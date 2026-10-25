@@ -82,6 +82,13 @@ for pairing. Static keys are each device's X25519 key from `sync.db`. The prolog
 4-byte preamble. A session handshake fails unless the peer's static key belongs to a
 non-removed `devices` row of this device's group.
 
+KK needs the initiator's static key before the first message, and nothing identifies the
+initiator in the clear. The responder tries message 1 against the key of each group member
+in turn (2 DH operations each) until one authenticates. If none does, it closes the
+connection without replying.
+
+Handshake payloads are empty. A non-empty payload from the peer is ignored.
+
 ## Pairing
 
 The device that starts pairing is A, the initiator. The device it pairs with is B. B shows
@@ -90,7 +97,7 @@ the code and A's user enters it.
 1. A connects in pairing mode and sends `PAIR_HELLO` in the clear:
    `{"dev", "name", "kind", "grp", "library_uid", "tracks": <track count>}`.
 2. B checks the join rules (below). If pairing is impossible, B replies `PAIR_REFUSE`
-   `{"reason": "in_group" | "library_mismatch" | "already_paired" | "busy"}` and closes.
+   `{"reason": "in_group" | "library_mismatch" | "already_paired" | "busy" | "wrong_code"}` and closes.
    Otherwise B draws a 6-digit code (uniform, `000000`–`999999`), shows it through the
    `on_pair_code` callback, and replies `PAIR_READY` `{"dev", "name", "kind", "grp",
    "library_uid", "tracks"}`.
@@ -98,8 +105,12 @@ the code and A's user enters it.
    SHA-256) with the code's 6 ASCII digits as the shared secret. A is the client:
    `JPAKE_1` both ways, then `JPAKE_2` both ways. Both derive the 32-byte secret.
 4. They run `Noise_XXpsk3` with `psk = HKDF-SHA256(jpake_secret, info = "musicapp pair v1")`.
-   A wrong code makes the handshake fail at the psk. B allows 3 failed attempts per code,
-   then draws a new one (and shows it), so each attempt is one online guess at 1 in 10⁶.
+   A wrong code makes the handshake fail at the psk. A's side of XXpsk3 finishes first, so
+   only B can tell. On a failure B sends `PAIR_REFUSE` `{"reason": "wrong_code",
+   "attempts_left": n}` in the clear and closes. A shows "Wrong code" and may reconnect to try
+   again. This reveals nothing an attacker doesn't already know. B allows 3 failed attempts
+   per code, then draws a new one (and shows it, with `attempts_left` reset), so each attempt
+   is one online guess at 1 in 10⁶.
    A 6-digit code must never key Noise directly: an active attacker could brute-force it
    offline from one handshake.
 5. Over the encrypted channel B sends `PAIR_ACCEPT` with the resulting group (below), and
