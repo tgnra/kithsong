@@ -1,0 +1,21 @@
+{
+  // F5: build, then debug the Windows app with w64devkit's gdb (C/C++ extension required).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "musicapp (Windows, gdb)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/windows-w64devkit/desktop/windows/musicapp.exe",
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "miDebuggerPath": "gdb.exe",
+      "environment": [{ "name": "PATH", "value": "${env:W64DEVKIT}\\bin;${env:PATH}" }],
+      "externalConsole": false,
+      "preLaunchTask": "windows: build",
+      "setupCommands": [
+        { "description": "Pretty printing", "text": "-enable-pretty-printing", "ignoreFailures": true }
+      ]
+    }
+  ]
+}

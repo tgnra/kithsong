@@ -1,0 +1,57 @@
+set(MUSICAPP_CONTACT "" CACHE STRING
+  "Contact URL or email sent in the MusicBrainz/AcoustID User-Agent (required by their terms)")
+if(MUSICAPP_CONTACT STREQUAL "")
+  message(WARNING "MUSICAPP_CONTACT is not set. MusicBrainz may block requests without contact "
+                  "info; configure with -DMUSICAPP_CONTACT=<url or email>.")
+  set(_contact "no contact configured")
+else()
+  set(_contact "${MUSICAPP_CONTACT}")
+endif()
+block(SCOPE_FOR VARIABLES)
+  set(MUSICAPP_CONTACT "${_contact}")
+  configure_file(src/config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/config.h" @ONLY)
+endblock()
+
+set(_schema_c "${CMAKE_CURRENT_BINARY_DIR}/generated/schema_v1.c")
+add_custom_command(
+  OUTPUT "${_schema_c}"
+  COMMAND "${CMAKE_COMMAND}"
+    -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/src/library/schema_v1.sql
+    -DOUTPUT=${_schema_c}
+    -DSYMBOL=mc_schema_v1_sql
+    -P "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+  DEPENDS src/library/schema_v1.sql "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+  COMMENT "Embedding schema_v1.sql")
+
+add_library(musiccore STATIC
+  src/core.c
+  src/util/platform.c
+  src/util/uid.c
+  src/util/hlc.c
+  src/library/library.c
+  "${_schema_c}"
+  src/playlist/playlist.c
+  src/playback/player.c
+  src/tagger/tag_io.cpp
+  src/tagger/musicbrainz.c
+  src/tagger/tagger.c
+  src/net/http.c
+  src/transcode/transcode.c
+  src/discovery/discovery.c
+  src/sync/sync.c)
+add_library(musiccore::musiccore ALIAS musiccore)
+
+target_include_directories(musiccore
+  PUBLIC include
+  PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(musiccore PRIVATE
+  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs tag CURL::libcurl)
+if(WIN32)
+  target_compile_definitions(musiccore PRIVATE _WIN32_WINNT=0x0A00)
+  target_link_libraries(musiccore PRIVATE bcrypt)
+endif()
+musicapp_warnings(musiccore)
+
+if(MUSICAPP_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()

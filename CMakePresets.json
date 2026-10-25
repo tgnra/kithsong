@@ -1,0 +1,56 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps"
+      }
+    },
+    {
+      "name": "windows-w64devkit",
+      "displayName": "Windows (w64devkit gcc)",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "windows-w64devkit-release",
+      "displayName": "Windows (w64devkit gcc, release)",
+      "inherits": "windows-w64devkit",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "linux-gtk",
+      "displayName": "Linux (GTK4)",
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "linux-gtk-release",
+      "displayName": "Linux (GTK4, release)",
+      "inherits": "linux-gtk",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-w64devkit", "configurePreset": "windows-w64devkit", "jobs": 8 },
+    { "name": "windows-w64devkit-release", "configurePreset": "windows-w64devkit-release", "jobs": 8 },
+    { "name": "linux-gtk", "configurePreset": "linux-gtk" },
+    { "name": "linux-gtk-release", "configurePreset": "linux-gtk-release" }
+  ],
+  "testPresets": [
+    { "name": "windows-w64devkit", "configurePreset": "windows-w64devkit", "output": { "outputOnFailure": true } },
+    { "name": "linux-gtk", "configurePreset": "linux-gtk", "output": { "outputOnFailure": true } }
+  ]
+}

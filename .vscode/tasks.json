@@ -1,0 +1,54 @@
+{
+  // Windows build tasks. Needs CMake, Ninja and w64devkit. If w64devkit's bin directory is
+  // not on PATH, set the W64DEVKIT environment variable to its root (e.g. C:\w64devkit).
+  "version": "2.0.0",
+  "options": {
+    "env": {
+      "PATH": "${env:W64DEVKIT}\\bin;${env:PATH}"
+    }
+  },
+  "tasks": [
+    {
+      "label": "windows: configure",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--preset", "windows-w64devkit"],
+      "problemMatcher": []
+    },
+    {
+      "label": "windows: build",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "--preset", "windows-w64devkit"],
+      "dependsOn": "windows: configure",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": {
+        "base": "$gcc",
+        "fileLocation": ["autoDetect", "${workspaceFolder}/build/windows-w64devkit"]
+      }
+    },
+    {
+      "label": "windows: run",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/windows-w64devkit/desktop/windows/musicapp.exe",
+      "dependsOn": "windows: build",
+      "problemMatcher": []
+    },
+    {
+      "label": "windows: test",
+      "type": "shell",
+      "command": "ctest",
+      "args": ["--preset", "windows-w64devkit"],
+      "dependsOn": "windows: build",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "windows: musicbrainz ping",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/windows-w64devkit/core/tests/manual_mb_ping.exe",
+      "dependsOn": "windows: build",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+# CMake
+/build/
+/out/
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+*.apk
+*.aab
+
+# Editors: keep shared VS Code config, ignore the rest
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# Local data and secrets
+*.db
+*.db-wal
+*.db-shm
+CMakeUserPresets.json
+*.local.cmake
