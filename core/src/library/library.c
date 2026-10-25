@@ -28,6 +28,11 @@ static const char *const k_migrations[] = {
   "  play_count INTEGER NOT NULL DEFAULT 0,"
   "  UNIQUE (track_uid, node_uid)"
   ") WITHOUT ROWID;",
+  /* v4: sync data moves out to sync.db, so the unused peers table goes. files.sha256 is the
+   * SHA-256 (hex) of the file's bytes, recorded when sync transfers or verifies it. The
+   * library's own identity, meta.library_uid, is created in C at open (see load_meta_uid). */
+  "DROP TABLE peers;"
+  "ALTER TABLE files ADD COLUMN sha256 TEXT;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -44,58 +49,14 @@ static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count",
 static const char *const k_playlist_cols[] = {"name", NULL};
 static const char *const k_entry_cols[] = {"playlist_uid", "track_uid", "position", NULL};
 
-static const struct {
-  const char *table;
-  const char *const *cols;
-} k_tracked[] = {
-  {"artists", k_artist_cols},
-  {"albums", k_album_cols},
-  {"tracks", k_track_cols},
-  {"track_plays", k_play_cols},
-  {"playlists", k_playlist_cols},
-  {"playlist_entries", k_entry_cols},
+static const mc_changelog_table k_tracked[] = {
+  {"artists", "uid", k_artist_cols},
+  {"albums", "uid", k_album_cols},
+  {"tracks", "uid", k_track_cols},
+  {"track_plays", "uid", k_play_cols},
+  {"playlists", "uid", k_playlist_cols},
+  {"playlist_entries", "uid", k_entry_cols},
 };
-
-/* --- SQL functions used by the change-log triggers --- */
-
-static void sql_hlc_now(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-  (void)argc;
-  (void)argv;
-  mc_library *lib = sqlite3_user_data(ctx);
-  sqlite3_result_int64(ctx, (sqlite3_int64)mc_hlc_now(&lib->hlc));
-}
-
-static void sql_node_uid(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-  (void)argc;
-  (void)argv;
-  mc_library *lib = sqlite3_user_data(ctx);
-  sqlite3_result_text(ctx, lib->node_uid, -1, SQLITE_TRANSIENT);
-}
-
-static void sql_applying_remote(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-  (void)argc;
-  (void)argv;
-  mc_library *lib = sqlite3_user_data(ctx);
-  sqlite3_result_int(ctx, lib->applying_remote);
-}
-
-static mc_status register_functions(mc_library *lib) {
-  static const struct {
-    const char *name;
-    void (*fn)(sqlite3_context *, int, sqlite3_value **);
-  } fns[] = {
-    {"mc_hlc_now", sql_hlc_now},
-    {"mc_node_uid", sql_node_uid},
-    {"mc_applying_remote", sql_applying_remote},
-  };
-  for (size_t i = 0; i < sizeof fns / sizeof fns[0]; i++) {
-    /* SQLITE_INNOCUOUS is required for use inside triggers while trusted_schema is OFF. */
-    int rc = sqlite3_create_function(lib->db, fns[i].name, 0, SQLITE_UTF8 | SQLITE_INNOCUOUS,
-                                     lib, fns[i].fn, NULL, NULL);
-    if (rc != SQLITE_OK) return MC_ERR_DB;
-  }
-  return MC_OK;
-}
 
 /* --- Schema --- */
 
@@ -130,92 +91,62 @@ static mc_status migrate(mc_library *lib) {
   return MC_OK;
 }
 
-/* One INSERT and one UPDATE trigger per tracked column, plus a DELETE trigger per table.
- * Recreated on every open so changes to the column lists take effect immediately. */
-static mc_status install_triggers(mc_library *lib) {
-  char sql[1024];
-  if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
+/* --- Identity --- */
 
-  for (size_t t = 0; t < sizeof k_tracked / sizeof k_tracked[0]; t++) {
-    const char *table = k_tracked[t].table;
-    for (const char *const *c = k_tracked[t].cols; *c; c++) {
-      snprintf(sql, sizeof sql,
-               "DROP TRIGGER IF EXISTS mc_log_ins_%s_%s;"
-               "CREATE TRIGGER mc_log_ins_%s_%s AFTER INSERT ON %s"
-               " WHEN new.%s IS NOT NULL AND mc_applying_remote() = 0 BEGIN"
-               " INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
-               " VALUES (mc_hlc_now(), mc_node_uid(), '%s', new.uid, '%s', new.%s);"
-               " END;",
-               table, *c, table, *c, table, *c, table, *c, *c);
-      if (exec(lib, sql) != MC_OK) goto fail;
-
-      snprintf(sql, sizeof sql,
-               "DROP TRIGGER IF EXISTS mc_log_upd_%s_%s;"
-               "CREATE TRIGGER mc_log_upd_%s_%s AFTER UPDATE OF %s ON %s"
-               " WHEN old.%s IS NOT new.%s AND mc_applying_remote() = 0 BEGIN"
-               " INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
-               " VALUES (mc_hlc_now(), mc_node_uid(), '%s', new.uid, '%s', new.%s);"
-               " END;",
-               table, *c, table, *c, *c, table, *c, *c, table, *c, *c);
-      if (exec(lib, sql) != MC_OK) goto fail;
-    }
-
-    snprintf(sql, sizeof sql,
-             "DROP TRIGGER IF EXISTS mc_log_del_%s;"
-             "CREATE TRIGGER mc_log_del_%s AFTER DELETE ON %s"
-             " WHEN mc_applying_remote() = 0 BEGIN"
-             " INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
-             " VALUES (mc_hlc_now(), mc_node_uid(), '%s', old.uid, '_deleted', 1);"
-             " END;",
-             table, table, table, table);
-    if (exec(lib, sql) != MC_OK) goto fail;
+/* A uid as mc_uid_new() writes it: 36 characters, lowercase hex and hyphens. */
+static int is_uid(const char *s) {
+  for (int i = 0; i < MC_UID_STRLEN - 1; i++) {
+    int hyphen = i == 8 || i == 13 || i == 18 || i == 23;
+    char c = s[i];
+    if (hyphen ? c != '-' : !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return 0;
   }
-  return exec(lib, "COMMIT");
-
-fail:
-  exec(lib, "ROLLBACK");
-  return MC_ERR_DB;
+  return s[MC_UID_STRLEN - 1] == '\0';
 }
 
-static mc_status load_node_uid(mc_library *lib) {
+/* Reads a uid from meta into out: MC_ERR_NOT_FOUND if the key is absent, MC_ERR_FORMAT if
+ * the value isn't a uid. */
+static mc_status read_meta_uid(mc_library *lib, const char *key, char out[MC_UID_STRLEN]) {
   sqlite3_stmt *stmt;
-  mc_status st = MC_ERR_DB;
-
-  if (sqlite3_prepare_v2(lib->db, "SELECT value FROM meta WHERE key = 'node_uid'", -1, &stmt,
-                         NULL) != SQLITE_OK)
+  if (sqlite3_prepare_v2(lib->db, "SELECT value FROM meta WHERE key = ?1", -1, &stmt, NULL) !=
+      SQLITE_OK)
     return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+  mc_status st = MC_ERR_DB;
   int rc = sqlite3_step(stmt);
   if (rc == SQLITE_ROW) {
     const unsigned char *v = sqlite3_column_text(stmt, 0);
     if (v && strlen((const char *)v) == MC_UID_STRLEN - 1) {
-      memcpy(lib->node_uid, v, MC_UID_STRLEN);
+      memcpy(out, v, MC_UID_STRLEN);
       st = MC_OK;
     } else {
       st = MC_ERR_FORMAT;
     }
+  } else if (rc == SQLITE_DONE) {
+    st = MC_ERR_NOT_FOUND;
   }
-  sqlite3_finalize(stmt);
-  if (rc != SQLITE_DONE) return st;
-
-  /* First open: this device gets its identity. */
-  if ((st = mc_uid_new(lib->node_uid)) != MC_OK) return st;
-  if (sqlite3_prepare_v2(lib->db, "INSERT INTO meta (key, value) VALUES ('node_uid', ?1)", -1,
-                         &stmt, NULL) != SQLITE_OK)
-    return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, lib->node_uid, -1, SQLITE_STATIC);
-  st = sqlite3_step(stmt) == SQLITE_DONE ? MC_OK : MC_ERR_DB;
   sqlite3_finalize(stmt);
   return st;
 }
 
-static uint64_t max_logged_hlc(mc_library *lib) {
+static mc_status write_meta(mc_library *lib, const char *key, const char *value) {
   sqlite3_stmt *stmt;
-  uint64_t hlc = 0;
-  if (sqlite3_prepare_v2(lib->db, "SELECT max(hlc) FROM changelog", -1, &stmt, NULL) != SQLITE_OK)
-    return 0;
-  if (sqlite3_step(stmt) == SQLITE_ROW) hlc = (uint64_t)sqlite3_column_int64(stmt, 0);
+  if (sqlite3_prepare_v2(lib->db, "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, value, -1, SQLITE_STATIC);
+  mc_status st = sqlite3_step(stmt) == SQLITE_DONE ? MC_OK : MC_ERR_DB;
   sqlite3_finalize(stmt);
-  return hlc;
+  return st;
+}
+
+/* Loads a uid kept in meta, generating it the first time: node_uid (this device's identity
+ * in the changelog) and library_uid (which library this is, so sync never mixes two). */
+static mc_status load_meta_uid(mc_library *lib, const char *key, char out[MC_UID_STRLEN]) {
+  mc_status st = read_meta_uid(lib, key, out);
+  if (st != MC_ERR_NOT_FOUND) return st;
+  if ((st = mc_uid_new(out)) != MC_OK) return st;
+  return write_meta(lib, key, out);
 }
 
 /* --- Public API --- */
@@ -227,6 +158,9 @@ mc_status mc_library_open(const char *dir, mc_library **out) {
   mc_library *lib = calloc(1, sizeof *lib);
   if (!lib) return MC_ERR_NOMEM;
   mc_hlc_init(&lib->hlc, mc_wall_ms, 0);
+  lib->log.hlc = &lib->hlc;
+  lib->log.node_uid = lib->node_uid;
+  lib->log.applying_remote = &lib->applying_remote;
 
   /* Keep the folder without a trailing separator, so joining paths is uniform. */
   size_t len = strlen(dir);
@@ -254,11 +188,14 @@ mc_status mc_library_open(const char *dir, mc_library **out) {
                       "PRAGMA foreign_keys = ON;"
                       "PRAGMA trusted_schema = OFF;")) != MC_OK)
     goto fail;
-  if ((st = register_functions(lib)) != MC_OK) goto fail;
+  if ((st = mc_changelog_register(lib->db, &lib->log)) != MC_OK) goto fail;
   if ((st = migrate(lib)) != MC_OK) goto fail;
-  if ((st = install_triggers(lib)) != MC_OK) goto fail;
-  if ((st = load_node_uid(lib)) != MC_OK) goto fail;
-  mc_hlc_init(&lib->hlc, mc_wall_ms, max_logged_hlc(lib));
+  if ((st = mc_changelog_install_triggers(lib->db, k_tracked,
+                                          sizeof k_tracked / sizeof k_tracked[0])) != MC_OK)
+    goto fail;
+  if ((st = load_meta_uid(lib, "node_uid", lib->node_uid)) != MC_OK) goto fail;
+  if ((st = load_meta_uid(lib, "library_uid", lib->library_uid)) != MC_OK) goto fail;
+  mc_hlc_init(&lib->hlc, mc_wall_ms, mc_changelog_max_hlc(lib->db));
 
   *out = lib;
   return MC_OK;
@@ -308,9 +245,15 @@ char *mc_library_abspath(const mc_library *lib, const char *rel) {
 }
 
 mc_status mc_library_begin_write(mc_library *lib) {
-  if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
-  uint64_t seen = max_logged_hlc(lib);
-  if (seen > lib->hlc.last) lib->hlc.last = seen;
+  if (mc_changelog_begin_write(lib->db, &lib->hlc) != MC_OK) return MC_ERR_DB;
+  /* Another connection may have rotated the node uid since this one opened. */
+  char node[MC_UID_STRLEN];
+  mc_status st = read_meta_uid(lib, "node_uid", node);
+  if (st != MC_OK) {
+    exec(lib, "ROLLBACK");
+    return st;
+  }
+  memcpy(lib->node_uid, node, MC_UID_STRLEN);
   return MC_OK;
 }
 
@@ -332,6 +275,40 @@ const char *mc_library_dir(const mc_library *lib) {
 
 const char *mc_library_node_uid(const mc_library *lib) {
   return lib->node_uid;
+}
+
+const char *mc_library_uid(const mc_library *lib) {
+  return lib->library_uid;
+}
+
+mc_status mc_library_rotate_node_uid(mc_library *lib) {
+  if (!lib) return MC_ERR_INVALID_ARG;
+  char fresh[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(fresh);
+  if (st != MC_OK) return st;
+  /* Not tracked: meta never syncs. Older changelog rows keep the old uid as their origin. */
+  if ((st = write_meta(lib, "node_uid", fresh)) != MC_OK) return st;
+  memcpy(lib->node_uid, fresh, MC_UID_STRLEN);
+  return MC_OK;
+}
+
+mc_status mc_library_adopt_uid(mc_library *lib, const char *library_uid) {
+  if (!lib || !library_uid || !is_uid(library_uid)) return MC_ERR_INVALID_ARG;
+  if (strcmp(library_uid, lib->library_uid) == 0) return MC_OK;
+
+  /* Count under the write lock, so an import on another connection can't slip in. */
+  if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
+  int64_t tracks = -1;
+  mc_status st = mc_library_count(lib, MC_ENTITY_TRACKS, &tracks);
+  if (st == MC_OK && tracks > 0) st = MC_ERR_LIBRARY_MISMATCH;
+  if (st == MC_OK) st = write_meta(lib, "library_uid", library_uid);
+  if (st == MC_OK) st = exec(lib, "COMMIT");
+  if (st != MC_OK) {
+    exec(lib, "ROLLBACK");
+    return st;
+  }
+  memcpy(lib->library_uid, library_uid, MC_UID_STRLEN);
+  return MC_OK;
 }
 
 const char *mc_library_errmsg(const mc_library *lib) {

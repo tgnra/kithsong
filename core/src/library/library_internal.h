@@ -5,6 +5,7 @@
 #include <sqlite3.h>
 
 #include "musiccore/library.h"
+#include "util/changelog.h"
 #include "util/hlc.h"
 
 struct mc_library {
@@ -12,9 +13,11 @@ struct mc_library {
   char *dir; /* the library folder, no trailing separator */
   mc_hlc hlc;
   char node_uid[MC_UID_STRLEN];
+  char library_uid[MC_UID_STRLEN];
   /* Set while applying changes received from a peer, so triggers don't log them a second
    * time as local edits; sync inserts those changelog rows itself. */
   int applying_remote;
+  mc_changelog_ctx log; /* points the trigger functions at hlc, node_uid, applying_remote */
 };
 
 static inline sqlite3 *mc_library_db(mc_library *lib) {
@@ -24,7 +27,8 @@ static inline sqlite3 *mc_library_db(mc_library *lib) {
 /* Every write to tracked tables goes through these. Several connections to one library
  * can exist in a process (the importer opens its own on its thread), each with its own
  * clock, so BEGIN IMMEDIATE takes the write lock and then catches the clock up to the
- * newest logged change. That keeps changelog hlcs strictly increasing per device. */
+ * newest logged change. That keeps changelog hlcs strictly increasing per device. It also
+ * rereads node_uid, in case another connection rotated it. */
 mc_status mc_library_begin_write(mc_library *lib);
 
 /* files.path is relative to the library folder and always uses '/', so the folder can be

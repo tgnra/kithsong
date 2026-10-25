@@ -26,7 +26,10 @@ typedef enum mc_status {
   MC_ERR_DB = -5,
   MC_ERR_NET = -6,
   MC_ERR_FORMAT = -7,
-  MC_ERR_NOT_FOUND = -8
+  MC_ERR_NOT_FOUND = -8,
+  MC_ERR_LOCKED = -9,           /* e.g. an archive device's sync profile */
+  MC_ERR_IN_GROUP = -10,        /* the device must leave its sync group first */
+  MC_ERR_LIBRARY_MISMATCH = -11 /* a different library than the sync group's */
 } mc_status;
 
 /* Length of a textual UUID including the terminating NUL. */

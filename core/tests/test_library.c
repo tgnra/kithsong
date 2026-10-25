@@ -21,6 +21,138 @@ static int exec(sqlite3 *db, const char *sql) {
   return sqlite3_exec(db, sql, NULL, NULL, NULL);
 }
 
+static int query_int(sqlite3 *db, const char *sql) {
+  sqlite3_stmt *stmt;
+  int n = -1;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW) n = sqlite3_column_int(stmt, 0);
+  sqlite3_finalize(stmt);
+  return n;
+}
+
+static int has_column(sqlite3 *db, const char *table, const char *column) {
+  char sql[256];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM pragma_table_info('%s') WHERE name = '%s'",
+           table, column);
+  return query_int(db, sql) == 1;
+}
+
+static void remove_db(const char *dir) {
+  const char *const names[] = {MC_LIBRARY_DB_NAME, MC_LIBRARY_DB_NAME "-wal",
+                               MC_LIBRARY_DB_NAME "-shm"};
+  char file[1100];
+  for (int i = 0; i < 3; i++) {
+    snprintf(file, sizeof file, "%s/%s", dir, names[i]);
+    remove(file);
+  }
+}
+
+/* Identity: library_uid, node uid rotation, adopting another library's uid. */
+static void test_identity(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_identity.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL, *other = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  CHECK(mc_library_open(path, &other) == MC_OK);
+  if (!lib || !other) {
+    mc_library_close(lib);
+    mc_library_close(other);
+    return;
+  }
+  sqlite3 *db = mc_library_db(lib);
+  char old_node[MC_UID_STRLEN], library_uid[MC_UID_STRLEN];
+  strcpy(old_node, mc_library_node_uid(lib));
+  strcpy(library_uid, mc_library_uid(lib));
+  CHECK(strlen(library_uid) == MC_UID_STRLEN - 1);
+  CHECK(strcmp(library_uid, old_node) != 0);
+  CHECK(strcmp(mc_library_uid(other), library_uid) == 0); /* the same for every connection */
+
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('a1', 'Low')") == SQLITE_OK);
+
+  /* Rotating gives new changes a new origin; earlier ones keep the old one. */
+  CHECK(mc_library_rotate_node_uid(lib) == MC_OK);
+  CHECK(strcmp(mc_library_node_uid(lib), old_node) != 0);
+  CHECK(strlen(mc_library_node_uid(lib)) == MC_UID_STRLEN - 1);
+  CHECK(exec(db, "UPDATE artists SET name = 'Lower' WHERE uid = 'a1'") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'a1' AND origin_uid = mc_node_uid()") == 1);
+  char where[128];
+  snprintf(where, sizeof where, "row_uid = 'a1' AND origin_uid = '%s'", old_node);
+  CHECK(changelog_count(db, where) == 1);
+
+  /* Another open connection picks up the new uid on its next write. */
+  CHECK(mc_library_begin_write(other) == MC_OK);
+  CHECK_STR(mc_library_node_uid(other), mc_library_node_uid(lib));
+  CHECK(exec(mc_library_db(other), "INSERT INTO artists (uid, name) VALUES ('a2', 'Duster')") ==
+        SQLITE_OK);
+  CHECK(mc_library_commit(other) == MC_OK);
+  CHECK(changelog_count(db, "row_uid = 'a2' AND origin_uid = mc_node_uid()") == 1);
+  mc_library_close(other);
+
+  /* A library with tracks can't take on another library's uid; an empty one can. */
+  char foreign[MC_UID_STRLEN];
+  CHECK(mc_uid_new(foreign) == MC_OK);
+  CHECK(mc_library_adopt_uid(lib, "not-a-uid") == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_adopt_uid(lib, "0192F1E4-7C3A-7B21-9D4E-1F2A3B4C5D6E") == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_adopt_uid(lib, foreign) == MC_OK); /* artists only, no tracks yet */
+  CHECK(strcmp(mc_library_uid(lib), foreign) == 0);
+  CHECK(exec(db, "INSERT INTO tracks (uid, title) VALUES ('t1', 'Starfire')") == SQLITE_OK);
+  CHECK(mc_library_adopt_uid(lib, library_uid) == MC_ERR_LIBRARY_MISMATCH);
+  CHECK(strcmp(mc_library_uid(lib), foreign) == 0);
+  CHECK(mc_library_adopt_uid(lib, foreign) == MC_OK); /* already this library's uid */
+
+  char node[MC_UID_STRLEN];
+  strcpy(node, mc_library_node_uid(lib));
+  mc_library_close(lib);
+
+  /* Both survive a reopen. */
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (lib) {
+    CHECK(strcmp(mc_library_uid(lib), foreign) == 0);
+    CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
+    mc_library_close(lib);
+  }
+}
+
+/* Migration v4 on a library made before it: peers goes, files gains sha256, and the library
+ * gets a library_uid. The old state is recreated by hand from a current database. */
+static void test_migration_v4(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v4.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
+  CHECK(has_column(db, "files", "sha256"));
+  CHECK(exec(db, "CREATE TABLE peers (uid TEXT PRIMARY KEY) WITHOUT ROWID;"
+                 "ALTER TABLE files DROP COLUMN sha256;"
+                 "DELETE FROM meta WHERE key = 'library_uid';"
+                 "PRAGMA user_version = 3;") == SQLITE_OK);
+  char node[MC_UID_STRLEN];
+  strcpy(node, mc_library_node_uid(lib));
+  char library_uid[MC_UID_STRLEN];
+  strcpy(library_uid, mc_library_uid(lib));
+  CHECK(strlen(library_uid) == MC_UID_STRLEN - 1);
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 4);
+  CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
+  CHECK(has_column(db, "files", "sha256"));
+  CHECK(strlen(mc_library_uid(lib)) == MC_UID_STRLEN - 1);
+  CHECK(query_int(db, "SELECT count(*) FROM meta WHERE key = 'library_uid'") == 1);
+  CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   /* The library is a folder; the database is library.db inside it. */
   char path[1024], file[1100];
@@ -36,9 +168,12 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 3);
+  CHECK(mc_library_schema_version(lib) == 4);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
+  char library_uid[MC_UID_STRLEN];
+  strcpy(library_uid, mc_library_uid(lib));
+  CHECK(strlen(library_uid) == MC_UID_STRLEN - 1);
   CHECK(strlen(node) == MC_UID_STRLEN - 1);
 
   int64_t n = -1;
@@ -111,8 +246,9 @@ int main(int argc, char **argv) {
   lib = NULL;
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (lib) {
-    CHECK_STR(mc_library_node_uid(lib), node);
-    CHECK(mc_library_schema_version(lib) == 3);
+    CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
+    CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
+    CHECK(mc_library_schema_version(lib) == 4);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }
@@ -123,14 +259,14 @@ int main(int argc, char **argv) {
   lib = NULL;
   CHECK(mc_library_open(file, &lib) == MC_OK);
   if (lib) {
-    CHECK_STR(mc_library_dir(lib), path);
+    CHECK(strcmp(mc_library_dir(lib), path) == 0);
     char abs[1200];
     snprintf(abs, sizeof abs, "%s%cLow%cSecret Name (1999)%c01 Starfire.flac", path, MC_PATH_SEP,
              MC_PATH_SEP, MC_PATH_SEP);
     char *rel = mc_library_relpath(lib, abs);
     CHECK_STR(rel, "Low/Secret Name (1999)/01 Starfire.flac");
     char *back = rel ? mc_library_abspath(lib, rel) : NULL;
-    CHECK_STR(back, abs);
+    CHECK(back && strcmp(back, abs) == 0);
     mc_free(rel);
     mc_free(back);
 
@@ -141,5 +277,7 @@ int main(int argc, char **argv) {
     mc_library_close(lib);
   }
 
+  test_identity(argc > 1 ? argv[1] : ".");
+  test_migration_v4(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();
 }

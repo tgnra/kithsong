@@ -9,6 +9,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 1 | initial schema |
 | 2 | singles: `albums.kind`, `tracks.year`, `tracks.mb_albumid` |
 | 3 | `tracks.added_ms`, `track_plays` |
+| 4 | `files.sha256`, `meta.library_uid`; `peers` dropped (sync data lives in `sync.db`) |
 
 ## Location
 
@@ -29,6 +30,24 @@ When two devices independently import the same album, they create different uids
 those duplicates (matched by MusicBrainz release id or by a content hash) is a sync-level
 operation; see [sync-protocol.md](sync-protocol.md). The same applies to singles albums,
 which are matched by artist and `kind = 'singles'` instead.
+
+The database has two identities of its own in `meta`, both generated on first open:
+
+- `library_uid` says which library this is. It's the same on every device that syncs the
+  library, and a sync group never touches a library with a different one. A device joining a
+  group takes on the group's `library_uid` with `mc_library_adopt_uid()`, which only works
+  while the library has no tracks, so two libraries are never merged.
+- `node_uid` is the origin stamped on every change made here. If sync finds that another
+  device already uses it (for example, the library folder was copied),
+  `mc_library_rotate_node_uid()` gives the library a new one. Changes logged under the old
+  one stay valid; to peers they're just another origin.
+
+## Sync data
+
+The library holds no sync data: keys, the group, its devices and their sync profiles live in
+a separate `sync.db` in the per-device config dir. See
+[sync-protocol.md](sync-protocol.md#two-databases) and its schema,
+[core/src/sync/sync_schema_v1.sql](../core/src/sync/sync_schema_v1.sql).
 
 ## Singles
 
@@ -54,16 +73,19 @@ with their track.
 | `track_plays`      | yes    | play counts, one row per track per device; see [Play counts](#play-counts) |
 | `playlists`        | yes    | |
 | `playlist_entries` | yes    | ordered by the fractional-index string `position` |
-| `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer |
+| `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it |
 | `changelog`        | -      | field-level change log that sync is built on |
-| `peers`            | no     | paired devices and their sync cursors |
-| `meta`             | no     | `node_uid` and other per-device settings |
+| `meta`             | no     | `node_uid`, `library_uid` and other per-library settings; see [Identity](#identity) |
 
 ## Change tracking
 
 `library.c` generates `AFTER INSERT/UPDATE/DELETE` triggers from its tracked-column list
 every time the library is opened. Each change to a tracked column writes one `changelog`
-row (`hlc`, `origin_uid`, `entity`, `row_uid`, `field`, `value`).
+row (`hlc`, `origin_uid`, `entity`, `row_uid`, `field`, `value`). The generator lives in
+`core/src/util/changelog.c` and is shared with `sync.db`, whose changelog has the same shape.
+
+The version vector sync exchanges (the newest hlc per origin) is computed from the changelog
+each time, never stored, so it can't disagree with the data after a crash.
 
 Several connections to one library can be open at once: the importer opens its own on its
 thread. Each has its own clock, so writes go through `mc_library_begin_write()`, which takes

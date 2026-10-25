@@ -23,6 +23,9 @@ const char *mc_status_str(mc_status status) {
     case MC_ERR_NET: return "network error";
     case MC_ERR_FORMAT: return "unsupported or corrupt file";
     case MC_ERR_NOT_FOUND: return "not found";
+    case MC_ERR_LOCKED: return "locked";
+    case MC_ERR_IN_GROUP: return "already in a sync group";
+    case MC_ERR_LIBRARY_MISMATCH: return "not the sync group's library";
   }
   return "unknown error";
 }

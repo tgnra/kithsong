@@ -35,8 +35,24 @@ int mc_library_schema_version(const mc_library *lib);
 /* The library folder, as given to mc_library_open() without a trailing separator. */
 const char *mc_library_dir(const mc_library *lib);
 
-/* This device's stable node id, generated the first time the library is created. */
+/* This device's stable node id, generated the first time the library is created. It
+ * stamps every change made here (the changelog's origin). */
 const char *mc_library_node_uid(const mc_library *lib);
+
+/* Gives the library a new node id, for when sync finds another device already using this
+ * one (e.g. the library folder was copied). Changes made under the old id stay valid: to
+ * peers they're just another origin. Other open connections pick it up on their next write. */
+mc_status mc_library_rotate_node_uid(mc_library *lib);
+
+/* Which library this is, generated when it's created and the same on every device that
+ * syncs it. A sync group syncs exactly one library and never touches another. */
+const char *mc_library_uid(const mc_library *lib);
+
+/* Makes this library take on another's uid, so a device can join a group that syncs it.
+ * Only allowed while the library has no tracks (MC_ERR_LIBRARY_MISMATCH otherwise), so two
+ * different libraries are never merged; adopting the uid it already has always succeeds.
+ * library_uid must be a lowercase textual UUID (MC_ERR_INVALID_ARG otherwise). */
+mc_status mc_library_adopt_uid(mc_library *lib, const char *library_uid);
 
 /* Most recent SQLite error message for this handle. Valid until the next call. */
 const char *mc_library_errmsg(const mc_library *lib);

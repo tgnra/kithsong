@@ -12,16 +12,25 @@ block(SCOPE_FOR VARIABLES)
   configure_file(src/config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/config.h" @ONLY)
 endblock()
 
-set(_schema_c "${CMAKE_CURRENT_BINARY_DIR}/generated/schema_v1.c")
-add_custom_command(
-  OUTPUT "${_schema_c}"
-  COMMAND "${CMAKE_COMMAND}"
-    -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/src/library/schema_v1.sql
-    -DOUTPUT=${_schema_c}
-    -DSYMBOL=mc_schema_v1_sql
-    -P "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
-  DEPENDS src/library/schema_v1.sql "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
-  COMMENT "Embedding schema_v1.sql")
+# Embeds a .sql file as a NUL-terminated C string named symbol; the generated source's path
+# is returned in out_var.
+function(musiccore_embed_sql out_var src symbol)
+  get_filename_component(_name "${src}" NAME_WE)
+  set(_c "${CMAKE_CURRENT_BINARY_DIR}/generated/${_name}.c")
+  add_custom_command(
+    OUTPUT "${_c}"
+    COMMAND "${CMAKE_COMMAND}"
+      -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/${src}
+      -DOUTPUT=${_c}
+      -DSYMBOL=${symbol}
+      -P "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+    DEPENDS "${src}" "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+    COMMENT "Embedding ${_name}.sql")
+  set(${out_var} "${_c}" PARENT_SCOPE)
+endfunction()
+
+musiccore_embed_sql(_schema_c src/library/schema_v1.sql mc_schema_v1_sql)
+musiccore_embed_sql(_sync_schema_c src/sync/sync_schema_v1.sql mc_sync_schema_v1_sql)
 
 add_library(musiccore STATIC
   src/core.c
@@ -29,6 +38,7 @@ add_library(musiccore STATIC
   src/util/platform.c
   src/util/uid.c
   src/util/hlc.c
+  src/util/changelog.c
   src/library/library.c
   "${_schema_c}"
   src/playlist/playlist.c
@@ -43,7 +53,9 @@ add_library(musiccore STATIC
   src/net/http.c
   src/transcode/transcode.c
   src/discovery/discovery.c
-  src/sync/sync.c)
+  src/sync/sync.c
+  src/sync/sync_db.c
+  "${_sync_schema_c}")
 add_library(musiccore::musiccore ALIAS musiccore)
 
 target_include_directories(musiccore

@@ -11,6 +11,8 @@ endfunction()
 
 musicapp_test(test_util)
 musicapp_test(test_library)
+musicapp_test(test_sync_db)
+target_link_libraries(test_sync_db PRIVATE mbedcrypto)  # checks the key pair independently
 musicapp_test(test_tags)
 musicapp_test(test_match)
 musicapp_test(test_import_db)
