@@ -19,7 +19,10 @@ typedef struct mc_tags {
   char *mb_releasetrackid;
   char *mb_albumid;        /* MusicBrainz release id */
   char *mb_artistid;
+  char *mb_albumartistid;
+  char *mb_releasegroupid;
   int year;
+  int original_year;
   int track;
   int track_total;
   int disc;
@@ -34,7 +37,8 @@ typedef struct mc_tags {
 /* Reads tags and audio properties. On success *out must be released with mc_tags_clear(). */
 mc_status mc_tags_read(const char *path, mc_tags *out);
 
-/* Writes every non-NULL / non-zero field of tags to the file, leaving other tags untouched. */
+/* Writes every non-NULL / non-zero field of tags to the file, leaving other tags untouched.
+ * An empty string removes that tag. */
 mc_status mc_tags_write(const char *path, const mc_tags *tags);
 
 void mc_tags_clear(mc_tags *tags);
@@ -43,16 +47,126 @@ void mc_tags_clear(mc_tags *tags);
  * returns its name in *out_name (free with mc_free). */
 mc_status mc_musicbrainz_ping(char **out_name);
 
-/* --- Autotagger (not implemented yet) --- */
+/* --- Import (autotagger) ---
+ *
+ * An import session scans folders on a core-owned thread and groups the audio files into
+ * items: an album (files that belong together), or a single (one loose track). Each item
+ * is matched against MusicBrainz and its candidates are scored. If the best one reaches
+ * the confidence threshold it is imported straight away: the files are copied into the
+ * library folder (moved, if they're already inside it) under Artist/Album (Year)/, tagged,
+ * given a cover.jpg, and added to the database. The originals are never modified.
+ * Otherwise the item waits in MC_IMPORT_REVIEW until the frontend resolves it.
+ *
+ * Singles: loose tracks, and releases MusicBrainz classes as singles, go into one album
+ * per artist called "<artist> Singles" (albums.kind = 'singles').
+ *
+ * Callbacks run on the import thread; frontends marshal them to their UI thread. Every
+ * other function may be called from any thread. */
 
-typedef struct mc_tagger mc_tagger;
+typedef struct mc_import mc_import;
 
-mc_status mc_tagger_new(mc_library *lib, mc_tagger **out);
-void mc_tagger_free(mc_tagger *tagger);
+typedef enum mc_import_kind {
+  MC_IMPORT_ALBUM,  /* a group of files matched to a release */
+  MC_IMPORT_SINGLE  /* one loose track matched to a recording */
+} mc_import_kind;
 
-/* Scans a directory, groups files into album candidates and looks them up. Candidates
- * are delivered to the frontend for confirmation before anything is written. */
-mc_status mc_tagger_import_dir(mc_tagger *tagger, const char *path);
+typedef enum mc_import_state {
+  MC_IMPORT_PENDING,   /* scanned, waiting to be matched */
+  MC_IMPORT_MATCHING,  /* searching MusicBrainz */
+  MC_IMPORT_REVIEW,    /* needs the user: low confidence or no candidates */
+  MC_IMPORT_WRITING,   /* accepted; tags, art and library rows being written */
+  MC_IMPORT_DONE,
+  MC_IMPORT_SKIPPED,
+  MC_IMPORT_FAILED
+} mc_import_state;
+
+typedef enum mc_import_event {
+  MC_IMPORT_EV_SCANNING,     /* arg: audio files found so far */
+  MC_IMPORT_EV_SCANNED,      /* arg: number of items; items can be read from now on */
+  MC_IMPORT_EV_ITEM_CHANGED, /* arg: item index; its state or candidates changed */
+  MC_IMPORT_EV_IDLE          /* every item is matched and no work is queued */
+} mc_import_event;
+
+typedef void (*mc_import_fn)(void *user, mc_import_event event, int arg);
+
+typedef struct mc_import_options {
+  double threshold; /* auto-accept at or above this confidence (0..1); 0 = default 0.9 */
+  int fetch_art;    /* download front covers (Cover Art Archive, then iTunes) */
+} mc_import_options;
+
+/* One track of a candidate, in release order. */
+typedef struct mc_import_match_track {
+  char *title;
+  char *artist;
+  int disc;
+  int number;
+  int length_ms;
+  int file; /* index into mc_import_item.files, or -1 if no file was matched to it */
+} mc_import_match_track;
+
+typedef struct mc_import_match {
+  char *album;        /* release title; for a single, the album it lands in */
+  char *album_artist;
+  char *release;      /* the MusicBrainz release title, e.g. the single's own title */
+  char *country;
+  char *label;
+  char *catalog;
+  char *format;       /* "CD", "Digital Media", "2×Vinyl", ... */
+  char *release_type; /* "Album", "Single", "EP", ... */
+  char *mb_albumid;
+  int year;
+  int is_single;      /* lands in "<artist> Singles" */
+  double confidence;  /* 0..1 */
+  int extra_files;    /* files left over after matching */
+  mc_import_match_track *tracks;
+  int track_count;
+} mc_import_match;
+
+typedef struct mc_import_file {
+  char *path;   /* the original until the item is imported, then the copy in the library */
+  char *title;  /* existing tags */
+  char *artist;
+  int track;
+  int disc;
+  int duration_ms;
+} mc_import_file;
+
+/* Snapshot of an item; free with mc_import_item_free(). */
+typedef struct mc_import_item {
+  mc_import_kind kind;
+  mc_import_state state;
+  char *folder;
+  char *artist; /* best guess from the existing tags, for display */
+  char *album;  /* for a single, the track title */
+  mc_import_file *files;
+  int file_count;
+  mc_import_match *matches; /* best first */
+  int match_count;
+  int chosen;   /* index of the applied match; -1 if imported as-is or not yet decided */
+  char *error;  /* set when state is MC_IMPORT_FAILED */
+} mc_import_item;
+
+/* Starts importing the given folders and/or files. lib must stay open until the session is
+ * freed; the import thread uses its own connection to the same database. */
+mc_status mc_import_start(mc_library *lib, const char *const *paths, int path_count,
+                          const mc_import_options *opts, mc_import_fn callback, void *user,
+                          mc_import **out);
+
+/* Stops the session, waits for the import thread and frees everything. Work already
+ * written stays written. Don't call it from the callback. */
+void mc_import_free(mc_import *imp);
+
+int mc_import_item_count(mc_import *imp);
+mc_status mc_import_item_get(mc_import *imp, int item, mc_import_item **out);
+void mc_import_item_free(mc_import_item *item);
+
+/* Resolving an item that needs review. These queue work for the import thread; progress is
+ * reported through MC_IMPORT_EV_ITEM_CHANGED. */
+mc_status mc_import_accept(mc_import *imp, int item, int match);
+mc_status mc_import_accept_as_is(mc_import *imp, int item); /* keep existing tags */
+mc_status mc_import_skip(mc_import *imp, int item);
+/* Searches again with user-supplied terms. title is the album, or the track for a single. */
+mc_status mc_import_search(mc_import *imp, int item, const char *artist, const char *title);
 
 #ifdef __cplusplus
 }

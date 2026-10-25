@@ -1,48 +1,153 @@
-# Tagging rules (draft)
+# Tagging rules
 
-> Status: design notes for `core/src/tagger`. Decide each of these rules before
-> implementing it.
+> Status: the importer in `core/src/tagger` implements everything below except where marked
+> *not yet*. Public API: the "Import" section of `core/include/musiccore/tagger.h`.
 
 ## Services
 
 | Service | Key needed | Limits | Use |
 |---------|------------|--------|-----|
-| MusicBrainz `ws/2` | No | 1 req/s; descriptive User-Agent with contact info (`-DMUSICAPP_CONTACT`) | release search and lookup |
-| Cover Art Archive | No | - | front covers |
-| AcoustID | Yes, a free *application* key, set with `-DMUSICAPP_ACOUSTID_KEY` and never committed | 3 req/s | fingerprint to recording id |
+| MusicBrainz `ws/2` | No | 1 req/s; descriptive User-Agent with contact info (`-DMUSICAPP_CONTACT`) | release and recording search and lookup |
+| Cover Art Archive | No | - | front covers, by release, then by release group |
+| iTunes Search API | No | about 20 req/min (unofficial; we wait 3 s between requests) | front covers when the Cover Art Archive has none |
+| AcoustID | Yes, a free *application* key, set with `-DMUSICAPP_ACOUSTID_KEY` and never committed | 3 req/s | fingerprint to recording id (*not yet*) |
 
 ## Pipeline
 
-1. **Scan**: walk the import directory and read the existing tags of every audio file.
-2. **Group** files into album candidates. Use existing `MUSICBRAINZ_ALBUMID` first, then
-   (album artist, album), then the folder.
-3. **Identify**:
-   - if the files already carry MusicBrainz ids, look those up directly
-   - otherwise search releases by artist, album and track count
-   - otherwise fingerprint with Chromaprint and look up on AcoustID
-4. **Score** each candidate release with a weighted distance (lower is better):
-   - album title, artist, track count, year, label/catalogue number, country/media
-     preferences
-   - per-track: title, track length (±10 s tolerance), track number
-5. **Assign** files to release tracks with the Hungarian algorithm over the per-track
-   distance matrix.
-6. **Confirm**: send ranked candidates to the frontend. Auto-accept above a confidence
-   threshold (setting).
-7. **Write**: update the library rows and write tags to the files. Optionally move or rename
-   files according to the path format (see below).
+Everything runs on one core-owned thread per import session (`tagger.c`).
 
-## Field mapping (our structure)
+1. **Scan**: walk the dropped folders and files and read the existing tags of every audio
+   file (`flac mp3 m4a mp4 aac ogg oga opus wav aif aiff wv ape mpc wma dsf`). Hidden files,
+   symlinks and junctions are skipped.
+2. **Group** files into items:
+   - key = album folder + album tag (or the release id if there is no album tag). The album
+     folder is the file's folder, or its parent for disc folders such as `CD1` or `Disc 2`,
+     so a multi-disc album stays together while two copies of an album in different folders
+     stay apart.
+   - files with neither an album tag nor a release id are **singles**, one item each.
+   - a lone file whose album tag equals its title is also a single.
+   - untagged singles get artist and title from the file name: `03 - Artist - Title.mp3`.
+3. **Identify**:
+   - albums: if every file carries the same `MUSICBRAINZ_ALBUMID`, look that release up;
+     then search releases by album and artist (not by artist when it is "Various Artists")
+     and look up the best 3. Hits are ranked by expected track count, then search score,
+     then earliest date, so the original release beats reissues.
+   - a one-file album also gets recording candidates, in case it is one track off a release.
+   - singles: look up `MUSICBRAINZ_TRACKID` if present, then search recordings by title and
+     artist (5 results).
+   - fingerprinting with Chromaprint + AcoustID when tags aren't enough (*not yet*).
+4. **Score** each candidate with a weighted distance, 0 to 1 (`match.c`):
+   - strings are compared by normalised edit distance. Case, punctuation, common Latin
+     accents, a leading "The" and `&`/"and" are ignored, and a bracketed or ` - ` suffix such
+     as "(2011 Remaster)" costs at most 0.1.
+   - per track: title 3, length 2 (no penalty within ±10 s, full penalty from ±30 s), track
+     number 1 (per disc or straight through), artist 1.
+   - per release: album title 5, album artist 5, mean track distance 6, fraction of release
+     tracks with no file 10, fraction of files with no track 6, year 0.5.
+   - per recording: title 3, artist 3, length 2.
+   - ties go to the earliest original release.
+5. **Assign** files to release tracks with the Hungarian algorithm over the per-track
+   distance matrix. A pair with track distance over 0.6 is dropped, so a wrong title is never
+   written just to fill a slot.
+6. **Confirm**: confidence = 1 - distance. The best candidate is accepted automatically if
+   its confidence is at least the threshold (default 0.9) **and** it is complete: no missing
+   tracks and no leftover files. Everything else waits for the user in the review dialog,
+   where they can pick another candidate, search again with their own terms, keep the
+   existing tags, or skip the item. Results of a manual search are never auto-accepted.
+7. **Write** (see [Library folder](#library-folder)): copy the files into the library folder
+   (or move them, if they're already inside it), write the tags to the copies, make sure
+   the album folder has a cover, then write the library rows in one transaction
+   (`import_db.c`). If any step fails, the files are put back. Files that weren't matched to
+   a track aren't imported.
+
+## Library folder
+
+The library is one folder the user chooses (default: their Music folder). It holds the
+database as `library.db` at the top and the music beneath it (`organize.c`):
+
+```
+Radiohead/OK Computer (1997)/01 Airbag.flac
+Radiohead/OK Computer (1997)/cover.jpg
+Some Band/Double Album (2004)/2-07 Title.flac      (disc-track, when there are several discs)
+OutKast/OutKast Singles/Hey Ya!.flac
+library.db
+```
+
+- **Originals are never modified.** Files from outside the library are copied in and the
+  copy is tagged. Files already inside the library are moved (renamed) to their new place,
+  and folders left empty, or holding only a cover, are removed.
+- the year is left out of the folder name when it isn't known. As-is imports use the
+  existing tags, then the file name for the title.
+- names are made safe for Windows everywhere (the strictest of our platforms), so a library
+  can move between systems: `<>:"/\|?*` and control characters become `_`, leading dots and
+  trailing dots or spaces are dropped, device names such as `CON` get a `_`, and each part
+  is cut to about 100 bytes.
+- if the destination is taken: the same release track imported again from outside the
+  library replaces its old copy; anything else gets ` (2)`, ` (3)`, ... appended.
+- files with an album tag of "&lt;album artist&gt; Singles" are treated as singles when
+  scanned again, so re-importing the library folder keeps them in place.
+- `files.path` is stored relative to the library folder, with `/`, so the folder can be moved
+  or mounted under another drive letter.
+- the library folder lives in per-device settings (`settings.json`, see
+  `core/include/musiccore/settings.h`), in `%LOCALAPPDATA%\musicapp` on Windows and
+  `~/.config/musicapp` on Linux.
+- a database inside a OneDrive/Dropbox-style synced folder can be corrupted by the sync
+  client; the Windows frontend warns when the chosen folder is under OneDrive.
+
+## Singles
+
+beets imports a single as a one-track album named after the song. We file every single
+under one album per artist instead:
+
+- an item is a single if it is a loose track (see Group), or if its best match is a release
+  whose MusicBrainz release group has primary type *Single*.
+- it goes into the album **"&lt;artist&gt; Singles"**, where the artist is the first credited
+  artist. "Beyoncé feat. Jay-Z" files under "Beyoncé Singles", and the track keeps the full
+  credit.
+- in the library that album has `albums.kind = 'singles'`, one per artist. Each track keeps
+  its own `year` and the `mb_albumid` of the release it came from.
+- in the file tags, `ALBUM` is "&lt;artist&gt; Singles" and `ALBUMARTIST` is the artist.
+  `MUSICBRAINZ_ALBUMID` and `MUSICBRAINZ_RELEASEGROUPID` are removed, because they would
+  point at a release whose title isn't the album tag. Track and disc numbers aren't written.
+- the release a recording is credited to: official beats unofficial, a single beats an album
+  or EP, compilations come last, and ties go to the earliest date.
+- the singles album gets no cover art for now.
+
+## Field mapping
 
 | Library field | Tag property (TagLib) | Notes |
 |---------------|-----------------------|-------|
 | track title | `TITLE` | |
 | track artist | `ARTIST` | credited name as on the release |
-| album | `ALBUM` | |
+| album | `ALBUM` | "&lt;artist&gt; Singles" for singles |
 | album artist | `ALBUMARTIST` | |
-| year | `DATE` | release date; `ORIGINALDATE` for original_year |
-| track/disc | `TRACKNUMBER`, `DISCNUMBER` | written as `n/total` |
-| mb ids | `MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_RELEASETRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID` | |
+| year | `DATE` | release date; original year for singles |
+| original year | `ORIGINALDATE` | release group's first release |
+| track/disc | `TRACKNUMBER`, `DISCNUMBER` | written as `n/total`; not for singles |
+| mb ids | `MUSICBRAINZ_TRACKID` (recording), `MUSICBRAINZ_RELEASETRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID` | artist ids only when a single artist is credited |
 
-To decide: how to handle featured artists, how to set sort names, whether to use
-"Various Artists" for compilations, which genre source (MusicBrainz tags/genres), and the
-path format, e.g. `$albumartist/$album ($year)/$disc-$track $title`.
+Writing an empty string through `mc_tags_write()` removes that tag.
+
+## Cover art
+
+Each album folder gets a `cover.jpg` (or `cover.png`). `albums.art_hash` holds its SHA-256,
+so devices can tell whether they have the same image. In order:
+
+1. a cover already in the album folder is kept.
+2. a cover in the folder the files came from (`cover`, `folder` or `front`, `.jpg`/`.jpeg`/
+   `.png`, any case) is copied.
+3. Cover Art Archive `release/<id>/front-1200`.
+4. Cover Art Archive `release-group/<id>/front-1200`.
+5. iTunes Search (`entity=album`). A result is used only if its album and artist names are
+   both close (combined distance below 0.25). The 100 px artwork URL is rewritten to
+   1200 px.
+
+Only JPEG and PNG up to 16 MB are downloaded. Singles albums get no cover. Art isn't
+embedded in the files yet.
+
+## Still to decide
+
+How to set sort names for multi-artist credits, which genre source to use (MusicBrainz
+tags/genres), whether the path format should be configurable, whether to embed cover art,
+whether the singles album should get a generated cover, and how to detect duplicates beyond
+"same release track, same place".

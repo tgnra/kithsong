@@ -11,8 +11,9 @@ Priorities:
   on the OS as little as possible.
 - **One brain.** A shared C core holds all the logic, so every platform behaves the same.
 
-> **Status:** early scaffold. The core opens and migrates its database, reads and writes
-> tags, and can reach MusicBrainz over HTTPS. Each frontend shows an empty window. See
+> **Status:** early scaffold. The core opens and migrates its database, and the importer
+> tags folders against MusicBrainz and fetches cover art. The Windows frontend has the import
+> screen and the album grid; otherwise the frontends show an empty window. See
 > [docs/architecture.md](docs/architecture.md) for what's stubbed.
 
 ## Platforms
@@ -27,9 +28,18 @@ Priorities:
 
 ### Library and autotagging
 
-- **Import** scans a folder, matches it against MusicBrainz (and AcoustID fingerprints when
-  the tags aren't enough), shows the best matches for you to confirm, then writes clean
-  tags.
+- **One library folder.** You choose it on first run (default: your Music folder). It
+  holds everything: the music, organised as `Artist/Album (Year)/01 Title.flac`, a
+  `cover.jpg` per album, and the database as `library.db`. The app's own settings, i.e. where
+  that folder is, live in `%LOCALAPPDATA%\musicapp` (`~/.config/musicapp` on Linux).
+- **Import**: drop folders on the window. Files are copied into the library; your originals
+  are never modified. Everything is scanned and matched against MusicBrainz in one go.
+  Confident matches are imported straight away, with cover art from the Cover Art Archive
+  or iTunes. Anything below the confidence threshold is listed for you to review: pick a
+  match, search again, keep the existing tags or skip. AcoustID fingerprints for untagged
+  files are planned.
+- **Singles** don't become one-track albums. Each artist's singles live together in one
+  album, "&lt;artist&gt; Singles".
 - The tagger is our own C code, not beets. That means no bundled Python, the same importer
   on every platform including Android, and tagging rules we control. See
   [docs/tagging-rules.md](docs/tagging-rules.md).

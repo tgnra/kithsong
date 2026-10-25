@@ -62,8 +62,11 @@ TagLib::FileRef open_file(const char *path, bool read_audio) {
 #endif
 }
 
+// NULL leaves the tag alone; "" removes it.
 void set_str(TagLib::PropertyMap &props, const char *key, const char *value) {
-  if (value && *value) props.replace(key, TagLib::StringList(TagLib::String(value, TagLib::String::UTF8)));
+  if (!value) return;
+  if (!*value) props.erase(key);
+  else props.replace(key, TagLib::StringList(TagLib::String(value, TagLib::String::UTF8)));
 }
 
 void set_pair(TagLib::PropertyMap &props, const char *key, int num, int total) {
@@ -93,7 +96,10 @@ extern "C" mc_status mc_tags_read(const char *path, mc_tags *out) {
     out->mb_releasetrackid = prop_str(props, "MUSICBRAINZ_RELEASETRACKID");
     out->mb_albumid = prop_str(props, "MUSICBRAINZ_ALBUMID");
     out->mb_artistid = prop_str(props, "MUSICBRAINZ_ARTISTID");
+    out->mb_albumartistid = prop_str(props, "MUSICBRAINZ_ALBUMARTISTID");
+    out->mb_releasegroupid = prop_str(props, "MUSICBRAINZ_RELEASEGROUPID");
     out->year = prop_int(props, "DATE");
+    out->original_year = prop_int(props, "ORIGINALDATE");
     prop_pair(props, "TRACKNUMBER", &out->track, &out->track_total);
     prop_pair(props, "DISCNUMBER", &out->disc, &out->disc_total);
     if (!out->track_total) out->track_total = prop_int(props, "TRACKTOTAL");
@@ -132,7 +138,11 @@ extern "C" mc_status mc_tags_write(const char *path, const mc_tags *tags) {
     set_str(props, "MUSICBRAINZ_RELEASETRACKID", tags->mb_releasetrackid);
     set_str(props, "MUSICBRAINZ_ALBUMID", tags->mb_albumid);
     set_str(props, "MUSICBRAINZ_ARTISTID", tags->mb_artistid);
+    set_str(props, "MUSICBRAINZ_ALBUMARTISTID", tags->mb_albumartistid);
+    set_str(props, "MUSICBRAINZ_RELEASEGROUPID", tags->mb_releasegroupid);
     if (tags->year > 0) set_str(props, "DATE", std::to_string(tags->year).c_str());
+    if (tags->original_year > 0)
+      set_str(props, "ORIGINALDATE", std::to_string(tags->original_year).c_str());
     set_pair(props, "TRACKNUMBER", tags->track, tags->track_total);
     set_pair(props, "DISCNUMBER", tags->disc, tags->disc_total);
 
@@ -149,7 +159,8 @@ extern "C" void mc_tags_clear(mc_tags *tags) {
   if (!tags) return;
   char **strs[] = {&tags->title,      &tags->artist,     &tags->album,
                    &tags->album_artist, &tags->genre,    &tags->mb_trackid,
-                   &tags->mb_releasetrackid, &tags->mb_albumid, &tags->mb_artistid};
+                   &tags->mb_releasetrackid, &tags->mb_albumid, &tags->mb_artistid,
+                   &tags->mb_albumartistid, &tags->mb_releasegroupid};
   for (char **s : strs) std::free(*s);
   std::memset(tags, 0, sizeof *tags);
 }

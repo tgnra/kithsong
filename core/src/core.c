@@ -5,6 +5,7 @@
 #include <curl/curl.h>
 
 #include "config.h"
+#include "tagger/coverart.h"
 #include "tagger/musicbrainz.h"
 
 const char *mc_version(void) {
@@ -29,6 +30,7 @@ const char *mc_status_str(mc_status status) {
 mc_status mc_init(void) {
   if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) return MC_ERR_NET;
   mc_musicbrainz_global_init();
+  mc_coverart_global_init();
   return MC_OK;
 }
 

@@ -1,5 +1,6 @@
 #include "net/http.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,6 +15,25 @@ void mc_buffer_free(mc_buffer *buf) {
   free(buf->data);
   buf->data = NULL;
   buf->len = 0;
+}
+
+char *mc_url_escape(const char *s) {
+  static const char hex[] = "0123456789ABCDEF";
+  char *out = malloc(strlen(s) * 3 + 1);
+  if (!out) return NULL;
+  char *p = out;
+  for (const unsigned char *c = (const unsigned char *)s; *c; c++) {
+    if ((*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') ||
+        *c == '-' || *c == '_' || *c == '.' || *c == '~') {
+      *p++ = (char)*c;
+    } else {
+      *p++ = '%';
+      *p++ = hex[*c >> 4];
+      *p++ = hex[*c & 15];
+    }
+  }
+  *p = '\0';
+  return out;
 }
 
 static size_t on_body(char *ptr, size_t size, size_t nmemb, void *user) {
@@ -41,6 +61,10 @@ mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status) {
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "musicapp/" MC_VERSION_STRING " ( " MC_CONTACT " )");
   curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &ca);
   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+  /* TLS 1.3 handshakes fail with curl 8.11.1 + Mbed TLS 3.6.2 ("SSL - Internal error",
+   * -0x6C00) against every host tried, with or without psa_crypto_init(). Cap at 1.2 until
+   * the pinned versions move on, then remove this and re-run manual_mb_ping. */
+  curl_easy_setopt(curl, CURLOPT_SSLVERSION, (long)(CURL_SSLVERSION_TLSv1_2 | CURL_SSLVERSION_MAX_TLSv1_2));
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
@@ -54,6 +78,7 @@ mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status) {
   curl_easy_cleanup(curl);
 
   if (rc != CURLE_OK) {
+    fprintf(stderr, "musiccore: GET %s failed: %s\n", url, curl_easy_strerror(rc));
     mc_buffer_free(body);
     return rc == CURLE_WRITE_ERROR ? MC_ERR_NOMEM : MC_ERR_NET;
   }

@@ -151,12 +151,21 @@ int main(int argc, char **argv) {
   app a = {0};
   mc_init();
 
-  char *dir = g_build_filename(g_get_user_data_dir(), "musicapp", NULL);
-  g_mkdir_with_parents(dir, 0700);
-  char *path = g_build_filename(dir, "library.db", NULL);
-  if (mc_library_open(path, &a.lib) != MC_OK) a.lib = NULL;
-  g_free(path);
-  g_free(dir);
+  /* Settings in ~/.config/musicapp say where the library folder is. Until there's a
+   * first-run dialog here, the Music folder is used and remembered. */
+  char *settings_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
+  mc_settings *settings = NULL;
+  if (mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings)) {
+    const char *music = g_get_user_special_dir(G_USER_DIRECTORY_MUSIC);
+    char *fallback = music ? NULL : g_build_filename(g_get_home_dir(), "Music", NULL);
+    mc_settings_set_library_dir(settings, music ? music : fallback);
+    mc_settings_save(settings);
+    g_free(fallback);
+  }
+  g_free(settings_dir);
+  const char *library_dir = mc_settings_library_dir(settings);
+  if (!library_dir || mc_library_open(library_dir, &a.lib) != MC_OK) a.lib = NULL;
+  mc_settings_free(settings);
 
   AdwApplication *gapp = adw_application_new("app.musicapp.Musicapp", G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(gapp, "activate", G_CALLBACK(on_activate), &a);

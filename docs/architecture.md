@@ -29,15 +29,16 @@
 
 | Module      | Path                   | Status   |
 |-------------|------------------------|----------|
-| library     | `core/src/library`     | schema, migrations, change-log triggers, counts |
-| tagger      | `core/src/tagger`      | tag read/write (TagLib), MusicBrainz ping; autotagger stubbed |
-| net         | `core/src/net`         | HTTPS GET with embedded CA bundle, rate limiter |
+| library     | `core/src/library`     | library folder, schema, migrations, change-log triggers, counts |
+| settings    | `core/src/settings.c`  | per-device settings (library folder location) as JSON |
+| tagger      | `core/src/tagger`      | tag read/write (TagLib), importer: MusicBrainz matching, scoring, singles, cover art, copying into the library folder (see [tagging-rules.md](tagging-rules.md)); no AcoustID yet |
+| net         | `core/src/net`         | HTTPS GET with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`) |
 | playlist    | `core/src/playlist`    | stub |
 | playback    | `core/src/playback`    | stub |
 | sync        | `core/src/sync`        | stub |
 | discovery   | `core/src/discovery`   | stub |
 | transcode   | `core/src/transcode`   | stub |
-| util        | `core/src/util`        | clocks, RNG, mutex, UUIDv7, HLC |
+| util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, UUIDv7, HLC |
 
 ## Startup budget
 

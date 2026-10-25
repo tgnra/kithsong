@@ -1,3 +1,32 @@
 #include <windows.h>
+#include <commctrl.h>
+
+#include "resource.h"
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "musicapp.manifest"
+
+/* Opened from the import list for an item that needs the user's decision. */
+IDD_REVIEW DIALOGEX 0, 0, 540, 340
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Choose a Match"
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_REV_HEADER, 7, 7, 526, 28, SS_NOPREFIX
+  LTEXT           "Matches on MusicBrainz", -1, 7, 40, 200, 9
+  CONTROL         "", IDC_REV_MATCHES, "SysListView32",
+                  LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER |
+                  WS_BORDER | WS_TABSTOP, 7, 51, 526, 92
+  LTEXT           "Tracks for the selected match", -1, 7, 149, 200, 9
+  CONTROL         "", IDC_REV_TRACKS, "SysListView32",
+                  LVS_REPORT | LVS_NOSORTHEADER | WS_BORDER | WS_TABSTOP, 7, 160, 526, 118
+  LTEXT           "Search again:", -1, 7, 290, 48, 9
+  LTEXT           "Artist", -1, 58, 290, 22, 9
+  EDITTEXT        IDC_REV_ARTIST, 82, 288, 150, 13, ES_AUTOHSCROLL
+  LTEXT           "Album", IDC_REV_TITLE_LABEL, 240, 290, 24, 9
+  EDITTEXT        IDC_REV_TITLE, 266, 288, 200, 13, ES_AUTOHSCROLL
+  PUSHBUTTON      "Search", IDC_REV_SEARCH, 473, 287, 60, 15
+  PUSHBUTTON      "Use Existing Tags", IDC_REV_ASIS, 7, 319, 80, 15
+  PUSHBUTTON      "Skip", IDC_REV_SKIP, 92, 319, 50, 15
+  DEFPUSHBUTTON   "Apply Match", IDOK, 413, 319, 60, 15
+  PUSHBUTTON      "Cancel", IDCANCEL, 478, 319, 55, 15
+END

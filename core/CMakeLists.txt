@@ -25,6 +25,7 @@ add_custom_command(
 
 add_library(musiccore STATIC
   src/core.c
+  src/settings.c
   src/util/platform.c
   src/util/uid.c
   src/util/hlc.c
@@ -34,6 +35,10 @@ add_library(musiccore STATIC
   src/playback/player.c
   src/tagger/tag_io.cpp
   src/tagger/musicbrainz.c
+  src/tagger/match.c
+  src/tagger/coverart.c
+  src/tagger/import_db.c
+  src/tagger/organize.c
   src/tagger/tagger.c
   src/net/http.c
   src/transcode/transcode.c
@@ -45,7 +50,7 @@ target_include_directories(musiccore
   PUBLIC include
   PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(musiccore PRIVATE
-  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs tag CURL::libcurl)
+  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs tag CURL::libcurl mbedcrypto)
 if(WIN32)
   target_compile_definitions(musiccore PRIVATE _WIN32_WINNT=0x0A00)
   target_link_libraries(musiccore PRIVATE bcrypt)

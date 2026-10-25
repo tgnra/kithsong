@@ -11,6 +11,23 @@ extern const unsigned char mc_schema_v1_sql[];
 /* Migration i takes the database from user_version i to i + 1. Append only. */
 static const char *const k_migrations[] = {
   (const char *)mc_schema_v1_sql,
+  /* v2: singles. Tracks that aren't part of an album live in one "<artist> Singles" album
+   * per artist (kind = 'singles'), so each track keeps its own year and release id. */
+  "ALTER TABLE albums ADD COLUMN kind TEXT NOT NULL DEFAULT 'album';"
+  "ALTER TABLE tracks ADD COLUMN year INTEGER;"
+  "ALTER TABLE tracks ADD COLUMN mb_albumid TEXT;"
+  "CREATE INDEX albums_singles ON albums (artist_uid) WHERE kind = 'singles';",
+  /* v3: date added and play counts. Tracks imported before this have no added_ms. Plays are
+   * counted per device (one row per track and node, only ever written by that node), so
+   * syncing never loses plays made on two devices; the total is the sum. */
+  "ALTER TABLE tracks ADD COLUMN added_ms INTEGER;"
+  "CREATE TABLE track_plays ("
+  "  uid        TEXT PRIMARY KEY,"
+  "  track_uid  TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
+  "  node_uid   TEXT NOT NULL,"
+  "  play_count INTEGER NOT NULL DEFAULT 0,"
+  "  UNIQUE (track_uid, node_uid)"
+  ") WITHOUT ROWID;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -18,10 +35,12 @@ static const char *const k_migrations[] = {
 static const char *const k_artist_cols[] = {"name", "sort_name", "mb_artistid", NULL};
 static const char *const k_album_cols[] = {"title", "artist_uid", "year", "original_year",
                                            "disc_total", "mb_albumid", "mb_releasegroupid",
-                                           "art_hash", NULL};
+                                           "art_hash", "kind", NULL};
 static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "track_no",
                                            "disc_no", "duration_ms", "genre", "mb_trackid",
-                                           "mb_releasetrackid", NULL};
+                                           "mb_releasetrackid", "year", "mb_albumid", "added_ms",
+                                           NULL};
+static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", NULL};
 static const char *const k_playlist_cols[] = {"name", NULL};
 static const char *const k_entry_cols[] = {"playlist_uid", "track_uid", "position", NULL};
 
@@ -32,6 +51,7 @@ static const struct {
   {"artists", k_artist_cols},
   {"albums", k_album_cols},
   {"tracks", k_track_cols},
+  {"track_plays", k_play_cols},
   {"playlists", k_playlist_cols},
   {"playlist_entries", k_entry_cols},
 };
@@ -200,17 +220,33 @@ static uint64_t max_logged_hlc(mc_library *lib) {
 
 /* --- Public API --- */
 
-mc_status mc_library_open(const char *path, mc_library **out) {
-  if (!path || !out) return MC_ERR_INVALID_ARG;
+mc_status mc_library_open(const char *dir, mc_library **out) {
+  if (!dir || !*dir || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
 
   mc_library *lib = calloc(1, sizeof *lib);
   if (!lib) return MC_ERR_NOMEM;
   mc_hlc_init(&lib->hlc, mc_wall_ms, 0);
 
-  mc_status st = MC_ERR_DB;
+  /* Keep the folder without a trailing separator, so joining paths is uniform. */
+  size_t len = strlen(dir);
+  while (len > 1 && (dir[len - 1] == '/' || dir[len - 1] == '\\')) len--;
+  char *db_path = malloc(len + sizeof MC_LIBRARY_DB_NAME + 1);
+  lib->dir = malloc(len + 1);
+  mc_status st = MC_ERR_NOMEM;
+  if (!db_path || !lib->dir) goto fail;
+  memcpy(lib->dir, dir, len);
+  lib->dir[len] = '\0';
+  snprintf(db_path, len + sizeof MC_LIBRARY_DB_NAME + 1, "%s%c" MC_LIBRARY_DB_NAME, lib->dir,
+           MC_PATH_SEP);
+
+  if ((st = mc_mkdirs(lib->dir)) != MC_OK) goto fail;
+  st = MC_ERR_DB;
   int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
-  if (sqlite3_open_v2(path, &lib->db, flags, NULL) != SQLITE_OK) goto fail;
+  int rc = sqlite3_open_v2(db_path, &lib->db, flags, NULL);
+  free(db_path);
+  db_path = NULL;
+  if (rc != SQLITE_OK) goto fail;
 
   sqlite3_busy_timeout(lib->db, 5000);
   if ((st = exec(lib, "PRAGMA journal_mode = WAL;"
@@ -229,6 +265,7 @@ mc_status mc_library_open(const char *path, mc_library **out) {
 
 fail:
   if (lib->db) fprintf(stderr, "musiccore: library open failed: %s\n", sqlite3_errmsg(lib->db));
+  free(db_path);
   mc_library_close(lib);
   return st;
 }
@@ -236,11 +273,61 @@ fail:
 void mc_library_close(mc_library *lib) {
   if (!lib) return;
   sqlite3_close_v2(lib->db);
+  free(lib->dir);
   free(lib);
+}
+
+char *mc_library_relpath(const mc_library *lib, const char *abs) {
+  size_t n = strlen(lib->dir);
+  if (strlen(abs) <= n + 1 || (abs[n] != '/' && abs[n] != '\\')) return NULL;
+  char *prefix = malloc(n + 1);
+  if (!prefix) return NULL;
+  memcpy(prefix, abs, n);
+  prefix[n] = '\0';
+  int inside = mc_same_path(prefix, lib->dir);
+  free(prefix);
+  if (!inside) return NULL;
+
+  char *rel = mc_strdup(abs + n + 1);
+  if (rel)
+    for (char *p = rel; *p; p++)
+      if (*p == '\\') *p = '/';
+  return rel;
+}
+
+char *mc_library_abspath(const mc_library *lib, const char *rel) {
+  size_t n = strlen(lib->dir), m = strlen(rel);
+  char *abs = malloc(n + m + 2);
+  if (!abs) return NULL;
+  memcpy(abs, lib->dir, n);
+  abs[n] = MC_PATH_SEP;
+  memcpy(abs + n + 1, rel, m + 1);
+  for (char *p = abs + n + 1; *p; p++)
+    if (*p == '/') *p = MC_PATH_SEP;
+  return abs;
+}
+
+mc_status mc_library_begin_write(mc_library *lib) {
+  if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
+  uint64_t seen = max_logged_hlc(lib);
+  if (seen > lib->hlc.last) lib->hlc.last = seen;
+  return MC_OK;
+}
+
+mc_status mc_library_commit(mc_library *lib) {
+  return exec(lib, "COMMIT");
+}
+
+void mc_library_rollback(mc_library *lib) {
+  exec(lib, "ROLLBACK");
 }
 
 int mc_library_schema_version(const mc_library *lib) {
   return user_version(lib->db);
+}
+
+const char *mc_library_dir(const mc_library *lib) {
+  return lib->dir;
 }
 
 const char *mc_library_node_uid(const mc_library *lib) {
@@ -249,6 +336,69 @@ const char *mc_library_node_uid(const mc_library *lib) {
 
 const char *mc_library_errmsg(const mc_library *lib) {
   return sqlite3_errmsg(lib->db);
+}
+
+static char *column_dup(sqlite3_stmt *stmt, int col) {
+  const unsigned char *s = sqlite3_column_text(stmt, col);
+  return s ? mc_strdup((const char *)s) : NULL;
+}
+
+mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* The folder is wherever the album's files are: any one file's directory will do. */
+  static const char sql[] =
+    "SELECT a.uid, a.title, ar.name, a.year, a.kind = 'singles', a.art_hash IS NOT NULL,"
+    " (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid"
+    "  WHERE t.album_uid = a.uid LIMIT 1)"
+    " FROM albums a LEFT JOIN artists ar ON ar.uid = a.artist_uid"
+    " ORDER BY coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.kind = 'singles',"
+    " a.year, a.title COLLATE NOCASE";
+
+  mc_album_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  int64_t total = 0;
+  mc_status st = mc_library_count(lib, MC_ENTITY_ALBUMS, &total);
+  if (st == MC_OK && total > 0 && !(list->items = calloc((size_t)total, sizeof *list->items)))
+    st = MC_ERR_NOMEM;
+
+  sqlite3_stmt *stmt = NULL;
+  if (st == MC_OK && sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) st = MC_ERR_DB;
+  while (st == MC_OK && list->count < total && sqlite3_step(stmt) == SQLITE_ROW) {
+    mc_album_info *a = &list->items[list->count++];
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(a->uid, (const char *)uid);
+    a->title = column_dup(stmt, 1);
+    a->artist = column_dup(stmt, 2);
+    a->year = sqlite3_column_int(stmt, 3);
+    a->is_singles = sqlite3_column_int(stmt, 4);
+    a->has_art = sqlite3_column_int(stmt, 5);
+    const unsigned char *file = sqlite3_column_text(stmt, 6);
+    if (file) {
+      char *abs = mc_library_abspath(lib, (const char *)file);
+      char *sep = abs ? strrchr(abs, MC_PATH_SEP) : NULL;
+      if (sep) *sep = '\0';
+      a->folder = abs;
+    }
+  }
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_album_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_album_list_free(mc_album_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].title);
+    free(list->items[i].artist);
+    free(list->items[i].folder);
+  }
+  free(list->items);
+  free(list);
 }
 
 mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out) {

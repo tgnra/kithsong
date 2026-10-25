@@ -16,6 +16,10 @@ typedef struct mc_buffer {
 
 void mc_buffer_free(mc_buffer *buf);
 
+/* Percent-encodes s for use in a URL query (RFC 3986 unreserved characters pass through).
+ * Returns a malloc'd string, or NULL on allocation failure. */
+char *mc_url_escape(const char *s);
+
 /* GET url into *body. *http_status receives the HTTP status code (may be NULL).
  * Transport failures return MC_ERR_NET; any HTTP status counts as success. */
 mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status);

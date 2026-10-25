@@ -70,6 +70,17 @@ int main(int argc, char **argv) {
   CHECK(out.duration_ms >= 990 && out.duration_ms <= 1010);
   mc_tags_clear(&out);
 
+  /* NULL leaves a tag alone, "" removes it. */
+  mc_tags edit = {0};
+  edit.mb_trackid = "";
+  edit.album_artist = "Low";
+  CHECK(mc_tags_write(path, &edit) == MC_OK);
+  CHECK(mc_tags_read(path, &out) == MC_OK);
+  CHECK(out.mb_trackid == NULL);
+  CHECK_STR(out.album_artist, "Low");
+  CHECK_STR(out.title, in.title);
+  mc_tags_clear(&out);
+
   CHECK(mc_tags_read("does-not-exist.flac", &out) == MC_ERR_FORMAT);
 
   return TEST_RESULT();

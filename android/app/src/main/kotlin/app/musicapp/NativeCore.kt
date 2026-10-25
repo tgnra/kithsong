@@ -8,6 +8,6 @@ object NativeCore {
 
     @JvmStatic external fun version(): String
 
-    /** Album count of the library at [path], or a negative mc_status code. */
-    @JvmStatic external fun albumCount(path: String): Long
+    /** Album count of the library in folder [libraryDir], or a negative mc_status code. */
+    @JvmStatic external fun albumCount(libraryDir: String): Long
 }

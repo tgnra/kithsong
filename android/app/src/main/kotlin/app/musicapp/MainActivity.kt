@@ -24,8 +24,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val dbPath = File(filesDir, "library.db").absolutePath
-        val albums = NativeCore.albumCount(dbPath)
+        // The library folder; library.db lives inside it.
+        val libraryDir = File(filesDir, "library").absolutePath
+        val albums = NativeCore.albumCount(libraryDir)
 
         setContent {
             MusicappTheme {
