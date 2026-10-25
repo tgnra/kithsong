@@ -64,7 +64,7 @@ Priorities:
   hybrid logical clocks, and playlist order merges cleanly even when it was changed on two
   devices.
 - **Lossy copies:** a device can ask for a lossy format instead of the originals, e.g. a
-  phone requesting Opus or MP3 rather than FLAC. The sender transcodes and caches the
+  phone requesting Opus rather than FLAC. The sender transcodes and caches the
   copies, and the copies are never mistaken for originals.
 
 Details: [docs/sync-protocol.md](docs/sync-protocol.md).

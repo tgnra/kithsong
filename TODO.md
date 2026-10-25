@@ -18,7 +18,6 @@
 - Set sync settings on any device - 
 - Library management - detect orphaned files, automatically organise library files
 - Last.fm scrobbling!!
-- Playback - Opus
 - Playback - Ogg Vorbis
 - Playback - AAC/M4A - pick a decoder: the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 

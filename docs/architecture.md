@@ -34,10 +34,10 @@
 | tagger      | `core/src/tagger`      | tag read/write (TagLib), importer: MusicBrainz matching, scoring, singles, cover art, copying into the library folder (see [tagging-rules.md](tagging-rules.md)); no AcoustID yet |
 | net         | `core/src/net`         | HTTPS GET with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`); TCP sockets with timeouts over POSIX and Winsock |
 | playlist    | `core/src/playlist`    | stub |
-| playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs |
+| playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs; Opus via opusfile |
 | sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing crypto; no sessions yet |
 | discovery   | `core/src/discovery`   | mDNS/DNS-SD announce and browse of `_musicapp._tcp` on a core thread (mjansson/mdns); peers reported online/offline through a callback |
-| transcode   | `core/src/transcode`   | stub |
+| transcode   | `core/src/transcode`   | Opus (libopusenc) with tags and cover, cached per file and bitrate with an LRU trim; size estimate; encode benchmark |
 | util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, UUIDv7, HLC |
 
 ## Startup budget

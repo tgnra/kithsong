@@ -20,6 +20,8 @@ musicapp_test(test_tags)
 musicapp_test(test_match)
 musicapp_test(test_import_db)
 musicapp_test(test_organize)
+musicapp_test(test_transcode)
+target_link_libraries(test_transcode PRIVATE mc_opusfile)  # reads the output back directly
 musicapp_test(test_player)
 set_tests_properties(test_player PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
 musicapp_test(test_discovery)

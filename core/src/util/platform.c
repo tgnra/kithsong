@@ -39,6 +39,12 @@ void mc_sleep_ms(uint32_t ms) {
   Sleep(ms);
 }
 
+int mc_cpu_count(void) {
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 1;
+}
+
 mc_status mc_random_bytes(void *buf, size_t len) {
   if (len > ULONG_MAX) return MC_ERR_INVALID_ARG;
   NTSTATUS st = BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)len, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
@@ -296,6 +302,20 @@ mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms) {
   return MC_OK;
 }
 
+mc_status mc_touch(const char *path) {
+  wchar_t *w = widen(path);
+  if (!w) return MC_ERR_INVALID_ARG;
+  HANDLE h = CreateFileW(w, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  free(w);
+  if (h == INVALID_HANDLE_VALUE) return MC_ERR_NOT_FOUND;
+  FILETIME now;
+  GetSystemTimeAsFileTime(&now);
+  BOOL ok = SetFileTime(h, NULL, NULL, &now);
+  CloseHandle(h);
+  return ok ? MC_OK : MC_ERR_IO;
+}
+
 #else
 
 static uint64_t timespec_ms(clockid_t clock) {
@@ -316,6 +336,11 @@ void mc_sleep_ms(uint32_t ms) {
   struct timespec ts = {(time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L};
   while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {
   }
+}
+
+int mc_cpu_count(void) {
+  long n = sysconf(_SC_NPROCESSORS_ONLN);
+  return n > 0 ? (int)n : 1;
 }
 
 mc_status mc_random_bytes(void *buf, size_t len) {
@@ -474,6 +499,11 @@ mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms) {
   *size = (int64_t)st.st_size;
   *mtime_ms = (int64_t)st.st_mtim.tv_sec * 1000 + st.st_mtim.tv_nsec / 1000000;
   return MC_OK;
+}
+
+mc_status mc_touch(const char *path) {
+  if (utimensat(AT_FDCWD, path, NULL, 0) == 0) return MC_OK;
+  return errno == ENOENT ? MC_ERR_NOT_FOUND : MC_ERR_IO;
 }
 
 mc_status mc_list_dir(const char *dir, mc_list_fn fn, void *user) {

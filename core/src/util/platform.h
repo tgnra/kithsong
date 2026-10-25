@@ -18,6 +18,8 @@ uint64_t mc_wall_ms(void);
 /* Monotonic milliseconds, arbitrary origin. */
 uint64_t mc_mono_ms(void);
 void mc_sleep_ms(uint32_t ms);
+/* Logical processors online, at least 1. */
+int mc_cpu_count(void);
 
 /* Cryptographically secure random bytes from the OS. */
 mc_status mc_random_bytes(void *buf, size_t len);
@@ -86,6 +88,8 @@ FILE *mc_fopen(const char *path, const char *mode);
 /* Creates a directory and any missing parents. Succeeds if it already exists. */
 mc_status mc_mkdirs(const char *path);
 mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms);
+/* Sets a file's modification time to now. */
+mc_status mc_touch(const char *path);
 int mc_file_exists(const char *path);
 /* Copies a file. Fails if dst exists, unless overwrite is set. */
 mc_status mc_copy_file(const char *src, const char *dst, int overwrite);
