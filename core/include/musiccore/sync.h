@@ -13,6 +13,7 @@ extern "C" {
 
 typedef struct mc_library mc_library;
 typedef struct mc_sync mc_sync;
+typedef struct mc_transcode_opts mc_transcode_opts;
 
 mc_status mc_sync_new(mc_library *lib, mc_sync **out);
 void mc_sync_free(mc_sync *sync);

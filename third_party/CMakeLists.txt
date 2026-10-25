@@ -79,12 +79,12 @@ FetchContent_MakeAvailable(taglib mbedtls)
 
 # TagLib only exposes install-time include dirs; add the build-tree ones.
 target_include_directories(tag SYSTEM INTERFACE
-  "${taglib_SOURCE_DIR}/taglib"
-  "${taglib_SOURCE_DIR}/taglib/toolkit"
-  "${taglib_SOURCE_DIR}/taglib/mpeg"
-  "${taglib_SOURCE_DIR}/taglib/mpeg/id3v2"
-  "${taglib_BINARY_DIR}/taglib"
-  "${taglib_BINARY_DIR}")
+  "$<BUILD_INTERFACE:${taglib_SOURCE_DIR}/taglib>"
+  "$<BUILD_INTERFACE:${taglib_SOURCE_DIR}/taglib/toolkit>"
+  "$<BUILD_INTERFACE:${taglib_SOURCE_DIR}/taglib/mpeg>"
+  "$<BUILD_INTERFACE:${taglib_SOURCE_DIR}/taglib/mpeg/id3v2>"
+  "$<BUILD_INTERFACE:${taglib_BINARY_DIR}/taglib>"
+  "$<BUILD_INTERFACE:${taglib_BINARY_DIR}>")
 target_compile_definitions(tag INTERFACE TAGLIB_STATIC)
 
 # curl: HTTP(S) only, mbedTLS backend, no optional system dependencies.

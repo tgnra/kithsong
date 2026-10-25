@@ -66,7 +66,7 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 - A left sidebar with **Albums**, **Artists** and **Playlists**, plus a **Devices** section
   listing sync devices: online ones, and paired ones that are currently unreachable.
 - The rest of the window is an album grid. Clicking an album opens its track list in a pane
-  on the right.
+  on the right.\
 
 **Mobile**
 
