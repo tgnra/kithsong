@@ -32,10 +32,10 @@
 | library     | `core/src/library`     | library folder, schema, migrations, change-log triggers, counts |
 | settings    | `core/src/settings.c`  | per-device settings (library folder location) as JSON |
 | tagger      | `core/src/tagger`      | tag read/write (TagLib), importer: MusicBrainz matching, scoring, singles, cover art, copying into the library folder (see [tagging-rules.md](tagging-rules.md)); no AcoustID yet |
-| net         | `core/src/net`         | HTTPS GET with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`) |
+| net         | `core/src/net`         | HTTPS GET with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`); TCP sockets with timeouts over POSIX and Winsock |
 | playlist    | `core/src/playlist`    | stub |
 | playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs |
-| sync        | `core/src/sync`        | stub |
+| sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing crypto; no sessions yet |
 | discovery   | `core/src/discovery`   | stub |
 | transcode   | `core/src/transcode`   | stub |
 | util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, UUIDv7, HLC |

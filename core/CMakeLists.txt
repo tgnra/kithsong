@@ -51,10 +51,15 @@ add_library(musiccore STATIC
   src/tagger/organize.c
   src/tagger/tagger.c
   src/net/http.c
+  src/net/socket.c
   src/transcode/transcode.c
   src/discovery/discovery.c
   src/sync/sync.c
   src/sync/sync_db.c
+  src/sync/frame.c
+  src/sync/noise.c
+  src/sync/channel.c
+  src/sync/pair.c
   "${_sync_schema_c}")
 add_library(musiccore::musiccore ALIAS musiccore)
 
@@ -65,7 +70,7 @@ target_link_libraries(musiccore PRIVATE
   mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs tag CURL::libcurl mbedcrypto)
 if(WIN32)
   target_compile_definitions(musiccore PRIVATE _WIN32_WINNT=0x0A00)
-  target_link_libraries(musiccore PRIVATE bcrypt)
+  target_link_libraries(musiccore PRIVATE bcrypt ws2_32)
 endif()
 musicapp_warnings(musiccore)
 
