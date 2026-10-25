@@ -50,6 +50,8 @@ void mc_cond_init(mc_cond *cond);
 void mc_cond_destroy(mc_cond *cond);
 /* Atomically releases mutex and waits; reacquires it before returning. */
 void mc_cond_wait(mc_cond *cond, mc_mutex *mutex);
+/* Like mc_cond_wait, but gives up after about ms milliseconds. */
+void mc_cond_wait_ms(mc_cond *cond, mc_mutex *mutex, uint32_t ms);
 void mc_cond_broadcast(mc_cond *cond);
 
 typedef struct mc_thread {

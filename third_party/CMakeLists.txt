@@ -1,13 +1,43 @@
-# Third-party dependencies. Small single-file libraries are vendored in this directory;
-# larger ones are fetched at configure time, pinned by URL + SHA-256.
+# Third-party dependencies. None are committed: all are fetched at configure time, pinned by
+# URL + SHA-256. This directory only holds our build glue for them.
 # See LICENSES.md at the repo root for the license of each.
 
 include(FetchContent)
 
-# --- Vendored -----------------------------------------------------------------
+# --- Single-file libraries ----------------------------------------------------
 
-add_library(mc_sqlite3 STATIC sqlite/sqlite3.c)
-target_include_directories(mc_sqlite3 SYSTEM PUBLIC sqlite)
+# Download only; the targets below are ours.
+FetchContent_Declare(sqlite
+  URL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip
+  URL_HASH SHA256=aa73d8748095808471deaa8e6f34aa700e37f2f787f4425744f53fdd15a89c40
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_Declare(yyjson
+  URL https://github.com/ibireme/yyjson/archive/refs/tags/0.10.0.tar.gz
+  URL_HASH SHA256=0d901cb2c45c5586e3f3a4245e58c2252d6b24bf4b402723f6179523d389b165
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_Declare(miniaudio
+  URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.21.tar.gz
+  URL_HASH SHA256=6afb5c231613d2fab4f1c668b7243ff9a7d6d78a7f5a2692c133f026fe508506
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+# dr_libs has no release tags; pinned to a commit.
+FetchContent_Declare(dr_libs
+  URL https://github.com/mackron/dr_libs/archive/ea33eedde32b3a1baa92bb78fc98c4711f890623.tar.gz
+  URL_HASH SHA256=40bec21c1560426978aaf60fad8d5e4b7929caf569deb82f05e77b8c9d10b8fb
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+# Mozilla CA bundle, a dated snapshot from curl.se/ca. Refresh by bumping the date and hash.
+FetchContent_Declare(cacert
+  URL https://curl.se/ca/cacert-2026-10-20.pem
+  URL_HASH SHA256=796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe
+  DOWNLOAD_NO_EXTRACT ON
+  SOURCE_SUBDIR _none_)
+FetchContent_MakeAvailable(sqlite yyjson miniaudio dr_libs cacert)
+
+add_library(mc_sqlite3 STATIC "${sqlite_SOURCE_DIR}/sqlite3.c")
+target_include_directories(mc_sqlite3 SYSTEM PUBLIC "${sqlite_SOURCE_DIR}")
 target_compile_definitions(mc_sqlite3 PRIVATE
   SQLITE_DQS=0
   SQLITE_THREADSAFE=1
@@ -23,25 +53,47 @@ if(UNIX)
   target_link_libraries(mc_sqlite3 PUBLIC Threads::Threads m)
 endif()
 
-add_library(mc_yyjson STATIC yyjson/yyjson.c)
-target_include_directories(mc_yyjson SYSTEM PUBLIC yyjson)
+add_library(mc_yyjson STATIC "${yyjson_SOURCE_DIR}/src/yyjson.c")
+target_include_directories(mc_yyjson SYSTEM PUBLIC "${yyjson_SOURCE_DIR}/src")
 
-# Header-only; the implementations are compiled once inside core (see core/src/playback).
-add_library(mc_miniaudio INTERFACE)
-target_include_directories(mc_miniaudio SYSTEM INTERFACE miniaudio)
-add_library(mc_dr_libs INTERFACE)
-target_include_directories(mc_dr_libs SYSTEM INTERFACE dr_libs)
+# Audio output and decoding for core/src/playback. miniaudio only does output and format
+# conversion; dr_libs decode. The definitions are public, so every includer sees the same
+# configuration.
+add_library(mc_miniaudio STATIC miniaudio/miniaudio.c)
+target_include_directories(mc_miniaudio SYSTEM PUBLIC "${miniaudio_SOURCE_DIR}")
+target_compile_definitions(mc_miniaudio PUBLIC
+  MA_NO_DECODING MA_NO_ENCODING MA_NO_GENERATION MA_NO_RESOURCE_MANAGER MA_NO_ENGINE
+  MA_NO_NODE_GRAPH MA_ENABLE_ONLY_SPECIFIC_BACKENDS)
+if(WIN32)
+  target_compile_definitions(mc_miniaudio PUBLIC MA_ENABLE_WASAPI)
+elseif(ANDROID)
+  target_compile_definitions(mc_miniaudio PUBLIC MA_ENABLE_AAUDIO MA_ENABLE_OPENSL)
+  target_link_libraries(mc_miniaudio PUBLIC dl m)
+else()
+  # PipeWire serves both through its compatibility layers.
+  target_compile_definitions(mc_miniaudio PUBLIC MA_ENABLE_PULSEAUDIO MA_ENABLE_ALSA)
+  find_package(Threads REQUIRED)
+  target_link_libraries(mc_miniaudio PUBLIC Threads::Threads dl m)
+endif()
 
-# Mozilla CA bundle (from curl.se/ca), embedded so HTTPS never depends on the OS trust store.
+add_library(mc_dr_libs STATIC dr_libs/dr_libs.c)
+target_include_directories(mc_dr_libs SYSTEM PUBLIC "${dr_libs_SOURCE_DIR}")
+if(UNIX)
+  target_link_libraries(mc_dr_libs PUBLIC m)
+endif()
+
+# The CA bundle is embedded and passed to curl with CURLOPT_CAINFO_BLOB, so HTTPS never
+# depends on the OS trust store.
+set(_cacert_pem "${cacert_SOURCE_DIR}/cacert-2026-10-20.pem")
 set(_cacert_c "${CMAKE_CURRENT_BINARY_DIR}/cacert_embed.c")
 add_custom_command(
   OUTPUT "${_cacert_c}"
   COMMAND "${CMAKE_COMMAND}"
-    -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/cacert/cacert.pem
+    -DINPUT=${_cacert_pem}
     -DOUTPUT=${_cacert_c}
     -DSYMBOL=mc_cacert_pem
     -P "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
-  DEPENDS cacert/cacert.pem "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+  DEPENDS "${_cacert_pem}" "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
   COMMENT "Embedding CA bundle")
 add_library(mc_cacert STATIC "${_cacert_c}")
 

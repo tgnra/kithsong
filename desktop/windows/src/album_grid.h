@@ -33,6 +33,17 @@ void album_grid_set_library(mc_library *lib);
 
 /* The selected album: copies its uid and returns its title, or returns NULL if there's none. */
 const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]);
+/* The selected album's artist, or NULL. Valid until the grid next reloads. */
+const wchar_t *album_grid_selection_artist(void);
+/* The folder holding the selected album's cover, or NULL if it has none (or none is
+ * selected). Valid until the grid next reloads. */
+const wchar_t *album_grid_selection_cover(void);
+
+/* Sizes the tiles for a grid full_w wide, even while it's narrower, so a pane beside it
+ * that comes and goes takes whole columns without resizing the tiles. Returns the width the
+ * pane should take from the grid to be at least min_w: a whole number of columns, or 0 if
+ * that would leave the grid none. Call before each layout. */
+int album_grid_set_full_width(int full_w, int min_w);
 
 /* Call after theme_update. */
 void album_grid_theme_changed(void);

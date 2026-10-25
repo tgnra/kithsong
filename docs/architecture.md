@@ -1,8 +1,8 @@
 # Architecture
 
 ```
- Win32 UI        GTK4/libadwaita UI       Compose UI
- (desktop/windows) (desktop/linux)         (android, via JNI)
+ Win32 UI        GTK4/libadwaita UI       Compose UI (phone + Wear OS)
+ (desktop/windows) (desktop/linux)         (android/app, android/wear, via JNI)
         \               |                     /
          +--------------+--------------------+
                         |
@@ -16,7 +16,7 @@
 
 - **All behaviour lives in the core.** Frontends render state and forward user actions. If
   two frontends would need the same logic, it belongs in `core/`.
-- **One static binary per platform.** Dependencies are vendored or fetched by pinned hash and
+- **One static binary per platform.** Dependencies are fetched by pinned hash (never committed) and
   linked statically. No OS codecs, OS TLS or OS mDNS daemons.
 - **UTF-8 everywhere** at the core boundary, including Windows paths (the core converts to
   UTF-16 internally where Win32 or TagLib needs it).
@@ -34,7 +34,7 @@
 | tagger      | `core/src/tagger`      | tag read/write (TagLib), importer: MusicBrainz matching, scoring, singles, cover art, copying into the library folder (see [tagging-rules.md](tagging-rules.md)); no AcoustID yet |
 | net         | `core/src/net`         | HTTPS GET with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`) |
 | playlist    | `core/src/playlist`    | stub |
-| playback    | `core/src/playback`    | stub |
+| playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs |
 | sync        | `core/src/sync`        | stub |
 | discovery   | `core/src/discovery`   | stub |
 | transcode   | `core/src/transcode`   | stub |

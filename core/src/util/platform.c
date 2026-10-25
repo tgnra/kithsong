@@ -73,6 +73,10 @@ void mc_cond_wait(mc_cond *cond, mc_mutex *mutex) {
   SleepConditionVariableSRW((PCONDITION_VARIABLE)&cond->cv, (PSRWLOCK)&mutex->srw, INFINITE, 0);
 }
 
+void mc_cond_wait_ms(mc_cond *cond, mc_mutex *mutex, uint32_t ms) {
+  SleepConditionVariableSRW((PCONDITION_VARIABLE)&cond->cv, (PSRWLOCK)&mutex->srw, ms, 0);
+}
+
 void mc_cond_broadcast(mc_cond *cond) {
   WakeAllConditionVariable((PCONDITION_VARIABLE)&cond->cv);
 }
@@ -358,6 +362,18 @@ void mc_cond_destroy(mc_cond *cond) {
 
 void mc_cond_wait(mc_cond *cond, mc_mutex *mutex) {
   pthread_cond_wait(&cond->c, &mutex->m);
+}
+
+void mc_cond_wait_ms(mc_cond *cond, mc_mutex *mutex, uint32_t ms) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  ts.tv_sec += ms / 1000;
+  ts.tv_nsec += (long)(ms % 1000) * 1000000L;
+  if (ts.tv_nsec >= 1000000000L) {
+    ts.tv_sec++;
+    ts.tv_nsec -= 1000000000L;
+  }
+  pthread_cond_timedwait(&cond->c, &mutex->m, &ts);
 }
 
 void mc_cond_broadcast(mc_cond *cond) {

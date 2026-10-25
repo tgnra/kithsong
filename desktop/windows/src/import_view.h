@@ -1,13 +1,13 @@
-/* The import screen. While shown it replaces the sidebar, album grid and track pane:
+/* The Import page, beside the sidebar:
  *
  *   before an import            during / after an import
  *   +----------------------+    +------------------------------------------+
- *   | [<- Back]            |    | Matching 12 of 40...               [Done] |
- *   |  .- - - - - - - - -. |    | ========-------------------------------- |
- *   |  : Drop a folder    : |    |                                          |
- *   |  '- - - - - - - - -' |    | NEEDS YOUR ATTENTION                     |
- *   |   [Choose Folder...]  |    |  Needs review  Low  Things We Lost  70%  |
- *   +----------------------+    | IMPORTED                                 |
+ *   |  .- - - - - - - - -. |    | Matching 12 of 40...               [Done] |
+ *   |  : Drop a folder    : |    | ========-------------------------------- |
+ *   |  '- - - - - - - - -' |    |                                          |
+ *   |   [Choose Folder...]  |    | NEEDS YOUR ATTENTION                     |
+ *   +----------------------+    |  Needs review  Low  Things We Lost  70%  |
+ *                               | IMPORTED                                 |
  *                               |  Imported  Radiohead  OK Computer  100%  |
  *                               +------------------------------------------+
  *
@@ -26,10 +26,11 @@
  * notice that the library changed. */
 #define WM_APP_IMPORT (WM_APP + 1)
 #define WM_APP_LIBRARY_CHANGED (WM_APP + 2)
-/* Posted to the main window to leave the import view. wParam 0 (Done) asks before stopping
- * a running import; IMPORT_CLOSE_CANCEL (Back, on the drop zone) doesn't ask. */
+/* Posted to the main window when Done is clicked; import_view_confirm_close ends the session. */
 #define WM_APP_IMPORT_CLOSE (WM_APP + 3)
-#define IMPORT_CLOSE_CANCEL 1
+/* Sent to the main window when an import session starts (wParam TRUE) or ends (FALSE). A
+ * session lasts from the start of an import until Done. */
+#define WM_APP_IMPORT_SESSION (WM_APP + 4)
 
 void import_view_create(HWND parent, mc_library *lib);
 void import_view_destroy(void);
@@ -44,10 +45,9 @@ BOOL import_view_start(const char *const *paths, int count);
 void import_view_browse(void);
 /* Handles a WM_DROPFILES; returns TRUE if anything was imported. */
 BOOL import_view_drop(HDROP drop);
-/* Asks to stop a running import. Returns FALSE if the user wants to keep it running. */
+/* Asks to stop a running import, then ends the session. Returns FALSE if the user wants to
+ * keep it running. Items already imported stay in the library. */
 BOOL import_view_confirm_close(void);
-/* Stops any import without asking. Items already imported stay in the library. */
-void import_view_cancel(void);
 
 void import_view_on_event(WPARAM wp, LPARAM lp);
 /* Returns TRUE if cmd belonged to the import view. */

@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "musicapp"
-include(":app")
+include(":native", ":app", ":wear")

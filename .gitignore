@@ -5,8 +5,8 @@
 # Android / Gradle
 android/.gradle/
 android/build/
-android/app/build/
-android/app/.cxx/
+android/*/build/
+android/*/.cxx/
 android/local.properties
 *.apk
 *.aab

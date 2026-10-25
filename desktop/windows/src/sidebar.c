@@ -6,26 +6,35 @@
 #include "canvas.h"
 #include "theme.h"
 
-typedef enum { ROW_NAV, ROW_HEADER, ROW_NOTE } row_kind;
+typedef enum { ROW_NAV, ROW_HEADER, ROW_NOTE, ROW_SPACER } row_kind;
 
+/* The list box holds one item per row, except the spacer, which takes as many items as it
+ * needs to fill the height (an item can't be taller than 255 pixels). Each item's data is
+ * its index in rows. */
 static const struct {
   const wchar_t *text;
   wchar_t icon; /* Segoe Fluent Icons */
   row_kind kind;
+  sidebar_page page; /* navigation rows */
 } rows[] = {
-  {L"Albums", 0xE93C, ROW_NAV},
-  {L"Artists", 0xE77B, ROW_NAV},
-  {L"Playlists", 0xE90B, ROW_NAV},
-  {L"DEVICES", 0, ROW_HEADER},
-  {L"No devices found", 0, ROW_NOTE},
+  {L"Albums", 0xE93C, ROW_NAV, PAGE_ALBUMS},
+  {L"Artists", 0xE77B, ROW_NAV, PAGE_ARTISTS},
+  {L"Playlists", 0xE90B, ROW_NAV, PAGE_PLAYLISTS},
+  {L"DEVICES", 0, ROW_HEADER, 0},
+  {L"No devices found", 0, ROW_NOTE, 0},
+  {L"", 0, ROW_SPACER, 0}, /* pushes the rest to the bottom */
+  {L"Import", 0xE8B5, ROW_NAV, PAGE_IMPORT},
+  {L"Settings", 0xE713, ROW_NAV, PAGE_SETTINGS},
 };
 #define NUM_ROWS ((int)(sizeof rows / sizeof rows[0]))
+#define MAX_ITEM_H 255
 
 /* Metrics at 96 DPI. */
 enum {
   NAV_H = 36,
   HEADER_H = 40, /* includes the gap above the section */
   NOTE_H = 32,
+  BOTTOM = 6, /* below the last row */
   INSET = 6,  /* between the list's edges and the selection fill */
   TEXT_X = 18,
   ICON_W = 28, /* icon plus the gap after it */
@@ -38,25 +47,83 @@ static struct {
   HFONT font, header_font, icon_font;
   HBRUSH bg; /* below the rows; black (transparent) over Mica */
   canvas buf;
-  int hot; /* navigation row under the mouse, or -1 */
+  int hot; /* navigation item under the mouse, or -1 */
+  BOOL locked;
 } s;
+
+static void set_hot(int i);
 
 static int scale(int px) {
   return MulDiv(px, (int)s.dpi, USER_DEFAULT_SCREEN_DPI);
 }
 
-/* The next navigation row after from in direction dir (+1 or -1), or -1 if there is none. */
+static int item_count(void) {
+  return (int)SendMessageW(s.wnd, LB_GETCOUNT, 0, 0);
+}
+
+static int row_of(int item) {
+  return (int)SendMessageW(s.wnd, LB_GETITEMDATA, (WPARAM)item, 0);
+}
+
+static int selected_item(void) {
+  return (int)SendMessageW(s.wnd, LB_GETCURSEL, 0, 0);
+}
+
+/* A navigation item that can be selected now. */
+static BOOL enabled(int item) {
+  return rows[row_of(item)].kind == ROW_NAV && (!s.locked || item == selected_item());
+}
+
+/* The next enabled navigation item after from in direction dir (+1 or -1), or -1 if there is none. */
 static int next_nav(int from, int dir) {
-  for (int i = from + dir; i >= 0 && i < NUM_ROWS; i += dir)
-    if (rows[i].kind == ROW_NAV) return i;
+  for (int i = from + dir; i >= 0 && i < item_count(); i += dir)
+    if (enabled(i)) return i;
   return -1;
 }
 
-/* The navigation row at a WM_MOUSE* lParam, or -1. */
+/* The enabled navigation item at a WM_MOUSE* lParam, or -1. */
 static int nav_at(LPARAM lp) {
   LRESULT r = SendMessageW(s.wnd, LB_ITEMFROMPOINT, 0, lp);
   int i = LOWORD(r);
-  return !HIWORD(r) && i < NUM_ROWS && rows[i].kind == ROW_NAV ? i : -1;
+  return !HIWORD(r) && i < item_count() && enabled(i) ? i : -1;
+}
+
+static int row_height(int row) {
+  static const int heights[] = {[ROW_NAV] = NAV_H, [ROW_HEADER] = HEADER_H, [ROW_NOTE] = NOTE_H, [ROW_SPACER] = 0};
+  return scale(heights[rows[row].kind]);
+}
+
+static void add_item(int at, int row) {
+  int item = (int)SendMessageW(s.wnd, LB_INSERTSTRING, (WPARAM)at, (LPARAM)rows[row].text);
+  SendMessageW(s.wnd, LB_SETITEMDATA, (WPARAM)item, row);
+  SendMessageW(s.wnd, LB_SETITEMHEIGHT, (WPARAM)item, row_height(row));
+}
+
+/* Gives the spacer the height left over, so the rows after it sit at the bottom. */
+static void fit_spacer(void) {
+  RECT rc;
+  GetClientRect(s.wnd, &rc);
+  int first = -1, n = 0, used = scale(BOTTOM), spacer_row = 0;
+  for (int i = 0; i < item_count(); i++) {
+    int row = row_of(i);
+    if (rows[row].kind != ROW_SPACER) {
+      used += row_height(row);
+    } else {
+      if (first < 0) first = i;
+      spacer_row = row;
+      n++;
+    }
+  }
+  if (first < 0) return;
+
+  int gap = max(0, rc.bottom - used), want = max(1, (gap + MAX_ITEM_H - 1) / MAX_ITEM_H);
+  set_hot(-1); /* item indexes shift */
+  for (; n < want; n++) add_item(first, spacer_row);
+  for (; n > want; n--) SendMessageW(s.wnd, LB_DELETESTRING, (WPARAM)first, 0);
+  for (int k = 0; k < n; k++)
+    SendMessageW(s.wnd, LB_SETITEMHEIGHT, (WPARAM)(first + k), gap / n + (k < gap % n));
+  SendMessageW(s.wnd, LB_SETTOPINDEX, 0, 0);
+  InvalidateRect(s.wnd, NULL, TRUE);
 }
 
 static void invalidate_row(int i) {
@@ -72,8 +139,8 @@ static void set_hot(int i) {
   s.hot = i;
 }
 
-static void select_row(int i) {
-  if (i < 0 || i == (int)SendMessageW(s.wnd, LB_GETCURSEL, 0, 0)) return;
+static void select_item(int i) {
+  if (i < 0 || i == selected_item()) return;
   SendMessageW(s.wnd, LB_SETCURSEL, (WPARAM)i, 0);
   SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), LBN_SELCHANGE),
                (LPARAM)s.wnd);
@@ -96,24 +163,29 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, U
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
       SetFocus(wnd);
-      select_row(nav_at(lp));
+      select_item(nav_at(lp));
       return 0;
     case WM_KEYDOWN: {
       /* Using the keyboard shows focus rectangles, as in a dialog. */
       SendMessageW(GetAncestor(wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
-      int cur = (int)SendMessageW(wnd, LB_GETCURSEL, 0, 0);
+      int cur = selected_item();
       switch (wp) {
-        case VK_UP: select_row(next_nav(cur, -1)); return 0;
-        case VK_DOWN: select_row(next_nav(cur, +1)); return 0;
+        case VK_UP: select_item(next_nav(cur, -1)); return 0;
+        case VK_DOWN: select_item(next_nav(cur, +1)); return 0;
         case VK_HOME:
-        case VK_PRIOR: select_row(next_nav(-1, +1)); return 0;
+        case VK_PRIOR: select_item(next_nav(-1, +1)); return 0;
         case VK_END:
-        case VK_NEXT: select_row(next_nav(NUM_ROWS, -1)); return 0;
+        case VK_NEXT: select_item(next_nav(item_count(), -1)); return 0;
       }
       break;
     }
     case WM_CHAR:
       return 0; /* type-ahead would land on headers */
+    case WM_SIZE: {
+      LRESULT r = DefSubclassProc(wnd, msg, wp, lp);
+      fit_spacer();
+      return r;
+    }
     case WM_NCDESTROY:
       RemoveWindowSubclass(wnd, sidebar_proc, id);
       if (s.font) DeleteObject(s.font);
@@ -136,7 +208,7 @@ HWND sidebar_create(HWND parent, int id) {
                             LBS_NOINTEGRALHEIGHT,
                           0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
   if (!s.wnd) return NULL;
-  for (int i = 0; i < NUM_ROWS; i++) SendMessageW(s.wnd, LB_ADDSTRING, 0, (LPARAM)rows[i].text);
+  for (int i = 0; i < NUM_ROWS; i++) add_item(i, i);
   SendMessageW(s.wnd, LB_SETCURSEL, 0, 0);
   SetWindowSubclass(s.wnd, sidebar_proc, 0, 0);
   return s.wnd;
@@ -164,16 +236,32 @@ void sidebar_update(UINT dpi) {
   if (s.bg) DeleteObject(s.bg);
   s.bg = CreateSolidBrush(theme.mica ? RGB(0, 0, 0) : theme.frame);
 
-  static const int heights[] = {[ROW_NAV] = NAV_H, [ROW_HEADER] = HEADER_H, [ROW_NOTE] = NOTE_H};
-  for (int i = 0; i < NUM_ROWS; i++)
-    SendMessageW(s.wnd, LB_SETITEMHEIGHT, (WPARAM)i, scale(heights[rows[i].kind]));
-  InvalidateRect(s.wnd, NULL, TRUE);
+  for (int i = 0; i < item_count(); i++)
+    if (rows[row_of(i)].kind != ROW_SPACER) SendMessageW(s.wnd, LB_SETITEMHEIGHT, (WPARAM)i, row_height(row_of(i)));
+  fit_spacer();
+}
+
+sidebar_page sidebar_selection(void) {
+  int i = selected_item();
+  return i >= 0 ? rows[row_of(i)].page : PAGE_ALBUMS;
+}
+
+void sidebar_select(sidebar_page page) {
+  for (int i = 0; i < item_count(); i++)
+    if (rows[row_of(i)].kind == ROW_NAV && rows[row_of(i)].page == page) SendMessageW(s.wnd, LB_SETCURSEL, (WPARAM)i, 0);
+}
+
+void sidebar_set_locked(BOOL locked) {
+  if (locked == s.locked) return;
+  s.locked = locked;
+  set_hot(-1);
+  InvalidateRect(s.wnd, NULL, FALSE);
 }
 
 void sidebar_draw(const DRAWITEMSTRUCT *dis) {
-  int i = (int)dis->itemID;
+  int item = (int)dis->itemID, i = (int)dis->itemData;
   int w = dis->rcItem.right - dis->rcItem.left, h = dis->rcItem.bottom - dis->rcItem.top;
-  if (i < 0 || i >= NUM_ROWS || !canvas_reserve(&s.buf, w, h)) return;
+  if (item < 0 || i < 0 || i >= NUM_ROWS || !canvas_reserve(&s.buf, w, h)) return;
 
   /* Drawn off-screen, which also gets the alpha right over Mica. */
   canvas *c = &s.buf;
@@ -189,7 +277,8 @@ void sidebar_draw(const DRAWITEMSTRUCT *dis) {
       BOOL selected = (dis->itemState & ODS_SELECTED) != 0;
       RECT fill = {scale(INSET), scale(2), w - scale(INSET), h - scale(2)};
       color = theme_draw_state(c, &fill, scale(RADIUS),
-                               selected ? STATE_SELECTED : i == s.hot ? STATE_HOT : STATE_NORMAL);
+                               selected ? STATE_SELECTED : item == s.hot ? STATE_HOT : STATE_NORMAL);
+      if (!enabled(item)) color = theme.text3;
       if (selected && !theme.high_contrast) { /* accent marker at the left edge */
         int mark_h = scale(16);
         RECT mark = {fill.left, (h - mark_h) / 2, fill.left + scale(3), (h + mark_h) / 2};
@@ -211,6 +300,8 @@ void sidebar_draw(const DRAWITEMSTRUCT *dis) {
       break;
     case ROW_NOTE:
       color = theme.text3;
+      break;
+    case ROW_SPACER:
       break;
   }
   canvas_text(c, rows[i].text, -1, &text, format, font, color);

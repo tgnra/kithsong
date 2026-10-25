@@ -13,7 +13,8 @@ Priorities:
 
 > **Status:** early scaffold. The core opens and migrates its database, and the importer
 > tags folders against MusicBrainz and fetches cover art. The Windows frontend has the import
-> screen and the album grid; otherwise the frontends show an empty window. See
+> screen, the album grid and gapless playback, with media keys, taskbar buttons and Windows'
+> media controls; otherwise the frontends show an empty window. See
 > [docs/architecture.md](docs/architecture.md) for what's stubbed.
 
 ## Platforms
@@ -23,6 +24,7 @@ Priorities:
 | Windows  | Win32 | [w64devkit](https://github.com/skeeto/w64devkit) (gcc), CMake, Ninja |
 | Linux    | GTK4 + libadwaita | gcc/clang, CMake, Ninja |
 | Android  | Jetpack Compose | Android Studio / Gradle, NDK |
+| Wear OS  | Compose for Wear OS | Android Studio / Gradle, NDK |
 
 ## Features
 
@@ -95,8 +97,11 @@ core/            libmusiccore: library, tagger, playback, sync, discovery, trans
   tests/         CTest unit tests
 desktop/windows  Win32 frontend
 desktop/linux    GTK4 + libadwaita frontend
-android/         Gradle project; Compose UI + JNI bridge to the core
-third_party/     vendored single-file libraries; larger deps are fetched by CMake
+android/         Gradle project
+  native/        core built with the NDK + JNI bridge, shared by both apps
+  app/           phone app (Compose)
+  wear/          Wear OS app (Compose for Wear OS)
+third_party/     CMake glue for dependencies; all are fetched at configure time, none committed
 docs/            design notes
 ```
 
@@ -155,8 +160,11 @@ and then run:
 
 ```sh
 cd android
-./gradlew assembleDebug
+./gradlew :app:assembleDebug    # phone
+./gradlew :wear:assembleDebug   # watch
 ```
 
 The NDK build compiles the core from the repo root. It needs CMake ≥ 3.28 from the SDK
-manager (`sdkmanager "cmake;3.30.5"`).
+manager (`sdkmanager "cmake;3.30.5"`). The watch app also ships `armeabi-v7a`, because many
+Wear OS watches run a 32-bit userspace. To run it, create a Wear OS emulator in Android
+Studio's Device Manager.

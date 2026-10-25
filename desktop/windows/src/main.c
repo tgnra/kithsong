@@ -1,16 +1,21 @@
 /* Win32 frontend. Layout:
  *
  *   +--------------------------------------------------------------+
- *   | |<  >  >|                    [Import] [Settings]   _  []  X  |  toolbar = title bar
+ *   | |<  >  >| [] 0:00 ==o------------------- -3:12        _ [] X |  toolbar = title bar
  *   +-----------+.-----------------------------------+-------------+
  *   | Albums    |                                    | track list  |
  *   | Artists   |          album grid                | (shown when |
  *   | Playlists |                                    |  an album   |
  *   | DEVICES   |                                    |  is picked) |
+ *   |           |                                    |             |
+ *   | Import    |                                    |             |
+ *   | Settings  |                                    |             |
  *   +-----------+------------------------------------+-------------+
  *
- * Import replaces everything below the toolbar with the import view (import_view.c)
- * until the user clicks Done. Folders dropped anywhere on the window start an import.
+ * The sidebar picks the page beside it. Import and Settings replace the album grid and track
+ * list with the import view (import_view.c) or the settings view (settings_view.c). Once an
+ * import starts, the other pages are greyed out until the user clicks Done. Folders dropped
+ * anywhere on the window start an import.
  *
  * The toolbar is the title bar: WM_NCCALCSIZE removes the standard one, and the frame is
  * extended into the client area (DwmExtendFrameIntoClientArea) so Windows still draws the
@@ -18,8 +23,9 @@
  * through the extended frame. Everything drawn there needs real alpha, which GDI doesn't
  * give, so it's drawn with canvas.c.
  *
- * The album grid is album_grid.c, the sidebar sidebar.c and the track list track_list.c.
- * The toolbar buttons are owner-drawn here.
+ * The album grid is album_grid.c, the sidebar sidebar.c, the track list track_list.c and
+ * the seekbar beside the playback buttons now_playing.c. The toolbar buttons are owner-drawn
+ * here.
  */
 #include <windows.h>
 #include <windowsx.h>
@@ -37,7 +43,10 @@
 #include "canvas.h"
 #include "import_view.h"
 #include "musiccore/musiccore.h"
+#include "now_playing.h"
 #include "pick_folder.h"
+#include "playback.h"
+#include "settings_view.h"
 #include "sidebar.h"
 #include "theme.h"
 #include "track_list.h"
@@ -45,14 +54,12 @@
 enum {
   ID_PREV = 100,
   ID_PLAY,
-  ID_NEXT, /* last playback button */
-  ID_IMPORT,
-  ID_SETTINGS,
+  ID_NEXT, /* last toolbar button */
   ID_SIDEBAR,
   ID_GRID,
   ID_TRACKS,
-  NUM_BUTTONS = ID_SETTINGS - ID_PREV + 1,
-  NUM_PLAYBACK = ID_NEXT - ID_PREV + 1
+  ID_NOW_PLAYING,
+  NUM_BUTTONS = ID_NEXT - ID_PREV + 1
 };
 
 /* Layout at 96 DPI. */
@@ -63,8 +70,8 @@ enum {
   TRACKS_W = 320,
   PAD = 8,
   ICON_BTN = 36,
-  BTN_W = 88,
-  BTN_H = 32,
+  NOW_PLAYING_GAP = 16, /* either side of the seekbar strip */
+  NOW_PLAYING_MAX = 640,
 };
 
 typedef struct app {
@@ -74,13 +81,15 @@ typedef struct app {
   HWND sidebar;
   HWND grid;
   HWND tracks;
+  HWND now_playing;
   HFONT font, icon_font;
   HWND hot_button; /* toolbar button under the mouse */
   canvas back;     /* the window's own background, around the children */
   canvas button;   /* scratch for drawing buttons */
   UINT dpi;
   BOOL show_tracks;
-  BOOL importing; /* the import view is showing instead of the library */
+  int tracks_w; /* while shown */
+  sidebar_page page;
   mc_settings *settings;
   mc_library *lib;
 } app;
@@ -123,74 +132,94 @@ static void update_font(void) {
 
   SendMessageW(g_app.grid, WM_SETFONT, (WPARAM)font, TRUE);
   track_list_update(g_app.dpi);
+  now_playing_update(g_app.dpi);
   import_view_set_font(font);
+  settings_view_set_font(font, g_app.dpi);
   for (int i = 0; i < NUM_BUTTONS; i++) InvalidateRect(g_app.buttons[i], NULL, FALSE);
 
   if (g_app.font) DeleteObject(g_app.font);
   g_app.font = font;
 }
 
+/* Albums, Artists and Playlists all show the album grid for now. */
+static BOOL library_page(void) {
+  return g_app.page != PAGE_IMPORT && g_app.page != PAGE_SETTINGS;
+}
+
 static void layout(void) {
   RECT rc;
   GetClientRect(g_app.wnd, &rc);
   int w = rc.right, h = rc.bottom;
-  int pad = scale(PAD), bar = scale(BAR_H), icon = scale(ICON_BTN), btn_w = scale(BTN_W), btn_h = scale(BTN_H);
-  int side_w = scale(SIDE_W), side_top = scale(SIDE_TOP), tracks_w = g_app.show_tracks ? scale(TRACKS_W) : 0;
+  int pad = scale(PAD), bar = scale(BAR_H), icon = scale(ICON_BTN);
+  int side_w = scale(SIDE_W), side_top = scale(SIDE_TOP);
+  /* The track list and its line take whole grid columns, so the albums keep their size as
+   * it comes and goes. Too narrow for that, it falls back to its usual width. */
+  int columns = album_grid_set_full_width(w - side_w, scale(TRACKS_W) + scale(1));
+  g_app.tracks_w = columns ? columns - scale(1) : scale(TRACKS_W);
+  int tracks_w = g_app.show_tracks ? g_app.tracks_w : 0;
   int grid_w = w - side_w - (tracks_w ? tracks_w + scale(1) : 0);
 
-  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 3);
+  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 4);
   int x = pad;
-  for (int i = 0; i < NUM_PLAYBACK; i++, x += icon + scale(2))
+  for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  int right = w - caption_buttons_width() - pad;
-  for (int i = NUM_BUTTONS - 1; i >= NUM_PLAYBACK; i--) {
-    right -= btn_w;
-    dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, right, (bar - btn_h) / 2, btn_w, btn_h, SWP_NOZORDER);
-    right -= pad;
-  }
-  UINT library = g_app.importing ? SWP_HIDEWINDOW : SWP_SHOWWINDOW;
-  dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top,
-                       SWP_NOZORDER | library);
+  /* The seekbar takes the space between the playback and caption buttons, up to a point. */
+  int right = w - caption_buttons_width();
+  int np_left = x - scale(2) + scale(NOW_PLAYING_GAP), np_w = right - scale(NOW_PLAYING_GAP) - np_left;
+  if (np_w > scale(NOW_PLAYING_MAX)) np_w = scale(NOW_PLAYING_MAX);
+  dwp = DeferWindowPos(dwp, g_app.now_playing, NULL, np_left, 0, np_w > 0 ? np_w : 0, bar, SWP_NOZORDER);
+  dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
+  UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
   dwp = DeferWindowPos(dwp, g_app.grid, NULL, side_w, bar, grid_w, h - bar, SWP_NOZORDER | library);
   dwp = DeferWindowPos(dwp, g_app.tracks, NULL, w - tracks_w, bar, tracks_w, h - bar,
-                       SWP_NOZORDER | (g_app.show_tracks && !g_app.importing ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+                       SWP_NOZORDER | (g_app.show_tracks && library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   EndDeferWindowPos(dwp);
 
   /* The extended frame: under the toolbar, beside the sidebar, and down far enough for the
-   * album grid's rounded corner to show Mica. Anything else in that strip, like the track
+   * content area's rounded corner to show Mica. Anything else in that strip, like the track
    * list, must be drawn with alpha too. */
-  BOOL mica = theme.mica && !g_app.importing;
-  MARGINS m = {mica ? side_w : 0, 0, bar + (mica ? scale(CONTENT_RADIUS) : 0), 0};
+  MARGINS m = {theme.mica ? side_w : 0, 0, bar + (theme.mica ? scale(CONTENT_RADIUS) : 0), 0};
   DwmExtendFrameIntoClientArea(g_app.wnd, &m);
   InvalidateRect(g_app.wnd, NULL, TRUE);
 
-  import_view_layout(0, bar, w, h - bar, g_app.dpi);
+  import_view_layout(side_w, bar, w - side_w, h - bar, g_app.dpi);
+  settings_view_layout(side_w, bar, w - side_w, h - bar, g_app.dpi);
 }
 
 /* The window's own areas, around its children: the toolbar and the sidebar column
- * (transparent over Mica, otherwise the frame colour) and the content background. */
+ * (transparent over Mica, otherwise the frame colour) and the content background, which
+ * shows behind the import and settings views. The album grid draws its own. */
 static void paint_background(HDC dc, const RECT *area) {
   RECT client;
   GetClientRect(g_app.wnd, &client);
   canvas *c = &g_app.back;
   if (!canvas_reserve(c, client.right, client.bottom)) return;
 
-  int w = client.right, h = client.bottom, bar = scale(BAR_H), side_w = g_app.importing ? 0 : scale(SIDE_W);
+  int w = client.right, h = client.bottom, bar = scale(BAR_H), side_w = scale(SIDE_W);
   int frame_alpha = theme.mica ? 0 : 255;
   RECT toolbar = {0, 0, w, bar}, side = {0, bar, side_w, h}, content = {side_w, bar, w, h}, r;
   if (IntersectRect(&r, &toolbar, area)) canvas_clear(c, &r, theme.frame, frame_alpha);
   if (IntersectRect(&r, &side, area)) canvas_clear(c, &r, theme.frame, frame_alpha);
-  if (IntersectRect(&r, &content, area)) canvas_clear(c, &r, theme.bg, 255);
-  RECT line = {0, 0, 0, 0};
-  if (g_app.importing) SetRect(&line, 0, bar, w, bar + scale(1));
-  else if (g_app.show_tracks) SetRect(&line, w - scale(TRACKS_W) - scale(1), bar, w - scale(TRACKS_W), h);
-  if (IntersectRect(&r, &line, area)) canvas_clear(c, &r, theme.line, 255);
+  if (IntersectRect(&r, &content, area)) {
+    /* The content area's border and rounded corner, as the album grid draws them. */
+    int radius = scale(CONTENT_RADIUS);
+    RECT border = {side_w, bar, w + radius, h + radius};
+    canvas_clear(c, &r, theme.bg, 255);
+    canvas_frame(c, &border, radius, 1, theme.line, 255);
+    canvas_round_corners(c, &content, radius, CORNER_TL, theme.frame, frame_alpha);
+  }
+  if (g_app.show_tracks && library_page()) {
+    RECT line = {w - g_app.tracks_w - scale(1), bar, w - g_app.tracks_w, h};
+    if (IntersectRect(&r, &line, area)) canvas_clear(c, &r, theme.line, 255);
+  }
   canvas_blit(c, dc, area->left, area->top, area);
 }
 
-static void show_import(BOOL show) {
-  g_app.importing = show;
-  import_view_show(show);
+static void show_page(sidebar_page page) {
+  g_app.page = page;
+  sidebar_select(page);
+  import_view_show(page == PAGE_IMPORT);
+  settings_view_show(page == PAGE_SETTINGS);
   layout();
 }
 
@@ -239,24 +268,10 @@ static LRESULT CALLBACK button_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UI
   return DefSubclassProc(wnd, msg, wp, lp);
 }
 
-/* Windows 11's standard button: a light fill (faint white in dark mode) with a hairline
- * border. Returns the text colour. */
-static COLORREF draw_standard_button(canvas *c, const RECT *rc, int radius, control_state state) {
-  if (theme.high_contrast) {
-    canvas_frame(c, rc, radius, 1, theme.text, 255);
-    return theme_draw_state(c, rc, radius, state);
-  }
-  static const int light[] = {[STATE_NORMAL] = 179, [STATE_HOT] = 128, [STATE_PRESSED] = 77, [STATE_SELECTED] = 179};
-  static const int dark[] = {[STATE_NORMAL] = 15, [STATE_HOT] = 21, [STATE_PRESSED] = 8, [STATE_SELECTED] = 15};
-  canvas_fill(c, rc, radius, RGB(255, 255, 255), (theme.dark ? dark : light)[state]);
-  canvas_frame(c, rc, radius, 1, theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), theme.dark ? 18 : 24);
-  return state == STATE_PRESSED ? theme.text2 : theme.text;
-}
-
-/* Playback buttons are bare icons with a fill on hover; Import and Settings are standard
- * buttons. Drawn with alpha, as they sit over Mica. */
+/* The playback buttons are bare icons with a fill on hover. Drawn with alpha, as they sit
+ * over Mica. */
 static void draw_button(const DRAWITEMSTRUCT *dis) {
-  static const wchar_t glyphs[NUM_PLAYBACK] = {0xE892, 0xE768, 0xE893}; /* Previous, Play, Next */
+  static const wchar_t glyphs[NUM_BUTTONS] = {0xE892, 0xE768, 0xE893}; /* Previous, Play, Next */
   RECT rc = {0, 0, dis->rcItem.right - dis->rcItem.left, dis->rcItem.bottom - dis->rcItem.top};
   canvas *c = &g_app.button;
   if (!canvas_reserve(c, rc.right, rc.bottom)) return;
@@ -265,17 +280,11 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   int index = (int)dis->CtlID - ID_PREV;
   BOOL pressed = (dis->itemState & ODS_SELECTED) != 0;
   control_state state = pressed ? STATE_PRESSED : dis->hwndItem == g_app.hot_button ? STATE_HOT : STATE_NORMAL;
-  int radius = scale(index < NUM_PLAYBACK ? 6 : 4);
-  UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
-  if (index < NUM_PLAYBACK) {
-    COLORREF color = theme_draw_state(c, &rc, radius, state);
-    canvas_text(c, &glyphs[index], 1, &rc, format, g_app.icon_font, color);
-  } else {
-    COLORREF color = draw_standard_button(c, &rc, radius, state);
-    wchar_t text[64];
-    int n = GetWindowTextW(dis->hwndItem, text, 64);
-    canvas_text(c, text, n, &rc, format, g_app.font, color);
-  }
+  int radius = scale(6);
+  COLORREF color = theme_draw_state(c, &rc, radius, state);
+  wchar_t glyph = dis->CtlID == ID_PLAY && playback_is_playing() ? 0xE769 : glyphs[index]; /* Pause */
+  canvas_text(c, &glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, g_app.icon_font,
+              color);
   if ((dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT))
     canvas_frame(c, &rc, radius, scale(2), theme.text, 255);
   canvas_blit(c, dis->hDC, dis->rcItem.left, dis->rcItem.top, &rc);
@@ -288,15 +297,15 @@ static void apply_theme(void) {
   theme_apply_control(g_app.tooltip);
   sidebar_update(g_app.dpi);
   track_list_update(g_app.dpi);
+  now_playing_update(g_app.dpi);
   album_grid_theme_changed();
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
 static void create_controls(void) {
-  /* The playback labels aren't shown; they name the buttons for tooltips and screen readers. */
-  static const wchar_t *const labels[NUM_BUTTONS] = {
-    L"Previous", L"Play", L"Next", L"Import", L"Settings"};
+  /* The labels aren't shown; they name the buttons for tooltips and screen readers. */
+  static const wchar_t *const labels[NUM_BUTTONS] = {L"Previous", L"Play", L"Next"};
   for (int i = 0; i < NUM_BUTTONS; i++) {
     g_app.buttons[i] = child(WC_BUTTONW, labels[i], BS_OWNERDRAW, ID_PREV + i);
     SetWindowSubclass(g_app.buttons[i], button_proc, 0, 0);
@@ -305,7 +314,7 @@ static void create_controls(void) {
   g_app.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, g_app.wnd, NULL,
                                   GetModuleHandleW(NULL), NULL);
-  for (int i = 0; i < NUM_PLAYBACK; i++) {
+  for (int i = 0; i < NUM_BUTTONS; i++) {
     TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_IDISHWND | TTF_SUBCLASS, .hwnd = g_app.wnd,
                       .uId = (UINT_PTR)g_app.buttons[i], .lpszText = (wchar_t *)labels[i]};
     SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
@@ -315,28 +324,68 @@ static void create_controls(void) {
 
   g_app.grid = album_grid_create(g_app.wnd, ID_GRID);
   g_app.tracks = track_list_create(g_app.wnd, ID_TRACKS);
+  g_app.now_playing = now_playing_create(g_app.wnd, ID_NOW_PLAYING);
   refresh_library();
 
   import_view_create(g_app.wnd, g_app.lib);
+  settings_view_create(g_app.wnd);
+  settings_view_set_library_dir(mc_settings_library_dir(g_app.settings));
+}
+
+/* Plays the shown album, from track start on. Tracks with no file on this device are left
+ * out of the queue. */
+static void play_album(int start) {
+  int n = track_list_count(), count = 0, first = 0;
+  playback_track *queue = n ? calloc((size_t)n, sizeof *queue) : NULL;
+  if (!queue) return;
+  char uid[MC_UID_STRLEN];
+  const wchar_t *album = album_grid_selection(uid), *artist = album_grid_selection_artist();
+  const wchar_t *cover = album_grid_selection_cover();
+  for (int i = 0; i < n; i++) {
+    track_list_item t = track_list_item_at(i);
+    if (!t.path) continue;
+    if (i <= start) first = count;
+    queue[count++] = (playback_track){t.uid, t.path, t.title, artist, album, cover, t.duration_ms};
+  }
+  if (count) playback_play(queue, count, first);
+  free(queue);
+}
+
+/* The Play button turns into Pause while playing. */
+static void playback_changed(void) {
+  HWND play = g_app.buttons[ID_PLAY - ID_PREV];
+  const wchar_t *label = playback_is_playing() ? L"Pause" : L"Play";
+  SetWindowTextW(play, label); /* for screen readers */
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)play, .lpszText = (wchar_t *)label};
+  SendMessageW(g_app.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+  InvalidateRect(play, NULL, FALSE);
 }
 
 static void on_command(int id, int code) {
   switch (id) {
-    case ID_IMPORT:
-      show_import(TRUE);
-      break;
-    case ID_SETTINGS:
-      change_library();
+    case ID_SIDEBAR:
+      if (code == LBN_SELCHANGE) show_page(sidebar_selection());
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) show_album();
       break;
+    case ID_PREV:
+      playback_previous();
+      break;
+    case ID_PLAY:
+      if (!playback_toggle()) play_album(0); /* nothing queued yet: the album that's shown */
+      break;
+    case ID_NEXT:
+      playback_next();
+      break;
     case ID_TRACKS:
-      /* Playback isn't in the core yet (mc_player is a stub); this is where the track list's
-       * track_list_playing_path() goes to the player. */
+      if (code == TLN_PLAY) play_album(track_list_play_index());
+      break;
+    case ID_NOW_PLAYING:
+      if (code == NPN_SEEK) playback_seek(now_playing_position());
       break;
     default:
-      import_view_on_command(id);
+      if (!import_view_on_command(id)) settings_view_on_command(id);
       break;
   }
 }
@@ -344,11 +393,13 @@ static void on_command(int id, int code) {
 static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   LRESULT result;
   if (DwmDefWindowProc(wnd, msg, wp, lp, &result)) return result; /* the caption buttons, snap layouts */
+  if (playback_window_message(msg, wp, lp, &result)) return result;   /* media keys, taskbar buttons */
 
   switch (msg) {
     case WM_CREATE:
       g_app.wnd = wnd;
       g_app.dpi = GetDpiForWindow(wnd);
+      playback_init(wnd, playback_changed);
       theme_apply_window(wnd, TRUE);
       create_controls();
       update_font();
@@ -423,7 +474,10 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       HBRUSH brush = sidebar_ctlcolor((HWND)lp);
       return (LRESULT)(brush ? brush : theme_ctlcolor(msg, (HDC)wp));
     }
-    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORSTATIC: {
+      HBRUSH brush = settings_view_ctlcolor((HWND)lp, (HDC)wp);
+      return (LRESULT)(brush ? brush : theme_ctlcolor(msg, (HDC)wp));
+    }
     case WM_CTLCOLORBTN:
     case WM_CTLCOLOREDIT:
       return (LRESULT)theme_ctlcolor(msg, (HDC)wp);
@@ -443,7 +497,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       import_view_on_notify((const NMHDR *)lp);
       return 0;
     case WM_DROPFILES:
-      if (!g_app.importing) show_import(TRUE);
+      if (g_app.page != PAGE_IMPORT) show_page(PAGE_IMPORT);
       import_view_drop((HDROP)wp);
       return 0;
     case WM_APP_IMPORT:
@@ -453,17 +507,25 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       refresh_library();
       return 0;
     case WM_APP_IMPORT_CLOSE:
-      if (wp == IMPORT_CLOSE_CANCEL) import_view_cancel();
-      if (wp == IMPORT_CLOSE_CANCEL || import_view_confirm_close()) {
-        show_import(FALSE);
+      if (import_view_confirm_close()) {
+        show_page(PAGE_ALBUMS);
         refresh_library();
       }
+      return 0;
+    case WM_APP_IMPORT_SESSION:
+      sidebar_set_locked((BOOL)wp);
+      layout(); /* the import view switches between the drop zone and the list */
+      return 0;
+    case WM_APP_OPEN_LIBRARY:
+      change_library();
       return 0;
     case WM_CLOSE:
       if (import_view_confirm_close()) DestroyWindow(wnd);
       return 0;
     case WM_DESTROY:
+      playback_free();
       import_view_destroy();
+      settings_view_destroy();
       canvas_free(&g_app.back);
       canvas_free(&g_app.button);
       PostQuitMessage(0);
@@ -489,7 +551,7 @@ static void import_args(void) {
   }
   LocalFree(argv);
   if (n > 0) {
-    show_import(TRUE);
+    show_page(PAGE_IMPORT);
     import_view_start((const char *const *)paths, n);
   }
   for (int i = 0; i < n; i++) free(paths[i]);
@@ -606,17 +668,9 @@ static BOOL open_library(const char *dir) {
   return TRUE;
 }
 
-/* Settings button: show where the library is and offer to switch to another folder. */
+/* Settings' Open Another Library: switch to the library in another folder. */
 static void change_library(void) {
   const char *current = mc_settings_library_dir(g_app.settings);
-  wchar_t *w = wide_from_utf8(current ? current : "");
-  wchar_t text[1200];
-  swprintf(text, 1200,
-           L"Library folder:\n%ls\n\nUse a different folder? Music you've imported stays where it "
-           L"is; musicapp switches to the library in the new folder, or starts an empty one there.",
-           w ? w : L"");
-  free(w);
-  if (MessageBoxW(g_app.wnd, text, L"Settings", MB_YESNO | MB_ICONINFORMATION) != IDYES) return;
   if (!import_view_confirm_close()) return;
 
   char *dir = choose_library_dir(g_app.wnd, current);
@@ -626,6 +680,7 @@ static void change_library(void) {
       MessageBoxW(g_app.wnd, L"Couldn't save the setting; the old folder will be used next time.",
                   L"Settings", MB_OK | MB_ICONWARNING);
     import_view_set_library(g_app.lib);
+    settings_view_set_library_dir(dir);
     refresh_library();
   }
   free(dir);

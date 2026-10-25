@@ -33,6 +33,7 @@ typedef struct row {
   wchar_t *title;
   wchar_t num[16];
   wchar_t duration[16];
+  int duration_ms;
   char *path;
 } row;
 
@@ -53,8 +54,8 @@ static struct {
   int header_h; /* the fixed part above the rows */
   int hot, selected;
   BOOL tracking;
+  int play_index; /* the track TLN_PLAY was last sent for */
   char playing_uid[MC_UID_STRLEN];
-  char *playing_path;
 } s;
 
 static int scale(int px) {
@@ -186,6 +187,7 @@ void track_list_show(mc_library *lib, const char *album_uid, const wchar_t *titl
     if (t->track_no && discs) swprintf(r->num, 16, L"%d-%d", t->disc_no ? t->disc_no : 1, t->track_no);
     else if (t->track_no) swprintf(r->num, 16, L"%d", t->track_no);
     format_duration(t->duration_ms, r->duration, 16);
+    r->duration_ms = t->duration_ms;
     r->path = t->path ? _strdup(t->path) : NULL;
     total_ms += t->duration_ms > 0 ? t->duration_ms : 0;
     if (keep[0] && !strcmp(r->uid, keep)) s.selected = i;
@@ -203,16 +205,36 @@ void track_list_show(mc_library *lib, const char *album_uid, const wchar_t *titl
   InvalidateRect(s.wnd, NULL, FALSE);
 }
 
-const char *track_list_playing_path(void) {
-  return s.playing_path;
+int track_list_count(void) {
+  return s.count;
 }
 
+track_list_item track_list_item_at(int i) {
+  track_list_item item = {0};
+  if (i < 0 || i >= s.count) return item;
+  const row *r = &s.rows[i];
+  item.uid = r->uid;
+  item.title = r->title;
+  item.duration_ms = r->duration_ms;
+  item.path = r->path;
+  return item;
+}
+
+int track_list_play_index(void) {
+  return s.play_index;
+}
+
+void track_list_set_playing(const char *uid) {
+  const char *now = uid ? uid : "";
+  if (!strcmp(now, s.playing_uid) || strlen(now) >= MC_UID_STRLEN) return;
+  strcpy(s.playing_uid, now);
+  if (s.wnd) InvalidateRect(s.wnd, &s.scroll.view, FALSE);
+}
+
+/* The parent starts playback, which then marks the track through track_list_set_playing. */
 static void play(int i) {
   if (i < 0 || i >= s.count) return;
-  memcpy(s.playing_uid, s.rows[i].uid, sizeof s.playing_uid);
-  free(s.playing_path);
-  s.playing_path = s.rows[i].path ? _strdup(s.rows[i].path) : NULL;
-  InvalidateRect(s.wnd, &s.scroll.view, FALSE);
+  s.play_index = i;
   SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), TLN_PLAY), (LPARAM)s.wnd);
 }
 
@@ -423,7 +445,6 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
     case WM_DESTROY:
       clear_rows();
       free(s.album_title);
-      free(s.playing_path);
       canvas_free(&s.buf);
       HFONT fonts[] = {s.font, s.title_font, s.sub_font, s.icon_font};
       for (int i = 0; i < 4; i++)

@@ -1,6 +1,6 @@
 package app.musicapp
 
-/** Bindings to musiccore (android/app/src/main/cpp/jni_bridge.c). */
+/** Bindings to musiccore (android/native/src/main/cpp/jni_bridge.c). */
 object NativeCore {
     init {
         System.loadLibrary("musicapp_jni")

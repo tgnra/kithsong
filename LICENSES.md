@@ -5,11 +5,11 @@ dependency is added.
 
 | Dependency | Version | License | How it's included |
 |------------|---------|---------|-------------------|
-| SQLite | 3.47.2 | Public domain | vendored, `third_party/sqlite` |
-| yyjson | 0.10.0 | MIT | vendored, `third_party/yyjson` |
-| miniaudio | 0.11.21 | Public domain / MIT-0 | vendored, `third_party/miniaudio` |
-| dr_flac, dr_mp3, dr_wav | 0.13.x / 0.7.x | Public domain / MIT-0 | vendored, `third_party/dr_libs` |
-| Mozilla CA bundle | curl.se snapshot | MPL-2.0 | vendored, `third_party/cacert` |
+| SQLite | 3.47.2 | Public domain | fetched, static |
+| yyjson | 0.10.0 | MIT | fetched, static |
+| miniaudio | 0.11.21 | Public domain / MIT-0 | fetched, static |
+| dr_flac, dr_mp3, dr_wav | 0.13.x / 0.7.x (commit `ea33eed`) | Public domain / MIT-0 | fetched, static |
+| Mozilla CA bundle | curl.se 2026-10-20 | MPL-2.0 | fetched, embedded |
 | TagLib | 2.0.2 | LGPL-2.1 **or** MPL-1.1 | fetched, static |
 | utfcpp | 4.0.6 | BSL-1.0 | fetched, header-only (TagLib dependency) |
 | curl | 8.11.1 | curl (MIT-style) | fetched, static |

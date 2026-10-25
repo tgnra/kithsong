@@ -1,7 +1,6 @@
 #define COBJMACROS
 #include "album_grid.h"
 
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
@@ -9,6 +8,7 @@
 #include <windowsx.h>
 
 #include "canvas.h"
+#include "cover.h"
 #include "scroller.h"
 #include "theme.h"
 
@@ -25,6 +25,7 @@ enum {
 typedef struct tile {
   char uid[MC_UID_STRLEN];
   wchar_t *title;
+  wchar_t *artist;    /* NULL if unknown */
   wchar_t *cover_dir; /* NULL when the album has no cover */
   HBITMAP thumb;      /* premultiplied, with rounded corners */
   const uint32_t *pixels;
@@ -58,6 +59,7 @@ static struct {
   /* Layout, in device pixels. */
   int cols, tile_w, row_h, pad, gap, text_gap, text_h;
   int client_w, client_h;
+  int full_w; /* the width the tiles are sized for; see album_grid_set_full_width */
   scroller scroll;
 
   int hot;                          /* tile under the mouse, or -1 */
@@ -95,75 +97,7 @@ static wchar_t *widen(const char *s) {
   return w;
 }
 
-/* --- Cover decoding (loader thread) --- */
-
-/* Decodes dir\cover.jpg (or .png) to a size x size premultiplied DIB: scaled so the short
- * side fits, centre-cropped, and with rounded corners. WIC's JPEG decoder does most of the
- * downscaling while decoding, which is what makes this fast. */
-static HBITMAP decode_cover(IWICImagingFactory *wic, const wchar_t *dir, int size, int radius,
-                            const uint32_t **pixels) {
-  wchar_t path[MAX_PATH * 2];
-  static const wchar_t *const names[] = {L"cover.jpg", L"cover.png"};
-  BOOL found = FALSE;
-  for (int i = 0; i < 2 && !found; i++) {
-    found = swprintf(path, MAX_PATH * 2, L"%ls\\%ls", dir, names[i]) > 0 &&
-            GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
-  }
-  if (!found || size <= 0) return NULL;
-
-  IWICBitmapDecoder *decoder = NULL;
-  IWICBitmapFrameDecode *frame = NULL;
-  IWICBitmapScaler *scaler = NULL;
-  IWICBitmapClipper *clipper = NULL;
-  IWICFormatConverter *converter = NULL;
-  HBITMAP bmp = NULL;
-  UINT w = 0, h = 0;
-
-  if (FAILED(IWICImagingFactory_CreateDecoderFromFilename(wic, path, NULL, GENERIC_READ,
-                                                          WICDecodeMetadataCacheOnDemand, &decoder)) ||
-      FAILED(IWICBitmapDecoder_GetFrame(decoder, 0, &frame)) ||
-      FAILED(IWICBitmapFrameDecode_GetSize(frame, &w, &h)) || !w || !h)
-    goto done;
-
-  double s = (double)size / (double)(w < h ? w : h);
-  UINT sw = (UINT)fmax(size, floor(w * s + 0.5)), sh = (UINT)fmax(size, floor(h * s + 0.5));
-  WICRect crop = {(INT)(sw - (UINT)size) / 2, (INT)(sh - (UINT)size) / 2, size, size};
-  if (FAILED(IWICImagingFactory_CreateBitmapScaler(wic, &scaler)) ||
-      FAILED(IWICBitmapScaler_Initialize(scaler, (IWICBitmapSource *)frame, sw, sh,
-                                         WICBitmapInterpolationModeFant)) ||
-      FAILED(IWICImagingFactory_CreateBitmapClipper(wic, &clipper)) ||
-      FAILED(IWICBitmapClipper_Initialize(clipper, (IWICBitmapSource *)scaler, &crop)) ||
-      FAILED(IWICImagingFactory_CreateFormatConverter(wic, &converter)) ||
-      FAILED(IWICFormatConverter_Initialize(converter, (IWICBitmapSource *)clipper,
-                                            &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,
-                                            NULL, 0.0, WICBitmapPaletteTypeCustom)))
-    goto done;
-
-  BITMAPINFO bi = {.bmiHeader = {.biSize = sizeof bi.bmiHeader, .biWidth = size,
-                                 .biHeight = -size, /* top-down */
-                                 .biPlanes = 1, .biBitCount = 32, .biCompression = BI_RGB}};
-  void *bits = NULL;
-  bmp = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-  UINT stride = (UINT)size * 4;
-  if (!bmp || FAILED(IWICFormatConverter_CopyPixels(converter, NULL, stride, stride * (UINT)size,
-                                                    (BYTE *)bits))) {
-    if (bmp) DeleteObject(bmp);
-    bmp = NULL;
-    goto done;
-  }
-  canvas corners = {.px = bits, .w = size, .h = size};
-  RECT all = {0, 0, size, size};
-  canvas_round_corners(&corners, &all, radius, CORNER_ALL, 0, 0);
-  *pixels = bits;
-
-done:
-  if (converter) IWICFormatConverter_Release(converter);
-  if (clipper) IWICBitmapClipper_Release(clipper);
-  if (scaler) IWICBitmapScaler_Release(scaler);
-  if (frame) IWICBitmapFrameDecode_Release(frame);
-  if (decoder) IWICBitmapDecoder_Release(decoder);
-  return bmp;
-}
+/* --- Cover loading (loader thread) --- */
 
 static DWORD WINAPI loader_main(void *arg) {
   (void)arg;
@@ -198,7 +132,7 @@ static DWORD WINAPI loader_main(void *arg) {
     r->size = job.size;
     r->gen = gen;
     r->pixels = NULL;
-    r->bmp = wic && dir ? decode_cover(wic, dir, job.size, job.radius, &r->pixels) : NULL;
+    r->bmp = wic && dir ? cover_decode(wic, dir, job.size, job.radius, &r->pixels) : NULL;
     free(dir);
     if (!PostMessageW(g.wnd, WM_APP_THUMB, 0, (LPARAM)r)) {
       if (r->bmp) DeleteObject(r->bmp);
@@ -212,8 +146,18 @@ static DWORD WINAPI loader_main(void *arg) {
 
 /* --- Layout --- */
 
-/* Columns follow the width: as many tiles of at least 150 px (at 96 dpi) as fit, then
- * stretched to fill the row. Keeps the first visible album in view across resizes. */
+/* Tiles for a grid w wide: as many of at least 150 px (at 96 dpi) as fit, stretched to fill
+ * the row. */
+static void fit(int w, int *cols, int *tile_w) {
+  int pad = scale(20), gap = scale(20), min_tile = scale(150);
+  int avail = w - 2 * pad;
+  *cols = avail + gap >= min_tile + gap ? (avail + gap) / (min_tile + gap) : 1;
+  *tile_w = (avail - gap * (*cols - 1)) / *cols;
+  if (*tile_w < scale(40)) *tile_w = scale(40);
+}
+
+/* Tiles are sized for the full width, so while a pane narrows the grid they keep their size
+ * and only fewer fit. Keeps the first visible album in view across resizes. */
 static void relayout(void) {
   RECT rc;
   GetClientRect(g.wnd, &rc);
@@ -224,11 +168,9 @@ static void relayout(void) {
   g.pad = scale(20);
   g.gap = scale(20);
   g.text_gap = scale(8);
-  int min_tile = scale(150);
-  int avail = g.client_w - 2 * g.pad;
-  g.cols = avail + g.gap >= min_tile + g.gap ? (avail + g.gap) / (min_tile + g.gap) : 1;
-  g.tile_w = (avail - g.gap * (g.cols - 1)) / g.cols;
-  if (g.tile_w < scale(40)) g.tile_w = scale(40);
+  fit(g.full_w > g.client_w ? g.full_w : g.client_w, &g.cols, &g.tile_w);
+  g.cols = (g.client_w - 2 * g.pad + g.gap) / (g.tile_w + g.gap);
+  if (g.cols < 1) fit(g.client_w, &g.cols, &g.tile_w); /* too narrow for full-width tiles */
 
   HDC dc = GetDC(g.wnd);
   HGDIOBJ old = SelectObject(dc, g.font ? (HGDIOBJ)g.font : GetStockObject(DEFAULT_GUI_FONT));
@@ -356,10 +298,19 @@ const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]) {
   return g.tiles[g.selected].title;
 }
 
+const wchar_t *album_grid_selection_artist(void) {
+  return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].artist : NULL;
+}
+
+const wchar_t *album_grid_selection_cover(void) {
+  return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].cover_dir : NULL;
+}
+
 static void clear_tiles(void) {
   for (int i = 0; i < g.count; i++) {
     free_thumb(&g.tiles[i]);
     free(g.tiles[i].title);
+    free(g.tiles[i].artist);
   }
   free(g.tiles);
   g.tiles = NULL;
@@ -379,6 +330,7 @@ static void reload(void) {
     const mc_album_info *a = &list->items[i];
     memcpy(tiles[i].uid, a->uid, sizeof tiles[i].uid);
     tiles[i].title = widen(a->title && *a->title ? a->title : "Untitled");
+    tiles[i].artist = a->artist && *a->artist ? widen(a->artist) : NULL;
     tiles[i].cover_dir = dirs[i] = a->has_art ? widen(a->folder) : NULL;
     if (g.selected_uid[0] && !strcmp(a->uid, g.selected_uid)) selected = i;
   }
@@ -554,6 +506,21 @@ static void paint(HDC dc, const RECT *dirty) {
   canvas_round_corners(c, &all, radius, CORNER_TL, theme.frame, theme.mica ? 0 : 255);
 
   canvas_blit(c, dc, dirty->left, dirty->top, dirty);
+}
+
+int album_grid_set_full_width(int full_w, int min_w) {
+  if (!g.wnd) return 0;
+  if (full_w != g.full_w) {
+    g.full_w = full_w;
+    relayout();
+    request_thumbs();
+    InvalidateRect(g.wnd, NULL, FALSE);
+  }
+  int cols, tile_w, pitch;
+  fit(full_w, &cols, &tile_w);
+  pitch = tile_w + scale(20);
+  int n = (min_w + pitch - 1) / pitch;
+  return n < cols ? n * pitch : 0;
 }
 
 void album_grid_theme_changed(void) {

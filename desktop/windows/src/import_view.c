@@ -19,7 +19,6 @@ enum {
   ID_IMP_PROGRESS,
   ID_IMP_LIST,
   ID_IMP_DONE,
-  ID_IMP_BACK,
 };
 
 enum { GROUP_REVIEW = 1, GROUP_ACTIVE, GROUP_DONE, GROUP_SKIPPED, GROUP_FAILED };
@@ -31,7 +30,7 @@ enum { COL_STATUS, COL_ARTIST, COL_ALBUM, COL_FILES, COL_MATCH, COL_CONFIDENCE, 
 
 typedef struct view {
   HWND parent;
-  HWND back, drop, browse, status, progress, list, done;
+  HWND drop, browse, status, progress, list, done;
   HFONT font;
   BOOL shown;
   mc_library *lib;
@@ -190,6 +189,7 @@ static void close_session(void) {
   g_view.item_count = 0;
   g_view.scanned_files = 0;
   SendMessageW(g_view.list, LVM_DELETEALLITEMS, 0, 0);
+  SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, FALSE, 0);
 }
 
 static void update_status(void) {
@@ -278,8 +278,7 @@ BOOL import_view_start(const char *const *paths, int count) {
     return FALSE;
   }
   update_status();
-  /* The layout switches from the drop zone to the list. */
-  SendMessageW(g_view.parent, WM_SIZE, 0, 0);
+  SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, TRUE, 0); /* and the layout switches to the list */
   return TRUE;
 }
 
@@ -323,10 +322,6 @@ BOOL import_view_confirm_close(void) {
   }
   close_session();
   return TRUE;
-}
-
-void import_view_cancel(void) {
-  close_session();
 }
 
 /* --- Review dialog --- */
@@ -612,7 +607,6 @@ BOOL import_view_on_command(int id) {
   switch (id) {
     case ID_IMP_BROWSE: import_view_browse(); return TRUE;
     case ID_IMP_DONE: PostMessageW(g_view.parent, WM_APP_IMPORT_CLOSE, 0, 0); return TRUE;
-    case ID_IMP_BACK: PostMessageW(g_view.parent, WM_APP_IMPORT_CLOSE, IMPORT_CLOSE_CANCEL, 0); return TRUE;
     default: return FALSE;
   }
 }
@@ -650,7 +644,6 @@ void import_view_create(HWND parent, mc_library *lib) {
                     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"musicapp_drop"};
   RegisterClassExW(&wc);
 
-  g_view.back = child(WC_BUTTONW, L"\x2190 Back", BS_PUSHBUTTON, ID_IMP_BACK);
   g_view.drop = child(L"musicapp_drop", NULL, 0, ID_IMP_DROP);
   g_view.browse = child(WC_BUTTONW, L"Choose Folder\x2026", BS_PUSHBUTTON, ID_IMP_BROWSE);
   g_view.status = child(WC_STATICW, NULL, SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, ID_IMP_STATUS);
@@ -685,7 +678,7 @@ void import_view_set_library(mc_library *lib) {
 
 void import_view_set_font(HFONT font) {
   g_view.font = font;
-  HWND controls[] = {g_view.back, g_view.browse, g_view.status, g_view.done, g_view.list};
+  HWND controls[] = {g_view.browse, g_view.status, g_view.done, g_view.list};
   for (size_t i = 0; i < sizeof controls / sizeof controls[0]; i++)
     SendMessageW(controls[i], WM_SETFONT, (WPARAM)font, TRUE);
   InvalidateRect(g_view.drop, NULL, TRUE);
@@ -694,7 +687,7 @@ void import_view_set_font(HFONT font) {
 void import_view_show(BOOL show) {
   g_view.shown = show;
   if (!show) {
-    HWND all[] = {g_view.back, g_view.drop, g_view.browse, g_view.status, g_view.progress,
+    HWND all[] = {g_view.drop, g_view.browse, g_view.status, g_view.progress,
                   g_view.done, g_view.list};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], SW_HIDE);
   }
@@ -706,10 +699,7 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi) {
   int pad = S(16);
   BOOL session = g_view.imp != NULL;
 
-  /* Back (drop zone only) returns to the library; Done does that once an import started. */
   int btn_w = S(88), btn_h = S(28);
-  ShowWindow(g_view.back, session ? SW_HIDE : SW_SHOW);
-  MoveWindow(g_view.back, x + pad, y + pad, btn_w, btn_h, TRUE);
 
   ShowWindow(g_view.drop, session ? SW_HIDE : SW_SHOW);
   ShowWindow(g_view.browse, session ? SW_HIDE : SW_SHOW);
@@ -720,8 +710,7 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi) {
 
   if (!session) {
     int dz_w = min(S(520), w - 2 * pad), dz_h = S(200), browse_w = S(150), browse_h = S(30);
-    int top = y + pad + btn_h + pad; /* below the Back button */
-    int dz_x = x + (w - dz_w) / 2, dz_y = max(top, y + (h - dz_h - browse_h - S(16)) / 2);
+    int dz_x = x + (w - dz_w) / 2, dz_y = max(y + pad, y + (h - dz_h - browse_h - S(16)) / 2);
     MoveWindow(g_view.drop, dz_x, dz_y, dz_w, dz_h, TRUE);
     MoveWindow(g_view.browse, x + (w - browse_w) / 2, dz_y + dz_h + S(16), browse_w, browse_h, TRUE);
     return;

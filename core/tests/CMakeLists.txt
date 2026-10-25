@@ -15,6 +15,8 @@ musicapp_test(test_tags)
 musicapp_test(test_match)
 musicapp_test(test_import_db)
 musicapp_test(test_organize)
+musicapp_test(test_player)
+set_tests_properties(test_player PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
 
 # Hit musicbrainz.org; run by hand, not part of ctest.
 add_executable(manual_mb_ping manual_mb_ping.c)

@@ -29,7 +29,20 @@ void track_list_update(UINT dpi);
  * reloads it (after an import, say), keeping the selection and scroll position. */
 void track_list_show(mc_library *lib, const char *album_uid, const wchar_t *title);
 
-/* The playing track's file (UTF-8), or NULL. It stays playing while other albums are shown. */
-const char *track_list_playing_path(void);
+/* The shown album's tracks, in order, for the play queue. Valid until the list next changes. */
+typedef struct track_list_item {
+  const char *uid;
+  const wchar_t *title;
+  int duration_ms; /* 0 if unknown */
+  const char *path; /* UTF-8; NULL if the track has no file on this device */
+} track_list_item;
+int track_list_count(void);
+track_list_item track_list_item_at(int i);
+/* The track the last TLN_PLAY was for. */
+int track_list_play_index(void);
+
+/* Marks the playing track, by uid, or none for NULL. It stays marked while other albums are
+ * shown, and when its album is shown again. */
+void track_list_set_playing(const char *uid);
 
 #endif
