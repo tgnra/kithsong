@@ -24,7 +24,7 @@ static int exec(sqlite3 *db, const char *sql) {
 int main(int argc, char **argv) {
   /* The library is a folder; the database is library.db inside it. */
   char path[1024], file[1100];
-  snprintf(path, sizeof path, "%s/test_library", argc > 1 ? argv[1] : ".");
+  snprintf(path, sizeof path, "%s/test_library.d", argc > 1 ? argv[1] : ".");
   const char *const leftovers[] = {MC_LIBRARY_DB_NAME, MC_LIBRARY_DB_NAME "-wal",
                                    MC_LIBRARY_DB_NAME "-shm"};
   for (int i = 0; i < 3; i++) {

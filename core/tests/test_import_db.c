@@ -39,7 +39,7 @@ static void remove_db(const char *path) {
 
 int main(int argc, char **argv) {
   char path[1024], db_file[1100];
-  snprintf(path, sizeof path, "%s/test_import_db", argc > 1 ? argv[1] : ".");
+  snprintf(path, sizeof path, "%s/test_import_db.d", argc > 1 ? argv[1] : ".");
   snprintf(db_file, sizeof db_file, "%s/" MC_LIBRARY_DB_NAME, path);
   remove_db(db_file);
 

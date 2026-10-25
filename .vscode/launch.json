@@ -1,5 +1,7 @@
 {
-  // F5: build, then debug the Windows app with w64devkit's gdb (C/C++ extension required).
+  // F5: build, then debug the app with gdb (C/C++ extension required). On Windows this uses
+  // w64devkit's gdb; on Linux, gdb runs inside the flake's dev shell, so the app inherits its
+  // library paths, GSettings schemas and icons.
   "version": "0.2.0",
   "configurations": [
     {
@@ -13,6 +15,21 @@
       "environment": [{ "name": "PATH", "value": "${env:W64DEVKIT}\\bin;${env:PATH}" }],
       "externalConsole": false,
       "preLaunchTask": "windows: build",
+      "setupCommands": [
+        { "description": "Pretty printing", "text": "-enable-pretty-printing", "ignoreFailures": true }
+      ]
+    },
+    {
+      "name": "musicapp (Linux, gdb)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/linux-gtk/desktop/linux/musicapp",
+      "cwd": "${workspaceFolder}",
+      "MIMode": "gdb",
+      "miDebuggerPath": "nix",
+      "miDebuggerArgs": "develop ${workspaceFolder} -c gdb",
+      "externalConsole": false,
+      "preLaunchTask": "linux: build",
       "setupCommands": [
         { "description": "Pretty printing", "text": "-enable-pretty-printing", "ignoreFailures": true }
       ]

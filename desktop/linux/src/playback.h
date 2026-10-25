@@ -1,0 +1,49 @@
+/* Playback in the GTK frontend: the core's player, and keeping everything that shows it in
+ * step: the now-playing strip, the track list's playing row, the window title and MPRIS
+ * (mpris.c), which is also how media keys and the desktop's media controls reach us.
+ *
+ * The player's callbacks come on its own thread and are passed to the UI thread with
+ * g_idle_add(); while playing, a timer moves the seekbar on. The player is created on first
+ * play. Call everything here on the UI thread.
+ */
+#ifndef MUSICAPP_PLAYBACK_H
+#define MUSICAPP_PLAYBACK_H
+
+#include <gtk/gtk.h>
+
+#include "musiccore/musiccore.h"
+
+/* A queue item. Strings are copied. */
+typedef struct playback_track {
+  const char *uid;
+  const char *path;
+  const char *title, *artist, *album; /* artist and album may be NULL */
+  const char *cover_dir;              /* the album folder, or NULL if it has no cover */
+  int duration_ms;                    /* from the library; 0 if unknown */
+} playback_track;
+
+/* win's title follows the playing track. changed is called whenever what the playback
+ * buttons should show may have changed: playing or not, and what's queued. */
+void playback_init(GtkWindow *win, void (*changed)(void *user), void *user);
+void playback_free(void);
+
+/* Replaces the queue and plays tracks[start]. */
+void playback_play(const playback_track *tracks, int count, int start);
+/* Pauses or resumes. Returns FALSE if nothing has been queued. */
+gboolean playback_toggle(void);
+void playback_resume(void);
+void playback_pause(void);
+void playback_stop(void);
+void playback_next(void);
+void playback_previous(void);
+void playback_seek(int64_t ms);
+
+gboolean playback_is_playing(void);
+mc_player_state playback_state(void);
+/* Whether there's a current track, and one after it. */
+gboolean playback_has_current(void);
+gboolean playback_has_next(void);
+int64_t playback_position_ms(void);
+int64_t playback_duration_ms(void);
+
+#endif

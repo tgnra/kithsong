@@ -2,6 +2,11 @@
 /build/
 /out/
 
+# Nix
+/result
+/result-*
+/.direnv/
+
 # Android / Gradle
 android/.gradle/
 android/build/

@@ -3,10 +3,16 @@
   // not on PATH, set the W64DEVKIT environment variable to its root (e.g. C:\w64devkit).
   // The CMake and Ninja bundled with Visual Studio 2022 Build Tools are used as a fallback
   // when they are not on PATH.
+  //
+  // Linux build tasks. Run everything inside the flake's dev shell (`nix develop`), which
+  // provides CMake, Ninja, GTK4, libadwaita and gdb. Ctrl+Shift+B runs `windows: build`;
+  // on Linux use Tasks: Run Task -> `linux: build`.
   "version": "2.0.0",
-  "options": {
-    "env": {
-      "PATH": "${env:W64DEVKIT}\\bin;${env:PATH};C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja"
+  "windows": {
+    "options": {
+      "env": {
+        "PATH": "${env:W64DEVKIT}\\bin;${env:PATH};C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja"
+      }
     }
   },
   "tasks": [
@@ -50,6 +56,50 @@
       "type": "shell",
       "command": "${workspaceFolder}/build/windows-w64devkit/core/tests/manual_mb_ping.exe",
       "dependsOn": "windows: build",
+      "problemMatcher": []
+    },
+    {
+      "label": "linux: configure",
+      "type": "shell",
+      "command": "nix",
+      "args": ["develop", "-c", "cmake", "--preset", "linux-gtk"],
+      "problemMatcher": []
+    },
+    {
+      "label": "linux: build",
+      "type": "shell",
+      "command": "nix",
+      "args": ["develop", "-c", "cmake", "--build", "--preset", "linux-gtk"],
+      "dependsOn": "linux: configure",
+      "group": "build",
+      "problemMatcher": {
+        "base": "$gcc",
+        "fileLocation": ["autoDetect", "${workspaceFolder}/build/linux-gtk"]
+      }
+    },
+    {
+      "label": "linux: run",
+      "type": "shell",
+      "command": "nix",
+      "args": ["develop", "-c", "${workspaceFolder}/build/linux-gtk/desktop/linux/musicapp"],
+      "dependsOn": "linux: build",
+      "problemMatcher": []
+    },
+    {
+      "label": "linux: test",
+      "type": "shell",
+      "command": "nix",
+      "args": ["develop", "-c", "ctest", "--preset", "linux-gtk"],
+      "dependsOn": "linux: build",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "linux: musicbrainz ping",
+      "type": "shell",
+      "command": "nix",
+      "args": ["develop", "-c", "${workspaceFolder}/build/linux-gtk/core/tests/manual_mb_ping"],
+      "dependsOn": "linux: build",
       "problemMatcher": []
     }
   ]

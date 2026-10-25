@@ -153,6 +153,22 @@ ctest --preset linux-gtk
 build/linux-gtk/desktop/linux/musicapp
 ```
 
+With Nix (flakes enabled), `flake.nix` provides a dev shell with CMake, Ninja, GTK4,
+libadwaita and gdb. It also sets up what an installed app would get from its wrapper: the
+audio libraries miniaudio loads at runtime (ALSA, PulseAudio, PipeWire), GSettings schemas
+and icons. Run the commands above through it, or enter it with `nix develop`:
+
+```sh
+nix develop -c cmake --preset linux-gtk
+nix develop -c cmake --build --preset linux-gtk
+nix develop -c ctest --preset linux-gtk
+nix develop -c build/linux-gtk/desktop/linux/musicapp
+```
+
+The VS Code tasks (`linux: build`, `linux: run`, `linux: test`) and the
+`musicapp (Linux, gdb)` debug configuration run inside the dev shell. `Ctrl+Shift+B` runs
+the Windows build, so on Linux start `linux: build` from `Tasks: Run Task`.
+
 ### Android
 
 Open `android/` in Android Studio, or generate the Gradle wrapper once (`gradle wrapper`)

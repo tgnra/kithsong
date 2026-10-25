@@ -1,0 +1,232 @@
+#include "playback.h"
+
+#include <string.h>
+
+#include "mpris.h"
+#include "now_playing.h"
+#include "track_list.h"
+
+enum { TICK_MS = 250 }; /* moves the seekbar on while playing */
+
+typedef struct item {
+  char uid[MC_UID_STRLEN];
+  char *title, *artist, *album, *cover_dir;
+  int duration_ms;
+} item;
+
+static struct {
+  GtkWindow *win;
+  void (*changed)(void *user);
+  void *user;
+  mc_player *player;
+  item *items;
+  int count;
+  guint tick;   /* timer source while playing */
+  gint pending; /* an idle is queued for the player's news; set on its thread */
+
+  /* What's shown, to tell what changed. */
+  int index;
+  mc_player_state state;
+} s;
+
+static void free_items(void) {
+  for (int i = 0; i < s.count; i++) {
+    g_free(s.items[i].title);
+    g_free(s.items[i].artist);
+    g_free(s.items[i].album);
+    g_free(s.items[i].cover_dir);
+  }
+  g_free(s.items);
+  s.items = NULL;
+  s.count = 0;
+}
+
+/* "Paranoid Android – Radiohead" while there's a track, for the window list and Alt+Tab. */
+static void set_window_title(const item *it) {
+  if (!s.win) return;
+  char *title = !it ? g_strdup("musicapp")
+                : it->artist ? g_strdup_printf("%s – %s", it->title, it->artist)
+                             : g_strdup(it->title);
+  gtk_window_set_title(s.win, title);
+  g_free(title);
+}
+
+static const item *current(const mc_player_status *st) {
+  return st->index >= 0 && st->index < s.count ? &s.items[st->index] : NULL;
+}
+
+static int duration_of(const item *it, const mc_player_status *st) {
+  int ms = it ? it->duration_ms : 0;
+  return ms ? ms : (int)st->duration_ms;
+}
+
+static gboolean on_tick(gpointer data);
+
+/* Brings everything showing playback up to date with the player. */
+static void refresh(void) {
+  if (!s.player) return;
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  const item *it = current(&st);
+  int duration_ms = duration_of(it, &st);
+  gboolean has_next = it && st.index + 1 < s.count;
+
+  gboolean new_track = st.index != s.index, new_state = st.state != s.state;
+  s.index = st.index;
+  s.state = st.state;
+  if (new_track) {
+    now_playing_show(it ? it->title : NULL, it ? it->artist : NULL, duration_ms, it ? it->cover_dir : NULL);
+    if (it) mpris_set_track(it->uid, it->title, it->artist, it->album, it->cover_dir, duration_ms);
+    else mpris_set_track(NULL, NULL, NULL, NULL, NULL, 0);
+  }
+  now_playing_set_position((int)st.position_ms);
+  /* Stopped, the track stays in the now-playing strip, ready to play, but isn't marked. */
+  track_list_set_playing(it && st.state != MC_PLAYER_STOPPED ? it->uid : NULL);
+
+  if (new_track || new_state) {
+    set_window_title(st.state != MC_PLAYER_STOPPED ? it : NULL);
+    mpris_set_state(st.state, it != NULL, has_next);
+    if (st.state == MC_PLAYER_PLAYING && !s.tick) s.tick = g_timeout_add(TICK_MS, on_tick, NULL);
+    else if (st.state != MC_PLAYER_PLAYING && s.tick) g_clear_handle_id(&s.tick, g_source_remove);
+    if (s.changed) s.changed(s.user);
+  }
+}
+
+static gboolean on_tick(gpointer data) {
+  (void)data;
+  refresh();
+  return G_SOURCE_CONTINUE;
+}
+
+static gboolean on_player_idle(gpointer data) {
+  (void)data;
+  g_atomic_int_set(&s.pending, 0);
+  refresh();
+  return G_SOURCE_REMOVE;
+}
+
+/* On the player's thread. Events that come in a burst share one refresh. */
+static void on_player(void *user, mc_player_event event) {
+  (void)user;
+  (void)event;
+  if (g_atomic_int_compare_and_exchange(&s.pending, 0, 1)) g_idle_add(on_player_idle, &s);
+}
+
+void playback_init(GtkWindow *win, void (*changed)(void *user), void *user) {
+  memset(&s, 0, sizeof s);
+  s.win = win;
+  s.changed = changed;
+  s.user = user;
+  s.index = -1;
+}
+
+void playback_free(void) {
+  mc_player_free(s.player); /* first, so nothing more is posted */
+  s.player = NULL;
+  if (s.tick) g_source_remove(s.tick);
+  g_idle_remove_by_data(&s); /* a refresh still queued */
+  free_items();
+  memset(&s, 0, sizeof s);
+}
+
+void playback_play(const playback_track *tracks, int count, int start) {
+  if (count <= 0 || start < 0 || start >= count) return;
+  if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
+    s.player = NULL;
+    return;
+  }
+  const char **paths = g_new0(const char *, (gsize)count);
+  item *items = g_new0(item, (gsize)count);
+  for (int i = 0; i < count; i++) {
+    const playback_track *t = &tracks[i];
+    item *it = &items[i];
+    if (t->uid && strlen(t->uid) < MC_UID_STRLEN) strcpy(it->uid, t->uid);
+    it->title = g_strdup(t->title ? t->title : "Untitled");
+    it->artist = g_strdup(t->artist);
+    it->album = g_strdup(t->album);
+    it->cover_dir = g_strdup(t->cover_dir);
+    it->duration_ms = t->duration_ms;
+    paths[i] = t->path;
+  }
+  free_items();
+  s.items = items;
+  s.count = count;
+  s.index = -1; /* show the track afresh even if it's the same item number */
+  mc_player_set_queue(s.player, paths, count, start);
+  g_free(paths);
+  refresh();
+}
+
+gboolean playback_toggle(void) {
+  if (!s.player || !s.count) return FALSE;
+  mc_player_toggle(s.player);
+  refresh();
+  return TRUE;
+}
+
+void playback_resume(void) {
+  if (!s.player || !s.count) return;
+  mc_player_resume(s.player);
+  refresh();
+}
+
+void playback_pause(void) {
+  if (!s.player) return;
+  mc_player_pause(s.player);
+  refresh();
+}
+
+void playback_stop(void) {
+  if (!s.player) return;
+  mc_player_stop(s.player);
+  refresh();
+}
+
+void playback_next(void) {
+  if (!s.player) return;
+  mc_player_next(s.player);
+  refresh();
+}
+
+void playback_previous(void) {
+  if (!s.player) return;
+  mc_player_previous(s.player);
+  refresh();
+}
+
+void playback_seek(int64_t ms) {
+  if (!s.player) return;
+  mc_player_seek_ms(s.player, ms < 0 ? 0 : ms);
+  refresh();
+  mpris_seeked(playback_position_ms());
+}
+
+gboolean playback_is_playing(void) {
+  return s.player && s.state == MC_PLAYER_PLAYING;
+}
+
+mc_player_state playback_state(void) {
+  return s.player ? s.state : MC_PLAYER_STOPPED;
+}
+
+gboolean playback_has_current(void) {
+  return s.player && s.index >= 0 && s.index < s.count;
+}
+
+gboolean playback_has_next(void) {
+  return playback_has_current() && s.index + 1 < s.count;
+}
+
+int64_t playback_position_ms(void) {
+  if (!s.player) return 0;
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  return st.position_ms;
+}
+
+int64_t playback_duration_ms(void) {
+  if (!s.player) return 0;
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  return duration_of(current(&st), &st);
+}
