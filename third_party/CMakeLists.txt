@@ -28,13 +28,18 @@ FetchContent_Declare(dr_libs
   URL_HASH SHA256=40bec21c1560426978aaf60fad8d5e4b7929caf569deb82f05e77b8c9d10b8fb
   DOWNLOAD_EXTRACT_TIMESTAMP ON
   SOURCE_SUBDIR _none_)
+FetchContent_Declare(mdns
+  URL https://github.com/mjansson/mdns/archive/refs/tags/1.4.3.tar.gz
+  URL_HASH SHA256=be1fd8e35599cb7de179decbd0633c121d11a2dcb9cc193ff5c590bd0d480483
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
 # Mozilla CA bundle, a dated snapshot from curl.se/ca. Refresh by bumping the date and hash.
 FetchContent_Declare(cacert
   URL https://curl.se/ca/cacert-2026-10-20.pem
   URL_HASH SHA256=796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe
   DOWNLOAD_NO_EXTRACT ON
   SOURCE_SUBDIR _none_)
-FetchContent_MakeAvailable(sqlite yyjson miniaudio dr_libs cacert)
+FetchContent_MakeAvailable(sqlite yyjson miniaudio dr_libs mdns cacert)
 
 add_library(mc_sqlite3 STATIC "${sqlite_SOURCE_DIR}/sqlite3.c")
 target_include_directories(mc_sqlite3 SYSTEM PUBLIC "${sqlite_SOURCE_DIR}")
@@ -81,6 +86,11 @@ target_include_directories(mc_dr_libs SYSTEM PUBLIC "${dr_libs_SOURCE_DIR}")
 if(UNIX)
   target_link_libraries(mc_dr_libs PUBLIC m)
 endif()
+
+# mDNS/DNS-SD for core/src/discovery. Header-only: every function is static inline. On
+# Windows it needs ws2_32, which core links.
+add_library(mc_mdns INTERFACE)
+target_include_directories(mc_mdns SYSTEM INTERFACE "${mdns_SOURCE_DIR}")
 
 # The CA bundle is embedded and passed to curl with CURLOPT_CAINFO_BLOB, so HTTPS never
 # depends on the OS trust store.

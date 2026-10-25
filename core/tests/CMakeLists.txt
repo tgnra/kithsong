@@ -19,6 +19,9 @@ musicapp_test(test_import_db)
 musicapp_test(test_organize)
 musicapp_test(test_player)
 set_tests_properties(test_player PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
+musicapp_test(test_discovery)
+target_link_libraries(test_discovery PRIVATE mc_mdns)  # sends packets as a fake peer
+set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multicast
 
 # Hit musicbrainz.org; run by hand, not part of ctest.
 add_executable(manual_mb_ping manual_mb_ping.c)
