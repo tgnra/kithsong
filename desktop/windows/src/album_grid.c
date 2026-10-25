@@ -9,11 +9,10 @@
 #include <windowsx.h>
 
 #include "canvas.h"
+#include "scroller.h"
 #include "theme.h"
 
 #define WM_APP_THUMB (WM_APP + 20) /* lParam: thumb_result *, from the loader thread */
-#define SCROLL_TIMER 1
-#define SCROLLBAR_TIMER 2 /* hides the scrollbar a while after the mouse stops */
 
 /* Metrics at 96 DPI. */
 enum {
@@ -21,11 +20,6 @@ enum {
   HOVER_PAD = 8, /* hover fill around the cover and title */
   RING_GAP = 2,  /* selection ring: gap from the cover, and width */
   RING_W = 2,
-  BAR_THIN = 3, /* scrollbar width at rest, and under the mouse */
-  BAR_WIDE = 6,
-  BAR_MARGIN = 3,
-  BAR_HIT = 14, /* how close to the right edge the mouse takes the scrollbar */
-  BAR_MIN = 32, /* shortest thumb */
 };
 
 typedef struct tile {
@@ -63,16 +57,13 @@ static struct {
 
   /* Layout, in device pixels. */
   int cols, tile_w, row_h, pad, gap, text_gap, text_h;
-  int client_w, client_h, content_h;
-  int scroll_y, target_y;
-  BOOL animating;
+  int client_w, client_h;
+  scroller scroll;
 
   int hot;                          /* tile under the mouse, or -1 */
   int selected;                     /* or -1 */
   char selected_uid[MC_UID_STRLEN]; /* keeps the selection across reloads */
   BOOL tracking;                    /* asked for WM_MOUSELEAVE */
-  BOOL bar_shown, bar_hot, dragging;
-  int drag_dy; /* where on the thumb it was grabbed */
 
   canvas buf;
   int loaded; /* thumbnails in memory */
@@ -221,41 +212,12 @@ static DWORD WINAPI loader_main(void *arg) {
 
 /* --- Layout --- */
 
-static int max_scroll(void) {
-  return g.content_h > g.client_h ? g.content_h - g.client_h : 0;
-}
-
-/* The scrollbar thumb, drawn over the grid. FALSE if everything fits. */
-static BOOL thumb_rect(RECT *out) {
-  int max = max_scroll();
-  if (max <= 0) return FALSE;
-  int margin = scale(BAR_MARGIN), track_h = g.client_h - 2 * margin;
-  int thumb_h = MulDiv(track_h, g.client_h, g.content_h);
-  if (thumb_h < scale(BAR_MIN)) thumb_h = scale(BAR_MIN);
-  int top = margin + MulDiv(track_h - thumb_h, g.scroll_y, max);
-  int width = scale(g.bar_hot || g.dragging ? BAR_WIDE : BAR_THIN), right = g.client_w - margin;
-  SetRect(out, right - width, top, right, top + thumb_h);
-  return TRUE;
-}
-
-static void invalidate_scrollbar(void) {
-  RECT strip = {g.client_w - scale(BAR_HIT), 0, g.client_w, g.client_h};
-  InvalidateRect(g.wnd, &strip, FALSE);
-}
-
-/* Shows the scrollbar for a while: it appears when the mouse moves or the view scrolls. */
-static void show_scrollbar(void) {
-  if (!g.bar_shown) invalidate_scrollbar();
-  g.bar_shown = TRUE;
-  SetTimer(g.wnd, SCROLLBAR_TIMER, 1500, NULL);
-}
-
 /* Columns follow the width: as many tiles of at least 150 px (at 96 dpi) as fit, then
  * stretched to fill the row. Keeps the first visible album in view across resizes. */
 static void relayout(void) {
   RECT rc;
   GetClientRect(g.wnd, &rc);
-  int first = g.cols && g.row_h ? (g.scroll_y / g.row_h) * g.cols : 0;
+  int first = g.cols && g.row_h ? (g.scroll.pos / g.row_h) * g.cols : 0;
 
   g.client_w = rc.right;
   g.client_h = rc.bottom;
@@ -278,16 +240,14 @@ static void relayout(void) {
   g.row_h = g.tile_w + g.text_gap + g.text_h + g.gap;
 
   int rows = (g.count + g.cols - 1) / g.cols;
-  g.content_h = rows ? 2 * g.pad + rows * g.row_h - g.gap : 0;
 
   if (g.glyph_font) DeleteObject(g.glyph_font);
   g.glyph_font = CreateFontW(-g.tile_w / 4, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                              DEFAULT_PITCH, theme_icon_face());
 
-  g.scroll_y = (first / g.cols) * g.row_h;
-  if (g.scroll_y > max_scroll()) g.scroll_y = max_scroll();
-  g.target_y = g.scroll_y;
+  g.scroll.pos = g.scroll.target = (first / g.cols) * g.row_h;
+  scroller_resize(&g.scroll, &rc, rows ? 2 * g.pad + rows * g.row_h - g.gap : 0);
 }
 
 /* --- Thumbnails (UI thread) --- */
@@ -303,8 +263,8 @@ static void free_thumb(tile *t) {
 
 /* Index range of tiles at least partly in view. */
 static void visible_range(int *first, int *last) {
-  int top_row = g.row_h ? (g.scroll_y - g.pad) / g.row_h : 0;
-  int bottom_row = g.row_h ? (g.scroll_y + g.client_h - g.pad) / g.row_h : 0;
+  int top_row = g.row_h ? (g.scroll.pos - g.pad) / g.row_h : 0;
+  int bottom_row = g.row_h ? (g.scroll.pos + g.client_h - g.pad) / g.row_h : 0;
   if (top_row < 0) top_row = 0;
   *first = top_row * g.cols;
   *last = (bottom_row + 1) * g.cols - 1;
@@ -376,7 +336,7 @@ static void on_thumb(thumb_result *r) {
 
   /* Repaint just that tile, if it's in view. */
   int row = index / g.cols, col = index % g.cols;
-  RECT tr = {g.pad + col * (g.tile_w + g.gap), g.pad + row * g.row_h - g.scroll_y, 0, 0};
+  RECT tr = {g.pad + col * (g.tile_w + g.gap), g.pad + row * g.row_h - g.scroll.pos, 0, 0};
   tr.right = tr.left + g.tile_w;
   tr.bottom = tr.top + g.tile_w;
   InvalidateRect(g.wnd, &tr, FALSE);
@@ -384,6 +344,17 @@ static void on_thumb(thumb_result *r) {
 }
 
 /* --- Data --- */
+
+/* Posted rather than sent: reloads happen while painting. */
+static void notify_selection(void) {
+  PostMessageW(GetParent(g.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(g.wnd), AGN_SELCHANGE), (LPARAM)g.wnd);
+}
+
+const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]) {
+  if (g.selected < 0 || g.selected >= g.count) return NULL;
+  memcpy(uid, g.tiles[g.selected].uid, MC_UID_STRLEN);
+  return g.tiles[g.selected].title;
+}
 
 static void clear_tiles(void) {
   for (int i = 0; i < g.count; i++) {
@@ -428,6 +399,10 @@ static void reload(void) {
   g.count = n;
   g.selected = selected;
   g.hot = -1;
+  if (selected < 0 && g.selected_uid[0]) { /* the selected album went */
+    g.selected_uid[0] = '\0';
+    notify_selection();
+  }
 
   relayout();
   request_thumbs();
@@ -444,7 +419,7 @@ void album_grid_set_library(mc_library *lib) {
 
 /* Where tile i is in the view: its cover, its title, and both with room for the hover fill. */
 static void tile_rects(int i, RECT *art, RECT *text, RECT *outer) {
-  int x = g.pad + (i % g.cols) * (g.tile_w + g.gap), y = g.pad + (i / g.cols) * g.row_h - g.scroll_y;
+  int x = g.pad + (i % g.cols) * (g.tile_w + g.gap), y = g.pad + (i / g.cols) * g.row_h - g.scroll.pos;
   SetRect(art, x, y, x + g.tile_w, y + g.tile_w);
   SetRect(text, x, art->bottom + g.text_gap, x + g.tile_w, art->bottom + g.text_gap + g.text_h);
   SetRect(outer, x, y, x + g.tile_w, text->bottom);
@@ -460,7 +435,7 @@ static void invalidate_tile(int i) {
 
 /* The tile (cover or title) at a point in the view, or -1. */
 static int tile_at(int x, int y) {
-  int cx = x - g.pad, cy = y + g.scroll_y - g.pad;
+  int cx = x - g.pad, cy = y + g.scroll.pos - g.pad;
   if (!g.count || !g.cols || cx < 0 || cy < 0 || y >= g.client_h) return -1;
   int col = cx / (g.tile_w + g.gap), row = cy / g.row_h, i = row * g.cols + col;
   if (col >= g.cols || cx % (g.tile_w + g.gap) >= g.tile_w || cy % g.row_h >= g.row_h - g.gap) return -1;
@@ -479,7 +454,7 @@ static void update_hot(void) {
   POINT pt;
   GetCursorPos(&pt);
   ScreenToClient(g.wnd, &pt);
-  set_hot(g.tracking && !g.bar_hot && !g.dragging ? tile_at(pt.x, pt.y) : -1);
+  set_hot(g.tracking && !g.scroll.hot && !g.scroll.dragging ? tile_at(pt.x, pt.y) : -1);
 }
 
 static void select_tile(int i) {
@@ -489,70 +464,16 @@ static void select_tile(int i) {
   g.selected = i;
   if (i >= 0) memcpy(g.selected_uid, g.tiles[i].uid, sizeof g.selected_uid);
   else g.selected_uid[0] = '\0';
+  notify_selection();
 }
 
-/* --- Scrolling --- */
+/* --- Scrolling and the mouse --- */
 
-static void scroll_to(int y) {
-  if (y < 0) y = 0;
-  if (y > max_scroll()) y = max_scroll();
-  if (y == g.scroll_y) return;
-  g.scroll_y = y;
-  InvalidateRect(g.wnd, NULL, FALSE);
+/* The scroller already repainted; the tiles in view changed. */
+static void on_scrolled(void) {
   request_thumbs();
-  show_scrollbar();
   update_hot();
 }
-
-/* Eases towards target_y over a few frames. */
-static void animate_to(int y) {
-  if (y < 0) y = 0;
-  if (y > max_scroll()) y = max_scroll();
-  g.target_y = y;
-  if (!g.animating && g.target_y != g.scroll_y) {
-    g.animating = TRUE;
-    SetTimer(g.wnd, SCROLL_TIMER, USER_TIMER_MINIMUM, NULL);
-  }
-}
-
-static void jump_to(int y) {
-  if (g.animating) KillTimer(g.wnd, SCROLL_TIMER);
-  g.animating = FALSE;
-  scroll_to(y);
-  g.target_y = g.scroll_y;
-}
-
-static void on_scroll_timer(void) {
-  int diff = g.target_y - g.scroll_y;
-  int step = diff / 4;
-  if (step == 0) step = diff;
-  scroll_to(g.scroll_y + step);
-  if (g.scroll_y == g.target_y || step == 0) {
-    KillTimer(g.wnd, SCROLL_TIMER);
-    g.animating = FALSE;
-  }
-}
-
-static void on_vscroll(int code) {
-  int line = g.row_h / 4, page = g.client_h * 9 / 10;
-  switch (code) {
-    case SB_LINEUP: animate_to(g.target_y - line); break;
-    case SB_LINEDOWN: animate_to(g.target_y + line); break;
-    case SB_PAGEUP: animate_to(g.target_y - page); break;
-    case SB_PAGEDOWN: animate_to(g.target_y + page); break;
-    case SB_TOP: jump_to(0); break;
-    case SB_BOTTOM: jump_to(max_scroll()); break;
-  }
-}
-
-static void on_wheel(int delta) {
-  UINT lines = 3;
-  SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
-  int px = lines == WHEEL_PAGESCROLL ? g.client_h * 9 / 10 : (int)lines * scale(40);
-  animate_to(g.target_y - MulDiv(delta, px, WHEEL_DELTA));
-}
-
-/* --- Mouse --- */
 
 static void on_mouse_move(int x, int y) {
   if (!g.tracking) {
@@ -560,36 +481,13 @@ static void on_mouse_move(int x, int y) {
     TrackMouseEvent(&tme);
     g.tracking = TRUE;
   }
-  if (g.dragging) {
-    RECT thumb;
-    if (!thumb_rect(&thumb)) return;
-    int margin = scale(BAR_MARGIN), travel = g.client_h - 2 * margin - (thumb.bottom - thumb.top);
-    if (travel > 0) jump_to(MulDiv(y - g.drag_dy - margin, max_scroll(), travel));
-    return;
-  }
-  BOOL bar_hot = max_scroll() > 0 && x >= g.client_w - scale(BAR_HIT);
-  if (bar_hot != g.bar_hot) {
-    g.bar_hot = bar_hot;
-    invalidate_scrollbar();
-  }
-  show_scrollbar();
-  set_hot(bar_hot ? -1 : tile_at(x, y));
+  BOOL on_bar = scroller_mouse_move(&g.scroll, x, y);
+  set_hot(on_bar ? -1 : tile_at(x, y));
 }
 
 static void on_mouse_down(int x, int y) {
   SetFocus(g.wnd); /* for keyboard scrolling */
-  RECT thumb;
-  if (g.bar_hot && thumb_rect(&thumb)) {
-    if (y >= thumb.top && y < thumb.bottom) {
-      g.dragging = TRUE;
-      g.drag_dy = y - thumb.top;
-      SetCapture(g.wnd);
-    } else {
-      on_vscroll(y < thumb.top ? SB_PAGEUP : SB_PAGEDOWN);
-    }
-    return;
-  }
-  select_tile(tile_at(x, y));
+  if (!scroller_mouse_down(&g.scroll, x, y)) select_tile(tile_at(x, y));
 }
 
 /* --- Painting --- */
@@ -647,9 +545,7 @@ static void paint(HDC dc, const RECT *dirty) {
   SelectObject(c->dc, old_font);
   canvas_opaque(c, dirty);
 
-  RECT thumb;
-  if (g.bar_shown && thumb_rect(&thumb))
-    canvas_fill(c, &thumb, thumb.right - thumb.left, theme.text, g.bar_hot || g.dragging ? 140 : 110);
+  scroller_paint(&g.scroll, c);
 
   /* The content area's border and rounded corner, against the sidebar and toolbar. */
   int radius = scale(CONTENT_RADIUS);
@@ -668,7 +564,7 @@ void album_grid_theme_changed(void) {
 /* --- Window --- */
 
 static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
-  if (!g.wnd) g.wnd = wnd; /* messages arrive before CreateWindowExW returns */
+  if (!g.wnd) g.wnd = g.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
   switch (msg) {
     case WM_SIZE:
       relayout();
@@ -691,26 +587,17 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_MOUSEWHEEL:
-      on_wheel(GET_WHEEL_DELTA_WPARAM(wp));
+      scroller_wheel(&g.scroll, GET_WHEEL_DELTA_WPARAM(wp));
       return 0;
     case WM_TIMER:
-      if (wp == SCROLL_TIMER) {
-        on_scroll_timer();
-      } else if (wp == SCROLLBAR_TIMER && !g.bar_hot && !g.dragging) {
-        KillTimer(wnd, SCROLLBAR_TIMER);
-        g.bar_shown = FALSE;
-        invalidate_scrollbar();
-      }
+      scroller_timer(&g.scroll, wp);
       return 0;
     case WM_MOUSEMOVE:
       on_mouse_move(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
       return 0;
     case WM_MOUSELEAVE:
       g.tracking = FALSE;
-      if (!g.dragging) {
-        g.bar_hot = FALSE;
-        invalidate_scrollbar();
-      }
+      scroller_mouse_leave(&g.scroll);
       set_hot(-1);
       return 0;
     case WM_LBUTTONDOWN:
@@ -718,22 +605,22 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       on_mouse_down(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
       return 0;
     case WM_LBUTTONUP:
-      if (g.dragging) ReleaseCapture();
+      scroller_mouse_up(&g.scroll);
       return 0;
     case WM_CAPTURECHANGED:
-      g.dragging = FALSE;
-      invalidate_scrollbar();
+      scroller_capture_changed(&g.scroll);
       return 0;
-    case WM_KEYDOWN:
-      switch (wp) {
-        case VK_UP: on_vscroll(SB_LINEUP); return 0;
-        case VK_DOWN: on_vscroll(SB_LINEDOWN); return 0;
-        case VK_PRIOR: on_vscroll(SB_PAGEUP); return 0;
-        case VK_NEXT: on_vscroll(SB_PAGEDOWN); return 0;
-        case VK_HOME: on_vscroll(SB_TOP); return 0;
-        case VK_END: on_vscroll(SB_BOTTOM); return 0;
-      }
+    case WM_KEYDOWN: {
+      static const struct { WPARAM key; int code; } keys[] = {
+        {VK_UP, SB_LINEUP}, {VK_DOWN, SB_LINEDOWN}, {VK_PRIOR, SB_PAGEUP},
+        {VK_NEXT, SB_PAGEDOWN}, {VK_HOME, SB_TOP}, {VK_END, SB_BOTTOM}};
+      for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
+        if (wp == keys[i].key) {
+          scroller_command(&g.scroll, keys[i].code, g.row_h / 4);
+          return 0;
+        }
       break;
+    }
     case WM_APP_THUMB:
       on_thumb((thumb_result *)lp);
       return 0;
@@ -767,6 +654,7 @@ HWND album_grid_create(HWND parent, int id) {
   memset(&g, 0, sizeof g);
   g.busy_index = -1;
   g.hot = g.selected = -1;
+  g.scroll.moved = on_scrolled;
   g.dirty = TRUE;
   InitializeCriticalSection(&g.lock);
   InitializeConditionVariable(&g.wake);

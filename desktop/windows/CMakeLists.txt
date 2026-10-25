@@ -6,8 +6,10 @@ add_executable(musicapp WIN32
   src/canvas.c
   src/import_view.c
   src/pick_folder.c
+  src/scroller.c
   src/sidebar.c
   src/theme.c
+  src/track_list.c
   src/app.rc)
 target_link_libraries(musicapp PRIVATE musiccore comctl32 ole32 uuid shell32 windowscodecs dwmapi uxtheme)
 target_compile_definitions(musicapp PRIVATE

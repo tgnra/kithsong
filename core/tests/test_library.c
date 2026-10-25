@@ -77,6 +77,34 @@ int main(int argc, char **argv) {
   CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't1'") == SQLITE_OK);
   CHECK(changelog_count(db, "row_uid = 'p1' AND field = '_deleted'") == 1);
 
+  /* An album's tracks come back by disc, then number (unnumbered last), with an absolute
+   * path to the original file rather than a transcode. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Secret Name')") == SQLITE_OK);
+  CHECK(exec(db, "INSERT INTO tracks (uid, album_uid, title, track_no, disc_no, duration_ms) VALUES"
+                 " ('t2', 'al1', 'Bright', 2, 1, 120000), ('t3', 'al1', 'Starfire', 1, 1, 200500),"
+                 " ('t4', 'al1', 'Hidden', NULL, 1, 1000), ('t5', 'al1', 'Disc Two', 1, 2, 5000),"
+                 " ('t6', NULL, 'Elsewhere', 1, 1, 1)") == SQLITE_OK);
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format, source_file_uid) VALUES"
+                 " ('f1', 't3', 'Low/Secret Name/01 Starfire.opus', 'opus', 'orig'),"
+                 " ('f2', 't3', 'Low/Secret Name/01 Starfire.flac', 'flac', NULL)") == SQLITE_OK);
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_album_tracks(lib, "al1", &tracks) == MC_OK && tracks && tracks->count == 4);
+  if (tracks && tracks->count == 4) {
+    CHECK_STR(tracks->items[0].title, "Starfire");
+    CHECK_STR(tracks->items[1].title, "Bright");
+    CHECK_STR(tracks->items[2].title, "Hidden");
+    CHECK_STR(tracks->items[3].title, "Disc Two");
+    CHECK(tracks->items[0].track_no == 1 && tracks->items[0].disc_no == 1);
+    CHECK(tracks->items[0].duration_ms == 200500);
+    CHECK(tracks->items[2].track_no == 0);
+    CHECK(tracks->items[0].path && strstr(tracks->items[0].path, "Starfire.flac"));
+    CHECK(tracks->items[1].path == NULL);
+  }
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_album_tracks(lib, "nope", &tracks) == MC_OK && tracks && tracks->count == 0);
+  mc_track_list_free(tracks);
+
   mc_library_close(lib);
 
   /* Reopening keeps the node identity and doesn't re-run migrations. */

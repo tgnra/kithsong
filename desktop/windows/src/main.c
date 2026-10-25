@@ -18,8 +18,8 @@
  * through the extended frame. Everything drawn there needs real alpha, which GDI doesn't
  * give, so it's drawn with canvas.c.
  *
- * The album grid is album_grid.c and the sidebar sidebar.c. The track list is a placeholder
- * for now. The toolbar buttons are owner-drawn here.
+ * The album grid is album_grid.c, the sidebar sidebar.c and the track list track_list.c.
+ * The toolbar buttons are owner-drawn here.
  */
 #include <windows.h>
 #include <windowsx.h>
@@ -40,6 +40,7 @@
 #include "pick_folder.h"
 #include "sidebar.h"
 #include "theme.h"
+#include "track_list.h"
 
 enum {
   ID_PREV = 100,
@@ -121,7 +122,7 @@ static void update_font(void) {
   sidebar_update(g_app.dpi);
 
   SendMessageW(g_app.grid, WM_SETFONT, (WPARAM)font, TRUE);
-  SendMessageW(g_app.tracks, WM_SETFONT, (WPARAM)font, TRUE);
+  track_list_update(g_app.dpi);
   import_view_set_font(font);
   for (int i = 0; i < NUM_BUTTONS; i++) InvalidateRect(g_app.buttons[i], NULL, FALSE);
 
@@ -156,8 +157,8 @@ static void layout(void) {
   EndDeferWindowPos(dwp);
 
   /* The extended frame: under the toolbar, beside the sidebar, and down far enough for the
-   * album grid's rounded corner to show Mica (anything else in that strip, like the track
-   * list when it's real, must be drawn with alpha too). */
+   * album grid's rounded corner to show Mica. Anything else in that strip, like the track
+   * list, must be drawn with alpha too. */
   BOOL mica = theme.mica && !g_app.importing;
   MARGINS m = {mica ? side_w : 0, 0, bar + (mica ? scale(CONTENT_RADIUS) : 0), 0};
   DwmExtendFrameIntoClientArea(g_app.wnd, &m);
@@ -193,8 +194,20 @@ static void show_import(BOOL show) {
   layout();
 }
 
+/* Shows the selected album's tracks, or hides the track list when no album is selected. */
+static void show_album(void) {
+  char uid[MC_UID_STRLEN];
+  const wchar_t *title = album_grid_selection(uid);
+  track_list_show(g_app.lib, title ? uid : NULL, title);
+  if (g_app.show_tracks != (title != NULL)) {
+    g_app.show_tracks = title != NULL;
+    layout();
+  }
+}
+
 static void refresh_library(void) {
   album_grid_set_library(g_app.lib);
+  show_album(); /* if the album went, the grid says so when it reloads */
 }
 
 static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
@@ -274,6 +287,7 @@ static void apply_theme(void) {
   theme_apply_controls(g_app.wnd);
   theme_apply_control(g_app.tooltip);
   sidebar_update(g_app.dpi);
+  track_list_update(g_app.dpi);
   album_grid_theme_changed();
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
@@ -300,21 +314,26 @@ static void create_controls(void) {
   g_app.sidebar = sidebar_create(g_app.wnd, ID_SIDEBAR);
 
   g_app.grid = album_grid_create(g_app.wnd, ID_GRID);
+  g_app.tracks = track_list_create(g_app.wnd, ID_TRACKS);
   refresh_library();
-
-  g_app.tracks = child(WC_LISTBOXW, NULL, LBS_NOINTEGRALHEIGHT, ID_TRACKS);
-  ShowWindow(g_app.tracks, SW_HIDE);
 
   import_view_create(g_app.wnd, g_app.lib);
 }
 
-static void on_command(int id) {
+static void on_command(int id, int code) {
   switch (id) {
     case ID_IMPORT:
       show_import(TRUE);
       break;
     case ID_SETTINGS:
       change_library();
+      break;
+    case ID_GRID:
+      if (code == AGN_SELCHANGE) show_album();
+      break;
+    case ID_TRACKS:
+      /* Playback isn't in the core yet (mc_player is a stub); this is where the track list's
+       * track_list_playing_path() goes to the player. */
       break;
     default:
       import_view_on_command(id);
@@ -418,7 +437,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       return DefWindowProcW(wnd, msg, wp, lp);
     case WM_COMMAND:
-      on_command(LOWORD(wp));
+      on_command(LOWORD(wp), HIWORD(wp));
       return 0;
     case WM_NOTIFY:
       import_view_on_notify((const NMHDR *)lp);

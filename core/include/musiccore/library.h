@@ -64,6 +64,26 @@ typedef struct mc_album_list {
 mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out);
 void mc_album_list_free(mc_album_list *list);
 
+typedef struct mc_track_info {
+  char uid[MC_UID_STRLEN];
+  char *title;
+  int track_no; /* 0 if unknown */
+  int disc_no;  /* 0 if unknown */
+  int duration_ms;
+  char *path; /* absolute path of the track's file on this device (the original, if there are
+               * transcodes too); NULL if there's none here */
+} mc_track_info;
+
+typedef struct mc_track_list {
+  mc_track_info *items;
+  int count;
+} mc_track_list;
+
+/* An album's tracks in order: by disc, then track number (unnumbered tracks last), then
+ * title. Free with mc_track_list_free(). */
+mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out);
+void mc_track_list_free(mc_track_list *list);
+
 #ifdef __cplusplus
 }
 #endif

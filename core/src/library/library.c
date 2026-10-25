@@ -401,6 +401,66 @@ void mc_album_list_free(mc_album_list *list) {
   free(list);
 }
 
+mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out) {
+  if (!lib || !album_uid || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  static const char sql[] =
+    "SELECT t.uid, t.title, t.track_no, t.disc_no, t.duration_ms,"
+    " (SELECT f.path FROM files f WHERE f.track_uid = t.uid"
+    "  ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)"
+    " FROM tracks t WHERE t.album_uid = ?"
+    " ORDER BY coalesce(t.disc_no, 0), t.track_no IS NULL, t.track_no, t.title COLLATE NOCASE";
+
+  mc_track_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = MC_OK;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK ||
+      sqlite3_bind_text(stmt, 1, album_uid, -1, SQLITE_STATIC) != SQLITE_OK)
+    st = MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (list->count == cap) {
+      int grown = cap ? cap * 2 : 16;
+      mc_track_info *items = realloc(list->items, (size_t)grown * sizeof *items);
+      if (!items) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      list->items = items;
+      cap = grown;
+    }
+    mc_track_info *t = &list->items[list->count++];
+    memset(t, 0, sizeof *t);
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(t->uid, (const char *)uid);
+    t->title = column_dup(stmt, 1);
+    t->track_no = sqlite3_column_int(stmt, 2);
+    t->disc_no = sqlite3_column_int(stmt, 3);
+    t->duration_ms = sqlite3_column_int(stmt, 4);
+    const unsigned char *file = sqlite3_column_text(stmt, 5);
+    if (file) t->path = mc_library_abspath(lib, (const char *)file);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_track_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_track_list_free(mc_track_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].title);
+    free(list->items[i].path);
+  }
+  free(list->items);
+  free(list);
+}
+
 mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out) {
   static const char *const sql[] = {
     [MC_ENTITY_ARTISTS] = "SELECT count(*) FROM artists",
