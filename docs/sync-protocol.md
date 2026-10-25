@@ -39,7 +39,9 @@ the data after a crash.
 - mDNS/DNS-SD service `_musicapp._tcp`, announced and browsed by an embedded responder
   (mjansson/mdns) on a background thread. Default scan interval: 30 s. A device that hasn't
   answered for two intervals is offline.
-- The SRV record carries the TCP port the device listens on (ephemeral, chosen at start).
+- The SRV record carries the TCP port the device listens on: 47823 by default, so a firewall
+  rule can allow it, or an ephemeral port if 47823 is taken. Hosts with a firewall must allow
+  UDP 5353 (mDNS) and TCP 47823.
 - TXT record:
 
   | Key    | Value |
