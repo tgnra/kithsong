@@ -2,6 +2,7 @@
 // We don't use TagLib's own C bindings: they take char* paths, which on Windows go through
 // the ANSI code page and break on non-ASCII file names.
 #include "musiccore/tagger.h"
+#include "tagger/tag_io.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +17,7 @@
 #include <audioproperties.h>
 #include <fileref.h>
 #include <tpropertymap.h>
+#include <tvariant.h>
 
 namespace {
 
@@ -152,6 +154,41 @@ extern "C" mc_status mc_tags_write(const char *path, const mc_tags *tags) {
     return MC_ERR_NOMEM;
   } catch (...) {
     return MC_ERR_IO;
+  }
+}
+
+extern "C" mc_status mc_tags_read_picture(const char *path, unsigned char **data, size_t *len) {
+  if (!path || !data || !len) return MC_ERR_INVALID_ARG;
+  *data = nullptr;
+  *len = 0;
+
+  try {
+    TagLib::FileRef f = open_file(path, false);
+    if (f.isNull()) return MC_ERR_FORMAT;
+
+    TagLib::List<TagLib::VariantMap> pictures = f.complexProperties("PICTURE");
+    const TagLib::VariantMap *best = nullptr;
+    for (const TagLib::VariantMap &p : pictures) {
+      if (p.value("data").value<TagLib::ByteVector>().isEmpty()) continue;
+      if (!best) best = &p;
+      if (p.value("pictureType").value<TagLib::String>() == "Front Cover") {
+        best = &p;
+        break;
+      }
+    }
+    if (!best) return MC_ERR_NOT_FOUND;
+
+    TagLib::ByteVector bytes = best->value("data").value<TagLib::ByteVector>();
+    unsigned char *copy = static_cast<unsigned char *>(std::malloc(bytes.size()));
+    if (!copy) return MC_ERR_NOMEM;
+    std::memcpy(copy, bytes.data(), bytes.size());
+    *data = copy;
+    *len = bytes.size();
+    return MC_OK;
+  } catch (const std::bad_alloc &) {
+    return MC_ERR_NOMEM;
+  } catch (...) {
+    return MC_ERR_FORMAT;
   }
 }
 

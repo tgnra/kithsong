@@ -1,8 +1,9 @@
 /* Audio playback: a play queue, played gaplessly.
  *
- * Built on miniaudio for output (WASAPI, PulseAudio/ALSA, AAudio/OpenSL ES) and dr_libs for
- * decoding: FLAC, MP3 (with the LAME encoder delay and padding trimmed), WAV and AIFF. Other
- * formats fail with MC_ERR_FORMAT and are skipped.
+ * Built on miniaudio for output (WASAPI, PulseAudio/ALSA, AAudio/OpenSL ES), dr_libs for
+ * decoding FLAC, MP3 (with the LAME encoder delay and padding trimmed), WAV and AIFF, and
+ * opusfile for Opus (pre-skip and end padding trimmed). Other formats fail with
+ * MC_ERR_FORMAT and are skipped.
  *
  * A player thread decodes ahead into a buffer the audio device reads from. When a track
  * ends it carries straight on into the next one in the same buffer, so there is no gap

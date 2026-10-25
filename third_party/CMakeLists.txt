@@ -164,3 +164,64 @@ FetchContent_Declare(curl
   DOWNLOAD_EXTRACT_TIMESTAMP ON
   EXCLUDE_FROM_ALL SYSTEM)
 FetchContent_MakeAvailable(curl)
+
+# Opus: libogg and libopus through their own CMake projects; libopusenc and opusfile have
+# none in these releases, so the targets below are ours. Encoding is for transcoded sync
+# copies, decoding for playback. libopus keeps its defaults: the x86 SIMD paths are picked
+# at run time, so the build stays portable to Android and Windows.
+foreach(_opt
+    INSTALL_DOCS INSTALL_PKG_CONFIG_MODULE INSTALL_CMAKE_PACKAGE_MODULE
+    OPUS_BUILD_PROGRAMS OPUS_BUILD_TESTING OPUS_INSTALL_PKG_CONFIG_MODULE
+    OPUS_INSTALL_CMAKE_CONFIG_MODULE)
+  set(${_opt} OFF CACHE BOOL "" FORCE)
+endforeach()
+FetchContent_Declare(ogg
+  URL https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.xz
+  URL_HASH SHA256=5c8253428e181840cd20d41f3ca16557a9cc04bad4a3d04cce84808677fa1061
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  EXCLUDE_FROM_ALL SYSTEM)
+FetchContent_Declare(opus
+  URL https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
+  URL_HASH SHA256=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  EXCLUDE_FROM_ALL SYSTEM)
+FetchContent_Declare(opusenc
+  URL https://downloads.xiph.org/releases/opus/libopusenc-0.2.1.tar.gz
+  URL_HASH SHA256=8298db61a8d3d63e41c1a80705baa8ce9ff3f50452ea7ec1c19a564fe106cbb9
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_Declare(opusfile
+  URL https://downloads.xiph.org/releases/opus/opusfile-0.12.tar.gz
+  URL_HASH SHA256=118d8601c12dd6a44f52423e68ca9083cc9f2bfe72da7a8c1acb22a80ae3550b
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_MakeAvailable(ogg opus opusenc opusfile)
+
+# Its own Speex resampler is built in, under a prefix so it can't clash.
+add_library(mc_opusenc STATIC
+  "${opusenc_SOURCE_DIR}/src/ogg_packer.c"
+  "${opusenc_SOURCE_DIR}/src/opus_header.c"
+  "${opusenc_SOURCE_DIR}/src/opusenc.c"
+  "${opusenc_SOURCE_DIR}/src/picture.c"
+  "${opusenc_SOURCE_DIR}/src/resample.c"
+  "${opusenc_SOURCE_DIR}/src/unicode_support.c")
+target_include_directories(mc_opusenc SYSTEM PUBLIC "${opusenc_SOURCE_DIR}/include")
+target_compile_definitions(mc_opusenc PRIVATE
+  OPE_BUILD OUTSIDE_SPEEX RANDOM_PREFIX=libopusenc
+  PACKAGE_NAME="libopusenc" PACKAGE_VERSION="0.2.1")
+target_link_libraries(mc_opusenc PUBLIC opus)
+if(UNIX)
+  target_link_libraries(mc_opusenc PUBLIC m)
+endif()
+
+# Files only: http.c (and with it OpenSSL) is left out, as if built with OP_DISABLE_HTTP.
+add_library(mc_opusfile STATIC
+  "${opusfile_SOURCE_DIR}/src/info.c"
+  "${opusfile_SOURCE_DIR}/src/internal.c"
+  "${opusfile_SOURCE_DIR}/src/opusfile.c"
+  "${opusfile_SOURCE_DIR}/src/stream.c")
+target_include_directories(mc_opusfile SYSTEM PUBLIC "${opusfile_SOURCE_DIR}/include")
+target_link_libraries(mc_opusfile PUBLIC opus ogg)
+if(UNIX)
+  target_link_libraries(mc_opusfile PUBLIC m)
+endif()

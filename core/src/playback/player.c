@@ -1,7 +1,7 @@
 /* Playback.
  *
  *   player thread                                  audio thread (miniaudio)
- *   source: dr_libs -> converter --> ring buffer --> device callback
+ *   source: decoder -> converter --> ring buffer --> device callback
  *
  * The player thread owns the source (the open queue item). It keeps the ring buffer about
  * full, and when a source runs out it opens the next queue item and goes on writing: that's
@@ -22,16 +22,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "dr_flac.h"
-#include "dr_mp3.h"
-#include "dr_wav.h"
 #include "miniaudio.h"
+#include "playback/decoder.h"
 #include "util/platform.h"
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
 
 enum {
   CHANNELS = 2,
@@ -44,13 +37,8 @@ enum {
 
 /* --- Sources --- */
 
-typedef enum format { FMT_NONE, FMT_FLAC, FMT_MP3, FMT_WAV } format;
-
 typedef struct source {
-  format fmt;
-  drflac *flac;
-  drmp3 mp3;
-  drwav wav;
+  mc_decoder *dec;
   ma_uint32 channels, rate;
   ma_uint64 length; /* frames at rate, 0 if unknown */
   ma_data_converter *conv; /* passed on to the next item when its format is the same */
@@ -58,26 +46,9 @@ typedef struct source {
   ma_uint64 in_count, in_pos;
 } source;
 
-static format format_of(const char *path) {
-  static const struct {
-    const char *ext;
-    format fmt;
-  } known[] = {{"flac", FMT_FLAC}, {"mp3", FMT_MP3}, {"wav", FMT_WAV}, {"aif", FMT_WAV}, {"aiff", FMT_WAV}};
-  const char *dot = strrchr(path, '.');
-  if (!dot || strchr(dot, '/') || strchr(dot, '\\')) return FMT_NONE;
-  for (size_t i = 0; i < sizeof known / sizeof known[0]; i++) {
-    const char *a = dot + 1, *b = known[i].ext;
-    while (*a && (*a | 0x20) == *b) a++, b++;
-    if (!*a && !*b) return known[i].fmt;
-  }
-  return FMT_NONE;
-}
-
 static void source_close(source *s) {
   if (!s) return;
-  if (s->fmt == FMT_FLAC) drflac_close(s->flac);
-  if (s->fmt == FMT_MP3) drmp3_uninit(&s->mp3);
-  if (s->fmt == FMT_WAV) drwav_uninit(&s->wav);
+  mc_decoder_close(s->dec);
   if (s->conv) ma_data_converter_uninit(s->conv, NULL);
   free(s->conv);
   free(s->in);
@@ -86,70 +57,23 @@ static void source_close(source *s) {
 
 /* Opens path for output at rate, or returns NULL (with *err set) if it can't be played. */
 static source *source_open(const char *path, ma_uint32 rate, mc_status *err) {
-  format fmt = format_of(path);
-  *err = MC_ERR_FORMAT;
-  if (fmt == FMT_NONE) return NULL;
   source *s = calloc(1, sizeof *s);
   if (!s) {
     *err = MC_ERR_NOMEM;
     return NULL;
   }
-  int ok = 0;
-#ifdef _WIN32
-  int n = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-  wchar_t *wpath = n > 0 ? malloc((size_t)n * sizeof *wpath) : NULL;
-  if (wpath) MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, n);
-#define OPEN_PATH wpath
-#define OPEN(fn) fn##_w
-#else
-#define OPEN_PATH path
-#define OPEN(fn) fn
-#endif
-  if (OPEN_PATH) {
-    switch (fmt) {
-      case FMT_FLAC:
-        if ((s->flac = OPEN(drflac_open_file)(OPEN_PATH, NULL))) {
-          ok = 1;
-          s->channels = s->flac->channels;
-          s->rate = s->flac->sampleRate;
-          s->length = s->flac->totalPCMFrameCount;
-        }
-        break;
-      case FMT_MP3:
-        if ((ok = OPEN(drmp3_init_file)(&s->mp3, OPEN_PATH, NULL))) {
-          s->channels = s->mp3.channels;
-          s->rate = s->mp3.sampleRate;
-          /* Only from the Xing/Info header: without one, counting means decoding the file. */
-          s->length = s->mp3.totalPCMFrameCount != DRMP3_UINT64_MAX ? drmp3_get_pcm_frame_count(&s->mp3) : 0;
-        }
-        break;
-      case FMT_WAV:
-        if ((ok = OPEN(drwav_init_file)(&s->wav, OPEN_PATH, NULL))) {
-          s->channels = s->wav.channels;
-          s->rate = s->wav.sampleRate;
-          s->length = s->wav.totalPCMFrameCount;
-        }
-        break;
-      case FMT_NONE:
-        break;
-    }
-  }
-#undef OPEN_PATH
-#undef OPEN
-#ifdef _WIN32
-  free(wpath);
-#endif
-  if (!ok) {
+  if ((*err = mc_decoder_open(path, &s->dec)) != MC_OK) {
     free(s);
-    *err = MC_ERR_IO;
     return NULL;
   }
-  s->fmt = fmt;
+  s->channels = mc_decoder_channels(s->dec);
+  s->rate = mc_decoder_rate(s->dec);
+  s->length = mc_decoder_length(s->dec);
 
   ma_data_converter_config config =
     ma_data_converter_config_init(ma_format_f32, ma_format_f32, s->channels, CHANNELS, s->rate, rate);
   config.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER;
-  s->in = s->channels && s->rate ? malloc((size_t)CHUNK * s->channels * sizeof *s->in) : NULL;
+  s->in = malloc((size_t)CHUNK * s->channels * sizeof *s->in);
   ma_data_converter *conv = s->in ? malloc(sizeof *conv) : NULL;
   if (!conv || ma_data_converter_init(&config, NULL, conv) != MA_SUCCESS) {
     free(conv);
@@ -166,22 +90,12 @@ static int64_t source_duration_ms(const source *s) {
   return (int64_t)(s->length * 1000 / s->rate);
 }
 
-static ma_uint64 source_decode(source *s, float *out, ma_uint64 frames) {
-  switch (s->fmt) {
-    case FMT_FLAC: return drflac_read_pcm_frames_f32(s->flac, frames, out);
-    case FMT_MP3: return drmp3_read_pcm_frames_f32(&s->mp3, frames, out);
-    case FMT_WAV: return drwav_read_pcm_frames_f32(&s->wav, frames, out);
-    case FMT_NONE: break;
-  }
-  return 0;
-}
-
 /* Up to frames output frames; fewer only at the end. */
 static ma_uint64 source_read(source *s, float *out, ma_uint64 frames) {
   ma_uint64 done = 0;
   while (done < frames) {
     if (s->in_pos == s->in_count) {
-      s->in_count = source_decode(s, s->in, CHUNK);
+      s->in_count = mc_decoder_read(s->dec, s->in, CHUNK);
       s->in_pos = 0;
       if (!s->in_count) break;
     }
@@ -196,11 +110,7 @@ static ma_uint64 source_read(source *s, float *out, ma_uint64 frames) {
 }
 
 static void source_seek(source *s, int64_t ms) {
-  ma_uint64 frame = (ma_uint64)ms * s->rate / 1000;
-  if (s->length && frame > s->length) frame = s->length;
-  if (s->fmt == FMT_FLAC) drflac_seek_to_pcm_frame(s->flac, frame);
-  if (s->fmt == FMT_MP3) drmp3_seek_to_pcm_frame(&s->mp3, frame);
-  if (s->fmt == FMT_WAV) drwav_seek_to_pcm_frame(&s->wav, frame);
+  mc_decoder_seek(s->dec, (ma_uint64)ms * s->rate / 1000);
   ma_data_converter_reset(s->conv);
   s->in_pos = s->in_count = 0;
 }
