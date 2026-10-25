@@ -36,7 +36,7 @@
 | playlist    | `core/src/playlist`    | stub |
 | playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs |
 | sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing crypto; no sessions yet |
-| discovery   | `core/src/discovery`   | stub |
+| discovery   | `core/src/discovery`   | mDNS/DNS-SD announce and browse of `_musicapp._tcp` on a core thread (mjansson/mdns); peers reported online/offline through a callback |
 | transcode   | `core/src/transcode`   | stub |
 | util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, UUIDv7, HLC |
 

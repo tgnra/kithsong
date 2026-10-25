@@ -67,10 +67,11 @@ target_include_directories(musiccore
   PUBLIC include
   PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(musiccore PRIVATE
-  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs tag CURL::libcurl mbedcrypto)
+  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs mc_mdns tag CURL::libcurl mbedcrypto)
 if(WIN32)
   target_compile_definitions(musiccore PRIVATE _WIN32_WINNT=0x0A00)
-  target_link_libraries(musiccore PRIVATE bcrypt ws2_32)
+  # ws2_32 for sockets (sync and discovery), iphlpapi for discovery's interface list.
+  target_link_libraries(musiccore PRIVATE bcrypt ws2_32 iphlpapi)
 endif()
 musicapp_warnings(musiccore)
 

@@ -9,6 +9,7 @@ dependency is added.
 | yyjson | 0.10.0 | MIT | fetched, static |
 | miniaudio | 0.11.21 | Public domain / MIT-0 | fetched, static |
 | dr_flac, dr_mp3, dr_wav | 0.13.x / 0.7.x (commit `ea33eed`) | Public domain / MIT-0 | fetched, static |
+| mjansson/mdns | 1.4.3 | Public domain (Unlicense) | fetched, header-only |
 | Mozilla CA bundle | curl.se 2026-10-20 | MPL-2.0 | fetched, embedded |
 | TagLib | 2.0.2 | LGPL-2.1 **or** MPL-1.1 | fetched, static |
 | utfcpp | 4.0.6 | BSL-1.0 | fetched, header-only (TagLib dependency) |
@@ -19,7 +20,6 @@ Planned:
 
 | Dependency | License | Notes |
 |------------|---------|-------|
-| mjansson/mdns | Public domain | mDNS discovery |
 | libopus / opusfile | BSD-3-Clause | Opus decode/encode |
 | LAME | LGPL-2.0 | MP3 encode; link dynamically or provide relinkable objects |
 | Chromaprint | LGPL-2.1 (MIT for parts) | fingerprinting; same LGPL care as LAME |
