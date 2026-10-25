@@ -98,14 +98,15 @@ static void row_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpoi
   /* The number, or a speaker on the playing track, in a column of fixed width. */
   GtkWidget *lead = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
   gtk_widget_set_size_request(lead, 28, -1);
-  r->num = row_label(1);
+  gtk_widget_set_hexpand(lead, FALSE); /* don't inherit the children's expand, or it takes the title's space */
+  r->num = row_label(0);
   gtk_widget_set_hexpand(r->num, TRUE);
   gtk_widget_add_css_class(r->num, "dim-label");
   gtk_widget_add_css_class(r->num, "numeric");
   gtk_box_append(GTK_BOX(lead), r->num);
   r->speaker = gtk_image_new_from_icon_name("audio-volume-high-symbolic");
   gtk_widget_set_hexpand(r->speaker, TRUE);
-  gtk_widget_set_halign(r->speaker, GTK_ALIGN_END);
+  gtk_widget_set_halign(r->speaker, GTK_ALIGN_START);
   gtk_widget_add_css_class(r->speaker, "accent");
   gtk_box_append(GTK_BOX(lead), r->speaker);
   gtk_box_append(GTK_BOX(box), lead);
