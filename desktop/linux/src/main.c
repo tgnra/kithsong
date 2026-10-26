@@ -9,11 +9,12 @@
  *
  * The album grid is album_grid.c, the track list track_list.c, the now-playing strip
  * now_playing.c, the player playback.c, the desktop's media controls mpris.c, the import
- * page import_view.c and the Settings dialog settings_view.c. The playback buttons are the app.previous, app.play-pause and app.next actions, so their
+ * page import_view.c and the Settings dialog settings_view.c and the Add Device dialog add_device.c. The playback buttons are the app.previous, app.play-pause and app.next actions, so their
  * sensitivity follows the actions'.
  */
 #include <adwaita.h>
 
+#include "add_device.h"
 #include "album_grid.h"
 #include "app.h"
 #include "cover.h"
@@ -129,6 +130,16 @@ static GtkWidget *nav_row(const char *icon, const char *label) {
   return box;
 }
 
+/* TODO: start pairing with mc_sync_pair_request_address() once the sync API lands. */
+static void on_add_device_connect(void *user, const char *host, guint16 port) {
+  (void)user;
+  g_message("Add device: %s port %u", host, (unsigned)port);
+}
+
+static void on_add_device(GtkButton *button, gpointer user) {
+  add_device_present(GTK_WIDGET(button), on_add_device_connect, user);
+}
+
 static GtkWidget *build_sidebar(app *a) {
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
@@ -142,14 +153,23 @@ static GtkWidget *build_sidebar(app *a) {
   g_signal_connect(nav, "row-activated", G_CALLBACK(on_nav_activated), a);
   gtk_box_append(GTK_BOX(box), nav);
 
+  /* The Devices heading, with + at the end to add a device by address. */
+  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  gtk_widget_set_margin_start(header, 18);
+  gtk_widget_set_margin_end(header, 12);
+  gtk_widget_set_margin_top(header, 12);
   GtkWidget *heading = gtk_label_new("Devices");
   gtk_widget_add_css_class(heading, "heading");
   gtk_widget_add_css_class(heading, "dim-label");
   gtk_label_set_xalign(GTK_LABEL(heading), 0);
-  gtk_widget_set_margin_start(heading, 18);
-  gtk_widget_set_margin_top(heading, 18);
-  gtk_widget_set_margin_bottom(heading, 6);
-  gtk_box_append(GTK_BOX(box), heading);
+  gtk_widget_set_hexpand(heading, TRUE);
+  gtk_box_append(GTK_BOX(header), heading);
+  GtkWidget *add = gtk_button_new_from_icon_name("list-add-symbolic");
+  gtk_widget_add_css_class(add, "flat");
+  gtk_widget_set_tooltip_text(add, "Add Device by Address");
+  g_signal_connect(add, "clicked", G_CALLBACK(on_add_device), a);
+  gtk_box_append(GTK_BOX(header), add);
+  gtk_box_append(GTK_BOX(box), header);
 
   /* Online peers, then paired peers that are currently unreachable. */
   GtkWidget *devices = gtk_list_box_new();
