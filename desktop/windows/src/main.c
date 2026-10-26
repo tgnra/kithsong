@@ -224,11 +224,23 @@ static void show_page(sidebar_page page) {
   layout();
 }
 
+/* Previous and Next need a track to go from; Play needs one, or a shown album with something
+ * to play. Disabled buttons are greyed out. */
+static void update_buttons(void) {
+  BOOL playable = playback_has_current();
+  for (int i = 0, n = track_list_count(); !playable && i < n; i++) playable = track_list_item_at(i).path != NULL;
+  EnableWindow(g_app.buttons[ID_PREV - ID_PREV], playback_has_current());
+  EnableWindow(g_app.buttons[ID_PLAY - ID_PREV], playable);
+  EnableWindow(g_app.buttons[ID_NEXT - ID_PREV], playback_has_next());
+}
+
 /* Shows the selected album's tracks, or hides the track list when no album is selected. */
 static void show_album(void) {
   char uid[MC_UID_STRLEN];
   const wchar_t *title = album_grid_selection(uid);
   track_list_show(g_app.lib, title ? uid : NULL, title);
+  track_list_set_details(album_grid_selection_artist(), album_grid_selection_year(), album_grid_selection_cover());
+  update_buttons();
   if (g_app.show_tracks != (title != NULL)) {
     g_app.show_tracks = title != NULL;
     layout();
@@ -279,10 +291,14 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   canvas_clear(c, &rc, theme.frame, theme.mica ? 0 : 255);
 
   int index = (int)dis->CtlID - ID_PREV;
-  BOOL pressed = (dis->itemState & ODS_SELECTED) != 0;
-  control_state state = pressed ? STATE_PRESSED : dis->hwndItem == g_app.hot_button ? STATE_HOT : STATE_NORMAL;
+  BOOL pressed = (dis->itemState & ODS_SELECTED) != 0, disabled = (dis->itemState & ODS_DISABLED) != 0;
+  control_state state = disabled ? STATE_NORMAL
+                        : pressed ? STATE_PRESSED
+                        : dis->hwndItem == g_app.hot_button ? STATE_HOT
+                                                            : STATE_NORMAL;
   int radius = scale(6);
   COLORREF color = theme_draw_state(c, &rc, radius, state);
+  if (disabled) color = theme.text3;
   wchar_t glyph = dis->CtlID == ID_PLAY && playback_is_playing() ? 0xE769 : glyphs[index]; /* Pause */
   canvas_text(c, &glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, g_app.icon_font,
               color);
@@ -354,6 +370,7 @@ static void play_album(int start) {
 
 /* The Play button turns into Pause while playing. */
 static void playback_changed(void) {
+  update_buttons();
   HWND play = g_app.buttons[ID_PLAY - ID_PREV];
   const wchar_t *label = playback_is_playing() ? L"Pause" : L"Play";
   SetWindowTextW(play, label); /* for screen readers */
@@ -390,6 +407,10 @@ static void on_command(int id, int code) {
       break;
     case ID_TRACKS:
       if (code == TLN_PLAY) play_album(track_list_play_index());
+      else if (code == TLN_CLOSE) { /* unselecting the album hides the list */
+        album_grid_unselect();
+        SetFocus(g_app.grid);
+      }
       break;
     case ID_NOW_PLAYING:
       if (code == NPN_SEEK) playback_seek(now_playing_position());

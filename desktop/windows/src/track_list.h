@@ -1,13 +1,16 @@
 /* The track list: the selected album's tracks, in a pane beside the album grid.
  *
- *   Album Title
- *   12 tracks · 47 min
- *   ----------------------------------
- *    1   Airbag                   4:44
- *   >)   Paranoid Android         6:23   <- playing, in the accent colour
+ *   +------+  OK Computer               [x]
+ *   | art  |  Radiohead
+ *   +------+  1997 · 12 tracks · 53 min
+ *   ----------------------------------------
+ *    1   Airbag                        4:44
+ *   >)   Paranoid Android              6:23   <- playing, in the accent colour
  *
- * Track numbers and durations are secondary text. Clicking selects a track; double-clicking
- * or Enter plays it. Right-click (or the menu key) opens a menu for the track.
+ * Track numbers and durations are secondary text; tracks with no file on this device are
+ * greyed out. Clicking selects a track; double-clicking or Enter plays it. Right-click (or
+ * the menu key) opens a menu for the track. The close button or Escape asks the parent to
+ * close the pane (TLN_CLOSE).
  */
 #ifndef MUSICAPP_TRACK_LIST_H
 #define MUSICAPP_TRACK_LIST_H
@@ -18,6 +21,8 @@
 
 /* Sent to the parent as a WM_COMMAND notification code when the user plays a track. */
 #define TLN_PLAY 1
+/* Sent likewise when the user closes the pane, with its close button or Escape. */
+#define TLN_CLOSE 2
 
 /* Creates the list as a child of parent. Only one exists at a time. */
 HWND track_list_create(HWND parent, int id);
@@ -28,6 +33,10 @@ void track_list_update(UINT dpi);
 /* Shows an album's tracks, or nothing for a NULL album_uid. Showing the same album again
  * reloads it (after an import, say), keeping the selection and scroll position. */
 void track_list_show(mc_library *lib, const char *album_uid, const wchar_t *title);
+/* The header's details for the album shown: its artist (NULL shows "Unknown Artist"), year
+ * (0 if unknown) and the folder holding its cover (NULL if there's none). Call after
+ * track_list_show. */
+void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover_dir);
 
 /* The shown album's tracks, in order, for the play queue. Valid until the list next changes. */
 typedef struct track_list_item {

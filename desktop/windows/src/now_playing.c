@@ -29,11 +29,12 @@ enum {
 static struct {
   HWND wnd;
   UINT dpi;
-  HFONT font, icon_font;
+  HFONT font, bold_font, icon_font;
   canvas buf;
   IWICImagingFactory *wic;
 
   wchar_t *title;     /* NULL when nothing is playing */
+  wchar_t *artist;    /* NULL if unknown */
   wchar_t *cover_dir; /* NULL when the album has no cover */
   HBITMAP art;        /* premultiplied, with rounded corners; NULL shows the placeholder */
   const uint32_t *art_px;
@@ -187,6 +188,37 @@ static void paint_bar(canvas *c) {
   canvas_fill(c, &inner, knob / 2, theme.accent, 255);
 }
 
+static int measure(HFONT font, const wchar_t *t) {
+  HDC dc = GetDC(s.wnd);
+  HGDIOBJ old = SelectObject(dc, font);
+  int w = text_width(dc, t);
+  SelectObject(dc, old);
+  ReleaseDC(s.wnd, dc);
+  return w;
+}
+
+/* "Paranoid Android — Radiohead": the title in bold, the artist dimmed, centred together
+ * over the bar. Too long, the title keeps at least half the room and both are cut short. */
+static void paint_title(canvas *c) {
+  UINT one_line = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
+  wchar_t artist[512] = L"";
+  if (s.artist) swprintf(artist, 512, L" \x2014 %ls", s.artist);
+  int room = s.title_rect.right - s.title_rect.left;
+  int title_w = measure(s.bold_font, s.title), artist_w = *artist ? measure(s.font, artist) : 0;
+  if (title_w + artist_w > room) {
+    title_w = min(title_w, max(room - artist_w, room / 2));
+    artist_w = room - title_w;
+  }
+  RECT title = s.title_rect;
+  title.left += (room - title_w - artist_w) / 2;
+  title.right = title.left + title_w;
+  canvas_text(c, s.title, -1, &title, one_line, s.bold_font, theme.text);
+  if (*artist) {
+    RECT rest = {title.right, title.top, title.right + artist_w, title.bottom};
+    canvas_text(c, artist, -1, &rest, one_line, s.font, theme.text2);
+  }
+}
+
 static void paint(HDC dc, const RECT *dirty) {
   RECT client;
   GetClientRect(s.wnd, &client);
@@ -208,7 +240,7 @@ static void paint(HDC dc, const RECT *dirty) {
   COLORREF time_color = s.title ? theme.text2 : theme.text3;
   canvas_text(c, cur, -1, &s.cur_rect, one_line | DT_RIGHT, s.font, time_color);
   canvas_text(c, left, -1, &s.left_rect, one_line | DT_LEFT, s.font, time_color);
-  if (s.title) canvas_text(c, s.title, -1, &s.title_rect, one_line | DT_CENTER | DT_END_ELLIPSIS, s.font, theme.text);
+  if (s.title) paint_title(c);
   paint_bar(c);
 
   if (GetFocus() == s.wnd && seekable() && !(SendMessageW(s.wnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS)) {
@@ -307,10 +339,12 @@ static LRESULT CALLBACK now_playing_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM l
     case WM_DESTROY:
       free_art();
       free(s.title);
+      free(s.artist);
       free(s.cover_dir);
       canvas_free(&s.buf);
       if (s.wic) IWICImagingFactory_Release(s.wic);
       if (s.font) DeleteObject(s.font);
+      if (s.bold_font) DeleteObject(s.bold_font);
       if (s.icon_font) DeleteObject(s.icon_font);
       memset(&s, 0, sizeof s);
       return 0;
@@ -334,8 +368,12 @@ void now_playing_update(UINT dpi) {
   NONCLIENTMETRICSW ncm = {.cbSize = sizeof ncm};
   SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof ncm, &ncm, 0, dpi);
   if (s.font) DeleteObject(s.font);
+  if (s.bold_font) DeleteObject(s.bold_font);
   if (s.icon_font) DeleteObject(s.icon_font);
   s.font = CreateFontIndirectW(&ncm.lfMessageFont);
+  LOGFONTW bold = ncm.lfMessageFont;
+  bold.lfWeight = FW_SEMIBOLD;
+  s.bold_font = CreateFontIndirectW(&bold);
   s.icon_font = CreateFontW(-scale(16), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
                             theme_icon_face());
@@ -346,11 +384,13 @@ void now_playing_update(UINT dpi) {
   }
 }
 
-void now_playing_show(const wchar_t *title, int duration_ms, const wchar_t *cover_dir) {
+void now_playing_show(const wchar_t *title, const wchar_t *artist, int duration_ms, const wchar_t *cover_dir) {
   if (s.dragging) ReleaseCapture();
   free(s.title);
+  free(s.artist);
   free(s.cover_dir);
   s.title = title ? _wcsdup(title) : NULL;
+  s.artist = title && artist ? _wcsdup(artist) : NULL;
   s.cover_dir = title && cover_dir ? _wcsdup(cover_dir) : NULL;
   s.duration_ms = title && duration_ms > 0 ? duration_ms : 0;
   s.pos_ms = 0;

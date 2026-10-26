@@ -79,7 +79,7 @@ static void refresh(void) {
   s.index = st.index;
   s.state = st.state;
   if (new_track) {
-    now_playing_show(it ? it->title : NULL, duration_ms, it ? it->cover_dir : NULL);
+    now_playing_show(it ? it->title : NULL, it ? it->artist : NULL, duration_ms, it ? it->cover_dir : NULL);
     if (it) media_controls_set_track(it->title, it->artist, it->album, it->cover_dir);
     else media_controls_set_track(NULL, NULL, NULL, NULL);
   }
@@ -253,4 +253,12 @@ void playback_seek(int ms) {
 
 BOOL playback_is_playing(void) {
   return s.player && s.state == MC_PLAYER_PLAYING;
+}
+
+BOOL playback_has_current(void) {
+  return s.player && s.index >= 0 && s.index < s.count;
+}
+
+BOOL playback_has_next(void) {
+  return playback_has_current() && s.index + 1 < s.count;
 }
