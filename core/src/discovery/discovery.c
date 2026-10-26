@@ -50,6 +50,7 @@
 
 #include <mbedtls/sha256.h>
 
+#include "discovery/local_addr.h"
 #include "mdns.h"
 #include "util/platform.h"
 
@@ -66,6 +67,7 @@ enum {
   ADDR_LEN = 64,
   RX_MAX = 8, /* services and hosts collected from one packet */
   TXT_MAX = 16,
+  TXT_COUNT = 6, /* the records we send: v, dev, name, kind, grp, host */
   SEND_BYTES = 2048,
   RECV_BYTES = 9216,    /* the largest mDNS packet (RFC 6762) */
   REANNOUNCE_MS = 1000, /* announcements go out twice, a second apart (RFC 6762 8.3) */
@@ -81,6 +83,7 @@ typedef struct msock {
 typedef struct peer {
   char dev[MC_UID_STRLEN];
   char name[DNS_NAME_LEN];
+  char host[DNS_NAME_LEN];
   char kind[KIND_LEN];
   char grp[MC_GROUP_HASH_STRLEN];
   int version;
@@ -101,6 +104,7 @@ typedef struct rx_service {
   int has_txt;
   char dev[MC_UID_STRLEN];
   char name[DNS_NAME_LEN];
+  char host[DNS_NAME_LEN];
   char kind[KIND_LEN];
   char grp[MC_GROUP_HASH_STRLEN];
   int version;
@@ -117,6 +121,7 @@ struct mc_discovery {
   /* Fixed at start. */
   char device_uid[MC_UID_STRLEN];
   char name[NAME_MAX_BYTES + 1];
+  char host[NAME_MAX_BYTES + 1];
   char kind[KIND_LEN];
   char instance[DNS_NAME_LEN];
   char hostname[DNS_NAME_LEN];
@@ -384,7 +389,7 @@ static void wake(mc_discovery *d) {
 
 typedef struct records {
   mdns_record_t ptr, srv, a, aaaa;
-  mdns_record_t txt[5];
+  mdns_record_t txt[TXT_COUNT];
   int has_a, has_aaaa;
 } records;
 
@@ -442,6 +447,7 @@ static void make_records(const mc_discovery *d, const msock *s, records *r) {
   r->txt[2] = txt_record(d, "name", d->name);
   r->txt[3] = txt_record(d, "kind", d->kind);
   r->txt[4] = txt_record(d, "grp", d->grp);
+  r->txt[5] = txt_record(d, "host", d->host);
 }
 
 /* Collects the records that accompany an answer: SRV if wanted, then A, AAAA and TXT. */
@@ -451,7 +457,7 @@ static size_t extras(const records *r, int with_srv, int with_a, int with_aaaa,
   if (with_srv) out[n++] = r->srv;
   if (with_a && r->has_a) out[n++] = r->a;
   if (with_aaaa && r->has_aaaa) out[n++] = r->aaaa;
-  for (int i = 0; i < 5; i++) out[n++] = r->txt[i];
+  for (int i = 0; i < TXT_COUNT; i++) out[n++] = r->txt[i];
   return n;
 }
 
@@ -460,7 +466,7 @@ typedef enum send_mode { SEND_ANNOUNCE, SEND_GOODBYE } send_mode;
 static void announce(mc_discovery *d, send_mode mode) {
   for (int i = 0; i < d->nsocks; i++) {
     records r;
-    mdns_record_t extra[8];
+    mdns_record_t extra[4 + TXT_COUNT];
     make_records(d, &d->socks[i], &r);
     size_t n = extras(&r, 1, 1, 1, extra);
     if (mode == SEND_ANNOUNCE)
@@ -485,7 +491,7 @@ static void answer_question(mc_discovery *d, const struct sockaddr *from, size_t
                             const char *qname) {
   int any = rtype == MDNS_RECORDTYPE_ANY;
   records r;
-  mdns_record_t answer, extra[8];
+  mdns_record_t answer, extra[4 + TXT_COUNT];
   size_t n;
   make_records(d, d->cur, &r);
   if (name_eq(qname, DNS_SD) && (rtype == MDNS_RECORDTYPE_PTR || any)) {
@@ -562,6 +568,8 @@ static void read_txt(rx_service *r, const void *data, size_t size, size_t off, s
       copy_str(r->name, sizeof r->name, v, vlen);
     } else if (key_is(&txt[i], "kind")) {
       copy_str(r->kind, sizeof r->kind, v, vlen);
+    } else if (key_is(&txt[i], "host")) {
+      copy_str(r->host, sizeof r->host, v, vlen);
     } else if (key_is(&txt[i], "grp")) {
       if (vlen < MC_GROUP_HASH_STRLEN) copy_str(r->grp, sizeof r->grp, v, vlen);
     } else if (key_is(&txt[i], "v")) {
@@ -666,6 +674,7 @@ static void notify(mc_discovery *d, const peer *p, int online) {
   info.device_uid = p->dev;
   info.name = p->name;
   info.kind = p->kind;
+  info.host = p->host;
   info.group_hash = p->grp;
   info.version = p->version;
   info.address = p->address;
@@ -722,6 +731,7 @@ static void merge_packet(mc_discovery *d) {
     if (r->has_txt) {
       changed |= set_field(p->name, sizeof p->name, r->name);
       changed |= set_field(p->kind, sizeof p->kind, r->kind);
+      changed |= set_field(p->host, sizeof p->host, r->host);
       changed |= set_field(p->grp, sizeof p->grp, r->grp);
       changed |= p->version != r->version;
       p->version = r->version;
@@ -893,6 +903,9 @@ mc_status mc_discovery_start(const char *device_uid, const char *device_name, co
 
   strcpy(d->device_uid, device_uid);
   copy_str(d->name, sizeof d->name, device_name, utf8_cut(device_name, NAME_MAX_BYTES));
+  char host[256];
+  if (mc_hostname(host, sizeof host) == MC_OK)
+    copy_str(d->host, sizeof d->host, host, utf8_cut(host, NAME_MAX_BYTES));
   strcpy(d->kind, kind);
   if (group_hash) strcpy(d->grp, group_hash);
   d->port = port;
@@ -963,4 +976,17 @@ mc_status mc_discovery_group_hash(const char *group_uid, char out[MC_GROUP_HASH_
   }
   out[16] = '\0';
   return MC_OK;
+}
+
+int mc_local_addresses(char (*out)[MC_LOCAL_ADDR_STRLEN], int max) {
+  struct in_addr v4[MAX_SOCKS];
+  struct in6_addr v6;
+  int n4 = 0, has6 = 0, n = 0;
+  list_addresses(v4, MAX_SOCKS, &n4, &v6, &has6);
+  for (int i = 0; i < n4 && n < max; i++) {
+    if ((ntohl(v4[i].s_addr) >> 24) == 127) continue; /* loopback reaches no one else */
+    if (inet_ntop(AF_INET, &v4[i], out[n], MC_LOCAL_ADDR_STRLEN)) n++;
+  }
+  if (has6 && n < max && inet_ntop(AF_INET6, &v6, out[n], MC_LOCAL_ADDR_STRLEN)) n++;
+  return n;
 }

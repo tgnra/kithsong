@@ -96,6 +96,10 @@ void mc_channel_close(mc_channel *ch) {
   free(ch);
 }
 
+void mc_channel_abort(mc_channel *ch) {
+  if (ch) mc_socket_shutdown(ch->sock);
+}
+
 int mc_channel_mode(const mc_channel *ch) {
   return ch->mode;
 }
@@ -247,8 +251,41 @@ mc_status mc_channel_recv(mc_channel *ch, uint8_t *type, const unsigned char **p
   return MC_OK;
 }
 
+mc_status mc_channel_recv_after_pair(mc_channel *ch, uint8_t *type, const unsigned char **payload,
+                                     size_t *len, int *clear) {
+  if (!ch || !type || !payload || !len || !clear || !ch->encrypted || ch->broken)
+    return MC_ERR_INVALID_ARG;
+  size_t n;
+  mc_status st = mc_frame_recv(ch->sock, ch->rbuf, sizeof ch->rbuf, &n, ch->timeout_ms);
+  if (st != MC_OK) {
+    ch->broken = 1;
+    return st;
+  }
+  /* Decrypting in place would wipe the frame on failure, so try a copy. */
+  if (n >= 1 + MC_NOISE_TAG_LEN) {
+    memcpy(ch->sbuf, ch->rbuf, n);
+    if (mc_noise_decrypt(&ch->recv, NULL, 0, ch->sbuf, n, ch->sbuf) == MC_OK) {
+      memcpy(ch->rbuf, ch->sbuf, n - MC_NOISE_TAG_LEN);
+      mbedtls_platform_zeroize(ch->sbuf, n);
+      *clear = 0;
+      *type = ch->rbuf[0];
+      *payload = ch->rbuf + 1;
+      *len = n - 1 - MC_NOISE_TAG_LEN;
+      return MC_OK;
+    }
+  }
+  ch->broken = 1; /* B derived other keys, so nothing more can be read */
+  if (n < 1 || ch->rbuf[0] != MC_MSG_PAIR_REFUSE) return MC_ERR_FORMAT;
+  *clear = 1;
+  *type = ch->rbuf[0];
+  *payload = ch->rbuf + 1;
+  *len = n - 1;
+  return MC_OK;
+}
+
 mc_status mc_channel_send_clear(mc_channel *ch, uint8_t type, const void *payload, size_t len) {
-  if (!ch || ch->encrypted || ch->broken || len > MC_FRAME_MAX - 1 || (!payload && len))
+  /* Allowed after a failed handshake: B still tells A of a wrong code in the clear. */
+  if (!ch || ch->encrypted || len > MC_FRAME_MAX - 1 || (!payload && len))
     return MC_ERR_INVALID_ARG;
   ch->sbuf[0] = type;
   if (len) memcpy(ch->sbuf + 1, payload, len);

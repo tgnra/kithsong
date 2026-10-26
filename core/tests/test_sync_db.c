@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
   mc_sync_db *sdb = NULL;
   CHECK(mc_sync_db_open(path, &sdb) == MC_OK);
   if (!sdb) return TEST_RESULT();
-  CHECK(mc_sync_db_schema_version(sdb) == 1);
+  CHECK(mc_sync_db_schema_version(sdb) == 2);
   char device[MC_UID_STRLEN];
   unsigned char priv[MC_SYNC_KEY_LEN], pub[MC_SYNC_KEY_LEN];
   strcpy(device, mc_sync_db_device_uid(sdb));
@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
     CHECK(memcmp(mc_sync_db_private_key(sdb), priv, sizeof priv) == 0);
     CHECK(memcmp(mc_sync_db_public_key(sdb), pub, sizeof pub) == 0);
     CHECK_STR(mc_sync_db_group_uid(sdb), "0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e");
-    CHECK(mc_sync_db_schema_version(sdb) == 1);
+    CHECK(mc_sync_db_schema_version(sdb) == 2);
     mc_sync_db_close(sdb);
   }
 

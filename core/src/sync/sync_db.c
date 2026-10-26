@@ -14,6 +14,18 @@ extern const unsigned char mc_sync_schema_v1_sql[];
 /* Migration i takes the database from user_version i to i + 1. Append only. */
 static const char *const k_migrations[] = {
   (const char *)mc_sync_schema_v1_sql,
+  /* v2: reaching peers without mDNS. devices.host is the device's host name, set by the
+   * device itself. capabilities.addresses is a JSON array of "addr:port" strings where the
+   * device listens, its address hints. peer_contact is this device's alone and never
+   * synced: the last address each peer was reached at, and when we last synced with it. */
+  "ALTER TABLE devices ADD COLUMN host TEXT;"
+  "ALTER TABLE capabilities ADD COLUMN addresses TEXT;"
+  "CREATE TABLE peer_contact ("
+  "  device_uid   TEXT PRIMARY KEY,"
+  "  address      TEXT,"
+  "  port         INTEGER,"
+  "  last_sync_ms INTEGER"
+  ") WITHOUT ROWID;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -21,12 +33,12 @@ static const char *const k_migrations[] = {
  * `local` is this device's alone and never logged. */
 static const char *const k_group_cols[] = {"library_uid", NULL};
 static const char *const k_device_cols[] = {"name", "kind", "public_key", "node_uid", "added_by",
-                                            "removed", NULL};
+                                            "removed", "host", NULL};
 static const char *const k_profile_cols[] = {"archive", "mode", "format", "bitrate_kbps",
                                              "budget_bytes", "budget_enabled", NULL};
 static const char *const k_item_cols[] = {"device_uid", "kind", "ref_uid", NULL};
 static const char *const k_capability_cols[] = {"cpu_score", "free_bytes", "on_power",
-                                                "can_transcode", "updated_ms", NULL};
+                                                "can_transcode", "updated_ms", "addresses", NULL};
 static const char *const k_status_cols[] = {"verified_ms", "expected", "ok", "missing", "corrupt",
                                             "bytes", NULL};
 
@@ -259,4 +271,41 @@ void mc_sync_db_rollback(mc_sync_db *sdb) {
 mc_status mc_sync_db_version_vector(mc_sync_db *sdb, mc_origin_hlc **out, int *count) {
   if (!sdb) return MC_ERR_INVALID_ARG;
   return mc_changelog_version_vector(sdb->db, out, count);
+}
+
+const mc_changelog_table *mc_sync_db_tracked(size_t *count) {
+  *count = sizeof k_tracked / sizeof k_tracked[0];
+  return k_tracked;
+}
+
+mc_status mc_sync_db_clear_group(mc_sync_db *sdb) {
+  if (!sdb) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st != MC_OK) return st;
+  /* Not logged: this is forgetting the group, not a change to send anyone. */
+  sdb->applying_remote = 1;
+  char sql[256];
+  for (size_t i = 0; i < sizeof k_tracked / sizeof k_tracked[0] && st == MC_OK; i++) {
+    /* This device's own capabilities stay: they hold the cached benchmark. */
+    if (!strcmp(k_tracked[i].table, "capabilities"))
+      snprintf(sql, sizeof sql, "DELETE FROM capabilities WHERE device_uid <> '%s'",
+               sdb->device_uid);
+    else
+      snprintf(sql, sizeof sql, "DELETE FROM %s", k_tracked[i].table);
+    st = exec(sdb, sql);
+  }
+  if (st == MC_OK) {
+    snprintf(sql, sizeof sql,
+             "DELETE FROM changelog WHERE NOT (entity = 'capabilities' AND row_uid = '%s'"
+             " AND origin_uid = '%s')",
+             sdb->device_uid, sdb->device_uid);
+    st = exec(sdb, sql);
+  }
+  if (st == MC_OK) st = exec(sdb, "DELETE FROM peer_contact");
+  if (st == MC_OK) st = exec(sdb, "UPDATE local SET group_uid = NULL WHERE id = 1");
+  sdb->applying_remote = 0;
+  if (st == MC_OK) st = mc_sync_db_commit(sdb);
+  if (st != MC_OK) mc_sync_db_rollback(sdb);
+  if (st == MC_OK) sdb->group_uid[0] = '\0';
+  return st;
 }

@@ -461,6 +461,15 @@ const char *mc_socket_peer(const mc_socket *s) {
   return s->peer;
 }
 
+void mc_socket_shutdown(mc_socket *s) {
+  if (!s) return;
+#ifdef _WIN32
+  shutdown(s->fd, SD_BOTH);
+#else
+  shutdown(s->fd, SHUT_RDWR);
+#endif
+}
+
 void mc_socket_close(mc_socket *s) {
   if (!s) return;
   close_sock(s->fd);

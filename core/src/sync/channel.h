@@ -27,6 +27,10 @@ mc_status mc_channel_connect(const char *host, uint16_t port, int mode, int time
  * preamble is closed and reported as MC_ERR_FORMAT; keep accepting. */
 mc_status mc_channel_accept(mc_listener *l, int timeout_ms, mc_channel **out);
 void mc_channel_close(mc_channel *ch);
+/* Makes a send or receive blocked on another thread fail at once, and every later one too.
+ * The only channel function that may be called from another thread, while the channel is
+ * still open. */
+void mc_channel_abort(mc_channel *ch);
 
 int mc_channel_mode(const mc_channel *ch);
 int mc_channel_is_initiator(const mc_channel *ch);
@@ -67,8 +71,16 @@ mc_status mc_channel_send(mc_channel *ch, uint8_t type, const void *payload, siz
 mc_status mc_channel_recv(mc_channel *ch, uint8_t *type, const unsigned char **payload,
                           size_t *len);
 
+/* Pairing, device A: the message after A's side of XXpsk3. It is either B's encrypted
+ * PAIR_ACCEPT or, if B rejected the psk, a clear-text PAIR_REFUSE; *clear says which. A
+ * clear message of any other type fails with MC_ERR_FORMAT. After a clear one the channel
+ * is unusable. */
+mc_status mc_channel_recv_after_pair(mc_channel *ch, uint8_t *type, const unsigned char **payload,
+                                     size_t *len, int *clear);
+
 /* Clear-text messages, for the pairing messages before the handshake. Refused once the
- * channel is encrypted, as the encrypted ones are refused before. */
+ * channel is encrypted, as the encrypted ones are refused before. Sending still works
+ * after a failed handshake, for PAIR_REFUSE. */
 mc_status mc_channel_send_clear(mc_channel *ch, uint8_t type, const void *payload, size_t len);
 mc_status mc_channel_recv_clear(mc_channel *ch, uint8_t *type, const unsigned char **payload,
                                 size_t *len);

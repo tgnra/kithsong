@@ -61,6 +61,9 @@ add_library(musiccore STATIC
   src/sync/noise.c
   src/sync/channel.c
   src/sync/pair.c
+  src/sync/pairing.c
+  src/sync/rows.c
+  src/sync/session.c
   "${_sync_schema_c}")
 add_library(musiccore::musiccore ALIAS musiccore)
 

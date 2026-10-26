@@ -458,3 +458,8 @@ mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out) {
   sqlite3_finalize(stmt);
   return st;
 }
+
+const mc_changelog_table *mc_library_tracked(size_t *count) {
+  *count = sizeof k_tracked / sizeof k_tracked[0];
+  return k_tracked;
+}

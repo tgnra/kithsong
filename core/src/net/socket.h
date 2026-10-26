@@ -41,6 +41,10 @@ mc_status mc_socket_send_all(mc_socket *s, const void *buf, size_t len, int time
 mc_status mc_socket_recv_exact(mc_socket *s, void *buf, size_t len, int timeout_ms);
 /* The peer's address as text, for logs. */
 const char *mc_socket_peer(const mc_socket *s);
+/* Shuts the connection down both ways, so a send or receive blocked on another thread
+ * fails at once. The only socket function that may be called from another thread; s must
+ * stay open (not closed) until that thread is done with it. */
+void mc_socket_shutdown(mc_socket *s);
 void mc_socket_close(mc_socket *s);
 
 #endif

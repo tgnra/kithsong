@@ -16,6 +16,9 @@ target_link_libraries(test_sync_db PRIVATE mbedcrypto)  # checks the key pair in
 musicapp_test(test_noise)
 target_link_libraries(test_noise PRIVATE mbedcrypto)  # known-answer tests of the primitives
 musicapp_test(test_channel)
+musicapp_test(test_rows)
+musicapp_test(test_session)
+set_tests_properties(test_session PROPERTIES TIMEOUT 300)
 musicapp_test(test_tags)
 musicapp_test(test_match)
 musicapp_test(test_import_db)

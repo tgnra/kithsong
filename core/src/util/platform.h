@@ -21,6 +21,12 @@ void mc_sleep_ms(uint32_t ms);
 /* Logical processors online, at least 1. */
 int mc_cpu_count(void);
 
+/* This machine's host name as UTF-8 (gethostname, or the DNS host name on Windows), cut
+ * to fit cap bytes. */
+mc_status mc_hostname(char *out, size_t cap);
+/* Bytes free for this user on the volume holding path. */
+mc_status mc_free_space(const char *path, int64_t *out);
+
 /* Cryptographically secure random bytes from the OS. */
 mc_status mc_random_bytes(void *buf, size_t len);
 

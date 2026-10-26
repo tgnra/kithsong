@@ -59,4 +59,13 @@ void mc_sync_db_rollback(mc_sync_db *sdb);
 /* The group changelog's version vector; see mc_changelog_version_vector(). */
 mc_status mc_sync_db_version_vector(mc_sync_db *sdb, mc_origin_hlc **out, int *count);
 
+/* The replicated tables and their logged columns. */
+const mc_changelog_table *mc_sync_db_tracked(size_t *count);
+
+/* Forgets the group, after leaving it or being removed: clears local.group_uid and deletes
+ * every replicated row and the group changelog without logging it, so nothing of the old
+ * group reaches the next one. Only this device's capabilities row (its cached benchmark)
+ * and its own changes to it are kept. */
+mc_status mc_sync_db_clear_group(mc_sync_db *sdb);
+
 #endif

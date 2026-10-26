@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
 #endif
@@ -316,6 +317,34 @@ mc_status mc_touch(const char *path) {
   return ok ? MC_OK : MC_ERR_IO;
 }
 
+mc_status mc_free_space(const char *path, int64_t *out) {
+  if (!path || !out) return MC_ERR_INVALID_ARG;
+  wchar_t *w = widen(path);
+  if (!w) return MC_ERR_INVALID_ARG;
+  ULARGE_INTEGER avail;
+  BOOL ok = GetDiskFreeSpaceExW(w, &avail, NULL, NULL);
+  free(w);
+  if (!ok) return MC_ERR_IO;
+  *out = (int64_t)avail.QuadPart;
+  return MC_OK;
+}
+
+mc_status mc_hostname(char *out, size_t cap) {
+  if (!out || !cap) return MC_ERR_INVALID_ARG;
+  out[0] = '\0';
+  wchar_t name[256];
+  DWORD n = sizeof name / sizeof name[0];
+  if (!GetComputerNameExW(ComputerNameDnsHostname, name, &n)) return MC_ERR_IO;
+  char *s = narrow(name);
+  if (!s) return MC_ERR_NOMEM;
+  size_t len = strlen(s);
+  if (len >= cap) len = cap - 1;
+  memcpy(out, s, len);
+  out[len] = '\0';
+  free(s);
+  return MC_OK;
+}
+
 #else
 
 static uint64_t timespec_ms(clockid_t clock) {
@@ -583,6 +612,27 @@ mc_status mc_rmdir(const char *path) {
 
 int mc_same_path(const char *a, const char *b) {
   return strcmp(a, b) == 0;
+}
+
+mc_status mc_free_space(const char *path, int64_t *out) {
+  if (!path || !out) return MC_ERR_INVALID_ARG;
+  struct statvfs sv;
+  if (statvfs(path, &sv) != 0) return MC_ERR_IO;
+  *out = (int64_t)sv.f_bavail * (int64_t)sv.f_frsize;
+  return MC_OK;
+}
+
+mc_status mc_hostname(char *out, size_t cap) {
+  if (!out || !cap) return MC_ERR_INVALID_ARG;
+  char name[256];
+  out[0] = '\0';
+  if (gethostname(name, sizeof name) != 0) return MC_ERR_IO;
+  name[sizeof name - 1] = '\0';
+  size_t len = strlen(name);
+  if (len >= cap) len = cap - 1;
+  memcpy(out, name, len);
+  out[len] = '\0';
+  return MC_OK;
 }
 
 #endif

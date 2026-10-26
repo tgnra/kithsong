@@ -32,6 +32,7 @@ typedef struct mc_peer_info {
   const char *device_uid; /* TXT "dev" */
   const char *name;
   const char *kind;       /* "desktop", "phone" or "watch" */
+  const char *host;       /* TXT "host": its host name, "" if it announced none */
   const char *group_hash; /* TXT "grp": 16 hex digits, "" when not in a group */
   int version;            /* TXT "v" */
   const char *address;    /* numeric IPv4, or IPv6 if the peer has no IPv4 address */
