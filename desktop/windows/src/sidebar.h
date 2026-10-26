@@ -1,6 +1,7 @@
 /* The navigation list on the left: an owner-drawn list box of pages under section headers,
  * with Import and Settings at the bottom. Only pages can be selected, by mouse or keyboard;
- * selecting one sends the parent WM_COMMAND with LBN_SELCHANGE. */
+ * selecting one sends the parent WM_COMMAND with LBN_SELCHANGE. The DEVICES heading has a +
+ * at its end, to add a device by address (SBN_ADD_DEVICE). */
 #ifndef MUSICAPP_SIDEBAR_H
 #define MUSICAPP_SIDEBAR_H
 
@@ -14,6 +15,10 @@ typedef enum {
   PAGE_SETTINGS,
 } sidebar_page;
 
+/* Sent to the parent as a WM_COMMAND notification code when the + on the DEVICES heading
+ * (Add Device by Address) is clicked. */
+#define SBN_ADD_DEVICE 0x100
+
 /* Creates the list as a child of parent, with Albums selected. Only one exists at a time. */
 HWND sidebar_create(HWND parent, int id);
 
@@ -24,7 +29,8 @@ void sidebar_update(UINT dpi);
 sidebar_page sidebar_selection(void);
 /* Selects a page without notifying the parent. */
 void sidebar_select(sidebar_page page);
-/* While locked, every page but the selected one is greyed out and can't be selected. */
+/* While locked, every page but the selected one is greyed out and can't be selected, and
+ * the + is greyed out too. */
 void sidebar_set_locked(BOOL locked);
 
 /* Paints a row: call from the parent's WM_DRAWITEM for the sidebar. */

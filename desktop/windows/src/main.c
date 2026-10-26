@@ -23,9 +23,9 @@
  * through the extended frame. Everything drawn there needs real alpha, which GDI doesn't
  * give, so it's drawn with canvas.c.
  *
- * The album grid is album_grid.c, the sidebar sidebar.c, the track list track_list.c and
- * the seekbar beside the playback buttons now_playing.c. The toolbar buttons are owner-drawn
- * here.
+ * The album grid is album_grid.c, the sidebar sidebar.c, the track list track_list.c,
+ * the seekbar beside the playback buttons now_playing.c and the Add Device dialog (the + on
+ * the sidebar's DEVICES heading) add_device.c. The toolbar buttons are owner-drawn here.
  */
 #include <windows.h>
 #include <windowsx.h>
@@ -39,6 +39,7 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "add_device.h"
 #include "album_grid.h"
 #include "canvas.h"
 #include "import_view.h"
@@ -361,10 +362,19 @@ static void playback_changed(void) {
   InvalidateRect(play, NULL, FALSE);
 }
 
+/* TODO: start pairing with mc_sync_pair_request_address() once the sync API lands. */
+static void on_add_device_connect(void *user, const char *host, uint16_t port) {
+  (void)user;
+  char text[300];
+  snprintf(text, sizeof text, "Add device: %s port %u\n", host, (unsigned)port);
+  OutputDebugStringA(text);
+}
+
 static void on_command(int id, int code) {
   switch (id) {
     case ID_SIDEBAR:
       if (code == LBN_SELCHANGE) show_page(sidebar_selection());
+      else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) show_album();
