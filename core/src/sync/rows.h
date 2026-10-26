@@ -70,7 +70,7 @@ typedef struct mc_rows_target {
   sqlite3 *db;
   mc_hlc *hlc;
   int *applying_remote;
-  const mc_changelog_table *tables; /* parents before children */
+  const mc_changelog_table *tables; /* in any order; foreign keys give the dependencies */
   size_t ntables;
   void *owner;
   mc_status (*begin)(void *owner);

@@ -39,8 +39,8 @@ char *mc_library_abspath(const mc_library *lib, const char *rel);
 mc_status mc_library_commit(mc_library *lib);
 void mc_library_rollback(mc_library *lib);
 
-/* The tables sync replicates and their logged columns, parents before children (the
- * order sync applies them in). */
+/* The tables sync replicates (k_tracked) and their logged columns. Sync works out the
+ * order to apply them in from their foreign keys. */
 const mc_changelog_table *mc_library_tracked(size_t *count);
 
 #endif

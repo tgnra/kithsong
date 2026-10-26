@@ -51,11 +51,26 @@ the data after a crash.
   | `name` | device name |
   | `kind` | `desktop`, `phone` or `watch` |
   | `grp`  | first 8 bytes of SHA-256(`group_uid`), hex; empty when not in a group |
+  | `host` | the machine's host name (`gethostname`, `GetComputerNameExW` on Windows), UTF-8, at most 63 bytes |
 
   `grp` lets devices tell members of their own group from strangers without broadcasting the
-  group id.
+  group id. The default device name, when the frontend gives none, is the host name.
 - Android and Wear OS must hold a `WifiManager.MulticastLock` while discovery runs. A watch
   is discoverable only on Wi-Fi.
+
+### Without multicast
+
+Firewalls and some networks drop mDNS. Sync works without it:
+
+- **Pairing by address.** `mc_sync_pair_request_address(host, port)` runs the same pairing
+  over a direct TCP connection to an IPv4/IPv6 literal or host name (port 0 means 47823).
+- **Address hints.** Each device publishes where it listens as `capabilities.addresses`, a
+  JSON array such as `["192.168.1.5:47823","[2001:db8::5]:47823"]` (its non-loopback IPv4
+  addresses and one global IPv6 address, with its port), and updates it when its interfaces
+  or port change. It replicates like other group data.
+- **Where to call a member,** in order: the address discovery reports, then its hints, then
+  the address that last worked (`peer_contact`, local to this device's `sync.db`, never
+  replicated). Once paired, devices reconnect without mDNS.
 
 ## Transport
 
@@ -82,7 +97,9 @@ UTF-8 JSON objects. `ROWS` and `FILE_DATA` are binary.
 `Noise_KK_25519_ChaChaPoly_SHA256` for sessions, and `Noise_XXpsk3_25519_ChaChaPoly_SHA256`
 for pairing. Static keys are each device's X25519 key from `sync.db`. The prologue is the
 4-byte preamble. A session handshake fails unless the peer's static key belongs to a
-non-removed `devices` row of this device's group.
+`devices` row of this device's group. If that row is `removed`, the responder completes the
+handshake only to send `ERROR {"reason": "removed"}` (see [Group membership](#group-membership)),
+reads what the peer sent meanwhile, and closes; nothing else is exchanged.
 
 KK needs the initiator's static key before the first message, and nothing identifies the
 initiator in the clear. The responder tries message 1 against the key of each group member
@@ -97,12 +114,17 @@ The device that starts pairing is A, the initiator. The device it pairs with is 
 the code and A's user enters it.
 
 1. A connects in pairing mode and sends `PAIR_HELLO` in the clear:
-   `{"dev", "name", "kind", "grp", "library_uid", "tracks": <track count>}`.
+   `{"dev", "name", "kind", "host", "grp", "library_uid", "tracks": <track count>,
+   "group_library_uid"}`. `library_uid` is A's open library; `group_library_uid`, sent only
+   when A is in a group, is the library its group syncs, which the join rules need.
 2. B checks the join rules (below). If pairing is impossible, B replies `PAIR_REFUSE`
    `{"reason": "in_group" | "library_mismatch" | "already_paired" | "busy" | "wrong_code"}` and closes.
    Otherwise B draws a 6-digit code (uniform, `000000`–`999999`), shows it through the
-   `on_pair_code` callback, and replies `PAIR_READY` `{"dev", "name", "kind", "grp",
-   "library_uid", "tracks"}`.
+   `on_pair_code` callback, and replies `PAIR_READY` with the same fields as `PAIR_HELLO`.
+   B serves one requester at a time: another device gets `busy` until that pairing ends
+   or its code expires (5 minutes unused). The same requester coming back after a wrong code
+   keeps its code. A that gives up while B waits for `JPAKE_1` sends `PAIR_REFUSE`
+   `{"reason": "cancelled"}`, so B stops showing the code.
 3. The user types the code on A. Both sides run EC J-PAKE (`mbedtls_ecjpake`, secp256r1,
    SHA-256) with the code's 6 ASCII digits as the shared secret. A is the client:
    `JPAKE_1` both ways, then `JPAKE_2` both ways. Both derive the 32-byte secret.
@@ -115,10 +137,19 @@ the code and A's user enters it.
    is one online guess at 1 in 10⁶.
    A 6-digit code must never key Noise directly: an active attacker could brute-force it
    offline from one handshake.
+   A tells B's encrypted `PAIR_ACCEPT` from a clear `PAIR_REFUSE` by trying to decrypt the
+   frame first.
 5. Over the encrypted channel B sends `PAIR_ACCEPT` with the resulting group (below), and
-   both store each other's static key in their `devices` rows. The connection then becomes
-   an ordinary session (from step 2 of [Session](#session)), so the new member receives the
-   whole group and library straight away.
+   both store each other's static key in their `devices` rows. When the group is A's (A in a
+   group, B not), B doesn't know it: B sends an empty `PAIR_ACCEPT` `{}` and A answers with
+   its own `PAIR_ACCEPT` `{"group_uid", "library_uid"}`. The device whose group it is writes
+   the other's `devices` row with `added_by` set to itself; for a new group B also writes
+   `sync_group`, its own row and the archive's `profiles` row (`archive = 1`, mode `all`,
+   format `original`). The joiner adopts the library uid if needed, sets `local.group_uid`
+   and writes the other's row (name, kind, host, key) so it can reconnect even if the
+   session breaks. The connection then becomes an ordinary session from its `HELLO` (step 1
+   of [Session](#session), without the handshake), so the new member receives the whole
+   group and library straight away.
 
 `PAIR_*` and `JPAKE_*` messages in the clear use the same `<type: u8> <payload>` form inside
 the frame.
@@ -130,7 +161,7 @@ no tracks.
 
 | A          | B          | Result |
 |------------|------------|--------|
-| no group   | no group   | New group. Its library is whichever side's is non-empty (B's if both are empty); the other side's library must be empty, else `library_mismatch`. The device holding the group library becomes the first archive. |
+| no group   | no group   | New group. Its library is whichever side's is non-empty (B's if both are empty); the other side's library must be empty, else `library_mismatch`, unless both have the same `library_uid` (a copied library folder), which is one library: B's side holds it. The device holding the group library becomes the first archive. |
 | no group   | in group   | A joins B's group. A's library must be empty or already have the group's `library_uid`. |
 | in group   | no group   | B joins A's group, same condition for B. |
 | same group | same group | `already_paired` |
@@ -145,8 +176,15 @@ A device joining with an empty library adopts the group's `library_uid` through
   B reaches C on C's next session with either of them.
 - Any member can add (by pairing) or remove a member. Removal sets `removed = 1`. Members
   then refuse that key, and the removed device clears its `local.group_uid` when it sees its
-  own row removed.
-- A device can't be removed while it is the only archive.
+  own row removed: either in a session's group data, or from the `ERROR "removed"` a
+  member answers its next session with. It then deletes the group's data from its `sync.db`
+  without logging it (keeping only its own `capabilities` row), so nothing of the old group
+  reaches a later one.
+- Leaving is removing oneself: the device marks its own row removed, tells one reachable
+  member in a session, and forgets the group.
+- A device can't be removed, or leave, while it is the only archive (`MC_ERR_LOCKED`).
+- Each device keeps its own `devices` row up to date (`name`, `kind`, `host`, key, and
+  `node_uid` once its library is the group's) and its own `capabilities`.
 
 ### Archives
 
@@ -188,7 +226,7 @@ Message types:
 | 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "caps": {...}}` |
 | 0x02 | `BYE`         | `{}` |
 | 0x03 | `ERROR`       | `{"reason", "msg"}` |
-| 0x10 | `VV`          | `{"db": "group" \| "library", "vv": {"<origin>": <hlc>}}` |
+| 0x10 | `VV`          | `{"db": "group" \| "library", "vv": {"<origin>": <hlc>}, "resend": true}` (`resend` only in the re-send round) |
 | 0x11 | `ROWS`        | binary, below |
 | 0x12 | `ROWS_END`    | `{"db", "digest"}` |
 | 0x20 | `HAVE_REQ`    | `{"tracks": [uid], "format", "kbps"}` |
@@ -203,28 +241,75 @@ Message types:
 | 0x42 | `PAIR_REFUSE` | |
 | 0x43 | `JPAKE_1`     | `mbedtls_ecjpake_write_round_one` output |
 | 0x44 | `JPAKE_2`     | `mbedtls_ecjpake_write_round_two` output |
-| 0x45 | `PAIR_ACCEPT` | `{"group_uid", "library_uid", "archive": dev}` |
+| 0x45 | `PAIR_ACCEPT` | `{"group_uid", "library_uid", "archive": dev \| null}`, or `{}`; see [Pairing](#pairing) |
 
 Steps:
 
-1. Handshake (Noise KK). Both sides send `HELLO`.
-2. **Group data.** Both sides send `VV` for `group`, then stream the group changelog rows the
-   other is missing (`ROWS`, in hlc order), then `ROWS_END`.
-3. **Library data**, only if both `library_uid`s equal the group's. Same as step 2 with
-   `db = "library"`. If a `HELLO`'s `node_uid` is already claimed by another member's
-   `devices.node_uid`, the device with that node uid rotates it
-   (`mc_library_rotate_node_uid()`) before sending its `VV`.
+1. Handshake (Noise KK). Both sides send `HELLO`; `caps` is
+   `{"cpu_score", "free_bytes", "on_power", "can_transcode"}`. The `dev` in a `HELLO` must
+   be the device the handshake authenticated. Before its `HELLO`, each device brings its own
+   `devices` and `capabilities` rows up to date.
+2. **Group data.** Both sides send `VV` for `group` (the initiator first), then stream the
+   group changelog rows the other is missing (`ROWS`, in hlc order, read from one snapshot)
+   and `ROWS_END`. The exchange is half-duplex, so neither side's stream can block the
+   other's:
+   1. the initiator streams its rows, then `ROWS_END` with a provisional digest;
+   2. the responder applies them, streams its own, then `ROWS_END` with its final digest;
+   3. the initiator applies those and sends a second `ROWS_END` with its final digest.
+3. **Library data**, only if both `library_uid`s equal the group's (from `sync_group`, just
+   synced). Same as step 2 with `db = "library"`; the initiator decides, and a responder that
+   disagrees answers `ERROR {"reason": "library"}`. Before it, each device checks its
+   library's `node_uid`: if another member's `devices.node_uid` already records it, or the
+   peer's `HELLO` carries it, one of them rotates it (`mc_library_rotate_node_uid()`): the
+   one that hasn't recorded it, or if both or neither have, the higher device uid. Each
+   then records its node uid in its own `devices` row. That write comes after the group
+   exchange, so the peer gets it in the next session, which follows a few seconds later.
 4. Each receiver applies rows in one transaction per batch with `applying_remote = 1`, so
    the triggers don't re-log them, and inserts the received rows into its own changelog
-   unchanged.
+   unchanged. See [Applying rows](#applying-rows).
 5. **Convergence check.** `ROWS_END.digest` is the hex SHA-256 over the sender's version
    vector after applying everything it received: origins sorted, each as
-   `<origin>=<hlc>\n`. If the two digests differ once both sides have finished, the session
-   logs it and re-sends that database from hlc 0 for the differing origins.
+   `<origin>=<hlc>\n`. Both sides compare the responder's final digest with the initiator's
+   final one. If they differ, the session logs it and runs step 2 (or 3) once more with
+   `"resend": true`: each side sends every row, from hlc 0, of each origin whose newest hlc
+   differs between the two new `VV`s. It doesn't retry further.
 6. **Files**, receiver-driven. See [Files](#files).
-7. `BYE`.
+7. `BYE`, the initiator first; the responder answers with `BYE`.
 
-Either side may send `ERROR` and close at any time. Sessions are retried with backoff.
+Either side may send `ERROR` and close at any time. Reasons used: `removed` (above),
+`busy` (a session between the two is already running; see [Scheduling](#scheduling)) and
+`library`. A device that refuses a session with `ERROR` reads what the peer sent meanwhile
+before closing, so the TCP reset of an unread close can't destroy the `ERROR` in transit.
+Sessions are retried with backoff (10 s, doubling, up to 5 minutes).
+
+### Applying rows
+
+- A row already in the changelog (same hlc, origin, entity, row uid and field) is skipped.
+- A row naming an entity or field this version doesn't know is logged, so it is passed on,
+  but never applied.
+- A row is *live* if one of its field changes is newer, by `(hlc, origin_uid)`, than its
+  newest `_deleted`. A dead row that exists is deleted. A live row that exists gets each
+  field the batch brought a new winner for. A live row that doesn't exist yet (new, or
+  brought back by an edit newer than its delete) is inserted with every field's winner, once
+  the changelog has a value for each `NOT NULL` column without a default; until then it
+  waits, so a row's fields may arrive in any order and across batches.
+- Tables are applied parents first, in an order derived from their foreign keys, with
+  `defer_foreign_keys` on. ON DELETE actions still run, unlogged, as they did on the origin.
+  A reference to a parent that doesn't exist at commit (it was deleted concurrently) is
+  resolved as ON DELETE would: set to NULL, or the row deleted where the column is
+  `NOT NULL`. Every device resolves it the same way.
+
+### Scheduling
+
+- A device syncs with each member when discovery reports it online, every 5 minutes, and
+  3 seconds after a local change (or after a session brought it rows its other members may
+  lack). One session per pair of devices at a time.
+- The lower `device_uid` is the preferred initiator. On the online and periodic triggers the
+  higher one waits 30 s and initiates only if it hasn't been contacted since, so a device
+  behind a firewall still syncs through its own outgoing connection. A change only one side
+  knows about is sent by that side at once.
+- If both still call each other at once, the session initiated by the lower uid wins: the
+  other side's is aborted, or refused with `ERROR {"reason": "busy"}`.
 
 ### `ROWS`
 

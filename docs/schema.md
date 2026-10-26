@@ -48,7 +48,9 @@ The database has two identities of its own in `meta`, both generated on first op
 The library holds no sync data: keys, the group, its devices and their sync profiles live in
 a separate `sync.db` in the per-device config dir. See
 [sync-protocol.md](sync-protocol.md#two-databases) and its schema,
-[core/src/sync/sync_schema_v1.sql](../core/src/sync/sync_schema_v1.sql).
+[core/src/sync/sync_schema_v1.sql](../core/src/sync/sync_schema_v1.sql), plus migration v2 in
+[core/src/sync/sync_db.c](../core/src/sync/sync_db.c) (`devices.host`, `capabilities.addresses`,
+and the local-only `peer_contact`).
 
 ## Singles
 

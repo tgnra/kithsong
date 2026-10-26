@@ -473,6 +473,22 @@ int main(int argc, char **argv) {
   edit(&b, sql);
   snprintf(sql, sizeof sql, "UPDATE tracks SET title = 'From C' WHERE uid = '%s'", t2);
   edit(&c, sql);
+  /* An album group made on C, with A's album in it, reaches everyone. */
+  {
+    char ag[MC_UID_STRLEN], ge[MC_UID_STRLEN], al[MC_UID_STRLEN];
+    mc_uid_new(ag);
+    mc_uid_new(ge);
+    lib_text(&c, "SELECT uid FROM albums", al, sizeof al);
+    CHECK(mc_library_begin_write(c.lib) == MC_OK);
+    snprintf(sql, sizeof sql, "INSERT INTO album_groups (uid, name) VALUES ('%s', 'Late')", ag);
+    CHECK(exec(mc_library_db(c.lib), sql) == SQLITE_OK);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO album_group_entries (uid, group_uid, album_uid, position)"
+             " VALUES ('%s', '%s', '%s', 'a0')",
+             ge, ag, al);
+    CHECK(exec(mc_library_db(c.lib), sql) == SQLITE_OK);
+    CHECK(mc_library_commit(c.lib) == MC_OK);
+  }
   dev *abc[] = {&a, &b, &c};
   for (int round = 0; round < 3 && !digests_equal(abc, 3); round++) {
     CHECK(sync_now(&a, &b) == MC_OK);
@@ -492,6 +508,10 @@ int main(int argc, char **argv) {
     CHECK_TEXT(text, want);
     CHECK(track_count(abc[i]) == 20);
     CHECK(query_int(mc_library_db(abc[i]->lib), "SELECT count(*) FROM playlist_entries") == 20);
+    CHECK(query_int(mc_library_db(abc[i]->lib),
+                    "SELECT count(*) FROM album_group_entries e JOIN album_groups g"
+                    " ON g.uid = e.group_uid JOIN albums a ON a.uid = e.album_uid"
+                    " WHERE g.name = 'Late'") == 1);
   }
 
   /* Refusals. D and E form a group of their own: A can't pair with D (in_group). F has a

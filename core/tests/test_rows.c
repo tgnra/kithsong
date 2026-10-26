@@ -304,6 +304,58 @@ static void test_new_rows(fixture *f) {
   CHECK(query_int(f->db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
 }
 
+/* Album groups (schema v5): entries reference a group and an album, both NOT NULL with
+ * ON DELETE CASCADE. Applied through the tracked tables in reverse, so the parent-first
+ * order must come from the foreign keys, not the list. */
+static void test_album_groups(fixture *f) {
+  size_t n;
+  const mc_changelog_table *tracked = mc_library_tracked(&n);
+  mc_changelog_table reversed[16];
+  CHECK(n <= 16);
+  for (size_t i = 0; i < n && i < 16; i++) reversed[i] = tracked[n - 1 - i];
+  mc_rows_target tg;
+  mc_rows_target_library(f->lib, &tg);
+  tg.tables = reversed;
+  mc_rows_applier *saved = f->a;
+  CHECK(mc_rows_applier_new(&tg, &f->a) == MC_OK);
+  if (!f->a) {
+    f->a = saved;
+    return;
+  }
+
+  char g[MC_UID_STRLEN], al[MC_UID_STRLEN], e1[MC_UID_STRLEN], e2[MC_UID_STRLEN];
+  mc_uid_new(g);
+  mc_uid_new(al);
+  mc_uid_new(e1);
+  mc_uid_new(e2);
+  const char *o = f->lo;
+  /* The entry's fields first, then its album and group, all in one batch; a second entry
+   * lacks its position (NOT NULL) and waits. */
+  mc_row b1[] = {text_row(2000, o, "album_group_entries", e1, "group_uid", g),
+                 text_row(2001, o, "album_group_entries", e1, "album_uid", al),
+                 text_row(2002, o, "album_group_entries", e1, "position", "a0"),
+                 text_row(2003, o, "album_group_entries", e2, "group_uid", g),
+                 text_row(2004, o, "album_group_entries", e2, "album_uid", al),
+                 text_row(2005, o, "albums", al, "title", "Grouped"),
+                 text_row(2006, o, "album_groups", g, "name", "Winter")};
+  CHECK(apply(f, b1, 7) == 7);
+  CHECK(query_int(f->db, "SELECT count(*) FROM album_groups") == 1);
+  CHECK(query_int(f->db, "SELECT count(*) FROM album_group_entries") == 1);
+  mc_row b2[] = {text_row(2007, o, "album_group_entries", e2, "position", "a1")};
+  CHECK(apply(f, b2, 1) == 1);
+  CHECK(query_int(f->db, "SELECT count(*) FROM album_group_entries") == 2);
+  CHECK(query_int(f->db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
+
+  /* Deleting the album removes it from the group, as a local delete would. */
+  mc_row b3[] = {int_row(2100, o, "albums", al, "_deleted", 1)};
+  CHECK(apply(f, b3, 1) == 1);
+  CHECK(query_int(f->db, "SELECT count(*) FROM album_group_entries") == 0);
+  CHECK(query_int(f->db, "SELECT count(*) FROM album_groups") == 1);
+
+  mc_rows_applier_free(f->a);
+  f->a = saved;
+}
+
 /* The reader sends what a peer lacks, in hlc order; resend sends differing origins whole. */
 static void test_reader(fixture *f) {
   mc_origin_hlc *mine;
@@ -390,6 +442,7 @@ int main(int argc, char **argv) {
   if (f.a) {
     test_lww(&f);
     test_new_rows(&f);
+    test_album_groups(&f);
     test_reader(&f);
   }
   mc_rows_applier_free(f.a);

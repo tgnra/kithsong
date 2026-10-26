@@ -247,7 +247,8 @@ void mc_rows_target_group(mc_sync_db *sdb, mc_rows_target *out) {
  * still happen when a delete is applied, so they stay on. But rows reach us field by field:
  * a track's album_uid may be applied before the album row is created later in the batch.
  * So the batch sets defer_foreign_keys, which moves every check to COMMIT, and applies
- * tables in dependency order (mc_changelog_table lists are parents first).
+ * tables parents first. That order comes from the foreign keys themselves (see
+ * order_tables()), so a table added to a tracked list later needs nothing here.
  *
  * Senders stream in hlc order from one snapshot, and a child's reference is always logged
  * after its parent's creation (the device that made the reference had seen the parent, and
@@ -262,6 +263,7 @@ typedef struct fk_info {
   int col; /* index into the table's cols */
   char parent[64];
   char parent_col[64];
+  int parent_table; /* index into the tracked tables */
   int notnull;
 } fk_info;
 
@@ -282,6 +284,7 @@ typedef struct touched {
 struct mc_rows_applier {
   mc_rows_target tg;
   table_meta *tables;
+  int *order; /* table indexes, parents before children */
   sqlite3_stmt *dup, *winner, *log, *state;
   touched *touched;
   int ntouched, cap;
@@ -328,11 +331,48 @@ static mc_status read_meta(sqlite3 *db, const mc_changelog_table *tables, size_t
     if (!pt) continue;
     fk_info *f = &m->fks[m->nfks++];
     f->col = i;
+    f->parent_table = (int)(pt - tables);
     snprintf(f->parent, sizeof f->parent, "%s", parent);
     snprintf(f->parent_col, sizeof f->parent_col, "%s", to ? to : pt->key);
     f->notnull = (notnull >> i) & 1;
   }
   sqlite3_finalize(stmt);
+  return MC_OK;
+}
+
+/* Orders the tables so each comes after the tables its foreign keys point to. A cycle
+ * (none exists today) falls back to list order for what's left; deferred foreign keys
+ * keep that correct, only less tidy. */
+static mc_status order_tables(mc_rows_applier *a) {
+  size_t n = a->tg.ntables;
+  a->order = calloc(n ? n : 1, sizeof *a->order);
+  char *placed = calloc(n ? n : 1, 1);
+  if (!a->order || !placed) {
+    free(placed);
+    return MC_ERR_NOMEM;
+  }
+  size_t done = 0;
+  while (done < n) {
+    size_t before = done;
+    for (size_t t = 0; t < n; t++) {
+      if (placed[t]) continue;
+      int ready = 1;
+      for (int k = 0; k < a->tables[t].nfks; k++) {
+        int p = a->tables[t].fks[k].parent_table;
+        if (p != (int)t && !placed[p]) ready = 0;
+      }
+      if (!ready) continue;
+      placed[t] = 1;
+      a->order[done++] = (int)t;
+    }
+    if (done == before) /* a cycle */
+      for (size_t t = 0; t < n; t++)
+        if (!placed[t]) {
+          placed[t] = 1;
+          a->order[done++] = (int)t;
+        }
+  }
+  free(placed);
   return MC_OK;
 }
 
@@ -348,6 +388,7 @@ mc_status mc_rows_applier_new(const mc_rows_target *target, mc_rows_applier **ou
     a->tables[i].t = &target->tables[i];
     st = read_meta(target->db, target->tables, target->ntables, &a->tables[i]);
   }
+  if (st == MC_OK) st = order_tables(a);
   sqlite3 *db = target->db;
   if (st == MC_OK &&
       (sqlite3_prepare_v2(db,
@@ -384,6 +425,7 @@ void mc_rows_applier_free(mc_rows_applier *a) {
   sqlite3_finalize(a->log);
   sqlite3_finalize(a->state);
   free(a->tables);
+  free(a->order);
   free(a->touched);
   free(a);
 }
@@ -683,7 +725,8 @@ mc_status mc_rows_apply(mc_rows_applier *a, const mc_row *rows, int count, int *
   /* Parents before children, then the references. */
   for (size_t t = 0; st == MC_OK && t < a->tg.ntables; t++)
     for (int i = 0; st == MC_OK && i < a->ntouched; i++)
-      if (a->touched[i].table == (int)t) st = materialize(a, &a->tables[t], &a->touched[i]);
+      if (a->touched[i].table == a->order[t])
+        st = materialize(a, &a->tables[a->order[t]], &a->touched[i]);
   for (int i = 0; st == MC_OK && i < a->ntouched; i++) {
     const table_meta *m = &a->tables[a->touched[i].table];
     if (m->nfks) st = fix_references(a, m, &a->touched[i]);
