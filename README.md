@@ -171,16 +171,21 @@ the Windows build, so on Linux start `linux: build` from `Tasks: Run Task`.
 
 ### Android
 
-Open `android/` in Android Studio, or generate the Gradle wrapper once (`gradle wrapper`)
-and then run:
+Open `android/` in Android Studio, or build with the Gradle wrapper through
+`android/scripts/android.sh`, which takes `JAVA_HOME` (and, on NixOS, the emulator's
+libraries) from Android Studio when it is not already set:
 
 ```sh
-cd android
-./gradlew :app:assembleDebug    # phone
-./gradlew :wear:assembleDebug   # watch
+android/scripts/android.sh gradle :app:assembleDebug    # phone
+android/scripts/android.sh gradle :wear:assembleDebug   # watch
 ```
 
 The NDK build compiles the core from the repo root. It needs CMake ≥ 3.28 from the SDK
-manager (`sdkmanager "cmake;3.30.5"`). The watch app also ships `armeabi-v7a`, because many
-Wear OS watches run a 32-bit userspace. To run it, create a Wear OS emulator in Android
-Studio's Device Manager.
+manager (`sdkmanager "cmake;3.30.5"`), or unzip
+https://dl.google.com/android/repository/cmake-3.30.5-linux.zip into
+`$ANDROID_HOME/cmake/3.30.5`. The watch app also ships `armeabi-v7a`, because many Wear OS
+watches run a 32-bit userspace.
+
+To run the watch app, create a Wear OS emulator named `Wear_OS_Small_Round` in Android
+Studio's Device Manager and run the `wear: run` task in VS Code. It boots the emulator unless
+it is already running, then installs and starts the debug build.
