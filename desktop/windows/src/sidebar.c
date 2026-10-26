@@ -39,6 +39,8 @@ enum {
   TEXT_X = 18,
   ICON_W = 28, /* icon plus the gap after it */
   RADIUS = 6,
+  ADD_W = 28, /* the + on the DEVICES heading: a square this wide, ending INSET from the edge */
+  ADD_BOTTOM = 2,
 };
 
 static struct {
@@ -49,6 +51,8 @@ static struct {
   canvas buf;
   int hot; /* navigation item under the mouse, or -1 */
   BOOL locked;
+  HWND tooltip;
+  BOOL add_hot, add_pressed; /* the mouse is over the +, or went down on it */
 } s;
 
 static void set_hot(int i);
@@ -146,6 +150,44 @@ static void select_item(int i) {
                (LPARAM)s.wnd);
 }
 
+/* --- The + on the DEVICES heading --- */
+
+/* Where the + is, in client coordinates; empty if the heading isn't there. */
+static RECT add_rect(void) {
+  RECT rc = {0, 0, 0, 0};
+  for (int i = 0; i < item_count(); i++) {
+    if (rows[row_of(i)].kind != ROW_HEADER) continue;
+    if (SendMessageW(s.wnd, LB_GETITEMRECT, (WPARAM)i, (LPARAM)&rc) == LB_ERR) break;
+    rc.right -= scale(INSET);
+    rc.left = rc.right - scale(ADD_W);
+    rc.bottom -= scale(ADD_BOTTOM);
+    rc.top = rc.bottom - scale(ADD_W);
+    return rc;
+  }
+  SetRectEmpty(&rc);
+  return rc;
+}
+
+static BOOL in_add(LPARAM lp) {
+  RECT rc = add_rect();
+  POINT pt = {(short)LOWORD(lp), (short)HIWORD(lp)};
+  return !s.locked && PtInRect(&rc, pt);
+}
+
+static void set_add_hot(BOOL hot) {
+  if (hot == s.add_hot) return;
+  s.add_hot = hot;
+  RECT rc = add_rect();
+  InvalidateRect(s.wnd, &rc, FALSE);
+}
+
+/* The tooltip follows the + when the rows move. */
+static void update_tooltip(void) {
+  if (!s.tooltip) return;
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = 1, .rect = add_rect()};
+  SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+}
+
 /* Takes over the mouse and keyboard so headers and notes can't be selected. */
 static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id,
                                      DWORD_PTR data) {
@@ -154,17 +196,41 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, U
     case WM_MOUSEMOVE: {
       TRACKMOUSEEVENT tme = {sizeof tme, TME_LEAVE, wnd, 0};
       TrackMouseEvent(&tme);
-      set_hot(nav_at(lp));
+      set_hot(s.add_pressed ? -1 : nav_at(lp));
+      set_add_hot(in_add(lp));
       return 0;
     }
     case WM_MOUSELEAVE:
       set_hot(-1);
+      if (!s.add_pressed) set_add_hot(FALSE);
       return 0;
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
+      if (in_add(lp)) { /* the + acts on release, like a button */
+        s.add_pressed = TRUE;
+        SetCapture(wnd);
+        RECT rc = add_rect();
+        InvalidateRect(wnd, &rc, FALSE);
+        return 0;
+      }
       SetFocus(wnd);
       select_item(nav_at(lp));
       return 0;
+    case WM_LBUTTONUP:
+      if (s.add_pressed) {
+        BOOL clicked = in_add(lp);
+        ReleaseCapture(); /* WM_CAPTURECHANGED clears add_pressed */
+        if (clicked)
+          SendMessageW(GetParent(wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(wnd), SBN_ADD_DEVICE), (LPARAM)wnd);
+      }
+      return 0;
+    case WM_CAPTURECHANGED:
+      if (s.add_pressed) {
+        s.add_pressed = FALSE;
+        RECT rc = add_rect();
+        InvalidateRect(wnd, &rc, FALSE);
+      }
+      break;
     case WM_KEYDOWN: {
       /* Using the keyboard shows focus rectangles, as in a dialog. */
       SendMessageW(GetAncestor(wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
@@ -184,6 +250,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, U
     case WM_SIZE: {
       LRESULT r = DefSubclassProc(wnd, msg, wp, lp);
       fit_spacer();
+      update_tooltip();
       return r;
     }
     case WM_NCDESTROY:
@@ -192,6 +259,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, U
       if (s.header_font) DeleteObject(s.header_font);
       if (s.icon_font) DeleteObject(s.icon_font);
       if (s.bg) DeleteObject(s.bg);
+      if (s.tooltip) DestroyWindow(s.tooltip);
       canvas_free(&s.buf);
       memset(&s, 0, sizeof s);
       break;
@@ -211,6 +279,13 @@ HWND sidebar_create(HWND parent, int id) {
   for (int i = 0; i < NUM_ROWS; i++) add_item(i, i);
   SendMessageW(s.wnd, LB_SETCURSEL, 0, 0);
   SetWindowSubclass(s.wnd, sidebar_proc, 0, 0);
+
+  s.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                              CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, s.wnd, NULL,
+                              GetModuleHandleW(NULL), NULL);
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = s.wnd, .uId = 1,
+                    .lpszText = L"Add Device by Address"};
+  SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   return s.wnd;
 }
 
@@ -239,6 +314,8 @@ void sidebar_update(UINT dpi) {
   for (int i = 0; i < item_count(); i++)
     if (rows[row_of(i)].kind != ROW_SPACER) SendMessageW(s.wnd, LB_SETITEMHEIGHT, (WPARAM)i, row_height(row_of(i)));
   fit_spacer();
+  update_tooltip();
+  theme_apply_control(s.tooltip);
 }
 
 sidebar_page sidebar_selection(void) {
@@ -255,6 +332,7 @@ void sidebar_set_locked(BOOL locked) {
   if (locked == s.locked) return;
   s.locked = locked;
   set_hot(-1);
+  set_add_hot(FALSE);
   InvalidateRect(s.wnd, NULL, FALSE);
 }
 
@@ -292,12 +370,23 @@ void sidebar_draw(const DRAWITEMSTRUCT *dis) {
       text.left += scale(ICON_W);
       break;
     }
-    case ROW_HEADER:
+    case ROW_HEADER: { /* the heading, level with the + at its end */
+      RECT add = {w - scale(INSET + ADD_W), h - scale(ADD_BOTTOM + ADD_W), w - scale(INSET), h - scale(ADD_BOTTOM)};
+      control_state state = s.locked                     ? STATE_NORMAL
+                            : s.add_pressed && s.add_hot ? STATE_PRESSED
+                            : s.add_hot || s.add_pressed ? STATE_HOT
+                                                         : STATE_NORMAL;
+      COLORREF add_color = theme_draw_state(c, &add, scale(4), state);
+      if (s.locked) add_color = theme.text3;
+      canvas_text(c, L"\xE710", 1, &add, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, s.icon_font,
+                  add_color); /* Add */
       font = s.header_font;
       color = theme.text2;
-      format = (format & ~DT_VCENTER) | DT_BOTTOM;
-      text.bottom -= scale(6);
+      text.top = add.top;
+      text.bottom = add.bottom;
+      text.right = add.left - scale(4);
       break;
+    }
     case ROW_NOTE:
       color = theme.text3;
       break;

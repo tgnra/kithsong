@@ -3,9 +3,9 @@
  *   before an import            during / after an import
  *   +----------------------+    +------------------------------------------+
  *   |  .- - - - - - - - -. |    | Matching 12 of 40...               [Done] |
- *   |  : Drop a folder    : |    | ========-------------------------------- |
+ *   |  : Drop folders     : |    | ========-------------------------------- |
  *   |  '- - - - - - - - -' |    |                                          |
- *   |   [Choose Folder...]  |    | NEEDS YOUR ATTENTION                     |
+ *   |  [Choose Folders...]  |    | NEEDS YOUR ATTENTION                     |
  *   +----------------------+    |  Needs review  Low  Things We Lost  70%  |
  *                               | IMPORTED                                 |
  *                               |  Imported  Radiohead  OK Computer  100%  |

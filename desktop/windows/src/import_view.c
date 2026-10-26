@@ -164,7 +164,7 @@ static LRESULT CALLBACK drop_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     HGDIOBJ old_font = SelectObject(dc, g_view.font ? (HGDIOBJ)g_view.font : GetStockObject(DEFAULT_GUI_FONT));
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, theme.text2);
-    DrawTextW(dc, L"Drop a folder of music here", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, L"Drop folders of music here", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(dc, old_font);
     EndPaint(wnd, &ps);
     return 0;
@@ -283,11 +283,12 @@ BOOL import_view_start(const char *const *paths, int count) {
 }
 
 void import_view_browse(void) {
-  char *path = pick_folder(g_view.parent, L"Choose a Folder to Import", NULL);
-  if (!path) return;
-  const char *paths[] = {path};
-  import_view_start(paths, 1);
-  free(path);
+  int n = 0;
+  char **paths = pick_folders(g_view.parent, L"Choose Folders to Import", &n);
+  if (!paths) return;
+  import_view_start((const char *const *)paths, n);
+  for (int i = 0; i < n; i++) free(paths[i]);
+  free(paths);
 }
 
 BOOL import_view_drop(HDROP drop) {
@@ -645,7 +646,7 @@ void import_view_create(HWND parent, mc_library *lib) {
   RegisterClassExW(&wc);
 
   g_view.drop = child(L"musicapp_drop", NULL, 0, ID_IMP_DROP);
-  g_view.browse = child(WC_BUTTONW, L"Choose Folder\x2026", BS_PUSHBUTTON, ID_IMP_BROWSE);
+  g_view.browse = child(WC_BUTTONW, L"Choose Folders\x2026", BS_PUSHBUTTON, ID_IMP_BROWSE);
   g_view.status = child(WC_STATICW, NULL, SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, ID_IMP_STATUS);
   g_view.progress = child(PROGRESS_CLASSW, NULL, 0, ID_IMP_PROGRESS);
   g_view.done = child(WC_BUTTONW, L"Done", BS_PUSHBUTTON, ID_IMP_DONE);

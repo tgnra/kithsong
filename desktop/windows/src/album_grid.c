@@ -26,8 +26,9 @@ typedef struct tile {
   char uid[MC_UID_STRLEN];
   wchar_t *title;
   wchar_t *artist;    /* NULL if unknown */
+  int year;           /* 0 if unknown */
   wchar_t *cover_dir; /* NULL when the album has no cover */
-  wchar_t sub[32];    /* beneath the title: a playlist's track count; "" for albums */
+  wchar_t sub[32];    /* beneath a playlist's name: its track count (albums show the artist) */
   HBITMAP thumb;      /* premultiplied, with rounded corners */
   const uint32_t *pixels;
   int thumb_size;
@@ -181,7 +182,7 @@ static void relayout(void) {
   SelectObject(dc, old);
   ReleaseDC(g.wnd, dc);
   g.text_h = tm.tmHeight;
-  g.row_h = g.tile_w + g.text_gap + g.text_h * (g.playlists ? 2 : 1) + g.gap; /* playlists: the count too */
+  g.row_h = g.tile_w + g.text_gap + 2 * g.text_h + g.gap; /* the title, and the artist or track count */
 
   int rows = (g.count + g.cols - 1) / g.cols;
 
@@ -300,6 +301,24 @@ const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]) {
   return g.tiles[g.selected].title;
 }
 
+const wchar_t *album_grid_selection_artist(void) {
+  return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].artist : NULL;
+}
+
+const wchar_t *album_grid_selection_cover(void) {
+  return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].cover_dir : NULL;
+}
+
+int album_grid_selection_year(void) {
+  return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].year : 0;
+}
+
+static void select_tile(int i);
+
+void album_grid_unselect(void) {
+  select_tile(-1);
+}
+
 static void clear_tiles(void) {
   for (int i = 0; i < g.count; i++) {
     free_thumb(&g.tiles[i]);
@@ -325,6 +344,7 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
     memcpy(t->uid, a->uid, sizeof t->uid);
     t->title = widen(a->title && *a->title ? a->title : "Untitled");
     t->artist = a->artist && *a->artist ? widen(a->artist) : NULL;
+    t->year = a->year;
     t->cover_dir = (*dirs)[i] = a->has_art ? widen(a->folder) : NULL;
   }
   mc_album_list_free(list);
@@ -419,7 +439,7 @@ static void tile_rects(int i, RECT *art, RECT *text, RECT *outer) {
   int x = g.pad + (i % g.cols) * (g.tile_w + g.gap), y = g.pad + (i / g.cols) * g.row_h - g.scroll.pos;
   SetRect(art, x, y, x + g.tile_w, y + g.tile_w);
   SetRect(text, x, art->bottom + g.text_gap, x + g.tile_w,
-          art->bottom + g.text_gap + g.text_h * (g.playlists ? 2 : 1));
+          art->bottom + g.text_gap + 2 * g.text_h);
   SetRect(outer, x, y, x + g.tile_w, text->bottom);
   InflateRect(outer, scale(HOVER_PAD), scale(HOVER_PAD));
 }
@@ -488,6 +508,30 @@ static void on_mouse_down(int x, int y) {
   if (!scroller_mouse_down(&g.scroll, x, y)) select_tile(tile_at(x, y));
 }
 
+/* The arrow keys, Home, End, Page Up and Page Down move the selection, as clicks would, and
+ * scroll it into view. Returns FALSE for other keys. */
+static BOOL on_key(WPARAM key) {
+  if (!g.count || !g.cols) return FALSE;
+  int cur = g.selected, last = g.count - 1, page = max(1, g.client_h / g.row_h) * g.cols, to;
+  switch (key) {
+    case VK_LEFT: to = cur < 0 ? 0 : cur - 1; break;
+    case VK_RIGHT: to = cur < 0 ? 0 : cur + 1; break;
+    case VK_UP: to = cur < 0 ? 0 : cur - g.cols; break;
+    case VK_DOWN: to = cur < 0 ? 0 : cur + g.cols; break;
+    case VK_PRIOR: to = cur < 0 ? 0 : cur - page; break;
+    case VK_NEXT: to = cur < 0 ? 0 : cur + page; break;
+    case VK_HOME: to = 0; break;
+    case VK_END: to = last; break;
+    default: return FALSE;
+  }
+  if (key == VK_UP || key == VK_PRIOR) to = max(to, cur % g.cols); /* stay in the column at the top */
+  to = max(0, min(to, last));
+  select_tile(to);
+  int top = g.pad + (to / g.cols) * g.row_h;
+  scroller_reveal(&g.scroll, top - g.pad, top + g.row_h - g.gap + g.pad);
+  return TRUE;
+}
+
 /* --- Painting --- */
 
 static void paint_tile(canvas *c, int i) {
@@ -515,13 +559,12 @@ static void paint_tile(canvas *c, int i) {
     }
   }
   RECT line = {text.left, text.top, text.right, text.top + g.text_h};
+  UINT one_line = DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
   SetTextColor(c->dc, theme.text);
-  DrawTextW(c->dc, t->title, -1, &line, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-  if (t->sub[0]) {
-    OffsetRect(&line, 0, g.text_h);
-    SetTextColor(c->dc, theme.text2);
-    DrawTextW(c->dc, t->sub, -1, &line, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-  }
+  DrawTextW(c->dc, t->title, -1, &line, one_line);
+  OffsetRect(&line, 0, g.text_h);
+  SetTextColor(c->dc, theme.text2);
+  DrawTextW(c->dc, g.playlists ? t->sub : t->artist ? t->artist : L"Unknown Artist", -1, &line, one_line);
 }
 
 /* Everything is drawn into a canvas, then copied in one go. GDI text leaves alpha at 0, so
@@ -637,17 +680,9 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CAPTURECHANGED:
       scroller_capture_changed(&g.scroll);
       return 0;
-    case WM_KEYDOWN: {
-      static const struct { WPARAM key; int code; } keys[] = {
-        {VK_UP, SB_LINEUP}, {VK_DOWN, SB_LINEDOWN}, {VK_PRIOR, SB_PAGEUP},
-        {VK_NEXT, SB_PAGEDOWN}, {VK_HOME, SB_TOP}, {VK_END, SB_BOTTOM}};
-      for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++)
-        if (wp == keys[i].key) {
-          scroller_command(&g.scroll, keys[i].code, g.row_h / 4);
-          return 0;
-        }
+    case WM_KEYDOWN:
+      if (on_key(wp)) return 0;
       break;
-    }
     case WM_APP_THUMB:
       on_thumb((thumb_result *)lp);
       return 0;

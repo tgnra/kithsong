@@ -22,8 +22,8 @@ typedef struct playback_track {
   int duration_ms;                       /* from the library; 0 if unknown */
 } playback_track;
 
-/* wnd is the main window. changed is called whenever playing starts or stops, so it can
- * redraw the Play/Pause button. */
+/* wnd is the main window. changed is called whenever what the playback buttons should show
+ * may have changed: playing or not, and what's queued. */
 void playback_init(HWND wnd, void (*changed)(void));
 void playback_free(void);
 
@@ -40,5 +40,8 @@ void playback_previous(void);
 void playback_seek(int ms);
 
 BOOL playback_is_playing(void);
+/* Whether there's a current track, and one after it. */
+BOOL playback_has_current(void);
+BOOL playback_has_next(void);
 
 #endif

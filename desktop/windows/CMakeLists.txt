@@ -2,6 +2,7 @@ enable_language(RC)
 
 add_executable(musicapp WIN32
   src/main.c
+  src/add_device.c
   src/add_to_playlist.c
   src/album_grid.c
   src/canvas.c

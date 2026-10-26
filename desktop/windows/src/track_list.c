@@ -1,5 +1,7 @@
+#define COBJMACROS
 #include "track_list.h"
 
+#include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,15 +10,22 @@
 
 #include "add_to_playlist.h"
 #include "canvas.h"
+#include "cover.h"
 #include "scroller.h"
 #include "theme.h"
 
 /* Metrics at 96 DPI. */
 enum {
-  PAD_X = 20,   /* header text from the edges */
-  PAD_TOP = 20, /* above the title */
-  SUB_GAP = 2,  /* between the title and the line under it */
-  HEADER_BOTTOM = 14,
+  PAD_X = 18,   /* the cover from the left edge */
+  PAD_TOP = 18, /* above the cover */
+  COVER = 96,
+  COVER_RADIUS = 8,
+  COVER_GAP = 16, /* between the cover and the header's text */
+  LINE_GAP = 4,   /* between the header's lines */
+  CLOSE = 32,     /* the close button's square */
+  CLOSE_TOP = 12,
+  CLOSE_RIGHT = 12,
+  HEADER_BOTTOM = 18,
   ROW_H = 36,
   INSET = 8,   /* rows' fill from the edges */
   CELL_X = 12, /* text inside the fill */
@@ -24,9 +33,7 @@ enum {
   NUM_GAP = 12,
   DUR_W = 52,
   RADIUS = 4,
-  MORE_BTN = 32, /* the playlist menu's button */
-  MORE_RIGHT = 12, /* from the button to the right edge */
-  MORE_TOP = 14,
+  MORE_GAP = 4,  /* between the playlist menu's button and the close button */
   DROP_LINE = 2, /* where a dragged track would go */
 };
 
@@ -59,17 +66,27 @@ typedef struct row {
 static struct {
   HWND wnd;
   UINT dpi;
-  HFONT font, title_font, sub_font, icon_font;
+  HFONT font, title_font, sub_font, icon_font, glyph_font;
   canvas buf;
   scroller scroll;
+  HWND tooltip;
+  IWICImagingFactory *wic;
 
   mc_library *lib;
   char album_uid[MC_UID_STRLEN];
   BOOL playlist; /* the shown uid is a playlist's */
   wchar_t *album_title;
-  wchar_t summary[64]; /* "12 tracks · 47 min" */
+  wchar_t *artist;     /* NULL if unknown */
+  int year;            /* 0 if unknown */
+  int total_ms;        /* the tracks' length */
+  wchar_t summary[64]; /* "1997 · 12 tracks · 47 min" */
+  wchar_t *cover_dir;  /* NULL if the album has no cover */
+  HBITMAP art;         /* the cover, premultiplied, with rounded corners; NULL shows the placeholder */
+  const uint32_t *art_px;
+  int art_size;
   row *rows;
   int count;
+  BOOL close_hot, close_pressed;
 
   int header_h; /* the fixed part above the rows */
   int hot, selected;
@@ -118,13 +135,38 @@ static int font_height(HFONT font) {
   return tm.tmHeight;
 }
 
+static RECT close_rect(void) {
+  RECT rc;
+  GetClientRect(s.wnd, &rc);
+  RECT r = {rc.right - scale(CLOSE_RIGHT + CLOSE), scale(CLOSE_TOP), rc.right - scale(CLOSE_RIGHT),
+            scale(CLOSE_TOP + CLOSE)};
+  return r;
+}
+
+static void set_close_hot(BOOL hot) {
+  if (hot == s.close_hot) return;
+  s.close_hot = hot;
+  RECT r = close_rect();
+  InvalidateRect(s.wnd, &r, FALSE);
+}
+
+static BOOL in_close(int x, int y) {
+  RECT r = close_rect();
+  POINT pt = {x, y};
+  return PtInRect(&r, pt);
+}
+
 static void relayout(void) {
   RECT rc;
   GetClientRect(s.wnd, &rc);
-  s.header_h = scale(PAD_TOP) + font_height(s.title_font) + scale(SUB_GAP) + font_height(s.sub_font) +
-               scale(HEADER_BOTTOM);
+  int text_h = 2 * font_height(s.title_font) + font_height(s.font) + font_height(s.sub_font) + 2 * scale(LINE_GAP);
+  s.header_h = scale(PAD_TOP) + max(scale(COVER), text_h) + scale(HEADER_BOTTOM);
   RECT view = {0, s.header_h + 1, rc.right, rc.bottom}; /* below the header's divider */
   scroller_resize(&s.scroll, &view, s.count * scale(ROW_H) + 2 * scale(INSET));
+  if (s.tooltip) {
+    TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = 1, .rect = close_rect()};
+    SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+  }
 }
 
 /* Row i's fill, in client coordinates. */
@@ -134,12 +176,10 @@ static RECT row_rect(int i) {
   return r;
 }
 
-/* The playlist menu's button, at the header's top right. */
+/* The playlist menu's button, just left of the close button. */
 static RECT more_rect(void) {
-  RECT client;
-  GetClientRect(s.wnd, &client);
-  int right = client.right - scale(MORE_RIGHT), top = scale(MORE_TOP);
-  RECT r = {right - scale(MORE_BTN), top, right, top + scale(MORE_BTN)};
+  RECT r = close_rect();
+  OffsetRect(&r, -(scale(CLOSE) + scale(MORE_GAP)), 0);
   return r;
 }
 
@@ -220,6 +260,48 @@ static void clear_rows(void) {
 
 static void end_drag(void);
 
+/* "1997 · 12 tracks · 47 min" */
+static void make_summary(void) {
+  wchar_t year[16] = L"";
+  if (s.year > 0) swprintf(year, 16, L"%d \x00B7 ", s.year);
+  int n = s.count, min = (s.total_ms + 30000) / 60000;
+  const wchar_t *tracks = n == 1 ? L"track" : L"tracks";
+  if (!n) swprintf(s.summary, 64, L"%lsNo tracks", year);
+  else if (min >= 60) swprintf(s.summary, 64, L"%ls%d %ls \x00B7 %d hr %d min", year, n, tracks, min / 60, min % 60);
+  else swprintf(s.summary, 64, L"%ls%d %ls \x00B7 %d min", year, n, tracks, min);
+}
+
+static void free_art(void) {
+  if (s.art) DeleteObject(s.art);
+  s.art = NULL;
+  s.art_px = NULL;
+}
+
+/* One small image, so it's decoded right here, as the now-playing strip does. */
+static void load_art(void) {
+  free_art();
+  if (!s.cover_dir) return;
+  if (!s.wic)
+    CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory,
+                     (void **)&s.wic);
+  s.art_size = scale(COVER);
+  if (s.wic) s.art = cover_decode(s.wic, s.cover_dir, s.art_size, scale(COVER_RADIUS), &s.art_px);
+}
+
+void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover_dir) {
+  free(s.artist);
+  s.artist = artist ? _wcsdup(artist) : NULL;
+  s.year = year;
+  make_summary();
+  BOOL same_cover = (!cover_dir && !s.cover_dir) || (cover_dir && s.cover_dir && !wcscmp(cover_dir, s.cover_dir));
+  if (!same_cover) {
+    free(s.cover_dir);
+    s.cover_dir = cover_dir ? _wcsdup(cover_dir) : NULL;
+    load_art();
+  }
+  if (s.wnd) InvalidateRect(s.wnd, NULL, FALSE);
+}
+
 void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist) {
   BOOL same = uid && !strcmp(uid, s.album_uid) && !playlist == !s.playlist;
   /* The selected track; in a playlist its entry, as a track can be in one twice. */
@@ -273,12 +355,9 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
   /* A track taken out of a playlist leaves the selection where it was, on the next one. */
   if (playlist && keep[0] && s.selected < 0 && n) s.selected = was < n ? was : n - 1;
 
-  int min = (total_ms + 30000) / 60000;
-  const wchar_t *tracks = n == 1 ? L"track" : L"tracks";
-  const wchar_t *kind = playlist ? L"Playlist \x00B7 " : L"";
-  if (!n) swprintf(s.summary, 64, L"%lsNo tracks", kind);
-  else if (min >= 60) swprintf(s.summary, 64, L"%ls%d %ls \x00B7 %d hr %d min", kind, n, tracks, min / 60, min % 60);
-  else swprintf(s.summary, 64, L"%ls%d %ls \x00B7 %d min", kind, n, tracks, min);
+  s.total_ms = total_ms;
+  if (!same) s.year = 0; /* until track_list_set_details */
+  make_summary();
 
   relayout();
   if (same && s.selected >= 0) reveal_row(s.selected); /* a moved track stays in view */
@@ -555,18 +634,70 @@ static void paint_row(canvas *c, int i, BOOL focused) {
   SelectObject(c->dc, s.font);
   SetTextColor(c->dc, dim);
   DrawTextW(c->dc, r->duration, -1, &dur, one_line | DT_RIGHT);
-  SetTextColor(c->dc, text);
+  SetTextColor(c->dc, r->path || playing ? text : theme.text3); /* greyed out: not on this device */
   DrawTextW(c->dc, r->title, -1, &title, one_line | DT_END_ELLIPSIS);
 }
 
-/* The playlist menu's button: a bare icon with a fill on hover, like the toolbar's. */
+/* The playlist menu's button: round, like the close button beside it. */
 static void paint_more(canvas *c) {
   RECT r = more_rect();
   control_state state = s.more_open ? STATE_PRESSED : s.more_hot ? STATE_HOT : STATE_NORMAL;
-  COLORREF color = theme_draw_state(c, &r, scale(RADIUS), state);
+  COLORREF color = theme_draw_state(c, &r, scale(CLOSE) / 2, state);
   SelectObject(c->dc, s.icon_font);
   SetTextColor(c->dc, color);
   DrawTextW(c->dc, L"\xE712", 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); /* More */
+}
+
+/* The cover, the title (up to two lines), artist and summary beside it, the playlist menu's
+ * button for a playlist, and the close button. */
+static void paint_header(canvas *c, int w) {
+  RECT cover = {scale(PAD_X), scale(PAD_TOP), scale(PAD_X + COVER), scale(PAD_TOP + COVER)};
+  if (s.art_px) {
+    canvas_draw_image(c, &cover, s.art_px, s.art_size, s.art_size);
+  } else { /* the album grid's placeholder */
+    canvas_fill(c, &cover, scale(COVER_RADIUS), theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), 15);
+    SelectObject(c->dc, s.glyph_font);
+    SetTextColor(c->dc, theme.text3);
+    const wchar_t *glyph = s.playlist ? L"\xE90B" : L"\xE8D6"; /* the sidebar's Playlists icon, or a note */
+    DrawTextW(c->dc, glyph, 1, &cover, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  }
+
+  RECT close = close_rect();
+  control_state state = s.close_pressed && s.close_hot ? STATE_PRESSED
+                        : s.close_hot || s.close_pressed ? STATE_HOT
+                                                         : STATE_NORMAL;
+  COLORREF close_color = theme_draw_state(c, &close, scale(CLOSE) / 2, state);
+  SelectObject(c->dc, s.icon_font);
+  SetTextColor(c->dc, close_color);
+  DrawTextW(c->dc, L"\xE711", 1, &close, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); /* Cancel */
+  if (s.playlist) paint_more(c);
+
+  /* The text, centred against the cover. The title wraps onto a second line if it must. */
+  int buttons = s.playlist ? more_rect().left : close.left;
+  int left = cover.right + scale(COVER_GAP), right = max(left, buttons - scale(4));
+  int title_line = font_height(s.title_font), artist_h = font_height(s.font), sub_h = font_height(s.sub_font);
+  UINT wrap = DT_WORDBREAK | DT_EDITCONTROL | DT_END_ELLIPSIS | DT_NOPREFIX;
+  RECT title = {left, 0, right, 0};
+  SelectObject(c->dc, s.title_font);
+  if (s.album_title) DrawTextW(c->dc, s.album_title, -1, &title, wrap | DT_CALCRECT);
+  int title_h = min(max(title.bottom, title_line), 2 * title_line);
+  int block = title_h + scale(LINE_GAP) + artist_h + scale(LINE_GAP) + sub_h;
+  int top = cover.top + max(0, (scale(COVER) - block) / 2);
+  SetRect(&title, left, top, right, top + title_h);
+  SetTextColor(c->dc, theme.text);
+  if (s.album_title) DrawTextW(c->dc, s.album_title, -1, &title, wrap);
+  UINT one_line = DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS;
+  RECT artist = {left, title.bottom + scale(LINE_GAP), right, title.bottom + scale(LINE_GAP) + artist_h};
+  SelectObject(c->dc, s.font);
+  const wchar_t *byline = s.playlist ? L"Playlist" : s.artist ? s.artist : L"Unknown Artist";
+  DrawTextW(c->dc, byline, -1, &artist, one_line);
+  RECT sub = {left, artist.bottom + scale(LINE_GAP), right, artist.bottom + scale(LINE_GAP) + sub_h};
+  SelectObject(c->dc, s.sub_font);
+  SetTextColor(c->dc, theme.text2);
+  DrawTextW(c->dc, s.summary, -1, &sub, one_line);
+
+  RECT divider = {0, s.header_h, w, s.header_h + 1};
+  canvas_clear(c, &divider, theme.line, 255);
 }
 
 /* Like the album grid, everything goes into a canvas; GDI text needs its alpha set after. */
@@ -592,20 +723,7 @@ static void paint(HDC dc, const RECT *dirty) {
   /* Header. */
   RECT header = {0, 0, client.right, s.scroll.view.top};
   canvas_clear(c, &header, theme.bg, 255);
-  int x = scale(PAD_X), w = client.right - 2 * scale(PAD_X), y = scale(PAD_TOP);
-  int title_h = font_height(s.title_font), sub_h = font_height(s.sub_font);
-  RECT title = {x, y, x + w, y + title_h}, sub = {x, title.bottom + scale(SUB_GAP), x + w, title.bottom + scale(SUB_GAP) + sub_h};
-  if (s.playlist) title.right = more_rect().left - scale(4); /* clear of the button */
-  UINT one_line = DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS;
-  SelectObject(c->dc, s.title_font);
-  SetTextColor(c->dc, theme.text);
-  if (s.album_title) DrawTextW(c->dc, s.album_title, -1, &title, one_line);
-  SelectObject(c->dc, s.sub_font);
-  SetTextColor(c->dc, theme.text2);
-  DrawTextW(c->dc, s.summary, -1, &sub, one_line);
-  if (s.playlist) paint_more(c);
-  RECT divider = {x, s.header_h, x + w, s.header_h + 1};
-  canvas_clear(c, &divider, theme.line, 255);
+  paint_header(c, client.right);
   SelectObject(c->dc, old_font);
   canvas_opaque(c, dirty);
 
@@ -639,7 +757,10 @@ static void on_key(WPARAM key) {
     case VK_RETURN: play(s.selected); break;
     case VK_DELETE: request_remove(s.selected); break;
     case VK_F2: request_playlist(TLN_RENAME_PLAYLIST); break;
-    case VK_ESCAPE: end_drag(); break;
+    case VK_ESCAPE: /* cancels a drag, else closes the pane */
+      if (s.drag_row >= 0) end_drag();
+      else notify(TLN_CLOSE);
+      break;
   }
 }
 
@@ -677,6 +798,7 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
         drag_to(x, y);
         return 0;
       }
+      set_close_hot(in_close(x, y));
       set_more_hot(on_more(x, y));
       set_hot(scroller_mouse_move(&s.scroll, x, y) ? -1 : row_at(x, y));
       return 0;
@@ -686,15 +808,23 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       scroller_mouse_leave(&s.scroll);
       set_hot(-1);
       set_more_hot(FALSE);
+      if (!s.close_pressed) set_close_hot(FALSE);
       return 0;
     case WM_LBUTTONDOWN:
     case WM_RBUTTONDOWN: {
-      SetFocus(wnd);
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+      if (msg == WM_LBUTTONDOWN && in_close(x, y)) { /* acts on release, like a button */
+        s.close_pressed = TRUE;
+        SetCapture(wnd);
+        RECT r = close_rect();
+        InvalidateRect(wnd, &r, FALSE);
+        return 0;
+      }
       if (on_more(x, y)) {
         if (msg == WM_LBUTTONDOWN) show_playlist_menu();
         return 0;
       }
+      SetFocus(wnd);
       if (msg == WM_RBUTTONDOWN || !scroller_mouse_down(&s.scroll, x, y)) {
         int i = row_at(x, y);
         select_row(i);
@@ -712,11 +842,22 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       return 0;
     }
     case WM_LBUTTONUP:
+      if (s.close_pressed) {
+        BOOL clicked = in_close(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+        ReleaseCapture(); /* WM_CAPTURECHANGED clears close_pressed */
+        if (clicked) notify(TLN_CLOSE);
+        return 0;
+      }
       if (s.drag_row >= 0) drop();
       scroller_mouse_up(&s.scroll);
       return 0;
     case WM_CAPTURECHANGED:
       if (s.drag_row >= 0 && (HWND)lp != wnd) end_drag(); /* lost it: e.g. a window came up */
+      if (s.close_pressed) {
+        s.close_pressed = FALSE;
+        RECT r = close_rect();
+        InvalidateRect(wnd, &r, FALSE);
+      }
       scroller_capture_changed(&s.scroll);
       return 0;
     case WM_CONTEXTMENU: {
@@ -759,12 +900,25 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
     case WM_UPDATEUISTATE:
       invalidate_row(s.selected);
       break;
+    case WM_CREATE: {
+      s.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                                  CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, wnd, NULL,
+                                  GetModuleHandleW(NULL), NULL);
+      TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = wnd, .uId = 1, .lpszText = L"Close"};
+      SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+      return 0;
+    }
     case WM_DESTROY:
       clear_rows();
       free(s.album_title);
+      free(s.artist);
+      free(s.cover_dir);
+      free_art();
+      if (s.wic) IWICImagingFactory_Release(s.wic);
+      if (s.tooltip) DestroyWindow(s.tooltip);
       canvas_free(&s.buf);
-      HFONT fonts[] = {s.font, s.title_font, s.sub_font, s.icon_font};
-      for (int i = 0; i < 4; i++)
+      HFONT fonts[] = {s.font, s.title_font, s.sub_font, s.icon_font, s.glyph_font};
+      for (int i = 0; i < 5; i++)
         if (fonts[i]) DeleteObject(fonts[i]);
       memset(&s, 0, sizeof s);
       return 0;
@@ -791,7 +945,7 @@ void track_list_update(UINT dpi) {
   s.dpi = dpi;
   NONCLIENTMETRICSW ncm = {.cbSize = sizeof ncm};
   SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof ncm, &ncm, 0, dpi);
-  HFONT old[] = {s.font, s.title_font, s.sub_font, s.icon_font};
+  HFONT old[] = {s.font, s.title_font, s.sub_font, s.icon_font, s.glyph_font};
 
   LOGFONTW lf = ncm.lfMessageFont;
   s.sub_font = CreateFontIndirectW(&lf);
@@ -803,10 +957,15 @@ void track_list_update(UINT dpi) {
   s.icon_font = CreateFontW(-scale(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
                             theme_icon_face());
-  for (int i = 0; i < 4; i++)
+  s.glyph_font = CreateFontW(-scale(COVER) / 4, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                             theme_icon_face());
+  for (int i = 0; i < 5; i++)
     if (old[i]) DeleteObject(old[i]);
+  if (s.tooltip) theme_apply_control(s.tooltip);
 
   if (s.wnd) {
+    if (s.art_size != scale(COVER)) load_art();
     relayout();
     InvalidateRect(s.wnd, NULL, FALSE);
   }

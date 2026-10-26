@@ -1,5 +1,5 @@
-/* The album grid: cover art with the album title beneath, in as many columns as fit. The
- * same grid shows the playlists on the Playlists page.
+/* The album grid: cover art with the album title and artist beneath, in as many columns as
+ * fit. The same grid shows the playlists on the Playlists page, with their track counts.
  *
  * Built for large libraries:
  *  - virtualised: only the tiles in view are painted, into an off-screen buffer.
@@ -9,7 +9,8 @@
  *  - pixel scrolling, with the mouse wheel eased over a few frames, and a thin overlay
  *    scrollbar that appears while the mouse moves over the grid or it scrolls.
  *
- * Clicking an album selects it (an accent ring around the cover). The grid also draws the
+ * Clicking an album (or moving to it with the arrow keys, Home, End, Page Up or Page Down)
+ * selects it (an accent ring around the cover). The grid also draws the
  * content area's border and rounded top-left corner, which shows Mica outside it.
  */
 #ifndef MUSICAPP_ALBUM_GRID_H
@@ -40,6 +41,15 @@ BOOL album_grid_showing_playlists(void);
 /* The selected album (or playlist): copies its uid and returns its title, or returns NULL
  * if there's none. */
 const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]);
+/* The selected album's artist, or NULL. Valid until the grid next reloads. */
+const wchar_t *album_grid_selection_artist(void);
+/* The folder holding the selected album's cover, or NULL if it has none (or none is
+ * selected). Valid until the grid next reloads. */
+const wchar_t *album_grid_selection_cover(void);
+/* The selected album's year, or 0 if it's unknown (or none is selected). */
+int album_grid_selection_year(void);
+/* Clears the selection, which notifies the parent (AGN_SELCHANGE) as a click would. */
+void album_grid_unselect(void);
 
 /* Sizes the tiles for a grid full_w wide, even while it's narrower, so a pane beside it
  * that comes and goes takes whole columns without resizing the tiles. Returns the width the

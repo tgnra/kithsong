@@ -1,18 +1,20 @@
 /* The track list: the selected album's or playlist's tracks, in a pane beside the grid.
  *
- *   Album Title                     [...]   <- the playlist menu, for playlists only
- *   12 tracks · 47 min
- *   ----------------------------------
- *    1   Airbag                   4:44
- *   >)   Paranoid Android         6:23   <- playing, in the accent colour
+ *   +------+  OK Computer          [...] [x]   <- [...], the playlist menu, for playlists only
+ *   | art  |  Radiohead
+ *   +------+  1997 · 12 tracks · 53 min
+ *   ----------------------------------------
+ *    1   Airbag                        4:44
+ *   >)   Paranoid Android              6:23   <- playing, in the accent colour
  *
  * Track numbers and durations are secondary text; in a playlist the numbers count its
- * places. Clicking selects a track; double-clicking or Enter plays it. Right-click (or the
- * menu key) opens a menu for the track: Add to Playlist (add_to_playlist.c), and in a
- * playlist also Move Up, Move Down and Remove from Playlist. A playlist's tracks can be
- * dragged into another order too, or moved with Alt+Up and Alt+Down; Delete removes one.
- * The [...] button (or F2, or the menu key with no track selected) offers Rename... and
- * Delete Playlist....
+ * places. Tracks with no file on this device are greyed out. Clicking selects a track;
+ * double-clicking or Enter plays it. Right-click (or the menu key) opens a menu for the
+ * track: Add to Playlist (add_to_playlist.c), and in a playlist also Move Up, Move Down and
+ * Remove from Playlist. A playlist's tracks can be dragged into another order too, or moved
+ * with Alt+Up and Alt+Down; Delete removes one. The [...] button (or F2, or the menu key
+ * with no track selected) offers Rename... and Delete Playlist.... The close button or
+ * Escape asks the parent to close the pane (TLN_CLOSE).
  */
 #ifndef MUSICAPP_TRACK_LIST_H
 #define MUSICAPP_TRACK_LIST_H
@@ -31,6 +33,8 @@
 #define TLN_MOVE 4            /* entry_uid, to after after_uid ("" = to the start) */
 #define TLN_RENAME_PLAYLIST 5 /* the shown playlist */
 #define TLN_DELETE_PLAYLIST 6
+/* Sent likewise when the user closes the pane, with its close button or Escape. */
+#define TLN_CLOSE 7
 
 typedef struct track_list_request {
   char track_uid[MC_UID_STRLEN];
@@ -51,6 +55,10 @@ void track_list_update(UINT dpi);
 /* Shows an album's tracks, or a playlist's, or nothing for a NULL uid. Showing the same
  * one again reloads it (after an import, say), keeping the selection and scroll position. */
 void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist);
+/* The header's details for the album shown: its artist (NULL shows "Unknown Artist"), year
+ * (0 if unknown) and the folder holding its cover (NULL if there's none). Call after
+ * track_list_show. A playlist's header shows "Playlist" for the artist. */
+void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover_dir);
 
 /* The shown tracks, in order, for the play queue. Valid until the list next changes. */
 typedef struct track_list_item {
