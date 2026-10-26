@@ -30,3 +30,28 @@ BEGIN
   DEFPUSHBUTTON   "Apply Match", IDOK, 413, 319, 60, 15
   PUSHBUTTON      "Cancel", IDCANCEL, 478, 319, 55, 15
 END
+
+/* New Playlist and Rename Playlist (playlist_dialogs.c): the caption and the OK button's
+ * label are set at run time. */
+IDD_PLAYLIST_NAME DIALOGEX 0, 0, 230, 70
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Playlist"
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "Name", IDC_PL_LABEL, 7, 9, 216, 9, SS_NOPREFIX
+  EDITTEXT        IDC_PL_NAME, 7, 20, 216, 14, ES_AUTOHSCROLL
+  DEFPUSHBUTTON   "OK", IDOK, 113, 48, 52, 15
+  PUSHBUTTON      "Cancel", IDCANCEL, 171, 48, 52, 15
+END
+
+/* Delete Playlist: the heading names the playlist. Cancel is the default. */
+IDD_PLAYLIST_DELETE DIALOGEX 0, 0, 230, 70
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Delete Playlist"
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_HEADING, 7, 8, 216, 12, SS_NOPREFIX | SS_ENDELLIPSIS
+  LTEXT           "Its tracks stay in the library.", IDC_PL_NOTE, 7, 24, 216, 9, SS_NOPREFIX
+  PUSHBUTTON      "Delete", IDOK, 113, 48, 52, 15
+  DEFPUSHBUTTON   "Cancel", IDCANCEL, 171, 48, 52, 15
+END

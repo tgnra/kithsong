@@ -1,13 +1,18 @@
-/* The track list: the selected album's tracks, in a pane beside the album grid.
+/* The track list: the selected album's or playlist's tracks, in a pane beside the grid.
  *
- *   Album Title
+ *   Album Title                     [...]   <- the playlist menu, for playlists only
  *   12 tracks · 47 min
  *   ----------------------------------
  *    1   Airbag                   4:44
  *   >)   Paranoid Android         6:23   <- playing, in the accent colour
  *
- * Track numbers and durations are secondary text. Clicking selects a track; double-clicking
- * or Enter plays it. Right-click (or the menu key) opens a menu for the track.
+ * Track numbers and durations are secondary text; in a playlist the numbers count its
+ * places. Clicking selects a track; double-clicking or Enter plays it. Right-click (or the
+ * menu key) opens a menu for the track: Add to Playlist (add_to_playlist.c), and in a
+ * playlist also Move Up, Move Down and Remove from Playlist. A playlist's tracks can be
+ * dragged into another order too, or moved with Alt+Up and Alt+Down; Delete removes one.
+ * The [...] button (or F2, or the menu key with no track selected) offers Rename... and
+ * Delete Playlist....
  */
 #ifndef MUSICAPP_TRACK_LIST_H
 #define MUSICAPP_TRACK_LIST_H
@@ -16,8 +21,26 @@
 
 #include "musiccore/musiccore.h"
 
-/* Sent to the parent as a WM_COMMAND notification code when the user plays a track. */
+/* Sent to the parent as WM_COMMAND notification codes. TLN_PLAY: the user plays a track
+ * (see track_list_play_index). The others ask the parent to change the library; the list
+ * changes nothing itself. The parent does it, then reloads the list with track_list_show.
+ * track_list_last_request has the details. */
 #define TLN_PLAY 1
+#define TLN_ADD_TO_PLAYLIST 2 /* track_uid, to the end of playlist_uid ("" = a new playlist) */
+#define TLN_REMOVE 3          /* entry_uid, out of the shown playlist */
+#define TLN_MOVE 4            /* entry_uid, to after after_uid ("" = to the start) */
+#define TLN_RENAME_PLAYLIST 5 /* the shown playlist */
+#define TLN_DELETE_PLAYLIST 6
+
+typedef struct track_list_request {
+  char track_uid[MC_UID_STRLEN];
+  char entry_uid[MC_UID_STRLEN];
+  char after_uid[MC_UID_STRLEN];
+  char playlist_uid[MC_UID_STRLEN];
+} track_list_request;
+
+/* The request the last notification was for. */
+const track_list_request *track_list_last_request(void);
 
 /* Creates the list as a child of parent. Only one exists at a time. */
 HWND track_list_create(HWND parent, int id);
@@ -25,16 +48,18 @@ HWND track_list_create(HWND parent, int id);
 /* Rebuilds fonts and metrics. Call after creating it, and on DPI or theme changes. */
 void track_list_update(UINT dpi);
 
-/* Shows an album's tracks, or nothing for a NULL album_uid. Showing the same album again
- * reloads it (after an import, say), keeping the selection and scroll position. */
-void track_list_show(mc_library *lib, const char *album_uid, const wchar_t *title);
+/* Shows an album's tracks, or a playlist's, or nothing for a NULL uid. Showing the same
+ * one again reloads it (after an import, say), keeping the selection and scroll position. */
+void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist);
 
-/* The shown album's tracks, in order, for the play queue. Valid until the list next changes. */
+/* The shown tracks, in order, for the play queue. Valid until the list next changes. */
 typedef struct track_list_item {
   const char *uid;
   const wchar_t *title;
-  int duration_ms; /* 0 if unknown */
-  const char *path; /* UTF-8; NULL if the track has no file on this device */
+  const wchar_t *artist, *album; /* NULL if unknown */
+  const wchar_t *cover_dir;      /* the album folder, or NULL if it has no cover */
+  int duration_ms;               /* 0 if unknown */
+  const char *path;              /* UTF-8; NULL if the track has no file on this device */
 } track_list_item;
 int track_list_count(void);
 track_list_item track_list_item_at(int i);

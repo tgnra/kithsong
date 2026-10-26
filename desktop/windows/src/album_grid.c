@@ -27,6 +27,7 @@ typedef struct tile {
   wchar_t *title;
   wchar_t *artist;    /* NULL if unknown */
   wchar_t *cover_dir; /* NULL when the album has no cover */
+  wchar_t sub[32];    /* beneath the title: a playlist's track count; "" for albums */
   HBITMAP thumb;      /* premultiplied, with rounded corners */
   const uint32_t *pixels;
   int thumb_size;
@@ -50,7 +51,8 @@ typedef struct thumb_result {
 static struct {
   HWND wnd;
   mc_library *lib;
-  BOOL dirty; /* reload when next shown */
+  BOOL dirty;     /* reload when next shown */
+  BOOL playlists; /* showing playlists rather than albums */
   tile *tiles;
   int count;
   UINT gen; /* bumped on every reload, so late thumbnails for old tiles are dropped */
@@ -179,7 +181,7 @@ static void relayout(void) {
   SelectObject(dc, old);
   ReleaseDC(g.wnd, dc);
   g.text_h = tm.tmHeight;
-  g.row_h = g.tile_w + g.text_gap + g.text_h + g.gap;
+  g.row_h = g.tile_w + g.text_gap + g.text_h * (g.playlists ? 2 : 1) + g.gap; /* playlists: the count too */
 
   int rows = (g.count + g.cols - 1) / g.cols;
 
@@ -298,14 +300,6 @@ const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]) {
   return g.tiles[g.selected].title;
 }
 
-const wchar_t *album_grid_selection_artist(void) {
-  return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].artist : NULL;
-}
-
-const wchar_t *album_grid_selection_cover(void) {
-  return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].cover_dir : NULL;
-}
-
 static void clear_tiles(void) {
   for (int i = 0; i < g.count; i++) {
     free_thumb(&g.tiles[i]);
@@ -317,24 +311,57 @@ static void clear_tiles(void) {
   g.count = 0;
 }
 
-static void reload(void) {
-  g.dirty = FALSE;
+/* The albums' tiles, into tiles and dirs (n of each). */
+static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
   mc_album_list *list = NULL;
   if (g.lib) mc_library_list_albums(g.lib, &list);
-  int n = list ? list->count : 0;
-  tile *tiles = n ? calloc((size_t)n, sizeof *tiles) : NULL;
-  wchar_t **dirs = n ? calloc((size_t)n, sizeof *dirs) : NULL;
-  if (n && (!tiles || !dirs)) n = 0;
-  int selected = -1;
-  for (int i = 0; i < n; i++) {
+  *n = list ? list->count : 0;
+  *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
+  *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL;
+  if (*n && (!*tiles || !*dirs)) *n = 0;
+  for (int i = 0; i < *n; i++) {
     const mc_album_info *a = &list->items[i];
-    memcpy(tiles[i].uid, a->uid, sizeof tiles[i].uid);
-    tiles[i].title = widen(a->title && *a->title ? a->title : "Untitled");
-    tiles[i].artist = a->artist && *a->artist ? widen(a->artist) : NULL;
-    tiles[i].cover_dir = dirs[i] = a->has_art ? widen(a->folder) : NULL;
-    if (g.selected_uid[0] && !strcmp(a->uid, g.selected_uid)) selected = i;
+    tile *t = &(*tiles)[i];
+    memcpy(t->uid, a->uid, sizeof t->uid);
+    t->title = widen(a->title && *a->title ? a->title : "Untitled");
+    t->artist = a->artist && *a->artist ? widen(a->artist) : NULL;
+    t->cover_dir = (*dirs)[i] = a->has_art ? widen(a->folder) : NULL;
   }
   mc_album_list_free(list);
+}
+
+/* The playlists' tiles: no cover, and the track count beneath the name. */
+static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
+  mc_playlist_list *list = NULL;
+  if (g.lib) mc_library_list_playlists(g.lib, &list);
+  *n = list ? list->count : 0;
+  *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
+  *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL; /* all NULL: nothing to load */
+  if (*n && (!*tiles || !*dirs)) *n = 0;
+  for (int i = 0; i < *n; i++) {
+    const mc_playlist_info *p = &list->items[i];
+    tile *t = &(*tiles)[i];
+    memcpy(t->uid, p->uid, sizeof t->uid);
+    t->title = widen(p->name && *p->name ? p->name : "Untitled");
+    swprintf(t->sub, sizeof t->sub / sizeof t->sub[0], L"%d %ls", p->track_count,
+             p->track_count == 1 ? L"track" : L"tracks");
+  }
+  mc_playlist_list_free(list);
+}
+
+static void reload(void) {
+  g.dirty = FALSE;
+  tile *tiles;
+  wchar_t **dirs;
+  int n;
+  if (g.playlists) read_playlists(&tiles, &dirs, &n);
+  else read_albums(&tiles, &dirs, &n);
+  int selected = -1;
+  for (int i = 0; i < n; i++)
+    if (g.selected_uid[0] && !strcmp(tiles[i].uid, g.selected_uid)) selected = i;
+  /* A renamed selection is news too: the track list shows its name. */
+  BOOL renamed = selected >= 0 && g.selected >= 0 && g.selected < g.count && g.tiles[g.selected].title &&
+                 tiles[selected].title && wcscmp(tiles[selected].title, g.tiles[g.selected].title) != 0;
 
   /* Swap in the new data; the loader's snapshot of folders changes under the lock. */
   clear_tiles();
@@ -354,11 +381,29 @@ static void reload(void) {
   if (selected < 0 && g.selected_uid[0]) { /* the selected album went */
     g.selected_uid[0] = '\0';
     notify_selection();
+  } else if (renamed) {
+    notify_selection();
   }
 
   relayout();
   request_thumbs();
   InvalidateRect(g.wnd, NULL, FALSE);
+}
+
+void album_grid_show_playlists(BOOL playlists) {
+  if (!playlists == !g.playlists) return;
+  BOOL had = g.selected_uid[0] != '\0';
+  g.playlists = playlists;
+  g.selected = g.hot = -1;
+  g.selected_uid[0] = '\0';
+  g.scroll.pos = g.scroll.target = 0;
+  g.dirty = TRUE;
+  if (g.wnd) InvalidateRect(g.wnd, NULL, FALSE);
+  if (had) notify_selection();
+}
+
+BOOL album_grid_showing_playlists(void) {
+  return g.playlists;
 }
 
 void album_grid_set_library(mc_library *lib) {
@@ -373,7 +418,8 @@ void album_grid_set_library(mc_library *lib) {
 static void tile_rects(int i, RECT *art, RECT *text, RECT *outer) {
   int x = g.pad + (i % g.cols) * (g.tile_w + g.gap), y = g.pad + (i / g.cols) * g.row_h - g.scroll.pos;
   SetRect(art, x, y, x + g.tile_w, y + g.tile_w);
-  SetRect(text, x, art->bottom + g.text_gap, x + g.tile_w, art->bottom + g.text_gap + g.text_h);
+  SetRect(text, x, art->bottom + g.text_gap, x + g.tile_w,
+          art->bottom + g.text_gap + g.text_h * (g.playlists ? 2 : 1));
   SetRect(outer, x, y, x + g.tile_w, text->bottom);
   InflateRect(outer, scale(HOVER_PAD), scale(HOVER_PAD));
 }
@@ -463,12 +509,19 @@ static void paint_tile(canvas *c, int i) {
     if (!t->cover_dir || t->failed) {
       HGDIOBJ f = SelectObject(c->dc, g.glyph_font);
       SetTextColor(c->dc, theme.text3);
-      DrawTextW(c->dc, L"\xE8D6", -1, &art, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); /* music note */
+      const wchar_t *glyph = g.playlists ? L"\xE90B" : L"\xE8D6"; /* the sidebar's Playlists icon, or a note */
+      DrawTextW(c->dc, glyph, -1, &art, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
       SelectObject(c->dc, f);
     }
   }
+  RECT line = {text.left, text.top, text.right, text.top + g.text_h};
   SetTextColor(c->dc, theme.text);
-  DrawTextW(c->dc, t->title, -1, &text, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+  DrawTextW(c->dc, t->title, -1, &line, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+  if (t->sub[0]) {
+    OffsetRect(&line, 0, g.text_h);
+    SetTextColor(c->dc, theme.text2);
+    DrawTextW(c->dc, t->sub, -1, &line, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+  }
 }
 
 /* Everything is drawn into a canvas, then copied in one go. GDI text leaves alpha at 0, so
@@ -483,8 +536,15 @@ static void paint(HDC dc, const RECT *dirty) {
   if (g.count == 0) {
     RECT rc = {0, 0, g.client_w, g.client_h};
     SetTextColor(c->dc, theme.text3);
-    DrawTextW(c->dc, g.lib ? L"No albums yet. Use Import to add music." : L"Could not open the library.",
-              -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    const wchar_t *empty = !g.lib         ? L"Could not open the library."
+                           : g.playlists ? L"No playlists yet. Right-click a track and choose Add to Playlist to start one."
+                                         : L"No albums yet. Use Import to add music.";
+    /* Wrapped if need be, and centred as a block. */
+    InflateRect(&rc, -g.pad, 0);
+    RECT fit_rc = rc;
+    DrawTextW(c->dc, empty, -1, &fit_rc, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+    OffsetRect(&rc, 0, (g.client_h - (fit_rc.bottom - fit_rc.top)) / 2);
+    DrawTextW(c->dc, empty, -1, &rc, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
   } else {
     int first, last;
     visible_range(&first, &last);

@@ -3,6 +3,7 @@
 ## Playlists
 
 - Linux - playlist cover art (a placeholder for now)
+- Windows - playlist cover art (a placeholder for now)
 - Linux - keyboard access to the track menu (Menu key, Shift+F10)
 
 ## Album Groups

@@ -23,9 +23,11 @@
  * through the extended frame. Everything drawn there needs real alpha, which GDI doesn't
  * give, so it's drawn with canvas.c.
  *
- * The album grid is album_grid.c, the sidebar sidebar.c, the track list track_list.c and
- * the seekbar beside the playback buttons now_playing.c. The toolbar buttons are owner-drawn
- * here.
+ * The album grid is album_grid.c (which also shows the playlists, on the Playlists page), the
+ * sidebar sidebar.c, the track list track_list.c and the seekbar beside the playback buttons
+ * now_playing.c. The track list's Add to Playlist menu is add_to_playlist.c, and the New,
+ * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
+ * changes and they're made here. The toolbar buttons are owner-drawn here.
  */
 #include <windows.h>
 #include <windowsx.h>
@@ -39,6 +41,7 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "add_to_playlist.h"
 #include "album_grid.h"
 #include "canvas.h"
 #include "import_view.h"
@@ -46,6 +49,7 @@
 #include "now_playing.h"
 #include "pick_folder.h"
 #include "playback.h"
+#include "playlist_dialogs.h"
 #include "settings_view.h"
 #include "sidebar.h"
 #include "theme.h"
@@ -141,7 +145,8 @@ static void update_font(void) {
   g_app.font = font;
 }
 
-/* Albums, Artists and Playlists all show the album grid for now. */
+/* Albums, Artists and Playlists all show the album grid: Playlists with the playlists in
+ * it, the others the albums for now. */
 static BOOL library_page(void) {
   return g_app.page != PAGE_IMPORT && g_app.page != PAGE_SETTINGS;
 }
@@ -218,16 +223,18 @@ static void paint_background(HDC dc, const RECT *area) {
 static void show_page(sidebar_page page) {
   g_app.page = page;
   sidebar_select(page);
+  if (library_page()) album_grid_show_playlists(page == PAGE_PLAYLISTS);
   import_view_show(page == PAGE_IMPORT);
   settings_view_show(page == PAGE_SETTINGS);
   layout();
 }
 
-/* Shows the selected album's tracks, or hides the track list when no album is selected. */
+/* Shows the selected album's or playlist's tracks, or hides the track list when none is
+ * selected. */
 static void show_album(void) {
   char uid[MC_UID_STRLEN];
   const wchar_t *title = album_grid_selection(uid);
-  track_list_show(g_app.lib, title ? uid : NULL, title);
+  track_list_show(g_app.lib, title ? uid : NULL, title, album_grid_showing_playlists());
   if (g_app.show_tracks != (title != NULL)) {
     g_app.show_tracks = title != NULL;
     layout();
@@ -332,20 +339,17 @@ static void create_controls(void) {
   settings_view_set_library_dir(mc_settings_library_dir(g_app.settings));
 }
 
-/* Plays the shown album, from track start on. Tracks with no file on this device are left
- * out of the queue. */
+/* Plays the shown album or playlist in order, from track start on. Tracks with no file on
+ * this device are left out of the queue. */
 static void play_album(int start) {
   int n = track_list_count(), count = 0, first = 0;
   playback_track *queue = n ? calloc((size_t)n, sizeof *queue) : NULL;
   if (!queue) return;
-  char uid[MC_UID_STRLEN];
-  const wchar_t *album = album_grid_selection(uid), *artist = album_grid_selection_artist();
-  const wchar_t *cover = album_grid_selection_cover();
   for (int i = 0; i < n; i++) {
     track_list_item t = track_list_item_at(i);
     if (!t.path) continue;
     if (i <= start) first = count;
-    queue[count++] = (playback_track){t.uid, t.path, t.title, artist, album, cover, t.duration_ms};
+    queue[count++] = (playback_track){t.uid, t.path, t.title, t.artist, t.album, t.cover_dir, t.duration_ms};
   }
   if (count) playback_play(queue, count, first);
   free(queue);
@@ -359,6 +363,37 @@ static void playback_changed(void) {
   TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)play, .lpszText = (wchar_t *)label};
   SendMessageW(g_app.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
   InvalidateRect(play, NULL, FALSE);
+}
+
+/* The track list's requests to change a playlist (see track_list.h). */
+static void on_track_request(int code) {
+  const track_list_request *req = track_list_last_request();
+  char uid[MC_UID_STRLEN];
+  const wchar_t *name = album_grid_selection(uid); /* the shown playlist */
+  BOOL changed = FALSE;
+  switch (code) {
+    case TLN_ADD_TO_PLAYLIST:
+      changed = add_to_playlist(g_app.wnd, g_app.lib, req->track_uid, req->playlist_uid[0] ? req->playlist_uid : NULL);
+      break;
+    case TLN_REMOVE:
+      changed = mc_playlist_remove(g_app.lib, req->entry_uid) == MC_OK;
+      if (!changed) MessageBoxW(g_app.wnd, L"Couldn't remove the track.", L"Playlist", MB_OK | MB_ICONERROR);
+      break;
+    case TLN_MOVE:
+      changed = mc_playlist_move(g_app.lib, req->entry_uid, req->after_uid[0] ? req->after_uid : NULL) == MC_OK;
+      if (!changed) MessageBoxW(g_app.wnd, L"Couldn't move the track.", L"Playlist", MB_OK | MB_ICONERROR);
+      break;
+    case TLN_RENAME_PLAYLIST:
+      if (name && !strcmp(uid, req->playlist_uid)) changed = playlist_rename_dialog(g_app.wnd, g_app.lib, uid, name);
+      break;
+    case TLN_DELETE_PLAYLIST:
+      if (name && !strcmp(uid, req->playlist_uid)) changed = playlist_delete_dialog(g_app.wnd, g_app.lib, uid, name);
+      break;
+  }
+  if (changed) {
+    refresh_library();
+    UpdateWindow(g_app.grid); /* reload the grid now: a deleted playlist's tracks go at once */
+  }
 }
 
 static void on_command(int id, int code) {
@@ -380,6 +415,7 @@ static void on_command(int id, int code) {
       break;
     case ID_TRACKS:
       if (code == TLN_PLAY) play_album(track_list_play_index());
+      else on_track_request(code);
       break;
     case ID_NOW_PLAYING:
       if (code == NPN_SEEK) playback_seek(now_playing_position());

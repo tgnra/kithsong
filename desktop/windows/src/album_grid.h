@@ -1,4 +1,5 @@
-/* The album grid: cover art with the album title beneath, in as many columns as fit.
+/* The album grid: cover art with the album title beneath, in as many columns as fit. The
+ * same grid shows the playlists on the Playlists page.
  *
  * Built for large libraries:
  *  - virtualised: only the tiles in view are painted, into an off-screen buffer.
@@ -27,17 +28,18 @@ HWND album_grid_create(HWND parent, int id);
  * an import) costs nothing. Call it again whenever the library changes. */
 void album_grid_set_library(mc_library *lib);
 
+/* Switches the grid between the albums and the playlists (a placeholder for the cover, and
+ * the track count beneath the name). Switching drops the selection. */
+void album_grid_show_playlists(BOOL playlists);
+BOOL album_grid_showing_playlists(void);
+
 /* Sent to the parent as a WM_COMMAND notification code (posted) when the selected album
- * changes, by a click or because it left the library. */
+ * changes, by a click or because it left the library, or when it was renamed. */
 #define AGN_SELCHANGE 1
 
-/* The selected album: copies its uid and returns its title, or returns NULL if there's none. */
+/* The selected album (or playlist): copies its uid and returns its title, or returns NULL
+ * if there's none. */
 const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]);
-/* The selected album's artist, or NULL. Valid until the grid next reloads. */
-const wchar_t *album_grid_selection_artist(void);
-/* The folder holding the selected album's cover, or NULL if it has none (or none is
- * selected). Valid until the grid next reloads. */
-const wchar_t *album_grid_selection_cover(void);
 
 /* Sizes the tiles for a grid full_w wide, even while it's narrower, so a pane beside it
  * that comes and goes takes whole columns without resizing the tiles. Returns the width the

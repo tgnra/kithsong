@@ -13,4 +13,12 @@
 #define IDC_REV_ASIS 1008
 #define IDC_REV_SKIP 1009
 
+/* The playlist dialogs, playlist_dialogs.c. */
+#define IDD_PLAYLIST_NAME 101
+#define IDD_PLAYLIST_DELETE 102
+#define IDC_PL_LABEL 1101
+#define IDC_PL_NAME 1102
+#define IDC_PL_HEADING 1103
+#define IDC_PL_NOTE 1104
+
 #endif
