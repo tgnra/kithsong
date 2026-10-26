@@ -132,6 +132,8 @@ static void test_migration_v4(const char *scratch) {
   CHECK(exec(db, "CREATE TABLE peers (uid TEXT PRIMARY KEY) WITHOUT ROWID;"
                  "ALTER TABLE files DROP COLUMN sha256;"
                  "DELETE FROM meta WHERE key = 'library_uid';"
+                 "DROP TABLE album_group_entries;"
+                 "DROP TABLE album_groups;"
                  "PRAGMA user_version = 3;") == SQLITE_OK);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
@@ -144,12 +146,55 @@ static void test_migration_v4(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 4);
+  CHECK(mc_library_schema_version(lib) == 5);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
   CHECK(has_column(db, "files", "sha256"));
   CHECK(strlen(mc_library_uid(lib)) == MC_UID_STRLEN - 1);
   CHECK(query_int(db, "SELECT count(*) FROM meta WHERE key = 'library_uid'") == 1);
   CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
+  mc_library_close(lib);
+}
+
+/* Migration v5: album groups. Their changes are logged like playlists', and deleting a group
+ * or an album takes its entries with it. */
+static void test_migration_v5(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v5.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "DROP TABLE album_group_entries;"
+                 "DROP TABLE album_groups;"
+                 "PRAGMA user_version = 4;") == SQLITE_OK);
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 5);
+  CHECK(has_column(db, "album_groups", "name"));
+  CHECK(has_column(db, "album_group_entries", "position"));
+
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('a1', 'Avalon'), ('a2', 'Siren');"
+                 "INSERT INTO album_groups (uid, name) VALUES ('g1', 'Roxy Music');"
+                 "INSERT INTO album_group_entries (uid, group_uid, album_uid, position)"
+                 "  VALUES ('e1', 'g1', 'a1', 'a0'), ('e2', 'g1', 'a2', 'a1');") == SQLITE_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'album_groups'"
+                      " AND row_uid = 'g1' AND field = 'name'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'album_group_entries'"
+                      " AND row_uid = 'e1'") == 3);
+
+  /* Deleting an album removes it from its groups, and the removal is logged. */
+  CHECK(exec(db, "DELETE FROM albums WHERE uid = 'a1'") == SQLITE_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM album_group_entries") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'album_group_entries'"
+                      " AND row_uid = 'e1' AND field = '_deleted'") == 1);
+  CHECK(exec(db, "DELETE FROM album_groups WHERE uid = 'g1'") == SQLITE_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM album_group_entries") == 0);
   mc_library_close(lib);
 }
 
@@ -168,7 +213,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 4);
+  CHECK(mc_library_schema_version(lib) == 5);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -248,7 +293,7 @@ int main(int argc, char **argv) {
   if (lib) {
     CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
     CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
-    CHECK(mc_library_schema_version(lib) == 4);
+    CHECK(mc_library_schema_version(lib) == 5);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }
@@ -279,5 +324,6 @@ int main(int argc, char **argv) {
 
   test_identity(argc > 1 ? argv[1] : ".");
   test_migration_v4(argc > 1 ? argv[1] : ".");
+  test_migration_v5(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();
 }

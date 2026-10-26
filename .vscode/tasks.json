@@ -7,6 +7,10 @@
   // Linux build tasks. Run everything inside the flake's dev shell (`nix develop`), which
   // provides CMake, Ninja, GTK4, libadwaita and gdb. Ctrl+Shift+B runs `windows: build`;
   // on Linux use Tasks: Run Task -> `linux: build`.
+  //
+  // Wear OS tasks (Linux). android/scripts/android.sh finds the JDK and the emulator's
+  // libraries through Android Studio; `wear: run` boots the Wear_OS_Small_Round AVD unless it
+  // is already running (e.g. started from Studio's Device Manager).
   "version": "2.0.0",
   "windows": {
     "options": {
@@ -100,6 +104,34 @@
       "command": "nix",
       "args": ["develop", "-c", "${workspaceFolder}/build/linux-gtk/core/tests/manual_mb_ping"],
       "dependsOn": "linux: build",
+      "problemMatcher": []
+    },
+    {
+      "label": "wear: build",
+      "type": "shell",
+      "command": "${workspaceFolder}/android/scripts/android.sh",
+      "args": ["gradle", ":wear:assembleDebug"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "wear: emulator",
+      "type": "shell",
+      "command": "${workspaceFolder}/android/scripts/android.sh",
+      "args": ["emulator", "Wear_OS_Small_Round"],
+      "problemMatcher": []
+    },
+    {
+      "label": "wear: run",
+      "type": "shell",
+      "command": "${workspaceFolder}/android/scripts/android.sh",
+      "args": [
+        "run",
+        "Wear_OS_Small_Round",
+        "${workspaceFolder}/android/wear/build/outputs/apk/debug/wear-debug.apk",
+        "app.musicapp/app.musicapp.wear.MainActivity"
+      ],
+      "dependsOn": "wear: build",
       "problemMatcher": []
     }
   ]

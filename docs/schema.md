@@ -10,6 +10,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 2 | singles: `albums.kind`, `tracks.year`, `tracks.mb_albumid` |
 | 3 | `tracks.added_ms`, `track_plays` |
 | 4 | `files.sha256`, `meta.library_uid`; `peers` dropped (sync data lives in `sync.db`) |
+| 5 | `album_groups`, `album_group_entries` |
 
 ## Location
 
@@ -63,6 +64,14 @@ own row (`node_uid` is that device) and only ever updates that one, so field-lev
 lose plays made on two devices: no two devices ever write the same field. Rows are deleted
 with their track.
 
+## Album groups
+
+An album group is a named, ordered list of albums: a playlist whose entries are albums
+instead of tracks. `album_group_entries` works like `playlist_entries` (one row per entry,
+ordered by `(position, uid)`), so concurrent edits merge the same way. Deleting an album
+removes it from every group, and deleting a group removes its entries; the albums
+themselves are untouched.
+
 ## Tables
 
 | Table              | Synced | Notes |
@@ -73,6 +82,8 @@ with their track.
 | `track_plays`      | yes    | play counts, one row per track per device; see [Play counts](#play-counts) |
 | `playlists`        | yes    | |
 | `playlist_entries` | yes    | ordered by the fractional-index string `position` |
+| `album_groups`     | yes    | playlists of albums; see [Album groups](#album-groups) |
+| `album_group_entries` | yes | ordered by `position`, like `playlist_entries` |
 | `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it |
 | `changelog`        | -      | field-level change log that sync is built on |
 | `meta`             | no     | `node_uid`, `library_uid` and other per-library settings; see [Identity](#identity) |

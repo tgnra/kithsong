@@ -1,30 +1,59 @@
 # Todo
 
-## Windows
+## Playlists
 
-- Playlists
-- Volume controls
+- Add UI to add to playlist and add playlists
+- Add UI to list playlists
+- Add to core ability to play playlists in order
 
-## Core
+## Album Groups
 
-- Smart Playlists
-- Sync - discovery
-- Sync - transcoding - estimate size of library given transcoding options
-- Sync - syncing
-- Sync - selective sync? sync albums, album collections, playlists
-- Search - fuzzy, rank by best match
-- Album collections! And smart album collections
-- Suggestions - build mixes dynamically
-- Set sync settings on any device - 
-- Library management - detect orphaned files, automatically organise library files
-- Last.fm scrobbling!!
-- Playback - Ogg Vorbis
+- Add UI to show Album Groups
+- Add UI to browse an Album Group - the grid
+
+## Smart Playlists/Groups
+
+- Core - rulesets that define these - most/least played, recently added, anything else?
+
+## Artists View
+
+ - List of Artists - toggle for album artist/ artist?
+
+## Sync
+
+- UI to do selective sync
+- Original file tags - if I add flacs on my phone which is set to sync opus - those files are originals. When syncing with an archive, sync them to the archive and then delete and sync back opus of those files.
+
+## Other
+
+- Last.fm scrobbler
 - Playback - AAC/M4A - pick a decoder: the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
+- Volume control
+- Spacebar to play/pause
+- Linux - fix animation jitter on album grid
+- Recents list above devices
 
-## Linux
+## Wear OS
+
+- Playback - a foreground MediaSessionService, so the system doesn't kill playback in the background and the watch's media controls work
+- Playback - route to Bluetooth headphones and prompt to connect them, rather than the watch speaker
+- Playback - progress and seeking on the player screen
+- Playback - a way back to the player from the home screen
+- Artists view
+- Playlists
+- Sync - drive the sync screen from the core instead of SampleSync
+- Sync - request a Wi-Fi network while syncing; Wear OS keeps Wi-Fi off while the phone is connected over Bluetooth
+- Sync - sync in the background, not only while the sync screen is open
+- Settings
 
 ## Android
 
-- Storage - in app
-
-## Wear OS
+- Main UI has a big list of 
+    - Recents
+    - Playlists
+    - Albums
+    - Artists
+- Clicking the header allows you to jump to each
+- Playback controls at the bottom
+- Sync and settings right at the top in the header?
+    - Make the header not sticky so that album art shows near the camera cut out
