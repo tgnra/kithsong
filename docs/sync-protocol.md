@@ -171,7 +171,8 @@ A device joining with an empty library adopts the group's `library_uid` through
   both keep their edit. This applies equally to library and group data.
 - **Deletes** are `_deleted` changes. A delete wins over a concurrent edit only if it has the
   higher hlc. Tombstones are kept until every group member has acknowledged them.
-- **Sets** (`profile_items`, `playlist_entries`) are one row per member, so concurrent adds
+- **Sets** (`profile_items`, `playlist_entries`, `album_group_entries`) are one row per
+  member, so concurrent adds
   and removes on two devices both apply.
 - **Playlist order:** entries carry a fractional-index `position`. Inserting between A and B
   generates a key strictly between theirs, plus a random suffix so concurrent inserts don't
@@ -247,8 +248,8 @@ the plaintext limit.
 
 - The **wanted set** for a device is:
   - mode `all`: every track;
-  - mode `selected`: the tracks of the selected albums ∪ the entries of the selected
-    playlists.
+  - mode `selected`: the tracks of the selected albums ∪ the tracks of the albums in the
+    selected album groups ∪ the entries of the selected playlists.
 
   Selections that name a uid the library doesn't have are skipped.
 - **Target format** per track: `original`, or Opus at the profile's bitrate. A lossy

@@ -54,12 +54,12 @@ CREATE TABLE profiles (
 ) WITHOUT ROWID;
 
 -- A profile's selection while its mode is 'selected'. Adding is an insert and removing a
--- delete, so concurrent edits on two devices both apply. ref_uid is an album or playlist
--- uid in the library; it may name one that no longer exists, which is skipped.
+-- delete, so concurrent edits on two devices both apply. ref_uid is an album, album group or
+-- playlist uid in the library; it may name one that no longer exists, which is skipped.
 CREATE TABLE profile_items (
   uid        TEXT PRIMARY KEY,
   device_uid TEXT NOT NULL,
-  kind       TEXT NOT NULL,     -- 'album' or 'playlist'
+  kind       TEXT NOT NULL,     -- 'album', 'album_group' or 'playlist'
   ref_uid    TEXT NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX profile_items_device ON profile_items (device_uid);

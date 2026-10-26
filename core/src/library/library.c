@@ -33,6 +33,20 @@ static const char *const k_migrations[] = {
    * library's own identity, meta.library_uid, is created in C at open (see load_meta_uid). */
   "DROP TABLE peers;"
   "ALTER TABLE files ADD COLUMN sha256 TEXT;",
+  /* v5: album groups, playlists of albums. Entries are ordered by fractional index like
+   * playlist_entries, so concurrent edits on two devices merge the same way. */
+  "CREATE TABLE album_groups ("
+  "  uid  TEXT PRIMARY KEY,"
+  "  name TEXT NOT NULL"
+  ") WITHOUT ROWID;"
+  "CREATE TABLE album_group_entries ("
+  "  uid       TEXT PRIMARY KEY,"
+  "  group_uid TEXT NOT NULL REFERENCES album_groups (uid) ON DELETE CASCADE,"
+  "  album_uid TEXT NOT NULL REFERENCES albums (uid) ON DELETE CASCADE,"
+  "  position  TEXT NOT NULL"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX album_group_entries_order ON album_group_entries (group_uid, position, uid);"
+  "CREATE INDEX album_group_entries_album ON album_group_entries (album_uid);",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -48,6 +62,8 @@ static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "
 static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", NULL};
 static const char *const k_playlist_cols[] = {"name", NULL};
 static const char *const k_entry_cols[] = {"playlist_uid", "track_uid", "position", NULL};
+static const char *const k_group_cols[] = {"name", NULL};
+static const char *const k_group_entry_cols[] = {"group_uid", "album_uid", "position", NULL};
 
 static const mc_changelog_table k_tracked[] = {
   {"artists", "uid", k_artist_cols},
@@ -56,6 +72,8 @@ static const mc_changelog_table k_tracked[] = {
   {"track_plays", "uid", k_play_cols},
   {"playlists", "uid", k_playlist_cols},
   {"playlist_entries", "uid", k_entry_cols},
+  {"album_groups", "uid", k_group_cols},
+  {"album_group_entries", "uid", k_group_entry_cols},
 };
 
 /* --- Schema --- */
