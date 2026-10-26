@@ -12,7 +12,9 @@ add_executable(musicapp
   src/track_list.c
   src/import_view.c
   src/settings_view.c
-  src/add_device.c)
+  src/add_device.c
+  src/add_to_playlist.c
+  src/playlist_dialogs.c)
 target_link_libraries(musicapp PRIVATE musiccore PkgConfig::ADW m)
 musicapp_warnings(musicapp)
 # GLib's headers trip -Wconversion / -Wpedantic; keep warnings strict for our code only.

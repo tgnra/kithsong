@@ -6,15 +6,21 @@
  *      +- GtkStack of pages: "library" | "import" (import_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
  *            +- GtkStack: empty-state page | GtkGridView of albums (virtualised)
+ *                         | empty-state page | GtkGridView of playlists
  *
- * The album grid is album_grid.c, the track list track_list.c, the now-playing strip
- * now_playing.c, the player playback.c, the desktop's media controls mpris.c, the import
- * page import_view.c and the Settings dialog settings_view.c and the Add Device dialog add_device.c. The playback buttons are the app.previous, app.play-pause and app.next actions, so their
- * sensitivity follows the actions'.
+ * The album and playlist grids are album_grid.c, the track list track_list.c, the
+ * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
+ * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, the Add Device
+ * dialog add_device.c, the Add to Playlist dialog add_to_playlist.c and the Rename and
+ * Delete Playlist dialogs playlist_dialogs.c. The playback buttons
+ * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
+ * the actions'.
  */
 #include <adwaita.h>
+#include <math.h>
 
 #include "add_device.h"
+#include "add_to_playlist.h"
 #include "album_grid.h"
 #include "app.h"
 #include "cover.h"
@@ -23,6 +29,7 @@
 #include "musiccore/musiccore.h"
 #include "now_playing.h"
 #include "playback.h"
+#include "playlist_dialogs.h"
 #include "settings_view.h"
 #include "track_list.h"
 
@@ -31,6 +38,8 @@ static const char css[] =
   ".now-playing .album-cover { border-radius: 4px; }"
   ".album-grid { padding: 12px; }"
   ".album-grid > child { padding: 8px; border-radius: 12px; }"
+  ".track-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
+  ".track-list > row.drop-below { box-shadow: inset 0 -2px @accent_bg_color; }"
   ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }";
 
 static GtkWidget *play_button;
@@ -112,11 +121,20 @@ static gboolean on_close_request(GtkWindow *win, gpointer user) {
 
 /* --- Sidebar --- */
 
-/* Albums, Artists and Playlists all lead back to the library page, e.g. from Import. */
+static void show_album(app *a);
+
+/* Albums, Artists and Playlists all lead back to the library page, e.g. from Import.
+ * Playlists shows the playlist grid; the others the album grid. */
 static void on_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
   (void)list;
-  (void)row;
-  show_page(user, "library");
+  app *a = user;
+  gboolean playlists = gtk_list_box_row_get_index(row) == 2;
+  if (playlists != a->show_playlists) {
+    album_grid_unselect(playlists ? a->album_grid : a->playlist_grid);
+    a->show_playlists = playlists;
+    app_reload_library(a);
+  }
+  show_page(a, "library");
 }
 
 static GtkWidget *nav_row(const char *icon, const char *label) {
@@ -143,7 +161,7 @@ static void on_add_device(GtkButton *button, gpointer user) {
 static GtkWidget *build_sidebar(app *a) {
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
-  /* Albums, Artists and Playlists all show the album grid for now, as on Windows. */
+  /* Artists shows the album grid for now, as on Windows. */
   GtkWidget *nav = gtk_list_box_new();
   gtk_widget_add_css_class(nav, "navigation-sidebar");
   gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("media-optical-symbolic", "Albums"));
@@ -240,30 +258,33 @@ static void on_seek(void *user, int ms) {
   playback_seek(ms);
 }
 
-/* Plays the shown album, from track start on. Tracks with no file on this device are left
- * out of the queue. */
+/* Plays the shown album or playlist in order, from track start on. Tracks with no file on
+ * this device are left out of the queue. */
 void app_play_album(app *a, int start) {
   (void)a;
-  AlbumItem *album = track_list_album();
   int n = track_list_count(), count = 0, first = 0;
-  if (!album || !n) return;
+  if (!track_list_album() || !n) return;
   playback_track *queue = g_new0(playback_track, (gsize)n);
   for (int i = 0; i < n; i++) {
     track_list_item t = track_list_item_at(i);
     if (!t.path) continue;
     if (i <= start) first = count;
-    queue[count++] = (playback_track){t.uid, t.path, t.title, album->artist, album->title, album->cover_dir,
-                                      t.duration_ms};
+    queue[count++] = (playback_track){t.uid, t.path, t.title, t.artist, t.album, t.cover_dir, t.duration_ms};
   }
   if (count) playback_play(queue, count, first);
   g_free(queue);
 }
 
-/* --- Albums and tracks --- */
+/* --- Albums, playlists and tracks --- */
 
-/* Shows the selected album's tracks, or hides the track list when none is selected. */
+static GtkWidget *shown_grid(app *a) {
+  return a->show_playlists ? a->playlist_grid : a->album_grid;
+}
+
+/* Shows the selected album's or playlist's tracks, or hides the track list when none is
+ * selected. */
 static void show_album(app *a) {
-  AlbumItem *album = album_grid_selection();
+  AlbumItem *album = album_grid_selection(shown_grid(a));
   track_list_show(a->lib, album);
   adw_overlay_split_view_set_show_sidebar(a->album_split, album != NULL);
   update_buttons(a);
@@ -278,14 +299,133 @@ static void on_track_play(void *user, int index) {
 }
 
 static void on_tracks_close(void *user) {
-  album_grid_unselect();
+  album_grid_unselect(shown_grid(user));
   show_album(user);
 }
 
+static void on_playlists_changed(void *user) {
+  app_reload_library(user);
+}
+
+static void on_track_add_to_playlist(void *user, const char *track_uid) {
+  app *a = user;
+  add_to_playlist_present(GTK_WIDGET(a->win), a->lib, track_uid, on_playlists_changed, a);
+}
+
+static void playlist_failed(app *a, const char *heading) {
+  AdwDialog *alert = adw_alert_dialog_new(heading, NULL);
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", "Close");
+  adw_dialog_present(alert, GTK_WIDGET(a->win));
+}
+
+static void on_track_remove(void *user, const char *entry_uid) {
+  app *a = user;
+  if (mc_playlist_remove(a->lib, entry_uid) != MC_OK) playlist_failed(a, "Couldn't Remove the Track");
+  app_reload_library(a);
+}
+
+static void on_track_move(void *user, const char *entry_uid, const char *after_entry_uid) {
+  app *a = user;
+  if (mc_playlist_move(a->lib, entry_uid, after_entry_uid) != MC_OK) playlist_failed(a, "Couldn't Move the Track");
+  app_reload_library(a);
+}
+
+static void on_playlist_rename(void *user) {
+  app *a = user;
+  AlbumItem *playlist = track_list_album();
+  if (playlist && playlist->is_playlist)
+    playlist_rename_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+}
+
+static void on_playlist_delete(void *user) {
+  app *a = user;
+  AlbumItem *playlist = track_list_album();
+  if (playlist && playlist->is_playlist)
+    playlist_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+}
+
 void app_reload_library(app *a) {
-  int albums = album_grid_reload(a->lib);
-  gtk_stack_set_visible_child_name(a->albums, albums > 0 ? "grid" : "empty");
+  int albums = album_grid_reload(a->album_grid, a->lib);
+  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib);
+  const char *page = a->show_playlists ? (playlists > 0 ? "playlists" : "no-playlists")
+                                       : (albums > 0 ? "grid" : "empty");
+  gtk_stack_set_visible_child_name(a->albums, page);
   show_album(a); /* if the album went, the selection did too */
+}
+
+/* --- SteadyBin --- */
+
+/* Holds the album grids while the track list slides in and out. The split view shrinks its
+ * content a little each frame, which would reflow the grid every frame; this lays the child
+ * out at the width it will end at, at once, and clips what the sliding pane will cover. */
+#define STEADY_TYPE_BIN (steady_bin_get_type())
+G_DECLARE_FINAL_TYPE(SteadyBin, steady_bin, STEADY, BIN, GtkWidget)
+
+struct _SteadyBin {
+  GtkWidget parent;
+  GtkWidget *child;
+  AdwOverlaySplitView *split;
+};
+
+G_DEFINE_FINAL_TYPE(SteadyBin, steady_bin, GTK_TYPE_WIDGET)
+
+/* The content's width once the split view settles; mirrors its get_sidebar_width(). */
+static int steady_bin_target_width(SteadyBin *self, int width) {
+  GtkWidget *split = GTK_WIDGET(self->split);
+  int split_width = gtk_widget_get_width(split);
+  if (adw_overlay_split_view_get_collapsed(self->split)) return width; /* the pane overlays */
+  if (!adw_overlay_split_view_get_show_sidebar(self->split)) return split_width;
+
+  GtkSettings *settings = gtk_widget_get_settings(split);
+  AdwLengthUnit unit = adw_overlay_split_view_get_sidebar_width_unit(self->split);
+  int sidebar_min, content_min;
+  gtk_widget_measure(adw_overlay_split_view_get_sidebar(self->split), GTK_ORIENTATION_HORIZONTAL, -1,
+                     &sidebar_min, NULL, NULL, NULL);
+  sidebar_min = MAX(sidebar_min, (int)ceil(adw_length_unit_to_px(
+                                     unit, adw_overlay_split_view_get_min_sidebar_width(self->split), settings)));
+  int sidebar_max = MAX(sidebar_min, (int)ceil(adw_length_unit_to_px(
+                                         unit, adw_overlay_split_view_get_max_sidebar_width(self->split), settings)));
+  gtk_widget_measure(GTK_WIDGET(self), GTK_ORIENTATION_HORIZONTAL, -1, &content_min, NULL, NULL, NULL);
+  int sidebar = MIN((int)(split_width * adw_overlay_split_view_get_sidebar_width_fraction(self->split)),
+                    split_width - content_min);
+  return split_width - CLAMP(sidebar, sidebar_min, sidebar_max);
+}
+
+static void steady_bin_measure(GtkWidget *widget, GtkOrientation orientation, int for_size, int *minimum,
+                               int *natural, int *minimum_baseline, int *natural_baseline) {
+  SteadyBin *self = STEADY_BIN(widget);
+  gtk_widget_measure(self->child, orientation, for_size, minimum, natural, minimum_baseline, natural_baseline);
+}
+
+static void steady_bin_size_allocate(GtkWidget *widget, int width, int height, int baseline) {
+  SteadyBin *self = STEADY_BIN(widget);
+  int min;
+  gtk_widget_measure(self->child, GTK_ORIENTATION_HORIZONTAL, height, &min, NULL, NULL, NULL);
+  gtk_widget_allocate(self->child, MAX(min, steady_bin_target_width(self, width)), height, baseline, NULL);
+}
+
+static void steady_bin_dispose(GObject *obj) {
+  SteadyBin *self = STEADY_BIN(obj);
+  g_clear_pointer(&self->child, gtk_widget_unparent);
+  G_OBJECT_CLASS(steady_bin_parent_class)->dispose(obj);
+}
+
+static void steady_bin_class_init(SteadyBinClass *klass) {
+  G_OBJECT_CLASS(klass)->dispose = steady_bin_dispose;
+  GTK_WIDGET_CLASS(klass)->measure = steady_bin_measure;
+  GTK_WIDGET_CLASS(klass)->size_allocate = steady_bin_size_allocate;
+}
+
+static void steady_bin_init(SteadyBin *self) {
+  gtk_widget_set_overflow(GTK_WIDGET(self), GTK_OVERFLOW_HIDDEN);
+}
+
+static GtkWidget *steady_bin_new(AdwOverlaySplitView *split, GtkWidget *child) {
+  SteadyBin *self = g_object_new(STEADY_TYPE_BIN, NULL);
+  self->split = split;
+  self->child = child;
+  gtk_widget_set_parent(child, GTK_WIDGET(self));
+  return GTK_WIDGET(self);
 }
 
 static GtkWidget *build_albums(app *a) {
@@ -295,9 +435,19 @@ static GtkWidget *build_albums(app *a) {
   a->empty = ADW_STATUS_PAGE(empty);
   set_empty_description(a);
 
+  GtkWidget *no_playlists = adw_status_page_new();
+  adw_status_page_set_icon_name(ADW_STATUS_PAGE(no_playlists), "view-list-symbolic");
+  adw_status_page_set_title(ADW_STATUS_PAGE(no_playlists), "No Playlists");
+  adw_status_page_set_description(ADW_STATUS_PAGE(no_playlists),
+                                  "Right-click a track and choose Add to Playlist to start one.");
+
   GtkWidget *stack = gtk_stack_new();
   gtk_stack_add_named(GTK_STACK(stack), empty, "empty");
-  gtk_stack_add_named(GTK_STACK(stack), album_grid_new(on_album_changed, a), "grid");
+  a->album_grid = album_grid_new("Albums", on_album_changed, a);
+  gtk_stack_add_named(GTK_STACK(stack), a->album_grid, "grid");
+  gtk_stack_add_named(GTK_STACK(stack), no_playlists, "no-playlists");
+  a->playlist_grid = album_grid_new("Playlists", on_album_changed, a);
+  gtk_stack_add_named(GTK_STACK(stack), a->playlist_grid, "playlists");
   a->albums = GTK_STACK(stack);
   return stack;
 }
@@ -375,8 +525,10 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_overlay_split_view_set_sidebar_position(a->album_split, GTK_PACK_END);
   adw_overlay_split_view_set_min_sidebar_width(a->album_split, 320);
   adw_overlay_split_view_set_max_sidebar_width(a->album_split, 420);
-  adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(on_track_play, on_tracks_close, a));
-  adw_overlay_split_view_set_content(a->album_split, build_albums(a));
+  const track_list_callbacks tracks_cb = {on_track_play, on_tracks_close, on_track_add_to_playlist, on_track_remove,
+                                          on_track_move, on_playlist_rename, on_playlist_delete, a};
+  adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
+  adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
   adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);
 
   GtkWidget *pages = gtk_stack_new();

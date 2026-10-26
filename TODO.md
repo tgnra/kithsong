@@ -2,9 +2,8 @@
 
 ## Playlists
 
-- Add UI to add to playlist and add playlists
-- Add UI to list playlists
-- Add to core ability to play playlists in order
+- Linux - playlist cover art (a placeholder for now)
+- Linux - keyboard access to the track menu (Menu key, Shift+F10)
 
 ## Album Groups
 
@@ -13,7 +12,9 @@
 
 ## Smart Playlists/Groups
 
-- Core - rulesets that define these - most/least played, recently added, anything else?
+- UI - rule editor (build it from mc_smart_field_get()), list smart lists alongside playlists and album groups, reshuffle button
+- Playback - call mc_library_record_play() when a track counts as played (half of it, or 4 minutes, like Last.fm?)
+- Core - limit by total duration ("an hour of music")
 
 ## Artists View
 
@@ -30,7 +31,6 @@
 - Playback - AAC/M4A - pick a decoder: the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Volume control
 - Spacebar to play/pause
-- Linux - fix animation jitter on album grid
 - Recents list above devices
 
 ## Wear OS

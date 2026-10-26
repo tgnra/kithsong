@@ -59,6 +59,10 @@ const char *mc_library_errmsg(const mc_library *lib);
 
 mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out);
 
+/* Counts a play of track_uid on this device and makes now its last play. What counts as a
+ * play (say, half the track) is the caller's call. MC_ERR_NOT_FOUND if there's no such track. */
+mc_status mc_library_record_play(mc_library *lib, const char *track_uid);
+
 typedef struct mc_album_info {
   char uid[MC_UID_STRLEN];
   char *title;
@@ -88,6 +92,11 @@ typedef struct mc_track_info {
   int duration_ms;
   char *path; /* absolute path of the track's file on this device (the original, if there are
                * transcodes too); NULL if there's none here */
+  char *artist;    /* the track's artist, else its album's; NULL if unknown */
+  char *album;     /* NULL if it has none */
+  char *cover_dir; /* the folder holding its album's cover, or NULL if there's none here */
+  char entry_uid[MC_UID_STRLEN]; /* its playlist entry, for mc_playlist_move() and
+                                  * mc_playlist_remove(); "" outside playlists */
 } mc_track_info;
 
 typedef struct mc_track_list {
@@ -98,7 +107,24 @@ typedef struct mc_track_list {
 /* An album's tracks in order: by disc, then track number (unnumbered tracks last), then
  * title. Free with mc_track_list_free(). */
 mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out);
+/* A playlist's tracks in playlist order. A track that's in it twice is listed twice. */
+mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out);
 void mc_track_list_free(mc_track_list *list);
+
+typedef struct mc_playlist_info {
+  char uid[MC_UID_STRLEN];
+  char *name;
+  int track_count;
+} mc_playlist_info;
+
+typedef struct mc_playlist_list {
+  mc_playlist_info *items;
+  int count;
+} mc_playlist_list;
+
+/* Every playlist, by name. Free with mc_playlist_list_free(). */
+mc_status mc_library_list_playlists(mc_library *lib, mc_playlist_list **out);
+void mc_playlist_list_free(mc_playlist_list *list);
 
 #ifdef __cplusplus
 }

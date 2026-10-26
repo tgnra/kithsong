@@ -39,6 +39,34 @@ char *mc_library_abspath(const mc_library *lib, const char *rel);
 mc_status mc_library_commit(mc_library *lib);
 void mc_library_rollback(mc_library *lib);
 
+/* The columns mc_library_read_tracks() reads, then the joins they need; t is the track, al
+ * its album, ar its artist and aar the album's artist. The file is the original if there
+ * are transcodes too. A playlist's query adds its entry's uid as a last column. */
+#define TRACK_COLS \
+  "SELECT t.uid, t.title, t.track_no, t.disc_no, t.duration_ms," \
+  " (SELECT f.path FROM files f WHERE f.track_uid = t.uid" \
+  "  ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)," \
+  " coalesce(ar.name, aar.name), al.title, al.art_hash IS NOT NULL"
+#define TRACK_JOINS \
+  " LEFT JOIN artists ar ON ar.uid = t.artist_uid" \
+  " LEFT JOIN albums al ON al.uid = t.album_uid" \
+  " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
+
+/* The columns mc_library_read_albums() reads, the join they need and the album display order;
+ * a is the album and ar its artist. The folder is wherever the album's files are: any one
+ * file's directory will do. */
+#define ALBUM_COLS \
+  "SELECT a.uid, a.title, ar.name, a.year, a.kind = 'singles', a.art_hash IS NOT NULL," \
+  " (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid" \
+  "  WHERE t.album_uid = a.uid LIMIT 1)"
+#define ALBUM_JOINS " LEFT JOIN artists ar ON ar.uid = a.artist_uid"
+#define ALBUM_ORDER \
+  "coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.kind = 'singles', a.year, a.title COLLATE NOCASE"
+
+/* Step a prepared, bound TRACK_COLS or ALBUM_COLS query into a list. Both finalize stmt. */
+mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_list **out);
+mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_list **out);
+
 /* The tables sync replicates (k_tracked) and their logged columns. Sync works out the
  * order to apply them in from their foreign keys. */
 const mc_changelog_table *mc_library_tracked(size_t *count);

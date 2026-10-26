@@ -47,6 +47,16 @@ static const char *const k_migrations[] = {
   ") WITHOUT ROWID;"
   "CREATE INDEX album_group_entries_order ON album_group_entries (group_uid, position, uid);"
   "CREATE INDEX album_group_entries_album ON album_group_entries (album_uid);",
+  /* v6: smart lists and last played. A smart list is a playlist or album group defined by a
+   * rule (JSON, see docs/schema.md) that's evaluated each time it's listed. Like play_count,
+   * last_played_ms is per device; a track's last play is the newest over its rows. */
+  "ALTER TABLE track_plays ADD COLUMN last_played_ms INTEGER;"
+  "CREATE TABLE smart_lists ("
+  "  uid     TEXT PRIMARY KEY,"
+  "  name    TEXT NOT NULL,"
+  "  subject TEXT NOT NULL,"
+  "  rule    TEXT NOT NULL"
+  ") WITHOUT ROWID;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -59,11 +69,13 @@ static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "
                                            "disc_no", "duration_ms", "genre", "mb_trackid",
                                            "mb_releasetrackid", "year", "mb_albumid", "added_ms",
                                            NULL};
-static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", NULL};
+static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", "last_played_ms",
+                                          NULL};
 static const char *const k_playlist_cols[] = {"name", NULL};
 static const char *const k_entry_cols[] = {"playlist_uid", "track_uid", "position", NULL};
 static const char *const k_group_cols[] = {"name", NULL};
 static const char *const k_group_entry_cols[] = {"group_uid", "album_uid", "position", NULL};
+static const char *const k_smart_cols[] = {"name", "subject", "rule", NULL};
 
 static const mc_changelog_table k_tracked[] = {
   {"artists", "uid", k_artist_cols},
@@ -74,6 +86,7 @@ static const mc_changelog_table k_tracked[] = {
   {"playlist_entries", "uid", k_entry_cols},
   {"album_groups", "uid", k_group_cols},
   {"album_group_entries", "uid", k_group_entry_cols},
+  {"smart_lists", "uid", k_smart_cols},
 };
 
 /* --- Schema --- */
@@ -107,6 +120,21 @@ static mc_status migrate(mc_library *lib) {
     if (exec(lib, "COMMIT") != MC_OK) return MC_ERR_DB;
   }
   return MC_OK;
+}
+
+/* mc_shuffle_key(seed, uid): a stable pseudo-random sort key, so a list ordered by it is
+ * shuffled the same way every time for the same seed. FNV-1a over the uid, mixed with the
+ * seed by splitmix64's finalizer. */
+static void sql_shuffle_key(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  uint64_t h = 14695981039346656037u;
+  const unsigned char *s = sqlite3_value_text(argv[1]);
+  for (; s && *s; s++) h = (h ^ *s) * 1099511628211u;
+  h ^= (uint64_t)sqlite3_value_int64(argv[0]) + 0x9e3779b97f4a7c15u;
+  h = (h ^ (h >> 30)) * 0xbf58476d1ce4e5b9u;
+  h = (h ^ (h >> 27)) * 0x94d049bb133111ebu;
+  h ^= h >> 31;
+  sqlite3_result_int64(ctx, (sqlite3_int64)(h >> 1));
 }
 
 /* --- Identity --- */
@@ -207,6 +235,12 @@ mc_status mc_library_open(const char *dir, mc_library **out) {
                       "PRAGMA trusted_schema = OFF;")) != MC_OK)
     goto fail;
   if ((st = mc_changelog_register(lib->db, &lib->log)) != MC_OK) goto fail;
+  if (sqlite3_create_function(lib->db, "mc_shuffle_key", 2,
+                              SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
+                              sql_shuffle_key, NULL, NULL) != SQLITE_OK) {
+    st = MC_ERR_DB;
+    goto fail;
+  }
   if ((st = migrate(lib)) != MC_OK) goto fail;
   if ((st = mc_changelog_install_triggers(lib->db, k_tracked,
                                           sizeof k_tracked / sizeof k_tracked[0])) != MC_OK)
@@ -338,29 +372,29 @@ static char *column_dup(sqlite3_stmt *stmt, int col) {
   return s ? mc_strdup((const char *)s) : NULL;
 }
 
-mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out) {
-  if (!lib || !out) return MC_ERR_INVALID_ARG;
+/* Grows a list's items array to hold one more, doubling as needed. */
+static int grow(void **items, int count, int *cap, size_t size) {
+  if (count < *cap) return 1;
+  int grown = *cap ? *cap * 2 : 16;
+  void *p = realloc(*items, (size_t)grown * size);
+  if (!p) return 0;
+  *items = p;
+  *cap = grown;
+  return 1;
+}
+
+mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_list **out) {
   *out = NULL;
-  /* The folder is wherever the album's files are: any one file's directory will do. */
-  static const char sql[] =
-    "SELECT a.uid, a.title, ar.name, a.year, a.kind = 'singles', a.art_hash IS NOT NULL,"
-    " (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid"
-    "  WHERE t.album_uid = a.uid LIMIT 1)"
-    " FROM albums a LEFT JOIN artists ar ON ar.uid = a.artist_uid"
-    " ORDER BY coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.kind = 'singles',"
-    " a.year, a.title COLLATE NOCASE";
-
   mc_album_list *list = calloc(1, sizeof *list);
-  if (!list) return MC_ERR_NOMEM;
-  int64_t total = 0;
-  mc_status st = mc_library_count(lib, MC_ENTITY_ALBUMS, &total);
-  if (st == MC_OK && total > 0 && !(list->items = calloc((size_t)total, sizeof *list->items)))
-    st = MC_ERR_NOMEM;
-
-  sqlite3_stmt *stmt = NULL;
-  if (st == MC_OK && sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) st = MC_ERR_DB;
-  while (st == MC_OK && list->count < total && sqlite3_step(stmt) == SQLITE_ROW) {
+  mc_status st = list ? MC_OK : MC_ERR_NOMEM;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
     mc_album_info *a = &list->items[list->count++];
+    memset(a, 0, sizeof *a);
     const unsigned char *uid = sqlite3_column_text(stmt, 0);
     if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(a->uid, (const char *)uid);
     a->title = column_dup(stmt, 1);
@@ -376,6 +410,7 @@ mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out) {
       a->folder = abs;
     }
   }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
     mc_album_list_free(list);
@@ -383,6 +418,15 @@ mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out) {
   }
   *out = list;
   return MC_OK;
+}
+
+mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  static const char sql[] = ALBUM_COLS " FROM albums a" ALBUM_JOINS " ORDER BY " ALBUM_ORDER;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  return mc_library_read_albums(lib, stmt, out);
 }
 
 void mc_album_list_free(mc_album_list *list) {
@@ -396,34 +440,15 @@ void mc_album_list_free(mc_album_list *list) {
   free(list);
 }
 
-mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out) {
-  if (!lib || !album_uid || !out) return MC_ERR_INVALID_ARG;
+mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_list **out) {
   *out = NULL;
-  static const char sql[] =
-    "SELECT t.uid, t.title, t.track_no, t.disc_no, t.duration_ms,"
-    " (SELECT f.path FROM files f WHERE f.track_uid = t.uid"
-    "  ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)"
-    " FROM tracks t WHERE t.album_uid = ?"
-    " ORDER BY coalesce(t.disc_no, 0), t.track_no IS NULL, t.track_no, t.title COLLATE NOCASE";
-
   mc_track_list *list = calloc(1, sizeof *list);
-  if (!list) return MC_ERR_NOMEM;
-  sqlite3_stmt *stmt = NULL;
-  mc_status st = MC_OK;
-  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK ||
-      sqlite3_bind_text(stmt, 1, album_uid, -1, SQLITE_STATIC) != SQLITE_OK)
-    st = MC_ERR_DB;
+  mc_status st = list ? MC_OK : MC_ERR_NOMEM;
   int cap = 0, rc = SQLITE_DONE;
   while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-    if (list->count == cap) {
-      int grown = cap ? cap * 2 : 16;
-      mc_track_info *items = realloc(list->items, (size_t)grown * sizeof *items);
-      if (!items) {
-        st = MC_ERR_NOMEM;
-        break;
-      }
-      list->items = items;
-      cap = grown;
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
     }
     mc_track_info *t = &list->items[list->count++];
     memset(t, 0, sizeof *t);
@@ -435,6 +460,16 @@ mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, m
     t->duration_ms = sqlite3_column_int(stmt, 4);
     const unsigned char *file = sqlite3_column_text(stmt, 5);
     if (file) t->path = mc_library_abspath(lib, (const char *)file);
+    t->artist = column_dup(stmt, 6);
+    t->album = column_dup(stmt, 7);
+    /* The cover sits in the album folder, which is where the track's file is. */
+    if (t->path && sqlite3_column_int(stmt, 8)) {
+      t->cover_dir = mc_strdup(t->path);
+      char *sep = t->cover_dir ? strrchr(t->cover_dir, MC_PATH_SEP) : NULL;
+      if (sep) *sep = '\0';
+    }
+    const unsigned char *entry = sqlite3_column_count(stmt) > 9 ? sqlite3_column_text(stmt, 9) : NULL;
+    if (entry && strlen((const char *)entry) < MC_UID_STRLEN) strcpy(t->entry_uid, (const char *)entry);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -446,12 +481,81 @@ mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, m
   return MC_OK;
 }
 
+/* Runs sql, a TRACK_COLS query with key as its one parameter, into a track list. */
+static mc_status list_tracks(mc_library *lib, const char *sql, const char *key, mc_track_list **out) {
+  if (!lib || !key || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  if (sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC) != SQLITE_OK) {
+    sqlite3_finalize(stmt);
+    return MC_ERR_DB;
+  }
+  return mc_library_read_tracks(lib, stmt, out);
+}
+
+mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out) {
+  static const char sql[] =
+    TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.album_uid = ?"
+    " ORDER BY coalesce(t.disc_no, 0), t.track_no IS NULL, t.track_no, t.title COLLATE NOCASE";
+  return list_tracks(lib, sql, album_uid, out);
+}
+
+mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out) {
+  static const char sql[] =
+    TRACK_COLS ", e.uid FROM playlist_entries e JOIN tracks t ON t.uid = e.track_uid" TRACK_JOINS
+    " WHERE e.playlist_uid = ? ORDER BY e.position, e.uid";
+  return list_tracks(lib, sql, playlist_uid, out);
+}
+
 void mc_track_list_free(mc_track_list *list) {
   if (!list) return;
   for (int i = 0; i < list->count; i++) {
     free(list->items[i].title);
     free(list->items[i].path);
+    free(list->items[i].artist);
+    free(list->items[i].album);
+    free(list->items[i].cover_dir);
   }
+  free(list->items);
+  free(list);
+}
+
+mc_status mc_library_list_playlists(mc_library *lib, mc_playlist_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  static const char sql[] =
+    "SELECT p.uid, p.name, (SELECT count(*) FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
+    " FROM playlists p ORDER BY p.name COLLATE NOCASE, p.uid";
+
+  mc_playlist_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  int64_t total = 0;
+  mc_status st = mc_library_count(lib, MC_ENTITY_PLAYLISTS, &total);
+  if (st == MC_OK && total > 0 && !(list->items = calloc((size_t)total, sizeof *list->items)))
+    st = MC_ERR_NOMEM;
+
+  sqlite3_stmt *stmt = NULL;
+  if (st == MC_OK && sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) st = MC_ERR_DB;
+  while (st == MC_OK && list->count < total && sqlite3_step(stmt) == SQLITE_ROW) {
+    mc_playlist_info *p = &list->items[list->count++];
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(p->uid, (const char *)uid);
+    p->name = column_dup(stmt, 1);
+    p->track_count = sqlite3_column_int(stmt, 2);
+  }
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_playlist_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_playlist_list_free(mc_playlist_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) free(list->items[i].name);
   free(list->items);
   free(list);
 }
@@ -474,6 +578,34 @@ mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out) {
     st = MC_OK;
   }
   sqlite3_finalize(stmt);
+  return st;
+}
+
+mc_status mc_library_record_play(mc_library *lib, const char *track_uid) {
+  if (!lib || !track_uid) return MC_ERR_INVALID_ARG;
+  char uid[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(uid);
+  if (st != MC_OK || (st = mc_library_begin_write(lib)) != MC_OK) return st;
+  /* Only this device's row, so plays on two devices never write the same field. */
+  static const char sql[] =
+    "INSERT INTO track_plays (uid, track_uid, node_uid, play_count, last_played_ms)"
+    " VALUES (?1, ?2, ?3, 1, ?4)"
+    " ON CONFLICT (track_uid, node_uid) DO UPDATE"
+    " SET play_count = play_count + 1, last_played_ms = excluded.last_played_ms";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    mc_library_rollback(lib);
+    return MC_ERR_DB;
+  }
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, track_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, lib->node_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 4, (sqlite3_int64)lib->hlc.wall_ms());
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  st = rc == SQLITE_DONE ? MC_OK : (rc & 0xff) == SQLITE_CONSTRAINT ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
   return st;
 }
 

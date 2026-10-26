@@ -1,8 +1,10 @@
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "musiccore/musiccore.h"
 #include "test.h"
+#include "util/fracindex.h"
 #include "util/hlc.h"
 
 static uint64_t fake_now;
@@ -57,9 +59,75 @@ static void test_hlc(void) {
   CHECK(mc_hlc_now(&hlc) == (uint64_t)6000 << MC_HLC_COUNTER_BITS);
 }
 
+/* Checks that the key between a and b is expected, and actually between them. */
+static void check_between(const char *a, const char *b, const char *expected) {
+  char *k = mc_frac_key_between(a, b);
+  CHECK_STR(k, expected);
+  if (k) {
+    CHECK(!a || strcmp(a, k) < 0);
+    CHECK(!b || strcmp(k, b) < 0);
+  }
+  free(k);
+}
+
+static void test_fracindex(void) {
+  check_between(NULL, NULL, "a0");
+  check_between("a0", NULL, "a1");
+  check_between("a1", NULL, "a2");
+  check_between(NULL, "a0", "Zz");
+  check_between("a0", "a1", "a0V");
+  check_between("a0", "a0V", "a0G");
+  check_between("a0V", "a1", "a0l");
+  check_between("az", NULL, "b00");
+  check_between("Zz", NULL, "a0");
+  check_between("Zy", "Zz", "ZyV");
+  check_between(NULL, "a0V", "a0");
+  check_between("b0z", "b10", "b0zV");
+
+  /* Invalid input: out of order, a fraction ending in 0, an unknown head. */
+  CHECK(mc_frac_key_between("a1", "a0") == NULL);
+  CHECK(mc_frac_key_between("a0", "a0") == NULL);
+  CHECK(mc_frac_key_between("a00", NULL) == NULL);
+  CHECK(mc_frac_key_between("!", NULL) == NULL);
+  CHECK(mc_frac_key_between("b0", NULL) == NULL); /* too short for its head */
+
+  /* Appending a thousand times stays short and in order; so does always inserting at the
+   * front, and always splitting the same gap. */
+  char *prev = NULL;
+  int ordered = 1;
+  for (int i = 0; i < 1000; i++) {
+    char *k = mc_frac_key_between(prev, NULL);
+    if (!k || (prev && strcmp(prev, k) >= 0)) ordered = 0;
+    free(prev);
+    prev = k;
+  }
+  CHECK(ordered && prev && strlen(prev) <= 3);
+  free(prev);
+  prev = NULL;
+  for (int i = 0; i < 1000; i++) {
+    char *k = mc_frac_key_between(NULL, prev);
+    if (!k || (prev && strcmp(k, prev) >= 0)) ordered = 0;
+    free(prev);
+    prev = k;
+  }
+  CHECK(ordered && prev && strlen(prev) <= 3);
+  free(prev);
+  char *lo = mc_frac_key_between(NULL, NULL), *hi = mc_frac_key_between(lo, NULL);
+  for (int i = 0; i < 200 && ordered; i++) {
+    char *k = mc_frac_key_between(lo, hi);
+    if (!k || strcmp(lo, k) >= 0 || strcmp(k, hi) >= 0) ordered = 0;
+    free(hi);
+    hi = k;
+  }
+  CHECK(ordered);
+  free(lo);
+  free(hi);
+}
+
 int main(void) {
   CHECK(strcmp(mc_version(), "") != 0);
   test_uid();
   test_hlc();
+  test_fracindex();
   return TEST_RESULT();
 }

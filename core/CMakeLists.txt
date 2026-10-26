@@ -39,9 +39,11 @@ add_library(musiccore STATIC
   src/util/uid.c
   src/util/hlc.c
   src/util/changelog.c
+  src/util/fracindex.c
   src/library/library.c
   "${_schema_c}"
   src/playlist/playlist.c
+  src/smart/smartlist.c
   src/playback/decoder.c
   src/playback/player.c
   src/tagger/tag_io.cpp

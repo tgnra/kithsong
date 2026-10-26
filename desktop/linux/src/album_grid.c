@@ -36,21 +36,49 @@ static AlbumItem *album_item_new(const mc_album_info *info) {
   return self;
 }
 
+static AlbumItem *album_item_new_playlist(const mc_playlist_info *info) {
+  AlbumItem *self = g_object_new(ALBUM_TYPE_ITEM, NULL);
+  memcpy(self->uid, info->uid, sizeof self->uid);
+  self->title = g_strdup(info->name && *info->name ? info->name : "Untitled");
+  self->is_playlist = TRUE;
+  self->track_count = info->track_count;
+  return self;
+}
+
 static gboolean album_item_equal(const AlbumItem *a, const AlbumItem *b) {
   return !strcmp(a->uid, b->uid) && !g_strcmp0(a->title, b->title) && !g_strcmp0(a->artist, b->artist) &&
-         !g_strcmp0(a->cover_dir, b->cover_dir) && a->year == b->year;
+         !g_strcmp0(a->cover_dir, b->cover_dir) && a->year == b->year && a->is_playlist == b->is_playlist &&
+         a->track_count == b->track_count;
+}
+
+/* The line beneath the title: the artist, or a playlist's track count. g_free it. */
+static char *album_item_subtitle(const AlbumItem *item) {
+  if (item->is_playlist)
+    return g_strdup_printf("%d %s", item->track_count, item->track_count == 1 ? "track" : "tracks");
+  return g_strdup(item->artist ? item->artist : "Unknown Artist");
 }
 
 /* --- Grid --- */
 
-static struct {
+/* One grid's state, owned by its scrolled window. */
+typedef struct grid {
   GListStore *store;
   GtkSingleSelection *selection;
   GtkWidget *view;
   void (*changed)(void *user);
   void *user;
   gboolean quiet; /* selection changes aren't the user's */
-} g;
+} grid;
+
+static grid *grid_of(GtkWidget *widget) {
+  return g_object_get_data(G_OBJECT(widget), "album-grid");
+}
+
+static void grid_free(gpointer data) {
+  grid *g = data;
+  g_object_unref(g->selection);
+  g_free(g);
+}
 
 /* A tile's widgets, and the cover it's waiting for. */
 typedef struct cell {
@@ -108,11 +136,13 @@ static void tile_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpoi
   AlbumItem *album = gtk_list_item_get_item(item);
   GtkWidget *box = gtk_list_item_get_child(item);
   cell *c = g_object_get_data(G_OBJECT(box), "cell");
+  char *subtitle = album_item_subtitle(album);
   gtk_label_set_text(GTK_LABEL(c->title), album->title);
-  gtk_label_set_text(GTK_LABEL(c->artist), album->artist ? album->artist : "Unknown Artist");
-  char *name = g_strdup_printf("%s, %s", album->title, album->artist ? album->artist : "Unknown Artist");
+  gtk_label_set_text(GTK_LABEL(c->artist), subtitle);
+  char *name = g_strdup_printf("%s, %s", album->title, subtitle);
   gtk_list_item_set_accessible_label(item, name);
   g_free(name);
+  g_free(subtitle);
 
   cell_cancel(c);
   gtk_picture_set_paintable(GTK_PICTURE(c->picture), NULL);
@@ -139,89 +169,118 @@ static void tile_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, gp
 static void on_selected(GObject *obj, GParamSpec *pspec, gpointer user) {
   (void)obj;
   (void)pspec;
-  (void)user;
-  if (!g.quiet && g.changed) g.changed(g.user);
+  grid *g = user;
+  if (!g->quiet && g->changed) g->changed(g->user);
 }
 
-GtkWidget *album_grid_new(void (*changed)(void *user), void *user) {
-  g.changed = changed;
-  g.user = user;
-  g.store = g_list_store_new(ALBUM_TYPE_ITEM);
-  g.selection = gtk_single_selection_new(G_LIST_MODEL(g.store)); /* takes the store */
-  gtk_single_selection_set_autoselect(g.selection, FALSE);
-  gtk_single_selection_set_can_unselect(g.selection, TRUE);
-  g_signal_connect(g.selection, "notify::selected", G_CALLBACK(on_selected), NULL);
+GtkWidget *album_grid_new(const char *label, void (*changed)(void *user), void *user) {
+  grid *g = g_new0(grid, 1);
+  g->changed = changed;
+  g->user = user;
+  g->store = g_list_store_new(ALBUM_TYPE_ITEM);
+  g->selection = gtk_single_selection_new(G_LIST_MODEL(g->store)); /* takes the store */
+  gtk_single_selection_set_autoselect(g->selection, FALSE);
+  gtk_single_selection_set_can_unselect(g->selection, TRUE);
+  g_signal_connect(g->selection, "notify::selected", G_CALLBACK(on_selected), g);
 
   GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
   g_signal_connect(factory, "setup", G_CALLBACK(tile_setup), NULL);
   g_signal_connect(factory, "bind", G_CALLBACK(tile_bind), NULL);
   g_signal_connect(factory, "unbind", G_CALLBACK(tile_unbind), NULL);
   /* The view takes both; the selection stays ours too. */
-  GtkWidget *grid = gtk_grid_view_new(GTK_SELECTION_MODEL(g_object_ref(g.selection)), factory);
-  g.view = grid;
-  gtk_grid_view_set_min_columns(GTK_GRID_VIEW(grid), 1);
-  gtk_grid_view_set_max_columns(GTK_GRID_VIEW(grid), 24);
-  gtk_widget_add_css_class(grid, "album-grid");
-  gtk_accessible_update_property(GTK_ACCESSIBLE(grid), GTK_ACCESSIBLE_PROPERTY_LABEL, "Albums", -1);
+  GtkWidget *view = gtk_grid_view_new(GTK_SELECTION_MODEL(g_object_ref(g->selection)), factory);
+  g->view = view;
+  gtk_grid_view_set_min_columns(GTK_GRID_VIEW(view), 1);
+  gtk_grid_view_set_max_columns(GTK_GRID_VIEW(view), 24);
+  gtk_widget_add_css_class(view, "album-grid");
+  gtk_accessible_update_property(GTK_ACCESSIBLE(view), GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
 
   GtkWidget *scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), grid);
-  g_signal_connect_swapped(scroller, "destroy", G_CALLBACK(g_object_unref), g.selection);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), view);
+  g_object_set_data_full(G_OBJECT(scroller), "album-grid", g, grid_free);
   return scroller;
 }
 
-int album_grid_reload(mc_library *lib) {
-  char keep[MC_UID_STRLEN] = "";
-  AlbumItem *sel = album_grid_selection();
-  if (sel) memcpy(keep, sel->uid, sizeof keep);
-
-  mc_album_list *list = NULL;
-  if (lib && mc_library_list_albums(lib, &list) != MC_OK) list = NULL;
-  guint n = list ? (guint)list->count : 0;
-  AlbumItem **items = g_new0(AlbumItem *, n + 1);
+/* Shows items (n of them; the grid takes its own references), keeping the tile with uid
+ * keep selected if it's still there. */
+static void grid_set_items(grid *g, AlbumItem **items, guint n, const char *keep) {
   guint selected = GTK_INVALID_LIST_POSITION;
-  for (guint i = 0; i < n; i++) {
-    items[i] = album_item_new(&list->items[i]);
-    if (keep[0] && !strcmp(items[i]->uid, keep)) selected = i;
-  }
-  mc_album_list_free(list);
+  for (guint i = 0; i < n && keep[0]; i++)
+    if (!strcmp(items[i]->uid, keep)) selected = i;
 
   /* Replace only the run that changed (an import usually adds an album or two), so the
    * tiles either side keep their covers and the view doesn't jump. */
-  guint old = g_list_model_get_n_items(G_LIST_MODEL(g.store)), head = 0, tail = 0;
+  guint old = g_list_model_get_n_items(G_LIST_MODEL(g->store)), head = 0, tail = 0;
   while (head < old && head < n) {
-    AlbumItem *a = g_list_model_get_item(G_LIST_MODEL(g.store), head);
+    AlbumItem *a = g_list_model_get_item(G_LIST_MODEL(g->store), head);
     gboolean same = album_item_equal(a, items[head]);
     g_object_unref(a);
     if (!same) break;
     head++;
   }
   while (tail < old - head && tail < n - head) {
-    AlbumItem *a = g_list_model_get_item(G_LIST_MODEL(g.store), old - 1 - tail);
+    AlbumItem *a = g_list_model_get_item(G_LIST_MODEL(g->store), old - 1 - tail);
     gboolean same = album_item_equal(a, items[n - 1 - tail]);
     g_object_unref(a);
     if (!same) break;
     tail++;
   }
-  g.quiet = TRUE;
+  g->quiet = TRUE;
   if (head + tail < old || head + tail < n)
-    g_list_store_splice(g.store, head, old - head - tail, (gpointer *)(items + head), n - head - tail);
-  gtk_single_selection_set_selected(g.selection, selected);
-  g.quiet = FALSE;
-  if (!old && n) gtk_grid_view_scroll_to(GTK_GRID_VIEW(g.view), 0, GTK_LIST_SCROLL_NONE, NULL); /* start at the top */
+    g_list_store_splice(g->store, head, old - head - tail, (gpointer *)(items + head), n - head - tail);
+  gtk_single_selection_set_selected(g->selection, selected);
+  g->quiet = FALSE;
+  if (!old && n) gtk_grid_view_scroll_to(GTK_GRID_VIEW(g->view), 0, GTK_LIST_SCROLL_NONE, NULL); /* start at the top */
+}
 
+/* The selected tile's uid, or "", into keep. */
+static void grid_keep(GtkWidget *widget, char keep[MC_UID_STRLEN]) {
+  AlbumItem *sel = album_grid_selection(widget);
+  keep[0] = '\0';
+  if (sel) memcpy(keep, sel->uid, MC_UID_STRLEN);
+}
+
+int album_grid_reload(GtkWidget *widget, mc_library *lib) {
+  char keep[MC_UID_STRLEN];
+  grid_keep(widget, keep);
+  mc_album_list *list = NULL;
+  if (lib && mc_library_list_albums(lib, &list) != MC_OK) list = NULL;
+  guint n = list ? (guint)list->count : 0;
+  AlbumItem **items = g_new0(AlbumItem *, n + 1);
+  for (guint i = 0; i < n; i++) items[i] = album_item_new(&list->items[i]);
+  mc_album_list_free(list);
+
+  grid_set_items(grid_of(widget), items, n, keep);
   for (guint i = 0; i < n; i++) g_object_unref(items[i]);
   g_free(items);
   return (int)n;
 }
 
-AlbumItem *album_grid_selection(void) {
-  return g.selection ? gtk_single_selection_get_selected_item(g.selection) : NULL;
+int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib) {
+  char keep[MC_UID_STRLEN];
+  grid_keep(widget, keep);
+  mc_playlist_list *list = NULL;
+  if (lib && mc_library_list_playlists(lib, &list) != MC_OK) list = NULL;
+  guint n = list ? (guint)list->count : 0;
+  AlbumItem **items = g_new0(AlbumItem *, n + 1);
+  for (guint i = 0; i < n; i++) items[i] = album_item_new_playlist(&list->items[i]);
+  mc_playlist_list_free(list);
+
+  grid_set_items(grid_of(widget), items, n, keep);
+  for (guint i = 0; i < n; i++) g_object_unref(items[i]);
+  g_free(items);
+  return (int)n;
 }
 
-void album_grid_unselect(void) {
-  g.quiet = TRUE;
-  gtk_single_selection_set_selected(g.selection, GTK_INVALID_LIST_POSITION);
-  g.quiet = FALSE;
+AlbumItem *album_grid_selection(GtkWidget *widget) {
+  grid *g = grid_of(widget);
+  return g ? gtk_single_selection_get_selected_item(g->selection) : NULL;
+}
+
+void album_grid_unselect(GtkWidget *widget) {
+  grid *g = grid_of(widget);
+  g->quiet = TRUE;
+  gtk_single_selection_set_selected(g->selection, GTK_INVALID_LIST_POSITION);
+  g->quiet = FALSE;
 }

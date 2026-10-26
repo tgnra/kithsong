@@ -14,11 +14,13 @@ G_DECLARE_FINAL_TYPE(TrackItem, track_item, TRACK, ITEM, GObject)
 struct _TrackItem {
   GObject parent;
   char uid[MC_UID_STRLEN];
+  char entry_uid[MC_UID_STRLEN]; /* its place in a playlist, else "" */
   char *title;
-  char num[16];      /* "3", "2-5" with several discs, or "" */
+  char num[16];      /* "3", "2-5" with several discs, or ""; in a playlist, its place */
   char duration[16]; /* "4:44", or "" if unknown */
   int duration_ms;
   char *path;
+  char *artist, *album, *cover_dir;
 };
 
 G_DEFINE_FINAL_TYPE(TrackItem, track_item, G_TYPE_OBJECT)
@@ -27,6 +29,9 @@ static void track_item_finalize(GObject *obj) {
   TrackItem *self = TRACK_ITEM(obj);
   g_free(self->title);
   g_free(self->path);
+  g_free(self->artist);
+  g_free(self->album);
+  g_free(self->cover_dir);
   G_OBJECT_CLASS(track_item_parent_class)->finalize(obj);
 }
 
@@ -50,12 +55,11 @@ static void format_duration(int ms, char *out, size_t n) {
 typedef struct row {
   GtkWidget *num, *speaker, *title, *duration;
   TrackItem *track; /* bound to, or NULL */
+  GtkListItem *item;
 } row;
 
 static struct {
-  void (*play)(void *user, int index);
-  void (*close)(void *user);
-  void *user;
+  track_list_callbacks cb;
 
   GListStore *store;
   GtkSingleSelection *selection;
@@ -64,8 +68,26 @@ static struct {
   GCancellable *cover_loading;
   AlbumItem *album;
   GPtrArray *rows; /* bound rows, to mark the playing one */
+  GtkWidget *pane, *menu;         /* menu: the tracks' right-click menu */
+  GMenuModel *album_menu, *playlist_menu; /* what it shows */
+  GSimpleAction *move_up, *move_down;
+  char menu_uid[MC_UID_STRLEN];   /* the track it was opened on */
+  char menu_entry[MC_UID_STRLEN]; /* and its playlist entry, or "" */
+  guint menu_pos;
+  GtkWidget *playlist_button;     /* the header's menu, shown for playlists */
   char playing_uid[MC_UID_STRLEN];
 } s;
+
+/* The shown track at position i (borrowed), or NULL. */
+static TrackItem *track_at(guint i) {
+  TrackItem *t = g_list_model_get_item(G_LIST_MODEL(s.store), i);
+  if (t) g_object_unref(t); /* the store keeps it */
+  return t;
+}
+
+static gboolean showing_playlist(void) {
+  return s.album && s.album->is_playlist;
+}
 
 static void row_update(row *r) {
   gboolean playing = r->track && s.playing_uid[0] && !strcmp(r->track->uid, s.playing_uid);
@@ -85,6 +107,94 @@ static GtkWidget *row_label(float xalign) {
   GtkWidget *l = gtk_label_new(NULL);
   gtk_label_set_xalign(GTK_LABEL(l), xalign);
   return l;
+}
+
+/* Right-click: selects the row and opens the menu for its track where the pointer is. */
+static void on_row_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  row *r = user;
+  if (!r->track || !r->item) return;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  memcpy(s.menu_uid, r->track->uid, sizeof s.menu_uid);
+  memcpy(s.menu_entry, r->track->entry_uid, sizeof s.menu_entry);
+  s.menu_pos = gtk_list_item_get_position(r->item);
+  gtk_single_selection_set_selected(s.selection, s.menu_pos);
+  gboolean playlist = showing_playlist() && s.menu_entry[0];
+  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(s.menu), playlist ? s.playlist_menu : s.album_menu);
+  g_simple_action_set_enabled(s.move_up, playlist && s.menu_pos > 0);
+  g_simple_action_set_enabled(s.move_down, playlist && s.menu_pos + 1 < g_list_model_get_n_items(G_LIST_MODEL(s.store)));
+  GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
+  graphene_point_t at;
+  if (!gtk_widget_compute_point(widget, s.pane, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
+  gtk_popover_set_pointing_to(GTK_POPOVER(s.menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(s.menu));
+}
+
+/* --- Dragging a playlist's tracks into another order --- */
+
+/* A playlist's row drags its entry uid. */
+static GdkContentProvider *on_drag_prepare(GtkDragSource *source, double x, double y, gpointer user) {
+  row *r = user;
+  if (!r->track || !r->track->entry_uid[0] || !showing_playlist()) return NULL;
+  GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(source));
+  GdkPaintable *icon = gtk_widget_paintable_new(widget);
+  gtk_drag_source_set_icon(source, icon, (int)x, (int)y);
+  g_object_unref(icon);
+  return gdk_content_provider_new_typed(G_TYPE_STRING, r->track->entry_uid);
+}
+
+/* Whether a drop at y lands below the row's middle, i.e. after it. */
+static gboolean drop_below(GtkDropTarget *target, double y) {
+  GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(target));
+  return y > gtk_widget_get_height(widget) / 2.0;
+}
+
+/* The line where the track would go, above or below the row (the list's row widget). */
+static void mark_drop(GtkDropTarget *target, int where) {
+  GtkWidget *widget = gtk_widget_get_parent(gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(target)));
+  if (!widget) return;
+  if (where < 0) gtk_widget_add_css_class(widget, "drop-above");
+  else gtk_widget_remove_css_class(widget, "drop-above");
+  if (where > 0) gtk_widget_add_css_class(widget, "drop-below");
+  else gtk_widget_remove_css_class(widget, "drop-below");
+}
+
+static GdkDragAction on_drop_motion(GtkDropTarget *target, double x, double y, gpointer user) {
+  (void)x;
+  row *r = user;
+  if (!r->track || !showing_playlist()) return 0;
+  mark_drop(target, drop_below(target, y) ? 1 : -1);
+  return GDK_ACTION_MOVE;
+}
+
+static void on_drop_leave(GtkDropTarget *target, gpointer user) {
+  (void)user;
+  mark_drop(target, 0);
+}
+
+static gboolean on_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer user) {
+  (void)x;
+  row *r = user;
+  mark_drop(target, 0);
+  if (!r->track || !r->item || !showing_playlist() || !G_VALUE_HOLDS_STRING(value)) return FALSE;
+  const char *dragged = g_value_get_string(value);
+  /* Only this playlist's entries: not text dragged in from elsewhere. */
+  gboolean ours = FALSE;
+  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(s.store)); dragged && i < n && !ours; i++)
+    ours = !strcmp(track_at(i)->entry_uid, dragged);
+  if (!ours) return FALSE;
+
+  /* Copies: moving reloads the list, and these with it. */
+  char entry[MC_UID_STRLEN], after[MC_UID_STRLEN] = "";
+  g_strlcpy(entry, dragged, sizeof entry);
+  guint to = gtk_list_item_get_position(r->item);
+  gboolean below = drop_below(target, y);
+  if (below) g_strlcpy(after, r->track->entry_uid, sizeof after);
+  else if (to > 0) g_strlcpy(after, track_at(to - 1)->entry_uid, sizeof after);
+  if (!strcmp(after, entry) || (!below && !strcmp(r->track->entry_uid, entry)))
+    return FALSE; /* dropped where it already is */
+  if (s.cb.move) s.cb.move(s.cb.user, entry, after[0] ? after : NULL);
+  return TRUE;
 }
 
 static void row_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
@@ -120,6 +230,21 @@ static void row_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpoi
   gtk_widget_add_css_class(r->duration, "numeric");
   gtk_box_append(GTK_BOX(box), r->duration);
 
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "pressed", G_CALLBACK(on_row_menu), r);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
+
+  GtkDragSource *drag = gtk_drag_source_new();
+  gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE);
+  g_signal_connect(drag, "prepare", G_CALLBACK(on_drag_prepare), r);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(drag));
+  GtkDropTarget *drop = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_MOVE);
+  g_signal_connect(drop, "motion", G_CALLBACK(on_drop_motion), r);
+  g_signal_connect(drop, "leave", G_CALLBACK(on_drop_leave), r);
+  g_signal_connect(drop, "drop", G_CALLBACK(on_drop), r);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(drop));
+
   g_object_set_data_full(G_OBJECT(box), "row", r, g_free);
   gtk_list_item_set_child(item, box);
 }
@@ -130,6 +255,7 @@ static void row_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpoin
   TrackItem *t = gtk_list_item_get_item(item);
   row *r = g_object_get_data(G_OBJECT(gtk_list_item_get_child(item)), "row");
   r->track = t;
+  r->item = item;
   gtk_label_set_text(GTK_LABEL(r->num), t->num);
   gtk_label_set_text(GTK_LABEL(r->title), t->title);
   gtk_label_set_text(GTK_LABEL(r->duration), t->duration);
@@ -145,19 +271,20 @@ static void row_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
   (void)user;
   row *r = g_object_get_data(G_OBJECT(gtk_list_item_get_child(item)), "row");
   r->track = NULL;
+  r->item = NULL;
   g_ptr_array_remove_fast(s.rows, r);
 }
 
 static void on_activate(GtkListView *view, guint position, gpointer user) {
   (void)view;
   (void)user;
-  if (s.play) s.play(s.user, (int)position);
+  if (s.cb.play) s.cb.play(s.cb.user, (int)position);
 }
 
 static void on_close(GtkWidget *widget, gpointer user) {
   (void)widget;
   (void)user;
-  if (s.close) s.close(s.user);
+  if (s.cb.close) s.cb.close(s.cb.user);
 }
 
 static gboolean on_escape(GtkWidget *widget, GVariant *args, gpointer user) {
@@ -203,6 +330,20 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(text), s.summary);
   gtk_box_append(GTK_BOX(header), text);
 
+  GMenu *menu = g_menu_new();
+  g_menu_append(menu, "Rename…", "playlist.rename");
+  g_menu_append(menu, "Delete Playlist…", "playlist.delete");
+  s.playlist_button = gtk_menu_button_new();
+  gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s.playlist_button), "view-more-symbolic");
+  gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), G_MENU_MODEL(menu));
+  g_object_unref(menu);
+  gtk_widget_set_tooltip_text(s.playlist_button, "Playlist Menu");
+  gtk_widget_add_css_class(s.playlist_button, "flat");
+  gtk_widget_add_css_class(s.playlist_button, "circular");
+  gtk_widget_set_valign(s.playlist_button, GTK_ALIGN_START);
+  gtk_widget_set_visible(s.playlist_button, FALSE);
+  gtk_box_append(GTK_BOX(header), s.playlist_button);
+
   GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic");
   gtk_widget_set_tooltip_text(close, "Close");
   gtk_widget_add_css_class(close, "flat");
@@ -213,10 +354,102 @@ static GtkWidget *build_header(void) {
   return header;
 }
 
-GtkWidget *track_list_new(void (*play)(void *user, int index), void (*close)(void *user), void *user) {
-  s.play = play;
-  s.close = close;
-  s.user = user;
+static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (s.cb.add_to_playlist && s.menu_uid[0]) s.cb.add_to_playlist(s.cb.user, s.menu_uid);
+}
+
+/* Move Up goes after the entry two above (or to the start); Move Down after the one below. */
+static void on_move(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)param;
+  (void)user;
+  gboolean up = action == s.move_up;
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(s.store));
+  if (!s.cb.move || !s.menu_entry[0] || (up && s.menu_pos == 0) || (!up && s.menu_pos + 1 >= n)) return;
+  char entry[MC_UID_STRLEN], after[MC_UID_STRLEN] = "";
+  memcpy(entry, s.menu_entry, sizeof entry);
+  if (!up) memcpy(after, track_at(s.menu_pos + 1)->entry_uid, sizeof after);
+  else if (s.menu_pos >= 2) memcpy(after, track_at(s.menu_pos - 2)->entry_uid, sizeof after);
+  s.cb.move(s.cb.user, entry, after[0] ? after : NULL);
+}
+
+static void on_remove(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  char entry[MC_UID_STRLEN];
+  memcpy(entry, s.menu_entry, sizeof entry);
+  if (s.cb.remove && entry[0]) s.cb.remove(s.cb.user, entry);
+}
+
+static void on_rename_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (s.cb.rename_playlist && showing_playlist()) s.cb.rename_playlist(s.cb.user);
+}
+
+static void on_delete_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (s.cb.delete_playlist && showing_playlist()) s.cb.delete_playlist(s.cb.user);
+}
+
+static GSimpleAction *add_action(GSimpleActionGroup *group, const char *name,
+                                 void (*activate)(GSimpleAction *, GVariant *, gpointer)) {
+  GSimpleAction *action = g_simple_action_new(name, NULL);
+  g_signal_connect(action, "activate", G_CALLBACK(activate), NULL);
+  g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(action));
+  g_object_unref(action); /* the group keeps it */
+  return action;
+}
+
+/* The right-click menu, as the pane's child so its "track." actions resolve; and the
+ * header menu's "playlist." actions. */
+static void build_menu(GtkWidget *pane) {
+  GSimpleActionGroup *actions = g_simple_action_group_new();
+  add_action(actions, "add-to-playlist", on_add_to_playlist);
+  s.move_up = add_action(actions, "move-up", on_move);
+  s.move_down = add_action(actions, "move-down", on_move);
+  add_action(actions, "remove", on_remove);
+  gtk_widget_insert_action_group(pane, "track", G_ACTION_GROUP(actions));
+  g_object_unref(actions);
+  actions = g_simple_action_group_new();
+  add_action(actions, "rename", on_rename_playlist);
+  add_action(actions, "delete", on_delete_playlist);
+  gtk_widget_insert_action_group(pane, "playlist", G_ACTION_GROUP(actions));
+  g_object_unref(actions);
+
+  GMenu *model = g_menu_new();
+  g_menu_append(model, "Add to Playlist…", "track.add-to-playlist");
+  s.album_menu = G_MENU_MODEL(model);
+  model = g_menu_new();
+  GMenu *section = g_menu_new();
+  g_menu_append(section, "Add to Playlist…", "track.add-to-playlist");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  section = g_menu_new();
+  g_menu_append(section, "Move Up", "track.move-up");
+  g_menu_append(section, "Move Down", "track.move-down");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  section = g_menu_new();
+  g_menu_append(section, "Remove from Playlist", "track.remove");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  s.playlist_menu = G_MENU_MODEL(model);
+
+  s.menu = gtk_popover_menu_new_from_model(s.album_menu);
+  gtk_popover_set_has_arrow(GTK_POPOVER(s.menu), FALSE);
+  gtk_widget_set_halign(s.menu, GTK_ALIGN_START);
+  gtk_widget_set_parent(s.menu, pane);
+}
+
+GtkWidget *track_list_new(const track_list_callbacks *cb) {
+  s.cb = *cb;
   s.rows = g_ptr_array_new();
   s.store = g_list_store_new(TRACK_TYPE_ITEM);
   s.selection = gtk_single_selection_new(G_LIST_MODEL(s.store));
@@ -241,6 +474,8 @@ GtkWidget *track_list_new(void (*play)(void *user, int index), void (*close)(voi
   gtk_box_append(GTK_BOX(pane), build_header());
   gtk_box_append(GTK_BOX(pane), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
   gtk_box_append(GTK_BOX(pane), s.scroller);
+  s.pane = pane;
+  build_menu(pane);
 
   GtkEventController *keys = gtk_shortcut_controller_new();
   gtk_shortcut_controller_add_shortcut(
@@ -265,16 +500,21 @@ static void set_summary(int year, int count, int total_ms) {
 
 void track_list_show(mc_library *lib, AlbumItem *album) {
   gboolean same = album && s.album && !strcmp(album->uid, s.album->uid);
+  /* The selected track; in a playlist, its entry, as a track can be in it twice. */
   char keep[MC_UID_STRLEN] = "";
   TrackItem *sel = gtk_single_selection_get_selected_item(s.selection);
-  if (same && sel) memcpy(keep, sel->uid, sizeof keep);
+  if (same && sel) memcpy(keep, album->is_playlist ? sel->entry_uid : sel->uid, sizeof keep);
 
   if (album) g_object_ref(album);
   g_clear_object(&s.album);
   s.album = album;
 
   mc_track_list *list = NULL;
-  if (lib && album && mc_library_list_album_tracks(lib, album->uid, &list) != MC_OK) list = NULL;
+  mc_status st = MC_OK;
+  if (lib && album)
+    st = album->is_playlist ? mc_library_list_playlist_tracks(lib, album->uid, &list)
+                            : mc_library_list_album_tracks(lib, album->uid, &list);
+  if (st != MC_OK) list = NULL;
   int n = list ? list->count : 0, total_ms = 0;
   gboolean discs = FALSE;
   for (int i = 0; i < n; i++) discs |= list->items[i].disc_no > 1;
@@ -284,14 +524,21 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
     const mc_track_info *t = &list->items[i];
     TrackItem *it = items[i] = g_object_new(TRACK_TYPE_ITEM, NULL);
     memcpy(it->uid, t->uid, sizeof it->uid);
+    memcpy(it->entry_uid, t->entry_uid, sizeof it->entry_uid);
     it->title = g_strdup(t->title && *t->title ? t->title : "Untitled");
-    if (t->track_no && discs) g_snprintf(it->num, sizeof it->num, "%d-%d", t->disc_no ? t->disc_no : 1, t->track_no);
+    if (album->is_playlist) g_snprintf(it->num, sizeof it->num, "%d", i + 1);
+    else if (t->track_no && discs) g_snprintf(it->num, sizeof it->num, "%d-%d", t->disc_no ? t->disc_no : 1, t->track_no);
     else if (t->track_no) g_snprintf(it->num, sizeof it->num, "%d", t->track_no);
     format_duration(t->duration_ms, it->duration, sizeof it->duration);
     it->duration_ms = t->duration_ms;
     it->path = g_strdup(t->path);
+    it->artist = g_strdup(t->artist);
+    it->album = g_strdup(t->album);
+    it->cover_dir = g_strdup(t->cover_dir);
     total_ms += t->duration_ms > 0 ? t->duration_ms : 0;
-    if (keep[0] && !strcmp(it->uid, keep)) selected = (guint)i;
+    if (keep[0] && selected == GTK_INVALID_LIST_POSITION &&
+        !strcmp(album->is_playlist ? it->entry_uid : it->uid, keep))
+      selected = (guint)i;
   }
   mc_track_list_free(list);
   g_list_store_splice(s.store, 0, g_list_model_get_n_items(G_LIST_MODEL(s.store)), (gpointer *)items, (guint)n);
@@ -300,8 +547,11 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   g_free(items);
 
   gtk_label_set_text(GTK_LABEL(s.title), album ? album->title : "");
-  gtk_label_set_text(GTK_LABEL(s.artist), album && album->artist ? album->artist : "Unknown Artist");
+  gtk_label_set_text(GTK_LABEL(s.artist), album && album->is_playlist ? "Playlist"
+                                          : album && album->artist ? album->artist
+                                                                   : "Unknown Artist");
   set_summary(album ? album->year : 0, n, total_ms);
+  gtk_widget_set_visible(s.playlist_button, album && album->is_playlist);
   if (!same) {
     gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(s.scroller)), 0);
     if (s.cover_loading) g_cancellable_cancel(s.cover_loading);
@@ -328,11 +578,14 @@ int track_list_count(void) {
 track_list_item track_list_item_at(int i) {
   track_list_item item = {0};
   if (i < 0 || i >= track_list_count()) return item;
-  TrackItem *t = g_list_model_get_item(G_LIST_MODEL(s.store), (guint)i);
+  TrackItem *t = track_at((guint)i);
   item.uid = t->uid;
   item.title = t->title;
   item.duration_ms = t->duration_ms;
   item.path = t->path;
+  item.artist = t->artist;
+  item.album = t->album;
+  item.cover_dir = t->cover_dir;
   g_object_unref(t); /* the store keeps it */
   return item;
 }

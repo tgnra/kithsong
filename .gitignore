@@ -30,3 +30,5 @@ android/local.properties
 *.db-shm
 CMakeUserPresets.json
 *.local.cmake
+
+.claude/
