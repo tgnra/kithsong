@@ -708,6 +708,7 @@ mc_status mc_session_run(mc_session *s) {
   if (!s || !s->ch || !s->conn || !is_uid(s->peer_uid)) return MC_ERR_INVALID_ARG;
   s->converged = 1;
   mc_session_refresh_self(s->sync, s->conn); /* best effort: stale capabilities are fine */
+  mc_transfer_write_status(s->sync, s->conn);
 
   hello peer;
   mc_status st = send_hello(s);

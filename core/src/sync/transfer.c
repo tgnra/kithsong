@@ -919,7 +919,7 @@ static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got
   size_t len;
   mc_channel_set_timeout(s->ch, FETCH_WAIT_MS); /* it may be encoding */
   st = mc_channel_recv(s->ch, &type, &payload, &len);
-  mc_channel_set_timeout(s->ch, MC_CHANNEL_TIMEOUT_MS);
+  mc_channel_set_timeout(s->ch, mc_channel_default_timeout());
   if (st != MC_OK) return st;
   if (type == MC_MSG_FILE_ERR) {
     *got = GOT_REFUSED;
@@ -1539,47 +1539,62 @@ static void verify_files(mc_library *lib, int deep, mc_verify_result *res) {
   rows_free(rows, n);
 }
 
-/* Writes this device's sync_status from plan and what it holds now. Only when a count
- * changed or the last check is older than the library's latest change, so an idle group
- * doesn't log a new row every session. Returns 1 if a count changed. */
-static int write_status(mc_sync_db *sdb, mc_library *lib, const mc_plan *plan, int corrupt,
-                        int *missing_out) {
-  int64_t expected = plan->count, ok = 0, bytes = 0;
-  for (int i = 0; i < plan->count; i++) ok += track_satisfied(lib, &plan->tracks[i]);
-  if (corrupt > expected - ok) corrupt = (int)(expected - ok);
-  int64_t missing = expected - ok - corrupt;
-  if (missing_out) *missing_out = (int)missing;
+typedef struct mc_sync_status_row status_row;
+
+/* This device's sync_status from plan and what it holds now. *latest_ms: the wall time of
+ * the library's latest change. */
+static void compute_status(mc_library *lib, const mc_plan *plan, int corrupt, status_row *v,
+                           int64_t *latest_ms) {
+  memset(v, 0, sizeof *v);
+  v->verified_ms = (int64_t)mc_wall_ms();
+  v->expected = plan->count;
+  for (int i = 0; i < plan->count; i++) v->ok += track_satisfied(lib, &plan->tracks[i]);
+  v->corrupt = corrupt < v->expected - v->ok ? corrupt : v->expected - v->ok;
+  v->missing = v->expected - v->ok - v->corrupt;
+  *latest_ms = 0;
   sqlite3_stmt *stmt;
-  int64_t latest = 0;
-  if (sqlite3_prepare_v2(mc_library_db(lib), "SELECT sum(size_bytes), (SELECT max(hlc) FROM changelog) FROM files",
-                         -1, &stmt, NULL) == SQLITE_OK) {
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT sum(size_bytes), (SELECT max(hlc) FROM changelog) FROM files", -1,
+                         &stmt, NULL) == SQLITE_OK) {
     if (sqlite3_step(stmt) == SQLITE_ROW) {
-      bytes = sqlite3_column_int64(stmt, 0);
-      latest = (int64_t)((uint64_t)sqlite3_column_int64(stmt, 1) >> 16); /* its wall ms */
+      v->bytes = sqlite3_column_int64(stmt, 0);
+      *latest_ms = (int64_t)((uint64_t)sqlite3_column_int64(stmt, 1) >> 16); /* its wall ms */
     }
     sqlite3_finalize(stmt);
   }
-  const char *me = mc_sync_db_device_uid(sdb);
-  sqlite3 *db = mc_sync_db_handle(sdb);
-  int have = 0, changed = 1;
-  int64_t verified = 0;
-  if (sqlite3_prepare_v2(db,
+}
+
+/* Whether v should be written: there's no row yet or a count changed, or with refresh
+ * (mc_sync_verify()) also when the stored check is older than the library's latest change.
+ * Writing only on change keeps an idle group from logging a row every session. */
+static int status_due(mc_sync_db *sdb, const status_row *v, int refresh, int64_t latest_ms) {
+  sqlite3_stmt *stmt;
+  int due = 1;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
                          "SELECT verified_ms, expected, ok, missing, corrupt, bytes FROM sync_status"
                          " WHERE device_uid = ?1",
-                         -1, &stmt, NULL) == SQLITE_OK) {
-    sqlite3_bind_text(stmt, 1, me, -1, SQLITE_STATIC);
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-      have = 1;
-      verified = sqlite3_column_int64(stmt, 0);
-      changed = sqlite3_column_int64(stmt, 1) != expected || sqlite3_column_int64(stmt, 2) != ok ||
-                sqlite3_column_int64(stmt, 3) != missing || sqlite3_column_int64(stmt, 4) != corrupt ||
-                sqlite3_column_int64(stmt, 5) != bytes;
-    }
-    sqlite3_finalize(stmt);
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return 1;
+  sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(sdb), -1, SQLITE_STATIC);
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    int changed = sqlite3_column_int64(stmt, 1) != v->expected ||
+                  sqlite3_column_int64(stmt, 2) != v->ok ||
+                  sqlite3_column_int64(stmt, 3) != v->missing ||
+                  sqlite3_column_int64(stmt, 4) != v->corrupt ||
+                  sqlite3_column_int64(stmt, 5) != v->bytes;
+    due = changed || (refresh && sqlite3_column_int64(stmt, 0) < latest_ms);
   }
-  if (have && !changed && verified >= latest) return 0;
-  if (mc_sync_db_begin_write(sdb) != MC_OK) return 0;
-  mc_status st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  return due;
+}
+
+/* Writes v as this device's sync_status. */
+static mc_status store_status(mc_sync_db *sdb, const status_row *v) {
+  sqlite3 *db = mc_sync_db_handle(sdb);
+  sqlite3_stmt *stmt;
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st != MC_OK) return st;
+  st = MC_ERR_DB;
   if (sqlite3_prepare_v2(db,
                          "INSERT INTO sync_status (device_uid, verified_ms, expected, ok, missing,"
                          " corrupt, bytes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
@@ -1588,19 +1603,35 @@ static int write_status(mc_sync_db *sdb, mc_library *lib, const mc_plan *plan, i
                          " missing = excluded.missing, corrupt = excluded.corrupt,"
                          " bytes = excluded.bytes",
                          -1, &stmt, NULL) == SQLITE_OK) {
-    sqlite3_bind_text(stmt, 1, me, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 2, (sqlite3_int64)mc_wall_ms());
-    sqlite3_bind_int64(stmt, 3, expected);
-    sqlite3_bind_int64(stmt, 4, ok);
-    sqlite3_bind_int64(stmt, 5, missing);
-    sqlite3_bind_int64(stmt, 6, corrupt);
-    sqlite3_bind_int64(stmt, 7, bytes);
+    sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(sdb), -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 2, v->verified_ms);
+    sqlite3_bind_int64(stmt, 3, v->expected);
+    sqlite3_bind_int64(stmt, 4, v->ok);
+    sqlite3_bind_int64(stmt, 5, v->missing);
+    sqlite3_bind_int64(stmt, 6, v->corrupt);
+    sqlite3_bind_int64(stmt, 7, v->bytes);
     if (sqlite3_step(stmt) == SQLITE_DONE) st = MC_OK;
     sqlite3_finalize(stmt);
   }
   if (st == MC_OK) st = mc_sync_db_commit(sdb);
   if (st != MC_OK) mc_sync_db_rollback(sdb);
-  return st == MC_OK && changed;
+  return st;
+}
+
+void mc_transfer_write_status(mc_sync *sync, mc_sync_conn *c) {
+  mc_mutex_lock(&sync->lock);
+  int pending = sync->status_pending;
+  status_row v = sync->status;
+  sync->status_pending = 0;
+  mc_mutex_unlock(&sync->lock);
+  if (pending && store_status(c->sdb, &v) != MC_OK) {
+    mc_mutex_lock(&sync->lock);
+    if (!sync->status_pending) {
+      sync->status = v;
+      sync->status_pending = 1;
+    }
+    mc_mutex_unlock(&sync->lock);
+  }
 }
 
 /* --- The phase --- */
@@ -1638,8 +1669,18 @@ void mc_transfer_end(mc_session *s, int ok) {
     mc_verify_result v;
     verify_files(lib, 0, &v);
     s->files_deleted += (int)v.deleted;
-    if (write_status(s->conn->sdb, lib, x->plan, s->files_corrupt, &s->files_missing))
-      s->follow_up = 1; /* the group hears of it soon */
+    status_row row;
+    int64_t latest;
+    compute_status(lib, x->plan, s->files_corrupt, &row, &latest);
+    s->files_missing = (int)row.missing;
+    if (status_due(s->conn->sdb, &row, 0, latest)) {
+      /* Written before the next session's group exchange, which follows soon. */
+      mc_mutex_lock(&s->sync->lock);
+      s->sync->status = row;
+      s->sync->status_pending = 1;
+      mc_mutex_unlock(&s->sync->lock);
+      s->follow_up = 1;
+    }
   }
   if (x->receiving) files_release(s->sync);
   mc_plan_free(x->plan);
@@ -1677,7 +1718,16 @@ mc_status mc_sync_verify(mc_sync *sync, mc_verify_mode mode, mc_verify_result *o
     if (mc_plan_compute(sync->api.sdb, sync->api.lib, sync->device_uid, free_bytes, &plan) ==
             MC_OK &&
         plan->status == MC_PLAN_OK)
-      write_status(sync->api.sdb, sync->api.lib, plan, 0, NULL);
+    {
+      status_row v;
+      int64_t latest;
+      compute_status(sync->api.lib, plan, 0, &v, &latest);
+      /* Written now, outside any session; it replaces one a session left pending. */
+      mc_mutex_lock(&sync->lock);
+      sync->status_pending = 0;
+      mc_mutex_unlock(&sync->lock);
+      if (status_due(sync->api.sdb, &v, 1, latest)) store_status(sync->api.sdb, &v);
+    }
     mc_plan_free(plan);
   }
   mc_mutex_unlock(&sync->api_lock);

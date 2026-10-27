@@ -108,6 +108,12 @@ struct mc_sync {
   char group_hash[MC_GROUP_HASH_STRLEN];
   uint64_t changed_ms; /* mono: a local change to tell members about; 0 = none */
   int files_busy; /* a session is fetching files or reconciling, or a verify runs */
+  /* This device's sync_status as a file phase last found it, waiting to be written before
+   * the next session's group exchange (a write after it would leave the pair unconverged). */
+  int status_pending;
+  struct mc_sync_status_row {
+    int64_t verified_ms, expected, ok, missing, corrupt, bytes;
+  } status;
   char hints[MC_SYNC_HINTS_MAX]; /* our address hints, JSON */
   /* Outgoing pairing: this device is A. */
   int out_active;

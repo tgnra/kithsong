@@ -26,6 +26,10 @@ mc_status mc_transfer_run(mc_session *s);
  * what mc_transfer_begin() set up. */
 void mc_transfer_end(mc_session *s, int ok);
 
+/* Before a session's HELLO, with this device's other own rows: writes the sync_status the
+ * last file phase left pending, so the group exchange carries it. */
+void mc_transfer_write_status(mc_sync *sync, mc_sync_conn *c);
+
 /* Copies the session's file counts into r. */
 void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r);
 

@@ -20,6 +20,7 @@
 #include "library/library_internal.h"
 #include "musiccore/musiccore.h"
 #include "sync/plan.h"
+#include "sync/rows.h"
 #include "sync/sync_db.h"
 #include "sync/sync_internal.h"
 #include "test.h"
@@ -664,17 +665,19 @@ int main(int argc, char **argv) {
              sizeof things);
 
   CHECK(pair(&a, &b) == MC_PAIR_PAIRED);
-  /* B has no profile row yet: nothing moves. A, the archive, reports itself complete. */
+  /* B has no profile row yet: nothing moves. */
   CHECK(b_files(&b, NULL) == 0);
-  snprintf(sql, sizeof sql, "SELECT expected FROM sync_status WHERE device_uid = '%s'", a.uid);
-  CHECK(group_int(&a, sql) == 4);
-  snprintf(sql, sizeof sql, "SELECT ok FROM sync_status WHERE device_uid = '%s'", a.uid);
-  CHECK(group_int(&a, sql) == 4);
 
   /* B: everything, originals. They arrive byte for byte, at the same organised paths. */
   set_profile(&a, b.uid, 0, NULL);
   mc_sync_result ra, rb;
   CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+  /* A, the archive, found itself complete in the pairing session; its sync_status is written
+   * before the next group exchange, so B has it now too. */
+  snprintf(sql, sizeof sql,
+           "SELECT count(*) FROM sync_status WHERE device_uid = '%s' AND expected = 4 AND ok = 4",
+           a.uid);
+  CHECK(group_int(&a, sql) == 1 && group_int(&b, sql) == 1);
   CHECK(rb.files_received == 4 && rb.files_missing == 0 && rb.files_corrupt == 0);
   CHECK(ra.files_sent == 4 && ra.bytes_sent == rb.bytes_received && rb.bytes_received > 0);
   CHECK(b_files(&b, NULL) == 4);
@@ -697,15 +700,25 @@ int main(int argc, char **argv) {
     }
   }
   CHECK(a.files_progress > 0 && b.files_progress > 0);
+  /* Nothing more to do: a second session moves nothing, and carries B's sync_status. */
+  CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+  CHECK(rb.files_received == 0 && ra.files_received == 0 && rb.files_deleted == 0);
   snprintf(sql, sizeof sql,
            "SELECT count(*) FROM sync_status WHERE device_uid = '%s' AND expected = 4 AND ok = 4"
            " AND missing = 0 AND corrupt = 0 AND bytes > 0 AND verified_ms > 0",
            b.uid);
-  CHECK(group_int(&b, sql) == 1);
-  /* B can serve those originals in turn (it's not an archive, but a received original is
-   * still one). Nothing more to do: a second session moves nothing. */
-  CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
-  CHECK(rb.files_received == 0 && ra.files_received == 0 && rb.files_deleted == 0);
+  CHECK(group_int(&b, sql) == 1 && group_int(&a, sql) == 1);
+  {
+    char g1[MC_DIGEST_STRLEN], g2[MC_DIGEST_STRLEN];
+    mc_sync_db *sdb = NULL;
+    g1[0] = g2[0] = '\0';
+    if (mc_sync_db_open(a.config, &sdb) == MC_OK) mc_rows_vv_digest(mc_sync_db_handle(sdb), g1);
+    mc_sync_db_close(sdb);
+    sdb = NULL;
+    if (mc_sync_db_open(b.config, &sdb) == MC_OK) mc_rows_vv_digest(mc_sync_db_handle(sdb), g2);
+    mc_sync_db_close(sdb);
+    CHECK(g1[0] && !strcmp(g1, g2)); /* the status write didn't unsettle the group data */
+  }
 
   /* B: Opus at 64 kbps. A transcodes; B swaps its WAVs for Opus files. */
   set_profile(&a, b.uid, 64, NULL);
