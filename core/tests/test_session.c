@@ -489,6 +489,23 @@ int main(int argc, char **argv) {
     CHECK(exec(mc_library_db(c.lib), sql) == SQLITE_OK);
     CHECK(mc_library_commit(c.lib) == MC_OK);
   }
+  /* Recents: A and then C open the album, so everyone keeps C's later open of it. A's artist
+   * arrives everywhere, and the playlist C opened goes from everyone's recents because B
+   * removed it after that. */
+  char al[MC_UID_STRLEN], ar[MC_UID_STRLEN], pl[MC_UID_STRLEN], opened[32];
+  lib_text(&a, "SELECT uid FROM albums", al, sizeof al);
+  lib_text(&a, "SELECT uid FROM artists", ar, sizeof ar);
+  lib_text(&a, "SELECT uid FROM playlists", pl, sizeof pl);
+  CHECK(mc_library_record_opened(a.lib, MC_RECENT_ALBUM, al) == MC_OK);
+  mc_sleep_ms(5);
+  CHECK(mc_library_record_opened(c.lib, MC_RECENT_ALBUM, al) == MC_OK);
+  mc_sleep_ms(5);
+  CHECK(mc_library_record_opened(c.lib, MC_RECENT_PLAYLIST, pl) == MC_OK);
+  mc_sleep_ms(5);
+  CHECK(mc_library_record_opened(a.lib, MC_RECENT_ARTIST, ar) == MC_OK);
+  CHECK(mc_library_record_opened(b.lib, MC_RECENT_PLAYLIST, pl) == MC_OK);
+  CHECK(mc_library_remove_recent(b.lib, pl) == MC_OK);
+  lib_text(&c, "SELECT opened_ms FROM recents WHERE kind = 'album'", opened, sizeof opened);
   dev *abc[] = {&a, &b, &c};
   for (int round = 0; round < 3 && !digests_equal(abc, 3); round++) {
     CHECK(sync_now(&a, &b) == MC_OK);
@@ -512,6 +529,16 @@ int main(int argc, char **argv) {
                     "SELECT count(*) FROM album_group_entries e JOIN album_groups g"
                     " ON g.uid = e.group_uid JOIN albums a ON a.uid = e.album_uid"
                     " WHERE g.name = 'Late'") == 1);
+    mc_recent_list *recents = NULL;
+    CHECK(mc_library_list_recents(abc[i]->lib, 0, &recents) == MC_OK && recents &&
+          recents->count == 2);
+    if (recents && recents->count == 2) {
+      CHECK(recents->items[0].kind == MC_RECENT_ARTIST && !strcmp(recents->items[0].uid, ar));
+      CHECK(recents->items[1].kind == MC_RECENT_ALBUM && !strcmp(recents->items[1].uid, al));
+      snprintf(text, sizeof text, "%lld", (long long)recents->items[1].opened_ms);
+      CHECK_TEXT(text, opened);
+    }
+    mc_recent_list_free(recents);
   }
 
   /* Refusals. D and E form a group of their own: A can't pair with D (in_group). F has a

@@ -145,6 +145,7 @@ static void test_migration_v4(const char *scratch) {
                  "DELETE FROM meta WHERE key = 'library_uid';"
                  "DROP TABLE album_group_entries;"
                  "DROP TABLE album_groups;"
+                 "DROP TABLE recents;"
                  "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS
                  "PRAGMA user_version = 3;") == SQLITE_OK);
@@ -159,7 +160,7 @@ static void test_migration_v4(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 6);
+  CHECK(mc_library_schema_version(lib) == 7);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
   CHECK(has_column(db, "files", "sha256"));
   CHECK(strlen(mc_library_uid(lib)) == MC_UID_STRLEN - 1);
@@ -181,6 +182,7 @@ static void test_migration_v5(const char *scratch) {
   sqlite3 *db = mc_library_db(lib);
   CHECK(exec(db, "DROP TABLE album_group_entries;"
                  "DROP TABLE album_groups;"
+                 "DROP TABLE recents;"
                  "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS
                  "PRAGMA user_version = 4;") == SQLITE_OK);
@@ -190,7 +192,7 @@ static void test_migration_v5(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 6);
+  CHECK(mc_library_schema_version(lib) == 7);
   CHECK(has_column(db, "album_groups", "name"));
   CHECK(has_column(db, "album_group_entries", "position"));
 
@@ -224,7 +226,8 @@ static void test_migration_v6(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   sqlite3 *db = mc_library_db(lib);
-  CHECK(exec(db, "DROP TABLE smart_lists;"
+  CHECK(exec(db, "DROP TABLE recents;"
+                 "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS
                  "PRAGMA user_version = 5;") == SQLITE_OK);
   mc_library_close(lib);
@@ -233,7 +236,7 @@ static void test_migration_v6(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 6);
+  CHECK(mc_library_schema_version(lib) == 7);
   CHECK(has_column(db, "smart_lists", "rule"));
   CHECK(has_column(db, "track_plays", "last_played_ms"));
 
@@ -253,6 +256,120 @@ static void test_migration_v6(const char *scratch) {
                       " AND node_uid = mc_node_uid()") == 2);
   CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'track_plays'"
                       " AND row_uid = 'p1' AND field = 'last_played_ms'") == 1);
+  mc_library_close(lib);
+}
+
+/* Uids of the recents in order, joined with spaces, into out. */
+static void recent_uids(mc_library *lib, int limit, char *out, size_t n) {
+  out[0] = '\0';
+  mc_recent_list *list = NULL;
+  if (mc_library_list_recents(lib, limit, &list) != MC_OK || !list) return;
+  for (int i = 0; i < list->count; i++) {
+    if (i) strncat(out, " ", n - strlen(out) - 1);
+    strncat(out, list->items[i].uid, n - strlen(out) - 1);
+  }
+  mc_recent_list_free(list);
+}
+
+/* Migration v7 and recents: one entry per item, newest open first, logged for sync, and
+ * items that are gone left out. */
+static void test_recents(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_recents.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "DROP TABLE recents; PRAGMA user_version = 6;") == SQLITE_OK);
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 7);
+  CHECK(has_column(db, "recents", "opened_ms"));
+
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid) VALUES ('al1', 'Things', 'ar1'),"
+                 " ('al2', 'Untitled', NULL);"
+                 "INSERT INTO playlists (uid, name) VALUES ('p1', 'Mix');"
+                 "INSERT INTO album_groups (uid, name) VALUES ('g1', 'Late');"
+                 "INSERT INTO smart_lists (uid, name, subject, rule) VALUES"
+                 " ('s1', 'Loved', 'tracks', '{}'), ('s2', 'New', 'albums', '{}');") == SQLITE_OK);
+
+  /* Each open is a millisecond or two apart, so the order is by time alone. */
+  const struct {
+    mc_recent_kind kind;
+    const char *uid;
+  } opens[] = {{MC_RECENT_ALBUM, "al1"},    {MC_RECENT_ARTIST, "ar1"},      {MC_RECENT_PLAYLIST, "p1"},
+               {MC_RECENT_PLAYLIST, "s1"},  {MC_RECENT_ALBUM_GROUP, "g1"},  {MC_RECENT_ALBUM_GROUP, "s2"},
+               {MC_RECENT_ALBUM, "al2"},    {MC_RECENT_ALBUM, "al1"}};
+  for (size_t i = 0; i < sizeof opens / sizeof opens[0]; i++) {
+    mc_sleep_ms(2);
+    CHECK(mc_library_record_opened(lib, opens[i].kind, opens[i].uid) == MC_OK);
+  }
+  char uids[256];
+  recent_uids(lib, 0, uids, sizeof uids);
+  CHECK(strcmp(uids, "al1 al2 s2 g1 s1 p1 ar1") == 0);
+  recent_uids(lib, 3, uids, sizeof uids);
+  CHECK(strcmp(uids, "al1 al2 s2") == 0);
+
+  mc_recent_list *list = NULL;
+  CHECK(mc_library_list_recents(lib, 0, &list) == MC_OK && list && list->count == 7);
+  if (list && list->count == 7) {
+    CHECK(list->items[0].kind == MC_RECENT_ALBUM);
+    CHECK_STR(list->items[0].name, "Things");
+    CHECK_STR(list->items[0].artist, "Low");
+    CHECK(list->items[1].artist == NULL);
+    CHECK(list->items[2].kind == MC_RECENT_ALBUM_GROUP && list->items[2].is_smart);
+    CHECK_STR(list->items[2].name, "New");
+    CHECK(list->items[3].kind == MC_RECENT_ALBUM_GROUP && !list->items[3].is_smart);
+    CHECK(list->items[4].kind == MC_RECENT_PLAYLIST && list->items[4].is_smart);
+    CHECK(list->items[6].kind == MC_RECENT_ARTIST);
+    CHECK_STR(list->items[6].name, "Low");
+    CHECK(list->items[0].opened_ms > list->items[1].opened_ms);
+    CHECK(list->items[0].opened_ms >= (int64_t)mc_wall_ms() - 60000);
+  }
+  mc_recent_list_free(list);
+
+  /* Only items that exist, as the kind given. */
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "nope") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ARTIST, "al1") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_PLAYLIST, "s2") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, "s1") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, (mc_recent_kind)9, "al1") == MC_ERR_INVALID_ARG);
+  CHECK(query_int(db, "SELECT count(*) FROM recents") == 7);
+
+  /* Reopening only moves the time, and only that is logged. */
+  CHECK(changelog_count(db, "entity = 'recents' AND row_uid = 'al1' AND field = 'kind'") == 1);
+  CHECK(changelog_count(db, "entity = 'recents' AND row_uid = 'al1' AND field = 'opened_ms'") == 2);
+
+  /* An item that's gone is left out, and one of an unknown kind (from a newer version) too. */
+  CHECK(exec(db, "DELETE FROM albums WHERE uid = 'al2';"
+                 "DELETE FROM smart_lists WHERE uid = 's1';"
+                 "INSERT INTO recents (uid, kind, opened_ms) VALUES ('x1', 'radio', 1)") == SQLITE_OK);
+  recent_uids(lib, 0, uids, sizeof uids);
+  CHECK(strcmp(uids, "al1 s2 g1 p1 ar1") == 0);
+
+  CHECK(mc_library_remove_recent(lib, "g1") == MC_OK);
+  CHECK(mc_library_remove_recent(lib, "g1") == MC_ERR_NOT_FOUND);
+  CHECK(changelog_count(db, "entity = 'recents' AND row_uid = 'g1' AND field = '_deleted'") == 1);
+  recent_uids(lib, 0, uids, sizeof uids);
+  CHECK(strcmp(uids, "al1 s2 p1 ar1") == 0);
+  /* Opening it again brings it back, first. */
+  mc_sleep_ms(2);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, "g1") == MC_OK);
+  recent_uids(lib, 2, uids, sizeof uids);
+  CHECK(strcmp(uids, "g1 al1") == 0);
+
+  CHECK(mc_library_clear_recents(lib) == MC_OK);
+  CHECK(mc_library_clear_recents(lib) == MC_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM recents") == 0);
+  recent_uids(lib, 0, uids, sizeof uids);
+  CHECK(strcmp(uids, "") == 0);
   mc_library_close(lib);
 }
 
@@ -437,7 +554,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 6);
+  CHECK(mc_library_schema_version(lib) == 7);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -518,7 +635,7 @@ int main(int argc, char **argv) {
   if (lib) {
     CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
     CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
-    CHECK(mc_library_schema_version(lib) == 6);
+    CHECK(mc_library_schema_version(lib) == 7);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }
@@ -551,6 +668,7 @@ int main(int argc, char **argv) {
   test_migration_v4(argc > 1 ? argv[1] : ".");
   test_migration_v5(argc > 1 ? argv[1] : ".");
   test_migration_v6(argc > 1 ? argv[1] : ".");
+  test_recents(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();

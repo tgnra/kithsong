@@ -12,6 +12,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 4 | `files.sha256`, `meta.library_uid`; `peers` dropped (sync data lives in `sync.db`) |
 | 5 | `album_groups`, `album_group_entries` |
 | 6 | `smart_lists`, `track_plays.last_played_ms` |
+| 7 | `recents` |
 
 ## Location
 
@@ -169,6 +170,18 @@ editor from.
 A rule can't refer to another smart list. A playlist or group a rule names that has since
 been deleted just matches nothing.
 
+## Recents
+
+`recents` holds what was last opened: albums, artists, playlists and album groups (smart
+ones included), with `kind` naming which (`'album'`, `'artist'`, `'playlist'`,
+`'album_group'`, as sync profile items do). A row's `uid` is the item's own uid, so an item
+has one row and opening it on two devices writes the same fields: sync keeps the newer open,
+and a removal wins over an earlier open. `opened_ms` is the wall-clock part of the hlc the
+open is stamped with, so the newest change by hlc is also the newest `opened_ms`. There is
+no foreign key, since a row may name any of four tables; listing leaves out rows whose item
+is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
+`mc_library_remove_recent()` and `mc_library_clear_recents()`.
+
 ## Tables
 
 | Table              | Synced | Notes |
@@ -182,6 +195,7 @@ been deleted just matches nothing.
 | `album_groups`     | yes    | playlists of albums; see [Album groups](#album-groups) |
 | `album_group_entries` | yes | ordered by `position`, like `playlist_entries` |
 | `smart_lists`      | yes    | `subject` is `'tracks'` or `'albums'`; `rule` is JSON; see [Smart lists](#smart-lists) |
+| `recents`          | yes    | last opened items, one row per item keyed by its uid; see [Recents](#recents) |
 | `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it |
 | `changelog`        | -      | field-level change log that sync is built on |
 | `meta`             | no     | `node_uid`, `library_uid` and other per-library settings; see [Identity](#identity) |

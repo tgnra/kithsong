@@ -158,6 +158,45 @@ typedef struct mc_album_group_list {
 mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **out);
 void mc_album_group_list_free(mc_album_group_list *list);
 
+/* Recents: what was last opened, on any device. They're library data and sync with it; an
+ * item has one entry everywhere, which the newest open wins. */
+
+typedef enum mc_recent_kind {
+  MC_RECENT_ALBUM,
+  MC_RECENT_ARTIST,
+  MC_RECENT_PLAYLIST,   /* a playlist or a smart playlist */
+  MC_RECENT_ALBUM_GROUP /* an album group or a smart album group */
+} mc_recent_kind;
+
+/* Notes that item uid, of kind, was opened now, putting it first in the recents (on every
+ * device, once it syncs). What counts as opening (say, starting it playing) is the caller's
+ * call. MC_ERR_NOT_FOUND if there's no such item of that kind. */
+mc_status mc_library_record_opened(mc_library *lib, mc_recent_kind kind, const char *uid);
+/* Takes item uid out of the recents until it's next opened. MC_ERR_NOT_FOUND if it isn't in
+ * them. */
+mc_status mc_library_remove_recent(mc_library *lib, const char *uid);
+/* Empties the recents, on every device once it syncs. */
+mc_status mc_library_clear_recents(mc_library *lib);
+
+typedef struct mc_recent_info {
+  mc_recent_kind kind;
+  char uid[MC_UID_STRLEN]; /* the album, artist, playlist or album group */
+  int64_t opened_ms;       /* when it was last opened (Unix ms) */
+  char *name;              /* its title or name */
+  char *artist;            /* an album's artist; NULL for other kinds, or if unknown */
+  int is_smart;            /* a smart playlist or smart album group */
+} mc_recent_info;
+
+typedef struct mc_recent_list {
+  mc_recent_info *items;
+  int count;
+} mc_recent_list;
+
+/* The recents, most recently opened first, at most limit of them (all if limit <= 0). Items
+ * that no longer exist are left out. Free with mc_recent_list_free(). */
+mc_status mc_library_list_recents(mc_library *lib, int limit, mc_recent_list **out);
+void mc_recent_list_free(mc_recent_list *list);
+
 #ifdef __cplusplus
 }
 #endif

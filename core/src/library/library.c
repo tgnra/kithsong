@@ -57,6 +57,14 @@ static const char *const k_migrations[] = {
   "  subject TEXT NOT NULL,"
   "  rule    TEXT NOT NULL"
   ") WITHOUT ROWID;",
+  /* v7: recents, what was last opened. A row's uid is the opened item's own uid, so opening
+   * one item on two devices writes the same row and sync keeps the newest open. */
+  "CREATE TABLE recents ("
+  "  uid       TEXT PRIMARY KEY,"
+  "  kind      TEXT NOT NULL,"
+  "  opened_ms INTEGER NOT NULL"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX recents_opened ON recents (opened_ms);",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -76,6 +84,7 @@ static const char *const k_entry_cols[] = {"playlist_uid", "track_uid", "positio
 static const char *const k_group_cols[] = {"name", NULL};
 static const char *const k_group_entry_cols[] = {"group_uid", "album_uid", "position", NULL};
 static const char *const k_smart_cols[] = {"name", "subject", "rule", NULL};
+static const char *const k_recent_cols[] = {"kind", "opened_ms", NULL};
 
 static const mc_changelog_table k_tracked[] = {
   {"artists", "uid", k_artist_cols},
@@ -87,6 +96,7 @@ static const mc_changelog_table k_tracked[] = {
   {"album_groups", "uid", k_group_cols},
   {"album_group_entries", "uid", k_group_entry_cols},
   {"smart_lists", "uid", k_smart_cols},
+  {"recents", "uid", k_recent_cols},
 };
 
 /* --- Schema --- */
@@ -693,6 +703,125 @@ mc_status mc_library_record_play(mc_library *lib, const char *track_uid) {
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) mc_library_rollback(lib);
   return st;
+}
+
+/* recents.kind, indexed by mc_recent_kind; the same names as sync profile items. */
+static const char *const k_recent_kinds[] = {"album", "artist", "playlist", "album_group"};
+#define RECENT_KIND_COUNT ((int)(sizeof k_recent_kinds / sizeof k_recent_kinds[0]))
+
+/* Runs a write to recents in a transaction of its own, binding text parameters p1 and p2
+ * (unless NULL) and now as ?3 if it has one. MC_ERR_NOT_FOUND if it changed no row. */
+static mc_status write_recents(mc_library *lib, const char *sql, const char *p1, const char *p2) {
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    mc_library_rollback(lib);
+    return MC_ERR_DB;
+  }
+  if (p1) sqlite3_bind_text(stmt, 1, p1, -1, SQLITE_STATIC);
+  if (p2) sqlite3_bind_text(stmt, 2, p2, -1, SQLITE_STATIC);
+  /* The open's time is the wall-clock part of a fresh hlc, just before the one that logs it.
+   * An open on any device that has seen this one then gets a later time as well as a later
+   * hlc, so sync's newest change by hlc is also the newest open, even when clocks disagree. */
+  if (sqlite3_bind_parameter_count(stmt) >= 3)
+    sqlite3_bind_int64(stmt, 3, (sqlite3_int64)mc_hlc_physical_ms(mc_hlc_now(&lib->hlc)));
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  st = rc != SQLITE_DONE ? MC_ERR_DB : sqlite3_changes(lib->db) ? MC_OK : MC_ERR_NOT_FOUND;
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
+mc_status mc_library_record_opened(mc_library *lib, mc_recent_kind kind, const char *uid) {
+  if (!lib || !uid || (unsigned)kind >= RECENT_KIND_COUNT) return MC_ERR_INVALID_ARG;
+  static const char sql[] =
+    "INSERT INTO recents (uid, kind, opened_ms) SELECT ?1, ?2, ?3"
+    " WHERE CASE ?2"
+    "  WHEN 'album' THEN EXISTS (SELECT 1 FROM albums WHERE uid = ?1)"
+    "  WHEN 'artist' THEN EXISTS (SELECT 1 FROM artists WHERE uid = ?1)"
+    "  WHEN 'playlist' THEN EXISTS (SELECT 1 FROM playlists WHERE uid = ?1)"
+    "   OR EXISTS (SELECT 1 FROM smart_lists WHERE uid = ?1 AND subject = 'tracks')"
+    "  WHEN 'album_group' THEN EXISTS (SELECT 1 FROM album_groups WHERE uid = ?1)"
+    "   OR EXISTS (SELECT 1 FROM smart_lists WHERE uid = ?1 AND subject = 'albums')"
+    " END"
+    " ON CONFLICT (uid) DO UPDATE SET kind = excluded.kind, opened_ms = excluded.opened_ms";
+  return write_recents(lib, sql, uid, k_recent_kinds[kind]);
+}
+
+mc_status mc_library_remove_recent(mc_library *lib, const char *uid) {
+  if (!lib || !uid) return MC_ERR_INVALID_ARG;
+  return write_recents(lib, "DELETE FROM recents WHERE uid = ?1", uid, NULL);
+}
+
+mc_status mc_library_clear_recents(mc_library *lib) {
+  if (!lib) return MC_ERR_INVALID_ARG;
+  mc_status st = write_recents(lib, "DELETE FROM recents", NULL, NULL);
+  return st == MC_ERR_NOT_FOUND ? MC_OK : st;
+}
+
+mc_status mc_library_list_recents(mc_library *lib, int limit, mc_recent_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* Each kind joins only its own table, so an entry whose item is gone, or of a kind this
+   * version doesn't know, matches nothing and is left out. */
+  static const char sql[] =
+    "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, s.name),"
+    " aar.name, s.uid IS NOT NULL"
+    " FROM recents r"
+    " LEFT JOIN albums al ON r.kind = 'album' AND al.uid = r.uid"
+    " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
+    " LEFT JOIN artists ar ON r.kind = 'artist' AND ar.uid = r.uid"
+    " LEFT JOIN playlists p ON r.kind = 'playlist' AND p.uid = r.uid"
+    " LEFT JOIN album_groups g ON r.kind = 'album_group' AND g.uid = r.uid"
+    " LEFT JOIN smart_lists s ON s.uid = r.uid AND s.subject ="
+    "  CASE r.kind WHEN 'playlist' THEN 'tracks' WHEN 'album_group' THEN 'albums' END"
+    " WHERE coalesce(al.uid, ar.uid, p.uid, g.uid, s.uid) IS NOT NULL"
+    " ORDER BY r.opened_ms DESC, r.uid DESC LIMIT ?1";
+
+  mc_recent_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  if (st == MC_OK) sqlite3_bind_int(stmt, 1, limit > 0 ? limit : -1);
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *kind = (const char *)sqlite3_column_text(stmt, 0);
+    int k = 0;
+    while (k < RECENT_KIND_COUNT && strcmp(kind, k_recent_kinds[k])) k++;
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_recent_info *r = &list->items[list->count++];
+    memset(r, 0, sizeof *r);
+    r->kind = (mc_recent_kind)k;
+    const unsigned char *uid = sqlite3_column_text(stmt, 1);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(r->uid, (const char *)uid);
+    r->opened_ms = sqlite3_column_int64(stmt, 2);
+    r->name = column_dup(stmt, 3);
+    r->artist = column_dup(stmt, 4);
+    r->is_smart = sqlite3_column_int(stmt, 5);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_recent_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_recent_list_free(mc_recent_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].name);
+    free(list->items[i].artist);
+  }
+  free(list->items);
+  free(list);
 }
 
 const mc_changelog_table *mc_library_tracked(size_t *count) {

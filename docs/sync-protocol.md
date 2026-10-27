@@ -17,7 +17,7 @@
 
 | Database     | Where                                   | Holds |
 |--------------|-----------------------------------------|-------|
-| `library.db` | the library folder                      | artists, albums, tracks, playlists, `files`, the library changelog |
+| `library.db` | the library folder                      | artists, albums, tracks, playlists, recents, `files`, the library changelog |
 | `sync.db`    | the per-device config dir, next to `settings.json` | this device's keys, the group, its devices, sync profiles, capabilities, sync status, the group changelog |
 
 The rule is one-way: the library holds no sync data, but sync may hold library data (the
@@ -222,6 +222,8 @@ A device joining with an empty library adopts the group's `library_uid` through
   generates a key strictly between theirs, plus a random suffix so concurrent inserts don't
   collide. Moving an entry is a `position` change on that entry. Two devices inserting at
   the same spot both keep their entry, ordered by `(position, uid)`.
+- **Recents** are keyed by the opened item's uid, so the same item opened on two devices is
+  one row, and its newest open wins like any field.
 
 ## Session
 
