@@ -20,9 +20,121 @@ data class SyncDevice(
     val port: Int,
     /** The last session with it, in Unix ms; 0 if never. */
     val lastSyncMs: Long,
+    /**
+     * Its own report of its files (sync_status). The rest are 0 without one: it hasn't
+     * finished a file phase yet.
+     */
+    val hasStatus: Boolean,
+    /** When it last checked its files, in Unix ms. */
+    val verifiedMs: Long,
+    /** The files its profile wants, those it holds and checked, missing ones, and corrupt ones. */
+    val expected: Long,
+    val ok: Long,
+    val missing: Long,
+    val corrupt: Long,
+    /** The size of every file it holds. */
+    val bytes: Long,
 ) {
     val kind: DeviceKind get() = DeviceKind.entries.getOrElse(kindCode) { DeviceKind.Desktop }
 }
+
+/** mc_profile_item_kind. */
+enum class ProfileItemKind {
+    Album,
+
+    /** Every album and track credited to the artist. */
+    Artist,
+
+    /** A manual playlist. */
+    Playlist,
+
+    /** A manual album group. */
+    AlbumGroup,
+}
+
+/** An album, artist, playlist or album group a profile selects, by its library uid. */
+data class ProfileItem(val kind: ProfileItemKind, val uid: String)
+
+/**
+ * What a member of the group holds (mc_sync_profile): everything or a selection, as originals
+ * or Opus, within a size budget. Edit a copy and store it with [CoreSync.setProfile].
+ */
+data class SyncProfile(
+    /** Its friendly name; null shows the device's own. */
+    val name: String?,
+    /**
+     * It keeps the whole library as originals, whatever the rest says; read-only here, set
+     * with [CoreSync.setArchive]. An archive's profile can't change [syncAll], [opusKbps] or
+     * [budgetEnabled] (ERR_LOCKED).
+     */
+    val archive: Boolean,
+    /** Everything; else just [items]. */
+    val syncAll: Boolean,
+    /** 0 for originals, else Opus at this bitrate, one of [CoreSync.OPUS_BITRATES]. */
+    val opusKbps: Int,
+    /** With [budgetBytes]: picks the best bitrate (from [opusKbps] down) that fits. */
+    val budgetEnabled: Boolean,
+    val budgetBytes: Long,
+    /** The selection; kept while [syncAll] so it comes back. */
+    val items: List<ProfileItem>,
+) {
+    // For jni_bridge.c, which passes the items as parallel kinds and uids.
+    @Suppress("unused")
+    private constructor(
+        name: String?,
+        archive: Boolean,
+        syncAll: Boolean,
+        opusKbps: Int,
+        budgetEnabled: Boolean,
+        budgetBytes: Long,
+        kinds: IntArray,
+        uids: Array<String>,
+    ) : this(
+        name,
+        archive,
+        syncAll,
+        opusKbps,
+        budgetEnabled,
+        budgetBytes,
+        // Kinds this version doesn't know are left out by the core already.
+        kinds.indices.map { ProfileItem(ProfileItemKind.entries[kinds[it]], uids[it]) },
+    )
+}
+
+/** How much a device would hold with a profile (mc_sync_estimate). */
+data class SyncEstimate(
+    /** The tracks the profile wants. */
+    val tracks: Int,
+    /** Their size at [kbps]; when [overBudget], at 64 kbps. */
+    val totalBytes: Long,
+    /** What it would hold them as: 0 for originals, else the Opus bitrate; 0 when [overBudget]. */
+    val kbps: Int,
+    /** It's an archive: everything, originals, no budget. */
+    val archive: Boolean,
+    /** Even 64 kbps doesn't fit the budget: nothing would sync. */
+    val overBudget: Boolean,
+    /** When [overBudget]: how much too big at 64 kbps. */
+    val shortfallBytes: Long,
+    /** With a budget, what the tracks must fit in (the budget, or less free space); -1 without. */
+    val limitBytes: Long,
+    /** The device's free space, -1 if unknown. */
+    val freeBytes: Long,
+    /**
+     * The tracks' size as originals ([0]) and at each of [CoreSync.OPUS_BITRATES] ([1 + i]),
+     * whatever the profile's format, so an editor can show every option.
+     */
+    val stepBytes: List<Long>,
+)
+
+/** What [CoreSync.verify] found (mc_verify_result). */
+data class VerifyResult(
+    val checked: Long,
+    val ok: Long,
+    /** Missing, changed or corrupt. */
+    val failed: Long,
+    /** Failed copies received from other devices, deleted so the next session fetches them again. */
+    val deleted: Long,
+)
 
 /** A device discovery sees that isn't in this device's group (mc_sync_nearby). */
 data class NearbyDevice(
@@ -57,7 +169,7 @@ class CoreSync(
     enum class PairReason { Paired, WrongCode, InGroup, LibraryMismatch, AlreadyPaired, Busy, Cancelled, Failed }
 
     /** mc_sync_phase. */
-    enum class Phase { Connecting, Group, Library, Done }
+    enum class Phase { Connecting, Group, Library, Files, Done }
 
     /** mc_sync_lib_state: whether the open library is the one the group syncs. */
     enum class LibraryState { NoGroup, Group, Other, Unknown }
@@ -83,15 +195,45 @@ class CoreSync(
             val status: Int,
         ) : Event
 
-        data class Progress(val uid: String, val phase: Phase, val rowsSent: Long, val rowsReceived: Long) : Event
+        /**
+         * A session's progress. Rows count the whole session so far. In [Phase.Files],
+         * [filesDone] of [filesTotal] are the files this device is fetching (received, failed
+         * or refused), and the bytes count the whole session's files both ways; they're 0 in
+         * the other phases.
+         */
+        data class Progress(
+            val uid: String,
+            val phase: Phase,
+            val rowsSent: Long,
+            val rowsReceived: Long,
+            val filesDone: Int,
+            val filesTotal: Int,
+            val bytesReceived: Long,
+            val bytesSent: Long,
+        ) : Event
 
-        /** A session ended; [status] is 0 on success. [librarySynced]: library data was exchanged too. */
+        /**
+         * A session ended; [status] is 0 on success. [librarySynced]: library data was
+         * exchanged too, and then the files counts are set, this device as the receiver:
+         * fetched and verified, wanted but still without a file, failed their checksum twice,
+         * deleted (no longer wanted, or failed the check after the session), and unknown to
+         * the library (deleted, except on an archive). [filesSent] were served to the peer.
+         */
         data class SyncDone(
             val uid: String,
             val status: Int,
             val librarySynced: Boolean,
+            val converged: Boolean,
             val rowsSent: Long,
             val rowsReceived: Long,
+            val filesReceived: Int,
+            val filesMissing: Int,
+            val filesCorrupt: Int,
+            val filesDeleted: Int,
+            val filesUnknown: Int,
+            val filesSent: Int,
+            val bytesReceived: Long,
+            val bytesSent: Long,
         ) : Event
     }
 
@@ -140,6 +282,86 @@ class CoreSync(
     /** Devices discovery sees that aren't in the group, by name. */
     fun nearby(): List<NearbyDevice> = nativeListNearby(handle).asList()
 
+    /**
+     * [uid]'s profile, any member's, this device's included. One with none stored yet reads as
+     * an editor should start: everything, originals, no budget, no name. ERR_NOT_FOUND if not
+     * in a group or [uid] isn't a member.
+     */
+    fun profile(uid: String): SyncProfile = nativeGetProfile(handle, uid)
+
+    /**
+     * Stores [uid]'s profile, writing only what differs from the stored one, so read it with
+     * [profile], change it and store it straight away. [SyncProfile.archive] is ignored.
+     * ERR_LOCKED for an archive's mode, format or budget switch; ERR_INVALID_ARG for a bitrate
+     * not in [OPUS_BITRATES].
+     */
+    fun setProfile(uid: String, profile: SyncProfile) = nativeSetProfile(
+        handle,
+        uid,
+        profile.name,
+        profile.syncAll,
+        profile.opusKbps,
+        profile.budgetEnabled,
+        profile.budgetBytes,
+        profile.itemKinds(),
+        profile.itemUids(),
+    )
+
+    /**
+     * Makes [uid] an archive, or stops it being one. Any member may make any device one; only
+     * the device itself may stop, and only while another archive has verified it holds
+     * everything (ERR_LOCKED otherwise).
+     */
+    fun setArchive(uid: String, archive: Boolean) = nativeSetArchive(handle, uid, archive)
+
+    /**
+     * How much [uid] would hold with [profile], which needn't be stored; [SyncProfile.archive]
+     * previews making it an archive. Blocks for a read of every track. ERR_LIBRARY_MISMATCH if
+     * the open library isn't the group's.
+     */
+    fun estimate(uid: String, profile: SyncProfile): SyncEstimate {
+        val out = LongArray(8 + 1 + OPUS_BITRATES.size)
+        nativeEstimate(
+            handle,
+            uid,
+            profile.name,
+            profile.archive,
+            profile.syncAll,
+            profile.opusKbps,
+            profile.budgetEnabled,
+            profile.budgetBytes,
+            profile.itemKinds(),
+            profile.itemUids(),
+            out,
+        )
+        return SyncEstimate(
+            tracks = out[0].toInt(),
+            totalBytes = out[1],
+            kbps = out[2].toInt(),
+            archive = out[3] != 0L,
+            overBudget = out[4] != 0L,
+            shortfallBytes = out[5],
+            limitBytes = out[6],
+            freeBytes = out[7],
+            stepBytes = out.drop(8),
+        )
+    }
+
+    /**
+     * Checks this device's files, [deep]ly by re-hashing them, else by size and time, then
+     * reports them to the group. Blocks for as long as that takes, after waiting for a
+     * session's file phase to finish.
+     */
+    fun verify(deep: Boolean): VerifyResult {
+        val out = LongArray(4)
+        nativeVerify(handle, deep, out)
+        return VerifyResult(out[0], out[1], out[2], out[3])
+    }
+
+    private fun SyncProfile.itemKinds() = IntArray(items.size) { items[it].kind.ordinal }
+
+    private fun SyncProfile.itemUids() = Array(items.size) { items[it].uid }
+
     /** Stops if started, then frees. */
     override fun close() {
         if (handle != 0L) nativeFree(handle)
@@ -159,20 +381,54 @@ class CoreSync(
         listener(Event.PairResult(uid, name, initiator, PairReason.entries[reason], attemptsLeft, status))
 
     @Suppress("unused")
-    private fun onProgress(uid: String, phase: Int, rowsSent: Long, rowsReceived: Long) =
-        listener(Event.Progress(uid, Phase.entries[phase], rowsSent, rowsReceived))
+    private fun onProgress(
+        uid: String,
+        phase: Int,
+        rowsSent: Long,
+        rowsReceived: Long,
+        filesDone: Int,
+        filesTotal: Int,
+        bytesReceived: Long,
+        bytesSent: Long,
+    ) = listener(
+        Event.Progress(uid, Phase.entries[phase], rowsSent, rowsReceived, filesDone, filesTotal, bytesReceived, bytesSent),
+    )
 
     @Suppress("unused")
-    private fun onSyncDone(uid: String, status: Int, librarySynced: Boolean, rowsSent: Long, rowsReceived: Long) =
-        listener(Event.SyncDone(uid, status, librarySynced, rowsSent, rowsReceived))
+    private fun onSyncDone(
+        uid: String,
+        status: Int,
+        librarySynced: Boolean,
+        converged: Boolean,
+        rowsSent: Long,
+        rowsReceived: Long,
+        filesReceived: Int,
+        filesMissing: Int,
+        filesCorrupt: Int,
+        filesDeleted: Int,
+        filesUnknown: Int,
+        filesSent: Int,
+        bytesReceived: Long,
+        bytesSent: Long,
+    ) = listener(
+        Event.SyncDone(
+            uid, status, librarySynced, converged, rowsSent, rowsReceived, filesReceived, filesMissing,
+            filesCorrupt, filesDeleted, filesUnknown, filesSent, bytesReceived, bytesSent,
+        ),
+    )
 
     companion object {
         /** The TCP port sync listens on unless it's taken (MC_SYNC_DEFAULT_PORT). */
         const val DEFAULT_PORT = 47823
 
-        // mc_status values the pairing calls fail with.
+        /** The Opus bitrates a profile may use, highest first (mc_opus_bitrates). */
+        val OPUS_BITRATES = listOf(256, 192, 160, 128, 96, 64)
+
+        // mc_status values the pairing and profile calls fail with.
+        const val ERR_INVALID_ARG = -2
         const val ERR_NOT_FOUND = -8
         const val ERR_LOCKED = -9
+        const val ERR_LIBRARY_MISMATCH = -11
 
         // nativeWithDevice's calls
         private const val CALL_PAIR_REQUEST = 0
@@ -204,5 +460,32 @@ class CoreSync(
         @JvmStatic private external fun nativeLibraryState(handle: Long): Int
         @JvmStatic private external fun nativeListDevices(handle: Long): Array<SyncDevice>
         @JvmStatic private external fun nativeListNearby(handle: Long): Array<NearbyDevice>
+        @JvmStatic private external fun nativeGetProfile(handle: Long, uid: String): SyncProfile
+        @JvmStatic private external fun nativeSetProfile(
+            handle: Long,
+            uid: String,
+            name: String?,
+            syncAll: Boolean,
+            kbps: Int,
+            budgetEnabled: Boolean,
+            budgetBytes: Long,
+            kinds: IntArray,
+            uids: Array<String>,
+        )
+        @JvmStatic private external fun nativeSetArchive(handle: Long, uid: String, archive: Boolean)
+        @JvmStatic private external fun nativeEstimate(
+            handle: Long,
+            uid: String,
+            name: String?,
+            archive: Boolean,
+            syncAll: Boolean,
+            kbps: Int,
+            budgetEnabled: Boolean,
+            budgetBytes: Long,
+            kinds: IntArray,
+            uids: Array<String>,
+            out: LongArray,
+        )
+        @JvmStatic private external fun nativeVerify(handle: Long, deep: Boolean, out: LongArray)
     }
 }

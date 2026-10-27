@@ -299,12 +299,44 @@ file transfer, and syncing with the desktop app.
 
 Open issues:
 
-- Android sometimes runs the background worker while it blocks the app's network, and the
-  core's sessions then hang instead of timing out. The worker retries later; the hang needs a
-  fix in the core.
-- The same album imported on two devices: how to merge it is an open question in the protocol
-  doc.
+- Android sometimes runs the background worker while it blocks the app's network. The core
+  now times sessions out when the peer goes silent, so they fail and back off rather than hang.
 - The emulator's library now has a synced 4-track playlist and a few extra plays.
+
+### File transfer and profiles
+
+Once the core gained its file phase, the phone got audio file transfer and the bridge for sync
+profiles. No core C changed, and no UI yet: a profile editor is to be built on `Syncer`'s API.
+
+- **Where files go:** the core writes received files into the library folder, and the phone's
+  is in internal no-backup storage (`MusicApp.libraryDir`), so synced music never lands on an
+  SD card. Free space for the profile budget is measured there too. Nothing else needed
+  configuring: the core serves this phone's own files to the others by itself, and never
+  transcodes for others on a phone.
+- **Progress:** `SyncStatus.sessions` maps each member a session is running with to a
+  `SyncProgress` (phase, rows, files done of total, bytes both ways); `SyncStatus.results` keeps
+  each member's last `SyncDone` (files received, missing, corrupt, deleted, sent). `SyncDevice`
+  carries each member's own file report (expected, ok, missing, corrupt, bytes, verified time).
+  The notification shows "n of m files" with a progress bar during the file phase.
+- **Library refresh:** after a session that brought rows or received or deleted files (even a
+  failed one, since files that arrived whole are kept), and every 10 s while files arrive, so a
+  long transfer fills the library as it goes and playback finds the files.
+- **Staying alive:** the foreground service already covers a whole session, file phase
+  included; its wake lock is now renewed on every progress step, so its 30-minute safety net
+  only fires if sync stalls. The multicast lock is held while sync runs. The background worker
+  waits up to 9 minutes (a worker gets 10); a transfer cut off keeps the files that arrived
+  and the next run fetches the rest. Unreachable members now count as done at once, so the
+  worker doesn't wait out its timeout on an offline desktop.
+- **Profiles:** `Syncer.profile()`, `editProfile()` (read-modify-write on the sync thread, then
+  `mc_sync_notify_changed`), `setArchive()`, `estimate()` and `verify()`, all suspending and run
+  on the sync thread, throwing `MusicCoreException`. `SyncProfile` mirrors `mc_sync_profile`.
+- `CoreSync.Phase` lacked `Files`, so the file phase's progress events would have crashed the
+  listener (index out of range on `Done`).
+
+Tested: `:app:assembleDebug` and `:wear:assembleDebug` build. Not tested at all: no device or
+emulator run, so file transfer, profile reads and writes through JNI, the estimate, the
+notification and the worker's longer wait are all unverified on Android. The core's own tests
+cover the file phase and profiles on the host.
 
 ## Phase 7: polish
 
@@ -352,9 +384,8 @@ Core:
 - Import lookups: detect being offline, or offer an option to skip MusicBrainz, so offline
   import isn't slow and every item doesn't need a decision.
 - Importing the same files twice copies them again; skip files already in the library.
-- Sync doesn't transfer audio files yet.
-- Sync sessions hang instead of timing out when Android blocks the network.
-- Merging the same album imported on two devices is an open question in the protocol doc.
+- Sync transfers audio files now; on Android it's wired up but untested on a device (see
+  phase 6).
 - No artist or recents API; artists are derived from albums and some recents live in the app.
 - No volume control, so the app can't duck itself on Android 7.
 - Desktop doesn't record plays yet; Android does.
