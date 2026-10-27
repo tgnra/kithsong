@@ -1,7 +1,8 @@
 /* Sync for the app: owns this device's mc_sync and carries its events onto the UI thread.
  * Core runs the sync callbacks on its own threads; each is copied into a flat malloc'd
  * sync_event (strings copied, names converted to UTF-16) and posted to the main window as
- * WM_APP_SYNC. Progress is throttled to one event every 150 ms per session.
+ * WM_APP_SYNC. Progress is throttled to one event every 150 ms per session, except a change
+ * of phase and the one that finishes the session's files, which always go through.
  *
  * Stopping bumps a generation counter carried in wParam, so events still queued from the
  * old mc_sync are dropped by sync_bridge_receive(). Every function runs on the UI thread. */
@@ -21,8 +22,10 @@ typedef enum {
   SYNC_EV_PEER,        /* on_peer: uid, online, member */
   SYNC_EV_PAIR_CODE,   /* on_pair_code: code, name (the requester), attempts_left */
   SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status */
-  SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_sent, rows_received */
-  SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_* */
+  SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_*, files_done, files_total, bytes_*,
+                        * library_changed */
+  SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
+                        * files_received, files_sent, bytes_* */
 } sync_event_kind;
 
 /* One core event. No pointers inside: free() it whole. Fields that don't apply to the kind
@@ -39,7 +42,13 @@ typedef struct sync_event {
   mc_status status;
   mc_sync_phase phase;
   int64_t rows_sent, rows_received;
+  int files_done, files_total;   /* the files this device is fetching in the session */
+  int files_received, files_sent;
+  int64_t bytes_received, bytes_sent;
   int library_synced, converged;
+  /* Progress: library rows or a file arrived since the last event posted for the device,
+   * so the library views should reload. */
+  int library_changed;
 } sync_event;
 
 /* Creates and starts sync for lib, with sync.db in config_dir, reporting to wnd. device_name

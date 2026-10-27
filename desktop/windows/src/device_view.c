@@ -42,6 +42,7 @@ enum {
   ID_DEV_TICK_TIMER,
   ID_DEV_REFRESH_TIMER,
   ID_DEV_ESTIMATE_TIMER,
+  ID_DEV_FINISHED_TIMER,
 };
 
 /* Posted by the list to itself after its theme changes, to put our checkboxes back. */
@@ -52,6 +53,8 @@ enum {
 #define APPLY_DELAY_MS 400
 #define ESTIMATE_DELAY_MS 250 /* a read of every track: once the edits pause */
 #define TICK_MS 30000 /* "synced 3 minutes ago" moves on */
+#define FINISHED_MS 5000 /* a finished sync's full bar stays this long */
+#define PROGRESS_MAX 1000
 #define DEFAULT_BUDGET_GB 32
 #define AUTO_ITEM 1 /* the format list's item data for Auto; the others hold their kbps, 0 originals */
 #define GIB ((int64_t)1024 * 1024 * 1024)
@@ -138,6 +141,12 @@ static struct {
   int nbusy;
   mc_sync_phase phase;
   int64_t sent, received;
+  int files_done, files_total; /* the files this PC is fetching */
+  int64_t bytes_received, bytes_sent;
+  /* The last session ended and none is running: the bar shows full, with finished_text,
+   * for FINISHED_MS. */
+  BOOL finished;
+  wchar_t finished_text[256];
 
   int hot_tab; /* under the mouse, or -1 */
 
@@ -434,6 +443,31 @@ static BOOL syncing(void) {
   return g_dv.nbusy > 0;
 }
 
+/* Where the bar stands: a step for each phase, and the files phase by files fetched. */
+static int progress_pos(void) {
+  switch (g_dv.phase) {
+    case MC_SYNC_PHASE_CONNECTING: return 0;
+    case MC_SYNC_PHASE_GROUP: return PROGRESS_MAX / 20;
+    case MC_SYNC_PHASE_LIBRARY: return PROGRESS_MAX * 3 / 20;
+    case MC_SYNC_PHASE_FILES: {
+      int base = PROGRESS_MAX * 3 / 10;
+      if (g_dv.files_total <= 0) return base;
+      int done = g_dv.files_done < g_dv.files_total ? g_dv.files_done : g_dv.files_total;
+      return base + (int)((int64_t)(PROGRESS_MAX - base) * done / g_dv.files_total);
+    }
+    default: return PROGRESS_MAX;
+  }
+}
+
+static void CALLBACK finished_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time);
+
+/* Starts or ends the finished state; started, it ends by itself after FINISHED_MS. */
+static void set_finished(BOOL on) {
+  g_dv.finished = on;
+  if (on) SetTimer(g_dv.parent, ID_DEV_FINISHED_TIMER, FINISHED_MS, finished_timer);
+  else KillTimer(g_dv.parent, ID_DEV_FINISHED_TIMER);
+}
+
 /* --- Controls from state --- */
 
 static void update_status(void) {
@@ -497,12 +531,25 @@ static void update_status(void) {
     const wchar_t *phase = mc_wstr(known ? phases[g_dv.phase] : MC_STR_WINDOWS_SYNCING_PROGRESS);
     if (g_dv.phase == MC_SYNC_PHASE_CONNECTING) {
       swprintf(text, 256, L"%ls", phase);
+    } else if (g_dv.phase == MC_SYNC_PHASE_FILES && g_dv.files_total > 0) {
+      wchar_t done[32], total[32], size[32];
+      mc_wformat(text, 256, mc_str_plural(MC_STR_WINDOWS_PROGRESS_FILES, (long)g_dv.files_total), MC_S(u8(phase)),
+                 MC_S(u8(fmt_count(g_dv.files_done, done, 32))), MC_S(u8(fmt_count(g_dv.files_total, total, 32))),
+                 MC_S(u8(fmt_size(g_dv.bytes_received, size, 32))));
+    } else if (g_dv.phase == MC_SYNC_PHASE_FILES) { /* fetching nothing; maybe serving */
+      wchar_t received[32], sent[32];
+      mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROGRESS_BYTES), MC_S(u8(phase)),
+                 MC_S(u8(fmt_size(g_dv.bytes_received, received, 32))),
+                 MC_S(u8(fmt_size(g_dv.bytes_sent, sent, 32))));
     } else {
       wchar_t sent[32], received[32];
       mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROGRESS_ROWS), MC_S(u8(phase)),
                  MC_S(u8(fmt_count(g_dv.sent, sent, 32))), MC_S(u8(fmt_count(g_dv.received, received, 32))));
     }
-    SendMessageW(g_dv.progress, PBM_SETPOS, (WPARAM)g_dv.phase + 1, 0);
+    SendMessageW(g_dv.progress, PBM_SETPOS, (WPARAM)progress_pos(), 0);
+  } else if (g_dv.finished) {
+    swprintf(text, 256, L"%ls", g_dv.finished_text);
+    SendMessageW(g_dv.progress, PBM_SETPOS, PROGRESS_MAX, 0);
   }
   SetWindowTextW(g_dv.progress_text, text);
 
@@ -1212,7 +1259,7 @@ void device_view_create(HWND parent, const device_view_host *host) {
   g_dv.status = child(WC_STATICW, NULL, line, ID_DEV_STATUS);
   g_dv.files = child(WC_STATICW, NULL, line, ID_DEV_FILES);
   g_dv.progress = child(PROGRESS_CLASSW, NULL, 0, ID_DEV_PROGRESS);
-  SendMessageW(g_dv.progress, PBM_SETRANGE32, 0, MC_SYNC_PHASE_DONE + 1);
+  SendMessageW(g_dv.progress, PBM_SETRANGE32, 0, PROGRESS_MAX);
   g_dv.progress_text = child(WC_STATICW, NULL, line, ID_DEV_PROGRESS_TEXT);
   g_dv.message = child(WC_STATICW, NULL, label, ID_DEV_MESSAGE);
   g_dv.notice = child(WC_STATICW, NULL, label, ID_DEV_NOTICE);
@@ -1284,6 +1331,7 @@ void device_view_destroy(void) {
   estimate_cancel();
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
   KillTimer(g_dv.parent, ID_DEV_TICK_TIMER);
+  KillTimer(g_dv.parent, ID_DEV_FINISHED_TIMER);
   KillTimer(g_dv.parent, ID_DEV_REFRESH_TIMER);
   pending_clear();
   free(g_dv.pending.toggles);
@@ -1446,7 +1494,7 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
 
   /* Status lines. While syncing, the progress takes the status line's place, so the page
    * doesn't move. */
-  BOOL busy = dev && syncing();
+  BOOL busy = dev && (syncing() || g_dv.finished);
   int bar_w = S(120);
   place(g_dv.status, on && !busy, left, top, text_w, line_h);
   place(g_dv.progress, busy, left, top + (line_h - S(6)) / 2, bar_w, S(6));
@@ -1560,6 +1608,7 @@ void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
   if (!same) {
     snprintf(g_dv.uid, sizeof g_dv.uid, "%s", uid && sync ? uid : "");
     g_dv.nbusy = 0;
+    set_finished(FALSE);
     g_dv.tab = TAB_ALBUMS;
     set_message(NULL);
   }
@@ -1586,6 +1635,13 @@ void device_view_refresh(void) {
   reload(TRUE);
 }
 
+static void CALLBACK finished_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
+  (void)wnd, (void)msg, (void)id, (void)time;
+  set_finished(FALSE);
+  if (g_dv.found) update_status();
+  layout_again();
+}
+
 static int busy_index(const char *uid) {
   for (int i = 0; i < g_dv.nbusy; i++)
     if (!strcmp(g_dv.busy[i], uid)) return i;
@@ -1607,6 +1663,12 @@ void device_view_on_sync_event(const sync_event *ev) {
         if (i < 0) return;
         memmove(g_dv.busy + i, g_dv.busy + i + 1, (size_t)(g_dv.nbusy - i - 1) * sizeof g_dv.busy[0]);
         g_dv.nbusy--;
+        /* One that got past connecting is reported by on_sync_done, which says how it went;
+         * until then the bar shows full. */
+        if (!syncing() && g_dv.phase != MC_SYNC_PHASE_CONNECTING) {
+          swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_PHASE_DONE));
+          set_finished(TRUE);
+        }
         update_status();
         break;
       }
@@ -1614,9 +1676,14 @@ void device_view_on_sync_event(const sync_event *ev) {
         memcpy(g_dv.busy[g_dv.nbusy], ev->uid, MC_UID_STRLEN);
         g_dv.busy[g_dv.nbusy++][MC_UID_STRLEN - 1] = '\0';
       }
+      set_finished(FALSE);
       g_dv.phase = ev->phase;
       g_dv.sent = ev->rows_sent;
       g_dv.received = ev->rows_received;
+      g_dv.files_done = ev->files_done;
+      g_dv.files_total = ev->files_total;
+      g_dv.bytes_received = ev->bytes_received;
+      g_dv.bytes_sent = ev->bytes_sent;
       if (i < 0) set_message(NULL);
       update_status();
       break;
@@ -1635,6 +1702,16 @@ void device_view_on_sync_event(const sync_event *ev) {
         swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_SYNC_DEVICE_LIST_ONLY));
       }
       set_message(text);
+      /* The finished bar says what came in; a failure says so in the message instead. */
+      if (ev->status != MC_OK) {
+        set_finished(FALSE);
+      } else if (g_dv.finished) {
+        wchar_t n[32], size[32];
+        if (ev->files_received > 0)
+          mc_wformat(g_dv.finished_text, 256, mc_str_plural(MC_STR_WINDOWS_SYNC_FINISHED_FILES, ev->files_received),
+                     MC_S(u8(fmt_count(ev->files_received, n, 32))), MC_S(u8(fmt_size(ev->bytes_received, size, 32))));
+        else swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_SYNC_FINISHED));
+      }
       /* The last sync time, its files, maybe its profile, have changed. */
       reload(TRUE);
       return;

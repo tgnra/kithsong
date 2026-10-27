@@ -172,6 +172,7 @@ typedef struct dev {
   done_event done[MAX_EVENTS];
   int ndone;
   int files_progress; /* MC_SYNC_PHASE_FILES progress events */
+  int done_files, done_total; /* in the last MC_SYNC_PHASE_DONE progress */
 } dev;
 
 static void on_pair_code(void *user, const char *code, const char *name, int attempts) {
@@ -198,6 +199,10 @@ static void on_progress(void *user, const mc_sync_progress *p) {
   dev *d = user;
   mc_mutex_lock(&d->m);
   if (p->phase == MC_SYNC_PHASE_FILES) d->files_progress++;
+  if (p->phase == MC_SYNC_PHASE_DONE) {
+    d->done_files = p->files_done;
+    d->done_total = p->files_total;
+  }
   mc_mutex_unlock(&d->m);
 }
 
@@ -694,6 +699,10 @@ int main(int argc, char **argv) {
   CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
   CHECK(!ra.files_paused && !rb.files_paused);
   CHECK(rb.files_received == 4 && rb.files_missing == 0 && rb.files_corrupt == 0);
+  /* The closing progress carries the file counts, finished. */
+  mc_mutex_lock(&b.m);
+  CHECK(b.done_total == 4 && b.done_files == 4);
+  mc_mutex_unlock(&b.m);
   CHECK(ra.files_sent == 4 && ra.bytes_sent == rb.bytes_received && rb.bytes_received > 0);
   CHECK(b_files(&b, NULL) == 4);
   CHECK(files_match(&b));

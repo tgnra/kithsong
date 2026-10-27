@@ -35,7 +35,6 @@
 - Core - albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
 - Core - changelog compaction must keep the rows that decide merges and archive demotions
 - Linux - the sync UI: show the pairing code, a device page with profiles, Sync now, Leave Group (Windows has them)
-- Windows - the device page's progress shows rows only; show files and bytes (files_done, files_total in mc_sync_progress)
 - Windows and Linux - make a device an archive (mc_sync_set_archive) in the profile editor (Windows already shows the size estimate; Linux's device page needs it too)
 - Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Core - move removed untracked files to the Recycle Bin/trash or a holding folder instead of deleting them permanently

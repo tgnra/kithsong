@@ -604,6 +604,9 @@ profile and pressed Sync.
      for a transcode `source_file_uid` (`FILE_HDR.file`). A received original keeps
      `source_file_uid` NULL: it is still an original, served as one in turn, while a row
      with `source_peer_uid` NULL too is an original imported on this device.
+   - Covers aren't transferred. When the track's album has an `art_hash` and its folder no
+     cover yet, the receiver saves the file's embedded picture (transcodes embed the
+     source's cover) as `cover.jpg` or `cover.png`.
    - On a mismatch it deletes the part file and retries once from another source, then
      counts the track as corrupt. Within a session the only source is the peer, so the
      retry asks it again; the track is tried anew in the next session, possibly with

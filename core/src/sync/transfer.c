@@ -33,7 +33,9 @@
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
 #include "sync/plan.h"
+#include "tagger/coverart.h"
 #include "tagger/organize.h"
+#include "tagger/tag_io.h"
 
 /* Tracks per HAVE_REQ and PREPARE_REQ, so each message and its answer fit in a frame. */
 #define HAVE_CHUNK 400
@@ -919,6 +921,39 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
   return st;
 }
 
+/* Covers aren't transferred: the album folder of a received file gets its cover from the
+ * file's embedded picture (transcodes embed the source's cover), when the album has art
+ * (albums.art_hash) and the folder no cover yet. abs is the received file. */
+static void ensure_cover(mc_library *lib, const char *track, const char *abs) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT 1 FROM tracks t JOIN albums al ON al.uid = t.album_uid"
+                         " WHERE t.uid = ?1 AND al.art_hash IS NOT NULL",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return;
+  sqlite3_bind_text(stmt, 1, track, -1, SQLITE_STATIC);
+  int has_art = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  char *dir = has_art ? mc_strdup(abs) : NULL, *sep = dir ? strrchr(dir, MC_PATH_SEP) : NULL;
+  if (!sep) {
+    free(dir);
+    return;
+  }
+  *sep = '\0';
+  char *cover = mc_coverart_find(dir);
+  unsigned char *img = NULL;
+  size_t len = 0;
+  if (!cover && mc_tags_read_picture(abs, &img, &len) == MC_OK) {
+    static const unsigned char png[] = {0x89, 'P', 'N', 'G'}, jpg[] = {0xFF, 0xD8, 0xFF};
+    const char *ext = len >= 4 && !memcmp(img, png, 4) ? "png" : len >= 3 && !memcmp(img, jpg, 3) ? "jpg" : NULL;
+    mc_buffer buf = {(char *)img, len};
+    if (ext) mc_coverart_save(dir, &buf, ext); /* without one, the grid shows a placeholder */
+  }
+  free(img);
+  free(cover);
+  free(dir);
+}
+
 /* FILE_REQ for t, then FILE_HDR and FILE_DATA into <dest>.part, renamed into place and
  * recorded if the hash matches. *got says how it went; the return value is only for errors
  * that end the session. */
@@ -1019,6 +1054,7 @@ static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got
                     sent_opus ? file_uid : NULL, s->peer_uid, sha) == MC_OK) {
       *got = GOT_OK;
       s->files_received++;
+      ensure_cover(lib, t->track_uid, abs);
     } else {
       mc_remove(abs); /* the track went meanwhile, or the database failed */
     }
