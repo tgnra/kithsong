@@ -71,12 +71,13 @@
 The phone app spec is done; see ANDROID_PROGRESS.md for the phases.
 
 - Playback - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts
-- Import - a screen to review items one at a time
-- Import - files MediaStore hasn't indexed don't appear in the folder sheet
-- Import - the "name: error" format for failed items is still hard-coded
+- Import - removed from Android for now (music arrives by sync); bring it back: the UI (header button, folder sheet, progress card), the READ_MEDIA_AUDIO/READ_EXTERNAL_STORAGE permissions and their request flow, and the foreground ImportService (see the Phase 5 commit)
+  - It needs a screen to review items one at a time
+  - Files MediaStore hasn't indexed didn't appear in the folder sheet
+  - The "name: error" format for failed items was hard-coded
 - Upgrade Kotlin to 2.4, then Coil and MaterialKolor
 - Test - mDNS discovery and sync over real Wi-Fi, API 24-32 devices, audio focus during calls, plays landing in the core's database
-- Test - the themed launcher icon, and the import and sync notification icons
+- Test - the themed launcher icon, and the sync notification icon
 - Search
 
 ## Release

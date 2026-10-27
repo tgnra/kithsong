@@ -15,7 +15,6 @@ object Icons {
     val Pause = icon("Pause", "M6,19h4V5H6v14zM14,5v14h4V5h-4z")
     val SkipPrevious = icon("SkipPrevious", "M6,6h2v12H6zM9.5,12l8.5,6V6z")
     val SkipNext = icon("SkipNext", "M6,18l8.5,-6L6,6v12zM16,6v12h2V6h-2z")
-    val Import = icon("Import", "M5,20h14v-2H5v2zM19,9h-4V3H9v6H5l7,7 7,-7z")
     val Settings = icon(
         "Settings",
         "M19.14,12.94c0.04,-0.3 0.06,-0.61 0.06,-0.94c0,-0.32 -0.02,-0.64 -0.07,-0.94l2.03,-1.58" +

@@ -4,7 +4,6 @@ import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
 import app.musicapp.AlbumInfo
-import app.musicapp.CoreImport
 import app.musicapp.CoreLibrary
 import app.musicapp.CoreSync
 import app.musicapp.DeviceKind
@@ -23,7 +22,7 @@ import java.io.File
  * The library as musiccore has it, in library folder [dir]. A library handle isn't
  * thread-safe, so every core call runs on one background thread ([core]); [library] is read
  * whole when this is created and again on [refresh], which is cheap enough to do after every
- * import: one query for the albums and one per playlist.
+ * sync: one query for the albums and one per playlist.
  *
  * Recents are the albums the core has the newest plays of ([recordPlay]; plays on other
  * devices arrive with sync), merged with what was last started here, kept in [prefs]: the core
@@ -56,7 +55,7 @@ class CoreLibrarySource(
         refresh()
     }
 
-    /** Reads the library again, e.g. after an import. */
+    /** Reads the library again, e.g. after a sync. */
     fun refresh(): Job = scope.launch(core) {
         val start = SystemClock.elapsedRealtime()
         contents = open()?.let { lib ->
@@ -70,10 +69,6 @@ class CoreLibrarySource(
         state.value = contents.library(recents())
         Log.i(TAG, "Read ${contents.albums.size} albums in ${SystemClock.elapsedRealtime() - start} ms")
     }
-
-    /** Starts importing [paths] into the library; see [CoreImport]. Close it when done. */
-    suspend fun startImport(paths: List<String>, fetchArt: Boolean, listener: (CoreImport.Event, Int) -> Unit): CoreImport? =
-        withContext(core) { open()?.let { CoreImport(it, paths, fetchArt, listener) } }
 
     /** Opens this phone's sync state in [configDir] for the library; see [CoreSync]. */
     suspend fun openSync(configDir: String, deviceName: String, listener: (CoreSync.Event) -> Unit): CoreSync? =

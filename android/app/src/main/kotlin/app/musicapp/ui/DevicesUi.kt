@@ -1,24 +1,14 @@
 package app.musicapp.ui
 
 import android.text.format.DateUtils
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -50,7 +40,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.musicapp.CoreSync
 import app.musicapp.DeviceKind
-import app.musicapp.NearbyDevice
 import app.musicapp.R
 import app.musicapp.SyncDevice
 import app.musicapp.sync.Pairing
@@ -58,165 +47,11 @@ import app.musicapp.sync.SyncStatus
 import app.musicapp.sync.Syncer
 
 /**
- * The devices section of settings, like the desktop apps' DEVICES list: this phone, the
- * devices it syncs with, the ones on the network it could pair with, adding one by address,
- * and leaving the group. Pairing itself shows in [PairingDialog], wherever the app is.
- */
-@Composable
-fun DevicesSection(status: SyncStatus, syncer: Syncer) {
-    var adding by rememberSaveable { mutableStateOf(false) }
-    var leaving by rememberSaveable { mutableStateOf(false) }
-    Column {
-        SettingsHeading(stringResource(R.string.devices))
-        ListItem(
-            leadingContent = { Icon(Icons.Smartphone, contentDescription = null) },
-            headlineContent = { Text(status.deviceName) },
-            supportingContent = { Text(selfText(status)) },
-        )
-        notice(status)?.let { (text, isError) ->
-            Text(
-                text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-        }
-        for (device in status.members) MemberRow(device, status, syncer)
-
-        if (status.nearby.isNotEmpty()) {
-            Text(
-                stringResource(R.string.devices_nearby),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
-            )
-        }
-        for (device in status.nearby) {
-            ListItem(
-                leadingContent = { Icon(device.kind.icon, contentDescription = null) },
-                headlineContent = { Text(device.name) },
-                supportingContent = {
-                    Text(stringResource(if (device.inOtherGroup) R.string.device_in_other_group else R.string.device_tap_to_pair))
-                },
-                modifier = Modifier.clickable(enabled = !device.inOtherGroup && status.pairing == null, onClickLabel = stringResource(R.string.pair)) {
-                    syncer.pair(device)
-                },
-            )
-        }
-        if (status.running && status.onLan && status.nearby.isEmpty() && !status.inGroup) {
-            ListItem(
-                leadingContent = { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) },
-                headlineContent = { Text(stringResource(R.string.devices_looking)) },
-                supportingContent = { Text(stringResource(R.string.devices_looking_text)) },
-            )
-        }
-
-        ListItem(
-            leadingContent = { Icon(Icons.Add, contentDescription = null) },
-            headlineContent = { Text(stringResource(R.string.add_device_by_address)) },
-            supportingContent = { Text(stringResource(R.string.add_device_by_address_text)) },
-            modifier = Modifier.clickable(enabled = status.running && status.pairing == null) { adding = true },
-        )
-        if (status.inGroup) {
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.leave_group), color = MaterialTheme.colorScheme.error) },
-                supportingContent = { Text(stringResource(R.string.leave_group_text)) },
-                modifier = Modifier.clickable(enabled = status.running) { leaving = true },
-            )
-        }
-    }
-
-    if (adding) {
-        AddDeviceDialog(
-            onConnect = { host, port ->
-                adding = false
-                syncer.pair(host, port)
-            },
-            onDismiss = { adding = false },
-        )
-    }
-    if (leaving) {
-        AlertDialog(
-            onDismissRequest = { leaving = false },
-            title = { Text(stringResource(R.string.leave_group_title)) },
-            text = { Text(stringResource(R.string.leave_group_confirm, status.members.joinToString { it.name })) },
-            confirmButton = {
-                TextButton(onClick = {
-                    leaving = false
-                    syncer.leaveGroup()
-                }) { Text(stringResource(R.string.leave)) }
-            },
-            dismissButton = { TextButton(onClick = { leaving = false }) { Text(stringResource(R.string.cancel)) } },
-        )
-    }
-}
-
-@Composable
-private fun MemberRow(device: SyncDevice, status: SyncStatus, syncer: Syncer) {
-    var menuOpen by remember { mutableStateOf(false) }
-    var removing by remember { mutableStateOf(false) }
-    val syncing = device.uid in status.syncing
-    val syncingLabel = stringResource(R.string.syncing)
-    Box {
-        ListItem(
-            leadingContent = { Icon(device.kind.icon, contentDescription = null) },
-            headlineContent = { Text(device.name) },
-            supportingContent = { Text(memberText(device, syncing), Modifier.semantics { liveRegion = LiveRegionMode.Polite }) },
-            trailingContent = {
-                if (syncing) {
-                    CircularProgressIndicator(
-                        Modifier.size(24.dp).semantics { contentDescription = syncingLabel },
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    IconButton(onClick = { syncer.syncNow(device.uid) }, enabled = status.running) {
-                        Icon(Icons.Sync, contentDescription = stringResource(R.string.sync_now_with, device.name))
-                    }
-                }
-            },
-            modifier = Modifier.clickable(onClickLabel = stringResource(R.string.more)) { menuOpen = true },
-        )
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.sync_now)) },
-                enabled = status.running && !syncing,
-                onClick = {
-                    menuOpen = false
-                    syncer.syncNow(device.uid)
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.remove_from_group)) },
-                enabled = status.running && !device.archive,
-                onClick = {
-                    menuOpen = false
-                    removing = true
-                },
-            )
-        }
-    }
-    if (removing) {
-        AlertDialog(
-            onDismissRequest = { removing = false },
-            title = { Text(stringResource(R.string.remove_device_title, device.name)) },
-            text = { Text(stringResource(R.string.remove_device_text)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    removing = false
-                    syncer.removeDevice(device.uid)
-                }) { Text(stringResource(R.string.remove)) }
-            },
-            dismissButton = { TextButton(onClick = { removing = false }) { Text(stringResource(R.string.cancel)) } },
-        )
-    }
-}
-
-/**
  * Asks for a device's address and port, as the desktop apps' Add Device dialog does, for
  * networks where discovery doesn't reach it. The device then shows a code to type in here.
  */
 @Composable
-private fun AddDeviceDialog(onConnect: (host: String, port: Int) -> Unit, onDismiss: () -> Unit) {
+fun AddDeviceDialog(onConnect: (host: String, port: Int) -> Unit, onDismiss: () -> Unit) {
     var host by rememberSaveable { mutableStateOf("") }
     var port by rememberSaveable { mutableStateOf(CoreSync.DEFAULT_PORT.toString()) }
     val portNumber = port.toIntOrNull()?.takeIf { it in 1..65535 }
@@ -357,7 +192,7 @@ private const val MAX_ATTEMPTS = 3
 @Composable
 private fun triesLeft(n: Int) = pluralStringResource(R.plurals.tries_left, n, n)
 
-private val DeviceKind.icon: ImageVector
+val DeviceKind.icon: ImageVector
     get() = when (this) {
         DeviceKind.Desktop -> Icons.Computer
         DeviceKind.Phone -> Icons.Smartphone
@@ -365,7 +200,7 @@ private val DeviceKind.icon: ImageVector
     }
 
 @Composable
-private fun selfText(status: SyncStatus): String {
+fun selfText(status: SyncStatus): String {
     val self = stringResource(if (status.inGroup) R.string.self_in_group else R.string.self_alone)
     val address = status.address?.takeIf { status.running } ?: return self
     return if (status.port != CoreSync.DEFAULT_PORT && status.port != 0) {
@@ -377,7 +212,7 @@ private fun selfText(status: SyncStatus): String {
 
 // What may stop sync, and whether it's a problem rather than a remark.
 @Composable
-private fun notice(status: SyncStatus): Pair<String, Boolean>? = when {
+fun syncNotice(status: SyncStatus): Pair<String, Boolean>? = when {
     status.error != null -> status.error to true
     !status.onLan -> stringResource(R.string.sync_not_on_wifi) to true
     status.libraryState == CoreSync.LibraryState.Other -> stringResource(R.string.sync_other_library) to true
@@ -386,7 +221,7 @@ private fun notice(status: SyncStatus): Pair<String, Boolean>? = when {
 }
 
 @Composable
-private fun memberText(device: SyncDevice, syncing: Boolean): String {
+fun memberText(device: SyncDevice, syncing: Boolean): String {
     val now = System.currentTimeMillis()
     val last = when {
         device.lastSyncMs <= 0 -> null

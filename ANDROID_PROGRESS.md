@@ -136,7 +136,8 @@ Decisions:
 - Fake data: launch with `--ez fake true`, or `--ez fake_empty true` for the empty state.
 - Kotlin and Coil were not upgraded.
 
-Loading test data (debug builds):
+Loading test data (debug builds; the receiver has since been removed with import, so this
+no longer works):
 
 1. Launch the app and send `adb shell am broadcast -n app.musicapp/.DebugImportReceiver` once,
    so the app creates its own `import` folder (folders created by adb aren't readable by it).
@@ -204,6 +205,9 @@ Open issues:
 ## Phase 5: import, permissions and settings
 
 Import, its permission flow and a settings screen work on the emulator. No core C code changed.
+
+**Import has since been removed from Android** (see "Sync page, import removed" below); this
+records how it worked, for bringing it back.
 
 Files, under `android/`:
 
@@ -273,8 +277,9 @@ Files, under `android/`:
 
 Decisions:
 
-- Sync lives in a Devices section at the top of Settings, not a header icon: pairing is rare,
-  syncing is automatic, and it mirrors the desktop's devices list. The Add Device dialog uses
+- Sync lived in a Devices section at the top of Settings, not a header icon: pairing is rare,
+  syncing is automatic, and it mirrors the desktop's devices list. (It has since moved to its
+  own page behind a header icon; see below.) The Add Device dialog uses
   the desktop's wording and fields. The pairing code dialog can appear over any screen, since
   the other device can start pairing.
 - Sync runs while the app is on screen, with a `dataSync` foreground service during a session
@@ -326,6 +331,20 @@ apps' native libraries pass the 16 KB alignment check. No core C changed.
 
 Not checked: the themed launcher icon on screen, and the import and sync notification icons.
 
+## Sync page, import removed
+
+- The header's import button is now a sync button. It opens a Sync page (`ui/SyncScreen.kt`)
+  with what was the Devices section of Settings: this phone, the group's devices with their
+  status, Sync now, nearby devices, Add Device by address and Leave Group. Settings keeps a row
+  that opens it. Tapping a device, this phone included, opens its page: status, last sync,
+  address, archive, Sync now and Remove from group, and a placeholder Profile section where the
+  profile editor goes.
+- Import is gone from Android for now: `importer/`, `ui/ImportUi.kt`, the debug import receiver,
+  the progress card, the import settings and the music permission, `READ_MEDIA_AUDIO` and
+  `READ_EXTERNAL_STORAGE`, and `requestLegacyExternalStorage`. Music reaches the phone by sync.
+  `CoreImport.kt` and its JNI functions are still in `:native`, unused. To bring import back,
+  start from the Phase 5 files in git history.
+
 ## Follow-ups
 
 Core:
@@ -350,7 +369,8 @@ Android:
 - Not yet tested: mDNS discovery and sync over real Wi-Fi, API 24-32 devices, audio focus during
   calls, and that plays land in the core's database.
 - Coil and MaterialKolor are held back until Kotlin moves to 2.4.
-- A screen for reviewing import items one at a time; files MediaStore hasn't indexed are missed.
+- Bring import back; it then needs a screen for reviewing items one at a time, and files
+  MediaStore hasn't indexed were missed.
 - Search.
 
 The emulator's test library has 5 albums with doubled tracks, a synced playlist and extra plays;
