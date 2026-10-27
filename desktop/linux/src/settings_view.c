@@ -39,7 +39,7 @@ static gboolean save_library_dir(const char *settings_dir, const char *dir) {
 
 static void show_library_dir(settings_view *s) {
   char *dir = load_library_dir(s->settings_dir);
-  adw_action_row_set_subtitle(ADW_ACTION_ROW(s->folder), dir ? dir : "None chosen");
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(s->folder), dir ? dir : mc_str(MC_STR_LINUX_SETTINGS_NONE_CHOSEN));
   g_free(dir);
 }
 
@@ -52,9 +52,8 @@ static void on_folder_chosen(GObject *source, GAsyncResult *result, gpointer dat
 
   if (dir && g_strcmp0(dir, current) != 0 && s->open_library && s->open_library(s->user, dir)) {
     if (!save_library_dir(s->settings_dir, dir))
-      adw_preferences_dialog_add_toast(
-        ADW_PREFERENCES_DIALOG(dialog),
-        adw_toast_new("Couldn\xE2\x80\x99t save the setting; the old folder will be used next time"));
+      adw_preferences_dialog_add_toast(ADW_PREFERENCES_DIALOG(dialog),
+                                       adw_toast_new(mc_str(MC_STR_SETTINGS_SAVE_FAILED)));
     /* Shown even if it wasn't saved: it's the library open now. */
     adw_action_row_set_subtitle(ADW_ACTION_ROW(s->folder), dir);
   }
@@ -68,7 +67,7 @@ static void on_open_activated(AdwActionRow *row, gpointer data) {
   (void)row;
   settings_view *s = data;
   GtkFileDialog *chooser = gtk_file_dialog_new();
-  gtk_file_dialog_set_title(chooser, "Choose Your Music Library Folder");
+  gtk_file_dialog_set_title(chooser, mc_str(MC_STR_LIBRARY_FOLDER_CHOOSE));
   char *current = load_library_dir(s->settings_dir);
   if (current) {
     GFile *folder = g_file_new_for_path(current);
@@ -100,35 +99,32 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
   /* The folder is plain text (not markup) and selectable, so it can be copied. */
   s->folder = adw_action_row_new();
   adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(s->folder), FALSE);
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->folder), "Library Folder");
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->folder), mc_str(MC_STR_LIBRARY_FOLDER));
   adw_action_row_set_subtitle_selectable(ADW_ACTION_ROW(s->folder), TRUE);
   gtk_widget_add_css_class(s->folder, "property");
   show_library_dir(s);
 
-  GtkWidget *open = nav_row("Open Another Library\xE2\x80\xA6", NULL, TRUE);
+  GtkWidget *open = nav_row(mc_str(MC_STR_LIBRARY_OPEN_ANOTHER), NULL, TRUE);
   gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(open), TRUE);
   g_signal_connect(open, "activated", G_CALLBACK(on_open_activated), s);
 
-  GtkWidget *move = nav_row("Move Library\xE2\x80\xA6", "Not available yet", FALSE);
+  GtkWidget *move = nav_row(mc_str(MC_STR_LIBRARY_MOVE), mc_str(MC_STR_LINUX_NOT_AVAILABLE_YET), FALSE);
   gtk_widget_set_sensitive(move, FALSE);
 
   GtkWidget *group = adw_preferences_group_new();
-  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), "Library Location");
-  adw_preferences_group_set_description(
-    ADW_PREFERENCES_GROUP(group),
-    "Opening another library switches to the library in that folder, or starts an empty one "
-    "there. Music you\xE2\x80\x99ve already imported stays where it is.");
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_LIBRARY_LOCATION));
+  adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_LIBRARY_LOCATION_TEXT));
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), s->folder);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), open);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), move);
 
   GtkWidget *page = adw_preferences_page_new();
-  adw_preferences_page_set_title(ADW_PREFERENCES_PAGE(page), "General");
+  adw_preferences_page_set_title(ADW_PREFERENCES_PAGE(page), mc_str(MC_STR_LINUX_SETTINGS_GENERAL));
   adw_preferences_page_set_icon_name(ADW_PREFERENCES_PAGE(page), "emblem-system-symbolic");
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(group));
 
   s->dialog = GTK_WIDGET(adw_preferences_dialog_new());
-  adw_dialog_set_title(ADW_DIALOG(s->dialog), "Settings");
+  adw_dialog_set_title(ADW_DIALOG(s->dialog), mc_str(MC_STR_SETTINGS));
   adw_preferences_dialog_add(ADW_PREFERENCES_DIALOG(s->dialog), ADW_PREFERENCES_PAGE(page));
   g_object_set_data_full(G_OBJECT(s->dialog), "settings-view", s, settings_view_free);
   adw_dialog_present(ADW_DIALOG(s->dialog), parent);

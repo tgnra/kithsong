@@ -259,7 +259,7 @@ static void row_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpoin
   gtk_label_set_text(GTK_LABEL(r->num), t->num);
   gtk_label_set_text(GTK_LABEL(r->title), t->title);
   gtk_label_set_text(GTK_LABEL(r->duration), t->duration);
-  gtk_widget_set_tooltip_text(r->title, t->path ? NULL : "Not on this device");
+  gtk_widget_set_tooltip_text(r->title, t->path ? NULL : mc_str(MC_STR_LINUX_NOT_ON_DEVICE));
   gtk_widget_set_sensitive(r->title, t->path != NULL);
   gtk_list_item_set_accessible_label(item, t->title);
   row_update(r);
@@ -331,13 +331,13 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(header), text);
 
   GMenu *menu = g_menu_new();
-  g_menu_append(menu, "Rename…", "playlist.rename");
-  g_menu_append(menu, "Delete Playlist…", "playlist.delete");
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_RENAME_MENU), "playlist.rename");
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_DELETE_MENU), "playlist.delete");
   s.playlist_button = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s.playlist_button), "view-more-symbolic");
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), G_MENU_MODEL(menu));
   g_object_unref(menu);
-  gtk_widget_set_tooltip_text(s.playlist_button, "Playlist Menu");
+  gtk_widget_set_tooltip_text(s.playlist_button, mc_str(MC_STR_LINUX_PLAYLIST_MENU));
   gtk_widget_add_css_class(s.playlist_button, "flat");
   gtk_widget_add_css_class(s.playlist_button, "circular");
   gtk_widget_set_valign(s.playlist_button, GTK_ALIGN_START);
@@ -345,7 +345,7 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(header), s.playlist_button);
 
   GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic");
-  gtk_widget_set_tooltip_text(close, "Close");
+  gtk_widget_set_tooltip_text(close, mc_str(MC_STR_CLOSE));
   gtk_widget_add_css_class(close, "flat");
   gtk_widget_add_css_class(close, "circular");
   gtk_widget_set_valign(close, GTK_ALIGN_START);
@@ -424,20 +424,20 @@ static void build_menu(GtkWidget *pane) {
   g_object_unref(actions);
 
   GMenu *model = g_menu_new();
-  g_menu_append(model, "Add to Playlist…", "track.add-to-playlist");
+  g_menu_append(model, mc_str_mnemonic(MC_STR_LINUX_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   s.album_menu = G_MENU_MODEL(model);
   model = g_menu_new();
   GMenu *section = g_menu_new();
-  g_menu_append(section, "Add to Playlist…", "track.add-to-playlist");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_LINUX_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   section = g_menu_new();
-  g_menu_append(section, "Move Up", "track.move-up");
-  g_menu_append(section, "Move Down", "track.move-down");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_MOVE_UP), "track.move-up");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_MOVE_DOWN), "track.move-down");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   section = g_menu_new();
-  g_menu_append(section, "Remove from Playlist", "track.remove");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_REMOVE_FROM_PLAYLIST), "track.remove");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   s.playlist_menu = G_MENU_MODEL(model);
@@ -463,7 +463,8 @@ GtkWidget *track_list_new(const track_list_callbacks *cb) {
   s.view = gtk_list_view_new(GTK_SELECTION_MODEL(s.selection), factory);
   gtk_widget_add_css_class(s.view, "navigation-sidebar");
   gtk_widget_add_css_class(s.view, "track-list");
-  gtk_accessible_update_property(GTK_ACCESSIBLE(s.view), GTK_ACCESSIBLE_PROPERTY_LABEL, "Tracks", -1);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(s.view), GTK_ACCESSIBLE_PROPERTY_LABEL, mc_str(MC_STR_TRACKS_TITLE),
+                                 -1);
   g_signal_connect(s.view, "activate", G_CALLBACK(on_activate), NULL);
   s.scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(s.scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
@@ -488,12 +489,19 @@ GtkWidget *track_list_new(const track_list_callbacks *cb) {
 /* "1997 · 12 tracks · 47 min" */
 static void set_summary(int year, int count, int total_ms) {
   GString *str = g_string_new(NULL);
-  if (year > 0) g_string_append_printf(str, "%d · ", year);
+  char part[64];
+  if (year > 0) g_string_append_printf(str, "%d%s", year, mc_str(MC_STR_SEPARATOR_DOT));
   int min = (total_ms + 30000) / 60000;
-  if (!count) g_string_append(str, "No tracks");
-  else g_string_append_printf(str, "%d %s", count, count == 1 ? "track" : "tracks");
-  if (count && min >= 60) g_string_append_printf(str, " · %d hr %d min", min / 60, min % 60);
-  else if (count) g_string_append_printf(str, " · %d min", min);
+  if (!count) {
+    g_string_append(str, mc_str(MC_STR_NO_TRACKS));
+  } else {
+    mc_format(part, sizeof part, mc_str_plural(MC_STR_TRACKS, count), MC_D(count));
+    g_string_append(str, part);
+    g_string_append(str, mc_str(MC_STR_SEPARATOR_DOT));
+    if (min >= 60) mc_format(part, sizeof part, mc_str(MC_STR_DURATION_HOURS_MINUTES), MC_D(min / 60), MC_D(min % 60));
+    else mc_format(part, sizeof part, mc_str(MC_STR_DURATION_MINUTES), MC_D(min));
+    g_string_append(str, part);
+  }
   gtk_label_set_text(GTK_LABEL(s.summary), str->str);
   g_string_free(str, TRUE);
 }
@@ -525,7 +533,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
     TrackItem *it = items[i] = g_object_new(TRACK_TYPE_ITEM, NULL);
     memcpy(it->uid, t->uid, sizeof it->uid);
     memcpy(it->entry_uid, t->entry_uid, sizeof it->entry_uid);
-    it->title = g_strdup(t->title && *t->title ? t->title : "Untitled");
+    it->title = g_strdup(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
     if (album->is_playlist) g_snprintf(it->num, sizeof it->num, "%d", i + 1);
     else if (t->track_no && discs) g_snprintf(it->num, sizeof it->num, "%d-%d", t->disc_no ? t->disc_no : 1, t->track_no);
     else if (t->track_no) g_snprintf(it->num, sizeof it->num, "%d", t->track_no);
@@ -547,9 +555,9 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   g_free(items);
 
   gtk_label_set_text(GTK_LABEL(s.title), album ? album->title : "");
-  gtk_label_set_text(GTK_LABEL(s.artist), album && album->is_playlist ? "Playlist"
+  gtk_label_set_text(GTK_LABEL(s.artist), album && album->is_playlist ? mc_str(MC_STR_PLAYLIST)
                                           : album && album->artist ? album->artist
-                                                                   : "Unknown Artist");
+                                                                   : mc_str(MC_STR_UNKNOWN_ARTIST));
   set_summary(album ? album->year : 0, n, total_ms);
   gtk_widget_set_visible(s.playlist_button, album && album->is_playlist);
   if (!same) {

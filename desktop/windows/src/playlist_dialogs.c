@@ -7,6 +7,7 @@
 
 #include "resource.h"
 #include "theme.h"
+#include "wstr.h"
 
 enum { MAX_NAME = 255 };
 
@@ -89,7 +90,9 @@ static INT_PTR CALLBACK name_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       a = (ask *)lp;
       SetWindowLongPtrW(dlg, DWLP_USER, (LONG_PTR)a);
       SetWindowTextW(dlg, a->caption);
+      SetDlgItemTextW(dlg, IDC_PL_LABEL, mc_wstr(MC_STR_NAME));
       SetDlgItemTextW(dlg, IDOK, a->ok);
+      SetDlgItemTextW(dlg, IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL));
       HWND edit = GetDlgItem(dlg, IDC_PL_NAME);
       SendMessageW(edit, EM_LIMITTEXT, MAX_NAME, 0);
       SetWindowTextW(edit, a->name ? a->name : L"");
@@ -129,21 +132,25 @@ static char *ask_name(HWND owner, const wchar_t *caption, const wchar_t *ok, con
 
 BOOL playlist_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]) {
   if (!lib) return FALSE;
-  char *name = ask_name(owner, L"New Playlist", L"Create", NULL);
+  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_PLAYLIST), mc_wstr_mnemonic(MC_STR_WINDOWS_CREATE), NULL);
   if (!name) return FALSE;
   mc_status st = mc_playlist_create(lib, name, out_uid);
   free(name);
-  if (st != MC_OK) MessageBoxW(owner, L"Couldn't create the playlist.", L"New Playlist", MB_OK | MB_ICONERROR);
+  if (st != MC_OK)
+    MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_CREATE_FAILED), mc_wstr(MC_STR_NEW_PLAYLIST), MB_OK | MB_ICONERROR);
   return st == MC_OK;
 }
 
 BOOL playlist_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name) {
   if (!lib || !uid) return FALSE;
-  char *entered = ask_name(owner, L"Rename Playlist", L"Rename", name ? name : L"");
+  char *entered = ask_name(owner, mc_wstr(MC_STR_PLAYLIST_RENAME_TITLE), mc_wstr_mnemonic(MC_STR_RENAME),
+                           name ? name : L"");
   if (!entered) return FALSE;
   mc_status st = mc_playlist_rename(lib, uid, entered);
   free(entered);
-  if (st != MC_OK) MessageBoxW(owner, L"Couldn't rename the playlist.", L"Rename Playlist", MB_OK | MB_ICONERROR);
+  if (st != MC_OK)
+    MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_RENAME_FAILED), mc_wstr(MC_STR_PLAYLIST_RENAME_TITLE),
+                MB_OK | MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -166,9 +173,15 @@ static INT_PTR CALLBACK delete_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         a->heading_font = CreateFontIndirectW(&lf);
         SendDlgItemMessageW(dlg, IDC_PL_HEADING, WM_SETFONT, (WPARAM)a->heading_font, FALSE);
       }
-      wchar_t heading[MAX_NAME + 32];
-      swprintf(heading, sizeof heading / sizeof heading[0], L"Delete \x201C%ls\x201D?", a->name ? a->name : L"");
+      SetWindowTextW(dlg, mc_wstr(MC_STR_WINDOWS_PLAYLIST_DELETE_CAPTION));
+      wchar_t heading[MAX_NAME * 2 + 64];
+      char *name = utf8(a->name ? a->name : L"");
+      mc_wformat(heading, sizeof heading / sizeof heading[0], mc_str(MC_STR_PLAYLIST_DELETE_TITLE), MC_S(name));
+      free(name);
       SetDlgItemTextW(dlg, IDC_PL_HEADING, heading);
+      SetDlgItemTextW(dlg, IDC_PL_NOTE, mc_wstr(MC_STR_PLAYLIST_DELETE_TEXT));
+      SetDlgItemTextW(dlg, IDOK, mc_wstr_mnemonic(MC_STR_DELETE));
+      SetDlgItemTextW(dlg, IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL));
       apply_theme(dlg);
       SetFocus(GetDlgItem(dlg, IDCANCEL));
       return FALSE;
@@ -193,6 +206,8 @@ BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const 
                       (LPARAM)&a) != IDOK)
     return FALSE;
   mc_status st = mc_playlist_delete(lib, uid);
-  if (st != MC_OK) MessageBoxW(owner, L"Couldn't delete the playlist.", L"Delete Playlist", MB_OK | MB_ICONERROR);
+  if (st != MC_OK)
+    MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_DELETE_FAILED), mc_wstr(MC_STR_WINDOWS_PLAYLIST_DELETE_CAPTION),
+                MB_OK | MB_ICONERROR);
   return st == MC_OK;
 }

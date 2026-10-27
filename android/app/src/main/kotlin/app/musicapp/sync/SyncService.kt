@@ -158,7 +158,7 @@ class SyncService : Service() {
 
         private fun createChannel(context: Context) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-            val channel = NotificationChannel(CHANNEL_ID, context.getString(R.string.sync_channel), NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(CHANNEL_ID, context.getString(R.string.sync), NotificationManager.IMPORTANCE_LOW)
             context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }

@@ -25,6 +25,7 @@ add_executable(musicapp WIN32
   src/taskbar.c
   src/theme.c
   src/track_list.c
+  src/wstr.c
   src/app.rc
   "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
 # version.rc lives in the build dir but includes resource.h.

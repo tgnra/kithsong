@@ -12,12 +12,13 @@ merged.
   "shared":  { "cancel": "Cancel" },
   "linux":   { "nothing_playing": "Nothing playing" },
   "windows": { "col_year": "Year" },
-  "android": { "back": "Back" }
+  "android": { "back": "Back" },
+  "wear":    { "watch_keep_open": "Keep this screen open." }
 }
 ```
 
 - **Sections**: `shared` for anything used by more than one platform or by the core,
-  `linux`, `windows`, `android` for the rest. Keys are snake_case, never reused across
+  `linux`, `windows`, `android` (the phone app) and `wear` (the watch app) for the rest. Keys are snake_case, never reused across
   sections, and stable: renaming one means changing its users.
 - **Values** are a string, or an object with:
   - `text`: the string;
@@ -57,9 +58,12 @@ English's, add a case to `plural_category()` in `core/src/util/i18n.c`.
   alphabetical within a section), and `mc_strings_gen.c` a table per language. The API is
   in `core/include/musiccore/i18n.h`: `mc_strings_set_locale()`, `mc_str()`,
   `mc_str_mnemonic()`, `mc_str_plural()` and `mc_format()`, all UTF-8.
-- **Android**: `android/app/build.gradle.kts` runs the generator (`MODE=android`) with the
-  SDK's CMake before resources are merged, into `app/build/generated/`: the shared and
-  android sections become `values/strings.xml` and `values-<lang>/strings.xml`, with
+- **Android**: the root `android/build.gradle.kts` registers a `GenerateStrings` task for
+  every app module that sets `extra["musicappStringSections"]` (`:app` takes `shared,android`,
+  `:wear` takes `shared,wear`). It runs the generator (`MODE=android`,
+  `-DANDROID_SECTIONS=...`) with the SDK's CMake before resources are merged, into the
+  module's `build/generated/`: those sections become `values/strings.xml` and
+  `values-<lang>/strings.xml`, with
   `{0}` as `%1$s`, mnemonics dropped and Android's escaping applied. Code uses
   `R.string.<key>` and `R.plurals.<key>` as usual. Strings the core produces itself (import
   errors, status reasons) come through the JNI in the language set with

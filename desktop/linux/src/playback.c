@@ -44,11 +44,10 @@ static void free_items(void) {
 /* "Paranoid Android – Radiohead" while there's a track, for the window list and Alt+Tab. */
 static void set_window_title(const item *it) {
   if (!s.win) return;
-  char *title = !it ? g_strdup("musicapp")
-                : it->artist ? g_strdup_printf("%s – %s", it->title, it->artist)
-                             : g_strdup(it->title);
-  gtk_window_set_title(s.win, title);
-  g_free(title);
+  char *title = it && it->artist ? mc_format_alloc(mc_str(MC_STR_TRACK_BYLINE), MC_S(it->title), MC_S(it->artist))
+                                 : NULL;
+  gtk_window_set_title(s.win, title ? title : it ? it->title : mc_str(MC_STR_APP_NAME));
+  mc_free(title);
 }
 
 static const item *current(const mc_player_status *st) {
@@ -141,7 +140,7 @@ void playback_play(const playback_track *tracks, int count, int start) {
     const playback_track *t = &tracks[i];
     item *it = &items[i];
     if (t->uid && strlen(t->uid) < MC_UID_STRLEN) strcpy(it->uid, t->uid);
-    it->title = g_strdup(t->title ? t->title : "Untitled");
+    it->title = g_strdup(t->title ? t->title : mc_str(MC_STR_UNTITLED));
     it->artist = g_strdup(t->artist);
     it->album = g_strdup(t->album);
     it->cover_dir = g_strdup(t->cover_dir);

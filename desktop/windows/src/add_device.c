@@ -7,6 +7,7 @@
 #include <wchar.h>
 
 #include "theme.h"
+#include "wstr.h"
 
 enum { ID_NOTE = 100, ID_ADDRESS_LABEL, ID_ADDRESS, ID_PORT_LABEL, ID_PORT, ID_SPIN };
 
@@ -23,7 +24,7 @@ typedef struct result {
 
 /* A DLGTEMPLATEEX being written: WORDs, with items aligned to DWORDs. */
 typedef struct tmpl {
-  WORD buf[1024];
+  WORD buf[2048];
   int n;
 } tmpl;
 
@@ -81,21 +82,23 @@ static void build(tmpl *t) {
   put_word(t, DLG_H);
   put_word(t, 0); /* no menu */
   put_word(t, 0); /* the standard dialog class */
-  put_string(t, L"Add Device");
+  put_string(t, mc_wstr(MC_STR_ADD_DEVICE));
   put_word(t, 9);         /* point size */
   put_word(t, FW_NORMAL); /* weight */
   put_word(t, 0);         /* italic, charset */
   put_string(t, L"Segoe UI");
 
   int w = DLG_W - 2 * MARGIN, y = MARGIN;
-  put_item(t, 0x0082, NULL, L"Enter the address of a device on your network. It will show a code to enter next.",
-           SS_LEFT | SS_NOPREFIX, MARGIN, y, w, 18, ID_NOTE);
+  put_item(t, 0x0082, NULL, mc_wstr(MC_STR_ADD_DEVICE_TEXT), SS_LEFT | SS_NOPREFIX, MARGIN, y, w, 18, ID_NOTE);
   y += 25;
-  put_item(t, 0x0082, NULL, L"&IP address or hostname:", SS_LEFT, MARGIN, y, w, 9, ID_ADDRESS_LABEL);
+  wchar_t label[128];
+  put_item(t, 0x0082, NULL, wstr_field_label(label, 128, MC_STR_ADD_DEVICE_HOST), SS_LEFT, MARGIN, y, w, 9,
+           ID_ADDRESS_LABEL);
   y += 11;
   put_item(t, 0x0081, NULL, L"", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, MARGIN, y, w, 14, ID_ADDRESS);
   y += 20;
-  put_item(t, 0x0082, NULL, L"&Port:", SS_LEFT, MARGIN, y, w, 9, ID_PORT_LABEL);
+  put_item(t, 0x0082, NULL, wstr_field_label(label, 128, MC_STR_ADD_DEVICE_PORT), SS_LEFT, MARGIN, y, w, 9,
+           ID_PORT_LABEL);
   y += 11;
   put_item(t, 0x0081, NULL, L"", WS_BORDER | WS_TABSTOP | ES_NUMBER, MARGIN, y, 54, 14, ID_PORT);
   /* Attaches itself to the port box, the control before it. */
@@ -103,10 +106,10 @@ static void build(tmpl *t) {
            UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS | UDS_NOTHOUSANDS | UDS_HOTTRACK, 0, 0,
            0, 0, ID_SPIN);
   int by = DLG_H - MARGIN - BTN_H;
-  put_item(t, 0x0080, NULL, L"Connect", BS_DEFPUSHBUTTON | WS_TABSTOP | WS_DISABLED,
+  put_item(t, 0x0080, NULL, mc_wstr_mnemonic(MC_STR_CONNECT), BS_DEFPUSHBUTTON | WS_TABSTOP | WS_DISABLED,
            DLG_W - MARGIN - 2 * BTN_W - 4, by, BTN_W, BTN_H, IDOK);
-  put_item(t, 0x0080, NULL, L"Cancel", BS_PUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W, by, BTN_W, BTN_H,
-           IDCANCEL);
+  put_item(t, 0x0080, NULL, mc_wstr_mnemonic(MC_STR_CANCEL), BS_PUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W, by,
+           BTN_W, BTN_H, IDCANCEL);
 }
 
 /* --- The dialog --- */

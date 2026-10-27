@@ -3,53 +3,56 @@
 
 #include "resource.h"
 
+/* The dialogs' text comes from the string table (wstr.h) and is set at WM_INITDIALOG, so
+ * every caption and label here is left empty. */
+
 /* Opened from the import list for an item that needs the user's decision. */
 IDD_REVIEW DIALOGEX 0, 0, 540, 340
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Choose a Match"
+CAPTION ""
 FONT 9, "Segoe UI", 0, 0, 1
 BEGIN
   LTEXT           "", IDC_REV_HEADER, 7, 7, 526, 28, SS_NOPREFIX
-  LTEXT           "Matches on MusicBrainz", -1, 7, 40, 200, 9
+  LTEXT           "", IDC_REV_MATCHES_LABEL, 7, 40, 200, 9
   CONTROL         "", IDC_REV_MATCHES, "SysListView32",
                   LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER |
                   WS_BORDER | WS_TABSTOP, 7, 51, 526, 92
-  LTEXT           "Tracks for the selected match", -1, 7, 149, 200, 9
+  LTEXT           "", IDC_REV_TRACKS_LABEL, 7, 149, 200, 9
   CONTROL         "", IDC_REV_TRACKS, "SysListView32",
                   LVS_REPORT | LVS_NOSORTHEADER | WS_BORDER | WS_TABSTOP, 7, 160, 526, 118
-  LTEXT           "Search again:", -1, 7, 290, 48, 9
-  LTEXT           "Artist", -1, 58, 290, 22, 9
+  LTEXT           "", IDC_REV_SEARCH_LABEL, 7, 290, 48, 9
+  LTEXT           "", IDC_REV_ARTIST_LABEL, 58, 290, 22, 9
   EDITTEXT        IDC_REV_ARTIST, 82, 288, 150, 13, ES_AUTOHSCROLL
-  LTEXT           "Album", IDC_REV_TITLE_LABEL, 240, 290, 24, 9
+  LTEXT           "", IDC_REV_TITLE_LABEL, 240, 290, 24, 9
   EDITTEXT        IDC_REV_TITLE, 266, 288, 200, 13, ES_AUTOHSCROLL
-  PUSHBUTTON      "Search", IDC_REV_SEARCH, 473, 287, 60, 15
-  PUSHBUTTON      "Use Existing Tags", IDC_REV_ASIS, 7, 319, 80, 15
-  PUSHBUTTON      "Skip", IDC_REV_SKIP, 92, 319, 50, 15
-  DEFPUSHBUTTON   "Apply Match", IDOK, 413, 319, 60, 15
-  PUSHBUTTON      "Cancel", IDCANCEL, 478, 319, 55, 15
+  PUSHBUTTON      "", IDC_REV_SEARCH, 473, 287, 60, 15
+  PUSHBUTTON      "", IDC_REV_ASIS, 7, 319, 80, 15
+  PUSHBUTTON      "", IDC_REV_SKIP, 92, 319, 50, 15
+  DEFPUSHBUTTON   "", IDOK, 413, 319, 60, 15
+  PUSHBUTTON      "", IDCANCEL, 478, 319, 55, 15
 END
 
 /* New Playlist and Rename Playlist (playlist_dialogs.c): the caption and the OK button's
- * label are set at run time. */
+ * label depend on which. */
 IDD_PLAYLIST_NAME DIALOGEX 0, 0, 230, 70
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Playlist"
+CAPTION ""
 FONT 9, "Segoe UI", 0, 0, 1
 BEGIN
-  LTEXT           "Name", IDC_PL_LABEL, 7, 9, 216, 9, SS_NOPREFIX
+  LTEXT           "", IDC_PL_LABEL, 7, 9, 216, 9, SS_NOPREFIX
   EDITTEXT        IDC_PL_NAME, 7, 20, 216, 14, ES_AUTOHSCROLL
-  DEFPUSHBUTTON   "OK", IDOK, 113, 48, 52, 15
-  PUSHBUTTON      "Cancel", IDCANCEL, 171, 48, 52, 15
+  DEFPUSHBUTTON   "", IDOK, 113, 48, 52, 15
+  PUSHBUTTON      "", IDCANCEL, 171, 48, 52, 15
 END
 
 /* Delete Playlist: the heading names the playlist. Cancel is the default. */
 IDD_PLAYLIST_DELETE DIALOGEX 0, 0, 230, 70
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Delete Playlist"
+CAPTION ""
 FONT 9, "Segoe UI", 0, 0, 1
 BEGIN
   LTEXT           "", IDC_PL_HEADING, 7, 8, 216, 12, SS_NOPREFIX | SS_ENDELLIPSIS
-  LTEXT           "Its tracks stay in the library.", IDC_PL_NOTE, 7, 24, 216, 9, SS_NOPREFIX
-  PUSHBUTTON      "Delete", IDOK, 113, 48, 52, 15
-  DEFPUSHBUTTON   "Cancel", IDCANCEL, 171, 48, 52, 15
+  LTEXT           "", IDC_PL_NOTE, 7, 24, 216, 9, SS_NOPREFIX
+  PUSHBUTTON      "", IDOK, 113, 48, 52, 15
+  DEFPUSHBUTTON   "", IDCANCEL, 171, 48, 52, 15
 END

@@ -116,6 +116,11 @@ status lines), `settings`, `section_albums`/`_artists`/`_playlists`, `import_mus
 `import_item_busy`, `import_searching`, `import_start_failed`, `playlist_delete_title`,
 `playlist_delete_text`, `import_error_*` and `status_*` (core text that every frontend shows).
 
+Merged after the watch (`:wear`) was converted: `nothing_playing` (was `linux.nothing_playing`
+and `wear.watch_nothing_playing`), `pair` (`android.pair`, `wear.watch_pair`), `sync`
+(`android.sync_channel`, `wear.watch_sync`), and `pair_wrong_code` + `tries_left` (Android's
+pair, now also used by the watch in place of its one-plural `wear.watch_wrong_code`).
+
 ## Considered and kept separate
 
 - `linux.add_to_playlist_menu` "Add to playlist…" vs `add_to_playlist`: the ellipsis means

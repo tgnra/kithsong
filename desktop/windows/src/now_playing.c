@@ -9,6 +9,7 @@
 #include "canvas.h"
 #include "cover.h"
 #include "theme.h"
+#include "wstr.h"
 
 /* Metrics at 96 DPI. */
 enum {
@@ -202,7 +203,12 @@ static int measure(HFONT font, const wchar_t *t) {
 static void paint_title(canvas *c) {
   UINT one_line = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
   wchar_t artist[512] = L"";
-  if (s.artist) swprintf(artist, 512, L" \x2014 %ls", s.artist);
+  if (s.artist) {
+    char *name = wstr_to_utf8(s.artist);
+    artist[0] = L' '; /* the gap after the title */
+    mc_wformat(artist + 1, 511, mc_str(MC_STR_NOW_PLAYING_ARTIST), MC_S(name));
+    free(name);
+  }
   int room = s.title_rect.right - s.title_rect.left;
   int title_w = measure(s.bold_font, s.title), artist_w = *artist ? measure(s.font, artist) : 0;
   if (title_w + artist_w > room) {

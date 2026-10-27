@@ -1,7 +1,7 @@
 /* UI text in the user's language. Every user-visible string lives in strings/<lang>.json
  * (see strings/README.md); the build generates enum mc_str_id from it, one id per string:
  * MC_STR_<KEY> for the shared section (e.g. MC_STR_CANCEL), MC_STR_<SECTION>_<KEY> for the
- * platform sections (MC_STR_LINUX_NOTHING_PLAYING, MC_STR_WINDOWS_COL_YEAR).
+ * platform sections (MC_STR_LINUX_NOT_AVAILABLE_YET, MC_STR_WINDOWS_COL_YEAR).
  *
  * All text is UTF-8 and static: never free it. A string a language doesn't translate comes
  * out in English. */

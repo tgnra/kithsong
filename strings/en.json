@@ -147,7 +147,13 @@
     "status_locked": "locked",
     "status_in_group": "already in a sync group",
     "status_library_mismatch": "not the sync group's library",
-    "status_unknown": "unknown error"
+    "status_unknown": "unknown error",
+
+    "nothing_playing": "Nothing playing",
+    "pair": { "text": "Pair", "note": "A button or screen title for pairing with another device." },
+    "sync": { "text": "Sync", "note": "Pairing and syncing between devices: a menu item, screen title or notification channel name." },
+    "pair_wrong_code": { "text": "Wrong code. {0}", "note": "{0} is tries_left." },
+    "tries_left": { "one": "{0:d} try left.", "other": "{0:d} tries left." }
   },
 
   "linux": {
@@ -155,7 +161,6 @@
     "add_to_playlist_menu": "Add to playlist…",
     "playlists_list_failed": "Couldn't list the playlists",
     "album_tile_name": { "text": "{0}, {1}", "note": "An album tile's name for accessibility: its title, then its artist or track count." },
-    "nothing_playing": "Nothing playing",
     "playlist_menu": "Playlist menu",
     "not_on_device": "Not on this device",
     "settings_general": "General",
@@ -169,7 +174,11 @@
     "import_file_count": { "one": "{0:d} file", "other": "{0:d} files" },
     "import_matches_none_yet": "None yet. Search again, or keep the existing tags.",
     "import_matches_nothing": "MusicBrainz has nothing that fits. Search again with different terms, or keep the existing tags.",
-    "import_tracks_text": "The chosen match's tracks, and the files they'd be applied to"
+    "import_tracks_text": "The chosen match's tracks, and the files they'd be applied to",
+
+    "app_summary": { "text": "Music library, player and LAN sync", "note": "The app's one-line description in the applications menu and software centres." },
+    "app_description": { "text": "A music library manager and player. It autotags your collection against MusicBrainz and keeps every device in sync over the local network, with no server and no cloud.", "note": "The app's description in software centres." },
+    "app_keywords": { "text": "music;audio;player;library;tags;sync;", "note": "Search terms for the applications menu, not shown. Each ends with a semicolon; translations may add the English ones." }
   },
 
   "windows": {
@@ -194,6 +203,7 @@
     "col_album_title": { "text": "Album / Title", "note": "Column of an album's name, or a single's title." },
     "col_files": "Files",
     "col_match": { "text": "Match", "note": "Column of how sure a match is, as a percentage." },
+    "col_match_release": { "text": "Match", "note": "Column of the MusicBrainz release an import item was matched to, e.g. \"Radiohead – OK Computer (1997)\"." },
     "col_confidence": "Confidence",
     "col_release": "Release",
     "col_year": "Year",
@@ -246,6 +256,7 @@
     "import_files_found": { "one": "{0:d} file found", "other": "{0:d} files found" },
     "import_no_match": { "text": "{0}. No sure match for the rest", "note": "After how many were imported, e.g. \"12 imported\"." },
     "import_no_match_reason": { "text": "{0}. No sure match for the rest ({1})", "note": "After how many were imported, e.g. \"12 imported\"; then why, e.g. \"Couldn't reach MusicBrainz\"." },
+    "import_problem": { "text": "{0}: {1}", "note": "An album that failed to import, in the list after an import: its name, then why, e.g. \"Couldn't reach MusicBrainz\"." },
 
     "settings_import": "Import",
     "fetch_art": "Download missing covers",
@@ -272,7 +283,6 @@
     "devices_nearby": "On this network",
     "device_in_other_group": "Syncs with other devices. Remove it from them to pair it here",
     "device_tap_to_pair": "Tap to pair",
-    "pair": "Pair",
     "pairing": "Pairing",
     "devices_looking": "Looking for devices on this network",
     "devices_looking_text": "Open musicapp on your computer. If it doesn't show up, add it by its address",
@@ -297,10 +307,8 @@
     "pair_with": "Pair with {0}",
     "pair_enter_code": "Enter the code {0} shows.",
     "pair_code": "Code",
-    "pair_wrong_code": "Wrong code. {0}",
     "paired": "Paired",
     "pair_failed": "Couldn't pair",
-    "tries_left": { "one": "{0:d} try left.", "other": "{0:d} tries left." },
     "self_in_group": "This phone. It syncs with the devices below whenever both are on the same network.",
     "self_alone": "This phone. Pair it with musicapp on a computer to sync your library.",
     "self_address": "{0} Its address is {1}.",
@@ -323,7 +331,6 @@
     "pair_busy": "{0} is pairing with another device. Try again in a moment.",
     "pair_cancelled": "Pairing was cancelled.",
     "pair_unreachable": "Couldn't reach {0}. Check that musicapp is open on it and that both are on the same network.",
-    "sync_channel": "Sync",
     "sync_notification_pairing_with": "Pairing with {0}",
     "sync_notification_wants_to_pair": "{0} wants to pair",
     "sync_notification_syncing_with": "Syncing with {0}",
@@ -331,5 +338,18 @@
     "sync_error_open": "Couldn't open this phone's sync data",
     "sync_error_listen": "Couldn't listen on the network",
     "sync_other_device": "the other device"
+  },
+  "wear": {
+    "watch_empty_text": "No music on this watch yet. Pair it under Sync to add some.",
+    "watch_pair_refused": { "text": "Can't pair", "note": "Title of the watch's screen when it turned down a pairing request." },
+    "watch_pair_waiting": { "text": "Add {0} under Devices on your computer or phone.", "note": "{0} is this watch's name." },
+    "watch_keep_open": "Keep this screen open.",
+    "watch_enter_code": { "text": "Enter this code on {0}", "note": "{0} is the name of the device asking to pair." },
+    "watch_syncing": { "one": "Syncing {0:d} of {1:d} track", "other": "Syncing {0:d} of {1:d} tracks", "note": "The plural follows {1}, the number of tracks to sync." },
+    "watch_tracks": { "one": "{0:d} track on this watch", "other": "{0:d} tracks on this watch" },
+    "watch_paired_text": { "text": "Paired with {0}. Choose what this watch holds on one of them.", "note": "{0} is the list of paired devices' names." },
+    "watch_refused_in_group": "This watch is already paired with other devices. Remove it there first.",
+    "watch_refused_library_mismatch": { "text": "This watch holds music from a different library than {0}.", "note": "{0} is the name of the device asking to pair." },
+    "watch_refused_already_paired": { "text": "This watch is already paired with {0}.", "note": "{0} is the name of the device asking to pair." }
   }
 }

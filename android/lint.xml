@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lint settings for :app and :wear (see the strings convention in build.gradle.kts). -->
+<lint>
+    <!-- strings/en.json's status_ok is a lower-case "ok" on purpose: status reasons sit
+         inside other sentences. Neither app shows it. -->
+    <issue id="ButtonCase">
+        <ignore regexp="capitalize ok is" />
+    </issue>
+    <issue id="Typos">
+        <ignore regexp="&quot;ok&quot; is usually capitalized" />
+    </issue>
+</lint>

@@ -1,16 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Configured by CMake with the release's version and build date. -->
+<!-- Configured by CMake with the release's version and build date, and the text in
+     strings/<lang>.json (linux.app_summary, app_description). -->
 <component type="desktop-application">
   <id>app.musicapp.Musicapp</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <name>musicapp</name>
-  <summary>Music library, player and LAN sync</summary>
-  <description>
-    <p>
-      A music library manager and player. It autotags your collection against MusicBrainz
-      and keeps every device in sync over the local network, with no server and no cloud.
-    </p>
-  </description>
+  <name>@MUSICAPP_APP_NAME@</name>
+  <summary>@MUSICAPP_SUMMARY@</summary>
+@MUSICAPP_SUMMARY_L10N@  <description>
+    <p>@MUSICAPP_DESCRIPTION@</p>
+@MUSICAPP_DESCRIPTION_L10N@  </description>
   <launchable type="desktop-id">app.musicapp.Musicapp.desktop</launchable>
   <developer id="app.musicapp">
     <name>musicapp</name>

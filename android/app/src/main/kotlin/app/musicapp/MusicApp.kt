@@ -2,6 +2,7 @@ package app.musicapp
 
 import android.app.Application
 import android.content.Context
+import android.content.res.Configuration
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
@@ -65,12 +66,12 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         val status = NativeCore.init()
         if (status != 0) Log.e(TAG, "musiccore init failed: $status")
+        NativeCore.followLocale(resources.configuration)
         val core = CoreLibrarySource(
             libraryDir,
             getSharedPreferences("library", MODE_PRIVATE),
             MainScope(),
-            getString(R.string.unknown_artist),
-        )
+        ) { getString(R.string.unknown_artist) }
         library = core
         playback = SessionPlayback(this, MainScope())
         settings = AppSettings(getSharedPreferences("app", MODE_PRIVATE))
@@ -79,6 +80,13 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
         // restored copy on another phone would pose as this one.
         syncer = Syncer(this, core, File(noBackupFilesDir, "sync"), deviceName(), MainScope())
         core.onChanged = syncer::notifyChanged
+    }
+
+    // The system language changed: the core's text follows it, and the library is read again
+    // for the "Unknown artist" in it.
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (NativeCore.followLocale(newConfig)) (library as? CoreLibrarySource)?.refresh()
     }
 
     // What other devices call this phone: the name set in the system settings (API 25+), else

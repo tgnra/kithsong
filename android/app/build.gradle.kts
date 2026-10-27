@@ -51,61 +51,8 @@ android {
     }
 }
 
-// The UI strings come from the repo's strings/*.json, shared with the desktop apps (see
-// strings/README.md): cmake/gen_strings.cmake writes them out as values*/strings.xml in a
-// generated res directory, before resources are merged.
-abstract class GenerateStrings : DefaultTask() {
-    @get:InputDirectory
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val stringsDir: DirectoryProperty
-
-    @get:InputFile
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val script: RegularFileProperty
-
-    @get:Input
-    abstract val cmake: Property<String>
-
-    @get:OutputDirectory
-    abstract val outputDir: DirectoryProperty
-
-    @get:Inject
-    abstract val execOperations: ExecOperations
-
-    @TaskAction
-    fun generate() {
-        val out = outputDir.get().asFile
-        out.deleteRecursively() // no stale values-<lang> from a removed translation
-        out.mkdirs()
-        execOperations.exec {
-            commandLine(
-                cmake.get(),
-                "-DIN=${stringsDir.get().file("en.json").asFile}",
-                "-DOUT_DIR=$out",
-                "-DMODE=android",
-                "-P", script.get().asFile.path,
-            )
-        }
-    }
-}
-
-// The SDK's CMake (as :native uses), or one on the PATH if that version isn't installed.
-val sdkCmake = androidComponents.sdkComponents.sdkDirectory.map { sdk ->
-    val exe = if (System.getProperty("os.name").startsWith("Windows")) "cmake.exe" else "cmake"
-    val version = rootProject.extra["musicappCmakeVersion"] as String
-    sdk.file("cmake/$version/bin/$exe").asFile.takeIf { it.isFile }?.path ?: "cmake"
-}
-
-androidComponents {
-    onVariants { variant ->
-        val task = tasks.register<GenerateStrings>("generate${variant.name.replaceFirstChar(Char::uppercase)}Strings") {
-            stringsDir.set(rootDir.resolve("../strings"))
-            script.set(rootDir.resolve("../cmake/gen_strings.cmake"))
-            cmake.set(sdkCmake)
-        }
-        variant.sources.res?.addGeneratedSourceDirectory(task, GenerateStrings::outputDir)
-    }
-}
+// R.string/R.plurals from strings/en.json (see GenerateStrings in the root build.gradle.kts).
+extra["musicappStringSections"] = listOf("shared", "android")
 
 dependencies {
     implementation(project(":native"))

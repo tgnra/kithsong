@@ -1,11 +1,14 @@
-# Script mode: cmake -DIN=<strings/en.json> -DOUT_DIR=<dir> -DMODE=c|android -P gen_strings.cmake
+# Script mode: cmake -DIN=<strings/en.json> -DOUT_DIR=<dir> -DMODE=c|android
+#                    [-DANDROID_SECTIONS=shared,android] -P gen_strings.cmake
 #
 # Turns the UI strings in strings/*.json (see strings/README.md) into code for each platform.
 # IN is the English file; every other <lang>.json next to it is a translation.
 #   MODE=c        OUT_DIR/mc_strings_gen.h: enum mc_str_id, one id per string of every
 #                 section; OUT_DIR/mc_strings_gen.c: a table per language (util/i18n_table.h).
 #   MODE=android  OUT_DIR/values/strings.xml, and values-<lang>/strings.xml per translation:
-#                 the shared and android sections as Android string and plurals resources.
+#                 the ANDROID_SECTIONS (comma-separated, default shared,android; :wear
+#                 uses shared,wear) as Android string and plurals resources, the shared
+#                 ones marked tools:ignore="UnusedResources".
 # Fails on anything malformed rather than writing something half right: unknown sections or
 # fields, keys that aren't snake_case or appear twice, bad placeholders, plurals without
 # "other", and translations of strings English doesn't have.
@@ -20,7 +23,16 @@ if(NOT MODE MATCHES "^(c|android)$")
   message(FATAL_ERROR "gen_strings: MODE must be c or android, not '${MODE}'")
 endif()
 
-set(SECTIONS shared linux windows android)
+set(SECTIONS shared linux windows android wear)
+if(NOT DEFINED ANDROID_SECTIONS)
+  set(ANDROID_SECTIONS "shared,android")
+endif()
+string(REPLACE "," ";" ANDROID_SECTIONS "${ANDROID_SECTIONS}")
+foreach(_s IN LISTS ANDROID_SECTIONS)
+  if(NOT _s IN_LIST SECTIONS)
+    message(FATAL_ERROR "gen_strings: ANDROID_SECTIONS: unknown section \"${_s}\"")
+  endif()
+endforeach()
 # Stand-ins while rewriting text; CMake strings have no escape for control characters.
 string(ASCII 1 SOH)
 string(ASCII 2 STX)
@@ -501,19 +513,25 @@ endfunction()
 function(android_resources pfx_of ids is_base out)
   set(x "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
   string(APPEND x "<!-- Generated from strings/<lang>.json by cmake/gen_strings.cmake - do not edit. -->\n")
-  string(APPEND x "<resources>\n")
+  string(APPEND x "<resources xmlns:tools=\"http://schemas.android.com/tools\">\n")
   foreach(id IN LISTS ids)
-    if(NOT ID_${id}_SECTION MATCHES "^(shared|android)$")
+    if(NOT ID_${id}_SECTION IN_LIST ANDROID_SECTIONS)
       continue()
     endif()
     set(p "${pfx_of}${id}")
     set(key "${ID_${id}_KEY}")
+    # No one app uses every shared string; lint still reports unused ones of its own section.
+    if(ID_${id}_SECTION STREQUAL "shared")
+      set(ignore " tools:ignore=\"UnusedResources\"")
+    else()
+      set(ignore "")
+    endif()
     if(NOT "${EN_${id}_NOTE}" STREQUAL "")
       xml_comment("${EN_${id}_NOTE}" cm)
       string(APPEND x "${cm}")
     endif()
     if(EN_${id}_PLURAL)
-      string(APPEND x "    <plurals name=\"${key}\">\n")
+      string(APPEND x "    <plurals name=\"${key}\"${ignore}>\n")
       foreach(c IN LISTS PLURAL_CATS)
         if(${p}_HAS_${c})
           android_text("${${p}_${c}}" t)
@@ -524,9 +542,9 @@ function(android_resources pfx_of ids is_base out)
     else()
       android_text("${${p}_TEXT}" t)
       if(EN_${id}_TRANSLATABLE)
-        string(APPEND x "    <string name=\"${key}\">${t}</string>\n")
+        string(APPEND x "    <string name=\"${key}\"${ignore}>${t}</string>\n")
       else()
-        string(APPEND x "    <string name=\"${key}\" translatable=\"false\">${t}</string>\n")
+        string(APPEND x "    <string name=\"${key}\" translatable=\"false\"${ignore}>${t}</string>\n")
       endif()
     endif()
   endforeach()

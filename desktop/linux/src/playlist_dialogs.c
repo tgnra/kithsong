@@ -38,7 +38,7 @@ static ask *ask_new(AdwDialog *dialog, GtkWidget *parent, mc_library *lib, const
 
 static void fail(GtkWidget *parent, const char *heading) {
   AdwDialog *alert = adw_alert_dialog_new(heading, NULL);
-  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", "Close");
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
   adw_dialog_present(alert, parent);
 }
 
@@ -69,7 +69,7 @@ static void on_rename_response(AdwAlertDialog *dialog, const char *response, gpo
   if (mc_playlist_rename(a->lib, a->uid, name) == MC_OK) {
     if (a->changed) a->changed(a->user);
   } else {
-    fail(a->parent, "Couldn't Rename the Playlist");
+    fail(a->parent, mc_str(MC_STR_PLAYLIST_RENAME_FAILED));
   }
   g_free(name);
 }
@@ -77,9 +77,10 @@ static void on_rename_response(AdwAlertDialog *dialog, const char *response, gpo
 void playlist_rename_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
                              void (*changed)(void *user), void *user) {
   if (!lib || !uid || strlen(uid) >= MC_UID_STRLEN) return;
-  AdwDialog *dialog = adw_alert_dialog_new("Rename Playlist", NULL);
+  AdwDialog *dialog = adw_alert_dialog_new(mc_str(MC_STR_PLAYLIST_RENAME_TITLE), NULL);
   ask *a = ask_new(dialog, parent, lib, uid, name, changed, user);
-  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(dialog), "cancel", "Cancel", "rename", "Rename", NULL);
+  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(dialog), "cancel", mc_str_mnemonic(MC_STR_CANCEL), "rename",
+                                 mc_str_mnemonic(MC_STR_RENAME), NULL);
   adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(dialog), "rename", ADW_RESPONSE_SUGGESTED);
   adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(dialog), "rename");
   adw_alert_dialog_set_close_response(ADW_ALERT_DIALOG(dialog), "cancel");
@@ -88,7 +89,7 @@ void playlist_rename_present(GtkWidget *parent, mc_library *lib, const char *uid
   a->entry = gtk_entry_new();
   gtk_editable_set_text(GTK_EDITABLE(a->entry), a->name);
   gtk_entry_set_activates_default(GTK_ENTRY(a->entry), TRUE);
-  gtk_accessible_update_property(GTK_ACCESSIBLE(a->entry), GTK_ACCESSIBLE_PROPERTY_LABEL, "Name", -1);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(a->entry), GTK_ACCESSIBLE_PROPERTY_LABEL, mc_str(MC_STR_NAME), -1);
   g_signal_connect(a->entry, "changed", G_CALLBACK(on_name_changed), dialog);
   adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(dialog), a->entry);
   g_signal_connect(dialog, "response", G_CALLBACK(on_rename_response), NULL);
@@ -105,18 +106,19 @@ static void on_delete_response(AdwAlertDialog *dialog, const char *response, gpo
   if (mc_playlist_delete(a->lib, a->uid) == MC_OK) {
     if (a->changed) a->changed(a->user);
   } else {
-    fail(a->parent, "Couldn't Delete the Playlist");
+    fail(a->parent, mc_str(MC_STR_PLAYLIST_DELETE_FAILED));
   }
 }
 
 void playlist_delete_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
                              void (*changed)(void *user), void *user) {
   if (!lib || !uid || strlen(uid) >= MC_UID_STRLEN) return;
-  char *heading = g_strdup_printf("Delete “%s”?", name ? name : "");
-  AdwDialog *dialog = adw_alert_dialog_new(heading, "Its tracks stay in the library.");
-  g_free(heading);
+  char *heading = mc_format_alloc(mc_str(MC_STR_PLAYLIST_DELETE_TITLE), MC_S(name));
+  AdwDialog *dialog = adw_alert_dialog_new(heading, mc_str(MC_STR_PLAYLIST_DELETE_TEXT));
+  mc_free(heading);
   ask_new(dialog, parent, lib, uid, name, changed, user);
-  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(dialog), "cancel", "Cancel", "delete", "Delete", NULL);
+  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(dialog), "cancel", mc_str_mnemonic(MC_STR_CANCEL), "delete",
+                                 mc_str_mnemonic(MC_STR_DELETE), NULL);
   adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(dialog), "delete", ADW_RESPONSE_DESTRUCTIVE);
   adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(dialog), "cancel");
   adw_alert_dialog_set_close_response(ADW_ALERT_DIALOG(dialog), "cancel");

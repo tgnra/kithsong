@@ -3,9 +3,9 @@
  *
  *   before an import              during / after an import
  *   +------------------------+    +--------------------------------------------+
- *   |  .- - - - - - - - - -.  |    | Matching 12 of 40...                [Done] |
- *   |  :   Import Music    :  |    | ==========-------------------------------- |
- *   |  :  [Choose Folders] :  |    |  Needs Your Attention                      |
+ *   |  .- - - - - - - - - -.  |    | Importing 12 of 40                  [Done] |
+ *   |  :   Import music    :  |    | ==========-------------------------------- |
+ *   |  :  [Choose folders] :  |    |  Needs a decision                          |
  *   |  '- - - - - - - - - -'  |    |  | Things We Lost  Low - ... 70%       > | |
  *   +------------------------+    |  Imported                                  |
  *                                 |  | OK Computer  Radiohead - ...  100%   > | |
@@ -14,7 +14,7 @@
  * Folders dropped on the page (or on any widget given to import_view_add_drop_target) or
  * picked with Choose Folders start an import. The core runs it on its own thread; its events
  * are marshalled to the main loop. Matches at or above the confidence threshold are imported
- * straight away; the rest wait under "Needs Your Attention". Activating an item opens the
+ * straight away; the rest wait under "Needs a decision". Activating an item opens the
  * review dialog, where the user picks a candidate, searches again, keeps the existing tags or
  * skips it. A session lasts from the start of an import until Done.
  *

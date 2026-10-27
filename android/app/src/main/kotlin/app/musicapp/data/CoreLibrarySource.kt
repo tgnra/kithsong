@@ -32,13 +32,14 @@ import java.io.File
  *
  * Sync brings the whole library's data, but only some of its files may be on this phone, so
  * only what has a file here is listed: albums with a folder here, and tracks with a file.
- * Albums and tracks with no artist get [unknownArtist].
+ * Albums and tracks with no artist get [unknownArtist], looked up on every read so that it
+ * follows the app's language.
  */
 class CoreLibrarySource(
     private val dir: File,
     private val prefs: SharedPreferences,
     private val scope: CoroutineScope,
-    private val unknownArtist: String,
+    private val unknownArtist: () -> String,
 ) : LibrarySource {
     private val core = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow<Library?>(null)
@@ -137,7 +138,7 @@ class CoreLibrarySource(
 
     private fun read(lib: CoreLibrary): Contents {
         val covers = Covers()
-        val albums = lib.albums().filter { it.folder != null }.map { info -> Album(info.uid, info.title, info.artist ?: unknownArtist, info.year, covers.album(info)) }
+        val albums = lib.albums().filter { it.folder != null }.map { info -> Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info)) }
 
         // The core lists albums by artist, so the artists come out in order too.
         val artists = albums.groupBy { it.artist }.map { (name, albums) ->
@@ -254,7 +255,7 @@ class CoreLibrarySource(
             return Track(
                 uid = info.uid,
                 title = info.title,
-                artist = info.artist ?: unknownArtist,
+                artist = info.artist ?: unknownArtist(),
                 album = album,
                 trackNo = info.trackNo,
                 durationMs = info.durationMs.toLong(),

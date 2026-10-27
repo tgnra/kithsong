@@ -13,7 +13,7 @@
 static void test_lookup(void) {
   CHECK_STR(mc_strings_locale(), "en");
   CHECK_STR(mc_str(MC_STR_CANCEL), "Cancel");
-  CHECK_STR(mc_str(MC_STR_LINUX_NOTHING_PLAYING), "Nothing playing");
+  CHECK_STR(mc_str(MC_STR_LINUX_NOT_AVAILABLE_YET), "Not available yet");
   CHECK_STR(mc_str(MC_STR_WINDOWS_COL_YEAR), "Year");
   CHECK_STR(mc_str(MC_STR_ANDROID_BACK), "Back");
   CHECK_STR(mc_str(MC_STR_COUNT), "");

@@ -108,7 +108,7 @@ static GVariant *get_root(GDBusConnection *conn, const char *sender, const char 
   (void)user;
   if (!strcmp(name, "CanQuit") || !strcmp(name, "CanRaise")) return g_variant_new_boolean(TRUE);
   if (!strcmp(name, "HasTrackList")) return g_variant_new_boolean(FALSE);
-  if (!strcmp(name, "Identity")) return g_variant_new_string("musicapp");
+  if (!strcmp(name, "Identity")) return g_variant_new_string(mc_str(MC_STR_APP_NAME));
   if (!strcmp(name, "DesktopEntry")) return g_variant_new_string(g_application_get_application_id(G_APPLICATION(s.gapp)));
   if (!strcmp(name, "SupportedUriSchemes") || !strcmp(name, "SupportedMimeTypes"))
     return g_variant_new_strv(NULL, 0);

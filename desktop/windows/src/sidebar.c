@@ -2,9 +2,11 @@
 
 #include <commctrl.h>
 #include <string.h>
+#include <wchar.h>
 
 #include "canvas.h"
 #include "theme.h"
+#include "wstr.h"
 
 typedef enum { ROW_NAV, ROW_HEADER, ROW_NOTE, ROW_SPACER } row_kind;
 
@@ -12,19 +14,19 @@ typedef enum { ROW_NAV, ROW_HEADER, ROW_NOTE, ROW_SPACER } row_kind;
  * needs to fill the height (an item can't be taller than 255 pixels). Each item's data is
  * its index in rows. */
 static const struct {
-  const wchar_t *text;
-  wchar_t icon; /* Segoe Fluent Icons */
+  enum mc_str_id text; /* MC_STR_COUNT for none */
+  wchar_t icon;        /* Segoe Fluent Icons */
   row_kind kind;
   sidebar_page page; /* navigation rows */
 } rows[] = {
-  {L"Albums", 0xE93C, ROW_NAV, PAGE_ALBUMS},
-  {L"Artists", 0xE77B, ROW_NAV, PAGE_ARTISTS},
-  {L"Playlists", 0xE90B, ROW_NAV, PAGE_PLAYLISTS},
-  {L"DEVICES", 0, ROW_HEADER, 0},
-  {L"No devices found", 0, ROW_NOTE, 0},
-  {L"", 0, ROW_SPACER, 0}, /* pushes the rest to the bottom */
-  {L"Import", 0xE8B5, ROW_NAV, PAGE_IMPORT},
-  {L"Settings", 0xE713, ROW_NAV, PAGE_SETTINGS},
+  {MC_STR_SECTION_ALBUMS, 0xE93C, ROW_NAV, PAGE_ALBUMS},
+  {MC_STR_SECTION_ARTISTS, 0xE77B, ROW_NAV, PAGE_ARTISTS},
+  {MC_STR_SECTION_PLAYLISTS, 0xE90B, ROW_NAV, PAGE_PLAYLISTS},
+  {MC_STR_DEVICES, 0, ROW_HEADER, 0},
+  {MC_STR_DEVICES_NONE, 0, ROW_NOTE, 0},
+  {MC_STR_COUNT, 0, ROW_SPACER, 0}, /* pushes the rest to the bottom */
+  {MC_STR_IMPORT_MUSIC, 0xE8B5, ROW_NAV, PAGE_IMPORT},
+  {MC_STR_SETTINGS, 0xE713, ROW_NAV, PAGE_SETTINGS},
 };
 #define NUM_ROWS ((int)(sizeof rows / sizeof rows[0]))
 #define MAX_ITEM_H 255
@@ -97,8 +99,19 @@ static int row_height(int row) {
   return scale(heights[rows[row].kind]);
 }
 
+/* A row's text. The heading (there's one, Devices) is in capitals. */
+static const wchar_t *row_text(int row) {
+  if (rows[row].kind != ROW_HEADER) return mc_wstr(rows[row].text);
+  static wchar_t upper[64];
+  if (!upper[0]) {
+    wcsncpy(upper, mc_wstr(rows[row].text), 63);
+    CharUpperBuffW(upper, (DWORD)wcslen(upper));
+  }
+  return upper;
+}
+
 static void add_item(int at, int row) {
-  int item = (int)SendMessageW(s.wnd, LB_INSERTSTRING, (WPARAM)at, (LPARAM)rows[row].text);
+  int item = (int)SendMessageW(s.wnd, LB_INSERTSTRING, (WPARAM)at, (LPARAM)row_text(row));
   SendMessageW(s.wnd, LB_SETITEMDATA, (WPARAM)item, row);
   SendMessageW(s.wnd, LB_SETITEMHEIGHT, (WPARAM)item, row_height(row));
 }
@@ -284,7 +297,7 @@ HWND sidebar_create(HWND parent, int id) {
                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, s.wnd, NULL,
                               GetModuleHandleW(NULL), NULL);
   TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = s.wnd, .uId = 1,
-                    .lpszText = L"Add Device by Address"};
+                    .lpszText = (wchar_t *)mc_wstr(MC_STR_ADD_DEVICE_BY_ADDRESS)};
   SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   return s.wnd;
 }
@@ -393,7 +406,7 @@ void sidebar_draw(const DRAWITEMSTRUCT *dis) {
     case ROW_SPACER:
       break;
   }
-  canvas_text(c, rows[i].text, -1, &text, format, font, color);
+  canvas_text(c, row_text(i), -1, &text, format, font, color);
   canvas_blit(c, dis->hDC, dis->rcItem.left, dis->rcItem.top, &rc);
 }
 

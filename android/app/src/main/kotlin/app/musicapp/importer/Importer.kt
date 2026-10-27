@@ -167,7 +167,8 @@ class Importer(
             failed = counts[CoreImport.State.Failed] ?: 0,
             reviewReason = if (firstReview >= 0) session.itemError(firstReview) else null,
             problems = states.indices.filter { states[it] == CoreImport.State.Failed }.map { item ->
-                session.itemError(item)?.let { "${session.itemName(item)}: $it" } ?: session.itemName(item)
+                session.itemError(item)?.let { context.getString(R.string.import_problem, session.itemName(item), it) }
+                    ?: session.itemName(item)
             },
         )
     }

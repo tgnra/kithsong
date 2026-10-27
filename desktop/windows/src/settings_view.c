@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "theme.h"
+#include "wstr.h"
 
 enum {
   ID_SET_TITLE = 300,
@@ -29,16 +30,15 @@ static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) 
 void settings_view_create(HWND parent) {
   g_set.parent = parent;
   DWORD label = SS_LEFT | SS_NOPREFIX;
-  g_set.title = child(WC_STATICW, L"Settings", label, ID_SET_TITLE);
-  g_set.heading = child(WC_STATICW, L"Library location", label, ID_SET_HEADING);
+  g_set.title = child(WC_STATICW, mc_wstr(MC_STR_SETTINGS), label, ID_SET_TITLE);
+  g_set.heading = child(WC_STATICW, mc_wstr(MC_STR_LIBRARY_LOCATION), label, ID_SET_HEADING);
   /* SS_EDITCONTROL wraps a long path wherever it has to, as an edit box would. */
   g_set.path = child(WC_STATICW, NULL, label | SS_EDITCONTROL, ID_SET_PATH);
-  g_set.move = child(WC_BUTTONW, L"Move Library\x2026", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_MOVE);
-  g_set.open = child(WC_BUTTONW, L"Open Another Library\x2026", BS_PUSHBUTTON | WS_TABSTOP, ID_SET_OPEN);
-  g_set.note = child(WC_STATICW,
-                     L"Opening another library switches to the library in that folder, or starts an empty "
-                     L"one there. Music you've already imported stays where it is.",
-                     label, ID_SET_NOTE);
+  g_set.move = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LIBRARY_MOVE), BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED,
+                     ID_SET_MOVE);
+  g_set.open = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LIBRARY_OPEN_ANOTHER), BS_PUSHBUTTON | WS_TABSTOP,
+                     ID_SET_OPEN);
+  g_set.note = child(WC_STATICW, mc_wstr(MC_STR_LIBRARY_LOCATION_TEXT), label, ID_SET_NOTE);
 }
 
 void settings_view_destroy(void) {

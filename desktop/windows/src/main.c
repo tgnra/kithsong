@@ -57,6 +57,7 @@
 #include "sidebar.h"
 #include "theme.h"
 #include "track_list.h"
+#include "wstr.h"
 
 enum {
   ID_PREV = 100,
@@ -331,7 +332,8 @@ static void apply_theme(void) {
 
 static void create_controls(void) {
   /* The labels aren't shown; they name the buttons for tooltips and screen readers. */
-  static const wchar_t *const labels[NUM_BUTTONS] = {L"Previous", L"Play", L"Next"};
+  const wchar_t *const labels[NUM_BUTTONS] = {mc_wstr(MC_STR_PREVIOUS_TRACK), mc_wstr(MC_STR_PLAY),
+                                              mc_wstr(MC_STR_NEXT_TRACK)};
   for (int i = 0; i < NUM_BUTTONS; i++) {
     g_app.buttons[i] = child(WC_BUTTONW, labels[i], BS_OWNERDRAW, ID_PREV + i);
     SetWindowSubclass(g_app.buttons[i], button_proc, 0, 0);
@@ -378,7 +380,7 @@ static void play_album(int start) {
 static void playback_changed(void) {
   update_buttons();
   HWND play = g_app.buttons[ID_PLAY - ID_PREV];
-  const wchar_t *label = playback_is_playing() ? L"Pause" : L"Play";
+  const wchar_t *label = mc_wstr(playback_is_playing() ? MC_STR_PAUSE : MC_STR_PLAY);
   SetWindowTextW(play, label); /* for screen readers */
   TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)play, .lpszText = (wchar_t *)label};
   SendMessageW(g_app.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
@@ -397,11 +399,13 @@ static void on_track_request(int code) {
       break;
     case TLN_REMOVE:
       changed = mc_playlist_remove(g_app.lib, req->entry_uid) == MC_OK;
-      if (!changed) MessageBoxW(g_app.wnd, L"Couldn't remove the track.", L"Playlist", MB_OK | MB_ICONERROR);
+      if (!changed)
+        MessageBoxW(g_app.wnd, mc_wstr(MC_STR_PLAYLIST_REMOVE_FAILED), mc_wstr(MC_STR_PLAYLIST), MB_OK | MB_ICONERROR);
       break;
     case TLN_MOVE:
       changed = mc_playlist_move(g_app.lib, req->entry_uid, req->after_uid[0] ? req->after_uid : NULL) == MC_OK;
-      if (!changed) MessageBoxW(g_app.wnd, L"Couldn't move the track.", L"Playlist", MB_OK | MB_ICONERROR);
+      if (!changed)
+        MessageBoxW(g_app.wnd, mc_wstr(MC_STR_PLAYLIST_MOVE_FAILED), mc_wstr(MC_STR_PLAYLIST), MB_OK | MB_ICONERROR);
       break;
     case TLN_RENAME_PLAYLIST:
       if (name && !strcmp(uid, req->playlist_uid)) changed = playlist_rename_dialog(g_app.wnd, g_app.lib, uid, name);
@@ -685,29 +689,20 @@ static char *choose_library_dir(HWND owner, const char *current) {
   for (;;) {
     char *dir = NULL;
     if (!current && suggested) {
-      wchar_t *w = wide_from_utf8(suggested);
-      wchar_t text[1024];
-      swprintf(text, 1024,
-               L"musicapp keeps your music in one library folder. Imported music is copied there, "
-               L"organised by artist and album, along with the library database.\n\n"
-               L"Use %ls?\n\nChoose No to pick a different folder.",
-               w ? w : L"");
-      free(w);
-      int answer = MessageBoxW(owner, text, L"Welcome to musicapp", MB_YESNOCANCEL | MB_ICONQUESTION);
+      wchar_t text[2048];
+      mc_wformat(text, 2048, mc_str(MC_STR_WINDOWS_WELCOME_TEXT), MC_S(suggested));
+      int answer = MessageBoxW(owner, text, mc_wstr(MC_STR_WINDOWS_WELCOME_TITLE), MB_YESNOCANCEL | MB_ICONQUESTION);
       if (answer == IDCANCEL) break;
       if (answer == IDYES && (dir = malloc(strlen(suggested) + 1))) strcpy(dir, suggested);
     }
-    if (!dir) dir = pick_folder(owner, L"Choose Your Music Library Folder", current ? current : suggested);
+    if (!dir) dir = pick_folder(owner, mc_wstr(MC_STR_LIBRARY_FOLDER_CHOOSE), current ? current : suggested);
     if (!dir) {
       if (current) break; /* changing location: cancel means keep the current one */
       continue;
     }
     if (in_onedrive(dir)) {
-      int answer = MessageBoxW(
-        owner,
-        L"This folder is synced by OneDrive. Sync can damage the library database while musicapp "
-        L"is writing to it.\n\nUse it anyway?",
-        L"Library Folder", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+      int answer = MessageBoxW(owner, mc_wstr(MC_STR_WINDOWS_ONEDRIVE_WARNING), mc_wstr(MC_STR_LIBRARY_FOLDER),
+                               MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
       if (answer != IDYES) {
         free(dir);
         continue;
@@ -724,11 +719,10 @@ static BOOL open_library(const char *dir) {
   mc_library *lib = NULL;
   mc_status st = mc_library_open(dir, &lib);
   if (st != MC_OK) {
-    wchar_t *w = wide_from_utf8(dir);
     wchar_t text[1024];
-    swprintf(text, 1024, L"Couldn't open the library in %ls (%hs).", w ? w : L"?", mc_status_str(st));
-    free(w);
-    MessageBoxW(g_app.wnd, text, L"musicapp", MB_OK | MB_ICONERROR);
+    mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LIBRARY_OPEN_FAILED_IN),
+               MC_S(dir ? dir : mc_str(MC_STR_UNKNOWN_VALUE)), MC_S(mc_status_str(st)));
+    MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONERROR);
     return FALSE;
   }
   mc_library_close(g_app.lib);
@@ -745,8 +739,7 @@ static void change_library(void) {
   if (dir && open_library(dir)) {
     mc_settings_set_library_dir(g_app.settings, dir);
     if (mc_settings_save(g_app.settings) != MC_OK)
-      MessageBoxW(g_app.wnd, L"Couldn't save the setting; the old folder will be used next time.",
-                  L"Settings", MB_OK | MB_ICONWARNING);
+      MessageBoxW(g_app.wnd, mc_wstr(MC_STR_SETTINGS_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
     import_view_set_library(g_app.lib);
     settings_view_set_library_dir(dir);
     refresh_library();
@@ -763,14 +756,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   InitCommonControlsEx(&icc);
   CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE); /* folder picker */
 
+  wstr_init(); /* before any thread looks up a string */
   mc_init();
   theme_update();
 
   /* Settings say where the library folder is; the first run asks. */
   char *settings = settings_dir();
   if (!settings || mc_settings_load(settings, &g_app.settings) != MC_OK) {
-    MessageBoxW(NULL, L"Couldn't find the folder for musicapp's settings (%LOCALAPPDATA%).",
-                L"musicapp", MB_OK | MB_ICONERROR);
+    MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_SETTINGS_DIR_FAILED), mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONERROR);
     return 1;
   }
   free(settings);
@@ -780,8 +773,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     mc_settings_set_library_dir(g_app.settings, dir);
     free(dir);
     if (mc_settings_save(g_app.settings) != MC_OK)
-      MessageBoxW(NULL, L"Couldn't save your settings; you'll be asked again next time.",
-                  L"musicapp", MB_OK | MB_ICONWARNING);
+      MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_SETTINGS_FIRST_SAVE_FAILED), mc_wstr(MC_STR_APP_NAME),
+                  MB_OK | MB_ICONWARNING);
   }
   open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
 
@@ -797,7 +790,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   };
   RegisterClassExW(&wc);
 
-  HWND wnd = CreateWindowExW(0, L"musicapp", L"musicapp", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+  HWND wnd = CreateWindowExW(0, L"musicapp", mc_wstr(MC_STR_APP_NAME), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                              CW_USEDEFAULT, CW_USEDEFAULT, 1200, 800, NULL, NULL, inst, NULL);
   if (!wnd) return 1;
   DragAcceptFiles(wnd, TRUE);

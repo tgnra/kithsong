@@ -12,6 +12,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -21,11 +23,40 @@ import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
+import app.musicapp.wear.R
 import app.musicapp.wear.RefuseReason
 import app.musicapp.wear.SyncState
 
 @Composable
 fun SyncScreen(state: SyncState, onDismissRefusal: () -> Unit) {
+    // Looked up here: the list's content lambda isn't composable.
+    val title = stringResource(
+        when (state) {
+            is SyncState.Refused -> R.string.watch_pair_refused
+            is SyncState.Paired -> R.string.sync
+            else -> R.string.pair
+        },
+    )
+    val lines = when (state) {
+        is SyncState.Waiting -> listOf(
+            stringResource(R.string.watch_pair_waiting, state.deviceName),
+            stringResource(R.string.watch_keep_open),
+        )
+        is SyncState.Refused -> listOf(refusalText(state))
+        is SyncState.Paired -> listOf(
+            when {
+                state.synced < state.wanted ->
+                    pluralStringResource(R.plurals.watch_syncing, state.wanted, state.synced, state.wanted)
+                else -> pluralStringResource(R.plurals.watch_tracks, state.wanted, state.wanted)
+            },
+            stringResource(
+                R.string.watch_paired_text,
+                state.devices.joinToString(stringResource(R.string.import_list_separator)),
+            ),
+        )
+        is SyncState.ShowingCode -> emptyList()
+    }
+    val ok = stringResource(R.string.ok)
     when (state) {
         is SyncState.ShowingCode -> CodeScreen(state)
         else -> ListScreen { transform ->
@@ -34,31 +65,8 @@ fun SyncScreen(state: SyncState, onDismissRefusal: () -> Unit) {
                     modifier = transform.modifier(this).fillMaxWidth(),
                     transformation = transform.surface(this),
                 ) {
-                    Text(
-                        when (state) {
-                            is SyncState.Refused -> "Can't pair"
-                            is SyncState.Paired -> "Sync"
-                            else -> "Pair"
-                        },
-                    )
+                    Text(title)
                 }
-            }
-            val lines = when (state) {
-                is SyncState.Waiting -> listOf(
-                    "Add ${state.deviceName} under Devices on your computer or phone.",
-                    "Keep this screen open.",
-                )
-                is SyncState.Refused -> listOf(refusalText(state))
-                is SyncState.Paired -> listOf(
-                    when {
-                        state.synced < state.wanted ->
-                            "Syncing ${state.synced} of ${state.wanted} tracks"
-                        else -> "${state.wanted} tracks on this watch"
-                    },
-                    "Paired with ${state.devices.joinToString()}. Choose what this watch " +
-                        "holds on one of them.",
-                )
-                is SyncState.ShowingCode -> emptyList()
             }
             lines.forEachIndexed { i, line ->
                 item {
@@ -81,7 +89,7 @@ fun SyncScreen(state: SyncState, onDismissRefusal: () -> Unit) {
                         onClick = onDismissRefusal,
                         modifier = transform.modifier(this).fillMaxWidth(),
                         transformation = transform.surface(this),
-                        label = { Text("OK") },
+                        label = { Text(ok) },
                     )
                 }
             }
@@ -105,7 +113,7 @@ private fun CodeScreen(state: SyncState.ShowingCode) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                "Enter this code on ${state.peerName}",
+                stringResource(R.string.watch_enter_code, state.peerName),
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
@@ -118,8 +126,7 @@ private fun CodeScreen(state: SyncState.ShowingCode) {
             if (state.attemptsLeft < 3) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Wrong code. ${state.attemptsLeft} " +
-                        (if (state.attemptsLeft == 1) "try" else "tries") + " left.",
+                    stringResource(R.string.pair_wrong_code, pluralStringResource(R.plurals.tries_left, state.attemptsLeft, state.attemptsLeft)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     textAlign = TextAlign.Center,
@@ -129,12 +136,12 @@ private fun CodeScreen(state: SyncState.ShowingCode) {
     }
 }
 
+@Composable
 private fun refusalText(state: SyncState.Refused) = when (state.reason) {
-    RefuseReason.InGroup ->
-        "This watch is already paired with other devices. Remove it there first."
+    RefuseReason.InGroup -> stringResource(R.string.watch_refused_in_group)
     RefuseReason.LibraryMismatch ->
-        "This watch holds music from a different library than ${state.peerName}."
-    RefuseReason.AlreadyPaired -> "This watch is already paired with ${state.peerName}."
+        stringResource(R.string.watch_refused_library_mismatch, state.peerName)
+    RefuseReason.AlreadyPaired -> stringResource(R.string.watch_refused_already_paired, state.peerName)
 }
 
 @Preview(device = "id:wearos_small_round", showSystemUi = true)

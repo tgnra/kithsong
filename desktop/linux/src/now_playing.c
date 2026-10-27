@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "cover.h"
+#include "musiccore/musiccore.h"
 
 enum {
   ART = 36, /* the cover's square, as tall as the playback buttons */
@@ -120,7 +121,7 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void *user) {
   gtk_scale_set_draw_value(GTK_SCALE(s.bar), FALSE);
   gtk_widget_set_hexpand(s.bar, TRUE);
   gtk_widget_set_sensitive(s.bar, FALSE);
-  gtk_accessible_update_property(GTK_ACCESSIBLE(s.bar), GTK_ACCESSIBLE_PROPERTY_LABEL, "Position", -1);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(s.bar), GTK_ACCESSIBLE_PROPERTY_LABEL, mc_str(MC_STR_SEEK), -1);
   g_signal_connect(s.bar, "change-value", G_CALLBACK(on_change_value), NULL);
   GtkEventController *legacy = gtk_event_controller_legacy_new();
   gtk_event_controller_set_propagation_phase(legacy, GTK_PHASE_CAPTURE);
@@ -148,13 +149,15 @@ void now_playing_show(const char *title, const char *artist, int duration_ms, co
   s.duration_ms = title && duration_ms > 0 ? duration_ms : 0;
   s.pressed = s.seek_pending = FALSE;
 
+  char *byline = artist ? mc_format_alloc(mc_str(MC_STR_NOW_PLAYING_ARTIST), MC_S(artist)) : NULL;
   char *markup = !title ? g_strdup("")
-                 : artist ? g_markup_printf_escaped("<b>%s</b> <span alpha=\"60%%\">— %s</span>", title, artist)
+                 : byline ? g_markup_printf_escaped("<b>%s</b> <span alpha=\"60%%\">%s</span>", title, byline)
                           : g_markup_printf_escaped("<b>%s</b>", title);
   gtk_label_set_markup(GTK_LABEL(s.title), markup);
   g_free(markup);
+  mc_free(byline);
   gtk_accessible_update_property(GTK_ACCESSIBLE(s.title), GTK_ACCESSIBLE_PROPERTY_LABEL,
-                                 title ? title : "Nothing playing", -1);
+                                 title ? title : mc_str(MC_STR_NOTHING_PLAYING), -1);
 
   /* Both times get room for the longest the track can show, so the bar doesn't move. */
   char widest[24] = "-";

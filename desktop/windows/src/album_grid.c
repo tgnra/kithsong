@@ -11,6 +11,7 @@
 #include "cover.h"
 #include "scroller.h"
 #include "theme.h"
+#include "wstr.h"
 
 #define WM_APP_THUMB (WM_APP + 20) /* lParam: thumb_result *, from the loader thread */
 
@@ -28,7 +29,7 @@ typedef struct tile {
   wchar_t *artist;    /* NULL if unknown */
   int year;           /* 0 if unknown */
   wchar_t *cover_dir; /* NULL when the album has no cover */
-  wchar_t sub[32];    /* beneath a playlist's name: its track count (albums show the artist) */
+  wchar_t sub[64];    /* beneath a playlist's name: its track count (albums show the artist) */
   HBITMAP thumb;      /* premultiplied, with rounded corners */
   const uint32_t *pixels;
   int thumb_size;
@@ -342,7 +343,7 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
     const mc_album_info *a = &list->items[i];
     tile *t = &(*tiles)[i];
     memcpy(t->uid, a->uid, sizeof t->uid);
-    t->title = widen(a->title && *a->title ? a->title : "Untitled");
+    t->title = widen(a->title && *a->title ? a->title : mc_str(MC_STR_UNTITLED));
     t->artist = a->artist && *a->artist ? widen(a->artist) : NULL;
     t->year = a->year;
     t->cover_dir = (*dirs)[i] = a->has_art ? widen(a->folder) : NULL;
@@ -362,9 +363,9 @@ static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
     const mc_playlist_info *p = &list->items[i];
     tile *t = &(*tiles)[i];
     memcpy(t->uid, p->uid, sizeof t->uid);
-    t->title = widen(p->name && *p->name ? p->name : "Untitled");
-    swprintf(t->sub, sizeof t->sub / sizeof t->sub[0], L"%d %ls", p->track_count,
-             p->track_count == 1 ? L"track" : L"tracks");
+    t->title = widen(p->name && *p->name ? p->name : mc_str(MC_STR_UNTITLED));
+    mc_wformat(t->sub, sizeof t->sub / sizeof t->sub[0], mc_str_plural(MC_STR_TRACKS, p->track_count),
+               MC_D(p->track_count));
   }
   mc_playlist_list_free(list);
 }
@@ -564,7 +565,7 @@ static void paint_tile(canvas *c, int i) {
   DrawTextW(c->dc, t->title, -1, &line, one_line);
   OffsetRect(&line, 0, g.text_h);
   SetTextColor(c->dc, theme.text2);
-  DrawTextW(c->dc, g.playlists ? t->sub : t->artist ? t->artist : L"Unknown Artist", -1, &line, one_line);
+  DrawTextW(c->dc, g.playlists ? t->sub : t->artist ? t->artist : mc_wstr(MC_STR_UNKNOWN_ARTIST), -1, &line, one_line);
 }
 
 /* Everything is drawn into a canvas, then copied in one go. GDI text leaves alpha at 0, so
@@ -579,9 +580,11 @@ static void paint(HDC dc, const RECT *dirty) {
   if (g.count == 0) {
     RECT rc = {0, 0, g.client_w, g.client_h};
     SetTextColor(c->dc, theme.text3);
-    const wchar_t *empty = !g.lib         ? L"Could not open the library."
-                           : g.playlists ? L"No playlists yet. Right-click a track and choose Add to Playlist to start one."
-                                         : L"No albums yet. Use Import to add music.";
+    wchar_t empty[512];
+    if (!g.lib) swprintf(empty, 512, L"%ls", mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
+    else if (g.playlists)
+      swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_NO_PLAYLISTS_TITLE), mc_wstr(MC_STR_NO_PLAYLISTS_TEXT));
+    else swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_EMPTY_TITLE), mc_wstr(MC_STR_EMPTY_TEXT));
     /* Wrapped if need be, and centred as a block. */
     InflateRect(&rc, -g.pad, 0);
     RECT fit_rc = rc;

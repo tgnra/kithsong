@@ -3,6 +3,7 @@ package app.musicapp.wear.ui
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -14,6 +15,7 @@ import androidx.wear.compose.material3.ListHeader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import app.musicapp.AlbumInfo
+import app.musicapp.wear.R
 
 @Composable
 fun AlbumsScreen(albums: List<AlbumInfo>, onAlbum: (AlbumInfo) -> Unit) {
@@ -23,13 +25,13 @@ fun AlbumsScreen(albums: List<AlbumInfo>, onAlbum: (AlbumInfo) -> Unit) {
                 modifier = transform.modifier(this).fillMaxWidth(),
                 transformation = transform.surface(this),
             ) {
-                Text("Albums")
+                Text(stringResource(R.string.section_albums))
             }
         }
         if (albums.isEmpty()) {
             item {
                 Text(
-                    "No music on this watch yet. Pair it under Sync to add some.",
+                    stringResource(R.string.watch_empty_text),
                     modifier = transform.modifier(this).fillMaxWidth().padding(horizontal = 8.dp),
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,

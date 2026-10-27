@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -23,6 +24,7 @@ import androidx.wear.compose.material3.IconButtonDefaults
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
+import app.musicapp.wear.R
 
 /** The player controls; [title] is null when nothing is queued. */
 @Composable
@@ -43,7 +45,7 @@ fun PlayerScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = title ?: "Nothing playing",
+                text = title ?: stringResource(R.string.nothing_playing),
                 // Round screens clip the corners; keep text inside the inscribed square.
                 modifier = Modifier.padding(horizontal = 28.dp),
                 style = MaterialTheme.typography.titleMedium,
@@ -66,7 +68,7 @@ fun PlayerScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onPrevious, enabled = hasPrevious) {
-                    Icon(Icons.SkipPrevious, contentDescription = "Previous track")
+                    Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track))
                 }
                 FilledIconButton(
                     onClick = onPlayPause,
@@ -75,12 +77,12 @@ fun PlayerScreen(
                 ) {
                     Icon(
                         if (isPlaying) Icons.Pause else Icons.Play,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        contentDescription = stringResource(if (isPlaying) R.string.pause else R.string.play),
                         modifier = Modifier.size(IconButtonDefaults.LargeIconSize),
                     )
                 }
                 IconButton(onClick = onNext, enabled = hasNext) {
-                    Icon(Icons.SkipNext, contentDescription = "Next track")
+                    Icon(Icons.SkipNext, contentDescription = stringResource(R.string.next_track))
                 }
             }
         }
