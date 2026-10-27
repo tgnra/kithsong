@@ -7,6 +7,7 @@
 
 #include "library/library_internal.h"
 #include "musiccore/musiccore.h"
+#include "sync/plan.h"
 #include "sync/sync_db.h"
 #include "sync/sync_internal.h"
 #include "test.h"
@@ -327,6 +328,69 @@ static mc_sync_profile *get(dev *d, const char *uid) {
   return p;
 }
 
+/* --- Archives --- */
+
+/* Whether d counts uid as an archive, by its profile and by its device list (which must
+ * agree); -1 if they don't. */
+static int archive_on(dev *d, const char *uid) {
+  int by_profile = -2, by_list = -3;
+  mc_sync_profile *p = get(d, uid);
+  if (p) by_profile = p->archive != 0;
+  mc_sync_profile_free(p);
+  mc_sync_device_list *list = NULL;
+  CHECK(mc_sync_list_devices(d->sync, &list) == MC_OK);
+  for (int i = 0; list && i < list->count; i++)
+    if (!strcmp(list->items[i].uid, uid)) by_list = list->items[i].archive != 0;
+  mc_sync_device_list_free(list);
+  return by_profile == by_list ? by_profile : -1;
+}
+
+/* uid's stored profiles.archive on d. */
+static int stored_archive(dev *d, const char *uid) {
+  char sql[256];
+  snprintf(sql, sizeof sql, "SELECT archive FROM profiles WHERE device_uid = '%s'", uid);
+  return group_int(d, sql);
+}
+
+/* Writes uid's sync_status on d, unlogged, as if uid had reported it. */
+static void fake_status(dev *d, const char *uid, int missing, int corrupt, long long verified_ms) {
+  char sql[512];
+  snprintf(sql, sizeof sql,
+           "INSERT INTO sync_status (device_uid, verified_ms, expected, ok, missing, corrupt,"
+           " bytes) VALUES ('%s', %lld, 1, 1, %d, %d, 0) ON CONFLICT (device_uid) DO UPDATE SET"
+           " verified_ms = excluded.verified_ms, missing = excluded.missing,"
+           " corrupt = excluded.corrupt",
+           uid, verified_ms, missing, corrupt);
+  group_edit(d, sql, 0);
+}
+
+/* --- Estimates --- */
+
+/* Stores s as uid's profile on d, then checks that the estimate of s agrees with the plan
+ * the device's next sync would work out from the stored row (free_bytes for both). */
+static void check_estimate(dev *d, const char *uid, const mc_sync_profile *s, int64_t free_bytes,
+                           int kbps, int over) {
+  mc_sync_estimate e;
+  CHECK(mc_sync_estimate_profile(d->sync, uid, s, &e) == MC_OK);
+  CHECK(e.kbps == kbps && e.over_budget == over);
+  CHECK(e.free_bytes == free_bytes);
+  CHECK(mc_sync_set_profile(d->sync, uid, s) == MC_OK);
+  mc_sync_db *sdb = NULL;
+  mc_plan *plan = NULL;
+  CHECK(mc_sync_db_open(d->config, &sdb) == MC_OK);
+  if (sdb) CHECK(mc_plan_compute(sdb, d->lib, uid, free_bytes, &plan) == MC_OK);
+  if (plan) {
+    CHECK(plan->status == (over ? MC_PLAN_OVER_BUDGET : MC_PLAN_OK));
+    CHECK(plan->kbps == e.kbps);
+    CHECK(plan->total_bytes == e.total_bytes);
+    CHECK(plan->shortfall_bytes == e.shortfall_bytes);
+    CHECK(plan->wanted == e.tracks);
+    if (!over) CHECK(plan->count == e.tracks);
+  }
+  mc_plan_free(plan);
+  mc_sync_db_close(sdb);
+}
+
 /* A selection of the given items, all else default. */
 static mc_sync_profile selection(mc_profile_item *items, int count) {
   mc_sync_profile p;
@@ -641,6 +705,187 @@ int main(int argc, char **argv) {
     mc_sync_profile_free(p);
     CHECK(count_items(&a, b.uid, "album", album) == 0);
     CHECK(count_items(&a, b.uid, "album", dup) == 0);
+  }
+
+  /* Archives. Any member makes any device one: A makes B one. Only the flag is written; B's
+   * profile reads as everything, originals, while its stored selection and Opus stay. */
+  CHECK(mc_sync_set_archive(a.sync, "nope", 1) == MC_ERR_INVALID_ARG);
+  CHECK(mc_sync_set_archive(a.sync, gone, 1) == MC_ERR_NOT_FOUND);
+  {
+    int fields = logged(&a, "profiles", NULL);
+    CHECK(mc_sync_set_archive(a.sync, b.uid, 1) == MC_OK);
+    CHECK(logged(&a, "profiles", NULL) == fields + 1);
+    fields = logged(&a, "profiles", NULL);
+    CHECK(mc_sync_set_archive(a.sync, b.uid, 1) == MC_OK); /* already: nothing more */
+    CHECK(logged(&a, "profiles", NULL) == fields);
+    CHECK(stored_archive(&a, b.uid) == 1);
+    snprintf(sql, sizeof sql,
+             "SELECT count(*) FROM profiles WHERE device_uid = '%s' AND mode = 'selected'"
+             " AND format = 'opus' AND bitrate_kbps = 96",
+             b.uid);
+    CHECK(group_int(&a, sql) == 1);
+    p = get(&a, b.uid);
+    if (p) {
+      CHECK(p->archive && p->sync_all && p->format.format == MC_FORMAT_ORIGINAL);
+      CHECK(p->format.bitrate_kbps == 0 && !p->budget_enabled);
+      CHECK(p->count > 0); /* the selection is kept for when it stops being one */
+      /* A read-modify-write of an archive's profile writes nothing it doesn't change. */
+      CHECK(mc_sync_set_profile(a.sync, b.uid, p) == MC_OK);
+      CHECK(logged(&a, "profiles", NULL) == fields);
+      CHECK(group_int(&a, sql) == 1);
+    }
+    mc_sync_profile_free(p);
+  }
+  CHECK(sync_now(&a, &b) == MC_OK);
+  CHECK(archive_on(&b, a.uid) == 1 && archive_on(&b, b.uid) == 1);
+  CHECK(archive_on(&a, a.uid) == 1 && archive_on(&a, b.uid) == 1);
+
+  /* Only the device itself may clear its flag... */
+  CHECK(mc_sync_set_archive(a.sync, b.uid, 0) == MC_ERR_LOCKED);
+  CHECK(mc_sync_set_archive(b.sync, a.uid, 0) == MC_ERR_LOCKED);
+  CHECK(stored_archive(&a, b.uid) == 1 && stored_archive(&b, a.uid) == 1);
+  /* ...and only while another archive reports itself verified complete since the library
+   * last changed. */
+  const long long later = 4102444800000LL; /* 2100: after any change the test makes */
+  snprintf(sql, sizeof sql, "DELETE FROM sync_status WHERE device_uid = '%s'", a.uid);
+  group_edit(&b, sql, 0);
+  CHECK(mc_sync_set_archive(b.sync, b.uid, 0) == MC_ERR_LOCKED); /* no report */
+  fake_status(&b, a.uid, 1, 0, later);
+  CHECK(mc_sync_set_archive(b.sync, b.uid, 0) == MC_ERR_LOCKED); /* missing one */
+  fake_status(&b, a.uid, 0, 1, later);
+  CHECK(mc_sync_set_archive(b.sync, b.uid, 0) == MC_ERR_LOCKED); /* corrupt one */
+  fake_status(&b, a.uid, 0, 0, 1);
+  CHECK(mc_sync_set_archive(b.sync, b.uid, 0) == MC_ERR_LOCKED); /* checked too long ago */
+  CHECK(stored_archive(&b, b.uid) == 1);
+
+  /* Both clear themselves at once, each relying on the other. Once their rows meet, no
+   * flag is left; the older demotion is void, both agree on it, and its device writes
+   * archive = 1 again. */
+  fake_status(&b, a.uid, 0, 0, later);
+  fake_status(&a, b.uid, 0, 0, later);
+  CHECK(mc_sync_set_archive(a.sync, a.uid, 0) == MC_OK);
+  CHECK(mc_sync_set_archive(b.sync, b.uid, 0) == MC_OK);
+  CHECK(archive_on(&a, a.uid) == 0 && archive_on(&a, b.uid) == 1);
+  CHECK(archive_on(&b, b.uid) == 0 && archive_on(&b, a.uid) == 1);
+  CHECK(sync_now(&a, &b) == MC_OK);
+  {
+    /* The demotion with the lowest (hlc, origin): each device's newest archive change. */
+    char keep[MC_UID_STRLEN] = "";
+    mc_sync_db *sdb = NULL;
+    if (mc_sync_db_open(a.config, &sdb) == MC_OK) {
+      sqlite3_stmt *stmt;
+      if (sqlite3_prepare_v2(
+              mc_sync_db_handle(sdb),
+              "SELECT row_uid FROM changelog c WHERE entity = 'profiles' AND field = 'archive'"
+              " AND value = 0 AND hlc = (SELECT max(hlc) FROM changelog w"
+              "  WHERE w.entity = 'profiles' AND w.field = 'archive' AND w.row_uid = c.row_uid"
+              "  AND w.value = 0)"
+              " AND row_uid IN (?1, ?2) ORDER BY hlc, origin_uid LIMIT 1",
+              -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, a.uid, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, b.uid, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW)
+          snprintf(keep, sizeof keep, "%s", (const char *)sqlite3_column_text(stmt, 0));
+        sqlite3_finalize(stmt);
+      }
+      mc_sync_db_close(sdb);
+    }
+    CHECK(strlen(keep) == 36);
+    dev *kd = !strcmp(keep, a.uid) ? &a : &b, *od = kd == &a ? &b : &a;
+    /* Both count the keeper as an archive and only it, whatever their rows say yet. */
+    CHECK(archive_on(&a, kd->uid) == 1 && archive_on(&a, od->uid) == 0);
+    CHECK(archive_on(&b, kd->uid) == 1 && archive_on(&b, od->uid) == 0);
+    /* The keeper re-wrote its flag right after the exchange; the other hears of it next. */
+    CHECK(stored_archive(kd, kd->uid) == 1);
+    CHECK(stored_archive(od, kd->uid) == 0);
+    snprintf(sql, sizeof sql,
+             "SELECT count(*) FROM changelog WHERE entity = 'profiles' AND field = 'archive'"
+             " AND row_uid = '%s' AND origin_uid = '%s' AND value = 1",
+             kd->uid, kd->uid);
+    CHECK(group_int(kd, sql) == 1);
+    /* Removing the only archive is refused, a void one as much as a stored one. */
+    CHECK(mc_sync_remove_device(od->sync, kd->uid) == MC_ERR_LOCKED);
+    CHECK(sync_now(&a, &b) == MC_OK);
+    CHECK(stored_archive(od, kd->uid) == 1 && stored_archive(od, od->uid) == 0);
+    CHECK(group_int(od, sql) == 1);
+    CHECK(archive_on(&a, kd->uid) == 1 && archive_on(&a, od->uid) == 0);
+    CHECK(archive_on(&b, kd->uid) == 1 && archive_on(&b, od->uid) == 0);
+    /* It is the only archive now, so it can't clear itself. */
+    fake_status(kd, od->uid, 0, 0, later);
+    CHECK(mc_sync_set_archive(kd->sync, kd->uid, 0) == MC_ERR_LOCKED);
+  }
+
+  /* The size estimate, for the member A knows of that has no profile stored, whose free
+   * space comes from its capabilities row: 3,000,000 bytes. The library is one 180 s track
+   * no device has a file of, so its original is estimated at 1000 kbps. */
+  {
+    int64_t sizes[MC_SYNC_ESTIMATE_STEPS];
+    CHECK(mc_transcode_estimate_bytes(180000, 1000, &sizes[0]) == MC_OK);
+    for (int i = 0; i < MC_OPUS_BITRATE_COUNT; i++)
+      CHECK(mc_transcode_estimate_bytes(180000, mc_opus_bitrates[i], &sizes[i + 1]) == MC_OK);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO capabilities (device_uid, free_bytes) VALUES ('%s', 3000000)", fake);
+    group_edit(&a, sql, 0);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM profiles WHERE device_uid = '%s'", fake);
+    CHECK(group_int(&a, sql) == 0);
+
+    mc_sync_estimate e;
+    mc_sync_profile s = selection(NULL, 0);
+    CHECK(mc_sync_estimate_profile(a.sync, fake, NULL, &e) == MC_ERR_INVALID_ARG);
+    CHECK(mc_sync_estimate_profile(a.sync, gone, &s, &e) == MC_ERR_NOT_FOUND);
+    s.format.format = MC_FORMAT_OPUS;
+    s.format.bitrate_kbps = 100;
+    CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_ERR_INVALID_ARG);
+    s = selection(NULL, 0);
+    /* No row: estimated as if the candidate were stored. */
+    CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
+    CHECK(e.tracks == 1 && e.kbps == 0 && !e.over_budget && !e.archive);
+    CHECK(e.total_bytes == sizes[0] && e.limit_bytes == -1 && e.free_bytes == 3000000);
+    for (int i = 0; i < MC_SYNC_ESTIMATE_STEPS; i++) CHECK(e.step_bytes[i] == sizes[i]);
+    CHECK(group_int(&a, sql) == 0); /* nothing stored */
+    /* Previewing it as an archive: everything as originals, budget or not. */
+    s.archive = 1;
+    s.budget_enabled = 1;
+    s.budget_bytes = 1;
+    CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
+    CHECK(e.archive && e.kbps == 0 && !e.over_budget && e.total_bytes == sizes[0]);
+    /* A selection of nothing. */
+    s = selection(NULL, 0);
+    s.sync_all = 0;
+    CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
+    CHECK(e.tracks == 0 && e.total_bytes == 0);
+
+    /* Against the plan: a budget of free space alone (128 fits in 3,000,000); a smaller
+     * budget size (96); no budget; an Opus 192 profile whose budget would allow originals
+     * (the walk starts at 192); and over budget. */
+    s = selection(NULL, 0);
+    s.budget_enabled = 1;
+    check_estimate(&a, fake, &s, 3000000, 128, 0);
+    CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
+    CHECK(e.limit_bytes == 3000000 && e.total_bytes == sizes[4]);
+    s.budget_bytes = 2500000;
+    check_estimate(&a, fake, &s, 3000000, 96, 0);
+    s = selection(NULL, 0);
+    check_estimate(&a, fake, &s, 3000000, 0, 0);
+    snprintf(sql, sizeof sql, "UPDATE capabilities SET free_bytes = 100000000000 WHERE"
+                              " device_uid = '%s'", fake);
+    group_edit(&a, sql, 0);
+    s.budget_enabled = 1;
+    s.budget_bytes = 0;
+    s.format.format = MC_FORMAT_OPUS;
+    s.format.bitrate_kbps = 192;
+    check_estimate(&a, fake, &s, 100000000000LL, 192, 0);
+    s.budget_bytes = 1000000;
+    check_estimate(&a, fake, &s, 100000000000LL, 0, 1);
+    CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
+    CHECK(e.over_budget && e.total_bytes == sizes[MC_OPUS_BITRATE_COUNT]);
+    CHECK(e.shortfall_bytes == sizes[MC_OPUS_BITRATE_COUNT] - 1000000);
+    CHECK(e.limit_bytes == 1000000 && e.tracks == 1);
+
+    /* This device's own estimate measures its free space here. */
+    s = selection(NULL, 0);
+    CHECK(mc_sync_estimate_profile(a.sync, a.uid, &s, &e) == MC_OK);
+    CHECK(e.tracks == 1 && e.free_bytes > 0);
   }
 
   dev_stop(&a);

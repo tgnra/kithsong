@@ -18,6 +18,7 @@
 
 #include "discovery/local_addr.h"
 #include "library/library_internal.h"
+#include "sync/archive.h"
 #include "sync/rows.h"
 #include "sync/session.h"
 #include "sync/sync_internal.h"
@@ -1255,16 +1256,11 @@ static int count_query(sqlite3 *db, const char *sql, const char *arg) {
   return n;
 }
 
-/* Under api_lock. MC_ERR_LOCKED if uid is the only archive among non-removed members. */
+/* Under api_lock. MC_ERR_LOCKED if uid is the only archive among non-removed members, a
+ * void demotion counting as one (sync/archive.h). */
 static mc_status check_not_last_archive(sqlite3 *db, const char *uid) {
-  int is_archive = count_query(db,
-                               "SELECT count(*) FROM profiles p JOIN devices d ON d.uid = p.device_uid"
-                               " WHERE p.device_uid = ?1 AND p.archive = 1 AND d.removed = 0",
-                               uid);
-  int archives = count_query(db,
-                             "SELECT count(*) FROM profiles p JOIN devices d ON d.uid = p.device_uid"
-                             " WHERE p.archive = 1 AND d.removed = 0",
-                             NULL);
+  int is_archive = mc_archive_is(db, uid);
+  int archives = mc_archive_count(db);
   if (is_archive < 0 || archives < 0) return MC_ERR_DB;
   return is_archive > 0 && archives <= 1 ? MC_ERR_LOCKED : MC_OK;
 }
@@ -1454,6 +1450,10 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
                          -1, &stmt, NULL) != SQLITE_OK)
     st = MC_ERR_DB;
   int cap = 0;
+  /* A device whose demotion is void still counts as an archive. */
+  char void_uid[MC_UID_STRLEN] = "";
+  if (st == MC_OK && stmt && mc_archive_void(mc_sync_db_handle(sync->api.sdb), void_uid) != MC_OK)
+    st = MC_ERR_DB;
   while (st == MC_OK && stmt && sqlite3_step(stmt) == SQLITE_ROW) {
     const char *uid = (const char *)sqlite3_column_text(stmt, 0);
     if (!is_uid(uid)) continue;
@@ -1474,7 +1474,7 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
     d->host = col_dup(stmt, 2);
     d->kind = mc_sync_kind_parse((const char *)sqlite3_column_text(stmt, 3));
     d->removed = sqlite3_column_int(stmt, 4) != 0;
-    d->archive = sqlite3_column_int(stmt, 5) != 0;
+    d->archive = sqlite3_column_int(stmt, 5) != 0 || !strcmp(uid, void_uid);
     d->address = col_dup(stmt, 6);
     d->port = (uint16_t)sqlite3_column_int(stmt, 7);
     d->last_sync_ms = sqlite3_column_int64(stmt, 8);

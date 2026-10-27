@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "musiccore/library.h"
+#include "musiccore/sync.h"
 #include "musiccore/transcode.h"
 #include "sync/sync_db.h"
 
@@ -26,26 +27,49 @@ typedef struct mc_plan_track {
   int duration_ms;
 } mc_plan_track;
 
+/* The ladder budget mode walks: originals, then each of mc_opus_bitrates, best first. */
+#define MC_PLAN_STEPS (1 + MC_OPUS_BITRATE_COUNT)
+
 typedef struct mc_plan {
   mc_plan_status status;
   int archive;        /* the device is an archive: everything, originals, never prune */
   int kbps;           /* the chosen Opus bitrate, 0 for originals */
-  int64_t total_bytes;
+  int wanted;         /* tracks in the wanted set, whatever the status */
+  int64_t total_bytes; /* the set at kbps; MC_PLAN_OVER_BUDGET: at 64 kbps */
   int64_t shortfall_bytes; /* MC_PLAN_OVER_BUDGET: how much too big at 64 kbps */
+  int64_t limit_bytes;     /* with a budget, what the set had to fit in; else -1 */
+  /* With MC_PLAN_SIZES: the set's size at each step of the ladder (index 0 originals, then
+   * mc_opus_bitrates' order), whatever the profile's own format. */
+  int64_t step_bytes[MC_PLAN_STEPS];
   mc_plan_track *tracks;   /* sorted by track_uid; empty unless MC_PLAN_OK */
   int count;
 } mc_plan;
 
-/* Works out device_uid's wanted set. free_bytes is that device's free space (from its
- * capabilities row, or measured locally for this device), negative if unknown; budget mode
- * uses min(budget_bytes, free_bytes + bytes it already holds of the set). files is local, so
- * the bytes held are only known for this device; for another one that term is 0. Originals'
- * sizes come from this device's files too (an original is the same file everywhere), and
- * are estimated at MC_PLAN_ORIGINAL_KBPS where this device has none. Free with
- * mc_plan_free(). Selections naming uids the library doesn't have are skipped. */
+/* Works out device_uid's wanted set from its stored profile. free_bytes is that device's
+ * free space (from its capabilities row, or measured locally for this device), negative if
+ * unknown; budget mode uses min(budget_bytes, free_bytes + bytes it already holds of the
+ * set). files is local, so the bytes held are only known for this device; for another one
+ * that term is 0. Originals' sizes come from this device's files too (an original is the
+ * same file everywhere), and are estimated at MC_PLAN_ORIGINAL_KBPS where this device has
+ * none. The device is an archive if sync/archive.h says so. Free with mc_plan_free().
+ * Selections naming uids the library doesn't have are skipped. */
 mc_status mc_plan_compute(mc_sync_db *sdb, mc_library *lib, const char *device_uid,
                           int64_t free_bytes, mc_plan **out);
+
+/* Flags for mc_plan_compute_profile(). */
+#define MC_PLAN_SIZES 1 /* fill step_bytes */
+
+/* As mc_plan_compute(), for a profile that isn't stored (the profile editor's estimate):
+ * profile's mode, format, budget and items stand in for the stored ones, which need not
+ * exist, so the status is never MC_PLAN_NO_PROFILE. The device is an archive if it is one
+ * or profile->archive is set. A NULL profile reads the stored one, as mc_plan_compute(). */
+mc_status mc_plan_compute_profile(mc_sync_db *sdb, mc_library *lib, const char *device_uid,
+                                  const mc_sync_profile *profile, int64_t free_bytes, int flags,
+                                  mc_plan **out);
 void mc_plan_free(mc_plan *plan);
+
+/* profile_items.kind for kind ("album", ...); NULL for a value out of range. */
+const char *mc_profile_kind_str(mc_profile_item_kind kind);
 
 /* The bitrate an original of unknown size is estimated at, roughly a FLAC of a CD. */
 #define MC_PLAN_ORIGINAL_KBPS 1000

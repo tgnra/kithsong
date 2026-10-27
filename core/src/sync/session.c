@@ -8,6 +8,7 @@
 
 #include "library/library_internal.h"
 #include "musiccore/transcode.h"
+#include "sync/archive.h"
 #include "sync/rows.h"
 #include "sync/transfer.h"
 
@@ -709,12 +710,21 @@ mc_status mc_session_run(mc_session *s) {
   s->converged = 1;
   mc_session_refresh_self(s->sync, s->conn); /* best effort: stale capabilities are fine */
   mc_transfer_write_status(s->sync, s->conn);
+  /* A void demotion of ours whose re-write failed last time (best effort, as above). */
+  mc_archive_restore(s->conn->sdb, NULL);
 
   hello peer;
   mc_status st = send_hello(s);
   if (st == MC_OK) st = recv_hello(s, &peer);
   if (st == MC_OK) st = exchange_db(s, MC_ROWS_GROUP, NULL, 0);
   if (st != MC_OK) return st;
+
+  /* "Archives": with the merged group data, if no member is an archive any more and the
+   * void demotion is ours, write archive = 1 again. That comes after the exchange, so the
+   * peer hears of it in the next session; every device reads the void demotion from the
+   * same rows meanwhile, so all of them count us as an archive anyway. */
+  int restored = 0;
+  if (mc_archive_restore(s->conn->sdb, &restored) == MC_OK && restored) s->follow_up = 1;
 
   if (removed_here(s)) s->we_removed = 1;
   int lib = !s->we_removed && library_matches(s, &peer);

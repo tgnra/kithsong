@@ -1,6 +1,6 @@
 /* Sync profiles: reading and editing what each member holds (the profiles and
- * profile_items tables of sync.db). See "Profiles and what a device holds" in
- * docs/sync-protocol.md.
+ * profile_items tables of sync.db), making a device an archive, and estimating a profile's
+ * size. See "Profiles and what a device holds" and "Archives" in docs/sync-protocol.md.
  *
  * Edits go through the group changelog field by field, so a set writes only what differs
  * from the stored profile: changed columns, and items inserted or deleted one by one. Two
@@ -8,7 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/library_internal.h"
+#include "sync/archive.h"
 #include "sync/merge.h"
+#include "sync/plan.h"
 #include "sync/sync_internal.h"
 
 /* profile_items.kind, indexed by mc_profile_item_kind. */
@@ -67,8 +70,14 @@ static mc_status check_member(mc_sync_db *sdb, const char *uid) {
   return rc == SQLITE_ROW ? MC_OK : rc == SQLITE_DONE ? MC_ERR_NOT_FOUND : MC_ERR_DB;
 }
 
+const char *mc_profile_kind_str(mc_profile_item_kind kind) {
+  return (int)kind >= 0 && (int)kind < KIND_COUNT ? k_kinds[kind] : NULL;
+}
+
 /* uid's profiles row into p (items untouched), the defaults if there is none; *exists says
- * which. Formats other than 'opus' read as original, modes other than 'selected' as all. */
+ * which. Formats other than 'opus' read as original, modes other than 'selected' as all.
+ * archive is whether it is one (sync/archive.h): the stored flag, or a void demotion. The
+ * other fields are as stored, even for an archive. */
 static mc_status read_fields(sqlite3 *db, const char *uid, mc_sync_profile *p, int *exists) {
   p->name = NULL;
   p->archive = 0;
@@ -105,7 +114,17 @@ static mc_status read_fields(sqlite3 *db, const char *uid, mc_sync_profile *p, i
     st = MC_ERR_DB;
   }
   sqlite3_finalize(stmt);
+  if (st == MC_OK && !p->archive) {
+    int a = mc_archive_is(db, uid);
+    if (a < 0) st = MC_ERR_DB;
+    p->archive = a > 0;
+  }
   return st;
+}
+
+/* What an archive's profile is fixed at: everything, originals, no budget. */
+static int archive_shape(const mc_sync_profile *p) {
+  return p->sync_all && p->format.format == MC_FORMAT_ORIGINAL && !p->budget_enabled;
 }
 
 /* An album or artist item names the uid its duplicates were merged into (see "Duplicates" in
@@ -177,6 +196,14 @@ mc_status mc_sync_get_profile(mc_sync *sync, const char *device_uid, mc_sync_pro
     mc_sync_profile_free(p);
     return st;
   }
+  if (p->archive) {
+    /* Shown as what it holds. The stored mode, format and budget flag stay as they are, and
+     * apply again if it stops being an archive; budget_bytes and the items are kept. */
+    p->sync_all = 1;
+    p->format.format = MC_FORMAT_ORIGINAL;
+    p->format.bitrate_kbps = 0;
+    p->budget_enabled = 0;
+  }
   *out = p;
   return MC_OK;
 }
@@ -201,6 +228,23 @@ static int same_text(const char *a, const char *b) {
   return a == b || (a && b && !strcmp(a, b));
 }
 
+/* A bare profiles row holding the defaults, which every version has anyway: unlogged, so
+ * the insert trigger doesn't log each default as an edit that could beat a member's
+ * concurrent change to that field. The caller's update then logs what it changes. */
+static mc_status insert_bare(mc_sync_db *sdb, const char *uid) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sdb), "INSERT INTO profiles (device_uid) VALUES (?1)",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  int was = sdb->applying_remote;
+  sdb->applying_remote = 1;
+  mc_status st = run(stmt);
+  sdb->applying_remote = was;
+  sqlite3_finalize(stmt);
+  return st;
+}
+
 /* The profiles row: the fields of p that differ from the stored ones (old, which exists or
  * is the defaults). *changed is set if anything was written. */
 static mc_status write_fields(mc_sync_db *sdb, const char *uid, const mc_sync_profile *old,
@@ -215,18 +259,7 @@ static mc_status write_fields(mc_sync_db *sdb, const char *uid, const mc_sync_pr
   sqlite3 *db = mc_sync_db_handle(sdb);
   sqlite3_stmt *stmt;
   if (!exists) {
-    /* A bare row holding the defaults, which every version has anyway: unlogged, so the
-     * insert trigger doesn't log each default as an edit that could beat a member's
-     * concurrent change to that field. The update below logs what this set changes. */
-    if (sqlite3_prepare_v2(db, "INSERT INTO profiles (device_uid) VALUES (?1)", -1, &stmt,
-                           NULL) != SQLITE_OK)
-      return MC_ERR_DB;
-    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
-    int was = sdb->applying_remote;
-    sdb->applying_remote = 1;
-    mc_status st = run(stmt);
-    sdb->applying_remote = was;
-    sqlite3_finalize(stmt);
+    mc_status st = insert_bare(sdb, uid);
     if (st != MC_OK) return st;
   }
   /* The update triggers log only the columns whose value changes. */
@@ -339,9 +372,10 @@ static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
   return st;
 }
 
-mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sync_profile *profile) {
-  if (!sync || !is_uid(device_uid) || !profile || profile->count < 0 ||
-      (profile->count && !profile->items) || profile->budget_bytes < 0)
+/* MC_ERR_INVALID_ARG for a profile no device could have. */
+static mc_status check_profile(const mc_sync_profile *profile) {
+  if (!profile || profile->count < 0 || (profile->count && !profile->items) ||
+      profile->budget_bytes < 0)
     return MC_ERR_INVALID_ARG;
   if (profile->format.format == MC_FORMAT_OPUS) {
     if (!valid_bitrate(profile->format.bitrate_kbps)) return MC_ERR_INVALID_ARG;
@@ -352,6 +386,11 @@ mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sy
     if ((int)profile->items[i].kind < 0 || (int)profile->items[i].kind >= KIND_COUNT ||
         !is_uid_field(profile->items[i].ref_uid))
       return MC_ERR_INVALID_ARG;
+  return MC_OK;
+}
+
+mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sync_profile *profile) {
+  if (!sync || !is_uid(device_uid) || check_profile(profile) != MC_OK) return MC_ERR_INVALID_ARG;
   mc_profile_item *want = NULL;
   int nwant = 0;
   if (profile->count) {
@@ -371,11 +410,16 @@ mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sy
     /* Compared against what's stored, inside the write so nothing changes it meanwhile. */
     st = check_member(sdb, device_uid);
     if (st == MC_OK) st = read_fields(mc_sync_db_handle(sdb), device_uid, &old, &exists);
-    if (st == MC_OK && old.archive &&
-        (!profile->sync_all || profile->format.format != MC_FORMAT_ORIGINAL ||
-         profile->budget_enabled))
-      st = MC_ERR_LOCKED;
-    if (st == MC_OK) st = write_fields(sdb, device_uid, &old, exists, profile, name, &changed);
+    mc_sync_profile want_fields = *profile;
+    if (st == MC_OK && old.archive) {
+      if (!archive_shape(profile)) st = MC_ERR_LOCKED;
+      /* The fixed fields aren't written: what's stored stays for when it stops being one. */
+      want_fields.sync_all = old.sync_all;
+      want_fields.format = old.format;
+      want_fields.budget_enabled = old.budget_enabled;
+    }
+    if (st == MC_OK)
+      st = write_fields(sdb, device_uid, &old, exists, &want_fields, name, &changed);
     if (st == MC_OK) st = write_items(sdb, sync->api.lib, device_uid, want, nwant, &changed);
     if (st == MC_OK) st = mc_sync_db_commit(sdb);
     if (st != MC_OK) mc_sync_db_rollback(sdb);
@@ -388,4 +432,180 @@ mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sy
   free(want);
   if (st == MC_OK && changed) mc_sync_notify_changed(sync);
   return st;
+}
+
+/* --- Archives --- */
+
+/* The wall time (Unix ms) of the library's latest change, 0 if it has none; -1 on error. */
+static int64_t library_latest_ms(mc_library *lib) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib), "SELECT max(hlc) FROM changelog", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return -1;
+  int64_t ms = -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW)
+    ms = (int64_t)((uint64_t)sqlite3_column_int64(stmt, 0) >> 16); /* its wall ms */
+  sqlite3_finalize(stmt);
+  return ms;
+}
+
+/* Whether a current member other than uid is an archive whose sync_status shows it
+ * verified complete: nothing missing or corrupt, checked after latest_ms. 1, 0 or -1. */
+static int other_archive_verified(sqlite3 *db, const char *uid, int64_t latest_ms) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db,
+                         "SELECT 1 FROM profiles p JOIN devices d ON d.uid = p.device_uid"
+                         " JOIN sync_status s ON s.device_uid = p.device_uid"
+                         " WHERE p.archive <> 0 AND d.removed = 0 AND p.device_uid <> ?1"
+                         " AND s.missing = 0 AND s.corrupt = 0 AND s.verified_ms > ?2",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 2, latest_ms);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_ROW ? 1 : rc == SQLITE_DONE ? 0 : -1;
+}
+
+/* Logs profiles.archive = value for uid, adding a bare row first if it has none. */
+static mc_status write_archive(mc_sync_db *sdb, const char *uid, int exists, int value) {
+  mc_status st = exists ? MC_OK : insert_bare(sdb, uid);
+  sqlite3_stmt *stmt;
+  if (st == MC_OK &&
+      sqlite3_prepare_v2(mc_sync_db_handle(sdb),
+                         "UPDATE profiles SET archive = ?2 WHERE device_uid = ?1", -1, &stmt,
+                         NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, value);
+    st = run(stmt);
+    sqlite3_finalize(stmt);
+  } else if (st == MC_OK) {
+    st = MC_ERR_DB;
+  }
+  return st;
+}
+
+mc_status mc_sync_set_archive(mc_sync *sync, const char *device_uid, int archive) {
+  if (!sync || !is_uid(device_uid)) return MC_ERR_INVALID_ARG;
+  int self = !strcmp(device_uid, mc_sync_device_uid(sync));
+  /* Clearing judges the other archives' checks by the library's latest change, which only
+   * the group's library can say. */
+  mc_sync_lib_state state = MC_SYNC_LIBRARY_NO_GROUP;
+  if (!archive && self) {
+    mc_status st = mc_sync_library_state(sync, &state);
+    if (st != MC_OK) return st;
+  }
+
+  mc_mutex_lock(&sync->api_lock);
+  mc_sync_db *sdb = sync->api.sdb;
+  sqlite3 *db = mc_sync_db_handle(sdb);
+  int changed = 0;
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st == MC_OK) {
+    st = check_member(sdb, device_uid);
+    mc_sync_profile old = {0};
+    int exists = 0;
+    if (st == MC_OK) st = read_fields(db, device_uid, &old, &exists);
+    free(old.name);
+    /* old.archive counts a void demotion: such a device is one, but its row says 0. */
+    int stored = 0;
+    if (st == MC_OK && exists) {
+      sqlite3_stmt *stmt;
+      if (sqlite3_prepare_v2(db, "SELECT archive <> 0 FROM profiles WHERE device_uid = ?1", -1,
+                             &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, device_uid, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) stored = sqlite3_column_int(stmt, 0);
+        sqlite3_finalize(stmt);
+      } else {
+        st = MC_ERR_DB;
+      }
+    }
+    if (st == MC_OK && archive && !stored) {
+      /* Any member, any device. Only the flag is written: the rest of the profile stays as
+       * it is, unused while it is an archive. */
+      st = write_archive(sdb, device_uid, exists, 1);
+      changed = st == MC_OK;
+    } else if (st == MC_OK && !archive && old.archive) {
+      int64_t latest = 0;
+      int verified = 0;
+      if (!self) {
+        st = MC_ERR_LOCKED; /* only the device itself */
+      } else if (state != MC_SYNC_LIBRARY_GROUP) {
+        st = MC_ERR_LIBRARY_MISMATCH;
+      } else if ((latest = library_latest_ms(sync->api.lib)) < 0 ||
+                 (verified = other_archive_verified(db, device_uid, latest)) < 0) {
+        st = MC_ERR_DB;
+      } else if (!verified) {
+        st = MC_ERR_LOCKED;
+      } else {
+        st = write_archive(sdb, device_uid, exists, 0);
+        changed = st == MC_OK;
+      }
+    }
+    if (st == MC_OK) st = mc_sync_db_commit(sdb);
+    if (st != MC_OK) {
+      mc_sync_db_rollback(sdb);
+      changed = 0;
+    }
+  }
+  mc_mutex_unlock(&sync->api_lock);
+  if (changed) mc_sync_notify_changed(sync);
+  return st;
+}
+
+/* --- Size estimate --- */
+
+/* device_uid's free space: measured here for this device, else from its capabilities row.
+ * -1 if unknown. */
+static int64_t free_space(mc_sync *sync, const char *device_uid) {
+  int64_t free_bytes = -1;
+  if (!strcmp(device_uid, mc_sync_device_uid(sync))) {
+    if (mc_free_space(mc_library_dir(sync->api.lib), &free_bytes) != MC_OK) free_bytes = -1;
+    return free_bytes;
+  }
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sync->api.sdb),
+                         "SELECT free_bytes FROM capabilities WHERE device_uid = ?1", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, device_uid, -1, SQLITE_STATIC);
+  if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL)
+    free_bytes = sqlite3_column_int64(stmt, 0);
+  sqlite3_finalize(stmt);
+  return free_bytes;
+}
+
+mc_status mc_sync_estimate_profile(mc_sync *sync, const char *device_uid,
+                                   const mc_sync_profile *profile, mc_sync_estimate *out) {
+  if (out) memset(out, 0, sizeof *out);
+  if (!sync || !is_uid(device_uid) || !out || check_profile(profile) != MC_OK)
+    return MC_ERR_INVALID_ARG;
+  mc_sync_lib_state state;
+  mc_status st = mc_sync_library_state(sync, &state);
+  if (st != MC_OK) return st;
+  if (state == MC_SYNC_LIBRARY_NO_GROUP) return MC_ERR_NOT_FOUND;
+  if (state != MC_SYNC_LIBRARY_GROUP) return MC_ERR_LIBRARY_MISMATCH;
+
+  mc_mutex_lock(&sync->api_lock);
+  mc_plan *plan = NULL;
+  int64_t free_bytes = -1;
+  st = check_member(sync->api.sdb, device_uid);
+  if (st == MC_OK) {
+    free_bytes = free_space(sync, device_uid);
+    st = mc_plan_compute_profile(sync->api.sdb, sync->api.lib, device_uid, profile, free_bytes,
+                                 MC_PLAN_SIZES, &plan);
+  }
+  mc_mutex_unlock(&sync->api_lock);
+  if (st != MC_OK) return st;
+  out->archive = plan->archive;
+  out->tracks = plan->wanted;
+  out->total_bytes = plan->total_bytes;
+  out->kbps = plan->kbps;
+  out->over_budget = plan->status == MC_PLAN_OVER_BUDGET;
+  out->shortfall_bytes = plan->shortfall_bytes;
+  out->limit_bytes = plan->limit_bytes;
+  out->free_bytes = free_bytes;
+  for (int i = 0; i < MC_SYNC_ESTIMATE_STEPS; i++) out->step_bytes[i] = plan->step_bytes[i];
+  mc_plan_free(plan);
+  return MC_OK;
 }

@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "library/library_internal.h"
+#include "sync/archive.h"
 #include "sync/merge.h"
 
 /* One track of the library while the plan is worked out. */
@@ -166,6 +167,19 @@ static mc_status mark_item(mc_library *lib, const char *kind, const char *ref, c
   return rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
 }
 
+/* Marks the tracks of one item, an album or artist merged into another (sync/merge.h)
+ * selected as the survivor. */
+static mc_status mark_ref(mc_library *lib, const char *kind, const char *ref, cand *cands,
+                          int n) {
+  char uid[MC_UID_STRLEN];
+  memcpy(uid, ref, MC_UID_STRLEN);
+  if ((!strcmp(kind, "album") || !strcmp(kind, "artist")) &&
+      mc_merge_resolve(lib, ref, uid) != MC_OK)
+    memcpy(uid, ref, MC_UID_STRLEN);
+  return mark_item(lib, kind, uid, cands, n);
+}
+
+/* The stored selection's tracks. */
 static mc_status mark_selected(mc_sync_db *sdb, mc_library *lib, const char *device_uid,
                                cand *cands, int n) {
   sqlite3_stmt *stmt;
@@ -180,16 +194,24 @@ static mc_status mark_selected(mc_sync_db *sdb, mc_library *lib, const char *dev
     const char *kind = (const char *)sqlite3_column_text(stmt, 0);
     const char *ref = (const char *)sqlite3_column_text(stmt, 1);
     if (!kind || !is_uid(ref)) continue;
-    /* An album or artist merged into another (sync/merge.h) is selected as the survivor. */
-    char uid[MC_UID_STRLEN];
-    memcpy(uid, ref, MC_UID_STRLEN);
-    if ((!strcmp(kind, "album") || !strcmp(kind, "artist")) &&
-        mc_merge_resolve(lib, ref, uid) != MC_OK)
-      memcpy(uid, ref, MC_UID_STRLEN);
-    st = mark_item(lib, kind, uid, cands, n);
+    st = mark_ref(lib, kind, ref, cands, n);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
+  return st;
+}
+
+/* A selection in hand (a profile not stored yet). */
+static mc_status mark_items(mc_library *lib, const mc_profile_item *items, int count,
+                            cand *cands, int n) {
+  mc_status st = MC_OK;
+  for (int i = 0; st == MC_OK && i < count; i++) {
+    const char *kind = mc_profile_kind_str(items[i].kind);
+    if (!kind || memchr(items[i].ref_uid, '\0', MC_UID_STRLEN) == NULL ||
+        !is_uid(items[i].ref_uid))
+      continue;
+    st = mark_ref(lib, kind, items[i].ref_uid, cands, n);
+  }
   return st;
 }
 
@@ -229,42 +251,81 @@ static int64_t total_at(const cand *cands, int n, int kbps) {
   return total;
 }
 
+/* The profile a plan follows: the stored row's fields, or a caller's. */
+typedef struct settings {
+  int all, opus, kbps, budget;
+  int64_t budget_bytes;
+} settings;
+
+/* device_uid's stored profile into s; *have = 0 if it has no profiles row. */
+static mc_status read_settings(mc_sync_db *sdb, const char *device_uid, settings *s, int *have) {
+  memset(s, 0, sizeof *s);
+  s->all = 1;
+  *have = 0;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
+                         "SELECT mode, format, bitrate_kbps, budget_bytes, budget_enabled"
+                         " FROM profiles WHERE device_uid = ?1",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, device_uid, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    *have = 1;
+    const char *mode = (const char *)sqlite3_column_text(stmt, 0);
+    const char *format = (const char *)sqlite3_column_text(stmt, 1);
+    s->all = !mode || strcmp(mode, "selected") != 0;
+    s->opus = format && !strcmp(format, "opus");
+    s->kbps = sqlite3_column_int(stmt, 2);
+    s->budget_bytes = sqlite3_column_int64(stmt, 3);
+    s->budget = sqlite3_column_int(stmt, 4) != 0;
+  }
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_ROW || rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+}
+
 mc_status mc_plan_compute(mc_sync_db *sdb, mc_library *lib, const char *device_uid,
                           int64_t free_bytes, mc_plan **out) {
+  return mc_plan_compute_profile(sdb, lib, device_uid, NULL, free_bytes, 0, out);
+}
+
+mc_status mc_plan_compute_profile(mc_sync_db *sdb, mc_library *lib, const char *device_uid,
+                                  const mc_sync_profile *profile, int64_t free_bytes, int flags,
+                                  mc_plan **out) {
   if (out) *out = NULL;
   if (!sdb || !lib || !is_uid(device_uid) || !out) return MC_ERR_INVALID_ARG;
   mc_plan *plan = calloc(1, sizeof *plan);
   if (!plan) return MC_ERR_NOMEM;
+  plan->limit_bytes = -1;
 
   /* The profile. */
-  int have = 0, all = 1, opus = 0, kbps = 0, budget = 0;
-  int64_t budget_bytes = 0;
-  sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
-                         "SELECT archive, mode, format, bitrate_kbps, budget_bytes, budget_enabled"
-                         " FROM profiles WHERE device_uid = ?1",
-                         -1, &stmt, NULL) != SQLITE_OK) {
+  settings set;
+  int have = 1;
+  mc_status st = MC_OK;
+  if (profile) {
+    memset(&set, 0, sizeof set);
+    set.all = profile->sync_all != 0;
+    set.opus = profile->format.format == MC_FORMAT_OPUS;
+    set.kbps = profile->format.bitrate_kbps;
+    set.budget = profile->budget_enabled != 0;
+    set.budget_bytes = profile->budget_bytes;
+  } else {
+    st = read_settings(sdb, device_uid, &set, &have);
+  }
+  int archive = st == MC_OK ? mc_archive_is(mc_sync_db_handle(sdb), device_uid) : 0;
+  if (st == MC_OK && archive < 0) st = MC_ERR_DB;
+  if (st != MC_OK) {
     free(plan);
-    return MC_ERR_DB;
+    return st;
   }
-  sqlite3_bind_text(stmt, 1, device_uid, -1, SQLITE_STATIC);
-  if (sqlite3_step(stmt) == SQLITE_ROW) {
-    have = 1;
-    const char *mode = (const char *)sqlite3_column_text(stmt, 1);
-    const char *format = (const char *)sqlite3_column_text(stmt, 2);
-    plan->archive = sqlite3_column_int(stmt, 0) != 0;
-    all = !mode || strcmp(mode, "selected") != 0;
-    opus = format && !strcmp(format, "opus");
-    kbps = sqlite3_column_int(stmt, 3);
-    budget_bytes = sqlite3_column_int64(stmt, 4);
-    budget = sqlite3_column_int(stmt, 5) != 0;
-  }
-  sqlite3_finalize(stmt);
   if (!have) {
     plan->status = MC_PLAN_NO_PROFILE;
     *out = plan;
     return MC_OK;
   }
+  plan->archive = archive || (profile && profile->archive);
+  int all = set.all, opus = set.opus, kbps = set.kbps, budget = set.budget;
+  int64_t budget_bytes = set.budget_bytes;
   if (plan->archive) {
     /* Everything, originals, whatever the rest of the row says. */
     all = 1;
@@ -286,13 +347,18 @@ mc_status mc_plan_compute(mc_sync_db *sdb, mc_library *lib, const char *device_u
 
   cand *cands = NULL;
   int n = 0;
-  mc_status st = read_tracks(lib, &cands, &n);
+  st = read_tracks(lib, &cands, &n);
   if (st == MC_OK) {
     if (all)
       for (int i = 0; i < n; i++) cands[i].wanted = 1;
+    else if (profile)
+      st = mark_items(lib, profile->items, profile->items ? profile->count : 0, cands, n);
     else
       st = mark_selected(sdb, lib, device_uid, cands, n);
   }
+  for (int i = 0; st == MC_OK && i < n; i++) plan->wanted += cands[i].wanted;
+  if (st == MC_OK && (flags & MC_PLAN_SIZES))
+    for (int l = 0; l < MC_PLAN_STEPS; l++) plan->step_bytes[l] = total_at(cands, n, ladder[l]);
 
   int chosen = start;
   if (st == MC_OK && budget) {
@@ -304,6 +370,7 @@ mc_status mc_plan_compute(mc_sync_db *sdb, mc_library *lib, const char *device_u
           if (cands[i].wanted) held += cands[i].held;
       if (free_bytes + held < limit) limit = free_bytes + held;
     }
+    if (limit != INT64_MAX) plan->limit_bytes = limit;
     chosen = -1;
     int64_t total = 0;
     for (int l = start; l <= MC_OPUS_BITRATE_COUNT && chosen < 0; l++) {
@@ -319,8 +386,7 @@ mc_status mc_plan_compute(mc_sync_db *sdb, mc_library *lib, const char *device_u
 
   if (st == MC_OK && plan->status == MC_PLAN_OK) {
     plan->kbps = ladder[chosen];
-    int wanted = 0;
-    for (int i = 0; i < n; i++) wanted += cands[i].wanted;
+    int wanted = plan->wanted;
     plan->tracks = wanted ? malloc((size_t)wanted * sizeof *plan->tracks) : NULL;
     if (wanted && !plan->tracks) st = MC_ERR_NOMEM;
     for (int i = 0; st == MC_OK && i < n; i++) {

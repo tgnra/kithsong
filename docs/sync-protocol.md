@@ -202,15 +202,37 @@ A device joining with an empty library adopts the group's `library_uid` through
 ### Archives
 
 - `profiles.archive = 1` fixes that device's profile at "everything, originals", no budget.
-  Profile setters refuse other values with `MC_ERR_LOCKED`; the name stays editable.
-- Any member can make a device an archive.
+  Profile setters refuse other values with `MC_ERR_LOCKED`; the name, budget size and
+  selection stay editable. The getter shows an archive's profile as everything, originals,
+  no budget, but the stored `mode`, `format`, `bitrate_kbps` and `budget_enabled` are left
+  as they were (setters don't write them), and apply again if the device stops being an
+  archive.
+- Any member can make a device an archive (`mc_sync_set_archive(dev, 1)`). Making and
+  clearing write only `archive` (a device with no `profiles` row gets a bare one first, as
+  for any first edit), so concurrent edits to the rest of the profile all apply.
 - Only the device itself can clear its own `archive`. It may do so only when another
   archive's `sync_status` shows it verified complete, with `missing = corrupt = 0` and
-  `verified_ms` newer than the library's latest change.
+  `verified_ms` newer than the library's latest change (the wall time of the newest hlc in
+  this device's library changelog, so the open library must be the group's). Otherwise
+  clearing fails with `MC_ERR_LOCKED`.
 - After applying remote group rows, every device checks the merged state. If no device is an
   archive, the demotion with the lowest `(hlc, origin_uid)` is void. Devices treat that
   device as an archive, and it writes `archive = 1` again when it next applies the check.
   Every device evaluates the same rows, so all reach the same answer.
+  - A *demotion* is the winning `profiles.archive` change of a current (not removed)
+    member's row when its value is 0 and an earlier change (by `(hlc, origin_uid)`) to that
+    field set 1. A 0 with no 1 before it (the defaults a logged insert writes) is not one.
+  - The check is a function of the changelog, so it isn't stored: everything that asks
+    whether a device is an archive (the profile getter, the device list, the plan, reconcile,
+    removal and leaving, the choice of transcoders) counts the void one.
+  - A device applies the check right after each session's group exchange, and again before
+    the next session's `HELLO` in case that write failed. A write after the exchange leaves
+    the two devices' group data different until their next session, so as for the node uid
+    in step 3 of [Session](#session) the session asks for another one soon after.
+  - It converges: until the write reaches a device, that device evaluates the same rows to
+    the same void demotion; once it arrives, the device is an archive by its stored flag and
+    the rule no longer applies. A demotion can only be voided while no device is an archive,
+    and only the device itself can clear its flag again, under the rule above.
 
 ## Clocks and conflict resolution
 
@@ -413,9 +435,12 @@ the plaintext limit.
     The selection is kept while the mode is `all`, so it comes back when the mode returns to
     `selected`.
 
-  A device with no `profiles` row has the defaults: `all`, `original`, no budget, no name.
-  The row is created by the first edit, which logs only the fields it changes (not the
-  defaults), so it can't overwrite a member's concurrent edit to another field.
+  A device with no `profiles` row receives no files until it has one (see below). Pairing
+  writes the row straight away (the archive's for a new group, and the joiner's when it
+  takes its name), so this only lasts until those rows arrive. For display, the profile
+  getter returns what an editor would start from: `all`, `original`, no budget, no name. A
+  row created by an edit logs only the fields it changes (not the defaults), so it can't
+  overwrite a member's concurrent edit to another field.
 - Any member may edit any member's profile. Editors write only what differs from the stored
   profile: changed fields, and an insert (with a new uid) per added item or a delete per
   removed one, so concurrent edits on two devices both apply. A `(kind, ref_uid)` stored more
@@ -450,6 +475,13 @@ the plaintext limit.
     one no device at hand holds is estimated at 1000 kbps. The bytes already held are only
     known to the device itself (`files` is local), so a plan worked out for another device
     (for `PREPARE_REQ`) counts its free space alone.
+  - The profile editor's estimate (`mc_sync_estimate_profile()`) is the same plan worked
+    out for a profile that isn't stored yet, so it agrees with what the next sync does: the
+    track count, the size, the bitrate the walk picks, or over budget and the shortfall,
+    plus the set's size at every step of the walk so the editor can show the options. Free
+    space is measured for the device running it and taken from `capabilities.free_bytes`
+    for another. A device with no `profiles` row is estimated as if the candidate were
+    stored.
 - **Reconcile**, at the end of every session on the receiving device, after `BYE`, when its
   plan is not over budget:
   - It deletes files of tracks that are no longer wanted, are in the wrong format, or have

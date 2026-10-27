@@ -267,7 +267,8 @@ typedef struct mc_profile_item {
 
 typedef struct mc_sync_profile {
   char *name;               /* friendly name; NULL = unset (shows devices.name) */
-  int archive;              /* read-only: keeps the full library as originals */
+  int archive;              /* keeps the full library as originals; read-only here, set
+                             * with mc_sync_set_archive() */
   int sync_all;             /* everything, else just items */
   mc_transcode_opts format; /* original, or opus + bitrate (one of mc_opus_bitrates) */
   int budget_enabled;
@@ -276,10 +277,12 @@ typedef struct mc_sync_profile {
   int count;
 } mc_sync_profile;
 
-/* device_uid's profile (any member's, this device's included). A device with no profile
- * stored gets the defaults: everything, originals, no budget, no name. Items of kinds this
- * version doesn't know are left out. MC_ERR_NOT_FOUND if not in a group or it isn't a
- * current member. Free with mc_sync_profile_free(). */
+/* device_uid's profile (any member's, this device's included). An archive's reads as
+ * everything, originals, no budget, whatever its row holds. A device with no profile stored
+ * receives no files until one is (pairing stores one at once, so this is brief); for it the
+ * getter returns what an editor should start from: everything, originals, no budget, no
+ * name. Items of kinds this version doesn't know are left out. MC_ERR_NOT_FOUND if not in
+ * a group or it isn't a current member. Free with mc_sync_profile_free(). */
 mc_status mc_sync_get_profile(mc_sync *sync, const char *device_uid, mc_sync_profile **out);
 /* Frees a profile from mc_sync_get_profile(). NULL is a no-op. */
 void mc_sync_profile_free(mc_sync_profile *profile);
@@ -288,10 +291,63 @@ void mc_sync_profile_free(mc_sync_profile *profile);
  * are kept). archive is ignored. Callers read-modify-write: mc_sync_get_profile(), change
  * the fields, then set straight away, so edits made meanwhile on other devices to other
  * fields or items aren't overwritten. An archive's profile is locked to everything,
- * originals and no budget (MC_ERR_LOCKED for anything else), but not its name, which stays
- * editable. MC_ERR_INVALID_ARG for an unknown kind or a bitrate not in mc_opus_bitrates;
- * MC_ERR_NOT_FOUND as for the getter. Members hear of the change in a few seconds. */
+ * originals and no budget (MC_ERR_LOCKED for anything else); its name, budget size and
+ * items stay editable, and its stored mode, format and budget switch are kept for when it
+ * stops being one. MC_ERR_INVALID_ARG for an unknown kind or a bitrate not in
+ * mc_opus_bitrates; MC_ERR_NOT_FOUND as for the getter. Members hear of the change in a few
+ * seconds. */
 mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sync_profile *profile);
+
+/* --- Archives ---
+ * An archive keeps the whole library as originals, and the group always has one. */
+
+/* archive = 1 makes device_uid an archive: any member may do it for any device. Its
+ * profile then reads as everything, originals, no budget (see mc_sync_set_profile()).
+ * archive = 0 clears it, which only the device itself may do (MC_ERR_LOCKED from any other),
+ * and only while another archive's own report (mc_sync_device's status) shows it verified
+ * complete: nothing missing or corrupt, checked after the library's latest change
+ * (MC_ERR_LOCKED otherwise; MC_ERR_LIBRARY_MISMATCH if the open library isn't the group's,
+ * which is what says when it last changed). Setting what it already is does nothing. Only
+ * the flag is written, so concurrent edits to the rest of the profile all apply. If two
+ * archives clear themselves at once, each relying on the other, the group keeps the one
+ * that cleared first (see "Archives" in docs/sync-protocol.md); every getter already counts
+ * it as one. MC_ERR_NOT_FOUND as for mc_sync_get_profile(). */
+mc_status mc_sync_set_archive(mc_sync *sync, const char *device_uid, int archive);
+
+/* --- Size estimate --- */
+
+/* Originals, then each of mc_opus_bitrates. */
+#define MC_SYNC_ESTIMATE_STEPS (1 + MC_OPUS_BITRATE_COUNT)
+
+typedef struct mc_sync_estimate {
+  int tracks;              /* tracks the profile wants */
+  int64_t total_bytes;     /* their size at kbps; when over_budget, at 64 kbps */
+  int kbps;                /* what the device would hold them as: 0 for originals, else the
+                            * Opus bitrate, with a budget the best that fits; 0 when
+                            * over_budget */
+  int archive;             /* the device is an archive: everything, originals, no budget */
+  int over_budget;         /* even 64 kbps doesn't fit: nothing would sync */
+  int64_t shortfall_bytes; /* when over_budget: how much too big at 64 kbps */
+  int64_t limit_bytes;     /* with a budget, what they must fit in: the budget, or free space
+                            * plus what the device already holds of them if that's less;
+                            * -1 without a budget or a limit */
+  int64_t free_bytes;      /* the device's free space used, -1 if unknown */
+  /* The wanted tracks' size as originals ([0]) and at each of mc_opus_bitrates ([1 + i]),
+   * whatever the profile's format, so an editor can show every option. */
+  int64_t step_bytes[MC_SYNC_ESTIMATE_STEPS];
+} mc_sync_estimate;
+
+/* How much device_uid would hold with profile, which needn't be stored (the profile editor's
+ * candidate; a device with no profile stored yet is estimated as if it were). Worked out as
+ * the device's next sync would: Opus sizes are estimated from durations, originals from the
+ * files this device knows (others at 1000 kbps). Free space is measured here for this
+ * device, and for another one comes from what it last reported, without what it already
+ * holds (only it knows that). profile->archive previews making it an archive. Blocks for a
+ * read of every track. MC_ERR_INVALID_ARG as for mc_sync_set_profile(); MC_ERR_NOT_FOUND as
+ * for mc_sync_get_profile(); MC_ERR_LIBRARY_MISMATCH if the open library isn't the
+ * group's. */
+mc_status mc_sync_estimate_profile(mc_sync *sync, const char *device_uid,
+                                   const mc_sync_profile *profile, mc_sync_estimate *out);
 
 /* --- Verification ---
  * Every file sync receives is checked against its SHA-256 on arrival (files.sha256). A fast
@@ -315,8 +371,6 @@ typedef struct mc_verify_result {
  * group's. Blocks for as long as it takes (a deep check reads every file), waiting first for
  * a session's file phase to finish. out may be NULL. */
 mc_status mc_sync_verify(mc_sync *sync, mc_verify_mode mode, mc_verify_result *out);
-
-/* TODO(phase 5): making a device an archive, and the size estimate. */
 
 #ifdef __cplusplus
 }

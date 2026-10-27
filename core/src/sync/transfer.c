@@ -31,6 +31,7 @@
 
 #include "library/library_internal.h"
 #include "musiccore/transcode.h"
+#include "sync/archive.h"
 #include "sync/plan.h"
 #include "tagger/organize.h"
 
@@ -273,26 +274,18 @@ static int self_transcodes(mc_session *s) {
 
 /* Whether uid's profile has it hold every original: an archive, or all, original, no
  * budget. */
-static int holds_originals(mc_sync_db *sdb, const char *uid) {
-  sqlite3_stmt *stmt;
-  int yes = 0;
-  if (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
-                         "SELECT 1 FROM profiles WHERE device_uid = ?1 AND (archive <> 0 OR"
-                         " (mode = 'all' AND format = 'original' AND budget_enabled = 0))",
-                         -1, &stmt, NULL) != SQLITE_OK)
-    return 0;
-  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
-  yes = sqlite3_step(stmt) == SQLITE_ROW;
-  sqlite3_finalize(stmt);
-  return yes;
+static int is_archive(mc_sync_db *sdb, const char *uid) {
+  return mc_archive_is(mc_sync_db_handle(sdb), uid) > 0; /* a void demotion included */
 }
 
-static int is_archive(mc_sync_db *sdb, const char *uid) {
+static int holds_originals(mc_sync_db *sdb, const char *uid) {
+  if (is_archive(sdb, uid)) return 1;
   sqlite3_stmt *stmt;
   int yes = 0;
   if (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
-                         "SELECT 1 FROM profiles WHERE device_uid = ?1 AND archive <> 0", -1,
-                         &stmt, NULL) != SQLITE_OK)
+                         "SELECT 1 FROM profiles WHERE device_uid = ?1 AND"
+                         " mode = 'all' AND format = 'original' AND budget_enabled = 0",
+                         -1, &stmt, NULL) != SQLITE_OK)
     return 0;
   sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
   yes = sqlite3_step(stmt) == SQLITE_ROW;
