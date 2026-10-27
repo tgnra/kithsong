@@ -15,7 +15,9 @@ extern "C" {
 
 typedef enum mc_format {
   MC_FORMAT_ORIGINAL,
-  MC_FORMAT_OPUS
+  MC_FORMAT_OPUS,
+  MC_FORMAT_AUTO /* sync profiles only: what the size budget picks (see mc_sync_profile);
+                  * never a transcode's format */
 } mc_format;
 
 /* The Opus bitrates offered, highest first: the ladder a size budget walks down. */
@@ -24,7 +26,7 @@ extern const int mc_opus_bitrates[MC_OPUS_BITRATE_COUNT]; /* 256, 192, 160, 128,
 
 typedef struct mc_transcode_opts {
   mc_format format;
-  int bitrate_kbps; /* for MC_FORMAT_OPUS: one of mc_opus_bitrates */
+  int bitrate_kbps; /* for MC_FORMAT_OPUS: one of mc_opus_bitrates; else 0 */
 } mc_transcode_opts;
 
 #ifdef __cplusplus

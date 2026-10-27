@@ -6,7 +6,8 @@
  *   | 1,204 of 1,210 files OK, 6 missing, 41.2 GB                      |
  *   | [####----] Syncing library... 120 sent, 340 received             |
  *   | Name   [Living room PC          ]                                |
- *   | Format [Opus 160 kbps v]   [ ] Limit storage to [32] GB          |
+ *   | Format [Auto          v]   [x] Limit storage to [32] GB          |
+ *   |        About 28.1 GB for 5,120 tracks, as Opus 160 kbps          |
  *   | What to sync                                                     |
  *   | [x] Sync everything                                              |
  *   | ( Albums | Artists | Playlists | Album groups )                  |
@@ -16,6 +17,8 @@
  *
  * This PC's own page has Sync now (with every member) and Leave group... instead. An
  * archive's format, budget and selection are fixed, so they're disabled; its name isn't.
+ * Under the format is the profile's size estimate, worked out on a thread as edits are made:
+ * the size, what Auto picked, or by how much it doesn't fit (then nothing would sync).
  * Edits are collected and applied together shortly after, through the device's sync profile
  * (get, change, set); an error shows on the page, which then reloads. The name applies on
  * Enter or when it loses the focus.

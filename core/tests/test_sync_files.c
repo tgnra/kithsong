@@ -617,11 +617,12 @@ static void check_plan(const char *root) {
   CHECK(mc_plan_compute(sdb, lib, me, 0, &p) == MC_OK);
   CHECK(p && p->status == MC_PLAN_OK && p->kbps == 64);
   mc_plan_free(p);
-  /* A budget of opus 128 never goes above 128. */
+  /* A budget picks the format: a row an older version wrote with Opus 128 beside it still
+   * walks from originals, which fit. */
   snprintf(sql, sizeof sql, "0, 'all', 'opus', 128, %lld, 1", (long long)(at[1] * 10));
   plan_profile(sdb, me, sql);
   CHECK(mc_plan_compute(sdb, lib, me, -1, &p) == MC_OK);
-  CHECK(p && p->kbps == 128);
+  CHECK(p && p->status == MC_PLAN_OK && p->kbps == 0);
   mc_plan_free(p);
   /* Not even 64 fits: over budget, nothing wanted, and by how much. */
   snprintf(sql, sizeof sql, "0, 'all', 'original', NULL, %lld, 1", (long long)(at[6] - 500));

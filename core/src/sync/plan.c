@@ -332,9 +332,12 @@ mc_status mc_plan_compute_profile(mc_sync_db *sdb, mc_library *lib, const char *
     opus = 0;
     budget = 0;
   }
+  /* A budget picks the format (auto), whatever format a row from an older version stored
+   * beside it: the walk starts at originals. */
+  if (budget) opus = 0;
 
-  /* The ladder: originals, then each Opus bitrate. The walk starts at the profile's own
-   * format, so a budget never picks better than what was asked for. */
+  /* The ladder: originals, then each Opus bitrate. Without a budget it's the profile's own
+   * step; with one, the walk takes the first that fits. */
   int ladder[1 + MC_OPUS_BITRATE_COUNT];
   ladder[0] = 0;
   for (int i = 0; i < MC_OPUS_BITRATE_COUNT; i++) ladder[i + 1] = mc_opus_bitrates[i];

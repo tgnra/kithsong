@@ -82,9 +82,11 @@ const char *mc_profile_kind_str(mc_profile_item_kind kind) {
 }
 
 /* uid's profiles row into p (items untouched), the defaults if there is none; *exists says
- * which. Formats other than 'opus' read as original, modes other than 'selected' as all.
- * archive is whether it is one (sync/archive.h): the stored flag, or a void demotion. The
- * other fields are as stored, even for an archive. */
+ * which. Formats other than 'opus' read as original, modes other than 'selected' as all, and
+ * any format with budget_enabled as auto: the budget picks it (older versions stored a
+ * format beside the budget, which then walked down from it). archive is whether it is one
+ * (sync/archive.h): the stored flag, or a void demotion. The other fields are as stored,
+ * even for an archive. */
 static mc_status read_fields(sqlite3 *db, const char *uid, mc_sync_profile *p, int *exists) {
   p->name = NULL;
   p->archive = 0;
@@ -116,6 +118,10 @@ static mc_status read_fields(sqlite3 *db, const char *uid, mc_sync_profile *p, i
     }
     p->budget_bytes = sqlite3_column_int64(stmt, 4);
     p->budget_enabled = sqlite3_column_int(stmt, 5) != 0;
+    if (p->budget_enabled) {
+      p->format.format = MC_FORMAT_AUTO;
+      p->format.bitrate_kbps = 0;
+    }
     if (name && *name && !(p->name = strdup(name))) st = MC_ERR_NOMEM;
   } else if (rc != SQLITE_DONE) {
     st = MC_ERR_DB;
@@ -253,7 +259,9 @@ static mc_status insert_bare(mc_sync_db *sdb, const char *uid) {
 }
 
 /* The profiles row: the fields of p that differ from the stored ones (old, which exists or
- * is the defaults). *changed is set if anything was written. */
+ * is the defaults). *changed is set if anything was written. Auto is stored as originals
+ * with budget_enabled, which versions without auto read the same way: the walk then starts
+ * at originals. */
 static mc_status write_fields(mc_sync_db *sdb, const char *uid, const mc_sync_profile *old,
                               int exists, const mc_sync_profile *p, const char *name,
                               int *changed) {
@@ -386,9 +394,13 @@ static mc_status check_profile(const mc_sync_profile *profile) {
     return MC_ERR_INVALID_ARG;
   if (profile->format.format == MC_FORMAT_OPUS) {
     if (!valid_bitrate(profile->format.bitrate_kbps)) return MC_ERR_INVALID_ARG;
-  } else if (profile->format.format != MC_FORMAT_ORIGINAL) {
+  } else if (profile->format.format != MC_FORMAT_ORIGINAL &&
+             profile->format.format != MC_FORMAT_AUTO) {
     return MC_ERR_INVALID_ARG;
   }
+  /* The budget picks the format, so the two come together or not at all. */
+  if (!profile->budget_enabled != (profile->format.format != MC_FORMAT_AUTO))
+    return MC_ERR_INVALID_ARG;
   for (int i = 0; i < profile->count; i++)
     if ((int)profile->items[i].kind < 0 || (int)profile->items[i].kind >= KIND_COUNT ||
         !is_uid_field(profile->items[i].ref_uid))

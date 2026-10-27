@@ -283,9 +283,9 @@ mc_status mc_sync_get_device_name(mc_sync *sync, char *out, size_t cap);
 int mc_sync_local_addresses(char (*out)[MC_SYNC_ADDR_STRLEN], int max);
 
 /* --- Profiles ---
- * What each device holds: everything or a selection, as originals or Opus, within a size
- * budget. Any member may edit any member's profile; the device applies it when it next
- * syncs. */
+ * What each device holds: everything or a selection, as originals or Opus, or within a size
+ * budget that picks the format. Any member may edit any member's profile; the device applies
+ * it when it next syncs. */
 
 typedef enum mc_profile_item_kind {
   MC_PROFILE_ALBUM,
@@ -304,9 +304,15 @@ typedef struct mc_sync_profile {
   int archive;              /* keeps the full library as originals; read-only here, set
                              * with mc_sync_set_archive() */
   int sync_all;             /* everything, else just items */
-  mc_transcode_opts format; /* original, or opus + bitrate (one of mc_opus_bitrates) */
+  /* Original, Opus + bitrate (one of mc_opus_bitrates), or MC_FORMAT_AUTO (bitrate 0) when
+   * and only when budget_enabled: the format and the size budget exclude each other. Auto
+   * takes the best of originals, then each of mc_opus_bitrates, that fits the budget; if
+   * even the lowest doesn't, the profile is over budget and nothing syncs (see
+   * mc_sync_estimate). */
+  mc_transcode_opts format;
   int budget_enabled;
-  int64_t budget_bytes;     /* size budget: picks the best bitrate that fits */
+  int64_t budget_bytes;     /* the budget; 0 = the device's free space alone. Kept while
+                             * !budget_enabled so it comes back. */
   mc_profile_item *items;   /* the selection; kept while sync_all so it comes back */
   int count;
 } mc_sync_profile;
@@ -315,8 +321,10 @@ typedef struct mc_sync_profile {
  * everything, originals, no budget, whatever its row holds. A device with no profile stored
  * receives no files until one is (pairing stores one at once, so this is brief); for it the
  * getter returns what an editor should start from: everything, originals, no budget, no
- * name. Items of kinds this version doesn't know are left out. MC_ERR_NOT_FOUND if not in
- * a group or it isn't a current member. Free with mc_sync_profile_free(). */
+ * name. A stored budget reads as MC_FORMAT_AUTO whatever format it was stored with (older
+ * versions kept both, the budget walking down from the format). Items of kinds this version
+ * doesn't know are left out. MC_ERR_NOT_FOUND if not in a group or it isn't a current
+ * member. Free with mc_sync_profile_free(). */
 mc_status mc_sync_get_profile(mc_sync *sync, const char *device_uid, mc_sync_profile **out);
 /* Frees a profile from mc_sync_get_profile(). NULL is a no-op. */
 void mc_sync_profile_free(mc_sync_profile *profile);
@@ -327,8 +335,9 @@ void mc_sync_profile_free(mc_sync_profile *profile);
  * fields or items aren't overwritten. An archive's profile is locked to everything,
  * originals and no budget (MC_ERR_LOCKED for anything else); its name, budget size and
  * items stay editable, and its stored mode, format and budget switch are kept for when it
- * stops being one. MC_ERR_INVALID_ARG for an unknown kind or a bitrate not in
- * mc_opus_bitrates; MC_ERR_NOT_FOUND as for the getter. Members hear of the change in a few
+ * stops being one. MC_ERR_INVALID_ARG for an unknown kind, a bitrate not in
+ * mc_opus_bitrates, or MC_FORMAT_AUTO without budget_enabled or another format with it;
+ * MC_ERR_NOT_FOUND as for the getter. Members hear of the change in a few
  * seconds. */
 mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sync_profile *profile);
 
@@ -357,7 +366,7 @@ typedef struct mc_sync_estimate {
   int tracks;              /* tracks the profile wants */
   int64_t total_bytes;     /* their size at kbps; when over_budget, at 64 kbps */
   int kbps;                /* what the device would hold them as: 0 for originals, else the
-                            * Opus bitrate, with a budget the best that fits; 0 when
+                            * Opus bitrate; for MC_FORMAT_AUTO the best that fits; 0 when
                             * over_budget */
   int archive;             /* the device is an archive: everything, originals, no budget */
   int over_budget;         /* even 64 kbps doesn't fit: nothing would sync */
