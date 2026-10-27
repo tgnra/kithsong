@@ -120,6 +120,8 @@
     "import_skip": "S_kip",
     "import_as_tagged": "_Keep existing tags",
     "import_use_match": "_Use this match",
+    "import_offline": { "text": "You're offline, so music can't be tagged from MusicBrainz until you're back online.", "note": "Banner on the Import page when the internet (MusicBrainz, the online music database used to tag files) can't be reached." },
+    "import_skip_tagging": { "text": "Import _without tagging", "note": "Button on the offline banner: imports the remaining items with the tags their files already have, without looking them up on MusicBrainz." },
 
     "import_error_unreachable": "Couldn't reach MusicBrainz",
     "import_error_no_matches": "No matches on MusicBrainz",

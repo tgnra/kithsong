@@ -61,6 +61,8 @@ struct import_view {
   int group_count[NUM_GROUPS];
 
   GtkWidget *status, *progress;
+  GtkWidget *banner; /* "You're offline", with Import Without Tagging */
+  gboolean offline, skipped_tags;
   GtkWidget *groups[NUM_GROUPS], *lists[NUM_GROUPS];
 
   review *rev; /* open review dialog, if any */
@@ -191,6 +193,19 @@ static void on_import_event(void *user, mc_import_event ev, int arg) {
   g_idle_add(deliver_event, e);
 }
 
+/* The offline banner shows while MusicBrainz can't be reached, until its button is used. */
+static void update_banner(import_view *v) {
+  if (v->root) adw_banner_set_revealed(ADW_BANNER(v->banner), v->imp && v->offline && !v->skipped_tags);
+}
+
+static void on_skip_tagging(AdwBanner *banner, gpointer data) {
+  (void)banner;
+  import_view *v = data;
+  if (!v->imp || mc_import_skip_tagging(v->imp) != MC_OK) return;
+  v->skipped_tags = TRUE;
+  update_banner(v);
+}
+
 /* Ends the session. While the widget is being torn down (root is NULL) only the core's side is
  * freed; the widgets are going anyway. */
 static void close_session(import_view *v) {
@@ -215,6 +230,9 @@ static void close_session(import_view *v) {
   v->states = NULL;
   v->item_count = 0;
   v->scanned_files = 0;
+  v->offline = FALSE;
+  v->skipped_tags = FALSE;
+  update_banner(v);
 
   if (v->root) gtk_stack_set_visible_child_name(GTK_STACK(v->root), "start");
   if (v->cb.session_changed) v->cb.session_changed(v->cb.user, FALSE);
@@ -357,6 +375,10 @@ static void on_event(import_view *v, mc_import_event ev, int arg) {
     }
     case MC_IMPORT_EV_IDLE:
       v->idle = TRUE;
+      break;
+    case MC_IMPORT_EV_OFFLINE:
+      v->offline = arg != 0;
+      update_banner(v);
       break;
   }
   if (v->imp) update_status(v); /* a callback may have ended the session */
@@ -943,7 +965,13 @@ GtkWidget *import_view_new(mc_library *lib, const import_view_callbacks *cb) {
     adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(v->groups[g]));
   }
 
+  v->banner = adw_banner_new(mc_str(MC_STR_IMPORT_OFFLINE));
+  adw_banner_set_use_markup(ADW_BANNER(v->banner), FALSE);
+  adw_banner_set_button_label(ADW_BANNER(v->banner), mc_str_mnemonic(MC_STR_IMPORT_SKIP_TAGGING));
+  g_signal_connect(v->banner, "button-clicked", G_CALLBACK(on_skip_tagging), v);
+
   GtkWidget *session = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(session), v->banner);
   gtk_box_append(GTK_BOX(session), clamp);
   gtk_box_append(GTK_BOX(session), page);
 

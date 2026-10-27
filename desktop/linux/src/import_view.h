@@ -17,6 +17,8 @@
  * straight away; the rest wait under "Needs a decision". Activating an item opens the
  * review dialog, where the user picks a candidate, searches again, keeps the existing tags or
  * skips it. A session lasts from the start of an import until Done.
+ * While MusicBrainz can't be reached, a banner says so and offers Import Without Tagging
+ * (mc_import_skip_tagging); it goes away once MusicBrainz answers again or it's used.
  *
  * Wiring it into main.c:
  *
