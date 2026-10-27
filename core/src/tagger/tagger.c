@@ -9,6 +9,7 @@
  * After matching, the thread stays alive to work through the user's review decisions.
  */
 #include "musiccore/tagger.h"
+#include "musiccore/i18n.h"
 
 #include <ctype.h>
 #include <stddef.h>
@@ -554,7 +555,7 @@ static void match_item(mc_import *imp, mc_library *lib, int idx, const char *art
 
   mc_tags *tags = malloc((size_t)it->file_count * sizeof *tags);
   if (!tags) {
-    set_state(imp, idx, MC_IMPORT_FAILED, "Out of memory");
+    set_state(imp, idx, MC_IMPORT_FAILED, mc_str(MC_STR_IMPORT_ERROR_NOMEM));
     return;
   }
   for (int i = 0; i < it->file_count; i++) tags[i] = *item_tags(imp, it, i);
@@ -580,7 +581,8 @@ static void match_item(mc_import *imp, mc_library *lib, int idx, const char *art
 
   const char *why = NULL;
   if (l.n == 0)
-    why = l.net == MC_ERR_NET ? "Couldn't reach MusicBrainz" : "No matches on MusicBrainz";
+    why = l.net == MC_ERR_NET ? mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE)
+                              : mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES);
   int accept = !manual && l.n > 0 && should_accept(it, &l.c[0], imp->threshold);
 
   mc_mutex_lock(&imp->lock);
@@ -732,24 +734,24 @@ static const char *place_files(mc_import *imp, mc_library *lib, placement *p, in
     const char *src = pl->f->path;
     pl->src_rel = mc_library_relpath(lib, src);
     pl->dest_abs = mc_library_abspath(lib, pl->dest_rel);
-    if (!pl->dest_abs) return "Out of memory";
+    if (!pl->dest_abs) return mc_str(MC_STR_IMPORT_ERROR_NOMEM);
     if (strcmp(src, pl->dest_abs) == 0) continue; /* already in place */
 
     char *dir = dirname_of(pl->dest_abs);
     mc_status st = dir ? mc_mkdirs(dir) : MC_ERR_NOMEM;
     free(dir);
-    if (st != MC_OK) return "Couldn't create a folder in the library";
+    if (st != MC_OK) return mc_str(MC_STR_IMPORT_ERROR_MKDIR);
 
     if (mc_same_path(src, pl->dest_abs)) {
       /* Only the letter case differs: rename in place. */
-      if (mc_rename(src, pl->dest_abs, 0) != MC_OK) return "Couldn't rename a file in the library";
+      if (mc_rename(src, pl->dest_abs, 0) != MC_OK) return mc_str(MC_STR_IMPORT_ERROR_RENAME);
       pl->op = OP_MOVED;
       continue;
     }
     if (mc_file_exists(pl->dest_abs)) {
       if (!pl->src_rel && mc_import_db_is_track_at(lib, pl->dest_rel, pl->releasetrackid)) {
         /* The same track imported again from elsewhere: replace the old copy. */
-        if (mc_copy_file(src, pl->dest_abs, 1) != MC_OK) return "Couldn't copy a file into the library";
+        if (mc_copy_file(src, pl->dest_abs, 1) != MC_OK) return mc_str(MC_STR_IMPORT_ERROR_COPY);
         pl->op = OP_REPLACED;
         continue;
       }
@@ -757,7 +759,7 @@ static const char *place_files(mc_import *imp, mc_library *lib, placement *p, in
       char *unique_rel = unique ? mc_library_relpath(lib, unique) : NULL;
       if (!unique_rel) {
         free(unique);
-        return "Couldn't find a free file name in the library";
+        return mc_str(MC_STR_IMPORT_ERROR_NO_NAME);
       }
       free(pl->dest_abs);
       free(pl->dest_rel);
@@ -765,12 +767,12 @@ static const char *place_files(mc_import *imp, mc_library *lib, placement *p, in
       pl->dest_rel = unique_rel;
     }
     if (pl->src_rel) {
-      if (mc_rename(src, pl->dest_abs, 0) != MC_OK) return "Couldn't move a file within the library";
+      if (mc_rename(src, pl->dest_abs, 0) != MC_OK) return mc_str(MC_STR_IMPORT_ERROR_MOVE);
       pl->op = OP_MOVED;
     } else {
-      if (cancelled(imp)) return "Cancelled";
+      if (cancelled(imp)) return mc_str(MC_STR_IMPORT_ERROR_CANCELLED);
       if (mc_copy_file(src, pl->dest_abs, 0) != MC_OK)
-        return "Couldn't copy a file into the library (is the disk full?)";
+        return mc_str(MC_STR_IMPORT_ERROR_COPY_FULL);
       pl->op = OP_COPIED;
     }
   }
@@ -850,7 +852,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   if (!rows || !places) {
     free(rows);
     free(places);
-    set_state(imp, idx, MC_IMPORT_FAILED, "Out of memory");
+    set_state(imp, idx, MC_IMPORT_FAILED, mc_str(MC_STR_IMPORT_ERROR_NOMEM));
     return;
   }
   /* A cover next to the original files is worth keeping. */
@@ -961,16 +963,16 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       free(name);
     }
   }
-  if (count == 0) error = "No files matched this release";
+  if (count == 0) error = mc_str(MC_STR_IMPORT_ERROR_NO_FILES);
 
   /* join_rel and the path builders return NULL only when out of memory. */
   for (int i = 0; i < count && !error; i++)
-    if (!places[i].dest_rel) error = "Out of memory";
+    if (!places[i].dest_rel) error = mc_str(MC_STR_IMPORT_ERROR_NOMEM);
   if (!error) error = place_files(imp, lib, places, count);
 
   for (int i = 0; i < count && !error; i++) {
     if (places[i].write_tags && mc_tags_write(places[i].dest_abs, &places[i].tags) != MC_OK)
-      error = "Couldn't write tags to a file (is it read-only or open elsewhere?)";
+      error = mc_str(MC_STR_IMPORT_ERROR_WRITE_TAGS);
   }
 
   if (!error) {
@@ -981,7 +983,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       t->old_path = places[i].op == OP_MOVED ? places[i].src_rel : NULL;
       mc_file_info(places[i].dest_abs, &t->size_bytes, &t->mtime_ms);
     }
-    if (mc_import_db_write(lib, &album, rows, count) != MC_OK) error = "Couldn't save to the library";
+    if (mc_import_db_write(lib, &album, rows, count) != MC_OK) error = mc_str(MC_STR_IMPORT_ERROR_SAVE);
   }
 
   if (error) {
@@ -1017,7 +1019,7 @@ static void request_free(request *r) {
 
 static void handle_request(mc_import *imp, mc_library *lib, request *r) {
   if (!lib) {
-    set_state(imp, r->item, MC_IMPORT_FAILED, "Couldn't open the library");
+    set_state(imp, r->item, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
     return;
   }
   switch (r->kind) {
@@ -1078,7 +1080,7 @@ static void import_thread(void *arg) {
   for (int i = 0; i < imp->item_count && !cancelled(imp); i++) {
     drain_requests(imp, lib); /* the user's decisions come before more matching */
     if (lib) match_item(imp, lib, i, NULL, NULL);
-    else set_state(imp, i, MC_IMPORT_FAILED, "Couldn't open the library");
+    else set_state(imp, i, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
   }
   if (!cancelled(imp)) emit(imp, MC_IMPORT_EV_IDLE, 0);
 

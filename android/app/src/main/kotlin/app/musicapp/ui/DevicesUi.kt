@@ -67,7 +67,7 @@ fun DevicesSection(status: SyncStatus, syncer: Syncer) {
     var adding by rememberSaveable { mutableStateOf(false) }
     var leaving by rememberSaveable { mutableStateOf(false) }
     Column {
-        SettingsHeading(stringResource(R.string.settings_devices))
+        SettingsHeading(stringResource(R.string.devices))
         ListItem(
             leadingContent = { Icon(Icons.Smartphone, contentDescription = null) },
             headlineContent = { Text(status.deviceName) },

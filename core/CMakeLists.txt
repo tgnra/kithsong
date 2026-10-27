@@ -32,6 +32,21 @@ endfunction()
 musiccore_embed_sql(_schema_c src/library/schema_v1.sql mc_schema_v1_sql)
 musiccore_embed_sql(_sync_schema_c src/sync/sync_schema_v1.sql mc_sync_schema_v1_sql)
 
+# UI strings: strings/*.json becomes enum mc_str_id (mc_strings_gen.h, public, for the
+# frontends) and a table per language (mc_strings_gen.c). See strings/README.md.
+set(_strings_dir "${PROJECT_SOURCE_DIR}/strings")
+set(_strings_out "${CMAKE_CURRENT_BINARY_DIR}/strings")
+file(GLOB _strings_json CONFIGURE_DEPENDS "${_strings_dir}/*.json")
+add_custom_command(
+  OUTPUT "${_strings_out}/mc_strings_gen.h" "${_strings_out}/mc_strings_gen.c"
+  COMMAND "${CMAKE_COMMAND}"
+    -DIN=${_strings_dir}/en.json
+    -DOUT_DIR=${_strings_out}
+    -DMODE=c
+    -P "${PROJECT_SOURCE_DIR}/cmake/gen_strings.cmake"
+  DEPENDS ${_strings_json} "${PROJECT_SOURCE_DIR}/cmake/gen_strings.cmake"
+  COMMENT "Generating UI strings")
+
 add_library(musiccore STATIC
   src/core.c
   src/settings.c
@@ -40,6 +55,9 @@ add_library(musiccore STATIC
   src/util/hlc.c
   src/util/changelog.c
   src/util/fracindex.c
+  src/util/i18n.c
+  "${_strings_out}/mc_strings_gen.h"
+  "${_strings_out}/mc_strings_gen.c"
   src/library/library.c
   "${_schema_c}"
   src/playlist/playlist.c
@@ -70,7 +88,7 @@ add_library(musiccore STATIC
 add_library(musiccore::musiccore ALIAS musiccore)
 
 target_include_directories(musiccore
-  PUBLIC include
+  PUBLIC include "${_strings_out}"
   PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(musiccore PRIVATE
   mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs mc_mdns mc_opusenc mc_opusfile tag

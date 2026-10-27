@@ -1,0 +1,8 @@
+{
+  "shared": {
+    "hello": "Bonjour",
+    "greet": "Bonjour, {0}",
+    "skip": "_Passer",
+    "items": { "one": "{0:d} élément", "many": "{0:d} d'éléments", "other": "{0:d} éléments" }
+  }
+}

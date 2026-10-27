@@ -14,20 +14,20 @@ const char *mc_version(void) {
 
 const char *mc_status_str(mc_status status) {
   switch (status) {
-    case MC_OK: return "ok";
-    case MC_ERR_UNIMPLEMENTED: return "not implemented";
-    case MC_ERR_INVALID_ARG: return "invalid argument";
-    case MC_ERR_NOMEM: return "out of memory";
-    case MC_ERR_IO: return "I/O error";
-    case MC_ERR_DB: return "database error";
-    case MC_ERR_NET: return "network error";
-    case MC_ERR_FORMAT: return "unsupported or corrupt file";
-    case MC_ERR_NOT_FOUND: return "not found";
-    case MC_ERR_LOCKED: return "locked";
-    case MC_ERR_IN_GROUP: return "already in a sync group";
-    case MC_ERR_LIBRARY_MISMATCH: return "not the sync group's library";
+    case MC_OK: return mc_str(MC_STR_STATUS_OK);
+    case MC_ERR_UNIMPLEMENTED: return mc_str(MC_STR_STATUS_UNIMPLEMENTED);
+    case MC_ERR_INVALID_ARG: return mc_str(MC_STR_STATUS_INVALID_ARG);
+    case MC_ERR_NOMEM: return mc_str(MC_STR_STATUS_NOMEM);
+    case MC_ERR_IO: return mc_str(MC_STR_STATUS_IO);
+    case MC_ERR_DB: return mc_str(MC_STR_STATUS_DB);
+    case MC_ERR_NET: return mc_str(MC_STR_STATUS_NET);
+    case MC_ERR_FORMAT: return mc_str(MC_STR_STATUS_FORMAT);
+    case MC_ERR_NOT_FOUND: return mc_str(MC_STR_STATUS_NOT_FOUND);
+    case MC_ERR_LOCKED: return mc_str(MC_STR_STATUS_LOCKED);
+    case MC_ERR_IN_GROUP: return mc_str(MC_STR_STATUS_IN_GROUP);
+    case MC_ERR_LIBRARY_MISMATCH: return mc_str(MC_STR_STATUS_LIBRARY_MISMATCH);
   }
-  return "unknown error";
+  return mc_str(MC_STR_STATUS_UNKNOWN);
 }
 
 mc_status mc_init(void) {

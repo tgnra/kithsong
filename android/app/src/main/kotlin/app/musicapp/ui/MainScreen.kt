@@ -314,7 +314,7 @@ private fun SectionHeading(
 /** What a recent shows under its title: an album's artist, or what kind of thing it is. */
 @Composable
 private fun Recent.subtitle(): String = artist ?: stringResource(
-    if (ref.kind == CollectionRef.Kind.Artist) R.string.recent_artist else R.string.recent_playlist,
+    if (ref.kind == CollectionRef.Kind.Artist) R.string.artist else R.string.playlist,
 )
 
 /** A list row with art, for recents, playlists and artists. */

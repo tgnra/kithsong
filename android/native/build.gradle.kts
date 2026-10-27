@@ -35,7 +35,7 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             // The core needs CMake >= 3.28; install it with `sdkmanager "cmake;3.30.5"`.
-            version = "3.30.5"
+            version = rootProject.extra["musicappCmakeVersion"] as String
         }
     }
 

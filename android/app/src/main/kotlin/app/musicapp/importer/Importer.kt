@@ -89,7 +89,7 @@ class Importer(
                 null
             }
             if (started == null) {
-                state.value = ImportProgress(ImportProgress.Phase.Finished, problems = listOf(context.getString(R.string.import_no_library)))
+                state.value = ImportProgress(ImportProgress.Phase.Finished, problems = listOf(context.getString(R.string.library_open_failed)))
                 return@launch
             }
             session = started

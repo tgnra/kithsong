@@ -13,3 +13,7 @@ val musicappVersion = rootDir.resolve("../VERSION").readText().trim()
 val (versionMajor, versionMinor, versionPatch) = musicappVersion.split(".").map(String::toInt)
 extra["musicappVersionName"] = musicappVersion
 extra["musicappVersionCode"] = versionMajor * 100000 + versionMinor * 1000 + versionPatch * 10
+
+// The SDK's CMake: :native builds the core with it, and :app runs cmake/gen_strings.cmake
+// with it to turn strings/*.json into string resources.
+extra["musicappCmakeVersion"] = "3.30.5"
