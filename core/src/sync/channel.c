@@ -23,6 +23,16 @@ struct mc_channel {
   unsigned char rbuf[MC_FRAME_MAX];
 };
 
+static int g_default_timeout_ms = MC_CHANNEL_TIMEOUT_MS;
+
+int mc_channel_default_timeout(void) {
+  return g_default_timeout_ms;
+}
+
+void mc_channel_set_default_timeout(int timeout_ms) {
+  g_default_timeout_ms = timeout_ms;
+}
+
 static void make_preamble(unsigned char out[MC_PREAMBLE_LEN], int mode) {
   out[0] = 'M';
   out[1] = 'A';
@@ -36,7 +46,7 @@ static mc_channel *channel_new(mc_socket *sock, int initiator, int mode) {
   ch->sock = sock;
   ch->initiator = initiator;
   ch->mode = mode;
-  ch->timeout_ms = MC_CHANNEL_TIMEOUT_MS;
+  ch->timeout_ms = g_default_timeout_ms;
   make_preamble(ch->preamble, mode);
   return ch;
 }
@@ -62,31 +72,44 @@ mc_status mc_channel_connect(const char *host, uint16_t port, int mode, int time
   return MC_OK;
 }
 
-mc_status mc_channel_accept(mc_listener *l, int timeout_ms, mc_channel **out) {
+mc_status mc_channel_accept_raw(mc_listener *l, int timeout_ms, mc_channel **out) {
   if (!l || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   mc_socket *sock;
   mc_status st = mc_listener_accept(l, timeout_ms, &sock);
   if (st != MC_OK || !sock) return st;
-
-  unsigned char pre[MC_PREAMBLE_LEN];
-  st = mc_socket_recv_exact(sock, pre, sizeof pre, MC_CHANNEL_TIMEOUT_MS);
-  if (st != MC_OK) {
-    mc_socket_close(sock);
-    return st;
-  }
-  if (pre[0] != 'M' || pre[1] != 'A' || pre[2] != MC_PROTOCOL_VERSION ||
-      (pre[3] != MC_MODE_PAIRING && pre[3] != MC_MODE_SESSION)) {
-    mc_socket_close(sock);
-    return MC_ERR_FORMAT;
-  }
-  mc_channel *ch = channel_new(sock, 0, pre[3]);
+  mc_channel *ch = channel_new(sock, 0, 0);
   if (!ch) {
     mc_socket_close(sock);
     return MC_ERR_NOMEM;
   }
+  ch->broken = 1; /* until the preamble checks out */
   *out = ch;
   return MC_OK;
+}
+
+mc_status mc_channel_read_preamble(mc_channel *ch) {
+  if (!ch || ch->initiator || ch->mode) return MC_ERR_INVALID_ARG;
+  unsigned char pre[MC_PREAMBLE_LEN];
+  mc_status st = mc_socket_recv_exact(ch->sock, pre, sizeof pre, ch->timeout_ms);
+  if (st != MC_OK) return st;
+  if (pre[0] != 'M' || pre[1] != 'A' || pre[2] != MC_PROTOCOL_VERSION ||
+      (pre[3] != MC_MODE_PAIRING && pre[3] != MC_MODE_SESSION))
+    return MC_ERR_FORMAT;
+  ch->mode = pre[3];
+  make_preamble(ch->preamble, ch->mode);
+  ch->broken = 0;
+  return MC_OK;
+}
+
+mc_status mc_channel_accept(mc_listener *l, int timeout_ms, mc_channel **out) {
+  mc_status st = mc_channel_accept_raw(l, timeout_ms, out);
+  if (st != MC_OK || !*out) return st;
+  if ((st = mc_channel_read_preamble(*out)) != MC_OK) {
+    mc_channel_close(*out);
+    *out = NULL;
+  }
+  return st;
 }
 
 void mc_channel_close(mc_channel *ch) {

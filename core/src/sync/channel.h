@@ -14,10 +14,17 @@
 
 /* The type byte and payload fill one Noise plaintext. */
 #define MC_CHANNEL_MAX_PAYLOAD (MC_NOISE_MAX_PLAINTEXT - 1)
-/* Default bound on each send or receive. */
+/* Default bound on each send or receive: an inactivity timeout, so a peer that goes silent
+ * (a phone whose network was cut off drops packets rather than resetting) fails the call
+ * with MC_ERR_NET instead of hanging it. A frame that keeps moving never times out. */
 #define MC_CHANNEL_TIMEOUT_MS 30000
 
 typedef struct mc_channel mc_channel;
+
+/* The timeout new channels start with, MC_CHANNEL_TIMEOUT_MS unless a test shortened it.
+ * Set it before any channel opens; it isn't synchronised. */
+int mc_channel_default_timeout(void);
+void mc_channel_set_default_timeout(int timeout_ms);
 
 /* Connects and sends the preamble for mode (MC_MODE_PAIRING or MC_MODE_SESSION). */
 mc_status mc_channel_connect(const char *host, uint16_t port, int mode, int timeout_ms,
@@ -26,6 +33,13 @@ mc_status mc_channel_connect(const char *host, uint16_t port, int mode, int time
  * with *out = NULL on timeout or once the listener is stopped. A connection with a bad
  * preamble is closed and reported as MC_ERR_FORMAT; keep accepting. */
 mc_status mc_channel_accept(mc_listener *l, int timeout_ms, mc_channel **out);
+/* The same in two steps, so that a connection can be handed to another thread before its
+ * preamble is read, and one that never sends it holds up only that thread: accepts without
+ * reading (mc_channel_mode() is 0 until then), ... */
+mc_status mc_channel_accept_raw(mc_listener *l, int timeout_ms, mc_channel **out);
+/* ... then reads the preamble. MC_ERR_FORMAT if it is bad, MC_ERR_NET if it doesn't come;
+ * either way only closing is left. */
+mc_status mc_channel_read_preamble(mc_channel *ch);
 void mc_channel_close(mc_channel *ch);
 /* Makes a send or receive blocked on another thread fail at once, and every later one too.
  * The only channel function that may be called from another thread, while the channel is

@@ -515,7 +515,7 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   mc_status st = mc_channel_recv_clear(ch, &type, &payload, &len);
   if (st != MC_OK || type != MC_MSG_PAIR_HELLO || parse_side(payload, len, &peer) != MC_OK ||
       !strcmp(peer.dev, sync->device_uid))
-    goto close;
+    goto untrack;
 
   /* One requester at a time; it may come back after a wrong code. */
   mc_mutex_lock(&sync->lock);
@@ -526,7 +526,7 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   mc_mutex_unlock(&sync->lock);
   if (busy) {
     send_refuse(ch, MC_PAIR_BUSY, 0);
-    goto close;
+    goto untrack;
   }
 
   outcome out = NEW_GROUP_B_LIBRARY;
@@ -538,7 +538,7 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
     mc_mutex_lock(&sync->lock);
     sync->in_conn = 0;
     mc_mutex_unlock(&sync->lock);
-    goto close;
+    goto untrack;
   }
 
   mc_mutex_lock(&sync->lock);
@@ -566,7 +566,7 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   int failures = sync->in_r.failures, new_code = 0;
   st = mc_pair_respond(&sync->in_r, ch, mc_sync_db_private_key(c->sdb),
                        mc_sync_db_public_key(c->sdb), peer_key, &new_code);
-  mc_channel_set_timeout(ch, MC_CHANNEL_TIMEOUT_MS);
+  mc_channel_set_timeout(ch, mc_channel_default_timeout());
 
   mc_mutex_lock(&sync->lock);
   int cancelled = sync->in_cancel || sync->stopping;
@@ -636,6 +636,5 @@ done:
   mc_mutex_unlock(&sync->lock);
 untrack:
   mc_sync_untrack(sync, ch);
-close:
   mc_channel_close(ch);
 }

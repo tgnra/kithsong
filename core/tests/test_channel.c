@@ -345,6 +345,127 @@ static void test_pairing(server *s, mc_sync_db *a, mc_sync_db *b) {
   s->pair = NULL;
 }
 
+/* --- A peer that goes silent --- */
+
+/* How long a test waits for silence to be noticed, against SILENT_MS of silence. */
+#define SILENT_MS 300
+#define NOTICE_MS 5000
+
+/* Handshakes, echoes one message, then neither reads nor writes until released: what a
+ * phone looks like once Android blocks its network and drops its packets. */
+typedef struct quiet_peer {
+  server *s;
+  mc_mutex m;
+  int released;
+  mc_status st;
+} quiet_peer;
+
+static void quiet_serve(void *arg) {
+  quiet_peer *q = arg;
+  mc_channel *ch = NULL;
+  mc_channel_accept(q->s->l, WAIT_MS, &ch);
+  if (!ch) return;
+  q->st = mc_channel_handshake_kk(ch, mc_sync_db_private_key(q->s->sdb),
+                                  mc_sync_db_public_key(q->s->sdb), q->s->peers, 1, NULL, NULL);
+  uint8_t type;
+  const unsigned char *payload;
+  size_t len;
+  if (q->st == MC_OK && (q->st = mc_channel_recv(ch, &type, &payload, &len)) == MC_OK)
+    q->st = mc_channel_send(ch, type, payload, len);
+  for (int released = 0; !released;) {
+    mc_sleep_ms(20);
+    mc_mutex_lock(&q->m);
+    released = q->released;
+    mc_mutex_unlock(&q->m);
+  }
+  mc_channel_close(ch);
+}
+
+static void test_silence(server *s, mc_sync_db *a, mc_sync_db *b) {
+  /* The TCP connection is accepted (the listener's backlog does that) but nothing more:
+   * the handshake fails once the reply has been missing for the timeout. */
+  mc_channel *ch = dial(s, MC_MODE_SESSION);
+  if (ch) {
+    mc_channel_set_timeout(ch, SILENT_MS);
+    uint64_t t0 = mc_mono_ms();
+    CHECK(kk(ch, a, mc_sync_db_public_key(b)) == MC_ERR_NET);
+    uint64_t took = mc_mono_ms() - t0;
+    CHECK(took >= SILENT_MS - 50 && took < NOTICE_MS);
+    mc_channel_close(ch);
+  }
+  /* Drain that connection from the listener's backlog. */
+  start(s, JOB_ACCEPT_ONLY);
+  mc_thread_join(&s->thread);
+
+  /* The other way round: a connection that never sends its preamble. */
+  mc_channel_set_default_timeout(SILENT_MS);
+  mc_socket *sock = NULL;
+  CHECK(mc_socket_connect("127.0.0.1", mc_listener_port(s->l), WAIT_MS, &sock) == MC_OK);
+  ch = NULL;
+  uint64_t t0 = mc_mono_ms();
+  CHECK(mc_channel_accept(s->l, WAIT_MS, &ch) == MC_ERR_NET && !ch);
+  CHECK(mc_mono_ms() - t0 < NOTICE_MS);
+  mc_socket_close(sock);
+  mc_channel_set_default_timeout(MC_CHANNEL_TIMEOUT_MS);
+
+  /* Mid-session: the peer answered once, then went silent. Receiving fails, and so does
+   * sending once the peer's buffers are full. */
+  quiet_peer q;
+  memset(&q, 0, sizeof q);
+  q.s = s;
+  q.st = MC_ERR_UNIMPLEMENTED;
+  mc_mutex_init(&q.m);
+  unsigned char peers[1][MC_NOISE_KEY_LEN];
+  memcpy(peers[0], mc_sync_db_public_key(a), MC_NOISE_KEY_LEN);
+  s->peers = (const unsigned char (*)[MC_NOISE_KEY_LEN])peers;
+  mc_thread th;
+  CHECK(mc_thread_start(&th, quiet_serve, &q) == MC_OK);
+  ch = dial(s, MC_MODE_SESSION);
+  if (ch) {
+    CHECK(kk(ch, a, mc_sync_db_public_key(b)) == MC_OK);
+    CHECK(round_trip(ch, MC_MSG_HELLO, (const unsigned char *)"{}", 2));
+    mc_channel_set_timeout(ch, SILENT_MS);
+    uint8_t type;
+    const unsigned char *payload;
+    size_t len;
+    t0 = mc_mono_ms();
+    CHECK(mc_channel_recv(ch, &type, &payload, &len) == MC_ERR_NET);
+    CHECK(mc_mono_ms() - t0 < NOTICE_MS);
+    mc_channel_close(ch);
+  }
+  mc_mutex_lock(&q.m);
+  q.released = 1;
+  mc_mutex_unlock(&q.m);
+  mc_thread_join(&th);
+  CHECK(q.st == MC_OK);
+
+  /* Sending into a peer that stopped reading: a full buffer, then a timeout. */
+  q.released = 0;
+  q.st = MC_ERR_UNIMPLEMENTED;
+  CHECK(mc_thread_start(&th, quiet_serve, &q) == MC_OK);
+  ch = dial(s, MC_MODE_SESSION);
+  if (ch) {
+    CHECK(kk(ch, a, mc_sync_db_public_key(b)) == MC_OK);
+    CHECK(round_trip(ch, MC_MSG_HELLO, (const unsigned char *)"{}", 2));
+    mc_channel_set_timeout(ch, SILENT_MS);
+    static unsigned char big[MC_CHANNEL_MAX_PAYLOAD];
+    mc_status st = MC_OK;
+    t0 = mc_mono_ms();
+    /* At most 1 GB: far more than any socket buffer. */
+    for (int i = 0; i < 16384 && st == MC_OK; i++)
+      st = mc_channel_send(ch, MC_MSG_ROWS, big, sizeof big);
+    CHECK(st == MC_ERR_NET);
+    CHECK(mc_mono_ms() - t0 < WAIT_MS);
+    mc_channel_close(ch);
+  }
+  mc_mutex_lock(&q.m);
+  q.released = 1;
+  mc_mutex_unlock(&q.m);
+  mc_thread_join(&th);
+  mc_mutex_destroy(&q.m);
+  s->peers = NULL;
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   char dir_a[1024], dir_b[1024], dir_c[1024];
@@ -371,6 +492,7 @@ int main(int argc, char **argv) {
     test_frames(&s);
     test_kk(&s, a, b, c);
     test_pairing(&s, a, b);
+    test_silence(&s, a, b);
     mc_listener_close(s.l);
   }
 

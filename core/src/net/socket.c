@@ -135,6 +135,16 @@ static uint64_t deadline_of(int timeout_ms) {
   return timeout_ms < 0 ? 0 : mc_mono_ms() + (uint64_t)timeout_ms;
 }
 
+/* How long a send or receive waits at a time. On Windows, select() doesn't wake when
+ * another thread shuts the socket down (mc_socket_shutdown()), so the wait is cut short
+ * and the next send() or recv() sees the shutdown. Elsewhere poll() wakes by itself. */
+static int slice(int left) {
+#ifdef _WIN32
+  if (left < 0 || left > 100) return 100;
+#endif
+  return left;
+}
+
 /* Waits until one of fds can be read (or written, with want_write) or has failed, for up
  * to timeout_ms (-1: forever). Returns its index, -1 on timeout, -2 on error. Errors and
  * hang-ups count as ready, so the next call on that socket reports them. */
@@ -423,11 +433,12 @@ mc_status mc_socket_send_all(mc_socket *s, const void *buf, size_t len, int time
     if (n > 0) {
       p += n;
       len -= (size_t)n;
+      deadline = deadline_of(timeout_ms); /* the peer is still taking it */
       continue;
     }
     if (n < 0 && WOULD_BLOCK(sock_error())) {
       int left = remaining(deadline, timeout_ms);
-      if (left == 0 || wait_ready(&s->fd, 1, 1, left) == -2) return MC_ERR_NET;
+      if (left == 0 || wait_ready(&s->fd, 1, 1, slice(left)) == -2) return MC_ERR_NET;
       continue;
     }
     return MC_ERR_NET;
@@ -445,11 +456,12 @@ mc_status mc_socket_recv_exact(mc_socket *s, void *buf, size_t len, int timeout_
     if (n > 0) {
       p += n;
       len -= (size_t)n;
+      deadline = deadline_of(timeout_ms); /* the peer is still there */
       continue;
     }
     if (n < 0 && WOULD_BLOCK(sock_error())) {
       int left = remaining(deadline, timeout_ms);
-      if (left == 0 || wait_ready(&s->fd, 1, 0, left) == -2) return MC_ERR_NET;
+      if (left == 0 || wait_ready(&s->fd, 1, 0, slice(left)) == -2) return MC_ERR_NET;
       continue;
     }
     return MC_ERR_NET; /* 0 is an orderly close mid-message */

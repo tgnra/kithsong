@@ -92,6 +92,13 @@ frame is one Noise transport message (ciphertext plus 16-byte tag), so plaintext
 Inside the encrypted channel each message is `<type: u8> <payload>`. Control payloads are
 UTF-8 JSON objects. `ROWS` and `FILE_DATA` are binary.
 
+A connection fails once a send or receive has made no progress for 30 s (a connect, after
+3 s). A peer can go silent without the connection being reset, e.g. a phone whose network
+Android has blocked drops packets, so this is how a session with it ends, to be retried with
+backoff. Where a message can legitimately take longer (B waits up to 5 minutes for A's
+first pairing handshake message while the user types the code), the waiting side uses a
+longer timeout for that message only.
+
 ### Noise
 
 `Noise_KK_25519_ChaChaPoly_SHA256` for sessions, and `Noise_XXpsk3_25519_ChaChaPoly_SHA256`

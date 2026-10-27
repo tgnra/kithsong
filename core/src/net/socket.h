@@ -9,7 +9,8 @@
 
 #include "musiccore/musiccore.h"
 
-/* Timeouts are in milliseconds for the whole call; MC_SOCKET_FOREVER waits indefinitely. */
+/* Timeouts are in milliseconds for the whole call, except sending and receiving (below);
+ * MC_SOCKET_FOREVER waits indefinitely. */
 #define MC_SOCKET_FOREVER (-1)
 
 typedef struct mc_socket mc_socket;
@@ -35,6 +36,8 @@ void mc_listener_close(mc_listener *l);
 /* Connects to host (an IPv4/IPv6 literal or a name) and port. Name lookup itself isn't
  * bounded by the timeout; discovery hands out addresses, so it's rarely used. */
 mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_socket **out);
+/* For these two the timeout is one of inactivity: it restarts whenever bytes move, so a
+ * long transfer at any steady pace doesn't time out, but a peer that goes silent does. */
 /* Sends all len bytes. MC_ERR_NET on error, timeout or a closed peer. */
 mc_status mc_socket_send_all(mc_socket *s, const void *buf, size_t len, int timeout_ms);
 /* Receives exactly len bytes. MC_ERR_NET on error, timeout or a closed peer. */

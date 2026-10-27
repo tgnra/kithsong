@@ -136,8 +136,8 @@ mc_device_kind mc_sync_kind_parse(const char *s);
 /* Starts fn(arg) on a worker thread, joined by stop. */
 mc_status mc_sync_spawn(mc_sync *sync, void (*fn)(void *), void *arg);
 /* Channels in this registry are aborted by mc_sync_stop(), and pairing ones also by
- * mc_sync_pair_cancel(). incoming: this device is B. Untracking an untracked channel is a
- * no-op. */
+ * mc_sync_pair_cancel(). incoming: this device is B. Tracking a tracked channel changes its
+ * role; untracking an untracked one is a no-op. */
 void mc_sync_track(mc_sync *sync, mc_channel *ch);
 void mc_sync_track_pairing(mc_sync *sync, mc_channel *ch, int incoming);
 void mc_sync_untrack(mc_sync *sync, mc_channel *ch);
@@ -187,7 +187,8 @@ typedef struct mc_pair_target {
   char device_uid[MC_UID_STRLEN]; /* "" when pairing by address */
 } mc_pair_target;
 void mc_pairing_initiate(void *arg);
-/* Serves an accepted pairing-mode connection (this device is B); owns ch. */
+/* Serves an accepted pairing-mode connection (this device is B); owns ch, and untracks it
+ * before closing it. */
 void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch);
 
 /* --- Test hooks --- */

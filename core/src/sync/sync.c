@@ -214,6 +214,12 @@ static void reap(mc_sync *sync, int all) {
 
 static void track(mc_sync *sync, mc_channel *ch, int role) {
   mc_mutex_lock(&sync->lock);
+  for (int i = 0; i < sync->nchans; i++) {
+    if (sync->chans[i].ch != ch) continue;
+    sync->chans[i].role = role; /* e.g. a served connection that turned out to be pairing */
+    mc_mutex_unlock(&sync->lock);
+    return;
+  }
   if (sync->nchans == sync->chans_cap) {
     int grown = sync->chans_cap ? sync->chans_cap * 2 : 8;
     struct mc_sync_tracked *more = realloc(sync->chans, (size_t)grown * sizeof *more);
@@ -593,6 +599,13 @@ static void job_addresses(mc_sync_conn *c, session_job *j, const char *disc_host
   }
 }
 
+static int stopping(mc_sync *sync) {
+  mc_mutex_lock(&sync->lock);
+  int s = sync->stopping;
+  mc_mutex_unlock(&sync->lock);
+  return s;
+}
+
 /* Connects to a member and runs a session as the initiator. */
 static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int quiet) {
   unsigned char key[MC_SYNC_KEY_LEN];
@@ -617,7 +630,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   mc_channel *ch = NULL;
   mc_status st = MC_ERR_NET;
   int at = -1;
-  for (int i = 0; i < j->n && !ch; i++) {
+  for (int i = 0; i < j->n && !ch && !stopping(sync); i++) {
     if (mc_channel_connect(j->host[i], j->port[i], MC_MODE_SESSION, CONNECT_MS, &ch) == MC_OK)
       at = i;
   }
@@ -670,8 +683,11 @@ static void serve_worker(void *arg) {
   free(arg);
   mc_sync *sync = a.sync;
   mc_channel *ch = a.ch;
+  /* Tracked from the start, so stopping cuts short a peer that never sends a thing. */
+  mc_sync_track(sync, ch);
   mc_sync_conn c;
-  if (mc_sync_conn_open(sync, &c) != MC_OK) {
+  if (mc_channel_read_preamble(ch) != MC_OK || mc_sync_conn_open(sync, &c) != MC_OK) {
+    mc_sync_untrack(sync, ch);
     mc_channel_close(ch);
     return;
   }
@@ -680,7 +696,6 @@ static void serve_worker(void *arg) {
     mc_sync_conn_close(&c);
     return;
   }
-  mc_sync_track(sync, ch);
   mc_session s;
   memset(&s, 0, sizeof s);
   s.sync = sync;
@@ -713,9 +728,11 @@ static void listen_main(void *arg) {
     mc_listener *l = sync->listener;
     mc_mutex_unlock(&sync->lock);
     if (stop) return;
+    /* The preamble is read on the worker: a connection that never sends one mustn't hold
+     * up the others, or stopping. */
     mc_channel *ch = NULL;
-    mc_status st = mc_channel_accept(l, ACCEPT_WAIT_MS, &ch);
-    if (st != MC_OK && st != MC_ERR_FORMAT) mc_sleep_ms(100);
+    mc_status st = mc_channel_accept_raw(l, ACCEPT_WAIT_MS, &ch);
+    if (st != MC_OK) mc_sleep_ms(100);
     if (!ch) continue;
     serve_arg *a = malloc(sizeof *a);
     if (!a || mc_sync_spawn(sync, serve_worker, a) != MC_OK) {
