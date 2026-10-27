@@ -10,6 +10,7 @@
 #include "library/library_internal.h"
 #include "sync/session.h"
 #include "sync/sync_internal.h"
+#include "sync/transfer.h"
 
 /* How long B keeps a code for its requester, and A waits for the user to type it. */
 #define CODE_WAIT_MS (5 * 60 * 1000)
@@ -337,8 +338,10 @@ static void first_session(mc_sync *sync, mc_sync_conn *c, mc_channel *ch, const 
    * the group already has one for it (it was a member before). The peer hears of it next
    * time. */
   if (st == MC_OK && !s.we_removed && mc_sync_seed_profile_name(sync, c)) s.follow_up = 1;
-  mc_sync_result r = {peer, st, s.library_synced, st == MC_OK && s.converged, s.rows_sent,
-                      s.rows_received};
+  mc_sync_result r = {.device_uid = peer, .status = st, .library_synced = s.library_synced,
+                      .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
+                      .rows_received = s.rows_received};
+  mc_transfer_fill_result(&s, &r);
   mc_sync_release(sync, peer);
   if (s.we_removed) mc_sync_forget_group(sync, c);
   mc_sync_session_ended(sync, c, peer, &r, s.rows_new, s.follow_up, initiator ? address : NULL, port);

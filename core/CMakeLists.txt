@@ -68,6 +68,8 @@ add_library(musiccore STATIC
   src/sync/merge.c
   src/sync/rows.c
   src/sync/session.c
+  src/sync/plan.c
+  src/sync/transfer.c
   "${_sync_schema_c}")
 add_library(musiccore::musiccore ALIAS musiccore)
 

@@ -9,6 +9,7 @@
 #include "library/library_internal.h"
 #include "musiccore/transcode.h"
 #include "sync/rows.h"
+#include "sync/transfer.h"
 
 /* A device's free space only gets logged again when it moved by this much. */
 #define FREE_BYTES_SLACK ((int64_t)64 << 20)
@@ -367,7 +368,8 @@ typedef struct exchange {
 } exchange;
 
 static void progress(mc_session *s, mc_sync_phase phase) {
-  mc_sync_progress p = {s->peer_uid, phase, s->rows_sent, s->rows_received};
+  mc_sync_progress p = {.device_uid = s->peer_uid, .phase = phase, .rows_sent = s->rows_sent,
+                        .rows_received = s->rows_received};
   mc_sync_emit_progress(s->sync, &p);
 }
 
@@ -722,8 +724,10 @@ mc_status mc_session_run(mc_session *s) {
   size_t len;
   if (mc_channel_is_initiator(s->ch)) {
     if (lib) {
+      mc_transfer_begin(s);
       st = exchange_db(s, MC_ROWS_LIBRARY, NULL, 0);
       s->library_synced = st == MC_OK;
+      if (st == MC_OK) st = mc_transfer_run(s); /* step 6 */
     }
     if (st == MC_OK) st = mc_channel_send(s->ch, MC_MSG_BYE, "{}", 2);
     if (st == MC_OK) st = recv_msg(s, &type, &payload, &len);
@@ -740,14 +744,18 @@ mc_status mc_session_run(mc_session *s) {
       unsigned char *vv = malloc(len ? len : 1);
       if (!vv) return MC_ERR_NOMEM;
       memcpy(vv, payload, len);
+      mc_transfer_begin(s);
       st = exchange_db(s, MC_ROWS_LIBRARY, vv, len);
       free(vv);
       s->library_synced = st == MC_OK;
+      if (st == MC_OK) st = mc_transfer_run(s); /* step 6 */
       if (st == MC_OK) st = recv_msg(s, &type, &payload, &len);
     }
     if (st == MC_OK && type != MC_MSG_BYE) st = MC_ERR_FORMAT;
     if (st == MC_OK) st = mc_channel_send(s->ch, MC_MSG_BYE, "{}", 2);
   }
+  /* Reconcile and the fast check, once the peer is done with our files. */
+  mc_transfer_end(s, st == MC_OK);
   if (st == MC_OK && removed_here(s)) s->we_removed = 1;
   progress(s, MC_SYNC_PHASE_DONE);
   return st;

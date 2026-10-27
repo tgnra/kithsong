@@ -55,6 +55,9 @@ typedef struct mc_sync_peer {
   int busy_lower; /* that session was initiated by the lower device uid */
   int abort;      /* a session the lower uid started wants this one gone */
   mc_channel *busy_ch;
+  /* The file phase: a signature of the transcodes last asked for on its behalf while it
+   * was offline (PREPARE_REQ), so they're asked for once per change. */
+  uint64_t prepared_sig;
 } mc_sync_peer;
 
 typedef struct mc_sync_worker {
@@ -81,6 +84,7 @@ struct mc_sync {
   void *user;
 
   mc_mutex cb_lock; /* one callback at a time */
+  mc_mutex transcode_lock; /* one transcode at a time: mc_transcode_cached() needs it per file */
   mc_mutex api_lock;
   mc_sync_conn api; /* the API's connections, under api_lock */
 
@@ -103,6 +107,7 @@ struct mc_sync {
   int absorb; /* sessions applied rows: the changelog poll shouldn't take them for edits */
   char group_hash[MC_GROUP_HASH_STRLEN];
   uint64_t changed_ms; /* mono: a local change to tell members about; 0 = none */
+  int files_busy; /* a session is fetching files or reconciling, or a verify runs */
   char hints[MC_SYNC_HINTS_MAX]; /* our address hints, JSON */
   /* Outgoing pairing: this device is A. */
   int out_active;
@@ -172,6 +177,11 @@ void mc_sync_take_group_name(mc_sync *sync, mc_sync_conn *c);
 /* After joining or making a group: gives this device's profile its current name unless the
  * group already has one for it. 1 if it wrote. */
 int mc_sync_seed_profile_name(mc_sync *sync, mc_sync_conn *c);
+
+/* Whether a member is online: discovery sees it, or the last session with it succeeded. */
+int mc_sync_peer_online(mc_sync *sync, const char *uid);
+/* Stores sig as uid's prepared_sig and returns the one it replaces (0 if none). */
+uint64_t mc_sync_peer_swap_prepared(mc_sync *sync, const char *uid, uint64_t sig);
 
 void mc_sync_emit_pair_code(mc_sync *sync, const char *code, const char *name, int attempts);
 void mc_sync_emit_pair_result(mc_sync *sync, const mc_pair_result *r);

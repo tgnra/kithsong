@@ -59,6 +59,7 @@ typedef enum mc_sync_phase {
   MC_SYNC_PHASE_CONNECTING,
   MC_SYNC_PHASE_GROUP,   /* group data: devices, profiles, status */
   MC_SYNC_PHASE_LIBRARY, /* library metadata */
+  MC_SYNC_PHASE_FILES,   /* audio files, after the library data */
   MC_SYNC_PHASE_DONE
 } mc_sync_phase;
 
@@ -67,6 +68,11 @@ typedef struct mc_sync_progress {
   mc_sync_phase phase;
   int64_t rows_sent;     /* change rows, for the whole session so far */
   int64_t rows_received;
+  /* MC_SYNC_PHASE_FILES: the files this device is fetching from the peer. */
+  int files_done;        /* received, failed or refused so far */
+  int files_total;       /* asked for in this session */
+  int64_t bytes_received; /* file bytes, for the whole session so far */
+  int64_t bytes_sent;
 } mc_sync_progress;
 
 typedef struct mc_sync_result {
@@ -76,6 +82,16 @@ typedef struct mc_sync_result {
   int converged;         /* both sides ended with the same data */
   int64_t rows_sent;
   int64_t rows_received;
+  /* Files, when library_synced. This device as the receiver: */
+  int files_received;    /* fetched and verified */
+  int files_missing;     /* wanted tracks it still has no file for in the right format */
+  int files_corrupt;     /* failed their checksum twice in this session */
+  int files_deleted;     /* removed by reconcile or the fast check */
+  int files_unknown;     /* audio files in the library folder no files row knows; deleted,
+                          * except on an archive, which only reports them */
+  int files_sent;        /* served to the peer */
+  int64_t bytes_received;
+  int64_t bytes_sent;
 } mc_sync_result;
 
 /* Every member may be NULL. All run on core threads; see the top of this file. */
@@ -276,6 +292,29 @@ void mc_sync_profile_free(mc_sync_profile *profile);
  * editable. MC_ERR_INVALID_ARG for an unknown kind or a bitrate not in mc_opus_bitrates;
  * MC_ERR_NOT_FOUND as for the getter. Members hear of the change in a few seconds. */
 mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sync_profile *profile);
+
+/* --- Verification ---
+ * Every file sync receives is checked against its SHA-256 on arrival (files.sha256). A fast
+ * check also runs after each session. */
+
+typedef enum mc_verify_mode {
+  MC_VERIFY_FAST, /* each file's size and modification time against its files row */
+  MC_VERIFY_DEEP  /* re-hashes each file against files.sha256 (recording it if unset) */
+} mc_verify_mode;
+
+typedef struct mc_verify_result {
+  int64_t checked;
+  int64_t ok;
+  int64_t failed;  /* missing, changed or corrupt */
+  int64_t deleted; /* failed copies received from peers: deleted with their rows, so the
+                    * next session fetches them again. Originals imported here are only
+                    * counted, never deleted. */
+} mc_verify_result;
+
+/* Checks this device's files, then writes its sync_status when the open library is the
+ * group's. Blocks for as long as it takes (a deep check reads every file), waiting first for
+ * a session's file phase to finish. out may be NULL. */
+mc_status mc_sync_verify(mc_sync *sync, mc_verify_mode mode, mc_verify_result *out);
 
 /* TODO(phase 5): making a device an archive, and the size estimate. */
 

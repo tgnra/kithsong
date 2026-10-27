@@ -21,6 +21,7 @@
 #include "sync/rows.h"
 #include "sync/session.h"
 #include "sync/sync_internal.h"
+#include "sync/transfer.h"
 
 #define PERIOD_MS (5 * 60 * 1000)
 #define CHANGE_DELAY_MS 3000
@@ -108,6 +109,26 @@ static mc_sync_peer *find_peer(mc_sync *sync, const char *uid, int create) {
   memset(p, 0, sizeof *p);
   memcpy(p->uid, uid, MC_UID_STRLEN);
   return p;
+}
+
+int mc_sync_peer_online(mc_sync *sync, const char *uid) {
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, uid, 0);
+  int online = p && (p->discovered || p->reached);
+  mc_mutex_unlock(&sync->lock);
+  return online;
+}
+
+uint64_t mc_sync_peer_swap_prepared(mc_sync *sync, const char *uid, uint64_t sig) {
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, uid, 1);
+  uint64_t old = 0;
+  if (p) {
+    old = p->prepared_sig;
+    p->prepared_sig = sig;
+  }
+  mc_mutex_unlock(&sync->lock);
+  return old;
 }
 
 /* --- Callbacks --- */
@@ -625,7 +646,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   }
   if (!have_key) return MC_ERR_NOT_FOUND;
 
-  mc_sync_progress prog = {j->uid, MC_SYNC_PHASE_CONNECTING, 0, 0};
+  mc_sync_progress prog = {.device_uid = j->uid, .phase = MC_SYNC_PHASE_CONNECTING};
   mc_sync_emit_progress(sync, &prog);
   mc_channel *ch = NULL;
   mc_status st = MC_ERR_NET;
@@ -653,8 +674,10 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   }
   if (s.we_removed) mc_sync_forget_group(sync, c);
   if (!claimed && quiet) return st; /* someone else is syncing with it: nothing to report */
-  mc_sync_result r = {j->uid, st, s.library_synced, st == MC_OK && s.converged, s.rows_sent,
-                      s.rows_received};
+  mc_sync_result r = {.device_uid = j->uid, .status = st, .library_synced = s.library_synced,
+                      .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
+                      .rows_received = s.rows_received};
+  mc_transfer_fill_result(&s, &r);
   mc_sync_session_ended(sync, c, j->uid, &r, s.rows_new, s.follow_up, at >= 0 ? j->host[at] : NULL,
                         at >= 0 ? j->port[at] : 0);
   return st;
@@ -707,8 +730,11 @@ static void serve_worker(void *arg) {
       st = mc_session_run(&s);
       mc_sync_release(sync, s.peer_uid);
       if (s.we_removed) mc_sync_forget_group(sync, &c);
-      mc_sync_result r = {s.peer_uid, st, s.library_synced, st == MC_OK && s.converged,
-                          s.rows_sent, s.rows_received};
+      mc_sync_result r = {.device_uid = s.peer_uid, .status = st,
+                          .library_synced = s.library_synced,
+                          .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
+                          .rows_received = s.rows_received};
+      mc_transfer_fill_result(&s, &r);
       mc_sync_session_ended(sync, &c, s.peer_uid, &r, s.rows_new, s.follow_up, NULL, 0);
     } else {
       /* A session with it is running already. */
@@ -981,6 +1007,7 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
     return MC_ERR_NOMEM;
   }
   mc_mutex_init(&sync->cb_lock);
+  mc_mutex_init(&sync->transcode_lock);
   mc_mutex_init(&sync->api_lock);
   mc_mutex_init(&sync->lock);
   mc_cond_init(&sync->cond);
@@ -1014,6 +1041,7 @@ void mc_sync_free(mc_sync *sync) {
   mc_mutex_destroy(&sync->lock);
   mc_mutex_destroy(&sync->api_lock);
   mc_mutex_destroy(&sync->cb_lock);
+  mc_mutex_destroy(&sync->transcode_lock);
   free(sync->peers);
   free(sync->chans);
   free(sync->config_dir);

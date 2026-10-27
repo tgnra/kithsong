@@ -1,5 +1,6 @@
 /* One sync session over an established channel: HELLO, then the group changelog, then the
- * library's if both devices hold the group's library, then BYE. See "Session" in
+ * library's and the files (transfer.c) if both devices hold the group's library, then BYE.
+ * See "Session" in
  * docs/sync-protocol.md. Internal to core. */
 #ifndef MC_SYNC_SESSION_H
 #define MC_SYNC_SESSION_H
@@ -18,6 +19,11 @@ typedef struct mc_session {
   int converged;   /* every database exchanged ended with equal digests */
   int we_removed;  /* this device learnt it was removed from the group */
   int follow_up;   /* group rows were written after the group exchange; sync again soon */
+  /* The file phase (transfer.c). */
+  int files_received, files_missing, files_corrupt, files_deleted, files_unknown, files_sent;
+  int files_done, files_total; /* this side's requests, for progress */
+  int64_t bytes_received, bytes_sent;
+  struct mc_transfer *xfer; /* between mc_transfer_begin() and mc_transfer_end() */
 } mc_session;
 
 /* Noise KK as the initiator, to the member whose static key is peer_key. */
