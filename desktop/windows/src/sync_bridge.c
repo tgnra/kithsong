@@ -15,12 +15,17 @@ static struct {
   volatile LONG gen;   /* bumped by every stop; events carry the one they were made in */
 } g_bridge;
 
-/* The last progress event posted for each device. Only the callbacks touch it, and core
- * runs them one at a time, so it needs no lock; start() clears it while no threads run. */
+/* The last progress event posted for each device, and what the ones dropped since changed.
+ * Only the callbacks touch it, and core runs them one at a time, so it needs no lock;
+ * start() clears it while no threads run. */
 static struct {
   char uid[MC_UID_STRLEN];
   ULONGLONG at;
   mc_sync_phase phase;
+  int files_posted;      /* files_done in the last event posted */
+  int64_t rows_received; /* in the last event seen, posted or not */
+  int files_done;
+  BOOL changed; /* the library changed since the last event posted */
 } g_progress[PROGRESS_SLOTS];
 static int g_progress_next; /* the slot to reuse when a new device needs one */
 
@@ -92,34 +97,60 @@ static void on_pair_result(void *user, const mc_pair_result *result) {
   post(user, ev);
 }
 
-/* Lets through a device's first progress event, a change of phase, and otherwise one every
- * PROGRESS_MS. */
-static BOOL progress_due(const char *uid, mc_sync_phase phase) {
+/* Lets through a device's first progress event, a change of phase, the one that finishes
+ * the session's files, and otherwise one every PROGRESS_MS. *changed says whether library
+ * rows or files arrived since the last one let through, this one included. */
+static BOOL progress_due(const mc_sync_progress *p, BOOL *changed) {
+  const char *uid = p->device_uid ? p->device_uid : "";
   ULONGLONG now = GetTickCount64();
   int slot = -1;
   for (int i = 0; i < PROGRESS_SLOTS && slot < 0; i++)
-    if (!strcmp(g_progress[i].uid, uid ? uid : "")) slot = i;
-  if (slot < 0) {
+    if (!strcmp(g_progress[i].uid, uid)) slot = i;
+  BOOL first = slot < 0;
+  if (first) {
     slot = g_progress_next;
     g_progress_next = (g_progress_next + 1) % PROGRESS_SLOTS;
-  } else if (g_progress[slot].phase == phase && now - g_progress[slot].at < PROGRESS_MS) {
-    return FALSE;
+    memset(&g_progress[slot], 0, sizeof g_progress[slot]);
+    copy_uid(g_progress[slot].uid, uid);
   }
-  g_progress[slot].uid[0] = '\0';
-  copy_uid(g_progress[slot].uid, uid);
+  if (p->phase == MC_SYNC_PHASE_CONNECTING) { /* a new session: its counts start again */
+    g_progress[slot].rows_received = 0;
+    g_progress[slot].files_done = g_progress[slot].files_posted = 0;
+  }
+  /* Rows are applied a batch per transaction, and a file is recorded once it's in place,
+   * so both are in the library by the time their progress arrives. */
+  if ((p->phase == MC_SYNC_PHASE_LIBRARY && p->rows_received > g_progress[slot].rows_received) ||
+      p->files_done > g_progress[slot].files_done)
+    g_progress[slot].changed = TRUE;
+  g_progress[slot].rows_received = p->rows_received;
+  g_progress[slot].files_done = p->files_done;
+
+  BOOL files_finished = p->files_total > 0 && p->files_done >= p->files_total &&
+                        p->files_done != g_progress[slot].files_posted;
+  if (!first && !files_finished && g_progress[slot].phase == p->phase && now - g_progress[slot].at < PROGRESS_MS)
+    return FALSE;
   g_progress[slot].at = now;
-  g_progress[slot].phase = phase;
+  g_progress[slot].phase = p->phase;
+  g_progress[slot].files_posted = p->files_done;
+  *changed = g_progress[slot].changed;
+  g_progress[slot].changed = FALSE;
   return TRUE;
 }
 
 static void on_progress(void *user, const mc_sync_progress *progress) {
-  if (!progress_due(progress->device_uid, progress->phase)) return;
+  BOOL changed = FALSE;
+  if (!progress_due(progress, &changed)) return;
   sync_event *ev = new_event(SYNC_EV_PROGRESS);
   if (!ev) return;
   copy_uid(ev->uid, progress->device_uid);
   ev->phase = progress->phase;
   ev->rows_sent = progress->rows_sent;
   ev->rows_received = progress->rows_received;
+  ev->files_done = progress->files_done;
+  ev->files_total = progress->files_total;
+  ev->bytes_received = progress->bytes_received;
+  ev->bytes_sent = progress->bytes_sent;
+  ev->library_changed = changed;
   post(user, ev);
 }
 
@@ -132,6 +163,10 @@ static void on_sync_done(void *user, const mc_sync_result *result) {
   ev->converged = result->converged;
   ev->rows_sent = result->rows_sent;
   ev->rows_received = result->rows_received;
+  ev->files_received = result->files_received;
+  ev->files_sent = result->files_sent;
+  ev->bytes_received = result->bytes_received;
+  ev->bytes_sent = result->bytes_sent;
   post(user, ev);
 }
 

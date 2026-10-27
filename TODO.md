@@ -35,7 +35,6 @@
 - Core - albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
 - Core - changelog compaction must keep the rows that decide merges and archive demotions
 - Linux - the sync UI: show the pairing code, a device page with profiles, Sync now, Leave Group (Windows has them)
-- Windows - the device page's progress shows rows only; show files and bytes (files_done, files_total in mc_sync_progress)
 - Windows and Linux - make a device an archive (mc_sync_set_archive) and show the size estimate (mc_sync_estimate_profile) in the profile editor
 - Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents(); artists need core uids rather than names

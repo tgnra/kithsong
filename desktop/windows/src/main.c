@@ -101,7 +101,9 @@ enum {
 enum {
   TIMER_REFRESH_DEVICES = 0x5D01, /* one-shot: a sync event asked for a refresh */
   TIMER_POLL_DEVICES,             /* repeating: renames elsewhere fire no event */
+  TIMER_REFRESH_LIBRARY,          /* one-shot: sync brought library rows or files */
   REFRESH_DEVICES_MS = 200,
+  REFRESH_LIBRARY_MS = 500,
   POLL_DEVICES_MS = 10000,
   MAX_SYNCING = 16, /* devices marked as syncing in the sidebar at once */
   MAX_ADDRESSES = 8,
@@ -127,6 +129,7 @@ typedef struct app {
   mc_library *lib;
   char *config_dir;        /* UTF-8: settings.json and sync.db */
   BOOL refresh_pending;    /* TIMER_REFRESH_DEVICES is set */
+  BOOL library_pending;    /* TIMER_REFRESH_LIBRARY is set */
   char syncing[MAX_SYNCING][MC_UID_STRLEN]; /* devices with a session in progress */
 } app;
 
@@ -626,6 +629,14 @@ static void schedule_refresh(void) {
   SetTimer(g_app.wnd, TIMER_REFRESH_DEVICES, REFRESH_DEVICES_MS, NULL);
 }
 
+/* Reloads the library views shortly, once for a burst of rows and files from sync, as an
+ * import does after each album. */
+static void schedule_library_refresh(void) {
+  if (g_app.library_pending) return;
+  g_app.library_pending = TRUE;
+  SetTimer(g_app.wnd, TIMER_REFRESH_LIBRARY, REFRESH_LIBRARY_MS, NULL);
+}
+
 /* This PC renamed on its own device page: sync has the name; settings.json keeps it. */
 static void rename_self(const char *name) {
   mc_settings_set_device_name(g_app.settings, name);
@@ -666,6 +677,8 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
     case SYNC_EV_DONE:
       set_syncing(ev->uid, FALSE);
       schedule_refresh();
+      /* Reconcile may have removed files after the last progress. */
+      if (ev->library_synced) schedule_library_refresh();
       device_view_on_sync_event(ev);
       break;
     case SYNC_EV_PAIR_CODE:
@@ -680,6 +693,7 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
       break;
     case SYNC_EV_PROGRESS:
       if (set_syncing(ev->uid, ev->phase != MC_SYNC_PHASE_DONE)) schedule_refresh();
+      if (ev->library_changed) schedule_library_refresh();
       device_view_on_sync_event(ev);
       break;
   }
@@ -907,6 +921,12 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         refresh_devices();
         return 0;
       }
+      if (wp == TIMER_REFRESH_LIBRARY) {
+        KillTimer(wnd, TIMER_REFRESH_LIBRARY);
+        g_app.library_pending = FALSE;
+        refresh_library();
+        return 0;
+      }
       break;
     case WM_APP_SYNC:
       on_sync_event(wp, lp);
@@ -940,6 +960,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
       KillTimer(wnd, TIMER_REFRESH_DEVICES);
       KillTimer(wnd, TIMER_POLL_DEVICES);
+      KillTimer(wnd, TIMER_REFRESH_LIBRARY);
       stop_sync(); /* before the library closes, after the loop */
       playback_free();
       import_view_destroy();

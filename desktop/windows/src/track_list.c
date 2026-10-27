@@ -307,6 +307,8 @@ void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cove
     free(s.cover_dir);
     s.cover_dir = cover_dir ? _wcsdup(cover_dir) : NULL;
     load_art();
+  } else if (s.cover_dir && !s.art) {
+    load_art(); /* it wasn't there before; sync may have brought it since */
   }
   if (s.wnd) InvalidateRect(s.wnd, NULL, FALSE);
 }

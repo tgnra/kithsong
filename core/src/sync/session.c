@@ -368,9 +368,13 @@ typedef struct exchange {
   unsigned char *buf;
 } exchange;
 
+/* With the file counts too: they stay at their last values after the file phase, so the
+ * closing MC_SYNC_PHASE_DONE carries the session's totals. */
 static void progress(mc_session *s, mc_sync_phase phase) {
   mc_sync_progress p = {.device_uid = s->peer_uid, .phase = phase, .rows_sent = s->rows_sent,
-                        .rows_received = s->rows_received};
+                        .rows_received = s->rows_received, .files_done = s->files_done,
+                        .files_total = s->files_total, .bytes_received = s->bytes_received,
+                        .bytes_sent = s->bytes_sent};
   mc_sync_emit_progress(s->sync, &p);
 }
 

@@ -33,6 +33,7 @@ typedef struct tile {
   HBITMAP thumb;      /* premultiplied, with rounded corners */
   const uint32_t *pixels;
   int thumb_size;
+  BOOL stale;  /* thumb is from before the last reload: drawn until it's decoded again */
   BOOL failed; /* the cover couldn't be decoded; draw the placeholder */
 } tile;
 
@@ -204,6 +205,7 @@ static void free_thumb(tile *t) {
   t->thumb = NULL;
   t->pixels = NULL;
   t->thumb_size = 0;
+  t->stale = FALSE;
   g.loaded--;
 }
 
@@ -219,7 +221,7 @@ static void visible_range(int *first, int *last) {
 
 static BOOL wants_thumb(int i) {
   const tile *t = &g.tiles[i];
-  return t->cover_dir && !t->failed && (!t->thumb || t->thumb_size != g.tile_w);
+  return t->cover_dir && !t->failed && (!t->thumb || t->stale || t->thumb_size != g.tile_w);
 }
 
 /* Tells the loader what to decode next: what's on screen first, then one screen below,
@@ -370,6 +372,37 @@ static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
   mc_playlist_list_free(list);
 }
 
+static int old_tile_cmp(const void *key, const void *elem) {
+  return strcmp(key, g.tiles[*(const int *)elem].uid);
+}
+
+static int old_tile_sort(const void *a, const void *b) {
+  return strcmp(g.tiles[*(const int *)a].uid, g.tiles[*(const int *)b].uid);
+}
+
+/* Moves the old tiles' thumbnails to the new ones of the same album and cover folder, so a
+ * reload (as sync brings albums in) doesn't blank the covers. They're marked stale and
+ * decoded again, since the cover may have changed. */
+static void carry_thumbs(tile *tiles, int n) {
+  int *order = g.count && n ? malloc((size_t)g.count * sizeof *order) : NULL;
+  if (!order) return;
+  for (int i = 0; i < g.count; i++) order[i] = i;
+  qsort(order, (size_t)g.count, sizeof *order, old_tile_sort);
+  for (int i = 0; i < n; i++) {
+    if (!tiles[i].cover_dir) continue;
+    const int *at = bsearch(tiles[i].uid, order, (size_t)g.count, sizeof *order, old_tile_cmp);
+    tile *old = at ? &g.tiles[*at] : NULL;
+    if (!old || !old->thumb || !old->cover_dir || wcscmp(old->cover_dir, tiles[i].cover_dir)) continue;
+    tiles[i].thumb = old->thumb;
+    tiles[i].pixels = old->pixels;
+    tiles[i].thumb_size = old->thumb_size;
+    tiles[i].stale = TRUE;
+    old->thumb = NULL; /* still counted in g.loaded, now by the new tile */
+    old->pixels = NULL;
+  }
+  free(order);
+}
+
 static void reload(void) {
   g.dirty = FALSE;
   tile *tiles;
@@ -383,6 +416,11 @@ static void reload(void) {
   /* A renamed selection is news too: the track list shows its name. */
   BOOL renamed = selected >= 0 && g.selected >= 0 && g.selected < g.count && g.tiles[g.selected].title &&
                  tiles[selected].title && wcscmp(tiles[selected].title, g.tiles[g.selected].title) != 0;
+  /* So is a cover that came or went: the track list shows it too. */
+  if (selected >= 0 && g.selected >= 0 && g.selected < g.count &&
+      !tiles[selected].cover_dir != !g.tiles[g.selected].cover_dir)
+    renamed = TRUE;
+  carry_thumbs(tiles, n);
 
   /* Swap in the new data; the loader's snapshot of folders changes under the lock. */
   clear_tiles();
