@@ -528,6 +528,33 @@ static char *dest_path(mc_library *lib, const char *track, const char *ext) {
   return NULL;
 }
 
+/* rel's absolute path if reconcile may delete it, else NULL. Only files inside the library
+ * folder qualify: rel is relative, has no empty, "." or ".." parts (nor ones of only dots and
+ * spaces, which Windows reads as those) and no colon (a drive or a stream), and no folder on
+ * the way is a link or junction, which could lead outside. Rows and walks never make such a
+ * path; this is so a damaged row can't. */
+static char *deletable_path(mc_library *lib, const char *rel) {
+  int ok = rel && *rel && !strchr(rel, ':');
+  for (const char *p = rel; ok && *p;) {
+    size_t n = strcspn(p, "/\\");
+    ok = n > 0 && strspn(p, ". ") < n;
+    p += n;
+    if (*p) ok = ok && *++p; /* no trailing separator */
+  }
+  char *abs = ok ? mc_library_abspath(lib, rel) : NULL;
+  char *sep = abs ? abs + strlen(mc_library_dir(lib)) : NULL;
+  while (ok && abs && (sep = strchr(sep + 1, MC_PATH_SEP))) {
+    *sep = '\0';
+    ok = !mc_is_link(abs);
+    *sep = MC_PATH_SEP;
+  }
+  if (ok && abs) return abs;
+  free(abs);
+  if (rel)
+    fprintf(stderr, "musiccore: sync: not deleting %s: it isn't inside the library folder\n", rel);
+  return NULL;
+}
+
 static int is_cover(const char *name) {
   return !strcmp(name, "cover.jpg") || !strcmp(name, "cover.png");
 }
@@ -548,7 +575,7 @@ static void scan_entry(void *user, const char *name, int is_dir) {
 /* After a file at rel went: removes its album folder and then its artist folder if
  * nothing but a cover is left in them. */
 static void prune_dirs(mc_library *lib, const char *rel) {
-  char *abs = mc_library_abspath(lib, rel);
+  char *abs = deletable_path(lib, rel);
   for (int level = 0; abs && level < 2; level++) {
     char *sep = strrchr(abs, MC_PATH_SEP);
     if (!sep || (size_t)(sep - abs) <= strlen(mc_library_dir(lib))) break;
@@ -586,10 +613,10 @@ static mc_status drop_file(mc_library *lib, const char *file_uid, const char *re
     mc_library_rollback(lib);
     return st;
   }
-  char *abs = mc_library_abspath(lib, rel);
+  char *abs = deletable_path(lib, rel);
   if (abs && mc_file_exists(abs)) mc_remove(abs);
+  if (abs) prune_dirs(lib, rel);
   free(abs);
-  prune_dirs(lib, rel);
   return MC_OK;
 }
 
@@ -1387,7 +1414,7 @@ static void drop_deleted_tracks(mc_session *s) {
     return;
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     const char *rel = (const char *)sqlite3_column_text(stmt, 0);
-    char *abs = rel ? mc_library_abspath(lib, rel) : NULL;
+    char *abs = deletable_path(lib, rel);
     if (abs && mc_file_exists(abs) && mc_remove(abs) == MC_OK) {
       s->files_deleted++;
       prune_dirs(lib, rel);
@@ -1476,7 +1503,7 @@ static void reconcile_unknown(mc_session *s, int archive) {
     if (archive) {
       fprintf(stderr, "musiccore: sync: unknown file in the library folder: %s\n", u.paths[i]);
     } else {
-      char *abs = mc_library_abspath(lib, u.paths[i]);
+      char *abs = deletable_path(lib, u.paths[i]);
       if (abs && mc_remove(abs) == MC_OK) {
         s->files_deleted++;
         prune_dirs(lib, u.paths[i]);

@@ -38,6 +38,7 @@
 - Windows - the device page's progress shows rows only; show files and bytes (files_done, files_total in mc_sync_progress)
 - Windows and Linux - make a device an archive (mc_sync_set_archive) and show the size estimate (mc_sync_estimate_profile) in the profile editor
 - Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
+- Core - move removed untracked files to the Recycle Bin/trash or a holding folder instead of deleting them permanently
 - Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents(); artists need core uids rather than names
 - Test phone to desktop sync now that the desktop can pair, including file transfer
 
