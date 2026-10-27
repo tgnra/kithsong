@@ -254,6 +254,19 @@ static void on_next(GSimpleAction *action, GVariant *param, gpointer user) {
   playback_next();
 }
 
+/* Space in an album grid or the track list. Those would take it to select the item with the
+ * focus, but clicking or the arrow keys has selected it already, so Space plays there. */
+static gboolean on_list_space(GtkWidget *win, GVariant *args, gpointer user) {
+  (void)args;
+  (void)user;
+  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
+  gboolean in_list = focus && (gtk_widget_get_ancestor(focus, GTK_TYPE_GRID_VIEW) ||
+                                gtk_widget_get_ancestor(focus, GTK_TYPE_LIST_VIEW));
+  if (!in_list) return FALSE;
+  gtk_widget_activate_action(win, "app.play-pause", NULL);
+  return TRUE;
+}
+
 static void on_seek(void *user, int ms) {
   (void)user;
   playback_seek(ms);
@@ -462,9 +475,12 @@ static GtkWidget *icon_button(const char *icon, const char *tooltip) {
   return b;
 }
 
+/* The playback buttons don't take the focus when clicked, so Space after clicking Next still
+ * plays or pauses rather than skipping again. */
 static GtkWidget *action_button(const char *icon, const char *tooltip, const char *action) {
   GtkWidget *b = icon_button(icon, tooltip);
   gtk_actionable_set_action_name(GTK_ACTIONABLE(b), action);
+  gtk_widget_set_focus_on_click(b, FALSE);
   return b;
 }
 
@@ -559,6 +575,20 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   gtk_window_set_default_size(a->win, 1200, 800);
   adw_application_window_set_content(ADW_APPLICATION_WINDOW(win), toolbar);
   g_signal_connect(win, "close-request", G_CALLBACK(on_close_request), a);
+
+  /* Space plays or pauses. The shortcut is in the bubble phase, so entries, buttons and
+   * switches still get Space first; the album grids and the track list don't (on_list_space()). */
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_space, 0), gtk_named_action_new("app.play-pause")));
+  gtk_widget_add_controller(win, keys);
+  GtkEventController *list_keys = gtk_shortcut_controller_new();
+  gtk_event_controller_set_propagation_phase(list_keys, GTK_PHASE_CAPTURE);
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(list_keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_space, 0), gtk_callback_action_new(on_list_space, NULL, NULL)));
+  gtk_widget_add_controller(win, list_keys);
 
   playback_init(a->win, playback_changed, a);
   playback_set_library(a->lib, a->settings_dir);
