@@ -24,7 +24,7 @@
 
 ## Import
 
-- Core - detect being offline, or an option to skip MusicBrainz, so offline import isn't slow and every item doesn't need a decision
+- Core - the offline check (mc_musicbrainz_reachable) bounds the connect but not the name lookup, so a network with broken DNS can stall each check; it runs before matching and every 30 s while offline
 - Core - skip files already in the library; importing them again copies them as "(2)" files
 - Core - AcoustID fingerprints (Chromaprint) for untagged files
 - Core - cover art for the singles album
@@ -71,7 +71,7 @@
 The phone app spec is done; see ANDROID_PROGRESS.md for the phases.
 
 - Playback - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts
-- Import - removed from Android for now (music arrives by sync); bring it back: the UI (header button, folder sheet, progress card), the READ_MEDIA_AUDIO/READ_EXTERNAL_STORAGE permissions and their request flow, and the foreground ImportService (see the Phase 5 commit)
+- Import - removed from Android for now (music arrives by sync); bring it back: the UI (header button, folder sheet, progress card), the READ_MEDIA_AUDIO/READ_EXTERNAL_STORAGE permissions and their request flow, and the foreground ImportService (see the Phase 5 commit), plus the offline banner the desktops have (MC_IMPORT_EV_OFFLINE, mc_import_skip_tagging)
   - It needs a screen to review items one at a time
   - Files MediaStore hasn't indexed didn't appear in the folder sheet
   - The "name: error" format for failed items was hard-coded

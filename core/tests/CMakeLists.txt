@@ -36,6 +36,7 @@ set_tests_properties(test_sync_files PROPERTIES TIMEOUT 300)
 musicapp_test(test_tags)
 musicapp_test(test_match)
 musicapp_test(test_import_db)
+musicapp_test(test_import_offline)
 musicapp_test(test_organize)
 musicapp_test(test_transcode)
 target_link_libraries(test_transcode PRIVATE mc_opusfile)  # reads the output back directly
