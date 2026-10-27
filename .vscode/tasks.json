@@ -51,6 +51,20 @@
       "problemMatcher": []
     },
     {
+      // A fresh library and config folder in %TEMP%, deleted when the app exits.
+      "label": "windows: run (scratch library)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-File",
+        "${workspaceFolder}\\scripts\\run-windows-scratch.ps1",
+        "${workspaceFolder}\\build\\windows-w64devkit\\desktop\\windows\\musicapp.exe"
+      ],
+      "dependsOn": "windows: build",
+      "problemMatcher": []
+    },
+    {
       "label": "windows: test",
       "type": "shell",
       "command": "ctest",
