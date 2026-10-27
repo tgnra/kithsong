@@ -102,6 +102,7 @@ static struct {
   int online, archive, removed, has_status;
   int64_t last_sync_ms, expected, ok, missing, corrupt, bytes;
   mc_sync_lib_state lib_state;
+  mc_sync_confirm_state confirm; /* files sync on their own only once confirmed */
 
   /* Its profile, with the pending edits applied; NULL if it couldn't be read. */
   mc_sync_profile *profile;
@@ -381,6 +382,7 @@ static void load_device(void) {
         g_dv.missing = d->missing;
         g_dv.corrupt = d->corrupt;
         g_dv.bytes = d->bytes;
+        g_dv.confirm = d->confirm;
       } else if (!d->is_self && !d->removed && d->name && used + 4 < cap) {
         wchar_t name[MC_SYNC_DEVICE_NAME_MAX + 1];
         widen(d->name, name, MC_SYNC_DEVICE_NAME_MAX + 1);
@@ -492,6 +494,10 @@ static void update_status(void) {
     SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_WINDOWS_PC_SYNC_OTHER_LIBRARY));
   else if (g_dv.lib_state == MC_SYNC_LIBRARY_UNKNOWN)
     SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_UNKNOWN_LIBRARY));
+  else if (g_dv.found && !g_dv.removed && g_dv.confirm == MC_SYNC_UNCONFIRMED)
+    SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_UNCONFIRMED));
+  else if (g_dv.found && !g_dv.removed && g_dv.confirm == MC_SYNC_PROFILE_CHANGED)
+    SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_PAUSED_PROFILE_CHANGED));
   else SetWindowTextW(g_dv.notice, L"");
 
   EnableWindow(g_dv.sync_now, g_dv.found && !g_dv.removed && g_dv.online && !syncing());
@@ -861,7 +867,8 @@ static void remove_device(void) {
 
 static void sync_now(void) {
   if (!g_dv.sync) return;
-  mc_status st = mc_sync_now(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
+  /* The user's say-so: confirms the profiles, so their files sync from now on. */
+  mc_status st = mc_sync_confirm_now(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
   wchar_t text[256] = L"";
   if (st != MC_OK) mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_SYNC_START_FAILED), MC_S(mc_status_str(st)));
   set_message(text);

@@ -285,10 +285,11 @@ static int done_seen(dev *d, const char *peer) {
   return n;
 }
 
-/* x syncs with y now; waits for both sides. rx and ry (may be NULL) get the results. */
+/* x's user presses Sync for y (confirming both profiles); waits for both sides. rx and ry
+ * (may be NULL) get the results. */
 static mc_status sync_now(dev *x, dev *y, mc_sync_result *rx, mc_sync_result *ry) {
   int sx = done_seen(x, y->uid), sy = done_seen(y, x->uid);
-  CHECK(mc_sync_now(x->sync, y->uid) == MC_OK);
+  CHECK(mc_sync_confirm_now(x->sync, y->uid) == MC_OK);
   mc_status st = wait_done(x, y->uid, sx, rx);
   if (st == MC_OK) wait_done(y, x->uid, sy, ry);
   return st;
@@ -672,12 +673,7 @@ int main(int argc, char **argv) {
   set_profile(&a, b.uid, 0, NULL);
   mc_sync_result ra, rb;
   CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
-  /* A, the archive, found itself complete in the pairing session; its sync_status is written
-   * before the next group exchange, so B has it now too. */
-  snprintf(sql, sizeof sql,
-           "SELECT count(*) FROM sync_status WHERE device_uid = '%s' AND expected = 4 AND ok = 4",
-           a.uid);
-  CHECK(group_int(&a, sql) == 1 && group_int(&b, sql) == 1);
+  CHECK(!ra.files_paused && !rb.files_paused);
   CHECK(rb.files_received == 4 && rb.files_missing == 0 && rb.files_corrupt == 0);
   CHECK(ra.files_sent == 4 && ra.bytes_sent == rb.bytes_received && rb.bytes_received > 0);
   CHECK(b_files(&b, NULL) == 4);
@@ -703,6 +699,13 @@ int main(int argc, char **argv) {
   /* Nothing more to do: a second session moves nothing, and carries B's sync_status. */
   CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
   CHECK(rb.files_received == 0 && ra.files_received == 0 && rb.files_deleted == 0);
+  /* A, the archive, found itself complete in the first confirmed session (the pairing one
+   * fetched nothing, unconfirmed); its sync_status is written before the next group
+   * exchange, so both have it now. */
+  snprintf(sql, sizeof sql,
+           "SELECT count(*) FROM sync_status WHERE device_uid = '%s' AND expected = 4 AND ok = 4",
+           a.uid);
+  CHECK(group_int(&a, sql) == 1 && group_int(&b, sql) == 1);
   snprintf(sql, sizeof sql,
            "SELECT count(*) FROM sync_status WHERE device_uid = '%s' AND expected = 4 AND ok = 4"
            " AND missing = 0 AND corrupt = 0 AND bytes > 0 AND verified_ms > 0",

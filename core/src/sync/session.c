@@ -315,6 +315,7 @@ static mc_status send_hello(mc_session *s) {
   yyjson_mut_obj_add_strcpy(doc, root, "dev", mc_sync_db_device_uid(sdb));
   yyjson_mut_obj_add_strcpy(doc, root, "library_uid", lib_uid);
   yyjson_mut_obj_add_strcpy(doc, root, "node_uid", mc_library_node_uid(s->conn->lib));
+  if (s->user) yyjson_mut_obj_add_bool(doc, root, "user", true);
   yyjson_mut_val *caps = yyjson_mut_obj(doc);
   yyjson_mut_obj_add_val(doc, root, "caps", caps);
   sqlite3_stmt *stmt;
@@ -351,6 +352,7 @@ static mc_status recv_hello(mc_session *s, hello *h) {
     memcpy(h->dev, dev, MC_UID_STRLEN);
     memcpy(h->library_uid, lib, MC_UID_STRLEN);
     memcpy(h->node_uid, node, MC_UID_STRLEN);
+    if (yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "user"))) s->user = 1;
     st = MC_OK;
   }
   yyjson_doc_free(doc);
@@ -725,6 +727,13 @@ mc_status mc_session_run(mc_session *s) {
    * same rows meanwhile, so all of them count us as an archive anyway. */
   int restored = 0;
   if (mc_archive_restore(s->conn->sdb, &restored) == MC_OK && restored) s->follow_up = 1;
+
+  /* "Confirming profiles": a press of Sync at either end confirms this device's profile as
+   * the group exchange left it. Written after the exchange, so the peer hears of it next
+   * time, as above. */
+  int confirmed = 0;
+  if (s->user && mc_profile_confirm(s->conn->sdb, &confirmed) == MC_OK && confirmed)
+    s->follow_up = 1;
 
   if (removed_here(s)) s->we_removed = 1;
   int lib = !s->we_removed && library_matches(s, &peer);

@@ -34,6 +34,10 @@
 #define ACCEPT_WAIT_MS 1000
 #define CLAIM_WAIT_MS 5000
 #define MAX_ADDRS 8
+/* How long a press of Sync waits for a session to carry it: long enough for a member that
+ * only it can reach out from to call back, not so long that a press confirms edits made
+ * long after it. */
+#define USER_WINDOW_MS (PERIOD_MS + HIGHER_GRACE_MS)
 
 /* --- Small helpers --- */
 
@@ -130,6 +134,15 @@ uint64_t mc_sync_peer_swap_prepared(mc_sync *sync, const char *uid, uint64_t sig
   }
   mc_mutex_unlock(&sync->lock);
   return old;
+}
+
+int mc_sync_take_user(mc_sync *sync, const char *peer_uid) {
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, peer_uid, 0);
+  int user = p && p->user_ms && mc_mono_ms() < p->user_ms + USER_WINDOW_MS;
+  if (p) p->user_ms = 0;
+  mc_mutex_unlock(&sync->lock);
+  return user;
 }
 
 /* --- Callbacks --- */
@@ -666,6 +679,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   if (ch) {
     mc_sync_track(sync, ch);
     claimed = mc_sync_claim(sync, j->uid, strcmp(sync->device_uid, j->uid) < 0, ch);
+    if (claimed) s.user = mc_sync_take_user(sync, j->uid);
     st = claimed ? MC_OK : MC_ERR_LOCKED;
     if (st == MC_OK) st = mc_session_handshake_initiate(&s, key);
     if (st == MC_OK) st = mc_session_run(&s);
@@ -734,6 +748,7 @@ static void serve_worker(void *arg) {
   mc_status st = mc_session_handshake_respond(&s);
   if (st == MC_OK) {
     if (mc_sync_claim(sync, s.peer_uid, strcmp(s.peer_uid, sync->device_uid) < 0, ch)) {
+      s.user = mc_sync_take_user(sync, s.peer_uid);
       st = mc_session_run(&s);
       mc_sync_release(sync, s.peer_uid);
       if (s.we_removed) mc_sync_forget_group(sync, &c);
@@ -1383,6 +1398,32 @@ mc_status mc_sync_now(mc_sync *sync, const char *device_uid) {
   return st;
 }
 
+mc_status mc_sync_confirm_now(mc_sync *sync, const char *device_uid) {
+  if (!sync || (device_uid && !is_uid(device_uid))) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  int started = sync->started;
+  mc_mutex_unlock(&sync->lock);
+  if (!started) return MC_ERR_INVALID_ARG;
+  /* This device's profile at once, so it's confirmed even if no member is in reach. The
+   * write is group data, which the change poll passes on. */
+  mc_mutex_lock(&sync->api_lock);
+  mc_status st = mc_profile_confirm(sync->api.sdb, NULL);
+  mc_mutex_unlock(&sync->api_lock);
+  if (st != MC_OK && st != MC_ERR_NOT_FOUND) return st;
+  uint64_t now = mc_mono_ms();
+  /* Before the trigger, so the session it starts carries the press. */
+  mc_mutex_lock(&sync->lock);
+  if (device_uid) {
+    mc_sync_peer *p = find_peer(sync, device_uid, 1);
+    if (p) p->user_ms = now;
+  } else {
+    for (int i = 0; i < sync->npeers; i++)
+      if (sync->peers[i].member) sync->peers[i].user_ms = now;
+  }
+  mc_mutex_unlock(&sync->lock);
+  return mc_sync_now(sync, device_uid);
+}
+
 void mc_sync_notify_changed(mc_sync *sync) {
   if (!sync) return;
   mc_mutex_lock(&sync->lock);
@@ -1492,6 +1533,9 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
     d->corrupt = sqlite3_column_int64(stmt, 14);
     d->bytes = sqlite3_column_int64(stmt, 15);
     d->is_self = !strcmp(uid, sync->device_uid);
+    int confirm = mc_profile_confirm_state(mc_sync_db_handle(sync->api.sdb), uid);
+    if (confirm < 0) st = MC_ERR_DB;
+    d->confirm = confirm < 0 ? MC_SYNC_UNCONFIRMED : (mc_sync_confirm_state)confirm;
   }
   sqlite3_finalize(stmt);
   mc_mutex_unlock(&sync->api_lock);

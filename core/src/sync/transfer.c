@@ -1269,6 +1269,14 @@ static mc_status send_prepares(mc_session *s) {
 static mc_status receive_turn(mc_session *s) {
   mc_transfer *x = s->xfer;
   mc_status st = MC_OK;
+  /* A profile its user hasn't confirmed fetches and deletes nothing (a session pressed for
+   * has confirmed it by now). */
+  if (x && !s->user &&
+      mc_profile_confirm_state(mc_sync_db_handle(s->conn->sdb),
+                               mc_sync_db_device_uid(s->conn->sdb)) != MC_SYNC_CONFIRMED) {
+    s->files_paused = 1;
+    x = NULL;
+  }
   /* Another session already fetching skips this turn: its peer may have it all anyway. */
   if (x && files_try(s->sync)) {
     x->receiving = 1;
@@ -1691,6 +1699,7 @@ void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r) {
   r->files_sent = s->files_sent;
   r->bytes_received = s->bytes_received;
   r->bytes_sent = s->bytes_sent;
+  r->files_paused = s->files_paused;
 }
 
 /* --- Public API --- */

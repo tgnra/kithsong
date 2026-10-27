@@ -28,6 +28,8 @@ set_tests_properties(test_sync_profile PROPERTIES TIMEOUT 300)
 musicapp_test(test_sync_name)
 set_tests_properties(test_sync_name PROPERTIES TIMEOUT 300)
 musicapp_test(test_sync_timeout)
+musicapp_test(test_sync_confirm)
+set_tests_properties(test_sync_confirm PROPERTIES TIMEOUT 300)
 musicapp_test(test_sync_files)
 target_link_libraries(test_sync_files PRIVATE mbedcrypto)  # hashes the files it compares
 set_tests_properties(test_sync_files PROPERTIES TIMEOUT 300)

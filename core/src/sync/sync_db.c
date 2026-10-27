@@ -55,6 +55,11 @@ static const char *const k_migrations[] = {
   "  duration_s   INTEGER,"
   "  mb_trackid   TEXT"
   ");",
+  /* v5: confirming profiles. devices.confirmed_profile is the fingerprint of the device's
+   * profile when its user last pressed Sync, set by the device itself; NULL until then. Its
+   * file phase runs only while its profile still has that fingerprint (see "Confirming
+   * profiles" in docs/sync-protocol.md). */
+  "ALTER TABLE devices ADD COLUMN confirmed_profile TEXT;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -62,7 +67,7 @@ static const char *const k_migrations[] = {
  * `local` is this device's alone and never logged. */
 static const char *const k_group_cols[] = {"library_uid", NULL};
 static const char *const k_device_cols[] = {"name", "kind", "public_key", "node_uid", "added_by",
-                                            "removed", "host", NULL};
+                                            "removed", "host", "confirmed_profile", NULL};
 static const char *const k_profile_cols[] = {"archive", "mode", "format", "bitrate_kbps",
                                              "budget_bytes", "budget_enabled", "name", NULL};
 static const char *const k_item_cols[] = {"device_uid", "kind", "ref_uid", NULL};

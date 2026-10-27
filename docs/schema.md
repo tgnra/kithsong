@@ -53,8 +53,9 @@ a separate `sync.db` in the per-device config dir. See
 [sync-protocol.md](sync-protocol.md#two-databases) and its schema,
 [core/src/sync/sync_schema_v1.sql](../core/src/sync/sync_schema_v1.sql), plus the migrations in
 [core/src/sync/sync_db.c](../core/src/sync/sync_db.c): v2 (`devices.host`,
-`capabilities.addresses`, and the local-only `peer_contact`), v3 (`profiles.name`) and v4
-(`scrobble_account`, and the local-only `scrobble_queue`).
+`capabilities.addresses`, and the local-only `peer_contact`), v3 (`profiles.name`), v4
+(`scrobble_account`, and the local-only `scrobble_queue`) and v5
+(`devices.confirmed_profile`).
 
 
 ## Singles

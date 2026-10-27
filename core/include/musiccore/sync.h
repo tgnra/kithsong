@@ -92,6 +92,8 @@ typedef struct mc_sync_result {
   int files_sent;        /* served to the peer */
   int64_t bytes_received;
   int64_t bytes_sent;
+  int files_paused;      /* this device fetched and deleted nothing: its profile isn't
+                          * confirmed (see mc_sync_confirm_now()) */
 } mc_sync_result;
 
 /* Every member may be NULL. All run on core threads; see the top of this file. */
@@ -138,8 +140,10 @@ uint16_t mc_sync_port(const mc_sync *sync);
 /* --- Pairing ---
  * This device (A) asks a nearby device (B) to pair. B shows a code through on_pair_code,
  * and A's user types it into mc_sync_pair_enter(). Both sides then get on_pair_result,
- * and on success the first session follows straight away. Requires mc_sync_start(). One
- * outgoing pairing at a time: MC_ERR_LOCKED while another is in progress. */
+ * and on success the first session follows straight away, but it exchanges only group and
+ * library data: the new member fetches no files until its profile is confirmed (see
+ * mc_sync_confirm_now()). Requires mc_sync_start(). One outgoing pairing at a time:
+ * MC_ERR_LOCKED while another is in progress. */
 
 /* A device from mc_sync_list_nearby(). MC_ERR_NOT_FOUND if discovery hasn't seen it. */
 mc_status mc_sync_pair_request(mc_sync *sync, const char *device_uid);
@@ -164,8 +168,33 @@ mc_status mc_sync_leave_group(mc_sync *sync);
  * group's only archive. */
 mc_status mc_sync_remove_device(mc_sync *sync, const char *device_uid);
 /* Syncs with device_uid, or with every reachable member for NULL, as soon as possible.
- * Returns at once; on_sync_done reports each session. Requires mc_sync_start(). */
+ * Returns at once; on_sync_done reports each session. Requires mc_sync_start(). This is an
+ * automatic sync, as a scheduled one is (for background work, say): it confirms nothing, so
+ * a device whose profile isn't confirmed fetches no files. A Sync button calls
+ * mc_sync_confirm_now(). */
 mc_status mc_sync_now(mc_sync *sync, const char *device_uid);
+
+/* --- Confirming profiles ---
+ * A device fetches and deletes files only for a profile its user has confirmed: sessions
+ * still exchange group and library data, but the file phase on a device whose profile isn't
+ * confirmed is skipped (mc_sync_result.files_paused). The user confirms by pressing Sync,
+ * on that device or on the other end of a session with it, which records a fingerprint of
+ * the device's profile; any later change to it (from any member) pauses the device again
+ * until the next press. A new member starts unconfirmed, so pairing alone never moves
+ * files. Names don't count as changes, nor do edits that leave what the device holds as it
+ * was (the selection while it syncs everything, an archive's fields). */
+
+typedef enum mc_sync_confirm_state {
+  MC_SYNC_CONFIRMED,      /* its profile is as its user last confirmed: files sync on their own */
+  MC_SYNC_UNCONFIRMED,    /* never confirmed (just paired): no files until Sync is pressed */
+  MC_SYNC_PROFILE_CHANGED /* changed since it was confirmed: paused until Sync is pressed */
+} mc_sync_confirm_state;
+
+/* The Sync button: as mc_sync_now(), and the user's say-so. It confirms this device's
+ * profile at once, and the next session with device_uid (each member for NULL), whichever
+ * side starts it within a few minutes, confirms the profiles of both ends as they stand
+ * after its group exchange, so it fetches files at once. Requires mc_sync_start(). */
+mc_status mc_sync_confirm_now(mc_sync *sync, const char *device_uid);
 /* Tells sync the library or a profile changed here, so members hear of it in a few
  * seconds. Optional: sync also polls for changes. Any thread. */
 void mc_sync_notify_changed(mc_sync *sync);
@@ -199,6 +228,9 @@ typedef struct mc_sync_device {
   /* Its own report of its files (sync_status); has_status = 0 if it hasn't written one. */
   int has_status;
   int64_t verified_ms, expected, ok, missing, corrupt, bytes;
+  /* Whether its files sync on their own; see mc_sync_confirm_now(). Another device's is as
+   * this one sees it: an edit here it hasn't received yet already counts. */
+  mc_sync_confirm_state confirm;
 } mc_sync_device;
 
 typedef struct mc_sync_device_list {

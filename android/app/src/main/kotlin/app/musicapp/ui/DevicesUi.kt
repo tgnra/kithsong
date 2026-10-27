@@ -48,6 +48,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.musicapp.ConfirmState
 import app.musicapp.CoreSync
 import app.musicapp.DeviceKind
 import app.musicapp.NearbyDevice
@@ -382,7 +383,16 @@ private fun notice(status: SyncStatus): Pair<String, Boolean>? = when {
     !status.onLan -> stringResource(R.string.sync_not_on_wifi) to true
     status.libraryState == CoreSync.LibraryState.Other -> stringResource(R.string.sync_other_library) to true
     status.libraryState == CoreSync.LibraryState.Unknown -> stringResource(R.string.sync_unknown_library) to false
+    status.inGroup && status.selfConfirm != null -> confirmText(status.selfConfirm)?.let { it to false }
     else -> null
+}
+
+/** Why files don't sync on their own for a device, or null if they do. */
+@Composable
+private fun confirmText(confirm: ConfirmState): String? = when (confirm) {
+    ConfirmState.Confirmed -> null
+    ConfirmState.Unconfirmed -> stringResource(R.string.sync_unconfirmed)
+    ConfirmState.ProfileChanged -> stringResource(R.string.sync_paused_profile_changed)
 }
 
 @Composable
@@ -398,7 +408,8 @@ private fun memberText(device: SyncDevice, syncing: Boolean): String {
         device.online -> if (last != null) stringResource(R.string.device_online_synced, last) else stringResource(R.string.device_online)
         else -> if (last != null) stringResource(R.string.device_offline_synced, last) else stringResource(R.string.device_not_synced)
     }
-    return if (device.archive) stringResource(R.string.device_archive, state) else state
+    val shown = if (device.archive) stringResource(R.string.device_archive, state) else state
+    return confirmText(device.confirm)?.let { "$shown\n$it" } ?: shown
 }
 
 @Composable

@@ -4,9 +4,16 @@
  *
  * Edits go through the group changelog field by field, so a set writes only what differs
  * from the stored profile: changed columns, and items inserted or deleted one by one. Two
- * members editing one profile at once then both keep their changes. */
+ * members editing one profile at once then both keep their changes.
+ *
+ * Confirming. A device's file phase runs on its own only while its profile has the
+ * fingerprint it had when its user last pressed Sync (devices.confirmed_profile); see
+ * "Confirming profiles" in docs/sync-protocol.md. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <mbedtls/sha256.h>
 
 #include "library/library_internal.h"
 #include "sync/archive.h"
@@ -608,4 +615,135 @@ mc_status mc_sync_estimate_profile(mc_sync *sync, const char *device_uid,
   for (int i = 0; i < MC_SYNC_ESTIMATE_STEPS; i++) out->step_bytes[i] = plan->step_bytes[i];
   mc_plan_free(plan);
   return MC_OK;
+}
+
+/* --- Confirming --- */
+
+static void sha_line(mbedtls_sha256_context *ctx, const char *s) {
+  mbedtls_sha256_update(ctx, (const unsigned char *)s, strlen(s));
+  mbedtls_sha256_update(ctx, (const unsigned char *)"\n", 1);
+}
+
+mc_status mc_profile_fingerprint(sqlite3 *db, const char *uid, char out[MC_PROFILE_FP_STRLEN]) {
+  out[0] = '\0';
+  int archive = mc_archive_is(db, uid);
+  if (archive < 0) return MC_ERR_DB;
+  mbedtls_sha256_context ctx;
+  mbedtls_sha256_init(&ctx);
+  mbedtls_sha256_starts(&ctx, 0);
+  mc_status st = MC_OK;
+  /* Only what decides what the device holds. An archive's row and items don't, nor does the
+   * selection while it syncs everything, a bitrate with originals, a switched-off budget's
+   * size, or the name. */
+  if (archive) {
+    sha_line(&ctx, "archive");
+  } else {
+    sqlite3_stmt *stmt;
+    int all = 1, rc = SQLITE_DONE;
+    if (sqlite3_prepare_v2(db,
+                           "SELECT mode, format, bitrate_kbps, budget_enabled, budget_bytes"
+                           " FROM profiles WHERE device_uid = ?1",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+      st = MC_ERR_DB;
+    } else {
+      sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+      rc = sqlite3_step(stmt);
+      if (rc == SQLITE_ROW) {
+        const char *mode = (const char *)sqlite3_column_text(stmt, 0);
+        const char *format = (const char *)sqlite3_column_text(stmt, 1);
+        int opus = format && !strcmp(format, "opus");
+        int budget = sqlite3_column_int(stmt, 3) != 0;
+        all = !mode || strcmp(mode, "selected") != 0;
+        char line[128];
+        snprintf(line, sizeof line, "%s %s %d %s %lld", all ? "all" : "selected",
+                 opus ? "opus" : "original", opus ? sqlite3_column_int(stmt, 2) : 0,
+                 budget ? "budget" : "-", budget ? (long long)sqlite3_column_int64(stmt, 4) : 0LL);
+        sha_line(&ctx, line);
+      } else if (rc == SQLITE_DONE) {
+        sha_line(&ctx, "none");
+      } else {
+        st = MC_ERR_DB;
+      }
+      sqlite3_finalize(stmt);
+    }
+    /* The stored rows as they are, of every kind, so devices of any version agree. */
+    if (st == MC_OK && rc == SQLITE_ROW && !all) {
+      if (sqlite3_prepare_v2(db,
+                             "SELECT DISTINCT kind, ref_uid FROM profile_items"
+                             " WHERE device_uid = ?1 ORDER BY kind, ref_uid",
+                             -1, &stmt, NULL) != SQLITE_OK) {
+        st = MC_ERR_DB;
+      } else {
+        sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+        while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+          const char *kind = (const char *)sqlite3_column_text(stmt, 0);
+          const char *ref = (const char *)sqlite3_column_text(stmt, 1);
+          char line[160];
+          snprintf(line, sizeof line, "%s %s", kind ? kind : "", ref ? ref : "");
+          sha_line(&ctx, line);
+        }
+        if (rc != SQLITE_DONE) st = MC_ERR_DB;
+        sqlite3_finalize(stmt);
+      }
+    }
+  }
+  unsigned char digest[32];
+  mbedtls_sha256_finish(&ctx, digest);
+  mbedtls_sha256_free(&ctx);
+  if (st != MC_OK) return st;
+  static const char hexd[] = "0123456789abcdef";
+  for (int i = 0; i < 32; i++) {
+    out[2 * i] = hexd[digest[i] >> 4];
+    out[2 * i + 1] = hexd[digest[i] & 15];
+  }
+  out[64] = '\0';
+  return MC_OK;
+}
+
+int mc_profile_confirm_state(sqlite3 *db, const char *uid) {
+  char fp[MC_PROFILE_FP_STRLEN];
+  if (mc_profile_fingerprint(db, uid, fp) != MC_OK) return -1;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db, "SELECT confirmed_profile FROM devices WHERE uid = ?1", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  int state = MC_SYNC_UNCONFIRMED, rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    const char *v = (const char *)sqlite3_column_text(stmt, 0);
+    if (v && *v) state = !strcmp(v, fp) ? MC_SYNC_CONFIRMED : MC_SYNC_PROFILE_CHANGED;
+  } else if (rc != SQLITE_DONE) {
+    state = -1;
+  }
+  sqlite3_finalize(stmt);
+  return state;
+}
+
+mc_status mc_profile_confirm(mc_sync_db *sdb, int *wrote) {
+  if (wrote) *wrote = 0;
+  if (!mc_sync_db_group_uid(sdb)) return MC_ERR_NOT_FOUND;
+  sqlite3 *db = mc_sync_db_handle(sdb);
+  const char *me = mc_sync_db_device_uid(sdb);
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st != MC_OK) return st;
+  /* Inside the write, so the fingerprint is of what's stored when it's recorded. */
+  char fp[MC_PROFILE_FP_STRLEN];
+  st = mc_profile_fingerprint(db, me, fp);
+  sqlite3_stmt *stmt = NULL;
+  if (st == MC_OK &&
+      sqlite3_prepare_v2(db,
+                         "UPDATE devices SET confirmed_profile = ?1 WHERE uid = ?2"
+                         " AND confirmed_profile IS NOT ?1",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    st = MC_ERR_DB;
+  if (st == MC_OK) {
+    sqlite3_bind_text(stmt, 1, fp, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, me, -1, SQLITE_STATIC);
+    st = run(stmt);
+    if (st == MC_OK && wrote) *wrote = sqlite3_changes(db) > 0;
+  }
+  sqlite3_finalize(stmt);
+  if (st == MC_OK) st = mc_sync_db_commit(sdb);
+  if (st != MC_OK) mc_sync_db_rollback(sdb);
+  return st;
 }

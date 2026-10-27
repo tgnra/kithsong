@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.compose.runtime.Immutable
+import app.musicapp.ConfirmState
 import app.musicapp.CoreSync
 import app.musicapp.MusicCoreException
 import app.musicapp.NearbyDevice
@@ -57,6 +58,8 @@ data class SyncStatus(
     val libraryState: CoreSync.LibraryState = CoreSync.LibraryState.NoGroup,
     /** The other members of the group, removed ones left out, by name. */
     val members: List<SyncDevice> = emptyList(),
+    /** Whether this phone's own files sync on their own; null outside a group. */
+    val selfConfirm: ConfirmState? = null,
     /** Devices on the network that aren't in the group, by name. */
     val nearby: List<NearbyDevice> = emptyList(),
     /** The members a session is running with. */
@@ -151,7 +154,14 @@ class Syncer(
         if (state.value.pairing is Pairing.Ended) update { copy(pairing = null) }
     }
 
-    fun syncNow(uid: String? = null) = call { it.syncNow(uid) }
+    /**
+     * The Sync button: syncs with [uid] (every member for null) now, confirming this phone's
+     * profile and its, so their files sync from then on. Background work uses [syncOnce].
+     */
+    fun syncNow(uid: String? = null) = call { sync ->
+        sync.confirmSyncNow(uid)
+        refreshLists(sync)
+    }
 
     fun removeDevice(uid: String) = call { sync ->
         sync.removeDevice(uid)
@@ -335,6 +345,7 @@ class Syncer(
                 copy(
                     libraryState = libraryState,
                     members = devices.filter { !it.isSelf && !it.removed },
+                    selfConfirm = devices.firstOrNull { it.isSelf }?.confirm,
                     nearby = if (running) sync.nearby() else emptyList(),
                     onLan = context.isOnLan(),
                     address = context.lanAddress(),

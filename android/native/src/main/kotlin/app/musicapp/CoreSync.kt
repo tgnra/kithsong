@@ -20,8 +20,24 @@ data class SyncDevice(
     val port: Int,
     /** The last session with it, in Unix ms; 0 if never. */
     val lastSyncMs: Long,
+    private val confirmCode: Int,
 ) {
     val kind: DeviceKind get() = DeviceKind.entries.getOrElse(kindCode) { DeviceKind.Desktop }
+
+    /** Whether its files sync on their own (see [CoreSync.confirmSyncNow]). */
+    val confirm: ConfirmState get() = ConfirmState.entries.getOrElse(confirmCode) { ConfirmState.Unconfirmed }
+}
+
+/** mc_sync_confirm_state: files sync automatically only for a profile the user confirmed. */
+enum class ConfirmState {
+    /** As its user last confirmed it. */
+    Confirmed,
+
+    /** Never confirmed (just paired): no files until Sync is pressed. */
+    Unconfirmed,
+
+    /** Changed since it was confirmed: paused until Sync is pressed. */
+    ProfileChanged,
 }
 
 /** A device discovery sees that isn't in this device's group (mc_sync_nearby). */
@@ -126,8 +142,14 @@ class CoreSync(
 
     fun removeDevice(uid: String) = nativeWithDevice(handle, CALL_REMOVE_DEVICE, uid)
 
-    /** Syncs with [uid], or every reachable member for null, as soon as possible. */
+    /**
+     * Syncs with [uid], or every reachable member for null, as soon as possible. Automatic, as
+     * for background work: it confirms nothing, so unconfirmed profiles fetch no files.
+     */
     fun syncNow(uid: String? = null) = nativeWithDevice(handle, CALL_SYNC_NOW, uid)
+
+    /** The Sync button: as [syncNow], and confirms this device's profile and [uid]'s (each member's for null). */
+    fun confirmSyncNow(uid: String? = null) = nativeWithDevice(handle, CALL_CONFIRM_SYNC_NOW, uid)
 
     /** The library changed here, so members should hear of it soon. Any thread. */
     fun notifyChanged() = nativeNotifyChanged(handle)
@@ -178,6 +200,7 @@ class CoreSync(
         private const val CALL_PAIR_REQUEST = 0
         private const val CALL_REMOVE_DEVICE = 1
         private const val CALL_SYNC_NOW = 2
+        private const val CALL_CONFIRM_SYNC_NOW = 3
 
         init {
             System.loadLibrary("musicapp_jni")

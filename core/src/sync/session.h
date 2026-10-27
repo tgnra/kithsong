@@ -12,6 +12,9 @@ typedef struct mc_session {
   mc_sync_conn *conn;
   mc_channel *ch;
   char peer_uid[MC_UID_STRLEN]; /* known before run: the KK peer, or the pairing partner */
+  /* A user pressed Sync for it: set before run if on this device (mc_sync_take_user()),
+   * and by run if the peer's HELLO says so. Both ends then confirm their profiles. */
+  int user;
   /* Results. */
   int64_t rows_sent, rows_received;
   int64_t rows_new; /* received rows that were new here */
@@ -19,6 +22,7 @@ typedef struct mc_session {
   int converged;   /* every database exchanged ended with equal digests */
   int we_removed;  /* this device learnt it was removed from the group */
   int follow_up;   /* group rows were written after the group exchange; sync again soon */
+  int files_paused; /* this side's file phase was skipped: its profile isn't confirmed */
   /* The file phase (transfer.c). */
   int files_received, files_missing, files_corrupt, files_deleted, files_unknown, files_sent;
   int files_done, files_total; /* this side's requests, for progress */

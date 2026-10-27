@@ -795,8 +795,8 @@ JNIEXPORT jint JNICALL Java_app_musicapp_CoreSync_nativePort(JNIEnv *env, jclass
   return mc_sync_port(sync_of(handle));
 }
 
-/* The calls that take a device uid: 0 pair request, 1 remove device, 2 sync now (uid null:
- * every reachable member). */
+/* The calls that take a device uid: 0 pair request, 1 remove device, 2 sync now, 3 confirm
+ * and sync now (the Sync button). For 2 and 3, uid null is every reachable member. */
 JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeWithDevice(JNIEnv *env, jclass cls,
                                                                     jlong handle, jint call,
                                                                     jstring uid) {
@@ -805,6 +805,7 @@ JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeWithDevice(JNIEnv *env, 
     mc_sync_pair_request,
     mc_sync_remove_device,
     mc_sync_now,
+    mc_sync_confirm_now,
   };
   if (call < 0 || call >= (jint)(sizeof calls / sizeof *calls)) {
     throw_status(env, MC_ERR_INVALID_ARG);
@@ -876,7 +877,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreSync_nativeListDevices(JNIE
   jclass info = (*env)->FindClass(env, "app/musicapp/SyncDevice");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
-                                       "(Ljava/lang/String;Ljava/lang/String;IZZZZLjava/lang/String;IJ)V");
+                                       "(Ljava/lang/String;Ljava/lang/String;IZZZZLjava/lang/String;IJI)V");
   if (!ctor) return NULL;
 
   mc_sync_device_list *list = NULL;
@@ -894,7 +895,8 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreSync_nativeListDevices(JNIE
     jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)d->kind,
                                      (jboolean)(d->is_self != 0), (jboolean)(d->online != 0),
                                      (jboolean)(d->archive != 0), (jboolean)(d->removed != 0),
-                                     address, (jint)d->port, (jlong)d->last_sync_ms);
+                                     address, (jint)d->port, (jlong)d->last_sync_ms,
+                                     (jint)d->confirm);
     if (!item) {
       out = NULL;
       break;

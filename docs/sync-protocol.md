@@ -156,7 +156,8 @@ the code and A's user enters it.
    and writes the other's row (name, kind, host, key) so it can reconnect even if the
    session breaks. The connection then becomes an ordinary session from its `HELLO` (step 1
    of [Session](#session), without the handshake), so the new member receives the whole
-   group and library straight away.
+   group and library straight away. No files move yet: the new member has never confirmed
+   its profile (see [Confirming profiles](#confirming-profiles)).
 
 `PAIR_*` and `JPAKE_*` messages in the clear use the same `<type: u8> <payload>` form inside
 the frame.
@@ -192,7 +193,8 @@ A device joining with an empty library adopts the group's `library_uid` through
   member in a session, and forgets the group.
 - A device can't be removed, or leave, while it is the only archive (`MC_ERR_LOCKED`).
 - Each device keeps its own `devices` row up to date (`name`, `kind`, `host`, key, and
-  `node_uid` once its library is the group's) and its own `capabilities`.
+  `node_uid` once its library is the group's, `confirmed_profile` when its user confirms
+  its profile) and its own `capabilities`.
 - **Names.** `profiles.name` is the device's friendly name in the group. Like the rest of a
   profile, any member may edit it, an archive's included. NULL means the device's own
   `devices.name`. The device takes the name on: when its effective name (`profiles.name`,
@@ -273,7 +275,7 @@ Message types:
 
 | Type | Name          | Payload |
 |------|---------------|---------|
-| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "caps": {...}}` |
+| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "caps": {...}}` (`user` only when pressed for) |
 | 0x02 | `BYE`         | `{}` |
 | 0x03 | `ERROR`       | `{"reason", "msg"}` |
 | 0x10 | `VV`          | `{"db": "group" \| "library", "vv": {"<origin>": <hlc>}, "resend": true}` (`resend` only in the re-send round) |
@@ -300,7 +302,9 @@ Steps:
    `{"cpu_score", "free_bytes", "on_power", "can_transcode"}`. The `dev` in a `HELLO` must
    be the device the handshake authenticated. Before its `HELLO`, each device brings its own
    `devices` and `capabilities` rows up to date, and writes the `sync_status` its last file
-   phase left pending (see [Files](#files)).
+   phase left pending (see [Files](#files)). `"user": true` says this device's user pressed
+   Sync for the peer (see [Confirming profiles](#confirming-profiles)); older versions
+   ignore it.
 2. **Group data.** Both sides send `VV` for `group` (the initiator first), then stream the
    group changelog rows the other is missing (`ROWS`, in hlc order, read from one snapshot)
    and `ROWS_END`. The exchange is half-duplex, so neither side's stream can block the
@@ -407,7 +411,9 @@ way, without logging anything.
 
 - A device syncs with each member when discovery reports it online, every 5 minutes, and
   3 seconds after a local change (or after a session brought it rows its other members may
-  lack). One session per pair of devices at a time.
+  lack). One session per pair of devices at a time. These automatic sessions always
+  exchange group and library data; files move in them only for confirmed profiles (see
+  [Confirming profiles](#confirming-profiles)).
 - The lower `device_uid` is the preferred initiator. On the online and periodic triggers the
   higher one waits 30 s and initiates only if it hasn't been contacted since, so a device
   behind a firewall still syncs through its own outgoing connection. A change only one side
@@ -516,6 +522,37 @@ the plaintext limit.
     tracks' files are removed, and unknown files are reported, not deleted.
 - Every device receives the whole library database. Frontends list only tracks with a local
   file (`available_only`), except the profile picker, which lists everything.
+
+### Confirming profiles
+
+A device fetches and deletes files only for a profile its user has confirmed, so pairing,
+or an edit made on another member, never moves files before someone has looked at the
+profile and pressed Sync.
+
+- A profile's **fingerprint** is the hex SHA-256 of what decides what the device holds, as
+  stored: `archive` (an archive, counting a void demotion, is just that), else one line
+  `<mode> <format> <kbps> <budget> <budget_bytes>` (`kbps` 0 for originals, `budget` `-` and
+  `budget_bytes` 0 when the budget is off), then for mode `selected` one line
+  `<kind> <ref_uid>` per distinct `profile_items` row, sorted. Names, the selection while the
+  mode is `all`, and an archive's other fields leave it as it is. With no `profiles` row it
+  is the hash of `none`. Every device holding the same rows computes the same one.
+- `devices.confirmed_profile` is the fingerprint of the device's profile when it was last
+  confirmed, written by the device itself (NULL until then). The device is *confirmed* while
+  its current fingerprint equals it, *unconfirmed* while it is NULL (a new member) and
+  *changed* otherwise. Any member can work this out for any other, so each can show a
+  device as paused; an edit this device made that the other hasn't received yet already
+  counts.
+- In its receiving turn (step 6 of [Session](#session)) a device that isn't confirmed
+  fetches nothing, sends no `PREPARE_REQ`, and skips reconcile and its `sync_status`; it
+  still serves the peer. Files of tracks deleted from the library still go with their rows.
+- **Pressing Sync** (`mc_sync_confirm_now()`) confirms this device's profile at once, and
+  marks the peers it was pressed for (one, or every member). The next session with such a
+  peer that starts within 5½ minutes, from either side, carries `"user": true` in this
+  device's `HELLO`. In a session where either `HELLO` has it, each device confirms its own
+  profile after the group exchange (so as it stands with the peer's edits), then runs its
+  receiving turn. That write comes after the group exchange, so the peer hears of it in the
+  next session, as for the node uid. A sync started otherwise (`mc_sync_now()`, the
+  scheduler, background work) confirms nothing.
 
 ## Files
 

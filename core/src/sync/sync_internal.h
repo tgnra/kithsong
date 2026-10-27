@@ -58,6 +58,9 @@ typedef struct mc_sync_peer {
   /* The file phase: a signature of the transcodes last asked for on its behalf while it
    * was offline (PREPARE_REQ), so they're asked for once per change. */
   uint64_t prepared_sig;
+  /* mono: this device's user pressed Sync for it (mc_sync_confirm_now()), which the next
+   * session with it carries; 0 = not, or already carried. */
+  uint64_t user_ms;
 } mc_sync_peer;
 
 typedef struct mc_sync_worker {
@@ -184,6 +187,10 @@ void mc_sync_take_group_name(mc_sync *sync, mc_sync_conn *c);
  * group already has one for it. 1 if it wrote. */
 int mc_sync_seed_profile_name(mc_sync *sync, mc_sync_conn *c);
 
+/* Whether this device's user pressed Sync for peer_uid a short while ago and no session has
+ * carried it yet; clears it. For a session that has just claimed the peer. */
+int mc_sync_take_user(mc_sync *sync, const char *peer_uid);
+
 /* Whether a member is online: discovery sees it, or the last session with it succeeded. */
 int mc_sync_peer_online(mc_sync *sync, const char *uid);
 /* Stores sig as uid's prepared_sig and returns the one it replaces (0 if none). */
@@ -192,6 +199,21 @@ uint64_t mc_sync_peer_swap_prepared(mc_sync *sync, const char *uid, uint64_t sig
 void mc_sync_emit_pair_code(mc_sync *sync, const char *code, const char *name, int attempts);
 void mc_sync_emit_pair_result(mc_sync *sync, const mc_pair_result *r);
 void mc_sync_emit_progress(mc_sync *sync, const mc_sync_progress *p);
+
+/* --- Confirming profiles (profile.c) --- */
+
+/* Hex SHA-256 and its NUL. */
+#define MC_PROFILE_FP_STRLEN 65
+
+/* uid's profile fingerprint: a hash of what decides what it holds (archive, mode, format,
+ * budget and selection, as stored), the same on every device holding the same rows. */
+mc_status mc_profile_fingerprint(sqlite3 *db, const char *uid, char out[MC_PROFILE_FP_STRLEN]);
+/* uid's mc_sync_confirm_state: its fingerprint against its devices.confirmed_profile. -1 on
+ * a database error. */
+int mc_profile_confirm_state(sqlite3 *db, const char *uid);
+/* Records this device's current fingerprint as confirmed, in a write of its own. *wrote
+ * (may be NULL): it changed. MC_ERR_NOT_FOUND if not in a group. */
+mc_status mc_profile_confirm(mc_sync_db *sdb, int *wrote);
 
 /* --- Pairing (pairing.c) --- */
 

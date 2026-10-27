@@ -177,6 +177,8 @@
     "remove_device_text": "The devices in this group stop syncing with it. To sync with it again, pair it again.",
     "synced_just_now": "just now",
     "sync_unknown_library": "Waiting to hear from the group which library it syncs.",
+    "sync_unconfirmed": { "text": "No music syncs until its sync settings are set up and you press Sync now.", "note": "A device that was just paired: nothing is copied to or removed from it yet." },
+    "sync_paused_profile_changed": { "text": "Paused: its sync settings changed. Press Sync now to apply them.", "note": "Music stops syncing automatically after a device's sync settings change, until the user confirms by pressing Sync now." },
     "pair_wrong_code_entered": "Wrong code entered. {0}",
     "sync_other_device": "the other device"
   },
