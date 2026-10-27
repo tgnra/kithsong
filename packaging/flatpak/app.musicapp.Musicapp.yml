@@ -1,0 +1,48 @@
+# Flatpak build of the GTK app, bundled into one .flatpak by scripts/release-linux.sh.
+#
+# Not Flathub-ready: CMake fetches the third-party sources at configure time, so the build
+# needs the network (build-args below), which Flathub forbids.
+id: app.musicapp.Musicapp
+runtime: org.gnome.Platform
+runtime-version: '51'  # also the container tag in .github/workflows/release.yml
+sdk: org.gnome.Sdk
+command: musicapp
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # miniaudio plays through PulseAudio (PipeWire's, on most systems).
+  - --socket=pulseaudio
+  # LAN sync and mDNS discovery, MusicBrainz, AcoustID and cover art.
+  - --share=network
+  # The library defaults to the Music folder, and the tagger writes into it. Folders
+  # elsewhere come in through the file chooser portal.
+  - --filesystem=xdg-music
+  # desktop/linux/src/mpris.c
+  - --own-name=org.mpris.MediaPlayer2.musicapp
+modules:
+  - name: musicapp
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      # secrets.local.cmake, written by the release script, sets the contact and AcoustID key.
+      - >-
+        cmake -S . -B _build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/app
+        -DMUSICAPP_BUILD_TESTS=OFF
+        $(test -f packaging/flatpak/secrets.local.cmake && echo -C packaging/flatpak/secrets.local.cmake)
+      - cmake --build _build
+      - cmake --install _build --component musicapp --strip
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .direnv
+          - .vscode
+          - android
+          - build
+          - dist
+          - result

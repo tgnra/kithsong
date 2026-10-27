@@ -6,23 +6,39 @@ plugins {
 android {
     namespace = "app.musicapp"
     compileSdk = 37
+    // The same NDK as :native, which AGP needs to strip the native core's debug symbols.
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "app.musicapp"
         // Android 7.0: Compose needs 23, the native core 24 (see :native).
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = rootProject.extra["musicappVersionCode"] as Int
+        versionName = rootProject.extra["musicappVersionName"] as String
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
+    signingConfigs {
+        // Release signing comes from the environment (scripts/release-android.*). Without
+        // it, release builds come out unsigned. The phone and the watch use the same key.
+        System.getenv("MUSICAPP_KEYSTORE")?.let { keystore ->
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("MUSICAPP_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MUSICAPP_KEY_ALIAS")
+                keyPassword = System.getenv("MUSICAPP_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

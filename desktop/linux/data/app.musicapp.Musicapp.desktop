@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=musicapp
+Comment=Music library, player and LAN sync
+Exec=musicapp
+Icon=app.musicapp.Musicapp
+Terminal=false
+Categories=AudioVideo;Audio;Player;GTK;
+Keywords=music;audio;player;library;tags;sync;
+StartupNotify=true

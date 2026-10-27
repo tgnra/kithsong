@@ -2,6 +2,9 @@
 #ifndef MUSICAPP_RESOURCE_H
 #define MUSICAPP_RESOURCE_H
 
+/* The app icon, version.rc.in. */
+#define IDI_APP 1
+
 #define IDD_REVIEW 100
 #define IDC_REV_HEADER 1001
 #define IDC_REV_MATCHES 1002

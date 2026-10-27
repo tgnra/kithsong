@@ -1,9 +1,13 @@
 cmake_minimum_required(VERSION 3.28)
 
+# The one version for every platform; the Android builds and the release workflow read it too.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" MUSICAPP_VERSION LIMIT_COUNT 1)
+
 project(musicapp
-  VERSION 0.1.0
+  VERSION ${MUSICAPP_VERSION}
   DESCRIPTION "Cross-platform music library, player and LAN sync"
   LANGUAGES C CXX)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

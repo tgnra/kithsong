@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="musicapp" version="0.1.0.0"/>
+  <assemblyIdentity type="win32" name="musicapp" version="@PROJECT_VERSION@.0"/>
   <!-- Common Controls v6: modern-looking buttons and lists. -->
   <dependency>
     <dependentAssembly>

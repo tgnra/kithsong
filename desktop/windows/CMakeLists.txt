@@ -1,5 +1,11 @@
 enable_language(RC)
 
+# The manifest and version resource carry PROJECT_VERSION, so both are configured.
+set(MUSICAPP_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/musicapp.manifest")
+set(MUSICAPP_ICON "${PROJECT_SOURCE_DIR}/packaging/icons/musicapp.ico")
+configure_file(src/musicapp.manifest.in "${MUSICAPP_MANIFEST}" @ONLY)
+configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/version.rc" @ONLY)
+
 add_executable(musicapp WIN32
   src/main.c
   src/add_device.c
@@ -19,7 +25,12 @@ add_executable(musicapp WIN32
   src/taskbar.c
   src/theme.c
   src/track_list.c
-  src/app.rc)
+  src/app.rc
+  "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
+# version.rc lives in the build dir but includes resource.h.
+target_include_directories(musicapp PRIVATE src)
+set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/version.rc" APPEND PROPERTY
+  OBJECT_DEPENDS "${MUSICAPP_MANIFEST}" "${MUSICAPP_ICON}")
 target_link_libraries(musicapp PRIVATE musiccore comctl32 ole32 uuid shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi)
 target_compile_definitions(musicapp PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)
@@ -29,3 +40,9 @@ musicapp_warnings(musicapp)
 if(MINGW)
   target_link_options(musicapp PRIVATE -static)
 endif()
+
+# The portable zip's layout (scripts/release-windows.ps1): the exe and LICENSES/ side by side.
+# The musicapp component leaves out the fetched libraries' own install rules.
+include(Licenses)
+install(TARGETS musicapp RUNTIME DESTINATION . COMPONENT musicapp)
+musicapp_install_licenses(LICENSES)

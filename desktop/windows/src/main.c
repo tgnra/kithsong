@@ -52,6 +52,7 @@
 #include "pick_folder.h"
 #include "playback.h"
 #include "playlist_dialogs.h"
+#include "resource.h"
 #include "settings_view.h"
 #include "sidebar.h"
 #include "theme.h"
@@ -789,6 +790,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     .lpfnWndProc = wnd_proc,
     .hInstance = inst,
     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW),
+    .hIcon = LoadIconW(inst, MAKEINTRESOURCEW(IDI_APP)),
+    .hIconSm = LoadImageW(inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                          GetSystemMetrics(SM_CYSMICON), 0),
     .lpszClassName = L"musicapp", /* no background brush: WM_ERASEBKGND paints */
   };
   RegisterClassExW(&wc);

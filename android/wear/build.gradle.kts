@@ -6,6 +6,8 @@ plugins {
 android {
     namespace = "app.musicapp.wear"
     compileSdk = 37
+    // The same NDK as :native, which AGP needs to strip the native core's debug symbols.
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         // Same id as the phone app, so the two can talk over the Wear Data Layer once they
@@ -15,8 +17,8 @@ android {
         // The Compose for Wear OS libraries would allow 25, but Wear OS 2 is not worth the cost.
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = rootProject.extra["musicappVersionCode"] as Int + 1  // the watch's codes end in 1
+        versionName = rootProject.extra["musicappVersionName"] as String
 
         ndk {
             // armeabi-v7a: many Wear OS watches run a 32-bit userspace.
@@ -24,9 +26,23 @@ android {
         }
     }
 
+    signingConfigs {
+        // Release signing comes from the environment (scripts/release-android.*). Without
+        // it, release builds come out unsigned. The phone and the watch use the same key.
+        System.getenv("MUSICAPP_KEYSTORE")?.let { keystore ->
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("MUSICAPP_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MUSICAPP_KEY_ALIAS")
+                keyPassword = System.getenv("MUSICAPP_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

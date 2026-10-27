@@ -1,0 +1,163 @@
+# Release builds. Pushing a v<VERSION> tag (or v<VERSION>-<suffix> for a prerelease) builds
+# every platform with the scripts in scripts/ and attaches the results to a draft GitHub
+# release. Running it by hand (Actions > Release > Run workflow) builds the same files as
+# workflow artifacts without making a release. See docs/RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MUSICAPP_CONTACT: ${{ secrets.MUSICAPP_CONTACT }}
+  MUSICAPP_ACOUSTID_KEY: ${{ secrets.MUSICAPP_ACOUSTID_KEY }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: |
+          version="$(head -n1 VERSION | tr -d '[:space:]')"
+          prerelease=false
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [[ "${tag%%-*}" != "$version" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME doesn't match VERSION ($version)."
+              exit 1
+            fi
+            [[ "$tag" == *-* ]] && prerelease=true
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install w64devkit and Ninja
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-Pinned($url, $sha256, $out) {
+              Invoke-WebRequest $url -OutFile $out
+              if ((Get-FileHash $out -Algorithm SHA256).Hash -ne $sha256) { throw "Checksum mismatch: $url" }
+          }
+          $tools = "$env:RUNNER_TEMP\tools"
+          Get-Pinned https://github.com/skeeto/w64devkit/releases/download/v2.10.1/w64devkit-x64-2.10.1.7z.exe `
+              add1edf984ce4d473cfeb7c52e0ab38db73a855bba6c7f564d5e16648eb2896a "$env:RUNNER_TEMP\w64devkit.exe"
+          & "$env:RUNNER_TEMP\w64devkit.exe" -y "-o$tools" | Out-Null
+          Get-Pinned https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip `
+              07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65 "$env:RUNNER_TEMP\ninja.zip"
+          Expand-Archive "$env:RUNNER_TEMP\ninja.zip" "$tools\ninja"
+          "$tools\w64devkit\bin" >> $env:GITHUB_PATH
+          "$tools\ninja" >> $env:GITHUB_PATH
+      - name: Cache fetched dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/_deps
+          key: deps-windows-${{ hashFiles('third_party/CMakeLists.txt') }}
+      - name: Build
+        shell: pwsh
+        run: scripts/release-windows.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    # The tag tracks runtime-version in packaging/flatpak/app.musicapp.Musicapp.yml.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: bash scripts/release-linux.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: dist/*.flatpak
+          if-no-files-found: error
+
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install the NDK and CMake
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "ndk;27.2.12479018" "cmake;3.30.5" >/dev/null
+      - name: Decode the signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [[ -z "$ANDROID_KEYSTORE_BASE64" ]]; then
+            if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 isn't set; a release needs signed APKs."
+              exit 1
+            fi
+            echo "::warning::ANDROID_KEYSTORE_BASE64 isn't set; building unsigned."
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d >"$RUNNER_TEMP/release.jks"
+          echo "MUSICAPP_KEYSTORE=$RUNNER_TEMP/release.jks" >>"$GITHUB_ENV"
+      - name: Build
+        env:
+          MUSICAPP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MUSICAPP_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MUSICAPP_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/release-android.sh
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: |
+            dist/*.apk
+            dist/*.aab
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, windows, linux, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          flags=(--draft --generate-notes --verify-tag --title "musicapp $GITHUB_REF_NAME")
+          [[ "$PRERELEASE" == true ]] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" dist/*

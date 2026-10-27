@@ -189,3 +189,9 @@ watches run a 32-bit userspace.
 To run the watch app, create a Wear OS emulator named `Wear_OS_Small_Round` in Android
 Studio's Device Manager and run the `wear: run` task in VS Code. It boots the emulator unless
 it is already running, then installs and starts the debug build.
+
+### Release builds
+
+`scripts/release-*` build the packages: a portable zip on Windows, a Flatpak bundle on
+Linux, and signed APKs and AABs for Android and Wear OS. Pushing a `v<version>` tag runs them
+on GitHub Actions and creates a draft release. See [docs/RELEASING.md](docs/RELEASING.md).

@@ -2,6 +2,9 @@
 /build/
 /out/
 
+# Release packages (scripts/release-*)
+/dist/
+
 # Nix
 /result
 /result-*
