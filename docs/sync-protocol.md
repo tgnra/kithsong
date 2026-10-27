@@ -487,8 +487,9 @@ the plaintext limit.
   bytes, or `files.size_bytes` for originals. Walk Original → 256 → 192 → 160 → 128 → 96 → 64 kbps and
   take the highest that fits in `min(budget_bytes, free space + bytes already held of the
   set)`. If even 64 kbps doesn't fit, the profile is over budget: nothing syncs (the file
-  phase fetches and deletes nothing, so what the device holds stays) and the UI shows the
-  shortfall, for the user to raise the budget or select less.
+  phase fetches and deletes nothing, so what the device holds stays) and the profile editor
+  shows the shortfall from `mc_sync_estimate_profile()` (on Windows' device page; the other
+  frontends have no profile editor yet), for the user to raise the budget or select less.
   - The walk always starts at originals, whatever `format` the row holds.
   - An original's size is the same file everywhere, so any device that holds it knows it;
     one no device at hand holds is estimated at 1000 kbps. The bytes already held are only

@@ -36,16 +36,21 @@ enum {
   ID_DEV_TAB, /* four of them */
   ID_DEV_LIST = ID_DEV_TAB + 4,
   ID_DEV_COUNT,
+  ID_DEV_ESTIMATE,
   /* Timers on the parent, run by their TIMERPROCs rather than WM_TIMER. */
   ID_DEV_APPLY_TIMER = 440,
   ID_DEV_TICK_TIMER,
   ID_DEV_REFRESH_TIMER,
+  ID_DEV_ESTIMATE_TIMER,
 };
 
 /* Posted by the list to itself after its theme changes, to put our checkboxes back. */
 #define WM_RECHECK (WM_APP + 1)
+/* Posted to the estimate line by the estimate's thread; lParam is its estimate_job. */
+#define WM_ESTIMATE_DONE (WM_APP + 2)
 
 #define APPLY_DELAY_MS 400
+#define ESTIMATE_DELAY_MS 250 /* a read of every track: once the edits pause */
 #define TICK_MS 30000 /* "synced 3 minutes ago" moves on */
 #define DEFAULT_BUDGET_GB 32
 #define AUTO_ITEM 1 /* the format list's item data for Auto; the others hold their kbps, 0 originals */
@@ -83,7 +88,7 @@ static struct {
   device_view_host host;
   HWND icon, title, sync_now, remove, status, files, progress, progress_text, message, notice;
   HWND name_label, name_edit, format_label, format, budget, budget_label, budget_size, budget_unit;
-  HWND heading, note, sync_all, sync_all_label, tabs[NUM_TABS], list, count, combo_list;
+  HWND heading, note, sync_all, sync_all_label, tabs[NUM_TABS], list, count, combo_list, estimate;
   HFONT font, title_font, heading_font, icon_font;
   HIMAGELIST checks; /* the list's checkboxes; the list owns them once set */
   UINT dpi;
@@ -134,9 +139,18 @@ static struct {
   int64_t sent, received;
 
   int hot_tab; /* under the mouse, or -1 */
+
+  /* The profile's size estimate, worked out on a thread of its own: one at a time. */
+  struct {
+    HANDLE thread; /* the one running, or NULL */
+    unsigned seq;  /* of the last one started */
+    BOOL again;    /* the profile changed while it ran */
+    BOOL over;     /* the line shows that it doesn't fit */
+  } est;
 } g_dv = {.hot_tab = -1};
 
 static void layout_again(void);
+static void estimate_request(void);
 
 /* --- Text helpers --- */
 
@@ -407,6 +421,7 @@ static void load_profile(void) {
     if (g_dv.profile_status != MC_OK) free_profile();
   }
   build_sel();
+  estimate_request();
 }
 
 static BOOL editable(void) {
@@ -727,6 +742,144 @@ static void reload(BOOL keep) {
   layout_again();
 }
 
+/* --- Size estimate ---
+ * mc_sync_estimate_profile() reads every track (about half a second for 50,000), so it runs
+ * on a thread, for the profile as shown (pending edits included), once the edits pause.
+ * Like sync's own callbacks, the thread only calls in while the mc_sync exists: it is waited
+ * for before the page lets go of it (device_view_open() with another, or NULL before sync
+ * stops). */
+
+typedef struct estimate_job {
+  mc_sync *sync;
+  char uid[MC_UID_STRLEN];
+  mc_sync_profile profile; /* a copy: no name, its own items */
+  unsigned seq;
+  HWND notify;
+  mc_status status;
+  mc_sync_estimate est;
+} estimate_job;
+
+static void estimate_job_free(estimate_job *job) {
+  if (!job) return;
+  free(job->profile.items);
+  free(job);
+}
+
+static DWORD WINAPI estimate_main(void *arg) {
+  estimate_job *job = arg;
+  job->status = mc_sync_estimate_profile(job->sync, job->uid, &job->profile, &job->est);
+  if (!PostMessageW(job->notify, WM_ESTIMATE_DONE, 0, (LPARAM)job)) estimate_job_free(job);
+  return 0;
+}
+
+static void set_estimate(const wchar_t *text, BOOL over) {
+  g_dv.est.over = over;
+  SetWindowTextW(g_dv.estimate, text ? text : L"");
+  InvalidateRect(g_dv.estimate, NULL, TRUE);
+  layout_again();
+}
+
+/* The estimate line: the size and, for Auto, what the budget picked; or how much too big. */
+static void show_estimate(const estimate_job *job) {
+  const mc_sync_estimate *e = &job->est;
+  wchar_t text[256] = L"", a[32], b[32];
+  BOOL over = job->status == MC_OK && e->over_budget;
+  if (over) {
+    /* Free space, when it is less than the budget, is what it had to fit in. */
+    int64_t budget = job->profile.budget_bytes;
+    BOOL by_free = e->free_bytes >= 0 && (budget <= 0 || e->limit_bytes < budget);
+    mc_wformat(text, 256, mc_str(by_free ? MC_STR_WINDOWS_ESTIMATE_OVER_FREE : MC_STR_WINDOWS_ESTIMATE_OVER),
+               MC_S(u8(fmt_size(e->shortfall_bytes, a, 32))), MC_S(u8(fmt_size(e->limit_bytes, b, 32))));
+  } else if (job->status == MC_OK) {
+    enum mc_str_id id = MC_STR_WINDOWS_ESTIMATE_SIZE;
+    if (job->profile.format.format == MC_FORMAT_AUTO && !e->archive)
+      id = e->kbps ? MC_STR_WINDOWS_ESTIMATE_AUTO_OPUS : MC_STR_WINDOWS_ESTIMATE_AUTO_ORIGINAL;
+    mc_wformat(text, 256, mc_str_plural(id, e->tracks), MC_S(u8(fmt_size(e->total_bytes, a, 32))),
+               MC_S(u8(fmt_count(e->tracks, b, 32))), MC_D(e->kbps));
+  } else if (job->status != MC_ERR_LIBRARY_MISMATCH && job->status != MC_ERR_NOT_FOUND) {
+    /* Another library open, or the device gone: the page says so already. */
+    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_ESTIMATE_FAILED), MC_S(mc_status_str(job->status)));
+  }
+  set_estimate(text, over);
+}
+
+static void estimate_start(void) {
+  if (g_dv.est.thread) {
+    g_dv.est.again = TRUE;
+    return;
+  }
+  g_dv.est.again = FALSE;
+  const mc_sync_profile *p = g_dv.profile;
+  if (!g_dv.sync || !p || !g_dv.found || g_dv.removed) {
+    set_estimate(NULL, FALSE);
+    return;
+  }
+  estimate_job *job = calloc(1, sizeof *job);
+  if (!job) return;
+  job->sync = g_dv.sync;
+  memcpy(job->uid, g_dv.uid, MC_UID_STRLEN);
+  job->profile = *p;
+  job->profile.name = NULL;
+  job->profile.items = NULL;
+  if (p->count > 0) {
+    job->profile.items = malloc((size_t)p->count * sizeof *p->items);
+    if (!job->profile.items) {
+      free(job);
+      return;
+    }
+    memcpy(job->profile.items, p->items, (size_t)p->count * sizeof *p->items);
+  }
+  job->seq = ++g_dv.est.seq;
+  job->notify = g_dv.estimate;
+  g_dv.est.thread = CreateThread(NULL, 0, estimate_main, job, 0, NULL);
+  if (!g_dv.est.thread) estimate_job_free(job);
+}
+
+static void CALLBACK estimate_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
+  (void)msg, (void)time;
+  KillTimer(wnd, id);
+  estimate_start();
+}
+
+/* Works the estimate out again shortly, for the profile as it is then. */
+static void estimate_request(void) {
+  if (g_dv.parent) SetTimer(g_dv.parent, ID_DEV_ESTIMATE_TIMER, ESTIMATE_DELAY_MS, estimate_timer);
+}
+
+static void estimate_done(estimate_job *job) {
+  if (g_dv.est.thread) {
+    WaitForSingleObject(g_dv.est.thread, INFINITE); /* it has posted: about to return */
+    CloseHandle(g_dv.est.thread);
+    g_dv.est.thread = NULL;
+  }
+  if (job->seq == g_dv.est.seq && job->sync == g_dv.sync && !strcmp(job->uid, g_dv.uid)) show_estimate(job);
+  estimate_job_free(job);
+  if (g_dv.est.again) estimate_start();
+}
+
+/* Waits for the thread and drops its result, and anything queued: before sync goes. */
+static void estimate_cancel(void) {
+  KillTimer(g_dv.parent, ID_DEV_ESTIMATE_TIMER);
+  if (g_dv.est.thread) {
+    WaitForSingleObject(g_dv.est.thread, INFINITE);
+    CloseHandle(g_dv.est.thread);
+    g_dv.est.thread = NULL;
+  }
+  MSG msg;
+  while (g_dv.estimate && PeekMessageW(&msg, g_dv.estimate, WM_ESTIMATE_DONE, WM_ESTIMATE_DONE, PM_REMOVE))
+    estimate_job_free((estimate_job *)msg.lParam);
+  g_dv.est.again = FALSE;
+}
+
+static LRESULT CALLBACK estimate_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+  (void)id, (void)data;
+  if (msg == WM_ESTIMATE_DONE) {
+    estimate_done((estimate_job *)lp);
+    return 0;
+  }
+  return DefSubclassProc(wnd, msg, wp, lp);
+}
+
 /* --- Applying edits --- */
 
 /* Applies the pending edits now: get, change, set. */
@@ -763,6 +916,7 @@ static void CALLBACK apply_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
 
 static void schedule(void) {
   SetTimer(g_dv.parent, ID_DEV_APPLY_TIMER, APPLY_DELAY_MS, apply_timer);
+  estimate_request(); /* for the edited profile, not waiting for it to be stored */
 }
 
 static void CALLBACK tick_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
@@ -1089,6 +1243,8 @@ void device_view_create(HWND parent, const device_view_host *host) {
   SendMessageW(g_dv.budget_size, EM_LIMITTEXT, 5, 0);
   SetWindowSubclass(g_dv.budget_size, edit_proc, 0, 0);
   g_dv.budget_unit = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_BUDGET_UNIT), line, ID_DEV_BUDGET_UNIT);
+  g_dv.estimate = child(WC_STATICW, NULL, label, ID_DEV_ESTIMATE);
+  SetWindowSubclass(g_dv.estimate, estimate_proc, 0, 0); /* receives the estimate's thread's results */
 
   g_dv.heading = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_WHAT_TO_SYNC), line, ID_DEV_HEADING);
   g_dv.note = child(WC_STATICW, NULL, label, ID_DEV_NOTE);
@@ -1118,6 +1274,7 @@ void device_view_create(HWND parent, const device_view_host *host) {
 }
 
 void device_view_destroy(void) {
+  estimate_cancel();
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
   KillTimer(g_dv.parent, ID_DEV_TICK_TIMER);
   KillTimer(g_dv.parent, ID_DEV_REFRESH_TIMER);
@@ -1168,7 +1325,8 @@ void device_view_set_font(HFONT font, UINT dpi) {
   SendMessageW(g_dv.heading, WM_SETFONT, (WPARAM)g_dv.heading_font, TRUE);
   HWND body[] = {g_dv.sync_now, g_dv.remove, g_dv.status, g_dv.files, g_dv.progress_text, g_dv.message,
                  g_dv.notice, g_dv.name_label, g_dv.name_edit, g_dv.format_label, g_dv.format, g_dv.budget_label,
-                 g_dv.budget_size, g_dv.budget_unit, g_dv.note, g_dv.sync_all_label, g_dv.list, g_dv.count};
+                 g_dv.budget_size, g_dv.budget_unit, g_dv.estimate, g_dv.note, g_dv.sync_all_label, g_dv.list,
+                 g_dv.count};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
   for (int i = 0; i < NUM_TABS; i++) InvalidateRect(g_dv.tabs[i], NULL, FALSE);
   set_check_images();
@@ -1178,7 +1336,8 @@ static HWND *all_controls(size_t *n) {
   static HWND all[32];
   HWND list[] = {g_dv.icon, g_dv.title, g_dv.sync_now, g_dv.remove, g_dv.status, g_dv.files, g_dv.progress,
                  g_dv.progress_text, g_dv.message, g_dv.notice, g_dv.name_label, g_dv.name_edit, g_dv.format_label,
-                 g_dv.format, g_dv.budget, g_dv.budget_label, g_dv.budget_size, g_dv.budget_unit, g_dv.heading,
+                 g_dv.format, g_dv.budget, g_dv.budget_label, g_dv.budget_size, g_dv.budget_unit, g_dv.estimate,
+                 g_dv.heading,
                  g_dv.note, g_dv.sync_all, g_dv.sync_all_label, g_dv.tabs[0], g_dv.tabs[1], g_dv.tabs[2],
                  g_dv.tabs[3], g_dv.list, g_dv.count};
   memcpy(all, list, sizeof list);
@@ -1331,7 +1490,12 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   place(g_dv.budget_size, dev, bx, top + (field_h - edit_h) / 2, size_w, edit_h);
   bx += size_w + S(8);
   place(g_dv.budget_unit, dev, bx, top + (field_h - line_h) / 2, unit_w, line_h);
-  if (dev) top += field_h + S(24);
+  if (dev) top += field_h;
+  BOOL estimate = dev && has_text(g_dv.estimate);
+  int eh = estimate ? text_height(g_dv.estimate, g_dv.font, right - field_x) : 0;
+  place(g_dv.estimate, estimate, field_x, top + S(4), right - field_x, eh);
+  if (estimate) top += eh + S(4);
+  if (dev) top += S(24);
 
   /* What to sync. */
   int hh = text_height(g_dv.heading, g_dv.heading_font, text_w);
@@ -1382,6 +1546,8 @@ void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
   pending_clear();
   BOOL same = sync && sync == g_dv.sync && uid && !strcmp(uid, g_dv.uid);
+  if (sync != g_dv.sync) estimate_cancel(); /* it uses the old one */
+  if (!same) set_estimate(NULL, FALSE);
   g_dv.sync = sync;
   g_dv.lib = lib;
   if (!same) {
@@ -1618,6 +1784,11 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
     color = IsWindowEnabled(g_dv.sync_all) ? theme.text : theme.text3;
   else if (wnd == g_dv.budget || wnd == g_dv.sync_all)
     color = theme.text;
+  else if (wnd == g_dv.estimate)
+    /* Fluent's caution colours, for the line that says it doesn't fit. */
+    color = !g_dv.est.over || theme.high_contrast ? (g_dv.est.over ? theme.text : theme.text2)
+            : theme.dark                          ? RGB(0xFC, 0xE1, 0x00)
+                                                  : RGB(0x9D, 0x5D, 0x00);
   else
     return NULL;
   SetTextColor(dc, color);
