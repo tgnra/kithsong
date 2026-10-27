@@ -29,6 +29,7 @@ typedef struct tile {
   wchar_t *artist;    /* NULL if unknown */
   int year;           /* 0 if unknown */
   wchar_t *cover_dir; /* NULL when the album has no cover */
+  wchar_t *cover_file; /* a playlist's picture, once the loader has looked; NULL if it has none */
   wchar_t sub[64];    /* beneath a playlist's name: its track count (albums show the artist) */
   HBITMAP thumb;      /* premultiplied, with rounded corners */
   const uint32_t *pixels;
@@ -49,6 +50,7 @@ typedef struct thumb_result {
   UINT gen;
   HBITMAP bmp; /* NULL if decoding failed */
   const uint32_t *pixels;
+  wchar_t *file; /* a playlist's picture, or NULL */
 } thumb_result;
 
 static struct {
@@ -56,6 +58,7 @@ static struct {
   mc_library *lib;
   BOOL dirty;     /* reload when next shown */
   BOOL playlists; /* showing playlists rather than albums */
+  BOOL tiles_playlists; /* the tiles are playlists' (playlists switches before the reload) */
   tile *tiles;
   int count;
   UINT gen; /* bumped on every reload, so late thumbnails for old tiles are dropped */
@@ -85,8 +88,11 @@ static struct {
   int busy_index; /* job the loader is working on, or -1 */
   UINT busy_gen;
   UINT loader_gen; /* gen the queued jobs belong to */
-  wchar_t **dirs;  /* snapshot of cover folders for the loader, per gen */
+  wchar_t **dirs;  /* snapshot of cover folders (for playlists, their uids) for the loader, per gen */
   int dir_count;
+  BOOL loader_playlists; /* the snapshot is of playlists */
+  char *lib_dir;         /* the library's folder, for the loader's own connection, per gen */
+  char *art_dir;         /* where playlists' pictures are cached */
   BOOL quit;
 } g;
 
@@ -104,12 +110,40 @@ static wchar_t *widen(const char *s) {
 
 /* --- Cover loading (loader thread) --- */
 
+/* The loader's own connection to the library, for playlists' pictures: making one decodes
+ * four covers, which would hold up the UI thread's connection. */
+typedef struct art_source {
+  mc_library *lib;
+  char *dir;
+} art_source;
+
+/* The picture file of playlist uid (see mc_playlist_art()), or NULL if it has none. Opens
+ * the library in lib_dir first, if it isn't the one open. */
+static wchar_t *playlist_art(art_source *src, const char *lib_dir, const char *art_dir, const wchar_t *uid) {
+  if (!lib_dir || !art_dir || !uid) return NULL;
+  if (src->lib && strcmp(src->dir, lib_dir)) {
+    mc_library_close(src->lib);
+    free(src->dir);
+    src->lib = NULL;
+    src->dir = NULL;
+  }
+  if (!src->lib && mc_library_open(lib_dir, &src->lib) == MC_OK) src->dir = _strdup(lib_dir);
+  if (!src->lib || !src->dir) return NULL;
+  char *u = wstr_to_utf8(uid), *path = NULL;
+  if (u) mc_playlist_art(src->lib, u, art_dir, &path);
+  free(u);
+  wchar_t *file = widen(path);
+  mc_free(path);
+  return file;
+}
+
 static DWORD WINAPI loader_main(void *arg) {
   (void)arg;
   CoInitializeEx(NULL, COINIT_MULTITHREADED);
   IWICImagingFactory *wic = NULL;
   CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory,
                    (void **)&wic);
+  art_source art = {0};
 
   for (;;) {
     EnterCriticalSection(&g.lock);
@@ -124,6 +158,9 @@ static DWORD WINAPI loader_main(void *arg) {
     UINT gen = g.loader_gen;
     /* Copy the folder: the UI thread may swap the snapshot as soon as we let go. */
     wchar_t *dir = job.index < g.dir_count && g.dirs[job.index] ? _wcsdup(g.dirs[job.index]) : NULL;
+    BOOL playlist = g.loader_playlists;
+    char *lib_dir = playlist && g.lib_dir ? _strdup(g.lib_dir) : NULL;
+    char *art_dir = playlist && g.art_dir ? _strdup(g.art_dir) : NULL;
     g.busy_index = job.index;
     g.busy_gen = gen;
     LeaveCriticalSection(&g.lock);
@@ -131,19 +168,29 @@ static DWORD WINAPI loader_main(void *arg) {
     thumb_result *r = malloc(sizeof *r);
     if (!r) {
       free(dir);
+      free(lib_dir);
+      free(art_dir);
       continue;
     }
     r->index = job.index;
     r->size = job.size;
     r->gen = gen;
     r->pixels = NULL;
-    r->bmp = wic && dir ? cover_decode(wic, dir, job.size, job.radius, &r->pixels) : NULL;
+    r->file = playlist ? playlist_art(&art, lib_dir, art_dir, dir) : NULL;
+    if (!wic) r->bmp = NULL;
+    else if (playlist) r->bmp = r->file ? cover_decode_file(wic, r->file, job.size, job.radius, &r->pixels) : NULL;
+    else r->bmp = dir ? cover_decode(wic, dir, job.size, job.radius, &r->pixels) : NULL;
     free(dir);
+    free(lib_dir);
+    free(art_dir);
     if (!PostMessageW(g.wnd, WM_APP_THUMB, 0, (LPARAM)r)) {
       if (r->bmp) DeleteObject(r->bmp);
+      free(r->file);
       free(r);
     }
   }
+  if (art.lib) mc_library_close(art.lib);
+  free(art.dir);
   if (wic) IWICImagingFactory_Release(wic);
   CoUninitialize();
   return 0;
@@ -219,9 +266,10 @@ static void visible_range(int *first, int *last) {
   if (*last >= g.count) *last = g.count - 1;
 }
 
+/* Every playlist is looked up: only the loader finds out whether it has a picture. */
 static BOOL wants_thumb(int i) {
   const tile *t = &g.tiles[i];
-  return t->cover_dir && !t->failed && (!t->thumb || t->stale || t->thumb_size != g.tile_w);
+  return (t->cover_dir || g.tiles_playlists) && !t->failed && (!t->thumb || t->stale || t->thumb_size != g.tile_w);
 }
 
 /* Tells the loader what to decode next: what's on screen first, then one screen below,
@@ -263,15 +311,23 @@ static void request_thumbs(void) {
   }
 }
 
+static void notify_selection(void);
+
 static void on_thumb(thumb_result *r) {
   if (r->gen != g.gen || r->index < 0 || r->index >= g.count) {
     if (r->bmp) DeleteObject(r->bmp);
+    free(r->file);
     free(r);
     return;
   }
   int index = r->index;
   tile *t = &g.tiles[index];
   free_thumb(t);
+  /* A selected playlist's new picture is news: the track list shows it too. */
+  BOOL changed = !r->file != !t->cover_file || (r->file && wcscmp(r->file, t->cover_file));
+  free(t->cover_file);
+  t->cover_file = r->file;
+  if (changed && index == g.selected) notify_selection();
   if (r->bmp) {
     t->thumb = r->bmp;
     t->pixels = r->pixels;
@@ -309,7 +365,8 @@ const wchar_t *album_grid_selection_artist(void) {
 }
 
 const wchar_t *album_grid_selection_cover(void) {
-  return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].cover_dir : NULL;
+  if (g.selected < 0 || g.selected >= g.count) return NULL;
+  return g.tiles_playlists ? g.tiles[g.selected].cover_file : g.tiles[g.selected].cover_dir;
 }
 
 int album_grid_selection_year(void) {
@@ -327,6 +384,7 @@ static void clear_tiles(void) {
     free_thumb(&g.tiles[i]);
     free(g.tiles[i].title);
     free(g.tiles[i].artist);
+    free(g.tiles[i].cover_file);
   }
   free(g.tiles);
   g.tiles = NULL;
@@ -353,18 +411,20 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
   mc_album_list_free(list);
 }
 
-/* The playlists' tiles: no cover, and the track count beneath the name. */
+/* The playlists' tiles: the loader finds their pictures by uid, and the track count goes
+ * beneath the name. */
 static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
   mc_playlist_list *list = NULL;
   if (g.lib) mc_library_list_playlists(g.lib, &list);
   *n = list ? list->count : 0;
   *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
-  *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL; /* all NULL: nothing to load */
+  *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL;
   if (*n && (!*tiles || !*dirs)) *n = 0;
   for (int i = 0; i < *n; i++) {
     const mc_playlist_info *p = &list->items[i];
     tile *t = &(*tiles)[i];
     memcpy(t->uid, p->uid, sizeof t->uid);
+    (*dirs)[i] = widen(p->uid);
     t->title = widen(p->name && *p->name ? p->name : mc_str(MC_STR_UNTITLED));
     mc_wformat(t->sub, sizeof t->sub / sizeof t->sub[0], mc_str_plural(MC_STR_TRACKS, p->track_count),
                MC_D(p->track_count));
@@ -380,19 +440,26 @@ static int old_tile_sort(const void *a, const void *b) {
   return strcmp(g.tiles[*(const int *)a].uid, g.tiles[*(const int *)b].uid);
 }
 
-/* Moves the old tiles' thumbnails to the new ones of the same album and cover folder, so a
- * reload (as sync brings albums in) doesn't blank the covers. They're marked stale and
- * decoded again, since the cover may have changed. */
-static void carry_thumbs(tile *tiles, int n) {
+/* Moves the old tiles' thumbnails to the new ones of the same album and cover folder (or the
+ * same playlist), so a reload (as sync brings albums in) doesn't blank the covers. They're
+ * marked stale and decoded again, since the cover may have changed: a playlist's picture
+ * does whenever a track that changes it comes or goes. */
+static void carry_thumbs(tile *tiles, int n, BOOL playlists) {
   int *order = g.count && n ? malloc((size_t)g.count * sizeof *order) : NULL;
   if (!order) return;
   for (int i = 0; i < g.count; i++) order[i] = i;
   qsort(order, (size_t)g.count, sizeof *order, old_tile_sort);
   for (int i = 0; i < n; i++) {
-    if (!tiles[i].cover_dir) continue;
+    if (!playlists && !tiles[i].cover_dir) continue;
     const int *at = bsearch(tiles[i].uid, order, (size_t)g.count, sizeof *order, old_tile_cmp);
     tile *old = at ? &g.tiles[*at] : NULL;
-    if (!old || !old->thumb || !old->cover_dir || wcscmp(old->cover_dir, tiles[i].cover_dir)) continue;
+    if (!old || !old->thumb) continue;
+    if (playlists) {
+      tiles[i].cover_file = old->cover_file; /* until the loader looks again */
+      old->cover_file = NULL;
+    } else if (!old->cover_dir || wcscmp(old->cover_dir, tiles[i].cover_dir)) {
+      continue;
+    }
     tiles[i].thumb = old->thumb;
     tiles[i].pixels = old->pixels;
     tiles[i].thumb_size = old->thumb_size;
@@ -410,6 +477,7 @@ static void reload(void) {
   int n;
   if (g.playlists) read_playlists(&tiles, &dirs, &n);
   else read_albums(&tiles, &dirs, &n);
+  char *lib_dir = g.lib ? _strdup(mc_library_dir(g.lib)) : NULL;
   int selected = -1;
   for (int i = 0; i < n; i++)
     if (g.selected_uid[0] && !strcmp(tiles[i].uid, g.selected_uid)) selected = i;
@@ -420,7 +488,8 @@ static void reload(void) {
   if (selected >= 0 && g.selected >= 0 && g.selected < g.count &&
       !tiles[selected].cover_dir != !g.tiles[g.selected].cover_dir)
     renamed = TRUE;
-  carry_thumbs(tiles, n);
+  if (!g.playlists == !g.tiles_playlists) carry_thumbs(tiles, n, g.playlists);
+  g.tiles_playlists = g.playlists;
 
   /* Swap in the new data; the loader's snapshot of folders changes under the lock. */
   clear_tiles();
@@ -432,6 +501,9 @@ static void reload(void) {
   free(g.dirs);
   g.dirs = dirs;
   g.dir_count = n;
+  g.loader_playlists = g.playlists;
+  free(g.lib_dir);
+  g.lib_dir = lib_dir;
   LeaveCriticalSection(&g.lock);
   g.tiles = tiles;
   g.count = n;
@@ -463,6 +535,13 @@ void album_grid_show_playlists(BOOL playlists) {
 
 BOOL album_grid_showing_playlists(void) {
   return g.playlists;
+}
+
+void album_grid_set_playlist_art_dir(const char *dir) {
+  EnterCriticalSection(&g.lock);
+  free(g.art_dir);
+  g.art_dir = dir ? _strdup(dir) : NULL;
+  LeaveCriticalSection(&g.lock);
 }
 
 void album_grid_set_library(mc_library *lib) {
@@ -737,6 +816,8 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       clear_tiles();
       for (int i = 0; i < g.dir_count; i++) free(g.dirs[i]);
       free(g.dirs);
+      free(g.lib_dir);
+      free(g.art_dir);
       free(g.queue);
       canvas_free(&g.buf);
       if (g.glyph_font) DeleteObject(g.glyph_font);

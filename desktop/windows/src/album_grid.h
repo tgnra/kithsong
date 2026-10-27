@@ -5,6 +5,7 @@
  *  - virtualised: only the tiles in view are painted, into an off-screen buffer.
  *  - covers are decoded on a background thread with WIC, scaled down during decoding to
  *    exactly the tile size, visible tiles first and one screen ahead in each direction.
+ *    Playlists' pictures are made there too (mc_playlist_art()), on its own connection.
  *  - thumbnails far from the view are freed, so memory stays flat however many albums.
  *  - pixel scrolling, with the mouse wheel eased over a few frames, and a thin overlay
  *    scrollbar that appears while the mouse moves over the grid or it scrolls.
@@ -29,13 +30,18 @@ HWND album_grid_create(HWND parent, int id);
  * an import) costs nothing. Call it again whenever the library changes. */
 void album_grid_set_library(mc_library *lib);
 
-/* Switches the grid between the albums and the playlists (a placeholder for the cover, and
- * the track count beneath the name). Switching drops the selection. */
+/* Switches the grid between the albums and the playlists (their pictures, or a placeholder,
+ * and the track count beneath the name). Switching drops the selection. */
 void album_grid_show_playlists(BOOL playlists);
 BOOL album_grid_showing_playlists(void);
 
+/* Where playlists' pictures are cached (UTF-8; see mc_playlist_art()). Without one,
+ * playlists show the placeholder. */
+void album_grid_set_playlist_art_dir(const char *dir);
+
 /* Sent to the parent as a WM_COMMAND notification code (posted) when the selected album
- * changes, by a click or because it left the library, or when it was renamed. */
+ * changes, by a click or because it left the library, or when it was renamed or its cover
+ * changed. */
 #define AGN_SELCHANGE 1
 
 /* The selected album (or playlist): copies its uid and returns its title, or returns NULL
@@ -43,8 +49,9 @@ BOOL album_grid_showing_playlists(void);
 const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]);
 /* The selected album's artist, or NULL. Valid until the grid next reloads. */
 const wchar_t *album_grid_selection_artist(void);
-/* The folder holding the selected album's cover, or NULL if it has none (or none is
- * selected). Valid until the grid next reloads. */
+/* The folder holding the selected album's cover, or for a playlist its picture file, or
+ * NULL if it has none (or none is selected). Valid until the grid next reloads or loads
+ * the cover. */
 const wchar_t *album_grid_selection_cover(void);
 /* The selected album's year, or 0 if it's unknown (or none is selected). */
 int album_grid_selection_year(void);

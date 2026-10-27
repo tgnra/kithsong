@@ -128,6 +128,7 @@ typedef struct app {
   mc_settings *settings;
   mc_library *lib;
   char *config_dir;        /* UTF-8: settings.json and sync.db */
+  char *art_dir;           /* UTF-8: playlists' pictures, in config_dir */
   BOOL refresh_pending;    /* TIMER_REFRESH_DEVICES is set */
   BOOL library_pending;    /* TIMER_REFRESH_LIBRARY is set */
   char syncing[MAX_SYNCING][MC_UID_STRLEN]; /* devices with a session in progress */
@@ -408,6 +409,7 @@ static void create_controls(void) {
   g_app.sidebar = sidebar_create(g_app.wnd, ID_SIDEBAR);
 
   g_app.grid = album_grid_create(g_app.wnd, ID_GRID);
+  album_grid_set_playlist_art_dir(g_app.art_dir);
   g_app.tracks = track_list_create(g_app.wnd, ID_TRACKS);
   g_app.now_playing = now_playing_create(g_app.wnd, ID_NOW_PLAYING);
   refresh_library();
@@ -1133,6 +1135,37 @@ static char *choose_library_dir(HWND owner, const char *current) {
   return NULL;
 }
 
+/* Clears playlists' pictures out of the cache when their playlists have gone, on a thread
+ * with its own connection, since it looks each one up. arg is the library folder and the
+ * cache folder, malloc'd. */
+static DWORD WINAPI prune_art_main(void *arg) {
+  char **dirs = arg;
+  mc_library *lib = NULL;
+  if (mc_library_open(dirs[0], &lib) == MC_OK) {
+    mc_playlist_art_prune(lib, dirs[1]);
+    mc_library_close(lib);
+  }
+  free(dirs[0]);
+  free(dirs[1]);
+  free(dirs);
+  return 0;
+}
+
+static void prune_art(void) {
+  char **dirs = g_app.lib && g_app.art_dir ? calloc(2, sizeof *dirs) : NULL;
+  if (!dirs) return;
+  dirs[0] = _strdup(mc_library_dir(g_app.lib));
+  dirs[1] = _strdup(g_app.art_dir);
+  HANDLE thread = dirs[0] && dirs[1] ? CreateThread(NULL, 0, prune_art_main, dirs, 0, NULL) : NULL;
+  if (thread) {
+    CloseHandle(thread);
+  } else {
+    free(dirs[0]);
+    free(dirs[1]);
+    free(dirs);
+  }
+}
+
 /* The library in dir, or NULL after saying why it couldn't be opened. */
 static mc_library *open_library(const char *dir) {
   mc_library *lib = NULL;
@@ -1213,6 +1246,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
                   MB_OK | MB_ICONWARNING);
   }
   g_app.lib = open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
+  size_t art_len = strlen(g_app.config_dir) + sizeof "\\" MC_PLAYLIST_ART_CACHE_DIR;
+  if ((g_app.art_dir = malloc(art_len)))
+    snprintf(g_app.art_dir, art_len, "%s\\%s", g_app.config_dir, MC_PLAYLIST_ART_CACHE_DIR);
+  prune_art();
 
   WNDCLASSEXW wc = {
     .cbSize = sizeof wc,
@@ -1254,6 +1291,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   mc_library_close(g_app.lib); /* sync stopped in WM_DESTROY */
   mc_settings_free(g_app.settings);
   free(g_app.config_dir);
+  free(g_app.art_dir);
   mc_shutdown();
   CoUninitialize();
   if (g_app.font) DeleteObject(g_app.font);

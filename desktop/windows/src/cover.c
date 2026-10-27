@@ -7,8 +7,6 @@
 
 #include "canvas.h"
 
-/* WIC's JPEG decoder does most of the downscaling while decoding, which is what makes this
- * fast. */
 HBITMAP cover_decode(IWICImagingFactory *wic, const wchar_t *dir, int size, int radius,
                      const uint32_t **pixels) {
   wchar_t path[MAX_PATH * 2];
@@ -18,7 +16,14 @@ HBITMAP cover_decode(IWICImagingFactory *wic, const wchar_t *dir, int size, int 
     found = swprintf(path, MAX_PATH * 2, L"%ls\\%ls", dir, names[i]) > 0 &&
             GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
   }
-  if (!found || size <= 0) return NULL;
+  return found ? cover_decode_file(wic, path, size, radius, pixels) : NULL;
+}
+
+/* WIC's JPEG decoder does most of the downscaling while decoding, which is what makes this
+ * fast. */
+HBITMAP cover_decode_file(IWICImagingFactory *wic, const wchar_t *path, int size, int radius,
+                          const uint32_t **pixels) {
+  if (!path || size <= 0) return NULL;
 
   IWICBitmapDecoder *decoder = NULL;
   IWICBitmapFrameDecode *frame = NULL;

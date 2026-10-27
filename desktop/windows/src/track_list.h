@@ -57,8 +57,9 @@ void track_list_update(UINT dpi);
 void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist);
 /* The header's details for the album shown: its artist (NULL shows "Unknown Artist"), year
  * (0 if unknown) and the folder holding its cover (NULL if there's none). Call after
- * track_list_show. A playlist's header shows "Playlist" for the artist. */
-void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover_dir);
+ * track_list_show. A playlist's header shows "Playlist" for the artist, and cover is its
+ * picture file (see mc_playlist_art()) rather than a folder. */
+void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover);
 
 /* The shown tracks, in order, for the play queue. Valid until the list next changes. */
 typedef struct track_list_item {

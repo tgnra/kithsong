@@ -81,7 +81,7 @@ static struct {
   int year;            /* 0 if unknown */
   int total_ms;        /* the tracks' length */
   wchar_t summary[128]; /* "1997 · 12 tracks · 47 min" */
-  wchar_t *cover_dir;  /* NULL if the album has no cover */
+  wchar_t *cover_dir;  /* NULL if the album has no cover; a playlist's picture file */
   HBITMAP art;         /* the cover, premultiplied, with rounded corners; NULL shows the placeholder */
   const uint32_t *art_px;
   int art_size;
@@ -294,7 +294,9 @@ static void load_art(void) {
     CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory,
                      (void **)&s.wic);
   s.art_size = scale(COVER);
-  if (s.wic) s.art = cover_decode(s.wic, s.cover_dir, s.art_size, scale(COVER_RADIUS), &s.art_px);
+  if (!s.wic) return;
+  if (s.playlist) s.art = cover_decode_file(s.wic, s.cover_dir, s.art_size, scale(COVER_RADIUS), &s.art_px);
+  else s.art = cover_decode(s.wic, s.cover_dir, s.art_size, scale(COVER_RADIUS), &s.art_px);
 }
 
 void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover_dir) {
