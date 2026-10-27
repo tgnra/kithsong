@@ -136,7 +136,8 @@ Decisions:
 - Fake data: launch with `--ez fake true`, or `--ez fake_empty true` for the empty state.
 - Kotlin and Coil were not upgraded.
 
-Loading test data (debug builds):
+Loading test data (debug builds; the receiver has since been removed with import, so this
+no longer works):
 
 1. Launch the app and send `adb shell am broadcast -n app.musicapp/.DebugImportReceiver` once,
    so the app creates its own `import` folder (folders created by adb aren't readable by it).
@@ -204,6 +205,9 @@ Open issues:
 ## Phase 5: import, permissions and settings
 
 Import, its permission flow and a settings screen work on the emulator. No core C code changed.
+
+**Import has since been removed from Android** (see "Sync page, import removed" below); this
+records how it worked, for bringing it back.
 
 Files, under `android/`:
 
@@ -273,8 +277,9 @@ Files, under `android/`:
 
 Decisions:
 
-- Sync lives in a Devices section at the top of Settings, not a header icon: pairing is rare,
-  syncing is automatic, and it mirrors the desktop's devices list. The Add Device dialog uses
+- Sync lived in a Devices section at the top of Settings, not a header icon: pairing is rare,
+  syncing is automatic, and it mirrors the desktop's devices list. (It has since moved to its
+  own page behind a header icon; see below.) The Add Device dialog uses
   the desktop's wording and fields. The pairing code dialog can appear over any screen, since
   the other device can start pairing.
 - Sync runs while the app is on screen, with a `dataSync` foreground service during a session
@@ -294,12 +299,44 @@ file transfer, and syncing with the desktop app.
 
 Open issues:
 
-- Android sometimes runs the background worker while it blocks the app's network, and the
-  core's sessions then hang instead of timing out. The worker retries later; the hang needs a
-  fix in the core.
-- The same album imported on two devices: how to merge it is an open question in the protocol
-  doc.
+- Android sometimes runs the background worker while it blocks the app's network. The core
+  now times sessions out when the peer goes silent, so they fail and back off rather than hang.
 - The emulator's library now has a synced 4-track playlist and a few extra plays.
+
+### File transfer and profiles
+
+Once the core gained its file phase, the phone got audio file transfer and the bridge for sync
+profiles. No core C changed, and no UI yet: a profile editor is to be built on `Syncer`'s API.
+
+- **Where files go:** the core writes received files into the library folder, and the phone's
+  is in internal no-backup storage (`MusicApp.libraryDir`), so synced music never lands on an
+  SD card. Free space for the profile budget is measured there too. Nothing else needed
+  configuring: the core serves this phone's own files to the others by itself, and never
+  transcodes for others on a phone.
+- **Progress:** `SyncStatus.sessions` maps each member a session is running with to a
+  `SyncProgress` (phase, rows, files done of total, bytes both ways); `SyncStatus.results` keeps
+  each member's last `SyncDone` (files received, missing, corrupt, deleted, sent). `SyncDevice`
+  carries each member's own file report (expected, ok, missing, corrupt, bytes, verified time).
+  The notification shows "n of m files" with a progress bar during the file phase.
+- **Library refresh:** after a session that brought rows or received or deleted files (even a
+  failed one, since files that arrived whole are kept), and every 10 s while files arrive, so a
+  long transfer fills the library as it goes and playback finds the files.
+- **Staying alive:** the foreground service already covers a whole session, file phase
+  included; its wake lock is now renewed on every progress step, so its 30-minute safety net
+  only fires if sync stalls. The multicast lock is held while sync runs. The background worker
+  waits up to 9 minutes (a worker gets 10); a transfer cut off keeps the files that arrived
+  and the next run fetches the rest. Unreachable members now count as done at once, so the
+  worker doesn't wait out its timeout on an offline desktop.
+- **Profiles:** `Syncer.profile()`, `editProfile()` (read-modify-write on the sync thread, then
+  `mc_sync_notify_changed`), `setArchive()`, `estimate()` and `verify()`, all suspending and run
+  on the sync thread, throwing `MusicCoreException`. `SyncProfile` mirrors `mc_sync_profile`.
+- `CoreSync.Phase` lacked `Files`, so the file phase's progress events would have crashed the
+  listener (index out of range on `Done`).
+
+Tested: `:app:assembleDebug` and `:wear:assembleDebug` build. Not tested at all: no device or
+emulator run, so file transfer, profile reads and writes through JNI, the estimate, the
+notification and the worker's longer wait are all unverified on Android. The core's own tests
+cover the file phase and profiles on the host.
 
 ## Phase 7: polish
 
@@ -326,6 +363,64 @@ apps' native libraries pass the 16 KB alignment check. No core C changed.
 
 Not checked: the themed launcher icon on screen, and the import and sync notification icons.
 
+## Sync page, import removed
+
+- The header's import button is now a sync button. It opens a Sync page (`ui/SyncScreen.kt`)
+  with what was the Devices section of Settings: this phone, the group's devices with their
+  status, Sync now, nearby devices, Add Device by address and Leave Group. Settings keeps a row
+  that opens it. Tapping a device, this phone included, opens its page: status, last sync,
+  address, archive, Sync now and Remove from group, and a placeholder Profile section where the
+  profile editor goes.
+- Import is gone from Android for now: `importer/`, `ui/ImportUi.kt`, the debug import receiver,
+  the progress card, the import settings and the music permission, `READ_MEDIA_AUDIO` and
+  `READ_EXTERNAL_STORAGE`, and `requestLegacyExternalStorage`. Music reaches the phone by sync.
+  `CoreImport.kt` and its JNI functions are still in `:native`, unused. To bring import back,
+  start from the Phase 5 files in git history.
+
+## Profile editor and device pages
+
+The Profile section of a device's page (`ui/ProfileEditor.kt`) edits any member's profile,
+this phone's included, with the Windows device page's semantics and wording (its strings moved
+to `shared`):
+
+- Sync everything, or a selection chosen on a full-screen list with tabs for albums, artists,
+  playlists and album groups. These come from the whole library by the core's uids, not just
+  what has files here: the bridge gained `CoreLibrary.artists()` and `albumGroups()`
+  (`mc_library_list_artists`, `mc_library_list_album_groups`), so artists are selectable by
+  real uid. Smart lists are left out, as profiles take manual ones only.
+- Original files or Opus at each bitrate, each with its size from the estimate; a size budget
+  (switch and GB, 32 GB by default, in units of 1024 as on Windows).
+- The archive switch: making a device one asks first, with the size of the whole library as
+  originals; only this phone's own page can turn it off, and the core's refusal (`ERR_LOCKED`)
+  reads "This phone can stop being an archive once another archive has checked...". An
+  archive's other settings are greyed out.
+- The estimate (tracks, size, the format a budget picks, over budget and by how much, the
+  room and free space) is worked out again 300 ms after each edit, on the sync thread.
+- Edits apply on their own 400 ms after the last one, as on Windows: only the changed fields
+  and items are applied over the profile as stored, so edits from other devices aren't lost;
+  edits left as the page closes are stored then.
+
+Device pages also show the device's file report (files OK of expected, missing, damaged, size,
+when last checked), sessions under way with their step, files and bytes and a progress bar
+(this phone's page lists every session), and how the last session went. The Sync page's rows
+add "3 of 10 files" while files come in.
+
+Renaming: the bridge gained `mc_sync_set_device_name`/`mc_sync_get_device_name`. This phone's
+page renames it (`Syncer.rename`), and the name is saved in `AppSettings.deviceName` and passed
+to `mc_sync_new` next time; one renamed by another member is taken on and saved the same way.
+A name equal to the system's isn't saved, so an unrenamed phone follows the system name. A
+member is renamed through its profile's name, as on Windows.
+
+Tested on the emulator against the Windows app (scratch library, `--config-dir`, paired by
+address at 10.0.2.2): pairing; the PC fetching the phone's 2,590 files; editing the PC's profile
+to a selection of 2 albums and an artist, Opus 128 and a 32 GB budget, which persisted across an
+app restart and which the PC applied (it kept 49 files and reported "49 of 49 files OK");
+making the PC an archive, after which it fetched the whole library again with progress on the
+phone; the refusal to stop this phone being an archive; renaming this phone. Not tested: the
+over-budget message (the test files are too small to exceed 1 GB), renaming a member, the
+selection list's album groups and playlists tabs with data, a group renaming this phone, dark
+theme.
+
 ## Follow-ups
 
 Core:
@@ -333,16 +428,14 @@ Core:
 - Import lookups: detect being offline, or offer an option to skip MusicBrainz, so offline
   import isn't slow and every item doesn't need a decision.
 - Importing the same files twice copies them again; skip files already in the library.
-- Sync doesn't transfer audio files yet.
-- Sync sessions hang instead of timing out when Android blocks the network.
-- Merging the same album imported on two devices is an open question in the protocol doc.
-- No artist or recents API; artists are derived from albums and some recents live in the app.
+- No artist or recents API for the main screen; artists there are derived from albums and some
+  recents live in the app (the profile editor uses the core's artist list).
 - No volume control, so the app can't duck itself on Android 7.
 - Desktop doesn't record plays yet; Android does.
 
 Desktop:
 
-- The Windows Add Device only logs a message, so phone-to-desktop sync is untested.
+- Phone-to-desktop sync and file transfer were tested with the Windows app on the emulator.
 
 Android:
 
@@ -350,7 +443,8 @@ Android:
 - Not yet tested: mDNS discovery and sync over real Wi-Fi, API 24-32 devices, audio focus during
   calls, and that plays land in the core's database.
 - Coil and MaterialKolor are held back until Kotlin moves to 2.4.
-- A screen for reviewing import items one at a time; files MediaStore hasn't indexed are missed.
+- Bring import back; it then needs a screen for reviewing items one at a time, and files
+  MediaStore hasn't indexed were missed.
 - Search.
 
 The emulator's test library has 5 albums with doubled tracks, a synced playlist and extra plays;

@@ -89,11 +89,6 @@ private sealed interface MainItem {
         override val contentType get() = "header"
     }
 
-    data object Banner : MainItem {
-        override val key get() = "banner"
-        override val contentType get() = "banner"
-    }
-
     data object Empty : MainItem {
         override val key get() = "empty"
         override val contentType get() = "empty"
@@ -130,9 +125,8 @@ private sealed interface MainItem {
 }
 
 // Null while the library is being read: just the header, rather than a flash of the empty state.
-private fun mainItems(library: Library?, columns: Int, banner: Boolean): List<MainItem> = buildList {
+private fun mainItems(library: Library?, columns: Int): List<MainItem> = buildList {
     add(MainItem.Header)
-    if (banner) add(MainItem.Banner)
     if (library == null) return@buildList
     if (library.isEmpty) {
         add(MainItem.Empty)
@@ -167,17 +161,15 @@ private val ListArtSize = 56.dp
 
 /**
  * The main screen: one lazy list of a header and the library's sections. [bottomPadding]
- * keeps the last items clear of the mini player and navigation bar. [banner], if any, goes
- * under the header: how an import is going.
+ * keeps the last items clear of the mini player and navigation bar.
  */
 @Composable
 fun MainScreen(
     library: Library?,
     bottomPadding: Dp,
     onOpen: (CollectionRef) -> Unit,
-    onImport: () -> Unit,
+    onSync: () -> Unit,
     onSettings: () -> Unit,
-    banner: (@Composable (Modifier) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -190,8 +182,7 @@ fun MainScreen(
         val cellPx = with(density) { ((width - Gutter * 2 - CellSpacing * (columns - 1)) / columns).roundToPx() }
         val statusBarPx = WindowInsets.statusBars.getTop(density)
 
-        val hasBanner = banner != null
-        val items = remember(library, columns, hasBanner) { mainItems(library, columns, hasBanner) }
+        val items = remember(library, columns) { mainItems(library, columns) }
         val sections = remember(items) {
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
@@ -220,8 +211,7 @@ fun MainScreen(
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {
-                    MainItem.Header -> Header(onImport, onSettings)
-                    MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
+                    MainItem.Header -> Header(onSync, onSettings)
                     MainItem.Empty -> EmptyLibrary()
                     is MainItem.Heading -> SectionHeading(item.section, sections, { current }, jumpTo)
                     is MainItem.RecentItem -> LibraryRow(
@@ -246,9 +236,9 @@ fun MainScreen(
     }
 }
 
-/** The app title, with import and settings. It scrolls away with the list. */
+/** The app title, with sync and settings. It scrolls away with the list. */
 @Composable
-private fun Header(onImport: () -> Unit, onSettings: () -> Unit) {
+private fun Header(onSync: () -> Unit, onSettings: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -261,7 +251,7 @@ private fun Header(onImport: () -> Unit, onSettings: () -> Unit) {
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.weight(1f).semantics { heading() },
         )
-        IconButton(onClick = onImport) { Icon(Icons.Import, contentDescription = stringResource(R.string.import_music)) }
+        IconButton(onClick = onSync) { Icon(Icons.Sync, contentDescription = stringResource(R.string.sync)) }
         IconButton(onClick = onSettings) { Icon(Icons.Settings, contentDescription = stringResource(R.string.settings)) }
     }
 }
@@ -393,7 +383,7 @@ private fun LazyItemScope.EmptyLibrary() {
             modifier = Modifier.padding(top = 16.dp),
         )
         Text(
-            stringResource(R.string.empty_text),
+            stringResource(R.string.empty_text_sync),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

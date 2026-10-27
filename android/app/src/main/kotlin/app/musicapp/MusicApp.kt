@@ -10,7 +10,6 @@ import app.musicapp.data.CollectionRef
 import app.musicapp.data.CoreLibrarySource
 import app.musicapp.data.FakeLibrary
 import app.musicapp.data.LibrarySource
-import app.musicapp.importer.Importer
 import app.musicapp.playback.FakePlayback
 import app.musicapp.playback.Playback
 import app.musicapp.playback.PlaybackService
@@ -25,14 +24,14 @@ import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.runBlocking
 
 /**
- * Holds the library, the player, the importer and sync for the life of the process, so they
- * outlive the activity. All come from the core; the player plays in [PlaybackService], and
- * [playback] is the UI's connection to it. Imports run in the background too ([Importer]), and
- * sync runs while the app is on screen and now and then in the background ([Syncer]).
+ * Holds the library, the player and sync for the life of the process, so they outlive the
+ * activity. All come from the core; the player plays in [PlaybackService], and [playback] is
+ * the UI's connection to it. Sync runs while the app is on screen and now and then in the
+ * background ([Syncer]).
  */
 class MusicApp : Application(), SingletonImageLoader.Factory {
     /**
-     * The library folder: library.db and the music, which import copies in. It's in the app's
+     * The library folder: library.db and the music, which sync brings in. It's in the app's
      * internal no-backup storage, never on an SD card: the music is far too big for Auto
      * Backup, and a library.db restored onto a new phone would carry this phone's sync node id
      * with it.
@@ -44,10 +43,6 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
     lateinit var playback: Playback
         private set
     lateinit var settings: AppSettings
-        private set
-
-    /** Imports into the core's library, even while the made-up one is shown. */
-    lateinit var importer: Importer
         private set
 
     /** Syncs the core's library with this phone's group, even while the made-up one is shown. */
@@ -75,10 +70,13 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
         library = core
         playback = SessionPlayback(this, MainScope())
         settings = AppSettings(getSharedPreferences("app", MODE_PRIVATE))
-        importer = Importer(this, core, MainScope())
         // sync.db holds this phone's keys, so it's in no-backup storage like the library: a
-        // restored copy on another phone would pose as this one.
-        syncer = Syncer(this, core, File(noBackupFilesDir, "sync"), deviceName(), MainScope())
+        // restored copy on another phone would pose as this one. A name the system's isn't
+        // saved, so the phone follows the system's while it hasn't been renamed.
+        val name = settings.deviceName ?: systemDeviceName()
+        syncer = Syncer(this, core, File(noBackupFilesDir, "sync"), name, MainScope()) { renamed ->
+            settings.deviceName = renamed.takeIf { it != systemDeviceName() }
+        }
         core.onChanged = syncer::notifyChanged
     }
 
@@ -89,9 +87,9 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
         if (NativeCore.followLocale(newConfig)) (library as? CoreLibrarySource)?.refresh()
     }
 
-    // What other devices call this phone: the name set in the system settings (API 25+), else
-    // its model.
-    private fun deviceName(): String {
+    // What other devices call this phone unless it's renamed: the name set in the system
+    // settings (API 25+), else its model.
+    private fun systemDeviceName(): String {
         val name = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
             Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
         } else {

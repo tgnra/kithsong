@@ -83,6 +83,31 @@ data class TrackList(
     val albumCount: Int = 0,
 )
 
+/**
+ * Something a sync profile can select: an album (with its [artist] and [year], 0 if unknown),
+ * an artist or an album group (with its [albumCount]), or a playlist.
+ */
+@Immutable
+data class ProfileChoice(
+    val uid: String,
+    val name: String,
+    val artist: String? = null,
+    val year: Int = 0,
+    val albumCount: Int = 0,
+)
+
+/**
+ * What a sync profile can select, from the whole library rather than just what's on this
+ * phone: every album, artist, manual playlist and manual album group, by the core's uids.
+ */
+@Immutable
+data class ProfileChoices(
+    val albums: List<ProfileChoice>,
+    val artists: List<ProfileChoice>,
+    val playlists: List<ProfileChoice>,
+    val albumGroups: List<ProfileChoice>,
+)
+
 /** Where the UI gets the library from: the core ([CoreLibrarySource]) or [FakeLibrary]. */
 interface LibrarySource {
     /** The library, or null until it has been read for the first time. */

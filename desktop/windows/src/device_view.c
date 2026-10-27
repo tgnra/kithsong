@@ -64,10 +64,10 @@ enum { TAB_ALBUMS, TAB_ARTISTS, TAB_PLAYLISTS, TAB_GROUPS, NUM_TABS };
 static const mc_profile_item_kind k_tab_kind[NUM_TABS] = {MC_PROFILE_ALBUM, MC_PROFILE_ARTIST,
                                                           MC_PROFILE_PLAYLIST, MC_PROFILE_ALBUM_GROUP};
 static const enum mc_str_id k_tab_name[NUM_TABS] = {MC_STR_SECTION_ALBUMS, MC_STR_SECTION_ARTISTS,
-                                                    MC_STR_SECTION_PLAYLISTS, MC_STR_WINDOWS_SECTION_ALBUM_GROUPS};
+                                                    MC_STR_SECTION_PLAYLISTS, MC_STR_SECTION_ALBUM_GROUPS};
 /* A selection's count of each tab's items, "3 albums". */
-static const enum mc_str_id k_tab_count[NUM_TABS] = {MC_STR_WINDOWS_COUNT_ALBUMS, MC_STR_WINDOWS_COUNT_ARTISTS,
-                                                     MC_STR_WINDOWS_COUNT_PLAYLISTS, MC_STR_WINDOWS_COUNT_ALBUM_GROUPS};
+static const enum mc_str_id k_tab_count[NUM_TABS] = {MC_STR_COUNT_ALBUMS, MC_STR_COUNT_ARTISTS,
+                                                     MC_STR_COUNT_PLAYLISTS, MC_STR_COUNT_ALBUM_GROUPS};
 
 /* Which fields of the profile have edits waiting to be applied. */
 enum { PEND_FORMAT = 1, PEND_BUDGET = 2, PEND_SYNC_ALL = 4 };
@@ -196,13 +196,13 @@ static wchar_t *fmt_count(int64_t n, wchar_t *out, int cap) {
 }
 
 static wchar_t *fmt_size(int64_t bytes, wchar_t *out, int cap) {
-  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_WINDOWS_SIZE_KB, MC_STR_WINDOWS_SIZE_MB,
-                                         MC_STR_WINDOWS_SIZE_GB, MC_STR_WINDOWS_SIZE_TB};
+  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_SIZE_KB, MC_STR_SIZE_MB,
+                                         MC_STR_SIZE_GB, MC_STR_SIZE_TB};
   double v = (double)bytes;
   int u = 0;
   while (v >= 1024.0 && u < 4) v /= 1024.0, u++;
   if (u == 0) {
-    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_WINDOWS_SIZE_BYTES, (long)bytes), MC_D((int)bytes));
+    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_SIZE_BYTES, (long)bytes), MC_D((int)bytes));
   } else {
     char num[32];
     snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
@@ -499,18 +499,18 @@ static void update_status(void) {
   if (g_dv.found && g_dv.has_status) {
     wchar_t ok[32], expected[32], n[32], size[32];
     const wchar_t *sep = mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR);
-    mc_wformat(text, 256, mc_str_plural(MC_STR_WINDOWS_FILES_OK, (long)g_dv.expected),
+    mc_wformat(text, 256, mc_str_plural(MC_STR_FILES_OK, (long)g_dv.expected),
                MC_S(u8(fmt_count(g_dv.ok, ok, 32))), MC_S(u8(fmt_count(g_dv.expected, expected, 32))));
     size_t used = wcslen(text);
     if (g_dv.missing > 0) {
       used += (size_t)swprintf(text + used, 256 - used, L"%ls", sep);
-      mc_wformat(text + used, 256 - used, mc_str(MC_STR_WINDOWS_FILES_MISSING),
+      mc_wformat(text + used, 256 - used, mc_str(MC_STR_FILES_MISSING),
                  MC_S(u8(fmt_count(g_dv.missing, n, 32))));
       used = wcslen(text);
     }
     if (g_dv.corrupt > 0) {
       used += (size_t)swprintf(text + used, 256 - used, L"%ls", sep);
-      mc_wformat(text + used, 256 - used, mc_str(MC_STR_WINDOWS_FILES_DAMAGED),
+      mc_wformat(text + used, 256 - used, mc_str(MC_STR_FILES_DAMAGED),
                  MC_S(u8(fmt_count(g_dv.corrupt, n, 32))));
       used = wcslen(text);
     }
@@ -519,11 +519,11 @@ static void update_status(void) {
   SetWindowTextW(g_dv.files, text);
 
   static const enum mc_str_id phases[] = {
-    [MC_SYNC_PHASE_CONNECTING] = MC_STR_WINDOWS_PHASE_CONNECTING,
-    [MC_SYNC_PHASE_GROUP] = MC_STR_WINDOWS_PHASE_GROUP,
-    [MC_SYNC_PHASE_LIBRARY] = MC_STR_WINDOWS_PHASE_LIBRARY,
-    [MC_SYNC_PHASE_FILES] = MC_STR_WINDOWS_PHASE_FILES,
-    [MC_SYNC_PHASE_DONE] = MC_STR_WINDOWS_PHASE_DONE,
+    [MC_SYNC_PHASE_CONNECTING] = MC_STR_PHASE_CONNECTING,
+    [MC_SYNC_PHASE_GROUP] = MC_STR_PHASE_GROUP,
+    [MC_SYNC_PHASE_LIBRARY] = MC_STR_PHASE_LIBRARY,
+    [MC_SYNC_PHASE_FILES] = MC_STR_PHASE_FILES,
+    [MC_SYNC_PHASE_DONE] = MC_STR_PHASE_DONE,
   };
   text[0] = L'\0';
   if (syncing()) {
@@ -538,7 +538,7 @@ static void update_status(void) {
                  MC_S(u8(fmt_size(g_dv.bytes_received, size, 32))));
     } else if (g_dv.phase == MC_SYNC_PHASE_FILES) { /* fetching nothing; maybe serving */
       wchar_t received[32], sent[32];
-      mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROGRESS_BYTES), MC_S(u8(phase)),
+      mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROGRESS_SIZES), MC_S(u8(phase)),
                  MC_S(u8(fmt_size(g_dv.bytes_received, received, 32))),
                  MC_S(u8(fmt_size(g_dv.bytes_sent, sent, 32))));
     } else {
@@ -590,8 +590,8 @@ static void update_count(void) {
       used += (size_t)mc_format(counts + used, sizeof counts - used, mc_str_plural(k_tab_count[i], n), MC_D(n));
   }
   wchar_t text[256];
-  if (counts[0]) mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_COUNT_SELECTED), MC_S(counts));
-  else swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_NOTHING_SELECTED));
+  if (counts[0]) mc_wformat(text, 256, mc_str(MC_STR_COUNT_SELECTED), MC_S(counts));
+  else swprintf(text, 256, L"%ls", mc_wstr(MC_STR_NOTHING_SELECTED));
   SetWindowTextW(g_dv.count, text);
 }
 
@@ -644,7 +644,7 @@ static void update_controls(BOOL force) {
   wchar_t note[256] = L"";
   if (p && p->archive) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_DEVICE_ARCHIVE_NOTE));
   else if (!p && g_dv.found && !g_dv.removed)
-    mc_wformat(note, 256, mc_str(MC_STR_WINDOWS_PROFILE_READ_FAILED), MC_S(mc_status_str(g_dv.profile_status)));
+    mc_wformat(note, 256, mc_str(MC_STR_PROFILE_READ_FAILED), MC_S(mc_status_str(g_dv.profile_status)));
   SetWindowTextW(g_dv.note, note);
 
   update_count();
@@ -724,7 +724,7 @@ static const char *item_row(const tab_items *items, int i, wchar_t *text, int ca
     count = items->groups->items[i].album_count;
   }
   detail[0] = L'\0';
-  if (count > 0) mc_wformat(detail, (size_t)detail_cap, mc_str_plural(MC_STR_WINDOWS_COUNT_ALBUMS, count), MC_D(count));
+  if (count > 0) mc_wformat(detail, (size_t)detail_cap, mc_str_plural(MC_STR_COUNT_ALBUMS, count), MC_D(count));
   return uid;
 }
 
@@ -841,17 +841,17 @@ static void show_estimate(const estimate_job *job) {
     /* Free space, when it is less than the budget, is what it had to fit in. */
     int64_t budget = job->profile.budget_bytes;
     BOOL by_free = e->free_bytes >= 0 && (budget <= 0 || e->limit_bytes < budget);
-    mc_wformat(text, 256, mc_str(by_free ? MC_STR_WINDOWS_ESTIMATE_OVER_FREE : MC_STR_WINDOWS_ESTIMATE_OVER),
+    mc_wformat(text, 256, mc_str(by_free ? MC_STR_ESTIMATE_OVER_FREE : MC_STR_ESTIMATE_OVER),
                MC_S(u8(fmt_size(e->shortfall_bytes, a, 32))), MC_S(u8(fmt_size(e->limit_bytes, b, 32))));
   } else if (job->status == MC_OK) {
-    enum mc_str_id id = MC_STR_WINDOWS_ESTIMATE_SIZE;
+    enum mc_str_id id = MC_STR_ESTIMATE_SIZE;
     if (job->profile.format.format == MC_FORMAT_AUTO && !e->archive)
-      id = e->kbps ? MC_STR_WINDOWS_ESTIMATE_AUTO_OPUS : MC_STR_WINDOWS_ESTIMATE_AUTO_ORIGINAL;
+      id = e->kbps ? MC_STR_ESTIMATE_AUTO_OPUS : MC_STR_ESTIMATE_AUTO_ORIGINAL;
     mc_wformat(text, 256, mc_str_plural(id, e->tracks), MC_S(u8(fmt_size(e->total_bytes, a, 32))),
                MC_S(u8(fmt_count(e->tracks, b, 32))), MC_D(e->kbps));
   } else if (job->status != MC_ERR_LIBRARY_MISMATCH && job->status != MC_ERR_NOT_FOUND) {
     /* Another library open, or the device gone: the page says so already. */
-    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_ESTIMATE_FAILED), MC_S(mc_status_str(job->status)));
+    mc_wformat(text, 256, mc_str(MC_STR_ESTIMATE_FAILED), MC_S(mc_status_str(job->status)));
   }
   set_estimate(text, over);
 }
@@ -949,10 +949,10 @@ static void flush(void) {
   mc_sync_profile_free(p);
   pending_clear();
   if (st == MC_ERR_LOCKED) {
-    set_message(mc_wstr(MC_STR_WINDOWS_PROFILE_LOCKED));
+    set_message(mc_wstr(MC_STR_PROFILE_LOCKED));
   } else if (st != MC_OK) {
     wchar_t text[256];
-    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROFILE_SAVE_FAILED), MC_S(mc_status_str(st)));
+    mc_wformat(text, 256, mc_str(MC_STR_PROFILE_SAVE_FAILED), MC_S(mc_status_str(st)));
     set_message(text);
   }
   /* What's stored now, which may include others' edits made meanwhile. */
@@ -1006,7 +1006,7 @@ static void apply_name(void) {
   }
   if (st != MC_OK) {
     wchar_t text[256];
-    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_DEVICE_RENAME_FAILED), MC_S(mc_status_str(st)));
+    mc_wformat(text, 256, mc_str(MC_STR_DEVICE_RENAME_FAILED), MC_S(mc_status_str(st)));
     set_message(text);
     SetWindowTextW(g_dv.name_edit, g_dv.name);
     layout_again();
@@ -1271,15 +1271,15 @@ void device_view_create(HWND parent, const device_view_host *host) {
   theme_center_edit(g_dv.name_edit);
   SendMessageW(g_dv.name_edit, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
   SetWindowSubclass(g_dv.name_edit, edit_proc, 0, 0);
-  g_dv.format_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_FORMAT), line, ID_DEV_FORMAT_LABEL);
+  g_dv.format_label = child(WC_STATICW, mc_wstr(MC_STR_SYNC_FORMAT), line, ID_DEV_FORMAT_LABEL);
   g_dv.format = child(WC_COMBOBOXW, NULL, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_DEV_FORMAT);
-  int i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_WINDOWS_FORMAT_AUTO));
+  int i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_FORMAT_AUTO));
   SendMessageW(g_dv.format, CB_SETITEMDATA, (WPARAM)i, AUTO_ITEM);
-  i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_WINDOWS_FORMAT_ORIGINAL));
+  i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_FORMAT_ORIGINAL));
   SendMessageW(g_dv.format, CB_SETITEMDATA, (WPARAM)i, 0);
   for (int b = 0; b < MC_OPUS_BITRATE_COUNT; b++) {
     wchar_t text[32];
-    mc_wformat(text, 32, mc_str(MC_STR_WINDOWS_FORMAT_OPUS), MC_D(mc_opus_bitrates[b]));
+    mc_wformat(text, 32, mc_str(MC_STR_FORMAT_OPUS), MC_D(mc_opus_bitrates[b]));
     i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)text);
     SendMessageW(g_dv.format, CB_SETITEMDATA, (WPARAM)i, (LPARAM)mc_opus_bitrates[b]);
   }
@@ -1289,22 +1289,22 @@ void device_view_create(HWND parent, const device_view_host *host) {
   /* Checkboxes have no text of their own: a themed checkbox's text stays black in dark
    * mode, so each has a label beside it, which toggles it too. */
   g_dv.budget = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_BUDGET);
-  g_dv.budget_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_BUDGET_LIMIT), line | SS_NOTIFY, ID_DEV_BUDGET_LABEL);
+  g_dv.budget_label = child(WC_STATICW, mc_wstr(MC_STR_BUDGET_LIMIT), line | SS_NOTIFY, ID_DEV_BUDGET_LABEL);
   g_dv.budget_size = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
                                      0, 0, 0, 0, parent, (HMENU)(INT_PTR)ID_DEV_BUDGET_SIZE, GetModuleHandleW(NULL),
                                      NULL);
   theme_center_edit(g_dv.budget_size);
   SendMessageW(g_dv.budget_size, EM_LIMITTEXT, 5, 0);
   SetWindowSubclass(g_dv.budget_size, edit_proc, 0, 0);
-  g_dv.budget_unit = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_BUDGET_UNIT), line, ID_DEV_BUDGET_UNIT);
+  g_dv.budget_unit = child(WC_STATICW, mc_wstr(MC_STR_BUDGET_UNIT), line, ID_DEV_BUDGET_UNIT);
   g_dv.estimate = child(WC_STATICW, NULL, label, ID_DEV_ESTIMATE);
   SetWindowSubclass(g_dv.estimate, estimate_proc, 0, 0); /* receives the estimate's thread's results */
 
-  g_dv.heading = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_WHAT_TO_SYNC), line, ID_DEV_HEADING);
+  g_dv.heading = child(WC_STATICW, mc_wstr(MC_STR_WHAT_TO_SYNC), line, ID_DEV_HEADING);
   g_dv.note = child(WC_STATICW, NULL, label, ID_DEV_NOTE);
   g_dv.sync_all = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_SYNC_ALL);
   g_dv.sync_all_label =
-    child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_EVERYTHING), line | SS_NOTIFY, ID_DEV_SYNC_ALL_LABEL);
+    child(WC_STATICW, mc_wstr(MC_STR_SYNC_EVERYTHING), line | SS_NOTIFY, ID_DEV_SYNC_ALL_LABEL);
   for (int t = 0; t < NUM_TABS; t++) {
     g_dv.tabs[t] = child(WC_BUTTONW, mc_wstr(k_tab_name[t]), BS_OWNERDRAW | WS_TABSTOP, ID_DEV_TAB + t);
     SetWindowSubclass(g_dv.tabs[t], tab_proc, 0, (DWORD_PTR)t);
@@ -1666,7 +1666,7 @@ void device_view_on_sync_event(const sync_event *ev) {
         /* One that got past connecting is reported by on_sync_done, which says how it went;
          * until then the bar shows full. */
         if (!syncing() && g_dv.phase != MC_SYNC_PHASE_CONNECTING) {
-          swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_PHASE_DONE));
+          swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_PHASE_DONE));
           set_finished(TRUE);
         }
         update_status();
@@ -1697,9 +1697,9 @@ void device_view_on_sync_event(const sync_event *ev) {
         if (g_dv.is_self && ev->name[0])
           mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_SYNC_FAILED_WITH), MC_S(u8(ev->name)),
                      MC_S(mc_status_str(ev->status)));
-        else mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_SYNC_FAILED), MC_S(mc_status_str(ev->status)));
+        else mc_wformat(text, 256, mc_str(MC_STR_SYNC_FAILED), MC_S(mc_status_str(ev->status)));
       } else if (!ev->library_synced) {
-        swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_SYNC_DEVICE_LIST_ONLY));
+        swprintf(text, 256, L"%ls", mc_wstr(MC_STR_SYNC_DEVICE_LIST_ONLY));
       }
       set_message(text);
       /* The finished bar says what came in; a failure says so in the message instead. */
@@ -1788,13 +1788,13 @@ BOOL device_view_on_notify(const NMHDR *nm, LRESULT *result) {
       break;
     }
     case LVN_GETEMPTYMARKUP: {
-      static const enum mc_str_id none[NUM_TABS] = {MC_STR_WINDOWS_NO_ALBUMS, MC_STR_WINDOWS_NO_ARTISTS,
-                                                    MC_STR_WINDOWS_NO_PLAYLISTS, MC_STR_WINDOWS_NO_ALBUM_GROUPS};
+      static const enum mc_str_id none[NUM_TABS] = {MC_STR_NO_ALBUMS, MC_STR_NO_ARTISTS,
+                                                    MC_STR_NO_PLAYLISTS, MC_STR_NO_ALBUM_GROUPS};
       NMLVEMPTYMARKUP *em = (NMLVEMPTYMARKUP *)nm;
       em->dwFlags = EMF_CENTERED;
       if (g_dv.rows_status == MC_OK) swprintf(em->szMarkup, L_MAX_URL_LENGTH, L"%ls", mc_wstr(none[g_dv.tab]));
       else
-        mc_wformat(em->szMarkup, L_MAX_URL_LENGTH, mc_str(MC_STR_WINDOWS_LIST_FAILED),
+        mc_wformat(em->szMarkup, L_MAX_URL_LENGTH, mc_str(MC_STR_LIST_FAILED),
                    MC_S(mc_status_str(g_dv.rows_status)));
       *result = TRUE;
       break;

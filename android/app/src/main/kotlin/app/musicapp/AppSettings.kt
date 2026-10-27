@@ -7,36 +7,21 @@ import android.content.SharedPreferences
  * only holds the library folder, which on a phone is always in the app's storage.
  */
 class AppSettings(private val prefs: SharedPreferences) {
-    /** Download covers for imported albums that have none (mc_import_options.fetch_art). */
-    var fetchArt: Boolean
-        get() = prefs.getBoolean(KEY_FETCH_ART, true)
-        set(value) = prefs.edit().putBoolean(KEY_FETCH_ART, value).apply()
-
     /** The notification permission is asked for once, unprompted; settings can ask again. */
     var askedForNotifications: Boolean
         get() = prefs.getBoolean(KEY_ASKED_FOR_NOTIFICATIONS, false)
         set(value) = prefs.edit().putBoolean(KEY_ASKED_FOR_NOTIFICATIONS, value).apply()
 
     /**
-     * Whether the audio permission has been asked for: once it has, a denial with no
-     * rationale to show means it was denied for good, and only the system settings can grant it.
+     * What this phone was renamed to, here or by another device in its group; null goes by the
+     * name set in the system settings.
      */
-    var askedForAudio: Boolean
-        get() = prefs.getBoolean(KEY_ASKED_FOR_AUDIO, false)
-        set(value) = prefs.edit().putBoolean(KEY_ASKED_FOR_AUDIO, value).apply()
-
-    /**
-     * Folders imported before. The core copies files in without checking for ones it already
-     * has, so importing a folder again would duplicate it; the import sheet leaves these unticked.
-     */
-    var importedFolders: Set<String>
-        get() = prefs.getStringSet(KEY_IMPORTED_FOLDERS, null).orEmpty()
-        set(value) = prefs.edit().putStringSet(KEY_IMPORTED_FOLDERS, value).apply()
+    var deviceName: String?
+        get() = prefs.getString(KEY_DEVICE_NAME, null)
+        set(value) = prefs.edit().putString(KEY_DEVICE_NAME, value).apply()
 
     private companion object {
-        const val KEY_FETCH_ART = "fetch_art"
         const val KEY_ASKED_FOR_NOTIFICATIONS = "asked_for_notifications"
-        const val KEY_ASKED_FOR_AUDIO = "asked_for_audio"
-        const val KEY_IMPORTED_FOLDERS = "imported_folders"
+        const val KEY_DEVICE_NAME = "device_name"
     }
 }

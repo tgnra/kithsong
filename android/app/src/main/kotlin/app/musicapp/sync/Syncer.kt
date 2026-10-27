@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.Immutable
 import app.musicapp.ConfirmState
@@ -12,7 +13,11 @@ import app.musicapp.MusicCoreException
 import app.musicapp.NearbyDevice
 import app.musicapp.R
 import app.musicapp.SyncDevice
+import app.musicapp.SyncEstimate
+import app.musicapp.SyncProfile
+import app.musicapp.VerifyResult
 import app.musicapp.data.CoreLibrarySource
+import app.musicapp.data.ProfileChoices
 import java.io.File
 import java.net.Inet4Address
 import kotlinx.coroutines.CoroutineScope
@@ -41,10 +46,28 @@ sealed interface Pairing {
     data class Ended(val peer: String, val reason: CoreSync.PairReason, val initiator: Boolean) : Pairing
 }
 
+/** How far a session with a member has got (mc_sync_progress). */
+@Immutable
+data class SyncProgress(
+    val phase: CoreSync.Phase,
+    /** Change rows, for the whole session so far. */
+    val rowsSent: Long = 0,
+    val rowsReceived: Long = 0,
+    /**
+     * The files this phone is fetching in this session: [filesDone] (received, failed or
+     * refused) of [filesTotal]. Set from [CoreSync.Phase.Files] on, and kept from then.
+     */
+    val filesDone: Int = 0,
+    val filesTotal: Int = 0,
+    /** File bytes both ways, for the whole session so far. */
+    val bytesReceived: Long = 0,
+    val bytesSent: Long = 0,
+)
+
 /** What the devices section of settings and the pairing dialog show. */
 @Immutable
 data class SyncStatus(
-    /** What other devices call this phone. */
+    /** What other devices call this phone; see [Syncer.rename]. */
     val deviceName: String,
     /** Listening, discovering and syncing; only while something holds it (see [Syncer.hold]). */
     val running: Boolean = false,
@@ -56,17 +79,24 @@ data class SyncStatus(
     val address: String? = null,
     val port: Int = 0,
     val libraryState: CoreSync.LibraryState = CoreSync.LibraryState.NoGroup,
+    /** This phone as a member of the group, e.g. for its uid and file status; null outside one. */
+    val self: SyncDevice? = null,
     /** The other members of the group, removed ones left out, by name. */
     val members: List<SyncDevice> = emptyList(),
     /** Whether this phone's own files sync on their own; null outside a group. */
     val selfConfirm: ConfirmState? = null,
     /** Devices on the network that aren't in the group, by name. */
     val nearby: List<NearbyDevice> = emptyList(),
-    /** The members a session is running with. */
-    val syncing: Set<String> = emptySet(),
+    /** The sessions running, by member uid. */
+    val sessions: Map<String, SyncProgress> = emptyMap(),
+    /** How the last session with each member since sync started ended, by member uid. */
+    val results: Map<String, CoreSync.Event.SyncDone> = emptyMap(),
     val pairing: Pairing? = null,
 ) {
     val inGroup: Boolean get() = libraryState != CoreSync.LibraryState.NoGroup
+
+    /** The members a session is running with. */
+    val syncing: Set<String> get() = sessions.keys
 
     /** Something is under way that shouldn't be cut off: a session or a pairing. */
     val busy: Boolean get() = syncing.isNotEmpty() || pairing is Pairing.EnterCode || pairing is Pairing.ShowCode
@@ -79,9 +109,18 @@ data class SyncStatus(
  * while a session or pairing is under way, and [SyncWorker] now and then in the background. A
  * phone app in the background may be frozen at any moment, so it doesn't listen all the time.
  *
- * Synced data lands in [source]'s library, in the app's own storage, which is read again after
- * every session that brought something. Every call on the core runs on one thread ([thread]);
- * the core's events arrive on its threads and are queued over to that one.
+ * Synced data and audio files land in [source]'s library folder, in the app's own storage (the
+ * core's file phase writes into the library folder, never anywhere else, so never on an SD
+ * card). The library is read again after every session that brought or removed something, and
+ * now and then while files arrive. This phone serves its own files to the others too; the core
+ * does that on its own. What files it holds follows its profile ([profile], [editProfile]),
+ * which any member may edit.
+ *
+ * This phone starts out as [deviceName]. Renamed here ([rename]) or by another member, it takes
+ * on the new name and passes it to [onRenamed], to be saved and given as [deviceName] next time.
+ *
+ * Every call on the core runs on one thread ([thread]); the core's events arrive on its threads
+ * and are queued over to that one.
  */
 class Syncer(
     private val context: Context,
@@ -89,6 +128,7 @@ class Syncer(
     private val configDir: File,
     deviceName: String,
     private val scope: CoroutineScope,
+    private val onRenamed: (String) -> Unit = {},
 ) {
     private val thread = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow(SyncStatus(deviceName))
@@ -108,6 +148,10 @@ class Syncer(
 
     // Sessions that have ended, for [syncOnce] to wait on. Only touched on [thread].
     private val done = MutableStateFlow(emptySet<String>())
+
+    // When the library was last read again for files that arrived (elapsed realtime). Only
+    // touched on [thread].
+    private var lastFilesRefresh = 0L
 
     init {
         scope.launch(thread) {
@@ -174,8 +218,97 @@ class Syncer(
         refreshLists(sync)
     }
 
+    /** Renames this phone, for the whole group when in one. Works whether sync runs or not. */
+    fun rename(name: String) {
+        scope.launch(thread) {
+            val sync = sync ?: return@launch
+            try {
+                sync.deviceName = name
+            } catch (e: MusicCoreException) {
+                Log.w(TAG, "Couldn't rename this phone", e)
+                return@launch
+            }
+            sync.notifyChanged()
+            refreshLists(sync)
+        }
+    }
+
     /** The library changed here, so the other devices should hear of it soon. */
     fun notifyChanged() = call { it.notifyChanged() }
+
+    // Profiles. These work whenever sync has been opened, running or not (the app holds it
+    // while on screen), and throw MusicCoreException: ERR_NOT_FOUND if it hasn't been or this
+    // phone isn't in a group, or [uid] isn't a member; see CoreSync for the others.
+
+    /** [uid]'s profile, this phone's ([SyncStatus.self]) or any other member's. */
+    suspend fun profile(uid: String): SyncProfile = onCore { it.profile(uid) }
+
+    /**
+     * Changes [uid]'s profile with [edit], applied to the one stored now and stored straight
+     * away, so edits made meanwhile on other devices to other fields or items aren't
+     * overwritten. Returns what's stored afterwards, which may include such edits. The name of
+     * this phone's own profile is what the group calls it, so leave it be and [rename] instead.
+     * ERR_LOCKED for an archive's mode, format or budget switch.
+     */
+    suspend fun editProfile(uid: String, edit: (SyncProfile) -> SyncProfile): SyncProfile = onCore { sync ->
+        val stored = sync.profile(uid)
+        val edited = edit(stored)
+        if (edited == stored) return@onCore stored
+        sync.setProfile(uid, edited)
+        // The core passes it on by itself too; this just makes sure it's soon.
+        sync.notifyChanged()
+        // A member's name is its profile's.
+        refreshLists(sync)
+        sync.profile(uid)
+    }
+
+    /**
+     * [editProfile] for when nobody waits on the result, such as edits left over as the editor
+     * closes; failures are only logged.
+     */
+    fun editProfileLater(uid: String, edit: (SyncProfile) -> SyncProfile) {
+        scope.launch {
+            try {
+                editProfile(uid, edit)
+            } catch (e: MusicCoreException) {
+                Log.w(TAG, "Couldn't store $uid's profile", e)
+            }
+        }
+    }
+
+    /**
+     * Makes [uid] an archive, keeping the whole library as originals, or stops it being one.
+     * Any member may make any device one; only this phone may stop being one itself, and only
+     * once another archive has verified it holds everything (ERR_LOCKED otherwise). Returns the
+     * profile as it now reads.
+     */
+    suspend fun setArchive(uid: String, archive: Boolean): SyncProfile = onCore { sync ->
+        sync.setArchive(uid, archive)
+        sync.notifyChanged()
+        refreshLists(sync)
+        sync.profile(uid)
+    }
+
+    /**
+     * How much [uid] would hold with [profile], stored or not (a profile editor's candidate):
+     * tracks, size, the bitrate a budget picks, or how far over budget it is. Reads every
+     * track, so it may take a moment on a big library. ERR_LIBRARY_MISMATCH if this phone's
+     * library isn't the group's.
+     */
+    suspend fun estimate(uid: String, profile: SyncProfile): SyncEstimate = onCore { it.estimate(uid, profile) }
+
+    /** What a profile can select, from the whole library. Throws MusicCoreException. */
+    suspend fun profileChoices(): ProfileChoices = source.profileChoices()
+
+    /**
+     * Checks this phone's files, [deep]ly by reading every one, else by size and time, and
+     * reports them to the group. Failed copies are deleted, to be fetched again. Waits for a
+     * file phase under way to end first, and holds up every other sync call until it's done,
+     * so a deep check is for when nothing else is going on.
+     */
+    suspend fun verify(deep: Boolean): VerifyResult = onCore { sync ->
+        sync.verify(deep).also { refreshLists(sync) }
+    }
 
     /**
      * Syncs with every member once, for [SyncWorker]: runs sync if it isn't running, and waits
@@ -237,6 +370,11 @@ class Syncer(
         }
     }
 
+    // Runs [block] on [thread] with sync as last opened, running or not, and returns its result.
+    private suspend fun <T> onCore(block: (CoreSync) -> T): T = withContext(thread) {
+        block(sync ?: throw MusicCoreException(CoreSync.ERR_NOT_FOUND))
+    }
+
     private inline fun update(change: SyncStatus.() -> SyncStatus) {
         state.value = state.value.change()
     }
@@ -276,7 +414,7 @@ class Syncer(
         if (holders.isNotEmpty() || !state.value.running) return
         sync.stop()
         multicastLock?.release()
-        update { copy(running = false, syncing = emptySet(), nearby = emptyList(), port = 0) }
+        update { copy(running = false, sessions = emptyMap(), nearby = emptyList(), port = 0) }
         Log.i(TAG, "Sync stopped")
     }
 
@@ -291,20 +429,62 @@ class Syncer(
                 startService()
             }
             is CoreSync.Event.PairResult -> onPairResult(event, pairing)
-            is CoreSync.Event.Progress -> if (event.phase != CoreSync.Phase.Done && event.uid !in state.value.syncing) {
-                update { copy(syncing = syncing + event.uid) }
-                startService()
-            }
+            is CoreSync.Event.Progress -> if (!onProgress(event)) return
             is CoreSync.Event.SyncDone -> {
-                Log.i(TAG, "Synced with ${event.uid}: status ${event.status}, ${event.rowsReceived} rows in, ${event.rowsSent} out")
-                update { copy(syncing = syncing - event.uid) }
+                Log.i(
+                    TAG,
+                    "Synced with ${event.uid}: status ${event.status}, ${event.rowsReceived} rows in, " +
+                        "${event.rowsSent} out, ${event.filesReceived} files in (${event.bytesReceived} bytes), " +
+                        "${event.filesSent} out, ${event.filesDeleted} deleted, ${event.filesMissing} missing, " +
+                        "${event.filesCorrupt} corrupt",
+                )
+                update { copy(sessions = sessions - event.uid, results = results + (event.uid to event)) }
                 done.value += event.uid
-                // Albums, playlists and plays from the other devices: the library and Recents.
-                if (event.status == 0 && event.rowsReceived > 0) source.refresh()
+                // Albums, playlists and plays from the other devices, and the files that arrived
+                // or went: the library and Recents. Files that arrived before a session failed
+                // are kept, so they count either way.
+                val rows = event.status == 0 && event.rowsReceived > 0
+                if (rows || event.filesReceived > 0 || event.filesDeleted > 0 || event.filesUnknown > 0) {
+                    source.refresh()
+                    lastFilesRefresh = SystemClock.elapsedRealtime()
+                }
             }
         }
         refreshLists(sync)
         stopIfIdle()
+    }
+
+    // On [thread]. Tracks a session's progress; true if the session just started or ended,
+    // so the lists should be read again. Most events are a file further on, so they don't.
+    private fun onProgress(event: CoreSync.Event.Progress): Boolean {
+        val before = state.value.sessions[event.uid]
+        if (event.phase == CoreSync.Phase.Done) {
+            update { copy(sessions = sessions - event.uid) }
+            // Never got past connecting: a scheduled attempt that found it unreachable, which
+            // no SyncDone reports.
+            if (before == null || before.phase == CoreSync.Phase.Connecting) done.value += event.uid
+            return true
+        }
+        val files = event.phase == CoreSync.Phase.Files
+        val progress = SyncProgress(
+            phase = event.phase,
+            rowsSent = event.rowsSent,
+            rowsReceived = event.rowsReceived,
+            filesDone = if (files) event.filesDone else before?.filesDone ?: 0,
+            filesTotal = if (files) event.filesTotal else before?.filesTotal ?: 0,
+            bytesReceived = if (files) event.bytesReceived else before?.bytesReceived ?: 0,
+            bytesSent = if (files) event.bytesSent else before?.bytesSent ?: 0,
+        )
+        update { copy(sessions = sessions + (event.uid to progress)) }
+        // Show what has arrived so far on a long transfer, rather than only at the end.
+        val now = SystemClock.elapsedRealtime()
+        if (files && progress.filesDone > (before?.filesDone ?: 0) && now - lastFilesRefresh >= FILES_REFRESH_MS) {
+            lastFilesRefresh = now
+            source.refresh()
+        }
+        if (before != null) return false
+        startService()
+        return true
     }
 
     // On [thread].
@@ -341,9 +521,14 @@ class Syncer(
         try {
             val devices = sync.devices()
             val libraryState = sync.libraryState
+            // Renamed here, or by another member in a session.
+            val name = sync.deviceName
+            if (name.isNotEmpty() && name != state.value.deviceName) onRenamed(name)
             update {
                 copy(
+                    deviceName = name.ifEmpty { deviceName },
                     libraryState = libraryState,
+                    self = devices.firstOrNull { it.isSelf },
                     members = devices.filter { !it.isSelf && !it.removed },
                     selfConfirm = devices.firstOrNull { it.isSelf }?.confirm,
                     nearby = if (running) sync.nearby() else emptyList(),
@@ -369,6 +554,7 @@ class Syncer(
         private const val TAG = "musicapp"
         private const val HOLDER_ONCE = "once"
         private const val START_TIMEOUT_MS = 10_000L
+        private const val FILES_REFRESH_MS = 10_000L
     }
 }
 

@@ -37,38 +37,36 @@ import androidx.compose.ui.unit.dp
 import app.musicapp.AppSettings
 import app.musicapp.data.CollectionRef
 import app.musicapp.data.LibrarySource
-import app.musicapp.importer.Importer
 import app.musicapp.playback.Playback
 import app.musicapp.sync.Syncer
 import app.musicapp.ui.theme.ArtTheme
 import java.io.File
 
 /**
- * The app's one screen: the main list, with settings or track list screens stacked over it,
- * then the mini player, then the full player. Navigation is this stack of [CollectionRef]s
- * and flags for settings and the player, so each layer can own its slide-in, drag-to-dismiss
- * and predictive back. The players take their colours from the album art. [onPlay] is called
- * when a track list starts playing, and [onImportStarted] when an import starts. Pairing with
- * another device shows over everything, as it can start from the other device at any time. [libraryDir]
- * is the library folder, for settings to show its size.
+ * The app's one screen: the main list, with settings, sync or track list screens stacked over
+ * it, then the mini player, then the full player. Navigation is this stack of [CollectionRef]s
+ * and flags for settings, sync, the device open from sync and the player, so each layer can own
+ * its slide-in, drag-to-dismiss and predictive back. The players take their colours from the
+ * album art. [onPlay] is called when a track list starts playing. Pairing with another device
+ * shows over everything, as it can start from the other device at any time. [libraryDir] is the
+ * library folder, for settings to show its size.
  */
 @Composable
 fun App(
     source: LibrarySource,
     playback: Playback,
-    importer: Importer,
     syncer: Syncer,
     settings: AppSettings,
     libraryDir: File,
     onPlay: () -> Unit = {},
-    onImportStarted: () -> Unit = {},
 ) {
     val library by source.library.collectAsState()
-    val importProgress by importer.progress.collectAsState()
     val stack = rememberSaveable(saver = StackSaver) { SnapshotStateList<CollectionRef>() }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    var syncOpen by rememberSaveable { mutableStateOf(false) }
+    // The device whose page is open over sync: a member's uid, or THIS_DEVICE.
+    var deviceOpen by rememberSaveable { mutableStateOf<String?>(null) }
     var playerOpen by rememberSaveable { mutableStateOf(false) }
-    var importOpen by rememberSaveable { mutableStateOf(false) }
     val track = playback.track
 
     // Lists end clear of the mini player, which sits above the navigation bar.
@@ -87,19 +85,40 @@ fun App(
                 library,
                 bottomPadding,
                 onOpen = open,
-                onImport = { importOpen = true },
+                onSync = { syncOpen = true },
                 onSettings = { settingsOpen = true },
-                banner = importProgress?.let { progress -> { modifier -> ImportCard(progress, importer, modifier) } },
-                modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen),
+                modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen),
             )
             if (settingsOpen) {
                 DismissibleScreen(
                     DismissDirection.Right,
                     onDismissed = { settingsOpen = false },
-                    backEnabled = !playerOpen,
-                    modifier = Modifier.coveredIf(playerOpen),
+                    backEnabled = !playerOpen && !syncOpen,
+                    modifier = Modifier.coveredIf(playerOpen || syncOpen),
                 ) { dismiss ->
-                    SettingsScreen(settings, syncer, libraryDir, bottomPadding, onBack = dismiss)
+                    SettingsScreen(settings, libraryDir, bottomPadding, onSync = { syncOpen = true }, onBack = dismiss)
+                }
+            }
+            if (syncOpen) {
+                DismissibleScreen(
+                    DismissDirection.Right,
+                    onDismissed = { syncOpen = false },
+                    backEnabled = !playerOpen && deviceOpen == null,
+                    modifier = Modifier.coveredIf(playerOpen || deviceOpen != null),
+                ) { dismiss ->
+                    SyncScreen(syncer, bottomPadding, onOpenDevice = { deviceOpen = it }, onBack = dismiss)
+                }
+            }
+            deviceOpen?.let { uid ->
+                key(uid) {
+                    DismissibleScreen(
+                        DismissDirection.Right,
+                        onDismissed = { deviceOpen = null },
+                        backEnabled = !playerOpen,
+                        modifier = Modifier.coveredIf(playerOpen),
+                    ) { dismiss ->
+                        DeviceScreen(syncer, uid, bottomPadding, onBack = dismiss, onRename = syncer::rename)
+                    }
                 }
             }
             stack.forEachIndexed { i, ref ->
@@ -146,9 +165,6 @@ fun App(
                         FullPlayer(playback, track, onCollapse = dismiss)
                     }
                 }
-            }
-            if (importOpen) {
-                ImportFlow(importer, settings, onStarted = onImportStarted, onClose = { importOpen = false })
             }
             // Over everything: another device may ask to pair at any time.
             PairingDialogs(syncer)

@@ -304,6 +304,83 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListSmart(JNI
   return out;
 }
 
+/* A NamedInfo[] of n items, item i's uid, name and album count from get(items, i), or NULL
+ * with an exception pending. */
+static jobjectArray named_array(JNIEnv *env, const void *items, int n,
+                                void (*get)(const void *, int, const char **, const char **, int *)) {
+  jclass info = (*env)->FindClass(env, "app/musicapp/NamedInfo");
+  if (!info) return NULL;
+  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V");
+  if (!ctor) return NULL;
+  jobjectArray out = (*env)->NewObjectArray(env, n, info, NULL);
+  for (int i = 0; out && i < n; i++) {
+    const char *cuid, *cname;
+    int count;
+    get(items, i, &cuid, &cname, &count);
+    jstring uid = new_string(env, cuid);
+    jstring name = new_string(env, cname ? cname : "");
+    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)count);
+    if (!item) {
+      out = NULL;
+      break;
+    }
+    (*env)->SetObjectArrayElement(env, out, i, item);
+    (*env)->DeleteLocalRef(env, item);
+    (*env)->DeleteLocalRef(env, uid);
+    (*env)->DeleteLocalRef(env, name);
+  }
+  return out;
+}
+
+static void artist_at(const void *items, int i, const char **uid, const char **name, int *count) {
+  const mc_artist_info *a = &((const mc_artist_info *)items)[i];
+  *uid = a->uid;
+  *name = a->name;
+  *count = a->album_count;
+}
+
+static void album_group_at(const void *items, int i, const char **uid, const char **name,
+                           int *count) {
+  const mc_album_group_info *g = &((const mc_album_group_info *)items)[i];
+  *uid = g->uid;
+  *name = g->name;
+  *count = g->album_count;
+}
+
+JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListArtists(JNIEnv *env,
+                                                                                jclass cls,
+                                                                                jlong handle) {
+  (void)cls;
+  mc_artist_list *list = NULL;
+  mc_status st = mc_library_list_artists((mc_library *)(intptr_t)handle, &list);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  /* An empty list may be NULL. */
+  jobjectArray out =
+    named_array(env, list ? list->items : NULL, list ? list->count : 0, artist_at);
+  mc_artist_list_free(list);
+  return out;
+}
+
+JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListAlbumGroups(JNIEnv *env,
+                                                                                    jclass cls,
+                                                                                    jlong handle) {
+  (void)cls;
+  mc_album_group_list *list = NULL;
+  mc_status st = mc_library_list_album_groups((mc_library *)(intptr_t)handle, &list);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  /* An empty list may be NULL. */
+  jobjectArray out =
+    named_array(env, list ? list->items : NULL, list ? list->count : 0, album_group_at);
+  mc_album_group_list_free(list);
+  return out;
+}
+
 /* --- CoreImport -------------------------------------------------------------------- */
 
 typedef struct jni_import {
@@ -677,7 +754,8 @@ static void on_sync_progress(void *user, const mc_sync_progress *pr) {
   if (!env) return;
   jstring uid = new_string(env, pr->device_uid ? pr->device_uid : "");
   (*env)->CallVoidMethod(env, p->listener, p->on_progress, uid, (jint)pr->phase,
-                         (jlong)pr->rows_sent, (jlong)pr->rows_received);
+                         (jlong)pr->rows_sent, (jlong)pr->rows_received, (jint)pr->files_done,
+                         (jint)pr->files_total, (jlong)pr->bytes_received, (jlong)pr->bytes_sent);
   if (uid) (*env)->DeleteLocalRef(env, uid);
   detach(env, attached);
 }
@@ -689,8 +767,11 @@ static void on_sync_done(void *user, const mc_sync_result *r) {
   if (!env) return;
   jstring uid = new_string(env, r->device_uid ? r->device_uid : "");
   (*env)->CallVoidMethod(env, p->listener, p->on_sync_done, uid, (jint)r->status,
-                         (jboolean)(r->library_synced != 0), (jlong)r->rows_sent,
-                         (jlong)r->rows_received);
+                         (jboolean)(r->library_synced != 0), (jboolean)(r->converged != 0),
+                         (jlong)r->rows_sent, (jlong)r->rows_received, (jint)r->files_received,
+                         (jint)r->files_missing, (jint)r->files_corrupt, (jint)r->files_deleted,
+                         (jint)r->files_unknown, (jint)r->files_sent, (jlong)r->bytes_received,
+                         (jlong)r->bytes_sent);
   if (uid) (*env)->DeleteLocalRef(env, uid);
   detach(env, attached);
 }
@@ -716,8 +797,8 @@ JNIEXPORT jlong JNICALL Java_app_musicapp_CoreSync_nativeNew(JNIEnv *env, jclass
     {"onPeer", "(Ljava/lang/String;ZZ)V"},
     {"onPairCode", "(Ljava/lang/String;Ljava/lang/String;I)V"},
     {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIII)V"},
-    {"onProgress", "(Ljava/lang/String;IJJ)V"},
-    {"onSyncDone", "(Ljava/lang/String;IZJJ)V"},
+    {"onProgress", "(Ljava/lang/String;IJJIIJJ)V"},
+    {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJ)V"},
   };
   jmethodID *ids[] = {&p->on_peer, &p->on_pair_code, &p->on_pair_result, &p->on_progress,
                       &p->on_sync_done};
@@ -877,7 +958,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreSync_nativeListDevices(JNIE
   jclass info = (*env)->FindClass(env, "app/musicapp/SyncDevice");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
-                                       "(Ljava/lang/String;Ljava/lang/String;IZZZZLjava/lang/String;IJI)V");
+                                       "(Ljava/lang/String;Ljava/lang/String;IZZZZLjava/lang/String;IJZJJJJJJI)V");
   if (!ctor) return NULL;
 
   mc_sync_device_list *list = NULL;
@@ -896,7 +977,9 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreSync_nativeListDevices(JNIE
                                      (jboolean)(d->is_self != 0), (jboolean)(d->online != 0),
                                      (jboolean)(d->archive != 0), (jboolean)(d->removed != 0),
                                      address, (jint)d->port, (jlong)d->last_sync_ms,
-                                     (jint)d->confirm);
+                                     (jboolean)(d->has_status != 0), (jlong)d->verified_ms,
+                                     (jlong)d->expected, (jlong)d->ok, (jlong)d->missing,
+                                     (jlong)d->corrupt, (jlong)d->bytes, (jint)d->confirm);
     if (!item) {
       out = NULL;
       break;
@@ -946,4 +1029,211 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreSync_nativeListNearby(JNIEn
   }
   mc_sync_nearby_list_free(list);
   return out;
+}
+
+/* --- Profiles --- */
+
+/* Fills p, zeroed, from a SyncProfile's fields as CoreSync passes them: kbps 0 for originals,
+ * a budget for Auto (kbps ignored), and the items as parallel kinds and uids. Returns 0 with an exception pending on failure;
+ * either way free it with profile_args_free(). */
+static int profile_from_args(JNIEnv *env, mc_sync_profile *p, jstring name, jboolean archive,
+                             jboolean sync_all, jint kbps, jboolean budget_enabled,
+                             jlong budget_bytes, jintArray kinds, jobjectArray uids) {
+  p->archive = archive != JNI_FALSE;
+  p->sync_all = sync_all != JNI_FALSE;
+  p->budget_enabled = budget_enabled != JNI_FALSE;
+  p->format.format = p->budget_enabled ? MC_FORMAT_AUTO : kbps > 0 ? MC_FORMAT_OPUS : MC_FORMAT_ORIGINAL;
+  p->format.bitrate_kbps = !p->budget_enabled && kbps > 0 ? kbps : 0;
+  p->budget_bytes = budget_bytes;
+  if (name) {
+    const char *cname = (*env)->GetStringUTFChars(env, name, NULL);
+    if (!cname) return 0;
+    p->name = strdup(cname);
+    (*env)->ReleaseStringUTFChars(env, name, cname);
+    if (!p->name) {
+      throw_status(env, MC_ERR_NOMEM);
+      return 0;
+    }
+  }
+  jsize count = (*env)->GetArrayLength(env, kinds);
+  if (count != (*env)->GetArrayLength(env, uids)) {
+    throw_status(env, MC_ERR_INVALID_ARG);
+    return 0;
+  }
+  if (count == 0) return 1;
+  p->items = calloc((size_t)count, sizeof *p->items);
+  jint *ckinds = p->items ? (*env)->GetIntArrayElements(env, kinds, NULL) : NULL;
+  if (!ckinds) {
+    if (!(*env)->ExceptionCheck(env)) throw_status(env, MC_ERR_NOMEM);
+    return 0;
+  }
+  int ok = 1;
+  for (jsize i = 0; ok && i < count; i++) {
+    jstring uid = (jstring)(*env)->GetObjectArrayElement(env, uids, i);
+    const char *cuid = uid ? (*env)->GetStringUTFChars(env, uid, NULL) : NULL;
+    if (cuid) {
+      p->items[i].kind = (mc_profile_item_kind)ckinds[i];
+      snprintf(p->items[i].ref_uid, sizeof p->items[i].ref_uid, "%s", cuid);
+      (*env)->ReleaseStringUTFChars(env, uid, cuid);
+      p->count++;
+    } else {
+      ok = 0;
+      if (!(*env)->ExceptionCheck(env)) throw_status(env, MC_ERR_INVALID_ARG);
+    }
+    if (uid) (*env)->DeleteLocalRef(env, uid);
+  }
+  (*env)->ReleaseIntArrayElements(env, kinds, ckinds, JNI_ABORT);
+  return ok;
+}
+
+static void profile_args_free(mc_sync_profile *p) {
+  free(p->name);
+  free(p->items);
+}
+
+/* device_uid's profile as a SyncProfile, made with its private constructor that takes the
+ * items as parallel kinds and uids. */
+JNIEXPORT jobject JNICALL Java_app_musicapp_CoreSync_nativeGetProfile(JNIEnv *env, jclass cls,
+                                                                       jlong handle, jstring uid) {
+  (void)cls;
+  jclass info = (*env)->FindClass(env, "app/musicapp/SyncProfile");
+  if (!info) return NULL;
+  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
+                                       "(Ljava/lang/String;ZZIZJ[I[Ljava/lang/String;)V");
+  jclass string_cls = ctor ? (*env)->FindClass(env, "java/lang/String") : NULL;
+  if (!string_cls) return NULL;
+  const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
+  if (!cuid) return NULL;
+  mc_sync_profile *p = NULL;
+  mc_status st = mc_sync_get_profile(sync_of(handle), cuid, &p);
+  (*env)->ReleaseStringUTFChars(env, uid, cuid);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jobject out = NULL;
+  jstring name = new_string(env, p->name);
+  jintArray kinds = (*env)->NewIntArray(env, p->count);
+  jobjectArray uids = kinds ? (*env)->NewObjectArray(env, p->count, string_cls, NULL) : NULL;
+  int ok = uids != NULL && (!p->name || name);
+  for (int i = 0; ok && i < p->count; i++) {
+    jint kind = (jint)p->items[i].kind;
+    (*env)->SetIntArrayRegion(env, kinds, i, 1, &kind);
+    jstring ref = new_string(env, p->items[i].ref_uid);
+    ok = ref != NULL;
+    if (ref) {
+      (*env)->SetObjectArrayElement(env, uids, i, ref);
+      (*env)->DeleteLocalRef(env, ref);
+    }
+  }
+  if (ok) {
+    jint kbps = p->format.format == MC_FORMAT_OPUS ? p->format.bitrate_kbps : 0;
+    out = (*env)->NewObject(env, info, ctor, name, (jboolean)(p->archive != 0),
+                            (jboolean)(p->sync_all != 0), kbps, (jboolean)(p->budget_enabled != 0),
+                            (jlong)p->budget_bytes, kinds, uids);
+  }
+  mc_sync_profile_free(p);
+  return out;
+}
+
+/* Stores device_uid's profile. There's no archive argument: mc_sync_set_profile() ignores it. */
+JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeSetProfile(
+  JNIEnv *env, jclass cls, jlong handle, jstring uid, jstring name, jboolean sync_all, jint kbps,
+  jboolean budget_enabled, jlong budget_bytes, jintArray kinds, jobjectArray uids) {
+  (void)cls;
+  mc_sync_profile p;
+  memset(&p, 0, sizeof p);
+  if (profile_from_args(env, &p, name, JNI_FALSE, sync_all, kbps, budget_enabled, budget_bytes,
+                        kinds, uids)) {
+    const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
+    if (cuid) {
+      mc_status st = mc_sync_set_profile(sync_of(handle), cuid, &p);
+      (*env)->ReleaseStringUTFChars(env, uid, cuid);
+      if (st != MC_OK) throw_status(env, st);
+    }
+  }
+  profile_args_free(&p);
+}
+
+JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeSetArchive(JNIEnv *env, jclass cls,
+                                                                    jlong handle, jstring uid,
+                                                                    jboolean archive) {
+  (void)cls;
+  const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
+  if (!cuid) return;
+  mc_status st = mc_sync_set_archive(sync_of(handle), cuid, archive != JNI_FALSE);
+  (*env)->ReleaseStringUTFChars(env, uid, cuid);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* Fills out with what device_uid would hold with the profile: tracks, total_bytes, kbps,
+ * archive, over_budget, shortfall_bytes, limit_bytes and free_bytes, then step_bytes. */
+JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeEstimate(
+  JNIEnv *env, jclass cls, jlong handle, jstring uid, jstring name, jboolean archive,
+  jboolean sync_all, jint kbps, jboolean budget_enabled, jlong budget_bytes, jintArray kinds,
+  jobjectArray uids, jlongArray out) {
+  (void)cls;
+  mc_sync_profile p;
+  memset(&p, 0, sizeof p);
+  if (profile_from_args(env, &p, name, archive, sync_all, kbps, budget_enabled, budget_bytes,
+                        kinds, uids)) {
+    const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
+    if (cuid) {
+      mc_sync_estimate e;
+      mc_status st = mc_sync_estimate_profile(sync_of(handle), cuid, &p, &e);
+      (*env)->ReleaseStringUTFChars(env, uid, cuid);
+      if (st == MC_OK) {
+        jlong values[8 + MC_SYNC_ESTIMATE_STEPS] = {
+          e.tracks,      e.total_bytes,     e.kbps,        e.archive,
+          e.over_budget, e.shortfall_bytes, e.limit_bytes, e.free_bytes,
+        };
+        for (int i = 0; i < MC_SYNC_ESTIMATE_STEPS; i++) values[8 + i] = e.step_bytes[i];
+        (*env)->SetLongArrayRegion(env, out, 0, 8 + MC_SYNC_ESTIMATE_STEPS, values);
+      } else {
+        throw_status(env, st);
+      }
+    }
+  }
+  profile_args_free(&p);
+}
+
+/* Checks this device's files (deep: re-hashes them) and fills out with checked, ok, failed and
+ * deleted. */
+JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeVerify(JNIEnv *env, jclass cls,
+                                                                jlong handle, jboolean deep,
+                                                                jlongArray out) {
+  (void)cls;
+  mc_verify_result r;
+  memset(&r, 0, sizeof r);
+  mc_status st = mc_sync_verify(sync_of(handle), deep ? MC_VERIFY_DEEP : MC_VERIFY_FAST, &r);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return;
+  }
+  jlong values[4] = {r.checked, r.ok, r.failed, r.deleted};
+  (*env)->SetLongArrayRegion(env, out, 0, 4, values);
+}
+
+/* Renames this device, for the whole group when in one. */
+JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeSetDeviceName(JNIEnv *env, jclass cls,
+                                                                       jlong handle, jstring name) {
+  (void)cls;
+  const char *cname = (*env)->GetStringUTFChars(env, name, NULL);
+  if (!cname) return;
+  mc_status st = mc_sync_set_device_name(sync_of(handle), cname);
+  (*env)->ReleaseStringUTFChars(env, name, cname);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* This device's name as it is now: the group may have renamed it. */
+JNIEXPORT jstring JNICALL Java_app_musicapp_CoreSync_nativeGetDeviceName(JNIEnv *env, jclass cls,
+                                                                         jlong handle) {
+  (void)cls;
+  char name[4 * MC_SYNC_DEVICE_NAME_MAX + 4];
+  mc_status st = mc_sync_get_device_name(sync_of(handle), name, sizeof name);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  return new_string(env, name);
 }

@@ -2,8 +2,11 @@ package app.musicapp.ui
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.text.format.Formatter
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -11,6 +14,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.add
@@ -23,18 +28,15 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -46,7 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -59,8 +60,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import app.musicapp.AppSettings
 import app.musicapp.NativeCore
 import app.musicapp.R
-import app.musicapp.importer.DeviceMusic
-import app.musicapp.sync.Syncer
 import coil3.SingletonImageLoader
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -68,14 +67,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The app's settings: the devices it syncs with, what import does, the permissions it has, the
- * storage it uses, and its version. [libraryDir] is the library folder, whose size is shown. [onBack] slides the screen
- * away; it is also dismissed by swiping right.
+ * The app's settings: a way to the devices it syncs with, the permissions it has, the storage
+ * it uses, and its version. [libraryDir] is the library folder, whose size is shown. [onSync]
+ * opens the sync screen. [onBack] slides the screen away; it is also dismissed by swiping right.
  */
 @Composable
-fun SettingsScreen(settings: AppSettings, syncer: Syncer, libraryDir: File, bottomPadding: Dp, onBack: () -> Unit) {
+fun SettingsScreen(
+    settings: AppSettings,
+    libraryDir: File,
+    bottomPadding: Dp,
+    onSync: () -> Unit,
+    onBack: () -> Unit,
+) {
     val context = LocalContext.current
-    val syncStatus by syncer.status.collectAsState()
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
@@ -83,72 +87,28 @@ fun SettingsScreen(settings: AppSettings, syncer: Syncer, libraryDir: File, bott
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),
         ) {
-            // In a short window, the title goes beside the back button rather than under it.
-            item(key = "header") {
-                val back = @Composable {
-                    IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
-                        Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
-                    }
-                }
-                val title = @Composable { modifier: Modifier ->
-                    Text(
-                        stringResource(R.string.settings),
-                        style = MaterialTheme.typography.headlineMedium,
-                        modifier = modifier.semantics { heading() },
-                    )
-                }
-                if (isShortWindow()) {
-                    Row(
-                        Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        back()
-                        title(Modifier.padding(start = 8.dp, top = 4.dp))
-                    }
-                } else {
-                    Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
-                        back()
-                        title(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                    }
-                }
-            }
+            item(key = "header") { ScreenHeader(stringResource(R.string.settings), onBack) }
 
-            item(key = "devices") { DevicesSection(syncStatus, syncer) }
-
-            item(key = "import") {
-                SettingsHeading(stringResource(R.string.settings_import))
-                var fetchArt by remember { mutableStateOf(settings.fetchArt) }
+            item(key = "sync") {
                 ListItem(
-                    headlineContent = { Text(stringResource(R.string.fetch_art)) },
-                    supportingContent = { Text(stringResource(R.string.fetch_art_text)) },
-                    trailingContent = { Switch(checked = fetchArt, onCheckedChange = null) },
-                    modifier = Modifier.toggleable(fetchArt, role = Role.Switch) {
-                        fetchArt = it
-                        settings.fetchArt = it
-                    },
+                    leadingContent = { Icon(Icons.Sync, contentDescription = null) },
+                    headlineContent = { Text(stringResource(R.string.sync)) },
+                    supportingContent = { Text(stringResource(R.string.settings_sync_text)) },
+                    modifier = Modifier.clickable(onClick = onSync),
                 )
             }
 
-            item(key = "permissions") {
+            // Notifications are the only permission asked for at run time, from API 33.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) item(key = "permissions") {
                 SettingsHeading(stringResource(R.string.settings_permissions))
                 PermissionRow(
-                    DeviceMusic.AUDIO_PERMISSION,
-                    stringResource(R.string.permission_audio),
-                    allowed = stringResource(R.string.permission_audio_allowed),
-                    denied = stringResource(R.string.permission_audio_denied),
-                    asked = { settings.askedForAudio },
-                    onAsk = { settings.askedForAudio = true },
+                    Manifest.permission.POST_NOTIFICATIONS,
+                    stringResource(R.string.permission_notifications),
+                    allowed = stringResource(R.string.permission_notifications_allowed),
+                    denied = stringResource(R.string.permission_notifications_denied),
+                    asked = { settings.askedForNotifications },
+                    onAsk = { settings.askedForNotifications = true },
                 )
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    PermissionRow(
-                        Manifest.permission.POST_NOTIFICATIONS,
-                        stringResource(R.string.permission_notifications),
-                        allowed = stringResource(R.string.permission_notifications_allowed),
-                        denied = stringResource(R.string.permission_notifications_denied),
-                        asked = { settings.askedForNotifications },
-                        onAsk = { settings.askedForNotifications = true },
-                    )
-                }
             }
 
             item(key = "storage") {
@@ -202,6 +162,45 @@ fun SettingsScreen(settings: AppSettings, syncer: Syncer, libraryDir: File, bott
                     supportingContent = { Text(stringResource(R.string.version, NativeCore.version())) },
                 )
             }
+        }
+    }
+}
+
+/**
+ * A full screen's header: a back button calling [onBack], and [title] under it, or beside it
+ * in a short window. [actions] go at the end of the back button's row.
+ */
+@Composable
+fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
+    val back = @Composable {
+        IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
+            Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
+        }
+    }
+    val heading = @Composable { modifier: Modifier ->
+        Text(
+            title,
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = modifier.semantics { heading() },
+        )
+    }
+    if (isShortWindow()) {
+        Row(
+            Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            back()
+            heading(Modifier.weight(1f).padding(start = 8.dp, top = 4.dp))
+            actions()
+        }
+    } else {
+        Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
+            Row(Modifier.fillMaxWidth().padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                back()
+                Spacer(Modifier.weight(1f))
+                actions()
+            }
+            heading(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         }
     }
 }
@@ -260,6 +259,14 @@ private fun PermissionRow(
 
 private fun Context.isGranted(permission: String) =
     ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+/** The system's settings page for this app, where its permissions can be changed. */
+private fun Context.openAppSettings() {
+    startActivity(
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+    )
+}
 
 private fun Context.clearArtCache() {
     val loader = SingletonImageLoader.get(this)
