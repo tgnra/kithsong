@@ -4,6 +4,7 @@
 #include <wchar.h>
 
 #include "theme.h"
+#include "wstr.h"
 
 /* Wrong codes before the responder draws a new one (MC_PAIR_MAX_FAILURES in core's private
  * pair.h). A wrong-code result with this many tries left means a new code is showing. */
@@ -112,9 +113,10 @@ static void build(tmpl *t, BOOL enter) {
   put_item(t, 0x0082, L"", SS_LEFT | SS_NOPREFIX, MARGIN, STATUS_Y, w, 28, IDC_PAIR_STATUS);
   int by = DLG_H - MARGIN - BTN_H;
   /* The show-code dialog hides Pair until it becomes OK. */
-  put_item(t, 0x0080, L"Pair", BS_DEFPUSHBUTTON | WS_TABSTOP | WS_DISABLED, DLG_W - MARGIN - 2 * BTN_W - 4, by,
-           BTN_W, BTN_H, IDOK);
-  put_item(t, 0x0080, L"Cancel", BS_PUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W, by, BTN_W, BTN_H, IDCANCEL);
+  put_item(t, 0x0080, mc_wstr(MC_STR_PAIR), BS_DEFPUSHBUTTON | WS_TABSTOP | WS_DISABLED,
+           DLG_W - MARGIN - 2 * BTN_W - 4, by, BTN_W, BTN_H, IDOK);
+  put_item(t, 0x0080, mc_wstr(MC_STR_CANCEL), BS_PUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W, by, BTN_W, BTN_H,
+           IDCANCEL);
 }
 
 /* --- Texts --- */
@@ -122,53 +124,52 @@ static void build(tmpl *t, BOOL enter) {
 /* The other device's name, or a stand-in when it's not known. */
 static const wchar_t *peer_name(const wchar_t *name, BOOL sentence_start) {
   if (name && *name) return name;
-  return sentence_start ? L"The other device" : L"the other device";
+  return mc_wstr(sentence_start ? MC_STR_WINDOWS_OTHER_DEVICE_START : MC_STR_SYNC_OTHER_DEVICE);
 }
 
-static void tries_left(wchar_t *out, size_t n, const wchar_t *prefix, int left) {
-  swprintf(out, n, L"%ls %d %ls left.", prefix, left, left == 1 ? L"try" : L"tries");
+/* The string id with the other device's name (or a stand-in) as its {0}. */
+static void peer_text(wchar_t *out, size_t n, enum mc_str_id id, const wchar_t *name, BOOL sentence_start) {
+  char *peer = wstr_to_utf8(peer_name(name, sentence_start));
+  mc_wformat(out, n, mc_str(id), MC_S(peer));
+  free(peer);
+}
+
+/* prefix_id ("Wrong code. {0}") with how many tries are left as its {0}. */
+static void tries_left(wchar_t *out, size_t n, enum mc_str_id prefix_id, int left) {
+  char tries[64];
+  mc_format(tries, sizeof tries, mc_str_plural(MC_STR_TRIES_LEFT, left), MC_D(left));
+  mc_wformat(out, n, mc_str(prefix_id), MC_S(tries));
 }
 
 /* How a pairing ended, as on Android. */
 static void ended_text(wchar_t *out, size_t n, mc_pair_reason reason, BOOL initiator, const wchar_t *name) {
-  const wchar_t *peer = peer_name(name, FALSE), *Peer = peer_name(name, TRUE);
   switch (reason) {
     case MC_PAIR_PAIRED:
-      swprintf(out, n, L"This PC and %ls now sync whenever both are on the same network.", peer);
+      peer_text(out, n, MC_STR_WINDOWS_PC_PAIRED_TEXT, name, FALSE);
       break;
     case MC_PAIR_WRONG_CODE:
-      swprintf(out, n, L"The code was wrong too many times.");
+      swprintf(out, n, L"%ls", mc_wstr(MC_STR_PAIR_WRONG_CODE_TOO_OFTEN));
       break;
     case MC_PAIR_IN_GROUP:
       /* Both are in groups, different ones (a device in no group just joins). */
-      swprintf(out, n,
-               L"This PC and %ls are in different groups. One of them must leave its group before they can pair.",
-               peer);
+      peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_IN_GROUP, name, FALSE);
       break;
     case MC_PAIR_LIBRARY_MISMATCH:
-      if (initiator) {
-        swprintf(out, n, L"This PC and %ls each have music of their own. A device can only join with an empty library.",
-                 peer);
-      } else {
-        swprintf(out, n,
-                 L"%ls asked to pair, but it and this PC each have music of their own. A device can only join with an "
-                 L"empty library.",
-                 Peer);
-      }
+      if (initiator) peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_LIBRARY_MISMATCH, name, FALSE);
+      else peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_LIBRARY_MISMATCH_INCOMING, name, TRUE);
       break;
     case MC_PAIR_ALREADY_PAIRED:
-      swprintf(out, n, L"This PC already syncs with %ls.", peer);
+      peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_ALREADY_PAIRED, name, FALSE);
       break;
     case MC_PAIR_BUSY:
-      swprintf(out, n, L"%ls is pairing with another device. Try again in a moment.", Peer);
+      peer_text(out, n, MC_STR_PAIR_BUSY, name, TRUE);
       break;
     case MC_PAIR_CANCELLED:
-      swprintf(out, n, L"Pairing was cancelled.");
+      swprintf(out, n, L"%ls", mc_wstr(MC_STR_PAIR_CANCELLED));
       break;
     case MC_PAIR_FAILED:
     default:
-      swprintf(out, n, L"Couldn't reach %ls. Check that musicapp is open on it and that both are on the same network.",
-               peer);
+      peer_text(out, n, MC_STR_PAIR_UNREACHABLE, name, FALSE);
       break;
   }
 }
@@ -257,7 +258,7 @@ static void show_ended(pair_dlg *d, mc_pair_reason reason, const wchar_t *name) 
   ended_text(text, 512, reason, d->initiator, name && *name ? name : d->peer);
   d->ended = TRUE;
   d->checking = FALSE;
-  SetWindowTextW(d->wnd, reason == MC_PAIR_PAIRED ? L"Paired" : L"Couldn't pair");
+  SetWindowTextW(d->wnd, mc_wstr(reason == MC_PAIR_PAIRED ? MC_STR_PAIRED : MC_STR_PAIR_FAILED));
   ShowWindow(GetDlgItem(d->wnd, ID_TEXT), SW_HIDE);
   ShowWindow(GetDlgItem(d->wnd, IDC_PAIR_CODE), SW_HIDE);
   ShowWindow(GetDlgItem(d->wnd, IDCANCEL), SW_HIDE);
@@ -265,7 +266,7 @@ static void show_ended(pair_dlg *d, mc_pair_reason reason, const wchar_t *name) 
   set_status(d, text);
   HWND ok = GetDlgItem(d->wnd, IDOK);
   place(d->wnd, IDOK, DLG_W - MARGIN - BTN_W, DLG_H - MARGIN - BTN_H, BTN_W, BTN_H);
-  SetWindowTextW(ok, L"OK");
+  SetWindowTextW(ok, mc_wstr(MC_STR_OK));
   EnableWindow(ok, TRUE);
   ShowWindow(ok, SW_SHOW);
   SendMessageW(d->wnd, DM_SETDEFID, IDOK, 0);
@@ -340,10 +341,10 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             EnableWindow(GetDlgItem(dlg, IDC_PAIR_CODE), FALSE);
             EnableWindow(GetDlgItem(dlg, IDOK), FALSE);
             SendMessageW(dlg, WM_NEXTDLGCTL, (WPARAM)GetDlgItem(dlg, IDCANCEL), TRUE);
-            set_status(d, L"Pairing\x2026");
+            set_status(d, mc_wstr(MC_STR_WINDOWS_PAIRING_PROGRESS));
           } else {
             wchar_t text[160];
-            swprintf(text, 160, L"Couldn't send the code: %hs.", mc_status_str(st));
+            mc_wformat(text, 160, mc_str(MC_STR_WINDOWS_PAIR_SEND_FAILED), MC_S(mc_status_str(st)));
             set_status(d, text);
           }
           return TRUE;
@@ -421,14 +422,18 @@ void pair_dialog_begin_enter(mc_sync *sync, const wchar_t *peer, const wchar_t *
   s.enter_cancelled = FALSE;
   wchar_t text[256];
   if (peer && *peer) {
-    swprintf(text, 256, L"Pair with %ls", peer);
+    peer_text(text, 256, MC_STR_PAIR_WITH, peer, FALSE);
     SetWindowTextW(d->wnd, text);
   } else {
-    SetWindowTextW(d->wnd, L"Pair by address");
+    SetWindowTextW(d->wnd, mc_wstr(MC_STR_WINDOWS_PAIR_BY_ADDRESS));
   }
-  if (!(peer && *peer) && address && *address) /* the address on a line of its own */
-    swprintf(text, 256, L"Enter the code the other device shows.\nIt's at %ls.", address);
-  else swprintf(text, 256, L"Enter the code %ls shows.", peer_name(peer, FALSE));
+  if (!(peer && *peer) && address && *address) { /* the address on a line of its own */
+    char *a = wstr_to_utf8(address);
+    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PAIR_ENTER_CODE_AT), MC_S(a));
+    free(a);
+  } else {
+    peer_text(text, 256, MC_STR_PAIR_ENTER_CODE, peer, FALSE);
+  }
   SetDlgItemTextW(d->wnd, ID_TEXT, text);
   ShowWindow(d->wnd, SW_SHOW);
 }
@@ -450,13 +455,13 @@ void pair_dialog_show_code(mc_sync *sync, const sync_event *ev) {
   if (d && !d->ended) {
     /* A new code after too many wrong ones. */
     SetDlgItemTextW(d->wnd, IDC_PAIR_CODE, code);
-    set_status(d, L"Wrong code entered too many times. Here's a new code.");
+    set_status(d, mc_wstr(MC_STR_WINDOWS_PAIR_NEW_CODE));
   } else {
     if (!(d = open_dlg(&s.show, sync, FALSE, ev->name))) return;
     s.show_cancelled = FALSE;
     wchar_t text[256];
-    SetWindowTextW(d->wnd, L"Pairing request");
-    swprintf(text, 256, L"To pair, enter this code on %ls.", peer_name(ev->name, FALSE));
+    SetWindowTextW(d->wnd, mc_wstr(MC_STR_WINDOWS_PAIR_REQUEST));
+    peer_text(text, 256, MC_STR_PAIR_SHOW_CODE, ev->name, FALSE);
     SetDlgItemTextW(d->wnd, ID_TEXT, text);
     SetDlgItemTextW(d->wnd, IDC_PAIR_CODE, code);
     ShowWindow(d->wnd, SW_SHOW);
@@ -486,10 +491,9 @@ static void initiator_result(const sync_event *ev) {
     /* The pairing waits for another code. */
     wchar_t text[256];
     if (ev->attempts_left >= MAX_FAILURES) {
-      swprintf(text, 256, L"Wrong code too many times. %ls now shows a new code.",
-               peer_name(ev->name[0] ? ev->name : d->peer, TRUE));
+      peer_text(text, 256, MC_STR_WINDOWS_PAIR_PEER_NEW_CODE, ev->name[0] ? ev->name : d->peer, TRUE);
     } else {
-      tries_left(text, 256, L"Wrong code.", ev->attempts_left);
+      tries_left(text, 256, MC_STR_PAIR_WRONG_CODE, ev->attempts_left);
     }
     set_status(d, text);
     ready_for_code(d);
@@ -509,9 +513,9 @@ static void responder_result(const sync_event *ev) {
     wchar_t text[256];
     if (ev->attempts_left >= MAX_FAILURES) {
       /* The new code is already showing. */
-      set_status(d, L"Wrong code entered too many times. Here's a new code.");
+      set_status(d, mc_wstr(MC_STR_WINDOWS_PAIR_NEW_CODE));
     } else {
-      tries_left(text, 256, L"Wrong code entered.", ev->attempts_left);
+      tries_left(text, 256, MC_STR_PAIR_WRONG_CODE_ENTERED, ev->attempts_left);
       set_status(d, text);
     }
     return;

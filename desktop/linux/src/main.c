@@ -76,11 +76,11 @@ static void on_import_done(void *user) {
 }
 
 static void set_empty_description(app *a) {
-  char *desc = g_strdup_printf(a->lib ? "Use Import to add music.\n\nmusiccore %s"
-                                      : "Could not open the library.\n\nmusiccore %s",
-                               mc_version());
+  char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION),
+                               MC_S(mc_str(a->lib ? MC_STR_EMPTY_TEXT : MC_STR_LIBRARY_OPEN_FAILED)),
+                               MC_S(mc_version()));
   adw_status_page_set_description(a->empty, desc);
-  g_free(desc);
+  mc_free(desc);
 }
 
 /* Settings' Open Another Library. The import view lets go of the old library first. */
@@ -88,8 +88,8 @@ static gboolean open_library(void *user, const char *dir) {
   app *a = user;
   mc_library *lib = NULL;
   if (mc_library_open(dir, &lib) != MC_OK) {
-    AdwDialog *alert = adw_alert_dialog_new("Couldn't Open the Library", dir);
-    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", "Close");
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_LIBRARY_OPEN_FAILED), dir);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
     adw_dialog_present(alert, GTK_WIDGET(a->win));
     return FALSE;
   }
@@ -164,9 +164,9 @@ static GtkWidget *build_sidebar(app *a) {
   /* Artists shows the album grid for now, as on Windows. */
   GtkWidget *nav = gtk_list_box_new();
   gtk_widget_add_css_class(nav, "navigation-sidebar");
-  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("media-optical-symbolic", "Albums"));
-  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("avatar-default-symbolic", "Artists"));
-  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("view-list-symbolic", "Playlists"));
+  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("media-optical-symbolic", mc_str(MC_STR_SECTION_ALBUMS)));
+  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("avatar-default-symbolic", mc_str(MC_STR_SECTION_ARTISTS)));
+  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("view-list-symbolic", mc_str(MC_STR_SECTION_PLAYLISTS)));
   gtk_list_box_select_row(GTK_LIST_BOX(nav), gtk_list_box_get_row_at_index(GTK_LIST_BOX(nav), 0));
   g_signal_connect(nav, "row-activated", G_CALLBACK(on_nav_activated), a);
   gtk_box_append(GTK_BOX(box), nav);
@@ -176,7 +176,7 @@ static GtkWidget *build_sidebar(app *a) {
   gtk_widget_set_margin_start(header, 18);
   gtk_widget_set_margin_end(header, 12);
   gtk_widget_set_margin_top(header, 12);
-  GtkWidget *heading = gtk_label_new("Devices");
+  GtkWidget *heading = gtk_label_new(mc_str(MC_STR_DEVICES));
   gtk_widget_add_css_class(heading, "heading");
   gtk_widget_add_css_class(heading, "dim-label");
   gtk_label_set_xalign(GTK_LABEL(heading), 0);
@@ -184,7 +184,7 @@ static GtkWidget *build_sidebar(app *a) {
   gtk_box_append(GTK_BOX(header), heading);
   GtkWidget *add = gtk_button_new_from_icon_name("list-add-symbolic");
   gtk_widget_add_css_class(add, "flat");
-  gtk_widget_set_tooltip_text(add, "Add Device by Address");
+  gtk_widget_set_tooltip_text(add, mc_str(MC_STR_ADD_DEVICE_BY_ADDRESS));
   g_signal_connect(add, "clicked", G_CALLBACK(on_add_device), a);
   gtk_box_append(GTK_BOX(header), add);
   gtk_box_append(GTK_BOX(box), header);
@@ -192,7 +192,7 @@ static GtkWidget *build_sidebar(app *a) {
   /* Online peers, then paired peers that are currently unreachable. */
   GtkWidget *devices = gtk_list_box_new();
   gtk_widget_add_css_class(devices, "navigation-sidebar");
-  GtkWidget *none = gtk_label_new("No devices found");
+  GtkWidget *none = gtk_label_new(mc_str(MC_STR_DEVICES_NONE));
   gtk_widget_add_css_class(none, "dim-label");
   gtk_list_box_set_placeholder(GTK_LIST_BOX(devices), none);
   gtk_box_append(GTK_BOX(box), devices);
@@ -223,7 +223,7 @@ static void update_buttons(app *a) {
   gboolean playing = playback_is_playing();
   gtk_button_set_icon_name(GTK_BUTTON(play_button),
                            playing ? "media-playback-pause-symbolic" : "media-playback-start-symbolic");
-  gtk_widget_set_tooltip_text(play_button, playing ? "Pause" : "Play");
+  gtk_widget_set_tooltip_text(play_button, mc_str(playing ? MC_STR_PAUSE : MC_STR_PLAY));
   set_action_enabled(a, "previous", playback_has_current());
   set_action_enabled(a, "play-pause", playback_has_current() || album_playable());
   set_action_enabled(a, "next", playback_has_next());
@@ -314,19 +314,21 @@ static void on_track_add_to_playlist(void *user, const char *track_uid) {
 
 static void playlist_failed(app *a, const char *heading) {
   AdwDialog *alert = adw_alert_dialog_new(heading, NULL);
-  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", "Close");
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
   adw_dialog_present(alert, GTK_WIDGET(a->win));
 }
 
 static void on_track_remove(void *user, const char *entry_uid) {
   app *a = user;
-  if (mc_playlist_remove(a->lib, entry_uid) != MC_OK) playlist_failed(a, "Couldn't Remove the Track");
+  if (mc_playlist_remove(a->lib, entry_uid) != MC_OK)
+    playlist_failed(a, mc_str(MC_STR_PLAYLIST_REMOVE_FAILED));
   app_reload_library(a);
 }
 
 static void on_track_move(void *user, const char *entry_uid, const char *after_entry_uid) {
   app *a = user;
-  if (mc_playlist_move(a->lib, entry_uid, after_entry_uid) != MC_OK) playlist_failed(a, "Couldn't Move the Track");
+  if (mc_playlist_move(a->lib, entry_uid, after_entry_uid) != MC_OK)
+    playlist_failed(a, mc_str(MC_STR_PLAYLIST_MOVE_FAILED));
   app_reload_library(a);
 }
 
@@ -431,22 +433,21 @@ static GtkWidget *steady_bin_new(AdwOverlaySplitView *split, GtkWidget *child) {
 static GtkWidget *build_albums(app *a) {
   GtkWidget *empty = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(empty), "folder-music-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(empty), "No Albums");
+  adw_status_page_set_title(ADW_STATUS_PAGE(empty), mc_str(MC_STR_EMPTY_TITLE));
   a->empty = ADW_STATUS_PAGE(empty);
   set_empty_description(a);
 
   GtkWidget *no_playlists = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(no_playlists), "view-list-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(no_playlists), "No Playlists");
-  adw_status_page_set_description(ADW_STATUS_PAGE(no_playlists),
-                                  "Right-click a track and choose Add to Playlist to start one.");
+  adw_status_page_set_title(ADW_STATUS_PAGE(no_playlists), mc_str(MC_STR_NO_PLAYLISTS_TITLE));
+  adw_status_page_set_description(ADW_STATUS_PAGE(no_playlists), mc_str(MC_STR_NO_PLAYLISTS_TEXT));
 
   GtkWidget *stack = gtk_stack_new();
   gtk_stack_add_named(GTK_STACK(stack), empty, "empty");
-  a->album_grid = album_grid_new("Albums", on_album_changed, a);
+  a->album_grid = album_grid_new(mc_str(MC_STR_SECTION_ALBUMS), on_album_changed, a);
   gtk_stack_add_named(GTK_STACK(stack), a->album_grid, "grid");
   gtk_stack_add_named(GTK_STACK(stack), no_playlists, "no-playlists");
-  a->playlist_grid = album_grid_new("Playlists", on_album_changed, a);
+  a->playlist_grid = album_grid_new(mc_str(MC_STR_SECTION_PLAYLISTS), on_album_changed, a);
   gtk_stack_add_named(GTK_STACK(stack), a->playlist_grid, "playlists");
   a->albums = GTK_STACK(stack);
   return stack;
@@ -497,15 +498,16 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
 
   GtkWidget *header = adw_header_bar_new();
   adw_header_bar_pack_start(ADW_HEADER_BAR(header),
-                            action_button("media-skip-backward-symbolic", "Previous", "app.previous"));
-  play_button = action_button("media-playback-start-symbolic", "Play", "app.play-pause");
+                            action_button("media-skip-backward-symbolic", mc_str(MC_STR_PREVIOUS_TRACK),
+                                          "app.previous"));
+  play_button = action_button("media-playback-start-symbolic", mc_str(MC_STR_PLAY), "app.play-pause");
   adw_header_bar_pack_start(ADW_HEADER_BAR(header), play_button);
   adw_header_bar_pack_start(ADW_HEADER_BAR(header),
-                            action_button("media-skip-forward-symbolic", "Next", "app.next"));
-  a->settings = icon_button("emblem-system-symbolic", "Settings");
+                            action_button("media-skip-forward-symbolic", mc_str(MC_STR_NEXT_TRACK), "app.next"));
+  a->settings = icon_button("emblem-system-symbolic", mc_str(MC_STR_SETTINGS));
   g_signal_connect(a->settings, "clicked", G_CALLBACK(on_settings), a);
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), a->settings);
-  GtkWidget *import = icon_button("list-add-symbolic", "Import");
+  GtkWidget *import = icon_button("list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC));
   g_signal_connect(import, "clicked", G_CALLBACK(on_import), a);
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), import);
 
@@ -552,7 +554,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
 
   GtkWidget *win = adw_application_window_new(gapp);
   a->win = GTK_WINDOW(win);
-  gtk_window_set_title(a->win, "musicapp");
+  gtk_window_set_title(a->win, mc_str(MC_STR_APP_NAME));
   gtk_window_set_default_size(a->win, 1200, 800);
   adw_application_window_set_content(ADW_APPLICATION_WINDOW(win), toolbar);
   g_signal_connect(win, "close-request", G_CALLBACK(on_close_request), a);
@@ -563,9 +565,17 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   gtk_window_present(a->win);
 }
 
+/* The UI language: LANGUAGE's first choice, else LC_ALL, LC_MESSAGES or LANG, as GLib
+ * reads them for gettext. With none set it's "C", which is English. */
+static void set_strings_locale(void) {
+  const char *const *names = g_get_language_names();
+  mc_strings_set_locale(names[0]);
+}
+
 int main(int argc, char **argv) {
   app a = {0};
   mc_init();
+  set_strings_locale(); /* before the player's and import's threads look anything up */
 
   /* Settings in ~/.config/musicapp say where the library folder is. Until there's a
    * first-run dialog here, the Music folder is used and remembered. */

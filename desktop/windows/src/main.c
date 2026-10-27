@@ -72,6 +72,7 @@
 #include "sync_bridge.h"
 #include "theme.h"
 #include "track_list.h"
+#include "wstr.h"
 
 enum {
   ID_PREV = 100,
@@ -380,7 +381,8 @@ static void apply_theme(void) {
 
 static void create_controls(void) {
   /* The labels aren't shown; they name the buttons for tooltips and screen readers. */
-  static const wchar_t *const labels[NUM_BUTTONS] = {L"Previous", L"Play", L"Next"};
+  const wchar_t *const labels[NUM_BUTTONS] = {mc_wstr(MC_STR_PREVIOUS_TRACK), mc_wstr(MC_STR_PLAY),
+                                              mc_wstr(MC_STR_NEXT_TRACK)};
   for (int i = 0; i < NUM_BUTTONS; i++) {
     g_app.buttons[i] = child(WC_BUTTONW, labels[i], BS_OWNERDRAW, ID_PREV + i);
     SetWindowSubclass(g_app.buttons[i], button_proc, 0, 0);
@@ -430,7 +432,7 @@ static void play_album(int start) {
 static void playback_changed(void) {
   update_buttons();
   HWND play = g_app.buttons[ID_PLAY - ID_PREV];
-  const wchar_t *label = playback_is_playing() ? L"Pause" : L"Play";
+  const wchar_t *label = mc_wstr(playback_is_playing() ? MC_STR_PAUSE : MC_STR_PLAY);
   SetWindowTextW(play, label); /* for screen readers */
   TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)play, .lpszText = (wchar_t *)label};
   SendMessageW(g_app.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
@@ -449,11 +451,13 @@ static void on_track_request(int code) {
       break;
     case TLN_REMOVE:
       changed = mc_playlist_remove(g_app.lib, req->entry_uid) == MC_OK;
-      if (!changed) MessageBoxW(g_app.wnd, L"Couldn't remove the track.", L"Playlist", MB_OK | MB_ICONERROR);
+      if (!changed)
+        MessageBoxW(g_app.wnd, mc_wstr(MC_STR_PLAYLIST_REMOVE_FAILED), mc_wstr(MC_STR_PLAYLIST), MB_OK | MB_ICONERROR);
       break;
     case TLN_MOVE:
       changed = mc_playlist_move(g_app.lib, req->entry_uid, req->after_uid[0] ? req->after_uid : NULL) == MC_OK;
-      if (!changed) MessageBoxW(g_app.wnd, L"Couldn't move the track.", L"Playlist", MB_OK | MB_ICONERROR);
+      if (!changed)
+        MessageBoxW(g_app.wnd, mc_wstr(MC_STR_PLAYLIST_MOVE_FAILED), mc_wstr(MC_STR_PLAYLIST), MB_OK | MB_ICONERROR);
       break;
     case TLN_RENAME_PLAYLIST:
       if (name && !strcmp(uid, req->playlist_uid)) changed = playlist_rename_dialog(g_app.wnd, g_app.lib, uid, name);
@@ -483,21 +487,23 @@ static void format_address(wchar_t *out, size_t cap, const char *host, unsigned 
 static void update_footer(void) {
   wchar_t line1[160], line2[160], tip[64 + MAX_ADDRESSES * 64] = L"";
   if (g_app.lib)
-    swprintf(line1, 160, L"musicapp %hs build %d \x00B7 db v%d", mc_version(), MUSICAPP_BUILD_NUMBER,
-             mc_library_schema_version(g_app.lib));
+    mc_wformat(line1, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION_DB), MC_S(mc_version()), MC_D(MUSICAPP_BUILD_NUMBER),
+               MC_D(mc_library_schema_version(g_app.lib)));
   else
-    swprintf(line1, 160, L"musicapp %hs build %d", mc_version(), MUSICAPP_BUILD_NUMBER);
+    mc_wformat(line1, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION), MC_S(mc_version()), MC_D(MUSICAPP_BUILD_NUMBER));
 
   mc_sync *sync = sync_bridge_get();
   if (!sync) {
-    swprintf(line2, 160, L"Sync off (%hs)", g_app.lib ? mc_status_str(sync_bridge_error()) : "no library");
+    mc_wformat(line2, 160, mc_str(MC_STR_WINDOWS_FOOTER_SYNC_OFF),
+               MC_S(g_app.lib ? mc_status_str(sync_bridge_error()) : mc_str(MC_STR_WINDOWS_NO_LIBRARY)));
   } else {
     char addrs[MAX_ADDRESSES][MC_SYNC_ADDR_STRLEN];
     unsigned port = mc_sync_port(sync);
     int n = mc_sync_local_addresses(addrs, MAX_ADDRESSES);
     if (n > 0) format_address(line2, 160, addrs[0], port);
-    else swprintf(line2, 160, L"Port %u (no network)", port);
-    size_t used = (size_t)swprintf(tip, 64, n > 0 ? L"Other devices reach this PC at" : L"No network");
+    else mc_wformat(line2, 160, mc_str(MC_STR_WINDOWS_PORT_NO_NETWORK), MC_D(port));
+    size_t used = (size_t)swprintf(tip, 64, L"%ls",
+                                   mc_wstr(n > 0 ? MC_STR_WINDOWS_FOOTER_REACHED_AT : MC_STR_WINDOWS_NO_NETWORK));
     for (int i = 0; i < n; i++) {
       wchar_t addr[64];
       format_address(addr, 64, addrs[i], port);
@@ -619,8 +625,7 @@ static void schedule_refresh(void) {
 static void rename_self(const char *name) {
   mc_settings_set_device_name(g_app.settings, name);
   if (mc_settings_save(g_app.settings) != MC_OK)
-    MessageBoxW(g_app.wnd, L"Couldn't save the name; the old one will be used next time.", L"Settings",
-                MB_OK | MB_ICONWARNING);
+    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_WINDOWS_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
   schedule_refresh();
 }
 
@@ -675,9 +680,8 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
 
 static void sync_off_message(void) {
   wchar_t text[256];
-  swprintf(text, 256, L"Sync is off, so this PC can't pair with other devices (%hs).",
-           mc_status_str(sync_bridge_error()));
-  MessageBoxW(g_app.wnd, text, L"Pair Device", MB_OK | MB_ICONINFORMATION);
+  mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PAIR_SYNC_OFF), MC_S(mc_status_str(sync_bridge_error())));
+  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_WINDOWS_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
 }
 
 /* After mc_sync_pair_request() or _address(): opens the enter-code dialog, or says why
@@ -690,17 +694,23 @@ static void pair_started(mc_status st, const wchar_t *name, const wchar_t *addre
       pair_dialog_begin_enter(sync_bridge_get(), name, address);
       return;
     case MC_ERR_LOCKED:
-      swprintf(text, 512, L"Already pairing with a device. Finish or cancel that first.");
+      swprintf(text, 512, L"%ls", mc_wstr(MC_STR_WINDOWS_PAIR_ALREADY_PAIRING));
       break;
     case MC_ERR_NOT_FOUND:
-      swprintf(text, 512, L"%ls is no longer on the network.",
-               name && *name ? name : address ? address : L"The device");
+      if (name && *name) address = name;
+      if (address) {
+        char *a = wstr_to_utf8(address);
+        mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_PAIR_GONE), MC_S(a));
+        free(a);
+      } else {
+        swprintf(text, 512, L"%ls", mc_wstr(MC_STR_WINDOWS_PAIR_GONE_UNNAMED));
+      }
       break;
     default:
-      swprintf(text, 512, L"Couldn't start pairing (%hs).", mc_status_str(st));
+      mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_PAIR_START_FAILED), MC_S(mc_status_str(st)));
       break;
   }
-  MessageBoxW(g_app.wnd, text, L"Pair Device", MB_OK | MB_ICONINFORMATION);
+  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_WINDOWS_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
 }
 
 /* A nearby device was clicked in the sidebar. Even one in another group: pairing then says
@@ -946,13 +956,6 @@ typedef struct app_args {
   int npaths;
 } app_args;
 
-static const wchar_t usage[] =
-  L"musicapp.exe [--config-dir <folder>] [--] [folders or files to import...]\n\n"
-  L"--config-dir <folder>\n"
-  L"    Keeps settings.json and sync.db in <folder> instead of %LOCALAPPDATA%\\musicapp, "
-  L"so two copies of musicapp can run, and sync, on one PC.\n\n"
-  L"Folders and files given are imported.";
-
 /* Fills args from the command line. Returns -1 to carry on, or the exit code (after showing
  * the usage). Free with free_args(). */
 static int parse_args(app_args *args) {
@@ -970,7 +973,7 @@ static int parse_args(app_args *args) {
         continue;
       }
       if (!wcscmp(a, L"--help")) {
-        MessageBoxW(NULL, usage, L"musicapp", MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_USAGE), mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONINFORMATION);
         return 0;
       }
       if (!wcscmp(a, L"--config-dir") && i + 1 < argc && args->argv[i + 1][0]) {
@@ -981,11 +984,12 @@ static int parse_args(app_args *args) {
         args->config_dir = a + 13;
         continue;
       }
-      MessageBoxW(NULL, usage, L"musicapp", MB_OK | MB_ICONWARNING); /* unknown, or no folder */
+      /* unknown, or no folder */
+      MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_USAGE), mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONWARNING);
       return 2;
     }
     if (options && !wcscmp(a, L"/?")) {
-      MessageBoxW(NULL, usage, L"musicapp", MB_OK | MB_ICONINFORMATION);
+      MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_USAGE), mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONINFORMATION);
       return 0;
     }
     if (args->paths) args->paths[args->npaths++] = a;
@@ -1074,29 +1078,20 @@ static char *choose_library_dir(HWND owner, const char *current) {
   for (;;) {
     char *dir = NULL;
     if (!current && suggested) {
-      wchar_t *w = wide_from_utf8(suggested);
-      wchar_t text[1024];
-      swprintf(text, 1024,
-               L"musicapp keeps your music in one library folder. Imported music is copied there, "
-               L"organised by artist and album, along with the library database.\n\n"
-               L"Use %ls?\n\nChoose No to pick a different folder.",
-               w ? w : L"");
-      free(w);
-      int answer = MessageBoxW(owner, text, L"Welcome to musicapp", MB_YESNOCANCEL | MB_ICONQUESTION);
+      wchar_t text[2048];
+      mc_wformat(text, 2048, mc_str(MC_STR_WINDOWS_WELCOME_TEXT), MC_S(suggested));
+      int answer = MessageBoxW(owner, text, mc_wstr(MC_STR_WINDOWS_WELCOME_TITLE), MB_YESNOCANCEL | MB_ICONQUESTION);
       if (answer == IDCANCEL) break;
       if (answer == IDYES && (dir = malloc(strlen(suggested) + 1))) strcpy(dir, suggested);
     }
-    if (!dir) dir = pick_folder(owner, L"Choose Your Music Library Folder", current ? current : suggested);
+    if (!dir) dir = pick_folder(owner, mc_wstr(MC_STR_LIBRARY_FOLDER_CHOOSE), current ? current : suggested);
     if (!dir) {
       if (current) break; /* changing location: cancel means keep the current one */
       continue;
     }
     if (in_onedrive(dir)) {
-      int answer = MessageBoxW(
-        owner,
-        L"This folder is synced by OneDrive. Sync can damage the library database while musicapp "
-        L"is writing to it.\n\nUse it anyway?",
-        L"Library Folder", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+      int answer = MessageBoxW(owner, mc_wstr(MC_STR_WINDOWS_ONEDRIVE_WARNING), mc_wstr(MC_STR_LIBRARY_FOLDER),
+                               MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
       if (answer != IDYES) {
         free(dir);
         continue;
@@ -1114,11 +1109,10 @@ static mc_library *open_library(const char *dir) {
   mc_library *lib = NULL;
   mc_status st = mc_library_open(dir, &lib);
   if (st != MC_OK) {
-    wchar_t *w = wide_from_utf8(dir);
     wchar_t text[1024];
-    swprintf(text, 1024, L"Couldn't open the library in %ls (%hs).", w ? w : L"?", mc_status_str(st));
-    free(w);
-    MessageBoxW(g_app.wnd, text, L"musicapp", MB_OK | MB_ICONERROR);
+    mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LIBRARY_OPEN_FAILED_IN),
+               MC_S(dir ? dir : mc_str(MC_STR_UNKNOWN_VALUE)), MC_S(mc_status_str(st)));
+    MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONERROR);
     return NULL;
   }
   return lib;
@@ -1138,8 +1132,7 @@ static void change_library(void) {
     g_app.lib = lib;
     mc_settings_set_library_dir(g_app.settings, dir);
     if (mc_settings_save(g_app.settings) != MC_OK)
-      MessageBoxW(g_app.wnd, L"Couldn't save the setting; the old folder will be used next time.",
-                  L"Settings", MB_OK | MB_ICONWARNING);
+      MessageBoxW(g_app.wnd, mc_wstr(MC_STR_SETTINGS_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
     import_view_set_library(g_app.lib);
     settings_view_set_library_dir(dir);
     refresh_library();
@@ -1155,6 +1148,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES |
                                             ICC_PROGRESS_CLASS | ICC_BAR_CLASSES /* tooltips */};
   InitCommonControlsEx(&icc);
+  wstr_init(); /* before any thread looks up a string */
   app_args args;
   int exit_code = parse_args(&args);
   if (exit_code >= 0) {
@@ -1172,8 +1166,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   g_app.config_dir = config_dir(&args, shown_dir, MAX_PATH);
   if (!g_app.config_dir || mc_settings_load(g_app.config_dir, &g_app.settings) != MC_OK) {
     wchar_t text[MAX_PATH + 128];
-    swprintf(text, MAX_PATH + 128, L"Couldn't load musicapp's settings from %ls.", shown_dir);
-    MessageBoxW(NULL, text, L"musicapp", MB_OK | MB_ICONERROR);
+    char *shown = wstr_to_utf8(shown_dir);
+    mc_wformat(text, MAX_PATH + 128, mc_str(MC_STR_WINDOWS_SETTINGS_LOAD_FAILED), MC_S(shown));
+    free(shown);
+    MessageBoxW(NULL, text, mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONERROR);
     free(g_app.config_dir);
     free_args(&args);
     return 1;
@@ -1184,8 +1180,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     mc_settings_set_library_dir(g_app.settings, dir);
     free(dir);
     if (mc_settings_save(g_app.settings) != MC_OK)
-      MessageBoxW(NULL, L"Couldn't save your settings; you'll be asked again next time.",
-                  L"musicapp", MB_OK | MB_ICONWARNING);
+      MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_SETTINGS_FIRST_SAVE_FAILED), mc_wstr(MC_STR_APP_NAME),
+                  MB_OK | MB_ICONWARNING);
   }
   g_app.lib = open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
 
@@ -1202,8 +1198,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   RegisterClassExW(&wc);
 
   /* A config folder of its own is shown in the title, to tell instances apart. */
-  wchar_t title[MAX_PATH + 32] = L"musicapp";
-  if (args.config_dir) swprintf(title, MAX_PATH + 32, L"musicapp \x2014 %ls", shown_dir);
+  wchar_t title[MAX_PATH + 32];
+  lstrcpynW(title, mc_wstr(MC_STR_APP_NAME), MAX_PATH + 32);
+  if (args.config_dir) {
+    char *shown = wstr_to_utf8(shown_dir);
+    mc_wformat(title, MAX_PATH + 32, mc_str(MC_STR_WINDOWS_TITLE_CONFIG_DIR), MC_S(shown));
+    free(shown);
+  }
   HWND wnd = CreateWindowExW(0, L"musicapp", title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                              CW_USEDEFAULT, CW_USEDEFAULT, 1200, 800, NULL, NULL, inst, NULL);
   if (!wnd) return 1;

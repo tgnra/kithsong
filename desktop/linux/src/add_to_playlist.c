@@ -24,7 +24,7 @@ static void fill(picker *p, const char *focus) {
   gtk_list_box_remove_all(GTK_LIST_BOX(p->list));
   mc_playlist_list *lists = NULL;
   if (mc_library_list_playlists(p->lib, &lists) != MC_OK) {
-    toast(p, "Couldn't list the playlists");
+    toast(p, mc_str(MC_STR_LINUX_PLAYLISTS_LIST_FAILED));
     return;
   }
   for (int i = 0; i < lists->count; i++) {
@@ -32,9 +32,9 @@ static void fill(picker *p, const char *focus) {
     GtkWidget *row = adw_action_row_new();
     adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), info->name);
-    char *count = g_strdup_printf("%d %s", info->track_count, info->track_count == 1 ? "track" : "tracks");
+    char count[64];
+    mc_format(count, sizeof count, mc_str_plural(MC_STR_TRACKS, info->track_count), MC_D(info->track_count));
     adw_action_row_set_subtitle(ADW_ACTION_ROW(row), count);
-    g_free(count);
     gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
     g_object_set_data_full(G_OBJECT(row), "uid", g_strdup(info->uid), g_free);
     gtk_list_box_append(GTK_LIST_BOX(p->list), row);
@@ -52,7 +52,7 @@ static void on_create(AdwEntryRow *entry, gpointer data) {
     fill(p, uid);
     if (p->changed) p->changed(p->user);
   } else if (*name) {
-    toast(p, "Couldn't create the playlist");
+    toast(p, mc_str(MC_STR_PLAYLIST_CREATE_FAILED));
   }
   g_free(name);
 }
@@ -62,7 +62,7 @@ static void on_playlist_activated(GtkListBox *list, GtkListBoxRow *row, gpointer
   picker *p = data;
   const char *uid = g_object_get_data(G_OBJECT(row), "uid");
   if (!uid || mc_playlist_append(p->lib, uid, p->track_uid, NULL) != MC_OK) {
-    toast(p, "Couldn't add the track");
+    toast(p, mc_str(MC_STR_PLAYLIST_ADD_FAILED));
     return;
   }
   /* Close first: changed reloads the window behind. */
@@ -83,7 +83,7 @@ void add_to_playlist_present(GtkWidget *parent, mc_library *lib, const char *tra
 
   p->dialog = GTK_WIDGET(adw_dialog_new());
   g_object_set_data_full(G_OBJECT(p->dialog), "add-to-playlist", p, g_free);
-  adw_dialog_set_title(ADW_DIALOG(p->dialog), "Add to Playlist");
+  adw_dialog_set_title(ADW_DIALOG(p->dialog), mc_str(MC_STR_ADD_TO_PLAYLIST));
   adw_dialog_set_content_width(ADW_DIALOG(p->dialog), 360);
   adw_dialog_set_content_height(ADW_DIALOG(p->dialog), 460);
 
@@ -97,7 +97,7 @@ void add_to_playlist_present(GtkWidget *parent, mc_library *lib, const char *tra
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(create), GTK_SELECTION_NONE);
   gtk_widget_add_css_class(create, "boxed-list");
   p->name = adw_entry_row_new();
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(p->name), "New Playlist");
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(p->name), mc_str(MC_STR_NEW_PLAYLIST));
   adw_entry_row_set_show_apply_button(ADW_ENTRY_ROW(p->name), TRUE);
   g_signal_connect(p->name, "apply", G_CALLBACK(on_create), p);
   gtk_list_box_append(GTK_LIST_BOX(create), p->name);
@@ -107,7 +107,7 @@ void add_to_playlist_present(GtkWidget *parent, mc_library *lib, const char *tra
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(p->list), GTK_SELECTION_NONE);
   gtk_widget_add_css_class(p->list, "boxed-list");
   gtk_widget_set_valign(p->list, GTK_ALIGN_START);
-  GtkWidget *none = gtk_label_new("No playlists yet");
+  GtkWidget *none = gtk_label_new(mc_str(MC_STR_NO_PLAYLISTS_TITLE));
   gtk_widget_add_css_class(none, "dim-label");
   gtk_widget_set_margin_top(none, 12);
   gtk_widget_set_margin_bottom(none, 12);

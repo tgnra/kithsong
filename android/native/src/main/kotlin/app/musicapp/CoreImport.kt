@@ -29,10 +29,13 @@ class CoreImport(
 
     fun itemState(item: Int): State = State.entries[nativeItemState(handle, item)]
 
-    /** "Artist - Album" from the item's tags, else its folder. */
+    /** "Artist – Album" from the item's tags, else its folder, in the core's language. */
     fun itemName(item: Int): String = nativeItemName(handle, item)
 
-    /** Why the item failed or needs review, e.g. "Couldn't reach MusicBrainz", or null. */
+    /**
+     * Why the item failed or needs review, e.g. "Couldn't reach MusicBrainz", or null: in the
+     * language given to [NativeCore.setLocale] when it happened.
+     */
     fun itemError(item: Int): String? = nativeItemError(handle, item)
 
     /** Imports an item that needs review with the tags it already has. */

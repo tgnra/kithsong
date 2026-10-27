@@ -4,10 +4,11 @@
 #include <wchar.h>
 
 #include "playlist_dialogs.h"
+#include "wstr.h"
 
 /* A menu item's text for name: & doubled, so it isn't taken for an accelerator. */
 static wchar_t *menu_text(const char *name) {
-  if (!name || !*name) name = "Untitled";
+  if (!name || !*name) name = mc_str(MC_STR_UNTITLED);
   int n = MultiByteToWideChar(CP_UTF8, 0, name, -1, NULL, 0);
   wchar_t *w = n > 0 ? malloc((size_t)n * sizeof *w) : NULL;
   wchar_t *out = w ? malloc((size_t)n * 2 * sizeof *out) : NULL;
@@ -36,7 +37,7 @@ HMENU add_to_playlist_menu(mc_library *lib, UINT first_id, UINT new_id, mc_playl
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   }
-  AppendMenuW(menu, MF_STRING | (lib ? 0 : MF_GRAYED), new_id, L"New Playlist\x2026");
+  AppendMenuW(menu, MF_STRING | (lib ? 0 : MF_GRAYED), new_id, mc_wstr_mnemonic(MC_STR_WINDOWS_NEW_PLAYLIST_MENU));
   return menu;
 }
 
@@ -50,7 +51,7 @@ BOOL add_to_playlist(HWND owner, mc_library *lib, const char *track_uid, const c
     created = TRUE;
   }
   if (mc_playlist_append(lib, playlist_uid, track_uid, NULL) != MC_OK) {
-    MessageBoxW(owner, L"Couldn't add the track to the playlist.", L"Add to Playlist", MB_OK | MB_ICONERROR);
+    MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_ADD_FAILED), mc_wstr(MC_STR_ADD_TO_PLAYLIST), MB_OK | MB_ICONERROR);
     return created;
   }
   return TRUE;

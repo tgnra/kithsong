@@ -51,6 +51,9 @@ android {
     }
 }
 
+// R.string/R.plurals from strings/en.json (see GenerateStrings in the root build.gradle.kts).
+extra["musicappStringSections"] = listOf("shared", "android")
+
 dependencies {
     implementation(project(":native"))
 

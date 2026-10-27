@@ -29,7 +29,7 @@ static void album_item_init(AlbumItem *self) {
 static AlbumItem *album_item_new(const mc_album_info *info) {
   AlbumItem *self = g_object_new(ALBUM_TYPE_ITEM, NULL);
   memcpy(self->uid, info->uid, sizeof self->uid);
-  self->title = g_strdup(info->title && *info->title ? info->title : "Untitled");
+  self->title = g_strdup(info->title && *info->title ? info->title : mc_str(MC_STR_UNTITLED));
   self->artist = info->artist && *info->artist ? g_strdup(info->artist) : NULL;
   self->cover_dir = info->has_art && info->folder ? g_strdup(info->folder) : NULL;
   self->year = info->year;
@@ -39,7 +39,7 @@ static AlbumItem *album_item_new(const mc_album_info *info) {
 static AlbumItem *album_item_new_playlist(const mc_playlist_info *info) {
   AlbumItem *self = g_object_new(ALBUM_TYPE_ITEM, NULL);
   memcpy(self->uid, info->uid, sizeof self->uid);
-  self->title = g_strdup(info->name && *info->name ? info->name : "Untitled");
+  self->title = g_strdup(info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED));
   self->is_playlist = TRUE;
   self->track_count = info->track_count;
   return self;
@@ -53,9 +53,12 @@ static gboolean album_item_equal(const AlbumItem *a, const AlbumItem *b) {
 
 /* The line beneath the title: the artist, or a playlist's track count. g_free it. */
 static char *album_item_subtitle(const AlbumItem *item) {
-  if (item->is_playlist)
-    return g_strdup_printf("%d %s", item->track_count, item->track_count == 1 ? "track" : "tracks");
-  return g_strdup(item->artist ? item->artist : "Unknown Artist");
+  if (item->is_playlist) {
+    char count[64];
+    mc_format(count, sizeof count, mc_str_plural(MC_STR_TRACKS, item->track_count), MC_D(item->track_count));
+    return g_strdup(count);
+  }
+  return g_strdup(item->artist ? item->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
 }
 
 /* --- Grid --- */
@@ -139,9 +142,9 @@ static void tile_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpoi
   char *subtitle = album_item_subtitle(album);
   gtk_label_set_text(GTK_LABEL(c->title), album->title);
   gtk_label_set_text(GTK_LABEL(c->artist), subtitle);
-  char *name = g_strdup_printf("%s, %s", album->title, subtitle);
-  gtk_list_item_set_accessible_label(item, name);
-  g_free(name);
+  char *name = mc_format_alloc(mc_str(MC_STR_LINUX_ALBUM_TILE_NAME), MC_S(album->title), MC_S(subtitle));
+  gtk_list_item_set_accessible_label(item, name ? name : album->title);
+  mc_free(name);
   g_free(subtitle);
 
   cell_cancel(c);

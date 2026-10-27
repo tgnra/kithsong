@@ -26,9 +26,79 @@ include(GNUInstallDirs)
 include(Licenses)
 set(_app_id app.musicapp.Musicapp)
 string(TIMESTAMP MUSICAPP_RELEASE_DATE "%Y-%m-%d" UTC)  # honours SOURCE_DATE_EPOCH
+
+# The .desktop file's and the metainfo's text is strings/en.json's (linux.app_summary,
+# app_description, app_keywords), plus a translated line for each strings/<lang>.json that
+# has one. Editing a strings file reconfigures.
+
+# The text of section.key in a strings file's JSON, or "" if it has none.
+function(_musicapp_string json section key out)
+  string(JSON _type ERROR_VARIABLE _err TYPE "${json}" ${section} ${key})
+  set(_text "")
+  if(_type STREQUAL "STRING")
+    string(JSON _text GET "${json}" ${section} ${key})
+  elseif(_type STREQUAL "OBJECT")
+    string(JSON _text ERROR_VARIABLE _err GET "${json}" ${section} ${key} text)
+    if(_err)
+      set(_text "")
+    endif()
+  endif()
+  set(${out} "${_text}" PARENT_SCOPE)
+endfunction()
+
+# text as a .desktop file's value (backslashes and newlines escaped) and as XML text.
+function(_musicapp_escape text desktop_out xml_out)
+  string(REPLACE "\\" "\\\\" _desktop "${text}")
+  string(REPLACE "\n" "\\n" _desktop "${_desktop}")
+  string(REPLACE "&" "&amp;" _xml "${text}")
+  string(REPLACE "<" "&lt;" _xml "${_xml}")
+  string(REPLACE ">" "&gt;" _xml "${_xml}")
+  set(${desktop_out} "${_desktop}" PARENT_SCOPE)
+  set(${xml_out} "${_xml}" PARENT_SCOPE)
+endfunction()
+
+file(GLOB _string_files CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/strings/*.json")
+list(SORT _string_files)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_string_files})
+# The translations, as whole lines for the templates.
+set(MUSICAPP_COMMENT_L10N "")
+set(MUSICAPP_KEYWORDS_L10N "")
+set(MUSICAPP_SUMMARY_L10N "")
+set(MUSICAPP_DESCRIPTION_L10N "")
+foreach(_file IN LISTS _string_files)
+  get_filename_component(_lang "${_file}" NAME_WE)
+  string(REPLACE "-" "_" _locale "${_lang}")  # pt-BR -> pt_BR, as both files name locales
+  file(READ "${_file}" _json)
+  _musicapp_string("${_json}" linux app_summary _summary)
+  _musicapp_string("${_json}" linux app_description _description)
+  _musicapp_string("${_json}" linux app_keywords _keywords)
+  _musicapp_escape("${_summary}" _summary_desktop _summary_xml)
+  _musicapp_escape("${_description}" _description_desktop _description_xml)
+  _musicapp_escape("${_keywords}" _keywords_desktop _keywords_xml)
+  if(_lang STREQUAL "en")
+    _musicapp_string("${_json}" shared app_name MUSICAPP_APP_NAME)
+    set(MUSICAPP_COMMENT "${_summary_desktop}")
+    set(MUSICAPP_KEYWORDS "${_keywords_desktop}")
+    set(MUSICAPP_SUMMARY "${_summary_xml}")
+    set(MUSICAPP_DESCRIPTION "${_description_xml}")
+    continue()
+  endif()
+  if(NOT _summary STREQUAL "")
+    string(APPEND MUSICAPP_COMMENT_L10N "Comment[${_locale}]=${_summary_desktop}\n")
+    string(APPEND MUSICAPP_SUMMARY_L10N "  <summary xml:lang=\"${_locale}\">${_summary_xml}</summary>\n")
+  endif()
+  if(NOT _keywords STREQUAL "")
+    string(APPEND MUSICAPP_KEYWORDS_L10N "Keywords[${_locale}]=${_keywords_desktop}\n")
+  endif()
+  if(NOT _description STREQUAL "")
+    string(APPEND MUSICAPP_DESCRIPTION_L10N "    <p xml:lang=\"${_locale}\">${_description_xml}</p>\n")
+  endif()
+endforeach()
+
+configure_file(data/${_app_id}.desktop.in "${CMAKE_CURRENT_BINARY_DIR}/${_app_id}.desktop" @ONLY)
 configure_file(data/${_app_id}.metainfo.xml.in "${CMAKE_CURRENT_BINARY_DIR}/${_app_id}.metainfo.xml" @ONLY)
 install(TARGETS musicapp RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT musicapp)
-install(FILES data/${_app_id}.desktop
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${_app_id}.desktop"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/applications" COMPONENT musicapp)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${_app_id}.metainfo.xml"
   DESTINATION "${CMAKE_INSTALL_DATADIR}/metainfo" COMPONENT musicapp)

@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "theme.h"
+#include "wstr.h"
 
 enum { PREVIOUS, PLAY, NEXT, NUM_BUTTONS };
 
@@ -72,7 +73,8 @@ static void make_icons(void) {
 }
 
 static void fill_buttons(THUMBBUTTON *b) {
-  static const wchar_t *const tips[] = {L"Previous", L"Play", L"Next"};
+  static const enum mc_str_id tips[] = {MC_STR_PREVIOUS_TRACK, MC_STR_PLAY, MC_STR_NEXT_TRACK};
+  const size_t tip_max = sizeof b[0].szTip / sizeof b[0].szTip[0] - 1;
   BOOL enabled[NUM_BUTTONS] = {s.has_previous, s.has_track, s.has_next};
   for (int i = 0; i < NUM_BUTTONS; i++) {
     memset(&b[i], 0, sizeof b[i]);
@@ -80,11 +82,11 @@ static void fill_buttons(THUMBBUTTON *b) {
     b[i].iId = (UINT)(TASKBAR_PREVIOUS + i);
     b[i].hIcon = s.icons[i];
     b[i].dwFlags = enabled[i] ? THBF_ENABLED : THBF_DISABLED;
-    wcscpy(b[i].szTip, tips[i]);
+    wcsncpy(b[i].szTip, mc_wstr(tips[i]), tip_max);
   }
   if (s.playing) {
     b[PLAY].hIcon = s.icons[NUM_BUTTONS];
-    wcscpy(b[PLAY].szTip, L"Pause");
+    wcsncpy(b[PLAY].szTip, mc_wstr(MC_STR_PAUSE), tip_max);
   }
 }
 

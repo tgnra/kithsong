@@ -43,6 +43,16 @@ JNIEXPORT jint JNICALL Java_app_musicapp_NativeCore_init(JNIEnv *env, jclass cls
   return mc_init();
 }
 
+/* The core's language for its own text, from a BCP 47 tag such as "fr-CA". */
+JNIEXPORT void JNICALL Java_app_musicapp_NativeCore_setLocale(JNIEnv *env, jclass cls,
+                                                               jstring tag) {
+  (void)cls;
+  const char *ctag = (*env)->GetStringUTFChars(env, tag, NULL);
+  if (!ctag) return; /* OutOfMemoryError is pending */
+  mc_strings_set_locale(ctag);
+  (*env)->ReleaseStringUTFChars(env, tag, ctag);
+}
+
 /* Returns the number of albums, or a negative mc_status on failure. */
 JNIEXPORT jlong JNICALL Java_app_musicapp_NativeCore_albumCount(JNIEnv *env, jclass cls,
                                                                  jstring path) {
@@ -400,7 +410,8 @@ JNIEXPORT jint JNICALL Java_app_musicapp_CoreImport_nativeItemState(JNIEnv *env,
   return state;
 }
 
-/* What to call the item: "Artist - Album" from its tags, else its folder. */
+/* What to call the item: "Artist – Album" (the core's track_byline) from its tags, else its
+ * folder. */
 JNIEXPORT jstring JNICALL Java_app_musicapp_CoreImport_nativeItemName(JNIEnv *env, jclass cls,
                                                                       jlong handle, jint item) {
   (void)cls;
@@ -412,11 +423,9 @@ JNIEXPORT jstring JNICALL Java_app_musicapp_CoreImport_nativeItemName(JNIEnv *en
   }
   jstring name;
   if (it->artist && it->album) {
-    size_t len = strlen(it->artist) + strlen(it->album) + 4;
-    char *text = malloc(len);
-    if (text) snprintf(text, len, "%s - %s", it->artist, it->album);
+    char *text = mc_format_alloc(mc_str(MC_STR_TRACK_BYLINE), MC_S(it->artist), MC_S(it->album));
     name = new_string(env, text ? text : it->album);
-    free(text);
+    mc_free(text);
   } else {
     name = new_string(env, it->album ? it->album : it->folder ? it->folder : "");
   }

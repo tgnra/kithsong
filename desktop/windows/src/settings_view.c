@@ -8,6 +8,7 @@
 
 #include "sync_bridge.h"
 #include "theme.h"
+#include "wstr.h"
 
 enum {
   ID_SET_TITLE = 300,
@@ -69,31 +70,28 @@ static LRESULT CALLBACK name_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT
 void settings_view_create(HWND parent) {
   g_set.parent = parent;
   DWORD label = SS_LEFT | SS_NOPREFIX;
-  g_set.title = child(WC_STATICW, L"Settings", label, ID_SET_TITLE);
-  g_set.heading = child(WC_STATICW, L"Library location", label, ID_SET_HEADING);
+  g_set.title = child(WC_STATICW, mc_wstr(MC_STR_SETTINGS), label, ID_SET_TITLE);
+  g_set.heading = child(WC_STATICW, mc_wstr(MC_STR_LIBRARY_LOCATION), label, ID_SET_HEADING);
   /* One line: a long path loses folders from its middle, rather than wrapping mid-name. */
   g_set.path = child(WC_STATICW, NULL, label | SS_PATHELLIPSIS, ID_SET_PATH);
-  g_set.move = child(WC_BUTTONW, L"Move Library\x2026", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_MOVE);
-  g_set.open = child(WC_BUTTONW, L"Open Another Library\x2026", BS_PUSHBUTTON | WS_TABSTOP, ID_SET_OPEN);
-  g_set.note = child(WC_STATICW,
-                     L"Opening another library switches to the library in that folder, or starts an empty "
-                     L"one there. Music you've already imported stays where it is.",
-                     label, ID_SET_NOTE);
+  g_set.move = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LIBRARY_MOVE), BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED,
+                     ID_SET_MOVE);
+  g_set.open = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LIBRARY_OPEN_ANOTHER), BS_PUSHBUTTON | WS_TABSTOP,
+                     ID_SET_OPEN);
+  g_set.note = child(WC_STATICW, mc_wstr(MC_STR_LIBRARY_LOCATION_TEXT), label, ID_SET_NOTE);
 
-  g_set.sync_heading = child(WC_STATICW, L"Sync", label, ID_SET_SYNC_HEADING);
-  g_set.name_label = child(WC_STATICW, L"This PC's name", label, ID_SET_NAME_LABEL);
+  g_set.sync_heading = child(WC_STATICW, mc_wstr(MC_STR_SYNC), label, ID_SET_SYNC_HEADING);
+  g_set.name_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_THIS_PC_NAME), label, ID_SET_NAME_LABEL);
   g_set.name = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0,
                                0, parent, (HMENU)(INT_PTR)ID_SET_NAME, GetModuleHandleW(NULL), NULL);
   SendMessageW(g_set.name, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
   SetWindowSubclass(g_set.name, name_proc, 0, 0);
   theme_center_edit(g_set.name);
-  g_set.addr_label = child(WC_STATICW, L"This PC's address", label, ID_SET_ADDR_LABEL);
+  g_set.addr_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_THIS_PC_ADDRESS), label, ID_SET_ADDR_LABEL);
   g_set.addr = child(WC_STATICW, NULL, label | SS_EDITCONTROL, ID_SET_ADDR);
-  g_set.leave = child(WC_BUTTONW, L"Leave Group\x2026", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_LEAVE);
-  g_set.sync_note = child(WC_STATICW,
-                          L"Other devices show this PC by its name. Leaving the group stops syncing with its "
-                          L"other devices; the music on this PC stays.",
-                          label, ID_SET_SYNC_NOTE);
+  g_set.leave = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_WINDOWS_LEAVE_GROUP_BUTTON),
+                      BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_LEAVE);
+  g_set.sync_note = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_SETTINGS_NOTE), label, ID_SET_SYNC_NOTE);
 }
 
 void settings_view_destroy(void) {
@@ -251,20 +249,21 @@ static void format_addresses(wchar_t *out, size_t cap) {
   mc_sync *sync = sync_bridge_get();
   out[0] = L'\0';
   if (!sync) {
-    swprintf(out, cap, L"Sync is off (%hs).", mc_status_str(sync_bridge_error()));
+    mc_wformat(out, cap, mc_str(MC_STR_WINDOWS_SYNC_OFF), MC_S(mc_status_str(sync_bridge_error())));
     return;
   }
   char addrs[MAX_ADDRESSES][MC_SYNC_ADDR_STRLEN];
   int n = mc_sync_local_addresses(addrs, MAX_ADDRESSES);
   unsigned port = mc_sync_port(sync);
   if (n <= 0) {
-    swprintf(out, cap, L"Port %u (no network)", port);
+    mc_wformat(out, cap, mc_str(MC_STR_WINDOWS_PORT_NO_NETWORK), MC_D(port));
     return;
   }
   size_t len = 0;
   for (int i = 0; i < n && len < cap; i++) {
     BOOL v6 = strchr(addrs[i], ':') != NULL;
-    int w = swprintf(out + len, cap - len, L"%ls%hs%hs%hs:%u", i ? L", " : L"", v6 ? "[" : "", addrs[i],
+    int w = swprintf(out + len, cap - len, L"%ls%hs%hs%hs:%u", i ? mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR) : L"",
+                     v6 ? "[" : "", addrs[i],
                      v6 ? "]" : "", port);
     if (w < 0) break;
     len += (size_t)w;
@@ -327,8 +326,8 @@ static void apply_name(void) {
   mc_status st = sync ? mc_sync_set_device_name(sync, name) : MC_OK;
   if (st != MC_OK && st != MC_ERR_UNIMPLEMENTED) {
     wchar_t text[256];
-    swprintf(text, 256, L"Couldn't rename this PC (%hs).", mc_status_str(st));
-    MessageBoxW(g_set.parent, text, L"Settings", MB_OK | MB_ICONERROR);
+    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_RENAME_SELF_FAILED), MC_S(mc_status_str(st)));
+    MessageBoxW(g_set.parent, text, mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONERROR);
     if (MultiByteToWideChar(CP_UTF8, 0, g_set.shown_name, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1))
       SetWindowTextW(g_set.name, w); /* back to the name it has, so it isn't tried again */
   } else if (g_set.settings) {
@@ -338,7 +337,7 @@ static void apply_name(void) {
       snprintf(saved, sizeof saved, "%s", name);
     mc_settings_set_device_name(g_set.settings, saved);
     if (mc_settings_save(g_set.settings) != MC_OK)
-      MessageBoxW(g_set.parent, L"Couldn't save the name; the old one will be used next time.", L"Settings",
+      MessageBoxW(g_set.parent, mc_wstr(MC_STR_WINDOWS_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS),
                   MB_OK | MB_ICONWARNING);
     snprintf(g_set.shown_name, sizeof g_set.shown_name, "%s", saved);
     if (MultiByteToWideChar(CP_UTF8, 0, saved, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1)) SetWindowTextW(g_set.name, w);
@@ -349,22 +348,19 @@ static void apply_name(void) {
 static void leave_group(void) {
   mc_sync *sync = sync_bridge_get();
   if (!sync) return;
-  if (MessageBoxW(g_set.parent,
-                  L"Leave the group?\n\nThis PC will stop syncing with the group's other devices. The music "
-                  L"on this PC stays.",
-                  L"Leave Group", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+  if (MessageBoxW(g_set.parent, mc_wstr(MC_STR_WINDOWS_PC_LEAVE_GROUP_CONFIRM), mc_wstr(MC_STR_LEAVE_GROUP),
+                  MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
     return;
   HCURSOR old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT));
   mc_status st = mc_sync_leave_group(sync); /* blocks for a few seconds at most */
   SetCursor(old);
   if (st == MC_ERR_LOCKED)
-    MessageBoxW(g_set.parent,
-                L"This PC is the group's only archive, so it can't leave while other devices remain.",
-                L"Leave Group", MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(g_set.parent, mc_wstr(MC_STR_WINDOWS_LEAVE_ONLY_ARCHIVE), mc_wstr(MC_STR_LEAVE_GROUP),
+                MB_OK | MB_ICONINFORMATION);
   else if (st != MC_OK && st != MC_ERR_NOT_FOUND) {
     wchar_t text[256];
-    swprintf(text, 256, L"Couldn't leave the group (%hs).", mc_status_str(st));
-    MessageBoxW(g_set.parent, text, L"Leave Group", MB_OK | MB_ICONERROR);
+    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_LEAVE_GROUP_FAILED), MC_S(mc_status_str(st)));
+    MessageBoxW(g_set.parent, text, mc_wstr(MC_STR_LEAVE_GROUP), MB_OK | MB_ICONERROR);
   }
   if (g_set.devices_changed) g_set.devices_changed();
   settings_view_update_sync();

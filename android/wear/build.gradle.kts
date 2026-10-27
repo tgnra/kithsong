@@ -55,6 +55,10 @@ android {
     }
 }
 
+// R.string/R.plurals from strings/en.json (see GenerateStrings in the root build.gradle.kts):
+// the strings shared with the other apps, and the watch's own.
+extra["musicappStringSections"] = listOf("shared", "wear")
+
 dependencies {
     implementation(project(":native"))
 

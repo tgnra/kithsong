@@ -10,8 +10,9 @@
 /* Groups of the item list, in display order. */
 enum { GROUP_REVIEW, GROUP_ACTIVE, GROUP_DONE, GROUP_SKIPPED, GROUP_FAILED, NUM_GROUPS };
 
-static const char *const group_titles[NUM_GROUPS] = {"Needs Your Attention", "In Progress",
-                                                     "Imported", "Skipped", "Failed"};
+static const enum mc_str_id group_titles[NUM_GROUPS] = {MC_STR_IMPORT_NEEDS_DECISION, MC_STR_IMPORT_GROUP_ACTIVE,
+                                                        MC_STR_IMPORT_STATE_DONE, MC_STR_IMPORT_STATE_SKIPPED,
+                                                        MC_STR_IMPORT_STATE_FAILED};
 
 typedef struct import_view import_view;
 
@@ -87,13 +88,13 @@ static void format_length(int ms, char *out, size_t n) {
 
 static const char *state_label(mc_import_state s) {
   switch (s) {
-    case MC_IMPORT_PENDING: return "Waiting";
-    case MC_IMPORT_MATCHING: return "Matching\xE2\x80\xA6";
-    case MC_IMPORT_REVIEW: return "Needs review";
-    case MC_IMPORT_WRITING: return "Writing\xE2\x80\xA6";
-    case MC_IMPORT_DONE: return "Imported";
-    case MC_IMPORT_SKIPPED: return "Skipped";
-    case MC_IMPORT_FAILED: return "Failed";
+    case MC_IMPORT_PENDING: return mc_str(MC_STR_IMPORT_STATE_WAITING);
+    case MC_IMPORT_MATCHING: return mc_str(MC_STR_IMPORT_STATE_MATCHING);
+    case MC_IMPORT_REVIEW: return mc_str(MC_STR_IMPORT_NEEDS_DECISION);
+    case MC_IMPORT_WRITING: return mc_str(MC_STR_IMPORT_STATE_WRITING);
+    case MC_IMPORT_DONE: return mc_str(MC_STR_IMPORT_STATE_DONE);
+    case MC_IMPORT_SKIPPED: return mc_str(MC_STR_IMPORT_STATE_SKIPPED);
+    case MC_IMPORT_FAILED: return mc_str(MC_STR_IMPORT_STATE_FAILED);
   }
   return "";
 }
@@ -114,11 +115,11 @@ static gboolean state_busy(mc_import_state s) {
 
 /* "Radiohead – OK Computer (1997)", or for a single "OutKast – Hey Ya! (2003)". */
 static void match_summary(const mc_import_match *m, char *out, size_t n) {
-  const char *artist = m->album_artist ? m->album_artist : "?";
+  const char *artist = m->album_artist ? m->album_artist : mc_str(MC_STR_UNKNOWN_VALUE);
   const char *title = m->is_single && m->track_count ? m->tracks[0].title : m->album;
-  if (!title) title = "?";
-  if (m->year) snprintf(out, n, "%s \xE2\x80\x93 %s (%d)", artist, title, m->year);
-  else snprintf(out, n, "%s \xE2\x80\x93 %s", artist, title);
+  if (!title) title = mc_str(MC_STR_UNKNOWN_VALUE);
+  if (m->year) mc_format(out, n, mc_str(MC_STR_IMPORT_MATCH_YEAR), MC_S(artist), MC_S(title), MC_D(m->year));
+  else mc_format(out, n, mc_str(MC_STR_TRACK_BYLINE), MC_S(artist), MC_S(title));
 }
 
 /* Appends part to a " · "-separated list in out. */
@@ -126,12 +127,17 @@ static void join(char *out, size_t n, const char *part) {
   if (!part || !*part) return;
   size_t len = strlen(out);
   if (len + 1 >= n) return;
-  snprintf(out + len, n - len, "%s%s", len ? " \xC2\xB7 " : "", part);
+  snprintf(out + len, n - len, "%s%s", len ? mc_str(MC_STR_SEPARATOR_DOT) : "", part);
+}
+
+/* A count's plural string with the count in it, e.g. "3 imported". */
+static void count_text(enum mc_str_id id, int count, char *out, size_t n) {
+  mc_format(out, n, mc_str_plural(id, count), MC_D(count));
 }
 
 static void alert(GtkWidget *parent, const char *heading, const char *body) {
   AdwDialog *dlg = adw_alert_dialog_new(heading, body);
-  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dlg), "close", "_Close");
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(dlg), "close", mc_str_mnemonic(MC_STR_CLOSE));
   adw_dialog_present(dlg, parent);
 }
 
@@ -215,26 +221,31 @@ static void close_session(import_view *v) {
 }
 
 static void update_status(import_view *v) {
-  char text[256];
+  char text[512], progress[128], imported[128], other[128];
   int counts[MC_IMPORT_FAILED + 1] = {0};
   for (int i = 0; v->states && i < v->item_count; i++) counts[v->states[i]]++;
   int settled = counts[MC_IMPORT_REVIEW] + counts[MC_IMPORT_DONE] + counts[MC_IMPORT_SKIPPED] +
                 counts[MC_IMPORT_FAILED];
 
+  count_text(MC_STR_IMPORT_IMPORTED, counts[MC_IMPORT_DONE], imported, sizeof imported);
   if (!v->states) {
-    snprintf(text, sizeof text, "Scanning\xE2\x80\xA6 %d audio files found", v->scanned_files);
+    count_text(MC_STR_IMPORT_SCANNING_FILES, v->scanned_files, text, sizeof text);
   } else if (v->item_count == 0) {
-    snprintf(text, sizeof text, "No audio files found.");
+    g_strlcpy(text, mc_str(MC_STR_IMPORT_NO_MUSIC), sizeof text);
   } else if (!v->idle) {
-    snprintf(text, sizeof text, "Matching %d of %d\xE2\x80\xA6   %d imported, %d need your attention",
-             settled < v->item_count ? settled + 1 : settled, v->item_count, counts[MC_IMPORT_DONE],
-             counts[MC_IMPORT_REVIEW]);
+    /* "Importing 3 of 40   2 imported, 1 needs a decision" */
+    mc_format(progress, sizeof progress, mc_str(MC_STR_IMPORT_MATCHING),
+              MC_D(settled < v->item_count ? settled + 1 : settled), MC_D(v->item_count));
+    count_text(MC_STR_IMPORT_NEED_DECISION, counts[MC_IMPORT_REVIEW], other, sizeof other);
+    snprintf(text, sizeof text, "%s   %s%s%s", progress, imported, mc_str(MC_STR_IMPORT_LIST_SEPARATOR), other);
   } else if (counts[MC_IMPORT_REVIEW]) {
-    snprintf(text, sizeof text, "%d imported. %d need your attention: choose one to pick a match.",
-             counts[MC_IMPORT_DONE], counts[MC_IMPORT_REVIEW]);
+    count_text(MC_STR_IMPORT_NEED_DECISION, counts[MC_IMPORT_REVIEW], other, sizeof other);
+    mc_format(text, sizeof text, mc_str(MC_STR_IMPORT_STATUS_REVIEW), MC_S(imported), MC_S(other));
   } else {
-    snprintf(text, sizeof text, "Finished: %d imported, %d skipped, %d failed.",
-             counts[MC_IMPORT_DONE], counts[MC_IMPORT_SKIPPED], counts[MC_IMPORT_FAILED]);
+    count_text(MC_STR_IMPORT_SKIPPED, counts[MC_IMPORT_SKIPPED], progress, sizeof progress);
+    count_text(MC_STR_IMPORT_FAILED, counts[MC_IMPORT_FAILED], other, sizeof other);
+    mc_format(text, sizeof text, mc_str(MC_STR_IMPORT_STATUS_FINISHED), MC_S(imported), MC_S(progress),
+              MC_S(other));
   }
   gtk_label_set_text(GTK_LABEL(v->status), text);
 
@@ -264,7 +275,9 @@ static void refresh_row(import_view *v, int idx) {
   v->states[idx] = it->state;
   item_row *r = &v->rows[idx];
 
-  const char *title = it->album ? it->album : it->file_count ? file_name(it->files[0].path) : "?";
+  const char *title = it->album        ? it->album
+                      : it->file_count ? file_name(it->files[0].path)
+                                       : mc_str(MC_STR_UNKNOWN_VALUE);
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(r->row), title);
 
   const mc_import_match *m = NULL;
@@ -272,13 +285,13 @@ static void refresh_row(import_view *v, int idx) {
   else if (it->state != MC_IMPORT_DONE && it->match_count) m = &it->matches[0];
   gboolean as_is = it->state == MC_IMPORT_DONE && it->chosen < 0;
 
-  char files[32], match[512] = "", subtitle[1024] = "";
-  if (it->kind == MC_IMPORT_SINGLE) snprintf(files, sizeof files, "Single");
-  else snprintf(files, sizeof files, it->file_count == 1 ? "%d file" : "%d files", it->file_count);
-  if (it->error) snprintf(match, sizeof match, "%s", it->error);
-  else if (as_is) snprintf(match, sizeof match, "Existing tags");
+  char files[64], match[512] = "", subtitle[1024] = "";
+  if (it->kind == MC_IMPORT_SINGLE) g_strlcpy(files, mc_str(MC_STR_IMPORT_SINGLE), sizeof files);
+  else count_text(MC_STR_LINUX_IMPORT_FILE_COUNT, it->file_count, files, sizeof files);
+  if (it->error) g_strlcpy(match, it->error, sizeof match);
+  else if (as_is) g_strlcpy(match, mc_str(MC_STR_IMPORT_EXISTING_TAGS), sizeof match);
   else if (m) match_summary(m, match, sizeof match);
-  else if (it->state == MC_IMPORT_REVIEW) snprintf(match, sizeof match, "No match found");
+  else if (it->state == MC_IMPORT_REVIEW) g_strlcpy(match, mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES), sizeof match);
   join(subtitle, sizeof subtitle, it->artist);
   join(subtitle, sizeof subtitle, files);
   if (*match) {
@@ -353,12 +366,11 @@ gboolean import_view_start(GtkWidget *view, const char *const *paths, int count)
   import_view *v = get_view(view);
   if (!v || count <= 0) return FALSE;
   if (!v->lib) {
-    alert(view, "Can\xE2\x80\x99t Import",
-          "The library could not be opened, so nothing can be imported.");
+    alert(view, mc_str(MC_STR_LINUX_IMPORT_CANT_TITLE), mc_str(MC_STR_IMPORT_NO_LIBRARY_TEXT));
     return FALSE;
   }
   if (v->imp && !v->idle) {
-    alert(view, "Import Still Running", "Wait for the current import to finish first.");
+    alert(view, mc_str(MC_STR_IMPORT_RUNNING_TITLE), mc_str(MC_STR_IMPORT_RUNNING_TEXT));
     return FALSE;
   }
   close_session(v);
@@ -372,9 +384,9 @@ gboolean import_view_start(GtkWidget *view, const char *const *paths, int count)
   if (st != MC_OK) {
     g_free(tag);
     v->imp = NULL;
-    char *body = g_strdup_printf("Couldn\xE2\x80\x99t start the import (%s).", mc_status_str(st));
-    alert(view, "Can\xE2\x80\x99t Import", body);
-    g_free(body);
+    char *body = mc_format_alloc(mc_str(MC_STR_IMPORT_START_FAILED), MC_S(mc_status_str(st)));
+    alert(view, mc_str(MC_STR_LINUX_IMPORT_CANT_TITLE), body);
+    mc_free(body);
     return FALSE;
   }
   v->tag = tag;
@@ -414,8 +426,8 @@ void import_view_choose_folders(GtkWidget *view) {
   import_view *v = get_view(view);
   if (!v) return;
   GtkFileDialog *dlg = gtk_file_dialog_new();
-  gtk_file_dialog_set_title(dlg, "Choose Folders to Import");
-  gtk_file_dialog_set_accept_label(dlg, "_Import");
+  gtk_file_dialog_set_title(dlg, mc_str(MC_STR_IMPORT_CHOOSE_FOLDERS_TITLE));
+  gtk_file_dialog_set_accept_label(dlg, mc_str_mnemonic(MC_STR_IMPORT_BUTTON));
   GtkRoot *root = gtk_widget_get_root(view);
   gtk_file_dialog_select_multiple_folders(dlg, GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL, NULL,
                                           on_folders_chosen, g_atomic_rc_box_acquire(v));
@@ -481,10 +493,9 @@ void import_view_confirm_close(GtkWidget *view, void (*then)(void *user, gboolea
     finish_confirm(c, TRUE);
     return;
   }
-  AdwDialog *dlg = adw_alert_dialog_new("Stop the Import?",
-                                        "Anything already imported stays in your library.");
-  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(dlg), "keep", "_Keep Importing", "stop", "_Stop",
-                                 NULL);
+  AdwDialog *dlg = adw_alert_dialog_new(mc_str(MC_STR_IMPORT_STOP_TITLE), mc_str(MC_STR_IMPORT_STOP_TEXT));
+  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(dlg), "keep", mc_str_mnemonic(MC_STR_LINUX_IMPORT_KEEP_GOING),
+                                 "stop", mc_str_mnemonic(MC_STR_LINUX_IMPORT_STOP), NULL);
   adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(dlg), "stop", ADW_RESPONSE_DESTRUCTIVE);
   adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(dlg), "keep");
   adw_alert_dialog_set_close_response(ADW_ALERT_DIALOG(dlg), "keep");
@@ -537,12 +548,13 @@ static void review_fill_tracks(review *r, int match) {
     gboolean multi_disc = m->track_count && m->tracks[m->track_count - 1].disc > 1;
     for (int j = 0; j < m->track_count; j++) {
       const mc_import_match_track *t = &m->tracks[j];
+      const char *name = t->title ? t->title : mc_str(MC_STR_UNKNOWN_VALUE);
       char *title;
-      if (it->kind == MC_IMPORT_SINGLE) title = g_strdup(t->title ? t->title : "?");
+      if (it->kind == MC_IMPORT_SINGLE) title = g_strdup(name);
       else {
         if (multi_disc) snprintf(num, sizeof num, "%d-%d", t->disc, t->number);
         else snprintf(num, sizeof num, "%d", t->number);
-        title = g_strdup_printf("%s. %s", num, t->title ? t->title : "?");
+        title = g_strdup_printf("%s. %s", num, name);
       }
       sub[0] = '\0';
       if (t->file >= 0 && t->file < it->file_count) {
@@ -553,7 +565,7 @@ static void review_fill_tracks(review *r, int match) {
         format_length(f->duration_ms, len, sizeof len);
         join(sub, sizeof sub, len);
       } else {
-        join(sub, sizeof sub, "\xE2\x80\x94 missing");
+        join(sub, sizeof sub, mc_str(MC_STR_IMPORT_TRACK_MISSING));
       }
       GtkWidget *row = plain_row(title, sub);
       g_free(title);
@@ -567,7 +579,7 @@ static void review_fill_tracks(review *r, int match) {
     if (used[i]) continue;
     const mc_import_file *f = &it->files[i];
     sub[0] = '\0';
-    if (match >= 0) join(sub, sizeof sub, "Not matched; left as is");
+    if (match >= 0) join(sub, sizeof sub, mc_str(MC_STR_IMPORT_NOT_MATCHED));
     join(sub, sizeof sub, f->title);
     GtkWidget *row = plain_row(file_name(f->path), sub);
     format_length(f->duration_ms, len, sizeof len);
@@ -595,16 +607,17 @@ static void review_load(review *r) {
   const mc_import_item *it = r->snap;
   gboolean busy = state_busy(it->state);
 
-  const char *album = it->album ? it->album : it->file_count ? file_name(it->files[0].path) : "?";
+  const char *unknown = mc_str(MC_STR_UNKNOWN_VALUE);
+  const char *album = it->album ? it->album : it->file_count ? file_name(it->files[0].path) : unknown;
+  const char *artist = it->artist ? it->artist : unknown;
   char *heading = it->kind == MC_IMPORT_ALBUM
-                    ? g_strdup_printf(it->file_count == 1 ? "Album: %s \xE2\x80\x93 %s (%d file)"
-                                                          : "Album: %s \xE2\x80\x93 %s (%d files)",
-                                      it->artist ? it->artist : "?", album, it->file_count)
-                    : g_strdup_printf("Single: %s \xE2\x80\x93 %s", it->artist ? it->artist : "?", album);
-  gtk_label_set_text(GTK_LABEL(r->heading), heading);
-  g_free(heading);
+                    ? mc_format_alloc(mc_str_plural(MC_STR_IMPORT_REVIEW_ALBUM, it->file_count), MC_S(artist),
+                                      MC_S(album), MC_D(it->file_count))
+                    : mc_format_alloc(mc_str(MC_STR_IMPORT_REVIEW_SINGLE), MC_S(artist), MC_S(album));
+  gtk_label_set_text(GTK_LABEL(r->heading), heading ? heading : album);
+  mc_free(heading);
   gtk_label_set_text(GTK_LABEL(r->folder), it->folder ? it->folder : "");
-  const char *note = busy ? "Searching MusicBrainz\xE2\x80\xA6" : it->error ? it->error : NULL;
+  const char *note = busy ? mc_str(MC_STR_IMPORT_SEARCHING) : it->error ? it->error : NULL;
   gtk_label_set_text(GTK_LABEL(r->note), note ? note : "");
   gtk_widget_set_visible(r->note, note != NULL);
 
@@ -612,7 +625,7 @@ static void review_load(review *r) {
     gtk_editable_set_text(GTK_EDITABLE(r->artist), it->artist ? it->artist : "");
     gtk_editable_set_text(GTK_EDITABLE(r->title), it->album ? it->album : "");
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(r->title),
-                                  it->kind == MC_IMPORT_SINGLE ? "Title" : "Album");
+                                  mc_str(it->kind == MC_IMPORT_SINGLE ? MC_STR_TITLE : MC_STR_ALBUM));
     r->terms_set = TRUE;
   }
 
@@ -621,19 +634,20 @@ static void review_load(review *r) {
   GtkWidget *first = NULL;
   for (int i = 0; i < it->match_count; i++) {
     const mc_import_match *m = &it->matches[i];
-    char *title;
-    if (m->is_single)
-      title = g_strdup_printf("%s \xE2\x80\x93 %s \xE2\x86\x92 %s", m->album_artist ? m->album_artist : "?",
-                              m->release ? m->release : "?", m->album ? m->album : "?");
-    else
-      title = g_strdup_printf("%s \xE2\x80\x93 %s", m->album_artist ? m->album_artist : "?",
-                              m->album ? m->album : "?");
+    /* "Artist – Album", or for a single "Artist – Release → Track". */
+    char *into = m->is_single ? mc_format_alloc(mc_str(MC_STR_IMPORT_MATCH_INTO),
+                                                MC_S(m->release ? m->release : unknown),
+                                                MC_S(m->album ? m->album : unknown))
+                              : NULL;
+    char *title = mc_format_alloc(mc_str(MC_STR_TRACK_BYLINE), MC_S(m->album_artist ? m->album_artist : unknown),
+                                  MC_S(m->is_single ? into : m->album ? m->album : unknown));
+    mc_free(into);
     char sub[1024] = "", buf[64];
     if (m->year) {
       snprintf(buf, sizeof buf, "%d", m->year);
       join(sub, sizeof sub, buf);
     }
-    snprintf(buf, sizeof buf, m->track_count == 1 ? "%d track" : "%d tracks", m->track_count);
+    count_text(MC_STR_TRACKS, m->track_count, buf, sizeof buf);
     join(sub, sizeof sub, buf);
     join(sub, sizeof sub, m->release_type);
     join(sub, sizeof sub, m->format);
@@ -641,7 +655,7 @@ static void review_load(review *r) {
     join(sub, sizeof sub, m->label);
     join(sub, sizeof sub, m->catalog);
     GtkWidget *row = plain_row(title, sub);
-    g_free(title);
+    mc_free(title);
 
     GtkWidget *check = gtk_check_button_new();
     gtk_widget_set_valign(check, GTK_ALIGN_CENTER);
@@ -661,13 +675,10 @@ static void review_load(review *r) {
   adw_preferences_group_set_description(
     ADW_PREFERENCES_GROUP(r->matches_group),
     busy || it->match_count ? NULL
-    : it->error             ? "None yet. Search again, or keep the existing tags."
-                            : "MusicBrainz has nothing that fits. Search again with different terms, "
-                              "or keep the existing tags.");
+    : it->error             ? mc_str(MC_STR_LINUX_IMPORT_MATCHES_NONE_YET)
+                            : mc_str(MC_STR_LINUX_IMPORT_MATCHES_NOTHING));
   adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(r->tracks_group),
-                                        sel >= 0 ? "The chosen match\xE2\x80\x99s tracks, and the files "
-                                                   "they\xE2\x80\x99""d be applied to"
-                                                 : NULL);
+                                        sel >= 0 ? mc_str(MC_STR_LINUX_IMPORT_TRACKS_TEXT) : NULL);
   review_fill_tracks(r, sel);
 
   gtk_widget_set_sensitive(r->use, !busy && it->match_count > 0);
@@ -682,7 +693,7 @@ static void review_done(review *r, mc_status st) {
     update_status(r->v);
     adw_dialog_close(r->dialog);
   } else {
-    alert(GTK_WIDGET(r->dialog), "Item Busy", "This item is busy. Try again in a moment.");
+    alert(GTK_WIDGET(r->dialog), mc_str(MC_STR_LINUX_IMPORT_ITEM_BUSY_TITLE), mc_str(MC_STR_IMPORT_ITEM_BUSY));
   }
 }
 
@@ -760,28 +771,28 @@ static void open_review(import_view *v, int idx) {
 
   /* Search again with the user's own terms. */
   r->artist = adw_entry_row_new();
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(r->artist), "Artist");
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(r->artist), mc_str(MC_STR_ARTIST));
   r->title = adw_entry_row_new();
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(r->title), "Album");
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(r->title), mc_str(MC_STR_ALBUM));
   g_signal_connect(r->artist, "entry-activated", G_CALLBACK(on_search), r);
   g_signal_connect(r->title, "entry-activated", G_CALLBACK(on_search), r);
-  r->search = gtk_button_new_with_mnemonic("_Search");
+  r->search = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_SEARCH));
   gtk_widget_set_valign(r->search, GTK_ALIGN_CENTER);
   g_signal_connect(r->search, "clicked", G_CALLBACK(on_search), r);
   GtkWidget *search_group = adw_preferences_group_new();
-  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(search_group), "Search Again");
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(search_group), mc_str(MC_STR_IMPORT_SEARCH_AGAIN));
   adw_preferences_group_set_header_suffix(ADW_PREFERENCES_GROUP(search_group), r->search);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(search_group), r->artist);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(search_group), r->title);
 
   r->matches = boxed_list();
   r->matches_group = adw_preferences_group_new();
-  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(r->matches_group), "Matches");
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(r->matches_group), mc_str(MC_STR_IMPORT_MATCHES));
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(r->matches_group), r->matches);
 
   r->tracks = boxed_list();
   r->tracks_group = adw_preferences_group_new();
-  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(r->tracks_group), "Tracks");
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(r->tracks_group), mc_str(MC_STR_TRACKS_TITLE));
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(r->tracks_group), r->tracks);
 
   GtkWidget *page = adw_preferences_page_new();
@@ -790,9 +801,9 @@ static void open_review(import_view *v, int idx) {
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(r->tracks_group));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(search_group));
 
-  r->skip = gtk_button_new_with_mnemonic("S_kip");
-  r->as_is = gtk_button_new_with_mnemonic("_Keep Existing Tags");
-  r->use = gtk_button_new_with_mnemonic("_Use This Match");
+  r->skip = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_IMPORT_SKIP));
+  r->as_is = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_IMPORT_AS_TAGGED));
+  r->use = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_IMPORT_USE_MATCH));
   gtk_widget_add_css_class(r->use, "suggested-action");
   g_signal_connect(r->skip, "clicked", G_CALLBACK(on_skip), r);
   g_signal_connect(r->as_is, "clicked", G_CALLBACK(on_as_is), r);
@@ -815,7 +826,7 @@ static void open_review(import_view *v, int idx) {
   adw_toolbar_view_add_bottom_bar(ADW_TOOLBAR_VIEW(toolbar), actions);
 
   r->dialog = adw_dialog_new();
-  adw_dialog_set_title(r->dialog, "Review Import");
+  adw_dialog_set_title(r->dialog, mc_str(MC_STR_IMPORT_REVIEW_TITLE));
   adw_dialog_set_content_width(r->dialog, 760);
   adw_dialog_set_content_height(r->dialog, 720);
   adw_dialog_set_child(r->dialog, toolbar);
@@ -881,17 +892,15 @@ GtkWidget *import_view_new(mc_library *lib, const import_view_callbacks *cb) {
   if (cb) v->cb = *cb;
 
   /* Before an import: a drop zone with a button. */
-  GtkWidget *choose = gtk_button_new_with_mnemonic("_Choose Folders\xE2\x80\xA6");
+  GtkWidget *choose = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_IMPORT_CHOOSE_FOLDERS));
   gtk_widget_set_halign(choose, GTK_ALIGN_CENTER);
   gtk_widget_add_css_class(choose, "pill");
   gtk_widget_add_css_class(choose, "suggested-action");
   g_signal_connect(choose, "clicked", G_CALLBACK(on_choose_clicked), v);
   GtkWidget *start = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(start), "folder-music-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(start), "Import Music");
-  adw_status_page_set_description(ADW_STATUS_PAGE(start),
-                                  "Drop folders of music here, or choose them. Imported music is "
-                                  "copied into your library; the originals are never changed.");
+  adw_status_page_set_title(ADW_STATUS_PAGE(start), mc_str(MC_STR_IMPORT_SHEET_TITLE));
+  adw_status_page_set_description(ADW_STATUS_PAGE(start), mc_str(MC_STR_LINUX_IMPORT_START_TEXT));
   adw_status_page_set_child(ADW_STATUS_PAGE(start), choose);
   gtk_widget_add_css_class(start, "import-drop");
   gtk_widget_set_margin_start(start, 24);
@@ -904,7 +913,7 @@ GtkWidget *import_view_new(mc_library *lib, const import_view_callbacks *cb) {
   gtk_label_set_xalign(GTK_LABEL(v->status), 0);
   gtk_label_set_ellipsize(GTK_LABEL(v->status), PANGO_ELLIPSIZE_END);
   gtk_widget_set_hexpand(v->status, TRUE);
-  GtkWidget *done = gtk_button_new_with_mnemonic("_Done");
+  GtkWidget *done = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_DONE));
   g_signal_connect(done, "clicked", G_CALLBACK(on_done_clicked), v);
   GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   gtk_box_append(GTK_BOX(top), v->status);
@@ -928,7 +937,7 @@ GtkWidget *import_view_new(mc_library *lib, const import_view_callbacks *cb) {
     gtk_list_box_set_sort_func(GTK_LIST_BOX(v->lists[g]), sort_by_item, NULL, NULL);
     g_signal_connect(v->lists[g], "row-activated", G_CALLBACK(on_row_activated), v);
     v->groups[g] = adw_preferences_group_new();
-    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(v->groups[g]), group_titles[g]);
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(v->groups[g]), mc_str(group_titles[g]));
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(v->groups[g]), v->lists[g]);
     gtk_widget_set_visible(v->groups[g], FALSE);
     adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(v->groups[g]));

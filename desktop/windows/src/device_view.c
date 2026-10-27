@@ -8,6 +8,7 @@
 
 #include "canvas.h"
 #include "theme.h"
+#include "wstr.h"
 
 enum {
   ID_DEV_ICON = 400,
@@ -53,7 +54,11 @@ enum {
 enum { TAB_ALBUMS, TAB_ARTISTS, TAB_PLAYLISTS, TAB_GROUPS, NUM_TABS };
 static const mc_profile_item_kind k_tab_kind[NUM_TABS] = {MC_PROFILE_ALBUM, MC_PROFILE_ARTIST,
                                                           MC_PROFILE_PLAYLIST, MC_PROFILE_ALBUM_GROUP};
-static const wchar_t *const k_tab_name[NUM_TABS] = {L"Albums", L"Artists", L"Playlists", L"Album groups"};
+static const enum mc_str_id k_tab_name[NUM_TABS] = {MC_STR_SECTION_ALBUMS, MC_STR_SECTION_ARTISTS,
+                                                    MC_STR_SECTION_PLAYLISTS, MC_STR_WINDOWS_SECTION_ALBUM_GROUPS};
+/* A selection's count of each tab's items, "3 albums". */
+static const enum mc_str_id k_tab_count[NUM_TABS] = {MC_STR_WINDOWS_COUNT_ALBUMS, MC_STR_WINDOWS_COUNT_ARTISTS,
+                                                     MC_STR_WINDOWS_COUNT_PLAYLISTS, MC_STR_WINDOWS_COUNT_ALBUM_GROUPS};
 
 /* Which fields of the profile have edits waiting to be applied. */
 enum { PEND_FORMAT = 1, PEND_BUDGET = 2, PEND_SYNC_ALL = 4 };
@@ -139,9 +144,14 @@ static void widen(const char *s, wchar_t *out, int cap) {
   out[cap - 1] = L'\0';
 }
 
-static wchar_t *status_text(mc_status st, wchar_t *out, int cap) {
-  widen(mc_status_str(st), out, cap);
-  return out;
+/* w as UTF-8, for mc_wformat()'s arguments, in one of four static buffers used in turn: valid
+ * until the fourth call after. UI thread only. */
+static const char *u8(const wchar_t *w) {
+  static char bufs[4][512];
+  static int next;
+  char *b = bufs[next++ & 3];
+  if (!w || !WideCharToMultiByte(CP_UTF8, 0, w, -1, b, 512, NULL, NULL)) b[0] = '\0';
+  return b;
 }
 
 /* n with the user's digit grouping: 1,204. */
@@ -161,12 +171,18 @@ static wchar_t *fmt_count(int64_t n, wchar_t *out, int cap) {
 }
 
 static wchar_t *fmt_size(int64_t bytes, wchar_t *out, int cap) {
-  static const wchar_t *const units[] = {L"bytes", L"KB", L"MB", L"GB", L"TB"};
+  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_WINDOWS_SIZE_KB, MC_STR_WINDOWS_SIZE_MB,
+                                         MC_STR_WINDOWS_SIZE_GB, MC_STR_WINDOWS_SIZE_TB};
   double v = (double)bytes;
   int u = 0;
   while (v >= 1024.0 && u < 4) v /= 1024.0, u++;
-  if (u == 0) swprintf(out, (size_t)cap, L"%d bytes", (int)bytes);
-  else swprintf(out, (size_t)cap, v < 100.0 ? L"%.1f %ls" : L"%.0f %ls", v, units[u]);
+  if (u == 0) {
+    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_WINDOWS_SIZE_BYTES, (long)bytes), MC_D((int)bytes));
+  } else {
+    char num[32];
+    snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
+    mc_wformat(out, (size_t)cap, mc_str(units[u]), MC_S(num));
+  }
   return out;
 }
 
@@ -180,19 +196,25 @@ static int64_t unix_ms_now(void) {
 /* "just now", "3 minutes ago", "yesterday", "on 12/03/2026". */
 static void fmt_ago(int64_t ms, wchar_t *out, int cap) {
   int64_t min = (unix_ms_now() - ms) / 60000;
-  if (min < 1) swprintf(out, (size_t)cap, L"just now");
-  else if (min < 60) swprintf(out, (size_t)cap, L"%d minute%ls ago", (int)min, min == 1 ? L"" : L"s");
-  else if (min < 24 * 60) swprintf(out, (size_t)cap, L"%d hour%ls ago", (int)(min / 60), min < 120 ? L"" : L"s");
-  else if (min < 2 * 24 * 60) swprintf(out, (size_t)cap, L"yesterday");
-  else if (min < 7 * 24 * 60) swprintf(out, (size_t)cap, L"%d days ago", (int)(min / (24 * 60)));
-  else {
+  if (min < 1) {
+    swprintf(out, (size_t)cap, L"%ls", mc_wstr(MC_STR_SYNCED_JUST_NOW));
+  } else if (min < 60) {
+    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_WINDOWS_AGO_MINUTES, (long)min), MC_D((int)min));
+  } else if (min < 24 * 60) {
+    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_WINDOWS_AGO_HOURS, (long)(min / 60)), MC_D((int)(min / 60)));
+  } else if (min < 2 * 24 * 60) {
+    swprintf(out, (size_t)cap, L"%ls", mc_wstr(MC_STR_WINDOWS_AGO_YESTERDAY));
+  } else if (min < 7 * 24 * 60) {
+    int days = (int)(min / (24 * 60));
+    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_WINDOWS_AGO_DAYS, days), MC_D(days));
+  } else {
     ULARGE_INTEGER t = {.QuadPart = (uint64_t)ms * 10000 + 116444736000000000ULL};
     FILETIME ft = {t.LowPart, t.HighPart}, local;
     SYSTEMTIME st;
     wchar_t date[64] = L"";
     if (FileTimeToLocalFileTime(&ft, &local) && FileTimeToSystemTime(&local, &st))
       GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, &st, NULL, date, 64, NULL);
-    swprintf(out, (size_t)cap, L"on %ls", date);
+    mc_wformat(out, (size_t)cap, mc_str(MC_STR_WINDOWS_AGO_ON_DATE), MC_S(u8(date)));
   }
 }
 
@@ -362,7 +384,8 @@ static void load_device(void) {
       } else if (!d->is_self && !d->removed && d->name && used + 4 < cap) {
         wchar_t name[MC_SYNC_DEVICE_NAME_MAX + 1];
         widen(d->name, name, MC_SYNC_DEVICE_NAME_MAX + 1);
-        int n = swprintf(g_dv.others + used, cap - used, used ? L", %ls" : L"%ls", name);
+        int n = swprintf(g_dv.others + used, cap - used, L"%ls%ls", used ? mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR) : L"",
+                         name);
         if (n > 0) used += (size_t)n;
       }
     }
@@ -398,22 +421,22 @@ static BOOL syncing(void) {
 static void update_status(void) {
   wchar_t text[256], ago[64];
   if (!g_dv.found) {
-    swprintf(text, 256, L"This device isn't in the group.");
+    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_DEVICE_NOT_IN_GROUP));
   } else if (g_dv.removed) {
-    swprintf(text, 256, L"Removed from the group");
+    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_DEVICE_REMOVED));
   } else {
     const wchar_t *state;
     wchar_t buf[128];
     if (g_dv.last_sync_ms > 0) fmt_ago(g_dv.last_sync_ms, ago, 64);
-    if (syncing()) state = L"Syncing\x2026";
-    else if (g_dv.is_self) state = L"This PC";
+    if (syncing()) state = mc_wstr(MC_STR_WINDOWS_SYNCING_PROGRESS);
+    else if (g_dv.is_self) state = mc_wstr(MC_STR_WINDOWS_THIS_PC);
     else if (g_dv.online) {
-      if (g_dv.last_sync_ms > 0) swprintf(buf, 128, L"Online, synced %ls", ago);
-      else swprintf(buf, 128, L"Online");
+      if (g_dv.last_sync_ms > 0) mc_wformat(buf, 128, mc_str(MC_STR_DEVICE_ONLINE_SYNCED), MC_S(u8(ago)));
+      else swprintf(buf, 128, L"%ls", mc_wstr(MC_STR_DEVICE_ONLINE));
       state = buf;
     } else {
-      if (g_dv.last_sync_ms > 0) swprintf(buf, 128, L"Offline, last synced %ls", ago);
-      else swprintf(buf, 128, L"Not synced yet");
+      if (g_dv.last_sync_ms > 0) mc_wformat(buf, 128, mc_str(MC_STR_DEVICE_OFFLINE_SYNCED), MC_S(u8(ago)));
+      else swprintf(buf, 128, L"%ls", mc_wstr(MC_STR_DEVICE_NOT_SYNCED));
       state = buf;
     }
     swprintf(text, 256, L"%ls", state); /* an archive's note says it keeps the whole library */
@@ -423,41 +446,52 @@ static void update_status(void) {
   text[0] = L'\0';
   if (g_dv.found && g_dv.has_status) {
     wchar_t ok[32], expected[32], n[32], size[32];
-    size_t used = (size_t)swprintf(text, 256, L"%ls of %ls files OK", fmt_count(g_dv.ok, ok, 32),
-                                   fmt_count(g_dv.expected, expected, 32));
-    if (g_dv.missing > 0)
-      used += (size_t)swprintf(text + used, 256 - used, L", %ls missing", fmt_count(g_dv.missing, n, 32));
-    if (g_dv.corrupt > 0)
-      used += (size_t)swprintf(text + used, 256 - used, L", %ls damaged", fmt_count(g_dv.corrupt, n, 32));
-    swprintf(text + used, 256 - used, L", %ls", fmt_size(g_dv.bytes, size, 32));
+    const wchar_t *sep = mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR);
+    mc_wformat(text, 256, mc_str_plural(MC_STR_WINDOWS_FILES_OK, (long)g_dv.expected),
+               MC_S(u8(fmt_count(g_dv.ok, ok, 32))), MC_S(u8(fmt_count(g_dv.expected, expected, 32))));
+    size_t used = wcslen(text);
+    if (g_dv.missing > 0) {
+      used += (size_t)swprintf(text + used, 256 - used, L"%ls", sep);
+      mc_wformat(text + used, 256 - used, mc_str(MC_STR_WINDOWS_FILES_MISSING),
+                 MC_S(u8(fmt_count(g_dv.missing, n, 32))));
+      used = wcslen(text);
+    }
+    if (g_dv.corrupt > 0) {
+      used += (size_t)swprintf(text + used, 256 - used, L"%ls", sep);
+      mc_wformat(text + used, 256 - used, mc_str(MC_STR_WINDOWS_FILES_DAMAGED),
+                 MC_S(u8(fmt_count(g_dv.corrupt, n, 32))));
+      used = wcslen(text);
+    }
+    swprintf(text + used, 256 - used, L"%ls%ls", sep, fmt_size(g_dv.bytes, size, 32));
   }
   SetWindowTextW(g_dv.files, text);
 
-  static const wchar_t *const phases[] = {
-    [MC_SYNC_PHASE_CONNECTING] = L"Connecting\x2026",
-    [MC_SYNC_PHASE_GROUP] = L"Syncing the device list\x2026",
-    [MC_SYNC_PHASE_LIBRARY] = L"Syncing library\x2026",
-    [MC_SYNC_PHASE_DONE] = L"Finishing\x2026",
+  static const enum mc_str_id phases[] = {
+    [MC_SYNC_PHASE_CONNECTING] = MC_STR_WINDOWS_PHASE_CONNECTING,
+    [MC_SYNC_PHASE_GROUP] = MC_STR_WINDOWS_PHASE_GROUP,
+    [MC_SYNC_PHASE_LIBRARY] = MC_STR_WINDOWS_PHASE_LIBRARY,
+    [MC_SYNC_PHASE_FILES] = MC_STR_WINDOWS_PHASE_FILES,
+    [MC_SYNC_PHASE_DONE] = MC_STR_WINDOWS_PHASE_DONE,
   };
   text[0] = L'\0';
   if (syncing()) {
-    const wchar_t *phase = (unsigned)g_dv.phase <= (unsigned)MC_SYNC_PHASE_DONE ? phases[g_dv.phase] : L"Syncing\x2026";
+    BOOL known = (unsigned)g_dv.phase <= (unsigned)MC_SYNC_PHASE_DONE;
+    const wchar_t *phase = mc_wstr(known ? phases[g_dv.phase] : MC_STR_WINDOWS_SYNCING_PROGRESS);
     if (g_dv.phase == MC_SYNC_PHASE_CONNECTING) {
       swprintf(text, 256, L"%ls", phase);
     } else {
       wchar_t sent[32], received[32];
-      swprintf(text, 256, L"%ls %ls sent, %ls received", phase, fmt_count(g_dv.sent, sent, 32),
-               fmt_count(g_dv.received, received, 32));
+      mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROGRESS_ROWS), MC_S(u8(phase)),
+                 MC_S(u8(fmt_count(g_dv.sent, sent, 32))), MC_S(u8(fmt_count(g_dv.received, received, 32))));
     }
     SendMessageW(g_dv.progress, PBM_SETPOS, (WPARAM)g_dv.phase + 1, 0);
   }
   SetWindowTextW(g_dv.progress_text, text);
 
   if (g_dv.lib_state == MC_SYNC_LIBRARY_OTHER)
-    SetWindowTextW(g_dv.notice, L"The library open on this PC isn't the one this group syncs, so only the list "
-                                L"of devices syncs.");
+    SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_WINDOWS_PC_SYNC_OTHER_LIBRARY));
   else if (g_dv.lib_state == MC_SYNC_LIBRARY_UNKNOWN)
-    SetWindowTextW(g_dv.notice, L"Waiting to hear from the group which library it syncs.");
+    SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_UNKNOWN_LIBRARY));
   else SetWindowTextW(g_dv.notice, L"");
 
   EnableWindow(g_dv.sync_now, g_dv.found && !g_dv.removed && g_dv.online && !syncing());
@@ -477,17 +511,18 @@ static void update_checks(void) {
 }
 
 static void update_count(void) {
-  static const wchar_t *const one[NUM_TABS] = {L"album", L"artist", L"playlist", L"album group"};
-  static const wchar_t *const many[NUM_TABS] = {L"albums", L"artists", L"playlists", L"album groups"};
-  wchar_t text[256];
+  char counts[256] = "";
   size_t used = 0;
-  for (int i = 0; i < NUM_TABS; i++) {
+  for (int i = 0; i < NUM_TABS && used < sizeof counts; i++) {
     int n = g_dv.sel[i].count;
     if (!n) continue;
-    int k = swprintf(text + used, 256 - used, L"%ls%d %ls", used ? L", " : L"", n, n == 1 ? one[i] : many[i]);
-    if (k > 0) used += (size_t)k;
+    if (used) used += (size_t)snprintf(counts + used, sizeof counts - used, "%s", mc_str(MC_STR_IMPORT_LIST_SEPARATOR));
+    if (used < sizeof counts)
+      used += (size_t)mc_format(counts + used, sizeof counts - used, mc_str_plural(k_tab_count[i], n), MC_D(n));
   }
-  swprintf(text + used, 256 - used, used ? L" selected" : L"Nothing selected");
+  wchar_t text[256];
+  if (counts[0]) mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_COUNT_SELECTED), MC_S(counts));
+  else swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_NOTHING_SELECTED));
   SetWindowTextW(g_dv.count, text);
 }
 
@@ -499,8 +534,11 @@ static void update_controls(BOOL force) {
                                    [MC_DEVICE_WATCH] = 0xE916};
   wchar_t glyph[2] = {(unsigned)g_dv.kind <= (unsigned)MC_DEVICE_WATCH ? glyphs[g_dv.kind] : glyphs[0], 0};
   SetWindowTextW(g_dv.icon, glyph);
-  SetWindowTextW(g_dv.title, !g_dv.sync ? L"Sync is off" : g_dv.found ? g_dv.name : L"Unknown device");
-  SetWindowTextW(g_dv.remove, g_dv.is_self ? L"Leave group\x2026" : L"Remove from group\x2026");
+  SetWindowTextW(g_dv.title, !g_dv.sync      ? mc_wstr(MC_STR_WINDOWS_SYNC_IS_OFF)
+                             : g_dv.found ? g_dv.name
+                                          : mc_wstr(MC_STR_WINDOWS_DEVICE_UNKNOWN));
+  SetWindowTextW(g_dv.remove, mc_wstr_mnemonic(g_dv.is_self ? MC_STR_WINDOWS_LEAVE_GROUP_BUTTON
+                                                            : MC_STR_WINDOWS_REMOVE_FROM_GROUP_BUTTON));
   update_status();
 
   if (force || GetFocus() != g_dv.name_edit) SetWindowTextW(g_dv.name_edit, g_dv.found ? g_dv.name : L"");
@@ -531,10 +569,10 @@ static void update_controls(BOOL force) {
   for (int i = 0; i < NUM_TABS; i++) EnableWindow(g_dv.tabs[i], edit);
   EnableWindow(g_dv.list, edit);
 
-  wchar_t note[256] = L"", st[64];
-  if (p && p->archive) swprintf(note, 256, L"Keeps the whole library as original files.");
+  wchar_t note[256] = L"";
+  if (p && p->archive) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_DEVICE_ARCHIVE_NOTE));
   else if (!p && g_dv.found && !g_dv.removed)
-    swprintf(note, 256, L"Couldn't read what this device syncs (%ls).", status_text(g_dv.profile_status, st, 64));
+    mc_wformat(note, 256, mc_str(MC_STR_WINDOWS_PROFILE_READ_FAILED), MC_S(mc_status_str(g_dv.profile_status)));
   SetWindowTextW(g_dv.note, note);
 
   update_count();
@@ -590,22 +628,16 @@ static void free_items(tab_items *items) {
 /* Item i's uid, and its row's text: "Artist - Title (year)" or a name, and a count. */
 static const char *item_row(const tab_items *items, int i, wchar_t *text, int cap, wchar_t *detail,
                             int detail_cap) {
-  wchar_t a[256], b[256];
   int count = 0;
   const char *uid;
   if (items->albums) {
     const mc_album_info *al = &items->albums->items[i];
     uid = al->uid;
-    widen(al->title, b, 256);
-    if (al->artist) {
-      widen(al->artist, a, 256);
-      swprintf(text, (size_t)cap, L"%ls \x2013 %ls", a, b);
-    } else {
-      swprintf(text, (size_t)cap, L"%ls", b);
-    }
+    if (al->artist) mc_wformat(text, (size_t)cap, mc_str(MC_STR_TRACK_BYLINE), MC_S(al->artist), MC_S(al->title));
+    else widen(al->title, text, cap);
     if (al->year > 0) {
       size_t len = wcslen(text);
-      swprintf(text + len, (size_t)cap - len, L" (%d)", al->year);
+      mc_wformat(text + len, (size_t)cap - len, mc_str(MC_STR_WINDOWS_ALBUM_YEAR_SUFFIX), MC_D(al->year));
     }
   } else if (items->artists) {
     uid = items->artists->items[i].uid;
@@ -620,7 +652,7 @@ static const char *item_row(const tab_items *items, int i, wchar_t *text, int ca
     count = items->groups->items[i].album_count;
   }
   detail[0] = L'\0';
-  if (count > 0) swprintf(detail, (size_t)detail_cap, L"%d album%ls", count, count == 1 ? L"" : L"s");
+  if (count > 0) mc_wformat(detail, (size_t)detail_cap, mc_str_plural(MC_STR_WINDOWS_COUNT_ALBUMS, count), MC_D(count));
   return uid;
 }
 
@@ -707,10 +739,10 @@ static void flush(void) {
   mc_sync_profile_free(p);
   pending_clear();
   if (st == MC_ERR_LOCKED) {
-    set_message(L"Couldn't save the changes: this device keeps the whole library as original files.");
+    set_message(mc_wstr(MC_STR_WINDOWS_PROFILE_LOCKED));
   } else if (st != MC_OK) {
-    wchar_t text[256], s[64];
-    swprintf(text, 256, L"Couldn't save the changes (%ls).", status_text(st, s, 64));
+    wchar_t text[256];
+    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROFILE_SAVE_FAILED), MC_S(mc_status_str(st)));
     set_message(text);
   }
   /* What's stored now, which may include others' edits made meanwhile. */
@@ -762,8 +794,8 @@ static void apply_name(void) {
     mc_sync_profile_free(p);
   }
   if (st != MC_OK) {
-    wchar_t text[256], m[64];
-    swprintf(text, 256, L"Couldn't rename it (%ls).", status_text(st, m, 64));
+    wchar_t text[256];
+    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_DEVICE_RENAME_FAILED), MC_S(mc_status_str(st)));
     set_message(text);
     SetWindowTextW(g_dv.name_edit, g_dv.name);
     layout_again();
@@ -791,15 +823,14 @@ static void remove_device(void) {
   wchar_t text[1024];
   const wchar_t *caption;
   if (g_dv.is_self) {
-    caption = L"Leave Group";
-    swprintf(text, 1024, L"Leave the group?\n\nThis PC stops syncing with %ls. To sync again, pair it again.",
-             g_dv.others[0] ? g_dv.others : L"the other devices");
+    caption = mc_wstr(MC_STR_LEAVE_GROUP);
+    mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LEAVE_GROUP_CONFIRM_OTHERS),
+               MC_S(g_dv.others[0] ? u8(g_dv.others) : mc_str(MC_STR_WINDOWS_OTHER_DEVICES)));
   } else {
-    caption = L"Remove from Group";
-    swprintf(text, 1024,
-             L"Remove %ls?\n\nThe devices in this group stop syncing with it. To sync with it again, pair it "
-             L"again.",
-             g_dv.name);
+    caption = mc_wstr(MC_STR_REMOVE_FROM_GROUP);
+    wchar_t title[256];
+    mc_wformat(title, 256, mc_str(MC_STR_REMOVE_DEVICE_TITLE), MC_S(u8(g_dv.name)));
+    swprintf(text, 1024, L"%ls\n\n%ls", title, mc_wstr(MC_STR_REMOVE_DEVICE_TEXT));
   }
   if (MessageBoxW(g_dv.parent, text, caption, MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
   flush();
@@ -816,15 +847,14 @@ static void remove_device(void) {
     if (g_dv.host.devices_changed) g_dv.host.devices_changed();
     return;
   }
-  wchar_t s[64];
   if (st == MC_ERR_LOCKED && g_dv.is_self)
-    swprintf(text, 1024,
-             L"This PC is the group's only archive, so it can't leave while other devices are in the group.");
+    swprintf(text, 1024, L"%ls", mc_wstr(MC_STR_WINDOWS_LEAVE_ONLY_ARCHIVE));
   else if (st == MC_ERR_LOCKED)
-    swprintf(text, 1024, L"%ls is the group's only archive, so it can't be removed.", g_dv.name);
+    mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_REMOVE_ONLY_ARCHIVE), MC_S(u8(g_dv.name)));
   else
-    swprintf(text, 1024, g_dv.is_self ? L"Couldn't leave the group (%ls)." : L"Couldn't remove it (%ls).",
-             status_text(st, s, 64));
+    mc_wformat(text, 1024,
+               mc_str(g_dv.is_self ? MC_STR_WINDOWS_LEAVE_GROUP_FAILED : MC_STR_WINDOWS_REMOVE_DEVICE_FAILED),
+               MC_S(mc_status_str(st)));
   set_message(text);
   layout_again();
 }
@@ -832,8 +862,8 @@ static void remove_device(void) {
 static void sync_now(void) {
   if (!g_dv.sync) return;
   mc_status st = mc_sync_now(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
-  wchar_t text[256] = L"", s[64];
-  if (st != MC_OK) swprintf(text, 256, L"Couldn't start syncing (%ls).", status_text(st, s, 64));
+  wchar_t text[256] = L"";
+  if (st != MC_OK) mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_SYNC_START_FAILED), MC_S(mc_status_str(st)));
   set_message(text);
   layout_again();
 }
@@ -991,8 +1021,9 @@ void device_view_create(HWND parent, const device_view_host *host) {
   DWORD label = SS_LEFT | SS_NOPREFIX, line = label | SS_ENDELLIPSIS;
   g_dv.icon = child(WC_STATICW, NULL, SS_CENTER | SS_CENTERIMAGE | SS_NOPREFIX, ID_DEV_ICON);
   g_dv.title = child(WC_STATICW, NULL, line, ID_DEV_TITLE);
-  g_dv.sync_now = child(WC_BUTTONW, L"Sync now", BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SYNC_NOW);
-  g_dv.remove = child(WC_BUTTONW, L"Remove from group\x2026", BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_REMOVE);
+  g_dv.sync_now = child(WC_BUTTONW, mc_wstr(MC_STR_SYNC_NOW), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SYNC_NOW);
+  g_dv.remove = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_WINDOWS_REMOVE_FROM_GROUP_BUTTON), BS_PUSHBUTTON | WS_TABSTOP,
+                      ID_DEV_REMOVE);
   g_dv.status = child(WC_STATICW, NULL, line, ID_DEV_STATUS);
   g_dv.files = child(WC_STATICW, NULL, line, ID_DEV_FILES);
   g_dv.progress = child(PROGRESS_CLASSW, NULL, 0, ID_DEV_PROGRESS);
@@ -1001,20 +1032,20 @@ void device_view_create(HWND parent, const device_view_host *host) {
   g_dv.message = child(WC_STATICW, NULL, label, ID_DEV_MESSAGE);
   g_dv.notice = child(WC_STATICW, NULL, label, ID_DEV_NOTICE);
 
-  g_dv.name_label = child(WC_STATICW, L"Name", line, ID_DEV_NAME_LABEL);
+  g_dv.name_label = child(WC_STATICW, mc_wstr(MC_STR_NAME), line, ID_DEV_NAME_LABEL);
   /* The edits look as in Settings: a themed border, the text centred in it. */
   g_dv.name_edit = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0,
                                    0, 0, parent, (HMENU)(INT_PTR)ID_DEV_NAME, GetModuleHandleW(NULL), NULL);
   theme_center_edit(g_dv.name_edit);
   SendMessageW(g_dv.name_edit, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
   SetWindowSubclass(g_dv.name_edit, edit_proc, 0, 0);
-  g_dv.format_label = child(WC_STATICW, L"Format", line, ID_DEV_FORMAT_LABEL);
+  g_dv.format_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_FORMAT), line, ID_DEV_FORMAT_LABEL);
   g_dv.format = child(WC_COMBOBOXW, NULL, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_DEV_FORMAT);
-  int i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)L"Original files");
+  int i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_WINDOWS_FORMAT_ORIGINAL));
   SendMessageW(g_dv.format, CB_SETITEMDATA, (WPARAM)i, 0);
   for (int b = 0; b < MC_OPUS_BITRATE_COUNT; b++) {
     wchar_t text[32];
-    swprintf(text, 32, L"Opus %d kbps", mc_opus_bitrates[b]);
+    mc_wformat(text, 32, mc_str(MC_STR_WINDOWS_FORMAT_OPUS), MC_D(mc_opus_bitrates[b]));
     i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)text);
     SendMessageW(g_dv.format, CB_SETITEMDATA, (WPARAM)i, (LPARAM)mc_opus_bitrates[b]);
   }
@@ -1024,21 +1055,22 @@ void device_view_create(HWND parent, const device_view_host *host) {
   /* Checkboxes have no text of their own: a themed checkbox's text stays black in dark
    * mode, so each has a label beside it, which toggles it too. */
   g_dv.budget = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_BUDGET);
-  g_dv.budget_label = child(WC_STATICW, L"Limit storage to", line | SS_NOTIFY, ID_DEV_BUDGET_LABEL);
+  g_dv.budget_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_BUDGET_LIMIT), line | SS_NOTIFY, ID_DEV_BUDGET_LABEL);
   g_dv.budget_size = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
                                      0, 0, 0, 0, parent, (HMENU)(INT_PTR)ID_DEV_BUDGET_SIZE, GetModuleHandleW(NULL),
                                      NULL);
   theme_center_edit(g_dv.budget_size);
   SendMessageW(g_dv.budget_size, EM_LIMITTEXT, 5, 0);
   SetWindowSubclass(g_dv.budget_size, edit_proc, 0, 0);
-  g_dv.budget_unit = child(WC_STATICW, L"GB", line, ID_DEV_BUDGET_UNIT);
+  g_dv.budget_unit = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_BUDGET_UNIT), line, ID_DEV_BUDGET_UNIT);
 
-  g_dv.heading = child(WC_STATICW, L"What to sync", line, ID_DEV_HEADING);
+  g_dv.heading = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_WHAT_TO_SYNC), line, ID_DEV_HEADING);
   g_dv.note = child(WC_STATICW, NULL, label, ID_DEV_NOTE);
   g_dv.sync_all = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_SYNC_ALL);
-  g_dv.sync_all_label = child(WC_STATICW, L"Sync everything", line | SS_NOTIFY, ID_DEV_SYNC_ALL_LABEL);
+  g_dv.sync_all_label =
+    child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_EVERYTHING), line | SS_NOTIFY, ID_DEV_SYNC_ALL_LABEL);
   for (int t = 0; t < NUM_TABS; t++) {
-    g_dv.tabs[t] = child(WC_BUTTONW, k_tab_name[t], BS_OWNERDRAW | WS_TABSTOP, ID_DEV_TAB + t);
+    g_dv.tabs[t] = child(WC_BUTTONW, mc_wstr(k_tab_name[t]), BS_OWNERDRAW | WS_TABSTOP, ID_DEV_TAB + t);
     SetWindowSubclass(g_dv.tabs[t], tab_proc, 0, (DWORD_PTR)t);
   }
 
@@ -1394,13 +1426,14 @@ void device_view_on_sync_event(const sync_event *ev) {
         memmove(g_dv.busy + i, g_dv.busy + i + 1, (size_t)(g_dv.nbusy - i - 1) * sizeof g_dv.busy[0]);
         g_dv.nbusy--;
       }
-      wchar_t text[256] = L"", s[64];
+      wchar_t text[256] = L"";
       if (ev->status != MC_OK) {
         if (g_dv.is_self && ev->name[0])
-          swprintf(text, 256, L"Couldn't sync with %ls: %ls", ev->name, status_text(ev->status, s, 64));
-        else swprintf(text, 256, L"Couldn't sync: %ls", status_text(ev->status, s, 64));
+          mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_SYNC_FAILED_WITH), MC_S(u8(ev->name)),
+                     MC_S(mc_status_str(ev->status)));
+        else mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_SYNC_FAILED), MC_S(mc_status_str(ev->status)));
       } else if (!ev->library_synced) {
-        swprintf(text, 256, L"Only the device list synced");
+        swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_SYNC_DEVICE_LIST_ONLY));
       }
       set_message(text);
       /* The last sync time, its files, maybe its profile, have changed. */
@@ -1479,15 +1512,14 @@ BOOL device_view_on_notify(const NMHDR *nm, LRESULT *result) {
       break;
     }
     case LVN_GETEMPTYMARKUP: {
-      static const wchar_t *const none[NUM_TABS] = {L"There are no albums in this library.",
-                                                    L"There are no artists in this library.",
-                                                    L"There are no playlists in this library.",
-                                                    L"There are no album groups in this library."};
+      static const enum mc_str_id none[NUM_TABS] = {MC_STR_WINDOWS_NO_ALBUMS, MC_STR_WINDOWS_NO_ARTISTS,
+                                                    MC_STR_WINDOWS_NO_PLAYLISTS, MC_STR_WINDOWS_NO_ALBUM_GROUPS};
       NMLVEMPTYMARKUP *em = (NMLVEMPTYMARKUP *)nm;
-      wchar_t s[64];
       em->dwFlags = EMF_CENTERED;
-      if (g_dv.rows_status == MC_OK) swprintf(em->szMarkup, L_MAX_URL_LENGTH, L"%ls", none[g_dv.tab]);
-      else swprintf(em->szMarkup, L_MAX_URL_LENGTH, L"Couldn't list them (%ls).", status_text(g_dv.rows_status, s, 64));
+      if (g_dv.rows_status == MC_OK) swprintf(em->szMarkup, L_MAX_URL_LENGTH, L"%ls", mc_wstr(none[g_dv.tab]));
+      else
+        mc_wformat(em->szMarkup, L_MAX_URL_LENGTH, mc_str(MC_STR_WINDOWS_LIST_FAILED),
+                   MC_S(mc_status_str(g_dv.rows_status)));
       *result = TRUE;
       break;
     }
@@ -1503,7 +1535,8 @@ BOOL device_view_draw_item(const DRAWITEMSTRUCT *dis) {
   if (!canvas_reserve(&c, rc.right, rc.bottom)) return TRUE;
   control_state state = dis->itemState & ODS_SELECTED ? STATE_PRESSED : g_dv.hot_tab == t ? STATE_HOT : STATE_NORMAL;
   int radius = MulDiv(4, (int)g_dv.dpi, USER_DEFAULT_SCREEN_DPI);
-  theme_draw_segment(&c, &rc, radius, k_tab_name[t], g_dv.font, t == 0, t == NUM_TABS - 1, t == g_dv.tab, state);
+  theme_draw_segment(&c, &rc, radius, mc_wstr(k_tab_name[t]), g_dv.font, t == 0, t == NUM_TABS - 1, t == g_dv.tab,
+                     state);
   if (dis->itemState & ODS_DISABLED) canvas_fill(&c, &rc, 0, theme.bg, 128);
   if ((dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT)) {
     RECT focus = rc;

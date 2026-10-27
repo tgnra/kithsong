@@ -15,6 +15,10 @@
 #define IDC_REV_SEARCH 1007
 #define IDC_REV_ASIS 1008
 #define IDC_REV_SKIP 1009
+#define IDC_REV_MATCHES_LABEL 1010
+#define IDC_REV_TRACKS_LABEL 1011
+#define IDC_REV_SEARCH_LABEL 1012
+#define IDC_REV_ARTIST_LABEL 1013
 
 /* The playlist dialogs, playlist_dialogs.c. */
 #define IDD_PLAYLIST_NAME 101

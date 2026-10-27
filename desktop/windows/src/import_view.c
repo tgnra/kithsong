@@ -11,6 +11,7 @@
 #include "pick_folder.h"
 #include "resource.h"
 #include "theme.h"
+#include "wstr.h"
 
 enum {
   ID_IMP_DROP = 200,
@@ -113,13 +114,13 @@ static void format_length(int ms, wchar_t *out, size_t n) {
 
 static const wchar_t *state_label(mc_import_state s) {
   switch (s) {
-    case MC_IMPORT_PENDING: return L"Waiting";
-    case MC_IMPORT_MATCHING: return L"Matching\x2026";
-    case MC_IMPORT_REVIEW: return L"Needs review";
-    case MC_IMPORT_WRITING: return L"Writing\x2026";
-    case MC_IMPORT_DONE: return L"Imported";
-    case MC_IMPORT_SKIPPED: return L"Skipped";
-    case MC_IMPORT_FAILED: return L"Failed";
+    case MC_IMPORT_PENDING: return mc_wstr(MC_STR_IMPORT_STATE_WAITING);
+    case MC_IMPORT_MATCHING: return mc_wstr(MC_STR_IMPORT_STATE_MATCHING);
+    case MC_IMPORT_REVIEW: return mc_wstr(MC_STR_IMPORT_NEEDS_DECISION);
+    case MC_IMPORT_WRITING: return mc_wstr(MC_STR_IMPORT_STATE_WRITING);
+    case MC_IMPORT_DONE: return mc_wstr(MC_STR_IMPORT_STATE_DONE);
+    case MC_IMPORT_SKIPPED: return mc_wstr(MC_STR_IMPORT_STATE_SKIPPED);
+    case MC_IMPORT_FAILED: return mc_wstr(MC_STR_IMPORT_STATE_FAILED);
   }
   return L"";
 }
@@ -136,11 +137,11 @@ static int state_group(mc_import_state s) {
 
 /* "Radiohead – OK Computer (1997)", or for a single "OutKast – Hey Ya! (2003)". */
 static void match_summary(const mc_import_match *m, char *out, size_t n) {
-  const char *artist = m->album_artist ? m->album_artist : "?";
+  const char *artist = m->album_artist ? m->album_artist : mc_str(MC_STR_UNKNOWN_VALUE);
   const char *title = m->is_single && m->track_count ? m->tracks[0].title : m->album;
-  if (!title) title = "?";
-  if (m->year) snprintf(out, n, "%s \xE2\x80\x93 %s (%d)", artist, title, m->year);
-  else snprintf(out, n, "%s \xE2\x80\x93 %s", artist, title);
+  if (!title) title = mc_str(MC_STR_UNKNOWN_VALUE);
+  if (m->year) mc_format(out, n, mc_str(MC_STR_IMPORT_MATCH_YEAR), MC_S(artist), MC_S(title), MC_D(m->year));
+  else mc_format(out, n, mc_str(MC_STR_TRACK_BYLINE), MC_S(artist), MC_S(title));
 }
 
 /* --- Drop zone --- */
@@ -164,7 +165,8 @@ static LRESULT CALLBACK drop_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     HGDIOBJ old_font = SelectObject(dc, g_view.font ? (HGDIOBJ)g_view.font : GetStockObject(DEFAULT_GUI_FONT));
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, theme.text2);
-    DrawTextW(dc, L"Drop folders of music here", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, mc_wstr(MC_STR_WINDOWS_IMPORT_DROP_HERE), -1, &rc,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, old_font);
     EndPaint(wnd, &ps);
     return 0;
@@ -192,27 +194,40 @@ static void close_session(void) {
   SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, FALSE, 0);
 }
 
+/* "12 imported" and the like: the plural id with its count, into buf. */
+static const char *count_text(char *buf, size_t n, enum mc_str_id id, int count) {
+  mc_format(buf, n, mc_str_plural(id, count), MC_D(count));
+  return buf;
+}
+
 static void update_status(void) {
-  wchar_t text[256];
+  wchar_t text[512];
   int counts[MC_IMPORT_FAILED + 1] = {0};
   for (int i = 0; i < g_view.item_count; i++) counts[g_view.states[i]]++;
   int settled = counts[MC_IMPORT_REVIEW] + counts[MC_IMPORT_DONE] + counts[MC_IMPORT_SKIPPED] +
                 counts[MC_IMPORT_FAILED];
 
+  char done[64], review[64], skipped[64], failed[64];
+  count_text(done, sizeof done, MC_STR_IMPORT_IMPORTED, counts[MC_IMPORT_DONE]);
+  count_text(review, sizeof review, MC_STR_IMPORT_NEED_DECISION, counts[MC_IMPORT_REVIEW]);
   if (!g_view.states) {
-    swprintf(text, 256, L"Scanning\x2026 %d audio files found", g_view.scanned_files);
+    mc_wformat(text, 512, mc_str_plural(MC_STR_IMPORT_SCANNING_FILES, g_view.scanned_files),
+               MC_D(g_view.scanned_files));
   } else if (g_view.item_count == 0) {
-    swprintf(text, 256, L"No audio files found.");
+    wstr_from_utf8(text, 512, mc_str(MC_STR_IMPORT_NO_MUSIC));
   } else if (!g_view.idle) {
-    swprintf(text, 256, L"Matching %d of %d\x2026   %d imported, %d need your attention",
-             settled < g_view.item_count ? settled + 1 : settled, g_view.item_count,
-             counts[MC_IMPORT_DONE], counts[MC_IMPORT_REVIEW]);
+    /* "Importing 3 of 12   2 imported, 1 needs a decision" */
+    char progress[128];
+    mc_format(progress, sizeof progress, mc_str(MC_STR_IMPORT_MATCHING),
+              MC_D(settled < g_view.item_count ? settled + 1 : settled), MC_D(g_view.item_count));
+    mc_wformat(text, 512, "{0}   {1}{2}{3}", MC_S(progress), MC_S(done), MC_S(mc_str(MC_STR_IMPORT_LIST_SEPARATOR)),
+               MC_S(review));
   } else if (counts[MC_IMPORT_REVIEW]) {
-    swprintf(text, 256, L"%d imported. %d need your attention: click one to choose a match.",
-             counts[MC_IMPORT_DONE], counts[MC_IMPORT_REVIEW]);
+    mc_wformat(text, 512, mc_str(MC_STR_IMPORT_STATUS_REVIEW), MC_S(done), MC_S(review));
   } else {
-    swprintf(text, 256, L"Finished: %d imported, %d skipped, %d failed.", counts[MC_IMPORT_DONE],
-             counts[MC_IMPORT_SKIPPED], counts[MC_IMPORT_FAILED]);
+    count_text(skipped, sizeof skipped, MC_STR_IMPORT_SKIPPED, counts[MC_IMPORT_SKIPPED]);
+    count_text(failed, sizeof failed, MC_STR_IMPORT_FAILED, counts[MC_IMPORT_FAILED]);
+    mc_wformat(text, 512, mc_str(MC_STR_IMPORT_STATUS_FINISHED), MC_S(done), MC_S(skipped), MC_S(failed));
   }
   SetWindowTextW(g_view.status, text);
   SendMessageW(g_view.progress, PBM_SETRANGE32, 0, g_view.item_count ? g_view.item_count : 1);
@@ -231,8 +246,9 @@ static void refresh_row(int idx) {
   lv_set_utf8(lv, idx, COL_ARTIST, it->artist);
   lv_set_utf8(lv, idx, COL_ALBUM, it->album ? it->album : file_name(it->files[0].path));
 
-  wchar_t num[32];
-  swprintf(num, 32, it->kind == MC_IMPORT_SINGLE ? L"single" : L"%d", it->file_count);
+  wchar_t num[64];
+  if (it->kind == MC_IMPORT_SINGLE) wstr_from_utf8(num, 64, mc_str(MC_STR_IMPORT_SINGLE));
+  else swprintf(num, 64, L"%d", it->file_count);
   lv_set(lv, idx, COL_FILES, num);
 
   char match[512] = "";
@@ -240,13 +256,14 @@ static void refresh_row(int idx) {
   if (it->chosen >= 0 && it->chosen < it->match_count) m = &it->matches[it->chosen];
   else if (it->state != MC_IMPORT_DONE && it->match_count) m = &it->matches[0];
   if (it->error) snprintf(match, sizeof match, "%s", it->error);
-  else if (it->state == MC_IMPORT_DONE && it->chosen < 0) snprintf(match, sizeof match, "Existing tags");
+  else if (it->state == MC_IMPORT_DONE && it->chosen < 0)
+    snprintf(match, sizeof match, "%s", mc_str(MC_STR_IMPORT_EXISTING_TAGS));
   else if (m) match_summary(m, match, sizeof match);
   lv_set_utf8(lv, idx, COL_MATCH, match);
 
   num[0] = L'\0';
   if (m && !(it->state == MC_IMPORT_DONE && it->chosen < 0))
-    swprintf(num, 32, L"%.0f%%", m->confidence * 100);
+    swprintf(num, 64, L"%.0f%%", m->confidence * 100);
   lv_set(lv, idx, COL_CONFIDENCE, num);
 
   mc_import_item_free(it);
@@ -254,13 +271,14 @@ static void refresh_row(int idx) {
 
 BOOL import_view_start(const char *const *paths, int count) {
   if (!g_view.lib) {
-    MessageBoxW(g_view.parent, L"The library could not be opened, so nothing can be imported.",
-                L"Import", MB_OK | MB_ICONERROR);
+    MessageBoxW(g_view.parent, mc_wstr(MC_STR_IMPORT_NO_LIBRARY_TEXT), mc_wstr(MC_STR_IMPORT_MUSIC),
+                MB_OK | MB_ICONERROR);
     return FALSE;
   }
   if (g_view.imp && !g_view.idle) {
-    MessageBoxW(g_view.parent, L"An import is still running. Wait for it to finish first.",
-                L"Import", MB_OK | MB_ICONINFORMATION);
+    wchar_t text[512];
+    swprintf(text, 512, L"%ls\n\n%ls", mc_wstr(MC_STR_IMPORT_RUNNING_TITLE), mc_wstr(MC_STR_IMPORT_RUNNING_TEXT));
+    MessageBoxW(g_view.parent, text, mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
     return FALSE;
   }
   close_session();
@@ -271,9 +289,9 @@ BOOL import_view_start(const char *const *paths, int count) {
   mc_status st = mc_import_start(g_view.lib, paths, count, &opts, on_import_event,
                                  (void *)(uintptr_t)g_view.generation, &g_view.imp);
   if (st != MC_OK) {
-    wchar_t msg[128];
-    swprintf(msg, 128, L"Couldn't start the import (%hs).", mc_status_str(st));
-    MessageBoxW(g_view.parent, msg, L"Import", MB_OK | MB_ICONERROR);
+    wchar_t msg[256];
+    mc_wformat(msg, 256, mc_str(MC_STR_IMPORT_START_FAILED), MC_S(mc_status_str(st)));
+    MessageBoxW(g_view.parent, msg, mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONERROR);
     g_view.imp = NULL;
     return FALSE;
   }
@@ -284,7 +302,7 @@ BOOL import_view_start(const char *const *paths, int count) {
 
 void import_view_browse(void) {
   int n = 0;
-  char **paths = pick_folders(g_view.parent, L"Choose Folders to Import", &n);
+  char **paths = pick_folders(g_view.parent, mc_wstr(MC_STR_IMPORT_CHOOSE_FOLDERS_TITLE), &n);
   if (!paths) return;
   import_view_start((const char *const *)paths, n);
   for (int i = 0; i < n; i++) free(paths[i]);
@@ -316,9 +334,9 @@ BOOL import_view_drop(HDROP drop) {
 
 BOOL import_view_confirm_close(void) {
   if (g_view.imp && !g_view.idle) {
-    int answer = MessageBoxW(g_view.parent,
-                             L"Stop the import? Anything already imported stays in your library.",
-                             L"Import", MB_YESNO | MB_ICONQUESTION);
+    wchar_t text[512];
+    swprintf(text, 512, L"%ls %ls", mc_wstr(MC_STR_IMPORT_STOP_TITLE), mc_wstr(MC_STR_IMPORT_STOP_TEXT));
+    int answer = MessageBoxW(g_view.parent, text, mc_wstr(MC_STR_IMPORT_MUSIC), MB_YESNO | MB_ICONQUESTION);
     if (answer != IDYES) return FALSE;
   }
   close_session();
@@ -359,7 +377,7 @@ static void fill_tracks(HWND dlg, int match) {
         format_length(f->duration_ms, buf, 64);
         lv_set(lv, row, 5, buf);
       } else {
-        lv_set(lv, row, 3, L"\x2014 missing");
+        lv_set(lv, row, 3, mc_wstr(MC_STR_IMPORT_TRACK_MISSING));
       }
     }
   }
@@ -367,7 +385,7 @@ static void fill_tracks(HWND dlg, int match) {
   for (int i = 0; i < it->file_count; i++) {
     if (used && used[i]) continue;
     int row = lv_append(lv, -1, 0);
-    lv_set(lv, row, 1, match >= 0 ? L"(not matched; left as is)" : L"");
+    lv_set(lv, row, 1, match >= 0 ? mc_wstr(MC_STR_IMPORT_NOT_MATCHED) : L"");
     lv_set_utf8(lv, row, 3, file_name(it->files[i].path));
     lv_set_utf8(lv, row, 4, it->files[i].title);
     format_length(it->files[i].duration_ms, buf, 64);
@@ -388,23 +406,25 @@ static void load_review(HWND dlg) {
               it->state == MC_IMPORT_PENDING;
 
   char header[1200];
-  int n = snprintf(header, sizeof header, "%s: %s \xE2\x80\x93 %s",
-                   it->kind == MC_IMPORT_SINGLE ? "Single" : "Album", it->artist ? it->artist : "?",
-                   it->album ? it->album : file_name(it->files[0].path));
-  if (it->kind == MC_IMPORT_ALBUM && n > 0 && (size_t)n < sizeof header)
-    n += snprintf(header + n, sizeof header - (size_t)n, " (%d files)", it->file_count);
-  if (n > 0 && (size_t)n < sizeof header)
-    n += snprintf(header + n, sizeof header - (size_t)n, "\n%s", it->folder ? it->folder : "");
-  if (busy && n > 0 && (size_t)n < sizeof header)
-    snprintf(header + n, sizeof header - (size_t)n, "\nSearching MusicBrainz\xE2\x80\xA6");
-  else if (it->error && n > 0 && (size_t)n < sizeof header)
-    snprintf(header + n, sizeof header - (size_t)n, "\n%s", it->error);
+  const char *artist = it->artist ? it->artist : mc_str(MC_STR_UNKNOWN_VALUE);
+  const char *album = it->album ? it->album : file_name(it->files[0].path);
+  size_t n = it->kind == MC_IMPORT_SINGLE
+               ? mc_format(header, sizeof header, mc_str(MC_STR_IMPORT_REVIEW_SINGLE), MC_S(artist), MC_S(album))
+               : mc_format(header, sizeof header, mc_str_plural(MC_STR_IMPORT_REVIEW_ALBUM, it->file_count),
+                           MC_S(artist), MC_S(album), MC_D(it->file_count));
+  if (n < sizeof header)
+    n += (size_t)snprintf(header + n, sizeof header - n, "\n%s", it->folder ? it->folder : "");
+  if (busy && n < sizeof header)
+    snprintf(header + n, sizeof header - n, "\n%s", mc_str(MC_STR_IMPORT_SEARCHING));
+  else if (it->error && n < sizeof header)
+    snprintf(header + n, sizeof header - n, "\n%s", it->error);
   set_text_utf8(GetDlgItem(dlg, IDC_REV_HEADER), header);
 
   if (!g_view.review_terms_set) {
     set_text_utf8(GetDlgItem(dlg, IDC_REV_ARTIST), it->artist);
     set_text_utf8(GetDlgItem(dlg, IDC_REV_TITLE), it->album);
-    SetDlgItemTextW(dlg, IDC_REV_TITLE_LABEL, it->kind == MC_IMPORT_SINGLE ? L"Title" : L"Album");
+    SetDlgItemTextW(dlg, IDC_REV_TITLE_LABEL,
+                    mc_wstr_mnemonic(it->kind == MC_IMPORT_SINGLE ? MC_STR_TITLE : MC_STR_ALBUM));
     g_view.review_terms_set = TRUE;
   }
 
@@ -419,7 +439,8 @@ static void load_review(HWND dlg) {
     lv_set_utf8(lv, row, 1, m->album_artist);
     if (m->is_single) {
       char into[512];
-      snprintf(into, sizeof into, "%s \xE2\x86\x92 %s", m->release ? m->release : "?", m->album);
+      mc_format(into, sizeof into, mc_str(MC_STR_IMPORT_MATCH_INTO),
+                MC_S(m->release ? m->release : mc_str(MC_STR_UNKNOWN_VALUE)), MC_S(m->album));
       lv_set_utf8(lv, row, 2, into);
     } else {
       lv_set_utf8(lv, row, 2, m->album);
@@ -450,28 +471,46 @@ static void load_review(HWND dlg) {
   EnableWindow(GetDlgItem(dlg, IDC_REV_SEARCH), !busy);
 }
 
+/* The dialog's fixed text; the template has none (app.rc). */
+static void init_review_text(HWND dlg) {
+  SetWindowTextW(dlg, mc_wstr(MC_STR_IMPORT_REVIEW_TITLE));
+  SetDlgItemTextW(dlg, IDC_REV_MATCHES_LABEL, mc_wstr_mnemonic(MC_STR_IMPORT_MATCHES));
+  SetDlgItemTextW(dlg, IDC_REV_TRACKS_LABEL, mc_wstr_mnemonic(MC_STR_TRACKS_TITLE));
+  wchar_t label[128];
+  SetDlgItemTextW(dlg, IDC_REV_SEARCH_LABEL, wstr_field_label(label, 128, MC_STR_IMPORT_SEARCH_AGAIN));
+  SetDlgItemTextW(dlg, IDC_REV_ARTIST_LABEL, mc_wstr_mnemonic(MC_STR_ARTIST));
+  SetDlgItemTextW(dlg, IDC_REV_TITLE_LABEL, mc_wstr_mnemonic(MC_STR_ALBUM));
+  SetDlgItemTextW(dlg, IDC_REV_SEARCH, mc_wstr_mnemonic(MC_STR_SEARCH));
+  SetDlgItemTextW(dlg, IDC_REV_ASIS, mc_wstr_mnemonic(MC_STR_IMPORT_AS_TAGGED));
+  SetDlgItemTextW(dlg, IDC_REV_SKIP, mc_wstr_mnemonic(MC_STR_IMPORT_SKIP));
+  SetDlgItemTextW(dlg, IDOK, mc_wstr_mnemonic(MC_STR_IMPORT_USE_MATCH));
+  SetDlgItemTextW(dlg, IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL));
+}
+
 static void init_review_columns(HWND dlg) {
   RECT rc;
   HWND lv = GetDlgItem(dlg, IDC_REV_MATCHES);
   SendMessageW(lv, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
   GetClientRect(lv, &rc);
   int w = rc.right - GetSystemMetrics(SM_CXVSCROLL);
-  static const struct { const wchar_t *title; int pct; int fmt; } matches[] = {
-    {L"Match", 7, LVCFMT_RIGHT}, {L"Artist", 17, 0}, {L"Release", 27, 0},
-    {L"Year", 6, LVCFMT_RIGHT}, {L"Tracks", 7, LVCFMT_RIGHT}, {L"Type", 8, 0},
-    {L"Format", 10, 0}, {L"Country", 7, 0}, {L"Label", 11, 0}};
+  static const struct { enum mc_str_id title; int pct; int fmt; } matches[] = {
+    {MC_STR_WINDOWS_COL_MATCH, 7, LVCFMT_RIGHT}, {MC_STR_ARTIST, 17, 0}, {MC_STR_WINDOWS_COL_RELEASE, 27, 0},
+    {MC_STR_WINDOWS_COL_YEAR, 6, LVCFMT_RIGHT}, {MC_STR_TRACKS_TITLE, 7, LVCFMT_RIGHT},
+    {MC_STR_WINDOWS_COL_TYPE, 8, 0}, {MC_STR_WINDOWS_COL_FORMAT, 10, 0}, {MC_STR_WINDOWS_COL_COUNTRY, 7, 0},
+    {MC_STR_WINDOWS_COL_LABEL, 11, 0}};
   for (int i = 0; i < 9; i++)
-    lv_add_column(lv, i, matches[i].title, w * matches[i].pct / 100, matches[i].fmt);
+    lv_add_column(lv, i, mc_wstr(matches[i].title), w * matches[i].pct / 100, matches[i].fmt);
 
   lv = GetDlgItem(dlg, IDC_REV_TRACKS);
   SendMessageW(lv, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
   GetClientRect(lv, &rc);
   w = rc.right - GetSystemMetrics(SM_CXVSCROLL);
-  static const struct { const wchar_t *title; int pct; int fmt; } tracks[] = {
-    {L"#", 6, LVCFMT_RIGHT}, {L"Title", 30, 0}, {L"Length", 8, LVCFMT_RIGHT},
-    {L"File", 22, 0}, {L"Current title", 26, 0}, {L"Length", 8, LVCFMT_RIGHT}};
+  static const struct { enum mc_str_id title; int pct; int fmt; } tracks[] = {
+    {MC_STR_WINDOWS_COL_NUMBER, 6, LVCFMT_RIGHT}, {MC_STR_TITLE, 30, 0},
+    {MC_STR_WINDOWS_COL_LENGTH, 8, LVCFMT_RIGHT}, {MC_STR_WINDOWS_COL_FILE, 22, 0},
+    {MC_STR_WINDOWS_COL_CURRENT_TITLE, 26, 0}, {MC_STR_WINDOWS_COL_LENGTH, 8, LVCFMT_RIGHT}};
   for (int i = 0; i < 6; i++)
-    lv_add_column(lv, i, tracks[i].title, w * tracks[i].pct / 100, tracks[i].fmt);
+    lv_add_column(lv, i, mc_wstr(tracks[i].title), w * tracks[i].pct / 100, tracks[i].fmt);
 }
 
 static void review_done(HWND dlg, mc_status st) {
@@ -480,7 +519,7 @@ static void review_done(HWND dlg, mc_status st) {
     update_status();
     EndDialog(dlg, IDOK);
   } else {
-    MessageBoxW(dlg, L"This item is busy. Try again in a moment.", L"Import", MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(dlg, mc_wstr(MC_STR_IMPORT_ITEM_BUSY), mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
   }
 }
 
@@ -490,6 +529,7 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       g_view.review = dlg;
       g_view.review_item = (int)lp;
       g_view.review_terms_set = FALSE;
+      init_review_text(dlg);
       init_review_columns(dlg);
       load_review(dlg);
       theme_apply_window(dlg, FALSE);
@@ -646,26 +686,28 @@ void import_view_create(HWND parent, mc_library *lib) {
   RegisterClassExW(&wc);
 
   g_view.drop = child(L"musicapp_drop", NULL, 0, ID_IMP_DROP);
-  g_view.browse = child(WC_BUTTONW, L"Choose Folders\x2026", BS_PUSHBUTTON, ID_IMP_BROWSE);
+  g_view.browse = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_IMPORT_CHOOSE_FOLDERS), BS_PUSHBUTTON, ID_IMP_BROWSE);
   g_view.status = child(WC_STATICW, NULL, SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, ID_IMP_STATUS);
   g_view.progress = child(PROGRESS_CLASSW, NULL, 0, ID_IMP_PROGRESS);
-  g_view.done = child(WC_BUTTONW, L"Done", BS_PUSHBUTTON, ID_IMP_DONE);
+  g_view.done = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_DONE), BS_PUSHBUTTON, ID_IMP_DONE);
   g_view.list = child(WC_LISTVIEWW, NULL, LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER,
                       ID_IMP_LIST);
   SendMessageW(g_view.list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
                LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
 
-  static const wchar_t *const titles[NUM_COLS] = {L"Status", L"Artist", L"Album / Title",
-                                                  L"Files", L"Match", L"Confidence"};
+  static const enum mc_str_id titles[NUM_COLS] = {
+    MC_STR_WINDOWS_COL_STATUS, MC_STR_ARTIST, MC_STR_WINDOWS_COL_ALBUM_TITLE,
+    MC_STR_WINDOWS_COL_FILES, MC_STR_WINDOWS_COL_MATCH_RELEASE, MC_STR_WINDOWS_COL_CONFIDENCE};
   for (int i = 0; i < NUM_COLS; i++)
-    lv_add_column(g_view.list, i, titles[i], 100, i == COL_FILES || i == COL_CONFIDENCE ? LVCFMT_RIGHT : 0);
+    lv_add_column(g_view.list, i, mc_wstr(titles[i]), 100,
+                  i == COL_FILES || i == COL_CONFIDENCE ? LVCFMT_RIGHT : 0);
 
   SendMessageW(g_view.list, LVM_ENABLEGROUPVIEW, TRUE, 0);
-  add_group(GROUP_REVIEW, L"Needs your attention");
-  add_group(GROUP_ACTIVE, L"In progress");
-  add_group(GROUP_DONE, L"Imported");
-  add_group(GROUP_SKIPPED, L"Skipped");
-  add_group(GROUP_FAILED, L"Failed");
+  add_group(GROUP_REVIEW, mc_wstr(MC_STR_IMPORT_NEEDS_DECISION));
+  add_group(GROUP_ACTIVE, mc_wstr(MC_STR_IMPORT_GROUP_ACTIVE));
+  add_group(GROUP_DONE, mc_wstr(MC_STR_IMPORT_STATE_DONE));
+  add_group(GROUP_SKIPPED, mc_wstr(MC_STR_IMPORT_STATE_SKIPPED));
+  add_group(GROUP_FAILED, mc_wstr(MC_STR_IMPORT_STATE_FAILED));
 }
 
 void import_view_destroy(void) {

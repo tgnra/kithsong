@@ -11,6 +11,7 @@
 #include "now_playing.h"
 #include "taskbar.h"
 #include "track_list.h"
+#include "wstr.h"
 
 /* To playback's own message-only window, so they can't clash with the main window's. */
 enum {
@@ -59,9 +60,16 @@ static void free_items(void) {
 /* "Paranoid Android – Radiohead" while there's a track, so the taskbar and Alt+Tab show it. */
 static void set_window_title(const item *it) {
   wchar_t title[512];
-  if (!it) wcscpy(title, L"musicapp");
-  else if (it->artist) swprintf(title, 512, L"%ls \x2013 %ls", it->title, it->artist);
-  else swprintf(title, 512, L"%ls", it->title);
+  if (!it) {
+    swprintf(title, 512, L"%ls", mc_wstr(MC_STR_APP_NAME));
+  } else if (it->artist) {
+    char *name = wstr_to_utf8(it->title), *artist = wstr_to_utf8(it->artist);
+    mc_wformat(title, 512, mc_str(MC_STR_TRACK_BYLINE), MC_S(name), MC_S(artist));
+    free(name);
+    free(artist);
+  } else {
+    swprintf(title, 512, L"%ls", it->title);
+  }
   SetWindowTextW(s.wnd, title);
 }
 
@@ -206,7 +214,7 @@ void playback_play(const playback_track *tracks, int count, int start) {
     const playback_track *t = &tracks[i];
     item *it = &items[i];
     if (t->uid && strlen(t->uid) < MC_UID_STRLEN) strcpy(it->uid, t->uid);
-    it->title = dup(t->title ? t->title : L"Untitled");
+    it->title = dup(t->title ? t->title : mc_wstr(MC_STR_UNTITLED));
     it->artist = dup(t->artist);
     it->album = dup(t->album);
     it->cover_dir = dup(t->cover_dir);

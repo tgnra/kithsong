@@ -7,6 +7,7 @@
 #include "canvas.h"
 #include "musiccore/sync.h"
 #include "theme.h"
+#include "wstr.h"
 
 typedef enum {
   ROW_NAV,
@@ -34,16 +35,16 @@ typedef struct sb_row {
 } sb_row;
 
 static const struct {
-  const wchar_t *text;
+  enum mc_str_id text;
   wchar_t icon;
   sidebar_page page;
 } nav_top[] = {
-  {L"Albums", 0xE93C, PAGE_ALBUMS},
-  {L"Artists", 0xE77B, PAGE_ARTISTS},
-  {L"Playlists", 0xE90B, PAGE_PLAYLISTS},
+  {MC_STR_SECTION_ALBUMS, 0xE93C, PAGE_ALBUMS},
+  {MC_STR_SECTION_ARTISTS, 0xE77B, PAGE_ARTISTS},
+  {MC_STR_SECTION_PLAYLISTS, 0xE90B, PAGE_PLAYLISTS},
 }, nav_bottom[] = {
-  {L"Import", 0xE8B5, PAGE_IMPORT},
-  {L"Settings", 0xE713, PAGE_SETTINGS},
+  {MC_STR_IMPORT_MUSIC, 0xE8B5, PAGE_IMPORT},
+  {MC_STR_SETTINGS, 0xE713, PAGE_SETTINGS},
 };
 #define MAX_ITEM_H 255
 
@@ -261,8 +262,8 @@ static void set_add_hot(BOOL hot) {
 static const wchar_t *row_tip(const sb_row *r) {
   switch (r->kind) {
     case ROW_FOOTER: return s.footer_tip;
-    case ROW_DEVICE: return r->flags & SB_DEV_ONLINE ? NULL : L"Offline";
-    case ROW_NEARBY: return r->flags & SB_DEV_OTHER_GROUP ? L"In another group" : NULL;
+    case ROW_DEVICE: return r->flags & SB_DEV_ONLINE ? NULL : mc_wstr(MC_STR_WINDOWS_DEVICE_OFFLINE);
+    case ROW_NEARBY: return r->flags & SB_DEV_OTHER_GROUP ? mc_wstr(MC_STR_WINDOWS_DEVICE_OTHER_GROUP_TIP) : NULL;
     default: return NULL;
   }
 }
@@ -315,8 +316,9 @@ static void push_device(row_kind kind, const device *d) {
   static const wchar_t icons[] = {[MC_DEVICE_DESKTOP] = 0xE977, /* PC */
                                   [MC_DEVICE_PHONE] = 0xE8EA,   /* CellPhone */
                                   [MC_DEVICE_WATCH] = 0xE823};  /* Recent: a clock face */
-  const wchar_t *name = d->name && *d->name ? d->name : L"Unnamed device";
-  sb_row *r = push_row(kind, name, kind == ROW_DEVICE && (d->flags & SB_DEV_SELF) ? L" (this PC)" : NULL);
+  const wchar_t *name = d->name && *d->name ? d->name : mc_wstr(MC_STR_WINDOWS_DEVICE_UNNAMED);
+  BOOL self = kind == ROW_DEVICE && (d->flags & SB_DEV_SELF);
+  sb_row *r = push_row(kind, name, self ? mc_wstr(MC_STR_WINDOWS_THIS_PC_SUFFIX) : NULL);
   if (!r) return;
   r->icon = d->kind >= 0 && d->kind < (int)(sizeof icons / sizeof icons[0]) ? icons[d->kind] : icons[0];
   r->page = PAGE_DEVICE;
@@ -354,21 +356,24 @@ static void rebuild(void) {
 
   free_rows();
   for (size_t i = 0; i < sizeof nav_top / sizeof nav_top[0]; i++)
-    push_nav(nav_top[i].text, nav_top[i].icon, nav_top[i].page);
-  push_row(ROW_HEADER, L"DEVICES", NULL);
+    push_nav(mc_wstr(nav_top[i].text), nav_top[i].icon, nav_top[i].page);
+  wchar_t heading[64];
+  lstrcpynW(heading, mc_wstr(MC_STR_DEVICES), 64);
+  CharUpperBuffW(heading, (DWORD)wcslen(heading));
+  push_row(ROW_HEADER, heading, NULL);
   for (int i = 0; i < s.npaired; i++) push_device(ROW_DEVICE, &s.paired[i]);
   if (s.nnearby > 0) {
     wchar_t text[64];
-    wsprintfW(text, L"Unpaired devices (%d)", s.nnearby);
+    mc_wformat(text, 64, mc_str(MC_STR_WINDOWS_DEVICES_UNPAIRED), MC_D(s.nnearby));
     sb_row *r = push_row(ROW_ACCORDION, text, NULL);
     if (r) r->icon = accordion_expanded() ? 0xE70D : 0xE76C; /* ChevronDown, ChevronRight */
     if (accordion_expanded())
       for (int i = 0; i < s.nnearby; i++) push_device(ROW_NEARBY, &s.nearby[i]);
   }
-  if (s.npaired == 0 && s.nnearby == 0) push_row(ROW_NOTE, L"No devices found", NULL);
+  if (s.npaired == 0 && s.nnearby == 0) push_row(ROW_NOTE, mc_wstr(MC_STR_DEVICES_NONE), NULL);
   push_row(ROW_SPACER, L"", NULL); /* pushes the rest to the bottom */
   for (size_t i = 0; i < sizeof nav_bottom / sizeof nav_bottom[0]; i++)
-    push_nav(nav_bottom[i].text, nav_bottom[i].icon, nav_bottom[i].page);
+    push_nav(mc_wstr(nav_bottom[i].text), nav_bottom[i].icon, nav_bottom[i].page);
   if (s.footer[0] || s.footer[1]) push_row(ROW_FOOTER, s.footer[0], NULL);
 
   BOOL visible = IsWindowVisible(s.wnd);
@@ -527,7 +532,7 @@ HWND sidebar_create(HWND parent, int id) {
                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, s.wnd, NULL,
                               GetModuleHandleW(NULL), NULL);
   TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = s.wnd, .uId = TIP_ADD,
-                    .lpszText = L"Add Device by Address"};
+                    .lpszText = (wchar_t *)mc_wstr(MC_STR_ADD_DEVICE_BY_ADDRESS)};
   SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   SendMessageW(s.tooltip, TTM_SETMAXTIPWIDTH, 0, TIP_W); /* so the footer's lines break */
   update_tooltip();

@@ -37,6 +37,8 @@ typedef enum mc_status {
 
 /* Library version as "major.minor.patch". Never fails, safe to call before mc_init(). */
 const char *mc_version(void);
+/* A short reason for status, in the UI language and lower case, to go inside a message:
+ * "out of memory". */
 const char *mc_status_str(mc_status status);
 
 /* Process-wide setup/teardown (network stack). Call once from the main thread. */
@@ -62,5 +64,6 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "musiccore/transcode.h"
 #include "musiccore/discovery.h"
 #include "musiccore/sync.h"
+#include "musiccore/i18n.h"
 
 #endif

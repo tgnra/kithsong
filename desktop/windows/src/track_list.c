@@ -13,6 +13,7 @@
 #include "cover.h"
 #include "scroller.h"
 #include "theme.h"
+#include "wstr.h"
 
 /* Metrics at 96 DPI. */
 enum {
@@ -79,7 +80,7 @@ static struct {
   wchar_t *artist;     /* NULL if unknown */
   int year;            /* 0 if unknown */
   int total_ms;        /* the tracks' length */
-  wchar_t summary[64]; /* "1997 · 12 tracks · 47 min" */
+  wchar_t summary[128]; /* "1997 · 12 tracks · 47 min" */
   wchar_t *cover_dir;  /* NULL if the album has no cover */
   HBITMAP art;         /* the cover, premultiplied, with rounded corners; NULL shows the placeholder */
   const uint32_t *art_px;
@@ -262,13 +263,21 @@ static void end_drag(void);
 
 /* "1997 · 12 tracks · 47 min" */
 static void make_summary(void) {
-  wchar_t year[16] = L"";
-  if (s.year > 0) swprintf(year, 16, L"%d \x00B7 ", s.year);
-  int n = s.count, min = (s.total_ms + 30000) / 60000;
-  const wchar_t *tracks = n == 1 ? L"track" : L"tracks";
-  if (!n) swprintf(s.summary, 64, L"%lsNo tracks", year);
-  else if (min >= 60) swprintf(s.summary, 64, L"%ls%d %ls \x00B7 %d hr %d min", year, n, tracks, min / 60, min % 60);
-  else swprintf(s.summary, 64, L"%ls%d %ls \x00B7 %d min", year, n, tracks, min);
+  int n = s.count, min = (s.total_ms + 30000) / 60000, count = 0;
+  char parts[3][64];
+  if (s.year > 0) snprintf(parts[count++], 64, "%d", s.year);
+  if (!n) {
+    snprintf(parts[count++], 64, "%s", mc_str(MC_STR_NO_TRACKS));
+  } else {
+    mc_format(parts[count++], 64, mc_str_plural(MC_STR_TRACKS, n), MC_D(n));
+    if (min >= 60) mc_format(parts[count++], 64, mc_str(MC_STR_DURATION_HOURS_MINUTES), MC_D(min / 60), MC_D(min % 60));
+    else mc_format(parts[count++], 64, mc_str(MC_STR_DURATION_MINUTES), MC_D(min));
+  }
+  char text[256];
+  size_t len = 0;
+  for (int i = 0; i < count && len < sizeof text; i++)
+    len += (size_t)snprintf(text + len, sizeof text - len, "%s%s", i ? mc_str(MC_STR_SEPARATOR_DOT) : "", parts[i]);
+  wstr_from_utf8(s.summary, sizeof s.summary / sizeof s.summary[0], text);
 }
 
 static void free_art(void) {
@@ -337,7 +346,7 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
     row *r = &s.rows[i];
     memcpy(r->uid, t->uid, sizeof r->uid);
     memcpy(r->entry_uid, t->entry_uid, sizeof r->entry_uid);
-    r->title = widen(t->title && *t->title ? t->title : "Untitled");
+    r->title = widen(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
     r->artist = t->artist && *t->artist ? widen(t->artist) : NULL;
     r->album = t->album && *t->album ? widen(t->album) : NULL;
     r->cover_dir = widen(t->cover_dir);
@@ -450,8 +459,10 @@ static void show_playlist_menu(void) {
   RECT r = more_rect();
   MapWindowPoints(s.wnd, NULL, (POINT *)&r, 2);
   HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, CMD_RENAME, L"Rename\x2026\tF2");
-  AppendMenuW(menu, MF_STRING, CMD_DELETE, L"Delete Playlist\x2026");
+  wchar_t item[128];
+  AppendMenuW(menu, MF_STRING, CMD_RENAME,
+              wstr_menu_item(item, 128, MC_STR_PLAYLIST_RENAME_MENU, MC_STR_WINDOWS_SHORTCUT_RENAME));
+  AppendMenuW(menu, MF_STRING, CMD_DELETE, mc_wstr_mnemonic(MC_STR_PLAYLIST_DELETE_MENU));
   s.more_open = TRUE;
   invalidate_more();
   /* Hangs from the button's right edge, as the button sits at the window's. */
@@ -472,16 +483,20 @@ static void show_menu(POINT pt) {
   HMENU menu = CreatePopupMenu();
   mc_playlist_list *lists = NULL;
   HMENU add = add_to_playlist_menu(s.lib, CMD_PLAYLIST_FIRST, CMD_NEW_PLAYLIST, &lists);
-  if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, L"Add to Playlist");
+  if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_PLAYLIST));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_PLAY_NEXT, L"Play Next");
-  AppendMenuW(menu, MF_STRING, CMD_PLAY_LAST, L"Play Last");
+  AppendMenuW(menu, MF_STRING, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
   if (in_playlist(i)) {
+    wchar_t item[128];
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING | (i > 0 ? 0 : MF_GRAYED), CMD_MOVE_UP, L"Move Up\tAlt+Up");
-    AppendMenuW(menu, MF_STRING | (i + 1 < s.count ? 0 : MF_GRAYED), CMD_MOVE_DOWN, L"Move Down\tAlt+Down");
+    AppendMenuW(menu, MF_STRING | (i > 0 ? 0 : MF_GRAYED), CMD_MOVE_UP,
+                wstr_menu_item(item, 128, MC_STR_MOVE_UP, MC_STR_WINDOWS_SHORTCUT_MOVE_UP));
+    AppendMenuW(menu, MF_STRING | (i + 1 < s.count ? 0 : MF_GRAYED), CMD_MOVE_DOWN,
+                wstr_menu_item(item, 128, MC_STR_MOVE_DOWN, MC_STR_WINDOWS_SHORTCUT_MOVE_DOWN));
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING, CMD_REMOVE, L"Remove from Playlist\tDel");
+    AppendMenuW(menu, MF_STRING, CMD_REMOVE,
+                wstr_menu_item(item, 128, MC_STR_REMOVE_FROM_PLAYLIST, MC_STR_WINDOWS_SHORTCUT_REMOVE));
   }
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, s.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
@@ -689,7 +704,7 @@ static void paint_header(canvas *c, int w) {
   UINT one_line = DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS;
   RECT artist = {left, title.bottom + scale(LINE_GAP), right, title.bottom + scale(LINE_GAP) + artist_h};
   SelectObject(c->dc, s.font);
-  const wchar_t *byline = s.playlist ? L"Playlist" : s.artist ? s.artist : L"Unknown Artist";
+  const wchar_t *byline = s.playlist ? mc_wstr(MC_STR_PLAYLIST) : s.artist ? s.artist : mc_wstr(MC_STR_UNKNOWN_ARTIST);
   DrawTextW(c->dc, byline, -1, &artist, one_line);
   RECT sub = {left, artist.bottom + scale(LINE_GAP), right, artist.bottom + scale(LINE_GAP) + sub_h};
   SelectObject(c->dc, s.sub_font);
@@ -904,7 +919,8 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       s.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, wnd, NULL,
                                   GetModuleHandleW(NULL), NULL);
-      TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = wnd, .uId = 1, .lpszText = L"Close"};
+      TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = wnd, .uId = 1,
+                        .lpszText = (wchar_t *)mc_wstr(MC_STR_CLOSE)};
       SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
       return 0;
     }

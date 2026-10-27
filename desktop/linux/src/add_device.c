@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "musiccore/i18n.h"
+
 #if !ADW_CHECK_VERSION(1, 5, 0)
 #error "add_device.c needs libadwaita 1.5 or later (AdwAlertDialog)"
 #endif
@@ -58,11 +60,11 @@ void add_device_present(GtkWidget *parent, add_device_connect_fn connect, void *
   d->connect = connect;
   d->user = user;
 
-  d->dialog = GTK_WIDGET(adw_alert_dialog_new(
-    "Add Device", "Enter the address of a device on your network. It will show a code to enter next."));
+  d->dialog = GTK_WIDGET(adw_alert_dialog_new(mc_str(MC_STR_ADD_DEVICE), mc_str(MC_STR_ADD_DEVICE_TEXT)));
   g_object_set_data_full(G_OBJECT(d->dialog), "add-device", d, g_free);
   AdwAlertDialog *alert = ADW_ALERT_DIALOG(d->dialog);
-  adw_alert_dialog_add_responses(alert, "cancel", "Cancel", "connect", "Connect", NULL);
+  adw_alert_dialog_add_responses(alert, "cancel", mc_str_mnemonic(MC_STR_CANCEL), "connect",
+                                 mc_str_mnemonic(MC_STR_CONNECT), NULL);
   adw_alert_dialog_set_response_appearance(alert, "connect", ADW_RESPONSE_SUGGESTED);
   adw_alert_dialog_set_response_enabled(alert, "connect", FALSE);
   adw_alert_dialog_set_default_response(alert, "connect");
@@ -74,14 +76,14 @@ void add_device_present(GtkWidget *parent, add_device_connect_fn connect, void *
   gtk_widget_add_css_class(list, "boxed-list");
 
   d->address = adw_entry_row_new();
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(d->address), "IP Address or Hostname");
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(d->address), mc_str(MC_STR_ADD_DEVICE_HOST));
   gtk_editable_set_enable_undo(GTK_EDITABLE(d->address), TRUE);
   g_signal_connect(d->address, "changed", G_CALLBACK(on_address_changed), d);
   g_signal_connect(d->address, "entry-activated", G_CALLBACK(on_address_activated), d);
   gtk_list_box_append(GTK_LIST_BOX(list), d->address);
 
   d->port = adw_spin_row_new_with_range(1, 65535, 1);
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(d->port), "Port");
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(d->port), mc_str(MC_STR_ADD_DEVICE_PORT));
   adw_spin_row_set_value(ADW_SPIN_ROW(d->port), ADD_DEVICE_DEFAULT_PORT);
   gtk_list_box_append(GTK_LIST_BOX(list), d->port);
 
