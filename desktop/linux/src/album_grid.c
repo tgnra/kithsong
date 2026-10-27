@@ -15,6 +15,7 @@ static void album_item_finalize(GObject *obj) {
   g_free(self->title);
   g_free(self->artist);
   g_free(self->cover_dir);
+  g_free(self->cover_file);
   G_OBJECT_CLASS(album_item_parent_class)->finalize(obj);
 }
 
@@ -36,19 +37,31 @@ static AlbumItem *album_item_new(const mc_album_info *info) {
   return self;
 }
 
-static AlbumItem *album_item_new_playlist(const mc_playlist_info *info) {
+static AlbumItem *album_item_new_playlist(const mc_playlist_info *info, const char *cover_file) {
   AlbumItem *self = g_object_new(ALBUM_TYPE_ITEM, NULL);
   memcpy(self->uid, info->uid, sizeof self->uid);
   self->title = g_strdup(info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED));
+  self->cover_file = g_strdup(cover_file);
   self->is_playlist = TRUE;
   self->track_count = info->track_count;
   return self;
 }
 
+/* A playlist's item with another picture. */
+static AlbumItem *album_item_with_cover(const AlbumItem *item, const char *cover_file) {
+  AlbumItem *self = g_object_new(ALBUM_TYPE_ITEM, NULL);
+  memcpy(self->uid, item->uid, sizeof self->uid);
+  self->title = g_strdup(item->title);
+  self->cover_file = g_strdup(cover_file);
+  self->is_playlist = item->is_playlist;
+  self->track_count = item->track_count;
+  return self;
+}
+
 static gboolean album_item_equal(const AlbumItem *a, const AlbumItem *b) {
   return !strcmp(a->uid, b->uid) && !g_strcmp0(a->title, b->title) && !g_strcmp0(a->artist, b->artist) &&
-         !g_strcmp0(a->cover_dir, b->cover_dir) && a->year == b->year && a->is_playlist == b->is_playlist &&
-         a->track_count == b->track_count;
+         !g_strcmp0(a->cover_dir, b->cover_dir) && !g_strcmp0(a->cover_file, b->cover_file) &&
+         a->year == b->year && a->is_playlist == b->is_playlist && a->track_count == b->track_count;
 }
 
 /* The line beneath the title: the artist, or a playlist's track count. g_free it. */
@@ -71,6 +84,8 @@ typedef struct grid {
   void (*changed)(void *user);
   void *user;
   gboolean quiet; /* selection changes aren't the user's */
+  GHashTable *art; /* playlist uid -> its picture, or NULL for none, as last looked up */
+  guint art_gen;   /* bumped by each lookup, so only the latest one's results are used */
 } grid;
 
 static grid *grid_of(GtkWidget *widget) {
@@ -80,6 +95,7 @@ static grid *grid_of(GtkWidget *widget) {
 static void grid_free(gpointer data) {
   grid *g = data;
   g_object_unref(g->selection);
+  if (g->art) g_hash_table_destroy(g->art);
   g_free(g);
 }
 
@@ -149,15 +165,18 @@ static void tile_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpoi
 
   cell_cancel(c);
   gtk_picture_set_paintable(GTK_PICTURE(c->picture), NULL);
-  if (!album->cover_dir) return;
+  if (!album->cover_dir && !album->cover_file) return;
   int size = COVER_SIZE * gtk_widget_get_scale_factor(box);
   GdkTexture *texture = NULL;
-  if (cover_lookup(album->cover_dir, size, &texture)) {
+  gboolean cached = album->cover_dir ? cover_lookup(album->cover_dir, size, &texture)
+                                     : cover_lookup_file(album->cover_file, size, &texture);
+  if (cached) {
     gtk_picture_set_paintable(GTK_PICTURE(c->picture), GDK_PAINTABLE(texture));
     g_clear_object(&texture);
   } else {
     c->loading = g_cancellable_new();
-    cover_load(album->cover_dir, size, c->loading, tile_cover_loaded, c);
+    if (album->cover_dir) cover_load(album->cover_dir, size, c->loading, tile_cover_loaded, c);
+    else cover_load_file(album->cover_file, size, c->loading, tile_cover_loaded, c);
   }
 }
 
@@ -260,19 +279,128 @@ int album_grid_reload(GtkWidget *widget, mc_library *lib) {
   return (int)n;
 }
 
-int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib) {
+/* --- Playlists' pictures --- */
+
+/* A lookup of every playlist's picture, on a worker thread with a library connection of its
+ * own: a picture that isn't cached yet takes decoding four covers. */
+typedef struct art_job {
+  GtkWidget *widget; /* the grid, kept alive until the job is done */
+  guint gen;
+  char *lib_dir, *art_dir;
+  char **uids;  /* NULL-terminated */
+  char **paths; /* results, one per uid, NULL for none */
+  guint n;
+} art_job;
+
+static void art_job_free(gpointer data) {
+  art_job *j = data;
+  g_object_unref(j->widget);
+  g_free(j->lib_dir);
+  g_free(j->art_dir);
+  g_strfreev(j->uids);
+  for (guint i = 0; i < j->n; i++) g_free(j->paths[i]);
+  g_free(j->paths);
+  g_free(j);
+}
+
+static void art_thread(GTask *task, gpointer source, gpointer data, GCancellable *cancellable) {
+  (void)source;
+  (void)cancellable;
+  art_job *j = data;
+  mc_library *lib = NULL;
+  if (mc_library_open(j->lib_dir, &lib) == MC_OK) {
+    for (guint i = 0; i < j->n; i++) {
+      char *path = NULL;
+      if (mc_playlist_art(lib, j->uids[i], j->art_dir, &path) == MC_OK && path) j->paths[i] = g_strdup(path);
+      mc_free(path);
+    }
+    mc_library_close(lib);
+  }
+  g_task_return_boolean(task, TRUE);
+}
+
+/* On the UI thread: the playlists whose pictures changed get new items. */
+static void art_done(GObject *source, GAsyncResult *result, gpointer user) {
+  (void)source;
+  (void)user;
+  art_job *j = g_task_get_task_data(G_TASK(result));
+  grid *g = grid_of(j->widget);
+  if (!g || j->gen != g->art_gen) return; /* a later lookup is on its way */
+
+  GHashTable *old = g->art;
+  g->art = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+  for (guint i = 0; i < j->n; i++) g_hash_table_insert(g->art, g_strdup(j->uids[i]), g_strdup(j->paths[i]));
+  if (old) g_hash_table_destroy(old);
+
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(g->store));
+  AlbumItem **items = g_new0(AlbumItem *, n + 1);
+  gboolean changed = FALSE, selected_changed = FALSE;
+  AlbumItem *sel = album_grid_selection(j->widget);
+  for (guint i = 0; i < n; i++) {
+    AlbumItem *a = g_list_model_get_item(G_LIST_MODEL(g->store), i);
+    const char *path = g_hash_table_lookup(g->art, a->uid);
+    if (g_hash_table_contains(g->art, a->uid) && g_strcmp0(path, a->cover_file)) {
+      items[i] = album_item_with_cover(a, path);
+      changed = TRUE;
+      selected_changed |= a == sel;
+      g_object_unref(a);
+    } else {
+      items[i] = a;
+    }
+  }
+  if (changed) {
+    char keep[MC_UID_STRLEN];
+    grid_keep(j->widget, keep);
+    grid_set_items(g, items, n, keep);
+  }
+  for (guint i = 0; i < n; i++) g_object_unref(items[i]);
+  g_free(items);
+  if (selected_changed && g->changed) g->changed(g->user); /* the track list shows it too */
+}
+
+/* Looks up the pictures of the grid's playlists again, as they may have changed. */
+static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir) {
+  grid *g = grid_of(widget);
+  g->art_gen++;
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(g->store));
+  if (!lib || !art_dir || !n) return;
+  art_job *j = g_new0(art_job, 1);
+  j->widget = g_object_ref(widget);
+  j->gen = g->art_gen;
+  j->lib_dir = g_strdup(mc_library_dir(lib));
+  j->art_dir = g_strdup(art_dir);
+  j->n = n;
+  j->uids = g_new0(char *, n + 1);
+  j->paths = g_new0(char *, n);
+  for (guint i = 0; i < n; i++) {
+    AlbumItem *a = g_list_model_get_item(G_LIST_MODEL(g->store), i);
+    j->uids[i] = g_strdup(a->uid);
+    g_object_unref(a);
+  }
+  GTask *task = g_task_new(NULL, NULL, art_done, NULL);
+  g_task_set_task_data(task, j, art_job_free);
+  g_task_run_in_thread(task, art_thread);
+  g_object_unref(task);
+}
+
+int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *art_dir) {
   char keep[MC_UID_STRLEN];
   grid_keep(widget, keep);
+  grid *g = grid_of(widget);
   mc_playlist_list *list = NULL;
   if (lib && mc_library_list_playlists(lib, &list) != MC_OK) list = NULL;
   guint n = list ? (guint)list->count : 0;
   AlbumItem **items = g_new0(AlbumItem *, n + 1);
-  for (guint i = 0; i < n; i++) items[i] = album_item_new_playlist(&list->items[i]);
+  for (guint i = 0; i < n; i++) {
+    const char *known = g->art ? g_hash_table_lookup(g->art, list->items[i].uid) : NULL;
+    items[i] = album_item_new_playlist(&list->items[i], known);
+  }
   mc_playlist_list_free(list);
 
-  grid_set_items(grid_of(widget), items, n, keep);
+  grid_set_items(g, items, n, keep);
   for (guint i = 0; i < n; i++) g_object_unref(items[i]);
   g_free(items);
+  art_lookup(widget, lib, art_dir);
   return (int)n;
 }
 

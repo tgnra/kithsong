@@ -512,7 +512,8 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   char keep[MC_UID_STRLEN] = "";
   TrackItem *sel = gtk_single_selection_get_selected_item(s.selection);
   if (same && sel) memcpy(keep, album->is_playlist ? sel->entry_uid : sel->uid, sizeof keep);
-
+  /* A playlist's picture changes with its tracks. */
+  gboolean new_cover = !same || g_strcmp0(album->cover_file, s.album->cover_file);
   if (album) g_object_ref(album);
   g_clear_object(&s.album);
   s.album = album;
@@ -560,15 +561,18 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
                                                                    : mc_str(MC_STR_UNKNOWN_ARTIST));
   set_summary(album ? album->year : 0, n, total_ms);
   gtk_widget_set_visible(s.playlist_button, album && album->is_playlist);
-  if (!same) {
-    gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(s.scroller)), 0);
+  if (!same) gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(s.scroller)), 0);
+  if (new_cover) {
     if (s.cover_loading) g_cancellable_cancel(s.cover_loading);
     g_clear_object(&s.cover_loading);
     GdkTexture *texture = NULL;
+    int size = HEADER_COVER * gtk_widget_get_scale_factor(s.cover);
     if (album && album->cover_dir) {
-      int size = HEADER_COVER * gtk_widget_get_scale_factor(s.cover);
       s.cover_loading = g_cancellable_new();
       texture = cover_get(album->cover_dir, size, s.cover_loading, cover_loaded, NULL);
+    } else if (album && album->cover_file) {
+      s.cover_loading = g_cancellable_new();
+      texture = cover_get_file(album->cover_file, size, s.cover_loading, cover_loaded, NULL);
     }
     gtk_picture_set_paintable(GTK_PICTURE(s.cover), GDK_PAINTABLE(texture));
     g_clear_object(&texture);
@@ -594,7 +598,6 @@ track_list_item track_list_item_at(int i) {
   item.artist = t->artist;
   item.album = t->album;
   item.cover_dir = t->cover_dir;
-  g_object_unref(t); /* the store keeps it */
   return item;
 }
 

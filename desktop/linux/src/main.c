@@ -349,7 +349,7 @@ static void on_playlist_delete(void *user) {
 
 void app_reload_library(app *a) {
   int albums = album_grid_reload(a->album_grid, a->lib);
-  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib);
+  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir);
   const char *page = a->show_playlists ? (playlists > 0 ? "playlists" : "no-playlists")
                                        : (albums > 0 ? "grid" : "empty");
   gtk_stack_set_visible_child_name(a->albums, page);
@@ -468,6 +468,32 @@ static GtkWidget *action_button(const char *icon, const char *tooltip, const cha
   return b;
 }
 
+/* Clears playlists' pictures out of the cache when their playlists have gone, on a worker
+ * thread with its own connection, since it looks each one up. data is the library folder
+ * and the cache folder. */
+static void prune_art_thread(GTask *task, gpointer source, gpointer data, GCancellable *cancellable) {
+  (void)source;
+  (void)cancellable;
+  char **dirs = data;
+  mc_library *lib = NULL;
+  if (mc_library_open(dirs[0], &lib) == MC_OK) {
+    mc_playlist_art_prune(lib, dirs[1]);
+    mc_library_close(lib);
+  }
+  g_task_return_boolean(task, TRUE);
+}
+
+static void prune_art(app *a) {
+  if (!a->lib) return;
+  char **dirs = g_new0(char *, 3);
+  dirs[0] = g_strdup(mc_library_dir(a->lib));
+  dirs[1] = g_strdup(a->art_dir);
+  GTask *task = g_task_new(NULL, NULL, NULL, NULL);
+  g_task_set_task_data(task, dirs, (GDestroyNotify)g_strfreev);
+  g_task_run_in_thread(task, prune_art_thread);
+  g_object_unref(task);
+}
+
 static void on_shutdown(GApplication *gapp, gpointer user) {
   (void)gapp;
   (void)user;
@@ -564,6 +590,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   playback_set_library(a->lib, a->settings_dir);
 
   mpris_init(gapp, a->win);
+  prune_art(a);
   app_reload_library(a);
   gtk_window_present(a->win);
 }
@@ -592,6 +619,7 @@ int main(int argc, char **argv) {
     g_free(fallback);
   }
   a.settings_dir = settings_dir;
+  a.art_dir = g_build_filename(settings_dir, MC_PLAYLIST_ART_CACHE_DIR, NULL);
   const char *library_dir = mc_settings_library_dir(settings);
   if (!library_dir || mc_library_open(library_dir, &a.lib) != MC_OK) a.lib = NULL;
   mc_settings_free(settings);
@@ -605,6 +633,7 @@ int main(int argc, char **argv) {
   /* The window, and the import view with it, is gone by now, so the library can close. */
   mc_library_close(a.lib);
   g_free(a.settings_dir);
+  g_free(a.art_dir);
   mc_shutdown();
   return status;
 }

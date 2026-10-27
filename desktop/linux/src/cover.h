@@ -1,6 +1,8 @@
 /* Album covers: the cover.jpg (or cover.png) in an album's folder, decoded on a worker
  * thread into square textures, and kept in a cache bounded by memory, so the album grid
- * scrolls smoothly however big the library is. Call everything on the UI thread. */
+ * scrolls smoothly however big the library is. The _file functions do the same for an
+ * image file, such as a playlist's picture (mc_playlist_art()). Call everything on the UI
+ * thread. */
 #ifndef MUSICAPP_COVER_H
 #define MUSICAPP_COVER_H
 
@@ -12,6 +14,7 @@ char *cover_path(const char *dir);
 /* Looks for dir's cover at size x size in the cache. Returns TRUE if it's there, with
  * *texture set to a new reference, or to NULL if the cover couldn't be decoded. */
 gboolean cover_lookup(const char *dir, int size, GdkTexture **texture);
+gboolean cover_lookup_file(const char *path, int size, GdkTexture **texture);
 
 /* Called on the UI thread with the cover (borrowed), or NULL if it couldn't be decoded. */
 typedef void (*cover_done)(GdkTexture *texture, gpointer user);
@@ -21,11 +24,14 @@ typedef void (*cover_done)(GdkTexture *texture, gpointer user);
  * happens before it starts, so a fast scroll leaves no backlog. The result is cached
  * either way. */
 void cover_load(const char *dir, int size, GCancellable *cancellable, cover_done done, gpointer user);
+void cover_load_file(const char *path, int size, GCancellable *cancellable, cover_done done, gpointer user);
 
 /* The cached cover if there is one, otherwise starts cover_load() and returns NULL. For
  * one-off images (the track list header, the now-playing strip). */
 GdkTexture *cover_get(const char *dir, int size, GCancellable *cancellable, cover_done done,
                       gpointer user);
+GdkTexture *cover_get_file(const char *path, int size, GCancellable *cancellable, cover_done done,
+                           gpointer user);
 
 void cover_cache_free(void);
 

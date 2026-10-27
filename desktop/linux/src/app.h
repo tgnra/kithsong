@@ -12,6 +12,7 @@ typedef struct app {
   GtkApplication *gapp;
   GtkWindow *win;
   char *settings_dir;   /* ~/.config/musicapp */
+  char *art_dir;        /* settings_dir/playlist-art: playlists' pictures, see mc_playlist_art() */
   GtkStack *pages;      /* "library": the album grid and track list | "import" */
   GtkWidget *import;    /* the import page, import_view.c */
   GtkWidget *sidebar;

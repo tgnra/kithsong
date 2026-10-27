@@ -88,7 +88,14 @@ gboolean cover_lookup(const char *dir, int size, GdkTexture **texture) {
   *texture = NULL;
   if (!s.cache) return FALSE;
   char *path = cover_path(dir);
-  if (!path) return FALSE;
+  gboolean found = cover_lookup_file(path, size, texture);
+  g_free(path);
+  return found;
+}
+
+gboolean cover_lookup_file(const char *path, int size, GdkTexture **texture) {
+  *texture = NULL;
+  if (!s.cache || !path) return FALSE;
   char *key = cache_key(path, size);
   entry *e = g_hash_table_lookup(s.cache, key);
   gboolean found = e && e->mtime == file_mtime(path);
@@ -98,7 +105,6 @@ gboolean cover_lookup(const char *dir, int size, GdkTexture **texture) {
     *texture = e->texture ? g_object_ref(e->texture) : NULL;
   }
   g_free(key);
-  g_free(path);
   return found;
 }
 
@@ -167,12 +173,17 @@ static void decode_done(GObject *source, GAsyncResult *result, gpointer user) {
 
 void cover_load(const char *dir, int size, GCancellable *cancellable, cover_done done, gpointer user) {
   char *path = cover_path(dir);
+  cover_load_file(path, size, cancellable, done, user);
+  g_free(path);
+}
+
+void cover_load_file(const char *path, int size, GCancellable *cancellable, cover_done done, gpointer user) {
   if (!path) {
     if (done) done(NULL, user);
     return;
   }
   job *j = g_new0(job, 1);
-  j->path = path;
+  j->path = g_strdup(path);
   j->key = cache_key(path, size);
   j->size = size;
   j->mtime = file_mtime(path);
@@ -190,6 +201,14 @@ GdkTexture *cover_get(const char *dir, int size, GCancellable *cancellable, cove
   GdkTexture *texture = NULL;
   if (cover_lookup(dir, size, &texture)) return texture;
   cover_load(dir, size, cancellable, done, user);
+  return NULL;
+}
+
+GdkTexture *cover_get_file(const char *path, int size, GCancellable *cancellable, cover_done done,
+                           gpointer user) {
+  GdkTexture *texture = NULL;
+  if (cover_lookup_file(path, size, &texture)) return texture;
+  cover_load_file(path, size, cancellable, done, user);
   return NULL;
 }
 

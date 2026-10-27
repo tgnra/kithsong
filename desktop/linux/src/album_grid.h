@@ -2,9 +2,10 @@
  * fit. A GtkGridView over a GListStore of AlbumItems, so only the tiles in view exist;
  * covers are decoded off the UI thread as tiles come into view (cover.c).
  *
- * The same grid shows playlists, with a placeholder for the cover and the track count
- * beneath the name. Clicking a tile (or moving to it with the keyboard) selects it, and the
- * selection picks what the track list shows. Each grid has a selection of its own. */
+ * The same grid shows playlists, with their pictures (mc_playlist_art(), made off the UI
+ * thread after each reload) and the track count beneath the name. Clicking a tile (or
+ * moving to it with the keyboard) selects it, and the selection picks what the track list
+ * shows. Each grid has a selection of its own. */
 #ifndef MUSICAPP_ALBUM_GRID_H
 #define MUSICAPP_ALBUM_GRID_H
 
@@ -22,20 +23,23 @@ struct _AlbumItem {
   char *title;      /* "Untitled" if it has none; a playlist's name */
   char *artist;     /* NULL if unknown, and for playlists */
   char *cover_dir;  /* the album folder if it has a cover, else NULL */
+  char *cover_file; /* a playlist's picture, once looked for; NULL if it has none */
   int year;         /* 0 if unknown */
   gboolean is_playlist;
   int track_count;  /* playlists only */
 };
 
 /* label names the grid for screen readers. changed is called when the user changes the
- * selection, not by album_grid_reload() or album_grid_unselect(). */
+ * selection, not by album_grid_reload() or album_grid_unselect(), and when the selected
+ * playlist's picture changes (its item is replaced). */
 GtkWidget *album_grid_new(const char *label, void (*changed)(void *user), void *user);
 
 /* Reloads the albums of lib (NULL for none), in mc_library_list_albums() order, or for
  * album_grid_reload_playlists() its playlists. Only what changed is replaced, so the grid
- * keeps its scroll position and selection. Returns the number of tiles. */
+ * keeps its scroll position and selection. Returns the number of tiles. Playlists keep the
+ * pictures they had while theirs are looked up again, in art_dir (see mc_playlist_art()). */
 int album_grid_reload(GtkWidget *grid, mc_library *lib);
-int album_grid_reload_playlists(GtkWidget *grid, mc_library *lib);
+int album_grid_reload_playlists(GtkWidget *grid, mc_library *lib, const char *art_dir);
 
 /* The selected tile's item (borrowed), or NULL. */
 AlbumItem *album_grid_selection(GtkWidget *grid);
