@@ -49,15 +49,18 @@ class SyncService : Service() {
                 notification(syncer.status.value),
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
             )
-            wakeLock = getSystemService(PowerManager::class.java)
+            val lock = getSystemService(PowerManager::class.java)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "musicapp:sync")
-                .apply { acquire(WAKE_LOCK_TIMEOUT_MS) }
+                .apply { setReferenceCounted(false) }
+            wakeLock = lock
             syncer.hold(HOLDER)
             scope.launch {
                 syncer.status.collect { status ->
                     if (!status.busy) {
                         stop()
                     } else {
+                        // Renewed as sync goes on, so a long file transfer keeps it.
+                        lock.acquire(WAKE_LOCK_TIMEOUT_MS)
                         NotificationManagerCompat.from(this@SyncService).notifyIfAllowed(notification(status))
                     }
                 }
@@ -102,8 +105,15 @@ class SyncService : Service() {
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
         if (pairing is Pairing.ShowCode) builder.setContentText(getString(R.string.sync_notification_see_code))
+        // Files being fetched, in every session at once; usually there's just one.
+        val files = status.sessions.values.filter { it.filesTotal > 0 }
+        val filesDone = files.sumOf { it.filesDone }
+        val filesTotal = files.sumOf { it.filesTotal }
         if (pairing is Pairing.EnterCode || pairing is Pairing.ShowCode) {
             builder.addAction(0, getString(R.string.cancel), cancel())
+        } else if (filesTotal > 0) {
+            builder.setContentText(resources.getQuantityString(R.plurals.sync_notification_files, filesTotal, filesDone, filesTotal))
+            builder.setProgress(filesTotal, filesDone, false)
         } else {
             builder.setProgress(0, 0, true)
         }
@@ -140,7 +150,8 @@ class SyncService : Service() {
         private const val CHANNEL_ID = "sync"
         private const val NOTIFICATION_ID = 4
         private const val ACTION_CANCEL = "app.musicapp.sync.CANCEL"
-        // A safety net: the service releases it once sync is idle.
+        // A safety net, if sync goes this long without a step forward: the service releases it
+        // once sync is idle.
         private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L
 
         /**

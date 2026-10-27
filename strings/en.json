@@ -443,6 +443,7 @@
     "sync_notification_wants_to_pair": "{0} wants to pair",
     "sync_notification_syncing_with": "Syncing with {0}",
     "sync_notification_see_code": "Open musicapp to see the code",
+    "sync_notification_files": { "one": "{0:d} of {1:d} file", "other": "{0:d} of {1:d} files", "note": "Audio files received so far of those to fetch, under \"Syncing with …\". The plural follows {1}." },
     "sync_error_open": "Couldn't open this phone's sync data",
     "sync_error_listen": "Couldn't listen on the network"
   },
