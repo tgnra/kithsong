@@ -12,6 +12,7 @@
 #ifdef _WIN32
 #include <sys/utime.h>
 #else
+#include <unistd.h>
 #include <utime.h>
 #endif
 
@@ -128,6 +129,23 @@ static int write_bytes(const char *path, const char *text) {
   if (!f) return 0;
   fputs(text, f);
   return fclose(f) == 0;
+}
+
+/* A link to the folder target: a symlink, or on Windows a junction (needs no privilege). */
+static int make_dir_link(const char *link, const char *target) {
+#ifdef _WIN32
+  char l[1100], t[1100], cmd[2400];
+  snprintf(l, sizeof l, "%s", link);
+  snprintf(t, sizeof t, "%s", target);
+  for (char *p = l; *p; p++)
+    if (*p == '/') *p = '\\';
+  for (char *p = t; *p; p++)
+    if (*p == '/') *p = '\\';
+  snprintf(cmd, sizeof cmd, "mklink /J \"%s\" \"%s\" >NUL", l, t);
+  return system(cmd) == 0 && mc_is_link(link);
+#else
+  return symlink(target, link) == 0;
+#endif
 }
 
 /* --- A device --- */
@@ -775,6 +793,62 @@ int main(int argc, char **argv) {
     CHECK(rb.files_unknown == 1);
     CHECK(mc_file_exists(old_a) && ra.files_unknown == 1 && ra.files_deleted == 0);
     mc_remove(old_a);
+  }
+
+  /* Reconcile deletes only inside the library folder. Rows of Other (unwanted on B) whose
+   * paths lead outside it, as a damaged row's might, lose their rows but not the files:
+   * "../", an absolute path, and a folder that links outside. An unknown file behind the link
+   * isn't seen. An unknown file's folders go once nothing but a cover is left in them. */
+  {
+    char out[1100], up[1200], absf[1200], via[1200], stray[1200], link[1100], p[1300];
+    snprintf(out, sizeof out, "%s/b/outside", root);
+    CHECK(mc_mkdirs(out) == MC_OK);
+    snprintf(up, sizeof up, "%s/up.mp3", out);
+    snprintf(absf, sizeof absf, "%s/abs.mp3", out);
+    snprintf(via, sizeof via, "%s/via.mp3", out);
+    snprintf(stray, sizeof stray, "%s/stray.mp3", out);
+    CHECK(write_bytes(up, "u") && write_bytes(absf, "a") && write_bytes(via, "v") &&
+          write_bytes(stray, "s"));
+    make_old(stray);
+    snprintf(link, sizeof link, "%s/Linked", b.libdir);
+    int linked = make_dir_link(link, out);
+    if (!linked) fprintf(stderr, "can't make a folder link; skipping that case\n");
+    const char *rels[] = {"../outside/up.mp3", absf, "Linked/via.mp3"};
+    for (int i = 0; i < (linked ? 3 : 2); i++) {
+      char fu[MC_UID_STRLEN];
+      mc_uid_new(fu);
+      snprintf(sql, sizeof sql,
+               "INSERT INTO files (uid, track_uid, path, format, bitrate_kbps, size_bytes,"
+               " mtime_ms, source_file_uid, source_peer_uid)"
+               " VALUES ('%s', '%s', '%s', 'mp3', 64, 1, 0, '%s', '%s')",
+               fu, o1.uid, rels[i], o1.file, a.uid);
+      CHECK(exec(mc_library_db(b.lib), sql) == SQLITE_OK);
+    }
+    snprintf(p, sizeof p, "%s/Stray/Album", b.libdir);
+    CHECK(mc_mkdirs(p) == MC_OK);
+    snprintf(p, sizeof p, "%s/Stray/Album/cover.jpg", b.libdir);
+    CHECK(write_bytes(p, "c"));
+    snprintf(p, sizeof p, "%s/Stray/Album/old.flac", b.libdir);
+    CHECK(write_bytes(p, "f"));
+    make_old(p);
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE track_uid = '%s'", o1.uid);
+    CHECK(lib_int(&b, sql) == 0);
+    CHECK(mc_file_exists(up) && mc_file_exists(absf) && mc_file_exists(via) &&
+          mc_file_exists(stray));
+    CHECK(rb.files_unknown == 1 && !mc_file_exists(p));
+    snprintf(p, sizeof p, "%s/Stray", b.libdir);
+    CHECK(!mc_file_exists(p));
+    CHECK(lib_file_exists(&b, "Low/Things (1994)/01 Song One.opus"));
+    if (linked) {
+#ifdef _WIN32
+      CHECK(mc_rmdir(link) == MC_OK);
+#else
+      CHECK(mc_remove(link) == MC_OK);
+#endif
+    }
+    CHECK(mc_file_exists(via)); /* removing the link left its target alone */
+    remove_tree(out);
   }
 
   /* A track deleted on B: the archive removes its file too. */

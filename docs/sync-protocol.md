@@ -527,6 +527,11 @@ the plaintext limit.
     `HAVE_RESP` says `original` and `verified` (its copy has a recorded `sha256`, i.e. it
     arrived with a matching checksum or passed a deep check). On an archive, only deleted
     tracks' files are removed, and unknown files are reported, not deleted.
+  - Deletes are permanent, and only of files inside the library folder: a path that is
+    absolute, has a `.` or `..` part or a colon, or passes through a symlink or junction is
+    left alone (its `files` row still goes), and the scan for unknown files doesn't follow
+    links. Library rows (tracks, albums, their art) are group data and stay: a device drops
+    only its own `files` rows, and frontends hide tracks without a file.
 - Every device receives the whole library database. Frontends list only tracks with a local
   file (`available_only`), except the profile picker, which lists everything.
 

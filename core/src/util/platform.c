@@ -250,6 +250,20 @@ int mc_file_exists(const char *path) {
   return attrs != INVALID_FILE_ATTRIBUTES;
 }
 
+int mc_is_link(const char *path) {
+  wchar_t *w = widen(path);
+  if (!w) return 0;
+  WIN32_FIND_DATAW fd;
+  HANDLE h = FindFirstFileExW(w, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, 0);
+  free(w);
+  if (h == INVALID_HANDLE_VALUE) return 0;
+  FindClose(h);
+  /* Other reparse points (cloud placeholders, dedup) keep the file where it is. */
+  DWORD tag = fd.dwReserved0;
+  return (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+         (tag == IO_REPARSE_TAG_SYMLINK || tag == IO_REPARSE_TAG_MOUNT_POINT);
+}
+
 mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
   wchar_t *ws = widen(src), *wd = widen(dst);
   BOOL ok = ws && wd && CopyFileW(ws, wd, !overwrite);
@@ -558,6 +572,11 @@ mc_status mc_list_dir(const char *dir, mc_list_fn fn, void *user) {
 int mc_file_exists(const char *path) {
   struct stat st;
   return lstat(path, &st) == 0;
+}
+
+int mc_is_link(const char *path) {
+  struct stat st;
+  return lstat(path, &st) == 0 && S_ISLNK(st.st_mode);
 }
 
 mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
