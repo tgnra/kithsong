@@ -692,7 +692,7 @@ int main(int argc, char **argv) {
     p->budget_bytes = 0;
     CHECK(mc_sync_set_profile(a.sync, a.uid, p) == MC_OK);
     free(p->name);
-    p->name = strdup("Vault");
+    p->name = mc_strdup("Vault");
     CHECK(mc_sync_set_profile(a.sync, a.uid, p) == MC_OK);
   }
   mc_sync_profile_free(p);

@@ -122,7 +122,7 @@ static mc_status read_fields(sqlite3 *db, const char *uid, mc_sync_profile *p, i
       p->format.format = MC_FORMAT_AUTO;
       p->format.bitrate_kbps = 0;
     }
-    if (name && *name && !(p->name = strdup(name))) st = MC_ERR_NOMEM;
+    if (name && *name && !(p->name = mc_strdup(name))) st = MC_ERR_NOMEM;
   } else if (rc != SQLITE_DONE) {
     st = MC_ERR_DB;
   }

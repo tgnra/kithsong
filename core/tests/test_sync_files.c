@@ -4,6 +4,9 @@
  * 64 kbps, then a selection. Also checksums, reconcile (unwanted, wrong-format, deleted and
  * unknown files, and the originals imported on B that go once the archive holds them),
  * sync_status and mc_sync_verify(). */
+#ifndef _WIN32
+#define _DEFAULT_SOURCE /* symlink */
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
