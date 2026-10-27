@@ -103,6 +103,8 @@ typedef struct mc_sync_events {
   void (*on_pair_code)(void *user, const char *code, const char *requester_name,
                        int attempts_left);
   void (*on_pair_result)(void *user, const mc_pair_result *result);
+  /* A session's progress. Each that starts ends with MC_SYNC_PHASE_DONE, even one that
+   * on_sync_done won't report (a scheduled attempt that found the device unreachable). */
   void (*on_progress)(void *user, const mc_sync_progress *progress);
   void (*on_sync_done)(void *user, const mc_sync_result *result);
 } mc_sync_events;

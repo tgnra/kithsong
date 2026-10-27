@@ -28,9 +28,10 @@
 /* The window the dialogs belong to, disabled while one is open. Call once. */
 void pair_dialog_init(HWND owner);
 /* Opens the enter-code dialog once mc_sync_pair_request() (or _address) succeeded. peer
- * names the other device in the title; NULL or "" for one known only by address. Six
- * digits call mc_sync_pair_enter(); Cancel calls mc_sync_pair_cancel(). */
-void pair_dialog_begin_enter(mc_sync *sync, const wchar_t *peer);
+ * names the other device in the title; NULL or "" for one known only by address, which
+ * address (NULL if not known) then gives. Six digits call mc_sync_pair_enter(); Cancel
+ * calls mc_sync_pair_cancel(). */
+void pair_dialog_begin_enter(mc_sync *sync, const wchar_t *peer, const wchar_t *address);
 /* Opens the show-code dialog for a SYNC_EV_PAIR_CODE, or updates its code when it's already
  * open (a new code after too many wrong tries), and flashes the taskbar button. */
 void pair_dialog_show_code(mc_sync *sync, const sync_event *ev);

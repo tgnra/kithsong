@@ -12,6 +12,7 @@
 #define MUSICAPP_THEME_H
 
 #include <windows.h>
+#include <commctrl.h>
 
 #include "canvas.h"
 
@@ -58,6 +59,17 @@ COLORREF theme_draw_state(canvas *c, const RECT *r, int radius, control_state st
  * button's own (hot, pressed). */
 void theme_draw_segment(canvas *c, const RECT *r, int radius, const wchar_t *text, HFONT font, BOOL first,
                         BOOL last, BOOL selected, control_state state);
+
+/* State images for a list view's LVS_EX_CHECKBOXES, size pixels square, drawn as Windows 11
+ * draws checkboxes in the current theme: unchecked, then checked. Set them with
+ * ListView_SetImageList(..., LVSIL_STATE) after the style, and again after theme and DPI
+ * changes; the list view frees the ones it has when it goes. */
+HIMAGELIST theme_checkboxes(int size);
+
+/* A single-line edit draws its text at the top of its client area. This keeps the client
+ * area as tall as the text, in the middle of the edit, so the text is centred however tall
+ * the edit is. Call once, after creating it. */
+void theme_center_edit(HWND edit);
 
 /* Segoe Fluent Icons, or Segoe MDL2 Assets (same code points) on Windows 10. */
 const wchar_t *theme_icon_face(void);

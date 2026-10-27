@@ -71,8 +71,8 @@ void settings_view_create(HWND parent) {
   DWORD label = SS_LEFT | SS_NOPREFIX;
   g_set.title = child(WC_STATICW, L"Settings", label, ID_SET_TITLE);
   g_set.heading = child(WC_STATICW, L"Library location", label, ID_SET_HEADING);
-  /* SS_EDITCONTROL wraps a long path wherever it has to, as an edit box would. */
-  g_set.path = child(WC_STATICW, NULL, label | SS_EDITCONTROL, ID_SET_PATH);
+  /* One line: a long path loses folders from its middle, rather than wrapping mid-name. */
+  g_set.path = child(WC_STATICW, NULL, label | SS_PATHELLIPSIS, ID_SET_PATH);
   g_set.move = child(WC_BUTTONW, L"Move Library\x2026", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_MOVE);
   g_set.open = child(WC_BUTTONW, L"Open Another Library\x2026", BS_PUSHBUTTON | WS_TABSTOP, ID_SET_OPEN);
   g_set.note = child(WC_STATICW,
@@ -86,6 +86,7 @@ void settings_view_create(HWND parent) {
                                0, parent, (HMENU)(INT_PTR)ID_SET_NAME, GetModuleHandleW(NULL), NULL);
   SendMessageW(g_set.name, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
   SetWindowSubclass(g_set.name, name_proc, 0, 0);
+  theme_center_edit(g_set.name);
   g_set.addr_label = child(WC_STATICW, L"This PC's address", label, ID_SET_ADDR_LABEL);
   g_set.addr = child(WC_STATICW, NULL, label | SS_EDITCONTROL, ID_SET_ADDR);
   g_set.leave = child(WC_BUTTONW, L"Leave Group\x2026", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_LEAVE);
@@ -106,7 +107,7 @@ void settings_view_set_library_dir(const char *dir) {
   if (!dir || !MultiByteToWideChar(CP_UTF8, 0, dir, -1, buf, 1024)) buf[0] = L'\0';
   buf[1023] = L'\0';
   SetWindowTextW(g_set.path, buf);
-  SendMessageW(g_set.parent, WM_SIZE, 0, 0); /* the path may wrap differently */
+  SendMessageW(g_set.parent, WM_SIZE, 0, 0); /* the path may be cut differently */
 }
 
 void settings_view_set_font(HFONT font, UINT dpi) {
@@ -181,7 +182,7 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.heading, left, top, text_w, hh, TRUE);
   top += hh + S(8);
 
-  int ph = text_height(g_set.path, g_set.font, text_w, DT_EDITCONTROL);
+  int ph = text_height(g_set.path, g_set.font, text_w, DT_SINGLELINE);
   MoveWindow(g_set.path, left, top, text_w, ph, TRUE);
   top += ph + S(12);
 

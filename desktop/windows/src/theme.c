@@ -314,6 +314,126 @@ void theme_draw_segment(canvas *c, const RECT *r, int radius, const wchar_t *tex
   canvas_text(c, text, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS, font, fg);
 }
 
+HIMAGELIST theme_checkboxes(int size) {
+  HIMAGELIST il = ImageList_Create(size, size, ILC_COLOR32, 2, 0);
+  canvas c = {0};
+  if (!il || !canvas_reserve(&c, size, size)) {
+    if (il) ImageList_Destroy(il);
+    return NULL;
+  }
+  int inset = MulDiv(size, 1, 16), line = size >= 24 ? 2 : 1, radius = MulDiv(size, 3, 16);
+  HFONT tick_font = CreateFontW(-MulDiv(size, 12, 16), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                                theme_icon_face());
+  RECT all = {0, 0, size, size}, box = {inset, inset, size - inset, size - inset};
+  for (int checked = 0; checked < 2; checked++) {
+    canvas_clear(&c, &all, 0, 0);
+    if (checked) {
+      canvas_fill(&c, &box, radius, theme.accent, 255);
+      /* CheckMark, drawn twice a pixel apart: on its own it's a hairline at this size. */
+      for (int k = 0; k < 2; k++) {
+        RECT at = box;
+        OffsetRect(&at, k * line, 0);
+        canvas_text(&c, L"\xE73E", 1, &at, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, tick_font,
+                    theme.on_accent);
+      }
+    } else {
+      canvas_frame(&c, &box, radius, line, theme.high_contrast ? theme.text : theme.text3, 255);
+    }
+    /* Image lists take straight alpha, as icons have; the canvas is premultiplied. */
+    for (int y = 0; y < size; y++)
+      for (int x = 0; x < size; x++) {
+        uint32_t *p = &c.px[(size_t)y * (size_t)c.w + (size_t)x], a = *p >> 24;
+        if (a && a < 255) {
+          uint32_t r = ((*p >> 16) & 255) * 255 / a, g = ((*p >> 8) & 255) * 255 / a, b = (*p & 255) * 255 / a;
+          *p = a << 24 | (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
+        }
+      }
+    /* A bitmap of exactly this size: the canvas may be bigger. */
+    BITMAPINFO bi = {.bmiHeader = {.biSize = sizeof bi.bmiHeader, .biWidth = size, .biHeight = -size, .biPlanes = 1,
+                                   .biBitCount = 32, .biCompression = BI_RGB}};
+    void *bits = NULL;
+    HBITMAP bmp = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (bmp) {
+      for (int y = 0; y < size; y++)
+        memcpy((uint32_t *)bits + (size_t)y * (size_t)size, c.px + (size_t)y * (size_t)c.w, (size_t)size * 4);
+      ImageList_Add(il, bmp, NULL);
+      DeleteObject(bmp);
+    }
+  }
+  if (tick_font) DeleteObject(tick_font);
+  canvas_free(&c);
+  return il;
+}
+
+/* The padding theme_center_edit puts above (and below) the text, for a client area height h
+ * before it. */
+static int edit_padding(HWND wnd, int h) {
+  HDC dc = GetDC(wnd);
+  HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageW(wnd, WM_GETFONT, 0, 0));
+  TEXTMETRICW tm = {0};
+  GetTextMetricsW(dc, &tm);
+  SelectObject(dc, old);
+  ReleaseDC(wnd, dc);
+  int pad = (h - tm.tmHeight) / 2;
+  return pad > 0 ? pad : 0;
+}
+
+/* The padding is non-client area, painted in the edit's background (its parent's
+ * WM_CTLCOLOR* brush), and clicks on it go to the text. */
+static LRESULT CALLBACK center_edit_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+  (void)data;
+  switch (msg) {
+    case WM_NCCALCSIZE: {
+      LRESULT r = DefSubclassProc(wnd, msg, wp, lp);
+      RECT *rc = wp ? &((NCCALCSIZE_PARAMS *)lp)->rgrc[0] : (RECT *)lp;
+      int pad = edit_padding(wnd, rc->bottom - rc->top);
+      rc->top += pad;
+      rc->bottom -= pad;
+      return r;
+    }
+    case WM_NCPAINT: {
+      LRESULT r = DefSubclassProc(wnd, msg, wp, lp);
+      RECT win, cl;
+      GetWindowRect(wnd, &win);
+      GetClientRect(wnd, &cl);
+      MapWindowPoints(wnd, NULL, (POINT *)&cl, 2);
+      OffsetRect(&cl, -win.left, -win.top);
+      int border = cl.left, h = win.bottom - win.top;
+      RECT above = {cl.left, border, cl.right, cl.top}, below = {cl.left, cl.bottom, cl.right, h - border};
+      HDC dc = GetWindowDC(wnd);
+      BOOL enabled = IsWindowEnabled(wnd) && !(GetWindowLongW(wnd, GWL_STYLE) & ES_READONLY);
+      HBRUSH brush = (HBRUSH)SendMessageW(GetParent(wnd), enabled ? WM_CTLCOLOREDIT : WM_CTLCOLORSTATIC, (WPARAM)dc,
+                                          (LPARAM)wnd);
+      if (!brush) brush = GetSysColorBrush(COLOR_WINDOW);
+      if (above.bottom > above.top) FillRect(dc, &above, brush);
+      if (below.bottom > below.top) FillRect(dc, &below, brush);
+      ReleaseDC(wnd, dc);
+      return r;
+    }
+    case WM_NCHITTEST: {
+      LRESULT r = DefSubclassProc(wnd, msg, wp, lp);
+      return r == HTBORDER || r == HTNOWHERE ? HTCLIENT : r;
+    }
+    case WM_SETFONT:
+    case WM_ENABLE: {
+      LRESULT r = DefSubclassProc(wnd, msg, wp, lp);
+      SetWindowPos(wnd, NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+      return r;
+    }
+    case WM_NCDESTROY:
+      RemoveWindowSubclass(wnd, center_edit_proc, id);
+      break;
+  }
+  return DefSubclassProc(wnd, msg, wp, lp);
+}
+
+void theme_center_edit(HWND edit) {
+  if (!edit) return;
+  SetWindowSubclass(edit, center_edit_proc, 0, 0);
+  SetWindowPos(edit, NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 static int CALLBACK font_found(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD type, LPARAM found) {
   (void)lf, (void)tm, (void)type;
   *(BOOL *)found = TRUE;

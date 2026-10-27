@@ -674,7 +674,13 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
     mc_channel_close(ch);
   }
   if (s.we_removed) mc_sync_forget_group(sync, c);
-  if (!claimed && quiet) return st; /* someone else is syncing with it: nothing to report */
+  if (!claimed && quiet) {
+    /* Unreachable, or someone else is syncing with it: nothing to report, but the
+     * CONNECTING above said a session began, so say it's over. */
+    prog.phase = MC_SYNC_PHASE_DONE;
+    mc_sync_emit_progress(sync, &prog);
+    return st;
+  }
   mc_sync_result r = {.device_uid = j->uid, .status = st, .library_synced = s.library_synced,
                       .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
                       .rows_received = s.rows_received};

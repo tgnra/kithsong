@@ -478,14 +478,15 @@ static void format_address(wchar_t *out, size_t cap, const char *host, unsigned 
   free(w);
 }
 
-/* The sidebar's footer: the version, and where other devices reach this PC. */
+/* The sidebar's footer: the version, and where other devices reach this PC (the first
+ * address; its tooltip lists them all). */
 static void update_footer(void) {
-  wchar_t line1[160], line2[160];
+  wchar_t line1[160], line2[160], tip[64 + MAX_ADDRESSES * 64] = L"";
   if (g_app.lib)
-    swprintf(line1, 160, L"musicapp %hs (build %d) \x00B7 database v%d", mc_version(), MUSICAPP_BUILD_NUMBER,
+    swprintf(line1, 160, L"musicapp %hs build %d \x00B7 db v%d", mc_version(), MUSICAPP_BUILD_NUMBER,
              mc_library_schema_version(g_app.lib));
   else
-    swprintf(line1, 160, L"musicapp %hs (build %d)", mc_version(), MUSICAPP_BUILD_NUMBER);
+    swprintf(line1, 160, L"musicapp %hs build %d", mc_version(), MUSICAPP_BUILD_NUMBER);
 
   mc_sync *sync = sync_bridge_get();
   if (!sync) {
@@ -493,10 +494,19 @@ static void update_footer(void) {
   } else {
     char addrs[MAX_ADDRESSES][MC_SYNC_ADDR_STRLEN];
     unsigned port = mc_sync_port(sync);
-    if (mc_sync_local_addresses(addrs, MAX_ADDRESSES) > 0) format_address(line2, 160, addrs[0], port);
+    int n = mc_sync_local_addresses(addrs, MAX_ADDRESSES);
+    if (n > 0) format_address(line2, 160, addrs[0], port);
     else swprintf(line2, 160, L"Port %u (no network)", port);
+    size_t used = (size_t)swprintf(tip, 64, n > 0 ? L"Other devices reach this PC at" : L"No network");
+    for (int i = 0; i < n; i++) {
+      wchar_t addr[64];
+      format_address(addr, 64, addrs[i], port);
+      int k = swprintf(tip + used, sizeof tip / sizeof tip[0] - used, L"\n%ls", addr);
+      if (k > 0) used += (size_t)k;
+    }
   }
   sidebar_set_footer(line1, line2);
+  sidebar_set_footer_tip(tip[0] ? tip : NULL);
 }
 
 /* Whether a sync session with uid is in progress, as far as the events have said. */
@@ -556,11 +566,13 @@ static void refresh_devices(void) {
   wchar_t **names = np + nn ? calloc((size_t)(np + nn), sizeof *names) : NULL;
   int npaired = 0, nnearby = 0;
   if (devs && names) {
-    /* This PC first, then the others in the order listed (by name); removed ones left out. */
-    for (int pass = 0; pass < 2; pass++)
+    /* This PC first, then the online devices, then the offline ones, each in the order
+     * listed (by name); removed ones left out. */
+    for (int pass = 0; pass < 3; pass++)
       for (int i = 0; i < np; i++) {
         const mc_sync_device *d = &paired->items[i];
-        if (d->removed || (pass == 0) != (d->is_self != 0)) continue;
+        int in_pass = d->is_self ? 0 : d->online ? 1 : 2;
+        if (d->removed || in_pass != pass) continue;
         sidebar_device *s = &devs[npaired];
         snprintf(s->uid, sizeof s->uid, "%s", d->uid);
         s->name = names[npaired] = wide_from_utf8(d->name ? d->name : "");
@@ -669,18 +681,20 @@ static void sync_off_message(void) {
 }
 
 /* After mc_sync_pair_request() or _address(): opens the enter-code dialog, or says why
- * pairing couldn't start. name names the other device, or is NULL. */
-static void pair_started(mc_status st, const wchar_t *name) {
+ * pairing couldn't start. name names the other device, or is NULL when it's known only by
+ * its address. */
+static void pair_started(mc_status st, const wchar_t *name, const wchar_t *address) {
   wchar_t text[512];
   switch (st) {
     case MC_OK:
-      pair_dialog_begin_enter(sync_bridge_get(), name);
+      pair_dialog_begin_enter(sync_bridge_get(), name, address);
       return;
     case MC_ERR_LOCKED:
       swprintf(text, 512, L"Already pairing with a device. Finish or cancel that first.");
       break;
     case MC_ERR_NOT_FOUND:
-      swprintf(text, 512, L"%ls is no longer on the network.", name && *name ? name : L"The device");
+      swprintf(text, 512, L"%ls is no longer on the network.",
+               name && *name ? name : address ? address : L"The device");
       break;
     default:
       swprintf(text, 512, L"Couldn't start pairing (%hs).", mc_status_str(st));
@@ -689,7 +703,8 @@ static void pair_started(mc_status st, const wchar_t *name) {
   MessageBoxW(g_app.wnd, text, L"Pair Device", MB_OK | MB_ICONINFORMATION);
 }
 
-/* A nearby device was clicked in the sidebar. */
+/* A nearby device was clicked in the sidebar. Even one in another group: pairing then says
+ * why it can't. */
 static void pair_nearby(void) {
   const char *clicked = sidebar_clicked_nearby();
   mc_sync *sync = sync_bridge_get();
@@ -701,25 +716,16 @@ static void pair_nearby(void) {
   char uid[MC_UID_STRLEN];
   snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when it refreshes */
   wchar_t *name = NULL;
-  BOOL other_group = FALSE;
   mc_sync_nearby_list *nearby = NULL;
   if (mc_sync_list_nearby(sync, &nearby) == MC_OK) {
     for (int i = 0; i < nearby->count; i++)
       if (!strcmp(nearby->items[i].uid, uid)) {
         name = wide_from_utf8(nearby->items[i].name ? nearby->items[i].name : "");
-        other_group = nearby->items[i].in_other_group;
         break;
       }
     mc_sync_nearby_list_free(nearby);
   }
-  if (other_group) {
-    wchar_t text[512];
-    swprintf(text, 512, L"%ls already syncs with other devices. To pair, it must leave its group first.",
-             name && *name ? name : L"This device");
-    MessageBoxW(g_app.wnd, text, L"Pair Device", MB_OK | MB_ICONINFORMATION);
-  } else {
-    pair_started(mc_sync_pair_request(sync, uid), name);
-  }
+  pair_started(mc_sync_pair_request(sync, uid), name, NULL);
   free(name);
 }
 
@@ -731,9 +737,9 @@ static void on_add_device_connect(void *user, const char *host, uint16_t port) {
     sync_off_message();
     return;
   }
-  wchar_t peer[300];
-  format_address(peer, 300, host, port ? port : MC_SYNC_DEFAULT_PORT);
-  pair_started(mc_sync_pair_request_address(sync, host, port), peer);
+  wchar_t address[300];
+  format_address(address, 300, host, port ? port : MC_SYNC_DEFAULT_PORT);
+  pair_started(mc_sync_pair_request_address(sync, host, port), NULL, address);
 }
 
 static void on_command(int id, int code) {

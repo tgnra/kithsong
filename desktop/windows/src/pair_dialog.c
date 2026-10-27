@@ -140,8 +140,10 @@ static void ended_text(wchar_t *out, size_t n, mc_pair_reason reason, BOOL initi
       swprintf(out, n, L"The code was wrong too many times.");
       break;
     case MC_PAIR_IN_GROUP:
-      swprintf(out, n, L"%ls already syncs with other devices. Remove it from them, or this PC from its group, first.",
-               Peer);
+      /* Both are in groups, different ones (a device in no group just joins). */
+      swprintf(out, n,
+               L"This PC and %ls are in different groups. One of them must leave its group before they can pair.",
+               peer);
       break;
     case MC_PAIR_LIBRARY_MISMATCH:
       if (initiator) {
@@ -413,7 +415,7 @@ void pair_dialog_init(HWND owner) {
   s.owner = owner;
 }
 
-void pair_dialog_begin_enter(mc_sync *sync, const wchar_t *peer) {
+void pair_dialog_begin_enter(mc_sync *sync, const wchar_t *peer, const wchar_t *address) {
   pair_dlg *d = open_dlg(&s.enter, sync, TRUE, peer);
   if (!d) return;
   s.enter_cancelled = FALSE;
@@ -424,7 +426,9 @@ void pair_dialog_begin_enter(mc_sync *sync, const wchar_t *peer) {
   } else {
     SetWindowTextW(d->wnd, L"Pair by address");
   }
-  swprintf(text, 256, L"Enter the code %ls shows.", peer_name(peer, FALSE));
+  if (!(peer && *peer) && address && *address) /* the address on a line of its own */
+    swprintf(text, 256, L"Enter the code the other device shows.\nIt's at %ls.", address);
+  else swprintf(text, 256, L"Enter the code %ls shows.", peer_name(peer, FALSE));
   SetDlgItemTextW(d->wnd, ID_TEXT, text);
   ShowWindow(d->wnd, SW_SHOW);
 }

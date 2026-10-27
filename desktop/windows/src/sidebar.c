@@ -11,7 +11,7 @@
 typedef enum {
   ROW_NAV,
   ROW_HEADER,
-  ROW_DEVICE,    /* a paired device: a page, while it's online */
+  ROW_DEVICE,    /* a paired device: a page, online or not */
   ROW_ACCORDION, /* "Unpaired devices (n)": shows or hides the nearby rows */
   ROW_NEARBY,    /* a nearby device: a button that asks to pair */
   ROW_NOTE,
@@ -62,7 +62,11 @@ enum {
   RADIUS = 6,
   ADD_W = 28, /* the + on the DEVICES heading: a square this wide, ending INSET from the edge */
   ADD_BOTTOM = 2,
+  TIP_W = 400, /* tooltips wrap at this width */
 };
+
+/* Tooltip ids: the +'s, then one per row that has a tip (TIP_ROWS + k). */
+enum { TIP_ADD = 1, TIP_ROWS };
 
 /* A device as sidebar_set_devices gave it. */
 typedef struct device {
@@ -89,7 +93,8 @@ static struct {
   device *paired, *nearby;
   int npaired, nnearby;
   BOOL expanded, expanded_set; /* the accordion; expanded_set once the user toggles it */
-  wchar_t *footer[2];
+  wchar_t *footer[2], *footer_tip;
+  int ntips; /* row tooltips, TIP_ROWS onwards */
   char clicked[37]; /* the nearby device of the last SBN_PAIR_DEVICE, or "" */
 } s;
 
@@ -130,7 +135,7 @@ static int selected_item(void) {
 
 /* A page row, which can be selected unless the sidebar is locked. */
 static BOOL selectable(const sb_row *r) {
-  return r->kind == ROW_NAV || (r->kind == ROW_DEVICE && (r->flags & SB_DEV_ONLINE));
+  return r->kind == ROW_NAV || r->kind == ROW_DEVICE;
 }
 
 /* A page item that can be selected now. */
@@ -252,11 +257,34 @@ static void set_add_hot(BOOL hot) {
   InvalidateRect(s.wnd, &rc, FALSE);
 }
 
-/* The tooltip follows the + when the rows move. */
+/* What a row's tooltip says, or NULL. */
+static const wchar_t *row_tip(const sb_row *r) {
+  switch (r->kind) {
+    case ROW_FOOTER: return s.footer_tip;
+    case ROW_DEVICE: return r->flags & SB_DEV_ONLINE ? NULL : L"Offline";
+    case ROW_NEARBY: return r->flags & SB_DEV_OTHER_GROUP ? L"In another group" : NULL;
+    default: return NULL;
+  }
+}
+
+/* The tooltips follow the + and the rows when they move. */
 static void update_tooltip(void) {
   if (!s.tooltip) return;
-  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = 1, .rect = add_rect()};
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = TIP_ADD, .rect = add_rect()};
   SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+  for (int k = 0; k < s.ntips; k++) {
+    TTTOOLINFOW del = {.cbSize = sizeof del, .hwnd = s.wnd, .uId = (UINT_PTR)(TIP_ROWS + k)};
+    SendMessageW(s.tooltip, TTM_DELTOOLW, 0, (LPARAM)&del);
+  }
+  s.ntips = 0;
+  for (int i = 0; i < item_count(); i++) {
+    const wchar_t *tip = row_tip(row_of(i));
+    if (!tip || !*tip) continue;
+    TTTOOLINFOW add = {.cbSize = sizeof add, .uFlags = TTF_SUBCLASS, .hwnd = s.wnd,
+                       .uId = (UINT_PTR)(TIP_ROWS + s.ntips), .lpszText = (wchar_t *)tip};
+    if (SendMessageW(s.wnd, LB_GETITEMRECT, (WPARAM)i, (LPARAM)&add.rect) == LB_ERR) continue;
+    if (SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&add)) s.ntips++;
+  }
 }
 
 /* --- Rows --- */
@@ -476,6 +504,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, U
       free_devices(s.nearby, s.nnearby);
       free(s.footer[0]);
       free(s.footer[1]);
+      free(s.footer_tip);
       memset(&s, 0, sizeof s);
       break;
   }
@@ -497,9 +526,11 @@ HWND sidebar_create(HWND parent, int id) {
   s.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, s.wnd, NULL,
                               GetModuleHandleW(NULL), NULL);
-  TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = s.wnd, .uId = 1,
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = s.wnd, .uId = TIP_ADD,
                     .lpszText = L"Add Device by Address"};
   SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+  SendMessageW(s.tooltip, TTM_SETMAXTIPWIDTH, 0, TIP_W); /* so the footer's lines break */
+  update_tooltip();
   return s.wnd;
 }
 
@@ -538,6 +569,7 @@ void sidebar_update(UINT dpi) {
     if (row_of(i)->kind != ROW_SPACER) SendMessageW(s.wnd, LB_SETITEMHEIGHT, (WPARAM)i, row_height(row_of(i)));
   fit_spacer();
   update_tooltip();
+  if (s.tooltip) SendMessageW(s.tooltip, TTM_SETMAXTIPWIDTH, 0, scale(TIP_W));
   theme_apply_control(s.tooltip);
 }
 
@@ -581,7 +613,7 @@ void sidebar_draw(const DRAWITEMSTRUCT *dis) {
       RECT fill = {scale(INSET), scale(2), w - scale(INSET), h - scale(2)};
       color = theme_draw_state(c, &fill, scale(RADIUS),
                                selected ? STATE_SELECTED : item == s.hot ? STATE_HOT : STATE_NORMAL);
-      if (!enabled(item)) color = theme.text3; /* locked, or an offline device */
+      if (!enabled(item)) color = theme.text3; /* locked */
       if (selected && !theme.high_contrast) { /* accent marker at the left edge */
         int mark_h = scale(16);
         RECT mark = {fill.left, (h - mark_h) / 2, fill.left + scale(3), (h + mark_h) / 2};
@@ -592,11 +624,15 @@ void sidebar_draw(const DRAWITEMSTRUCT *dis) {
       RECT icon = {text.left, 0, text.left + scale(ICON_W), h};
       canvas_text(c, &r->icon, 1, &icon, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX, s.icon_font, color);
       text.left += scale(ICON_W);
-      if (r->flags & SB_DEV_SYNCING) { /* a small Sync glyph at the end */
-        RECT sync = {text.right - scale(ICON_W - 8), 0, text.right - scale(4), h};
-        canvas_text(c, L"\xE895", 1, &sync, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
-                    s.small_icon_font, color);
-        text.right = sync.left;
+      /* A small glyph at the end: Sync while syncing, else NetworkOffline while offline. */
+      wchar_t badge = r->flags & SB_DEV_SYNCING                               ? 0xE895
+                      : r->kind == ROW_DEVICE && !(r->flags & SB_DEV_ONLINE) ? 0xF384
+                                                                              : 0;
+      if (badge) {
+        RECT at = {text.right - scale(ICON_W - 8), 0, text.right - scale(4), h};
+        canvas_text(c, &badge, 1, &at, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX, s.small_icon_font,
+                    color == theme.text ? theme.text2 : color);
+        text.right = at.left;
       }
       break;
     }
@@ -606,7 +642,7 @@ void sidebar_draw(const DRAWITEMSTRUCT *dis) {
                             : s.hot == item || s.pressed == item ? STATE_HOT
                                                                   : STATE_NORMAL;
       color = theme_draw_state(c, &fill, scale(RADIUS), state);
-      if (s.locked || (r->flags & SB_DEV_OTHER_GROUP)) color = theme.text3;
+      if (s.locked) color = theme.text3;
       RECT icon = {text.left, 0, text.left + scale(ICON_W), h};
       canvas_text(c, &r->icon, 1, &icon, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX, s.icon_font, color);
       text.left += scale(ICON_W);
@@ -711,6 +747,13 @@ void sidebar_set_footer(const wchar_t *line1, const wchar_t *line2) {
   }
   for (int i = 0; i < item_count(); i++)
     if (row_of(i)->kind == ROW_FOOTER) invalidate_row(i);
+}
+
+void sidebar_set_footer_tip(const wchar_t *tip) {
+  if (s.footer_tip && tip && !wcscmp(s.footer_tip, tip)) return;
+  free(s.footer_tip);
+  s.footer_tip = tip ? wcs_dup(tip, NULL) : NULL;
+  update_tooltip();
 }
 
 const char *sidebar_selected_device(void) {

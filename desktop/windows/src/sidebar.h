@@ -3,9 +3,10 @@
  * selecting one sends the parent WM_COMMAND with LBN_SELCHANGE. The DEVICES heading has a +
  * at its end, to add a device by address (SBN_ADD_DEVICE).
  *
- * Under DEVICES: this PC once it's in a group, the paired devices (each a PAGE_DEVICE row),
- * and an "Unpaired devices (n)" accordion of nearby devices, which ask to pair when clicked
- * (SBN_PAIR_DEVICE). A two-line footer (version, address) sits below Settings. */
+ * Under DEVICES: this PC once it's in a group, the paired devices (each a PAGE_DEVICE row;
+ * offline ones too, marked with a small glyph), and an "Unpaired devices (n)" accordion of
+ * nearby devices, which ask to pair when clicked (SBN_PAIR_DEVICE). A two-line footer
+ * (version, address) sits below Settings, with a tooltip of its own. */
 #ifndef MUSICAPP_SIDEBAR_H
 #define MUSICAPP_SIDEBAR_H
 
@@ -32,7 +33,8 @@ enum {
   SB_DEV_ONLINE = 1,
   SB_DEV_SELF = 2,        /* this PC, shown "(this PC)" */
   SB_DEV_ARCHIVE = 4,
-  SB_DEV_OTHER_GROUP = 8, /* nearby but in another group: greyed out, can't pair */
+  SB_DEV_OTHER_GROUP = 8, /* nearby, and we're in different groups: only a tooltip says so,
+                           * as pairing itself tells why it can't */
   SB_DEV_SYNCING = 16,
 };
 
@@ -64,6 +66,8 @@ void sidebar_set_locked(BOOL locked);
 void sidebar_set_devices(const sidebar_device *paired, int npaired, const sidebar_device *nearby, int nnearby);
 /* The two small lines at the bottom (NULL for none). */
 void sidebar_set_footer(const wchar_t *line1, const wchar_t *line2);
+/* The footer's tooltip, which may have several lines (NULL for none). */
+void sidebar_set_footer_tip(const wchar_t *tip);
 /* The uid of the device whose page is selected, or NULL if it isn't PAGE_DEVICE. Valid until
  * the devices change. */
 const char *sidebar_selected_device(void);

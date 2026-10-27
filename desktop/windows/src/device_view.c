@@ -38,9 +38,10 @@ enum {
   /* Timers on the parent, run by their TIMERPROCs rather than WM_TIMER. */
   ID_DEV_APPLY_TIMER = 440,
   ID_DEV_TICK_TIMER,
+  ID_DEV_REFRESH_TIMER,
 };
 
-/* Posted by the list to itself after its theme changes, to remake its checkboxes. */
+/* Posted by the list to itself after its theme changes, to put our checkboxes back. */
 #define WM_RECHECK (WM_APP + 1)
 
 #define APPLY_DELAY_MS 400
@@ -78,8 +79,10 @@ static struct {
   HWND name_label, name_edit, format_label, format, budget, budget_label, budget_size, budget_unit;
   HWND heading, note, sync_all, sync_all_label, tabs[NUM_TABS], list, count, combo_list;
   HFONT font, title_font, heading_font, icon_font;
+  HIMAGELIST checks; /* the list's checkboxes; the list owns them once set */
   UINT dpi;
   BOOL shown;
+  BOOL refresh_later; /* a refresh came while the format drop-down was open */
   int x, y, w, h; /* the last layout */
 
   mc_sync *sync;
@@ -413,7 +416,7 @@ static void update_status(void) {
       else swprintf(buf, 128, L"Not synced yet");
       state = buf;
     }
-    swprintf(text, 256, g_dv.archive ? L"%ls. Keeps the whole library" : L"%ls", state);
+    swprintf(text, 256, L"%ls", state); /* an archive's note says it keeps the whole library */
   }
   SetWindowTextW(g_dv.status, text);
 
@@ -657,6 +660,7 @@ static void fill_list(BOOL keep) {
                       .state = INDEXTOSTATEIMAGEMASK(set_has(sel, rows[i]) ? 2 : 1),
                       .stateMask = LVIS_STATEIMAGEMASK};
       SendMessageW(g_dv.list, LVM_INSERTITEMW, 0, (LPARAM)&item);
+      set_check(i, set_has(sel, rows[i])); /* a checkbox list may insert it unchecked anyway */
     }
     LVITEMW sub = {.iSubItem = 1, .pszText = detail};
     SendMessageW(g_dv.list, LVM_SETITEMTEXTW, (WPARAM)i, (LPARAM)&sub);
@@ -916,8 +920,20 @@ static LRESULT CALLBACK edit_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT
   return DefSubclassProc(wnd, msg, wp, lp);
 }
 
-/* The checkbox images are made when LVS_EX_CHECKBOXES is set, in the theme of the time, so
- * after a theme change they're made again (once the new colours are set too). */
+/* Our own checkbox images, drawn in the theme's colours: the stock ones stay light in dark
+ * mode. Made again for each theme and DPI. */
+static void set_check_images(void) {
+  if (!g_dv.list) return;
+  UINT dpi = g_dv.dpi ? g_dv.dpi : USER_DEFAULT_SCREEN_DPI;
+  HIMAGELIST il = theme_checkboxes(MulDiv(16, (int)dpi, USER_DEFAULT_SCREEN_DPI));
+  if (!il) return;
+  HIMAGELIST old = ListView_SetImageList(g_dv.list, il, LVSIL_STATE);
+  if (old && old == g_dv.checks) ImageList_Destroy(old);
+  g_dv.checks = il;
+}
+
+/* A theme change makes the list remake the stock checkboxes, so ours go back on after it
+ * (once the new colours are set too). */
 static LRESULT CALLBACK list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
   (void)data;
   switch (msg) {
@@ -925,11 +941,9 @@ static LRESULT CALLBACK list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT
       PostMessageW(wnd, WM_RECHECK, 0, 0);
       break;
     case WM_RECHECK:
-      g_dv.filling = TRUE;
-      ListView_SetExtendedListViewStyleEx(wnd, LVS_EX_CHECKBOXES, 0);
-      ListView_SetExtendedListViewStyleEx(wnd, LVS_EX_CHECKBOXES, LVS_EX_CHECKBOXES);
-      g_dv.filling = FALSE;
+      set_check_images();
       update_checks();
+      InvalidateRect(wnd, NULL, TRUE);
       return 0;
     case WM_NCDESTROY:
       RemoveWindowSubclass(wnd, list_proc, id);
@@ -988,7 +1002,10 @@ void device_view_create(HWND parent, const device_view_host *host) {
   g_dv.notice = child(WC_STATICW, NULL, label, ID_DEV_NOTICE);
 
   g_dv.name_label = child(WC_STATICW, L"Name", line, ID_DEV_NAME_LABEL);
-  g_dv.name_edit = child(WC_EDITW, NULL, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, ID_DEV_NAME);
+  /* The edits look as in Settings: a themed border, the text centred in it. */
+  g_dv.name_edit = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0,
+                                   0, 0, parent, (HMENU)(INT_PTR)ID_DEV_NAME, GetModuleHandleW(NULL), NULL);
+  theme_center_edit(g_dv.name_edit);
   SendMessageW(g_dv.name_edit, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
   SetWindowSubclass(g_dv.name_edit, edit_proc, 0, 0);
   g_dv.format_label = child(WC_STATICW, L"Format", line, ID_DEV_FORMAT_LABEL);
@@ -1008,7 +1025,10 @@ void device_view_create(HWND parent, const device_view_host *host) {
    * mode, so each has a label beside it, which toggles it too. */
   g_dv.budget = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_BUDGET);
   g_dv.budget_label = child(WC_STATICW, L"Limit storage to", line | SS_NOTIFY, ID_DEV_BUDGET_LABEL);
-  g_dv.budget_size = child(WC_EDITW, NULL, WS_BORDER | WS_TABSTOP | ES_NUMBER | ES_RIGHT, ID_DEV_BUDGET_SIZE);
+  g_dv.budget_size = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
+                                     0, 0, 0, 0, parent, (HMENU)(INT_PTR)ID_DEV_BUDGET_SIZE, GetModuleHandleW(NULL),
+                                     NULL);
+  theme_center_edit(g_dv.budget_size);
   SendMessageW(g_dv.budget_size, EM_LIMITTEXT, 5, 0);
   SetWindowSubclass(g_dv.budget_size, edit_proc, 0, 0);
   g_dv.budget_unit = child(WC_STATICW, L"GB", line, ID_DEV_BUDGET_UNIT);
@@ -1030,10 +1050,10 @@ void device_view_create(HWND parent, const device_view_host *host) {
   col.fmt = LVCFMT_RIGHT;
   col.cx = 100;
   SendMessageW(g_dv.list, LVM_INSERTCOLUMNW, 1, (LPARAM)&col);
-  /* Themed first, so the checkboxes are made in its style. */
   theme_apply_control(g_dv.list);
   ListView_SetExtendedListViewStyleEx(g_dv.list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER,
                                       LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+  set_check_images();
   g_dv.count = child(WC_STATICW, NULL, line, ID_DEV_COUNT);
 
   SetTimer(parent, ID_DEV_TICK_TIMER, TICK_MS, tick_timer);
@@ -1042,6 +1062,7 @@ void device_view_create(HWND parent, const device_view_host *host) {
 void device_view_destroy(void) {
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
   KillTimer(g_dv.parent, ID_DEV_TICK_TIMER);
+  KillTimer(g_dv.parent, ID_DEV_REFRESH_TIMER);
   pending_clear();
   free(g_dv.pending.toggles);
   g_dv.pending.toggles = NULL;
@@ -1092,6 +1113,7 @@ void device_view_set_font(HFONT font, UINT dpi) {
                  g_dv.budget_size, g_dv.budget_unit, g_dv.note, g_dv.sync_all_label, g_dv.list, g_dv.count};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
   for (int i = 0; i < NUM_TABS; i++) InvalidateRect(g_dv.tabs[i], NULL, FALSE);
+  set_check_images();
 }
 
 static HWND *all_controls(size_t *n) {
@@ -1147,9 +1169,35 @@ static BOOL has_text(HWND wnd) {
   return GetWindowTextLengthW(wnd) > 0;
 }
 
+/* Moves wnd unless it's there already: the page is laid out again on every refresh, and a
+ * move would close an open drop-down and redraw for nothing. h < 0 keeps its height (a combo
+ * box's is its own) and gives it drop_h, the drop-down's. Where it does move, both where it
+ * was and where it goes are repainted, so it leaves nothing behind. */
+static void move_to(HWND wnd, int x, int y, int w, int h, int drop_h) {
+  RECT old, want = {x, y, x + w, y + h};
+  GetWindowRect(wnd, &old);
+  MapWindowPoints(NULL, g_dv.parent, (POINT *)&old, 2);
+  if (h < 0) want.bottom = y + (old.bottom - old.top);
+  if (EqualRect(&old, &want)) return;
+  MoveWindow(wnd, x, y, w, h >= 0 ? h : drop_h, FALSE);
+  UINT flags = RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN;
+  if (IsWindowVisible(wnd)) RedrawWindow(g_dv.parent, &old, NULL, flags);
+  GetWindowRect(wnd, &want);
+  MapWindowPoints(NULL, g_dv.parent, (POINT *)&want, 2);
+  RedrawWindow(g_dv.parent, &want, NULL, flags);
+}
+
+static void set_shown(HWND wnd, BOOL visible) {
+  if (!(GetWindowLongW(wnd, GWL_STYLE) & WS_VISIBLE) != !visible) ShowWindow(wnd, visible ? SW_SHOW : SW_HIDE);
+}
+
 static void place(HWND wnd, BOOL visible, int x, int y, int w, int h) {
-  if (visible) MoveWindow(wnd, x, y, w, h, TRUE);
-  ShowWindow(wnd, visible ? SW_SHOW : SW_HIDE);
+  if (visible) move_to(wnd, x, y, w, h, 0);
+  set_shown(wnd, visible);
+}
+
+static void set_column_width(int col, int w) {
+  if (ListView_GetColumnWidth(g_dv.list, col) != w) ListView_SetColumnWidth(g_dv.list, col, w);
 }
 
 void device_view_layout(int x, int y, int w, int h, UINT dpi) {
@@ -1172,17 +1220,17 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   place(g_dv.title, TRUE, title_x, top + (head_h - title_h) / 2, max(title_r - title_x, S(40)), title_h);
   top += head_h + S(4);
 
-  /* Status lines. */
-  place(g_dv.status, on, left, top, text_w, line_h);
+  /* Status lines. While syncing, the progress takes the status line's place, so the page
+   * doesn't move. */
+  BOOL busy = dev && syncing();
+  int bar_w = S(120);
+  place(g_dv.status, on && !busy, left, top, text_w, line_h);
+  place(g_dv.progress, busy, left, top + (line_h - S(6)) / 2, bar_w, S(6));
+  place(g_dv.progress_text, busy, left + bar_w + S(12), top, text_w - bar_w - S(12), line_h);
   if (on) top += line_h + S(2);
   BOOL files = dev && has_text(g_dv.files);
   place(g_dv.files, files, left, top, text_w, line_h);
   if (files) top += line_h + S(2);
-  BOOL busy = dev && syncing();
-  int bar_w = S(120);
-  place(g_dv.progress, busy, left, top + (line_h - S(6)) / 2, bar_w, S(6));
-  place(g_dv.progress_text, busy, left + bar_w + S(12), top, text_w - bar_w - S(12), line_h);
-  if (busy) top += line_h + S(2);
   BOOL message = dev && has_text(g_dv.message);
   int mh = message ? text_height(g_dv.message, g_dv.font, text_w) : 0;
   place(g_dv.message, message, left, top + S(4), text_w, mh);
@@ -1195,20 +1243,20 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
 
   /* Name, format and budget. */
   int label_w = max(text_width(g_dv.name_label, g_dv.font), text_width(g_dv.format_label, g_dv.font)) + S(16);
-  int field_h = S(30), field_x = left + label_w;
+  int field_h = S(30), edit_h = S(28), field_x = left + label_w;
   place(g_dv.name_label, dev, left, top + (field_h - line_h) / 2, label_w, line_h);
-  place(g_dv.name_edit, dev, field_x, top, min(S(320), right - field_x), field_h);
+  place(g_dv.name_edit, dev, field_x, top + (field_h - edit_h) / 2, min(S(320), right - field_x), edit_h);
   if (dev) top += field_h + S(8);
 
+  /* Left alone while it's dropped down. */
   int combo_w = S(180);
-  if (dev) {
-    MoveWindow(g_dv.format, field_x, top, combo_w, S(300), TRUE);
+  if (dev && !SendMessageW(g_dv.format, CB_GETDROPPEDSTATE, 0, 0)) {
     RECT rc;
     GetWindowRect(g_dv.format, &rc);
     int ch = rc.bottom - rc.top;
-    if (ch < field_h) MoveWindow(g_dv.format, field_x, top + (field_h - ch) / 2, combo_w, S(300), TRUE);
+    move_to(g_dv.format, field_x, top + (ch > 0 && ch < field_h ? (field_h - ch) / 2 : 0), combo_w, -1, S(300));
   }
-  ShowWindow(g_dv.format, dev ? SW_SHOW : SW_HIDE);
+  set_shown(g_dv.format, dev);
   place(g_dv.format_label, dev, left, top + (field_h - line_h) / 2, label_w, line_h);
   int box = S(20), budget_label_w = text_width(g_dv.budget_label, g_dv.font) + S(8);
   int unit_w = text_width(g_dv.budget_unit, g_dv.font) + S(4), size_w = S(64);
@@ -1222,7 +1270,7 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   bx += box + S(8);
   place(g_dv.budget_label, dev, bx, top + (field_h - line_h) / 2, budget_label_w, line_h);
   bx += budget_label_w;
-  place(g_dv.budget_size, dev, bx, top, size_w, field_h);
+  place(g_dv.budget_size, dev, bx, top + (field_h - edit_h) / 2, size_w, edit_h);
   bx += size_w + S(8);
   place(g_dv.budget_unit, dev, bx, top + (field_h - line_h) / 2, unit_w, line_h);
   if (dev) top += field_h + S(24);
@@ -1256,8 +1304,8 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
     RECT rc;
     GetClientRect(g_dv.list, &rc);
     int detail_w = S(110);
-    ListView_SetColumnWidth(g_dv.list, 1, detail_w);
-    ListView_SetColumnWidth(g_dv.list, 0, max(rc.right - detail_w, S(80)));
+    set_column_width(1, detail_w);
+    set_column_width(0, max(rc.right - detail_w, S(80)));
   }
 #undef S
 }
@@ -1289,8 +1337,21 @@ void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
   for (int i = 0; i < NUM_TABS; i++) InvalidateRect(g_dv.tabs[i], NULL, FALSE);
 }
 
+static void CALLBACK refresh_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
+  (void)msg, (void)time;
+  KillTimer(wnd, id);
+  device_view_refresh();
+}
+
 void device_view_refresh(void) {
   if (!g_dv.sync) return;
+  /* Not under an open drop-down, which would lose what's highlighted in it: once it
+   * closes. */
+  if (SendMessageW(g_dv.format, CB_GETDROPPEDSTATE, 0, 0)) {
+    g_dv.refresh_later = TRUE;
+    return;
+  }
+  g_dv.refresh_later = FALSE;
   reload(TRUE);
 }
 
@@ -1311,6 +1372,13 @@ void device_view_on_sync_event(const sync_event *ev) {
       update_status();
       break;
     case SYNC_EV_PROGRESS:
+      if (ev->phase == MC_SYNC_PHASE_DONE) { /* over; on_sync_done may follow, or not */
+        if (i < 0) return;
+        memmove(g_dv.busy + i, g_dv.busy + i + 1, (size_t)(g_dv.nbusy - i - 1) * sizeof g_dv.busy[0]);
+        g_dv.nbusy--;
+        update_status();
+        break;
+      }
       if (i < 0 && g_dv.nbusy < MAX_BUSY) {
         memcpy(g_dv.busy[g_dv.nbusy], ev->uid, MC_UID_STRLEN);
         g_dv.busy[g_dv.nbusy++][MC_UID_STRLEN - 1] = '\0';
@@ -1358,6 +1426,8 @@ BOOL device_view_on_command(int id, int code) {
       return TRUE;
     case ID_DEV_FORMAT:
       if (code == CBN_SELCHANGE && !g_dv.filling) on_format();
+      /* After the CBN_SELCHANGE that may follow, so a choice isn't undone. */
+      else if (code == CBN_CLOSEUP && g_dv.refresh_later) SetTimer(g_dv.parent, ID_DEV_REFRESH_TIMER, 1, refresh_timer);
       return TRUE;
     case ID_DEV_BUDGET_LABEL:
       if (code != STN_CLICKED || !IsWindowEnabled(g_dv.budget)) return TRUE;
@@ -1465,11 +1535,14 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
     default:
       return NULL;
   }
-  /* Disabled edits ask as statics. */
+  /* Disabled edits ask as statics. They lose the field colour too, as the disabled combo box
+   * does, so they don't look editable. */
   if (wnd == g_dv.name_edit || wnd == g_dv.budget_size) {
+    COLORREF bg = theme.dark || theme.high_contrast ? theme.bg : theme.frame;
     SetTextColor(dc, theme.text3);
-    SetBkColor(dc, theme.field);
-    return theme.field_brush;
+    SetBkColor(dc, bg);
+    SetDCBrushColor(dc, bg);
+    return GetStockObject(DC_BRUSH);
   }
   COLORREF color;
   if (wnd == g_dv.title || wnd == g_dv.icon || wnd == g_dv.heading || wnd == g_dv.message || wnd == g_dv.notice ||
