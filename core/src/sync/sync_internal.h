@@ -70,11 +70,11 @@ typedef struct mc_sync_conn {
 } mc_sync_conn;
 
 struct mc_sync {
-  /* Fixed at mc_sync_new(). */
+  /* Fixed at mc_sync_new(), but for name. */
   char *config_dir;
   char *lib_dir;
   char device_uid[MC_UID_STRLEN];
-  char name[MC_SYNC_NAME_MAX];
+  char name[MC_SYNC_NAME_MAX]; /* under lock: it changes when the device is renamed */
   char host[MC_SYNC_NAME_MAX];
   mc_device_kind kind;
   mc_sync_events ev;
@@ -158,6 +158,20 @@ void mc_sync_forget_group(mc_sync *sync, mc_sync_conn *c);
 void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
                            const mc_sync_result *result, int64_t rows_new, int follow_up,
                            const char *address, uint16_t port);
+
+/* Sets this device's profiles.name through c in a write transaction, adding the profile
+ * row if there's none. only_if_unset: keep a name that's there. *wrote (may be NULL): it
+ * changed something. */
+mc_status mc_sync_write_profile_name(mc_sync_conn *c, const char *name, int only_if_unset,
+                                     int *wrote);
+/* Takes on the name the group gives this device (its profile name) if it has one and it
+ * differs: renames, re-announces and writes its devices row. c is the caller's connection
+ * (the API's under api_lock); not under lock. Done at start, after each session and after a
+ * rename here; call it after setting this device's profile too. */
+void mc_sync_take_group_name(mc_sync *sync, mc_sync_conn *c);
+/* After joining or making a group: gives this device's profile its current name unless the
+ * group already has one for it. 1 if it wrote. */
+int mc_sync_seed_profile_name(mc_sync *sync, mc_sync_conn *c);
 
 void mc_sync_emit_pair_code(mc_sync *sync, const char *code, const char *name, int attempts);
 void mc_sync_emit_pair_result(mc_sync *sync, const mc_pair_result *r);

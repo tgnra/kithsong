@@ -26,6 +26,10 @@ static const char *const k_migrations[] = {
   "  port         INTEGER,"
   "  last_sync_ms INTEGER"
   ") WITHOUT ROWID;",
+  /* v3: names the group gives its devices. profiles.name is the device's friendly name,
+   * editable from any member like the rest of the profile (an archive's too); NULL means the
+   * device's own devices.name. */
+  "ALTER TABLE profiles ADD COLUMN name TEXT;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -35,7 +39,7 @@ static const char *const k_group_cols[] = {"library_uid", NULL};
 static const char *const k_device_cols[] = {"name", "kind", "public_key", "node_uid", "added_by",
                                             "removed", "host", NULL};
 static const char *const k_profile_cols[] = {"archive", "mode", "format", "bitrate_kbps",
-                                             "budget_bytes", "budget_enabled", NULL};
+                                             "budget_bytes", "budget_enabled", "name", NULL};
 static const char *const k_item_cols[] = {"device_uid", "kind", "ref_uid", NULL};
 static const char *const k_capability_cols[] = {"cpu_score", "free_bytes", "on_power",
                                                 "can_transcode", "updated_ms", "addresses", NULL};

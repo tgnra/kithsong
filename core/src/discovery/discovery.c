@@ -120,7 +120,6 @@ typedef struct rx_host {
 struct mc_discovery {
   /* Fixed at start. */
   char device_uid[MC_UID_STRLEN];
-  char name[NAME_MAX_BYTES + 1];
   char host[NAME_MAX_BYTES + 1];
   char kind[KIND_LEN];
   char instance[DNS_NAME_LEN];
@@ -137,9 +136,12 @@ struct mc_discovery {
   int stop;
   int group_changed;
   char next_grp[MC_GROUP_HASH_STRLEN];
+  int name_changed;
+  char next_name[NAME_MAX_BYTES + 1];
 
   /* Discovery thread only (and start, before the thread exists). */
   char grp[MC_GROUP_HASH_STRLEN];
+  char name[NAME_MAX_BYTES + 1]; /* TXT "name" */
   int wake_fd;
   struct sockaddr_in wake_addr;
   msock socks[MAX_SOCKS];
@@ -839,9 +841,10 @@ static void run(void *arg) {
   uint64_t next_scan = now + d->interval_ms, reannounce = now + REANNOUNCE_MS;
   for (;;) {
     mc_mutex_lock(&d->lock);
-    int stop = d->stop, changed = d->group_changed;
-    if (changed) memcpy(d->grp, d->next_grp, sizeof d->grp);
-    d->group_changed = 0;
+    int stop = d->stop, changed = d->group_changed || d->name_changed;
+    if (d->group_changed) memcpy(d->grp, d->next_grp, sizeof d->grp);
+    if (d->name_changed) memcpy(d->name, d->next_name, sizeof d->name);
+    d->group_changed = d->name_changed = 0;
     mc_mutex_unlock(&d->lock);
     if (stop) break;
 
@@ -949,6 +952,17 @@ mc_status mc_discovery_set_group(mc_discovery *disc, const char *group_hash) {
   mc_mutex_lock(&disc->lock);
   strcpy(disc->next_grp, group_hash ? group_hash : "");
   disc->group_changed = 1;
+  mc_mutex_unlock(&disc->lock);
+  wake(disc);
+  return MC_OK;
+}
+
+mc_status mc_discovery_set_name(mc_discovery *disc, const char *device_name) {
+  if (!disc || !device_name) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&disc->lock);
+  copy_str(disc->next_name, sizeof disc->next_name, device_name,
+           utf8_cut(device_name, NAME_MAX_BYTES));
+  disc->name_changed = 1;
   mc_mutex_unlock(&disc->lock);
   wake(disc);
   return MC_OK;

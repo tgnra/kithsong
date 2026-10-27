@@ -328,7 +328,7 @@ static void test_playlists(const char *scratch) {
           !strstr(tracks->items[0].cover_dir, "One.flac"));
     CHECK(tracks->items[1].artist == NULL && tracks->items[1].album == NULL);
     CHECK(tracks->items[3].cover_dir == NULL); /* no file here */
-    CHECK_STR(tracks->items[0].entry_uid, e2); /* the entries, to move and remove */
+    CHECK(strcmp(tracks->items[0].entry_uid, e2) == 0); /* the entries, to move and remove */
     CHECK(tracks->items[1].entry_uid[0] && strcmp(tracks->items[1].entry_uid, tracks->items[2].entry_uid));
   }
   mc_track_list_free(tracks);
@@ -349,6 +349,76 @@ static void test_playlists(const char *scratch) {
   CHECK(query_int(db, "SELECT count(*) FROM playlist_entries") == 0);
   CHECK(query_int(db, "SELECT count(*) FROM tracks") == 3);
   CHECK(changelog_count(db, "entity = 'playlist_entries' AND field = '_deleted'") == 5);
+  mc_library_close(lib);
+}
+
+/* Artists and album groups for the library's browse views. */
+static void test_artists_and_groups(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_artists.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+
+  /* An empty library has neither. */
+  mc_artist_list *artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 0);
+  mc_artist_list_free(artists);
+  mc_album_group_list *groups = NULL;
+  CHECK(mc_library_list_album_groups(lib, &groups) == MC_OK && groups && groups->count == 0);
+  mc_album_group_list_free(groups);
+  mc_artist_list_free(NULL);
+  mc_album_group_list_free(NULL);
+
+  /* The Beatles sort under B, Low's singles count as an album, Guest is only on a track and
+   * Nobody is on nothing at all. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name, sort_name) VALUES"
+                 " ('ar1', 'The Beatles', 'Beatles, The'), ('ar2', 'Low', NULL),"
+                 " ('ar3', 'Guest', NULL), ('ar4', 'abba', NULL), ('ar5', 'Nobody', NULL);"
+                 "INSERT INTO albums (uid, title, artist_uid, kind) VALUES"
+                 " ('al1', 'Abbey Road', 'ar1', 'album'), ('al2', 'Help!', 'ar1', 'album'),"
+                 " ('al3', 'Secret Name', 'ar2', 'album'), ('al4', 'Low Singles', 'ar2', 'singles'),"
+                 " ('al5', 'Arrival', 'ar4', 'album');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
+                 " ('t1', 'al3', 'ar3', 'Duet');") == SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 4);
+  if (artists && artists->count == 4) {
+    CHECK_STR(artists->items[0].name, "abba"); /* by sort name, ignoring case */
+    CHECK(artists->items[0].album_count == 1);
+    CHECK_STR(artists->items[1].name, "The Beatles");
+    CHECK(strcmp(artists->items[1].uid, "ar1") == 0);
+    CHECK(artists->items[1].album_count == 2);
+    CHECK_STR(artists->items[2].name, "Guest");
+    CHECK(artists->items[2].album_count == 0);
+    CHECK_STR(artists->items[3].name, "Low");
+    CHECK(artists->items[3].album_count == 2);
+  }
+  mc_artist_list_free(artists);
+
+  /* Groups by name, ignoring case, each with its number of albums. */
+  CHECK(exec(db, "INSERT INTO album_groups (uid, name) VALUES ('g1', 'road trip'), ('g2', 'Empty'),"
+                 " ('g3', 'Beatles');"
+                 "INSERT INTO album_group_entries (uid, group_uid, album_uid, position) VALUES"
+                 " ('e1', 'g1', 'al1', 'a0'), ('e2', 'g1', 'al3', 'a1'), ('e3', 'g1', 'al5', 'a2'),"
+                 " ('e4', 'g3', 'al1', 'a0'), ('e5', 'g3', 'al2', 'a1');"
+                 "INSERT INTO smart_lists (uid, name, subject, rule) VALUES"
+                 " ('s1', 'Recent', 'albums', '{}');") == SQLITE_OK);
+  groups = NULL;
+  CHECK(mc_library_list_album_groups(lib, &groups) == MC_OK && groups && groups->count == 3);
+  if (groups && groups->count == 3) {
+    CHECK_STR(groups->items[0].name, "Beatles");
+    CHECK(groups->items[0].album_count == 2);
+    CHECK_STR(groups->items[1].name, "Empty");
+    CHECK(groups->items[1].album_count == 0);
+    CHECK_STR(groups->items[2].name, "road trip");
+    CHECK(strcmp(groups->items[2].uid, "g1") == 0);
+    CHECK(groups->items[2].album_count == 3);
+  }
+  mc_album_group_list_free(groups);
   mc_library_close(lib);
 }
 
@@ -482,5 +552,6 @@ int main(int argc, char **argv) {
   test_migration_v5(argc > 1 ? argv[1] : ".");
   test_migration_v6(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
+  test_artists_and_groups(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();
 }

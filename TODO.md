@@ -14,15 +14,31 @@
 ## Smart Playlists/Groups
 
 - UI - rule editor (build it from mc_smart_field_get()), list smart lists alongside playlists and album groups, reshuffle button
-- Playback - call mc_library_record_play() when a track counts as played (half of it, or 4 minutes, like Last.fm?)
+- Desktop playback - call mc_library_record_play() when a track counts as played. Android already does: half the track or 4 minutes, whichever comes first
 - Core - limit by total duration ("an hour of music")
 
 ## Artists View
 
- - List of Artists - toggle for album artist/ artist?
+- Core - an artist API; Android derives artists from the album list
+- List of Artists - toggle for album artist/ artist?
+- Linux and Windows - Artists shows the album grid for now
+
+## Import
+
+- Core - detect being offline, or an option to skip MusicBrainz, so offline import isn't slow and every item doesn't need a decision
+- Core - skip files already in the library; importing them again copies them as "(2)" files
+- Core - AcoustID fingerprints (Chromaprint) for untagged files
+- Core - cover art for the singles album
 
 ## Sync
 
+- Core - transfer audio files; only metadata syncs so far
+- Core - sessions hang instead of timing out when Android blocks the network
+- Core - sync profiles: getters and setters, making a device an archive, the size estimate (TODO(phase 5) in sync.h)
+- Core - merging the same album imported on two devices (open question in sync-protocol.md)
+- Core - recents API, so recents sync; Android keeps playlist and artist recents itself
+- Linux and Windows - Add Device only logs a message; start pairing with mc_sync_pair_request_address() and wire up the rest of the sync API
+- Test phone to desktop sync once the desktop can pair
 - UI to do selective sync
 - Original file tags - if I add flacs on my phone which is set to sync opus - those files are originals. When syncing with an archive, sync them to the archive and then delete and sync back opus of those files.
 
@@ -30,10 +46,11 @@
 
 - Last.fm scrobbler
 - Playback - AAC/M4A - pick a decoder: the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
-- Volume control
+- Volume control (in the core, so Android can also duck itself on Android 7)
 - Spacebar to play/pause
 - Recents list above devices
 - Move text strings to a centralised list and include in build
+- Linux and Windows - Move Library (the button is disabled)
 
 ## Wear OS
 
@@ -50,25 +67,25 @@
 
 ## Android
 
-- One activity, Material 3 with dynamic colour, follows the system dark/light setting
-- Edge to edge
-- Main screen is one long scroll of sections
-    - Recents (list), Playlists (list), Albums (grid), Artists (list)
-    - Tapping a section heading animates open a list of the headings; tapping one scrolls there
-    - Sections with no content have no heading. With no content at all, show an icon and a message
-    - Performance matters: one lazy list, stable keys and content types, no nested scrolling grids
-    - Preload album art ahead of the scroll position so it never visibly loads
-- Header scrolls with the content (not sticky): app title on the left, import and settings on the right
-    - Clears the status bar at rest; once scrolled, art shows under the status bar and camera cutout
-- Mini player: a floating rounded rectangle above the content, clearing the gesture navigation bar
-    - Album art in a rounded square, title with "Artist - Album" underneath, play/pause on the right
-    - Full-width seekbar underneath
-    - Tapping it opens the full player
-- Full player: large album art, seekbar, play/pause and seeking. Swipe down to dismiss
-- Album, artist and playlist screens show a track list. Swipe right anywhere to dismiss
-- Predictive back, accessibility labels, colours taken from the current album art
-- Background playback via a media session: notification and lock screen controls, headset
-  buttons, audio focus
-- Import: request the audio permission appropriate to the API level
-- Sync stores files in the app's own storage, never on the SD card
-- Search comes later
+The phone app spec is done; see ANDROID_PROGRESS.md for the phases.
+
+- Playback - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts
+- Import - a screen to review items one at a time
+- Import - files MediaStore hasn't indexed don't appear in the folder sheet
+- Import - the "name: error" format for failed items is still hard-coded
+- Upgrade Kotlin to 2.4, then Coil and MaterialKolor
+- Test - mDNS discovery and sync over real Wi-Fi, API 24-32 devices, audio focus during calls, plays landing in the core's database
+- Test - the themed launcher icon, and the import and sync notification icons
+- Search
+
+## Release
+
+- Windows - installer, MSIX/Store package, code signing
+- Linux - Flathub (every dependency in third_party/CMakeLists.txt as a Flatpak source), architectures other than x86_64
+- Android - enable R8
+- Android - third-party license texts in the apps
+
+## Docs
+
+- architecture.md - the playlist module is listed as a stub
+- README - the status note and the Mobile UI section are out of date

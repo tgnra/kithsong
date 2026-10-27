@@ -1,4 +1,4 @@
-/* Per-device preferences: currently just where the library folder is. Stored as
+/* Per-device preferences: where the library folder is and the device's name. Stored as
  * settings.json in a folder the frontend picks (%LOCALAPPDATA%\musicapp on Windows,
  * ~/.config/musicapp on Linux). Never synced: each device has its own library folder. */
 #ifndef MUSICCORE_SETTINGS_H
@@ -24,6 +24,12 @@ mc_status mc_settings_save(const mc_settings *s);
 /* The library folder, or NULL if none has been chosen yet (first run). */
 const char *mc_settings_library_dir(const mc_settings *s);
 mc_status mc_settings_set_library_dir(mc_settings *s, const char *dir);
+
+/* The name this device shows to others (see mc_sync_new()), or NULL if none is saved (the
+ * host name is used). */
+const char *mc_settings_device_name(const mc_settings *s);
+/* NULL or "" clears it. */
+mc_status mc_settings_set_device_name(mc_settings *s, const char *name);
 
 #ifdef __cplusplus
 }

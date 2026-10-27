@@ -40,6 +40,12 @@ option(MUSICAPP_BUILD_WINDOWS "Build the Win32 desktop frontend" ${_default_wind
 option(MUSICAPP_BUILD_GTK     "Build the GTK4/libadwaita desktop frontend" ${_default_gtk})
 option(MUSICAPP_BUILD_TESTS   "Build core unit tests" ${PROJECT_IS_TOP_LEVEL})
 set(MUSICAPP_ACOUSTID_KEY "" CACHE STRING "AcoustID application API key (never commit this)")
+# Which build of the version this is: the 4th field of the Windows file version and shown in
+# the app. CI sets it to the release workflow's run number; local builds are 0.
+set(MUSICAPP_BUILD_NUMBER 0 CACHE STRING "Build number, 0-65535")
+if(NOT MUSICAPP_BUILD_NUMBER MATCHES "^[0-9]+$" OR MUSICAPP_BUILD_NUMBER GREATER 65535)
+  message(FATAL_ERROR "MUSICAPP_BUILD_NUMBER must be a whole number from 0 to 65535, not '${MUSICAPP_BUILD_NUMBER}'")
+endif()
 
 if(MUSICAPP_BUILD_TESTS)
   enable_testing()

@@ -1,8 +1,12 @@
 #include "settings_view.h"
 
 #include <commctrl.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
 
+#include "sync_bridge.h"
 #include "theme.h"
 
 enum {
@@ -12,18 +16,54 @@ enum {
   ID_SET_MOVE,
   ID_SET_OPEN,
   ID_SET_NOTE,
+  ID_SET_SYNC_HEADING,
+  ID_SET_NAME_LABEL,
+  ID_SET_NAME,
+  ID_SET_ADDR_LABEL,
+  ID_SET_ADDR,
+  ID_SET_LEAVE,
+  ID_SET_SYNC_NOTE,
 };
+
+enum { MAX_ADDRESSES = 8 };
 
 static struct {
   HWND parent;
   HWND title, heading, path, move, open, note;
+  HWND sync_heading, name_label, name, addr_label, addr, leave, sync_note;
   HFONT font, title_font, heading_font;
   BOOL shown;
+  mc_settings *settings;
+  void (*devices_changed)(void);
+  char shown_name[MC_SYNC_DEVICE_NAME_MAX + 1]; /* what the name box was last set to */
 } g_set;
 
 static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
   return CreateWindowExW(0, cls, text, WS_CHILD | style, 0, 0, 0, 0, g_set.parent, (HMENU)(INT_PTR)id,
                          GetModuleHandleW(NULL), NULL);
+}
+
+static void apply_name(void);
+
+/* Enter in the name box applies it (a plain window has no default button to take it). */
+static LRESULT CALLBACK name_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+  (void)data;
+  switch (msg) {
+    case WM_KEYDOWN:
+      if (wp == VK_RETURN) {
+        apply_name();
+        SendMessageW(wnd, EM_SETSEL, 0, -1);
+        return 0;
+      }
+      break;
+    case WM_CHAR:
+      if (wp == L'\r') return 0; /* no beep */
+      break;
+    case WM_NCDESTROY:
+      RemoveWindowSubclass(wnd, name_proc, id);
+      break;
+  }
+  return DefSubclassProc(wnd, msg, wp, lp);
 }
 
 void settings_view_create(HWND parent) {
@@ -39,6 +79,20 @@ void settings_view_create(HWND parent) {
                      L"Opening another library switches to the library in that folder, or starts an empty "
                      L"one there. Music you've already imported stays where it is.",
                      label, ID_SET_NOTE);
+
+  g_set.sync_heading = child(WC_STATICW, L"Sync", label, ID_SET_SYNC_HEADING);
+  g_set.name_label = child(WC_STATICW, L"This PC's name", label, ID_SET_NAME_LABEL);
+  g_set.name = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0,
+                               0, parent, (HMENU)(INT_PTR)ID_SET_NAME, GetModuleHandleW(NULL), NULL);
+  SendMessageW(g_set.name, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
+  SetWindowSubclass(g_set.name, name_proc, 0, 0);
+  g_set.addr_label = child(WC_STATICW, L"This PC's address", label, ID_SET_ADDR_LABEL);
+  g_set.addr = child(WC_STATICW, NULL, label | SS_EDITCONTROL, ID_SET_ADDR);
+  g_set.leave = child(WC_BUTTONW, L"Leave Group\x2026", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_LEAVE);
+  g_set.sync_note = child(WC_STATICW,
+                          L"Other devices show this PC by its name. Leaving the group stops syncing with its "
+                          L"other devices; the music on this PC stays.",
+                          label, ID_SET_SYNC_NOTE);
 }
 
 void settings_view_destroy(void) {
@@ -72,14 +126,19 @@ void settings_view_set_font(HFONT font, UINT dpi) {
 
   SendMessageW(g_set.title, WM_SETFONT, (WPARAM)g_set.title_font, TRUE);
   SendMessageW(g_set.heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
-  HWND body[] = {g_set.path, g_set.move, g_set.open, g_set.note};
+  SendMessageW(g_set.sync_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  HWND body[] = {g_set.path,  g_set.move,       g_set.open, g_set.note,  g_set.name_label,
+                 g_set.name,  g_set.addr_label, g_set.addr, g_set.leave, g_set.sync_note};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
 }
 
 void settings_view_show(BOOL show) {
   g_set.shown = show;
-  HWND all[] = {g_set.title, g_set.heading, g_set.path, g_set.move, g_set.open, g_set.note};
+  HWND all[] = {g_set.title,      g_set.heading,      g_set.path,  g_set.move,       g_set.open,
+                g_set.note,       g_set.sync_heading, g_set.name_label, g_set.name,  g_set.addr_label,
+                g_set.addr,       g_set.leave,        g_set.sync_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
+  if (show) settings_view_update_sync();
 }
 
 /* The height wnd's text needs at width w, wrapped as its static control wraps it. */
@@ -133,20 +192,201 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
 
   int nh = text_height(g_set.note, g_set.font, text_w, 0);
   MoveWindow(g_set.note, left, top, text_w, nh, TRUE);
+  top += nh + S(32);
+
+  /* Sync */
+  hh = text_height(g_set.sync_heading, g_set.heading_font, text_w, 0);
+  MoveWindow(g_set.sync_heading, left, top, text_w, hh, TRUE);
+  top += hh + S(8);
+
+  int lh = text_height(g_set.name_label, g_set.font, text_w, 0);
+  MoveWindow(g_set.name_label, left, top, text_w, lh, TRUE);
+  top += lh + S(4);
+  MoveWindow(g_set.name, left, top, min(text_w, S(320)), S(28), TRUE);
+  top += S(28) + S(12);
+
+  lh = text_height(g_set.addr_label, g_set.font, text_w, 0);
+  MoveWindow(g_set.addr_label, left, top, text_w, lh, TRUE);
+  top += lh + S(4);
+  int ah = text_height(g_set.addr, g_set.font, text_w, DT_EDITCONTROL);
+  MoveWindow(g_set.addr, left, top, text_w, ah, TRUE);
+  top += ah + S(12);
+
+  MoveWindow(g_set.leave, left, top, button_width(g_set.leave, S(16)), btn_h, TRUE);
+  top += btn_h + S(12);
+
+  nh = text_height(g_set.sync_note, g_set.font, text_w, 0);
+  MoveWindow(g_set.sync_note, left, top, text_w, nh, TRUE);
 #undef S
 }
 
-BOOL settings_view_on_command(int id) {
+/* --- Sync --- */
+
+void settings_view_init_sync(mc_settings *settings, void (*devices_changed)(void)) {
+  g_set.settings = settings;
+  g_set.devices_changed = devices_changed;
+  settings_view_update_sync();
+}
+
+/* This PC's name as sync has it, else as saved, else the host name; UTF-8 into out. */
+static void current_name(char *out, size_t cap) {
+  mc_sync *sync = sync_bridge_get();
+  out[0] = '\0';
+  if (sync && mc_sync_get_device_name(sync, out, cap) == MC_OK && out[0]) return;
+  const char *saved = g_set.settings ? mc_settings_device_name(g_set.settings) : NULL;
+  if (saved && *saved) {
+    snprintf(out, cap, "%s", saved);
+    return;
+  }
+  wchar_t host[256];
+  DWORD n = 256;
+  if (GetComputerNameExW(ComputerNameDnsHostname, host, &n) && n)
+    WideCharToMultiByte(CP_UTF8, 0, host, -1, out, (int)cap, NULL, NULL);
+  out[cap - 1] = '\0';
+}
+
+/* "addr:port" for each of this PC's addresses, IPv6 ones in brackets. */
+static void format_addresses(wchar_t *out, size_t cap) {
+  mc_sync *sync = sync_bridge_get();
+  out[0] = L'\0';
+  if (!sync) {
+    swprintf(out, cap, L"Sync is off (%hs).", mc_status_str(sync_bridge_error()));
+    return;
+  }
+  char addrs[MAX_ADDRESSES][MC_SYNC_ADDR_STRLEN];
+  int n = mc_sync_local_addresses(addrs, MAX_ADDRESSES);
+  unsigned port = mc_sync_port(sync);
+  if (n <= 0) {
+    swprintf(out, cap, L"Port %u (no network)", port);
+    return;
+  }
+  size_t len = 0;
+  for (int i = 0; i < n && len < cap; i++) {
+    BOOL v6 = strchr(addrs[i], ':') != NULL;
+    int w = swprintf(out + len, cap - len, L"%ls%hs%hs%hs:%u", i ? L", " : L"", v6 ? "[" : "", addrs[i],
+                     v6 ? "]" : "", port);
+    if (w < 0) break;
+    len += (size_t)w;
+  }
+}
+
+/* Whether this PC is in a group: listed devices, its own row included, that aren't removed. */
+static BOOL in_group(void) {
+  mc_sync *sync = sync_bridge_get();
+  mc_sync_device_list *list = NULL;
+  if (!sync || mc_sync_list_devices(sync, &list) != MC_OK) return FALSE;
+  BOOL member = FALSE;
+  for (int i = 0; i < list->count && !member; i++) member = !list->items[i].removed;
+  mc_sync_device_list_free(list);
+  return member;
+}
+
+void settings_view_update_sync(void) {
+  if (!g_set.name) return;
+  if (GetFocus() != g_set.name) {
+    current_name(g_set.shown_name, sizeof g_set.shown_name);
+    wchar_t w[MC_SYNC_DEVICE_NAME_MAX + 1];
+    if (!MultiByteToWideChar(CP_UTF8, 0, g_set.shown_name, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1)) w[0] = L'\0';
+    SetWindowTextW(g_set.name, w);
+  }
+  wchar_t addr[1024], old[1024];
+  format_addresses(addr, 1024);
+  GetWindowTextW(g_set.addr, old, 1024);
+  if (wcscmp(addr, old)) {
+    SetWindowTextW(g_set.addr, addr);
+    if (g_set.shown) SendMessageW(g_set.parent, WM_SIZE, 0, 0); /* it may wrap differently */
+  }
+  EnableWindow(g_set.leave, in_group());
+}
+
+/* Trims spaces at either end, in place. */
+static char *trim(char *s) {
+  while (*s == ' ' || *s == '\t') s++;
+  size_t n = strlen(s);
+  while (n && (s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = '\0';
+  return s;
+}
+
+/* Renames this PC to what's in the name box, if it changed. An empty box goes back to the
+ * current name. */
+static void apply_name(void) {
+  wchar_t w[MC_SYNC_DEVICE_NAME_MAX + 1];
+  char buf[4 * (MC_SYNC_DEVICE_NAME_MAX + 1)];
+  GetWindowTextW(g_set.name, w, MC_SYNC_DEVICE_NAME_MAX + 1);
+  if (!WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, (int)sizeof buf, NULL, NULL)) buf[0] = '\0';
+  char *name = trim(buf);
+  if (!*name || !strcmp(name, g_set.shown_name)) {
+    current_name(g_set.shown_name, sizeof g_set.shown_name);
+    if (MultiByteToWideChar(CP_UTF8, 0, g_set.shown_name, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1))
+      SetWindowTextW(g_set.name, w);
+    return;
+  }
+
+  mc_sync *sync = sync_bridge_get();
+  mc_status st = sync ? mc_sync_set_device_name(sync, name) : MC_OK;
+  if (st != MC_OK && st != MC_ERR_UNIMPLEMENTED) {
+    wchar_t text[256];
+    swprintf(text, 256, L"Couldn't rename this PC (%hs).", mc_status_str(st));
+    MessageBoxW(g_set.parent, text, L"Settings", MB_OK | MB_ICONERROR);
+    if (MultiByteToWideChar(CP_UTF8, 0, g_set.shown_name, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1))
+      SetWindowTextW(g_set.name, w); /* back to the name it has, so it isn't tried again */
+  } else if (g_set.settings) {
+    /* sync may have cut it to fit; save what it now goes by */
+    char saved[MC_SYNC_DEVICE_NAME_MAX + 1];
+    if (!sync || mc_sync_get_device_name(sync, saved, sizeof saved) != MC_OK || !saved[0])
+      snprintf(saved, sizeof saved, "%s", name);
+    mc_settings_set_device_name(g_set.settings, saved);
+    if (mc_settings_save(g_set.settings) != MC_OK)
+      MessageBoxW(g_set.parent, L"Couldn't save the name; the old one will be used next time.", L"Settings",
+                  MB_OK | MB_ICONWARNING);
+    snprintf(g_set.shown_name, sizeof g_set.shown_name, "%s", saved);
+    if (MultiByteToWideChar(CP_UTF8, 0, saved, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1)) SetWindowTextW(g_set.name, w);
+  }
+  if (g_set.devices_changed) g_set.devices_changed();
+}
+
+static void leave_group(void) {
+  mc_sync *sync = sync_bridge_get();
+  if (!sync) return;
+  if (MessageBoxW(g_set.parent,
+                  L"Leave the group?\n\nThis PC will stop syncing with the group's other devices. The music "
+                  L"on this PC stays.",
+                  L"Leave Group", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+    return;
+  HCURSOR old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT));
+  mc_status st = mc_sync_leave_group(sync); /* blocks for a few seconds at most */
+  SetCursor(old);
+  if (st == MC_ERR_LOCKED)
+    MessageBoxW(g_set.parent,
+                L"This PC is the group's only archive, so it can't leave while other devices remain.",
+                L"Leave Group", MB_OK | MB_ICONINFORMATION);
+  else if (st != MC_OK && st != MC_ERR_NOT_FOUND) {
+    wchar_t text[256];
+    swprintf(text, 256, L"Couldn't leave the group (%hs).", mc_status_str(st));
+    MessageBoxW(g_set.parent, text, L"Leave Group", MB_OK | MB_ICONERROR);
+  }
+  if (g_set.devices_changed) g_set.devices_changed();
+  settings_view_update_sync();
+}
+
+BOOL settings_view_on_command(int id, int code) {
   switch (id) {
     case ID_SET_OPEN: PostMessageW(g_set.parent, WM_APP_OPEN_LIBRARY, 0, 0); return TRUE;
     case ID_SET_MOVE: return TRUE; /* not implemented yet; the button is disabled */
+    case ID_SET_NAME:
+      if (code == EN_KILLFOCUS) apply_name();
+      return TRUE;
+    case ID_SET_LEAVE: leave_group(); return TRUE;
     default: return FALSE;
   }
 }
 
 HBRUSH settings_view_ctlcolor(HWND wnd, HDC dc) {
-  if (wnd != g_set.title && wnd != g_set.heading && wnd != g_set.path && wnd != g_set.note) return NULL;
-  SetTextColor(dc, wnd == g_set.note ? theme.text2 : theme.text);
+  BOOL note = wnd == g_set.note || wnd == g_set.sync_note;
+  if (!note && wnd != g_set.title && wnd != g_set.heading && wnd != g_set.path && wnd != g_set.sync_heading &&
+      wnd != g_set.name_label && wnd != g_set.addr_label && wnd != g_set.addr)
+    return NULL;
+  SetTextColor(dc, note ? theme.text2 : theme.text);
   SetBkColor(dc, theme.bg);
   return theme.bg_brush;
 }

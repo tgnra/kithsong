@@ -24,6 +24,12 @@ the same scripts on GitHub Actions.
 To test the builds without a release, run the workflow by hand (Actions → Release → Run
 workflow). The files are attached to the run as artifacts.
 
+Windows builds also carry a build number, the 4th field of the exe's file version (e.g.
+`0.2.0.57`), shown in the app's sidebar footer. CMake takes it as `MUSICAPP_BUILD_NUMBER`
+(0-65535, default 0), and `scripts/release-windows.ps1` passes `$env:MUSICAPP_BUILD_NUMBER`
+through. The workflow sets it to the run number (`github.run_number`), since its shallow
+checkouts can't count commits. Local builds are build 0 unless you set it.
+
 Android versionCodes are `major*100000 + minor*1000 + patch*10`, plus 0 for the phone and 1
 for the watch. The two apps share the `app.musicapp` id, so Play needs every code to be
 unique.

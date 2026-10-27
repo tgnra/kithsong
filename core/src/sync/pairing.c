@@ -103,7 +103,9 @@ static void text_column(sqlite3 *db, const char *sql, const char *arg, char *out
 static mc_status my_side(mc_sync *sync, mc_sync_conn *c, side *me) {
   memset(me, 0, sizeof *me);
   snprintf(me->dev, sizeof me->dev, "%s", sync->device_uid);
+  mc_mutex_lock(&sync->lock);
   snprintf(me->name, sizeof me->name, "%s", sync->name);
+  mc_mutex_unlock(&sync->lock);
   snprintf(me->kind, sizeof me->kind, "%s", mc_sync_kind_str(sync->kind));
   snprintf(me->host, sizeof me->host, "%s", sync->host);
   const char *group = mc_sync_db_group_uid(c->sdb);
@@ -331,6 +333,10 @@ static void first_session(mc_sync *sync, mc_sync_conn *c, mc_channel *ch, const 
   int lower = initiator ? strcmp(sync->device_uid, peer) < 0 : strcmp(peer, sync->device_uid) < 0;
   if (!mc_sync_claim(sync, peer, lower, ch)) return; /* a session is already running */
   mc_status st = mc_session_run(&s);
+  /* Now that the group's rows are here: this device's name becomes its profile name, unless
+   * the group already has one for it (it was a member before). The peer hears of it next
+   * time. */
+  if (st == MC_OK && !s.we_removed && mc_sync_seed_profile_name(sync, c)) s.follow_up = 1;
   mc_sync_result r = {peer, st, s.library_synced, st == MC_OK && s.converged, s.rows_sent,
                       s.rows_received};
   mc_sync_release(sync, peer);

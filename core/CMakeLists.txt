@@ -64,6 +64,7 @@ add_library(musiccore STATIC
   src/sync/channel.c
   src/sync/pair.c
   src/sync/pairing.c
+  src/sync/profile.c
   src/sync/rows.c
   src/sync/session.c
   "${_sync_schema_c}")

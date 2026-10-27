@@ -57,6 +57,30 @@ static char *dup_or_null(const char *s) {
   return s && *s ? mc_strdup(s) : NULL;
 }
 
+/* Length of s cut to at most max bytes without splitting a UTF-8 sequence. */
+static size_t utf8_cut(const char *s, size_t max) {
+  size_t n = strlen(s);
+  if (n <= max) return n;
+  n = max;
+  while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+  return n;
+}
+
+static int is_space(char c) {
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+}
+
+/* name with the white space around it trimmed, cut to MC_SYNC_DEVICE_NAME_MAX bytes at a
+ * character boundary; "" if nothing is left. */
+static void clean_name(const char *name, char out[MC_SYNC_NAME_MAX]) {
+  const char *s = name ? name : "";
+  while (is_space(*s)) s++;
+  size_t n = utf8_cut(s, MC_SYNC_DEVICE_NAME_MAX);
+  while (n > 0 && is_space(s[n - 1])) n--;
+  memcpy(out, s, n);
+  out[n] = '\0';
+}
+
 mc_status mc_sync_conn_open(mc_sync *sync, mc_sync_conn *c) {
   memset(c, 0, sizeof *c);
   mc_status st = mc_sync_db_open(sync->config_dir, &c->sdb);
@@ -268,6 +292,104 @@ void mc_sync_release(mc_sync *sync, const char *peer_uid) {
   mc_mutex_unlock(&sync->lock);
 }
 
+/* --- Names --- */
+
+/* This device's profile name, cleaned; "" if it has none or isn't in a group. */
+static void own_profile_name(mc_sync_conn *c, char out[MC_SYNC_NAME_MAX]) {
+  out[0] = '\0';
+  if (!mc_sync_db_group_uid(c->sdb)) return;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(c->sdb),
+                         "SELECT name FROM profiles WHERE device_uid = ?1", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return;
+  sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(c->sdb), -1, SQLITE_STATIC);
+  if (sqlite3_step(stmt) == SQLITE_ROW) clean_name((const char *)sqlite3_column_text(stmt, 0), out);
+  sqlite3_finalize(stmt);
+}
+
+mc_status mc_sync_write_profile_name(mc_sync_conn *c, const char *name, int only_if_unset,
+                                     int *wrote) {
+  if (wrote) *wrote = 0;
+  mc_sync_db *sdb = c->sdb;
+  sqlite3 *db = mc_sync_db_handle(sdb);
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st != MC_OK) return st;
+  /* An upsert that sets only the name: on an existing row only that column is logged. */
+  sqlite3_stmt *stmt;
+  st = MC_ERR_DB;
+  if (sqlite3_prepare_v2(db,
+                         only_if_unset
+                           ? "INSERT INTO profiles (device_uid, name) VALUES (?1, ?2)"
+                             " ON CONFLICT (device_uid) DO UPDATE SET name = excluded.name"
+                             " WHERE coalesce(profiles.name, '') = ''"
+                           : "INSERT INTO profiles (device_uid, name) VALUES (?1, ?2)"
+                             " ON CONFLICT (device_uid) DO UPDATE SET name = excluded.name"
+                             " WHERE profiles.name IS NOT excluded.name",
+                         -1, &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(sdb), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, name, -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_DONE) st = MC_OK;
+    sqlite3_finalize(stmt);
+  }
+  int changes = st == MC_OK ? sqlite3_changes(db) : 0;
+  if (st == MC_OK) st = mc_sync_db_commit(sdb);
+  if (st != MC_OK) mc_sync_db_rollback(sdb);
+  if (st == MC_OK && wrote) *wrote = changes > 0;
+  return st;
+}
+
+/* This device is now called name: announced at once, written to its devices row (in a
+ * group), and passed on to the members. c is the caller's connection (the API's under
+ * api_lock). Takes lock, so not under it. */
+static mc_status adopt_name(mc_sync *sync, mc_sync_conn *c, const char *name) {
+  mc_mutex_lock(&sync->lock);
+  if (strcmp(sync->name, name) != 0) {
+    snprintf(sync->name, sizeof sync->name, "%s", name);
+    if (sync->disc) mc_discovery_set_name(sync->disc, name);
+  }
+  mc_mutex_unlock(&sync->lock);
+
+  mc_status st = MC_OK;
+  if (mc_sync_db_group_uid(c->sdb) && (st = mc_sync_db_begin_write(c->sdb)) == MC_OK) {
+    sqlite3_stmt *stmt;
+    st = MC_ERR_DB;
+    if (sqlite3_prepare_v2(mc_sync_db_handle(c->sdb),
+                           "UPDATE devices SET name = ?1 WHERE uid = ?2 AND name IS NOT ?1", -1,
+                           &stmt, NULL) == SQLITE_OK) {
+      sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
+      sqlite3_bind_text(stmt, 2, mc_sync_db_device_uid(c->sdb), -1, SQLITE_STATIC);
+      if (sqlite3_step(stmt) == SQLITE_DONE) st = MC_OK;
+      sqlite3_finalize(stmt);
+    }
+    if (st == MC_OK) st = mc_sync_db_commit(c->sdb);
+    if (st != MC_OK) mc_sync_db_rollback(c->sdb);
+  }
+  mc_sync_notify_changed(sync);
+  return st;
+}
+
+void mc_sync_take_group_name(mc_sync *sync, mc_sync_conn *c) {
+  char name[MC_SYNC_NAME_MAX];
+  own_profile_name(c, name);
+  if (!name[0]) return;
+  mc_mutex_lock(&sync->lock);
+  int same = !strcmp(name, sync->name);
+  mc_mutex_unlock(&sync->lock);
+  if (!same) adopt_name(sync, c, name);
+}
+
+int mc_sync_seed_profile_name(mc_sync *sync, mc_sync_conn *c) {
+  if (!mc_sync_db_group_uid(c->sdb)) return 0;
+  char name[MC_SYNC_NAME_MAX];
+  mc_mutex_lock(&sync->lock);
+  memcpy(name, sync->name, sizeof name);
+  mc_mutex_unlock(&sync->lock);
+  int wrote = 0;
+  if (mc_sync_write_profile_name(c, name, 1, &wrote) != MC_OK) return 0;
+  return wrote;
+}
+
 /* --- Group state --- */
 
 void mc_sync_group_changed(mc_sync *sync, mc_sync_conn *c) {
@@ -324,6 +446,8 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
       sqlite3_step(stmt);
       sqlite3_finalize(stmt);
     }
+    /* Before on_sync_done, so a frontend that asks then sees the new name. */
+    mc_sync_take_group_name(sync, c);
   }
   uint64_t now = mc_mono_ms();
   int changed = 0, online = 0, member = 0;
@@ -849,8 +973,8 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   sync->use_discovery = 1;
   sync->listen_port = -1;
   if (mc_hostname(sync->host, sizeof sync->host) != MC_OK) sync->host[0] = '\0';
-  snprintf(sync->name, sizeof sync->name, "%s",
-           device_name && *device_name ? device_name : sync->host[0] ? sync->host : "musicapp");
+  clean_name(device_name, sync->name);
+  if (!sync->name[0]) clean_name(sync->host[0] ? sync->host : "musicapp", sync->name);
 
   mc_status st = mc_sync_conn_open(sync, &sync->api);
   if (st != MC_OK) {
@@ -913,12 +1037,17 @@ mc_status mc_sync_start(mc_sync *sync) {
   memcpy(sync->hints, hints, sizeof hints);
   mc_mutex_unlock(&sync->lock);
   mc_mutex_lock(&sync->api_lock);
+  mc_sync_take_group_name(sync, &sync->api); /* before discovery announces the name */
   mc_session_refresh_self(sync, &sync->api);
   mc_mutex_unlock(&sync->api_lock);
 
   if (sync->use_discovery) {
     mc_discovery *d = NULL;
-    st = mc_discovery_start(sync->device_uid, sync->name, mc_sync_kind_str(sync->kind),
+    char name[MC_SYNC_NAME_MAX];
+    mc_mutex_lock(&sync->lock);
+    memcpy(name, sync->name, sizeof name);
+    mc_mutex_unlock(&sync->lock);
+    st = mc_discovery_start(sync->device_uid, name, mc_sync_kind_str(sync->kind),
                             sync->group_hash, sync->port, 0, on_discovered, sync, &d);
     if (st != MC_OK)
       fprintf(stderr, "musiccore: sync: no discovery (%s); using known addresses only\n",
@@ -1269,13 +1398,14 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
   sqlite3_stmt *stmt = NULL;
   if (mc_sync_db_group_uid(sync->api.sdb) &&
       sqlite3_prepare_v2(mc_sync_db_handle(sync->api.sdb),
-                         "SELECT d.uid, d.name, d.host, d.kind, d.removed, coalesce(p.archive, 0),"
+                         "SELECT d.uid, coalesce(nullif(p.name, ''), d.name) AS shown, d.host,"
+                         " d.kind, d.removed, coalesce(p.archive, 0),"
                          " pc.address, pc.port, pc.last_sync_ms, s.device_uid IS NOT NULL,"
                          " s.verified_ms, s.expected, s.ok, s.missing, s.corrupt, s.bytes"
                          " FROM devices d LEFT JOIN profiles p ON p.device_uid = d.uid"
                          " LEFT JOIN peer_contact pc ON pc.device_uid = d.uid"
                          " LEFT JOIN sync_status s ON s.device_uid = d.uid"
-                         " ORDER BY d.name COLLATE NOCASE, d.uid",
+                         " ORDER BY shown COLLATE NOCASE, d.uid",
                          -1, &stmt, NULL) != SQLITE_OK)
     st = MC_ERR_DB;
   int cap = 0;
@@ -1371,12 +1501,14 @@ mc_status mc_sync_list_nearby(mc_sync *sync, mc_sync_nearby_list **out) {
     const mc_sync_peer *p = &sync->peers[i];
     int ours = sync->group_hash[0] && !strcmp(p->grp, sync->group_hash);
     if (!p->discovered || p->member || ours) continue;
+    /* Not in a group ourselves, we'd just join theirs; only two groups clash. */
+    int other = p->grp[0] && sync->group_hash[0];
     mc_sync_nearby *n = &list->items[list->count++];
     memcpy(n->uid, p->uid, MC_UID_STRLEN);
     n->name = mc_strdup(p->name);
     n->host = dup_or_null(p->host);
     n->kind = mc_sync_kind_parse(p->kind);
-    n->in_other_group = p->grp[0] != '\0';
+    n->in_other_group = other;
     n->address = dup_or_null(p->address);
     n->port = p->port;
   }
@@ -1399,6 +1531,38 @@ void mc_sync_nearby_list_free(mc_sync_nearby_list *list) {
   }
   free(list->items);
   free(list);
+}
+
+/* --- Names and addresses --- */
+
+mc_status mc_sync_set_device_name(mc_sync *sync, const char *name) {
+  if (!sync) return MC_ERR_INVALID_ARG;
+  char clean[MC_SYNC_NAME_MAX];
+  clean_name(name, clean);
+  if (!clean[0]) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->api_lock);
+  mc_status st = MC_OK;
+  if (mc_sync_db_group_uid(sync->api.sdb))
+    st = mc_sync_write_profile_name(&sync->api, clean, 0, NULL);
+  if (st == MC_OK) st = adopt_name(sync, &sync->api, clean);
+  mc_mutex_unlock(&sync->api_lock);
+  return st;
+}
+
+mc_status mc_sync_get_device_name(mc_sync *sync, char *out, size_t cap) {
+  if (!sync || !out || !cap) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  size_t n = utf8_cut(sync->name, cap - 1);
+  memcpy(out, sync->name, n);
+  mc_mutex_unlock(&sync->lock);
+  out[n] = '\0';
+  return MC_OK;
+}
+
+/* local_addr.h's list is already in this order and leaves loopback out. */
+int mc_sync_local_addresses(char (*out)[MC_SYNC_ADDR_STRLEN], int max) {
+  if (!out || max <= 0) return 0;
+  return mc_local_addresses(out, max);
 }
 
 /* --- Test hooks --- */

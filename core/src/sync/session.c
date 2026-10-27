@@ -227,7 +227,11 @@ mc_status mc_session_refresh_self(mc_sync *sync, mc_sync_conn *c) {
   mc_status st = mc_sync_db_begin_write(sdb);
   if (st != MC_OK) return st;
   const char *kind = mc_sync_kind_str(sync->kind);
-  const char *dev_args[] = {me, sync->name, kind, sync->host};
+  char name[MC_SYNC_NAME_MAX];
+  mc_mutex_lock(&sync->lock);
+  memcpy(name, sync->name, sizeof name);
+  mc_mutex_unlock(&sync->lock);
+  const char *dev_args[] = {me, name, kind, sync->host};
   /* An upsert: the update triggers only log the columns that really changed. */
   if (sqlite3_prepare_v2(db,
                          "INSERT INTO devices (uid, name, kind, host, public_key)"

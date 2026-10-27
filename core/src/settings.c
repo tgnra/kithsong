@@ -109,3 +109,17 @@ mc_status mc_settings_set_library_dir(mc_settings *s, const char *dir) {
   yyjson_mut_obj_remove_key(root, "library_dir");
   return yyjson_mut_obj_add_strcpy(s->doc, root, "library_dir", dir) ? MC_OK : MC_ERR_NOMEM;
 }
+
+const char *mc_settings_device_name(const mc_settings *s) {
+  if (!s) return NULL;
+  const char *v = yyjson_mut_get_str(yyjson_mut_obj_get(yyjson_mut_doc_get_root(s->doc), "device_name"));
+  return v && *v ? v : NULL;
+}
+
+mc_status mc_settings_set_device_name(mc_settings *s, const char *name) {
+  if (!s) return MC_ERR_INVALID_ARG;
+  yyjson_mut_val *root = yyjson_mut_doc_get_root(s->doc);
+  yyjson_mut_obj_remove_key(root, "device_name");
+  if (!name || !*name) return MC_OK;
+  return yyjson_mut_obj_add_strcpy(s->doc, root, "device_name", name) ? MC_OK : MC_ERR_NOMEM;
+}

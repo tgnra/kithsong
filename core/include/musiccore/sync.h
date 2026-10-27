@@ -15,6 +15,7 @@
 #define MUSICCORE_SYNC_H
 
 #include "musiccore/musiccore.h"
+#include "musiccore/transcode.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -196,7 +197,8 @@ typedef struct mc_sync_nearby {
   char *name;
   char *host;            /* NULL if it didn't announce one */
   mc_device_kind kind;
-  int in_other_group;    /* must leave its group before it can pair with us */
+  int in_other_group;    /* both of us are in groups, different ones: pairing will be
+                          * refused until one leaves (MC_PAIR_IN_GROUP) */
   char *address;
   uint16_t port;
 } mc_sync_nearby;
@@ -210,8 +212,72 @@ typedef struct mc_sync_nearby_list {
 mc_status mc_sync_list_nearby(mc_sync *sync, mc_sync_nearby_list **out);
 void mc_sync_nearby_list_free(mc_sync_nearby_list *list);
 
-/* TODO(phase 5): sync profile getters and setters (any member's profile, MC_ERR_LOCKED for
- * an archive's), making a device an archive, and the size estimate. */
+/* --- Names and addresses --- */
+
+/* Length of a numeric IPv6 address (the longest kind) including the terminating NUL. */
+#define MC_SYNC_ADDR_STRLEN 46
+/* Longest device name in bytes, excluding the NUL. Longer names are cut at a UTF-8
+ * character boundary. */
+#define MC_SYNC_DEVICE_NAME_MAX 127
+
+/* Renames this device. In a group this sets its profile name, which the group then shows
+ * everywhere; outside one it only changes the name discovery announces. Leading and
+ * trailing spaces are trimmed; MC_ERR_INVALID_ARG if nothing is left. The frontend saves
+ * the name (mc_settings_set_device_name()) to pass to mc_sync_new() next time. */
+mc_status mc_sync_set_device_name(mc_sync *sync, const char *name);
+/* This device's current name into out (cap bytes, NUL-terminated, cut if it doesn't fit).
+ * A device takes on the name its group gives it, so this can change after a session. */
+mc_status mc_sync_get_device_name(mc_sync *sync, char *out, size_t cap);
+/* This machine's numeric IPv4 and IPv6 addresses on interfaces that are up, loopback left
+ * out, IPv4 first. Writes at most max and returns how many; 0 if there are none. */
+int mc_sync_local_addresses(char (*out)[MC_SYNC_ADDR_STRLEN], int max);
+
+/* --- Profiles ---
+ * What each device holds: everything or a selection, as originals or Opus, within a size
+ * budget. Any member may edit any member's profile; the device applies it when it next
+ * syncs. */
+
+typedef enum mc_profile_item_kind {
+  MC_PROFILE_ALBUM,
+  MC_PROFILE_ARTIST,      /* every album and track credited to the artist */
+  MC_PROFILE_PLAYLIST,    /* a manual playlist */
+  MC_PROFILE_ALBUM_GROUP  /* a manual album group */
+} mc_profile_item_kind;
+
+typedef struct mc_profile_item {
+  mc_profile_item_kind kind;
+  char ref_uid[MC_UID_STRLEN]; /* the album, artist, playlist or album group */
+} mc_profile_item;
+
+typedef struct mc_sync_profile {
+  char *name;               /* friendly name; NULL = unset (shows devices.name) */
+  int archive;              /* read-only: keeps the full library as originals */
+  int sync_all;             /* everything, else just items */
+  mc_transcode_opts format; /* original, or opus + bitrate (one of mc_opus_bitrates) */
+  int budget_enabled;
+  int64_t budget_bytes;     /* size budget: picks the best bitrate that fits */
+  mc_profile_item *items;   /* the selection; kept while sync_all so it comes back */
+  int count;
+} mc_sync_profile;
+
+/* device_uid's profile (any member's, this device's included). A device with no profile
+ * stored gets the defaults: everything, originals, no budget, no name. Items of kinds this
+ * version doesn't know are left out. MC_ERR_NOT_FOUND if not in a group or it isn't a
+ * current member. Free with mc_sync_profile_free(). */
+mc_status mc_sync_get_profile(mc_sync *sync, const char *device_uid, mc_sync_profile **out);
+/* Frees a profile from mc_sync_get_profile(). NULL is a no-op. */
+void mc_sync_profile_free(mc_sync_profile *profile);
+/* Stores device_uid's profile, writing only what differs from the stored one: changed
+ * fields, and items added or removed (duplicates are merged; stored items of unknown kinds
+ * are kept). archive is ignored. Callers read-modify-write: mc_sync_get_profile(), change
+ * the fields, then set straight away, so edits made meanwhile on other devices to other
+ * fields or items aren't overwritten. An archive's profile is locked to everything,
+ * originals and no budget (MC_ERR_LOCKED for anything else), but not its name, which stays
+ * editable. MC_ERR_INVALID_ARG for an unknown kind or a bitrate not in mc_opus_bitrates;
+ * MC_ERR_NOT_FOUND as for the getter. Members hear of the change in a few seconds. */
+mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sync_profile *profile);
+
+/* TODO(phase 5): making a device an archive, and the size estimate. */
 
 #ifdef __cplusplus
 }

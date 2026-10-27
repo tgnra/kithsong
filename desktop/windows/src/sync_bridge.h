@@ -1,0 +1,60 @@
+/* Sync for the app: owns this device's mc_sync and carries its events onto the UI thread.
+ * Core runs the sync callbacks on its own threads; each is copied into a flat malloc'd
+ * sync_event (strings copied, names converted to UTF-16) and posted to the main window as
+ * WM_APP_SYNC. Progress is throttled to one event every 150 ms per session.
+ *
+ * Stopping bumps a generation counter carried in wParam, so events still queued from the
+ * old mc_sync are dropped by sync_bridge_receive(). Every function runs on the UI thread. */
+#ifndef MUSICAPP_SYNC_BRIDGE_H
+#define MUSICAPP_SYNC_BRIDGE_H
+
+#include <stdint.h>
+#include <windows.h>
+
+#include "musiccore/musiccore.h"
+
+/* Posted to the main window. wParam: the generation; lParam: a sync_event * (malloc'd).
+ * Pass both to sync_bridge_receive(). */
+#define WM_APP_SYNC (WM_APP + 6)
+
+typedef enum {
+  SYNC_EV_PEER,        /* on_peer: uid, online, member */
+  SYNC_EV_PAIR_CODE,   /* on_pair_code: code, name (the requester), attempts_left */
+  SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status */
+  SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_sent, rows_received */
+  SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_* */
+} sync_event_kind;
+
+/* One core event. No pointers inside: free() it whole. Fields that don't apply to the kind
+ * are zero. */
+typedef struct sync_event {
+  sync_event_kind kind;
+  char uid[MC_UID_STRLEN]; /* the other device; "" if unknown */
+  wchar_t name[128];
+  int online, member;
+  char code[MC_PAIR_CODE_LEN + 1];
+  int attempts_left;
+  int initiator;
+  mc_pair_reason reason;
+  mc_status status;
+  mc_sync_phase phase;
+  int64_t rows_sent, rows_received;
+  int library_synced, converged;
+} sync_event;
+
+/* Creates and starts sync for lib, with sync.db in config_dir, reporting to wnd. device_name
+ * (UTF-8) is what other devices show; NULL uses the host name. On failure sync stays off
+ * and sync_bridge_error() says why. Stops any sync already running first. */
+void sync_bridge_start(HWND wnd, mc_library *lib, const char *config_dir, const char *device_name);
+/* Stops and frees sync, blocking until its threads end, and drops events still queued.
+ * Safe to call when not started. Call before closing the library. */
+void sync_bridge_stop(void);
+/* The running mc_sync, or NULL if sync is off. */
+mc_sync *sync_bridge_get(void);
+/* Why the last sync_bridge_start() failed; MC_OK while running or never started. */
+mc_status sync_bridge_error(void);
+/* Takes ownership of a WM_APP_SYNC's event: returns it (free() it when done), or frees it
+ * and returns NULL if it's from an older generation. */
+sync_event *sync_bridge_receive(WPARAM wp, LPARAM lp);
+
+#endif

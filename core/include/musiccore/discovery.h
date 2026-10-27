@@ -57,6 +57,10 @@ mc_status mc_discovery_start(const char *device_uid, const char *device_name, co
 /* Changes the announced group, e.g. after pairing or leaving a group, and re-announces at
  * once. group_hash as for mc_discovery_start(). */
 mc_status mc_discovery_set_group(mc_discovery *disc, const char *group_hash);
+/* Changes the announced name (TXT "name"), e.g. after the device is renamed, and
+ * re-announces at once. The service instance label stays as started. Same threading as
+ * mc_discovery_set_group(). */
+mc_status mc_discovery_set_name(mc_discovery *disc, const char *device_name);
 /* Says goodbye to the network, stops the thread and frees disc. NULL is a no-op. */
 void mc_discovery_stop(mc_discovery *disc);
 

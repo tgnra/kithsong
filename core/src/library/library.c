@@ -560,6 +560,92 @@ void mc_playlist_list_free(mc_playlist_list *list) {
   free(list);
 }
 
+mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* Artists nothing refers to any more are left out, as the albums and tracks views do. */
+  static const char sql[] =
+    "SELECT ar.uid, ar.name, (SELECT count(*) FROM albums a WHERE a.artist_uid = ar.uid) AS n_albums"
+    " FROM artists ar"
+    " WHERE n_albums > 0 OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)"
+    " ORDER BY coalesce(ar.sort_name, ar.name) COLLATE NOCASE, ar.name COLLATE NOCASE, ar.uid";
+
+  mc_artist_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_artist_info *a = &list->items[list->count++];
+    memset(a, 0, sizeof *a);
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(a->uid, (const char *)uid);
+    a->name = column_dup(stmt, 1);
+    a->album_count = sqlite3_column_int(stmt, 2);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_artist_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_artist_list_free(mc_artist_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) free(list->items[i].name);
+  free(list->items);
+  free(list);
+}
+
+mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* Smart album groups live in smart_lists, so this table holds only the manual ones. */
+  static const char sql[] =
+    "SELECT g.uid, g.name, (SELECT count(*) FROM album_group_entries e WHERE e.group_uid = g.uid)"
+    " FROM album_groups g ORDER BY g.name COLLATE NOCASE, g.uid";
+
+  mc_album_group_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_album_group_info *g = &list->items[list->count++];
+    memset(g, 0, sizeof *g);
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(g->uid, (const char *)uid);
+    g->name = column_dup(stmt, 1);
+    g->album_count = sqlite3_column_int(stmt, 2);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_album_group_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_album_group_list_free(mc_album_group_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) free(list->items[i].name);
+  free(list->items);
+  free(list);
+}
+
 mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out) {
   static const char *const sql[] = {
     [MC_ENTITY_ARTISTS] = "SELECT count(*) FROM artists",

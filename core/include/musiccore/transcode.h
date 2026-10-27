@@ -8,8 +8,7 @@
 #ifndef MUSICCORE_TRANSCODE_H
 #define MUSICCORE_TRANSCODE_H
 
-#include "musiccore/musiccore.h"
-
+/* The format types come before musiccore.h, which includes sync.h, which uses them. */
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +26,16 @@ typedef struct mc_transcode_opts {
   mc_format format;
   int bitrate_kbps; /* for MC_FORMAT_OPUS: one of mc_opus_bitrates */
 } mc_transcode_opts;
+
+#ifdef __cplusplus
+}
+#endif
+
+#include "musiccore/musiccore.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Returns the path of a cached transcode of src_path (free with mc_free), creating it if
  * needed. A cache hit returns at once and marks the file as recently used. For

@@ -42,8 +42,8 @@ BOOL theme_is_change(UINT msg, WPARAM wp, LPARAM lp);
 /* A dark or light title bar to match. With mica, also asks for a Mica backdrop and sets
  * theme.mica to whether there is one. */
 void theme_apply_window(HWND wnd, BOOL mica);
-/* Themes the standard controls among wnd's children: buttons, list views, edits, progress
- * bars and scrollbars. Call again after a theme change. */
+/* Themes the standard controls among wnd's children: buttons, list views, edits, combo
+ * boxes, progress bars and scrollbars. Call again after a theme change. */
 void theme_apply_controls(HWND wnd);
 void theme_apply_control(HWND ctl);
 /* For WM_CTLCOLOR* messages: sets dc's colours and returns the background brush, or NULL
@@ -52,6 +52,12 @@ HBRUSH theme_ctlcolor(UINT msg, HDC dc);
 
 /* The backdrop of a hovered, pressed or selected item. Returns the colour for text on it. */
 COLORREF theme_draw_state(canvas *c, const RECT *r, int radius, control_state state);
+
+/* One button of a segmented control (a row of joined buttons, one of them selected), filling
+ * r: first and last say which ends of the row it is, which are rounded. state is the
+ * button's own (hot, pressed). */
+void theme_draw_segment(canvas *c, const RECT *r, int radius, const wchar_t *text, HFONT font, BOOL first,
+                        BOOL last, BOOL selected, control_state state);
 
 /* Segoe Fluent Icons, or Segoe MDL2 Assets (same code points) on Windows 10. */
 const wchar_t *theme_icon_face(void);

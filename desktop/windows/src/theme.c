@@ -218,6 +218,15 @@ void theme_apply_control(HWND ctl) {
     SetWindowSubclass(ctl, listview_proc, 0, 0);
   } else if (!_wcsicmp(cls, WC_EDITW)) {
     SetWindowTheme(ctl, theme.dark ? L"DarkMode_CFD" : NULL, NULL);
+  } else if (!_wcsicmp(cls, WC_COMBOBOXW)) {
+    /* The file dialog's dark combo box; its drop-down list is a popup of its own, not a
+     * child, so it's themed here too (WM_CTLCOLORLISTBOX gives it its colours). */
+    SetWindowTheme(ctl, theme.dark ? L"DarkMode_CFD" : NULL, NULL);
+    COMBOBOXINFO info = {.cbSize = sizeof info};
+    if (GetComboBoxInfo(ctl, &info) && info.hwndList) {
+      SetWindowTheme(info.hwndList, dark_or_default, NULL);
+      InvalidateRect(info.hwndList, NULL, TRUE);
+    }
   } else if (!_wcsicmp(cls, PROGRESS_CLASSW)) {
     /* No visual style, so no glow animation drawing behind our back; and without one it
      * gets a sunken edge, which goes. */
@@ -274,6 +283,35 @@ COLORREF theme_draw_state(canvas *c, const RECT *r, int radius, control_state st
   static const int alpha[] = {[STATE_NORMAL] = 0, [STATE_HOT] = 15, [STATE_PRESSED] = 10, [STATE_SELECTED] = 22};
   canvas_fill(c, r, radius, theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), alpha[state]);
   return state == STATE_PRESSED ? theme.text2 : theme.text;
+}
+
+void theme_draw_segment(canvas *c, const RECT *r, int radius, const wchar_t *text, HFONT font, BOOL first,
+                        BOOL last, BOOL selected, control_state state) {
+  int line = 1;
+  canvas_clear(c, r, theme.bg, 255);
+  /* The row's outline, drawn wider than r wherever it continues into the next segment so
+   * only its own part shows, and only the row's two ends are rounded. */
+  RECT outline = *r;
+  if (!first) outline.left -= 2 * radius + line;
+  if (!last) outline.right += 2 * radius + line;
+  COLORREF fg;
+  if (selected) {
+    canvas_fill(c, &outline, radius, theme.accent, 255);
+    fg = theme.on_accent;
+  } else {
+    canvas_frame(c, &outline, radius, line, theme.high_contrast ? theme.text : theme.line, 255);
+    RECT inner = outline;
+    InflateRect(&inner, -line, -line);
+    fg = theme_draw_state(c, &inner, radius > line ? radius - line : 0, state);
+    if (!first) { /* the divider between this segment and the one before */
+      RECT div = {r->left, r->top + line, r->left + line, r->bottom - line};
+      canvas_fill(c, &div, 0, theme.high_contrast ? theme.text : theme.line, 255);
+    }
+  }
+  if (selected && state == STATE_PRESSED) canvas_fill(c, &outline, radius, RGB(0, 0, 0), 25);
+  RECT tr = *r;
+  InflateRect(&tr, -radius, 0);
+  canvas_text(c, text, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS, font, fg);
 }
 
 static int CALLBACK font_found(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD type, LPARAM found) {

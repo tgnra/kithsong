@@ -1,7 +1,7 @@
 /* Discovery over real mDNS multicast: two instances in this process, plus a fake peer whose
  * packets the test sends itself with mdns.h. Skipped (exit 77) when multicast isn't
  * available, e.g. in a sandbox with no network. Checks that each instance sees the other
- * with the right TXT fields, that a group change reaches the other, that a goodbye takes a
+ * with the right TXT fields, that a group change and a rename reach the other, that a goodbye takes a
  * peer offline at once, that a silent peer times out after two scan intervals, and that
  * peers speaking another protocol version are ignored. */
 #ifndef _WIN32
@@ -207,6 +207,18 @@ int main(void) {
   CHECK(wait_for(&seen_by_b, uid_a, 1, hash2, 1500, NULL) >= 0);
   CHECK(mc_discovery_set_group(a, NULL) == MC_OK);
   CHECK(wait_for(&seen_by_b, uid_a, 1, "", 1500, NULL) >= 0);
+
+  /* So is a rename: TXT "name" changes, the instance label doesn't. */
+  CHECK(mc_discovery_set_name(a, NULL) == MC_ERR_INVALID_ARG);
+  CHECK(mc_discovery_set_name(a, "Living room") == MC_OK);
+  uint64_t renamed = mc_mono_ms();
+  for (;;) {
+    if (lookup(&seen_by_b, uid_a, &pa) && !strcmp(pa.name, "Living room")) break;
+    if (mc_mono_ms() - renamed > 1500) break;
+    mc_sleep_ms(20);
+  }
+  CHECK_STR(pa.name, "Living room");
+  CHECK(pa.online);
 
   /* A fake peer announces once and then falls silent; one on protocol version 2 is
    * ignored. */

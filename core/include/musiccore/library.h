@@ -126,6 +126,38 @@ typedef struct mc_playlist_list {
 mc_status mc_library_list_playlists(mc_library *lib, mc_playlist_list **out);
 void mc_playlist_list_free(mc_playlist_list *list);
 
+typedef struct mc_artist_info {
+  char uid[MC_UID_STRLEN];
+  char *name;
+  int album_count; /* albums it's the album artist of; 0 if it's only credited on tracks */
+} mc_artist_info;
+
+typedef struct mc_artist_list {
+  mc_artist_info *items;
+  int count;
+} mc_artist_list;
+
+/* Every artist, album artists and those credited only on tracks alike, by sort name. Free
+ * with mc_artist_list_free(). */
+mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out);
+void mc_artist_list_free(mc_artist_list *list);
+
+typedef struct mc_album_group_info {
+  char uid[MC_UID_STRLEN];
+  char *name;
+  int album_count;
+} mc_album_group_info;
+
+typedef struct mc_album_group_list {
+  mc_album_group_info *items;
+  int count;
+} mc_album_group_list;
+
+/* Every manual album group (smart ones are left out), by name. Free with
+ * mc_album_group_list_free(). */
+mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **out);
+void mc_album_group_list_free(mc_album_group_list *list);
+
 #ifdef __cplusplus
 }
 #endif

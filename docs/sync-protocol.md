@@ -185,11 +185,17 @@ A device joining with an empty library adopts the group's `library_uid` through
 - A device can't be removed, or leave, while it is the only archive (`MC_ERR_LOCKED`).
 - Each device keeps its own `devices` row up to date (`name`, `kind`, `host`, key, and
   `node_uid` once its library is the group's) and its own `capabilities`.
+- **Names.** `profiles.name` is the device's friendly name in the group. Like the rest of a
+  profile, any member may edit it, an archive's included. NULL means the device's own
+  `devices.name`. The device takes the name on: when its effective name (`profiles.name`,
+  else `devices.name`) differs from the one it runs under, at start, after a session or
+  after a local edit, it switches to it, announces it through discovery and writes it to its
+  own `devices.name`, so nearby devices and pairing see the group's name for it.
 
 ### Archives
 
-- `profiles.archive = 1` fixes that device's profile at "everything, originals". Profile
-  setters refuse other values with `MC_ERR_LOCKED`.
+- `profiles.archive = 1` fixes that device's profile at "everything, originals", no budget.
+  Profile setters refuse other values with `MC_ERR_LOCKED`; the name stays editable.
 - Any member can make a device an archive.
 - Only the device itself can clear its own `archive`. It may do so only when another
   archive's `sync_status` shows it verified complete, with `missing = corrupt = 0` and
@@ -331,12 +337,36 @@ the plaintext limit.
 
 ## Profiles and what a device holds
 
+- A device's **profile** is its `profiles` row plus its `profile_items`:
+  - `name`: its friendly name, NULL for its own `devices.name` (see
+    [Group membership](#group-membership));
+  - `mode`: `all` or `selected`;
+  - `format`: `original` or `opus`, with `bitrate_kbps` one of 256, 192, 160, 128, 96, 64
+    (NULL for `original`);
+  - `budget_enabled` and `budget_bytes` (NULL when unset);
+  - `archive` (see [Archives](#archives));
+  - the selection, one `profile_items` row per item: `kind` is `album`, `artist`,
+    `playlist` (manual) or `album_group` (manual), and `ref_uid` the library uid it names.
+    The selection is kept while the mode is `all`, so it comes back when the mode returns to
+    `selected`.
+
+  A device with no `profiles` row has the defaults: `all`, `original`, no budget, no name.
+  The row is created by the first edit, which logs only the fields it changes (not the
+  defaults), so it can't overwrite a member's concurrent edit to another field.
+- Any member may edit any member's profile. Editors write only what differs from the stored
+  profile: changed fields, and an insert (with a new uid) per added item or a delete per
+  removed one, so concurrent edits on two devices both apply. A `(kind, ref_uid)` stored more
+  than once (two members adding it at once) counts once; removing it deletes every copy.
+  Items of a kind a version doesn't know are kept as they are and ignored.
 - The **wanted set** for a device is:
   - mode `all`: every track;
-  - mode `selected`: the tracks of the selected albums ∪ the tracks of the albums in the
-    selected album groups ∪ the entries of the selected playlists.
+  - mode `selected`: the tracks of the selected albums ∪ the tracks whose `artist_uid` is a
+    selected artist ∪ the tracks of the albums whose `artist_uid` is a selected artist ∪
+    the tracks of the albums in the selected album groups ∪ the entries of the selected
+    playlists.
 
-  Selections that name a uid the library doesn't have are skipped.
+  Selections that name a uid the library doesn't have are skipped, and so are items of
+  kinds the device doesn't know.
 - **Target format** per track: `original`, or Opus at the profile's bitrate. A lossy
   original that is already smaller than the Opus estimate is sent as-is.
 - **Budget mode**: estimate each track as `duration_ms × kbps / 8 + 4096` bytes, or
