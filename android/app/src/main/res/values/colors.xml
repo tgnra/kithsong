@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window behind the UI, from launch: the same as the Compose theme's surface, so
+         nothing flashes before the first frame. Without dynamic colour (before Android 12)
+         that's Material's baseline. -->
+    <color name="window_background">#FEF7FF</color>
+    <color name="ic_launcher_background">#4F378B</color>
+</resources>

@@ -1,57 +1,76 @@
 package app.musicapp
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import app.musicapp.ui.App
 import app.musicapp.ui.theme.MusicappTheme
-import java.io.File
 
 class MainActivity : ComponentActivity() {
+    private val askForNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // The library folder; library.db lives inside it.
-        val libraryDir = File(filesDir, "library").absolutePath
-        val albums = NativeCore.albumCount(libraryDir)
+        val app = application as MusicApp
+        // `adb shell am start -n app.musicapp/.MainActivity --ez fake true` shows made-up
+        // music instead of the library, and `--ez fake_empty true` the empty state. Only on a
+        // fresh start, so turning the phone doesn't start the fake over.
+        val empty = intent.getBooleanExtra("fake_empty", false)
+        if (savedInstanceState == null && (empty || intent.getBooleanExtra("fake", false))) {
+            app.useFakeLibrary(empty)
+        }
+        Log.i(TAG, "musiccore ${NativeCore.version()}")
 
         setContent {
             MusicappTheme {
-                Home(version = NativeCore.version(), albums = albums)
+                App(
+                    app.library,
+                    app.playback,
+                    app.importer,
+                    app.syncer,
+                    app.settings,
+                    app.libraryDir,
+                    onPlay = ::askForNotificationsOnce,
+                    onImportStarted = ::askForNotificationsOnce,
+                )
             }
         }
     }
-}
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun Home(version: String, albums: Long) {
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("musicapp") }) },
-    ) { padding ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = if (albums >= 0) "$albums albums" else "Could not open the library ($albums)",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text("musiccore $version", style = MaterialTheme.typography.bodySmall)
-        }
+    override fun onStart() {
+        super.onStart()
+        (application as MusicApp).isVisible = true
+    }
+
+    override fun onStop() {
+        (application as MusicApp).isVisible = false
+        super.onStop()
+    }
+
+    // From Android 13 notifications need permission, asked for once, unprompted, on the first
+    // play or import: that's when there is one to show. Settings can ask again. The playback
+    // controls show without it, being a media session's, but not in the list of notifications,
+    // and an import runs without its progress notification.
+    private fun askForNotificationsOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        val settings = (application as MusicApp).settings
+        if (settings.askedForNotifications) return
+        settings.askedForNotifications = true
+        askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private companion object {
+        const val TAG = "musicapp"
     }
 }

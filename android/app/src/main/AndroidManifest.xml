@@ -3,20 +3,65 @@
 
     <!-- MusicBrainz/AcoustID lookups and LAN sync. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- mDNS discovery needs a multicast lock. -->
+    <!-- To warn before importing offline, and to tell whether sync is on Wi-Fi. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- mDNS discovery needs a multicast lock. Sync opens its own sockets and uses no Wi-Fi
+         scanning, Wi-Fi Direct or Aware, so it needs neither NEARBY_WIFI_DEVICES nor location. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Background playback: PlaybackService runs in the foreground while playing (API 28+
+         needs FOREGROUND_SERVICE, API 34+ the permission for its type), and holds a wake lock. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- The playback and import notifications, API 33+. Asked for once, on first play or
+         import, and from settings. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Import reads music from shared storage: READ_MEDIA_AUDIO from API 33, before that
+         READ_EXTERNAL_STORAGE. Asked for when importing. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- ImportService runs in the foreground while importing, and SyncService while a sync
+         session or pairing is under way (API 34+: the dataSync type). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- requestLegacyExternalStorage: on API 29 only, so the core can read music by its path
+         as it can on every other version. -->
     <application
-        android:label="musicapp"
+        android:name=".MusicApp"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.Musicapp">
+        <!-- The launch screen theme until onCreate installs the splash screen, which then
+             switches to Theme.Musicapp. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:theme="@style/Theme.Musicapp.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".importer.ImportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".sync.SyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- Exported so media controllers (system UI, Bluetooth, Android Auto) can connect. -->
+        <service
+            android:name=".playback.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

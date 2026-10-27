@@ -42,9 +42,9 @@ android {
 dependencies {
     implementation(project(":native"))
 
-    val composeBom = platform("androidx.compose:compose-bom:2026.02.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
-    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.activity:activity-compose:1.13.0")
     // Compose for Wear OS replaces androidx.compose.material/material3 on the watch.
     implementation("androidx.wear.compose:compose-material3:1.7.1")
     implementation("androidx.wear.compose:compose-foundation:1.7.1")

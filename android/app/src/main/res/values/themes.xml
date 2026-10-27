@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The launch screen: the window background follows the system's light or dark setting
+         from the start, so light mode doesn't flash dark. MainActivity switches to
+         Theme.Musicapp as it starts. -->
+    <style name="Theme.Musicapp.Starting" parent="Theme.SplashScreen.IconBackground">
+        <item name="windowSplashScreenBackground">@color/window_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/ic_launcher_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.Musicapp</item>
+    </style>
+
+    <!-- Only the window matters: everything inside it is Compose, themed by MusicappTheme. -->
+    <style name="Theme.Musicapp" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>

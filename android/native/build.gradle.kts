@@ -10,13 +10,16 @@ android {
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        minSdk = 26
+        // getifaddrs() in core/src/discovery needs API 24.
+        minSdk = 24
 
         externalNativeBuild {
             cmake {
                 // Pass e.g. -PmusicappContact=... to set the MusicBrainz User-Agent contact.
                 val contact = (project.findProperty("musicappContact") as String?) ?: ""
                 arguments += listOf("-DMUSICAPP_CONTACT=$contact")
+                // 16 KB page alignment, required by Android 15+ devices; NDK r28 does it by default.
+                arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
             }
         }
         ndk {

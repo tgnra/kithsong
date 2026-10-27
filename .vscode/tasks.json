@@ -11,6 +11,10 @@
   // Wear OS tasks (Linux). android/scripts/android.sh finds the JDK and the emulator's
   // libraries through Android Studio; `wear: run` boots the Wear_OS_Small_Round AVD unless it
   // is already running (e.g. started from Studio's Device Manager).
+  //
+  // Android phone tasks work on both platforms: android.sh on Linux, android.ps1 on Windows
+  // (which defaults JAVA_HOME to Android Studio's JDK and ANDROID_HOME to
+  // %LOCALAPPDATA%\Android\Sdk). `android: run` boots the Pixel_10 AVD unless it is running.
   "version": "2.0.0",
   "windows": {
     "options": {
@@ -104,6 +108,54 @@
       "command": "nix",
       "args": ["develop", "-c", "${workspaceFolder}/build/linux-gtk/core/tests/manual_mb_ping"],
       "dependsOn": "linux: build",
+      "problemMatcher": []
+    },
+    {
+      "label": "android: build",
+      "type": "shell",
+      "command": "${workspaceFolder}/android/scripts/android.sh",
+      "args": ["gradle", ":app:assembleDebug"],
+      "windows": {
+        "command": "powershell",
+        "args": ["-NoProfile", "-File", "${workspaceFolder}\\android\\scripts\\android.ps1", "gradle", ":app:assembleDebug"]
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "android: emulator",
+      "type": "shell",
+      "command": "${workspaceFolder}/android/scripts/android.sh",
+      "args": ["emulator", "Pixel_10"],
+      "windows": {
+        "command": "powershell",
+        "args": ["-NoProfile", "-File", "${workspaceFolder}\\android\\scripts\\android.ps1", "emulator", "Pixel_10"]
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "android: run",
+      "type": "shell",
+      "command": "${workspaceFolder}/android/scripts/android.sh",
+      "args": [
+        "run",
+        "Pixel_10",
+        "${workspaceFolder}/android/app/build/outputs/apk/debug/app-debug.apk",
+        "app.musicapp/.MainActivity"
+      ],
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-File",
+          "${workspaceFolder}\\android\\scripts\\android.ps1",
+          "run",
+          "Pixel_10",
+          "${workspaceFolder}\\android\\app\\build\\outputs\\apk\\debug\\app-debug.apk",
+          "app.musicapp/.MainActivity"
+        ]
+      },
+      "dependsOn": "android: build",
       "problemMatcher": []
     },
     {

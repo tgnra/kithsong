@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">musicapp</string>
+    <string name="core_name" translatable="false">musiccore</string>
+
+    <!-- Shared -->
+    <string name="back">Back</string>
+    <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+    <string name="unknown_artist">Unknown artist</string>
+    <!-- Under a track's title: artist, then album. -->
+    <string name="track_byline">%1$s - %2$s</string>
+    <string name="cover_of">Cover of %1$s</string>
+    <plurals name="tracks">
+        <item quantity="one">%d track</item>
+        <item quantity="other">%d tracks</item>
+    </plurals>
+    <plurals name="albums">
+        <item quantity="one">%d album</item>
+        <item quantity="other">%d albums</item>
+    </plurals>
+
+    <!-- Main screen -->
+    <string name="import_music">Import</string>
+    <string name="settings">Settings</string>
+    <string name="section_recents">Recents</string>
+    <string name="section_playlists">Playlists</string>
+    <string name="section_albums">Albums</string>
+    <string name="section_artists">Artists</string>
+    <string name="jump_to_section">Jump to a section</string>
+    <string name="recent_artist">Artist</string>
+    <string name="recent_playlist">Playlist</string>
+    <string name="empty_title">No music yet</string>
+    <string name="empty_text">Import music to fill your library.</string>
+
+    <!-- Track list screen: an album's artist and year. -->
+    <string name="album_byline_year">%1$s - %2$d</string>
+
+    <!-- Players -->
+    <string name="open_player">Open the player</string>
+    <string name="close_player">Close the player</string>
+    <string name="play">Play</string>
+    <string name="pause">Pause</string>
+    <string name="previous_track">Previous track</string>
+    <string name="next_track">Next track</string>
+    <string name="seek">Seek</string>
+    <!-- The seekbar's state for accessibility: elapsed time of total time. -->
+    <string name="seek_state">%1$s of %2$s</string>
+
+    <!-- Import -->
+    <string name="import_running_title">Import still running</string>
+    <string name="import_running_text">Wait for the current import to finish first.</string>
+    <string name="import_rationale_title">Allow access to music</string>
+    <string name="import_rationale_text">To import music from this phone, musicapp needs to read its music and audio files. It copies them into its library and leaves the originals alone.</string>
+    <string name="import_continue">Continue</string>
+    <string name="not_now">Not now</string>
+    <string name="import_denied_title">Music access is off</string>
+    <string name="import_denied_text">To import music from this phone, allow musicapp to access music and audio in its settings.</string>
+    <string name="open_settings">Open settings</string>
+    <string name="import_sheet_title">Import music</string>
+    <string name="import_sheet_text">Music is copied into the app and named from MusicBrainz. The originals stay where they are.</string>
+    <string name="import_offline">You\'re offline, so nothing can be matched on MusicBrainz: each album still takes a second or more, then needs a decision.</string>
+    <string name="import_no_folders">No music found. Music in this phone\'s shared storage, such as the Music and Download folders, shows up here.</string>
+    <!-- A folder in the import sheet: its track count and storage volume. -->
+    <string name="import_folder">%1$s - %2$s</string>
+    <string name="import_folder_before">%1$s - %2$s - imported before</string>
+    <string name="internal_storage">Internal storage</string>
+    <string name="import_button">Import</string>
+    <plurals name="import_button_tracks">
+        <item quantity="one">Import %d track</item>
+        <item quantity="other">Import %d tracks</item>
+    </plurals>
+    <plurals name="import_more_problems">
+        <item quantity="one">and %d more</item>
+        <item quantity="other">and %d more</item>
+    </plurals>
+    <string name="import_skip">Skip</string>
+    <string name="import_as_tagged">Import as tagged</string>
+    <string name="done">Done</string>
+    <string name="import_channel">Import</string>
+    <string name="import_scanning">Looking for music</string>
+    <string name="import_matching">Importing %1$d of %2$d</string>
+    <plurals name="import_review">
+        <item quantity="one">%d item needs a decision</item>
+        <item quantity="other">%d items need a decision</item>
+    </plurals>
+    <string name="import_finished">Import finished</string>
+    <string name="import_cancelled">Import cancelled</string>
+    <plurals name="import_files_found">
+        <item quantity="one">%d file found</item>
+        <item quantity="other">%d files found</item>
+    </plurals>
+    <plurals name="import_imported">
+        <item quantity="one">%d imported</item>
+        <item quantity="other">%d imported</item>
+    </plurals>
+    <plurals name="import_need_decision">
+        <item quantity="one">%d needs a decision</item>
+        <item quantity="other">%d need a decision</item>
+    </plurals>
+    <plurals name="import_skipped">
+        <item quantity="one">%d skipped</item>
+        <item quantity="other">%d skipped</item>
+    </plurals>
+    <plurals name="import_failed">
+        <item quantity="one">%d failed</item>
+        <item quantity="other">%d failed</item>
+    </plurals>
+    <!-- After how many were imported, e.g. "12 imported". -->
+    <string name="import_no_match">%1$s. No sure match for the rest</string>
+    <string name="import_no_match_reason">%1$s. No sure match for the rest (%2$s)</string>
+    <string name="import_list_separator">", "</string>
+    <string name="import_no_music">No music found</string>
+    <string name="import_no_library">Couldn\'t open the library</string>
+
+    <!-- Settings -->
+    <string name="settings_import">Import</string>
+    <string name="fetch_art">Download missing covers</string>
+    <string name="fetch_art_text">For albums with no cover of their own, from the Cover Art Archive or iTunes</string>
+    <string name="settings_permissions">Permissions</string>
+    <string name="permission_audio">Music and audio</string>
+    <string name="permission_audio_allowed">Allowed, to import music from this phone</string>
+    <string name="permission_audio_denied">Not allowed. Needed to import music from this phone</string>
+    <string name="permission_notifications">Notifications</string>
+    <string name="permission_notifications_allowed">Allowed, for playback and import progress</string>
+    <string name="permission_notifications_denied">Not allowed. Playback controls still show, import progress doesn\'t</string>
+    <string name="open_app_settings">Open app settings</string>
+    <string name="allow">Allow</string>
+    <string name="settings_storage">Storage</string>
+    <string name="storage_library">Library</string>
+    <string name="storage_library_size">%s in the app\'s own storage</string>
+    <string name="storage_art_cache">Album art cache</string>
+    <string name="storage_art_cache_size">%s of covers sized for the screen</string>
+    <string name="measuring">Measuring</string>
+    <string name="clear">Clear</string>
+    <string name="settings_about">About</string>
+    <string name="version">Version %s</string>
+
+    <!-- Devices and sync -->
+    <string name="settings_devices">Devices</string>
+    <string name="devices_nearby">On this network</string>
+    <string name="device_in_other_group">Syncs with other devices. Remove it from them to pair it here</string>
+    <string name="device_tap_to_pair">Tap to pair</string>
+    <string name="pair">Pair</string>
+    <string name="pairing">Pairing</string>
+    <string name="devices_looking">Looking for devices on this network</string>
+    <string name="devices_looking_text">Open musicapp on your computer. If it doesn\'t show up, add it by its address</string>
+    <string name="add_device_by_address">Add device by address</string>
+    <string name="add_device_by_address_text">For networks where devices can\'t find each other</string>
+    <string name="leave_group">Leave group</string>
+    <string name="leave_group_text">Stop syncing with these devices. The music on this phone stays</string>
+    <string name="leave_group_title">Leave group?</string>
+    <string name="leave_group_confirm">This phone stops syncing with %1$s. To sync again, pair it again.</string>
+    <string name="leave">Leave</string>
+    <string name="syncing">Syncing</string>
+    <string name="sync_now_with">Sync now with %1$s</string>
+    <string name="more">More</string>
+    <string name="sync_now">Sync now</string>
+    <string name="remove_from_group">Remove from group</string>
+    <string name="remove_device_title">Remove %1$s?</string>
+    <string name="remove_device_text">The devices in this group stop syncing with it. To sync with it again, pair it again.</string>
+    <string name="remove">Remove</string>
+    <string name="add_device">Add device</string>
+    <string name="add_device_text">Enter the address of a device on your network. It will show a code to enter next.</string>
+    <string name="add_device_host">IP address or hostname</string>
+    <string name="add_device_port">Port</string>
+    <string name="connect">Connect</string>
+    <string name="pair_with_question">Pair with %1$s?</string>
+    <string name="pair_show_code">To pair, enter this code on %1$s.</string>
+    <!-- The pairing code read out digit by digit, e.g. "Code 1 2 3 4 5 6". -->
+    <string name="pair_code_description">Code %1$s</string>
+    <string name="pair_wrong_code_entered">Wrong code entered. %1$s</string>
+    <string name="pair_with">Pair with %1$s</string>
+    <string name="pair_enter_code">Enter the code %1$s shows.</string>
+    <string name="pair_code">Code</string>
+    <string name="pair_wrong_code">Wrong code. %1$s</string>
+    <string name="paired">Paired</string>
+    <string name="pair_failed">Couldn\'t pair</string>
+    <plurals name="tries_left">
+        <item quantity="one">%d try left.</item>
+        <item quantity="other">%d tries left.</item>
+    </plurals>
+    <string name="self_in_group">This phone. It syncs with the devices below whenever both are on the same network.</string>
+    <string name="self_alone">This phone. Pair it with musicapp on a computer to sync your library.</string>
+    <string name="self_address">%1$s Its address is %2$s.</string>
+    <string name="self_address_port">%1$s Its address is %2$s, port %3$d.</string>
+    <string name="sync_not_on_wifi">Not on Wi-Fi. Sync reaches devices on the same local network.</string>
+    <string name="sync_other_library">The library on this phone isn\'t the one this group syncs, so only the list of devices syncs.</string>
+    <string name="sync_unknown_library">Waiting to hear from the group which library it syncs.</string>
+    <string name="synced_just_now">just now</string>
+    <string name="device_online">Online</string>
+    <string name="device_online_synced">Online, synced %1$s</string>
+    <string name="device_offline_synced">Offline, last synced %1$s</string>
+    <string name="device_not_synced">Not synced yet</string>
+    <string name="device_archive">%1$s. Keeps the whole library</string>
+    <string name="paired_text">This phone and %1$s now sync whenever both are on the same network.</string>
+    <string name="pair_wrong_code_too_often">The code was wrong too many times.</string>
+    <string name="pair_in_group">%1$s already syncs with other devices. Remove it from them, or this phone from its group, first.</string>
+    <string name="pair_library_mismatch">This phone and %1$s each have music of their own. A device can only join with an empty library.</string>
+    <string name="pair_library_mismatch_incoming">%1$s asked to pair, but it and this phone each have music of their own. A device can only join with an empty library.</string>
+    <string name="pair_already_paired">This phone already syncs with %1$s.</string>
+    <string name="pair_busy">%1$s is pairing with another device. Try again in a moment.</string>
+    <string name="pair_cancelled">Pairing was cancelled.</string>
+    <string name="pair_unreachable">Couldn\'t reach %1$s. Check that musicapp is open on it and that both are on the same network.</string>
+    <string name="sync_channel">Sync</string>
+    <string name="sync_notification_pairing_with">Pairing with %1$s</string>
+    <string name="sync_notification_wants_to_pair">%1$s wants to pair</string>
+    <string name="sync_notification_syncing_with">Syncing with %1$s</string>
+    <string name="sync_notification_see_code">Open musicapp to see the code</string>
+    <string name="sync_error_open">Couldn\'t open this phone\'s sync data</string>
+    <string name="sync_error_listen">Couldn\'t listen on the network</string>
+    <string name="sync_other_device">the other device</string>
+</resources>
