@@ -48,6 +48,7 @@ enum {
 #define APPLY_DELAY_MS 400
 #define TICK_MS 30000 /* "synced 3 minutes ago" moves on */
 #define DEFAULT_BUDGET_GB 32
+#define AUTO_ITEM 1 /* the format list's item data for Auto; the others hold their kbps, 0 originals */
 #define GIB ((int64_t)1024 * 1024 * 1024)
 #define MAX_BUSY 16
 
@@ -549,7 +550,10 @@ static void update_controls(BOOL force) {
   int sel = -1, n = (int)SendMessageW(g_dv.format, CB_GETCOUNT, 0, 0);
   for (int i = 0; p && i < n; i++) {
     int kbps = (int)SendMessageW(g_dv.format, CB_GETITEMDATA, (WPARAM)i, 0);
-    if (p->format.format == MC_FORMAT_ORIGINAL ? kbps == 0 : kbps == p->format.bitrate_kbps) sel = i;
+    if (p->format.format == MC_FORMAT_AUTO       ? kbps == AUTO_ITEM
+        : p->format.format == MC_FORMAT_ORIGINAL ? kbps == 0
+                                                 : kbps == p->format.bitrate_kbps)
+      sel = i;
   }
   SendMessageW(g_dv.format, CB_SETCURSEL, (WPARAM)sel, 0);
   EnableWindow(g_dv.format, edit);
@@ -877,26 +881,46 @@ static int64_t budget_from_edit(void) {
   return gb > 0 ? (int64_t)gb * GIB : 0;
 }
 
+/* The format and the budget exclude each other (the budget picks the format, as Auto), so
+ * an edit of either is pending for both. */
+static void pend_format_budget(void) {
+  g_dv.pending.format = g_dv.profile->format;
+  g_dv.pending.budget_enabled = g_dv.profile->budget_enabled;
+  g_dv.pending.budget_bytes = g_dv.profile->budget_bytes;
+  g_dv.pending.mask |= PEND_FORMAT | PEND_BUDGET;
+  update_controls(FALSE);
+  schedule();
+}
+
+/* Auto turns the budget on; any other format turns it off. */
 static void on_format(void) {
   if (!g_dv.profile) return;
   int i = (int)SendMessageW(g_dv.format, CB_GETCURSEL, 0, 0);
   if (i < 0) return;
   int kbps = (int)SendMessageW(g_dv.format, CB_GETITEMDATA, (WPARAM)i, 0);
-  mc_transcode_opts f = {kbps ? MC_FORMAT_OPUS : MC_FORMAT_ORIGINAL, kbps};
-  g_dv.profile->format = g_dv.pending.format = f;
-  g_dv.pending.mask |= PEND_FORMAT;
-  schedule();
+  mc_sync_profile *p = g_dv.profile;
+  p->format.format = kbps == AUTO_ITEM ? MC_FORMAT_AUTO : kbps ? MC_FORMAT_OPUS : MC_FORMAT_ORIGINAL;
+  p->format.bitrate_kbps = kbps == AUTO_ITEM ? 0 : kbps;
+  p->budget_enabled = kbps == AUTO_ITEM;
+  if (p->budget_enabled && p->budget_bytes <= 0) {
+    int64_t bytes = budget_from_edit();
+    p->budget_bytes = bytes ? bytes : DEFAULT_BUDGET_GB * GIB;
+  }
+  pend_format_budget();
 }
 
+/* A budget sets the format to Auto; none leaves it at originals if it was Auto. */
 static void on_budget(void) {
   if (!g_dv.profile) return;
   int64_t bytes = budget_from_edit();
   if (!bytes) bytes = DEFAULT_BUDGET_GB * GIB;
-  g_dv.profile->budget_enabled = g_dv.pending.budget_enabled = is_checked(g_dv.budget);
-  g_dv.profile->budget_bytes = g_dv.pending.budget_bytes = bytes;
-  g_dv.pending.mask |= PEND_BUDGET;
-  EnableWindow(g_dv.budget_size, g_dv.pending.budget_enabled);
-  schedule();
+  mc_sync_profile *p = g_dv.profile;
+  p->budget_enabled = is_checked(g_dv.budget);
+  p->budget_bytes = bytes;
+  if (p->budget_enabled) p->format.format = MC_FORMAT_AUTO;
+  else if (p->format.format == MC_FORMAT_AUTO) p->format.format = MC_FORMAT_ORIGINAL;
+  if (p->format.format != MC_FORMAT_OPUS) p->format.bitrate_kbps = 0;
+  pend_format_budget();
 }
 
 static void on_sync_all(void) {
@@ -1041,7 +1065,9 @@ void device_view_create(HWND parent, const device_view_host *host) {
   SetWindowSubclass(g_dv.name_edit, edit_proc, 0, 0);
   g_dv.format_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_FORMAT), line, ID_DEV_FORMAT_LABEL);
   g_dv.format = child(WC_COMBOBOXW, NULL, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_DEV_FORMAT);
-  int i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_WINDOWS_FORMAT_ORIGINAL));
+  int i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_WINDOWS_FORMAT_AUTO));
+  SendMessageW(g_dv.format, CB_SETITEMDATA, (WPARAM)i, AUTO_ITEM);
+  i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_WINDOWS_FORMAT_ORIGINAL));
   SendMessageW(g_dv.format, CB_SETITEMDATA, (WPARAM)i, 0);
   for (int b = 0; b < MC_OPUS_BITRATE_COUNT; b++) {
     wchar_t text[32];

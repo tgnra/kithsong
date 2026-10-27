@@ -332,6 +332,7 @@
     "sync_format": { "text": "Format", "note": "The file format a device keeps its music in." },
     "format_original": "Original files",
     "format_opus": { "text": "Opus {0:d} kbps", "note": "Opus is a name; kbps a unit." },
+    "format_auto": { "text": "Auto", "note": "A format: whatever fits the storage limit, original files or Opus at the highest bitrate that fits." },
     "budget_limit": "Limit storage to",
     "budget_unit": { "text": "GB", "note": "Gigabytes, after \"Limit storage to\" and a number." },
     "what_to_sync": "What to sync",

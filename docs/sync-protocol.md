@@ -441,7 +441,13 @@ the plaintext limit.
   - `mode`: `all` or `selected`;
   - `format`: `original` or `opus`, with `bitrate_kbps` one of 256, 192, 160, 128, 96, 64
     (NULL for `original`);
-  - `budget_enabled` and `budget_bytes` (NULL when unset);
+  - `budget_enabled` and `budget_bytes` (NULL when unset). The format and the budget
+    exclude each other: with `budget_enabled` the format is **auto**, picked by the budget
+    (see Budget mode), and editors store it as `original` with a NULL `bitrate_kbps`.
+    Choosing a format turns the budget off, keeping `budget_bytes`. Older versions let a
+    profile have both, the budget walking down from the format; such a row, or one a
+    concurrent edit left with both, reads as auto. Nothing is rewritten: an auto row is one
+    those versions read the same way, as originals walking down;
   - `archive` (see [Archives](#archives));
   - the selection, one `profile_items` row per item: `kind` is `album`, `artist`,
     `playlist` (manual) or `album_group` (manual), and `ref_uid` the library uid it names.
@@ -471,19 +477,19 @@ the plaintext limit.
 - A device holds files only once it has a `profiles` row (written when it joins, see
   [Group membership](#group-membership)): until then its file phase fetches and deletes
   nothing. An archive holds everything as originals whatever the rest of its row says.
-- **Target format** per track: `original`, or Opus at the profile's bitrate. A lossy
-  original that is already smaller than the Opus estimate is sent as-is. Lossy means MP3,
-  AAC, Ogg Vorbis, Opus, WMA or Musepack, or an `.m4a`/`.mp4` with a known bitrate under
-  500 kbps (otherwise it may be ALAC). The sender applies the rule (it has the file), and
-  answers a request for Opus with the original then; the receiver applies it too, to files
-  it already holds.
-- **Budget mode**: estimate each track as `duration_ms × kbps / 8 + 4096` bytes, or
-  `files.size_bytes` for originals. Walk Original → 256 → 192 → 160 → 128 → 96 → 64 kbps and
+- **Target format** per track: `original`, or Opus at the profile's bitrate (for auto, the
+  bitrate the budget picks). A lossy original that is already smaller than the Opus
+  estimate is sent as-is. Lossy means MP3, AAC, Ogg Vorbis, Opus, WMA or Musepack, or an
+  `.m4a`/`.mp4` with a known bitrate under 500 kbps (otherwise it may be ALAC). The sender
+  applies the rule (it has the file), and answers a request for Opus with the original
+  then; the receiver applies it too, to files it already holds.
+- **Budget mode** (the auto format): estimate each track as `duration_ms × kbps / 8 + 4096`
+  bytes, or `files.size_bytes` for originals. Walk Original → 256 → 192 → 160 → 128 → 96 → 64 kbps and
   take the highest that fits in `min(budget_bytes, free space + bytes already held of the
-  set)`. If even 64 kbps doesn't fit, the profile is over budget: nothing syncs and the UI
-  shows the shortfall.
-  - The walk starts at the profile's own format: a profile set to Opus 128 with a budget
-    never gets more than 128.
+  set)`. If even 64 kbps doesn't fit, the profile is over budget: nothing syncs (the file
+  phase fetches and deletes nothing, so what the device holds stays) and the UI shows the
+  shortfall, for the user to raise the budget or select less.
+  - The walk always starts at originals, whatever `format` the row holds.
   - An original's size is the same file everywhere, so any device that holds it knows it;
     one no device at hand holds is estimated at 1000 kbps. The bytes already held are only
     known to the device itself (`files` is local), so a plan worked out for another device

@@ -484,6 +484,19 @@ int main(int argc, char **argv) {
     s.budget_bytes = -1;
     CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_ERR_INVALID_ARG);
     CHECK(mc_sync_set_profile(a.sync, b.uid, NULL) == MC_ERR_INVALID_ARG);
+    /* The format and the budget exclude each other: a budget comes with auto, and auto only
+     * with a budget. */
+    s = selection(NULL, 0);
+    s.format.format = MC_FORMAT_AUTO;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_ERR_INVALID_ARG);
+    s.format.format = MC_FORMAT_ORIGINAL;
+    s.budget_enabled = 1;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_ERR_INVALID_ARG);
+    s.format.format = MC_FORMAT_OPUS;
+    s.format.bitrate_kbps = 128;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_ERR_INVALID_ARG);
+    s.format.format = (mc_format)7;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_ERR_INVALID_ARG);
   }
 
   /* A round trip of every field and all four kinds. */
@@ -495,15 +508,14 @@ int main(int argc, char **argv) {
     s.sync_all = 0;
     s.format.format = MC_FORMAT_OPUS;
     s.format.bitrate_kbps = 128;
-    s.budget_enabled = 1;
-    s.budget_bytes = 32000000000LL;
+    s.budget_bytes = 32000000000LL; /* kept while the budget is off */
     CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_OK);
     p = get(&a, b.uid);
     if (p) {
       CHECK_STR(p->name, "Kitchen");
       CHECK(!p->archive && !p->sync_all);
       CHECK(p->format.format == MC_FORMAT_OPUS && p->format.bitrate_kbps == 128);
-      CHECK(p->budget_enabled && p->budget_bytes == 32000000000LL);
+      CHECK(!p->budget_enabled && p->budget_bytes == 32000000000LL);
       CHECK(p->count == 4);
       CHECK(has_item(p, MC_PROFILE_ALBUM, x) == 1 && has_item(p, MC_PROFILE_ARTIST, y) == 1);
       CHECK(has_item(p, MC_PROFILE_PLAYLIST, z) == 1);
@@ -533,6 +545,62 @@ int main(int argc, char **argv) {
              " AND name IS NULL",
              b.uid);
     CHECK(group_int(&a, sql) == 1);
+    fields = logged(&a, "profiles", NULL);
+
+    /* A budget: auto, stored as originals with the budget on, which versions without auto
+     * read the same way. Then Opus, which turns the budget off and keeps its size. */
+    s.format.format = MC_FORMAT_AUTO;
+    s.budget_enabled = 1;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_OK);
+    CHECK(logged(&a, "profiles", NULL) == fields + 1); /* budget_enabled */
+    p = get(&a, b.uid);
+    if (p) {
+      CHECK(p->format.format == MC_FORMAT_AUTO && p->format.bitrate_kbps == 0);
+      CHECK(p->budget_enabled && p->budget_bytes == 32000000000LL);
+    }
+    mc_sync_profile_free(p);
+    snprintf(sql, sizeof sql,
+             "SELECT count(*) FROM profiles WHERE device_uid = '%s' AND format = 'original'"
+             " AND bitrate_kbps IS NULL AND budget_enabled = 1",
+             b.uid);
+    CHECK(group_int(&a, sql) == 1);
+    s.format.format = MC_FORMAT_OPUS;
+    s.format.bitrate_kbps = 160;
+    s.budget_enabled = 0;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_OK);
+    /* format, bitrate_kbps, budget_enabled */
+    CHECK(logged(&a, "profiles", NULL) == fields + 4);
+    p = get(&a, b.uid);
+    if (p) {
+      CHECK(p->format.format == MC_FORMAT_OPUS && p->format.bitrate_kbps == 160);
+      CHECK(!p->budget_enabled && p->budget_bytes == 32000000000LL);
+    }
+    mc_sync_profile_free(p);
+
+    /* A row an older version wrote, with a format beside the budget (or one concurrent edits
+     * of each left so), reads as auto and is rewritten only when edited. */
+    snprintf(sql, sizeof sql, "UPDATE profiles SET budget_enabled = 1 WHERE device_uid = '%s'",
+             b.uid);
+    group_edit(&a, sql, 1);
+    fields = logged(&a, "profiles", NULL);
+    p = get(&a, b.uid);
+    if (p) {
+      CHECK(p->format.format == MC_FORMAT_AUTO && p->format.bitrate_kbps == 0);
+      CHECK(p->budget_enabled);
+      CHECK(mc_sync_set_profile(a.sync, b.uid, p) == MC_OK); /* as read: nothing to write */
+      CHECK(logged(&a, "profiles", NULL) == fields);
+    }
+    mc_sync_profile_free(p);
+    snprintf(sql, sizeof sql,
+             "SELECT bitrate_kbps FROM profiles WHERE device_uid = '%s' AND format = 'opus'",
+             b.uid);
+    CHECK(group_int(&a, sql) == 160);
+    s.format.format = MC_FORMAT_ORIGINAL;
+    s.format.bitrate_kbps = 0;
+    s.budget_enabled = 0;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_OK);
+    /* format, bitrate_kbps, budget_enabled */
+    CHECK(logged(&a, "profiles", NULL) == fields + 3);
     fields = logged(&a, "profiles", NULL);
 
     /* Swapping one item for another: one delete and one insert; the others keep their uids. */
@@ -614,11 +682,12 @@ int main(int argc, char **argv) {
     p->format.format = MC_FORMAT_OPUS;
     p->format.bitrate_kbps = 160;
     CHECK(mc_sync_set_profile(b.sync, a.uid, p) == MC_ERR_LOCKED);
-    p->format.format = MC_FORMAT_ORIGINAL;
+    p->format.format = MC_FORMAT_AUTO;
     p->format.bitrate_kbps = 0;
     p->budget_enabled = 1;
     p->budget_bytes = 1000;
     CHECK(mc_sync_set_profile(a.sync, a.uid, p) == MC_ERR_LOCKED);
+    p->format.format = MC_FORMAT_ORIGINAL;
     p->budget_enabled = 0;
     p->budget_bytes = 0;
     CHECK(mc_sync_set_profile(a.sync, a.uid, p) == MC_OK);
@@ -845,6 +914,7 @@ int main(int argc, char **argv) {
     CHECK(group_int(&a, sql) == 0); /* nothing stored */
     /* Previewing it as an archive: everything as originals, budget or not. */
     s.archive = 1;
+    s.format.format = MC_FORMAT_AUTO;
     s.budget_enabled = 1;
     s.budget_bytes = 1;
     CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
@@ -856,9 +926,10 @@ int main(int argc, char **argv) {
     CHECK(e.tracks == 0 && e.total_bytes == 0);
 
     /* Against the plan: a budget of free space alone (128 fits in 3,000,000); a smaller
-     * budget size (96); no budget; an Opus 192 profile whose budget would allow originals
-     * (the walk starts at 192); and over budget. */
+     * budget size (96); no budget; budgets that allow originals and each bitrate; and over
+     * budget, where nothing syncs. */
     s = selection(NULL, 0);
+    s.format.format = MC_FORMAT_AUTO;
     s.budget_enabled = 1;
     check_estimate(&a, fake, &s, 3000000, 128, 0);
     CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
@@ -870,11 +941,39 @@ int main(int argc, char **argv) {
     snprintf(sql, sizeof sql, "UPDATE capabilities SET free_bytes = 100000000000 WHERE"
                               " device_uid = '%s'", fake);
     group_edit(&a, sql, 0);
+    s.format.format = MC_FORMAT_AUTO;
     s.budget_enabled = 1;
     s.budget_bytes = 0;
-    s.format.format = MC_FORMAT_OPUS;
-    s.format.bitrate_kbps = 192;
-    check_estimate(&a, fake, &s, 100000000000LL, 192, 0);
+    check_estimate(&a, fake, &s, 100000000000LL, 0, 0);
+    CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
+    CHECK(e.total_bytes == sizes[0]);
+    /* Each budget gets the highest bitrate whose size fits it. */
+    for (int i = 0; i < MC_OPUS_BITRATE_COUNT; i++) {
+      s.budget_bytes = sizes[i + 1];
+      check_estimate(&a, fake, &s, 100000000000LL, mc_opus_bitrates[i], 0);
+      CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
+      CHECK(e.total_bytes == sizes[i + 1] && e.limit_bytes == sizes[i + 1]);
+      s.budget_bytes = sizes[i + 1] - 1; /* a byte less: the next one down, or over */
+      CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
+      if (i + 1 < MC_OPUS_BITRATE_COUNT) CHECK(e.kbps == mc_opus_bitrates[i + 1] && !e.over_budget);
+      else CHECK(e.over_budget && e.shortfall_bytes == 1);
+    }
+    /* A row an older version wrote, Opus 192 beside the budget: the walk starts at originals
+     * all the same. */
+    s.budget_bytes = 0;
+    check_estimate(&a, fake, &s, 100000000000LL, 0, 0);
+    snprintf(sql, sizeof sql, "UPDATE profiles SET format = 'opus', bitrate_kbps = 192"
+                              " WHERE device_uid = '%s'", fake);
+    group_edit(&a, sql, 1);
+    {
+      mc_sync_db *sdb = NULL;
+      mc_plan *plan = NULL;
+      CHECK(mc_sync_db_open(a.config, &sdb) == MC_OK);
+      if (sdb) CHECK(mc_plan_compute(sdb, a.lib, fake, 100000000000LL, &plan) == MC_OK);
+      if (plan) CHECK(plan->status == MC_PLAN_OK && plan->kbps == 0);
+      mc_plan_free(plan);
+      mc_sync_db_close(sdb);
+    }
     s.budget_bytes = 1000000;
     check_estimate(&a, fake, &s, 100000000000LL, 0, 1);
     CHECK(mc_sync_estimate_profile(a.sync, fake, &s, &e) == MC_OK);
