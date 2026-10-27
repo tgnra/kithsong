@@ -21,6 +21,11 @@ android {
                 // And -PmusicappAcoustidKey=... for fingerprinting; empty turns it off.
                 val acoustidKey = (project.findProperty("musicappAcoustidKey") as String?) ?: ""
                 arguments += listOf("-DMUSICAPP_ACOUSTID_KEY=$acoustidKey")
+                // And -PmusicappLastfmKey=... -PmusicappLastfmSecret=... for scrobbling to Last.fm.
+                val lastfmKey = (project.findProperty("musicappLastfmKey") as String?) ?: ""
+                val lastfmSecret = (project.findProperty("musicappLastfmSecret") as String?) ?: ""
+                arguments += listOf("-DMUSICAPP_LASTFM_KEY=$lastfmKey", "-DMUSICAPP_LASTFM_SECRET=$lastfmSecret")
+
                 // 16 KB page alignment, required by Android 15+ devices; NDK r28 does it by default.
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
             }

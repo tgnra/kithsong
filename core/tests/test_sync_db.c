@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
   mc_sync_db *sdb = NULL;
   CHECK(mc_sync_db_open(path, &sdb) == MC_OK);
   if (!sdb) return TEST_RESULT();
-  CHECK(mc_sync_db_schema_version(sdb) == 3);
+  CHECK(mc_sync_db_schema_version(sdb) == 4);
   char device[MC_UID_STRLEN];
   unsigned char priv[MC_SYNC_KEY_LEN], pub[MC_SYNC_KEY_LEN];
   strcpy(device, mc_sync_db_device_uid(sdb));
@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
     CHECK(memcmp(mc_sync_db_private_key(sdb), priv, sizeof priv) == 0);
     CHECK(memcmp(mc_sync_db_public_key(sdb), pub, sizeof pub) == 0);
     CHECK_STR(mc_sync_db_group_uid(sdb), "0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e");
-    CHECK(mc_sync_db_schema_version(sdb) == 3);
+    CHECK(mc_sync_db_schema_version(sdb) == 4);
     mc_sync_db_close(sdb);
   }
 
@@ -202,8 +202,36 @@ int main(int argc, char **argv) {
     vv = NULL;
     count = -1;
     CHECK(mc_sync_db_version_vector(sdb, &vv, &count) == MC_OK && count == 0 && vv == NULL);
+
+    /* The scrobbling account is replicated; the scrobble queue is this device's alone. */
+    db = mc_sync_db_handle(sdb);
+    CHECK(mc_sync_db_begin_write(sdb) == MC_OK);
+    CHECK(exec(db, "INSERT INTO scrobble_account (uid, session_key, username) VALUES"
+                   " ('" MC_SCROBBLE_ACCOUNT_UID "', 'sk', 'tania')") == SQLITE_OK);
+    CHECK(exec(db, "INSERT INTO scrobble_queue (played_at_s, artist, track) VALUES"
+                   " (1, 'Low', 'Sunflower')") == SQLITE_OK);
+    CHECK(exec(db, "INSERT INTO sync_group (uid, library_uid) VALUES ('g2', 'lib2')") == SQLITE_OK);
+    CHECK(mc_sync_db_commit(sdb) == MC_OK);
+    CHECK(changelog_count(db, "entity = 'scrobble_account' AND row_uid = '" MC_SCROBBLE_ACCOUNT_UID
+                              "'") == 2);
+    CHECK(changelog_count(db, "entity = 'scrobble_queue'") == 0);
+    CHECK(exec(db, "UPDATE scrobble_account SET session_key = NULL") == SQLITE_OK);
+    CHECK(changelog_count(db, "entity = 'scrobble_account' AND field = 'session_key'"
+                              " AND value IS NULL") == 1);
+
+    /* Leaving the group keeps the account, and its changes to pass on to the next group. */
+    CHECK(mc_sync_db_clear_group(sdb) == MC_OK);
+    CHECK(changelog_count(db, "entity = 'sync_group'") == 0);
+    CHECK(changelog_count(db, "entity = 'scrobble_account'") == 3);
+    sqlite3_stmt *acc;
+    if (sqlite3_prepare_v2(db, "SELECT count(*) FROM scrobble_account", -1, &acc, NULL) ==
+        SQLITE_OK) {
+      CHECK(sqlite3_step(acc) == SQLITE_ROW && sqlite3_column_int(acc, 0) == 1);
+      sqlite3_finalize(acc);
+    }
     mc_sync_db_close(sdb);
   }
+
 
   return TEST_RESULT();
 }

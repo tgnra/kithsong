@@ -4,7 +4,8 @@
  *
  * The player's callbacks come on its own thread and are passed to the UI thread with
  * g_idle_add(); while playing, a timer moves the seekbar on. The player is created on first
- * play. Call everything here on the UI thread.
+ * play. Plays are counted in the library and scrobbled when the player says they count. Call
+ * everything here on the UI thread.
  */
 #ifndef MUSICAPP_PLAYBACK_H
 #define MUSICAPP_PLAYBACK_H
@@ -26,6 +27,12 @@ typedef struct playback_track {
  * buttons should show may have changed: playing or not, and what's queued. */
 void playback_init(GtkWindow *win, void (*changed)(void *user), void *user);
 void playback_free(void);
+
+/* Where plays are counted: lib (used on the UI thread only), and a scrobbler for it with
+ * the sync.db in config_dir. NULL, before the library closes. Plays already counted go to
+ * the library that was set before. */
+void playback_set_library(mc_library *lib, const char *config_dir);
+
 
 /* Replaces the queue and plays tracks[start]. */
 void playback_play(const playback_track *tracks, int count, int start);

@@ -43,6 +43,9 @@ values as environment variables. Each script warns about any that are missing.
 |--------|----------------|------------|
 | `MUSICAPP_CONTACT` | `MUSICAPP_CONTACT` | Contact URL or email for the MusicBrainz User-Agent |
 | `MUSICAPP_ACOUSTID_KEY` | `MUSICAPP_ACOUSTID_KEY` | AcoustID application key |
+| `MUSICAPP_LASTFM_KEY` | `MUSICAPP_LASTFM_KEY` | Last.fm API key, for scrobbling |
+| `MUSICAPP_LASTFM_SECRET` | `MUSICAPP_LASTFM_SECRET` | Last.fm API shared secret |
+
 | `ANDROID_KEYSTORE_BASE64` | `MUSICAPP_KEYSTORE` (a path) | The release keystore, base64-encoded for the secret |
 | `ANDROID_KEYSTORE_PASSWORD` | `MUSICAPP_KEYSTORE_PASSWORD` | |
 | `ANDROID_KEY_ALIAS` | `MUSICAPP_KEY_ALIAS` | |

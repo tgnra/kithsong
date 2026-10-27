@@ -7,8 +7,8 @@
 #
 # Signs with the keystore at $MUSICAPP_KEYSTORE ($MUSICAPP_KEYSTORE_PASSWORD,
 # $MUSICAPP_KEY_ALIAS, $MUSICAPP_KEY_PASSWORD); without it the outputs are unsigned. Bakes in
-# $MUSICAPP_CONTACT and $MUSICAPP_ACOUSTID_KEY when they're set. JAVA_HOME and ANDROID_HOME
-# as for android/scripts/android.sh.
+# $MUSICAPP_CONTACT, $MUSICAPP_ACOUSTID_KEY, $MUSICAPP_LASTFM_KEY and $MUSICAPP_LASTFM_SECRET
+# when they're set. JAVA_HOME and ANDROID_HOME as for android/scripts/android.sh.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,10 +27,14 @@ fi
     echo "warning: MUSICAPP_CONTACT is not set; MusicBrainz may block this build." >&2
 [[ -n "${MUSICAPP_ACOUSTID_KEY:-}" ]] ||
     echo "warning: MUSICAPP_ACOUSTID_KEY is not set; fingerprinting will be off in this build." >&2
+[[ -n "${MUSICAPP_LASTFM_KEY:-}" && -n "${MUSICAPP_LASTFM_SECRET:-}" ]] ||
+    echo "warning: MUSICAPP_LASTFM_KEY or MUSICAPP_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build." >&2
 
 "$root/android/scripts/android.sh" gradle --no-daemon \
     :app:assembleRelease :app:bundleRelease :wear:assembleRelease :wear:bundleRelease \
-    "-PmusicappContact=${MUSICAPP_CONTACT:-}" "-PmusicappAcoustidKey=${MUSICAPP_ACOUSTID_KEY:-}"
+    "-PmusicappContact=${MUSICAPP_CONTACT:-}" "-PmusicappAcoustidKey=${MUSICAPP_ACOUSTID_KEY:-}" \
+    "-PmusicappLastfmKey=${MUSICAPP_LASTFM_KEY:-}" "-PmusicappLastfmSecret=${MUSICAPP_LASTFM_SECRET:-}"
+
 
 suffix=$([[ $signed == 1 ]] && echo release || echo release-unsigned)
 mkdir -p "$root/dist"

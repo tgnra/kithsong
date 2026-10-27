@@ -5,8 +5,8 @@
 #   scripts/release-linux.sh
 #
 # Needs flatpak and flatpak-builder. The GNOME SDK comes from Flathub (as a --user install)
-# if it isn't installed already. Bakes in $MUSICAPP_CONTACT and $MUSICAPP_ACOUSTID_KEY when
-# they're set.
+# if it isn't installed already. Bakes in $MUSICAPP_CONTACT, $MUSICAPP_ACOUSTID_KEY,
+# $MUSICAPP_LASTFM_KEY and $MUSICAPP_LASTFM_SECRET when they're set.
 #
 # Install the result with `flatpak install --user <file>`; Flatpak fetches the GNOME runtime
 # from Flathub if needed.
@@ -46,6 +46,13 @@ if [[ -n "${MUSICAPP_ACOUSTID_KEY:-}" ]]; then
 else
     echo "warning: MUSICAPP_ACOUSTID_KEY is not set; fingerprinting will be off in this build." >&2
 fi
+if [[ -n "${MUSICAPP_LASTFM_KEY:-}" && -n "${MUSICAPP_LASTFM_SECRET:-}" ]]; then
+    echo "set(MUSICAPP_LASTFM_KEY $(cmake_quote "$MUSICAPP_LASTFM_KEY") CACHE STRING \"\")" >>"$secrets"
+    echo "set(MUSICAPP_LASTFM_SECRET $(cmake_quote "$MUSICAPP_LASTFM_SECRET") CACHE STRING \"\")" >>"$secrets"
+else
+    echo "warning: MUSICAPP_LASTFM_KEY or MUSICAPP_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build." >&2
+fi
+
 
 # The CI container has the SDK installed system-wide; elsewhere fetch it for this user.
 deps=()

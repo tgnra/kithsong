@@ -6,8 +6,9 @@
 #
 # Signs with the keystore at $env:MUSICAPP_KEYSTORE ($env:MUSICAPP_KEYSTORE_PASSWORD,
 # $env:MUSICAPP_KEY_ALIAS, $env:MUSICAPP_KEY_PASSWORD); without it the outputs are unsigned.
-# Bakes in $env:MUSICAPP_CONTACT and $env:MUSICAPP_ACOUSTID_KEY when they're set. JAVA_HOME
-# and ANDROID_HOME as for android\scripts\android.ps1.
+# Bakes in $env:MUSICAPP_CONTACT, $env:MUSICAPP_ACOUSTID_KEY, $env:MUSICAPP_LASTFM_KEY and
+# $env:MUSICAPP_LASTFM_SECRET when they're set. JAVA_HOME and ANDROID_HOME as for
+# android\scripts\android.ps1.
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -19,13 +20,16 @@ if ($signed) { $env:MUSICAPP_KEYSTORE = (Resolve-Path $env:MUSICAPP_KEYSTORE).Pa
 else { Write-Warning 'MUSICAPP_KEYSTORE is not set; the APKs and AABs will be unsigned.' }
 if (-not $env:MUSICAPP_CONTACT) { Write-Warning 'MUSICAPP_CONTACT is not set; MusicBrainz may block this build.' }
 if (-not $env:MUSICAPP_ACOUSTID_KEY) { Write-Warning 'MUSICAPP_ACOUSTID_KEY is not set; fingerprinting will be off in this build.' }
+if (-not ($env:MUSICAPP_LASTFM_KEY -and $env:MUSICAPP_LASTFM_SECRET)) { Write-Warning 'MUSICAPP_LASTFM_KEY or MUSICAPP_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build.' }
 
 # android.ps1 changes directory; keep the caller's.
 Push-Location
 try {
     & "$root\android\scripts\android.ps1" gradle --no-daemon `
         :app:assembleRelease :app:bundleRelease :wear:assembleRelease :wear:bundleRelease `
-        "-PmusicappContact=$env:MUSICAPP_CONTACT" "-PmusicappAcoustidKey=$env:MUSICAPP_ACOUSTID_KEY"
+        "-PmusicappContact=$env:MUSICAPP_CONTACT" "-PmusicappAcoustidKey=$env:MUSICAPP_ACOUSTID_KEY" `
+        "-PmusicappLastfmKey=$env:MUSICAPP_LASTFM_KEY" "-PmusicappLastfmSecret=$env:MUSICAPP_LASTFM_SECRET"
+
     if ($LASTEXITCODE) { Write-Error "Gradle failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location

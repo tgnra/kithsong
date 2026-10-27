@@ -24,6 +24,10 @@ char *mc_url_escape(const char *s);
  * Transport failures return MC_ERR_NET; any HTTP status counts as success. */
 mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status);
 
+/* POSTs form (application/x-www-form-urlencoded, already escaped) to url; otherwise as
+ * mc_http_get(). */
+mc_status mc_http_post_form(const char *url, const char *form, mc_buffer *body, long *http_status);
+
 /* Enforces a minimum interval between requests to one service, across threads.
  * MusicBrainz allows 1 request/second per client. */
 typedef struct mc_ratelimit {

@@ -147,6 +147,8 @@
     "status_locked": "locked",
     "status_in_group": "already in a sync group",
     "status_library_mismatch": "not the sync group's library",
+    "status_auth": { "text": "not signed in", "note": "The scrobbling service (e.g. Last.fm) refused the sign-in, the session or the app's API key." },
+
     "status_unknown": "unknown error",
 
     "nothing_playing": "Nothing playing",

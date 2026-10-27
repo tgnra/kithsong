@@ -1,6 +1,6 @@
 /* The player against the real audio device, with silent WAVs. Skipped (exit 77) when there
  * is no device. Checks the queue moves on by itself across sample rates, skips files it
- * can't play, stops at the end, and seeks while paused. */
+ * can't play, stops at the end, seeks while paused, and counts plays. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,13 +13,14 @@
 #define SKIP 77
 
 static mc_mutex lock;
-static int errors, events;
+static int errors, events, played;
 
 static void on_event(void *user, mc_player_event event) {
   (void)user;
   mc_mutex_lock(&lock);
   events++;
   if (event == MC_PLAYER_EVENT_ERROR) errors++;
+  if (event == MC_PLAYER_EVENT_PLAYED) played++;
   mc_mutex_unlock(&lock);
 }
 
@@ -132,6 +133,31 @@ int main(int argc, char **argv) {
   n = watch(player, seen, 8, 3000);
   mc_player_status_get(player, &st);
   CHECK(st.state == MC_PLAYER_STOPPED);
+
+  /* Plays count once half the track has been heard: both of these, in order. Replacing the
+   * queue dropped the plays of the first one. */
+  const char *twice[] = {a, a};
+  int64_t before = (int64_t)mc_wall_ms();
+  CHECK(mc_player_set_queue(player, twice, 2, 0) == MC_OK);
+  n = watch(player, seen, 8, 3000);
+  int index = -1;
+  int64_t started = 0;
+  CHECK(mc_player_take_played(player, &index, &started) == MC_OK && index == 0);
+  CHECK(started >= before - 50 && started <= (int64_t)mc_wall_ms());
+  int64_t first = started;
+  CHECK(mc_player_take_played(player, &index, &started) == MC_OK && index == 1);
+  CHECK(started >= first + 250); /* the second began after the first's 300 ms */
+  CHECK(mc_player_take_played(player, &index, &started) == MC_ERR_NOT_FOUND);
+  mc_mutex_lock(&lock);
+  CHECK(played >= 1);
+  mc_mutex_unlock(&lock);
+
+  /* Seeking past half doesn't make a play count: it's what was heard that counts. */
+  CHECK(mc_player_set_queue(player, one, 1, 0) == MC_OK);
+  CHECK(mc_player_seek_ms(player, 2800) == MC_OK);
+  n = watch(player, seen, 8, 3000);
+  CHECK(mc_player_take_played(player, &index, &started) == MC_ERR_NOT_FOUND);
+
 
   mc_player_free(player);
   mc_remove(a);

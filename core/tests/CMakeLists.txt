@@ -37,7 +37,11 @@ musicapp_test(test_import_db)
 musicapp_test(test_organize)
 musicapp_test(test_transcode)
 target_link_libraries(test_transcode PRIVATE mc_opusfile)  # reads the output back directly
+musicapp_test(test_scrobbler)
+target_link_libraries(test_scrobbler PRIVATE mbedcrypto mc_yyjson)  # checks the signature independently
+target_include_directories(test_scrobbler PRIVATE "${PROJECT_BINARY_DIR}/core/generated")  # config.h
 musicapp_test(test_player)
+
 set_tests_properties(test_player PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
 musicapp_test(test_discovery)
 target_link_libraries(test_discovery PRIVATE mc_mdns)  # sends packets as a fake peer
@@ -46,7 +50,12 @@ set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multic
 # Hit musicbrainz.org; run by hand, not part of ctest.
 add_executable(manual_mb_ping manual_mb_ping.c)
 target_link_libraries(manual_mb_ping PRIVATE musiccore)
+# Signs in and scrobbles for real; see the comment at its top.
+add_executable(manual_scrobble manual_scrobble.c)
+target_link_libraries(manual_scrobble PRIVATE musiccore)
+target_include_directories(manual_scrobble PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_import manual_import.c)
+
 target_link_libraries(manual_import PRIVATE musiccore)
 target_include_directories(manual_import PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 

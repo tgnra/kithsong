@@ -94,6 +94,7 @@ static gboolean open_library(void *user, const char *dir) {
     return FALSE;
   }
   import_view_set_library(a->import, lib);
+  playback_set_library(lib, a->settings_dir);
   mc_library_close(a->lib);
   a->lib = lib;
   set_empty_description(a);
@@ -560,6 +561,8 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   g_signal_connect(win, "close-request", G_CALLBACK(on_close_request), a);
 
   playback_init(a->win, playback_changed, a);
+  playback_set_library(a->lib, a->settings_dir);
+
   mpris_init(gapp, a->win);
   app_reload_library(a);
   gtk_window_present(a->win);

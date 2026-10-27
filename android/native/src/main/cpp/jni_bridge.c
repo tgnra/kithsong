@@ -589,7 +589,22 @@ JNIEXPORT void JNICALL Java_app_musicapp_CorePlayer_nativeStatus(JNIEnv *env, jc
   (*env)->SetLongArrayRegion(env, out, 0, 5, values);
 }
 
+/* Fills out with the item and start (wall clock ms) of the oldest play that counts; false if
+ * there's none. */
+JNIEXPORT jboolean JNICALL Java_app_musicapp_CorePlayer_nativeTakePlayed(JNIEnv *env, jclass cls,
+                                                                         jlong handle,
+                                                                         jlongArray out) {
+  (void)cls;
+  int index;
+  int64_t started_ms;
+  if (mc_player_take_played(player_of(handle), &index, &started_ms) != MC_OK) return JNI_FALSE;
+  jlong values[2] = {index, started_ms};
+  (*env)->SetLongArrayRegion(env, out, 0, 2, values);
+  return JNI_TRUE;
+}
+
 /* --- CoreSync ---------------------------------------------------------------------- */
+
 
 typedef struct jni_sync {
   mc_sync *sync;

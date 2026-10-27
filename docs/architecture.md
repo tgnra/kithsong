@@ -32,9 +32,11 @@
 | library     | `core/src/library`     | library folder, schema, migrations, change-log triggers, counts |
 | settings    | `core/src/settings.c`  | per-device settings (library folder location) as JSON |
 | tagger      | `core/src/tagger`      | tag read/write (TagLib), importer: MusicBrainz matching, scoring, singles, cover art, copying into the library folder (see [tagging-rules.md](tagging-rules.md)); no AcoustID yet |
-| net         | `core/src/net`         | HTTPS GET with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`); TCP sockets with timeouts over POSIX and Winsock |
+| net         | `core/src/net`         | HTTPS GET and form POST with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`); TCP sockets with timeouts over POSIX and Winsock |
+| scrobble    | `core/src/scrobble`    | Last.fm 2.0 API (or a service with the same API, such as Libre.fm): browser sign-in, now playing, plays queued in `sync.db` and sent in batches with backoff; the account syncs to the group |
 | playlist    | `core/src/playlist`    | stub |
-| playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs; Opus via opusfile |
+| playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs; Opus via opusfile; decides when a play counts |
+
 | sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing over the network with the join rules, group and library changelog sessions (field-level LWW), a scheduler, address hints; no file transfer yet |
 | discovery   | `core/src/discovery`   | mDNS/DNS-SD announce and browse of `_musicapp._tcp` on a core thread (mjansson/mdns); peers reported online/offline through a callback; announces the host name |
 | transcode   | `core/src/transcode`   | Opus (libopusenc) with tags and cover, cached per file and bitrate with an LRU trim; size estimate; encode benchmark |

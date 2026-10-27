@@ -30,6 +30,31 @@ static const char *const k_migrations[] = {
    * editable from any member like the rest of the profile (an archive's too); NULL means the
    * device's own devices.name. */
   "ALTER TABLE profiles ADD COLUMN name TEXT;",
+  /* v4: scrobbling. scrobble_account is the group's one account (keyed by
+   * MC_SCROBBLE_ACCOUNT_UID, so a device that signed in before joining merges with the
+   * group's by last writer wins), with the service it's on: NULLs are Last.fm and the
+   * build's API key. scrobble_queue is this device's alone and never synced: its plays not
+   * yet submitted, with the metadata resolved when they were played. */
+  "CREATE TABLE scrobble_account ("
+  "  uid         TEXT PRIMARY KEY,"
+  "  api_url     TEXT,"
+  "  auth_url    TEXT,"
+  "  api_key     TEXT,"
+  "  api_secret  TEXT,"
+  "  session_key TEXT,"
+  "  username    TEXT"
+  ") WITHOUT ROWID;"
+  "CREATE TABLE scrobble_queue ("
+  "  seq          INTEGER PRIMARY KEY,"
+  "  played_at_s  INTEGER NOT NULL,"
+  "  artist       TEXT NOT NULL,"
+  "  track        TEXT NOT NULL,"
+  "  album        TEXT,"
+  "  album_artist TEXT,"
+  "  track_no     INTEGER,"
+  "  duration_s   INTEGER,"
+  "  mb_trackid   TEXT"
+  ");",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -45,6 +70,8 @@ static const char *const k_capability_cols[] = {"cpu_score", "free_bytes", "on_p
                                                 "can_transcode", "updated_ms", "addresses", NULL};
 static const char *const k_status_cols[] = {"verified_ms", "expected", "ok", "missing", "corrupt",
                                             "bytes", NULL};
+static const char *const k_scrobble_cols[] = {"api_url", "auth_url", "api_key", "api_secret",
+                                              "session_key", "username", NULL};
 
 static const mc_changelog_table k_tracked[] = {
   {"sync_group", "uid", k_group_cols},
@@ -53,6 +80,7 @@ static const mc_changelog_table k_tracked[] = {
   {"profile_items", "uid", k_item_cols},
   {"capabilities", "device_uid", k_capability_cols},
   {"sync_status", "device_uid", k_status_cols},
+  {"scrobble_account", "uid", k_scrobble_cols},
 };
 
 /* --- Schema --- */
@@ -290,7 +318,9 @@ mc_status mc_sync_db_clear_group(mc_sync_db *sdb) {
   sdb->applying_remote = 1;
   char sql[256];
   for (size_t i = 0; i < sizeof k_tracked / sizeof k_tracked[0] && st == MC_OK; i++) {
-    /* This device's own capabilities stay: they hold the cached benchmark. */
+    /* This device's own capabilities stay: they hold the cached benchmark. The scrobbling
+     * account stays too: leaving a group doesn't sign you out. */
+    if (!strcmp(k_tracked[i].table, "scrobble_account")) continue;
     if (!strcmp(k_tracked[i].table, "capabilities"))
       snprintf(sql, sizeof sql, "DELETE FROM capabilities WHERE device_uid <> '%s'",
                sdb->device_uid);
@@ -301,7 +331,7 @@ mc_status mc_sync_db_clear_group(mc_sync_db *sdb) {
   if (st == MC_OK) {
     snprintf(sql, sizeof sql,
              "DELETE FROM changelog WHERE NOT (entity = 'capabilities' AND row_uid = '%s'"
-             " AND origin_uid = '%s')",
+             " AND origin_uid = '%s') AND entity <> 'scrobble_account'",
              sdb->device_uid, sdb->device_uid);
     st = exec(sdb, sql);
   }

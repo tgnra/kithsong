@@ -19,6 +19,9 @@ static struct {
   void (*changed)(void *user);
   void *user;
   mc_player *player;
+  mc_library *lib; /* where plays are counted, or NULL */
+  mc_scrobbler *scrobbler;
+  int announced;   /* the item last sent as now playing, or -1 */
   item *items;
   int count;
   guint tick;   /* timer source while playing */
@@ -61,9 +64,21 @@ static int duration_of(const item *it, const mc_player_status *st) {
 
 static gboolean on_tick(gpointer data);
 
+/* Counts the plays the player says count, and scrobbles them. */
+static void count_plays(void) {
+  int index;
+  int64_t started_ms;
+  while (s.player && mc_player_take_played(s.player, &index, &started_ms) == MC_OK) {
+    if (index < 0 || index >= s.count || !s.items[index].uid[0]) continue;
+    if (s.lib) mc_library_record_play(s.lib, s.items[index].uid);
+    if (s.scrobbler) mc_scrobbler_scrobble(s.scrobbler, s.items[index].uid, started_ms);
+  }
+}
+
 /* Brings everything showing playback up to date with the player. */
 static void refresh(void) {
   if (!s.player) return;
+  count_plays();
   mc_player_status st;
   mc_player_status_get(s.player, &st);
   const item *it = current(&st);
@@ -73,6 +88,12 @@ static void refresh(void) {
   gboolean new_track = st.index != s.index, new_state = st.state != s.state;
   s.index = st.index;
   s.state = st.state;
+  if (st.state != MC_PLAYER_PLAYING) {
+    s.announced = -1;
+  } else if (it && st.index != s.announced) {
+    s.announced = st.index;
+    if (s.scrobbler && it->uid[0]) mc_scrobbler_now_playing(s.scrobbler, it->uid);
+  }
   if (new_track) {
     now_playing_show(it ? it->title : NULL, it ? it->artist : NULL, duration_ms, it ? it->cover_dir : NULL);
     if (it) mpris_set_track(it->uid, it->title, it->artist, it->album, it->cover_dir, duration_ms);
@@ -116,16 +137,25 @@ void playback_init(GtkWindow *win, void (*changed)(void *user), void *user) {
   s.win = win;
   s.changed = changed;
   s.user = user;
-  s.index = -1;
+  s.index = s.announced = -1;
 }
 
 void playback_free(void) {
+  playback_set_library(NULL, NULL);
   mc_player_free(s.player); /* first, so nothing more is posted */
   s.player = NULL;
   if (s.tick) g_source_remove(s.tick);
   g_idle_remove_by_data(&s); /* a refresh still queued */
   free_items();
   memset(&s, 0, sizeof s);
+}
+
+void playback_set_library(mc_library *lib, const char *config_dir) {
+  count_plays();
+  mc_scrobbler_free(s.scrobbler);
+  s.scrobbler = NULL;
+  s.lib = lib;
+  if (lib && config_dir && mc_scrobbler_new(lib, config_dir, &s.scrobbler) != MC_OK) s.scrobbler = NULL;
 }
 
 void playback_play(const playback_track *tracks, int count, int start) {
@@ -147,10 +177,12 @@ void playback_play(const playback_track *tracks, int count, int start) {
     it->duration_ms = t->duration_ms;
     paths[i] = t->path;
   }
+  count_plays(); /* the old queue's: the player drops them with it */
   free_items();
   s.items = items;
   s.count = count;
-  s.index = -1; /* show the track afresh even if it's the same item number */
+  s.index = s.announced = -1; /* show the track afresh even if it's the same item number */
+
   mc_player_set_queue(s.player, paths, count, start);
   g_free(paths);
   refresh();

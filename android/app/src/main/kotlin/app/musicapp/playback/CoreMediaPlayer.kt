@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -25,8 +24,8 @@ import com.google.common.util.concurrent.ListenableFuture
  * decodes and plays, and this keeps the queue of [MediaItem]s (see [toMediaItem]) and what
  * Media3 needs around it. It also does what an Android player must and the core doesn't know
  * about: audio focus, pausing when headphones are unplugged, and a wake lock while playing.
- * Plays are counted to [onPlayed] with the track uid once a track has been listened to for
- * half its length or four minutes, whichever is less.
+ * Plays are counted to [onPlayed] with the track uid when the core says they count (half the
+ * track or four minutes listened, whichever is less).
  *
  * Use it on the main thread.
  */
@@ -61,17 +60,6 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
     private var started = false
     private var startIndex = 0
     private var startPositionMs = 0L
-
-    // How long the current item has been heard for, to count a play.
-    private var listenedMs = 0L
-    private var counted = false
-    private var lastTick = 0L
-    private val tick = object : Runnable {
-        override fun run() {
-            countPlay()
-            main.postDelayed(this, TICK_MS)
-        }
-    }
 
     override fun getState(): State {
         val status = core.status
@@ -115,12 +103,12 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
     }
 
     override fun handleSetMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<*> {
+        takePlays() // the old queue's, while [items] still says which tracks they were
         items = mediaItems
         this.startIndex = if (startIndex == C.INDEX_UNSET) 0 else startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
         this.startPositionMs = if (startPositionMs == C.TIME_UNSET) 0 else startPositionMs
         started = false
         core.stop()
-        resetCount()
         update()
         return Futures.immediateVoidFuture()
     }
@@ -156,10 +144,8 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
                 // Skipping plays; keep a paused player paused.
                 core.skipTo(mediaItemIndex)
                 if (status.state != CorePlayer.State.Playing) core.pause()
-                resetCount()
             }
             if (position > 0 || mediaItemIndex == status.index) core.seekMs(position)
-            if (position == 0L) resetCount()
         }
         return Futures.immediateVoidFuture()
     }
@@ -174,8 +160,8 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
     override fun handleRelease(): ListenableFuture<*> {
         focus.release()
         noisy.setEnabled(false)
-        main.removeCallbacks(tick)
         if (wakeLock.isHeld) wakeLock.release()
+        takePlays()
         core.close()
         return Futures.immediateVoidFuture()
     }
@@ -219,11 +205,8 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
             core.pause()
         }
         noisy.setEnabled(playing)
-        main.removeCallbacks(tick)
         if (playing) {
             wakeLock.acquire()
-            lastTick = SystemClock.elapsedRealtime()
-            main.postDelayed(tick, TICK_MS)
         } else if (wakeLock.isHeld) {
             wakeLock.release()
         }
@@ -232,45 +215,30 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
     private fun onCoreEvent(event: CorePlayer.Event) {
         val status = core.status
         when (event) {
-            CorePlayer.Event.Track -> resetCount()
+            CorePlayer.Event.Played -> takePlays()
             CorePlayer.Event.Error -> Log.w(TAG, "The core skipped a track or has no audio device")
-            CorePlayer.Event.State -> Unit
+            CorePlayer.Event.Track, CorePlayer.Event.State -> Unit
         }
         // It stopped by itself: the queue played out, or there's no audio device.
         if (started && status.state != CorePlayer.State.Playing && wantPlaying && !suppressed) {
             wantPlaying = false
             wantPlayingReason = PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM
-            resetCount()
             update()
         }
         invalidateState()
     }
 
-    private fun resetCount() {
-        listenedMs = 0
-        counted = false
-    }
-
-    private fun countPlay() {
-        val now = SystemClock.elapsedRealtime()
-        val elapsed = now - lastTick
-        lastTick = now
-        val status = core.status
-        val item = items.getOrNull(status.index) ?: return
-        if (counted || status.state != CorePlayer.State.Playing) return
-        listenedMs += elapsed
-        val durationMs = status.durationMs.takeIf { it > 0 } ?: item.mediaMetadata.durationMs ?: 0
-        val needed = if (durationMs > 0) minOf(durationMs / 2, MAX_PLAY_MS) else MAX_PLAY_MS
-        if (listenedMs >= needed) {
-            counted = true
-            onPlayed(item.mediaId)
+    // Passes on the plays the core says count. Its indexes are into [items].
+    private fun takePlays() {
+        while (true) {
+            val played = core.takePlayed() ?: break
+            items.getOrNull(played.index)?.let { onPlayed(it.mediaId) }
         }
     }
 
     private companion object {
         const val TAG = "musicapp"
-        const val TICK_MS = 1000L
-        const val MAX_PLAY_MS = 4 * 60 * 1000L
+
         val AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)

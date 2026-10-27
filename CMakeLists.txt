@@ -40,6 +40,9 @@ option(MUSICAPP_BUILD_WINDOWS "Build the Win32 desktop frontend" ${_default_wind
 option(MUSICAPP_BUILD_GTK     "Build the GTK4/libadwaita desktop frontend" ${_default_gtk})
 option(MUSICAPP_BUILD_TESTS   "Build core unit tests" ${PROJECT_IS_TOP_LEVEL})
 set(MUSICAPP_ACOUSTID_KEY "" CACHE STRING "AcoustID application API key (never commit this)")
+set(MUSICAPP_LASTFM_KEY "" CACHE STRING "Last.fm API key, for scrobbling (never commit this)")
+set(MUSICAPP_LASTFM_SECRET "" CACHE STRING "Last.fm API shared secret (never commit this)")
+
 # Which build of the version this is: the 4th field of the Windows file version and shown in
 # the app. CI sets it to the release workflow's run number; local builds are 0.
 set(MUSICAPP_BUILD_NUMBER 0 CACHE STRING "Build number, 0-65535")

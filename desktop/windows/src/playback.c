@@ -33,6 +33,9 @@ static struct {
   void (*changed)(void);
   mc_player *player;
   BOOL media_controls; /* set up on first play, as it loads WinRT */
+  mc_library *lib;     /* where plays are counted, or NULL */
+  mc_scrobbler *scrobbler;
+  int announced;       /* the item last sent as now playing, or -1 */
   item *items;
   int count;
 
@@ -73,9 +76,21 @@ static void set_window_title(const item *it) {
   SetWindowTextW(s.wnd, title);
 }
 
+/* Counts the plays the player says count, and scrobbles them. */
+static void count_plays(void) {
+  int index;
+  int64_t started_ms;
+  while (s.player && mc_player_take_played(s.player, &index, &started_ms) == MC_OK) {
+    if (index < 0 || index >= s.count || !s.items[index].uid[0]) continue;
+    if (s.lib) mc_library_record_play(s.lib, s.items[index].uid);
+    if (s.scrobbler) mc_scrobbler_scrobble(s.scrobbler, s.items[index].uid, started_ms);
+  }
+}
+
 /* Brings everything showing playback up to date with the player. */
 static void refresh(void) {
   if (!s.player) return;
+  count_plays();
   mc_player_status st;
   mc_player_status_get(s.player, &st);
   const item *it = st.index >= 0 && st.index < s.count ? &s.items[st.index] : NULL;
@@ -86,6 +101,12 @@ static void refresh(void) {
   BOOL new_track = st.index != s.index, new_state = st.state != s.state;
   s.index = st.index;
   s.state = st.state;
+  if (st.state != MC_PLAYER_PLAYING) {
+    s.announced = -1;
+  } else if (it && st.index != s.announced) {
+    s.announced = st.index;
+    if (s.scrobbler && it->uid[0]) mc_scrobbler_now_playing(s.scrobbler, it->uid);
+  }
   if (new_track) {
     now_playing_show(it ? it->title : NULL, it ? it->artist : NULL, duration_ms, it ? it->cover_dir : NULL);
     if (it) media_controls_set_track(it->title, it->artist, it->album, it->cover_dir);
@@ -143,7 +164,7 @@ void playback_init(HWND wnd, void (*changed)(void)) {
   memset(&s, 0, sizeof s);
   s.wnd = wnd;
   s.changed = changed;
-  s.index = -1;
+  s.index = s.announced = -1;
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = msgs_proc, .hInstance = GetModuleHandleW(NULL),
                     .lpszClassName = L"musicapp_playback"};
   RegisterClassExW(&wc);
@@ -153,12 +174,21 @@ void playback_init(HWND wnd, void (*changed)(void)) {
 }
 
 void playback_free(void) {
+  playback_set_library(NULL, NULL);
   mc_player_free(s.player); /* first, so nothing more is posted */
   if (s.media_controls) media_controls_free();
   taskbar_free();
   if (s.msgs) DestroyWindow(s.msgs);
   free_items();
   memset(&s, 0, sizeof s);
+}
+
+void playback_set_library(mc_library *lib, const char *config_dir) {
+  count_plays();
+  mc_scrobbler_free(s.scrobbler);
+  s.scrobbler = NULL;
+  s.lib = lib;
+  if (lib && config_dir && mc_scrobbler_new(lib, config_dir, &s.scrobbler) != MC_OK) s.scrobbler = NULL;
 }
 
 BOOL playback_window_message(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result) {
@@ -221,10 +251,12 @@ void playback_play(const playback_track *tracks, int count, int start) {
     it->duration_ms = t->duration_ms;
     paths[i] = t->path;
   }
+  count_plays(); /* the old queue's: the player drops them with it */
   free_items();
   s.items = items;
   s.count = count;
-  s.index = -1; /* show the track afresh even if it's the same item number */
+  s.index = s.announced = -1; /* show the track afresh even if it's the same item number */
+
   mc_player_set_queue(s.player, paths, count, start);
   free(paths);
   refresh();

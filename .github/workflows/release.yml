@@ -19,6 +19,9 @@ concurrency:
 env:
   MUSICAPP_CONTACT: ${{ secrets.MUSICAPP_CONTACT }}
   MUSICAPP_ACOUSTID_KEY: ${{ secrets.MUSICAPP_ACOUSTID_KEY }}
+  MUSICAPP_LASTFM_KEY: ${{ secrets.MUSICAPP_LASTFM_KEY }}
+  MUSICAPP_LASTFM_SECRET: ${{ secrets.MUSICAPP_LASTFM_SECRET }}
+
 
 jobs:
   version:

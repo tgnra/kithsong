@@ -14,7 +14,6 @@
 ## Smart Playlists/Groups
 
 - UI - rule editor (build it from mc_smart_field_get()), list smart lists alongside playlists and album groups, reshuffle button
-- Desktop playback - call mc_library_record_play() when a track counts as played. Android already does: half the track or 4 minutes, whichever comes first
 - Core - limit by total duration ("an hour of music")
 
 ## Artists View
@@ -44,7 +43,9 @@
 
 ## Other
 
-- Last.fm scrobbler
+- Scrobbling - UI on every platform: sign in (mc_scrobbler_auth_begin() opens the browser, then poll mc_scrobbler_auth_finish()), sign out, choose the service (Last.fm, Libre.fm or another URL), show pending plays and errors
+- Scrobbling - Android: a JNI bridge for mc_scrobbler, then pass on plays (CoreMediaPlayer's onPlayed) and now playing
+- Scrobbling - cancel a call in progress on mc_scrobbler_free(), so quitting while the service is slow doesn't wait for curl's timeout (up to 30 seconds)
 - Playback - AAC/M4A - pick a decoder: the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Volume control (in the core, so Android can also duck itself on Android 7)
 - Spacebar to play/pause
@@ -53,6 +54,7 @@
 
 ## Wear OS
 
+- Playback - count plays and scrobble them: CorePlayer's Played event, as the phone does
 - Playback - a foreground MediaSessionService, so the system doesn't kill playback in the background and the watch's media controls work
 - Playback - route to Bluetooth headphones and prompt to connect them, rather than the watch speaker
 - Playback - progress and seeking on the player screen

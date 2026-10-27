@@ -8,7 +8,8 @@ package app.musicapp
 class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
     enum class State { Stopped, Playing, Paused }
 
-    enum class Event { State, Track, Error }
+    /** Played: a play counts, to take with [takePlayed]. */
+    enum class Event { State, Track, Error, Played }
 
     data class Status(
         val state: State,
@@ -19,6 +20,9 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         /** 0 if unknown. */
         val durationMs: Long,
     )
+
+    /** A play that counts: queue item [index], begun at [startedMs] (wall clock). */
+    data class Played(val index: Int, val startedMs: Long)
 
     private var handle = nativeNew(this)
 
@@ -44,6 +48,15 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
             return Status(State.entries[v[0].toInt()], v[1].toInt(), v[2].toInt(), v[3], v[4])
         }
 
+    /**
+     * The oldest play that has counted since the last call, or null. Plays are dropped with
+     * the queue, so take them before [setQueue].
+     */
+    fun takePlayed(): Played? {
+        val v = LongArray(2)
+        return if (nativeTakePlayed(handle, v)) Played(v[0].toInt(), v[1]) else null
+    }
+
     /** Stops playback and closes the audio device. */
     override fun close() {
         if (handle != 0L) nativeFree(handle)
@@ -66,5 +79,7 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         @JvmStatic external fun nativeSkipTo(handle: Long, index: Int)
         @JvmStatic external fun nativeSeekMs(handle: Long, ms: Long)
         @JvmStatic external fun nativeStatus(handle: Long, out: LongArray)
+        @JvmStatic external fun nativeTakePlayed(handle: Long, out: LongArray): Boolean
+
     }
 }

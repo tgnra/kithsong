@@ -10,6 +10,12 @@
  * between tracks, even when their sample rates differ: everything is converted to one
  * output format. The audio device is opened on first play.
  *
+ * The player also decides when a play counts (mc_play_counts()), for play counts and
+ * scrobbling alike. Time listened is what was heard: pausing doesn't add to it, and seeking
+ * neither adds to it nor starts a new play. Starting an item again (a skip to it, previous(),
+ * a seek to 0, resuming after a stop) does.
+
+ *
  * Unlike most handles, a player may be used from any thread.
  */
 #ifndef MUSICCORE_PLAYBACK_H
@@ -32,7 +38,8 @@ typedef enum mc_player_state {
 typedef enum mc_player_event {
   MC_PLAYER_EVENT_STATE, /* playing, paused or stopped */
   MC_PLAYER_EVENT_TRACK, /* another queue item started, or the queue was replaced */
-  MC_PLAYER_EVENT_ERROR  /* an item couldn't be played and was skipped, or there's no audio device */
+  MC_PLAYER_EVENT_ERROR, /* an item couldn't be played and was skipped, or there's no audio device */
+  MC_PLAYER_EVENT_PLAYED /* a play counts: take it with mc_player_take_played() */
 } mc_player_event;
 
 /* Called on the player's thread, never from inside a player call, so it may call the player
@@ -44,7 +51,9 @@ mc_status mc_player_new(mc_player_cb cb, void *user, mc_player **out);
 /* Stops playback and closes the audio device. */
 void mc_player_free(mc_player *player);
 
-/* Replaces the queue with count files (UTF-8 paths, copied) and plays item start. */
+/* Replaces the queue with count files (UTF-8 paths, copied) and plays item start. Plays not
+ * yet taken with mc_player_take_played() are dropped, as their indexes were into the old
+ * queue: take them first. */
 mc_status mc_player_set_queue(mc_player *player, const char *const *paths, int count, int start);
 /* Plays queue item index from its start. */
 mc_status mc_player_skip_to(mc_player *player, int index);
@@ -73,6 +82,17 @@ typedef struct mc_player_status {
 
 /* A consistent snapshot. Cheap enough to call on a UI timer. */
 void mc_player_status_get(mc_player *player, mc_player_status *out);
+
+/* Takes the oldest play that has counted since the last call: its queue item and when the
+ * play began (wall clock ms). The frontend counts it (mc_library_record_play()) and scrobbles
+ * it (mc_scrobbler_scrobble()). Call until MC_ERR_NOT_FOUND on each MC_PLAYER_EVENT_PLAYED;
+ * the last few plays are kept, so none are lost to events arriving together. */
+mc_status mc_player_take_played(mc_player *player, int *index, int64_t *started_ms);
+
+/* Whether a play counts: once it has been listened to for half the track or four minutes,
+ * whichever is less (four minutes when the duration is unknown, 0). The same rule as
+ * Last.fm's for scrobbling. Never fails. */
+int mc_play_counts(int64_t duration_ms, int64_t listened_ms);
 
 #ifdef __cplusplus
 }

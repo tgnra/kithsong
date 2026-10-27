@@ -13,6 +13,10 @@
 /* In the per-device config dir, next to settings.json. */
 #define MC_SYNC_DB_NAME "sync.db"
 
+/* The uid of the one scrobble_account row. The same on every device, so accounts signed in
+ * on two of them are one row, merged by last writer wins. */
+#define MC_SCROBBLE_ACCOUNT_UID "00000000-0000-0000-0000-000000000000"
+
 /* Raw X25519 key length, public and private. */
 #define MC_SYNC_KEY_LEN 32
 
@@ -65,7 +69,8 @@ const mc_changelog_table *mc_sync_db_tracked(size_t *count);
 /* Forgets the group, after leaving it or being removed: clears local.group_uid and deletes
  * every replicated row and the group changelog without logging it, so nothing of the old
  * group reaches the next one. Only this device's capabilities row (its cached benchmark)
- * and its own changes to it are kept. */
+ * and its own changes to it are kept, and the scrobbling account with its changes: leaving
+ * doesn't sign the device out, and the account goes with it to the next group. */
 mc_status mc_sync_db_clear_group(mc_sync_db *sdb);
 
 #endif

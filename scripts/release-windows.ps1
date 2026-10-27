@@ -5,7 +5,9 @@
 #   scripts\release-windows.ps1
 #
 # Needs w64devkit's gcc (on PATH, or at $env:W64DEVKIT), CMake >= 3.28 and Ninja. Bakes in
-# $env:MUSICAPP_CONTACT and $env:MUSICAPP_ACOUSTID_KEY when they're set, and stamps
+# $env:MUSICAPP_CONTACT, $env:MUSICAPP_ACOUSTID_KEY, $env:MUSICAPP_LASTFM_KEY and
+# $env:MUSICAPP_LASTFM_SECRET when they're set, and stamps
+
 # $env:MUSICAPP_BUILD_NUMBER (0-65535) into the file version and the app.
 $ErrorActionPreference = 'Stop'
 
@@ -36,6 +38,10 @@ if ($env:MUSICAPP_CONTACT) { $configure += "-DMUSICAPP_CONTACT=$env:MUSICAPP_CON
 else { Write-Warning 'MUSICAPP_CONTACT is not set; MusicBrainz may block this build.' }
 if ($env:MUSICAPP_ACOUSTID_KEY) { $configure += "-DMUSICAPP_ACOUSTID_KEY=$env:MUSICAPP_ACOUSTID_KEY" }
 else { Write-Warning 'MUSICAPP_ACOUSTID_KEY is not set; fingerprinting will be off in this build.' }
+if ($env:MUSICAPP_LASTFM_KEY -and $env:MUSICAPP_LASTFM_SECRET) {
+    $configure += "-DMUSICAPP_LASTFM_KEY=$env:MUSICAPP_LASTFM_KEY", "-DMUSICAPP_LASTFM_SECRET=$env:MUSICAPP_LASTFM_SECRET"
+} else { Write-Warning 'MUSICAPP_LASTFM_KEY or MUSICAPP_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build.' }
+
 if ($env:MUSICAPP_BUILD_NUMBER) { $configure += "-DMUSICAPP_BUILD_NUMBER=$env:MUSICAPP_BUILD_NUMBER" }
 
 Push-Location $root

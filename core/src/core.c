@@ -26,6 +26,8 @@ const char *mc_status_str(mc_status status) {
     case MC_ERR_LOCKED: return mc_str(MC_STR_STATUS_LOCKED);
     case MC_ERR_IN_GROUP: return mc_str(MC_STR_STATUS_IN_GROUP);
     case MC_ERR_LIBRARY_MISMATCH: return mc_str(MC_STR_STATUS_LIBRARY_MISMATCH);
+    case MC_ERR_AUTH: return mc_str(MC_STR_STATUS_AUTH);
+
   }
   return mc_str(MC_STR_STATUS_UNKNOWN);
 }

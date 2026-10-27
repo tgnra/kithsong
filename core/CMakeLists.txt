@@ -72,6 +72,9 @@ add_library(musiccore STATIC
   src/tagger/organize.c
   src/tagger/tagger.c
   src/net/http.c
+  src/scrobble/lastfm.c
+  src/scrobble/scrobbler.c
+
   src/net/socket.c
   src/transcode/transcode.c
   src/discovery/discovery.c

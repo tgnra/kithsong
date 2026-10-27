@@ -18,7 +18,7 @@
 | Database     | Where                                   | Holds |
 |--------------|-----------------------------------------|-------|
 | `library.db` | the library folder                      | artists, albums, tracks, playlists, recents, `files`, the library changelog |
-| `sync.db`    | the per-device config dir, next to `settings.json` | this device's keys, the group, its devices, sync profiles, capabilities, sync status, the group changelog |
+| `sync.db`    | the per-device config dir, next to `settings.json` | this device's keys, the group, its devices, sync profiles, capabilities, sync status, the scrobbling account, the group changelog; and, never synced, this device's scrobble queue |
 
 The rule is one-way: the library holds no sync data, but sync may hold library data (the
 group's `library_uid`, each device's library `node_uid`).
@@ -186,7 +186,8 @@ A device joining with an empty library adopts the group's `library_uid` through
   own row removed: either in a session's group data, or from the `ERROR "removed"` a
   member answers its next session with. It then deletes the group's data from its `sync.db`
   without logging it (keeping only its own `capabilities` row), so nothing of the old group
-  reaches a later one.
+  reaches a later one. The exception is the scrobbling account (below), which stays with
+  its changes: leaving doesn't sign the device out, and the account goes with it.
 - Leaving is removing oneself: the device marks its own row removed, tells one reachable
   member in a session, and forgets the group.
 - A device can't be removed, or leave, while it is the only archive (`MC_ERR_LOCKED`).
@@ -199,7 +200,19 @@ A device joining with an empty library adopts the group's `library_uid` through
   after a local edit, it switches to it, announces it through discovery and writes it to its
   own `devices.name`, so nearby devices and pairing see the group's name for it.
 
+### Scrobbling account
+
+`scrobble_account` is the group's one account with Last.fm or a service with the same API
+(see `core/include/musiccore/scrobbler.h`): the service's addresses, API key and secret
+(NULL: Last.fm and the build's key), the session key and the user name. Its one row has the
+fixed uid `00000000-0000-0000-0000-000000000000` on every device, so a device that signed in
+before it joined a group merges with the group's account by last writer wins, field by field.
+Signing in on any member signs in the group; signing out, or changing the service, signs out
+the group. Each device scrobbles only its own plays, from `scrobble_queue`, which is never
+synced.
+
 ### Archives
+
 
 - `profiles.archive = 1` fixes that device's profile at "everything, originals", no budget.
   Profile setters refuse other values with `MC_ERR_LOCKED`; the name, budget size and

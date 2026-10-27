@@ -217,10 +217,15 @@ static void layout(void) {
   int x = pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  /* The seekbar takes the space between the playback and caption buttons, up to a point. */
-  int right = w - caption_buttons_width();
-  int np_left = x - scale(2) + scale(NOW_PLAYING_GAP), np_w = right - scale(NOW_PLAYING_GAP) - np_left;
+  /* The seekbar takes the space between the playback and caption buttons, up to a point,
+   * centred in the window where that leaves it clear of both. */
+  int min_left = x - scale(2) + scale(NOW_PLAYING_GAP);
+  int max_right = w - caption_buttons_width() - scale(NOW_PLAYING_GAP);
+  int np_w = max_right - min_left;
   if (np_w > scale(NOW_PLAYING_MAX)) np_w = scale(NOW_PLAYING_MAX);
+  int np_left = (w - np_w) / 2;
+  if (np_left + np_w > max_right) np_left = max_right - np_w;
+  if (np_left < min_left) np_left = min_left;
   dwp = DeferWindowPos(dwp, g_app.now_playing, NULL, np_left, 0, np_w > 0 ? np_w : 0, bar, SWP_NOZORDER);
   dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
   UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
@@ -632,6 +637,7 @@ static void rename_self(const char *name) {
 static void start_sync(void) {
   memset(g_app.syncing, 0, sizeof g_app.syncing);
   sync_bridge_start(g_app.wnd, g_app.lib, g_app.config_dir, mc_settings_device_name(g_app.settings));
+  playback_set_library(g_app.lib, g_app.config_dir);
   /* After a library switch on a device's page, it shows again on the new sync (or Albums, if
    * the refresh finds the device gone). */
   if (g_app.page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
@@ -643,6 +649,8 @@ static void stop_sync(void) {
   pair_dialog_close_all();
   device_view_open(NULL, NULL, NULL);
   sync_bridge_stop();
+  playback_set_library(NULL, NULL);
+
   update_footer();
 }
 
@@ -840,8 +848,8 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_GETMINMAXINFO: {
       MINMAXINFO *mmi = (MINMAXINFO *)lp;
-      mmi->ptMinTrackSize.x = scale(640);
-      mmi->ptMinTrackSize.y = scale(400);
+      mmi->ptMinTrackSize.x = scale(1152);
+      mmi->ptMinTrackSize.y = scale(864);
       return 0;
     }
     case WM_ERASEBKGND: { /* also how themed child controls draw their parent's background */

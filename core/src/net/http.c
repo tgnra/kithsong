@@ -48,7 +48,8 @@ static size_t on_body(char *ptr, size_t size, size_t nmemb, void *user) {
   return n;
 }
 
-mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status) {
+/* GET url, or POST form when it isn't NULL. */
+static mc_status perform(const char *url, const char *form, mc_buffer *body, long *http_status) {
   if (!url || !body) return MC_ERR_INVALID_ARG;
   body->data = NULL;
   body->len = 0;
@@ -72,17 +73,28 @@ mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status) {
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, on_body);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, body);
+  if (form) curl_easy_setopt(curl, CURLOPT_POSTFIELDS, form); /* form-urlencoded by default */
 
   CURLcode rc = curl_easy_perform(curl);
   if (rc == CURLE_OK && http_status) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, http_status);
   curl_easy_cleanup(curl);
 
   if (rc != CURLE_OK) {
-    fprintf(stderr, "musiccore: GET %s failed: %s\n", url, curl_easy_strerror(rc));
+    fprintf(stderr, "musiccore: %s %s failed: %s\n", form ? "POST" : "GET", url,
+            curl_easy_strerror(rc));
     mc_buffer_free(body);
     return rc == CURLE_WRITE_ERROR ? MC_ERR_NOMEM : MC_ERR_NET;
   }
   return MC_OK;
+}
+
+mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status) {
+  return perform(url, NULL, body, http_status);
+}
+
+mc_status mc_http_post_form(const char *url, const char *form, mc_buffer *body, long *http_status) {
+  if (!form) return MC_ERR_INVALID_ARG;
+  return perform(url, form, body, http_status);
 }
 
 void mc_ratelimit_init(mc_ratelimit *rl, uint32_t interval_ms) {

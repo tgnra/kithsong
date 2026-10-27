@@ -6,12 +6,16 @@
  * Media keys work while the window has the focus through WM_APPCOMMAND, and otherwise
  * through the media controls, which Windows sends them to.
  *
+ * Plays are counted in the library and scrobbled when the player says they count.
+ *
  * The player is created on first play. Everything here runs on the UI thread.
  */
 #ifndef MUSICAPP_PLAYBACK_H
 #define MUSICAPP_PLAYBACK_H
 
 #include <windows.h>
+
+#include "musiccore/musiccore.h"
 
 /* A queue item. Strings are copied. */
 typedef struct playback_track {
@@ -26,6 +30,12 @@ typedef struct playback_track {
  * may have changed: playing or not, and what's queued. */
 void playback_init(HWND wnd, void (*changed)(void));
 void playback_free(void);
+
+/* Where plays are counted: lib (used on the UI thread only), and a scrobbler for it with
+ * the sync.db in config_dir. NULL, before the library closes. Plays already counted go to
+ * the library that was set before. */
+void playback_set_library(mc_library *lib, const char *config_dir);
+
 
 /* Call first in the main window's procedure. Returns TRUE, with *result set, if msg was
  * playback's: media keys, the taskbar's buttons. */

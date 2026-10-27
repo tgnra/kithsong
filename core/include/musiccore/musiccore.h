@@ -29,7 +29,9 @@ typedef enum mc_status {
   MC_ERR_NOT_FOUND = -8,
   MC_ERR_LOCKED = -9,           /* e.g. an archive device's sync profile */
   MC_ERR_IN_GROUP = -10,        /* the device must leave its sync group first */
-  MC_ERR_LIBRARY_MISMATCH = -11 /* a different library than the sync group's */
+  MC_ERR_LIBRARY_MISMATCH = -11, /* a different library than the sync group's */
+  MC_ERR_AUTH = -12             /* a service refused the sign-in, session or API key */
+
 } mc_status;
 
 /* Length of a textual UUID including the terminating NUL. */
@@ -64,6 +66,8 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "musiccore/transcode.h"
 #include "musiccore/discovery.h"
 #include "musiccore/sync.h"
+#include "musiccore/scrobbler.h"
+
 #include "musiccore/i18n.h"
 
 #endif

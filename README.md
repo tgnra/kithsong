@@ -117,6 +117,10 @@ Optional CMake settings:
   asks every client to include one.
 - `-DMUSICAPP_ACOUSTID_KEY=<key>`: enables fingerprint lookups. Keep it out of git, for
   example in a `CMakeUserPresets.json`, which is already ignored.
+- `-DMUSICAPP_LASTFM_KEY=<key>` and `-DMUSICAPP_LASTFM_SECRET=<secret>`: a Last.fm API
+  account (from https://www.last.fm/api/account/create), for scrobbling to Last.fm. Keep
+  them out of git too.
+
 
 ### Windows
 
