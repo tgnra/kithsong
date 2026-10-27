@@ -117,7 +117,7 @@ fun App(
                         backEnabled = !playerOpen,
                         modifier = Modifier.coveredIf(playerOpen),
                     ) { dismiss ->
-                        DeviceScreen(syncer, uid, bottomPadding, onBack = dismiss)
+                        DeviceScreen(syncer, uid, bottomPadding, onBack = dismiss, onRename = syncer::rename)
                     }
                 }
             }

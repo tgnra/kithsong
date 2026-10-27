@@ -16,6 +16,7 @@ import app.musicapp.SyncEstimate
 import app.musicapp.SyncProfile
 import app.musicapp.VerifyResult
 import app.musicapp.data.CoreLibrarySource
+import app.musicapp.data.ProfileChoices
 import java.io.File
 import java.net.Inet4Address
 import kotlinx.coroutines.CoroutineScope
@@ -65,7 +66,7 @@ data class SyncProgress(
 /** What the devices section of settings and the pairing dialog show. */
 @Immutable
 data class SyncStatus(
-    /** What other devices call this phone. */
+    /** What other devices call this phone; see [Syncer.rename]. */
     val deviceName: String,
     /** Listening, discovering and syncing; only while something holds it (see [Syncer.hold]). */
     val running: Boolean = false,
@@ -112,6 +113,9 @@ data class SyncStatus(
  * does that on its own. What files it holds follows its profile ([profile], [editProfile]),
  * which any member may edit.
  *
+ * This phone starts out as [deviceName]. Renamed here ([rename]) or by another member, it takes
+ * on the new name and passes it to [onRenamed], to be saved and given as [deviceName] next time.
+ *
  * Every call on the core runs on one thread ([thread]); the core's events arrive on its threads
  * and are queued over to that one.
  */
@@ -121,6 +125,7 @@ class Syncer(
     private val configDir: File,
     deviceName: String,
     private val scope: CoroutineScope,
+    private val onRenamed: (String) -> Unit = {},
 ) {
     private val thread = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow(SyncStatus(deviceName))
@@ -203,6 +208,21 @@ class Syncer(
         refreshLists(sync)
     }
 
+    /** Renames this phone, for the whole group when in one. Works whether sync runs or not. */
+    fun rename(name: String) {
+        scope.launch(thread) {
+            val sync = sync ?: return@launch
+            try {
+                sync.deviceName = name
+            } catch (e: MusicCoreException) {
+                Log.w(TAG, "Couldn't rename this phone", e)
+                return@launch
+            }
+            sync.notifyChanged()
+            refreshLists(sync)
+        }
+    }
+
     /** The library changed here, so the other devices should hear of it soon. */
     fun notifyChanged() = call { it.notifyChanged() }
 
@@ -217,8 +237,8 @@ class Syncer(
      * Changes [uid]'s profile with [edit], applied to the one stored now and stored straight
      * away, so edits made meanwhile on other devices to other fields or items aren't
      * overwritten. Returns what's stored afterwards, which may include such edits. The name of
-     * this phone's own profile is what the group calls it; the app keeps that as the system's
-     * device name, so leave it be. ERR_LOCKED for an archive's mode, format or budget switch.
+     * this phone's own profile is what the group calls it, so leave it be and [rename] instead.
+     * ERR_LOCKED for an archive's mode, format or budget switch.
      */
     suspend fun editProfile(uid: String, edit: (SyncProfile) -> SyncProfile): SyncProfile = onCore { sync ->
         val stored = sync.profile(uid)
@@ -227,7 +247,23 @@ class Syncer(
         sync.setProfile(uid, edited)
         // The core passes it on by itself too; this just makes sure it's soon.
         sync.notifyChanged()
+        // A member's name is its profile's.
+        refreshLists(sync)
         sync.profile(uid)
+    }
+
+    /**
+     * [editProfile] for when nobody waits on the result, such as edits left over as the editor
+     * closes; failures are only logged.
+     */
+    fun editProfileLater(uid: String, edit: (SyncProfile) -> SyncProfile) {
+        scope.launch {
+            try {
+                editProfile(uid, edit)
+            } catch (e: MusicCoreException) {
+                Log.w(TAG, "Couldn't store $uid's profile", e)
+            }
+        }
     }
 
     /**
@@ -250,6 +286,9 @@ class Syncer(
      * library isn't the group's.
      */
     suspend fun estimate(uid: String, profile: SyncProfile): SyncEstimate = onCore { it.estimate(uid, profile) }
+
+    /** What a profile can select, from the whole library. Throws MusicCoreException. */
+    suspend fun profileChoices(): ProfileChoices = source.profileChoices()
 
     /**
      * Checks this phone's files, [deep]ly by reading every one, else by size and time, and
@@ -472,8 +511,12 @@ class Syncer(
         try {
             val devices = sync.devices()
             val libraryState = sync.libraryState
+            // Renamed here, or by another member in a session.
+            val name = sync.deviceName
+            if (name.isNotEmpty() && name != state.value.deviceName) onRenamed(name)
             update {
                 copy(
+                    deviceName = name.ifEmpty { deviceName },
                     libraryState = libraryState,
                     self = devices.firstOrNull { it.isSelf },
                     members = devices.filter { !it.isSelf && !it.removed },

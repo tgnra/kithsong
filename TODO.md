@@ -39,8 +39,7 @@
 - Windows and Linux - make a device an archive (mc_sync_set_archive) and show the size estimate (mc_sync_estimate_profile) in the profile editor
 - Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents(); artists need core uids rather than names
-- Android - a profile editor and file progress in the UI, on Syncer's profile API (profile, editProfile, setArchive, estimate) and SyncStatus.sessions; the bridge is done
-- Test phone to desktop sync now that the desktop can pair, including file transfer (wired on Android, never run on a device), and profile edits through the JNI
+- Android - profile editor done (see ANDROID_PROGRESS.md); untested: the over-budget message, renaming a member, a group renaming the phone, dark theme, and sync on a real device over Wi-Fi
 
 ## Other
 

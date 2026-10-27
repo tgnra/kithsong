@@ -242,6 +242,15 @@ class CoreSync(
     /** This device's uid. */
     val deviceUid: String = nativeDeviceUid(handle)
 
+    /**
+     * What the group calls this device. Setting it renames it for the whole group (trimmed;
+     * ERR_INVALID_ARG if blank); the group may rename it too, so it can change after a session.
+     * Save it to pass to the constructor next time.
+     */
+    var deviceName: String
+        get() = nativeGetDeviceName(handle)
+        set(value) = nativeSetDeviceName(handle, value)
+
     /** The TCP port sync listens on once started, else 0. */
     val port: Int get() = nativePort(handle)
 
@@ -448,6 +457,8 @@ class CoreSync(
         ): Long
         @JvmStatic private external fun nativeFree(handle: Long)
         @JvmStatic private external fun nativeDeviceUid(handle: Long): String
+        @JvmStatic private external fun nativeGetDeviceName(handle: Long): String
+        @JvmStatic private external fun nativeSetDeviceName(handle: Long, name: String)
         @JvmStatic private external fun nativeStart(handle: Long)
         @JvmStatic private external fun nativeStop(handle: Long)
         @JvmStatic private external fun nativePort(handle: Long): Int

@@ -36,6 +36,12 @@ data class PlaylistInfo(val uid: String, val name: String, val trackCount: Int)
 /** mc_smart_info: a smart playlist, or a smart album group if [isAlbums]. [rule] is its JSON. */
 data class SmartInfo(val uid: String, val name: String, val isAlbums: Boolean, val rule: String)
 
+/**
+ * mc_artist_info or mc_album_group_info. [albumCount] is an artist's albums as album artist (0
+ * if only credited on tracks), or an album group's albums.
+ */
+data class NamedInfo(val uid: String, val name: String, val albumCount: Int)
+
 /** An open library (mc_library), in folder [dir]. Not thread-safe; close it when done. */
 class CoreLibrary(dir: String) : AutoCloseable {
     internal var handle = nativeOpen(dir)
@@ -56,6 +62,12 @@ class CoreLibrary(dir: String) : AutoCloseable {
     /** [playlistUid]'s tracks in playlist order; a track in it twice is listed twice. */
     fun playlistTracks(playlistUid: String): List<TrackInfo> =
         nativeListTracks(handle, TRACKS_PLAYLIST, playlistUid).asList()
+
+    /** Every artist, album artists and those credited only on tracks alike, by sort name. */
+    fun artists(): List<NamedInfo> = nativeListArtists(handle).asList()
+
+    /** Every manual album group, by name. */
+    fun albumGroups(): List<NamedInfo> = nativeListAlbumGroups(handle).asList()
 
     /** Every smart list of either kind, by name. */
     fun smartLists(): List<SmartInfo> = nativeListSmart(handle).asList()
@@ -94,6 +106,8 @@ class CoreLibrary(dir: String) : AutoCloseable {
         @JvmStatic external fun nativeListAlbums(handle: Long): Array<AlbumInfo>
         @JvmStatic external fun nativeListTracks(handle: Long, kind: Int, uid: String): Array<TrackInfo>
         @JvmStatic external fun nativeListPlaylists(handle: Long): Array<PlaylistInfo>
+        @JvmStatic external fun nativeListArtists(handle: Long): Array<NamedInfo>
+        @JvmStatic external fun nativeListAlbumGroups(handle: Long): Array<NamedInfo>
         @JvmStatic external fun nativeListSmart(handle: Long): Array<SmartInfo>
         @JvmStatic external fun nativePreviewSmartAlbums(handle: Long, rule: String): Array<AlbumInfo>
         @JvmStatic external fun nativeRecordPlay(handle: Long, trackUid: String)

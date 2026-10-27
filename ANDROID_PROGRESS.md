@@ -377,6 +377,50 @@ Not checked: the themed launcher icon on screen, and the import and sync notific
   `CoreImport.kt` and its JNI functions are still in `:native`, unused. To bring import back,
   start from the Phase 5 files in git history.
 
+## Profile editor and device pages
+
+The Profile section of a device's page (`ui/ProfileEditor.kt`) edits any member's profile,
+this phone's included, with the Windows device page's semantics and wording (its strings moved
+to `shared`):
+
+- Sync everything, or a selection chosen on a full-screen list with tabs for albums, artists,
+  playlists and album groups. These come from the whole library by the core's uids, not just
+  what has files here: the bridge gained `CoreLibrary.artists()` and `albumGroups()`
+  (`mc_library_list_artists`, `mc_library_list_album_groups`), so artists are selectable by
+  real uid. Smart lists are left out, as profiles take manual ones only.
+- Original files or Opus at each bitrate, each with its size from the estimate; a size budget
+  (switch and GB, 32 GB by default, in units of 1024 as on Windows).
+- The archive switch: making a device one asks first, with the size of the whole library as
+  originals; only this phone's own page can turn it off, and the core's refusal (`ERR_LOCKED`)
+  reads "This phone can stop being an archive once another archive has checked...". An
+  archive's other settings are greyed out.
+- The estimate (tracks, size, the format a budget picks, over budget and by how much, the
+  room and free space) is worked out again 300 ms after each edit, on the sync thread.
+- Edits apply on their own 400 ms after the last one, as on Windows: only the changed fields
+  and items are applied over the profile as stored, so edits from other devices aren't lost;
+  edits left as the page closes are stored then.
+
+Device pages also show the device's file report (files OK of expected, missing, damaged, size,
+when last checked), sessions under way with their step, files and bytes and a progress bar
+(this phone's page lists every session), and how the last session went. The Sync page's rows
+add "3 of 10 files" while files come in.
+
+Renaming: the bridge gained `mc_sync_set_device_name`/`mc_sync_get_device_name`. This phone's
+page renames it (`Syncer.rename`), and the name is saved in `AppSettings.deviceName` and passed
+to `mc_sync_new` next time; one renamed by another member is taken on and saved the same way.
+A name equal to the system's isn't saved, so an unrenamed phone follows the system name. A
+member is renamed through its profile's name, as on Windows.
+
+Tested on the emulator against the Windows app (scratch library, `--config-dir`, paired by
+address at 10.0.2.2): pairing; the PC fetching the phone's 2,590 files; editing the PC's profile
+to a selection of 2 albums and an artist, Opus 128 and a 32 GB budget, which persisted across an
+app restart and which the PC applied (it kept 49 files and reported "49 of 49 files OK");
+making the PC an archive, after which it fetched the whole library again with progress on the
+phone; the refusal to stop this phone being an archive; renaming this phone. Not tested: the
+over-budget message (the test files are too small to exceed 1 GB), renaming a member, the
+selection list's album groups and playlists tabs with data, a group renaming this phone, dark
+theme.
+
 ## Follow-ups
 
 Core:
@@ -384,15 +428,14 @@ Core:
 - Import lookups: detect being offline, or offer an option to skip MusicBrainz, so offline
   import isn't slow and every item doesn't need a decision.
 - Importing the same files twice copies them again; skip files already in the library.
-- Sync transfers audio files now; on Android it's wired up but untested on a device (see
-  phase 6).
-- No artist or recents API; artists are derived from albums and some recents live in the app.
+- No artist or recents API for the main screen; artists there are derived from albums and some
+  recents live in the app (the profile editor uses the core's artist list).
 - No volume control, so the app can't duck itself on Android 7.
 - Desktop doesn't record plays yet; Android does.
 
 Desktop:
 
-- The Windows Add Device only logs a message, so phone-to-desktop sync is untested.
+- Phone-to-desktop sync and file transfer were tested with the Windows app on the emulator.
 
 Android:
 

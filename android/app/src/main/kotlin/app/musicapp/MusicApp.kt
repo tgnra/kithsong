@@ -71,8 +71,12 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
         playback = SessionPlayback(this, MainScope())
         settings = AppSettings(getSharedPreferences("app", MODE_PRIVATE))
         // sync.db holds this phone's keys, so it's in no-backup storage like the library: a
-        // restored copy on another phone would pose as this one.
-        syncer = Syncer(this, core, File(noBackupFilesDir, "sync"), deviceName(), MainScope())
+        // restored copy on another phone would pose as this one. A name the system's isn't
+        // saved, so the phone follows the system's while it hasn't been renamed.
+        val name = settings.deviceName ?: systemDeviceName()
+        syncer = Syncer(this, core, File(noBackupFilesDir, "sync"), name, MainScope()) { renamed ->
+            settings.deviceName = renamed.takeIf { it != systemDeviceName() }
+        }
         core.onChanged = syncer::notifyChanged
     }
 
@@ -83,9 +87,9 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
         if (NativeCore.followLocale(newConfig)) (library as? CoreLibrarySource)?.refresh()
     }
 
-    // What other devices call this phone: the name set in the system settings (API 25+), else
-    // its model.
-    private fun deviceName(): String {
+    // What other devices call this phone unless it's renamed: the name set in the system
+    // settings (API 25+), else its model.
+    private fun systemDeviceName(): String {
         val name = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
             Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
         } else {

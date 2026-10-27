@@ -74,6 +74,20 @@ class CoreLibrarySource(
     suspend fun openSync(configDir: String, deviceName: String, listener: (CoreSync.Event) -> Unit): CoreSync? =
         withContext(core) { open()?.let { CoreSync(it, configDir, deviceName, DeviceKind.Phone, listener) } }
 
+    /**
+     * What a sync profile can select (see [ProfileChoices]); smart playlists and album groups
+     * are left out, as profiles only take manual ones. Throws MusicCoreException.
+     */
+    suspend fun profileChoices(): ProfileChoices = withContext(core) {
+        val lib = open() ?: throw MusicCoreException(CoreSync.ERR_NOT_FOUND)
+        ProfileChoices(
+            albums = lib.albums().map { ProfileChoice(it.uid, it.title, it.artist ?: unknownArtist(), it.year) },
+            artists = lib.artists().map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount) },
+            playlists = lib.playlists().map { ProfileChoice(it.uid, it.name) },
+            albumGroups = lib.albumGroups().map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount) },
+        )
+    }
+
     override suspend fun trackList(ref: CollectionRef): TrackList? = withContext(core) {
         val lib = open() ?: return@withContext null
         val covers = Covers()

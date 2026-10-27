@@ -304,6 +304,83 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListSmart(JNI
   return out;
 }
 
+/* A NamedInfo[] of n items, item i's uid, name and album count from get(items, i), or NULL
+ * with an exception pending. */
+static jobjectArray named_array(JNIEnv *env, const void *items, int n,
+                                void (*get)(const void *, int, const char **, const char **, int *)) {
+  jclass info = (*env)->FindClass(env, "app/musicapp/NamedInfo");
+  if (!info) return NULL;
+  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V");
+  if (!ctor) return NULL;
+  jobjectArray out = (*env)->NewObjectArray(env, n, info, NULL);
+  for (int i = 0; out && i < n; i++) {
+    const char *cuid, *cname;
+    int count;
+    get(items, i, &cuid, &cname, &count);
+    jstring uid = new_string(env, cuid);
+    jstring name = new_string(env, cname ? cname : "");
+    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)count);
+    if (!item) {
+      out = NULL;
+      break;
+    }
+    (*env)->SetObjectArrayElement(env, out, i, item);
+    (*env)->DeleteLocalRef(env, item);
+    (*env)->DeleteLocalRef(env, uid);
+    (*env)->DeleteLocalRef(env, name);
+  }
+  return out;
+}
+
+static void artist_at(const void *items, int i, const char **uid, const char **name, int *count) {
+  const mc_artist_info *a = &((const mc_artist_info *)items)[i];
+  *uid = a->uid;
+  *name = a->name;
+  *count = a->album_count;
+}
+
+static void album_group_at(const void *items, int i, const char **uid, const char **name,
+                           int *count) {
+  const mc_album_group_info *g = &((const mc_album_group_info *)items)[i];
+  *uid = g->uid;
+  *name = g->name;
+  *count = g->album_count;
+}
+
+JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListArtists(JNIEnv *env,
+                                                                                jclass cls,
+                                                                                jlong handle) {
+  (void)cls;
+  mc_artist_list *list = NULL;
+  mc_status st = mc_library_list_artists((mc_library *)(intptr_t)handle, &list);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  /* An empty list may be NULL. */
+  jobjectArray out =
+    named_array(env, list ? list->items : NULL, list ? list->count : 0, artist_at);
+  mc_artist_list_free(list);
+  return out;
+}
+
+JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListAlbumGroups(JNIEnv *env,
+                                                                                    jclass cls,
+                                                                                    jlong handle) {
+  (void)cls;
+  mc_album_group_list *list = NULL;
+  mc_status st = mc_library_list_album_groups((mc_library *)(intptr_t)handle, &list);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  /* An empty list may be NULL. */
+  jobjectArray out =
+    named_array(env, list ? list->items : NULL, list ? list->count : 0, album_group_at);
+  mc_album_group_list_free(list);
+  return out;
+}
+
 /* --- CoreImport -------------------------------------------------------------------- */
 
 typedef struct jni_import {
@@ -1134,4 +1211,28 @@ JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeVerify(JNIEnv *env, jcla
   }
   jlong values[4] = {r.checked, r.ok, r.failed, r.deleted};
   (*env)->SetLongArrayRegion(env, out, 0, 4, values);
+}
+
+/* Renames this device, for the whole group when in one. */
+JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeSetDeviceName(JNIEnv *env, jclass cls,
+                                                                       jlong handle, jstring name) {
+  (void)cls;
+  const char *cname = (*env)->GetStringUTFChars(env, name, NULL);
+  if (!cname) return;
+  mc_status st = mc_sync_set_device_name(sync_of(handle), cname);
+  (*env)->ReleaseStringUTFChars(env, name, cname);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* This device's name as it is now: the group may have renamed it. */
+JNIEXPORT jstring JNICALL Java_app_musicapp_CoreSync_nativeGetDeviceName(JNIEnv *env, jclass cls,
+                                                                         jlong handle) {
+  (void)cls;
+  char name[4 * MC_SYNC_DEVICE_NAME_MAX + 4];
+  mc_status st = mc_sync_get_device_name(sync_of(handle), name, sizeof name);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  return new_string(env, name);
 }
