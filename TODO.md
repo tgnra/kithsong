@@ -32,15 +32,15 @@
 
 ## Sync
 
-- Core - transfer audio files; only metadata syncs so far
-- Core - sessions hang instead of timing out when Android blocks the network
-- Core - sync profiles: getters and setters, making a device an archive, the size estimate (TODO(phase 5) in sync.h)
-- Core - merging the same album imported on two devices (open question in sync-protocol.md)
-- Core - recents API, so recents sync; Android keeps playlist and artist recents itself
-- Linux and Windows - Add Device only logs a message; start pairing with mc_sync_pair_request_address() and wire up the rest of the sync API
-- Test phone to desktop sync once the desktop can pair
-- UI to do selective sync
-- Original file tags - if I add flacs on my phone which is set to sync opus - those files are originals. When syncing with an archive, sync them to the archive and then delete and sync back opus of those files.
+- Core - test PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
+- Core - albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
+- Core - changelog compaction must keep the rows that decide merges and archive demotions
+- Linux - the sync UI: show the pairing code, a device page with profiles, Sync now, Leave Group (Windows has them)
+- Windows - the device page's progress shows rows only; show files and bytes (files_done, files_total in mc_sync_progress)
+- Windows and Linux - make a device an archive (mc_sync_set_archive) and show the size estimate (mc_sync_estimate_profile) in the profile editor
+- Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
+- Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents(); artists need core uids rather than names
+- Test phone to desktop sync now that the desktop can pair, including file transfer
 
 ## Other
 
@@ -49,7 +49,6 @@
 - Volume control (in the core, so Android can also duck itself on Android 7)
 - Spacebar to play/pause
 - Recents list above devices
-- Move text strings to a centralised list and include in build
 - Linux and Windows - Move Library (the button is disabled)
 
 ## Wear OS
