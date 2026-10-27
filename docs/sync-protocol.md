@@ -313,6 +313,55 @@ Sessions are retried with backoff (10 s, doubling, up to 5 minutes).
   A reference to a parent that doesn't exist at commit (it was deleted concurrently) is
   resolved as ON DELETE would: set to NULL, or the row deleted where the column is
   `NOT NULL`. Every device resolves it the same way.
+- Duplicates are merged as rows are applied; see [Duplicates](#duplicates).
+
+### Duplicates
+
+Two devices can import the same album independently, each making its own artist, album and
+track rows with uids of their own. Once their rows meet, every device merges them, the same
+way, without logging anything.
+
+- **What is one.** Two artists are one when they share an `mb_artistid`, two albums when
+  they share an `mb_albumid`, two tracks when they share an `mb_releasetrackid` (a track on
+  one release, so the same recording on two releases stays two tracks), and two singles
+  albums (`kind = 'singles'`) when their artists are one. Empty ids don't count. "Share"
+  means any value the changelog has ever held for the field, not only the current winner,
+  so a class only ever grows as rows arrive: a later edit that changes or clears an id
+  doesn't split it. The classes are therefore a function of the set of changelog rows, the
+  same on every device whatever order the rows came in.
+- **Under which uid.** A class is one row under its smallest uid (the canonical uid). Its
+  fields and whether it is live are worked out from the changelog rows of every uid in the
+  class together, as if they were one row's: field by field the highest `(hlc, origin_uid)`
+  wins, and a delete of any of them is the class's delete. Recents rows, keyed by the
+  item's uid, merge the same way.
+- **References.** `tracks.album_uid` and `album_group_entries.album_uid`, `albums.artist_uid`
+  and `tracks.artist_uid`, and `playlist_entries.track_uid`, `track_plays.track_uid` and
+  the device-local `files.track_uid` are moved to the canonical uid, so each device's files
+  stay attached to the surviving track. Two `track_plays` rows that would then share a
+  `(track_uid, node_uid)` keep only the smaller uid. If the whole class is deleted, the
+  references go as ON DELETE takes them. Album groups or playlists that held both copies
+  hold the survivor twice.
+- **Late rows.** A row naming a merged-away uid, from a device that hasn't merged yet, is
+  logged as it is and applied to the canonical row; a row whose reference names one is
+  pointed at the canonical uid.
+- **Sync profiles.** `profile_items` in `sync.db` are not rewritten, since `sync.db` holds
+  what its own changelog says. An `album` or `artist` item that names a merged-away uid is
+  read as naming the canonical uid (by `mc_sync_get_profile()` and the wanted set), and
+  removing that album or artist from a profile deletes every stored row that resolves to
+  it.
+- **Not logged.** The merge writes nothing to the changelog. Each device derives it from
+  the same rows, as it does the reference resolution above, so its tables agree with every
+  other device's once their changelogs do, and the convergence digest (over the version
+  vectors) is unaffected. Logging it instead would have every device that merges add its
+  own copy of each rewrite, and a rewrite stamped later than a concurrent edit (moving a
+  track to another album, say) would override it.
+- **Local state.** `library.db` keeps `aliases` (each merged-away uid and its canonical uid)
+  and `merge_keys` (the ids ever logged per uid); neither is logged. `meta.merge_seq` is the
+  changelog `seq` read so far, and each applied batch reads on from there, so rows written
+  locally are taken into account at the next batch too.
+- **Imports.** An import looks albums up by `mb_albumid` first and artists by
+  `mb_artistid`, so importing an album a device already has, merged or not, adds to the
+  survivor rather than making a second copy.
 
 ### Scheduling
 
@@ -442,8 +491,7 @@ transfer-only.
 
 ## Open questions
 
-- Duplicate merge: two devices import the same album independently. Proposal: when an
-  incoming album has the same `mb_albumid` as a local one with a different uid, record an
-  alias row and rewrite references (including `profile_items`) to the lexicographically
-  smaller uid.
+- Duplicates without MusicBrainz ids (untagged imports of one album on two devices) stay
+  two. Compaction must keep the rows that decide [Duplicates](#duplicates), or a device
+  joining later can't derive the same classes.
 - How long to keep changelog history once every member has acknowledged it (compaction).

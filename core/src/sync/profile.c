@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sync/merge.h"
 #include "sync/sync_internal.h"
 
 /* profile_items.kind, indexed by mc_profile_item_kind. */
@@ -107,9 +108,18 @@ static mc_status read_fields(sqlite3 *db, const char *uid, mc_sync_profile *p, i
   return st;
 }
 
-/* uid's items of known kinds, sorted, each (kind, ref_uid) once. *out is malloc'd (NULL if
- * there are none). */
-static mc_status read_items(sqlite3 *db, const char *uid, mc_profile_item **out, int *count) {
+/* An album or artist item names the uid its duplicates were merged into (see "Duplicates" in
+ * docs/sync-protocol.md), whichever copy it was made for. The stored row keeps the uid it
+ * was written with, so sync.db stays what its changelog says. lib may be NULL. */
+static mc_status resolve_item(mc_library *lib, mc_profile_item *item) {
+  if (item->kind != MC_PROFILE_ALBUM && item->kind != MC_PROFILE_ARTIST) return MC_OK;
+  return mc_merge_resolve(lib, item->ref_uid, item->ref_uid);
+}
+
+/* uid's items of known kinds, resolved, sorted, each (kind, ref_uid) once. *out is malloc'd
+ * (NULL if there are none). */
+static mc_status read_items(sqlite3 *db, mc_library *lib, const char *uid, mc_profile_item **out,
+                            int *count) {
   *out = NULL;
   *count = 0;
   sqlite3_stmt *stmt;
@@ -137,6 +147,7 @@ static mc_status read_items(sqlite3 *db, const char *uid, mc_profile_item **out,
     }
     items[n].kind = (mc_profile_item_kind)kind;
     memcpy(items[n].ref_uid, ref, MC_UID_STRLEN);
+    if ((st = resolve_item(lib, &items[n])) != MC_OK) break;
     n++;
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
@@ -160,7 +171,7 @@ mc_status mc_sync_get_profile(mc_sync *sync, const char *device_uid, mc_sync_pro
   int exists;
   mc_status st = check_member(sync->api.sdb, device_uid);
   if (st == MC_OK) st = read_fields(db, device_uid, p, &exists);
-  if (st == MC_OK) st = read_items(db, device_uid, &p->items, &p->count);
+  if (st == MC_OK) st = read_items(db, sync->api.lib, device_uid, &p->items, &p->count);
   mc_mutex_unlock(&sync->api_lock);
   if (st != MC_OK) {
     mc_sync_profile_free(p);
@@ -238,25 +249,67 @@ static mc_status write_fields(mc_sync_db *sdb, const char *uid, const mc_sync_pr
   return st;
 }
 
+/* Deletes uid's stored rows that resolve to item: every copy, whichever duplicate's uid it
+ * was written with. */
+static mc_status delete_item(sqlite3 *db, mc_library *lib, const char *uid,
+                             const mc_profile_item *item) {
+  sqlite3_stmt *sel, *del = NULL;
+  if (sqlite3_prepare_v2(db, "SELECT uid, ref_uid FROM profile_items WHERE device_uid = ?1"
+                             " AND kind = ?2", -1, &sel, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  mc_status st = sqlite3_prepare_v2(db, "DELETE FROM profile_items WHERE uid = ?1", -1, &del,
+                                    NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  sqlite3_bind_text(sel, 1, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(sel, 2, k_kinds[item->kind], -1, SQLITE_STATIC);
+  /* Collected first: deleting while stepping the same table's rows is best avoided. */
+  char (*rows)[MC_UID_STRLEN] = NULL;
+  int n = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(sel)) == SQLITE_ROW) {
+    const char *row = (const char *)sqlite3_column_text(sel, 0);
+    mc_profile_item it = {.kind = item->kind};
+    const char *ref = (const char *)sqlite3_column_text(sel, 1);
+    if (!is_uid(row) || !is_uid(ref)) continue;
+    memcpy(it.ref_uid, ref, MC_UID_STRLEN);
+    if ((st = resolve_item(lib, &it)) != MC_OK || strcmp(it.ref_uid, item->ref_uid)) continue;
+    char (*more)[MC_UID_STRLEN] = realloc(rows, (size_t)(n + 1) * sizeof *more);
+    if (!more) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    rows = more;
+    memcpy(rows[n++], row, MC_UID_STRLEN);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE && rc != SQLITE_ROW) st = MC_ERR_DB;
+  sqlite3_finalize(sel);
+  for (int i = 0; st == MC_OK && i < n; i++) {
+    sqlite3_bind_text(del, 1, rows[i], -1, SQLITE_STATIC);
+    st = run(del);
+  }
+  sqlite3_finalize(del);
+  free(rows);
+  return st;
+}
+
 /* profile_items: inserts the wanted items not stored, and deletes the stored ones not
- * wanted (with any duplicates of them). want is sorted and unique. Rows of kinds this
- * version doesn't know are left as they are. */
-static mc_status write_items(mc_sync_db *sdb, const char *uid, const mc_profile_item *want,
-                             int nwant, int *changed) {
+ * wanted (with any duplicates of them). want is sorted and unique; it is resolved here, so a
+ * caller holding a merged-away uid still means its album. Rows of kinds this version
+ * doesn't know are left as they are. */
+static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
+                             mc_profile_item *want, int nwant, int *changed) {
   sqlite3 *db = mc_sync_db_handle(sdb);
   mc_profile_item *have;
   int nhave;
-  mc_status st = read_items(db, uid, &have, &nhave);
+  mc_status st = MC_OK;
+  for (int i = 0; st == MC_OK && i < nwant; i++) st = resolve_item(lib, &want[i]);
   if (st != MC_OK) return st;
-  sqlite3_stmt *ins = NULL, *del = NULL;
+  nwant = sort_unique(want, nwant);
+  st = read_items(db, lib, uid, &have, &nhave);
+  if (st != MC_OK) return st;
+  sqlite3_stmt *ins = NULL;
   if (sqlite3_prepare_v2(db,
                          "INSERT INTO profile_items (uid, device_uid, kind, ref_uid)"
                          " VALUES (?1, ?2, ?3, ?4)",
-                         -1, &ins, NULL) != SQLITE_OK ||
-      sqlite3_prepare_v2(db,
-                         "DELETE FROM profile_items"
-                         " WHERE device_uid = ?1 AND kind = ?2 AND ref_uid = ?3",
-                         -1, &del, NULL) != SQLITE_OK)
+                         -1, &ins, NULL) != SQLITE_OK)
     st = MC_ERR_DB;
   int i = 0, j = 0;
   while (st == MC_OK && (i < nwant || j < nhave)) {
@@ -272,10 +325,7 @@ static mc_status write_items(mc_sync_db *sdb, const char *uid, const mc_profile_
       st = run(ins);
       i++;
     } else if (c > 0) {
-      sqlite3_bind_text(del, 1, uid, -1, SQLITE_STATIC);
-      sqlite3_bind_text(del, 2, k_kinds[have[j].kind], -1, SQLITE_STATIC);
-      sqlite3_bind_text(del, 3, have[j].ref_uid, -1, SQLITE_STATIC);
-      st = run(del);
+      st = delete_item(db, lib, uid, &have[j]);
       j++;
     } else {
       i++;
@@ -285,7 +335,6 @@ static mc_status write_items(mc_sync_db *sdb, const char *uid, const mc_profile_
     if (st == MC_OK) *changed = 1;
   }
   sqlite3_finalize(ins);
-  sqlite3_finalize(del);
   free(have);
   return st;
 }
@@ -327,7 +376,7 @@ mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sy
          profile->budget_enabled))
       st = MC_ERR_LOCKED;
     if (st == MC_OK) st = write_fields(sdb, device_uid, &old, exists, profile, name, &changed);
-    if (st == MC_OK) st = write_items(sdb, device_uid, want, nwant, &changed);
+    if (st == MC_OK) st = write_items(sdb, sync->api.lib, device_uid, want, nwant, &changed);
     if (st == MC_OK) st = mc_sync_db_commit(sdb);
     if (st != MC_OK) mc_sync_db_rollback(sdb);
   }

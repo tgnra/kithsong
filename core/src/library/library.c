@@ -65,6 +65,25 @@ static const char *const k_migrations[] = {
   "  opened_ms INTEGER NOT NULL"
   ") WITHOUT ROWID;"
   "CREATE INDEX recents_opened ON recents (opened_ms);",
+  /* v8: duplicate merging (sync/merge.c). The same artist, album or track imported on two
+   * devices is one: aliases maps each merged-away uid to the smallest uid of its class, and
+   * merge_keys holds the MusicBrainz ids (and singles albums' artists) ever logged for each
+   * uid, which decide the classes. Both are derived from the changelog on every device, so
+   * they are never logged; meta.merge_seq is how far the changelog has been read. */
+  "CREATE TABLE aliases ("
+  "  uid       TEXT PRIMARY KEY,"
+  "  entity    TEXT NOT NULL,"
+  "  canonical TEXT NOT NULL"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX aliases_canonical ON aliases (canonical);"
+  "CREATE TABLE merge_keys ("
+  "  entity TEXT NOT NULL,"
+  "  field  TEXT NOT NULL,"
+  "  value  TEXT NOT NULL,"
+  "  uid    TEXT NOT NULL,"
+  "  PRIMARY KEY (entity, field, value, uid)"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX merge_keys_uid ON merge_keys (uid);",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 

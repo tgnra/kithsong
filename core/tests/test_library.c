@@ -146,6 +146,8 @@ static void test_migration_v4(const char *scratch) {
                  "DROP TABLE album_group_entries;"
                  "DROP TABLE album_groups;"
                  "DROP TABLE recents;"
+                 "DROP TABLE aliases;"
+                 "DROP TABLE merge_keys;"
                  "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS
                  "PRAGMA user_version = 3;") == SQLITE_OK);
@@ -160,7 +162,7 @@ static void test_migration_v4(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 7);
+  CHECK(mc_library_schema_version(lib) == 8);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
   CHECK(has_column(db, "files", "sha256"));
   CHECK(strlen(mc_library_uid(lib)) == MC_UID_STRLEN - 1);
@@ -183,6 +185,8 @@ static void test_migration_v5(const char *scratch) {
   CHECK(exec(db, "DROP TABLE album_group_entries;"
                  "DROP TABLE album_groups;"
                  "DROP TABLE recents;"
+                 "DROP TABLE aliases;"
+                 "DROP TABLE merge_keys;"
                  "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS
                  "PRAGMA user_version = 4;") == SQLITE_OK);
@@ -192,7 +196,7 @@ static void test_migration_v5(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 7);
+  CHECK(mc_library_schema_version(lib) == 8);
   CHECK(has_column(db, "album_groups", "name"));
   CHECK(has_column(db, "album_group_entries", "position"));
 
@@ -227,6 +231,8 @@ static void test_migration_v6(const char *scratch) {
   if (!lib) return;
   sqlite3 *db = mc_library_db(lib);
   CHECK(exec(db, "DROP TABLE recents;"
+                 "DROP TABLE aliases;"
+                 "DROP TABLE merge_keys;"
                  "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS
                  "PRAGMA user_version = 5;") == SQLITE_OK);
@@ -236,7 +242,7 @@ static void test_migration_v6(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 7);
+  CHECK(mc_library_schema_version(lib) == 8);
   CHECK(has_column(db, "smart_lists", "rule"));
   CHECK(has_column(db, "track_plays", "last_played_ms"));
 
@@ -282,14 +288,15 @@ static void test_recents(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   sqlite3 *db = mc_library_db(lib);
-  CHECK(exec(db, "DROP TABLE recents; PRAGMA user_version = 6;") == SQLITE_OK);
+  CHECK(exec(db, "DROP TABLE recents; DROP TABLE aliases; DROP TABLE merge_keys;"
+                 "PRAGMA user_version = 6;") == SQLITE_OK);
   mc_library_close(lib);
 
   lib = NULL;
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 7);
+  CHECK(mc_library_schema_version(lib) == 8);
   CHECK(has_column(db, "recents", "opened_ms"));
 
   CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
@@ -554,7 +561,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 7);
+  CHECK(mc_library_schema_version(lib) == 8);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -635,7 +642,7 @@ int main(int argc, char **argv) {
   if (lib) {
     CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
     CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
-    CHECK(mc_library_schema_version(lib) == 7);
+    CHECK(mc_library_schema_version(lib) == 8);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }

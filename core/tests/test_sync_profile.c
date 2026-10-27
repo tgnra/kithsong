@@ -614,6 +614,33 @@ int main(int argc, char **argv) {
       mc_sync_profile_free(p);
     }
     CHECK(count_items(&b, b.uid, "genre", x) == 1); /* the unknown kind reached B as well */
+
+    /* A duplicate of the album, imported elsewhere and merged into it on A: an item still
+     * naming the duplicate means the album, and removing the album removes both rows. */
+    char dup[MC_UID_STRLEN];
+    mc_uid_new(dup);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO aliases (uid, entity, canonical) VALUES ('%s', 'albums', '%s')", dup,
+             album);
+    CHECK(exec(mc_library_db(a.lib), sql) == SQLITE_OK);
+    char iu[MC_UID_STRLEN];
+    mc_uid_new(iu);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO profile_items (uid, device_uid, kind, ref_uid)"
+             " VALUES ('%s', '%s', 'album', '%s')",
+             iu, b.uid, dup);
+    group_edit(&a, sql, 1);
+    p = get(&a, b.uid);
+    if (p) {
+      CHECK(has_item(p, MC_PROFILE_ALBUM, album) == 1 && has_item(p, MC_PROFILE_ALBUM, dup) == 0);
+      CHECK(p->count == 3);
+      for (int i = 0; i < p->count; i++)
+        if (p->items[i].kind == MC_PROFILE_ALBUM) p->items[i] = item(MC_PROFILE_ARTIST, artist);
+      CHECK(mc_sync_set_profile(a.sync, b.uid, p) == MC_OK);
+    }
+    mc_sync_profile_free(p);
+    CHECK(count_items(&a, b.uid, "album", album) == 0);
+    CHECK(count_items(&a, b.uid, "album", dup) == 0);
   }
 
   dev_stop(&a);

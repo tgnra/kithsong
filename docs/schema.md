@@ -13,6 +13,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 5 | `album_groups`, `album_group_entries` |
 | 6 | `smart_lists`, `track_plays.last_played_ms` |
 | 7 | `recents` |
+| 8 | `aliases`, `merge_keys` (duplicate merging) |
 
 ## Location
 
@@ -197,8 +198,10 @@ is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
 | `smart_lists`      | yes    | `subject` is `'tracks'` or `'albums'`; `rule` is JSON; see [Smart lists](#smart-lists) |
 | `recents`          | yes    | last opened items, one row per item keyed by its uid; see [Recents](#recents) |
 | `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it |
+| `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
+| `merge_keys`       | no     | the MusicBrainz ids (and singles albums' artists) ever logged per uid, which decide what merges |
 | `changelog`        | -      | field-level change log that sync is built on |
-| `meta`             | no     | `node_uid`, `library_uid` and other per-library settings; see [Identity](#identity) |
+| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to) and other per-library settings; see [Identity](#identity) |
 
 ## Change tracking
 

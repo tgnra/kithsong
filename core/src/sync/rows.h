@@ -73,6 +73,9 @@ typedef struct mc_rows_target {
   const mc_changelog_table *tables; /* in any order; foreign keys give the dependencies */
   size_t ntables;
   void *owner;
+  /* library.db: the same artist, album or track from two devices is merged into one row
+   * as rows are applied (merge.c). */
+  int merge;
   mc_status (*begin)(void *owner);
   mc_status (*commit)(void *owner);
   void (*rollback)(void *owner);

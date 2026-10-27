@@ -7,6 +7,7 @@
 #include <mbedtls/sha256.h>
 
 #include "library/library_internal.h"
+#include "sync/merge.h"
 #include "sync/sync_db.h"
 
 #define UID_LEN (MC_UID_STRLEN - 1)
@@ -198,6 +199,7 @@ void mc_rows_target_library(mc_library *lib, mc_rows_target *out) {
   out->applying_remote = &lib->applying_remote;
   out->tables = mc_library_tracked(&out->ntables);
   out->owner = lib;
+  out->merge = 1;
   out->begin = lib_begin;
   out->commit = lib_commit;
   out->rollback = lib_rollback;
@@ -257,7 +259,16 @@ void mc_rows_target_group(mc_sync_db *sdb, mc_rows_target *out) {
  * references are checked, and one to a missing parent is resolved as the schema's ON
  * DELETE action would have: set to NULL, or the row deleted where the column is NOT NULL.
  * Every device resolves it the same way, and none logs it, since each reaches the same
- * state from the same changelog. */
+ * state from the same changelog.
+ *
+ * Duplicates (library.db; see merge.h). After logging, the changelog is scanned for keys
+ * that make two uids one. A merged class is one row under its canonical uid: rows naming
+ * any uid of the class are applied to the canonical row, whose fields and liveness are
+ * worked out from the changelog rows of every uid in the class together, as if they were
+ * one row's. Then references to the uids this batch merged away move to the canonical row
+ * and the losers' rows go, and any touched row that names an older loser is pointed at its
+ * canonical uid. Like the reference check, this is derived from the changelog and never
+ * logged. */
 
 typedef struct fk_info {
   int col; /* index into the table's cols */
@@ -286,6 +297,7 @@ struct mc_rows_applier {
   table_meta *tables;
   int *order; /* table indexes, parents before children */
   sqlite3_stmt *dup, *winner, *log, *state;
+  sqlite3_stmt *class_state; /* state over a merged class; library.db only */
   touched *touched;
   int ntouched, cap;
 };
@@ -410,6 +422,15 @@ mc_status mc_rows_applier_new(const mc_rows_target *target, mc_rows_applier **ou
                           " ORDER BY field, hlc DESC, origin_uid DESC",
                           -1, &a->state, NULL) != SQLITE_OK))
     st = MC_ERR_DB;
+  /* row_uid last only to make ties between a class's uids deterministic. */
+  if (st == MC_OK && target->merge &&
+      sqlite3_prepare_v2(db,
+                         "SELECT field, value, hlc, origin_uid FROM changelog"
+                         " WHERE entity = ?1 AND row_uid IN"
+                         " (SELECT ?2 UNION ALL SELECT uid FROM aliases WHERE canonical = ?2)"
+                         " ORDER BY field, hlc DESC, origin_uid DESC, row_uid",
+                         -1, &a->class_state, NULL) != SQLITE_OK)
+    st = MC_ERR_DB;
   if (st != MC_OK) {
     mc_rows_applier_free(a);
     return st;
@@ -424,6 +445,7 @@ void mc_rows_applier_free(mc_rows_applier *a) {
   sqlite3_finalize(a->winner);
   sqlite3_finalize(a->log);
   sqlite3_finalize(a->state);
+  sqlite3_finalize(a->class_state);
   free(a->tables);
   free(a->order);
   free(a->touched);
@@ -542,7 +564,7 @@ static mc_status read_state(mc_rows_applier *a, const table_meta *m, const char 
   int has_del = 0, has_change = 0;
   char prev[MC_ROWS_NAME_MAX + 1] = "";
 
-  sqlite3_stmt *s = a->state;
+  sqlite3_stmt *s = a->class_state && mc_merge_table(m->t->table) ? a->class_state : a->state;
   sqlite3_reset(s);
   sqlite3_bind_text(s, 1, m->t->table, -1, SQLITE_STATIC);
   sqlite3_bind_text(s, 2, row_uid, -1, SQLITE_STATIC);
@@ -692,6 +714,32 @@ static mc_status fix_references(mc_rows_applier *a, const table_meta *m, const t
   return MC_OK;
 }
 
+/* Finds the classes the changelog now joins, and makes the touched rows of mergeable tables
+ * their classes' canonical rows, with every field to be set from the class. Each uid merged
+ * away now is touched too, so its class's canonical row and recents row are rebuilt. */
+static mc_status merge_classes(mc_rows_applier *a, mc_merge_pair **pairs, int *npairs) {
+  mc_status st = mc_merge_scan(a->tg.db, pairs, npairs);
+  for (int i = 0; st == MC_OK && i < *npairs; i++) {
+    const char *names[] = {(*pairs)[i].table, "recents"};
+    for (int k = 0; k < 2; k++) {
+      int t = find_table(a, names[k]);
+      if (t >= 0 && !touch(a, t, (*pairs)[i].loser)) st = MC_ERR_NOMEM;
+    }
+  }
+  for (int i = 0; st == MC_OK && i < a->ntouched; i++) {
+    touched *tc = &a->touched[i];
+    const table_meta *m = &a->tables[tc->table];
+    if (!mc_merge_table(m->t->table)) continue;
+    char c[MC_UID_STRLEN];
+    int merged;
+    if ((st = mc_merge_canonical(a->tg.db, tc->row_uid, c, &merged)) != MC_OK || !merged)
+      continue;
+    memcpy(tc->row_uid, c, MC_UID_STRLEN);
+    tc->won = m->ncols < 32 ? (1u << m->ncols) - 1 : ~0u;
+  }
+  return st;
+}
+
 mc_status mc_rows_apply(mc_rows_applier *a, const mc_row *rows, int count, int *logged) {
   if (!a || (!rows && count) || count < 0) return MC_ERR_INVALID_ARG;
   if (logged) *logged = 0;
@@ -722,11 +770,20 @@ mc_status mc_rows_apply(mc_rows_applier *a, const mc_row *rows, int count, int *
     if (won && col >= 0) tc->won |= 1u << col;
   }
 
-  /* Parents before children, then the references. */
+  mc_merge_pair *pairs = NULL;
+  int npairs = 0;
+  if (st == MC_OK && a->tg.merge) st = merge_classes(a, &pairs, &npairs);
+
+  /* Parents before children, then the merges, then the references. */
   for (size_t t = 0; st == MC_OK && t < a->tg.ntables; t++)
     for (int i = 0; st == MC_OK && i < a->ntouched; i++)
       if (a->touched[i].table == a->order[t])
         st = materialize(a, &a->tables[a->order[t]], &a->touched[i]);
+  for (int i = 0; st == MC_OK && i < npairs; i++) st = mc_merge_rewrite(a->tg.db, &pairs[i]);
+  free(pairs);
+  for (int i = 0; st == MC_OK && a->tg.merge && i < a->ntouched; i++)
+    st = mc_merge_map_row(a->tg.db, a->tables[a->touched[i].table].t->table,
+                          a->touched[i].row_uid);
   for (int i = 0; st == MC_OK && i < a->ntouched; i++) {
     const table_meta *m = &a->tables[a->touched[i].table];
     if (m->nfks) st = fix_references(a, m, &a->touched[i]);

@@ -20,6 +20,7 @@ musicapp_test(test_noise)
 target_link_libraries(test_noise PRIVATE mbedcrypto)  # known-answer tests of the primitives
 musicapp_test(test_channel)
 musicapp_test(test_rows)
+musicapp_test(test_merge)
 musicapp_test(test_session)
 set_tests_properties(test_session PROPERTIES TIMEOUT 300)
 musicapp_test(test_sync_profile)
