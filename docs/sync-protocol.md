@@ -245,12 +245,13 @@ Message types:
 | 0x11 | `ROWS`        | binary, below |
 | 0x12 | `ROWS_END`    | `{"db", "digest"}` |
 | 0x20 | `HAVE_REQ`    | `{"tracks": [uid], "format", "kbps"}` |
-| 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool}]}` |
+| 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool, "verified": bool}]}` |
 | 0x22 | `FILE_REQ`    | `{"track", "format", "kbps"}`; `format` `"original"` or `"opus"` |
 | 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256"}` |
 | 0x24 | `FILE_DATA`   | raw bytes, in order, until `size` bytes have been sent |
 | 0x25 | `FILE_ERR`    | `{"track", "reason"}`, sent instead of `FILE_HDR` |
 | 0x26 | `PREPARE_REQ` | `{"device", "tracks": [uid], "kbps"}`: transcode into the cache for a device that is offline; no reply |
+| 0x27 | `FILES_DONE`  | `{}`: the receiver has asked for everything it wants; the turn passes |
 | 0x40 | `PAIR_HELLO`  | pairing only; see [Pairing](#pairing) |
 | 0x41 | `PAIR_READY`  | |
 | 0x42 | `PAIR_REFUSE` | |
@@ -263,7 +264,8 @@ Steps:
 1. Handshake (Noise KK). Both sides send `HELLO`; `caps` is
    `{"cpu_score", "free_bytes", "on_power", "can_transcode"}`. The `dev` in a `HELLO` must
    be the device the handshake authenticated. Before its `HELLO`, each device brings its own
-   `devices` and `capabilities` rows up to date.
+   `devices` and `capabilities` rows up to date, and writes the `sync_status` its last file
+   phase left pending (see [Files](#files)).
 2. **Group data.** Both sides send `VV` for `group` (the initiator first), then stream the
    group changelog rows the other is missing (`ROWS`, in hlc order, read from one snapshot)
    and `ROWS_END`. The exchange is half-duplex, so neither side's stream can block the
@@ -288,8 +290,11 @@ Steps:
    final one. If they differ, the session logs it and runs step 2 (or 3) once more with
    `"resend": true`: each side sends every row, from hlc 0, of each origin whose newest hlc
    differs between the two new `VV`s. It doesn't retry further.
-6. **Files**, receiver-driven. See [Files](#files).
-7. `BYE`, the initiator first; the responder answers with `BYE`.
+6. **Files**, receiver-driven, when step 3 ran. See [Files](#files). Each side is the
+   receiver in turn, the initiator first: the receiver sends `HAVE_REQ`, `FILE_REQ` and
+   `PREPARE_REQ` while the other only answers, and ends its turn with `FILES_DONE`.
+7. `BYE`, the initiator first; the responder answers with `BYE`. Each side then reconciles
+   its library folder, so the peer can no longer ask for a file it is about to delete.
 
 Either side may send `ERROR` and close at any time. Reasons used: `removed` (above),
 `busy` (a session between the two is already running; see [Scheduling](#scheduling)) and
@@ -425,20 +430,45 @@ the plaintext limit.
 
   Selections that name a uid the library doesn't have are skipped, and so are items of
   kinds the device doesn't know.
+- A device holds files only once it has a `profiles` row (written when it joins, see
+  [Group membership](#group-membership)): until then its file phase fetches and deletes
+  nothing. An archive holds everything as originals whatever the rest of its row says.
 - **Target format** per track: `original`, or Opus at the profile's bitrate. A lossy
-  original that is already smaller than the Opus estimate is sent as-is.
+  original that is already smaller than the Opus estimate is sent as-is. Lossy means MP3,
+  AAC, Ogg Vorbis, Opus, WMA or Musepack, or an `.m4a`/`.mp4` with a known bitrate under
+  500 kbps (otherwise it may be ALAC). The sender applies the rule (it has the file), and
+  answers a request for Opus with the original then; the receiver applies it too, to files
+  it already holds.
 - **Budget mode**: estimate each track as `duration_ms × kbps / 8 + 4096` bytes, or
   `files.size_bytes` for originals. Walk Original → 256 → 192 → 160 → 128 → 96 → 64 kbps and
   take the highest that fits in `min(budget_bytes, free space + bytes already held of the
   set)`. If even 64 kbps doesn't fit, the profile is over budget: nothing syncs and the UI
   shows the shortfall.
-- **Reconcile**, at the end of every session on the receiving device:
+  - The walk starts at the profile's own format: a profile set to Opus 128 with a budget
+    never gets more than 128.
+  - An original's size is the same file everywhere, so any device that holds it knows it;
+    one no device at hand holds is estimated at 1000 kbps. The bytes already held are only
+    known to the device itself (`files` is local), so a plan worked out for another device
+    (for `PREPARE_REQ`) counts its free space alone.
+- **Reconcile**, at the end of every session on the receiving device, after `BYE`, when its
+  plan is not over budget:
   - It deletes files of tracks that are no longer wanted, are in the wrong format, or have
-    been deleted. It removes their `files` rows and any album folders left empty.
-  - It deletes files in the library folder that no `files` row knows about.
+    been deleted. It removes their `files` rows and any album folders left empty (holding
+    nothing but a `cover.jpg` or `cover.png`, which go too). A wrong-format copy of a wanted
+    track stays until a copy in the right format has arrived, so the track stays playable.
+  - It deletes files in the library folder that no `files` row knows about. Only audio
+    files (the extensions import takes) and stale `.part` files count, and only once they
+    are an hour old, so an import that is copying files in isn't raced.
+  - Deleted tracks: `files` rows go with their track (`ON DELETE CASCADE`) when the library
+    exchange applies the delete, so the session notes the rows it deletes and removes their
+    files. A file whose row went otherwise (a crash, an edit outside a session) is an
+    unknown file.
   - Exceptions: originals imported on that device are kept until an archive holds verified
-    copies. On an archive, only deleted tracks' files are removed, and unknown files are
-    reported, not deleted.
+    copies. The device learns that in a session with an archive: its `HAVE_REQ` there also
+    lists the tracks of such originals it no longer wants as they are, and the archive's
+    `HAVE_RESP` says `original` and `verified` (its copy has a recorded `sha256`, i.e. it
+    arrived with a matching checksum or passed a deep check). On an archive, only deleted
+    tracks' files are removed, and unknown files are reported, not deleted.
 - Every device receives the whole library database. Frontends list only tracks with a local
   file (`available_only`), except the profile picker, which lists everything.
 
@@ -446,35 +476,78 @@ the plaintext limit.
 
 1. The receiver works out what it is missing: wanted tracks without a `files` row in the
    target format.
-2. It sends `HAVE_REQ` to each online member and collects `HAVE_RESP`.
+2. It sends `HAVE_REQ` to the members it can reach and collects `HAVE_RESP`. A session is
+   between two devices, so in practice it asks the session's peer, in batches of up to 400
+   tracks (`format`/`kbps` are its profile's; a sender answers at most 600). Each member is
+   asked in its own session, and what one can't give is asked of the next.
+   - `original`: the sender has an original of the track (imported there or received as
+     an original), and the file is there.
+   - `cached`: it can send the requested Opus without encoding: from its transcode cache,
+     a transcode it received at that bitrate, or a lossy original small enough to stand in.
+   - `verified`: its original has a recorded `sha256` (see Reconcile above).
 3. It chooses a source per track:
    1. a device with a cached transcode, or with the original when the target is `original`;
    2. otherwise a device holding the original with `can_transcode`, `on_power` and enough
-      free space, ranked by `cpu_score`, with the work split across candidates in proportion
-      to score.
+      free space (256 MiB), ranked by `cpu_score`, with the work split across candidates in
+      proportion to score.
 
-   Phones on battery and watches never transcode for others.
-4. `FILE_REQ` → `FILE_HDR` + `FILE_DATA` (or `FILE_ERR`).
-   - The sender computes `sha256` over the exact bytes it sends.
+   Phones on battery and watches never transcode for others; a sender that may not answers
+   `FILE_ERR {"reason": "no_transcode"}`. The split: the candidates are the session's peer
+   and the other online members that may transcode and hold every original (an archive, or
+   `all`/`original` without a budget). Each track goes to one of them by a hash of its uid,
+   weighted by `cpu_score`, the same every time; one that falls to another member waits for
+   the session with that member.
+4. `FILE_REQ` → `FILE_HDR` + `FILE_DATA` (or `FILE_ERR`, reasons `missing`, `no_transcode`,
+   `io`, `format`).
+   - The sender computes `sha256` over the exact bytes it sends (the recorded one if the
+     file's size and mtime still match its row). `file` is the original's file uid: its own,
+     or for a transcode the original it was made from. `format` is `"original"` when a lossy
+     original stands in for the requested Opus. `ext` is the file's extension; a receiver
+     refuses one that isn't an audio extension import takes.
+   - The receiver waits up to 10 minutes for `FILE_HDR`, since the sender may be encoding.
    - The receiver writes to `<dest>.part` while hashing. On a match it renames the file into
-     place and inserts a `files` row with `sha256`, `source_file_uid` and
-     `source_peer_uid`.
+     place and inserts a `files` row with `sha256` and `source_peer_uid` (the sender), plus
+     for a transcode `source_file_uid` (`FILE_HDR.file`). A received original keeps
+     `source_file_uid` NULL: it is still an original, served as one in turn, while a row
+     with `source_peer_uid` NULL too is an original imported on this device.
    - On a mismatch it deletes the part file and retries once from another source, then
-     counts the track as corrupt.
+     counts the track as corrupt. Within a session the only source is the peer, so the
+     retry asks it again; the track is tried anew in the next session, possibly with
+     another member.
 5. The receiver chooses the path itself, with the same organising rules as imports, so
-   paths are never taken from the peer.
-6. After the file phase the receiver writes its `sync_status` (`expected`, `ok`, `missing`,
-   `corrupt`, `bytes`, `verified_ms`). That row is group data, so every device can show
-   "1,203 / 1,203 verified".
+   paths are never taken from the peer: `<album artist>/<album> (<year>)/<track> <title>.<ext>`,
+   or `<artist>/<artist> Singles/<title>.<ext>` for singles, as `<name> (2).<ext>` and so on
+   if the path is taken on disk or in `files`.
+6. After the file phase (and reconcile and the fast check) the receiver works out its
+   `sync_status` (`expected`, `ok`, `missing`, `corrupt`, `bytes`, `verified_ms`). That row
+   is group data, so every device can show "1,203 / 1,203 verified". `corrupt` counts the
+   tracks that failed twice in the session; `missing` the other wanted tracks without a
+   file in the target format; `bytes` every file the device holds. A write after the group
+   exchange would leave the two devices' group data different until their next session, so
+   the row is kept pending and written before the next session's `HELLO` (which follows a
+   few seconds later, as for the node uid in step 3), and only when there is none yet or a
+   count changed. `mc_sync_verify()` writes it at once, and also refreshes `verified_ms`
+   when it is older than the library's latest change.
+
+One receiver at a time: a device fetching in one session skips its receiving turn in
+another that runs meanwhile (it still serves), and `mc_sync_verify()` waits for it.
 
 When a profile changes for a device that is offline, the best online holder of the
 originals is sent `PREPARE_REQ` and fills its transcode cache. The target's next sync is then
-transfer-only.
+transfer-only. Any member, in its receiving turn, works out each offline member's plan (from
+its profile and the free space in its `capabilities`) and sends `PREPARE_REQ`, in batches of
+up to 1000 tracks, if the session's peer is the best online holder: it may transcode, holds
+every original, and has the highest `cpu_score` of those (the lower uid on a tie). It sends
+once per change in the Opus tracks that member wants, as far as this device remembers
+(in memory: after a restart it sends again, and cached files make that cheap). The holder
+encodes in the background, so the session goes on; one that may not transcode ignores it.
 
 ## Lossy copies
 
 - Transcodes are Opus (libopusenc), cached on the transcoding device in
-  `<config>/transcode-cache/<file_uid>/opus-<kbps>.opus`, with an LRU size cap.
+  `<config>/transcode-cache/<file_uid>/opus-<kbps>.opus`, with an LRU size cap of 8 GiB,
+  trimmed after a session or `PREPARE_REQ` that encoded something. One encode runs at a
+  time per device.
 - The receiver stores the copy as a `files` row with `source_file_uid` and
   `source_peer_uid` set. It is linked to the same `track_uid`, so it is never imported as a
   new track and never offered back to anyone as an original.
@@ -488,6 +561,13 @@ transfer-only.
 - `mc_sync_verify(fast)` compares `size_bytes` and `mtime_ms`; `mc_sync_verify(deep)`
   re-hashes against `files.sha256`. A fast check runs after each sync and a deep one weekly
   or on demand. Failed files are deleted and fetched again on the next session.
+  - The fast check after a session runs after reconcile, so a file it deletes is fetched
+    again in the following session.
+  - Originals imported on the device are never deleted by a check (there may be no other
+    copy): they are only counted as failed.
+  - A deep check records the hash of a file that has none (an imported original), which
+    then counts as verified.
+  - Scheduling the weekly deep check is left to the frontend.
 
 ## Open questions
 

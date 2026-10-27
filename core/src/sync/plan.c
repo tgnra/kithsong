@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "library/library_internal.h"
+#include "sync/merge.h"
 
 /* One track of the library while the plan is worked out. */
 typedef struct cand {
@@ -178,7 +179,14 @@ static mc_status mark_selected(mc_sync_db *sdb, mc_library *lib, const char *dev
   while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     const char *kind = (const char *)sqlite3_column_text(stmt, 0);
     const char *ref = (const char *)sqlite3_column_text(stmt, 1);
-    if (kind && is_uid(ref)) st = mark_item(lib, kind, ref, cands, n);
+    if (!kind || !is_uid(ref)) continue;
+    /* An album or artist merged into another (sync/merge.h) is selected as the survivor. */
+    char uid[MC_UID_STRLEN];
+    memcpy(uid, ref, MC_UID_STRLEN);
+    if ((!strcmp(kind, "album") || !strcmp(kind, "artist")) &&
+        mc_merge_resolve(lib, ref, uid) != MC_OK)
+      memcpy(uid, ref, MC_UID_STRLEN);
+    st = mark_item(lib, kind, uid, cands, n);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
