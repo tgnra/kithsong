@@ -195,6 +195,17 @@ JNIEXPORT jstring JNICALL Java_app_musicapp_CoreLibrary_nativePlaylistArt(JNIEnv
   return out;
 }
 
+/* Deletes cached pictures of playlists that have gone (see mc_playlist_art_prune()). */
+JNIEXPORT void JNICALL Java_app_musicapp_CoreLibrary_nativePlaylistArtPrune(JNIEnv *env, jclass cls, jlong handle,
+                                                                           jstring cache_dir) {
+  (void)cls;
+  const char *cdir = (*env)->GetStringUTFChars(env, cache_dir, NULL);
+  if (!cdir) return;
+  mc_status st = mc_playlist_art_prune((mc_library *)(intptr_t)handle, cdir);
+  (*env)->ReleaseStringUTFChars(env, cache_dir, cdir);
+  if (st != MC_OK) throw_status(env, st);
+}
+
 /* A TrackInfo[] of list, which it frees, or NULL with an exception pending. st is the
  * status of the call that made the list. */
 static jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {

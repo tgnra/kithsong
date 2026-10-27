@@ -421,6 +421,25 @@ over-budget message (the test files are too small to exceed 1 GB), renaming a me
 selection list's album groups and playlists tabs with data, a group renaming this phone, dark
 theme.
 
+## Playlist pictures
+
+A manual playlist's art is now the core's picture (`mc_playlist_art`): a 2x2 grid of four of
+its album covers, one album's cover with fewer than four, or the lettered placeholder with none.
+It shows in the Playlists rows, Recents and the playlist's screen. Smart playlists still show
+their first track's cover, as the core has no picture for them.
+
+`CoreLibrarySource` looks the pictures up after each read (so after each sync too) on a
+dispatcher and `CoreLibrary` of its own, as a cache miss decodes four covers, and updates
+`library` with those that changed; until then a playlist shows the picture it last had, kept in
+the `library` prefs as `playlist_art`. Grids are cached in `cacheDir/playlist-art`, which the
+core fills again if the system clears it, and pruned at startup through the new
+`CoreLibrary.playlistArtPrune()` (`mc_playlist_art_prune`). The playlist screen takes its art
+from `library`, so a picture found after it opened still shows.
+
+Tested on the emulator with a scratch library (4 playlists: 6 covers, 2 covers, none, empty),
+then the emulator's own library was put back. Not tested: a playlist's picture changing through
+sync, dark theme.
+
 ## Follow-ups
 
 Core:

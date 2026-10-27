@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
@@ -58,7 +59,12 @@ fun DetailScreen(
     onPlay: (List<Track>, Int) -> Unit,
     onBack: () -> Unit,
 ) {
-    val list by produceState<TrackList?>(null, ref) { value = source.trackList(ref) }
+    val loaded by produceState<TrackList?>(null, ref) { value = source.trackList(ref) }
+    // A playlist's picture is looked up after the library is read, so it may come later.
+    val library by source.library.collectAsState()
+    val playlistArt = library?.playlists?.firstOrNull { it.uid == ref.uid }?.art
+        ?.takeIf { ref.kind == CollectionRef.Kind.Playlist }
+    val list = loaded?.let { if (playlistArt != null) it.copy(art = playlistArt) else it }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         val tracks = list?.tracks.orEmpty()
         LazyColumn(

@@ -33,9 +33,15 @@ import java.io.File
  * only what has a file here is listed: albums with a folder here, and tracks with a file.
  * Albums and tracks with no artist get [unknownArtist], looked up on every read so that it
  * follows the app's language.
+ *
+ * A playlist's picture is the core's (CoreLibrary.playlistArt), cached in [artDir]. Making
+ * one decodes four covers, so after each read the pictures are looked up on a thread and
+ * library connection of their own ([art]), and [library] is updated with those that changed.
+ * Meanwhile a playlist shows the picture it last had, kept in [prefs] across launches.
  */
 class CoreLibrarySource(
     private val dir: File,
+    private val artDir: File,
     private val prefs: SharedPreferences,
     private val scope: CoroutineScope,
     private val unknownArtist: () -> String,
@@ -50,9 +56,14 @@ class CoreLibrarySource(
     // Only touched on [core].
     private var lib: CoreLibrary? = null
     private var contents = Contents.Empty
+    private var artLookups = 0 // bumped by each read, so only the latest read's lookup is used
+
+    private val art = Dispatchers.IO.limitedParallelism(1)
+    private var artLib: CoreLibrary? = null // only touched on [art]
 
     init {
         refresh()
+        scope.launch(art) { pruneArt() }
     }
 
     /** Reads the library again, e.g. after a sync. */
@@ -68,6 +79,65 @@ class CoreLibrarySource(
         } ?: Contents.Empty
         state.value = contents.library(recents())
         Log.i(TAG, "Read ${contents.albums.size} albums in ${SystemClock.elapsedRealtime() - start} ms")
+        lookUpArt(contents.playlists.keys - contents.smart, ++artLookups)
+    }
+
+    // On [core]. Looks up the pictures of playlists [uids] on [art], then puts those that
+    // changed in [contents], unless another read has started a lookup since.
+    private fun lookUpArt(uids: Set<String>, lookup: Int) {
+        if (uids.isEmpty()) return
+        scope.launch(art) {
+            val start = SystemClock.elapsedRealtime()
+            val found = uids.associateWith { uid -> playlistArt(uid) }
+            Log.i(TAG, "Looked up ${uids.size} playlists' pictures in ${SystemClock.elapsedRealtime() - start} ms")
+            withContext(core) {
+                if (lookup != artLookups) return@withContext
+                saveArt(savedArt().filterKeys { it in contents.playlists } + found)
+                val playlists = contents.playlists.mapValues { (uid, playlist) ->
+                    val file = found[uid] ?: return@mapValues playlist
+                    val picture = artRef(uid, playlist.name, file.takeIf { it.path.isNotEmpty() })
+                    if (picture == playlist.art) playlist else playlist.copy(art = picture)
+                }
+                if (playlists == contents.playlists) return@withContext
+                contents = Contents(contents.albums, contents.artists, playlists, contents.smart)
+                state.value = contents.library(recents())
+            }
+        }
+    }
+
+    // On [art]. [uid]'s picture, or an empty path for none (the placeholder).
+    private fun playlistArt(uid: String): File {
+        val lib = artLib ?: try {
+            CoreLibrary(dir.path).also { artLib = it }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't open the library in $dir for playlists' pictures", e)
+            return File("")
+        }
+        return try {
+            File(lib.playlistArt(uid, artDir.path).orEmpty())
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't make playlist $uid's picture", e)
+            File("")
+        }
+    }
+
+    // On [art]. Clears out the pictures of playlists that have gone.
+    private fun pruneArt() {
+        try {
+            CoreLibrary(dir.path).use { it.playlistArtPrune(artDir.path) }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't prune playlists' pictures in $artDir", e)
+        }
+    }
+
+    // The playlists' pictures as last looked up: lines of "uid:path", with an empty path for
+    // none. On [core].
+    private fun savedArt(): Map<String, File> =
+        prefs.getString(KEY_PLAYLIST_ART, null).orEmpty().lines().filter { ':' in it }
+            .associate { it.substringBefore(':') to File(it.substringAfter(':')) }
+
+    private fun saveArt(art: Map<String, File>) {
+        prefs.edit().putString(KEY_PLAYLIST_ART, art.entries.joinToString("\n") { (uid, file) -> "$uid:${file.path}" }).apply()
     }
 
     /** Opens this phone's sync state in [configDir] for the library; see [CoreSync]. */
@@ -159,10 +229,13 @@ class CoreLibrarySource(
         }
 
         // Smart playlists sit among the others; smart album groups have no place on this screen.
+        // A manual playlist shows the picture it last had until [lookUpArt] finds it again.
         val smart = lib.smartLists().filter { !it.isAlbums }
+        val known = savedArt()
         val playlists = lib.playlists().map { info ->
             val tracks = lib.playlistTracks(info.uid).here()
-            Playlist(info.uid, info.name, tracks.size, covers.playlist(info.uid, info.name, tracks))
+            val file = known[info.uid]?.takeIf { it.path.isNotEmpty() && it.isFile }
+            Playlist(info.uid, info.name, tracks.size, artRef(info.uid, info.name, file))
         } + smart.map { info ->
             val tracks = lib.smartTracks(info.uid).here()
             Playlist(info.uid, info.name, tracks.size, covers.playlist(info.uid, info.name, tracks))
@@ -273,15 +346,14 @@ class CoreLibrarySource(
             )
         }
 
-        /** A playlist shows its first track's cover. */
+        /** A smart playlist shows its first track's cover; the core makes manual ones' pictures. */
         fun playlist(uid: String, name: String, tracks: List<TrackInfo>): ArtRef {
             val first = tracks.firstOrNull { it.coverDir != null }
             val cover = first?.coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } }
             return ref(uid, name, cover)
         }
 
-        private fun ref(uid: String, label: String, file: File?) =
-            ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
+        private fun ref(uid: String, label: String, file: File?) = artRef(uid, label, file)
 
         private fun coverIn(dir: String): File? =
             COVER_NAMES.asSequence().map { File(dir, it) }.firstOrNull { it.isFile }
@@ -293,11 +365,14 @@ class CoreLibrarySource(
     private companion object {
         const val TAG = "musicapp"
         const val KEY_RECENTS = "recents"
+        const val KEY_PLAYLIST_ART = "playlist_art"
         const val MAX_RECENTS = 8
         const val RECENT_ALBUMS_RULE = """{"v": 1, "match": {"field": "last_played", "op": "not_empty"},
             "order": [{"field": "last_played", "dir": "desc"}], "limit": $MAX_RECENTS}"""
         val COVER_NAMES = listOf("cover.jpg", "cover.png")
         // What MediaMetadataRetriever can find pictures in.
         val EMBEDDED_ART_EXTENSIONS = setOf("mp3", "flac", "m4a", "mp4", "ogg", "opus")
+
+        fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
     }
 }

@@ -64,6 +64,7 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
         NativeCore.followLocale(resources.configuration)
         val core = CoreLibrarySource(
             libraryDir,
+            File(cacheDir, PLAYLIST_ART_DIR),
             getSharedPreferences("library", MODE_PRIVATE),
             MainScope(),
         ) { getString(R.string.unknown_artist) }
@@ -119,5 +120,7 @@ class MusicApp : Application(), SingletonImageLoader.Factory {
 
     private companion object {
         const val TAG = "musicapp"
+        // Playlists' pictures, which the core makes again if the system clears them away.
+        const val PLAYLIST_ART_DIR = "playlist-art" // MC_PLAYLIST_ART_CACHE_DIR
     }
 }
