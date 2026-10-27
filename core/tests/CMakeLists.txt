@@ -14,6 +14,8 @@ endfunction()
 musicapp_test(test_util)
 musicapp_test(test_library)
 musicapp_test(test_smart)
+musicapp_test(test_playlist_art)
+target_link_libraries(test_playlist_art PRIVATE mc_stb mbedcrypto)  # makes covers, reads grids back
 musicapp_test(test_sync_db)
 target_link_libraries(test_sync_db PRIVATE mbedcrypto)  # checks the key pair independently
 musicapp_test(test_noise)

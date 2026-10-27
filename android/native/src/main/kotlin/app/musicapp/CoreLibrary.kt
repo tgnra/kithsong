@@ -63,6 +63,15 @@ class CoreLibrary(dir: String) : AutoCloseable {
     fun playlistTracks(playlistUid: String): List<TrackInfo> =
         nativeListTracks(handle, TRACKS_PLAYLIST, playlistUid).asList()
 
+    /**
+     * The image file to show for [playlistUid] (mc_playlist_art): a 2x2 grid of its album covers
+     * cached in [cacheDir], or one album's cover if it has fewer than four, or null for a
+     * placeholder. The path changes whenever the picture does. A cache miss decodes four covers,
+     * so call it off the main thread.
+     */
+    fun playlistArt(playlistUid: String, cacheDir: String): String? =
+        nativePlaylistArt(handle, playlistUid, cacheDir)
+
     /** Every artist, album artists and those credited only on tracks alike, by sort name. */
     fun artists(): List<NamedInfo> = nativeListArtists(handle).asList()
 
@@ -106,6 +115,7 @@ class CoreLibrary(dir: String) : AutoCloseable {
         @JvmStatic external fun nativeListAlbums(handle: Long): Array<AlbumInfo>
         @JvmStatic external fun nativeListTracks(handle: Long, kind: Int, uid: String): Array<TrackInfo>
         @JvmStatic external fun nativeListPlaylists(handle: Long): Array<PlaylistInfo>
+        @JvmStatic external fun nativePlaylistArt(handle: Long, uid: String, cacheDir: String): String?
         @JvmStatic external fun nativeListArtists(handle: Long): Array<NamedInfo>
         @JvmStatic external fun nativeListAlbumGroups(handle: Long): Array<NamedInfo>
         @JvmStatic external fun nativeListSmart(handle: Long): Array<SmartInfo>

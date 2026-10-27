@@ -34,7 +34,7 @@
 | tagger      | `core/src/tagger`      | tag read/write (TagLib), importer: MusicBrainz matching, scoring, singles, cover art, copying into the library folder (see [tagging-rules.md](tagging-rules.md)); no AcoustID yet |
 | net         | `core/src/net`         | HTTPS GET and form POST with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`); TCP sockets with timeouts over POSIX and Winsock |
 | scrobble    | `core/src/scrobble`    | Last.fm 2.0 API (or a service with the same API, such as Libre.fm): browser sign-in, now playing, plays queued in `sync.db` and sent in batches with backoff; the account syncs to the group |
-| playlist    | `core/src/playlist`    | stub |
+| playlist    | `core/src/playlist`    | playlists ordered by fractional index; cover art as a 2x2 grid of album covers picked by a playlist-seeded hash, composited with stb_image and cached per device as a JPEG |
 | playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs; Opus via opusfile; decides when a play counts |
 
 | sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing over the network with the join rules, group and library changelog sessions (field-level LWW), a scheduler, address hints; no file transfer yet |

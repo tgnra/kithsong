@@ -28,6 +28,12 @@ FetchContent_Declare(dr_libs
   URL_HASH SHA256=40bec21c1560426978aaf60fad8d5e4b7929caf569deb82f05e77b8c9d10b8fb
   DOWNLOAD_EXTRACT_TIMESTAMP ON
   SOURCE_SUBDIR _none_)
+# stb has no release tags either; pinned to a commit. stb_image 2.30, stb_image_write 1.16.
+FetchContent_Declare(stb
+  URL https://github.com/nothings/stb/archive/f58f558c120e9b32c217290b80bad1a0729fbb2c.tar.gz
+  URL_HASH SHA256=be1a5dad9ac38f42ef8abf00bd7db776101661b77603f832fcc0bae843d82846
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
 FetchContent_Declare(mdns
   URL https://github.com/mjansson/mdns/archive/refs/tags/1.4.3.tar.gz
   URL_HASH SHA256=be1fd8e35599cb7de179decbd0633c121d11a2dcb9cc193ff5c590bd0d480483
@@ -39,7 +45,7 @@ FetchContent_Declare(cacert
   URL_HASH SHA256=796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe
   DOWNLOAD_NO_EXTRACT ON
   SOURCE_SUBDIR _none_)
-FetchContent_MakeAvailable(sqlite yyjson miniaudio dr_libs mdns cacert)
+FetchContent_MakeAvailable(sqlite yyjson miniaudio dr_libs stb mdns cacert)
 
 add_library(mc_sqlite3 STATIC "${sqlite_SOURCE_DIR}/sqlite3.c")
 target_include_directories(mc_sqlite3 SYSTEM PUBLIC "${sqlite_SOURCE_DIR}")
@@ -85,6 +91,14 @@ add_library(mc_dr_libs STATIC dr_libs/dr_libs.c)
 target_include_directories(mc_dr_libs SYSTEM PUBLIC "${dr_libs_SOURCE_DIR}")
 if(UNIX)
   target_link_libraries(mc_dr_libs PUBLIC m)
+endif()
+
+# Image decode and encode for playlist cover art (core/src/playlist/playlist_art.c). Built
+# with only JPEG and PNG decoding, no stdio; see stb/stb.c.
+add_library(mc_stb STATIC stb/stb.c)
+target_include_directories(mc_stb SYSTEM PUBLIC "${stb_SOURCE_DIR}")
+if(UNIX)
+  target_link_libraries(mc_stb PUBLIC m)
 endif()
 
 # mDNS/DNS-SD for core/src/discovery. Header-only: every function is static inline. On

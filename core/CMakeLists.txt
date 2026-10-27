@@ -61,6 +61,7 @@ add_library(musiccore STATIC
   src/library/library.c
   "${_schema_c}"
   src/playlist/playlist.c
+  src/playlist/playlist_art.c
   src/smart/smartlist.c
   src/playback/decoder.c
   src/playback/player.c
@@ -99,7 +100,7 @@ target_include_directories(musiccore
   PUBLIC include "${_strings_out}"
   PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(musiccore PRIVATE
-  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs mc_mdns mc_opusenc mc_opusfile tag
+  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs mc_stb mc_mdns mc_opusenc mc_opusfile tag
   CURL::libcurl mbedcrypto)
 if(WIN32)
   target_compile_definitions(musiccore PRIVATE _WIN32_WINNT=0x0A00)

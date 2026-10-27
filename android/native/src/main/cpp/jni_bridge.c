@@ -170,6 +170,31 @@ JNIEXPORT void JNICALL Java_app_musicapp_CoreLibrary_nativeRecordPlay(JNIEnv *en
   if (st != MC_OK) throw_status(env, st);
 }
 
+/* The image to show for a playlist (see mc_playlist_art()), or NULL for a placeholder. */
+JNIEXPORT jstring JNICALL Java_app_musicapp_CoreLibrary_nativePlaylistArt(JNIEnv *env, jclass cls,
+                                                                         jlong handle, jstring uid,
+                                                                         jstring cache_dir) {
+  (void)cls;
+  const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
+  if (!cuid) return NULL;
+  const char *cdir = (*env)->GetStringUTFChars(env, cache_dir, NULL);
+  if (!cdir) {
+    (*env)->ReleaseStringUTFChars(env, uid, cuid);
+    return NULL;
+  }
+  char *path = NULL;
+  mc_status st = mc_playlist_art((mc_library *)(intptr_t)handle, cuid, cdir, &path);
+  (*env)->ReleaseStringUTFChars(env, uid, cuid);
+  (*env)->ReleaseStringUTFChars(env, cache_dir, cdir);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jstring out = new_string(env, path);
+  mc_free(path);
+  return out;
+}
+
 /* A TrackInfo[] of list, which it frees, or NULL with an exception pending. st is the
  * status of the call that made the list. */
 static jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {

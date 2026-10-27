@@ -2,8 +2,9 @@
 
 ## Playlists
 
-- Linux - playlist cover art (a placeholder for now)
-- Windows - playlist cover art (a placeholder for now)
+- Linux - playlist cover art (a placeholder for now; core's mc_playlist_art() makes the image)
+- Windows - playlist cover art (a placeholder for now; core's mc_playlist_art() makes the image)
+- Android - playlist cover art (CoreLibrary.playlistArt() is bound; no UI uses it yet)
 - Linux - keyboard access to the track menu (Menu key, Shift+F10)
 
 ## Album Groups
