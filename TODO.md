@@ -5,6 +5,24 @@
 - Android - smart playlists' art (still their first track's cover; mc_playlist_art() only knows manual playlists)
 - Linux - keyboard access to the track menu (Menu key, Shift+F10)
 
+## Keyboard Shortcuts
+
+Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPRIS on Linux), Esc closes the track pane, arrows/Home/End on a focused seek bar (5 s), Alt+letter mnemonics in the import page and dialogs (so no bare Alt+letter shortcuts). Windows' track list also has Enter, Delete, F2, Alt+Up/Down and the Menu key.
+
+- Windows and Linux - Ctrl+Right/Ctrl+Left next/previous track (not Alt+Left/Right, which is Back)
+- Windows and Linux - Shift+Right/Shift+Left seek 5 s anywhere but text fields, as the seek bar's arrows do
+- Windows and Linux - Ctrl+Up/Ctrl+Down volume and Ctrl+M mute, once volume exists
+- Windows and Linux - Ctrl+F focus search, once desktop search exists; Windows also Ctrl+E/F3 as in Explorer, Linux also type to search (GNOME)
+- Windows and Linux - Ctrl+1/2/3 switch to Albums/Artists/Playlists (sidebar order)
+- Windows and Linux - Alt+Left and the mouse's back button go back (album -> grid, device page -> library); Esc keeps closing the pane
+- Windows and Linux - Ctrl+O import, Ctrl+N new playlist
+- Windows and Linux - Delete on a selected sidebar playlist asks to delete it; F2 renames it
+- Linux - Delete, F2, Enter and Alt+Up/Down in the track list, as Windows has
+- Linux - Ctrl+, settings, Ctrl+? shortcuts dialog (AdwShortcutsDialog), F1 help/about, Ctrl+W close window, Ctrl+Q quit (GNOME HIG)
+- Windows - Ctrl+, settings too (no menu bar, so no Alt+T,O); F1 about; Alt+F4 only to quit
+- Windows and Linux - show shortcuts in button tooltips (e.g. "Next (Ctrl+Right)")
+- Windows and Linux - test media keys while the window is in the background: SMTC on Windows, MPRIS on GNOME and KDE (the desktop forwards the keys)
+
 ## Album Groups
 
 - Add UI to show Album Groups
@@ -47,7 +65,6 @@
 - Scrobbling - cancel a call in progress on mc_scrobbler_free(), so quitting while the service is slow doesn't wait for curl's timeout (up to 30 seconds)
 - Playback - AAC/M4A - pick a decoder: the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Volume control (in the core, so Android can also duck itself on Android 7)
-- Spacebar to play/pause
 - Recents list above devices
 - Linux and Windows - Move Library (the button is disabled)
 

@@ -15,7 +15,8 @@
  * The sidebar picks the page beside it. Import and Settings replace the album grid and track
  * list with the import view (import_view.c) or the settings view (settings_view.c). Once an
  * import starts, the other pages are greyed out until the user clicks Done. Folders dropped
- * anywhere on the window start an import.
+ * anywhere on the window start an import. Space plays or pauses, unless the focused control
+ * uses Space itself.
  *
  * The toolbar is the title bar: WM_NCCALCSIZE removes the standard one, and the frame is
  * extended into the client area (DwmExtendFrameIntoClientArea) so Windows still draws the
@@ -1203,6 +1204,23 @@ static void change_library(void) {
   free(dir);
 }
 
+/* For the message loop: Space in the main window plays or pauses, as the Play button does.
+ * Controls that use Space themselves keep it: edits, push buttons, checkboxes and the device
+ * page's checkbox list. The playback buttons and the sidebar take focus when clicked, so
+ * Space plays there too, rather than pressing Next again. TRUE if msg was that Space. */
+static BOOL space_play_pause(const MSG *msg) {
+  if (msg->message != WM_KEYDOWN || msg->wParam != VK_SPACE) return FALSE;
+  if (!g_app.wnd || GetAncestor(msg->hwnd, GA_ROOT) != g_app.wnd) return FALSE;
+  if (GetKeyState(VK_CONTROL) < 0 || GetKeyState(VK_SHIFT) < 0) return FALSE;
+  BOOL ours = msg->hwnd == g_app.sidebar;
+  for (int i = 0; i < NUM_BUTTONS; i++) ours |= msg->hwnd == g_app.buttons[i];
+  const LRESULT wants = DLGC_WANTCHARS | DLGC_HASSETSEL | DLGC_WANTALLKEYS | DLGC_BUTTON;
+  if (!ours && (SendMessageW(msg->hwnd, WM_GETDLGCODE, msg->wParam, (LPARAM)msg) & wants)) return FALSE;
+  BOOL repeat = (msg->lParam & 0x40000000) != 0; /* held down: once is enough */
+  if (!repeat && IsWindowEnabled(g_app.buttons[ID_PLAY - ID_PREV])) on_command(ID_PLAY, BN_CLICKED);
+  return TRUE;
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   (void)prev;
   (void)cmd;
@@ -1284,6 +1302,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   MSG msg;
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {
     if (pair_dialog_translate(&msg)) continue;
+    if (space_play_pause(&msg)) continue;
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }
