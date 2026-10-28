@@ -74,43 +74,107 @@ static void show_library_dir(settings_view *s) {
   g_free(dir);
 }
 
-static void on_folder_chosen(GObject *source, GAsyncResult *result, gpointer data) {
-  GtkWidget *dialog = data; /* referenced while the chooser was open */
-  settings_view *s = g_object_get_data(G_OBJECT(dialog), "settings-view");
-  GFile *file = gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(source), result, NULL);
-  char *dir = file ? g_file_get_path(file) : NULL;
-  char *current = load_library_dir(s->settings_dir);
+/* Open Another Library's steps, while the folder picker is open. */
+typedef struct choosing {
+  GtkWidget *parent; /* referenced */
+  char *settings_dir;
+  settings_view_open_library_fn open_library;
+  void *user;
+  gboolean empty_only;
+  settings_view_chosen_fn done;
+  gpointer data;
+  GDestroyNotify free_data;
+} choosing;
 
-  if (dir && g_strcmp0(dir, current) != 0 && s->open_library && s->open_library(s->user, dir)) {
-    if (!save_library_dir(s->settings_dir, dir))
-      adw_preferences_dialog_add_toast(ADW_PREFERENCES_DIALOG(dialog),
-                                       adw_toast_new(mc_str(MC_STR_SETTINGS_SAVE_FAILED)));
-    /* Shown even if it wasn't saved: it's the library open now. */
-    adw_action_row_set_subtitle(ADW_ACTION_ROW(s->folder), dir);
-    update_sync(s); /* sync restarted with it */
-  }
-  g_free(current);
-  g_free(dir);
-  if (file) g_object_unref(file);
-  g_object_unref(dialog);
+static void choosing_free(choosing *c, const char *dir, gboolean saved) {
+  if (c->done) c->done(c->data, dir, saved);
+  if (c->free_data) c->free_data(c->data);
+  g_object_unref(c->parent);
+  g_free(c->settings_dir);
+  g_free(c);
 }
 
-static void on_open_activated(AdwActionRow *row, gpointer data) {
-  (void)row;
-  settings_view *s = data;
+static void choose_folder(choosing *c);
+
+/* Asks again after a folder that isn't empty, once the alert is dismissed. */
+static void on_not_empty_closed(AdwAlertDialog *alert, const char *response, gpointer data) {
+  (void)alert, (void)response;
+  choose_folder(data);
+}
+
+static void on_folder_chosen(GObject *source, GAsyncResult *result, gpointer data) {
+  choosing *c = data;
+  GFile *file = gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(source), result, NULL);
+  char *dir = file ? g_file_get_path(file) : NULL;
+  if (file) g_object_unref(file);
+  char *current = load_library_dir(c->settings_dir);
+  gboolean switched = FALSE, saved = FALSE;
+
+  if (dir && c->empty_only && !mc_folder_is_empty(dir)) {
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_LIBRARY_FOLDER), mc_str(MC_STR_LIBRARY_NOT_EMPTY));
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    g_signal_connect(alert, "response", G_CALLBACK(on_not_empty_closed), c);
+    adw_dialog_present(alert, c->parent);
+    g_free(current);
+    g_free(dir);
+    return;
+  }
+  if (dir && g_strcmp0(dir, current) != 0 && c->open_library && c->open_library(c->user, dir)) {
+    switched = TRUE;
+    saved = save_library_dir(c->settings_dir, dir);
+  }
+  g_free(current);
+  choosing_free(c, switched ? dir : NULL, saved);
+  g_free(dir);
+}
+
+static void choose_folder(choosing *c) {
   GtkFileDialog *chooser = gtk_file_dialog_new();
-  gtk_file_dialog_set_title(chooser, mc_str(MC_STR_LIBRARY_FOLDER_CHOOSE));
-  char *current = load_library_dir(s->settings_dir);
+  gtk_file_dialog_set_title(chooser, mc_str(c->empty_only ? MC_STR_LIBRARY_FOLDER_NEW : MC_STR_LIBRARY_FOLDER_CHOOSE));
+  char *current = load_library_dir(c->settings_dir);
   if (current) {
     GFile *folder = g_file_new_for_path(current);
     gtk_file_dialog_set_initial_folder(chooser, folder);
     g_object_unref(folder);
     g_free(current);
   }
-  GtkRoot *root = gtk_widget_get_root(s->dialog);
-  gtk_file_dialog_select_folder(chooser, GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL, NULL,
-                                on_folder_chosen, g_object_ref(s->dialog));
+  GtkRoot *root = gtk_widget_get_root(c->parent);
+  gtk_file_dialog_select_folder(chooser, GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL, NULL, on_folder_chosen, c);
   g_object_unref(chooser);
+}
+
+void settings_view_choose_library(GtkWidget *parent, const char *settings_dir,
+                                  settings_view_open_library_fn open_library, void *user, gboolean empty_only,
+                                  settings_view_chosen_fn done, gpointer data, GDestroyNotify free_data) {
+  choosing *c = g_new0(choosing, 1);
+  c->parent = g_object_ref(parent);
+  c->settings_dir = g_strdup(settings_dir);
+  c->open_library = open_library;
+  c->user = user;
+  c->empty_only = empty_only;
+  c->done = done;
+  c->data = data;
+  c->free_data = free_data;
+  choose_folder(c);
+}
+
+/* Open Another Library from the dialog: data is the dialog, referenced while choosing. */
+static void on_library_chosen(gpointer data, const char *dir, gboolean saved) {
+  GtkWidget *dialog = data;
+  settings_view *s = g_object_get_data(G_OBJECT(dialog), "settings-view");
+  if (!dir || !s) return;
+  if (!saved)
+    adw_preferences_dialog_add_toast(ADW_PREFERENCES_DIALOG(dialog), adw_toast_new(mc_str(MC_STR_SETTINGS_SAVE_FAILED)));
+  /* Shown even if it wasn't saved: it's the library open now. */
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(s->folder), dir);
+  update_sync(s); /* sync restarted with it */
+}
+
+static void on_open_activated(AdwActionRow *row, gpointer data) {
+  (void)row;
+  settings_view *s = data;
+  settings_view_choose_library(s->dialog, s->settings_dir, s->open_library, s->user, FALSE, on_library_chosen,
+                               g_object_ref(s->dialog), g_object_unref);
 }
 
 static void on_move_activated(AdwActionRow *row, gpointer data) {

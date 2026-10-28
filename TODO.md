@@ -143,6 +143,13 @@ Pairing two devices whose libraries both have music fails with library_mismatch.
 - Two Last.fm accounts: unclear what's best; at least don't sign either out silently. Plays not yet scrobbled stay with the account they were played under
 - Files: originals copy over the network to the kept library's archive, then the other device drops them as its profile says
 
+### Pairing
+- Android - a pairing refused because the phone has music of its own (library mismatch) offers no way out: its library lives in app storage, so there's no folder to pick for a new one, as the desktops' Create a new library does. It would need a "start afresh" that sets the old library aside (or deletes it, after asking)
+- Windows and Linux - after Create a new library, Pair again asks by uid, else at the address discovery last saw; a device seen only by address (multicast blocked) on the side that was asked to pair has neither, so Pair again isn't offered there and the user pairs from the Devices list
+- Windows and Linux - Create a new library takes only an empty folder; a folder with an empty library already in it (from an earlier try) is refused too, so it's opened with Open another library instead
+- All - the archive explainer shows once per device, after it joins a group; a member running an older version doesn't send the archive's name (PAIR_ACCEPT's archive_names), and then nothing is shown (and it stays unshown for a later pairing)
+- All - after pairing, the dialog no longer opens the other device's page by itself; Choose what to sync opens the page of the device that joined (this one's own when it joined). Check this feels right
+
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
@@ -228,6 +235,7 @@ Things built but not checked properly.
 - Move library's refused close-request under a real window manager
 - An archive's sidebar row ("Offline. Keeps the whole library" under its name), only compiled
 - The empty Albums page's Pair with a device… menu (opening it, pairing a device picked there, Add device by address…), the empty Playlists page's Choose what to sync, and the Album groups page's +: only compiled; under Xvfb the button showed, and the Playlists + made a playlist that stayed shown until another page was picked
+- The pairing dialog's ended page (only compiled): Choose what to sync, the archive explainer's bold "archive" (Pango markup), Create a new library (the folder picker, refusing a folder that isn't empty, then Pair again) and the button styles
 
 ### Windows
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
@@ -236,9 +244,11 @@ Things built but not checked properly.
 - Volume's fade (only silent test files so far)
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns and focus events
 - The empty Playlists page's Choose what to sync (needs this PC in a group with every playlist hidden), pairing from the empty Albums page's menu, and the new header buttons and empty-page button through UI Automation
+- The pairing dialog's ended page with a real pairing: Choose what to sync, the archive explainer (and the dialog growing to fit it), Create a new library and Pair again
 
 ### Android
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
+- After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - mDNS discovery and sync over real Wi-Fi, on a real device
 - API 24-32 devices, audio focus during calls, plays landing in the core's database
 - The themed launcher icon, and the sync notification icon

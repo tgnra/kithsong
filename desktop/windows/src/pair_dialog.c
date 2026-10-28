@@ -1,6 +1,8 @@
 #include "pair_dialog.h"
 
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <wchar.h>
 
 #include "theme.h"
@@ -10,10 +12,22 @@
  * pair.h). A wrong-code result with this many tries left means a new code is showing. */
 #define MAX_FAILURES 3
 
-enum { ID_TEXT = 100 };
+enum { ID_TEXT = 100, ID_ACTION };
 
 /* Layout, in dialog units. */
 enum { DLG_W = 220, DLG_H = 112, MARGIN = 7, BTN_W = 50, BTN_H = 14, TEXT_H = 18, CODE_Y = 29, STATUS_Y = 55 };
+enum { ACTION_W = 96 }; /* the ended dialog's button left of OK */
+
+/* What that button does. */
+typedef enum ended_action {
+  ACT_NONE,
+  ACT_CHOOSE,      /* Choose What to Sync: the page of the device that joined */
+  ACT_NEW_LIBRARY, /* Create a New Library, then offer to pair again */
+  ACT_PAIR_AGAIN,  /* Pair Again, after that */
+} ended_action;
+
+/* settings.json's record that this PC showed which device is the archive. */
+#define ARCHIVE_EXPLAINED_KEY "archive_explained"
 
 /* Point sizes of the code: typed, and shown. */
 enum { ENTER_PT = 16, SHOW_PT = 22 };
@@ -24,9 +38,13 @@ typedef struct pair_dlg {
   mc_sync *sync;
   BOOL initiator;
   BOOL checking; /* the code went to the other device; waiting to hear */
-  BOOL ended;    /* shows how the pairing ended, with only OK */
+  BOOL ended;    /* shows how the pairing ended, with OK and maybe the action button */
   HFONT big_font;
   wchar_t peer[128];
+  ended_action action;
+  char target[MC_UID_STRLEN]; /* ACT_CHOOSE's device; the other device for the rest */
+  char host[MC_SYNC_ADDR_STRLEN]; /* ACT_PAIR_AGAIN: where it was, "" if not known */
+  uint16_t port;
 } pair_dlg;
 
 static struct {
@@ -36,6 +54,7 @@ static struct {
   pair_dlg *enter;    /* the enter-code dialog (initiator), or NULL */
   pair_dlg *show;     /* the show-code dialog (responder), or NULL */
   BOOL enter_cancelled, show_cancelled; /* Cancel was pressed: the CANCELLED to come is ours */
+  const pair_dialog_host *host;
 } s;
 
 /* --- The template --- */
@@ -80,10 +99,11 @@ static void put_item(tmpl *t, WORD atom, const wchar_t *text, DWORD style, int x
   put_word(t, 0); /* no creation data */
 }
 
-/* Both dialogs: a line of text, the code, the status line, then Pair (or OK) and Cancel. The
- * texts are set once it's created. */
+/* Both dialogs: a line of text, the code, the status line, then Pair (or OK) and Cancel, and
+ * the ended dialog's action button (hidden until then). The texts are set once it's
+ * created. */
 static void build(tmpl *t, BOOL enter) {
-  enum { NUM_ITEMS = 5 };
+  enum { NUM_ITEMS = 6 };
   t->n = 0;
   put_word(t, 1);      /* version */
   put_word(t, 0xFFFF); /* DLGTEMPLATEEX */
@@ -117,6 +137,8 @@ static void build(tmpl *t, BOOL enter) {
            DLG_W - MARGIN - 2 * BTN_W - 4, by, BTN_W, BTN_H, IDOK);
   put_item(t, 0x0080, mc_wstr(MC_STR_CANCEL), BS_PUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W, by, BTN_W, BTN_H,
            IDCANCEL);
+  put_item(t, 0x0080, L"", BS_PUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W - 4 - ACTION_W, by, ACTION_W, BTN_H,
+           ID_ACTION);
 }
 
 /* --- Texts --- */
@@ -134,18 +156,61 @@ static void peer_text(wchar_t *out, size_t n, enum mc_str_id id, const wchar_t *
   free(peer);
 }
 
-/* prefix_id ("Wrong code. {0}") with how many tries are left as its {0}. */
+/* prefix_id ("Wrong code entered. {0}") with how many tries are left as its {0}. */
 static void tries_left(wchar_t *out, size_t n, enum mc_str_id prefix_id, int left) {
   char tries[64];
   mc_format(tries, sizeof tries, mc_str_plural(MC_STR_TRIES_LEFT, left), MC_D(left));
   mc_wformat(out, n, mc_str(prefix_id), MC_S(tries));
 }
 
+/* Takes the ** out of "the **archive** device": a static control can't show bold. */
+static void drop_bold_marks(wchar_t *text) {
+  wchar_t *to = text;
+  for (const wchar_t *from = text; *from; from++) {
+    if (from[0] == L'*' && from[1] == L'*') {
+      from++;
+      continue;
+    }
+    *to++ = *from;
+  }
+  *to = L'\0';
+}
+
+/* Once, on this PC after it joined a group: which device keeps the originals. Appends it
+ * to out as a paragraph of its own; nothing if the archive isn't known or it was shown
+ * before. */
+static void append_archive_explainer(wchar_t *out, size_t n, const sync_event *ev) {
+  if (!ev->joined || !ev->archive_name[0] || !s.host || !s.host->first_time) return;
+  if (!s.host->first_time(ARCHIVE_EXPLAINED_KEY)) return;
+  char *name = wstr_to_utf8(ev->archive_name);
+  wchar_t text[640];
+  if (ev->archives > 1)
+    mc_wformat(text, 640, mc_str_plural(MC_STR_ARCHIVE_EXPLAINER_SEVERAL, ev->archives - 1), MC_S(name),
+               MC_D(ev->archives - 1));
+  else
+    mc_wformat(text, 640, mc_str(MC_STR_ARCHIVE_EXPLAINER), MC_S(name));
+  free(name);
+  drop_bold_marks(text);
+  size_t len = wcslen(out);
+  if (len + 2 < n) swprintf(out + len, n - len, L"\n\n%ls", text);
+}
+
+/* Whether this PC could have joined: it's in no group, so a new, empty library lets it. */
+static BOOL could_join(void) {
+  mc_sync_lib_state state;
+  mc_sync *sync = sync_bridge_get();
+  return sync && s.host && s.host->new_library && mc_sync_library_state(sync, &state) == MC_OK &&
+         state == MC_SYNC_LIBRARY_NO_GROUP;
+}
+
 /* How a pairing ended, as on Android. */
-static void ended_text(wchar_t *out, size_t n, mc_pair_reason reason, BOOL initiator, const wchar_t *name) {
+static void ended_text(wchar_t *out, size_t n, const sync_event *ev, BOOL initiator, const wchar_t *name) {
+  mc_pair_reason reason = ev->reason;
   switch (reason) {
     case MC_PAIR_PAIRED:
-      peer_text(out, n, MC_STR_WINDOWS_PC_PAIRED_TEXT, name, FALSE);
+      /* Nothing syncs yet: the device that joined has its sync settings to choose. */
+      peer_text(out, n, ev->joined ? MC_STR_WINDOWS_PC_PAIRED_TEXT : MC_STR_PAIRED_PEER_TEXT, name, !ev->joined);
+      append_archive_explainer(out, n, ev);
       break;
     case MC_PAIR_WRONG_CODE:
       swprintf(out, n, L"%ls", mc_wstr(MC_STR_PAIR_WRONG_CODE_TOO_OFTEN));
@@ -157,6 +222,10 @@ static void ended_text(wchar_t *out, size_t n, mc_pair_reason reason, BOOL initi
     case MC_PAIR_LIBRARY_MISMATCH:
       if (initiator) peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_LIBRARY_MISMATCH, name, FALSE);
       else peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_LIBRARY_MISMATCH_INCOMING, name, TRUE);
+      if (could_join()) {
+        size_t len = wcslen(out);
+        if (len + 2 < n) swprintf(out + len, n - len, L"\n\n%ls", mc_wstr(MC_STR_PAIR_NEW_LIBRARY_HINT));
+      }
       break;
     case MC_PAIR_ALREADY_PAIRED:
       peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_ALREADY_PAIRED, name, FALSE);
@@ -252,31 +321,104 @@ static void ready_for_code(pair_dlg *d) {
   if (GetActiveWindow() == d->wnd) SetFocus(edit);
 }
 
-/* Shows how the pairing ended, with one OK button in Cancel's place. */
-static void show_ended(pair_dlg *d, mc_pair_reason reason, const wchar_t *name) {
-  wchar_t text[512];
-  ended_text(text, 512, reason, d->initiator, name && *name ? name : d->peer);
+/* Moves a control down by dy pixels. */
+static void move_down(HWND dlg, int id, int dy) {
+  HWND item = GetDlgItem(dlg, id);
+  RECT r;
+  GetWindowRect(item, &r);
+  MapWindowPoints(NULL, dlg, (POINT *)&r, 2);
+  SetWindowPos(item, NULL, r.left, r.top + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/* Makes the dialog taller if the status text needs more room than it has. */
+static void fit_status(pair_dlg *d) {
+  HWND status = GetDlgItem(d->wnd, IDC_PAIR_STATUS);
+  int len = GetWindowTextLengthW(status);
+  wchar_t *text = malloc(((size_t)len + 1) * sizeof *text);
+  if (!text) return;
+  GetWindowTextW(status, text, len + 1);
+  RECT have;
+  GetClientRect(status, &have);
+  RECT need = {0, 0, have.right, 0};
+  HDC dc = GetDC(status);
+  HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageW(status, WM_GETFONT, 0, 0));
+  DrawTextW(dc, text, -1, &need, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
+  SelectObject(dc, old);
+  ReleaseDC(status, dc);
+  free(text);
+  int dy = need.bottom - have.bottom;
+  if (dy <= 0) return;
+  RECT w;
+  GetWindowRect(d->wnd, &w);
+  SetWindowPos(d->wnd, NULL, w.left, w.top - dy / 2, w.right - w.left, w.bottom - w.top + dy,
+               SWP_NOZORDER | SWP_NOACTIVATE);
+  SetWindowPos(status, NULL, 0, 0, have.right, have.bottom + dy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  move_down(d->wnd, IDOK, dy);
+  move_down(d->wnd, ID_ACTION, dy);
+}
+
+/* Turns the dialog into a message: title, text, and OK (labelled ok_id) in Cancel's place,
+ * with the action button left of it unless action is ACT_NONE. */
+static void show_message(pair_dlg *d, const wchar_t *title, const wchar_t *text, ended_action action,
+                         enum mc_str_id action_id, enum mc_str_id ok_id) {
   d->ended = TRUE;
   d->checking = FALSE;
-  SetWindowTextW(d->wnd, mc_wstr(reason == MC_PAIR_PAIRED ? MC_STR_PAIRED : MC_STR_PAIR_FAILED));
+  d->action = action;
+  SetWindowTextW(d->wnd, title);
   ShowWindow(GetDlgItem(d->wnd, ID_TEXT), SW_HIDE);
   ShowWindow(GetDlgItem(d->wnd, IDC_PAIR_CODE), SW_HIDE);
   ShowWindow(GetDlgItem(d->wnd, IDCANCEL), SW_HIDE);
   place(d->wnd, IDC_PAIR_STATUS, MARGIN, MARGIN, DLG_W - 2 * MARGIN, DLG_H - 3 * MARGIN - BTN_H);
   set_status(d, text);
-  HWND ok = GetDlgItem(d->wnd, IDOK);
+  HWND ok = GetDlgItem(d->wnd, IDOK), act = GetDlgItem(d->wnd, ID_ACTION);
   place(d->wnd, IDOK, DLG_W - MARGIN - BTN_W, DLG_H - MARGIN - BTN_H, BTN_W, BTN_H);
-  SetWindowTextW(ok, mc_wstr(MC_STR_OK));
+  SetWindowTextW(ok, mc_wstr_mnemonic(ok_id));
   EnableWindow(ok, TRUE);
   ShowWindow(ok, SW_SHOW);
-  SendMessageW(d->wnd, DM_SETDEFID, IDOK, 0);
-  if (GetActiveWindow() == d->wnd) SendMessageW(d->wnd, WM_NEXTDLGCTL, (WPARAM)ok, TRUE);
+  if (action != ACT_NONE) {
+    SetWindowTextW(act, mc_wstr_mnemonic(action_id));
+    ShowWindow(act, SW_SHOW);
+  }
+  fit_status(d);
+  /* Enter takes the next step, except Create a New Library, which is a bigger one. */
+  HWND def = action == ACT_NONE || action == ACT_NEW_LIBRARY ? ok : act;
+  SendMessageW(d->wnd, DM_SETDEFID, (WPARAM)GetDlgCtrlID(def), 0);
+  if (GetActiveWindow() == d->wnd) SendMessageW(d->wnd, WM_NEXTDLGCTL, (WPARAM)def, TRUE);
+}
+
+/* Shows how the pairing ended, with OK in Cancel's place, and a button for the next step:
+ * Choose What to Sync after pairing, Create a New Library when this PC has music of its own
+ * but could otherwise join. */
+static void show_ended(pair_dlg *d, const sync_event *ev) {
+  const wchar_t *name = ev->name[0] ? ev->name : d->peer;
+  if (ev->name[0]) wcsncpy(d->peer, ev->name, sizeof d->peer / sizeof d->peer[0] - 1);
+  wchar_t text[1024];
+  ended_text(text, 1024, ev, d->initiator, name);
+  ended_action action = ACT_NONE;
+  enum mc_str_id action_id = MC_STR_OK;
+  if (ev->reason == MC_PAIR_PAIRED && s.host && s.host->show_device) {
+    mc_sync *sync = sync_bridge_get();
+    const char *uid = ev->joined ? (sync ? mc_sync_device_uid(sync) : "") : ev->uid;
+    if (uid && *uid) {
+      snprintf(d->target, sizeof d->target, "%s", uid);
+      action = ACT_CHOOSE;
+      action_id = MC_STR_CHOOSE_WHAT_TO_SYNC;
+    }
+  } else if (ev->reason == MC_PAIR_LIBRARY_MISMATCH && could_join()) {
+    if (ev->uid[0]) snprintf(d->target, sizeof d->target, "%s", ev->uid); /* else as set_target said */
+    action = ACT_NEW_LIBRARY;
+    action_id = MC_STR_PAIR_CREATE_LIBRARY;
+  }
+  show_message(d, mc_wstr(ev->reason == MC_PAIR_PAIRED ? MC_STR_PAIRED : MC_STR_PAIR_FAILED), text, action,
+               action_id, MC_STR_OK);
 }
 
 static void apply_theme(HWND dlg) {
   theme_apply_window(dlg, FALSE);
   theme_apply_controls(dlg);
 }
+
+static void run_action(pair_dlg *d);
 
 /* Posted to itself after a DPI change, once the dialog manager has rescaled the controls. */
 #define WM_APP_REFONT (WM_APP + 1)
@@ -289,6 +431,7 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       d->wnd = dlg;
       SetWindowLongPtrW(dlg, DWLP_USER, lp);
       set_big_font(d);
+      ShowWindow(GetDlgItem(dlg, ID_ACTION), SW_HIDE);
       if (d->initiator) {
         SendDlgItemMessageW(dlg, IDC_PAIR_CODE, EM_LIMITTEXT, MC_PAIR_CODE_LEN, 0);
       } else {
@@ -349,6 +492,9 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
           }
           return TRUE;
         }
+        case ID_ACTION:
+          if (d->ended && d->action != ACT_NONE) run_action(d);
+          return TRUE;
         case IDCANCEL:
           if (!d->ended) {
             /* Cancelling here: the CANCELLED result it brings needs no telling. */
@@ -410,10 +556,81 @@ static pair_dlg *open_dlg(pair_dlg **slot, mc_sync *sync, BOOL initiator, const 
   return d;
 }
 
+/* After Create a New Library: offers to pair with the same device again. */
+static void offer_pair_again(const char *uid, const wchar_t *peer, const char *host, uint16_t port) {
+  if (!*uid && !*host) return; /* nothing to ask */
+  wchar_t shown[128];
+  if (*peer) wcsncpy(shown, peer, 127);
+  else wstr_from_utf8(shown, 128, host); /* refused before it said its name: its address */
+  shown[127] = L'\0';
+  peer = shown;
+  pair_dlg *d = open_dlg(&s.enter, NULL, TRUE, peer);
+  if (!d) return;
+  snprintf(d->target, sizeof d->target, "%s", uid);
+  snprintf(d->host, sizeof d->host, "%s", host);
+  d->port = port;
+  wchar_t title[256], text[512];
+  peer_text(title, 256, MC_STR_PAIR_WITH, peer, FALSE);
+  peer_text(text, 512, MC_STR_PAIR_AGAIN_TEXT, peer, FALSE);
+  show_message(d, title, text, ACT_PAIR_AGAIN, MC_STR_PAIR_AGAIN, MC_STR_CANCEL);
+  ShowWindow(d->wnd, SW_SHOW);
+}
+
+/* The ended dialog's action button. The dialog closes first, so what follows (a page, a
+ * folder picker, another pairing) has the main window back. */
+static void run_action(pair_dlg *d) {
+  ended_action action = d->action;
+  char uid[MC_UID_STRLEN], host[MC_SYNC_ADDR_STRLEN];
+  wchar_t peer[128];
+  snprintf(uid, sizeof uid, "%s", d->target);
+  snprintf(host, sizeof host, "%s", d->host);
+  uint16_t port = d->port;
+  wcscpy(peer, d->peer);
+  const pair_dialog_host *h = s.host;
+  if (action == ACT_NEW_LIBRARY && *uid) {
+    /* Where it is now, in case discovery hasn't seen it again by the time the new library's
+     * sync asks. */
+    mc_sync_nearby_list *nearby = NULL;
+    mc_sync *sync = sync_bridge_get();
+    if (sync && mc_sync_list_nearby(sync, &nearby) == MC_OK) {
+      for (int i = 0; i < nearby->count; i++)
+        if (!strcmp(nearby->items[i].uid, uid) && nearby->items[i].address) {
+          snprintf(host, sizeof host, "%s", nearby->items[i].address);
+          port = nearby->items[i].port;
+        }
+      mc_sync_nearby_list_free(nearby);
+    }
+  }
+  close_dlg(d); /* frees d */
+  if (!h) return;
+  switch (action) {
+    case ACT_CHOOSE:
+      if (h->show_device) h->show_device(uid);
+      break;
+    case ACT_NEW_LIBRARY:
+      if (h->new_library && h->new_library()) offer_pair_again(uid, peer, host, port);
+      break;
+    case ACT_PAIR_AGAIN:
+      if (h->pair_again) h->pair_again(uid, peer, *host ? host : NULL, port);
+      break;
+    case ACT_NONE:
+      break;
+  }
+}
+
 /* --- API --- */
 
-void pair_dialog_init(HWND owner) {
+void pair_dialog_init(HWND owner, const pair_dialog_host *host) {
   s.owner = owner;
+  s.host = host;
+}
+
+void pair_dialog_set_target(const char *uid, const char *host, uint16_t port) {
+  pair_dlg *d = s.enter;
+  if (!d || d->ended) return;
+  snprintf(d->target, sizeof d->target, "%s", uid ? uid : "");
+  snprintf(d->host, sizeof d->host, "%s", host ? host : "");
+  d->port = port;
 }
 
 void pair_dialog_begin_enter(mc_sync *sync, const wchar_t *peer, const wchar_t *address) {
@@ -482,7 +699,7 @@ static void initiator_result(const sync_event *ev) {
     }
     if (!(d = open_dlg(&s.enter, NULL, TRUE, ev->name))) return;
     s.enter_cancelled = FALSE;
-    show_ended(d, ev->reason, ev->name);
+    show_ended(d, ev);
     ShowWindow(d->wnd, SW_SHOW);
     return;
   }
@@ -499,7 +716,7 @@ static void initiator_result(const sync_event *ev) {
     ready_for_code(d);
     return;
   }
-  show_ended(d, ev->reason, ev->name);
+  show_ended(d, ev);
 }
 
 static void responder_result(const sync_event *ev) {
@@ -515,7 +732,7 @@ static void responder_result(const sync_event *ev) {
       /* The new code is already showing. */
       set_status(d, mc_wstr(MC_STR_PAIR_NEW_CODE));
     } else {
-      tries_left(text, 256, MC_STR_PAIR_WRONG_CODE_ENTERED, ev->attempts_left);
+      tries_left(text, 256, MC_STR_PAIR_WRONG_CODE, ev->attempts_left);
       set_status(d, text);
     }
     return;
@@ -527,14 +744,14 @@ static void responder_result(const sync_event *ev) {
       return;
     }
     if (!(d = open_dlg(&s.show, NULL, FALSE, ev->name))) return;
-    show_ended(d, ev->reason, ev->name);
+    show_ended(d, ev);
     ShowWindow(d->wnd, SW_SHOW);
     if (s.owner) {
       FLASHWINFO fi = {sizeof fi, s.owner, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0};
       FlashWindowEx(&fi);
     }
   } else {
-    show_ended(d, ev->reason, ev->name);
+    show_ended(d, ev);
   }
   s.show_cancelled = FALSE;
 }

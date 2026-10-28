@@ -5,6 +5,7 @@
 #include "add_device.h"
 #include "device_view.h"
 #include "pair_dialog.h"
+#include "settings_view.h"
 #include "sync_bridge.h"
 
 enum {
@@ -369,7 +370,9 @@ static void pair_nearby(const char *picked) {
       if (!strcmp(nearby->items[i].uid, uid)) name = g_strdup(nearby->items[i].name ? nearby->items[i].name : "");
     mc_sync_nearby_list_free(nearby);
   }
-  pair_started(mc_sync_pair_request(sync, uid), name, NULL);
+  mc_status st = mc_sync_pair_request(sync, uid);
+  pair_started(st, name, NULL);
+  if (st == MC_OK) pair_dialog_set_target(uid, NULL, 0);
   g_free(name);
 }
 
@@ -387,7 +390,9 @@ static void on_add_device_connect(void *user, const char *host, guint16 port) {
     return;
   }
   char *address = format_address(host, port ? port : MC_SYNC_DEFAULT_PORT);
-  pair_started(mc_sync_pair_request_address(sync, host, port), NULL, address);
+  mc_status st = mc_sync_pair_request_address(sync, host, port);
+  pair_started(st, NULL, address);
+  if (st == MC_OK) pair_dialog_set_target(NULL, host, port);
   g_free(address);
 }
 
@@ -462,6 +467,73 @@ void devices_open_self(void) {
   refresh_devices(); /* selects its row */
 }
 
+/* --- The pairing dialogs' side --- */
+
+/* Choose What to Sync: the device's page (this computer's own, when it joined). */
+static void pair_show_device(const char *uid) {
+  open_device(uid);
+  refresh_devices(); /* selects its row */
+}
+
+static gboolean open_library_for_pairing(void *user, const char *dir) {
+  return app_open_library(user, dir);
+}
+
+/* Create a New Library's wait for the folder picker. */
+typedef struct new_library_wait {
+  void (*done)(gpointer data, gboolean switched);
+  gpointer data;
+} new_library_wait;
+
+static void on_new_library_chosen(gpointer data, const char *dir, gboolean saved) {
+  new_library_wait *w = data;
+  if (dir && !saved) alert(mc_str(MC_STR_SETTINGS), mc_str(MC_STR_SETTINGS_SAVE_FAILED));
+  w->done(w->data, dir != NULL);
+}
+
+/* Create a New Library, from a pairing refused because this computer has music of its own:
+ * Settings' Open Another Library, taking only an empty folder. */
+static void pair_new_library(GtkWidget *parent, void (*done)(gpointer data, gboolean switched), gpointer data) {
+  new_library_wait *w = g_new0(new_library_wait, 1);
+  w->done = done;
+  w->data = data;
+  settings_view_choose_library(parent, d.a->settings_dir, open_library_for_pairing, d.a, TRUE, on_new_library_chosen,
+                               w, g_free);
+}
+
+/* Pair Again, once the new library is open: by uid if discovery has seen the device again,
+ * else at the address it had. */
+static void pair_again(const char *uid, const char *name, const char *host, guint16 port) {
+  mc_sync *sync = sync_bridge_get();
+  if (!sync) {
+    sync_off_message();
+    return;
+  }
+  mc_status st = uid && *uid ? mc_sync_pair_request(sync, uid) : MC_ERR_NOT_FOUND;
+  if (st == MC_ERR_NOT_FOUND && host && *host) {
+    char *address = format_address(host, port ? port : MC_SYNC_DEFAULT_PORT);
+    st = mc_sync_pair_request_address(sync, host, port);
+    pair_started(st, name, address);
+    g_free(address);
+  } else {
+    pair_started(st, name, NULL);
+  }
+  if (st == MC_OK) pair_dialog_set_target(uid, host, port);
+}
+
+/* One-time explanations: TRUE the first time key is asked about, which settings.json then
+ * records. Not saved, it shows again next run. */
+static gboolean pair_first_time(const char *key) {
+  mc_settings *settings = NULL;
+  if (mc_settings_load(d.a->settings_dir, &settings) != MC_OK) return TRUE;
+  gboolean first = !mc_settings_bool(settings, key, 0);
+  if (first && mc_settings_set_bool(settings, key, 1) == MC_OK) mc_settings_save(settings);
+  mc_settings_free(settings);
+  return first;
+}
+
+static const pair_dialog_host k_pair_host = {pair_show_device, pair_new_library, pair_again, pair_first_time};
+
 /* --- Sync events --- */
 
 static void on_sync_event(void *user, const sync_event *ev) {
@@ -484,13 +556,8 @@ static void on_sync_event(void *user, const sync_event *ev) {
       pair_dialog_show_code(window(), sync, ev);
       break;
     case SYNC_EV_PAIR_RESULT:
-      if (pair_dialog_on_result(window(), ev)) { /* paired: show the new device's page */
-        refresh_devices();
-        if (ev->uid[0]) {
-          open_device(ev->uid);
-          refresh_devices(); /* selects its row */
-        }
-      }
+      /* Paired: the dialog's Choose What to Sync opens the page of the device that joined. */
+      if (pair_dialog_on_result(window(), ev)) refresh_devices();
       break;
     case SYNC_EV_PROGRESS:
       if (set_syncing(ev->uid, ev->phase != MC_SYNC_PHASE_DONE)) schedule_refresh();
@@ -515,6 +582,7 @@ static void on_devices_changed(void *user) {
 
 GtkWidget *devices_new(app *a) {
   d.a = a;
+  pair_dialog_init(&k_pair_host);
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
   /* The Devices heading, with + at the end to add a device by address. */

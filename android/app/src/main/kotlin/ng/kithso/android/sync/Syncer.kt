@@ -42,8 +42,21 @@ sealed interface Pairing {
     /** [peer] asked to pair: its user types [code] in there. [attemptsLeft] drops after a wrong code. */
     data class ShowCode(val peer: String, val code: String, val attemptsLeft: Int) : Pairing
 
-    /** It's over: paired, or why not. [initiator]: this phone asked. */
-    data class Ended(val peer: String, val reason: CoreSync.PairReason, val initiator: Boolean) : Pairing
+    /**
+     * It's over: paired, or why not. [initiator]: this phone asked. When paired, [joined] says
+     * this phone joined [peer]'s group (or a new one syncing [peer]'s library), so it's this
+     * phone's sync settings that are to be chosen, else [peerUid]'s; [archiveName] is then the
+     * group's archive (the first of [archives]), "" if not known.
+     */
+    data class Ended(
+        val peer: String,
+        val reason: CoreSync.PairReason,
+        val initiator: Boolean,
+        val peerUid: String = "",
+        val joined: Boolean = false,
+        val archiveName: String = "",
+        val archives: Int = 0,
+    ) : Pairing
 }
 
 /** How far a session with a member has got (mc_sync_progress). */
@@ -522,7 +535,7 @@ class Syncer(
             CoreSync.PairReason.Cancelled -> null
             CoreSync.PairReason.Paired -> {
                 source.refresh()
-                Pairing.Ended(peer, event.reason, event.initiator)
+                Pairing.Ended(peer, event.reason, event.initiator, event.uid, event.joined, event.archiveName, event.archives)
             }
             else -> Pairing.Ended(peer, event.reason, event.initiator)
         }

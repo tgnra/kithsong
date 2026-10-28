@@ -74,6 +74,8 @@ typedef struct dev {
   mc_pair_reason reason;
   int attempts_left;
   char result_peer[MC_UID_STRLEN];
+  int joined, archives; /* of the last result */
+  char archive_name[128];
   done_event done[MAX_EVENTS];
   int ndone;
 } dev;
@@ -95,6 +97,9 @@ static void on_pair_result(void *user, const mc_pair_result *r) {
   d->reason = r->reason;
   d->attempts_left = r->attempts_left;
   snprintf(d->result_peer, sizeof d->result_peer, "%s", r->device_uid);
+  d->joined = r->joined;
+  d->archives = r->archives;
+  snprintf(d->archive_name, sizeof d->archive_name, "%s", r->archive_name ? r->archive_name : "?");
   d->results++;
   mc_cond_broadcast(&d->c);
   mc_mutex_unlock(&d->m);
@@ -412,6 +417,10 @@ int main(int argc, char **argv) {
   /* A asks B. A's library has tracks and B's is empty, so the group syncs A's library and
    * A is its archive. A first types a wrong code. */
   CHECK(pair(&a, &b, 0, 1) == MC_PAIR_PAIRED);
+  /* B joined, and says A is the archive. */
+  CHECK(!a.joined && a.archives == 0);
+  CHECK(b.joined && b.archives == 1);
+  CHECK_TEXT(b.archive_name, "a");
   char group[MC_UID_STRLEN], sql[512], text[256];
   group_text(&a, "SELECT group_uid FROM local", group, sizeof group);
   CHECK(strlen(group) == 36);
@@ -435,6 +444,10 @@ int main(int argc, char **argv) {
 
   /* C (empty) pairs with B by address and joins the group; A hears of C through B. */
   CHECK(pair(&c, &b, 1, 0) == MC_PAIR_PAIRED);
+  /* C joined, and hears from B that A is the archive. */
+  CHECK(c.joined && c.archives == 1);
+  CHECK_TEXT(c.archive_name, "a");
+  CHECK(!b.joined);
   CHECK(track_count(&c) == 20);
   CHECK(group_int(&c, "SELECT count(*) FROM devices") == 3);
   CHECK(group_int(&a, "SELECT count(*) FROM devices") == 2);
@@ -545,6 +558,9 @@ int main(int argc, char **argv) {
    * library of its own, so it can't join A's group (library_mismatch). */
   if (dev_start(&d) && dev_start(&e) && dev_start(&f)) {
     CHECK(pair(&d, &e, 1, 0) == MC_PAIR_PAIRED);
+    /* Both empty: the group syncs E's library, so D joined and E is the archive. */
+    CHECK(d.joined && !e.joined);
+    CHECK_TEXT(d.archive_name, "e");
     CHECK(pair(&a, &d, 1, 0) == MC_PAIR_IN_GROUP);
     CHECK(pair(&d, &e, 1, 0) == MC_PAIR_ALREADY_PAIRED);
     fill_library(&f, 2);
@@ -591,7 +607,10 @@ int main(int argc, char **argv) {
    * the library doesn't. Its fresh mc_sync knows no addresses and has no discovery, so it
    * reaches B through B's address hints alone. */
   if (dev_start(&h)) {
-    CHECK(pair(&h, &b, 1, 0) == MC_PAIR_PAIRED);
+    /* B asks H: H joins B's group, and hears of the archive in B's PAIR_ACCEPT. */
+    CHECK(pair(&b, &h, 1, 0) == MC_PAIR_PAIRED);
+    CHECK(!b.joined && h.joined && h.archives == 1);
+    CHECK_TEXT(h.archive_name, "a");
     CHECK(track_count(&h) == 20);
     dev_stop(&h);
     char other[512];

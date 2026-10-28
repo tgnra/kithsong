@@ -835,11 +835,13 @@ static void on_sync_pair_result(void *user, const mc_pair_result *r) {
   if (!env) return;
   jstring uid = new_string(env, r->device_uid ? r->device_uid : "");
   jstring name = new_string(env, r->name ? r->name : "");
+  jstring archive = new_string(env, r->archive_name ? r->archive_name : "");
   (*env)->CallVoidMethod(env, p->listener, p->on_pair_result, uid, name,
                          (jboolean)(r->initiator != 0), (jint)r->reason, (jint)r->attempts_left,
-                         (jint)r->status);
+                         (jint)r->status, (jboolean)(r->joined != 0), archive, (jint)r->archives);
   if (uid) (*env)->DeleteLocalRef(env, uid);
   if (name) (*env)->DeleteLocalRef(env, name);
+  if (archive) (*env)->DeleteLocalRef(env, archive);
   detach(env, attached);
 }
 
@@ -893,7 +895,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
   } methods[] = {
     {"onPeer", "(Ljava/lang/String;ZZ)V"},
     {"onPairCode", "(Ljava/lang/String;Ljava/lang/String;I)V"},
-    {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIII)V"},
+    {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIIIZLjava/lang/String;I)V"},
     {"onProgress", "(Ljava/lang/String;IJJIIJJ)V"},
     {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJIZ)V"},
   };

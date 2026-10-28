@@ -65,8 +65,12 @@ Priorities:
 
 - **Discovery:** each instance announces itself over mDNS. A background thread scans
   periodically and shows new devices for pairing.
-- **Pairing:** a short code links two devices once. After that they reconnect and sync
-  automatically whenever both are online.
+- **Pairing:** a short code links two devices once. The device that joins must have an empty
+  library (on Windows and Linux the pairing dialog offers to create a new one if it hasn't),
+  and no music moves until you've chosen what it holds and pressed **Sync now**. After that
+  they reconnect and sync automatically whenever both are online.
+- **Archives:** the device whose music the group started from is its *archive*: it keeps the
+  originals of everything. A device that joins a group says so once, naming the archive.
 - **No server:** any device can sync with any other. Edits are merged field by field using
   hybrid logical clocks, and playlist order merges cleanly even when it was changed on two
   devices.

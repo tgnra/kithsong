@@ -48,6 +48,17 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
             save()
         }
 
+    /**
+     * Whether this phone has said which device is the archive, which it does once, after it
+     * first joins a group. The same key as the desktops'.
+     */
+    var archiveExplained: Boolean
+        get() = core.bool(KEY_ARCHIVE_EXPLAINED, false)
+        set(value) {
+            core.setBool(KEY_ARCHIVE_EXPLAINED, value)
+            save()
+        }
+
     /** Whether playback shuffles, as it was left. */
     var shuffle: Boolean
         get() = core.shuffle
@@ -73,6 +84,7 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
         const val TAG = "kithsong"
         // A frontend's own bool in settings.json (the rest have the core's own keys).
         const val KEY_ASKED_FOR_NOTIFICATIONS = "android_asked_for_notifications"
+        const val KEY_ARCHIVE_EXPLAINED = "archive_explained"
         // What they were in [old].
         const val OLD_ASKED_FOR_NOTIFICATIONS = "asked_for_notifications"
         const val OLD_DEVICE_NAME = "device_name"

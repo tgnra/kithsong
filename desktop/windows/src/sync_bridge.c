@@ -94,6 +94,9 @@ static void on_pair_result(void *user, const mc_pair_result *result) {
   ev->reason = result->reason;
   ev->attempts_left = result->attempts_left;
   ev->status = result->status;
+  ev->joined = result->joined;
+  ev->archives = result->archives;
+  copy_name(ev->archive_name, (int)(sizeof ev->archive_name / sizeof ev->archive_name[0]), result->archive_name);
   post(user, ev);
 }
 

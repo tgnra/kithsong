@@ -76,4 +76,9 @@ void app_open_track(app *a, const char *album_uid, const char *track_uid);
 void app_open_artist(app *a, const char *uid);
 void app_open_album_group(app *a, const char *uid);
 
+/* Switches to the library in dir, as Settings' Open Another Library does (sync restarts with
+ * it). TRUE if it's open; FALSE after telling the user why it couldn't be. Saves nothing:
+ * settings_view_choose_library() does. */
+gboolean app_open_library(app *a, const char *dir);
+
 #endif

@@ -34,13 +34,19 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import ng.kithso.core.ConfirmState
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeviceKind
+import ng.kithso.android.AppSettings
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
 import ng.kithso.android.sync.Pairing
@@ -91,19 +97,25 @@ fun AddDeviceDialog(onConnect: (host: String, port: Int) -> Unit, onDismiss: () 
     )
 }
 
-/** [PairingDialog] for the pairing under way, if any. */
+/**
+ * [PairingDialog] for the pairing under way, if any. [onChooseWhatToSync] opens a device's
+ * page (a member's uid, or [THIS_DEVICE]) after pairing, to choose its sync settings.
+ */
 @Composable
-fun PairingDialogs(syncer: Syncer) {
+fun PairingDialogs(syncer: Syncer, settings: AppSettings, onChooseWhatToSync: (String) -> Unit) {
     val pairing = syncer.status.collectAsState().value.pairing ?: return
-    PairingDialog(pairing, syncer)
+    PairingDialog(pairing, syncer, settings, onChooseWhatToSync)
 }
 
 /**
  * Pairing, wherever the app is: the code another device asked for, to type in there; the code
- * this phone asked a device for, to type in here; and how it ended.
+ * this phone asked a device for, to type in here; and how it ended. Once paired, nothing
+ * syncs until the device that joined has its sync settings chosen, so Choose What to Sync
+ * opens its page. The first time this phone joins a group, it also says which device is the
+ * archive.
  */
 @Composable
-private fun PairingDialog(pairing: Pairing, syncer: Syncer) {
+private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSettings, onChooseWhatToSync: (String) -> Unit) {
     when (pairing) {
         is Pairing.ShowCode -> {
             // The screen must not time out while someone types the code on the other device.
@@ -132,7 +144,7 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer) {
                         if (pairing.attemptsLeft < MAX_ATTEMPTS) {
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                stringResource(R.string.pair_wrong_code_entered, triesLeft(pairing.attemptsLeft)),
+                                stringResource(R.string.pair_wrong_code, triesLeft(pairing.attemptsLeft)),
                                 color = MaterialTheme.colorScheme.error,
                                 textAlign = TextAlign.Center,
                             )
@@ -178,12 +190,66 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer) {
                 dismissButton = { TextButton(onClick = syncer::cancelPairing) { Text(stringResource(R.string.cancel)) } },
             )
         }
-        is Pairing.Ended -> AlertDialog(
-            onDismissRequest = syncer::dismissPairing,
-            title = { Text(stringResource(if (pairing.reason == CoreSync.PairReason.Paired) R.string.paired else R.string.pair_failed)) },
-            text = { Text(endedText(pairing)) },
-            confirmButton = { TextButton(onClick = syncer::dismissPairing) { Text(stringResource(R.string.ok)) } },
-        )
+        is Pairing.Ended -> {
+            val paired = pairing.reason == CoreSync.PairReason.Paired
+            // The device whose sync settings are to be chosen.
+            val choose = when {
+                !paired -> null
+                pairing.joined -> THIS_DEVICE
+                else -> pairing.peerUid.ifEmpty { null }
+            }
+            // Which device is the archive, once: decided when the dialog first shows, and
+            // kept while it does.
+            val explain = rememberSaveable(pairing) {
+                paired && pairing.joined && pairing.archiveName.isNotEmpty() && !settings.archiveExplained
+            }
+            LaunchedEffect(explain) { if (explain) settings.archiveExplained = true }
+            AlertDialog(
+                onDismissRequest = syncer::dismissPairing,
+                title = { Text(stringResource(if (paired) R.string.paired else R.string.pair_failed)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(endedText(pairing))
+                        if (explain) Text(archiveExplainer(pairing))
+                    }
+                },
+                confirmButton = {
+                    if (choose != null) {
+                        TextButton(onClick = {
+                            syncer.dismissPairing()
+                            onChooseWhatToSync(choose)
+                        }) { Text(stringResource(R.string.choose_what_to_sync)) }
+                    } else {
+                        TextButton(onClick = syncer::dismissPairing) { Text(stringResource(R.string.ok)) }
+                    }
+                },
+                dismissButton = if (choose != null) {
+                    { TextButton(onClick = syncer::dismissPairing) { Text(stringResource(R.string.ok)) } }
+                } else {
+                    null
+                },
+            )
+        }
+    }
+}
+
+/** Which device keeps the originals, its "**archive**" in bold. */
+@Composable
+private fun archiveExplainer(pairing: Pairing.Ended): AnnotatedString {
+    val others = pairing.archives - 1
+    val text = if (others > 0) {
+        pluralStringResource(R.plurals.archive_explainer_several, others, pairing.archiveName, others)
+    } else {
+        stringResource(R.string.archive_explainer, pairing.archiveName)
+    }
+    return boldMarks(text)
+}
+
+/** [text] with each "**" pair's part in bold, and the "**" taken out. */
+private fun boldMarks(text: String): AnnotatedString = buildAnnotatedString {
+    val parts = text.split("**")
+    parts.forEachIndexed { i, part ->
+        if (i % 2 == 1) withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(part) } else append(part)
     }
 }
 
@@ -249,7 +315,12 @@ fun memberText(device: SyncDevice, syncing: Boolean): String {
 
 @Composable
 private fun endedText(pairing: Pairing.Ended): String = when (pairing.reason) {
-    CoreSync.PairReason.Paired -> stringResource(R.string.paired_text, pairing.peer)
+    // Nothing syncs yet: the device that joined has its sync settings to choose.
+    CoreSync.PairReason.Paired -> if (pairing.joined) {
+        stringResource(R.string.paired_text, pairing.peer)
+    } else {
+        stringResource(R.string.paired_peer_text, pairing.peer)
+    }
     CoreSync.PairReason.WrongCode -> stringResource(R.string.pair_wrong_code_too_often)
     CoreSync.PairReason.InGroup -> stringResource(R.string.pair_in_group, pairing.peer)
     CoreSync.PairReason.LibraryMismatch -> stringResource(
