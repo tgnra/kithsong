@@ -440,6 +440,36 @@ Tested on the emulator with a scratch library (4 playlists: 6 covers, 2 covers, 
 then the emulator's own library was put back. Not tested: a playlist's picture changing through
 sync, dark theme.
 
+## Player swipe settling
+
+Report: swiping the full player away sometimes stopped partway down the screen.
+`DismissibleScreen` (the full player, settings, sync, device and detail pages) moved an
+`Animatable` from a plain `draggable`, launching a coroutine per drag step to `snapTo` the new
+offset and settling in `onDragStopped`. Those steps ran after the drag code had moved on, so
+the settle decision read an offset that could lag the finger, and a step still queued when
+the settle animation began would cancel that animation (`snapTo` takes the Animatable's lock),
+leaving the layer wherever it was. It also needed 800dp/s or a third of the way to dismiss.
+
+`DismissibleScreen` now uses an `AnchoredDraggableState` (Shown at 0, Hidden at the
+screen's height or width) with `Modifier.anchoredDraggable`. Drag steps apply as they arrive,
+under the same lock as the slide in/out and predictive back, so nothing can cut a settle short.
+On release, or when the system cancels the touch, it settles: past halfway or flung that way
+(400dp/s; slower releases go by position, since the default 125dp/s counted a slow drag let
+go mid-motion as a fling) dismisses, anything else springs back. Dismissal is reported once,
+whichever of the fling, the close button or back finishes it. The mini player has no swipe-up
+gesture (it opens on tap), so there was nothing to fix there.
+
+Testing: the stuck state did not reproduce on the emulator before the fix, with `adb input
+swipe` at many speeds and distances, drags starting on the art, title, seekbar and top bar,
+drags during the slide-in, back gestures, and a throwaway instrumented test that dispatched the
+last move and the lift in one main-thread task (as Android does when a finger lifts within a
+frame) and ACTION_CANCEL; logging showed every drag step's coroutine ran before the release.
+So the cause above is from reading the code, not observed. After the fix, on the emulator:
+slow drags released at 30% and 45% and a slow drag from the seekbar spring back; a slow drag
+to 60%, fast short flings and a medium swipe dismiss; cancelled drags at 30%/60% settle open
+and dismissed; back closes only the player; detail pages still swipe right to close. Not
+tested on a physical phone, where the report came from.
+
 ## Follow-ups
 
 Core:
