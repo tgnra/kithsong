@@ -614,6 +614,14 @@ static void prune_dirs(mc_library *lib, const char *rel) {
   free(abs);
 }
 
+char *mc_transfer_deletable_path(mc_library *lib, const char *rel) {
+  return deletable_path(lib, rel);
+}
+
+void mc_transfer_prune_dirs(mc_library *lib, const char *rel) {
+  prune_dirs(lib, rel);
+}
+
 /* Deletes a files row, then its file and any album folder that leaves empty. */
 static mc_status drop_file(mc_library *lib, const char *file_uid, const char *rel) {
   mc_status st = mc_library_begin_write(lib);

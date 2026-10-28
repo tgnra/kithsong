@@ -297,9 +297,10 @@ static mc_status write_fields(mc_sync_db *sdb, const char *uid, const mc_sync_pr
   return st;
 }
 
-/* Deletes uid's stored rows that resolve to item: every copy, whichever duplicate's uid it
- * was written with. */
-static mc_status delete_item(sqlite3 *db, mc_library *lib, const char *uid,
+/* Deletes uid's stored rows of kind (a profile_items.kind) that resolve to item's ref_uid:
+ * every copy, whichever duplicate's uid it was written with. item->kind says how ref_uids
+ * resolve. */
+static mc_status delete_rows(sqlite3 *db, mc_library *lib, const char *uid, const char *kind,
                              const mc_profile_item *item) {
   sqlite3_stmt *sel, *del = NULL;
   if (sqlite3_prepare_v2(db, "SELECT uid, ref_uid FROM profile_items WHERE device_uid = ?1"
@@ -308,7 +309,7 @@ static mc_status delete_item(sqlite3 *db, mc_library *lib, const char *uid,
   mc_status st = sqlite3_prepare_v2(db, "DELETE FROM profile_items WHERE uid = ?1", -1, &del,
                                     NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
   sqlite3_bind_text(sel, 1, uid, -1, SQLITE_STATIC);
-  sqlite3_bind_text(sel, 2, k_kinds[item->kind], -1, SQLITE_STATIC);
+  sqlite3_bind_text(sel, 2, kind, -1, SQLITE_STATIC);
   /* Collected first: deleting while stepping the same table's rows is best avoided. */
   char (*rows)[MC_UID_STRLEN] = NULL;
   int n = 0, rc = SQLITE_DONE;
@@ -338,10 +339,31 @@ static mc_status delete_item(sqlite3 *db, mc_library *lib, const char *uid,
   return st;
 }
 
+static mc_status delete_item(sqlite3 *db, mc_library *lib, const char *uid,
+                             const mc_profile_item *item) {
+  return delete_rows(db, lib, uid, k_kinds[item->kind], item);
+}
+
+/* Selecting an album or artist drops its exclusion (musiccore/sync_here.h): what the user
+ * just chose to sync is synced. */
+static mc_status drop_exclusion(sqlite3 *db, mc_library *lib, const char *uid,
+                                const mc_profile_item *item) {
+  const char *kind = item->kind == MC_PROFILE_ALBUM    ? MC_PLAN_EXCLUDE_ALBUM
+                     : item->kind == MC_PROFILE_ARTIST ? MC_PLAN_EXCLUDE_ARTIST
+                                                       : NULL;
+  return kind ? delete_rows(db, lib, uid, kind, item) : MC_OK;
+}
+
+mc_status mc_profile_delete_rows(sqlite3 *db, mc_library *lib, const char *device_uid,
+                                 const char *kind, const mc_profile_item *item) {
+  return delete_rows(db, lib, device_uid, kind, item);
+}
+
 /* profile_items: inserts the wanted items not stored, and deletes the stored ones not
  * wanted (with any duplicates of them). want is sorted and unique; it is resolved here, so a
  * caller holding a merged-away uid still means its album. Rows of kinds this version
- * doesn't know are left as they are. */
+ * doesn't know are left as they are, and so are exclusions, but an album or artist added
+ * drops its own. */
 static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
                              mc_profile_item *want, int nwant, int *changed) {
   sqlite3 *db = mc_sync_db_handle(sdb);
@@ -371,6 +393,7 @@ static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
       sqlite3_bind_text(ins, 3, k_kinds[want[i].kind], -1, SQLITE_STATIC);
       sqlite3_bind_text(ins, 4, want[i].ref_uid, -1, SQLITE_STATIC);
       st = run(ins);
+      if (st == MC_OK) st = drop_exclusion(db, lib, uid, &want[i]);
       i++;
     } else if (c > 0) {
       st = delete_item(db, lib, uid, &have[j]);
@@ -455,8 +478,7 @@ mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sy
 
 /* --- Archives --- */
 
-/* The wall time (Unix ms) of the library's latest change, 0 if it has none; -1 on error. */
-static int64_t library_latest_ms(mc_library *lib) {
+int64_t mc_profile_library_latest_ms(mc_library *lib) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib), "SELECT max(hlc) FROM changelog", -1, &stmt,
                          NULL) != SQLITE_OK)
@@ -468,9 +490,7 @@ static int64_t library_latest_ms(mc_library *lib) {
   return ms;
 }
 
-/* Whether a current member other than uid is an archive whose sync_status shows it
- * verified complete: nothing missing or corrupt, checked after latest_ms. 1, 0 or -1. */
-static int other_archive_verified(sqlite3 *db, const char *uid, int64_t latest_ms) {
+int mc_profile_other_archive_verified(sqlite3 *db, const char *uid, int64_t latest_ms) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(db,
                          "SELECT 1 FROM profiles p JOIN devices d ON d.uid = p.device_uid"
@@ -551,8 +571,8 @@ mc_status mc_sync_set_archive(mc_sync *sync, const char *device_uid, int archive
         st = MC_ERR_LOCKED; /* only the device itself */
       } else if (state != MC_SYNC_LIBRARY_GROUP) {
         st = MC_ERR_LIBRARY_MISMATCH;
-      } else if ((latest = library_latest_ms(sync->api.lib)) < 0 ||
-                 (verified = other_archive_verified(db, device_uid, latest)) < 0) {
+      } else if ((latest = mc_profile_library_latest_ms(sync->api.lib)) < 0 ||
+                 (verified = mc_profile_other_archive_verified(db, device_uid, latest)) < 0) {
         st = MC_ERR_DB;
       } else if (!verified) {
         st = MC_ERR_LOCKED;
@@ -645,8 +665,8 @@ mc_status mc_profile_fingerprint(sqlite3 *db, const char *uid, char out[MC_PROFI
   mbedtls_sha256_starts(&ctx, 0);
   mc_status st = MC_OK;
   /* Only what decides what the device holds. An archive's row and items don't, nor does the
-   * selection while it syncs everything, a bitrate with originals, a switched-off budget's
-   * size, or the name. */
+   * selection while it syncs everything (but its exclusions do), a bitrate with originals, a
+   * switched-off budget's size, or the name. */
   if (archive) {
     sha_line(&ctx, "archive");
   } else {
@@ -678,11 +698,15 @@ mc_status mc_profile_fingerprint(sqlite3 *db, const char *uid, char out[MC_PROFI
       }
       sqlite3_finalize(stmt);
     }
-    /* The stored rows as they are, of every kind, so devices of any version agree. */
-    if (st == MC_OK && rc == SQLITE_ROW && !all) {
+    /* The stored rows as they are, of every kind, so devices of any version agree. While it
+     * syncs everything, only its exclusions (none, for versions without them). */
+    if (st == MC_OK && rc == SQLITE_ROW) {
       if (sqlite3_prepare_v2(db,
-                             "SELECT DISTINCT kind, ref_uid FROM profile_items"
-                             " WHERE device_uid = ?1 ORDER BY kind, ref_uid",
+                             all ? "SELECT DISTINCT kind, ref_uid FROM profile_items"
+                                   " WHERE device_uid = ?1 AND kind IN ('" MC_PLAN_EXCLUDE_ALBUM
+                                   "', '" MC_PLAN_EXCLUDE_ARTIST "') ORDER BY kind, ref_uid"
+                                 : "SELECT DISTINCT kind, ref_uid FROM profile_items"
+                                   " WHERE device_uid = ?1 ORDER BY kind, ref_uid",
                              -1, &stmt, NULL) != SQLITE_OK) {
         st = MC_ERR_DB;
       } else {

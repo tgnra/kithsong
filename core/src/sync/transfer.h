@@ -34,4 +34,10 @@ void mc_transfer_write_status(mc_sync *sync, mc_sync_conn *c);
 /* Copies the session's file counts into r. */
 void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r);
 
+/* For removing files outside a session (here.c): rel's absolute path if sync may delete it
+ * (inside the library folder, no links on the way), else NULL; and, after a file at rel
+ * went, removing its album and artist folders if only a cover is left in them. */
+char *mc_transfer_deletable_path(mc_library *lib, const char *rel);
+void mc_transfer_prune_dirs(mc_library *lib, const char *rel);
+
 #endif
