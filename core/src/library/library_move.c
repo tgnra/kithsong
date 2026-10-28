@@ -21,6 +21,15 @@ int64_t mc_move_test_free_space = -1;
 int mc_move_test_fail_at = 0;
 int mc_move_test_no_rename = 0;
 
+/* Debug builds: the hooks from the environment, see move_internal.h. */
+static void env_hooks(void) {
+#ifndef NDEBUG
+  const char *copy = getenv("MUSICAPP_TEST_MOVE_COPY"), *space = getenv("MUSICAPP_TEST_MOVE_FREE_SPACE");
+  if (copy && *copy) mc_move_test_no_rename = atoi(copy) != 0;
+  if (space && *space) mc_move_test_free_space = strtoll(space, NULL, 10);
+#endif
+}
+
 /* Room for the filesystem's own overhead on top of the library's bytes. */
 static int64_t needed_for(int64_t bytes) {
   return bytes + bytes / 50 + ((int64_t)64 << 20);
@@ -265,6 +274,7 @@ mc_status mc_folder_size(const char *dir, int64_t *bytes, int *files) {
 
 /* mc_library_move_check(), keeping the listing for the move. src_full gets src made full. */
 static mc_status check(const char *src, const char *dst, mc_library_move_info *info, tree *t, char **src_full) {
+  env_hooks();
   memset(info, 0, sizeof *info);
   info->free_bytes = -1;
   *src_full = NULL;
