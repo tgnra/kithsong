@@ -88,7 +88,10 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
   devices: online ones, and paired ones that are currently unreachable. It scrolls when it's
   taller than the window.
 - The rest of the window is an album grid. Clicking an album opens its track list in a pane
-  on the right.\
+  on the right. The Playlists and Album groups pages have a **+** in their header to make a
+  new, empty one.
+- An empty library suggests importing or, while the computer isn't paired yet, pairing it
+  with another device to sync that device's music (pairing only joins an empty library).
 
 **Keyboard shortcuts** (Windows and Linux)
 
