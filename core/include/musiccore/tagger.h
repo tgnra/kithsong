@@ -47,6 +47,13 @@ void mc_tags_clear(mc_tags *tags);
  * returns its name in *out_name (free with mc_free). */
 mc_status mc_musicbrainz_ping(char **out_name);
 
+/* Cheap offline check: opens (and closes) a TCP connection to the MusicBrainz server,
+ * waiting at most timeout_ms for the connection (name lookup isn't bounded, but fails at
+ * once on a machine with no network). MC_OK if it connected, MC_ERR_NET if not. Blocks.
+ * For testing, MUSICAPP_MUSICBRAINZ_PROBE=host:port in the environment checks that address
+ * instead, e.g. 127.0.0.1:1 to simulate being offline. */
+mc_status mc_musicbrainz_reachable(int timeout_ms);
+
 /* --- Import (autotagger) ---
  *
  * An import session scans folders on a core-owned thread and groups the audio files into
@@ -59,6 +66,13 @@ mc_status mc_musicbrainz_ping(char **out_name);
  *
  * Singles: loose tracks, and releases MusicBrainz classes as singles, go into one album
  * per artist called "<artist> Singles" (albums.kind = 'singles').
+ *
+ * Offline: before matching, and whenever a lookup fails with a network error, the session
+ * checks whether MusicBrainz is reachable (mc_musicbrainz_reachable). While it isn't, items
+ * aren't looked up but go straight to MC_IMPORT_REVIEW ("Couldn't reach MusicBrainz"), so an
+ * offline import doesn't wait on a timeout per item, and MC_IMPORT_EV_OFFLINE tells the
+ * frontend, which can offer mc_import_skip_tagging(). The check is repeated every 30 s; once
+ * MusicBrainz answers again the items waiting on it are matched after all.
  *
  * Callbacks run on the import thread; frontends marshal them to their UI thread. Every
  * other function may be called from any thread. */
@@ -84,7 +98,8 @@ typedef enum mc_import_event {
   MC_IMPORT_EV_SCANNING,     /* arg: audio files found so far */
   MC_IMPORT_EV_SCANNED,      /* arg: number of items; items can be read from now on */
   MC_IMPORT_EV_ITEM_CHANGED, /* arg: item index; its state or candidates changed */
-  MC_IMPORT_EV_IDLE          /* every item is matched and no work is queued */
+  MC_IMPORT_EV_IDLE,         /* every item is matched and no work is queued */
+  MC_IMPORT_EV_OFFLINE       /* arg: 1 when MusicBrainz can't be reached, 0 when it can again */
 } mc_import_event;
 
 typedef void (*mc_import_fn)(void *user, mc_import_event event, int arg);
@@ -92,6 +107,7 @@ typedef void (*mc_import_fn)(void *user, mc_import_event event, int arg);
 typedef struct mc_import_options {
   double threshold; /* auto-accept at or above this confidence (0..1); 0 = default 0.9 */
   int fetch_art;    /* download front covers (Cover Art Archive, then iTunes) */
+  int skip_tagging; /* no MusicBrainz lookups: import every item with its existing tags */
 } mc_import_options;
 
 /* One track of a candidate, in release order. */
@@ -167,6 +183,15 @@ mc_status mc_import_accept_as_is(mc_import *imp, int item); /* keep existing tag
 mc_status mc_import_skip(mc_import *imp, int item);
 /* Searches again with user-supplied terms. title is the album, or the track for a single. */
 mc_status mc_import_search(mc_import *imp, int item, const char *artist, const char *title);
+
+/* Stops tagging for the rest of the session, as if it had been started with skip_tagging:
+ * items not matched yet, and items in review because MusicBrainz couldn't be reached, are
+ * imported with their existing tags. Items that already have candidates stay in review, and
+ * mc_import_search() still searches. For an offline import. */
+mc_status mc_import_skip_tagging(mc_import *imp);
+
+/* Whether the session last found MusicBrainz unreachable (see MC_IMPORT_EV_OFFLINE). */
+int mc_import_offline(mc_import *imp);
 
 #ifdef __cplusplus
 }

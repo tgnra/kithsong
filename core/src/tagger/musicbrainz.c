@@ -10,9 +10,11 @@
 
 #include "musiccore/tagger.h"
 #include "net/http.h"
+#include "net/socket.h"
 #include "util/platform.h"
 
-#define MB_API "https://musicbrainz.org/ws/2"
+#define MB_HOST "musicbrainz.org"
+#define MB_API "https://" MB_HOST "/ws/2"
 
 /* Radiohead: a stable, well-known artist for the connectivity check. */
 #define MB_PING_ARTIST "a74b1b7f-71a5-4011-9441-d0b5e4122711"
@@ -66,6 +68,23 @@ mc_status mc_musicbrainz_ping(char **out_name) {
   else if (!(*out_name = mc_strdup(name))) st = MC_ERR_NOMEM;
   yyjson_doc_free(doc);
   return st;
+}
+
+mc_status mc_musicbrainz_reachable(int timeout_ms) {
+  char host[256];
+  uint16_t port = 443;
+  snprintf(host, sizeof host, "%s", MB_HOST);
+  /* host:port; the last colon, so an IPv6 literal needs brackets left off and a port given. */
+  const char *probe = getenv("MUSICAPP_MUSICBRAINZ_PROBE");
+  const char *colon = probe ? strrchr(probe, ':') : NULL;
+  if (colon && colon > probe && (size_t)(colon - probe) < sizeof host) {
+    snprintf(host, sizeof host, "%.*s", (int)(colon - probe), probe);
+    port = (uint16_t)atoi(colon + 1);
+  }
+  mc_socket *s;
+  mc_status st = mc_socket_connect(host, port, timeout_ms, &s);
+  if (st == MC_OK) mc_socket_close(s);
+  return st == MC_OK ? MC_OK : MC_ERR_NET;
 }
 
 /* --- JSON helpers --- */

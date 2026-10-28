@@ -3,7 +3,9 @@
  *   2. group files into items: albums by release id, then album tag and folder; files with
  *      no album tag are singles
  *   3. look up candidates on MusicBrainz (musicbrainz.c) and score them (match.c)
- *   4. auto-accept confident matches; leave the rest in REVIEW for the user
+ *   4. auto-accept confident matches; leave the rest in REVIEW for the user. While
+ *      MusicBrainz can't be reached, items skip 3 and go straight to REVIEW; with tagging
+ *      skipped, they're imported as they are.
  *   5. on accept: copy (or, inside the library, move) the files into the library folder
  *      (organize.c), write tags, add a cover (coverart.c), then library rows (import_db.c)
  * After matching, the thread stays alive to work through the user's review decisions.
@@ -28,6 +30,8 @@
 #define DEFAULT_THRESHOLD 0.9
 #define RELEASE_LOOKUPS 3   /* full release lookups per album; each costs a second */
 #define RECORDING_RESULTS 5
+#define PROBE_TIMEOUT_MS 3000   /* offline check: connecting to MusicBrainz */
+#define PROBE_INTERVAL_MS 30000 /* while offline, how often to check again */
 
 typedef struct file_entry {
   char *path;
@@ -57,9 +61,12 @@ typedef struct item {
   int cand_count;
   int chosen;
   char *error;
+  int unreachable; /* in REVIEW because MusicBrainz couldn't be reached */
 } item;
 
-typedef enum req_kind { REQ_ACCEPT, REQ_AS_IS, REQ_SKIP, REQ_SEARCH } req_kind;
+/* REQ_RETRY matches an item waiting on MusicBrainz again (see auto_match), once it's back or
+ * tagging is skipped; it does nothing if the item has moved on meanwhile. */
+typedef enum req_kind { REQ_ACCEPT, REQ_AS_IS, REQ_SKIP, REQ_SEARCH, REQ_RETRY } req_kind;
 
 typedef struct request {
   req_kind kind;
@@ -85,6 +92,9 @@ struct mc_import {
   mc_cond wake;
   /* Guarded by lock. */
   int cancel;
+  int skip_tagging; /* import as-is from now on */
+  int offline;      /* MusicBrainz was unreachable at the last check */
+  uint64_t next_probe_ms; /* while offline: when to check again */
   request *head, *tail;
   /* Item state, error, chosen and candidates are guarded by lock once items are published.
    * Everything else about items and files is written only before publishing. */
@@ -110,10 +120,30 @@ static void set_state(mc_import *imp, int idx, mc_import_state state, const char
   mc_mutex_lock(&imp->lock);
   item *it = &imp->items[idx];
   it->state = state;
+  it->unreachable = 0;
   free(it->error);
   it->error = mc_strdup(error);
   mc_mutex_unlock(&imp->lock);
   emit(imp, MC_IMPORT_EV_ITEM_CHANGED, idx);
+}
+
+/* Puts an item in review because MusicBrainz couldn't be reached. */
+static void set_unreachable(mc_import *imp, int idx) {
+  mc_mutex_lock(&imp->lock);
+  item *it = &imp->items[idx];
+  it->state = MC_IMPORT_REVIEW;
+  it->unreachable = 1;
+  free(it->error);
+  it->error = mc_strdup(mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE));
+  mc_mutex_unlock(&imp->lock);
+  emit(imp, MC_IMPORT_EV_ITEM_CHANGED, idx);
+}
+
+static int skipping_tags(mc_import *imp) {
+  mc_mutex_lock(&imp->lock);
+  int skip = imp->skip_tagging;
+  mc_mutex_unlock(&imp->lock);
+  return skip;
 }
 
 /* --- Scan --- */
@@ -542,8 +572,9 @@ static int should_accept(const item *it, const candidate *c, double threshold) {
 static void write_item(mc_import *imp, mc_library *lib, int idx, int match);
 
 /* Finds and scores candidates for an item. artist/title override the item's own tags (a
- * search the user typed); such results are never auto-accepted. */
-static void match_item(mc_import *imp, mc_library *lib, int idx, const char *artist,
+ * search the user typed); such results are never auto-accepted. Returns nonzero if nothing
+ * was found because a request failed with a network error. */
+static int match_item(mc_import *imp, mc_library *lib, int idx, const char *artist,
                        const char *title) {
   item *it = &imp->items[idx];
   int manual = artist || title;
@@ -556,7 +587,7 @@ static void match_item(mc_import *imp, mc_library *lib, int idx, const char *art
   mc_tags *tags = malloc((size_t)it->file_count * sizeof *tags);
   if (!tags) {
     set_state(imp, idx, MC_IMPORT_FAILED, mc_str(MC_STR_IMPORT_ERROR_NOMEM));
-    return;
+    return 0;
   }
   for (int i = 0; i < it->file_count; i++) tags[i] = *item_tags(imp, it, i);
 
@@ -579,10 +610,8 @@ static void match_item(mc_import *imp, mc_library *lib, int idx, const char *art
   free(tags);
   if (l.n > 1) qsort(l.c, (size_t)l.n, sizeof *l.c, compare_candidates);
 
-  const char *why = NULL;
-  if (l.n == 0)
-    why = l.net == MC_ERR_NET ? mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE)
-                              : mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES);
+  int unreachable = l.n == 0 && l.net == MC_ERR_NET;
+  const char *why = l.n == 0 && !unreachable ? mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES) : NULL;
   int accept = !manual && l.n > 0 && should_accept(it, &l.c[0], imp->threshold);
 
   mc_mutex_lock(&imp->lock);
@@ -592,7 +621,9 @@ static void match_item(mc_import *imp, mc_library *lib, int idx, const char *art
   mc_mutex_unlock(&imp->lock);
 
   if (accept) write_item(imp, lib, idx, 0);
+  else if (unreachable) set_unreachable(imp, idx);
   else set_state(imp, idx, MC_IMPORT_REVIEW, why);
+  return unreachable;
 }
 
 /* --- Writing --- */
@@ -1017,6 +1048,62 @@ static void request_free(request *r) {
   free(r);
 }
 
+/* Appends a request for an item; the caller holds imp->lock. */
+static mc_status push_request_locked(mc_import *imp, req_kind kind, int idx) {
+  request *r = calloc(1, sizeof *r);
+  if (!r) return MC_ERR_NOMEM;
+  r->kind = kind;
+  r->item = idx;
+  r->match = -1;
+  if (imp->tail) imp->tail->next = r;
+  else imp->head = r;
+  imp->tail = r;
+  mc_cond_broadcast(&imp->wake);
+  return MC_OK;
+}
+
+/* --- Offline --- */
+
+static void set_offline(mc_import *imp, int offline) {
+  mc_mutex_lock(&imp->lock);
+  int changed = imp->offline != offline;
+  imp->offline = offline;
+  if (offline) imp->next_probe_ms = mc_mono_ms() + PROBE_INTERVAL_MS;
+  /* Back online: match the items that were waiting on MusicBrainz after all, unless tagging
+   * is being skipped (then they were queued as-is already). */
+  for (int i = 0; changed && !offline && !imp->skip_tagging && i < imp->item_count; i++)
+    if (imp->items[i].state == MC_IMPORT_REVIEW && imp->items[i].unreachable)
+      push_request_locked(imp, REQ_RETRY, i);
+  mc_mutex_unlock(&imp->lock);
+  if (changed) emit(imp, MC_IMPORT_EV_OFFLINE, offline);
+}
+
+/* Checks whether MusicBrainz can be reached, and reports a change. */
+static void probe(mc_import *imp) {
+  set_offline(imp, mc_musicbrainz_reachable(PROBE_TIMEOUT_MS) != MC_OK);
+}
+
+/* While offline, checks again once the interval has passed. Returns nonzero if online. */
+static int online(mc_import *imp) {
+  mc_mutex_lock(&imp->lock);
+  int due = imp->offline && mc_mono_ms() >= imp->next_probe_ms;
+  mc_mutex_unlock(&imp->lock);
+  if (due) probe(imp);
+  return !mc_import_offline(imp);
+}
+
+/* Matches an item without the user: as-is with tagging skipped, straight to review while
+ * offline, else against MusicBrainz. */
+static void auto_match(mc_import *imp, mc_library *lib, int idx) {
+  if (skipping_tags(imp)) write_item(imp, lib, idx, -1);
+  else if (!online(imp)) set_unreachable(imp, idx);
+  else if (match_item(imp, lib, idx, NULL, NULL)) {
+    probe(imp); /* a network error: offline? */
+    /* Tagging was skipped while this item was being looked up. */
+    if (skipping_tags(imp)) write_item(imp, lib, idx, -1);
+  }
+}
+
 static void handle_request(mc_import *imp, mc_library *lib, request *r) {
   if (!lib) {
     set_state(imp, r->item, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
@@ -1032,15 +1119,39 @@ static void handle_request(mc_import *imp, mc_library *lib, request *r) {
     }
     case REQ_AS_IS: write_item(imp, lib, r->item, -1); break;
     case REQ_SKIP: set_state(imp, r->item, MC_IMPORT_SKIPPED, NULL); break;
-    case REQ_SEARCH: match_item(imp, lib, r->item, r->artist, r->title); break;
+    case REQ_SEARCH:
+      if (match_item(imp, lib, r->item, r->artist, r->title)) probe(imp);
+      break;
+    case REQ_RETRY: {
+      /* Only if nothing else happened to the item since it was queued. */
+      mc_mutex_lock(&imp->lock);
+      const item *it = &imp->items[r->item];
+      int waiting = it->state == MC_IMPORT_REVIEW && it->unreachable;
+      mc_mutex_unlock(&imp->lock);
+      if (waiting) auto_match(imp, lib, r->item);
+      break;
+    }
   }
 }
 
 /* Takes the next request, or NULL. With wait, blocks until there is one or the session is
- * cancelled. */
+ * cancelled; while offline it also checks every so often whether MusicBrainz is back. */
 static request *next_request(mc_import *imp, int wait) {
   mc_mutex_lock(&imp->lock);
-  while (wait && !imp->cancel && !imp->head) mc_cond_wait(&imp->wake, &imp->lock);
+  while (wait && !imp->cancel && !imp->head) {
+    if (!imp->offline || imp->skip_tagging) {
+      mc_cond_wait(&imp->wake, &imp->lock);
+      continue;
+    }
+    uint64_t now = mc_mono_ms();
+    if (now < imp->next_probe_ms) {
+      mc_cond_wait_ms(&imp->wake, &imp->lock, (uint32_t)(imp->next_probe_ms - now));
+      continue;
+    }
+    mc_mutex_unlock(&imp->lock);
+    probe(imp); /* queues retries if MusicBrainz is back */
+    mc_mutex_lock(&imp->lock);
+  }
   request *r = imp->cancel ? NULL : imp->head;
   if (r) {
     imp->head = r->next;
@@ -1077,9 +1188,12 @@ static void import_thread(void *arg) {
   mc_mutex_unlock(&imp->lock);
   emit(imp, MC_IMPORT_EV_SCANNED, imp->item_count);
 
+  /* One quick check up front, so an offline import says so before the first item. */
+  if (lib && imp->item_count && !skipping_tags(imp) && !cancelled(imp)) probe(imp);
+
   for (int i = 0; i < imp->item_count && !cancelled(imp); i++) {
     drain_requests(imp, lib); /* the user's decisions come before more matching */
-    if (lib) match_item(imp, lib, i, NULL, NULL);
+    if (lib) auto_match(imp, lib, i);
     else set_state(imp, i, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
   }
   if (!cancelled(imp)) emit(imp, MC_IMPORT_EV_IDLE, 0);
@@ -1109,6 +1223,7 @@ mc_status mc_import_start(mc_library *lib, const char *const *paths, int path_co
   mc_cond_init(&imp->wake);
   imp->threshold = opts && opts->threshold > 0 ? opts->threshold : DEFAULT_THRESHOLD;
   imp->fetch_art = opts ? opts->fetch_art : 1;
+  imp->skip_tagging = opts ? opts->skip_tagging : 0;
   imp->callback = callback;
   imp->user = user;
   imp->lib_dir = mc_strdup(mc_library_dir(lib));
@@ -1321,4 +1436,27 @@ mc_status mc_import_skip(mc_import *imp, int idx) {
 mc_status mc_import_search(mc_import *imp, int idx, const char *artist, const char *title) {
   if (!title || !*title) return MC_ERR_INVALID_ARG;
   return enqueue(imp, REQ_SEARCH, idx, -1, artist, title);
+}
+
+mc_status mc_import_skip_tagging(mc_import *imp) {
+  if (!imp) return MC_ERR_INVALID_ARG;
+  mc_status st = MC_OK;
+  mc_mutex_lock(&imp->lock);
+  if (!imp->skip_tagging) {
+    imp->skip_tagging = 1;
+    for (int i = 0; i < imp->item_count && st == MC_OK; i++)
+      if (imp->items[i].state == MC_IMPORT_REVIEW && imp->items[i].unreachable)
+        st = push_request_locked(imp, REQ_RETRY, i); /* as-is now */
+    mc_cond_broadcast(&imp->wake); /* the thread may be waiting to check the network again */
+  }
+  mc_mutex_unlock(&imp->lock);
+  return st;
+}
+
+int mc_import_offline(mc_import *imp) {
+  if (!imp) return 0;
+  mc_mutex_lock(&imp->lock);
+  int offline = imp->offline;
+  mc_mutex_unlock(&imp->lock);
+  return offline;
 }

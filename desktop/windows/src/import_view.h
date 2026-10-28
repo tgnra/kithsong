@@ -13,6 +13,9 @@
  *
  * Clicking an item opens the review dialog, where the user picks a match, searches again,
  * keeps the existing tags or skips it. Folders can be dropped anywhere on the window.
+ * While MusicBrainz can't be reached, a banner above the list says so and offers Import
+ * Without Tagging (mc_import_skip_tagging); it goes away once MusicBrainz answers again or
+ * it's used.
  */
 #ifndef MUSICAPP_IMPORT_VIEW_H
 #define MUSICAPP_IMPORT_VIEW_H

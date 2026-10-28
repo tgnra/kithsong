@@ -20,6 +20,8 @@ enum {
   ID_IMP_PROGRESS,
   ID_IMP_LIST,
   ID_IMP_DONE,
+  ID_IMP_BANNER,
+  ID_IMP_SKIP_TAGGING,
 };
 
 enum { GROUP_REVIEW = 1, GROUP_ACTIVE, GROUP_DONE, GROUP_SKIPPED, GROUP_FAILED };
@@ -32,7 +34,9 @@ enum { COL_STATUS, COL_ARTIST, COL_ALBUM, COL_FILES, COL_MATCH, COL_CONFIDENCE, 
 typedef struct view {
   HWND parent;
   HWND drop, browse, status, progress, list, done;
+  HWND banner, skip_tagging; /* the offline banner, and its button (a child of it) */
   HFONT font;
+  UINT dpi;
   BOOL shown;
   mc_library *lib;
 
@@ -42,6 +46,8 @@ typedef struct view {
   int scanned_files;
   int item_count;
   mc_import_state *states;
+  BOOL offline;      /* MusicBrainz can't be reached: show the banner */
+  BOOL skipped_tags; /* the banner's button was used; it stays hidden from then on */
 
   HWND review; /* open review dialog, if any */
   int review_item;
@@ -174,6 +180,72 @@ static LRESULT CALLBACK drop_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   return DefWindowProcW(wnd, msg, wp, lp);
 }
 
+/* --- Offline banner --- */
+
+/* c over the content background at alpha 0..255. */
+static COLORREF tint(COLORREF c, int alpha) {
+  COLORREF b = theme.bg;
+#define MIX(f) ((f(c) * alpha + f(b) * (255 - alpha)) / 255)
+  return RGB(MIX(GetRValue), MIX(GetGValue), MIX(GetBValue));
+#undef MIX
+}
+
+static LRESULT CALLBACK banner_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC dc = BeginPaint(wnd, &ps);
+      RECT rc;
+      GetClientRect(wnd, &rc);
+      FillRect(dc, &rc, theme.bg_brush);
+      int r = MulDiv(8, (int)g_view.dpi, USER_DEFAULT_SCREEN_DPI);
+      HBRUSH fill = CreateSolidBrush(tint(theme.accent, theme.dark ? 60 : 36));
+      HPEN pen = CreatePen(PS_SOLID, 1, tint(theme.accent, 110));
+      HGDIOBJ old_brush = SelectObject(dc, fill), old_pen = SelectObject(dc, pen);
+      RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, r, r);
+      SelectObject(dc, old_brush);
+      SelectObject(dc, old_pen);
+      DeleteObject(fill);
+      DeleteObject(pen);
+
+      /* Info icon, then the text up to the button. */
+      int pad = MulDiv(12, (int)g_view.dpi, USER_DEFAULT_SCREEN_DPI);
+      int icon = MulDiv(16, (int)g_view.dpi, USER_DEFAULT_SCREEN_DPI);
+      HFONT icon_font = CreateFontW(-icon, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                    CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, theme_icon_face());
+      SetBkMode(dc, TRANSPARENT);
+      SetTextColor(dc, theme.text);
+      HGDIOBJ old_font = SelectObject(dc, icon_font);
+      RECT ir = {rc.left + pad, rc.top, rc.left + pad + icon, rc.bottom};
+      DrawTextW(dc, L"\xE946", 1, &ir, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      SelectObject(dc, g_view.font ? (HGDIOBJ)g_view.font : GetStockObject(DEFAULT_GUI_FONT));
+      RECT btn = {0};
+      if (IsWindowVisible(g_view.skip_tagging)) {
+        GetWindowRect(g_view.skip_tagging, &btn);
+        MapWindowPoints(NULL, wnd, (POINT *)&btn, 2);
+      }
+      RECT tr = {ir.right + pad / 2 + pad / 4, rc.top, btn.left ? btn.left - pad : rc.right - pad, rc.bottom};
+      DrawTextW(dc, mc_wstr(MC_STR_IMPORT_OFFLINE), -1, &tr,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+      SelectObject(dc, old_font);
+      DeleteObject(icon_font);
+      EndPaint(wnd, &ps);
+      return 0;
+    }
+    case WM_ERASEBKGND: return 1;
+    case WM_COMMAND: /* the button: the main window routes it back to import_view_on_command */
+      return SendMessageW(g_view.parent, msg, wp, lp);
+    case WM_CTLCOLORBTN: return (LRESULT)theme_ctlcolor(msg, (HDC)wp);
+  }
+  return DefWindowProcW(wnd, msg, wp, lp);
+}
+
+static void skip_tagging(void) {
+  if (!g_view.imp || mc_import_skip_tagging(g_view.imp) != MC_OK) return;
+  g_view.skipped_tags = TRUE;
+  SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, TRUE, 0); /* relayout without the banner */
+}
+
 /* --- Session --- */
 
 static void on_import_event(void *user, mc_import_event ev, int arg) {
@@ -190,6 +262,8 @@ static void close_session(void) {
   g_view.states = NULL;
   g_view.item_count = 0;
   g_view.scanned_files = 0;
+  g_view.offline = FALSE;
+  g_view.skipped_tags = FALSE;
   SendMessageW(g_view.list, LVM_DELETEALLITEMS, 0, 0);
   SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, FALSE, 0);
 }
@@ -640,6 +714,12 @@ void import_view_on_event(WPARAM wp, LPARAM lp) {
     case MC_IMPORT_EV_IDLE:
       g_view.idle = TRUE;
       break;
+    case MC_IMPORT_EV_OFFLINE:
+      if (g_view.offline != (arg != 0)) {
+        g_view.offline = arg != 0;
+        SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, TRUE, 0); /* relayout: banner in or out */
+      }
+      break;
   }
   update_status();
 }
@@ -648,6 +728,7 @@ BOOL import_view_on_command(int id) {
   switch (id) {
     case ID_IMP_BROWSE: import_view_browse(); return TRUE;
     case ID_IMP_DONE: PostMessageW(g_view.parent, WM_APP_IMPORT_CLOSE, 0, 0); return TRUE;
+    case ID_IMP_SKIP_TAGGING: skip_tagging(); return TRUE;
     default: return FALSE;
   }
 }
@@ -684,12 +765,19 @@ void import_view_create(HWND parent, mc_library *lib) {
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = drop_proc, .hInstance = GetModuleHandleW(NULL),
                     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"musicapp_drop"};
   RegisterClassExW(&wc);
+  WNDCLASSEXW bc = {.cbSize = sizeof bc, .lpfnWndProc = banner_proc, .hInstance = GetModuleHandleW(NULL),
+                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"musicapp_banner"};
+  RegisterClassExW(&bc);
 
   g_view.drop = child(L"musicapp_drop", NULL, 0, ID_IMP_DROP);
   g_view.browse = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_IMPORT_CHOOSE_FOLDERS), BS_PUSHBUTTON, ID_IMP_BROWSE);
   g_view.status = child(WC_STATICW, NULL, SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, ID_IMP_STATUS);
   g_view.progress = child(PROGRESS_CLASSW, NULL, 0, ID_IMP_PROGRESS);
   g_view.done = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_DONE), BS_PUSHBUTTON, ID_IMP_DONE);
+  g_view.banner = child(L"musicapp_banner", NULL, WS_CLIPCHILDREN, ID_IMP_BANNER);
+  g_view.skip_tagging = CreateWindowExW(0, WC_BUTTONW, mc_wstr_mnemonic(MC_STR_IMPORT_SKIP_TAGGING),
+                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, g_view.banner,
+                                        (HMENU)(INT_PTR)ID_IMP_SKIP_TAGGING, GetModuleHandleW(NULL), NULL);
   g_view.list = child(WC_LISTVIEWW, NULL, LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER,
                       ID_IMP_LIST);
   SendMessageW(g_view.list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
@@ -721,7 +809,7 @@ void import_view_set_library(mc_library *lib) {
 
 void import_view_set_font(HFONT font) {
   g_view.font = font;
-  HWND controls[] = {g_view.browse, g_view.status, g_view.done, g_view.list};
+  HWND controls[] = {g_view.browse, g_view.status, g_view.done, g_view.list, g_view.skip_tagging};
   for (size_t i = 0; i < sizeof controls / sizeof controls[0]; i++)
     SendMessageW(controls[i], WM_SETFONT, (WPARAM)font, TRUE);
   InvalidateRect(g_view.drop, NULL, TRUE);
@@ -731,7 +819,7 @@ void import_view_show(BOOL show) {
   g_view.shown = show;
   if (!show) {
     HWND all[] = {g_view.drop, g_view.browse, g_view.status, g_view.progress,
-                  g_view.done, g_view.list};
+                  g_view.done, g_view.list, g_view.banner};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], SW_HIDE);
   }
 }
@@ -741,6 +829,8 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi) {
 #define S(px) MulDiv((px), (int)dpi, USER_DEFAULT_SCREEN_DPI)
   int pad = S(16);
   BOOL session = g_view.imp != NULL;
+  BOOL banner = session && g_view.offline && !g_view.skipped_tags;
+  g_view.dpi = dpi;
 
   int btn_w = S(88), btn_h = S(28);
 
@@ -750,6 +840,7 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi) {
   ShowWindow(g_view.progress, session ? SW_SHOW : SW_HIDE);
   ShowWindow(g_view.done, session ? SW_SHOW : SW_HIDE);
   ShowWindow(g_view.list, session ? SW_SHOW : SW_HIDE);
+  ShowWindow(g_view.banner, banner ? SW_SHOW : SW_HIDE);
 
   if (!session) {
     int dz_w = min(S(520), w - 2 * pad), dz_h = S(200), browse_w = S(150), browse_h = S(30);
@@ -763,6 +854,14 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_view.status, x + pad, y + pad + (btn_h - S(18)) / 2, w - 3 * pad - btn_w, S(18), TRUE);
   MoveWindow(g_view.progress, x + pad, y + pad + btn_h + S(8), w - 2 * pad, S(6), TRUE);
   int list_y = y + pad + btn_h + S(22);
+  if (banner) {
+    /* Offline: a banner across the top of the list, its button at the right. */
+    int banner_h = S(44), skip_w = S(180);
+    MoveWindow(g_view.banner, x + pad, list_y, w - 2 * pad, banner_h, TRUE);
+    MoveWindow(g_view.skip_tagging, w - 2 * pad - S(8) - skip_w, (banner_h - btn_h) / 2, skip_w, btn_h, TRUE);
+    InvalidateRect(g_view.banner, NULL, TRUE);
+    list_y += banner_h + S(10);
+  }
   MoveWindow(g_view.list, x + pad, list_y, w - 2 * pad, y + h - pad - list_y, TRUE);
 
   /* Fixed columns, with Match taking whatever is left. */
