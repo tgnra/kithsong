@@ -99,6 +99,17 @@ static const char *state_label(mc_import_state s) {
   return "";
 }
 
+/* What writing an item did about duplicates, or NULL if nothing worth saying. */
+static const char *outcome_label(mc_import_outcome o) {
+  switch (o) {
+    case MC_IMPORT_OUTCOME_REPLACED: return mc_str(MC_STR_IMPORT_STATE_REPLACED);
+    case MC_IMPORT_OUTCOME_ADDED: return mc_str(MC_STR_IMPORT_STATE_ADDED_MISSING);
+    case MC_IMPORT_OUTCOME_DUPLICATE: return mc_str(MC_STR_IMPORT_STATE_DUPLICATE);
+    case MC_IMPORT_OUTCOME_NONE: break;
+  }
+  return NULL;
+}
+
 static int state_group(mc_import_state s) {
   switch (s) {
     case MC_IMPORT_REVIEW: return GROUP_REVIEW;
@@ -304,10 +315,12 @@ static void refresh_row(import_view *v, int idx) {
   if (m && !as_is) snprintf(conf, sizeof conf, "%.0f%%", m->confidence * 100);
   gtk_label_set_text(GTK_LABEL(r->confidence), conf);
 
-  /* The group headings say the rest; only work in progress gets a status of its own. */
+  /* The group headings say the rest; only work in progress, and what an import did about
+   * duplicates, get a status of their own. */
   gboolean busy = state_busy(it->state);
-  gtk_label_set_text(GTK_LABEL(r->state), state_label(it->state));
-  gtk_widget_set_visible(r->state, busy);
+  const char *outcome = busy ? NULL : outcome_label(it->outcome);
+  gtk_label_set_text(GTK_LABEL(r->state), outcome ? outcome : state_label(it->state));
+  gtk_widget_set_visible(r->state, busy || outcome);
   gtk_widget_set_visible(r->spinner, it->state == MC_IMPORT_MATCHING || it->state == MC_IMPORT_WRITING);
   gtk_spinner_set_spinning(GTK_SPINNER(r->spinner), gtk_widget_get_visible(r->spinner));
   gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(r->row), !busy);
