@@ -415,3 +415,20 @@ void album_grid_unselect(GtkWidget *widget) {
   gtk_single_selection_set_selected(g->selection, GTK_INVALID_LIST_POSITION);
   g->quiet = FALSE;
 }
+
+gboolean album_grid_select(GtkWidget *widget, const char *uid) {
+  grid *g = grid_of(widget);
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(g->store));
+  for (guint i = 0; i < n; i++) {
+    AlbumItem *item = g_list_model_get_item(G_LIST_MODEL(g->store), i);
+    gboolean found = !strcmp(item->uid, uid);
+    g_object_unref(item);
+    if (!found) continue;
+    g->quiet = TRUE;
+    gtk_single_selection_set_selected(g->selection, i);
+    g->quiet = FALSE;
+    gtk_grid_view_scroll_to(GTK_GRID_VIEW(g->view), i, GTK_LIST_SCROLL_NONE, NULL);
+    return TRUE;
+  }
+  return FALSE;
+}

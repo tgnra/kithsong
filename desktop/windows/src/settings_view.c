@@ -89,7 +89,7 @@ void settings_view_create(HWND parent) {
   theme_center_edit(g_set.name);
   g_set.addr_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_THIS_PC_ADDRESS), label, ID_SET_ADDR_LABEL);
   g_set.addr = child(WC_STATICW, NULL, label | SS_EDITCONTROL, ID_SET_ADDR);
-  g_set.leave = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_WINDOWS_LEAVE_GROUP_BUTTON),
+  g_set.leave = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LEAVE_GROUP_BUTTON),
                       BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_LEAVE);
   g_set.sync_note = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_SETTINGS_NOTE), label, ID_SET_SYNC_NOTE);
 }
@@ -249,7 +249,7 @@ static void format_addresses(wchar_t *out, size_t cap) {
   mc_sync *sync = sync_bridge_get();
   out[0] = L'\0';
   if (!sync) {
-    mc_wformat(out, cap, mc_str(MC_STR_WINDOWS_SYNC_OFF), MC_S(mc_status_str(sync_bridge_error())));
+    mc_wformat(out, cap, mc_str(MC_STR_SYNC_OFF), MC_S(mc_status_str(sync_bridge_error())));
     return;
   }
   char addrs[MAX_ADDRESSES][MC_SYNC_ADDR_STRLEN];
@@ -337,7 +337,7 @@ static void apply_name(void) {
       snprintf(saved, sizeof saved, "%s", name);
     mc_settings_set_device_name(g_set.settings, saved);
     if (mc_settings_save(g_set.settings) != MC_OK)
-      MessageBoxW(g_set.parent, mc_wstr(MC_STR_WINDOWS_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS),
+      MessageBoxW(g_set.parent, mc_wstr(MC_STR_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS),
                   MB_OK | MB_ICONWARNING);
     snprintf(g_set.shown_name, sizeof g_set.shown_name, "%s", saved);
     if (MultiByteToWideChar(CP_UTF8, 0, saved, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1)) SetWindowTextW(g_set.name, w);
@@ -359,7 +359,7 @@ static void leave_group(void) {
                 MB_OK | MB_ICONINFORMATION);
   else if (st != MC_OK && st != MC_ERR_NOT_FOUND) {
     wchar_t text[256];
-    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_LEAVE_GROUP_FAILED), MC_S(mc_status_str(st)));
+    mc_wformat(text, 256, mc_str(MC_STR_LEAVE_GROUP_FAILED), MC_S(mc_status_str(st)));
     MessageBoxW(g_set.parent, text, mc_wstr(MC_STR_LEAVE_GROUP), MB_OK | MB_ICONERROR);
   }
   if (g_set.devices_changed) g_set.devices_changed();

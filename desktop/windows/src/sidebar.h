@@ -1,16 +1,26 @@
-/* The navigation list on the left: an owner-drawn list box of pages under section headers,
- * with Import and Settings at the bottom. Only pages can be selected, by mouse or keyboard;
- * selecting one sends the parent WM_COMMAND with LBN_SELCHANGE. The DEVICES heading has a +
- * at its end, to add a device by address (SBN_ADD_DEVICE).
+/* The navigation list on the left, custom-drawn: pages under section headers, with Import
+ * and Settings pinned at the bottom. Pages are selected by mouse or keyboard; selecting one
+ * sends the parent WM_COMMAND with LBN_SELCHANGE. The DEVICES heading has a + at its end, to
+ * add a device by address (SBN_ADD_DEVICE).
  *
+ * Under the pages: RECENTS, what was last played on any device (sidebar_set_recents), each
+ * a button that opens it (SBN_OPEN_RECENT); the section is left out while there are none.
  * Under DEVICES: this PC once it's in a group, the paired devices (each a PAGE_DEVICE row;
  * offline ones too, marked with a small glyph), and an "Unpaired devices (n)" accordion of
  * nearby devices, which ask to pair when clicked (SBN_PAIR_DEVICE). A two-line footer
- * (version, address) sits below Settings, with a tooltip of its own. */
+ * (version, address) sits below Settings, with a tooltip of its own.
+ *
+ * Everything above Import scrolls when it's taller than the space left for it, with the
+ * same overlay scrollbar as the album grid (scroller.c), which isn't drawn while everything
+ * fits. Import, Settings and the footer stay put below it. The arrow keys, Home and End
+ * move the focus through the pages and buttons (selecting a page as they land on it, and
+ * scrolling it into view); Enter or Space presses a button. */
 #ifndef MUSICAPP_SIDEBAR_H
 #define MUSICAPP_SIDEBAR_H
 
 #include <windows.h>
+
+#include "musiccore/musiccore.h"
 
 typedef enum {
   PAGE_ALBUMS,
@@ -27,6 +37,9 @@ typedef enum {
 /* Sent the same way when a nearby device is clicked, to pair with it; sidebar_clicked_nearby()
  * says which. */
 #define SBN_PAIR_DEVICE 0x101
+/* Sent the same way when a recent is clicked, to open it; sidebar_clicked_recent() says
+ * which. */
+#define SBN_OPEN_RECENT 0x102
 
 /* sidebar_device.flags */
 enum {
@@ -46,7 +59,15 @@ typedef struct sidebar_device {
   unsigned flags;
 } sidebar_device;
 
-/* Creates the list as a child of parent, with Albums selected. Only one exists at a time. */
+/* A recent's row. The sidebar copies what it needs. */
+typedef struct sidebar_recent {
+  char uid[MC_UID_STRLEN];
+  mc_recent_kind kind; /* picks the icon */
+  const wchar_t *name;
+  const wchar_t *detail; /* the tooltip's second line, e.g. the album's artist; NULL for none */
+} sidebar_recent;
+
+/* Creates the sidebar as a child of parent, with Albums selected. Only one exists at a time. */
 HWND sidebar_create(HWND parent, int id);
 
 /* Rebuilds fonts, row heights and colours. Call after creating it, and on DPI or theme
@@ -57,8 +78,14 @@ sidebar_page sidebar_selection(void);
 /* Selects a page without notifying the parent. */
 void sidebar_select(sidebar_page page);
 /* While locked, every page but the selected one is greyed out and can't be selected, and
- * the + is greyed out too. */
+ * the recents, the nearby devices and the + are greyed out too. */
 void sidebar_set_locked(BOOL locked);
+
+/* Replaces the recents, most recent first. */
+void sidebar_set_recents(const sidebar_recent *recents, int n);
+/* The recent of the last SBN_OPEN_RECENT, copying its kind to *kind, or NULL. Valid until
+ * the recents change. */
+const char *sidebar_clicked_recent(mc_recent_kind *kind);
 
 /* Replaces the device rows: paired are the group's members (this PC included, with
  * SB_DEV_SELF), nearby the devices discovery sees outside it. Keeps the selection by page
@@ -75,11 +102,5 @@ const char *sidebar_selected_device(void);
 void sidebar_select_device(const char *uid);
 /* The nearby device of the last SBN_PAIR_DEVICE, or NULL. Valid until the devices change. */
 const char *sidebar_clicked_nearby(void);
-
-/* Paints a row: call from the parent's WM_DRAWITEM for the sidebar. */
-void sidebar_draw(const DRAWITEMSTRUCT *dis);
-
-/* The background brush for the parent's WM_CTLCOLORLISTBOX, or NULL if wnd isn't the sidebar. */
-HBRUSH sidebar_ctlcolor(HWND wnd);
 
 #endif

@@ -44,5 +44,8 @@ int album_grid_reload_playlists(GtkWidget *grid, mc_library *lib, const char *ar
 /* The selected tile's item (borrowed), or NULL. */
 AlbumItem *album_grid_selection(GtkWidget *grid);
 void album_grid_unselect(GtkWidget *grid);
+/* Selects the tile with uid and scrolls it into view, without calling changed. FALSE if the
+ * grid hasn't got it. */
+gboolean album_grid_select(GtkWidget *grid, const char *uid);
 
 #endif

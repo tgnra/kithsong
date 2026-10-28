@@ -13,6 +13,11 @@ add_executable(musicapp
   src/import_view.c
   src/settings_view.c
   src/add_device.c
+  src/devices.c
+  src/recents.c
+  src/device_view.c
+  src/pair_dialog.c
+  src/sync_bridge.c
   src/add_to_playlist.c
   src/playlist_dialogs.c)
 target_link_libraries(musicapp PRIVATE musiccore PkgConfig::ADW m)

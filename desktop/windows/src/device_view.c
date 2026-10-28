@@ -224,14 +224,14 @@ static void fmt_ago(int64_t ms, wchar_t *out, int cap) {
   if (min < 1) {
     swprintf(out, (size_t)cap, L"%ls", mc_wstr(MC_STR_SYNCED_JUST_NOW));
   } else if (min < 60) {
-    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_WINDOWS_AGO_MINUTES, (long)min), MC_D((int)min));
+    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_AGO_MINUTES, (long)min), MC_D((int)min));
   } else if (min < 24 * 60) {
-    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_WINDOWS_AGO_HOURS, (long)(min / 60)), MC_D((int)(min / 60)));
+    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_AGO_HOURS, (long)(min / 60)), MC_D((int)(min / 60)));
   } else if (min < 2 * 24 * 60) {
-    swprintf(out, (size_t)cap, L"%ls", mc_wstr(MC_STR_WINDOWS_AGO_YESTERDAY));
+    swprintf(out, (size_t)cap, L"%ls", mc_wstr(MC_STR_AGO_YESTERDAY));
   } else if (min < 7 * 24 * 60) {
     int days = (int)(min / (24 * 60));
-    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_WINDOWS_AGO_DAYS, days), MC_D(days));
+    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_AGO_DAYS, days), MC_D(days));
   } else {
     ULARGE_INTEGER t = {.QuadPart = (uint64_t)ms * 10000 + 116444736000000000ULL};
     FILETIME ft = {t.LowPart, t.HighPart}, local;
@@ -239,7 +239,7 @@ static void fmt_ago(int64_t ms, wchar_t *out, int cap) {
     wchar_t date[64] = L"";
     if (FileTimeToLocalFileTime(&ft, &local) && FileTimeToSystemTime(&local, &st))
       GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, &st, NULL, date, 64, NULL);
-    mc_wformat(out, (size_t)cap, mc_str(MC_STR_WINDOWS_AGO_ON_DATE), MC_S(u8(date)));
+    mc_wformat(out, (size_t)cap, mc_str(MC_STR_AGO_ON_DATE), MC_S(u8(date)));
   }
 }
 
@@ -473,14 +473,14 @@ static void set_finished(BOOL on) {
 static void update_status(void) {
   wchar_t text[256], ago[64];
   if (!g_dv.found) {
-    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_DEVICE_NOT_IN_GROUP));
+    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_DEVICE_NOT_IN_GROUP));
   } else if (g_dv.removed) {
-    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_DEVICE_REMOVED));
+    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_DEVICE_REMOVED));
   } else {
     const wchar_t *state;
     wchar_t buf[128];
     if (g_dv.last_sync_ms > 0) fmt_ago(g_dv.last_sync_ms, ago, 64);
-    if (syncing()) state = mc_wstr(MC_STR_WINDOWS_SYNCING_PROGRESS);
+    if (syncing()) state = mc_wstr(MC_STR_SYNCING_PROGRESS);
     else if (g_dv.is_self) state = mc_wstr(MC_STR_WINDOWS_THIS_PC);
     else if (g_dv.online) {
       if (g_dv.last_sync_ms > 0) mc_wformat(buf, 128, mc_str(MC_STR_DEVICE_ONLINE_SYNCED), MC_S(u8(ago)));
@@ -528,22 +528,22 @@ static void update_status(void) {
   text[0] = L'\0';
   if (syncing()) {
     BOOL known = (unsigned)g_dv.phase <= (unsigned)MC_SYNC_PHASE_DONE;
-    const wchar_t *phase = mc_wstr(known ? phases[g_dv.phase] : MC_STR_WINDOWS_SYNCING_PROGRESS);
+    const wchar_t *phase = mc_wstr(known ? phases[g_dv.phase] : MC_STR_SYNCING_PROGRESS);
     if (g_dv.phase == MC_SYNC_PHASE_CONNECTING) {
       swprintf(text, 256, L"%ls", phase);
     } else if (g_dv.phase == MC_SYNC_PHASE_FILES && g_dv.files_total > 0) {
       wchar_t done[32], total[32], size[32];
-      mc_wformat(text, 256, mc_str_plural(MC_STR_WINDOWS_PROGRESS_FILES, (long)g_dv.files_total), MC_S(u8(phase)),
+      mc_wformat(text, 256, mc_str_plural(MC_STR_PROGRESS_FILES, (long)g_dv.files_total), MC_S(u8(phase)),
                  MC_S(u8(fmt_count(g_dv.files_done, done, 32))), MC_S(u8(fmt_count(g_dv.files_total, total, 32))),
                  MC_S(u8(fmt_size(g_dv.bytes_received, size, 32))));
     } else if (g_dv.phase == MC_SYNC_PHASE_FILES) { /* fetching nothing; maybe serving */
       wchar_t received[32], sent[32];
-      mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROGRESS_SIZES), MC_S(u8(phase)),
+      mc_wformat(text, 256, mc_str(MC_STR_PROGRESS_SIZES), MC_S(u8(phase)),
                  MC_S(u8(fmt_size(g_dv.bytes_received, received, 32))),
                  MC_S(u8(fmt_size(g_dv.bytes_sent, sent, 32))));
     } else {
       wchar_t sent[32], received[32];
-      mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PROGRESS_ROWS), MC_S(u8(phase)),
+      mc_wformat(text, 256, mc_str(MC_STR_PROGRESS_ROWS), MC_S(u8(phase)),
                  MC_S(u8(fmt_count(g_dv.sent, sent, 32))), MC_S(u8(fmt_count(g_dv.received, received, 32))));
     }
     SendMessageW(g_dv.progress, PBM_SETPOS, (WPARAM)progress_pos(), 0);
@@ -603,11 +603,11 @@ static void update_controls(BOOL force) {
                                    [MC_DEVICE_WATCH] = 0xE916};
   wchar_t glyph[2] = {(unsigned)g_dv.kind <= (unsigned)MC_DEVICE_WATCH ? glyphs[g_dv.kind] : glyphs[0], 0};
   SetWindowTextW(g_dv.icon, glyph);
-  SetWindowTextW(g_dv.title, !g_dv.sync      ? mc_wstr(MC_STR_WINDOWS_SYNC_IS_OFF)
+  SetWindowTextW(g_dv.title, !g_dv.sync      ? mc_wstr(MC_STR_SYNC_IS_OFF)
                              : g_dv.found ? g_dv.name
-                                          : mc_wstr(MC_STR_WINDOWS_DEVICE_UNKNOWN));
-  SetWindowTextW(g_dv.remove, mc_wstr_mnemonic(g_dv.is_self ? MC_STR_WINDOWS_LEAVE_GROUP_BUTTON
-                                                            : MC_STR_WINDOWS_REMOVE_FROM_GROUP_BUTTON));
+                                          : mc_wstr(MC_STR_DEVICE_UNKNOWN));
+  SetWindowTextW(g_dv.remove, mc_wstr_mnemonic(g_dv.is_self ? MC_STR_LEAVE_GROUP_BUTTON
+                                                            : MC_STR_REMOVE_FROM_GROUP_BUTTON));
   update_status();
 
   if (force || GetFocus() != g_dv.name_edit) SetWindowTextW(g_dv.name_edit, g_dv.found ? g_dv.name : L"");
@@ -642,7 +642,7 @@ static void update_controls(BOOL force) {
   EnableWindow(g_dv.list, edit);
 
   wchar_t note[256] = L"";
-  if (p && p->archive) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_DEVICE_ARCHIVE_NOTE));
+  if (p && p->archive) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_DEVICE_ARCHIVE_NOTE));
   else if (!p && g_dv.found && !g_dv.removed)
     mc_wformat(note, 256, mc_str(MC_STR_PROFILE_READ_FAILED), MC_S(mc_status_str(g_dv.profile_status)));
   SetWindowTextW(g_dv.note, note);
@@ -709,7 +709,7 @@ static const char *item_row(const tab_items *items, int i, wchar_t *text, int ca
     else widen(al->title, text, cap);
     if (al->year > 0) {
       size_t len = wcslen(text);
-      mc_wformat(text + len, (size_t)cap - len, mc_str(MC_STR_WINDOWS_ALBUM_YEAR_SUFFIX), MC_D(al->year));
+      mc_wformat(text + len, (size_t)cap - len, mc_str(MC_STR_ALBUM_YEAR_SUFFIX), MC_D(al->year));
     }
   } else if (items->artists) {
     uid = items->artists->items[i].uid;
@@ -1036,7 +1036,7 @@ static void remove_device(void) {
   if (g_dv.is_self) {
     caption = mc_wstr(MC_STR_LEAVE_GROUP);
     mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LEAVE_GROUP_CONFIRM_OTHERS),
-               MC_S(g_dv.others[0] ? u8(g_dv.others) : mc_str(MC_STR_WINDOWS_OTHER_DEVICES)));
+               MC_S(g_dv.others[0] ? u8(g_dv.others) : mc_str(MC_STR_OTHER_DEVICES)));
   } else {
     caption = mc_wstr(MC_STR_REMOVE_FROM_GROUP);
     wchar_t title[256];
@@ -1061,10 +1061,10 @@ static void remove_device(void) {
   if (st == MC_ERR_LOCKED && g_dv.is_self)
     swprintf(text, 1024, L"%ls", mc_wstr(MC_STR_WINDOWS_LEAVE_ONLY_ARCHIVE));
   else if (st == MC_ERR_LOCKED)
-    mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_REMOVE_ONLY_ARCHIVE), MC_S(u8(g_dv.name)));
+    mc_wformat(text, 1024, mc_str(MC_STR_REMOVE_ONLY_ARCHIVE), MC_S(u8(g_dv.name)));
   else
     mc_wformat(text, 1024,
-               mc_str(g_dv.is_self ? MC_STR_WINDOWS_LEAVE_GROUP_FAILED : MC_STR_WINDOWS_REMOVE_DEVICE_FAILED),
+               mc_str(g_dv.is_self ? MC_STR_LEAVE_GROUP_FAILED : MC_STR_REMOVE_DEVICE_FAILED),
                MC_S(mc_status_str(st)));
   set_message(text);
   layout_again();
@@ -1075,7 +1075,7 @@ static void sync_now(void) {
   /* The user's say-so: confirms the profiles, so their files sync from now on. */
   mc_status st = mc_sync_confirm_now(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
   wchar_t text[256] = L"";
-  if (st != MC_OK) mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_SYNC_START_FAILED), MC_S(mc_status_str(st)));
+  if (st != MC_OK) mc_wformat(text, 256, mc_str(MC_STR_SYNC_START_FAILED), MC_S(mc_status_str(st)));
   set_message(text);
   layout_again();
 }
@@ -1254,7 +1254,7 @@ void device_view_create(HWND parent, const device_view_host *host) {
   g_dv.icon = child(WC_STATICW, NULL, SS_CENTER | SS_CENTERIMAGE | SS_NOPREFIX, ID_DEV_ICON);
   g_dv.title = child(WC_STATICW, NULL, line, ID_DEV_TITLE);
   g_dv.sync_now = child(WC_BUTTONW, mc_wstr(MC_STR_SYNC_NOW), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SYNC_NOW);
-  g_dv.remove = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_WINDOWS_REMOVE_FROM_GROUP_BUTTON), BS_PUSHBUTTON | WS_TABSTOP,
+  g_dv.remove = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_GROUP_BUTTON), BS_PUSHBUTTON | WS_TABSTOP,
                       ID_DEV_REMOVE);
   g_dv.status = child(WC_STATICW, NULL, line, ID_DEV_STATUS);
   g_dv.files = child(WC_STATICW, NULL, line, ID_DEV_FILES);
@@ -1695,7 +1695,7 @@ void device_view_on_sync_event(const sync_event *ev) {
       wchar_t text[256] = L"";
       if (ev->status != MC_OK) {
         if (g_dv.is_self && ev->name[0])
-          mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_SYNC_FAILED_WITH), MC_S(u8(ev->name)),
+          mc_wformat(text, 256, mc_str(MC_STR_SYNC_FAILED_WITH), MC_S(u8(ev->name)),
                      MC_S(mc_status_str(ev->status)));
         else mc_wformat(text, 256, mc_str(MC_STR_SYNC_FAILED), MC_S(mc_status_str(ev->status)));
       } else if (!ev->library_synced) {
@@ -1708,9 +1708,9 @@ void device_view_on_sync_event(const sync_event *ev) {
       } else if (g_dv.finished) {
         wchar_t n[32], size[32];
         if (ev->files_received > 0)
-          mc_wformat(g_dv.finished_text, 256, mc_str_plural(MC_STR_WINDOWS_SYNC_FINISHED_FILES, ev->files_received),
+          mc_wformat(g_dv.finished_text, 256, mc_str_plural(MC_STR_SYNC_FINISHED_FILES, ev->files_received),
                      MC_S(u8(fmt_count(ev->files_received, n, 32))), MC_S(u8(fmt_size(ev->bytes_received, size, 32))));
-        else swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_SYNC_FINISHED));
+        else swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_SYNC_FINISHED));
       }
       /* The last sync time, its files, maybe its profile, have changed. */
       reload(TRUE);

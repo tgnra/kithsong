@@ -13,9 +13,10 @@ typedef struct app {
   GtkWindow *win;
   char *settings_dir;   /* ~/.config/musicapp */
   char *art_dir;        /* settings_dir/playlist-art: playlists' pictures, see mc_playlist_art() */
-  GtkStack *pages;      /* "library": the album grid and track list | "import" */
+  GtkStack *pages;      /* "library": the album grid and track list | "import" | "device" */
   GtkWidget *import;    /* the import page, import_view.c */
   GtkWidget *sidebar;
+  GtkListBox *nav;      /* the sidebar's Albums, Artists and Playlists */
   GtkWidget *settings;  /* the header bar's Settings button */
   GtkStack *albums;     /* "empty" status page | "grid" | "no-playlists" status page | "playlists" */
   AdwStatusPage *empty; /* "No Albums" */
@@ -28,7 +29,12 @@ typedef struct app {
  * selection and scroll position. Call whenever the library changes, e.g. after an import. */
 void app_reload_library(app *a);
 
-/* Plays the album or playlist shown in the track list, from track start on. */
+/* Plays the album or playlist shown in the track list, from track start on, and puts it
+ * first in the recents. */
 void app_play_album(app *a, int start);
+
+/* Shows the album (or the playlist, if playlist) with uid selected on the Albums (or
+ * Playlists) page, as picking it in Recents does. */
+void app_open(app *a, gboolean playlist, const char *uid);
 
 #endif

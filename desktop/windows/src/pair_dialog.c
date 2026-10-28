@@ -124,7 +124,7 @@ static void build(tmpl *t, BOOL enter) {
 /* The other device's name, or a stand-in when it's not known. */
 static const wchar_t *peer_name(const wchar_t *name, BOOL sentence_start) {
   if (name && *name) return name;
-  return mc_wstr(sentence_start ? MC_STR_WINDOWS_OTHER_DEVICE_START : MC_STR_SYNC_OTHER_DEVICE);
+  return mc_wstr(sentence_start ? MC_STR_OTHER_DEVICE_START : MC_STR_SYNC_OTHER_DEVICE);
 }
 
 /* The string id with the other device's name (or a stand-in) as its {0}. */
@@ -341,10 +341,10 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             EnableWindow(GetDlgItem(dlg, IDC_PAIR_CODE), FALSE);
             EnableWindow(GetDlgItem(dlg, IDOK), FALSE);
             SendMessageW(dlg, WM_NEXTDLGCTL, (WPARAM)GetDlgItem(dlg, IDCANCEL), TRUE);
-            set_status(d, mc_wstr(MC_STR_WINDOWS_PAIRING_PROGRESS));
+            set_status(d, mc_wstr(MC_STR_PAIRING_PROGRESS));
           } else {
             wchar_t text[160];
-            mc_wformat(text, 160, mc_str(MC_STR_WINDOWS_PAIR_SEND_FAILED), MC_S(mc_status_str(st)));
+            mc_wformat(text, 160, mc_str(MC_STR_PAIR_SEND_FAILED), MC_S(mc_status_str(st)));
             set_status(d, text);
           }
           return TRUE;
@@ -425,11 +425,11 @@ void pair_dialog_begin_enter(mc_sync *sync, const wchar_t *peer, const wchar_t *
     peer_text(text, 256, MC_STR_PAIR_WITH, peer, FALSE);
     SetWindowTextW(d->wnd, text);
   } else {
-    SetWindowTextW(d->wnd, mc_wstr(MC_STR_WINDOWS_PAIR_BY_ADDRESS));
+    SetWindowTextW(d->wnd, mc_wstr(MC_STR_PAIR_BY_ADDRESS));
   }
   if (!(peer && *peer) && address && *address) { /* the address on a line of its own */
     char *a = wstr_to_utf8(address);
-    mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PAIR_ENTER_CODE_AT), MC_S(a));
+    mc_wformat(text, 256, mc_str(MC_STR_PAIR_ENTER_CODE_AT), MC_S(a));
     free(a);
   } else {
     peer_text(text, 256, MC_STR_PAIR_ENTER_CODE, peer, FALSE);
@@ -455,12 +455,12 @@ void pair_dialog_show_code(mc_sync *sync, const sync_event *ev) {
   if (d && !d->ended) {
     /* A new code after too many wrong ones. */
     SetDlgItemTextW(d->wnd, IDC_PAIR_CODE, code);
-    set_status(d, mc_wstr(MC_STR_WINDOWS_PAIR_NEW_CODE));
+    set_status(d, mc_wstr(MC_STR_PAIR_NEW_CODE));
   } else {
     if (!(d = open_dlg(&s.show, sync, FALSE, ev->name))) return;
     s.show_cancelled = FALSE;
     wchar_t text[256];
-    SetWindowTextW(d->wnd, mc_wstr(MC_STR_WINDOWS_PAIR_REQUEST));
+    SetWindowTextW(d->wnd, mc_wstr(MC_STR_PAIR_REQUEST));
     peer_text(text, 256, MC_STR_PAIR_SHOW_CODE, ev->name, FALSE);
     SetDlgItemTextW(d->wnd, ID_TEXT, text);
     SetDlgItemTextW(d->wnd, IDC_PAIR_CODE, code);
@@ -491,7 +491,7 @@ static void initiator_result(const sync_event *ev) {
     /* The pairing waits for another code. */
     wchar_t text[256];
     if (ev->attempts_left >= MAX_FAILURES) {
-      peer_text(text, 256, MC_STR_WINDOWS_PAIR_PEER_NEW_CODE, ev->name[0] ? ev->name : d->peer, TRUE);
+      peer_text(text, 256, MC_STR_PAIR_PEER_NEW_CODE, ev->name[0] ? ev->name : d->peer, TRUE);
     } else {
       tries_left(text, 256, MC_STR_PAIR_WRONG_CODE, ev->attempts_left);
     }
@@ -513,7 +513,7 @@ static void responder_result(const sync_event *ev) {
     wchar_t text[256];
     if (ev->attempts_left >= MAX_FAILURES) {
       /* The new code is already showing. */
-      set_status(d, mc_wstr(MC_STR_WINDOWS_PAIR_NEW_CODE));
+      set_status(d, mc_wstr(MC_STR_PAIR_NEW_CODE));
     } else {
       tries_left(text, 256, MC_STR_PAIR_WRONG_CODE_ENTERED, ev->attempts_left);
       set_status(d, text);

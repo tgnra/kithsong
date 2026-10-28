@@ -650,6 +650,20 @@ static BOOL on_key(WPARAM key) {
   return TRUE;
 }
 
+BOOL album_grid_select(const char *uid) {
+  if (g.dirty) reload(); /* e.g. just switched between albums and playlists */
+  for (int i = 0; i < g.count; i++) {
+    if (strcmp(g.tiles[i].uid, uid)) continue;
+    select_tile(i);
+    if (g.cols) {
+      int top = g.pad + (i / g.cols) * g.row_h;
+      scroller_reveal(&g.scroll, top - g.pad, top + g.row_h - g.gap + g.pad);
+    }
+    return TRUE;
+  }
+  return FALSE;
+}
+
 /* --- Painting --- */
 
 static void paint_tile(canvas *c, int i) {

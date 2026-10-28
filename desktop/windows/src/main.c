@@ -6,13 +6,16 @@
  *   | Albums    |                                    | track list  |
  *   | Artists   |          album grid                | (shown when |
  *   | Playlists |                                    |  an album   |
- *   | DEVICES   |                                    |  is picked) |
- *   |           |                                    |             |
+ *   | RECENTS   |                                    |  is picked) |
+ *   | DEVICES   |                                    |             |
+ *   |-----------|                                    |             |
  *   | Import    |                                    |             |
  *   | Settings  |                                    |             |
  *   +-----------+------------------------------------+-------------+
  *
- * The sidebar picks the page beside it. Import and Settings replace the album grid and track
+ * The sidebar picks the page beside it. Its RECENTS are the albums and playlists last
+ * played, here or on another device (they sync with the library); clicking one shows it on
+ * the Albums or Playlists page. Import and Settings replace the album grid and track
  * list with the import view (import_view.c) or the settings view (settings_view.c). Once an
  * import starts, the other pages are greyed out until the user clicks Done. Folders dropped
  * anywhere on the window start an import. Space plays or pauses, unless the focused control
@@ -108,6 +111,7 @@ enum {
   POLL_DEVICES_MS = 10000,
   MAX_SYNCING = 16, /* devices marked as syncing in the sidebar at once */
   MAX_ADDRESSES = 8,
+  MAX_RECENTS = 10, /* in the sidebar */
 };
 
 typedef struct app {
@@ -316,9 +320,51 @@ static void show_album(void) {
   }
 }
 
+/* The sidebar's recents: the albums and playlists last played, on any device. Artists,
+ * album groups and smart playlists have no page here to open them on, so they're left out
+ * (they're recorded on other devices). */
+static void refresh_recents(void) {
+  mc_recent_list *list = NULL;
+  if (!g_app.lib || mc_library_list_recents(g_app.lib, 0, &list) != MC_OK) list = NULL;
+  sidebar_recent items[MAX_RECENTS];
+  wchar_t *names[MAX_RECENTS], *artists[MAX_RECENTS];
+  int n = 0;
+  for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
+    const mc_recent_info *r = &list->items[i];
+    if (r->is_smart || (r->kind != MC_RECENT_ALBUM && r->kind != MC_RECENT_PLAYLIST)) continue;
+    BOOL album = r->kind == MC_RECENT_ALBUM;
+    names[n] = wide_from_utf8(r->name ? r->name : "");
+    artists[n] = album ? wide_from_utf8(r->artist ? r->artist : mc_str(MC_STR_UNKNOWN_ARTIST)) : NULL;
+    items[n] = (sidebar_recent){.kind = r->kind, .name = names[n],
+                                .detail = album ? artists[n] : mc_wstr(MC_STR_PLAYLIST)};
+    snprintf(items[n].uid, sizeof items[n].uid, "%s", r->uid);
+    n++;
+  }
+  mc_recent_list_free(list);
+  sidebar_set_recents(items, n);
+  for (int i = 0; i < n; i++) {
+    free(names[i]);
+    free(artists[i]);
+  }
+}
+
+/* A recent was clicked in the sidebar: its page, with it selected. */
+static void open_recent(void) {
+  mc_recent_kind kind;
+  const char *clicked = sidebar_clicked_recent(&kind);
+  if (!clicked) return;
+  char uid[MC_UID_STRLEN];
+  snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when the recents refresh */
+  show_page(kind == MC_RECENT_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUMS);
+  album_grid_select(uid);
+}
+
+/* After the library changed: an import, a playlist edit, or rows from sync, which may have
+ * removed the shown album or a recent, or brought recents from other devices. */
 static void refresh_library(void) {
   album_grid_set_library(g_app.lib);
   show_album(); /* if the album went, the grid says so when it reloads */
+  refresh_recents();
 }
 
 static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
@@ -424,7 +470,8 @@ static void create_controls(void) {
 }
 
 /* Plays the shown album or playlist in order, from track start on. Tracks with no file on
- * this device are left out of the queue. */
+ * this device are left out of the queue. Playing it puts it first in the recents, as on
+ * Android. */
 static void play_album(int start) {
   int n = track_list_count(), count = 0, first = 0;
   playback_track *queue = n ? calloc((size_t)n, sizeof *queue) : NULL;
@@ -437,6 +484,11 @@ static void play_album(int start) {
   }
   if (count) playback_play(queue, count, first);
   free(queue);
+
+  char uid[MC_UID_STRLEN];
+  mc_recent_kind kind = album_grid_showing_playlists() ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
+  if (count && g_app.lib && album_grid_selection(uid) && mc_library_record_opened(g_app.lib, kind, uid) == MC_OK)
+    refresh_recents();
 }
 
 /* The Play button turns into Pause while playing. */
@@ -514,7 +566,7 @@ static void update_footer(void) {
     if (n > 0) format_address(line2, 160, addrs[0], port);
     else mc_wformat(line2, 160, mc_str(MC_STR_WINDOWS_PORT_NO_NETWORK), MC_D(port));
     size_t used = (size_t)swprintf(tip, 64, L"%ls",
-                                   mc_wstr(n > 0 ? MC_STR_WINDOWS_FOOTER_REACHED_AT : MC_STR_WINDOWS_NO_NETWORK));
+                                   mc_wstr(n > 0 ? MC_STR_WINDOWS_FOOTER_REACHED_AT : MC_STR_NO_NETWORK));
     for (int i = 0; i < n; i++) {
       wchar_t addr[64];
       format_address(addr, 64, addrs[i], port);
@@ -644,7 +696,7 @@ static void schedule_library_refresh(void) {
 static void rename_self(const char *name) {
   mc_settings_set_device_name(g_app.settings, name);
   if (mc_settings_save(g_app.settings) != MC_OK)
-    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_WINDOWS_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
+    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
   schedule_refresh();
 }
 
@@ -706,7 +758,7 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
 static void sync_off_message(void) {
   wchar_t text[256];
   mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PAIR_SYNC_OFF), MC_S(mc_status_str(sync_bridge_error())));
-  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_WINDOWS_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
+  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
 }
 
 /* After mc_sync_pair_request() or _address(): opens the enter-code dialog, or says why
@@ -719,23 +771,23 @@ static void pair_started(mc_status st, const wchar_t *name, const wchar_t *addre
       pair_dialog_begin_enter(sync_bridge_get(), name, address);
       return;
     case MC_ERR_LOCKED:
-      swprintf(text, 512, L"%ls", mc_wstr(MC_STR_WINDOWS_PAIR_ALREADY_PAIRING));
+      swprintf(text, 512, L"%ls", mc_wstr(MC_STR_PAIR_ALREADY_PAIRING));
       break;
     case MC_ERR_NOT_FOUND:
       if (name && *name) address = name;
       if (address) {
         char *a = wstr_to_utf8(address);
-        mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_PAIR_GONE), MC_S(a));
+        mc_wformat(text, 512, mc_str(MC_STR_PAIR_GONE), MC_S(a));
         free(a);
       } else {
-        swprintf(text, 512, L"%ls", mc_wstr(MC_STR_WINDOWS_PAIR_GONE_UNNAMED));
+        swprintf(text, 512, L"%ls", mc_wstr(MC_STR_PAIR_GONE_UNNAMED));
       }
       break;
     default:
-      mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_PAIR_START_FAILED), MC_S(mc_status_str(st)));
+      mc_wformat(text, 512, mc_str(MC_STR_PAIR_START_FAILED), MC_S(mc_status_str(st)));
       break;
   }
-  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_WINDOWS_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
+  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
 }
 
 /* A nearby device was clicked in the sidebar. Even one in another group: pairing then says
@@ -783,6 +835,7 @@ static void on_command(int id, int code) {
       if (code == LBN_SELCHANGE) show_page(sidebar_selection());
       else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       else if (code == SBN_PAIR_DEVICE) pair_nearby();
+      else if (code == SBN_OPEN_RECENT) open_recent();
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) show_album();
@@ -889,8 +942,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DRAWITEM: {
       const DRAWITEMSTRUCT *dis = (const DRAWITEMSTRUCT *)lp;
-      if (dis->CtlID == ID_SIDEBAR) sidebar_draw(dis);
-      else if (dis->CtlID >= ID_PREV && dis->CtlID < ID_PREV + NUM_BUTTONS) draw_button(dis);
+      if (dis->CtlID >= ID_PREV && dis->CtlID < ID_PREV + NUM_BUTTONS) draw_button(dis);
       else device_view_draw_item(dis);
       return TRUE;
     }
@@ -899,7 +951,6 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CTLCOLORBTN:
     case WM_CTLCOLOREDIT: {
       HBRUSH brush = device_view_ctlcolor(msg, (HWND)lp, (HDC)wp);
-      if (!brush && msg == WM_CTLCOLORLISTBOX) brush = sidebar_ctlcolor((HWND)lp);
       if (!brush && msg == WM_CTLCOLORSTATIC) brush = settings_view_ctlcolor((HWND)lp, (HDC)wp);
       return (LRESULT)(brush ? brush : theme_ctlcolor(msg, (HDC)wp));
     }

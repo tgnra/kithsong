@@ -2,34 +2,37 @@
  *
  *   AdwToolbarView
  *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar  [import][settings]
- *   +- AdwOverlaySplitView (sidebar: Albums / Artists / Playlists / Devices)
- *      +- GtkStack of pages: "library" | "import" (import_view.c)
+ *   +- AdwOverlaySplitView (sidebar: Albums / Artists / Playlists / Recents / Devices)
+ *      +- GtkStack of pages: "library" | "import" (import_view.c) | "device" (device_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
  *            +- GtkStack: empty-state page | GtkGridView of albums (virtualised)
  *                         | empty-state page | GtkGridView of playlists
  *
  * The album and playlist grids are album_grid.c, the track list track_list.c, the
  * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
- * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, the Add Device
- * dialog add_device.c, the Add to Playlist dialog add_to_playlist.c and the Rename and
- * Delete Playlist dialogs playlist_dialogs.c. The playback buttons
+ * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, the Add to
+ * Playlist dialog add_to_playlist.c and the Rename and Delete Playlist dialogs
+ * playlist_dialogs.c. The sidebar's Recents section is recents.c, and its Devices section and
+ * sync are devices.c, which adds a
+ * device's page (device_view.c) to the stack of pages as "device". The playback buttons
  * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
  * the actions'.
  */
 #include <adwaita.h>
 #include <math.h>
 
-#include "add_device.h"
 #include "add_to_playlist.h"
 #include "album_grid.h"
 #include "app.h"
 #include "cover.h"
+#include "devices.h"
 #include "import_view.h"
 #include "mpris.h"
 #include "musiccore/musiccore.h"
 #include "now_playing.h"
 #include "playback.h"
 #include "playlist_dialogs.h"
+#include "recents.h"
 #include "settings_view.h"
 #include "track_list.h"
 
@@ -40,7 +43,10 @@ static const char css[] =
   ".album-grid > child { padding: 8px; border-radius: 12px; }"
   ".track-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
   ".track-list > row.drop-below { box-shadow: inset 0 -2px @accent_bg_color; }"
-  ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }";
+  ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }"
+  ".pair-code { font-size: 20pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
+  ".pair-code-shown { font-size: 32pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
+  ".sync-picker { background: none; }";
 
 static GtkWidget *play_button;
 
@@ -93,31 +99,50 @@ static gboolean open_library(void *user, const char *dir) {
     adw_dialog_present(alert, GTK_WIDGET(a->win));
     return FALSE;
   }
+  devices_stop(a); /* sync reads the old library */
   import_view_set_library(a->import, lib);
   playback_set_library(lib, a->settings_dir);
   mc_library_close(a->lib);
   a->lib = lib;
   set_empty_description(a);
   app_reload_library(a);
+  devices_start(a);
   return TRUE;
+}
+
+static void on_settings_renamed(void *user, const char *name) {
+  devices_renamed(user, name);
+}
+
+static void on_settings_group_changed(void *user) {
+  devices_refresh(user);
 }
 
 static void on_settings(GtkButton *button, gpointer user) {
   (void)button;
   app *a = user;
-  settings_view_present(GTK_WIDGET(a->win), a->settings_dir, open_library, a);
+  static const settings_view_sync sync = {devices_sync, devices_sync_off_text, on_settings_renamed,
+                                          on_settings_group_changed};
+  settings_view_present(GTK_WIDGET(a->win), a->settings_dir, open_library, &sync, a);
 }
 
 static void close_confirmed(void *user, gboolean closed) {
-  if (closed) gtk_window_destroy(user);
+  app *a = user;
+  if (!closed) return;
+  devices_stop(a); /* while its dialogs and the device page are still there */
+  gtk_window_destroy(a->win);
 }
 
 /* Closing the window while an import runs asks first. */
 static gboolean on_close_request(GtkWindow *win, gpointer user) {
+  (void)win;
   app *a = user;
-  if (!import_view_is_running(a->import)) return FALSE;
-  import_view_confirm_close(a->import, close_confirmed, win);
-  return TRUE;
+  if (import_view_is_running(a->import)) {
+    import_view_confirm_close(a->import, close_confirmed, a);
+    return TRUE;
+  }
+  devices_stop(a);
+  return FALSE;
 }
 
 /* --- Sidebar --- */
@@ -129,6 +154,7 @@ static void show_album(app *a);
 static void on_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
   (void)list;
   app *a = user;
+  devices_unselect();
   gboolean playlists = gtk_list_box_row_get_index(row) == 2;
   if (playlists != a->show_playlists) {
     album_grid_unselect(playlists ? a->album_grid : a->playlist_grid);
@@ -149,14 +175,19 @@ static GtkWidget *nav_row(const char *icon, const char *label) {
   return box;
 }
 
-/* TODO: start pairing with mc_sync_pair_request_address() once the sync API lands. */
-static void on_add_device_connect(void *user, const char *host, guint16 port) {
+/* The arrow keys stop at the ends of a list; past them, they go on to the next or previous
+ * one (Recents, Devices), as Tab does. */
+static gboolean on_sidebar_keynav_failed(GtkWidget *list, GtkDirectionType dir, gpointer user) {
   (void)user;
-  g_message("Add device: %s port %u", host, (unsigned)port);
+  if (dir != GTK_DIR_UP && dir != GTK_DIR_DOWN) return FALSE;
+  gtk_widget_child_focus(GTK_WIDGET(gtk_widget_get_root(list)),
+                         dir == GTK_DIR_DOWN ? GTK_DIR_TAB_FORWARD : GTK_DIR_TAB_BACKWARD);
+  return TRUE;
 }
 
-static void on_add_device(GtkButton *button, gpointer user) {
-  add_device_present(GTK_WIDGET(button), on_add_device_connect, user);
+static void connect_keynav(GtkWidget *widget) {
+  if (GTK_IS_LIST_BOX(widget)) g_signal_connect(widget, "keynav-failed", G_CALLBACK(on_sidebar_keynav_failed), NULL);
+  for (GtkWidget *c = gtk_widget_get_first_child(widget); c; c = gtk_widget_get_next_sibling(c)) connect_keynav(c);
 }
 
 static GtkWidget *build_sidebar(app *a) {
@@ -171,37 +202,22 @@ static GtkWidget *build_sidebar(app *a) {
   gtk_list_box_select_row(GTK_LIST_BOX(nav), gtk_list_box_get_row_at_index(GTK_LIST_BOX(nav), 0));
   g_signal_connect(nav, "row-activated", G_CALLBACK(on_nav_activated), a);
   gtk_box_append(GTK_BOX(box), nav);
+  a->nav = GTK_LIST_BOX(nav);
 
-  /* The Devices heading, with + at the end to add a device by address. */
-  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-  gtk_widget_set_margin_start(header, 18);
-  gtk_widget_set_margin_end(header, 12);
-  gtk_widget_set_margin_top(header, 12);
-  GtkWidget *heading = gtk_label_new(mc_str(MC_STR_DEVICES));
-  gtk_widget_add_css_class(heading, "heading");
-  gtk_widget_add_css_class(heading, "dim-label");
-  gtk_label_set_xalign(GTK_LABEL(heading), 0);
-  gtk_widget_set_hexpand(heading, TRUE);
-  gtk_box_append(GTK_BOX(header), heading);
-  GtkWidget *add = gtk_button_new_from_icon_name("list-add-symbolic");
-  gtk_widget_add_css_class(add, "flat");
-  gtk_widget_set_tooltip_text(add, mc_str(MC_STR_ADD_DEVICE_BY_ADDRESS));
-  g_signal_connect(add, "clicked", G_CALLBACK(on_add_device), a);
-  gtk_box_append(GTK_BOX(header), add);
-  gtk_box_append(GTK_BOX(box), header);
+  gtk_box_append(GTK_BOX(box), recents_new(a));
+  gtk_box_append(GTK_BOX(box), devices_new(a));
+  connect_keynav(box);
 
-  /* Online peers, then paired peers that are currently unreachable. */
-  GtkWidget *devices = gtk_list_box_new();
-  gtk_widget_add_css_class(devices, "navigation-sidebar");
-  GtkWidget *none = gtk_label_new(mc_str(MC_STR_DEVICES_NONE));
-  gtk_widget_add_css_class(none, "dim-label");
-  gtk_list_box_set_placeholder(GTK_LIST_BOX(devices), none);
-  gtk_box_append(GTK_BOX(box), devices);
-
+  /* It all scrolls when it's taller than the window, with a scrollbar only then; moving the
+   * focus with the keyboard scrolls the focused row into view. Import and Settings are in
+   * the header bar, so nothing is pinned below. */
+  GtkWidget *viewport = gtk_viewport_new(NULL, NULL);
+  gtk_viewport_set_scroll_to_focus(GTK_VIEWPORT(viewport), TRUE);
+  gtk_viewport_set_child(GTK_VIEWPORT(viewport), box);
   GtkWidget *scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
                                  GTK_POLICY_AUTOMATIC);
-  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), viewport);
   return scroller;
 }
 
@@ -273,11 +289,12 @@ static void on_seek(void *user, int ms) {
 }
 
 /* Plays the shown album or playlist in order, from track start on. Tracks with no file on
- * this device are left out of the queue. */
+ * this device are left out of the queue. Playing it puts it first in the recents, as on
+ * Android and Windows. */
 void app_play_album(app *a, int start) {
-  (void)a;
   int n = track_list_count(), count = 0, first = 0;
-  if (!track_list_album() || !n) return;
+  AlbumItem *album = track_list_album();
+  if (!album || !n) return;
   playback_track *queue = g_new0(playback_track, (gsize)n);
   for (int i = 0; i < n; i++) {
     track_list_item t = track_list_item_at(i);
@@ -287,6 +304,9 @@ void app_play_album(app *a, int start) {
   }
   if (count) playback_play(queue, count, first);
   g_free(queue);
+
+  mc_recent_kind kind = album->is_playlist ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
+  if (count && a->lib && mc_library_record_opened(a->lib, kind, album->uid) == MC_OK) recents_refresh(a);
 }
 
 /* --- Albums, playlists and tracks --- */
@@ -367,6 +387,14 @@ void app_reload_library(app *a) {
                                        : (albums > 0 ? "grid" : "empty");
   gtk_stack_set_visible_child_name(a->albums, page);
   show_album(a); /* if the album went, the selection did too */
+  recents_refresh(a);
+}
+
+void app_open(app *a, gboolean playlist, const char *uid) {
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->nav, playlist ? 2 : 0);
+  gtk_list_box_select_row(a->nav, row);
+  on_nav_activated(a->nav, row, a);
+  if (album_grid_select(shown_grid(a), uid)) show_album(a);
 }
 
 /* --- SteadyBin --- */
@@ -510,6 +538,13 @@ static void prune_art(app *a) {
   g_object_unref(task);
 }
 
+/* Sync goes with the window, before the library closes, if closing it didn't stop sync
+ * already (it does, while the pairing dialogs and the device page are still there). */
+static void on_window_destroy(GtkWidget *win, gpointer user) {
+  (void)win;
+  devices_stop(user);
+}
+
 static void on_shutdown(GApplication *gapp, gpointer user) {
   (void)gapp;
   (void)user;
@@ -622,6 +657,8 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   mpris_init(gapp, a->win);
   prune_art(a);
   app_reload_library(a);
+  devices_start(a);
+  g_signal_connect(win, "destroy", G_CALLBACK(on_window_destroy), a);
   gtk_window_present(a->win);
 }
 

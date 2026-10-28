@@ -53,22 +53,32 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 - Core - test PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
 - Core - albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
 - Core - changelog compaction must keep the rows that decide merges and archive demotions
-- Linux - the sync UI: show the pairing code, a device page with profiles, Sync now, Leave Group (Windows has them)
-- Windows and Linux - make a device an archive (mc_sync_set_archive) in the profile editor (Windows already shows the size estimate; Linux's device page needs it too)
+- Windows - make a device an archive (mc_sync_set_archive) in the profile editor (Linux and Android have it: a switch that asks first, with the size as originals)
+- Linux - a pairing request while the window is in the background goes unnoticed (Windows flashes the taskbar button); send a GNotification
+- Linux - with no sync.db yet (first run), sync can fail to start with "sync.db open failed: not an error" and Devices says "Sync is off (database error)"; it starts on the next run (seen twice in Docker under Xvfb)
+- Linux - sync UI untested: pairing with Windows or Android, the over-budget estimate, a watch's icon, switching library while a device page is open, and a real LAN (only two containers on one Docker network so far)
 - Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Core - move removed untracked files to the Recycle Bin/trash instead of deleting them permanently (mc_trash() in util/platform.h does it; import's swaps use it)
 - Core - a stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
 - Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents(); artists need core uids rather than names
 - Android - profile editor done (see ANDROID_PROGRESS.md); untested: the over-budget message, renaming a member, a group renaming the phone, dark theme, and sync on a real device over Wi-Fi
 
+## Recents
+
+- Linux and Windows - artists, album groups and smart playlists are left out of the sidebar's Recents (and opening them isn't recorded) until there are pages to open them on
+- Linux and Windows - remove one from Recents, or clear them (mc_library_remove_recent(), mc_library_clear_recents()), e.g. from a context menu
+- Linux and Windows - Recents show the page's icon, not the cover art (no sidebar row has art yet)
+- Linux and Windows - untested: a recent arriving or going with a real sync between two devices (the refresh after sync is the same one an import uses; a removal was tried by changing the database under the app and reloading)
+- Windows - the sidebar is custom-drawn now (it was a list box), so screen readers don't see its rows, like the album grid and track list; give them a UI Automation provider
+
 ## Other
+
 
 - Scrobbling - UI on every platform: sign in (mc_scrobbler_auth_begin() opens the browser, then poll mc_scrobbler_auth_finish()), sign out, choose the service (Last.fm, Libre.fm or another URL), show pending plays and errors
 - Scrobbling - Android: a JNI bridge for mc_scrobbler, then pass on plays (CoreMediaPlayer's onPlayed) and now playing
 - Scrobbling - cancel a call in progress on mc_scrobbler_free(), so quitting while the service is slow doesn't wait for curl's timeout (up to 30 seconds)
 - Playback - AAC/M4A - pick a decoder: the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Volume control (in the core, so Android can also duck itself on Android 7)
-- Recents list above devices
 - Linux and Windows - Move Library (the button is disabled)
 
 ## Wear OS

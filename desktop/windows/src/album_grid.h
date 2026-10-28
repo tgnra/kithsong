@@ -57,6 +57,9 @@ const wchar_t *album_grid_selection_cover(void);
 int album_grid_selection_year(void);
 /* Clears the selection, which notifies the parent (AGN_SELCHANGE) as a click would. */
 void album_grid_unselect(void);
+/* Selects the album (or playlist, on the Playlists page) with uid and scrolls it into view,
+ * which notifies the parent as a click would. FALSE if the grid hasn't got it. */
+BOOL album_grid_select(const char *uid);
 
 /* Sizes the tiles for a grid full_w wide, even while it's narrower, so a pane beside it
  * that comes and goes takes whole columns without resizing the tiles. Returns the width the
