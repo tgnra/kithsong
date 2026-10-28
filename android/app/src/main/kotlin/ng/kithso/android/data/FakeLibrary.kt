@@ -22,7 +22,11 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
             }
             CollectionRef.Kind.Artist -> lib.artists.firstOrNull { it.uid == ref.uid }?.let { artist ->
                 val albums = lib.albums.filter { it.artist == artist.name }
-                TrackList(artist.name, artist.art, albums.flatMap(::tracksOf), albumCount = albums.size)
+                TrackList(artist.name, artist.art, albums.flatMap(::tracksOf), albumCount = albums.size, albums = albums)
+            }
+            CollectionRef.Kind.AlbumGroup -> lib.albumGroups.firstOrNull { it.uid == ref.uid }?.let { group ->
+                val albums = groupAlbums(lib, group)
+                TrackList(group.name, group.art, albums.flatMap(::tracksOf), albumCount = albums.size, albums = albums)
             }
             CollectionRef.Kind.Playlist -> lib.playlists.firstOrNull { it.uid == ref.uid }?.let { playlist ->
                 // Every few tracks from across the library, so the list is stable.
@@ -38,6 +42,29 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
     override fun notePlayed(ref: CollectionRef) = Unit
 
     override fun recordPlay(trackUid: String) = Unit
+
+    // Names containing the query, which is enough to try the search screen.
+    override suspend fun search(query: String): SearchResults {
+        val lib = state.value
+        val q = query.trim()
+        if (q.isEmpty()) return SearchResults.Empty
+        val artists = lib.artists.filter { it.name.contains(q, ignoreCase = true) }
+        val albums = lib.albums.filter { it.title.contains(q, ignoreCase = true) }
+        val playlists = lib.playlists.filter { it.name.contains(q, ignoreCase = true) }
+        val groups = lib.albumGroups.filter { it.name.contains(q, ignoreCase = true) }
+        val order = listOfNotNull(
+            SearchResults.Kind.Artists.takeIf { artists.isNotEmpty() },
+            SearchResults.Kind.Albums.takeIf { albums.isNotEmpty() },
+            SearchResults.Kind.Playlists.takeIf { playlists.isNotEmpty() },
+            SearchResults.Kind.AlbumGroups.takeIf { groups.isNotEmpty() },
+        )
+        return SearchResults(order, artists, albums, playlists = playlists, albumGroups = groups)
+    }
+
+    override suspend fun reshuffle(ref: CollectionRef) = Unit
+
+    private fun groupAlbums(lib: Library, group: AlbumGroup): List<Album> =
+        lib.albums.filterIndexed { i, _ -> (i + (group.uid.hashCode() and 0x7fffffff)) % 5 == 0 }.take(group.albumCount)
 
     private fun tracksOf(album: Album): List<Track> {
         val count = 6 + (album.uid.hashCode() and 0x7fffffff) % 9
@@ -93,7 +120,11 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
             } + playlists[2].let {
                 Recent(CollectionRef(CollectionRef.Kind.Playlist, it.uid), it.name, null, it.art)
             }
-            return Library(recents, playlists, albums, artists)
+            val groups = listOf("Desert island", "Autumn").mapIndexed { i, name ->
+                val uid = "group-$i"
+                AlbumGroup(uid, name, 4 + i * 2, ArtRef(uid, name))
+            }
+            return Library(recents, playlists, albums, artists, groups)
         }
     }
 }

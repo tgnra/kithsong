@@ -7,8 +7,12 @@ import ng.kithso.core.AlbumInfo
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeviceKind
+import ng.kithso.core.ItemKind
 import ng.kithso.core.MusicCoreException
+import ng.kithso.core.SearchKind
 import ng.kithso.core.TrackInfo
+import ng.kithso.core.albumGroupAlbums
+import ng.kithso.core.albumGroupArt
 import ng.kithso.core.appendToPlaylist
 import ng.kithso.core.createPlaylist
 import ng.kithso.core.deletePlaylist
@@ -16,6 +20,15 @@ import ng.kithso.core.movePlaylistEntry
 import ng.kithso.core.playlistEntries
 import ng.kithso.core.removePlaylistEntry
 import ng.kithso.core.renamePlaylist
+import ng.kithso.core.artistAlbums
+import ng.kithso.core.artistTracks
+import ng.kithso.core.previewSmartTracks
+import ng.kithso.core.recents
+import ng.kithso.core.recordOpened
+import ng.kithso.core.reshuffle
+import ng.kithso.core.search
+import ng.kithso.core.searchPrepare
+import ng.kithso.core.smartAlbums
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,30 +36,33 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONException
+import org.json.JSONObject
 import java.io.File
 
 /**
  * The library as musiccore has it, in library folder [dir]. A library handle isn't
  * thread-safe, so every core call runs on one background thread ([core]); [library] is read
  * whole when this is created and again on [refresh], which is cheap enough to do after every
- * sync: one query for the albums and one per playlist.
+ * sync: one query for the albums, one for the tracks on this phone (for the artists), and
+ * one per playlist and album group.
  *
- * Recents are the albums the core has the newest plays of ([recordPlay]; plays on other
- * devices arrive with sync), merged with what was last started here, kept in [prefs]: the core
- * doesn't know a track was played from a playlist or an artist, and a track only counts as a
- * play once it has played for a while, whereas Recents should show what was tapped at once.
+ * Recents are the core's (mc_library_list_recents): what was last started playing, on any
+ * device. Recents kept here before were in [prefs]; they're handed to the core once.
  *
  * Sync brings the whole library's data, but only some of its files may be on this phone, so
- * only what has a file here is listed: albums with a folder here, tracks with a file, and
- * playlists and smart playlists with at least one such track (the core's MC_LIST_PLAYABLE).
+ * only what has a file here is listed: albums with a folder here, tracks with a file,
+ * artists with such an album or track, album groups with such an album, and playlists and
+ * smart lists with at least one such track or album (the core's MC_LIST_PLAYABLE).
  * The sync profile editor's choices ([profileChoices]) still list every playlist.
  * Albums and tracks with no artist get [unknownArtist], looked up on every read so that it
  * follows the app's language.
  *
- * A playlist's picture is the core's (CoreLibrary.playlistArt), cached in [artDir]. Making
- * one decodes four covers, so after each read the pictures are looked up on a thread and
- * library connection of their own ([art]), and [library] is updated with those that changed.
- * Meanwhile a playlist shows the picture it last had, kept in [prefs] across launches.
+ * A playlist's or album group's picture is the core's (CoreLibrary.playlistArt and
+ * albumGroupArt), cached in [artDir]. Making one decodes four covers, so after each read the
+ * pictures are looked up on a thread and library connection of their own ([art]), and
+ * [library] is updated with those that changed. Meanwhile each shows the picture it last
+ * had, kept in [prefs] across launches. Smart lists show their first cover.
  *
  * Manual playlists are edited here too ([PlaylistEditor]), on [core], each change followed by
  * a [refresh].
@@ -89,61 +105,74 @@ class CoreLibrarySource(
                 null
             }
         } ?: Contents.Empty
+        handOverRecents()
         state.value = contents.library(recents())
         Log.i(TAG, "Read ${contents.albums.size} albums in ${SystemClock.elapsedRealtime() - start} ms")
-        lookUpArt(contents.playlists.keys - contents.smart, ++artLookups)
+        try {
+            lib?.searchPrepare()
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't prepare search", e)
+        }
+        lookUpArt(
+            (contents.playlists.keys - contents.smart) + (contents.albumGroups.keys - contents.smart),
+            ++artLookups,
+        )
     }
 
-    // On [core]. Looks up the pictures of playlists [uids] on [art], then puts those that
-    // changed in [contents], unless another read has started a lookup since.
+    // On [core]. Looks up the pictures of playlists and album groups [uids] on [art], then puts
+    // those that changed in [contents], unless another read has started a lookup since.
     private fun lookUpArt(uids: Set<String>, lookup: Int) {
         if (uids.isEmpty()) return
+        val groups = contents.albumGroups.keys
         scope.launch(art) {
             val start = SystemClock.elapsedRealtime()
-            val found = uids.associateWith { uid -> playlistArt(uid) }
-            Log.i(TAG, "Looked up ${uids.size} playlists' pictures in ${SystemClock.elapsedRealtime() - start} ms")
+            val found = uids.associateWith { uid -> pictureOf(uid, uid in groups) }
+            Log.i(TAG, "Looked up ${uids.size} pictures in ${SystemClock.elapsedRealtime() - start} ms")
             withContext(core) {
                 if (lookup != artLookups) return@withContext
-                saveArt(savedArt().filterKeys { it in contents.playlists } + found)
-                val playlists = contents.playlists.mapValues { (uid, playlist) ->
-                    val file = found[uid] ?: return@mapValues playlist
-                    val picture = artRef(uid, playlist.name, file.takeIf { it.path.isNotEmpty() })
-                    if (picture == playlist.art) playlist else playlist.copy(art = picture)
+                saveArt(savedArt().filterKeys { it in contents.playlists || it in contents.albumGroups } + found)
+                fun picture(uid: String, name: String, old: ArtRef): ArtRef {
+                    val file = found[uid] ?: return old
+                    val picture = artRef(uid, name, file.takeIf { it.path.isNotEmpty() })
+                    return if (picture == old) old else picture
                 }
-                if (playlists == contents.playlists) return@withContext
-                contents = Contents(contents.albums, contents.artists, playlists, contents.smart)
+                val playlists = contents.playlists.mapValues { (uid, p) -> p.copy(art = picture(uid, p.name, p.art)) }
+                val albumGroups = contents.albumGroups.mapValues { (uid, g) -> g.copy(art = picture(uid, g.name, g.art)) }
+                if (playlists == contents.playlists && albumGroups == contents.albumGroups) return@withContext
+                contents = contents.copy(playlists = playlists, albumGroups = albumGroups)
                 state.value = contents.library(recents())
             }
         }
     }
 
-    // On [art]. [uid]'s picture, or an empty path for none (the placeholder).
-    private fun playlistArt(uid: String): File {
+    // On [art]. [uid]'s picture, a playlist's or if [group] an album group's, or an empty path
+    // for none (the placeholder).
+    private fun pictureOf(uid: String, group: Boolean): File {
         val lib = artLib ?: try {
             CoreLibrary(dir.path).also { artLib = it }
         } catch (e: MusicCoreException) {
-            Log.e(TAG, "Couldn't open the library in $dir for playlists' pictures", e)
+            Log.e(TAG, "Couldn't open the library in $dir for pictures", e)
             return File("")
         }
         return try {
-            File(lib.playlistArt(uid, artDir.path).orEmpty())
+            File((if (group) lib.albumGroupArt(uid, artDir.path) else lib.playlistArt(uid, artDir.path)).orEmpty())
         } catch (e: MusicCoreException) {
-            Log.e(TAG, "Couldn't make playlist $uid's picture", e)
+            Log.e(TAG, "Couldn't make $uid's picture", e)
             File("")
         }
     }
 
-    // On [art]. Clears out the pictures of playlists that have gone.
+    // On [art]. Clears out the pictures of playlists and album groups that have gone.
     private fun pruneArt() {
         try {
             CoreLibrary(dir.path).use { it.playlistArtPrune(artDir.path) }
         } catch (e: MusicCoreException) {
-            Log.e(TAG, "Couldn't prune playlists' pictures in $artDir", e)
+            Log.e(TAG, "Couldn't prune pictures in $artDir", e)
         }
     }
 
-    // The playlists' pictures as last looked up: lines of "uid:path", with an empty path for
-    // none. On [core].
+    // The playlists' and album groups' pictures as last looked up: lines of "uid:path", with an
+    // empty path for none. On [core].
     private fun savedArt(): Map<String, File> =
         prefs.getString(KEY_PLAYLIST_ART, null).orEmpty().lines().filter { ':' in it }
             .associate { it.substringBefore(':') to File(it.substringAfter(':')) }
@@ -178,9 +207,11 @@ class CoreLibrarySource(
                 CollectionRef.Kind.Album -> contents.albums[ref.uid]?.let { album ->
                     TrackList(album.title, album.art, lib.albumTracks(album.uid).here().map { covers.track(it) }, album.artist, album.year)
                 }
-                CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { (artist, albums) ->
-                    val tracks = albums.flatMap { album -> lib.albumTracks(album.uid).here().map { covers.track(it) } }
-                    TrackList(artist.name, artist.art, tracks, albumCount = albums.size)
+                // The albums it's on, its own first, then every track credited to it.
+                CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { artist ->
+                    val albums = lib.artistAlbums(artist.uid).mapNotNull { contents.albums[it.uid] }
+                    val tracks = lib.artistTracks(artist.uid).here().map { covers.track(it) }
+                    TrackList(artist.name, artist.art, tracks, albumCount = albums.size, albums = albums)
                 }
                 CollectionRef.Kind.Playlist -> contents.playlists[ref.uid]?.let { playlist ->
                     val tracks = if (ref.uid in contents.smart) {
@@ -191,7 +222,17 @@ class CoreLibrarySource(
                             .filter { (track, _) -> track.path != null }
                             .map { (track, entry) -> covers.track(track).copy(entryUid = entry) }
                     }
-                    TrackList(playlist.name, playlist.art, tracks)
+                    TrackList(playlist.name, playlist.art, tracks, canReshuffle = ref.uid in contents.random)
+                }
+                // Its albums, and their tracks one album after another to play it.
+                CollectionRef.Kind.AlbumGroup -> contents.albumGroups[ref.uid]?.let { group ->
+                    val infos = if (ref.uid in contents.smart) lib.smartAlbums(ref.uid) else lib.albumGroupAlbums(ref.uid)
+                    val albums = infos.mapNotNull { contents.albums[it.uid] }
+                    val tracks = albums.flatMap { album -> lib.albumTracks(album.uid).here().map { covers.track(it) } }
+                    TrackList(
+                        group.name, group.art, tracks,
+                        albumCount = albums.size, albums = albums, canReshuffle = ref.uid in contents.random,
+                    )
                 }
             }
         } catch (e: MusicCoreException) {
@@ -201,11 +242,16 @@ class CoreLibrarySource(
     }
 
     override fun notePlayed(ref: CollectionRef) {
-        val now = System.currentTimeMillis()
         scope.launch(core) {
-            val saved = (listOf(ref to now) + savedRecents().filter { it.first != ref }).take(MAX_RECENTS)
-            prefs.edit().putString(KEY_RECENTS, saved.joinToString("\n") { (ref, time) -> "${ref.kind.name}:$time:${ref.uid}" }).apply()
+            val lib = open() ?: return@launch
+            try {
+                lib.recordOpened(ref.kind.itemKind, ref.uid)
+            } catch (e: MusicCoreException) {
+                Log.e(TAG, "Couldn't add $ref to the recents", e)
+                return@launch
+            }
             state.value = state.value?.copy(recents = recents())
+            onChanged()
         }
     }
 
@@ -218,7 +264,6 @@ class CoreLibrarySource(
                 Log.e(TAG, "Couldn't record a play of $trackUid", e)
                 return@launch
             }
-            state.value = state.value?.copy(recents = recents())
             onChanged()
         }
     }
@@ -283,6 +328,59 @@ class CoreLibrarySource(
         }
     }
 
+    override suspend fun search(query: String): SearchResults = withContext(core) {
+        val hits = try {
+            open()?.search(query, SEARCH_LIMIT).orEmpty()
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't search for \"$query\"", e)
+            emptyList()
+        }
+        // The index can be a little behind the library, and knows what isn't on this phone:
+        // only what's listed here is shown, as it was last read.
+        val c = contents
+        val covers = Covers()
+        val order = ArrayList<SearchResults.Kind>()
+        val artists = ArrayList<Artist>()
+        val albums = ArrayList<Album>()
+        val tracks = ArrayList<FoundTrack>()
+        val playlists = ArrayList<Playlist>()
+        val albumGroups = ArrayList<AlbumGroup>()
+        for (hit in hits) {
+            val kind = when (hit.kind) {
+                SearchKind.Artist -> c.artists[hit.uid]?.let(artists::add)?.let { SearchResults.Kind.Artists }
+                SearchKind.Album -> c.albums[hit.uid]?.let(albums::add)?.let { SearchResults.Kind.Albums }
+                SearchKind.Track -> {
+                    // A track is found by its album, whose art and tracks are here.
+                    val album = hit.albumUid?.let { c.albums[it] } ?: continue
+                    tracks += FoundTrack(
+                        hit.uid, hit.name, hit.artist ?: unknownArtist(), hit.album.orEmpty(), album.uid,
+                        covers.found(album),
+                    )
+                    SearchResults.Kind.Tracks
+                }
+                SearchKind.Playlist -> c.playlists[hit.uid]?.let(playlists::add)?.let { SearchResults.Kind.Playlists }
+                SearchKind.AlbumGroup -> c.albumGroups[hit.uid]?.let(albumGroups::add)?.let { SearchResults.Kind.AlbumGroups }
+            } ?: continue
+            if (kind !in order) order += kind
+        }
+        SearchResults(order, artists, albums, tracks, playlists, albumGroups)
+    }
+
+    override suspend fun reshuffle(ref: CollectionRef) {
+        withContext(core) {
+            val lib = open() ?: return@withContext
+            try {
+                lib.reshuffle(ref.uid)
+            } catch (e: MusicCoreException) {
+                Log.e(TAG, "Couldn't reshuffle $ref", e)
+                return@withContext
+            }
+            onChanged()
+        }
+        // A smart list's picture is its first cover, which may have changed.
+        refresh().join()
+    }
+
     // On [core]. Null if the library can't be opened.
     private fun open(): CoreLibrary? {
         lib?.let { return it }
@@ -298,100 +396,119 @@ class CoreLibrarySource(
         val covers = Covers()
         val albums = lib.albums().filter { it.folder != null }.map { info -> Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info)) }
 
-        // The core lists albums by artist, so the artists come out in order too.
-        val artists = albums.groupBy { it.artist }.map { (name, albums) ->
-            // The uid is the name: the core has no artist list yet, and albums give a name.
+        // The core's artists with an album or track here. Neither an album nor a track gives its
+        // artist's uid, so they're matched by name: two artists of the same name share both.
+        val albumsBy = albums.groupBy { it.artist }
+        val tracksBy = lib.previewSmartTracks(ON_DEVICE_RULE).groupingBy { it.artist ?: unknownArtist() }.eachCount()
+        val artists = lib.artists().mapNotNull { info ->
+            val own = albumsBy[info.name].orEmpty()
+            val trackCount = tracksBy[info.name] ?: 0
+            if (own.isEmpty() && trackCount == 0) return@mapNotNull null
             // A cover file before an audio file that may have no picture in it.
-            val cover = (albums.firstOrNull { album -> album.art.file?.let { File(it).name in COVER_NAMES } == true }
-                ?: albums.firstOrNull { it.art.file != null })?.art
-            Artist(name, name, albums.size, cover?.copy(uid = name, label = name) ?: ArtRef(name, name)) to albums
+            val cover = (own.firstOrNull { album -> album.art.file?.let { File(it).name in COVER_NAMES } == true }
+                ?: own.firstOrNull { it.art.file != null })?.art
+            Artist(info.uid, info.name, own.size, cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name), trackCount)
         }
 
-        // Smart playlists sit among the others; smart album groups have no place on this screen.
-        // Only those with a track to play here, which also keeps the rest out of Recents.
-        // A manual playlist shows the picture it last had until [lookUpArt] finds it again.
-        val smart = lib.smartLists(playableOnly = true).filter { !it.isAlbums }
+        // Smart playlists sit among the others, and smart album groups among the manual ones.
+        // Only those with a track or album to play here, which also keeps the rest out of
+        // Recents. A manual one shows the picture it last had until [lookUpArt] finds it again.
+        val here = albums.associateBy { it.uid }
+        val smart = lib.smartLists(playableOnly = true)
         val known = savedArt()
+        fun knownArt(uid: String, name: String) = artRef(uid, name, known[uid]?.takeIf { it.path.isNotEmpty() && it.isFile })
         val playlists = lib.playlists(playableOnly = true).map { info ->
             val tracks = lib.playlistTracks(info.uid).here()
-            val file = known[info.uid]?.takeIf { it.path.isNotEmpty() && it.isFile }
-            Playlist(info.uid, info.name, tracks.size, artRef(info.uid, info.name, file))
-        } + smart.map { info ->
+            Playlist(info.uid, info.name, tracks.size, knownArt(info.uid, info.name))
+        } + smart.filter { !it.isAlbums }.map { info ->
             val tracks = lib.smartTracks(info.uid).here()
             Playlist(info.uid, info.name, tracks.size, covers.playlist(info.uid, info.name, tracks))
         }
+        val albumGroups = lib.albumGroups().mapNotNull { info ->
+            val count = lib.albumGroupAlbums(info.uid).count { it.uid in here }
+            if (count == 0) null else AlbumGroup(info.uid, info.name, count, knownArt(info.uid, info.name))
+        } + smart.filter { it.isAlbums }.map { info ->
+            val inGroup = lib.smartAlbums(info.uid).mapNotNull { here[it.uid] }
+            val cover = inGroup.firstOrNull { it.art.file != null }?.art
+            AlbumGroup(info.uid, info.name, inGroup.size, cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name))
+        }
 
         return Contents(
-            albums.associateBy { it.uid },
-            artists.associateBy { it.first.uid },
+            here,
+            artists.associateBy { it.uid },
             playlists.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }).associateBy { it.uid },
+            albumGroups.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }).associateBy { it.uid },
             smart.mapTo(HashSet()) { it.uid },
+            smart.filter { isRandom(it.rule) }.mapTo(HashSet()) { it.uid },
         )
     }
 
-    // What was last started here, newest first, with when: lines of "kind:time:uid". Lines
-    // from before there were times are "kind:uid", and an artist's uid is its name, which
-    // may hold a colon.
-    private fun savedRecents(): List<Pair<CollectionRef, Long>> =
-        prefs.getString(KEY_RECENTS, null).orEmpty().lines().mapNotNull { line ->
-            val kind = CollectionRef.Kind.entries.firstOrNull { it.name == line.substringBefore(':') }
-                ?: return@mapNotNull null
+    // On [core]. Recents used to be kept here, as lines of "kind:time:uid" (or "kind:uid")
+    // in [prefs], newest first; they go to the core oldest first, so the newest ends up first.
+    // An artist's uid was its name then, which the core doesn't know, so those are dropped.
+    private fun handOverRecents() {
+        val saved = prefs.getString(KEY_RECENTS, null) ?: return
+        val lib = open() ?: return
+        for (line in saved.lines().reversed()) {
+            val kind = CollectionRef.Kind.entries.firstOrNull { it.name == line.substringBefore(':') } ?: continue
+            if (kind == CollectionRef.Kind.Artist) continue
             val rest = line.substringAfter(':')
-            val time = rest.substringBefore(':').toLongOrNull()
-            CollectionRef(kind, if (time != null) rest.substringAfter(':') else rest) to (time ?: 0)
+            val uid = if (rest.substringBefore(':').toLongOrNull() != null) rest.substringAfter(':') else rest
+            try {
+                lib.recordOpened(kind.itemKind, uid)
+            } catch (e: MusicCoreException) {
+                Log.i(TAG, "Left $kind $uid out of the recents", e)
+            }
         }
-
-    // On [core]. The albums with the newest plays, newest first.
-    private fun playedAlbums(): List<String> = try {
-        open()?.previewSmartAlbums(RECENT_ALBUMS_RULE)?.map { it.uid }.orEmpty()
-    } catch (e: MusicCoreException) {
-        Log.e(TAG, "Couldn't list recently played albums", e)
-        emptyList()
+        prefs.edit().remove(KEY_RECENTS).apply()
+        onChanged()
     }
 
-    // On [core]. Recently played things that are still in the library. The core gives an
-    // order but no times, so a played album takes its time from when it was started here,
-    // else from the album before it, and then everything is sorted by time.
-    private fun recents(): List<Recent> {
-        val saved = savedRecents()
-        val times = saved.toMap()
-        var time = Long.MAX_VALUE
-        val played = playedAlbums().map { uid ->
-            val ref = CollectionRef(CollectionRef.Kind.Album, uid)
-            time = times[ref] ?: time
-            ref to time
-        }
-        val refs = (played + saved).sortedByDescending { it.second }.map { it.first }.distinct()
-        return refs.mapNotNull(::recent).take(MAX_RECENTS)
+    // On [core]. The core's recents that are on this phone, newest first. Its list leaves out
+    // playlists with nothing here, but not albums or artists, so it's asked for more than are
+    // shown.
+    private fun recents(): List<Recent> = try {
+        open()?.recents(MAX_RECENTS * 4, playableOnly = true).orEmpty()
+            .mapNotNull { recent(CollectionRef(it.kind.refKind, it.uid)) }
+            .take(MAX_RECENTS)
+    } catch (e: MusicCoreException) {
+        Log.e(TAG, "Couldn't list the recents", e)
+        emptyList()
     }
 
     private fun recent(ref: CollectionRef): Recent? = when (ref.kind) {
         CollectionRef.Kind.Album -> contents.albums[ref.uid]?.let { Recent(ref, it.title, it.artist, it.art) }
-        CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { (artist, _) ->
-            Recent(ref, artist.name, null, artist.art)
-        }
+        CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
         CollectionRef.Kind.Playlist -> contents.playlists[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
+        CollectionRef.Kind.AlbumGroup -> contents.albumGroups[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
     }
 
     // The tracks with a file on this phone.
     private fun List<TrackInfo>.here() = filter { it.path != null }
 
-    /** What the last read found, for building [Library] and looking things up by uid. */
-    private class Contents(
+    /**
+     * What the last read found, for building [Library] and looking things up by uid. [smart]
+     * are the smart lists among the playlists and album groups, and [random] those of them
+     * ordered by random.
+     */
+    private data class Contents(
         val albums: Map<String, Album>,
-        val artists: Map<String, Pair<Artist, List<Album>>>,
+        val artists: Map<String, Artist>,
         val playlists: Map<String, Playlist>,
+        val albumGroups: Map<String, AlbumGroup>,
         val smart: Set<String>,
+        val random: Set<String>,
     ) {
         fun library(recents: List<Recent>) = Library(
             recents,
             playlists.values.toList(),
             albums.values.toList(),
-            artists.values.map { it.first },
+            artists.values.toList(),
+            albumGroups.values.toList(),
         )
 
         companion object {
-            val Empty = Contents(emptyMap(), emptyMap(), emptyMap(), emptySet())
+            val Empty = Contents(emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptySet(), emptySet())
         }
     }
 
@@ -425,6 +542,9 @@ class CoreLibrarySource(
             )
         }
 
+        /** A found track's art: its album's, keyed by the album's title as a track's is. */
+        fun found(album: Album): ArtRef = album.art.copy(uid = album.title, label = album.title)
+
         /** A smart playlist shows its first track's cover; the core makes manual ones' pictures. */
         fun playlist(uid: String, name: String, tracks: List<TrackInfo>): ArtRef {
             val first = tracks.firstOrNull { it.coverDir != null }
@@ -440,13 +560,37 @@ class CoreLibrarySource(
 
     private companion object {
         const val TAG = "kithsong"
-        const val KEY_RECENTS = "recents"
+        const val KEY_RECENTS = "recents" // only read once, to hand them to the core
         const val KEY_PLAYLIST_ART = "playlist_art"
         const val MAX_RECENTS = 8
-        const val RECENT_ALBUMS_RULE = """{"v": 1, "match": {"field": "last_played", "op": "not_empty"},
-            "order": [{"field": "last_played", "dir": "desc"}], "limit": $MAX_RECENTS}"""
+        const val SEARCH_LIMIT = 20 // of each kind, as the desktops show
+        const val ON_DEVICE_RULE = """{"v": 1, "match": {"field": "on_device", "op": "is", "value": true}}"""
         val COVER_NAMES = listOf("cover.jpg", "cover.png")
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
+
+        // Whether smart list [rule] is ordered by random, so reshuffling gives a new order.
+        fun isRandom(rule: String): Boolean = try {
+            val order = JSONObject(rule).optJSONArray("order")
+            order != null && (0 until order.length()).any { order.optJSONObject(it)?.optString("field") == "random" }
+        } catch (e: JSONException) {
+            false
+        }
+
+        val CollectionRef.Kind.itemKind: ItemKind
+            get() = when (this) {
+                CollectionRef.Kind.Album -> ItemKind.Album
+                CollectionRef.Kind.Artist -> ItemKind.Artist
+                CollectionRef.Kind.Playlist -> ItemKind.Playlist
+                CollectionRef.Kind.AlbumGroup -> ItemKind.AlbumGroup
+            }
+
+        val ItemKind.refKind: CollectionRef.Kind
+            get() = when (this) {
+                ItemKind.Album -> CollectionRef.Kind.Album
+                ItemKind.Artist -> CollectionRef.Kind.Artist
+                ItemKind.Playlist -> CollectionRef.Kind.Playlist
+                ItemKind.AlbumGroup -> CollectionRef.Kind.AlbumGroup
+            }
     }
 }

@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import ng.kithso.android.data.Album
+import ng.kithso.android.data.AlbumGroup
 import ng.kithso.android.data.ArtRef
 import ng.kithso.android.data.Artist
 import ng.kithso.android.data.CollectionRef
@@ -74,6 +75,7 @@ import kotlinx.coroutines.launch
 enum class Section(@StringRes val title: Int) {
     Recents(R.string.section_recents),
     Playlists(R.string.section_playlists),
+    AlbumGroups(R.string.section_album_groups),
     Albums(R.string.section_albums),
     Artists(R.string.section_artists),
 }
@@ -112,6 +114,12 @@ private sealed interface MainItem {
         override val art get() = listOf(playlist.art)
     }
 
+    data class AlbumGroupItem(val group: AlbumGroup) : MainItem {
+        override val key get() = "group:${group.uid}"
+        override val contentType get() = "playlist"
+        override val art get() = listOf(group.art)
+    }
+
     data class AlbumRow(val albums: List<Album>) : MainItem {
         override val key get() = "albums:${albums.first().uid}"
         override val contentType get() = "albums"
@@ -141,6 +149,10 @@ private fun mainItems(library: Library?, columns: Int): List<MainItem> = buildLi
         add(MainItem.Heading(Section.Playlists))
         library.playlists.mapTo(this, MainItem::PlaylistItem)
     }
+    if (library.albumGroups.isNotEmpty()) {
+        add(MainItem.Heading(Section.AlbumGroups))
+        library.albumGroups.mapTo(this, MainItem::AlbumGroupItem)
+    }
     if (library.albums.isNotEmpty()) {
         add(MainItem.Heading(Section.Albums))
         library.albums.chunked(columns).mapTo(this, MainItem::AlbumRow)
@@ -169,6 +181,7 @@ fun MainScreen(
     library: Library?,
     bottomPadding: Dp,
     onOpen: (CollectionRef) -> Unit,
+    onSearch: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
@@ -215,7 +228,7 @@ fun MainScreen(
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {
-                    MainItem.Header -> Header(onSync, onSettings)
+                    MainItem.Header -> Header(onSearch, onSync, onSettings)
                     MainItem.Empty -> EmptyLibrary()
                     is MainItem.Heading -> SectionHeading(item.section, sections, { current }, jumpTo)
                     is MainItem.RecentItem -> LibraryRow(
@@ -228,10 +241,16 @@ fun MainScreen(
                         RoundedCornerShape(8.dp),
                         onLongClick = { onPlaylistMenu(item.playlist) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.Playlist, item.playlist.uid)) }
+                    is MainItem.AlbumGroupItem -> LibraryRow(
+                        item.group.name,
+                        pluralStringResource(R.plurals.albums, item.group.albumCount, item.group.albumCount),
+                        item.group.art,
+                        RoundedCornerShape(8.dp),
+                    ) { onOpen(CollectionRef(CollectionRef.Kind.AlbumGroup, item.group.uid)) }
                     is MainItem.AlbumRow -> AlbumRow(item.albums, columns, onOpen, onAlbumMenu)
                     is MainItem.ArtistItem -> LibraryRow(
                         item.artist.name,
-                        pluralStringResource(R.plurals.albums, item.artist.albumCount, item.artist.albumCount),
+                        item.artist.subtitle(),
                         item.artist.art,
                         CircleShape,
                     ) { onOpen(CollectionRef(CollectionRef.Kind.Artist, item.artist.uid)) }
@@ -241,9 +260,9 @@ fun MainScreen(
     }
 }
 
-/** The app title, with sync and settings. It scrolls away with the list. */
+/** The app title, with search, sync and settings. It scrolls away with the list. */
 @Composable
-private fun Header(onSync: () -> Unit, onSettings: () -> Unit) {
+private fun Header(onSearch: () -> Unit, onSync: () -> Unit, onSettings: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -256,6 +275,7 @@ private fun Header(onSync: () -> Unit, onSettings: () -> Unit) {
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.weight(1f).semantics { heading() },
         )
+        IconButton(onClick = onSearch) { Icon(Icons.Search, contentDescription = stringResource(R.string.search)) }
         IconButton(onClick = onSync) { Icon(Icons.Sync, contentDescription = stringResource(R.string.sync)) }
         IconButton(onClick = onSettings) { Icon(Icons.Settings, contentDescription = stringResource(R.string.settings)) }
     }
@@ -309,8 +329,18 @@ private fun SectionHeading(
 /** What a recent shows under its title: an album's artist, or what kind of thing it is. */
 @Composable
 private fun Recent.subtitle(): String = artist ?: stringResource(
-    if (ref.kind == CollectionRef.Kind.Artist) R.string.artist else R.string.playlist,
+    when (ref.kind) {
+        CollectionRef.Kind.Artist -> R.string.artist
+        CollectionRef.Kind.AlbumGroup -> R.string.album_group
+        else -> R.string.playlist
+    },
 )
+
+/** An artist's albums here, or for one only credited on tracks, their tracks. */
+@Composable
+internal fun Artist.subtitle(): String =
+    if (albumCount > 0) pluralStringResource(R.plurals.albums, albumCount, albumCount)
+    else pluralStringResource(R.plurals.tracks, trackCount, trackCount)
 
 /** A list row with art, for recents, playlists and artists. */
 @Composable

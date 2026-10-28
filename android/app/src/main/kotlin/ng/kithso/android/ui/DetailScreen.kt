@@ -1,7 +1,9 @@
 package ng.kithso.android.ui
 
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,14 +21,18 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,6 +43,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,11 +64,14 @@ import ng.kithso.android.data.Track
 import ng.kithso.android.data.TrackList
 import ng.kithso.android.ui.art.AlbumArt
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 /**
- * An album, artist or playlist: its art and name, then its tracks. Tapping a track plays the
- * list from there; long-pressing one opens its menu ([PlaylistActions.trackMenu]). [onBack]
- * slides the screen away; it is also dismissed by swiping right.
+ * An album, artist, playlist or album group: its art and name, then its tracks. Tapping a
+ * track plays the list from there; long-pressing one opens its menu ([PlaylistActions.trackMenu]).
+ * An artist's albums come before their tracks, and an album group shows its albums with a
+ * button to play them all; [onOpen] opens an album. A smart list in random order has a button
+ * to reshuffle it. [onBack] slides the screen away; it is also dismissed by swiping right.
  *
  * A manual playlist has an Edit button, which shows each track with a button to remove it and
  * a handle to drag it elsewhere, until Done. Each change is made as it happens, and the list as
@@ -74,13 +84,17 @@ fun DetailScreen(
     actions: PlaylistActions,
     bottomPadding: Dp,
     onPlay: (List<Track>, Int) -> Unit,
+    onOpen: (CollectionRef) -> Unit,
     onBack: () -> Unit,
 ) {
     val editor = actions.editor
+    // Bumped by a reshuffle, to list it again in its new order.
+    var shuffles by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
     // An edit reads the list again, even when the library looks no different (after a move).
     val edits by (editor?.edits ?: remember { MutableStateFlow(0) }).collectAsState()
     var edited by remember { mutableStateOf<List<Track>?>(null) }
-    val loaded by produceState<TrackList?>(null, ref, edits) {
+    val loaded by produceState<TrackList?>(null, ref, edits, shuffles) {
         val list = source.trackList(ref)
         // An edit took the playlist's last track on this phone, or deleted it: it's gone.
         if (list == null && value != null) onBack()
@@ -92,11 +106,15 @@ fun DetailScreen(
     }
     var editing by rememberSaveable { mutableStateOf(false) }
 
-    // A playlist's picture is looked up after the library is read, so it may come later.
+    // A playlist's or album group's picture is looked up after the library is read, so it
+    // may come later.
     val library by source.library.collectAsState()
-    val playlistArt = library?.playlists?.firstOrNull { it.uid == ref.uid }?.art
-        ?.takeIf { ref.kind == CollectionRef.Kind.Playlist }
-    val list = loaded?.let { if (playlistArt != null) it.copy(art = playlistArt) else it }
+    val picture = when (ref.kind) {
+        CollectionRef.Kind.Playlist -> library?.playlists?.firstOrNull { it.uid == ref.uid }?.art
+        CollectionRef.Kind.AlbumGroup -> library?.albumGroups?.firstOrNull { it.uid == ref.uid }?.art
+        else -> null
+    }
+    val list = loaded?.let { if (picture != null) it.copy(art = picture) else it }
     val tracks = edited ?: list?.tracks.orEmpty()
     val isEditing = editing && editable
 
@@ -130,48 +148,97 @@ fun DetailScreen(
     }
 
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            state = listState,
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
-                .add(WindowInsets(bottom = bottomPadding))
-                .asPaddingValues(),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            item(key = "header", contentType = "header") {
-                DetailHeader(ref.kind, list, onBack, editing = if (editable) isEditing else null, onEdit = { editing = it })
-            }
-            // A playlist can hold a track twice, so the uid alone isn't a unique key. Its
-            // entries are, and keep a dragged track's key as it moves.
-            itemsIndexed(tracks, key = { i, track -> entryKey(track) ?: "$i:${track.uid}" }, contentType = { _, _ -> "track" }) { i, track ->
-                val key = entryKey(track)
-                if (isEditing && key != null) {
-                    val moveUp = stringResource(R.string.move_up)
-                    val moveDown = stringResource(R.string.move_down)
-                    EditTrackRow(
-                        track,
-                        onRemove = {
-                            edited = tracks.filterIndexed { j, _ -> j != i }
-                            track.entryUid?.let { editor?.removeEntry(it) }
-                        },
-                        handle = with(reorder) {
-                            Modifier.dragHandle(key).semantics {
-                                customActions = buildList {
-                                    if (i > 0) add(CustomAccessibilityAction(moveUp) { moveBy(i, -1); true })
-                                    if (i < tracks.lastIndex) add(CustomAccessibilityAction(moveDown) { moveBy(i, 1); true })
-                                }
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val columns = albumColumns(maxWidth)
+            val albums = list?.albums.orEmpty()
+            val group = ref.kind == CollectionRef.Kind.AlbumGroup
+            LazyColumn(
+                state = listState,
+                contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+                    .add(WindowInsets(bottom = bottomPadding))
+                    .asPaddingValues(),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                item(key = "header", contentType = "header") {
+                    DetailHeader(ref.kind, list, onBack, editing = if (editable) isEditing else null, onEdit = { editing = it })
+                }
+                if (list != null && (group || list.canReshuffle)) item(key = "actions", contentType = "actions") {
+                    DetailActions(
+                        onPlay = if (group && tracks.isNotEmpty()) ({ onPlay(tracks, 0) }) else null,
+                        onReshuffle = if (list.canReshuffle) ({
+                            scope.launch {
+                                source.reshuffle(ref)
+                                shuffles++
                             }
-                        },
-                        modifier = if (key == reorder.dragged) with(reorder) { Modifier.dragged(key) } else Modifier.animateItem(),
-                    )
-                } else {
-                    TrackRow(
-                        track,
-                        showAlbum = ref.kind != CollectionRef.Kind.Album,
-                        onLongClick = { actions.trackMenu(track, removable = editable) },
-                        onClick = { onPlay(tracks, i) },
+                        }) else null,
                     )
                 }
+                if (group) {
+                    items(albums.chunked(columns), key = { "albums:${it.first().uid}" }, contentType = { "albums" }) { row ->
+                        AlbumGridRow(row, columns, onOpen)
+                    }
+                    return@LazyColumn
+                }
+                if (ref.kind == CollectionRef.Kind.Artist && albums.isNotEmpty()) {
+                    item(key = "albums", contentType = "albums") {
+                        Column {
+                            BrowseHeading(stringResource(R.string.section_albums))
+                            AlbumStrip(albums, list?.title.orEmpty(), onOpen)
+                            if (tracks.isNotEmpty()) BrowseHeading(stringResource(R.string.tracks_title))
+                        }
+                    }
+                }
+                // A playlist can hold a track twice, so the uid alone isn't a unique key. Its
+                // entries are, and keep a dragged track's key as it moves.
+                itemsIndexed(tracks, key = { i, track -> entryKey(track) ?: "$i:${track.uid}" }, contentType = { _, _ -> "track" }) { i, track ->
+                    val key = entryKey(track)
+                    if (isEditing && key != null) {
+                        val moveUp = stringResource(R.string.move_up)
+                        val moveDown = stringResource(R.string.move_down)
+                        EditTrackRow(
+                            track,
+                            onRemove = {
+                                edited = tracks.filterIndexed { j, _ -> j != i }
+                                track.entryUid?.let { editor?.removeEntry(it) }
+                            },
+                            handle = with(reorder) {
+                                Modifier.dragHandle(key).semantics {
+                                    customActions = buildList {
+                                        if (i > 0) add(CustomAccessibilityAction(moveUp) { moveBy(i, -1); true })
+                                        if (i < tracks.lastIndex) add(CustomAccessibilityAction(moveDown) { moveBy(i, 1); true })
+                                    }
+                                }
+                            },
+                            modifier = if (key == reorder.dragged) with(reorder) { Modifier.dragged(key) } else Modifier.animateItem(),
+                        )
+                    } else {
+                        TrackRow(
+                            track,
+                            showAlbum = ref.kind != CollectionRef.Kind.Album,
+                            onLongClick = { actions.trackMenu(track, removable = editable) },
+                            onClick = { onPlay(tracks, i) },
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+/** Play (for an album group, whose tracks aren't listed) and Reshuffle, if given. */
+@Composable
+private fun DetailActions(onPlay: (() -> Unit)?, onReshuffle: (() -> Unit)?) {
+    Row(
+        Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (onPlay != null) Button(onClick = onPlay) {
+            Icon(Icons.Play, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+            Text(stringResource(R.string.play), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+        }
+        if (onReshuffle != null) OutlinedButton(onClick = onReshuffle) {
+            Icon(Icons.Shuffle, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+            Text(stringResource(R.string.reshuffle), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
         }
     }
 }
@@ -245,8 +312,11 @@ private fun DetailTitle(kind: CollectionRef.Kind, list: TrackList, artSize: Dp, 
                 when (kind) {
                     CollectionRef.Kind.Album ->
                         if (list.year > 0) stringResource(R.string.album_byline_year, list.artist, list.year) else list.artist
-                    CollectionRef.Kind.Artist -> pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount)
+                    CollectionRef.Kind.Artist ->
+                        if (list.albumCount > 0) pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount)
+                        else pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size)
                     CollectionRef.Kind.Playlist -> pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size)
+                    CollectionRef.Kind.AlbumGroup -> pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount)
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

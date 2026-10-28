@@ -47,13 +47,14 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * The app's one screen: the main list, with settings, sync or track list screens stacked over
- * it, then the mini player, then the full player. Navigation is this stack of [CollectionRef]s
- * and flags for settings, sync, the device open from sync and the player, so each layer can own
- * its slide-in, drag-to-dismiss and predictive back. The players take their colours from the
- * album art. [onPlay] is called when a track list starts playing. Pairing with another device
- * shows over everything, as it can start from the other device at any time. [libraryDir] is the
- * library folder, for settings to show its size.
+ * The app's one screen: the main list, with settings, sync, search or track list screens stacked
+ * over it, then the mini player, then the full player. Navigation is this stack of
+ * [CollectionRef]s and flags for settings, sync, the device open from sync, search and the
+ * player, so each layer can own its slide-in, drag-to-dismiss and predictive back. A search
+ * result opens its track list over search. The players take their colours from the album art.
+ * [onPlay] is called when a track list starts playing. Pairing with another device shows over
+ * everything, as it can start from the other device at any time. [libraryDir] is the library
+ * folder, for settings to show its size.
  */
 @Composable
 fun App(
@@ -71,6 +72,7 @@ fun App(
     // The device whose page is open over sync: a member's uid, or THIS_DEVICE.
     var deviceOpen by rememberSaveable { mutableStateOf<String?>(null) }
     var playerOpen by rememberSaveable { mutableStateOf(false) }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
     val track = playback.track
 
     // Lists end clear of the mini player, which sits above the navigation bar.
@@ -105,9 +107,10 @@ fun App(
                 library,
                 bottomPadding,
                 onOpen = open,
+                onSearch = { searchOpen = true },
                 onSync = { syncOpen = true },
                 onSettings = { settingsOpen = true },
-                modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen),
+                modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen || searchOpen),
                 onPlaylistMenu = actions::playlistMenu,
                 onAlbumMenu = actions::albumMenu,
             )
@@ -143,6 +146,33 @@ fun App(
                     }
                 }
             }
+            // Under the track lists, which its results open over it.
+            if (searchOpen) {
+                DismissibleScreen(
+                    DismissDirection.Right,
+                    onDismissed = { searchOpen = false },
+                    backEnabled = stack.isEmpty() && !playerOpen,
+                    modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen),
+                ) { dismiss ->
+                    SearchScreen(
+                        source,
+                        bottomPadding,
+                        onOpen = open,
+                        onPlayTrack = { found ->
+                            // Its album, from the track on.
+                            val album = found.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
+                            if (album != null) scope.launch {
+                                val tracks = source.trackList(album)?.tracks.orEmpty()
+                                if (tracks.isEmpty()) return@launch
+                                playback.play(tracks, tracks.indexOfFirst { it.uid == found.uid }.coerceAtLeast(0))
+                                source.notePlayed(album)
+                                onPlay()
+                            }
+                        },
+                        onBack = dismiss,
+                    )
+                }
+            }
             stack.forEachIndexed { i, ref ->
                 key(i, ref) {
                     val top = i == stack.lastIndex
@@ -162,6 +192,7 @@ fun App(
                                 source.notePlayed(ref)
                                 onPlay()
                             },
+                            onOpen = open,
                             onBack = dismiss,
                         )
                     }

@@ -9,6 +9,8 @@
 
 #include "musiccore/musiccore.h"
 
+#include "jni_bridge.h"
+
 static JavaVM *g_vm;
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
@@ -17,8 +19,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
   return JNI_VERSION_1_6;
 }
 
-/* Throws MusicCoreException(status) and returns status. */
-static mc_status throw_status(JNIEnv *env, mc_status st) {
+mc_status throw_status(JNIEnv *env, mc_status st) {
   jclass cls = (*env)->FindClass(env, "ng/kithso/core/MusicCoreException");
   if (!cls) return st; /* NoClassDefFoundError is already pending */
   jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "(I)V");
@@ -27,8 +28,7 @@ static mc_status throw_status(JNIEnv *env, mc_status st) {
   return st;
 }
 
-/* A Java string for s, or NULL for NULL. */
-static jstring new_string(JNIEnv *env, const char *s) {
+jstring new_string(JNIEnv *env, const char *s) {
   return s ? (*env)->NewStringUTF(env, s) : NULL;
 }
 
@@ -99,9 +99,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreLibrary_nativeCount(JNIEnv *env,
   return (jlong)count;
 }
 
-/* An AlbumInfo[] of list, which it frees, or NULL with an exception pending. st is the
- * status of the call that made the list. */
-static jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) {
+jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) {
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;
@@ -206,9 +204,7 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativePlaylistArtPrune(JN
   if (st != MC_OK) throw_status(env, st);
 }
 
-/* A TrackInfo[] of list, which it frees, or NULL with an exception pending. st is the
- * status of the call that made the list. */
-static jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {
+jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;

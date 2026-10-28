@@ -6,7 +6,7 @@ project(kithsong_android C CXX)
 set(KITHSONG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../..")
 add_subdirectory("${KITHSONG_ROOT}" kithsong)
 
-add_library(kithsong_jni SHARED jni_bridge.c)
+add_library(kithsong_jni SHARED jni_bridge.c jni_browse.c)
 target_link_libraries(kithsong_jni PRIVATE musiccore log)
 
 # Playlist editing (PlaylistNatives), apart from jni_bridge.c.

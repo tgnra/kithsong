@@ -482,6 +482,7 @@
     "albums": { "one": "{0:d} album", "other": "{0:d} albums" },
 
     "jump_to_section": "Jump to a section",
+    "reshuffle": { "text": "Reshuffle", "note": "Button on a smart playlist or smart album group that's in a random order: picks a new random order." },
 
     "album_byline_year": { "text": "{0} – {1:d}", "note": "Track list screen: an album's artist and year." },
 
