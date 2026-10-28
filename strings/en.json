@@ -539,6 +539,8 @@
 
     "edit_playlist": { "text": "Edit", "note": "Button on a playlist's page that shows the controls to reorder and remove its tracks." },
     "playlist_added": { "text": "Added to {0}", "note": "{0} is a playlist's name." },
+    "add_to_album_group_menu": { "text": "Add to album group…", "note": "On an album's menu: opens the list of album groups to add it to." },
+    "album_group_added": { "text": "Added to {0}", "note": "{0} is an album group's name." },
     "playlist_reorder": { "text": "Drag to reorder", "note": "A playlist track's drag handle, for accessibility." },
 
     "delete_permanently_text": { "one": "{0:d} file will be deleted for good and removed from the library on all your devices. This phone has no trash to restore it from.", "other": "{0:d} files will be deleted for good and removed from the library on all your devices. This phone has no trash to restore them from.", "note": "Under \"Delete “{0}”?\"; the files are an album's, artist's or track's, and its cover." },

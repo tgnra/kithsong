@@ -140,8 +140,9 @@ fun artImageLoader(context: Context, source: ArtSource): ImageLoader =
         .build()
 
 // By file when there is one, so art shared by an album and its artist is cached once, and
-// with its version, so a changed cover is loaded afresh.
-private fun ArtRef.key() = if (file != null) "art:$file:$version" else "art:$uid"
+// with its version, so a changed cover is loaded afresh. A placeholder is drawn from its label,
+// so a renamed playlist or album group gets a new one.
+private fun ArtRef.key() = if (file != null) "art:$file:$version" else "art:$uid:$label"
 
 private class ArtKeyer : Keyer<ArtRef> {
     override fun key(data: ArtRef, options: Options) = data.key()

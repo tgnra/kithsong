@@ -1,6 +1,7 @@
 package ng.kithso.android.ui
 
 import android.widget.Toast
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import ng.kithso.android.data.Addition
 import ng.kithso.android.data.Album
+import ng.kithso.android.data.AlbumGroup
 import ng.kithso.android.data.Artist
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.DeleteOutcome
@@ -62,12 +64,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * The menus and dialogs for playlists, albums, artists and tracks, shown by [PlaylistSheets]
- * over everything: long-pressing a playlist, album, artist or track opens its menu
- * ([playlistMenu], [albumMenu], [artistMenu], [trackMenu]), and Add to playlist
- * ([addToPlaylist]) opens the list of playlists to add to, with New playlist… first. [editor]
- * is null when the library can't be edited, and [deleter] when nothing can be deleted from it
- * (the made-up one): the menus then offer only playing.
+ * The menus and dialogs for playlists, album groups, albums, artists and tracks, shown by
+ * [PlaylistSheets] over everything: long-pressing a playlist, album group, album, artist or
+ * track opens its menu ([playlistMenu], [albumGroupMenu], [albumMenu], [artistMenu],
+ * [trackMenu]), and Add to playlist ([addToPlaylist]) opens the list of playlists to add to,
+ * with New playlist… first; an album's Add to album group… likewise lists the album groups.
+ * [editor] is null when the library can't be edited, and [deleter] when nothing can be
+ * deleted from it (the made-up one): the menus then offer only playing.
  */
 @Stable
 class PlaylistActions(val editor: PlaylistEditor?, val deleter: LibraryDeleter? = null) {
@@ -78,8 +81,13 @@ class PlaylistActions(val editor: PlaylistEditor?, val deleter: LibraryDeleter? 
         sheet = Sheet.PlaylistMenu(playlist)
     }
 
-    fun albumMenu(album: Album) {
-        sheet = Sheet.AlbumMenu(album)
+    fun albumGroupMenu(group: AlbumGroup) {
+        sheet = Sheet.AlbumGroupMenu(group)
+    }
+
+    /** [groupUid]: the manual album group the album is listed from, which it can be taken out of. */
+    fun albumMenu(album: Album, groupUid: String? = null) {
+        sheet = Sheet.AlbumMenu(album, groupUid)
     }
 
     fun artistMenu(artist: Artist) {
@@ -97,16 +105,20 @@ class PlaylistActions(val editor: PlaylistEditor?, val deleter: LibraryDeleter? 
 
     internal sealed interface Sheet {
         data class PlaylistMenu(val playlist: Playlist) : Sheet
-        data class AlbumMenu(val album: Album) : Sheet
+        data class AlbumGroupMenu(val group: AlbumGroup) : Sheet
+        data class AlbumMenu(val album: Album, val groupUid: String?) : Sheet
         data class ArtistMenu(val artist: Artist) : Sheet
         data class TrackMenu(val track: Track, val removable: Boolean) : Sheet
         data class AddTo(val what: Addition) : Sheet
+        data class AddToGroup(val albumUid: String) : Sheet
     }
 
     internal sealed interface Dialog {
         data class NewPlaylist(val what: Addition) : Dialog
-        data class Rename(val uid: String, val name: String) : Dialog
-        data class Delete(val uid: String, val name: String) : Dialog
+        data class NewGroup(val albumUid: String) : Dialog
+        // A playlist's, or if [group] an album group's.
+        data class Rename(val uid: String, val name: String, val group: Boolean = false) : Dialog
+        data class Delete(val uid: String, val name: String, val group: Boolean = false) : Dialog
         /** Deleting an album, artist or track from the library, which is asked first. */
         data class DeleteFromLibrary(val what: Deletion) : Dialog
     }
@@ -117,14 +129,14 @@ private class SheetAction(val label: String, val icon: ImageVector, val onClick:
 
 /**
  * Shows [actions]' open menu or dialog, if any. [onPlay] plays a collection from its start,
- * or shuffled; [onDeleted] is called with a playlist's uid once it's been deleted, to close
- * its page.
+ * or shuffled; [onDeleted] is called with a playlist or album group once it's been deleted,
+ * to close its page.
  */
 @Composable
 fun PlaylistSheets(
     actions: PlaylistActions,
     onPlay: (CollectionRef, shuffle: Boolean) -> Unit,
-    onDeleted: (String) -> Unit,
+    onDeleted: (CollectionRef) -> Unit,
 ) {
     val editor = actions.editor
     val deleter = actions.deleter
@@ -154,9 +166,33 @@ fun PlaylistSheets(
                 },
             )
         }
+        is PlaylistActions.Sheet.AlbumGroupMenu -> {
+            val group = sheet.group
+            val ref = CollectionRef(CollectionRef.Kind.AlbumGroup, group.uid)
+            // Smart album groups can only be played.
+            val editable by produceState(false, group.uid) { value = editor?.isEditableGroup(group.uid) == true }
+            MenuSheet(
+                actions,
+                group.name,
+                pluralStringResource(R.plurals.albums, group.albumCount, group.albumCount),
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
+                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    if (editable) {
+                        add(SheetAction(stringResource(R.string.playlist_rename_menu), Icons.Edit) {
+                            actions.dialog = PlaylistActions.Dialog.Rename(group.uid, group.name, group = true)
+                        })
+                        add(SheetAction(stringResource(R.string.album_group_delete_menu), Icons.Delete) {
+                            actions.dialog = PlaylistActions.Dialog.Delete(group.uid, group.name, group = true)
+                        })
+                    }
+                },
+            )
+        }
         is PlaylistActions.Sheet.AlbumMenu -> {
             val album = sheet.album
             val ref = CollectionRef(CollectionRef.Kind.Album, album.uid)
+            val groupUid = sheet.groupUid
             MenuSheet(
                 actions,
                 album.title,
@@ -168,6 +204,14 @@ fun PlaylistSheets(
                         add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {
                             actions.addToPlaylist(Addition.Album(album.uid))
                         })
+                        add(SheetAction(stringResource(R.string.add_to_album_group_menu), Icons.LibraryAdd) {
+                            actions.sheet = PlaylistActions.Sheet.AddToGroup(album.uid)
+                        })
+                        if (groupUid != null) {
+                            add(SheetAction(stringResource(R.string.remove_from_album_group), Icons.Remove) {
+                                editor.removeFromAlbumGroup(groupUid, album.uid)
+                            })
+                        }
                     }
                     if (deleter != null) {
                         add(SheetAction(stringResource(R.string.delete_album_menu), Icons.Delete) {
@@ -226,7 +270,30 @@ fun PlaylistSheets(
                 },
             )
         }
-        is PlaylistActions.Sheet.AddTo -> if (editor != null) AddToPlaylistSheet(actions, editor, sheet.what)
+        is PlaylistActions.Sheet.AddTo -> if (editor != null) {
+            AddToSheet(
+                actions,
+                title = stringResource(R.string.add_to_playlist),
+                newLabel = stringResource(R.string.new_playlist_menu),
+                icon = Icons.LibraryMusic,
+                added = R.string.playlist_added,
+                load = editor::playlistChoices,
+                onNew = { actions.dialog = PlaylistActions.Dialog.NewPlaylist(sheet.what) },
+                onPick = { editor.addToPlaylist(it.uid, sheet.what) },
+            )
+        }
+        is PlaylistActions.Sheet.AddToGroup -> if (editor != null) {
+            AddToSheet(
+                actions,
+                title = stringResource(R.string.add_to_album_group),
+                newLabel = stringResource(R.string.new_album_group_menu),
+                icon = Icons.Album,
+                added = R.string.album_group_added,
+                load = editor::albumGroupChoices,
+                onNew = { actions.dialog = PlaylistActions.Dialog.NewGroup(sheet.albumUid) },
+                onPick = { editor.addToAlbumGroup(it.uid, sheet.albumUid) },
+            )
+        }
     }
 
     when (val dialog = actions.dialog) {
@@ -238,22 +305,38 @@ fun PlaylistSheets(
             onConfirm = { name -> editor?.addToNewPlaylist(name, dialog.what) },
             onDismiss = { actions.dialog = null },
         )
+        is PlaylistActions.Dialog.NewGroup -> NameDialog(
+            title = stringResource(R.string.new_album_group),
+            initial = "",
+            confirm = stringResource(R.string.create),
+            onConfirm = { name -> editor?.addToNewAlbumGroup(name, dialog.albumUid) },
+            onDismiss = { actions.dialog = null },
+        )
         is PlaylistActions.Dialog.Rename -> NameDialog(
-            title = stringResource(R.string.playlist_rename_title),
+            title = stringResource(if (dialog.group) R.string.album_group_rename_title else R.string.playlist_rename_title),
             initial = dialog.name,
             confirm = stringResource(R.string.rename),
-            onConfirm = { name -> if (name != dialog.name) editor?.renamePlaylist(dialog.uid, name) },
+            onConfirm = { name ->
+                if (name != dialog.name) {
+                    if (dialog.group) editor?.renameAlbumGroup(dialog.uid, name) else editor?.renamePlaylist(dialog.uid, name)
+                }
+            },
             onDismiss = { actions.dialog = null },
         )
         is PlaylistActions.Dialog.Delete -> AlertDialog(
             onDismissRequest = { actions.dialog = null },
             title = { Text(stringResource(R.string.playlist_delete_title, dialog.name)) },
-            text = { Text(stringResource(R.string.playlist_delete_text)) },
+            text = { Text(stringResource(if (dialog.group) R.string.album_group_delete_text else R.string.playlist_delete_text)) },
             confirmButton = {
                 TextButton(onClick = {
                     actions.dialog = null
-                    editor?.deletePlaylist(dialog.uid)
-                    onDeleted(dialog.uid)
+                    if (dialog.group) {
+                        editor?.deleteAlbumGroup(dialog.uid)
+                        onDeleted(CollectionRef(CollectionRef.Kind.AlbumGroup, dialog.uid))
+                    } else {
+                        editor?.deletePlaylist(dialog.uid)
+                        onDeleted(CollectionRef(CollectionRef.Kind.Playlist, dialog.uid))
+                    }
                 }) {
                     Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
                 }
@@ -384,17 +467,28 @@ private fun SheetTitle(title: String, subtitle: String?) {
 }
 
 /**
- * The playlists to add [what] to, New playlist… first, which asks for a name. Every manual
- * playlist is listed, those with nothing to play on this phone too. A toast says where it went.
+ * Add to playlist or Add to album group: [title] over New playlist… or New album group…
+ * ([newLabel]; [onNew] asks for a name), then the manual playlists or album groups [load]
+ * lists, those with nothing to play on this phone too. Picking one hands it to [onPick], and a
+ * toast says where it went ([added], with its name).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddToPlaylistSheet(actions: PlaylistActions, editor: PlaylistEditor, what: Addition) {
+private fun AddToSheet(
+    actions: PlaylistActions,
+    title: String,
+    newLabel: String,
+    icon: ImageVector,
+    @StringRes added: Int,
+    load: suspend () -> List<PlaylistChoice>?,
+    onNew: () -> Unit,
+    onPick: (PlaylistChoice) -> Unit,
+) {
     val state = rememberModalBottomSheetState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val current = actions.sheet
-    val choices by produceState<List<PlaylistChoice>?>(null, editor) { value = editor.playlistChoices() }
+    val choices by produceState<List<PlaylistChoice>?>(null, current) { value = load() }
     val close: (() -> Unit) -> Unit = { then ->
         scope.launch { state.hide() }.invokeOnCompletion {
             if (actions.sheet == current) actions.sheet = null
@@ -402,26 +496,26 @@ private fun AddToPlaylistSheet(actions: PlaylistActions, editor: PlaylistEditor,
         then()
     }
     ModalBottomSheet(onDismissRequest = { if (actions.sheet == current) actions.sheet = null }, sheetState = state) {
-        SheetTitle(stringResource(R.string.add_to_playlist), null)
+        SheetTitle(title, null)
         LazyColumn(Modifier.navigationBarsPadding()) {
             item(key = "new") {
                 ListItem(
-                    headlineContent = { Text(stringResource(R.string.new_playlist_menu)) },
+                    headlineContent = { Text(newLabel) },
                     leadingContent = { Icon(Icons.Add, contentDescription = null) },
                     colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.clickable { close { actions.dialog = PlaylistActions.Dialog.NewPlaylist(what) } },
+                    modifier = Modifier.clickable { close(onNew) },
                 )
             }
             items(choices.orEmpty(), key = { it.uid }) { choice ->
-                val added = stringResource(R.string.playlist_added, choice.name)
+                val toast = stringResource(added, choice.name)
                 ListItem(
                     headlineContent = { Text(choice.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingContent = { Icon(Icons.LibraryMusic, contentDescription = null) },
+                    leadingContent = { Icon(icon, contentDescription = null) },
                     colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                     modifier = Modifier.clickable {
                         close {
-                            editor.addToPlaylist(choice.uid, what)
-                            Toast.makeText(context, added, Toast.LENGTH_SHORT).show()
+                            onPick(choice)
+                            Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
                         }
                     },
                 )
@@ -430,7 +524,7 @@ private fun AddToPlaylistSheet(actions: PlaylistActions, editor: PlaylistEditor,
     }
 }
 
-/** Asks for a playlist's name, starting from [initial] (selected), for [onConfirm]. */
+/** Asks for a playlist's or album group's name, starting from [initial] (selected), for [onConfirm]. */
 @Composable
 private fun NameDialog(
     title: String,

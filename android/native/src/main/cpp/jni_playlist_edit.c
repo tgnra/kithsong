@@ -1,6 +1,7 @@
-/* JNI bindings for ng.kithso.core.PlaylistNatives: editing playlists (musiccore/playlist.h)
- * on an open CoreLibrary's handle. Kept apart from jni_bridge.c; as thin as it is: marshal
- * arguments, call musiccore, convert results. Failures throw ng.kithso.core.MusicCoreException. */
+/* JNI bindings for ng.kithso.core.PlaylistNatives and AlbumGroupNatives: editing playlists and
+ * album groups (musiccore/playlist.h) on an open CoreLibrary's handle. Kept apart from
+ * jni_bridge.c; as thin as it is: marshal arguments, call musiccore, convert results.
+ * Failures throw ng.kithso.core.MusicCoreException. */
 #include <jni.h>
 #include <stdint.h>
 
@@ -150,4 +151,74 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_PlaylistNatives_nativeEntries
   }
   mc_track_list_free(list);
   return out;
+}
+
+/* --- AlbumGroupNatives: album groups, the playlists of albums --- */
+
+/* A new album group called name; returns its uid. */
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeCreate(JNIEnv *env, jclass cls,
+                                                                           jlong handle, jstring name) {
+  (void)cls;
+  int ok = 1;
+  const char *cname = chars(env, name, &ok);
+  if (!ok) return NULL;
+  char uid[MC_UID_STRLEN];
+  mc_status st = mc_album_group_create(lib_of(handle), cname ? cname : "", uid);
+  release(env, name, cname);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  return (*env)->NewStringUTF(env, uid);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeRename(JNIEnv *env, jclass cls,
+                                                                        jlong handle, jstring uid,
+                                                                        jstring name) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = chars(env, uid, &ok);
+  const char *cname = chars(env, name, &ok);
+  mc_status st = ok ? mc_album_group_rename(lib_of(handle), cuid ? cuid : "", cname ? cname : "") : MC_OK;
+  release(env, uid, cuid);
+  release(env, name, cname);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeDelete(JNIEnv *env, jclass cls,
+                                                                        jlong handle, jstring uid) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = chars(env, uid, &ok);
+  if (!ok) return;
+  mc_status st = mc_album_group_delete(lib_of(handle), cuid ? cuid : "");
+  release(env, uid, cuid);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* Adds album to the end of the group; nothing if it's in it already. */
+JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeAdd(JNIEnv *env, jclass cls,
+                                                                     jlong handle, jstring uid,
+                                                                     jstring album) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = chars(env, uid, &ok);
+  const char *calbum = chars(env, album, &ok);
+  mc_status st = ok ? mc_album_group_add(lib_of(handle), cuid ? cuid : "", calbum ? calbum : "") : MC_OK;
+  release(env, uid, cuid);
+  release(env, album, calbum);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeRemove(JNIEnv *env, jclass cls,
+                                                                        jlong handle, jstring uid,
+                                                                        jstring album) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = chars(env, uid, &ok);
+  const char *calbum = chars(env, album, &ok);
+  mc_status st = ok ? mc_album_group_remove(lib_of(handle), cuid ? cuid : "", calbum ? calbum : "") : MC_OK;
+  release(env, uid, cuid);
+  release(env, album, calbum);
+  if (st != MC_OK) throw_status(env, st);
 }

@@ -114,8 +114,9 @@ fun App(
                 onSettings = { settingsOpen = true },
                 modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen || searchOpen),
                 onPlaylistMenu = actions::playlistMenu,
-                onAlbumMenu = actions::albumMenu,
+                onAlbumMenu = { actions.albumMenu(it) },
                 onArtistMenu = actions::artistMenu,
+                onAlbumGroupMenu = actions::albumGroupMenu,
             )
             if (settingsOpen) {
                 DismissibleScreen(
@@ -239,8 +240,8 @@ fun App(
             PlaylistSheets(
                 actions,
                 onPlay = playAll,
-                // Closes the deleted playlist's page, if it's open.
-                onDeleted = { uid -> stack.removeAll { it.kind == CollectionRef.Kind.Playlist && it.uid == uid } },
+                // Closes the deleted playlist's or album group's page, if it's open.
+                onDeleted = { ref -> stack.removeAll { it == ref } },
             )
             // Over everything: another device may ask to pair at any time.
             PairingDialogs(syncer)

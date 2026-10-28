@@ -10,12 +10,12 @@ sealed interface Addition {
     data class Album(val uid: String) : Addition
 }
 
-/** A manual playlist, as Add to playlist lists it. */
+/** A manual playlist, as Add to playlist lists it, or a manual album group, as Add to album group does. */
 @Immutable
 data class PlaylistChoice(val uid: String, val name: String)
 
 /**
- * Editing manual playlists, for a [LibrarySource] that can ([CoreLibrarySource]; the made-up
+ * Editing manual playlists and album groups, for a [LibrarySource] that can ([CoreLibrarySource]; the made-up
  * library can't, and the UI then offers no editing). The changes are made in the background;
  * [LibrarySource.library] follows, and [edits] counts them, so an open track list can be read
  * again even when the library looks no different (after a move, say). A change that fails is
@@ -49,4 +49,28 @@ interface PlaylistEditor {
 
     /** Moves entry [entryUid] to after [afterEntryUid] in its playlist, or to the start if null. */
     fun moveEntry(entryUid: String, afterEntryUid: String?)
+
+    // Album groups, the playlists of albums, are edited likewise. An album is in a group at
+    // most once. As with playlists, a group with no album on this phone isn't listed, so a new
+    // one is only made with an album in it; smart groups can't be edited or added to.
+
+    /** Every manual album group by name, those with nothing here too; null on failure. */
+    suspend fun albumGroupChoices(): List<PlaylistChoice>?
+
+    /** Whether [groupUid] is a manual album group, which can be edited. */
+    suspend fun isEditableGroup(groupUid: String): Boolean
+
+    /** Adds album [albumUid] to the end of album group [groupUid], unless it's in it already. */
+    fun addToAlbumGroup(groupUid: String, albumUid: String)
+
+    /** Makes an album group called [name] and adds album [albumUid] to it. */
+    fun addToNewAlbumGroup(name: String, albumUid: String)
+
+    fun renameAlbumGroup(groupUid: String, name: String)
+
+    /** Deletes the album group; its albums stay in the library. */
+    fun deleteAlbumGroup(groupUid: String)
+
+    /** Takes album [albumUid] out of album group [groupUid]. */
+    fun removeFromAlbumGroup(groupUid: String, albumUid: String)
 }

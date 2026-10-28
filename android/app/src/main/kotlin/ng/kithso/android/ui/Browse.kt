@@ -1,6 +1,6 @@
 package ng.kithso.android.ui
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -51,13 +51,19 @@ internal fun BrowseHeading(text: String) {
     )
 }
 
-/** An album's cover, title and [subtitle]; tapping it opens the album. */
+/** An album's cover, title and [subtitle]; tapping it opens the album, long-pressing it its menu. */
 @Composable
-private fun AlbumTile(album: Album, subtitle: String, onOpen: (CollectionRef) -> Unit, modifier: Modifier) {
+private fun AlbumTile(
+    album: Album,
+    subtitle: String,
+    onOpen: (CollectionRef) -> Unit,
+    onMenu: (Album) -> Unit,
+    modifier: Modifier,
+) {
     Column(
         modifier
             .clip(RoundedCornerShape(12.dp))
-            .clickable { onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid)) },
+            .combinedClickable(onLongClick = { onMenu(album) }) { onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid)) },
     ) {
         AlbumArt(
             album.art,
@@ -84,12 +90,12 @@ private fun AlbumTile(album: Album, subtitle: String, onOpen: (CollectionRef) ->
 
 /** One row of an album grid; a short last row keeps the tiles the same width. */
 @Composable
-internal fun AlbumGridRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) -> Unit) {
+internal fun AlbumGridRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) -> Unit, onMenu: (Album) -> Unit) {
     Row(
         Modifier.padding(horizontal = BrowseGutter).padding(bottom = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(TileSpacing),
     ) {
-        for (album in albums) AlbumTile(album, album.artist, onOpen, Modifier.weight(1f))
+        for (album in albums) AlbumTile(album, album.artist, onOpen, onMenu, Modifier.weight(1f))
         repeat(columns - albums.size) { Spacer(Modifier.weight(1f)) }
     }
 }
@@ -99,14 +105,14 @@ internal fun AlbumGridRow(albums: List<Album>, columns: Int, onOpen: (Collection
  * credited on) shows whose it is; the artist's own show their year.
  */
 @Composable
-internal fun AlbumStrip(albums: List<Album>, artist: String, onOpen: (CollectionRef) -> Unit) {
+internal fun AlbumStrip(albums: List<Album>, artist: String, onOpen: (CollectionRef) -> Unit, onMenu: (Album) -> Unit) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = BrowseGutter),
         horizontalArrangement = Arrangement.spacedBy(TileSpacing),
     ) {
         items(albums, key = { it.uid }) { album ->
             val subtitle = if (album.artist != artist) album.artist else if (album.year > 0) album.year.toString() else ""
-            AlbumTile(album, subtitle, onOpen, Modifier.width(StripTileWidth))
+            AlbumTile(album, subtitle, onOpen, onMenu, Modifier.width(StripTileWidth))
         }
     }
 }

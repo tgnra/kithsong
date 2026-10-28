@@ -45,7 +45,7 @@ private object ArtSeeds {
     private val NONE = Color.Unspecified
     private val cache = LruCache<String, Color>(64)
 
-    private val ArtRef.key get() = if (file != null) "$file:$version" else "art:$uid"
+    private val ArtRef.key get() = if (file != null) "$file:$version" else "art:$uid:$label"
 
     fun cached(art: ArtRef): Color? = cache[art.key]?.takeIf { it != NONE }
 

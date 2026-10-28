@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
+import ng.kithso.android.data.Album
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.Track
@@ -73,7 +74,8 @@ import kotlinx.coroutines.launch
  * as the desktops have above a track list), then its tracks. Tapping a track plays the list
  * from there ([onPlay]), shuffled or not as shuffle is; long-pressing one opens its menu
  * ([PlaylistActions.trackMenu]). An artist's albums come before their tracks, and an album
- * group shows its albums; [onOpen] opens an album. A smart list in random order has a button
+ * group shows its albums; [onOpen] opens an album, and long-pressing one opens its menu
+ * ([PlaylistActions.albumMenu]), which in a manual album group can take it out. A smart list in random order has a button
  * to reshuffle it. [onBack] slides the screen away; it is also dismissed by swiping right.
  *
  * A manual playlist has an Edit button, which shows each track with a button to remove it and
@@ -108,6 +110,11 @@ fun DetailScreen(
     val editable by produceState(false, ref, edits) {
         value = ref.kind == CollectionRef.Kind.Playlist && editor?.isEditable(ref.uid) == true
     }
+    // A manual album group's albums can be taken out of it, from their menus.
+    val editableGroup by produceState(false, ref, edits) {
+        value = ref.kind == CollectionRef.Kind.AlbumGroup && editor?.isEditableGroup(ref.uid) == true
+    }
+    val albumMenu: (Album) -> Unit = { actions.albumMenu(it, groupUid = ref.uid.takeIf { editableGroup }) }
     var editing by rememberSaveable { mutableStateOf(false) }
 
     // A playlist's or album group's picture is looked up after the library is read, so it
@@ -179,7 +186,7 @@ fun DetailScreen(
                 }
                 if (group) {
                     items(albums.chunked(columns), key = { "albums:${it.first().uid}" }, contentType = { "albums" }) { row ->
-                        AlbumGridRow(row, columns, onOpen)
+                        AlbumGridRow(row, columns, onOpen, albumMenu)
                     }
                     return@LazyColumn
                 }
@@ -187,7 +194,7 @@ fun DetailScreen(
                     item(key = "albums", contentType = "albums") {
                         Column {
                             BrowseHeading(stringResource(R.string.section_albums))
-                            AlbumStrip(albums, list?.title.orEmpty(), onOpen)
+                            AlbumStrip(albums, list?.title.orEmpty(), onOpen, albumMenu)
                             if (tracks.isNotEmpty()) BrowseHeading(stringResource(R.string.tracks_title))
                         }
                     }

@@ -5,7 +5,6 @@
 Big pieces that haven't been started, or that only one platform has.
 
 - **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; none can create, edit, rename or delete one. Needs a rule editor (built from mc_smart_field_get())
-- **Album group editing on Android** - Android lists and plays groups, but can't create, rename, delete or fill one
 - **Import on Android** - removed for now (music arrives by sync); see Android below
 - **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard; no on-screen control anywhere, and Android doesn't duck with it yet
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
@@ -23,7 +22,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Artists | yes (no art) | yes (no art) | yes (matched by name) | no |
 | Playlists: browse | yes | yes | yes | no |
 | Playlists: edit | yes | yes | yes | no |
-| Album groups | yes | yes | browse and play only | no |
+| Album groups | yes | yes | yes (no reorder) | no |
 | Smart playlists | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
 | Recents | yes | yes | yes (core's) | no |
 | Search | yes | yes | yes | no |
@@ -57,8 +56,8 @@ Big pieces that haven't been started, or that only one platform has.
 - All - multi-select in track lists, so several tracks can be deleted or added to a playlist at once
 
 ### Album groups
-- Android - create, rename, delete, add and remove albums (Windows and Linux have it)
-- Core - mc_album_group_move(), so albums in a group can be reordered
+- Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are); failed edits are only logged
+- Core - mc_album_group_move(), so albums in a group can be reordered (then Android too)
 - Windows - reorder albums in a group, and drag albums onto a group
 - Windows and Linux - play a whole group, smart groups too (queue its albums in order; Android has Play)
 
@@ -176,7 +175,7 @@ The album grid, track list, sidebar and search page have UI Automation providers
 ## Android
 
 - Upgrade Kotlin to 2.4, then Coil and MaterialKolor
-- Import and album group editing (see above)
+- Import (see above)
 
 ## Wear OS
 

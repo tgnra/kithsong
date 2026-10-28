@@ -12,16 +12,21 @@ import ng.kithso.core.ItemKind
 import ng.kithso.core.MusicCoreException
 import ng.kithso.core.SearchKind
 import ng.kithso.core.TrackInfo
+import ng.kithso.core.addToAlbumGroup
 import ng.kithso.core.albumGroupAlbums
 import ng.kithso.core.albumGroupArt
 import ng.kithso.core.appendToPlaylist
+import ng.kithso.core.createAlbumGroup
 import ng.kithso.core.createPlaylist
+import ng.kithso.core.deleteAlbumGroup
 import ng.kithso.core.deletePermanently
 import ng.kithso.core.deletePlaylist
 import ng.kithso.core.deletePreview
 import ng.kithso.core.movePlaylistEntry
 import ng.kithso.core.playlistEntries
+import ng.kithso.core.removeFromAlbumGroup
 import ng.kithso.core.removePlaylistEntry
+import ng.kithso.core.renameAlbumGroup
 import ng.kithso.core.renamePlaylist
 import ng.kithso.core.artistAlbums
 import ng.kithso.core.artistTracks
@@ -66,8 +71,9 @@ import java.io.File
  * [library] is updated with those that changed. Meanwhile each shows the picture it last
  * had, kept in [prefs] across launches. Smart lists show their first cover.
  *
- * Manual playlists are edited here too ([PlaylistEditor]), and albums, artists and tracks
- * deleted ([LibraryDeleter]), on [core], each change followed by a [refresh].
+ * Manual playlists and album groups are edited here too ([PlaylistEditor]), and albums,
+ * artists and tracks deleted ([LibraryDeleter]), on [core], each change followed by a
+ * [refresh].
  */
 class CoreLibrarySource(
     private val dir: File,
@@ -307,6 +313,35 @@ class CoreLibrarySource(
 
     override fun moveEntry(entryUid: String, afterEntryUid: String?) =
         edit("move playlist entry $entryUid") { it.movePlaylistEntry(entryUid, afterEntryUid) }
+
+    override suspend fun albumGroupChoices(): List<PlaylistChoice>? = withContext(core) {
+        try {
+            open()?.albumGroups()?.map { PlaylistChoice(it.uid, it.name) }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't list the album groups", e)
+            null
+        }
+    }
+
+    override suspend fun isEditableGroup(groupUid: String): Boolean = withContext(core) {
+        groupUid in contents.albumGroups && groupUid !in contents.smart
+    }
+
+    override fun addToAlbumGroup(groupUid: String, albumUid: String) =
+        edit("add album $albumUid to album group $groupUid") { it.addToAlbumGroup(groupUid, albumUid) }
+
+    override fun addToNewAlbumGroup(name: String, albumUid: String) = edit("make album group $name") {
+        it.addToAlbumGroup(it.createAlbumGroup(name), albumUid)
+    }
+
+    override fun renameAlbumGroup(groupUid: String, name: String) =
+        edit("rename album group $groupUid") { it.renameAlbumGroup(groupUid, name) }
+
+    override fun deleteAlbumGroup(groupUid: String) =
+        edit("delete album group $groupUid") { it.deleteAlbumGroup(groupUid) }
+
+    override fun removeFromAlbumGroup(groupUid: String, albumUid: String) =
+        edit("remove album $albumUid from album group $groupUid") { it.removeFromAlbumGroup(groupUid, albumUid) }
 
     // On [core]. The tracks [what] adds: an album's that have a file here, as the album lists
     // them, since that's what this phone shows of it.

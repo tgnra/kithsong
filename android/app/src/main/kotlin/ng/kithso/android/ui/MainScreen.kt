@@ -185,10 +185,11 @@ fun MainScreen(
     onSync: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
-    // Long-pressing a playlist, an album or an artist opens its menu.
+    // Long-pressing a playlist, an album group, an album or an artist opens its menu.
     onPlaylistMenu: (Playlist) -> Unit = {},
     onAlbumMenu: (Album) -> Unit = {},
     onArtistMenu: (Artist) -> Unit = {},
+    onAlbumGroupMenu: (AlbumGroup) -> Unit = {},
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -247,6 +248,7 @@ fun MainScreen(
                         pluralStringResource(R.plurals.albums, item.group.albumCount, item.group.albumCount),
                         item.group.art,
                         RoundedCornerShape(8.dp),
+                        onLongClick = { onAlbumGroupMenu(item.group) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.AlbumGroup, item.group.uid)) }
                     is MainItem.AlbumRow -> AlbumRow(item.albums, columns, onOpen, onAlbumMenu)
                     is MainItem.ArtistItem -> LibraryRow(

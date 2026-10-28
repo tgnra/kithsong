@@ -43,3 +43,34 @@ internal object PlaylistNatives {
     @JvmStatic external fun nativeMove(handle: Long, entryUid: String, afterEntryUid: String?)
     @JvmStatic external fun nativeRemove(handle: Long, entryUid: String)
 }
+
+// Editing album groups, the playlists of albums (also musiccore/playlist.h), likewise. An album
+// is in a group at most once, so adding and removing name the album. Listing them is
+// CoreLibrary.albumGroups and albumGroupAlbums. Each throws MusicCoreException, ERR_NOT_FOUND
+// (-3) when the group or album doesn't exist, or for a removal, the album isn't in the group.
+
+/** A new, empty album group called [name] (not blank); returns its uid. */
+fun CoreLibrary.createAlbumGroup(name: String): String = AlbumGroupNatives.nativeCreate(handle, name)
+
+fun CoreLibrary.renameAlbumGroup(groupUid: String, name: String) = AlbumGroupNatives.nativeRename(handle, groupUid, name)
+
+/** Deletes the group and its entries; the albums are untouched. */
+fun CoreLibrary.deleteAlbumGroup(groupUid: String) = AlbumGroupNatives.nativeDelete(handle, groupUid)
+
+/** Adds [albumUid] at the end of the group; nothing changes if it's in it already. */
+fun CoreLibrary.addToAlbumGroup(groupUid: String, albumUid: String) = AlbumGroupNatives.nativeAdd(handle, groupUid, albumUid)
+
+fun CoreLibrary.removeFromAlbumGroup(groupUid: String, albumUid: String) =
+    AlbumGroupNatives.nativeRemove(handle, groupUid, albumUid)
+
+internal object AlbumGroupNatives {
+    init {
+        System.loadLibrary("kithsong_jni")
+    }
+
+    @JvmStatic external fun nativeCreate(handle: Long, name: String): String
+    @JvmStatic external fun nativeRename(handle: Long, uid: String, name: String)
+    @JvmStatic external fun nativeDelete(handle: Long, uid: String)
+    @JvmStatic external fun nativeAdd(handle: Long, uid: String, albumUid: String)
+    @JvmStatic external fun nativeRemove(handle: Long, uid: String, albumUid: String)
+}
