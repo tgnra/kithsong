@@ -37,3 +37,6 @@ CMakeUserPresets.json
 *.keystore
 
 .claude/
+
+# Local-only helpers
+/scripts/rewrite-email.sh
