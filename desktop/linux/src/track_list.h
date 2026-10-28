@@ -3,17 +3,19 @@
  *   +------+  OK Computer                  [x]
  *   | art  |  Radiohead
  *   +------+  1997 · 12 tracks · 53 min
+ *   [     |> Play     ] [    >< Shuffle    ]
  *   ----------------------------------------
  *    1   Airbag                        4:44
  *   >)   Paranoid Android              6:23   <- playing, in the accent colour
  *
- * Track numbers and durations are dimmed; on albums with more than one disc the numbers
- * read "2-5"; in a playlist they count its places. Double-click or Enter plays a track;
- * right-click opens its menu (Add to Playlist; in a playlist also Move Up, Move Down and
- * Remove from Playlist). A playlist's tracks can be dragged into another order too, and its
- * header has a menu (the "..." beside close) to rename or delete it. Escape or the close
- * button closes the pane. A GtkListView, so long albums stay cheap. Only one list exists at
- * a time.
+ * Play and Shuffle play the whole list, in order or shuffled; they're insensitive when
+ * nothing in it can be played here. Track numbers and durations are dimmed; on albums with
+ * more than one disc the numbers read "2-5"; in a playlist they count its places.
+ * Double-click or Enter plays a track; right-click opens its menu (Add to Playlist; in a
+ * playlist also Move Up, Move Down and Remove from Playlist). A playlist's tracks can be
+ * dragged into another order too, and its header has a menu (the "..." beside close) to
+ * rename or delete it. Escape or the close button closes the pane. A GtkListView, so long
+ * albums stay cheap. Only one list exists at a time.
  */
 #ifndef MUSICAPP_TRACK_LIST_H
 #define MUSICAPP_TRACK_LIST_H
@@ -27,6 +29,9 @@
  * reloads it with track_list_show(). Any may be NULL. */
 typedef struct track_list_callbacks {
   void (*play)(void *user, int index);
+  /* The header's Play and Shuffle: every track, from the first in order (shuffle off), or
+   * shuffled (shuffle on). */
+  void (*play_all)(void *user, gboolean shuffled);
   void (*close)(void *user);
   void (*add_to_playlist)(void *user, const char *track_uid);
   /* In the shown playlist: take an entry out, or move it to after after_entry_uid (NULL =

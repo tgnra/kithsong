@@ -38,10 +38,12 @@ static struct {
   int announced;       /* the item last sent as now playing, or -1 */
   item *items;
   int count;
+  BOOL shuffle;
 
   /* What's shown, to tell what changed. */
   int index;
   mc_player_state state;
+  BOOL shown_shuffle;
 } s;
 
 static wchar_t *dup(const wchar_t *w) {
@@ -96,11 +98,13 @@ static void refresh(void) {
   const item *it = st.index >= 0 && st.index < s.count ? &s.items[st.index] : NULL;
   int duration_ms = it ? it->duration_ms : 0;
   if (!duration_ms) duration_ms = (int)st.duration_ms;
-  BOOL has_next = it && st.index + 1 < s.count;
+  BOOL has_next = it && (st.shuffle || st.index + 1 < s.count);
 
   BOOL new_track = st.index != s.index, new_state = st.state != s.state;
+  BOOL new_shuffle = !st.shuffle != !s.shown_shuffle; /* changes whether there's a next track */
   s.index = st.index;
   s.state = st.state;
+  s.shown_shuffle = st.shuffle;
   if (st.state != MC_PLAYER_PLAYING) {
     s.announced = -1;
   } else if (it && st.index != s.announced) {
@@ -116,7 +120,7 @@ static void refresh(void) {
   /* Stopped, the track stays in the now-playing strip, ready to play, but isn't marked. */
   track_list_set_playing(it && st.state != MC_PLAYER_STOPPED ? it->uid : NULL);
 
-  if (new_track || new_state) {
+  if (new_track || new_state || new_shuffle) {
     set_window_title(st.state != MC_PLAYER_STOPPED ? it : NULL);
     taskbar_set_state(it != NULL, st.state == MC_PLAYER_PLAYING, it != NULL, has_next);
     media_controls_set_state(st.state, it != NULL, has_next);
@@ -245,11 +249,12 @@ void playback_clear(void) {
 }
 
 void playback_play(const playback_track *tracks, int count, int start) {
-  if (count <= 0 || start < 0 || start >= count) return;
+  if (count <= 0 || start < -1 || start >= count) return;
   if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
     s.player = NULL;
     return;
   }
+  mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off */
   if (!s.media_controls) s.media_controls = media_controls_init(s.wnd, s.msgs, WM_MEDIA_BUTTON);
 
   const char **paths = calloc((size_t)count, sizeof *paths);
@@ -279,6 +284,20 @@ void playback_play(const playback_track *tracks, int count, int start) {
   mc_player_set_queue(s.player, paths, count, start);
   free(paths);
   refresh();
+}
+
+void playback_set_shuffle(BOOL on) {
+  s.shuffle = on;
+  if (s.player) {
+    mc_player_set_shuffle(s.player, on);
+    refresh();
+  } else if (s.changed) {
+    s.changed();
+  }
+}
+
+BOOL playback_shuffle(void) {
+  return s.shuffle;
 }
 
 BOOL playback_toggle(void) {
@@ -319,5 +338,5 @@ BOOL playback_has_current(void) {
 }
 
 BOOL playback_has_next(void) {
-  return playback_has_current() && s.index + 1 < s.count;
+  return playback_has_current() && (s.shuffle || s.index + 1 < s.count);
 }

@@ -37,6 +37,10 @@ mc_status mc_settings_set_device_name(mc_settings *s, const char *name);
 int mc_settings_bool(const mc_settings *s, const char *key, int def);
 mc_status mc_settings_set_bool(mc_settings *s, const char *key, int value);
 
+/* Whether playback shuffles (mc_player_set_shuffle()), as it was left. Off if never set. */
+int mc_settings_shuffle(const mc_settings *s);
+mc_status mc_settings_set_shuffle(mc_settings *s, int on);
+
 #ifdef __cplusplus
 }
 #endif

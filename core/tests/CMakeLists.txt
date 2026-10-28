@@ -51,6 +51,7 @@ musicapp_test(test_scrobbler)
 target_link_libraries(test_scrobbler PRIVATE mbedcrypto mc_yyjson)  # checks the signature independently
 target_include_directories(test_scrobbler PRIVATE "${PROJECT_BINARY_DIR}/core/generated")  # config.h
 musicapp_test(test_player)
+musicapp_test(test_shuffle)
 
 set_tests_properties(test_player PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
 musicapp_test(test_discovery)

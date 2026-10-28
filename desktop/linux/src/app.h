@@ -32,8 +32,8 @@ typedef struct app {
  * selection and scroll position. Call whenever the library changes, e.g. after an import. */
 void app_reload_library(app *a);
 
-/* Plays the album or playlist shown in the track list, from track start on, and puts it
- * first in the recents. */
+/* Plays the album or playlist shown in the track list, from track start on (or with start
+ * -1 from the first track, which shuffled is any), and puts it first in the recents. */
 void app_play_album(app *a, int start);
 
 /* Shows the album (or the playlist, if playlist) with uid selected on the Albums (or

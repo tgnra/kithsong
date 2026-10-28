@@ -3,12 +3,15 @@
  *   +------+  OK Computer          [...] [x]   <- [...], the playlist menu, for playlists only
  *   | art  |  Radiohead
  *   +------+  1997 · 12 tracks · 53 min
+ *   [     |> Play     ] [    >< Shuffle    ]
  *   ----------------------------------------
  *    1   Airbag                        4:44
  *   >)   Paranoid Android              6:23   <- playing, in the accent colour
  *
- * Track numbers and durations are secondary text; in a playlist the numbers count its
- * places. Tracks with no file on this device are greyed out. Clicking selects a track;
+ * Play and Shuffle play the whole list, in order or shuffled (TLN_PLAY_ALL, TLN_SHUFFLE_ALL);
+ * they're greyed out when nothing in it can be played here. Track numbers and durations are
+ * secondary text; in a playlist the numbers count its places. Tracks with no file on this
+ * device are greyed out. Clicking selects a track;
  * double-clicking or Enter plays it. Right-click (or the menu key) opens a menu for the
  * track: Add to Playlist (add_to_playlist.c), and in a playlist also Move Up, Move Down and
  * Remove from Playlist. A playlist's tracks can be dragged into another order too, or moved
@@ -35,6 +38,10 @@
 #define TLN_DELETE_PLAYLIST 6
 /* Sent likewise when the user closes the pane, with its close button or Escape. */
 #define TLN_CLOSE 7
+/* And for the header's Play and Shuffle buttons: play every track, from the first in order
+ * (shuffle off), or shuffled (shuffle on). */
+#define TLN_PLAY_ALL 8
+#define TLN_SHUFFLE_ALL 9
 
 typedef struct track_list_request {
   char track_uid[MC_UID_STRLEN];

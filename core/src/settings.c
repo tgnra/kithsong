@@ -136,3 +136,7 @@ mc_status mc_settings_set_bool(mc_settings *s, const char *key, int value) {
   yyjson_mut_obj_remove_key(root, key);
   return yyjson_mut_obj_add_bool(s->doc, root, key, value != 0) ? MC_OK : MC_ERR_NOMEM;
 }
+
+int mc_settings_shuffle(const mc_settings *s) { return mc_settings_bool(s, "shuffle", 0); }
+
+mc_status mc_settings_set_shuffle(mc_settings *s, int on) { return mc_settings_set_bool(s, "shuffle", on); }

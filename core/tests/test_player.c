@@ -158,6 +158,27 @@ int main(int argc, char **argv) {
   n = watch(player, seen, 8, 3000);
   CHECK(mc_player_take_played(player, &index, &started) == MC_ERR_NOT_FOUND);
 
+  /* Shuffled, the queue never ends: each round plays every item once, and the next round
+   * doesn't start with the one just played. */
+  const char *three[] = {a, b, a};
+  CHECK(mc_player_set_shuffle(player, 1) == MC_OK);
+  CHECK(mc_player_set_queue(player, three, 3, -1) == MC_OK);
+  n = watch(player, seen, 8, 2500);
+  mc_player_status_get(player, &st);
+  CHECK(st.shuffle && st.state == MC_PLAYER_PLAYING);
+  CHECK(n >= 6);
+  if (n >= 6) {
+    CHECK(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2]);
+    CHECK(seen[3] != seen[4] && seen[4] != seen[5] && seen[3] != seen[5]);
+  }
+  /* Turned off, it plays on in order to the end of the queue, and stops there. (These are
+   * short enough that the items after the current one are buffered already, so the order
+   * changes after them.) */
+  CHECK(mc_player_set_shuffle(player, 0) == MC_OK);
+  n = watch(player, seen, 8, 3000);
+  mc_player_status_get(player, &st);
+  CHECK(!st.shuffle && st.state == MC_PLAYER_STOPPED);
+  CHECK(n && seen[n - 1] == 2);
 
   mc_player_free(player);
   mc_remove(a);

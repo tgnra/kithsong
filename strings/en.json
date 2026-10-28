@@ -43,6 +43,9 @@
     "pause": "Pause",
     "previous_track": "Previous track",
     "next_track": "Next track",
+    "shuffle": { "text": "Shuffle", "note": "Button above a list of tracks that plays them in a random order; also the shuffle toggle's name for accessibility." },
+    "shuffle_on": { "text": "Shuffle on", "note": "Tooltip of the shuffle toggle in the now-playing bar while it's on." },
+    "shuffle_off": { "text": "Shuffle off", "note": "Tooltip of the shuffle toggle in the now-playing bar while it's off." },
     "seek": { "text": "Position", "note": "The seek bar's name for accessibility." },
     "now_playing_artist": { "text": "— {0}", "note": "After the track's title in the now-playing bar, dimmed: its artist." },
 

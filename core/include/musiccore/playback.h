@@ -51,17 +51,27 @@ mc_status mc_player_new(mc_player_cb cb, void *user, mc_player **out);
 /* Stops playback and closes the audio device. */
 void mc_player_free(mc_player *player);
 
-/* Replaces the queue with count files (UTF-8 paths, copied) and plays item start. Plays not
- * yet taken with mc_player_take_played() are dropped, as their indexes were into the old
- * queue: take them first. */
+/* Replaces the queue with count files (UTF-8 paths, copied) and plays item start, or with
+ * start -1, the first item (shuffled, any item). Plays not yet taken with
+ * mc_player_take_played() are dropped, as their indexes were into the old queue: take them
+ * first. */
 mc_status mc_player_set_queue(mc_player *player, const char *const *paths, int count, int start);
-/* Plays queue item index from its start. */
+/* Plays queue item index from its start. Shuffled, the rest are shuffled afresh after it. */
 mc_status mc_player_skip_to(mc_player *player, int index);
 /* The next item. After the last one, stops with the first item current, as when the queue
  * plays out by itself. */
 mc_status mc_player_next(mc_player *player);
 /* Back to the start of the item, or to the previous item when within its first 3 seconds. */
 mc_status mc_player_previous(mc_player *player);
+
+/* Shuffle (off to begin with). The queue then plays in a shuffled order (a Miller Shuffle,
+ * see src/playback/shuffle.h) that next() and previous() follow too, and never ends: once
+ * every item has played, it goes on in a new shuffle, which doesn't start with the item
+ * just played. Turning it on carries on from the current item with the rest of the queue
+ * shuffled; turning it off carries on from the current item in queue order. (Should the
+ * next item be buffered already, in a track's last second, the new order starts after it
+ * instead.) Set it before mc_player_set_queue() to start a queue shuffled. */
+mc_status mc_player_set_shuffle(mc_player *player, int on);
 
 mc_status mc_player_pause(mc_player *player);
 /* Carries on from where it was paused, or when stopped, plays the current item. */
@@ -76,6 +86,7 @@ typedef struct mc_player_status {
   mc_player_state state;
   int index;           /* current queue item, -1 if the queue is empty */
   int count;           /* items in the queue */
+  int shuffle;         /* see mc_player_set_shuffle(); there's always a next item then */
   int64_t position_ms; /* in the current item, as heard */
   int64_t duration_ms; /* of the current item, 0 if unknown (or not open yet) */
 } mc_player_status;

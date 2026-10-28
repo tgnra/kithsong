@@ -68,6 +68,7 @@ add_library(musiccore STATIC
   src/search/search.c
   src/playback/decoder.c
   src/playback/player.c
+  src/playback/shuffle.c
   src/tagger/tag_io.cpp
   src/tagger/musicbrainz.c
   src/tagger/match.c
