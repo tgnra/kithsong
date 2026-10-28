@@ -27,6 +27,10 @@
  * album then failed. */
 void album_group_create_present(GtkWidget *parent, mc_library *lib, const char *album_uid,
                                 void (*changed)(void *user), void *user);
+/* Create with no album (the Album groups page's +), calling created with the new group's
+ * uid once it's made. */
+void album_group_new_present(GtkWidget *parent, mc_library *lib, void (*created)(void *user, const char *uid),
+                             void *user);
 /* For group uid, currently called name. */
 void album_group_rename_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
                                 void (*changed)(void *user), void *user);

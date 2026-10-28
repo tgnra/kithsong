@@ -508,20 +508,26 @@ static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir) 
   g_object_unref(task);
 }
 
-int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *art_dir, int *hidden) {
+int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *art_dir, const char *shown,
+                                int *hidden) {
   char keep[MC_UID_STRLEN];
   grid_keep(widget, keep);
   grid *g = grid_of(widget);
   mc_playlist_list *list = NULL;
-  if (lib && mc_library_list_playlists(lib, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
+  if (lib && mc_library_list_playlists(lib, 0, &list) != MC_OK) list = NULL;
   mc_smart_list *smart = NULL;
   if (lib && mc_library_list_smart(lib, MC_LIST_PLAYABLE, &smart) != MC_OK) smart = NULL;
-  guint n = list ? (guint)list->count : 0;
-  *hidden = list ? list->hidden : 0;
-  AlbumItem **items = g_new0(AlbumItem *, n + (smart ? (guint)smart->count : 0) + 1);
-  for (guint i = 0; i < n; i++) {
+  guint count = list ? (guint)list->count : 0, n = 0;
+  *hidden = 0;
+  AlbumItem **items = g_new0(AlbumItem *, count + (smart ? (guint)smart->count : 0) + 1);
+  for (guint i = 0; i < count; i++) {
+    /* What MC_LIST_PLAYABLE would leave out, unless it's shown */
+    if (list->items[i].playable_count == 0 && g_strcmp0(list->items[i].uid, shown)) {
+      (*hidden)++;
+      continue;
+    }
     const char *known = g->art ? g_hash_table_lookup(g->art, list->items[i].uid) : NULL;
-    items[i] = album_item_new_playlist(&list->items[i], known);
+    items[n++] = album_item_new_playlist(&list->items[i], known);
   }
   mc_playlist_list_free(list);
   add_smart(MC_SMART_TRACKS, items, &n, smart);

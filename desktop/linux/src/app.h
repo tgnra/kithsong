@@ -31,10 +31,16 @@ typedef struct app {
   GtkListBox *top_nav;  /* the sidebar's Home (not available yet) and Search, above nav */
   GtkListBox *nav;      /* the sidebar's Albums, Artists, Playlists and Album groups */
   GtkWidget *settings;  /* the header bar's Settings button */
-  GtkStack *albums;     /* "empty" status page | "grid" | "no-playlists" status page | "playlists"
+  GtkStack *albums;     /* "empty" status page | "grid" | "playlists" (a header over playlists)
                          * | "groups" (album_groups.c) */
   AdwStatusPage *empty;        /* "No Albums" */
+  GtkWidget *pair;             /* its Pair with a device… button (devices_pair_button()) */
   AdwStatusPage *no_playlists; /* "No playlists yet", or none to play here */
+  GtkWidget *choose_sync;      /* its Choose what to sync button */
+  GtkStack *playlists;         /* "none" (no_playlists) | "grid", under the Playlists header */
+  char keep_playlist[MC_UID_STRLEN]; /* made with New playlist: shown though it has nothing to
+                                      * play here, until another page is picked */
+  int hidden_playlists;        /* playlists left out for having nothing to play here */
   GtkWidget *album_grid, *playlist_grid;
   app_view view;        /* the sidebar's library page picked last */
   AdwOverlaySplitView *album_split; /* the track list is its sidebar, at the end */
@@ -44,6 +50,15 @@ typedef struct app {
  * from the library, keeping the selection and scroll position. Call whenever the library
  * changes, e.g. after an import. */
 void app_reload_library(app *a);
+
+/* Updates what the empty Albums and Playlists pages suggest from this computer's place in
+ * sync (devices_sync_state()): pairing while it isn't in a group, Choose what to sync once
+ * it is. */
+void app_update_empty_pages(app *a);
+
+/* A header for a list page, as an album group's: its name (title-2) and a round + button
+ * with tooltip, which calls clicked(button, user). For Playlists and Album groups. */
+GtkWidget *app_list_header(const char *title, const char *tooltip, GCallback clicked, gpointer user);
 
 /* Plays the album or playlist shown in the track list, from track start on (or with start
  * -1 from the first track, which shuffled is any), and puts it first in the recents. */

@@ -868,6 +868,10 @@ static void refresh_devices(void) {
     }
   }
   sidebar_set_devices(devs, npaired, devs ? devs + npaired : NULL, nnearby);
+  /* For the empty pages: pairing while this PC isn't in a group, the sync profile once it is. */
+  int members = 0;
+  for (int i = 0; i < np; i++) members += !paired->items[i].removed;
+  album_grid_set_sync_state(!sync ? AG_SYNC_OFF : members ? AG_SYNC_GROUPED : AG_SYNC_ALONE);
   for (int i = 0; names && i < npaired + nnearby; i++) free(names[i]);
   free(names);
   free(devs);
@@ -1018,10 +1022,10 @@ static void pair_started(mc_status st, const wchar_t *name, const wchar_t *addre
   MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
 }
 
-/* A nearby device was clicked in the sidebar. Even one in another group: pairing then says
- * why it can't. */
-static void pair_nearby(void) {
-  const char *clicked = sidebar_clicked_nearby();
+/* Asks nearby device clicked to pair: one clicked in the sidebar, or picked from the empty
+ * Albums page's Pair with a Device... menu. Even one in another group: pairing then says why
+ * it can't. */
+static void pair_nearby_uid(const char *clicked) {
   mc_sync *sync = sync_bridge_get();
   if (!clicked) return;
   if (!sync) {
@@ -1057,6 +1061,54 @@ static void on_add_device_connect(void *user, const char *host, uint16_t port) {
   pair_started(mc_sync_pair_request_address(sync, host, port), NULL, address);
 }
 
+/* The empty Albums page's Pair with a Device...: a menu of the devices nearby, as the
+ * sidebar's DEVICES lists them, then Add Device by Address..., beneath the button. */
+static void pair_menu(void) {
+  enum { CMD_ADDRESS = 1, CMD_DEVICE_FIRST = 100 };
+  mc_sync *sync = sync_bridge_get();
+  if (!sync) {
+    sync_off_message();
+    return;
+  }
+  RECT button;
+  if (!album_grid_action_rect(&button)) return;
+  mc_sync_nearby_list *nearby = NULL;
+  if (mc_sync_list_nearby(sync, &nearby) != MC_OK) nearby = NULL;
+  HMENU menu = CreatePopupMenu();
+  int n = nearby ? nearby->count : 0;
+  for (int i = 0; i < n; i++) {
+    const mc_sync_nearby *d = &nearby->items[i];
+    wchar_t *name = wide_from_utf8(d->name && *d->name ? d->name : mc_str(MC_STR_DEVICE_UNNAMED));
+    AppendMenuW(menu, MF_STRING, CMD_DEVICE_FIRST + i, name ? name : L"");
+    free(name);
+  }
+  if (n == 0) AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, mc_wstr(MC_STR_DEVICES_NONE));
+  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_ADDRESS, mc_wstr_mnemonic(MC_STR_ADD_DEVICE_BY_ADDRESS_MENU));
+  UINT flags = TPM_RETURNCMD | TPM_LEFTBUTTON | TPM_CENTERALIGN | TPM_TOPALIGN;
+  TPMPARAMS avoid = {sizeof avoid, button};
+  int cmd = TrackPopupMenuEx(menu, flags, (button.left + button.right) / 2, button.bottom, g_app.wnd, &avoid);
+  DestroyMenu(menu);
+  if (cmd >= CMD_DEVICE_FIRST && cmd - CMD_DEVICE_FIRST < n) {
+    char uid[MC_UID_STRLEN];
+    snprintf(uid, sizeof uid, "%s", nearby->items[cmd - CMD_DEVICE_FIRST].uid);
+    mc_sync_nearby_list_free(nearby);
+    pair_nearby_uid(uid);
+    return;
+  }
+  mc_sync_nearby_list_free(nearby);
+  if (cmd == CMD_ADDRESS) add_device_show(g_app.wnd, on_add_device_connect, NULL);
+}
+
+/* The empty Playlists page's Choose What to Sync: this PC's own page, whose What to Sync
+ * picks the playlists it holds. */
+static void show_own_page(void) {
+  mc_sync *sync = sync_bridge_get();
+  if (!sync) return;
+  sidebar_select_device(mc_sync_device_uid(sync));
+  if (sidebar_selected_device()) show_page(PAGE_DEVICE);
+}
+
 static void on_command(int id, int code) {
   switch (id) {
     case ID_SIDEBAR:
@@ -1069,12 +1121,14 @@ static void on_command(int id, int code) {
         else if (library_page()) SetFocus(g_app.grid);
         else if (g_app.page == PAGE_ARTISTS) SetFocus(g_app.artists);
       } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
-      else if (code == SBN_PAIR_DEVICE) pair_nearby();
+      else if (code == SBN_PAIR_DEVICE) pair_nearby_uid(sidebar_clicked_nearby());
       else if (code == SBN_OPEN_RECENT) open_recent();
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) show_album();
       else if (code == AGN_LIBRARY_CHANGED) refresh_library();
+      else if (code == AGN_PAIR) pair_menu();
+      else if (code == AGN_SYNC_SETTINGS) show_own_page();
       else if (code == AGN_OPEN_GROUP && g_app.lib && album_grid_group() &&
                mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, album_grid_group()) == MC_OK)
         refresh_recents();

@@ -51,7 +51,10 @@ Big pieces that haven't been started, or that only one platform has.
   - Windows - "Add to playlist → New playlist…" with a track that has no file here makes a playlist that's hidden at once; say so, or grey the menu for such tracks
   - Linux - a playlist made in the Add to playlist dialog and left empty is only reachable from that dialog until a track is added
   - Windows and Linux - removing a playlist's last playable track makes the playlist vanish from the grid and its track list close; consider keeping the open one shown until it's left (Android closes the page)
-- Android - a new playlist can only be made from Add to playlist (empty ones are hidden there)
+  - Windows and Linux - a playlist made with the Playlists page's + stays shown (and selected) only until another page is picked; after that an empty one is reachable from Add to playlist alone
+- Android - a new playlist can only be made from Add to playlist (empty ones are hidden there); the desktops' Playlists page has a +
+- Android - when every playlist is hidden for having nothing to play here, the Playlists section just isn't there; the desktops say so and link to Choose what to sync
+- Windows - the Playlists and Album groups headers' + can't be reached with the keyboard (as the group header's buttons); Ctrl+N (see Keyboard shortcuts) would do
 - Android - drag-to-reorder only scrolls while the finger is moving
 - Android - failed edits are only logged; show a message
 - All - multi-select in track lists, so several tracks can be deleted or added to a playlist at once
@@ -142,6 +145,9 @@ Pairing two devices whose libraries both have music fails with library_mismatch.
 
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
+- Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
+- Windows and Linux - an empty library in a group (nothing imported anywhere yet) just says "Use Import to add music."; it could say the music arrives from the group, or link to Choose what to sync
+- Android - the empty main screen always says to pair, even when the phone is already in a group and its profile holds nothing; say "choose what to sync" there instead
 - Linux - a pairing request while the window is in the background goes unnoticed (Windows flashes the taskbar button); send a GNotification
 - Linux - with no sync.db yet (first run), sync can fail to start with "sync.db open failed: not an error" and Devices says "Sync is off (database error)"; it starts on the next run (seen several times in Docker under Xvfb)
 
@@ -221,6 +227,7 @@ Things built but not checked properly.
 - Sync: pairing with Windows or Android, the over-budget estimate, a watch's icon, switching library while a device page is open, and a real LAN (only two Docker containers so far)
 - Move library's refused close-request under a real window manager
 - An archive's sidebar row ("Offline. Keeps the whole library" under its name), only compiled
+- The empty Albums page's Pair with a device… menu (opening it, pairing a device picked there, Add device by address…), the empty Playlists page's Choose what to sync, and the Album groups page's +: only compiled; under Xvfb the button showed, and the Playlists + made a playlist that stayed shown until another page was picked
 
 ### Windows
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
@@ -228,6 +235,7 @@ Things built but not checked properly.
 - Deleting a track while it plays
 - Volume's fade (only silent test files so far)
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns and focus events
+- The empty Playlists page's Choose what to sync (needs this PC in a group with every playlist hidden), pairing from the empty Albums page's menu, and the new header buttons and empty-page button through UI Automation
 
 ### Android
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme

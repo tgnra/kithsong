@@ -43,7 +43,12 @@ void album_grid_set_library(mc_library *lib);
  * something to play here, with a placeholder and "Smart playlist" or "Smart album group"
  * beneath the name. A smart group opens like a group, with the albums its rule picks; in
  * place of More it has a Reshuffle button if it's in random order (which the grid does
- * itself, notifying AGN_LIBRARY_CHANGED), and nothing to rename, delete or remove. */
+ * itself, notifying AGN_LIBRARY_CHANGED), and nothing to rename, delete or remove.
+ *
+ * Playlists and album groups have a header too, with the page's name and a + button: New
+ * Playlist or New Album Group, which asks for a name (playlist_dialogs.c) and makes an empty
+ * one. A new group opens; a new playlist is selected, and stays on the page (though playlists
+ * with nothing to play here are hidden) until the grid shows another view. */
 typedef enum album_grid_view {
   AGV_ALBUMS,
   AGV_PLAYLISTS,
@@ -71,6 +76,19 @@ BOOL album_grid_back(void);
  * Delete. The grid makes those changes itself (add_to_playlist.c, playlist_dialogs.c), then
  * notifies AGN_LIBRARY_CHANGED. */
 
+/* This PC's place in sync, for the empty pages: with no albums and no group, Albums suggests
+ * pairing, with a Pair with a Device... button (AGN_PAIR); on Playlists, when every playlist
+ * is hidden for having nothing to play here and this PC is in a group, a Choose What to Sync
+ * button (AGN_SYNC_SETTINGS). */
+typedef enum album_grid_sync {
+  AG_SYNC_OFF,     /* sync isn't running: neither */
+  AG_SYNC_ALONE,   /* running, and this PC isn't in a group */
+  AG_SYNC_GROUPED, /* this PC is in a group */
+} album_grid_sync;
+void album_grid_set_sync_state(album_grid_sync state);
+/* The empty page's button, in screen coordinates (for AGN_PAIR's menu); FALSE if none. */
+BOOL album_grid_action_rect(RECT *screen);
+
 /* Where playlists' pictures are cached (UTF-8; see mc_playlist_art()). Without one,
  * playlists show the placeholder. */
 void album_grid_set_playlist_art_dir(const char *dir);
@@ -84,6 +102,12 @@ void album_grid_set_playlist_art_dir(const char *dir);
 /* Sent the same way after the grid changed the library (see above), for the parent to
  * refresh what shows it. */
 #define AGN_LIBRARY_CHANGED 3
+/* Sent the same way when the empty page's Pair with a Device... is pressed, for the parent to
+ * offer the devices to pair with (at album_grid_action_rect()). */
+#define AGN_PAIR 4
+/* Sent the same way when Choose What to Sync is pressed, for the parent to show this PC's
+ * page. */
+#define AGN_SYNC_SETTINGS 5
 
 /* The selected album (or playlist): copies its uid and returns its title, or returns NULL
  * if there's none. */
