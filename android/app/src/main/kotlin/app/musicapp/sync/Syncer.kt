@@ -313,7 +313,10 @@ class Syncer(
     /**
      * Syncs with every member once, for [SyncWorker]: runs sync if it isn't running, and waits
      * until each member has had a session or [timeoutMs] has passed. False if the app can't
-     * reach the network now, so it should try again later.
+     * reach the network now, so it should try again later. This is automatic sync, so the
+     * core's hourly limit applies: a member synced completely within the last hour gets no
+     * session until [SyncDevice.autoSyncAfterMs]. It is waited for only if that comes early
+     * in the run (as it does when the last run synced it), and otherwise left to a later run.
      */
     suspend fun syncOnce(timeoutMs: Long): Boolean {
         // In the background Android may block the app's network, even while WorkManager runs
@@ -323,12 +326,16 @@ class Syncer(
         try {
             val ready = withTimeoutOrNull(START_TIMEOUT_MS) { state.first { it.running || it.error != null } }
             if (ready?.running != true || !ready.inGroup) return true
-            val members = ready.members.mapTo(HashSet()) { it.uid }
-            withContext(thread) {
+            val members = withContext(thread) {
+                val sync = sync ?: return@withContext emptySet<String>()
                 done.value = emptySet()
-                sync?.syncNow(null)
+                sync.syncBackground(null)
+                // Read after the call, so the limit is as the core has it now.
+                val due = System.currentTimeMillis() + timeoutMs / 2
+                sync.devices().filter { !it.isSelf && !it.removed && it.autoSyncAfterMs < due }
+                    .mapTo(HashSet()) { it.uid }
             }
-            withTimeoutOrNull(timeoutMs) { done.first { it.containsAll(members) } }
+            if (members.isNotEmpty()) withTimeoutOrNull(timeoutMs) { done.first { it.containsAll(members) } }
         } catch (e: MusicCoreException) {
             Log.w(TAG, "Couldn't sync", e)
         } finally {

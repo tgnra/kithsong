@@ -645,7 +645,12 @@ int main(int argc, char **argv) {
     CHECK(lib_state(&c) == MC_SYNC_LIBRARY_NO_GROUP);
   }
 
-  /* With the scheduler on, an edit reaches the other side within seconds. */
+  /* With the scheduler on, an edit reaches the other side within seconds, once the rate
+   * limit is off: A and B just synced, so it would hold the edit for an hour (see
+   * test_sync_rate.c). */
+  mc_sync_set_test_auto_interval(a.sync, 0);
+  mc_sync_set_test_auto_interval(b.sync, 0);
+  CHECK(sync_now(&a, &b) == MC_OK); /* clears the limit the last session set */
   mc_sync_set_test_manual(a.sync, 0);
   mc_sync_set_test_manual(b.sync, 0);
   snprintf(sql, sizeof sql, "UPDATE tracks SET disc_no = 9 WHERE uid = '%s'", t2);

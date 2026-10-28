@@ -18,7 +18,8 @@ import java.util.concurrent.TimeUnit
  * seconds, but audio files may take much longer, so each run waits for nearly the ten minutes
  * a worker gets. A transfer cut off then keeps the files that arrived whole, and the next run
  * carries on with the rest. Without the app on screen there's no foreground service: Android
- * won't start one from the background.
+ * won't start one from the background. A member synced completely within the last hour, from
+ * here or by itself, gets no session until the hour is up (see [Syncer.syncOnce]).
  */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {

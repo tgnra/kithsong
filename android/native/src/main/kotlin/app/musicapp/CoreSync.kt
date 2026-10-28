@@ -21,6 +21,11 @@ data class SyncDevice(
     /** The last session with it, in Unix ms; 0 if never. */
     val lastSyncMs: Long,
     /**
+     * Unix ms before which this device starts no automatic session with it (an hour after the
+     * last complete one, MC_SYNC_AUTO_INTERVAL_MS); 0 if it may now. See [CoreSync.syncBackground].
+     */
+    val autoSyncAfterMs: Long,
+    /**
      * Its own report of its files (sync_status). The rest are 0 without one: it hasn't
      * finished a file phase yet.
      */
@@ -302,6 +307,12 @@ class CoreSync(
     /** The Sync button: as [syncNow], and confirms this device's profile and [uid]'s (each member's for null). */
     fun confirmSyncNow(uid: String? = null) = nativeWithDevice(handle, CALL_CONFIRM_SYNC_NOW, uid)
 
+    /**
+     * As [syncNow], for background work: a member synced completely within the last hour gets
+     * no session until [SyncDevice.autoSyncAfterMs], and then only if sync still runs.
+     */
+    fun syncBackground(uid: String? = null) = nativeWithDevice(handle, CALL_SYNC_BACKGROUND, uid)
+
     /** The library changed here, so members should hear of it soon. Any thread. */
     fun notifyChanged() = nativeNotifyChanged(handle)
 
@@ -466,6 +477,7 @@ class CoreSync(
         private const val CALL_REMOVE_DEVICE = 1
         private const val CALL_SYNC_NOW = 2
         private const val CALL_CONFIRM_SYNC_NOW = 3
+        private const val CALL_SYNC_BACKGROUND = 4
 
         init {
             System.loadLibrary("musicapp_jni")
