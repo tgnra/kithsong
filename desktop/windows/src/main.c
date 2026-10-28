@@ -41,7 +41,8 @@
  * sidebar sidebar.c, the track list track_list.c and the seekbar beside the playback buttons
  * now_playing.c. The track list's Add to Playlist menu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
- * changes and they're made here. The toolbar buttons, and the shuffle toggle after the seekbar
+ * changes (a smart playlist's too: its rule's editor is smart_editor.c) and they're made
+ * here. The toolbar buttons, and the shuffle toggle after the seekbar
  * ([S]), are owner-drawn here; shuffle is kept in the settings.
  *
  * Sync (sync_bridge.c) runs while a library is open, and stops before it closes, so switching
@@ -94,6 +95,7 @@
 #include "search_view.h"
 #include "settings_view.h"
 #include "sidebar.h"
+#include "smart_editor.h"
 #include "sync_bridge.h"
 #include "theme.h"
 #include "track_list.h"
@@ -716,10 +718,18 @@ static void on_track_request(int code) {
         MessageBoxW(g_app.wnd, mc_wstr(MC_STR_PLAYLIST_MOVE_FAILED), mc_wstr(MC_STR_PLAYLIST), MB_OK | MB_ICONERROR);
       break;
     case TLN_RENAME_PLAYLIST:
-      if (name && !strcmp(uid, req->playlist_uid)) changed = playlist_rename_dialog(g_app.wnd, g_app.lib, uid, name);
+      if (!name || strcmp(uid, req->playlist_uid)) break;
+      if (album_grid_selection_smart(NULL)) changed = smart_rename_dialog(g_app.wnd, g_app.lib, uid, name, MC_SMART_TRACKS);
+      else changed = playlist_rename_dialog(g_app.wnd, g_app.lib, uid, name);
       break;
     case TLN_DELETE_PLAYLIST:
-      if (name && !strcmp(uid, req->playlist_uid)) changed = playlist_delete_dialog(g_app.wnd, g_app.lib, uid, name);
+      if (!name || strcmp(uid, req->playlist_uid)) break;
+      if (album_grid_selection_smart(NULL)) changed = smart_delete_dialog(g_app.wnd, g_app.lib, uid, name, MC_SMART_TRACKS);
+      else changed = playlist_delete_dialog(g_app.wnd, g_app.lib, uid, name);
+      break;
+    case TLN_EDIT_SMART: /* a smart playlist's rule */
+      if (name && !strcmp(uid, req->playlist_uid) && album_grid_selection_smart(NULL))
+        changed = smart_edit_dialog(g_app.wnd, g_app.lib, uid);
       break;
     case TLN_DELETE_TRACK:
       for (int i = 0, n = track_list_count(); i < n; i++) {
@@ -1071,6 +1081,10 @@ static void on_command(int id, int code) {
       } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       else if (code == SBN_PAIR_DEVICE) pair_nearby();
       else if (code == SBN_OPEN_RECENT) open_recent();
+      else if (code == SBN_NEW_SMART_PLAYLIST || code == SBN_NEW_SMART_GROUP) {
+        show_page(code == SBN_NEW_SMART_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUM_GROUPS);
+        album_grid_new_smart();
+      }
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) show_album();
