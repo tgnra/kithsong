@@ -206,6 +206,10 @@ class CoreSync(
          * How a pairing attempt ended. [initiator]: this device asked, and its user typed the
          * code. [uid] and [name] are "" if the other device was never reached. After
          * [PairReason.WrongCode] on the initiator, the pairing waits for another code.
+         * When paired, [joined] says this device joined (the other's group, or a new group
+         * syncing the other's library): it holds nothing yet, and its sync settings are the
+         * ones to choose. Then [archiveName] is the group's archive (the first by name of
+         * [archives]), "" and 0 if the other device didn't say.
          */
         data class PairResult(
             val uid: String,
@@ -214,6 +218,9 @@ class CoreSync(
             val reason: PairReason,
             val attemptsLeft: Int,
             val status: Int,
+            val joined: Boolean = false,
+            val archiveName: String = "",
+            val archives: Int = 0,
         ) : Event
 
         /**
@@ -431,8 +438,17 @@ class CoreSync(
         listener(Event.PairCode(code, requester, attemptsLeft))
 
     @Suppress("unused")
-    private fun onPairResult(uid: String, name: String, initiator: Boolean, reason: Int, attemptsLeft: Int, status: Int) =
-        listener(Event.PairResult(uid, name, initiator, PairReason.entries[reason], attemptsLeft, status))
+    private fun onPairResult(
+        uid: String,
+        name: String,
+        initiator: Boolean,
+        reason: Int,
+        attemptsLeft: Int,
+        status: Int,
+        joined: Boolean,
+        archiveName: String,
+        archives: Int,
+    ) = listener(Event.PairResult(uid, name, initiator, PairReason.entries[reason], attemptsLeft, status, joined, archiveName, archives))
 
     @Suppress("unused")
     private fun onProgress(

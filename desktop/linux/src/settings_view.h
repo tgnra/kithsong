@@ -67,6 +67,9 @@
 typedef gboolean (*settings_view_open_library_fn)(void *user, const char *dir);
 /* Moves the library somewhere the user picks. Called once the dialog has closed. */
 typedef void (*settings_view_move_library_fn)(void *user);
+/* How settings_view_choose_library() ended: dir is the library open now, or NULL if it
+ * didn't change; saved, whether settings.json names it. */
+typedef void (*settings_view_chosen_fn)(gpointer data, const char *dir, gboolean saved);
 
 /* What the Sync group needs of the app. Every member runs on the main thread. */
 typedef struct settings_view_sync {
@@ -82,5 +85,14 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
                            settings_view_open_library_fn open_library,
                            settings_view_move_library_fn move_library, const settings_view_sync *sync,
                            void *user);
+
+/* Open Another Library's steps, for Settings and for the pairing dialog's Create a New
+ * Library (empty_only): a folder picker over parent; with empty_only, a folder with anything
+ * in it is refused and the picker opens again; then open_library(user, dir), and the folder
+ * saved to settings.json. done(data, ...) says how it ended, then free_data(data) (either may
+ * be NULL). */
+void settings_view_choose_library(GtkWidget *parent, const char *settings_dir,
+                                  settings_view_open_library_fn open_library, void *user, gboolean empty_only,
+                                  settings_view_chosen_fn done, gpointer data, GDestroyNotify free_data);
 
 #endif

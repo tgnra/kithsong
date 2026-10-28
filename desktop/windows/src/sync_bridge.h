@@ -21,7 +21,8 @@
 typedef enum {
   SYNC_EV_PEER,        /* on_peer: uid, online, member */
   SYNC_EV_PAIR_CODE,   /* on_pair_code: code, name (the requester), attempts_left */
-  SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status */
+  SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status,
+                        * joined, archive_name, archives */
   SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_*, files_done, files_total, bytes_*,
                         * library_changed */
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
@@ -50,6 +51,9 @@ typedef struct sync_event {
   /* Progress: library rows or a file arrived since the last event posted for the device,
    * so the library views should reload. */
   int library_changed;
+  /* Pair result: this PC joined, and the group's archive (the first of archives). */
+  int joined, archives;
+  wchar_t archive_name[128];
 } sync_event;
 
 /* Creates and starts sync for lib, with sync.db in config_dir, reporting to wnd. device_name

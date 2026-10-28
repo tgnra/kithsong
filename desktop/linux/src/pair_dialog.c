@@ -10,6 +10,17 @@
  * pair.h). A wrong-code result with this many tries left means a new code is showing. */
 #define MAX_FAILURES 3
 
+/* settings.json's record that this computer showed which device is the archive. */
+#define ARCHIVE_EXPLAINED_KEY "archive_explained"
+
+/* What the ended page's button above OK does. */
+typedef enum ended_action {
+  ACT_NONE,
+  ACT_CHOOSE,      /* Choose What to Sync: the page of the device that joined */
+  ACT_NEW_LIBRARY, /* Create a New Library, then offer to pair again */
+  ACT_PAIR_AGAIN,  /* Pair Again, after that */
+} ended_action;
+
 /* One open dialog. Freed when it closes. */
 typedef struct pair_dlg {
   AdwDialog *dialog;
@@ -19,17 +30,23 @@ typedef struct pair_dlg {
   gboolean ended;    /* shows how the pairing ended */
   gboolean quiet;    /* closed by pair_dialog_close_all() or on the end: don't cancel */
   char peer[MC_SYNC_DEVICE_NAME_MAX + 1];
+  GtkWidget *parent;            /* what it was presented over: the main window */
   AdwHeaderBar *header;
   GtkWidget *cancel, *pair;     /* the header bar's buttons */
   GtkWidget *stack;             /* "ask" | "ended" */
   GtkWidget *text, *code, *status;
-  GtkWidget *ended_icon, *ended_title, *ended_text, *ok;
+  GtkWidget *ended_icon, *ended_title, *ended_text, *action, *ok;
+  ended_action next;
+  char target[MC_UID_STRLEN];   /* ACT_CHOOSE's device; the other device for the rest */
+  char host[MC_SYNC_ADDR_STRLEN]; /* ACT_PAIR_AGAIN: where it was, "" if not known */
+  guint16 port;
 } pair_dlg;
 
 static struct {
   pair_dlg *enter; /* the enter-code dialog (initiator), or NULL */
   pair_dlg *show;  /* the show-code dialog (responder), or NULL */
   gboolean enter_cancelled, show_cancelled; /* Cancel was pressed: the CANCELLED to come is ours */
+  const pair_dialog_host *host;
 } s;
 
 /* --- Texts --- */
@@ -48,7 +65,7 @@ static char *peer_text(enum mc_str_id id, const char *name, gboolean sentence_st
   return out;
 }
 
-/* prefix_id ("Wrong code. {0}") with how many tries are left as its {0}; g_free it. */
+/* prefix_id ("Wrong code entered. {0}") with how many tries are left as its {0}; g_free it. */
 static char *tries_left(enum mc_str_id prefix_id, int left) {
   char tries[64];
   mc_format(tries, sizeof tries, mc_str_plural(MC_STR_TRIES_LEFT, left), MC_D(left));
@@ -58,16 +75,64 @@ static char *tries_left(enum mc_str_id prefix_id, int left) {
   return out;
 }
 
+/* Whether this computer could have joined: it's in no group, so a new, empty library lets it. */
+static gboolean could_join(void) {
+  mc_sync_lib_state state;
+  mc_sync *sync = sync_bridge_get();
+  return sync && s.host && s.host->new_library && mc_sync_library_state(sync, &state) == MC_OK &&
+         state == MC_SYNC_LIBRARY_NO_GROUP;
+}
+
+/* text as Pango markup, its "**archive**" in bold; g_free it. */
+static char *bold_marks(const char *text) {
+  char *escaped = g_markup_escape_text(text, -1);
+  GString *out = g_string_new(NULL);
+  gboolean bold = FALSE;
+  for (const char *p = escaped; *p; p++) {
+    if (p[0] == '*' && p[1] == '*') {
+      g_string_append(out, bold ? "</b>" : "<b>");
+      bold = !bold;
+      p++;
+    } else {
+      g_string_append_c(out, *p);
+    }
+  }
+  if (bold) g_string_append(out, "</b>");
+  g_free(escaped);
+  return g_string_free(out, FALSE);
+}
+
+/* Once, on this computer after it joined a group: which device keeps the originals, as
+ * markup; NULL if the archive isn't known or it was shown before. g_free it. */
+static char *archive_explainer(const sync_event *ev) {
+  if (!ev->joined || !ev->archive_name[0] || !s.host || !s.host->first_time) return NULL;
+  if (!s.host->first_time(ARCHIVE_EXPLAINED_KEY)) return NULL;
+  char *text = ev->archives > 1 ? mc_format_alloc(mc_str_plural(MC_STR_ARCHIVE_EXPLAINER_SEVERAL, ev->archives - 1),
+                                                  MC_S(ev->archive_name), MC_D(ev->archives - 1))
+                                : mc_format_alloc(mc_str(MC_STR_ARCHIVE_EXPLAINER), MC_S(ev->archive_name));
+  char *markup = bold_marks(text ? text : "");
+  mc_free(text);
+  return markup;
+}
+
 /* How a pairing ended, as on Windows and Android; g_free it. */
-static char *ended_text(mc_pair_reason reason, gboolean initiator, const char *name) {
-  switch (reason) {
-    case MC_PAIR_PAIRED: return peer_text(MC_STR_LINUX_COMPUTER_PAIRED_TEXT, name, FALSE);
+static char *ended_text(const sync_event *ev, gboolean initiator, const char *name) {
+  switch (ev->reason) {
+    case MC_PAIR_PAIRED:
+      /* Nothing syncs yet: the device that joined has its sync settings to choose. */
+      return ev->joined ? peer_text(MC_STR_LINUX_COMPUTER_PAIRED_TEXT, name, FALSE)
+                        : peer_text(MC_STR_PAIRED_PEER_TEXT, name, TRUE);
     case MC_PAIR_WRONG_CODE: return g_strdup(mc_str(MC_STR_PAIR_WRONG_CODE_TOO_OFTEN));
     /* Both are in groups, different ones (a device in no group just joins). */
     case MC_PAIR_IN_GROUP: return peer_text(MC_STR_LINUX_COMPUTER_PAIR_IN_GROUP, name, FALSE);
-    case MC_PAIR_LIBRARY_MISMATCH:
-      return initiator ? peer_text(MC_STR_LINUX_COMPUTER_PAIR_LIBRARY_MISMATCH, name, FALSE)
-                       : peer_text(MC_STR_LINUX_COMPUTER_PAIR_LIBRARY_MISMATCH_INCOMING, name, TRUE);
+    case MC_PAIR_LIBRARY_MISMATCH: {
+      char *text = initiator ? peer_text(MC_STR_LINUX_COMPUTER_PAIR_LIBRARY_MISMATCH, name, FALSE)
+                             : peer_text(MC_STR_LINUX_COMPUTER_PAIR_LIBRARY_MISMATCH_INCOMING, name, TRUE);
+      if (!could_join()) return text;
+      char *joined = g_strdup_printf("%s\n\n%s", text, mc_str(MC_STR_PAIR_NEW_LIBRARY_HINT));
+      g_free(text);
+      return joined;
+    }
     case MC_PAIR_ALREADY_PAIRED: return peer_text(MC_STR_LINUX_COMPUTER_PAIR_ALREADY_PAIRED, name, FALSE);
     case MC_PAIR_BUSY: return peer_text(MC_STR_PAIR_BUSY, name, TRUE);
     case MC_PAIR_CANCELLED: return g_strdup(mc_str(MC_STR_PAIR_CANCELLED));
@@ -125,25 +190,77 @@ static void close_quietly(pair_dlg *d) {
   adw_dialog_force_close(d->dialog);
 }
 
-/* Shows how the pairing ended: a status page with OK. */
-static void show_ended(pair_dlg *d, mc_pair_reason reason, const char *name) {
-  char *text = ended_text(reason, d->initiator, name && *name ? name : d->peer);
+/* Turns the dialog into a status page: icon, title, markup, and OK (labelled ok_id), with
+ * the action button above it unless next is ACT_NONE. */
+static void show_message(pair_dlg *d, const char *icon, gboolean good, const char *title, const char *markup,
+                         ended_action next, enum mc_str_id action_id, enum mc_str_id ok_id) {
   d->ended = TRUE;
   d->checking = FALSE;
-  adw_dialog_set_title(d->dialog, mc_str(reason == MC_PAIR_PAIRED ? MC_STR_PAIRED : MC_STR_PAIR_FAILED));
-  gboolean paired = reason == MC_PAIR_PAIRED;
-  gtk_image_set_from_icon_name(GTK_IMAGE(d->ended_icon), paired ? "object-select-symbolic" : "dialog-warning-symbolic");
-  gtk_widget_remove_css_class(d->ended_icon, paired ? "warning" : "success");
-  gtk_widget_add_css_class(d->ended_icon, paired ? "success" : "warning");
-  gtk_label_set_text(GTK_LABEL(d->ended_title), mc_str(paired ? MC_STR_PAIRED : MC_STR_PAIR_FAILED));
-  gtk_label_set_text(GTK_LABEL(d->ended_text), text);
-  g_free(text);
+  d->next = next;
+  adw_dialog_set_title(d->dialog, title);
+  gtk_image_set_from_icon_name(GTK_IMAGE(d->ended_icon), icon);
+  gtk_widget_remove_css_class(d->ended_icon, good ? "warning" : "success");
+  gtk_widget_add_css_class(d->ended_icon, good ? "success" : "warning");
+  gtk_label_set_text(GTK_LABEL(d->ended_title), title);
+  gtk_label_set_markup(GTK_LABEL(d->ended_text), markup);
   gtk_widget_set_visible(d->cancel, FALSE);
   if (d->pair) gtk_widget_set_visible(d->pair, FALSE);
   adw_header_bar_set_show_end_title_buttons(d->header, TRUE);
+  gtk_button_set_label(GTK_BUTTON(d->ok), mc_str_mnemonic(ok_id));
+  gtk_widget_set_visible(d->action, next != ACT_NONE);
+  if (next != ACT_NONE) gtk_button_set_label(GTK_BUTTON(d->action), mc_str_mnemonic(action_id));
+  /* The next step is the suggested one, except Create a New Library, which is a bigger one. */
+  gboolean suggest = next != ACT_NONE && next != ACT_NEW_LIBRARY;
+  GtkWidget *def = suggest ? d->action : d->ok;
+  if (suggest) {
+    gtk_widget_add_css_class(d->action, "suggested-action");
+    gtk_widget_remove_css_class(d->ok, "suggested-action");
+  } else {
+    gtk_widget_remove_css_class(d->action, "suggested-action");
+    gtk_widget_add_css_class(d->ok, "suggested-action");
+  }
   gtk_stack_set_visible_child_name(GTK_STACK(d->stack), "ended");
-  adw_dialog_set_default_widget(d->dialog, d->ok);
-  adw_dialog_set_focus(d->dialog, d->ok);
+  adw_dialog_set_default_widget(d->dialog, def);
+  adw_dialog_set_focus(d->dialog, def);
+}
+
+/* Shows how the pairing ended, with OK and a button for the next step: Choose What to Sync
+ * after pairing, Create a New Library when this computer has music of its own but could
+ * otherwise join. */
+static void show_ended(pair_dlg *d, const sync_event *ev) {
+  const char *name = ev->name[0] ? ev->name : d->peer;
+  if (ev->name[0]) g_strlcpy(d->peer, ev->name, sizeof d->peer);
+  char *text = ended_text(ev, d->initiator, name);
+  char *markup = g_markup_escape_text(text, -1);
+  g_free(text);
+  gboolean paired = ev->reason == MC_PAIR_PAIRED;
+  if (paired) {
+    char *explainer = archive_explainer(ev);
+    if (explainer) {
+      char *both = g_strdup_printf("%s\n\n%s", markup, explainer);
+      g_free(markup);
+      g_free(explainer);
+      markup = both;
+    }
+  }
+  ended_action next = ACT_NONE;
+  enum mc_str_id action_id = MC_STR_OK;
+  if (paired && s.host && s.host->show_device) {
+    mc_sync *sync = sync_bridge_get();
+    const char *uid = ev->joined ? (sync ? mc_sync_device_uid(sync) : "") : ev->uid;
+    if (uid && *uid) {
+      g_strlcpy(d->target, uid, sizeof d->target);
+      next = ACT_CHOOSE;
+      action_id = MC_STR_CHOOSE_WHAT_TO_SYNC;
+    }
+  } else if (ev->reason == MC_PAIR_LIBRARY_MISMATCH && could_join()) {
+    if (ev->uid[0]) g_strlcpy(d->target, ev->uid, sizeof d->target); /* else as set_target said */
+    next = ACT_NEW_LIBRARY;
+    action_id = MC_STR_PAIR_CREATE_LIBRARY;
+  }
+  show_message(d, paired ? "object-select-symbolic" : "dialog-warning-symbolic", paired,
+               mc_str(paired ? MC_STR_PAIRED : MC_STR_PAIR_FAILED), markup, next, action_id, MC_STR_OK);
+  g_free(markup);
 }
 
 static void on_cancel_clicked(GtkButton *button, gpointer data) {
@@ -154,6 +271,86 @@ static void on_cancel_clicked(GtkButton *button, gpointer data) {
 static void on_ok_clicked(GtkButton *button, gpointer data) {
   (void)button;
   close_quietly(data);
+}
+
+static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gboolean initiator, const char *peer);
+
+/* Create a New Library's wait: what to pair with again once it's open. */
+typedef struct pending {
+  GtkWidget *parent;
+  char uid[MC_UID_STRLEN];
+  char name[MC_SYNC_DEVICE_NAME_MAX + 1];
+  char host[MC_SYNC_ADDR_STRLEN];
+  guint16 port;
+} pending;
+
+/* After Create a New Library: offers to pair with the same device again. */
+static void offer_pair_again(gpointer data, gboolean switched) {
+  pending *p = data;
+  /* Refused before it said its name: its address stands in. */
+  if (!p->name[0]) g_strlcpy(p->name, p->host, sizeof p->name);
+  if (switched && (p->uid[0] || p->host[0])) {
+    pair_dlg *d = open_dlg(&s.enter, p->parent, NULL, TRUE, p->name);
+    g_strlcpy(d->target, p->uid, sizeof d->target);
+    g_strlcpy(d->host, p->host, sizeof d->host);
+    d->port = p->port;
+    char *title = peer_text(MC_STR_PAIR_WITH, p->name, FALSE);
+    char *text = peer_text(MC_STR_PAIR_AGAIN_TEXT, p->name, FALSE);
+    char *markup = g_markup_escape_text(text, -1);
+    show_message(d, "folder-new-symbolic", TRUE, title, markup, ACT_PAIR_AGAIN, MC_STR_PAIR_AGAIN, MC_STR_CANCEL);
+    g_free(markup);
+    g_free(text);
+    g_free(title);
+  }
+  g_free(p);
+}
+
+/* The ended page's button above OK. The dialog closes first, so what follows (a page, a
+ * folder picker, another pairing) has the window to itself. */
+static void on_action_clicked(GtkButton *button, gpointer data) {
+  (void)button;
+  pair_dlg *d = data;
+  if (!d->ended || d->next == ACT_NONE) return;
+  ended_action next = d->next;
+  pending *p = g_new0(pending, 1);
+  p->parent = d->parent;
+  g_strlcpy(p->uid, d->target, sizeof p->uid);
+  g_strlcpy(p->name, d->peer, sizeof p->name);
+  g_strlcpy(p->host, d->host, sizeof p->host);
+  p->port = d->port;
+  if (next == ACT_NEW_LIBRARY && p->uid[0]) {
+    /* Where it is now, in case discovery hasn't seen it again by the time the new library's
+     * sync asks. */
+    mc_sync_nearby_list *nearby = NULL;
+    mc_sync *sync = sync_bridge_get();
+    if (sync && mc_sync_list_nearby(sync, &nearby) == MC_OK) {
+      for (int i = 0; i < nearby->count; i++)
+        if (!strcmp(nearby->items[i].uid, p->uid) && nearby->items[i].address) {
+          g_strlcpy(p->host, nearby->items[i].address, sizeof p->host);
+          p->port = nearby->items[i].port;
+        }
+      mc_sync_nearby_list_free(nearby);
+    }
+  }
+  close_quietly(d); /* d may be freed from here on */
+  const pair_dialog_host *h = s.host;
+  switch (next) {
+    case ACT_CHOOSE:
+      if (h && h->show_device) h->show_device(p->uid);
+      break;
+    case ACT_NEW_LIBRARY:
+      if (h && h->new_library) {
+        h->new_library(p->parent, offer_pair_again, p);
+        return; /* p goes with offer_pair_again */
+      }
+      break;
+    case ACT_PAIR_AGAIN:
+      if (h && h->pair_again) h->pair_again(p->uid, p->name, p->host[0] ? p->host : NULL, p->port);
+      break;
+    case ACT_NONE:
+      break;
+  }
+  g_free(p);
 }
 
 static void send_code(pair_dlg *d) {
@@ -230,6 +427,7 @@ static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gbo
   pair_dlg *d = g_new0(pair_dlg, 1);
   d->sync = sync;
   d->initiator = initiator;
+  d->parent = parent;
   g_strlcpy(d->peer, peer ? peer : "", sizeof d->peer);
   d->dialog = g_object_ref_sink(adw_dialog_new()); /* ours until it closes */
   adw_dialog_set_content_width(d->dialog, 400);
@@ -290,11 +488,17 @@ static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gbo
   gtk_box_append(GTK_BOX(ended), d->ended_title);
   d->ended_text = wrapped_label(NULL);
   gtk_box_append(GTK_BOX(ended), d->ended_text);
+  d->action = gtk_button_new_with_mnemonic("");
+  gtk_widget_add_css_class(d->action, "pill");
+  gtk_widget_set_halign(d->action, GTK_ALIGN_CENTER);
+  gtk_widget_set_margin_top(d->action, 12);
+  gtk_widget_set_visible(d->action, FALSE);
+  g_signal_connect(d->action, "clicked", G_CALLBACK(on_action_clicked), d);
+  gtk_box_append(GTK_BOX(ended), d->action);
   d->ok = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_OK));
   gtk_widget_add_css_class(d->ok, "pill");
   gtk_widget_add_css_class(d->ok, "suggested-action");
   gtk_widget_set_halign(d->ok, GTK_ALIGN_CENTER);
-  gtk_widget_set_margin_top(d->ok, 12);
   g_signal_connect(d->ok, "clicked", G_CALLBACK(on_ok_clicked), d);
   gtk_box_append(GTK_BOX(ended), d->ok);
 
@@ -319,6 +523,18 @@ static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gbo
 }
 
 /* --- API --- */
+
+void pair_dialog_init(const pair_dialog_host *host) {
+  s.host = host;
+}
+
+void pair_dialog_set_target(const char *uid, const char *host, guint16 port) {
+  pair_dlg *d = s.enter;
+  if (!d || d->ended) return;
+  g_strlcpy(d->target, uid ? uid : "", sizeof d->target);
+  g_strlcpy(d->host, host ? host : "", sizeof d->host);
+  d->port = port;
+}
 
 void pair_dialog_begin_enter(GtkWidget *parent, mc_sync *sync, const char *peer, const char *address) {
   pair_dlg *d = open_dlg(&s.enter, parent, sync, TRUE, peer);
@@ -371,7 +587,7 @@ static void initiator_result(GtkWidget *parent, const sync_event *ev) {
     }
     d = open_dlg(&s.enter, parent, NULL, TRUE, ev->name);
     s.enter_cancelled = FALSE;
-    show_ended(d, ev->reason, ev->name);
+    show_ended(d, ev);
     return;
   }
   if (d->ended) return;
@@ -385,7 +601,7 @@ static void initiator_result(GtkWidget *parent, const sync_event *ev) {
     ready_for_code(d);
     return;
   }
-  show_ended(d, ev->reason, ev->name);
+  show_ended(d, ev);
 }
 
 static void responder_result(GtkWidget *parent, const sync_event *ev) {
@@ -399,7 +615,7 @@ static void responder_result(GtkWidget *parent, const sync_event *ev) {
     if (ev->attempts_left >= MAX_FAILURES) {
       set_status(d, mc_str(MC_STR_PAIR_NEW_CODE)); /* the new code is already showing */
     } else {
-      char *text = tries_left(MC_STR_PAIR_WRONG_CODE_ENTERED, ev->attempts_left);
+      char *text = tries_left(MC_STR_PAIR_WRONG_CODE, ev->attempts_left);
       set_status(d, text);
       g_free(text);
     }
@@ -413,7 +629,7 @@ static void responder_result(GtkWidget *parent, const sync_event *ev) {
     }
     d = open_dlg(&s.show, parent, NULL, FALSE, ev->name);
   }
-  show_ended(d, ev->reason, ev->name);
+  show_ended(d, ev);
   s.show_cancelled = FALSE;
 }
 

@@ -143,6 +143,10 @@ static gboolean open_library(void *user, const char *dir) {
   return TRUE;
 }
 
+gboolean app_open_library(app *a, const char *dir) {
+  return open_library(a, dir);
+}
+
 static void on_settings_renamed(void *user, const char *name) {
   devices_renamed(user, name);
 }

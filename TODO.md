@@ -139,6 +139,13 @@ Pairing two devices whose libraries both have music fails with library_mismatch.
 - Two Last.fm accounts: unclear what's best; at least don't sign either out silently. Plays not yet scrobbled stay with the account they were played under
 - Files: originals copy over the network to the kept library's archive, then the other device drops them as its profile says
 
+### Pairing
+- Android - a pairing refused because the phone has music of its own (library mismatch) offers no way out: its library lives in app storage, so there's no folder to pick for a new one, as the desktops' Create a new library does. It would need a "start afresh" that sets the old library aside (or deletes it, after asking)
+- Windows and Linux - after Create a new library, Pair again asks by uid, else at the address discovery last saw; a device seen only by address (multicast blocked) on the side that was asked to pair has neither, so Pair again isn't offered there and the user pairs from the Devices list
+- Windows and Linux - Create a new library takes only an empty folder; a folder with an empty library already in it (from an earlier try) is refused too, so it's opened with Open another library instead
+- All - the archive explainer shows once per device, after it joins a group; a member running an older version doesn't send the archive's name (PAIR_ACCEPT's archive_names), and then nothing is shown (and it stays unshown for a later pairing)
+- All - after pairing, the dialog no longer opens the other device's page by itself; Choose what to sync opens the page of the device that joined (this one's own when it joined). Check this feels right
+
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Linux - a pairing request while the window is in the background goes unnoticed (Windows flashes the taskbar button); send a GNotification
@@ -220,15 +227,18 @@ Things built but not checked properly.
 - Sync: pairing with Windows or Android, the over-budget estimate, a watch's icon, switching library while a device page is open, and a real LAN (only two Docker containers so far)
 - Move library's refused close-request under a real window manager
 - An archive's sidebar row ("Offline. Keeps the whole library" under its name), only compiled
+- The pairing dialog's ended page (only compiled): Choose what to sync, the archive explainer's bold "archive" (Pango markup), Create a new library (the folder picker, refusing a folder that isn't empty, then Pair again) and the button styles
 
 ### Windows
 - Firewall prompt: the success path after UAC, beyond one run
 - Deleting a track while it plays
 - Volume's fade (only silent test files so far)
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns and focus events
+- The pairing dialog's ended page with a real pairing: Choose what to sync, the archive explainer (and the dialog growing to fit it), Create a new library and Pair again
 
 ### Android
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
+- After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - mDNS discovery and sync over real Wi-Fi, on a real device
 - API 24-32 devices, audio focus during calls, plays landing in the core's database
 - The themed launcher icon, and the sync notification icon

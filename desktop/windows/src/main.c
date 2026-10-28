@@ -175,7 +175,7 @@ typedef struct app {
 
 static app g_app;
 
-static void change_library(void);
+static BOOL change_library(BOOL new_empty);
 static void move_library(void);
 static void schedule_refresh(void);
 static void rename_self(const char *name);
@@ -968,11 +968,8 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
       pair_dialog_show_code(sync, ev);
       break;
     case SYNC_EV_PAIR_RESULT:
-      if (pair_dialog_on_result(ev)) { /* paired: show the new device's page */
-        refresh_devices();
-        sidebar_select_device(ev->uid);
-        if (sidebar_selected_device()) show_page(PAGE_DEVICE);
-      }
+      /* Paired: the dialog's Choose What to Sync opens the page of the device that joined. */
+      if (pair_dialog_on_result(ev)) refresh_devices();
       break;
     case SYNC_EV_PROGRESS:
       if (set_syncing(ev->uid, ev->phase != MC_SYNC_PHASE_DONE)) schedule_refresh();
@@ -1040,7 +1037,9 @@ static void pair_nearby(void) {
       }
     mc_sync_nearby_list_free(nearby);
   }
-  pair_started(mc_sync_pair_request(sync, uid), name, NULL);
+  mc_status st = mc_sync_pair_request(sync, uid);
+  pair_started(st, name, NULL);
+  if (st == MC_OK) pair_dialog_set_target(uid, NULL, 0);
   free(name);
 }
 
@@ -1054,8 +1053,55 @@ static void on_add_device_connect(void *user, const char *host, uint16_t port) {
   }
   wchar_t address[300];
   format_address(address, 300, host, port ? port : MC_SYNC_DEFAULT_PORT);
-  pair_started(mc_sync_pair_request_address(sync, host, port), NULL, address);
+  mc_status st = mc_sync_pair_request_address(sync, host, port);
+  pair_started(st, NULL, address);
+  if (st == MC_OK) pair_dialog_set_target(NULL, host, port);
 }
+
+/* --- The pairing dialogs' side --- */
+
+/* Choose What to Sync: the device's page (this PC's own, when it joined). */
+static void pair_show_device(const char *uid) {
+  refresh_devices();
+  sidebar_select_device(uid);
+  if (sidebar_selected_device()) show_page(PAGE_DEVICE);
+}
+
+/* Create a New Library, from a pairing refused because this PC has music of its own. */
+static BOOL pair_new_library(void) {
+  return change_library(TRUE);
+}
+
+/* Pair Again, once the new library is open: by uid if discovery has seen the device again,
+ * else at the address it had. */
+static void pair_again(const char *uid, const wchar_t *name, const char *host, uint16_t port) {
+  mc_sync *sync = sync_bridge_get();
+  if (!sync) {
+    sync_off_message();
+    return;
+  }
+  mc_status st = uid && *uid ? mc_sync_pair_request(sync, uid) : MC_ERR_NOT_FOUND;
+  if (st == MC_ERR_NOT_FOUND && host && *host) {
+    wchar_t address[300];
+    format_address(address, 300, host, port ? port : MC_SYNC_DEFAULT_PORT);
+    st = mc_sync_pair_request_address(sync, host, port);
+    pair_started(st, name, address);
+  } else {
+    pair_started(st, name, NULL);
+  }
+  if (st == MC_OK) pair_dialog_set_target(uid, host, port);
+}
+
+/* One-time explanations: TRUE the first time key is asked about, which settings.json then
+ * records. Not saved, it shows again next run. */
+static BOOL pair_first_time(const char *key) {
+  if (mc_settings_bool(g_app.settings, key, 0)) return FALSE;
+  mc_settings_set_bool(g_app.settings, key, 1);
+  mc_settings_save(g_app.settings);
+  return TRUE;
+}
+
+static const pair_dialog_host k_pair_host = {pair_show_device, pair_new_library, pair_again, pair_first_time};
 
 static void on_command(int id, int code) {
   switch (id) {
@@ -1295,7 +1341,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       layout(); /* the import view switches between the drop zone and the list */
       return 0;
     case WM_APP_OPEN_LIBRARY:
-      change_library();
+      change_library(FALSE);
       return 0;
     case WM_APP_MOVE_LIBRARY:
       move_library();
@@ -1454,9 +1500,10 @@ static BOOL in_onedrive(const char *dir) {
 }
 
 /* Asks where the library should live. On first run current is NULL and the Music folder
- * is offered; otherwise the folder picker opens straight away. Returns a malloc'd UTF-8
- * path, or NULL if the user gave up. */
-static char *choose_library_dir(HWND owner, const char *current) {
+ * is offered; otherwise the folder picker opens straight away, titled title_id, and with
+ * empty_only it takes only an empty folder. Returns a malloc'd UTF-8 path, or NULL if the
+ * user gave up. */
+static char *choose_library_dir(HWND owner, const char *current, enum mc_str_id title_id, BOOL empty_only) {
   char *suggested = current ? NULL : music_folder();
   for (;;) {
     char *dir = NULL;
@@ -1467,9 +1514,14 @@ static char *choose_library_dir(HWND owner, const char *current) {
       if (answer == IDCANCEL) break;
       if (answer == IDYES && (dir = malloc(strlen(suggested) + 1))) strcpy(dir, suggested);
     }
-    if (!dir) dir = pick_folder(owner, mc_wstr(MC_STR_LIBRARY_FOLDER_CHOOSE), current ? current : suggested);
+    if (!dir) dir = pick_folder(owner, mc_wstr(title_id), current ? current : suggested);
     if (!dir) {
       if (current) break; /* changing location: cancel means keep the current one */
+      continue;
+    }
+    if (empty_only && !mc_folder_is_empty(dir)) {
+      MessageBoxW(owner, mc_wstr(MC_STR_LIBRARY_NOT_EMPTY), mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
+      free(dir);
       continue;
     }
     if (in_onedrive(dir)) {
@@ -1533,12 +1585,15 @@ static mc_library *open_library(const char *dir) {
 }
 
 /* Settings' Open Another Library: switch to the library in another folder. The new one opens
- * first, so if it can't, nothing changes; sync then moves from the old one to it. */
-static void change_library(void) {
+ * first, so if it can't, nothing changes; sync then moves from the old one to it. With
+ * new_empty (the pairing dialog's Create a New Library) the folder must be empty, so the
+ * library made there is too. TRUE if it switched. */
+static BOOL change_library(BOOL new_empty) {
   const char *current = mc_settings_library_dir(g_app.settings);
-  if (!import_view_confirm_close()) return;
+  if (!import_view_confirm_close()) return FALSE;
 
-  char *dir = choose_library_dir(g_app.wnd, current);
+  char *dir = choose_library_dir(g_app.wnd, current, new_empty ? MC_STR_LIBRARY_FOLDER_NEW : MC_STR_LIBRARY_FOLDER_CHOOSE,
+                                 new_empty);
   mc_library *lib = dir ? open_library(dir) : NULL;
   if (lib) {
     stop_sync();
@@ -1553,6 +1608,7 @@ static void change_library(void) {
     start_sync();
   }
   free(dir);
+  return lib != NULL;
 }
 
 /* For the message loop: Space in the main window plays or pauses, as the Play button does.
@@ -1734,7 +1790,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     return 1;
   }
   if (!mc_settings_library_dir(g_app.settings)) {
-    char *dir = choose_library_dir(NULL, NULL);
+    char *dir = choose_library_dir(NULL, NULL, MC_STR_LIBRARY_FOLDER_CHOOSE, FALSE);
     if (!dir) return 0;
     mc_settings_set_library_dir(g_app.settings, dir);
     free(dir);
@@ -1774,7 +1830,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   if (!wnd) return 1;
   DragAcceptFiles(wnd, TRUE);
   ShowWindow(wnd, show);
-  pair_dialog_init(wnd);
+  pair_dialog_init(wnd, &k_pair_host);
   start_sync();
   firewall_check_later(wnd, g_app.settings);
   import_args(&args);

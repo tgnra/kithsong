@@ -19,7 +19,8 @@
 typedef enum {
   SYNC_EV_PEER,        /* on_peer: uid, online, member */
   SYNC_EV_PAIR_CODE,   /* on_pair_code: code, name (the requester), attempts_left */
-  SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status */
+  SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status,
+                        * joined, archive_name, archives */
   SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_*, files_done, files_total, bytes_*,
                         * library_changed */
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
@@ -48,6 +49,9 @@ typedef struct sync_event {
   /* Progress: library rows or a file arrived since the last event delivered for the
    * device, so the library views should reload. */
   int library_changed;
+  /* Pair result: this computer joined, and the group's archive (the first of archives). */
+  int joined, archives;
+  char archive_name[MC_SYNC_DEVICE_NAME_MAX + 1];
 } sync_event;
 
 /* Receives each event on the main thread. ev is valid during the call only. */

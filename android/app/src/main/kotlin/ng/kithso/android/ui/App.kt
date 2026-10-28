@@ -274,7 +274,11 @@ fun App(
                 onDeleted = { ref -> stack.removeAll { it == ref } },
             )
             // Over everything: another device may ask to pair at any time.
-            PairingDialogs(syncer)
+            PairingDialogs(syncer, settings) { uid ->
+                // Choose What to Sync: the device's page, over Sync as when it's tapped there.
+                syncOpen = true
+                deviceOpen = uid
+            }
         }
     }
 }
