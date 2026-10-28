@@ -26,6 +26,18 @@ typedef struct mc_sync mc_sync;
 
 /* The TCP port sync listens on unless it is taken. */
 #define MC_SYNC_DEFAULT_PORT 47823
+/* Rate limit on automatic sync. After a complete session with a member (status MC_OK, both
+ * sides converged, nothing left to follow up), in either direction, this device starts no
+ * automatic session with it for this long: not on its periodic schedule, not when discovery
+ * sees it come online, not for local changes (they wait, and go out when it runs out), and
+ * not for mc_sync_background(). Those are held back until it runs out, then go ahead (the
+ * periodic one included, so members still sync about once an interval). Unaffected:
+ *  - sessions the other device starts: they are served as ever (and count as complete ones);
+ *  - mc_sync_now() and mc_sync_confirm_now(), which start one at once;
+ *  - a failed or incomplete session, which lifts the limit, so the usual retries (with
+ *    backoff) and follow-ups go ahead.
+ * It survives restarts: it is measured from peer_contact.last_sync_ms in sync.db. */
+#define MC_SYNC_AUTO_INTERVAL_MS (60 * 60 * 1000)
 #define MC_PAIR_CODE_LEN 6
 
 typedef enum mc_device_kind {
@@ -167,12 +179,16 @@ mc_status mc_sync_leave_group(mc_sync *sync);
  * it, and it forgets the group when it next talks to one. MC_ERR_LOCKED if it is the
  * group's only archive. */
 mc_status mc_sync_remove_device(mc_sync *sync, const char *device_uid);
-/* Syncs with device_uid, or with every reachable member for NULL, as soon as possible.
- * Returns at once; on_sync_done reports each session. Requires mc_sync_start(). This is an
- * automatic sync, as a scheduled one is (for background work, say): it confirms nothing, so
- * a device whose profile isn't confirmed fetches no files. A Sync button calls
- * mc_sync_confirm_now(). */
+/* Syncs with device_uid, or with every reachable member for NULL, as soon as possible,
+ * whatever MC_SYNC_AUTO_INTERVAL_MS says. Returns at once; on_sync_done reports each session.
+ * Requires mc_sync_start(). It confirms nothing, so a device whose profile isn't confirmed
+ * fetches no files. A Sync button calls mc_sync_confirm_now(); background work calls
+ * mc_sync_background(). */
 mc_status mc_sync_now(mc_sync *sync, const char *device_uid);
+/* As mc_sync_now(), for background work (a periodic job, say): an automatic sync, so a member
+ * this device had a complete session with less than MC_SYNC_AUTO_INTERVAL_MS ago gets none
+ * until that runs out (see mc_sync_device.auto_after_ms), and only if sync still runs then. */
+mc_status mc_sync_background(mc_sync *sync, const char *device_uid);
 
 /* --- Confirming profiles ---
  * A device fetches and deletes files only for a profile its user has confirmed: sessions
@@ -225,6 +241,8 @@ typedef struct mc_sync_device {
   char *address;         /* where it was last seen or reached; NULL if never */
   uint16_t port;
   int64_t last_sync_ms;  /* last session with it (Unix ms), 0 if never */
+  int64_t auto_after_ms; /* Unix ms before which this device starts no automatic session
+                          * with it (see MC_SYNC_AUTO_INTERVAL_MS); 0 if it may now */
   /* Its own report of its files (sync_status); has_status = 0 if it hasn't written one. */
   int has_status;
   int64_t verified_ms, expected, ok, missing, corrupt, bytes;

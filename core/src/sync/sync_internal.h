@@ -28,7 +28,8 @@ typedef enum mc_sync_trigger {
   MC_TRIGGER_PERIODIC, /* every few minutes, and at start */
   MC_TRIGGER_ONLINE,   /* discovery just saw it */
   MC_TRIGGER_CHANGED,  /* something changed here that it should hear about */
-  MC_TRIGGER_NOW       /* mc_sync_now() */
+  MC_TRIGGER_NOW,      /* mc_sync_now(): the only one MC_SYNC_AUTO_INTERVAL_MS doesn't hold back */
+  MC_TRIGGER_AUTO      /* mc_sync_background() */
 } mc_sync_trigger;
 
 /* What this device knows of another one's whereabouts, and for members, the schedule. */
@@ -50,6 +51,9 @@ typedef struct mc_sync_peer {
   mc_sync_trigger trigger;
   uint64_t contact_ms; /* mono: the last session with it, in either direction */
   uint32_t backoff_ms;
+  /* mono: no automatic session with it starts before this (MC_SYNC_AUTO_INTERVAL_MS after
+   * the last complete session either way); 0 = none held back. */
+  uint64_t auto_after_ms;
   /* The session running with it, if any. */
   int busy;
   int busy_lower; /* that session was initiated by the lower device uid */
@@ -136,6 +140,7 @@ struct mc_sync {
   int use_discovery;
   int manual_only; /* sessions only on mc_sync_now(), for tests; under lock */
   int listen_port; /* -1: the default with fallback */
+  uint32_t auto_interval_ms; /* MC_SYNC_AUTO_INTERVAL_MS, but in tests; under lock */
   char hint_override[MC_SYNC_HINTS_MAX];
 };
 
@@ -237,6 +242,9 @@ void mc_sync_set_test_options(mc_sync *sync, uint16_t port, int use_discovery);
 /* manual_only: the scheduler starts sessions only for mc_sync_now(), so tests decide when
  * devices talk. Any time. */
 void mc_sync_set_test_manual(mc_sync *sync, int manual_only);
+/* Shortens (or lengthens) MC_SYNC_AUTO_INTERVAL_MS for sessions that end from now on; 0
+ * turns the limit off. Any time. */
+void mc_sync_set_test_auto_interval(mc_sync *sync, uint32_t ms);
 /* Publishes these address hints (JSON array text) instead of the interfaces' addresses. */
 void mc_sync_set_test_hints(mc_sync *sync, const char *json);
 /* As if discovery had reported a peer online (online = 1) or gone (0). */

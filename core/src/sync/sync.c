@@ -9,7 +9,15 @@
  * if it hasn't been contacted by then (the lower one may be behind a firewall). A change
  * only one side knows about is sent by that side at once. Two sessions between one pair
  * never run together: see mc_sync_claim(). Peers are tried at their discovered address,
- * then their address hints, then the address that last worked. */
+ * then their address hints, then the address that last worked.
+ *
+ * Rate limit (MC_SYNC_AUTO_INTERVAL_MS in sync.h). A complete session with a member, either
+ * way, sets its auto_after_ms; until then every trigger but MC_TRIGGER_NOW is held back: the
+ * scheduler moves its due time to auto_after_ms and keeps the trigger, so a pending change
+ * goes out when the limit runs out. Sessions the member starts are served as ever, and end
+ * the same way. A failed or incomplete session clears auto_after_ms, so retries and
+ * follow-ups keep their schedule. mc_sync_new() seeds it from peer_contact.last_sync_ms, so
+ * a restart doesn't reset it. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -458,6 +466,8 @@ static void trigger_members(mc_sync *sync, const char *skip, mc_sync_trigger why
   for (int i = 0; i < sync->npeers; i++) {
     mc_sync_peer *p = &sync->peers[i];
     if (!p->member || (skip && !strcmp(p->uid, skip))) continue;
+    /* A press of Sync not yet acted on mustn't become a trigger the rate limit holds. */
+    if (p->trigger == MC_TRIGGER_NOW && why != MC_TRIGGER_NOW) continue;
     p->trigger = why;
     p->trigger_ms = mc_mono_ms();
     p->due_ms = at;
@@ -504,12 +514,16 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
       p->due_ms = now + PERIOD_MS;
       p->trigger = MC_TRIGGER_PERIODIC;
       p->trigger_ms = p->due_ms;
+      /* Complete: nothing left that the next automatic session would carry at once. */
+      int complete = result->converged && !follow_up;
+      p->auto_after_ms = complete && sync->auto_interval_ms ? now + sync->auto_interval_ms : 0;
       if (address && !p->discovered) {
         snprintf(p->address, sizeof p->address, "%s", address);
         p->port = port;
       }
     } else if (result->status != MC_ERR_LOCKED) {
       p->reached = 0;
+      p->auto_after_ms = 0; /* the retries below go ahead */
       p->backoff_ms = p->backoff_ms ? p->backoff_ms * 2 : BACKOFF_MIN_MS;
       if (p->backoff_ms > PERIOD_MS) p->backoff_ms = PERIOD_MS;
       p->due_ms = now + p->backoff_ms;
@@ -920,13 +934,24 @@ static void sched_main(void *arg) {
         p->trigger = MC_TRIGGER_PERIODIC;
         p->trigger_ms = now;
       }
-      if (p->busy || (sync->manual_only && p->trigger != MC_TRIGGER_NOW)) continue;
+      if (p->busy || (sync->manual_only && p->trigger != MC_TRIGGER_NOW &&
+                      p->trigger != MC_TRIGGER_AUTO))
+        continue;
       if (now < p->due_ms) {
         if (p->due_ms < wake) wake = p->due_ms;
         continue;
       }
+      if (p->trigger != MC_TRIGGER_NOW && now < p->auto_after_ms) {
+        /* Synced lately: hold the trigger until the limit runs out. A periodic or online
+         * one counts from then, for the higher uid's grace. */
+        p->due_ms = p->auto_after_ms;
+        if (p->trigger == MC_TRIGGER_PERIODIC || p->trigger == MC_TRIGGER_ONLINE)
+          p->trigger_ms = p->due_ms;
+        if (p->due_ms < wake) wake = p->due_ms;
+        continue;
+      }
       int go = p->trigger == MC_TRIGGER_CHANGED || p->trigger == MC_TRIGGER_NOW ||
-               strcmp(sync->device_uid, p->uid) < 0;
+               p->trigger == MC_TRIGGER_AUTO || strcmp(sync->device_uid, p->uid) < 0;
       if (!go) {
         if (p->contact_ms && p->contact_ms >= p->trigger_ms) {
           /* The lower uid has been in touch since: nothing to do until next time. */
@@ -985,7 +1010,7 @@ static void peer_seen(mc_sync *sync, const char *uid, const char *name, const ch
       p->port = port;
       if (!p->discovered) {
         p->seen_ms = mc_mono_ms();
-        if (p->member) {
+        if (p->member && p->trigger != MC_TRIGGER_NOW) {
           p->trigger = MC_TRIGGER_ONLINE;
           p->trigger_ms = p->seen_ms;
           p->due_ms = p->seen_ms;
@@ -1010,6 +1035,31 @@ static void on_discovered(const mc_peer_info *peer, int online, void *user) {
 }
 
 /* --- Public API --- */
+
+/* The rate limit as the last complete sessions left it, from sync.db: peer_contact's
+ * last_sync_ms is written after each successful session either way. A failed session isn't
+ * recorded there, so after a restart the limit may hold back a retry the running process
+ * wouldn't have, for one interval at most. A last_sync_ms in the future (the clock went
+ * back) counts as now. Before any thread runs. */
+static void seed_auto_after(mc_sync *sync) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sync->api.sdb),
+                         "SELECT device_uid, last_sync_ms FROM peer_contact"
+                         " WHERE last_sync_ms > 0",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return;
+  uint64_t mono = mc_mono_ms();
+  int64_t wall = mc_wall_ms(), interval = (int64_t)sync->auto_interval_ms;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *uid = (const char *)sqlite3_column_text(stmt, 0);
+    int64_t age = wall - sqlite3_column_int64(stmt, 1);
+    if (age < 0) age = 0;
+    if (!is_uid(uid) || age >= interval) continue;
+    mc_sync_peer *p = find_peer(sync, uid, 1);
+    if (p) p->auto_after_ms = mono + (uint64_t)(interval - age);
+  }
+  sqlite3_finalize(stmt);
+}
 
 mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *device_name,
                       mc_device_kind kind, const mc_sync_events *events, void *user,
@@ -1038,6 +1088,7 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   sync->user = user;
   sync->use_discovery = 1;
   sync->listen_port = -1;
+  sync->auto_interval_ms = MC_SYNC_AUTO_INTERVAL_MS;
   if (mc_hostname(sync->host, sizeof sync->host) != MC_OK) sync->host[0] = '\0';
   clean_name(device_name, sync->name);
   if (!sync->name[0]) clean_name(sync->host[0] ? sync->host : "musicapp", sync->name);
@@ -1048,6 +1099,7 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
     return st;
   }
   memcpy(sync->device_uid, mc_sync_db_device_uid(sync->api.sdb), MC_UID_STRLEN);
+  seed_auto_after(sync);
   const char *group = mc_sync_db_group_uid(sync->api.sdb);
   if (group) mc_discovery_group_hash(group, sync->group_hash);
   *out = sync;
@@ -1379,23 +1431,32 @@ mc_status mc_sync_remove_device(mc_sync *sync, const char *device_uid) {
   return st;
 }
 
-mc_status mc_sync_now(mc_sync *sync, const char *device_uid) {
+/* mc_sync_now() (MC_TRIGGER_NOW) and mc_sync_background() (MC_TRIGGER_AUTO). */
+static mc_status sync_soon(mc_sync *sync, const char *device_uid, mc_sync_trigger why) {
   if (!sync || (device_uid && !is_uid(device_uid))) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&sync->lock);
   mc_status st = sync->started ? MC_OK : MC_ERR_INVALID_ARG;
   if (st == MC_OK && device_uid) {
     mc_sync_peer *p = find_peer(sync, device_uid, 1);
-    if (p) {
-      p->trigger = MC_TRIGGER_NOW;
+    if (p && (why == MC_TRIGGER_NOW || p->trigger != MC_TRIGGER_NOW)) {
+      p->trigger = why;
       p->trigger_ms = mc_mono_ms();
       p->due_ms = p->trigger_ms;
     }
     mc_cond_broadcast(&sync->cond);
   } else if (st == MC_OK) {
-    trigger_members(sync, NULL, MC_TRIGGER_NOW, mc_mono_ms());
+    trigger_members(sync, NULL, why, mc_mono_ms());
   }
   mc_mutex_unlock(&sync->lock);
   return st;
+}
+
+mc_status mc_sync_now(mc_sync *sync, const char *device_uid) {
+  return sync_soon(sync, device_uid, MC_TRIGGER_NOW);
+}
+
+mc_status mc_sync_background(mc_sync *sync, const char *device_uid) {
+  return sync_soon(sync, device_uid, MC_TRIGGER_AUTO);
 }
 
 mc_status mc_sync_confirm_now(mc_sync *sync, const char *device_uid) {
@@ -1540,7 +1601,9 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
   sqlite3_finalize(stmt);
   mc_mutex_unlock(&sync->api_lock);
 
-  /* Whereabouts from the peer table. */
+  /* Whereabouts and the rate limit from the peer table. */
+  uint64_t mono_now = mc_mono_ms();
+  int64_t wall_now = mc_wall_ms();
   mc_mutex_lock(&sync->lock);
   for (int i = 0; st == MC_OK && i < list->count; i++) {
     mc_sync_device *d = &list->items[i];
@@ -1551,6 +1614,8 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
     mc_sync_peer *p = find_peer(sync, d->uid, 0);
     if (!p) continue;
     d->online = p->discovered || p->reached;
+    if (p->auto_after_ms > mono_now)
+      d->auto_after_ms = wall_now + (int64_t)(p->auto_after_ms - mono_now);
     if (p->address[0] && (p->discovered || !d->address)) {
       free(d->address);
       d->address = mc_strdup(p->address);
@@ -1671,6 +1736,12 @@ void mc_sync_set_test_manual(mc_sync *sync, int manual_only) {
   mc_mutex_lock(&sync->lock);
   sync->manual_only = manual_only;
   mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+}
+
+void mc_sync_set_test_auto_interval(mc_sync *sync, uint32_t ms) {
+  mc_mutex_lock(&sync->lock);
+  sync->auto_interval_ms = ms;
   mc_mutex_unlock(&sync->lock);
 }
 

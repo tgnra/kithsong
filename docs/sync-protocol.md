@@ -420,6 +420,17 @@ way, without logging anything.
   knows about is sent by that side at once.
 - If both still call each other at once, the session initiated by the lower uid wins: the
   other side's is aborted, or refused with `ERROR {"reason": "busy"}`.
+- **Rate limit.** After a complete session with a member (it succeeded, converged and left
+  nothing to follow up), in either direction, a device starts no automatic session with it
+  for an hour (`MC_SYNC_AUTO_INTERVAL_MS`): online, periodic, change and background
+  (`mc_sync_background()`) triggers are held until the hour is up, then go ahead, so local
+  changes wait too. Sessions the member starts are served as ever, and `mc_sync_now()` and
+  `mc_sync_confirm_now()` aren't held. A failed or incomplete session lifts the limit, so
+  retries and follow-ups keep their schedule. The hour is counted from
+  `peer_contact.last_sync_ms`, so it survives a restart. The other device keeps its own
+  limit; nothing about it goes over the wire. So where only the member can connect (a
+  firewall), a press of Sync here waits for a session it starts, which it won't while its
+  own limit holds; the press lapses after its 5½ minutes, and the user presses Sync there.
 
 ### `ROWS`
 
@@ -564,7 +575,7 @@ profile and pressed Sync.
   profile after the group exchange (so as it stands with the peer's edits), then runs its
   receiving turn. That write comes after the group exchange, so the peer hears of it in the
   next session, as for the node uid. A sync started otherwise (`mc_sync_now()`, the
-  scheduler, background work) confirms nothing.
+  scheduler, background work with `mc_sync_background()`) confirms nothing.
 
 ## Files
 
