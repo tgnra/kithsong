@@ -149,7 +149,11 @@ the code and A's user enters it.
 5. Over the encrypted channel B sends `PAIR_ACCEPT` with the resulting group (below), and
    both store each other's static key in their `devices` rows. When the group is A's (A in a
    group, B not), B doesn't know it: B sends an empty `PAIR_ACCEPT` `{}` and A answers with
-   its own `PAIR_ACCEPT` `{"group_uid", "library_uid"}`. The device whose group it is writes
+   its own `PAIR_ACCEPT` `{"group_uid", "library_uid"}`. When an existing group's member
+   sends it to the device joining that group, it adds `"archive_names"`: the shown names of
+   the group's current archives (a void demotion included), sorted by name, so the joiner can
+   say which device keeps the originals before the group data arrives (older versions leave
+   it out, and readers ignore it). The device whose group it is writes
    the other's `devices` row with `added_by` set to itself; for a new group B also writes
    `sync_group`, its own row and the archive's `profiles` row (`archive = 1`, mode `all`,
    format `original`). The joiner adopts the library uid if needed, sets `local.group_uid`
@@ -307,7 +311,7 @@ Message types:
 | 0x42 | `PAIR_REFUSE` | |
 | 0x43 | `JPAKE_1`     | `mbedtls_ecjpake_write_round_one` output |
 | 0x44 | `JPAKE_2`     | `mbedtls_ecjpake_write_round_two` output |
-| 0x45 | `PAIR_ACCEPT` | `{"group_uid", "library_uid", "archive": dev \| null}`, or `{}`; see [Pairing](#pairing) |
+| 0x45 | `PAIR_ACCEPT` | `{"group_uid", "library_uid", "archive": dev \| null, "archive_names"?: [name]}`, or `{}`; see [Pairing](#pairing) |
 
 Steps:
 

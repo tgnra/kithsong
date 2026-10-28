@@ -65,6 +65,16 @@ typedef struct mc_pair_result {
   mc_pair_reason reason;
   int attempts_left;      /* for MC_PAIR_WRONG_CODE */
   mc_status status;       /* MC_OK when paired, else the error behind the reason */
+  /* MC_PAIR_PAIRED: 1 on the device that joined (the other one's group, or a new group
+   * syncing the other one's library; see "Join rules" in docs/sync-protocol.md), 0 on the
+   * other. The device that joined holds no music yet, and its profile is the one to set up
+   * before Sync is pressed (every new member starts MC_SYNC_UNCONFIRMED). */
+  int joined;
+  /* MC_PAIR_PAIRED with joined: the shown name of the group's archive, the first by name if
+   * it has several, and how many it has. "" and 0 if not known (a member running an older
+   * version doesn't say). */
+  const char *archive_name;
+  int archives;
 } mc_pair_result;
 
 typedef enum mc_sync_phase {

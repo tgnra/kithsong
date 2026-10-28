@@ -8,6 +8,7 @@
 #include <yyjson.h>
 
 #include "library/library_internal.h"
+#include "sync/archive.h"
 #include "sync/session.h"
 #include "sync/sync_internal.h"
 #include "sync/transfer.h"
@@ -271,8 +272,33 @@ static mc_status apply_pairing(mc_sync_conn *c, const char *group_uid, const cha
   return st;
 }
 
+/* The shown names (profile name, else device name) of the group's current archives, a void
+ * demotion included, by name, as a JSON array in doc; NULL on error. */
+static yyjson_mut_val *archive_names(yyjson_mut_doc *doc, sqlite3 *db) {
+  char void_uid[MC_UID_STRLEN] = "";
+  if (mc_archive_void(db, void_uid) != MC_OK) return NULL;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db,
+                         "SELECT coalesce(nullif(p.name, ''), d.name) AS shown FROM devices d"
+                         " JOIN profiles p ON p.device_uid = d.uid"
+                         " WHERE d.removed = 0 AND (p.archive = 1 OR d.uid = ?1)"
+                         " ORDER BY shown COLLATE NOCASE, d.uid",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return NULL;
+  sqlite3_bind_text(stmt, 1, void_uid, -1, SQLITE_STATIC);
+  yyjson_mut_val *arr = yyjson_mut_arr(doc);
+  while (arr && sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *name = (const char *)sqlite3_column_text(stmt, 0);
+    yyjson_mut_arr_add_strcpy(doc, arr, name ? name : "");
+  }
+  sqlite3_finalize(stmt);
+  return arr;
+}
+
+/* group_uid NULL sends B's empty PAIR_ACCEPT. db, when not NULL, is the group the other
+ * device joins: its archives' names go with it. */
 static mc_status send_accept(mc_channel *ch, const char *group_uid, const char *library_uid,
-                             const char *archive) {
+                             const char *archive, sqlite3 *db) {
   yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
   if (!doc) return MC_ERR_NOMEM;
   yyjson_mut_val *root = yyjson_mut_obj(doc);
@@ -284,6 +310,8 @@ static mc_status send_accept(mc_channel *ch, const char *group_uid, const char *
       yyjson_mut_obj_add_str(doc, root, "archive", archive);
     else
       yyjson_mut_obj_add_null(doc, root, "archive");
+    yyjson_mut_val *names = db ? archive_names(doc, db) : NULL;
+    if (names) yyjson_mut_obj_add_val(doc, root, "archive_names", names);
   }
   size_t len = 0;
   char *json = yyjson_mut_write(doc, 0, &len);
@@ -294,9 +322,18 @@ static mc_status send_accept(mc_channel *ch, const char *group_uid, const char *
   return st;
 }
 
-/* PAIR_ACCEPT's group, or "" for B's empty one ("send me yours"). */
+/* What the device that joined learns of its group's archives. */
+typedef struct joined_archives {
+  char first[MC_SYNC_NAME_MAX]; /* "" if not known */
+  int count;
+} joined_archives;
+
+/* PAIR_ACCEPT's group, or "" for B's empty one ("send me yours"). arch (may be NULL) gets
+ * the archives' names, which a member sends to the device joining its group (older versions
+ * don't). */
 static mc_status parse_accept(const unsigned char *payload, size_t len,
-                              char group_uid[MC_UID_STRLEN], char library_uid[MC_UID_STRLEN]) {
+                              char group_uid[MC_UID_STRLEN], char library_uid[MC_UID_STRLEN],
+                              joined_archives *arch) {
   group_uid[0] = library_uid[0] = '\0';
   yyjson_doc *doc = yyjson_read((const char *)payload, len, 0);
   yyjson_val *root = yyjson_doc_get_root(doc);
@@ -305,19 +342,25 @@ static mc_status parse_accept(const unsigned char *payload, size_t len,
     copy_field(root, "group_uid", group_uid, MC_UID_STRLEN);
     copy_field(root, "library_uid", library_uid, MC_UID_STRLEN);
     if (!group_uid[0] || (is_uid(group_uid) && is_uid(library_uid))) st = MC_OK;
+    yyjson_val *names = yyjson_obj_get(root, "archive_names");
+    if (arch && yyjson_is_arr(names) && yyjson_arr_size(names) > 0) {
+      const char *first = yyjson_get_str(yyjson_arr_get_first(names));
+      snprintf(arch->first, sizeof arch->first, "%s", first ? first : "");
+      arch->count = (int)yyjson_arr_size(names);
+    }
   }
   yyjson_doc_free(doc);
   return st;
 }
 
 static mc_status recv_accept(mc_channel *ch, char group_uid[MC_UID_STRLEN],
-                             char library_uid[MC_UID_STRLEN]) {
+                             char library_uid[MC_UID_STRLEN], joined_archives *arch) {
   uint8_t type;
   const unsigned char *payload;
   size_t len;
   mc_status st = mc_channel_recv(ch, &type, &payload, &len);
   if (st == MC_OK && type != MC_MSG_PAIR_ACCEPT) st = MC_ERR_FORMAT;
-  if (st == MC_OK) st = parse_accept(payload, len, group_uid, library_uid);
+  if (st == MC_OK) st = parse_accept(payload, len, group_uid, library_uid, arch);
   return st;
 }
 
@@ -356,7 +399,34 @@ static void result(mc_sync *sync, const side *peer, int initiator, mc_pair_reaso
   r.reason = reason;
   r.attempts_left = attempts_left;
   r.status = st;
+  r.joined = 0;
+  r.archive_name = "";
+  r.archives = 0;
   mc_sync_emit_pair_result(sync, &r);
+}
+
+/* MC_PAIR_PAIRED. arch is NULL on the device that didn't join, else what it knows of the
+ * group's archives. */
+static void paired(mc_sync *sync, const side *peer, int initiator, const joined_archives *arch) {
+  mc_pair_result r;
+  memset(&r, 0, sizeof r);
+  r.device_uid = peer->dev;
+  r.name = peer->name;
+  r.initiator = initiator;
+  r.reason = MC_PAIR_PAIRED;
+  r.status = MC_OK;
+  r.joined = arch != NULL;
+  r.archive_name = arch ? arch->first : "";
+  r.archives = arch ? arch->count : 0;
+  mc_sync_emit_pair_result(sync, &r);
+}
+
+/* A new group syncing the other device's library: it's the archive. */
+static joined_archives peer_is_archive(const side *peer) {
+  joined_archives a;
+  snprintf(a.first, sizeof a.first, "%s", peer->name);
+  a.count = 1;
+  return a;
 }
 
 /* --- A: asking to pair --- */
@@ -459,7 +529,8 @@ void mc_pairing_initiate(void *arg) {
     }
     if (st == MC_OK && type != MC_MSG_PAIR_ACCEPT) st = MC_ERR_FORMAT;
     char group_uid[MC_UID_STRLEN], library_uid[MC_UID_STRLEN];
-    if (st == MC_OK) st = parse_accept(payload, len, group_uid, library_uid);
+    joined_archives arch = {"", 0};
+    if (st == MC_OK) st = parse_accept(payload, len, group_uid, library_uid, &arch);
     if (st != MC_OK) break;
 
     if (out == B_JOINS_A) {
@@ -472,7 +543,8 @@ void mc_pairing_initiate(void *arg) {
       snprintf(group_uid, sizeof group_uid, "%s", group ? group : "");
       st = apply_pairing(&c, group_uid, me.group_library_uid, NULL, &me, &peer, peer_key,
                          me.dev);
-      if (st == MC_OK) st = send_accept(ch, group_uid, me.group_library_uid, NULL);
+      if (st == MC_OK)
+        st = send_accept(ch, group_uid, me.group_library_uid, NULL, mc_sync_db_handle(c.sdb));
     } else {
       if (!group_uid[0]) {
         st = MC_ERR_FORMAT;
@@ -486,7 +558,9 @@ void mc_pairing_initiate(void *arg) {
     }
     reason = MC_PAIR_PAIRED;
     mc_sync_group_changed(sync, &c);
-    result(sync, &peer, 1, MC_PAIR_PAIRED, 0, MC_OK);
+    /* A joined B's group, or a new group syncing B's library. */
+    if (out == NEW_GROUP_B_LIBRARY) arch = peer_is_archive(&peer);
+    paired(sync, &peer, 1, out == A_JOINS_B || out == NEW_GROUP_B_LIBRARY ? &arch : NULL);
     first_session(sync, &c, ch, peer.dev, t->host, t->port);
     break;
   }
@@ -597,9 +671,10 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
 
   /* Paired. Settle the group, then carry on as a session. */
   char group_uid[MC_UID_STRLEN], library_uid[MC_UID_STRLEN];
+  joined_archives arch = {"", 0};
   if (out == B_JOINS_A) {
-    st = send_accept(ch, NULL, NULL, NULL);
-    if (st == MC_OK) st = recv_accept(ch, group_uid, library_uid);
+    st = send_accept(ch, NULL, NULL, NULL, NULL);
+    if (st == MC_OK) st = recv_accept(ch, group_uid, library_uid, &arch);
     if (st == MC_OK && !group_uid[0]) st = MC_ERR_FORMAT;
     if (st == MC_OK)
       st = apply_pairing(c, group_uid, library_uid, NULL, &me, &peer, peer_key, NULL);
@@ -609,14 +684,15 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
     st = is_uid(me.group_library_uid) ? MC_OK : MC_ERR_NOT_FOUND;
     if (st == MC_OK)
       st = apply_pairing(c, group_uid, me.group_library_uid, NULL, &me, &peer, peer_key, me.dev);
-    if (st == MC_OK) st = send_accept(ch, group_uid, me.group_library_uid, NULL);
+    if (st == MC_OK)
+      st = send_accept(ch, group_uid, me.group_library_uid, NULL, mc_sync_db_handle(c->sdb));
   } else {
     const side *holder = out == NEW_GROUP_A_LIBRARY ? &peer : &me;
     snprintf(library_uid, sizeof library_uid, "%s", holder->library_uid);
     st = mc_uid_new(group_uid);
     if (st == MC_OK)
       st = apply_pairing(c, group_uid, library_uid, holder->dev, &me, &peer, peer_key, me.dev);
-    if (st == MC_OK) st = send_accept(ch, group_uid, library_uid, holder->dev);
+    if (st == MC_OK) st = send_accept(ch, group_uid, library_uid, holder->dev, NULL);
   }
   if (st != MC_OK) {
     result(sync, &peer, 0,
@@ -628,7 +704,9 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   mc_pair_responder_wipe(&sync->in_r);
   mc_mutex_unlock(&sync->lock);
   mc_sync_group_changed(sync, c);
-  result(sync, &peer, 0, MC_PAIR_PAIRED, 0, MC_OK);
+  /* B joined A's group, or a new group syncing A's library. */
+  if (out == NEW_GROUP_A_LIBRARY) arch = peer_is_archive(&peer);
+  paired(sync, &peer, 0, out == B_JOINS_A || out == NEW_GROUP_A_LIBRARY ? &arch : NULL);
   first_session(sync, c, ch, peer.dev, NULL, 0);
   goto untrack;
 
