@@ -93,20 +93,30 @@ int main(int argc, char **argv) {
   mc_player_status_get(player, &st);
   CHECK(st.state == MC_PLAYER_STOPPED && st.index == -1 && st.count == 0);
 
+  /* Is there a device? The position only moves once it pulls audio; the state alone reads
+   * PLAYING as soon as a start is asked for. Short of half the track, so no play counts. */
+  const char *one[] = {longer};
+  CHECK(mc_player_set_queue(player, one, 1, 0) == MC_OK);
+  int has_device = 0;
+  for (uint64_t end = mc_mono_ms() + 3000; !has_device && mc_mono_ms() < end; mc_sleep_ms(10)) {
+    mc_player_status_get(player, &st);
+    has_device = st.state == MC_PLAYER_PLAYING && st.position_ms > 0;
+  }
+  if (!has_device) {
+    fprintf(stderr, "no audio device; skipping\n");
+    mc_player_free(player);
+    return SKIP;
+  }
+  mc_mutex_lock(&lock);
+  errors = events = played = 0;
+  mc_mutex_unlock(&lock);
+
   /* a, two that can't be played, then b at another rate and channel count. */
   const char *queue[] = {a, bad, missing, b};
   CHECK(mc_player_set_queue(player, queue, 4, 0) == MC_OK);
   int seen[8];
   int n = watch(player, seen, 8, 5000);
   mc_player_status_get(player, &st);
-  mc_mutex_lock(&lock);
-  int no_device = n == 0 && errors > 0;
-  mc_mutex_unlock(&lock);
-  if (no_device) {
-    fprintf(stderr, "no audio device; skipping\n");
-    mc_player_free(player);
-    return SKIP;
-  }
   CHECK(n == 2 && seen[0] == 0 && seen[1] == 3);
   CHECK(st.state == MC_PLAYER_STOPPED && st.index == 0); /* played out: back at the start */
   mc_mutex_lock(&lock);
@@ -115,7 +125,6 @@ int main(int argc, char **argv) {
   mc_mutex_unlock(&lock);
 
   /* Seeking while paused stays paused, at the new position. */
-  const char *one[] = {longer};
   CHECK(mc_player_set_queue(player, one, 1, 0) == MC_OK);
   mc_player_pause(player);
   CHECK(mc_player_seek_ms(player, 2000) == MC_OK);

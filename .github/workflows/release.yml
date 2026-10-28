@@ -95,25 +95,6 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build
         run: bash scripts/release-linux.sh
-      # Diagnostics for a failed `appstreamcli compose` (icon-file-read-error): rerun it in
-      # the build sandbox with --verbose and print the hints, which name the actual error.
-      - name: Rerun appstream compose verbosely
-        if: failure()
-        continue-on-error: true
-        run: |
-          flatpak build build/flatpak-app appstreamcli compose --verbose --no-color \
-            --prefix=/ --origin=app.musicapp.Musicapp --components=app.musicapp.Musicapp \
-            --result-root=/app/compose-debug --hints-dir=/app/compose-debug/hints /app || true
-          find build/flatpak-app/files/compose-debug -type f -print \
-            -exec sh -c 'case "$1" in *.gz) zcat "$1" ;; *.yml|*.yaml|*.json|*.xml) cat "$1" ;; esac' _ {} \;
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: linux-appstream-debug
-          path: |
-            build/flatpak-app/files/share
-            build/flatpak-app/files/compose-debug
-          if-no-files-found: warn
       - uses: actions/upload-artifact@v7
         with:
           name: linux

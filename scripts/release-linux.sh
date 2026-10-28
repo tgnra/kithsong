@@ -62,13 +62,25 @@ if ! flatpak info "org.gnome.Sdk//$runtime_version" >/dev/null 2>&1; then
 fi
 
 flatpak-builder "${deps[@]}" --force-clean --disable-rofiles-fuse \
-    --state-dir=build/flatpak-state --repo=build/flatpak-repo \
-    build/flatpak-app "$manifest"
+    --state-dir=build/flatpak-state build/flatpak-app "$manifest"
 
+# The manifest turns off flatpak-builder's own compose (see there), so compose the software
+# catalog here, outside the sandbox, where flatpak-builder would have put it. Without it the
+# bundle still installs; software centres just show less about it.
+files=build/flatpak-app/files
 if command -v appstreamcli >/dev/null; then
-    appstreamcli validate --no-net --explain \
-        "build/flatpak-app/files/share/metainfo/$app_id.metainfo.xml"
+    appstreamcli validate --no-net --explain "$files/share/metainfo/$app_id.metainfo.xml"
+    if ! appstreamcli compose --no-color --prefix=/ --origin="$app_id" \
+        --result-root="$files" --data-dir="$files/share/app-info/xmls" \
+        --icons-dir="$files/share/app-info/icons/flatpak" --hints-dir=build/flatpak-hints \
+        --components="$app_id,$app_id.desktop" "$files"; then
+        echo "warning: appstreamcli compose failed; the bundle has no software catalog." >&2
+        rm -rf "$files/share/app-info"
+    fi
+else
+    echo "warning: appstreamcli isn't installed; the bundle has no software catalog." >&2
 fi
+flatpak build-export build/flatpak-repo build/flatpak-app
 
 mkdir -p dist
 flatpak build-bundle --runtime-repo="$flathub" build/flatpak-repo "$bundle" "$app_id"

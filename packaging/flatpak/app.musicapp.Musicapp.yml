@@ -7,6 +7,9 @@ runtime: org.gnome.Platform
 runtime-version: '51'  # also the container tag in .github/workflows/release.yml
 sdk: org.gnome.Sdk
 command: musicapp
+# Composed by scripts/release-linux.sh instead: inside the build sandbox, the runtime's glycin
+# image loaders can't start their own sandbox, so appstream can't read the icons.
+appstream-compose: false
 finish-args:
   - --share=ipc
   - --socket=wayland
