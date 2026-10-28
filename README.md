@@ -182,7 +182,7 @@ nix develop -c build/linux-gtk/desktop/linux/kithsong
 ```
 
 The VS Code tasks (`linux: build`, `linux: run`, `linux: test`) and the
-`kithsong (Linux, gdb)` debug configuration run inside the dev shell. `Ctrl+Shift+B` runs
+`Kithsong (Linux, gdb)` debug configuration run inside the dev shell. `Ctrl+Shift+B` runs
 the Windows build, so on Linux start `linux: build` from `Tasks: Run Task`.
 
 ### Android
