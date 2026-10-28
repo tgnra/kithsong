@@ -1,4 +1,4 @@
-"""Renders musicapp.svg to the committed PNGs and musicapp.ico.
+"""Renders kithsong.svg to the committed PNGs and kithsong.ico.
 
 Run by hand after editing the SVG; nothing in the build calls it. Needs Microsoft Edge (or
 Chrome, via $BROWSER) for the SVG rendering and nothing beyond the standard library.
@@ -70,7 +70,7 @@ def write_ico(pngs, out):
 
 def main():
     browser = find_browser()
-    svg = HERE / "musicapp.svg"
+    svg = HERE / "kithsong.svg"
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
         rendered = {}
@@ -82,9 +82,9 @@ def main():
                 sys.exit(f"{size}px rendered as {png_size(data)}; the browser clamped the window.")
             rendered[size] = data
         for size in PNG_SIZES:
-            (HERE / f"musicapp-{size}.png").write_bytes(rendered[size])
-        write_ico([rendered[s] for s in ICO_SIZES], HERE / "musicapp.ico")
-    print("Wrote", ", ".join(f"musicapp-{s}.png" for s in PNG_SIZES), "and musicapp.ico")
+            (HERE / f"kithsong-{size}.png").write_bytes(rendered[size])
+        write_ico([rendered[s] for s in ICO_SIZES], HERE / "kithsong.ico")
+    print("Wrote", ", ".join(f"kithsong-{s}.png" for s in PNG_SIZES), "and kithsong.ico")
 
 
 if __name__ == "__main__":

@@ -2,11 +2,11 @@
 #
 # Not Flathub-ready: CMake fetches the third-party sources at configure time, so the build
 # needs the network (build-args below), which Flathub forbids.
-id: app.musicapp.Musicapp
+id: app.kithsong.Kithsong
 runtime: org.gnome.Platform
 runtime-version: '51'  # also the container tag in .github/workflows/release.yml
 sdk: org.gnome.Sdk
-command: musicapp
+command: kithsong
 # Composed by scripts/release-linux.sh instead: inside the build sandbox, the runtime's glycin
 # image loaders can't start their own sandbox, so appstream can't read the icons.
 appstream-compose: false
@@ -23,9 +23,9 @@ finish-args:
   # elsewhere come in through the file chooser portal.
   - --filesystem=xdg-music
   # desktop/linux/src/mpris.c
-  - --own-name=org.mpris.MediaPlayer2.musicapp
+  - --own-name=org.mpris.MediaPlayer2.kithsong
 modules:
-  - name: musicapp
+  - name: kithsong
     buildsystem: simple
     build-options:
       build-args:
@@ -34,10 +34,10 @@ modules:
       # secrets.local.cmake, written by the release script, sets the contact and AcoustID key.
       - >-
         cmake -S . -B _build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/app
-        -DMUSICAPP_BUILD_TESTS=OFF
+        -DKITHSONG_BUILD_TESTS=OFF
         $(test -f packaging/flatpak/secrets.local.cmake && echo -C packaging/flatpak/secrets.local.cmake)
       - cmake --build _build
-      - cmake --install _build --component musicapp --strip
+      - cmake --install _build --component kithsong --strip
     sources:
       - type: dir
         path: ../..

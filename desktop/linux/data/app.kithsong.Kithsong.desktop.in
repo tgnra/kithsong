@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=@KITHSONG_APP_NAME@
+Comment=@KITHSONG_COMMENT@
+@KITHSONG_COMMENT_L10N@Exec=kithsong
+Icon=app.kithsong.Kithsong
+Terminal=false
+Categories=AudioVideo;Audio;Player;GTK;
+Keywords=@KITHSONG_KEYWORDS@
+@KITHSONG_KEYWORDS_L10N@StartupNotify=true

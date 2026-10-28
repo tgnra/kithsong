@@ -19,8 +19,8 @@
  * says which (device_view_reach_text()). Picking a paired device
  * shows its page (device_view.c) in the main stack's "device" page; picking a nearby one
  * asks it to pair (pair_dialog.c), as does the + (add_device.c, by address). */
-#ifndef MUSICAPP_DEVICES_H
-#define MUSICAPP_DEVICES_H
+#ifndef KITHSONG_DEVICES_H
+#define KITHSONG_DEVICES_H
 
 #include <adwaita.h>
 

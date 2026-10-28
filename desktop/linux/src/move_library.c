@@ -13,7 +13,7 @@ static struct {
   mc_settings *settings; /* the worker's copy, saved by the move */
   GThread *thread;
   guint inhibit; /* logging out, while the move runs */
-  int delay_ms;  /* debug builds: MUSICAPP_TEST_MOVE_DELAY_MS */
+  int delay_ms;  /* debug builds: KITHSONG_TEST_MOVE_DELAY_MS */
   gboolean running;
   void (*after_alert)(void); /* what the shown alert's Close leads to, or NULL */
 
@@ -73,13 +73,13 @@ static char *problem_text(mc_status st, const mc_library_move_info *info, const 
   return NULL;
 }
 
-/* Debug builds: MUSICAPP_TEST_MOVE_TO in place of the picker. */
+/* Debug builds: KITHSONG_TEST_MOVE_TO in place of the picker. */
 static const char *test_hook(void) {
 #ifdef NDEBUG
   return NULL;
 #else
-  const char *to = g_getenv("MUSICAPP_TEST_MOVE_TO");
-  const char *delay = g_getenv("MUSICAPP_TEST_MOVE_DELAY_MS");
+  const char *to = g_getenv("KITHSONG_TEST_MOVE_TO");
+  const char *delay = g_getenv("KITHSONG_TEST_MOVE_DELAY_MS");
   g_move.delay_ms = delay ? atoi(delay) : 0;
   return to && *to ? to : NULL;
 #endif

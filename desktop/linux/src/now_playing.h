@@ -10,8 +10,8 @@
  * drag seeks when it's let go. With nothing playing the bar is greyed out. Only one strip
  * exists at a time.
  */
-#ifndef MUSICAPP_NOW_PLAYING_H
-#define MUSICAPP_NOW_PLAYING_H
+#ifndef KITHSONG_NOW_PLAYING_H
+#define KITHSONG_NOW_PLAYING_H
 
 #include <gtk/gtk.h>
 

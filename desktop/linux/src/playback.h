@@ -7,8 +7,8 @@
  * play. Plays are counted in the library and scrobbled when the player says they count. Call
  * everything here on the UI thread.
  */
-#ifndef MUSICAPP_PLAYBACK_H
-#define MUSICAPP_PLAYBACK_H
+#ifndef KITHSONG_PLAYBACK_H
+#define KITHSONG_PLAYBACK_H
 
 #include <gtk/gtk.h>
 

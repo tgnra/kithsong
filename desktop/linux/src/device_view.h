@@ -31,8 +31,8 @@
  * (get, change, set); a failure shows as a toast, and the page reloads. The name applies
  * with its row's apply button or Enter. Outside a group this computer's page has only its
  * address, connections and name. */
-#ifndef MUSICAPP_DEVICE_VIEW_H
-#define MUSICAPP_DEVICE_VIEW_H
+#ifndef KITHSONG_DEVICE_VIEW_H
+#define KITHSONG_DEVICE_VIEW_H
 
 #include <adwaita.h>
 

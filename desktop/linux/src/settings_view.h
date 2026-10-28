@@ -24,7 +24,7 @@
  * sync when it runs, and settings.json either way), shows where other devices reach it, and
  * leaves the group after asking, as Windows' Settings does.
  *
- * Wiring it into main.c (settings_dir is ~/.config/musicapp, as main() already builds):
+ * Wiring it into main.c (settings_dir is ~/.config/kithsong, as main() already builds):
  *
  *   static gboolean open_library(void *user, const char *dir) {
  *     app *a = user;
@@ -47,8 +47,8 @@
  *
  * Needs libadwaita 1.5 (AdwPreferencesDialog).
  */
-#ifndef MUSICAPP_SETTINGS_VIEW_H
-#define MUSICAPP_SETTINGS_VIEW_H
+#ifndef KITHSONG_SETTINGS_VIEW_H
+#define KITHSONG_SETTINGS_VIEW_H
 
 #include <adwaita.h>
 

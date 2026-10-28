@@ -48,8 +48,8 @@
  *
  * Needs libadwaita 1.5 (AdwDialog, AdwAlertDialog) and GTK 4.12.
  */
-#ifndef MUSICAPP_IMPORT_VIEW_H
-#define MUSICAPP_IMPORT_VIEW_H
+#ifndef KITHSONG_IMPORT_VIEW_H
+#define KITHSONG_IMPORT_VIEW_H
 
 #include <adwaita.h>
 

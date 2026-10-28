@@ -17,8 +17,8 @@
  * rename or delete it. Escape or the close button closes the pane. A GtkListView, so long
  * albums stay cheap. Only one list exists at a time.
  */
-#ifndef MUSICAPP_TRACK_LIST_H
-#define MUSICAPP_TRACK_LIST_H
+#ifndef KITHSONG_TRACK_LIST_H
+#define KITHSONG_TRACK_LIST_H
 
 #include <gtk/gtk.h>
 

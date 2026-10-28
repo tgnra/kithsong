@@ -5,7 +5,7 @@
 #include "cover.h"
 #include "playback.h"
 
-#define BUS_NAME "org.mpris.MediaPlayer2.musicapp"
+#define BUS_NAME "org.mpris.MediaPlayer2.kithsong"
 #define OBJECT_PATH "/org/mpris/MediaPlayer2"
 #define ROOT_IFACE "org.mpris.MediaPlayer2"
 #define PLAYER_IFACE "org.mpris.MediaPlayer2.Player"
@@ -206,7 +206,7 @@ static const GDBusInterfaceVTable player_vtable = {call_player, get_player, NULL
 static void on_name_lost(GDBusConnection *conn, const char *name, gpointer user) {
   (void)conn;
   (void)user;
-  g_warning("Couldn't take the D-Bus name %s; media controls won't show musicapp", name);
+  g_warning("Couldn't take the D-Bus name %s; media controls won't show Kithsong", name);
 }
 
 void mpris_init(GtkApplication *gapp, GtkWindow *win) {
@@ -264,12 +264,12 @@ void mpris_set_track(const char *uid, const char *title, const char *artist, con
   clear_track();
   if (uid) {
     /* Object path elements allow [A-Za-z0-9_] only; uids are hex and '-'. */
-    s.trackid = g_strdup_printf("/app/musicapp/track/%s", *uid ? uid : "none");
+    s.trackid = g_strdup_printf("/app/kithsong/track/%s", *uid ? uid : "none");
     for (char *p = s.trackid; *p; p++)
       if (*p == '-') *p = '_';
     if (!g_variant_is_object_path(s.trackid)) {
       g_free(s.trackid);
-      s.trackid = g_strdup("/app/musicapp/track/current");
+      s.trackid = g_strdup("/app/kithsong/track/current");
     }
     s.title = g_strdup(title);
     s.artist = g_strdup(artist);

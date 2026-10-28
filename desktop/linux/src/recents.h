@@ -8,8 +8,8 @@
  * library data and sync with it), newest first and at most ten; the section hides while
  * there are none. Picking one opens it on the Albums or Playlists page (app_open()). Playing
  * an album or playlist records it (app_play_album()). */
-#ifndef MUSICAPP_RECENTS_H
-#define MUSICAPP_RECENTS_H
+#ifndef KITHSONG_RECENTS_H
+#define KITHSONG_RECENTS_H
 
 #include <adwaita.h>
 
