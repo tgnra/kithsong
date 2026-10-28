@@ -184,7 +184,7 @@ static void show_results(const char *query) {
   mc_search_results_free(res);
 
   if (!shown) {
-    char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_SEARCH_NO_RESULTS_TEXT), MC_S(query));
+    char *desc = mc_format_alloc(mc_str(MC_STR_SEARCH_NO_RESULTS_TEXT), MC_S(query));
     adw_status_page_set_description(ADW_STATUS_PAGE(v.no_results), desc);
     mc_free(desc);
     gtk_widget_set_visible(v.no_results, TRUE);
@@ -220,7 +220,7 @@ static void on_destroy(GtkWidget *widget, gpointer user) {
 GtkWidget *search_view_new(app *a) {
   v.a = a;
   v.entry = gtk_search_entry_new();
-  gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(v.entry), mc_str(MC_STR_LINUX_SEARCH_PLACEHOLDER));
+  gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(v.entry), mc_str(MC_STR_SEARCH_PLACEHOLDER));
   gtk_search_entry_set_search_delay(GTK_SEARCH_ENTRY(v.entry), SEARCH_DELAY_MS);
   gtk_widget_add_css_class(v.entry, "search-large");
   gtk_widget_set_hexpand(v.entry, TRUE);
@@ -240,7 +240,7 @@ GtkWidget *search_view_new(app *a) {
 
   v.no_results = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(v.no_results), "system-search-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(v.no_results), mc_str(MC_STR_LINUX_SEARCH_NO_RESULTS_TITLE));
+  adw_status_page_set_title(ADW_STATUS_PAGE(v.no_results), mc_str(MC_STR_SEARCH_NO_RESULTS_TITLE));
   gtk_widget_set_visible(v.no_results, FALSE);
 
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);

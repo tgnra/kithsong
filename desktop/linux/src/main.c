@@ -232,7 +232,7 @@ static GtkWidget *build_top_nav(app *a) {
   GtkWidget *list = gtk_list_box_new();
   gtk_widget_add_css_class(list, "navigation-sidebar");
   GtkWidget *home = gtk_list_box_row_new();
-  gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(home), nav_row("go-home-symbolic", mc_str(MC_STR_LINUX_SECTION_HOME)));
+  gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(home), nav_row("go-home-symbolic", mc_str(MC_STR_SECTION_HOME)));
   gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(home), FALSE);
   gtk_list_box_row_set_selectable(GTK_LIST_BOX_ROW(home), FALSE);
   gtk_widget_set_sensitive(home, FALSE);

@@ -25,6 +25,7 @@ add_executable(musicapp WIN32
   src/playback.c
   src/playlist_dialogs.c
   src/scroller.c
+  src/search_view.c
   src/settings_view.c
   src/sidebar.c
   src/sync_bridge.c

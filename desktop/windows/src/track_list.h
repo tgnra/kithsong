@@ -75,6 +75,9 @@ track_list_item track_list_item_at(int i);
 /* The track the last TLN_PLAY was for. */
 int track_list_play_index(void);
 
+/* Selects the shown track with uid and scrolls it into view, if it's there. */
+void track_list_select(const char *uid);
+
 /* Marks the playing track, by uid, or none for NULL. It stays marked while other albums are
  * shown, and when its album is shown again. */
 void track_list_set_playing(const char *uid);

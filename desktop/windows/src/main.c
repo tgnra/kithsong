@@ -3,10 +3,13 @@
  *   +--------------------------------------------------------------+
  *   | |<  >  >| [] 0:00 ==o------------------- -3:12        _ [] X |  toolbar = title bar
  *   +-----------+.-----------------------------------+-------------+
- *   | Albums    |                                    | track list  |
- *   | Artists   |          album grid                | (shown when |
- *   | Playlists |                                    |  an album   |
- *   | RECENTS   |                                    |  is picked) |
+ *   | Home      |                                    | track list  |
+ *   | Search    |                                    | (shown when |
+ *   |-----------|                                    |  an album   |
+ *   | Albums    |                                    |  is picked) |
+ *   | Artists   |          album grid                |             |
+ *   | Playlists |                                    |             |
+ *   | RECENTS   |                                    |             |
  *   | DEVICES   |                                    |             |
  *   |-----------|                                    |             |
  *   | Import    |                                    |             |
@@ -15,8 +18,10 @@
  *
  * The sidebar picks the page beside it. Its RECENTS are the albums and playlists last
  * played, here or on another device (they sync with the library); clicking one shows it on
- * the Albums or Playlists page. Import and Settings replace the album grid and track
- * list with the import view (import_view.c) or the settings view (settings_view.c). Once an
+ * the Albums or Playlists page. Home is greyed out until there's a home page. Search,
+ * Import and Settings replace the album grid and track list with the search page
+ * (search_view.c), the import view (import_view.c) or the settings view (settings_view.c);
+ * a search result opens on the Albums or Playlists page. Once an
  * import starts, the other pages are greyed out until the user clicks Done. Folders dropped
  * anywhere on the window start an import. Space plays or pauses, unless the focused control
  * uses Space itself.
@@ -76,6 +81,7 @@
 #include "playback.h"
 #include "playlist_dialogs.h"
 #include "resource.h"
+#include "search_view.h"
 #include "settings_view.h"
 #include "sidebar.h"
 #include "sync_bridge.h"
@@ -91,6 +97,7 @@ enum {
   ID_GRID,
   ID_TRACKS,
   ID_NOW_PLAYING,
+  ID_SEARCH,
   NUM_BUTTONS = ID_NEXT - ID_PREV + 1
 };
 
@@ -127,6 +134,7 @@ typedef struct app {
   HWND grid;
   HWND tracks;
   HWND now_playing;
+  HWND search;
   HFONT font, icon_font;
   HWND hot_button; /* toolbar button under the mouse */
   canvas back;     /* the window's own background, around the children */
@@ -200,6 +208,7 @@ static void update_font(void) {
   SendMessageW(g_app.grid, WM_SETFONT, (WPARAM)font, TRUE);
   track_list_update(g_app.dpi);
   now_playing_update(g_app.dpi);
+  search_view_update(g_app.dpi, font);
   import_view_set_font(font);
   settings_view_set_font(font, g_app.dpi);
   device_view_set_font(font, g_app.dpi);
@@ -212,7 +221,7 @@ static void update_font(void) {
 /* Albums, Artists and Playlists all show the album grid: Playlists with the playlists in
  * it, the others the albums for now. */
 static BOOL library_page(void) {
-  return g_app.page != PAGE_IMPORT && g_app.page != PAGE_SETTINGS && g_app.page != PAGE_DEVICE;
+  return g_app.page == PAGE_ALBUMS || g_app.page == PAGE_ARTISTS || g_app.page == PAGE_PLAYLISTS;
 }
 
 static void layout(void) {
@@ -228,7 +237,7 @@ static void layout(void) {
   int tracks_w = g_app.show_tracks ? g_app.tracks_w : 0;
   int grid_w = w - side_w - (tracks_w ? tracks_w + scale(1) : 0);
 
-  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 4);
+  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 5);
   int x = pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
@@ -247,6 +256,8 @@ static void layout(void) {
   dwp = DeferWindowPos(dwp, g_app.grid, NULL, side_w, bar, grid_w, h - bar, SWP_NOZORDER | library);
   dwp = DeferWindowPos(dwp, g_app.tracks, NULL, w - tracks_w, bar, tracks_w, h - bar,
                        SWP_NOZORDER | (g_app.show_tracks && library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  dwp = DeferWindowPos(dwp, g_app.search, NULL, side_w, bar, w - side_w, h - bar,
+                       SWP_NOZORDER | (g_app.page == PAGE_SEARCH ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   EndDeferWindowPos(dwp);
 
   /* The extended frame: under the toolbar, beside the sidebar, and down far enough for the
@@ -371,6 +382,26 @@ static void refresh_library(void) {
   album_grid_set_library(g_app.lib);
   show_album(); /* if the album went, the grid says so when it reloads */
   refresh_recents();
+  if (g_app.lib) mc_library_search_prepare(g_app.lib); /* the index is ready before the user types */
+  search_view_set_library(g_app.lib);
+}
+
+/* A search result was opened: an album or playlist on its page, a track on its album with
+ * the track selected. */
+static void open_search_result(void) {
+  search_view_hit hit = *search_view_opened();
+  if (hit.kind == MC_SEARCH_PLAYLIST) {
+    show_page(PAGE_PLAYLISTS);
+    album_grid_select(hit.uid);
+    return;
+  }
+  show_page(PAGE_ALBUMS);
+  if (!album_grid_select(hit.kind == MC_SEARCH_TRACK ? hit.album_uid : hit.uid)) return;
+  if (hit.kind == MC_SEARCH_TRACK) {
+    show_album(); /* now, rather than when the grid's notification arrives */
+    track_list_select(hit.uid);
+    SetFocus(g_app.tracks);
+  }
 }
 
 static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
@@ -436,6 +467,7 @@ static void apply_theme(void) {
   sidebar_update(g_app.dpi);
   track_list_update(g_app.dpi);
   now_playing_update(g_app.dpi);
+  search_view_update(g_app.dpi, g_app.font);
   album_grid_theme_changed();
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
@@ -465,6 +497,7 @@ static void create_controls(void) {
   album_grid_set_playlist_art_dir(g_app.art_dir);
   g_app.tracks = track_list_create(g_app.wnd, ID_TRACKS);
   g_app.now_playing = now_playing_create(g_app.wnd, ID_NOW_PLAYING);
+  g_app.search = search_view_create(g_app.wnd, ID_SEARCH);
   refresh_library();
 
   import_view_create(g_app.wnd, g_app.lib);
@@ -838,8 +871,14 @@ static void on_add_device_connect(void *user, const char *host, uint16_t port) {
 static void on_command(int id, int code) {
   switch (id) {
     case ID_SIDEBAR:
-      if (code == LBN_SELCHANGE) show_page(sidebar_selection());
-      else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
+      if (code == LBN_SELCHANGE) {
+        show_page(sidebar_selection());
+        /* Clicked rather than reached with the arrow keys, which stay in the sidebar. */
+        if (g_app.page == PAGE_SEARCH && GetKeyState(VK_LBUTTON) < 0) search_view_focus();
+      } else if (code == SBN_ENTER_PAGE) {
+        if (g_app.page == PAGE_SEARCH) search_view_focus();
+        else if (library_page()) SetFocus(g_app.grid);
+      } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       else if (code == SBN_PAIR_DEVICE) pair_nearby();
       else if (code == SBN_OPEN_RECENT) open_recent();
       break;
@@ -862,6 +901,9 @@ static void on_command(int id, int code) {
         SetFocus(g_app.grid);
       } else on_track_request(code);
       break;
+    case ID_SEARCH:
+      if (code == SVN_OPEN) open_search_result();
+      break;
     case ID_NOW_PLAYING:
       if (code == NPN_SEEK) playback_seek(now_playing_position());
       break;
@@ -880,6 +922,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE:
       g_app.wnd = wnd;
       g_app.dpi = GetDpiForWindow(wnd);
+      g_app.page = PAGE_ALBUMS; /* the sidebar starts there */
       playback_init(wnd, playback_changed);
       theme_apply_window(wnd, TRUE);
       create_controls();

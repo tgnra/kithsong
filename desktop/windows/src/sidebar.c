@@ -18,7 +18,8 @@ typedef enum {
   ROW_ACCORDION, /* "Unpaired devices (n)": shows or hides the nearby rows */
   ROW_NEARBY,    /* a nearby device: a button that asks to pair */
   ROW_NOTE,
-  ROW_FOOTER, /* two small lines, s.footer */
+  ROW_FOOTER,  /* two small lines, s.footer */
+  ROW_DIVIDER, /* a line between Home and Search and the library's pages */
 } row_kind;
 
 /* The rows are rebuilt from the fixed ones, the recents, the devices and the footer whenever
@@ -34,6 +35,7 @@ typedef struct sb_row {
   char uid[MC_UID_STRLEN]; /* recent, device and nearby rows */
   unsigned flags;    /* device and nearby rows: SB_DEV_*; recent rows: the mc_recent_kind */
   int indent;        /* at 96 DPI */
+  BOOL unavailable;  /* a page that isn't there yet: greyed out, and can't be selected */
   BOOL add;          /* a heading with a + at its end */
   BOOL pinned;       /* at the bottom, out of the scrolling */
   int top, height;   /* pixels: in the content if it scrolls, else in the client area */
@@ -43,7 +45,10 @@ static const struct {
   enum mc_str_id text;
   wchar_t icon;
   sidebar_page page;
-} nav_top[] = {
+} nav_first[] = {
+  {MC_STR_SECTION_HOME, 0xE80F, PAGE_HOME},
+  {MC_STR_SEARCH, 0xE721, PAGE_SEARCH},
+}, nav_top[] = {
   {MC_STR_SECTION_ALBUMS, 0xE93C, PAGE_ALBUMS},
   {MC_STR_SECTION_ARTISTS, 0xE77B, PAGE_ARTISTS},
   {MC_STR_SECTION_PLAYLISTS, 0xE90B, PAGE_PLAYLISTS},
@@ -59,6 +64,7 @@ enum {
   NOTE_H = 32,
   FOOTER_H = 42, /* two lines of FOOTER_LINE, with room above */
   FOOTER_LINE = 15,
+  DIVIDER_H = 7,
   BOTTOM = 6, /* below the last row, of the scrolling ones and of the pinned ones */
   INSET = 6,  /* between the sidebar's edges and the selection fill */
   TEXT_X = 18,
@@ -137,7 +143,7 @@ static wchar_t *wcs_dup(const wchar_t *a, const wchar_t *b) {
 }
 
 static const sb_row *row(int i) {
-  static const sb_row none = {ROW_NOTE, NULL, NULL, 0, PAGE_ALBUMS, "", 0, 0, FALSE, FALSE, 0, 0};
+  static const sb_row none = {ROW_NOTE, NULL, NULL, 0, PAGE_ALBUMS, "", 0, 0, FALSE, FALSE, FALSE, 0, 0};
   return i >= 0 && i < s.nrows ? &s.rows[i] : &none;
 }
 
@@ -148,7 +154,7 @@ static BOOL selectable(const sb_row *r) {
 
 /* A page row that can be selected now. */
 static BOOL enabled(int i) {
-  return selectable(row(i)) && (!s.locked || i == s.sel);
+  return selectable(row(i)) && !row(i)->unavailable && (!s.locked || i == s.sel);
 }
 
 /* A row that acts when clicked, like a button: the accordion, a recent or a nearby device. */
@@ -168,7 +174,7 @@ static int next_focus(int from, int dir) {
 static int row_height(const sb_row *r) {
   static const int heights[] = {[ROW_NAV] = NAV_H,       [ROW_HEADER] = HEADER_H, [ROW_RECENT] = NAV_H,
                                 [ROW_DEVICE] = NAV_H,    [ROW_ACCORDION] = NAV_H, [ROW_NEARBY] = NAV_H,
-                                [ROW_NOTE] = NOTE_H,     [ROW_FOOTER] = FOOTER_H};
+                                [ROW_NOTE] = NOTE_H,     [ROW_FOOTER] = FOOTER_H, [ROW_DIVIDER] = DIVIDER_H};
   return scale(heights[r->kind]);
 }
 
@@ -386,6 +392,7 @@ static void push_nav(const wchar_t *text, wchar_t icon, sidebar_page page, BOOL 
   r->icon = icon;
   r->page = page;
   r->pinned = pinned;
+  r->unavailable = page == PAGE_HOME; /* there's no home page yet */
 }
 
 /* A section heading, in capitals. */
@@ -463,6 +470,9 @@ static void rebuild(void) {
   s.hot = -1;
 
   free_rows();
+  for (size_t i = 0; i < sizeof nav_first / sizeof nav_first[0]; i++)
+    push_nav(mc_wstr(nav_first[i].text), nav_first[i].icon, nav_first[i].page, FALSE);
+  push_row(ROW_DIVIDER, NULL, NULL);
   for (size_t i = 0; i < sizeof nav_top / sizeof nav_top[0]; i++)
     push_nav(mc_wstr(nav_top[i].text), nav_top[i].icon, nav_top[i].page, FALSE);
   if (s.nrecents > 0) {
@@ -545,7 +555,7 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
       BOOL selected = i == s.sel;
       color = theme_draw_state(c, &fill, scale(RADIUS),
                                selected ? STATE_SELECTED : i == s.hot ? STATE_HOT : STATE_NORMAL);
-      if (!enabled(i)) color = theme.text3; /* locked */
+      if (!enabled(i)) color = theme.text3; /* locked, or not there yet */
       if (selected && !theme.high_contrast) { /* accent marker at the left edge */
         int mark_h = scale(16);
         RECT mark = {fill.left, y + (h - mark_h) / 2, fill.left + scale(3), y + (h + mark_h) / 2};
@@ -611,6 +621,11 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
     case ROW_NOTE:
       color = theme.text3;
       break;
+    case ROW_DIVIDER: {
+      RECT line = {fill.left + scale(6), y + h / 2, fill.right - scale(6), y + h / 2 + 1};
+      canvas_clear(c, &line, theme.line, 255);
+      return;
+    }
     case ROW_FOOTER: { /* two small lines at the bottom */
       int line = scale(FOOTER_LINE);
       for (int k = 0; k < 2; k++) {
@@ -672,6 +687,8 @@ static void on_key(WPARAM key) {
     case VK_RETURN:
     case VK_SPACE:
       if (clickable(s.focus)) activate(s.focus);
+      else if (key == VK_RETURN && s.focus == s.sel && s.sel >= 0)
+        SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_ENTER_PAGE), (LPARAM)s.wnd);
       return;
     default: return;
   }

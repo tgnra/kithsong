@@ -1,5 +1,6 @@
-/* The navigation list on the left, custom-drawn: pages under section headers, with Import
- * and Settings pinned at the bottom. Pages are selected by mouse or keyboard; selecting one
+/* The navigation list on the left, custom-drawn: Home (greyed out until there's a home page)
+ * and Search, then the library's pages under section headers, with Import and Settings
+ * pinned at the bottom. Pages are selected by mouse or keyboard; selecting one
  * sends the parent WM_COMMAND with LBN_SELCHANGE. The DEVICES heading has a + at its end, to
  * add a device by address (SBN_ADD_DEVICE).
  *
@@ -14,7 +15,8 @@
  * same overlay scrollbar as the album grid (scroller.c), which isn't drawn while everything
  * fits. Import, Settings and the footer stay put below it. The arrow keys, Home and End
  * move the focus through the pages and buttons (selecting a page as they land on it, and
- * scrolling it into view); Enter or Space presses a button. */
+ * scrolling it into view); Enter or Space presses a button, and Enter on the selected page
+ * asks to move the focus into it (SBN_ENTER_PAGE). */
 #ifndef MUSICAPP_SIDEBAR_H
 #define MUSICAPP_SIDEBAR_H
 
@@ -23,6 +25,8 @@
 #include "musiccore/musiccore.h"
 
 typedef enum {
+  PAGE_HOME,   /* not there yet: its row is greyed out */
+  PAGE_SEARCH,
   PAGE_ALBUMS,
   PAGE_ARTISTS,
   PAGE_PLAYLISTS,
@@ -40,6 +44,8 @@ typedef enum {
 /* Sent the same way when a recent is clicked, to open it; sidebar_clicked_recent() says
  * which. */
 #define SBN_OPEN_RECENT 0x102
+/* Sent the same way on Enter on the selected page's row, to move the focus into the page. */
+#define SBN_ENTER_PAGE 0x103
 
 /* sidebar_device.flags */
 enum {

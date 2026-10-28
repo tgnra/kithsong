@@ -17,7 +17,7 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 - Windows and Linux - Ctrl+Right/Ctrl+Left next/previous track (not Alt+Left/Right, which is Back)
 - Windows and Linux - Shift+Right/Shift+Left seek 5 s anywhere but text fields, as the seek bar's arrows do
 - Windows and Linux - Ctrl+Up/Ctrl+Down volume and Ctrl+M mute, once volume exists
-- Windows and Linux - Ctrl+F focus search (Linux has a Search page now); Windows also Ctrl+E/F3 as in Explorer, Linux also type to search (GNOME)
+- Windows and Linux - Ctrl+F focus search (both have a Search page now); Windows also Ctrl+E/F3 as in Explorer, Linux also type to search (GNOME)
 - Windows and Linux - Ctrl+1/2/3 switch to Albums/Artists/Playlists (sidebar order)
 - Windows and Linux - Alt+Left and the mouse's back button go back (album -> grid, device page -> library); Esc keeps closing the pane
 - Windows and Linux - Ctrl+O import, Ctrl+N new playlist
@@ -78,9 +78,10 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 
 ## Search
 
-- Windows - search page, as Linux has
-- Linux - artist, album group and smart playlist results don't open until there are pages for them
-- Linux - Home in the sidebar is greyed out until there's a home page
+- Windows and Linux - artist, album group and smart playlist results don't open until there are pages for them
+- Windows and Linux - Home in the sidebar is greyed out until there's a home page
+- Windows - the search page is custom-drawn, so screen readers don't see its results (like the album grid and track list)
+- Windows - Up and Down move through the album tiles one at a time, not by row
 - Linux - only compiled and launched so far; check it in the running app
 
 ## Other

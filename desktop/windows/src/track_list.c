@@ -403,6 +403,14 @@ const track_list_request *track_list_last_request(void) {
   return &s.req;
 }
 
+void track_list_select(const char *uid) {
+  for (int i = 0; uid && i < s.count; i++)
+    if (!strcmp(s.rows[i].uid, uid)) {
+      select_row(i);
+      return;
+    }
+}
+
 void track_list_set_playing(const char *uid) {
   const char *now = uid ? uid : "";
   if (!strcmp(now, s.playing_uid) || strlen(now) >= MC_UID_STRLEN) return;
