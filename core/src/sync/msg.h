@@ -29,6 +29,8 @@
 #define MC_MSG_FILE_ERR 0x25
 #define MC_MSG_PREPARE_REQ 0x26
 #define MC_MSG_FILES_DONE 0x27 /* the receiver has asked for all it wants; the turn passes */
+#define MC_MSG_COVER_REQ 0x28  /* only to a peer whose HELLO has "covers": true */
+#define MC_MSG_COVER_HDR 0x29
 
 /* Pairing. PAIR_HELLO to JPAKE_2 travel in the clear, PAIR_ACCEPT encrypted. */
 #define MC_MSG_PAIR_HELLO 0x40

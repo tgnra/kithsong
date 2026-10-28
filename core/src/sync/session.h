@@ -15,6 +15,8 @@ typedef struct mc_session {
   /* A user pressed Sync for it: set before run if on this device (mc_sync_take_user()),
    * and by run if the peer's HELLO says so. Both ends then confirm their profiles. */
   int user;
+  /* The peer's HELLO says it serves COVER_REQ (older versions end the session on it). */
+  int peer_covers;
   /* Results. */
   int64_t rows_sent, rows_received;
   int64_t rows_new; /* received rows that were new here */
@@ -26,6 +28,7 @@ typedef struct mc_session {
   /* The file phase (transfer.c). */
   int files_received, files_missing, files_corrupt, files_deleted, files_unknown, files_sent;
   int files_done, files_total; /* this side's requests, for progress */
+  int covers_received;
   int64_t bytes_received, bytes_sent;
   struct mc_transfer *xfer; /* between mc_transfer_begin() and mc_transfer_end() */
 } mc_session;

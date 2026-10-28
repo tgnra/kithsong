@@ -316,6 +316,7 @@ static mc_status send_hello(mc_session *s) {
   yyjson_mut_obj_add_strcpy(doc, root, "library_uid", lib_uid);
   yyjson_mut_obj_add_strcpy(doc, root, "node_uid", mc_library_node_uid(s->conn->lib));
   if (s->user) yyjson_mut_obj_add_bool(doc, root, "user", true);
+  yyjson_mut_obj_add_bool(doc, root, "covers", true);
   yyjson_mut_val *caps = yyjson_mut_obj(doc);
   yyjson_mut_obj_add_val(doc, root, "caps", caps);
   sqlite3_stmt *stmt;
@@ -353,6 +354,7 @@ static mc_status recv_hello(mc_session *s, hello *h) {
     memcpy(h->library_uid, lib, MC_UID_STRLEN);
     memcpy(h->node_uid, node, MC_UID_STRLEN);
     if (yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "user"))) s->user = 1;
+    s->peer_covers = yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "covers"));
     st = MC_OK;
   }
   yyjson_doc_free(doc);

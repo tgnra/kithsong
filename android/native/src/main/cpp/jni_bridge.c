@@ -771,7 +771,7 @@ static void on_sync_done(void *user, const mc_sync_result *r) {
                          (jlong)r->rows_sent, (jlong)r->rows_received, (jint)r->files_received,
                          (jint)r->files_missing, (jint)r->files_corrupt, (jint)r->files_deleted,
                          (jint)r->files_unknown, (jint)r->files_sent, (jlong)r->bytes_received,
-                         (jlong)r->bytes_sent);
+                         (jlong)r->bytes_sent, (jint)r->covers_received);
   if (uid) (*env)->DeleteLocalRef(env, uid);
   detach(env, attached);
 }
@@ -798,7 +798,7 @@ JNIEXPORT jlong JNICALL Java_app_musicapp_CoreSync_nativeNew(JNIEnv *env, jclass
     {"onPairCode", "(Ljava/lang/String;Ljava/lang/String;I)V"},
     {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIII)V"},
     {"onProgress", "(Ljava/lang/String;IJJIIJJ)V"},
-    {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJ)V"},
+    {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJI)V"},
   };
   jmethodID *ids[] = {&p->on_peer, &p->on_pair_code, &p->on_pair_result, &p->on_progress,
                       &p->on_sync_done};

@@ -3,7 +3,8 @@
  * is the group's archive; B's profile decides what it fetches: originals, then Opus at
  * 64 kbps, then a selection. Also checksums, reconcile (unwanted, wrong-format, deleted and
  * unknown files, and the originals imported on B that go once the archive holds them),
- * sync_status and mc_sync_verify(). */
+ * album covers that exist only as an image file beside the originals, sync_status and
+ * mc_sync_verify(). */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -749,6 +750,37 @@ int main(int argc, char **argv) {
     if (mc_sync_db_open(b.config, &sdb) == MC_OK) mc_rows_vv_digest(mc_sync_db_handle(sdb), g2);
     mc_sync_db_close(sdb);
     CHECK(g1[0] && !strcmp(g1, g2)); /* the status write didn't unsettle the group data */
+  }
+
+  /* A cover that is only an image file beside the originals, none of which embeds it (as
+   * an import's downloaded art is): B already holds the files, and the next session brings
+   * the cover, byte for byte. Other has no art and gets none; a later session asks again
+   * for nothing. */
+  {
+    char cover_a[2048], cover_b[2048], ha[65], hb[65];
+    snprintf(cover_a, sizeof cover_a, "%s/Low/Things (1994)/cover.jpg", a.libdir);
+    snprintf(cover_b, sizeof cover_b, "%s/Low/Things (1994)/cover.jpg", b.libdir);
+    FILE *f = mc_fopen(cover_a, "wb");
+    CHECK(f != NULL);
+    if (f) {
+      static const unsigned char head[] = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'};
+      fwrite(head, 1, sizeof head, f);
+      for (int i = 0; i < 200000; i++) fputc(i * 7 & 0xFF, f); /* spans several frames */
+      fclose(f);
+    }
+    file_sha(cover_a, ha);
+    CHECK(mc_library_begin_write(a.lib) == MC_OK);
+    snprintf(sql, sizeof sql, "UPDATE albums SET art_hash = '%s' WHERE uid = '%s'", ha, things);
+    CHECK(exec(mc_library_db(a.lib), sql) == SQLITE_OK);
+    CHECK(mc_library_commit(a.lib) == MC_OK);
+    CHECK(!mc_file_exists(cover_b));
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.files_received == 0 && rb.covers_received == 1 && ra.covers_received == 0);
+    file_sha(cover_b, hb);
+    CHECK(ha[0] && !strcmp(ha, hb));
+    CHECK(!lib_file_exists(&b, "Low/Other (1996)/cover.jpg"));
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(rb.covers_received == 0 && ra.covers_received == 0);
   }
 
   /* B: Opus at 64 kbps. A transcodes; B swaps its WAVs for Opus files. */

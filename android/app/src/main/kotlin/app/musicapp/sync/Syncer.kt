@@ -436,15 +436,16 @@ class Syncer(
                     "Synced with ${event.uid}: status ${event.status}, ${event.rowsReceived} rows in, " +
                         "${event.rowsSent} out, ${event.filesReceived} files in (${event.bytesReceived} bytes), " +
                         "${event.filesSent} out, ${event.filesDeleted} deleted, ${event.filesMissing} missing, " +
-                        "${event.filesCorrupt} corrupt",
+                        "${event.filesCorrupt} corrupt, ${event.coversReceived} covers in",
                 )
                 update { copy(sessions = sessions - event.uid, results = results + (event.uid to event)) }
                 done.value += event.uid
-                // Albums, playlists and plays from the other devices, and the files that arrived
-                // or went: the library and Recents. Files that arrived before a session failed
-                // are kept, so they count either way.
+                // Albums, playlists and plays from the other devices, and the files and covers
+                // that arrived or went: the library and Recents. Files that arrived before a
+                // session failed are kept, so they count either way.
                 val rows = event.status == 0 && event.rowsReceived > 0
-                if (rows || event.filesReceived > 0 || event.filesDeleted > 0 || event.filesUnknown > 0) {
+                val files = event.filesReceived > 0 || event.filesDeleted > 0 || event.filesUnknown > 0
+                if (rows || files || event.coversReceived > 0) {
                     source.refresh()
                     lastFilesRefresh = SystemClock.elapsedRealtime()
                 }

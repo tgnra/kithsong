@@ -94,6 +94,7 @@ typedef struct mc_sync_result {
   int64_t bytes_sent;
   int files_paused;      /* this device fetched and deleted nothing: its profile isn't
                           * confirmed (see mc_sync_confirm_now()) */
+  int covers_received;   /* album covers fetched for folders here that had none */
 } mc_sync_result;
 
 /* Every member may be NULL. All run on core threads; see the top of this file. */
