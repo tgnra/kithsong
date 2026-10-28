@@ -13,6 +13,10 @@
 
 static char base[1024];
 
+static int same(const char *a, const char *b) {
+  return a && b && !strcmp(a, b);
+}
+
 static void path(char *out, size_t cap, const char *rel) {
   snprintf(out, cap, "%s/%s", base, rel);
 }
@@ -225,11 +229,11 @@ static void test_failure(void) {
   mc_library_move_result_free(&result);
   CHECK(library_intact("src"));
   CHECK(!exists("dest")); /* made for the move, so removed again */
-  CHECK(!strcmp(mc_settings_library_dir(settings), src));
+  CHECK(same(mc_settings_library_dir(settings), src));
   mc_settings_free(settings);
   settings = NULL;
   CHECK(mc_settings_load(cfg, &settings) == MC_OK);
-  CHECK(!strcmp(mc_settings_library_dir(settings), src));
+  CHECK(same(mc_settings_library_dir(settings), src));
   mc_settings_free(settings);
 
   /* The library still opens where it was. */
@@ -287,7 +291,7 @@ static void test_copy(void) {
   mc_settings_free(settings);
   settings = NULL;
   CHECK(mc_settings_load(cfg, &settings) == MC_OK);
-  CHECK(!strcmp(mc_settings_library_dir(settings), dst));
+  CHECK(same(mc_settings_library_dir(settings), dst));
   mc_settings_free(settings);
   check_moved("copied", dst);
   reset_hooks();
@@ -317,7 +321,7 @@ static void test_rename(void) {
 int main(int argc, char **argv) {
   /* Full, as a library folder is; the database's absolute path has to look like one. */
   char *dir = mc_full_path(argc > 1 ? argv[1] : ".");
-  snprintf(base, sizeof base, "%s/test_library_move", dir ? dir : ".");
+  snprintf(base, sizeof base, "%s/library_move_scratch", dir ? dir : ".");
   free(dir);
   remove_tree(base);
   mc_mkdirs(base);
