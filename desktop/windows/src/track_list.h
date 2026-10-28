@@ -19,8 +19,8 @@
  * with no track selected) offers Rename... and Delete Playlist.... The close button or
  * Escape asks the parent to close the pane (TLN_CLOSE).
  */
-#ifndef MUSICAPP_TRACK_LIST_H
-#define MUSICAPP_TRACK_LIST_H
+#ifndef KITHSONG_TRACK_LIST_H
+#define KITHSONG_TRACK_LIST_H
 
 #include <windows.h>
 

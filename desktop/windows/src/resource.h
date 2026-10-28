@@ -1,6 +1,6 @@
 /* Resource ids shared by app.rc and the C sources. */
-#ifndef MUSICAPP_RESOURCE_H
-#define MUSICAPP_RESOURCE_H
+#ifndef KITHSONG_RESOURCE_H
+#define KITHSONG_RESOURCE_H
 
 /* The app icon, version.rc.in. */
 #define IDI_APP 1

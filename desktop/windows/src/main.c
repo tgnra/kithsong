@@ -56,8 +56,8 @@
  * and comes back with the library open in its new folder (or its old one, if the move
  * failed).
  *
- * Command line: musicapp.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
- * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\musicapp,
+ * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
+ * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
  * so two instances can sync on one PC; the paths are imported. --add-firewall-rule alone is
  * firewall.c's elevated helper, which adds the Windows Firewall rule sync needs and exits.
  */
@@ -708,10 +708,10 @@ static void format_address(wchar_t *out, size_t cap, const char *host, unsigned 
 static void update_footer(void) {
   wchar_t line1[160], line2[160], tip[64 + MAX_ADDRESSES * 64] = L"";
   if (g_app.lib)
-    mc_wformat(line1, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION_DB), MC_S(mc_version()), MC_D(MUSICAPP_BUILD_NUMBER),
+    mc_wformat(line1, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION_DB), MC_S(mc_version()), MC_D(KITHSONG_BUILD_NUMBER),
                MC_D(mc_library_schema_version(g_app.lib)));
   else
-    mc_wformat(line1, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION), MC_S(mc_version()), MC_D(MUSICAPP_BUILD_NUMBER));
+    mc_wformat(line1, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION), MC_S(mc_version()), MC_D(KITHSONG_BUILD_NUMBER));
 
   mc_sync *sync = sync_bridge_get();
   if (!sync) {
@@ -1297,7 +1297,7 @@ static void free_args(app_args *args) {
 }
 
 /* Where settings.json and sync.db live: --config-dir made absolute, or
- * %LOCALAPPDATA%\musicapp. Created if missing. Returns UTF-8, or NULL (*shown says which
+ * %LOCALAPPDATA%\kithsong. Created if missing. Returns UTF-8, or NULL (*shown says which
  * folder it was, for the error). */
 static char *config_dir(const app_args *args, wchar_t *shown, DWORD cap) {
   wchar_t dir[MAX_PATH];
@@ -1309,11 +1309,18 @@ static char *config_dir(const app_args *args, wchar_t *shown, DWORD cap) {
   } else {
     DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH);
     if (n == 0 || n >= MAX_PATH - 16) {
-      lstrcpynW(shown, L"%LOCALAPPDATA%\\musicapp", (int)cap);
+      lstrcpynW(shown, L"%LOCALAPPDATA%\\kithsong", (int)cap);
       return NULL;
     }
-    wcscat(dir, L"\\musicapp");
+    wchar_t old[MAX_PATH];
+    wcscpy(old, dir);
+    wcscat(old, L"\\musicapp");
+    wcscat(dir, L"\\kithsong");
     lstrcpynW(shown, dir, (int)cap);
+    char *old8 = utf8_from_wide(old), *dir8 = utf8_from_wide(dir);
+    mc_settings_move_old_dir(old8, dir8);
+    free(old8);
+    free(dir8);
   }
   int err = SHCreateDirectoryExW(NULL, dir, NULL);
   if (err != ERROR_SUCCESS && err != ERROR_ALREADY_EXISTS && err != ERROR_FILE_EXISTS) return NULL;
@@ -1572,7 +1579,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     .hIcon = LoadIconW(inst, MAKEINTRESOURCEW(IDI_APP)),
     .hIconSm = LoadImageW(inst, MAKEINTRESOURCEW(IDI_APP), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
                           GetSystemMetrics(SM_CYSMICON), 0),
-    .lpszClassName = L"musicapp", /* no background brush: WM_ERASEBKGND paints */
+    .lpszClassName = L"kithsong", /* no background brush: WM_ERASEBKGND paints */
   };
   RegisterClassExW(&wc);
 
@@ -1584,7 +1591,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     mc_wformat(title, MAX_PATH + 32, mc_str(MC_STR_WINDOWS_TITLE_CONFIG_DIR), MC_S(shown));
     free(shown);
   }
-  HWND wnd = CreateWindowExW(0, L"musicapp", title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+  HWND wnd = CreateWindowExW(0, L"kithsong", title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                              CW_USEDEFAULT, CW_USEDEFAULT, 1200, 800, NULL, NULL, inst, NULL);
   if (!wnd) return 1;
   DragAcceptFiles(wnd, TRUE);

@@ -1,15 +1,15 @@
 # Runs the Windows app against a throwaway library and config folder in %TEMP%, so the real
-# library and %LOCALAPPDATA%\musicapp are never touched. Both are deleted when the app exits.
+# library and %LOCALAPPDATA%\kithsong are never touched. Both are deleted when the app exits.
 # Any arguments (folders or files to import) are passed through to the app.
 #
-#   run-windows-scratch.ps1 <path to musicapp.exe> [paths...]
+#   run-windows-scratch.ps1 <path to kithsong.exe> [paths...]
 param(
   [Parameter(Mandatory)] [string] $Exe,
   [Parameter(ValueFromRemainingArguments)] [string[]] $Paths
 )
 $ErrorActionPreference = 'Stop'
 
-$root = Join-Path $env:TEMP ("musicapp-scratch-" + [IO.Path]::GetRandomFileName())
+$root = Join-Path $env:TEMP ("kithsong-scratch-" + [IO.Path]::GetRandomFileName())
 $library = Join-Path $root 'library'
 $config = Join-Path $root 'config'
 New-Item -ItemType Directory -Force $library, $config | Out-Null
@@ -24,7 +24,7 @@ try {
   $argList = @('--config-dir', "`"$config`"", '--') + ($Paths | ForEach-Object { "`"$_`"" })
   $proc = Start-Process -FilePath $Exe -ArgumentList $argList -PassThru
   $proc.WaitForExit()
-  Write-Host "musicapp exited with code $($proc.ExitCode)"
+  Write-Host "Kithsong exited with code $($proc.ExitCode)"
 } finally {
   # The library database can stay locked for a moment after exit.
   for ($i = 0; $i -lt 10 -and (Test-Path $root); $i++) {

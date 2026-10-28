@@ -1,14 +1,14 @@
-# Builds the Windows release and packs it as dist\musicapp-<version>-windows-x64.zip: one
-# musicapp-<version>\ folder holding musicapp.exe and LICENSES\. The release workflow runs this
+# Builds the Windows release and packs it as dist\kithsong-<version>-windows-x64.zip: one
+# kithsong-<version>\ folder holding kithsong.exe and LICENSES\. The release workflow runs this
 # too.
 #
 #   scripts\release-windows.ps1
 #
 # Needs w64devkit's gcc (on PATH, or at $env:W64DEVKIT), CMake >= 3.28 and Ninja. Bakes in
-# $env:MUSICAPP_CONTACT, $env:MUSICAPP_ACOUSTID_KEY, $env:MUSICAPP_LASTFM_KEY and
-# $env:MUSICAPP_LASTFM_SECRET when they're set, and stamps
+# $env:KITHSONG_CONTACT, $env:KITHSONG_ACOUSTID_KEY, $env:KITHSONG_LASTFM_KEY and
+# $env:KITHSONG_LASTFM_SECRET when they're set, and stamps
 
-# $env:MUSICAPP_BUILD_NUMBER (0-65535) into the file version and the app.
+# $env:KITHSONG_BUILD_NUMBER (0-65535) into the file version and the app.
 $ErrorActionPreference = 'Stop'
 
 if ($env:OS -ne 'Windows_NT') { Write-Error 'The Windows release builds on Windows only.' }
@@ -17,8 +17,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content "$root\VERSION" -TotalCount 1).Trim()
 $preset = 'windows-w64devkit-release'
 $buildDir = "$root\build\$preset"
-$stage = "$root\build\stage-windows\musicapp-$version"
-$zip = "$root\dist\musicapp-$version-windows-x64.zip"
+$stage = "$root\build\stage-windows\kithsong-$version"
+$zip = "$root\dist\kithsong-$version-windows-x64.zip"
 
 if ($env:W64DEVKIT) { $env:PATH = "$env:W64DEVKIT\bin;$env:PATH" }
 foreach ($tool in 'gcc', 'cmake', 'ninja') {
@@ -33,16 +33,16 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) { Write-Error "$($args[0]) failed (exit $LASTEXITCODE)" }
 }
 
-$configure = @('--preset', $preset, '-DMUSICAPP_BUILD_TESTS=ON')
-if ($env:MUSICAPP_CONTACT) { $configure += "-DMUSICAPP_CONTACT=$env:MUSICAPP_CONTACT" }
-else { Write-Warning 'MUSICAPP_CONTACT is not set; MusicBrainz may block this build.' }
-if ($env:MUSICAPP_ACOUSTID_KEY) { $configure += "-DMUSICAPP_ACOUSTID_KEY=$env:MUSICAPP_ACOUSTID_KEY" }
-else { Write-Warning 'MUSICAPP_ACOUSTID_KEY is not set; fingerprinting will be off in this build.' }
-if ($env:MUSICAPP_LASTFM_KEY -and $env:MUSICAPP_LASTFM_SECRET) {
-    $configure += "-DMUSICAPP_LASTFM_KEY=$env:MUSICAPP_LASTFM_KEY", "-DMUSICAPP_LASTFM_SECRET=$env:MUSICAPP_LASTFM_SECRET"
-} else { Write-Warning 'MUSICAPP_LASTFM_KEY or MUSICAPP_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build.' }
+$configure = @('--preset', $preset, '-DKITHSONG_BUILD_TESTS=ON')
+if ($env:KITHSONG_CONTACT) { $configure += "-DKITHSONG_CONTACT=$env:KITHSONG_CONTACT" }
+else { Write-Warning 'KITHSONG_CONTACT is not set; MusicBrainz may block this build.' }
+if ($env:KITHSONG_ACOUSTID_KEY) { $configure += "-DKITHSONG_ACOUSTID_KEY=$env:KITHSONG_ACOUSTID_KEY" }
+else { Write-Warning 'KITHSONG_ACOUSTID_KEY is not set; fingerprinting will be off in this build.' }
+if ($env:KITHSONG_LASTFM_KEY -and $env:KITHSONG_LASTFM_SECRET) {
+    $configure += "-DKITHSONG_LASTFM_KEY=$env:KITHSONG_LASTFM_KEY", "-DKITHSONG_LASTFM_SECRET=$env:KITHSONG_LASTFM_SECRET"
+} else { Write-Warning 'KITHSONG_LASTFM_KEY or KITHSONG_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build.' }
 
-if ($env:MUSICAPP_BUILD_NUMBER) { $configure += "-DMUSICAPP_BUILD_NUMBER=$env:MUSICAPP_BUILD_NUMBER" }
+if ($env:KITHSONG_BUILD_NUMBER) { $configure += "-DKITHSONG_BUILD_NUMBER=$env:KITHSONG_BUILD_NUMBER" }
 
 Push-Location $root
 try {
@@ -50,7 +50,7 @@ try {
     Invoke-Checked cmake --build --preset $preset
     Invoke-Checked ctest --test-dir $buildDir --output-on-failure
     if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-    Invoke-Checked cmake --install $buildDir --prefix $stage --component musicapp --strip
+    Invoke-Checked cmake --install $buildDir --prefix $stage --component kithsong --strip
 } finally {
     Pop-Location
 }

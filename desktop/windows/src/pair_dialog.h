@@ -14,8 +14,8 @@
  * Android. The code and the status line have fixed ids, so test scripts can drive the
  * dialogs. The templates are built in memory, as in add_device.c, so they need no
  * resources. */
-#ifndef MUSICAPP_PAIR_DIALOG_H
-#define MUSICAPP_PAIR_DIALOG_H
+#ifndef KITHSONG_PAIR_DIALOG_H
+#define KITHSONG_PAIR_DIALOG_H
 
 #include <windows.h>
 

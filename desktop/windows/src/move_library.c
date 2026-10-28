@@ -32,7 +32,7 @@ static struct {
   char *src, *dst; /* UTF-8 */
   HANDLE thread;
   BOOL lock_ready;
-  int delay_ms; /* debug builds: MUSICAPP_TEST_MOVE_DELAY_MS */
+  int delay_ms; /* debug builds: KITHSONG_TEST_MOVE_DELAY_MS */
 
   /* Shared with the worker, under lock. */
   CRITICAL_SECTION lock;
@@ -104,17 +104,17 @@ static wchar_t *problem_text(mc_status st, const mc_library_move_info *info, con
   return NULL;
 }
 
-/* Debug builds: MUSICAPP_TEST_MOVE_TO in place of the picker. */
+/* Debug builds: KITHSONG_TEST_MOVE_TO in place of the picker. */
 static BOOL test_hook(char **dst) {
 #ifdef NDEBUG
   (void)dst;
   return FALSE;
 #else
   wchar_t w[MAX_PATH];
-  DWORD n = GetEnvironmentVariableW(L"MUSICAPP_TEST_MOVE_TO", w, MAX_PATH);
+  DWORD n = GetEnvironmentVariableW(L"KITHSONG_TEST_MOVE_TO", w, MAX_PATH);
   if (!n || n >= MAX_PATH) return FALSE;
   *dst = wstr_to_utf8(w);
-  n = GetEnvironmentVariableW(L"MUSICAPP_TEST_MOVE_DELAY_MS", w, MAX_PATH);
+  n = GetEnvironmentVariableW(L"KITHSONG_TEST_MOVE_DELAY_MS", w, MAX_PATH);
   g_move.delay_ms = n && n < MAX_PATH ? _wtoi(w) : 0;
   return TRUE;
 #endif
@@ -312,9 +312,9 @@ static BOOL create_window(void) {
                     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW),
                     .hIcon = (HICON)GetClassLongPtrW(g_move.main, GCLP_HICON),
                     .hIconSm = (HICON)GetClassLongPtrW(g_move.main, GCLP_HICONSM),
-                    .lpszClassName = L"musicapp_move"};
+                    .lpszClassName = L"kithsong_move"};
   RegisterClassExW(&wc);
-  g_move.wnd = CreateWindowExW(WS_EX_APPWINDOW | WS_EX_DLGMODALFRAME, L"musicapp_move",
+  g_move.wnd = CreateWindowExW(WS_EX_APPWINDOW | WS_EX_DLGMODALFRAME, L"kithsong_move",
                                mc_wstr(MC_STR_LIBRARY_MOVE_TITLE), WS_POPUP | WS_CAPTION | WS_CLIPCHILDREN, 0, 0,
                                0, 0, NULL, NULL, GetModuleHandleW(NULL), NULL);
   if (!g_move.wnd) return FALSE;

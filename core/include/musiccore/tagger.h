@@ -51,7 +51,7 @@ mc_status mc_musicbrainz_ping(char **out_name);
 /* Cheap offline check: opens (and closes) a TCP connection to the MusicBrainz server,
  * waiting at most timeout_ms for the connection (name lookup isn't bounded, but fails at
  * once on a machine with no network). MC_OK if it connected, MC_ERR_NET if not. Blocks.
- * For testing, MUSICAPP_MUSICBRAINZ_PROBE=host:port in the environment checks that address
+ * For testing, KITHSONG_MUSICBRAINZ_PROBE=host:port in the environment checks that address
  * instead, e.g. 127.0.0.1:1 to simulate being offline. */
 mc_status mc_musicbrainz_reachable(int timeout_ms);
 

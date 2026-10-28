@@ -10,8 +10,8 @@
  *
  * Add to Album Group is the same for an album, in the album grid's right-click menu.
  */
-#ifndef MUSICAPP_ADD_TO_PLAYLIST_H
-#define MUSICAPP_ADD_TO_PLAYLIST_H
+#ifndef KITHSONG_ADD_TO_PLAYLIST_H
+#define KITHSONG_ADD_TO_PLAYLIST_H
 
 #include <windows.h>
 

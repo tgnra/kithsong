@@ -1,4 +1,4 @@
--- musicapp sync database, version 1. See docs/sync-protocol.md.
+-- Kithsong sync database, version 1. See docs/sync-protocol.md.
 --
 -- sync.db lives in the per-device config dir, next to settings.json, and holds everything
 -- about syncing: this device's keys, the group it belongs to, the group's devices and their

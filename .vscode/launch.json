@@ -5,10 +5,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "musicapp (Windows, gdb)",
+      "name": "Kithsong (Windows, gdb)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/windows-w64devkit/desktop/windows/musicapp.exe",
+      "program": "${workspaceFolder}/build/windows-w64devkit/desktop/windows/kithsong.exe",
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb.exe",
@@ -20,10 +20,10 @@
       ]
     },
     {
-      "name": "musicapp (Linux, gdb)",
+      "name": "Kithsong (Linux, gdb)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/linux-gtk/desktop/linux/musicapp",
+      "program": "${workspaceFolder}/build/linux-gtk/desktop/linux/kithsong",
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
       "miDebuggerPath": "nix",

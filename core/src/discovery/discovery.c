@@ -11,10 +11,10 @@
  * then merge into the peer table.
  *
  * Our records, for device "Desk" with device_uid ending in 12345678:
- *   _musicapp._tcp.local.                   PTR  Desk (12345678)._musicapp._tcp.local.
- *   Desk (12345678)._musicapp._tcp.local.   SRV  0 0 <port> musicapp-12345678.local.
- *   Desk (12345678)._musicapp._tcp.local.   TXT  v=1 dev=... name=Desk kind=desktop grp=...
- *   musicapp-12345678.local.                A    <interface address>, AAAA <global IPv6>
+ *   _kithsong._tcp.local.                   PTR  Desk (12345678)._kithsong._tcp.local.
+ *   Desk (12345678)._kithsong._tcp.local.   SRV  0 0 <port> kithsong-12345678.local.
+ *   Desk (12345678)._kithsong._tcp.local.   TXT  v=1 dev=... name=Desk kind=desktop grp=...
+ *   kithsong-12345678.local.                A    <interface address>, AAAA <global IPv6>
  * The uid suffix keeps instance and host names unique without probing.
  *
  * The thread sleeps in select() until the next scan, announcement or peer expiry, or until
@@ -54,7 +54,7 @@
 #include "mdns.h"
 #include "util/platform.h"
 
-#define SERVICE "_musicapp._tcp.local."
+#define SERVICE "_kithsong._tcp.local."
 #define DNS_SD "_services._dns-sd._udp.local."
 
 enum {
@@ -177,7 +177,7 @@ static int name_eq(const char *a, const char *b) {
   return *a == *b;
 }
 
-/* "<label>._musicapp._tcp.local." */
+/* "<label>._kithsong._tcp.local." */
 static int is_instance(const char *name) {
   size_t n = strlen(name), s = strlen(SERVICE);
   return n > s + 1 && name[n - s - 1] == '.' && name_eq(name + n - s, SERVICE);
@@ -927,8 +927,8 @@ mc_status mc_discovery_start(const char *device_uid, const char *device_name, co
     label[i] = c == '.' ? '-' : c < 0x20 ? ' ' : (char)c;
   }
   label[n] = '\0';
-  snprintf(d->instance, sizeof d->instance, "%s (%s)." SERVICE, n ? label : "musicapp", tail);
-  snprintf(d->hostname, sizeof d->hostname, "musicapp-%s.local.", tail);
+  snprintf(d->instance, sizeof d->instance, "%s (%s)." SERVICE, n ? label : "Kithsong", tail);
+  snprintf(d->hostname, sizeof d->hostname, "kithsong-%s.local.", tail);
 
   list_addresses(d->addrs4, MAX_SOCKS, &d->naddrs4, &d->addr6, &d->has_addr6);
   open_ipv4(d);

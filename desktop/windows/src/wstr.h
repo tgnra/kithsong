@@ -1,6 +1,6 @@
 /* UI text as UTF-16, from the core's string table (musiccore/i18n.h, strings/en.json). */
-#ifndef MUSICAPP_WSTR_H
-#define MUSICAPP_WSTR_H
+#ifndef KITHSONG_WSTR_H
+#define KITHSONG_WSTR_H
 
 #include <stddef.h>
 #include <windows.h>

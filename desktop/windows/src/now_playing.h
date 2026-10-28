@@ -12,8 +12,8 @@
  * Drawn with alpha, as it sits over Mica. Everywhere but the bar lets clicks through to the
  * title bar, so the window can still be dragged by it.
  */
-#ifndef MUSICAPP_NOW_PLAYING_H
-#define MUSICAPP_NOW_PLAYING_H
+#ifndef KITHSONG_NOW_PLAYING_H
+#define KITHSONG_NOW_PLAYING_H
 
 #include <windows.h>
 

@@ -19,9 +19,9 @@
 
 #define SKIP 77
 #define INTERVAL_S 2 /* so a silent peer is offline after 4 s */
-#define FAKE_INSTANCE "Fake (00000001)._musicapp._tcp.local."
+#define FAKE_INSTANCE "Fake (00000001)._kithsong._tcp.local."
 #define FAKE_DEV "0192f1e4-7c3a-7b21-9d4e-000000000001"
-#define FAKE_OLD_INSTANCE "Old (00000099)._musicapp._tcp.local."
+#define FAKE_OLD_INSTANCE "Old (00000099)._kithsong._tcp.local."
 #define FAKE_OLD_DEV "0192f1e4-7c3a-7b21-9d4e-000000000099"
 
 typedef struct seen_peer {
@@ -118,7 +118,7 @@ static int fake_announce(int sock, const char *instance, const char *dev, const 
   uint32_t buf[512];
   mdns_record_t ptr, extra[6];
   memset(&ptr, 0, sizeof ptr);
-  ptr.name = str("_musicapp._tcp.local.");
+  ptr.name = str("_kithsong._tcp.local.");
   ptr.type = MDNS_RECORDTYPE_PTR;
   ptr.data.ptr.name = str(instance);
   memset(&extra[0], 0, sizeof extra[0]);

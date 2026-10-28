@@ -1,7 +1,7 @@
 /* Manual check of scrobbling against the real service:
  *   build/<preset>/core/tests/manual_scrobble <library folder> <config dir>
  *       [<api url> <auth url> <api key> <api secret>]
- * Without the last four it's Last.fm with the build's key (-DMUSICAPP_LASTFM_KEY/SECRET);
+ * Without the last four it's Last.fm with the build's key (-DKITHSONG_LASTFM_KEY/SECRET);
  * for Libre.fm pass https://libre.fm/2.0/ https://libre.fm/api/auth/ and any key and secret.
  * Signs in (open the printed page and approve), then sends the library's first track as now
  * playing and as a play from five minutes ago. Use scratch folders: the sign-in is saved in

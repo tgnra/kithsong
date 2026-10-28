@@ -17,8 +17,8 @@
  * move the focus through the pages and buttons (selecting a page as they land on it, and
  * scrolling it into view); Enter or Space presses a button, and Enter on the selected page
  * asks to move the focus into it (SBN_ENTER_PAGE). */
-#ifndef MUSICAPP_SIDEBAR_H
-#define MUSICAPP_SIDEBAR_H
+#ifndef KITHSONG_SIDEBAR_H
+#define KITHSONG_SIDEBAR_H
 
 #include <windows.h>
 

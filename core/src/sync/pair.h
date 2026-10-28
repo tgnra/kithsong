@@ -15,7 +15,7 @@
 /* Failed attempts allowed per code before B draws a new one. */
 #define MC_PAIR_MAX_FAILURES 3
 /* HKDF info for the psk. */
-#define MC_PAIR_PSK_INFO "musicapp pair v1"
+#define MC_PAIR_PSK_INFO "kithsong pair v1"
 
 /* A uniformly random code, "000000" to "999999". */
 mc_status mc_pair_new_code(char code[MC_PAIR_CODE_DIGITS + 1]);

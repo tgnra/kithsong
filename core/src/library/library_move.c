@@ -24,7 +24,7 @@ int mc_move_test_no_rename = 0;
 /* Debug builds: the hooks from the environment, see move_internal.h. */
 static void env_hooks(void) {
 #ifndef NDEBUG
-  const char *copy = getenv("MUSICAPP_TEST_MOVE_COPY"), *space = getenv("MUSICAPP_TEST_MOVE_FREE_SPACE");
+  const char *copy = getenv("KITHSONG_TEST_MOVE_COPY"), *space = getenv("KITHSONG_TEST_MOVE_FREE_SPACE");
   if (copy && *copy) mc_move_test_no_rename = atoi(copy) != 0;
   if (space && *space) mc_move_test_free_space = strtoll(space, NULL, 10);
 #endif
@@ -97,7 +97,7 @@ static int can_write(const char *dir) {
   unsigned char r[6];
   char name[32];
   if (mc_random_bytes(r, sizeof r) != MC_OK) memset(r, 0, sizeof r);
-  snprintf(name, sizeof name, ".musicapp-probe-%02x%02x%02x%02x%02x%02x", r[0], r[1], r[2], r[3], r[4], r[5]);
+  snprintf(name, sizeof name, ".kithsong-probe-%02x%02x%02x%02x%02x%02x", r[0], r[1], r[2], r[3], r[4], r[5]);
   char *path = join(dir, name);
   FILE *f = path ? mc_fopen(path, "wb") : NULL;
   int ok = f != NULL;

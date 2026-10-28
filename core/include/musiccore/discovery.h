@@ -1,5 +1,5 @@
-/* LAN discovery of other musicapp devices via embedded mDNS/DNS-SD (service type
- * "_musicapp._tcp"), with no OS mDNS daemon. See docs/sync-protocol.md, "Discovery".
+/* LAN discovery of other Kithsong devices via embedded mDNS/DNS-SD (service type
+ * "_kithsong._tcp"), with no OS mDNS daemon. See docs/sync-protocol.md, "Discovery".
  *
  * Threading: mc_discovery_start() starts a discovery thread that answers queries, browses
  * every scan interval and calls the callback. The callback always runs on that thread, so

@@ -832,14 +832,14 @@ HWND sidebar_create(HWND parent, int id) {
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .style = CS_DBLCLKS, .lpfnWndProc = sidebar_proc,
                     .hInstance = GetModuleHandleW(NULL),
                     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW),
-                    .lpszClassName = L"musicapp_sidebar"};
+                    .lpszClassName = L"kithsong_sidebar"};
   RegisterClassExW(&wc);
 
   memset(&s, 0, sizeof s);
   s.sel = s.focus = s.hot = s.pressed = -1;
   s.dpi = USER_DEFAULT_SCREEN_DPI;
   s.scroll.moved = on_scrolled;
-  if (!CreateWindowExW(0, L"musicapp_sidebar", NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, parent,
+  if (!CreateWindowExW(0, L"kithsong_sidebar", NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, parent,
                        (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL))
     return NULL;
 

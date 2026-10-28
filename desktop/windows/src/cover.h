@@ -1,7 +1,7 @@
 /* Album covers: the cover.jpg (or cover.png) in an album's folder, decoded with WIC. Playlists'
  * pictures (see mc_playlist_art()) are decoded the same way from their file. */
-#ifndef MUSICAPP_COVER_H
-#define MUSICAPP_COVER_H
+#ifndef KITHSONG_COVER_H
+#define KITHSONG_COVER_H
 
 #include <stdint.h>
 #include <wincodec.h>

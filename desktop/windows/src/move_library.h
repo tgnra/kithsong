@@ -19,14 +19,14 @@
  * the library where it now is and shows the main window, followed by a message if the move
  * failed or left files behind.
  *
- * Debug builds only: MUSICAPP_TEST_MOVE_TO=<folder> in the environment takes the place of
+ * Debug builds only: KITHSONG_TEST_MOVE_TO=<folder> in the environment takes the place of
  * the picker (once: a folder that won't do isn't asked for again), and
- * MUSICAPP_TEST_MOVE_DELAY_MS=<ms> slows each file down, so the progress can be seen. The
- * core's MUSICAPP_TEST_MOVE_COPY and MUSICAPP_TEST_MOVE_FREE_SPACE (see
+ * KITHSONG_TEST_MOVE_DELAY_MS=<ms> slows each file down, so the progress can be seen. The
+ * core's KITHSONG_TEST_MOVE_COPY and KITHSONG_TEST_MOVE_FREE_SPACE (see
  * core/src/library/move_internal.h) make it copy, or run short of room, on one disk.
  */
-#ifndef MUSICAPP_MOVE_LIBRARY_H
-#define MUSICAPP_MOVE_LIBRARY_H
+#ifndef KITHSONG_MOVE_LIBRARY_H
+#define KITHSONG_MOVE_LIBRARY_H
 
 #include <windows.h>
 

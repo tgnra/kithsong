@@ -1,14 +1,14 @@
-set(MUSICAPP_CONTACT "" CACHE STRING
+set(KITHSONG_CONTACT "" CACHE STRING
   "Contact URL or email sent in the MusicBrainz/AcoustID User-Agent (required by their terms)")
-if(MUSICAPP_CONTACT STREQUAL "")
-  message(WARNING "MUSICAPP_CONTACT is not set. MusicBrainz may block requests without contact "
-                  "info; configure with -DMUSICAPP_CONTACT=<url or email>.")
+if(KITHSONG_CONTACT STREQUAL "")
+  message(WARNING "KITHSONG_CONTACT is not set. MusicBrainz may block requests without contact "
+                  "info; configure with -DKITHSONG_CONTACT=<url or email>.")
   set(_contact "no contact configured")
 else()
-  set(_contact "${MUSICAPP_CONTACT}")
+  set(_contact "${KITHSONG_CONTACT}")
 endif()
 block(SCOPE_FOR VARIABLES)
-  set(MUSICAPP_CONTACT "${_contact}")
+  set(KITHSONG_CONTACT "${_contact}")
   configure_file(src/config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/config.h" @ONLY)
 endblock()
 
@@ -114,8 +114,8 @@ if(WIN32)
   # shell32 for the Recycle Bin (mc_trash).
   target_link_libraries(musiccore PRIVATE bcrypt ws2_32 iphlpapi shell32)
 endif()
-musicapp_warnings(musiccore)
+kithsong_warnings(musiccore)
 
-if(MUSICAPP_BUILD_TESTS)
+if(KITHSONG_BUILD_TESTS)
   add_subdirectory(tests)
 endif()

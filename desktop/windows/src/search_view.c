@@ -871,14 +871,14 @@ HWND search_view_create(HWND parent, int id) {
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .style = CS_DBLCLKS, .lpfnWndProc = search_proc,
                     .hInstance = GetModuleHandleW(NULL),
                     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW),
-                    .lpszClassName = L"musicapp_search"};
+                    .lpszClassName = L"kithsong_search"};
   RegisterClassExW(&wc);
 
   memset(&v, 0, sizeof v);
   v.hot = v.pressed = v.focus = -1;
   v.dpi = USER_DEFAULT_SCREEN_DPI;
   v.scroll.moved = on_scrolled;
-  if (!CreateWindowExW(0, L"musicapp_search", NULL, WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0, 0, parent,
+  if (!CreateWindowExW(0, L"kithsong_search", NULL, WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0, 0, parent,
                        (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL))
     return NULL;
   v.edit = CreateWindowExW(0, WC_EDITW, NULL, WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, v.wnd,

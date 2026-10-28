@@ -68,6 +68,10 @@ void mc_settings_free(mc_settings *s) {
   free(s);
 }
 
+void mc_settings_move_old_dir(const char *old_dir, const char *dir) {
+  if (old_dir && dir && !mc_file_exists(dir) && mc_file_exists(old_dir)) mc_rename(old_dir, dir, 0);
+}
+
 mc_status mc_settings_save(const mc_settings *s) {
   if (!s) return MC_ERR_INVALID_ARG;
   mc_status st = mc_mkdirs(s->dir);
