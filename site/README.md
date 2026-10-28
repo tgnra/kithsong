@@ -13,6 +13,10 @@ python -m venv .venv
 .venv/Scripts/python -m unittest
 ```
 
+On Linux the flake's dev shell provides Python with both dependencies instead, so there's
+no venv: `nix develop -c python -m ssg build`, run from `site/`. That's what the VS Code
+`site: build` task runs.
+
 ## Layout
 
 | Path | What it is |
@@ -26,7 +30,7 @@ python -m venv .venv
 ## Home page
 
 `content/home.md` front matter sets the page `title`, `description` and the `tagline` under
-the logo. Each `## ` heading starts a section. Every section needs one line holding only an
+the logo. An optional `word` is shown in smaller type between the logo and the tagline. Each `## ` heading starts a section. Every section needs one line holding only an
 image, which is shown beside the text. The sides alternate, and on narrow screens the image
 comes first.
 

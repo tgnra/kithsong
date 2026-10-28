@@ -1,5 +1,6 @@
 ---
 title: Kithsong
+word: kith (n.): your own people and home ground; friends, neighbours, the familiar place you belong. From Old English cȳþþ, "native land, kinsfolk", the kith of "kith and kin".
 tagline: A local-only music player that keeps your library perfectly organised and synced across your devices. No streaming, your music lives on your device.
 description: Kithsong is a music library manager and player for Windows, Linux and Android. It tags your music against MusicBrainz and syncs your devices over your local network.
 ---
