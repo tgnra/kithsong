@@ -75,8 +75,10 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 
 - A header bar with playback controls on the left, and **Import** and **Settings** on the
   right.
-- A left sidebar with **Albums**, **Artists** and **Playlists**, plus a **Devices** section
-  listing sync devices: online ones, and paired ones that are currently unreachable.
+- A left sidebar with **Albums**, **Artists** and **Playlists**, a **Recents** section of the
+  ten albums and playlists last played on any device, and a **Devices** section listing sync
+  devices: online ones, and paired ones that are currently unreachable. It scrolls when it's
+  taller than the window.
 - The rest of the window is an album grid. Clicking an album opens its track list in a pane
   on the right.\
 
