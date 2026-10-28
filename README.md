@@ -82,8 +82,9 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 
 - A header bar with playback controls on the left, and **Import** and **Settings** on the
   right.
-- A left sidebar with **Albums**, **Artists** and **Playlists**, a **Recents** section of the
-  ten albums and playlists last played on any device, and a **Devices** section listing sync
+- A left sidebar with **Albums**, **Artists**, **Playlists** and **Album groups**, a **Recents**
+  section of the ten albums and playlists last played and artists and album groups last
+  opened on any device, and a **Devices** section listing sync
   devices: online ones, and paired ones that are currently unreachable. It scrolls when it's
   taller than the window.
 - The rest of the window is an album grid. Clicking an album opens its track list in a pane
@@ -102,7 +103,7 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 | Ctrl+F | Search |
 | Ctrl+1, 2, 3, 4 | Albums, Artists, Playlists, Album groups |
 | Ctrl+, | Settings |
-| Alt+Left or Backspace | Back, from an artist's page or an album group (Windows) |
+| Alt+Left or Backspace | Back, from an artist's page or an album group |
 | Esc | Close the track list |
 
 In a text box (e.g. search) the arrow keys, + and - keep their usual meaning. The volume is

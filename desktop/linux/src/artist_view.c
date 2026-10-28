@@ -593,6 +593,9 @@ static GtkWidget *build_page(void) {
   gtk_shortcut_controller_add_shortcut(
     GTK_SHORTCUT_CONTROLLER(keys),
     gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Left, GDK_ALT_MASK), gtk_callback_action_new(on_back_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_BackSpace, 0), gtk_callback_action_new(on_back_key, NULL, NULL)));
   gtk_widget_add_controller(v.page, keys);
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 8); /* back */

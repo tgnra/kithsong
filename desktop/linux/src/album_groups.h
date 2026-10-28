@@ -7,8 +7,8 @@
  *   | art  | | art  | | art  |      <- the group's albums, in its order
  *   +------+ +------+ +------+
  *
- * A click (or Enter) on a group opens it, which puts it first in the recents; Back, Alt+Left
- * or the mouse's back button goes back to the groups. Its albums select as the album grid's
+ * A click (or Enter) on a group opens it, which puts it first in the recents; Back, Alt+Left,
+ * Backspace or the mouse's back button goes back to the groups. Its albums select as the album grid's
  * do, showing their tracks in the track list. The header's menu (...) and a group tile's
  * right-click menu rename or delete it.
  *

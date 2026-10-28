@@ -24,8 +24,8 @@
  * someone else. Clicking one opens it on the Albums page. The tracks are every one credited
  * to the artist (mc_library_list_artist_tracks()), with their albums; double-click or Enter
  * plays the artist's tracks from there, and right-click gives Add to playlist. Play and
- * Shuffle play them all. Back is the back button, Escape, Alt+Left or the mouse's back
- * button; the list keeps its place meanwhile.
+ * Shuffle play them all. Back is the back button, Escape, Alt+Left, Backspace or the mouse's
+ * back button; the list keeps its place meanwhile.
  *
  * Only one exists at a time. As on Windows, artists have no pictures yet: their initials
  * stand in. */
