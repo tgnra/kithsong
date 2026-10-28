@@ -1,6 +1,6 @@
-/* Deleting albums, artists and tracks from the library (musiccore/delete.h): the album
- * tiles' Delete album... (album_groups.c), the artist page's Delete artist... and the track
- * menus' Delete from library... (track_list.c, artist_view.c). Asks first:
+/* Deleting albums, artists and tracks from the library (musiccore/delete.h): Delete from
+ * library... on the album tiles' menu (album_groups.c), the artist page's and the track
+ * menus (track_list.c, artist_view.c). Asks first:
  *
  *   +---------------------------------------------+
  *   |            Delete "OK Computer"?             |
