@@ -52,7 +52,7 @@ boot_emulator() {
     local avd="$1" serial log
     serial="$(emulator_serial "$avd")"
     if [[ -z "$serial" ]]; then
-        log="${XDG_STATE_HOME:-$HOME/.local/state}/musicapp/emulator-$avd.log"
+        log="${XDG_STATE_HOME:-$HOME/.local/state}/kithsong/emulator-$avd.log"
         mkdir -p "$(dirname "$log")"
         echo "Starting emulator $avd (log: $log)" >&2
         # Detached, so it outlives the task that started it.

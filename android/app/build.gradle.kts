@@ -4,18 +4,18 @@ plugins {
 }
 
 android {
-    namespace = "app.musicapp"
+    namespace = "app.kithsong"
     compileSdk = 37
     // The same NDK as :native, which AGP needs to strip the native core's debug symbols.
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "app.musicapp"
+        applicationId = "app.kithsong"
         // Android 7.0: Compose needs 23, the native core 24 (see :native).
         minSdk = 24
         targetSdk = 36
-        versionCode = rootProject.extra["musicappVersionCode"] as Int
-        versionName = rootProject.extra["musicappVersionName"] as String
+        versionCode = rootProject.extra["kithsongVersionCode"] as Int
+        versionName = rootProject.extra["kithsongVersionName"] as String
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -25,12 +25,12 @@ android {
     signingConfigs {
         // Release signing comes from the environment (scripts/release-android.*). Without
         // it, release builds come out unsigned. The phone and the watch use the same key.
-        System.getenv("MUSICAPP_KEYSTORE")?.let { keystore ->
+        System.getenv("KITHSONG_KEYSTORE")?.let { keystore ->
             create("release") {
                 storeFile = file(keystore)
-                storePassword = System.getenv("MUSICAPP_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("MUSICAPP_KEY_ALIAS")
-                keyPassword = System.getenv("MUSICAPP_KEY_PASSWORD")
+                storePassword = System.getenv("KITHSONG_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KITHSONG_KEY_ALIAS")
+                keyPassword = System.getenv("KITHSONG_KEY_PASSWORD")
             }
         }
     }
@@ -52,7 +52,7 @@ android {
 }
 
 // R.string/R.plurals from strings/en.json (see GenerateStrings in the root build.gradle.kts).
-extra["musicappStringSections"] = listOf("shared", "android")
+extra["kithsongStringSections"] = listOf("shared", "android")
 
 dependencies {
     implementation(project(":native"))
