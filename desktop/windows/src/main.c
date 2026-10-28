@@ -57,7 +57,8 @@
  *
  * Command line: musicapp.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\musicapp,
- * so two instances can sync on one PC; the paths are imported.
+ * so two instances can sync on one PC; the paths are imported. --add-firewall-rule alone is
+ * firewall.c's elevated helper, which adds the Windows Firewall rule sync needs and exits.
  */
 #include <windows.h>
 #include <windowsx.h>
@@ -78,6 +79,7 @@
 #include "build_info.h"
 #include "canvas.h"
 #include "device_view.h"
+#include "firewall.h"
 #include "import_view.h"
 #include "move_library.h"
 #include "musiccore/musiccore.h"
@@ -1470,6 +1472,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
                                             ICC_PROGRESS_CLASS | ICC_BAR_CLASSES /* tooltips */};
   InitCommonControlsEx(&icc);
   wstr_init(); /* before any thread looks up a string */
+  int helper_code;
+  if (firewall_helper_main(&helper_code)) return helper_code; /* the elevated --add-firewall-rule */
   app_args args;
   int exit_code = parse_args(&args);
   if (exit_code >= 0) {
@@ -1537,6 +1541,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   ShowWindow(wnd, show);
   pair_dialog_init(wnd);
   start_sync();
+  firewall_check_later(wnd, g_app.settings);
   import_args(&args);
   free_args(&args);
 

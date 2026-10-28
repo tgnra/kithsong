@@ -457,7 +457,16 @@
     "pc_pair_already_paired": "This PC already syncs with {0}.",
     "this_pc": "This PC",
     "pc_sync_other_library": "The library open on this PC isn't the one this group syncs, so only the list of devices syncs.",
-    "leave_group_confirm_others": { "text": "Leave the group?\n\nThis PC stops syncing with {0}. To sync again, pair it again.", "note": "{0} lists the other devices' names." }
+    "leave_group_confirm_others": { "text": "Leave the group?\n\nThis PC stops syncing with {0}. To sync again, pair it again.", "note": "{0} lists the other devices' names." },
+    "firewall_title": { "text": "Let your other devices sync with this PC?", "note": "Heading of the dialog asking to add a Windows Firewall rule for musicapp, shown at startup when there's none." },
+    "firewall_text": { "text": "musicapp syncs with your other devices over your local network, but Windows Firewall stops them connecting to this PC. Allowing musicapp through the firewall on private networks lets them find it and sync with it.\n\nWindows asks for an administrator's permission first.", "note": "Body of the firewall dialog. Private networks are what Windows calls trusted home or work networks." },
+    "firewall_allow": { "text": "_Allow", "note": "Firewall dialog button: adds the firewall rule. Shows Windows' administrator shield." },
+    "firewall_not_now": { "text": "_Not now", "note": "Firewall dialog button: closes it; it's shown again the next time musicapp starts." },
+    "firewall_dont_ask": { "text": "_Don't ask again", "note": "Checkbox in the firewall dialog." },
+    "firewall_added": "musicapp is now allowed through Windows Firewall on private networks.",
+    "firewall_added_public": { "text": "musicapp is now allowed through Windows Firewall on private networks.\n\nThis PC's network is set to public, so other devices still can't connect to it. To sync on this network, set it to private in Windows Settings, under Network & internet.", "note": "After adding the firewall rule while the PC's current network is a public one, which the rule doesn't cover." },
+    "firewall_add_failed": { "text": "Couldn't allow musicapp through Windows Firewall (error {0}).", "note": "{0} is an error code, e.g. 0x80070005." },
+    "firewall_rule_description": { "text": "Lets musicapp on your other devices find this PC and sync with it on the local network.", "note": "Description of the rule shown in Windows Firewall's settings." }
   },
 
   "android": {

@@ -344,7 +344,18 @@ static void test_settings(const char *root) {
   CHECK(mc_settings_set_device_name(s, "Den") == MC_OK);
   CHECK(mc_settings_set_device_name(s, NULL) == MC_OK);
   CHECK(mc_settings_device_name(s) == NULL);
+  CHECK(mc_settings_bool(s, "flag", 1) == 1);
+  CHECK(mc_settings_bool(s, "theme", 0) == 0); /* not a boolean */
+  CHECK(mc_settings_set_bool(s, "", 1) == MC_ERR_INVALID_ARG);
+  CHECK(mc_settings_set_bool(s, "flag", 0) == MC_OK);
+  CHECK(mc_settings_set_bool(s, "flag", 5) == MC_OK); /* replaces */
   CHECK(mc_settings_save(s) == MC_OK);
+  mc_settings_free(s);
+
+  s = NULL;
+  CHECK(mc_settings_load(dir, &s) == MC_OK);
+  if (!s) return;
+  CHECK(mc_settings_bool(s, "flag", 0) == 1);
   mc_settings_free(s);
 
   /* Keys this version doesn't know survive. */

@@ -17,6 +17,7 @@ add_executable(musicapp WIN32
   src/canvas.c
   src/cover.c
   src/device_view.c
+  src/firewall.c
   src/import_view.c
   src/media_controls.c
   src/move_library.c
@@ -40,7 +41,7 @@ add_executable(musicapp WIN32
 target_include_directories(musicapp PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/version.rc" APPEND PROPERTY
   OBJECT_DEPENDS "${MUSICAPP_MANIFEST}" "${MUSICAPP_ICON}")
-target_link_libraries(musicapp PRIVATE musiccore comctl32 ole32 uuid shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi)
+target_link_libraries(musicapp PRIVATE musiccore comctl32 ole32 oleaut32 uuid shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi)
 target_compile_definitions(musicapp PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 musicapp_warnings(musicapp)
