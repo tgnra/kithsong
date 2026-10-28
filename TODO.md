@@ -63,6 +63,7 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Smart playlists
 - All - rule editor (from mc_smart_field_get()), and rename/delete
+- Core - mc_smart_describe() is English-shaped: conditions are joined as "field op value" clauses under "Tracks where …", and a language that needs grammatical case or agreement for a field or playlist name may need its own templates; dates use the smart_date template (local time), not the OS's date format
 - All - the v10 example lists' names are stored as data, so they're always English
 - Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it
 - Core - limit by total duration ("an hour of music")

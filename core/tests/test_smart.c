@@ -406,6 +406,171 @@ static void test_saved(mc_library *lib) {
   CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'smart_lists' AND field = '_deleted'") == 1);
 }
 
+/* A rule as mc_smart_describe() puts it, or "ERR <status>". */
+static const char *describe(mc_library *lib, mc_smart_subject subject, const char *rule) {
+  char *s = NULL;
+  mc_status st = mc_smart_describe(lib, subject, rule, &s);
+  if (st != MC_OK) snprintf(g_out, sizeof g_out, "ERR %d", st);
+  else snprintf(g_out, sizeof g_out, "%s", s);
+  mc_free(s);
+  return g_out;
+}
+
+/* A track rule matching cond, described. */
+static const char *describe_cond(mc_library *lib, const char *cond) {
+  char rule[1024];
+  snprintf(rule, sizeof rule, "{\"v\":1,\"match\":%s}", cond);
+  return describe(lib, MC_SMART_TRACKS, rule);
+}
+
+#define CHECK_DESC(cond, want) CHECK_STR(describe_cond(lib, cond), "Tracks where " want)
+#define GENRE(op, v) "{\"field\":\"genre\",\"op\":\"" op "\",\"value\":\"" v "\"}"
+#define PLAYS(op, v) "{\"field\":\"plays\",\"op\":\"" op "\",\"value\":" #v "}"
+#define DEVICE "{\"field\":\"on_device\",\"op\":\"is\",\"value\":true}"
+
+static void test_describe(mc_library *lib) {
+  CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1}"), "All tracks");
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1}"), "All albums");
+  CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"all\":[]}}"), "All tracks");
+  CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"any\":[]}}"), "No tracks");
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"not\":{\"all\":[{\"all\":[]}]}}}"), "No albums");
+
+  /* docs/schema.md's example. */
+  CHECK_STR(describe(lib, MC_SMART_TRACKS,
+                     "{\"v\":1,\"match\":{\"all\":[" GENRE("contains", "jazz") ",{\"any\":[" PLAYS("<", 3)
+                     ",{\"not\":{\"field\":\"last_played\",\"op\":\"within\",\"value\":{\"days\":180}}}]}]},"
+                     "\"order\":[{\"field\":\"plays\",\"dir\":\"asc\"},{\"field\":\"added\",\"dir\":\"desc\"}],"
+                     "\"limit\":10}"),
+            "Tracks where genre contains “jazz” and (play count is less than 3 or last played isn't in the last"
+            " 180 days) · least played first, then newest added first · 10 tracks");
+
+  /* Text, and "not" turning into the negative op. */
+  CHECK_DESC(GENRE("is", "Rock"), "genre is “Rock”");
+  CHECK_DESC(GENRE("is_not", "Rock"), "genre isn't “Rock”");
+  CHECK_DESC("{\"not\":" GENRE("is", "Rock") "}", "genre isn't “Rock”");
+  CHECK_DESC(GENRE("contains", "o"), "genre contains “o”");
+  CHECK_DESC(GENRE("not_contains", "o"), "genre doesn't contain “o”");
+  CHECK_DESC("{\"not\":" GENRE("not_contains", "o") "}", "genre contains “o”");
+  CHECK_DESC("{\"field\":\"title\",\"op\":\"starts_with\",\"value\":\"So\"}", "title starts with “So”");
+  CHECK_DESC("{\"not\":{\"field\":\"album_artist\",\"op\":\"starts_with\",\"value\":\"The\"}}",
+             "album artist doesn't start with “The”");
+  CHECK_DESC("{\"field\":\"album\",\"op\":\"empty\"}", "album is empty");
+  CHECK_DESC("{\"field\":\"artist\",\"op\":\"not_empty\"}", "artist isn't empty");
+  CHECK_DESC("{\"not\":{\"not\":{\"field\":\"artist\",\"op\":\"empty\"}}}", "artist is empty");
+
+  /* Numbers and durations. */
+  CHECK_DESC("{\"field\":\"year\",\"op\":\"=\",\"value\":1969}", "year is 1969");
+  CHECK_DESC("{\"field\":\"year\",\"op\":\"!=\",\"value\":1969}", "year isn't 1969");
+  CHECK_DESC(PLAYS("<", 3), "play count is less than 3");
+  CHECK_DESC("{\"not\":" PLAYS("<", 3) "}", "play count isn't less than 3");
+  CHECK_DESC(PLAYS("<=", 3), "play count is at most 3");
+  CHECK_DESC(PLAYS(">", 3), "play count is more than 3");
+  CHECK_DESC(PLAYS(">=", 3), "play count is at least 3");
+  CHECK_DESC("{\"not\":" PLAYS(">=", 3) "}", "play count isn't at least 3");
+  CHECK_DESC("{\"field\":\"track_no\",\"op\":\"between\",\"value\":[1,5]}", "track number is between 1 and 5");
+  CHECK_DESC("{\"not\":{\"field\":\"disc_no\",\"op\":\"between\",\"value\":[1,2]}}",
+             "disc number isn't between 1 and 2");
+  CHECK_DESC("{\"field\":\"year\",\"op\":\"empty\"}", "year is empty");
+  CHECK_DESC("{\"field\":\"duration\",\"op\":\">\",\"value\":300}", "duration is more than 5:00");
+  CHECK_DESC("{\"field\":\"duration\",\"op\":\"between\",\"value\":[90,3725]}",
+             "duration is between 1:30 and 1:02:05");
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"track_count\",\"op\":\">\",\"value\":9}}"),
+            "Albums where number of tracks is more than 9");
+
+  /* Dates: 12 March 2025 at noon UTC, which is the 12th in every time zone within 11 hours. */
+  CHECK_DESC("{\"field\":\"added\",\"op\":\"before\",\"value\":1741780800000}", "date added is before March 12, 2025");
+  CHECK_DESC("{\"not\":{\"field\":\"added\",\"op\":\"after\",\"value\":1741780800000}}",
+             "date added isn't after March 12, 2025");
+  CHECK_DESC("{\"field\":\"added\",\"op\":\"within\",\"value\":{\"days\":30}}", "date added is in the last 30 days");
+  CHECK_DESC("{\"field\":\"added\",\"op\":\"within\",\"value\":{\"days\":14}}", "date added is in the last 2 weeks");
+  CHECK_DESC("{\"field\":\"added\",\"op\":\"within\",\"value\":{\"days\":1}}", "date added is in the last 1 day");
+  CHECK_DESC("{\"field\":\"last_played\",\"op\":\"not_within\",\"value\":{\"days\":7}}",
+             "last played isn't in the last 7 days");
+  CHECK_DESC("{\"field\":\"last_played\",\"op\":\"empty\"}", "it's never been played");
+  CHECK_DESC("{\"not\":{\"field\":\"last_played\",\"op\":\"empty\"}}", "it's been played");
+  CHECK_DESC("{\"field\":\"last_played\",\"op\":\"not_empty\"}", "it's been played");
+  CHECK_DESC("{\"field\":\"added\",\"op\":\"empty\"}", "date added is empty");
+
+  /* Yes-or-no fields, formats, playlists and groups. */
+  CHECK_DESC(DEVICE, "it's on this device");
+  CHECK_DESC("{\"field\":\"on_device\",\"op\":\"is\",\"value\":false}", "it isn't on this device");
+  CHECK_DESC("{\"not\":" DEVICE "}", "it isn't on this device");
+  CHECK_DESC("{\"field\":\"singles\",\"op\":\"is\",\"value\":true}", "it's a single");
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false}}"),
+            "Albums where it isn't a singles album");
+  CHECK_DESC("{\"field\":\"format\",\"op\":\"is\",\"value\":\"flac\"}", "it has a FLAC file");
+  CHECK_DESC("{\"field\":\"format\",\"op\":\"is_not\",\"value\":\"opus\"}", "it has no OPUS file");
+  CHECK_DESC("{\"field\":\"playlist\",\"op\":\"is\",\"value\":\"pl1\"}", "it's in the playlist “Mix”");
+  CHECK_DESC("{\"not\":{\"field\":\"playlist\",\"op\":\"is\",\"value\":\"pl1\"}}", "it isn't in the playlist “Mix”");
+  CHECK_DESC("{\"field\":\"playlist\",\"op\":\"is\",\"value\":\"gone\"}", "it's in a deleted playlist");
+  CHECK_DESC("{\"field\":\"playlist\",\"op\":\"is_not\",\"value\":\"gone\"}", "it isn't in a deleted playlist");
+  CHECK_DESC("{\"field\":\"group\",\"op\":\"is\",\"value\":\"g1\"}", "it's in the album group “Swedes”");
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"group\",\"op\":\"is_not\",\"value\":\"x\"}}"),
+            "Albums where it isn't in a deleted album group");
+
+  /* Groups: lists, parentheses for nested ones, "none of" and "not all of". */
+  CHECK_DESC("{\"all\":[" GENRE("is", "a") "," GENRE("is", "b") "," GENRE("is", "c") "]}",
+             "genre is “a”, genre is “b”, and genre is “c”");
+  CHECK_DESC("{\"any\":[" GENRE("is", "a") "," GENRE("is", "b") "," GENRE("is", "c") "]}",
+             "genre is “a”, genre is “b”, or genre is “c”");
+  CHECK_DESC("{\"all\":[" GENRE("is", "a") "]}", "genre is “a”");
+  CHECK_DESC("{\"not\":{\"any\":[" GENRE("is", "a") "]}}", "genre isn't “a”");
+  CHECK_DESC("{\"not\":{\"any\":[" GENRE("is", "a") "," DEVICE "]}}", "none of (genre is “a” or it's on this device)");
+  CHECK_DESC("{\"not\":{\"all\":[" GENRE("is", "a") "," DEVICE "]}}",
+             "not all of (genre is “a” and it's on this device)");
+  CHECK_DESC("{\"any\":[" DEVICE ",{\"all\":[" GENRE("is", "a") ",{\"not\":{\"any\":[" PLAYS("=", 1) "," PLAYS("=", 2)
+             "]}}]}]}",
+             "it's on this device or (genre is “a” and none of (play count is 1 or play count is 2))");
+  CHECK_DESC("{\"all\":[" DEVICE ",{\"any\":[]}]}", "it's on this device and nothing matches");
+
+  /* Order and limit. */
+  CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"order\":[{\"field\":\"random\",\"seed\":7}]}"),
+            "All tracks · shuffled");
+  CHECK_STR(describe(lib, MC_SMART_TRACKS,
+                     "{\"v\":1,\"order\":[{\"field\":\"plays\",\"dir\":\"desc\"},{\"field\":\"random\",\"seed\":7}],"
+                     "\"limit\":1}"),
+            "All tracks · most played first, then shuffled · 1 track");
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit\":5}"),
+            "All albums · title A to Z · 5 albums");
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":" DEVICE ",\"limit\":1}"),
+            "Albums where it's on this device · 1 album");
+
+  /* Invalid rules. */
+  char err_buf[32];
+  snprintf(err_buf, sizeof err_buf, "ERR %d", MC_ERR_FORMAT);
+  const char *err = err_buf;
+  CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"field\":\"nope\",\"op\":\"is\",\"value\":1}}"),
+            err);
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"album\",\"op\":\"is\",\"value\":\"x\"}}"),
+            err);
+  CHECK_STR(describe(lib, MC_SMART_TRACKS, "not json"), err);
+  char *s = NULL;
+  CHECK(mc_smart_describe(NULL, MC_SMART_TRACKS, "{\"v\":1}", &s) == MC_ERR_INVALID_ARG && !s);
+
+  /* Labels for an editor. */
+  CHECK_STR(mc_smart_field_label("last_played"), "Last played");
+  CHECK_STR(mc_smart_field_label("random"), "Random");
+  CHECK(mc_smart_field_label("nope") == NULL);
+  CHECK_STR(mc_smart_op_label("int", "<"), "is less than");
+  CHECK_STR(mc_smart_op_label("date", "not_within"), "isn't in the last");
+  CHECK_STR(mc_smart_op_label("playlist", "is_not"), "isn't");
+  CHECK(mc_smart_op_label("text", "<") == NULL);
+  CHECK(mc_smart_op_label("nope", "is") == NULL);
+  CHECK_STR(mc_smart_order_label("plays", 0), "least played first");
+  CHECK_STR(mc_smart_order_label("added", 1), "newest added first");
+  CHECK_STR(mc_smart_order_label("random", 0), "shuffled");
+  CHECK(mc_smart_order_label("singles", 0) == NULL);
+  /* Every field and operator has words. */
+  for (int subject = MC_SMART_TRACKS; subject <= MC_SMART_ALBUMS; subject++) {
+    mc_smart_field f;
+    for (int i = 0; mc_smart_field_get((mc_smart_subject)subject, i, &f); i++) {
+      CHECK(mc_smart_field_label(f.name) && *mc_smart_field_label(f.name));
+      CHECK(!f.sortable || mc_smart_order_label(f.name, 0));
+      for (const char *const *op = f.ops; *op; op++) CHECK(mc_smart_op_label(f.type, *op));
+    }
+  }
+}
+
 int main(int argc, char **argv) {
   char path[1024];
   snprintf(path, sizeof path, "%s/test_smart.d", argc > 1 ? argv[1] : ".");
@@ -423,6 +588,7 @@ int main(int argc, char **argv) {
   test_fields();
   test_examples(lib);
   test_saved(lib);
+  test_describe(lib);
 
   mc_library_close(lib);
   return TEST_RESULT();

@@ -7,9 +7,11 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <yyjson.h>
 
 #include "library/library_internal.h"
+#include "musiccore/i18n.h"
 #include "util/platform.h"
 
 #define RULE_VERSION 1
@@ -534,6 +536,405 @@ mc_status mc_smart_preview_albums(mc_library *lib, const char *rule_json, mc_alb
   sqlite3_stmt *stmt;
   mc_status st = prepare(lib, MC_SMART_ALBUMS, rule_json, &stmt);
   return st == MC_OK ? mc_library_read_albums(lib, stmt, out) : st;
+}
+
+/* --- Describing a rule ---
+ *
+ * The rule is validated first, so the walk below can take its shape as given. Every piece is
+ * a malloc'd string from a template in strings/<lang>.json; NULL means out of memory, and
+ * passes up through every level. */
+
+#define NO_STR MC_STR_COUNT
+
+/* A field's words: its picker label, its name inside a condition, and its sort orders. */
+typedef struct field_words {
+  const char *name;
+  enum mc_str_id label, in_text, asc, desc;
+} field_words;
+
+static const field_words k_field_words[] = {
+  {"title", MC_STR_SMART_FIELD_TITLE, MC_STR_SMART_FIELD_TITLE_IN_TEXT, MC_STR_SMART_ORDER_TITLE_ASC,
+   MC_STR_SMART_ORDER_TITLE_DESC},
+  {"artist", MC_STR_SMART_FIELD_ARTIST, MC_STR_SMART_FIELD_ARTIST_IN_TEXT, MC_STR_SMART_ORDER_ARTIST_ASC,
+   MC_STR_SMART_ORDER_ARTIST_DESC},
+  {"album_artist", MC_STR_SMART_FIELD_ALBUM_ARTIST, MC_STR_SMART_FIELD_ALBUM_ARTIST_IN_TEXT,
+   MC_STR_SMART_ORDER_ALBUM_ARTIST_ASC, MC_STR_SMART_ORDER_ALBUM_ARTIST_DESC},
+  {"album", MC_STR_SMART_FIELD_ALBUM, MC_STR_SMART_FIELD_ALBUM_IN_TEXT, MC_STR_SMART_ORDER_ALBUM_ASC,
+   MC_STR_SMART_ORDER_ALBUM_DESC},
+  {"genre", MC_STR_SMART_FIELD_GENRE, MC_STR_SMART_FIELD_GENRE_IN_TEXT, MC_STR_SMART_ORDER_GENRE_ASC,
+   MC_STR_SMART_ORDER_GENRE_DESC},
+  {"year", MC_STR_SMART_FIELD_YEAR, MC_STR_SMART_FIELD_YEAR_IN_TEXT, MC_STR_SMART_ORDER_YEAR_ASC,
+   MC_STR_SMART_ORDER_YEAR_DESC},
+  {"duration", MC_STR_SMART_FIELD_DURATION, MC_STR_SMART_FIELD_DURATION_IN_TEXT, MC_STR_SMART_ORDER_DURATION_ASC,
+   MC_STR_SMART_ORDER_DURATION_DESC},
+  {"track_no", MC_STR_SMART_FIELD_TRACK_NO, MC_STR_SMART_FIELD_TRACK_NO_IN_TEXT, MC_STR_SMART_ORDER_TRACK_NO_ASC,
+   MC_STR_SMART_ORDER_TRACK_NO_DESC},
+  {"disc_no", MC_STR_SMART_FIELD_DISC_NO, MC_STR_SMART_FIELD_DISC_NO_IN_TEXT, MC_STR_SMART_ORDER_DISC_NO_ASC,
+   MC_STR_SMART_ORDER_DISC_NO_DESC},
+  {"track_count", MC_STR_SMART_FIELD_TRACK_COUNT, MC_STR_SMART_FIELD_TRACK_COUNT_IN_TEXT,
+   MC_STR_SMART_ORDER_TRACK_COUNT_ASC, MC_STR_SMART_ORDER_TRACK_COUNT_DESC},
+  {"added", MC_STR_SMART_FIELD_ADDED, MC_STR_SMART_FIELD_ADDED_IN_TEXT, MC_STR_SMART_ORDER_ADDED_ASC,
+   MC_STR_SMART_ORDER_ADDED_DESC},
+  {"plays", MC_STR_SMART_FIELD_PLAYS, MC_STR_SMART_FIELD_PLAYS_IN_TEXT, MC_STR_SMART_ORDER_PLAYS_ASC,
+   MC_STR_SMART_ORDER_PLAYS_DESC},
+  {"last_played", MC_STR_SMART_FIELD_LAST_PLAYED, MC_STR_SMART_FIELD_LAST_PLAYED_IN_TEXT,
+   MC_STR_SMART_ORDER_LAST_PLAYED_ASC, MC_STR_SMART_ORDER_LAST_PLAYED_DESC},
+  {"singles", MC_STR_SMART_FIELD_SINGLES, NO_STR, NO_STR, NO_STR},
+  {"on_device", MC_STR_SMART_FIELD_ON_DEVICE, NO_STR, NO_STR, NO_STR},
+  {"format", MC_STR_SMART_FIELD_FORMAT, NO_STR, NO_STR, NO_STR},
+  {"playlist", MC_STR_SMART_FIELD_PLAYLIST, NO_STR, NO_STR, NO_STR},
+  {"group", MC_STR_SMART_FIELD_GROUP, NO_STR, NO_STR, NO_STR},
+  {"random", MC_STR_SMART_FIELD_RANDOM, NO_STR, MC_STR_SMART_ORDER_RANDOM, MC_STR_SMART_ORDER_RANDOM},
+};
+
+/* An operator's picker label, its condition, and the condition under a "not". */
+typedef struct op_words {
+  const char *op;
+  enum mc_str_id label, cond, negated;
+} op_words;
+
+static const op_words k_op_words[] = {
+  {"is", MC_STR_SMART_OP_IS, MC_STR_SMART_COND_IS, MC_STR_SMART_COND_IS_NOT},
+  {"is_not", MC_STR_SMART_OP_IS_NOT, MC_STR_SMART_COND_IS_NOT, MC_STR_SMART_COND_IS},
+  {"contains", MC_STR_SMART_OP_CONTAINS, MC_STR_SMART_COND_CONTAINS, MC_STR_SMART_COND_NOT_CONTAINS},
+  {"not_contains", MC_STR_SMART_OP_NOT_CONTAINS, MC_STR_SMART_COND_NOT_CONTAINS, MC_STR_SMART_COND_CONTAINS},
+  {"starts_with", MC_STR_SMART_OP_STARTS_WITH, MC_STR_SMART_COND_STARTS_WITH, MC_STR_SMART_COND_NOT_STARTS_WITH},
+  {"empty", MC_STR_SMART_OP_EMPTY, MC_STR_SMART_COND_EMPTY, MC_STR_SMART_COND_NOT_EMPTY},
+  {"not_empty", MC_STR_SMART_OP_NOT_EMPTY, MC_STR_SMART_COND_NOT_EMPTY, MC_STR_SMART_COND_EMPTY},
+  {"=", MC_STR_SMART_OP_IS, MC_STR_SMART_COND_IS, MC_STR_SMART_COND_IS_NOT},
+  {"!=", MC_STR_SMART_OP_IS_NOT, MC_STR_SMART_COND_IS_NOT, MC_STR_SMART_COND_IS},
+  {"<", MC_STR_SMART_OP_LT, MC_STR_SMART_COND_LT, MC_STR_SMART_COND_NOT_LT},
+  {"<=", MC_STR_SMART_OP_LE, MC_STR_SMART_COND_LE, MC_STR_SMART_COND_NOT_LE},
+  {">", MC_STR_SMART_OP_GT, MC_STR_SMART_COND_GT, MC_STR_SMART_COND_NOT_GT},
+  {">=", MC_STR_SMART_OP_GE, MC_STR_SMART_COND_GE, MC_STR_SMART_COND_NOT_GE},
+  {"between", MC_STR_SMART_OP_BETWEEN, MC_STR_SMART_COND_BETWEEN, MC_STR_SMART_COND_NOT_BETWEEN},
+  {"before", MC_STR_SMART_OP_BEFORE, MC_STR_SMART_COND_BEFORE, MC_STR_SMART_COND_NOT_BEFORE},
+  {"after", MC_STR_SMART_OP_AFTER, MC_STR_SMART_COND_AFTER, MC_STR_SMART_COND_NOT_AFTER},
+  {"within", MC_STR_SMART_OP_WITHIN, MC_STR_SMART_COND_WITHIN, MC_STR_SMART_COND_NOT_WITHIN},
+  {"not_within", MC_STR_SMART_OP_NOT_WITHIN, MC_STR_SMART_COND_NOT_WITHIN, MC_STR_SMART_COND_WITHIN},
+};
+
+static const enum mc_str_id k_months[12] = {
+  MC_STR_SMART_MONTH_JANUARY, MC_STR_SMART_MONTH_FEBRUARY, MC_STR_SMART_MONTH_MARCH,
+  MC_STR_SMART_MONTH_APRIL,   MC_STR_SMART_MONTH_MAY,      MC_STR_SMART_MONTH_JUNE,
+  MC_STR_SMART_MONTH_JULY,    MC_STR_SMART_MONTH_AUGUST,   MC_STR_SMART_MONTH_SEPTEMBER,
+  MC_STR_SMART_MONTH_OCTOBER, MC_STR_SMART_MONTH_NOVEMBER, MC_STR_SMART_MONTH_DECEMBER,
+};
+
+static const field_words *words_of(const char *name) {
+  for (size_t i = 0; name && i < sizeof k_field_words / sizeof k_field_words[0]; i++)
+    if (strcmp(k_field_words[i].name, name) == 0) return &k_field_words[i];
+  return NULL;
+}
+
+static const op_words *op_words_of(const char *op) {
+  for (size_t i = 0; op && i < sizeof k_op_words / sizeof k_op_words[0]; i++)
+    if (strcmp(k_op_words[i].op, op) == 0) return &k_op_words[i];
+  return NULL;
+}
+
+const char *mc_smart_field_label(const char *field) {
+  const field_words *w = words_of(field);
+  return w ? mc_str(w->label) : NULL;
+}
+
+const char *mc_smart_op_label(const char *type, const char *op) {
+  for (size_t t = 0; type && op && t < sizeof k_type_names / sizeof k_type_names[0]; t++) {
+    if (strcmp(k_type_names[t], type) != 0) continue;
+    for (const char *const *o = k_type_ops[t]; *o; o++)
+      if (strcmp(*o, op) == 0) return mc_str(op_words_of(op)->label);
+  }
+  return NULL;
+}
+
+const char *mc_smart_order_label(const char *field, int desc) {
+  const field_words *w = words_of(field);
+  enum mc_str_id id = !w ? NO_STR : desc ? w->desc : w->asc;
+  return id == NO_STR ? NULL : mc_str(id);
+}
+
+typedef struct describer {
+  mc_library *lib;
+  mc_smart_subject subject;
+  mc_status st; /* a database error; running out of memory is a NULL string instead */
+} describer;
+
+static char *fmt1(enum mc_str_id id, mc_arg a) {
+  return mc_format_alloc(mc_str(id), a);
+}
+
+static char *number(int64_t n) {
+  return mc_format_alloc("{0}", MC_D(n));
+}
+
+/* Seconds as m:ss, or h:mm:ss from an hour. */
+static char *duration(int64_t s) {
+  char buf[48];
+  const char *sign = s < 0 ? "-" : "";
+  uint64_t u = s < 0 ? 0 - (uint64_t)s : (uint64_t)s;
+  if (u >= 3600)
+    snprintf(buf, sizeof buf, "%s%llu:%02u:%02u", sign, (unsigned long long)(u / 3600), (unsigned)(u / 60 % 60),
+             (unsigned)(u % 60));
+  else
+    snprintf(buf, sizeof buf, "%s%u:%02u", sign, (unsigned)(u / 60), (unsigned)(u % 60));
+  return mc_strdup(buf);
+}
+
+/* A Unix ms time as a date in local time. */
+static char *date(int64_t ms) {
+  int64_t secs = ms / 1000 - (ms % 1000 < 0); /* rounded down, before 1970 too */
+  time_t t = (time_t)secs;
+  struct tm tm;
+#ifdef _WIN32
+  int ok = (int64_t)t == secs && localtime_s(&tm, &t) == 0;
+#else
+  int ok = (int64_t)t == secs && localtime_r(&t, &tm) != NULL;
+#endif
+  if (!ok || tm.tm_mon < 0 || tm.tm_mon > 11) return mc_strdup(mc_str(MC_STR_UNKNOWN_VALUE));
+  return mc_format_alloc(mc_str(MC_STR_SMART_DATE), MC_D(tm.tm_mday), MC_S(mc_str(k_months[tm.tm_mon])),
+                         MC_D(tm.tm_year + 1900LL));
+}
+
+/* {"days": n} as weeks where it's a whole number of them, from 2, else days. */
+static char *days(int64_t n) {
+  if (n >= 14 && n % 7 == 0) return mc_format_alloc(mc_str_plural(MC_STR_SMART_WEEKS, (long)(n / 7)), MC_D(n / 7));
+  return mc_format_alloc(mc_str_plural(MC_STR_SMART_DAYS, (long)n), MC_D(n));
+}
+
+/* A value of a text, int, duration or date field, as it reads in a condition. */
+static char *scalar_value(ftype type, const char *op, yyjson_val *v) {
+  int64_t n = 0;
+  if (type == F_TEXT) return fmt1(MC_STR_SMART_QUOTED, MC_S(yyjson_get_str(v)));
+  get_int(type == F_DATE && yyjson_is_obj(v) ? yyjson_obj_get(v, "days") : v, &n);
+  if (type == F_DURATION) return duration(n);
+  if (type == F_DATE) return strstr(op, "within") ? days(n) : date(n);
+  return number(n);
+}
+
+/* The name of the playlist or album group uid; NULL with st still MC_OK if there's none. */
+static char *member_name(describer *d, ftype type, const char *uid) {
+  sqlite3_stmt *stmt;
+  const char *sql = type == F_PLAYLIST ? "SELECT name FROM playlists WHERE uid = ?1"
+                                       : "SELECT name FROM album_groups WHERE uid = ?1";
+  if (sqlite3_prepare_v2(d->lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    d->st = MC_ERR_DB;
+    return NULL;
+  }
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  char *name = NULL;
+  if (rc == SQLITE_ROW) name = fmt1(MC_STR_SMART_QUOTED, MC_S((const char *)sqlite3_column_text(stmt, 0)));
+  else if (rc != SQLITE_DONE) d->st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  return name;
+}
+
+static char *describe_leaf(describer *d, yyjson_val *leaf, int negated) {
+  const field_def *f = find_field(d->subject, yyjson_obj_get(leaf, "field"));
+  const char *op = yyjson_get_str(yyjson_obj_get(leaf, "op"));
+  yyjson_val *value = yyjson_obj_get(leaf, "value");
+  /* Whether the condition reads as the positive one, for the types with a fixed sentence each. */
+  int yes = (f->type == F_BOOL ? yyjson_get_bool(value) : strcmp(op, "is") == 0) != negated;
+
+  if (f->type == F_BOOL) {
+    if (strcmp(f->name, "on_device") == 0)
+      return mc_strdup(mc_str(yes ? MC_STR_SMART_COND_ON_DEVICE : MC_STR_SMART_COND_NOT_ON_DEVICE));
+    if (d->subject == MC_SMART_TRACKS)
+      return mc_strdup(mc_str(yes ? MC_STR_SMART_COND_SINGLE : MC_STR_SMART_COND_NOT_SINGLE));
+    return mc_strdup(mc_str(yes ? MC_STR_SMART_COND_SINGLES_ALBUM : MC_STR_SMART_COND_NOT_SINGLES_ALBUM));
+  }
+  if (f->type == F_FORMAT) {
+    char *upper = mc_strdup(yyjson_get_str(value));
+    if (!upper) return NULL;
+    for (char *c = upper; *c; c++)
+      if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 'a' + 'A');
+    char *s = fmt1(yes ? MC_STR_SMART_COND_FORMAT : MC_STR_SMART_COND_NOT_FORMAT, MC_S(upper));
+    free(upper);
+    return s;
+  }
+  if (f->type == F_PLAYLIST || f->type == F_GROUP) {
+    int playlist = f->type == F_PLAYLIST;
+    char *name = member_name(d, f->type, yyjson_get_str(value));
+    if (d->st != MC_OK) return NULL;
+    if (!name) {
+      enum mc_str_id id = playlist ? (yes ? MC_STR_SMART_COND_IN_DELETED_PLAYLIST
+                                          : MC_STR_SMART_COND_NOT_IN_DELETED_PLAYLIST)
+                                   : (yes ? MC_STR_SMART_COND_IN_DELETED_GROUP : MC_STR_SMART_COND_NOT_IN_DELETED_GROUP);
+      return mc_strdup(mc_str(id));
+    }
+    enum mc_str_id id = playlist ? (yes ? MC_STR_SMART_COND_IN_PLAYLIST : MC_STR_SMART_COND_NOT_IN_PLAYLIST)
+                                 : (yes ? MC_STR_SMART_COND_IN_GROUP : MC_STR_SMART_COND_NOT_IN_GROUP);
+    char *s = fmt1(id, MC_S(name));
+    free(name);
+    return s;
+  }
+
+  int empty = strcmp(op, "empty") == 0, not_empty = strcmp(op, "not_empty") == 0;
+  if (strcmp(f->name, "last_played") == 0 && (empty || not_empty))
+    return mc_strdup(mc_str(empty != negated ? MC_STR_SMART_COND_NEVER_PLAYED : MC_STR_SMART_COND_PLAYED));
+  const op_words *w = op_words_of(op);
+  const char *tmpl = mc_str(negated ? w->negated : w->cond);
+  const char *field = mc_str(words_of(f->name)->in_text);
+  if (empty || not_empty) return mc_format_alloc(tmpl, MC_S(field));
+  char *a, *b, *s;
+  if (strcmp(op, "between") == 0) {
+    a = scalar_value(f->type, op, yyjson_arr_get(value, 0));
+    b = scalar_value(f->type, op, yyjson_arr_get(value, 1));
+    s = a && b ? mc_format_alloc(tmpl, MC_S(field), MC_S(a), MC_S(b)) : NULL;
+    free(b);
+  } else {
+    a = scalar_value(f->type, op, value);
+    s = a ? mc_format_alloc(tmpl, MC_S(field), MC_S(a)) : NULL;
+  }
+  free(a);
+  return s;
+}
+
+/* Joins n parts (n >= 2) into a list with "and" or "or", freeing them. */
+static char *join(char **parts, int n, int all) {
+  enum mc_str_id two = all ? MC_STR_SMART_AND_TWO : MC_STR_SMART_OR_TWO;
+  enum mc_str_id more = all ? MC_STR_SMART_AND_MORE : MC_STR_SMART_OR_MORE;
+  enum mc_str_id last = all ? MC_STR_SMART_AND_LAST : MC_STR_SMART_OR_LAST;
+  char *acc = parts[0];
+  parts[0] = NULL;
+  for (int i = 1; i < n && acc; i++) {
+    enum mc_str_id id = n == 2 ? two : i == n - 1 ? last : more;
+    char *next = mc_format_alloc(mc_str(id), MC_S(acc), MC_S(parts[i]));
+    free(acc);
+    acc = next;
+  }
+  for (int i = 0; i < n; i++) free(parts[i]);
+  return acc;
+}
+
+/* Whether node, under negated "not"s, always matches (1), never does (0), or depends (-1):
+ * it's an empty group, maybe inside "not"s and groups of one. */
+static int constant(yyjson_val *node, int negated) {
+  for (;;) {
+    yyjson_val *not = yyjson_obj_get(node, "not");
+    yyjson_val *all = yyjson_obj_get(node, "all"), *any = yyjson_obj_get(node, "any");
+    size_t n = yyjson_arr_size(all ? all : any);
+    if (not) {
+      negated = !negated;
+      node = not;
+    } else if ((all || any) && n == 1) {
+      node = yyjson_arr_get_first(all ? all : any);
+    } else {
+      return (all || any) && n == 0 ? !!all != negated : -1;
+    }
+  }
+}
+
+/* node as a phrase. nested says it's inside a group, so a group of its own needs
+ * parentheses. A "not" goes into the condition it's around ("isn't", "doesn't contain"),
+ * and around a group reads as "none of" or "not all of". */
+static char *describe_match(describer *d, yyjson_val *node, int negated, int nested) {
+  yyjson_val *not = yyjson_obj_get(node, "not");
+  if (not) return describe_match(d, not, !negated, nested);
+  yyjson_val *all = yyjson_obj_get(node, "all"), *any = yyjson_obj_get(node, "any");
+  if (!all && !any) return describe_leaf(d, node, negated);
+  yyjson_val *list = all ? all : any;
+  int n = (int)yyjson_arr_size(list);
+  if (n == 0) return mc_strdup(mc_str(!!all != negated ? MC_STR_SMART_ALWAYS : MC_STR_SMART_NEVER));
+  if (n == 1) return describe_match(d, yyjson_arr_get_first(list), negated, nested);
+  char **parts = calloc((size_t)n, sizeof *parts);
+  if (!parts) return NULL;
+  int ok = 1;
+  size_t idx, max;
+  yyjson_val *child;
+  yyjson_arr_foreach(list, idx, max, child) {
+    if (ok && !(parts[idx] = describe_match(d, child, 0, 1))) ok = 0;
+  }
+  char *joined = NULL;
+  if (ok) {
+    joined = join(parts, n, !!all);
+  } else {
+    for (int i = 0; i < n; i++) free(parts[i]);
+  }
+  free(parts);
+  if (!joined || (!negated && !nested)) return joined;
+  enum mc_str_id wrap = !negated ? MC_STR_SMART_PARENS : all ? MC_STR_SMART_NOT_ALL_OF : MC_STR_SMART_NONE_OF;
+  char *s = fmt1(wrap, MC_S(joined));
+  free(joined);
+  return s;
+}
+
+/* The order keys, "then"-joined, or NULL with *none set if there are none. */
+static char *describe_order(yyjson_val *order, int *none) {
+  char *acc = NULL;
+  *none = 1;
+  size_t idx, max;
+  yyjson_val *key;
+  yyjson_arr_foreach(order, idx, max, key) {
+    yyjson_val *dir = yyjson_obj_get(key, "dir");
+    const char *label = mc_smart_order_label(yyjson_get_str(yyjson_obj_get(key, "field")),
+                                             dir && yyjson_equals_str(dir, "desc"));
+    char *next = idx ? mc_format_alloc(mc_str(MC_STR_SMART_ORDER_THEN), MC_S(acc), MC_S(label))
+                     : mc_strdup(label ? label : "");
+    free(acc);
+    *none = 0;
+    if (!(acc = next)) return NULL;
+  }
+  return acc;
+}
+
+mc_status mc_smart_describe(mc_library *lib, mc_smart_subject subject, const char *rule_json, char **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_status st = mc_smart_validate(subject, rule_json);
+  if (st != MC_OK) return st;
+  yyjson_doc *doc = yyjson_read(rule_json, strlen(rule_json), 0);
+  if (!doc) return MC_ERR_NOMEM; /* it parsed a moment ago */
+  yyjson_val *root = yyjson_doc_get_root(doc);
+  describer d = {lib, subject, MC_OK};
+  int tracks = subject == MC_SMART_TRACKS;
+
+  /* The parts, joined with " · ": what matches, the order, the limit. */
+  char *parts[3] = {NULL, NULL, NULL};
+  int nparts = 0, ok = 1;
+  yyjson_val *match = yyjson_obj_get(root, "match");
+  int always = match ? constant(match, 0) : 1;
+  if (always >= 0) {
+    enum mc_str_id id = always ? (tracks ? MC_STR_SMART_ALL_TRACKS : MC_STR_SMART_ALL_ALBUMS)
+                               : (tracks ? MC_STR_NO_TRACKS : MC_STR_SMART_NO_ALBUMS);
+    ok = !!(parts[nparts++] = mc_strdup(mc_str(id)));
+  } else {
+    char *conds = describe_match(&d, match, 0, 0);
+    ok = conds && (parts[nparts++] = fmt1(tracks ? MC_STR_SMART_TRACKS_WHERE : MC_STR_SMART_ALBUMS_WHERE,
+                                          MC_S(conds)));
+    free(conds);
+  }
+  int none;
+  if (ok) {
+    char *order = describe_order(yyjson_obj_get(root, "order"), &none);
+    if (order) parts[nparts++] = order;
+    else ok = none;
+  }
+  int64_t limit;
+  if (ok && get_int(yyjson_obj_get(root, "limit"), &limit))
+    ok = !!(parts[nparts++] = mc_format_alloc(mc_str_plural(tracks ? MC_STR_TRACKS : MC_STR_COUNT_ALBUMS, (long)limit),
+                                              MC_D(limit)));
+  yyjson_doc_free(doc);
+
+  const char *sep = mc_str(MC_STR_SEPARATOR_DOT);
+  size_t len = 1;
+  for (int i = 0; ok && i < nparts; i++) len += strlen(parts[i]) + strlen(sep);
+  char *s = ok ? malloc(len) : NULL;
+  if (s) {
+    s[0] = '\0';
+    for (int i = 0; i < nparts; i++) {
+      if (i) strcat(s, sep);
+      strcat(s, parts[i]);
+    }
+  }
+  for (int i = 0; i < 3; i++) free(parts[i]);
+  if (d.st != MC_OK) {
+    free(s);
+    return d.st;
+  }
+  if (!s) return MC_ERR_NOMEM;
+  *out = s;
+  return MC_OK;
 }
 
 /* --- Saved lists --- */

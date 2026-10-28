@@ -187,7 +187,13 @@ Operators by type:
 `empty` and `not_empty` take no value.
 
 `mc_smart_field_count()`/`mc_smart_field_get()` return this table for a UI to build its
-editor from.
+editor from, and `mc_smart_field_label()`, `mc_smart_op_label()` and `mc_smart_order_label()`
+the words for its pickers ("Last played", "is less than", "least played first"), so every
+platform uses the same ones. `mc_smart_describe()` puts a whole rule as one sentence in the
+current language, e.g. "Tracks where genre contains “jazz” and (play count is less than 3 or
+last played isn't in the last 180 days) · least played first, then newest added first · 10
+tracks", naming playlists and groups by their current names. Its words are the `smart_*`
+strings in `strings/en.json`.
 
 A rule can't refer to another smart list. A playlist or group a rule names that has since
 been deleted just matches nothing.

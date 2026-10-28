@@ -87,6 +87,34 @@ typedef struct mc_smart_field {
 int mc_smart_field_count(mc_smart_subject subject);
 int mc_smart_field_get(mc_smart_subject subject, int i, mc_smart_field *out);
 
+/* --- Words for an editor ---
+ *
+ * In the language set with mc_strings_set_locale() (i18n.h), so every platform's editor uses
+ * the same wording. All static; NULL for a name or combination the rule format doesn't have.
+ * A bool field's values read as MC_STR_SMART_VALUE_YES / MC_STR_SMART_VALUE_NO. */
+
+/* A field's label for a picker, e.g. "Last played" for "last_played"; also "Random" for the
+ * "random" order key. */
+const char *mc_smart_field_label(const char *field);
+/* An operator's label for a picker after the field, e.g. "is less than" for ("int", "<") or
+ * "isn't in the last" for ("date", "not_within"). type is an mc_smart_field type. */
+const char *mc_smart_op_label(const char *type, const char *op);
+/* A sort order's label, e.g. "least played first" for ("plays", 0) and "newest added first"
+ * for ("added", 1); desc is 1 for "dir": "desc". "random" gives "shuffled" either way. NULL
+ * for a field neither subject can sort on (check mc_smart_field.sortable: genre has words
+ * but only sorts tracks). */
+const char *mc_smart_order_label(const char *field, int desc);
+
+/* rule_json as a sentence for showing under a list's name or in the editor, e.g. "Tracks
+ * where genre contains “jazz” and (play count is less than 3 or last played isn't in the last
+ * 180 days) · least played first · 10 tracks": the conditions, the order and the limit,
+ * joined with " · " (each left out if the rule has none); "All tracks" / "All albums" if
+ * everything matches. Playlists and album groups are named as they're called in lib now (one
+ * that's been deleted reads as "a deleted playlist"), dates are in local time, and the words
+ * are in the current language. MC_ERR_FORMAT if the rule isn't valid for subject. Free *out
+ * with mc_free(). Runs one small query per playlist or group the rule names. */
+mc_status mc_smart_describe(mc_library *lib, mc_smart_subject subject, const char *rule_json, char **out);
+
 #ifdef __cplusplus
 }
 #endif
