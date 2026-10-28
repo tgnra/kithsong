@@ -136,7 +136,6 @@ static struct {
   char *old_rule;
   BOOL read_only;
   BOOL changed;
-  char *new_name; /* a preset's, for a new list */
 
   mc_smart_field fields[MAX_FIELDS];
   int nfields;
@@ -1049,6 +1048,11 @@ static void layout_panel(void) {
 
   if (p.dwp) EndDeferWindowPos(p.dwp);
   ed.content_h = y; /* put() takes content coordinates */
+  if (ed.scroll > max(0, ed.content_h - rc.bottom)) { /* rows went: no space below the last */
+    ed.scroll = max(0, ed.content_h - rc.bottom);
+    layout_panel();
+    return;
+  }
   SCROLLINFO si = {.cbSize = sizeof si, .fMask = SIF_ALL | SIF_DISABLENOSCROLL, .nMin = 0,
                    .nMax = max(0, ed.content_h - 1), .nPage = (UINT)rc.bottom, .nPos = ed.scroll};
   SetScrollInfo(ed.panel, SB_VERT, &si, TRUE);

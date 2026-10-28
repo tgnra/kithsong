@@ -4,7 +4,7 @@
 
 Big pieces that haven't been started, or that only one platform has.
 
-- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; none can create, edit, rename or delete one. Needs a rule editor (built from mc_smart_field_get())
+- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; only Windows can create, edit, rename or delete one (its rule editor, smart_editor.c). Linux and Android need theirs (built from mc_smart_field_get() and the mc_smart_*_label() words)
 - **Import on Android** - removed for now (music arrives by sync); see Android below
 - **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard; no on-screen control anywhere, and Android doesn't duck with it yet
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
@@ -23,7 +23,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Playlists: browse | yes | yes | yes | no |
 | Playlists: edit | yes | yes | yes | no |
 | Album groups | yes | yes | yes (no reorder) | no |
-| Smart playlists | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
+| Smart playlists | yes (rule editor, rename, delete) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
 | Recents | yes | yes | yes (core's) | no |
 | Search | yes | yes | yes | no |
 | Delete (with restore) | yes | yes | yes (permanent: no trash to restore from) | no |
@@ -62,10 +62,17 @@ Big pieces that haven't been started, or that only one platform has.
 - Windows and Linux - play a whole group, smart groups too (queue its albums in order; Android has Play)
 
 ### Smart playlists
-- All - rule editor (from mc_smart_field_get()), and rename/delete
+- Linux and Android - rule editor (from mc_smart_field_get()), and rename/delete; Windows has them
+- Windows - the editor's date picker (Date added or Last played before or after a date) stays light in dark mode: there's no dark theme for it
+- Windows - text conditions don't offer the library's genres and artists as you type
+- Windows - the editor only shows a "not" where it means a negative operator (isn't, doesn't contain, isn't in the last, is empty's opposite), and groups one level deep; any other rule opens read-only, as its sentence
+- Windows - "months" in the editor are 30 days, and reopen as days (or weeks)
+- Windows - the editor's live counts run one query per top-level condition after each change (on its own thread and connection); a core mc_smart_count() would save materialising every track
+- Windows - the editor doesn't lay itself out again when it moves to a monitor with another DPI
+- Windows - New Smart Playlist... and New Smart Album Group... are only on right-click menus (the pages' and the sidebar rows'), as there's no New button for manual playlists either
 - Core - mc_smart_describe() is English-shaped: conditions are joined as "field op value" clauses under "Tracks where …", and a language that needs grammatical case or agreement for a field or playlist name may need its own templates; dates use the smart_date template (local time), not the OS's date format
 - All - the v10 example lists' names are stored as data, so they're always English
-- Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it
+- Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it, and on Windows a new smart playlist that picks nothing playable isn't selected after Create (a new smart group still opens)
 - Core - limit by total duration ("an hour of music")
 
 ### Delete
