@@ -18,11 +18,14 @@
  *   +-----------+------------------------------------+-------------+
  *
  * The sidebar picks the page beside it. Its RECENTS are the albums and playlists last
- * played and the album groups last opened, here or on another device (they sync with the
- * library); clicking one shows it on the Albums, Playlists or Album Groups page. Home is greyed out until there's a home page. Search,
+ * played and the artists and album groups last opened, here or on another device (they sync
+ * with the library); clicking one shows it on its page. Home is greyed out until there's a
+ * home page. Artists lists the artists (artist_view.c); an artist's page is that view's
+ * header, with the track list beneath showing the artist's tracks, and Back returns to the
+ * list. Search,
  * Import and Settings replace the album grid and track list with the search page
  * (search_view.c), the import view (import_view.c) or the settings view (settings_view.c);
- * a search result opens on the Albums or Playlists page. Once an
+ * a search result opens on its page. Once an
  * import starts, the other pages are greyed out until the user clicks Done. Folders dropped
  * anywhere on the window start an import. Space plays or pauses, unless the focused control
  * uses Space itself.
@@ -71,6 +74,7 @@
 #include "add_device.h"
 #include "add_to_playlist.h"
 #include "album_grid.h"
+#include "artist_view.h"
 #include "build_info.h"
 #include "canvas.h"
 #include "device_view.h"
@@ -100,6 +104,7 @@ enum {
   ID_TRACKS,
   ID_NOW_PLAYING,
   ID_SEARCH,
+  ID_ARTISTS,
   NUM_BUTTONS = ID_NEXT - ID_PREV + 1
 };
 
@@ -137,6 +142,7 @@ typedef struct app {
   HWND tracks;
   HWND now_playing;
   HWND search;
+  HWND artists;
   HFONT font, icon_font;
   HWND hot_button; /* toolbar button under the mouse */
   canvas back;     /* the window's own background, around the children */
@@ -211,6 +217,7 @@ static void update_font(void) {
   track_list_update(g_app.dpi);
   now_playing_update(g_app.dpi);
   search_view_update(g_app.dpi, font);
+  artist_view_update(g_app.dpi, font);
   import_view_set_font(font);
   settings_view_set_font(font, g_app.dpi);
   device_view_set_font(font, g_app.dpi);
@@ -220,11 +227,15 @@ static void update_font(void) {
   g_app.font = font;
 }
 
-/* Albums, Artists, Playlists and Album Groups all show the album grid: Playlists with the
- * playlists in it, Album Groups with the groups, the others the albums for now. */
+/* Albums, Playlists and Album Groups show the album grid: Playlists with the playlists in it,
+ * Album Groups with the groups. */
 static BOOL library_page(void) {
-  return g_app.page == PAGE_ALBUMS || g_app.page == PAGE_ARTISTS || g_app.page == PAGE_PLAYLISTS ||
-         g_app.page == PAGE_ALBUM_GROUPS;
+  return g_app.page == PAGE_ALBUMS || g_app.page == PAGE_PLAYLISTS || g_app.page == PAGE_ALBUM_GROUPS;
+}
+
+/* An artist's page is open on the Artists page: the track list is beneath its header. */
+static BOOL artist_page(void) {
+  return g_app.page == PAGE_ARTISTS && artist_view_artist();
 }
 
 static void layout(void) {
@@ -240,7 +251,7 @@ static void layout(void) {
   int tracks_w = g_app.show_tracks ? g_app.tracks_w : 0;
   int grid_w = w - side_w - (tracks_w ? tracks_w + scale(1) : 0);
 
-  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 5);
+  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 6);
   int x = pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
@@ -257,8 +268,15 @@ static void layout(void) {
   dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
   UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
   dwp = DeferWindowPos(dwp, g_app.grid, NULL, side_w, bar, grid_w, h - bar, SWP_NOZORDER | library);
-  dwp = DeferWindowPos(dwp, g_app.tracks, NULL, w - tracks_w, bar, tracks_w, h - bar,
-                       SWP_NOZORDER | (g_app.show_tracks && library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  int artist_h = artist_page() ? min(artist_view_header_height(), h - bar) : h - bar;
+  dwp = DeferWindowPos(dwp, g_app.artists, NULL, side_w, bar, w - side_w, artist_h,
+                       SWP_NOZORDER | (g_app.page == PAGE_ARTISTS ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  if (artist_page())
+    dwp = DeferWindowPos(dwp, g_app.tracks, NULL, side_w, bar + artist_h, w - side_w, h - bar - artist_h,
+                         SWP_NOZORDER | SWP_SHOWWINDOW);
+  else
+    dwp = DeferWindowPos(dwp, g_app.tracks, NULL, w - tracks_w, bar, tracks_w, h - bar,
+                         SWP_NOZORDER | (g_app.show_tracks && library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   dwp = DeferWindowPos(dwp, g_app.search, NULL, side_w, bar, w - side_w, h - bar,
                        SWP_NOZORDER | (g_app.page == PAGE_SEARCH ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   EndDeferWindowPos(dwp);
@@ -304,12 +322,15 @@ static void paint_background(HDC dc, const RECT *area) {
   canvas_blit(c, dc, area->left, area->top, area);
 }
 
+static void show_album(void);
+
 /* For PAGE_DEVICE, the device selected in the sidebar (sidebar_select_device()) is shown. */
 static void show_page(sidebar_page page) {
   g_app.page = page;
   if (page != PAGE_DEVICE) sidebar_select(page);
   if (library_page())
     album_grid_show(page == PAGE_PLAYLISTS ? AGV_PLAYLISTS : page == PAGE_ALBUM_GROUPS ? AGV_GROUPS : AGV_ALBUMS);
+  if (library_page() || page == PAGE_ARTISTS) show_album(); /* the track list is the page's */
   if (page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
   import_view_show(page == PAGE_IMPORT);
   settings_view_show(page == PAGE_SETTINGS);
@@ -328,8 +349,13 @@ static void update_buttons(void) {
 }
 
 /* Shows the selected album's or playlist's tracks, or hides the track list when none is
- * selected. */
+ * selected. On the Artists page, the open artist's tracks instead. */
 static void show_album(void) {
+  if (g_app.page == PAGE_ARTISTS) {
+    track_list_show_artist(g_app.lib, artist_view_artist());
+    update_buttons();
+    return;
+  }
   char uid[MC_UID_STRLEN];
   const wchar_t *title = album_grid_selection(uid);
   track_list_show(g_app.lib, title ? uid : NULL, title, album_grid_showing_playlists());
@@ -341,9 +367,9 @@ static void show_album(void) {
   }
 }
 
-/* The sidebar's recents: the albums and playlists last played and album groups last opened,
- * on any device. Artists and smart lists have no page here to open them on, so they're left
- * out (they're recorded on other devices). */
+/* The sidebar's recents: the albums and playlists last played and the artists and album
+ * groups last opened, on any device. Smart lists have no page here to open them on, so
+ * they're left out (they're recorded on other devices). */
 static void refresh_recents(void) {
   mc_recent_list *list = NULL;
   if (!g_app.lib || mc_library_list_recents(g_app.lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
@@ -352,11 +378,13 @@ static void refresh_recents(void) {
   int n = 0;
   for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
     const mc_recent_info *r = &list->items[i];
-    if (r->is_smart || r->kind == MC_RECENT_ARTIST) continue;
+    if (r->is_smart) continue;
     BOOL album = r->kind == MC_RECENT_ALBUM;
     names[n] = wide_from_utf8(r->name ? r->name : "");
     artists[n] = album ? wide_from_utf8(r->artist ? r->artist : mc_str(MC_STR_UNKNOWN_ARTIST)) : NULL;
-    const wchar_t *kind = mc_wstr(r->kind == MC_RECENT_PLAYLIST ? MC_STR_PLAYLIST : MC_STR_ALBUM_GROUP);
+    const wchar_t *kind = mc_wstr(r->kind == MC_RECENT_ARTIST     ? MC_STR_ARTIST
+                                  : r->kind == MC_RECENT_PLAYLIST ? MC_STR_PLAYLIST
+                                                                  : MC_STR_ALBUM_GROUP);
     items[n] = (sidebar_recent){.kind = r->kind, .name = names[n], .detail = album ? artists[n] : kind};
     snprintf(items[n].uid, sizeof items[n].uid, "%s", r->uid);
     n++;
@@ -369,6 +397,20 @@ static void refresh_recents(void) {
   }
 }
 
+/* An artist's page has opened: it goes first in the recents, and its tracks in the list. */
+static void artist_opened(void) {
+  if (g_app.lib && mc_library_record_opened(g_app.lib, MC_RECENT_ARTIST, artist_view_artist()) == MC_OK)
+    refresh_recents();
+  show_album();
+  layout();
+}
+
+/* The Artists page, with the page of the artist with uid open if it's there. */
+static void open_artist(const char *uid) {
+  show_page(PAGE_ARTISTS);
+  if (artist_view_open(uid)) artist_opened();
+}
+
 /* A recent was clicked in the sidebar: its page, with it selected. */
 static void open_recent(void) {
   mc_recent_kind kind;
@@ -376,6 +418,10 @@ static void open_recent(void) {
   if (!clicked) return;
   char uid[MC_UID_STRLEN];
   snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when the recents refresh */
+  if (kind == MC_RECENT_ARTIST) {
+    open_artist(uid);
+    return;
+  }
   if (kind == MC_RECENT_ALBUM_GROUP) {
     show_page(PAGE_ALBUM_GROUPS);
     album_grid_open_group(uid);
@@ -389,16 +435,21 @@ static void open_recent(void) {
  * removed the shown album or a recent, or brought recents from other devices. */
 static void refresh_library(void) {
   album_grid_set_library(g_app.lib);
+  artist_view_set_library(g_app.lib); /* if the open artist went, it goes back (ARN_BACK) */
   show_album(); /* if the album went, the grid says so when it reloads */
   refresh_recents();
   if (g_app.lib) mc_library_search_prepare(g_app.lib); /* the index is ready before the user types */
   search_view_set_library(g_app.lib);
 }
 
-/* A search result was opened: an album, playlist or album group on its page, a track on its
- * album with the track selected. */
+/* A search result was opened: an artist, album, playlist or album group on its page, a track
+ * on its album with the track selected. */
 static void open_search_result(void) {
   search_view_hit hit = *search_view_opened();
+  if (hit.kind == MC_SEARCH_ARTIST) {
+    open_artist(hit.uid);
+    return;
+  }
   if (hit.kind == MC_SEARCH_ALBUM_GROUP) {
     show_page(PAGE_ALBUM_GROUPS);
     album_grid_open_group(hit.uid);
@@ -482,6 +533,7 @@ static void apply_theme(void) {
   track_list_update(g_app.dpi);
   now_playing_update(g_app.dpi);
   search_view_update(g_app.dpi, g_app.font);
+  artist_view_update(g_app.dpi, g_app.font);
   album_grid_theme_changed();
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
@@ -512,6 +564,7 @@ static void create_controls(void) {
   g_app.tracks = track_list_create(g_app.wnd, ID_TRACKS);
   g_app.now_playing = now_playing_create(g_app.wnd, ID_NOW_PLAYING);
   g_app.search = search_view_create(g_app.wnd, ID_SEARCH);
+  g_app.artists = artist_view_create(g_app.wnd, ID_ARTISTS);
   refresh_library();
 
   import_view_create(g_app.wnd, g_app.lib);
@@ -522,9 +575,9 @@ static void create_controls(void) {
   device_view_create(g_app.wnd, &host);
 }
 
-/* Plays the shown album or playlist in order, from track start on. Tracks with no file on
- * this device are left out of the queue. Playing it puts it first in the recents, as on
- * Android. */
+/* Plays the shown album, playlist or artist's tracks in order, from track start on. Tracks
+ * with no file on this device are left out of the queue. Playing it puts it first in the
+ * recents, as on Android. */
 static void play_album(int start) {
   int n = track_list_count(), count = 0, first = 0;
   playback_track *queue = n ? calloc((size_t)n, sizeof *queue) : NULL;
@@ -538,10 +591,15 @@ static void play_album(int start) {
   if (count) playback_play(queue, count, first);
   free(queue);
 
-  char uid[MC_UID_STRLEN];
+  char uid[MC_UID_STRLEN] = "";
   mc_recent_kind kind = album_grid_showing_playlists() ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
-  if (count && g_app.lib && album_grid_selection(uid) && mc_library_record_opened(g_app.lib, kind, uid) == MC_OK)
-    refresh_recents();
+  if (artist_page()) {
+    kind = MC_RECENT_ARTIST;
+    snprintf(uid, sizeof uid, "%s", artist_view_artist());
+  } else if (!album_grid_selection(uid)) {
+    uid[0] = '\0';
+  }
+  if (count && g_app.lib && uid[0] && mc_library_record_opened(g_app.lib, kind, uid) == MC_OK) refresh_recents();
 }
 
 /* The Play button turns into Pause while playing. */
@@ -892,6 +950,7 @@ static void on_command(int id, int code) {
       } else if (code == SBN_ENTER_PAGE) {
         if (g_app.page == PAGE_SEARCH) search_view_focus();
         else if (library_page()) SetFocus(g_app.grid);
+        else if (g_app.page == PAGE_ARTISTS) SetFocus(g_app.artists);
       } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       else if (code == SBN_PAIR_DEVICE) pair_nearby();
       else if (code == SBN_OPEN_RECENT) open_recent();
@@ -902,6 +961,24 @@ static void on_command(int id, int code) {
       else if (code == AGN_OPEN_GROUP && g_app.lib && album_grid_group() &&
                mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, album_grid_group()) == MC_OK)
         refresh_recents();
+      break;
+    case ID_ARTISTS:
+      if (code == ARN_OPEN) {
+        artist_opened();
+      } else if (code == ARN_BACK) {
+        show_album(); /* empties the track list */
+        layout();
+      } else if (code == ARN_OPEN_ALBUM) {
+        char uid[MC_UID_STRLEN];
+        snprintf(uid, sizeof uid, "%s", artist_view_opened_album());
+        show_page(PAGE_ALBUMS);
+        /* The track list comes in now, narrowing the grid, which drops a scroll under way;
+         * selecting again scrolls the album into view at the grid's new width. */
+        if (album_grid_select(uid)) {
+          show_album();
+          album_grid_select(uid);
+        }
+      }
       break;
     case ID_PREV:
       playback_previous();
@@ -914,7 +991,12 @@ static void on_command(int id, int code) {
       break;
     case ID_TRACKS:
       if (code == TLN_PLAY) play_album(track_list_play_index());
-      else if (code == TLN_CLOSE) { /* unselecting the album hides the list */
+      else if (code == TLN_CLOSE && artist_page()) { /* Escape on an artist's page: back to the list */
+        artist_view_back();
+        show_album();
+        layout();
+        SetFocus(g_app.artists);
+      } else if (code == TLN_CLOSE) { /* unselecting the album hides the list */
         album_grid_unselect();
         SetFocus(g_app.grid);
       } else on_track_request(code);
@@ -1033,6 +1115,12 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
       on_command(LOWORD(wp), HIWORD(wp));
       return 0;
+    case WM_APPCOMMAND: /* the mouse's back button, over the track list on an artist's page */
+      if (GET_APPCOMMAND_LPARAM(lp) == APPCOMMAND_BROWSER_BACKWARD && artist_page()) {
+        on_command(ID_TRACKS, TLN_CLOSE);
+        return TRUE;
+      }
+      break;
     case WM_NOTIFY:
       if (device_view_on_notify((const NMHDR *)lp, &result)) return result;
       import_view_on_notify((const NMHDR *)lp);

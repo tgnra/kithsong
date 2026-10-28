@@ -447,6 +447,10 @@ mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_l
       if (sep) *sep = '\0';
       a->folder = abs;
     }
+    if (sqlite3_column_count(stmt) > 8) { /* an artist's albums */
+      a->track_count = sqlite3_column_int(stmt, 7);
+      a->credited_count = sqlite3_column_int(stmt, 8);
+    }
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -649,6 +653,42 @@ void mc_artist_list_free(mc_artist_list *list) {
   for (int i = 0; i < list->count; i++) free(list->items[i].name);
   free(list->items);
   free(list);
+}
+
+mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid, mc_album_list **out) {
+  if (!lib || !artist_uid || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* c counts the tracks of just the albums the artist is on (by the two artist indexes). An
+   * album artist's album with no tracks has no c row, and counts as all theirs. */
+  static const char sql[] =
+    ALBUM_COLS ", coalesce(c.n, 0), coalesce(c.credited, 0) FROM albums a" ALBUM_JOINS
+    " LEFT JOIN (SELECT t.album_uid, count(*) AS n,"
+    "   count(CASE WHEN coalesce(t.artist_uid, al.artist_uid) = ?1 THEN 1 END) AS credited"
+    "  FROM tracks t JOIN albums al ON al.uid = t.album_uid"
+    "  WHERE t.album_uid IN (SELECT album_uid FROM tracks WHERE artist_uid = ?1"
+    "   UNION SELECT uid FROM albums WHERE artist_uid = ?1)"
+    "  GROUP BY t.album_uid) c ON c.album_uid = a.uid"
+    " WHERE c.credited > 0 OR a.artist_uid = ?1"
+    " ORDER BY max(a.artist_uid IS ?1, coalesce(c.credited * 1.0 / c.n, 0)) DESC, a.kind = 'singles', a.year,"
+    "  a.title COLLATE NOCASE, a.uid";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  if (sqlite3_bind_text(stmt, 1, artist_uid, -1, SQLITE_STATIC) != SQLITE_OK) {
+    sqlite3_finalize(stmt);
+    return MC_ERR_DB;
+  }
+  return mc_library_read_albums(lib, stmt, out);
+}
+
+mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid, mc_track_list **out) {
+  /* Their own tracks, and those with no artist on their albums, each by its index. */
+  static const char sql[] =
+    TRACK_COLS " FROM tracks t" TRACK_JOINS
+    " WHERE t.uid IN (SELECT uid FROM tracks WHERE artist_uid = ?1"
+    "  UNION ALL SELECT t2.uid FROM albums a2 JOIN tracks t2 ON t2.album_uid = a2.uid"
+    "  WHERE a2.artist_uid = ?1 AND t2.artist_uid IS NULL)"
+    " ORDER BY t.title COLLATE NOCASE, al.title COLLATE NOCASE, coalesce(t.disc_no, 0), t.track_no, t.uid";
+  return list_tracks(lib, sql, artist_uid, out);
 }
 
 mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **out) {

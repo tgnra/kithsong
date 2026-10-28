@@ -6,6 +6,7 @@
     "ok": "OK",
     "close": "_Close",
     "done": "_Done",
+    "back": "Back",
     "rename": "Rename",
     "delete": "Delete",
     "connect": "Connect",
@@ -429,6 +430,9 @@
     "col_file": "File",
     "col_current_title": { "text": "Current title", "note": "The title in a file's tags before importing." },
 
+    "scroll_left": { "text": "Scroll left", "note": "Button at the start of a row of albums that scrolls sideways." },
+    "scroll_right": { "text": "Scroll right", "note": "Button at the end of a row of albums that scrolls sideways." },
+
     "this_pc_suffix": { "text": " (this PC)", "note": "After this PC's name in the list of devices." },
     "footer_version": { "text": "musicapp {0} build {1:d}", "note": "{0} is the version, e.g. \"0.3.0\", {1} the build number." },
     "footer_version_db": { "text": "musicapp {0} build {1:d} · db v{2:d}", "note": "{0} is the version, {1} the build number, {2} the library database version." },
@@ -459,7 +463,6 @@
   "android": {
     "core_name": { "text": "musiccore", "translatable": false },
 
-    "back": "Back",
     "cover_of": "Cover of {0}",
     "albums": { "one": "{0:d} album", "other": "{0:d} albums" },
 

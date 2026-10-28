@@ -43,9 +43,12 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 
 ## Artists View
 
-- Core - an artist API; Android derives artists from the album list
+- Core - a track has one artist, so "A & B" or "A feat. B" credits only that combined artist; crediting each needs a track_artists table (and tag parsing on import)
+- Android - derives artists from the album list; switch to mc_library_list_artists() and the artist page's mc_library_list_artist_albums()/_tracks()
 - List of Artists - toggle for album artist/ artist?
-- Linux and Windows - Artists shows the album grid for now
+- Linux - Artists shows the album grid for now
+- Windows - an artist page has no Play or Shuffle of its own: play a track, or the toolbar's Play with nothing queued plays the list from the top
+- Windows - the artist list has no artist pictures, and no context menu (Add to Playlist of all their tracks, say)
 
 ## Import
 
@@ -73,7 +76,8 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 
 ## Recents
 
-- Linux and Windows - artists and smart playlists (and on Linux album groups) are left out of the sidebar's Recents (and opening them isn't recorded) until there are pages to open them on
+- Linux - artists, album groups and smart playlists are left out of the sidebar's Recents (and opening them isn't recorded) until there are pages to open them on
+- Windows - smart playlists are left out of the sidebar's Recents (and opening them isn't recorded) until there's a page to open them on
 - Linux and Windows - remove one from Recents, or clear them (mc_library_remove_recent(), mc_library_clear_recents()), e.g. from a context menu
 - Linux and Windows - Recents show the page's icon, not the cover art (no sidebar row has art yet)
 - Linux and Windows - untested: a recent arriving or going with a real sync between two devices (the refresh after sync is the same one an import uses; a removal was tried by changing the database under the app and reloading)
@@ -81,7 +85,7 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 
 ## Search
 
-- Windows and Linux - artist and smart playlist results (and on Linux album group results) don't open until there are pages for them
+- Windows and Linux - smart playlist results don't open until there's a page for them; nor do artist and album group results on Linux
 - Windows and Linux - Home in the sidebar is greyed out until there's a home page
 - Windows - the search page is custom-drawn, so screen readers don't see its results (like the album grid and track list)
 - Windows - Up and Down move through the album tiles one at a time, not by row

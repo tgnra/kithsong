@@ -13,6 +13,7 @@ add_executable(musicapp WIN32
   src/add_device.c
   src/add_to_playlist.c
   src/album_grid.c
+  src/artist_view.c
   src/canvas.c
   src/cover.c
   src/device_view.c

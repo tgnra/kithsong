@@ -16,10 +16,10 @@
  * section, and the sections are in the order of their best hit, so the top result's kind
  * comes first. The results scroll beneath the box, with the album grid's overlay scrollbar.
  *
- * Clicking a result, or Enter on it, opens it (SVN_OPEN): albums, playable playlists and
- * album groups on their pages, tracks on their album with the track selected. Artists and
- * smart lists have no page here yet, so their rows do nothing. Down in the box moves
- * the focus to the first result; the arrow keys, Home and End move it through the results,
+ * Clicking a result, or Enter on it, opens it (SVN_OPEN): artists, albums, playable
+ * playlists and album groups on their pages, tracks on their album with the track
+ * selected. Smart playlists have no page here yet, so their rows do nothing. Down in the
+ * box moves the focus to the first result; the arrow keys, Home and End move it through the results,
  * and Up from the first goes back to the box.
  *
  * Covers are decoded on the UI thread, one per message, so typing isn't held up by them. */
@@ -35,7 +35,7 @@
 #define SVN_OPEN 1
 
 typedef struct search_view_hit {
-  mc_search_kind kind; /* MC_SEARCH_ALBUM, MC_SEARCH_TRACK or MC_SEARCH_PLAYLIST */
+  mc_search_kind kind; /* MC_SEARCH_ARTIST, _ALBUM, _TRACK or _PLAYLIST */
   char uid[MC_UID_STRLEN];
   char album_uid[MC_UID_STRLEN]; /* a track's album */
 } search_view_hit;

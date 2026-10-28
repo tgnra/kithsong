@@ -407,6 +407,7 @@ static void show_results(BOOL keep) {
       h->name = widen(r->name && *r->name ? r->name : mc_str(MC_STR_UNTITLED));
       h->sub = hit_sub(r);
       switch (r->kind) {
+        case MC_SEARCH_ARTIST:
         case MC_SEARCH_ALBUM: h->opens = TRUE; break;
         case MC_SEARCH_TRACK: h->opens = find_album(r->album_uid) != NULL; break;
         case MC_SEARCH_PLAYLIST: h->opens = !r->is_smart && playable_playlist(r->uid); break;
