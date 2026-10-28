@@ -4,6 +4,10 @@ plugins {
     id("com.android.library")
 }
 
+// Where CMake copies the fetched libraries' license files, one folder per ABI (see
+// cmake/Licenses.cmake's kithsong_copy_licenses). They're the same for every ABI.
+val licensesDir = layout.buildDirectory.dir("intermediates/kithsong-licenses")
+
 android {
     namespace = "ng.kithso.core"
     compileSdk = 36
@@ -32,6 +36,9 @@ android {
                     arguments += "-DKITHSONG_LASTFM_FILE=${file(it).absolutePath.replace('\\', '/')}"
                 }
 
+                // The native libraries' license texts, copied at configure time for the assets below.
+                arguments += "-DKITHSONG_LICENSES_DIR=" + licensesDir.get().asFile.absolutePath.replace('\\', '/')
+
                 // 16 KB page alignment, required by Android 15+ devices; NDK r28 does it by default.
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
             }
@@ -50,8 +57,41 @@ android {
         }
     }
 
+    // R8: the classes and members the JNI bridge looks up by name. Applied to the apps.
+    defaultConfig.consumerProguardFiles("consumer-rules.pro")
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+// The native licences as assets/licenses/native/ (index.tsv, LICENSES.md and the texts), for
+// the apps' "Open source licences" screens. Merged into each app that depends on :native.
+abstract class NativeLicenseAssets : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val licenses: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile.resolve("licenses/native")
+        out.deleteRecursively()
+        val abi = licenses.get().asFile.listFiles { f -> f.resolve("index.tsv").isFile }?.minOrNull()
+            ?: throw GradleException("No native license texts in ${licenses.get()}; did CMake run?")
+        abi.copyRecursively(out)
+    }
+}
+
+androidComponents.onVariants { variant ->
+    val name = variant.name.replaceFirstChar(Char::uppercase)
+    val task = tasks.register<NativeLicenseAssets>("generate${name}NativeLicenseAssets") {
+        licenses.set(licensesDir)
+        // CMake writes them when it configures, which the native build does first.
+        dependsOn(tasks.matching { it.name == "externalNativeBuild$name" })
+    }
+    variant.sources.assets?.addGeneratedSourceDirectory(task, NativeLicenseAssets::outputDir)
 }

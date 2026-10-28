@@ -70,6 +70,9 @@ fun App(
     val stack = rememberSaveable(saver = StackSaver) { SnapshotStateList<CollectionRef>() }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var syncOpen by rememberSaveable { mutableStateOf(false) }
+    var licensesOpen by rememberSaveable { mutableStateOf(false) }
+    // The licence text open over the licences: its asset's path.
+    var licenseOpen by rememberSaveable { mutableStateOf<String?>(null) }
     // The device whose page is open over sync: a member's uid, or THIS_DEVICE.
     var deviceOpen by rememberSaveable { mutableStateOf<String?>(null) }
     var playerOpen by rememberSaveable { mutableStateOf(false) }
@@ -122,10 +125,37 @@ fun App(
                 DismissibleScreen(
                     DismissDirection.Right,
                     onDismissed = { settingsOpen = false },
-                    backEnabled = !playerOpen && !syncOpen,
-                    modifier = Modifier.coveredIf(playerOpen || syncOpen),
+                    backEnabled = !playerOpen && !syncOpen && !licensesOpen,
+                    modifier = Modifier.coveredIf(playerOpen || syncOpen || licensesOpen),
                 ) { dismiss ->
-                    SettingsScreen(settings, libraryDir, bottomPadding, onSync = { syncOpen = true }, onBack = dismiss)
+                    SettingsScreen(
+                        settings, libraryDir, bottomPadding,
+                        onSync = { syncOpen = true },
+                        onLicenses = { licensesOpen = true },
+                        onBack = dismiss,
+                    )
+                }
+            }
+            if (licensesOpen) {
+                DismissibleScreen(
+                    DismissDirection.Right,
+                    onDismissed = { licensesOpen = false },
+                    backEnabled = !playerOpen && licenseOpen == null,
+                    modifier = Modifier.coveredIf(playerOpen || licenseOpen != null),
+                ) { dismiss ->
+                    LicensesScreen(bottomPadding, onOpen = { licenseOpen = it }, onBack = dismiss)
+                }
+            }
+            licenseOpen?.let { asset ->
+                key(asset) {
+                    DismissibleScreen(
+                        DismissDirection.Right,
+                        onDismissed = { licenseOpen = null },
+                        backEnabled = !playerOpen,
+                        modifier = Modifier.coveredIf(playerOpen),
+                    ) { dismiss ->
+                        LicenseTextScreen(asset, bottomPadding, onBack = dismiss)
+                    }
                 }
             }
             if (syncOpen) {

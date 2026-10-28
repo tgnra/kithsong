@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the phone and Wear OS release APKs and AABs into dist/:
-#   kithsong-<version>-android.apk/.aab and kithsong-<version>-wearos.apk/.aab
+#   kithsong-<version>-android.apk/.aab and kithsong-<version>-wearos.apk/.aab, with R8's
+#   kithsong-<version>-{android,wearos}-mapping.txt beside them
 # The release workflow runs this too; scripts/release-android.ps1 is the Windows twin.
 #
 #   scripts/release-android.sh
@@ -43,6 +44,8 @@ for pair in app:android wear:wearos; do
     out="$root/android/$module/build/outputs"
     cp "$out/apk/release/$module-$suffix.apk" "$root/dist/kithsong-$version-$name.apk"
     cp "$out/bundle/release/$module-release.aab" "$root/dist/kithsong-$version-$name.aab"
+    # R8's map back to the real names, for stack traces. The AABs carry it for Play too.
+    cp "$out/mapping/release/mapping.txt" "$root/dist/kithsong-$version-$name-mapping.txt"
 done
 
 if [[ $signed == 1 ]]; then

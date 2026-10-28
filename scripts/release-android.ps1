@@ -1,5 +1,6 @@
 # Builds the phone and Wear OS release APKs and AABs into dist\:
-#   kithsong-<version>-android.apk/.aab and kithsong-<version>-wearos.apk/.aab
+#   kithsong-<version>-android.apk/.aab and kithsong-<version>-wearos.apk/.aab, with R8's
+#   kithsong-<version>-{android,wearos}-mapping.txt beside them
 # The Windows twin of scripts/release-android.sh, which the release workflow runs.
 #
 #   scripts\release-android.ps1
@@ -42,6 +43,8 @@ foreach ($pair in @(@('app', 'android'), @('wear', 'wearos'))) {
     $out = "$root\android\$module\build\outputs"
     Copy-Item "$out\apk\release\$module-$suffix.apk" "$root\dist\kithsong-$version-$name.apk"
     Copy-Item "$out\bundle\release\$module-release.aab" "$root\dist\kithsong-$version-$name.aab"
+    # R8's map back to the real names, for stack traces. The AABs carry it for Play too.
+    Copy-Item "$out\mapping\release\mapping.txt" "$root\dist\kithsong-$version-$name-mapping.txt"
 }
 
 if ($signed) {

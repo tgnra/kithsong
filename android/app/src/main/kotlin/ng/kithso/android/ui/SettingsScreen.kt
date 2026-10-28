@@ -70,7 +70,7 @@ import kotlinx.coroutines.withContext
 /**
  * The app's settings: a way to the devices it syncs with, signing in to Last.fm, the
  * permissions it has, the storage it uses, and its version. [libraryDir] is the library folder, whose size is shown. [onSync]
- * opens the sync screen. [onBack] slides the screen away; it is also dismissed by swiping right.
+ * opens the sync screen, [onLicenses] the open source licences. [onBack] slides the screen away; it is also dismissed by swiping right.
  */
 @Composable
 fun SettingsScreen(
@@ -78,6 +78,7 @@ fun SettingsScreen(
     libraryDir: File,
     bottomPadding: Dp,
     onSync: () -> Unit,
+    onLicenses: () -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -166,6 +167,11 @@ fun SettingsScreen(
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.core_name)) },
                     supportingContent = { Text(stringResource(R.string.version, NativeCore.version())) },
+                )
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.licenses)) },
+                    supportingContent = { Text(stringResource(R.string.licenses_text)) },
+                    modifier = Modifier.clickable(onClick = onLicenses),
                 )
             }
         }

@@ -43,3 +43,14 @@ Planned:
   version. We go by the LICENSE file. Apache-2.0 asks that changed files say so:
   `shuffle.c` credits the original and lists the changes (its static state worked out per
   call, so it's thread-safe; n = 0 for 2^32 items dropped). The project has no NOTICE file.
+
+## Where the texts ship
+
+- **Desktop packages**: a `LICENSES` folder (Windows) or `share/licenses/` (Linux) with this
+  file and each library's own license file, from `cmake/Licenses.cmake`.
+- **Android and Wear OS**: the same files as assets, plus the Android libraries' licences. The
+  phone shows them under Settings > Open source licences. The Android libraries (AndroidX,
+  Kotlin, Media3, Coil, MaterialKolor, ...) aren't listed here: the build reads them off each
+  app's dependencies and their POMs (`GenerateMavenLicenses` in `android/build.gradle.kts`),
+  with the texts in `android/licenses/`. A library under a licence it doesn't know, or an MIT
+  one without its copyright notice there, fails the build.

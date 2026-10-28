@@ -565,6 +565,11 @@
     "clear": "Clear",
     "settings_about": "About",
     "version": "Version {0}",
+    "licenses": { "text": "Open source licences", "note": "Settings entry, and the title of its screen: the third-party libraries in the app and their licences." },
+    "licenses_text": "The libraries Kithsong is built with",
+    "licenses_native": { "text": "In the core", "note": "Heading on the licences screen: the C libraries the native core is built from." },
+    "licenses_overview": { "text": "Overview", "note": "Licences screen: the list of every third-party library, its version and licence (LICENSES.md)." },
+    "licenses_android": { "text": "In the Android app", "note": "Heading on the licences screen: the Android/Kotlin libraries." },
 
     "this_phone": "This phone",
     "this_phone_in_group": "It syncs with the other devices in its group whenever both are on the same network.",

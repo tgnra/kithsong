@@ -11,7 +11,7 @@ Big pieces that haven't been started, or that only one platform has.
 - **Screen readers on Windows** - the album grid, track list, sidebar and search page have UI Automation providers, checked with a UI Automation tree walk but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **AAC/M4A playback** - no decoder chosen
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists, artists or settings
-- **Releases** - no Windows installer or signing, no Flathub listing, Android without R8 or license texts
+- **Releases** - no Windows installer or signing, no Flathub listing (Android: R8 on, licences in Settings; the watch has no licences screen yet)
 - **Translations** - strings/en.json is the only language
 
 ### Parity at a glance
@@ -191,6 +191,7 @@ The album grid, track list, sidebar and search page have UI Automation providers
 - Sync - request a Wi-Fi network while syncing; Wear OS keeps Wi-Fi off while the phone is connected over Bluetooth
 - Sync - sync in the background, not only while the sync screen is open
 - Artists, Playlists, Settings
+- Settings - an "Open source licences" screen like the phone's; the watch APK already carries the texts (assets/licenses/)
 
 ## Testing and verification
 
@@ -234,8 +235,7 @@ Things built but not checked properly.
 
 - Windows - installer, MSIX/Store package, code signing
 - Linux - Flathub (every dependency in third_party/CMakeLists.txt as a Flatpak source), architectures other than x86_64
-- Android - enable R8
-- Android - third-party license texts in the apps
+- Android - the release workflow keeps only the APKs and AABs, so the R8 mapping files the scripts put in dist/ don't reach the GitHub release (the AABs carry them for Play)
 - All - translations (strings/en.json is the only language)
 
 ## Docs

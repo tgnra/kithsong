@@ -37,7 +37,12 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8: shrinks, optimises and renames the code, then drops unused resources. The
+            // JNI bridge's keep rules come with :native (native/consumer-rules.pro); the
+            // libraries bring their own. The map back is build/outputs/mapping/release/.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.findByName("release")
         }
     }
