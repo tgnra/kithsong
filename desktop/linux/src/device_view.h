@@ -21,6 +21,9 @@
  *   |  12 albums, 2 artists, 1 playlist selected                       |
  *   +------------------------------------------------------------------+
  *
+ * While a session with the device runs, Sync now reads Cancel sync, and ends it (see
+ * mc_sync_cancel()).
+ *
  * An AdwPreferencesPage under an AdwBanner, in an AdwToastOverlay. This computer's own page
  * has Sync now (with every member) and Leave group… instead. An archive's format, budget and
  * selection are fixed, so they're insensitive; its name isn't. Making a device an archive

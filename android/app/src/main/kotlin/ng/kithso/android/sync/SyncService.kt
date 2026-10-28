@@ -40,6 +40,7 @@ class SyncService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val syncer = (application as KithsongApp).syncer
         if (intent?.action == ACTION_CANCEL) syncer.cancelPairing()
+        if (intent?.action == ACTION_CANCEL_SYNC) syncer.cancelSync()
         if (!foreground) {
             foreground = true
             createChannel(this)
@@ -110,12 +111,15 @@ class SyncService : Service() {
         val filesDone = files.sumOf { it.filesDone }
         val filesTotal = files.sumOf { it.filesTotal }
         if (pairing is Pairing.EnterCode || pairing is Pairing.ShowCode) {
-            builder.addAction(0, getString(R.string.cancel), cancel())
-        } else if (filesTotal > 0) {
-            builder.setContentText(resources.getQuantityString(R.plurals.sync_notification_files, filesTotal, filesDone, filesTotal))
-            builder.setProgress(filesTotal, filesDone, false)
+            builder.addAction(0, getString(R.string.cancel), cancel(ACTION_CANCEL))
         } else {
-            builder.setProgress(0, 0, true)
+            if (filesTotal > 0) {
+                builder.setContentText(resources.getQuantityString(R.plurals.sync_notification_files, filesTotal, filesDone, filesTotal))
+                builder.setProgress(filesTotal, filesDone, false)
+            } else {
+                builder.setProgress(0, 0, true)
+            }
+            if (status.syncing.isNotEmpty()) builder.addAction(0, getString(R.string.cancel_sync), cancel(ACTION_CANCEL_SYNC))
         }
         return builder.build()
     }
@@ -127,10 +131,11 @@ class SyncService : Service() {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
-    private fun cancel() = PendingIntent.getService(
+    // Distinct request codes, so the two actions' intents don't stand in for each other.
+    private fun cancel(action: String) = PendingIntent.getService(
         this,
-        0,
-        Intent(this, SyncService::class.java).setAction(ACTION_CANCEL),
+        if (action == ACTION_CANCEL_SYNC) 1 else 0,
+        Intent(this, SyncService::class.java).setAction(action),
         PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -150,6 +155,7 @@ class SyncService : Service() {
         private const val CHANNEL_ID = "sync"
         private const val NOTIFICATION_ID = 4
         private const val ACTION_CANCEL = "ng.kithso.android.sync.CANCEL"
+        private const val ACTION_CANCEL_SYNC = "ng.kithso.android.sync.CANCEL_SYNC"
         // A safety net, if sync goes this long without a step forward: the service releases it
         // once sync is idle.
         private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L

@@ -58,7 +58,10 @@ typedef struct mc_sync_peer {
   int busy;
   int busy_lower; /* that session was initiated by the lower device uid */
   int abort;      /* a session the lower uid started wants this one gone */
+  int cancel;     /* mc_sync_cancel() cut it short */
   mc_channel *busy_ch;
+  /* mono: mc_sync_cancel() holds sessions with it back until this; 0 = none. */
+  uint64_t held_ms;
   /* The file phase: a signature of the transcodes last asked for on its behalf while it
    * was offline (PREPARE_REQ), so they're asked for once per change. */
   uint64_t prepared_sig;
@@ -151,6 +154,7 @@ struct mc_sync {
   uint32_t auto_interval_ms; /* MC_SYNC_AUTO_INTERVAL_MS, but in tests; under lock */
   char hint_override[MC_SYNC_HINTS_MAX];
   uint16_t reach_port_override; /* under lock */
+  uint32_t send_delay_ms; /* under lock */
 };
 
 /* --- Shared helpers (sync.c) --- */
@@ -172,9 +176,11 @@ void mc_sync_untrack(mc_sync *sync, mc_channel *ch);
 
 /* At most one session per peer. lower: the session was initiated by the lower device uid.
  * A session the lower uid initiated displaces one the higher did (which is aborted);
- * otherwise the newcomer loses. 1 if claimed. */
+ * otherwise the newcomer loses, as does any while mc_sync_cancel() holds the peer back.
+ * 1 if claimed. */
 int mc_sync_claim(mc_sync *sync, const char *peer_uid, int lower, mc_channel *ch);
-void mc_sync_release(mc_sync *sync, const char *peer_uid);
+/* 1 if mc_sync_cancel() cut the claimed session short. */
+int mc_sync_release(mc_sync *sync, const char *peer_uid);
 
 /* After this device joined or left a group: the announced group hash and the members. */
 void mc_sync_group_changed(mc_sync *sync, mc_sync_conn *c);
@@ -259,6 +265,9 @@ void mc_sync_set_test_hints(mc_sync *sync, const char *json);
 /* Reach checks ask to be called back at port instead of the listener's (0: the listener's),
  * as if a firewall blocked it. Any time. */
 void mc_sync_set_test_reach_port(mc_sync *sync, uint16_t port);
+/* Sleeps ms before each frame of a file this device serves, so that a test can catch a
+ * transfer halfway (0: none). Any time. */
+void mc_sync_set_test_send_delay(mc_sync *sync, uint32_t ms);
 /* As if discovery had reported a peer online (online = 1) or gone (0). */
 void mc_sync_test_peer(mc_sync *sync, const char *device_uid, const char *name, const char *kind,
                        const char *group_hash, const char *address, uint16_t port, int online);

@@ -8,9 +8,9 @@
  * threads of its own once started: a listener, a scheduler, discovery, and one per running
  * session or pairing. Events are reported through the mc_sync_events callbacks, which run on
  * those core threads, never on the caller's, and one at a time (never two at once), so
- * frontends marshal them onto their UI thread. A callback may call the getters and the
- * pairing functions, but not mc_sync_stop() or mc_sync_free(). Strings passed to callbacks
- * are valid only during the call. */
+ * frontends marshal them onto their UI thread. A callback may call the getters, the pairing
+ * functions and mc_sync_cancel(), but not mc_sync_stop() or mc_sync_free(). Strings passed
+ * to callbacks are valid only during the call. */
 #ifndef MUSICCORE_SYNC_H
 #define MUSICCORE_SYNC_H
 
@@ -107,6 +107,7 @@ typedef struct mc_sync_result {
   int files_paused;      /* this device fetched and deleted nothing: its profile isn't
                           * confirmed (see mc_sync_confirm_now()) */
   int covers_received;   /* album covers fetched for folders here that had none */
+  int cancelled;         /* mc_sync_cancel() here cut the session short; status is not MC_OK */
 } mc_sync_result;
 
 /* Every member may be NULL. All run on core threads; see the top of this file. */
@@ -194,6 +195,17 @@ mc_status mc_sync_now(mc_sync *sync, const char *device_uid);
  * this device had a complete session with less than MC_SYNC_AUTO_INTERVAL_MS ago gets none
  * until that runs out (see mc_sync_device.auto_after_ms), and only if sync still runs then. */
 mc_status mc_sync_background(mc_sync *sync, const char *device_uid);
+/* The Cancel button: ends the session with device_uid (with every member for NULL) if one is
+ * running, whichever side started it, and holds sessions with it back for
+ * MC_SYNC_CANCEL_HOLD_MS, so it doesn't pick up again at once: none starts here, automatic or
+ * not, and one the other device starts is refused as busy. mc_sync_now() and
+ * mc_sync_confirm_now() lift the hold (for NULL, every member's); mc_sync_background()
+ * doesn't. A Sync press not yet acted on is dropped. A file being fetched is abandoned and
+ * its partial copy deleted; files that arrived whole are kept. The session's on_sync_done
+ * reports it with cancelled set. Returns at once; the hold lasts across mc_sync_stop() and
+ * mc_sync_start(), but not mc_sync_free(). */
+#define MC_SYNC_CANCEL_HOLD_MS MC_SYNC_AUTO_INTERVAL_MS
+mc_status mc_sync_cancel(mc_sync *sync, const char *device_uid);
 
 /* --- Confirming profiles ---
  * A device fetches and deletes files only for a profile its user has confirmed: sessions

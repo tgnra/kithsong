@@ -55,8 +55,9 @@ boot_emulator() {
         log="${XDG_STATE_HOME:-$HOME/.local/state}/kithsong/emulator-$avd.log"
         mkdir -p "$(dirname "$log")"
         echo "Starting emulator $avd (log: $log)" >&2
-        # Detached, so it outlives the task that started it.
-        setsid "$emulator" -avd "$avd" -netdelay none -netspeed full >"$log" 2>&1 < /dev/null &
+        # Detached, so it outlives the task that started it. -no-snapshot cold-boots every time and
+        # skips saving a snapshot on exit: restoring Quick Boot snapshots was unreliable.
+        setsid "$emulator" -avd "$avd" -no-snapshot -netdelay none -netspeed full >"$log" 2>&1 < /dev/null &
         for _ in $(seq 120); do
             serial="$(emulator_serial "$avd")"
             [[ -n "$serial" ]] && break

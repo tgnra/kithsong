@@ -674,7 +674,11 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
   }
   unsigned char *buf = st == MC_OK ? malloc(MC_CHANNEL_MAX_PAYLOAD) : NULL;
   if (st == MC_OK && !buf) st = MC_ERR_NOMEM;
+  mc_mutex_lock(&s->sync->lock);
+  uint32_t delay = s->sync->send_delay_ms; /* tests only */
+  mc_mutex_unlock(&s->sync->lock);
   for (int64_t sent = 0; st == MC_OK && sent < size;) {
+    if (delay) mc_sleep_ms(delay);
     size_t want = size - sent < MC_CHANNEL_MAX_PAYLOAD ? (size_t)(size - sent)
                                                         : MC_CHANNEL_MAX_PAYLOAD;
     size_t n = fread(buf, 1, want, f);
@@ -1216,6 +1220,7 @@ typedef struct want {
   const mc_plan_track *t; /* NULL: an original imported here we asked about for reconcile */
   char uid[MC_UID_STRLEN];
   int original, cached, verified;
+  int imported; /* this device holds an original of it imported here, in the wrong format */
 } want;
 
 static int want_cmp(const void *key, const void *elem) {
@@ -1311,6 +1316,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
    * had them (no longer wanted, or wanted in another format). Merged in, so w stays sorted
    * and unique. */
   int peer_archive = !plan->archive && is_archive(s->conn->sdb, s->peer_uid);
+  int nmissing = n;
   if (st == MC_OK && peer_archive) {
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(mc_library_db(lib),
@@ -1325,7 +1331,11 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
                                         (const char *)sqlite3_column_text(stmt, 1),
                                         sqlite3_column_int(stmt, 2), sqlite3_column_int64(stmt, 3)))
           continue;
-        if (t && !track_satisfied(lib, t)) continue; /* asked about already, as missing */
+        if (t && !track_satisfied(lib, t)) { /* asked about already, as missing */
+          want *m = bsearch(uid, w, (size_t)nmissing, sizeof *w, want_cmp);
+          if (m) m->imported = 1;
+          continue;
+        }
         int dup = 0;
         for (int i = 0; i < n && !dup; i++) dup = !w[i].t && !strcmp(w[i].uid, uid);
         if (dup) continue;
@@ -1358,7 +1368,10 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     if (!w[i].t) continue;
     if (w[i].t->format.format == MC_FORMAT_ORIGINAL)
       how[i] = w[i].original ? 1 : 0;
-    else if (w[i].cached || (w[i].original && assigned_to_peer(tc, ntc, w[i].uid)))
+    /* An original imported here goes when this archive has it, so the archive encodes it:
+     * the other transcoders may not hold it yet. */
+    else if (w[i].cached ||
+             (w[i].original && ntc && (w[i].imported || assigned_to_peer(tc, ntc, w[i].uid))))
       how[i] = 2;
     s->files_total += how[i] != 0;
   }
@@ -1993,7 +2006,7 @@ void mc_transfer_begin(mc_session *s) {
 mc_status mc_transfer_run(mc_session *s) {
   progress(s);
   mc_status st;
-  if (mc_channel_is_initiator(s->ch)) {
+  if (s->receive_first) {
     st = receive_turn(s);
     if (st == MC_OK) st = serve_turn(s);
   } else {

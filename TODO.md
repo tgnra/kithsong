@@ -10,6 +10,7 @@ Big pieces that haven't been started, or that only one platform has.
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar and search page have UI Automation providers, checked with a UI Automation tree walk but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **AAC/M4A playback** - no decoder chosen
+- **Merging libraries** - two devices that both have music can't pair (library_mismatch); see Sync → Merging libraries below
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists, artists or settings
 - **Releases** - no Windows installer or signing, no Flathub listing (Android: R8 on, licences in Settings; the watch has no licences screen yet)
 - **Translations** - strings/en.json is the only language
@@ -128,6 +129,15 @@ Big pieces that haven't been started, or that only one platform has.
 - Changelog compaction must keep the rows that decide merges and archive demotions
 - Move removed untracked files to the Recycle Bin/trash instead of deleting them (mc_trash() in util/platform.h does it); deleted tracks' originals on peers already go to the trash, unknown files are still removed outright
 - A stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
+
+### Merging libraries
+Pairing two devices whose libraries both have music fails with library_mismatch. Instead, offer to merge: keep one library (its database, uids and changelog) and import the other device's music into it, as an import would, rather than merging the two changelogs. Syncing two changelogs would hit the duplicate rules' edges: a delete in one library kills the other's copy of that album, merge classes that never split join a once-mismatched album to the wrong release, metadata mixes field by field, and both archives would claim the whole library. Edge cases to settle:
+- Which library is kept: the archive's, or the larger one's? Let the user choose
+- Music without MusicBrainz ids (imported with Keep existing tags or without tagging) has nothing to match on; import it as tagged, and send albums the library already has through the import's duplicates check (higher quality replaces, same or lower is skipped)
+- Playlists, album groups, play counts and recents of the library that isn't kept: carry them over by mapping its tracks to the kept library's (a playlist of the same name: keep both, or merge?)
+- Its own sync group: its other devices must leave and pair again, or join with it
+- Two Last.fm accounts: unclear what's best; at least don't sign either out silently. Plays not yet scrobbled stay with the account they were played under
+- Files: originals copy over the network to the kept library's archive, then the other device drops them as its profile says
 
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports

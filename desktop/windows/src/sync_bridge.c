@@ -167,6 +167,7 @@ static void on_sync_done(void *user, const mc_sync_result *result) {
   ev->files_sent = result->files_sent;
   ev->bytes_received = result->bytes_received;
   ev->bytes_sent = result->bytes_sent;
+  ev->cancelled = result->cancelled;
   post(user, ev);
 }
 

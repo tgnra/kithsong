@@ -38,8 +38,9 @@ function Start-Emulator($avd) {
         New-Item -ItemType Directory -Force $logDir | Out-Null
         $log = "$logDir\emulator-$avd.log"
         Write-Host "Starting emulator $avd (log: $log)"
-        # Its own process, so it outlives the task that started it.
-        $proc = Start-Process $emulator -ArgumentList '-avd', $avd, '-netdelay', 'none', '-netspeed', 'full' `
+        # Its own process, so it outlives the task that started it. -no-snapshot cold-boots every
+        # time and skips saving a snapshot on exit: restoring Quick Boot snapshots was unreliable.
+        $proc = Start-Process $emulator -ArgumentList '-avd', $avd, '-no-snapshot', '-netdelay', 'none', '-netspeed', 'full' `
             -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru
         for ($i = 0; $i -lt 120 -and -not $serial; $i++) {
             Start-Sleep 1

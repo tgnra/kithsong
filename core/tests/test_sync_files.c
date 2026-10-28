@@ -911,7 +911,8 @@ int main(int argc, char **argv) {
   }
 
   /* An original imported on B, wanted there as Opus: it goes to the archive first, then B
-   * swaps it for an Opus copy and deletes it once the archive holds it verified. */
+   * swaps it for an Opus copy and deletes it once the archive holds it verified. One
+   * session does it all, even with B initiating: the archive takes the first file turn. */
   {
     track_ref m1;
     add_track(&b, "Low", "Things", 1994, "Mine", 9, 770, &m1);
@@ -921,8 +922,8 @@ int main(int argc, char **argv) {
       abs_path(&b, m1.rel, p, sizeof p);
       file_sha(p, imported);
     }
-    for (int i = 0; i < 3 && lib_file_exists(&b, m1.rel); i++)
-      CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(ra.files_received == 1 && rb.files_received == 1);
     CHECK(!lib_file_exists(&b, m1.rel));
     snprintf(sql, sizeof sql,
              "SELECT count(*) FROM files WHERE track_uid = '%s' AND format = 'opus'"

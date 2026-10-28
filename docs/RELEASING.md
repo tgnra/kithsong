@@ -26,8 +26,8 @@ done in the web UI under Settings → Secrets and variables → Actions → New 
 
 ```sh
 mkdir -p ~/keys
-keytool -genkeypair -v -keystore ~/Documents/kithsong-release.jks -keyalg RSA -keysize 4096 \
-  -validity 10000 -alias kithsong
+keytool -genkeypair -v -keystore ~/Documents/musicapp-release.jks -keyalg RSA -keysize 4096 \
+  -validity 10000 -alias musicapp
 ```
 
 It asks for a keystore password, then for a name, organisation and so on. Those end up in the
@@ -40,7 +40,7 @@ lands there anyway.
 Note the certificate's SHA-256 fingerprint. You'll check builds against it later:
 
 ```sh
-keytool -list -v -keystore ~/keys/kithsong-release.jks -alias kithsong | grep SHA256
+keytool -list -v -keystore ~/Documents/musicapp-release.jks -alias musicapp | grep SHA256
 ```
 
 ### 2. Back it up

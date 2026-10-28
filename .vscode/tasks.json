@@ -14,7 +14,8 @@
   //
   // Android phone tasks work on both platforms: android.sh on Linux, android.ps1 on Windows
   // (which defaults JAVA_HOME to Android Studio's JDK and ANDROID_HOME to
-  // %LOCALAPPDATA%\Android\Sdk). `android: run` boots the Pixel_10 AVD unless it is running.
+  // %LOCALAPPDATA%\Android\Sdk). `android: run` cold-boots the Pixel_10 AVD (no Quick Boot
+  // snapshot) unless it is running.
   //
   // `site: build` writes the website to site/dist. On Linux the dev shell provides Python,
   // Pillow and Markdown; on Windows it uses the venv in site/.venv (see site/README.md).

@@ -285,6 +285,7 @@ typedef struct hello {
   char dev[MC_UID_STRLEN];
   char library_uid[MC_UID_STRLEN];
   char node_uid[MC_UID_STRLEN];
+  int archive; /* -1: the HELLO doesn't say (an older version) */
 } hello;
 
 /* The library's uid as stored, in case another connection adopted a new one. */
@@ -301,7 +302,7 @@ static void library_uid_now(mc_library *lib, char out[MC_UID_STRLEN]) {
   sqlite3_finalize(stmt);
 }
 
-static mc_status send_hello(mc_session *s) {
+static mc_status send_hello(mc_session *s, int archive) {
   mc_sync_db *sdb = s->conn->sdb;
   sqlite3 *db = mc_sync_db_handle(sdb);
   char lib_uid[MC_UID_STRLEN];
@@ -317,6 +318,7 @@ static mc_status send_hello(mc_session *s) {
   yyjson_mut_obj_add_strcpy(doc, root, "node_uid", mc_library_node_uid(s->conn->lib));
   if (s->user) yyjson_mut_obj_add_bool(doc, root, "user", true);
   yyjson_mut_obj_add_bool(doc, root, "covers", true);
+  yyjson_mut_obj_add_bool(doc, root, "archive", archive);
   yyjson_mut_val *caps = yyjson_mut_obj(doc);
   yyjson_mut_obj_add_val(doc, root, "caps", caps);
   sqlite3_stmt *stmt;
@@ -355,6 +357,8 @@ static mc_status recv_hello(mc_session *s, hello *h) {
     memcpy(h->node_uid, node, MC_UID_STRLEN);
     if (yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "user"))) s->user = 1;
     s->peer_covers = yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "covers"));
+    yyjson_val *archive = yyjson_obj_get(yyjson_doc_get_root(doc), "archive");
+    h->archive = yyjson_is_bool(archive) ? yyjson_get_bool(archive) : -1;
     st = MC_OK;
   }
   yyjson_doc_free(doc);
@@ -721,11 +725,19 @@ mc_status mc_session_run(mc_session *s) {
   /* A void demotion of ours whose re-write failed last time (best effort, as above). */
   mc_archive_restore(s->conn->sdb, NULL);
 
+  /* Step 6's order: an archive facing a non-archive receives first, so an original imported
+   * on the other device reaches it before the other's turn, which can then swap that
+   * original for its profile's format in the same session. Taken from what each HELLO says,
+   * so both sides agree even if their group data differs. */
+  mc_sync_db *sdb = s->conn->sdb;
+  int archive = mc_archive_is(mc_sync_db_handle(sdb), mc_sync_db_device_uid(sdb)) > 0;
   hello peer;
-  mc_status st = send_hello(s);
+  mc_status st = send_hello(s, archive);
   if (st == MC_OK) st = recv_hello(s, &peer);
   if (st == MC_OK) st = exchange_db(s, MC_ROWS_GROUP, NULL, 0);
   if (st != MC_OK) return st;
+  s->receive_first = peer.archive >= 0 && peer.archive != archive ? archive
+                                                                  : mc_channel_is_initiator(s->ch);
 
   /* "Archives": with the merged group data, if no member is an archive any more and the
    * void demotion is ours, write archive = 1 again. That comes after the exchange, so the

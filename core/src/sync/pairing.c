@@ -342,7 +342,7 @@ static void first_session(mc_sync *sync, mc_sync_conn *c, mc_channel *ch, const 
                       .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
                       .rows_received = s.rows_received};
   mc_transfer_fill_result(&s, &r);
-  mc_sync_release(sync, peer);
+  r.cancelled = mc_sync_release(sync, peer) && st != MC_OK;
   if (s.we_removed) mc_sync_forget_group(sync, c);
   mc_sync_session_ended(sync, c, peer, &r, s.rows_new, s.follow_up, initiator ? address : NULL, port);
 }

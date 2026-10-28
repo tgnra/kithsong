@@ -286,7 +286,7 @@ Message types:
 
 | Type | Name          | Payload |
 |------|---------------|---------|
-| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "covers": true, "caps": {...}}` (`user` only when pressed for; `covers`: it serves `COVER_REQ`) |
+| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "covers": true, "archive": bool, "caps": {...}}` (`user` only when pressed for; `covers`: it serves `COVER_REQ`; `archive`: the sender counts itself an archive, see step 6) |
 | 0x02 | `BYE`         | `{}` |
 | 0x03 | `ERROR`       | `{"reason", "msg"}` |
 | 0x10 | `VV`          | `{"db": "group" \| "library", "vv": {"<origin>": <hlc>}, "resend": true}` (`resend` only in the re-send round) |
@@ -343,8 +343,13 @@ Steps:
    `"resend": true`: each side sends every row, from hlc 0, of each origin whose newest hlc
    differs between the two new `VV`s. It doesn't retry further.
 6. **Files**, receiver-driven, when step 3 ran. See [Files](#files). Each side is the
-   receiver in turn, the initiator first: the receiver sends `HAVE_REQ`, `FILE_REQ` and
-   `PREPARE_REQ` while the other only answers, and ends its turn with `FILES_DONE`.
+   receiver in turn: the receiver sends `HAVE_REQ`, `FILE_REQ` and `PREPARE_REQ` while the
+   other only answers, and ends its turn with `FILES_DONE`. When both `HELLO`s carry
+   `archive` and exactly one says `true`, that side receives first; otherwise the initiator
+   does. So an original imported on the other device reaches the archive in its turn, and
+   the other's turn can fetch it in its own format and drop the original (see Reconcile)
+   in the same session. The order comes from the `HELLO`s, not the group data, so both
+   sides agree on it even if they disagree about who is an archive.
 7. `BYE`, the initiator first; the responder answers with `BYE`. Each side then reconciles
    its library folder, so the peer can no longer ask for a file it is about to delete.
 
@@ -444,6 +449,16 @@ way, without logging anything.
   limit; nothing about it goes over the wire. So where only the member can connect (a
   firewall), a press of Sync here waits for a session it starts, which it won't while its
   own limit holds; the press lapses after its 5½ minutes, and the user presses Sync there.
+- **Cancel.** The user's Cancel (`mc_sync_cancel()`) aborts the connection of the session
+  with a member (with every member, for all), whichever side started it, and holds that
+  member back for an hour (`MC_SYNC_CANCEL_HOLD_MS`): no session with it starts here,
+  automatic or not, and one it starts is refused with
+  `ERROR {"reason": "busy"}`, so it keeps its usual schedule rather than backing off. A
+  press of Sync (`mc_sync_now()`, `mc_sync_confirm_now()`) lifts the hold; background work
+  doesn't. Nothing goes over the wire: the member sees a broken connection, then busy. A
+  file being fetched when the connection goes is abandoned and its `.part` deleted, as for
+  any failed transfer (see [Files](#files)); files that arrived whole stay. The hold is kept
+  in memory only, so a restart of the app ends it.
 
 ### `ROWS`
 
@@ -562,7 +577,11 @@ the plaintext limit.
     copies. The device learns that in a session with an archive: its `HAVE_REQ` there also
     lists the tracks of such originals it no longer wants as they are, and the archive's
     `HAVE_RESP` says `original` and `verified` (its copy has a recorded `sha256`, i.e. it
-    arrived with a matching checksum or passed a deep check). On an archive, only deleted
+    arrived with a matching checksum or passed a deep check). A wanted track whose Opus is
+    missing while such an original is here is transcoded by the archive whenever it may
+    transcode, rather than split across transcoders as in [Files](#files): the others may
+    not hold the original yet. With the archive receiving first (step 6 of
+    [Session](#session)), the original's swap then takes one session. On an archive, only deleted
     tracks' files are removed, and unknown files are reported, not deleted.
   - Deletes are permanent, and only of files inside the library folder: a path that is
     absolute, has a `.` or `..` part or a colon, or passes through a symlink or junction is

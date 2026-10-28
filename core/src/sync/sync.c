@@ -410,26 +410,31 @@ int mc_sync_claim(mc_sync *sync, const char *peer_uid, int lower, mc_channel *ch
            mc_mono_ms() < deadline)
       mc_cond_wait_ms(&sync->cond, &sync->lock, 200);
   }
-  if (p && !p->busy && !sync->stopping) {
+  if (p && !p->busy && !sync->stopping && mc_mono_ms() >= p->held_ms) {
     p->busy = 1;
     p->busy_lower = lower;
     p->busy_ch = ch;
     p->abort = 0;
+    p->cancel = 0;
     ok = 1;
   }
   mc_mutex_unlock(&sync->lock);
   return ok;
 }
 
-void mc_sync_release(mc_sync *sync, const char *peer_uid) {
+int mc_sync_release(mc_sync *sync, const char *peer_uid) {
+  int cancelled = 0;
   mc_mutex_lock(&sync->lock);
   mc_sync_peer *p = find_peer(sync, peer_uid, 0);
   if (p) {
+    cancelled = p->cancel;
     p->busy = 0;
     p->busy_ch = NULL;
+    p->cancel = 0;
   }
   mc_cond_broadcast(&sync->cond);
   mc_mutex_unlock(&sync->lock);
+  return cancelled;
 }
 
 /* --- Names --- */
@@ -612,7 +617,7 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
         snprintf(p->address, sizeof p->address, "%s", address);
         p->port = port;
       }
-    } else if (result->status != MC_ERR_LOCKED) {
+    } else if (result->status != MC_ERR_LOCKED && !result->cancelled) {
       p->reached = 0;
       p->auto_after_ms = 0; /* the retries below go ahead */
       p->backoff_ms = p->backoff_ms ? p->backoff_ms * 2 : BACKOFF_MIN_MS;
@@ -784,7 +789,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   s.conn = c;
   s.ch = ch;
   memcpy(s.peer_uid, j->uid, MC_UID_STRLEN);
-  int claimed = 0;
+  int claimed = 0, cancelled = 0;
   if (ch) {
     mc_sync_track(sync, ch);
     claimed = mc_sync_claim(sync, j->uid, strcmp(sync->device_uid, j->uid) < 0, ch);
@@ -792,7 +797,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
     st = claimed ? MC_OK : MC_ERR_LOCKED;
     if (st == MC_OK) st = mc_session_handshake_initiate(&s, key);
     if (st == MC_OK) st = mc_session_run(&s);
-    if (claimed) mc_sync_release(sync, j->uid);
+    if (claimed) cancelled = mc_sync_release(sync, j->uid) && st != MC_OK;
     mc_sync_untrack(sync, ch);
     mc_channel_close(ch);
   }
@@ -806,7 +811,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   }
   mc_sync_result r = {.device_uid = j->uid, .status = st, .library_synced = s.library_synced,
                       .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
-                      .rows_received = s.rows_received};
+                      .rows_received = s.rows_received, .cancelled = cancelled};
   mc_transfer_fill_result(&s, &r);
   mc_sync_session_ended(sync, c, j->uid, &r, s.rows_new, s.follow_up, at >= 0 ? j->host[at] : NULL,
                         at >= 0 ? j->port[at] : 0);
@@ -936,12 +941,12 @@ static void serve_worker(void *arg) {
     if (mc_sync_claim(sync, s.peer_uid, strcmp(s.peer_uid, sync->device_uid) < 0, ch)) {
       s.user = mc_sync_take_user(sync, s.peer_uid);
       st = mc_session_run(&s);
-      mc_sync_release(sync, s.peer_uid);
+      int cancelled = mc_sync_release(sync, s.peer_uid) && st != MC_OK;
       if (s.we_removed) mc_sync_forget_group(sync, &c);
       mc_sync_result r = {.device_uid = s.peer_uid, .status = st,
                           .library_synced = s.library_synced,
                           .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
-                          .rows_received = s.rows_received};
+                          .rows_received = s.rows_received, .cancelled = cancelled};
       mc_transfer_fill_result(&s, &r);
       mc_sync_session_ended(sync, &c, s.peer_uid, &r, s.rows_new, s.follow_up, NULL, 0);
     } else {
@@ -1114,6 +1119,11 @@ static void sched_main(void *arg) {
       if (p->busy || (sync->manual_only && p->trigger != MC_TRIGGER_NOW &&
                       p->trigger != MC_TRIGGER_AUTO))
         continue;
+      if (now < p->held_ms) {
+        /* Cancelled: whatever is due waits until the hold runs out. */
+        if (p->held_ms < wake) wake = p->held_ms;
+        continue;
+      }
       if (now < p->due_ms) {
         if (p->due_ms < wake) wake = p->due_ms;
         continue;
@@ -1594,6 +1604,7 @@ mc_status mc_sync_leave_group(mc_sync *sync) {
         memcpy(host, p->address, sizeof host);
         port = p->port;
       }
+      if (p) p->held_ms = 0; /* leaving outweighs a cancel */
       mc_mutex_unlock(&sync->lock);
       job_addresses(&c, &j, host, port);
       if (initiate(sync, &c, &j, 0) == MC_OK) break;
@@ -1642,6 +1653,7 @@ static mc_status sync_soon(mc_sync *sync, const char *device_uid, mc_sync_trigge
   mc_status st = sync->started ? MC_OK : MC_ERR_INVALID_ARG;
   if (st == MC_OK && device_uid) {
     mc_sync_peer *p = find_peer(sync, device_uid, 1);
+    if (p && why == MC_TRIGGER_NOW) p->held_ms = 0;
     if (p && (why == MC_TRIGGER_NOW || p->trigger != MC_TRIGGER_NOW)) {
       p->trigger = why;
       p->trigger_ms = mc_mono_ms();
@@ -1649,10 +1661,38 @@ static mc_status sync_soon(mc_sync *sync, const char *device_uid, mc_sync_trigge
     }
     mc_cond_broadcast(&sync->cond);
   } else if (st == MC_OK) {
+    if (why == MC_TRIGGER_NOW)
+      for (int i = 0; i < sync->npeers; i++) sync->peers[i].held_ms = 0;
     trigger_members(sync, NULL, why, mc_mono_ms());
   }
   mc_mutex_unlock(&sync->lock);
   return st;
+}
+
+/* Under lock. */
+static void cancel_peer(mc_sync_peer *p, uint64_t until) {
+  p->held_ms = until;
+  p->user_ms = 0; /* a press no session has carried yet is withdrawn */
+  if (p->trigger == MC_TRIGGER_NOW) p->trigger = MC_TRIGGER_PERIODIC;
+  if (p->busy) {
+    p->cancel = 1;
+    if (p->busy_ch) mc_channel_abort(p->busy_ch);
+  }
+}
+
+mc_status mc_sync_cancel(mc_sync *sync, const char *device_uid) {
+  if (!sync || (device_uid && !is_uid(device_uid))) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  uint64_t until = mc_mono_ms() + MC_SYNC_CANCEL_HOLD_MS;
+  if (device_uid) {
+    mc_sync_peer *p = find_peer(sync, device_uid, 1);
+    if (p) cancel_peer(p, until);
+  } else {
+    for (int i = 0; i < sync->npeers; i++) cancel_peer(&sync->peers[i], until);
+  }
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+  return MC_OK;
 }
 
 mc_status mc_sync_now(mc_sync *sync, const char *device_uid) {
@@ -2010,6 +2050,12 @@ void mc_sync_set_test_hints(mc_sync *sync, const char *json) {
 void mc_sync_set_test_reach_port(mc_sync *sync, uint16_t port) {
   mc_mutex_lock(&sync->lock);
   sync->reach_port_override = port;
+  mc_mutex_unlock(&sync->lock);
+}
+
+void mc_sync_set_test_send_delay(mc_sync *sync, uint32_t ms) {
+  mc_mutex_lock(&sync->lock);
+  sync->send_delay_ms = ms;
   mc_mutex_unlock(&sync->lock);
 }
 

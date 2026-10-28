@@ -207,6 +207,12 @@ class Syncer(
         refreshLists(sync)
     }
 
+    /**
+     * The Cancel button: ends the session with [uid] (every member's for null), deleting a file
+     * it had half fetched. None starts with it for an hour, unless [syncNow] says so.
+     */
+    fun cancelSync(uid: String? = null) = call { it.cancel(uid) }
+
     fun removeDevice(uid: String) = call { sync ->
         sync.removeDevice(uid)
         refreshLists(sync)

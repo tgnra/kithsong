@@ -17,6 +17,8 @@ typedef struct mc_session {
   int user;
   /* The peer's HELLO says it serves COVER_REQ (older versions end the session on it). */
   int peer_covers;
+  /* This side takes the first file turn (step 6): set by run from the HELLOs. */
+  int receive_first;
   /* Results. */
   int64_t rows_sent, rows_received;
   int64_t rows_new; /* received rows that were new here */

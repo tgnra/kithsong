@@ -572,7 +572,13 @@ static void update_status(void) {
     SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_PAUSED_PROFILE_CHANGED));
   else SetWindowTextW(g_dv.notice, L"");
 
-  EnableWindow(g_dv.sync_now, g_dv.found && !g_dv.removed && g_dv.online && !syncing());
+  /* While syncing, Sync now becomes Cancel sync; set only on a change, not every progress. */
+  static int cancel_shown = -1;
+  if (cancel_shown != syncing()) {
+    cancel_shown = syncing();
+    SetWindowTextW(g_dv.sync_now, mc_wstr(cancel_shown ? MC_STR_CANCEL_SYNC : MC_STR_SYNC_NOW));
+  }
+  EnableWindow(g_dv.sync_now, g_dv.found && !g_dv.removed && (syncing() || g_dv.online));
   EnableWindow(g_dv.remove, g_dv.found && !g_dv.removed);
 }
 
@@ -1127,6 +1133,11 @@ static void sync_now(void) {
   set_message(text);
   if (st == MC_OK) reload(TRUE); /* confirmed now: the notice goes */
   layout_again();
+}
+
+/* Ends the sessions the page shows, which on_sync_done then reports as cancelled. */
+static void cancel_sync(void) {
+  if (g_dv.sync) mc_sync_cancel(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
 }
 
 /* --- Archive --- */
@@ -1847,7 +1858,9 @@ void device_view_on_sync_event(const sync_event *ev) {
         g_dv.nbusy--;
       }
       wchar_t text[256] = L"";
-      if (ev->status != MC_OK) {
+      if (ev->cancelled) {
+        swprintf(text, 256, L"%ls", mc_wstr(MC_STR_SYNC_CANCELLED));
+      } else if (ev->status != MC_OK) {
         if (g_dv.is_self && ev->name[0])
           mc_wformat(text, 256, mc_str(MC_STR_SYNC_FAILED_WITH), MC_S(u8(ev->name)),
                      MC_S(mc_status_str(ev->status)));
@@ -1879,7 +1892,8 @@ void device_view_on_sync_event(const sync_event *ev) {
 BOOL device_view_on_command(int id, int code) {
   switch (id) {
     case ID_DEV_SYNC_NOW:
-      if (code == BN_CLICKED) sync_now();
+      if (code == BN_CLICKED && syncing()) cancel_sync();
+      else if (code == BN_CLICKED) sync_now();
       return TRUE;
     case ID_DEV_REMOVE:
       if (code == BN_CLICKED) remove_device();

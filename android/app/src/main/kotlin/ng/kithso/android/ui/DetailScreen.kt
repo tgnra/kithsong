@@ -33,6 +33,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -50,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -66,11 +68,13 @@ import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.Track
 import ng.kithso.android.data.TrackList
 import ng.kithso.android.ui.art.AlbumArt
+import ng.kithso.android.ui.theme.ArtBackdrop
+import ng.kithso.android.ui.theme.rememberArtColors
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * An album, artist, playlist or album group: its art and name, Play and Shuffle ([onPlayAll],
+ * An album, artist, playlist or album group, over a background coloured from its art: its art and name, Play and Shuffle ([onPlayAll],
  * as the desktops have above a track list), then its tracks. Tapping a track plays the list
  * from there ([onPlay]), shuffled or not as shuffle is; long-pressing one opens its menu
  * ([PlaylistActions.trackMenu]). An artist's albums come before their tracks, and an album
@@ -163,6 +167,7 @@ fun DetailScreen(
             val columns = albumColumns(maxWidth)
             val albums = list?.albums.orEmpty()
             val group = ref.kind == CollectionRef.Kind.AlbumGroup
+            ArtBackdrop(rememberArtColors(list?.art), Modifier.matchParentSize())
             LazyColumn(
                 state = listState,
                 contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
@@ -220,6 +225,7 @@ fun DetailScreen(
                                     }
                                 }
                             },
+                            lifted = key == reorder.dragged,
                             modifier = if (key == reorder.dragged) with(reorder) { Modifier.dragged(key) } else Modifier.animateItem(),
                         )
                     } else {
@@ -364,13 +370,18 @@ private fun TrackRow(track: Track, showAlbum: Boolean, onLongClick: () -> Unit, 
             { Text(stringResource(R.string.track_byline, track.artist, track.album), maxLines = 1, overflow = TextOverflow.Ellipsis) }
         } else null,
         trailingContent = { Text(formatTime(track.durationMs)) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.combinedClickable(onLongClick = onLongClick, onClick = onClick),
     )
 }
 
-/** A playlist's track while editing: a button to remove it, and [handle] to drag it by. */
+/**
+ * A playlist's track while editing: a button to remove it, and [handle] to drag it by. It's
+ * clear, for the background, except while [lifted] by a drag, so the rows it passes don't
+ * show through.
+ */
 @Composable
-private fun EditTrackRow(track: Track, onRemove: () -> Unit, handle: Modifier, modifier: Modifier) {
+private fun EditTrackRow(track: Track, onRemove: () -> Unit, handle: Modifier, lifted: Boolean, modifier: Modifier) {
     ListItem(
         leadingContent = {
             IconButton(onClick = onRemove) {
@@ -390,6 +401,9 @@ private fun EditTrackRow(track: Track, onRemove: () -> Unit, handle: Modifier, m
                 Icon(Icons.DragHandle, contentDescription = stringResource(R.string.playlist_reorder))
             }
         },
+        colors = ListItemDefaults.colors(
+            containerColor = if (lifted) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
+        ),
         modifier = modifier,
     )
 }

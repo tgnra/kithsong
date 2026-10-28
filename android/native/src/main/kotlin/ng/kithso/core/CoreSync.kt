@@ -239,7 +239,8 @@ class CoreSync(
          * fetched and verified, wanted but still without a file, failed their checksum twice,
          * deleted (no longer wanted, or failed the check after the session), and unknown to
          * the library (deleted, except on an archive). [filesSent] were served to the peer.
-         * [coversReceived]: album covers fetched for folders here that had none.
+         * [coversReceived]: album covers fetched for folders here that had none. [cancelled]:
+         * [CoreSync.cancel] here cut it short ([status] isn't 0 then).
          */
         data class SyncDone(
             val uid: String,
@@ -257,6 +258,7 @@ class CoreSync(
             val bytesReceived: Long,
             val bytesSent: Long,
             val coversReceived: Int = 0,
+            val cancelled: Boolean = false,
         ) : Event
     }
 
@@ -314,6 +316,14 @@ class CoreSync(
      * no session until [SyncDevice.autoSyncAfterMs], and then only if sync still runs.
      */
     fun syncBackground(uid: String? = null) = nativeWithDevice(handle, CALL_SYNC_BACKGROUND, uid)
+
+    /**
+     * The Cancel button: ends the session with [uid] (every member's for null), whichever side
+     * started it, deleting a file it had half fetched, and holds sessions with it back for an
+     * hour (MC_SYNC_CANCEL_HOLD_MS) or until [syncNow] or [confirmSyncNow]. Its [Event.SyncDone]
+     * has [Event.SyncDone.cancelled] set.
+     */
+    fun cancel(uid: String? = null) = nativeWithDevice(handle, CALL_CANCEL, uid)
 
     /** The library changed here, so members should hear of it soon. Any thread. */
     fun notifyChanged() = nativeNotifyChanged(handle)
@@ -455,10 +465,12 @@ class CoreSync(
         bytesReceived: Long,
         bytesSent: Long,
         coversReceived: Int,
+        cancelled: Boolean,
     ) = listener(
         Event.SyncDone(
             uid, status, librarySynced, converged, rowsSent, rowsReceived, filesReceived, filesMissing,
             filesCorrupt, filesDeleted, filesUnknown, filesSent, bytesReceived, bytesSent, coversReceived,
+            cancelled,
         ),
     )
 
@@ -481,6 +493,7 @@ class CoreSync(
         private const val CALL_SYNC_NOW = 2
         private const val CALL_CONFIRM_SYNC_NOW = 3
         private const val CALL_SYNC_BACKGROUND = 4
+        private const val CALL_CANCEL = 5
 
         init {
             System.loadLibrary("kithsong_jni")

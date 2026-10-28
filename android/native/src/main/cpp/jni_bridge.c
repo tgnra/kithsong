@@ -867,7 +867,8 @@ static void on_sync_done(void *user, const mc_sync_result *r) {
                          (jlong)r->rows_sent, (jlong)r->rows_received, (jint)r->files_received,
                          (jint)r->files_missing, (jint)r->files_corrupt, (jint)r->files_deleted,
                          (jint)r->files_unknown, (jint)r->files_sent, (jlong)r->bytes_received,
-                         (jlong)r->bytes_sent, (jint)r->covers_received);
+                         (jlong)r->bytes_sent, (jint)r->covers_received,
+                         (jboolean)(r->cancelled != 0));
   if (uid) (*env)->DeleteLocalRef(env, uid);
   detach(env, attached);
 }
@@ -894,7 +895,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
     {"onPairCode", "(Ljava/lang/String;Ljava/lang/String;I)V"},
     {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIII)V"},
     {"onProgress", "(Ljava/lang/String;IJJIIJJ)V"},
-    {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJI)V"},
+    {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJIZ)V"},
   };
   jmethodID *ids[] = {&p->on_peer, &p->on_pair_code, &p->on_pair_result, &p->on_progress,
                       &p->on_sync_done};
@@ -973,8 +974,8 @@ JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreSync_nativePort(JNIEnv *env, jcla
 }
 
 /* The calls that take a device uid: 0 pair request, 1 remove device, 2 sync now, 3 confirm
- * and sync now (the Sync button), 4 background sync (rate-limited). For 2 to 4, uid null is
- * every reachable member. */
+ * and sync now (the Sync button), 4 background sync (rate-limited), 5 cancel. For 2 to 5, uid
+ * null is every member. */
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeWithDevice(JNIEnv *env, jclass cls,
                                                                     jlong handle, jint call,
                                                                     jstring uid) {
@@ -985,6 +986,7 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeWithDevice(JNIEnv *env
     mc_sync_now,
     mc_sync_confirm_now,
     mc_sync_background,
+    mc_sync_cancel,
   };
   if (call < 0 || call >= (jint)(sizeof calls / sizeof *calls)) {
     throw_status(env, MC_ERR_INVALID_ARG);

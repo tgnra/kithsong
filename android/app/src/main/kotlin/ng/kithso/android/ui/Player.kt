@@ -38,6 +38,8 @@ import ng.kithso.android.R
 import ng.kithso.android.data.Track
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.ui.art.AlbumArt
+import ng.kithso.android.ui.theme.ArtBackdrop
+import ng.kithso.android.ui.theme.rememberArtColors
 
 /** "Artist - Album", under a track's title. */
 @Composable
@@ -96,7 +98,7 @@ private fun PlayPause(playback: Playback) {
 }
 
 /**
- * The full player: large art at the top, then title and byline, seekbar, and play/pause
+ * The full player, over a background coloured from the art: large art at the top, then title and byline, seekbar, and play/pause
  * between previous and next, with Add to playlist ([onAddToPlaylist], disabled if null) and
  * the shuffle toggle at the ends. [onCollapse] slides it away; it is also dismissed by swiping
  * down (see [DismissibleScreen]).
@@ -104,6 +106,7 @@ private fun PlayPause(playback: Playback) {
 @Composable
 fun FullPlayer(playback: Playback, track: Track, onCollapse: () -> Unit, onAddToPlaylist: (() -> Unit)? = null) {
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
+        ArtBackdrop(rememberArtColors(track.art), Modifier.fillMaxSize())
         BoxWithConstraints(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
             val wide = maxWidth > maxHeight
             Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {

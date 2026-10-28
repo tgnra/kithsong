@@ -118,6 +118,7 @@ fun SyncScreen(syncer: Syncer, bottomPadding: Dp, onOpenDevice: (String) -> Unit
                     },
                     headlineContent = { Text(stringResource(if (syncing) R.string.syncing else R.string.sync_now)) },
                     supportingContent = { Text(stringResource(R.string.sync_now_text)) },
+                    trailingContent = { if (syncing) CancelSyncButton { syncer.cancelSync() } },
                     modifier = Modifier.clickable(enabled = status.running && !syncing) { syncer.syncNow() },
                 )
             }
@@ -312,6 +313,7 @@ fun DeviceScreen(
                             else Icon(Icons.Sync, contentDescription = null)
                         },
                         headlineContent = { Text(stringResource(if (syncing) R.string.syncing else R.string.sync_now)) },
+                        trailingContent = { if (syncing) CancelSyncButton { syncer.cancelSync(device.uid) } },
                         modifier = Modifier.clickable(enabled = status.running && !syncing) { syncer.syncNow(device.uid) },
                     )
                     // The group's archive can't be removed (the core refuses): it holds the originals.
@@ -463,6 +465,7 @@ private fun filesText(progress: SyncProgress): String =
 // How the last session with a member went.
 @Composable
 private fun resultText(result: CoreSync.Event.SyncDone): String = when {
+    result.cancelled -> stringResource(R.string.sync_cancelled)
     result.status != 0 -> stringResource(R.string.sync_failed, statusText(LocalContext.current, result.status))
     !result.librarySynced -> stringResource(R.string.sync_device_list_only)
     else -> listOfNotNull(
@@ -470,6 +473,12 @@ private fun resultText(result: CoreSync.Event.SyncDone): String = when {
         result.filesMissing.takeIf { it > 0 }?.let { stringResource(R.string.files_missing, it.toString()) },
         result.filesCorrupt.takeIf { it > 0 }?.let { stringResource(R.string.files_damaged, it.toString()) },
     ).joinToString(stringResource(R.string.separator_dot))
+}
+
+// Beside "Syncing…": ends the session (see [Syncer.cancelSync]).
+@Composable
+private fun CancelSyncButton(onClick: () -> Unit) {
+    TextButton(onClick = onClick) { Text(stringResource(R.string.cancel_sync)) }
 }
 
 @Composable

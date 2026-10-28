@@ -536,7 +536,15 @@ static void update_status(void) {
   adw_banner_set_button_label(g_dv.banner, button ? mc_str(MC_STR_SYNC_NOW) : NULL);
   adw_banner_set_revealed(g_dv.banner, notice != NULL);
 
-  gboolean can_sync = g_dv.found && !g_dv.removed && g_dv.online && !syncing();
+  /* While syncing, Sync now becomes Cancel sync; set only on a change, not every progress. */
+  static int cancel_shown = -1;
+  if (cancel_shown != syncing()) {
+    cancel_shown = syncing();
+    gtk_button_set_label(GTK_BUTTON(g_dv.sync_now), mc_str(cancel_shown ? MC_STR_CANCEL_SYNC : MC_STR_SYNC_NOW));
+    if (cancel_shown) gtk_widget_remove_css_class(g_dv.sync_now, "suggested-action");
+    else gtk_widget_add_css_class(g_dv.sync_now, "suggested-action");
+  }
+  gboolean can_sync = g_dv.found && !g_dv.removed && (syncing() || g_dv.online);
   gtk_widget_set_sensitive(g_dv.sync_now, can_sync);
   gtk_widget_set_visible(g_dv.sync_now, g_dv.found && !g_dv.solo);
   gtk_widget_set_sensitive(g_dv.remove, g_dv.found && !g_dv.removed);
@@ -1111,9 +1119,15 @@ static void sync_now(void) {
   if (st == MC_OK) reload(TRUE); /* confirmed now: the banner goes */
 }
 
+/* Ends the sessions the page shows, which on_sync_done then reports as cancelled. */
+static void cancel_sync(void) {
+  if (g_dv.sync) mc_sync_cancel(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
+}
+
 static void on_sync_now_clicked(GtkButton *button, gpointer data) {
   (void)button, (void)data;
-  sync_now();
+  if (syncing()) cancel_sync();
+  else sync_now();
 }
 
 static void on_banner_button(AdwBanner *banner, gpointer data) {
@@ -1631,7 +1645,9 @@ void device_view_on_sync_event(const sync_event *ev) {
     case SYNC_EV_DONE: {
       busy_remove(i);
       char text[256] = "";
-      if (ev->status != MC_OK) {
+      if (ev->cancelled) {
+        g_strlcpy(text, mc_str(MC_STR_SYNC_CANCELLED), sizeof text);
+      } else if (ev->status != MC_OK) {
         if (g_dv.is_self && ev->name[0])
           mc_format(text, sizeof text, mc_str(MC_STR_SYNC_FAILED_WITH), MC_S(ev->name), MC_S(mc_status_str(ev->status)));
         else

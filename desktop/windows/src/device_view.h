@@ -16,7 +16,9 @@
  *   | 12 albums, 2 artists, 1 playlist selected                        |
  *   +------------------------------------------------------------------+
  *
- * This PC's own page has Sync now (with every member) and Leave group... instead. An
+ * While a session with the device runs, Sync now reads Cancel sync, and ends it (see
+ * mc_sync_cancel()). This PC's own page has Sync now (with every member) and Leave group...
+ * instead. An
  * archive's format, budget and selection are fixed, so they're disabled; its name isn't.
  * Making a device an archive asks first (a task dialog), with the whole library's size as
  * originals once it's worked out; only the device itself can stop being one, which isn't

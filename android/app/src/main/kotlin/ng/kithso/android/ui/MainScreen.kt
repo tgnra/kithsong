@@ -33,6 +33,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -70,6 +71,8 @@ import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.Recent
 import ng.kithso.android.ui.art.AlbumArt
 import ng.kithso.android.ui.art.PrefetchArt
+import ng.kithso.android.ui.theme.ArtBackdrop
+import ng.kithso.android.ui.theme.rememberOnScreenArtColors
 import kotlinx.coroutines.launch
 
 enum class Section(@StringRes val title: Int) {
@@ -173,8 +176,9 @@ private val MinCellWidth = 150.dp
 private val ListArtSize = 56.dp
 
 /**
- * The main screen: one lazy list of a header and the library's sections. [bottomPadding]
- * keeps the last items clear of the mini player and navigation bar.
+ * The main screen: one lazy list of a header and the library's sections, over a background
+ * coloured from the art on screen. [bottomPadding] keeps the last items clear of the mini
+ * player and navigation bar.
  */
 @Composable
 fun MainScreen(
@@ -219,6 +223,10 @@ fun MainScreen(
         }
 
         PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
+        ArtBackdrop(
+            rememberOnScreenArtColors(listState) { index -> items.getOrNull(index)?.art.orEmpty() },
+            Modifier.matchParentSize(),
+        )
 
         LazyColumn(
             state = listState,
@@ -360,6 +368,7 @@ private fun LibraryRow(
         headlineContent = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = { Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         leadingContent = { AlbumArt(art, contentDescription = null, shape = artShape, modifier = Modifier.size(ListArtSize)) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.combinedClickable(onLongClick = onLongClick, onClick = onClick),
     )
 }
