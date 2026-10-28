@@ -41,6 +41,12 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
     fun previous() = nativeCommand(handle, 5)
     fun seekMs(positionMs: Long) = nativeSeekMs(handle, positionMs)
 
+    /**
+     * Shuffle (mc_player_set_shuffle): the queue plays in a shuffled order that [next] and
+     * [previous] follow, and never ends. Set before [setQueue] to start a queue shuffled.
+     */
+    fun setShuffle(on: Boolean) = nativeSetShuffle(handle, on)
+
     val status: Status
         get() {
             val v = LongArray(5)
@@ -78,6 +84,7 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         @JvmStatic external fun nativeCommand(handle: Long, command: Int)
         @JvmStatic external fun nativeSkipTo(handle: Long, index: Int)
         @JvmStatic external fun nativeSeekMs(handle: Long, ms: Long)
+        @JvmStatic external fun nativeSetShuffle(handle: Long, on: Boolean)
         @JvmStatic external fun nativeStatus(handle: Long, out: LongArray)
         @JvmStatic external fun nativeTakePlayed(handle: Long, out: LongArray): Boolean
 

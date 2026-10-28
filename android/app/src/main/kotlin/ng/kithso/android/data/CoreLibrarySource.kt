@@ -9,6 +9,13 @@ import ng.kithso.core.CoreSync
 import ng.kithso.core.DeviceKind
 import ng.kithso.core.MusicCoreException
 import ng.kithso.core.TrackInfo
+import ng.kithso.core.appendToPlaylist
+import ng.kithso.core.createPlaylist
+import ng.kithso.core.deletePlaylist
+import ng.kithso.core.movePlaylistEntry
+import ng.kithso.core.playlistEntries
+import ng.kithso.core.removePlaylistEntry
+import ng.kithso.core.renamePlaylist
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,6 +47,9 @@ import java.io.File
  * one decodes four covers, so after each read the pictures are looked up on a thread and
  * library connection of their own ([art]), and [library] is updated with those that changed.
  * Meanwhile a playlist shows the picture it last had, kept in [prefs] across launches.
+ *
+ * Manual playlists are edited here too ([PlaylistEditor]), on [core], each change followed by
+ * a [refresh].
  */
 class CoreLibrarySource(
     private val dir: File,
@@ -47,7 +57,7 @@ class CoreLibrarySource(
     private val prefs: SharedPreferences,
     private val scope: CoroutineScope,
     private val unknownArtist: () -> String,
-) : LibrarySource {
+) : LibrarySource, PlaylistEditor {
     private val core = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow<Library?>(null)
     override val library: StateFlow<Library?> = state
@@ -173,8 +183,15 @@ class CoreLibrarySource(
                     TrackList(artist.name, artist.art, tracks, albumCount = albums.size)
                 }
                 CollectionRef.Kind.Playlist -> contents.playlists[ref.uid]?.let { playlist ->
-                    val tracks = (if (ref.uid in contents.smart) lib.smartTracks(ref.uid) else lib.playlistTracks(ref.uid)).here()
-                    TrackList(playlist.name, playlist.art, tracks.map { covers.track(it) })
+                    val tracks = if (ref.uid in contents.smart) {
+                        lib.smartTracks(ref.uid).here().map { covers.track(it) }
+                    } else {
+                        // With their entries, for editing.
+                        lib.playlistTracks(ref.uid).zip(lib.playlistEntries(ref.uid))
+                            .filter { (track, _) -> track.path != null }
+                            .map { (track, entry) -> covers.track(track).copy(entryUid = entry) }
+                    }
+                    TrackList(playlist.name, playlist.art, tracks)
                 }
             }
         } catch (e: MusicCoreException) {
@@ -202,6 +219,66 @@ class CoreLibrarySource(
                 return@launch
             }
             state.value = state.value?.copy(recents = recents())
+            onChanged()
+        }
+    }
+
+    // --- PlaylistEditor ---
+
+    private val editCount = MutableStateFlow(0)
+    override val edits: StateFlow<Int> = editCount
+
+    override suspend fun playlistChoices(): List<PlaylistChoice>? = withContext(core) {
+        try {
+            open()?.playlists()?.map { PlaylistChoice(it.uid, it.name) }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't list the playlists", e)
+            null
+        }
+    }
+
+    override suspend fun isEditable(playlistUid: String): Boolean = withContext(core) {
+        playlistUid in contents.playlists && playlistUid !in contents.smart
+    }
+
+    override fun addToPlaylist(playlistUid: String, what: Addition) =
+        edit("add to playlist $playlistUid") { it.appendToPlaylist(playlistUid, trackUids(it, what)) }
+
+    override fun addToNewPlaylist(name: String, what: Addition) = edit("make playlist $name") {
+        val uid = it.createPlaylist(name)
+        it.appendToPlaylist(uid, trackUids(it, what))
+    }
+
+    override fun renamePlaylist(playlistUid: String, name: String) =
+        edit("rename playlist $playlistUid") { it.renamePlaylist(playlistUid, name) }
+
+    override fun deletePlaylist(playlistUid: String) =
+        edit("delete playlist $playlistUid") { it.deletePlaylist(playlistUid) }
+
+    override fun removeEntry(entryUid: String) =
+        edit("remove playlist entry $entryUid") { it.removePlaylistEntry(entryUid) }
+
+    override fun moveEntry(entryUid: String, afterEntryUid: String?) =
+        edit("move playlist entry $entryUid") { it.movePlaylistEntry(entryUid, afterEntryUid) }
+
+    // On [core]. The tracks [what] adds: an album's that have a file here, as the album lists
+    // them, since that's what this phone shows of it.
+    private fun trackUids(lib: CoreLibrary, what: Addition): List<String> = when (what) {
+        is Addition.Tracks -> what.uids
+        is Addition.Album -> lib.albumTracks(what.uid).here().map { it.uid }
+    }
+
+    // Makes a change on [core], then reads the library again and passes the change on to sync.
+    private fun edit(what: String, change: (CoreLibrary) -> Unit) {
+        scope.launch(core) {
+            val lib = open() ?: return@launch
+            try {
+                change(lib)
+            } catch (e: MusicCoreException) {
+                Log.e(TAG, "Couldn't $what", e)
+            }
+            refresh().join()
+            editCount.value++
             onChanged()
         }
     }

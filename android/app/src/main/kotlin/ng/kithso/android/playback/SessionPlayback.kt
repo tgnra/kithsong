@@ -37,6 +37,8 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
         private set
     override var hasNext by mutableStateOf(false)
         private set
+    private var shuffleOn by mutableStateOf(false)
+    override val shuffle get() = shuffleOn
 
     private var controller: MediaController? = null
     private val pending = ArrayList<(MediaController) -> Unit>()
@@ -88,6 +90,11 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
 
     override fun previous() = withController { it.seekToPrevious() }
 
+    override fun setShuffle(on: Boolean) {
+        shuffleOn = on
+        withController { it.shuffleModeEnabled = on }
+    }
+
     private fun withController(action: (MediaController) -> Unit) {
         val controller = controller
         if (controller != null) action(controller) else pending += action
@@ -97,7 +104,9 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
         track = player.currentMediaItem?.toTrack()
         // As the play/pause button should show it, so it doesn't flicker while starting.
         isPlaying = !Util.shouldShowPlayButton(player)
-        hasNext = player.hasNextMediaItem()
+        shuffleOn = player.shuffleModeEnabled
+        // Shuffled, the core's queue never ends, though Media3's timeline doesn't know it.
+        hasNext = player.hasNextMediaItem() || (shuffle && player.mediaItemCount > 0)
         positionMs = player.currentPosition
         ticker?.cancel()
         ticker = if (!player.isPlaying) null else scope.launch {

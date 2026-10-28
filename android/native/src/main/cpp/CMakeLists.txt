@@ -8,3 +8,6 @@ add_subdirectory("${KITHSONG_ROOT}" kithsong)
 
 add_library(kithsong_jni SHARED jni_bridge.c)
 target_link_libraries(kithsong_jni PRIVATE musiccore log)
+
+# Playlist editing (PlaylistNatives), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_playlist_edit.c)

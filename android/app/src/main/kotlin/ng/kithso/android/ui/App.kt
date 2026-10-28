@@ -22,6 +22,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -35,11 +36,14 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.AppSettings
+import ng.kithso.android.data.Addition
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.LibrarySource
+import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.sync.Syncer
 import ng.kithso.android.ui.theme.ArtTheme
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -78,6 +82,22 @@ fun App(
     val open: (CollectionRef) -> Unit = remember { { stack.add(it) } }
     val pop: () -> Unit = remember { { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) } }
 
+    // Menus and Add to playlist, over everything. Their Play and Shuffle play a whole album or
+    // playlist from its start, or shuffled from a random track.
+    val actions = remember(source) { PlaylistActions(source as? PlaylistEditor) }
+    val scope = rememberCoroutineScope()
+    val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
+        scope.launch {
+            val tracks = source.trackList(ref)?.tracks ?: return@launch
+            val playable = tracks.indices.filter { tracks[it].path != null }
+            if (playable.isEmpty()) return@launch
+            playback.setShuffle(shuffle)
+            playback.play(tracks, if (shuffle) playable.random() else playable.first())
+            source.notePlayed(ref)
+            onPlay()
+        }
+    }
+
     // A Surface rather than a background, so text gets the surface's content colour.
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Box(Modifier.fillMaxSize()) {
@@ -88,6 +108,8 @@ fun App(
                 onSync = { syncOpen = true },
                 onSettings = { settingsOpen = true },
                 modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen),
+                onPlaylistMenu = actions::playlistMenu,
+                onAlbumMenu = actions::albumMenu,
             )
             if (settingsOpen) {
                 DismissibleScreen(
@@ -133,6 +155,7 @@ fun App(
                         DetailScreen(
                             ref,
                             source,
+                            actions,
                             bottomPadding,
                             onPlay = { tracks, index ->
                                 playback.play(tracks, index)
@@ -162,10 +185,23 @@ fun App(
                 )
                 if (playerOpen) {
                     DismissibleScreen(DismissDirection.Down, onDismissed = { playerOpen = false }) { dismiss ->
-                        FullPlayer(playback, track, onCollapse = dismiss)
+                        FullPlayer(
+                            playback,
+                            track,
+                            onCollapse = dismiss,
+                            onAddToPlaylist = if (actions.editor == null) null else {
+                                { actions.addToPlaylist(Addition.Tracks(listOf(track.uid))) }
+                            },
+                        )
                     }
                 }
             }
+            PlaylistSheets(
+                actions,
+                onPlay = playAll,
+                // Closes the deleted playlist's page, if it's open.
+                onDeleted = { uid -> stack.removeAll { it.kind == CollectionRef.Kind.Playlist && it.uid == uid } },
+            )
             // Over everything: another device may ask to pair at any time.
             PairingDialogs(syncer)
         }

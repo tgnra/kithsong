@@ -101,6 +101,9 @@
     "playlist_delete_failed": "Couldn't delete the playlist",
     "playlist_remove_failed": "Couldn't remove the track",
     "playlist_move_failed": "Couldn't move the track",
+    "add_to_playlist_menu": "Add to playlist…",
+    "new_playlist_menu": "New playlist…",
+    "create": "Create",
 
     "album_group": "Album group",
     "add_to_album_group": "Add to album group",
@@ -346,7 +349,6 @@
 
   "linux": {
     "empty_with_version": { "text": "{0}\n\nmusiccore {1}", "note": "{0} is the empty-library message, {1} the core library's version number. musiccore is a name." },
-    "add_to_playlist_menu": "Add to playlist…",
     "playlists_list_failed": "Couldn't list the playlists",
     "album_tile_name": { "text": "{0}, {1}", "note": "An album tile's name for accessibility: its title, then its artist or track count." },
     "playlist_menu": "Playlist menu",
@@ -409,8 +411,6 @@
     "onedrive_warning": "This folder is synced by OneDrive. Sync can damage the library database while Kithsong is writing to it.\n\nUse it anyway?",
     "library_open_failed_in": { "text": "Couldn't open the library in {0} ({1}).", "note": "{0} is a folder, {1} the reason, e.g. \"not found\"." },
     "settings_first_save_failed": "Couldn't save your settings; you'll be asked again next time.",
-    "new_playlist_menu": "New playlist…",
-    "create": "Create",
     "play_next": "Play next",
     "play_last": "Play last",
     "playlist_delete_caption": "Delete playlist",
@@ -487,6 +487,10 @@
     "open_player": "Open the player",
     "close_player": "Close the player",
     "seek_state": { "text": "{0} of {1}", "note": "The seekbar's state for accessibility: elapsed time of total time." },
+
+    "edit_playlist": { "text": "Edit", "note": "Button on a playlist's page that shows the controls to reorder and remove its tracks." },
+    "playlist_added": { "text": "Added to {0}", "note": "{0} is a playlist's name." },
+    "playlist_reorder": { "text": "Drag to reorder", "note": "A playlist track's drag handle, for accessibility." },
 
     "empty_text_sync": "Pair this phone with Kithsong on a computer, under Sync, to bring your music here.",
 

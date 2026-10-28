@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -93,12 +95,13 @@ private fun PlayPause(playback: Playback) {
 }
 
 /**
- * The full player: large art, title and byline, seekbar, and play/pause between previous and
- * next. [onCollapse] slides it away; it is also dismissed by swiping down (see
- * [DismissibleScreen]).
+ * The full player: large art at the top, then title and byline, seekbar, and play/pause
+ * between previous and next, with Add to playlist ([onAddToPlaylist], disabled if null) and
+ * the shuffle toggle at the ends. [onCollapse] slides it away; it is also dismissed by swiping
+ * down (see [DismissibleScreen]).
  */
 @Composable
-fun FullPlayer(playback: Playback, track: Track, onCollapse: () -> Unit) {
+fun FullPlayer(playback: Playback, track: Track, onCollapse: () -> Unit, onAddToPlaylist: (() -> Unit)? = null) {
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
             val wide = maxWidth > maxHeight
@@ -111,13 +114,13 @@ fun FullPlayer(playback: Playback, track: Track, onCollapse: () -> Unit) {
                     Row(Modifier.fillMaxSize().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         PlayerArt(track, Modifier.fillMaxHeight())
                         Spacer(Modifier.size(32.dp))
-                        PlayerControls(playback, track, Modifier.weight(1f))
+                        PlayerControls(playback, track, onAddToPlaylist, Modifier.weight(1f))
                     }
                 } else {
-                    Spacer(Modifier.weight(0.5f))
-                    PlayerArt(track, Modifier.fillMaxWidth().align(Alignment.CenterHorizontally))
-                    Spacer(Modifier.weight(0.5f))
-                    PlayerControls(playback, track, Modifier.padding(bottom = 32.dp))
+                    // The art at the top, as wide as it can be in the height the controls
+                    // leave, and the controls just below it; what's left over is at the bottom.
+                    PlayerArt(track, Modifier.weight(1f, fill = false).align(Alignment.CenterHorizontally))
+                    PlayerControls(playback, track, onAddToPlaylist, Modifier.padding(top = 24.dp, bottom = 24.dp))
                 }
             }
         }
@@ -135,7 +138,7 @@ private fun PlayerArt(track: Track, modifier: Modifier) {
 }
 
 @Composable
-private fun PlayerControls(playback: Playback, track: Track, modifier: Modifier) {
+private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: (() -> Unit)?, modifier: Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Column {
             Text(
@@ -157,11 +160,15 @@ private fun PlayerControls(playback: Playback, track: Track, modifier: Modifier)
             durationMs = track.durationMs,
             onSeek = playback::seekTo,
         )
+        // Add to playlist and shuffle at the ends, the playing controls between, centred.
         Row(
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.align(Alignment.CenterHorizontally),
+            modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp).align(Alignment.CenterHorizontally),
         ) {
+            IconButton(onClick = { onAddToPlaylist?.invoke() }, enabled = onAddToPlaylist != null, modifier = Modifier.offset(x = (-4).dp)) {
+                Icon(Icons.PlaylistAdd, contentDescription = stringResource(R.string.add_to_playlist))
+            }
             IconButton(onClick = playback::previous, modifier = Modifier.size(56.dp)) {
                 Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track), modifier = Modifier.size(32.dp))
             }
@@ -171,6 +178,17 @@ private fun PlayerControls(playback: Playback, track: Track, modifier: Modifier)
             }
             IconButton(onClick = playback::next, enabled = playback.hasNext, modifier = Modifier.size(56.dp)) {
                 Icon(Icons.SkipNext, contentDescription = stringResource(R.string.next_track), modifier = Modifier.size(32.dp))
+            }
+            IconToggleButton(
+                checked = playback.shuffle,
+                onCheckedChange = playback::setShuffle,
+                colors = IconButtonDefaults.iconToggleButtonColors(
+                    checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                ),
+                modifier = Modifier.offset(x = 4.dp),
+            ) {
+                Icon(Icons.Shuffle, contentDescription = stringResource(R.string.shuffle))
             }
         }
     }

@@ -38,6 +38,8 @@ data class Track(
     val art: ArtRef,
     /** The file to play, or null when the track has none on this device. */
     val path: String? = null,
+    /** Its entry in the playlist it was listed from, for moving and removing it; else null. */
+    val entryUid: String? = null,
 )
 
 /** What a track list screen shows: an album, an artist or a playlist. */

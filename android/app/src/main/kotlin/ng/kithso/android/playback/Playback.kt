@@ -22,8 +22,10 @@ interface Playback {
     val track: Track?
     val isPlaying: Boolean
     val positionMs: Long
-    /** Whether the queue goes on after [track]. */
+    /** Whether the queue goes on after [track]: always, shuffled. */
     val hasNext: Boolean
+    /** Whether the queue plays in a shuffled order (the core's, see CoreMediaPlayer). */
+    val shuffle: Boolean
 
     /** Plays [queue] from [index]; tracks without a file on this device are left out. */
     fun play(queue: List<Track>, index: Int)
@@ -32,6 +34,8 @@ interface Playback {
     fun next()
     /** Back to the start of the track, or to the one before within its first 3 seconds. */
     fun previous()
+    /** Turns shuffle on or off, carrying on from the current track; set it before [play] to start shuffled. */
+    fun setShuffle(on: Boolean)
 }
 
 /** Pretends to play: the position advances while playing and the queue moves on. */
@@ -48,6 +52,9 @@ class FakePlayback(private val scope: CoroutineScope) : Playback {
         private set
     override val hasNext: Boolean
         get() = track != null && index < queue.lastIndex
+    // Only the flag: the pretend queue doesn't shuffle.
+    private var shuffleOn by mutableStateOf(false)
+    override val shuffle get() = shuffleOn
 
     /** Loads [queue] at [index] without playing, as if restored from last time. */
     fun load(queue: List<Track>, index: Int) {
@@ -74,6 +81,10 @@ class FakePlayback(private val scope: CoroutineScope) : Playback {
 
     override fun previous() {
         if (positionMs < 3000 && index > 0) load(queue, index - 1) else positionMs = 0
+    }
+
+    override fun setShuffle(on: Boolean) {
+        shuffleOn = on
     }
 
     private fun playOrPause(playing: Boolean) {

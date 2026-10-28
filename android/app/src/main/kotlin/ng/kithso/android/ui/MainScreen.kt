@@ -2,6 +2,7 @@ package ng.kithso.android.ui
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -171,6 +172,9 @@ fun MainScreen(
     onSync: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    // Long-pressing a playlist or an album opens its menu.
+    onPlaylistMenu: (Playlist) -> Unit = {},
+    onAlbumMenu: (Album) -> Unit = {},
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -222,8 +226,9 @@ fun MainScreen(
                         pluralStringResource(R.plurals.tracks, item.playlist.trackCount, item.playlist.trackCount),
                         item.playlist.art,
                         RoundedCornerShape(8.dp),
+                        onLongClick = { onPlaylistMenu(item.playlist) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.Playlist, item.playlist.uid)) }
-                    is MainItem.AlbumRow -> AlbumRow(item.albums, columns, onOpen)
+                    is MainItem.AlbumRow -> AlbumRow(item.albums, columns, onOpen, onAlbumMenu)
                     is MainItem.ArtistItem -> LibraryRow(
                         item.artist.name,
                         pluralStringResource(R.plurals.albums, item.artist.albumCount, item.artist.albumCount),
@@ -314,19 +319,20 @@ private fun LibraryRow(
     subtitle: String,
     art: ArtRef,
     artShape: Shape,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     ListItem(
         headlineContent = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = { Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         leadingContent = { AlbumArt(art, contentDescription = null, shape = artShape, modifier = Modifier.size(ListArtSize)) },
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier.combinedClickable(onLongClick = onLongClick, onClick = onClick),
     )
 }
 
 /** One row of the album grid; a short last row keeps the cells the same width. */
 @Composable
-private fun AlbumRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) -> Unit) {
+private fun AlbumRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) -> Unit, onMenu: (Album) -> Unit) {
     Row(
         Modifier.padding(horizontal = Gutter).padding(bottom = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(CellSpacing),
@@ -336,7 +342,9 @@ private fun AlbumRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) 
                 Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(12.dp))
-                    .clickable { onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid)) },
+                    .combinedClickable(onLongClick = { onMenu(album) }) {
+                        onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid))
+                    },
             ) {
                 AlbumArt(
                     album.art,

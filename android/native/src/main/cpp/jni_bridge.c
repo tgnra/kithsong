@@ -695,6 +695,13 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSeekMs(JNIEnv *env, 
   if (st != MC_OK) throw_status(env, st);
 }
 
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetShuffle(JNIEnv *env, jclass cls,
+                                                                      jlong handle, jboolean on) {
+  (void)cls;
+  mc_status st = mc_player_set_shuffle(player_of(handle), on ? 1 : 0);
+  if (st != MC_OK) throw_status(env, st);
+}
+
 /* Fills out with state, index, count, position_ms, duration_ms. */
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeStatus(JNIEnv *env, jclass cls,
                                                                   jlong handle, jlongArray out) {

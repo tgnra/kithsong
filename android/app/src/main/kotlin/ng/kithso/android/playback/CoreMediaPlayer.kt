@@ -27,6 +27,11 @@ import com.google.common.util.concurrent.ListenableFuture
  * Plays are counted to [onPlayed] with the track uid when the core says they count (half the
  * track or four minutes listened, whichever is less).
  *
+ * Shuffle is the core's (mc_player_set_shuffle), offered as Media3's shuffle mode. Media3
+ * has no way to be told the core's order, so its timeline stays in queue order: next and
+ * previous are passed to the core as such rather than as the item Media3 picks, and next is
+ * always offered while shuffled, as the core's shuffle never ends.
+ *
  * Use it on the main thread.
  */
 @OptIn(UnstableApi::class)
@@ -60,6 +65,7 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
     private var started = false
     private var startIndex = 0
     private var startPositionMs = 0L
+    private var shuffle = false
 
     override fun getState(): State {
         val status = core.status
@@ -70,6 +76,7 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
             COMMAND_PLAY_PAUSE, COMMAND_PREPARE, COMMAND_STOP, COMMAND_RELEASE,
             COMMAND_SET_MEDIA_ITEM, COMMAND_CHANGE_MEDIA_ITEMS,
             COMMAND_GET_CURRENT_MEDIA_ITEM, COMMAND_GET_TIMELINE, COMMAND_GET_METADATA, COMMAND_GET_AUDIO_ATTRIBUTES,
+            COMMAND_SET_SHUFFLE_MODE,
         )
         if (items.isNotEmpty()) {
             commands.addAll(
@@ -77,7 +84,7 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
                 // Previous restarts the track before going back, so it always does something.
                 COMMAND_SEEK_TO_PREVIOUS, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
             )
-            if (index < items.lastIndex) commands.addAll(COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+            if (shuffle || index < items.lastIndex) commands.addAll(COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
         }
         return State.Builder()
             .setAvailableCommands(commands.build())
@@ -99,6 +106,7 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
             )
             // The core restarts the track within its first 3 seconds, and so does Media3.
             .setMaxSeekToPreviousPositionMs(3000)
+            .setShuffleModeEnabled(shuffle)
             .build()
     }
 
@@ -138,6 +146,11 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
         if (!started) {
             if (mediaItemIndex != C.INDEX_UNSET) startIndex = mediaItemIndex
             startPositionMs = position
+        } else if (shuffle && seekCommand in SHUFFLED_SEEKS) {
+            // The core's shuffled order, not Media3's idea of the next or previous item.
+            val paused = core.status.state != CorePlayer.State.Playing
+            if (seekCommand == COMMAND_SEEK_TO_NEXT || seekCommand == COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) core.next() else core.previous()
+            if (paused) core.pause()
         } else {
             val status = core.status
             if (mediaItemIndex != C.INDEX_UNSET && mediaItemIndex != status.index) {
@@ -147,6 +160,12 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
             }
             if (position > 0 || mediaItemIndex == status.index) core.seekMs(position)
         }
+        return Futures.immediateVoidFuture()
+    }
+
+    override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean): ListenableFuture<*> {
+        shuffle = shuffleModeEnabled
+        core.setShuffle(shuffleModeEnabled)
         return Futures.immediateVoidFuture()
     }
 
@@ -238,6 +257,10 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
 
     private companion object {
         const val TAG = "kithsong"
+
+        val SHUFFLED_SEEKS = setOf(
+            COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+        )
 
         val AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
