@@ -374,6 +374,7 @@ static GtkWidget *new_item_row(import_view *v, int idx) {
   r->spinner = gtk_spinner_new();
   r->state = dim_label(NULL);
   r->confidence = dim_label(NULL);
+  gtk_widget_set_tooltip_text(r->confidence, mc_str(MC_STR_COL_CONFIDENCE));
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->row), r->spinner);
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->row), r->state);
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->row), r->confidence);
@@ -839,7 +840,9 @@ static void review_load(review *r) {
     adw_action_row_set_activatable_widget(ADW_ACTION_ROW(row), check);
 
     snprintf(buf, sizeof buf, "%.0f%%", m->confidence * 100);
-    adw_action_row_add_suffix(ADW_ACTION_ROW(row), dim_label(buf));
+    GtkWidget *confidence = dim_label(buf);
+    gtk_widget_set_tooltip_text(confidence, mc_str(MC_STR_COL_CONFIDENCE));
+    adw_action_row_add_suffix(ADW_ACTION_ROW(row), confidence);
     gtk_list_box_append(GTK_LIST_BOX(r->matches), row);
   }
   gtk_widget_set_visible(r->matches, it->match_count > 0);

@@ -715,7 +715,7 @@ static void init_review_columns(HWND dlg) {
   GetClientRect(lv, &rc);
   int w = rc.right - GetSystemMetrics(SM_CXVSCROLL);
   static const struct { enum mc_str_id title; int pct; int fmt; } matches[] = {
-    {MC_STR_WINDOWS_COL_MATCH, 7, LVCFMT_RIGHT}, {MC_STR_ARTIST, 17, 0}, {MC_STR_WINDOWS_COL_RELEASE, 27, 0},
+    {MC_STR_COL_CONFIDENCE, 10, LVCFMT_RIGHT}, {MC_STR_ARTIST, 17, 0}, {MC_STR_WINDOWS_COL_RELEASE, 24, 0},
     {MC_STR_WINDOWS_COL_YEAR, 6, LVCFMT_RIGHT}, {MC_STR_TRACKS_TITLE, 7, LVCFMT_RIGHT},
     {MC_STR_WINDOWS_COL_TYPE, 8, 0}, {MC_STR_WINDOWS_COL_FORMAT, 10, 0}, {MC_STR_WINDOWS_COL_COUNTRY, 7, 0},
     {MC_STR_WINDOWS_COL_LABEL, 11, 0}};
@@ -948,7 +948,7 @@ void import_view_create(HWND parent, mc_library *lib) {
 
   static const enum mc_str_id titles[NUM_COLS] = {
     MC_STR_WINDOWS_COL_STATUS, MC_STR_ARTIST, MC_STR_WINDOWS_COL_ALBUM_TITLE,
-    MC_STR_WINDOWS_COL_FILES, MC_STR_WINDOWS_COL_MATCH_RELEASE, MC_STR_WINDOWS_COL_CONFIDENCE};
+    MC_STR_WINDOWS_COL_FILES, MC_STR_WINDOWS_COL_MATCH_RELEASE, MC_STR_COL_CONFIDENCE};
   for (int i = 0; i < NUM_COLS; i++)
     lv_add_column(g_view.list, i, mc_wstr(titles[i]), 100,
                   i == COL_FILES || i == COL_CONFIDENCE ? LVCFMT_RIGHT : 0);
