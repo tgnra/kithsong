@@ -22,7 +22,6 @@
  * is kept in settings.json.
  */
 #include <adwaita.h>
-#include <glib/gstdio.h>
 #include <math.h>
 #include <string.h>
 
@@ -790,13 +789,6 @@ static void set_strings_locale(void) {
 
 /* Settings from before the app was called Kithsong move over once. If the move fails, the
  * new folder starts out empty as on a first run. */
-static void migrate_settings_dir(const char *settings_dir) {
-  if (g_file_test(settings_dir, G_FILE_TEST_EXISTS)) return;
-  char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
-  if (g_file_test(old_dir, G_FILE_TEST_IS_DIR)) g_rename(old_dir, settings_dir);
-  g_free(old_dir);
-}
-
 int main(int argc, char **argv) {
   app a = {0};
   mc_init();
@@ -805,7 +797,9 @@ int main(int argc, char **argv) {
   /* Settings in ~/.config/kithsong say where the library folder is. Until there's a
    * first-run dialog here, the Music folder is used and remembered. */
   char *settings_dir = g_build_filename(g_get_user_config_dir(), "kithsong", NULL);
-  migrate_settings_dir(settings_dir);
+  char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
+  mc_settings_move_old_dir(old_dir, settings_dir);
+  g_free(old_dir);
   mc_settings *settings = NULL;
   if (mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings)) {
     const char *music = g_get_user_special_dir(G_USER_DIRECTORY_MUSIC);
