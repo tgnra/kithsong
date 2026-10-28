@@ -43,8 +43,13 @@ enum {
   CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
 };
 
-/* The parts of a group's header that act on a click; also their tooltips' ids. */
-enum { PART_NONE, PART_BACK, PART_MORE };
+/* The parts of a page's header that act on a click (also their tooltips' ids), and the
+ * empty page's button. On Playlists and Album Groups, PART_MORE is New Playlist or New
+ * Album Group (a +). */
+enum { PART_NONE, PART_BACK, PART_MORE, PART_ACTION };
+
+/* What the empty page's button does (see album_grid_set_sync_state()). */
+typedef enum { ACTION_NONE, ACTION_PAIR, ACTION_SYNC } empty_action;
 
 typedef struct tile {
   char uid[MC_UID_STRLEN];
@@ -84,6 +89,12 @@ static BOOL pictures(album_grid_view view) {
   return view == AGV_PLAYLISTS || view == AGV_GROUPS;
 }
 
+/* A group has a header with Back, its name and More; Playlists and Album Groups one with the
+ * page's name and a +. */
+static BOOL has_header(album_grid_view view) {
+  return view == AGV_GROUP || view == AGV_PLAYLISTS || view == AGV_GROUPS;
+}
+
 static struct {
   HWND wnd;
   mc_library *lib;
@@ -94,6 +105,10 @@ static struct {
   wchar_t *group_name;           /* its name, as of the last reload */
   BOOL group_smart, group_random; /* it's a smart group, and in random order */
   int hidden;                    /* playlists left out for having nothing to play here */
+  char keep_uid[MC_UID_STRLEN];  /* a playlist made with New Playlist: shown, though it has
+                                  * nothing to play here, until the view changes */
+  album_grid_sync sync_state;    /* whether the empty pages offer pairing or the sync profile */
+  RECT action_rc;                /* the empty page's button, as last painted; empty if none */
   tile *tiles;
   int count;
   UINT gen; /* bumped on every reload, so late thumbnails for old tiles are dropped */
@@ -267,7 +282,7 @@ static void relayout(void) {
   g.pad = scale(20);
   g.gap = scale(20);
   g.text_gap = scale(8);
-  g.top = g.pad + (g.view == AGV_GROUP ? scale(HEADER_BUTTON + HEADER_GAP) : 0);
+  g.top = g.pad + (has_header(g.view) ? scale(HEADER_BUTTON + HEADER_GAP) : 0);
   fit(g.full_w > g.client_w ? g.full_w : g.client_w, &g.cols, &g.tile_w);
   g.cols = (g.client_w - 2 * g.pad + g.gap) / (g.tile_w + g.gap);
   if (g.cols < 1) fit(g.client_w, &g.cols, &g.tile_w); /* too narrow for full-width tiles */
@@ -513,21 +528,26 @@ static void add_smart(mc_smart_subject subject, tile **tiles, wchar_t ***dirs, i
 }
 
 /* The playlists' tiles: the loader finds their pictures by uid, and the track count goes
- * beneath the name. Only those with a track to play here; the rest are counted in g.hidden.
- * Smart playlists follow. */
+ * beneath the name. Only those with a track to play here (as MC_LIST_PLAYABLE would list
+ * them), and g.keep_uid's; the rest are counted in g.hidden. Smart playlists follow. */
 static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
   mc_playlist_list *list = NULL;
-  if (g.lib) mc_library_list_playlists(g.lib, MC_LIST_PLAYABLE, &list);
-  g.hidden = list ? list->hidden : 0;
-  *n = list ? list->count : 0;
-  *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
-  *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL;
-  if (*n && (!*tiles || !*dirs)) *n = 0;
-  for (int i = 0; i < *n; i++) {
+  if (g.lib) mc_library_list_playlists(g.lib, 0, &list);
+  int count = list ? list->count : 0;
+  *n = 0;
+  g.hidden = 0;
+  *tiles = count ? calloc((size_t)count, sizeof **tiles) : NULL;
+  *dirs = count ? calloc((size_t)count, sizeof **dirs) : NULL;
+  if (count && (!*tiles || !*dirs)) count = 0;
+  for (int i = 0; i < count; i++) {
     const mc_playlist_info *p = &list->items[i];
-    tile *t = &(*tiles)[i];
+    if (p->playable_count == 0 && strcmp(p->uid, g.keep_uid)) {
+      g.hidden++;
+      continue;
+    }
+    tile *t = &(*tiles)[*n];
     memcpy(t->uid, p->uid, sizeof t->uid);
-    (*dirs)[i] = widen(p->uid);
+    (*dirs)[(*n)++] = widen(p->uid);
     t->title = widen(p->name && *p->name ? p->name : mc_str(MC_STR_UNTITLED));
     mc_wformat(t->sub, sizeof t->sub / sizeof t->sub[0], mc_str_plural(MC_STR_TRACKS, p->track_count),
                MC_D(p->track_count));
@@ -695,6 +715,7 @@ static void switch_view(album_grid_view view, const char *group, const char *sel
   if (view == g.view && (view != AGV_GROUP || !strcmp(group, g.group_uid))) return;
   BOOL had = g.selected_uid[0] != '\0';
   g.view = view;
+  g.keep_uid[0] = '\0'; /* a new playlist with nothing to play here is hidden again */
   if (view == AGV_GROUP) snprintf(g.group_uid, sizeof g.group_uid, "%s", group);
   g.selected = g.hot = -1;
   snprintf(g.selected_uid, sizeof g.selected_uid, "%s", select ? select : "");
@@ -753,6 +774,7 @@ void album_grid_set_playlist_art_dir(const char *dir) {
 }
 
 void album_grid_set_library(mc_library *lib) {
+  if (lib != g.lib) g.keep_uid[0] = '\0';
   g.lib = lib;
   g.dirty = TRUE;
   if (g.wnd) InvalidateRect(g.wnd, NULL, FALSE); /* reloads on the next paint, if visible */
@@ -831,13 +853,22 @@ static void on_scrolled(void) {
 
 /* --- A group's header --- */
 
-/* Its Back button, at the top left, or its More button (Rename, Delete), at the top right.
- * A smart group has Reshuffle there instead, if it's in random order, or nothing. */
+/* A group's header: its Back button, at the top left, and its More button (Rename,
+ * Delete), at the top right. A smart group has Reshuffle there instead, if it's in random
+ * order, or nothing. On Playlists and Album Groups the header has no Back, and in place of
+ * More a + (New Playlist, New Album Group) while a library is open. */
+static BOOL has_back(void) {
+  return g.tiles_view == AGV_GROUP;
+}
+
 static BOOL has_more(void) {
+  if (!has_header(g.tiles_view)) return FALSE;
+  if (g.tiles_view != AGV_GROUP) return g.lib != NULL;
   return !g.group_smart || g.group_random;
 }
 
 static RECT header_button(int part) {
+  if (part == PART_ACTION) return g.action_rc;
   int size = scale(HEADER_BUTTON), y = g.pad - g.scroll.pos;
   int x = part == PART_BACK ? g.pad : g.client_w - g.pad - size;
   RECT r = {x, y, x + size, y + size};
@@ -847,6 +878,8 @@ static RECT header_button(int part) {
 /* What a header button is called, in its tooltip and to a screen reader. */
 static const wchar_t *header_label(int part) {
   if (part == PART_BACK) return mc_wstr(MC_STR_BACK);
+  if (g.tiles_view == AGV_PLAYLISTS) return mc_wstr(MC_STR_NEW_PLAYLIST);
+  if (g.tiles_view == AGV_GROUPS) return mc_wstr(MC_STR_NEW_ALBUM_GROUP);
   return mc_wstr(g.group_smart ? MC_STR_RESHUFFLE : MC_STR_ALBUM_GROUP_MENU);
 }
 
@@ -854,7 +887,7 @@ static const wchar_t *header_label(int part) {
 static void update_tips(void) {
   if (!g.tooltip) return;
   for (int part = PART_BACK; part <= PART_MORE; part++) {
-    BOOL shown = g.tiles_view == AGV_GROUP && (part == PART_BACK || has_more());
+    BOOL shown = part == PART_BACK ? has_back() : has_more();
     TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g.wnd, .uId = (UINT_PTR)part,
                       .rect = shown ? header_button(part) : (RECT){0},
                       .lpszText = (wchar_t *)header_label(part)};
@@ -863,11 +896,14 @@ static void update_tips(void) {
   }
 }
 
+/* The header button, or the empty page's button, at a point. */
 static int header_part_at(int x, int y) {
-  if (g.tiles_view != AGV_GROUP) return PART_NONE;
   POINT pt = {x, y};
   RECT back = header_button(PART_BACK), more = header_button(PART_MORE);
-  return PtInRect(&back, pt) ? PART_BACK : has_more() && PtInRect(&more, pt) ? PART_MORE : PART_NONE;
+  if (has_back() && PtInRect(&back, pt)) return PART_BACK;
+  if (has_more() && PtInRect(&more, pt)) return PART_MORE;
+  if (PtInRect(&g.action_rc, pt) && g.count == 0) return PART_ACTION;
+  return PART_NONE;
 }
 
 static void set_hot_part(int part) {
@@ -878,22 +914,29 @@ static void set_hot_part(int part) {
   g.hot_part = part;
 }
 
+static const wchar_t *view_name(void);
+
 static void paint_header(canvas *c) {
   RECT back = header_button(PART_BACK), more = header_button(PART_MORE);
   int radius = scale(HEADER_BUTTON) / 2;
-  const wchar_t *glyphs[] = {L"\xE72B", g.group_smart ? L"\xE72C" : L"\xE712"}; /* Back, Refresh or More */
+  /* Back, then Add, Refresh or More */
+  const wchar_t *glyphs[] = {L"\xE72B", g.tiles_view != AGV_GROUP ? L"\xE710" : g.group_smart ? L"\xE72C" : L"\xE712"};
   RECT buttons[] = {back, more};
-  for (int i = 0; i < (has_more() ? 2 : 1); i++) {
+  BOOL shown[] = {has_back(), has_more()};
+  for (int i = 0; i < 2; i++) {
+    if (!shown[i]) continue;
     COLORREF color = theme_draw_state(c, &buttons[i], radius, g.hot_part == i + PART_BACK ? STATE_HOT : STATE_NORMAL);
     SelectObject(c->dc, g.icon_font);
     SetTextColor(c->dc, color);
     DrawTextW(c->dc, glyphs[i], 1, &buttons[i], DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   }
-  RECT name = {back.right + scale(HEADER_TEXT_GAP), back.top, more.left - scale(HEADER_TEXT_GAP), back.bottom};
+  RECT name = {has_back() ? back.right + scale(HEADER_TEXT_GAP) : g.pad, back.top, more.left - scale(HEADER_TEXT_GAP),
+               back.bottom};
   SelectObject(c->dc, g.header_font ? g.header_font : g.font);
   SetTextColor(c->dc, theme.text);
-  if (g.group_name)
-    DrawTextW(c->dc, g.group_name, -1, &name, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+  const wchar_t *title = g.tiles_view == AGV_GROUP ? g.group_name : view_name();
+  if (title)
+    DrawTextW(c->dc, title, -1, &name, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
   SelectObject(c->dc, g.font ? (HGDIOBJ)g.font : GetStockObject(DEFAULT_GUI_FONT));
 }
 
@@ -946,6 +989,71 @@ static void reshuffle_group(void) {
   else
     MessageBoxW(GetAncestor(g.wnd, GA_ROOT), mc_wstr(MC_STR_RESHUFFLE_FAILED), mc_wstr(MC_STR_SMART_ALBUM_GROUP),
                 MB_OK | MB_ICONERROR);
+}
+
+/* The header's + on Playlists and Album Groups: asks for a name and makes an empty one. A
+ * new group opens; a new playlist is selected, so the track list shows it, and kept on the
+ * page while it has nothing to play here (g.keep_uid). */
+static void new_list(void) {
+  if (!g.lib) return;
+  HWND owner = GetAncestor(g.wnd, GA_ROOT);
+  char uid[MC_UID_STRLEN];
+  if (g.tiles_view == AGV_GROUPS) {
+    if (!album_group_create_dialog(owner, g.lib, uid)) return;
+    notify_changed();
+    album_grid_open_group(uid);
+  } else if (g.tiles_view == AGV_PLAYLISTS) {
+    if (!playlist_create_dialog(owner, g.lib, uid)) return;
+    memcpy(g.keep_uid, uid, sizeof g.keep_uid);
+    g.dirty = TRUE;
+    album_grid_select(uid); /* reloads first */
+    notify_changed();
+  }
+}
+
+/* The empty page's button, if it has one (album_grid_set_sync_state()). */
+static empty_action action(void) {
+  if (!g.lib || g.count) return ACTION_NONE;
+  if (g.tiles_view == AGV_ALBUMS && g.sync_state == AG_SYNC_ALONE) return ACTION_PAIR;
+  if (g.tiles_view == AGV_PLAYLISTS && g.hidden && g.sync_state == AG_SYNC_GROUPED) return ACTION_SYNC;
+  return ACTION_NONE;
+}
+
+static const wchar_t *action_label(empty_action a) {
+  return mc_wstr(a == ACTION_PAIR ? MC_STR_PAIR_WITH_DEVICE_MENU : MC_STR_CHOOSE_WHAT_TO_SYNC);
+}
+
+/* Posted: the parent shows a menu or another page. */
+static void do_action(void) {
+  empty_action a = action();
+  if (a == ACTION_NONE) return;
+  PostMessageW(GetParent(g.wnd), WM_COMMAND,
+               MAKEWPARAM(GetDlgCtrlID(g.wnd), a == ACTION_PAIR ? AGN_PAIR : AGN_SYNC_SETTINGS), (LPARAM)g.wnd);
+}
+
+/* A click on a header button or the empty page's button, or the same from UI Automation. */
+static void press_part(int part) {
+  if (part == PART_BACK) go_back();
+  else if (part == PART_MORE && g.tiles_view != AGV_GROUP) new_list();
+  else if (part == PART_MORE && g.group_smart) reshuffle_group();
+  else if (part == PART_MORE) show_more_menu();
+  else if (part == PART_ACTION) do_action();
+}
+
+void album_grid_set_sync_state(album_grid_sync state) {
+  if (state == g.sync_state) return;
+  g.sync_state = state;
+  if (g.wnd && g.count == 0) {
+    InvalidateRect(g.wnd, NULL, FALSE);
+    ui_changed();
+  }
+}
+
+BOOL album_grid_action_rect(RECT *screen) {
+  if (!g.wnd || action() == ACTION_NONE || IsRectEmpty(&g.action_rc)) return FALSE;
+  *screen = g.action_rc;
+  MapWindowPoints(g.wnd, NULL, (POINT *)screen, 2);
+  return TRUE;
 }
 
 /* Add to Album Group, inside a (manual) group Remove from Album Group, and Delete Album...,
@@ -1041,13 +1149,9 @@ static void on_mouse_down(int x, int y) {
   g.navigated = FALSE;
   if (scroller_mouse_down(&g.scroll, x, y)) return;
   int part = header_part_at(x, y), i = tile_at(x, y);
-  if (part == PART_BACK) {
-    go_back();
-    g.navigated = TRUE;
-  } else if (part == PART_MORE && g.group_smart) {
-    reshuffle_group();
-  } else if (part == PART_MORE) {
-    show_more_menu();
+  if (part != PART_NONE) {
+    g.navigated = part == PART_BACK || (part == PART_MORE && g.tiles_view == AGV_GROUPS);
+    press_part(part);
   } else if (g.tiles_view == AGV_GROUPS && i >= 0) {
     album_grid_open_group(g.tiles[i].uid);
     g.navigated = TRUE;
@@ -1067,6 +1171,10 @@ static BOOL on_key(WPARAM key) {
   }
   if (key == VK_RETURN && g.tiles_view == AGV_GROUPS && g.selected >= 0 && g.selected < g.count) {
     album_grid_open_group(g.tiles[g.selected].uid);
+    return TRUE;
+  }
+  if (key == VK_RETURN && action() != ACTION_NONE) { /* the empty page's button */
+    do_action();
     return TRUE;
   }
   if (!g.count || !g.cols) return FALSE;
@@ -1154,8 +1262,30 @@ static void empty_text(wchar_t *buf, size_t n, const wchar_t *sep) {
   else if (g.tiles_view == AGV_GROUPS) title = MC_STR_NO_ALBUM_GROUPS_TITLE, text = MC_STR_NO_ALBUM_GROUPS_TEXT;
   else if (g.tiles_view == AGV_GROUP && g.group_smart) title = MC_STR_SMART_LIST_EMPTY_TITLE, text = MC_STR_SMART_LIST_EMPTY_TEXT;
   else if (g.tiles_view == AGV_GROUP) title = MC_STR_ALBUM_GROUP_EMPTY_TITLE, text = MC_STR_ALBUM_GROUP_EMPTY_TEXT;
+  else if (g.sync_state == AG_SYNC_ALONE) title = MC_STR_EMPTY_TITLE, text = MC_STR_WINDOWS_PC_EMPTY_TEXT_PAIR;
   else title = MC_STR_EMPTY_TITLE, text = MC_STR_EMPTY_TEXT;
   swprintf(buf, n, L"%ls%ls%ls", mc_wstr(title), sep, mc_wstr(text));
+}
+
+/* The empty page's button, a standard one (as the track list's Shuffle), label_w wide
+ * inside, centred at top; it's kept in g.action_rc for clicks. A focus ring shows while the
+ * grid has the keyboard focus, since Enter presses it. */
+static void paint_action(canvas *c, const wchar_t *label, int label_w, int top, int h) {
+  int w = label_w + scale(2 * 16), radius = scale(4);
+  RECT r = {(g.client_w - w) / 2, top, (g.client_w - w) / 2 + w, top + h};
+  g.action_rc = r;
+  control_state state = g.hot_part == PART_ACTION ? STATE_HOT : STATE_NORMAL;
+  COLORREF ink = theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0);
+  if (!theme.high_contrast) canvas_fill(c, &r, radius, ink, theme.dark ? 15 : 6);
+  COLORREF fg = theme_draw_state(c, &r, radius, state);
+  canvas_frame(c, &r, radius, 1, theme.high_contrast ? theme.text : theme.line, 255);
+  SetTextColor(c->dc, fg);
+  DrawTextW(c->dc, label, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  if (GetFocus() == g.wnd && !(SendMessageW(g.wnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS)) {
+    RECT ring = r;
+    InflateRect(&ring, scale(3), scale(3));
+    canvas_frame(c, &ring, radius + scale(3), scale(2), theme.text, 255);
+  }
 }
 
 /* Everything is drawn into a canvas, then copied in one go. GDI text leaves alpha at 0, so
@@ -1167,18 +1297,26 @@ static void paint(HDC dc, const RECT *dirty) {
   canvas_clear(c, dirty, theme.bg, 255);
   HGDIOBJ old_font = SelectObject(c->dc, g.font ? (HGDIOBJ)g.font : GetStockObject(DEFAULT_GUI_FONT));
 
-  if (g.tiles_view == AGV_GROUP) paint_header(c);
+  if (has_header(g.tiles_view)) paint_header(c);
+  SetRectEmpty(&g.action_rc);
   if (g.count == 0) {
     RECT rc = {0, 0, g.client_w, g.client_h};
     SetTextColor(c->dc, theme.text3);
     wchar_t empty[512];
     empty_text(empty, 512, L"\n");
-    /* Wrapped if need be, and centred as a block. */
+    /* Wrapped if need be, and centred as a block with the button, if any, beneath. */
+    empty_action a = action();
+    const wchar_t *label = a != ACTION_NONE ? action_label(a) : NULL;
+    SIZE label_size = {0};
+    if (label) GetTextExtentPoint32W(c->dc, label, (int)wcslen(label), &label_size);
+    int button_h = label ? scale(32) : 0, button_gap = label ? scale(16) : 0;
     InflateRect(&rc, -g.pad, 0);
     RECT fit_rc = rc;
     DrawTextW(c->dc, empty, -1, &fit_rc, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
-    OffsetRect(&rc, 0, (g.client_h - (fit_rc.bottom - fit_rc.top)) / 2);
+    int text_h = fit_rc.bottom - fit_rc.top;
+    OffsetRect(&rc, 0, (g.client_h - (text_h + button_gap + button_h)) / 2);
     DrawTextW(c->dc, empty, -1, &rc, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+    if (label) paint_action(c, label, label_size.cx, rc.top + text_h + button_gap, button_h);
   } else {
     int first, last;
     visible_range(&first, &last);
@@ -1225,11 +1363,21 @@ void album_grid_theme_changed(void) {
 
 /* --- UI Automation (uia.h) ---
  *
- * The nodes: a group's header buttons (Back, then More or Reshuffle), the list, and the
- * list's tiles; while there are none, a text saying why follows the list instead. */
+ * The nodes: the header's buttons (a group's Back, then More or Reshuffle; the + on
+ * Playlists and Album Groups), the list, and the list's tiles; while there are none, a text
+ * saying why follows the list instead, and the empty page's button, if any. */
+
+/* The header's buttons' parts, in order; returns how many. */
+static int ui_parts(int parts[2]) {
+  int n = 0;
+  if (has_back()) parts[n++] = PART_BACK;
+  if (has_more()) parts[n++] = PART_MORE;
+  return n;
+}
 
 static int ui_buttons(void) {
-  return g.tiles_view != AGV_GROUP ? 0 : has_more() ? 2 : 1;
+  int parts[2];
+  return ui_parts(parts);
 }
 
 static int ui_list(void) {
@@ -1255,22 +1403,24 @@ static BOOL ui_node(int i, uia_node *n) {
   if (i == UIA_ROOT) {
     n->type = UIA_PaneControlTypeId;
     lstrcpynW(n->name, view_name(), 512);
-    n->count = list + 1 + (g.count == 0);
+    n->count = list + 1 + (g.count == 0) + (g.count == 0 && action() != ACTION_NONE);
     return TRUE;
   }
-  if (i >= 0 && i < list) { /* Back, More */
-    int part = i == 0 ? PART_BACK : PART_MORE;
+  if (i >= 0 && i < list) { /* Back, More (or +) */
+    int parts[2];
+    ui_parts(parts);
+    int part = parts[i];
     n->type = UIA_ButtonControlTypeId;
     n->flags = UIA_INVOKABLE;
     n->rect = header_button(part);
-    n->automation_id = part == PART_BACK ? L"Back" : L"More";
+    n->automation_id = part == PART_BACK ? L"Back" : g.tiles_view != AGV_GROUP ? L"New" : L"More";
     lstrcpynW(n->name, header_label(part), 512);
     return TRUE;
   }
   if (i == list) {
     n->type = UIA_ListControlTypeId;
     n->flags = UIA_SELECTION;
-    SetRect(&n->rect, 0, g.tiles_view == AGV_GROUP ? max(0, g.top - g.pad - g.scroll.pos) : 0, g.client_w, g.client_h);
+    SetRect(&n->rect, 0, has_header(g.tiles_view) ? max(0, g.top - g.pad - g.scroll.pos) : 0, g.client_w, g.client_h);
     n->first = list + 1;
     n->count = g.count;
     n->automation_id = L"Tiles";
@@ -1282,6 +1432,14 @@ static BOOL ui_node(int i, uia_node *n) {
     n->type = UIA_TextControlTypeId;
     SetRect(&n->rect, 0, 0, g.client_w, g.client_h);
     empty_text(n->name, 512, L" ");
+    return TRUE;
+  }
+  if (g.count == 0 && t == 1 && action() != ACTION_NONE) { /* Pair with a Device..., Choose What to Sync */
+    n->type = UIA_ButtonControlTypeId;
+    n->flags = UIA_INVOKABLE;
+    n->rect = g.action_rc;
+    n->automation_id = L"EmptyAction";
+    lstrcpynW(n->name, action_label(action()), 512);
     return TRUE;
   }
   if (t < 0 || t >= g.count) return FALSE;
@@ -1307,7 +1465,10 @@ static int ui_focus(void) {
 
 static int ui_at(POINT pt) {
   int part = header_part_at(pt.x, pt.y), i = tile_at(pt.x, pt.y);
-  if (part != PART_NONE) return part == PART_BACK ? 0 : 1;
+  if (part == PART_ACTION) return ui_list() + 2;
+  int parts[2], n = ui_parts(parts);
+  for (int k = 0; k < n; k++)
+    if (parts[k] == part) return k;
   return i >= 0 ? ui_tile(i) : UIA_ROOT;
 }
 
@@ -1322,12 +1483,11 @@ static void ui_select(int i) {
   reveal_tile(t);
 }
 
-/* As a click: the header's buttons act, and a group opens. */
+/* As a click: the header's buttons and the empty page's act, and a group opens. */
 static void ui_invoke(int i) {
-  int list = ui_list(), t = i - list - 1;
-  if (i == 0 && list > 0) go_back();
-  else if (i == 1 && list > 1 && g.group_smart) reshuffle_group();
-  else if (i == 1 && list > 1) show_more_menu();
+  int parts[2], list = ui_parts(parts), t = i - list - 1;
+  if (i >= 0 && i < list) press_part(parts[i]);
+  else if (g.count == 0 && t == 1) press_part(PART_ACTION);
   else if (g.tiles_view == AGV_GROUPS && t >= 0 && t < g.count) album_grid_open_group(g.tiles[t].uid);
 }
 
@@ -1351,7 +1511,7 @@ static const uia_ops ui_ops = {
 static void ui_changed(void) {
   unsigned long sig = uia_hash(0, &g.tiles_view, sizeof g.tiles_view);
   if (g.tiles_view == AGV_GROUP) sig = uia_hash(sig, g.group_uid, sizeof g.group_uid);
-  int buttons = ui_buttons();
+  int buttons = ui_buttons() * 4 + (int)action();
   sig = uia_hash(sig, &buttons, sizeof buttons);
   for (int i = 0; i < g.count; i++) sig = uia_hash(sig, g.tiles[i].uid, strlen(g.tiles[i].uid));
   uia_changed(&ui, sig);
@@ -1376,6 +1536,11 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_ERASEBKGND:
       return 1; /* painted entirely in WM_PAINT */
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+    case WM_UPDATEUISTATE:
+      if (g.count == 0) InvalidateRect(wnd, &g.action_rc, FALSE); /* the button's focus ring */
+      break;
     case WM_PAINT: {
       if (g.dirty) reload(); /* deferred while hidden; painting means we're visible */
       PAINTSTRUCT ps;

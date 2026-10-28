@@ -257,7 +257,7 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
         )
         val choosable = editable && !profile.syncAll
         ListItem(
-            headlineContent = { Text(stringResource(R.string.profile_choose)) },
+            headlineContent = { Text(stringResource(R.string.choose_what_to_sync)) },
             colors = itemColors(choosable),
             supportingContent = { Text(selectionText(profile.items)) },
             modifier = Modifier.clickable(enabled = choosable) { picking = true },
