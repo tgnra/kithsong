@@ -656,7 +656,8 @@ mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **ou
   *out = NULL;
   /* Smart album groups live in smart_lists, so this table holds only the manual ones. */
   static const char sql[] =
-    "SELECT g.uid, g.name, (SELECT count(*) FROM album_group_entries e WHERE e.group_uid = g.uid)"
+    "SELECT g.uid, g.name,"
+    " (SELECT count(DISTINCT e.album_uid) FROM album_group_entries e WHERE e.group_uid = g.uid)"
     " FROM album_groups g ORDER BY g.name COLLATE NOCASE, g.uid";
 
   mc_album_group_list *list = calloc(1, sizeof *list);
@@ -691,6 +692,27 @@ void mc_album_group_list_free(mc_album_group_list *list) {
   for (int i = 0; i < list->count; i++) free(list->items[i].name);
   free(list->items);
   free(list);
+}
+
+mc_status mc_library_list_album_group_albums(mc_library *lib, const char *group_uid, mc_album_list **out) {
+  if (!lib || !group_uid || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "SELECT 1 FROM album_groups WHERE uid = ?1", -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, group_uid, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc == SQLITE_DONE) return MC_ERR_NOT_FOUND;
+  if (rc != SQLITE_ROW) return MC_ERR_DB;
+  /* An album two devices added at once has two entries: it's listed once, at the first. */
+  static const char sql[] = ALBUM_COLS " FROM albums a" ALBUM_JOINS
+    " JOIN (SELECT album_uid, min(position) AS pos FROM album_group_entries WHERE group_uid = ?1"
+    "  GROUP BY album_uid) e ON e.album_uid = a.uid"
+    " ORDER BY e.pos, a.uid";
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, group_uid, -1, SQLITE_STATIC);
+  return mc_library_read_albums(lib, stmt, out);
 }
 
 mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out) {

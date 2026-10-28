@@ -712,6 +712,89 @@ static void test_artists_and_groups(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* Making and changing album groups, and listing a group's albums. */
+static void test_album_group_edits(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_groups.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid) VALUES ('al1', 'One', 'ar1'), ('al2', 'Two', 'ar1'),"
+                 " ('al3', 'Three', 'ar1');") == SQLITE_OK);
+
+  char uid[MC_UID_STRLEN], other[MC_UID_STRLEN];
+  CHECK(mc_album_group_create(lib, "", uid) == MC_ERR_INVALID_ARG);
+  CHECK(mc_album_group_create(lib, "Road trip", uid) == MC_OK && strlen(uid) == MC_UID_STRLEN - 1);
+  CHECK(mc_album_group_create(lib, "Other", other) == MC_OK);
+  CHECK(changelog_count(db, "entity = 'album_groups' AND field = 'name'") == 2);
+
+  /* Added at the end, each album once. */
+  CHECK(mc_album_group_add(lib, uid, "al2") == MC_OK);
+  CHECK(mc_album_group_add(lib, uid, "al1") == MC_OK);
+  CHECK(mc_album_group_add(lib, uid, "al3") == MC_OK);
+  CHECK(mc_album_group_add(lib, uid, "al1") == MC_OK);
+  CHECK(mc_album_group_add(lib, uid, "nope") == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_group_add(lib, "nope", "al1") == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_group_add(lib, other, "al1") == MC_OK);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_album_group_albums(lib, uid, &albums) == MC_OK && albums && albums->count == 3);
+  if (albums && albums->count == 3) {
+    CHECK_STR(albums->items[0].title, "Two");
+    CHECK_STR(albums->items[0].artist, "Low");
+    CHECK_STR(albums->items[1].title, "One");
+    CHECK_STR(albums->items[2].title, "Three");
+  }
+  mc_album_list_free(albums);
+  albums = NULL;
+  CHECK(mc_library_list_album_group_albums(lib, "nope", &albums) == MC_ERR_NOT_FOUND && !albums);
+
+  /* An album sync added twice is listed and counted once, and removed for good. */
+  CHECK(exec(db, "INSERT INTO album_group_entries (uid, group_uid, album_uid, position)"
+                 " SELECT 'dup', group_uid, album_uid, 'zz' FROM album_group_entries"
+                 " WHERE album_uid = 'al2' AND group_uid = (SELECT uid FROM album_groups WHERE name = 'Road trip')")
+        == SQLITE_OK);
+  mc_album_group_list *groups = NULL;
+  CHECK(mc_library_list_album_groups(lib, &groups) == MC_OK && groups && groups->count == 2);
+  if (groups && groups->count == 2) {
+    CHECK_STR(groups->items[1].name, "Road trip");
+    CHECK(groups->items[1].album_count == 3);
+  }
+  mc_album_group_list_free(groups);
+  CHECK(mc_library_list_album_group_albums(lib, uid, &albums) == MC_OK && albums && albums->count == 3);
+  if (albums && albums->count == 3) CHECK_STR(albums->items[0].title, "Two");
+  mc_album_list_free(albums);
+  CHECK(mc_album_group_remove(lib, uid, "al2") == MC_OK);
+  CHECK(mc_album_group_remove(lib, uid, "al2") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_list_album_group_albums(lib, uid, &albums) == MC_OK && albums && albums->count == 2);
+  if (albums && albums->count == 2) CHECK_STR(albums->items[0].title, "One");
+  mc_album_list_free(albums);
+
+  /* Rename and delete; the other group and the albums stay. */
+  CHECK(mc_album_group_rename(lib, uid, "") == MC_ERR_INVALID_ARG);
+  CHECK(mc_album_group_rename(lib, uid, "Holiday") == MC_OK);
+  CHECK(mc_album_group_rename(lib, "nope", "X") == MC_ERR_NOT_FOUND);
+  CHECK(query_int(db, "SELECT count(*) FROM album_groups WHERE name = 'Holiday'") == 1);
+  CHECK(mc_album_group_delete(lib, uid) == MC_OK);
+  CHECK(mc_album_group_delete(lib, uid) == MC_ERR_NOT_FOUND);
+  CHECK(query_int(db, "SELECT count(*) FROM album_group_entries") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM albums") == 3);
+
+  /* Opening one puts it in the recents. */
+  mc_recent_list *recents = NULL;
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, other) == MC_OK);
+  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 1);
+  if (recents && recents->count == 1) {
+    CHECK(recents->items[0].kind == MC_RECENT_ALBUM_GROUP && !recents->items[0].is_smart);
+    CHECK_STR(recents->items[0].name, "Other");
+  }
+  mc_recent_list_free(recents);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   /* The library is a folder; the database is library.db inside it. */
   char path[1024], file[1100];
@@ -845,5 +928,6 @@ int main(int argc, char **argv) {
   test_playlists(argc > 1 ? argv[1] : ".");
   test_playable(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");
+  test_album_group_edits(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();
 }

@@ -1,5 +1,6 @@
 /* The album grid: cover art with the album title and artist beneath, in as many columns as
- * fit. The same grid shows the playlists on the Playlists page, with their track counts.
+ * fit. The same grid shows the playlists on the Playlists page, with their track counts,
+ * and the album groups and a group's albums on the Album Groups page.
  *
  * Built for large libraries:
  *  - virtualised: only the tiles in view are painted, into an off-screen buffer.
@@ -30,10 +31,33 @@ HWND album_grid_create(HWND parent, int id);
  * an import) costs nothing. Call it again whenever the library changes. */
 void album_grid_set_library(mc_library *lib);
 
-/* Switches the grid between the albums and the playlists (their pictures, or a placeholder,
- * and the track count beneath the name). Switching drops the selection. */
+/* What the grid shows. Playlists and album groups show their pictures (or a placeholder) with
+ * the track or album count beneath the name. Clicking a group (or Enter on it) opens it:
+ * AGV_GROUP, its albums under a header with Back (also Backspace, Alt+Left and the mouse's
+ * back button), its name, and a More button with Rename and Delete. */
+typedef enum album_grid_view {
+  AGV_ALBUMS,
+  AGV_PLAYLISTS,
+  AGV_GROUPS, /* the album groups */
+  AGV_GROUP,  /* one group's albums; see album_grid_open_group() */
+} album_grid_view;
+
+/* Switches the grid to view (not AGV_GROUP), which drops the selection. */
+void album_grid_show(album_grid_view view);
+album_grid_view album_grid_shown(void);
+/* album_grid_show(AGV_PLAYLISTS or AGV_ALBUMS), and whether it's AGV_PLAYLISTS. */
 void album_grid_show_playlists(BOOL playlists);
 BOOL album_grid_showing_playlists(void);
+/* Shows album group uid's albums, as a click on it does (notifying AGN_OPEN_GROUP). If the
+ * group goes, the grid goes back to the groups. */
+void album_grid_open_group(const char *uid);
+/* The shown group's uid, or NULL outside AGV_GROUP. */
+const char *album_grid_group(void);
+
+/* Right-clicking an album (on Albums or in a group) offers Add to Album Group, and in a
+ * group Remove from Album Group; right-clicking a group (or its header) offers Rename and
+ * Delete. The grid makes those changes itself (add_to_playlist.c, playlist_dialogs.c), then
+ * notifies AGN_LIBRARY_CHANGED. */
 
 /* Where playlists' pictures are cached (UTF-8; see mc_playlist_art()). Without one,
  * playlists show the placeholder. */
@@ -43,6 +67,11 @@ void album_grid_set_playlist_art_dir(const char *dir);
  * changes, by a click or because it left the library, or when it was renamed or its cover
  * changed. */
 #define AGN_SELCHANGE 1
+/* Sent the same way when a group is opened (album_grid_group() says which). */
+#define AGN_OPEN_GROUP 2
+/* Sent the same way after the grid changed the library (see above), for the parent to
+ * refresh what shows it. */
+#define AGN_LIBRARY_CHANGED 3
 
 /* The selected album (or playlist): copies its uid and returns its title, or returns NULL
  * if there's none. */

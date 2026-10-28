@@ -340,6 +340,7 @@ static wchar_t *hit_sub(const mc_search_hit *h) {
   switch (h->kind) {
     case MC_SEARCH_ALBUM: return widen(h->artist ? h->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
     case MC_SEARCH_PLAYLIST: return h->is_smart ? NULL : _wcsdup(mc_wstr(MC_STR_PLAYLIST));
+    case MC_SEARCH_ALBUM_GROUP: return h->is_smart ? NULL : _wcsdup(mc_wstr(MC_STR_ALBUM_GROUP));
     case MC_SEARCH_TRACK:
       if (h->artist && h->album) {
         mc_wformat(buf, 512, mc_str(MC_STR_TRACK_BYLINE), MC_S(h->artist), MC_S(h->album));
@@ -409,6 +410,7 @@ static void show_results(BOOL keep) {
         case MC_SEARCH_ALBUM: h->opens = TRUE; break;
         case MC_SEARCH_TRACK: h->opens = find_album(r->album_uid) != NULL; break;
         case MC_SEARCH_PLAYLIST: h->opens = !r->is_smart && playable_playlist(r->uid); break;
+        case MC_SEARCH_ALBUM_GROUP: h->opens = !r->is_smart; break;
         default: h->opens = FALSE; break; /* no page for it here yet */
       }
       if (album && album->cover_dir) h->cover_dir = _wcsdup(album->cover_dir);

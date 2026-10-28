@@ -16,9 +16,9 @@
  * section, and the sections are in the order of their best hit, so the top result's kind
  * comes first. The results scroll beneath the box, with the album grid's overlay scrollbar.
  *
- * Clicking a result, or Enter on it, opens it (SVN_OPEN): albums and playable playlists on
- * their pages, tracks on their album with the track selected. Artists, album groups and
- * smart playlists have no page here yet, so their rows do nothing. Down in the box moves
+ * Clicking a result, or Enter on it, opens it (SVN_OPEN): albums, playable playlists and
+ * album groups on their pages, tracks on their album with the track selected. Artists and
+ * smart lists have no page here yet, so their rows do nothing. Down in the box moves
  * the focus to the first result; the arrow keys, Home and End move it through the results,
  * and Up from the first goes back to the box.
  *

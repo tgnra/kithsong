@@ -30,8 +30,11 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 
 ## Album Groups
 
-- Add UI to show Album Groups
-- Add UI to browse an Album Group - the grid
+- Windows - done: the Album groups page (2x2 covers from mc_album_group_art()), a group's albums with Back, Add to album group on an album's right-click menu, Remove from album group inside one, Rename and Delete; opening one is recorded in Recents, and search results open them
+- Linux and Android - the same UI (the core API is mc_album_group_*() in playlist.h, mc_library_list_album_group_albums())
+- Windows - reorder albums in a group (core has no mc_album_group_move() yet), and drag albums onto a group
+- Windows - play a whole group (queue its albums in order)
+- Windows - the group's header has no tooltips or screen reader names for Back and More, like the rest of the custom-drawn grid
 
 ## Smart Playlists/Groups
 
@@ -70,7 +73,7 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 
 ## Recents
 
-- Linux and Windows - artists, album groups and smart playlists are left out of the sidebar's Recents (and opening them isn't recorded) until there are pages to open them on
+- Linux and Windows - artists and smart playlists (and on Linux album groups) are left out of the sidebar's Recents (and opening them isn't recorded) until there are pages to open them on
 - Linux and Windows - remove one from Recents, or clear them (mc_library_remove_recent(), mc_library_clear_recents()), e.g. from a context menu
 - Linux and Windows - Recents show the page's icon, not the cover art (no sidebar row has art yet)
 - Linux and Windows - untested: a recent arriving or going with a real sync between two devices (the refresh after sync is the same one an import uses; a removal was tried by changing the database under the app and reloading)
@@ -78,7 +81,7 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 
 ## Search
 
-- Windows and Linux - artist, album group and smart playlist results don't open until there are pages for them
+- Windows and Linux - artist and smart playlist results (and on Linux album group results) don't open until there are pages for them
 - Windows and Linux - Home in the sidebar is greyed out until there's a home page
 - Windows - the search page is custom-drawn, so screen readers don't see its results (like the album grid and track list)
 - Windows - Up and Down move through the album tiles one at a time, not by row

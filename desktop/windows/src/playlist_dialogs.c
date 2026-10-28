@@ -13,7 +13,8 @@ enum { MAX_NAME = 255 };
 
 /* One dialog's state, passed in through DialogBoxParamW. */
 typedef struct ask {
-  const wchar_t *caption, *ok; /* the name dialog's title and OK label */
+  const wchar_t *caption, *ok; /* the name dialog's title and OK label; Delete's title */
+  const wchar_t *note;         /* Delete's note under the heading */
   const wchar_t *name;         /* the current name; NULL for a new playlist */
   wchar_t entered[MAX_NAME + 1];
   HFONT heading_font; /* Delete's */
@@ -173,13 +174,13 @@ static INT_PTR CALLBACK delete_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         a->heading_font = CreateFontIndirectW(&lf);
         SendDlgItemMessageW(dlg, IDC_PL_HEADING, WM_SETFONT, (WPARAM)a->heading_font, FALSE);
       }
-      SetWindowTextW(dlg, mc_wstr(MC_STR_WINDOWS_PLAYLIST_DELETE_CAPTION));
+      SetWindowTextW(dlg, a->caption);
       wchar_t heading[MAX_NAME * 2 + 64];
       char *name = utf8(a->name ? a->name : L"");
       mc_wformat(heading, sizeof heading / sizeof heading[0], mc_str(MC_STR_PLAYLIST_DELETE_TITLE), MC_S(name));
       free(name);
       SetDlgItemTextW(dlg, IDC_PL_HEADING, heading);
-      SetDlgItemTextW(dlg, IDC_PL_NOTE, mc_wstr(MC_STR_PLAYLIST_DELETE_TEXT));
+      SetDlgItemTextW(dlg, IDC_PL_NOTE, a->note);
       SetDlgItemTextW(dlg, IDOK, mc_wstr_mnemonic(MC_STR_DELETE));
       SetDlgItemTextW(dlg, IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL));
       apply_theme(dlg);
@@ -199,15 +200,57 @@ static INT_PTR CALLBACK delete_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
   return FALSE;
 }
 
+/* Asks whether to delete name, in a dialog titled caption with note under the question. */
+static BOOL ask_delete(HWND owner, const wchar_t *caption, const wchar_t *note, const wchar_t *name) {
+  ask a = {.caption = caption, .note = note, .name = name};
+  return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_PLAYLIST_DELETE), owner, delete_proc,
+                         (LPARAM)&a) == IDOK;
+}
+
 BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name) {
   if (!lib || !uid) return FALSE;
-  ask a = {.name = name};
-  if (DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_PLAYLIST_DELETE), owner, delete_proc,
-                      (LPARAM)&a) != IDOK)
+  if (!ask_delete(owner, mc_wstr(MC_STR_WINDOWS_PLAYLIST_DELETE_CAPTION), mc_wstr(MC_STR_PLAYLIST_DELETE_TEXT), name))
     return FALSE;
   mc_status st = mc_playlist_delete(lib, uid);
   if (st != MC_OK)
     MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_DELETE_FAILED), mc_wstr(MC_STR_WINDOWS_PLAYLIST_DELETE_CAPTION),
+                MB_OK | MB_ICONERROR);
+  return st == MC_OK;
+}
+
+/* --- Album groups: the same dialogs --- */
+
+BOOL album_group_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]) {
+  if (!lib) return FALSE;
+  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_ALBUM_GROUP), mc_wstr_mnemonic(MC_STR_WINDOWS_CREATE), NULL);
+  if (!name) return FALSE;
+  mc_status st = mc_album_group_create(lib, name, out_uid);
+  free(name);
+  if (st != MC_OK)
+    MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_CREATE_FAILED), mc_wstr(MC_STR_NEW_ALBUM_GROUP), MB_OK | MB_ICONERROR);
+  return st == MC_OK;
+}
+
+BOOL album_group_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name) {
+  if (!lib || !uid) return FALSE;
+  char *entered = ask_name(owner, mc_wstr(MC_STR_ALBUM_GROUP_RENAME_TITLE), mc_wstr_mnemonic(MC_STR_RENAME),
+                           name ? name : L"");
+  if (!entered) return FALSE;
+  mc_status st = mc_album_group_rename(lib, uid, entered);
+  free(entered);
+  if (st != MC_OK)
+    MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_RENAME_FAILED), mc_wstr(MC_STR_ALBUM_GROUP_RENAME_TITLE),
+                MB_OK | MB_ICONERROR);
+  return st == MC_OK;
+}
+
+BOOL album_group_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name) {
+  if (!lib || !uid) return FALSE;
+  const wchar_t *caption = mc_wstr(MC_STR_WINDOWS_ALBUM_GROUP_DELETE_CAPTION);
+  if (!ask_delete(owner, caption, mc_wstr(MC_STR_ALBUM_GROUP_DELETE_TEXT), name)) return FALSE;
+  mc_status st = mc_album_group_delete(lib, uid);
+  if (st != MC_OK)
+    MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_DELETE_FAILED), mc_wstr(MC_STR_WINDOWS_ALBUM_GROUP_DELETE_CAPTION),
                 MB_OK | MB_ICONERROR);
   return st == MC_OK;
 }

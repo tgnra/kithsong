@@ -30,6 +30,7 @@ typedef enum {
   PAGE_ALBUMS,
   PAGE_ARTISTS,
   PAGE_PLAYLISTS,
+  PAGE_ALBUM_GROUPS,
   PAGE_DEVICE, /* a paired device's page; sidebar_selected_device() says which */
   PAGE_IMPORT,
   PAGE_SETTINGS,

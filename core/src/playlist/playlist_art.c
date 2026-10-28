@@ -8,7 +8,10 @@
  *
  * Caching: the grid is saved as <cache_dir>/<playlist uid>-<key>.jpg, the key being a hash of
  * the four art hashes in grid order (and ART_VERSION). Art hashes are of the image contents,
- * so a replaced cover changes the key too. Nothing is stored in the database. */
+ * so a replaced cover changes the key too. Nothing is stored in the database.
+ *
+ * Album groups get the same grid, but their covers rank by the group's order (so the first
+ * four win) and share the cache folder: uids never clash. */
 #include "musiccore/playlist.h"
 
 #include <stdint.h>
@@ -62,29 +65,37 @@ static int sha256_parts(const char *const *parts, int count, uint8_t digest[32])
   return rc;
 }
 
-/* The playlist's albums with art, best ranked first. MC_ERR_NOT_FOUND if there's no such
- * playlist. */
-static mc_status load_rows(mc_library *lib, const char *playlist_uid, cover_row **out, int *count) {
+/* Any one file finds the album's folder, as in ALBUM_COLS; originals first. */
+#define ALBUM_FILE                                                                   \
+  "(SELECT f.path FROM tracks t2 JOIN files f ON f.track_uid = t2.uid"              \
+  "  WHERE t2.album_uid = al.uid ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)"
+
+/* The playlist's (or album group's) albums with art, best ranked first. MC_ERR_NOT_FOUND if
+ * there's no such playlist (or group). */
+static mc_status load_rows(mc_library *lib, const char *uid, int group, cover_row **out, int *count) {
   *out = NULL;
   *count = 0;
   sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(lib->db, "SELECT 1 FROM playlists WHERE uid = ?1", -1, &stmt, NULL) != SQLITE_OK)
-    return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, playlist_uid, -1, SQLITE_STATIC);
+  const char *exists = group ? "SELECT 1 FROM album_groups WHERE uid = ?1" : "SELECT 1 FROM playlists WHERE uid = ?1";
+  if (sqlite3_prepare_v2(lib->db, exists, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   if (rc == SQLITE_DONE) return MC_ERR_NOT_FOUND;
   if (rc != SQLITE_ROW) return MC_ERR_DB;
 
-  /* Any one file finds the album's folder, as in ALBUM_COLS; originals first. */
-  static const char sql[] =
-    "SELECT al.art_hash, (SELECT f.path FROM tracks t2 JOIN files f ON f.track_uid = t2.uid"
-    "  WHERE t2.album_uid = al.uid ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)"
+  static const char playlist_sql[] =
+    "SELECT al.art_hash, " ALBUM_FILE
     " FROM albums al WHERE al.art_hash IS NOT NULL AND al.uid IN"
     "  (SELECT t.album_uid FROM playlist_entries e JOIN tracks t ON t.uid = e.track_uid"
     "   WHERE e.playlist_uid = ?1)";
-  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, playlist_uid, -1, SQLITE_STATIC);
+  static const char group_sql[] =
+    "SELECT al.art_hash, " ALBUM_FILE
+    " FROM album_group_entries e JOIN albums al ON al.uid = e.album_uid"
+    " WHERE e.group_uid = ?1 AND al.art_hash IS NOT NULL"
+    " GROUP BY al.uid ORDER BY min(e.position), al.uid";
+  if (sqlite3_prepare_v2(lib->db, group ? group_sql : playlist_sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
 
   cover_row *rows = NULL;
   int n = 0, cap = 0;
@@ -103,13 +114,17 @@ static mc_status load_rows(mc_library *lib, const char *playlist_uid, cover_row 
     }
     cover_row *r = &rows[n];
     strcpy(r->hash, hash);
-    uint8_t digest[32];
-    const char *parts[] = {playlist_uid, "\n", hash};
-    if (sha256_parts(parts, 3, digest) != 0) {
-      st = MC_ERR_IO;
-      break;
+    if (group) { /* the group's order: n, big-endian */
+      for (int b = 0; b < 8; b++) r->rank[b] = (uint8_t)((uint64_t)n >> (56 - 8 * b));
+    } else {
+      uint8_t digest[32];
+      const char *parts[] = {uid, "\n", hash};
+      if (sha256_parts(parts, 3, digest) != 0) {
+        st = MC_ERR_IO;
+        break;
+      }
+      memcpy(r->rank, digest, sizeof r->rank);
     }
-    memcpy(r->rank, digest, sizeof r->rank);
     if (!(r->rel = mc_strdup(rel))) st = MC_ERR_NOMEM;
     else n++;
   }
@@ -125,9 +140,8 @@ static mc_status load_rows(mc_library *lib, const char *playlist_uid, cover_row 
   return MC_OK;
 }
 
-/* Walks the ranked rows: the next cover file on this device whose image isn't the one
- * last returned (albums sharing a cover rank next to each other). Returns its row index
- * and sets *path (malloc'd), or -1 at the end. */
+/* Walks the ranked rows: the next cover file on this device whose image isn't spent (see
+ * spend_hash). Returns its row index and sets *path (malloc'd), or -1 at the end. */
 static int next_cover(mc_library *lib, const cover_row *rows, int count, int *next, char **path) {
   *path = NULL;
   for (; *next < count; (*next)++) {
@@ -145,9 +159,11 @@ static int next_cover(mc_library *lib, const cover_row *rows, int count, int *ne
   return -1;
 }
 
-/* After row i gives a cover, rows with the same image are spent. */
+/* After row i gives a cover, later rows with the same image are spent. A playlist's rank
+ * them next to each other; an album group's can be anywhere after. */
 static void spend_hash(cover_row *rows, int count, int i) {
-  for (int j = i + 1; j < count && strcmp(rows[j].hash, rows[i].hash) == 0; j++) rows[j].hash[0] = '\0';
+  for (int j = i + 1; j < count; j++)
+    if (strcmp(rows[j].hash, rows[i].hash) == 0) rows[j].hash[0] = '\0';
 }
 
 /* Reads a whole file of at most MAX_COVER_BYTES. */
@@ -319,7 +335,8 @@ static void remove_old_grids(const char *cache_dir, const char *playlist_uid, co
   free_names(&l);
 }
 
-mc_status mc_playlist_art(mc_library *lib, const char *playlist_uid, const char *cache_dir,
+/* mc_playlist_art(), or for group mc_album_group_art(); playlist_uid is either's uid. */
+static mc_status make_art(mc_library *lib, const char *playlist_uid, int group, const char *cache_dir,
                           char **out_path) {
   if (out_path) *out_path = NULL;
   if (!lib || !playlist_uid || strlen(playlist_uid) != MC_UID_STRLEN - 1 || !cache_dir || !*cache_dir ||
@@ -328,7 +345,7 @@ mc_status mc_playlist_art(mc_library *lib, const char *playlist_uid, const char 
 
   cover_row *rows;
   int count, next = 0;
-  mc_status st = load_rows(lib, playlist_uid, &rows, &count);
+  mc_status st = load_rows(lib, playlist_uid, group, &rows, &count);
   if (st != MC_OK) return st;
 
   /* The top four covers on this device. */
@@ -393,6 +410,16 @@ mc_status mc_playlist_art(mc_library *lib, const char *playlist_uid, const char 
   return st;
 }
 
+mc_status mc_playlist_art(mc_library *lib, const char *playlist_uid, const char *cache_dir,
+                          char **out_path) {
+  return make_art(lib, playlist_uid, 0, cache_dir, out_path);
+}
+
+mc_status mc_album_group_art(mc_library *lib, const char *group_uid, const char *cache_dir,
+                             char **out_path) {
+  return make_art(lib, group_uid, 1, cache_dir, out_path);
+}
+
 mc_status mc_playlist_art_prune(mc_library *lib, const char *cache_dir) {
   if (!lib || !cache_dir || !*cache_dir) return MC_ERR_INVALID_ARG;
   name_list l = {0};
@@ -402,7 +429,9 @@ mc_status mc_playlist_art_prune(mc_library *lib, const char *cache_dir) {
     return MC_ERR_NOMEM;
   }
   sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(lib->db, "SELECT 1 FROM playlists WHERE uid = ?1", -1, &stmt, NULL) != SQLITE_OK) {
+  if (sqlite3_prepare_v2(lib->db,
+                         "SELECT 1 FROM playlists WHERE uid = ?1 UNION ALL SELECT 1 FROM album_groups WHERE uid = ?1",
+                         -1, &stmt, NULL) != SQLITE_OK) {
     free_names(&l);
     return MC_ERR_DB;
   }
