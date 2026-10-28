@@ -106,7 +106,7 @@ static GtkWidget *kind_icon(int kind) {
   return icon;
 }
 
-/* A row: the kind's icon, the name, a dim line under it (NULL for none), a warning triangle
+/* A row: the kind's icon, the name, a dim line under it (NULL for none; its tooltip too), a warning triangle
  * with warning as its tooltip (NULL for none), and a spinner while it syncs. */
 static GtkWidget *device_row(const char *uid, int kind, const char *name, const char *sub, const char *warning,
                              gboolean busy, gboolean dim) {
@@ -130,6 +130,7 @@ static GtkWidget *device_row(const char *uid, int kind, const char *name, const 
     gtk_label_set_ellipsize(GTK_LABEL(line), PANGO_ELLIPSIZE_END);
     gtk_widget_add_css_class(line, "caption");
     gtk_widget_add_css_class(line, "dim-label");
+    gtk_widget_set_tooltip_text(line, sub); /* the sidebar is narrow: the line may be cut short */
     gtk_box_append(GTK_BOX(text), line);
   }
   gtk_box_append(GTK_BOX(box), text);
@@ -197,6 +198,14 @@ static void refresh_devices(void) {
       int in_pass = dev->is_self ? 0 : dev->online ? 1 : 2;
       if (dev->removed || in_pass != pass) continue;
       const char *sub = dev->is_self ? mc_str(MC_STR_LINUX_THIS_COMPUTER) : !dev->online ? mc_str(MC_STR_DEVICE_OFFLINE) : NULL;
+      /* An archive says so under its name, after its state, as Android's device list does:
+       * "Offline. Keeps the whole library". */
+      char archive[160];
+      if (dev->archive) {
+        mc_format(archive, sizeof archive, mc_str(MC_STR_DEVICE_ARCHIVE),
+                  MC_S(sub ? sub : mc_str(MC_STR_DEVICE_ONLINE)));
+        sub = archive;
+      }
       char *warning = dev->online ? device_view_reach_text(sync, dev->uid, dev->name, TRUE) : NULL;
       GtkWidget *row = device_row(dev->uid, dev->kind, dev->name, sub, warning, syncing_slot(dev->uid) >= 0,
                                   !dev->is_self && !dev->online);

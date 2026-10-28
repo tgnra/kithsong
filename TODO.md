@@ -200,6 +200,7 @@ Things built but not checked properly.
 - Playlists page, now the -std=c11 core fix (68d61bf) and track_list_item_at() fix (3eaa789) are in
 - Sync: pairing with Windows or Android, the over-budget estimate, a watch's icon, switching library while a device page is open, and a real LAN (only two Docker containers so far)
 - Move library's refused close-request under a real window manager
+- An archive's sidebar row ("Offline. Keeps the whole library" under its name), only compiled
 
 ### Windows
 - Firewall prompt: the success path after UAC, beyond one run
