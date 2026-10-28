@@ -5,10 +5,10 @@ the release workflow all read it.
 
 | Platform | Package | Script |
 |----------|---------|--------|
-| Windows | `musicapp-<ver>-windows-x64.zip`, a portable folder with `musicapp.exe` and `LICENSES\` | `scripts/release-windows.ps1` (Windows) |
-| Linux | `musicapp-<ver>-linux-x86_64.flatpak`, a single-file Flatpak bundle | `scripts/release-linux.sh` (Linux) |
-| Android | `musicapp-<ver>-android.apk` / `.aab` | `scripts/release-android.sh` or `.ps1` |
-| Wear OS | `musicapp-<ver>-wearos.apk` / `.aab` | the same script |
+| Windows | `kithsong-<ver>-windows-x64.zip`, a portable folder with `kithsong.exe` and `LICENSES\` | `scripts/release-windows.ps1` (Windows) |
+| Linux | `kithsong-<ver>-linux-x86_64.flatpak`, a single-file Flatpak bundle | `scripts/release-linux.sh` (Linux) |
+| Android | `kithsong-<ver>-android.apk` / `.aab` | `scripts/release-android.sh` or `.ps1` |
+| Wear OS | `kithsong-<ver>-wearos.apk` / `.aab` | the same script |
 
 Each script writes into `dist/`. The [release workflow](../.github/workflows/release.yml) runs
 the same scripts on GitHub Actions.
@@ -26,8 +26,8 @@ done in the web UI under Settings → Secrets and variables → Actions → New 
 
 ```sh
 mkdir -p ~/keys
-keytool -genkeypair -v -keystore ~/Documents/musicapp-release.jks -keyalg RSA -keysize 4096 \
-  -validity 10000 -alias musicapp
+keytool -genkeypair -v -keystore ~/Documents/kithsong-release.jks -keyalg RSA -keysize 4096 \
+  -validity 10000 -alias kithsong
 ```
 
 It asks for a keystore password, then for a name, organisation and so on. Those end up in the
@@ -40,7 +40,7 @@ lands there anyway.
 Note the certificate's SHA-256 fingerprint. You'll check builds against it later:
 
 ```sh
-keytool -list -v -keystore ~/keys/musicapp-release.jks -alias musicapp | grep SHA256
+keytool -list -v -keystore ~/keys/kithsong-release.jks -alias kithsong | grep SHA256
 ```
 
 ### 2. Back it up
@@ -57,10 +57,10 @@ A lost upload key can be reset through Play support.
 This catches a wrong password or alias before CI does:
 
 ```sh
-export MUSICAPP_KEYSTORE=~/keys/musicapp-release.jks
-export MUSICAPP_KEY_ALIAS=musicapp
-read -rs MUSICAPP_KEYSTORE_PASSWORD && export MUSICAPP_KEYSTORE_PASSWORD
-export MUSICAPP_KEY_PASSWORD="$MUSICAPP_KEYSTORE_PASSWORD"
+export KITHSONG_KEYSTORE=~/keys/kithsong-release.jks
+export KITHSONG_KEY_ALIAS=kithsong
+read -rs KITHSONG_KEYSTORE_PASSWORD && export KITHSONG_KEYSTORE_PASSWORD
+export KITHSONG_KEY_PASSWORD="$KITHSONG_KEYSTORE_PASSWORD"
 scripts/release-android.sh
 ```
 
@@ -70,14 +70,14 @@ The script ends by running `apksigner verify --print-certs` on both APKs. The
 ### 4. Add the secrets
 
 ```sh
-base64 -w0 ~/keys/musicapp-release.jks | gh secret set ANDROID_KEYSTORE_BASE64
-gh secret set ANDROID_KEY_ALIAS --body musicapp
+base64 -w0 ~/keys/kithsong-release.jks | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEY_ALIAS --body kithsong
 gh secret set ANDROID_KEYSTORE_PASSWORD     # prompts for the value
 gh secret set ANDROID_KEY_PASSWORD          # the same password again
 ```
 
-On macOS, use `base64 -i ~/keys/musicapp-release.jks`. In PowerShell, use
-`[Convert]::ToBase64String([IO.File]::ReadAllBytes("musicapp-release.jks")) | gh secret set ANDROID_KEYSTORE_BASE64`.
+On macOS, use `base64 -i ~/keys/kithsong-release.jks`. In PowerShell, use
+`[Convert]::ToBase64String([IO.File]::ReadAllBytes("kithsong-release.jks")) | gh secret set ANDROID_KEYSTORE_BASE64`.
 
 Then set the API keys. They're baked into every platform's build:
 
@@ -92,14 +92,14 @@ gh secret set MUSICAPP_LASTFM_SECRET
 
 | Secret | Local variable | What it is |
 |--------|----------------|------------|
-| `MUSICAPP_CONTACT` | `MUSICAPP_CONTACT` | Contact URL or email for the MusicBrainz User-Agent |
-| `MUSICAPP_ACOUSTID_KEY` | `MUSICAPP_ACOUSTID_KEY` | AcoustID application key, from <https://acoustid.org/new-application> |
-| `MUSICAPP_LASTFM_KEY` | `MUSICAPP_LASTFM_KEY` | Last.fm API key, for scrobbling, from <https://www.last.fm/api/account/create> |
-| `MUSICAPP_LASTFM_SECRET` | `MUSICAPP_LASTFM_SECRET` | Last.fm API shared secret |
-| `ANDROID_KEYSTORE_BASE64` | `MUSICAPP_KEYSTORE` (a path) | The release keystore, base64-encoded |
-| `ANDROID_KEYSTORE_PASSWORD` | `MUSICAPP_KEYSTORE_PASSWORD` | The keystore password |
-| `ANDROID_KEY_ALIAS` | `MUSICAPP_KEY_ALIAS` | `musicapp`, unless you picked another alias |
-| `ANDROID_KEY_PASSWORD` | `MUSICAPP_KEY_PASSWORD` | Same as the keystore password |
+| `MUSICAPP_CONTACT` | `KITHSONG_CONTACT` | Contact URL or email for the MusicBrainz User-Agent |
+| `MUSICAPP_ACOUSTID_KEY` | `KITHSONG_ACOUSTID_KEY` | AcoustID application key, from <https://acoustid.org/new-application> |
+| `MUSICAPP_LASTFM_KEY` | `KITHSONG_LASTFM_KEY` | Last.fm API key, for scrobbling, from <https://www.last.fm/api/account/create> |
+| `MUSICAPP_LASTFM_SECRET` | `KITHSONG_LASTFM_SECRET` | Last.fm API shared secret |
+| `ANDROID_KEYSTORE_BASE64` | `KITHSONG_KEYSTORE` (a path) | The release keystore, base64-encoded |
+| `ANDROID_KEYSTORE_PASSWORD` | `KITHSONG_KEYSTORE_PASSWORD` | The keystore password |
+| `ANDROID_KEY_ALIAS` | `KITHSONG_KEY_ALIAS` | `kithsong`, unless you picked another alias |
+| `ANDROID_KEY_PASSWORD` | `KITHSONG_KEY_PASSWORD` | Same as the keystore password |
 
 A missing API key doesn't stop a build. The scripts warn, and that feature is off in the
 build. A missing keystore makes manual runs build unsigned APKs, but tagged runs fail, so a
@@ -110,11 +110,11 @@ release can't go out unsigned.
 ```sh
 gh workflow run release.yml
 gh run watch
-gh run download --name android --dir /tmp/musicapp-test
+gh run download --name android --dir /tmp/kithsong-test
 ```
 
 Check the APK's certificate against step 1 with
-`$ANDROID_HOME/build-tools/<ver>/apksigner verify --print-certs /tmp/musicapp-test/*-android.apk`.
+`$ANDROID_HOME/build-tools/<ver>/apksigner verify --print-certs /tmp/kithsong-test/*-android.apk`.
 The job's log also prints it.
 
 If the Android job fails with "Keystore was tampered with, or password was incorrect", the
@@ -133,26 +133,26 @@ To test the builds without a release, run the workflow by hand (Actions → Rele
 workflow, or `gh workflow run release.yml`). The files are attached to the run as artifacts.
 
 Windows builds also carry a build number, the 4th field of the exe's file version (e.g.
-`0.2.0.57`), shown in the app's sidebar footer. CMake takes it as `MUSICAPP_BUILD_NUMBER`
-(0-65535, default 0), and `scripts/release-windows.ps1` passes `$env:MUSICAPP_BUILD_NUMBER`
+`0.2.0.57`), shown in the app's sidebar footer. CMake takes it as `KITHSONG_BUILD_NUMBER`
+(0-65535, default 0), and `scripts/release-windows.ps1` passes `$env:KITHSONG_BUILD_NUMBER`
 through. The workflow sets it to the run number (`github.run_number`), since its shallow
 checkouts can't count commits. Local builds are build 0 unless you set it.
 
 Android versionCodes are `major*100000 + minor*1000 + patch*10`, plus 0 for the phone and 1
-for the watch. The two apps share the `app.musicapp` id, so Play needs every code to be
+for the watch. The two apps share the `app.kithsong` id, so Play needs every code to be
 unique.
 
 ## Installing
 
-- **Windows:** unzip anywhere and run `musicapp.exe`. The build isn't code-signed, so
+- **Windows:** unzip anywhere and run `kithsong.exe`. The build isn't code-signed, so
   SmartScreen warns on first launch (More info → Run anyway). To update, replace the folder.
   Settings and the library live elsewhere, so they survive.
-- **Linux:** `flatpak install --user musicapp-<ver>-linux-x86_64.flatpak`. This fetches the
+- **Linux:** `flatpak install --user kithsong-<ver>-linux-x86_64.flatpak`. This fetches the
   GNOME runtime from Flathub if needed. To update, install the newer bundle. To uninstall,
-  run `flatpak uninstall app.musicapp.Musicapp`. The sandbox can reach `~/Music`. Folders
+  run `flatpak uninstall app.kithsong.Kithsong`. The sandbox can reach `~/Music`. Folders
   elsewhere are opened through the file chooser.
-- **Android / Wear OS:** `adb install musicapp-<ver>-android.apk`, or open the file on the
-  device. For a watch, use `adb -s <watch> install musicapp-<ver>-wearos.apk` over Wi-Fi
+- **Android / Wear OS:** `adb install kithsong-<ver>-android.apk`, or open the file on the
+  device. For a watch, use `adb -s <watch> install kithsong-<ver>-wearos.apk` over Wi-Fi
   debugging. The `.aab` files are for uploading to Google Play.
 
 ## Not done yet
@@ -162,5 +162,5 @@ unique.
   `third_party/CMakeLists.txt` would need to be a Flatpak source. x86_64 only.
 - Android: R8 isn't enabled (`isMinifyEnabled = false`), so the APKs carry all of Compose.
   The third-party license texts aren't in the apps yet.
-- The icons in `packaging/icons/` are generated from `musicapp.svg` by `render.py`. Rerun it
+- The icons in `packaging/icons/` are generated from `kithsong.svg` by `render.py`. Rerun it
   after changing the SVG.

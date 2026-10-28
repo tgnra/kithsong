@@ -59,7 +59,7 @@ English's, add a case to `plural_category()` in `core/src/util/i18n.c`.
   in `core/include/musiccore/i18n.h`: `mc_strings_set_locale()`, `mc_str()`,
   `mc_str_mnemonic()`, `mc_str_plural()` and `mc_format()`, all UTF-8.
 - **Android**: the root `android/build.gradle.kts` registers a `GenerateStrings` task for
-  every app module that sets `extra["musicappStringSections"]` (`:app` takes `shared,android`,
+  every app module that sets `extra["kithsongStringSections"]` (`:app` takes `shared,android`,
   `:wear` takes `shared,wear`). It runs the generator (`MODE=android`,
   `-DANDROID_SECTIONS=...`) with the SDK's CMake before resources are merged, into the
   module's `build/generated/`: those sections become `values/strings.xml` and

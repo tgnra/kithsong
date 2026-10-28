@@ -63,7 +63,7 @@ $env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"; $env:ANDROID_HOME=
 cd android; .\gradlew.bat :app:assembleDebug
 & "$env:ANDROID_HOME\emulator\emulator.exe" -avd Pixel_10
 adb install -r app\build\outputs\apk\debug\app-debug.apk
-adb shell am start -W -n app.musicapp/.MainActivity
+adb shell am start -W -n app.kithsong/.MainActivity
 ```
 
 Open issues:
@@ -78,12 +78,12 @@ the emulator in light and dark mode: the main screen at rest and scrolled, the h
 list, track list screens with swipe right, the full player with seeking and swipe down,
 predictive back on the full player, and the empty state (launch with `--ez fake_empty true`).
 
-Files, under `android/app/src/main/kotlin/app/musicapp/`:
+Files, under `android/app/src/main/kotlin/app/kithsong/`:
 
-- New: `MusicApp.kt`, `data/Library.kt`, `data/FakeLibrary.kt`, `playback/Playback.kt`,
+- New: `KithsongApp.kt`, `data/Library.kt`, `data/FakeLibrary.kt`, `playback/Playback.kt`,
   `ui/App.kt`, `ui/MainScreen.kt`, `ui/DetailScreen.kt`, `ui/Player.kt`, `ui/Dismissible.kt`,
   `ui/Seekbar.kt`, `ui/Icons.kt`, `ui/art/Art.kt`
-- Changed: `MainActivity.kt`, `AndroidManifest.xml` (registers `MusicApp`), `app/build.gradle.kts`
+- Changed: `MainActivity.kt`, `AndroidManifest.xml` (registers `KithsongApp`), `app/build.gradle.kts`
   (adds Coil)
 
 Decisions:
@@ -119,7 +119,7 @@ Files, under `android/`:
 - Bridge: `native/src/main/cpp/jni_bridge.c`, `CoreLibrary.kt`, `NativeCore.kt` (now calls
   `mc_init`), new `CoreImport.kt`. Covers playlists, smart playlists, track lists and import.
 - App: new `data/CoreLibrarySource.kt`; changed `Library.kt`, `FakeLibrary.kt`, `ui/art/Art.kt`,
-  `MusicApp.kt`, `MainActivity.kt`, `App.kt`, `MainScreen.kt`, `DetailScreen.kt`.
+  `KithsongApp.kt`, `MainActivity.kt`, `App.kt`, `MainScreen.kt`, `DetailScreen.kt`.
 - Debug builds only: `app/src/debug/AndroidManifest.xml` and `DebugImportReceiver.kt`.
 
 Decisions:
@@ -139,9 +139,9 @@ Decisions:
 Loading test data (debug builds; the receiver has since been removed with import, so this
 no longer works):
 
-1. Launch the app and send `adb shell am broadcast -n app.musicapp/.DebugImportReceiver` once,
+1. Launch the app and send `adb shell am broadcast -n app.kithsong/.DebugImportReceiver` once,
    so the app creates its own `import` folder (folders created by adb aren't readable by it).
-2. `adb push` music into `/sdcard/Android/data/app.musicapp/files/import/`.
+2. `adb push` music into `/sdcard/Android/data/app.kithsong/files/import/`.
 3. Send the broadcast again. Every item is looked up on MusicBrainz first; with the network
    off, 332 items still took about 6 minutes.
 
@@ -169,7 +169,7 @@ Files, under `android/`:
 
 - New in `app/.../playback/`: `CoreMediaPlayer.kt`, `PlaybackService.kt`, `SessionPlayback.kt`,
   `MediaItems.kt`, `ArtBitmapLoader.kt`; plus `ui/theme/ArtTheme.kt`.
-- Changed: `app/build.gradle.kts`, `AndroidManifest.xml`, `MusicApp.kt`, `MainActivity.kt`,
+- Changed: `app/build.gradle.kts`, `AndroidManifest.xml`, `KithsongApp.kt`, `MainActivity.kt`,
   `Playback.kt`, `Library.kt`, `FakeLibrary.kt`, `CoreLibrarySource.kt`, `App.kt`, `Player.kt`,
   `Icons.kt`, `ui/art/Art.kt`.
 - Bridge: `jni_bridge.c` and `CoreLibrary.kt` gain calls to record plays and preview smart albums.
@@ -213,7 +213,7 @@ Files, under `android/`:
 
 - New in `app/.../`: `AppSettings.kt`, `importer/DeviceMusic.kt`, `importer/Importer.kt`,
   `importer/ImportService.kt`, `ui/ImportUi.kt`, `ui/SettingsScreen.kt`
-- Changed: `AndroidManifest.xml`, `MusicApp.kt`, `MainActivity.kt`, `ui/App.kt`,
+- Changed: `AndroidManifest.xml`, `KithsongApp.kt`, `MainActivity.kt`, `ui/App.kt`,
   `ui/MainScreen.kt`, debug `DebugImportReceiver.kt`
 - Bridge: `jni_bridge.c` and `CoreImport.kt` gain `itemName` and `itemError`
 
@@ -272,7 +272,7 @@ Files, under `android/`:
 
 - Bridge: `native/.../jni_bridge.c` and a new `CoreSync.kt`
 - New: `app/.../sync/Syncer.kt`, `SyncService.kt`, `SyncWorker.kt`, and `ui/DevicesUi.kt`
-- Changed: `MusicApp.kt`, `MainActivity.kt`, `CoreLibrarySource.kt`, `Importer.kt`, `App.kt`,
+- Changed: `KithsongApp.kt`, `MainActivity.kt`, `CoreLibrarySource.kt`, `Importer.kt`, `App.kt`,
   `SettingsScreen.kt`, `Icons.kt`, `AndroidManifest.xml`, `app/build.gradle.kts` (WorkManager 2.11.1)
 
 Decisions:
@@ -309,7 +309,7 @@ Once the core gained its file phase, the phone got audio file transfer and the b
 profiles. No core C changed, and no UI yet: a profile editor is to be built on `Syncer`'s API.
 
 - **Where files go:** the core writes received files into the library folder, and the phone's
-  is in internal no-backup storage (`MusicApp.libraryDir`), so synced music never lands on an
+  is in internal no-backup storage (`KithsongApp.libraryDir`), so synced music never lands on an
   SD card. Free space for the profile budget is measured there too. Nothing else needed
   configuring: the core serves this phone's own files to the others by itself, and never
   transcodes for others on a phone.

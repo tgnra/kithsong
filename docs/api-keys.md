@@ -5,9 +5,9 @@ building the app, register for once and bake into every build:
 
 | Service | What you need | Build setting | State in the code |
 |---------|---------------|---------------|-------------------|
-| MusicBrainz (and the Cover Art Archive) | no key; a contact URL or email for the User-Agent | `MUSICAPP_CONTACT` | used by the importer on every platform |
-| Last.fm | an API key **and** a shared secret | `MUSICAPP_LASTFM_KEY`, `MUSICAPP_LASTFM_SECRET` | core done; desktops queue and send plays; no sign-in UI yet, nothing on Android yet |
-| AcoustID | an *application* (client) key | `MUSICAPP_ACOUSTID_KEY` | **not implemented**: the key is plumbed through the build but nothing reads it |
+| MusicBrainz (and the Cover Art Archive) | no key; a contact URL or email for the User-Agent | `KITHSONG_CONTACT` | used by the importer on every platform |
+| Last.fm | an API key **and** a shared secret | `KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET` | core done; desktops queue and send plays; no sign-in UI yet, nothing on Android yet |
+| AcoustID | an *application* (client) key | `KITHSONG_ACOUSTID_KEY` | **not implemented**: the key is plumbed through the build but nothing reads it |
 | iTunes Search (cover art fallback) | nothing | - | used by the importer |
 
 All of these are CMake cache variables, declared in [`CMakeLists.txt`](../CMakeLists.txt)
@@ -16,10 +16,10 @@ them into a generated header, `build/<preset>/core/generated/config.h`, from
 [`core/src/config.h.in`](../core/src/config.h.in):
 
 ```c
-#define MC_CONTACT "@MUSICAPP_CONTACT@"            /* line 8 */
-#define MC_ACOUSTID_KEY "@MUSICAPP_ACOUSTID_KEY@"  /* line 11 */
-#define MC_LASTFM_KEY "@MUSICAPP_LASTFM_KEY@"      /* line 15 */
-#define MC_LASTFM_SECRET "@MUSICAPP_LASTFM_SECRET@" /* line 16 */
+#define MC_CONTACT "@KITHSONG_CONTACT@"            /* line 8 */
+#define MC_ACOUSTID_KEY "@KITHSONG_ACOUSTID_KEY@"  /* line 11 */
+#define MC_LASTFM_KEY "@KITHSONG_LASTFM_KEY@"      /* line 15 */
+#define MC_LASTFM_SECRET "@KITHSONG_LASTFM_SECRET@" /* line 16 */
 ```
 
 So they are compile-time constants. There is no environment variable or settings entry the
@@ -51,10 +51,10 @@ committed presets and adds the secrets:
       "name": "windows-keys",
       "inherits": "windows-w64devkit",
       "cacheVariables": {
-        "MUSICAPP_CONTACT": "https://github.com/<you>/musicapp",
-        "MUSICAPP_LASTFM_KEY": "<32 hex chars>",
-        "MUSICAPP_LASTFM_SECRET": "<32 hex chars>",
-        "MUSICAPP_ACOUSTID_KEY": "<key>"
+        "KITHSONG_CONTACT": "https://github.com/<you>/kithsong",
+        "KITHSONG_LASTFM_KEY": "<32 hex chars>",
+        "KITHSONG_LASTFM_SECRET": "<32 hex chars>",
+        "KITHSONG_ACOUSTID_KEY": "<key>"
       }
     }
   ],
@@ -66,11 +66,11 @@ Use `"inherits": "linux-gtk"` on Linux. Then `cmake --preset windows-keys` and
 `cmake --build --preset windows-keys`.
 
 Or pass them once on the command line, e.g.
-`cmake --preset windows-w64devkit -DMUSICAPP_LASTFM_KEY=... -DMUSICAPP_LASTFM_SECRET=...`.
+`cmake --preset windows-w64devkit -DKITHSONG_LASTFM_KEY=... -DKITHSONG_LASTFM_SECRET=...`.
 Two things to know about that:
 
 - They're cache variables, so they **stick** in `build/<preset>/CMakeCache.txt` for later
-  configures. To drop one, configure with `-DMUSICAPP_LASTFM_KEY=` (empty) or delete the
+  configures. To drop one, configure with `-DKITHSONG_LASTFM_KEY=` (empty) or delete the
   cache.
 - `-D` values end up in your shell history. The presets file avoids that.
 
@@ -84,22 +84,22 @@ four Gradle project properties and passes them to CMake:
 
 | Gradle property | CMake variable |
 |-----------------|----------------|
-| `musicappContact` | `MUSICAPP_CONTACT` |
-| `musicappAcoustidKey` | `MUSICAPP_ACOUSTID_KEY` |
-| `musicappLastfmKey` | `MUSICAPP_LASTFM_KEY` |
-| `musicappLastfmSecret` | `MUSICAPP_LASTFM_SECRET` |
+| `kithsongContact` | `KITHSONG_CONTACT` |
+| `kithsongAcoustidKey` | `KITHSONG_ACOUSTID_KEY` |
+| `kithsongLastfmKey` | `KITHSONG_LASTFM_KEY` |
+| `kithsongLastfmSecret` | `KITHSONG_LASTFM_SECRET` |
 
 Either pass them on the command line
-(`gradlew.bat assembleDebug -PmusicappContact=... -PmusicappLastfmKey=...`), or put them in
+(`gradlew.bat assembleDebug -PkithsongContact=... -PkithsongLastfmKey=...`), or put them in
 your **user-level** `gradle.properties`, outside the repo
 (`%USERPROFILE%\.gradle\gradle.properties` on Windows, `~/.gradle/gradle.properties`
 elsewhere):
 
 ```properties
-musicappContact=https://github.com/<you>/musicapp
-musicappLastfmKey=<32 hex chars>
-musicappLastfmSecret=<32 hex chars>
-musicappAcoustidKey=<key>
+kithsongContact=https://github.com/<you>/kithsong
+kithsongLastfmKey=<32 hex chars>
+kithsongLastfmSecret=<32 hex chars>
+kithsongAcoustidKey=<key>
 ```
 
 Not `android/gradle.properties`: that file is tracked. Not `android/local.properties`
@@ -111,8 +111,8 @@ Note that the Android app doesn't scrobble yet (no JNI bridge for `mc_scrobbler`
 
 ### Release builds: environment variables and GitHub secrets
 
-The release scripts read `MUSICAPP_CONTACT`, `MUSICAPP_ACOUSTID_KEY`, `MUSICAPP_LASTFM_KEY`
-and `MUSICAPP_LASTFM_SECRET` from the environment and warn about any that are missing:
+The release scripts read `KITHSONG_CONTACT`, `KITHSONG_ACOUSTID_KEY`, `KITHSONG_LASTFM_KEY`
+and `KITHSONG_LASTFM_SECRET` from the environment and warn about any that are missing:
 
 - [`scripts/release-windows.ps1`](../scripts/release-windows.ps1) turns them into `-D` options.
 - [`scripts/release-linux.sh`](../scripts/release-linux.sh) writes them to
@@ -151,10 +151,10 @@ Application name/<version> ( contact-email )
   request libcurl makes:
 
   ```c
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "musicapp/" MC_VERSION_STRING " ( " MC_CONTACT " )");
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "Kithsong/" MC_VERSION_STRING " ( " MC_CONTACT " )");
   ```
 
-  That gives e.g. `musicapp/0.1.0 ( https://github.com/you/musicapp )`, which is the
+  That gives e.g. `Kithsong/0.1.0 ( https://github.com/you/kithsong )`, which is the
   recommended format. It's the one HTTP client for the whole core, so the same header also
   goes to the Cover Art Archive, iTunes, Last.fm and (later) AcoustID.
 - **Rate limit**: [`core/src/tagger/musicbrainz.c`](../core/src/tagger/musicbrainz.c) line 26
@@ -163,19 +163,19 @@ Application name/<version> ( contact-email )
 
 ### The placeholder
 
-**`MUSICAPP_CONTACT` defaults to empty.** CMake then prints a warning and substitutes the
+**`KITHSONG_CONTACT` defaults to empty.** CMake then prints a warning and substitutes the
 literal string `no contact configured`
 ([`core/CMakeLists.txt`](../core/CMakeLists.txt) line 6). The User-Agent then reads
-`musicapp/<version> ( no contact configured )`, which has no contact info in it at all. That
+`Kithsong/<version> ( no contact configured )`, which has no contact info in it at all. That
 is what every build gets today unless you set the variable, including Android builds without
-`-PmusicappContact` and release builds without the secret.
+`-PkithsongContact` and release builds without the secret.
 
 **What to set it to**: something that reaches you and stays valid as long as old builds are
 out there:
 
-- the project's URL (e.g. `https://github.com/<you>/musicapp`), which is good if the issue
+- the project's URL (e.g. `https://github.com/<you>/kithsong`), which is good if the issue
   tracker is open; or
-- an email address you read, e.g. `musicapp@yourdomain`. It's sent in clear text with every
+- an email address you read, e.g. `kithsong@yourdomain`. It's sent in clear text with every
   request (to MusicBrainz, Last.fm, Apple and so on), so use one you don't mind being public.
 
 Don't use `example.com` or a personal address you might drop. MusicBrainz uses the contact
@@ -287,7 +287,7 @@ use is non-commercial unless you get a commercial agreement from Last.fm, and ap
 There's no sign-in button in the apps yet ([TODO.md](../TODO.md) line 90). The Windows and
 Linux apps already send now playing and plays when an account is signed in
 (`desktop/*/src/playback.c`). For now, sign in with the manual test program, which is built
-with the tests (`MUSICAPP_BUILD_TESTS`, on by default):
+with the tests (`KITHSONG_BUILD_TESTS`, on by default):
 
 1. Configure and build with your key and secret (e.g. the `windows-keys` preset above).
    `test_scrobbler` checks that a build *without* a key refuses to sign in, so it's fine
@@ -306,7 +306,7 @@ with the tests (`MUSICAPP_BUILD_TESTS`, on by default):
    minutes ago, and should end with `Scrobbled as <your user>`.
 4. Check <https://www.last.fm/user/<you>> for the scrobble.
 5. To test the real app end to end, start it on the same config folder
-   (`musicapp.exe --config-dir <config folder>` on Windows). The sign-in is already in that
+   (`kithsong.exe --config-dir <config folder>` on Windows). The sign-in is already in that
    folder's `sync.db`. When it asks for a library folder, pick the scratch library, not your
    Music folder. Play a track past halfway (or for 4 minutes) and check Last.fm again.
 
@@ -344,8 +344,8 @@ give a recording id to look up, the way a `MUSICBRAINZ_TRACKID` tag does now.
 
 Being specific about it:
 
-- **There is a build setting for the key.** `MUSICAPP_ACOUSTID_KEY` is in `CMakeLists.txt`
-  line 42, the Gradle property `musicappAcoustidKey`, the release scripts, CI and RELEASING.md.
+- **There is a build setting for the key.** `KITHSONG_ACOUSTID_KEY` is in `CMakeLists.txt`
+  line 42, the Gradle property `kithsongAcoustidKey`, the release scripts, CI and RELEASING.md.
   It ends up as `MC_ACOUSTID_KEY` in `config.h` ([`core/src/config.h.in`](../core/src/config.h.in)
   line 11).
 - **No code reads `MC_ACOUSTID_KEY`.** There's no AcoustID client, no fingerprinting, and no
@@ -373,7 +373,7 @@ when the feature lands.
    baked into the app. Each user would enter their own. The app only needs the application
    key for lookups.
 
-Put the key where the others go: `MUSICAPP_ACOUSTID_KEY` / `musicappAcoustidKey` /
+Put the key where the others go: `KITHSONG_ACOUSTID_KEY` / `kithsongAcoustidKey` /
 the `MUSICAPP_ACOUSTID_KEY` secret. Like the Last.fm secret it ends up readable in the binary,
 which is normal for AcoustID client keys. Keep it out of git anyway, and re-register if it's
 abused.
@@ -428,21 +428,21 @@ Licensing (from Chromaprint's
 
 ## Checklist
 
-- [ ] **Contact**: choose a long-lived URL or email. Set `MUSICAPP_CONTACT` locally
-      (CMakeUserPresets.json), as `musicappContact` in `~/.gradle/gradle.properties`, and as
+- [ ] **Contact**: choose a long-lived URL or email. Set `KITHSONG_CONTACT` locally
+      (CMakeUserPresets.json), as `kithsongContact` in `~/.gradle/gradle.properties`, and as
       the `MUSICAPP_CONTACT` GitHub secret. Without it every build says
       `( no contact configured )` (`core/CMakeLists.txt` line 6).
 - [ ] Check `build/<preset>/core/generated/config.h` shows your contact. Run `manual_mb_ping`.
 - [ ] **Last.fm**: create an API account at <https://www.last.fm/api/account/create>, with no
       callback URL. Note the API key and shared secret.
-- [ ] Put both in CMakeUserPresets.json (`MUSICAPP_LASTFM_KEY`, `MUSICAPP_LASTFM_SECRET`),
-      `~/.gradle/gradle.properties` (`musicappLastfmKey`, `musicappLastfmSecret`) and the
+- [ ] Put both in CMakeUserPresets.json (`KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET`),
+      `~/.gradle/gradle.properties` (`kithsongLastfmKey`, `kithsongLastfmSecret`) and the
       matching GitHub secrets. Set both or neither.
 - [ ] Run `manual_scrobble` against scratch folders. It should end with
       "Scrobbled as <user>", and the play should show on your Last.fm profile.
 - [ ] **AcoustID** (optional until it's implemented): register at
-      <https://acoustid.org/new-application>. Set `MUSICAPP_ACOUSTID_KEY` /
-      `musicappAcoustidKey` / the secret. It's the application key, never a user key.
+      <https://acoustid.org/new-application>. Set `KITHSONG_ACOUSTID_KEY` /
+      `kithsongAcoustidKey` / the secret. It's the application key, never a user key.
 - [ ] `git status` shows no key anywhere. `gh secret list` shows all four.
 - [ ] Before AcoustID work starts: decide between linking Chromaprint dynamically and
       shipping relinkable objects, use KissFFT (not FFTW3), and update LICENSES.md.

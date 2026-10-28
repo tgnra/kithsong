@@ -7,10 +7,10 @@
 
 | Service | Key needed | Limits | Use |
 |---------|------------|--------|-----|
-| MusicBrainz `ws/2` | No | 1 req/s; descriptive User-Agent with contact info (`-DMUSICAPP_CONTACT`) | release and recording search and lookup |
+| MusicBrainz `ws/2` | No | 1 req/s; descriptive User-Agent with contact info (`-DKITHSONG_CONTACT`) | release and recording search and lookup |
 | Cover Art Archive | No | - | front covers, by release, then by release group |
 | iTunes Search API | No | about 20 req/min (unofficial; we wait 3 s between requests) | front covers when the Cover Art Archive has none |
-| AcoustID | Yes, a free *application* key, set with `-DMUSICAPP_ACOUSTID_KEY` and never committed | 3 req/s | fingerprint to recording id (*not yet*) |
+| AcoustID | Yes, a free *application* key, set with `-DKITHSONG_ACOUSTID_KEY` and never committed | 3 req/s | fingerprint to recording id (*not yet*) |
 
 ## Pipeline
 
@@ -92,8 +92,8 @@ library.db
 - `files.path` is stored relative to the library folder, with `/`, so the folder can be moved
   or mounted under another drive letter.
 - the library folder lives in per-device settings (`settings.json`, see
-  `core/include/musiccore/settings.h`), in `%LOCALAPPDATA%\musicapp` on Windows and
-  `~/.config/musicapp` on Linux.
+  `core/include/musiccore/settings.h`), in `%LOCALAPPDATA%\kithsong` on Windows and
+  `~/.config/kithsong` on Linux.
 - a database inside a OneDrive/Dropbox-style synced folder can be corrupted by the sync
   client; the Windows frontend warns when the chosen folder is under OneDrive.
 

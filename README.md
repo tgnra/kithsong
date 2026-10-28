@@ -1,4 +1,11 @@
-# musicapp
+# Kithsong
+
+> **kith** (n.): your own people and home ground; friends, neighbours, the familiar
+> place you belong. From Old English *cȳþþ*, "native land, kinsfolk", the *kith* of
+> "kith and kin".
+>
+> **Kithsong**: the songs of your own people and place. Your music, kept at home
+> among your own devices.
 
 A music library manager and player for Windows, Linux and Android. It autotags your
 collection against MusicBrainz and keeps every device in sync over the local network,
@@ -33,7 +40,7 @@ Priorities:
 - **One library folder.** You choose it on first run (default: your Music folder). It
   holds everything: the music, organised as `Artist/Album (Year)/01 Title.flac`, a
   `cover.jpg` per album, and the database as `library.db`. The app's own settings, i.e. where
-  that folder is, live in `%LOCALAPPDATA%\musicapp` (`~/.config/musicapp` on Linux).
+  that folder is, live in `%LOCALAPPDATA%\kithsong` (`~/.config/kithsong` on Linux).
 - **Import**: drop folders on the window. Files are copied into the library; your originals
   are never modified. Everything is scanned and matched against MusicBrainz in one go.
   Confident matches are imported straight away, with cover art from the Cover Art Archive
@@ -115,11 +122,11 @@ The first configure downloads TagLib, curl and Mbed TLS (pinned by SHA-256) into
 
 Optional CMake settings:
 
-- `-DMUSICAPP_CONTACT=<url or email>`: sent in the MusicBrainz User-Agent. MusicBrainz
+- `-DKITHSONG_CONTACT=<url or email>`: sent in the MusicBrainz User-Agent. MusicBrainz
   asks every client to include one.
-- `-DMUSICAPP_ACOUSTID_KEY=<key>`: enables fingerprint lookups. Keep it out of git, for
+- `-DKITHSONG_ACOUSTID_KEY=<key>`: enables fingerprint lookups. Keep it out of git, for
   example in a `CMakeUserPresets.json`, which is already ignored.
-- `-DMUSICAPP_LASTFM_KEY=<key>` and `-DMUSICAPP_LASTFM_SECRET=<secret>`: a Last.fm API
+- `-DKITHSONG_LASTFM_KEY=<key>` and `-DKITHSONG_LASTFM_SECRET=<secret>`: a Last.fm API
   account (from https://www.last.fm/api/account/create), for scrobbling to Last.fm. Keep
   them out of git too.
 
@@ -147,7 +154,7 @@ From a terminal:
 cmake --preset windows-w64devkit
 cmake --build --preset windows-w64devkit
 ctest --preset windows-w64devkit
-build/windows-w64devkit/desktop/windows/musicapp.exe
+build/windows-w64devkit/desktop/windows/kithsong.exe
 ```
 
 ### Linux
@@ -159,7 +166,7 @@ Needs GTK ≥ 4.12 and libadwaita ≥ 1.4 development packages, e.g.
 cmake --preset linux-gtk
 cmake --build --preset linux-gtk
 ctest --preset linux-gtk
-build/linux-gtk/desktop/linux/musicapp
+build/linux-gtk/desktop/linux/kithsong
 ```
 
 With Nix (flakes enabled), `flake.nix` provides a dev shell with CMake, Ninja, GTK4,
@@ -171,11 +178,11 @@ and icons. Run the commands above through it, or enter it with `nix develop`:
 nix develop -c cmake --preset linux-gtk
 nix develop -c cmake --build --preset linux-gtk
 nix develop -c ctest --preset linux-gtk
-nix develop -c build/linux-gtk/desktop/linux/musicapp
+nix develop -c build/linux-gtk/desktop/linux/kithsong
 ```
 
 The VS Code tasks (`linux: build`, `linux: run`, `linux: test`) and the
-`musicapp (Linux, gdb)` debug configuration run inside the dev shell. `Ctrl+Shift+B` runs
+`kithsong (Linux, gdb)` debug configuration run inside the dev shell. `Ctrl+Shift+B` runs
 the Windows build, so on Linux start `linux: build` from `Tasks: Run Task`.
 
 ### Android

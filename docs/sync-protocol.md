@@ -36,7 +36,7 @@ the data after a crash.
 
 ## Discovery
 
-- mDNS/DNS-SD service `_musicapp._tcp`, announced and browsed by an embedded responder
+- mDNS/DNS-SD service `_kithsong._tcp`, announced and browsed by an embedded responder
   (mjansson/mdns) on a background thread. Default scan interval: 30 s. A device that hasn't
   answered for two intervals is offline.
 - The SRV record carries the TCP port the device listens on: 47823 by default, so a firewall
@@ -135,7 +135,7 @@ the code and A's user enters it.
 3. The user types the code on A. Both sides run EC J-PAKE (`mbedtls_ecjpake`, secp256r1,
    SHA-256) with the code's 6 ASCII digits as the shared secret. A is the client:
    `JPAKE_1` both ways, then `JPAKE_2` both ways. Both derive the 32-byte secret.
-4. They run `Noise_XXpsk3` with `psk = HKDF-SHA256(jpake_secret, info = "musicapp pair v1")`.
+4. They run `Noise_XXpsk3` with `psk = HKDF-SHA256(jpake_secret, info = "kithsong pair v1")`.
    A wrong code makes the handshake fail at the psk. A's side of XXpsk3 finishes first, so
    only B can tell. On a failure B sends `PAIR_REFUSE` `{"reason": "wrong_code",
    "attempts_left": n}` in the clear and closes. A shows "Wrong code" and may reconnect to try
