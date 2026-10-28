@@ -457,11 +457,11 @@ static void build_menu(GtkWidget *pane) {
   g_object_unref(actions);
 
   GMenu *model = g_menu_new();
-  g_menu_append(model, mc_str_mnemonic(MC_STR_LINUX_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
+  g_menu_append(model, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   s.album_menu = G_MENU_MODEL(model);
   model = g_menu_new();
   GMenu *section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_LINUX_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   section = g_menu_new();

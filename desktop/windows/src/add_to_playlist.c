@@ -37,7 +37,7 @@ HMENU add_to_playlist_menu(mc_library *lib, UINT first_id, UINT new_id, mc_playl
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   }
-  AppendMenuW(menu, MF_STRING | (lib ? 0 : MF_GRAYED), new_id, mc_wstr_mnemonic(MC_STR_WINDOWS_NEW_PLAYLIST_MENU));
+  AppendMenuW(menu, MF_STRING | (lib ? 0 : MF_GRAYED), new_id, mc_wstr_mnemonic(MC_STR_NEW_PLAYLIST_MENU));
   return menu;
 }
 
