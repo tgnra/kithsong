@@ -84,6 +84,17 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 - Windows - Up and Down move through the album tiles one at a time, not by row
 - Linux - only compiled and launched so far; check it in the running app
 
+## Shuffle
+
+Windows and Linux have it: a toggle after the seekbar, Play and Shuffle above the track list, kept in settings.json; the order is the core's (mc_player_set_shuffle(), a Miller Shuffle).
+
+- Android - use the core's shuffle (the toggle, Play/Shuffle buttons and the setting)
+- Linux - MPRIS's Shuffle property, so the desktop's media controls show and set it
+- Windows - the media flyout's shuffle button (SMTC IsShuffleEnabled and ShuffleEnabledChangeRequested)
+- Windows - Play and Shuffle in the track list are custom-drawn: no keyboard access, and screen readers don't see them (like the rest of the list)
+- Linux - only compiled so far; check the toggle and the track list's buttons in the running app
+- Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
+
 ## Other
 
 

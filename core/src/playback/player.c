@@ -13,6 +13,11 @@
  * thread knows when to report the next track. The same count, taken a segment at a time,
  * is the time listened that decides when a play counts.
  *
+ * With shuffle on, the queue plays in an order of places (shuffle.c) rather than item by
+ * item; segments note both. In order, an item's place is its index. Turning shuffle on or
+ * off renumbers the places from the last item in the buffer, so what's buffered still plays
+ * and the new order carries on after it.
+ *
  * The callback only copies out of the ring buffer and counts. A flush (seek, skip, stop)
  * resets the buffer from the player thread, so the two share a spinlock that the callback
  * holds just for the copy. Everything else is under the mutex; the thread drops it while
@@ -25,6 +30,7 @@
 
 #include "miniaudio.h"
 #include "playback/decoder.h"
+#include "playback/shuffle.h"
 #include "util/platform.h"
 
 enum {
@@ -122,6 +128,7 @@ static void source_seek(source *s, int64_t ms) {
 
 typedef struct segment {
   int index;           /* queue item */
+  int pos;             /* its place in the play order */
   uint64_t start;      /* its first frame in the stream */
   uint64_t offset;     /* output frames into the item at start: after a seek, not 0 */
   int64_t duration_ms; /* 0 if unknown */
@@ -150,16 +157,20 @@ struct mc_player {
   char **queue;
   int count;
   mc_player_state state;
-  command cmd; /* waiting for the thread; CMD_START plays cmd_index from cmd_ms, then cmd_state */
-  int cmd_index;
+  int shuffle;
+  mc_shuffle order; /* while shuffle is on */
+  command cmd; /* waiting for the thread; CMD_START plays cmd_index (at place cmd_pos) from cmd_ms, then cmd_state */
+  int cmd_index, cmd_pos;
   int64_t cmd_ms;
   mc_player_state cmd_state;
   int cmd_seek;  /* the CMD_START is a seek */
   unsigned gen;  /* bumped by every command, so the thread can tell its work went stale */
   int current;   /* the current item while there are no segments; -1 with an empty queue */
+  int current_pos;
   segment segs[MAX_SEGMENTS]; /* segs[0] is audible, the rest are buffered after it */
   int nsegs;
   int decoding;      /* the source's item */
+  int decoding_pos;
   int drained;       /* the source ran out after the last playable item */
   uint64_t written;  /* stream frames put into the ring buffer */
   ma_uint32 rate;    /* output rate, once the device is open */
@@ -182,6 +193,18 @@ struct mc_player {
   ma_spinlock spin;
   uint64_t played; /* stream frames handed to the device */
 };
+
+/* The queue item at place pos in the play order, or -1 if there's none. Under lock. */
+static int item_at(mc_player *p, int pos) {
+  if (p->shuffle) return mc_shuffle_at(&p->order, pos);
+  return pos >= 0 && pos < p->count ? pos : -1;
+}
+
+static uint32_t new_seed(void) {
+  uint32_t seed;
+  if (mc_random_bytes(&seed, sizeof seed) != MC_OK) seed = (uint32_t)mc_mono_ms() * 2654435761u;
+  return seed;
+}
 
 static void on_audio(ma_device *device, void *output, const void *input, ma_uint32 frames) {
   (void)input;
@@ -229,6 +252,7 @@ static const segment *audible(mc_player *p) {
 static void snapshot(mc_player *p, mc_player_status *st) {
   memset(st, 0, sizeof *st);
   st->count = p->count;
+  st->shuffle = p->shuffle;
   st->state = p->state;
   st->index = p->current;
   if (p->cmd == CMD_START) { /* report it as done already, so the UI doesn't flicker back */
@@ -294,11 +318,12 @@ static unsigned sync_device(mc_player *p) {
   return 0;
 }
 
-/* Opens the first playable item from index on, seeking the first one to ms. Drops the lock
- * meanwhile. Returns NULL with *index past the end if none could be opened, or if gen moved
- * on (another command came in), in which case the caller gives up. */
-static source *open_from(mc_player *p, int *index, int64_t ms, unsigned gen, unsigned *events) {
-  while (*index < p->count) {
+/* Opens the first playable item in the play order from *index (at place *pos) on, seeking
+ * the first one to ms. Drops the lock meanwhile. Returns NULL if none could be opened (with
+ * *index -1; shuffled, after a try of as many items as the queue has), or if gen moved on
+ * (another command came in), in which case the caller gives up. */
+static source *open_from(mc_player *p, int *pos, int *index, int64_t ms, unsigned gen, unsigned *events) {
+  for (int tries = 0; *index >= 0 && tries < p->count; tries++) {
     char *path = mc_strdup(p->queue[*index]);
     ma_uint32 rate = p->rate;
     mc_mutex_unlock(&p->lock);
@@ -313,7 +338,7 @@ static source *open_from(mc_player *p, int *index, int64_t ms, unsigned gen, uns
     }
     if (src) return src;
     *events |= EV(MC_PLAYER_EVENT_ERROR);
-    ++*index;
+    *index = item_at(p, ++*pos);
     ms = 0;
   }
   return NULL;
@@ -331,14 +356,15 @@ static void stop_at_start(mc_player *p) {
   close_source(p);
   flush(p);
   p->state = MC_PLAYER_STOPPED;
-  p->current = p->count ? 0 : -1;
+  p->current_pos = 0;
+  p->current = item_at(p, 0);
 }
 
 /* Carries out p->cmd. The command stays posted (and is what mc_player_status_get reports)
  * until it's done, as opening the device and the file drop the lock. If another command
  * comes in meanwhile, this one is abandoned for it. */
 static unsigned do_command(mc_player *p) {
-  int asked = p->cmd_index, index = asked;
+  int asked = p->cmd_pos, pos = asked, index = p->cmd_index;
   int64_t ms = p->cmd_ms;
   int seek = p->cmd_seek;
   unsigned gen = p->gen, events = EV(MC_PLAYER_EVENT_STATE);
@@ -357,9 +383,10 @@ static unsigned do_command(mc_player *p) {
     flush(p);
     p->state = MC_PLAYER_STOPPED;
     p->current = index;
+    p->current_pos = pos;
     return events | EV(MC_PLAYER_EVENT_ERROR) | EV(MC_PLAYER_EVENT_TRACK);
   }
-  source *src = open_from(p, &index, ms, gen, &events);
+  source *src = open_from(p, &pos, &index, ms, gen, &events);
   if (gen != p->gen) return events & EV(MC_PLAYER_EVENT_ERROR);
   p->cmd = CMD_NONE;
   events |= EV(MC_PLAYER_EVENT_TRACK);
@@ -367,12 +394,13 @@ static unsigned do_command(mc_player *p) {
     stop_at_start(p);
     return events;
   }
-  if (index != asked) ms = 0; /* skipped past the one asked for */
+  if (pos != asked) ms = 0; /* skipped past the one asked for */
   flush(p);
   p->src = src;
   p->decoding = p->current = index;
-  p->segs[0] = (segment){index, p->written, (uint64_t)ms * p->rate / 1000, source_duration_ms(src),
-                         !seek || index != asked};
+  p->decoding_pos = p->current_pos = pos;
+  p->segs[0] = (segment){index, pos, p->written, (uint64_t)ms * p->rate / 1000, source_duration_ms(src),
+                         !seek || pos != asked};
   p->nsegs = 1;
   p->state = p->cmd_state; /* read now: pause() and resume() change it without a new command */
   return events;
@@ -381,29 +409,34 @@ static unsigned do_command(mc_player *p) {
 /* Fills the ring buffer, moving on to the next item when the source runs out. Under lock. */
 static unsigned fill(mc_player *p) {
   unsigned events = 0;
-  while (p->src && p->cmd == CMD_NONE && !p->quit) {
-    ma_uint32 n = CHUNK;
-    void *buf;
-    if (ma_pcm_rb_acquire_write(&p->rb, &n, &buf) != MA_SUCCESS || !n) break;
-    source *src = p->src;
-    mc_mutex_unlock(&p->lock);
-    ma_uint64 got = source_read(src, buf, n);
-    mc_mutex_lock(&p->lock);
-    ma_pcm_rb_commit_write(&p->rb, (ma_uint32)got);
-    p->written += got;
-    if (got == n || p->cmd != CMD_NONE) continue;
+  while (p->cmd == CMD_NONE && !p->quit) {
+    if (p->src) {
+      ma_uint32 n = CHUNK;
+      void *buf;
+      if (ma_pcm_rb_acquire_write(&p->rb, &n, &buf) != MA_SUCCESS || !n) break;
+      source *src = p->src;
+      mc_mutex_unlock(&p->lock);
+      ma_uint64 got = source_read(src, buf, n);
+      mc_mutex_lock(&p->lock);
+      ma_pcm_rb_commit_write(&p->rb, (ma_uint32)got);
+      p->written += got;
+      if (got == n || p->cmd != CMD_NONE) continue;
+    } else if (p->drained || !p->nsegs) {
+      break;
+    }
 
-    /* The source ran out: carry on with the next item, straight after it in the buffer. */
+    /* The source ran out (or there was none, as the last item had run out before shuffle
+     * came on): carry on with the next item, straight after it in the buffer. */
     if (p->nsegs == MAX_SEGMENTS) break; /* lots of very short tracks; wait for some to play */
-    int index = p->decoding + 1;
+    int pos = p->decoding_pos + 1, index = item_at(p, pos);
     unsigned gen = p->gen;
     source *done = p->src;
     p->src = NULL;
-    source *next = open_from(p, &index, 0, gen, &events);
+    source *next = open_from(p, &pos, &index, 0, gen, &events);
     /* The resampler holds the last few frames back. Given the same converter, the next item
      * continues the stream exactly, as one file would: the usual case, as albums keep one
      * format. Across a change of rate those frames are lost, which is under a millisecond. */
-    if (next && next->rate == done->rate && next->channels == done->channels) {
+    if (next && done && next->rate == done->rate && next->channels == done->channels) {
       ma_data_converter *conv = next->conv;
       next->conv = done->conv;
       done->conv = conv;
@@ -421,7 +454,8 @@ static unsigned fill(mc_player *p) {
     }
     p->src = next;
     p->decoding = index;
-    p->segs[p->nsegs++] = (segment){index, p->written, 0, source_duration_ms(next), 1};
+    p->decoding_pos = pos;
+    p->segs[p->nsegs++] = (segment){index, pos, p->written, 0, source_duration_ms(next), 1};
   }
   return events;
 }
@@ -467,6 +501,7 @@ static unsigned advance(mc_player *p) {
     p->nsegs -= gone;
     memmove(p->segs, p->segs + gone, (size_t)p->nsegs * sizeof *p->segs);
     p->current = p->segs[0].index;
+    p->current_pos = p->segs[0].pos;
     events |= EV(MC_PLAYER_EVENT_TRACK);
   }
   if (p->drained && !p->src && played >= p->written && p->state != MC_PLAYER_STOPPED) {
@@ -512,6 +547,7 @@ mc_status mc_player_new(mc_player_cb cb, void *user, mc_player **out) {
   p->cb = cb;
   p->user = user;
   p->current = p->decoding = p->play_index = -1;
+  p->current_pos = p->decoding_pos = -1;
   mc_mutex_init(&p->lock);
   mc_cond_init(&p->wake);
   mc_status st = mc_thread_start(&p->thread, run, p);
@@ -550,9 +586,10 @@ void mc_player_free(mc_player *p) {
   free(p);
 }
 
-/* Under lock. */
-static void post(mc_player *p, command cmd, int index, int64_t ms, mc_player_state state) {
+/* Under lock. index is the item at place pos. */
+static void post(mc_player *p, command cmd, int pos, int index, int64_t ms, mc_player_state state) {
   p->cmd = cmd;
+  p->cmd_pos = pos;
   p->cmd_index = index;
   p->cmd_ms = ms > 0 ? ms : 0;
   p->cmd_state = state;
@@ -561,15 +598,16 @@ static void post(mc_player *p, command cmd, int index, int64_t ms, mc_player_sta
   mc_cond_broadcast(&p->wake);
 }
 
-/* The item the UI is showing as current. Under lock. */
-static int current_index(mc_player *p) {
-  mc_player_status st;
-  snapshot(p, &st);
-  return st.index;
+/* The place in the play order of the item the UI is showing as current (see snapshot()).
+ * Under lock. */
+static int current_pos(mc_player *p) {
+  if (p->cmd == CMD_START) return p->cmd_pos;
+  if (p->cmd == CMD_NONE && p->nsegs) return audible(p)->pos;
+  return p->current_pos;
 }
 
 mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count, int start) {
-  if (!p || count < 0 || (count && (!paths || start < 0 || start >= count))) return MC_ERR_INVALID_ARG;
+  if (!p || count < 0 || (count && (!paths || start < -1 || start >= count))) return MC_ERR_INVALID_ARG;
   char **queue = count ? calloc((size_t)count, sizeof *queue) : NULL;
   if (count && !queue) return MC_ERR_NOMEM;
   for (int i = 0; i < count; i++) {
@@ -585,11 +623,13 @@ mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count,
   p->count = count;
   p->nplays = 0;
   p->play_index = -1;
+  mc_shuffle_init(&p->order, count, new_seed(), start);
+  int pos = start >= 0 && !p->shuffle ? start : 0;
   if (count) {
-    post(p, CMD_START, start, 0, MC_PLAYER_PLAYING);
+    post(p, CMD_START, pos, item_at(p, pos), 0, MC_PLAYER_PLAYING);
   } else {
-    p->current = -1;
-    post(p, CMD_STOP, -1, 0, MC_PLAYER_STOPPED);
+    p->current = p->current_pos = -1;
+    post(p, CMD_STOP, -1, -1, 0, MC_PLAYER_STOPPED);
   }
   mc_mutex_unlock(&p->lock);
   return MC_OK;
@@ -599,7 +639,12 @@ mc_status mc_player_skip_to(mc_player *p, int index) {
   if (!p) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&p->lock);
   mc_status st = index >= 0 && index < p->count ? MC_OK : MC_ERR_INVALID_ARG;
-  if (st == MC_OK) post(p, CMD_START, index, 0, MC_PLAYER_PLAYING);
+  if (st == MC_OK && p->shuffle) { /* that one first, then the rest shuffled afresh */
+    mc_shuffle_init(&p->order, p->count, new_seed(), index);
+    post(p, CMD_START, 0, index, 0, MC_PLAYER_PLAYING);
+  } else if (st == MC_OK) {
+    post(p, CMD_START, index, index, 0, MC_PLAYER_PLAYING);
+  }
   mc_mutex_unlock(&p->lock);
   return st;
 }
@@ -607,12 +652,13 @@ mc_status mc_player_skip_to(mc_player *p, int index) {
 mc_status mc_player_next(mc_player *p) {
   if (!p) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&p->lock);
-  int next = current_index(p) + 1;
-  if (next > 0 && next < p->count) {
-    post(p, CMD_START, next, 0, MC_PLAYER_PLAYING);
+  int pos = current_pos(p) + 1, index = item_at(p, pos);
+  if (index >= 0) {
+    post(p, CMD_START, pos, index, 0, MC_PLAYER_PLAYING);
   } else if (p->count) { /* past the end: stopped at the start, as when the queue plays out */
-    p->current = 0;
-    post(p, CMD_STOP, 0, 0, MC_PLAYER_STOPPED);
+    p->current_pos = 0;
+    p->current = item_at(p, 0);
+    post(p, CMD_STOP, 0, p->current, 0, MC_PLAYER_STOPPED);
   }
   mc_mutex_unlock(&p->lock);
   return MC_OK;
@@ -624,8 +670,12 @@ mc_status mc_player_previous(mc_player *p) {
   mc_player_status st;
   snapshot(p, &st);
   if (st.index >= 0) {
-    int index = st.index > 0 && st.position_ms < RESTART_MS ? st.index - 1 : st.index;
-    post(p, CMD_START, index, 0, MC_PLAYER_PLAYING);
+    int pos = current_pos(p), index = st.index, before = item_at(p, pos - 1);
+    if (before >= 0 && st.position_ms < RESTART_MS) {
+      pos--;
+      index = before;
+    }
+    post(p, CMD_START, pos, index, 0, MC_PLAYER_PLAYING);
   }
   mc_mutex_unlock(&p->lock);
   return MC_OK;
@@ -648,8 +698,10 @@ mc_status mc_player_resume(mc_player *p) {
   snapshot(p, &st);
   if (p->cmd == CMD_START) p->cmd_state = MC_PLAYER_PLAYING;
   else if (st.state == MC_PLAYER_PAUSED) p->state = MC_PLAYER_PLAYING;
+  else if (st.state == MC_PLAYER_STOPPED && p->count && st.index >= 0 && st.index < p->count)
+    post(p, CMD_START, current_pos(p), st.index, 0, MC_PLAYER_PLAYING);
   else if (st.state == MC_PLAYER_STOPPED && p->count)
-    post(p, CMD_START, st.index >= 0 && st.index < p->count ? st.index : 0, 0, MC_PLAYER_PLAYING);
+    post(p, CMD_START, 0, item_at(p, 0), 0, MC_PLAYER_PLAYING);
   mc_cond_broadcast(&p->wake);
   mc_mutex_unlock(&p->lock);
   return MC_OK;
@@ -667,9 +719,12 @@ mc_status mc_player_toggle(mc_player *p) {
 mc_status mc_player_stop(mc_player *p) {
   if (!p) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&p->lock);
-  int index = current_index(p);
-  p->current = index;
-  post(p, CMD_STOP, index, 0, MC_PLAYER_STOPPED);
+  mc_player_status st;
+  snapshot(p, &st);
+  int pos = current_pos(p);
+  p->current = st.index;
+  p->current_pos = pos;
+  post(p, CMD_STOP, pos, st.index, 0, MC_PLAYER_STOPPED);
   mc_mutex_unlock(&p->lock);
   return MC_OK;
 }
@@ -680,10 +735,33 @@ mc_status mc_player_seek_ms(mc_player *p, int64_t position_ms) {
   mc_player_status st;
   snapshot(p, &st);
   if (st.index >= 0 && st.index < p->count) {
-    post(p, CMD_START, st.index, position_ms,
+    post(p, CMD_START, current_pos(p), st.index, position_ms,
          st.state == MC_PLAYER_PAUSED ? MC_PLAYER_PAUSED : MC_PLAYER_PLAYING);
     p->cmd_seek = position_ms > 0; /* back to the start is starting it again */
 
+  }
+  mc_mutex_unlock(&p->lock);
+  return MC_OK;
+}
+
+mc_status mc_player_set_shuffle(mc_player *p, int on) {
+  if (!p) return MC_ERR_INVALID_ARG;
+  on = on != 0;
+  mc_mutex_lock(&p->lock);
+  if (on != p->shuffle) {
+    /* The new order carries on from the last item in the buffer, as what's buffered plays
+     * anyway: usually the one playing. Or from the one about to start, or the current one. */
+    int last = p->cmd == CMD_START               ? p->cmd_index
+               : p->cmd == CMD_NONE && p->nsegs ? p->segs[p->nsegs - 1].index
+                                                 : p->current;
+    p->shuffle = on;
+    if (on) mc_shuffle_init(&p->order, p->count, new_seed(), last);
+    int pos = on ? 0 : last; /* in order, an item's place is its index */
+    p->cmd_pos = p->current_pos = p->decoding_pos = pos;
+    for (int i = 0; i < p->nsegs; i++) p->segs[i].pos = on ? pos - (p->nsegs - 1 - i) : p->segs[i].index;
+    if (p->cmd == CMD_NONE && p->nsegs) p->current_pos = p->segs[0].pos;
+    if (on) p->drained = 0; /* the last item may have run out already: carry on after it */
+    mc_cond_broadcast(&p->wake);
   }
   mc_mutex_unlock(&p->lock);
   return MC_OK;

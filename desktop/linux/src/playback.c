@@ -24,12 +24,14 @@ static struct {
   int announced;   /* the item last sent as now playing, or -1 */
   item *items;
   int count;
+  gboolean shuffle;
   guint tick;   /* timer source while playing */
   gint pending; /* an idle is queued for the player's news; set on its thread */
 
   /* What's shown, to tell what changed. */
   int index;
   mc_player_state state;
+  gboolean shown_shuffle;
 } s;
 
 static void free_items(void) {
@@ -83,11 +85,13 @@ static void refresh(void) {
   mc_player_status_get(s.player, &st);
   const item *it = current(&st);
   int duration_ms = duration_of(it, &st);
-  gboolean has_next = it && st.index + 1 < s.count;
+  gboolean has_next = it && (st.shuffle || st.index + 1 < s.count);
 
   gboolean new_track = st.index != s.index, new_state = st.state != s.state;
+  gboolean new_shuffle = !st.shuffle != !s.shown_shuffle; /* changes whether there's a next track */
   s.index = st.index;
   s.state = st.state;
+  s.shown_shuffle = st.shuffle;
   if (st.state != MC_PLAYER_PLAYING) {
     s.announced = -1;
   } else if (it && st.index != s.announced) {
@@ -103,7 +107,7 @@ static void refresh(void) {
   /* Stopped, the track stays in the now-playing strip, ready to play, but isn't marked. */
   track_list_set_playing(it && st.state != MC_PLAYER_STOPPED ? it->uid : NULL);
 
-  if (new_track || new_state) {
+  if (new_track || new_state || new_shuffle) {
     set_window_title(st.state != MC_PLAYER_STOPPED ? it : NULL);
     mpris_set_state(st.state, it != NULL, has_next);
     if (st.state == MC_PLAYER_PLAYING && !s.tick) s.tick = g_timeout_add(TICK_MS, on_tick, NULL);
@@ -179,11 +183,12 @@ void playback_clear(void) {
 }
 
 void playback_play(const playback_track *tracks, int count, int start) {
-  if (count <= 0 || start < 0 || start >= count) return;
+  if (count <= 0 || start < -1 || start >= count) return;
   if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
     s.player = NULL;
     return;
   }
+  mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off */
   const char **paths = g_new0(const char *, (gsize)count);
   item *items = g_new0(item, (gsize)count);
   for (int i = 0; i < count; i++) {
@@ -206,6 +211,21 @@ void playback_play(const playback_track *tracks, int count, int start) {
   mc_player_set_queue(s.player, paths, count, start);
   g_free(paths);
   refresh();
+}
+
+void playback_set_shuffle(gboolean on) {
+  s.shuffle = on;
+  now_playing_set_shuffle(on);
+  if (s.player) {
+    mc_player_set_shuffle(s.player, on);
+    refresh();
+  } else if (s.changed) {
+    s.changed(s.user);
+  }
+}
+
+gboolean playback_shuffle(void) {
+  return s.shuffle;
 }
 
 gboolean playback_toggle(void) {
@@ -265,7 +285,7 @@ gboolean playback_has_current(void) {
 }
 
 gboolean playback_has_next(void) {
-  return playback_has_current() && s.index + 1 < s.count;
+  return playback_has_current() && (s.shuffle || s.index + 1 < s.count);
 }
 
 int64_t playback_position_ms(void) {

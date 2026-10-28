@@ -1,7 +1,7 @@
 /* Win32 frontend. Layout:
  *
  *   +--------------------------------------------------------------+
- *   | |<  >  >| [] 0:00 ==o------------------- -3:12        _ [] X |  toolbar = title bar
+ *   | |<  >  >| [] 0:00 ==o----------------- -3:12 [S]    _ [] X |  toolbar = title bar
  *   +-----------+.-----------------------------------+-------------+
  *   | Home      |                                    | track list  |
  *   | Search    |                                    | (shown when |
@@ -36,7 +36,8 @@
  * sidebar sidebar.c, the track list track_list.c and the seekbar beside the playback buttons
  * now_playing.c. The track list's Add to Playlist menu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
- * changes and they're made here. The toolbar buttons are owner-drawn here.
+ * changes and they're made here. The toolbar buttons, and the shuffle toggle after the seekbar
+ * ([S]), are owner-drawn here; shuffle is kept in the settings.
  *
  * Sync (sync_bridge.c) runs while a library is open, and stops before it closes, so switching
  * library restarts it. Its events arrive as WM_APP_SYNC. The sidebar's DEVICES section lists
@@ -98,6 +99,7 @@ enum {
   ID_TRACKS,
   ID_NOW_PLAYING,
   ID_SEARCH,
+  ID_SHUFFLE, /* after the seekbar */
   NUM_BUTTONS = ID_NEXT - ID_PREV + 1
 };
 
@@ -109,7 +111,8 @@ enum {
   TRACKS_W = 320,
   PAD = 8,
   ICON_BTN = 36,
-  NOW_PLAYING_GAP = 16, /* either side of the seekbar strip */
+  NOW_PLAYING_GAP = 16, /* either side of the seekbar strip and the shuffle button */
+  SHUFFLE_GAP = 6,      /* between the seekbar strip and the shuffle button */
   NOW_PLAYING_MAX = 640,
 };
 
@@ -129,6 +132,7 @@ enum {
 typedef struct app {
   HWND wnd;
   HWND buttons[NUM_BUTTONS];
+  HWND shuffle; /* a toggle, drawn like the playback buttons */
   HWND tooltip;
   HWND sidebar;
   HWND grid;
@@ -213,6 +217,7 @@ static void update_font(void) {
   settings_view_set_font(font, g_app.dpi);
   device_view_set_font(font, g_app.dpi);
   for (int i = 0; i < NUM_BUTTONS; i++) InvalidateRect(g_app.buttons[i], NULL, FALSE);
+  InvalidateRect(g_app.shuffle, NULL, FALSE);
 
   if (g_app.font) DeleteObject(g_app.font);
   g_app.font = font;
@@ -237,12 +242,13 @@ static void layout(void) {
   int tracks_w = g_app.show_tracks ? g_app.tracks_w : 0;
   int grid_w = w - side_w - (tracks_w ? tracks_w + scale(1) : 0);
 
-  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 5);
+  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 6);
   int x = pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  /* The seekbar takes the space between the playback and caption buttons, up to a point,
-   * centred in the window where that leaves it clear of both. */
+  /* The seekbar and the shuffle button after it take the space between the playback and
+   * caption buttons, up to a point, centred in the window where that leaves them clear of
+   * both. */
   int min_left = x - scale(2) + scale(NOW_PLAYING_GAP);
   int max_right = w - caption_buttons_width() - scale(NOW_PLAYING_GAP);
   int np_w = max_right - min_left;
@@ -250,7 +256,10 @@ static void layout(void) {
   int np_left = (w - np_w) / 2;
   if (np_left + np_w > max_right) np_left = max_right - np_w;
   if (np_left < min_left) np_left = min_left;
-  dwp = DeferWindowPos(dwp, g_app.now_playing, NULL, np_left, 0, np_w > 0 ? np_w : 0, bar, SWP_NOZORDER);
+  int strip_w = np_w - icon - scale(SHUFFLE_GAP);
+  dwp = DeferWindowPos(dwp, g_app.now_playing, NULL, np_left, 0, strip_w > 0 ? strip_w : 0, bar, SWP_NOZORDER);
+  dwp = DeferWindowPos(dwp, g_app.shuffle, NULL, np_left + (strip_w > 0 ? strip_w : 0) + scale(SHUFFLE_GAP),
+                       (bar - icon) / 2, icon, icon, SWP_NOZORDER);
   dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
   UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
   dwp = DeferWindowPos(dwp, g_app.grid, NULL, side_w, bar, grid_w, h - bar, SWP_NOZORDER | library);
@@ -433,8 +442,9 @@ static LRESULT CALLBACK button_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UI
   return DefSubclassProc(wnd, msg, wp, lp);
 }
 
-/* The playback buttons are bare icons with a fill on hover. Drawn with alpha, as they sit
- * over Mica. */
+/* The playback buttons, and the shuffle button, are bare icons with a fill on hover. Drawn
+ * with alpha, as they sit over Mica. Shuffle, while on, is in the accent colour with a dot
+ * under it, as Windows' Media Player shows its toggles. */
 static void draw_button(const DRAWITEMSTRUCT *dis) {
   static const wchar_t glyphs[NUM_BUTTONS] = {0xE892, 0xE768, 0xE893}; /* Previous, Play, Next */
   RECT rc = {0, 0, dis->rcItem.right - dis->rcItem.left, dis->rcItem.bottom - dis->rcItem.top};
@@ -442,7 +452,7 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   if (!canvas_reserve(c, rc.right, rc.bottom)) return;
   canvas_clear(c, &rc, theme.frame, theme.mica ? 0 : 255);
 
-  int index = (int)dis->CtlID - ID_PREV;
+  BOOL shuffle = dis->CtlID == ID_SHUFFLE, on = shuffle && playback_shuffle();
   BOOL pressed = (dis->itemState & ODS_SELECTED) != 0, disabled = (dis->itemState & ODS_DISABLED) != 0;
   control_state state = disabled ? STATE_NORMAL
                         : pressed ? STATE_PRESSED
@@ -451,9 +461,18 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   int radius = scale(6);
   COLORREF color = theme_draw_state(c, &rc, radius, state);
   if (disabled) color = theme.text3;
-  wchar_t glyph = dis->CtlID == ID_PLAY && playback_is_playing() ? 0xE769 : glyphs[index]; /* Pause */
+  else if (on && state != STATE_PRESSED) color = theme.accent;
+  wchar_t glyph = shuffle ? 0xE8B1                                         /* Shuffle */
+                  : dis->CtlID == ID_PLAY && playback_is_playing() ? 0xE769 /* Pause */
+                                                                   : glyphs[dis->CtlID - ID_PREV];
   canvas_text(c, &glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, g_app.icon_font,
               color);
+  if (on) {
+    int dot = scale(4);
+    RECT r = {(rc.right - dot) / 2, rc.bottom - scale(6) - dot / 2, (rc.right - dot) / 2 + dot, 0};
+    r.bottom = r.top + dot;
+    canvas_fill(c, &r, dot / 2, color, 255);
+  }
   if ((dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT))
     canvas_frame(c, &rc, radius, scale(2), theme.text, 255);
   canvas_blit(c, dis->hDC, dis->rcItem.left, dis->rcItem.top, &rc);
@@ -490,6 +509,13 @@ static void create_controls(void) {
                       .uId = (UINT_PTR)g_app.buttons[i], .lpszText = (wchar_t *)labels[i]};
     SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   }
+  /* Its name and tooltip say whether it's on (see playback_changed()), as an owner-drawn
+   * button can't be a checkbox. */
+  g_app.shuffle = child(WC_BUTTONW, mc_wstr(MC_STR_SHUFFLE_OFF), BS_OWNERDRAW, ID_SHUFFLE);
+  SetWindowSubclass(g_app.shuffle, button_proc, 0, 0);
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_IDISHWND | TTF_SUBCLASS, .hwnd = g_app.wnd,
+                    .uId = (UINT_PTR)g_app.shuffle, .lpszText = (wchar_t *)mc_wstr(MC_STR_SHUFFLE_OFF)};
+  SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
 
   g_app.sidebar = sidebar_create(g_app.wnd, ID_SIDEBAR);
 
@@ -508,17 +534,17 @@ static void create_controls(void) {
   device_view_create(g_app.wnd, &host);
 }
 
-/* Plays the shown album or playlist in order, from track start on. Tracks with no file on
- * this device are left out of the queue. Playing it puts it first in the recents, as on
- * Android. */
+/* Plays the shown album or playlist in order, from track start on; or with start -1 from
+ * the first track, which shuffled is any. Tracks with no file on this device are left out of
+ * the queue. Playing it puts it first in the recents, as on Android. */
 static void play_album(int start) {
-  int n = track_list_count(), count = 0, first = 0;
+  int n = track_list_count(), count = 0, first = start < 0 ? -1 : 0;
   playback_track *queue = n ? calloc((size_t)n, sizeof *queue) : NULL;
   if (!queue) return;
   for (int i = 0; i < n; i++) {
     track_list_item t = track_list_item_at(i);
     if (!t.path) continue;
-    if (i <= start) first = count;
+    if (start >= 0 && i <= start) first = count;
     queue[count++] = (playback_track){t.uid, t.path, t.title, t.artist, t.album, t.cover_dir, t.duration_ms};
   }
   if (count) playback_play(queue, count, first);
@@ -530,15 +556,34 @@ static void play_album(int start) {
     refresh_recents();
 }
 
-/* The Play button turns into Pause while playing. */
+/* A button's name, for screen readers, and its tooltip. */
+static void set_button_label(HWND button, const wchar_t *label) {
+  SetWindowTextW(button, label);
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)button, .lpszText = (wchar_t *)label};
+  SendMessageW(g_app.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+  InvalidateRect(button, NULL, FALSE);
+}
+
+/* The Play button turns into Pause while playing; Shuffle shows whether it's on. */
 static void playback_changed(void) {
   update_buttons();
-  HWND play = g_app.buttons[ID_PLAY - ID_PREV];
-  const wchar_t *label = mc_wstr(playback_is_playing() ? MC_STR_PAUSE : MC_STR_PLAY);
-  SetWindowTextW(play, label); /* for screen readers */
-  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)play, .lpszText = (wchar_t *)label};
-  SendMessageW(g_app.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
-  InvalidateRect(play, NULL, FALSE);
+  set_button_label(g_app.buttons[ID_PLAY - ID_PREV], mc_wstr(playback_is_playing() ? MC_STR_PAUSE : MC_STR_PLAY));
+  set_button_label(g_app.shuffle, mc_wstr(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
+}
+
+/* Shuffle on or off, kept in the settings for next time. */
+static void set_shuffle(BOOL on) {
+  if (!on == !playback_shuffle()) return;
+  playback_set_shuffle(on);
+  mc_settings_set_shuffle(g_app.settings, on);
+  mc_settings_save(g_app.settings); /* failing, it's saved with the next setting */
+}
+
+/* The track list's Play and Shuffle buttons: the whole album or playlist, in order from the
+ * first track, or shuffled. */
+static void play_all(BOOL shuffled) {
+  set_shuffle(shuffled);
+  play_album(shuffled ? -1 : 0);
 }
 
 /* The track list's requests to change a playlist (see track_list.h). */
@@ -889,13 +934,17 @@ static void on_command(int id, int code) {
       playback_previous();
       break;
     case ID_PLAY:
-      if (!playback_toggle()) play_album(0); /* nothing queued yet: the album that's shown */
+      if (!playback_toggle()) play_album(-1); /* nothing queued yet: the album that's shown */
       break;
     case ID_NEXT:
       playback_next();
       break;
+    case ID_SHUFFLE:
+      set_shuffle(!playback_shuffle());
+      break;
     case ID_TRACKS:
       if (code == TLN_PLAY) play_album(track_list_play_index());
+      else if (code == TLN_PLAY_ALL || code == TLN_SHUFFLE_ALL) play_all(code == TLN_SHUFFLE_ALL);
       else if (code == TLN_CLOSE) { /* unselecting the album hides the list */
         album_grid_unselect();
         SetFocus(g_app.grid);
@@ -926,6 +975,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       playback_init(wnd, playback_changed);
       theme_apply_window(wnd, TRUE);
       create_controls();
+      playback_set_shuffle(mc_settings_shuffle(g_app.settings)); /* as it was left */
       update_font();
       apply_theme();
       /* No focus rectangles until the keyboard is used (dialogs do this for themselves). */
@@ -991,7 +1041,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DRAWITEM: {
       const DRAWITEMSTRUCT *dis = (const DRAWITEMSTRUCT *)lp;
-      if (dis->CtlID >= ID_PREV && dis->CtlID < ID_PREV + NUM_BUTTONS) draw_button(dis);
+      if ((dis->CtlID >= ID_PREV && dis->CtlID < ID_PREV + NUM_BUTTONS) || dis->CtlID == ID_SHUFFLE) draw_button(dis);
       else device_view_draw_item(dis);
       return TRUE;
     }

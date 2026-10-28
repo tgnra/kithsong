@@ -26,6 +26,9 @@ enum {
   CLOSE = 32,     /* the close button's square */
   CLOSE_TOP = 12,
   CLOSE_RIGHT = 12,
+  ACTIONS_GAP = 16, /* between the cover and the Play and Shuffle buttons */
+  ACTION_H = 32,
+  ACTION_GAP = 8, /* between Play and Shuffle */
   HEADER_BOTTOM = 18,
   ROW_H = 36,
   INSET = 8,   /* rows' fill from the edges */
@@ -89,7 +92,9 @@ static struct {
   int count;
   BOOL close_hot, close_pressed;
 
-  int header_h; /* the fixed part above the rows */
+  int header_h;    /* the fixed part above the rows */
+  int actions_top; /* the Play and Shuffle buttons' */
+  int action_hot, action_pressed; /* 0 Play, 1 Shuffle, or -1 */
   int hot, selected;
   BOOL tracking;
   BOOL more_hot, more_open; /* the playlist menu's button */
@@ -161,7 +166,8 @@ static void relayout(void) {
   RECT rc;
   GetClientRect(s.wnd, &rc);
   int text_h = 2 * font_height(s.title_font) + font_height(s.font) + font_height(s.sub_font) + 2 * scale(LINE_GAP);
-  s.header_h = scale(PAD_TOP) + max(scale(COVER), text_h) + scale(HEADER_BOTTOM);
+  s.actions_top = scale(PAD_TOP) + max(scale(COVER), text_h) + scale(ACTIONS_GAP);
+  s.header_h = s.actions_top + scale(ACTION_H) + scale(HEADER_BOTTOM);
   RECT view = {0, s.header_h + 1, rc.right, rc.bottom}; /* below the header's divider */
   scroller_resize(&s.scroll, &view, s.count * scale(ROW_H) + 2 * scale(INSET));
   if (s.tooltip) {
@@ -182,6 +188,44 @@ static RECT more_rect(void) {
   RECT r = close_rect();
   OffsetRect(&r, -(scale(CLOSE) + scale(MORE_GAP)), 0);
   return r;
+}
+
+/* Play (0) and Shuffle (1), side by side under the cover, half the width each. */
+static RECT action_rect(int i) {
+  RECT rc;
+  GetClientRect(s.wnd, &rc);
+  int left = scale(PAD_X), right = max(left, rc.right - scale(PAD_X));
+  int half = max(0, (right - left - scale(ACTION_GAP)) / 2);
+  RECT r = {i ? right - half : left, s.actions_top, i ? right : left + half, s.actions_top + scale(ACTION_H)};
+  return r;
+}
+
+/* Whether any shown track can be played here: Play and Shuffle are greyed out otherwise. */
+static BOOL playable(void) {
+  for (int i = 0; i < s.count; i++)
+    if (s.rows[i].path) return TRUE;
+  return FALSE;
+}
+
+static int action_at(int x, int y) {
+  POINT pt = {x, y};
+  for (int i = 0; i < 2; i++) {
+    RECT r = action_rect(i);
+    if (PtInRect(&r, pt)) return playable() ? i : -1;
+  }
+  return -1;
+}
+
+static void invalidate_actions(void) {
+  RECT r = action_rect(0), shuffle = action_rect(1);
+  UnionRect(&r, &r, &shuffle);
+  InvalidateRect(s.wnd, &r, FALSE);
+}
+
+static void set_action_hot(int i) {
+  if (i == s.action_hot) return;
+  s.action_hot = i;
+  invalidate_actions();
 }
 
 static void invalidate_row(int i) {
@@ -330,7 +374,7 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
   s.lib = lib;
   s.album_uid[0] = '\0';
   s.playlist = playlist;
-  s.hot = s.selected = -1;
+  s.hot = s.selected = s.action_hot = -1;
   s.more_hot = FALSE;
   if (!same) s.scroll.pos = s.scroll.target = 0;
 
@@ -675,8 +719,53 @@ static void paint_more(canvas *c) {
   DrawTextW(c->dc, L"\xE712", 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); /* More */
 }
 
+/* Play, an accent button as Windows 11's main action is, and Shuffle, a standard one beside
+ * it: an icon and a label, centred together. */
+static void paint_action(canvas *c, int i) {
+  RECT r = action_rect(i);
+  if (r.right <= r.left) return;
+  int radius = scale(RADIUS);
+  BOOL enabled = playable();
+  control_state state = !enabled ? STATE_NORMAL
+                        : s.action_pressed == i && s.action_hot == i ? STATE_PRESSED
+                        : s.action_hot == i || s.action_pressed == i ? STATE_HOT
+                                                                     : STATE_NORMAL;
+  COLORREF ink = theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), fg;
+  if (!enabled) {
+    canvas_fill(c, &r, radius, ink, theme.high_contrast ? 0 : 15);
+    if (theme.high_contrast) canvas_frame(c, &r, radius, 1, theme.text3, 255);
+    fg = theme.text3;
+  } else if (i == 0) {
+    int alpha = theme.high_contrast ? 255 : state == STATE_PRESSED ? 205 : state == STATE_HOT ? 230 : 255;
+    canvas_fill(c, &r, radius, theme.accent, alpha);
+    if (theme.high_contrast && state != STATE_NORMAL) canvas_frame(c, &r, radius, scale(2), theme.text, 255);
+    fg = theme.on_accent;
+  } else {
+    if (!theme.high_contrast) canvas_fill(c, &r, radius, ink, theme.dark ? 15 : 6);
+    fg = theme_draw_state(c, &r, radius, state);
+    canvas_frame(c, &r, radius, 1, theme.high_contrast ? theme.text : theme.line, 255);
+  }
+
+  const wchar_t *glyph = i ? L"\xE8B1" : L"\xE768"; /* Shuffle, Play */
+  const wchar_t *label = mc_wstr(i ? MC_STR_SHUFFLE : MC_STR_PLAY);
+  SIZE icon = {0}, text = {0};
+  SelectObject(c->dc, s.icon_font);
+  GetTextExtentPoint32W(c->dc, glyph, 1, &icon);
+  SelectObject(c->dc, s.font);
+  GetTextExtentPoint32W(c->dc, label, (int)wcslen(label), &text);
+  int gap = scale(8), x = r.left + max(0, (int)(r.right - r.left - icon.cx - gap - text.cx) / 2);
+  UINT one_line = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX;
+  RECT at = {x, r.top, x + icon.cx, r.bottom};
+  SetTextColor(c->dc, fg);
+  SelectObject(c->dc, s.icon_font);
+  DrawTextW(c->dc, glyph, 1, &at, one_line);
+  SetRect(&at, at.right + gap, r.top, r.right - scale(4), r.bottom);
+  SelectObject(c->dc, s.font);
+  DrawTextW(c->dc, label, -1, &at, one_line | DT_END_ELLIPSIS);
+}
+
 /* The cover, the title (up to two lines), artist and summary beside it, the playlist menu's
- * button for a playlist, and the close button. */
+ * button for a playlist, the close button, and Play and Shuffle under them. */
 static void paint_header(canvas *c, int w) {
   RECT cover = {scale(PAD_X), scale(PAD_TOP), scale(PAD_X + COVER), scale(PAD_TOP + COVER)};
   if (s.art_px) {
@@ -722,6 +811,8 @@ static void paint_header(canvas *c, int w) {
   SelectObject(c->dc, s.sub_font);
   SetTextColor(c->dc, theme.text2);
   DrawTextW(c->dc, s.summary, -1, &sub, one_line);
+  paint_action(c, 0);
+  paint_action(c, 1);
 
   RECT divider = {0, s.header_h, w, s.header_h + 1};
   canvas_clear(c, &divider, theme.line, 255);
@@ -827,6 +918,7 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       }
       set_close_hot(in_close(x, y));
       set_more_hot(on_more(x, y));
+      set_action_hot(action_at(x, y));
       set_hot(scroller_mouse_move(&s.scroll, x, y) ? -1 : row_at(x, y));
       return 0;
     }
@@ -836,10 +928,23 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       set_hot(-1);
       set_more_hot(FALSE);
       if (!s.close_pressed) set_close_hot(FALSE);
+      if (s.action_pressed < 0) set_action_hot(-1);
       return 0;
     case WM_LBUTTONDOWN:
-    case WM_RBUTTONDOWN: {
-      int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+    case WM_RBUTTONDOWN:
+    case WM_LBUTTONDBLCLK: {
+      int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp), action = action_at(x, y);
+      if (msg != WM_RBUTTONDOWN && action >= 0) { /* Play or Shuffle: acts on release */
+        s.action_pressed = action;
+        SetCapture(wnd);
+        invalidate_actions();
+        return 0;
+      }
+      if (msg == WM_LBUTTONDBLCLK) {
+        int i = row_at(x, y);
+        if (i >= 0) play(i);
+        return 0;
+      }
       if (msg == WM_LBUTTONDOWN && in_close(x, y)) { /* acts on release, like a button */
         s.close_pressed = TRUE;
         SetCapture(wnd);
@@ -863,12 +968,14 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       }
       return 0;
     }
-    case WM_LBUTTONDBLCLK: {
-      int i = row_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
-      if (i >= 0) play(i);
-      return 0;
-    }
     case WM_LBUTTONUP:
+      if (s.action_pressed >= 0) {
+        int action = s.action_pressed;
+        BOOL clicked = action_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)) == action;
+        ReleaseCapture(); /* WM_CAPTURECHANGED clears action_pressed */
+        if (clicked) notify(action ? TLN_SHUFFLE_ALL : TLN_PLAY_ALL);
+        return 0;
+      }
       if (s.close_pressed) {
         BOOL clicked = in_close(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         ReleaseCapture(); /* WM_CAPTURECHANGED clears close_pressed */
@@ -884,6 +991,10 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
         s.close_pressed = FALSE;
         RECT r = close_rect();
         InvalidateRect(wnd, &r, FALSE);
+      }
+      if (s.action_pressed >= 0) {
+        s.action_pressed = -1;
+        invalidate_actions();
       }
       scroller_capture_changed(&s.scroll);
       return 0;
@@ -963,7 +1074,7 @@ HWND track_list_create(HWND parent, int id) {
 
   memset(&s, 0, sizeof s);
   s.dpi = USER_DEFAULT_SCREEN_DPI;
-  s.hot = s.selected = s.drag_row = s.drop_at = -1;
+  s.hot = s.selected = s.drag_row = s.drop_at = s.action_hot = s.action_pressed = -1;
   s.scroll.moved = on_scrolled;
   return CreateWindowExW(0, L"musicapp_tracklist", NULL, WS_CHILD, 0, 0, 0, 0, parent,
                          (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);

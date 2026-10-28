@@ -44,8 +44,13 @@ BOOL playback_window_message(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result);
 /* Stops playing and empties the queue, letting go of the file that was playing; for before
  * the library's files move. */
 void playback_clear(void);
-/* Replaces the queue and plays tracks[start]. */
+/* Replaces the queue and plays tracks[start], or with start -1 the first track (shuffled,
+ * any track). */
 void playback_play(const playback_track *tracks, int count, int start);
+/* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to
+ * whatever is queued next. Off to begin with; main.c keeps it in the settings. */
+void playback_set_shuffle(BOOL on);
+BOOL playback_shuffle(void);
 /* Pauses or resumes. Returns FALSE if nothing has been queued. */
 BOOL playback_toggle(void);
 void playback_next(void);
@@ -53,7 +58,7 @@ void playback_previous(void);
 void playback_seek(int ms);
 
 BOOL playback_is_playing(void);
-/* Whether there's a current track, and one after it. */
+/* Whether there's a current track, and one after it (always, shuffled). */
 BOOL playback_has_current(void);
 BOOL playback_has_next(void);
 

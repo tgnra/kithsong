@@ -60,6 +60,8 @@ static void test_settings(const char *base) {
   mc_settings *s = NULL;
   CHECK(mc_settings_load(dir, &s) == MC_OK);
   CHECK(mc_settings_library_dir(s) == NULL);
+  CHECK(!mc_settings_shuffle(s));
+  CHECK(mc_settings_set_shuffle(s, 1) == MC_OK);
   CHECK(mc_settings_set_library_dir(s, "C:\\Users\\Me\\Music") == MC_OK);
   CHECK(mc_settings_set_library_dir(s, "D:\\M\xC3\xBAsica") == MC_OK); /* replaces */
   CHECK(mc_settings_save(s) == MC_OK);
@@ -68,6 +70,7 @@ static void test_settings(const char *base) {
   s = NULL;
   CHECK(mc_settings_load(dir, &s) == MC_OK);
   CHECK_STR(mc_settings_library_dir(s), "D:\\M\xC3\xBAsica");
+  CHECK(mc_settings_shuffle(s));
   mc_settings_free(s);
 
   /* Keys from a newer version survive a save; a damaged file is treated as empty. */

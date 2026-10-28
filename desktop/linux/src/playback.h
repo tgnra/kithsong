@@ -37,8 +37,13 @@ void playback_set_library(mc_library *lib, const char *config_dir);
 /* Stops playing and empties the queue, letting go of the file that was playing; for before
  * the library's files move. */
 void playback_clear(void);
-/* Replaces the queue and plays tracks[start]. */
+/* Replaces the queue and plays tracks[start], or with start -1 the first track (shuffled,
+ * any track). */
 void playback_play(const playback_track *tracks, int count, int start);
+/* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to
+ * whatever is queued next. Off to begin with; main.c keeps it in the settings. */
+void playback_set_shuffle(gboolean on);
+gboolean playback_shuffle(void);
 /* Pauses or resumes. Returns FALSE if nothing has been queued. */
 gboolean playback_toggle(void);
 void playback_resume(void);
@@ -50,7 +55,7 @@ void playback_seek(int64_t ms);
 
 gboolean playback_is_playing(void);
 mc_player_state playback_state(void);
-/* Whether there's a current track, and one after it. */
+/* Whether there's a current track, and one after it (always, shuffled). */
 gboolean playback_has_current(void);
 gboolean playback_has_next(void);
 int64_t playback_position_ms(void);

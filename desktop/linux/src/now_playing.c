@@ -12,9 +12,10 @@ enum {
 
 static struct {
   void (*seek)(void *user, int ms);
+  void (*shuffle)(void *user, gboolean on);
   void *user;
 
-  GtkWidget *picture, *title, *cur, *left, *bar;
+  GtkWidget *picture, *title, *cur, *left, *bar, *shuffle_button;
   GCancellable *cover_loading;
   gboolean playing; /* there's a track */
   int duration_ms;
@@ -87,6 +88,13 @@ static gboolean on_bar_event(GtkEventControllerLegacy *controller, GdkEvent *eve
   return FALSE;
 }
 
+static void on_shuffle_toggled(GtkToggleButton *button, gpointer user) {
+  (void)user;
+  gboolean on = gtk_toggle_button_get_active(button);
+  gtk_widget_set_tooltip_text(GTK_WIDGET(button), mc_str(on ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
+  if (!s.updating && s.shuffle) s.shuffle(s.user, on);
+}
+
 static GtkWidget *time_label(void) {
   GtkWidget *l = gtk_label_new("0:00");
   gtk_widget_add_css_class(l, "numeric");
@@ -95,9 +103,10 @@ static GtkWidget *time_label(void) {
   return l;
 }
 
-GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void *user) {
+GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(void *user, gboolean on), void *user) {
   memset(&s, 0, sizeof s);
   s.seek = seek;
+  s.shuffle = shuffle;
   s.user = user;
 
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
@@ -133,6 +142,19 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void *user) {
   gtk_box_append(GTK_BOX(row), s.left);
   gtk_box_append(GTK_BOX(right), row);
   gtk_box_append(GTK_BOX(box), right);
+
+  /* Doesn't take the focus when clicked, like the playback buttons, so Space still plays. */
+  s.shuffle_button = gtk_toggle_button_new();
+  gtk_button_set_icon_name(GTK_BUTTON(s.shuffle_button), "media-playlist-shuffle-symbolic");
+  gtk_widget_add_css_class(s.shuffle_button, "flat");
+  gtk_widget_add_css_class(s.shuffle_button, "shuffle");
+  gtk_widget_set_valign(s.shuffle_button, GTK_ALIGN_CENTER);
+  gtk_widget_set_focus_on_click(s.shuffle_button, FALSE);
+  gtk_widget_set_tooltip_text(s.shuffle_button, mc_str(MC_STR_SHUFFLE_OFF));
+  gtk_accessible_update_property(GTK_ACCESSIBLE(s.shuffle_button), GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                 mc_str(MC_STR_SHUFFLE), -1);
+  g_signal_connect(s.shuffle_button, "toggled", G_CALLBACK(on_shuffle_toggled), NULL);
+  gtk_box_append(GTK_BOX(box), s.shuffle_button);
 
   now_playing_show(NULL, NULL, 0, NULL);
   return box;
@@ -181,6 +203,13 @@ void now_playing_show(const char *title, const char *artist, int duration_ms, co
   }
   gtk_picture_set_paintable(GTK_PICTURE(s.picture), GDK_PAINTABLE(texture));
   g_clear_object(&texture);
+}
+
+void now_playing_set_shuffle(gboolean on) {
+  if (!s.shuffle_button) return;
+  s.updating = TRUE;
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s.shuffle_button), on);
+  s.updating = FALSE;
 }
 
 void now_playing_set_position(int ms) {

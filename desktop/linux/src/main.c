@@ -1,7 +1,7 @@
 /* GTK4 + libadwaita frontend. Layout:
  *
  *   AdwToolbarView
- *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar  [import][settings]
+ *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar [shuffle]  [import][settings]
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Recents / Devices)
  *      +- GtkStack of pages: "library" | "search" (search_view.c) | "import" (import_view.c)
  *         | "device" (device_view.c)
@@ -18,7 +18,8 @@
  * its Devices section and sync are devices.c, which adds a device's page (device_view.c) to
  * the stack of pages as "device". The playback buttons
  * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
- * the actions'.
+ * the actions'. Shuffle, which the strip's toggle and the track list's Play and Shuffle set,
+ * is kept in settings.json.
  */
 #include <adwaita.h>
 #include <math.h>
@@ -49,6 +50,7 @@ static const char css[] =
   ".track-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
   ".track-list > row.drop-below { box-shadow: inset 0 -2px @accent_bg_color; }"
   ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }"
+  ".now-playing .shuffle:checked { color: @accent_color; }"
   ".pair-code { font-size: 20pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
   ".pair-code-shown { font-size: 32pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
   ".sync-picker { background: none; }"
@@ -335,7 +337,7 @@ static void on_previous(GSimpleAction *action, GVariant *param, gpointer user) {
 static void on_play_pause(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
-  if (!playback_toggle()) app_play_album(user, 0); /* nothing queued yet: the album that's shown */
+  if (!playback_toggle()) app_play_album(user, -1); /* nothing queued yet: the album that's shown */
 }
 
 static void on_next(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -363,18 +365,32 @@ static void on_seek(void *user, int ms) {
   playback_seek(ms);
 }
 
-/* Plays the shown album or playlist in order, from track start on. Tracks with no file on
- * this device are left out of the queue. Playing it puts it first in the recents, as on
- * Android and Windows. */
+/* Shuffle on or off, kept in settings.json for next time. */
+static void set_shuffle(app *a, gboolean on) {
+  if (!on == !playback_shuffle()) return;
+  playback_set_shuffle(on);
+  mc_settings *settings = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) != MC_OK) return;
+  if (mc_settings_set_shuffle(settings, on) == MC_OK) mc_settings_save(settings);
+  mc_settings_free(settings);
+}
+
+static void on_shuffle(void *user, gboolean on) {
+  set_shuffle(user, on);
+}
+
+/* Plays the shown album or playlist in order, from track start on; or with start -1 from
+ * the first track, which shuffled is any. Tracks with no file on this device are left out of
+ * the queue. Playing it puts it first in the recents, as on Android and Windows. */
 void app_play_album(app *a, int start) {
-  int n = track_list_count(), count = 0, first = 0;
+  int n = track_list_count(), count = 0, first = start < 0 ? -1 : 0;
   AlbumItem *album = track_list_album();
   if (!album || !n) return;
   playback_track *queue = g_new0(playback_track, (gsize)n);
   for (int i = 0; i < n; i++) {
     track_list_item t = track_list_item_at(i);
     if (!t.path) continue;
-    if (i <= start) first = count;
+    if (start >= 0 && i <= start) first = count;
     queue[count++] = (playback_track){t.uid, t.path, t.title, t.artist, t.album, t.cover_dir, t.duration_ms};
   }
   if (count) playback_play(queue, count, first);
@@ -405,6 +421,13 @@ static void on_album_changed(void *user) {
 
 static void on_track_play(void *user, int index) {
   app_play_album(user, index);
+}
+
+/* The track list's Play and Shuffle: the whole album or playlist, in order from the first
+ * track, or shuffled. */
+static void on_track_play_all(void *user, gboolean shuffled) {
+  set_shuffle(user, shuffled);
+  app_play_album(user, shuffled ? -1 : 0);
 }
 
 static void on_tracks_close(void *user) {
@@ -686,7 +709,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   gtk_widget_set_hexpand(clamp, TRUE);
   gtk_widget_set_margin_start(clamp, 12);
   gtk_widget_set_margin_end(clamp, 12);
-  adw_clamp_set_child(ADW_CLAMP(clamp), now_playing_new(on_seek, a));
+  adw_clamp_set_child(ADW_CLAMP(clamp), now_playing_new(on_seek, on_shuffle, a));
   adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), clamp);
 
   /* Right-hand track pane: hidden until an album is selected. */
@@ -695,8 +718,8 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_overlay_split_view_set_sidebar_position(a->album_split, GTK_PACK_END);
   adw_overlay_split_view_set_min_sidebar_width(a->album_split, 320);
   adw_overlay_split_view_set_max_sidebar_width(a->album_split, 420);
-  const track_list_callbacks tracks_cb = {on_track_play, on_tracks_close, on_track_add_to_playlist, on_track_remove,
-                                          on_track_move, on_playlist_rename, on_playlist_delete, a};
+  const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
+                                          on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
   adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);
@@ -745,6 +768,9 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
 
   playback_init(a->win, playback_changed, a);
   playback_set_library(a->lib, a->settings_dir);
+  mc_settings *settings = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) == MC_OK) playback_set_shuffle(mc_settings_shuffle(settings));
+  mc_settings_free(settings); /* shuffle as it was left */
 
   mpris_init(gapp, a->win);
   prune_art(a);

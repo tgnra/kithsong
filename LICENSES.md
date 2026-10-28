@@ -20,6 +20,7 @@ dependency is added.
 | libopus | 1.5.2 | BSD-3-Clause (plus royalty-free patent grants) | fetched, static |
 | libopusenc | 0.2.1 | BSD-3-Clause | fetched, static (includes the Speex resampler, BSD-3-Clause) |
 | opusfile | 0.12 | BSD-3-Clause | fetched, static, without its HTTP support |
+| Miller Shuffle (`MillerShuffle_Large`) | Jan 2026 update ([RondeSC/Miller_Shuffle_Algo](https://github.com/RondeSC/Miller_Shuffle_Algo)) | Apache-2.0 | reimplemented in `core/src/playback/shuffle.c` (one function, adapted) |
 
 Planned:
 
@@ -33,6 +34,12 @@ Planned:
   source of TagLib's own files (including any modifications) to stay available, so static
   linking into a closed or open app is fine. If the LGPL option is used instead, static
   linking requires shipping relinkable object files.
-- **Apache-2.0 (Mbed TLS), MIT (yyjson), curl, BSL (utfcpp), MPL (CA bundle), BSD-3-Clause
-  (libogg, libopus, libopusenc, opusfile)**: include their license texts in an "About /
-  Licenses" screen or a `LICENSES` folder in each distributed package.
+- **Apache-2.0 (Mbed TLS, Miller Shuffle), MIT (yyjson), curl, BSL (utfcpp), MPL (CA bundle),
+  BSD-3-Clause (libogg, libopus, libopusenc, opusfile)**: include their license texts in an
+  "About / Licenses" screen or a `LICENSES` folder in each distributed package.
+- **Miller Shuffle** (Copyright 2022 Ronald R. Miller): the repository's LICENSE is
+  Apache-2.0, and so is the link in `MillerShuffle.c`'s header, though that header's
+  "license:" line still reads "Attribution-NonCommercial-ShareAlike" from an earlier
+  version. We go by the LICENSE file. Apache-2.0 asks that changed files say so:
+  `shuffle.c` credits the original and lists the changes (its static state worked out per
+  call, so it's thread-safe; n = 0 for 2^32 items dropped). The project has no NOTICE file.

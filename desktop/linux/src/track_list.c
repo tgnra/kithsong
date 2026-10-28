@@ -1,5 +1,6 @@
 #include "track_list.h"
 
+#include <adwaita.h>
 #include <string.h>
 
 #include "cover.h"
@@ -75,6 +76,7 @@ static struct {
   char menu_entry[MC_UID_STRLEN]; /* and its playlist entry, or "" */
   guint menu_pos;
   GtkWidget *playlist_button;     /* the header's menu, shown for playlists */
+  GtkWidget *actions;             /* Play and Shuffle */
   char playing_uid[MC_UID_STRLEN];
 } s;
 
@@ -281,6 +283,37 @@ static void on_activate(GtkListView *view, guint position, gpointer user) {
   if (s.cb.play) s.cb.play(s.cb.user, (int)position);
 }
 
+static void on_play_all(GtkButton *button, gpointer user) {
+  (void)button;
+  if (s.cb.play_all) s.cb.play_all(s.cb.user, GPOINTER_TO_INT(user));
+}
+
+/* A button with an icon and a label, half the row's width. */
+static GtkWidget *action_button(const char *icon, const char *label, gboolean shuffled) {
+  GtkWidget *content = adw_button_content_new();
+  adw_button_content_set_icon_name(ADW_BUTTON_CONTENT(content), icon);
+  adw_button_content_set_label(ADW_BUTTON_CONTENT(content), label);
+  GtkWidget *b = gtk_button_new();
+  gtk_button_set_child(GTK_BUTTON(b), content);
+  gtk_widget_set_hexpand(b, TRUE);
+  g_signal_connect(b, "clicked", G_CALLBACK(on_play_all), GINT_TO_POINTER(shuffled));
+  return b;
+}
+
+/* Play, the suggested action, and Shuffle, side by side under the header. */
+static GtkWidget *build_actions(void) {
+  s.actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_box_set_homogeneous(GTK_BOX(s.actions), TRUE);
+  gtk_widget_set_margin_start(s.actions, 18);
+  gtk_widget_set_margin_end(s.actions, 18);
+  gtk_widget_set_margin_bottom(s.actions, 18);
+  GtkWidget *play = action_button("media-playback-start-symbolic", mc_str(MC_STR_PLAY), FALSE);
+  gtk_widget_add_css_class(play, "suggested-action");
+  gtk_box_append(GTK_BOX(s.actions), play);
+  gtk_box_append(GTK_BOX(s.actions), action_button("media-playlist-shuffle-symbolic", mc_str(MC_STR_SHUFFLE), TRUE));
+  return s.actions;
+}
+
 static void on_close(GtkWidget *widget, gpointer user) {
   (void)widget;
   (void)user;
@@ -304,7 +337,7 @@ static GtkWidget *build_header(void) {
   gtk_widget_set_margin_start(header, 18);
   gtk_widget_set_margin_end(header, 12);
   gtk_widget_set_margin_top(header, 18);
-  gtk_widget_set_margin_bottom(header, 18);
+  gtk_widget_set_margin_bottom(header, 16); /* then Play and Shuffle */
   gtk_box_append(GTK_BOX(header), cover_frame_new(HEADER_COVER, HEADER_COVER / 3, &s.cover));
 
   GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
@@ -473,6 +506,7 @@ GtkWidget *track_list_new(const track_list_callbacks *cb) {
 
   GtkWidget *pane = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_box_append(GTK_BOX(pane), build_header());
+  gtk_box_append(GTK_BOX(pane), build_actions());
   gtk_box_append(GTK_BOX(pane), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
   gtk_box_append(GTK_BOX(pane), s.scroller);
   s.pane = pane;
@@ -525,7 +559,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
                             : mc_library_list_album_tracks(lib, album->uid, &list);
   if (st != MC_OK) list = NULL;
   int n = list ? list->count : 0, total_ms = 0;
-  gboolean discs = FALSE;
+  gboolean discs = FALSE, playable = FALSE;
   for (int i = 0; i < n; i++) discs |= list->items[i].disc_no > 1;
   TrackItem **items = g_new0(TrackItem *, (gsize)n + 1);
   guint selected = GTK_INVALID_LIST_POSITION;
@@ -541,6 +575,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
     format_duration(t->duration_ms, it->duration, sizeof it->duration);
     it->duration_ms = t->duration_ms;
     it->path = g_strdup(t->path);
+    playable |= t->path != NULL;
     it->artist = g_strdup(t->artist);
     it->album = g_strdup(t->album);
     it->cover_dir = g_strdup(t->cover_dir);
@@ -561,6 +596,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
                                                                    : mc_str(MC_STR_UNKNOWN_ARTIST));
   set_summary(album ? album->year : 0, n, total_ms);
   gtk_widget_set_visible(s.playlist_button, album && album->is_playlist);
+  gtk_widget_set_sensitive(s.actions, playable);
   if (!same) gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(s.scroller)), 0);
   if (new_cover) {
     if (s.cover_loading) g_cancellable_cancel(s.cover_loading);

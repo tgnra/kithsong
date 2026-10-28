@@ -123,3 +123,14 @@ mc_status mc_settings_set_device_name(mc_settings *s, const char *name) {
   if (!name || !*name) return MC_OK;
   return yyjson_mut_obj_add_strcpy(s->doc, root, "device_name", name) ? MC_OK : MC_ERR_NOMEM;
 }
+
+int mc_settings_shuffle(const mc_settings *s) {
+  return s && yyjson_mut_get_bool(yyjson_mut_obj_get(yyjson_mut_doc_get_root(s->doc), "shuffle"));
+}
+
+mc_status mc_settings_set_shuffle(mc_settings *s, int on) {
+  if (!s) return MC_ERR_INVALID_ARG;
+  yyjson_mut_val *root = yyjson_mut_doc_get_root(s->doc);
+  yyjson_mut_obj_remove_key(root, "shuffle");
+  return yyjson_mut_obj_add_bool(s->doc, root, "shuffle", on != 0) ? MC_OK : MC_ERR_NOMEM;
+}
