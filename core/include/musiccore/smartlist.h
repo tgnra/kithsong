@@ -50,10 +50,15 @@ typedef struct mc_smart_info {
 typedef struct mc_smart_list {
   mc_smart_info *items;
   int count;
+  int hidden; /* smart lists MC_LIST_PLAYABLE left out */
 } mc_smart_list;
 
-/* Every smart list of either subject, by name. Free with mc_smart_list_free(). */
-mc_status mc_library_list_smart(mc_library *lib, mc_smart_list **out);
+/* Every smart list of either subject, by name. With MC_LIST_PLAYABLE (library.h) in flags,
+ * only those that hold something to play here: each rule is evaluated, and a list is left out
+ * if it holds no track with a file here (a smart playlist), no album with a file here (a smart
+ * album group), or its rule can't be evaluated (MC_ERR_FORMAT, e.g. from a newer app). Free
+ * with mc_smart_list_free(). */
+mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list **out);
 void mc_smart_list_free(mc_smart_list *list);
 
 /* What a saved smart list holds now. MC_ERR_INVALID_ARG if it's the other subject. Free with

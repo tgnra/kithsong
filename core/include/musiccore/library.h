@@ -111,19 +111,35 @@ mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, m
 mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out);
 void mc_track_list_free(mc_track_list *list);
 
+/* Flags for listing playlists, smart lists and recents.
+ *
+ * MC_LIST_PLAYABLE leaves out what has nothing to play on this device: a playlist none of
+ * whose tracks has a file here (an original, or a copy or transcode sync brought), which
+ * includes an empty one; a smart playlist whose rule picks no such track; a smart album group
+ * with no album that has a file here. "Has a file here" is the same test that gives a
+ * mc_track_info a path, which is what the track lists grey out or hide by. Views that are
+ * about playing (the Playlists page, recents) pass it; pickers that are about choosing (Add to
+ * playlist, a sync profile's playlists) don't, so a playlist that has nothing here yet can
+ * still be added to or synced. A frontend lists again whenever files come or go (an import,
+ * sync bringing or removing files, a delete), as it does for any library change. */
+#define MC_LIST_PLAYABLE 1u
+
 typedef struct mc_playlist_info {
   char uid[MC_UID_STRLEN];
   char *name;
-  int track_count;
+  int track_count;    /* entries, a track that's in it twice counted twice */
+  int playable_count; /* the entries whose track has a file on this device */
 } mc_playlist_info;
 
 typedef struct mc_playlist_list {
   mc_playlist_info *items;
   int count;
+  int hidden; /* playlists MC_LIST_PLAYABLE left out, e.g. to say why the list is empty */
 } mc_playlist_list;
 
-/* Every playlist, by name. Free with mc_playlist_list_free(). */
-mc_status mc_library_list_playlists(mc_library *lib, mc_playlist_list **out);
+/* Every playlist, by name; with MC_LIST_PLAYABLE in flags, only those with a track to play
+ * here. Free with mc_playlist_list_free(). */
+mc_status mc_library_list_playlists(mc_library *lib, unsigned flags, mc_playlist_list **out);
 void mc_playlist_list_free(mc_playlist_list *list);
 
 typedef struct mc_artist_info {
@@ -193,8 +209,10 @@ typedef struct mc_recent_list {
 } mc_recent_list;
 
 /* The recents, most recently opened first, at most limit of them (all if limit <= 0). Items
- * that no longer exist are left out. Free with mc_recent_list_free(). */
-mc_status mc_library_list_recents(mc_library *lib, int limit, mc_recent_list **out);
+ * that no longer exist are left out, and with MC_LIST_PLAYABLE in flags so are playlists and
+ * smart playlists with nothing to play here (as mc_library_list_playlists() and
+ * mc_library_list_smart() leave out; other kinds are kept). Free with mc_recent_list_free(). */
+mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc_recent_list **out);
 void mc_recent_list_free(mc_recent_list *list);
 
 #ifdef __cplusplus

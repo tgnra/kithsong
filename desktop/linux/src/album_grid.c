@@ -260,12 +260,13 @@ int album_grid_reload(GtkWidget *widget, mc_library *lib) {
   return (int)n;
 }
 
-int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib) {
+int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, int *hidden) {
   char keep[MC_UID_STRLEN];
   grid_keep(widget, keep);
   mc_playlist_list *list = NULL;
-  if (lib && mc_library_list_playlists(lib, &list) != MC_OK) list = NULL;
+  if (lib && mc_library_list_playlists(lib, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
   guint n = list ? (guint)list->count : 0;
+  *hidden = list ? list->hidden : 0;
   AlbumItem **items = g_new0(AlbumItem *, n + 1);
   for (guint i = 0; i < n; i++) items[i] = album_item_new_playlist(&list->items[i]);
   mc_playlist_list_free(list);

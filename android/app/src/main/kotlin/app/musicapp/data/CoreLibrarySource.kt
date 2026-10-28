@@ -30,7 +30,9 @@ import java.io.File
  * play once it has played for a while, whereas Recents should show what was tapped at once.
  *
  * Sync brings the whole library's data, but only some of its files may be on this phone, so
- * only what has a file here is listed: albums with a folder here, and tracks with a file.
+ * only what has a file here is listed: albums with a folder here, tracks with a file, and
+ * playlists and smart playlists with at least one such track (the core's MC_LIST_PLAYABLE).
+ * The sync profile editor's choices ([profileChoices]) still list every playlist.
  * Albums and tracks with no artist get [unknownArtist], looked up on every read so that it
  * follows the app's language.
  */
@@ -159,8 +161,9 @@ class CoreLibrarySource(
         }
 
         // Smart playlists sit among the others; smart album groups have no place on this screen.
-        val smart = lib.smartLists().filter { !it.isAlbums }
-        val playlists = lib.playlists().map { info ->
+        // Only those with a track to play here, which also keeps the rest out of Recents.
+        val smart = lib.smartLists(playableOnly = true).filter { !it.isAlbums }
+        val playlists = lib.playlists(playableOnly = true).map { info ->
             val tracks = lib.playlistTracks(info.uid).here()
             Playlist(info.uid, info.name, tracks.size, covers.playlist(info.uid, info.name, tracks))
         } + smart.map { info ->

@@ -550,11 +550,14 @@ void mc_track_list_free(mc_track_list *list) {
   free(list);
 }
 
-mc_status mc_library_list_playlists(mc_library *lib, mc_playlist_list **out) {
+mc_status mc_library_list_playlists(mc_library *lib, unsigned flags, mc_playlist_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
+  /* A track is playable here if it has a file here: the test TRACK_COLS's path makes. */
   static const char sql[] =
-    "SELECT p.uid, p.name, (SELECT count(*) FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
+    "SELECT p.uid, p.name, (SELECT count(*) FROM playlist_entries e WHERE e.playlist_uid = p.uid),"
+    " (SELECT count(*) FROM playlist_entries e WHERE e.playlist_uid = p.uid"
+    "   AND EXISTS (SELECT 1 FROM files f WHERE f.track_uid = e.track_uid))"
     " FROM playlists p ORDER BY p.name COLLATE NOCASE, p.uid";
 
   mc_playlist_list *list = calloc(1, sizeof *list);
@@ -567,11 +570,17 @@ mc_status mc_library_list_playlists(mc_library *lib, mc_playlist_list **out) {
   sqlite3_stmt *stmt = NULL;
   if (st == MC_OK && sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) st = MC_ERR_DB;
   while (st == MC_OK && list->count < total && sqlite3_step(stmt) == SQLITE_ROW) {
+    int playable = sqlite3_column_int(stmt, 3);
+    if ((flags & MC_LIST_PLAYABLE) && playable == 0) {
+      list->hidden++;
+      continue;
+    }
     mc_playlist_info *p = &list->items[list->count++];
     const unsigned char *uid = sqlite3_column_text(stmt, 0);
     if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(p->uid, (const char *)uid);
     p->name = column_dup(stmt, 1);
     p->track_count = sqlite3_column_int(stmt, 2);
+    p->playable_count = playable;
   }
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
@@ -780,14 +789,16 @@ mc_status mc_library_clear_recents(mc_library *lib) {
   return st == MC_ERR_NOT_FOUND ? MC_OK : st;
 }
 
-mc_status mc_library_list_recents(mc_library *lib, int limit, mc_recent_list **out) {
+mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc_recent_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   /* Each kind joins only its own table, so an entry whose item is gone, or of a kind this
    * version doesn't know, matches nothing and is left out. */
   static const char sql[] =
     "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, s.name),"
-    " aar.name, s.uid IS NOT NULL"
+    " aar.name, s.uid IS NOT NULL,"
+    " p.uid IS NULL OR EXISTS (SELECT 1 FROM playlist_entries e JOIN files f ON f.track_uid = e.track_uid"
+    "  WHERE e.playlist_uid = p.uid)"
     " FROM recents r"
     " LEFT JOIN albums al ON r.kind = 'album' AND al.uid = r.uid"
     " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
@@ -803,12 +814,21 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, mc_recent_list **o
   if (!list) return MC_ERR_NOMEM;
   sqlite3_stmt *stmt = NULL;
   mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
-  if (st == MC_OK) sqlite3_bind_int(stmt, 1, limit > 0 ? limit : -1);
+  /* Leaving items out means the limit is counted here rather than in SQL. */
+  int playable_only = (flags & MC_LIST_PLAYABLE) != 0;
+  if (st == MC_OK) sqlite3_bind_int(stmt, 1, limit > 0 && !playable_only ? limit : -1);
   int cap = 0, rc = SQLITE_DONE;
-  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+  while (st == MC_OK && (limit <= 0 || list->count < limit) && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     const char *kind = (const char *)sqlite3_column_text(stmt, 0);
     int k = 0;
     while (k < RECENT_KIND_COUNT && strcmp(kind, k_recent_kinds[k])) k++;
+    if (playable_only && k == MC_RECENT_PLAYLIST) {
+      int playable = sqlite3_column_int(stmt, 6);
+      if (sqlite3_column_int(stmt, 5))
+        st = mc_smart_has_playable(lib, (const char *)sqlite3_column_text(stmt, 1), &playable);
+      if (st != MC_OK) break;
+      if (!playable) continue;
+    }
     if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
       st = MC_ERR_NOMEM;
       break;
@@ -823,7 +843,7 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, mc_recent_list **o
     r->artist = column_dup(stmt, 4);
     r->is_smart = sqlite3_column_int(stmt, 5);
   }
-  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  if (st == MC_OK && rc != SQLITE_DONE && rc != SQLITE_ROW) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
     mc_recent_list_free(list);

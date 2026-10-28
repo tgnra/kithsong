@@ -32,10 +32,11 @@ struct _AlbumItem {
 GtkWidget *album_grid_new(const char *label, void (*changed)(void *user), void *user);
 
 /* Reloads the albums of lib (NULL for none), in mc_library_list_albums() order, or for
- * album_grid_reload_playlists() its playlists. Only what changed is replaced, so the grid
- * keeps its scroll position and selection. Returns the number of tiles. */
+ * album_grid_reload_playlists() its playlists that have a track to play here
+ * (MC_LIST_PLAYABLE), with the number left out in *hidden. Only what changed is replaced, so
+ * the grid keeps its scroll position and selection. Returns the number of tiles. */
 int album_grid_reload(GtkWidget *grid, mc_library *lib);
-int album_grid_reload_playlists(GtkWidget *grid, mc_library *lib);
+int album_grid_reload_playlists(GtkWidget *grid, mc_library *lib, int *hidden);
 
 /* The selected tile's item (borrowed), or NULL. */
 AlbumItem *album_grid_selection(GtkWidget *grid);

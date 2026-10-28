@@ -45,6 +45,8 @@
     "library_open_failed": "Couldn't open the library",
     "no_playlists_title": "No playlists yet",
     "no_playlists_text": "Right-click a track and choose Add to playlist to start one.",
+    "no_playable_playlists_title": { "text": "No playlists to play here", "note": "The Playlists page when the library has playlists but none has a track on this device (the others are hidden)." },
+    "no_playable_playlists_text": "None of this library's playlists has a track on this device yet. They'll appear when their music is here.",
     "library_folder": "Library folder",
     "library_folder_choose": "Choose your music library folder",
     "library_location": "Library location",

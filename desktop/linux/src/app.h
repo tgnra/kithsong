@@ -17,7 +17,8 @@ typedef struct app {
   GtkWidget *sidebar;
   GtkWidget *settings;  /* the header bar's Settings button */
   GtkStack *albums;     /* "empty" status page | "grid" | "no-playlists" status page | "playlists" */
-  AdwStatusPage *empty; /* "No Albums" */
+  AdwStatusPage *empty;        /* "No Albums" */
+  AdwStatusPage *no_playlists; /* "No playlists yet", or none to play here */
   GtkWidget *album_grid, *playlist_grid;
   gboolean show_playlists; /* the sidebar's Playlists is picked, rather than Albums or Artists */
   AdwOverlaySplitView *album_split; /* the track list is its sidebar, at the end */

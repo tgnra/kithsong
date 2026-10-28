@@ -23,7 +23,7 @@ static void toast(picker *p, const char *text) {
 static void fill(picker *p, const char *focus) {
   gtk_list_box_remove_all(GTK_LIST_BOX(p->list));
   mc_playlist_list *lists = NULL;
-  if (mc_library_list_playlists(p->lib, &lists) != MC_OK) {
+  if (mc_library_list_playlists(p->lib, 0, &lists) != MC_OK) {
     toast(p, mc_str(MC_STR_LINUX_PLAYLISTS_LIST_FAILED));
     return;
   }
