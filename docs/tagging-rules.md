@@ -56,6 +56,8 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    tracks and no leftover files. Everything else waits for the user in the review dialog,
    where they can pick another candidate, search again with their own terms, keep the
    existing tags, or skip the item. Results of a manual search are never auto-accepted.
+   For an album they can also **search more widely** (the extended search on request,
+   whose results join the candidates and aren't auto-accepted either).
    **Use as track N** fixes an assignment the tagger got wrong: the review's track list shows
    the missing tracks, the files no track took, and the files of other items from the same
    folder (`mc_import_related`, e.g. a file whose album tag put it in an item of its own).
@@ -65,8 +67,6 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    place, and its library rows updated). A file taken from another item leaves it; if that
    item had imported it, its library row moves to this album, and an item left with no files
    is skipped as "Moved to another album".
-   For an album they can also **search more widely** (the extended search on request,
-   whose results join the candidates and aren't auto-accepted either).
 7. **Compare** with the library (`dupes.c`, see [Duplicates](#duplicates)): skip what it
    already has, or swap in a better copy of the release.
 8. **Write** (see [Library folder](#library-folder)): copy the files into the library folder
