@@ -9,6 +9,7 @@
 #define MC_PROTOCOL_VERSION 1
 #define MC_MODE_PAIRING 1
 #define MC_MODE_SESSION 2
+#define MC_MODE_REACH 3 /* "can you connect back to me?"; older versions close it */
 
 /* Session */
 #define MC_MSG_HELLO 0x01
@@ -39,5 +40,9 @@
 #define MC_MSG_JPAKE_1 0x43
 #define MC_MSG_JPAKE_2 0x44
 #define MC_MSG_PAIR_ACCEPT 0x45
+
+/* Reach, in the clear. */
+#define MC_MSG_REACH_REQ 0x50
+#define MC_MSG_REACH_RESP 0x51
 
 #endif

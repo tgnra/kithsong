@@ -106,10 +106,10 @@ static GtkWidget *kind_icon(int kind) {
   return icon;
 }
 
-/* A row: the kind's icon, the name, a dim line under it (NULL for none), and a spinner while
- * it syncs. */
-static GtkWidget *device_row(const char *uid, int kind, const char *name, const char *sub, gboolean busy,
-                             gboolean dim) {
+/* A row: the kind's icon, the name, a dim line under it (NULL for none), a warning triangle
+ * with warning as its tooltip (NULL for none), and a spinner while it syncs. */
+static GtkWidget *device_row(const char *uid, int kind, const char *name, const char *sub, const char *warning,
+                             gboolean busy, gboolean dim) {
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   gtk_widget_set_margin_start(box, 6);
   gtk_widget_set_margin_end(box, 6);
@@ -136,6 +136,13 @@ static GtkWidget *device_row(const char *uid, int kind, const char *name, const 
   if (dim) {
     gtk_widget_add_css_class(icon, "dim-label");
     gtk_widget_add_css_class(label, "dim-label");
+  }
+  if (warning) {
+    GtkWidget *triangle = gtk_image_new_from_icon_name("dialog-warning-symbolic");
+    gtk_widget_add_css_class(triangle, "warning");
+    gtk_widget_set_tooltip_text(triangle, warning);
+    gtk_accessible_update_property(GTK_ACCESSIBLE(triangle), GTK_ACCESSIBLE_PROPERTY_LABEL, warning, -1);
+    gtk_box_append(GTK_BOX(box), triangle);
   }
   if (busy) {
     GtkWidget *spinner = gtk_spinner_new();
@@ -180,24 +187,44 @@ static void refresh_devices(void) {
   clear_list(d.paired);
   clear_list(d.nearby);
   GtkWidget *selected = NULL;
+  int rows = 0;
   /* This computer first, then the online devices, then the offline ones, each in the order
-   * listed (by name); removed ones left out. */
+   * listed (by name); removed ones left out. A device offline shows no warning: what was
+   * found while it was online may no longer hold. */
   for (int pass = 0; paired && pass < 3; pass++)
     for (int i = 0; i < paired->count; i++) {
       const mc_sync_device *dev = &paired->items[i];
       int in_pass = dev->is_self ? 0 : dev->online ? 1 : 2;
       if (dev->removed || in_pass != pass) continue;
       const char *sub = dev->is_self ? mc_str(MC_STR_LINUX_THIS_COMPUTER) : !dev->online ? mc_str(MC_STR_DEVICE_OFFLINE) : NULL;
-      GtkWidget *row = device_row(dev->uid, dev->kind, dev->name, sub, syncing_slot(dev->uid) >= 0,
+      char *warning = dev->online ? device_view_reach_text(sync, dev->uid, dev->name, TRUE) : NULL;
+      GtkWidget *row = device_row(dev->uid, dev->kind, dev->name, sub, warning, syncing_slot(dev->uid) >= 0,
                                   !dev->is_self && !dev->online);
+      g_free(warning);
       gtk_list_box_append(GTK_LIST_BOX(d.paired), row);
+      rows++;
       if (!strcmp(dev->uid, d.selected)) selected = row;
     }
+  /* Not in a group, this computer still has its row: its page renames it and says whether
+   * other devices can reach it. */
+  if (sync && !rows) {
+    const char *uid = mc_sync_device_uid(sync);
+    char name[MC_SYNC_DEVICE_NAME_MAX + 1] = "";
+    mc_sync_get_device_name(sync, name, sizeof name);
+    char *warning = device_view_reach_text(sync, uid, name, TRUE);
+    GtkWidget *row = device_row(uid, MC_DEVICE_DESKTOP, name, mc_str(MC_STR_LINUX_THIS_COMPUTER), warning, FALSE, FALSE);
+    g_free(warning);
+    gtk_list_box_append(GTK_LIST_BOX(d.paired), row);
+    rows++;
+    if (!strcmp(uid, d.selected)) selected = row;
+  }
   int nn = nearby ? nearby->count : 0;
   for (int i = 0; i < nn; i++) {
     const mc_sync_nearby *dev = &nearby->items[i];
     const char *sub = dev->in_other_group ? mc_str(MC_STR_DEVICE_OTHER_GROUP_TIP) : NULL;
-    gtk_list_box_append(GTK_LIST_BOX(d.nearby), device_row(dev->uid, dev->kind, dev->name, sub, FALSE, FALSE));
+    char *warning = device_view_reach_text(sync, dev->uid, dev->name, TRUE);
+    gtk_list_box_append(GTK_LIST_BOX(d.nearby), device_row(dev->uid, dev->kind, dev->name, sub, warning, FALSE, FALSE));
+    g_free(warning);
   }
   char heading[128];
   mc_format(heading, sizeof heading, mc_str(MC_STR_DEVICES_UNPAIRED), MC_D(nn));
@@ -208,7 +235,7 @@ static void refresh_devices(void) {
   char *off = devices_sync_off_text();
   gtk_label_set_text(GTK_LABEL(d.none), off ? off : mc_str(MC_STR_DEVICES_NONE));
   g_free(off);
-  gtk_widget_set_visible(d.paired, (paired && paired->count > 0) || nn == 0);
+  gtk_widget_set_visible(d.paired, rows > 0 || nn == 0);
   mc_sync_device_list_free(paired);
   mc_sync_nearby_list_free(nearby);
 
@@ -257,6 +284,7 @@ static void schedule_library_refresh(void) {
 
 static void open_device(const char *uid) {
   g_strlcpy(d.selected, uid, sizeof d.selected);
+  gtk_list_box_unselect_all(d.a->top_nav);
   gtk_list_box_unselect_all(d.a->nav);
   device_view_open(sync_bridge_get(), d.a->lib, uid);
   gtk_stack_set_visible_child_name(d.a->pages, "device");
@@ -355,6 +383,7 @@ static void on_sync_event(void *user, const sync_event *ev) {
   mc_sync *sync = sync_bridge_get();
   switch (ev->kind) {
     case SYNC_EV_PEER:
+    case SYNC_EV_REACH:
       schedule_refresh();
       device_view_on_sync_event(ev);
       break;

@@ -53,7 +53,7 @@ static mc_channel *channel_new(mc_socket *sock, int initiator, int mode) {
 
 mc_status mc_channel_connect(const char *host, uint16_t port, int mode, int timeout_ms,
                              mc_channel **out) {
-  if (!host || !out || (mode != MC_MODE_PAIRING && mode != MC_MODE_SESSION))
+  if (!host || !out || (mode != MC_MODE_PAIRING && mode != MC_MODE_SESSION && mode != MC_MODE_REACH))
     return MC_ERR_INVALID_ARG;
   *out = NULL;
   mc_socket *sock;
@@ -94,7 +94,7 @@ mc_status mc_channel_read_preamble(mc_channel *ch) {
   mc_status st = mc_socket_recv_exact(ch->sock, pre, sizeof pre, ch->timeout_ms);
   if (st != MC_OK) return st;
   if (pre[0] != 'M' || pre[1] != 'A' || pre[2] != MC_PROTOCOL_VERSION ||
-      (pre[3] != MC_MODE_PAIRING && pre[3] != MC_MODE_SESSION))
+      (pre[3] != MC_MODE_PAIRING && pre[3] != MC_MODE_SESSION && pre[3] != MC_MODE_REACH))
     return MC_ERR_FORMAT;
   ch->mode = pre[3];
   make_preamble(ch->preamble, ch->mode);

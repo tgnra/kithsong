@@ -56,6 +56,7 @@ add_library(musiccore STATIC
   src/util/changelog.c
   src/util/fracindex.c
   src/util/i18n.c
+  src/util/text.c
   "${_strings_out}/mc_strings_gen.h"
   "${_strings_out}/mc_strings_gen.c"
   src/library/library.c
@@ -64,6 +65,7 @@ add_library(musiccore STATIC
   src/playlist/playlist.c
   src/playlist/playlist_art.c
   src/smart/smartlist.c
+  src/search/search.c
   src/playback/decoder.c
   src/playback/player.c
   src/tagger/tag_io.cpp
@@ -95,6 +97,7 @@ add_library(musiccore STATIC
   src/sync/session.c
   src/sync/plan.c
   src/sync/transfer.c
+  src/sync/reach.c
   "${_sync_schema_c}")
 add_library(musiccore::musiccore ALIAS musiccore)
 

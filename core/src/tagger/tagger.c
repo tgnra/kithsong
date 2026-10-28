@@ -836,11 +836,12 @@ static void unplace_files(mc_library *lib, placement *p, int n) {
 }
 
 /* Makes sure the album folder has a cover: keep one that's there, else bring the one from
- * the folder the files came from, else download one. Returns the cover's hash in hash, or
- * NULL if the album has none. Failures here never fail the import. */
+ * the folder the files came from, else write out a picture embedded in one of the files
+ * (p, n of them), else download one. Returns the cover's hash in hash, or NULL if the album
+ * has none. Failures here never fail the import. */
 static const char *ensure_cover(mc_import *imp, mc_library *lib, const char *album_rel,
-                                const char *source_dir, const mb_release *rel,
-                                char hash[MC_ART_HASH_LEN]) {
+                                const char *source_dir, const placement *p, int n,
+                                const mb_release *rel, char hash[MC_ART_HASH_LEN]) {
   char *dir = mc_library_abspath(lib, album_rel);
   if (!dir) return NULL;
   char *cover = mc_coverart_find(dir);
@@ -858,6 +859,9 @@ static const char *ensure_cover(mc_import *imp, mc_library *lib, const char *alb
     }
     free(source);
   }
+
+  for (int i = 0; i < n && !cover; i++)
+    if (mc_coverart_save_embedded(dir, p[i].dest_abs) == MC_OK) cover = mc_coverart_find(dir);
 
   if (!cover && rel && imp->fetch_art && !cancelled(imp)) {
     mc_buffer img;
@@ -1116,7 +1120,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   }
 
   if (!error && !all_dupes) {
-    if (!album.singles) album.art_hash = ensure_cover(imp, lib, cover_dir, source_dir, rel, hash);
+    if (!album.singles) album.art_hash = ensure_cover(imp, lib, cover_dir, source_dir, places, count, rel, hash);
     for (int i = 0; i < count; i++) {
       mc_db_track *t = &rows[i];
       t->path = places[i].dest_rel;

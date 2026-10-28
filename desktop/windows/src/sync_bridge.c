@@ -180,7 +180,8 @@ void sync_bridge_start(HWND wnd, mc_library *lib, const char *config_dir, const 
     return;
   }
 
-  static const mc_sync_events events = {on_peer, on_pair_code, on_pair_result, on_progress, on_sync_done};
+  static const mc_sync_events events = {on_peer, on_pair_code, on_pair_result, on_progress, on_sync_done,
+                                        NULL};
   mc_sync *sync = NULL;
   void *gen = (void *)(uintptr_t)(ULONG)g_bridge.gen;
   mc_status st = mc_sync_new(lib, config_dir, device_name, MC_DEVICE_DESKTOP, &events, gen, &sync);

@@ -18,6 +18,7 @@ struct mc_library {
    * time as local edits; sync inserts those changelog rows itself. */
   int applying_remote;
   mc_changelog_ctx log; /* points the trigger functions at hlc, node_uid, applying_remote */
+  struct mc_search *search; /* search.c's index and its builder; NULL until first used */
 };
 
 static inline sqlite3 *mc_library_db(mc_library *lib) {

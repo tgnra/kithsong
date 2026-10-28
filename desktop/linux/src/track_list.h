@@ -60,6 +60,9 @@ typedef struct track_list_item {
 int track_list_count(void);
 track_list_item track_list_item_at(int i);
 
+/* Selects the shown track with uid, focused and scrolled into view, if it's there. */
+void track_list_select(const char *uid);
+
 /* Marks the playing track, by uid, or none for NULL. It stays marked while other albums are
  * shown, and when its album is shown again. */
 void track_list_set_playing(const char *uid);

@@ -13,9 +13,11 @@ typedef struct app {
   GtkWindow *win;
   char *settings_dir;   /* ~/.config/musicapp */
   char *art_dir;        /* settings_dir/playlist-art: playlists' pictures, see mc_playlist_art() */
-  GtkStack *pages;      /* "library": the album grid and track list | "import" | "device" */
+  GtkStack *pages;      /* "library": the album grid and track list | "search" | "import" | "device" */
   GtkWidget *import;    /* the import page, import_view.c */
+  GtkWidget *search;    /* the search page, search_view.c */
   GtkWidget *sidebar;
+  GtkListBox *top_nav;  /* the sidebar's Home (not available yet) and Search, above nav */
   GtkListBox *nav;      /* the sidebar's Albums, Artists and Playlists */
   GtkWidget *settings;  /* the header bar's Settings button */
   GtkStack *albums;     /* "empty" status page | "grid" | "no-playlists" status page | "playlists" */
@@ -37,5 +39,8 @@ void app_play_album(app *a, int start);
 /* Shows the album (or the playlist, if playlist) with uid selected on the Albums (or
  * Playlists) page, as picking it in Recents does. */
 void app_open(app *a, gboolean playlist, const char *uid);
+
+/* Shows the album with album_uid, as app_open() does, with its track track_uid selected. */
+void app_open_track(app *a, const char *album_uid, const char *track_uid);
 
 #endif

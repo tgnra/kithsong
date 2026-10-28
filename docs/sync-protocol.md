@@ -627,18 +627,16 @@ profile and pressed Sync.
      for a transcode `source_file_uid` (`FILE_HDR.file`). A received original keeps
      `source_file_uid` NULL: it is still an original, served as one in turn, while a row
      with `source_peer_uid` NULL too is an original imported on this device.
-   - When the track's album has an `art_hash` and its folder no cover yet, the receiver
-     saves the file's embedded picture (transcodes embed the source's cover) as
-     `cover.jpg` or `cover.png`.
+   - When the track's album has an `art_hash` (not singles) and its folder no cover yet,
+     the receiver sends `COVER_REQ` for it right away, so the album shows with its art while
+     the rest of it is still coming. Pictures embedded in received files are never used.
    - Covers. After its fetches, the receiver sends `COVER_REQ` for each folder of its own
      that holds files of an album with an `art_hash` (not singles) and has no cover image
-     (`mc_coverart_find()`), so covers that exist only as an image file beside originals
-     without an embedded picture (an import's downloaded art, a ripped album's
-     `cover.jpg`) arrive too, and a device that synced before this catches up in its next
-     session. The sender answers with its cover: the image file in a folder holding the
-     album's files (`cover`, `folder` or `front`, `.jpg`/`.jpeg`/`.png`, any case),
-     originals' folders first, else a picture embedded in one of those files; at most
-     32 MiB. It answers `FILE_ERR` `missing` when it has none. The receiver checks
+     (`mc_coverart_find()`), for folders whose files were already here, and so a device that
+     synced before this catches up in its next session. The sender answers with its cover:
+     the image file in a folder holding the album's files (`cover`, `folder` or `front`,
+     `.jpg`/`.jpeg`/`.png`, any case), originals' folders first (never a picture embedded
+     in a file); at most 32 MiB. It answers `FILE_ERR` `missing` when it has none. The receiver checks
      `sha256` and saves the image as `cover.jpg` or `cover.png` by its magic bytes. A
      device whose peer's `HELLO` lacks `"covers"` (older versions end the session on an
      unknown message) skips this. A folder that already has a cover keeps it, even when

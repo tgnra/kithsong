@@ -122,6 +122,10 @@ typedef struct mc_sync_events {
    * on_sync_done won't report (a scheduled attempt that found the device unreachable). */
   void (*on_progress)(void *user, const mc_sync_progress *progress);
   void (*on_sync_done)(void *user, const mc_sync_result *result);
+  /* What's known of whether device_uid and this device can connect to each other changed
+   * (see "Reachability" below). device_uid is this device's own when whether others can
+   * reach it changed, and NULL when much changed at once (its network did). */
+  void (*on_reach)(void *user, const char *device_uid);
 } mc_sync_events;
 
 /* Opens this device's sync state in config_dir (the per-device config dir, which holds
@@ -227,6 +231,47 @@ typedef enum mc_sync_lib_state {
 
 mc_status mc_sync_library_state(mc_sync *sync, mc_sync_lib_state *out);
 
+/* --- Reachability ---
+ * Firewalls often let discovery (UDP 5353) through but block the TCP port sync listens on,
+ * so a device shows up but can't be synced with, or syncs only when the other side calls.
+ * Sync tests both directions with each device it can see: every connection it makes or
+ * fails to make while the device is online, every one the device makes to it, and a reach
+ * check, in which this device connects to the other and asks it to connect back. Checks run
+ * when a device is first seen online (a member, or a nearby device outside the group), every
+ * 15 minutes while it stays online, and when this device's network changes, which forgets
+ * what was known. Nothing about it is stored: it starts out unknown after mc_sync_start(),
+ * and on_reach reports changes. A device running an older version answers no check, so
+ * whether it can reach this one stays unknown until it connects. */
+
+typedef enum mc_sync_reach {
+  MC_REACH_UNKNOWN, /* not tested yet */
+  MC_REACH_OK,      /* the latest attempt connected */
+  MC_REACH_BLOCKED  /* the latest attempt failed while the device was online */
+} mc_sync_reach;
+
+/* Can other devices connect to this one? */
+typedef struct mc_sync_self_reach {
+  mc_sync_reach state; /* BLOCKED if any device found it couldn't, OK if some could and
+                        * none couldn't, else UNKNOWN */
+  int ok, blocked;     /* how many devices found each */
+  uint16_t port;       /* the TCP port to allow, as mc_sync_port() */
+  int default_port;    /* port is MC_SYNC_DEFAULT_PORT; else that was taken, and the port
+                        * changes from one start to the next */
+} mc_sync_self_reach;
+
+/* "Can we be seen": whether the devices sync has tested with can connect to this one.
+ * MC_ERR_INVALID_ARG unless started. */
+mc_status mc_sync_reach_self(mc_sync *sync, mc_sync_self_reach *out);
+/* "Can we see them": whether this device can connect to device_uid (*to_them), and it to
+ * this one (*to_us); either may be NULL. Any device sync knows of, member or nearby.
+ * MC_ERR_NOT_FOUND if it knows nothing of it. */
+mc_status mc_sync_reach_peer(mc_sync *sync, const char *device_uid, mc_sync_reach *to_them,
+                             mc_sync_reach *to_us);
+/* Checks device_uid (every device online, for NULL) again now, as after the user fixed a
+ * firewall. Returns at once; on_reach reports what changes. Requires mc_sync_start();
+ * MC_ERR_NOT_FOUND for a device sync knows nothing of. */
+mc_status mc_sync_check_reach(mc_sync *sync, const char *device_uid);
+
 /* --- Snapshots ---
  * Lists are malloc'd copies, freed with their _free function. */
 
@@ -250,6 +295,9 @@ typedef struct mc_sync_device {
   /* Whether its files sync on their own; see mc_sync_confirm_now(). Another device's is as
    * this one sees it: an edit here it hasn't received yet already counts. */
   mc_sync_confirm_state confirm;
+  /* As mc_sync_reach_peer(): reach, whether this device can connect to it; reach_us, it to
+   * this one. On this device's own row both are mc_sync_reach_self()'s state. */
+  mc_sync_reach reach, reach_us;
 } mc_sync_device;
 
 typedef struct mc_sync_device_list {
@@ -270,6 +318,8 @@ typedef struct mc_sync_nearby {
                           * refused until one leaves (MC_PAIR_IN_GROUP) */
   char *address;
   uint16_t port;
+  mc_sync_reach reach, reach_us; /* as in mc_sync_device: BLOCKED reach means pairing
+                                  * with it will fail */
 } mc_sync_nearby;
 
 typedef struct mc_sync_nearby_list {

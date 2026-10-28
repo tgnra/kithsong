@@ -8,7 +8,6 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
 import android.graphics.Typeface
-import android.media.MediaMetadataRetriever
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.MaterialTheme
@@ -51,7 +50,7 @@ import kotlin.math.absoluteValue
 
 /**
  * Where cover images come from. Coil does the caching and threading; a source only decodes.
- * [FileArt] decodes covers and embedded art, and falls back to [PlaceholderArt].
+ * [FileArt] decodes cover files, and falls back to [PlaceholderArt].
  */
 fun interface ArtSource {
     /** [art]'s cover, no smaller than [px] square where possible, or null for none. */
@@ -59,33 +58,14 @@ fun interface ArtSource {
 }
 
 /**
- * [ArtRef.file]: a cover image, or the picture embedded in an audio file, decoded at the size
- * asked for rather than at full size. Without a file, or when it has no picture, the art
- * comes from [fallback].
+ * [ArtRef.file]: a cover image, decoded at the size asked for rather than at full size.
+ * Without a file, or when it won't decode, the art comes from [fallback].
  */
 class FileArt(private val fallback: ArtSource = PlaceholderArt) : ArtSource {
     override suspend fun load(art: ArtRef, px: Int): Bitmap? {
         val file = art.file ?: return fallback.load(art, px)
-        val bitmap = if (file.substringAfterLast('.').lowercase() in IMAGE_EXTENSIONS) {
-            decodeSampled(px) { options -> BitmapFactory.decodeFile(file, options) }
-        } else {
-            embeddedPicture(file)?.let { bytes ->
-                decodeSampled(px) { options -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) }
-            }
-        }
+        val bitmap = decodeSampled(px) { options -> BitmapFactory.decodeFile(file, options) }
         return bitmap ?: fallback.load(art, px)
-    }
-
-    private fun embeddedPicture(file: String): ByteArray? {
-        val retriever = MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(file)
-            retriever.embeddedPicture
-        } catch (e: RuntimeException) {
-            null // missing, or not a file it understands
-        } finally {
-            retriever.release()
-        }
     }
 
     /**
@@ -108,10 +88,6 @@ class FileArt(private val fallback: ArtSource = PlaceholderArt) : ArtSource {
                 inTargetDensity = px
             }
         })
-    }
-
-    private companion object {
-        val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
     }
 }
 
@@ -149,8 +125,7 @@ object PlaceholderArt : ArtSource {
 /**
  * Builds the app's image loader, which loads [ArtRef]s from [source]. Decoded art is kept in
  * memory, and art decoded from a file is also kept on disk at the size it was decoded at, so
- * a cover that has left the memory cache decodes again quickly and embedded art is only dug
- * out of its audio file once.
+ * a cover that has left the memory cache decodes again quickly.
  */
 fun artImageLoader(context: Context, source: ArtSource): ImageLoader =
     ImageLoader.Builder(context)

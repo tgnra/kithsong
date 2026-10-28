@@ -19,7 +19,7 @@ import java.io.IOException
 
 /**
  * Art for the notification and lock screen, from a queue item's [artRef] through the app's
- * image loader, so covers and embedded art come out as they do in the app, and from its caches.
+ * image loader, so covers come out as they do in the app, and from its caches.
  * Items carry no artwork URI: the system couldn't read files in app storage anyway.
  */
 @OptIn(UnstableApi::class)

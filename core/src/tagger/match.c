@@ -4,40 +4,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "util/text.h"
+
 /* --- String distance --- */
 
-/* Base letters for U+00C0..U+00FF; '\0' drops the character (× and ÷). */
-static const char k_latin1[] = "aaaaaaaceeeeiiiidnooooo\0ouuuuyts"
-                               "aaaaaaaceeeeiiiidnooooo\0ouuuuyty";
-
-static uint32_t next_codepoint(const unsigned char **s) {
-  const unsigned char *p = *s;
-  uint32_t c = *p++;
-  int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
-  if (extra) c &= 0x3Fu >> extra;
-  while (extra-- && (*p & 0xC0) == 0x80) c = (c << 6) | (*p++ & 0x3Fu);
-  *s = p;
-  return c;
-}
-
 /* Appends the comparable form of [s, end) to out; returns the new length. Letters and digits
- * are kept (lowercased, accents stripped), "&" becomes "and", everything else is dropped. */
+ * are kept (folded, see mc_text_fold), everything else is dropped. */
 static size_t normalize(const char *s, const char *end, uint32_t *out) {
   size_t n = 0;
   const unsigned char *p = (const unsigned char *)s;
   while (p < (const unsigned char *)end && *p) {
-    uint32_t c = next_codepoint(&p);
-    if (c < 0x80) {
-      if (c >= 'A' && c <= 'Z') out[n++] = c + 32;
-      else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) out[n++] = c;
-      else if (c == '&') out[n++] = 'a', out[n++] = 'n', out[n++] = 'd';
-    } else if (c >= 0xC0 && c <= 0xFF) {
-      if (k_latin1[c - 0xC0]) out[n++] = (unsigned char)k_latin1[c - 0xC0];
-    } else if ((c >= 0x80 && c < 0xC0) || (c >= 0x2000 && c <= 0x206F)) {
-      /* Latin-1 symbols and general punctuation (curly quotes, dashes, ellipsis). */
-    } else {
-      out[n++] = c;
-    }
+    int k = mc_text_fold(mc_utf8_next(&p), out + n);
+    if (k > 0) n += (size_t)k;
   }
   return n;
 }

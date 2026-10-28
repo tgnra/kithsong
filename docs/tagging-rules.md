@@ -158,14 +158,17 @@ Writing an empty string through `mc_tags_write()` removes that tag.
 ## Cover art
 
 Each album folder gets a `cover.jpg` (or `cover.png`). `albums.art_hash` holds its SHA-256,
-so devices can tell whether they have the same image. In order:
+so devices can tell whether they have the same image. That file is the album's art on every
+device: pictures embedded in audio files are never shown, only copied out on import. In order:
 
 1. a cover already in the album folder is kept.
 2. a cover in the folder the files came from (`cover`, `folder` or `front`, `.jpg`/`.jpeg`/
    `.png`, any case) is copied.
-3. Cover Art Archive `release/<id>/front-1200`.
-4. Cover Art Archive `release-group/<id>/front-1200`.
-5. iTunes Search (`entity=album`). A result is used only if its album and artist names are
+3. a picture embedded in one of the imported files (the front cover, else the first one;
+   JPEG or PNG up to 16 MB) is written out.
+4. Cover Art Archive `release/<id>/front-1200`.
+5. Cover Art Archive `release-group/<id>/front-1200`.
+6. iTunes Search (`entity=album`). A result is used only if its album and artist names are
    both close (combined distance below 0.25). The 100 px artwork URL is rewritten to
    1200 px.
 

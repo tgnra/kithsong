@@ -26,7 +26,8 @@ typedef struct mc_channel mc_channel;
 int mc_channel_default_timeout(void);
 void mc_channel_set_default_timeout(int timeout_ms);
 
-/* Connects and sends the preamble for mode (MC_MODE_PAIRING or MC_MODE_SESSION). */
+/* Connects and sends the preamble for mode (MC_MODE_PAIRING, MC_MODE_SESSION or
+ * MC_MODE_REACH). */
 mc_status mc_channel_connect(const char *host, uint16_t port, int mode, int timeout_ms,
                              mc_channel **out);
 /* Accepts one connection and reads its preamble. Like mc_listener_accept(), returns MC_OK

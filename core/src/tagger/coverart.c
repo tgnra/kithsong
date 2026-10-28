@@ -10,6 +10,7 @@
 #include <yyjson.h>
 
 #include "tagger/match.h"
+#include "tagger/tag_io.h"
 #include "util/platform.h"
 
 #define CAA_API "https://coverartarchive.org"
@@ -179,6 +180,18 @@ mc_status mc_coverart_save(const char *dir, const mc_buffer *img, const char *ex
   }
   free(path);
   free(tmp);
+  return st;
+}
+
+mc_status mc_coverart_save_embedded(const char *dir, const char *audio_path) {
+  unsigned char *data;
+  size_t len;
+  mc_status st = mc_tags_read_picture(audio_path, &data, &len);
+  if (st != MC_OK) return st;
+  mc_buffer img = {(char *)data, len};
+  const char *ext = len <= MAX_IMAGE_BYTES ? image_ext(&img) : NULL;
+  st = ext ? mc_coverart_save(dir, &img, ext) : MC_ERR_FORMAT;
+  free(data);
   return st;
 }
 

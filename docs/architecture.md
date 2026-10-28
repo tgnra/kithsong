@@ -30,6 +30,7 @@
 | Module      | Path                   | Status   |
 |-------------|------------------------|----------|
 | library     | `core/src/library`     | library folder, schema, migrations, change-log triggers, counts |
+| search      | `core/src/search`      | in-memory index of artist, album, track, playlist and album group names, rebuilt on a core thread (own read-only connection) after one changes, while searches use the previous index; typo-tolerant word matching (bounded Damerau-Levenshtein), the last word as a prefix |
 | settings    | `core/src/settings.c`  | per-device settings (library folder location) as JSON |
 | tagger      | `core/src/tagger`      | tag read/write (TagLib), importer: MusicBrainz matching, scoring, singles, cover art, copying into the library folder (see [tagging-rules.md](tagging-rules.md)); no AcoustID yet |
 | net         | `core/src/net`         | HTTPS GET and form POST with embedded CA bundle, rate limiter; capped at TLS 1.2 (see `http.c`); TCP sockets with timeouts over POSIX and Winsock |
@@ -40,7 +41,7 @@
 | sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing over the network with the join rules, group and library changelog sessions (field-level LWW), a scheduler, address hints; no file transfer yet |
 | discovery   | `core/src/discovery`   | mDNS/DNS-SD announce and browse of `_musicapp._tcp` on a core thread (mjansson/mdns); peers reported online/offline through a callback; announces the host name |
 | transcode   | `core/src/transcode`   | Opus (libopusenc) with tags and cover, cached per file and bitrate with an LRU trim; size estimate; encode benchmark |
-| util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, UUIDv7, HLC |
+| util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, text folding (case, accents) for comparison, UUIDv7, HLC |
 
 ## Startup budget
 

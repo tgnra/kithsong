@@ -13,6 +13,114 @@ the release workflow all read it.
 Each script writes into `dist/`. The [release workflow](../.github/workflows/release.yml) runs
 the same scripts on GitHub Actions.
 
+## Setting up the workflow
+
+Do this once per repository. Only the Android key and the API keys need setting up. The
+Windows and Linux jobs need nothing beyond the repo. The commands use the
+[`gh` CLI](https://cli.github.com/), run from a checkout of the repo. Everything can also be
+done in the web UI under Settings → Secrets and variables → Actions → New repository secret.
+
+### 1. Create the Android signing key
+
+`keytool` comes with any JDK:
+
+```sh
+mkdir -p ~/keys
+keytool -genkeypair -v -keystore ~/Documents/musicapp-release.jks -keyalg RSA -keysize 4096 \
+  -validity 10000 -alias musicapp
+```
+
+It asks for a keystore password, then for a name, organisation and so on. Those end up in the
+certificate, which anyone can read from the APK, so a name or a handle is enough. The keystore
+is PKCS12, so the key's password is the same as the keystore's.
+
+Keep the `.jks` outside the repo. `.gitignore` skips `*.jks` and `*.keystore` in case one
+lands there anyway.
+
+Note the certificate's SHA-256 fingerprint. You'll check builds against it later:
+
+```sh
+keytool -list -v -keystore ~/keys/musicapp-release.jks -alias musicapp | grep SHA256
+```
+
+### 2. Back it up
+
+**Back up the `.jks` file and its password somewhere safe, outside the repo and away from this
+machine** (a password manager that takes file attachments works well). Android only installs
+an update signed with the same key. If the key is lost, every sideloaded install has to be
+uninstalled before the next version can go on. The phone and the watch share the key. If you
+use Play App Signing, this key becomes your upload key, and Google holds the app signing key.
+A lost upload key can be reset through Play support.
+
+### 3. Try a signed build locally (optional)
+
+This catches a wrong password or alias before CI does:
+
+```sh
+export MUSICAPP_KEYSTORE=~/keys/musicapp-release.jks
+export MUSICAPP_KEY_ALIAS=musicapp
+read -rs MUSICAPP_KEYSTORE_PASSWORD && export MUSICAPP_KEYSTORE_PASSWORD
+export MUSICAPP_KEY_PASSWORD="$MUSICAPP_KEYSTORE_PASSWORD"
+scripts/release-android.sh
+```
+
+The script ends by running `apksigner verify --print-certs` on both APKs. The
+`SHA-256 digest` it prints should match the fingerprint from step 1, without the colons.
+
+### 4. Add the secrets
+
+```sh
+base64 -w0 ~/keys/musicapp-release.jks | gh secret set ANDROID_KEYSTORE_BASE64
+gh secret set ANDROID_KEY_ALIAS --body musicapp
+gh secret set ANDROID_KEYSTORE_PASSWORD     # prompts for the value
+gh secret set ANDROID_KEY_PASSWORD          # the same password again
+```
+
+On macOS, use `base64 -i ~/keys/musicapp-release.jks`. In PowerShell, use
+`[Convert]::ToBase64String([IO.File]::ReadAllBytes("musicapp-release.jks")) | gh secret set ANDROID_KEYSTORE_BASE64`.
+
+Then set the API keys. They're baked into every platform's build:
+
+```sh
+gh secret set MUSICAPP_CONTACT
+gh secret set MUSICAPP_ACOUSTID_KEY
+gh secret set MUSICAPP_LASTFM_KEY
+gh secret set MUSICAPP_LASTFM_SECRET
+```
+
+`gh secret list` should now show all eight. The full list:
+
+| Secret | Local variable | What it is |
+|--------|----------------|------------|
+| `MUSICAPP_CONTACT` | `MUSICAPP_CONTACT` | Contact URL or email for the MusicBrainz User-Agent |
+| `MUSICAPP_ACOUSTID_KEY` | `MUSICAPP_ACOUSTID_KEY` | AcoustID application key, from <https://acoustid.org/new-application> |
+| `MUSICAPP_LASTFM_KEY` | `MUSICAPP_LASTFM_KEY` | Last.fm API key, for scrobbling, from <https://www.last.fm/api/account/create> |
+| `MUSICAPP_LASTFM_SECRET` | `MUSICAPP_LASTFM_SECRET` | Last.fm API shared secret |
+| `ANDROID_KEYSTORE_BASE64` | `MUSICAPP_KEYSTORE` (a path) | The release keystore, base64-encoded |
+| `ANDROID_KEYSTORE_PASSWORD` | `MUSICAPP_KEYSTORE_PASSWORD` | The keystore password |
+| `ANDROID_KEY_ALIAS` | `MUSICAPP_KEY_ALIAS` | `musicapp`, unless you picked another alias |
+| `ANDROID_KEY_PASSWORD` | `MUSICAPP_KEY_PASSWORD` | Same as the keystore password |
+
+A missing API key doesn't stop a build. The scripts warn, and that feature is off in the
+build. A missing keystore makes manual runs build unsigned APKs, but tagged runs fail, so a
+release can't go out unsigned.
+
+### 5. Do a test run
+
+```sh
+gh workflow run release.yml
+gh run watch
+gh run download --name android --dir /tmp/musicapp-test
+```
+
+Check the APK's certificate against step 1 with
+`$ANDROID_HOME/build-tools/<ver>/apksigner verify --print-certs /tmp/musicapp-test/*-android.apk`.
+The job's log also prints it.
+
+If the Android job fails with "Keystore was tampered with, or password was incorrect", the
+password secret is wrong. "No key with alias … found" means the alias is wrong. If it fails to
+decode, the base64 was probably wrapped: re-encode with `-w0`.
+
 ## Making a release
 
 1. Set `VERSION` to the new version, e.g. `0.2.0`, and commit.
@@ -22,7 +130,7 @@ the same scripts on GitHub Actions.
    attached. Review it on GitHub and publish it.
 
 To test the builds without a release, run the workflow by hand (Actions → Release → Run
-workflow). The files are attached to the run as artifacts.
+workflow, or `gh workflow run release.yml`). The files are attached to the run as artifacts.
 
 Windows builds also carry a build number, the 4th field of the exe's file version (e.g.
 `0.2.0.57`), shown in the app's sidebar footer. CMake takes it as `MUSICAPP_BUILD_NUMBER`
@@ -33,44 +141,6 @@ checkouts can't count commits. Local builds are build 0 unless you set it.
 Android versionCodes are `major*100000 + minor*1000 + patch*10`, plus 0 for the phone and 1
 for the watch. The two apps share the `app.musicapp` id, so Play needs every code to be
 unique.
-
-## Secrets
-
-Add these under Settings → Secrets and variables → Actions. For local builds, set the same
-values as environment variables. Each script warns about any that are missing.
-
-| Secret | Local variable | What it is |
-|--------|----------------|------------|
-| `MUSICAPP_CONTACT` | `MUSICAPP_CONTACT` | Contact URL or email for the MusicBrainz User-Agent |
-| `MUSICAPP_ACOUSTID_KEY` | `MUSICAPP_ACOUSTID_KEY` | AcoustID application key |
-| `MUSICAPP_LASTFM_KEY` | `MUSICAPP_LASTFM_KEY` | Last.fm API key, for scrobbling |
-| `MUSICAPP_LASTFM_SECRET` | `MUSICAPP_LASTFM_SECRET` | Last.fm API shared secret |
-
-| `ANDROID_KEYSTORE_BASE64` | `MUSICAPP_KEYSTORE` (a path) | The release keystore, base64-encoded for the secret |
-| `ANDROID_KEYSTORE_PASSWORD` | `MUSICAPP_KEYSTORE_PASSWORD` | |
-| `ANDROID_KEY_ALIAS` | `MUSICAPP_KEY_ALIAS` | |
-| `ANDROID_KEY_PASSWORD` | `MUSICAPP_KEY_PASSWORD` | |
-
-Without the keystore, local Android builds come out unsigned. Tagged builds in CI fail
-instead.
-
-### The Android keystore
-
-Create it once:
-
-```sh
-keytool -genkeypair -v -keystore musicapp-release.jks -keyalg RSA -keysize 4096 \
-  -validity 10000 -alias musicapp
-base64 -w0 musicapp-release.jks   # PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("musicapp-release.jks"))
-```
-
-Paste the base64 output into `ANDROID_KEYSTORE_BASE64`.
-
-**Back the `.jks` file and its passwords up somewhere safe, outside the repo.** Android
-only installs an update signed with the same key, so if the key is lost, every sideloaded
-install has to be uninstalled before the next version can go on. The phone and the watch
-share the key. If you use Play App Signing, this key becomes your upload key, and Google
-holds the app signing key.
 
 ## Installing
 

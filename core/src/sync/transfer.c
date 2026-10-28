@@ -43,7 +43,6 @@
 #include "sync/plan.h"
 #include "tagger/coverart.h"
 #include "tagger/organize.h"
-#include "tagger/tag_io.h"
 
 /* Tracks per HAVE_REQ and PREPARE_REQ, so each message and its answer fit in a frame. */
 #define HAVE_CHUNK 400
@@ -900,8 +899,8 @@ static int read_small(const char *path, unsigned char **out, size_t *len) {
 }
 
 /* An album's cover as this device has it: the image file in a folder holding the album's
- * files (whatever mc_coverart_find() takes: cover, folder or front, any case), else a
- * picture embedded in one of those files. Originals are looked at first. */
+ * files (whatever mc_coverart_find() takes: cover, folder or front, any case). Originals'
+ * folders are looked at first. Pictures embedded in the files are never used. */
 static int album_cover(mc_library *lib, const char *album, unsigned char **img, size_t *len,
                        const char **ext) {
   sqlite3_stmt *stmt;
@@ -944,12 +943,6 @@ static int album_cover(mc_library *lib, const char *album, unsigned char **img, 
     free(cover);
   }
   free(last_dir);
-  /* Else a picture embedded in one of the first few. */
-  for (int i = 0; i < n && i < 5 && !found; i++) {
-    if (mc_tags_read_picture(paths[i], img, len) != MC_OK) continue;
-    if (*len <= (size_t)MAX_COVER_BYTES && (*ext = image_ext(*img, *len)) != NULL) found = 1;
-    else free(*img);
-  }
   for (int i = 0; i < n; i++) free(paths[i]);
   free(paths);
   if (!found) *img = NULL;
@@ -1069,37 +1062,39 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
   return st;
 }
 
-/* The album folder of a received file gets its cover from the file's embedded picture
- * (transcodes embed the source's cover), when the album has art (albums.art_hash) and the
- * folder no cover yet. Folders whose files carry no picture get theirs from
- * fetch_covers(). abs is the received file. */
-static void ensure_cover(mc_library *lib, const char *track, const char *abs) {
+static mc_status fetch_cover(mc_session *s, const char *album, const char *dir);
+
+/* The album folder of a received file gets the peer's cover as soon as the file is in, when
+ * the album has art (albums.art_hash) and the folder no cover yet, so the album shows with
+ * its art while the rest of it is still coming. Pictures embedded in the file are never
+ * used: the cover file is the album's art. fetch_covers() catches any folder this missed.
+ * abs is the received file. The return value is only for errors that end the session. */
+static mc_status ensure_cover(mc_session *s, const char *track, const char *abs) {
+  if (!s->peer_covers) return MC_OK; /* an older peer would end the session */
   sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(mc_library_db(lib),
-                         "SELECT 1 FROM tracks t JOIN albums al ON al.uid = t.album_uid"
-                         " WHERE t.uid = ?1 AND al.art_hash IS NOT NULL",
+  if (sqlite3_prepare_v2(mc_library_db(s->conn->lib),
+                         "SELECT al.uid FROM tracks t JOIN albums al ON al.uid = t.album_uid"
+                         " WHERE t.uid = ?1 AND al.art_hash IS NOT NULL AND al.kind <> 'singles'",
                          -1, &stmt, NULL) != SQLITE_OK)
-    return;
+    return MC_OK;
   sqlite3_bind_text(stmt, 1, track, -1, SQLITE_STATIC);
-  int has_art = sqlite3_step(stmt) == SQLITE_ROW;
+  char album[MC_UID_STRLEN] = "";
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *a = (const char *)sqlite3_column_text(stmt, 0);
+    if (is_uid(a)) memcpy(album, a, MC_UID_STRLEN);
+  }
   sqlite3_finalize(stmt);
-  char *dir = has_art ? mc_strdup(abs) : NULL, *sep = dir ? strrchr(dir, MC_PATH_SEP) : NULL;
+  char *dir = album[0] ? mc_strdup(abs) : NULL, *sep = dir ? strrchr(dir, MC_PATH_SEP) : NULL;
   if (!sep) {
     free(dir);
-    return;
+    return MC_OK;
   }
   *sep = '\0';
   char *cover = mc_coverart_find(dir);
-  unsigned char *img = NULL;
-  size_t len = 0;
-  if (!cover && mc_tags_read_picture(abs, &img, &len) == MC_OK) {
-    const char *ext = image_ext(img, len);
-    mc_buffer buf = {(char *)img, len};
-    if (ext) mc_coverart_save(dir, &buf, ext); /* without one, the grid shows a placeholder */
-  }
-  free(img);
+  mc_status st = cover ? MC_OK : fetch_cover(s, album, dir);
   free(cover);
   free(dir);
+  return st;
 }
 
 /* FILE_REQ for t, then FILE_HDR and FILE_DATA into <dest>.part, renamed into place and
@@ -1202,7 +1197,7 @@ static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got
                     sent_opus ? file_uid : NULL, s->peer_uid, sha) == MC_OK) {
       *got = GOT_OK;
       s->files_received++;
-      ensure_cover(lib, t->track_uid, abs);
+      st = ensure_cover(s, t->track_uid, abs);
     } else {
       mc_remove(abs); /* the track went meanwhile, or the database failed */
     }
@@ -1444,10 +1439,9 @@ static mc_status fetch_cover(mc_session *s, const char *album, const char *dir) 
 }
 
 /* Asks the peer for the cover of each folder here that holds files of an album with art
- * (albums.art_hash) but has no cover. A received file's embedded picture gives its folder
- * one as it arrives (ensure_cover()); this is for covers that exist only as an image file
- * beside the originals, as an import's downloaded art does, and it also catches up a
- * device that synced before covers were sent. Singles share a folder and get none. */
+ * (albums.art_hash) but has no cover. A folder usually gets one as its first file arrives
+ * (ensure_cover()); this catches up folders whose files were already here, or a device that
+ * synced before covers were sent. Singles share a folder and get none. */
 static mc_status fetch_covers(mc_session *s) {
   if (!s->peer_covers) return MC_OK; /* an older peer would end the session */
   mc_library *lib = s->conn->lib;

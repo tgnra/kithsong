@@ -22,8 +22,8 @@ struct _AlbumItem {
   char uid[MC_UID_STRLEN];
   char *title;      /* "Untitled" if it has none; a playlist's name */
   char *artist;     /* NULL if unknown, and for playlists */
-  char *cover_dir;  /* the album folder if it has a cover, else NULL */
-  char *cover_file; /* a playlist's picture, once looked for; NULL if it has none */
+  char *cover_file; /* the album's cover as found when the item was made (a playlist's picture,
+                     * once looked for); NULL if it has none */
   int year;         /* 0 if unknown */
   gboolean is_playlist;
   int track_count;  /* playlists only */
@@ -49,5 +49,11 @@ void album_grid_unselect(GtkWidget *grid);
 /* Selects the tile with uid and scrolls it into view, without calling changed. FALSE if the
  * grid hasn't got it. */
 gboolean album_grid_select(GtkWidget *grid, const char *uid);
+/* The grid's item with uid (a new reference), or NULL if it hasn't got it. */
+AlbumItem *album_grid_find(GtkWidget *grid, const char *uid);
+
+/* One tile on its own, as the grid shows album (cover, title, artist or track count), for
+ * places that aren't a grid view, e.g. search results. Its cover loads as the grid's do. */
+GtkWidget *album_tile_new(AlbumItem *album);
 
 #endif

@@ -65,6 +65,14 @@ typedef struct mc_sync_peer {
   /* mono: this device's user pressed Sync for it (mc_sync_confirm_now()), which the next
    * session with it carries; 0 = not, or already carried. */
   uint64_t user_ms;
+  /* Reachability: mono times of the latest evidence each way; 0 = none. out: we connected
+   * to it, or failed to while it was online. in: it connected to us, or a reach check says
+   * it couldn't. */
+  uint64_t out_ok_ms, out_fail_ms, in_ok_ms, in_fail_ms;
+  char in_addr[MC_SYNC_ADDR_MAX]; /* where its last session with us came from */
+  uint64_t reach_ms; /* mono: when the last reach check with it started; 0 = never */
+  int reaching;      /* a reach check with it is running */
+  int reach_now;     /* mc_sync_check_reach() asked for one */
 } mc_sync_peer;
 
 typedef struct mc_sync_worker {
@@ -142,6 +150,7 @@ struct mc_sync {
   int listen_port; /* -1: the default with fallback */
   uint32_t auto_interval_ms; /* MC_SYNC_AUTO_INTERVAL_MS, but in tests; under lock */
   char hint_override[MC_SYNC_HINTS_MAX];
+  uint16_t reach_port_override; /* under lock */
 };
 
 /* --- Shared helpers (sync.c) --- */
@@ -239,14 +248,17 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch);
 /* Before mc_sync_start(): listen on port (0: ephemeral) instead of the default, and run
  * without discovery. */
 void mc_sync_set_test_options(mc_sync *sync, uint16_t port, int use_discovery);
-/* manual_only: the scheduler starts sessions only for mc_sync_now(), so tests decide when
- * devices talk. Any time. */
+/* manual_only: the scheduler starts sessions only for mc_sync_now(), and reach checks only
+ * for mc_sync_check_reach(), so tests decide when devices talk. Any time. */
 void mc_sync_set_test_manual(mc_sync *sync, int manual_only);
 /* Shortens (or lengthens) MC_SYNC_AUTO_INTERVAL_MS for sessions that end from now on; 0
  * turns the limit off. Any time. */
 void mc_sync_set_test_auto_interval(mc_sync *sync, uint32_t ms);
 /* Publishes these address hints (JSON array text) instead of the interfaces' addresses. */
 void mc_sync_set_test_hints(mc_sync *sync, const char *json);
+/* Reach checks ask to be called back at port instead of the listener's (0: the listener's),
+ * as if a firewall blocked it. Any time. */
+void mc_sync_set_test_reach_port(mc_sync *sync, uint16_t port);
 /* As if discovery had reported a peer online (online = 1) or gone (0). */
 void mc_sync_test_peer(mc_sync *sync, const char *device_uid, const char *name, const char *kind,
                        const char *group_hash, const char *address, uint16_t port, int online);

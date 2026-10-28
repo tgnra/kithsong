@@ -84,7 +84,7 @@ static struct {
   AdwBanner *banner;
   GtkWidget *icon, *title, *status_stack, *status, *progress_box, *progress, *progress_text, *message;
   GtkWidget *sync_now, *remove;
-  GtkWidget *info_group, *files_row, *address_row;
+  GtkWidget *info_group, *files_row, *address_row, *reach_row, *reach_check;
   GtkWidget *profile_group, *name_row, *archive_row, *format_row, *budget_row, *budget_switch, *budget_spin;
   GtkWidget *what_group, *sync_all_row, *picker, *tabs[NUM_TABS], *list_stack, *empty, *count;
   GListStore *store;
@@ -94,8 +94,9 @@ static struct {
   mc_library *lib;
   char uid[MC_UID_STRLEN];
 
-  /* The device, from mc_sync_list_devices(). */
-  gboolean found, is_self;
+  /* The device, from mc_sync_list_devices(). solo: this computer, not in a group, so found
+   * with what it knows of itself. */
+  gboolean found, is_self, solo;
   char name[MC_SYNC_DEVICE_NAME_MAX + 1];
   char *others; /* the other members' names, for Leave group */
   char *address; /* where it was last seen, "addr, port n"; NULL if never */
@@ -364,6 +365,15 @@ static void load_device(void) {
     g_dv.others = g_string_free(others, FALSE);
     mc_sync_device_list_free(list);
   }
+  g_dv.solo = g_dv.is_self && !g_dv.found;
+  if (g_dv.solo) {
+    g_dv.found = TRUE;
+    if (mc_sync_get_device_name(g_dv.sync, g_dv.name, sizeof g_dv.name) != MC_OK) g_dv.name[0] = '\0';
+    g_dv.kind = MC_DEVICE_DESKTOP;
+    g_dv.archive = g_dv.removed = g_dv.has_status = 0;
+    g_dv.last_sync_ms = 0;
+    g_dv.confirm = MC_SYNC_CONFIRMED; /* nothing to confirm */
+  }
   if (g_dv.is_self) {
     g_dv.online = 1;
     g_dv.address = self_address();
@@ -376,7 +386,7 @@ static void load_device(void) {
 static void load_profile(void) {
   free_profile();
   g_dv.profile_status = MC_ERR_NOT_FOUND;
-  if (g_dv.sync && g_dv.found && !g_dv.removed) {
+  if (g_dv.sync && g_dv.found && !g_dv.removed && !g_dv.solo) {
     g_dv.profile_status = mc_sync_get_profile(g_dv.sync, g_dv.uid, &g_dv.profile);
     if (g_dv.profile_status == MC_OK) g_dv.profile_status = apply_pending(g_dv.profile);
     if (g_dv.profile_status != MC_OK) free_profile();
@@ -431,6 +441,7 @@ static void update_status(void) {
   } else {
     if (g_dv.last_sync_ms > 0) fmt_ago(g_dv.last_sync_ms, ago, sizeof ago);
     if (syncing()) g_strlcpy(text, mc_str(MC_STR_SYNCING_PROGRESS), sizeof text);
+    else if (g_dv.solo) g_strlcpy(text, mc_str(MC_STR_LINUX_THIS_COMPUTER_NO_GROUP), sizeof text);
     else if (g_dv.is_self) g_strlcpy(text, mc_str(MC_STR_LINUX_THIS_COMPUTER), sizeof text);
     else if (g_dv.online && g_dv.last_sync_ms > 0) mc_format(text, sizeof text, mc_str(MC_STR_DEVICE_ONLINE_SYNCED), MC_S(ago));
     else if (g_dv.online) g_strlcpy(text, mc_str(MC_STR_DEVICE_ONLINE), sizeof text);
@@ -463,6 +474,11 @@ static void update_status(void) {
   adw_action_row_set_subtitle(ADW_ACTION_ROW(g_dv.files_row), text[0] ? text : mc_str(MC_STR_DEVICE_FILES_NONE));
   adw_action_row_set_subtitle(ADW_ACTION_ROW(g_dv.address_row),
                               g_dv.address ? g_dv.address : mc_str(MC_STR_DEVICE_ADDRESS_UNKNOWN));
+  gtk_widget_set_visible(g_dv.files_row, !g_dv.solo);
+  char *reach = g_dv.found ? device_view_reach_text(g_dv.sync, g_dv.uid, g_dv.name, FALSE) : NULL;
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(g_dv.reach_row), reach ? reach : "");
+  g_free(reach);
+  gtk_widget_set_sensitive(g_dv.reach_check, g_dv.found && !g_dv.removed && g_dv.online);
 
   /* Progress takes the status line's place while syncing, and for a moment after. */
   static const enum mc_str_id phases[] = {
@@ -522,9 +538,9 @@ static void update_status(void) {
 
   gboolean can_sync = g_dv.found && !g_dv.removed && g_dv.online && !syncing();
   gtk_widget_set_sensitive(g_dv.sync_now, can_sync);
-  gtk_widget_set_visible(g_dv.sync_now, g_dv.found);
+  gtk_widget_set_visible(g_dv.sync_now, g_dv.found && !g_dv.solo);
   gtk_widget_set_sensitive(g_dv.remove, g_dv.found && !g_dv.removed);
-  gtk_widget_set_visible(g_dv.remove, g_dv.found);
+  gtk_widget_set_visible(g_dv.remove, g_dv.found && !g_dv.solo);
 }
 
 static void update_count(void) {
@@ -599,7 +615,11 @@ static void update_controls(gboolean force) {
 
   gtk_widget_set_visible(g_dv.info_group, dev);
   gtk_widget_set_visible(g_dv.profile_group, dev && !g_dv.removed);
-  gtk_widget_set_visible(g_dv.what_group, dev && !g_dv.removed);
+  gtk_widget_set_visible(g_dv.what_group, dev && !g_dv.removed && !g_dv.solo);
+  /* Outside a group there's no profile, only the name. */
+  gtk_widget_set_visible(g_dv.archive_row, !g_dv.solo);
+  gtk_widget_set_visible(g_dv.format_row, !g_dv.solo);
+  gtk_widget_set_visible(g_dv.budget_row, !g_dv.solo);
 
   if (force || !has_focus_within(g_dv.name_row)) set_entry_text(g_dv.name_row, g_dv.found ? g_dv.name : "");
   gtk_widget_set_sensitive(g_dv.name_row, g_dv.found && !g_dv.removed && (g_dv.is_self || g_dv.profile));
@@ -1274,6 +1294,15 @@ static void on_destroy(GtkWidget *widget, gpointer data) {
   g_dv.root = NULL;
 }
 
+/* Tests the connections again: with every device online, on this computer's own page. The
+ * row updates when the answers come in. */
+static void on_reach_check_clicked(GtkButton *button, gpointer data) {
+  (void)button, (void)data;
+  if (!g_dv.sync) return;
+  mc_status st = mc_sync_check_reach(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
+  if (st != MC_OK) toast(mc_status_str(st));
+}
+
 static GtkWidget *info_row(const char *title) {
   GtkWidget *row = adw_action_row_new();
   adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
@@ -1473,8 +1502,14 @@ GtkWidget *device_view_new(const device_view_callbacks *callbacks) {
   g_dv.info_group = adw_preferences_group_new();
   g_dv.files_row = info_row(mc_str(MC_STR_DEVICE_FILES));
   g_dv.address_row = info_row(mc_str(MC_STR_DEVICE_ADDRESS));
+  g_dv.reach_row = info_row(mc_str(MC_STR_LINUX_REACH));
+  g_dv.reach_check = gtk_button_new_with_label(mc_str(MC_STR_LINUX_REACH_CHECK));
+  gtk_widget_set_valign(g_dv.reach_check, GTK_ALIGN_CENTER);
+  g_signal_connect(g_dv.reach_check, "clicked", G_CALLBACK(on_reach_check_clicked), NULL);
+  adw_action_row_add_suffix(ADW_ACTION_ROW(g_dv.reach_row), g_dv.reach_check);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(g_dv.info_group), g_dv.files_row);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(g_dv.info_group), g_dv.address_row);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(g_dv.info_group), g_dv.reach_row);
 
   g_dv.profile_group = build_profile_group();
   g_dv.what_group = build_what_group();
@@ -1554,7 +1589,12 @@ static void busy_remove(int i) {
 }
 
 void device_view_on_sync_event(const sync_event *ev) {
-  if (!g_dv.root || !g_dv.sync || !g_dv.found || !ev->uid[0]) return;
+  if (!g_dv.root || !g_dv.sync || !g_dv.found) return;
+  if (ev->kind == SYNC_EV_REACH) { /* cheap enough to redo for any device */
+    update_status();
+    return;
+  }
+  if (!ev->uid[0]) return;
   if (!g_dv.is_self && strcmp(ev->uid, g_dv.uid)) return;
   int i = busy_index(ev->uid);
   switch (ev->kind) {
@@ -1619,4 +1659,45 @@ void device_view_on_sync_event(const sync_event *ev) {
     default:
       return;
   }
+}
+
+/* A string of mc_format_alloc()'s, as a g_free()able one. */
+static char *take_formatted(char *text) {
+  char *out = g_strdup(text);
+  mc_free(text);
+  return out;
+}
+
+char *device_view_reach_text(mc_sync *sync, const char *uid, const char *name, gboolean warning_only) {
+  if (!sync || !uid) return NULL;
+  const char *shown = name && *name ? name : mc_str(MC_STR_DEVICE_UNNAMED);
+  if (!strcmp(uid, mc_sync_device_uid(sync))) {
+    mc_sync_self_reach r;
+    if (mc_sync_reach_self(sync, &r) != MC_OK) return NULL;
+    if (r.state == MC_REACH_BLOCKED) {
+      char *text = take_formatted(mc_format_alloc(mc_str_plural(MC_STR_LINUX_REACH_SELF_BLOCKED, r.blocked),
+                                                  MC_D(r.blocked), MC_D(r.port)));
+      if (r.default_port) return text;
+      char *taken = take_formatted(mc_format_alloc(mc_str(MC_STR_LINUX_REACH_PORT_TAKEN), MC_D(MC_SYNC_DEFAULT_PORT)));
+      char *both = g_strdup_printf("%s %s", text, taken);
+      g_free(text);
+      g_free(taken);
+      return both;
+    }
+    if (warning_only) return NULL;
+    return g_strdup(mc_str(r.state == MC_REACH_OK ? MC_STR_LINUX_REACH_SELF_OK : MC_STR_LINUX_REACH_UNKNOWN));
+  }
+  mc_sync_reach to_them, to_us;
+  if (mc_sync_reach_peer(sync, uid, &to_them, &to_us) != MC_OK) to_them = to_us = MC_REACH_UNKNOWN;
+  if (to_them == MC_REACH_BLOCKED)
+    return take_formatted(mc_format_alloc(
+        mc_str(to_us == MC_REACH_BLOCKED ? MC_STR_LINUX_REACH_PEER_BLOCKED_BOTH : MC_STR_LINUX_REACH_PEER_BLOCKED),
+        MC_S(shown)));
+  /* Its not reaching this computer shows on this computer's row instead. */
+  if (warning_only) return NULL;
+  if (to_us == MC_REACH_BLOCKED)
+    return take_formatted(mc_format_alloc(mc_str(MC_STR_LINUX_REACH_PEER_US_BLOCKED), MC_S(shown)));
+  if (to_them == MC_REACH_OK)
+    return g_strdup(mc_str(to_us == MC_REACH_OK ? MC_STR_LINUX_REACH_PEER_OK : MC_STR_LINUX_REACH_PEER_OUT_OK));
+  return g_strdup(mc_str(MC_STR_LINUX_REACH_UNKNOWN));
 }

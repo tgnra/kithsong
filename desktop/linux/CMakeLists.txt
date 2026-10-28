@@ -16,6 +16,7 @@ add_executable(musicapp
   src/add_device.c
   src/devices.c
   src/recents.c
+  src/search_view.c
   src/device_view.c
   src/pair_dialog.c
   src/sync_bridge.c

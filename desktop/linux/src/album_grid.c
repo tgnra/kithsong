@@ -14,7 +14,6 @@ static void album_item_finalize(GObject *obj) {
   AlbumItem *self = ALBUM_ITEM(obj);
   g_free(self->title);
   g_free(self->artist);
-  g_free(self->cover_dir);
   g_free(self->cover_file);
   G_OBJECT_CLASS(album_item_parent_class)->finalize(obj);
 }
@@ -32,7 +31,9 @@ static AlbumItem *album_item_new(const mc_album_info *info) {
   memcpy(self->uid, info->uid, sizeof self->uid);
   self->title = g_strdup(info->title && *info->title ? info->title : mc_str(MC_STR_UNTITLED));
   self->artist = info->artist && *info->artist ? g_strdup(info->artist) : NULL;
-  self->cover_dir = info->has_art && info->folder ? g_strdup(info->folder) : NULL;
+  /* Looked for now, so a reload after a cover arrives (sync fetches them as albums come in)
+   * makes a different item, and its tile is bound again. */
+  self->cover_file = info->has_art ? cover_path(info->folder) : NULL;
   self->year = info->year;
   return self;
 }
@@ -60,7 +61,7 @@ static AlbumItem *album_item_with_cover(const AlbumItem *item, const char *cover
 
 static gboolean album_item_equal(const AlbumItem *a, const AlbumItem *b) {
   return !strcmp(a->uid, b->uid) && !g_strcmp0(a->title, b->title) && !g_strcmp0(a->artist, b->artist) &&
-         !g_strcmp0(a->cover_dir, b->cover_dir) && !g_strcmp0(a->cover_file, b->cover_file) &&
+         !g_strcmp0(a->cover_file, b->cover_file) &&
          a->year == b->year && a->is_playlist == b->is_playlist && a->track_count == b->track_count;
 }
 
@@ -117,9 +118,8 @@ static void cell_free(gpointer data) {
   g_free(c);
 }
 
-static void tile_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
-  (void)factory;
-  (void)user;
+/* A tile's widgets, empty; its cell is the box's "cell". */
+static GtkWidget *tile_build(void) {
   cell *c = g_new0(cell, 1);
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_set_size_request(box, COVER_SIZE, -1);
@@ -140,7 +140,7 @@ static void tile_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
   gtk_box_append(GTK_BOX(box), c->artist);
 
   g_object_set_data_full(G_OBJECT(box), "cell", c, cell_free);
-  gtk_list_item_set_child(item, box);
+  return box;
 }
 
 static void tile_cover_loaded(GdkTexture *texture, gpointer user) {
@@ -149,35 +149,53 @@ static void tile_cover_loaded(GdkTexture *texture, gpointer user) {
   gtk_picture_set_paintable(GTK_PICTURE(c->picture), GDK_PAINTABLE(texture));
 }
 
-static void tile_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
-  (void)factory;
-  (void)user;
-  AlbumItem *album = gtk_list_item_get_item(item);
-  GtkWidget *box = gtk_list_item_get_child(item);
+/* Shows album in the tile, loading its cover if it isn't cached. Returns the tile's name for
+ * screen readers; g_free it. */
+static char *tile_show(GtkWidget *box, AlbumItem *album) {
   cell *c = g_object_get_data(G_OBJECT(box), "cell");
   char *subtitle = album_item_subtitle(album);
   gtk_label_set_text(GTK_LABEL(c->title), album->title);
   gtk_label_set_text(GTK_LABEL(c->artist), subtitle);
-  char *name = mc_format_alloc(mc_str(MC_STR_LINUX_ALBUM_TILE_NAME), MC_S(album->title), MC_S(subtitle));
-  gtk_list_item_set_accessible_label(item, name ? name : album->title);
-  mc_free(name);
+  char *formatted = mc_format_alloc(mc_str(MC_STR_LINUX_ALBUM_TILE_NAME), MC_S(album->title), MC_S(subtitle));
+  char *name = g_strdup(formatted ? formatted : album->title);
+  mc_free(formatted);
   g_free(subtitle);
 
   cell_cancel(c);
   gtk_picture_set_paintable(GTK_PICTURE(c->picture), NULL);
-  if (!album->cover_dir && !album->cover_file) return;
+  if (!album->cover_file) return name;
   int size = COVER_SIZE * gtk_widget_get_scale_factor(box);
   GdkTexture *texture = NULL;
-  gboolean cached = album->cover_dir ? cover_lookup(album->cover_dir, size, &texture)
-                                     : cover_lookup_file(album->cover_file, size, &texture);
-  if (cached) {
+  if (cover_lookup_file(album->cover_file, size, &texture)) {
     gtk_picture_set_paintable(GTK_PICTURE(c->picture), GDK_PAINTABLE(texture));
     g_clear_object(&texture);
   } else {
     c->loading = g_cancellable_new();
-    if (album->cover_dir) cover_load(album->cover_dir, size, c->loading, tile_cover_loaded, c);
-    else cover_load_file(album->cover_file, size, c->loading, tile_cover_loaded, c);
+    cover_load_file(album->cover_file, size, c->loading, tile_cover_loaded, c);
   }
+  return name;
+}
+
+static void tile_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  gtk_list_item_set_child(item, tile_build());
+}
+
+static void tile_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  char *name = tile_show(gtk_list_item_get_child(item), gtk_list_item_get_item(item));
+  gtk_list_item_set_accessible_label(item, name);
+  g_free(name);
+}
+
+GtkWidget *album_tile_new(AlbumItem *album) {
+  GtkWidget *box = tile_build();
+  char *name = tile_show(box, album);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(box), GTK_ACCESSIBLE_PROPERTY_LABEL, name, -1);
+  g_free(name);
+  return box;
 }
 
 static void tile_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
@@ -415,6 +433,17 @@ void album_grid_unselect(GtkWidget *widget) {
   g->quiet = TRUE;
   gtk_single_selection_set_selected(g->selection, GTK_INVALID_LIST_POSITION);
   g->quiet = FALSE;
+}
+
+AlbumItem *album_grid_find(GtkWidget *widget, const char *uid) {
+  grid *g = grid_of(widget);
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(g->store));
+  for (guint i = 0; i < n; i++) {
+    AlbumItem *item = g_list_model_get_item(G_LIST_MODEL(g->store), i);
+    if (!strcmp(item->uid, uid)) return item;
+    g_object_unref(item);
+  }
+  return NULL;
 }
 
 gboolean album_grid_select(GtkWidget *widget, const char *uid) {

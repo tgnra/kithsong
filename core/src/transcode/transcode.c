@@ -5,7 +5,7 @@
  *
  * Tags are read from the source with TagLib (tag_io.cpp) and written as Opus comments while
  * encoding, so the file is complete the moment it's renamed into place. The cover is the
- * source's embedded picture, else the image beside it (coverart.c finds it). */
+ * album's image beside the source (coverart.c finds it), never the source's embedded one. */
 #include "musiccore/transcode.h"
 
 #include <math.h>
@@ -104,16 +104,9 @@ static int add_tags(OggOpusComments *c, const char *src_path) {
   return ok;
 }
 
-/* Embeds the cover as a front-cover picture. An image libopusenc can't parse (it takes
- * JPEG, PNG and GIF) is left out rather than failing the transcode. */
+/* Embeds the album's cover as a front-cover picture. An image libopusenc can't parse (it
+ * takes JPEG, PNG and GIF) is left out rather than failing the transcode. */
 static void add_cover(OggOpusComments *c, const char *src_path) {
-  unsigned char *img;
-  size_t len;
-  if (mc_tags_read_picture(src_path, &img, &len) == MC_OK) {
-    int err = ope_comments_add_picture_from_memory(c, (const char *)img, len, -1, NULL);
-    free(img);
-    if (err == OPE_OK) return;
-  }
   char *dir = parent_dir(src_path);
   char *cover = dir ? mc_coverart_find(dir) : NULL;
   if (cover) ope_comments_add_picture(c, cover, -1, NULL);

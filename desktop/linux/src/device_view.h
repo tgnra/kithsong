@@ -8,6 +8,7 @@
  *   |         (or, syncing: [####----] Syncing library… 120 sent, …)   |
  *   |  | Files    1,204 of 1,210 files OK, 6 missing, 41.2 GB       |  |
  *   |  | Address  192.168.1.20, port 47823                        |  |
+ *   |  | Connections  This computer can't connect…   [Check again] |  |
  *   |  Profile                                                         |
  *   |  | Name                                       [Living room ✓] |  |
  *   |  | Archive  Keeps the whole library as original files    (o) |  |
@@ -28,7 +29,8 @@
  * made: the size, what Auto picked, or by how much it doesn't fit (then nothing would sync).
  * Edits are collected and applied together shortly after, through the device's sync profile
  * (get, change, set); a failure shows as a toast, and the page reloads. The name applies
- * with its row's apply button or Enter. */
+ * with its row's apply button or Enter. Outside a group this computer's page has only its
+ * address, connections and name. */
 #ifndef MUSICAPP_DEVICE_VIEW_H
 #define MUSICAPP_DEVICE_VIEW_H
 
@@ -55,5 +57,10 @@ void device_view_open(mc_sync *sync, mc_library *lib, const char *uid);
 void device_view_refresh(void);
 /* Updates the status and progress from a sync event about this device; others are ignored. */
 void device_view_on_sync_event(const sync_event *ev);
+
+/* What's known of whether this computer and device uid (named name) can connect to each
+ * other: for this computer's own uid, whether other devices can reach it. warning_only:
+ * NULL unless this computer can't be reached, or can't reach uid. g_free it. */
+char *device_view_reach_text(mc_sync *sync, const char *uid, const char *name, gboolean warning_only);
 
 #endif

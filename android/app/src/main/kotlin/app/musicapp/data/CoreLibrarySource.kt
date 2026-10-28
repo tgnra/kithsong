@@ -327,16 +327,15 @@ class CoreLibrarySource(
 
         fun album(info: AlbumInfo): ArtRef {
             val folder = info.folder ?: return ArtRef(info.uid, info.title)
-            // Without a cover the core knows of, the first track's embedded art, if any.
-            val file = found.getOrPut(folder) { if (info.hasArt) coverIn(folder) else firstAudioFileIn(folder) }
+            // Embedded art is never shown: the cover file is the album's art.
+            val file = if (info.hasArt) found.getOrPut(folder) { coverIn(folder) } else null
             return ref(info.uid, info.title, file)
         }
 
-        // A track's album cover, else its own embedded art.
+        // A track's album cover.
         fun track(info: TrackInfo): Track {
             val album = info.album.orEmpty()
-            val cover = info.coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } }
-            val file = cover ?: info.path?.let(::File)
+            val file = info.coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } }
             return Track(
                 uid = info.uid,
                 title = info.title,
@@ -360,9 +359,6 @@ class CoreLibrarySource(
 
         private fun coverIn(dir: String): File? =
             COVER_NAMES.asSequence().map { File(dir, it) }.firstOrNull { it.isFile }
-
-        private fun firstAudioFileIn(dir: String): File? =
-            File(dir).listFiles { file -> file.extension.lowercase() in EMBEDDED_ART_EXTENSIONS }?.minByOrNull { it.name }
     }
 
     private companion object {
@@ -373,8 +369,6 @@ class CoreLibrarySource(
         const val RECENT_ALBUMS_RULE = """{"v": 1, "match": {"field": "last_played", "op": "not_empty"},
             "order": [{"field": "last_played", "dir": "desc"}], "limit": $MAX_RECENTS}"""
         val COVER_NAMES = listOf("cover.jpg", "cover.png")
-        // What MediaMetadataRetriever can find pictures in.
-        val EMBEDDED_ART_EXTENSIONS = setOf("mp3", "flac", "m4a", "mp4", "ogg", "opus")
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
     }

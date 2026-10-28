@@ -2,8 +2,9 @@
  *
  *   AdwToolbarView
  *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar  [import][settings]
- *   +- AdwOverlaySplitView (sidebar: Albums / Artists / Playlists / Recents / Devices)
- *      +- GtkStack of pages: "library" | "import" (import_view.c) | "device" (device_view.c)
+ *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Recents / Devices)
+ *      +- GtkStack of pages: "library" | "search" (search_view.c) | "import" (import_view.c)
+ *         | "device" (device_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
  *            +- GtkStack: empty-state page | GtkGridView of albums (virtualised)
  *                         | empty-state page | GtkGridView of playlists
@@ -12,7 +13,8 @@
  * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
  * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, Settings' Move
  * Library move_library.c, the Add to Playlist dialog add_to_playlist.c and the Rename and
- * Delete Playlist dialogs playlist_dialogs.c. The sidebar's Recents section is recents.c, and
+ * Delete Playlist dialogs playlist_dialogs.c and the Search page search_view.c. The sidebar's
+ * Recents section is recents.c, and
  * its Devices section and sync are devices.c, which adds a device's page (device_view.c) to
  * the stack of pages as "device". The playback buttons
  * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
@@ -20,6 +22,7 @@
  */
 #include <adwaita.h>
 #include <math.h>
+#include <string.h>
 
 #include "add_to_playlist.h"
 #include "album_grid.h"
@@ -34,6 +37,7 @@
 #include "playback.h"
 #include "playlist_dialogs.h"
 #include "recents.h"
+#include "search_view.h"
 #include "settings_view.h"
 #include "track_list.h"
 
@@ -47,7 +51,9 @@ static const char css[] =
   ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }"
   ".pair-code { font-size: 20pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
   ".pair-code-shown { font-size: 32pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
-  ".sync-picker { background: none; }";
+  ".sync-picker { background: none; }"
+  ".search-large { font-size: 14pt; min-height: 44px; }"
+  ".search-albums > flowboxchild { padding: 8px; border-radius: 12px; }";
 
 static GtkWidget *play_button;
 
@@ -190,6 +196,7 @@ static void on_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user
   (void)list;
   app *a = user;
   devices_unselect();
+  gtk_list_box_unselect_all(a->top_nav);
   gboolean playlists = gtk_list_box_row_get_index(row) == 2;
   if (playlists != a->show_playlists) {
     album_grid_unselect(playlists ? a->album_grid : a->playlist_grid);
@@ -210,6 +217,32 @@ static GtkWidget *nav_row(const char *icon, const char *label) {
   return box;
 }
 
+/* Search is the only row of top_nav that can be picked; Home isn't there yet. */
+static void on_top_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
+  (void)list;
+  (void)row;
+  app *a = user;
+  devices_unselect();
+  gtk_list_box_unselect_all(a->nav);
+  show_page(a, "search");
+  search_view_focus();
+}
+
+static GtkWidget *build_top_nav(app *a) {
+  GtkWidget *list = gtk_list_box_new();
+  gtk_widget_add_css_class(list, "navigation-sidebar");
+  GtkWidget *home = gtk_list_box_row_new();
+  gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(home), nav_row("go-home-symbolic", mc_str(MC_STR_LINUX_SECTION_HOME)));
+  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(home), FALSE);
+  gtk_list_box_row_set_selectable(GTK_LIST_BOX_ROW(home), FALSE);
+  gtk_widget_set_sensitive(home, FALSE);
+  gtk_list_box_append(GTK_LIST_BOX(list), home);
+  gtk_list_box_append(GTK_LIST_BOX(list), nav_row("system-search-symbolic", mc_str(MC_STR_SEARCH)));
+  g_signal_connect(list, "row-activated", G_CALLBACK(on_top_nav_activated), a);
+  a->top_nav = GTK_LIST_BOX(list);
+  return list;
+}
+
 /* The arrow keys stop at the ends of a list; past them, they go on to the next or previous
  * one (Recents, Devices), as Tab does. */
 static gboolean on_sidebar_keynav_failed(GtkWidget *list, GtkDirectionType dir, gpointer user) {
@@ -227,6 +260,13 @@ static void connect_keynav(GtkWidget *widget) {
 
 static GtkWidget *build_sidebar(app *a) {
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(box), build_top_nav(a));
+  GtkWidget *separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+  gtk_widget_set_margin_start(separator, 12);
+  gtk_widget_set_margin_end(separator, 12);
+  gtk_widget_set_margin_top(separator, 3);
+  gtk_widget_set_margin_bottom(separator, 3);
+  gtk_box_append(GTK_BOX(box), separator);
 
   /* Artists shows the album grid for now, as on Windows. */
   GtkWidget *nav = gtk_list_box_new();
@@ -429,6 +469,8 @@ void app_reload_library(app *a) {
   gtk_stack_set_visible_child_name(a->albums, page);
   show_album(a); /* if the album went, the selection did too */
   recents_refresh(a);
+  if (a->lib) mc_library_search_prepare(a->lib); /* the index is ready before the user types */
+  search_view_refresh();
 }
 
 void app_open(app *a, gboolean playlist, const char *uid) {
@@ -436,6 +478,12 @@ void app_open(app *a, gboolean playlist, const char *uid) {
   gtk_list_box_select_row(a->nav, row);
   on_nav_activated(a->nav, row, a);
   if (album_grid_select(shown_grid(a), uid)) show_album(a);
+}
+
+void app_open_track(app *a, const char *album_uid, const char *track_uid) {
+  app_open(a, FALSE, album_uid);
+  AlbumItem *album = track_list_album();
+  if (album && !strcmp(album->uid, album_uid)) track_list_select(track_uid);
 }
 
 /* --- SteadyBin --- */
@@ -656,6 +704,8 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   GtkWidget *pages = gtk_stack_new();
   a->pages = GTK_STACK(pages);
   gtk_stack_add_named(a->pages, album_split, "library");
+  a->search = search_view_new(a);
+  gtk_stack_add_named(a->pages, a->search, "search");
   const import_view_callbacks import_cb = {on_import_library_changed, on_import_session,
                                            on_import_done, on_import_present, a};
   a->import = import_view_new(a->lib, &import_cb);

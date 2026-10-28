@@ -98,7 +98,7 @@ static void on_sync_done(void *user, const mc_sync_result *r) {
   mc_mutex_unlock(&d->m);
 }
 
-static const mc_sync_events k_events = {NULL, on_pair_code, on_pair_result, NULL, on_sync_done};
+static const mc_sync_events k_events = {NULL, on_pair_code, on_pair_result, NULL, on_sync_done, NULL};
 
 static int dev_start(dev *d, const char *root, const char *label) {
   d->label = label;

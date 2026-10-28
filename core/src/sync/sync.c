@@ -17,7 +17,12 @@
  * goes out when the limit runs out. Sessions the member starts are served as ever, and end
  * the same way. A failed or incomplete session clears auto_after_ms, so retries and
  * follow-ups keep their schedule. mc_sync_new() seeds it from peer_contact.last_sync_ms, so
- * a restart doesn't reset it. */
+ * a restart doesn't reset it.
+ *
+ * Reachability (mc_sync_reach in sync.h). Every connection made to a peer, or failed while
+ * it is online, and every session it starts here, is evidence of which way connections get
+ * through; so is a reach check (reach.c), which the scheduler runs with each online peer
+ * when first seen and every REACH_EVERY_MS. The latest evidence each way wins. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +32,7 @@
 #include "discovery/local_addr.h"
 #include "library/library_internal.h"
 #include "sync/archive.h"
+#include "sync/reach.h"
 #include "sync/rows.h"
 #include "sync/session.h"
 #include "sync/sync_internal.h"
@@ -46,6 +52,10 @@
  * only it can reach out from to call back, not so long that a press confirms edits made
  * long after it. */
 #define USER_WINDOW_MS (PERIOD_MS + HIGHER_GRACE_MS)
+/* Reach checks with a device that stays online. */
+#define REACH_EVERY_MS (15 * 60 * 1000)
+/* A device that connected to us counts as online this long (see reach_alive()). */
+#define REACH_ALIVE_MS (PERIOD_MS + HIGHER_GRACE_MS)
 
 /* --- Small helpers --- */
 
@@ -183,11 +193,92 @@ void mc_sync_emit_progress(mc_sync *sync, const mc_sync_progress *p) {
   mc_mutex_unlock(&sync->cb_lock);
 }
 
+static void emit_reach(mc_sync *sync, const char *uid) {
+  if (!sync->ev.on_reach) return;
+  mc_mutex_lock(&sync->cb_lock);
+  sync->ev.on_reach(sync->user, uid);
+  mc_mutex_unlock(&sync->cb_lock);
+}
+
 static void emit_done(mc_sync *sync, const mc_sync_result *r) {
   if (!sync->ev.on_sync_done) return;
   mc_mutex_lock(&sync->cb_lock);
   sync->ev.on_sync_done(sync->user, r);
   mc_mutex_unlock(&sync->cb_lock);
+}
+
+/* --- Reachability: what's known --- */
+
+static mc_sync_reach verdict(uint64_t ok_ms, uint64_t fail_ms) {
+  if (!ok_ms && !fail_ms) return MC_REACH_UNKNOWN;
+  return ok_ms >= fail_ms ? MC_REACH_OK : MC_REACH_BLOCKED;
+}
+
+/* Under lock. Online by evidence other than our own connecting to it: discovery sees it, or
+ * it connected to us lately. A failure to connect to a device that isn't means it's away,
+ * not blocked. */
+static int reach_alive(const mc_sync_peer *p, uint64_t now) {
+  return p->discovered || (p->in_ok_ms && now < p->in_ok_ms + REACH_ALIVE_MS);
+}
+
+/* Under lock. */
+static void self_reach_locked(mc_sync *sync, mc_sync_self_reach *out) {
+  memset(out, 0, sizeof *out);
+  for (int i = 0; i < sync->npeers; i++) {
+    mc_sync_reach v = verdict(sync->peers[i].in_ok_ms, sync->peers[i].in_fail_ms);
+    if (v == MC_REACH_OK) out->ok++;
+    if (v == MC_REACH_BLOCKED) out->blocked++;
+  }
+  out->state = out->blocked ? MC_REACH_BLOCKED : out->ok ? MC_REACH_OK : MC_REACH_UNKNOWN;
+  out->port = sync->started ? sync->port : 0;
+  out->default_port = out->port == MC_SYNC_DEFAULT_PORT;
+}
+
+enum { REACH_OUT_OK, REACH_OUT_FAIL, REACH_IN_OK, REACH_IN_FAIL };
+
+/* Records evidence about uid and reports what it changed. from, if given, is the address
+ * of a connection uid made to us. create: add uid to the peer table if it isn't there. */
+static void reach_note(mc_sync *sync, const char *uid, int what, const char *from, int create) {
+  uint64_t now = mc_mono_ms();
+  int peer_changed = 0, self_changed = 0;
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, uid, create);
+  if (p) {
+    mc_sync_self_reach before, after;
+    self_reach_locked(sync, &before);
+    mc_sync_reach out = verdict(p->out_ok_ms, p->out_fail_ms);
+    mc_sync_reach in = verdict(p->in_ok_ms, p->in_fail_ms);
+    switch (what) {
+      case REACH_OUT_OK: p->out_ok_ms = now; break;
+      case REACH_OUT_FAIL:
+        if (reach_alive(p, now)) p->out_fail_ms = now;
+        break;
+      case REACH_IN_OK: p->in_ok_ms = now; break;
+      default: p->in_fail_ms = now; break;
+    }
+    if (from) mc_reach_host_of(from, p->in_addr);
+    peer_changed = out != verdict(p->out_ok_ms, p->out_fail_ms) ||
+                   in != verdict(p->in_ok_ms, p->in_fail_ms);
+    self_reach_locked(sync, &after);
+    self_changed = before.state != after.state || before.ok != after.ok ||
+                   before.blocked != after.blocked;
+  }
+  mc_mutex_unlock(&sync->lock);
+  if (peer_changed) emit_reach(sync, uid);
+  if (self_changed) emit_reach(sync, sync->device_uid);
+}
+
+/* This device's network changed: what was known held for the old one. */
+static void reach_forget(mc_sync *sync) {
+  mc_mutex_lock(&sync->lock);
+  for (int i = 0; i < sync->npeers; i++) {
+    mc_sync_peer *p = &sync->peers[i];
+    p->out_ok_ms = p->out_fail_ms = p->in_ok_ms = p->in_fail_ms = 0;
+    p->reach_ms = 0;
+  }
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+  emit_reach(sync, NULL);
 }
 
 /* --- Workers and channels --- */
@@ -683,6 +774,10 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
     if (mc_channel_connect(j->host[i], j->port[i], MC_MODE_SESSION, CONNECT_MS, &ch) == MC_OK)
       at = i;
   }
+  if (ch)
+    reach_note(sync, j->uid, REACH_OUT_OK, NULL, 0);
+  else if (j->n && !stopping(sync))
+    reach_note(sync, j->uid, REACH_OUT_FAIL, NULL, 0);
   mc_session s;
   memset(&s, 0, sizeof s);
   s.sync = sync;
@@ -729,6 +824,75 @@ static void session_worker(void *arg) {
   free(j);
 }
 
+/* --- Reach checks --- */
+
+static void reach_done(mc_sync *sync, const char *uid) {
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, uid, 0);
+  if (p) p->reaching = 0;
+  mc_mutex_unlock(&sync->lock);
+}
+
+/* Asks a peer to connect back. The job holds its discovered or last known address; a
+ * member's hints are added here, and the address its sessions come from at each port. */
+static void reach_worker(void *arg) {
+  session_job *j = arg;
+  mc_sync *sync = j->sync;
+  char from[MC_SYNC_ADDR_MAX] = "";
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, j->uid, 0);
+  int member = p && p->member;
+  if (p) memcpy(from, p->in_addr, sizeof from);
+  uint16_t port = sync->reach_port_override ? sync->reach_port_override : sync->port;
+  mc_mutex_unlock(&sync->lock);
+  mc_sync_conn c;
+  if (member && mc_sync_conn_open(sync, &c) == MC_OK) {
+    job_addresses(&c, j, NULL, 0);
+    mc_sync_conn_close(&c);
+  }
+  for (int i = 0, n = j->n; from[0] && i < n; i++) job_add(j, from, j->port[i]);
+
+  mc_reach_answer a;
+  memset(&a, 0, sizeof a);
+  int connected = 0;
+  for (int i = 0; i < j->n && !connected && !stopping(sync); i++) {
+    mc_channel *ch = NULL;
+    if (mc_channel_connect(j->host[i], j->port[i], MC_MODE_REACH, CONNECT_MS, &ch) != MC_OK)
+      continue;
+    connected = 1;
+    mc_sync_track(sync, ch);
+    mc_reach_ask(ch, sync->device_uid, port, &a);
+    mc_sync_untrack(sync, ch);
+    mc_channel_close(ch);
+  }
+  if (a.answered && strcmp(a.uid, j->uid) != 0) {
+    /* Another device has its address now: nothing learnt about this one. */
+  } else if (connected) {
+    reach_note(sync, j->uid, REACH_OUT_OK, NULL, 0);
+    if (a.answered) reach_note(sync, j->uid, a.ok ? REACH_IN_OK : REACH_IN_FAIL, NULL, 0);
+  } else if (j->n && !stopping(sync)) {
+    reach_note(sync, j->uid, REACH_OUT_FAIL, NULL, 0);
+  }
+  reach_done(sync, j->uid);
+  free(j);
+}
+
+/* Another device's reach check. Nothing in it is authenticated, so it counts as evidence
+ * about the device it names only when it comes from where that device is known to be. */
+static void serve_reach(mc_sync *sync, mc_channel *ch) {
+  char claimed[MC_UID_STRLEN], host[MC_SYNC_ADDR_MAX];
+  int ok;
+  mc_status st = mc_reach_serve(ch, sync->device_uid, claimed, host, &ok);
+  if (st == MC_ERR_FORMAT || !claimed[0] || !strcmp(claimed, sync->device_uid)) return;
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, claimed, 0);
+  int known = p && host[0] && (!strcmp(p->address, host) || !strcmp(p->in_addr, host));
+  mc_mutex_unlock(&sync->lock);
+  if (!known) return;
+  reach_note(sync, claimed, REACH_IN_OK, NULL, 0);
+  reach_note(sync, claimed, ok ? REACH_OUT_OK : REACH_OUT_FAIL, NULL, 0);
+}
+
 /* --- Serving connections --- */
 
 typedef struct serve_arg {
@@ -754,6 +918,13 @@ static void serve_worker(void *arg) {
     mc_sync_conn_close(&c);
     return;
   }
+  if (mc_channel_mode(ch) == MC_MODE_REACH) {
+    serve_reach(sync, ch);
+    mc_sync_untrack(sync, ch);
+    mc_channel_close(ch);
+    mc_sync_conn_close(&c);
+    return;
+  }
   mc_session s;
   memset(&s, 0, sizeof s);
   s.sync = sync;
@@ -761,6 +932,7 @@ static void serve_worker(void *arg) {
   s.ch = ch;
   mc_status st = mc_session_handshake_respond(&s);
   if (st == MC_OK) {
+    reach_note(sync, s.peer_uid, REACH_IN_OK, mc_channel_peer_addr(ch), 1);
     if (mc_sync_claim(sync, s.peer_uid, strcmp(s.peer_uid, sync->device_uid) < 0, ch)) {
       s.user = mc_sync_take_user(sync, s.peer_uid);
       st = mc_session_run(&s);
@@ -796,14 +968,16 @@ static void listen_main(void *arg) {
     mc_status st = mc_channel_accept_raw(l, ACCEPT_WAIT_MS, &ch);
     if (st != MC_OK) mc_sleep_ms(100);
     if (!ch) continue;
+    /* Filled in before the worker starts, which may be at once. */
     serve_arg *a = malloc(sizeof *a);
+    if (a) {
+      a->sync = sync;
+      a->ch = ch;
+    }
     if (!a || mc_sync_spawn(sync, serve_worker, a) != MC_OK) {
       free(a);
       mc_channel_close(ch);
-      continue;
     }
-    a->sync = sync;
-    a->ch = ch;
   }
 }
 
@@ -879,7 +1053,10 @@ static void sched_main(void *arg) {
       int changed = strcmp(hints, sync->hints) != 0;
       if (changed) memcpy(sync->hints, hints, sizeof hints);
       mc_mutex_unlock(&sync->lock);
-      if (changed) mc_session_refresh_self(sync, &c);
+      if (changed) {
+        mc_session_refresh_self(sync, &c);
+        reach_forget(sync);
+      }
     }
     if (now >= next_poll) {
       next_poll = now + POLL_MS;
@@ -977,10 +1154,37 @@ static void sched_main(void *arg) {
       p->trigger_ms = p->due_ms;
       jobs[njobs++] = j;
     }
+    /* Reach checks: each peer online, when first seen and every REACH_EVERY_MS. */
+    session_job *checks[16];
+    int nchecks = 0;
+    for (int i = 0; i < sync->npeers && nchecks < 16; i++) {
+      mc_sync_peer *p = &sync->peers[i];
+      if (p->reaching) continue;
+      int online = !sync->manual_only && (p->reached || reach_alive(p, now));
+      uint64_t due = p->reach_ms ? p->reach_ms + REACH_EVERY_MS : now;
+      if (!p->reach_now && !(online && now >= due)) {
+        if (online && due < wake) wake = due;
+        continue;
+      }
+      session_job *j = calloc(1, sizeof *j);
+      if (!j) break;
+      j->sync = sync;
+      memcpy(j->uid, p->uid, MC_UID_STRLEN);
+      job_add(j, p->address, p->port);
+      p->reaching = 1;
+      p->reach_now = 0;
+      p->reach_ms = now;
+      checks[nchecks++] = j;
+    }
     mc_mutex_unlock(&sync->lock);
 
     for (int i = 0; i < njobs; i++)
       if (mc_sync_spawn(sync, session_worker, jobs[i]) != MC_OK) free(jobs[i]);
+    for (int i = 0; i < nchecks; i++) {
+      if (mc_sync_spawn(sync, reach_worker, checks[i]) == MC_OK) continue;
+      reach_done(sync, checks[i]->uid);
+      free(checks[i]);
+    }
 
     mc_mutex_lock(&sync->lock);
     now = mc_mono_ms();
@@ -1605,15 +1809,20 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
   uint64_t mono_now = mc_mono_ms();
   int64_t wall_now = mc_wall_ms();
   mc_mutex_lock(&sync->lock);
+  mc_sync_self_reach self;
+  self_reach_locked(sync, &self);
   for (int i = 0; st == MC_OK && i < list->count; i++) {
     mc_sync_device *d = &list->items[i];
     if (d->is_self) {
       d->online = 1;
+      d->reach = d->reach_us = self.state;
       continue;
     }
     mc_sync_peer *p = find_peer(sync, d->uid, 0);
     if (!p) continue;
     d->online = p->discovered || p->reached;
+    d->reach = verdict(p->out_ok_ms, p->out_fail_ms);
+    d->reach_us = verdict(p->in_ok_ms, p->in_fail_ms);
     if (p->auto_after_ms > mono_now)
       d->auto_after_ms = wall_now + (int64_t)(p->auto_after_ms - mono_now);
     if (p->address[0] && (p->discovered || !d->address)) {
@@ -1671,6 +1880,8 @@ mc_status mc_sync_list_nearby(mc_sync *sync, mc_sync_nearby_list **out) {
     n->in_other_group = other;
     n->address = dup_or_null(p->address);
     n->port = p->port;
+    n->reach = verdict(p->out_ok_ms, p->out_fail_ms);
+    n->reach_us = verdict(p->in_ok_ms, p->in_fail_ms);
   }
   mc_mutex_unlock(&sync->lock);
   if (st != MC_OK) {
@@ -1691,6 +1902,50 @@ void mc_sync_nearby_list_free(mc_sync_nearby_list *list) {
   }
   free(list->items);
   free(list);
+}
+
+/* --- Reachability --- */
+
+mc_status mc_sync_reach_self(mc_sync *sync, mc_sync_self_reach *out) {
+  if (!sync || !out) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  self_reach_locked(sync, out);
+  mc_status st = sync->started ? MC_OK : MC_ERR_INVALID_ARG;
+  mc_mutex_unlock(&sync->lock);
+  return st;
+}
+
+mc_status mc_sync_reach_peer(mc_sync *sync, const char *device_uid, mc_sync_reach *to_them,
+                             mc_sync_reach *to_us) {
+  if (!sync || !device_uid) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, device_uid, 0);
+  if (p && to_them) *to_them = verdict(p->out_ok_ms, p->out_fail_ms);
+  if (p && to_us) *to_us = verdict(p->in_ok_ms, p->in_fail_ms);
+  mc_mutex_unlock(&sync->lock);
+  return p ? MC_OK : MC_ERR_NOT_FOUND;
+}
+
+mc_status mc_sync_check_reach(mc_sync *sync, const char *device_uid) {
+  if (!sync || (device_uid && !is_uid(device_uid))) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  mc_status st = sync->started ? MC_OK : MC_ERR_INVALID_ARG;
+  uint64_t now = mc_mono_ms();
+  if (st == MC_OK && device_uid) {
+    mc_sync_peer *p = find_peer(sync, device_uid, 0);
+    if (p)
+      p->reach_now = 1;
+    else
+      st = MC_ERR_NOT_FOUND;
+  } else if (st == MC_OK) {
+    for (int i = 0; i < sync->npeers; i++) {
+      mc_sync_peer *p = &sync->peers[i];
+      if (p->reached || reach_alive(p, now)) p->reach_now = 1;
+    }
+  }
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+  return st;
 }
 
 /* --- Names and addresses --- */
@@ -1749,6 +2004,12 @@ void mc_sync_set_test_hints(mc_sync *sync, const char *json) {
   mc_mutex_lock(&sync->lock);
   snprintf(sync->hint_override, sizeof sync->hint_override, "%s", json ? json : "");
   memcpy(sync->hints, sync->hint_override, sizeof sync->hints);
+  mc_mutex_unlock(&sync->lock);
+}
+
+void mc_sync_set_test_reach_port(mc_sync *sync, uint16_t port) {
+  mc_mutex_lock(&sync->lock);
+  sync->reach_port_override = port;
   mc_mutex_unlock(&sync->lock);
 }
 

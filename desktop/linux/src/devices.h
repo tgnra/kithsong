@@ -2,18 +2,21 @@
  * counterpart of the sync parts of desktop/windows/src/main.c and sidebar.c):
  *
  *   DEVICES                          [+]
- *   [computer] Study PC
+ *   [computer] Study PC              /!\
  *              This computer
  *   [phone]    Pixel                 (spinner while syncing)
  *   [computer] Living room PC
  *              Offline
  *   UNPAIRED DEVICES (1)
- *   [computer] Kitchen laptop
+ *   [computer] Kitchen laptop        /!\
  *
  * Sync (sync_bridge.c) runs while a library is open and stops before it closes, so switching
  * library restarts it. The section lists the group's devices (this computer first, then the
  * online ones, then the offline ones) and the nearby ones, refreshed shortly after sync
- * events and every 10 seconds (a rename elsewhere fires no event). Picking a paired device
+ * events and every 10 seconds (a rename elsewhere fires no event). This computer is listed
+ * in a group or not. A warning triangle marks this computer when other devices can't
+ * connect to it, and an online or nearby device this computer can't connect to; its tooltip
+ * says which (device_view_reach_text()). Picking a paired device
  * shows its page (device_view.c) in the main stack's "device" page; picking a nearby one
  * asks it to pair (pair_dialog.c), as does the + (add_device.c, by address). */
 #ifndef MUSICAPP_DEVICES_H

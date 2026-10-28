@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * Album art to load: [uid] names the album (or artist or playlist) whose cover it is, and
  * [label] gives the placeholder its letter and colour when there is no cover. [file] is the
- * cover image, or an audio file to take embedded art from, and [version] its modification
+ * cover image (never an audio file: embedded art isn't shown), and [version] its modification
  * time, so a changed cover isn't served from the cache; with no [file], art is a placeholder.
  */
 @Immutable

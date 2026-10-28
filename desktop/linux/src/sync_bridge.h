@@ -24,6 +24,7 @@ typedef enum {
                         * library_changed */
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
                         * files_received, files_sent, bytes_* */
+  SYNC_EV_REACH,       /* on_reach: uid ("" when much changed at once) */
 } sync_event_kind;
 
 /* One core event. Fields that don't apply to the kind are zero. */

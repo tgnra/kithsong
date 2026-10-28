@@ -512,7 +512,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   char keep[MC_UID_STRLEN] = "";
   TrackItem *sel = gtk_single_selection_get_selected_item(s.selection);
   if (same && sel) memcpy(keep, album->is_playlist ? sel->entry_uid : sel->uid, sizeof keep);
-  /* A playlist's picture changes with its tracks. */
+  /* A playlist's picture changes with its tracks, and an album's cover may have arrived. */
   gboolean new_cover = !same || g_strcmp0(album->cover_file, s.album->cover_file);
   if (album) g_object_ref(album);
   g_clear_object(&s.album);
@@ -567,10 +567,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
     g_clear_object(&s.cover_loading);
     GdkTexture *texture = NULL;
     int size = HEADER_COVER * gtk_widget_get_scale_factor(s.cover);
-    if (album && album->cover_dir) {
-      s.cover_loading = g_cancellable_new();
-      texture = cover_get(album->cover_dir, size, s.cover_loading, cover_loaded, NULL);
-    } else if (album && album->cover_file) {
+    if (album && album->cover_file) {
       s.cover_loading = g_cancellable_new();
       texture = cover_get_file(album->cover_file, size, s.cover_loading, cover_loaded, NULL);
     }
@@ -599,6 +596,14 @@ track_list_item track_list_item_at(int i) {
   item.album = t->album;
   item.cover_dir = t->cover_dir;
   return item;
+}
+
+void track_list_select(const char *uid) {
+  for (guint i = 0, n = (guint)track_list_count(); i < n; i++) {
+    if (strcmp(track_at(i)->uid, uid)) continue;
+    gtk_list_view_scroll_to(GTK_LIST_VIEW(s.view), i, GTK_LIST_SCROLL_SELECT | GTK_LIST_SCROLL_FOCUS, NULL);
+    return;
+  }
 }
 
 void track_list_set_playing(const char *uid) {

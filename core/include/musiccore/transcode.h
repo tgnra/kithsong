@@ -45,7 +45,7 @@ extern "C" {
  *
  * Encoding: the source is decoded (FLAC, MP3, WAV, AIFF or Opus), downmixed to stereo if it
  * has more than two channels, resampled to 48 kHz and encoded as Opus VBR at the bitrate.
- * Tags and the cover (embedded in the source, or an image file beside it) are copied. The
+ * Tags are copied, and the album's cover (the image file beside the source) is embedded. The
  * file appears atomically; on failure nothing is left behind. */
 mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const char *src_path,
                               const mc_transcode_opts *opts, char **out_path);

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "search/search_internal.h"
 #include "util/platform.h"
 
 extern const unsigned char mc_schema_v1_sql[];
@@ -297,6 +298,7 @@ fail:
 
 void mc_library_close(mc_library *lib) {
   if (!lib) return;
+  mc_search_free(lib->search);
   sqlite3_close_v2(lib->db);
   free(lib->dir);
   free(lib);
