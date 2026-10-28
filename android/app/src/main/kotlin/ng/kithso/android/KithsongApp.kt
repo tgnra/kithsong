@@ -76,7 +76,8 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         ) { getString(R.string.unknown_artist) }
         library = core
         playback = SessionPlayback(this, MainScope())
-        settings = AppSettings(getSharedPreferences("app", MODE_PRIVATE))
+        // settings.json, as the desktops have, with the app's own preferences in it as well.
+        settings = AppSettings(CoreSettings(filesDir.path), getSharedPreferences("app", MODE_PRIVATE))
         // sync.db holds this phone's keys, so it's in no-backup storage like the library: a
         // restored copy on another phone would pose as this one. A name the system's isn't
         // saved, so the phone follows the system's while it hasn't been renamed.

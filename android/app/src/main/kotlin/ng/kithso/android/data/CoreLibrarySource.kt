@@ -36,8 +36,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONException
-import org.json.JSONObject
 import java.io.File
 
 /**
@@ -418,8 +416,7 @@ class CoreLibrarySource(
         val known = savedArt()
         fun knownArt(uid: String, name: String) = artRef(uid, name, known[uid]?.takeIf { it.path.isNotEmpty() && it.isFile })
         val playlists = lib.playlists(playableOnly = true).map { info ->
-            val tracks = lib.playlistTracks(info.uid).here()
-            Playlist(info.uid, info.name, tracks.size, knownArt(info.uid, info.name))
+            Playlist(info.uid, info.name, info.playableCount, knownArt(info.uid, info.name))
         } + smart.filter { !it.isAlbums }.map { info ->
             val tracks = lib.smartTracks(info.uid).here()
             Playlist(info.uid, info.name, tracks.size, covers.playlist(info.uid, info.name, tracks))
@@ -439,7 +436,7 @@ class CoreLibrarySource(
             playlists.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }).associateBy { it.uid },
             albumGroups.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }).associateBy { it.uid },
             smart.mapTo(HashSet()) { it.uid },
-            smart.filter { isRandom(it.rule) }.mapTo(HashSet()) { it.uid },
+            smart.filter { it.isRandom }.mapTo(HashSet()) { it.uid },
         )
     }
 
@@ -568,14 +565,6 @@ class CoreLibrarySource(
         val COVER_NAMES = listOf("cover.jpg", "cover.png")
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
-
-        // Whether smart list [rule] is ordered by random, so reshuffling gives a new order.
-        fun isRandom(rule: String): Boolean = try {
-            val order = JSONObject(rule).optJSONArray("order")
-            order != null && (0 until order.length()).any { order.optJSONObject(it)?.optString("field") == "random" }
-        } catch (e: JSONException) {
-            false
-        }
 
         val CollectionRef.Kind.itemKind: ItemKind
             get() = when (this) {

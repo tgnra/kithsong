@@ -11,6 +11,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
+import androidx.media3.common.Tracks
 import androidx.media3.common.audio.AudioBecomingNoisyManager
 import androidx.media3.common.audio.AudioFocusManager
 import androidx.media3.common.util.Clock
@@ -28,24 +29,32 @@ import com.google.common.util.concurrent.ListenableFuture
  * when the core says they count (half the track or four minutes listened, whichever is less).
  * [onNowPlaying] gets each track's uid as it starts playing, for scrobbling.
  *
- * Shuffle is the core's (mc_player_set_shuffle), offered as Media3's shuffle mode. Media3
- * has no way to be told the core's order, so its timeline stays in queue order: next and
- * previous are passed to the core as such rather than as the item Media3 picks, and next is
- * always offered while shuffled, as the core's shuffle never ends.
+ * Shuffle is the core's (mc_player_set_shuffle), offered as Media3's shuffle mode and starting
+ * as [shuffle]; each change goes to [onShuffleChanged], to be kept for next time. The core's
+ * shuffled order is published as the timeline's shuffle order ([OrderedTimeline]), so
+ * controllers know what comes next; next and previous are still passed to the core as such,
+ * and next is always offered while shuffled, as the core's shuffle never ends. The core's
+ * [volume] (0 to 100) is set to begin with.
  *
  * Use it on the main thread.
  */
 @OptIn(UnstableApi::class)
 class CoreMediaPlayer(
     context: Context,
+    private var shuffle: Boolean,
+    volume: Int,
+    private val onShuffleChanged: (Boolean) -> Unit,
     private val onNowPlaying: (String) -> Unit = {},
     private val onPlayed: (String, Long) -> Unit,
 ) : SimpleBasePlayer(Looper.getMainLooper()) {
     private val main = Handler(Looper.getMainLooper())
-    private val core = CorePlayer { event -> main.post { onCoreEvent(event) } }
+    private val core = CorePlayer { event -> main.post { onCoreEvent(event) } }.apply {
+        setShuffle(shuffle)
+        setVolume(volume)
+    }
 
-    // The core has no volume control, so there's no ducking here. From Android 8 the system
-    // ducks the app itself, since music doesn't ask to be paused instead.
+    // No ducking here yet, though the core has a volume now. From Android 8 the system ducks
+    // the app itself, since music doesn't ask to be paused instead.
     private val focus = AudioFocusManager(context, Looper.getMainLooper(), object : AudioFocusManager.PlayerControl {
         override fun setVolumeMultiplier(volumeMultiplier: Float) = Unit
         override fun executePlayerCommand(playerCommand: Int) = onFocusCommand(playerCommand)
@@ -58,6 +67,12 @@ class CoreMediaPlayer(
         .apply { setReferenceCounted(false) }
 
     private var items: List<MediaItem> = emptyList()
+    // The core's shuffled order for Media3, worked out again when the current item or the
+    // order changes: for item [orderIndex], while [orderVersion] is [orderMade].
+    private var order: IntArray? = null
+    private var orderIndex = -1
+    private var orderMade = -1
+    private var orderVersion = 0
     // What was asked for. Playing also needs audio focus: while it's lost for a moment
     // (a call, say), [suppressed] holds playback paused.
     private var wantPlaying = false
@@ -65,14 +80,13 @@ class CoreMediaPlayer(
     private var suppressed = false
     // After stop() and before prepare().
     private var idle = true
-    // Giving the core a queue starts playing it, so a new queue stays here, to start at
-    // [startIndex] and [startPositionMs], until it's first played.
+    // A new queue is loaded into the core stopped, to start at [startIndex] and
+    // [startPositionMs] once it's first played; shuffled, the core picks the first item.
     private var started = false
     // The item last passed to [onNowPlaying], -1 while not playing.
     private var announced = -1
     private var startIndex = 0
     private var startPositionMs = 0L
-    private var shuffle = false
 
     override fun getState(): State {
         val status = core.status
@@ -93,7 +107,7 @@ class CoreMediaPlayer(
             )
             if (shuffle || index < items.lastIndex) commands.addAll(COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
         }
-        return State.Builder()
+        val state = State.Builder()
             .setAvailableCommands(commands.build())
             .setAudioAttributes(AUDIO_ATTRIBUTES)
             .setPlaylist(items.mapIndexed { i, item ->
@@ -115,6 +129,35 @@ class CoreMediaPlayer(
             .setMaxSeekToPreviousPositionMs(3000)
             .setShuffleModeEnabled(shuffle)
             .build()
+        val order = if (shuffle) shuffledOrder(index) else null
+        return if (order == null) state
+        else state.buildUpon().setPlaylist(OrderedTimeline(state.timeline, order), Tracks.EMPTY, state.currentMetadata).build()
+    }
+
+    // The core's shuffled order as a permutation of the queue, as Media3's timeline needs: the
+    // items that played before [current], then it and those that play after it, the nearest
+    // of each first, each item once. Null if the core is on another item just now.
+    private fun shuffledOrder(current: Int): IntArray? {
+        val n = items.size
+        if (n == 0) return null
+        if (current == orderIndex && orderMade == orderVersion) return order
+        // The places n - 1 either side hold every item: a round of n places plays each once.
+        val around = core.order(-(n - 1), 2 * n - 1)
+        val mid = n - 1
+        if (around[mid] != current) return null
+        val seen = BooleanArray(n).also { it[current] = true }
+        val before = ArrayList<Int>()
+        val after = ArrayList<Int>()
+        for (d in 1 until n) {
+            around[mid + d].let { if (it in 0 until n && !seen[it]) after += it.also { seen[it] = true } }
+            around[mid - d].let { if (it in 0 until n && !seen[it]) before += it.also { seen[it] = true } }
+        }
+        for (i in 0 until n) if (!seen[i]) after += i
+        val made = (before.asReversed() + current + after).toIntArray()
+        order = made
+        orderIndex = current
+        orderMade = orderVersion
+        return made
     }
 
     override fun handleSetMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<*> {
@@ -123,7 +166,11 @@ class CoreMediaPlayer(
         this.startIndex = if (startIndex == C.INDEX_UNSET) 0 else startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
         this.startPositionMs = if (startPositionMs == C.TIME_UNSET) 0 else startPositionMs
         started = false
-        core.stop()
+        // Unset, shuffled, the core picks the first item.
+        val start = if (startIndex == C.INDEX_UNSET && shuffle) -1 else this.startIndex
+        core.loadQueue(items.map { it.path.orEmpty() }, start)
+        if (items.isNotEmpty()) this.startIndex = core.status.index.coerceAtLeast(0)
+        orderVersion++
         update()
         return Futures.immediateVoidFuture()
     }
@@ -161,8 +208,10 @@ class CoreMediaPlayer(
         } else {
             val status = core.status
             if (mediaItemIndex != C.INDEX_UNSET && mediaItemIndex != status.index) {
-                // Skipping plays; keep a paused player paused.
+                // Skipping plays; keep a paused player paused. Shuffled, the rest are shuffled
+                // afresh after it.
                 core.skipTo(mediaItemIndex)
+                orderVersion++
                 if (status.state != CorePlayer.State.Playing) core.pause()
             }
             if (position > 0 || mediaItemIndex == status.index) core.seekMs(position)
@@ -171,8 +220,12 @@ class CoreMediaPlayer(
     }
 
     override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean): ListenableFuture<*> {
-        shuffle = shuffleModeEnabled
-        core.setShuffle(shuffleModeEnabled)
+        if (shuffleModeEnabled != shuffle) {
+            shuffle = shuffleModeEnabled
+            core.setShuffle(shuffleModeEnabled)
+            orderVersion++
+            onShuffleChanged(shuffleModeEnabled)
+        }
         return Futures.immediateVoidFuture()
     }
 
@@ -221,7 +274,13 @@ class CoreMediaPlayer(
     private fun play(playing: Boolean) {
         if (playing) {
             if (!started) {
-                core.setQueue(items.map { it.path.orEmpty() }, startIndex)
+                // Loaded stopped on its item, unless another was picked since.
+                if (startIndex == core.status.index) {
+                    core.resume()
+                } else {
+                    core.skipTo(startIndex)
+                    orderVersion++
+                }
                 if (startPositionMs > 0) core.seekMs(startPositionMs)
                 started = true
             } else if (core.status.state != CorePlayer.State.Playing) {

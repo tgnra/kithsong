@@ -1,4 +1,4 @@
-/* Helpers jni_bridge.c shares with the bridge's other files (jni_browse.c). */
+/* Helpers jni_bridge.c shares with the bridge's other files (jni_browse.c, jni_settings.c). */
 #ifndef KITHSONG_JNI_BRIDGE_H
 #define KITHSONG_JNI_BRIDGE_H
 

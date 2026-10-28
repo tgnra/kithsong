@@ -308,7 +308,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListSmart(J
   jclass info = (*env)->FindClass(env, "ng/kithso/core/SmartInfo");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
-                                       "(Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)V");
+                                       "(Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Z)V");
   if (!ctor) return NULL;
 
   mc_smart_list *list = NULL;
@@ -324,7 +324,8 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListSmart(J
     jstring name = new_string(env, s->name ? s->name : "");
     jstring rule = new_string(env, s->rule ? s->rule : "");
     jobject item = (*env)->NewObject(env, info, ctor, uid, name,
-                                     (jboolean)(s->subject == MC_SMART_ALBUMS), rule);
+                                     (jboolean)(s->subject == MC_SMART_ALBUMS), rule,
+                                     (jboolean)(s->random != 0));
     if (!item) {
       out = NULL;
       break;
@@ -634,11 +635,8 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeFree(JNIEnv *env, jc
   free(p);
 }
 
-JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetQueue(JNIEnv *env, jclass cls,
-                                                                    jlong handle,
-                                                                    jobjectArray paths,
-                                                                    jint start) {
-  (void)cls;
+/* mc_player_set_queue(), or if load, mc_player_load_queue(). */
+static void set_queue(JNIEnv *env, jlong handle, jobjectArray paths, jint start, int load) {
   jsize count = (*env)->GetArrayLength(env, paths);
   const char **cpaths = calloc(count ? (size_t)count : 1, sizeof *cpaths);
   jstring *jpaths = calloc(count ? (size_t)count : 1, sizeof *jpaths);
@@ -649,8 +647,11 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetQueue(JNIEnv *env
     cpaths[got] = jpaths[got] ? (*env)->GetStringUTFChars(env, jpaths[got], NULL) : NULL;
     if (!cpaths[got]) st = MC_ERR_INVALID_ARG;
   }
-  /* mc_player_set_queue copies the paths. */
-  if (st == MC_OK) st = mc_player_set_queue(player_of(handle), cpaths, count, start);
+  /* Both copy the paths. */
+  if (st == MC_OK) {
+    st = load ? mc_player_load_queue(player_of(handle), cpaths, count, start)
+              : mc_player_set_queue(player_of(handle), cpaths, count, start);
+  }
   for (jsize i = 0; i < got; i++) {
     if (cpaths[i]) (*env)->ReleaseStringUTFChars(env, jpaths[i], cpaths[i]);
     if (jpaths[i]) (*env)->DeleteLocalRef(env, jpaths[i]);
@@ -658,6 +659,22 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetQueue(JNIEnv *env
   free(cpaths);
   free(jpaths);
   if (st != MC_OK && !(*env)->ExceptionCheck(env)) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetQueue(JNIEnv *env, jclass cls,
+                                                                    jlong handle,
+                                                                    jobjectArray paths,
+                                                                    jint start) {
+  (void)cls;
+  set_queue(env, handle, paths, start, 0);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeLoadQueue(JNIEnv *env, jclass cls,
+                                                                     jlong handle,
+                                                                     jobjectArray paths,
+                                                                     jint start) {
+  (void)cls;
+  set_queue(env, handle, paths, start, 1);
 }
 
 /* The player calls that take no arguments: 0 toggle, 1 pause, 2 resume, 3 stop, 4 next,
@@ -698,14 +715,51 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetShuffle(JNIEnv *e
   if (st != MC_OK) throw_status(env, st);
 }
 
-/* Fills out with state, index, count, position_ms, duration_ms. */
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetVolume(JNIEnv *env, jclass cls,
+                                                                     jlong handle, jint volume) {
+  (void)cls;
+  mc_status st = mc_player_set_volume(player_of(handle), volume);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetMuted(JNIEnv *env, jclass cls,
+                                                                    jlong handle, jboolean muted) {
+  (void)cls;
+  mc_status st = mc_player_set_muted(player_of(handle), muted ? 1 : 0);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* The queue items at places from to from + count - 1 around the current one (mc_player_order). */
+JNIEXPORT jintArray JNICALL Java_ng_kithso_core_CorePlayer_nativeOrder(JNIEnv *env, jclass cls,
+                                                                     jlong handle, jint from,
+                                                                     jint count) {
+  (void)cls;
+  if (count < 0) {
+    throw_status(env, MC_ERR_INVALID_ARG);
+    return NULL;
+  }
+  _Static_assert(sizeof(jint) == sizeof(int), "jint is int");
+  int *order = malloc(count ? (size_t)count * sizeof *order : 1);
+  if (!order) {
+    throw_status(env, MC_ERR_NOMEM);
+    return NULL;
+  }
+  mc_status st = mc_player_order(player_of(handle), from, count, order);
+  jintArray out = st == MC_OK ? (*env)->NewIntArray(env, count) : NULL;
+  if (out) (*env)->SetIntArrayRegion(env, out, 0, count, (const jint *)order);
+  free(order);
+  if (st != MC_OK) throw_status(env, st);
+  return out;
+}
+
+/* Fills out with state, index, count, position_ms, duration_ms, shuffle, volume, muted. */
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeStatus(JNIEnv *env, jclass cls,
                                                                   jlong handle, jlongArray out) {
   (void)cls;
   mc_player_status st;
   mc_player_status_get(player_of(handle), &st);
-  jlong values[5] = {st.state, st.index, st.count, st.position_ms, st.duration_ms};
-  (*env)->SetLongArrayRegion(env, out, 0, 5, values);
+  jlong values[8] = {st.state, st.index, st.count, st.position_ms, st.duration_ms, st.shuffle, st.volume, st.muted};
+  (*env)->SetLongArrayRegion(env, out, 0, 8, values);
 }
 
 /* Fills out with the item and start (wall clock ms) of the oldest play that counts; false if

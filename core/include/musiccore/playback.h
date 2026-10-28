@@ -56,6 +56,10 @@ void mc_player_free(mc_player *player);
  * mc_player_take_played() are dropped, as their indexes were into the old queue: take them
  * first. */
 mc_status mc_player_set_queue(mc_player *player, const char *const *paths, int count, int start);
+/* Like mc_player_set_queue(), but stopped: item start (or with -1, the first item, which
+ * shuffled is any) is current, and plays from its start on mc_player_resume(). So a frontend
+ * can show what will play before it does, e.g. a shuffled queue's first item. */
+mc_status mc_player_load_queue(mc_player *player, const char *const *paths, int count, int start);
 /* Plays queue item index from its start. Shuffled, the rest are shuffled afresh after it. */
 mc_status mc_player_skip_to(mc_player *player, int index);
 /* The next item. After the last one, stops with the first item current, as when the queue
@@ -72,6 +76,14 @@ mc_status mc_player_previous(mc_player *player);
  * next item be buffered already, in a track's last second, the new order starts after it
  * instead.) Set it before mc_player_set_queue() to start a queue shuffled. */
 mc_status mc_player_set_shuffle(mc_player *player, int on);
+
+/* The play order around the current item, which next() and previous() follow: out[i] gets
+ * the queue item at place from + i, counted from the current item's (0 is the current item,
+ * -1 the one before it, 1 the next), or -1 where there's none: before the first place, after
+ * the last item in queue order, or with an empty queue. Shuffled, the order goes on in new
+ * rounds, so an item can come up more than once. For showing what plays next, or telling a
+ * media framework the order (Android's Media3 timeline). */
+mc_status mc_player_order(mc_player *player, int from, int count, int *out);
 
 mc_status mc_player_pause(mc_player *player);
 /* Carries on from where it was paused, or when stopped, plays the current item. */

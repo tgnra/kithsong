@@ -33,8 +33,11 @@ data class TrackInfo(
 /** mc_playlist_info. [playableCount] is the entries whose track has a file on this device. */
 data class PlaylistInfo(val uid: String, val name: String, val trackCount: Int, val playableCount: Int)
 
-/** mc_smart_info: a smart playlist, or a smart album group if [isAlbums]. [rule] is its JSON. */
-data class SmartInfo(val uid: String, val name: String, val isAlbums: Boolean, val rule: String)
+/**
+ * mc_smart_info: a smart playlist, or a smart album group if [isAlbums]. [rule] is its JSON;
+ * [isRandom] if it's ordered by random, so it can be reshuffled.
+ */
+data class SmartInfo(val uid: String, val name: String, val isAlbums: Boolean, val rule: String, val isRandom: Boolean)
 
 /**
  * mc_artist_info or mc_album_group_info. [albumCount] is an artist's albums as album artist (0

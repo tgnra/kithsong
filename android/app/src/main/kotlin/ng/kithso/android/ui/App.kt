@@ -84,17 +84,17 @@ fun App(
     val open: (CollectionRef) -> Unit = remember { { stack.add(it) } }
     val pop: () -> Unit = remember { { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) } }
 
-    // Menus and Add to playlist, over everything. Their Play and Shuffle play a whole album or
-    // playlist from its start, or shuffled from a random track.
+    // Menus and Add to playlist, over everything. Their Play and Shuffle, and a track list's,
+    // play a whole album or playlist from its start with shuffle off, or with shuffle on from
+    // whichever track the core's shuffle starts with, as the desktops do.
     val actions = remember(source) { PlaylistActions(source as? PlaylistEditor) }
     val scope = rememberCoroutineScope()
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
         scope.launch {
             val tracks = source.trackList(ref)?.tracks ?: return@launch
-            val playable = tracks.indices.filter { tracks[it].path != null }
-            if (playable.isEmpty()) return@launch
+            if (tracks.none { it.path != null }) return@launch
             playback.setShuffle(shuffle)
-            playback.play(tracks, if (shuffle) playable.random() else playable.first())
+            playback.play(tracks, -1)
             source.notePlayed(ref)
             onPlay()
         }
@@ -189,6 +189,12 @@ fun App(
                             bottomPadding,
                             onPlay = { tracks, index ->
                                 playback.play(tracks, index)
+                                source.notePlayed(ref)
+                                onPlay()
+                            },
+                            onPlayAll = { tracks, shuffle ->
+                                playback.setShuffle(shuffle)
+                                playback.play(tracks, -1)
                                 source.notePlayed(ref)
                                 onPlay()
                             },

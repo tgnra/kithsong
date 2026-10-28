@@ -93,6 +93,27 @@ int main(int argc, char **argv) {
   mc_player_status_get(player, &st);
   CHECK(st.state == MC_PLAYER_STOPPED && st.index == -1 && st.count == 0);
 
+  /* Loaded, a queue waits stopped on its item (no device needed), and the order runs on
+   * from it: to the end in order, and shuffled, in rounds that each hold every item once,
+   * the next not starting with the item the last ended on. */
+  const char *loaded[] = {a, b, longer};
+  int order[6];
+  CHECK(mc_player_order(player, 0, 1, order) == MC_OK && order[0] == -1);
+  CHECK(mc_player_load_queue(player, loaded, 3, 1) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.state == MC_PLAYER_STOPPED && st.index == 1 && st.count == 3);
+  CHECK(mc_player_order(player, -2, 5, order) == MC_OK);
+  CHECK(order[0] == -1 && order[1] == 0 && order[2] == 1 && order[3] == 2 && order[4] == -1);
+  CHECK(mc_player_set_shuffle(player, 1) == MC_OK);
+  CHECK(mc_player_load_queue(player, loaded, 3, -1) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.state == MC_PLAYER_STOPPED && st.index >= 0 && st.index < 3);
+  CHECK(mc_player_order(player, 0, 6, order) == MC_OK);
+  CHECK(order[0] == st.index && order[0] != order[1] && order[1] != order[2] && order[0] != order[2]);
+  CHECK(order[3] != order[2] && order[3] != order[4] && order[4] != order[5] && order[3] != order[5]);
+  CHECK(mc_player_order(player, -1, 1, order) == MC_OK && order[0] == -1);
+  CHECK(mc_player_set_shuffle(player, 0) == MC_OK);
+
   /* Is there a device? The position only moves once it pulls audio; the state alone reads
    * PLAYING as soon as a start is asked for. Short of half the track, so no play counts. */
   const char *one[] = {longer};

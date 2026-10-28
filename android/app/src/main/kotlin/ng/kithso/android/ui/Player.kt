@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -172,7 +173,11 @@ private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: ((
             IconButton(onClick = playback::previous, modifier = Modifier.size(56.dp)) {
                 Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track), modifier = Modifier.size(32.dp))
             }
-            FilledIconButton(onClick = playback::toggle, modifier = Modifier.size(80.dp)) {
+            // Smaller, but still round, when the height is short (landscape with large text).
+            FilledIconButton(
+                onClick = playback::toggle,
+                modifier = Modifier.sizeIn(maxWidth = 80.dp, maxHeight = 80.dp).aspectRatio(1f, matchHeightConstraintsFirst = true),
+            ) {
                 if (playback.isPlaying) Icon(Icons.Pause, contentDescription = stringResource(R.string.pause), modifier = Modifier.size(40.dp))
                 else Icon(Icons.Play, contentDescription = stringResource(R.string.play), modifier = Modifier.size(40.dp))
             }

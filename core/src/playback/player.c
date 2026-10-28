@@ -25,6 +25,7 @@
  */
 #include "musiccore/playback.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -636,7 +637,8 @@ static int current_pos(mc_player *p) {
   return p->current_pos;
 }
 
-mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count, int start) {
+/* mc_player_set_queue(), and with play 0 mc_player_load_queue(). */
+static mc_status set_queue(mc_player *p, const char *const *paths, int count, int start, int play) {
   if (!p || count < 0 || (count && (!paths || start < -1 || start >= count))) return MC_ERR_INVALID_ARG;
   char **queue = count ? calloc((size_t)count, sizeof *queue) : NULL;
   if (count && !queue) return MC_ERR_NOMEM;
@@ -655,14 +657,26 @@ mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count,
   p->play_index = -1;
   mc_shuffle_init(&p->order, count, new_seed(), start);
   int pos = start >= 0 && !p->shuffle ? start : 0;
-  if (count) {
+  if (count && play) {
     post(p, CMD_START, pos, item_at(p, pos), 0, MC_PLAYER_PLAYING);
+  } else if (count) { /* stopped there, to play on resume */
+    p->current_pos = pos;
+    p->current = item_at(p, pos);
+    post(p, CMD_STOP, pos, p->current, 0, MC_PLAYER_STOPPED);
   } else {
     p->current = p->current_pos = -1;
     post(p, CMD_STOP, -1, -1, 0, MC_PLAYER_STOPPED);
   }
   mc_mutex_unlock(&p->lock);
   return MC_OK;
+}
+
+mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count, int start) {
+  return set_queue(p, paths, count, start, 1);
+}
+
+mc_status mc_player_load_queue(mc_player *p, const char *const *paths, int count, int start) {
+  return set_queue(p, paths, count, start, 0);
 }
 
 mc_status mc_player_skip_to(mc_player *p, int index) {
@@ -820,6 +834,19 @@ mc_status mc_player_set_shuffle(mc_player *p, int on) {
     if (p->cmd == CMD_NONE && p->nsegs) p->current_pos = p->segs[0].pos;
     if (on) p->drained = 0; /* the last item may have run out already: carry on after it */
     mc_cond_broadcast(&p->wake);
+  }
+  mc_mutex_unlock(&p->lock);
+  return MC_OK;
+}
+
+mc_status mc_player_order(mc_player *p, int from, int count, int *out) {
+  if (!p || count < 0 || (count && !out)) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  int pos = p->count ? current_pos(p) : -1;
+  for (int i = 0; i < count; i++) {
+    /* Places far enough from the current one to overflow have no item. */
+    long long place = (long long)pos + from + i;
+    out[i] = pos >= 0 && place >= 0 && place <= INT_MAX ? item_at(p, (int)place) : -1;
   }
   mc_mutex_unlock(&p->lock);
   return MC_OK;

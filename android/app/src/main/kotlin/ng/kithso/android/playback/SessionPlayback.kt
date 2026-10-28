@@ -67,13 +67,24 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
     }
 
     override fun play(queue: List<Track>, index: Int) {
-        if (queue.getOrNull(index)?.path == null) return
         val playable = queue.filter { it.path != null }
+        if (playable.isEmpty() || (index >= 0 && queue.getOrNull(index)?.path == null)) return
+        val items = playable.map(Track::toMediaItem)
+        if (index < 0) {
+            // From the start: the player picks the first track, shuffled, so it's shown once
+            // the player says which.
+            withController {
+                it.setMediaItems(items, true)
+                it.prepare()
+                it.play()
+            }
+            return
+        }
         val start = queue.subList(0, index).count { it.path != null }
         track = playable[start]
         positionMs = 0
         withController {
-            it.setMediaItems(playable.map(Track::toMediaItem), start, 0)
+            it.setMediaItems(items, start, 0)
             it.prepare()
             it.play()
         }
@@ -105,7 +116,8 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
         // As the play/pause button should show it, so it doesn't flicker while starting.
         isPlaying = !Util.shouldShowPlayButton(player)
         shuffleOn = player.shuffleModeEnabled
-        // Shuffled, the core's queue never ends, though Media3's timeline doesn't know it.
+        // Shuffled, the core's queue never ends, though the timeline's shuffle order, which
+        // holds each track once, does.
         hasNext = player.hasNextMediaItem() || (shuffle && player.mediaItemCount > 0)
         positionMs = player.currentPosition
         ticker?.cancel()

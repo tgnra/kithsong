@@ -27,7 +27,11 @@ interface Playback {
     /** Whether the queue plays in a shuffled order (the core's, see CoreMediaPlayer). */
     val shuffle: Boolean
 
-    /** Plays [queue] from [index]; tracks without a file on this device are left out. */
+    /**
+     * Plays [queue] from [index], or with -1 from the first track, which shuffled is any (the
+     * core picks it, as the desktops' Shuffle buttons have it). Tracks without a file on this
+     * device are left out.
+     */
     fun play(queue: List<Track>, index: Int)
     fun toggle()
     fun seekTo(positionMs: Long)
@@ -65,7 +69,7 @@ class FakePlayback(private val scope: CoroutineScope) : Playback {
     }
 
     override fun play(queue: List<Track>, index: Int) {
-        load(queue, index)
+        load(queue, index.coerceAtLeast(0))
         playOrPause(track != null)
     }
 

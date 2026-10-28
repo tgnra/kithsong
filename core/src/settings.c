@@ -138,7 +138,9 @@ mc_status mc_settings_set_bool(mc_settings *s, const char *key, int value) {
   if (!s || !key || !*key) return MC_ERR_INVALID_ARG;
   yyjson_mut_val *root = yyjson_mut_doc_get_root(s->doc);
   yyjson_mut_obj_remove_key(root, key);
-  return yyjson_mut_obj_add_bool(s->doc, root, key, value != 0) ? MC_OK : MC_ERR_NOMEM;
+  /* The key is copied: yyjson_mut_obj_add_bool() would keep the caller's pointer. */
+  yyjson_mut_val *k = yyjson_mut_strcpy(s->doc, key), *v = yyjson_mut_bool(s->doc, value != 0);
+  return k && v && yyjson_mut_obj_add(root, k, v) ? MC_OK : MC_ERR_NOMEM;
 }
 
 int mc_settings_shuffle(const mc_settings *s) { return mc_settings_bool(s, "shuffle", 0); }

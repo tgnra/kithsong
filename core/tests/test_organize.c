@@ -66,6 +66,11 @@ static void test_settings(const char *base) {
   CHECK(mc_settings_set_volume(s, 140) == MC_OK); /* clamped */
   CHECK(mc_settings_volume(s) == 100);
   CHECK(mc_settings_set_volume(s, 35) == MC_OK);
+  { /* a frontend's own key, which needn't outlive the call (Android's come from JNI) */
+    char key[] = "frontend_flag";
+    CHECK(mc_settings_set_bool(s, key, 1) == MC_OK);
+    memset(key, 'x', sizeof key - 1);
+  }
   CHECK(mc_settings_set_library_dir(s, "C:\\Users\\Me\\Music") == MC_OK);
   CHECK(mc_settings_set_library_dir(s, "D:\\M\xC3\xBAsica") == MC_OK); /* replaces */
   CHECK(mc_settings_save(s) == MC_OK);
@@ -76,6 +81,7 @@ static void test_settings(const char *base) {
   CHECK_STR(mc_settings_library_dir(s), "D:\\M\xC3\xBAsica");
   CHECK(mc_settings_shuffle(s));
   CHECK(mc_settings_volume(s) == 35);
+  CHECK(mc_settings_bool(s, "frontend_flag", 0));
   mc_settings_free(s);
 
   /* Keys from a newer version survive a save; a damaged file is treated as empty. */

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -28,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -67,10 +69,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * An album, artist, playlist or album group: its art and name, then its tracks. Tapping a
- * track plays the list from there; long-pressing one opens its menu ([PlaylistActions.trackMenu]).
- * An artist's albums come before their tracks, and an album group shows its albums with a
- * button to play them all; [onOpen] opens an album. A smart list in random order has a button
+ * An album, artist, playlist or album group: its art and name, Play and Shuffle ([onPlayAll],
+ * as the desktops have above a track list), then its tracks. Tapping a track plays the list
+ * from there ([onPlay]), shuffled or not as shuffle is; long-pressing one opens its menu
+ * ([PlaylistActions.trackMenu]). An artist's albums come before their tracks, and an album
+ * group shows its albums; [onOpen] opens an album. A smart list in random order has a button
  * to reshuffle it. [onBack] slides the screen away; it is also dismissed by swiping right.
  *
  * A manual playlist has an Edit button, which shows each track with a button to remove it and
@@ -84,6 +87,7 @@ fun DetailScreen(
     actions: PlaylistActions,
     bottomPadding: Dp,
     onPlay: (List<Track>, Int) -> Unit,
+    onPlayAll: (List<Track>, shuffle: Boolean) -> Unit,
     onOpen: (CollectionRef) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -162,9 +166,9 @@ fun DetailScreen(
                 item(key = "header", contentType = "header") {
                     DetailHeader(ref.kind, list, onBack, editing = if (editable) isEditing else null, onEdit = { editing = it })
                 }
-                if (list != null && (group || list.canReshuffle)) item(key = "actions", contentType = "actions") {
+                if (list != null && !isEditing && (tracks.isNotEmpty() || list.canReshuffle)) item(key = "actions", contentType = "actions") {
                     DetailActions(
-                        onPlay = if (group && tracks.isNotEmpty()) ({ onPlay(tracks, 0) }) else null,
+                        onPlay = if (tracks.isNotEmpty()) ({ shuffle -> onPlayAll(tracks, shuffle) }) else null,
                         onReshuffle = if (list.canReshuffle) ({
                             scope.launch {
                                 source.reshuffle(ref)
@@ -225,16 +229,23 @@ fun DetailScreen(
     }
 }
 
-/** Play (for an album group, whose tracks aren't listed) and Reshuffle, if given. */
+/** Play and Shuffle ([onPlay], with whether to shuffle), and Reshuffle, if given. */
 @Composable
-private fun DetailActions(onPlay: (() -> Unit)?, onReshuffle: (() -> Unit)?) {
-    Row(
+private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onReshuffle: (() -> Unit)?) {
+    FlowRow(
         Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (onPlay != null) Button(onClick = onPlay) {
-            Icon(Icons.Play, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
-            Text(stringResource(R.string.play), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+        if (onPlay != null) {
+            Button(onClick = { onPlay(false) }) {
+                Icon(Icons.Play, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                Text(stringResource(R.string.play), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+            }
+            FilledTonalButton(onClick = { onPlay(true) }) {
+                Icon(Icons.Shuffle, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                Text(stringResource(R.string.shuffle), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+            }
         }
         if (onReshuffle != null) OutlinedButton(onClick = onReshuffle) {
             Icon(Icons.Shuffle, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))

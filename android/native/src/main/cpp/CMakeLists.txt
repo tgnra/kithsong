@@ -11,3 +11,6 @@ target_link_libraries(kithsong_jni PRIVATE musiccore log)
 
 # Playlist editing (PlaylistNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_playlist_edit.c)
+
+# The core's settings.json (CoreSettings), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_settings.c)
