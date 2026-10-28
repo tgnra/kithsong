@@ -31,6 +31,7 @@
     "section_albums": "Albums",
     "section_artists": "Artists",
     "section_playlists": "Playlists",
+    "section_recents": { "text": "Recents", "note": "Heading of the albums, playlists and artists last played, on any device: in the sidebar, or on the phone's main screen." },
     "import_music": "Import",
     "devices": "Devices",
     "play": "Play",
@@ -402,7 +403,6 @@
     "cover_of": "Cover of {0}",
     "albums": { "one": "{0:d} album", "other": "{0:d} albums" },
 
-    "section_recents": "Recents",
     "jump_to_section": "Jump to a section",
 
     "album_byline_year": { "text": "{0} – {1:d}", "note": "Track list screen: an album's artist and year." },
