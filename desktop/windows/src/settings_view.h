@@ -17,8 +17,9 @@
  *   | Leaving the group stops syncing ...              |
  *   +--------------------------------------------------+
  *
- * Moving the library isn't implemented yet, so its button is disabled. Open Another Library
- * posts WM_APP_OPEN_LIBRARY to the main window, which asks for the folder.
+ * Move Library posts WM_APP_MOVE_LIBRARY to the main window, which moves it (move_library.c).
+ * Open Another Library posts WM_APP_OPEN_LIBRARY to the main window, which asks for the
+ * folder.
  *
  * The name applies on Enter or when the box loses the focus: through sync, which shows it
  * to other devices, and into settings.json for next time. Leave Group is enabled while this
@@ -32,6 +33,7 @@
 #include "musiccore/musiccore.h"
 
 #define WM_APP_OPEN_LIBRARY (WM_APP + 5)
+#define WM_APP_MOVE_LIBRARY (WM_APP + 7)
 
 void settings_view_create(HWND parent);
 void settings_view_destroy(void);

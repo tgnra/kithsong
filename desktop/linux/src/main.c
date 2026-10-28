@@ -10,11 +10,11 @@
  *
  * The album and playlist grids are album_grid.c, the track list track_list.c, the
  * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
- * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, the Add to
- * Playlist dialog add_to_playlist.c and the Rename and Delete Playlist dialogs
- * playlist_dialogs.c. The sidebar's Recents section is recents.c, and its Devices section and
- * sync are devices.c, which adds a
- * device's page (device_view.c) to the stack of pages as "device". The playback buttons
+ * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, Settings' Move
+ * Library move_library.c, the Add to Playlist dialog add_to_playlist.c and the Rename and
+ * Delete Playlist dialogs playlist_dialogs.c. The sidebar's Recents section is recents.c, and
+ * its Devices section and sync are devices.c, which adds a device's page (device_view.c) to
+ * the stack of pages as "device". The playback buttons
  * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
  * the actions'.
  */
@@ -27,6 +27,7 @@
 #include "cover.h"
 #include "devices.h"
 #include "import_view.h"
+#include "move_library.h"
 #include "mpris.h"
 #include "musiccore/musiccore.h"
 #include "now_playing.h"
@@ -118,12 +119,46 @@ static void on_settings_group_changed(void *user) {
   devices_refresh(user);
 }
 
+/* Before Move Library moves the files: everything that reads the library or plays its files
+ * lets go, and it closes. */
+static void move_close_library(void *user) {
+  app *a = user;
+  devices_stop(a); /* sync reads the library */
+  playback_clear();
+  import_view_set_library(a->import, NULL);
+  playback_set_library(NULL, NULL);
+  album_grid_unselect(a->album_grid);
+  album_grid_unselect(a->playlist_grid);
+  mc_library_close(a->lib);
+  a->lib = NULL;
+  app_reload_library(a);
+}
+
+/* After the move: the library opens where it is now (settings.json already says so). */
+static void move_reopen_library(void *user, const char *dir) {
+  app *a = user;
+  if (mc_library_open(dir, &a->lib) != MC_OK) a->lib = NULL; /* the empty page says so */
+  import_view_set_library(a->import, a->lib);
+  playback_set_library(a->lib, a->settings_dir);
+  set_empty_description(a);
+  app_reload_library(a);
+  devices_start(a);
+  gtk_window_present(a->win);
+}
+
+static void move_library(void *user) {
+  app *a = user;
+  static move_library_host host = {move_close_library, move_reopen_library, NULL};
+  host.user = a;
+  move_library_start(a->win, a->settings_dir, &host);
+}
+
 static void on_settings(GtkButton *button, gpointer user) {
   (void)button;
   app *a = user;
   static const settings_view_sync sync = {devices_sync, devices_sync_off_text, on_settings_renamed,
                                           on_settings_group_changed};
-  settings_view_present(GTK_WIDGET(a->win), a->settings_dir, open_library, &sync, a);
+  settings_view_present(GTK_WIDGET(a->win), a->settings_dir, open_library, move_library, &sync, a);
 }
 
 static void close_confirmed(void *user, gboolean closed) {

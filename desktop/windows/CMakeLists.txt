@@ -18,6 +18,7 @@ add_executable(musicapp WIN32
   src/device_view.c
   src/import_view.c
   src/media_controls.c
+  src/move_library.c
   src/now_playing.c
   src/pair_dialog.c
   src/pick_folder.c

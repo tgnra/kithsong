@@ -59,6 +59,7 @@ add_library(musiccore STATIC
   "${_strings_out}/mc_strings_gen.h"
   "${_strings_out}/mc_strings_gen.c"
   src/library/library.c
+  src/library/library_move.c
   "${_schema_c}"
   src/playlist/playlist.c
   src/playlist/playlist_art.c

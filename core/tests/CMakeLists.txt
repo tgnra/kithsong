@@ -13,6 +13,7 @@ endfunction()
 
 musicapp_test(test_util)
 musicapp_test(test_library)
+musicapp_test(test_library_move)
 musicapp_test(test_smart)
 musicapp_test(test_playlist_art)
 target_link_libraries(test_playlist_art PRIVATE mc_stb mbedcrypto)  # makes covers, reads grids back

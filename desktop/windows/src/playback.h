@@ -41,6 +41,9 @@ void playback_set_library(mc_library *lib, const char *config_dir);
  * playback's: media keys, the taskbar's buttons. */
 BOOL playback_window_message(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result);
 
+/* Stops playing and empties the queue, letting go of the file that was playing; for before
+ * the library's files move. */
+void playback_clear(void);
 /* Replaces the queue and plays tracks[start]. */
 void playback_play(const playback_track *tracks, int count, int start);
 /* Pauses or resumes. Returns FALSE if nothing has been queued. */

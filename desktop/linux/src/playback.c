@@ -158,6 +158,26 @@ void playback_set_library(mc_library *lib, const char *config_dir) {
   if (lib && config_dir && mc_scrobbler_new(lib, config_dir, &s.scrobbler) != MC_OK) s.scrobbler = NULL;
 }
 
+void playback_clear(void) {
+  if (!s.player) return;
+  count_plays();
+  mc_player_free(s.player); /* closes the file */
+  s.player = NULL;
+  g_idle_remove_by_data(&s);
+  g_atomic_int_set(&s.pending, 0);
+  if (s.tick) g_clear_handle_id(&s.tick, g_source_remove);
+  free_items();
+  s.index = s.announced = -1;
+  s.state = MC_PLAYER_STOPPED;
+  now_playing_show(NULL, NULL, 0, NULL);
+  now_playing_set_position(0);
+  mpris_set_track(NULL, NULL, NULL, NULL, NULL, 0);
+  mpris_set_state(MC_PLAYER_STOPPED, FALSE, FALSE);
+  track_list_set_playing(NULL);
+  set_window_title(NULL);
+  if (s.changed) s.changed(s.user);
+}
+
 void playback_play(const playback_track *tracks, int count, int start) {
   if (count <= 0 || start < 0 || start >= count) return;
   if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {

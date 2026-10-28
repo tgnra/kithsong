@@ -79,7 +79,12 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 - Scrobbling - cancel a call in progress on mc_scrobbler_free(), so quitting while the service is slow doesn't wait for curl's timeout (up to 30 seconds)
 - Playback - AAC/M4A - pick a decoder: the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Volume control (in the core, so Android can also duck itself on Android 7)
-- Linux and Windows - Move Library (the button is disabled)
+- Move Library - the core can't be cancelled part-way (the progress window has no Cancel); copying reports progress per file, so one huge file shows no movement while it copies
+- Move Library - Windows: read-only files copy with their attribute, so undoing a failed copy, or removing the old files, can't delete them (they're counted as left behind); clear the attribute first
+- Move Library - Windows: a desktop.ini at the top of the library stays in the old folder (it's the folder's own); Linux's .directory isn't treated the same way
+- Move Library - Windows: no OneDrive warning for the new folder, as Open another library gives
+- Move Library - Linux: close-request is refused while moving, but untested under a real window manager (tested under Xvfb with none)
+- Move Library - Android has no Move library (its library lives in app storage)
 
 ## Wear OS
 

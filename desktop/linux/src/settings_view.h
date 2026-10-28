@@ -8,7 +8,7 @@
  *   |  | Library Folder                             | |
  *   |  | /home/me/Music                             | |
  *   |  | Open Another Library...                  > | |
- *   |  | Move Library...  (not available yet)       | |
+ *   |  | Move Library...                          > | |
  *   |  Sync                                            |
  *   |  Other devices show this computer by its name... |
  *   |  | This Computer's Name         [Study PC   v] | |
@@ -19,10 +19,10 @@
  *
  * The library folder is read from settings.json in settings_dir. Open Another Library picks a
  * folder and hands it to the caller's open_library; if that succeeds the choice is saved to
- * settings.json (unknown keys are kept). Moving the library isn't implemented yet, so its row
- * is disabled, as on Windows. The Sync group renames this computer (through sync when it
- * runs, and settings.json either way), shows where other devices reach it, and leaves the
- * group after asking, as Windows' Settings does.
+ * settings.json (unknown keys are kept). Move Library closes the dialog and calls the caller's
+ * move_library, which moves it (move_library.c). The Sync group renames this computer (through
+ * sync when it runs, and settings.json either way), shows where other devices reach it, and
+ * leaves the group after asking, as Windows' Settings does.
  *
  * Wiring it into main.c (settings_dir is ~/.config/musicapp, as main() already builds):
  *
@@ -39,7 +39,7 @@
  *   }
  *
  *   // the header bar's Settings button:
- *   settings_view_present(win, a->settings_dir, open_library, a);
+ *   settings_view_present(win, a->settings_dir, open_library, move_library, a);
  *
  * Windows locks the sidebar (so Settings can't be reached) while an import session is open;
  * do the same here by making the Settings button insensitive from the import view's
@@ -57,6 +57,8 @@
 /* Switches to the library in dir (UTF-8). Returns TRUE if it's now open; FALSE if it couldn't
  * be, after telling the user why. Runs on the main thread, while the dialog is open. */
 typedef gboolean (*settings_view_open_library_fn)(void *user, const char *dir);
+/* Moves the library somewhere the user picks. Called once the dialog has closed. */
+typedef void (*settings_view_move_library_fn)(void *user);
 
 /* What the Sync group needs of the app. Every member runs on the main thread. */
 typedef struct settings_view_sync {
@@ -69,7 +71,8 @@ typedef struct settings_view_sync {
 /* Shows the Settings dialog over parent (any widget in the main window). sync (copied) may be
  * NULL, which leaves the Sync group out. */
 void settings_view_present(GtkWidget *parent, const char *settings_dir,
-                           settings_view_open_library_fn open_library, const settings_view_sync *sync,
+                           settings_view_open_library_fn open_library,
+                           settings_view_move_library_fn move_library, const settings_view_sync *sync,
                            void *user);
 
 #endif

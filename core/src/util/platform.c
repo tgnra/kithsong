@@ -1,5 +1,6 @@
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE /* realpath */
 #endif
 
 #include "util/platform.h"
@@ -320,6 +321,39 @@ int mc_same_path(const char *a, const char *b) {
   free(wa);
   free(wb);
   return same;
+}
+
+mc_status mc_rename_in_place(const char *src, const char *dst) {
+  wchar_t *ws = widen(src), *wd = widen(dst);
+  BOOL ok = ws && wd && MoveFileExW(ws, wd, 0); /* no MOVEFILE_COPY_ALLOWED */
+  free(ws);
+  free(wd);
+  return ok ? MC_OK : MC_ERR_IO;
+}
+
+int mc_same_volume(const char *a, const char *b) {
+  wchar_t *wa = widen(a), *wb = widen(b), va[MAX_PATH], vb[MAX_PATH];
+  int same = wa && wb && GetVolumePathNameW(wa, va, MAX_PATH) && GetVolumePathNameW(wb, vb, MAX_PATH) &&
+             CompareStringOrdinal(va, -1, vb, -1, TRUE) == CSTR_EQUAL;
+  free(wa);
+  free(wb);
+  return same;
+}
+
+char *mc_full_path(const char *path) {
+  wchar_t *w = widen(path);
+  if (!w) return NULL;
+  DWORD n = GetFullPathNameW(w, 0, NULL, NULL);
+  wchar_t *full = n ? malloc(n * sizeof *full) : NULL;
+  char *out = NULL;
+  if (full && GetFullPathNameW(w, n, full, NULL) < n) {
+    size_t len = wcslen(full);
+    while (len > 3 && full[len - 1] == L'\\') full[--len] = L'\0'; /* but keep "C:\" */
+    out = narrow(full);
+  }
+  free(full);
+  free(w);
+  return out;
 }
 
 mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms) {
@@ -732,6 +766,48 @@ mc_status mc_rmdir(const char *path) {
 
 int mc_same_path(const char *a, const char *b) {
   return strcmp(a, b) == 0;
+}
+
+mc_status mc_rename_in_place(const char *src, const char *dst) {
+  if (mc_file_exists(dst)) return MC_ERR_IO;
+  return rename(src, dst) == 0 ? MC_OK : MC_ERR_IO;
+}
+
+int mc_same_volume(const char *a, const char *b) {
+  struct stat sa, sb;
+  return stat(a, &sa) == 0 && stat(b, &sb) == 0 && sa.st_dev == sb.st_dev;
+}
+
+char *mc_full_path(const char *path) {
+  if (!path || !*path) return NULL;
+  char *abs;
+  if (path[0] == '/') {
+    abs = mc_strdup(path);
+  } else {
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof cwd)) return NULL;
+    size_t n = strlen(cwd) + strlen(path) + 2;
+    if ((abs = malloc(n))) snprintf(abs, n, "%s/%s", cwd, path);
+  }
+  if (!abs) return NULL;
+  /* Resolve the longest part that exists, then add the rest back on. */
+  size_t len = strlen(abs);
+  while (len > 1 && abs[len - 1] == '/') abs[--len] = '\0';
+  char *cut = abs + len, real[PATH_MAX];
+  for (;;) {
+    char saved = *cut;
+    *cut = '\0';
+    int ok = realpath(cut == abs ? "/" : abs, real) != NULL;
+    *cut = saved;
+    if (ok) break;
+    while (cut > abs && *--cut != '/') {}
+  }
+  const char *rest = cut;
+  size_t n = strlen(real) + strlen(rest) + 1;
+  char *out = malloc(n);
+  if (out) snprintf(out, n, "%s%s", strcmp(real, "/") || !*rest ? real : "", rest);
+  free(abs);
+  return out;
 }
 
 mc_status mc_free_space(const char *path, int64_t *out) {

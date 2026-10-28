@@ -225,6 +225,25 @@ BOOL playback_window_message(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result) {
   return FALSE;
 }
 
+void playback_clear(void) {
+  if (!s.player) return;
+  count_plays();
+  mc_player_free(s.player); /* closes the file */
+  s.player = NULL;
+  free_items();
+  s.index = s.announced = -1;
+  s.state = MC_PLAYER_STOPPED;
+  KillTimer(s.msgs, TICK_TIMER);
+  now_playing_show(NULL, NULL, 0, NULL);
+  now_playing_set_position(0);
+  media_controls_set_track(NULL, NULL, NULL, NULL);
+  media_controls_set_state(MC_PLAYER_STOPPED, FALSE, FALSE);
+  track_list_set_playing(NULL);
+  set_window_title(NULL);
+  taskbar_set_state(FALSE, FALSE, FALSE, FALSE);
+  if (s.changed) s.changed();
+}
+
 void playback_play(const playback_track *tracks, int count, int start) {
   if (count <= 0 || start < 0 || start >= count) return;
   if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {

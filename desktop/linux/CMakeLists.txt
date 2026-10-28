@@ -12,6 +12,7 @@ add_executable(musicapp
   src/track_list.c
   src/import_view.c
   src/settings_view.c
+  src/move_library.c
   src/add_device.c
   src/devices.c
   src/recents.c
