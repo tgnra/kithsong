@@ -14,12 +14,32 @@
 #include <windows.h>
 #endif
 
+#include <ape/apeproperties.h>
 #include <audioproperties.h>
+#include <dsf/dsfproperties.h>
 #include <fileref.h>
+#include <flac/flacproperties.h>
+#include <mp4/mp4properties.h>
+#include <riff/aiff/aiffproperties.h>
+#include <riff/wav/wavproperties.h>
+#include <wavpack/wavpackproperties.h>
 #include <tpropertymap.h>
 #include <tvariant.h>
 
 namespace {
+
+// Bits per sample of the lossless formats that have one; 0 for the rest.
+int bits_per_sample(const TagLib::AudioProperties *ap) {
+  if (auto *p = dynamic_cast<const TagLib::FLAC::Properties *>(ap)) return p->bitsPerSample();
+  if (auto *p = dynamic_cast<const TagLib::RIFF::WAV::Properties *>(ap)) return p->bitsPerSample();
+  if (auto *p = dynamic_cast<const TagLib::RIFF::AIFF::Properties *>(ap)) return p->bitsPerSample();
+  if (auto *p = dynamic_cast<const TagLib::WavPack::Properties *>(ap)) return p->bitsPerSample();
+  if (auto *p = dynamic_cast<const TagLib::APE::Properties *>(ap)) return p->bitsPerSample();
+  if (auto *p = dynamic_cast<const TagLib::DSF::Properties *>(ap)) return p->bitsPerSample();
+  if (auto *p = dynamic_cast<const TagLib::MP4::Properties *>(ap))
+    return p->codec() == TagLib::MP4::Properties::ALAC ? p->bitsPerSample() : 0;
+  return 0;
+}
 
 char *dup_utf8(const TagLib::String &s) {
   std::string utf8 = s.to8Bit(true);
@@ -112,6 +132,7 @@ extern "C" mc_status mc_tags_read(const char *path, mc_tags *out) {
       out->bitrate_kbps = ap->bitrate();
       out->sample_rate = ap->sampleRate();
       out->channels = ap->channels();
+      out->bits_per_sample = bits_per_sample(ap);
     }
     return MC_OK;
   } catch (const std::bad_alloc &) {

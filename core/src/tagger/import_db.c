@@ -108,6 +108,17 @@ static mc_status upsert_singles_album(sqlite3 *db, const char *artist_uid, const
 
 static mc_status upsert_album(sqlite3 *db, const mc_db_album *al, const char *artist_uid,
                               char uid[MC_UID_STRLEN]) {
+  if (al->existing_uid) {
+    if (strlen(al->existing_uid) >= MC_UID_STRLEN) return MC_ERR_INVALID_ARG;
+    strcpy(uid, al->existing_uid);
+    if (!al->art_hash) return MC_OK;
+    sqlite3_stmt *stmt =
+      prepare(db, "UPDATE albums SET art_hash = ?2 WHERE uid = ?1 AND art_hash IS NULL");
+    if (!stmt) return MC_ERR_DB;
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+    bind_text(stmt, 2, al->art_hash);
+    return step_done(stmt);
+  }
   const char *title = al->title && *al->title ? al->title : "Unknown Album";
   sqlite3_stmt *stmt;
   int found = 0;
@@ -178,6 +189,56 @@ static int find_file(sqlite3 *db, const char *path, char track_uid[MC_UID_STRLEN
   return found;
 }
 
+/* A file for a track already in the library (t->track_uid): swapped in for the files row
+ * t->replace_file_uid, or added. The track's metadata stays as it is. */
+static mc_status attach_file(sqlite3 *db, const mc_db_track *t) {
+  char file_uid[MC_UID_STRLEN], rev[MC_UID_STRLEN];
+  mc_status st;
+  if ((st = mc_uid_new(file_uid)) != MC_OK || (st = mc_uid_new(rev)) != MC_OK) return st;
+  int swap = t->replace_file_uid != NULL;
+
+  sqlite3_stmt *stmt = prepare(db, swap ? "UPDATE tracks SET duration_ms = coalesce(?2, duration_ms),"
+                                          " file_rev = ?3 WHERE uid = ?1"
+                                        : "UPDATE tracks SET duration_ms = coalesce(duration_ms, ?2)"
+                                          " WHERE uid = ?1");
+  if (!stmt) return MC_ERR_DB;
+  bind_text(stmt, 1, t->track_uid);
+  bind_int(stmt, 2, t->duration_ms);
+  if (swap) sqlite3_bind_text(stmt, 3, rev, -1, SQLITE_STATIC);
+  if ((st = step_done(stmt)) != MC_OK) return st;
+  if (sqlite3_changes(db) != 1) return MC_ERR_NOT_FOUND;
+
+  /* As in upsert_track: a row still claiming the destination path is stale. */
+  stmt = prepare(db, "DELETE FROM files WHERE path = ?1 AND uid IS NOT ?2");
+  if (!stmt) return MC_ERR_DB;
+  bind_text(stmt, 1, t->path);
+  bind_text(stmt, 2, t->replace_file_uid);
+  if ((st = step_done(stmt)) != MC_OK) return st;
+
+  /* An imported original from now on, whatever the old row was; sha256 is unknown until
+   * sync or a deep check records it. */
+  stmt = prepare(db, swap ? "UPDATE files SET uid = ?1, format = ?3, bitrate_kbps = ?4,"
+                            " size_bytes = ?5, mtime_ms = ?6, path = ?7, sha256 = NULL,"
+                            " source_file_uid = NULL, source_peer_uid = NULL, file_rev = ?8"
+                            " WHERE uid = ?2 AND track_uid = ?9"
+                          : "INSERT INTO files (uid, track_uid, format, bitrate_kbps, size_bytes,"
+                            " mtime_ms, path, file_rev)"
+                            " VALUES (?1, ?9, ?3, ?4, ?5, ?6, ?7,"
+                            "  (SELECT file_rev FROM tracks WHERE uid = ?9))");
+  if (!stmt) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, file_uid, -1, SQLITE_STATIC);
+  if (swap) bind_text(stmt, 2, t->replace_file_uid);
+  bind_text(stmt, 3, t->format ? t->format : "unknown");
+  bind_int(stmt, 4, t->bitrate_kbps);
+  bind_int(stmt, 5, t->size_bytes);
+  bind_int(stmt, 6, t->mtime_ms);
+  bind_text(stmt, 7, t->path);
+  if (swap) sqlite3_bind_text(stmt, 8, rev, -1, SQLITE_STATIC);
+  bind_text(stmt, 9, t->track_uid);
+  if ((st = step_done(stmt)) != MC_OK) return st;
+  return sqlite3_changes(db) == 1 ? MC_OK : MC_ERR_NOT_FOUND;
+}
+
 /* Writes one track and its file row. *old_album receives the album the file's track was in
  * before, if it was already in the library. */
 static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *album_uid,
@@ -243,6 +304,20 @@ static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *alb
   return step_done(stmt);
 }
 
+mc_status mc_import_db_move_file(mc_library *lib, const char *old_path, const char *new_path) {
+  if (!lib || !old_path || !new_path) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  sqlite3_stmt *stmt = prepare(mc_library_db(lib), "UPDATE files SET path = ?2 WHERE path = ?1");
+  if (stmt) {
+    bind_text(stmt, 1, old_path);
+    bind_text(stmt, 2, new_path);
+  }
+  if ((st = step_done(stmt)) == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
 int mc_import_db_is_track_at(mc_library *lib, const char *path, const char *mb_releasetrackid) {
   if (!lib || !path || !mb_releasetrackid) return 0;
   sqlite3_stmt *stmt = prepare(mc_library_db(lib),
@@ -272,7 +347,14 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
   if (st != MC_OK) return st;
 
   char album_artist[MC_UID_STRLEN], album_uid[MC_UID_STRLEN];
-  if ((st = upsert_artist(db, &album->artist, album_artist)) != MC_OK) goto fail;
+  /* An existing album keeps its artist, which new tracks without one fall back to. */
+  sqlite3_stmt *stmt = album->existing_uid
+                         ? prepare(db, "SELECT artist_uid FROM albums WHERE uid = ?1"
+                                       " AND artist_uid IS NOT NULL")
+                         : NULL;
+  if (stmt) bind_text(stmt, 1, album->existing_uid);
+  if (!stmt || !select_uid(stmt, album_artist))
+    if ((st = upsert_artist(db, &album->artist, album_artist)) != MC_OK) goto fail;
   st = album->singles ? upsert_singles_album(db, album_artist, album->artist.name, album_uid)
                       : upsert_album(db, album, album_artist, album_uid);
   if (st != MC_OK) goto fail;
@@ -280,6 +362,10 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
   for (int i = 0; i < count; i++) {
     const mc_db_track *t = &tracks[i];
     char artist_uid[MC_UID_STRLEN], old_album[MC_UID_STRLEN];
+    if (t->track_uid) {
+      if ((st = attach_file(db, t)) != MC_OK) goto fail;
+      continue;
+    }
     if (t->artist.name && *t->artist.name) {
       if ((st = upsert_artist(db, &t->artist, artist_uid)) != MC_OK) goto fail;
     } else {

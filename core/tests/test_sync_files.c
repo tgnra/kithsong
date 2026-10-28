@@ -3,7 +3,8 @@
  * is the group's archive; B's profile decides what it fetches: originals, then Opus at
  * 64 kbps, then a selection. Also checksums, reconcile (unwanted, wrong-format, deleted and
  * unknown files, and the originals imported on B that go once the archive holds them),
- * sync_status and mc_sync_verify(). */
+ * sync_status, mc_sync_verify(), and a track whose original an import on A replaced with a
+ * better file (B's copy made from the old one is replaced too). */
 #ifndef _WIN32
 #define _DEFAULT_SOURCE /* symlink */
 #endif
@@ -27,6 +28,7 @@
 #include "sync/rows.h"
 #include "sync/sync_db.h"
 #include "sync/sync_internal.h"
+#include "tagger/import_db.h"
 #include "test.h"
 #include "util/platform.h"
 
@@ -945,6 +947,55 @@ int main(int argc, char **argv) {
     CHECK(files_match(&a));
   }
   CHECK(mc_sync_verify(NULL, MC_VERIFY_FAST, NULL) == MC_ERR_INVALID_ARG);
+
+  /* An import on A swaps Song One's original for a better file, as tagger.c does: new file,
+   * the files row updated in place, then the old file removed. B's Opus copy was made from
+   * the old file, so it's stale: B fetches a copy of the new one and drops the old. */
+  {
+    char old_opus[MC_UID_STRLEN], p[2048], new_rel[256];
+    snprintf(sql, sizeof sql, "SELECT uid FROM files WHERE track_uid = '%s'", t1.uid);
+    query_text(mc_library_db(b.lib), sql, old_opus, sizeof old_opus);
+    snprintf(new_rel, sizeof new_rel, "Low/Things (1994)/01 Song One (2).wav");
+    abs_path(&a, new_rel, p, sizeof p);
+    CHECK(write_wav(p, 1500, 880));
+    int64_t size = 0, mtime = 0;
+    CHECK(mc_file_info(p, &size, &mtime) == MC_OK);
+    mc_db_album album = {0};
+    album.existing_uid = things;
+    mc_db_track row = {0};
+    row.path = new_rel;
+    row.format = "wav";
+    row.bitrate_kbps = 1411;
+    row.size_bytes = size;
+    row.mtime_ms = mtime;
+    row.duration_ms = 1500;
+    row.track_uid = t1.uid;
+    row.replace_file_uid = t1.file;
+    CHECK(mc_import_db_write(a.lib, &album, &row, 1) == MC_OK);
+    abs_path(&a, t1.rel, p, sizeof p);
+    CHECK(mc_remove(p) == MC_OK);
+    char new_file[MC_UID_STRLEN];
+    snprintf(sql, sizeof sql, "SELECT uid FROM files WHERE track_uid = '%s'", t1.uid);
+    query_text(mc_library_db(a.lib), sql, new_file, sizeof new_file);
+    CHECK(new_file[0] && strcmp(new_file, t1.file) != 0);
+
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.files_received == 1 && rb.files_deleted == 1 && rb.files_missing == 0);
+    snprintf(sql, sizeof sql,
+             "SELECT count(*) FROM files f JOIN tracks t ON t.uid = f.track_uid"
+             " WHERE f.track_uid = '%s' AND f.format = 'opus' AND f.source_file_uid = '%s'"
+             " AND f.file_rev = t.file_rev AND t.file_rev IS NOT NULL",
+             t1.uid, new_file);
+    CHECK(lib_int(&b, sql) == 1);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE track_uid = '%s'", t1.uid);
+    CHECK(lib_int(&b, sql) == 1);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE uid = '%s'", old_opus);
+    CHECK(lib_int(&b, sql) == 0);
+    CHECK(files_match(&b));
+    /* Settled: nothing more moves. */
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.files_received == 0 && rb.files_deleted == 0);
+  }
 
   dev_stop(&a);
   dev_stop(&b);

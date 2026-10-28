@@ -12,6 +12,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <bcrypt.h>
+#include <shellapi.h>
 #include <process.h>
 #else
 #include <dirent.h>
@@ -20,6 +21,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <time.h>
+#include <stdio.h>
 #include <unistd.h>
 #endif
 
@@ -286,6 +288,23 @@ mc_status mc_remove(const char *path) {
   BOOL ok = w && DeleteFileW(w);
   free(w);
   return ok ? MC_OK : MC_ERR_IO;
+}
+
+mc_status mc_trash(const char *path) {
+  wchar_t *w = widen(path);
+  if (!w) return MC_ERR_NOMEM;
+  /* SHFileOperation wants an absolute path ending in two NULs. */
+  wchar_t full[MAX_PATH * 4];
+  DWORD n = GetFullPathNameW(w, MAX_PATH * 4 - 1, full, NULL);
+  free(w);
+  if (n == 0 || n >= MAX_PATH * 4 - 1) return MC_ERR_IO;
+  full[n + 1] = L'\0';
+  SHFILEOPSTRUCTW op = {0};
+  op.wFunc = FO_DELETE;
+  op.pFrom = full;
+  op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+  int rc = SHFileOperationW(&op);
+  return rc == 0 && !op.fAnyOperationsAborted ? MC_OK : MC_ERR_IO;
 }
 
 mc_status mc_rmdir(const char *path) {
@@ -623,6 +642,88 @@ mc_status mc_rename(const char *src, const char *dst, int replace) {
 
 mc_status mc_remove(const char *path) {
   return unlink(path) == 0 ? MC_OK : MC_ERR_IO;
+}
+
+/* "/a b" -> "/a%20b", as .trashinfo's Path wants. */
+static char *percent_encode(const char *s) {
+  static const char hex[] = "0123456789ABCDEF";
+  char *out = malloc(strlen(s) * 3 + 1), *o = out;
+  if (!out) return NULL;
+  for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+    if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
+        strchr("/-_.~", *p)) {
+      *o++ = (char)*p;
+    } else {
+      *o++ = '%';
+      *o++ = hex[*p >> 4];
+      *o++ = hex[*p & 15];
+    }
+  }
+  *o = '\0';
+  return out;
+}
+
+/* The freedesktop.org Trash specification's home trash: info/<name>.trashinfo is created
+ * first (exclusively, which claims the name), then the file is renamed into files/<name>.
+ * Only a rename: a file on another file system than the home trash isn't trashed. */
+mc_status mc_trash(const char *path) {
+  const char *data = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
+  char trash[4096], files[4200], info[4200], abs[4096];
+  if (data && *data) snprintf(trash, sizeof trash, "%s/Trash", data);
+  else if (home && *home) snprintf(trash, sizeof trash, "%s/.local/share/Trash", home);
+  else return MC_ERR_NOT_FOUND;
+  if (path[0] == '/') {
+    snprintf(abs, sizeof abs, "%s", path);
+  } else {
+    char cwd[2048];
+    if (!getcwd(cwd, sizeof cwd)) return MC_ERR_IO;
+    snprintf(abs, sizeof abs, "%s/%s", cwd, path);
+  }
+  snprintf(files, sizeof files, "%s/files", trash);
+  snprintf(info, sizeof info, "%s/info", trash);
+  if (mc_mkdirs(files) != MC_OK || mc_mkdirs(info) != MC_OK) return MC_ERR_IO;
+
+  const char *slash = strrchr(abs, '/');
+  const char *name = slash ? slash + 1 : abs;
+  const char *dot = strrchr(name, '.');
+  if (!dot || dot == name) dot = name + strlen(name);
+  if (strlen(name) > 240) return MC_ERR_INVALID_ARG; /* leaves room for ".<n>" */
+  char *encoded = percent_encode(abs);
+  if (!encoded) return MC_ERR_NOMEM;
+  char date[32];
+  time_t now = time(NULL);
+  struct tm tm;
+  localtime_r(&now, &tm);
+  strftime(date, sizeof date, "%Y-%m-%dT%H:%M:%S", &tm);
+
+  mc_status st = MC_ERR_IO;
+  for (int n = 1; n < 1000; n++) {
+    char base[256], info_path[4500], dest[4500];
+    if (n == 1) snprintf(base, sizeof base, "%.240s", name);
+    else snprintf(base, sizeof base, "%.*s.%d%.*s", (int)(dot - name), name, n,
+                  (int)(240 - (dot - name)), dot);
+    snprintf(info_path, sizeof info_path, "%s/%s.trashinfo", info, base);
+    snprintf(dest, sizeof dest, "%s/%s", files, base);
+    int fd = open(info_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0) {
+      if (errno == EEXIST) continue;
+      break;
+    }
+    char text[5400];
+    int len = snprintf(text, sizeof text, "[Trash Info]\nPath=%s\nDeletionDate=%s\n", encoded,
+                       date);
+    int ok = len > 0 && (size_t)len < sizeof text && write(fd, text, (size_t)len) == len;
+    if (close(fd) != 0) ok = 0;
+    if (ok && !mc_file_exists(dest) && rename(abs, dest) == 0) {
+      st = MC_OK;
+    } else {
+      unlink(info_path);
+      if (ok && mc_file_exists(dest)) continue;
+    }
+    break;
+  }
+  free(encoded);
+  return st;
 }
 
 mc_status mc_rmdir(const char *path) {

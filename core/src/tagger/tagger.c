@@ -6,8 +6,10 @@
  *   4. auto-accept confident matches; leave the rest in REVIEW for the user. While
  *      MusicBrainz can't be reached, items skip 3 and go straight to REVIEW; with tagging
  *      skipped, they're imported as they are.
- *   5. on accept: copy (or, inside the library, move) the files into the library folder
- *      (organize.c), write tags, add a cover (coverart.c), then library rows (import_db.c)
+ *   5. on accept: compare with what the library has (dupes.c: skip duplicates, or swap in a
+ *      better release), copy (or, inside the library, move) the files into the library
+ *      folder (organize.c), write tags, add a cover (coverart.c), then library rows
+ *      (import_db.c)
  * After matching, the thread stays alive to work through the user's review decisions.
  */
 #include "musiccore/tagger.h"
@@ -21,6 +23,7 @@
 
 #include "library/library_internal.h"
 #include "tagger/coverart.h"
+#include "tagger/dupes.h"
 #include "tagger/import_db.h"
 #include "tagger/match.h"
 #include "tagger/musicbrainz.h"
@@ -62,6 +65,8 @@ typedef struct item {
   int chosen;
   char *error;
   int unreachable; /* in REVIEW because MusicBrainz couldn't be reached */
+  mc_import_outcome outcome; /* guarded by lock, like state */
+  int replaced, duplicates;
 } item;
 
 /* REQ_RETRY matches an item waiting on MusicBrainz again (see auto_match), once it's back or
@@ -674,6 +679,12 @@ typedef struct placement {
   char *dest_rel; /* where it goes, relative to the library folder */
   char *dest_abs;
   enum { OP_NONE, OP_COPIED, OP_MOVED, OP_REPLACED } op;
+  /* Swapping out a library file (dupes.h): it's at old_rel, and the new one is meant for
+   * final_rel, which may be old_rel itself; until the old file is gone, the new one waits
+   * at dest_rel. */
+  int swap;
+  const char *old_rel;
+  char *final_rel;
 } placement;
 
 static void placements_free(placement *p, int n) {
@@ -681,6 +692,7 @@ static void placements_free(placement *p, int n) {
     free(p[i].src_rel);
     free(p[i].dest_rel);
     free(p[i].dest_abs);
+    free(p[i].final_rel);
   }
   free(p);
 }
@@ -780,7 +792,8 @@ static const char *place_files(mc_import *imp, mc_library *lib, placement *p, in
       continue;
     }
     if (mc_file_exists(pl->dest_abs)) {
-      if (!pl->src_rel && mc_import_db_is_track_at(lib, pl->dest_rel, pl->releasetrackid)) {
+      if (!pl->swap && !pl->src_rel &&
+          mc_import_db_is_track_at(lib, pl->dest_rel, pl->releasetrackid)) {
         /* The same track imported again from elsewhere: replace the old copy. */
         if (mc_copy_file(src, pl->dest_abs, 1) != MC_OK) return mc_str(MC_STR_IMPORT_ERROR_COPY);
         pl->op = OP_REPLACED;
@@ -861,6 +874,92 @@ static const char *ensure_cover(mc_import *imp, mc_library *lib, const char *alb
   return result;
 }
 
+/* Whether none of the files is in the library folder already. */
+static int all_outside(mc_library *lib, const placement *p, int n) {
+  for (int i = 0; i < n; i++) {
+    char *rel = mc_library_relpath(lib, p[i].f->path);
+    free(rel);
+    if (rel) return 0;
+  }
+  return 1;
+}
+
+static const char *base_name(const char *rel) {
+  const char *slash = strrchr(rel, '/');
+  return slash ? slash + 1 : rel;
+}
+
+/* old_rel with the extension of format: where a swapped-in file goes. */
+static char *swap_path(const char *old_rel, const char *format) {
+  const char *name = base_name(old_rel), *dot = strrchr(name, '.');
+  size_t stem = dot && dot > name ? (size_t)(dot - old_rel) : strlen(old_rel);
+  size_t len = stem + strlen(format) + 2;
+  char *out = malloc(len);
+  if (out) snprintf(out, len, "%.*s.%s", (int)stem, old_rel, format);
+  return out;
+}
+
+/* Compares the item with the library (dupes.c) and drops, retargets or redirects its files
+ * to suit. Returns the new count; *planned is set when the comparison ran. */
+static int apply_dupes(mc_library *lib, mc_db_album *album, mc_db_track *rows,
+                       placement *places, int count, mc_dupe_plan *dp, int *planned) {
+  *planned = 0;
+  if (count <= 0 || !all_outside(lib, places, count)) return count;
+  mc_dupe_in *in = calloc((size_t)count, sizeof *in);
+  if (!in) return count;
+  for (int i = 0; i < count; i++) {
+    const file_entry *f = places[i].f;
+    in[i].row = &rows[i];
+    in[i].src_path = f->path;
+    in[i].size = f->size;
+    in[i].quality = (mc_audio_quality){audio_format(f->path), f->tags.bitrate_kbps,
+                                       f->tags.sample_rate, f->tags.bits_per_sample};
+  }
+  mc_status st = mc_dupes_plan(lib, album, in, count, dp);
+  free(in);
+  if (st != MC_OK) return count; /* import as before */
+  *planned = 1;
+
+  if (dp->album_uid[0]) album->existing_uid = dp->album_uid;
+  int kept = 0;
+  for (int i = 0; i < count; i++) {
+    mc_dupe_decision *d = &dp->d[i];
+    placement pl = places[i];
+    mc_db_track row = rows[i];
+    if (d->action == MC_DUPE_SKIP) {
+      free(pl.dest_rel);
+      continue;
+    }
+    if (d->action == MC_DUPE_SWAP || d->action == MC_DUPE_ATTACH) row.track_uid = d->track_uid;
+    char *dest = NULL;
+    if (d->action == MC_DUPE_SWAP) {
+      row.replace_file_uid = d->file_uid;
+      pl.swap = 1;
+      pl.old_rel = d->old_path;
+      pl.final_rel = swap_path(d->old_path, audio_format(pl.f->path));
+      dest = mc_strdup(pl.final_rel);
+    } else if (dp->album_dir && pl.dest_rel) {
+      dest = join_rel(dp->album_dir, base_name(pl.dest_rel));
+    }
+    if (dest || d->action == MC_DUPE_SWAP) {
+      free(pl.dest_rel);
+      pl.dest_rel = dest; /* NULL when out of memory, which the caller reports */
+    }
+    places[kept] = pl;
+    rows[kept] = row;
+    kept++;
+  }
+  return kept;
+}
+
+/* After the rows are saved: the swapped-out files go to the trash, and new files waiting
+ * next to them take their names. A file that can't be trashed stays where it is, no longer
+ * in the library (sync's reconcile treats it as an unknown file). */
+static void finish_swaps(mc_library *lib, placement *p, int n) {
+  for (int i = 0; i < n; i++)
+    if (p[i].swap) mc_dupes_finish_swap(lib, p[i].old_rel, p[i].final_rel, &p[i].dest_rel, &p[i].dest_abs);
+}
+
 /* Applies a candidate (or the existing tags, if match < 0): files are copied or moved into
  * place, tagged, given a cover, and only then recorded in the library. A failure at any step
  * puts the files back. Runs on the import thread. */
@@ -868,6 +967,8 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   item *it = &imp->items[idx];
   mc_mutex_lock(&imp->lock);
   it->chosen = match;
+  it->outcome = MC_IMPORT_OUTCOME_NONE;
+  it->replaced = it->duplicates = 0;
   mc_mutex_unlock(&imp->lock);
   set_state(imp, idx, MC_IMPORT_WRITING, NULL);
 
@@ -996,18 +1097,26 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   }
   if (count == 0) error = mc_str(MC_STR_IMPORT_ERROR_NO_FILES);
 
+  /* Already in the library? Skip, or swap in the better release (see tagger.h). */
+  mc_dupe_plan dp = {0};
+  int planned = 0;
+  if (!error) count = apply_dupes(lib, &album, rows, places, count, &dp, &planned);
+  int all_dupes = planned && count == 0;
+  const char *cover_dir = planned && dp.album_dir ? dp.album_dir : album_rel;
+
   /* join_rel and the path builders return NULL only when out of memory. */
   for (int i = 0; i < count && !error; i++)
-    if (!places[i].dest_rel) error = mc_str(MC_STR_IMPORT_ERROR_NOMEM);
-  if (!error) error = place_files(imp, lib, places, count);
+    if (!places[i].dest_rel || (places[i].swap && !places[i].final_rel))
+      error = mc_str(MC_STR_IMPORT_ERROR_NOMEM);
+  if (!error && !all_dupes) error = place_files(imp, lib, places, count);
 
   for (int i = 0; i < count && !error; i++) {
     if (places[i].write_tags && mc_tags_write(places[i].dest_abs, &places[i].tags) != MC_OK)
       error = mc_str(MC_STR_IMPORT_ERROR_WRITE_TAGS);
   }
 
-  if (!error) {
-    if (!album.singles) album.art_hash = ensure_cover(imp, lib, album_rel, source_dir, rel, hash);
+  if (!error && !all_dupes) {
+    if (!album.singles) album.art_hash = ensure_cover(imp, lib, cover_dir, source_dir, rel, hash);
     for (int i = 0; i < count; i++) {
       mc_db_track *t = &rows[i];
       t->path = places[i].dest_rel;
@@ -1020,6 +1129,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   if (error) {
     unplace_files(lib, places, count);
   } else {
+    finish_swaps(lib, places, count);
     /* Done: tidy up folders that moves emptied, and remember where each file is now, so
      * choosing another match later moves it again instead of copying it a second time. */
     for (int i = 0; i < count; i++) {
@@ -1032,12 +1142,26 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       }
     }
   }
+  mc_import_outcome outcome = MC_IMPORT_OUTCOME_NONE;
+  if (!error && planned)
+    outcome = dp.swaps ? MC_IMPORT_OUTCOME_REPLACED
+              : all_dupes ? MC_IMPORT_OUTCOME_DUPLICATE
+              : dp.skips  ? MC_IMPORT_OUTCOME_ADDED
+                          : MC_IMPORT_OUTCOME_NONE;
+  mc_mutex_lock(&imp->lock);
+  it->outcome = outcome;
+  it->replaced = !error && planned ? dp.swaps : 0;
+  it->duplicates = !error && planned ? dp.skips : 0;
+  mc_mutex_unlock(&imp->lock);
+
   placements_free(places, count);
+  mc_dupe_plan_free(&dp);
   free(rows);
   free(singles);
   free(album_rel);
   free(source_dir);
-  set_state(imp, idx, error ? MC_IMPORT_FAILED : MC_IMPORT_DONE, error);
+  set_state(imp, idx, error ? MC_IMPORT_FAILED : all_dupes ? MC_IMPORT_SKIPPED : MC_IMPORT_DONE,
+            error);
 }
 
 /* --- Requests from the UI --- */
@@ -1338,6 +1462,9 @@ mc_status mc_import_item_get(mc_import *imp, int idx, mc_import_item **out) {
   snap->album = mc_strdup(it->album);
   snap->chosen = it->chosen;
   snap->error = mc_strdup(it->error);
+  snap->outcome = it->outcome;
+  snap->replaced_files = it->replaced;
+  snap->duplicate_files = it->duplicates;
   if ((snap->files = calloc((size_t)it->file_count, sizeof *snap->files))) {
     snap->file_count = it->file_count;
     for (int i = 0; i < it->file_count; i++) {

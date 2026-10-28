@@ -106,6 +106,12 @@ mc_status mc_copy_file(const char *src, const char *dst, int overwrite);
  * is set. */
 mc_status mc_rename(const char *src, const char *dst, int replace);
 mc_status mc_remove(const char *path);
+/* Moves a file to the Recycle Bin (Windows) or the user's freedesktop.org trash
+ * ($XDG_DATA_HOME/Trash, POSIX), so the user can still get it back. Fails rather than
+ * deleting when there is no trash it can use (e.g. a library on another file system than
+ * the home trash, or Android); callers then leave the file where it is. On Windows a drive
+ * without a Recycle Bin (some network and removable drives) deletes the file outright. */
+mc_status mc_trash(const char *path);
 /* Removes a directory; fails if it isn't empty. */
 mc_status mc_rmdir(const char *path);
 /* Whether two paths name the same file as far as the file system is concerned: compared

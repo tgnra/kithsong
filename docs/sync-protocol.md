@@ -521,6 +521,16 @@ the plaintext limit.
     exchange applies the delete, so the session notes the rows it deletes and removes their
     files. A file whose row went otherwise (a crash, an edit outside a session) is an
     unknown file.
+  - Stale copies: when an import on some device replaces a track's original with a
+    better file (see "Duplicates" in `core/include/musiccore/tagger.h`), the track gets a
+    new `tracks.file_rev`, which syncs like any other field. Every `files` row records the
+    `file_rev` it was made from. A received original or transcode whose `file_rev` differs
+    from its track's is stale: it doesn't count as holding the track, so the new file is
+    fetched, and reconcile then deletes the stale copy as it would one in the wrong format
+    (an archive deletes it too, once the current original has arrived). Senders only offer
+    originals and transcodes whose `file_rev` is current, and the swapped file gets a new
+    file uid, so no transcode cached for the old one is sent. An original imported on a
+    device is never stale there: another device's better file doesn't replace it.
   - Exceptions: originals imported on that device are kept until an archive holds verified
     copies. The device learns that in a session with an archive: its `HAVE_REQ` there also
     lists the tracks of such originals it no longer wants as they are, and the archive's

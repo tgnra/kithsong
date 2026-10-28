@@ -32,6 +32,7 @@ typedef struct mc_tags {
   int bitrate_kbps;
   int sample_rate;
   int channels;
+  int bits_per_sample; /* lossless formats (FLAC, WAV, AIFF, ALAC, WavPack, APE, DSF); else 0 */
 } mc_tags;
 
 /* Reads tags and audio properties. On success *out must be released with mc_tags_clear(). */
@@ -74,6 +75,37 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * frontend, which can offer mc_import_skip_tagging(). The check is repeated every 30 s; once
  * MusicBrainz answers again the items waiting on it are matched after all.
  *
+ * Duplicates. Before an accepted item is written, it is compared with the library (only
+ * files from outside the library folder; files inside it are being re-filed, not added):
+ *
+ *   - The same release already in the library: an album with the same MusicBrainz release
+ *     id, else the same release group id, else the same album artist and title (ignoring
+ *     case) with at least half of the incoming tracks in its track list. A single: the
+ *     artist's singles album holding the same recording (or, without ids, the same title).
+ *     Incoming tracks are paired with the album's tracks by release track id, recording id,
+ *     disc and track number with the same title, then title alone.
+ *   - Quality of one file, best first:
+ *       1. lossless beats lossy (lossy: MP3, AAC, Vorbis, Opus, WMA, Musepack, and .m4a/.mp4
+ *          under 500 kbps; everything else, e.g. FLAC, WAV, AIFF, ALAC, WavPack, is lossless);
+ *       2. between lossless files: more bits per sample, then a higher sample rate;
+ *       3. between lossy files: a higher effective bitrate, i.e. the bitrate weighted by
+ *          codec (MP3, WMA, Musepack 1.0; AAC and Vorbis 1.3; Opus 1.6), and only when it is
+ *          more than 10% higher, so VBR noise doesn't count.
+ *     Anything else is equal quality.
+ *   - The incoming release replaces the library's when, taken as a whole, it is better: it
+ *     has a counterpart for every track the library holds a file of here (never a partial
+ *     release for a full one), none of its tracks is worse, and more than half are better.
+ *     Then every paired track's file is swapped: the new file is written next to the old
+ *     one, the library rows are updated in place (the album, tracks and their uids stay, so
+ *     playlists, album groups, play counts, recents and sync profiles keep them), and only
+ *     then the old file goes to the Recycle Bin / trash (see mc_trash). The track gets a new
+ *     tracks.file_rev, which sync uses to replace other devices' copies.
+ *   - Otherwise the tracks already in the library are skipped: no "(2)" copies.
+ *   - Tracks of the release the library lacks are added to the existing album either way,
+ *     and a file whose bytes are identical to a file in the library (SHA-256) is skipped.
+ *
+ * mc_import_item.outcome says what happened.
+ *
  * Callbacks run on the import thread; frontends marshal them to their UI thread. Every
  * other function may be called from any thread. */
 
@@ -103,6 +135,15 @@ typedef enum mc_import_event {
 } mc_import_event;
 
 typedef void (*mc_import_fn)(void *user, mc_import_event event, int arg);
+
+/* What writing an item did, beyond its state. See "Duplicates" above. */
+typedef enum mc_import_outcome {
+  MC_IMPORT_OUTCOME_NONE,      /* not written yet, or written as new music */
+  MC_IMPORT_OUTCOME_REPLACED,  /* DONE: replaced the library's copy with higher quality */
+  MC_IMPORT_OUTCOME_ADDED,     /* DONE: added the tracks the library lacked; the rest were
+                                * already there in equal or better quality */
+  MC_IMPORT_OUTCOME_DUPLICATE  /* SKIPPED: already in the library in equal or better quality */
+} mc_import_outcome;
 
 typedef struct mc_import_options {
   double threshold; /* auto-accept at or above this confidence (0..1); 0 = default 0.9 */
@@ -160,6 +201,9 @@ typedef struct mc_import_item {
   int match_count;
   int chosen;   /* index of the applied match; -1 if imported as-is or not yet decided */
   char *error;  /* set when state is MC_IMPORT_FAILED */
+  mc_import_outcome outcome;
+  int replaced_files;  /* files swapped for higher quality ones */
+  int duplicate_files; /* files skipped because the library already has them */
 } mc_import_item;
 
 /* Starts importing the given folders and/or files. lib must stay open until the session is

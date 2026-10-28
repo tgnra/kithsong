@@ -42,7 +42,9 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 ## Import
 
 - Core - the offline check (mc_musicbrainz_reachable) bounds the connect but not the name lookup, so a network with broken DNS can stall each check; it runs before matching and every 30 s while offline
-- Core - skip files already in the library; importing them again copies them as "(2)" files
+- Core - duplicates: a swap keeps the library's album and track metadata and files the new file under the old name; the new file's tags come from its own match, so a release-group or by-name swap can leave tags naming another release than the library row
+- Core - duplicates: a byte-identical file is only recognised against files that were imported as-is or synced (matched imports are re-tagged in the library, so their bytes differ from the source)
+- Linux - check the import outcomes ("Replaced with higher quality", "Already in library", "Added missing tracks") in the running app; only compiled so far
 - Core - AcoustID fingerprints (Chromaprint) for untagged files
 - Core - cover art for the singles album
 
@@ -54,7 +56,8 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 - Linux - the sync UI: show the pairing code, a device page with profiles, Sync now, Leave Group (Windows has them)
 - Windows and Linux - make a device an archive (mc_sync_set_archive) in the profile editor (Windows already shows the size estimate; Linux's device page needs it too)
 - Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
-- Core - move removed untracked files to the Recycle Bin/trash or a holding folder instead of deleting them permanently
+- Core - move removed untracked files to the Recycle Bin/trash instead of deleting them permanently (mc_trash() in util/platform.h does it; import's swaps use it)
+- Core - a stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
 - Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents(); artists need core uids rather than names
 - Android - profile editor done (see ANDROID_PROGRESS.md); untested: the over-budget message, renaming a member, a group renaming the phone, dark theme, and sync on a real device over Wi-Fi
 

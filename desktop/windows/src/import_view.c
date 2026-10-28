@@ -131,6 +131,19 @@ static const wchar_t *state_label(mc_import_state s) {
   return L"";
 }
 
+/* The status column: what writing the item did about duplicates, else its state. */
+static const wchar_t *item_label(const mc_import_item *it) {
+  if (it->state == MC_IMPORT_DONE || it->state == MC_IMPORT_SKIPPED) {
+    switch (it->outcome) {
+      case MC_IMPORT_OUTCOME_REPLACED: return mc_wstr(MC_STR_IMPORT_STATE_REPLACED);
+      case MC_IMPORT_OUTCOME_ADDED: return mc_wstr(MC_STR_IMPORT_STATE_ADDED_MISSING);
+      case MC_IMPORT_OUTCOME_DUPLICATE: return mc_wstr(MC_STR_IMPORT_STATE_DUPLICATE);
+      case MC_IMPORT_OUTCOME_NONE: break;
+    }
+  }
+  return state_label(it->state);
+}
+
 static int state_group(mc_import_state s) {
   switch (s) {
     case MC_IMPORT_REVIEW: return GROUP_REVIEW;
@@ -316,7 +329,7 @@ static void refresh_row(int idx) {
   HWND lv = g_view.list;
   LVITEMW li = {.mask = LVIF_GROUPID, .iItem = idx, .iGroupId = state_group(it->state)};
   SendMessageW(lv, LVM_SETITEMW, 0, (LPARAM)&li);
-  lv_set(lv, idx, COL_STATUS, state_label(it->state));
+  lv_set(lv, idx, COL_STATUS, item_label(it));
   lv_set_utf8(lv, idx, COL_ARTIST, it->artist);
   lv_set_utf8(lv, idx, COL_ALBUM, it->album ? it->album : file_name(it->files[0].path));
 
@@ -864,8 +877,9 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi) {
   }
   MoveWindow(g_view.list, x + pad, list_y, w - 2 * pad, y + h - pad - list_y, TRUE);
 
-  /* Fixed columns, with Match taking whatever is left. */
-  static const int widths[NUM_COLS] = {110, 170, 220, 60, 0, 90};
+  /* Fixed columns, with Match taking whatever is left. Status fits "Replaced with higher
+   * quality". */
+  static const int widths[NUM_COLS] = {180, 150, 210, 60, 0, 90};
   int lw = w - 2 * pad - GetSystemMetrics(SM_CXVSCROLL) - S(4), used = 0;
   for (int i = 0; i < NUM_COLS; i++)
     if (i != COL_MATCH) {

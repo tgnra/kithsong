@@ -54,7 +54,9 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    tracks and no leftover files. Everything else waits for the user in the review dialog,
    where they can pick another candidate, search again with their own terms, keep the
    existing tags, or skip the item. Results of a manual search are never auto-accepted.
-7. **Write** (see [Library folder](#library-folder)): copy the files into the library folder
+7. **Compare** with the library (`dupes.c`, see [Duplicates](#duplicates)): skip what it
+   already has, or swap in a better copy of the release.
+8. **Write** (see [Library folder](#library-folder)): copy the files into the library folder
    (or move them, if they're already inside it), write the tags to the copies, make sure
    the album folder has a cover, then write the library rows in one transaction
    (`import_db.c`). If any step fails, the files are put back. Files that weren't matched to
@@ -83,7 +85,8 @@ library.db
   trailing dots or spaces are dropped, device names such as `CON` get a `_`, and each part
   is cut to about 100 bytes.
 - if the destination is taken: the same release track imported again from outside the
-  library replaces its old copy; anything else gets ` (2)`, ` (3)`, ... appended.
+  library replaces its old copy; anything else gets ` (2)`, ` (3)`, ... appended. (A release
+  that's already in the library doesn't get this far: see [Duplicates](#duplicates).)
 - files with an album tag of "&lt;album artist&gt; Singles" are treated as singles when
   scanned again, so re-importing the library folder keeps them in place.
 - `files.path` is stored relative to the library folder, with `/`, so the folder can be moved
@@ -93,6 +96,30 @@ library.db
   `~/.config/musicapp` on Linux.
 - a database inside a OneDrive/Dropbox-style synced folder can be corrupted by the sync
   client; the Windows frontend warns when the chosen folder is under OneDrive.
+
+## Duplicates
+
+Before an item from outside the library folder is written, it's compared with the library.
+The full rules are in `core/include/musiccore/tagger.h` ("Duplicates"); in short:
+
+- **Same release**: an album with the same MusicBrainz release id, else release group id,
+  else the same album artist and title with at least half of the incoming tracks in its
+  track list; for a single, the same recording in the artist's singles album. Tracks pair
+  up by release track id, recording id, disc and track number with the title, then title.
+- **Quality** of a file: lossless beats lossy; then bits per sample and sample rate for
+  lossless, or bitrate weighted by codec for lossy (MP3 1.0, AAC and Vorbis 1.3, Opus 1.6;
+  less than 10% apart is equal).
+- **Better as a whole**: the incoming release has every track the library holds a file of,
+  none worse, and more than half better. Then its files replace the library's in place: the
+  album and tracks keep their uids (so playlists, album groups, plays, recents and sync
+  profiles keep them), the new file takes the old one's name with its own extension, and
+  the old file goes to the Recycle Bin or trash. The track's `file_rev` changes, which tells
+  other devices to replace their copies (see "Files" in sync-protocol.md).
+- Otherwise the tracks the library has are **skipped**, with no ` (2)` copies; tracks it
+  lacks are added to its album either way. A file whose bytes are already in the library is
+  skipped too.
+- The item says what happened: replaced with higher quality, added the missing tracks, or
+  already in the library (the item is then skipped).
 
 ## Singles
 

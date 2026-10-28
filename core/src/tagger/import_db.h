@@ -24,6 +24,9 @@ typedef struct mc_db_album {
   const char *mb_albumid;
   const char *mb_releasegroupid;
   const char *art_hash; /* NULL keeps the current cover */
+  /* An album already in the library to write into (a duplicate, see dupes.h): its row is
+   * left as it is, apart from art_hash filling a missing cover. */
+  const char *existing_uid;
 } mc_db_album;
 
 typedef struct mc_db_track {
@@ -43,6 +46,13 @@ typedef struct mc_db_track {
   const char *mb_trackid;
   const char *mb_releasetrackid;
   const char *mb_albumid;
+  /* A track already in the library that this file belongs to (see dupes.h). Its metadata
+   * is kept; only the duration follows the new file. With replace_file_uid the file swaps
+   * out that files row in place: the row gets a new uid (so nothing cached for the old
+   * file, such as transcodes, is taken for the new one), the track a new file_rev. Without
+   * it, the file is added to the track. */
+  const char *track_uid;
+  const char *replace_file_uid;
 } mc_db_track;
 
 /* Inserts or updates the album, its artists, tracks and files in one transaction. Artists
@@ -51,6 +61,9 @@ typedef struct mc_db_track {
  * duplicating it. Albums left empty by a re-import are deleted. */
 mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc_db_track *tracks,
                              int count);
+
+/* Changes the path of the files row at old_path (both relative). */
+mc_status mc_import_db_move_file(mc_library *lib, const char *old_path, const char *new_path);
 
 /* Whether the file at path (relative) is in the library as the given release track, i.e.
  * importing that track again to the same place would replace a copy of itself. */

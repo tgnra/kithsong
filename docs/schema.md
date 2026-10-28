@@ -14,6 +14,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 6 | `smart_lists`, `track_plays.last_played_ms` |
 | 7 | `recents` |
 | 8 | `aliases`, `merge_keys` (duplicate merging) |
+| 9 | `tracks.file_rev`, `files.file_rev` (a track's file replaced by a better one) |
 
 ## Location
 
@@ -197,7 +198,7 @@ is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
 |--------------------|--------|-------|
 | `artists`          | yes    | |
 | `albums`           | yes    | `art_hash` is the SHA-256 of the album folder's `cover.jpg` |
-| `tracks`           | yes    | `added_ms`: when the track was first imported (Unix ms); NULL for tracks imported before v3 |
+| `tracks`           | yes    | `added_ms`: when the track was first imported (Unix ms); NULL for tracks imported before v3. `file_rev`: a new uid each time an import replaces the track's original with a higher-quality file, NULL before the first time |
 | `track_plays`      | yes    | play counts and last plays, one row per track per device; see [Play counts](#play-counts) |
 | `playlists`        | yes    | |
 | `playlist_entries` | yes    | ordered by the fractional-index string `position` |
@@ -205,7 +206,7 @@ is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
 | `album_group_entries` | yes | ordered by `position`, like `playlist_entries` |
 | `smart_lists`      | yes    | `subject` is `'tracks'` or `'albums'`; `rule` is JSON; see [Smart lists](#smart-lists) |
 | `recents`          | yes    | last opened items, one row per item keyed by its uid; see [Recents](#recents) |
-| `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it |
+| `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it; `file_rev` is the track's `file_rev` the file was made from (a copy whose `file_rev` differs from its track's is stale, see [Files](sync-protocol.md#files)) |
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
 | `merge_keys`       | no     | the MusicBrainz ids (and singles albums' artists) ever logged per uid, which decide what merges |
 | `changelog`        | -      | field-level change log that sync is built on |
