@@ -2,16 +2,16 @@
 <!-- Configured by CMake with the release's version and build date, and the text in
      strings/<lang>.json (linux.app_summary, app_description). -->
 <component type="desktop-application">
-  <id>app.musicapp.Musicapp</id>
+  <id>app.kithsong.Kithsong</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <name>@MUSICAPP_APP_NAME@</name>
-  <summary>@MUSICAPP_SUMMARY@</summary>
-@MUSICAPP_SUMMARY_L10N@  <description>
-    <p>@MUSICAPP_DESCRIPTION@</p>
-@MUSICAPP_DESCRIPTION_L10N@  </description>
-  <launchable type="desktop-id">app.musicapp.Musicapp.desktop</launchable>
-  <developer id="app.musicapp">
-    <name>musicapp</name>
+  <name>@KITHSONG_APP_NAME@</name>
+  <summary>@KITHSONG_SUMMARY@</summary>
+@KITHSONG_SUMMARY_L10N@  <description>
+    <p>@KITHSONG_DESCRIPTION@</p>
+@KITHSONG_DESCRIPTION_L10N@  </description>
+  <launchable type="desktop-id">app.kithsong.Kithsong.desktop</launchable>
+  <developer id="app.kithsong">
+    <name>Kithsong</name>
   </developer>
   <content_rating type="oars-1.1"/>
   <supports>
@@ -19,6 +19,6 @@
     <control>keyboard</control>
   </supports>
   <releases>
-    <release version="@PROJECT_VERSION@" date="@MUSICAPP_RELEASE_DATE@"/>
+    <release version="@PROJECT_VERSION@" date="@KITHSONG_RELEASE_DATE@"/>
   </releases>
 </component>

@@ -1,5 +1,5 @@
 {
-  description = "musicapp: cross-platform music library, player and LAN sync";
+  description = "Kithsong: cross-platform music library, player and LAN sync";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 

@@ -12,8 +12,8 @@
  *
  * Needs libadwaita 1.5 (AdwAlertDialog).
  */
-#ifndef MUSICAPP_PLAYLIST_DIALOGS_H
-#define MUSICAPP_PLAYLIST_DIALOGS_H
+#ifndef KITHSONG_PLAYLIST_DIALOGS_H
+#define KITHSONG_PLAYLIST_DIALOGS_H
 
 #include <adwaita.h>
 

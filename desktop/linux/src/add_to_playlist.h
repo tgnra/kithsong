@@ -15,8 +15,8 @@
  *
  * Needs libadwaita 1.5 (AdwDialog).
  */
-#ifndef MUSICAPP_ADD_TO_PLAYLIST_H
-#define MUSICAPP_ADD_TO_PLAYLIST_H
+#ifndef KITHSONG_ADD_TO_PLAYLIST_H
+#define KITHSONG_ADD_TO_PLAYLIST_H
 
 #include <adwaita.h>
 

@@ -13,8 +13,8 @@
  * Both can be open at once (this computer can be pairing each way). Each turns into a
  * status-page layout saying how its pairing ended, worded as on Windows and Android. Closing a
  * dialog before the end (Cancel, Escape) cancels the pairing. */
-#ifndef MUSICAPP_PAIR_DIALOG_H
-#define MUSICAPP_PAIR_DIALOG_H
+#ifndef KITHSONG_PAIR_DIALOG_H
+#define KITHSONG_PAIR_DIALOG_H
 
 #include <adwaita.h>
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Builds the GTK app as a Flatpak and bundles it into one file,
-# dist/musicapp-<version>-linux-<arch>.flatpak. The release workflow runs this too.
+# dist/kithsong-<version>-linux-<arch>.flatpak. The release workflow runs this too.
 #
 #   scripts/release-linux.sh
 #
 # Needs flatpak and flatpak-builder. The GNOME SDK comes from Flathub (as a --user install)
-# if it isn't installed already. Bakes in $MUSICAPP_CONTACT, $MUSICAPP_ACOUSTID_KEY,
-# $MUSICAPP_LASTFM_KEY and $MUSICAPP_LASTFM_SECRET when they're set.
+# if it isn't installed already. Bakes in $KITHSONG_CONTACT, $KITHSONG_ACOUSTID_KEY,
+# $KITHSONG_LASTFM_KEY and $KITHSONG_LASTFM_SECRET when they're set.
 #
 # Install the result with `flatpak install --user <file>`; Flatpak fetches the GNOME runtime
 # from Flathub if needed.
@@ -22,13 +22,13 @@ done
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
-app_id=app.musicapp.Musicapp
+app_id=app.kithsong.Kithsong
 manifest=packaging/flatpak/$app_id.yml
 version="$(head -n1 VERSION | tr -d '[:space:]')"
 arch="$(flatpak --default-arch)"
 runtime_version="$(sed -n "s/^runtime-version: '\([^']*\)'.*/\1/p" "$manifest")"
 flathub=https://dl.flathub.org/repo/flathub.flatpakrepo
-bundle="dist/musicapp-$version-linux-$arch.flatpak"
+bundle="dist/kithsong-$version-linux-$arch.flatpak"
 
 # The manifest's build reads these from an initial-cache file, which is gitignored and
 # removed again afterwards.
@@ -36,21 +36,21 @@ secrets=packaging/flatpak/secrets.local.cmake
 trap 'rm -f "$secrets"' EXIT
 cmake_quote() { local s=${1//\\/\\\\}; printf '"%s"' "${s//\"/\\\"}"; }
 : >"$secrets"
-if [[ -n "${MUSICAPP_CONTACT:-}" ]]; then
-    echo "set(MUSICAPP_CONTACT $(cmake_quote "$MUSICAPP_CONTACT") CACHE STRING \"\")" >>"$secrets"
+if [[ -n "${KITHSONG_CONTACT:-}" ]]; then
+    echo "set(KITHSONG_CONTACT $(cmake_quote "$KITHSONG_CONTACT") CACHE STRING \"\")" >>"$secrets"
 else
-    echo "warning: MUSICAPP_CONTACT is not set; MusicBrainz may block this build." >&2
+    echo "warning: KITHSONG_CONTACT is not set; MusicBrainz may block this build." >&2
 fi
-if [[ -n "${MUSICAPP_ACOUSTID_KEY:-}" ]]; then
-    echo "set(MUSICAPP_ACOUSTID_KEY $(cmake_quote "$MUSICAPP_ACOUSTID_KEY") CACHE STRING \"\")" >>"$secrets"
+if [[ -n "${KITHSONG_ACOUSTID_KEY:-}" ]]; then
+    echo "set(KITHSONG_ACOUSTID_KEY $(cmake_quote "$KITHSONG_ACOUSTID_KEY") CACHE STRING \"\")" >>"$secrets"
 else
-    echo "warning: MUSICAPP_ACOUSTID_KEY is not set; fingerprinting will be off in this build." >&2
+    echo "warning: KITHSONG_ACOUSTID_KEY is not set; fingerprinting will be off in this build." >&2
 fi
-if [[ -n "${MUSICAPP_LASTFM_KEY:-}" && -n "${MUSICAPP_LASTFM_SECRET:-}" ]]; then
-    echo "set(MUSICAPP_LASTFM_KEY $(cmake_quote "$MUSICAPP_LASTFM_KEY") CACHE STRING \"\")" >>"$secrets"
-    echo "set(MUSICAPP_LASTFM_SECRET $(cmake_quote "$MUSICAPP_LASTFM_SECRET") CACHE STRING \"\")" >>"$secrets"
+if [[ -n "${KITHSONG_LASTFM_KEY:-}" && -n "${KITHSONG_LASTFM_SECRET:-}" ]]; then
+    echo "set(KITHSONG_LASTFM_KEY $(cmake_quote "$KITHSONG_LASTFM_KEY") CACHE STRING \"\")" >>"$secrets"
+    echo "set(KITHSONG_LASTFM_SECRET $(cmake_quote "$KITHSONG_LASTFM_SECRET") CACHE STRING \"\")" >>"$secrets"
 else
-    echo "warning: MUSICAPP_LASTFM_KEY or MUSICAPP_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build." >&2
+    echo "warning: KITHSONG_LASTFM_KEY or KITHSONG_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build." >&2
 fi
 
 

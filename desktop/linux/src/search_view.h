@@ -15,8 +15,8 @@
  * in the order of their best hit, so the top result's kind comes first. Albums and playable
  * playlists open on their pages, tracks on their album with the track selected; artists,
  * album groups and smart playlists have no page here yet, so their rows do nothing. */
-#ifndef MUSICAPP_SEARCH_VIEW_H
-#define MUSICAPP_SEARCH_VIEW_H
+#ifndef KITHSONG_SEARCH_VIEW_H
+#define KITHSONG_SEARCH_VIEW_H
 
 #include "app.h"
 

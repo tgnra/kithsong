@@ -3,8 +3,8 @@
  * scrolls smoothly however big the library is. The _file functions do the same for an
  * image file, such as a playlist's picture (mc_playlist_art()). Call everything on the UI
  * thread. */
-#ifndef MUSICAPP_COVER_H
-#define MUSICAPP_COVER_H
+#ifndef KITHSONG_COVER_H
+#define KITHSONG_COVER_H
 
 #include <gtk/gtk.h>
 

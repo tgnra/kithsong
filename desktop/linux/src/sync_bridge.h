@@ -8,8 +8,8 @@
  * Stopping bumps a generation counter carried with each event, so events still queued from
  * the old mc_sync are dropped rather than delivered. Every function runs on the main thread,
  * and so does the event callback. */
-#ifndef MUSICAPP_SYNC_BRIDGE_H
-#define MUSICAPP_SYNC_BRIDGE_H
+#ifndef KITHSONG_SYNC_BRIDGE_H
+#define KITHSONG_SYNC_BRIDGE_H
 
 #include <glib.h>
 #include <stdint.h>

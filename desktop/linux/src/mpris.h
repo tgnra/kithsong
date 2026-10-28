@@ -1,4 +1,4 @@
-/* MPRIS (org.mpris.MediaPlayer2 on the session bus, as org.mpris.MediaPlayer2.musicapp):
+/* MPRIS (org.mpris.MediaPlayer2 on the session bus, as org.mpris.MediaPlayer2.kithsong):
  * the desktop's media controls, in GNOME's top bar and lock screen, KDE's applet,
  * playerctl, and Bluetooth headsets. It's also how media keys reach the app, whichever
  * window has the focus. The Linux side of what media_controls.c does on Windows.
@@ -6,8 +6,8 @@
  * Shows the playing track (title, artist, album, length, cover) and its position, and
  * passes the controls on to playback.c. Call everything on the UI thread.
  */
-#ifndef MUSICAPP_MPRIS_H
-#define MUSICAPP_MPRIS_H
+#ifndef KITHSONG_MPRIS_H
+#define KITHSONG_MPRIS_H
 
 #include <gtk/gtk.h>
 

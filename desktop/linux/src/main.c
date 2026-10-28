@@ -22,6 +22,7 @@
  * is kept in settings.json.
  */
 #include <adwaita.h>
+#include <glib/gstdio.h>
 #include <math.h>
 #include <string.h>
 
@@ -787,14 +788,24 @@ static void set_strings_locale(void) {
   mc_strings_set_locale(names[0]);
 }
 
+/* Settings from before the app was called Kithsong move over once. If the move fails, the
+ * new folder starts out empty as on a first run. */
+static void migrate_settings_dir(const char *settings_dir) {
+  if (g_file_test(settings_dir, G_FILE_TEST_EXISTS)) return;
+  char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
+  if (g_file_test(old_dir, G_FILE_TEST_IS_DIR)) g_rename(old_dir, settings_dir);
+  g_free(old_dir);
+}
+
 int main(int argc, char **argv) {
   app a = {0};
   mc_init();
   set_strings_locale(); /* before the player's and import's threads look anything up */
 
-  /* Settings in ~/.config/musicapp say where the library folder is. Until there's a
+  /* Settings in ~/.config/kithsong say where the library folder is. Until there's a
    * first-run dialog here, the Music folder is used and remembered. */
-  char *settings_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
+  char *settings_dir = g_build_filename(g_get_user_config_dir(), "kithsong", NULL);
+  migrate_settings_dir(settings_dir);
   mc_settings *settings = NULL;
   if (mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings)) {
     const char *music = g_get_user_special_dir(G_USER_DIRECTORY_MUSIC);
@@ -809,7 +820,7 @@ int main(int argc, char **argv) {
   if (!library_dir || mc_library_open(library_dir, &a.lib) != MC_OK) a.lib = NULL;
   mc_settings_free(settings);
 
-  AdwApplication *gapp = adw_application_new("app.musicapp.Musicapp", G_APPLICATION_DEFAULT_FLAGS);
+  AdwApplication *gapp = adw_application_new("app.kithsong.Kithsong", G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(gapp, "activate", G_CALLBACK(on_activate), &a);
   g_signal_connect(gapp, "shutdown", G_CALLBACK(on_shutdown), &a);
   int status = g_application_run(G_APPLICATION(gapp), argc, argv);

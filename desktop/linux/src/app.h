@@ -1,7 +1,7 @@
 /* State shared by the GTK frontend's modules, and what they call back into main.c for.
  * Everything here runs on the UI thread. */
-#ifndef MUSICAPP_APP_H
-#define MUSICAPP_APP_H
+#ifndef KITHSONG_APP_H
+#define KITHSONG_APP_H
 
 #include <adwaita.h>
 
@@ -11,7 +11,7 @@ typedef struct app {
   mc_library *lib;
   GtkApplication *gapp;
   GtkWindow *win;
-  char *settings_dir;   /* ~/.config/musicapp */
+  char *settings_dir;   /* ~/.config/kithsong */
   char *art_dir;        /* settings_dir/playlist-art: playlists' pictures, see mc_playlist_art() */
   GtkStack *pages;      /* "library": the album grid and track list | "search" | "import" | "device" */
   GtkWidget *import;    /* the import page, import_view.c */

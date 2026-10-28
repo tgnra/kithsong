@@ -18,8 +18,8 @@
  *
  * Needs libadwaita 1.5 (AdwAlertDialog).
  */
-#ifndef MUSICAPP_ADD_DEVICE_H
-#define MUSICAPP_ADD_DEVICE_H
+#ifndef KITHSONG_ADD_DEVICE_H
+#define KITHSONG_ADD_DEVICE_H
 
 #include <adwaita.h>
 

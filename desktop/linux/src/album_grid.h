@@ -6,8 +6,8 @@
  * thread after each reload) and the track count beneath the name. Clicking a tile (or
  * moving to it with the keyboard) selects it, and the selection picks what the track list
  * shows. Each grid has a selection of its own. */
-#ifndef MUSICAPP_ALBUM_GRID_H
-#define MUSICAPP_ALBUM_GRID_H
+#ifndef KITHSONG_ALBUM_GRID_H
+#define KITHSONG_ALBUM_GRID_H
 
 #include <gtk/gtk.h>
 
