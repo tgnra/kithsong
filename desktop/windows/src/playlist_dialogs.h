@@ -32,4 +32,8 @@ BOOL album_group_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_
 BOOL album_group_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
 BOOL album_group_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
 
+/* The Delete dialog for anything else (delete_dialog.c): "Delete "name"?" with note, which
+ * may run to three lines, beneath, titled caption. TRUE if the user chose Delete. */
+BOOL confirm_delete_dialog(HWND owner, const wchar_t *caption, const wchar_t *name, const wchar_t *note);
+
 #endif

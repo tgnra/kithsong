@@ -68,6 +68,9 @@ void playback_set_muted(BOOL muted);
 BOOL playback_muted(void);
 
 BOOL playback_is_playing(void);
+/* The queue's tracks, by uid ("" for one without), e.g. to stop before their files go. */
+int playback_queue_count(void);
+const char *playback_queue_uid(int i);
 /* Whether there's a current track, and one after it (always, shuffled). */
 BOOL playback_has_current(void);
 BOOL playback_has_next(void);

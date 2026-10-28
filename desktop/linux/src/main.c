@@ -36,6 +36,7 @@
 #include "app.h"
 #include "artist_view.h"
 #include "cover.h"
+#include "delete_dialog.h"
 #include "devices.h"
 #include "import_view.h"
 #include "move_library.h"
@@ -112,6 +113,14 @@ static void set_empty_description(app *a) {
   mc_free(desc);
 }
 
+/* Deleted tracks whose files are back from the Trash come back into the library
+ * (musiccore/delete.h). Cheap: run when a library opens and whenever the window becomes
+ * active. TRUE if any came back. */
+static gboolean restore_deleted(app *a) {
+  int restored = 0;
+  return a->lib && mc_delete_restore(a->lib, a->settings_dir, &restored) == MC_OK && restored;
+}
+
 /* Settings' Open Another Library. The import view lets go of the old library first. */
 static gboolean open_library(void *user, const char *dir) {
   app *a = user;
@@ -128,6 +137,7 @@ static gboolean open_library(void *user, const char *dir) {
   mc_library_close(a->lib);
   a->lib = lib;
   set_empty_description(a);
+  restore_deleted(a);
   app_reload_library(a);
   devices_start(a);
   return TRUE;
@@ -163,6 +173,7 @@ static void move_reopen_library(void *user, const char *dir) {
   import_view_set_library(a->import, a->lib);
   playback_set_library(a->lib, a->settings_dir);
   set_empty_description(a);
+  restore_deleted(a);
   app_reload_library(a);
   devices_start(a);
   gtk_window_present(a->win);
@@ -677,6 +688,19 @@ static void on_playlist_delete(void *user) {
     playlist_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
 }
 
+/* The track menu's Delete from Library.... (Delete album... is on the album tiles' menu,
+ * album_groups_album_menu().) */
+static void on_track_delete(void *user, const char *track_uid, const char *title) {
+  app *a = user;
+  delete_dialog_present(GTK_WIDGET(a->win), a->lib, a->settings_dir, MC_DELETE_TRACKS, track_uid, title,
+                        on_playlists_changed, a);
+}
+
+static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
+  (void)pspec;
+  if (gtk_window_is_active(GTK_WINDOW(win)) && restore_deleted(user)) app_reload_library(user);
+}
+
 void app_reload_library(app *a) {
   int albums = album_grid_reload(a->album_grid, a->lib);
   int hidden = 0;
@@ -941,7 +965,8 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_overlay_split_view_set_min_sidebar_width(a->album_split, 320);
   adw_overlay_split_view_set_max_sidebar_width(a->album_split, 420);
   const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
-                                          on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete, a};
+                                          on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete,
+                                          on_track_delete, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
   adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);
@@ -1003,8 +1028,10 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
 
   mpris_init(gapp, a->win);
   prune_art(a);
+  restore_deleted(a);
   app_reload_library(a);
   devices_start(a);
+  g_signal_connect(win, "notify::is-active", G_CALLBACK(on_active_changed), a);
   g_signal_connect(win, "destroy", G_CALLBACK(on_window_destroy), a);
   gtk_window_present(a->win);
 }

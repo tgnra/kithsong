@@ -431,6 +431,15 @@ static void on_delete_playlist(GSimpleAction *action, GVariant *param, gpointer 
   if (s.cb.delete_playlist && showing_playlist()) s.cb.delete_playlist(s.cb.user);
 }
 
+/* The track menu's Delete from Library... */
+static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  TrackItem *t = s.menu_uid[0] ? track_at(s.menu_pos) : NULL;
+  if (s.cb.delete_track && t && !strcmp(t->uid, s.menu_uid)) s.cb.delete_track(s.cb.user, t->uid, t->title);
+}
+
 static GSimpleAction *add_action(GSimpleActionGroup *group, const char *name,
                                  void (*activate)(GSimpleAction *, GVariant *, gpointer)) {
   GSimpleAction *action = g_simple_action_new(name, NULL);
@@ -448,6 +457,7 @@ static void build_menu(GtkWidget *pane) {
   s.move_up = add_action(actions, "move-up", on_move);
   s.move_down = add_action(actions, "move-down", on_move);
   add_action(actions, "remove", on_remove);
+  add_action(actions, "delete", on_delete_track);
   gtk_widget_insert_action_group(pane, "track", G_ACTION_GROUP(actions));
   g_object_unref(actions);
   actions = g_simple_action_group_new();
@@ -457,10 +467,17 @@ static void build_menu(GtkWidget *pane) {
   g_object_unref(actions);
 
   GMenu *model = g_menu_new();
-  g_menu_append(model, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
+  GMenu *section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_TRACK_MENU), "track.delete");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
   s.album_menu = G_MENU_MODEL(model);
   model = g_menu_new();
-  GMenu *section = g_menu_new();
+  section = g_menu_new();
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
@@ -471,6 +488,7 @@ static void build_menu(GtkWidget *pane) {
   g_object_unref(section);
   section = g_menu_new();
   g_menu_append(section, mc_str_mnemonic(MC_STR_REMOVE_FROM_PLAYLIST), "track.remove");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_TRACK_MENU), "track.delete");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   s.playlist_menu = G_MENU_MODEL(model);

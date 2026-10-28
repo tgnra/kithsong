@@ -11,6 +11,7 @@
 #include "add_to_playlist.h"
 #include "canvas.h"
 #include "cover.h"
+#include "delete_dialog.h"
 #include "playlist_dialogs.h"
 #include "scroller.h"
 #include "theme.h"
@@ -35,6 +36,7 @@ enum {
   CMD_REMOVE_FROM_GROUP,
   CMD_RENAME_GROUP,
   CMD_DELETE_GROUP,
+  CMD_DELETE_ALBUM,
   CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
 };
 
@@ -825,11 +827,13 @@ static void show_more_menu(void) {
   show_group_menu(g.group_uid, g.group_name, pt);
 }
 
-/* Add to Album Group, and inside a group Remove from Album Group, for album tile i. */
+/* Add to Album Group, inside a group Remove from Album Group, and Delete Album..., for album
+ * tile i. */
 static void show_album_menu(int i, POINT pt) {
   char album[MC_UID_STRLEN], group[MC_UID_STRLEN];
   memcpy(album, g.tiles[i].uid, sizeof album);
   memcpy(group, g.group_uid, sizeof group);
+  wchar_t *title = _wcsdup(g.tiles[i].title ? g.tiles[i].title : L"");
   BOOL in_group = g.tiles_view == AGV_GROUP;
   HMENU menu = CreatePopupMenu();
   mc_album_group_list *groups = NULL;
@@ -839,11 +843,15 @@ static void show_album_menu(int i, POINT pt) {
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING, CMD_REMOVE_FROM_GROUP, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP));
   }
+  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_ALBUM, mc_wstr_mnemonic(MC_STR_DELETE_ALBUM_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
 
   HWND owner = GetAncestor(g.wnd, GA_ROOT);
   BOOL changed = FALSE;
+  if (cmd == CMD_DELETE_ALBUM) changed = delete_dialog(owner, g.lib, MC_DELETE_ALBUMS, album, title);
+  free(title);
   if (cmd >= CMD_GROUP_FIRST && groups && cmd - CMD_GROUP_FIRST < groups->count)
     changed = add_to_album_group(owner, g.lib, album, groups->items[cmd - CMD_GROUP_FIRST].uid);
   mc_album_group_list_free(groups);

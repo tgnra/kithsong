@@ -58,6 +58,18 @@ a separate `sync.db` in the per-device config dir. See
 (`scrobble_account`, and the local-only `scrobble_queue`) and v5
 (`devices.confirmed_profile`).
 
+## Deleted tracks
+
+Deleting a track (`mc_delete_run()`, see
+[musiccore/delete.h](../core/include/musiccore/delete.h)) moves its files to the Recycle Bin
+or trash and deletes its rows like any other change, so the delete syncs. What's needed to
+bring it back is kept out of the library, in `deleted.db` in the per-device config dir: one
+row per trashed file with its old path, size, modification time, hash (if known), and the
+rows it takes back (the track, its album and artists, plays, playlist and album group
+entries, the file's own row) as JSON objects of column to value. Restoring inserts them
+again with their old uids, using whichever columns the table still has, so records outlive
+migrations. Records are dropped once their file is back, or after 90 days.
+
 
 ## Singles
 

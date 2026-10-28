@@ -79,6 +79,7 @@
 #include "artist_view.h"
 #include "build_info.h"
 #include "canvas.h"
+#include "delete_dialog.h"
 #include "device_view.h"
 #include "firewall.h"
 #include "import_view.h"
@@ -719,6 +720,14 @@ static void on_track_request(int code) {
     case TLN_DELETE_PLAYLIST:
       if (name && !strcmp(uid, req->playlist_uid)) changed = playlist_delete_dialog(g_app.wnd, g_app.lib, uid, name);
       break;
+    case TLN_DELETE_TRACK:
+      for (int i = 0, n = track_list_count(); i < n; i++) {
+        track_list_item it = track_list_item_at(i);
+        if (strcmp(it.uid, req->track_uid)) continue;
+        changed = delete_dialog(g_app.wnd, g_app.lib, MC_DELETE_TRACKS, req->track_uid, it.title);
+        break;
+      }
+      break;
   }
   if (changed) {
     refresh_library();
@@ -891,7 +900,28 @@ static void rename_self(const char *name) {
   schedule_refresh();
 }
 
+/* Deleted tracks whose files are back from the Recycle Bin come back into the library
+ * (musiccore/delete.h). Cheap: run at startup, on switching libraries and whenever the
+ * window is activated. */
+static void restore_deleted(void) {
+  int restored = 0;
+  if (g_app.lib && g_app.config_dir && mc_delete_restore(g_app.lib, g_app.config_dir, &restored) == MC_OK &&
+      restored)
+    refresh_library();
+}
+
+/* Just before a delete trashes files: the playing file, and the next one the player may have
+ * opened already, can't go while they're open, so playback stops if any queued track goes. */
+static void before_delete(const mc_delete_plan *plan) {
+  for (int i = 0, n = playback_queue_count(); i < n; i++)
+    if (mc_delete_plan_has(plan, playback_queue_uid(i))) {
+      playback_clear();
+      return;
+    }
+}
+
 static void start_sync(void) {
+  restore_deleted(); /* the library just opened */
   memset(g_app.syncing, 0, sizeof g_app.syncing);
   sync_bridge_start(g_app.wnd, g_app.lib, g_app.config_dir, mc_settings_device_name(g_app.settings));
   playback_set_library(g_app.lib, g_app.config_dir);
@@ -1045,6 +1075,8 @@ static void on_command(int id, int code) {
     case ID_ARTISTS:
       if (code == ARN_OPEN) {
         artist_opened();
+      } else if (code == ARN_LIBRARY_CHANGED) {
+        refresh_library();
       } else if (code == ARN_BACK) {
         show_album(); /* empties the track list */
         layout();
@@ -1201,6 +1233,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
       on_command(LOWORD(wp), HIWORD(wp));
       return 0;
+    case WM_ACTIVATEAPP: /* back from Explorer, maybe from restoring files from the Recycle Bin */
+      if (wp) restore_deleted();
+      break;
     case WM_APPCOMMAND: /* the mouse's back button, over the track list on an artist's page */
       if (GET_APPCOMMAND_LPARAM(lp) == APPCOMMAND_BROWSER_BACKWARD && artist_page()) {
         on_command(ID_TRACKS, TLN_CLOSE);
@@ -1704,6 +1739,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   if ((g_app.art_dir = malloc(art_len)))
     snprintf(g_app.art_dir, art_len, "%s\\%s", g_app.config_dir, MC_PLAYLIST_ART_CACHE_DIR);
   prune_art();
+  delete_dialog_init(g_app.config_dir, before_delete);
 
   WNDCLASSEXW wc = {
     .cbSize = sizeof wc,

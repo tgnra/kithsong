@@ -44,6 +44,7 @@ kithsong_test(test_match)
 kithsong_test(test_import_db)
 kithsong_test(test_import_offline)
 kithsong_test(test_dupes)
+kithsong_test(test_delete)
 kithsong_test(test_organize)
 kithsong_test(test_transcode)
 target_link_libraries(test_transcode PRIVATE mc_opusfile)  # reads the output back directly

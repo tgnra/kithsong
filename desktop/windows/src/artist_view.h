@@ -41,6 +41,9 @@
 #define ARN_OPEN 1
 #define ARN_BACK 2
 #define ARN_OPEN_ALBUM 3
+/* Posted after the right-click menu's Delete Artist... (on a row, or anywhere on an artist's
+ * page) deleted the artist's tracks (delete_dialog.h): reload everything. */
+#define ARN_LIBRARY_CHANGED 4
 
 /* Creates the page, hidden, as a child of parent. Only one exists at a time. */
 HWND artist_view_create(HWND parent, int id);

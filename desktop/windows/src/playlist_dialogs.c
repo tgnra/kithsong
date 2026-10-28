@@ -207,6 +207,12 @@ static BOOL ask_delete(HWND owner, const wchar_t *caption, const wchar_t *note, 
                          (LPARAM)&a) == IDOK;
 }
 
+BOOL confirm_delete_dialog(HWND owner, const wchar_t *caption, const wchar_t *name, const wchar_t *note) {
+  ask a = {.caption = caption, .note = note, .name = name};
+  return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_LIBRARY_DELETE), owner, delete_proc,
+                         (LPARAM)&a) == IDOK;
+}
+
 BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name) {
   if (!lib || !uid) return FALSE;
   if (!ask_delete(owner, mc_wstr(MC_STR_WINDOWS_PLAYLIST_DELETE_CAPTION), mc_wstr(MC_STR_PLAYLIST_DELETE_TEXT), name))

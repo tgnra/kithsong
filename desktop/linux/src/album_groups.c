@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "album_group_dialogs.h"
+#include "delete_dialog.h"
 #include "recents.h"
 
 static struct {
@@ -17,6 +18,7 @@ static struct {
   char open[MC_UID_STRLEN];       /* the open group, or "" */
   char menu_album[MC_UID_STRLEN]; /* the album a menu was opened on */
   char menu_group[MC_UID_STRLEN]; /* and the group it's in there, or "" */
+  char *menu_title;               /* and the album's title */
   gboolean actions;               /* the "albumgroup." actions are on the window */
 } v;
 
@@ -49,7 +51,8 @@ static char *group_name(const char *uid) {
   return name;
 }
 
-/* --- Actions: albumgroup.add(uid), .new, .remove, .rename(uid), .delete(uid) --- */
+/* --- Actions: albumgroup.add(uid), .new, .remove, .rename(uid), .delete(uid), and
+ * .delete-album, which deletes the menu's album from the library (delete_dialog.h) --- */
 
 static void on_add(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
@@ -96,6 +99,15 @@ static void on_delete(GSimpleAction *action, GVariant *param, gpointer user) {
   g_free(name);
 }
 
+static void on_delete_album(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (a->lib && v.menu_album[0])
+    delete_dialog_present(GTK_WIDGET(a->win), a->lib, a->settings_dir, MC_DELETE_ALBUMS, v.menu_album,
+                          v.menu_title, on_library_changed, a);
+}
+
 /* On the window, so the album grids' menus and the header's find them. */
 static void ensure_actions(void) {
   if (v.actions || !v.a->win) return;
@@ -105,6 +117,7 @@ static void ensure_actions(void) {
     {"remove", on_remove, NULL, NULL, NULL, {0}},
     {"rename", on_rename, "s", NULL, NULL, {0}},
     {"delete", on_delete, "s", NULL, NULL, {0}},
+    {"delete-album", on_delete_album, NULL, NULL, NULL, {0}},
   };
   GSimpleActionGroup *group = g_simple_action_group_new();
   g_action_map_add_action_entries(G_ACTION_MAP(group), entries, G_N_ELEMENTS(entries), v.a);
@@ -132,6 +145,8 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
   if (!a->lib || !album || album->is_playlist || album->is_group) return;
   g_strlcpy(v.menu_album, album->uid, sizeof v.menu_album);
   g_strlcpy(v.menu_group, in_group ? in_group : "", sizeof v.menu_group);
+  g_free(v.menu_title);
+  v.menu_title = g_strdup(album->title);
 
   GMenu *menu = g_menu_new(), *add = g_menu_new();
   mc_album_group_list *groups = NULL;
@@ -161,6 +176,10 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
     g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
     g_object_unref(section);
   }
+  section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_ALBUM_MENU), "albumgroup.delete-album");
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
   album_grid_popup(grid, G_MENU_MODEL(menu), x, y);
   g_object_unref(menu); /* the popover keeps it */
 }

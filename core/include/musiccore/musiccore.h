@@ -60,6 +60,7 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "musiccore/library.h"
 #include "musiccore/settings.h"
 #include "musiccore/library_move.h"
+#include "musiccore/delete.h"
 #include "musiccore/playlist.h"
 #include "musiccore/smartlist.h"
 #include "musiccore/search.h"

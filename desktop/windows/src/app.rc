@@ -56,3 +56,16 @@ BEGIN
   PUSHBUTTON      "", IDOK, 113, 48, 52, 15
   DEFPUSHBUTTON   "", IDCANCEL, 171, 48, 52, 15
 END
+
+/* Delete from Library (delete_dialog.c): the same, wider, with room for a few lines of note
+ * (how many files go to the Recycle Bin). */
+IDD_LIBRARY_DELETE DIALOGEX 0, 0, 260, 84
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_HEADING, 7, 8, 246, 12, SS_NOPREFIX | SS_ENDELLIPSIS
+  LTEXT           "", IDC_PL_NOTE, 7, 24, 246, 28, SS_NOPREFIX
+  PUSHBUTTON      "", IDOK, 143, 62, 52, 15
+  DEFPUSHBUTTON   "", IDCANCEL, 201, 62, 52, 15
+END

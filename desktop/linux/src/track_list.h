@@ -11,11 +11,11 @@
  * Play and Shuffle play the whole list, in order or shuffled; they're insensitive when
  * nothing in it can be played here. Track numbers and durations are dimmed; on albums with
  * more than one disc the numbers read "2-5"; in a playlist they count its places.
- * Double-click or Enter plays a track; right-click opens its menu (Add to Playlist; in a
- * playlist also Move Up, Move Down and Remove from Playlist). A playlist's tracks can be
- * dragged into another order too, and its header has a menu (the "..." beside close) to
- * rename or delete it. Escape or the close button closes the pane. A GtkListView, so long
- * albums stay cheap. Only one list exists at a time.
+ * Double-click or Enter plays a track; right-click opens its menu (Add to Playlist, Delete
+ * from Library; in a playlist also Move Up, Move Down and Remove from Playlist). A playlist's
+ * tracks can be dragged into another order too, and its header has a menu (the "..." beside
+ * close) to rename or delete it. Escape or the close button closes the pane. A GtkListView,
+ * so long albums stay cheap. Only one list exists at a time.
  */
 #ifndef KITHSONG_TRACK_LIST_H
 #define KITHSONG_TRACK_LIST_H
@@ -41,6 +41,8 @@ typedef struct track_list_callbacks {
   /* The header menu's Rename... and Delete Playlist..., for the shown playlist. */
   void (*rename_playlist)(void *user);
   void (*delete_playlist)(void *user);
+  /* The track menu's Delete from Library... (see delete_dialog.h). */
+  void (*delete_track)(void *user, const char *track_uid, const char *title);
   void *user;
 } track_list_callbacks;
 

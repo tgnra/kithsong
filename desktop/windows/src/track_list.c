@@ -51,6 +51,7 @@ enum {
   CMD_REMOVE,
   CMD_RENAME,
   CMD_DELETE,
+  CMD_DELETE_TRACK,
   CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
 };
 
@@ -567,6 +568,8 @@ static void show_menu(POINT pt) {
     AppendMenuW(menu, MF_STRING, CMD_REMOVE,
                 wstr_menu_item(item, 128, MC_STR_REMOVE_FROM_PLAYLIST, MC_STR_WINDOWS_SHORTCUT_REMOVE));
   }
+  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_TRACK_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, s.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
 
@@ -585,6 +588,10 @@ static void show_menu(POINT pt) {
     case CMD_MOVE_UP: request_move(i, i - 1); break;
     case CMD_MOVE_DOWN: request_move(i, i + 2); break;
     case CMD_REMOVE: request_remove(i); break;
+    case CMD_DELETE_TRACK:
+      strcpy(s.req.track_uid, s.rows[i].uid);
+      notify(TLN_DELETE_TRACK);
+      break;
     case CMD_PLAY_NEXT: /* not yet: needs a play queue */
     case CMD_PLAY_LAST:
       break;

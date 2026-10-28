@@ -38,6 +38,7 @@
 #include <yyjson.h>
 
 #include "library/library_internal.h"
+#include "musiccore/delete.h"
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
 #include "sync/plan.h"
@@ -1695,28 +1696,34 @@ static mc_status read_files(mc_library *lib, file_row **out, int *count) {
 /* Files rows deleted during the library exchange are noted here (a temp trigger, so only
  * this connection's writes, and rolled back with them). */
 static const char k_watch_sql[] =
-  "CREATE TEMP TABLE IF NOT EXISTS sync_dropped_files (path TEXT, track_uid TEXT);"
+  "CREATE TEMP TABLE IF NOT EXISTS sync_dropped_files (path TEXT, track_uid TEXT, original INTEGER);"
   "CREATE TEMP TRIGGER IF NOT EXISTS sync_files_dropped AFTER DELETE ON main.files BEGIN"
-  " INSERT INTO sync_dropped_files (path, track_uid) VALUES (old.path, old.track_uid);"
+  " INSERT INTO sync_dropped_files (path, track_uid, original)"
+  " VALUES (old.path, old.track_uid, old.source_file_uid IS NULL AND old.source_peer_uid IS NULL);"
   " END;";
 static const char k_unwatch_sql[] =
   "DROP TRIGGER IF EXISTS temp.sync_files_dropped;"
   "DROP TABLE IF EXISTS temp.sync_dropped_files;";
 
-/* Removes the files of tracks the exchange deleted. */
+/* Removes the files of tracks the exchange deleted (another device deleted them, see
+ * musiccore/delete.h). Originals imported here go to the trash, where they can still be got
+ * back, unless there's none; files received from peers are simply removed. */
 static void drop_deleted_tracks(mc_session *s) {
   mc_library *lib = s->conn->lib;
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
-                         "SELECT DISTINCT d.path FROM temp.sync_dropped_files d"
+                         "SELECT d.path, max(d.original) FROM temp.sync_dropped_files d"
                          " WHERE NOT EXISTS (SELECT 1 FROM main.files f WHERE f.path = d.path)"
-                         " AND NOT EXISTS (SELECT 1 FROM main.tracks t WHERE t.uid = d.track_uid)",
+                         " AND NOT EXISTS (SELECT 1 FROM main.tracks t WHERE t.uid = d.track_uid)"
+                         " GROUP BY d.path",
                          -1, &stmt, NULL) != SQLITE_OK)
     return;
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     const char *rel = (const char *)sqlite3_column_text(stmt, 0);
+    int original = sqlite3_column_int(stmt, 1);
     char *abs = deletable_path(lib, rel);
-    if (abs && mc_file_exists(abs) && mc_remove(abs) == MC_OK) {
+    if (abs && mc_file_exists(abs) &&
+        ((original && mc_trash(abs) == MC_OK) || mc_remove(abs) == MC_OK)) {
       s->files_deleted++;
       prune_dirs(lib, rel);
     }
@@ -2005,6 +2012,8 @@ void mc_transfer_end(mc_session *s, int ok) {
   if (ok && x->fetched) {
     if (!x->plan->archive) reconcile_files(s, x);
     else drop_stale_on_archive(s);
+    /* Files the user took back out of the trash would look unknown: their rows first. */
+    mc_delete_restore(lib, s->sync->config_dir, NULL);
     reconcile_unknown(s, x->plan->archive);
     mc_verify_result v;
     verify_files(lib, 0, &v);

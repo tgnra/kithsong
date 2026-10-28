@@ -16,6 +16,7 @@ add_executable(kithsong WIN32
   src/artist_view.c
   src/canvas.c
   src/cover.c
+  src/delete_dialog.c
   src/device_view.c
   src/firewall.c
   src/import_view.c

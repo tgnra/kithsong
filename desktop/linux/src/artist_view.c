@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "album_grid.h"
+#include "delete_dialog.h"
 #include "playback.h"
 #include "recents.h"
 
@@ -365,6 +366,34 @@ static const char *open_name(void) {
   return NULL;
 }
 
+static void on_deleted(void *user) {
+  app_reload_library(user);
+}
+
+/* The track menu's Delete from library... (delete_dialog.h). */
+static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.tracks)); v.menu_uid[0] && i < n; i++) {
+    ArtistTrack *t = track_at(i);
+    if (strcmp(t->uid, v.menu_uid)) continue;
+    delete_dialog_present(GTK_WIDGET(v.a->win), v.a->lib, v.a->settings_dir, MC_DELETE_TRACKS, t->uid, t->title,
+                          on_deleted, v.a);
+    return;
+  }
+}
+
+/* The header menu's Delete artist...: the open artist's tracks and own albums. */
+static void on_delete_artist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.open[0])
+    delete_dialog_present(GTK_WIDGET(v.a->win), v.a->lib, v.a->settings_dir, MC_DELETE_ARTISTS, v.open, open_name(),
+                          on_deleted, v.a);
+}
+
 /* An album's tile, with its year beneath it, or its artist when that's someone else. */
 static GtkWidget *album_child(const mc_album_info *info, const char *artist) {
   AlbumItem *album = album_item_new(info);
@@ -517,6 +546,19 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(v.actions), play_button("media-playlist-shuffle-symbolic", mc_str(MC_STR_SHUFFLE), TRUE));
   gtk_box_append(GTK_BOX(text), v.actions);
   gtk_box_append(GTK_BOX(header), text);
+
+  /* Delete artist..., under "...". */
+  GMenu *menu = g_menu_new();
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_DELETE_ARTIST_MENU), "artist.delete");
+  GtkWidget *more = gtk_menu_button_new();
+  gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(more), "view-more-symbolic");
+  gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(more), G_MENU_MODEL(menu));
+  g_object_unref(menu);
+  gtk_widget_set_tooltip_text(more, mc_str(MC_STR_LINUX_ARTIST_MENU));
+  gtk_widget_add_css_class(more, "flat");
+  gtk_widget_add_css_class(more, "circular");
+  gtk_widget_set_valign(more, GTK_ALIGN_START);
+  gtk_box_append(GTK_BOX(header), more);
   return header;
 }
 
@@ -574,12 +616,21 @@ static GtkWidget *build_page(void) {
 
   /* The tracks' right-click menu, as the page's child so its "artist." action resolves. */
   GSimpleActionGroup *actions = g_simple_action_group_new();
-  const GActionEntry entries[] = {{"add-to-playlist", on_add_to_playlist, NULL, NULL, NULL, {0}}};
+  const GActionEntry entries[] = {{"add-to-playlist", on_add_to_playlist, NULL, NULL, NULL, {0}},
+                                  {"delete-track", on_delete_track, NULL, NULL, NULL, {0}},
+                                  {"delete", on_delete_artist, NULL, NULL, NULL, {0}}};
   g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
   gtk_widget_insert_action_group(v.page, "artist", G_ACTION_GROUP(actions));
   g_object_unref(actions);
   GMenu *model = g_menu_new();
-  g_menu_append(model, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "artist.add-to-playlist");
+  GMenu *section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "artist.add-to-playlist");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_TRACK_MENU), "artist.delete-track");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
   v.menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));
   g_object_unref(model);
   gtk_popover_set_has_arrow(GTK_POPOVER(v.menu), FALSE);

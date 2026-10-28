@@ -532,8 +532,11 @@ the plaintext limit.
     are an hour old, so an import that is copying files in isn't raced.
   - Deleted tracks: `files` rows go with their track (`ON DELETE CASCADE`) when the library
     exchange applies the delete, so the session notes the rows it deletes and removes their
-    files. A file whose row went otherwise (a crash, an edit outside a session) is an
-    unknown file.
+    files: originals imported on this device go to its Recycle Bin or trash (removed if
+    there's none), received files are removed. A file whose row went otherwise (a crash, an
+    edit outside a session) is an unknown file. Before looking for unknown files, the
+    session restores deleted tracks whose files the user took back out of the trash
+    (`mc_delete_restore()`, `core/include/musiccore/delete.h`), so those aren't swept away.
   - Stale copies: when an import on some device replaces a track's original with a
     better file (see "Duplicates" in `core/include/musiccore/tagger.h`), the track gets a
     new `tracks.file_rev`, which syncs like any other field. Every `files` row records the

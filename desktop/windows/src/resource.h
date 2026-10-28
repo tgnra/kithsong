@@ -23,6 +23,7 @@
 /* The playlist dialogs, playlist_dialogs.c. */
 #define IDD_PLAYLIST_NAME 101
 #define IDD_PLAYLIST_DELETE 102
+#define IDD_LIBRARY_DELETE 103 /* delete_dialog.c, with the playlist dialogs' controls */
 #define IDC_PL_LABEL 1101
 #define IDC_PL_NAME 1102
 #define IDC_PL_HEADING 1103

@@ -13,8 +13,8 @@
  * secondary text; in a playlist the numbers count its places. Tracks with no file on this
  * device are greyed out. Clicking selects a track;
  * double-clicking or Enter plays it. Right-click (or the menu key) opens a menu for the
- * track: Add to Playlist (add_to_playlist.c), and in a playlist also Move Up, Move Down and
- * Remove from Playlist. A playlist's tracks can be dragged into another order too, or moved
+ * track: Add to Playlist (add_to_playlist.c) and Delete from Library, and in a playlist also
+ * Move Up, Move Down and Remove from Playlist. A playlist's tracks can be dragged into another order too, or moved
  * with Alt+Up and Alt+Down; Delete removes one. The [...] button (or F2, or the menu key
  * with no track selected) offers Rename... and Delete Playlist.... The close button or
  * Escape asks the parent to close the pane (TLN_CLOSE).
@@ -42,6 +42,9 @@
  * (shuffle off), or shuffled (shuffle on). */
 #define TLN_PLAY_ALL 8
 #define TLN_SHUFFLE_ALL 9
+/* The track menu's Delete from Library...: track_uid, out of the library and to the Recycle
+ * Bin (delete_dialog.h). */
+#define TLN_DELETE_TRACK 10
 
 typedef struct track_list_request {
   char track_uid[MC_UID_STRLEN];

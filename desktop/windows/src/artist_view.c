@@ -12,6 +12,7 @@
 
 #include "canvas.h"
 #include "cover.h"
+#include "delete_dialog.h"
 #include "scroller.h"
 #include "theme.h"
 #include "wstr.h"
@@ -744,6 +745,48 @@ static void paint(HDC dc, const RECT *dirty) {
   canvas_blit(c, dc, dirty->left, dirty->top, dirty);
 }
 
+/* --- Menu --- */
+
+enum { CMD_DELETE_ARTIST = 1 };
+
+/* WM_CONTEXTMENU: Delete Artist... for the row under the pointer (from the keyboard, lp -1,
+ * the focused row), or anywhere on an artist's page for that artist. */
+static BOOL on_context_menu(LPARAM lp) {
+  if (!v.lib) return FALSE;
+  POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+  int i = -1;
+  if (!is_open()) {
+    if (lp == -1) {
+      i = v.focus;
+    } else {
+      POINT client = pt;
+      ScreenToClient(v.wnd, &client);
+      i = hit_at(client.x, client.y);
+    }
+    if (i < 0 || i >= v.nartists) return FALSE;
+  }
+  if (lp == -1) {
+    RECT r = is_open() ? v.back : row_rect(i);
+    pt.x = r.left;
+    pt.y = r.bottom;
+    ClientToScreen(v.wnd, &pt);
+  }
+  /* Copies: the dialog's message loop repaints the list, which may reload it. */
+  char uid[MC_UID_STRLEN];
+  snprintf(uid, sizeof uid, "%s", is_open() ? v.open_uid : v.artists[i].uid);
+  wchar_t *name = _wcsdup(is_open() ? (v.open_name ? v.open_name : L"") : v.artists[i].name);
+  HMENU menu = CreatePopupMenu();
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_ARTIST, mc_wstr_mnemonic(MC_STR_DELETE_ARTIST_MENU));
+  UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
+  int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, v.wnd, NULL);
+  DestroyMenu(menu);
+  if (cmd == CMD_DELETE_ARTIST && name &&
+      delete_dialog(GetAncestor(v.wnd, GA_ROOT), v.lib, MC_DELETE_ARTISTS, uid, name))
+    notify(ARN_LIBRARY_CHANGED, TRUE);
+  free(name);
+  return TRUE;
+}
+
 /* --- Window --- */
 
 static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -856,6 +899,9 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         go_back();
         return TRUE;
       }
+      break;
+    case WM_CONTEXTMENU:
+      if (on_context_menu(lp)) return 0;
       break;
     case WM_GETDLGCODE:
       return DLGC_WANTARROWS | DLGC_WANTCHARS;
