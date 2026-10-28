@@ -1013,13 +1013,13 @@ static void open_review(import_view *v, int idx) {
   adw_dialog_set_content_height(r->dialog, 720);
   adw_dialog_set_child(r->dialog, toolbar);
   g_signal_connect(r->dialog, "closed", G_CALLBACK(on_review_closed), r);
-  GSimpleActionGroup *actions = g_simple_action_group_new();
+  GSimpleActionGroup *group = g_simple_action_group_new();
   r->assign = g_simple_action_new("assign", NULL);
   g_signal_connect(r->assign, "activate", G_CALLBACK(on_assign), r);
-  g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(r->assign));
+  g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(r->assign));
   g_object_unref(r->assign); /* the group keeps it */
-  gtk_widget_insert_action_group(GTK_WIDGET(r->dialog), "review", G_ACTION_GROUP(actions));
-  g_object_unref(actions);
+  gtk_widget_insert_action_group(GTK_WIDGET(r->dialog), "review", G_ACTION_GROUP(group));
+  g_object_unref(group);
 
   review_load(r);
   if (v->rev == r) adw_dialog_present(r->dialog, v->root);
