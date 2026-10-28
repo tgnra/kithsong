@@ -24,8 +24,9 @@ import com.google.common.util.concurrent.ListenableFuture
  * decodes and plays, and this keeps the queue of [MediaItem]s (see [toMediaItem]) and what
  * Media3 needs around it. It also does what an Android player must and the core doesn't know
  * about: audio focus, pausing when headphones are unplugged, and a wake lock while playing.
- * Plays are counted to [onPlayed] with the track uid when the core says they count (half the
- * track or four minutes listened, whichever is less).
+ * Plays are counted to [onPlayed] with the track uid and when the play began (wall clock ms)
+ * when the core says they count (half the track or four minutes listened, whichever is less).
+ * [onNowPlaying] gets each track's uid as it starts playing, for scrobbling.
  *
  * Shuffle is the core's (mc_player_set_shuffle), offered as Media3's shuffle mode. Media3
  * has no way to be told the core's order, so its timeline stays in queue order: next and
@@ -35,7 +36,11 @@ import com.google.common.util.concurrent.ListenableFuture
  * Use it on the main thread.
  */
 @OptIn(UnstableApi::class)
-class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) : SimpleBasePlayer(Looper.getMainLooper()) {
+class CoreMediaPlayer(
+    context: Context,
+    private val onNowPlaying: (String) -> Unit = {},
+    private val onPlayed: (String, Long) -> Unit,
+) : SimpleBasePlayer(Looper.getMainLooper()) {
     private val main = Handler(Looper.getMainLooper())
     private val core = CorePlayer { event -> main.post { onCoreEvent(event) } }
 
@@ -63,6 +68,8 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
     // Giving the core a queue starts playing it, so a new queue stays here, to start at
     // [startIndex] and [startPositionMs], until it's first played.
     private var started = false
+    // The item last passed to [onNowPlaying], -1 while not playing.
+    private var announced = -1
     private var startIndex = 0
     private var startPositionMs = 0L
     private var shuffle = false
@@ -238,6 +245,12 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
             CorePlayer.Event.Error -> Log.w(TAG, "The core skipped a track or has no audio device")
             CorePlayer.Event.Track, CorePlayer.Event.State -> Unit
         }
+        if (status.state != CorePlayer.State.Playing) {
+            announced = -1
+        } else if (status.index != announced) {
+            announced = status.index
+            items.getOrNull(status.index)?.let { onNowPlaying(it.mediaId) }
+        }
         // It stopped by itself: the queue played out, or there's no audio device.
         if (started && status.state != CorePlayer.State.Playing && wantPlaying && !suppressed) {
             wantPlaying = false
@@ -251,7 +264,7 @@ class CoreMediaPlayer(context: Context, private val onPlayed: (String) -> Unit) 
     private fun takePlays() {
         while (true) {
             val played = core.takePlayed() ?: break
-            items.getOrNull(played.index)?.let { onPlayed(it.mediaId) }
+            items.getOrNull(played.index)?.let { onPlayed(it.mediaId, played.startedMs) }
         }
     }
 

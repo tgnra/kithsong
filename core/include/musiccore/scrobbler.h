@@ -65,6 +65,8 @@ typedef struct mc_scrobbler_status {
   char *username;     /* NULL when signed out */
   char *api_url;      /* the service's */
   int pending;        /* plays queued here and not yet sent */
+  int has_key;        /* 0 when the service has no API key: Last.fm in a build without one,
+                       * where signing in fails with MC_ERR_AUTH; say so instead */
   mc_status last_error; /* of the last call to the service: MC_ERR_AUTH when it refused the
                          * session (sign in again), MC_ERR_NET when it couldn't be reached */
 } mc_scrobbler_status;

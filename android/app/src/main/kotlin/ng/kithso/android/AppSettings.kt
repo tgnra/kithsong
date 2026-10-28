@@ -20,8 +20,14 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getString(KEY_DEVICE_NAME, null)
         set(value) = prefs.edit().putString(KEY_DEVICE_NAME, value).apply()
 
+    /** Whether this phone scrobbles its plays; the account itself is the sync group's. */
+    var scrobble: Boolean
+        get() = prefs.getBoolean(KEY_SCROBBLE, true)
+        set(value) = prefs.edit().putBoolean(KEY_SCROBBLE, value).apply()
+
     private companion object {
         const val KEY_ASKED_FOR_NOTIFICATIONS = "asked_for_notifications"
+        const val KEY_SCROBBLE = "scrobble"
         const val KEY_DEVICE_NAME = "device_name"
     }
 }

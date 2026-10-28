@@ -77,6 +77,7 @@ void mc_lastfm_sign(const mc_lastfm_param *params, int count, const char *secret
     }
     out[32] = '\0';
   }
+  mc_lastfm_wipe(b.s, b.cap); /* it ends with the secret */
   free(b.s);
 }
 
@@ -115,19 +116,33 @@ static mc_status call(const mc_lastfm_service *svc, const char *method,
                       int *api_error) {
   *out = NULL;
   *api_error = 0;
-  if (!svc->api_url || !*svc->api_url || !svc->api_key || !*svc->api_key || !svc->api_secret ||
-      !*svc->api_secret)
+  /* The build's key and secret, if the service has none of its own: decoded here, on the
+   * stack, and wiped once the call is signed. */
+  char build_key[MC_LASTFM_KEY_MAX], build_secret[MC_LASTFM_KEY_MAX];
+  build_key[0] = build_secret[0] = '\0';
+  const char *key = svc->api_key, *secret = svc->api_secret;
+  if (!key && mc_lastfm_build_key(build_key, sizeof build_key)) key = build_key;
+  if (!secret && mc_lastfm_build_secret(build_secret, sizeof build_secret)) secret = build_secret;
+  if (!svc->api_url || !*svc->api_url || !key || !*key || !secret || !*secret) {
+    mc_lastfm_wipe(build_key, sizeof build_key);
+    mc_lastfm_wipe(build_secret, sizeof build_secret);
     return MC_ERR_AUTH; /* no API account: a build without one, on its default service */
+  }
 
   mc_lastfm_param *all = malloc((size_t)(count + 3) * sizeof *all);
-  if (!all) return MC_ERR_NOMEM;
+  if (!all) {
+    mc_lastfm_wipe(build_key, sizeof build_key);
+    mc_lastfm_wipe(build_secret, sizeof build_secret);
+    return MC_ERR_NOMEM;
+  }
   if (count) memcpy(all, params, (size_t)count * sizeof *all);
   int n = count;
   all[n++] = (mc_lastfm_param){"method", method};
-  all[n++] = (mc_lastfm_param){"api_key", svc->api_key};
+  all[n++] = (mc_lastfm_param){"api_key", key};
   if (svc->session_key) all[n++] = (mc_lastfm_param){"sk", svc->session_key};
   char sig[MC_LASTFM_SIG_STRLEN];
-  mc_lastfm_sign(all, n, svc->api_secret, sig);
+  mc_lastfm_sign(all, n, secret, sig);
+  mc_lastfm_wipe(build_secret, sizeof build_secret);
 
   strbuf form = {0};
   for (int i = 0; i < n; i++) {
@@ -140,6 +155,7 @@ static mc_status call(const mc_lastfm_service *svc, const char *method,
   sb_str(&form, sig);
   sb_str(&form, "&format=json"); /* not signed: the API leaves format out of the signature */
   free(all);
+  mc_lastfm_wipe(build_key, sizeof build_key);
   if (form.failed || !sig[0]) {
     free(form.s);
     return MC_ERR_NOMEM;

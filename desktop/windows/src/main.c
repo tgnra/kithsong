@@ -1218,7 +1218,8 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CTLCOLORBTN:
     case WM_CTLCOLOREDIT: {
       HBRUSH brush = device_view_ctlcolor(msg, (HWND)lp, (HDC)wp);
-      if (!brush && msg == WM_CTLCOLORSTATIC) brush = settings_view_ctlcolor((HWND)lp, (HDC)wp);
+      if (!brush && (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN))
+        brush = settings_view_ctlcolor((HWND)lp, (HDC)wp);
       return (LRESULT)(brush ? brush : theme_ctlcolor(msg, (HDC)wp));
     }
     case WM_SETTINGCHANGE:

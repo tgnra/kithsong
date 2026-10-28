@@ -1023,6 +1023,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   if (mc_settings_load(a->settings_dir, &settings) == MC_OK) { /* shuffle and volume as they were left */
     playback_set_shuffle(mc_settings_shuffle(settings));
     playback_set_volume(mc_settings_volume(settings));
+    playback_set_scrobble(mc_settings_scrobble(settings));
   }
   mc_settings_free(settings);
 

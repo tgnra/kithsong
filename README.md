@@ -149,7 +149,9 @@ Optional CMake settings:
   example in a `CMakeUserPresets.json`, which is already ignored.
 - `-DKITHSONG_LASTFM_KEY=<key>` and `-DKITHSONG_LASTFM_SECRET=<secret>`: a Last.fm API
   account (from https://www.last.fm/api/account/create), for scrobbling to Last.fm. Keep
-  them out of git too.
+  them out of git too. Or set the environment variables of the same names, or paste the
+  account page into `last.fm.api` at the top of the repo (gitignored). Without them the
+  app builds fine and Settings says it can't scrobble.
 
 How to get each of these, where to put them on every platform and how to test them:
 [docs/api-keys.md](docs/api-keys.md).

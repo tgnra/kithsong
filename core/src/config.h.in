@@ -10,10 +10,8 @@
 /* AcoustID application key, from -DKITHSONG_ACOUSTID_KEY=... (empty disables fingerprinting). */
 #define MC_ACOUSTID_KEY "@KITHSONG_ACOUSTID_KEY@"
 
-/* Last.fm API account, from -DKITHSONG_LASTFM_KEY=... and -DKITHSONG_LASTFM_SECRET=...: the
- * scrobbler's default service (empty means only services with their own key work). */
-#define MC_LASTFM_KEY "@KITHSONG_LASTFM_KEY@"
-#define MC_LASTFM_SECRET "@KITHSONG_LASTFM_SECRET@"
+/* The Last.fm API key and secret aren't here: they're in lastfm_key.h, obscured (see
+ * cmake/LastfmKey.cmake and core/src/scrobble/lastfm_key.c). */
 
 
 #endif

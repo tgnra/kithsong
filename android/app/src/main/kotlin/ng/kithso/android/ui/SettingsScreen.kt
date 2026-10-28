@@ -58,6 +58,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import ng.kithso.android.AppSettings
+import ng.kithso.android.KithsongApp
 import ng.kithso.core.NativeCore
 import ng.kithso.android.R
 import coil3.SingletonImageLoader
@@ -67,8 +68,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The app's settings: a way to the devices it syncs with, the permissions it has, the storage
- * it uses, and its version. [libraryDir] is the library folder, whose size is shown. [onSync]
+ * The app's settings: a way to the devices it syncs with, signing in to Last.fm, the
+ * permissions it has, the storage it uses, and its version. [libraryDir] is the library folder, whose size is shown. [onSync]
  * opens the sync screen. [onBack] slides the screen away; it is also dismissed by swiping right.
  */
 @Composable
@@ -96,6 +97,11 @@ fun SettingsScreen(
                     supportingContent = { Text(stringResource(R.string.settings_sync_text)) },
                     modifier = Modifier.clickable(onClick = onSync),
                 )
+            }
+
+            item(key = "scrobbling") {
+                SettingsHeading(stringResource(R.string.scrobbling))
+                ScrobblingSettings((context.applicationContext as KithsongApp).scrobbling)
             }
 
             // Notifications are the only permission asked for at run time, from API 33.

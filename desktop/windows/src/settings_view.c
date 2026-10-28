@@ -1,11 +1,13 @@
 #include "settings_view.h"
 
 #include <commctrl.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 
+#include "playback.h"
 #include "sync_bridge.h"
 #include "theme.h"
 #include "wstr.h"
@@ -24,20 +26,45 @@ enum {
   ID_SET_ADDR,
   ID_SET_LEAVE,
   ID_SET_SYNC_NOTE,
+  ID_SET_LFM_HEADING,
+  ID_SET_LFM_STATUS,
+  ID_SET_LFM_BUTTON,
+  ID_SET_LFM_CHECK,
+  ID_SET_LFM_CHECK_LABEL,
+  ID_SET_LFM_NOTE,
 };
 
 enum { MAX_ADDRESSES = 8 };
+
+/* Signing in: the auth thread polls mc_scrobbler_auth_finish() every AUTH_POLL_MS until the
+ * user has approved the token in the browser, for up to AUTH_LIMIT_MS (tokens last an hour,
+ * but nobody waits that long). The status line is refreshed every STATUS_MS while shown,
+ * since an account arriving by sync, or plays being sent, changes it. */
+enum { AUTH_POLL_MS = 3000, AUTH_LIMIT_MS = 10 * 60 * 1000, STATUS_MS = 2000, STATUS_TIMER = 1 };
+enum { WM_AUTH_URL = WM_APP + 1, WM_AUTH_DONE }; /* to the status label, from the auth thread */
 
 static struct {
   HWND parent;
   HWND title, heading, path, move, open, note;
   HWND sync_heading, name_label, name, addr_label, addr, leave, sync_note;
+  HWND lfm_heading, lfm_status, lfm_button, lfm_check, lfm_check_label, lfm_note;
   HFONT font, title_font, heading_font;
   BOOL shown;
   mc_settings *settings;
   void (*devices_changed)(void);
   char shown_name[MC_SYNC_DEVICE_NAME_MAX + 1]; /* what the name box was last set to */
+
+  /* Signing in to Last.fm. */
+  HANDLE auth_thread, auth_cancel; /* while signing in; auth_cancel is an event */
+  mc_status auth_result;           /* of the last sign-in, shown until the next action */
+  BOOL auth_timed_out;             /* it wasn't approved in time */
+  wchar_t lfm_shown[512];          /* the status line as last set */
+  enum mc_str_id lfm_button_shown; /* and the button's text */
 } g_set;
+
+static void update_scrobble(void);
+static void stop_auth(void);
+static LRESULT CALLBACK lfm_status_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data);
 
 static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
   return CreateWindowExW(0, cls, text, WS_CHILD | style, 0, 0, 0, 0, g_set.parent, (HMENU)(INT_PTR)id,
@@ -91,9 +118,23 @@ void settings_view_create(HWND parent) {
   g_set.leave = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LEAVE_GROUP_BUTTON),
                       BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_LEAVE);
   g_set.sync_note = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_SETTINGS_NOTE), label, ID_SET_SYNC_NOTE);
+
+  g_set.lfm_heading = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLING), label, ID_SET_LFM_HEADING);
+  g_set.lfm_status = child(WC_STATICW, NULL, label, ID_SET_LFM_STATUS);
+  SetWindowSubclass(g_set.lfm_status, lfm_status_proc, 0, 0); /* the auth thread's news, the timer */
+  g_set.lfm_button = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_SCROBBLE_SIGN_IN), BS_PUSHBUTTON | WS_TABSTOP,
+                           ID_SET_LFM_BUTTON);
+  /* No text of its own: a themed checkbox's text stays black in dark mode, so the label
+   * beside it says it, and toggles it too (as on the device page). */
+  g_set.lfm_check = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_SET_LFM_CHECK);
+  g_set.lfm_check_label = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLE_SWITCH), label | SS_NOTIFY, ID_SET_LFM_CHECK_LABEL);
+  g_set.lfm_note = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLE_NOTE), label, ID_SET_LFM_NOTE);
+  playback_on_scrobbler_closing(stop_auth);
 }
 
 void settings_view_destroy(void) {
+  stop_auth();
+  playback_on_scrobbler_closing(NULL);
   if (g_set.title_font) DeleteObject(g_set.title_font);
   if (g_set.heading_font) DeleteObject(g_set.heading_font);
   g_set.title_font = g_set.heading_font = NULL;
@@ -125,8 +166,11 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   SendMessageW(g_set.title, WM_SETFONT, (WPARAM)g_set.title_font, TRUE);
   SendMessageW(g_set.heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.sync_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
-  HWND body[] = {g_set.path,  g_set.move,       g_set.open, g_set.note,  g_set.name_label,
-                 g_set.name,  g_set.addr_label, g_set.addr, g_set.leave, g_set.sync_note};
+  SendMessageW(g_set.lfm_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  HWND body[] = {g_set.path,       g_set.move,       g_set.open,       g_set.note,
+                 g_set.name_label, g_set.name,       g_set.addr_label, g_set.addr,
+                 g_set.leave,      g_set.sync_note,  g_set.lfm_status, g_set.lfm_button,
+                 g_set.lfm_check,  g_set.lfm_check_label, g_set.lfm_note};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
 }
 
@@ -134,9 +178,16 @@ void settings_view_show(BOOL show) {
   g_set.shown = show;
   HWND all[] = {g_set.title,      g_set.heading,      g_set.path,  g_set.move,       g_set.open,
                 g_set.note,       g_set.sync_heading, g_set.name_label, g_set.name,  g_set.addr_label,
-                g_set.addr,       g_set.leave,        g_set.sync_note};
+                g_set.addr,       g_set.leave,        g_set.sync_note, g_set.lfm_heading, g_set.lfm_status,
+                g_set.lfm_button, g_set.lfm_check,    g_set.lfm_check_label, g_set.lfm_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
-  if (show) settings_view_update_sync();
+  if (show) {
+    settings_view_update_sync();
+    update_scrobble();
+    SetTimer(g_set.lfm_status, STATUS_TIMER, STATUS_MS, NULL);
+  } else {
+    KillTimer(g_set.lfm_status, STATUS_TIMER);
+  }
 }
 
 /* The height wnd's text needs at width w, wrapped as its static control wraps it. */
@@ -215,6 +266,29 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
 
   nh = text_height(g_set.sync_note, g_set.font, text_w, 0);
   MoveWindow(g_set.sync_note, left, top, text_w, nh, TRUE);
+  top += nh + S(32);
+
+  /* Scrobbling */
+  hh = text_height(g_set.lfm_heading, g_set.heading_font, text_w, 0);
+  MoveWindow(g_set.lfm_heading, left, top, text_w, hh, TRUE);
+  top += hh + S(8);
+
+  int sh = text_height(g_set.lfm_status, g_set.font, text_w, 0);
+  MoveWindow(g_set.lfm_status, left, top, text_w, sh, TRUE);
+  top += sh + S(12);
+
+  MoveWindow(g_set.lfm_button, left, top, button_width(g_set.lfm_button, S(16)), btn_h, TRUE);
+  top += btn_h + S(12);
+
+  int box = GetSystemMetricsForDpi(SM_CXMENUCHECK, dpi);
+  lh = text_height(g_set.lfm_check_label, g_set.font, text_w - box - S(8), 0);
+  int row_h = max(box, lh);
+  MoveWindow(g_set.lfm_check, left, top + (row_h - box) / 2, box, box, TRUE);
+  MoveWindow(g_set.lfm_check_label, left + box + S(8), top + (row_h - lh) / 2, text_w - box - S(8), lh, TRUE);
+  top += row_h + S(12);
+
+  nh = text_height(g_set.lfm_note, g_set.font, text_w, 0);
+  MoveWindow(g_set.lfm_note, left, top, text_w, nh, TRUE);
 #undef S
 }
 
@@ -223,6 +297,9 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
 void settings_view_init_sync(mc_settings *settings, void (*devices_changed)(void)) {
   g_set.settings = settings;
   g_set.devices_changed = devices_changed;
+  BOOL on = !settings || mc_settings_scrobble(settings);
+  playback_set_scrobble(on);
+  SendMessageW(g_set.lfm_check, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
   settings_view_update_sync();
 }
 
@@ -365,6 +442,206 @@ static void leave_group(void) {
   settings_view_update_sync();
 }
 
+/* --- Scrobbling --- */
+
+/* Brings the Scrobbling section up to date with the scrobbler: signed in or not, whether
+ * the build can sign in at all, plays waiting and the last error. */
+static void update_scrobble(void) {
+  if (!g_set.lfm_status) return;
+  mc_scrobbler *sc = playback_scrobbler();
+  mc_scrobbler_status st = {0};
+  BOOL have = sc && mc_scrobbler_status_get(sc, &st) == MC_OK;
+  BOOL waiting = g_set.auth_thread != NULL;
+  wchar_t text[512], line[256];
+  text[0] = L'\0';
+  enum mc_str_id button = MC_STR_SCROBBLE_SIGN_IN;
+  BOOL enabled = have;
+
+  if (waiting) {
+    wcscpy(text, mc_wstr(MC_STR_SCROBBLE_WAITING));
+    button = MC_STR_SCROBBLE_CANCEL_SIGN_IN;
+    enabled = TRUE;
+  } else if (have && st.username) {
+    char *name = st.username;
+    mc_wformat(text, 512, mc_str(MC_STR_SCROBBLE_SIGNED_IN), MC_S(name));
+    button = MC_STR_SCROBBLE_SIGN_OUT;
+    line[0] = L'\0';
+    if (st.last_error == MC_ERR_AUTH) wcscpy(line, mc_wstr(MC_STR_SCROBBLE_REFUSED));
+    else if (st.last_error == MC_ERR_NET) wcscpy(line, mc_wstr(MC_STR_SCROBBLE_OFFLINE));
+    else if (st.pending > 0) mc_wformat(line, 256, mc_str_plural(MC_STR_SCROBBLE_PENDING, st.pending), MC_D(st.pending));
+    if (line[0]) {
+      wcscat(text, L"\n");
+      wcsncat(text, line, 511 - wcslen(text));
+    }
+  } else if (have && !st.has_key) {
+    wcscpy(text, mc_wstr(MC_STR_SCROBBLE_NO_KEY));
+    enabled = FALSE;
+  } else {
+    wcscpy(text, mc_wstr(MC_STR_SCROBBLE_SIGNED_OUT));
+  }
+  if (!waiting && g_set.auth_result != MC_OK) {
+    if (g_set.auth_timed_out)
+      wcscpy(line, mc_wstr(MC_STR_SCROBBLE_SIGN_IN_TIMED_OUT));
+    else
+      mc_wformat(line, 256, mc_str(MC_STR_SCROBBLE_SIGN_IN_FAILED), MC_S(mc_status_str(g_set.auth_result)));
+    wcscat(text, L"\n");
+    wcsncat(text, line, 511 - wcslen(text));
+  }
+  if (have) mc_scrobbler_status_clear(&st);
+
+  EnableWindow(g_set.lfm_button, enabled);
+  BOOL relayout = FALSE;
+  if (button != g_set.lfm_button_shown || !g_set.lfm_shown[0]) {
+    g_set.lfm_button_shown = button;
+    SetWindowTextW(g_set.lfm_button, mc_wstr_mnemonic(button));
+    relayout = TRUE; /* its width */
+  }
+  if (wcscmp(text, g_set.lfm_shown)) {
+    wcscpy(g_set.lfm_shown, text);
+    SetWindowTextW(g_set.lfm_status, text);
+    relayout = TRUE; /* it may take more lines */
+  }
+  if (relayout && g_set.shown) SendMessageW(g_set.parent, WM_SIZE, 0, 0);
+}
+
+typedef struct auth_job {
+  mc_scrobbler *sc;
+  HWND notify;
+  HANDLE cancel;
+} auth_job;
+
+/* The auth thread: gets a token and the page to approve it on (posted as WM_AUTH_URL, the
+ * URL to free with mc_free()), then polls until it's approved, cancelled or too late; posts
+ * WM_AUTH_DONE with the result. */
+static DWORD WINAPI auth_main(void *arg) {
+  auth_job *job = arg;
+  char *url = NULL;
+  mc_status st = mc_scrobbler_auth_begin(job->sc, &url);
+  BOOL polled = FALSE;
+  if (st == MC_OK) {
+    polled = TRUE;
+    if (!PostMessageW(job->notify, WM_AUTH_URL, 0, (LPARAM)url)) mc_free(url);
+    ULONGLONG end = GetTickCount64() + AUTH_LIMIT_MS;
+    do {
+      if (WaitForSingleObject(job->cancel, AUTH_POLL_MS) == WAIT_OBJECT_0) break; /* stop_auth() */
+      st = mc_scrobbler_auth_finish(job->sc);
+    } while (st == MC_ERR_AUTH && GetTickCount64() < end);
+  }
+  PostMessageW(job->notify, WM_AUTH_DONE, (WPARAM)(INT_PTR)st, polled && st == MC_ERR_AUTH);
+  free(job);
+  return 0;
+}
+
+static void start_auth(void) {
+  mc_scrobbler *sc = playback_scrobbler();
+  if (!sc || g_set.auth_thread) return;
+  auth_job *job = malloc(sizeof *job);
+  HANDLE cancel = CreateEventW(NULL, TRUE, FALSE, NULL);
+  if (!job || !cancel) {
+    free(job);
+    if (cancel) CloseHandle(cancel);
+    return;
+  }
+  *job = (auth_job){sc, g_set.lfm_status, cancel};
+  g_set.auth_result = MC_OK;
+  g_set.auth_timed_out = FALSE;
+  g_set.auth_cancel = cancel;
+  g_set.auth_thread = CreateThread(NULL, 0, auth_main, job, 0, NULL);
+  if (!g_set.auth_thread) {
+    free(job);
+    CloseHandle(cancel);
+    g_set.auth_cancel = NULL;
+  }
+  update_scrobble();
+}
+
+/* Cancels a sign-in in progress and waits for its thread, which may be in the middle of a
+ * call to the service (bounded by its timeout). Also called just before the scrobbler is
+ * freed. */
+static void stop_auth(void) {
+  if (!g_set.auth_thread) return;
+  SetEvent(g_set.auth_cancel);
+  WaitForSingleObject(g_set.auth_thread, INFINITE);
+  CloseHandle(g_set.auth_thread);
+  CloseHandle(g_set.auth_cancel);
+  g_set.auth_thread = g_set.auth_cancel = NULL;
+  /* Its WM_AUTH_URL may still be queued: drop it, and the URL with it. */
+  MSG msg;
+  while (PeekMessageW(&msg, g_set.lfm_status, WM_AUTH_URL, WM_AUTH_DONE, PM_REMOVE))
+    if (msg.message == WM_AUTH_URL) mc_free((void *)msg.lParam);
+  update_scrobble();
+}
+
+static void sign_out(void) {
+  mc_scrobbler *sc = playback_scrobbler();
+  if (!sc) return;
+  if (MessageBoxW(g_set.parent, mc_wstr(MC_STR_SCROBBLE_SIGN_OUT_TEXT), mc_wstr(MC_STR_SCROBBLE_SIGN_OUT_TITLE),
+                  MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
+    return;
+  g_set.auth_result = mc_scrobbler_sign_out(sc);
+  g_set.auth_timed_out = FALSE;
+  update_scrobble();
+}
+
+static void on_scrobble_button(void) {
+  mc_scrobbler *sc = playback_scrobbler();
+  mc_scrobbler_status st;
+  if (g_set.auth_thread) {
+    stop_auth();
+  } else if (sc && mc_scrobbler_status_get(sc, &st) == MC_OK) {
+    BOOL signed_in = st.username != NULL;
+    mc_scrobbler_status_clear(&st);
+    if (signed_in) sign_out();
+    else start_auth();
+  }
+}
+
+static void on_scrobble_check(void) {
+  BOOL on = SendMessageW(g_set.lfm_check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  playback_set_scrobble(on);
+  if (g_set.settings) {
+    mc_settings_set_scrobble(g_set.settings, on);
+    mc_settings_save(g_set.settings);
+  }
+}
+
+static LRESULT CALLBACK lfm_status_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+  (void)data;
+  switch (msg) {
+    case WM_AUTH_URL: {
+      char *url = (char *)lp;
+      wchar_t w[2048];
+      if (wstr_from_utf8(w, 2048, url)) ShellExecuteW(g_set.parent, L"open", w, NULL, NULL, SW_SHOWNORMAL);
+      mc_free(url);
+      return 0;
+    }
+    case WM_AUTH_DONE: {
+      mc_status st = (mc_status)(INT_PTR)wp;
+      if (g_set.auth_thread) {
+        WaitForSingleObject(g_set.auth_thread, INFINITE); /* it's just posted this */
+        CloseHandle(g_set.auth_thread);
+        CloseHandle(g_set.auth_cancel);
+        g_set.auth_thread = g_set.auth_cancel = NULL;
+      }
+      g_set.auth_result = st;
+      g_set.auth_timed_out = lp != 0;
+      if (st == MC_OK) SetForegroundWindow(g_set.parent); /* back from the browser */
+      update_scrobble();
+      return 0;
+    }
+    case WM_TIMER:
+      if (wp == STATUS_TIMER) {
+        update_scrobble();
+        return 0;
+      }
+      break;
+    case WM_NCDESTROY:
+      RemoveWindowSubclass(wnd, lfm_status_proc, id);
+      break;
+  }
+  return DefSubclassProc(wnd, msg, wp, lp);
+}
+
 BOOL settings_view_on_command(int id, int code) {
   switch (id) {
     case ID_SET_OPEN: PostMessageW(g_set.parent, WM_APP_OPEN_LIBRARY, 0, 0); return TRUE;
@@ -373,14 +650,30 @@ BOOL settings_view_on_command(int id, int code) {
       if (code == EN_KILLFOCUS) apply_name();
       return TRUE;
     case ID_SET_LEAVE: leave_group(); return TRUE;
+    case ID_SET_LFM_BUTTON: on_scrobble_button(); return TRUE;
+    case ID_SET_LFM_CHECK:
+      if (code == BN_CLICKED) on_scrobble_check();
+      return TRUE;
+    case ID_SET_LFM_CHECK_LABEL:
+      if (code == STN_CLICKED) {
+        BOOL on = SendMessageW(g_set.lfm_check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        SendMessageW(g_set.lfm_check, BM_SETCHECK, on ? BST_UNCHECKED : BST_CHECKED, 0);
+        on_scrobble_check();
+      }
+      return TRUE;
     default: return FALSE;
   }
 }
 
 HBRUSH settings_view_ctlcolor(HWND wnd, HDC dc) {
-  BOOL note = wnd == g_set.note || wnd == g_set.sync_note;
+  if (wnd == g_set.lfm_check) { /* WM_CTLCOLORBTN: just its background */
+    SetBkColor(dc, theme.bg);
+    return theme.bg_brush;
+  }
+  BOOL note = wnd == g_set.note || wnd == g_set.sync_note || wnd == g_set.lfm_note;
   if (!note && wnd != g_set.title && wnd != g_set.heading && wnd != g_set.path && wnd != g_set.sync_heading &&
-      wnd != g_set.name_label && wnd != g_set.addr_label && wnd != g_set.addr)
+      wnd != g_set.name_label && wnd != g_set.addr_label && wnd != g_set.addr && wnd != g_set.lfm_heading &&
+      wnd != g_set.lfm_status && wnd != g_set.lfm_check_label)
     return NULL;
   SetTextColor(dc, note ? theme.text2 : theme.text);
   SetBkColor(dc, theme.bg);

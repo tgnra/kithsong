@@ -50,6 +50,12 @@ mc_status mc_settings_set_shuffle(mc_settings *s, int on);
 int mc_settings_volume(const mc_settings *s);
 mc_status mc_settings_set_volume(mc_settings *s, int volume);
 
+/* Whether this device scrobbles its plays while the group is signed in to a scrobbling
+ * service (see scrobbler.h). The account is the group's; this switch is each device's own.
+ * On if never set. */
+int mc_settings_scrobble(const mc_settings *s);
+mc_status mc_settings_set_scrobble(mc_settings *s, int on);
+
 #ifdef __cplusplus
 }
 #endif

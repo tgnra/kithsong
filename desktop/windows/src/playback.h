@@ -35,6 +35,13 @@ void playback_free(void);
  * the sync.db in config_dir. NULL, before the library closes. Plays already counted go to
  * the library that was set before. */
 void playback_set_library(mc_library *lib, const char *config_dir);
+/* The scrobbler set up for the library, or NULL, for the Settings page to sign in with. It's
+ * freed when the library changes; closing (if set) is called just before, so a sign-in in
+ * progress with it can stop first. */
+mc_scrobbler *playback_scrobbler(void);
+void playback_on_scrobbler_closing(void (*closing)(void));
+/* Whether this device scrobbles (mc_settings_scrobble(); on to begin with). */
+void playback_set_scrobble(BOOL on);
 
 
 /* Call first in the main window's procedure. Returns TRUE, with *result set, if msg was

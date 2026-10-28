@@ -15,6 +15,12 @@
  *   |  | This Computer's Address                    | |
  *   |  | 192.168.1.20:47823                         | |
  *   |  |              Leave Group...                | |
+ *   |  Scrobbling                                      |
+ *   |  Signing in opens Last.fm in your browser...     |
+ *   |  | Last.fm                                    | |
+ *   |  | Signed in as tania                         | |
+ *   |  |                 Sign Out                   | |
+ *   |  | Scrobble what I play on this device   [==] | |
  *   +--------------------------------------------------+
  *
  * The library folder is read from settings.json in settings_dir. Open Another Library picks a
@@ -22,7 +28,9 @@
  * settings.json (unknown keys are kept). Move Library closes the dialog and calls the caller's
  * move_library, which moves it (move_library.c). The Sync group renames this computer (through
  * sync when it runs, and settings.json either way), shows where other devices reach it, and
- * leaves the group after asking, as Windows' Settings does.
+ * leaves the group after asking, as Windows' Settings does. The Scrobbling group signs in
+ * with playback_scrobbler(), in the browser; a sign-in carries on if the dialog closes. The
+ * switch is this computer's own (settings.json); the account is the sync group's.
  *
  * Wiring it into main.c (settings_dir is ~/.config/kithsong, as main() already builds):
  *

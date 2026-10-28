@@ -6,25 +6,38 @@ building the app, register for once and bake into every build:
 | Service | What you need | Build setting | State in the code |
 |---------|---------------|---------------|-------------------|
 | MusicBrainz (and the Cover Art Archive) | no key; a contact URL or email for the User-Agent | `KITHSONG_CONTACT` | used by the importer on every platform |
-| Last.fm | an API key **and** a shared secret | `KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET` | core done; desktops queue and send plays; no sign-in UI yet, nothing on Android yet |
+| Last.fm | an API key **and** a shared secret | `KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET` (or a `last.fm.api` file) | done: sign-in in Settings on Windows, Linux and Android; every platform sends plays |
 | AcoustID | an *application* (client) key | `KITHSONG_ACOUSTID_KEY` | **not implemented**: the key is plumbed through the build but nothing reads it |
 | iTunes Search (cover art fallback) | nothing | - | used by the importer |
 
 All of these are CMake cache variables, declared in [`CMakeLists.txt`](../CMakeLists.txt)
-(lines 42-44) and [`core/CMakeLists.txt`](../core/CMakeLists.txt) (lines 1-13). CMake writes
-them into a generated header, `build/<preset>/core/generated/config.h`, from
+and [`core/CMakeLists.txt`](../core/CMakeLists.txt). CMake writes the contact and the AcoustID
+key into a generated header, `build/<preset>/core/generated/config.h`, from
 [`core/src/config.h.in`](../core/src/config.h.in):
 
 ```c
-#define MC_CONTACT "@KITHSONG_CONTACT@"            /* line 8 */
-#define MC_ACOUSTID_KEY "@KITHSONG_ACOUSTID_KEY@"  /* line 11 */
-#define MC_LASTFM_KEY "@KITHSONG_LASTFM_KEY@"      /* line 15 */
-#define MC_LASTFM_SECRET "@KITHSONG_LASTFM_SECRET@" /* line 16 */
+#define MC_CONTACT "@KITHSONG_CONTACT@"
+#define MC_ACOUSTID_KEY "@KITHSONG_ACOUSTID_KEY@"
 ```
 
-So they are compile-time constants. There is no environment variable or settings entry the
-app reads at run time. Environment variables only come into it through the release scripts
-and CI, which turn them into `-D` options (see [Where the values go](#where-the-values-go)).
+The Last.fm key and secret go into `build/<preset>/core/generated/lastfm_key.h` instead,
+**obscured** ([`cmake/LastfmKey.cmake`](../cmake/LastfmKey.cmake)): each is XORed with a
+random mask made once per build folder and split into its even and odd bytes, and
+[`core/src/scrobble/lastfm_key.c`](../core/src/scrobble/lastfm_key.c) decodes them onto the
+stack only while a request is signed, then wipes them. So `strings` on the binary doesn't show
+them. That's obscurity, not protection (see [The secret is in the binary](#3-the-secret-is-in-the-binary)).
+The Last.fm pair can also come from the environment or a file, without `-D`:
+
+1. `-DKITHSONG_LASTFM_KEY=...` and `-DKITHSONG_LASTFM_SECRET=...` (presets, command line);
+2. else the environment variables `KITHSONG_LASTFM_KEY` and `KITHSONG_LASTFM_SECRET` at
+   configure time;
+3. else the file `KITHSONG_LASTFM_FILE` names, by default `last.fm.api` at the top of the
+   repo (gitignored): the text of Last.fm's "API account" page pasted as it is, which has an
+   `API key <hex>` line and a `Shared secret <hex>` line.
+
+Values from 2 and 3 aren't stored in `CMakeCache.txt`. Configure prints which one it used
+("Last.fm: API key from ...") or "no API key". They are compile-time constants either way:
+nothing is read at run time.
 
 An empty value is always allowed and never breaks the build. It turns the feature off
 (Last.fm, AcoustID) or sends a placeholder contact (MusicBrainz, with a configure warning).
@@ -74,8 +87,14 @@ Two things to know about that:
   cache.
 - `-D` values end up in your shell history. The presets file avoids that.
 
-Either way the secrets sit in plain text in `build/` (in `CMakeCache.txt` and the generated
-`config.h`), which is gitignored. Don't zip up and share a build folder.
+`-D` values sit in plain text in `build/<preset>/CMakeCache.txt`, which is gitignored, and
+`lastfm_key.h` holds them obscured. Don't zip up and share a build folder.
+
+### Any platform, local builds: `last.fm.api`
+
+Copy the text of your application's page at <https://www.last.fm/api/accounts> into a file
+named `last.fm.api` at the top of the repo. It's gitignored. A worktree or a build elsewhere
+can point at it with `-DKITHSONG_LASTFM_FILE=<path>` (Gradle: `-PkithsongLastfmFile=<path>`).
 
 ### Android: Gradle properties
 
@@ -88,6 +107,10 @@ four Gradle project properties and passes them to CMake:
 | `kithsongAcoustidKey` | `KITHSONG_ACOUSTID_KEY` |
 | `kithsongLastfmKey` | `KITHSONG_LASTFM_KEY` |
 | `kithsongLastfmSecret` | `KITHSONG_LASTFM_SECRET` |
+
+`kithsongLastfmFile` passes `KITHSONG_LASTFM_FILE`. With none of them set, the native build
+still looks for `KITHSONG_LASTFM_KEY`/`_SECRET` in the environment and then for
+`last.fm.api` at the top of the repo, as above.
 
 Either pass them on the command line
 (`gradlew.bat assembleDebug -PkithsongContact=... -PkithsongLastfmKey=...`), or put them in
@@ -105,9 +128,6 @@ kithsongAcoustidKey=<key>
 Not `android/gradle.properties`: that file is tracked. Not `android/local.properties`
 either: Gradle doesn't read it as project properties, so `findProperty()` wouldn't see the
 values there.
-
-Note that the Android app doesn't scrobble yet (no JNI bridge for `mc_scrobbler`;
-[TODO.md](../TODO.md) line 91), so for now only the contact matters on Android.
 
 ### Release builds: environment variables and GitHub secrets
 
@@ -230,12 +250,14 @@ The code uses Last.fm's **desktop application** flow
 flow (`auth.getMobileSession`, which sends the user's password) or the web flow (which needs a
 callback URL):
 
-1. `mc_scrobbler_auth_begin()` calls **`auth.getToken`**
+1. Settings' **Sign in** calls `mc_scrobbler_auth_begin()`, which calls **`auth.getToken`**
    ([`core/src/scrobble/lastfm.c`](../core/src/scrobble/lastfm.c) `mc_lastfm_get_token`) and
-   returns `https://www.last.fm/api/auth/?api_key=<key>&token=<token>` for the frontend to
-   open in the browser ([`scrobbler.c`](../core/src/scrobble/scrobbler.c) line 493 on).
-2. The user approves the app on that page.
-3. The frontend polls `mc_scrobbler_auth_finish()` every few seconds. It calls
+   returns `https://www.last.fm/api/auth/?api_key=<key>&token=<token>`, which the app opens in
+   the browser (Windows: `settings_view.c`, Linux: `settings_view.c`, Android:
+   `ScrobblingSettings.kt` with `playback/Scrobbling.kt`).
+2. The user approves the app on that page. The app never sees their password.
+3. The app polls `mc_scrobbler_auth_finish()` every 3 seconds, for up to 10 minutes, on a
+   thread of its own (Cancel stops it). It calls
    **`auth.getSession`**, which fails with error 14 ("token not yet authorised", reported as
    `MC_ERR_AUTH`) until the user has approved. Tokens last 60 minutes.
 4. The session key it gets never expires unless the user revokes the app in their Last.fm
@@ -265,8 +287,10 @@ minutes) is decided by the player. These match <https://www.last.fm/api/scrobbli
 ### 3. The secret is in the binary
 
 A desktop or mobile app can't truly keep the shared secret secret. It's compiled into
-`config.h` and anyone with the binary can pull it out with `strings`. Last.fm knows this
-about desktop apps. The realistic goals are:
+the binary. It's stored obscured (XORed and split, see [above](#api-keys-and-contact-info)),
+so `strings` or a hex editor doesn't show it, but anyone with the binary and a debugger can
+still get it, since the app has to decode it to sign requests. Last.fm knows this about
+desktop apps. The realistic goals are:
 
 - keep it **out of git** and out of logs and screenshots (use the places in
   [Where the values go](#where-the-values-go));
@@ -284,10 +308,12 @@ use is non-commercial unless you get a commercial agreement from Last.fm, and ap
 
 ### 4. Test it
 
-There's no sign-in button in the apps yet ([TODO.md](../TODO.md) line 90). The Windows and
-Linux apps already send now playing and plays when an account is signed in
-(`desktop/*/src/playback.c`). For now, sign in with the manual test program, which is built
-with the tests (`KITHSONG_BUILD_TESTS`, on by default):
+Sign in from Settings > Scrobbling on any platform. A build without a key says so there
+("built without a Last.fm API key") and greys out Sign in. Every platform sends now playing
+and plays while signed in and this device's "Scrobble what I play on this device" switch is on
+(`desktop/*/src/playback.c`, Android's `PlaybackService`). To test without the app, sign in with
+the manual test program, which is built with the tests (`KITHSONG_BUILD_TESTS`, on by
+default):
 
 1. Configure and build with your key and secret (e.g. the `windows-keys` preset above).
    `test_scrobbler` checks that a build *without* a key refuses to sign in, so it's fine
@@ -314,7 +340,7 @@ What failures mean:
 
 | Symptom | Likely cause |
 |---------|--------------|
-| `auth_begin` gives `MC_ERR_AUTH` straight away, no network traffic | the build has no key or no secret (check `config.h`) |
+| `auth_begin` gives `MC_ERR_AUTH` straight away, no network traffic | the build has no key or no secret (configure says "Last.fm: no API key") |
 | error 10, "Invalid API key" | wrong key, or a typo in the key |
 | error 13, "Invalid method signature" | wrong secret, or the key and secret are from different accounts |
 | stuck "Waiting..." | the approval page wasn't opened or wasn't approved; the token runs out after an hour |
@@ -435,9 +461,12 @@ Licensing (from Chromaprint's
 - [ ] Check `build/<preset>/core/generated/config.h` shows your contact. Run `manual_mb_ping`.
 - [ ] **Last.fm**: create an API account at <https://www.last.fm/api/account/create>, with no
       callback URL. Note the API key and shared secret.
-- [ ] Put both in CMakeUserPresets.json (`KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET`),
-      `~/.gradle/gradle.properties` (`kithsongLastfmKey`, `kithsongLastfmSecret`) and the
-      matching GitHub secrets. Set both or neither.
+- [ ] Put both in `last.fm.api` at the top of the repo (or CMakeUserPresets.json:
+      `KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET`; `~/.gradle/gradle.properties`:
+      `kithsongLastfmKey`, `kithsongLastfmSecret`) and the matching GitHub secrets. Set both
+      or neither.
+- [ ] Check neither shows in the binary, e.g. `strings kithsong.exe | grep -i <first 8 hex of the key>`
+      (and the same for `libkithsong_jni.so` in the APK).
 - [ ] Run `manual_scrobble` against scratch folders. It should end with
       "Scrobbled as <user>", and the play should show on your Last.fm profile.
 - [ ] **AcoustID** (optional until it's implemented): register at

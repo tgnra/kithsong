@@ -258,7 +258,27 @@ int main(int argc, char **argv) {
   CHECK(queue_rows(config) == 0);
   char *url = NULL;
   CHECK(mc_scrobbler_auth_finish(sc) == MC_ERR_INVALID_ARG); /* no begin */
-  if (!*MC_LASTFM_KEY) CHECK(mc_scrobbler_auth_begin(sc, &url) == MC_ERR_AUTH);
+  if (!mc_lastfm_build_key_present()) CHECK(mc_scrobbler_auth_begin(sc, &url) == MC_ERR_AUTH);
+  {
+    mc_scrobbler_status st;
+    CHECK(mc_scrobbler_status_get(sc, &st) == MC_OK);
+    CHECK(st.has_key == mc_lastfm_build_key_present());
+    mc_scrobbler_status_clear(&st);
+  }
+  if (mc_lastfm_build_key_present()) {
+    /* The build's key, decoded for the call: in the form and the page to approve it on.
+     * (The fake service answers; nothing reaches Last.fm.) */
+    char key[MC_LASTFM_KEY_MAX], want[MC_LASTFM_KEY_MAX + 16];
+    CHECK(mc_lastfm_build_key(key, sizeof key) == 1);
+    CHECK(mc_scrobbler_auth_begin(sc, &url) == MC_OK);
+    snprintf(want, sizeof want, "api_key=%s&", key);
+    CHECK(url && !strncmp(url, MC_LASTFM_AUTH_URL "?", strlen(MC_LASTFM_AUTH_URL) + 1));
+    CHECK(url && strstr(url, want) != NULL);
+    CHECK(strstr(last_form, want) != NULL && strstr(last_form, "api_sig=") != NULL);
+    mc_lastfm_wipe(key, sizeof key);
+    mc_free(url);
+    url = NULL;
+  }
 
   /* Another service, with its own key: sign in, in the browser. */
   CHECK(mc_scrobbler_set_service(sc, "https://scrobble.invalid/2.0/",

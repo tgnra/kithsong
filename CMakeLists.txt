@@ -42,6 +42,8 @@ option(KITHSONG_BUILD_TESTS   "Build core unit tests" ${PROJECT_IS_TOP_LEVEL})
 set(KITHSONG_ACOUSTID_KEY "" CACHE STRING "AcoustID application API key (never commit this)")
 set(KITHSONG_LASTFM_KEY "" CACHE STRING "Last.fm API key, for scrobbling (never commit this)")
 set(KITHSONG_LASTFM_SECRET "" CACHE STRING "Last.fm API shared secret (never commit this)")
+set(KITHSONG_LASTFM_FILE "${CMAKE_CURRENT_SOURCE_DIR}/last.fm.api" CACHE FILEPATH
+  "Where to read the Last.fm key and secret when neither -D nor the environment sets them")
 
 # Which build of the version this is: the 4th field of the Windows file version and shown in
 # the app. CI sets it to the release workflow's run number; local builds are 0.

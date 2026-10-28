@@ -160,3 +160,7 @@ mc_status mc_settings_set_volume(mc_settings *s, int volume) {
   yyjson_mut_obj_remove_key(root, "volume");
   return yyjson_mut_obj_add_int(s->doc, root, "volume", volume) ? MC_OK : MC_ERR_NOMEM;
 }
+
+int mc_settings_scrobble(const mc_settings *s) { return mc_settings_bool(s, "scrobble", 1); }
+
+mc_status mc_settings_set_scrobble(mc_settings *s, int on) { return mc_settings_set_bool(s, "scrobble", on); }

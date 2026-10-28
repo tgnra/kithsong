@@ -352,7 +352,26 @@
     "device_files_none": "Not reported yet",
     "device_address": "Address",
     "device_address_port": { "text": "{0}, port {1:d}", "note": "A device's network address, then its port number." },
-    "device_address_unknown": "Not seen yet"
+    "device_address_unknown": "Not seen yet",
+
+    "scrobble_service": { "text": "Last.fm", "translatable": false },
+    "scrobbling": { "text": "Scrobbling", "note": "Settings heading: sending what you play to Last.fm (\"scrobbling\" is Last.fm's word)." },
+    "scrobble_sign_in": { "text": "_Sign in to Last.fm…", "note": "Opens Last.fm in the browser, where the user allows the app to scrobble." },
+    "scrobble_sign_out": "Sign _out",
+    "scrobble_cancel_sign_in": "_Cancel sign-in",
+    "scrobble_signed_in": { "text": "Signed in as {0}", "note": "{0} is the user's Last.fm name." },
+    "scrobble_signed_out": "Not signed in",
+    "scrobble_waiting": "Waiting for you to allow Kithsong on Last.fm, in your browser…",
+    "scrobble_no_key": { "text": "This copy of Kithsong was built without a Last.fm API key, so it can't scrobble.", "note": "Shown instead of the sign-in button in builds made without the key (e.g. self-built ones)." },
+    "scrobble_sign_in_failed": { "text": "Couldn't sign in ({0}).", "note": "{0} is the reason." },
+    "scrobble_sign_in_timed_out": "Signing in took too long. Try again.",
+    "scrobble_sign_out_title": "Sign out of Last.fm?",
+    "scrobble_sign_out_text": "Your other devices sign out too, when they next sync.",
+    "scrobble_switch": { "text": "Scrobble what I play on this device", "note": "A switch; the sign-in is shared by all devices, this choice isn't." },
+    "scrobble_pending": { "one": "{0:d} play waiting to be sent", "other": "{0:d} plays waiting to be sent" },
+    "scrobble_offline": "Can't reach Last.fm right now; plays are kept and sent later.",
+    "scrobble_refused": "Last.fm turned down this sign-in. Sign out and sign in again.",
+    "scrobble_note": "Signing in opens Last.fm in your browser; Kithsong never sees your password. Signing in or out here does the same on your other devices when they sync."
   },
 
   "linux": {
@@ -488,6 +507,7 @@
   },
 
   "android": {
+    "scrobble_sign_in_short": { "text": "Sign in", "note": "Button beside the Last.fm account in Settings; opens Last.fm in the browser." },
     "core_name": { "text": "musiccore", "translatable": false },
 
     "cover_of": "Cover of {0}",

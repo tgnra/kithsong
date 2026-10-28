@@ -211,7 +211,18 @@ fixed uid `00000000-0000-0000-0000-000000000000` on every device, so a device th
 before it joined a group merges with the group's account by last writer wins, field by field.
 Signing in on any member signs in the group; signing out, or changing the service, signs out
 the group. Each device scrobbles only its own plays, from `scrobble_queue`, which is never
-synced.
+synced, and each decides for itself whether it scrobbles at all (`scrobble` in its
+settings.json or app preferences, never synced).
+
+The session key is a long-lived credential (it lasts until the user revokes the app on
+Last.fm), so it travels only the way all group data does: in the changelog, inside a session's
+Noise-encrypted channel, to devices that are members of the group (paired, holding a key the
+group knows, and not removed). It never goes into discovery announcements or the pairing
+messages themselves: a new device first gets it in the session that follows a pairing the
+user confirmed with the code, and a removed device is refused before any group data is sent. It sits unencrypted
+in each member's `sync.db`, like the device keys. The build's own API key and secret are never
+written to `sync.db` (NULL there means "the build's"), so they don't travel either; a service
+with its own key (`mc_scrobbler_set_service()`) syncs that key and secret with the account.
 
 ### Archives
 

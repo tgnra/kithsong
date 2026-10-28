@@ -14,6 +14,7 @@ import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.playback.FakePlayback
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.playback.PlaybackService
+import ng.kithso.android.playback.Scrobbling
 import ng.kithso.android.playback.SessionPlayback
 import ng.kithso.android.sync.Syncer
 import ng.kithso.android.ui.art.FileArt
@@ -44,6 +45,10 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
     lateinit var playback: Playback
         private set
     lateinit var settings: AppSettings
+        private set
+
+    /** Passes plays on to Last.fm for the group's account (see [Scrobbling]). */
+    lateinit var scrobbling: Scrobbling
         private set
 
     /** Syncs the core's library with this phone's group, even while the made-up one is shown. */
@@ -80,6 +85,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
             settings.deviceName = renamed.takeIf { it != systemDeviceName() }
         }
         core.onChanged = syncer::notifyChanged
+        scrobbling = Scrobbling(libraryDir, File(noBackupFilesDir, "sync"), settings, MainScope())
     }
 
     // The system language changed: the core's text follows it, and the library is read again

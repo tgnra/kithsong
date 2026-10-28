@@ -3,6 +3,7 @@
 #ifndef MC_SCROBBLE_LASTFM_H
 #define MC_SCROBBLE_LASTFM_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "musiccore/musiccore.h"
@@ -22,10 +23,22 @@ extern mc_lastfm_post_fn mc_lastfm_post;
 
 typedef struct mc_lastfm_service {
   const char *api_url;
-  const char *api_key;
-  const char *api_secret;
+  const char *api_key;     /* NULL: the build's (mc_lastfm_build_key()) */
+  const char *api_secret;  /* NULL: the build's, decoded only while a call is signed */
   const char *session_key; /* NULL for the auth calls */
 } mc_lastfm_service;
+
+/* The build's own Last.fm API account (lastfm_key.c), kept obscured in the binary. Room for
+ * either, with its NUL. */
+#define MC_LASTFM_KEY_MAX 128
+/* Whether the build has a key and secret. */
+int mc_lastfm_build_key_present(void);
+/* Decode the build's key or secret into out: 1, or 0 with out "" if there's none or it
+ * doesn't fit. Wipe out with mc_lastfm_wipe() as soon as it's no longer needed. */
+int mc_lastfm_build_key(char *out, size_t cap);
+int mc_lastfm_build_secret(char *out, size_t cap);
+/* Zeroes buf in a way the compiler can't leave out. */
+void mc_lastfm_wipe(void *buf, size_t len);
 
 typedef struct mc_lastfm_param {
   const char *name;

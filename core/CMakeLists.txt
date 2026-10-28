@@ -11,6 +11,8 @@ block(SCOPE_FOR VARIABLES)
   set(KITHSONG_CONTACT "${_contact}")
   configure_file(src/config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/config.h" @ONLY)
 endblock()
+include("${PROJECT_SOURCE_DIR}/cmake/LastfmKey.cmake")
+kithsong_lastfm_key_header("${CMAKE_CURRENT_BINARY_DIR}/generated/lastfm_key.h")
 
 # Embeds a .sql file as a NUL-terminated C string named symbol; the generated source's path
 # is returned in out_var.
@@ -80,6 +82,7 @@ add_library(musiccore STATIC
   src/tagger/tagger.c
   src/net/http.c
   src/scrobble/lastfm.c
+  src/scrobble/lastfm_key.c
   src/scrobble/scrobbler.c
 
   src/net/socket.c

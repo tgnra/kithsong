@@ -29,7 +29,13 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val app = application as KithsongApp
-        val player = CoreMediaPlayer(this) { trackUid -> app.library.recordPlay(trackUid) }
+        val player = CoreMediaPlayer(
+            this,
+            onNowPlaying = { trackUid -> app.scrobbling.nowPlaying(trackUid) },
+        ) { trackUid, startedMs ->
+            app.library.recordPlay(trackUid)
+            app.scrobbling.scrobble(trackUid, startedMs)
+        }
         val openApp = PendingIntent.getActivity(
             this,
             0,

@@ -51,18 +51,30 @@ struct mc_scrobbler {
 /* --- The account --- */
 
 typedef struct account {
-  char *api_url, *auth_url, *api_key, *api_secret;
+  char *api_url, *auth_url;
+  char *api_key, *api_secret;   /* NULL: the build's, which stay encoded until a call */
   char *session_key, *username; /* NULL when signed out */
 } account;
+
+static void free_wiped(char *s) {
+  if (s) mc_lastfm_wipe(s, strlen(s));
+  free(s);
+}
 
 static void account_clear(account *a) {
   free(a->api_url);
   free(a->auth_url);
   free(a->api_key);
-  free(a->api_secret);
-  free(a->session_key);
+  free_wiped(a->api_secret);
+  free_wiped(a->session_key);
   free(a->username);
   memset(a, 0, sizeof *a);
+}
+
+/* Whether the account's service has an API key and secret, its own or the build's. */
+static int account_has_key(const account *a) {
+  int build = mc_lastfm_build_key_present();
+  return (a->api_key ? 1 : build) && (a->api_secret ? 1 : build);
 }
 
 static char *column_or(sqlite3_stmt *stmt, int col, const char *fallback) {
@@ -71,7 +83,8 @@ static char *column_or(sqlite3_stmt *stmt, int col, const char *fallback) {
   return v ? mc_strdup(v) : NULL;
 }
 
-/* Reads the account, with Last.fm and the build's API key filling in what isn't set. */
+/* Reads the account, with Last.fm's addresses filling in what isn't set. The API key and
+ * secret are left NULL when unset, meaning the build's. */
 static mc_status account_read(sqlite3 *db, account *a) {
   memset(a, 0, sizeof *a);
   sqlite3_stmt *stmt;
@@ -84,8 +97,8 @@ static mc_status account_read(sqlite3 *db, account *a) {
   sqlite3_stmt *row = rc == SQLITE_ROW ? stmt : NULL;
   a->api_url = column_or(row, 0, MC_LASTFM_API_URL);
   a->auth_url = column_or(row, 1, MC_LASTFM_AUTH_URL);
-  a->api_key = column_or(row, 2, MC_LASTFM_KEY);
-  a->api_secret = column_or(row, 3, MC_LASTFM_SECRET);
+  a->api_key = column_or(row, 2, NULL);
+  a->api_secret = column_or(row, 3, NULL);
   a->session_key = column_or(row, 4, NULL);
   a->username = column_or(row, 5, NULL);
   sqlite3_finalize(stmt);
@@ -93,7 +106,7 @@ static mc_status account_read(sqlite3 *db, account *a) {
     account_clear(a);
     return MC_ERR_DB;
   }
-  if (!a->api_url || !a->auth_url || !a->api_key || !a->api_secret) {
+  if (!a->api_url || !a->auth_url) {
     account_clear(a);
     return MC_ERR_NOMEM;
   }
@@ -338,8 +351,9 @@ static void run(void *arg) {
     mc_mutex_unlock(&sc->lock);
 
     account acc = {0};
-    int sending = 0, pending = 0;
+    int sending = 0, pending = 0, has_key = mc_lastfm_build_key_present();
     if (open_st == MC_OK && account_read(db, &acc) == MC_OK) {
+      has_key = account_has_key(&acc);
       if (refused && (!acc.session_key || strcmp(refused, acc.session_key))) {
         free(refused);
         refused = NULL;
@@ -386,6 +400,7 @@ static void run(void *arg) {
     sc->status.api_url = acc.api_url;
     acc.username = acc.api_url = NULL;
     sc->status.pending = pending;
+    sc->status.has_key = has_key;
     sc->status.last_error = last_error;
     account_clear(&acc);
     if (quit) break;
@@ -416,6 +431,7 @@ mc_status mc_scrobbler_new(mc_library *lib, const char *config_dir, mc_scrobbler
     free(sc);
     return MC_ERR_NOMEM;
   }
+  sc->status.has_key = mc_lastfm_build_key_present(); /* until the worker reads the account */
   mc_mutex_init(&sc->lock);
   mc_cond_init(&sc->wake);
   mc_status st = mc_thread_start(&sc->thread, run, sc);
@@ -501,7 +517,11 @@ mc_status mc_scrobbler_auth_begin(mc_scrobbler *sc, char **out_url) {
   char *token = NULL;
   int api_error;
   st = mc_lastfm_get_token(&svc, &token, &api_error);
-  char *key = st == MC_OK ? mc_url_escape(a.api_key) : NULL;
+  char build_key[MC_LASTFM_KEY_MAX];
+  const char *api_key = a.api_key;
+  if (!api_key) api_key = mc_lastfm_build_key(build_key, sizeof build_key) ? build_key : "";
+  char *key = st == MC_OK ? mc_url_escape(api_key) : NULL;
+  mc_lastfm_wipe(build_key, sizeof build_key);
   char *tok = st == MC_OK ? mc_url_escape(token) : NULL;
   if (st == MC_OK && key && tok) {
     size_t len = strlen(a.auth_url) + strlen(key) + strlen(tok) + 32;

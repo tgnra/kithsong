@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "musiccore/musiccore.h"
+#include "playback.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)
 #error "settings_view.c needs libadwaita 1.5 or later (AdwPreferencesDialog)"
@@ -18,12 +19,34 @@ typedef struct settings_view {
   void *user;
   GtkWidget *dialog, *folder;
   GtkWidget *name, *address, *leave; /* the Sync group's rows */
+  GtkWidget *lfm_status, *lfm_button, *lfm_switch; /* the Scrobbling group's */
+  guint lfm_timer;
 } settings_view;
 
 static void update_sync(settings_view *s);
 
+/* Signing in to Last.fm outlives the dialog: the user may close it while the browser is open.
+ * One sign-in at a time, on a thread that gets the token, has the page opened, then polls
+ * mc_scrobbler_auth_finish() every AUTH_POLL_MS until approved, cancelled or AUTH_LIMIT_MS. */
+enum { AUTH_POLL_MS = 3000, AUTH_LIMIT_MS = 10 * 60 * 1000, STATUS_MS = 2000 };
+static struct {
+  GThread *thread;
+  GMutex lock;
+  GCond wake;
+  gboolean cancel;        /* under lock */
+  unsigned generation;    /* bumped by each stop, so a stopped thread's news is dropped */
+  mc_status result;       /* of the last sign-in, shown until the next action */
+  gboolean timed_out;     /* it wasn't approved in time */
+  settings_view *shown;   /* the open dialog, or NULL */
+} g_auth;
+
+static void update_scrobble(settings_view *s);
+static void stop_auth(void);
+
 static void settings_view_free(gpointer data) {
   settings_view *s = data;
+  if (s->lfm_timer) g_source_remove(s->lfm_timer);
+  if (g_auth.shown == s) g_auth.shown = NULL;
   g_free(s->settings_dir);
   g_free(s);
 }
@@ -269,6 +292,234 @@ static GtkWidget *build_sync_group(settings_view *s) {
   return group;
 }
 
+/* --- Scrobbling --- */
+
+typedef struct auth_news {
+  unsigned generation;
+  char *url;    /* the page to open (mc_free it), or NULL when it's the result */
+  mc_status st;
+  gboolean timed_out;
+} auth_news;
+
+static void on_uri_launched(GObject *source, GAsyncResult *result, gpointer data) {
+  (void)data;
+  gtk_uri_launcher_launch_finish(GTK_URI_LAUNCHER(source), result, NULL);
+}
+
+/* On the main thread: the auth thread's page to open, or its result. */
+static gboolean auth_news_arrived(gpointer data) {
+  auth_news *n = data;
+  if (n->generation == g_auth.generation) {
+    if (n->url) {
+      GtkUriLauncher *launcher = gtk_uri_launcher_new(n->url);
+      GtkRoot *root = g_auth.shown ? gtk_widget_get_root(g_auth.shown->dialog) : NULL;
+      gtk_uri_launcher_launch(launcher, GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL, NULL, on_uri_launched, NULL);
+      g_object_unref(launcher);
+    } else {
+      g_thread_join(g_auth.thread); /* it's just sent this */
+      g_auth.thread = NULL;
+      g_auth.result = n->st;
+      g_auth.timed_out = n->timed_out;
+      if (g_auth.shown) update_scrobble(g_auth.shown);
+    }
+  }
+  mc_free(n->url);
+  g_free(n);
+  return G_SOURCE_REMOVE;
+}
+
+static void send_news(unsigned generation, char *url, mc_status st, gboolean timed_out) {
+  auth_news *n = g_new0(auth_news, 1);
+  *n = (auth_news){generation, url, st, timed_out};
+  g_idle_add(auth_news_arrived, n);
+}
+
+static gpointer auth_main(gpointer data) {
+  mc_scrobbler *sc = data;
+  g_mutex_lock(&g_auth.lock);
+  unsigned generation = g_auth.generation;
+  g_mutex_unlock(&g_auth.lock);
+  char *url = NULL;
+  mc_status st = mc_scrobbler_auth_begin(sc, &url);
+  gboolean polled = FALSE;
+  if (st == MC_OK) {
+    polled = TRUE;
+    send_news(generation, url, MC_OK, FALSE);
+    gint64 end = g_get_monotonic_time() + (gint64)AUTH_LIMIT_MS * 1000;
+    do {
+      g_mutex_lock(&g_auth.lock);
+      gint64 until = g_get_monotonic_time() + (gint64)AUTH_POLL_MS * 1000;
+      while (!g_auth.cancel && g_cond_wait_until(&g_auth.wake, &g_auth.lock, until)) {
+      }
+      gboolean cancel = g_auth.cancel;
+      g_mutex_unlock(&g_auth.lock);
+      if (cancel) return NULL; /* stop_auth() joins it */
+      st = mc_scrobbler_auth_finish(sc);
+    } while (st == MC_ERR_AUTH && g_get_monotonic_time() < end);
+  }
+  send_news(generation, NULL, st, polled && st == MC_ERR_AUTH);
+  return NULL;
+}
+
+static void start_auth(settings_view *s) {
+  mc_scrobbler *sc = playback_scrobbler();
+  if (!sc || g_auth.thread) return;
+  g_auth.cancel = FALSE;
+  g_auth.result = MC_OK;
+  g_auth.timed_out = FALSE;
+  g_auth.thread = g_thread_new("scrobble-auth", auth_main, sc);
+  update_scrobble(s);
+}
+
+/* Cancels a sign-in in progress and waits for its thread, which may be in a call to the
+ * service (bounded by its timeout). Also called just before the scrobbler is freed. */
+static void stop_auth(void) {
+  if (!g_auth.thread) return;
+  g_mutex_lock(&g_auth.lock);
+  g_auth.cancel = TRUE;
+  g_auth.generation++;
+  g_cond_broadcast(&g_auth.wake);
+  g_mutex_unlock(&g_auth.lock);
+  g_thread_join(g_auth.thread);
+  g_auth.thread = NULL;
+  if (g_auth.shown) update_scrobble(g_auth.shown);
+}
+
+/* Brings the Scrobbling group up to date: signed in or not, whether the build can sign in at
+ * all, plays waiting and the last error. */
+static void update_scrobble(settings_view *s) {
+  mc_scrobbler *sc = playback_scrobbler();
+  mc_scrobbler_status st = {0};
+  gboolean have = sc && mc_scrobbler_status_get(sc, &st) == MC_OK;
+  GString *text = g_string_new(NULL);
+  enum mc_str_id button = MC_STR_SCROBBLE_SIGN_IN;
+  gboolean enabled = have;
+  char line[256];
+
+  if (g_auth.thread) {
+    g_string_append(text, mc_str(MC_STR_SCROBBLE_WAITING));
+    button = MC_STR_SCROBBLE_CANCEL_SIGN_IN;
+    enabled = TRUE;
+  } else if (have && st.username) {
+    mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_SIGNED_IN), MC_S(st.username));
+    g_string_append(text, line);
+    button = MC_STR_SCROBBLE_SIGN_OUT;
+    line[0] = '\0';
+    if (st.last_error == MC_ERR_AUTH) g_strlcpy(line, mc_str(MC_STR_SCROBBLE_REFUSED), sizeof line);
+    else if (st.last_error == MC_ERR_NET) g_strlcpy(line, mc_str(MC_STR_SCROBBLE_OFFLINE), sizeof line);
+    else if (st.pending > 0) mc_format(line, sizeof line, mc_str_plural(MC_STR_SCROBBLE_PENDING, st.pending), MC_D(st.pending));
+    if (line[0]) g_string_append_printf(text, "\n%s", line);
+  } else if (have && !st.has_key) {
+    g_string_append(text, mc_str(MC_STR_SCROBBLE_NO_KEY));
+    enabled = FALSE;
+  } else {
+    g_string_append(text, mc_str(MC_STR_SCROBBLE_SIGNED_OUT));
+  }
+  if (!g_auth.thread && g_auth.result != MC_OK) {
+    if (g_auth.timed_out)
+      g_strlcpy(line, mc_str(MC_STR_SCROBBLE_SIGN_IN_TIMED_OUT), sizeof line);
+    else
+      mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_SIGN_IN_FAILED), MC_S(mc_status_str(g_auth.result)));
+    g_string_append_printf(text, "\n%s", line);
+  }
+  if (have) mc_scrobbler_status_clear(&st);
+
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(s->lfm_status), text->str);
+  g_string_free(text, TRUE);
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->lfm_button), mc_str(button));
+  gtk_widget_set_sensitive(s->lfm_button, enabled);
+}
+
+static gboolean on_scrobble_tick(gpointer data) {
+  update_scrobble(data);
+  return G_SOURCE_CONTINUE;
+}
+
+static void on_sign_out_response(AdwAlertDialog *alert, const char *response, gpointer data) {
+  (void)alert;
+  settings_view *s = data;
+  mc_scrobbler *sc = playback_scrobbler();
+  if (strcmp(response, "sign-out") || !sc) return;
+  g_auth.result = mc_scrobbler_sign_out(sc);
+  g_auth.timed_out = FALSE;
+  update_scrobble(s);
+}
+
+static void on_scrobble_button(GtkWidget *row, gpointer data) {
+  (void)row;
+  settings_view *s = data;
+  mc_scrobbler *sc = playback_scrobbler();
+  mc_scrobbler_status st;
+  if (g_auth.thread) {
+    stop_auth();
+    return;
+  }
+  if (!sc || mc_scrobbler_status_get(sc, &st) != MC_OK) return;
+  gboolean signed_in = st.username != NULL;
+  mc_scrobbler_status_clear(&st);
+  if (!signed_in) {
+    start_auth(s);
+    return;
+  }
+  AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SCROBBLE_SIGN_OUT_TITLE), mc_str(MC_STR_SCROBBLE_SIGN_OUT_TEXT));
+  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", mc_str_mnemonic(MC_STR_CANCEL), "sign-out",
+                                 mc_str_mnemonic(MC_STR_SCROBBLE_SIGN_OUT), NULL);
+  adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "cancel");
+  adw_alert_dialog_set_close_response(ADW_ALERT_DIALOG(alert), "cancel");
+  g_signal_connect(alert, "response", G_CALLBACK(on_sign_out_response), s);
+  adw_dialog_present(alert, s->dialog);
+}
+
+static void on_scrobble_switch(GObject *row, GParamSpec *pspec, gpointer data) {
+  (void)pspec;
+  settings_view *s = data;
+  gboolean on = adw_switch_row_get_active(ADW_SWITCH_ROW(row));
+  playback_set_scrobble(on);
+  mc_settings *settings = NULL;
+  if (mc_settings_load(s->settings_dir, &settings) == MC_OK) {
+    if (mc_settings_set_scrobble(settings, on) != MC_OK || mc_settings_save(settings) != MC_OK)
+      toast(s, mc_str(MC_STR_SETTINGS_SAVE_FAILED));
+    mc_settings_free(settings);
+  }
+}
+
+static GtkWidget *build_scrobble_group(settings_view *s) {
+  GtkWidget *group = adw_preferences_group_new();
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SCROBBLING));
+  adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SCROBBLE_NOTE));
+
+  s->lfm_status = adw_action_row_new();
+  adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(s->lfm_status), FALSE);
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->lfm_status), mc_str(MC_STR_SCROBBLE_SERVICE));
+  gtk_widget_add_css_class(s->lfm_status, "property");
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), s->lfm_status);
+
+#if ADW_CHECK_VERSION(1, 6, 0)
+  s->lfm_button = adw_button_row_new();
+#else
+  s->lfm_button = nav_row(mc_str(MC_STR_SCROBBLE_SIGN_IN), NULL, FALSE);
+  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(s->lfm_button), TRUE);
+#endif
+  g_signal_connect(s->lfm_button, "activated", G_CALLBACK(on_scrobble_button), s);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), s->lfm_button);
+
+  s->lfm_switch = adw_switch_row_new();
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->lfm_switch), mc_str(MC_STR_SCROBBLE_SWITCH));
+  mc_settings *settings = NULL;
+  gboolean on = TRUE;
+  if (mc_settings_load(s->settings_dir, &settings) == MC_OK) on = mc_settings_scrobble(settings);
+  mc_settings_free(settings);
+  adw_switch_row_set_active(ADW_SWITCH_ROW(s->lfm_switch), on);
+  g_signal_connect(s->lfm_switch, "notify::active", G_CALLBACK(on_scrobble_switch), s);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), s->lfm_switch);
+
+  g_auth.shown = s;
+  playback_on_scrobbler_closing(stop_auth);
+  update_scrobble(s);
+  s->lfm_timer = g_timeout_add(STATUS_MS, on_scrobble_tick, s);
+  return group;
+}
+
 void settings_view_present(GtkWidget *parent, const char *settings_dir,
                            settings_view_open_library_fn open_library,
                            settings_view_move_library_fn move_library, const settings_view_sync *sync,
@@ -311,6 +562,7 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
   adw_preferences_page_set_icon_name(ADW_PREFERENCES_PAGE(page), "emblem-system-symbolic");
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(group));
   if (s->has_sync) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_sync_group(s)));
+  adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_scrobble_group(s)));
 
   s->dialog = GTK_WIDGET(adw_preferences_dialog_new());
   adw_dialog_set_title(ADW_DIALOG(s->dialog), mc_str(MC_STR_SETTINGS));

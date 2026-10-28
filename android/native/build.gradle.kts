@@ -22,9 +22,15 @@ android {
                 val acoustidKey = (project.findProperty("kithsongAcoustidKey") as String?) ?: ""
                 arguments += listOf("-DKITHSONG_ACOUSTID_KEY=$acoustidKey")
                 // And -PkithsongLastfmKey=... -PkithsongLastfmSecret=... for scrobbling to Last.fm.
+                // Without them CMake tries $KITHSONG_LASTFM_KEY/_SECRET, then the file
+                // -PkithsongLastfmFile=... names (default: last.fm.api at the top of the repo);
+                // see cmake/LastfmKey.cmake. The core keeps them obscured, never as plain text.
                 val lastfmKey = (project.findProperty("kithsongLastfmKey") as String?) ?: ""
                 val lastfmSecret = (project.findProperty("kithsongLastfmSecret") as String?) ?: ""
                 arguments += listOf("-DKITHSONG_LASTFM_KEY=$lastfmKey", "-DKITHSONG_LASTFM_SECRET=$lastfmSecret")
+                (project.findProperty("kithsongLastfmFile") as String?)?.let {
+                    arguments += "-DKITHSONG_LASTFM_FILE=${file(it).absolutePath.replace('\\', '/')}"
+                }
 
                 // 16 KB page alignment, required by Android 15+ devices; NDK r28 does it by default.
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")

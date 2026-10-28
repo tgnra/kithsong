@@ -35,6 +35,8 @@ static struct {
   BOOL media_controls; /* set up on first play, as it loads WinRT */
   mc_library *lib;     /* where plays are counted, or NULL */
   mc_scrobbler *scrobbler;
+  BOOL scrobble_off;              /* this device doesn't scrobble (the account is the group's) */
+  void (*scrobbler_closing)(void);
   int announced;       /* the item last sent as now playing, or -1 */
   item *items;
   int count;
@@ -87,7 +89,7 @@ static void count_plays(void) {
   while (s.player && mc_player_take_played(s.player, &index, &started_ms) == MC_OK) {
     if (index < 0 || index >= s.count || !s.items[index].uid[0]) continue;
     if (s.lib) mc_library_record_play(s.lib, s.items[index].uid);
-    if (s.scrobbler) mc_scrobbler_scrobble(s.scrobbler, s.items[index].uid, started_ms);
+    if (s.scrobbler && !s.scrobble_off) mc_scrobbler_scrobble(s.scrobbler, s.items[index].uid, started_ms);
   }
 }
 
@@ -111,7 +113,7 @@ static void refresh(void) {
     s.announced = -1;
   } else if (it && st.index != s.announced) {
     s.announced = st.index;
-    if (s.scrobbler && it->uid[0]) mc_scrobbler_now_playing(s.scrobbler, it->uid);
+    if (s.scrobbler && !s.scrobble_off && it->uid[0]) mc_scrobbler_now_playing(s.scrobbler, it->uid);
   }
   if (new_track) {
     now_playing_show(it ? it->title : NULL, it ? it->artist : NULL, duration_ms, it ? it->cover_dir : NULL);
@@ -192,6 +194,7 @@ void playback_free(void) {
 
 void playback_set_library(mc_library *lib, const char *config_dir) {
   count_plays();
+  if (s.scrobbler && s.scrobbler_closing) s.scrobbler_closing();
   mc_scrobbler_free(s.scrobbler);
   s.scrobbler = NULL;
   s.lib = lib;
@@ -380,4 +383,16 @@ BOOL playback_has_current(void) {
 
 BOOL playback_has_next(void) {
   return playback_has_current() && (s.shuffle || s.index + 1 < s.count);
+}
+
+mc_scrobbler *playback_scrobbler(void) {
+  return s.scrobbler;
+}
+
+void playback_on_scrobbler_closing(void (*closing)(void)) {
+  s.scrobbler_closing = closing;
+}
+
+void playback_set_scrobble(BOOL on) {
+  s.scrobble_off = !on;
 }
