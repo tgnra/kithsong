@@ -8,13 +8,13 @@
  *   |  | Library Folder                             | |
  *   |  | /home/me/Music                             | |
  *   |  | Open Another Library...                  > | |
- *   |  | Move Library...  (not available yet)       | |
+ *   |  | Move Library...                          > | |
  *   +--------------------------------------------------+
  *
  * The library folder is read from settings.json in settings_dir. Open Another Library picks a
  * folder and hands it to the caller's open_library; if that succeeds the choice is saved to
- * settings.json (unknown keys are kept). Moving the library isn't implemented yet, so its row
- * is disabled, as on Windows.
+ * settings.json (unknown keys are kept). Move Library closes the dialog and calls the caller's
+ * move_library, which moves it (move_library.c).
  *
  * Wiring it into main.c (settings_dir is ~/.config/musicapp, as main() already builds):
  *
@@ -31,7 +31,7 @@
  *   }
  *
  *   // the header bar's Settings button:
- *   settings_view_present(win, a->settings_dir, open_library, a);
+ *   settings_view_present(win, a->settings_dir, open_library, move_library, a);
  *
  * Windows locks the sidebar (so Settings can't be reached) while an import session is open;
  * do the same here by making the Settings button insensitive from the import view's
@@ -47,9 +47,12 @@
 /* Switches to the library in dir (UTF-8). Returns TRUE if it's now open; FALSE if it couldn't
  * be, after telling the user why. Runs on the main thread, while the dialog is open. */
 typedef gboolean (*settings_view_open_library_fn)(void *user, const char *dir);
+/* Moves the library somewhere the user picks. Called once the dialog has closed. */
+typedef void (*settings_view_move_library_fn)(void *user);
 
 /* Shows the Settings dialog over parent (any widget in the main window). */
 void settings_view_present(GtkWidget *parent, const char *settings_dir,
-                           settings_view_open_library_fn open_library, void *user);
+                           settings_view_open_library_fn open_library,
+                           settings_view_move_library_fn move_library, void *user);
 
 #endif

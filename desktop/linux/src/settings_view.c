@@ -10,6 +10,7 @@
 typedef struct settings_view {
   char *settings_dir;
   settings_view_open_library_fn open_library;
+  settings_view_move_library_fn move_library;
   void *user;
   GtkWidget *dialog, *folder;
 } settings_view;
@@ -81,6 +82,15 @@ static void on_open_activated(AdwActionRow *row, gpointer data) {
   g_object_unref(chooser);
 }
 
+static void on_move_activated(AdwActionRow *row, gpointer data) {
+  (void)row;
+  settings_view *s = data;
+  settings_view_move_library_fn move_library = s->move_library;
+  void *user = s->user;
+  adw_dialog_close(ADW_DIALOG(s->dialog)); /* may free s */
+  if (move_library) move_library(user);
+}
+
 static GtkWidget *nav_row(const char *title, const char *subtitle, gboolean chevron) {
   GtkWidget *row = adw_action_row_new();
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
@@ -90,10 +100,12 @@ static GtkWidget *nav_row(const char *title, const char *subtitle, gboolean chev
 }
 
 void settings_view_present(GtkWidget *parent, const char *settings_dir,
-                           settings_view_open_library_fn open_library, void *user) {
+                           settings_view_open_library_fn open_library,
+                           settings_view_move_library_fn move_library, void *user) {
   settings_view *s = g_new0(settings_view, 1);
   s->settings_dir = g_strdup(settings_dir);
   s->open_library = open_library;
+  s->move_library = move_library;
   s->user = user;
 
   /* The folder is plain text (not markup) and selectable, so it can be copied. */
@@ -108,8 +120,9 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
   gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(open), TRUE);
   g_signal_connect(open, "activated", G_CALLBACK(on_open_activated), s);
 
-  GtkWidget *move = nav_row(mc_str(MC_STR_LIBRARY_MOVE), mc_str(MC_STR_LINUX_NOT_AVAILABLE_YET), FALSE);
-  gtk_widget_set_sensitive(move, FALSE);
+  GtkWidget *move = nav_row(mc_str(MC_STR_LIBRARY_MOVE), NULL, TRUE);
+  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(move), TRUE);
+  g_signal_connect(move, "activated", G_CALLBACK(on_move_activated), s);
 
   GtkWidget *group = adw_preferences_group_new();
   adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_LIBRARY_LOCATION));

@@ -34,6 +34,9 @@ void playback_free(void);
 void playback_set_library(mc_library *lib, const char *config_dir);
 
 
+/* Stops playing and empties the queue, letting go of the file that was playing; for before
+ * the library's files move. */
+void playback_clear(void);
 /* Replaces the queue and plays tracks[start]. */
 void playback_play(const playback_track *tracks, int count, int start);
 /* Pauses or resumes. Returns FALSE if nothing has been queued. */
