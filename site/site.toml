@@ -1,0 +1,29 @@
+title = "Kithsong"
+description = "A music library manager and player for Windows, Linux and Android that keeps every device in sync over your own network."
+base_url = "https://kithso.ng"
+language = "en"
+github = "https://github.com/tgnra/kithsong"
+# An image shown instead of the title text, e.g. "/logo.svg" from static/. Its alt text
+# is the title.
+logo = ""
+
+# The home page's download links, in this order. download.js makes the visitor's own
+# platform (windows, linux or android) the main button. Replace each href with the
+# store page once the app is listed there.
+[[downloads]]
+platform = "windows"
+name = "Windows"
+store = "Microsoft Store"
+href = "#"
+
+[[downloads]]
+platform = "linux"
+name = "Linux"
+store = "Flathub"
+href = "#"
+
+[[downloads]]
+platform = "android"
+name = "Android"
+store = "Google Play"
+href = "#"
