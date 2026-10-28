@@ -998,6 +998,8 @@ static void flush(void) {
     wchar_t text[256];
     mc_wformat(text, 256, mc_str(MC_STR_PROFILE_SAVE_FAILED), MC_S(mc_status_str(st)));
     set_message(text);
+  } else {
+    mc_sync_notify_changed(g_dv.sync);
   }
   /* What's stored now, which may include others' edits made meanwhile. */
   load_profile();
@@ -1064,6 +1066,7 @@ static void apply_name(void) {
     wcsncpy(g_dv.name, s, MC_SYNC_DEVICE_NAME_MAX);
   }
   g_dv.name[MC_SYNC_DEVICE_NAME_MAX] = L'\0';
+  if (!g_dv.is_self) mc_sync_notify_changed(g_dv.sync);
   SetWindowTextW(g_dv.title, g_dv.name);
   SetWindowTextW(g_dv.name_edit, g_dv.name);
   layout_again();
@@ -1116,11 +1119,13 @@ static void remove_device(void) {
 
 static void sync_now(void) {
   if (!g_dv.sync) return;
+  flush();
   /* The user's say-so: confirms the profiles, so their files sync from now on. */
   mc_status st = mc_sync_confirm_now(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
   wchar_t text[256] = L"";
   if (st != MC_OK) mc_wformat(text, 256, mc_str(MC_STR_SYNC_START_FAILED), MC_S(mc_status_str(st)));
   set_message(text);
+  if (st == MC_OK) reload(TRUE); /* confirmed now: the notice goes */
   layout_again();
 }
 
