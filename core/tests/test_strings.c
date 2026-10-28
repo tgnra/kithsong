@@ -15,7 +15,7 @@ static void test_lookup(void) {
   CHECK_STR(mc_str(MC_STR_CANCEL), "Cancel");
   CHECK_STR(mc_str(MC_STR_LINUX_NOT_AVAILABLE_YET), "Not available yet");
   CHECK_STR(mc_str(MC_STR_WINDOWS_COL_YEAR), "Year");
-  CHECK_STR(mc_str(MC_STR_ANDROID_BACK), "Back");
+  CHECK_STR(mc_str(MC_STR_ANDROID_COVER_OF), "Cover of {0}");
   CHECK_STR(mc_str(MC_STR_COUNT), "");
   CHECK_STR(mc_str((enum mc_str_id)-1), "");
 

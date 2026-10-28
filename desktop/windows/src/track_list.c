@@ -76,6 +76,7 @@ static struct {
   mc_library *lib;
   char album_uid[MC_UID_STRLEN];
   BOOL playlist; /* the shown uid is a playlist's */
+  BOOL by_artist; /* an artist's: no header (the artist page has its own), and an album column */
   wchar_t *album_title;
   wchar_t *artist;     /* NULL if unknown */
   int year;            /* 0 if unknown */
@@ -152,6 +153,7 @@ static void set_close_hot(BOOL hot) {
 }
 
 static BOOL in_close(int x, int y) {
+  if (s.by_artist) return FALSE;
   RECT r = close_rect();
   POINT pt = {x, y};
   return PtInRect(&r, pt);
@@ -161,11 +163,11 @@ static void relayout(void) {
   RECT rc;
   GetClientRect(s.wnd, &rc);
   int text_h = 2 * font_height(s.title_font) + font_height(s.font) + font_height(s.sub_font) + 2 * scale(LINE_GAP);
-  s.header_h = scale(PAD_TOP) + max(scale(COVER), text_h) + scale(HEADER_BOTTOM);
-  RECT view = {0, s.header_h + 1, rc.right, rc.bottom}; /* below the header's divider */
+  s.header_h = s.by_artist ? 0 : scale(PAD_TOP) + max(scale(COVER), text_h) + scale(HEADER_BOTTOM);
+  RECT view = {0, s.by_artist ? 0 : s.header_h + 1, rc.right, rc.bottom}; /* below the header's divider */
   scroller_resize(&s.scroll, &view, s.count * scale(ROW_H) + 2 * scale(INSET));
   if (s.tooltip) {
-    TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = 1, .rect = close_rect()};
+    TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = 1, .rect = s.by_artist ? (RECT){0} : close_rect()};
     SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
   }
 }
@@ -315,8 +317,8 @@ void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cove
   if (s.wnd) InvalidateRect(s.wnd, NULL, FALSE);
 }
 
-void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist) {
-  BOOL same = uid && !strcmp(uid, s.album_uid) && !playlist == !s.playlist;
+static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist, BOOL artist) {
+  BOOL same = uid && !strcmp(uid, s.album_uid) && !playlist == !s.playlist && !artist == !s.by_artist;
   /* The selected track; in a playlist its entry, as a track can be in one twice. */
   char keep[MC_UID_STRLEN] = "";
   int was = s.selected;
@@ -330,6 +332,7 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
   s.lib = lib;
   s.album_uid[0] = '\0';
   s.playlist = playlist;
+  s.by_artist = artist;
   s.hot = s.selected = -1;
   s.more_hot = FALSE;
   if (!same) s.scroll.pos = s.scroll.target = 0;
@@ -338,6 +341,7 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
   if (lib && uid && strlen(uid) < MC_UID_STRLEN) {
     strcpy(s.album_uid, uid);
     if (playlist) mc_library_list_playlist_tracks(lib, uid, &list);
+    else if (artist) mc_library_list_artist_tracks(lib, uid, &list);
     else mc_library_list_album_tracks(lib, uid, &list);
   }
   int n = list ? list->count : 0, total_ms = 0;
@@ -354,7 +358,7 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
     r->artist = t->artist && *t->artist ? widen(t->artist) : NULL;
     r->album = t->album && *t->album ? widen(t->album) : NULL;
     r->cover_dir = widen(t->cover_dir);
-    if (playlist) swprintf(r->num, 16, L"%d", i + 1);
+    if (playlist || artist) swprintf(r->num, 16, L"%d", i + 1);
     else if (t->track_no && discs) swprintf(r->num, 16, L"%d-%d", t->disc_no ? t->disc_no : 1, t->track_no);
     else if (t->track_no) swprintf(r->num, 16, L"%d", t->track_no);
     format_duration(t->duration_ms, r->duration, 16);
@@ -375,6 +379,14 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
   relayout();
   if (same && s.selected >= 0) reveal_row(s.selected); /* a moved track stays in view */
   InvalidateRect(s.wnd, NULL, FALSE);
+}
+
+void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist) {
+  show(lib, uid, title, playlist, FALSE);
+}
+
+void track_list_show_artist(mc_library *lib, const char *artist_uid) {
+  show(lib, artist_uid, NULL, FALSE, TRUE);
 }
 
 int track_list_count(void) {
@@ -661,6 +673,13 @@ static void paint_row(canvas *c, int i, BOOL focused) {
   SelectObject(c->dc, s.font);
   SetTextColor(c->dc, dim);
   DrawTextW(c->dc, r->duration, -1, &dur, one_line | DT_RIGHT);
+  if (s.by_artist && r->album) { /* the tracks come from many albums: each one's, beside it */
+    RECT album = title;
+    title.right = album.left = title.left + (title.right - title.left) * 3 / 5;
+    album.left += scale(NUM_GAP);
+    SetTextColor(c->dc, r->path || playing ? dim : theme.text3);
+    DrawTextW(c->dc, r->album, -1, &album, one_line | DT_END_ELLIPSIS);
+  }
   SetTextColor(c->dc, r->path || playing ? text : theme.text3); /* greyed out: not on this device */
   DrawTextW(c->dc, r->title, -1, &title, one_line | DT_END_ELLIPSIS);
 }
@@ -750,7 +769,7 @@ static void paint(HDC dc, const RECT *dirty) {
   /* Header. */
   RECT header = {0, 0, client.right, s.scroll.view.top};
   canvas_clear(c, &header, theme.bg, 255);
-  paint_header(c, client.right);
+  if (!s.by_artist) paint_header(c, client.right);
   SelectObject(c->dc, old_font);
   canvas_opaque(c, dirty);
 
@@ -763,7 +782,8 @@ static void paint(HDC dc, const RECT *dirty) {
 
   scroller_paint(&s.scroll, c);
   RECT top = {0, 0, client.right, 1}; /* continues the album grid's top border */
-  canvas_clear(c, &top, theme.line, 255);
+  RECT left = {0, 0, 1, client.bottom}; /* on the artist page, beside the sidebar: its left border */
+  canvas_clear(c, s.by_artist ? &left : &top, theme.line, 255);
   canvas_blit(c, dc, dirty->left, dirty->top, dirty);
 }
 

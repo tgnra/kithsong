@@ -689,6 +689,48 @@ static void test_artists_and_groups(const char *scratch) {
   }
   mc_artist_list_free(artists);
 
+  /* An artist's albums: Low's own first (Secret Name, though Guest sings on one of its two
+   * tracks, ties with their singles, which go after it), then where they're on most of the
+   * tracks, then least. A track with no artist of its own is its album artist's. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title, artist_uid, year) VALUES"
+                 " ('al6', 'Mix', 'ar3', 2001), ('al7', 'Tribute', 'ar3', 1999);"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
+                 " ('t2', 'al3', NULL, 'Words'), ('t3', 'al4', 'ar2', 'Over the Ocean'),"
+                 " ('t4', 'al6', 'ar2', 'Canada'), ('t5', 'al6', 'ar3', 'Intro'),"
+                 " ('t6', 'al6', 'ar3', 'Outro'), ('t7', 'al7', 'ar2', 'Anon'),"
+                 " ('t8', 'al7', 'ar2', 'Belong'), ('t9', 'al7', 'ar1', 'Something');") == SQLITE_OK);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_artist_albums(lib, "ar2", &albums) == MC_OK && albums && albums->count == 4);
+  if (albums && albums->count == 4) {
+    CHECK_STR(albums->items[0].title, "Secret Name");
+    CHECK(albums->items[0].track_count == 2 && albums->items[0].credited_count == 1);
+    CHECK_STR(albums->items[1].title, "Low Singles");
+    CHECK(albums->items[1].is_singles && albums->items[1].credited_count == 1);
+    CHECK_STR(albums->items[2].title, "Tribute"); /* 2 of 3 */
+    CHECK_STR(albums->items[2].artist, "Guest");
+    CHECK_STR(albums->items[3].title, "Mix"); /* 1 of 3 */
+    CHECK(albums->items[3].track_count == 3 && albums->items[3].credited_count == 1);
+  }
+  mc_album_list_free(albums);
+  albums = NULL;
+  CHECK(mc_library_list_artist_albums(lib, "ar5", &albums) == MC_OK && albums && albums->count == 0);
+  mc_album_list_free(albums);
+  CHECK(mc_library_list_artist_albums(lib, NULL, &albums) == MC_ERR_INVALID_ARG);
+
+  /* Their tracks, by title, from every album; Duet is Guest's, Words Low's by its album. */
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "ar2", &tracks) == MC_OK && tracks && tracks->count == 5);
+  if (tracks && tracks->count == 5) {
+    const char *const titles[] = {"Anon", "Belong", "Canada", "Over the Ocean", "Words"};
+    for (int i = 0; i < 5; i++) CHECK_STR(tracks->items[i].title, titles[i]);
+    CHECK_STR(tracks->items[4].artist, "Low");
+    CHECK_STR(tracks->items[0].album, "Tribute");
+  }
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "ar3", &tracks) == MC_OK && tracks && tracks->count == 3);
+  mc_track_list_free(tracks);
+
   /* Groups by name, ignoring case, each with its number of albums. */
   CHECK(exec(db, "INSERT INTO album_groups (uid, name) VALUES ('g1', 'road trip'), ('g2', 'Empty'),"
                  " ('g3', 'Beatles');"

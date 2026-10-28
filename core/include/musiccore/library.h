@@ -71,6 +71,10 @@ typedef struct mc_album_info {
   int is_singles; /* an artist's "<artist> Singles" album */
   int has_art;    /* folder holds cover.jpg or cover.png */
   char *folder;   /* absolute path of the album's folder; NULL if it has no files here */
+  /* From mc_library_list_artist_albums() only (0 elsewhere): the album's tracks, and how
+   * many of them are credited to the artist. */
+  int track_count;
+  int credited_count;
 } mc_album_info;
 
 typedef struct mc_album_list {
@@ -157,6 +161,18 @@ typedef struct mc_artist_list {
  * with mc_artist_list_free(). */
 mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out);
 void mc_artist_list_free(mc_artist_list *list);
+
+/* A track is credited to its own artist, or to its album's when it has none; a track has one
+ * artist, so a duet credited "A & B" is that one artist's.
+ *
+ * The albums artist_uid appears on, as the album artist or credited on any track, with
+ * track_count and credited_count filled in. Their own albums come first: the album artist's,
+ * then by the share of the tracks credited to them, most first; then singles last, by year
+ * and title. Free with mc_album_list_free(). */
+mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid, mc_album_list **out);
+/* Every track credited to artist_uid, by title (then album and track number). Free with
+ * mc_track_list_free(). */
+mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid, mc_track_list **out);
 
 typedef struct mc_album_group_info {
   char uid[MC_UID_STRLEN];

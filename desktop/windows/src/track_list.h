@@ -55,6 +55,10 @@ void track_list_update(UINT dpi);
 /* Shows an album's tracks, or a playlist's, or nothing for a NULL uid. Showing the same
  * one again reloads it (after an import, say), keeping the selection and scroll position. */
 void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist);
+/* Shows the tracks credited to an artist, numbered in order, each with its album beside it,
+ * and no header or close button: on the artist page, which has its own. Escape still sends
+ * TLN_CLOSE. Showing the same one again reloads it, as track_list_show does. */
+void track_list_show_artist(mc_library *lib, const char *artist_uid);
 /* The header's details for the album shown: its artist (NULL shows "Unknown Artist"), year
  * (0 if unknown) and the folder holding its cover (NULL if there's none). Call after
  * track_list_show. A playlist's header shows "Playlist" for the artist, and cover is its
