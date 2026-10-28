@@ -252,6 +252,31 @@ static void test_grid(mc_library *lib) {
   mc_free(path);
 }
 
+/* An album group's cover: its first four distinct images, in the group's order. Pruning
+ * keeps it. */
+#define GROUP1 "00000000-0000-7000-8000-000000000011"
+static void test_group(mc_library *lib) {
+  char *path = (char *)"x";
+  CHECK(mc_album_group_art(lib, PL1, g_cache, &path) == MC_ERR_NOT_FOUND && !path); /* a playlist's uid */
+  CHECK(exec(mc_library_db(lib), "INSERT INTO album_groups (uid, name) VALUES ('" GROUP1 "', 'G')") == SQLITE_OK);
+  CHECK(mc_album_group_art(lib, GROUP1, g_cache, &path) == MC_OK && !path);
+
+  CHECK(mc_album_group_add(lib, GROUP1, "al3") == MC_OK);
+  CHECK(mc_album_group_art(lib, GROUP1, g_cache, &path) == MC_OK && is_cover_of(path, 3));
+  mc_free(path);
+
+  /* 6 shares 5's image, so it's passed over though it isn't next to 5. */
+  const char *const more[] = {"al5", "al1", "al6", "al0", "al2"};
+  for (int i = 0; i < 5; i++) CHECK(mc_album_group_add(lib, GROUP1, more[i]) == MC_OK);
+  static const int want[4] = {3, 5, 1, 0};
+  path = NULL;
+  CHECK(mc_album_group_art(lib, GROUP1, g_cache, &path) == MC_OK && in_cache(path));
+  CHECK(path && grid_is(path, want));
+  CHECK(mc_playlist_art_prune(lib, g_cache) == MC_OK);
+  CHECK(path && mc_file_exists(path));
+  mc_free(path);
+}
+
 /* A cover that won't decode gives way to the next; with fewer than four left, the best one
  * that does decode, alone. */
 static void test_bad_cover(mc_library *lib) {
@@ -343,6 +368,7 @@ int main(int argc, char **argv) {
   test_args(lib);
   test_few(lib);
   test_grid(lib);
+  test_group(lib);
   test_bad_cover(lib);
   test_prune(lib);
 

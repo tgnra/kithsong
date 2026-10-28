@@ -9,6 +9,7 @@
  *   | Albums    |                                    |  is picked) |
  *   | Artists   |          album grid                |             |
  *   | Playlists |                                    |             |
+ *   | Album grp |                                    |             |
  *   | RECENTS   |                                    |             |
  *   | DEVICES   |                                    |             |
  *   |-----------|                                    |             |
@@ -17,8 +18,8 @@
  *   +-----------+------------------------------------+-------------+
  *
  * The sidebar picks the page beside it. Its RECENTS are the albums and playlists last
- * played, here or on another device (they sync with the library); clicking one shows it on
- * the Albums or Playlists page. Home is greyed out until there's a home page. Search,
+ * played and the album groups last opened, here or on another device (they sync with the
+ * library); clicking one shows it on the Albums, Playlists or Album Groups page. Home is greyed out until there's a home page. Search,
  * Import and Settings replace the album grid and track list with the search page
  * (search_view.c), the import view (import_view.c) or the settings view (settings_view.c);
  * a search result opens on the Albums or Playlists page. Once an
@@ -32,7 +33,8 @@
  * through the extended frame. Everything drawn there needs real alpha, which GDI doesn't
  * give, so it's drawn with canvas.c.
  *
- * The album grid is album_grid.c (which also shows the playlists, on the Playlists page), the
+ * The album grid is album_grid.c (which also shows the playlists, on the Playlists page, and
+ * the album groups, on the Album Groups page, making their changes itself), the
  * sidebar sidebar.c, the track list track_list.c and the seekbar beside the playback buttons
  * now_playing.c. The track list's Add to Playlist menu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
@@ -218,10 +220,11 @@ static void update_font(void) {
   g_app.font = font;
 }
 
-/* Albums, Artists and Playlists all show the album grid: Playlists with the playlists in
- * it, the others the albums for now. */
+/* Albums, Artists, Playlists and Album Groups all show the album grid: Playlists with the
+ * playlists in it, Album Groups with the groups, the others the albums for now. */
 static BOOL library_page(void) {
-  return g_app.page == PAGE_ALBUMS || g_app.page == PAGE_ARTISTS || g_app.page == PAGE_PLAYLISTS;
+  return g_app.page == PAGE_ALBUMS || g_app.page == PAGE_ARTISTS || g_app.page == PAGE_PLAYLISTS ||
+         g_app.page == PAGE_ALBUM_GROUPS;
 }
 
 static void layout(void) {
@@ -305,7 +308,8 @@ static void paint_background(HDC dc, const RECT *area) {
 static void show_page(sidebar_page page) {
   g_app.page = page;
   if (page != PAGE_DEVICE) sidebar_select(page);
-  if (library_page()) album_grid_show_playlists(page == PAGE_PLAYLISTS);
+  if (library_page())
+    album_grid_show(page == PAGE_PLAYLISTS ? AGV_PLAYLISTS : page == PAGE_ALBUM_GROUPS ? AGV_GROUPS : AGV_ALBUMS);
   if (page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
   import_view_show(page == PAGE_IMPORT);
   settings_view_show(page == PAGE_SETTINGS);
@@ -337,9 +341,9 @@ static void show_album(void) {
   }
 }
 
-/* The sidebar's recents: the albums and playlists last played, on any device. Artists,
- * album groups and smart playlists have no page here to open them on, so they're left out
- * (they're recorded on other devices). */
+/* The sidebar's recents: the albums and playlists last played and album groups last opened,
+ * on any device. Artists and smart lists have no page here to open them on, so they're left
+ * out (they're recorded on other devices). */
 static void refresh_recents(void) {
   mc_recent_list *list = NULL;
   if (!g_app.lib || mc_library_list_recents(g_app.lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
@@ -348,12 +352,12 @@ static void refresh_recents(void) {
   int n = 0;
   for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
     const mc_recent_info *r = &list->items[i];
-    if (r->is_smart || (r->kind != MC_RECENT_ALBUM && r->kind != MC_RECENT_PLAYLIST)) continue;
+    if (r->is_smart || r->kind == MC_RECENT_ARTIST) continue;
     BOOL album = r->kind == MC_RECENT_ALBUM;
     names[n] = wide_from_utf8(r->name ? r->name : "");
     artists[n] = album ? wide_from_utf8(r->artist ? r->artist : mc_str(MC_STR_UNKNOWN_ARTIST)) : NULL;
-    items[n] = (sidebar_recent){.kind = r->kind, .name = names[n],
-                                .detail = album ? artists[n] : mc_wstr(MC_STR_PLAYLIST)};
+    const wchar_t *kind = mc_wstr(r->kind == MC_RECENT_PLAYLIST ? MC_STR_PLAYLIST : MC_STR_ALBUM_GROUP);
+    items[n] = (sidebar_recent){.kind = r->kind, .name = names[n], .detail = album ? artists[n] : kind};
     snprintf(items[n].uid, sizeof items[n].uid, "%s", r->uid);
     n++;
   }
@@ -372,6 +376,11 @@ static void open_recent(void) {
   if (!clicked) return;
   char uid[MC_UID_STRLEN];
   snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when the recents refresh */
+  if (kind == MC_RECENT_ALBUM_GROUP) {
+    show_page(PAGE_ALBUM_GROUPS);
+    album_grid_open_group(uid);
+    return;
+  }
   show_page(kind == MC_RECENT_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUMS);
   album_grid_select(uid);
 }
@@ -386,10 +395,15 @@ static void refresh_library(void) {
   search_view_set_library(g_app.lib);
 }
 
-/* A search result was opened: an album or playlist on its page, a track on its album with
- * the track selected. */
+/* A search result was opened: an album, playlist or album group on its page, a track on its
+ * album with the track selected. */
 static void open_search_result(void) {
   search_view_hit hit = *search_view_opened();
+  if (hit.kind == MC_SEARCH_ALBUM_GROUP) {
+    show_page(PAGE_ALBUM_GROUPS);
+    album_grid_open_group(hit.uid);
+    return;
+  }
   if (hit.kind == MC_SEARCH_PLAYLIST) {
     show_page(PAGE_PLAYLISTS);
     album_grid_select(hit.uid);
@@ -884,6 +898,10 @@ static void on_command(int id, int code) {
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) show_album();
+      else if (code == AGN_LIBRARY_CHANGED) refresh_library();
+      else if (code == AGN_OPEN_GROUP && g_app.lib && album_grid_group() &&
+               mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, album_grid_group()) == MC_OK)
+        refresh_recents();
       break;
     case ID_PREV:
       playback_previous();

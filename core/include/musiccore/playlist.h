@@ -62,10 +62,33 @@ mc_status mc_playlist_remove(mc_library *lib, const char *entry_uid);
 mc_status mc_playlist_art(mc_library *lib, const char *playlist_uid, const char *cache_dir,
                           char **out_path);
 
-/* Deletes cached grids in cache_dir for playlists that no longer exist, and temp files
- * from writes abandoned over an hour ago. Only files named as mc_playlist_art() names them
- * are touched. A missing cache_dir is empty. */
+/* Deletes cached grids in cache_dir for playlists and album groups that no longer exist,
+ * and temp files from writes abandoned over an hour ago. Only files named as
+ * mc_playlist_art() names them are touched. A missing cache_dir is empty. */
 mc_status mc_playlist_art_prune(mc_library *lib, const char *cache_dir);
+
+/* Album groups: playlists of albums (see docs/schema.md). Entries are ordered by fractional
+ * position keys like a playlist's, but an album is in a group at most once. Listing them
+ * is in library.h (mc_library_list_album_groups(), mc_library_list_album_group_albums()).
+ * MC_ERR_NOT_FOUND means the group or album named doesn't exist. */
+
+/* name must not be empty; names needn't be unique. */
+mc_status mc_album_group_create(mc_library *lib, const char *name, char out_uid[MC_UID_STRLEN]);
+mc_status mc_album_group_rename(mc_library *lib, const char *group_uid, const char *name);
+/* Deletes the group and its entries; the albums are untouched. */
+mc_status mc_album_group_delete(mc_library *lib, const char *group_uid);
+/* Adds album_uid at the end of the group. MC_OK without a change if it's already in it. */
+mc_status mc_album_group_add(mc_library *lib, const char *group_uid, const char *album_uid);
+/* Takes album_uid out of the group (every entry for it, should sync have left two).
+ * MC_ERR_NOT_FOUND if it isn't in it. */
+mc_status mc_album_group_remove(mc_library *lib, const char *group_uid, const char *album_uid);
+
+/* A group's cover, made as mc_playlist_art() makes a playlist's, into the same cache_dir,
+ * except that the four covers are the group's first four (by distinct image, in the
+ * group's order) rather than a seeded random pick. With 1 to 3 covers, it's the first
+ * album's; with none, *out_path is NULL. */
+mc_status mc_album_group_art(mc_library *lib, const char *group_uid, const char *cache_dir,
+                             char **out_path);
 
 #ifdef __cplusplus
 }

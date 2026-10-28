@@ -12,6 +12,9 @@
  * the default button (Enter), and stay disabled while the name is blank or, renaming,
  * unchanged. Delete's default is Cancel. Escape cancels any of them. A failure is reported
  * in a message box of its own.
+ *
+ * Album groups have the same three, with their own titles and Delete's note ("Its albums
+ * stay in the library.").
  */
 #ifndef MUSICAPP_PLAYLIST_DIALOGS_H
 #define MUSICAPP_PLAYLIST_DIALOGS_H
@@ -24,5 +27,9 @@
 BOOL playlist_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]);
 BOOL playlist_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
 BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
+
+BOOL album_group_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]);
+BOOL album_group_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
+BOOL album_group_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
 
 #endif

@@ -173,6 +173,9 @@ typedef struct mc_album_group_list {
  * mc_album_group_list_free(). */
 mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **out);
 void mc_album_group_list_free(mc_album_group_list *list);
+/* A manual album group's albums in the group's order, each once. MC_ERR_NOT_FOUND if
+ * there's no such group. Free with mc_album_list_free(). */
+mc_status mc_library_list_album_group_albums(mc_library *lib, const char *group_uid, mc_album_list **out);
 
 /* Recents: what was last opened, on any device. They're library data and sync with it; an
  * item has one entry everywhere, which the newest open wins. */

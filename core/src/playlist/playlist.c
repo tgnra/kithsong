@@ -1,5 +1,6 @@
-/* Playlists, ordered by fractional index keys (see schema_v1.sql, playlist_entries). Every
- * write goes through mc_library_begin_write(), and the changelog triggers record it. */
+/* Playlists and album groups, ordered by fractional index keys (see schema_v1.sql,
+ * playlist_entries, and docs/schema.md). Every write goes through mc_library_begin_write(),
+ * and the changelog triggers record it. */
 #include "musiccore/playlist.h"
 
 #include <stdlib.h>
@@ -170,4 +171,61 @@ mc_status mc_playlist_move(mc_library *lib, const char *entry_uid, const char *a
 mc_status mc_playlist_remove(mc_library *lib, const char *entry_uid) {
   if (!lib || !entry_uid) return MC_ERR_INVALID_ARG;
   return write_txn(lib, "DELETE FROM playlist_entries WHERE uid = ?1", entry_uid, NULL);
+}
+
+/* --- Album groups --- */
+
+mc_status mc_album_group_create(mc_library *lib, const char *name, char out_uid[MC_UID_STRLEN]) {
+  if (!lib || !name || !*name || !out_uid) return MC_ERR_INVALID_ARG;
+  char uid[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(uid);
+  if (st == MC_OK) st = write_txn(lib, "INSERT INTO album_groups (uid, name) VALUES (?1, ?2)", uid, name);
+  if (st == MC_OK) memcpy(out_uid, uid, MC_UID_STRLEN);
+  return st;
+}
+
+mc_status mc_album_group_rename(mc_library *lib, const char *group_uid, const char *name) {
+  if (!lib || !group_uid || !name || !*name) return MC_ERR_INVALID_ARG;
+  return write_txn(lib, "UPDATE album_groups SET name = ?2 WHERE uid = ?1", group_uid, name);
+}
+
+mc_status mc_album_group_delete(mc_library *lib, const char *group_uid) {
+  if (!lib || !group_uid) return MC_ERR_INVALID_ARG;
+  return write_txn(lib, "DELETE FROM album_groups WHERE uid = ?1", group_uid, NULL);
+}
+
+mc_status mc_album_group_add(mc_library *lib, const char *group_uid, const char *album_uid) {
+  if (!lib || !group_uid || !album_uid) return MC_ERR_INVALID_ARG;
+  char uid[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(uid);
+  if (st != MC_OK) return st;
+  if ((st = mc_library_begin_write(lib)) != MC_OK) return st;
+
+  char *there = NULL, *last = NULL, *position = NULL;
+  st = query_text(lib, "SELECT uid FROM album_group_entries WHERE group_uid = ?1 AND album_uid = ?2", group_uid,
+                  album_uid, NULL, &there);
+  if (st == MC_OK && there) { /* already in it */
+    free(there);
+    mc_library_rollback(lib);
+    return MC_OK;
+  }
+  if (st == MC_OK)
+    st = query_text(lib, "SELECT max(position) FROM album_group_entries WHERE group_uid = ?1", group_uid, NULL,
+                    NULL, &last);
+  if (st == MC_OK && !(position = mc_frac_key_between(last, NULL))) st = MC_ERR_FORMAT;
+  if (st == MC_OK)
+    st = write_one(lib,
+                   "INSERT INTO album_group_entries (uid, group_uid, album_uid, position) VALUES (?1, ?2, ?3, ?4)",
+                   uid, group_uid, album_uid, position);
+  free(last);
+  free(position);
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
+mc_status mc_album_group_remove(mc_library *lib, const char *group_uid, const char *album_uid) {
+  if (!lib || !group_uid || !album_uid) return MC_ERR_INVALID_ARG;
+  return write_txn(lib, "DELETE FROM album_group_entries WHERE group_uid = ?1 AND album_uid = ?2", group_uid,
+                   album_uid);
 }
