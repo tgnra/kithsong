@@ -52,6 +52,8 @@
 /* How long a receiver waits for FILE_HDR: the sender may be encoding the file. */
 #define FETCH_WAIT_MS (10 * 60 * 1000)
 #define MAX_FILE_BYTES ((int64_t)4 << 30)
+/* The largest cover COVER_HDR may announce; a cover is held in memory whole. */
+#define MAX_COVER_BYTES ((int64_t)32 << 20)
 /* A device needs this much free space to transcode for others. */
 #define MIN_TRANSCODE_FREE ((int64_t)256 << 20)
 /* Unknown files younger than this are left alone: an import may be about to record them. */
@@ -869,6 +871,134 @@ static mc_status serve_prepare(mc_session *s, const unsigned char *payload, size
   return MC_OK;
 }
 
+/* --- Covers, serving --- */
+
+/* "jpg" or "png" by the image's magic bytes, else NULL. */
+static const char *image_ext(const unsigned char *img, size_t len) {
+  static const unsigned char png[] = {0x89, 'P', 'N', 'G'}, jpg[] = {0xFF, 0xD8, 0xFF};
+  if (len >= 4 && !memcmp(img, png, 4)) return "png";
+  if (len >= 3 && !memcmp(img, jpg, 3)) return "jpg";
+  return NULL;
+}
+
+/* A whole file of up to MAX_COVER_BYTES. */
+static int read_small(const char *path, unsigned char **out, size_t *len) {
+  int64_t size = 0, mtime = 0;
+  *out = NULL;
+  if (mc_file_info(path, &size, &mtime) != MC_OK || size <= 0 || size > MAX_COVER_BYTES) return 0;
+  FILE *f = mc_fopen(path, "rb");
+  unsigned char *buf = f ? malloc((size_t)size) : NULL;
+  int ok = buf && fread(buf, 1, (size_t)size, f) == (size_t)size;
+  if (f) fclose(f);
+  if (!ok) {
+    free(buf);
+    return 0;
+  }
+  *out = buf;
+  *len = (size_t)size;
+  return 1;
+}
+
+/* An album's cover as this device has it: the image file in a folder holding the album's
+ * files (whatever mc_coverart_find() takes: cover, folder or front, any case), else a
+ * picture embedded in one of those files. Originals are looked at first. */
+static int album_cover(mc_library *lib, const char *album, unsigned char **img, size_t *len,
+                       const char **ext) {
+  sqlite3_stmt *stmt;
+  *img = NULL;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT f.path FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                         " WHERE t.album_uid = ?1 ORDER BY f.source_file_uid IS NOT NULL, f.path"
+                         " LIMIT 50",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return 0;
+  sqlite3_bind_text(stmt, 1, album, -1, SQLITE_STATIC);
+  char **paths = NULL, *last_dir = NULL;
+  int n = 0, found = 0;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    char *abs = mc_library_abspath(lib, (const char *)sqlite3_column_text(stmt, 0));
+    char **more = abs ? realloc(paths, (size_t)(n + 1) * sizeof *more) : NULL;
+    if (!more) {
+      free(abs);
+      break;
+    }
+    paths = more;
+    paths[n++] = abs;
+  }
+  sqlite3_finalize(stmt);
+  /* An image file beside them, looking in each folder once. */
+  for (int i = 0; i < n && !found; i++) {
+    char *dir = mc_strdup(paths[i]), *sep = dir ? strrchr(dir, MC_PATH_SEP) : NULL;
+    if (sep) *sep = '\0';
+    if (!sep || (last_dir && !strcmp(last_dir, dir))) {
+      free(dir);
+      continue;
+    }
+    free(last_dir);
+    last_dir = dir;
+    char *cover = mc_coverart_find(dir);
+    if (cover && read_small(cover, img, len)) {
+      if ((*ext = image_ext(*img, *len)) != NULL) found = 1;
+      else free(*img);
+    }
+    free(cover);
+  }
+  free(last_dir);
+  /* Else a picture embedded in one of the first few. */
+  for (int i = 0; i < n && i < 5 && !found; i++) {
+    if (mc_tags_read_picture(paths[i], img, len) != MC_OK) continue;
+    if (*len <= (size_t)MAX_COVER_BYTES && (*ext = image_ext(*img, *len)) != NULL) found = 1;
+    else free(*img);
+  }
+  for (int i = 0; i < n; i++) free(paths[i]);
+  free(paths);
+  if (!found) *img = NULL;
+  return found;
+}
+
+/* COVER_REQ {"album"}: COVER_HDR {"album", "ext", "size", "sha256"} and the bytes as
+ * FILE_DATA, or FILE_ERR {"album", "reason"} when this device has no cover for it. */
+static mc_status serve_cover(mc_session *s, const unsigned char *payload, size_t len) {
+  yyjson_doc *req = parse(payload, len);
+  if (!req) return MC_ERR_FORMAT;
+  char album[MC_UID_STRLEN] = "";
+  const char *a = obj_str(req, "album");
+  if (is_uid(a)) memcpy(album, a, MC_UID_STRLEN);
+  yyjson_doc_free(req);
+
+  unsigned char *img = NULL;
+  size_t size = 0;
+  const char *ext = NULL;
+  int have = album[0] && album_cover(s->conn->lib, album, &img, &size, &ext);
+  yyjson_mut_val *root;
+  yyjson_mut_doc *doc = new_doc(&root);
+  if (!doc) {
+    free(img);
+    return MC_ERR_NOMEM;
+  }
+  yyjson_mut_obj_add_strcpy(doc, root, "album", album);
+  if (!have) {
+    yyjson_mut_obj_add_str(doc, root, "reason", album[0] ? "missing" : "format");
+    return send_doc(s->ch, MC_MSG_FILE_ERR, doc);
+  }
+  unsigned char digest[32];
+  char sha[SHA_STRLEN];
+  mbedtls_sha256(img, size, digest, 0);
+  hex(digest, sha);
+  yyjson_mut_obj_add_str(doc, root, "ext", ext);
+  yyjson_mut_obj_add_int(doc, root, "size", (int64_t)size);
+  yyjson_mut_obj_add_strcpy(doc, root, "sha256", sha);
+  mc_status st = send_doc(s->ch, MC_MSG_COVER_HDR, doc);
+  for (size_t sent = 0; st == MC_OK && sent < size;) {
+    size_t want = size - sent < MC_CHANNEL_MAX_PAYLOAD ? size - sent : MC_CHANNEL_MAX_PAYLOAD;
+    st = mc_channel_send(s->ch, MC_MSG_FILE_DATA, img + sent, want);
+    sent += want;
+    s->bytes_sent += (int64_t)want;
+  }
+  free(img);
+  return st;
+}
+
 /* The other side's turn: serves its requests until FILES_DONE. */
 static mc_status serve_turn(mc_session *s) {
   int transcoded = 0;
@@ -886,6 +1016,8 @@ static mc_status serve_turn(mc_session *s) {
       st = serve_file(s, payload, len, &transcoded);
     else if (type == MC_MSG_PREPARE_REQ)
       st = serve_prepare(s, payload, len);
+    else if (type == MC_MSG_COVER_REQ)
+      st = serve_cover(s, payload, len);
     else
       st = MC_ERR_FORMAT; /* an ERROR, or out of turn */
     if (st != MC_OK) break;
@@ -937,9 +1069,10 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
   return st;
 }
 
-/* Covers aren't transferred: the album folder of a received file gets its cover from the
- * file's embedded picture (transcodes embed the source's cover), when the album has art
- * (albums.art_hash) and the folder no cover yet. abs is the received file. */
+/* The album folder of a received file gets its cover from the file's embedded picture
+ * (transcodes embed the source's cover), when the album has art (albums.art_hash) and the
+ * folder no cover yet. Folders whose files carry no picture get theirs from
+ * fetch_covers(). abs is the received file. */
 static void ensure_cover(mc_library *lib, const char *track, const char *abs) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
@@ -960,8 +1093,7 @@ static void ensure_cover(mc_library *lib, const char *track, const char *abs) {
   unsigned char *img = NULL;
   size_t len = 0;
   if (!cover && mc_tags_read_picture(abs, &img, &len) == MC_OK) {
-    static const unsigned char png[] = {0x89, 'P', 'N', 'G'}, jpg[] = {0xFF, 0xD8, 0xFF};
-    const char *ext = len >= 4 && !memcmp(img, png, 4) ? "png" : len >= 3 && !memcmp(img, jpg, 3) ? "jpg" : NULL;
+    const char *ext = image_ext(img, len);
     mc_buffer buf = {(char *)img, len};
     if (ext) mc_coverart_save(dir, &buf, ext); /* without one, the grid shows a placeholder */
   }
@@ -1255,6 +1387,116 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   return st;
 }
 
+/* --- Covers, asking --- */
+
+/* COVER_REQ for album, saving a good answer as dir's cover. The return value is only for
+ * errors that end the session. */
+static mc_status fetch_cover(mc_session *s, const char *album, const char *dir) {
+  yyjson_mut_val *root;
+  yyjson_mut_doc *doc = new_doc(&root);
+  if (!doc) return MC_ERR_NOMEM;
+  yyjson_mut_obj_add_strcpy(doc, root, "album", album);
+  mc_status st = send_doc(s->ch, MC_MSG_COVER_REQ, doc);
+  uint8_t type;
+  const unsigned char *payload;
+  size_t len;
+  if (st == MC_OK) st = mc_channel_recv(s->ch, &type, &payload, &len);
+  if (st != MC_OK) return st;
+  if (type == MC_MSG_FILE_ERR) return MC_OK;
+  if (type != MC_MSG_COVER_HDR) return MC_ERR_FORMAT;
+  yyjson_doc *hdr = parse(payload, len);
+  if (!hdr) return MC_ERR_FORMAT;
+  const char *h_album = obj_str(hdr, "album"), *h_sha = obj_str(hdr, "sha256");
+  int64_t size = obj_int(hdr, "size");
+  char sha[SHA_STRLEN] = "";
+  int ok = h_album && !strcmp(h_album, album) && size > 0 && size <= MAX_COVER_BYTES;
+  if (ok && is_sha(h_sha)) memcpy(sha, h_sha, SHA_STRLEN);
+  yyjson_doc_free(hdr);
+  if (!ok) return MC_ERR_FORMAT; /* can't tell how much follows */
+
+  unsigned char *img = malloc((size_t)size);
+  if (!img) return MC_ERR_NOMEM;
+  for (int64_t have = 0; have < size;) {
+    if ((st = mc_channel_recv(s->ch, &type, &payload, &len)) != MC_OK) break;
+    if (type != MC_MSG_FILE_DATA || (int64_t)len > size - have) {
+      st = MC_ERR_FORMAT;
+      break;
+    }
+    memcpy(img + have, payload, len);
+    have += (int64_t)len;
+    s->bytes_received += (int64_t)len;
+  }
+  if (st == MC_OK) {
+    unsigned char digest[32];
+    char got[SHA_STRLEN];
+    mbedtls_sha256(img, (size_t)size, digest, 0);
+    hex(digest, got);
+    const char *ext = image_ext(img, (size_t)size); /* from the bytes, not the peer */
+    mc_buffer buf = {(char *)img, (size_t)size};
+    if (strcmp(got, sha) != 0)
+      fprintf(stderr, "musiccore: sync: the cover of %s from %s failed its checksum\n", album,
+              s->peer_uid);
+    else if (ext && mc_coverart_save(dir, &buf, ext) == MC_OK)
+      s->covers_received++;
+  }
+  free(img);
+  return st;
+}
+
+/* Asks the peer for the cover of each folder here that holds files of an album with art
+ * (albums.art_hash) but has no cover. A received file's embedded picture gives its folder
+ * one as it arrives (ensure_cover()); this is for covers that exist only as an image file
+ * beside the originals, as an import's downloaded art does, and it also catches up a
+ * device that synced before covers were sent. Singles share a folder and get none. */
+static mc_status fetch_covers(mc_session *s) {
+  if (!s->peer_covers) return MC_OK; /* an older peer would end the session */
+  mc_library *lib = s->conn->lib;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT al.uid, f.path FROM albums al"
+                         " JOIN tracks t ON t.album_uid = al.uid"
+                         " JOIN files f ON f.track_uid = t.uid"
+                         " WHERE al.art_hash IS NOT NULL AND al.kind <> 'singles'"
+                         " ORDER BY al.uid, f.path",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  typedef struct need {
+    char album[MC_UID_STRLEN];
+    char *dir;
+  } need;
+  need *ns = NULL;
+  int n = 0;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *album = (const char *)sqlite3_column_text(stmt, 0);
+    const char *rel = (const char *)sqlite3_column_text(stmt, 1);
+    char *dir = is_uid(album) && rel ? mc_library_abspath(lib, rel) : NULL;
+    char *sep = dir ? strrchr(dir, MC_PATH_SEP) : NULL;
+    if (sep) *sep = '\0';
+    int dup = 0;
+    for (int i = n - 1; sep && i >= 0 && !dup && !strcmp(ns[i].album, album); i--)
+      dup = !strcmp(ns[i].dir, dir);
+    need *more = sep && !dup ? realloc(ns, (size_t)(n + 1) * sizeof *more) : NULL;
+    if (!more) {
+      free(dir);
+      continue;
+    }
+    ns = more;
+    memcpy(ns[n].album, album, MC_UID_STRLEN);
+    ns[n++].dir = dir;
+  }
+  sqlite3_finalize(stmt);
+  mc_status st = MC_OK;
+  for (int i = 0; i < n; i++) {
+    char *cover = st == MC_OK ? mc_coverart_find(ns[i].dir) : NULL;
+    if (st == MC_OK && !cover && mc_file_exists(ns[i].dir))
+      st = fetch_cover(s, ns[i].album, ns[i].dir);
+    free(cover);
+    free(ns[i].dir);
+  }
+  free(ns);
+  return st;
+}
+
 /* --- PREPARE_REQ, asking --- */
 
 /* For each member that is offline and wants Opus copies, asks the peer to fill its cache if
@@ -1366,6 +1608,7 @@ static mc_status receive_turn(mc_session *s) {
         x->plan->status == MC_PLAN_OK) {
       x->fetched = 1;
       st = fetch_missing(s, x);
+      if (st == MC_OK) st = fetch_covers(s);
     }
     if (st == MC_OK) st = send_prepares(s);
   }
@@ -1802,6 +2045,7 @@ void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r) {
   r->bytes_received = s->bytes_received;
   r->bytes_sent = s->bytes_sent;
   r->files_paused = s->files_paused;
+  r->covers_received = s->covers_received;
 }
 
 /* --- Public API --- */

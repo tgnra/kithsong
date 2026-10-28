@@ -239,6 +239,7 @@ class CoreSync(
          * fetched and verified, wanted but still without a file, failed their checksum twice,
          * deleted (no longer wanted, or failed the check after the session), and unknown to
          * the library (deleted, except on an archive). [filesSent] were served to the peer.
+         * [coversReceived]: album covers fetched for folders here that had none.
          */
         data class SyncDone(
             val uid: String,
@@ -255,6 +256,7 @@ class CoreSync(
             val filesSent: Int,
             val bytesReceived: Long,
             val bytesSent: Long,
+            val coversReceived: Int = 0,
         ) : Event
     }
 
@@ -452,10 +454,11 @@ class CoreSync(
         filesSent: Int,
         bytesReceived: Long,
         bytesSent: Long,
+        coversReceived: Int,
     ) = listener(
         Event.SyncDone(
             uid, status, librarySynced, converged, rowsSent, rowsReceived, filesReceived, filesMissing,
-            filesCorrupt, filesDeleted, filesUnknown, filesSent, bytesReceived, bytesSent,
+            filesCorrupt, filesDeleted, filesUnknown, filesSent, bytesReceived, bytesSent, coversReceived,
         ),
     )
 

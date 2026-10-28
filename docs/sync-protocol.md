@@ -275,7 +275,7 @@ Message types:
 
 | Type | Name          | Payload |
 |------|---------------|---------|
-| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "caps": {...}}` (`user` only when pressed for) |
+| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "covers": true, "caps": {...}}` (`user` only when pressed for; `covers`: it serves `COVER_REQ`) |
 | 0x02 | `BYE`         | `{}` |
 | 0x03 | `ERROR`       | `{"reason", "msg"}` |
 | 0x10 | `VV`          | `{"db": "group" \| "library", "vv": {"<origin>": <hlc>}, "resend": true}` (`resend` only in the re-send round) |
@@ -289,6 +289,8 @@ Message types:
 | 0x25 | `FILE_ERR`    | `{"track", "reason"}`, sent instead of `FILE_HDR` |
 | 0x26 | `PREPARE_REQ` | `{"device", "tracks": [uid], "kbps"}`: transcode into the cache for a device that is offline; no reply |
 | 0x27 | `FILES_DONE`  | `{}`: the receiver has asked for everything it wants; the turn passes |
+| 0x28 | `COVER_REQ`   | `{"album"}`; only to a peer whose `HELLO` has `"covers": true` |
+| 0x29 | `COVER_HDR`   | `{"album", "ext", "size", "sha256"}`, then the image as `FILE_DATA`; or `FILE_ERR {"album", "reason"}` instead |
 | 0x40 | `PAIR_HELLO`  | pairing only; see [Pairing](#pairing) |
 | 0x41 | `PAIR_READY`  | |
 | 0x42 | `PAIR_REFUSE` | |
@@ -625,9 +627,22 @@ profile and pressed Sync.
      for a transcode `source_file_uid` (`FILE_HDR.file`). A received original keeps
      `source_file_uid` NULL: it is still an original, served as one in turn, while a row
      with `source_peer_uid` NULL too is an original imported on this device.
-   - Covers aren't transferred. When the track's album has an `art_hash` and its folder no
-     cover yet, the receiver saves the file's embedded picture (transcodes embed the
-     source's cover) as `cover.jpg` or `cover.png`.
+   - When the track's album has an `art_hash` and its folder no cover yet, the receiver
+     saves the file's embedded picture (transcodes embed the source's cover) as
+     `cover.jpg` or `cover.png`.
+   - Covers. After its fetches, the receiver sends `COVER_REQ` for each folder of its own
+     that holds files of an album with an `art_hash` (not singles) and has no cover image
+     (`mc_coverart_find()`), so covers that exist only as an image file beside originals
+     without an embedded picture (an import's downloaded art, a ripped album's
+     `cover.jpg`) arrive too, and a device that synced before this catches up in its next
+     session. The sender answers with its cover: the image file in a folder holding the
+     album's files (`cover`, `folder` or `front`, `.jpg`/`.jpeg`/`.png`, any case),
+     originals' folders first, else a picture embedded in one of those files; at most
+     32 MiB. It answers `FILE_ERR` `missing` when it has none. The receiver checks
+     `sha256` and saves the image as `cover.jpg` or `cover.png` by its magic bytes. A
+     device whose peer's `HELLO` lacks `"covers"` (older versions end the session on an
+     unknown message) skips this. A folder that already has a cover keeps it, even when
+     the album's `art_hash` has since changed.
    - On a mismatch it deletes the part file and retries once from another source, then
      counts the track as corrupt. Within a session the only source is the peer, so the
      retry asks it again; the track is tried anew in the next session, possibly with
