@@ -139,7 +139,7 @@ through. The workflow sets it to the run number (`github.run_number`), since its
 checkouts can't count commits. Local builds are build 0 unless you set it.
 
 Android versionCodes are `major*100000 + minor*1000 + patch*10`, plus 0 for the phone and 1
-for the watch. The two apps share the `app.kithsong` id, so Play needs every code to be
+for the watch. The two apps share the `ng.kithso` id, so Play needs every code to be
 unique.
 
 ## Installing

@@ -63,7 +63,7 @@ $env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"; $env:ANDROID_HOME=
 cd android; .\gradlew.bat :app:assembleDebug
 & "$env:ANDROID_HOME\emulator\emulator.exe" -avd Pixel_10
 adb install -r app\build\outputs\apk\debug\app-debug.apk
-adb shell am start -W -n app.kithsong/.MainActivity
+adb shell am start -W -n ng.kithso/ng.kithso.android.MainActivity
 ```
 
 Open issues:
@@ -78,7 +78,7 @@ the emulator in light and dark mode: the main screen at rest and scrolled, the h
 list, track list screens with swipe right, the full player with seeking and swipe down,
 predictive back on the full player, and the empty state (launch with `--ez fake_empty true`).
 
-Files, under `android/app/src/main/kotlin/app/kithsong/`:
+Files, under `android/app/src/main/kotlin/ng/kithso/android/`:
 
 - New: `KithsongApp.kt`, `data/Library.kt`, `data/FakeLibrary.kt`, `playback/Playback.kt`,
   `ui/App.kt`, `ui/MainScreen.kt`, `ui/DetailScreen.kt`, `ui/Player.kt`, `ui/Dismissible.kt`,
@@ -139,9 +139,9 @@ Decisions:
 Loading test data (debug builds; the receiver has since been removed with import, so this
 no longer works):
 
-1. Launch the app and send `adb shell am broadcast -n app.kithsong/.DebugImportReceiver` once,
+1. Launch the app and send `adb shell am broadcast -n ng.kithso/ng.kithso.android.DebugImportReceiver` once,
    so the app creates its own `import` folder (folders created by adb aren't readable by it).
-2. `adb push` music into `/sdcard/Android/data/app.kithsong/files/import/`.
+2. `adb push` music into `/sdcard/Android/data/ng.kithso/files/import/`.
 3. Send the broadcast again. Every item is looked up on MusicBrainz first; with the network
    off, 332 items still took about 6 minutes.
 

@@ -1,6 +1,6 @@
-/* JNI bindings for app.kithsong.NativeCore, CoreLibrary, CoreImport, CorePlayer and CoreSync. Keep this
+/* JNI bindings for ng.kithso.core.NativeCore, CoreLibrary, CoreImport, CorePlayer and CoreSync. Keep this
  * thin: marshal arguments, call musiccore, convert results. Failures throw
- * app.kithsong.MusicCoreException. */
+ * ng.kithso.core.MusicCoreException. */
 #include <jni.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -19,7 +19,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
 
 /* Throws MusicCoreException(status) and returns status. */
 static mc_status throw_status(JNIEnv *env, mc_status st) {
-  jclass cls = (*env)->FindClass(env, "app/kithsong/MusicCoreException");
+  jclass cls = (*env)->FindClass(env, "ng/kithso/core/MusicCoreException");
   if (!cls) return st; /* NoClassDefFoundError is already pending */
   jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "(I)V");
   jobject ex = ctor ? (*env)->NewObject(env, cls, ctor, (jint)st) : NULL;
@@ -32,19 +32,19 @@ static jstring new_string(JNIEnv *env, const char *s) {
   return s ? (*env)->NewStringUTF(env, s) : NULL;
 }
 
-JNIEXPORT jstring JNICALL Java_app_kithsong_NativeCore_version(JNIEnv *env, jclass cls) {
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_NativeCore_version(JNIEnv *env, jclass cls) {
   (void)cls;
   return (*env)->NewStringUTF(env, mc_version());
 }
 
-JNIEXPORT jint JNICALL Java_app_kithsong_NativeCore_init(JNIEnv *env, jclass cls) {
+JNIEXPORT jint JNICALL Java_ng_kithso_core_NativeCore_init(JNIEnv *env, jclass cls) {
   (void)env;
   (void)cls;
   return mc_init();
 }
 
 /* The core's language for its own text, from a BCP 47 tag such as "fr-CA". */
-JNIEXPORT void JNICALL Java_app_kithsong_NativeCore_setLocale(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_NativeCore_setLocale(JNIEnv *env, jclass cls,
                                                                jstring tag) {
   (void)cls;
   const char *ctag = (*env)->GetStringUTFChars(env, tag, NULL);
@@ -54,7 +54,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_NativeCore_setLocale(JNIEnv *env, jclas
 }
 
 /* Returns the number of albums, or a negative mc_status on failure. */
-JNIEXPORT jlong JNICALL Java_app_kithsong_NativeCore_albumCount(JNIEnv *env, jclass cls,
+JNIEXPORT jlong JNICALL Java_ng_kithso_core_NativeCore_albumCount(JNIEnv *env, jclass cls,
                                                                  jstring path) {
   (void)cls;
   const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
@@ -71,7 +71,7 @@ JNIEXPORT jlong JNICALL Java_app_kithsong_NativeCore_albumCount(JNIEnv *env, jcl
 
 /* --- CoreLibrary ------------------------------------------------------------------- */
 
-JNIEXPORT jlong JNICALL Java_app_kithsong_CoreLibrary_nativeOpen(JNIEnv *env, jclass cls,
+JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreLibrary_nativeOpen(JNIEnv *env, jclass cls,
                                                                   jstring dir) {
   (void)cls;
   const char *cdir = (*env)->GetStringUTFChars(env, dir, NULL);
@@ -83,14 +83,14 @@ JNIEXPORT jlong JNICALL Java_app_kithsong_CoreLibrary_nativeOpen(JNIEnv *env, jc
   return (jlong)(intptr_t)lib;
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreLibrary_nativeClose(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativeClose(JNIEnv *env, jclass cls,
                                                                   jlong handle) {
   (void)env;
   (void)cls;
   mc_library_close((mc_library *)(intptr_t)handle);
 }
 
-JNIEXPORT jlong JNICALL Java_app_kithsong_CoreLibrary_nativeCount(JNIEnv *env, jclass cls,
+JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreLibrary_nativeCount(JNIEnv *env, jclass cls,
                                                                    jlong handle, jint entity) {
   (void)cls;
   int64_t count = 0;
@@ -107,7 +107,7 @@ static jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) 
     return NULL;
   }
   jobjectArray out = NULL;
-  jclass info = (*env)->FindClass(env, "app/kithsong/AlbumInfo");
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/AlbumInfo");
   jmethodID ctor = info ? (*env)->GetMethodID(
                             env, info, "<init>",
                             "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;)V")
@@ -137,7 +137,7 @@ static jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) 
   return out;
 }
 
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListAlbums(JNIEnv *env,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListAlbums(JNIEnv *env,
                                                                                jclass cls,
                                                                                jlong handle) {
   (void)cls;
@@ -147,7 +147,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListAlbums(JN
 }
 
 /* What a smart album group with rule would hold, without saving it. */
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativePreviewSmartAlbums(JNIEnv *env,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativePreviewSmartAlbums(JNIEnv *env,
                                                                                        jclass cls,
                                                                                        jlong handle,
                                                                                        jstring rule) {
@@ -160,7 +160,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativePreviewSmartA
   return album_array(env, st, list);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreLibrary_nativeRecordPlay(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativeRecordPlay(JNIEnv *env, jclass cls,
                                                                       jlong handle, jstring uid) {
   (void)cls;
   const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
@@ -171,7 +171,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreLibrary_nativeRecordPlay(JNIEnv *en
 }
 
 /* The image to show for a playlist (see mc_playlist_art()), or NULL for a placeholder. */
-JNIEXPORT jstring JNICALL Java_app_kithsong_CoreLibrary_nativePlaylistArt(JNIEnv *env, jclass cls,
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreLibrary_nativePlaylistArt(JNIEnv *env, jclass cls,
                                                                          jlong handle, jstring uid,
                                                                          jstring cache_dir) {
   (void)cls;
@@ -196,7 +196,7 @@ JNIEXPORT jstring JNICALL Java_app_kithsong_CoreLibrary_nativePlaylistArt(JNIEnv
 }
 
 /* Deletes cached pictures of playlists that have gone (see mc_playlist_art_prune()). */
-JNIEXPORT void JNICALL Java_app_kithsong_CoreLibrary_nativePlaylistArtPrune(JNIEnv *env, jclass cls, jlong handle,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativePlaylistArtPrune(JNIEnv *env, jclass cls, jlong handle,
                                                                            jstring cache_dir) {
   (void)cls;
   const char *cdir = (*env)->GetStringUTFChars(env, cache_dir, NULL);
@@ -214,7 +214,7 @@ static jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) 
     return NULL;
   }
   jobjectArray out = NULL;
-  jclass info = (*env)->FindClass(env, "app/kithsong/TrackInfo");
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/TrackInfo");
   jmethodID ctor = info ? (*env)->GetMethodID(env, info, "<init>",
                                               "(Ljava/lang/String;Ljava/lang/String;IIILjava/lang/String;"
                                               "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")
@@ -248,7 +248,7 @@ static jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) 
 }
 
 /* The tracks of an album (kind 0), a playlist (1) or a smart playlist (2). */
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListTracks(JNIEnv *env, jclass cls,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListTracks(JNIEnv *env, jclass cls,
                                                                                jlong handle, jint kind,
                                                                                jstring uid) {
   (void)cls;
@@ -270,12 +270,12 @@ JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListTracks(JN
 }
 
 /* flags are mc_library_list_playlists()'s (MC_LIST_PLAYABLE). */
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListPlaylists(JNIEnv *env,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListPlaylists(JNIEnv *env,
                                                                                   jclass cls,
                                                                                   jlong handle,
                                                                                   jint flags) {
   (void)cls;
-  jclass info = (*env)->FindClass(env, "app/kithsong/PlaylistInfo");
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/PlaylistInfo");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V");
   if (!ctor) return NULL;
@@ -306,10 +306,10 @@ JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListPlaylists
 }
 
 /* flags are mc_library_list_smart()'s (MC_LIST_PLAYABLE). */
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListSmart(JNIEnv *env, jclass cls,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListSmart(JNIEnv *env, jclass cls,
                                                                               jlong handle, jint flags) {
   (void)cls;
-  jclass info = (*env)->FindClass(env, "app/kithsong/SmartInfo");
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/SmartInfo");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
                                        "(Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)V");
@@ -347,7 +347,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListSmart(JNI
  * with an exception pending. */
 static jobjectArray named_array(JNIEnv *env, const void *items, int n,
                                 void (*get)(const void *, int, const char **, const char **, int *)) {
-  jclass info = (*env)->FindClass(env, "app/kithsong/NamedInfo");
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/NamedInfo");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V");
   if (!ctor) return NULL;
@@ -386,7 +386,7 @@ static void album_group_at(const void *items, int i, const char **uid, const cha
   *count = g->album_count;
 }
 
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListArtists(JNIEnv *env,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListArtists(JNIEnv *env,
                                                                                 jclass cls,
                                                                                 jlong handle) {
   (void)cls;
@@ -403,7 +403,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListArtists(J
   return out;
 }
 
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreLibrary_nativeListAlbumGroups(JNIEnv *env,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListAlbumGroups(JNIEnv *env,
                                                                                     jclass cls,
                                                                                     jlong handle) {
   (void)cls;
@@ -446,7 +446,7 @@ static mc_import *import_of(jlong handle) {
   return ((jni_import *)(intptr_t)handle)->imp;
 }
 
-JNIEXPORT jlong JNICALL Java_app_kithsong_CoreImport_nativeStart(JNIEnv *env, jclass cls,
+JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreImport_nativeStart(JNIEnv *env, jclass cls,
                                                                   jlong library, jobjectArray paths,
                                                                   jboolean fetch_art,
                                                                   jobject listener) {
@@ -494,7 +494,7 @@ JNIEXPORT jlong JNICALL Java_app_kithsong_CoreImport_nativeStart(JNIEnv *env, jc
   return (jlong)(intptr_t)p;
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreImport_nativeFree(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeFree(JNIEnv *env, jclass cls,
                                                                 jlong handle) {
   (void)cls;
   jni_import *p = (jni_import *)(intptr_t)handle;
@@ -504,7 +504,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreImport_nativeFree(JNIEnv *env, jcla
   free(p);
 }
 
-JNIEXPORT jint JNICALL Java_app_kithsong_CoreImport_nativeItemCount(JNIEnv *env, jclass cls,
+JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreImport_nativeItemCount(JNIEnv *env, jclass cls,
                                                                      jlong handle) {
   (void)env;
   (void)cls;
@@ -512,7 +512,7 @@ JNIEXPORT jint JNICALL Java_app_kithsong_CoreImport_nativeItemCount(JNIEnv *env,
 }
 
 /* The item's mc_import_state. */
-JNIEXPORT jint JNICALL Java_app_kithsong_CoreImport_nativeItemState(JNIEnv *env, jclass cls,
+JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreImport_nativeItemState(JNIEnv *env, jclass cls,
                                                                      jlong handle, jint item) {
   (void)cls;
   mc_import_item *it = NULL;
@@ -528,7 +528,7 @@ JNIEXPORT jint JNICALL Java_app_kithsong_CoreImport_nativeItemState(JNIEnv *env,
 
 /* What to call the item: "Artist – Album" (the core's track_byline) from its tags, else its
  * folder. */
-JNIEXPORT jstring JNICALL Java_app_kithsong_CoreImport_nativeItemName(JNIEnv *env, jclass cls,
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreImport_nativeItemName(JNIEnv *env, jclass cls,
                                                                       jlong handle, jint item) {
   (void)cls;
   mc_import_item *it = NULL;
@@ -550,7 +550,7 @@ JNIEXPORT jstring JNICALL Java_app_kithsong_CoreImport_nativeItemName(JNIEnv *en
 }
 
 /* Why the item failed or needs review, or null. */
-JNIEXPORT jstring JNICALL Java_app_kithsong_CoreImport_nativeItemError(JNIEnv *env, jclass cls,
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreImport_nativeItemError(JNIEnv *env, jclass cls,
                                                                        jlong handle, jint item) {
   (void)cls;
   mc_import_item *it = NULL;
@@ -565,7 +565,7 @@ JNIEXPORT jstring JNICALL Java_app_kithsong_CoreImport_nativeItemError(JNIEnv *e
 }
 
 /* The calls that resolve an item needing review: 0 accept as is, 1 skip. */
-JNIEXPORT void JNICALL Java_app_kithsong_CoreImport_nativeResolve(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeResolve(JNIEnv *env, jclass cls,
                                                                    jlong handle, jint item,
                                                                    jint how) {
   (void)cls;
@@ -604,7 +604,7 @@ static mc_player *player_of(jlong handle) {
   return ((jni_player *)(intptr_t)handle)->player;
 }
 
-JNIEXPORT jlong JNICALL Java_app_kithsong_CorePlayer_nativeNew(JNIEnv *env, jclass cls,
+JNIEXPORT jlong JNICALL Java_ng_kithso_core_CorePlayer_nativeNew(JNIEnv *env, jclass cls,
                                                                 jobject listener) {
   (void)cls;
   jni_player *p = calloc(1, sizeof *p);
@@ -628,7 +628,7 @@ JNIEXPORT jlong JNICALL Java_app_kithsong_CorePlayer_nativeNew(JNIEnv *env, jcla
   return (jlong)(intptr_t)p;
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeFree(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeFree(JNIEnv *env, jclass cls,
                                                                 jlong handle) {
   (void)cls;
   jni_player *p = (jni_player *)(intptr_t)handle;
@@ -638,7 +638,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeFree(JNIEnv *env, jcla
   free(p);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeSetQueue(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetQueue(JNIEnv *env, jclass cls,
                                                                     jlong handle,
                                                                     jobjectArray paths,
                                                                     jint start) {
@@ -666,7 +666,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeSetQueue(JNIEnv *env, 
 
 /* The player calls that take no arguments: 0 toggle, 1 pause, 2 resume, 3 stop, 4 next,
  * 5 previous. */
-JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeCommand(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeCommand(JNIEnv *env, jclass cls,
                                                                    jlong handle, jint command) {
   (void)cls;
   static mc_status (*const commands[])(mc_player *) = {
@@ -681,14 +681,14 @@ JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeCommand(JNIEnv *env, j
   if (st != MC_OK) throw_status(env, st);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeSkipTo(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSkipTo(JNIEnv *env, jclass cls,
                                                                   jlong handle, jint index) {
   (void)cls;
   mc_status st = mc_player_skip_to(player_of(handle), index);
   if (st != MC_OK) throw_status(env, st);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeSeekMs(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSeekMs(JNIEnv *env, jclass cls,
                                                                   jlong handle, jlong ms) {
   (void)cls;
   mc_status st = mc_player_seek_ms(player_of(handle), ms);
@@ -696,7 +696,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeSeekMs(JNIEnv *env, jc
 }
 
 /* Fills out with state, index, count, position_ms, duration_ms. */
-JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeStatus(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeStatus(JNIEnv *env, jclass cls,
                                                                   jlong handle, jlongArray out) {
   (void)cls;
   mc_player_status st;
@@ -707,7 +707,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CorePlayer_nativeStatus(JNIEnv *env, jc
 
 /* Fills out with the item and start (wall clock ms) of the oldest play that counts; false if
  * there's none. */
-JNIEXPORT jboolean JNICALL Java_app_kithsong_CorePlayer_nativeTakePlayed(JNIEnv *env, jclass cls,
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CorePlayer_nativeTakePlayed(JNIEnv *env, jclass cls,
                                                                          jlong handle,
                                                                          jlongArray out) {
   (void)cls;
@@ -819,7 +819,7 @@ static mc_sync *sync_of(jlong handle) {
   return ((jni_sync *)(intptr_t)handle)->sync;
 }
 
-JNIEXPORT jlong JNICALL Java_app_kithsong_CoreSync_nativeNew(JNIEnv *env, jclass cls,
+JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jclass cls,
                                                               jlong library, jstring config_dir,
                                                               jstring device_name, jint kind,
                                                               jobject listener) {
@@ -878,7 +878,7 @@ JNIEXPORT jlong JNICALL Java_app_kithsong_CoreSync_nativeNew(JNIEnv *env, jclass
   return (jlong)(intptr_t)p;
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeFree(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeFree(JNIEnv *env, jclass cls,
                                                               jlong handle) {
   (void)cls;
   jni_sync *p = (jni_sync *)(intptr_t)handle;
@@ -888,27 +888,27 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeFree(JNIEnv *env, jclass
   free(p);
 }
 
-JNIEXPORT jstring JNICALL Java_app_kithsong_CoreSync_nativeDeviceUid(JNIEnv *env, jclass cls,
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreSync_nativeDeviceUid(JNIEnv *env, jclass cls,
                                                                      jlong handle) {
   (void)cls;
   return new_string(env, mc_sync_device_uid(sync_of(handle)));
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeStart(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeStart(JNIEnv *env, jclass cls,
                                                                jlong handle) {
   (void)cls;
   mc_status st = mc_sync_start(sync_of(handle));
   if (st != MC_OK) throw_status(env, st);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeStop(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeStop(JNIEnv *env, jclass cls,
                                                               jlong handle) {
   (void)env;
   (void)cls;
   mc_sync_stop(sync_of(handle));
 }
 
-JNIEXPORT jint JNICALL Java_app_kithsong_CoreSync_nativePort(JNIEnv *env, jclass cls,
+JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreSync_nativePort(JNIEnv *env, jclass cls,
                                                               jlong handle) {
   (void)env;
   (void)cls;
@@ -918,7 +918,7 @@ JNIEXPORT jint JNICALL Java_app_kithsong_CoreSync_nativePort(JNIEnv *env, jclass
 /* The calls that take a device uid: 0 pair request, 1 remove device, 2 sync now, 3 confirm
  * and sync now (the Sync button), 4 background sync (rate-limited). For 2 to 4, uid null is
  * every reachable member. */
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeWithDevice(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeWithDevice(JNIEnv *env, jclass cls,
                                                                     jlong handle, jint call,
                                                                     jstring uid) {
   (void)cls;
@@ -940,7 +940,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeWithDevice(JNIEnv *env, 
   if (st != MC_OK) throw_status(env, st);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativePairRequestAddress(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativePairRequestAddress(JNIEnv *env, jclass cls,
                                                                             jlong handle,
                                                                             jstring host,
                                                                             jint port) {
@@ -952,7 +952,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativePairRequestAddress(JNIEn
   if (st != MC_OK) throw_status(env, st);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativePairEnter(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativePairEnter(JNIEnv *env, jclass cls,
                                                                    jlong handle, jstring code) {
   (void)cls;
   const char *ccode = (*env)->GetStringUTFChars(env, code, NULL);
@@ -962,21 +962,21 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativePairEnter(JNIEnv *env, j
   if (st != MC_OK) throw_status(env, st);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativePairCancel(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativePairCancel(JNIEnv *env, jclass cls,
                                                                     jlong handle) {
   (void)env;
   (void)cls;
   mc_sync_pair_cancel(sync_of(handle));
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeLeaveGroup(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeLeaveGroup(JNIEnv *env, jclass cls,
                                                                     jlong handle) {
   (void)cls;
   mc_status st = mc_sync_leave_group(sync_of(handle));
   if (st != MC_OK) throw_status(env, st);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeNotifyChanged(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeNotifyChanged(JNIEnv *env, jclass cls,
                                                                        jlong handle) {
   (void)env;
   (void)cls;
@@ -984,7 +984,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeNotifyChanged(JNIEnv *en
 }
 
 /* The mc_sync_lib_state. */
-JNIEXPORT jint JNICALL Java_app_kithsong_CoreSync_nativeLibraryState(JNIEnv *env, jclass cls,
+JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreSync_nativeLibraryState(JNIEnv *env, jclass cls,
                                                                       jlong handle) {
   (void)cls;
   mc_sync_lib_state state = MC_SYNC_LIBRARY_NO_GROUP;
@@ -993,10 +993,10 @@ JNIEXPORT jint JNICALL Java_app_kithsong_CoreSync_nativeLibraryState(JNIEnv *env
   return (jint)state;
 }
 
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreSync_nativeListDevices(JNIEnv *env, jclass cls,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreSync_nativeListDevices(JNIEnv *env, jclass cls,
                                                                              jlong handle) {
   (void)cls;
-  jclass info = (*env)->FindClass(env, "app/kithsong/SyncDevice");
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/SyncDevice");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
                                        "(Ljava/lang/String;Ljava/lang/String;IZZZZLjava/lang/String;IJJZJJJJJJI)V");
@@ -1036,10 +1036,10 @@ JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreSync_nativeListDevices(JNIE
   return out;
 }
 
-JNIEXPORT jobjectArray JNICALL Java_app_kithsong_CoreSync_nativeListNearby(JNIEnv *env, jclass cls,
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreSync_nativeListNearby(JNIEnv *env, jclass cls,
                                                                             jlong handle) {
   (void)cls;
-  jclass info = (*env)->FindClass(env, "app/kithsong/NearbyDevice");
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/NearbyDevice");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
                                        "(Ljava/lang/String;Ljava/lang/String;IZLjava/lang/String;I)V");
@@ -1135,10 +1135,10 @@ static void profile_args_free(mc_sync_profile *p) {
 
 /* device_uid's profile as a SyncProfile, made with its private constructor that takes the
  * items as parallel kinds and uids. */
-JNIEXPORT jobject JNICALL Java_app_kithsong_CoreSync_nativeGetProfile(JNIEnv *env, jclass cls,
+JNIEXPORT jobject JNICALL Java_ng_kithso_core_CoreSync_nativeGetProfile(JNIEnv *env, jclass cls,
                                                                        jlong handle, jstring uid) {
   (void)cls;
-  jclass info = (*env)->FindClass(env, "app/kithsong/SyncProfile");
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/SyncProfile");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
                                        "(Ljava/lang/String;ZZIZJ[I[Ljava/lang/String;)V");
@@ -1179,7 +1179,7 @@ JNIEXPORT jobject JNICALL Java_app_kithsong_CoreSync_nativeGetProfile(JNIEnv *en
 }
 
 /* Stores device_uid's profile. There's no archive argument: mc_sync_set_profile() ignores it. */
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeSetProfile(
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeSetProfile(
   JNIEnv *env, jclass cls, jlong handle, jstring uid, jstring name, jboolean sync_all, jint kbps,
   jboolean budget_enabled, jlong budget_bytes, jintArray kinds, jobjectArray uids) {
   (void)cls;
@@ -1197,7 +1197,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeSetProfile(
   profile_args_free(&p);
 }
 
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeSetArchive(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeSetArchive(JNIEnv *env, jclass cls,
                                                                     jlong handle, jstring uid,
                                                                     jboolean archive) {
   (void)cls;
@@ -1210,7 +1210,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeSetArchive(JNIEnv *env, 
 
 /* Fills out with what device_uid would hold with the profile: tracks, total_bytes, kbps,
  * archive, over_budget, shortfall_bytes, limit_bytes and free_bytes, then step_bytes. */
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeEstimate(
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeEstimate(
   JNIEnv *env, jclass cls, jlong handle, jstring uid, jstring name, jboolean archive,
   jboolean sync_all, jint kbps, jboolean budget_enabled, jlong budget_bytes, jintArray kinds,
   jobjectArray uids, jlongArray out) {
@@ -1241,7 +1241,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeEstimate(
 
 /* Checks this device's files (deep: re-hashes them) and fills out with checked, ok, failed and
  * deleted. */
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeVerify(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeVerify(JNIEnv *env, jclass cls,
                                                                 jlong handle, jboolean deep,
                                                                 jlongArray out) {
   (void)cls;
@@ -1257,7 +1257,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeVerify(JNIEnv *env, jcla
 }
 
 /* Renames this device, for the whole group when in one. */
-JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeSetDeviceName(JNIEnv *env, jclass cls,
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeSetDeviceName(JNIEnv *env, jclass cls,
                                                                        jlong handle, jstring name) {
   (void)cls;
   const char *cname = (*env)->GetStringUTFChars(env, name, NULL);
@@ -1268,7 +1268,7 @@ JNIEXPORT void JNICALL Java_app_kithsong_CoreSync_nativeSetDeviceName(JNIEnv *en
 }
 
 /* This device's name as it is now: the group may have renamed it. */
-JNIEXPORT jstring JNICALL Java_app_kithsong_CoreSync_nativeGetDeviceName(JNIEnv *env, jclass cls,
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreSync_nativeGetDeviceName(JNIEnv *env, jclass cls,
                                                                          jlong handle) {
   (void)cls;
   char name[4 * MC_SYNC_DEVICE_NAME_MAX + 4];

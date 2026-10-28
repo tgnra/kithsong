@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "app.kithsong.nativecore"
+    namespace = "ng.kithso.core"
     compileSdk = 36
     ndkVersion = "27.2.12479018"
 

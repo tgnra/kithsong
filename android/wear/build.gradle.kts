@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "app.kithsong.wear"
+    namespace = "ng.kithso.wear"
     compileSdk = 37
     // The same NDK as :native, which AGP needs to strip the native core's debug symbols.
     ndkVersion = "27.2.12479018"
@@ -12,7 +12,7 @@ android {
     defaultConfig {
         // Same id as the phone app, so the two can talk over the Wear Data Layer once they
         // are signed with the same key. The watch build is told apart by its manifest.
-        applicationId = "app.kithsong"
+        applicationId = "ng.kithso"
         // Wear OS 3, the oldest version still in use; it covers Wear OS 5 (API 34) and later.
         // The Compose for Wear OS libraries would allow 25, but Wear OS 2 is not worth the cost.
         minSdk = 30

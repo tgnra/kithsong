@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace = "app.kithsong"
+    namespace = "ng.kithso.android"
     compileSdk = 37
     // The same NDK as :native, which AGP needs to strip the native core's debug symbols.
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "app.kithsong"
+        applicationId = "ng.kithso"
         // Android 7.0: Compose needs 23, the native core 24 (see :native).
         minSdk = 24
         targetSdk = 36

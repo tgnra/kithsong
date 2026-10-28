@@ -155,7 +155,7 @@
         "run",
         "Pixel_10",
         "${workspaceFolder}/android/app/build/outputs/apk/debug/app-debug.apk",
-        "app.kithsong/.MainActivity"
+        "ng.kithso/ng.kithso.android.MainActivity"
       ],
       "windows": {
         "command": "powershell",
@@ -166,7 +166,7 @@
           "run",
           "Pixel_10",
           "${workspaceFolder}\\android\\app\\build\\outputs\\apk\\debug\\app-debug.apk",
-          "app.kithsong/.MainActivity"
+          "ng.kithso/ng.kithso.android.MainActivity"
         ]
       },
       "dependsOn": "android: build",
@@ -195,7 +195,7 @@
         "run",
         "Wear_OS_Small_Round",
         "${workspaceFolder}/android/wear/build/outputs/apk/debug/wear-debug.apk",
-        "app.kithsong/app.kithsong.wear.MainActivity"
+        "ng.kithso/ng.kithso.wear.MainActivity"
       ],
       "dependsOn": "wear: build",
       "problemMatcher": []
