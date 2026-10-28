@@ -12,7 +12,11 @@
  *                               +------------------------------------------+
  *
  * Clicking an item opens the review dialog, where the user picks a match, searches again,
- * keeps the existing tags or skips it. Folders can be dropped anywhere on the window.
+ * keeps the existing tags or skips it. Its track list shows the match's missing tracks and
+ * the files no track took (with those of other items from the same folder); selecting a
+ * missing track and a file (Ctrl+click) and choosing Use as Track N from the right-click menu
+ * makes the file that track (mc_import_assign), in review or already imported. Folders can be
+ * dropped anywhere on the window.
  * While MusicBrainz can't be reached, a banner above the list says so and offers Import
  * Without Tagging (mc_import_skip_tagging); it goes away once MusicBrainz answers again or
  * it's used.

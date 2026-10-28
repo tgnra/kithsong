@@ -53,7 +53,20 @@ typedef struct view {
   int review_item;
   mc_import_item *review_snap;
   BOOL review_terms_set;
+  /* The review's track list, by row (each row's lParam is its index here). */
+  struct review_row *rows;
+  int row_count;
+  int rows_match; /* the match the rows show; -1 if none */
 } view;
+
+/* A row of the review's track list: a track of the match, with the file matched to it if
+ * any, or a file no track has. A file is item from_item's file `file`: this item's own, or
+ * one of a related item (mc_import_related) that Use as Track can bring in. */
+typedef struct review_row {
+  int track; /* index into the match's tracks, or -1 for a file row */
+  int from_item;
+  int file;
+} review_row;
 
 static view g_view;
 
@@ -138,6 +151,7 @@ static const wchar_t *item_label(const mc_import_item *it) {
       case MC_IMPORT_OUTCOME_REPLACED: return mc_wstr(MC_STR_IMPORT_STATE_REPLACED);
       case MC_IMPORT_OUTCOME_ADDED: return mc_wstr(MC_STR_IMPORT_STATE_ADDED_MISSING);
       case MC_IMPORT_OUTCOME_DUPLICATE: return mc_wstr(MC_STR_IMPORT_STATE_DUPLICATE);
+      case MC_IMPORT_OUTCOME_MOVED: return mc_wstr(MC_STR_IMPORT_STATE_MOVED);
       case MC_IMPORT_OUTCOME_NONE: break;
     }
   }
@@ -331,7 +345,7 @@ static void refresh_row(int idx) {
   SendMessageW(lv, LVM_SETITEMW, 0, (LPARAM)&li);
   lv_set(lv, idx, COL_STATUS, item_label(it));
   lv_set_utf8(lv, idx, COL_ARTIST, it->artist);
-  lv_set_utf8(lv, idx, COL_ALBUM, it->album ? it->album : file_name(it->files[0].path));
+  lv_set_utf8(lv, idx, COL_ALBUM, it->album ? it->album : it->file_count ? file_name(it->files[0].path) : "");
 
   wchar_t num[64];
   if (it->kind == MC_IMPORT_SINGLE) wstr_from_utf8(num, 64, mc_str(MC_STR_IMPORT_SINGLE));
@@ -342,6 +356,7 @@ static void refresh_row(int idx) {
   const mc_import_match *m = NULL;
   if (it->chosen >= 0 && it->chosen < it->match_count) m = &it->matches[it->chosen];
   else if (it->state != MC_IMPORT_DONE && it->match_count) m = &it->matches[0];
+  if (it->outcome == MC_IMPORT_OUTCOME_MOVED) m = NULL; /* none of it is imported with a match */
   if (it->error) snprintf(match, sizeof match, "%s", it->error);
   else if (it->state == MC_IMPORT_DONE && it->chosen < 0)
     snprintf(match, sizeof match, "%s", mc_str(MC_STR_IMPORT_EXISTING_TAGS));
@@ -436,55 +451,170 @@ static int selected_match(HWND dlg) {
   return (int)SendDlgItemMessageW(dlg, IDC_REV_MATCHES, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
 }
 
+/* A track's number as the list shows it: "3", or "2-3" on a multi-disc release. */
+static void track_number(const mc_import_match *m, const mc_import_match_track *t, wchar_t *out, size_t n) {
+  if (m->track_count && m->tracks[m->track_count - 1].disc > 1) swprintf(out, n, L"%d-%d", t->disc, t->number);
+  else swprintf(out, n, L"%d", t->number);
+}
+
+/* Records what a track list row is; returns its lParam. */
+static LPARAM add_row(int track, int from_item, int file) {
+  review_row *grown = realloc(g_view.rows, (size_t)(g_view.row_count + 1) * sizeof *grown);
+  if (!grown) return -1;
+  g_view.rows = grown;
+  g_view.rows[g_view.row_count] = (review_row){track, from_item, file};
+  return g_view.row_count++;
+}
+
+static void file_columns(HWND lv, int row, const mc_import_file *f) {
+  wchar_t buf[64];
+  lv_set_utf8(lv, row, 3, file_name(f->path));
+  lv_set_utf8(lv, row, 4, f->title);
+  format_length(f->duration_ms, buf, 64);
+  lv_set(lv, row, 5, buf);
+}
+
+/* Files of other items from the same folder (mc_import_related), which Use as Track can make
+ * tracks of this match. Returns how many were listed. */
+static int fill_related(HWND lv) {
+  int related[64];
+  int n = mc_import_related(g_view.imp, g_view.review_item, related, 64), listed = 0;
+  for (int k = 0; k < n && k < 64; k++) {
+    int idx = related[k];
+    mc_import_state s = idx < g_view.item_count ? g_view.states[idx] : MC_IMPORT_PENDING;
+    if (s == MC_IMPORT_PENDING || s == MC_IMPORT_MATCHING || s == MC_IMPORT_WRITING) continue;
+    mc_import_item *other;
+    if (mc_import_item_get(g_view.imp, idx, &other) != MC_OK) continue;
+    char label[512];
+    const char *name = other->album ? other->album : mc_str(MC_STR_UNKNOWN_VALUE);
+    mc_format(label, sizeof label, mc_str(MC_STR_IMPORT_OTHER_ITEM_FILE), MC_S(name));
+    for (int i = 0; i < other->file_count; i++) {
+      int row = lv_append(lv, add_row(-1, idx, i), 0);
+      lv_set_utf8(lv, row, 1, label);
+      file_columns(lv, row, &other->files[i]);
+      listed++;
+    }
+    mc_import_item_free(other);
+  }
+  return listed;
+}
+
 static void fill_tracks(HWND dlg, int match) {
   HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
   SendMessageW(lv, LVM_DELETEALLITEMS, 0, 0);
+  g_view.row_count = 0;
+  g_view.rows_match = -1;
+  SetDlgItemTextW(dlg, IDC_REV_TRACKS_HINT, L"");
   const mc_import_item *it = g_view.review_snap;
   if (!it) return;
 
   wchar_t buf[64];
   int *used = calloc((size_t)it->file_count + 1, sizeof *used);
+  int missing = 0, loose = 0;
   if (match >= 0 && match < it->match_count) {
     const mc_import_match *m = &it->matches[match];
-    int multi_disc = m->track_count && m->tracks[m->track_count - 1].disc > 1;
+    g_view.rows_match = match;
     for (int j = 0; j < m->track_count; j++) {
       const mc_import_match_track *t = &m->tracks[j];
-      int row = lv_append(lv, j, 0);
-      if (multi_disc) swprintf(buf, 64, L"%d-%d", t->disc, t->number);
-      else swprintf(buf, 64, L"%d", t->number);
+      int row = lv_append(lv, add_row(j, -1, -1), 0);
+      track_number(m, t, buf, 64);
       lv_set(lv, row, 0, it->kind == MC_IMPORT_SINGLE ? L"" : buf);
       lv_set_utf8(lv, row, 1, t->title);
       format_length(t->length_ms, buf, 64);
       lv_set(lv, row, 2, buf);
       if (t->file >= 0 && t->file < it->file_count) {
-        const mc_import_file *f = &it->files[t->file];
         if (used) used[t->file] = 1;
-        lv_set_utf8(lv, row, 3, file_name(f->path));
-        lv_set_utf8(lv, row, 4, f->title);
-        format_length(f->duration_ms, buf, 64);
-        lv_set(lv, row, 5, buf);
+        file_columns(lv, row, &it->files[t->file]);
       } else {
         lv_set(lv, row, 3, mc_wstr(MC_STR_IMPORT_TRACK_MISSING));
+        missing++;
       }
     }
   }
   /* Files that weren't matched to any track: left untouched if this match is applied. */
   for (int i = 0; i < it->file_count; i++) {
     if (used && used[i]) continue;
-    int row = lv_append(lv, -1, 0);
+    int row = lv_append(lv, add_row(-1, g_view.review_item, i), 0);
     lv_set(lv, row, 1, match >= 0 ? mc_wstr(MC_STR_IMPORT_NOT_MATCHED) : L"");
-    lv_set_utf8(lv, row, 3, file_name(it->files[i].path));
-    lv_set_utf8(lv, row, 4, it->files[i].title);
-    format_length(it->files[i].duration_ms, buf, 64);
-    lv_set(lv, row, 5, buf);
+    file_columns(lv, row, &it->files[i]);
+    loose++;
   }
   free(used);
+  /* With tracks missing, files from the same folder that ended up elsewhere may be them. */
+  if (missing && it->kind == MC_IMPORT_ALBUM) loose += fill_related(lv);
+  if (missing && loose) SetDlgItemTextW(dlg, IDC_REV_TRACKS_HINT, mc_wstr(MC_STR_IMPORT_USE_AS_TRACK_HINT));
+}
+
+/* The track list's row (lParam) at list index i, or NULL. */
+static const review_row *row_at(HWND lv, int i) {
+  LVITEMW li = {.mask = LVIF_PARAM, .iItem = i};
+  if (!SendMessageW(lv, LVM_GETITEMW, 0, (LPARAM)&li) || li.lParam < 0 || li.lParam >= g_view.row_count)
+    return NULL;
+  return &g_view.rows[li.lParam];
+}
+
+/* The track list's menu: Use as Track N, for one missing track selected with one file. pt is
+ * in screen coordinates, or (-1, -1) from the keyboard. */
+static void tracks_menu(HWND dlg, POINT pt) {
+  const mc_import_item *it = g_view.review_snap;
+  int match = g_view.rows_match;
+  if (!it || match < 0 || match >= it->match_count || it->kind != MC_IMPORT_ALBUM) return;
+  const mc_import_match *m = &it->matches[match];
+  HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
+
+  const review_row *track = NULL, *file = NULL;
+  int selected = 0, tracks = 0, files = 0;
+  for (int i = -1; (i = (int)SendMessageW(lv, LVM_GETNEXTITEM, (WPARAM)i, LVNI_SELECTED)) >= 0;) {
+    const review_row *r = row_at(lv, i);
+    selected++;
+    if (!r) continue;
+    if (r->track >= 0) {
+      tracks++;
+      if (r->track < m->track_count && m->tracks[r->track].file < 0) track = r;
+    } else {
+      files++;
+      file = r;
+    }
+  }
+  if (!track || tracks != 1) return; /* only for a missing track */
+
+  BOOL busy = it->state == MC_IMPORT_PENDING || it->state == MC_IMPORT_MATCHING || it->state == MC_IMPORT_WRITING;
+  BOOL ok = !busy && selected == 2 && files == 1;
+  wchar_t number[32], text[128];
+  track_number(m, &m->tracks[track->track], number, 32);
+  char num8[64];
+  WideCharToMultiByte(CP_UTF8, 0, number, -1, num8, sizeof num8, NULL, NULL);
+  mc_wformat(text, 128, mc_str(MC_STR_IMPORT_USE_AS_TRACK), MC_S(num8));
+
+  if (pt.x == -1 && pt.y == -1) {
+    RECT rc = {.left = LVIR_LABEL};
+    int focus = (int)SendMessageW(lv, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_FOCUSED);
+    if (focus < 0 || !SendMessageW(lv, LVM_GETITEMRECT, (WPARAM)focus, (LPARAM)&rc)) GetClientRect(lv, &rc);
+    pt.x = rc.left;
+    pt.y = rc.bottom;
+    ClientToScreen(lv, &pt);
+  }
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return;
+  AppendMenuW(menu, MF_STRING | (ok ? 0 : MF_GRAYED), 1, text);
+  UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
+  int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, dlg, NULL);
+  DestroyMenu(menu);
+  if (cmd != 1 || !ok) return;
+
+  if (mc_import_assign(g_view.imp, g_view.review_item, match, track->track, file->from_item, file->file) == MC_OK) {
+    g_view.idle = FALSE; /* the import thread writes the item again; the dialog stays open */
+    update_status();
+  } else {
+    MessageBoxW(dlg, mc_wstr(MC_STR_IMPORT_ITEM_BUSY), mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
+  }
 }
 
 static void load_review(HWND dlg) {
   mc_import_item_free(g_view.review_snap);
   g_view.review_snap = NULL;
-  if (mc_import_item_get(g_view.imp, g_view.review_item, &g_view.review_snap) != MC_OK) {
+  if (mc_import_item_get(g_view.imp, g_view.review_item, &g_view.review_snap) != MC_OK ||
+      g_view.review_snap->file_count == 0) { /* its files went to another item */
     EndDialog(dlg, IDCANCEL);
     return;
   }
@@ -494,7 +624,7 @@ static void load_review(HWND dlg) {
 
   char header[1200];
   const char *artist = it->artist ? it->artist : mc_str(MC_STR_UNKNOWN_VALUE);
-  const char *album = it->album ? it->album : file_name(it->files[0].path);
+  const char *album = it->album ? it->album : it->file_count ? file_name(it->files[0].path) : "";
   size_t n = it->kind == MC_IMPORT_SINGLE
                ? mc_format(header, sizeof header, mc_str(MC_STR_IMPORT_REVIEW_SINGLE), MC_S(artist), MC_S(album))
                : mc_format(header, sizeof header, mc_str_plural(MC_STR_IMPORT_REVIEW_ALBUM, it->file_count),
@@ -640,6 +770,12 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_REVIEW_REFRESH:
       load_review(dlg);
       return TRUE;
+    case WM_CONTEXTMENU:
+      if ((HWND)wp == GetDlgItem(dlg, IDC_REV_TRACKS)) {
+        tracks_menu(dlg, (POINT){(short)LOWORD(lp), (short)HIWORD(lp)});
+        return TRUE;
+      }
+      break;
     case WM_NOTIFY: {
       const NMHDR *nm = (const NMHDR *)lp;
       if (nm->idFrom != IDC_REV_MATCHES) break;
@@ -685,6 +821,9 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       g_view.review = NULL;
       mc_import_item_free(g_view.review_snap);
       g_view.review_snap = NULL;
+      free(g_view.rows);
+      g_view.rows = NULL;
+      g_view.row_count = 0;
       break;
   }
   return FALSE;

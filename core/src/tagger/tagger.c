@@ -71,12 +71,13 @@ typedef struct item {
 
 /* REQ_RETRY matches an item waiting on MusicBrainz again (see auto_match), once it's back or
  * tagging is skipped; it does nothing if the item has moved on meanwhile. */
-typedef enum req_kind { REQ_ACCEPT, REQ_AS_IS, REQ_SKIP, REQ_SEARCH, REQ_RETRY } req_kind;
+typedef enum req_kind { REQ_ACCEPT, REQ_AS_IS, REQ_SKIP, REQ_SEARCH, REQ_RETRY, REQ_ASSIGN } req_kind;
 
 typedef struct request {
   req_kind kind;
   int item;
   int match;
+  int track, from_item, file; /* REQ_ASSIGN */
   char *artist;
   char *title;
   struct request *next;
@@ -101,8 +102,10 @@ struct mc_import {
   int offline;      /* MusicBrainz was unreachable at the last check */
   uint64_t next_probe_ms; /* while offline: when to check again */
   request *head, *tail;
-  /* Item state, error, chosen and candidates are guarded by lock once items are published.
-   * Everything else about items and files is written only before publishing. */
+  /* Item state, error, chosen and candidates are guarded by lock once items are published,
+   * and so are an item's files (mc_import_assign moves files between items). They change only
+   * on the import thread, which can read them without the lock. Everything else about items
+   * and files is written only before publishing. */
   item *items;
   int item_count;
 
@@ -1232,6 +1235,82 @@ static void auto_match(mc_import *imp, mc_library *lib, int idx) {
   }
 }
 
+static int busy(mc_import_state s) {
+  return s == MC_IMPORT_PENDING || s == MC_IMPORT_MATCHING || s == MC_IMPORT_WRITING;
+}
+
+/* Counts a candidate's missing tracks and extra files from its map. */
+static void recount(candidate *c, int file_count) {
+  int matched = 0;
+  for (int i = 0; i < file_count; i++) matched += c->map[i] >= 0;
+  c->missing = c->rel.track_count - matched;
+  c->extra = file_count - matched;
+}
+
+/* Moves file `file` of item `from` to the end of item `to`'s files, unmatched in every
+ * candidate of `to`. The caller holds the lock. Returns the file's index in `to`, or -1 when
+ * out of memory (nothing has moved then). */
+static int move_file_locked(mc_import *imp, int to, int from, int file) {
+  item *a = &imp->items[to], *b = &imp->items[from];
+  int n = a->file_count + 1;
+  int *files = realloc(a->files, (size_t)n * sizeof *files);
+  if (!files) return -1;
+  a->files = files;
+  for (int k = 0; k < a->cand_count; k++) {
+    int *map = realloc(a->cands[k].map, (size_t)n * sizeof *map);
+    if (!map) return -1; /* the maps that grew are only bigger */
+    a->cands[k].map = map;
+  }
+  a->files[a->file_count] = b->files[file];
+  for (int k = 0; k < a->cand_count; k++) a->cands[k].map[a->file_count] = -1;
+  a->file_count = n;
+  for (int k = 0; k < a->cand_count; k++) recount(&a->cands[k], n);
+
+  int rest = b->file_count - file - 1;
+  memmove(&b->files[file], &b->files[file + 1], (size_t)rest * sizeof *b->files);
+  for (int k = 0; k < b->cand_count; k++) {
+    int *map = b->cands[k].map;
+    memmove(&map[file], &map[file + 1], (size_t)rest * sizeof *map);
+  }
+  b->file_count--;
+  for (int k = 0; k < b->cand_count; k++) recount(&b->cands[k], b->file_count);
+  return n - 1;
+}
+
+/* REQ_ASSIGN (mc_import_assign): the file becomes the track, then the item is written. */
+static void assign_file(mc_import *imp, mc_library *lib, const request *r) {
+  mc_mutex_lock(&imp->lock);
+  item *it = &imp->items[r->item];
+  item *from = &imp->items[r->from_item];
+  /* Checked when queued, but requests before this one may have changed the items. */
+  int ok = !busy(it->state) && !busy(from->state) && r->match >= 0 && r->match < it->cand_count &&
+           r->track >= 0 && r->track < it->cands[r->match].rel.track_count && r->file >= 0 &&
+           r->file < from->file_count;
+  int file = r->file;
+  if (ok && r->from_item != r->item) {
+    file = move_file_locked(imp, r->item, r->from_item, r->file);
+    ok = file >= 0;
+    if (ok && from->file_count == 0) {
+      from->state = MC_IMPORT_SKIPPED;
+      from->outcome = MC_IMPORT_OUTCOME_MOVED;
+      from->unreachable = 0;
+      free(from->error);
+      from->error = NULL;
+    }
+  }
+  if (ok) {
+    candidate *c = &it->cands[r->match];
+    for (int i = 0; i < it->file_count; i++)
+      if (c->map[i] == r->track) c->map[i] = -1; /* the file that was on it stays, unmatched */
+    c->map[file] = r->track;
+    recount(c, it->file_count);
+  }
+  mc_mutex_unlock(&imp->lock);
+  if (!ok) return;
+  if (r->from_item != r->item) emit(imp, MC_IMPORT_EV_ITEM_CHANGED, r->from_item);
+  write_item(imp, lib, r->item, r->match);
+}
+
 static void handle_request(mc_import *imp, mc_library *lib, request *r) {
   if (!lib) {
     set_state(imp, r->item, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
@@ -1250,6 +1329,7 @@ static void handle_request(mc_import *imp, mc_library *lib, request *r) {
     case REQ_SEARCH:
       if (match_item(imp, lib, r->item, r->artist, r->title)) probe(imp);
       break;
+    case REQ_ASSIGN: assign_file(imp, lib, r); break;
     case REQ_RETRY: {
       /* Only if nothing else happened to the item since it was queued. */
       mc_mutex_lock(&imp->lock);
@@ -1536,9 +1616,9 @@ static mc_status enqueue(mc_import *imp, req_kind kind, int idx, int match, cons
     st = MC_ERR_INVALID_ARG;
   } else {
     /* Busy items can't be changed; a finished one can be re-tagged but not un-imported. */
+    /* Nor one whose files all went to another item (mc_import_assign). */
     mc_import_state s = imp->items[idx].state;
-    if (s == MC_IMPORT_PENDING || s == MC_IMPORT_MATCHING || s == MC_IMPORT_WRITING ||
-        (s == MC_IMPORT_DONE && kind == REQ_SKIP))
+    if (busy(s) || (s == MC_IMPORT_DONE && kind == REQ_SKIP) || imp->items[idx].file_count == 0)
       st = MC_ERR_INVALID_ARG;
   }
   if (st == MC_OK) {
@@ -1567,6 +1647,60 @@ mc_status mc_import_skip(mc_import *imp, int idx) {
 mc_status mc_import_search(mc_import *imp, int idx, const char *artist, const char *title) {
   if (!title || !*title) return MC_ERR_INVALID_ARG;
   return enqueue(imp, REQ_SEARCH, idx, -1, artist, title);
+}
+
+mc_status mc_import_assign(mc_import *imp, int idx, int match, int track, int from_item, int file) {
+  if (!imp) return MC_ERR_INVALID_ARG;
+  request *r = calloc(1, sizeof *r);
+  if (!r) return MC_ERR_NOMEM;
+  r->kind = REQ_ASSIGN;
+  r->item = idx;
+  r->match = match;
+  r->track = track;
+  r->from_item = from_item;
+  r->file = file;
+
+  mc_mutex_lock(&imp->lock);
+  mc_status st = MC_ERR_INVALID_ARG;
+  if (idx >= 0 && idx < imp->item_count && from_item >= 0 && from_item < imp->item_count) {
+    const item *it = &imp->items[idx], *from = &imp->items[from_item];
+    if (!busy(it->state) && !busy(from->state) && match >= 0 && match < it->cand_count &&
+        track >= 0 && track < it->cands[match].rel.track_count && file >= 0 && file < from->file_count)
+      st = MC_OK;
+  }
+  if (st == MC_OK) {
+    if (imp->tail) imp->tail->next = r;
+    else imp->head = r;
+    imp->tail = r;
+    mc_cond_broadcast(&imp->wake);
+  }
+  mc_mutex_unlock(&imp->lock);
+  if (st != MC_OK) request_free(r);
+  return st;
+}
+
+/* Whether dir is root or a folder inside it. */
+static int folder_within(const char *dir, const char *root) {
+  size_t n = root ? strlen(root) : 0;
+  if (!dir || !n || strncmp(dir, root, n) != 0) return 0;
+  return dir[n] == '\0' || dir[n] == '/' || dir[n] == '\\';
+}
+
+int mc_import_related(mc_import *imp, int idx, int *out, int max) {
+  if (!imp) return 0;
+  int n = 0;
+  mc_mutex_lock(&imp->lock);
+  if (idx >= 0 && idx < imp->item_count) {
+    const char *root = imp->items[idx].folder;
+    for (int i = 0; i < imp->item_count; i++) {
+      const item *it = &imp->items[i];
+      if (i == idx || it->file_count == 0 || !folder_within(it->folder, root)) continue;
+      if (out && n < max) out[n] = i;
+      n++;
+    }
+  }
+  mc_mutex_unlock(&imp->lock);
+  return n;
 }
 
 mc_status mc_import_skip_tagging(mc_import *imp) {

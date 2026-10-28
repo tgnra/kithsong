@@ -22,6 +22,13 @@
 /* Shared by every thread in the process: the limit is per client, not per request. */
 static mc_ratelimit g_mb_rate;
 
+/* Set by tests (mb_set_fake). */
+static const mb_fake *g_fake;
+
+void mb_set_fake(const mb_fake *fake) {
+  g_fake = fake;
+}
+
 void mc_musicbrainz_global_init(void) {
   mc_ratelimit_init(&g_mb_rate, 1100); /* a little over 1 s for clock slack */
 }
@@ -71,6 +78,7 @@ mc_status mc_musicbrainz_ping(char **out_name) {
 }
 
 mc_status mc_musicbrainz_reachable(int timeout_ms) {
+  if (g_fake) return MC_OK;
   char host[256];
   uint16_t port = 443;
   snprintf(host, sizeof host, "%s", MB_HOST);
@@ -291,6 +299,8 @@ mc_status mb_search_releases(const char *artist, const char *album, int track_co
                              char (*ids)[MC_UID_STRLEN], int max, int *n) {
   *n = 0;
   if (!album || !*album) return MC_ERR_INVALID_ARG;
+  if (g_fake)
+    return g_fake->search_releases ? g_fake->search_releases(artist, album, track_count, ids, max, n) : MC_OK;
   char *path = search_path("release", "release", album, "artist", artist, 15);
   if (!path) return MC_ERR_NOMEM;
 
@@ -330,6 +340,7 @@ mc_status mb_search_releases(const char *artist, const char *album, int track_co
 mc_status mb_lookup_release(const char *id, mb_release *out) {
   memset(out, 0, sizeof *out);
   if (!is_mbid(id)) return MC_ERR_INVALID_ARG;
+  if (g_fake) return g_fake->lookup_release ? g_fake->lookup_release(id, out) : MC_ERR_NOT_FOUND;
   char path[128];
   snprintf(path, sizeof path, "/release/%s?inc=recordings+artist-credits+release-groups+labels",
            id);
@@ -489,6 +500,8 @@ mc_status mb_search_recordings(const char *artist, const char *title, mb_release
                                int *n) {
   *n = 0;
   if (!title || !*title) return MC_ERR_INVALID_ARG;
+  if (g_fake)
+    return g_fake->search_recordings ? g_fake->search_recordings(artist, title, out, max, n) : MC_OK;
   char *path = search_path("recording", "recording", title, "artist", artist, max);
   if (!path) return MC_ERR_NOMEM;
   mc_status st = recordings_from(path, out, max, n);
@@ -501,6 +514,7 @@ mc_status mb_lookup_recording(const char *id, mb_release *out) {
    * entry, which a plain lookup doesn't. */
   memset(out, 0, sizeof *out);
   if (!is_mbid(id)) return MC_ERR_INVALID_ARG;
+  if (g_fake) return g_fake->lookup_recording ? g_fake->lookup_recording(id, out) : MC_ERR_NOT_FOUND;
   char path[96];
   snprintf(path, sizeof path, "/recording?query=rid:%s&limit=1", id);
   int n = 0;

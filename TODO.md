@@ -110,6 +110,8 @@ Big pieces that haven't been started, or that only one platform has.
 - Core - the offline check (mc_musicbrainz_reachable) bounds the connect but not the name lookup, so a network with broken DNS can stall each check; it runs before matching and every 30 s while offline
 - Core - duplicates: a swap keeps the library's album and track metadata and files the new file under the old name; the new file's tags come from its own match, so a release-group or by-name swap can leave tags naming another release than the library row
 - Core - duplicates: a byte-identical file is only recognised against files that were imported as-is or synced (matched imports are re-tagged in the library, so their bytes differ from the source)
+- All - Use as Track (mc_import_assign) works only within an import session: once Done is clicked the session's matches are gone, so an album already in the library can't be fixed that way. It would need the release's track list kept (or looked up again by mb_albumid) and a library-side "assign this file to that track"
+- Core - Use as Track doesn't recompute the match's confidence, and rewriting an already imported item skips the duplicates check (its files are in the library), so a file brought in from outside the library replaces a library copy at the same path rather than being compared for quality
 - Android - bring import back:
   - the UI (header button, folder sheet, progress card), the READ_MEDIA_AUDIO/READ_EXTERNAL_STORAGE permissions and their request flow, and the foreground ImportService (see the Phase 5 commit)
   - the offline banner the desktops have (MC_IMPORT_EV_OFFLINE, mc_import_skip_tagging)
@@ -199,6 +201,7 @@ Things built but not checked properly.
 - The Settings scrobbling group on screen
 - Delete and restore in the running app
 - Import outcomes ("Replaced with higher quality", "Already in library", "Added missing tracks")
+- Import review's Use as Track N (multi-select track list, right-click menu, files of related items): written without a GTK build at hand, not even compiled yet
 - Playlists page, now the -std=c11 core fix (68d61bf) and track_list_item_at() fix (3eaa789) are in
 - Sync: pairing with Windows or Android, the over-budget estimate, a watch's icon, switching library while a device page is open, and a real LAN (only two Docker containers so far)
 - Move library's refused close-request under a real window manager

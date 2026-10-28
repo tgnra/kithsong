@@ -63,4 +63,19 @@ mc_status mb_search_recordings(const char *artist, const char *title, mb_release
 /* One recording by id, as a one-track release (see mb_search_recordings). */
 mc_status mb_lookup_recording(const char *id, mb_release *out);
 
+/* For tests: answers the lookups above instead of musicbrainz.org, without the rate limit,
+ * until set back to NULL. A NULL function finds nothing. While a fake is set,
+ * mc_musicbrainz_reachable() says MusicBrainz is reachable. Not thread-safe: set it while
+ * no import is running. */
+typedef struct mb_fake {
+  mc_status (*search_releases)(const char *artist, const char *album, int track_count,
+                               char (*ids)[MC_UID_STRLEN], int max, int *n);
+  mc_status (*lookup_release)(const char *id, mb_release *out);
+  mc_status (*search_recordings)(const char *artist, const char *title, mb_release *out, int max,
+                                 int *n);
+  mc_status (*lookup_recording)(const char *id, mb_release *out);
+} mb_fake;
+
+void mb_set_fake(const mb_fake *fake);
+
 #endif

@@ -142,7 +142,9 @@ typedef enum mc_import_outcome {
   MC_IMPORT_OUTCOME_REPLACED,  /* DONE: replaced the library's copy with higher quality */
   MC_IMPORT_OUTCOME_ADDED,     /* DONE: added the tracks the library lacked; the rest were
                                 * already there in equal or better quality */
-  MC_IMPORT_OUTCOME_DUPLICATE  /* SKIPPED: already in the library in equal or better quality */
+  MC_IMPORT_OUTCOME_DUPLICATE, /* SKIPPED: already in the library in equal or better quality */
+  MC_IMPORT_OUTCOME_MOVED      /* SKIPPED: its files were all assigned to another item's
+                                * tracks (mc_import_assign); it has none left */
 } mc_import_outcome;
 
 typedef struct mc_import_options {
@@ -227,6 +229,31 @@ mc_status mc_import_accept_as_is(mc_import *imp, int item); /* keep existing tag
 mc_status mc_import_skip(mc_import *imp, int item);
 /* Searches again with user-supplied terms. title is the album, or the track for a single. */
 mc_status mc_import_search(mc_import *imp, int item, const char *artist, const char *title);
+
+/* Fixes a match the tagger got wrong: makes file `file` of item `from_item` release track
+ * `track` (an index into matches[match].tracks) of item `item`, then writes `item` with that
+ * match, as mc_import_accept() does. So the file is tagged and filed as that track whether the
+ * item was still in review or already imported; for an imported item its files are already in
+ * the library, so they're re-tagged and moved in place, and the library rows updated (tracks
+ * keep their uids).
+ *
+ * The file may be one of the item's own (one left unmatched, or matched to another track), or
+ * belong to another item of the session, e.g. a file whose tags put it in an item of its own.
+ * Then it moves into `item`: it's gone from from_item, whose candidates no longer count it,
+ * and if from_item had already put it in the library, its library row moves to this album
+ * (an album left empty is deleted). A from_item with no files left becomes MC_IMPORT_SKIPPED
+ * with MC_IMPORT_OUTCOME_MOVED. A file already on that track stays in the item, unmatched.
+ * The match's confidence isn't recomputed.
+ *
+ * Neither item may be busy (pending, matching or writing): MC_ERR_INVALID_ARG, as for bad
+ * indices. File indices of both items change, so frontends read them again on
+ * MC_IMPORT_EV_ITEM_CHANGED. Queued like the calls above. */
+mc_status mc_import_assign(mc_import *imp, int item, int match, int track, int from_item, int file);
+
+/* Other items whose folder is item's folder or inside it (a disc folder, say): where files
+ * that belong to item but were grouped apart from it are. Fills up to max indices into out and
+ * returns how many there are in all. */
+int mc_import_related(mc_import *imp, int item, int *out, int max);
 
 /* Stops tagging for the rest of the session, as if it had been started with skip_tagging:
  * items not matched yet, and items in review because MusicBrainz couldn't be reached, are
