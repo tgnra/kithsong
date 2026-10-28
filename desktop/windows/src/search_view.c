@@ -179,14 +179,20 @@ static void load_lists(void) {
   }
   mc_album_list_free(albums);
 
+  /* The playlists the grid shows, smart ones included. */
   mc_playlist_list *playlists = NULL;
-  if (v.lib && mc_library_list_playlists(v.lib, MC_LIST_PLAYABLE, &playlists) == MC_OK && playlists->count) {
-    v.playlists = calloc((size_t)playlists->count, sizeof *v.playlists);
-    v.nplaylists = v.playlists ? playlists->count : 0;
-    for (int i = 0; i < v.nplaylists; i++) memcpy(v.playlists[i], playlists->items[i].uid, MC_UID_STRLEN);
-    qsort(v.playlists, (size_t)v.nplaylists, sizeof *v.playlists, uid_cmp);
-  }
+  mc_smart_list *smart = NULL;
+  if (v.lib && mc_library_list_playlists(v.lib, MC_LIST_PLAYABLE, &playlists) != MC_OK) playlists = NULL;
+  if (v.lib && mc_library_list_smart(v.lib, MC_LIST_PLAYABLE, &smart) != MC_OK) smart = NULL;
+  int n = (playlists ? playlists->count : 0) + (smart ? smart->count : 0);
+  v.playlists = n ? calloc((size_t)n, sizeof *v.playlists) : NULL;
+  for (int i = 0; v.playlists && playlists && i < playlists->count; i++)
+    memcpy(v.playlists[v.nplaylists++], playlists->items[i].uid, MC_UID_STRLEN);
+  for (int i = 0; v.playlists && smart && i < smart->count; i++)
+    if (smart->items[i].subject == MC_SMART_TRACKS) memcpy(v.playlists[v.nplaylists++], smart->items[i].uid, MC_UID_STRLEN);
+  if (v.nplaylists) qsort(v.playlists, (size_t)v.nplaylists, sizeof *v.playlists, uid_cmp);
   mc_playlist_list_free(playlists);
+  mc_smart_list_free(smart);
 }
 
 static const album_ref *find_album(const char *uid) {
@@ -334,13 +340,13 @@ static void free_hits(hit *hits, int n) {
 }
 
 /* A track's artist and album, or whichever is known; an album's artist; a playlist's
- * "Playlist". NULL for none. */
+ * "Playlist" (or "Smart playlist"), and likewise a group's. NULL for none. */
 static wchar_t *hit_sub(const mc_search_hit *h) {
   wchar_t buf[512];
   switch (h->kind) {
     case MC_SEARCH_ALBUM: return widen(h->artist ? h->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
-    case MC_SEARCH_PLAYLIST: return h->is_smart ? NULL : _wcsdup(mc_wstr(MC_STR_PLAYLIST));
-    case MC_SEARCH_ALBUM_GROUP: return h->is_smart ? NULL : _wcsdup(mc_wstr(MC_STR_ALBUM_GROUP));
+    case MC_SEARCH_PLAYLIST: return _wcsdup(mc_wstr(h->is_smart ? MC_STR_SMART_PLAYLIST : MC_STR_PLAYLIST));
+    case MC_SEARCH_ALBUM_GROUP: return _wcsdup(mc_wstr(h->is_smart ? MC_STR_SMART_ALBUM_GROUP : MC_STR_ALBUM_GROUP));
     case MC_SEARCH_TRACK:
       if (h->artist && h->album) {
         mc_wformat(buf, 512, mc_str(MC_STR_TRACK_BYLINE), MC_S(h->artist), MC_S(h->album));
@@ -410,8 +416,8 @@ static void show_results(BOOL keep) {
         case MC_SEARCH_ARTIST:
         case MC_SEARCH_ALBUM: h->opens = TRUE; break;
         case MC_SEARCH_TRACK: h->opens = find_album(r->album_uid) != NULL; break;
-        case MC_SEARCH_PLAYLIST: h->opens = !r->is_smart && playable_playlist(r->uid); break;
-        case MC_SEARCH_ALBUM_GROUP: h->opens = !r->is_smart; break;
+        case MC_SEARCH_PLAYLIST: h->opens = playable_playlist(r->uid); break;
+        case MC_SEARCH_ALBUM_GROUP: h->opens = TRUE; break;
         default: h->opens = FALSE; break; /* no page for it here yet */
       }
       if (album && album->cover_dir) h->cover_dir = _wcsdup(album->cover_dir);

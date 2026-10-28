@@ -45,6 +45,8 @@
 /* The track menu's Delete from Library...: track_uid, out of the library and to the Recycle
  * Bin (delete_dialog.h). */
 #define TLN_DELETE_TRACK 10
+/* A random smart playlist's Reshuffle button: give the shown one a new order. */
+#define TLN_RESHUFFLE 11
 
 typedef struct track_list_request {
   char track_uid[MC_UID_STRLEN];
@@ -69,6 +71,10 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
  * and no header or close button: on the artist page, which has its own. Escape still sends
  * TLN_CLOSE. Showing the same one again reloads it, as track_list_show does. */
 void track_list_show_artist(mc_library *lib, const char *artist_uid);
+/* Shows smart playlist uid's tracks, as its rule picks them now, with "Smart playlist" for
+ * the artist. Nothing can be moved or removed, and there's no playlist menu; in random
+ * order (random), a Reshuffle button sits where the menu's button would (TLN_RESHUFFLE). */
+void track_list_show_smart(mc_library *lib, const char *uid, const wchar_t *title, BOOL random);
 /* The header's details for the album shown: its artist (NULL shows "Unknown Artist"), year
  * (0 if unknown) and the folder holding its cover (NULL if there's none). Call after
  * track_list_show. A playlist's header shows "Playlist" for the artist, and cover is its

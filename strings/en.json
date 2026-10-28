@@ -129,6 +129,13 @@
     "new_album_group_menu": "New album group…",
     "album_group_delete_menu": "Delete album group…",
 
+    "smart_playlist": { "text": "Smart playlist", "note": "A playlist whose tracks are chosen by a rule, e.g. \"the 100 most played\"; under its name, and in search results and recents." },
+    "smart_album_group": { "text": "Smart album group", "note": "An album group whose albums are chosen by a rule, e.g. \"albums added recently\"." },
+    "reshuffle": { "text": "Reshuffle", "note": "Button on a smart playlist or smart album group that's in a random order: picks a new random order." },
+    "reshuffle_failed": "Couldn't reshuffle",
+    "smart_list_empty_title": { "text": "Nothing matches yet", "note": "A smart playlist's or smart album group's page when its rule picks nothing." },
+    "smart_list_empty_text": "Nothing in your library matches this list's rule",
+
     "add_device": "Add device",
     "add_device_text": "Enter the address of a device on your network. It will show a code to enter next.",
     "add_device_host": "_IP address or hostname",
@@ -514,7 +521,6 @@
     "albums": { "one": "{0:d} album", "other": "{0:d} albums" },
 
     "jump_to_section": "Jump to a section",
-    "reshuffle": { "text": "Reshuffle", "note": "Button on a smart playlist or smart album group that's in a random order: picks a new random order." },
 
     "album_byline_year": { "text": "{0} – {1:d}", "note": "Track list screen: an album's artist and year." },
 

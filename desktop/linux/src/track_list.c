@@ -76,6 +76,7 @@ static struct {
   char menu_entry[MC_UID_STRLEN]; /* and its playlist entry, or "" */
   guint menu_pos;
   GtkWidget *playlist_button;     /* the header's menu, shown for playlists */
+  GtkWidget *reshuffle_button;    /* shown for smart playlists in random order */
   GtkWidget *actions;             /* Play and Shuffle */
   char playing_uid[MC_UID_STRLEN];
 } s;
@@ -87,8 +88,9 @@ static TrackItem *track_at(guint i) {
   return t;
 }
 
+/* A playlist whose entries can be moved, removed, renamed and deleted: not a smart one. */
 static gboolean showing_playlist(void) {
-  return s.album && s.album->is_playlist;
+  return s.album && s.album->is_playlist && !s.album->is_smart;
 }
 
 static void row_update(row *r) {
@@ -332,6 +334,12 @@ static void cover_loaded(GdkTexture *texture, gpointer user) {
   gtk_picture_set_paintable(GTK_PICTURE(s.cover), GDK_PAINTABLE(texture));
 }
 
+static void on_reshuffle(GtkButton *button, gpointer user) {
+  (void)button;
+  (void)user;
+  if (s.cb.reshuffle && s.album && s.album->is_smart) s.cb.reshuffle(s.cb.user);
+}
+
 static GtkWidget *build_header(void) {
   GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
   gtk_widget_set_margin_start(header, 18);
@@ -376,6 +384,15 @@ static GtkWidget *build_header(void) {
   gtk_widget_set_valign(s.playlist_button, GTK_ALIGN_START);
   gtk_widget_set_visible(s.playlist_button, FALSE);
   gtk_box_append(GTK_BOX(header), s.playlist_button);
+
+  s.reshuffle_button = gtk_button_new_from_icon_name("view-refresh-symbolic");
+  gtk_widget_set_tooltip_text(s.reshuffle_button, mc_str(MC_STR_RESHUFFLE));
+  gtk_widget_add_css_class(s.reshuffle_button, "flat");
+  gtk_widget_add_css_class(s.reshuffle_button, "circular");
+  gtk_widget_set_valign(s.reshuffle_button, GTK_ALIGN_START);
+  gtk_widget_set_visible(s.reshuffle_button, FALSE);
+  g_signal_connect(s.reshuffle_button, "clicked", G_CALLBACK(on_reshuffle), NULL);
+  gtk_box_append(GTK_BOX(header), s.reshuffle_button);
 
   GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic");
   gtk_widget_set_tooltip_text(close, mc_str(MC_STR_CLOSE));
@@ -563,7 +580,8 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   /* The selected track; in a playlist, its entry, as a track can be in it twice. */
   char keep[MC_UID_STRLEN] = "";
   TrackItem *sel = gtk_single_selection_get_selected_item(s.selection);
-  if (same && sel) memcpy(keep, album->is_playlist ? sel->entry_uid : sel->uid, sizeof keep);
+  gboolean entries = album && album->is_playlist && !album->is_smart; /* else by track */
+  if (same && sel) memcpy(keep, entries ? sel->entry_uid : sel->uid, sizeof keep);
   /* A playlist's picture changes with its tracks, and an album's cover may have arrived. */
   gboolean new_cover = !same || g_strcmp0(album->cover_file, s.album->cover_file);
   if (album) g_object_ref(album);
@@ -573,8 +591,9 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   mc_track_list *list = NULL;
   mc_status st = MC_OK;
   if (lib && album)
-    st = album->is_playlist ? mc_library_list_playlist_tracks(lib, album->uid, &list)
-                            : mc_library_list_album_tracks(lib, album->uid, &list);
+    st = album->is_smart      ? mc_library_list_smart_tracks(lib, album->uid, &list)
+         : album->is_playlist ? mc_library_list_playlist_tracks(lib, album->uid, &list)
+                              : mc_library_list_album_tracks(lib, album->uid, &list);
   if (st != MC_OK) list = NULL;
   int n = list ? list->count : 0, total_ms = 0;
   gboolean discs = FALSE, playable = FALSE;
@@ -599,7 +618,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
     it->cover_dir = g_strdup(t->cover_dir);
     total_ms += t->duration_ms > 0 ? t->duration_ms : 0;
     if (keep[0] && selected == GTK_INVALID_LIST_POSITION &&
-        !strcmp(album->is_playlist ? it->entry_uid : it->uid, keep))
+        !strcmp(entries ? it->entry_uid : it->uid, keep))
       selected = (guint)i;
   }
   mc_track_list_free(list);
@@ -609,11 +628,13 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   g_free(items);
 
   gtk_label_set_text(GTK_LABEL(s.title), album ? album->title : "");
-  gtk_label_set_text(GTK_LABEL(s.artist), album && album->is_playlist ? mc_str(MC_STR_PLAYLIST)
-                                          : album && album->artist ? album->artist
-                                                                   : mc_str(MC_STR_UNKNOWN_ARTIST));
+  gtk_label_set_text(GTK_LABEL(s.artist), album && album->is_smart      ? mc_str(MC_STR_SMART_PLAYLIST)
+                                          : album && album->is_playlist ? mc_str(MC_STR_PLAYLIST)
+                                          : album && album->artist      ? album->artist
+                                                                        : mc_str(MC_STR_UNKNOWN_ARTIST));
   set_summary(album ? album->year : 0, n, total_ms);
-  gtk_widget_set_visible(s.playlist_button, album && album->is_playlist);
+  gtk_widget_set_visible(s.playlist_button, entries);
+  gtk_widget_set_visible(s.reshuffle_button, album && album->is_smart && album->random);
   gtk_widget_set_sensitive(s.actions, playable);
   if (!same) gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(s.scroller)), 0);
   if (new_cover) {

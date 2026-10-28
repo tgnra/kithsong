@@ -170,7 +170,7 @@ static void test_migration_v4(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 9);
+  CHECK(mc_library_schema_version(lib) == 10);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
   CHECK(has_column(db, "files", "sha256"));
   CHECK(strlen(mc_library_uid(lib)) == MC_UID_STRLEN - 1);
@@ -204,7 +204,7 @@ static void test_migration_v5(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 9);
+  CHECK(mc_library_schema_version(lib) == 10);
   CHECK(has_column(db, "album_groups", "name"));
   CHECK(has_column(db, "album_group_entries", "position"));
 
@@ -250,7 +250,7 @@ static void test_migration_v6(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 9);
+  CHECK(mc_library_schema_version(lib) == 10);
   CHECK(has_column(db, "smart_lists", "rule"));
   CHECK(has_column(db, "track_plays", "last_played_ms"));
 
@@ -270,6 +270,63 @@ static void test_migration_v6(const char *scratch) {
                       " AND node_uid = mc_node_uid()") == 2);
   CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'track_plays'"
                       " AND row_uid = 'p1' AND field = 'last_played_ms'") == 1);
+  mc_library_close(lib);
+}
+
+/* Migration v10: the example smart lists. Every device makes the same rows (fixed uids) and
+ * none are logged, also when the triggers from the last open are there as it runs; they
+ * evaluate on an empty library, holding nothing; later edits are logged as usual. */
+static void test_migration_v10(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v10.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(query_int(db, "SELECT count(*) FROM smart_lists") == 5);
+  CHECK(changelog_count(db, "entity = 'smart_lists'") == 0);
+  mc_smart_list *lists = NULL;
+  CHECK(mc_library_list_smart(lib, 0, &lists) == MC_OK && lists && lists->count == 5);
+  int tracks = 0, random = 0;
+  for (int i = 0; lists && i < lists->count; i++) {
+    const mc_smart_info *s = &lists->items[i];
+    tracks += s->subject == MC_SMART_TRACKS;
+    random += s->random;
+    CHECK(strncmp(s->uid, "5e1ec7ed-", 9) == 0);
+    if (s->subject == MC_SMART_TRACKS) {
+      mc_track_list *t = NULL;
+      CHECK(mc_library_list_smart_tracks(lib, s->uid, &t) == MC_OK && t && t->count == 0);
+      mc_track_list_free(t);
+    } else {
+      mc_album_list *a = NULL;
+      CHECK(mc_library_list_smart_albums(lib, s->uid, &a) == MC_OK && a && a->count == 0);
+      mc_album_list_free(a);
+    }
+  }
+  CHECK(tracks == 3 && random == 2);
+  mc_smart_list_free(lists);
+  lists = NULL;
+  CHECK(mc_library_list_smart(lib, MC_LIST_PLAYABLE, &lists) == MC_OK && lists && lists->count == 0 &&
+        lists->hidden == 5);
+  mc_smart_list_free(lists);
+
+  /* Back to v9 with the triggers in place: the migration runs again without logging. */
+  lib->applying_remote = 1;
+  CHECK(exec(db, "DELETE FROM smart_lists; PRAGMA user_version = 9;") == SQLITE_OK);
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 10);
+  CHECK(query_int(db, "SELECT count(*) FROM smart_lists") == 5);
+  CHECK(changelog_count(db, "entity = 'smart_lists'") == 0);
+  CHECK(mc_smart_reshuffle(lib, "5e1ec7ed-0000-4000-8000-000000000003") == MC_OK);
+  CHECK(changelog_count(db, "entity = 'smart_lists' AND row_uid = '5e1ec7ed-0000-4000-8000-000000000003'"
+                            " AND origin_uid = mc_node_uid()") == 1);
   mc_library_close(lib);
 }
 
@@ -304,7 +361,7 @@ static void test_recents(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 9);
+  CHECK(mc_library_schema_version(lib) == 10);
   CHECK(has_column(db, "recents", "opened_ms"));
   CHECK(has_column(db, "tracks", "file_rev")); /* v9 */
   CHECK(has_column(db, "files", "file_rev"));
@@ -575,6 +632,7 @@ static void test_playable(const char *scratch) {
 
   /* Smart lists: a smart playlist by whether its tracks have files here, a smart album group
    * by whether its albums do, and one whose rule can't be evaluated is left out too. */
+  CHECK(exec(db, "DELETE FROM smart_lists") == SQLITE_OK); /* v10's examples */
   char s_uid[MC_UID_STRLEN];
   CHECK(mc_smart_create(lib, "Ones", MC_SMART_TRACKS,
                         "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"One\"}}", s_uid) == MC_OK);
@@ -852,7 +910,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 9);
+  CHECK(mc_library_schema_version(lib) == 10);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -933,7 +991,7 @@ int main(int argc, char **argv) {
   if (lib) {
     CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
     CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
-    CHECK(mc_library_schema_version(lib) == 9);
+    CHECK(mc_library_schema_version(lib) == 10);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }
@@ -967,6 +1025,7 @@ int main(int argc, char **argv) {
   test_migration_v5(argc > 1 ? argv[1] : ".");
   test_migration_v6(argc > 1 ? argv[1] : ".");
   test_recents(argc > 1 ? argv[1] : ".");
+  test_migration_v10(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
   test_playable(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");

@@ -44,7 +44,8 @@ typedef struct mc_smart_info {
   char uid[MC_UID_STRLEN];
   char *name;
   mc_smart_subject subject;
-  char *rule; /* the rule's JSON */
+  char *rule;  /* the rule's JSON */
+  int random;  /* ordered by random, so mc_smart_reshuffle() gives it a new order */
 } mc_smart_info;
 
 typedef struct mc_smart_list {

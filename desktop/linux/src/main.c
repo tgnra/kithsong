@@ -677,15 +677,24 @@ static void on_track_move(void *user, const char *entry_uid, const char *after_e
 static void on_playlist_rename(void *user) {
   app *a = user;
   AlbumItem *playlist = track_list_album();
-  if (playlist && playlist->is_playlist)
+  if (playlist && playlist->is_playlist && !playlist->is_smart)
     playlist_rename_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
 }
 
 static void on_playlist_delete(void *user) {
   app *a = user;
   AlbumItem *playlist = track_list_album();
-  if (playlist && playlist->is_playlist)
+  if (playlist && playlist->is_playlist && !playlist->is_smart)
     playlist_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+}
+
+/* A new order for the shown smart playlist, which is in random order. */
+static void on_reshuffle(void *user) {
+  app *a = user;
+  AlbumItem *playlist = track_list_album();
+  if (!playlist || !playlist->is_smart) return;
+  if (mc_smart_reshuffle(a->lib, playlist->uid) != MC_OK) playlist_failed(a, mc_str(MC_STR_RESHUFFLE_FAILED));
+  app_reload_library(a);
 }
 
 /* The track menu's Delete from Library.... (Delete album... is on the album tiles' menu,
@@ -966,7 +975,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_overlay_split_view_set_max_sidebar_width(a->album_split, 420);
   const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
                                           on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete,
-                                          on_track_delete, a};
+                                          on_track_delete, on_reshuffle, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
   adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);

@@ -105,10 +105,11 @@ static GtkWidget *album_section(const mc_search_results *res) {
 }
 
 /* A track's artist and album, or whichever is known; a playlist's "Playlist", a group's
- * "Album group". g_free it. */
+ * "Album group" (or "Smart playlist", "Smart album group"). g_free it. */
 static char *hit_subtitle(const mc_search_hit *h) {
-  if (h->kind == MC_SEARCH_PLAYLIST) return h->is_smart ? NULL : g_strdup(mc_str(MC_STR_PLAYLIST));
-  if (h->kind == MC_SEARCH_ALBUM_GROUP) return h->is_smart ? NULL : g_strdup(mc_str(MC_STR_ALBUM_GROUP));
+  if (h->kind == MC_SEARCH_PLAYLIST) return g_strdup(mc_str(h->is_smart ? MC_STR_SMART_PLAYLIST : MC_STR_PLAYLIST));
+  if (h->kind == MC_SEARCH_ALBUM_GROUP)
+    return g_strdup(mc_str(h->is_smart ? MC_STR_SMART_ALBUM_GROUP : MC_STR_ALBUM_GROUP));
   if (h->kind != MC_SEARCH_TRACK) return NULL;
   if (h->artist && h->album) {
     char *s = mc_format_alloc(mc_str(MC_STR_TRACK_BYLINE), MC_S(h->artist), MC_S(h->album));
@@ -126,13 +127,13 @@ static gboolean grid_has(GtkWidget *grid, const char *uid) {
   return item != NULL;
 }
 
-/* Whether this computer has a page to open the hit on. Smart lists have none yet. */
+/* Whether this computer has a page to open the hit on. */
 static gboolean hit_opens(const mc_search_hit *h) {
   switch (h->kind) {
     case MC_SEARCH_ARTIST: return TRUE;
     case MC_SEARCH_TRACK: return grid_has(v.a->album_grid, h->album_uid); /* gone since the index was built? */
-    case MC_SEARCH_PLAYLIST: return !h->is_smart && grid_has(v.a->playlist_grid, h->uid); /* only playable ones */
-    case MC_SEARCH_ALBUM_GROUP: return !h->is_smart;
+    case MC_SEARCH_PLAYLIST: return grid_has(v.a->playlist_grid, h->uid); /* only playable ones */
+    case MC_SEARCH_ALBUM_GROUP: return TRUE;
     default: return FALSE;
   }
 }

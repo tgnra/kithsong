@@ -92,6 +92,28 @@ static const char *const k_migrations[] = {
    * track's is stale, and sync replaces it (transfer.c). Not logged: files are per device. */
   "ALTER TABLE tracks ADD COLUMN file_rev TEXT;"
   "ALTER TABLE files ADD COLUMN file_rev TEXT;",
+  /* v10: example smart lists, so a library has some to open before there's an editor. Their
+   * uids are fixed, so every device makes the same rows: they aren't logged (migrations
+   * never are, see migrate), and a later rename, reshuffle or delete logs against the uid
+   * every device already has. A rule with no matches just lists nothing, as on an empty
+   * library. */
+  "INSERT OR IGNORE INTO smart_lists (uid, name, subject, rule) VALUES"
+  " ('5e1ec7ed-0000-4000-8000-000000000001', 'Recently added', 'tracks',"
+  "  '{\"v\":1,\"match\":{\"field\":\"added\",\"op\":\"not_empty\"},"
+  "\"order\":[{\"field\":\"added\",\"dir\":\"desc\"}],\"limit\":100}'),"
+  " ('5e1ec7ed-0000-4000-8000-000000000002', 'Most played', 'tracks',"
+  "  '{\"v\":1,\"match\":{\"field\":\"plays\",\"op\":\">\",\"value\":0},"
+  "\"order\":[{\"field\":\"plays\",\"dir\":\"desc\"},{\"field\":\"last_played\",\"dir\":\"desc\"}],"
+  "\"limit\":100}'),"
+  " ('5e1ec7ed-0000-4000-8000-000000000003', 'Never played', 'tracks',"
+  "  '{\"v\":1,\"match\":{\"field\":\"plays\",\"op\":\"=\",\"value\":0},"
+  "\"order\":[{\"field\":\"random\",\"seed\":1}],\"limit\":100}'),"
+  " ('5e1ec7ed-0000-4000-8000-000000000004', 'Recently added albums', 'albums',"
+  "  '{\"v\":1,\"match\":{\"field\":\"added\",\"op\":\"not_empty\"},"
+  "\"order\":[{\"field\":\"added\",\"dir\":\"desc\"}],\"limit\":24}'),"
+  " ('5e1ec7ed-0000-4000-8000-000000000005', 'Random albums', 'albums',"
+  "  '{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false},"
+  "\"order\":[{\"field\":\"random\",\"seed\":1}],\"limit\":24}');",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -146,17 +168,24 @@ static mc_status migrate(mc_library *lib) {
   if (version < 0) return MC_ERR_DB;
   if (version > MC_SCHEMA_VERSION) return MC_ERR_FORMAT; /* written by a newer app */
 
-  for (int v = version; v < MC_SCHEMA_VERSION; v++) {
+  /* Rows a migration writes aren't logged: every device runs the same migration, and the
+   * triggers left by the last open would log them before node_uid is loaded. */
+  lib->applying_remote = 1;
+  mc_status st = MC_OK;
+  for (int v = version; v < MC_SCHEMA_VERSION && st == MC_OK; v++) {
     char bump[64];
     snprintf(bump, sizeof bump, "PRAGMA user_version = %d", v + 1);
-    if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
-    if (exec(lib, k_migrations[v]) != MC_OK || exec(lib, bump) != MC_OK) {
+    if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) {
+      st = MC_ERR_DB;
+    } else if (exec(lib, k_migrations[v]) != MC_OK || exec(lib, bump) != MC_OK) {
       exec(lib, "ROLLBACK");
-      return MC_ERR_DB;
+      st = MC_ERR_DB;
+    } else if (exec(lib, "COMMIT") != MC_OK) {
+      st = MC_ERR_DB;
     }
-    if (exec(lib, "COMMIT") != MC_OK) return MC_ERR_DB;
   }
-  return MC_OK;
+  lib->applying_remote = 0;
+  return st;
 }
 
 /* mc_shuffle_key(seed, uid): a stable pseudo-random sort key, so a list ordered by it is

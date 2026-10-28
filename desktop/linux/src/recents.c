@@ -19,8 +19,8 @@ static const char *kind_icon(mc_recent_kind kind) {
 }
 
 /* A row like the pages above it: the icon and the name, cut off if it's long, with the
- * whole name and the album's artist (or what it is: "Playlist", "Artist", "Album group") in
- * the tooltip. */
+ * whole name and the album's artist (or what it is: "Playlist", "Artist", "Album group",
+ * "Smart playlist", "Smart album group") in the tooltip. */
 static GtkWidget *recent_row(const mc_recent_info *info) {
   const char *name = info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED);
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
@@ -35,9 +35,11 @@ static GtkWidget *recent_row(const mc_recent_info *info) {
   gtk_widget_set_hexpand(label, TRUE);
   gtk_box_append(GTK_BOX(box), label);
 
-  const char *detail = info->kind == MC_RECENT_PLAYLIST      ? mc_str(MC_STR_PLAYLIST)
-                       : info->kind == MC_RECENT_ARTIST      ? mc_str(MC_STR_ARTIST)
-                       : info->kind == MC_RECENT_ALBUM_GROUP ? mc_str(MC_STR_ALBUM_GROUP)
+  const char *detail = info->kind == MC_RECENT_PLAYLIST && info->is_smart      ? mc_str(MC_STR_SMART_PLAYLIST)
+                       : info->kind == MC_RECENT_PLAYLIST                      ? mc_str(MC_STR_PLAYLIST)
+                       : info->kind == MC_RECENT_ARTIST                        ? mc_str(MC_STR_ARTIST)
+                       : info->kind == MC_RECENT_ALBUM_GROUP && info->is_smart ? mc_str(MC_STR_SMART_ALBUM_GROUP)
+                       : info->kind == MC_RECENT_ALBUM_GROUP                   ? mc_str(MC_STR_ALBUM_GROUP)
                        : info->artist                        ? info->artist
                                                              : mc_str(MC_STR_UNKNOWN_ARTIST);
   char *tip = g_strdup_printf("%s\n%s", name, detail);
@@ -89,14 +91,11 @@ void recents_refresh(app *a) {
   GtkWidget *child;
   while ((child = gtk_widget_get_first_child(r.list))) gtk_list_box_remove(GTK_LIST_BOX(r.list), child);
 
-  /* Smart playlists and smart album groups have no page here to open them on, so they're
-   * left out (they're recorded on other devices). */
   mc_recent_list *list = NULL;
   if (!a->lib || mc_library_list_recents(a->lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
   int n = 0;
   for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
     const mc_recent_info *info = &list->items[i];
-    if (info->is_smart) continue;
     gtk_list_box_append(GTK_LIST_BOX(r.list), recent_row(info));
     n++;
   }

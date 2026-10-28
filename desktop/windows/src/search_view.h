@@ -17,8 +17,8 @@
  * comes first. The results scroll beneath the box, with the album grid's overlay scrollbar.
  *
  * Clicking a result, or Enter on it, opens it (SVN_OPEN): artists, albums, playable
- * playlists and album groups on their pages, tracks on their album with the track
- * selected. Smart playlists have no page here yet, so their rows do nothing. Down in the
+ * playlists and album groups (smart ones too) on their pages, tracks on their album with
+ * the track selected. Down in the
  * box moves the focus to the first result; the arrow keys, Home and End move it through the results,
  * and Up from the first goes back to the box.
  *

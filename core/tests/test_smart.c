@@ -304,6 +304,42 @@ static void test_fields(void) {
     if (strcmp(f.name, "genre") == 0) CHECK(!f.sortable && strcmp(f.type, "text") == 0);
 }
 
+/* The titles saved smart list uid holds now, joined with '|', or "ERR <status>". */
+static const char *saved(mc_library *lib, const char *uid, mc_smart_subject subject) {
+  g_out[0] = '\0';
+  mc_track_list *t = NULL;
+  mc_album_list *a = NULL;
+  mc_status st = subject == MC_SMART_TRACKS ? mc_library_list_smart_tracks(lib, uid, &t)
+                                            : mc_library_list_smart_albums(lib, uid, &a);
+  if (st != MC_OK) {
+    snprintf(g_out, sizeof g_out, "ERR %d", st);
+    return g_out;
+  }
+  for (int i = 0, n = t ? t->count : a->count; i < n; i++) {
+    if (i) strncat(g_out, "|", sizeof g_out - strlen(g_out) - 1);
+    strncat(g_out, t ? t->items[i].title : a->items[i].title, sizeof g_out - strlen(g_out) - 1);
+  }
+  mc_track_list_free(t);
+  mc_album_list_free(a);
+  return g_out;
+}
+
+/* v10's example lists (library.c), then gone so the rest start from none. Random ones are
+ * compared by length, as their order depends on the seed. */
+static void test_examples(mc_library *lib) {
+  char uid[MC_UID_STRLEN];
+#define EXAMPLE(n) (snprintf(uid, sizeof uid, "5e1ec7ed-0000-4000-8000-00000000000%d", n), uid)
+  CHECK_STR(saved(lib, EXAMPLE(1), MC_SMART_TRACKS), "Dancing Queen|Money, Money|Come Together|Something");
+  CHECK_STR(saved(lib, EXAMPLE(2), MC_SMART_TRACKS), "Come Together|Dancing Queen|Money, Money");
+  CHECK(strlen(saved(lib, EXAMPLE(3), MC_SMART_TRACKS)) == strlen("Something|Words"));
+  CHECK_STR(saved(lib, EXAMPLE(4), MC_SMART_ALBUMS), "Arrival|Abbey Road");
+  CHECK(strlen(saved(lib, EXAMPLE(5), MC_SMART_ALBUMS)) == strlen("Abbey Road|Arrival"));
+#undef EXAMPLE
+  lib->applying_remote = 1;
+  CHECK(exec(mc_library_db(lib), "DELETE FROM smart_lists") == SQLITE_OK);
+  lib->applying_remote = 0;
+}
+
 static void test_saved(mc_library *lib) {
   sqlite3 *db = mc_library_db(lib);
   char least[MC_UID_STRLEN], recent[MC_UID_STRLEN], shuffled[MC_UID_STRLEN];
@@ -385,6 +421,7 @@ int main(int argc, char **argv) {
   test_album_rules(lib);
   test_invalid();
   test_fields();
+  test_examples(lib);
   test_saved(lib);
 
   mc_library_close(lib);

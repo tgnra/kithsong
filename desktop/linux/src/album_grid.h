@@ -31,8 +31,10 @@ struct _AlbumItem {
   int year;         /* 0 if unknown */
   gboolean is_playlist;
   gboolean is_group; /* an album group */
-  int track_count;  /* playlists only; for a group, its albums */
+  int track_count;  /* playlists only; for a group, its albums; not for smart ones */
   char *subtitle;   /* shown beneath the title in place of the artist, or NULL */
+  gboolean is_smart; /* a smart playlist or group (smartlist.h), whose rule picks what it holds */
+  gboolean random;   /* a smart one in random order, which can be reshuffled */
 };
 
 /* An album's item, as the album grid makes them. */
@@ -48,11 +50,13 @@ GtkWidget *album_grid_new(const char *label, void (*changed)(void *user), void *
  * (MC_LIST_PLAYABLE), with the number left out in *hidden. Only what changed is replaced, so
  * the grid keeps its scroll position and selection. Returns the number of tiles. Playlists
  * keep the pictures they had while theirs are looked up again, in art_dir (see
- * mc_playlist_art()). */
+ * mc_playlist_art()). The smart playlists with something to play here follow the others
+ * (not counted in *hidden), with no picture and "Smart playlist" beneath the name. */
 int album_grid_reload(GtkWidget *grid, mc_library *lib);
 int album_grid_reload_playlists(GtkWidget *grid, mc_library *lib, const char *art_dir, int *hidden);
 /* The same for every manual album group (mc_library_list_album_groups()), with their
- * pictures from mc_album_group_art(); and for a group's own albums, in its order. A grid
+ * pictures from mc_album_group_art(), then the smart groups as the smart playlists; and for a
+ * group's own albums, in its order (or a smart group's, as its rule picks them). A grid
  * should show only one of albums, playlists or groups. *found is FALSE if the group has
  * gone (it then shows nothing). */
 int album_grid_reload_groups(GtkWidget *grid, mc_library *lib, const char *art_dir);

@@ -13,9 +13,8 @@
  * Results follow the text once typing pauses for a while (Enter searches at once), so the
  * page doesn't jump about with each keystroke. Each kind gets a section, and the sections are
  * in the order of their best hit, so the top result's kind comes first. Albums, artists,
- * album groups and playable playlists open on their pages (opening an artist or group puts it
- * in the recents), tracks on their album with the track selected; smart playlists and smart
- * album groups have no page here yet, so their rows do nothing. */
+ * album groups and playable playlists (smart ones too) open on their pages (opening an artist
+ * or group puts it in the recents), tracks on their album with the track selected. */
 #ifndef KITHSONG_SEARCH_VIEW_H
 #define KITHSONG_SEARCH_VIEW_H
 

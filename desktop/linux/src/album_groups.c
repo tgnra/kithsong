@@ -15,7 +15,9 @@ static struct {
   GtkWidget *albums;       /* the open group's albums' grid */
   GtkWidget *albums_stack; /* "empty" status page | "albums" */
   GtkWidget *name, *more;  /* the open group's header: its name and menu */
+  GtkWidget *reshuffle;    /* in place of the menu, for a smart group in random order */
   char open[MC_UID_STRLEN];       /* the open group, or "" */
+  gboolean smart;                 /* it's a smart group: nothing to rename, delete or remove */
   char menu_album[MC_UID_STRLEN]; /* the album a menu was opened on */
   char menu_group[MC_UID_STRLEN]; /* and the group it's in there, or "" */
   char *menu_title;               /* and the album's title */
@@ -202,7 +204,7 @@ static gboolean reload_open(app *a) {
   gboolean found = FALSE;
   int n = album_grid_reload_group_albums(v.albums, a->lib, v.open, &found);
   if (!found) return FALSE;
-  gtk_stack_set_visible_child_name(GTK_STACK(v.albums_stack), n ? "albums" : "empty");
+  gtk_stack_set_visible_child_name(GTK_STACK(v.albums_stack), n ? "albums" : v.smart ? "smart-empty" : "empty");
   char *name = group_name(v.open);
   if (*name) gtk_label_set_text(GTK_LABEL(v.name), name); /* renamed, maybe */
   g_free(name);
@@ -215,6 +217,9 @@ gboolean album_groups_open(app *a, const char *uid) {
   ensure_actions();
   g_strlcpy(v.open, group->uid, sizeof v.open);
   gtk_label_set_text(GTK_LABEL(v.name), group->title);
+  v.smart = group->is_smart;
+  gtk_widget_set_visible(v.more, !group->is_smart);
+  gtk_widget_set_visible(v.reshuffle, group->is_smart && group->random);
   g_object_unref(group);
   GMenuModel *menu = group_menu(v.open);
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(v.more), menu);
@@ -271,6 +276,7 @@ static void on_group_activated(void *user, AlbumItem *group) {
 
 static void on_group_menu(void *user, GtkWidget *grid, AlbumItem *group, double x, double y) {
   (void)user;
+  if (group->is_smart) return; /* nothing to rename or delete */
   ensure_actions();
   GMenuModel *menu = group_menu(group->uid);
   album_grid_popup(grid, menu, x, y);
@@ -278,7 +284,16 @@ static void on_group_menu(void *user, GtkWidget *grid, AlbumItem *group, double 
 }
 
 static void on_album_menu(void *user, GtkWidget *grid, AlbumItem *album, double x, double y) {
-  album_groups_album_menu(user, grid, album, v.open[0] ? v.open : NULL, x, y);
+  album_groups_album_menu(user, grid, album, v.open[0] && !v.smart ? v.open : NULL, x, y);
+}
+
+/* The header's Reshuffle, for a smart group in random order: its albums in a new order. */
+static void on_reshuffle(GtkButton *button, gpointer user) {
+  (void)button;
+  app *a = user;
+  if (!a->lib || !v.open[0] || !v.smart) return;
+  if (mc_smart_reshuffle(a->lib, v.open) != MC_OK) fail(mc_str(MC_STR_RESHUFFLE_FAILED));
+  app_reload_library(a);
 }
 
 static void on_album_changed(void *user) {
@@ -320,6 +335,10 @@ static GtkWidget *build_group_page(app *a) {
   v.more = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(v.more), "view-more-symbolic");
   gtk_box_append(GTK_BOX(header), round_button(v.more, mc_str(MC_STR_LINUX_ALBUM_GROUP_MENU)));
+  v.reshuffle = round_button(gtk_button_new_from_icon_name("view-refresh-symbolic"), mc_str(MC_STR_RESHUFFLE));
+  gtk_widget_set_visible(v.reshuffle, FALSE);
+  g_signal_connect(v.reshuffle, "clicked", G_CALLBACK(on_reshuffle), a);
+  gtk_box_append(GTK_BOX(header), v.reshuffle);
 
   v.albums = album_grid_new(mc_str(MC_STR_ALBUM_GROUP), on_album_changed, a);
   album_grid_set_menu(v.albums, on_album_menu, a);
@@ -328,6 +347,9 @@ static GtkWidget *build_group_page(app *a) {
   gtk_stack_add_named(GTK_STACK(v.albums_stack),
                       status_page("media-optical-symbolic", MC_STR_ALBUM_GROUP_EMPTY_TITLE, MC_STR_ALBUM_GROUP_EMPTY_TEXT),
                       "empty");
+  gtk_stack_add_named(GTK_STACK(v.albums_stack),
+                      status_page("media-optical-symbolic", MC_STR_SMART_LIST_EMPTY_TITLE, MC_STR_SMART_LIST_EMPTY_TEXT),
+                      "smart-empty");
   gtk_stack_add_named(GTK_STACK(v.albums_stack), v.albums, "albums");
 
   GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);

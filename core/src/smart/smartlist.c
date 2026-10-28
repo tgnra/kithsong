@@ -713,6 +713,16 @@ mc_status mc_smart_reshuffle(mc_library *lib, const char *smart_uid) {
   return st;
 }
 
+/* Whether rule's last order key is random, as mc_smart_reshuffle() needs. */
+static int is_random(const char *rule) {
+  yyjson_doc *doc = rule ? yyjson_read(rule, strlen(rule), 0) : NULL;
+  yyjson_val *order = yyjson_obj_get(yyjson_doc_get_root(doc), "order");
+  size_t n = yyjson_arr_size(order);
+  int random = n && yyjson_equals_str(yyjson_obj_get(yyjson_arr_get(order, n - 1), "field"), "random");
+  yyjson_doc_free(doc);
+  return random;
+}
+
 mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
@@ -756,6 +766,7 @@ mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list *
     s->name = mc_strdup((const char *)sqlite3_column_text(stmt, 1));
     s->rule = mc_strdup((const char *)sqlite3_column_text(stmt, 3));
     if (!s->name || !s->rule) st = MC_ERR_NOMEM;
+    else s->random = is_random(s->rule);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);

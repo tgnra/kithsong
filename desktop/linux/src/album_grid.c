@@ -59,6 +59,28 @@ static AlbumItem *album_item_new_group(const mc_album_group_info *info, const ch
   return self;
 }
 
+/* A smart playlist's or group's item. It has no picture (mc_playlist_art() and
+ * mc_album_group_art() only make manual ones'), and says what it is beneath the name:
+ * counting what it holds would evaluate its rule again. */
+static AlbumItem *album_item_new_smart(const mc_smart_info *info) {
+  AlbumItem *self = g_object_new(ALBUM_TYPE_ITEM, NULL);
+  memcpy(self->uid, info->uid, sizeof self->uid);
+  self->title = g_strdup(info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED));
+  self->is_playlist = info->subject == MC_SMART_TRACKS;
+  self->is_group = info->subject == MC_SMART_ALBUMS;
+  self->subtitle = g_strdup(mc_str(self->is_group ? MC_STR_SMART_ALBUM_GROUP : MC_STR_SMART_PLAYLIST));
+  self->is_smart = TRUE;
+  self->random = info->random;
+  return self;
+}
+
+/* Appends the smart lists of subject with something to play here to items (n of them, with
+ * room for every smart list after them). */
+static void add_smart(mc_smart_subject subject, AlbumItem **items, guint *n, mc_smart_list *smart) {
+  for (int i = 0; smart && i < smart->count; i++)
+    if (smart->items[i].subject == subject) items[(*n)++] = album_item_new_smart(&smart->items[i]);
+}
+
 /* A playlist's or group's item with another picture. */
 static AlbumItem *album_item_with_cover(const AlbumItem *item, const char *cover_file) {
   AlbumItem *self = g_object_new(ALBUM_TYPE_ITEM, NULL);
@@ -69,6 +91,8 @@ static AlbumItem *album_item_with_cover(const AlbumItem *item, const char *cover
   self->is_group = item->is_group;
   self->track_count = item->track_count;
   self->subtitle = g_strdup(item->subtitle);
+  self->is_smart = item->is_smart;
+  self->random = item->random;
   return self;
 }
 
@@ -76,7 +100,8 @@ static gboolean album_item_equal(const AlbumItem *a, const AlbumItem *b) {
   return !strcmp(a->uid, b->uid) && !g_strcmp0(a->title, b->title) && !g_strcmp0(a->artist, b->artist) &&
          !g_strcmp0(a->cover_file, b->cover_file) &&
          a->year == b->year && a->is_playlist == b->is_playlist && a->is_group == b->is_group &&
-         a->track_count == b->track_count && !g_strcmp0(a->subtitle, b->subtitle);
+         a->track_count == b->track_count && !g_strcmp0(a->subtitle, b->subtitle) && a->is_smart == b->is_smart &&
+         a->random == b->random;
 }
 
 /* The line beneath the title: the artist, a playlist's track count or a group's album
@@ -470,12 +495,11 @@ static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir) 
   j->lib_dir = g_strdup(mc_library_dir(lib));
   j->art_dir = g_strdup(art_dir);
   j->groups = g->groups;
-  j->n = n;
   j->uids = g_new0(char *, n + 1);
   j->paths = g_new0(char *, n);
   for (guint i = 0; i < n; i++) {
     AlbumItem *a = g_list_model_get_item(G_LIST_MODEL(g->store), i);
-    j->uids[i] = g_strdup(a->uid);
+    if (!a->is_smart) j->uids[j->n++] = g_strdup(a->uid); /* smart ones have no picture */
     g_object_unref(a);
   }
   GTask *task = g_task_new(NULL, NULL, art_done, NULL);
@@ -490,14 +514,18 @@ int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *
   grid *g = grid_of(widget);
   mc_playlist_list *list = NULL;
   if (lib && mc_library_list_playlists(lib, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
+  mc_smart_list *smart = NULL;
+  if (lib && mc_library_list_smart(lib, MC_LIST_PLAYABLE, &smart) != MC_OK) smart = NULL;
   guint n = list ? (guint)list->count : 0;
   *hidden = list ? list->hidden : 0;
-  AlbumItem **items = g_new0(AlbumItem *, n + 1);
+  AlbumItem **items = g_new0(AlbumItem *, n + (smart ? (guint)smart->count : 0) + 1);
   for (guint i = 0; i < n; i++) {
     const char *known = g->art ? g_hash_table_lookup(g->art, list->items[i].uid) : NULL;
     items[i] = album_item_new_playlist(&list->items[i], known);
   }
   mc_playlist_list_free(list);
+  add_smart(MC_SMART_TRACKS, items, &n, smart);
+  mc_smart_list_free(smart);
 
   grid_set_items(g, items, n, keep);
   for (guint i = 0; i < n; i++) g_object_unref(items[i]);
@@ -513,13 +541,17 @@ int album_grid_reload_groups(GtkWidget *widget, mc_library *lib, const char *art
   g->groups = TRUE;
   mc_album_group_list *list = NULL;
   if (lib && mc_library_list_album_groups(lib, &list) != MC_OK) list = NULL;
+  mc_smart_list *smart = NULL;
+  if (lib && mc_library_list_smart(lib, MC_LIST_PLAYABLE, &smart) != MC_OK) smart = NULL;
   guint n = list ? (guint)list->count : 0;
-  AlbumItem **items = g_new0(AlbumItem *, n + 1);
+  AlbumItem **items = g_new0(AlbumItem *, n + (smart ? (guint)smart->count : 0) + 1);
   for (guint i = 0; i < n; i++) {
     const char *known = g->art ? g_hash_table_lookup(g->art, list->items[i].uid) : NULL;
     items[i] = album_item_new_group(&list->items[i], known);
   }
   mc_album_group_list_free(list);
+  add_smart(MC_SMART_ALBUMS, items, &n, smart);
+  mc_smart_list_free(smart);
 
   grid_set_items(g, items, n, keep);
   for (guint i = 0; i < n; i++) g_object_unref(items[i]);
@@ -533,6 +565,12 @@ int album_grid_reload_group_albums(GtkWidget *widget, mc_library *lib, const cha
   grid_keep(widget, keep);
   mc_album_list *list = NULL;
   mc_status st = lib && group_uid ? mc_library_list_album_group_albums(lib, group_uid, &list) : MC_ERR_NOT_FOUND;
+  if (st == MC_ERR_NOT_FOUND && lib && group_uid) { /* not a manual group: a smart one? */
+    mc_album_list_free(list);
+    list = NULL;
+    st = mc_library_list_smart_albums(lib, group_uid, &list);
+    if (st == MC_ERR_INVALID_ARG) st = MC_ERR_NOT_FOUND; /* a smart playlist */
+  }
   if (st != MC_OK) list = NULL;
   *found = st != MC_ERR_NOT_FOUND;
   guint n = list ? (guint)list->count : 0;

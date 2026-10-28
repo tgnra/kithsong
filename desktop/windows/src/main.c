@@ -376,7 +376,9 @@ static void show_album(void) {
   }
   char uid[MC_UID_STRLEN];
   const wchar_t *title = album_grid_selection(uid);
-  track_list_show(g_app.lib, title ? uid : NULL, title, album_grid_showing_playlists());
+  BOOL random;
+  if (title && album_grid_selection_smart(&random)) track_list_show_smart(g_app.lib, uid, title, random);
+  else track_list_show(g_app.lib, title ? uid : NULL, title, album_grid_showing_playlists());
   track_list_set_details(album_grid_selection_artist(), album_grid_selection_year(), album_grid_selection_cover());
   update_buttons();
   if (g_app.show_tracks != (title != NULL)) {
@@ -386,8 +388,7 @@ static void show_album(void) {
 }
 
 /* The sidebar's recents: the albums and playlists last played and the artists and album
- * groups last opened, on any device. Smart lists have no page here to open them on, so
- * they're left out (they're recorded on other devices). */
+ * groups last opened, on any device, smart playlists and groups included. */
 static void refresh_recents(void) {
   mc_recent_list *list = NULL;
   if (!g_app.lib || mc_library_list_recents(g_app.lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
@@ -396,12 +397,12 @@ static void refresh_recents(void) {
   int n = 0;
   for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
     const mc_recent_info *r = &list->items[i];
-    if (r->is_smart) continue;
     BOOL album = r->kind == MC_RECENT_ALBUM;
     names[n] = wide_from_utf8(r->name ? r->name : "");
     artists[n] = album ? wide_from_utf8(r->artist ? r->artist : mc_str(MC_STR_UNKNOWN_ARTIST)) : NULL;
     const wchar_t *kind = mc_wstr(r->kind == MC_RECENT_ARTIST     ? MC_STR_ARTIST
-                                  : r->kind == MC_RECENT_PLAYLIST ? MC_STR_PLAYLIST
+                                  : r->kind == MC_RECENT_PLAYLIST ? (r->is_smart ? MC_STR_SMART_PLAYLIST : MC_STR_PLAYLIST)
+                                  : r->is_smart                   ? MC_STR_SMART_ALBUM_GROUP
                                                                   : MC_STR_ALBUM_GROUP);
     items[n] = (sidebar_recent){.kind = r->kind, .name = names[n], .detail = album ? artists[n] : kind};
     snprintf(items[n].uid, sizeof items[n].uid, "%s", r->uid);
@@ -727,6 +728,12 @@ static void on_track_request(int code) {
         changed = delete_dialog(g_app.wnd, g_app.lib, MC_DELETE_TRACKS, req->track_uid, it.title);
         break;
       }
+      break;
+    case TLN_RESHUFFLE: /* a smart playlist's new order */
+      if (!name || strcmp(uid, req->playlist_uid)) break;
+      changed = mc_smart_reshuffle(g_app.lib, uid) == MC_OK;
+      if (!changed)
+        MessageBoxW(g_app.wnd, mc_wstr(MC_STR_RESHUFFLE_FAILED), mc_wstr(MC_STR_SMART_PLAYLIST), MB_OK | MB_ICONERROR);
       break;
   }
   if (changed) {

@@ -56,6 +56,8 @@ typedef struct tile {
   int thumb_size;
   BOOL stale;  /* thumb is from before the last reload: drawn until it's decoded again */
   BOOL failed; /* the cover couldn't be decoded; draw the placeholder */
+  BOOL smart;  /* a smart playlist or group, which has no picture */
+  BOOL random; /* a smart one in random order, which can be reshuffled */
 } tile;
 
 typedef struct load_job {
@@ -87,6 +89,7 @@ static struct {
   album_grid_view tiles_view;    /* what the tiles are (view switches before the reload) */
   char group_uid[MC_UID_STRLEN]; /* AGV_GROUP's group */
   wchar_t *group_name;           /* its name, as of the last reload */
+  BOOL group_smart, group_random; /* it's a smart group, and in random order */
   int hidden;                    /* playlists left out for having nothing to play here */
   tile *tiles;
   int count;
@@ -419,6 +422,12 @@ const wchar_t *album_grid_selection_cover(void) {
   return pictures(g.tiles_view) ? g.tiles[g.selected].cover_file : g.tiles[g.selected].cover_dir;
 }
 
+BOOL album_grid_selection_smart(BOOL *random) {
+  BOOL smart = g.selected >= 0 && g.selected < g.count && g.tiles_view == AGV_PLAYLISTS && g.tiles[g.selected].smart;
+  if (random) *random = smart && g.tiles[g.selected].random;
+  return smart;
+}
+
 int album_grid_selection_year(void) {
   return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].year : 0;
 }
@@ -444,7 +453,8 @@ static void clear_tiles(void) {
 /* The albums' tiles (all of them, or the shown group's), into tiles and dirs (n of each). */
 static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
   mc_album_list *list = NULL;
-  if (g.lib && g.view == AGV_GROUP) mc_library_list_album_group_albums(g.lib, g.group_uid, &list);
+  if (g.lib && g.view == AGV_GROUP && g.group_smart) mc_library_list_smart_albums(g.lib, g.group_uid, &list);
+  else if (g.lib && g.view == AGV_GROUP) mc_library_list_album_group_albums(g.lib, g.group_uid, &list);
   else if (g.lib) mc_library_list_albums(g.lib, &list);
   *n = list ? list->count : 0;
   *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
@@ -462,8 +472,39 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
   mc_album_list_free(list);
 }
 
+/* Appends the smart lists of subject with something to play here to tiles and dirs (n of
+ * each), after the others. They have no picture (mc_playlist_art() only makes manual
+ * playlists' and groups'), and "Smart playlist" or "Smart album group" goes beneath the
+ * name: counting what they hold would evaluate each rule again. */
+static void add_smart(mc_smart_subject subject, tile **tiles, wchar_t ***dirs, int *n) {
+  mc_smart_list *list = NULL;
+  if (!g.lib || mc_library_list_smart(g.lib, MC_LIST_PLAYABLE, &list) != MC_OK) return;
+  int more = 0;
+  for (int i = 0; i < list->count; i++) more += list->items[i].subject == subject;
+  tile *grown = more ? realloc(*tiles, (size_t)(*n + more) * sizeof **tiles) : NULL;
+  if (grown) *tiles = grown;
+  wchar_t **grown_dirs = grown ? realloc(*dirs, (size_t)(*n + more) * sizeof **dirs) : NULL;
+  if (grown_dirs) *dirs = grown_dirs;
+  const wchar_t *sub = mc_wstr(subject == MC_SMART_TRACKS ? MC_STR_SMART_PLAYLIST : MC_STR_SMART_ALBUM_GROUP);
+  for (int i = 0; grown_dirs && i < list->count; i++) {
+    const mc_smart_info *s = &list->items[i];
+    if (s->subject != subject) continue;
+    tile *t = &(*tiles)[*n];
+    memset(t, 0, sizeof *t);
+    memcpy(t->uid, s->uid, sizeof t->uid);
+    t->title = widen(s->name && *s->name ? s->name : mc_str(MC_STR_UNTITLED));
+    swprintf(t->sub, sizeof t->sub / sizeof t->sub[0], L"%ls", sub);
+    t->smart = TRUE;
+    t->random = s->random;
+    t->failed = TRUE; /* nothing for the loader to look for: the placeholder */
+    (*dirs)[(*n)++] = NULL;
+  }
+  mc_smart_list_free(list);
+}
+
 /* The playlists' tiles: the loader finds their pictures by uid, and the track count goes
- * beneath the name. Only those with a track to play here; the rest are counted in g.hidden. */
+ * beneath the name. Only those with a track to play here; the rest are counted in g.hidden.
+ * Smart playlists follow. */
 static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
   mc_playlist_list *list = NULL;
   if (g.lib) mc_library_list_playlists(g.lib, MC_LIST_PLAYABLE, &list);
@@ -482,11 +523,28 @@ static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
                MC_D(p->track_count));
   }
   mc_playlist_list_free(list);
+  add_smart(MC_SMART_TRACKS, tiles, dirs, n);
 }
 
-/* The album groups' tiles, as the playlists' with the album count beneath the name. For
- * AGV_GROUP, finds the shown group's name instead (g.group_name), or leaves it NULL if the
- * group has gone; *n is then 0. */
+/* For AGV_GROUP, when the shown group isn't a manual one: the smart group's name, and
+ * whether it's in random order. Listed whether or not it has anything to play here, so a
+ * group that's open stays open. */
+static void find_smart_group(void) {
+  mc_smart_list *list = NULL;
+  if (!g.lib || mc_library_list_smart(g.lib, 0, &list) != MC_OK) return;
+  for (int i = 0; i < list->count; i++) {
+    const mc_smart_info *s = &list->items[i];
+    if (s->subject != MC_SMART_ALBUMS || strcmp(s->uid, g.group_uid)) continue;
+    g.group_name = widen(s->name && *s->name ? s->name : mc_str(MC_STR_UNTITLED));
+    g.group_smart = TRUE;
+    g.group_random = s->random;
+  }
+  mc_smart_list_free(list);
+}
+
+/* The album groups' tiles, as the playlists' with the album count beneath the name, and the
+ * smart groups after them. For AGV_GROUP, finds the shown group's name instead
+ * (g.group_name), or leaves it NULL if the group has gone; *n is then 0. */
 static void read_groups(tile **tiles, wchar_t ***dirs, int *n) {
   mc_album_group_list *list = NULL;
   if (g.lib) mc_library_list_album_groups(g.lib, &list);
@@ -496,10 +554,12 @@ static void read_groups(tile **tiles, wchar_t ***dirs, int *n) {
   if (g.view == AGV_GROUP) {
     free(g.group_name);
     g.group_name = NULL;
+    g.group_smart = g.group_random = FALSE;
     for (int i = 0; list && i < list->count; i++)
       if (!strcmp(list->items[i].uid, g.group_uid))
         g.group_name = widen(list->items[i].name && *list->items[i].name ? list->items[i].name : mc_str(MC_STR_UNTITLED));
     mc_album_group_list_free(list);
+    if (!g.group_name) find_smart_group();
     return;
   }
   *n = list ? list->count : 0;
@@ -516,6 +576,7 @@ static void read_groups(tile **tiles, wchar_t ***dirs, int *n) {
                MC_D(a->album_count));
   }
   mc_album_group_list_free(list);
+  add_smart(MC_SMART_ALBUMS, tiles, dirs, n);
 }
 
 static int old_tile_cmp(const void *key, const void *elem) {
@@ -745,7 +806,12 @@ static void on_scrolled(void) {
 
 /* --- A group's header --- */
 
-/* Its Back button, at the top left, or its More button (Rename, Delete), at the top right. */
+/* Its Back button, at the top left, or its More button (Rename, Delete), at the top right.
+ * A smart group has Reshuffle there instead, if it's in random order, or nothing. */
+static BOOL has_more(void) {
+  return !g.group_smart || g.group_random;
+}
+
 static RECT header_button(int part) {
   int size = scale(HEADER_BUTTON), y = g.pad - g.scroll.pos;
   int x = part == PART_BACK ? g.pad : g.client_w - g.pad - size;
@@ -757,7 +823,7 @@ static int header_part_at(int x, int y) {
   if (g.tiles_view != AGV_GROUP) return PART_NONE;
   POINT pt = {x, y};
   RECT back = header_button(PART_BACK), more = header_button(PART_MORE);
-  return PtInRect(&back, pt) ? PART_BACK : PtInRect(&more, pt) ? PART_MORE : PART_NONE;
+  return PtInRect(&back, pt) ? PART_BACK : has_more() && PtInRect(&more, pt) ? PART_MORE : PART_NONE;
 }
 
 static void set_hot_part(int part) {
@@ -771,9 +837,9 @@ static void set_hot_part(int part) {
 static void paint_header(canvas *c) {
   RECT back = header_button(PART_BACK), more = header_button(PART_MORE);
   int radius = scale(HEADER_BUTTON) / 2;
-  const wchar_t *glyphs[] = {L"\xE72B", L"\xE712"}; /* Back, More */
+  const wchar_t *glyphs[] = {L"\xE72B", g.group_smart ? L"\xE72C" : L"\xE712"}; /* Back, Refresh or More */
   RECT buttons[] = {back, more};
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < (has_more() ? 2 : 1); i++) {
     COLORREF color = theme_draw_state(c, &buttons[i], radius, g.hot_part == i + PART_BACK ? STATE_HOT : STATE_NORMAL);
     SelectObject(c->dc, g.icon_font);
     SetTextColor(c->dc, color);
@@ -818,23 +884,34 @@ static void show_group_menu(const char *uid, const wchar_t *name, POINT pt) {
   if (changed) notify_changed();
 }
 
-/* The More button's menu: the shown group's, hanging from the button's right edge. */
+/* The More button's menu: the shown group's, hanging from the button's right edge. Smart
+ * groups have none. */
 static void show_more_menu(void) {
-  if (g.tiles_view != AGV_GROUP) return;
+  if (g.tiles_view != AGV_GROUP || g.group_smart) return;
   RECT r = header_button(PART_MORE);
   POINT pt = {r.right, r.bottom};
   ClientToScreen(g.wnd, &pt);
   show_group_menu(g.group_uid, g.group_name, pt);
 }
 
-/* Add to Album Group, inside a group Remove from Album Group, and Delete Album..., for album
- * tile i. */
+/* The header's button for a smart group in random order: a new order for its albums. */
+static void reshuffle_group(void) {
+  if (!g.lib || g.tiles_view != AGV_GROUP || !g.group_smart) return;
+  if (mc_smart_reshuffle(g.lib, g.group_uid) == MC_OK)
+    notify_changed();
+  else
+    MessageBoxW(GetAncestor(g.wnd, GA_ROOT), mc_wstr(MC_STR_RESHUFFLE_FAILED), mc_wstr(MC_STR_SMART_ALBUM_GROUP),
+                MB_OK | MB_ICONERROR);
+}
+
+/* Add to Album Group, inside a (manual) group Remove from Album Group, and Delete Album...,
+ * for album tile i. */
 static void show_album_menu(int i, POINT pt) {
   char album[MC_UID_STRLEN], group[MC_UID_STRLEN];
   memcpy(album, g.tiles[i].uid, sizeof album);
   memcpy(group, g.group_uid, sizeof group);
   wchar_t *title = _wcsdup(g.tiles[i].title ? g.tiles[i].title : L"");
-  BOOL in_group = g.tiles_view == AGV_GROUP;
+  BOOL in_group = g.tiles_view == AGV_GROUP && !g.group_smart;
   HMENU menu = CreatePopupMenu();
   mc_album_group_list *groups = NULL;
   HMENU add = add_to_album_group_menu(g.lib, CMD_GROUP_FIRST, CMD_NEW_GROUP, &groups);
@@ -866,7 +943,7 @@ static void show_album_menu(int i, POINT pt) {
 
 /* WM_CONTEXTMENU: a tile's menu, or the group's on its header. From the keyboard (lp -1),
  * the selected tile's, under its cover. Playlists have none here: theirs is in the track
- * list. */
+ * list. Nor do smart groups, though their albums do. */
 static BOOL on_context_menu(LPARAM lp) {
   if (!g.lib) return FALSE;
   POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -875,7 +952,7 @@ static BOOL on_context_menu(LPARAM lp) {
     i = g.selected;
     if (i < 0 && g.tiles_view == AGV_GROUP) {
       show_more_menu();
-      return TRUE;
+      return !g.group_smart;
     }
     if (i < 0 || i >= g.count) return FALSE;
     RECT art, text, outer;
@@ -887,12 +964,13 @@ static BOOL on_context_menu(LPARAM lp) {
     POINT client = pt;
     ScreenToClient(g.wnd, &client);
     i = tile_at(client.x, client.y);
-    if (i < 0 && g.tiles_view == AGV_GROUP && client.y < g.top - g.scroll.pos) {
+    if (i < 0 && g.tiles_view == AGV_GROUP && client.y < g.top - g.scroll.pos && !g.group_smart) {
       show_group_menu(g.group_uid, g.group_name, pt);
       return TRUE;
     }
     if (i < 0) return FALSE;
   }
+  if (g.tiles_view == AGV_GROUPS && g.tiles[i].smart) return FALSE;
   if (g.tiles_view == AGV_GROUPS) show_group_menu(g.tiles[i].uid, g.tiles[i].title, pt);
   else if (g.tiles_view != AGV_PLAYLISTS) show_album_menu(i, pt);
   else return FALSE;
@@ -922,6 +1000,8 @@ static void on_mouse_down(int x, int y) {
   if (part == PART_BACK) {
     go_back();
     g.navigated = TRUE;
+  } else if (part == PART_MORE && g.group_smart) {
+    reshuffle_group();
   } else if (part == PART_MORE) {
     show_more_menu();
   } else if (g.tiles_view == AGV_GROUPS && i >= 0) {
@@ -1001,8 +1081,11 @@ static void paint_tile(canvas *c, int i) {
     if (!t->cover_dir || t->failed) {
       HGDIOBJ f = SelectObject(c->dc, g.glyph_font);
       SetTextColor(c->dc, theme.text3);
-      /* The sidebar's Playlists or Album Groups icon, or a note. */
-      const wchar_t *glyph = g.tiles_view == AGV_PLAYLISTS ? L"\xE90B" : g.tiles_view == AGV_GROUPS ? L"\xE8F1" : L"\xE8D6";
+      /* A smart list's bolt, the sidebar's Playlists or Album Groups icon, or a note. */
+      const wchar_t *glyph = t->smart                        ? L"\xE945"
+                             : g.tiles_view == AGV_PLAYLISTS ? L"\xE90B"
+                             : g.tiles_view == AGV_GROUPS    ? L"\xE8F1"
+                                                             : L"\xE8D6";
       DrawTextW(c->dc, glyph, -1, &art, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
       SelectObject(c->dc, f);
     }
@@ -1040,6 +1123,8 @@ static void paint(HDC dc, const RECT *dirty) {
       swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_NO_PLAYLISTS_TITLE), mc_wstr(MC_STR_NO_PLAYLISTS_TEXT));
     else if (g.tiles_view == AGV_GROUPS)
       swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_NO_ALBUM_GROUPS_TITLE), mc_wstr(MC_STR_NO_ALBUM_GROUPS_TEXT));
+    else if (g.tiles_view == AGV_GROUP && g.group_smart)
+      swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_SMART_LIST_EMPTY_TITLE), mc_wstr(MC_STR_SMART_LIST_EMPTY_TEXT));
     else if (g.tiles_view == AGV_GROUP)
       swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_ALBUM_GROUP_EMPTY_TITLE), mc_wstr(MC_STR_ALBUM_GROUP_EMPTY_TEXT));
     else swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_EMPTY_TITLE), mc_wstr(MC_STR_EMPTY_TEXT));

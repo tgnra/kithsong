@@ -192,6 +192,13 @@ editor from.
 A rule can't refer to another smart list. A playlist or group a rule names that has since
 been deleted just matches nothing.
 
+Migration v10 adds example lists, so a library has some to open before there's an editor:
+"Recently added", "Most played" and "Never played" (random order) playlists, and "Recently
+added albums" and "Random albums" groups. Their uids are fixed (`5e1ec7ed-0000-4000-8000-00000000000N`),
+so every device makes the same rows, and they aren't logged (no migration's rows are): a
+rename, reshuffle or delete is logged against a uid every device already has. Their names
+are English, as user data rather than UI strings.
+
 ## Recents
 
 `recents` holds what was last opened: albums, artists, playlists and album groups (smart

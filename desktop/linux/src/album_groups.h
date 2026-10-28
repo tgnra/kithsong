@@ -14,7 +14,9 @@
  *
  * Right-clicking an album, here or in the album grid, gives Add to album group (each group,
  * then New album group...), and inside a group Remove from album group, as on Windows.
- * Smart album groups aren't listed (see TODO: smart lists).
+ * Smart album groups (those with something to play here) follow the others and open the
+ * same way, with the albums their rule picks; they have no menu, nothing to remove, and in
+ * random order a Reshuffle button in place of the header's menu.
  *
  * Only one exists at a time. */
 #ifndef KITHSONG_ALBUM_GROUPS_H

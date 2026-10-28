@@ -34,7 +34,13 @@ void album_grid_set_library(mc_library *lib);
 /* What the grid shows. Playlists and album groups show their pictures (or a placeholder) with
  * the track or album count beneath the name. Clicking a group (or Enter on it) opens it:
  * AGV_GROUP, its albums under a header with Back (also Backspace, Alt+Left and the mouse's
- * back button), its name, and a More button with Rename and Delete. */
+ * back button), its name, and a More button with Rename and Delete.
+ *
+ * Smart playlists and smart album groups (smartlist.h) follow the others, those with
+ * something to play here, with a placeholder and "Smart playlist" or "Smart album group"
+ * beneath the name. A smart group opens like a group, with the albums its rule picks; in
+ * place of More it has a Reshuffle button if it's in random order (which the grid does
+ * itself, notifying AGN_LIBRARY_CHANGED), and nothing to rename, delete or remove. */
 typedef enum album_grid_view {
   AGV_ALBUMS,
   AGV_PLAYLISTS,
@@ -85,6 +91,9 @@ const wchar_t *album_grid_selection_artist(void);
  * NULL if it has none (or none is selected). Valid until the grid next reloads or loads
  * the cover. */
 const wchar_t *album_grid_selection_cover(void);
+/* Whether the selected playlist is a smart one, and if so in *random (may be NULL) whether
+ * it's in random order. */
+BOOL album_grid_selection_smart(BOOL *random);
 /* The selected album's year, or 0 if it's unknown (or none is selected). */
 int album_grid_selection_year(void);
 /* Clears the selection, which notifies the parent (AGN_SELCHANGE) as a click would. */
