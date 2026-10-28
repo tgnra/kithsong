@@ -111,5 +111,13 @@ mc_status mc_rmdir(const char *path);
 /* Whether two paths name the same file as far as the file system is concerned: compared
  * case-insensitively on Windows. Doesn't resolve links. */
 int mc_same_path(const char *a, const char *b);
+/* Renames a file or directory without ever copying it: fails (MC_ERR_IO) if src and dst are
+ * on different volumes, or if dst exists. */
+mc_status mc_rename_in_place(const char *src, const char *dst);
+/* Whether two existing paths are on the same volume, so one can be renamed into the other. */
+int mc_same_volume(const char *a, const char *b);
+/* path made absolute, without "." or ".." parts or a trailing separator; on Linux, links in
+ * the part of it that exists are resolved too. malloc'd, or NULL. */
+char *mc_full_path(const char *path);
 
 #endif

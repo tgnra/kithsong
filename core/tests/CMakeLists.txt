@@ -13,6 +13,7 @@ endfunction()
 
 musicapp_test(test_util)
 musicapp_test(test_library)
+musicapp_test(test_library_move)
 musicapp_test(test_smart)
 musicapp_test(test_sync_db)
 target_link_libraries(test_sync_db PRIVATE mbedcrypto)  # checks the key pair independently
