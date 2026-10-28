@@ -82,20 +82,20 @@ On macOS, use `base64 -i ~/keys/kithsong-release.jks`. In PowerShell, use
 Then set the API keys. They're baked into every platform's build:
 
 ```sh
-gh secret set MUSICAPP_CONTACT
-gh secret set MUSICAPP_ACOUSTID_KEY
-gh secret set MUSICAPP_LASTFM_KEY
-gh secret set MUSICAPP_LASTFM_SECRET
+gh secret set KITHSONG_CONTACT
+gh secret set KITHSONG_ACOUSTID_KEY
+gh secret set KITHSONG_LASTFM_KEY
+gh secret set KITHSONG_LASTFM_SECRET
 ```
 
 `gh secret list` should now show all eight. The full list:
 
 | Secret | Local variable | What it is |
 |--------|----------------|------------|
-| `MUSICAPP_CONTACT` | `KITHSONG_CONTACT` | Contact URL or email for the MusicBrainz User-Agent |
-| `MUSICAPP_ACOUSTID_KEY` | `KITHSONG_ACOUSTID_KEY` | AcoustID application key, from <https://acoustid.org/new-application> |
-| `MUSICAPP_LASTFM_KEY` | `KITHSONG_LASTFM_KEY` | Last.fm API key, for scrobbling, from <https://www.last.fm/api/account/create> |
-| `MUSICAPP_LASTFM_SECRET` | `KITHSONG_LASTFM_SECRET` | Last.fm API shared secret |
+| `KITHSONG_CONTACT` | `KITHSONG_CONTACT` | Contact URL or email for the MusicBrainz User-Agent |
+| `KITHSONG_ACOUSTID_KEY` | `KITHSONG_ACOUSTID_KEY` | AcoustID application key, from <https://acoustid.org/new-application> |
+| `KITHSONG_LASTFM_KEY` | `KITHSONG_LASTFM_KEY` | Last.fm API key, for scrobbling, from <https://www.last.fm/api/account/create> |
+| `KITHSONG_LASTFM_SECRET` | `KITHSONG_LASTFM_SECRET` | Last.fm API shared secret |
 | `ANDROID_KEYSTORE_BASE64` | `KITHSONG_KEYSTORE` (a path) | The release keystore, base64-encoded |
 | `ANDROID_KEYSTORE_PASSWORD` | `KITHSONG_KEYSTORE_PASSWORD` | The keystore password |
 | `ANDROID_KEY_ALIAS` | `KITHSONG_KEY_ALIAS` | `kithsong`, unless you picked another alias |

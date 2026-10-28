@@ -374,7 +374,7 @@ when the feature lands.
    key for lookups.
 
 Put the key where the others go: `KITHSONG_ACOUSTID_KEY` / `kithsongAcoustidKey` /
-the `MUSICAPP_ACOUSTID_KEY` secret. Like the Last.fm secret it ends up readable in the binary,
+the `KITHSONG_ACOUSTID_KEY` secret. Like the Last.fm secret it ends up readable in the binary,
 which is normal for AcoustID client keys. Keep it out of git anyway, and re-register if it's
 abused.
 
@@ -430,7 +430,7 @@ Licensing (from Chromaprint's
 
 - [ ] **Contact**: choose a long-lived URL or email. Set `KITHSONG_CONTACT` locally
       (CMakeUserPresets.json), as `kithsongContact` in `~/.gradle/gradle.properties`, and as
-      the `MUSICAPP_CONTACT` GitHub secret. Without it every build says
+      the `KITHSONG_CONTACT` GitHub secret. Without it every build says
       `( no contact configured )` (`core/CMakeLists.txt` line 6).
 - [ ] Check `build/<preset>/core/generated/config.h` shows your contact. Run `manual_mb_ping`.
 - [ ] **Last.fm**: create an API account at <https://www.last.fm/api/account/create>, with no
