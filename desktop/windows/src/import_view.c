@@ -686,6 +686,9 @@ static void load_review(HWND dlg) {
   EnableWindow(GetDlgItem(dlg, IDC_REV_ASIS), !busy);
   EnableWindow(GetDlgItem(dlg, IDC_REV_SKIP), !busy && it->state != MC_IMPORT_DONE);
   EnableWindow(GetDlgItem(dlg, IDC_REV_SEARCH), !busy);
+  /* Only albums have the clues; once it has run, a manual search brings it back. */
+  ShowWindow(GetDlgItem(dlg, IDC_REV_WIDER), it->kind == MC_IMPORT_ALBUM ? SW_SHOW : SW_HIDE);
+  EnableWindow(GetDlgItem(dlg, IDC_REV_WIDER), !busy && !it->searched_wider && !g_view.offline);
 }
 
 /* The dialog's fixed text; the template has none (app.rc). */
@@ -698,6 +701,7 @@ static void init_review_text(HWND dlg) {
   SetDlgItemTextW(dlg, IDC_REV_ARTIST_LABEL, mc_wstr_mnemonic(MC_STR_ARTIST));
   SetDlgItemTextW(dlg, IDC_REV_TITLE_LABEL, mc_wstr_mnemonic(MC_STR_ALBUM));
   SetDlgItemTextW(dlg, IDC_REV_SEARCH, mc_wstr_mnemonic(MC_STR_SEARCH));
+  SetDlgItemTextW(dlg, IDC_REV_WIDER, mc_wstr_mnemonic(MC_STR_IMPORT_SEARCH_WIDER));
   SetDlgItemTextW(dlg, IDC_REV_ASIS, mc_wstr_mnemonic(MC_STR_IMPORT_AS_TAGGED));
   SetDlgItemTextW(dlg, IDC_REV_SKIP, mc_wstr_mnemonic(MC_STR_IMPORT_SKIP));
   SetDlgItemTextW(dlg, IDOK, mc_wstr_mnemonic(MC_STR_IMPORT_USE_MATCH));
@@ -812,6 +816,12 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
           free(title);
           return TRUE; /* the dialog stays open and refreshes when results arrive */
         }
+        case IDC_REV_WIDER:
+          if (mc_import_search_wider(g_view.imp, g_view.review_item) == MC_OK) {
+            g_view.idle = FALSE;
+            update_status();
+          }
+          return TRUE; /* like Search: the dialog refreshes when results arrive */
         case IDCANCEL:
           EndDialog(dlg, IDCANCEL);
           return TRUE;
@@ -870,6 +880,7 @@ void import_view_on_event(WPARAM wp, LPARAM lp) {
       if (g_view.offline != (arg != 0)) {
         g_view.offline = arg != 0;
         SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, TRUE, 0); /* relayout: banner in or out */
+        if (g_view.review) SendMessageW(g_view.review, WM_APP_REVIEW_REFRESH, 0, 0); /* Search More Widely */
       }
       break;
   }

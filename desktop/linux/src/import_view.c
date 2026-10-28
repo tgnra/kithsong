@@ -41,6 +41,7 @@ typedef struct review {
   GtkWidget *artist, *title, *search;
   GtkWidget *matches_group, *matches, *tracks_group, *tracks;
   GtkWidget *use, *as_is, *skip;
+  GtkWidget *wider; /* Search More Widely, in the matches' header */
 
   /* The track list's menu (Use as Track) and what it would assign: track of the shown match,
    * and from_item's file `file`. */
@@ -409,6 +410,7 @@ static void on_event(import_view *v, mc_import_event ev, int arg) {
     case MC_IMPORT_EV_OFFLINE:
       v->offline = arg != 0;
       update_banner(v);
+      if (v->rev) review_load(v->rev); /* Search More Widely needs the network */
       break;
   }
   if (v->imp) update_status(v); /* a callback may have ended the session */
@@ -852,6 +854,9 @@ static void review_load(review *r) {
   gtk_widget_set_sensitive(r->as_is, !busy);
   gtk_widget_set_sensitive(r->skip, !busy && it->state != MC_IMPORT_DONE);
   gtk_widget_set_sensitive(r->search, !busy);
+  /* Only albums have the clues; once it has run, a manual search brings it back. */
+  gtk_widget_set_visible(r->wider, it->kind == MC_IMPORT_ALBUM);
+  gtk_widget_set_sensitive(r->wider, !busy && !it->searched_wider && !v->offline);
 }
 
 static void review_done(review *r, mc_status st) {
@@ -893,6 +898,16 @@ static void on_search(GtkWidget *widget, gpointer data) {
     update_status(r->v);
   }
   /* The dialog stays open and refreshes when results arrive. */
+}
+
+static void on_wider(GtkButton *button, gpointer data) {
+  (void)button;
+  review *r = data;
+  if (r->v->imp && mc_import_search_wider(r->v->imp, r->item) == MC_OK) {
+    r->v->idle = FALSE;
+    update_status(r->v);
+  }
+  /* Like Search: the dialog stays open and refreshes when results arrive. */
 }
 
 static void on_review_closed(AdwDialog *dialog, gpointer data) {
@@ -956,6 +971,10 @@ static void open_review(import_view *v, int idx) {
   r->matches = boxed_list();
   r->matches_group = adw_preferences_group_new();
   adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(r->matches_group), mc_str(MC_STR_IMPORT_MATCHES));
+  r->wider = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_IMPORT_SEARCH_WIDER));
+  gtk_widget_set_valign(r->wider, GTK_ALIGN_CENTER);
+  g_signal_connect(r->wider, "clicked", G_CALLBACK(on_wider), r);
+  adw_preferences_group_set_header_suffix(ADW_PREFERENCES_GROUP(r->matches_group), r->wider);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(r->matches_group), r->matches);
 
   r->tracks = boxed_list();

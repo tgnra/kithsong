@@ -185,6 +185,7 @@
     "import_review_single": { "text": "Single: {0} – {1}", "note": "{0} is the artist, {1} the track." },
     "import_searching": "Searching MusicBrainz…",
     "import_search_again": "Search again",
+    "import_search_wider": { "text": "Search _more widely", "note": "Button in the review of an imported album: searches MusicBrainz (the online music database) again using other clues from the files and the folder name, such as catalogue numbers, the tracks' artists and the record label." },
     "import_matches": "Matches",
     "import_track_missing": { "text": "— missing", "note": "A track of the chosen match that no file was matched to." },
     "import_not_matched": { "text": "Not matched; left as is", "note": "A file that no track of the chosen match fits." },

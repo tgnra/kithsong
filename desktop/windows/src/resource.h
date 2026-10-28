@@ -20,6 +20,7 @@
 #define IDC_REV_SEARCH_LABEL 1012
 #define IDC_REV_ARTIST_LABEL 1013
 #define IDC_REV_TRACKS_HINT 1014
+#define IDC_REV_WIDER 1030 /* Search More Widely */
 
 /* The playlist dialogs, playlist_dialogs.c. */
 #define IDD_PLAYLIST_NAME 101
