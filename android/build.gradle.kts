@@ -12,20 +12,20 @@ plugins {
 // One version for every platform: the repo's VERSION file (see the root CMakeLists.txt).
 // versionCode packs it as major*100000 + minor*1000 + patch*10; the phone adds 0 and the
 // watch 1, since the two share an applicationId and Play wants every code unique.
-val musicappVersion = rootDir.resolve("../VERSION").readText().trim()
-val (versionMajor, versionMinor, versionPatch) = musicappVersion.split(".").map(String::toInt)
-extra["musicappVersionName"] = musicappVersion
-extra["musicappVersionCode"] = versionMajor * 100000 + versionMinor * 1000 + versionPatch * 10
+val kithsongVersion = rootDir.resolve("../VERSION").readText().trim()
+val (versionMajor, versionMinor, versionPatch) = kithsongVersion.split(".").map(String::toInt)
+extra["kithsongVersionName"] = kithsongVersion
+extra["kithsongVersionCode"] = versionMajor * 100000 + versionMinor * 1000 + versionPatch * 10
 
 // The SDK's CMake: :native builds the core with it, and the apps run cmake/gen_strings.cmake
 // with it to turn strings/*.json into string resources.
-extra["musicappCmakeVersion"] = "3.30.5"
+extra["kithsongCmakeVersion"] = "3.30.5"
 
 // The UI strings come from the repo's strings/*.json, shared with the desktop apps (see
 // strings/README.md): cmake/gen_strings.cmake writes them out as values*/strings.xml in a
 // generated res directory, before resources are merged. Each app module names the sections
 // of en.json it takes, and gets R.string/R.plurals for them:
-//   extra["musicappStringSections"] = listOf("shared", "android")
+//   extra["kithsongStringSections"] = listOf("shared", "android")
 abstract class GenerateStrings : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -81,13 +81,13 @@ subprojects {
         // The SDK's CMake (as :native uses), or one on the PATH if that version isn't installed.
         val sdkCmake = components.sdkComponents.sdkDirectory.map { sdk ->
             val exe = if (System.getProperty("os.name").startsWith("Windows")) "cmake.exe" else "cmake"
-            val version = rootProject.extra["musicappCmakeVersion"] as String
+            val version = rootProject.extra["kithsongCmakeVersion"] as String
             sdk.file("cmake/$version/bin/$exe").asFile.takeIf { it.isFile }?.path ?: "cmake"
         }
         components.onVariants { variant ->
             // Read here, after the module's build script has set it.
             @Suppress("UNCHECKED_CAST")
-            val wanted = module.extra.properties["musicappStringSections"] as List<String>?
+            val wanted = module.extra.properties["kithsongStringSections"] as List<String>?
                 ?: return@onVariants
             val task = module.tasks.register<GenerateStrings>(
                 "generate${variant.name.replaceFirstChar(Char::uppercase)}Strings",

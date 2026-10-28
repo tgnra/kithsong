@@ -34,7 +34,7 @@ function Get-EmulatorSerial($avd) {
 function Start-Emulator($avd) {
     $serial = Get-EmulatorSerial $avd
     if (-not $serial) {
-        $logDir = "$env:TEMP\musicapp"
+        $logDir = "$env:TEMP\kithsong"
         New-Item -ItemType Directory -Force $logDir | Out-Null
         $log = "$logDir\emulator-$avd.log"
         Write-Host "Starting emulator $avd (log: $log)"

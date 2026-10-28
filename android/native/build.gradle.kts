@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "app.musicapp.nativecore"
+    namespace = "app.kithsong.nativecore"
     compileSdk = 36
     ndkVersion = "27.2.12479018"
 
@@ -15,16 +15,16 @@ android {
 
         externalNativeBuild {
             cmake {
-                // Pass e.g. -PmusicappContact=... to set the MusicBrainz User-Agent contact.
-                val contact = (project.findProperty("musicappContact") as String?) ?: ""
-                arguments += listOf("-DMUSICAPP_CONTACT=$contact")
-                // And -PmusicappAcoustidKey=... for fingerprinting; empty turns it off.
-                val acoustidKey = (project.findProperty("musicappAcoustidKey") as String?) ?: ""
-                arguments += listOf("-DMUSICAPP_ACOUSTID_KEY=$acoustidKey")
-                // And -PmusicappLastfmKey=... -PmusicappLastfmSecret=... for scrobbling to Last.fm.
-                val lastfmKey = (project.findProperty("musicappLastfmKey") as String?) ?: ""
-                val lastfmSecret = (project.findProperty("musicappLastfmSecret") as String?) ?: ""
-                arguments += listOf("-DMUSICAPP_LASTFM_KEY=$lastfmKey", "-DMUSICAPP_LASTFM_SECRET=$lastfmSecret")
+                // Pass e.g. -PkithsongContact=... to set the MusicBrainz User-Agent contact.
+                val contact = (project.findProperty("kithsongContact") as String?) ?: ""
+                arguments += listOf("-DKITHSONG_CONTACT=$contact")
+                // And -PkithsongAcoustidKey=... for fingerprinting; empty turns it off.
+                val acoustidKey = (project.findProperty("kithsongAcoustidKey") as String?) ?: ""
+                arguments += listOf("-DKITHSONG_ACOUSTID_KEY=$acoustidKey")
+                // And -PkithsongLastfmKey=... -PkithsongLastfmSecret=... for scrobbling to Last.fm.
+                val lastfmKey = (project.findProperty("kithsongLastfmKey") as String?) ?: ""
+                val lastfmSecret = (project.findProperty("kithsongLastfmSecret") as String?) ?: ""
+                arguments += listOf("-DKITHSONG_LASTFM_KEY=$lastfmKey", "-DKITHSONG_LASTFM_SECRET=$lastfmSecret")
 
                 // 16 KB page alignment, required by Android 15+ devices; NDK r28 does it by default.
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
@@ -40,7 +40,7 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             // The core needs CMake >= 3.28; install it with `sdkmanager "cmake;3.30.5"`.
-            version = rootProject.extra["musicappCmakeVersion"] as String
+            version = rootProject.extra["kithsongCmakeVersion"] as String
         }
     }
 

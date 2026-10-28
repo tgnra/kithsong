@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "app.musicapp.wear"
+    namespace = "app.kithsong.wear"
     compileSdk = 37
     // The same NDK as :native, which AGP needs to strip the native core's debug symbols.
     ndkVersion = "27.2.12479018"
@@ -12,13 +12,13 @@ android {
     defaultConfig {
         // Same id as the phone app, so the two can talk over the Wear Data Layer once they
         // are signed with the same key. The watch build is told apart by its manifest.
-        applicationId = "app.musicapp"
+        applicationId = "app.kithsong"
         // Wear OS 3, the oldest version still in use; it covers Wear OS 5 (API 34) and later.
         // The Compose for Wear OS libraries would allow 25, but Wear OS 2 is not worth the cost.
         minSdk = 30
         targetSdk = 36
-        versionCode = rootProject.extra["musicappVersionCode"] as Int + 1  // the watch's codes end in 1
-        versionName = rootProject.extra["musicappVersionName"] as String
+        versionCode = rootProject.extra["kithsongVersionCode"] as Int + 1  // the watch's codes end in 1
+        versionName = rootProject.extra["kithsongVersionName"] as String
 
         ndk {
             // armeabi-v7a: many Wear OS watches run a 32-bit userspace.
@@ -29,12 +29,12 @@ android {
     signingConfigs {
         // Release signing comes from the environment (scripts/release-android.*). Without
         // it, release builds come out unsigned. The phone and the watch use the same key.
-        System.getenv("MUSICAPP_KEYSTORE")?.let { keystore ->
+        System.getenv("KITHSONG_KEYSTORE")?.let { keystore ->
             create("release") {
                 storeFile = file(keystore)
-                storePassword = System.getenv("MUSICAPP_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("MUSICAPP_KEY_ALIAS")
-                keyPassword = System.getenv("MUSICAPP_KEY_PASSWORD")
+                storePassword = System.getenv("KITHSONG_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KITHSONG_KEY_ALIAS")
+                keyPassword = System.getenv("KITHSONG_KEY_PASSWORD")
             }
         }
     }
@@ -57,7 +57,7 @@ android {
 
 // R.string/R.plurals from strings/en.json (see GenerateStrings in the root build.gradle.kts):
 // the strings shared with the other apps, and the watch's own.
-extra["musicappStringSections"] = listOf("shared", "wear")
+extra["kithsongStringSections"] = listOf("shared", "wear")
 
 dependencies {
     implementation(project(":native"))
