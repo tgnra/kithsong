@@ -877,7 +877,8 @@ JNIEXPORT jint JNICALL Java_app_musicapp_CoreSync_nativePort(JNIEnv *env, jclass
 }
 
 /* The calls that take a device uid: 0 pair request, 1 remove device, 2 sync now, 3 confirm
- * and sync now (the Sync button). For 2 and 3, uid null is every reachable member. */
+ * and sync now (the Sync button), 4 background sync (rate-limited). For 2 to 4, uid null is
+ * every reachable member. */
 JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeWithDevice(JNIEnv *env, jclass cls,
                                                                     jlong handle, jint call,
                                                                     jstring uid) {
@@ -887,6 +888,7 @@ JNIEXPORT void JNICALL Java_app_musicapp_CoreSync_nativeWithDevice(JNIEnv *env, 
     mc_sync_remove_device,
     mc_sync_now,
     mc_sync_confirm_now,
+    mc_sync_background,
   };
   if (call < 0 || call >= (jint)(sizeof calls / sizeof *calls)) {
     throw_status(env, MC_ERR_INVALID_ARG);
@@ -958,7 +960,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreSync_nativeListDevices(JNIE
   jclass info = (*env)->FindClass(env, "app/musicapp/SyncDevice");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
-                                       "(Ljava/lang/String;Ljava/lang/String;IZZZZLjava/lang/String;IJZJJJJJJI)V");
+                                       "(Ljava/lang/String;Ljava/lang/String;IZZZZLjava/lang/String;IJJZJJJJJJI)V");
   if (!ctor) return NULL;
 
   mc_sync_device_list *list = NULL;
@@ -977,6 +979,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreSync_nativeListDevices(JNIE
                                      (jboolean)(d->is_self != 0), (jboolean)(d->online != 0),
                                      (jboolean)(d->archive != 0), (jboolean)(d->removed != 0),
                                      address, (jint)d->port, (jlong)d->last_sync_ms,
+                                     (jlong)d->auto_after_ms,
                                      (jboolean)(d->has_status != 0), (jlong)d->verified_ms,
                                      (jlong)d->expected, (jlong)d->ok, (jlong)d->missing,
                                      (jlong)d->corrupt, (jlong)d->bytes, (jint)d->confirm);
