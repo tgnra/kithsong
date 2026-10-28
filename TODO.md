@@ -7,7 +7,6 @@ Big pieces that haven't been started, or that only one platform has.
 - **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; none can create, edit, rename or delete one. Needs a rule editor (built from mc_smart_field_get())
 - **Album group editing on Android** - Android lists and plays groups, but can't create, rename, delete or fill one
 - **Import on Android** - removed for now (music arrives by sync); see Android below
-- **Delete on Android** - the desktops delete albums, artists and tracks (with restore from the Recycle Bin/Trash); Android has no delete
 - **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard; no on-screen control anywhere, and Android doesn't duck with it yet
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar and search page have UI Automation providers, checked with a UI Automation tree walk but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
@@ -28,7 +27,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Smart playlists | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
 | Recents | yes | yes | yes (core's) | no |
 | Search | yes | yes | yes | no |
-| Delete (with restore) | yes | yes | no | no |
+| Delete (with restore) | yes | yes | yes (permanent: no trash to restore from) | no |
 | Shuffle | core's | core's | core's | no |
 | Volume | keyboard only | keyboard only | core only, no UI | no |
 | Import | yes | yes | removed | no |
@@ -73,7 +72,8 @@ Big pieces that haven't been started, or that only one platform has.
 - Linux - mc_trash() fails for a library on another file system from the home Trash; support `$topdir/.Trash-$uid`, or offer a permanent delete
 - Core - a peer that trashed an original after a remote delete keeps no restore record; restoring it there gets it swept as an unknown file
 - Windows and Linux - a "Restored N tracks" message after a restore from the bin
-- Android - delete (no recycle bin: confirm, then delete)
+- Android - delete from an album's page or the player too (only the album, artist and track long-press menus have it)
+- Android - a track that's deleted while it plays keeps playing to its end, and its later queue entries are skipped; the desktops stop playback first (Windows can't trash an open file)
 
 ### Recents
 - Windows and Linux - remove one, or clear them all (mc_library_remove_recent(), mc_library_clear_recents()), e.g. from a context menu; Android too
@@ -174,7 +174,7 @@ The album grid, track list, sidebar and search page have UI Automation providers
 ## Android
 
 - Upgrade Kotlin to 2.4, then Coil and MaterialKolor
-- Import, delete and album group editing (see above)
+- Import and album group editing (see above)
 
 ## Wear OS
 
@@ -220,6 +220,7 @@ Things built but not checked properly.
 - A real Last.fm sign-in and scrobble (only fake sessions so far), and the sign-in reaching another device over a real sync
 - Media keys with the window in the background: SMTC on Windows, MPRIS on GNOME and KDE
 - Recents arriving or going with a real sync between two devices
+- An Android delete reaching a desktop over a real sync (copies removed there, originals to its trash)
 - A delete and a restore going through a real sync
 - Sync PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
 

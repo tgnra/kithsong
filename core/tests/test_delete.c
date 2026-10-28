@@ -397,16 +397,77 @@ static void test_expiry(void) {
   mc_library_close(lib);
 }
 
+/* Where there's no trash: the files and the left-over cover are removed, not trashed, and
+ * nothing is recorded; a file that can't be removed keeps its track. */
+static int g_removed;
+
+static mc_status counting_remove(const char *path) {
+  if (g_refuse && strstr(path, g_refuse)) return MC_ERR_IO;
+  mc_status st = mc_remove(path);
+  if (st == MC_OK) g_removed++;
+  return st;
+}
+
+static void test_permanent(void) {
+  char config[1200];
+  mc_library *lib = open_library("permanent", config);
+  if (!lib) return;
+  char t[3][MC_UID_STRLEN], album[MC_UID_STRLEN], sql[512];
+  add_album(lib, "Low", "Gone", 3, NULL, t);
+  char cover[1600], low_dir[1400];
+  snprintf(low_dir, sizeof low_dir, "%s%cLow", mc_library_dir(lib), MC_PATH_SEP);
+  snprintf(cover, sizeof cover, "%s%cGone%ccover.jpg", low_dir, MC_PATH_SEP, MC_PATH_SEP);
+  write_file(cover, "a cover");
+  snprintf(sql, sizeof sql, "SELECT album_uid FROM tracks WHERE uid = '%s'", t[0]);
+  query_text(lib, sql, album, sizeof album);
+
+  /* One track first, refused: it stays. */
+  const char *one[] = {t[2]};
+  mc_delete_plan *plan = NULL;
+  CHECK(mc_delete_plan_new(lib, MC_DELETE_TRACKS, one, 1, &plan) == MC_OK);
+  g_refuse = "03.flac";
+  mc_delete_result res;
+  int trashed = g_trashed;
+  CHECK(mc_delete_run_permanently(lib, plan, &res) == MC_OK);
+  g_refuse = NULL;
+  CHECK(res.tracks_deleted == 0 && res.files_trashed == 0 && res.tracks_kept == 1);
+  CHECK(count_of(lib, MC_ENTITY_TRACKS) == 3);
+  mc_delete_plan_free(plan);
+
+  /* Then the album. */
+  const char *uids[] = {album};
+  CHECK(mc_delete_plan_new(lib, MC_DELETE_ALBUMS, uids, 1, &plan) == MC_OK);
+  CHECK(mc_delete_plan_tracks(plan) == 3 && mc_delete_plan_files(plan) == 4);
+  CHECK(mc_delete_run_permanently(lib, plan, &res) == MC_OK);
+  mc_delete_plan_free(plan);
+  CHECK(res.tracks_deleted == 3 && res.files_trashed == 4 && res.tracks_kept == 0);
+  CHECK(g_removed == 4 && g_trashed == trashed); /* none went to the trash */
+  CHECK(count_of(lib, MC_ENTITY_TRACKS) == 0 && count_of(lib, MC_ENTITY_ALBUMS) == 0);
+  CHECK(count_of(lib, MC_ENTITY_ARTISTS) == 0 && count_of(lib, MC_ENTITY_FILES) == 0);
+  CHECK(!mc_file_exists(cover) && !mc_file_exists(low_dir));
+  CHECK(records(config) == -1); /* no deleted.db at all */
+  snprintf(sql, sizeof sql,
+           "SELECT count(*) FROM changelog WHERE field = '_deleted' AND row_uid IN ('%s', '%s')",
+           t[0], album);
+  CHECK(query_int(lib, sql) == 2); /* logged, so sync deletes them everywhere */
+  int restored = -1;
+  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 0);
+  CHECK(mc_delete_run_permanently(lib, NULL, &res) == MC_ERR_INVALID_ARG);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   snprintf(g_scratch, sizeof g_scratch, "%s%ctest_delete.d", argc > 1 ? argv[1] : ".", MC_PATH_SEP);
   remove_tree(g_scratch); /* the last run's */
   snprintf(g_trash, sizeof g_trash, "%s%ctrash", g_scratch, MC_PATH_SEP);
   CHECK(mc_mkdirs(g_trash) == MC_OK);
   mc_delete_trash = fake_trash;
+  mc_delete_remove = counting_remove;
 
   test_album();
   test_kept();
   test_artist();
   test_expiry();
+  test_permanent();
   return TEST_RESULT();
 }

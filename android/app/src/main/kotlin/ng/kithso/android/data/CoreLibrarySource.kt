@@ -6,6 +6,7 @@ import android.util.Log
 import ng.kithso.core.AlbumInfo
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CoreSync
+import ng.kithso.core.DeleteKind
 import ng.kithso.core.DeviceKind
 import ng.kithso.core.ItemKind
 import ng.kithso.core.MusicCoreException
@@ -15,7 +16,9 @@ import ng.kithso.core.albumGroupAlbums
 import ng.kithso.core.albumGroupArt
 import ng.kithso.core.appendToPlaylist
 import ng.kithso.core.createPlaylist
+import ng.kithso.core.deletePermanently
 import ng.kithso.core.deletePlaylist
+import ng.kithso.core.deletePreview
 import ng.kithso.core.movePlaylistEntry
 import ng.kithso.core.playlistEntries
 import ng.kithso.core.removePlaylistEntry
@@ -32,6 +35,7 @@ import ng.kithso.core.smartAlbums
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -62,8 +66,8 @@ import java.io.File
  * [library] is updated with those that changed. Meanwhile each shows the picture it last
  * had, kept in [prefs] across launches. Smart lists show their first cover.
  *
- * Manual playlists are edited here too ([PlaylistEditor]), on [core], each change followed by
- * a [refresh].
+ * Manual playlists are edited here too ([PlaylistEditor]), and albums, artists and tracks
+ * deleted ([LibraryDeleter]), on [core], each change followed by a [refresh].
  */
 class CoreLibrarySource(
     private val dir: File,
@@ -71,7 +75,7 @@ class CoreLibrarySource(
     private val prefs: SharedPreferences,
     private val scope: CoroutineScope,
     private val unknownArtist: () -> String,
-) : LibrarySource, PlaylistEditor {
+) : LibrarySource, PlaylistEditor, LibraryDeleter {
     private val core = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow<Library?>(null)
     override val library: StateFlow<Library?> = state
@@ -326,6 +330,36 @@ class CoreLibrarySource(
         }
     }
 
+    // --- LibraryDeleter ---
+
+    override suspend fun deleteSize(what: Deletion): DeleteSize? = withContext(core) {
+        try {
+            open()?.deletePreview(what.kind.core, what.uid)?.let { DeleteSize(it.tracks, it.files) }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't find out what deleting $what takes", e)
+            null
+        }
+    }
+
+    // In [scope], so it's seen through and the library read again even if the screen that
+    // asked goes away.
+    override suspend fun delete(what: Deletion): DeleteOutcome = scope.async(core) {
+        val lib = open() ?: return@async DeleteOutcome.Failed
+        val outcome = try {
+            val result = lib.deletePermanently(what.kind.core, what.uid)
+            Log.i(TAG, "Deleted $what: ${result.tracksDeleted} tracks, ${result.filesRemoved} files, ${result.tracksKept} kept")
+            if (result.tracksKept > 0) DeleteOutcome.Kept(result.tracksKept) else DeleteOutcome.Deleted
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't delete $what", e)
+            DeleteOutcome.Failed
+        }
+        // Even after a failure: some files may have gone.
+        refresh().join()
+        editCount.value++
+        onChanged()
+        outcome
+    }.await()
+
     override suspend fun search(query: String): SearchResults = withContext(core) {
         val hits = try {
             open()?.search(query, SEARCH_LIMIT).orEmpty()
@@ -565,6 +599,13 @@ class CoreLibrarySource(
         val COVER_NAMES = listOf("cover.jpg", "cover.png")
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
+
+        val Deletion.Kind.core: DeleteKind
+            get() = when (this) {
+                Deletion.Kind.Track -> DeleteKind.Track
+                Deletion.Kind.Album -> DeleteKind.Album
+                Deletion.Kind.Artist -> DeleteKind.Artist
+            }
 
         val CollectionRef.Kind.itemKind: ItemKind
             get() = when (this) {

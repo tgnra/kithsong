@@ -23,6 +23,7 @@
 #define MTIME_SLACK_MS 2000
 
 mc_status (*mc_delete_trash)(const char *path) = mc_trash;
+mc_status (*mc_delete_remove)(const char *path) = mc_remove;
 
 /* The tables a track's record holds, parents first, in the order they're restored. Each
  * selects the rows for track ?1. The file's own row goes last, under "files". */
@@ -569,12 +570,12 @@ static char *record_json(sqlite3 *db, const char *track_rows, const char *file_u
   return rows;
 }
 
-/* Trashes track_uid's files, saving a record of each to store (which may be NULL). Their
- * folders are added to dirs, and the uids of those trashed to trashed. *kept is set if one
- * couldn't go. */
-static mc_status trash_track(mc_library *lib, sqlite3 *store, const char *track_uid,
-                             const char *track_rows, str_list *dirs, uid_set *trashed,
-                             int *files_trashed, int *kept) {
+/* Trashes track_uid's files, saving a record of each to store (which may be NULL); or if
+ * permanent, removes them and records nothing. Their folders are added to dirs, and the
+ * uids of those gone to trashed. *kept is set if one couldn't go. */
+static mc_status trash_track(mc_library *lib, sqlite3 *store, int permanent,
+                             const char *track_uid, const char *track_rows, str_list *dirs,
+                             uid_set *trashed, int *files_trashed, int *kept) {
   *kept = 0;
   sqlite3_stmt *stmt = prepare(lib->db, "SELECT uid, path, sha256 FROM files WHERE track_uid = ?1");
   if (!stmt) return MC_ERR_DB;
@@ -591,13 +592,15 @@ static mc_status trash_track(mc_library *lib, sqlite3 *store, const char *track_
       continue;
     }
     char *rows = store ? record_json(lib->db, track_rows, uid) : NULL;
-    if (mc_delete_trash(abs) != MC_OK) {
-      fprintf(stderr, "musiccore: delete: couldn't move %s to the trash; kept\n", abs);
+    if ((permanent ? mc_delete_remove : mc_delete_trash)(abs) != MC_OK) {
+      fprintf(stderr, "musiccore: delete: couldn't %s %s%s; kept\n", permanent ? "remove" : "move",
+              abs, permanent ? "" : " to the trash");
       *kept = 1;
     } else {
       (*files_trashed)++;
       st = set_add(trashed, uid);
-      if (st == MC_OK && (!rows || save_record(store, lib, abs, rel, size, mtime, sha, rows) != MC_OK))
+      if (st == MC_OK && !permanent &&
+          (!rows || save_record(store, lib, abs, rel, size, mtime, sha, rows) != MC_OK))
         fprintf(stderr, "musiccore: delete: couldn't save how to restore %s\n", rel);
       char *dir = parent_dir(abs);
       if (st == MC_OK && dir && !list_has(dirs, dir)) st = list_add(dirs, dir);
@@ -650,15 +653,16 @@ static mc_status delete_rows(mc_library *lib, const uid_set *gone, const uid_set
   return st;
 }
 
-/* After its files went: a folder left with only a cover loses the cover to the trash and
- * goes, and then its parent (the artist's folder) if that's empty. */
-static int tidy_folder(mc_library *lib, const char *dir) {
+/* After its files went: a folder left with only a cover loses the cover (to the trash, or if
+ * permanent removed) and goes, and then its parent (the artist's folder) if that's empty. */
+static int tidy_folder(mc_library *lib, const char *dir, int permanent) {
   int trashed = 0;
   if (covers_left(lib, dir, NULL)) {
     const char *covers[] = {"cover.jpg", "cover.png"};
     for (int i = 0; i < 2; i++) {
       char *c = join(dir, covers[i]);
-      if (c && mc_file_exists(c) && mc_delete_trash(c) == MC_OK) trashed++;
+      if (c && mc_file_exists(c) && (permanent ? mc_delete_remove : mc_delete_trash)(c) == MC_OK)
+        trashed++;
       free(c);
     }
   }
@@ -670,12 +674,13 @@ static int tidy_folder(mc_library *lib, const char *dir) {
   return trashed;
 }
 
-mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete_plan *plan,
-                        mc_delete_result *out) {
-  if (out) memset(out, 0, sizeof *out);
-  if (!lib || !config_dir || !plan) return MC_ERR_INVALID_ARG;
+/* mc_delete_run(), or with config_dir NULL mc_delete_run_permanently(): files are removed
+ * rather than trashed, and nothing is recorded for restoring. */
+static mc_status delete_run(mc_library *lib, const char *config_dir, const mc_delete_plan *plan,
+                            mc_delete_result *out) {
+  int permanent = !config_dir;
   sqlite3 *store = NULL;
-  if (plan->tracks.count && store_open(config_dir, 1, &store) != MC_OK)
+  if (!permanent && plan->tracks.count && store_open(config_dir, 1, &store) != MC_OK)
     fprintf(stderr, "musiccore: delete: deleted tracks can't be restored from the trash\n");
   if (store) sqlite3_exec(store, "BEGIN", NULL, NULL, NULL);
 
@@ -697,7 +702,7 @@ mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete
                        t, &artists);
     int kept = 0;
     if (st == MC_OK)
-      st = trash_track(lib, store, t, rows, &dirs, &trashed, &res.files_trashed, &kept);
+      st = trash_track(lib, store, permanent, t, rows, &dirs, &trashed, &res.files_trashed, &kept);
     free(rows);
     if (st == MC_OK && kept) res.tracks_kept++;
     else if (st == MC_OK) st = set_add(&gone, t);
@@ -716,7 +721,8 @@ mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete
   if (st == MC_OK) st = write;
   if (write == MC_OK) {
     res.tracks_deleted = gone.count;
-    for (int i = 0; i < dirs.count; i++) res.files_trashed += tidy_folder(lib, dirs.items[i]);
+    for (int i = 0; i < dirs.count; i++)
+      res.files_trashed += tidy_folder(lib, dirs.items[i], permanent);
   }
   free(gone.items);
   free(trashed.items);
@@ -725,6 +731,20 @@ mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete
   list_free(&dirs);
   if (out) *out = res;
   return st;
+}
+
+mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete_plan *plan,
+                        mc_delete_result *out) {
+  if (out) memset(out, 0, sizeof *out);
+  if (!lib || !config_dir || !plan) return MC_ERR_INVALID_ARG;
+  return delete_run(lib, config_dir, plan, out);
+}
+
+mc_status mc_delete_run_permanently(mc_library *lib, const mc_delete_plan *plan,
+                                    mc_delete_result *out) {
+  if (out) memset(out, 0, sizeof *out);
+  if (!lib || !plan) return MC_ERR_INVALID_ARG;
+  return delete_run(lib, NULL, plan, out);
 }
 
 /* --- Restoring --- */

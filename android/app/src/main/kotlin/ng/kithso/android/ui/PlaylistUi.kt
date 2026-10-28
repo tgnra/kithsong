@@ -48,22 +48,29 @@ import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import ng.kithso.android.data.Addition
 import ng.kithso.android.data.Album
+import ng.kithso.android.data.Artist
 import ng.kithso.android.data.CollectionRef
+import ng.kithso.android.data.DeleteOutcome
+import ng.kithso.android.data.DeleteSize
+import ng.kithso.android.data.Deletion
+import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.PlaylistChoice
 import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.Track
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * The menus and dialogs for playlists, albums and tracks, shown by [PlaylistSheets] over
- * everything: long-pressing a playlist, album or track opens its menu ([playlistMenu],
- * [albumMenu], [trackMenu]), and Add to playlist ([addToPlaylist]) opens the list of playlists
- * to add to, with New playlist… first. [editor] is null when the library can't be edited (the
- * made-up one): the menus then offer only playing.
+ * The menus and dialogs for playlists, albums, artists and tracks, shown by [PlaylistSheets]
+ * over everything: long-pressing a playlist, album, artist or track opens its menu
+ * ([playlistMenu], [albumMenu], [artistMenu], [trackMenu]), and Add to playlist
+ * ([addToPlaylist]) opens the list of playlists to add to, with New playlist… first. [editor]
+ * is null when the library can't be edited, and [deleter] when nothing can be deleted from it
+ * (the made-up one): the menus then offer only playing.
  */
 @Stable
-class PlaylistActions(val editor: PlaylistEditor?) {
+class PlaylistActions(val editor: PlaylistEditor?, val deleter: LibraryDeleter? = null) {
     internal var sheet by mutableStateOf<Sheet?>(null)
     internal var dialog by mutableStateOf<Dialog?>(null)
 
@@ -73,6 +80,10 @@ class PlaylistActions(val editor: PlaylistEditor?) {
 
     fun albumMenu(album: Album) {
         sheet = Sheet.AlbumMenu(album)
+    }
+
+    fun artistMenu(artist: Artist) {
+        sheet = Sheet.ArtistMenu(artist)
     }
 
     /** [removable]: the track is listed from a manual playlist and can be taken out of it. */
@@ -87,6 +98,7 @@ class PlaylistActions(val editor: PlaylistEditor?) {
     internal sealed interface Sheet {
         data class PlaylistMenu(val playlist: Playlist) : Sheet
         data class AlbumMenu(val album: Album) : Sheet
+        data class ArtistMenu(val artist: Artist) : Sheet
         data class TrackMenu(val track: Track, val removable: Boolean) : Sheet
         data class AddTo(val what: Addition) : Sheet
     }
@@ -95,6 +107,8 @@ class PlaylistActions(val editor: PlaylistEditor?) {
         data class NewPlaylist(val what: Addition) : Dialog
         data class Rename(val uid: String, val name: String) : Dialog
         data class Delete(val uid: String, val name: String) : Dialog
+        /** Deleting an album, artist or track from the library, which is asked first. */
+        data class DeleteFromLibrary(val what: Deletion) : Dialog
     }
 }
 
@@ -113,6 +127,8 @@ fun PlaylistSheets(
     onDeleted: (String) -> Unit,
 ) {
     val editor = actions.editor
+    val deleter = actions.deleter
+    val scope = rememberCoroutineScope()
     when (val sheet = actions.sheet) {
         null -> Unit
         is PlaylistActions.Sheet.PlaylistMenu -> {
@@ -153,6 +169,33 @@ fun PlaylistSheets(
                             actions.addToPlaylist(Addition.Album(album.uid))
                         })
                     }
+                    if (deleter != null) {
+                        add(SheetAction(stringResource(R.string.delete_album_menu), Icons.Delete) {
+                            actions.dialog = PlaylistActions.Dialog.DeleteFromLibrary(
+                                Deletion(Deletion.Kind.Album, album.uid, album.title),
+                            )
+                        })
+                    }
+                },
+            )
+        }
+        is PlaylistActions.Sheet.ArtistMenu -> {
+            val artist = sheet.artist
+            val ref = CollectionRef(CollectionRef.Kind.Artist, artist.uid)
+            MenuSheet(
+                actions,
+                artist.name,
+                artist.subtitle(),
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
+                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    if (deleter != null) {
+                        add(SheetAction(stringResource(R.string.delete_artist_menu), Icons.Delete) {
+                            actions.dialog = PlaylistActions.Dialog.DeleteFromLibrary(
+                                Deletion(Deletion.Kind.Artist, artist.uid, artist.name),
+                            )
+                        })
+                    }
                 },
             )
         }
@@ -171,6 +214,14 @@ fun PlaylistSheets(
                     val entry = track.entryUid
                     if (editor != null && sheet.removable && entry != null) {
                         add(SheetAction(stringResource(R.string.remove_from_playlist), Icons.Remove) { editor.removeEntry(entry) })
+                    }
+                    if (deleter != null) {
+                        val name = track.title.ifEmpty { stringResource(R.string.unknown_value) }
+                        add(SheetAction(stringResource(R.string.delete_track_menu), Icons.Delete) {
+                            actions.dialog = PlaylistActions.Dialog.DeleteFromLibrary(
+                                Deletion(Deletion.Kind.Track, track.uid, name),
+                            )
+                        })
                     }
                 },
             )
@@ -211,7 +262,71 @@ fun PlaylistSheets(
                 TextButton(onClick = { actions.dialog = null }) { Text(stringResource(R.string.cancel)) }
             },
         )
+        is PlaylistActions.Dialog.DeleteFromLibrary -> if (deleter != null) {
+            DeleteFromLibraryDialog(deleter, dialog.what, scope, onDismiss = { actions.dialog = null })
+        }
     }
+}
+
+/**
+ * Asks before deleting [what] from the library, saying how many files go from this phone for
+ * good (there's no trash to restore them from) and that it goes from every device, then
+ * deletes it. Delete waits for the count; something that's gone already closes the dialog.
+ * Afterwards a toast says if the delete failed, or some tracks stayed; the desktops show a
+ * message box.
+ */
+@Composable
+private fun DeleteFromLibraryDialog(
+    deleter: LibraryDeleter,
+    what: Deletion,
+    // Outlives the dialog, which closes as the delete starts, for the toasts after it.
+    scope: CoroutineScope,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current.applicationContext
+    val failed = stringResource(R.string.delete_failed)
+    val resources = context.resources
+    val size by produceState<DeleteSize?>(null, what) {
+        val found = deleter.deleteSize(what)
+        if (found == null) Toast.makeText(context, failed, Toast.LENGTH_LONG).show()
+        if (found == null || found.tracks == 0) onDismiss() else value = found
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.playlist_delete_title, what.name)) },
+        text = {
+            size?.let {
+                Text(
+                    if (it.files > 0) pluralStringResource(R.plurals.delete_permanently_text, it.files, it.files)
+                    else stringResource(R.string.delete_no_files_text),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = size != null,
+                onClick = {
+                    onDismiss()
+                    scope.launch {
+                        when (val outcome = deleter.delete(what)) {
+                            DeleteOutcome.Deleted -> Unit
+                            is DeleteOutcome.Kept -> Toast.makeText(
+                                context,
+                                resources.getQuantityString(R.plurals.delete_kept, outcome.tracks, outcome.tracks),
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            DeleteOutcome.Failed -> Toast.makeText(context, failed, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                },
+            ) {
+                Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        },
+    )
 }
 
 /**

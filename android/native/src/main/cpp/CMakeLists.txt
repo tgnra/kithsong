@@ -14,3 +14,6 @@ target_sources(kithsong_jni PRIVATE jni_playlist_edit.c)
 
 # The core's settings.json (CoreSettings), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_settings.c)
+
+# Deleting albums, artists and tracks (DeleteNatives), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_delete.c)

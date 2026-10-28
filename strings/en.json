@@ -537,6 +537,9 @@
     "playlist_added": { "text": "Added to {0}", "note": "{0} is a playlist's name." },
     "playlist_reorder": { "text": "Drag to reorder", "note": "A playlist track's drag handle, for accessibility." },
 
+    "delete_permanently_text": { "one": "{0:d} file will be deleted for good and removed from the library on all your devices. This phone has no trash to restore it from.", "other": "{0:d} files will be deleted for good and removed from the library on all your devices. This phone has no trash to restore them from.", "note": "Under \"Delete “{0}”?\"; the files are an album's, artist's or track's, and its cover." },
+    "delete_kept": { "one": "{0:d} track couldn't be deleted, so it's still in the library.", "other": "{0:d} tracks couldn't be deleted, so they're still in the library." },
+
     "empty_text_sync": "Pair this phone with Kithsong on a computer, under Sync, to bring your music here.",
 
     "settings_sync_text": "The devices this phone syncs with, and pairing new ones",

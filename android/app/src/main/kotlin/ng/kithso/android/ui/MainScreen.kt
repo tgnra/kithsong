@@ -185,9 +185,10 @@ fun MainScreen(
     onSync: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
-    // Long-pressing a playlist or an album opens its menu.
+    // Long-pressing a playlist, an album or an artist opens its menu.
     onPlaylistMenu: (Playlist) -> Unit = {},
     onAlbumMenu: (Album) -> Unit = {},
+    onArtistMenu: (Artist) -> Unit = {},
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -253,6 +254,7 @@ fun MainScreen(
                         item.artist.subtitle(),
                         item.artist.art,
                         CircleShape,
+                        onLongClick = { onArtistMenu(item.artist) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.Artist, item.artist.uid)) }
                 }
             }

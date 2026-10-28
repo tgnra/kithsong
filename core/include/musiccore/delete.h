@@ -10,6 +10,10 @@
  * imported there go to their own trash. A track one of whose files can't be trashed (it's in
  * use, or there's no trash, as on Android) stays, with that file.
  *
+ * Where there's no trash (Android), mc_delete_run_permanently() does the same but removes
+ * the files outright and records nothing, so there's nothing to restore; the frontend says
+ * so before it deletes. Sync passes it on the same way.
+ *
  * What's needed to take a track back is kept outside the library, in deleted.db in the
  * config dir (next to settings.json and sync.db): for each trashed file, where it was, its
  * size, modification time and hash (when known), and its rows as JSON (the track and its
@@ -70,8 +74,8 @@ int mc_delete_plan_has(const mc_delete_plan *plan, const char *track_uid);
 
 typedef struct mc_delete_result {
   int tracks_deleted;
-  int files_trashed;
-  int tracks_kept; /* a file couldn't go to the trash, so the track stayed with it */
+  int files_trashed; /* or removed, by mc_delete_run_permanently() */
+  int tracks_kept;   /* a file couldn't go to the trash (or be removed), so the track stayed with it */
 } mc_delete_result;
 
 /* Deletes what plan holds, as the library is now, recording what's needed to restore it in
@@ -80,6 +84,13 @@ typedef struct mc_delete_result {
  * already trashed are still recorded, so restoring them brings them back. */
 mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete_plan *plan,
                         mc_delete_result *out);
+
+/* mc_delete_run() for a device with no trash (Android): the files, and the covers of album
+ * folders it leaves empty, are removed for good rather than trashed, and nothing is
+ * recorded, so mc_delete_restore() can't bring them back. The same results and errors; a
+ * file that can't be removed keeps its track. */
+mc_status mc_delete_run_permanently(mc_library *lib, const mc_delete_plan *plan,
+                                    mc_delete_result *out);
 
 /* Brings back deleted tracks whose files are back where they were (see above), and drops
  * records older than MC_DELETE_KEEP_DAYS. *restored (may be NULL) is how many files came

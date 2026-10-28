@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import ng.kithso.android.AppSettings
 import ng.kithso.android.data.Addition
 import ng.kithso.android.data.CollectionRef
+import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.playback.Playback
@@ -86,8 +87,9 @@ fun App(
 
     // Menus and Add to playlist, over everything. Their Play and Shuffle, and a track list's,
     // play a whole album or playlist from its start with shuffle off, or with shuffle on from
-    // whichever track the core's shuffle starts with, as the desktops do.
-    val actions = remember(source) { PlaylistActions(source as? PlaylistEditor) }
+    // whichever track the core's shuffle starts with, as the desktops do. Deleting an album,
+    // artist or track reads open track lists again, and one that's left empty closes itself.
+    val actions = remember(source) { PlaylistActions(source as? PlaylistEditor, source as? LibraryDeleter) }
     val scope = rememberCoroutineScope()
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
         scope.launch {
@@ -113,6 +115,7 @@ fun App(
                 modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen || searchOpen),
                 onPlaylistMenu = actions::playlistMenu,
                 onAlbumMenu = actions::albumMenu,
+                onArtistMenu = actions::artistMenu,
             )
             if (settingsOpen) {
                 DismissibleScreen(
