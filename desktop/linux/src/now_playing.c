@@ -8,6 +8,7 @@
 enum {
   ART = 36, /* the cover's square, as tall as the playback buttons */
   KEY_STEP_MS = 5000,
+  FLASH_MS = 1500,
 };
 
 static struct {
@@ -22,6 +23,8 @@ static struct {
   gboolean pressed;      /* a pointer is down on the bar */
   gboolean seek_pending; /* the bar moved during that press */
   gboolean updating;     /* we're moving the bar, not the user */
+  char *markup;          /* the track's line, while a flash covers it */
+  guint flash;           /* the flash's timeout */
 } s;
 
 static void format_time(int ms, char *out, size_t n) {
@@ -175,8 +178,13 @@ void now_playing_show(const char *title, const char *artist, int duration_ms, co
   char *markup = !title ? g_strdup("")
                  : byline ? g_markup_printf_escaped("<b>%s</b> <span alpha=\"60%%\">%s</span>", title, byline)
                           : g_markup_printf_escaped("<b>%s</b>", title);
-  gtk_label_set_markup(GTK_LABEL(s.title), markup);
-  g_free(markup);
+  if (s.flash) { /* shown once the flash is over */
+    g_free(s.markup);
+    s.markup = markup;
+  } else {
+    gtk_label_set_markup(GTK_LABEL(s.title), markup);
+    g_free(markup);
+  }
   mc_free(byline);
   gtk_accessible_update_property(GTK_ACCESSIBLE(s.title), GTK_ACCESSIBLE_PROPERTY_LABEL,
                                  title ? title : mc_str(MC_STR_NOTHING_PLAYING), -1);
@@ -214,4 +222,20 @@ void now_playing_set_shuffle(gboolean on) {
 
 void now_playing_set_position(int ms) {
   if (!s.pressed) set_bar(MAX(0, MIN(ms, s.duration_ms)));
+}
+
+static gboolean end_flash(gpointer user) {
+  (void)user;
+  s.flash = 0;
+  gtk_label_set_markup(GTK_LABEL(s.title), s.markup ? s.markup : "");
+  g_clear_pointer(&s.markup, g_free);
+  return G_SOURCE_REMOVE;
+}
+
+void now_playing_flash(const char *text) {
+  if (!s.title) return;
+  if (s.flash) g_source_remove(s.flash);
+  else s.markup = g_strdup(gtk_label_get_label(GTK_LABEL(s.title)));
+  gtk_label_set_text(GTK_LABEL(s.title), text ? text : "");
+  s.flash = g_timeout_add(FLASH_MS, end_flash, NULL);
 }

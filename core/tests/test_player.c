@@ -189,6 +189,17 @@ int main(int argc, char **argv) {
   CHECK(!st.shuffle && st.state == MC_PLAYER_STOPPED);
   CHECK(n && seen[n - 1] == 2);
 
+  /* Volume: clamped, and kept apart from muted. */
+  CHECK(st.volume == 100 && !st.muted);
+  CHECK(mc_player_set_volume(player, 40) == MC_OK);
+  CHECK(mc_player_set_muted(player, 1) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.volume == 40 && st.muted);
+  CHECK(mc_player_set_volume(player, -5) == MC_OK);
+  CHECK(mc_player_set_muted(player, 0) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.volume == 0 && !st.muted);
+
   mc_player_free(player);
   mc_remove(a);
   mc_remove(b);

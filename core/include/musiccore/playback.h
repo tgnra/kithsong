@@ -82,6 +82,14 @@ mc_status mc_player_toggle(mc_player *player);
 mc_status mc_player_stop(mc_player *player);
 mc_status mc_player_seek_ms(mc_player *player, int64_t position_ms);
 
+/* The volume, 0 to 100 (100 to begin with; out of range is clamped). It's a gain on the
+ * output, on a perceptual curve: the cube of volume / 100, so 50 is about -18 dB, 10 about
+ * -60 dB and 0 silence. Changes fade over a few milliseconds, so they don't click. The OS's
+ * own volume is left alone. Frontends keep it with mc_settings_set_volume(). */
+mc_status mc_player_set_volume(mc_player *player, int volume);
+/* Muted (off to begin with) is silence, keeping the volume for when it's unmuted. */
+mc_status mc_player_set_muted(mc_player *player, int muted);
+
 typedef struct mc_player_status {
   mc_player_state state;
   int index;           /* current queue item, -1 if the queue is empty */
@@ -89,6 +97,8 @@ typedef struct mc_player_status {
   int shuffle;         /* see mc_player_set_shuffle(); there's always a next item then */
   int64_t position_ms; /* in the current item, as heard */
   int64_t duration_ms; /* of the current item, 0 if unknown (or not open yet) */
+  int volume;          /* see mc_player_set_volume() */
+  int muted;
 } mc_player_status;
 
 /* A consistent snapshot. Cheap enough to call on a UI timer. */

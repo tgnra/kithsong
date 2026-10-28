@@ -25,6 +25,8 @@ static struct {
   item *items;
   int count;
   gboolean shuffle;
+  int volume;
+  gboolean muted;
   guint tick;   /* timer source while playing */
   gint pending; /* an idle is queued for the player's news; set on its thread */
 
@@ -142,6 +144,7 @@ void playback_init(GtkWindow *win, void (*changed)(void *user), void *user) {
   s.changed = changed;
   s.user = user;
   s.index = s.announced = -1;
+  s.volume = 100;
 }
 
 void playback_free(void) {
@@ -188,7 +191,9 @@ void playback_play(const playback_track *tracks, int count, int start) {
     s.player = NULL;
     return;
   }
-  mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off */
+  mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off, at full volume */
+  mc_player_set_volume(s.player, s.volume);
+  mc_player_set_muted(s.player, s.muted);
   const char **paths = g_new0(const char *, (gsize)count);
   item *items = g_new0(item, (gsize)count);
   for (int i = 0; i < count; i++) {
@@ -270,6 +275,31 @@ void playback_seek(int64_t ms) {
   mc_player_seek_ms(s.player, ms < 0 ? 0 : ms);
   refresh();
   mpris_seeked(playback_position_ms());
+}
+
+void playback_seek_by(int64_t delta_ms) {
+  if (!playback_has_current()) return;
+  int64_t to = playback_position_ms() + delta_ms, duration_ms = playback_duration_ms();
+  if (duration_ms > 0 && to > duration_ms) to = duration_ms;
+  playback_seek(to);
+}
+
+void playback_set_volume(int volume) {
+  s.volume = CLAMP(volume, 0, 100);
+  if (s.player) mc_player_set_volume(s.player, s.volume);
+}
+
+int playback_volume(void) {
+  return s.volume;
+}
+
+void playback_set_muted(gboolean muted) {
+  s.muted = muted;
+  if (s.player) mc_player_set_muted(s.player, muted);
+}
+
+gboolean playback_muted(void) {
+  return s.muted;
 }
 
 gboolean playback_is_playing(void) {

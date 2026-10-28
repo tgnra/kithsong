@@ -36,4 +36,7 @@ void now_playing_show(const wchar_t *title, const wchar_t *artist, int duration_
 void now_playing_set_position(int ms);
 int now_playing_position(void);
 
+/* Shows text in the track's place for a moment, e.g. "Volume 40%" after a shortcut. */
+void now_playing_flash(const wchar_t *text);
+
 #endif

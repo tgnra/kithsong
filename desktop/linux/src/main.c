@@ -19,7 +19,8 @@
  * the stack of pages as "device". The playback buttons
  * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
  * the actions'. Shuffle, which the strip's toggle and the track list's Play and Shuffle set,
- * is kept in settings.json.
+ * is kept in settings.json, as is the volume, which only the keyboard shortcuts (on_shortcut(),
+ * listed in README.md) change for now.
  */
 #include <adwaita.h>
 #include <math.h>
@@ -58,6 +59,13 @@ static const char css[] =
   ".search-albums > flowboxchild { padding: 8px; border-radius: 12px; }";
 
 static GtkWidget *play_button;
+static guint save_volume_source; /* a timeout, so a held key saves the volume once */
+
+enum {
+  VOLUME_STEP = 5, /* per press of a volume shortcut */
+  SEEK_STEP_MS = 5000,
+  SAVE_VOLUME_MS = 1000,
+};
 
 /* --- Import and Settings --- */
 
@@ -379,6 +387,153 @@ static void on_shuffle(void *user, gboolean on) {
   set_shuffle(user, on);
 }
 
+/* --- Keyboard shortcuts --- */
+
+static gboolean save_volume(gpointer user) {
+  app *a = user;
+  save_volume_source = 0;
+  mc_settings *settings = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) != MC_OK) return G_SOURCE_REMOVE;
+  if (mc_settings_set_volume(settings, playback_volume()) == MC_OK) mc_settings_save(settings);
+  mc_settings_free(settings);
+  return G_SOURCE_REMOVE;
+}
+
+/* Shows the volume (or Muted) for a moment in the now-playing strip, as there's no volume
+ * control to show it. */
+static void flash_volume(void) {
+  if (playback_muted()) {
+    now_playing_flash(mc_str(MC_STR_VOLUME_MUTED));
+    return;
+  }
+  char *text = mc_format_alloc(mc_str(MC_STR_VOLUME_LEVEL), MC_D(playback_volume()));
+  now_playing_flash(text);
+  mc_free(text);
+}
+
+/* Volume 0 to 100, kept in settings.json for next time. Changing it unmutes. */
+static void set_volume(app *a, int volume) {
+  playback_set_muted(FALSE);
+  playback_set_volume(volume);
+  flash_volume();
+  if (save_volume_source) g_source_remove(save_volume_source);
+  save_volume_source = g_timeout_add(SAVE_VOLUME_MS, save_volume, a);
+}
+
+/* The sidebar's row n of Albums, Artists, Playlists..., as clicking it does. */
+static void activate_nav_row(app *a, int n) {
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->nav, n);
+  if (!row) return;
+  gtk_list_box_select_row(a->nav, row);
+  g_signal_emit_by_name(a->nav, "row-activated", row);
+}
+
+typedef enum shortcut {
+  SC_NEXT,
+  SC_PREVIOUS,
+  SC_SEEK_FORWARD,
+  SC_SEEK_BACK,
+  SC_VOLUME_UP,
+  SC_VOLUME_DOWN,
+  SC_MUTE,
+  SC_SHUFFLE,
+  SC_SEARCH,
+  SC_PAGE_1, /* ...to SC_PAGE_1 + 3 */
+  SC_SETTINGS = SC_PAGE_1 + 4,
+} shortcut;
+
+/* Whether the focus is in a text box, whose own keys (arrows, + and -) it keeps. */
+static gboolean text_focused(GtkWidget *win) {
+  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
+  return focus && (GTK_IS_EDITABLE(focus) || GTK_IS_TEXT_VIEW(focus));
+}
+
+/* The window's keyboard shortcuts, besides Space (see README.md). Captured before the focused
+ * widget sees them, so the lists' own arrow keys don't hide them; text boxes keep the keys
+ * they use (the arrows, + and -), and a dialog over the window keeps them all. The pages and
+ * Settings aren't reached while an import has the sidebar locked. */
+static gboolean on_shortcut(GtkWidget *win, GVariant *args, gpointer user) {
+  app *a = user;
+  shortcut sc = (shortcut)g_variant_get_int32(args);
+  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
+  if (focus && gtk_widget_get_ancestor(focus, ADW_TYPE_DIALOG)) return FALSE;
+  gboolean text = text_focused(win);
+  switch (sc) {
+    case SC_NEXT:
+    case SC_PREVIOUS:
+      if (text) return FALSE; /* a word at a time */
+      if (sc == SC_NEXT) playback_next();
+      else playback_previous();
+      return TRUE;
+    case SC_SEEK_FORWARD:
+    case SC_SEEK_BACK:
+      if (text) return FALSE;
+      playback_seek_by(sc == SC_SEEK_FORWARD ? SEEK_STEP_MS : -SEEK_STEP_MS);
+      return TRUE;
+    case SC_VOLUME_UP:
+    case SC_VOLUME_DOWN:
+      if (text) return FALSE;
+      set_volume(a, playback_volume() + (sc == SC_VOLUME_UP ? VOLUME_STEP : -VOLUME_STEP));
+      return TRUE;
+    case SC_MUTE:
+      playback_set_muted(!playback_muted());
+      flash_volume();
+      return TRUE;
+    case SC_SHUFFLE:
+      set_shuffle(a, !playback_shuffle());
+      now_playing_flash(mc_str(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
+      return TRUE;
+    case SC_SEARCH:
+      if (!gtk_widget_is_sensitive(a->sidebar)) return TRUE;
+      gtk_list_box_select_row(a->top_nav, gtk_list_box_get_row_at_index(a->top_nav, 1));
+      on_top_nav_activated(a->top_nav, NULL, a);
+      return TRUE;
+    case SC_SETTINGS:
+      if (gtk_widget_is_sensitive(a->settings)) on_settings(NULL, a);
+      return TRUE;
+    default:
+      if (gtk_widget_is_sensitive(a->sidebar)) activate_nav_row(a, sc - SC_PAGE_1);
+      return TRUE;
+  }
+}
+
+/* Volume and seeking also come from the plain keys, so held down they repeat. */
+static void add_shortcuts(app *a, GtkWidget *win) {
+  static const struct {
+    guint key;
+    GdkModifierType mods;
+    shortcut sc;
+  } keys[] = {
+    {GDK_KEY_Right, GDK_CONTROL_MASK, SC_NEXT},
+    {GDK_KEY_Left, GDK_CONTROL_MASK, SC_PREVIOUS},
+    {GDK_KEY_Right, GDK_SHIFT_MASK, SC_SEEK_FORWARD},
+    {GDK_KEY_Left, GDK_SHIFT_MASK, SC_SEEK_BACK},
+    {GDK_KEY_Up, GDK_CONTROL_MASK, SC_VOLUME_UP},
+    {GDK_KEY_Down, GDK_CONTROL_MASK, SC_VOLUME_DOWN},
+    {GDK_KEY_plus, 0, SC_VOLUME_UP},
+    {GDK_KEY_equal, 0, SC_VOLUME_UP},
+    {GDK_KEY_KP_Add, 0, SC_VOLUME_UP},
+    {GDK_KEY_minus, 0, SC_VOLUME_DOWN},
+    {GDK_KEY_KP_Subtract, 0, SC_VOLUME_DOWN},
+    {GDK_KEY_m, GDK_CONTROL_MASK, SC_MUTE},
+    {GDK_KEY_s, GDK_CONTROL_MASK, SC_SHUFFLE},
+    {GDK_KEY_f, GDK_CONTROL_MASK, SC_SEARCH},
+    {GDK_KEY_1, GDK_CONTROL_MASK, SC_PAGE_1},
+    {GDK_KEY_2, GDK_CONTROL_MASK, SC_PAGE_1 + 1},
+    {GDK_KEY_3, GDK_CONTROL_MASK, SC_PAGE_1 + 2},
+    {GDK_KEY_4, GDK_CONTROL_MASK, SC_PAGE_1 + 3},
+    {GDK_KEY_comma, GDK_CONTROL_MASK, SC_SETTINGS},
+  };
+  GtkEventController *controller = gtk_shortcut_controller_new();
+  gtk_event_controller_set_propagation_phase(controller, GTK_PHASE_CAPTURE);
+  for (size_t i = 0; i < G_N_ELEMENTS(keys); i++)
+    gtk_shortcut_controller_add_shortcut(
+      GTK_SHORTCUT_CONTROLLER(controller),
+      gtk_shortcut_new_with_arguments(gtk_keyval_trigger_new(keys[i].key, keys[i].mods),
+                                      gtk_callback_action_new(on_shortcut, a, NULL), "i", (gint32)keys[i].sc));
+  gtk_widget_add_controller(win, controller);
+}
+
 /* Plays the shown album or playlist in order, from track start on; or with start -1 from
  * the first track, which shuffled is any. Tracks with no file on this device are left out of
  * the queue. Playing it puts it first in the recents, as on Android and Windows. */
@@ -660,7 +815,10 @@ static void on_window_destroy(GtkWidget *win, gpointer user) {
 
 static void on_shutdown(GApplication *gapp, gpointer user) {
   (void)gapp;
-  (void)user;
+  if (save_volume_source) { /* a change not saved yet */
+    g_source_remove(save_volume_source);
+    save_volume(user);
+  }
   playback_free();
   mpris_free();
   cover_cache_free();
@@ -765,12 +923,16 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
     GTK_SHORTCUT_CONTROLLER(list_keys),
     gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_space, 0), gtk_callback_action_new(on_list_space, NULL, NULL)));
   gtk_widget_add_controller(win, list_keys);
+  add_shortcuts(a, win);
 
   playback_init(a->win, playback_changed, a);
   playback_set_library(a->lib, a->settings_dir);
   mc_settings *settings = NULL;
-  if (mc_settings_load(a->settings_dir, &settings) == MC_OK) playback_set_shuffle(mc_settings_shuffle(settings));
-  mc_settings_free(settings); /* shuffle as it was left */
+  if (mc_settings_load(a->settings_dir, &settings) == MC_OK) { /* shuffle and volume as they were left */
+    playback_set_shuffle(mc_settings_shuffle(settings));
+    playback_set_volume(mc_settings_volume(settings));
+  }
+  mc_settings_free(settings);
 
   mpris_init(gapp, a->win);
   prune_art(a);

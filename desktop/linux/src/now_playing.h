@@ -30,4 +30,7 @@ void now_playing_show(const char *title, const char *artist, int duration_ms, co
 /* Where playback is, in ms. Ignored while the user drags the bar. */
 void now_playing_set_position(int ms);
 
+/* Shows text in the track's place for a moment, e.g. "Volume 40%" after a shortcut. */
+void now_playing_flash(const char *text);
+
 #endif

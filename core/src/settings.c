@@ -144,3 +144,19 @@ mc_status mc_settings_set_bool(mc_settings *s, const char *key, int value) {
 int mc_settings_shuffle(const mc_settings *s) { return mc_settings_bool(s, "shuffle", 0); }
 
 mc_status mc_settings_set_shuffle(mc_settings *s, int on) { return mc_settings_set_bool(s, "shuffle", on); }
+
+int mc_settings_volume(const mc_settings *s) {
+  if (!s) return 100;
+  yyjson_mut_val *v = yyjson_mut_obj_get(yyjson_mut_doc_get_root(s->doc), "volume");
+  if (!yyjson_mut_is_num(v)) return 100;
+  double d = yyjson_mut_get_num(v);
+  return d <= 0 ? 0 : d >= 100 ? 100 : (int)(d + 0.5);
+}
+
+mc_status mc_settings_set_volume(mc_settings *s, int volume) {
+  if (!s) return MC_ERR_INVALID_ARG;
+  volume = volume < 0 ? 0 : volume > 100 ? 100 : volume;
+  yyjson_mut_val *root = yyjson_mut_doc_get_root(s->doc);
+  yyjson_mut_obj_remove_key(root, "volume");
+  return yyjson_mut_obj_add_int(s->doc, root, "volume", volume) ? MC_OK : MC_ERR_NOMEM;
+}

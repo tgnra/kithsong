@@ -27,8 +27,8 @@
  * (search_view.c), the import view (import_view.c) or the settings view (settings_view.c);
  * a search result opens on its page. Once an
  * import starts, the other pages are greyed out until the user clicks Done. Folders dropped
- * anywhere on the window start an import. Space plays or pauses, unless the focused control
- * uses Space itself.
+ * anywhere on the window start an import. Keyboard shortcuts (shortcut(), listed in
+ * README.md) work from anywhere in the window, but leave text boxes their own keys.
  *
  * The toolbar is the title bar: WM_NCCALCSIZE removes the standard one, and the frame is
  * extended into the client area (DwmExtendFrameIntoClientArea) so Windows still draws the
@@ -130,7 +130,11 @@ enum {
   TIMER_REFRESH_DEVICES = 0x5D01, /* one-shot: a sync event asked for a refresh */
   TIMER_POLL_DEVICES,             /* repeating: renames elsewhere fire no event */
   TIMER_REFRESH_LIBRARY,          /* one-shot: sync brought library rows or files */
+  TIMER_SAVE_VOLUME,              /* one-shot: the volume changed, so a held key saves once */
   REFRESH_DEVICES_MS = 200,
+  SAVE_VOLUME_MS = 1000,
+  VOLUME_STEP = 5, /* per press of a volume shortcut */
+  SEEK_STEP_MS = 5000,
   REFRESH_LIBRARY_MS = 500,
   POLL_DEVICES_MS = 10000,
   MAX_SYNCING = 16, /* devices marked as syncing in the sidebar at once */
@@ -163,6 +167,8 @@ typedef struct app {
   char *art_dir;           /* UTF-8: playlists' pictures, in config_dir */
   BOOL refresh_pending;    /* TIMER_REFRESH_DEVICES is set */
   BOOL library_pending;    /* TIMER_REFRESH_LIBRARY is set */
+  BOOL volume_pending;     /* TIMER_SAVE_VOLUME is set */
+  BOOL locked;             /* an import session has the other pages greyed out */
   char syncing[MAX_SYNCING][MC_UID_STRLEN]; /* devices with a session in progress */
 } app;
 
@@ -653,6 +659,33 @@ static void set_shuffle(BOOL on) {
   mc_settings_save(g_app.settings); /* failing, it's saved with the next setting */
 }
 
+/* Volume 0 to 100, kept in the settings for next time. Changing it unmutes. Says so in the
+ * now-playing strip for a moment, as there's no volume control to show it. */
+static void set_volume(int volume) {
+  playback_set_muted(FALSE);
+  playback_set_volume(volume);
+  wchar_t text[64];
+  mc_wformat(text, 64, mc_str(MC_STR_VOLUME_LEVEL), MC_D(playback_volume()));
+  now_playing_flash(text);
+  mc_settings_set_volume(g_app.settings, playback_volume());
+  g_app.volume_pending = TRUE;
+  SetTimer(g_app.wnd, TIMER_SAVE_VOLUME, SAVE_VOLUME_MS, NULL);
+}
+
+static void save_volume(void) {
+  KillTimer(g_app.wnd, TIMER_SAVE_VOLUME);
+  if (g_app.volume_pending) mc_settings_save(g_app.settings); /* failing, it's saved with the next setting */
+  g_app.volume_pending = FALSE;
+}
+
+static void toggle_muted(void) {
+  playback_set_muted(!playback_muted());
+  wchar_t text[64];
+  if (playback_muted()) lstrcpynW(text, mc_wstr(MC_STR_VOLUME_MUTED), 64);
+  else mc_wformat(text, 64, mc_str(MC_STR_VOLUME_LEVEL), MC_D(playback_volume()));
+  now_playing_flash(text);
+}
+
 /* The track list's Play and Shuffle buttons: the whole album, playlist or artist's tracks,
  * in order from the first track, or shuffled. */
 static void play_all(BOOL shuffled) {
@@ -1078,6 +1111,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       theme_apply_window(wnd, TRUE);
       create_controls();
       playback_set_shuffle(mc_settings_shuffle(g_app.settings)); /* as it was left */
+      playback_set_volume(mc_settings_volume(g_app.settings));
       update_font();
       apply_theme();
       /* No focus rectangles until the keyboard is used (dialogs do this for themselves). */
@@ -1188,6 +1222,10 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         refresh_library();
         return 0;
       }
+      if (wp == TIMER_SAVE_VOLUME) {
+        save_volume();
+        return 0;
+      }
       break;
     case WM_APP_SYNC:
       on_sync_event(wp, lp);
@@ -1209,6 +1247,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       return 0;
     case WM_APP_IMPORT_SESSION:
+      g_app.locked = (BOOL)wp;
       sidebar_set_locked((BOOL)wp);
       layout(); /* the import view switches between the drop zone and the list */
       return 0;
@@ -1225,6 +1264,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       KillTimer(wnd, TIMER_REFRESH_DEVICES);
       KillTimer(wnd, TIMER_POLL_DEVICES);
       KillTimer(wnd, TIMER_REFRESH_LIBRARY);
+      save_volume();
       stop_sync(); /* before the library closes, after the loop */
       playback_free();
       import_view_destroy();
@@ -1489,6 +1529,100 @@ static BOOL space_play_pause(const MSG *msg) {
   return TRUE;
 }
 
+/* Back, as the page's own Back does: from an artist's page to the artists, or from an album
+ * group to the groups. FALSE if there's nowhere to go back to. */
+static BOOL go_back(void) {
+  if (artist_page()) {
+    on_command(ID_TRACKS, TLN_CLOSE);
+    return TRUE;
+  }
+  return g_app.page == PAGE_ALBUM_GROUPS && album_grid_back();
+}
+
+/* A sidebar page from the keyboard, with the focus in it, as Enter in the sidebar does (or
+ * on the sidebar for a page that has nowhere to put it, as a click does); not while an import
+ * has the others greyed out. */
+static void shortcut_page(sidebar_page page) {
+  if (g_app.locked && page != g_app.page) return;
+  show_page(page);
+  if (page == PAGE_SEARCH || page == PAGE_ARTISTS || library_page()) on_command(ID_SIDEBAR, SBN_ENTER_PAGE);
+  else SetFocus(g_app.sidebar);
+}
+
+/* For the message loop: the keyboard shortcuts in the main window (see README.md), besides
+ * Space. In a text box (the search box, Settings' fields) the arrow keys, + and - and
+ * Backspace stay the box's; the Ctrl+letter, digit and comma ones work there too. Toggles
+ * act once while a key is held; volume and seeking repeat. TRUE if msg was a shortcut. */
+static BOOL shortcut(const MSG *msg) {
+  if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN) return FALSE;
+  if (!g_app.wnd || GetAncestor(msg->hwnd, GA_ROOT) != g_app.wnd || !IsWindowEnabled(g_app.wnd)) return FALSE;
+  BOOL ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
+  BOOL repeat = (msg->lParam & 0x40000000) != 0;
+  BOOL text = (SendMessageW(msg->hwnd, WM_GETDLGCODE, msg->wParam, (LPARAM)msg) & DLGC_HASSETSEL) != 0;
+  UINT key = (UINT)msg->wParam;
+
+  if (alt || msg->message == WM_SYSKEYDOWN) /* Alt+Left, as in a browser; other Alt keys are mnemonics */
+    return key == VK_LEFT && !ctrl && !shift && go_back();
+  if (key == VK_BROWSER_BACK || (key == VK_BACK && !ctrl && !shift && !text)) return go_back();
+
+  if (ctrl && !shift) {
+    switch (key) {
+      case VK_RIGHT:
+      case VK_LEFT:
+        if (text) return FALSE; /* a word at a time */
+        if (!repeat && key == VK_RIGHT) playback_next();
+        else if (!repeat) playback_previous();
+        return TRUE;
+      case VK_UP:
+      case VK_DOWN:
+        if (text) return FALSE;
+        set_volume(playback_volume() + (key == VK_UP ? VOLUME_STEP : -VOLUME_STEP));
+        return TRUE;
+      case 'M':
+        if (!repeat) toggle_muted();
+        return TRUE;
+      case 'S':
+        if (!repeat) {
+          set_shuffle(!playback_shuffle());
+          now_playing_flash(mc_wstr(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
+        }
+        return TRUE;
+      case 'F':
+        if (!repeat) shortcut_page(PAGE_SEARCH);
+        return TRUE;
+      case '1':
+      case '2':
+      case '3':
+      case '4': {
+        static const sidebar_page pages[] = {PAGE_ALBUMS, PAGE_ARTISTS, PAGE_PLAYLISTS, PAGE_ALBUM_GROUPS};
+        if (!repeat) shortcut_page(pages[key - '1']);
+        return TRUE;
+      }
+      case VK_OEM_COMMA:
+        if (!repeat) shortcut_page(PAGE_SETTINGS);
+        return TRUE;
+    }
+    return FALSE;
+  }
+  if (text || ctrl) return FALSE;
+  switch (key) {
+    case VK_RIGHT:
+    case VK_LEFT:
+      if (!shift) return FALSE; /* the arrows alone move about in lists */
+      playback_seek_by(key == VK_RIGHT ? SEEK_STEP_MS : -SEEK_STEP_MS);
+      return TRUE;
+    case VK_OEM_PLUS: /* the = key, so + with or without Shift */
+    case VK_ADD:
+      set_volume(playback_volume() + VOLUME_STEP);
+      return TRUE;
+    case VK_OEM_MINUS:
+    case VK_SUBTRACT:
+      set_volume(playback_volume() - VOLUME_STEP);
+      return TRUE;
+  }
+  return FALSE;
+}
+
 /* Before Move Library moves the files: everything that reads the library or plays its files
  * lets go, and it closes. */
 static void move_close_library(void) {
@@ -1605,7 +1739,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   MSG msg;
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {
     if (pair_dialog_translate(&msg)) continue;
-    if (space_play_pause(&msg)) continue;
+    if (space_play_pause(&msg) || shortcut(&msg)) continue;
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
   }

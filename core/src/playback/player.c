@@ -18,9 +18,9 @@
  * off renumbers the places from the last item in the buffer, so what's buffered still plays
  * and the new order carries on after it.
  *
- * The callback only copies out of the ring buffer and counts. A flush (seek, skip, stop)
- * resets the buffer from the player thread, so the two share a spinlock that the callback
- * holds just for the copy. Everything else is under the mutex; the thread drops it while
+ * The callback copies out of the ring buffer, applies the volume and counts. A flush (seek,
+ * skip, stop) resets the buffer from the player thread, so the two share a spinlock that the
+ * callback holds just for the copy (and the volume). Everything else is under the mutex; the thread drops it while
  * opening, decoding and touching the device, so calls from the UI never wait on the disk.
  */
 #include "musiccore/playback.h"
@@ -42,6 +42,7 @@ enum {
   RESTART_MS = 3000, /* previous() restarts the item after this far in */
   MAX_PLAYED = 16,   /* counted plays waiting for mc_player_take_played() */
   MAX_PLAY_MS = 4 * 60 * 1000,
+  FADE_MS = 10, /* a volume change goes all the way from silence to full in this long */
 };
 
 /* --- Sources --- */
@@ -189,9 +190,13 @@ struct mc_player {
   ma_device device;
   ma_pcm_rb rb;
 
+  int volume, muted; /* under lock, as set */
+
   /* Shared with the callback, under spin. */
   ma_spinlock spin;
   uint64_t played; /* stream frames handed to the device */
+  float gain_target; /* from volume and muted */
+  float gain;        /* fading towards gain_target */
 };
 
 /* The queue item at place pos in the play order, or -1 if there's none. Under lock. */
@@ -206,12 +211,32 @@ static uint32_t new_seed(void) {
   return seed;
 }
 
+/* The volume's gain: the cube of the fraction, roughly how loud it sounds. */
+static float volume_gain(int volume, int muted) {
+  float v = muted ? 0.0f : (float)volume / 100.0f;
+  return v * v * v;
+}
+
+/* Scales frames of out by the gain, fading it towards target. Under spin. */
+static void apply_gain(mc_player *p, float *out, ma_uint32 frames, float target, ma_uint32 rate) {
+  float g = p->gain;
+  if (g == target && g == 1.0f) return;
+  float step = 1.0f / (float)(rate ? rate * FADE_MS / 1000 : 480);
+  for (ma_uint32 i = 0; i < frames; i++) {
+    if (g < target) g = g + step < target ? g + step : target;
+    else if (g > target) g = g - step > target ? g - step : target;
+    for (int c = 0; c < CHANNELS; c++) out[(size_t)i * CHANNELS + c] *= g;
+  }
+  p->gain = g;
+}
+
 static void on_audio(ma_device *device, void *output, const void *input, ma_uint32 frames) {
   (void)input;
   mc_player *p = device->pUserData;
   float *out = output; /* miniaudio has already filled it with silence */
   ma_uint32 done = 0;
   ma_spinlock_lock(&p->spin);
+  float target = p->gain_target;
   while (done < frames) {
     ma_uint32 n = frames - done;
     void *buf;
@@ -221,6 +246,7 @@ static void on_audio(ma_device *device, void *output, const void *input, ma_uint
     done += n;
   }
   p->played += done;
+  apply_gain(p, out, done, target, device->sampleRate);
   ma_spinlock_unlock(&p->spin);
 }
 
@@ -253,6 +279,8 @@ static void snapshot(mc_player *p, mc_player_status *st) {
   memset(st, 0, sizeof *st);
   st->count = p->count;
   st->shuffle = p->shuffle;
+  st->volume = p->volume;
+  st->muted = p->muted;
   st->state = p->state;
   st->index = p->current;
   if (p->cmd == CMD_START) { /* report it as done already, so the UI doesn't flicker back */
@@ -548,6 +576,8 @@ mc_status mc_player_new(mc_player_cb cb, void *user, mc_player **out) {
   p->user = user;
   p->current = p->decoding = p->play_index = -1;
   p->current_pos = p->decoding_pos = -1;
+  p->volume = 100;
+  p->gain = p->gain_target = 1.0f;
   mc_mutex_init(&p->lock);
   mc_cond_init(&p->wake);
   mc_status st = mc_thread_start(&p->thread, run, p);
@@ -744,6 +774,34 @@ mc_status mc_player_seek_ms(mc_player *p, int64_t position_ms) {
   return MC_OK;
 }
 
+/* Under lock. With the device stopped there's nothing to fade, so the next sound starts at
+ * the new volume. */
+static void update_gain(mc_player *p) {
+  float gain = volume_gain(p->volume, p->muted);
+  ma_spinlock_lock(&p->spin);
+  p->gain_target = gain;
+  if (!p->device_running) p->gain = gain;
+  ma_spinlock_unlock(&p->spin);
+}
+
+mc_status mc_player_set_volume(mc_player *p, int volume) {
+  if (!p) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  p->volume = volume < 0 ? 0 : volume > 100 ? 100 : volume;
+  update_gain(p);
+  mc_mutex_unlock(&p->lock);
+  return MC_OK;
+}
+
+mc_status mc_player_set_muted(mc_player *p, int muted) {
+  if (!p) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  p->muted = muted != 0;
+  update_gain(p);
+  mc_mutex_unlock(&p->lock);
+  return MC_OK;
+}
+
 mc_status mc_player_set_shuffle(mc_player *p, int on) {
   if (!p) return MC_ERR_INVALID_ARG;
   on = on != 0;
@@ -790,6 +848,7 @@ void mc_player_status_get(mc_player *p, mc_player_status *out) {
   if (!p) {
     memset(out, 0, sizeof *out);
     out->index = -1;
+    out->volume = 100;
     return;
   }
   mc_mutex_lock(&p->lock);

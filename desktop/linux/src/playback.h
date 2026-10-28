@@ -52,6 +52,16 @@ void playback_stop(void);
 void playback_next(void);
 void playback_previous(void);
 void playback_seek(int64_t ms);
+/* Moves the position by delta_ms, within the current track. */
+void playback_seek_by(int64_t delta_ms);
+
+/* The volume, 0 to 100, and muted (see mc_player_set_volume()). 100 and not muted to begin
+ * with; main.c keeps the volume in settings.json. They carry over to the player when it's
+ * created. */
+void playback_set_volume(int volume);
+int playback_volume(void);
+void playback_set_muted(gboolean muted);
+gboolean playback_muted(void);
 
 gboolean playback_is_playing(void);
 mc_player_state playback_state(void);

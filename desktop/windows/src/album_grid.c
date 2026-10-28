@@ -663,6 +663,12 @@ static void go_back(void) {
   switch_view(AGV_GROUPS, NULL, uid);
 }
 
+BOOL album_grid_back(void) {
+  if (g.view != AGV_GROUP) return FALSE;
+  go_back();
+  return TRUE;
+}
+
 void album_grid_set_playlist_art_dir(const char *dir) {
   EnterCriticalSection(&g.lock);
   free(g.art_dir);

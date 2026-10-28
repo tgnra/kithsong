@@ -39,6 +39,8 @@ static struct {
   item *items;
   int count;
   BOOL shuffle;
+  int volume;
+  BOOL muted;
 
   /* What's shown, to tell what changed. */
   int index;
@@ -169,6 +171,7 @@ void playback_init(HWND wnd, void (*changed)(void)) {
   s.wnd = wnd;
   s.changed = changed;
   s.index = s.announced = -1;
+  s.volume = 100;
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = msgs_proc, .hInstance = GetModuleHandleW(NULL),
                     .lpszClassName = L"kithsong_playback"};
   RegisterClassExW(&wc);
@@ -254,7 +257,9 @@ void playback_play(const playback_track *tracks, int count, int start) {
     s.player = NULL;
     return;
   }
-  mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off */
+  mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off, at full volume */
+  mc_player_set_volume(s.player, s.volume);
+  mc_player_set_muted(s.player, s.muted);
   if (!s.media_controls) s.media_controls = media_controls_init(s.wnd, s.msgs, WM_MEDIA_BUTTON);
 
   const char **paths = calloc((size_t)count, sizeof *paths);
@@ -327,6 +332,34 @@ void playback_seek(int ms) {
   mc_player_status_get(s.player, &st);
   int duration_ms = st.index >= 0 && st.index < s.count ? s.items[st.index].duration_ms : 0;
   media_controls_set_timeline(st.position_ms, duration_ms ? duration_ms : st.duration_ms);
+}
+
+void playback_seek_by(int delta_ms) {
+  if (!playback_has_current()) return;
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  int duration_ms = s.items[s.index].duration_ms ? s.items[s.index].duration_ms : (int)st.duration_ms;
+  int64_t to = st.position_ms + delta_ms;
+  if (duration_ms > 0 && to > duration_ms) to = duration_ms;
+  playback_seek(to > 0 ? (int)to : 0);
+}
+
+void playback_set_volume(int volume) {
+  s.volume = max(0, min(volume, 100));
+  if (s.player) mc_player_set_volume(s.player, s.volume);
+}
+
+int playback_volume(void) {
+  return s.volume;
+}
+
+void playback_set_muted(BOOL muted) {
+  s.muted = muted;
+  if (s.player) mc_player_set_muted(s.player, muted);
+}
+
+BOOL playback_muted(void) {
+  return s.muted;
 }
 
 BOOL playback_is_playing(void) {

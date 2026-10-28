@@ -53,6 +53,9 @@ BOOL album_grid_showing_playlists(void);
 void album_grid_open_group(const char *uid);
 /* The shown group's uid, or NULL outside AGV_GROUP. */
 const char *album_grid_group(void);
+/* In a group, goes back to the groups with it selected, as Backspace there does. FALSE outside
+ * AGV_GROUP. */
+BOOL album_grid_back(void);
 
 /* Right-clicking an album (on Albums or in a group) offers Add to Album Group, and in a
  * group Remove from Album Group; right-clicking a group (or its header) offers Rename and

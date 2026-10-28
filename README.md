@@ -89,6 +89,26 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 - The rest of the window is an album grid. Clicking an album opens its track list in a pane
   on the right.\
 
+**Keyboard shortcuts** (Windows and Linux)
+
+| Keys | Does |
+| --- | --- |
+| Space | Play or pause |
+| Ctrl+Right / Ctrl+Left | Next / previous track |
+| Shift+Right / Shift+Left | Forward / back 5 seconds |
+| Ctrl+Up / Ctrl+Down, or + / - | Volume up / down |
+| Ctrl+M | Mute or unmute |
+| Ctrl+S | Shuffle on or off |
+| Ctrl+F | Search |
+| Ctrl+1, 2, 3, 4 | Albums, Artists, Playlists, Album groups |
+| Ctrl+, | Settings |
+| Alt+Left or Backspace | Back, from an artist's page or an album group (Windows) |
+| Esc | Close the track list |
+
+In a text box (e.g. search) the arrow keys, + and - keep their usual meaning. The volume is
+the app's own and is remembered; there's no volume control on screen yet, so the level shows
+briefly in place of the track's name.
+
 **Mobile**
 
 - A Compose app that follows the system light/dark theme. The rest of the design is still

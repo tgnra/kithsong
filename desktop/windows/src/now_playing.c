@@ -25,6 +25,8 @@ enum {
   KNOB_PRESSED = 6, /* ...while dragging */
   HIT_PAD = 5,      /* the bar takes clicks this far above and below its row */
   KEY_STEP_MS = 5000,
+  FLASH_MS = 1500,
+  FLASH_TIMER = 1,
 };
 
 static struct {
@@ -41,6 +43,7 @@ static struct {
   const uint32_t *art_px;
   int art_size;
   int duration_ms, pos_ms;
+  wchar_t flash[64]; /* shown instead of the track while FLASH_TIMER runs; "" for none */
 
   /* Layout, in device pixels. */
   RECT art_rect, title_rect, cur_rect, left_rect, bar; /* bar: the row the rail and thumb sit in */
@@ -246,7 +249,8 @@ static void paint(HDC dc, const RECT *dirty) {
   COLORREF time_color = s.title ? theme.text2 : theme.text3;
   canvas_text(c, cur, -1, &s.cur_rect, one_line | DT_RIGHT, s.font, time_color);
   canvas_text(c, left, -1, &s.left_rect, one_line | DT_LEFT, s.font, time_color);
-  if (s.title) paint_title(c);
+  if (s.flash[0]) canvas_text(c, s.flash, -1, &s.title_rect, one_line | DT_CENTER | DT_END_ELLIPSIS, s.font, theme.text);
+  else if (s.title) paint_title(c);
   paint_bar(c);
 
   if (GetFocus() == s.wnd && seekable() && !(SendMessageW(s.wnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS)) {
@@ -335,6 +339,12 @@ static LRESULT CALLBACK now_playing_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM l
     case WM_KEYDOWN:
       on_key(wp);
       return 0;
+    case WM_TIMER:
+      if (wp != FLASH_TIMER) break;
+      KillTimer(wnd, FLASH_TIMER);
+      s.flash[0] = 0;
+      InvalidateRect(wnd, NULL, FALSE);
+      return 0;
     case WM_GETDLGCODE:
       return DLGC_WANTARROWS;
     case WM_SETFOCUS:
@@ -343,6 +353,7 @@ static LRESULT CALLBACK now_playing_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM l
       InvalidateRect(wnd, NULL, FALSE);
       break;
     case WM_DESTROY:
+      KillTimer(wnd, FLASH_TIMER);
       free_art();
       free(s.title);
       free(s.artist);
@@ -412,4 +423,12 @@ void now_playing_set_position(int ms) {
 
 int now_playing_position(void) {
   return s.pos_ms;
+}
+
+void now_playing_flash(const wchar_t *text) {
+  if (!s.wnd) return;
+  lstrcpynW(s.flash, text ? text : L"", (int)(sizeof s.flash / sizeof *s.flash));
+  if (s.flash[0]) SetTimer(s.wnd, FLASH_TIMER, FLASH_MS, NULL); /* restarts it */
+  else KillTimer(s.wnd, FLASH_TIMER);
+  InvalidateRect(s.wnd, NULL, FALSE);
 }
