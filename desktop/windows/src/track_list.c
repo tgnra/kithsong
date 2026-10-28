@@ -1095,14 +1095,14 @@ HWND track_list_create(HWND parent, int id) {
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .style = CS_DBLCLKS, .lpfnWndProc = track_list_proc,
                     .hInstance = GetModuleHandleW(NULL),
                     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW),
-                    .lpszClassName = L"musicapp_tracklist"};
+                    .lpszClassName = L"kithsong_tracklist"};
   RegisterClassExW(&wc);
 
   memset(&s, 0, sizeof s);
   s.dpi = USER_DEFAULT_SCREEN_DPI;
   s.hot = s.selected = s.drag_row = s.drop_at = s.action_hot = s.action_pressed = -1;
   s.scroll.moved = on_scrolled;
-  return CreateWindowExW(0, L"musicapp_tracklist", NULL, WS_CHILD, 0, 0, 0, 0, parent,
+  return CreateWindowExW(0, L"kithsong_tracklist", NULL, WS_CHILD, 0, 0, 0, 0, parent,
                          (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
 }
 

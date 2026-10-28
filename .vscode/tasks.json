@@ -46,7 +46,7 @@
     {
       "label": "windows: run",
       "type": "shell",
-      "command": "${workspaceFolder}/build/windows-w64devkit/desktop/windows/musicapp.exe",
+      "command": "${workspaceFolder}/build/windows-w64devkit/desktop/windows/kithsong.exe",
       "dependsOn": "windows: build",
       "problemMatcher": []
     },
@@ -59,7 +59,7 @@
         "-NoProfile",
         "-File",
         "${workspaceFolder}\\scripts\\run-windows-scratch.ps1",
-        "${workspaceFolder}\\build\\windows-w64devkit\\desktop\\windows\\musicapp.exe"
+        "${workspaceFolder}\\build\\windows-w64devkit\\desktop\\windows\\kithsong.exe"
       ],
       "dependsOn": "windows: build",
       "problemMatcher": []
@@ -103,7 +103,7 @@
       "label": "linux: run",
       "type": "shell",
       "command": "nix",
-      "args": ["develop", "-c", "${workspaceFolder}/build/linux-gtk/desktop/linux/musicapp"],
+      "args": ["develop", "-c", "${workspaceFolder}/build/linux-gtk/desktop/linux/kithsong"],
       "dependsOn": "linux: build",
       "problemMatcher": []
     },
@@ -155,7 +155,7 @@
         "run",
         "Pixel_10",
         "${workspaceFolder}/android/app/build/outputs/apk/debug/app-debug.apk",
-        "app.musicapp/.MainActivity"
+        "app.kithsong/.MainActivity"
       ],
       "windows": {
         "command": "powershell",
@@ -166,7 +166,7 @@
           "run",
           "Pixel_10",
           "${workspaceFolder}\\android\\app\\build\\outputs\\apk\\debug\\app-debug.apk",
-          "app.musicapp/.MainActivity"
+          "app.kithsong/.MainActivity"
         ]
       },
       "dependsOn": "android: build",
@@ -195,7 +195,7 @@
         "run",
         "Wear_OS_Small_Round",
         "${workspaceFolder}/android/wear/build/outputs/apk/debug/wear-debug.apk",
-        "app.musicapp/app.musicapp.wear.MainActivity"
+        "app.kithsong/app.kithsong.wear.MainActivity"
       ],
       "dependsOn": "wear: build",
       "problemMatcher": []

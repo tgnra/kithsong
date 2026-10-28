@@ -15,7 +15,7 @@
 #include "wstr.h"
 
 #define SETTING_DONT_ASK "firewall_dont_ask"
-#define RULE_GROUP L"musicapp" /* the rule's Grouping, which Windows' firewall settings show */
+#define RULE_GROUP L"Kithsong" /* the rule's Grouping, which Windows' firewall settings show */
 #define RULE_PROFILES (NET_FW_PROFILE2_PRIVATE | NET_FW_PROFILE2_DOMAIN)
 #define PROTOCOL_ANY 256 /* NET_FW_IP_PROTOCOL_ANY, which mingw's icftypes.h leaves out */
 
@@ -177,7 +177,7 @@ static BOOL rule_missing(unsigned port) {
   verdict v = {0};
   if (missing && FAILED(weigh_rules(policy, port, &v))) missing = FALSE;
   /* Sync gets in on a network this PC is on now, or the rule is there for private ones;
-   * or the user blocked musicapp on private networks, which a rule of ours wouldn't undo. */
+   * or the user blocked Kithsong on private networks, which a rule of ours wouldn't undo. */
   if (missing && ((v.allow & ~v.block & guarded) || (v.allow & NET_FW_PROFILE2_PRIVATE) ||
                   (v.block & NET_FW_PROFILE2_PRIVATE)))
     missing = FALSE;
@@ -395,7 +395,7 @@ void firewall_check_later(HWND owner, mc_settings *settings) {
   if (g_fw.busy || !sync_bridge_get() || mc_settings_bool(settings, SETTING_DONT_ASK, 0) || !find_exe())
     return;
   if (!g_fw.wnd) {
-    WNDCLASSW wc = {.lpfnWndProc = fw_proc, .hInstance = GetModuleHandleW(NULL), .lpszClassName = L"musicapp_firewall"};
+    WNDCLASSW wc = {.lpfnWndProc = fw_proc, .hInstance = GetModuleHandleW(NULL), .lpszClassName = L"kithsong_firewall"};
     RegisterClassW(&wc);
     g_fw.wnd = CreateWindowExW(0, wc.lpszClassName, NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
     if (!g_fw.wnd) return;

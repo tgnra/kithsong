@@ -27,8 +27,8 @@
  * In the list the arrow keys, Page Up, Page Down, Home and End move the focus, and typing a
  * letter goes to the next artist starting with it. Covers are decoded on the UI thread, one
  * per message, as the search page does. */
-#ifndef MUSICAPP_ARTIST_VIEW_H
-#define MUSICAPP_ARTIST_VIEW_H
+#ifndef KITHSONG_ARTIST_VIEW_H
+#define KITHSONG_ARTIST_VIEW_H
 
 #include <windows.h>
 

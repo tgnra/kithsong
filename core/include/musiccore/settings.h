@@ -1,6 +1,6 @@
 /* Per-device preferences: where the library folder is, the device's name and a frontend's
  * own yes/no answers. Stored as settings.json in a folder the frontend picks
- * (%LOCALAPPDATA%\musicapp on Windows, ~/.config/musicapp on Linux). Never synced: each
+ * (%LOCALAPPDATA%\kithsong on Windows, ~/.config/kithsong on Linux). Never synced: each
  * device has its own library folder. */
 #ifndef MUSICCORE_SETTINGS_H
 #define MUSICCORE_SETTINGS_H
@@ -17,6 +17,11 @@ typedef struct mc_settings mc_settings;
  * written until mc_settings_save(). */
 mc_status mc_settings_load(const char *dir, mc_settings **out);
 void mc_settings_free(mc_settings *s);
+
+/* Moves the folder old_dir, where an earlier version kept its settings, to dir, if dir
+ * doesn't exist yet. Call before mc_settings_load(dir). If the move fails, dir starts out
+ * empty. */
+void mc_settings_move_old_dir(const char *old_dir, const char *dir);
 
 /* Writes the settings back, creating dir if needed. Keys this version doesn't know about
  * are kept. */

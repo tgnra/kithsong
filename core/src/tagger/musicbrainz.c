@@ -75,7 +75,7 @@ mc_status mc_musicbrainz_reachable(int timeout_ms) {
   uint16_t port = 443;
   snprintf(host, sizeof host, "%s", MB_HOST);
   /* host:port; the last colon, so an IPv6 literal needs brackets left off and a port given. */
-  const char *probe = getenv("MUSICAPP_MUSICBRAINZ_PROBE");
+  const char *probe = getenv("KITHSONG_MUSICBRAINZ_PROBE");
   const char *colon = probe ? strrchr(probe, ':') : NULL;
   if (colon && colon > probe && (size_t)(colon - probe) < sizeof host) {
     snprintf(host, sizeof host, "%.*s", (int)(colon - probe), probe);

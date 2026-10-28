@@ -6,10 +6,10 @@
  * style classes and uxtheme's SetPreferredAppMode (for menus). Where those are missing the
  * controls stay light; everything we draw ourselves still follows the theme.
  *
- * MUSICAPP_THEME=light or MUSICAPP_THEME=dark in the environment overrides the app mode.
+ * KITHSONG_THEME=light or KITHSONG_THEME=dark in the environment overrides the app mode.
  */
-#ifndef MUSICAPP_THEME_H
-#define MUSICAPP_THEME_H
+#ifndef KITHSONG_THEME_H
+#define KITHSONG_THEME_H
 
 #include <windows.h>
 #include <commctrl.h>

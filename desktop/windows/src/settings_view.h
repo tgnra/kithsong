@@ -25,8 +25,8 @@
  * to other devices, and into settings.json for next time. Leave Group is enabled while this
  * PC is in a group. The sync shown is sync_bridge_get()'s.
  */
-#ifndef MUSICAPP_SETTINGS_VIEW_H
-#define MUSICAPP_SETTINGS_VIEW_H
+#ifndef KITHSONG_SETTINGS_VIEW_H
+#define KITHSONG_SETTINGS_VIEW_H
 
 #include <windows.h>
 

@@ -16,8 +16,8 @@
  * Album groups have the same three, with their own titles and Delete's note ("Its albums
  * stay in the library.").
  */
-#ifndef MUSICAPP_PLAYLIST_DIALOGS_H
-#define MUSICAPP_PLAYLIST_DIALOGS_H
+#ifndef KITHSONG_PLAYLIST_DIALOGS_H
+#define KITHSONG_PLAYLIST_DIALOGS_H
 
 #include <windows.h>
 

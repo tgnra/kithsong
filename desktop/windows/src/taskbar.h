@@ -6,8 +6,8 @@
  * are Segoe Fluent Icons glyphs, drawn in the taskbar's colour (it has its own light or
  * dark setting, apart from apps').
  */
-#ifndef MUSICAPP_TASKBAR_H
-#define MUSICAPP_TASKBAR_H
+#ifndef KITHSONG_TASKBAR_H
+#define KITHSONG_TASKBAR_H
 
 #include <windows.h>
 

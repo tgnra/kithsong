@@ -72,8 +72,8 @@ void theme_update(void) {
                RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
                             L"AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &light, &size) == ERROR_SUCCESS &&
                !light;
-  wchar_t forced[8]; /* MUSICAPP_THEME=light or dark overrides the app mode, for testing */
-  if (!theme.high_contrast && GetEnvironmentVariableW(L"MUSICAPP_THEME", forced, 8))
+  wchar_t forced[8]; /* KITHSONG_THEME=light or dark overrides the app mode, for testing */
+  if (!theme.high_contrast && GetEnvironmentVariableW(L"KITHSONG_THEME", forced, 8))
     theme.dark = !_wcsicmp(forced, L"dark");
 
   /* Windows 11's palette: the Mica fallback colours, and its text and stroke opacities

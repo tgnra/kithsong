@@ -776,18 +776,18 @@ void import_view_create(HWND parent, mc_library *lib) {
   g_view.lib = lib;
 
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = drop_proc, .hInstance = GetModuleHandleW(NULL),
-                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"musicapp_drop"};
+                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"kithsong_drop"};
   RegisterClassExW(&wc);
   WNDCLASSEXW bc = {.cbSize = sizeof bc, .lpfnWndProc = banner_proc, .hInstance = GetModuleHandleW(NULL),
-                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"musicapp_banner"};
+                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"kithsong_banner"};
   RegisterClassExW(&bc);
 
-  g_view.drop = child(L"musicapp_drop", NULL, 0, ID_IMP_DROP);
+  g_view.drop = child(L"kithsong_drop", NULL, 0, ID_IMP_DROP);
   g_view.browse = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_IMPORT_CHOOSE_FOLDERS), BS_PUSHBUTTON, ID_IMP_BROWSE);
   g_view.status = child(WC_STATICW, NULL, SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, ID_IMP_STATUS);
   g_view.progress = child(PROGRESS_CLASSW, NULL, 0, ID_IMP_PROGRESS);
   g_view.done = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_DONE), BS_PUSHBUTTON, ID_IMP_DONE);
-  g_view.banner = child(L"musicapp_banner", NULL, WS_CLIPCHILDREN, ID_IMP_BANNER);
+  g_view.banner = child(L"kithsong_banner", NULL, WS_CLIPCHILDREN, ID_IMP_BANNER);
   g_view.skip_tagging = CreateWindowExW(0, WC_BUTTONW, mc_wstr_mnemonic(MC_STR_IMPORT_SKIP_TAGGING),
                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, g_view.banner,
                                         (HMENU)(INT_PTR)ID_IMP_SKIP_TAGGING, GetModuleHandleW(NULL), NULL);

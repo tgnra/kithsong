@@ -25,8 +25,8 @@
  *
  * Like the settings page, its controls are loose children of the main window, which routes
  * messages to it. Control ids are 400-449. */
-#ifndef MUSICAPP_DEVICE_VIEW_H
-#define MUSICAPP_DEVICE_VIEW_H
+#ifndef KITHSONG_DEVICE_VIEW_H
+#define KITHSONG_DEVICE_VIEW_H
 
 #include <windows.h>
 

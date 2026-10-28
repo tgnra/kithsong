@@ -5,8 +5,8 @@
  * Shows the playing track (title, artist, album, cover) and a timeline that can be seeked.
  * Stays hidden until something has played. Call everything on the UI thread.
  */
-#ifndef MUSICAPP_MEDIA_CONTROLS_H
-#define MUSICAPP_MEDIA_CONTROLS_H
+#ifndef KITHSONG_MEDIA_CONTROLS_H
+#define KITHSONG_MEDIA_CONTROLS_H
 
 #include <stdint.h>
 #include <windows.h>

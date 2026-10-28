@@ -1295,7 +1295,7 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   sync->auto_interval_ms = MC_SYNC_AUTO_INTERVAL_MS;
   if (mc_hostname(sync->host, sizeof sync->host) != MC_OK) sync->host[0] = '\0';
   clean_name(device_name, sync->name);
-  if (!sync->name[0]) clean_name(sync->host[0] ? sync->host : "musicapp", sync->name);
+  if (!sync->name[0]) clean_name(sync->host[0] ? sync->host : "Kithsong", sync->name);
 
   mc_status st = mc_sync_conn_open(sync, &sync->api);
   if (st != MC_OK) {

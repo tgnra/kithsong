@@ -1,4 +1,4 @@
-/* musiccore: shared library behind every musicapp frontend.
+/* musiccore: shared library behind every Kithsong frontend.
  *
  * Conventions:
  *  - Every function returns mc_status (or a value plus an out-param) unless noted.

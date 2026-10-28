@@ -6,8 +6,8 @@
  *
  * Stopping bumps a generation counter carried in wParam, so events still queued from the
  * old mc_sync are dropped by sync_bridge_receive(). Every function runs on the UI thread. */
-#ifndef MUSICAPP_SYNC_BRIDGE_H
-#define MUSICAPP_SYNC_BRIDGE_H
+#ifndef KITHSONG_SYNC_BRIDGE_H
+#define KITHSONG_SYNC_BRIDGE_H
 
 #include <stdint.h>
 #include <windows.h>

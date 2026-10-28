@@ -1,4 +1,4 @@
-/* Importing offline, without touching the network: MUSICAPP_MUSICBRAINZ_PROBE points the
+/* Importing offline, without touching the network: KITHSONG_MUSICBRAINZ_PROBE points the
  * offline check at a closed local port. Checks that the check fails, that an offline
  * session says so and puts every item in review without looking it up, that skipping
  * tagging then imports them all with their existing tags, and that a session started with
@@ -116,9 +116,9 @@ static int write_track(const char *path, const char *artist, const char *album, 
 
 static void set_probe(const char *value) {
 #ifdef _WIN32
-  _putenv_s("MUSICAPP_MUSICBRAINZ_PROBE", value);
+  _putenv_s("KITHSONG_MUSICBRAINZ_PROBE", value);
 #else
-  setenv("MUSICAPP_MUSICBRAINZ_PROBE", value, 1);
+  setenv("KITHSONG_MUSICBRAINZ_PROBE", value, 1);
 #endif
 }
 

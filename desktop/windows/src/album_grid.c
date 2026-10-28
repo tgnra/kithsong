@@ -1180,7 +1180,7 @@ HWND album_grid_create(HWND parent, int id) {
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .style = CS_DBLCLKS, .lpfnWndProc = grid_proc,
                     .hInstance = GetModuleHandleW(NULL),
                     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW),
-                    .lpszClassName = L"musicapp_albumgrid"};
+                    .lpszClassName = L"kithsong_albumgrid"};
   RegisterClassExW(&wc);
 
   memset(&g, 0, sizeof g);
@@ -1190,7 +1190,7 @@ HWND album_grid_create(HWND parent, int id) {
   g.dirty = TRUE;
   InitializeCriticalSection(&g.lock);
   InitializeConditionVariable(&g.wake);
-  g.wnd = CreateWindowExW(0, L"musicapp_albumgrid", NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
+  g.wnd = CreateWindowExW(0, L"kithsong_albumgrid", NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
   if (g.wnd) g.thread = CreateThread(NULL, 0, loader_main, NULL, 0, NULL);
   return g.wnd;
 }

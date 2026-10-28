@@ -15,8 +15,8 @@
  * selects it (an accent ring around the cover). The grid also draws the
  * content area's border and rounded top-left corner, which shows Mica outside it.
  */
-#ifndef MUSICAPP_ALBUM_GRID_H
-#define MUSICAPP_ALBUM_GRID_H
+#ifndef KITHSONG_ALBUM_GRID_H
+#define KITHSONG_ALBUM_GRID_H
 
 #include <windows.h>
 

@@ -17,10 +17,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MUSICAPP_CONTACT: ${{ secrets.MUSICAPP_CONTACT }}
-  MUSICAPP_ACOUSTID_KEY: ${{ secrets.MUSICAPP_ACOUSTID_KEY }}
-  MUSICAPP_LASTFM_KEY: ${{ secrets.MUSICAPP_LASTFM_KEY }}
-  MUSICAPP_LASTFM_SECRET: ${{ secrets.MUSICAPP_LASTFM_SECRET }}
+  KITHSONG_CONTACT: ${{ secrets.MUSICAPP_CONTACT }}
+  KITHSONG_ACOUSTID_KEY: ${{ secrets.MUSICAPP_ACOUSTID_KEY }}
+  KITHSONG_LASTFM_KEY: ${{ secrets.MUSICAPP_LASTFM_KEY }}
+  KITHSONG_LASTFM_SECRET: ${{ secrets.MUSICAPP_LASTFM_SECRET }}
 
 
 jobs:
@@ -76,7 +76,7 @@ jobs:
       - name: Build
         shell: pwsh
         env:
-          MUSICAPP_BUILD_NUMBER: ${{ github.run_number }}
+          KITHSONG_BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/release-windows.ps1
       - uses: actions/upload-artifact@v7
         with:
@@ -87,7 +87,7 @@ jobs:
   linux:
     needs: version
     runs-on: ubuntu-latest
-    # The tag tracks runtime-version in packaging/flatpak/app.musicapp.Musicapp.yml.
+    # The tag tracks runtime-version in packaging/flatpak/app.kithsong.Kithsong.yml.
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
@@ -128,12 +128,12 @@ jobs:
             exit 0
           fi
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d >"$RUNNER_TEMP/release.jks"
-          echo "MUSICAPP_KEYSTORE=$RUNNER_TEMP/release.jks" >>"$GITHUB_ENV"
+          echo "KITHSONG_KEYSTORE=$RUNNER_TEMP/release.jks" >>"$GITHUB_ENV"
       - name: Build
         env:
-          MUSICAPP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          MUSICAPP_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          MUSICAPP_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KITHSONG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KITHSONG_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KITHSONG_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bash scripts/release-android.sh
       - name: Remove the signing key
         if: always()
@@ -163,6 +163,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
-          flags=(--draft --generate-notes --verify-tag --title "musicapp $GITHUB_REF_NAME")
+          flags=(--draft --generate-notes --verify-tag --title "Kithsong $GITHUB_REF_NAME")
           [[ "$PRERELEASE" == true ]] && flags+=(--prerelease)
           gh release create "$GITHUB_REF_NAME" "${flags[@]}" dist/*

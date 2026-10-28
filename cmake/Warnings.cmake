@@ -1,6 +1,6 @@
-# musicapp_warnings(<target>): project warning flags. Only applied to our own code,
+# kithsong_warnings(<target>): project warning flags. Only applied to our own code,
 # never to third_party.
-function(musicapp_warnings target)
+function(kithsong_warnings target)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4)
   else()

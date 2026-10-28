@@ -897,7 +897,7 @@ HWND artist_view_create(HWND parent, int id) {
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .style = CS_DBLCLKS, .lpfnWndProc = artist_proc,
                     .hInstance = GetModuleHandleW(NULL),
                     .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW),
-                    .lpszClassName = L"musicapp_artists"};
+                    .lpszClassName = L"kithsong_artists"};
   RegisterClassExW(&wc);
 
   memset(&v, 0, sizeof v);
@@ -906,7 +906,7 @@ HWND artist_view_create(HWND parent, int id) {
   v.dpi = USER_DEFAULT_SCREEN_DPI;
   v.stale = TRUE;
   v.scroll.moved = on_scrolled;
-  return CreateWindowExW(0, L"musicapp_artists", NULL, WS_CHILD, 0, 0, 0, 0, parent, (HMENU)(INT_PTR)id,
+  return CreateWindowExW(0, L"kithsong_artists", NULL, WS_CHILD, 0, 0, 0, 0, parent, (HMENU)(INT_PTR)id,
                          GetModuleHandleW(NULL), NULL);
 }
 

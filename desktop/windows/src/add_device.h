@@ -20,8 +20,8 @@
  *
  * The dialog's template is built in memory, so it needs no resources.
  */
-#ifndef MUSICAPP_ADD_DEVICE_H
-#define MUSICAPP_ADD_DEVICE_H
+#ifndef KITHSONG_ADD_DEVICE_H
+#define KITHSONG_ADD_DEVICE_H
 
 #include <stdint.h>
 #include <windows.h>

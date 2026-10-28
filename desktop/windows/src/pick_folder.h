@@ -1,6 +1,6 @@
 /* The shell's folder picker. Needs COM initialised on the calling thread. */
-#ifndef MUSICAPP_PICK_FOLDER_H
-#define MUSICAPP_PICK_FOLDER_H
+#ifndef KITHSONG_PICK_FOLDER_H
+#define KITHSONG_PICK_FOLDER_H
 
 #include <windows.h>
 

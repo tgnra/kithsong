@@ -1,4 +1,4 @@
--- musicapp library schema, version 1. See docs/schema.md.
+-- Kithsong library schema, version 1. See docs/schema.md.
 --
 -- Every row is keyed by a UUIDv7 `uid` that is identical on every device, so rows can be
 -- matched up during sync. MusicBrainz ids are stored when known but are never keys:

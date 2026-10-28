@@ -10,8 +10,8 @@
  *
  * The player is created on first play. Everything here runs on the UI thread.
  */
-#ifndef MUSICAPP_PLAYBACK_H
-#define MUSICAPP_PLAYBACK_H
+#ifndef KITHSONG_PLAYBACK_H
+#define KITHSONG_PLAYBACK_H
 
 #include <windows.h>
 

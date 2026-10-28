@@ -170,9 +170,9 @@ void playback_init(HWND wnd, void (*changed)(void)) {
   s.changed = changed;
   s.index = s.announced = -1;
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = msgs_proc, .hInstance = GetModuleHandleW(NULL),
-                    .lpszClassName = L"musicapp_playback"};
+                    .lpszClassName = L"kithsong_playback"};
   RegisterClassExW(&wc);
-  s.msgs = CreateWindowExW(0, L"musicapp_playback", NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL,
+  s.msgs = CreateWindowExW(0, L"kithsong_playback", NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL,
                            GetModuleHandleW(NULL), NULL);
   taskbar_init(wnd);
 }

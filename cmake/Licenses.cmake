@@ -4,8 +4,8 @@
 include_guard(GLOBAL)
 include(FetchContent)
 
-function(musicapp_install_licenses destination)
-  install(FILES "${PROJECT_SOURCE_DIR}/LICENSES.md" DESTINATION "${destination}" COMPONENT musicapp)
+function(kithsong_install_licenses destination)
+  install(FILES "${PROJECT_SOURCE_DIR}/LICENSES.md" DESTINATION "${destination}" COMPONENT kithsong)
   foreach(_entry
       yyjson:LICENSE miniaudio:LICENSE dr_libs:LICENSE mdns:LICENSE taglib:COPYING.MPL
       utfcpp:LICENSE curl:COPYING mbedtls:LICENSE ogg:COPYING opus:COPYING opusenc:COPYING
@@ -18,6 +18,6 @@ function(musicapp_install_licenses destination)
       message(FATAL_ERROR "No ${_file} in ${_dep}'s sources (${_src}); update cmake/Licenses.cmake.")
     endif()
     install(FILES "${_src}/${_file}" DESTINATION "${destination}" RENAME "${_dep}-${_file}.txt"
-            COMPONENT musicapp)
+            COMPONENT kithsong)
   endforeach()
 endfunction()

@@ -23,8 +23,8 @@
  * and Up from the first goes back to the box.
  *
  * Covers are decoded on the UI thread, one per message, so typing isn't held up by them. */
-#ifndef MUSICAPP_SEARCH_VIEW_H
-#define MUSICAPP_SEARCH_VIEW_H
+#ifndef KITHSONG_SEARCH_VIEW_H
+#define KITHSONG_SEARCH_VIEW_H
 
 #include <windows.h>
 

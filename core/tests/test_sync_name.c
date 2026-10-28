@@ -368,6 +368,24 @@ static void test_settings(const char *root) {
   }
   CHECK(strstr(text, "\"theme\"") != NULL);
   CHECK(strstr(text, "device_name") == NULL);
+
+  /* An old settings folder moves to the new name, unless the new one exists. */
+  char old_dir[1100], new_dir[1100];
+  snprintf(old_dir, sizeof old_dir, "%s/old-settings", root);
+  snprintf(new_dir, sizeof new_dir, "%s/new-settings", root);
+  mc_settings_move_old_dir(old_dir, new_dir); /* neither exists */
+  CHECK(!mc_file_exists(new_dir));
+  CHECK(mc_rename(dir, old_dir, 0) == MC_OK);
+  mc_settings_move_old_dir(old_dir, new_dir);
+  CHECK(!mc_file_exists(old_dir));
+  CHECK(mc_mkdirs(old_dir) == MC_OK);
+  mc_settings_move_old_dir(old_dir, new_dir); /* the new one is kept */
+  CHECK(mc_file_exists(old_dir));
+  s = NULL;
+  CHECK(mc_settings_load(new_dir, &s) == MC_OK);
+  if (!s) return;
+  CHECK_STR(mc_settings_library_dir(s), "/music");
+  mc_settings_free(s);
 }
 
 /* -1 when discovery doesn't list uid as nearby, else its in_other_group. */

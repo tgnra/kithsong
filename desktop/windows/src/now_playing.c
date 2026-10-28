@@ -360,12 +360,12 @@ static LRESULT CALLBACK now_playing_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM l
 
 HWND now_playing_create(HWND parent, int id) {
   WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = now_playing_proc, .hInstance = GetModuleHandleW(NULL),
-                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"musicapp_nowplaying"};
+                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"kithsong_nowplaying"};
   RegisterClassExW(&wc);
 
   memset(&s, 0, sizeof s);
   s.dpi = USER_DEFAULT_SCREEN_DPI;
-  return CreateWindowExW(0, L"musicapp_nowplaying", NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, parent,
+  return CreateWindowExW(0, L"kithsong_nowplaying", NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, parent,
                          (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
 }
 

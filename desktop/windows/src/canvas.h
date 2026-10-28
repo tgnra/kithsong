@@ -6,8 +6,8 @@
  * that are opaque anyway; canvas_opaque then sets the alpha it left at 0. Text over
  * transparent pixels goes through canvas_text instead.
  */
-#ifndef MUSICAPP_CANVAS_H
-#define MUSICAPP_CANVAS_H
+#ifndef KITHSONG_CANVAS_H
+#define KITHSONG_CANVAS_H
 
 #include <stdint.h>
 #include <windows.h>

@@ -5,8 +5,8 @@
  * The view owns the window and forwards its mouse, wheel and timer messages here; it draws
  * the bar with scroller_paint. The timer ids below are the scroller's.
  */
-#ifndef MUSICAPP_SCROLLER_H
-#define MUSICAPP_SCROLLER_H
+#ifndef KITHSONG_SCROLLER_H
+#define KITHSONG_SCROLLER_H
 
 #include <windows.h>
 

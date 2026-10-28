@@ -17,8 +17,8 @@
  * Without Tagging (mc_import_skip_tagging); it goes away once MusicBrainz answers again or
  * it's used.
  */
-#ifndef MUSICAPP_IMPORT_VIEW_H
-#define MUSICAPP_IMPORT_VIEW_H
+#ifndef KITHSONG_IMPORT_VIEW_H
+#define KITHSONG_IMPORT_VIEW_H
 
 #include <windows.h>
 #include <shellapi.h>

@@ -59,7 +59,7 @@ static mc_status perform(const char *url, const char *form, mc_buffer *body, lon
 
   struct curl_blob ca = {(void *)mc_cacert_pem, mc_cacert_pem_len, CURL_BLOB_NOCOPY};
   curl_easy_setopt(curl, CURLOPT_URL, url);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "musicapp/" MC_VERSION_STRING " ( " MC_CONTACT " )");
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "Kithsong/" MC_VERSION_STRING " ( " MC_CONTACT " )");
   curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &ca);
   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
   /* TLS 1.3 handshakes fail with curl 8.11.1 + Mbed TLS 3.6.2 ("SSL - Internal error",
