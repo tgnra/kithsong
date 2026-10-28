@@ -9,6 +9,7 @@
 @KITHSONG_SUMMARY_L10N@  <description>
     <p>@KITHSONG_DESCRIPTION@</p>
 @KITHSONG_DESCRIPTION_L10N@  </description>
+  <url type="homepage">https://kithso.ng</url>
   <launchable type="desktop-id">app.kithsong.Kithsong.desktop</launchable>
   <developer id="app.kithsong">
     <name>Kithsong</name>
