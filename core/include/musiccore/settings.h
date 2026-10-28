@@ -1,6 +1,7 @@
-/* Per-device preferences: where the library folder is and the device's name. Stored as
- * settings.json in a folder the frontend picks (%LOCALAPPDATA%\musicapp on Windows,
- * ~/.config/musicapp on Linux). Never synced: each device has its own library folder. */
+/* Per-device preferences: where the library folder is, the device's name and a frontend's
+ * own yes/no answers. Stored as settings.json in a folder the frontend picks
+ * (%LOCALAPPDATA%\musicapp on Windows, ~/.config/musicapp on Linux). Never synced: each
+ * device has its own library folder. */
 #ifndef MUSICCORE_SETTINGS_H
 #define MUSICCORE_SETTINGS_H
 
@@ -30,6 +31,11 @@ mc_status mc_settings_set_library_dir(mc_settings *s, const char *dir);
 const char *mc_settings_device_name(const mc_settings *s);
 /* NULL or "" clears it. */
 mc_status mc_settings_set_device_name(mc_settings *s, const char *name);
+
+/* A frontend's own yes/no preference under key (e.g. Windows' "firewall_dont_ask"), or def
+ * if none is saved or it isn't a boolean. */
+int mc_settings_bool(const mc_settings *s, const char *key, int def);
+mc_status mc_settings_set_bool(mc_settings *s, const char *key, int value);
 
 #ifdef __cplusplus
 }

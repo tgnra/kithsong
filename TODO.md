@@ -58,6 +58,8 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 - Core - test PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
 - Core - albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
 - Core - changelog compaction must keep the rows that decide merges and archive demotions
+- Windows - firewall prompt (firewall.c): the success path after UAC is untested by hand beyond one run; a way to ask again after "Don't ask again" (Settings, or the device page's Connections row when this PC is blocked); offer it when the network is public too (today it stays quiet unless Private is uncovered, and only says so after adding the rule); a stale rule left for an old exe path (portable zip moved) is never cleaned up
+- Windows - the installer, once there is one, should add the firewall rule (program-scoped, Private/Domain, as firewall.c does) and remove it on uninstall, so the prompt never shows
 - Windows - make a device an archive (mc_sync_set_archive) in the profile editor (Linux and Android have it: a switch that asks first, with the size as originals)
 - Linux - a pairing request while the window is in the background goes unnoticed (Windows flashes the taskbar button); send a GNotification
 - Linux - with no sync.db yet (first run), sync can fail to start with "sync.db open failed: not an error" and Devices says "Sync is off (database error)"; it starts on the next run (seen twice in Docker under Xvfb)

@@ -123,3 +123,16 @@ mc_status mc_settings_set_device_name(mc_settings *s, const char *name) {
   if (!name || !*name) return MC_OK;
   return yyjson_mut_obj_add_strcpy(s->doc, root, "device_name", name) ? MC_OK : MC_ERR_NOMEM;
 }
+
+int mc_settings_bool(const mc_settings *s, const char *key, int def) {
+  if (!s || !key) return def;
+  yyjson_mut_val *v = yyjson_mut_obj_get(yyjson_mut_doc_get_root(s->doc), key);
+  return yyjson_mut_is_bool(v) ? yyjson_mut_get_bool(v) : def;
+}
+
+mc_status mc_settings_set_bool(mc_settings *s, const char *key, int value) {
+  if (!s || !key || !*key) return MC_ERR_INVALID_ARG;
+  yyjson_mut_val *root = yyjson_mut_doc_get_root(s->doc);
+  yyjson_mut_obj_remove_key(root, key);
+  return yyjson_mut_obj_add_bool(s->doc, root, key, value != 0) ? MC_OK : MC_ERR_NOMEM;
+}
