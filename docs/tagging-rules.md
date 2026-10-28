@@ -35,6 +35,8 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    - a one-file album also gets recording candidates, in case it is one track off a release.
    - singles: look up `MUSICBRAINZ_TRACKID` if present, then search recordings by title and
      artist (5 results).
+   - albums with no candidates, or only poor ones (best under 75%): the
+     [extended search](#extended-search), by catalogue number, other artists and the label.
    - fingerprinting with Chromaprint + AcoustID when tags aren't enough (*not yet*).
 4. **Score** each candidate with a weighted distance, 0 to 1 (`match.c`):
    - strings are compared by normalised edit distance. Case, punctuation, common Latin
@@ -63,6 +65,8 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    place, and its library rows updated). A file taken from another item leaves it; if that
    item had imported it, its library row moves to this album, and an item left with no files
    is skipped as "Moved to another album".
+   For an album they can also **search more widely** (the extended search on request,
+   whose results join the candidates and aren't auto-accepted either).
 7. **Compare** with the library (`dupes.c`, see [Duplicates](#duplicates)): skip what it
    already has, or swap in a better copy of the release.
 8. **Write** (see [Library folder](#library-folder)): copy the files into the library folder
@@ -70,6 +74,63 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    the album folder has a cover, then write the library rows in one transaction
    (`import_db.c`). If any step fails, the files are put back. Files that weren't matched to
    a track aren't imported.
+
+## Extended search
+
+Albums often carry a label or circle in the album artist tag instead of the artist: a
+doujin label's releases tagged "SHARPNELSOUND" or "SHARPNELSOUND (DJ CHUCKY)" when MusicBrainz
+credits "DJ CHUCKY", "DJ SHARPNEL" or "Various Artists". The normal search (album title with
+that album artist) then finds nothing, or only the wrong releases. The real artist and the
+release usually show up elsewhere (`search_keys.c` gathers them):
+
+- **catalogue numbers**: `CATALOGNUMBER` (or `CATALOGID`, `CATALOG`, `LABELNO`) tags, and
+  `[bracketed]` groups in the folder name, split at `/`. A catalogue number has an ASCII
+  letter and at least three digits, so dates (`[2002.08.11]`), events (`(C89)`) and notes
+  like `[24bit]` or `[FLAC]` don't count. `SRPC-0008LTD` also tries `SRPC-0008`.
+- **artists**: the parenthesised part of a `Label (Artist) - Title [CAT-001] (Event)` folder
+  name or album artist tag, without "and V.A."; and the artist that the track artist tags,
+  the file names (`03. Artist — Title.flac`, with `-`, `–` or `—`, the side that isn't the
+  title tag) or, where the artist tag just repeats the album artist, the titles
+  (`Artist - Title`) agree on for at least half the files. "feat." parts are dropped.
+- **labels**: `LABEL` (or `ORGANIZATION`, `PUBLISHER`) tags, and the name standing where the
+  artist would (the folder name's prefix, the album artist tag) when it has a parenthesised
+  artist, or differs from the artist the tracks agree on, or the tracks are a compilation.
+- **titles**: the album tag, and the folder name's title (after ` - `, up to the first
+  `[group]`, without a trailing `(2004)`) when it differs.
+- a **compilation**: "V.A." in the parentheses, or no artist on at least half the files.
+
+The queries, most specific first, each skipped when its keys are missing:
+
+1. `catno:(A OR B)`, looking up at most 3 of the hits;
+2. title with the first artist; 3. title with the labels (`label:`); 4. the title alone (only
+   if the normal search had an artist); 5. title with the second artist; 6. the folder's
+   title alone. At most 2 lookups each.
+
+The budget is 4 searches and 6 release lookups beyond the normal search (about 10 s at
+1 request/second), and it stops early once a candidate would be accepted. Hits already
+among the candidates aren't looked up again.
+
+**Scoring** is the normal one (tracks, lengths, track numbers, missing and extra files all
+count as before), except that the album title and album artist parts use whichever fits the
+release best among the item's own, the keys' titles and artists, and "Various Artists" for a
+compilation. Every release candidate is rescored this way, including the normal search's.
+"V.A." as a release artist counts as Various Artists.
+
+**When**: automatically for an album whose best candidate is below **75%** confidence, or that
+has none. The threshold comes from the scoring: the album artist is 5 of the release
+distance's 32.5 weight units, so the right release with a wrong album artist tag loses at
+most about 15 points and still scores around 85-90%; below 75%, the title, a quarter of the
+tracks or more, or both disagree too, which means the wrong release. Results are treated
+like the normal search's: the same threshold and completeness rules decide whether the best
+one is accepted. Above 75% but not accepted, the review offers **Search more widely**, which
+runs the same search on request; its results join the candidates and are never accepted by
+themselves. Singles don't have it (their keys are album clues). After a manual search, the
+button is offered again.
+
+**Offline**: it isn't started while MusicBrainz can't be reached (the normal search failed
+with a network error, or the session is offline), and a network error ends it early: the
+item then keeps what it has, or waits for MusicBrainz like any other. The frontends disable
+the button while offline.
 
 ## Library folder
 

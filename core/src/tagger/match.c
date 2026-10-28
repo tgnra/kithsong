@@ -215,8 +215,10 @@ mc_status mc_assign(const double *cost, int rows, int cols, int *out) {
  * so a wrong title is never written to a file just to fill a slot. */
 #define TRACK_MATCH_MAX 0.6
 
+/* "Various Artists", or as some releases credit it, "V.A.". */
 static int is_various(const char *artist) {
-  return artist && mc_string_distance(artist, "Various Artists") == 0.0;
+  return artist && (mc_string_distance(artist, "Various Artists") == 0.0 ||
+                    mc_string_distance(artist, "V.A.") == 0.0);
 }
 
 /* Most common non-zero year among the files, or 0. */

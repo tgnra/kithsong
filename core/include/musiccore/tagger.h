@@ -21,6 +21,9 @@ typedef struct mc_tags {
   char *mb_artistid;
   char *mb_albumartistid;
   char *mb_releasegroupid;
+  /* Read-only, ignored by mc_tags_write(); clues for the importer's extended search. */
+  char *label;   /* LABEL, else ORGANIZATION or PUBLISHER */
+  char *catalog; /* CATALOGNUMBER, else CATALOGID, CATALOG or LABELNO */
   int year;
   int original_year;
   int track;
@@ -74,6 +77,20 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * offline import doesn't wait on a timeout per item, and MC_IMPORT_EV_OFFLINE tells the
  * frontend, which can offer mc_import_skip_tagging(). The check is repeated every 30 s; once
  * MusicBrainz answers again the items waiting on it are matched after all.
+ *
+ * Extended search. Albums often carry a label or circle in the album artist tag rather than
+ * the artist ("SHARPNELSOUND"), and then the normal search (album title and album artist)
+ * finds nothing, or nothing good. When an album's best candidate is below 75% confidence
+ * (or there is none), the session searches more widely by itself before deciding: by the
+ * catalogue numbers in its tags (CATALOGNUMBER, CATALOGID, ...) and in [brackets] in the
+ * folder name; by the album title with the artists found in "Label (Artist) - Title" folder
+ * names, the album artist tag, the track artists and the file names; with the label (label
+ * tags, or the name standing where the artist would); and by the title alone. At most 4
+ * more searches and 6 more release lookups per album. Every release candidate is then
+ * scored with the best fitting of those artists and titles; tracks, lengths and the rest
+ * are scored as usual, and the same rules decide whether the best one is accepted. Above
+ * 75%, mc_import_search_wider() runs it on request. It's skipped while MusicBrainz can't be
+ * reached, and a network error ends it early (then searched_wider stays 0).
  *
  * Duplicates. Before an accepted item is written, it is compared with the library (only
  * files from outside the library folder; files inside it are being re-filed, not added):
@@ -202,6 +219,7 @@ typedef struct mc_import_item {
   mc_import_match *matches; /* best first */
   int match_count;
   int chosen;   /* index of the applied match; -1 if imported as-is or not yet decided */
+  int searched_wider; /* the matches include an extended search's (see above) */
   char *error;  /* set when state is MC_IMPORT_FAILED */
   mc_import_outcome outcome;
   int replaced_files;  /* files swapped for higher quality ones */
@@ -254,6 +272,11 @@ mc_status mc_import_assign(mc_import *imp, int item, int match, int track, int f
  * that belong to item but were grouped apart from it are. Fills up to max indices into out and
  * returns how many there are in all. */
 int mc_import_related(mc_import *imp, int item, int *out, int max);
+
+/* Searches more widely for an album (see "Extended search" above); the candidates found join
+ * the item's, and the item stays in review. MC_ERR_INVALID_ARG for a single. While offline
+ * it waits for the next request instead, so frontends offer it only while online. */
+mc_status mc_import_search_wider(mc_import *imp, int item);
 
 /* Stops tagging for the rest of the session, as if it had been started with skip_tagging:
  * items not matched yet, and items in review because MusicBrainz couldn't be reached, are

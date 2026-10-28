@@ -124,7 +124,7 @@ static mc_status fake_lookup(const char *id, mb_release *out) {
   return MC_OK;
 }
 
-static const mb_fake k_fake = {fake_search, fake_lookup, NULL, NULL};
+static const mb_fake k_fake = {fake_search, fake_lookup, NULL, NULL, NULL};
 
 /* --- Sessions --- */
 

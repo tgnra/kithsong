@@ -75,6 +75,7 @@ add_library(musiccore STATIC
   src/tagger/tag_io.cpp
   src/tagger/musicbrainz.c
   src/tagger/match.c
+  src/tagger/search_keys.c
   src/tagger/coverart.c
   src/tagger/import_db.c
   src/tagger/dupes.c

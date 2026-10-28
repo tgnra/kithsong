@@ -295,18 +295,11 @@ static int better_hit(yyjson_val *a, yyjson_val *b, int track_count) {
   return earlier(a, b);
 }
 
-mc_status mb_search_releases(const char *artist, const char *album, int track_count,
-                             char (*ids)[MC_UID_STRLEN], int max, int *n) {
-  *n = 0;
-  if (!album || !*album) return MC_ERR_INVALID_ARG;
-  if (g_fake)
-    return g_fake->search_releases ? g_fake->search_releases(artist, album, track_count, ids, max, n) : MC_OK;
-  char *path = search_path("release", "release", album, "artist", artist, 15);
-  if (!path) return MC_ERR_NOMEM;
-
+/* Runs a release search and fills ids with the hits, ranked (see better_hit). */
+static mc_status release_ids_from(const char *path, int track_count, char (*ids)[MC_UID_STRLEN],
+                                  int max, int *n) {
   yyjson_doc *doc;
   mc_status st = mb_get_json(path, &doc);
-  free(path);
   if (st != MC_OK) return st;
 
   /* Rank: expected track count first, then search score, then earliest date, so that among
@@ -335,6 +328,79 @@ mc_status mb_search_releases(const char *artist, const char *album, int track_co
   free(hits);
   yyjson_doc_free(doc);
   return MC_OK;
+}
+
+mc_status mb_search_releases(const char *artist, const char *album, int track_count,
+                             char (*ids)[MC_UID_STRLEN], int max, int *n) {
+  *n = 0;
+  if (!album || !*album) return MC_ERR_INVALID_ARG;
+  if (g_fake)
+    return g_fake->search_releases ? g_fake->search_releases(artist, album, track_count, ids, max, n) : MC_OK;
+  char *path = search_path("release", "release", album, "artist", artist, 15);
+  if (!path) return MC_ERR_NOMEM;
+  mc_status st = release_ids_from(path, track_count, ids, max, n);
+  free(path);
+  return st;
+}
+
+/* Appends " AND field:(v1 OR v2 ...)" (without the AND for the first clause) to q. */
+static int append_clause(char *q, size_t cap, const char *field, const char *const *values,
+                         int count) {
+  if (count <= 0) return 1;
+  size_t used = strlen(q);
+  int w = snprintf(q + used, cap - used, "%s%s:(", used ? " AND " : "", field);
+  if (w < 0 || (size_t)w >= cap - used) return 0;
+  used += (size_t)w;
+  for (int i = 0; i < count; i++) {
+    char *v = lucene_escape(values[i]);
+    if (!v) return 0;
+    w = snprintf(q + used, cap - used, "%s%s", i ? " OR " : "", v);
+    free(v);
+    if (w < 0 || (size_t)w >= cap - used) return 0;
+    used += (size_t)w;
+  }
+  if (used + 2 > cap) return 0;
+  q[used++] = ')';
+  q[used] = '\0';
+  return 1;
+}
+
+mc_status mb_search_releases_by(const mb_release_query *q, int track_count,
+                                char (*ids)[MC_UID_STRLEN], int max, int *n) {
+  *n = 0;
+  if (!q) return MC_ERR_INVALID_ARG;
+  if (g_fake)
+    return g_fake->search_releases_by ? g_fake->search_releases_by(q, track_count, ids, max, n) : MC_OK;
+  size_t cap = 64;
+  if (q->album) cap += strlen(q->album) * 2 + 16;
+  if (q->artist) cap += strlen(q->artist) * 2 + 16;
+  for (int i = 0; i < q->label_count; i++) cap += strlen(q->labels[i]) * 2 + 16;
+  for (int i = 0; i < q->catno_count; i++) cap += strlen(q->catnos[i]) * 2 + 16;
+  char *query = malloc(cap);
+  if (!query) return MC_ERR_NOMEM;
+  query[0] = '\0';
+  const char *album[1] = {q->album}, *artist[1] = {q->artist};
+  int ok = append_clause(query, cap, "release", album, q->album && *q->album) &&
+           append_clause(query, cap, "artist", artist, q->artist && *q->artist) &&
+           append_clause(query, cap, "label", q->labels, q->label_count) &&
+           append_clause(query, cap, "catno", q->catnos, q->catno_count);
+  if (!ok || !*query) {
+    free(query);
+    return ok ? MC_ERR_INVALID_ARG : MC_ERR_NOMEM;
+  }
+  char *esc = mc_url_escape(query);
+  free(query);
+  if (!esc) return MC_ERR_NOMEM;
+  size_t plen = strlen(esc) + 48;
+  char *path = malloc(plen);
+  mc_status st = MC_ERR_NOMEM;
+  if (path) {
+    snprintf(path, plen, "/release?query=%s&limit=15", esc);
+    st = release_ids_from(path, track_count, ids, max, n);
+  }
+  free(path);
+  free(esc);
+  return st;
 }
 
 mc_status mb_lookup_release(const char *id, mb_release *out) {

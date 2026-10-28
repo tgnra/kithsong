@@ -119,6 +119,12 @@ static void test_release(void) {
   mc_score_release(&rel, files, 3, "Things We Lost in the Fire", "Low", map, &wrong);
   CHECK(wrong.distance > 0.1);
   CHECK(right.distance < 0.02);
+
+  /* A compilation credited to "V.A." counts as Various Artists. */
+  rel.title = "Things We Lost in the Fire";
+  rel.artist = "V.A.";
+  CHECK(mc_score_release(&rel, files, 3, "Things We Lost in the Fire", "Various Artists", map, &s) == MC_OK);
+  CHECK(s.distance < 0.02);
 }
 
 static void test_recording(void) {

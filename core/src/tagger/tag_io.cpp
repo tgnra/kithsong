@@ -120,6 +120,10 @@ extern "C" mc_status mc_tags_read(const char *path, mc_tags *out) {
     out->mb_artistid = prop_str(props, "MUSICBRAINZ_ARTISTID");
     out->mb_albumartistid = prop_str(props, "MUSICBRAINZ_ALBUMARTISTID");
     out->mb_releasegroupid = prop_str(props, "MUSICBRAINZ_RELEASEGROUPID");
+    for (const char *key : {"LABEL", "ORGANIZATION", "PUBLISHER"})
+      if (!out->label) out->label = prop_str(props, key);
+    for (const char *key : {"CATALOGNUMBER", "CATALOGID", "CATALOG", "LABELNO"})
+      if (!out->catalog) out->catalog = prop_str(props, key);
     out->year = prop_int(props, "DATE");
     out->original_year = prop_int(props, "ORIGINALDATE");
     prop_pair(props, "TRACKNUMBER", &out->track, &out->track_total);
@@ -218,7 +222,8 @@ extern "C" void mc_tags_clear(mc_tags *tags) {
   char **strs[] = {&tags->title,      &tags->artist,     &tags->album,
                    &tags->album_artist, &tags->genre,    &tags->mb_trackid,
                    &tags->mb_releasetrackid, &tags->mb_albumid, &tags->mb_artistid,
-                   &tags->mb_albumartistid, &tags->mb_releasegroupid};
+                   &tags->mb_albumartistid, &tags->mb_releasegroupid, &tags->label,
+                   &tags->catalog};
   for (char **s : strs) std::free(*s);
   std::memset(tags, 0, sizeof *tags);
 }

@@ -28,6 +28,7 @@
 #include "tagger/match.h"
 #include "tagger/musicbrainz.h"
 #include "tagger/organize.h"
+#include "tagger/search_keys.h"
 #include "util/platform.h"
 
 #define DEFAULT_THRESHOLD 0.9
@@ -35,6 +36,12 @@
 #define RECORDING_RESULTS 5
 #define PROBE_TIMEOUT_MS 3000   /* offline check: connecting to MusicBrainz */
 #define PROBE_INTERVAL_MS 30000 /* while offline, how often to check again */
+/* Extended search (docs/tagging-rules.md): it runs by itself when the best candidate's
+ * confidence is below POOR_CONFIDENCE, and costs at most WIDE_SEARCHES searches plus
+ * WIDE_LOOKUPS release lookups, i.e. about 10 s at MusicBrainz's 1 request/second. */
+#define POOR_CONFIDENCE 0.75
+#define WIDE_SEARCHES 4
+#define WIDE_LOOKUPS 6
 
 typedef struct file_entry {
   char *path;
@@ -65,13 +72,14 @@ typedef struct item {
   int chosen;
   char *error;
   int unreachable; /* in REVIEW because MusicBrainz couldn't be reached */
+  int searched_wider; /* the candidates include an extended search's */
   mc_import_outcome outcome; /* guarded by lock, like state */
   int replaced, duplicates;
 } item;
 
 /* REQ_RETRY matches an item waiting on MusicBrainz again (see auto_match), once it's back or
  * tagging is skipped; it does nothing if the item has moved on meanwhile. */
-typedef enum req_kind { REQ_ACCEPT, REQ_AS_IS, REQ_SKIP, REQ_SEARCH, REQ_RETRY, REQ_ASSIGN } req_kind;
+typedef enum req_kind { REQ_ACCEPT, REQ_AS_IS, REQ_SKIP, REQ_SEARCH, REQ_RETRY, REQ_ASSIGN, REQ_WIDER } req_kind;
 
 typedef struct request {
   req_kind kind;
@@ -577,6 +585,186 @@ static int should_accept(const item *it, const candidate *c, double threshold) {
   return it->kind == MC_IMPORT_SINGLE || (c->missing == 0 && c->extra == 0);
 }
 
+/* --- Extended search ---
+ *
+ * For albums the normal search can't place, typically because the album artist tag names
+ * a label or circle ("SHARPNELSOUND") rather than the artist: searches MusicBrainz again
+ * with other keys from the files and the folder name (search_keys.h), and scores every
+ * release candidate with whichever of those keys fits it best. */
+
+/* Whether the candidates (sorted) are poor enough to search more widely by default. */
+static int poor_match(const mc_import *imp, const item *it, const cand_list *l) {
+  if (it->kind != MC_IMPORT_ALBUM || l->net == MC_ERR_NET) return 0;
+  if (l->n == 0) return 1;
+  return !should_accept(it, &l->c[0], imp->threshold) && 1.0 - l->c[0].distance < POOR_CONFIDENCE;
+}
+
+static int known_release(const item *also, const cand_list *l, const char *id) {
+  if (have_release(l, id)) return 1;
+  for (int i = 0; also && i < also->cand_count; i++)
+    if (!also->cands[i].from_recording && strcmp(also->cands[i].rel.id, id) == 0) return 1;
+  return 0;
+}
+
+/* Rescores a release candidate with the best fitting album title and artist among the
+ * item's own and the keys'. */
+static void rescore(const item *it, const mc_tags *tags, const mc_search_keys *k, candidate *c) {
+  if (c->from_recording) return;
+  const char *albums[3] = {it->album, k->album, k->folder_album};
+  const char *artists[2 + MC_KEYS_MAX] = {it->artist, k->various ? "Various Artists" : NULL};
+  for (int i = 0; i < k->artist_count; i++) artists[2 + i] = k->artists[i];
+  int *map = malloc((size_t)it->file_count * sizeof *map);
+  if (!map) return;
+  for (int a = 0; a < 3; a++) {
+    if (!albums[a] || (a && same_text(albums[a], albums[0]))) continue;
+    for (int r = 0; r < 2 + k->artist_count; r++) {
+      if (!artists[r]) continue;
+      mc_release_score score;
+      if (mc_score_release(&c->rel, tags, it->file_count, albums[a], artists[r], map, &score) == MC_OK &&
+          score.distance < c->distance)
+        c->distance = score.distance;
+    }
+  }
+  free(map);
+}
+
+static int any_accepted(const mc_import *imp, const item *it, const cand_list *l) {
+  for (int i = 0; i < l->n; i++)
+    if (should_accept(it, &l->c[i], imp->threshold)) return 1;
+  return 0;
+}
+
+typedef struct wide_query {
+  mb_release_query q;
+  int lookups; /* how many of its hits to look up, at most */
+} wide_query;
+
+/* Runs the extended search's queries, most specific first, into l (skipping releases in l
+ * or in also's candidates), until the budget is spent or a candidate would be accepted.
+ * searched_artist is the artist the normal search used, if any. Returns nonzero if it ran
+ * to the end, zero if it was cancelled or lost the network. */
+static int wide_search(mc_import *imp, const item *it, const mc_tags *tags, const mc_search_keys *k,
+                       const char *searched_artist, cand_list *l, const item *also) {
+  wide_query plan[6];
+  int np = 0;
+  const char *const *labels = (const char *const *)k->labels;
+  if (k->catno_count)
+    plan[np++] = (wide_query){{.catnos = (const char *const *)k->catnos, .catno_count = k->catno_count}, 3};
+  if (k->album) {
+    if (k->artist_count && !same_text(k->artists[0], searched_artist))
+      plan[np++] = (wide_query){{.album = k->album, .artist = k->artists[0]}, 2};
+    if (k->label_count)
+      plan[np++] = (wide_query){{.album = k->album, .labels = labels, .label_count = k->label_count}, 2};
+    if (searched_artist) plan[np++] = (wide_query){{.album = k->album}, 2};
+    if (k->artist_count > 1) plan[np++] = (wide_query){{.album = k->album, .artist = k->artists[1]}, 2};
+  }
+  if (k->folder_album) plan[np++] = (wide_query){{.album = k->folder_album}, 2};
+
+  int searches = 0, lookups = 0;
+  for (int i = 0; i < np && searches < WIDE_SEARCHES && lookups < WIDE_LOOKUPS; i++) {
+    if (cancelled(imp)) return 0;
+    char ids[8][MC_UID_STRLEN];
+    int n = 0;
+    mc_status st = mb_search_releases_by(&plan[i].q, it->file_count, ids, 8, &n);
+    searches++;
+    note_error(l, st);
+    if (st == MC_ERR_NET) return 0;
+    for (int j = 0, taken = 0; j < n && taken < plan[i].lookups && lookups < WIDE_LOOKUPS; j++) {
+      if (known_release(also, l, ids[j])) continue;
+      int before = l->n;
+      add_release(imp, it, tags, it->artist, it->album, ids[j], l);
+      lookups++;
+      taken++;
+      if (l->n > before) rescore(it, tags, k, &l->c[l->n - 1]);
+      if (cancelled(imp) || l->net == MC_ERR_NET) return 0;
+    }
+    if (any_accepted(imp, it, l)) break;
+  }
+  return 1;
+}
+
+static void item_keys(mc_import *imp, const item *it, const mc_tags *tags, mc_search_keys *k) {
+  const char **paths = malloc((size_t)it->file_count * sizeof *paths);
+  for (int i = 0; paths && i < it->file_count; i++) paths[i] = imp->files[it->files[i]].path;
+  mc_search_keys_build(it->folder, tags, paths, it->file_count, it->album, it->artist, k);
+  free(paths);
+}
+
+static const char *searched_artist(const item *it) {
+  return it->artist && mc_string_distance(it->artist, "Various Artists") != 0.0 ? it->artist : NULL;
+}
+
+/* The extended search on top of the normal search's candidates in l, which it rescores
+ * too. Returns what wide_search did. */
+static int widen(mc_import *imp, const item *it, const mc_tags *tags, cand_list *l) {
+  mc_search_keys k;
+  item_keys(imp, it, tags, &k);
+  int done = wide_search(imp, it, tags, &k, searched_artist(it), l, NULL);
+  for (int i = 0; i < l->n; i++) rescore(it, tags, &k, &l->c[i]);
+  mc_search_keys_clear(&k);
+  if (l->n > 1) qsort(l->c, (size_t)l->n, sizeof *l->c, compare_candidates);
+  return done;
+}
+
+/* The user asked for an extended search: its candidates join the item's, never accepted
+ * by themselves. Returns nonzero if it found nothing because of a network error. */
+static int widen_item(mc_import *imp, int idx) {
+  item *it = &imp->items[idx];
+  set_state(imp, idx, MC_IMPORT_MATCHING, NULL);
+  mc_tags *tags = malloc((size_t)it->file_count * sizeof *tags);
+  double *dist = malloc(((size_t)it->cand_count + 1) * sizeof *dist);
+  if (!tags || !dist) {
+    free(tags);
+    free(dist);
+    set_state(imp, idx, MC_IMPORT_REVIEW, NULL);
+    return 0;
+  }
+  for (int i = 0; i < it->file_count; i++) tags[i] = *item_tags(imp, it, i);
+
+  /* Only this thread changes an item's candidates, so it can read them without the lock. */
+  mc_search_keys k;
+  item_keys(imp, it, tags, &k);
+  cand_list l = {0};
+  int done = wide_search(imp, it, tags, &k, searched_artist(it), &l, it);
+  for (int i = 0; i < it->cand_count; i++) {
+    candidate c = it->cands[i];
+    rescore(it, tags, &k, &c);
+    dist[i] = c.distance;
+  }
+  mc_search_keys_clear(&k);
+  free(tags);
+
+  mc_mutex_lock(&imp->lock);
+  const candidate *was = it->chosen >= 0 && it->chosen < it->cand_count ? &it->cands[it->chosen] : NULL;
+  char *chosen_id = was ? mc_strdup(was->rel.id) : NULL;
+  int chosen_rec = was ? was->from_recording : 0;
+  for (int i = 0; i < it->cand_count; i++) it->cands[i].distance = dist[i];
+  candidate *grown = l.n ? realloc(it->cands, (size_t)(it->cand_count + l.n) * sizeof *grown) : it->cands;
+  if (grown) {
+    memcpy(grown + it->cand_count, l.c, (size_t)l.n * sizeof *l.c);
+    it->cands = grown;
+    it->cand_count += l.n;
+    free(l.c);
+  } else {
+    candidates_free(l.c, l.n);
+  }
+  if (it->cand_count > 1) qsort(it->cands, (size_t)it->cand_count, sizeof *it->cands, compare_candidates);
+  if (chosen_id) {
+    for (int i = 0; i < it->cand_count; i++)
+      if (it->cands[i].from_recording == chosen_rec && it->cands[i].rel.id &&
+          strcmp(it->cands[i].rel.id, chosen_id) == 0)
+        it->chosen = i;
+  }
+  it->searched_wider = done;
+  int none = it->cand_count == 0;
+  mc_mutex_unlock(&imp->lock);
+  free(chosen_id);
+  free(dist);
+
+  set_state(imp, idx, MC_IMPORT_REVIEW, none ? mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES) : NULL);
+  return !done && l.net == MC_ERR_NET;
+}
+
 static void write_item(mc_import *imp, mc_library *lib, int idx, int match);
 
 /* Finds and scores candidates for an item. artist/title override the item's own tags (a
@@ -608,6 +796,7 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
   }
 
   cand_list l = {0};
+  int wide = 0;
   if (it->kind == MC_IMPORT_ALBUM) {
     search_releases(imp, it, tags, artist, title, &l);
     /* A lone file could also be one track off a release: offer it as a single too. */
@@ -615,8 +804,10 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
   } else {
     search_recordings(imp, &scored, artist, title, &l);
   }
-  free(tags);
   if (l.n > 1) qsort(l.c, (size_t)l.n, sizeof *l.c, compare_candidates);
+  /* Nothing, or nothing good: search more widely before deciding. */
+  if (!manual && poor_match(imp, it, &l)) wide = widen(imp, it, tags, &l);
+  free(tags);
 
   int unreachable = l.n == 0 && l.net == MC_ERR_NET;
   const char *why = l.n == 0 && !unreachable ? mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES) : NULL;
@@ -626,6 +817,7 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
   candidates_free(it->cands, it->cand_count);
   it->cands = l.c;
   it->cand_count = l.n;
+  it->searched_wider = wide;
   mc_mutex_unlock(&imp->lock);
 
   if (accept) write_item(imp, lib, idx, 0);
@@ -1330,6 +1522,10 @@ static void handle_request(mc_import *imp, mc_library *lib, request *r) {
       if (match_item(imp, lib, r->item, r->artist, r->title)) probe(imp);
       break;
     case REQ_ASSIGN: assign_file(imp, lib, r); break;
+    case REQ_WIDER:
+      /* The frontends offer it only while online; if that changed meanwhile, wait. */
+      if (online(imp) && widen_item(imp, r->item)) probe(imp);
+      break;
     case REQ_RETRY: {
       /* Only if nothing else happened to the item since it was queued. */
       mc_mutex_lock(&imp->lock);
@@ -1545,6 +1741,7 @@ mc_status mc_import_item_get(mc_import *imp, int idx, mc_import_item **out) {
   snap->artist = mc_strdup(it->artist);
   snap->album = mc_strdup(it->album);
   snap->chosen = it->chosen;
+  snap->searched_wider = it->searched_wider;
   snap->error = mc_strdup(it->error);
   snap->outcome = it->outcome;
   snap->replaced_files = it->replaced;
@@ -1701,6 +1898,14 @@ int mc_import_related(mc_import *imp, int idx, int *out, int max) {
   }
   mc_mutex_unlock(&imp->lock);
   return n;
+}
+
+mc_status mc_import_search_wider(mc_import *imp, int idx) {
+  if (!imp) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&imp->lock);
+  int album = idx >= 0 && idx < imp->item_count && imp->items[idx].kind == MC_IMPORT_ALBUM;
+  mc_mutex_unlock(&imp->lock);
+  return album ? enqueue(imp, REQ_WIDER, idx, -1, NULL, NULL) : MC_ERR_INVALID_ARG;
 }
 
 mc_status mc_import_skip_tagging(mc_import *imp) {

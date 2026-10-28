@@ -51,6 +51,21 @@ void mc_musicbrainz_global_init(void);
 mc_status mb_search_releases(const char *artist, const char *album, int track_count,
                              char (*ids)[MC_UID_STRLEN], int max, int *n);
 
+/* A release search by any of: title, artist, label names (any of them) and catalogue
+ * numbers (any of them). Fields left NULL / 0 aren't searched; at least one must be set. */
+typedef struct mb_release_query {
+  const char *album;
+  const char *artist;
+  const char *const *labels;
+  int label_count;
+  const char *const *catnos;
+  int catno_count;
+} mb_release_query;
+
+/* Like mb_search_releases, with the fields of q. */
+mc_status mb_search_releases_by(const mb_release_query *q, int track_count,
+                                char (*ids)[MC_UID_STRLEN], int max, int *n);
+
 /* Full release with tracklist, artist credits, label and release group. */
 mc_status mb_lookup_release(const char *id, mb_release *out);
 
@@ -74,6 +89,8 @@ typedef struct mb_fake {
   mc_status (*search_recordings)(const char *artist, const char *title, mb_release *out, int max,
                                  int *n);
   mc_status (*lookup_recording)(const char *id, mb_release *out);
+  mc_status (*search_releases_by)(const mb_release_query *q, int track_count,
+                                  char (*ids)[MC_UID_STRLEN], int max, int *n);
 } mb_fake;
 
 void mb_set_fake(const mb_fake *fake);
