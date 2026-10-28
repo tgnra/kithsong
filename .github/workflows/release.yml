@@ -95,10 +95,6 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v7
-      # appstreamcli compose and flatpak build-export read the icons through gdk-pixbuf,
-      # and the image has no SVG loader for it.
-      - name: Install the SVG pixbuf loader
-        run: dnf install -y librsvg2
       - name: Build
         run: bash scripts/release-linux.sh
       - uses: actions/upload-artifact@v7
