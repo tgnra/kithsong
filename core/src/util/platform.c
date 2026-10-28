@@ -687,6 +687,7 @@ mc_status mc_trash(const char *path) {
   const char *name = slash ? slash + 1 : abs;
   const char *dot = strrchr(name, '.');
   if (!dot || dot == name) dot = name + strlen(name);
+  if (strlen(name) > 240) return MC_ERR_INVALID_ARG; /* leaves room for ".<n>" */
   char *encoded = percent_encode(abs);
   if (!encoded) return MC_ERR_NOMEM;
   char date[32];
@@ -697,9 +698,10 @@ mc_status mc_trash(const char *path) {
 
   mc_status st = MC_ERR_IO;
   for (int n = 1; n < 1000; n++) {
-    char base[1024], info_path[5300], dest[5300];
-    if (n == 1) snprintf(base, sizeof base, "%s", name);
-    else snprintf(base, sizeof base, "%.*s.%d%s", (int)(dot - name), name, n, dot);
+    char base[256], info_path[4500], dest[4500];
+    if (n == 1) snprintf(base, sizeof base, "%.240s", name);
+    else snprintf(base, sizeof base, "%.*s.%d%.*s", (int)(dot - name), name, n,
+                  (int)(240 - (dot - name)), dot);
     snprintf(info_path, sizeof info_path, "%s/%s.trashinfo", info, base);
     snprintf(dest, sizeof dest, "%s/%s", files, base);
     int fd = open(info_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);

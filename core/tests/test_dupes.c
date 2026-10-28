@@ -1,6 +1,10 @@
 /* Duplicates on import (tagger/dupes.c): quality, finding the release in the library, and
  * what a swap does to the files and rows. The import thread's own steps (copy, tag, rows,
- * finish) are mirrored by apply() below, since the thread needs MusicBrainz. */
+ * finish) are mirrored by apply() below, since the thread needs MusicBrainz. Also
+ * mc_trash()'s freedesktop.org trash, on POSIX only: on Windows it's the real Recycle Bin. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L /* setenv */
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -572,6 +576,38 @@ static void test_single(void) {
   mc_library_close(lib);
 }
 
+#ifndef _WIN32
+/* mc_trash() into a trash under the scratch folder: the file moves to files/, with an info
+ * file saying where it came from, and a second file of the same name gets another name. */
+static void test_posix_trash(void) {
+  char xdg[1200], a[1300], b[1300], p[1400];
+  snprintf(xdg, sizeof xdg, "%s/xdg", g_scratch);
+  setenv("XDG_DATA_HOME", xdg, 1);
+  snprintf(a, sizeof a, "%s/old song.mp3", g_scratch);
+  snprintf(b, sizeof b, "%s/sub/old song.mp3", g_scratch);
+  snprintf(p, sizeof p, "%s/sub", g_scratch);
+  mc_mkdirs(p);
+  write_file(a, "a");
+  write_file(b, "b");
+  CHECK(mc_trash(a) == MC_OK && !mc_file_exists(a));
+  CHECK(mc_trash(b) == MC_OK && !mc_file_exists(b));
+  snprintf(p, sizeof p, "%s/Trash/files/old song.mp3", xdg);
+  CHECK(mc_file_exists(p));
+  snprintf(p, sizeof p, "%s/Trash/files/old song.2.mp3", xdg);
+  CHECK(mc_file_exists(p));
+  snprintf(p, sizeof p, "%s/Trash/info/old song.mp3.trashinfo", xdg);
+  FILE *f = mc_fopen(p, "rb");
+  char info[2048] = "";
+  if (f) {
+    info[fread(info, 1, sizeof info - 1, f)] = '\0';
+    fclose(f);
+  }
+  CHECK(strncmp(info, "[Trash Info]\nPath=/", 19) == 0);
+  CHECK(strstr(info, "/old%20song.mp3\n") != NULL && strstr(info, "DeletionDate=") != NULL);
+  CHECK(mc_trash(a) != MC_OK); /* gone already */
+}
+#endif
+
 int main(int argc, char **argv) {
   snprintf(g_scratch, sizeof g_scratch, "%s%ctest_dupes.d", argc > 1 ? argv[1] : ".",
            MC_PATH_SEP);
@@ -588,5 +624,8 @@ int main(int argc, char **argv) {
   test_by_name_and_gaps();
   test_exact_file();
   test_single();
+#ifndef _WIN32
+  test_posix_trash();
+#endif
   return TEST_RESULT();
 }
