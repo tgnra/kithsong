@@ -2,7 +2,7 @@
  *
  *   AdwToolbarView
  *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar  [import][settings]
- *   +- AdwOverlaySplitView (sidebar: Albums / Artists / Playlists / Devices)
+ *   +- AdwOverlaySplitView (sidebar: Albums / Artists / Playlists / Recents / Devices)
  *      +- GtkStack of pages: "library" | "import" (import_view.c) | "device" (device_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
  *            +- GtkStack: empty-state page | GtkGridView of albums (virtualised)
@@ -12,7 +12,8 @@
  * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
  * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, the Add to
  * Playlist dialog add_to_playlist.c and the Rename and Delete Playlist dialogs
- * playlist_dialogs.c. The sidebar's Devices section and sync are devices.c, which adds a
+ * playlist_dialogs.c. The sidebar's Recents section is recents.c, and its Devices section and
+ * sync are devices.c, which adds a
  * device's page (device_view.c) to the stack of pages as "device". The playback buttons
  * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
  * the actions'.
@@ -31,6 +32,7 @@
 #include "now_playing.h"
 #include "playback.h"
 #include "playlist_dialogs.h"
+#include "recents.h"
 #include "settings_view.h"
 #include "track_list.h"
 
@@ -173,6 +175,21 @@ static GtkWidget *nav_row(const char *icon, const char *label) {
   return box;
 }
 
+/* The arrow keys stop at the ends of a list; past them, they go on to the next or previous
+ * one (Recents, Devices), as Tab does. */
+static gboolean on_sidebar_keynav_failed(GtkWidget *list, GtkDirectionType dir, gpointer user) {
+  (void)user;
+  if (dir != GTK_DIR_UP && dir != GTK_DIR_DOWN) return FALSE;
+  gtk_widget_child_focus(GTK_WIDGET(gtk_widget_get_root(list)),
+                         dir == GTK_DIR_DOWN ? GTK_DIR_TAB_FORWARD : GTK_DIR_TAB_BACKWARD);
+  return TRUE;
+}
+
+static void connect_keynav(GtkWidget *widget) {
+  if (GTK_IS_LIST_BOX(widget)) g_signal_connect(widget, "keynav-failed", G_CALLBACK(on_sidebar_keynav_failed), NULL);
+  for (GtkWidget *c = gtk_widget_get_first_child(widget); c; c = gtk_widget_get_next_sibling(c)) connect_keynav(c);
+}
+
 static GtkWidget *build_sidebar(app *a) {
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
@@ -187,12 +204,20 @@ static GtkWidget *build_sidebar(app *a) {
   gtk_box_append(GTK_BOX(box), nav);
   a->nav = GTK_LIST_BOX(nav);
 
+  gtk_box_append(GTK_BOX(box), recents_new(a));
   gtk_box_append(GTK_BOX(box), devices_new(a));
+  connect_keynav(box);
 
+  /* It all scrolls when it's taller than the window, with a scrollbar only then; moving the
+   * focus with the keyboard scrolls the focused row into view. Import and Settings are in
+   * the header bar, so nothing is pinned below. */
+  GtkWidget *viewport = gtk_viewport_new(NULL, NULL);
+  gtk_viewport_set_scroll_to_focus(GTK_VIEWPORT(viewport), TRUE);
+  gtk_viewport_set_child(GTK_VIEWPORT(viewport), box);
   GtkWidget *scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
                                  GTK_POLICY_AUTOMATIC);
-  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), viewport);
   return scroller;
 }
 
@@ -251,11 +276,12 @@ static void on_seek(void *user, int ms) {
 }
 
 /* Plays the shown album or playlist in order, from track start on. Tracks with no file on
- * this device are left out of the queue. */
+ * this device are left out of the queue. Playing it puts it first in the recents, as on
+ * Android and Windows. */
 void app_play_album(app *a, int start) {
-  (void)a;
   int n = track_list_count(), count = 0, first = 0;
-  if (!track_list_album() || !n) return;
+  AlbumItem *album = track_list_album();
+  if (!album || !n) return;
   playback_track *queue = g_new0(playback_track, (gsize)n);
   for (int i = 0; i < n; i++) {
     track_list_item t = track_list_item_at(i);
@@ -265,6 +291,9 @@ void app_play_album(app *a, int start) {
   }
   if (count) playback_play(queue, count, first);
   g_free(queue);
+
+  mc_recent_kind kind = album->is_playlist ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
+  if (count && a->lib && mc_library_record_opened(a->lib, kind, album->uid) == MC_OK) recents_refresh(a);
 }
 
 /* --- Albums, playlists and tracks --- */
@@ -345,6 +374,14 @@ void app_reload_library(app *a) {
                                        : (albums > 0 ? "grid" : "empty");
   gtk_stack_set_visible_child_name(a->albums, page);
   show_album(a); /* if the album went, the selection did too */
+  recents_refresh(a);
+}
+
+void app_open(app *a, gboolean playlist, const char *uid) {
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->nav, playlist ? 2 : 0);
+  gtk_list_box_select_row(a->nav, row);
+  on_nav_activated(a->nav, row, a);
+  if (album_grid_select(shown_grid(a), uid)) show_album(a);
 }
 
 /* --- SteadyBin --- */
