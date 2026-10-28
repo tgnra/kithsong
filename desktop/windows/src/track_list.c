@@ -614,8 +614,9 @@ static void show_menu(POINT pt) {
   HMENU add = add_to_playlist_menu(s.lib, CMD_PLAYLIST_FIRST, CMD_NEW_PLAYLIST, &lists);
   if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_PLAYLIST));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  /* Greyed out until there's a play queue to add to (see TODO.md, Playback). */
+  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
   if (in_playlist(i)) {
     wchar_t item[128];
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -628,7 +629,7 @@ static void show_menu(POINT pt) {
                 wstr_menu_item(item, 128, MC_STR_REMOVE_FROM_PLAYLIST, MC_STR_WINDOWS_SHORTCUT_REMOVE));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_TRACK_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, s.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
 
@@ -651,7 +652,7 @@ static void show_menu(POINT pt) {
       strcpy(s.req.track_uid, s.rows[i].uid);
       notify(TLN_DELETE_TRACK);
       break;
-    case CMD_PLAY_NEXT: /* not yet: needs a play queue */
+    case CMD_PLAY_NEXT: /* greyed out: needs a play queue */
     case CMD_PLAY_LAST:
       break;
   }

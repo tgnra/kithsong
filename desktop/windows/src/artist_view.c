@@ -776,7 +776,7 @@ static BOOL on_context_menu(LPARAM lp) {
   snprintf(uid, sizeof uid, "%s", is_open() ? v.open_uid : v.artists[i].uid);
   wchar_t *name = _wcsdup(is_open() ? (v.open_name ? v.open_name : L"") : v.artists[i].name);
   HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, CMD_DELETE_ARTIST, mc_wstr_mnemonic(MC_STR_DELETE_ARTIST_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_ARTIST, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
   int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, v.wnd, NULL);
   DestroyMenu(menu);

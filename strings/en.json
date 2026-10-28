@@ -118,9 +118,7 @@
     "album_group_delete_failed": "Couldn't delete the album group",
     "album_group_remove_failed": "Couldn't remove the album from the album group",
 
-    "delete_album_menu": "Delete album…",
-    "delete_artist_menu": { "text": "Delete artist…", "note": "Deletes every track credited to the artist, and their albums." },
-    "delete_track_menu": { "text": "Delete from library…", "note": "On a track's menu: deletes the track and its file, unlike Remove from playlist." },
+    "delete_from_library_menu": { "text": "Delete from library…", "note": "On an album's, artist's or track's menu: deletes it, and its files, from the library on every device, unlike Remove from playlist or Remove from this PC (this computer, this phone). For an artist: every track credited to them, and their albums." },
     "delete_no_files_text": { "text": "It has no files on this device. It will be removed from the library on all your devices.", "note": "Under \"Delete “{0}”?\", for an album, artist or track that's only on other devices." },
     "delete_failed": "Couldn't delete it from the library",
     "no_album_groups_title": "No album groups yet",

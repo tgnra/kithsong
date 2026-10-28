@@ -549,7 +549,7 @@ static GtkWidget *build_header(void) {
 
   /* Delete artist..., under "...". */
   GMenu *menu = g_menu_new();
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_DELETE_ARTIST_MENU), "artist.delete");
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete");
   GtkWidget *more = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(more), "view-more-symbolic");
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(more), G_MENU_MODEL(menu));
@@ -628,7 +628,7 @@ static GtkWidget *build_page(void) {
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_TRACK_MENU), "artist.delete-track");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete-track");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   v.menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));

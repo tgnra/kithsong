@@ -965,7 +965,7 @@ static void show_album_menu(int i, POINT pt) {
     AppendMenuW(menu, MF_STRING, CMD_REMOVE_FROM_GROUP, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_DELETE_ALBUM, mc_wstr_mnemonic(MC_STR_DELETE_ALBUM_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_ALBUM, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
 

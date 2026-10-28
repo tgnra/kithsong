@@ -179,7 +179,7 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
     g_object_unref(section);
   }
   section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_ALBUM_MENU), "albumgroup.delete-album");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "albumgroup.delete-album");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   album_grid_popup(grid, G_MENU_MODEL(menu), x, y);
