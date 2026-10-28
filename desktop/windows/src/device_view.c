@@ -37,6 +37,9 @@ enum {
   ID_DEV_LIST = ID_DEV_TAB + 4,
   ID_DEV_COUNT,
   ID_DEV_ESTIMATE,
+  ID_DEV_ARCHIVE_LABEL,
+  ID_DEV_ARCHIVE,
+  ID_DEV_ARCHIVE_TEXT,
   /* Timers on the parent, run by their TIMERPROCs rather than WM_TIMER. */
   ID_DEV_APPLY_TIMER = 440,
   ID_DEV_TICK_TIMER,
@@ -59,6 +62,7 @@ enum {
 #define AUTO_ITEM 1 /* the format list's item data for Auto; the others hold their kbps, 0 originals */
 #define GIB ((int64_t)1024 * 1024 * 1024)
 #define MAX_BUSY 16
+#define ARCHIVE_BUTTON 100 /* the archive confirmation's Make archive */
 
 enum { TAB_ALBUMS, TAB_ARTISTS, TAB_PLAYLISTS, TAB_GROUPS, NUM_TABS };
 static const mc_profile_item_kind k_tab_kind[NUM_TABS] = {MC_PROFILE_ALBUM, MC_PROFILE_ARTIST,
@@ -90,7 +94,8 @@ static struct {
   HWND parent;
   device_view_host host;
   HWND icon, title, sync_now, remove, status, files, progress, progress_text, message, notice;
-  HWND name_label, name_edit, format_label, format, budget, budget_label, budget_size, budget_unit;
+  HWND name_label, name_edit, archive_label, archive_box, archive_text, format_label, format, budget, budget_label;
+  HWND budget_size, budget_unit;
   HWND heading, note, sync_all, sync_all_label, tabs[NUM_TABS], list, count, combo_list, estimate;
   HFONT font, title_font, heading_font, icon_font;
   HIMAGELIST checks; /* the list's checkboxes; the list owns them once set */
@@ -156,7 +161,11 @@ static struct {
     unsigned seq;  /* of the last one started */
     BOOL again;    /* the profile changed while it ran */
     BOOL over;     /* the line shows that it doesn't fit */
+    HANDLE archive;       /* the archive confirmation's, or NULL */
+    unsigned archive_seq; /* of the last of those started */
   } est;
+  HWND confirm_dlg;          /* the archive confirmation, while it's open */
+  wchar_t confirm_text[512]; /* its text, which it shows from here */
 } g_dv = {.hot_tab = -1};
 
 static void layout_again(void);
@@ -615,6 +624,15 @@ static void update_controls(BOOL force) {
 
   BOOL edit = editable();
   const mc_sync_profile *p = g_dv.profile;
+  set_checked(g_dv.archive_box, p && p->archive);
+  /* Only the device itself may stop being an archive. */
+  EnableWindow(g_dv.archive_box, p && (!p->archive || g_dv.is_self));
+  wchar_t archive_text[256];
+  if (p && p->archive && !g_dv.is_self)
+    mc_wformat(archive_text, 256, mc_str(MC_STR_PROFILE_ARCHIVE_OTHER), MC_S(u8(g_dv.name)));
+  else swprintf(archive_text, 256, L"%ls", mc_wstr(MC_STR_DEVICE_ARCHIVE_TEXT));
+  SetWindowTextW(g_dv.archive_text, archive_text);
+
   int sel = -1, n = (int)SendMessageW(g_dv.format, CB_GETCOUNT, 0, 0);
   for (int i = 0; p && i < n; i++) {
     int kbps = (int)SendMessageW(g_dv.format, CB_GETITEMDATA, (WPARAM)i, 0);
@@ -650,7 +668,8 @@ static void update_controls(BOOL force) {
   update_count();
   g_dv.filling = FALSE;
   /* The labels' colours follow their controls'. */
-  HWND labels[] = {g_dv.format_label, g_dv.budget_label, g_dv.budget_unit, g_dv.sync_all_label};
+  HWND labels[] = {g_dv.archive_label, g_dv.archive_text, g_dv.format_label, g_dv.budget_label, g_dv.budget_unit,
+                   g_dv.sync_all_label};
   for (size_t i = 0; i < sizeof labels / sizeof labels[0]; i++) InvalidateRect(labels[i], NULL, TRUE);
   for (int i = 0; i < NUM_TABS; i++) InvalidateRect(g_dv.tabs[i], NULL, FALSE);
 }
@@ -810,6 +829,7 @@ typedef struct estimate_job {
   HWND notify;
   mc_status status;
   mc_sync_estimate est;
+  BOOL confirm; /* for the archive confirmation, rather than the estimate line */
 } estimate_job;
 
 static void estimate_job_free(estimate_job *job) {
@@ -856,6 +876,27 @@ static void show_estimate(const estimate_job *job) {
   set_estimate(text, over);
 }
 
+/* A job for p on the shown device; NULL if out of memory. */
+static estimate_job *estimate_job_new(const mc_sync_profile *p) {
+  estimate_job *job = calloc(1, sizeof *job);
+  if (!job) return NULL;
+  job->sync = g_dv.sync;
+  memcpy(job->uid, g_dv.uid, MC_UID_STRLEN);
+  job->profile = *p;
+  job->profile.name = NULL;
+  job->profile.items = NULL;
+  if (p->count > 0) {
+    job->profile.items = malloc((size_t)p->count * sizeof *p->items);
+    if (!job->profile.items) {
+      free(job);
+      return NULL;
+    }
+    memcpy(job->profile.items, p->items, (size_t)p->count * sizeof *p->items);
+  }
+  job->notify = g_dv.estimate;
+  return job;
+}
+
 static void estimate_start(void) {
   if (g_dv.est.thread) {
     g_dv.est.again = TRUE;
@@ -867,23 +908,9 @@ static void estimate_start(void) {
     set_estimate(NULL, FALSE);
     return;
   }
-  estimate_job *job = calloc(1, sizeof *job);
+  estimate_job *job = estimate_job_new(p);
   if (!job) return;
-  job->sync = g_dv.sync;
-  memcpy(job->uid, g_dv.uid, MC_UID_STRLEN);
-  job->profile = *p;
-  job->profile.name = NULL;
-  job->profile.items = NULL;
-  if (p->count > 0) {
-    job->profile.items = malloc((size_t)p->count * sizeof *p->items);
-    if (!job->profile.items) {
-      free(job);
-      return;
-    }
-    memcpy(job->profile.items, p->items, (size_t)p->count * sizeof *p->items);
-  }
   job->seq = ++g_dv.est.seq;
-  job->notify = g_dv.estimate;
   g_dv.est.thread = CreateThread(NULL, 0, estimate_main, job, 0, NULL);
   if (!g_dv.est.thread) estimate_job_free(job);
 }
@@ -899,7 +926,19 @@ static void estimate_request(void) {
   if (g_dv.parent) SetTimer(g_dv.parent, ID_DEV_ESTIMATE_TIMER, ESTIMATE_DELAY_MS, estimate_timer);
 }
 
+static void confirm_archive_estimated(const estimate_job *job);
+
 static void estimate_done(estimate_job *job) {
+  if (job->confirm) { /* the archive confirmation's; an older one's thread is gone already */
+    if (job->seq == g_dv.est.archive_seq && g_dv.est.archive) {
+      WaitForSingleObject(g_dv.est.archive, INFINITE); /* it has posted: about to return */
+      CloseHandle(g_dv.est.archive);
+      g_dv.est.archive = NULL;
+    }
+    confirm_archive_estimated(job);
+    estimate_job_free(job);
+    return;
+  }
   if (g_dv.est.thread) {
     WaitForSingleObject(g_dv.est.thread, INFINITE); /* it has posted: about to return */
     CloseHandle(g_dv.est.thread);
@@ -917,6 +956,11 @@ static void estimate_cancel(void) {
     WaitForSingleObject(g_dv.est.thread, INFINITE);
     CloseHandle(g_dv.est.thread);
     g_dv.est.thread = NULL;
+  }
+  if (g_dv.est.archive) {
+    WaitForSingleObject(g_dv.est.archive, INFINITE);
+    CloseHandle(g_dv.est.archive);
+    g_dv.est.archive = NULL;
   }
   MSG msg;
   while (g_dv.estimate && PeekMessageW(&msg, g_dv.estimate, WM_ESTIMATE_DONE, WM_ESTIMATE_DONE, PM_REMOVE))
@@ -1078,6 +1122,95 @@ static void sync_now(void) {
   if (st != MC_OK) mc_wformat(text, 256, mc_str(MC_STR_SYNC_START_FAILED), MC_S(mc_status_str(st)));
   set_message(text);
   layout_again();
+}
+
+/* --- Archive --- */
+
+static void set_archive(BOOL archive) {
+  if (!g_dv.sync || !g_dv.found) return;
+  flush();
+  mc_status st = mc_sync_set_archive(g_dv.sync, g_dv.uid, archive);
+  wchar_t text[256] = L"";
+  if (st == MC_OK) mc_sync_notify_changed(g_dv.sync);
+  else if (st == MC_ERR_LOCKED && !archive && g_dv.is_self)
+    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_PC_ARCHIVE_LOCKED));
+  else mc_wformat(text, 256, mc_str(MC_STR_PROFILE_ARCHIVE_FAILED), MC_S(mc_status_str(st)));
+  set_message(text);
+  reload(TRUE);
+  if (g_dv.host.devices_changed) g_dv.host.devices_changed(); /* the sidebar's tooltip says it's one */
+}
+
+/* The confirmation's text, with the whole library's size once it's known. */
+static void confirm_archive_estimated(const estimate_job *job) {
+  if (!g_dv.confirm_dlg || job->seq != g_dv.est.archive_seq || job->status != MC_OK) return;
+  wchar_t size[32];
+  mc_wformat(g_dv.confirm_text, 512, mc_str(MC_STR_MAKE_ARCHIVE_TEXT),
+             MC_S(u8(fmt_size(job->est.total_bytes, size, 32))));
+  SendMessageW(g_dv.confirm_dlg, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, (LPARAM)g_dv.confirm_text);
+}
+
+static HRESULT CALLBACK confirm_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp, LONG_PTR data) {
+  (void)wp, (void)lp, (void)data;
+  if (msg == TDN_CREATED) g_dv.confirm_dlg = dlg;
+  else if (msg == TDN_DESTROYED) g_dv.confirm_dlg = NULL;
+  return S_OK;
+}
+
+/* Asks first, saying how much the whole library comes to as originals, then makes it one. */
+static void ask_make_archive(void) {
+  if (!g_dv.sync || !g_dv.profile || g_dv.confirm_dlg) return;
+  mc_sync *sync = g_dv.sync;
+  char uid[MC_UID_STRLEN];
+  memcpy(uid, g_dv.uid, MC_UID_STRLEN);
+  wchar_t title[256];
+  mc_wformat(title, 256, mc_str(MC_STR_MAKE_ARCHIVE_TITLE), MC_S(u8(g_dv.name)));
+  swprintf(g_dv.confirm_text, 512, L"%ls", mc_wstr(MC_STR_MAKE_ARCHIVE_TEXT_UNKNOWN));
+
+  /* The size: the profile as an archive, on a thread that posts to the estimate line as the
+   * estimate's own does. One asked a moment ago finishes first. */
+  if (g_dv.est.archive) {
+    WaitForSingleObject(g_dv.est.archive, INFINITE);
+    CloseHandle(g_dv.est.archive);
+    g_dv.est.archive = NULL;
+  }
+  estimate_job *job = estimate_job_new(g_dv.profile);
+  if (job) {
+    job->profile.archive = 1;
+    job->confirm = TRUE;
+    job->seq = ++g_dv.est.archive_seq;
+    g_dv.est.archive = CreateThread(NULL, 0, estimate_main, job, 0, NULL);
+    if (!g_dv.est.archive) estimate_job_free(job);
+  }
+
+  const TASKDIALOG_BUTTON buttons[] = {
+    {ARCHIVE_BUTTON, mc_wstr_mnemonic(MC_STR_MAKE_ARCHIVE)},
+    {IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL)},
+  };
+  TASKDIALOGCONFIG config = {
+    .cbSize = sizeof config,
+    .hwndParent = g_dv.parent,
+    .dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW,
+    .pszWindowTitle = mc_wstr(MC_STR_APP_NAME),
+    .pszMainInstruction = title,
+    .pszContent = g_dv.confirm_text,
+    .cButtons = sizeof buttons / sizeof buttons[0],
+    .pButtons = buttons,
+    .nDefaultButton = ARCHIVE_BUTTON,
+    .pfCallback = confirm_proc,
+  };
+  int button = 0;
+  HRESULT hr = TaskDialogIndirect(&config, &button, NULL, NULL);
+  g_dv.confirm_dlg = NULL;
+  /* Still the device it was asked about. */
+  if (SUCCEEDED(hr) && button == ARCHIVE_BUTTON && sync == g_dv.sync && !strcmp(uid, g_dv.uid)) set_archive(TRUE);
+}
+
+/* The box shows what is until it's confirmed and stored. Only the device itself may stop
+ * being an archive, which isn't asked. */
+static void on_archive(void) {
+  if (!g_dv.profile || !IsWindowEnabled(g_dv.archive_box)) return;
+  if (!g_dv.profile->archive) ask_make_archive();
+  else set_archive(FALSE);
 }
 
 /* --- Edits from the controls --- */
@@ -1271,6 +1404,10 @@ void device_view_create(HWND parent, const device_view_host *host) {
   theme_center_edit(g_dv.name_edit);
   SendMessageW(g_dv.name_edit, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
   SetWindowSubclass(g_dv.name_edit, edit_proc, 0, 0);
+  g_dv.archive_label = child(WC_STATICW, mc_wstr(MC_STR_DEVICE_ARCHIVE_TITLE), line, ID_DEV_ARCHIVE_LABEL);
+  /* Not an auto checkbox: it shows the stored flag, which changes only once confirmed. */
+  g_dv.archive_box = child(WC_BUTTONW, NULL, BS_CHECKBOX | WS_TABSTOP, ID_DEV_ARCHIVE);
+  g_dv.archive_text = child(WC_STATICW, NULL, line | SS_NOTIFY, ID_DEV_ARCHIVE_TEXT);
   g_dv.format_label = child(WC_STATICW, mc_wstr(MC_STR_SYNC_FORMAT), line, ID_DEV_FORMAT_LABEL);
   g_dv.format = child(WC_COMBOBOXW, NULL, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_DEV_FORMAT);
   int i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_FORMAT_AUTO));
@@ -1379,7 +1516,8 @@ void device_view_set_font(HFONT font, UINT dpi) {
   SendMessageW(g_dv.icon, WM_SETFONT, (WPARAM)g_dv.icon_font, TRUE);
   SendMessageW(g_dv.heading, WM_SETFONT, (WPARAM)g_dv.heading_font, TRUE);
   HWND body[] = {g_dv.sync_now, g_dv.remove, g_dv.status, g_dv.files, g_dv.progress_text, g_dv.message,
-                 g_dv.notice, g_dv.name_label, g_dv.name_edit, g_dv.format_label, g_dv.format, g_dv.budget_label,
+                 g_dv.notice, g_dv.name_label, g_dv.name_edit, g_dv.archive_label, g_dv.archive_text,
+                 g_dv.format_label, g_dv.format, g_dv.budget_label,
                  g_dv.budget_size, g_dv.budget_unit, g_dv.estimate, g_dv.note, g_dv.sync_all_label, g_dv.list,
                  g_dv.count};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
@@ -1388,9 +1526,10 @@ void device_view_set_font(HFONT font, UINT dpi) {
 }
 
 static HWND *all_controls(size_t *n) {
-  static HWND all[32];
+  static HWND all[40];
   HWND list[] = {g_dv.icon, g_dv.title, g_dv.sync_now, g_dv.remove, g_dv.status, g_dv.files, g_dv.progress,
-                 g_dv.progress_text, g_dv.message, g_dv.notice, g_dv.name_label, g_dv.name_edit, g_dv.format_label,
+                 g_dv.progress_text, g_dv.message, g_dv.notice, g_dv.name_label, g_dv.name_edit, g_dv.archive_label,
+                 g_dv.archive_box, g_dv.archive_text, g_dv.format_label,
                  g_dv.format, g_dv.budget, g_dv.budget_label, g_dv.budget_size, g_dv.budget_unit, g_dv.estimate,
                  g_dv.heading,
                  g_dv.note, g_dv.sync_all, g_dv.sync_all_label, g_dv.tabs[0], g_dv.tabs[1], g_dv.tabs[2],
@@ -1514,10 +1653,20 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   top += S(16);
 
   /* Name, format and budget. */
-  int label_w = max(text_width(g_dv.name_label, g_dv.font), text_width(g_dv.format_label, g_dv.font)) + S(16);
+  int label_w = max(max(text_width(g_dv.name_label, g_dv.font), text_width(g_dv.archive_label, g_dv.font)),
+                    text_width(g_dv.format_label, g_dv.font)) +
+                S(16);
   int field_h = S(30), edit_h = S(28), field_x = left + label_w;
   place(g_dv.name_label, dev, left, top + (field_h - line_h) / 2, label_w, line_h);
   place(g_dv.name_edit, dev, field_x, top + (field_h - edit_h) / 2, min(S(320), right - field_x), edit_h);
+  if (dev) top += field_h + S(8);
+
+  /* Archive: the box, and what it means beside it, which toggles it too. */
+  int box = S(20), archive_x = field_x + box + S(8);
+  place(g_dv.archive_label, dev, left, top + (field_h - line_h) / 2, label_w, line_h);
+  place(g_dv.archive_box, dev, field_x, top + (field_h - box) / 2, box, box);
+  place(g_dv.archive_text, dev, archive_x, top + (field_h - line_h) / 2,
+        max(min(text_width(g_dv.archive_text, g_dv.font) + S(8), right - archive_x), S(40)), line_h);
   if (dev) top += field_h + S(8);
 
   /* Left alone while it's dropped down. */
@@ -1530,7 +1679,7 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   }
   set_shown(g_dv.format, dev);
   place(g_dv.format_label, dev, left, top + (field_h - line_h) / 2, label_w, line_h);
-  int box = S(20), budget_label_w = text_width(g_dv.budget_label, g_dv.font) + S(8);
+  int budget_label_w = text_width(g_dv.budget_label, g_dv.font) + S(8);
   int unit_w = text_width(g_dv.budget_unit, g_dv.font) + S(4), size_w = S(64);
   int budget_w = box + S(8) + budget_label_w + size_w + S(8) + unit_w;
   int bx = field_x + combo_w + S(24);
@@ -1750,6 +1899,10 @@ BOOL device_view_on_command(int id, int code) {
       if (code == EN_CHANGE && !g_dv.filling && budget_from_edit() > 0) on_budget();
       else if (code == EN_KILLFOCUS && !budget_from_edit()) update_controls(TRUE); /* empty or 0: put it back */
       return TRUE;
+    case ID_DEV_ARCHIVE:
+    case ID_DEV_ARCHIVE_TEXT:
+      if ((code == BN_CLICKED || code == STN_CLICKED) && !g_dv.filling) on_archive();
+      return TRUE;
     case ID_DEV_SYNC_ALL_LABEL:
       if (code != STN_CLICKED || !IsWindowEnabled(g_dv.sync_all)) return TRUE;
       set_checked(g_dv.sync_all, !is_checked(g_dv.sync_all));
@@ -1763,7 +1916,7 @@ BOOL device_view_on_command(int id, int code) {
         if (code == BN_CLICKED) select_tab(id - ID_DEV_TAB);
         return TRUE;
       }
-      return id >= ID_DEV_ICON && id <= ID_DEV_COUNT;
+      return id >= ID_DEV_ICON && id <= ID_DEV_ARCHIVE_TEXT;
   }
 }
 
@@ -1836,7 +1989,9 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
       if (wnd != g_dv.name_edit && wnd != g_dv.budget_size && wnd != g_dv.format) return NULL;
       return theme_ctlcolor(msg, dc);
     case WM_CTLCOLORBTN:
-      if (wnd != g_dv.sync_now && wnd != g_dv.remove && wnd != g_dv.budget && wnd != g_dv.sync_all) return NULL;
+      if (wnd != g_dv.sync_now && wnd != g_dv.remove && wnd != g_dv.budget && wnd != g_dv.sync_all &&
+          wnd != g_dv.archive_box)
+        return NULL;
       SetBkColor(dc, theme.bg);
       return theme.bg_brush;
     case WM_CTLCOLORSTATIC:
@@ -1860,13 +2015,17 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
   else if (wnd == g_dv.status || wnd == g_dv.files || wnd == g_dv.progress_text || wnd == g_dv.note ||
            wnd == g_dv.count)
     color = theme.text2;
+  else if (wnd == g_dv.archive_label)
+    color = IsWindowEnabled(g_dv.archive_box) ? theme.text : theme.text3;
+  else if (wnd == g_dv.archive_text) /* disabled, it says why */
+    color = IsWindowEnabled(g_dv.archive_box) ? theme.text : theme.text2;
   else if (wnd == g_dv.format_label)
     color = IsWindowEnabled(g_dv.format) ? theme.text : theme.text3;
   else if (wnd == g_dv.budget_label || wnd == g_dv.budget_unit)
     color = IsWindowEnabled(g_dv.budget) ? theme.text : theme.text3;
   else if (wnd == g_dv.sync_all_label)
     color = IsWindowEnabled(g_dv.sync_all) ? theme.text : theme.text3;
-  else if (wnd == g_dv.budget || wnd == g_dv.sync_all)
+  else if (wnd == g_dv.budget || wnd == g_dv.sync_all || wnd == g_dv.archive_box)
     color = theme.text;
   else if (wnd == g_dv.estimate)
     /* Fluent's caution colours, for the line that says it doesn't fit. */

@@ -5,9 +5,10 @@
  *   | Online, synced 3 minutes ago                                     |
  *   | 1,204 of 1,210 files OK, 6 missing, 41.2 GB                      |
  *   | [####----] Syncing library... 120 sent, 340 received             |
- *   | Name   [Living room PC          ]                                |
- *   | Format [Auto          v]   [x] Limit storage to [32] GB          |
- *   |        About 28.1 GB for 5,120 tracks, as Opus 160 kbps          |
+ *   | Name    [Living room PC          ]                               |
+ *   | Archive [ ] Keeps the whole library as original files            |
+ *   | Format  [Auto          v]   [x] Limit storage to [32] GB         |
+ *   |         About 28.1 GB for 5,120 tracks, as Opus 160 kbps         |
  *   | What to sync                                                     |
  *   | [x] Sync everything                                              |
  *   | ( Albums | Artists | Playlists | Album groups )                  |
@@ -17,6 +18,9 @@
  *
  * This PC's own page has Sync now (with every member) and Leave group... instead. An
  * archive's format, budget and selection are fixed, so they're disabled; its name isn't.
+ * Making a device an archive asks first (a task dialog), with the whole library's size as
+ * originals once it's worked out; only the device itself can stop being one, which isn't
+ * asked, and the box beside Archive is disabled on the others' pages.
  * Under the format is the profile's size estimate, worked out on a thread as edits are made:
  * the size, what Auto picked, or by how much it doesn't fit (then nothing would sync).
  * Edits are collected and applied together shortly after, through the device's sync profile

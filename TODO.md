@@ -33,7 +33,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Volume | keyboard only | keyboard only | core only, no UI | no |
 | Import | yes | yes | removed | no |
 | Sync | yes | yes (barely tested) | yes | mock-up |
-| Archive devices | no | yes | yes | no |
+| Archive devices | yes | yes | yes | no |
 | Move library | yes | yes | n/a (app storage) | n/a |
 | Scrobbling | yes | yes (UI untested on screen) | yes | no |
 | OS media controls | SMTC (no shuffle) | MPRIS (no shuffle) | Media3 session (with shuffle) | none |
@@ -127,7 +127,6 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
-- Windows - make a device an archive (mc_sync_set_archive) in the profile editor, as Linux and Android do (a switch that asks first, with the size as originals)
 - Linux - a pairing request while the window is in the background goes unnoticed (Windows flashes the taskbar button); send a GNotification
 - Linux - with no sync.db yet (first run), sync can fail to start with "sync.db open failed: not an error" and Devices says "Sync is off (database error)"; it starts on the next run (seen several times in Docker under Xvfb)
 

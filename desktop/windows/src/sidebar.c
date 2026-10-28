@@ -322,12 +322,20 @@ static void set_add_hot(BOOL hot) {
   InvalidateRect(s.wnd, &rc, FALSE);
 }
 
-/* What a row's tooltip says, or NULL. */
+/* What a row's tooltip says, or NULL. An archive's says so, with its state ("Online.
+ * Keeps the whole library"), in a buffer valid until the next call: the tooltip copies it. */
 static const wchar_t *row_tip(const sb_row *r) {
+  static wchar_t archive[128];
   switch (r->kind) {
     case ROW_FOOTER: return s.footer_tip;
     case ROW_RECENT: return r->tip;
-    case ROW_DEVICE: return r->flags & SB_DEV_ONLINE ? NULL : mc_wstr(MC_STR_DEVICE_OFFLINE);
+    case ROW_DEVICE:
+      if (r->flags & SB_DEV_ARCHIVE) {
+        mc_wformat(archive, 128, mc_str(MC_STR_DEVICE_ARCHIVE),
+                   MC_S(mc_str(r->flags & SB_DEV_ONLINE ? MC_STR_DEVICE_ONLINE : MC_STR_DEVICE_OFFLINE)));
+        return archive;
+      }
+      return r->flags & SB_DEV_ONLINE ? NULL : mc_wstr(MC_STR_DEVICE_OFFLINE);
     case ROW_NEARBY: return r->flags & SB_DEV_OTHER_GROUP ? mc_wstr(MC_STR_DEVICE_OTHER_GROUP_TIP) : NULL;
     default: return NULL;
   }
