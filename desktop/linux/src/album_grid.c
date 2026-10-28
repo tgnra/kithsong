@@ -359,7 +359,7 @@ static void art_done(GObject *source, GAsyncResult *result, gpointer user) {
 }
 
 /* Looks up the pictures of the grid's playlists again, as they may have changed. */
-static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir, int *hidden) {
+static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir) {
   grid *g = grid_of(widget);
   g->art_gen++;
   guint n = g_list_model_get_n_items(G_LIST_MODEL(g->store));
