@@ -1,5 +1,5 @@
 title = "Kithsong"
-description = "A music library manager and player for Windows, Linux and Android that keeps every device in sync over your own network."
+description = "A local-only music player that keeps your library perfectly organised and synced across your devices"
 base_url = "https://kithso.ng"
 language = "en"
 github = "https://github.com/tgnra/kithsong"

@@ -1,36 +1,29 @@
 ---
-title: Kithsong: your music, kept at home
-tagline: A music library and player that tags your collection and keeps all your devices in sync over your own network. No server, no cloud.
+title: Kithsong
+tagline: A local-only music player that keeps your library perfectly organised and synced across your devices. No streaming, your music lives on your device.
 description: Kithsong is a music library manager and player for Windows, Linux and Android. It tags your music against MusicBrainz and syncs your devices over your local network.
 ---
 
-## One library, in order
+## Your whole library in one place
 
 ![Kithsong's playlists on Linux, with cover art made from each playlist's albums](images/library.png)
 
-Drop folders on the window and Kithsong copies them into one library folder, organised by
-artist and album, with cover art for every album. Your originals are never changed, and
-singles live together instead of becoming one-track albums.
+Your library is organised into one library folder, with cover art and a database that's all kept together. 
 
-## Tagged for you
+## Tagged and organised
 
 ![The import screen on Windows, listing tracks that need a decision](images/import.png)
 
-Everything you import is matched against MusicBrainz in one go. Confident matches go
-straight in. Anything Kithsong isn't sure about waits for you: pick a match, search again,
-or keep the tags you have.
+Importing matches your new music against MusicBrainz - small issues are fixed automatically and are added to your library straight away. Matches Kithsong is unsure about will be shown and you decide what to do.
 
-## Sync without the cloud
+## Local sync
 
 ![Two computers paired for sync, on Linux](images/sync.png)
 
-Your devices find each other on your local network. Pair them once with a short code and
-they sync whenever they're both online: music, playlists and edits. Phones can ask for
-smaller copies instead of the original files.
+Sync works over the local network. Devices find each other and pair using a six-digit code. They sync when they're both online, 2-way, so playlist edits and new imports are propagated across all of your devices. Automatically transcode files to meet a storage budget.
 
-## On your phone and watch
+## Always with you
 
 ![Playlists with cover art on an Android phone](images/android.png)
 
-The Android app carries your whole library, or just the part you choose to sync, and
-there's a Wear OS app for your watch too.
+Selectively sync a few albums to your phone, or just one playlist to your smartwatch. As long as one of your devices holds the full library, others can take any selection they like.

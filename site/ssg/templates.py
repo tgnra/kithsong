@@ -142,12 +142,13 @@ class Templates:
             f'<li><a class="dl" href="{esc(d["href"])}" data-platform="{esc(d["platform"])}">'
             f'<span class="dl-name">{esc(d["name"])}</span><span class="vh">, </span>'
             f'<span class="dl-store">{esc(d["store"])}</span></a></li>' for d in items)
-        names = [d["name"] for d in items]
-        available = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+        other = ""
+        if self.site["github"]:
+            releases = self.site["github"].rstrip("/") + "/releases"
+            other = f'\n<p class="other-downloads"><a href="{esc(releases)}">Other downloads</a></p>'
         return f"""<section class="get" aria-labelledby="get">
 <h2 id="get" class="vh">Download</h2>
-<ul class="downloads" role="list">{links}</ul>
-<p class="available">Available for {esc(available)}.</p>
+<ul class="downloads" role="list">{links}</ul>{other}
 </section>"""
 
     # -- docs -----------------------------------------------------------------

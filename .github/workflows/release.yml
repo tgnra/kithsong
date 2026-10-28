@@ -68,11 +68,13 @@ jobs:
           Expand-Archive "$env:RUNNER_TEMP\ninja.zip" "$tools\ninja"
           "$tools\w64devkit\bin" >> $env:GITHUB_PATH
           "$tools\ninja" >> $env:GITHUB_PATH
+      # FetchContent's subbuilds record absolute paths, so the key includes the repository
+      # (and with it the checkout path): a cache from before a rename won't configure.
       - name: Cache fetched dependencies
         uses: actions/cache@v6
         with:
           path: build/_deps
-          key: deps-windows-${{ hashFiles('third_party/CMakeLists.txt') }}
+          key: deps-windows-${{ github.repository }}-${{ hashFiles('third_party/CMakeLists.txt') }}
       - name: Build
         shell: pwsh
         env:
@@ -93,6 +95,10 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v7
+      # appstreamcli compose and flatpak build-export read the icons through gdk-pixbuf,
+      # and the image has no SVG loader for it.
+      - name: Install the SVG pixbuf loader
+        run: dnf install -y librsvg2
       - name: Build
         run: bash scripts/release-linux.sh
       - uses: actions/upload-artifact@v7

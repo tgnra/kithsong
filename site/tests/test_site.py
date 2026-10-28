@@ -81,7 +81,7 @@ class SiteTest(unittest.TestCase):
         # Downloads: one link per platform, in site.toml's order.
         platforms = re.findall(r'data-platform="(\w+)"', html)
         self.assertEqual(platforms, ["windows", "android"])
-        self.assertIn("Available for Windows and Android.", html)
+        self.assertIn('<a href="https://github.com/example/test/releases">Other downloads</a>', html)
         # Sections in order, each labelled by its heading, with its picture beside the text.
         sections = re.findall(r'<section class="feature" aria-labelledby="([^"]+)">', html)
         self.assertEqual(sections, ["first-section", "second-section"])

@@ -4,28 +4,22 @@ order: 1
 description: Where to get Kithsong for Windows, Linux and Android.
 ---
 
-Kithsong will be available from each platform's store:
+Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt
+ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation
+ullamco laboris nisi ut aliquip ex ea commodo consequat.
 
-- **Windows:** the Microsoft Store
-- **Linux:** Flathub
-- **Android:** Google Play, for phones and Wear OS watches
+## Lorem ipsum
 
-The store listings aren't up yet.
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat
+nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia
+deserunt mollit anim id est laborum.
 
-## Building from source
+- **Lorem ipsum.** Dolor sit amet, consectetur adipiscing elit.
+- **Sed do eiusmod.** Tempor incididunt ut labore et dolore magna aliqua.
+- **Ut enim.** Ad minim veniam, quis nostrud exercitation ullamco.
 
-Kithsong builds with CMake on Windows and Linux, and with Gradle for Android. The
-[README on GitHub](https://github.com/tgnra/kithsong#readme) lists what each platform
-needs. On Windows, with [w64devkit](https://github.com/skeeto/w64devkit), CMake and Ninja:
+## Dolor sit amet
 
-```sh
-cmake --preset windows-w64devkit
-cmake --build --preset windows-w64devkit
-```
-
-On Linux, with GTK 4.12 and libadwaita 1.4 or later:
-
-```sh
-cmake --preset linux-gtk
-cmake --build --preset linux-gtk
-```
+Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque
+laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi
+architecto beatae vitae dicta sunt explicabo.
