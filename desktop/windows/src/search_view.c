@@ -4,6 +4,7 @@
 #include <commctrl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uiautomation.h>
 #include <wchar.h>
 #include <wincodec.h>
 #include <windowsx.h>
@@ -12,6 +13,7 @@
 #include "cover.h"
 #include "scroller.h"
 #include "theme.h"
+#include "uia.h"
 #include "wstr.h"
 
 #define WM_APP_COVER (WM_APP + 21) /* decode the next cover */
@@ -109,6 +111,9 @@ static struct {
   BOOL tracking;
   search_view_hit opened;
 } v;
+
+/* Outside v, which is cleared when the window goes: elements clients still hold use it. */
+static uia_host ui;
 
 static int scale(int px) {
   return MulDiv(px, (int)v.dpi, USER_DEFAULT_SCREEN_DPI);
@@ -446,6 +451,14 @@ static void show_results(BOOL keep) {
   layout();
   request_covers();
   InvalidateRect(v.wnd, NULL, FALSE);
+
+  /* What the results are, for UI Automation: clients only start over when they changed. */
+  unsigned long sig = uia_hash(0, &v.nsections, sizeof v.nsections);
+  for (int i = 0; i < v.nhits; i++) {
+    sig = uia_hash(sig, &v.hits[i].kind, sizeof v.hits[i].kind);
+    sig = uia_hash(sig, v.hits[i].uid, strlen(v.hits[i].uid));
+  }
+  uia_changed(&ui, sig);
 }
 
 /* Searches for the box's text now. */
@@ -489,6 +502,7 @@ static void set_focus(int i) {
   invalidate_hit(i);
   v.focus = i;
   reveal(i);
+  uia_focus(&ui);
 }
 
 /* The next hit after from in direction dir (+1 or -1) that opens, or -1. */
@@ -757,10 +771,101 @@ static void paint(HDC dc, const RECT *dirty) {
   canvas_blit(c, dc, dirty->left, dirty->top, dirty);
 }
 
+/* --- UI Automation (uia.h) ---
+ *
+ * The nodes: a list for each section, named by its heading, then their results, numbered
+ * after the sections; or with nothing found, a text that says so. The search box is an
+ * edit control, which speaks for itself. */
+
+static int ui_hit(int i) {
+  return v.nsections + i;
+}
+
+static BOOL no_results(void) {
+  return !v.nsections && v.query && *v.query && !v.results_stale;
+}
+
+static BOOL ui_node(int i, uia_node *n) {
+  n->parent = UIA_ROOT;
+  if (i == UIA_ROOT) {
+    n->type = UIA_PaneControlTypeId;
+    lstrcpynW(n->name, mc_wstr(MC_STR_SEARCH), 512);
+    n->count = v.nsections + no_results();
+    return TRUE;
+  }
+  if (i >= 0 && i < v.nsections) {
+    const section *sec = &v.sections[i];
+    n->type = UIA_ListControlTypeId;
+    RECT r = {(v.scroll.view.right - v.content_w) / 2, sec->top, 0, 0};
+    r.right = r.left + v.content_w;
+    r.bottom = sec->count ? (sec->kind == MC_SEARCH_ALBUM ? tile_outer(&v.hits[sec->first + sec->count - 1]).bottom
+                                                         : sec->card.bottom)
+                          : sec->top + scale(HEADING_H);
+    r = to_client(r);
+    IntersectRect(&n->rect, &r, &v.scroll.view);
+    n->first = ui_hit(sec->first);
+    n->count = sec->count;
+    lstrcpynW(n->name, kind_heading(sec->kind), 512);
+    return TRUE;
+  }
+  if (i == ui_hit(v.nhits) && no_results()) {
+    n->type = UIA_TextControlTypeId;
+    n->rect = v.scroll.view;
+    wchar_t text[MAX_QUERY + 128];
+    mc_wformat(text, sizeof text / sizeof text[0], mc_str(MC_STR_SEARCH_NO_RESULTS_TEXT), MC_S(v.query));
+    uia_name(n, mc_wstr(MC_STR_SEARCH_NO_RESULTS_TITLE), text, NULL);
+    return TRUE;
+  }
+  int h = i - v.nsections;
+  if (h < 0 || h >= v.nhits) return FALSE;
+  const hit *ht = &v.hits[h];
+  for (int k = 0; k < v.nsections; k++)
+    if (h >= v.sections[k].first && h < v.sections[k].first + v.sections[k].count) n->parent = k;
+  n->type = UIA_ListItemControlTypeId;
+  n->flags = ht->opens ? UIA_FOCUSABLE | UIA_INVOKABLE : UIA_DISABLED;
+  RECT r = to_client(ht->rc);
+  IntersectRect(&n->rect, &r, &v.scroll.view);
+  uia_name(n, ht->name ? ht->name : L"", ht->sub ? ht->sub : L"", NULL);
+  return TRUE;
+}
+
+static int ui_focus(void) {
+  return v.focus >= 0 && v.focus < v.nhits ? ui_hit(v.focus) : UIA_ROOT;
+}
+
+static int ui_at(POINT pt) {
+  int i = hit_at(pt.x, pt.y);
+  return i >= 0 ? ui_hit(i) : UIA_ROOT;
+}
+
+static void ui_set_focus(int i) {
+  int h = i - v.nsections;
+  if (h >= 0 && h < v.nhits && v.hits[h].opens) set_focus(h);
+}
+
+static void ui_invoke(int i) {
+  open_hit(i - v.nsections);
+}
+
+static void ui_reveal(int i) {
+  reveal(i - v.nsections);
+}
+
+static const uia_ops ui_ops = {
+  .node = ui_node,
+  .focus = ui_focus,
+  .at = ui_at,
+  .invoke = ui_invoke,
+  .reveal = ui_reveal,
+  .set_focus = ui_set_focus,
+};
+
 /* --- Window --- */
 
 static LRESULT CALLBACK search_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!v.wnd) v.wnd = v.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
+  LRESULT result;
+  if (uia_message(&ui, msg, wp, lp, &result)) return result;
   switch (msg) {
     case WM_SIZE:
       layout();
@@ -856,6 +961,7 @@ static LRESULT CALLBACK search_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       invalidate_hit(v.focus);
       break;
     case WM_DESTROY:
+      uia_destroy(&ui);
       KillTimer(wnd, TIMER_SEARCH);
       free_hits(v.hits, v.nhits);
       free(v.sections);
@@ -887,6 +993,7 @@ HWND search_view_create(HWND parent, int id) {
   if (!CreateWindowExW(0, L"kithsong_search", NULL, WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0, 0, parent,
                        (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL))
     return NULL;
+  uia_init(&ui, v.wnd, &ui_ops);
   v.edit = CreateWindowExW(0, WC_EDITW, NULL, WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 0, 0, 0, 0, v.wnd,
                            (HMENU)(INT_PTR)ID_EDIT, GetModuleHandleW(NULL), NULL);
   SendMessageW(v.edit, EM_LIMITTEXT, MAX_QUERY - 1, 0);

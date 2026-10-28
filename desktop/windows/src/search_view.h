@@ -22,7 +22,8 @@
  * box moves the focus to the first result; the arrow keys, Home and End move it through the results,
  * and Up from the first goes back to the box.
  *
- * Covers are decoded on the UI thread, one per message, so typing isn't held up by them. */
+ * Covers are decoded on the UI thread, one per message, so typing isn't held up by them.
+ * Screen readers see a list for each section (uia.h). */
 #ifndef KITHSONG_SEARCH_VIEW_H
 #define KITHSONG_SEARCH_VIEW_H
 

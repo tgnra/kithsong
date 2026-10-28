@@ -334,7 +334,7 @@ static GtkWidget *build_group_page(app *a) {
   gtk_box_append(GTK_BOX(header), v.name);
   v.more = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(v.more), "view-more-symbolic");
-  gtk_box_append(GTK_BOX(header), round_button(v.more, mc_str(MC_STR_LINUX_ALBUM_GROUP_MENU)));
+  gtk_box_append(GTK_BOX(header), round_button(v.more, mc_str(MC_STR_ALBUM_GROUP_MENU)));
   v.reshuffle = round_button(gtk_button_new_from_icon_name("view-refresh-symbolic"), mc_str(MC_STR_RESHUFFLE));
   gtk_widget_set_visible(v.reshuffle, FALSE);
   g_signal_connect(v.reshuffle, "clicked", G_CALLBACK(on_reshuffle), a);

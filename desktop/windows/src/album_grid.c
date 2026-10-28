@@ -1,9 +1,11 @@
 #define COBJMACROS
 #include "album_grid.h"
 
+#include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uiautomation.h>
 #include <wchar.h>
 #include <wincodec.h>
 #include <windowsx.h>
@@ -15,6 +17,7 @@
 #include "playlist_dialogs.h"
 #include "scroller.h"
 #include "theme.h"
+#include "uia.h"
 #include "wstr.h"
 
 #define WM_APP_THUMB (WM_APP + 20) /* lParam: thumb_result *, from the loader thread */
@@ -40,7 +43,7 @@ enum {
   CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
 };
 
-/* The parts of a group's header that act on a click. */
+/* The parts of a group's header that act on a click; also their tooltips' ids. */
 enum { PART_NONE, PART_BACK, PART_MORE };
 
 typedef struct tile {
@@ -113,6 +116,7 @@ static struct {
 
   canvas buf;
   int loaded; /* thumbnails in memory */
+  HWND tooltip; /* the header's buttons' */
 
   /* Loader thread. The UI thread replaces the queue whenever the view moves; the loader
    * takes jobs from the front. Tiles are only touched on the UI thread. */
@@ -131,6 +135,9 @@ static struct {
   char *art_dir;               /* where playlists' and groups' pictures are cached */
   BOOL quit;
 } g;
+
+/* Outside g, which is cleared when the window goes: elements clients still hold use it. */
+static uia_host ui;
 
 static int scale(int px) {
   return MulDiv(px, (int)GetDpiForWindow(g.wnd), USER_DEFAULT_SCREEN_DPI);
@@ -236,6 +243,8 @@ static DWORD WINAPI loader_main(void *arg) {
 
 /* --- Layout --- */
 
+static void update_tips(void);
+
 /* Tiles for a grid w wide: as many of at least 150 px (at 96 dpi) as fit, stretched to fill
  * the row. */
 static void fit(int w, int *cols, int *tile_w) {
@@ -295,6 +304,7 @@ static void relayout(void) {
 
   g.scroll.pos = g.scroll.target = (first / g.cols) * g.row_h;
   scroller_resize(&g.scroll, &rc, rows ? g.top + g.pad + rows * g.row_h - g.gap : g.top);
+  update_tips();
 }
 
 /* --- Thumbnails (UI thread) --- */
@@ -617,6 +627,8 @@ static void carry_thumbs(tile *tiles, int n, BOOL playlists) {
   free(order);
 }
 
+static void ui_changed(void);
+
 static void reload(void) {
   g.dirty = FALSE;
   tile *tiles;
@@ -674,6 +686,7 @@ static void reload(void) {
   relayout();
   request_thumbs();
   InvalidateRect(g.wnd, NULL, FALSE);
+  ui_changed();
 }
 
 /* Switches to view (and for AGV_GROUP, group), dropping the selection; select, if given,
@@ -788,6 +801,8 @@ static void update_hot(void) {
   set_hot(g.tracking && !g.scroll.hot && !g.scroll.dragging ? tile_at(pt.x, pt.y) : -1);
 }
 
+static int ui_tile(int i);
+
 static void select_tile(int i) {
   if (i == g.selected) return;
   invalidate_tile(g.selected);
@@ -796,12 +811,22 @@ static void select_tile(int i) {
   if (i >= 0) memcpy(g.selected_uid, g.tiles[i].uid, sizeof g.selected_uid);
   else g.selected_uid[0] = '\0';
   notify_selection();
+  if (i >= 0) uia_selected(&ui, ui_tile(i));
+  uia_focus(&ui);
+}
+
+/* Scrolls tile i into view, with room for its selection ring. */
+static void reveal_tile(int i) {
+  if (i < 0 || i >= g.count || !g.cols) return;
+  int top = g.top + (i / g.cols) * g.row_h;
+  scroller_reveal(&g.scroll, top - g.pad, top + g.row_h - g.gap + g.pad);
 }
 
 /* The scroller already repainted; the tiles in view changed. */
 static void on_scrolled(void) {
   request_thumbs();
   update_hot();
+  update_tips();
 }
 
 /* --- A group's header --- */
@@ -817,6 +842,25 @@ static RECT header_button(int part) {
   int x = part == PART_BACK ? g.pad : g.client_w - g.pad - size;
   RECT r = {x, y, x + size, y + size};
   return r;
+}
+
+/* What a header button is called, in its tooltip and to a screen reader. */
+static const wchar_t *header_label(int part) {
+  if (part == PART_BACK) return mc_wstr(MC_STR_BACK);
+  return mc_wstr(g.group_smart ? MC_STR_RESHUFFLE : MC_STR_ALBUM_GROUP_MENU);
+}
+
+/* The buttons' tooltips follow them as the header comes and goes and scrolls. */
+static void update_tips(void) {
+  if (!g.tooltip) return;
+  for (int part = PART_BACK; part <= PART_MORE; part++) {
+    BOOL shown = g.tiles_view == AGV_GROUP && (part == PART_BACK || has_more());
+    TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g.wnd, .uId = (UINT_PTR)part,
+                      .rect = shown ? header_button(part) : (RECT){0},
+                      .lpszText = (wchar_t *)header_label(part)};
+    SendMessageW(g.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+    SendMessageW(g.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+  }
 }
 
 static int header_part_at(int x, int y) {
@@ -1041,8 +1085,7 @@ static BOOL on_key(WPARAM key) {
   if (key == VK_UP || key == VK_PRIOR) to = max(to, cur % g.cols); /* stay in the column at the top */
   to = max(0, min(to, last));
   select_tile(to);
-  int top = g.top + (to / g.cols) * g.row_h;
-  scroller_reveal(&g.scroll, top - g.pad, top + g.row_h - g.gap + g.pad);
+  reveal_tile(to);
   return TRUE;
 }
 
@@ -1051,10 +1094,7 @@ BOOL album_grid_select(const char *uid) {
   for (int i = 0; i < g.count; i++) {
     if (strcmp(g.tiles[i].uid, uid)) continue;
     select_tile(i);
-    if (g.cols) {
-      int top = g.top + (i / g.cols) * g.row_h;
-      scroller_reveal(&g.scroll, top - g.pad, top + g.row_h - g.gap + g.pad);
-    }
+    reveal_tile(i);
     return TRUE;
   }
   return FALSE;
@@ -1100,6 +1140,24 @@ static void paint_tile(canvas *c, int i) {
   DrawTextW(c->dc, sub, -1, &line, one_line);
 }
 
+/* What shows while there are no tiles, into buf (n characters): a title and the text
+ * beneath it, with sep between them. */
+static void empty_text(wchar_t *buf, size_t n, const wchar_t *sep) {
+  BOOL playlists = g.tiles_view == AGV_PLAYLISTS;
+  enum mc_str_id title, text;
+  if (!g.lib) {
+    swprintf(buf, n, L"%ls", mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
+    return;
+  }
+  if (playlists && g.hidden) title = MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE, text = MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT;
+  else if (playlists) title = MC_STR_NO_PLAYLISTS_TITLE, text = MC_STR_NO_PLAYLISTS_TEXT;
+  else if (g.tiles_view == AGV_GROUPS) title = MC_STR_NO_ALBUM_GROUPS_TITLE, text = MC_STR_NO_ALBUM_GROUPS_TEXT;
+  else if (g.tiles_view == AGV_GROUP && g.group_smart) title = MC_STR_SMART_LIST_EMPTY_TITLE, text = MC_STR_SMART_LIST_EMPTY_TEXT;
+  else if (g.tiles_view == AGV_GROUP) title = MC_STR_ALBUM_GROUP_EMPTY_TITLE, text = MC_STR_ALBUM_GROUP_EMPTY_TEXT;
+  else title = MC_STR_EMPTY_TITLE, text = MC_STR_EMPTY_TEXT;
+  swprintf(buf, n, L"%ls%ls%ls", mc_wstr(title), sep, mc_wstr(text));
+}
+
 /* Everything is drawn into a canvas, then copied in one go. GDI text leaves alpha at 0, so
  * it's made opaque at the end, except outside the rounded top-left corner, which shows
  * the sidebar's Mica. */
@@ -1114,20 +1172,7 @@ static void paint(HDC dc, const RECT *dirty) {
     RECT rc = {0, 0, g.client_w, g.client_h};
     SetTextColor(c->dc, theme.text3);
     wchar_t empty[512];
-    BOOL playlists = g.tiles_view == AGV_PLAYLISTS;
-    if (!g.lib) swprintf(empty, 512, L"%ls", mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
-    else if (playlists && g.hidden)
-      swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE),
-               mc_wstr(MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT));
-    else if (playlists)
-      swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_NO_PLAYLISTS_TITLE), mc_wstr(MC_STR_NO_PLAYLISTS_TEXT));
-    else if (g.tiles_view == AGV_GROUPS)
-      swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_NO_ALBUM_GROUPS_TITLE), mc_wstr(MC_STR_NO_ALBUM_GROUPS_TEXT));
-    else if (g.tiles_view == AGV_GROUP && g.group_smart)
-      swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_SMART_LIST_EMPTY_TITLE), mc_wstr(MC_STR_SMART_LIST_EMPTY_TEXT));
-    else if (g.tiles_view == AGV_GROUP)
-      swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_ALBUM_GROUP_EMPTY_TITLE), mc_wstr(MC_STR_ALBUM_GROUP_EMPTY_TEXT));
-    else swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_EMPTY_TITLE), mc_wstr(MC_STR_EMPTY_TEXT));
+    empty_text(empty, 512, L"\n");
     /* Wrapped if need be, and centred as a block. */
     InflateRect(&rc, -g.pad, 0);
     RECT fit_rc = rc;
@@ -1174,13 +1219,150 @@ int album_grid_set_full_width(int full_w, int min_w) {
 
 void album_grid_theme_changed(void) {
   relayout(); /* the icon font */
+  if (g.tooltip) theme_apply_control(g.tooltip);
   InvalidateRect(g.wnd, NULL, FALSE);
+}
+
+/* --- UI Automation (uia.h) ---
+ *
+ * The nodes: a group's header buttons (Back, then More or Reshuffle), the list, and the
+ * list's tiles; while there are none, a text saying why follows the list instead. */
+
+static int ui_buttons(void) {
+  return g.tiles_view != AGV_GROUP ? 0 : has_more() ? 2 : 1;
+}
+
+static int ui_list(void) {
+  return ui_buttons();
+}
+
+static int ui_tile(int i) {
+  return ui_list() + 1 + i;
+}
+
+static const wchar_t *view_name(void) {
+  switch (g.tiles_view) {
+    case AGV_PLAYLISTS: return mc_wstr(MC_STR_SECTION_PLAYLISTS);
+    case AGV_GROUPS: return mc_wstr(MC_STR_SECTION_ALBUM_GROUPS);
+    case AGV_GROUP: return g.group_name ? g.group_name : L"";
+    default: return mc_wstr(MC_STR_SECTION_ALBUMS);
+  }
+}
+
+static BOOL ui_node(int i, uia_node *n) {
+  int list = ui_list();
+  n->parent = UIA_ROOT;
+  if (i == UIA_ROOT) {
+    n->type = UIA_PaneControlTypeId;
+    lstrcpynW(n->name, view_name(), 512);
+    n->count = list + 1 + (g.count == 0);
+    return TRUE;
+  }
+  if (i >= 0 && i < list) { /* Back, More */
+    int part = i == 0 ? PART_BACK : PART_MORE;
+    n->type = UIA_ButtonControlTypeId;
+    n->flags = UIA_INVOKABLE;
+    n->rect = header_button(part);
+    n->automation_id = part == PART_BACK ? L"Back" : L"More";
+    lstrcpynW(n->name, header_label(part), 512);
+    return TRUE;
+  }
+  if (i == list) {
+    n->type = UIA_ListControlTypeId;
+    n->flags = UIA_SELECTION;
+    SetRect(&n->rect, 0, g.tiles_view == AGV_GROUP ? max(0, g.top - g.pad - g.scroll.pos) : 0, g.client_w, g.client_h);
+    n->first = list + 1;
+    n->count = g.count;
+    n->automation_id = L"Tiles";
+    lstrcpynW(n->name, view_name(), 512);
+    return TRUE;
+  }
+  int t = i - list - 1;
+  if (g.count == 0 && t == 0) { /* why there are none */
+    n->type = UIA_TextControlTypeId;
+    SetRect(&n->rect, 0, 0, g.client_w, g.client_h);
+    empty_text(n->name, 512, L" ");
+    return TRUE;
+  }
+  if (t < 0 || t >= g.count) return FALSE;
+  const tile *tl = &g.tiles[t];
+  RECT art, text;
+  tile_rects(t, &art, &text, &n->rect);
+  InflateRect(&n->rect, -scale(HOVER_PAD), -scale(HOVER_PAD));
+  n->parent = list;
+  n->type = UIA_ListItemControlTypeId;
+  n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | (t == g.selected ? UIA_SELECTED : 0) |
+             (g.tiles_view == AGV_GROUPS ? UIA_INVOKABLE : 0); /* Enter opens a group */
+  /* What the tile shows: the title, then the artist, or a playlist's or group's count. */
+  wchar_t year[16] = L"";
+  if (tl->year > 0 && !pictures(g.tiles_view)) swprintf(year, 16, L"%d", tl->year);
+  const wchar_t *sub = pictures(g.tiles_view) ? tl->sub : tl->artist ? tl->artist : mc_wstr(MC_STR_UNKNOWN_ARTIST);
+  uia_name(n, tl->title ? tl->title : L"", sub, year, NULL);
+  return TRUE;
+}
+
+static int ui_focus(void) {
+  return g.selected >= 0 && g.selected < g.count ? ui_tile(g.selected) : UIA_ROOT;
+}
+
+static int ui_at(POINT pt) {
+  int part = header_part_at(pt.x, pt.y), i = tile_at(pt.x, pt.y);
+  if (part != PART_NONE) return part == PART_BACK ? 0 : 1;
+  return i >= 0 ? ui_tile(i) : UIA_ROOT;
+}
+
+static int ui_selection(int i) {
+  return i == ui_list() && g.selected >= 0 && g.selected < g.count ? ui_tile(g.selected) : UIA_NONE;
+}
+
+static void ui_select(int i) {
+  int t = i - ui_list() - 1;
+  if (t < 0 || t >= g.count) return;
+  select_tile(t);
+  reveal_tile(t);
+}
+
+/* As a click: the header's buttons act, and a group opens. */
+static void ui_invoke(int i) {
+  int list = ui_list(), t = i - list - 1;
+  if (i == 0 && list > 0) go_back();
+  else if (i == 1 && list > 1 && g.group_smart) reshuffle_group();
+  else if (i == 1 && list > 1) show_more_menu();
+  else if (g.tiles_view == AGV_GROUPS && t >= 0 && t < g.count) album_grid_open_group(g.tiles[t].uid);
+}
+
+static void ui_reveal(int i) {
+  if (i < ui_list()) scroller_reveal(&g.scroll, 0, g.top);
+  else ui_select(i);
+}
+
+static const uia_ops ui_ops = {
+  .node = ui_node,
+  .focus = ui_focus,
+  .at = ui_at,
+  .selection = ui_selection,
+  .select = ui_select,
+  .invoke = ui_invoke,
+  .reveal = ui_reveal,
+  .set_focus = ui_select,
+};
+
+/* After a reload: what the nodes are, so clients only start over when they changed. */
+static void ui_changed(void) {
+  unsigned long sig = uia_hash(0, &g.tiles_view, sizeof g.tiles_view);
+  if (g.tiles_view == AGV_GROUP) sig = uia_hash(sig, g.group_uid, sizeof g.group_uid);
+  int buttons = ui_buttons();
+  sig = uia_hash(sig, &buttons, sizeof buttons);
+  for (int i = 0; i < g.count; i++) sig = uia_hash(sig, g.tiles[i].uid, strlen(g.tiles[i].uid));
+  uia_changed(&ui, sig);
 }
 
 /* --- Window --- */
 
 static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!g.wnd) g.wnd = g.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
+  LRESULT result;
+  if (uia_message(&ui, msg, wp, lp, &result)) return result;
   switch (msg) {
     case WM_SIZE:
       relayout();
@@ -1251,6 +1433,8 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       on_thumb((thumb_result *)lp);
       return 0;
     case WM_DESTROY:
+      uia_destroy(&ui);
+      if (g.tooltip) DestroyWindow(g.tooltip);
       EnterCriticalSection(&g.lock);
       g.quit = TRUE;
       WakeConditionVariable(&g.wake);
@@ -1290,6 +1474,20 @@ HWND album_grid_create(HWND parent, int id) {
   InitializeCriticalSection(&g.lock);
   InitializeConditionVariable(&g.wake);
   g.wnd = CreateWindowExW(0, L"kithsong_albumgrid", NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, parent, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
-  if (g.wnd) g.thread = CreateThread(NULL, 0, loader_main, NULL, 0, NULL);
+  if (!g.wnd) return NULL;
+  g.thread = CreateThread(NULL, 0, loader_main, NULL, 0, NULL);
+  uia_init(&ui, g.wnd, &ui_ops);
+
+  /* A group's Back and More (or Reshuffle) buttons; placed by update_tips(). */
+  g.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                              CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, g.wnd, NULL,
+                              GetModuleHandleW(NULL), NULL);
+  for (int part = PART_BACK; part <= PART_MORE; part++) {
+    TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = g.wnd, .uId = (UINT_PTR)part,
+                      .lpszText = (wchar_t *)header_label(part)};
+    SendMessageW(g.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+  }
+  theme_apply_control(g.tooltip);
+  update_tips();
   return g.wnd;
 }

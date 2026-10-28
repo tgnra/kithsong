@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uiautomation.h>
 #include <wchar.h>
 #include <windowsx.h>
 
@@ -13,6 +14,7 @@
 #include "cover.h"
 #include "scroller.h"
 #include "theme.h"
+#include "uia.h"
 #include "wstr.h"
 
 /* Metrics at 96 DPI. */
@@ -29,6 +31,7 @@ enum {
   ACTIONS_GAP = 16, /* between the cover and the Play and Shuffle buttons */
   ACTION_H = 32,
   ACTION_GAP = 8, /* between Play and Shuffle */
+  FOCUS_OUT = 3,  /* Play's and Shuffle's focus rings, outside them */
   HEADER_BOTTOM = 18,
   ROW_H = 36,
   INSET = 8,   /* rows' fill from the edges */
@@ -99,6 +102,7 @@ static struct {
   int header_h;    /* the fixed part above the rows */
   int actions_top; /* the Play and Shuffle buttons' */
   int action_hot, action_pressed; /* 0 Play, 1 Shuffle, or -1 */
+  int focus_action; /* Play or Shuffle while it has the keyboard focus, else -1 (the rows) */
   int hot, selected;
   BOOL tracking;
   BOOL more_hot, more_open; /* the playlist menu's button */
@@ -113,6 +117,9 @@ static struct {
   BOOL dragging;
   int drop_at;
 } s;
+
+/* Outside s, which is cleared when the window goes: elements clients still hold use it. */
+static uia_host ui;
 
 static int scale(int px) {
   return MulDiv(px, (int)s.dpi, USER_DEFAULT_SCREEN_DPI);
@@ -168,6 +175,8 @@ static BOOL in_close(int x, int y) {
 }
 
 static RECT more_rect(void);
+static BOOL has_more(void);
+static const wchar_t *more_label(void);
 
 static void relayout(void) {
   RECT rc;
@@ -182,8 +191,10 @@ static void relayout(void) {
     TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = 1, .rect = s.by_artist ? (RECT){0} : close_rect()};
     SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
     ti.uId = 2;
-    ti.rect = s.smart && s.random ? more_rect() : (RECT){0};
+    ti.rect = has_more() ? more_rect() : (RECT){0};
+    ti.lpszText = (wchar_t *)more_label();
     SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+    SendMessageW(s.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
   }
 }
 
@@ -230,6 +241,7 @@ static int action_at(int x, int y) {
 static void invalidate_actions(void) {
   RECT r = action_rect(0), shuffle = action_rect(1);
   UnionRect(&r, &r, &shuffle);
+  InflateRect(&r, scale(FOCUS_OUT), scale(FOCUS_OUT)); /* and the focus ring */
   InvalidateRect(s.wnd, &r, FALSE);
 }
 
@@ -266,6 +278,11 @@ static BOOL has_more(void) {
   return s.playlist && (!s.smart || s.random);
 }
 
+/* What it's called, in its tooltip and to a screen reader. */
+static const wchar_t *more_label(void) {
+  return mc_wstr(s.smart ? MC_STR_RESHUFFLE : MC_STR_PLAYLIST_MENU);
+}
+
 static BOOL on_more(int x, int y) {
   RECT r = more_rect();
   POINT pt = {x, y};
@@ -290,12 +307,25 @@ static void reveal_row(int i) {
   scroller_reveal(&s.scroll, top - scale(INSET), top + scale(ROW_H) + scale(INSET));
 }
 
+static int ui_row(int i);
+
 static void select_row(int i) {
   if (i < 0 || i >= s.count) return;
   invalidate_row(s.selected);
   invalidate_row(i);
   s.selected = i;
   reveal_row(i);
+  uia_selected(&ui, ui_row(i));
+  uia_focus(&ui);
+}
+
+/* Moves the keyboard focus to Play (0) or Shuffle (1), or back to the rows (-1). */
+static void focus_action(int i) {
+  if (i == s.focus_action) return;
+  s.focus_action = i;
+  invalidate_actions();
+  invalidate_row(s.selected);
+  uia_focus(&ui);
 }
 
 static void on_scrolled(void) {
@@ -376,6 +406,8 @@ void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cove
   if (s.wnd) InvalidateRect(s.wnd, NULL, FALSE);
 }
 
+static void ui_changed(void);
+
 static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist, BOOL artist, BOOL smart,
                  BOOL random) {
   BOOL same = uid && !strcmp(uid, s.album_uid) && !playlist == !s.playlist && !artist == !s.by_artist &&
@@ -399,6 +431,7 @@ static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL pl
   s.hot = s.selected = s.action_hot = -1;
   s.more_hot = FALSE;
   if (!same) s.scroll.pos = s.scroll.target = 0;
+  if (!same) s.focus_action = -1;
 
   mc_track_list *list = NULL;
   if (lib && uid && strlen(uid) < MC_UID_STRLEN) {
@@ -440,9 +473,12 @@ static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL pl
   if (!same) s.year = 0; /* until track_list_set_details */
   make_summary();
 
+  if (!playable()) s.focus_action = -1; /* greyed out */
+
   relayout();
   if (same && s.selected >= 0) reveal_row(s.selected); /* a moved track stays in view */
   InvalidateRect(s.wnd, NULL, FALSE);
+  ui_changed();
 }
 
 void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist) {
@@ -730,7 +766,7 @@ static void paint_row(canvas *c, int i, BOOL focused) {
       text = dim = theme.accent;
     }
   }
-  if (focused && i == s.selected) canvas_frame(c, &fill, scale(RADIUS), scale(2), theme.text, 255);
+  if (focused && i == s.selected && s.focus_action < 0) canvas_frame(c, &fill, scale(RADIUS), scale(2), theme.text, 255);
 
   UINT one_line = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX;
   RECT num = {fill.left + scale(CELL_X), fill.top, fill.left + scale(CELL_X + NUM_W), fill.bottom};
@@ -771,8 +807,9 @@ static void paint_more(canvas *c) {
 }
 
 /* Play, an accent button as Windows 11's main action is, and Shuffle, a standard one beside
- * it: an icon and a label, centred together. */
-static void paint_action(canvas *c, int i) {
+ * it: an icon and a label, centred together. focused: the window has the focus and shows
+ * focus rectangles. */
+static void paint_action(canvas *c, int i, BOOL focused) {
   RECT r = action_rect(i);
   if (r.right <= r.left) return;
   int radius = scale(RADIUS);
@@ -813,11 +850,16 @@ static void paint_action(canvas *c, int i) {
   SetRect(&at, at.right + gap, r.top, r.right - scale(4), r.bottom);
   SelectObject(c->dc, s.font);
   DrawTextW(c->dc, label, -1, &at, one_line | DT_END_ELLIPSIS);
+  if (focused && enabled && s.focus_action == i) { /* the focus ring, just outside it */
+    RECT ring = r;
+    InflateRect(&ring, scale(FOCUS_OUT), scale(FOCUS_OUT));
+    canvas_frame(c, &ring, radius + scale(FOCUS_OUT), scale(2), theme.text, 255);
+  }
 }
 
 /* The cover, the title (up to two lines), artist and summary beside it, the playlist menu's
  * button for a playlist, the close button, and Play and Shuffle under them. */
-static void paint_header(canvas *c, int w) {
+static void paint_header(canvas *c, int w, BOOL focused) {
   RECT cover = {scale(PAD_X), scale(PAD_TOP), scale(PAD_X + COVER), scale(PAD_TOP + COVER)};
   if (s.art_px) {
     canvas_draw_image(c, &cover, s.art_px, s.art_size, s.art_size);
@@ -866,8 +908,8 @@ static void paint_header(canvas *c, int w) {
   SelectObject(c->dc, s.sub_font);
   SetTextColor(c->dc, theme.text2);
   DrawTextW(c->dc, s.summary, -1, &sub, one_line);
-  paint_action(c, 0);
-  paint_action(c, 1);
+  paint_action(c, 0, focused);
+  paint_action(c, 1, focused);
 
   RECT divider = {0, s.header_h, w, s.header_h + 1};
   canvas_clear(c, &divider, theme.line, 255);
@@ -897,10 +939,10 @@ static void paint(HDC dc, const RECT *dirty) {
   RECT header = {0, 0, client.right, s.scroll.view.top};
   canvas_clear(c, &header, theme.bg, 255);
   if (!s.by_artist) {
-    paint_header(c, client.right);
+    paint_header(c, client.right, focused);
   } else {
-    paint_action(c, 0);
-    paint_action(c, 1);
+    paint_action(c, 0, focused);
+    paint_action(c, 1, focused);
   }
   SelectObject(c->dc, old_font);
   canvas_opaque(c, dirty);
@@ -921,13 +963,62 @@ static void paint(HDC dc, const RECT *dirty) {
 
 /* --- Window --- */
 
+/* Play or Shuffle, as a click on it does. */
+static void press_action(int i) {
+  if (i >= 0 && playable()) notify(i ? TLN_SHUFFLE_ALL : TLN_PLAY_ALL);
+}
+
+/* Tab and Shift+Tab go round Play, Shuffle and the rows (to the selected one, or the first);
+ * Play and Shuffle are left out while they're greyed out. */
+static void on_tab(BOOL back) {
+  int at = s.focus_action >= 0 ? s.focus_action : 2;
+  int to = playable() ? (at + (back ? 2 : 1)) % 3 : 2;
+  if (to < 2) {
+    focus_action(to);
+    return;
+  }
+  focus_action(-1);
+  if (s.selected < 0) select_row(0);
+}
+
+/* With the focus on Play or Shuffle: Left and Right move between them, Enter and Space press
+ * them, and Down, Home, End and Page Down go to the rows. Escape and F2 do as they do on the
+ * rows. TRUE if key was handled. */
+static BOOL on_action_key(WPARAM key) {
+  switch (key) {
+    case VK_LEFT:
+    case VK_RIGHT: focus_action(key == VK_RIGHT); return TRUE;
+    case VK_RETURN:
+    case VK_SPACE: press_action(s.focus_action); return TRUE;
+    case VK_DOWN:
+      focus_action(-1);
+      if (s.selected < 0) select_row(0);
+      else reveal_row(s.selected);
+      return TRUE;
+    case VK_HOME:
+    case VK_END:
+    case VK_NEXT: focus_action(-1); return FALSE;
+    case VK_ESCAPE:
+    case VK_F2: return FALSE;
+    default: return TRUE; /* nothing above them, and the rest are the rows' */
+  }
+}
+
 static void on_key(WPARAM key) {
   /* Using the keyboard shows the focus rectangle. */
   SendMessageW(GetAncestor(s.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+  if (key == VK_TAB) {
+    on_tab(GetKeyState(VK_SHIFT) < 0);
+    return;
+  }
+  if (s.focus_action >= 0 && on_action_key(key)) return;
   int page = (s.scroll.view.bottom - s.scroll.view.top) / scale(ROW_H);
   int cur = s.selected;
   switch (key) {
-    case VK_UP: select_row(cur > 0 ? cur - 1 : 0); break;
+    case VK_UP: /* from the first row up to Play */
+      if (cur <= 0 && playable()) focus_action(0);
+      else select_row(cur > 0 ? cur - 1 : 0);
+      break;
     case VK_DOWN: select_row(cur < s.count - 1 ? cur + 1 : s.count - 1); break;
     case VK_PRIOR: select_row(cur - page > 0 ? cur - page : 0); break;
     case VK_NEXT: select_row(cur + page < s.count ? cur + page : s.count - 1); break;
@@ -943,8 +1034,204 @@ static void on_key(WPARAM key) {
   }
 }
 
+/* --- UI Automation (uia.h) ---
+ *
+ * The nodes: the header's text and buttons, in the order below (an artist's list has only
+ * Play and Shuffle), then the list, then its rows. */
+
+enum { UI_TITLE, UI_BYLINE, UI_SUMMARY, UI_PLAY, UI_SHUFFLE, UI_MORE, UI_CLOSE, UI_LIST, UI_PARTS };
+
+/* The header's parts there are now, in order, into parts; returns how many. */
+static int ui_parts(int parts[UI_PARTS]) {
+  int n = 0;
+  for (int part = 0; part < UI_PARTS; part++) {
+    BOOL header = part <= UI_SUMMARY || part == UI_CLOSE;
+    if ((header && s.by_artist) || (part == UI_MORE && !has_more())) continue;
+    parts[n++] = part;
+  }
+  return n;
+}
+
+/* Node i's part, or UI_PARTS for a row. */
+static int ui_part(int i) {
+  int parts[UI_PARTS], n = ui_parts(parts);
+  return i >= 0 && i < n ? parts[i] : UI_PARTS;
+}
+
+static int ui_index(int part) {
+  int parts[UI_PARTS], n = ui_parts(parts);
+  for (int i = 0; i < n; i++)
+    if (parts[i] == part) return i;
+  return UIA_NONE;
+}
+
+static int ui_row(int i) {
+  return ui_index(UI_LIST) + 1 + i;
+}
+
+static BOOL ui_node(int i, uia_node *n) {
+  int list = ui_index(UI_LIST);
+  n->parent = UIA_ROOT;
+  if (i == UIA_ROOT) {
+    n->type = UIA_PaneControlTypeId;
+    lstrcpynW(n->name, s.album_title ? s.album_title : mc_wstr(MC_STR_TRACKS_TITLE), 512);
+    n->count = list + 1;
+    return TRUE;
+  }
+  if (i < 0) return FALSE;
+  if (i > list) { /* a row */
+    int r = i - list - 1;
+    if (r >= s.count) return FALSE;
+    const row *rw = &s.rows[r];
+    BOOL playing = s.playing_uid[0] && !strcmp(rw->uid, s.playing_uid);
+    n->parent = list;
+    n->type = UIA_ListItemControlTypeId;
+    n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | UIA_INVOKABLE | (r == s.selected ? UIA_SELECTED : 0);
+    RECT fill = row_rect(r);
+    IntersectRect(&n->rect, &fill, &s.scroll.view);
+    /* As it shows: the number, the title, an artist's list's album, and the length. A
+     * playlist's tracks come from many artists, so it says each one's too. */
+    const wchar_t *artist = s.playlist && rw->artist ? rw->artist : NULL;
+    const wchar_t *album = s.by_artist && rw->album ? rw->album : NULL;
+    uia_name(n, rw->num, rw->title ? rw->title : L"", artist ? artist : L"", album ? album : L"", rw->duration, NULL);
+    if (playing) lstrcpynW(n->status, mc_wstr(MC_STR_WINDOWS_TRACK_PLAYING), 64);
+    else if (!rw->path) lstrcpynW(n->status, mc_wstr(MC_STR_NOT_ON_DEVICE), 64);
+    return TRUE;
+  }
+  RECT text = {scale(PAD_X + COVER + COVER_GAP), scale(PAD_TOP),
+               (has_more() ? more_rect().left : close_rect().left) - scale(4), scale(PAD_TOP + COVER)};
+  switch (ui_part(i)) {
+    case UI_TITLE:
+    case UI_BYLINE:
+    case UI_SUMMARY: {
+      int part = ui_part(i);
+      n->type = UIA_TextControlTypeId;
+      n->rect = text;
+      const wchar_t *byline = s.smart      ? mc_wstr(MC_STR_SMART_PLAYLIST)
+                              : s.playlist ? mc_wstr(MC_STR_PLAYLIST)
+                              : s.artist   ? s.artist
+                                           : mc_wstr(MC_STR_UNKNOWN_ARTIST);
+      const wchar_t *what = part == UI_TITLE ? (s.album_title ? s.album_title : L"") : part == UI_BYLINE ? byline : s.summary;
+      lstrcpynW(n->name, what, 512);
+      return TRUE;
+    }
+    case UI_PLAY:
+    case UI_SHUFFLE: {
+      int action = ui_part(i) == UI_SHUFFLE;
+      n->type = UIA_ButtonControlTypeId;
+      n->flags = UIA_FOCUSABLE | UIA_INVOKABLE | (playable() ? 0 : UIA_DISABLED);
+      n->rect = action_rect(action);
+      n->automation_id = action ? L"Shuffle" : L"Play";
+      lstrcpynW(n->name, mc_wstr(action ? MC_STR_SHUFFLE : MC_STR_PLAY), 512);
+      return TRUE;
+    }
+    case UI_MORE:
+      n->type = UIA_ButtonControlTypeId;
+      n->flags = UIA_INVOKABLE;
+      n->rect = more_rect();
+      n->automation_id = L"More";
+      lstrcpynW(n->name, more_label(), 512);
+      return TRUE;
+    case UI_CLOSE:
+      n->type = UIA_ButtonControlTypeId;
+      n->flags = UIA_INVOKABLE;
+      n->rect = close_rect();
+      n->automation_id = L"Close";
+      lstrcpynW(n->name, mc_wstr(MC_STR_CLOSE), 512);
+      return TRUE;
+    case UI_LIST:
+      n->type = UIA_ListControlTypeId;
+      n->flags = UIA_SELECTION;
+      n->rect = s.scroll.view;
+      n->first = list + 1;
+      n->count = s.count;
+      n->automation_id = L"Tracks";
+      lstrcpynW(n->name, mc_wstr(MC_STR_TRACKS_TITLE), 512);
+      return TRUE;
+  }
+  return FALSE;
+}
+
+static int ui_focus(void) {
+  if (s.focus_action >= 0) return ui_index(s.focus_action ? UI_SHUFFLE : UI_PLAY);
+  return s.selected >= 0 && s.selected < s.count ? ui_row(s.selected) : UIA_ROOT;
+}
+
+static int ui_at(POINT pt) {
+  for (int k = 0; k < 2; k++) {
+    RECT r = action_rect(k);
+    if (PtInRect(&r, pt)) return ui_index(k ? UI_SHUFFLE : UI_PLAY);
+  }
+  if (in_close(pt.x, pt.y)) return ui_index(UI_CLOSE);
+  if (on_more(pt.x, pt.y)) return ui_index(UI_MORE);
+  int r = row_at(pt.x, pt.y);
+  return r >= 0 ? ui_row(r) : UIA_ROOT;
+}
+
+static int ui_selection(int i) {
+  return i == ui_index(UI_LIST) && s.selected >= 0 && s.selected < s.count ? ui_row(s.selected) : UIA_NONE;
+}
+
+/* Selecting a row moves the focus to it, as clicking it does. */
+static void ui_select(int i) {
+  int r = i - ui_index(UI_LIST) - 1;
+  if (r < 0 || r >= s.count) return;
+  focus_action(-1);
+  select_row(r);
+}
+
+static void ui_set_focus(int i) {
+  int part = ui_part(i);
+  if (part == UI_PLAY || part == UI_SHUFFLE) focus_action(part == UI_SHUFFLE);
+  else ui_select(i);
+}
+
+/* As a click, or for a row a double click: it plays. */
+static void ui_invoke(int i) {
+  switch (ui_part(i)) {
+    case UI_PLAY: press_action(0); break;
+    case UI_SHUFFLE: press_action(1); break;
+    case UI_MORE:
+      if (s.smart) request_playlist(TLN_RESHUFFLE);
+      else show_playlist_menu();
+      break;
+    case UI_CLOSE: notify(TLN_CLOSE); break;
+    case UI_PARTS: play(i - ui_index(UI_LIST) - 1); break;
+  }
+}
+
+static void ui_reveal(int i) {
+  int r = i - ui_index(UI_LIST) - 1;
+  if (r >= 0 && r < s.count) reveal_row(r);
+}
+
+static const uia_ops ui_ops = {
+  .node = ui_node,
+  .focus = ui_focus,
+  .at = ui_at,
+  .selection = ui_selection,
+  .select = ui_select,
+  .invoke = ui_invoke,
+  .reveal = ui_reveal,
+  .set_focus = ui_set_focus,
+};
+
+/* After the list changed: what the nodes are, so clients only start over when they did. */
+static void ui_changed(void) {
+  int parts[UI_PARTS], n = ui_parts(parts);
+  unsigned long sig = uia_hash(0, parts, (size_t)n * sizeof parts[0]);
+  sig = uia_hash(sig, s.album_uid, strlen(s.album_uid));
+  for (int i = 0; i < s.count; i++) {
+    sig = uia_hash(sig, s.rows[i].uid, strlen(s.rows[i].uid));
+    sig = uia_hash(sig, s.rows[i].entry_uid, strlen(s.rows[i].entry_uid));
+  }
+  uia_changed(&ui, sig);
+}
+
 static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!s.wnd) s.wnd = s.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
+  LRESULT result;
+  if (uia_message(&ui, msg, wp, lp, &result)) return result;
   switch (msg) {
     case WM_SIZE:
       relayout();
@@ -1021,6 +1308,7 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       SetFocus(wnd);
       if (msg == WM_RBUTTONDOWN || !scroller_mouse_down(&s.scroll, x, y)) {
         int i = row_at(x, y);
+        if (i >= 0) focus_action(-1);
         select_row(i);
         if (msg == WM_LBUTTONDOWN && in_playlist(i)) { /* maybe the start of a drag */
           s.drag_row = i;
@@ -1093,26 +1381,29 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
         return 0;
       }
       break;
-    case WM_GETDLGCODE:
-      return DLGC_WANTARROWS;
+    case WM_GETDLGCODE: /* on Play or Shuffle, Space presses it rather than playing or pausing */
+      return DLGC_WANTARROWS | DLGC_WANTTAB | (s.focus_action >= 0 ? DLGC_BUTTON : 0);
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
     case WM_UPDATEUISTATE:
       invalidate_row(s.selected);
+      invalidate_actions();
       break;
     case WM_CREATE: {
+      uia_init(&ui, wnd, &ui_ops);
       s.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, wnd, NULL,
                                   GetModuleHandleW(NULL), NULL);
       TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = wnd, .uId = 1,
                         .lpszText = (wchar_t *)mc_wstr(MC_STR_CLOSE)};
       SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
-      ti.uId = 2; /* a random smart playlist's Reshuffle; placed by relayout() */
-      ti.lpszText = (wchar_t *)mc_wstr(MC_STR_RESHUFFLE);
+      ti.uId = 2; /* the playlist menu's button, or Reshuffle; placed by relayout() */
+      ti.lpszText = (wchar_t *)more_label();
       SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
       return 0;
     }
     case WM_DESTROY:
+      uia_destroy(&ui);
       clear_rows();
       free(s.album_title);
       free(s.artist);

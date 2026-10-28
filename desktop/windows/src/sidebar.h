@@ -16,7 +16,8 @@
  * fits. Import, Settings and the footer stay put below it. The arrow keys, Home and End
  * move the focus through the pages and buttons (selecting a page as they land on it, and
  * scrolling it into view); Enter or Space presses a button, and Enter on the selected page
- * asks to move the focus into it (SBN_ENTER_PAGE). */
+ * asks to move the focus into it (SBN_ENTER_PAGE). Screen readers see the rows as a list
+ * (uia.h). */
 #ifndef KITHSONG_SIDEBAR_H
 #define KITHSONG_SIDEBAR_H
 

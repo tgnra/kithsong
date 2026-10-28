@@ -4,10 +4,12 @@
 #include <commctrl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uiautomation.h>
 
 #include "canvas.h"
 #include "scroller.h"
 #include "theme.h"
+#include "uia.h"
 #include "wstr.h"
 
 typedef enum {
@@ -123,6 +125,10 @@ static struct {
   char clicked_recent[MC_UID_STRLEN]; /* the recent of the last SBN_OPEN_RECENT, or "" */
   mc_recent_kind clicked_kind;
 } s;
+
+/* Outside s, which is cleared when the window goes: elements clients still hold use it. */
+static uia_host ui;
+static int ui_node_of(int row, BOOL add);
 
 static void set_hot(int i);
 static void update_tooltip(void);
@@ -269,6 +275,7 @@ static void set_focus(int i) {
   invalidate_row(s.focus);
   invalidate_row(i);
   s.focus = i;
+  uia_focus(&ui);
 }
 
 static void select_item(int i) {
@@ -276,6 +283,7 @@ static void select_item(int i) {
   invalidate_row(s.sel);
   invalidate_row(i);
   s.sel = i;
+  uia_selected(&ui, ui_node_of(i, FALSE));
   SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), LBN_SELCHANGE), (LPARAM)s.wnd);
 }
 
@@ -286,6 +294,7 @@ static void select_quietly(int i) {
   invalidate_row(s.sel);
   invalidate_row(i);
   s.sel = i;
+  uia_selected(&ui, ui_node_of(i, FALSE));
   if (!clickable(s.focus)) set_focus(i);
 }
 
@@ -521,6 +530,16 @@ static void rebuild(void) {
   layout();
   InvalidateRect(s.wnd, NULL, FALSE);
   update_tooltip();
+
+  /* What the rows are, for UI Automation: clients only start over when they changed. */
+  unsigned long sig = 0;
+  for (int i = 0; i < s.nrows; i++) {
+    const sb_row *r = &s.rows[i];
+    unsigned what[] = {r->kind, r->page, r->add};
+    sig = uia_hash(sig, what, sizeof what);
+    sig = uia_hash(sig, r->uid, strlen(r->uid));
+  }
+  uia_changed(&ui, sig);
 }
 
 /* A click (or Enter) on a clickable row. */
@@ -678,6 +697,158 @@ static void paint(HDC dc, const RECT *dirty) {
   canvas_blit(c, dc, dirty->left, dirty->top, dirty);
 }
 
+/* --- UI Automation (uia.h) ---
+ *
+ * A list of the rows, as they show from the top: pages, buttons (the recents, the
+ * accordion, the nearby devices) and text (headings, notes, the footer), with the + after
+ * the DEVICES heading. The dividers are left out. */
+
+/* Node i's row, and in *add whether it's the + on that row; -1 if there's no node i. */
+static int ui_row_of(int i, BOOL *add) {
+  int n = 0;
+  for (int r = 0; r < s.nrows; r++) {
+    if (s.rows[r].kind == ROW_DIVIDER) continue;
+    if (n++ == i) {
+      *add = FALSE;
+      return r;
+    }
+    if (s.rows[r].add && n++ == i) {
+      *add = TRUE;
+      return r;
+    }
+  }
+  return -1;
+}
+
+static int ui_node_of(int row, BOOL add) {
+  int n = 0;
+  for (int r = 0; r < s.nrows; r++) {
+    if (s.rows[r].kind == ROW_DIVIDER) continue;
+    if (r == row && !add) return n;
+    n++;
+    if (s.rows[r].add && r == row) return n;
+    if (s.rows[r].add) n++;
+  }
+  return UIA_NONE;
+}
+
+static BOOL ui_node(int i, uia_node *n) {
+  if (i == UIA_ROOT) {
+    n->type = UIA_ListControlTypeId;
+    n->flags = UIA_SELECTION;
+    lstrcpynW(n->name, mc_wstr(MC_STR_WINDOWS_SIDEBAR_NAME), 512);
+    for (int r = 0; r < s.nrows; r++) n->count += (s.rows[r].kind != ROW_DIVIDER) + s.rows[r].add;
+    return TRUE;
+  }
+  BOOL add;
+  int r = ui_row_of(i, &add);
+  if (r < 0) return FALSE;
+  const sb_row *row = &s.rows[r];
+  n->parent = UIA_ROOT;
+  n->rect = visible_rect(r);
+  if (add) {
+    n->type = UIA_ButtonControlTypeId;
+    n->flags = UIA_INVOKABLE | (s.locked ? UIA_DISABLED : 0);
+    n->rect = add_rect();
+    n->automation_id = L"AddDevice";
+    lstrcpynW(n->name, mc_wstr(MC_STR_ADD_DEVICE_BY_ADDRESS), 512);
+    return TRUE;
+  }
+  lstrcpynW(n->name, row->text ? row->text : L"", 512);
+  const wchar_t *tip = row_tip(row);
+  if (tip) lstrcpynW(n->help, tip, 256);
+  switch (row->kind) {
+    case ROW_NAV:
+    case ROW_DEVICE:
+      n->type = UIA_ListItemControlTypeId;
+      n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | (r == s.sel ? UIA_SELECTED : 0) | (enabled(r) ? 0 : UIA_DISABLED);
+      if (row->flags & SB_DEV_SYNCING) lstrcpynW(n->status, mc_wstr(MC_STR_SYNCING_PROGRESS), 64);
+      else if (row->kind == ROW_DEVICE && !(row->flags & SB_DEV_ONLINE))
+        lstrcpynW(n->status, mc_wstr(MC_STR_DEVICE_OFFLINE), 64);
+      break;
+    case ROW_RECENT:
+    case ROW_NEARBY:
+      n->type = UIA_ListItemControlTypeId;
+      n->flags = UIA_FOCUSABLE | UIA_INVOKABLE | (clickable(r) ? 0 : UIA_DISABLED);
+      break;
+    case ROW_ACCORDION:
+      n->type = UIA_ButtonControlTypeId;
+      n->flags = UIA_FOCUSABLE | UIA_INVOKABLE | (accordion_expanded() ? UIA_EXPANDED : UIA_COLLAPSED);
+      break;
+    case ROW_FOOTER:
+      n->type = UIA_TextControlTypeId;
+      uia_name(n, s.footer[0] ? s.footer[0] : L"", s.footer[1] ? s.footer[1] : L"", NULL);
+      break;
+    default: /* headings and notes */
+      n->type = UIA_TextControlTypeId;
+      break;
+  }
+  return TRUE;
+}
+
+static int ui_focus(void) {
+  return s.focus >= 0 && s.focus < s.nrows ? ui_node_of(s.focus, FALSE) : UIA_ROOT;
+}
+
+static int ui_at(POINT pt) {
+  if (in_add(pt.x, pt.y)) {
+    for (int r = 0; r < s.nrows; r++)
+      if (s.rows[r].add) return ui_node_of(r, TRUE);
+  }
+  int r = row_at(pt.x, pt.y);
+  return r >= 0 && s.rows[r].kind != ROW_DIVIDER ? ui_node_of(r, FALSE) : UIA_ROOT;
+}
+
+static int ui_selection(int i) {
+  return i == UIA_ROOT && s.sel >= 0 ? ui_node_of(s.sel, FALSE) : UIA_NONE;
+}
+
+/* As the keyboard does: the focus moves to the row, and a page is selected. */
+static void ui_set_focus(int i) {
+  BOOL add;
+  int r = ui_row_of(i, &add);
+  if (r < 0 || add || !(enabled(r) || clickable(r))) return;
+  set_focus(r);
+  if (enabled(r)) select_item(r);
+  reveal(r);
+}
+
+static void ui_invoke(int i) {
+  BOOL add;
+  int r = ui_row_of(i, &add);
+  if (r < 0) return;
+  if (add && !s.locked) {
+    SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_ADD_DEVICE), (LPARAM)s.wnd);
+  } else if (!add && clickable(r)) {
+    set_focus(r);
+    activate(r);
+  }
+}
+
+static void ui_expand(int i, BOOL expand) {
+  BOOL add;
+  int r = ui_row_of(i, &add);
+  if (r >= 0 && !add && s.rows[r].kind == ROW_ACCORDION && expand != accordion_expanded()) activate(r);
+}
+
+static void ui_reveal(int i) {
+  BOOL add;
+  int r = ui_row_of(i, &add);
+  if (r >= 0) reveal(r);
+}
+
+static const uia_ops ui_ops = {
+  .node = ui_node,
+  .focus = ui_focus,
+  .at = ui_at,
+  .selection = ui_selection,
+  .select = ui_set_focus,
+  .invoke = ui_invoke,
+  .expand = ui_expand,
+  .reveal = ui_reveal,
+  .set_focus = ui_set_focus,
+};
+
 /* --- Window --- */
 
 /* The arrow keys, Home, End, Page Up and Page Down move the focus through the pages and
@@ -709,6 +880,8 @@ static void on_key(WPARAM key) {
 
 static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!s.wnd) s.wnd = s.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
+  LRESULT result;
+  if (uia_message(&ui, msg, wp, lp, &result)) return result;
   switch (msg) {
     case WM_SIZE:
       layout();
@@ -814,6 +987,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       invalidate_row(s.focus);
       break;
     case WM_DESTROY:
+      uia_destroy(&ui);
       if (s.font) DeleteObject(s.font);
       if (s.header_font) DeleteObject(s.header_font);
       if (s.icon_font) DeleteObject(s.icon_font);
@@ -850,6 +1024,7 @@ HWND sidebar_create(HWND parent, int id) {
   if (!CreateWindowExW(0, L"kithsong_sidebar", NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, parent,
                        (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL))
     return NULL;
+  uia_init(&ui, s.wnd, &ui_ops);
 
   s.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, s.wnd, NULL,

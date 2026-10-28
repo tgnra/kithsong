@@ -14,6 +14,9 @@
  * Clicking an album (or moving to it with the arrow keys, Home, End, Page Up or Page Down)
  * selects it (an accent ring around the cover). The grid also draws the
  * content area's border and rounded top-left corner, which shows Mica outside it.
+ *
+ * Screen readers see the tiles as a list, and a group's header buttons (uia.h); those
+ * have tooltips too.
  */
 #ifndef KITHSONG_ALBUM_GRID_H
 #define KITHSONG_ALBUM_GRID_H

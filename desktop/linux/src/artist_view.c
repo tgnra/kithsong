@@ -313,7 +313,7 @@ static void track_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
   gtk_label_set_text(GTK_LABEL(r->title), t->title);
   gtk_label_set_text(GTK_LABEL(r->album), t->album ? t->album : "");
   gtk_label_set_text(GTK_LABEL(r->duration), t->duration);
-  gtk_widget_set_tooltip_text(r->title, t->path ? NULL : mc_str(MC_STR_LINUX_NOT_ON_DEVICE));
+  gtk_widget_set_tooltip_text(r->title, t->path ? NULL : mc_str(MC_STR_NOT_ON_DEVICE));
   gtk_widget_set_sensitive(r->title, t->path != NULL);
   gtk_list_item_set_accessible_label(item, t->title);
   track_row_update(r);

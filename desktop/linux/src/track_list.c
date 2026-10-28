@@ -263,7 +263,7 @@ static void row_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpoin
   gtk_label_set_text(GTK_LABEL(r->num), t->num);
   gtk_label_set_text(GTK_LABEL(r->title), t->title);
   gtk_label_set_text(GTK_LABEL(r->duration), t->duration);
-  gtk_widget_set_tooltip_text(r->title, t->path ? NULL : mc_str(MC_STR_LINUX_NOT_ON_DEVICE));
+  gtk_widget_set_tooltip_text(r->title, t->path ? NULL : mc_str(MC_STR_NOT_ON_DEVICE));
   gtk_widget_set_sensitive(r->title, t->path != NULL);
   gtk_list_item_set_accessible_label(item, t->title);
   row_update(r);
@@ -378,7 +378,7 @@ static GtkWidget *build_header(void) {
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s.playlist_button), "view-more-symbolic");
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), G_MENU_MODEL(menu));
   g_object_unref(menu);
-  gtk_widget_set_tooltip_text(s.playlist_button, mc_str(MC_STR_LINUX_PLAYLIST_MENU));
+  gtk_widget_set_tooltip_text(s.playlist_button, mc_str(MC_STR_PLAYLIST_MENU));
   gtk_widget_add_css_class(s.playlist_button, "flat");
   gtk_widget_add_css_class(s.playlist_button, "circular");
   gtk_widget_set_valign(s.playlist_button, GTK_ALIGN_START);

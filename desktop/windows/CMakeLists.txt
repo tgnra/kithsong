@@ -35,6 +35,7 @@ add_executable(kithsong WIN32
   src/taskbar.c
   src/theme.c
   src/track_list.c
+  src/uia.c
   src/wstr.c
   src/app.rc
   "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
@@ -42,7 +43,7 @@ add_executable(kithsong WIN32
 target_include_directories(kithsong PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/version.rc" APPEND PROPERTY
   OBJECT_DEPENDS "${KITHSONG_MANIFEST}" "${KITHSONG_ICON}")
-target_link_libraries(kithsong PRIVATE musiccore comctl32 ole32 oleaut32 uuid shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi)
+target_link_libraries(kithsong PRIVATE musiccore comctl32 ole32 oleaut32 uuid shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi uiautomationcore)
 target_compile_definitions(kithsong PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 kithsong_warnings(kithsong)

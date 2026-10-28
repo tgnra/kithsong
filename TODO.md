@@ -10,7 +10,7 @@ Big pieces that haven't been started, or that only one platform has.
 - **Delete on Android** - the desktops delete albums, artists and tracks (with restore from the Recycle Bin/Trash); Android has no delete
 - **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard; no on-screen control anywhere, and Android doesn't duck with it yet
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
-- **Screen readers on Windows** - the album grid, track list, sidebar and search page are custom-drawn and invisible to UI Automation
+- **Screen readers on Windows** - the album grid, track list, sidebar and search page have UI Automation providers, checked with a UI Automation tree walk but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **AAC/M4A playback** - no decoder chosen
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists, artists or settings
 - **Releases** - no Windows installer or signing, no Flathub listing, Android without R8 or license texts
@@ -165,9 +165,11 @@ Windows:
 - F1 about; Alt+F4 only to quit
 
 ### Windows screen readers and custom-drawn controls
-- A UI Automation provider for the custom-drawn controls: album grid, track list, sidebar (a list box until recently) and search page
-- The track list's Play and Shuffle buttons: no keyboard access either
-- The album group header's Back and More: no tooltips or accessible names
+The album grid, track list, sidebar and search page have UI Automation providers (uia.c), and the track list's Play and Shuffle are reachable from the keyboard. Still to do:
+- The artist page (kithsong_artists) is still custom-drawn without a provider, and the now-playing strip only has its title as its name: no seek bar or times
+- Name changes (a renamed album, a device going offline, "Playing" moving) aren't raised as property-change events; screen readers pick them up when they next look
+- The album group header's Back and More, and the track list's playlist menu and close buttons, can't be reached with the keyboard (Backspace, F2, the menu key and Escape do the same)
+- Live regions for the now-playing flash ("Volume 40%", "Shuffle on")
 
 ## Android
 
@@ -206,6 +208,7 @@ Things built but not checked properly.
 - Firewall prompt: the success path after UAC, beyond one run
 - Deleting a track while it plays
 - Volume's fade (only silent test files so far)
+- The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns and focus events
 
 ### Android
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme

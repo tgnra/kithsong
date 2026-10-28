@@ -9,7 +9,9 @@
  *   >)   Paranoid Android              6:23   <- playing, in the accent colour
  *
  * Play and Shuffle play the whole list, in order or shuffled (TLN_PLAY_ALL, TLN_SHUFFLE_ALL);
- * they're greyed out when nothing in it can be played here. Track numbers and durations are
+ * they're greyed out when nothing in it can be played here. From the keyboard, Up from the
+ * first track (or Tab) moves the focus to Play, Left and Right between Play and Shuffle,
+ * Enter or Space presses one, and Down (or Tab) goes back to the tracks. Track numbers and durations are
  * secondary text; in a playlist the numbers count its places. Tracks with no file on this
  * device are greyed out. Clicking selects a track;
  * double-clicking or Enter plays it. Right-click (or the menu key) opens a menu for the
@@ -18,6 +20,8 @@
  * with Alt+Up and Alt+Down; Delete removes one. The [...] button (or F2, or the menu key
  * with no track selected) offers Rename... and Delete Playlist.... The close button or
  * Escape asks the parent to close the pane (TLN_CLOSE).
+ *
+ * Screen readers see the header's text and buttons and a list of the tracks (uia.h).
  */
 #ifndef KITHSONG_TRACK_LIST_H
 #define KITHSONG_TRACK_LIST_H
