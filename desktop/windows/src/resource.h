@@ -31,4 +31,11 @@
 #define IDC_PL_HEADING 1103
 #define IDC_PL_NOTE 1104
 
+/* The smart list editor and its ready-made rules, smart_editor.c. The editor's controls
+ * other than OK and Cancel are made at run time. */
+#define IDD_SMART_EDITOR 104
+#define IDD_SMART_PRESET 105
+#define IDC_SP_HEADING 1201
+#define IDC_SP_LIST 1202
+
 #endif
