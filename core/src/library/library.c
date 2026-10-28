@@ -84,6 +84,13 @@ static const char *const k_migrations[] = {
   "  PRIMARY KEY (entity, field, value, uid)"
   ") WITHOUT ROWID;"
   "CREATE INDEX merge_keys_uid ON merge_keys (uid);",
+  /* v9: replacing a track's file. An import that swaps a track's original for a better file
+   * (tagger.h, "Duplicates") gives the track a new file_rev (a uid; NULL until the first
+   * swap). It is logged, so every device learns of the swap. files.file_rev is the file_rev
+   * a file was made from: a received copy or transcode whose file_rev differs from its
+   * track's is stale, and sync replaces it (transfer.c). Not logged: files are per device. */
+  "ALTER TABLE tracks ADD COLUMN file_rev TEXT;"
+  "ALTER TABLE files ADD COLUMN file_rev TEXT;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -95,7 +102,7 @@ static const char *const k_album_cols[] = {"title", "artist_uid", "year", "origi
 static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "track_no",
                                            "disc_no", "duration_ms", "genre", "mb_trackid",
                                            "mb_releasetrackid", "year", "mb_albumid", "added_ms",
-                                           NULL};
+                                           "file_rev", NULL};
 static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", "last_played_ms",
                                           NULL};
 static const char *const k_playlist_cols[] = {"name", NULL};

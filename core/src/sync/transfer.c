@@ -18,7 +18,15 @@
  * Files rows. A received original gets source_peer_uid (who sent it) but no
  * source_file_uid, so it is still an original and may be served as one; a transcode gets
  * both. Originals imported here have neither: they are never deleted by verification, and
- * reconcile keeps them until an archive peer reports holding a verified copy. */
+ * reconcile keeps them until an archive peer reports holding a verified copy.
+ *
+ * Replaced files. When an import swaps a track's original for a better file, the track gets
+ * a new tracks.file_rev, and every files row records the file_rev it was made from
+ * (files.file_rev). A copy received from a peer, or a transcode, whose file_rev differs from
+ * its track's is stale (STALE_SQL): it satisfies nothing, so the track is fetched again,
+ * and reconcile then drops the stale copy like one in the wrong format. Only files whose
+ * file_rev matches are offered to peers. An original imported here is never stale: it's
+ * this device's own, whatever another device swapped in. */
 #include "sync/transfer.h"
 
 #include <ctype.h>
@@ -49,6 +57,10 @@
 /* Unknown files younger than this are left alone: an import may be about to record them. */
 #define UNKNOWN_GRACE_MS ((int64_t)60 * 60 * 1000)
 #define SHA_STRLEN 65
+/* For a files row f of track t: whether f was made from an older file of the track. */
+#define STALE_SQL \
+  "((f.source_file_uid IS NOT NULL OR f.source_peer_uid IS NOT NULL)" \
+  " AND f.file_rev IS NOT t.file_rev)"
 
 typedef struct mc_transfer {
   int receiving; /* holds sync->files_busy */
@@ -391,7 +403,8 @@ static int held_from_row(mc_library *lib, sqlite3_stmt *stmt, held *h) {
   return 0;
 }
 
-/* This device's original of track (imported ones first), if the file is there. */
+/* This device's original of track (imported ones first), if the file is there and is the
+ * track's current file (file_rev). */
 static int find_original(mc_library *lib, const char *track, held *h) {
   sqlite3_stmt *stmt;
   int found = 0;
@@ -399,6 +412,7 @@ static int find_original(mc_library *lib, const char *track, held *h) {
                          "SELECT f.uid, f.path, f.format, f.bitrate_kbps, f.size_bytes, f.mtime_ms,"
                          " f.sha256, t.duration_ms FROM files f JOIN tracks t ON t.uid = f.track_uid"
                          " WHERE f.track_uid = ?1 AND f.source_file_uid IS NULL"
+                         " AND f.file_rev IS t.file_rev"
                          " ORDER BY f.source_peer_uid IS NOT NULL, f.uid",
                          -1, &stmt, NULL) != SQLITE_OK)
     return 0;
@@ -417,7 +431,7 @@ static int find_transcode(mc_library *lib, const char *track, int kbps, held *h)
                          " f.mtime_ms, f.sha256, t.duration_ms"
                          " FROM files f JOIN tracks t ON t.uid = f.track_uid"
                          " WHERE f.track_uid = ?1 AND f.source_file_uid IS NOT NULL"
-                         " AND f.bitrate_kbps = ?2",
+                         " AND f.bitrate_kbps = ?2 AND NOT " STALE_SQL,
                          -1, &stmt, NULL) != SQLITE_OK)
     return 0;
   sqlite3_bind_text(stmt, 1, track, -1, SQLITE_STATIC);
@@ -427,13 +441,14 @@ static int find_transcode(mc_library *lib, const char *track, int kbps, held *h)
   return found;
 }
 
-/* Whether some file of track here is in the format t wants. */
+/* Whether some file of track here is in the format t wants, and not stale. */
 static int track_satisfied(mc_library *lib, const mc_plan_track *t) {
   sqlite3_stmt *stmt;
   int yes = 0;
   if (sqlite3_prepare_v2(mc_library_db(lib),
-                         "SELECT format, bitrate_kbps, size_bytes, source_file_uid, source_peer_uid"
-                         " FROM files WHERE track_uid = ?1",
+                         "SELECT f.format, f.bitrate_kbps, f.size_bytes, f.source_file_uid,"
+                         " f.source_peer_uid FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                         " WHERE f.track_uid = ?1 AND NOT " STALE_SQL,
                          -1, &stmt, NULL) != SQLITE_OK)
     return 0;
   sqlite3_bind_text(stmt, 1, t->track_uid, -1, SQLITE_STATIC);
@@ -898,8 +913,9 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
                          "INSERT INTO files (uid, track_uid, path, format, bitrate_kbps,"
-                         " size_bytes, mtime_ms, source_file_uid, source_peer_uid, sha256)"
-                         " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                         " size_bytes, mtime_ms, source_file_uid, source_peer_uid, sha256, file_rev)"
+                         " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,"
+                         "  (SELECT file_rev FROM tracks WHERE uid = ?2))",
                          -1, &stmt, NULL) != SQLITE_OK) {
     st = MC_ERR_DB;
   } else {
@@ -1370,6 +1386,7 @@ typedef struct file_row {
   int has_mtime;
   char sha[SHA_STRLEN];
   mc_file_kind kind;
+  int stale; /* made from an older file of the track (see the top) */
 } file_row;
 
 static void rows_free(file_row *rows, int n) {
@@ -1383,8 +1400,10 @@ static mc_status read_files(mc_library *lib, file_row **out, int *count) {
   *count = 0;
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
-                         "SELECT uid, track_uid, path, format, bitrate_kbps, size_bytes, mtime_ms,"
-                         " sha256, source_file_uid, source_peer_uid FROM files ORDER BY track_uid",
+                         "SELECT f.uid, f.track_uid, f.path, f.format, f.bitrate_kbps, f.size_bytes,"
+                         " f.mtime_ms, f.sha256, f.source_file_uid, f.source_peer_uid, " STALE_SQL
+                         " FROM files f LEFT JOIN tracks t ON t.uid = f.track_uid"
+                         " ORDER BY f.track_uid",
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
   file_row *rows = NULL;
@@ -1424,6 +1443,7 @@ static mc_status read_files(mc_library *lib, file_row **out, int *count) {
     if (is_sha(sha)) memcpy(r->sha, sha, SHA_STRLEN);
     r->kind = mc_plan_file_kind((const char *)sqlite3_column_text(stmt, 8),
                                 (const char *)sqlite3_column_text(stmt, 9));
+    r->stale = sqlite3_column_int(stmt, 10);
   }
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
@@ -1473,8 +1493,8 @@ static int archived(const mc_transfer *x, const char *track) {
          bsearch(track, x->archived, (size_t)x->narchived, sizeof *x->archived, uid_cmp) != NULL;
 }
 
-/* Files of tracks no longer wanted or in the wrong format go. A wrong-format copy stays
- * while the track has no copy in the right one yet, so it stays playable; an original
+/* Files of tracks no longer wanted, in the wrong format, or stale go. A wrong-format or
+ * stale copy stays while the track has no good copy yet, so it stays playable; an original
  * imported here stays until an archive holds a verified copy. */
 static void reconcile_files(mc_session *s, mc_transfer *x) {
   mc_library *lib = s->conn->lib;
@@ -1487,16 +1507,34 @@ static void reconcile_files(mc_session *s, mc_transfer *x) {
     const mc_plan_track *t = mc_plan_find(x->plan, rows[i].track);
     int satisfied = 0;
     for (int j = i; t && j < end; j++)
-      satisfied |= mc_plan_file_satisfies(t, rows[j].kind, rows[j].format, rows[j].bitrate,
-                                          rows[j].size);
+      satisfied |= !rows[j].stale && mc_plan_file_satisfies(t, rows[j].kind, rows[j].format,
+                                                             rows[j].bitrate, rows[j].size);
     for (int j = i; j < end; j++) {
       file_row *r = &rows[j];
       if (t && (!satisfied ||
-                mc_plan_file_satisfies(t, r->kind, r->format, r->bitrate, r->size)))
+                (!r->stale && mc_plan_file_satisfies(t, r->kind, r->format, r->bitrate, r->size))))
         continue;
       if (r->kind == MC_FILE_IMPORTED && !archived(x, r->track)) continue;
       if (drop_file(lib, r->uid, r->path) == MC_OK) s->files_deleted++;
     }
+    i = end;
+  }
+  rows_free(rows, n);
+}
+
+/* An archive keeps everything, except a stale copy once the track's current original has
+ * arrived: that's the same track, replaced by a better file. */
+static void drop_stale_on_archive(mc_session *s) {
+  mc_library *lib = s->conn->lib;
+  file_row *rows;
+  int n;
+  if (read_files(lib, &rows, &n) != MC_OK) return;
+  for (int i = 0; i < n;) {
+    int end = i, current = 0;
+    while (end < n && !strcmp(rows[end].track, rows[i].track)) end++;
+    for (int j = i; j < end; j++) current |= !rows[j].stale && rows[j].kind != MC_FILE_TRANSCODE;
+    for (int j = i; current && j < end; j++)
+      if (rows[j].stale && drop_file(lib, rows[j].uid, rows[j].path) == MC_OK) s->files_deleted++;
     i = end;
   }
   rows_free(rows, n);
@@ -1729,6 +1767,7 @@ void mc_transfer_end(mc_session *s, int ok) {
   sqlite3_exec(mc_library_db(lib), k_unwatch_sql, NULL, NULL, NULL);
   if (ok && x->fetched) {
     if (!x->plan->archive) reconcile_files(s, x);
+    else drop_stale_on_archive(s);
     reconcile_unknown(s, x->plan->archive);
     mc_verify_result v;
     verify_files(lib, 0, &v);

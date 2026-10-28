@@ -69,6 +69,7 @@ add_library(musiccore STATIC
   src/tagger/match.c
   src/tagger/coverart.c
   src/tagger/import_db.c
+  src/tagger/dupes.c
   src/tagger/organize.c
   src/tagger/tagger.c
   src/net/http.c
@@ -103,8 +104,9 @@ target_link_libraries(musiccore PRIVATE
   CURL::libcurl mbedcrypto)
 if(WIN32)
   target_compile_definitions(musiccore PRIVATE _WIN32_WINNT=0x0A00)
-  # ws2_32 for sockets (sync and discovery), iphlpapi for discovery's interface list.
-  target_link_libraries(musiccore PRIVATE bcrypt ws2_32 iphlpapi)
+  # ws2_32 for sockets (sync and discovery), iphlpapi for discovery's interface list,
+  # shell32 for the Recycle Bin (mc_trash).
+  target_link_libraries(musiccore PRIVATE bcrypt ws2_32 iphlpapi shell32)
 endif()
 musicapp_warnings(musiccore)
 
