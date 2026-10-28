@@ -55,11 +55,15 @@ import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.DeleteOutcome
 import ng.kithso.android.data.DeleteSize
 import ng.kithso.android.data.Deletion
+import ng.kithso.android.data.DeviceRemover
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.PlaylistChoice
 import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.Track
+import ng.kithso.core.HerePreview
+import ng.kithso.core.HereState
+import ng.kithso.core.ProfileItemKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -70,10 +74,15 @@ import kotlinx.coroutines.launch
  * [trackMenu]), and Add to playlist ([addToPlaylist]) opens the list of playlists to add to,
  * with New playlist… first; an album's Add to album group… likewise lists the album groups.
  * [editor] is null when the library can't be edited, and [deleter] when nothing can be
- * deleted from it (the made-up one): the menus then offer only playing.
+ * deleted from it (the made-up one): the menus then offer only playing. [remover] offers
+ * Remove from this phone (or Sync to this phone) on albums and artists, where it applies.
  */
 @Stable
-class PlaylistActions(val editor: PlaylistEditor?, val deleter: LibraryDeleter? = null) {
+class PlaylistActions(
+    val editor: PlaylistEditor?,
+    val deleter: LibraryDeleter? = null,
+    val remover: DeviceRemover? = null,
+) {
     internal var sheet by mutableStateOf<Sheet?>(null)
     internal var dialog by mutableStateOf<Dialog?>(null)
 
@@ -121,6 +130,8 @@ class PlaylistActions(val editor: PlaylistEditor?, val deleter: LibraryDeleter? 
         data class Delete(val uid: String, val name: String, val group: Boolean = false) : Dialog
         /** Deleting an album, artist or track from the library, which is asked first. */
         data class DeleteFromLibrary(val what: Deletion) : Dialog
+        /** Removing an album or artist from this phone only, which is asked first. */
+        data class RemoveHere(val kind: ProfileItemKind, val uid: String, val name: String) : Dialog
     }
 }
 
@@ -140,7 +151,30 @@ fun PlaylistSheets(
 ) {
     val editor = actions.editor
     val deleter = actions.deleter
+    val remover = actions.remover
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current.applicationContext
+    val syncHereFailed = stringResource(R.string.sync_here_failed)
+    // Remove from this phone or Sync to this phone for an album or artist, where it applies.
+    @Composable
+    fun hereAction(kind: ProfileItemKind, uid: String, name: String): SheetAction? {
+        val state by produceState(HereState.Unavailable, kind, uid) {
+            value = remover?.hereState(kind, uid) ?: HereState.Unavailable
+        }
+        return when (state) {
+            HereState.Unavailable -> null
+            HereState.Held -> SheetAction(stringResource(R.string.remove_from_this_phone), Icons.Remove) {
+                actions.dialog = PlaylistActions.Dialog.RemoveHere(kind, uid, name)
+            }
+            HereState.Removed -> SheetAction(stringResource(R.string.sync_to_this_phone), Icons.Sync) {
+                scope.launch {
+                    if (remover?.restoreHere(kind, uid) == false) {
+                        Toast.makeText(context, syncHereFailed, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
     when (val sheet = actions.sheet) {
         null -> Unit
         is PlaylistActions.Sheet.PlaylistMenu -> {
@@ -193,6 +227,7 @@ fun PlaylistSheets(
             val album = sheet.album
             val ref = CollectionRef(CollectionRef.Kind.Album, album.uid)
             val groupUid = sheet.groupUid
+            val here = hereAction(ProfileItemKind.Album, album.uid, album.title)
             MenuSheet(
                 actions,
                 album.title,
@@ -213,6 +248,7 @@ fun PlaylistSheets(
                             })
                         }
                     }
+                    if (here != null) add(here)
                     if (deleter != null) {
                         add(SheetAction(stringResource(R.string.delete_from_library_menu), Icons.Delete) {
                             actions.dialog = PlaylistActions.Dialog.DeleteFromLibrary(
@@ -226,6 +262,7 @@ fun PlaylistSheets(
         is PlaylistActions.Sheet.ArtistMenu -> {
             val artist = sheet.artist
             val ref = CollectionRef(CollectionRef.Kind.Artist, artist.uid)
+            val here = hereAction(ProfileItemKind.Artist, artist.uid, artist.name)
             MenuSheet(
                 actions,
                 artist.name,
@@ -233,6 +270,7 @@ fun PlaylistSheets(
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
                     add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    if (here != null) add(here)
                     if (deleter != null) {
                         add(SheetAction(stringResource(R.string.delete_from_library_menu), Icons.Delete) {
                             actions.dialog = PlaylistActions.Dialog.DeleteFromLibrary(
@@ -348,7 +386,81 @@ fun PlaylistSheets(
         is PlaylistActions.Dialog.DeleteFromLibrary -> if (deleter != null) {
             DeleteFromLibraryDialog(deleter, dialog.what, scope, onDismiss = { actions.dialog = null })
         }
+        is PlaylistActions.Dialog.RemoveHere -> if (remover != null) {
+            RemoveHereDialog(remover, dialog, scope, onDismiss = { actions.dialog = null })
+        }
     }
+}
+
+/**
+ * Asks before removing an album or artist from this phone only: how many files go from here,
+ * how many originals imported here stay until an archive has them, that it stays in the
+ * library and on the other devices, and how to get it back. Remove waits for the count.
+ * Afterwards a toast says if it failed, or if some files couldn't be removed.
+ */
+@Composable
+private fun RemoveHereDialog(
+    remover: DeviceRemover,
+    what: PlaylistActions.Dialog.RemoveHere,
+    // Outlives the dialog, which closes as the removal starts, for the toasts after it.
+    scope: CoroutineScope,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current.applicationContext
+    val failed = stringResource(R.string.remove_here_failed)
+    val resources = context.resources
+    val name = what.name.ifEmpty { stringResource(R.string.unknown_value) }
+    val preview by produceState<HerePreview?>(null, what) {
+        val found = remover.herePreview(what.kind, what.uid)
+        if (found == null) {
+            Toast.makeText(context, failed, Toast.LENGTH_LONG).show()
+            onDismiss()
+        } else {
+            value = found
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.remove_from_this_phone_title, name)) },
+        text = {
+            preview?.let {
+                val parts = buildList {
+                    if (it.files > 0) add(pluralStringResource(R.plurals.remove_here_files, it.files, it.files))
+                    else if (it.kept == 0) add(stringResource(R.string.remove_here_no_files))
+                    if (it.kept > 0) add(pluralStringResource(R.plurals.remove_here_kept, it.kept, it.kept))
+                    add(stringResource(R.string.remove_from_this_phone_back))
+                }
+                Text(parts.joinToString(" "))
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = preview != null,
+                onClick = {
+                    val kept = preview?.kept ?: 0
+                    onDismiss()
+                    scope.launch {
+                        val result = remover.removeHere(what.kind, what.uid)
+                        if (result == null) {
+                            Toast.makeText(context, failed, Toast.LENGTH_LONG).show()
+                        } else if (result.filesKept > kept) {
+                            val n = result.filesKept - kept
+                            Toast.makeText(
+                                context,
+                                resources.getQuantityString(R.plurals.remove_here_in_use, n, n),
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                },
+            ) {
+                Text(stringResource(R.string.remove), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        },
+    )
 }
 
 /**

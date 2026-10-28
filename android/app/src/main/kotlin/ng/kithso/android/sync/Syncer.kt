@@ -9,14 +9,23 @@ import android.util.Log
 import androidx.compose.runtime.Immutable
 import ng.kithso.core.ConfirmState
 import ng.kithso.core.CoreSync
+import ng.kithso.core.HerePreview
+import ng.kithso.core.HereResult
+import ng.kithso.core.HereState
 import ng.kithso.core.MusicCoreException
 import ng.kithso.core.NearbyDevice
+import ng.kithso.core.ProfileItemKind
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncEstimate
 import ng.kithso.core.SyncProfile
 import ng.kithso.core.VerifyResult
+import ng.kithso.core.hereState as coreHereState
+import ng.kithso.core.herePreview as coreHerePreview
+import ng.kithso.core.removeHere as coreRemoveHere
+import ng.kithso.core.restoreHere as coreRestoreHere
 import ng.kithso.android.data.CoreLibrarySource
+import ng.kithso.android.data.DeviceRemover
 import ng.kithso.android.data.ProfileChoices
 import java.io.File
 import java.net.Inet4Address
@@ -129,7 +138,7 @@ class Syncer(
     deviceName: String,
     private val scope: CoroutineScope,
     private val onRenamed: (String) -> Unit = {},
-) {
+) : DeviceRemover {
     private val thread = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow(SyncStatus(deviceName))
     val status: StateFlow<SyncStatus> = state
@@ -302,6 +311,38 @@ class Syncer(
      * library isn't the group's.
      */
     suspend fun estimate(uid: String, profile: SyncProfile): SyncEstimate = onCore { it.estimate(uid, profile) }
+
+    // Remove from this phone ([DeviceRemover]). Like the profile calls, these work whenever
+    // sync has been opened; failures are logged and reported as null or false.
+
+    override suspend fun hereState(kind: ProfileItemKind, uid: String): HereState = try {
+        onCore { it.coreHereState(kind, uid) }
+    } catch (e: MusicCoreException) {
+        HereState.Unavailable
+    }
+
+    override suspend fun herePreview(kind: ProfileItemKind, uid: String): HerePreview? = try {
+        onCore { it.coreHerePreview(kind, uid) }
+    } catch (e: MusicCoreException) {
+        Log.w(TAG, "Couldn't work out removing $uid", e)
+        null
+    }
+
+    override suspend fun removeHere(kind: ProfileItemKind, uid: String): HereResult? = try {
+        onCore { it.coreRemoveHere(kind, uid) }.also { source.refresh() }
+    } catch (e: MusicCoreException) {
+        Log.w(TAG, "Couldn't remove $uid from this phone", e)
+        null
+    }
+
+    override suspend fun restoreHere(kind: ProfileItemKind, uid: String): Boolean = try {
+        onCore { it.coreRestoreHere(kind, uid) }
+        syncNow() // bring it back soon, rather than at the next scheduled sync
+        true
+    } catch (e: MusicCoreException) {
+        Log.w(TAG, "Couldn't sync $uid to this phone again", e)
+        false
+    }
 
     /** What a profile can select, from the whole library. Throws MusicCoreException. */
     suspend fun profileChoices(): ProfileChoices = source.profileChoices()

@@ -9,6 +9,9 @@
 /* Throws MusicCoreException(status) and returns status. */
 mc_status throw_status(JNIEnv *env, mc_status st);
 
+/* The mc_sync of a CoreSync's handle (jni_sync_here.c). */
+mc_sync *jni_sync_of(jlong handle);
+
 /* A Java string for s, or NULL for NULL. */
 jstring new_string(JNIEnv *env, const char *s);
 

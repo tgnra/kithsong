@@ -18,6 +18,9 @@ target_sources(kithsong_jni PRIVATE jni_settings.c)
 # Deleting albums, artists and tracks (DeleteNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_delete.c)
 
+# Removing an album or artist from this phone only (SyncHereNatives), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_sync_here.c)
+
 # The native libraries' license texts, for the apps' licence screens (build.gradle.kts).
 if(KITHSONG_LICENSES_DIR)
   include("${KITHSONG_ROOT}/cmake/Licenses.cmake")
