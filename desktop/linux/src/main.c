@@ -2,18 +2,22 @@
  *
  *   AdwToolbarView
  *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar [shuffle]  [import][settings]
- *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Recents / Devices)
- *      +- GtkStack of pages: "library" | "search" (search_view.c) | "import" (import_view.c)
- *         | "device" (device_view.c)
+ *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
+ *      |                    / Recents / Devices)
+ *      +- GtkStack of pages: "library" | "artists" (artist_view.c) | "search" (search_view.c)
+ *         | "import" (import_view.c) | "device" (device_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
  *            +- GtkStack: empty-state page | GtkGridView of albums (virtualised)
  *                         | empty-state page | GtkGridView of playlists
+ *                         | album groups and a group's albums (album_groups.c)
  *
  * The album and playlist grids are album_grid.c, the track list track_list.c, the
  * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
  * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, Settings' Move
  * Library move_library.c, the Add to Playlist dialog add_to_playlist.c and the Rename and
- * Delete Playlist dialogs playlist_dialogs.c and the Search page search_view.c. The sidebar's
+ * Delete Playlist dialogs playlist_dialogs.c, the Album groups page album_groups.c (its
+ * dialogs album_group_dialogs.c), the Artists page artist_view.c and the Search page
+ * search_view.c. The sidebar's
  * Recents section is recents.c, and
  * its Devices section and sync are devices.c, which adds a device's page (device_view.c) to
  * the stack of pages as "device". The playback buttons
@@ -28,7 +32,9 @@
 
 #include "add_to_playlist.h"
 #include "album_grid.h"
+#include "album_groups.h"
 #include "app.h"
+#include "artist_view.h"
 #include "cover.h"
 #include "devices.h"
 #include "import_view.h"
@@ -199,21 +205,26 @@ static gboolean on_close_request(GtkWindow *win, gpointer user) {
 /* --- Sidebar --- */
 
 static void show_album(app *a);
+static GtkWidget *shown_grid(app *a);
+static void update_buttons(app *a);
 
-/* Albums, Artists and Playlists all lead back to the library page, e.g. from Import.
- * Playlists shows the playlist grid; the others the album grid. */
+/* Albums, Playlists and Album groups lead back to the library page, e.g. from Import, each
+ * with its grid; Artists to the Artists page. The grid left loses its selection, so the
+ * track list closes. */
 static void on_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
   (void)list;
   app *a = user;
   devices_unselect();
   gtk_list_box_unselect_all(a->top_nav);
-  gboolean playlists = gtk_list_box_row_get_index(row) == 2;
-  if (playlists != a->show_playlists) {
-    album_grid_unselect(playlists ? a->album_grid : a->playlist_grid);
-    a->show_playlists = playlists;
+  app_view view = (app_view)gtk_list_box_row_get_index(row);
+  if (view != a->view) {
+    GtkWidget *grid = shown_grid(a);
+    if (grid) album_grid_unselect(grid);
+    a->view = view;
     app_reload_library(a);
   }
-  show_page(a, "library");
+  show_page(a, view == APP_VIEW_ARTISTS ? "artists" : "library");
+  update_buttons(a);
 }
 
 static GtkWidget *nav_row(const char *icon, const char *label) {
@@ -278,12 +289,13 @@ static GtkWidget *build_sidebar(app *a) {
   gtk_widget_set_margin_bottom(separator, 3);
   gtk_box_append(GTK_BOX(box), separator);
 
-  /* Artists shows the album grid for now, as on Windows. */
+  /* In app_view's order. */
   GtkWidget *nav = gtk_list_box_new();
   gtk_widget_add_css_class(nav, "navigation-sidebar");
   gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("media-optical-symbolic", mc_str(MC_STR_SECTION_ALBUMS)));
   gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("avatar-default-symbolic", mc_str(MC_STR_SECTION_ARTISTS)));
   gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("view-list-symbolic", mc_str(MC_STR_SECTION_PLAYLISTS)));
+  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("folder-symbolic", mc_str(MC_STR_SECTION_ALBUM_GROUPS)));
   gtk_list_box_select_row(GTK_LIST_BOX(nav), gtk_list_box_get_row_at_index(GTK_LIST_BOX(nav), 0));
   g_signal_connect(nav, "row-activated", G_CALLBACK(on_nav_activated), a);
   gtk_box_append(GTK_BOX(box), nav);
@@ -313,8 +325,14 @@ static void set_action_enabled(app *a, const char *name, gboolean enabled) {
   if (action) g_simple_action_set_enabled(G_SIMPLE_ACTION(action), enabled);
 }
 
-/* Whether the shown album has anything to play. */
-static gboolean album_playable(void) {
+/* An artist's page is what's shown: Play plays the artist rather than the album. */
+static gboolean artist_shown(app *a) {
+  return !g_strcmp0(gtk_stack_get_visible_child_name(a->pages), "artists") && artist_view_artist();
+}
+
+/* Whether the shown album (or artist) has anything to play. */
+static gboolean album_playable(app *a) {
+  if (artist_shown(a)) return artist_view_playable();
   for (int i = 0, n = track_list_count(); i < n; i++)
     if (track_list_item_at(i).path) return TRUE;
   return FALSE;
@@ -327,7 +345,7 @@ static void update_buttons(app *a) {
                            playing ? "media-playback-pause-symbolic" : "media-playback-start-symbolic");
   gtk_widget_set_tooltip_text(play_button, mc_str(playing ? MC_STR_PAUSE : MC_STR_PLAY));
   set_action_enabled(a, "previous", playback_has_current());
-  set_action_enabled(a, "play-pause", playback_has_current() || album_playable());
+  set_action_enabled(a, "play-pause", playback_has_current() || album_playable(a));
   set_action_enabled(a, "next", playback_has_next());
 }
 
@@ -345,7 +363,9 @@ static void on_previous(GSimpleAction *action, GVariant *param, gpointer user) {
 static void on_play_pause(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
-  if (!playback_toggle()) app_play_album(user, -1); /* nothing queued yet: the album that's shown */
+  if (playback_toggle()) return;
+  if (artist_shown(user)) artist_view_play(-1); /* nothing queued yet: the artist or album that's shown */
+  else app_play_album(user, -1);
 }
 
 static void on_next(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -557,14 +577,22 @@ void app_play_album(app *a, int start) {
 
 /* --- Albums, playlists and tracks --- */
 
+/* The grid whose selection the track list shows: on Album groups, the open group's albums
+ * (NULL while the groups show); on Artists, none. */
 static GtkWidget *shown_grid(app *a) {
-  return a->show_playlists ? a->playlist_grid : a->album_grid;
+  switch (a->view) {
+    case APP_VIEW_PLAYLISTS: return a->playlist_grid;
+    case APP_VIEW_ALBUM_GROUPS: return album_groups_album_grid();
+    case APP_VIEW_ARTISTS: return NULL;
+    default: return a->album_grid;
+  }
 }
 
 /* Shows the selected album's or playlist's tracks, or hides the track list when none is
  * selected. */
 static void show_album(app *a) {
-  AlbumItem *album = album_grid_selection(shown_grid(a));
+  GtkWidget *grid = shown_grid(a);
+  AlbumItem *album = grid ? album_grid_selection(grid) : NULL;
   track_list_show(a->lib, album);
   adw_overlay_split_view_set_show_sidebar(a->album_split, album != NULL);
   update_buttons(a);
@@ -586,8 +614,24 @@ static void on_track_play_all(void *user, gboolean shuffled) {
 }
 
 static void on_tracks_close(void *user) {
-  album_grid_unselect(shown_grid(user));
+  GtkWidget *grid = shown_grid(user);
+  if (grid) album_grid_unselect(grid);
   show_album(user);
+}
+
+/* An album clicked on an artist's page: it opens on the Albums page. */
+static void on_artist_album(void *user, const char *album_uid) {
+  app_open(user, FALSE, album_uid);
+}
+
+/* Opening an album group, or going back from one: the track list follows. */
+static void on_group_navigated(void *user) {
+  show_album(user);
+}
+
+/* Right-clicking an album in the album grid: Add to album group. */
+static void on_album_menu(void *user, GtkWidget *grid, AlbumItem *album, double x, double y) {
+  album_groups_album_menu(user, grid, album, NULL, x, y);
 }
 
 static void on_playlists_changed(void *user) {
@@ -642,8 +686,11 @@ void app_reload_library(app *a) {
                                                            : MC_STR_NO_PLAYLISTS_TITLE));
   adw_status_page_set_description(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT
                                                                  : MC_STR_NO_PLAYLISTS_TEXT));
-  const char *page = a->show_playlists ? (playlists > 0 ? "playlists" : "no-playlists")
-                                       : (albums > 0 ? "grid" : "empty");
+  album_groups_reload(a); /* if the open group went, back to the groups */
+  artist_view_reload();
+  const char *page = a->view == APP_VIEW_PLAYLISTS      ? (playlists > 0 ? "playlists" : "no-playlists")
+                     : a->view == APP_VIEW_ALBUM_GROUPS ? "groups"
+                                                        : (albums > 0 ? "grid" : "empty");
   gtk_stack_set_visible_child_name(a->albums, page);
   show_album(a); /* if the album went, the selection did too */
   recents_refresh(a);
@@ -651,11 +698,26 @@ void app_reload_library(app *a) {
   search_view_refresh();
 }
 
-void app_open(app *a, gboolean playlist, const char *uid) {
-  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->nav, playlist ? 2 : 0);
+/* Picks view in the sidebar, as clicking it does. */
+static void open_view(app *a, app_view view) {
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->nav, (int)view);
   gtk_list_box_select_row(a->nav, row);
   on_nav_activated(a->nav, row, a);
+}
+
+void app_open(app *a, gboolean playlist, const char *uid) {
+  open_view(a, playlist ? APP_VIEW_PLAYLISTS : APP_VIEW_ALBUMS);
   if (album_grid_select(shown_grid(a), uid)) show_album(a);
+}
+
+void app_open_artist(app *a, const char *uid) {
+  open_view(a, APP_VIEW_ARTISTS);
+  artist_view_open(uid);
+}
+
+void app_open_album_group(app *a, const char *uid) {
+  open_view(a, APP_VIEW_ALBUM_GROUPS);
+  album_groups_open(a, uid);
 }
 
 void app_open_track(app *a, const char *album_uid, const char *track_uid) {
@@ -755,10 +817,12 @@ static GtkWidget *build_albums(app *a) {
   GtkWidget *stack = gtk_stack_new();
   gtk_stack_add_named(GTK_STACK(stack), empty, "empty");
   a->album_grid = album_grid_new(mc_str(MC_STR_SECTION_ALBUMS), on_album_changed, a);
+  album_grid_set_menu(a->album_grid, on_album_menu, a);
   gtk_stack_add_named(GTK_STACK(stack), a->album_grid, "grid");
   gtk_stack_add_named(GTK_STACK(stack), no_playlists, "no-playlists");
   a->playlist_grid = album_grid_new(mc_str(MC_STR_SECTION_PLAYLISTS), on_album_changed, a);
   gtk_stack_add_named(GTK_STACK(stack), a->playlist_grid, "playlists");
+  gtk_stack_add_named(GTK_STACK(stack), album_groups_new(a, on_album_changed, on_group_navigated), "groups");
   a->albums = GTK_STACK(stack);
   return stack;
 }
@@ -885,6 +949,9 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   GtkWidget *pages = gtk_stack_new();
   a->pages = GTK_STACK(pages);
   gtk_stack_add_named(a->pages, album_split, "library");
+  const artist_view_callbacks artists_cb = {on_shuffle, on_track_add_to_playlist, on_artist_album, playback_changed, a};
+  a->artists = artist_view_new(a, &artists_cb);
+  gtk_stack_add_named(a->pages, a->artists, "artists");
   a->search = search_view_new(a);
   gtk_stack_add_named(a->pages, a->search, "search");
   const import_view_callbacks import_cb = {on_import_library_changed, on_import_session,

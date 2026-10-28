@@ -133,7 +133,7 @@ static char *ask_name(HWND owner, const wchar_t *caption, const wchar_t *ok, con
 
 BOOL playlist_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]) {
   if (!lib) return FALSE;
-  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_PLAYLIST), mc_wstr_mnemonic(MC_STR_WINDOWS_CREATE), NULL);
+  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_PLAYLIST), mc_wstr_mnemonic(MC_STR_CREATE), NULL);
   if (!name) return FALSE;
   mc_status st = mc_playlist_create(lib, name, out_uid);
   free(name);
@@ -222,7 +222,7 @@ BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const 
 
 BOOL album_group_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]) {
   if (!lib) return FALSE;
-  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_ALBUM_GROUP), mc_wstr_mnemonic(MC_STR_WINDOWS_CREATE), NULL);
+  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_ALBUM_GROUP), mc_wstr_mnemonic(MC_STR_CREATE), NULL);
   if (!name) return FALSE;
   mc_status st = mc_album_group_create(lib, name, out_uid);
   free(name);

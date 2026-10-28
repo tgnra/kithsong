@@ -65,8 +65,13 @@ static void on_row_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user
   char copy[MC_UID_STRLEN], album_copy[MC_UID_STRLEN];
   g_strlcpy(copy, uid, sizeof copy);
   g_strlcpy(album_copy, album_uid ? album_uid : "", sizeof album_copy);
-  if (album_copy[0]) app_open_track(v.a, album_copy, copy);
-  else app_open(v.a, TRUE, copy); /* only playlists' rows have no album */
+  switch ((mc_search_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"))) {
+    case MC_SEARCH_TRACK: app_open_track(v.a, album_copy, copy); break;
+    case MC_SEARCH_ARTIST: app_open_artist(v.a, copy); break;
+    case MC_SEARCH_ALBUM_GROUP: app_open_album_group(v.a, copy); break;
+    case MC_SEARCH_PLAYLIST: app_open(v.a, TRUE, copy); break;
+    default: app_open(v.a, FALSE, copy); break;
+  }
 }
 
 /* --- Sections --- */
@@ -99,9 +104,11 @@ static GtkWidget *album_section(const mc_search_results *res) {
   return flow;
 }
 
-/* A track's artist and album, or whichever is known; a playlist's "Playlist". g_free it. */
+/* A track's artist and album, or whichever is known; a playlist's "Playlist", a group's
+ * "Album group". g_free it. */
 static char *hit_subtitle(const mc_search_hit *h) {
   if (h->kind == MC_SEARCH_PLAYLIST) return h->is_smart ? NULL : g_strdup(mc_str(MC_STR_PLAYLIST));
+  if (h->kind == MC_SEARCH_ALBUM_GROUP) return h->is_smart ? NULL : g_strdup(mc_str(MC_STR_ALBUM_GROUP));
   if (h->kind != MC_SEARCH_TRACK) return NULL;
   if (h->artist && h->album) {
     char *s = mc_format_alloc(mc_str(MC_STR_TRACK_BYLINE), MC_S(h->artist), MC_S(h->album));
@@ -112,13 +119,22 @@ static char *hit_subtitle(const mc_search_hit *h) {
   return g_strdup(h->artist ? h->artist : h->album);
 }
 
-/* Whether this computer has a page to open the hit on. */
+/* Whether grid has the item with uid. */
+static gboolean grid_has(GtkWidget *grid, const char *uid) {
+  AlbumItem *item = uid[0] ? album_grid_find(grid, uid) : NULL;
+  if (item) g_object_unref(item);
+  return item != NULL;
+}
+
+/* Whether this computer has a page to open the hit on. Smart lists have none yet. */
 static gboolean hit_opens(const mc_search_hit *h) {
-  if (h->kind == MC_SEARCH_TRACK) return h->album_uid[0] != '\0';
-  if (h->kind != MC_SEARCH_PLAYLIST || h->is_smart) return FALSE;
-  AlbumItem *playlist = album_grid_find(v.a->playlist_grid, h->uid); /* only playable ones */
-  if (playlist) g_object_unref(playlist);
-  return playlist != NULL;
+  switch (h->kind) {
+    case MC_SEARCH_ARTIST: return TRUE;
+    case MC_SEARCH_TRACK: return grid_has(v.a->album_grid, h->album_uid); /* gone since the index was built? */
+    case MC_SEARCH_PLAYLIST: return !h->is_smart && grid_has(v.a->playlist_grid, h->uid); /* only playable ones */
+    case MC_SEARCH_ALBUM_GROUP: return !h->is_smart;
+    default: return FALSE;
+  }
 }
 
 static GtkWidget *hit_row(const mc_search_hit *h) {
@@ -134,6 +150,7 @@ static GtkWidget *hit_row(const mc_search_hit *h) {
   gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), opens);
   if (opens) {
     g_object_set_data_full(G_OBJECT(row), "uid", g_strdup(h->uid), g_free);
+    g_object_set_data(G_OBJECT(row), "kind", GINT_TO_POINTER(h->kind));
     if (h->kind == MC_SEARCH_TRACK) g_object_set_data_full(G_OBJECT(row), "album-uid", g_strdup(h->album_uid), g_free);
     adw_action_row_add_suffix(ADW_ACTION_ROW(row), gtk_image_new_from_icon_name("go-next-symbolic"));
   }
@@ -168,7 +185,7 @@ static void show_results(const char *query) {
   int kinds = 0;
   for (int i = 0; res && i < res->count; i++) {
     mc_search_kind k = res->items[i].kind;
-    if (!seen[k]) seen[k] = TRUE, order[kinds++] = k;
+    if ((unsigned)k < KIND_COUNT && !seen[k]) seen[k] = TRUE, order[kinds++] = k; /* a newer core's kinds are skipped */
   }
 
   int shown = 0;

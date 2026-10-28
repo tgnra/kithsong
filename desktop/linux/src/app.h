@@ -7,29 +7,42 @@
 
 #include "musiccore/musiccore.h"
 
+/* The sidebar's library pages, in its order (nav's rows). */
+typedef enum app_view {
+  APP_VIEW_ALBUMS,
+  APP_VIEW_ARTISTS,
+  APP_VIEW_PLAYLISTS,
+  APP_VIEW_ALBUM_GROUPS,
+} app_view;
+
 typedef struct app {
   mc_library *lib;
   GtkApplication *gapp;
   GtkWindow *win;
   char *settings_dir;   /* ~/.config/kithsong */
-  char *art_dir;        /* settings_dir/playlist-art: playlists' pictures, see mc_playlist_art() */
-  GtkStack *pages;      /* "library": the album grid and track list | "search" | "import" | "device" */
+  char *art_dir;        /* settings_dir/playlist-art: playlists' and album groups' pictures, see
+                         * mc_playlist_art() */
+  GtkStack *pages;      /* "library": the album grids and track list | "artists" | "search"
+                         * | "import" | "device" */
   GtkWidget *import;    /* the import page, import_view.c */
   GtkWidget *search;    /* the search page, search_view.c */
+  GtkWidget *artists;   /* the Artists page, artist_view.c */
   GtkWidget *sidebar;
   GtkListBox *top_nav;  /* the sidebar's Home (not available yet) and Search, above nav */
-  GtkListBox *nav;      /* the sidebar's Albums, Artists and Playlists */
+  GtkListBox *nav;      /* the sidebar's Albums, Artists, Playlists and Album groups */
   GtkWidget *settings;  /* the header bar's Settings button */
-  GtkStack *albums;     /* "empty" status page | "grid" | "no-playlists" status page | "playlists" */
+  GtkStack *albums;     /* "empty" status page | "grid" | "no-playlists" status page | "playlists"
+                         * | "groups" (album_groups.c) */
   AdwStatusPage *empty;        /* "No Albums" */
   AdwStatusPage *no_playlists; /* "No playlists yet", or none to play here */
   GtkWidget *album_grid, *playlist_grid;
-  gboolean show_playlists; /* the sidebar's Playlists is picked, rather than Albums or Artists */
+  app_view view;        /* the sidebar's library page picked last */
   AdwOverlaySplitView *album_split; /* the track list is its sidebar, at the end */
 } app;
 
-/* Reloads the album and playlist grids and the shown tracks from the library, keeping the
- * selection and scroll position. Call whenever the library changes, e.g. after an import. */
+/* Reloads the album and playlist grids, the album groups, the artists and the shown tracks
+ * from the library, keeping the selection and scroll position. Call whenever the library
+ * changes, e.g. after an import. */
 void app_reload_library(app *a);
 
 /* Plays the album or playlist shown in the track list, from track start on (or with start
@@ -42,5 +55,10 @@ void app_open(app *a, gboolean playlist, const char *uid);
 
 /* Shows the album with album_uid, as app_open() does, with its track track_uid selected. */
 void app_open_track(app *a, const char *album_uid, const char *track_uid);
+
+/* Opens the page of the artist, or of the album group, with uid, and puts it first in the
+ * recents. */
+void app_open_artist(app *a, const char *uid);
+void app_open_album_group(app *a, const char *uid);
 
 #endif

@@ -3,11 +3,14 @@
  *   Recents
  *   [album]    Northern Lights
  *   [playlist] Road Trip
+ *   [artist]   Low
  *
- * The albums and playlists last played, on this computer or another device (recents are
- * library data and sync with it), newest first and at most ten; the section hides while
- * there are none. Picking one opens it on the Albums or Playlists page (app_open()). Playing
- * an album or playlist records it (app_play_album()). */
+ * The albums and playlists last played and the artists and album groups last opened, on this
+ * computer or another device (recents are library data and sync with it), newest first and
+ * at most ten; the section hides while there are none. Picking one opens it on its page
+ * (app_open(), app_open_artist(), app_open_album_group()). Playing an album or playlist
+ * records it (app_play_album()), as opening an artist's or group's page does. Smart lists
+ * are left out until there's a page for them. */
 #ifndef KITHSONG_RECENTS_H
 #define KITHSONG_RECENTS_H
 

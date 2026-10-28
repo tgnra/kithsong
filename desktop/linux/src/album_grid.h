@@ -5,7 +5,10 @@
  * The same grid shows playlists, with their pictures (mc_playlist_art(), made off the UI
  * thread after each reload) and the track count beneath the name. Clicking a tile (or
  * moving to it with the keyboard) selects it, and the selection picks what the track list
- * shows. Each grid has a selection of its own. */
+ * shows. Each grid has a selection of its own.
+ *
+ * Album groups show the same way, with their pictures (mc_album_group_art()) and the album
+ * count beneath the name; a group's own page shows its albums in a grid of their own. */
 #ifndef KITHSONG_ALBUM_GRID_H
 #define KITHSONG_ALBUM_GRID_H
 
@@ -16,18 +19,24 @@
 #define ALBUM_TYPE_ITEM (album_item_get_type())
 G_DECLARE_FINAL_TYPE(AlbumItem, album_item, ALBUM, ITEM, GObject)
 
-/* One album, as mc_library_list_albums() gives it, or one playlist. Read-only. */
+/* One album, as mc_library_list_albums() gives it, or one playlist or album group.
+ * Read-only. */
 struct _AlbumItem {
   GObject parent;
   char uid[MC_UID_STRLEN];
   char *title;      /* "Untitled" if it has none; a playlist's name */
-  char *artist;     /* NULL if unknown, and for playlists */
+  char *artist;     /* NULL if unknown, and for playlists and groups */
   char *cover_file; /* the album's cover as found when the item was made (a playlist's picture,
                      * once looked for); NULL if it has none */
   int year;         /* 0 if unknown */
   gboolean is_playlist;
-  int track_count;  /* playlists only */
+  gboolean is_group; /* an album group */
+  int track_count;  /* playlists only; for a group, its albums */
+  char *subtitle;   /* shown beneath the title in place of the artist, or NULL */
 };
+
+/* An album's item, as the album grid makes them. */
+AlbumItem *album_item_new(const mc_album_info *info);
 
 /* label names the grid for screen readers. changed is called when the user changes the
  * selection, not by album_grid_reload() or album_grid_unselect(), and when the selected
@@ -42,6 +51,29 @@ GtkWidget *album_grid_new(const char *label, void (*changed)(void *user), void *
  * mc_playlist_art()). */
 int album_grid_reload(GtkWidget *grid, mc_library *lib);
 int album_grid_reload_playlists(GtkWidget *grid, mc_library *lib, const char *art_dir, int *hidden);
+/* The same for every manual album group (mc_library_list_album_groups()), with their
+ * pictures from mc_album_group_art(); and for a group's own albums, in its order. A grid
+ * should show only one of albums, playlists or groups. *found is FALSE if the group has
+ * gone (it then shows nothing). */
+int album_grid_reload_groups(GtkWidget *grid, mc_library *lib, const char *art_dir);
+int album_grid_reload_group_albums(GtkWidget *grid, mc_library *lib, const char *group_uid, gboolean *found);
+
+/* Right-clicking a tile calls menu with its item (borrowed) and where the click was, in
+ * the grid's coordinates (the widget album_grid_new() returned), e.g. to pop up a menu
+ * there. */
+void album_grid_set_menu(GtkWidget *grid,
+                         void (*menu)(void *user, GtkWidget *grid, AlbumItem *item, double x, double y),
+                         void *user);
+/* Pops up menu in the grid at x, y (as menu above gives them). Its actions resolve from the
+ * grid's ancestors, e.g. the window. */
+void album_grid_popup(GtkWidget *grid, GMenuModel *menu, double x, double y);
+/* A tile was activated: clicked, if single_click, else double-clicked; or Enter on it. For
+ * grids whose tiles open somewhere else rather than being selected (album groups). */
+void album_grid_set_activate(GtkWidget *grid, gboolean single_click, void (*activate)(void *user, AlbumItem *item),
+                             void *user);
+
+/* Puts the keyboard focus in the grid. */
+void album_grid_focus(GtkWidget *grid);
 
 /* The selected tile's item (borrowed), or NULL. */
 AlbumItem *album_grid_selection(GtkWidget *grid);

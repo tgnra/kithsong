@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "artist_view.h"
 #include "mpris.h"
 #include "now_playing.h"
 #include "track_list.h"
@@ -108,6 +109,7 @@ static void refresh(void) {
   now_playing_set_position((int)st.position_ms);
   /* Stopped, the track stays in the now-playing strip, ready to play, but isn't marked. */
   track_list_set_playing(it && st.state != MC_PLAYER_STOPPED ? it->uid : NULL);
+  artist_view_set_playing(it && st.state != MC_PLAYER_STOPPED ? it->uid : NULL);
 
   if (new_track || new_state || new_shuffle) {
     set_window_title(st.state != MC_PLAYER_STOPPED ? it : NULL);
@@ -181,6 +183,7 @@ void playback_clear(void) {
   mpris_set_track(NULL, NULL, NULL, NULL, NULL, 0);
   mpris_set_state(MC_PLAYER_STOPPED, FALSE, FALSE);
   track_list_set_playing(NULL);
+  artist_view_set_playing(NULL);
   set_window_title(NULL);
   if (s.changed) s.changed(s.user);
 }

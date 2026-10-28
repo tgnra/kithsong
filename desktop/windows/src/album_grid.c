@@ -805,7 +805,7 @@ static void show_group_menu(const char *uid, const wchar_t *name, POINT pt) {
   wchar_t *title = _wcsdup(name ? name : L"");
   HMENU menu = CreatePopupMenu();
   AppendMenuW(menu, MF_STRING, CMD_RENAME_GROUP, mc_wstr_mnemonic(MC_STR_PLAYLIST_RENAME_MENU));
-  AppendMenuW(menu, MF_STRING, CMD_DELETE_GROUP, mc_wstr_mnemonic(MC_STR_WINDOWS_ALBUM_GROUP_DELETE_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_GROUP, mc_wstr_mnemonic(MC_STR_ALBUM_GROUP_DELETE_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
   DestroyMenu(menu);
   HWND owner = GetAncestor(g.wnd, GA_ROOT);
