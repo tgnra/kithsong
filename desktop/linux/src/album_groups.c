@@ -10,7 +10,8 @@ static struct {
   app *a;
   void (*album_changed)(void *user);
   void (*navigated)(void *user);
-  GtkWidget *stack;        /* "none" status page | "groups" grid | "group" page */
+  GtkWidget *stack;        /* "list" (the header and list_stack) | "group" page */
+  GtkWidget *list_stack;   /* "none" status page | "groups" grid */
   GtkWidget *groups;       /* the groups' grid */
   GtkWidget *albums;       /* the open group's albums' grid */
   GtkWidget *albums_stack; /* "empty" status page | "albums" */
@@ -372,6 +373,17 @@ static GtkWidget *build_group_page(app *a) {
   return page;
 }
 
+/* The header's +: a new, empty group, which opens. */
+static void on_group_created(void *user, const char *uid) {
+  app_reload_library(user);
+  app_open_album_group(user, uid);
+}
+
+static void on_new_group(GtkButton *button, gpointer user) {
+  app *a = user;
+  album_group_new_present(GTK_WIDGET(button), a->lib, on_group_created, a);
+}
+
 GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*navigated)(void *user)) {
   v.a = a;
   v.album_changed = album_changed;
@@ -380,10 +392,20 @@ GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*na
   album_grid_set_activate(v.groups, TRUE, on_group_activated, a);
   album_grid_set_menu(v.groups, on_group_menu, a);
 
-  v.stack = gtk_stack_new();
-  gtk_stack_add_named(GTK_STACK(v.stack),
+  /* The groups under a header with the page's name and New album group (+). */
+  v.list_stack = gtk_stack_new();
+  gtk_widget_set_vexpand(v.list_stack, TRUE);
+  gtk_stack_add_named(GTK_STACK(v.list_stack),
                       status_page("folder-symbolic", MC_STR_NO_ALBUM_GROUPS_TITLE, MC_STR_NO_ALBUM_GROUPS_TEXT), "none");
-  gtk_stack_add_named(GTK_STACK(v.stack), v.groups, "groups");
+  gtk_stack_add_named(GTK_STACK(v.list_stack), v.groups, "groups");
+  GtkWidget *list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_add_css_class(list, "view");
+  gtk_box_append(GTK_BOX(list), app_list_header(mc_str(MC_STR_SECTION_ALBUM_GROUPS), mc_str(MC_STR_NEW_ALBUM_GROUP),
+                                                G_CALLBACK(on_new_group), a));
+  gtk_box_append(GTK_BOX(list), v.list_stack);
+
+  v.stack = gtk_stack_new();
+  gtk_stack_add_named(GTK_STACK(v.stack), list, "list");
   gtk_stack_add_named(GTK_STACK(v.stack), build_group_page(a), "group");
   return v.stack;
 }
@@ -395,7 +417,8 @@ int album_groups_reload(app *a) {
     v.open[0] = '\0';
     clear_albums();
   }
-  gtk_stack_set_visible_child_name(GTK_STACK(v.stack), v.open[0] ? "group" : n ? "groups" : "none");
+  gtk_stack_set_visible_child_name(GTK_STACK(v.list_stack), n ? "groups" : "none");
+  gtk_stack_set_visible_child_name(GTK_STACK(v.stack), v.open[0] ? "group" : "list");
   return n;
 }
 

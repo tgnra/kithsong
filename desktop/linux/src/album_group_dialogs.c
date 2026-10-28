@@ -14,6 +14,7 @@ typedef struct ask {
   GtkWidget *parent, *entry;     /* entry: Create's and Rename's */
   const char *ok;                /* the response the entry enables */
   void (*changed)(void *user);
+  void (*created)(void *user, const char *uid); /* Create's, called after changed */
   void *user;
 } ask;
 
@@ -111,6 +112,7 @@ static void on_create_response(AdwAlertDialog *dialog, const char *response, gpo
     if (a->uid[0] && mc_album_group_add(a->lib, group, a->uid) != MC_OK)
       fail(a->parent, mc_str(MC_STR_ALBUM_GROUP_ADD_FAILED));
     changed(a);
+    if (a->created) a->created(a->user, group);
   }
   g_free(name);
 }
@@ -120,6 +122,16 @@ void album_group_create_present(GtkWidget *parent, mc_library *lib, const char *
   if (!lib || (album_uid && strlen(album_uid) >= MC_UID_STRLEN)) return;
   AdwDialog *dialog = name_dialog(mc_str(MC_STR_NEW_ALBUM_GROUP), parent, lib, album_uid, NULL, "create",
                                   MC_STR_CREATE, changed_cb, user);
+  g_signal_connect(dialog, "response", G_CALLBACK(on_create_response), NULL);
+  adw_dialog_present(dialog, parent);
+}
+
+void album_group_new_present(GtkWidget *parent, mc_library *lib, void (*created)(void *user, const char *uid),
+                             void *user) {
+  if (!lib) return;
+  AdwDialog *dialog = name_dialog(mc_str(MC_STR_NEW_ALBUM_GROUP), parent, lib, NULL, NULL, "create", MC_STR_CREATE,
+                                  NULL, user);
+  ask_of(ADW_ALERT_DIALOG(dialog))->created = created;
   g_signal_connect(dialog, "response", G_CALLBACK(on_create_response), NULL);
   adw_dialog_present(dialog, parent);
 }

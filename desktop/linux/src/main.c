@@ -105,12 +105,53 @@ static void on_import_done(void *user) {
   show_page(user, "library");
 }
 
+/* The empty Albums page suggests pairing while this computer isn't in a group, with the Pair
+ * with a device… button. */
 static void set_empty_description(app *a) {
-  char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION),
-                               MC_S(mc_str(a->lib ? MC_STR_EMPTY_TEXT : MC_STR_LIBRARY_OPEN_FAILED)),
-                               MC_S(mc_version()));
+  gboolean alone = a->lib && devices_sync_state() == DEVICES_ALONE;
+  enum mc_str_id text = !a->lib ? MC_STR_LIBRARY_OPEN_FAILED : alone ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
+                                                                     : MC_STR_EMPTY_TEXT;
+  char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION), MC_S(mc_str(text)), MC_S(mc_version()));
   adw_status_page_set_description(a->empty, desc);
   mc_free(desc);
+  if (a->pair) gtk_widget_set_visible(a->pair, alone);
+}
+
+/* Choose what to sync shows under "none of them have tracks on this device" once this
+ * computer is in a group. */
+static void set_no_playlists(app *a) {
+  gboolean hidden = a->hidden_playlists > 0;
+  adw_status_page_set_title(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE
+                                                           : MC_STR_NO_PLAYLISTS_TITLE));
+  adw_status_page_set_description(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT
+                                                                 : MC_STR_NO_PLAYLISTS_TEXT));
+  gtk_widget_set_visible(a->choose_sync, hidden && devices_sync_state() == DEVICES_GROUPED);
+}
+
+void app_update_empty_pages(app *a) {
+  if (!a->empty || !a->no_playlists) return; /* not built yet */
+  set_empty_description(a);
+  set_no_playlists(a);
+}
+
+GtkWidget *app_list_header(const char *title, const char *tooltip, GCallback clicked, gpointer user) {
+  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_margin_start(header, 18);
+  gtk_widget_set_margin_end(header, 18);
+  gtk_widget_set_margin_top(header, 12);
+  GtkWidget *label = gtk_label_new(title);
+  gtk_widget_add_css_class(label, "title-2");
+  gtk_label_set_xalign(GTK_LABEL(label), 0);
+  gtk_widget_set_hexpand(label, TRUE);
+  gtk_box_append(GTK_BOX(header), label);
+  GtkWidget *add = gtk_button_new_from_icon_name("list-add-symbolic");
+  gtk_widget_set_tooltip_text(add, tooltip);
+  gtk_widget_add_css_class(add, "flat");
+  gtk_widget_add_css_class(add, "circular");
+  gtk_widget_set_valign(add, GTK_ALIGN_CENTER);
+  g_signal_connect(add, "clicked", clicked, user);
+  gtk_box_append(GTK_BOX(header), add);
+  return header;
 }
 
 /* Deleted tracks whose files are back from the Trash come back into the library
@@ -136,6 +177,7 @@ static gboolean open_library(void *user, const char *dir) {
   playback_set_library(lib, a->settings_dir);
   mc_library_close(a->lib);
   a->lib = lib;
+  a->keep_playlist[0] = '\0';
   set_empty_description(a);
   restore_deleted(a);
   app_reload_library(a);
@@ -232,6 +274,7 @@ static void on_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user
     GtkWidget *grid = shown_grid(a);
     if (grid) album_grid_unselect(grid);
     a->view = view;
+    a->keep_playlist[0] = '\0'; /* a new playlist with nothing to play here is hidden again */
     app_reload_library(a);
   }
   show_page(a, view == APP_VIEW_ARTISTS ? "artists" : "library");
@@ -649,6 +692,25 @@ static void on_playlists_changed(void *user) {
   app_reload_library(user);
 }
 
+/* The Playlists header's +: the new playlist opens, and stays on the page while it has
+ * nothing to play here until another page is picked. */
+static void on_playlist_created(void *user, const char *uid) {
+  app *a = user;
+  g_strlcpy(a->keep_playlist, uid, sizeof a->keep_playlist);
+  app_reload_library(a);
+  app_open(a, TRUE, uid);
+}
+
+static void on_new_playlist(GtkButton *button, gpointer user) {
+  app *a = user;
+  playlist_create_present(GTK_WIDGET(button), a->lib, on_playlist_created, a);
+}
+
+static void on_choose_sync(GtkButton *button, gpointer user) {
+  (void)button, (void)user;
+  devices_open_self();
+}
+
 static void on_track_add_to_playlist(void *user, const char *track_uid) {
   app *a = user;
   add_to_playlist_present(GTK_WIDGET(a->win), a->lib, track_uid, on_playlists_changed, a);
@@ -712,16 +774,14 @@ static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
 
 void app_reload_library(app *a) {
   int albums = album_grid_reload(a->album_grid, a->lib);
-  int hidden = 0;
-  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir, &hidden);
+  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir, a->keep_playlist,
+                                              &a->hidden_playlists);
   /* Playlists with nothing to play here are hidden; say so rather than "No playlists yet". */
-  adw_status_page_set_title(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE
-                                                           : MC_STR_NO_PLAYLISTS_TITLE));
-  adw_status_page_set_description(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT
-                                                                 : MC_STR_NO_PLAYLISTS_TEXT));
+  set_no_playlists(a);
+  gtk_stack_set_visible_child_name(a->playlists, playlists > 0 ? "grid" : "none");
   album_groups_reload(a); /* if the open group went, back to the groups */
   artist_view_reload();
-  const char *page = a->view == APP_VIEW_PLAYLISTS      ? (playlists > 0 ? "playlists" : "no-playlists")
+  const char *page = a->view == APP_VIEW_PLAYLISTS      ? "playlists"
                      : a->view == APP_VIEW_ALBUM_GROUPS ? "groups"
                                                         : (albums > 0 ? "grid" : "empty");
   gtk_stack_set_visible_child_name(a->albums, page);
@@ -839,22 +899,40 @@ static GtkWidget *build_albums(app *a) {
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(empty), "folder-music-symbolic");
   adw_status_page_set_title(ADW_STATUS_PAGE(empty), mc_str(MC_STR_EMPTY_TITLE));
   a->empty = ADW_STATUS_PAGE(empty);
+  a->pair = devices_pair_button();
+  gtk_widget_set_visible(a->pair, FALSE);
+  adw_status_page_set_child(a->empty, a->pair);
   set_empty_description(a);
 
   GtkWidget *no_playlists = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(no_playlists), "view-list-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(no_playlists), mc_str(MC_STR_NO_PLAYLISTS_TITLE));
-  adw_status_page_set_description(ADW_STATUS_PAGE(no_playlists), mc_str(MC_STR_NO_PLAYLISTS_TEXT));
   a->no_playlists = ADW_STATUS_PAGE(no_playlists);
+  a->choose_sync = gtk_button_new_with_label(mc_str(MC_STR_CHOOSE_WHAT_TO_SYNC));
+  gtk_widget_add_css_class(a->choose_sync, "pill");
+  gtk_widget_set_halign(a->choose_sync, GTK_ALIGN_CENTER);
+  g_signal_connect(a->choose_sync, "clicked", G_CALLBACK(on_choose_sync), a);
+  adw_status_page_set_child(a->no_playlists, a->choose_sync);
+  set_no_playlists(a);
+
+  /* The playlists under a header with the page's name and New playlist (+). */
+  GtkWidget *playlists = gtk_stack_new();
+  gtk_widget_set_vexpand(playlists, TRUE);
+  a->playlists = GTK_STACK(playlists);
+  gtk_stack_add_named(a->playlists, no_playlists, "none");
+  a->playlist_grid = album_grid_new(mc_str(MC_STR_SECTION_PLAYLISTS), on_album_changed, a);
+  gtk_stack_add_named(a->playlists, a->playlist_grid, "grid");
+  GtkWidget *playlists_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_add_css_class(playlists_page, "view");
+  gtk_box_append(GTK_BOX(playlists_page), app_list_header(mc_str(MC_STR_SECTION_PLAYLISTS), mc_str(MC_STR_NEW_PLAYLIST),
+                                                          G_CALLBACK(on_new_playlist), a));
+  gtk_box_append(GTK_BOX(playlists_page), playlists);
 
   GtkWidget *stack = gtk_stack_new();
   gtk_stack_add_named(GTK_STACK(stack), empty, "empty");
   a->album_grid = album_grid_new(mc_str(MC_STR_SECTION_ALBUMS), on_album_changed, a);
   album_grid_set_menu(a->album_grid, on_album_menu, a);
   gtk_stack_add_named(GTK_STACK(stack), a->album_grid, "grid");
-  gtk_stack_add_named(GTK_STACK(stack), no_playlists, "no-playlists");
-  a->playlist_grid = album_grid_new(mc_str(MC_STR_SECTION_PLAYLISTS), on_album_changed, a);
-  gtk_stack_add_named(GTK_STACK(stack), a->playlist_grid, "playlists");
+  gtk_stack_add_named(GTK_STACK(stack), playlists_page, "playlists");
   gtk_stack_add_named(GTK_STACK(stack), album_groups_new(a, on_album_changed, on_group_navigated), "groups");
   a->albums = GTK_STACK(stack);
   return stack;

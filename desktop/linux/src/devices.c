@@ -20,6 +20,7 @@ static struct {
   char selected[MC_UID_STRLEN]; /* the device whose page is picked; "" if none */
   char syncing[MAX_SYNCING][MC_UID_STRLEN]; /* devices with a session in progress */
   guint refresh_source, library_source, poll_source;
+  devices_state state; /* as of the last refresh */
 } d;
 
 /* --- Helpers --- */
@@ -214,6 +215,7 @@ static void refresh_devices(void) {
       rows++;
       if (!strcmp(dev->uid, d.selected)) selected = row;
     }
+  devices_state state = !sync ? DEVICES_SYNC_OFF : rows ? DEVICES_GROUPED : DEVICES_ALONE;
   /* Not in a group, this computer still has its row: its page renames it and says whether
    * other devices can reach it. */
   if (sync && !rows) {
@@ -258,6 +260,10 @@ static void refresh_devices(void) {
     if (shown) show_albums();
   }
   if (sync) save_own_name(sync);
+  if (state != d.state) {
+    d.state = state;
+    app_update_empty_pages(d.a); /* pairing, or the sync profile */
+  }
 }
 
 static gboolean on_refresh_timeout(gpointer data) {
@@ -346,11 +352,10 @@ static void pair_started(mc_status st, const char *name, const char *address) {
   g_free(text);
 }
 
-/* A nearby device was picked. Even one in another group: pairing then says why it can't. */
-static void on_nearby_activated(GtkListBox *list, GtkListBoxRow *row, gpointer data) {
-  (void)list, (void)data;
+/* A nearby device was picked, in the section or the empty Albums page's Pair with a
+ * device… menu. Even one in another group: pairing then says why it can't. */
+static void pair_nearby(const char *picked) {
   mc_sync *sync = sync_bridge_get();
-  const char *picked = g_object_get_data(G_OBJECT(row), "uid");
   if (!picked) return;
   if (!sync) {
     sync_off_message();
@@ -368,6 +373,11 @@ static void on_nearby_activated(GtkListBox *list, GtkListBoxRow *row, gpointer d
   g_free(name);
 }
 
+static void on_nearby_activated(GtkListBox *list, GtkListBoxRow *row, gpointer data) {
+  (void)list, (void)data;
+  pair_nearby(g_object_get_data(G_OBJECT(row), "uid"));
+}
+
 /* The Add Device dialog closed with Connect. */
 static void on_add_device_connect(void *user, const char *host, guint16 port) {
   (void)user;
@@ -383,6 +393,73 @@ static void on_add_device_connect(void *user, const char *host, guint16 port) {
 
 static void on_add_device(GtkButton *button, gpointer user) {
   add_device_present(GTK_WIDGET(button), on_add_device_connect, user);
+}
+
+/* --- Pair with a device… --- */
+
+static void on_menu_pair(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action, (void)user;
+  pair_nearby(g_variant_get_string(param, NULL));
+}
+
+static void on_menu_add(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action, (void)param;
+  add_device_present(window(), on_add_device_connect, user);
+}
+
+/* Rebuilt each time it opens: the nearby devices (or "No devices found"), then Add device by
+ * address…. */
+static void build_pair_menu(GtkMenuButton *button, gpointer user) {
+  (void)user;
+  GMenu *menu = g_menu_new(), *devices = g_menu_new(), *address = g_menu_new();
+  mc_sync *sync = sync_bridge_get();
+  mc_sync_nearby_list *nearby = NULL;
+  if (sync && mc_sync_list_nearby(sync, &nearby) != MC_OK) nearby = NULL;
+  for (int i = 0; nearby && i < nearby->count; i++) {
+    const mc_sync_nearby *dev = &nearby->items[i];
+    GMenuItem *item = g_menu_item_new(dev->name && *dev->name ? dev->name : mc_str(MC_STR_DEVICE_UNNAMED), NULL);
+    g_menu_item_set_action_and_target_value(item, "pair.device", g_variant_new_string(dev->uid));
+    g_menu_append_item(devices, item);
+    g_object_unref(item);
+  }
+  if (!nearby || nearby->count == 0) g_menu_append(devices, mc_str(MC_STR_DEVICES_NONE), "pair.none");
+  mc_sync_nearby_list_free(nearby);
+  g_menu_append(address, mc_str_mnemonic(MC_STR_ADD_DEVICE_BY_ADDRESS_MENU), "pair.address");
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(devices));
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(address));
+  gtk_menu_button_set_menu_model(button, G_MENU_MODEL(menu));
+  g_object_unref(devices);
+  g_object_unref(address);
+  g_object_unref(menu);
+}
+
+GtkWidget *devices_pair_button(void) {
+  GtkWidget *button = gtk_menu_button_new();
+  gtk_menu_button_set_label(GTK_MENU_BUTTON(button), mc_str(MC_STR_PAIR_WITH_DEVICE_MENU));
+  gtk_widget_add_css_class(button, "pill");
+  gtk_widget_set_halign(button, GTK_ALIGN_CENTER);
+  /* "pair.none" has no handler, so "No devices found" shows insensitive. */
+  const GActionEntry entries[] = {
+    {"device", on_menu_pair, "s", NULL, NULL, {0}},
+    {"address", on_menu_add, NULL, NULL, NULL, {0}},
+  };
+  GSimpleActionGroup *group = g_simple_action_group_new();
+  g_action_map_add_action_entries(G_ACTION_MAP(group), entries, G_N_ELEMENTS(entries), NULL);
+  gtk_widget_insert_action_group(button, "pair", G_ACTION_GROUP(group));
+  g_object_unref(group);
+  gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(button), build_pair_menu, NULL, NULL);
+  return button;
+}
+
+devices_state devices_sync_state(void) {
+  return d.state;
+}
+
+void devices_open_self(void) {
+  mc_sync *sync = sync_bridge_get();
+  if (!sync || d.state != DEVICES_GROUPED) return;
+  open_device(mc_sync_device_uid(sync));
+  refresh_devices(); /* selects its row */
 }
 
 /* --- Sync events --- */

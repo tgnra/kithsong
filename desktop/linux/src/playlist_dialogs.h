@@ -26,5 +26,9 @@ void playlist_rename_present(GtkWidget *parent, mc_library *lib, const char *uid
                              void (*changed)(void *user), void *user);
 void playlist_delete_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
                              void (*changed)(void *user), void *user);
+/* New playlist, from the Playlists page's +: the Rename dialog's twin, titled New playlist,
+ * with Create. Makes an empty playlist and calls created with its uid. */
+void playlist_create_present(GtkWidget *parent, mc_library *lib, void (*created)(void *user, const char *uid),
+                             void *user);
 
 #endif
