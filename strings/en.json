@@ -212,6 +212,10 @@
     "import_error_no_name": "Couldn't find a free file name in the library",
     "import_error_move": "Couldn't move a file within the library",
     "import_error_cancelled": "Cancelled",
+    "import_error_zip_bad": { "text": "Couldn't open the zip (is it damaged or password-protected?)", "note": "An import item for a .zip file that couldn't be extracted." },
+    "import_error_zip_too_big": { "text": "The zip is too big to import (over {0:d} GB unzipped)", "note": "An import item for a .zip file; {0} is the limit in gigabytes." },
+    "import_error_zip_space": { "text": "Not enough free space to unzip it", "note": "An import item for a .zip file that wouldn't fit on the disk once extracted." },
+    "import_error_zip_write": { "text": "Couldn't unzip it (is the disk full?)", "note": "An import item for a .zip file whose files couldn't be written out." },
 
     "status_ok": { "text": "ok", "note": "Status reasons appear inside other messages, e.g. \"Couldn't start the import (out of memory).\", so they start in lower case." },
     "status_unimplemented": "not implemented",

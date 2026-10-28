@@ -29,6 +29,7 @@
 #include "tagger/musicbrainz.h"
 #include "tagger/organize.h"
 #include "tagger/search_keys.h"
+#include "tagger/unzip.h"
 #include "util/platform.h"
 
 #define DEFAULT_THRESHOLD 0.9
@@ -119,6 +120,17 @@ struct mc_import {
 
   file_entry *files;
   int file_count, file_cap;
+
+  /* Zips (see "Zips" in tagger.h): where they're extracted, the session's own folder in it
+   * (created with the first zip, deleted by mc_import_free), and the zips that couldn't be,
+   * which become failed items. Only touched on the import thread, and by mc_import_free. */
+  char *staging_parent;
+  char *staging;
+  struct zip_failure {
+    char *path;
+    char *error;
+  } *zip_failures;
+  int zip_failure_count;
 };
 
 static void emit(mc_import *imp, mc_import_event ev, int arg) {
@@ -1573,12 +1585,125 @@ static void drain_requests(mc_import *imp, mc_library *lib) {
   }
 }
 
+/* --- Zips --- */
+
+static int cancel_check(void *user) {
+  return cancelled(user);
+}
+
+static void ignore_entry(void *user, const char *name, int is_dir) {
+  (void)user;
+  (void)name;
+  (void)is_dir;
+}
+
+static const char *zip_file_name(const char *path) {
+  const char *sep = last_sep(path);
+  return sep ? sep + 1 : path;
+}
+
+/* Creates the session's staging folder, once. */
+static const char *staging_root(mc_import *imp) {
+  if (imp->staging) return imp->staging;
+  char *parent = imp->staging_parent ? mc_strdup(imp->staging_parent) : mc_temp_dir();
+  if (!parent) return NULL;
+  for (int attempt = 0; attempt < 8 && !imp->staging; attempt++) {
+    unsigned char rnd[6];
+    if (mc_random_bytes(rnd, sizeof rnd) != MC_OK) break;
+    size_t n = strlen(parent) + 32;
+    char *dir = malloc(n);
+    if (!dir) break;
+    snprintf(dir, n, "%s%ckithsong-import-%02x%02x%02x%02x%02x%02x", parent, MC_PATH_SEP, rnd[0],
+             rnd[1], rnd[2], rnd[3], rnd[4], rnd[5]);
+    if (!mc_file_exists(dir) && mc_mkdirs(dir) == MC_OK) imp->staging = dir;
+    else free(dir);
+  }
+  free(parent);
+  return imp->staging;
+}
+
+static void add_zip_failure(mc_import *imp, const char *path, const char *error) {
+  struct zip_failure *grown =
+      realloc(imp->zip_failures, (size_t)(imp->zip_failure_count + 1) * sizeof *grown);
+  if (!grown) return;
+  imp->zip_failures = grown;
+  grown[imp->zip_failure_count].path = mc_strdup(path);
+  grown[imp->zip_failure_count].error = mc_strdup(error);
+  imp->zip_failure_count++;
+}
+
+/* Extracts the zip at path into the staging folder, returning the folder to scan (malloc'd),
+ * or NULL with a failure noted. */
+static char *stage_zip(mc_import *imp, const char *path) {
+  const char *root = staging_root(imp);
+  if (!root) {
+    add_zip_failure(imp, path, mc_str(MC_STR_IMPORT_ERROR_ZIP_WRITE));
+    return NULL;
+  }
+  const char *name = zip_file_name(path);
+  int stem = (int)(strlen(name) - 4); /* without ".zip" */
+  size_t n = strlen(root) + (size_t)stem + 16;
+  char *dest = malloc(n);
+  if (!dest) {
+    add_zip_failure(imp, path, mc_str(MC_STR_IMPORT_ERROR_NOMEM));
+    return NULL;
+  }
+  /* Two zips of the same name get a folder each. */
+  snprintf(dest, n, "%s%c%.*s", root, MC_PATH_SEP, stem, name);
+  for (int i = 2; mc_file_exists(dest) && i < 1000; i++)
+    snprintf(dest, n, "%s%c%.*s (%d)", root, MC_PATH_SEP, stem, name, i);
+
+  mc_unzip_stats stats;
+  mc_unzip_result r = mc_unzip(path, dest, MC_UNZIP_MAX_BYTES, cancel_check, imp, &stats);
+  if (r == MC_UNZIP_OK) return dest;
+  mc_remove_tree(dest);
+  free(dest);
+  char *text = NULL;
+  switch (r) {
+    case MC_UNZIP_TOO_BIG:
+      text = mc_format_alloc(mc_str(MC_STR_IMPORT_ERROR_ZIP_TOO_BIG), MC_D(MC_UNZIP_MAX_BYTES >> 30));
+      add_zip_failure(imp, path, text ? text : mc_str(MC_STR_IMPORT_ERROR_ZIP_BAD));
+      mc_free(text);
+      break;
+    case MC_UNZIP_NO_SPACE: add_zip_failure(imp, path, mc_str(MC_STR_IMPORT_ERROR_ZIP_SPACE)); break;
+    case MC_UNZIP_WRITE: add_zip_failure(imp, path, mc_str(MC_STR_IMPORT_ERROR_ZIP_WRITE)); break;
+    case MC_UNZIP_NOMEM: add_zip_failure(imp, path, mc_str(MC_STR_IMPORT_ERROR_NOMEM)); break;
+    case MC_UNZIP_CANCELLED: break;
+    default: add_zip_failure(imp, path, mc_str(MC_STR_IMPORT_ERROR_ZIP_BAD)); break;
+  }
+  return NULL;
+}
+
+/* Scans one of the paths the session was given, extracting it first if it's a zip. */
+static void scan_path(mc_import *imp, const char *path) {
+  /* A folder that happens to end in .zip is scanned as a folder. */
+  if (mc_unzip_is_zip(path) && mc_file_exists(path) && mc_list_dir(path, ignore_entry, NULL) != MC_OK) {
+    char *dir = stage_zip(imp, path);
+    if (dir) mc_walk(dir, scan_file, imp);
+    free(dir);
+    return;
+  }
+  mc_walk(path, scan_file, imp);
+}
+
+/* Adds an item for each zip that couldn't be extracted: no files, failed with the reason. */
+static void add_zip_items(mc_import *imp, item_list *l) {
+  for (int i = 0; i < imp->zip_failure_count; i++) {
+    const char *path = imp->zip_failures[i].path ? imp->zip_failures[i].path : "";
+    item *it = add_item(l, MC_IMPORT_ALBUM, path);
+    if (!it) return;
+    it->state = MC_IMPORT_FAILED;
+    it->album = mc_strdup(zip_file_name(path));
+    it->error = mc_strdup(imp->zip_failures[i].error);
+  }
+}
+
 static void import_thread(void *arg) {
   mc_import *imp = arg;
   mc_library *lib = NULL;
   if (mc_library_open(imp->lib_dir, &lib) != MC_OK) lib = NULL;
 
-  for (int i = 0; i < imp->path_count && !cancelled(imp); i++) mc_walk(imp->paths[i], scan_file, imp);
+  for (int i = 0; i < imp->path_count && !cancelled(imp); i++) scan_path(imp, imp->paths[i]);
   if (imp->file_count > 1) qsort(imp->files, (size_t)imp->file_count, sizeof *imp->files, compare_paths);
   emit(imp, MC_IMPORT_EV_SCANNING, imp->file_count);
 
@@ -1586,6 +1711,7 @@ static void import_thread(void *arg) {
    * failure, whatever was grouped so far is still imported. */
   item_list staged = {0};
   group_files(imp, &staged);
+  add_zip_items(imp, &staged);
   mc_mutex_lock(&imp->lock);
   imp->items = staged.items;
   imp->item_count = staged.count;
@@ -1597,6 +1723,7 @@ static void import_thread(void *arg) {
 
   for (int i = 0; i < imp->item_count && !cancelled(imp); i++) {
     drain_requests(imp, lib); /* the user's decisions come before more matching */
+    if (imp->items[i].state == MC_IMPORT_FAILED) continue; /* a zip that couldn't be extracted */
     if (lib) auto_match(imp, lib, i);
     else set_state(imp, i, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
   }
@@ -1628,6 +1755,7 @@ mc_status mc_import_start(mc_library *lib, const char *const *paths, int path_co
   imp->threshold = opts && opts->threshold > 0 ? opts->threshold : DEFAULT_THRESHOLD;
   imp->fetch_art = opts ? opts->fetch_art : 1;
   imp->skip_tagging = opts ? opts->skip_tagging : 0;
+  imp->staging_parent = opts && opts->staging_dir ? mc_strdup(opts->staging_dir) : NULL;
   imp->callback = callback;
   imp->user = user;
   imp->lib_dir = mc_strdup(mc_library_dir(lib));
@@ -1676,6 +1804,15 @@ void mc_import_free(mc_import *imp) {
   free(imp->files);
   for (int i = 0; i < imp->path_count; i++) free(imp->paths[i]);
   free(imp->paths);
+  /* The extracted zips: their files are in the library now, or weren't wanted. */
+  if (imp->staging) mc_remove_tree(imp->staging);
+  free(imp->staging);
+  free(imp->staging_parent);
+  for (int i = 0; i < imp->zip_failure_count; i++) {
+    free(imp->zip_failures[i].path);
+    free(imp->zip_failures[i].error);
+  }
+  free(imp->zip_failures);
   free(imp->lib_dir);
   mc_cond_destroy(&imp->wake);
   mc_mutex_destroy(&imp->lock);

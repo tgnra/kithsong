@@ -123,6 +123,17 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  *
  * mc_import_item.outcome says what happened.
  *
+ * Zips. A path given to mc_import_start that is a .zip file is extracted into a staging
+ * folder named after the zip without its extension (in a kithsong-import-* folder of its own
+ * under mc_import_options.staging_dir), and that folder is imported as any other, cover.jpg
+ * and all. Entry names are UTF-8 when the entry's flag bit 11 says so, else CP437; entries
+ * that are absolute or use ".." (zip slip) are left out, and so are __MACOSX/ and .DS_Store.
+ * A zip holding more than 8 GB unzipped, or more than the staging folder's free space, isn't
+ * extracted. A zip that can't be extracted becomes an item of its own with no files, in
+ * MC_IMPORT_FAILED with the reason in error (folder is the zip's path, album its file name).
+ * The staging folder is deleted when the session is freed. Only zips named directly are
+ * extracted, not zips found inside a folder.
+ *
  * Callbacks run on the import thread; frontends marshal them to their UI thread. Every
  * other function may be called from any thread. */
 
@@ -168,6 +179,9 @@ typedef struct mc_import_options {
   double threshold; /* auto-accept at or above this confidence (0..1); 0 = default 0.9 */
   int fetch_art;    /* download front covers (Cover Art Archive, then iTunes) */
   int skip_tagging; /* no MusicBrainz lookups: import every item with its existing tags */
+  /* Where zips are extracted (see "Zips" above); NULL for the system's temporary folder.
+   * Must not be inside the library folder. Copied. */
+  const char *staging_dir;
 } mc_import_options;
 
 /* One track of a candidate, in release order. */

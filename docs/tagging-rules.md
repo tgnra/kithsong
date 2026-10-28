@@ -18,7 +18,13 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
 
 1. **Scan**: walk the dropped folders and files and read the existing tags of every audio
    file (`flac mp3 m4a mp4 aac ogg oga opus wav aif aiff wv ape mpc wma dsf`). Hidden files,
-   symlinks and junctions are skipped.
+   symlinks and junctions are skipped. A `.zip` given to the import is first extracted
+   (`unzip.c`, miniz) into a staging folder named after it, in a temporary folder of the
+   session's own that is deleted when the session is freed, then scanned like a folder, so
+   its `cover.jpg` counts too. Names are UTF-8 if the entry's flag bit 11 says so, else
+   CP437; entries with an absolute path or `..` are dropped (zip slip), and so are
+   `__MACOSX/` and `.DS_Store`. Zips over 8 GB unzipped, or bigger than the free space, are
+   refused. A zip that can't be extracted shows as a failed item.
 2. **Group** files into items:
    - key = album folder + album tag (or the release id if there is no album tag). The album
      folder is the file's folder, or its parent for disc folders such as `CD1` or `Disc 2`,

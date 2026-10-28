@@ -114,6 +114,12 @@ mc_status mc_remove(const char *path);
 mc_status mc_trash(const char *path);
 /* Removes a directory; fails if it isn't empty. */
 mc_status mc_rmdir(const char *path);
+/* Deletes path and, for a directory, everything in it, outright (no trash). Links and
+ * junctions inside are removed, never followed. MC_OK if path doesn't exist. */
+mc_status mc_remove_tree(const char *path);
+/* The user's folder for temporary files, without a trailing separator: GetTempPath on
+ * Windows, else $TMPDIR or /tmp. malloc'd, or NULL. */
+char *mc_temp_dir(void);
 /* Whether two paths name the same file as far as the file system is concerned: compared
  * case-insensitively on Windows. Doesn't resolve links. */
 int mc_same_path(const char *a, const char *b);
