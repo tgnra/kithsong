@@ -262,8 +262,8 @@ static void set_add_hot(BOOL hot) {
 static const wchar_t *row_tip(const sb_row *r) {
   switch (r->kind) {
     case ROW_FOOTER: return s.footer_tip;
-    case ROW_DEVICE: return r->flags & SB_DEV_ONLINE ? NULL : mc_wstr(MC_STR_WINDOWS_DEVICE_OFFLINE);
-    case ROW_NEARBY: return r->flags & SB_DEV_OTHER_GROUP ? mc_wstr(MC_STR_WINDOWS_DEVICE_OTHER_GROUP_TIP) : NULL;
+    case ROW_DEVICE: return r->flags & SB_DEV_ONLINE ? NULL : mc_wstr(MC_STR_DEVICE_OFFLINE);
+    case ROW_NEARBY: return r->flags & SB_DEV_OTHER_GROUP ? mc_wstr(MC_STR_DEVICE_OTHER_GROUP_TIP) : NULL;
     default: return NULL;
   }
 }
@@ -316,7 +316,7 @@ static void push_device(row_kind kind, const device *d) {
   static const wchar_t icons[] = {[MC_DEVICE_DESKTOP] = 0xE977, /* PC */
                                   [MC_DEVICE_PHONE] = 0xE8EA,   /* CellPhone */
                                   [MC_DEVICE_WATCH] = 0xE823};  /* Recent: a clock face */
-  const wchar_t *name = d->name && *d->name ? d->name : mc_wstr(MC_STR_WINDOWS_DEVICE_UNNAMED);
+  const wchar_t *name = d->name && *d->name ? d->name : mc_wstr(MC_STR_DEVICE_UNNAMED);
   BOOL self = kind == ROW_DEVICE && (d->flags & SB_DEV_SELF);
   sb_row *r = push_row(kind, name, self ? mc_wstr(MC_STR_WINDOWS_THIS_PC_SUFFIX) : NULL);
   if (!r) return;
@@ -364,7 +364,7 @@ static void rebuild(void) {
   for (int i = 0; i < s.npaired; i++) push_device(ROW_DEVICE, &s.paired[i]);
   if (s.nnearby > 0) {
     wchar_t text[64];
-    mc_wformat(text, 64, mc_str(MC_STR_WINDOWS_DEVICES_UNPAIRED), MC_D(s.nnearby));
+    mc_wformat(text, 64, mc_str(MC_STR_DEVICES_UNPAIRED), MC_D(s.nnearby));
     sb_row *r = push_row(ROW_ACCORDION, text, NULL);
     if (r) r->icon = accordion_expanded() ? 0xE70D : 0xE76C; /* ChevronDown, ChevronRight */
     if (accordion_expanded())

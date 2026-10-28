@@ -511,7 +511,7 @@ static void update_footer(void) {
     if (n > 0) format_address(line2, 160, addrs[0], port);
     else mc_wformat(line2, 160, mc_str(MC_STR_WINDOWS_PORT_NO_NETWORK), MC_D(port));
     size_t used = (size_t)swprintf(tip, 64, L"%ls",
-                                   mc_wstr(n > 0 ? MC_STR_WINDOWS_FOOTER_REACHED_AT : MC_STR_WINDOWS_NO_NETWORK));
+                                   mc_wstr(n > 0 ? MC_STR_WINDOWS_FOOTER_REACHED_AT : MC_STR_NO_NETWORK));
     for (int i = 0; i < n; i++) {
       wchar_t addr[64];
       format_address(addr, 64, addrs[i], port);
@@ -641,7 +641,7 @@ static void schedule_library_refresh(void) {
 static void rename_self(const char *name) {
   mc_settings_set_device_name(g_app.settings, name);
   if (mc_settings_save(g_app.settings) != MC_OK)
-    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_WINDOWS_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
+    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
   schedule_refresh();
 }
 
@@ -703,7 +703,7 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
 static void sync_off_message(void) {
   wchar_t text[256];
   mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PAIR_SYNC_OFF), MC_S(mc_status_str(sync_bridge_error())));
-  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_WINDOWS_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
+  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
 }
 
 /* After mc_sync_pair_request() or _address(): opens the enter-code dialog, or says why
@@ -716,23 +716,23 @@ static void pair_started(mc_status st, const wchar_t *name, const wchar_t *addre
       pair_dialog_begin_enter(sync_bridge_get(), name, address);
       return;
     case MC_ERR_LOCKED:
-      swprintf(text, 512, L"%ls", mc_wstr(MC_STR_WINDOWS_PAIR_ALREADY_PAIRING));
+      swprintf(text, 512, L"%ls", mc_wstr(MC_STR_PAIR_ALREADY_PAIRING));
       break;
     case MC_ERR_NOT_FOUND:
       if (name && *name) address = name;
       if (address) {
         char *a = wstr_to_utf8(address);
-        mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_PAIR_GONE), MC_S(a));
+        mc_wformat(text, 512, mc_str(MC_STR_PAIR_GONE), MC_S(a));
         free(a);
       } else {
-        swprintf(text, 512, L"%ls", mc_wstr(MC_STR_WINDOWS_PAIR_GONE_UNNAMED));
+        swprintf(text, 512, L"%ls", mc_wstr(MC_STR_PAIR_GONE_UNNAMED));
       }
       break;
     default:
-      mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_PAIR_START_FAILED), MC_S(mc_status_str(st)));
+      mc_wformat(text, 512, mc_str(MC_STR_PAIR_START_FAILED), MC_S(mc_status_str(st)));
       break;
   }
-  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_WINDOWS_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
+  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
 }
 
 /* A nearby device was clicked in the sidebar. Even one in another group: pairing then says
