@@ -74,8 +74,7 @@ void settings_view_create(HWND parent) {
   g_set.heading = child(WC_STATICW, mc_wstr(MC_STR_LIBRARY_LOCATION), label, ID_SET_HEADING);
   /* One line: a long path loses folders from its middle, rather than wrapping mid-name. */
   g_set.path = child(WC_STATICW, NULL, label | SS_PATHELLIPSIS, ID_SET_PATH);
-  g_set.move = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LIBRARY_MOVE), BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED,
-                     ID_SET_MOVE);
+  g_set.move = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LIBRARY_MOVE), BS_PUSHBUTTON | WS_TABSTOP, ID_SET_MOVE);
   g_set.open = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LIBRARY_OPEN_ANOTHER), BS_PUSHBUTTON | WS_TABSTOP,
                      ID_SET_OPEN);
   g_set.note = child(WC_STATICW, mc_wstr(MC_STR_LIBRARY_LOCATION_TEXT), label, ID_SET_NOTE);
@@ -369,7 +368,7 @@ static void leave_group(void) {
 BOOL settings_view_on_command(int id, int code) {
   switch (id) {
     case ID_SET_OPEN: PostMessageW(g_set.parent, WM_APP_OPEN_LIBRARY, 0, 0); return TRUE;
-    case ID_SET_MOVE: return TRUE; /* not implemented yet; the button is disabled */
+    case ID_SET_MOVE: PostMessageW(g_set.parent, WM_APP_MOVE_LIBRARY, 0, 0); return TRUE;
     case ID_SET_NAME:
       if (code == EN_KILLFOCUS) apply_name();
       return TRUE;

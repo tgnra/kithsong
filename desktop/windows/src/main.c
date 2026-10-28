@@ -37,6 +37,10 @@
  * which pairs by address, add_device.c. The sidebar's footer shows the version and this
  * PC's address.
  *
+ * Settings' Move Library is move_library.c: the main window hides while the library moves,
+ * and comes back with the library open in its new folder (or its old one, if the move
+ * failed).
+ *
  * Command line: musicapp.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\musicapp,
  * so two instances can sync on one PC; the paths are imported.
@@ -60,6 +64,7 @@
 #include "canvas.h"
 #include "device_view.h"
 #include "import_view.h"
+#include "move_library.h"
 #include "musiccore/musiccore.h"
 #include "now_playing.h"
 #include "pair_dialog.h"
@@ -136,6 +141,7 @@ typedef struct app {
 static app g_app;
 
 static void change_library(void);
+static void move_library(void);
 static void schedule_refresh(void);
 static void rename_self(const char *name);
 
@@ -954,6 +960,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_OPEN_LIBRARY:
       change_library();
       return 0;
+    case WM_APP_MOVE_LIBRARY:
+      move_library();
+      return 0;
     case WM_CLOSE:
       if (import_view_confirm_close()) DestroyWindow(wnd);
       return 0;
@@ -1168,6 +1177,38 @@ static void change_library(void) {
     start_sync();
   }
   free(dir);
+}
+
+/* Before Move Library moves the files: everything that reads the library or plays its files
+ * lets go, and it closes. */
+static void move_close_library(void) {
+  KillTimer(g_app.wnd, TIMER_REFRESH_LIBRARY);
+  g_app.library_pending = FALSE;
+  playback_clear();
+  stop_sync();
+  import_view_set_library(NULL);
+  album_grid_unselect();
+  mc_library_close(g_app.lib);
+  g_app.lib = NULL;
+  refresh_library();
+}
+
+/* After the move: the library opens where it is now (settings already say so). */
+static void move_reopen_library(const char *dir) {
+  g_app.lib = open_library(dir); /* on failure the window says so */
+  import_view_set_library(g_app.lib);
+  settings_view_set_library_dir(mc_settings_library_dir(g_app.settings));
+  refresh_library();
+  start_sync();
+  ShowWindow(g_app.wnd, SW_SHOW);
+  SetForegroundWindow(g_app.wnd);
+}
+
+/* Settings' Move Library. Like switching library, it ends a finished import first. */
+static void move_library(void) {
+  static const move_library_host host = {move_close_library, move_reopen_library};
+  if (move_library_running() || !import_view_confirm_close()) return;
+  move_library_start(g_app.wnd, g_app.settings, &host);
 }
 
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
