@@ -29,7 +29,7 @@ HMENU add_to_playlist_menu(mc_library *lib, UINT first_id, UINT new_id, mc_playl
   *lists = NULL;
   HMENU menu = CreatePopupMenu();
   if (!menu) return NULL;
-  if (lib && mc_library_list_playlists(lib, lists) == MC_OK && (*lists)->count) {
+  if (lib && mc_library_list_playlists(lib, 0, lists) == MC_OK && (*lists)->count) {
     for (int i = 0; i < (*lists)->count; i++) {
       wchar_t *text = menu_text((*lists)->items[i].name);
       if (text) AppendMenuW(menu, MF_STRING, first_id + (UINT)i, text);

@@ -59,6 +59,7 @@ static struct {
   BOOL dirty;     /* reload when next shown */
   BOOL playlists; /* showing playlists rather than albums */
   BOOL tiles_playlists; /* the tiles are playlists' (playlists switches before the reload) */
+  int hidden;     /* playlists left out for having nothing to play here */
   tile *tiles;
   int count;
   UINT gen; /* bumped on every reload, so late thumbnails for old tiles are dropped */
@@ -412,10 +413,11 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
 }
 
 /* The playlists' tiles: the loader finds their pictures by uid, and the track count goes
- * beneath the name. */
+ * beneath the name. Only those with a track to play here; the rest are counted in g.hidden. */
 static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
   mc_playlist_list *list = NULL;
-  if (g.lib) mc_library_list_playlists(g.lib, &list);
+  if (g.lib) mc_library_list_playlists(g.lib, MC_LIST_PLAYABLE, &list);
+  g.hidden = list ? list->hidden : 0;
   *n = list ? list->count : 0;
   *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
   *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL;
@@ -713,6 +715,9 @@ static void paint(HDC dc, const RECT *dirty) {
     SetTextColor(c->dc, theme.text3);
     wchar_t empty[512];
     if (!g.lib) swprintf(empty, 512, L"%ls", mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
+    else if (g.playlists && g.hidden)
+      swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE),
+               mc_wstr(MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT));
     else if (g.playlists)
       swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_NO_PLAYLISTS_TITLE), mc_wstr(MC_STR_NO_PLAYLISTS_TEXT));
     else swprintf(empty, 512, L"%ls\n%ls", mc_wstr(MC_STR_EMPTY_TITLE), mc_wstr(MC_STR_EMPTY_TEXT));

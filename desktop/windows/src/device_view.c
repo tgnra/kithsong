@@ -678,7 +678,7 @@ static mc_status list_items(int tab, tab_items *out, int *n) {
       if (st == MC_OK && out->artists) *n = out->artists->count;
       break;
     case TAB_PLAYLISTS:
-      st = mc_library_list_playlists(g_dv.lib, &out->playlists);
+      st = mc_library_list_playlists(g_dv.lib, 0, &out->playlists);
       if (st == MC_OK && out->playlists) *n = out->playlists->count;
       break;
     default:

@@ -530,7 +530,7 @@ int main(int argc, char **argv) {
                     " ON g.uid = e.group_uid JOIN albums a ON a.uid = e.album_uid"
                     " WHERE g.name = 'Late'") == 1);
     mc_recent_list *recents = NULL;
-    CHECK(mc_library_list_recents(abc[i]->lib, 0, &recents) == MC_OK && recents &&
+    CHECK(mc_library_list_recents(abc[i]->lib, 0, 0, &recents) == MC_OK && recents &&
           recents->count == 2);
     if (recents && recents->count == 2) {
       CHECK(recents->items[0].kind == MC_RECENT_ARTIST && !strcmp(recents->items[0].uid, ar));

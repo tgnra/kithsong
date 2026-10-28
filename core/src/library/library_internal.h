@@ -67,6 +67,10 @@ void mc_library_rollback(mc_library *lib);
 mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_list **out);
 mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_list **out);
 
+/* Whether saved smart list smart_uid holds something with a file here, into *out (see
+ * MC_LIST_PLAYABLE). A rule that can't be evaluated holds nothing. In smartlist.c. */
+mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out);
+
 /* The tables sync replicates (k_tracked) and their logged columns. Sync works out the
  * order to apply them in from their foreign keys. */
 const mc_changelog_table *mc_library_tracked(size_t *count);

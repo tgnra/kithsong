@@ -277,7 +277,7 @@ static void test_migration_v6(const char *scratch) {
 static void recent_uids(mc_library *lib, int limit, char *out, size_t n) {
   out[0] = '\0';
   mc_recent_list *list = NULL;
-  if (mc_library_list_recents(lib, limit, &list) != MC_OK || !list) return;
+  if (mc_library_list_recents(lib, limit, 0, &list) != MC_OK || !list) return;
   for (int i = 0; i < list->count; i++) {
     if (i) strncat(out, " ", n - strlen(out) - 1);
     strncat(out, list->items[i].uid, n - strlen(out) - 1);
@@ -335,7 +335,7 @@ static void test_recents(const char *scratch) {
   CHECK(strcmp(uids, "al1 al2 s2") == 0);
 
   mc_recent_list *list = NULL;
-  CHECK(mc_library_list_recents(lib, 0, &list) == MC_OK && list && list->count == 7);
+  CHECK(mc_library_list_recents(lib, 0, 0, &list) == MC_OK && list && list->count == 7);
   if (list && list->count == 7) {
     CHECK(list->items[0].kind == MC_RECENT_ALBUM);
     CHECK_STR(list->items[0].name, "Things");
@@ -468,7 +468,7 @@ static void test_playlists(const char *scratch) {
   mc_track_list_free(tracks);
 
   mc_playlist_list *lists = NULL;
-  CHECK(mc_library_list_playlists(lib, &lists) == MC_OK && lists && lists->count == 2);
+  CHECK(mc_library_list_playlists(lib, 0, &lists) == MC_OK && lists && lists->count == 2);
   if (lists && lists->count == 2) {
     CHECK_STR(lists->items[0].name, "another"); /* by name, ignoring case */
     CHECK(lists->items[0].track_count == 0);
@@ -483,6 +483,162 @@ static void test_playlists(const char *scratch) {
   CHECK(query_int(db, "SELECT count(*) FROM playlist_entries") == 0);
   CHECK(query_int(db, "SELECT count(*) FROM tracks") == 3);
   CHECK(changelog_count(db, "entity = 'playlist_entries' AND field = '_deleted'") == 5);
+  mc_library_close(lib);
+}
+
+/* Names of the playlists listed with flags, joined with '|', into out; *hidden gets the
+ * number left out. */
+static void playlist_names(mc_library *lib, unsigned flags, char *out, size_t n, int *hidden) {
+  out[0] = '\0';
+  *hidden = -1;
+  mc_playlist_list *list = NULL;
+  if (mc_library_list_playlists(lib, flags, &list) != MC_OK || !list) return;
+  for (int i = 0; i < list->count; i++) {
+    if (i) strncat(out, "|", n - strlen(out) - 1);
+    strncat(out, list->items[i].name, n - strlen(out) - 1);
+  }
+  *hidden = list->hidden;
+  mc_playlist_list_free(list);
+}
+
+static void smart_names(mc_library *lib, unsigned flags, char *out, size_t n, int *hidden) {
+  out[0] = '\0';
+  *hidden = -1;
+  mc_smart_list *list = NULL;
+  if (mc_library_list_smart(lib, flags, &list) != MC_OK || !list) return;
+  for (int i = 0; i < list->count; i++) {
+    if (i) strncat(out, "|", n - strlen(out) - 1);
+    strncat(out, list->items[i].name, n - strlen(out) - 1);
+  }
+  *hidden = list->hidden;
+  mc_smart_list_free(list);
+}
+
+/* MC_LIST_PLAYABLE: playlists, smart lists and recents with nothing that has a file on this
+ * device are left out, by the same test that gives a track its path; and they come back as
+ * soon as a file does. */
+static void test_playable(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_playable.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  /* t1 has its original here, t3 only a transcode sync brought; t2 and t4 have no file here
+   * (an archive device has them, say). al2 has nothing here. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Here'), ('al2', 'Away');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'One'), ('t2', 'al1', 'Two'),"
+                 " ('t3', 'al1', 'Three'), ('t4', 'al2', 'Four');"
+                 "INSERT INTO files (uid, track_uid, path, format, source_file_uid, source_peer_uid) VALUES"
+                 " ('f1', 't1', 'Here/01 One.flac', 'flac', NULL, NULL),"
+                 " ('f3', 't3', 'Here/03 Three.opus', 'opus', 'orig3', 'peer');") == SQLITE_OK);
+
+  char all[MC_UID_STRLEN], partly[MC_UID_STRLEN], away[MC_UID_STRLEN], empty[MC_UID_STRLEN];
+  CHECK(mc_playlist_create(lib, "All here", all) == MC_OK);
+  CHECK(mc_playlist_create(lib, "Partly", partly) == MC_OK);
+  CHECK(mc_playlist_create(lib, "Away", away) == MC_OK);
+  CHECK(mc_playlist_create(lib, "Empty", empty) == MC_OK);
+  CHECK(mc_playlist_append(lib, all, "t1", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, partly, "t2", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, partly, "t3", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, away, "t2", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, away, "t4", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, away, "t2", NULL) == MC_OK);
+
+  /* Without the flag, every playlist, with how many of its entries can play here. */
+  mc_playlist_list *lists = NULL;
+  CHECK(mc_library_list_playlists(lib, 0, &lists) == MC_OK && lists && lists->count == 4 && lists->hidden == 0);
+  if (lists && lists->count == 4) {
+    CHECK_STR(lists->items[0].name, "All here");
+    CHECK(lists->items[0].track_count == 1 && lists->items[0].playable_count == 1);
+    CHECK_STR(lists->items[1].name, "Away");
+    CHECK(lists->items[1].track_count == 3 && lists->items[1].playable_count == 0);
+    CHECK_STR(lists->items[2].name, "Empty");
+    CHECK(lists->items[2].track_count == 0 && lists->items[2].playable_count == 0);
+    CHECK_STR(lists->items[3].name, "Partly");
+    CHECK(lists->items[3].track_count == 2 && lists->items[3].playable_count == 1);
+  }
+  mc_playlist_list_free(lists);
+
+  char names[256];
+  int hidden;
+  playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "All here|Partly") == 0);
+  CHECK(hidden == 2);
+  /* The same notion as the track list's: the hidden one's tracks all have no path. */
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_playlist_tracks(lib, away, &tracks) == MC_OK && tracks && tracks->count == 3);
+  for (int i = 0; tracks && i < tracks->count; i++) CHECK(tracks->items[i].path == NULL);
+  mc_track_list_free(tracks);
+
+  /* Smart lists: a smart playlist by whether its tracks have files here, a smart album group
+   * by whether its albums do, and one whose rule can't be evaluated is left out too. */
+  char s_uid[MC_UID_STRLEN];
+  CHECK(mc_smart_create(lib, "Ones", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"One\"}}", s_uid) == MC_OK);
+  char s_away[MC_UID_STRLEN];
+  CHECK(mc_smart_create(lib, "Fours", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Four\"}}", s_away) == MC_OK);
+  CHECK(mc_smart_create(lib, "Nothing", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Zero\"}}", s_uid) == MC_OK);
+  CHECK(mc_smart_create(lib, "Here albums", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Here\"}}", s_uid) == MC_OK);
+  CHECK(mc_smart_create(lib, "Away albums", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Away\"}}", s_uid) == MC_OK);
+  CHECK(exec(db, "INSERT INTO smart_lists (uid, name, subject, rule) VALUES ('sx', 'Future', 'tracks', '{\"v\":9}')") ==
+        SQLITE_OK);
+  smart_names(lib, 0, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away albums|Fours|Future|Here albums|Nothing|Ones") == 0);
+  CHECK(hidden == 0);
+  smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Here albums|Ones") == 0);
+  CHECK(hidden == 4);
+
+  /* Recents leave the same ones out with the flag, and still fill the limit. */
+  const struct {
+    mc_recent_kind kind;
+    const char *uid;
+  } opens[] = {{MC_RECENT_ALBUM, "al2"}, {MC_RECENT_PLAYLIST, all}, {MC_RECENT_PLAYLIST, s_away},
+               {MC_RECENT_PLAYLIST, partly}, {MC_RECENT_PLAYLIST, empty}, {MC_RECENT_PLAYLIST, away}};
+  for (size_t i = 0; i < sizeof opens / sizeof opens[0]; i++) {
+    mc_sleep_ms(2);
+    CHECK(mc_library_record_opened(lib, opens[i].kind, opens[i].uid) == MC_OK);
+  }
+  mc_recent_list *recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 6);
+  mc_recent_list_free(recents);
+  recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 3);
+  if (recents && recents->count == 3) {
+    CHECK(strcmp(recents->items[0].uid, partly) == 0);
+    CHECK(strcmp(recents->items[1].uid, all) == 0);
+    CHECK_STR(recents->items[2].uid, "al2"); /* other kinds are kept */
+  }
+  mc_recent_list_free(recents);
+  recents = NULL;
+  CHECK(mc_library_list_recents(lib, 2, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 2);
+  if (recents && recents->count == 2) CHECK(strcmp(recents->items[1].uid, all) == 0);
+  mc_recent_list_free(recents);
+
+  /* A file arriving (sync, an import) brings a playlist back; one going (a delete, sync
+   * removing it) takes it away. Listing again is all it takes. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f4', 't4', 'Away/04 Four.flac', 'flac')") ==
+        SQLITE_OK);
+  CHECK(exec(db, "DELETE FROM files WHERE uid = 'f1'") == SQLITE_OK);
+  playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Partly") == 0);
+  CHECK(hidden == 2);
+  smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away albums|Fours|Here albums") == 0);
+  /* A track that's gone takes its entries with it. */
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't3'") == SQLITE_OK);
+  playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away") == 0);
+  CHECK(hidden == 3);
+
+  CHECK(mc_library_list_playlists(NULL, MC_LIST_PLAYABLE, &lists) == MC_ERR_INVALID_ARG);
   mc_library_close(lib);
 }
 
@@ -687,6 +843,7 @@ int main(int argc, char **argv) {
   test_migration_v6(argc > 1 ? argv[1] : ".");
   test_recents(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
+  test_playable(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();
 }

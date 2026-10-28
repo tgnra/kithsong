@@ -359,7 +359,7 @@ static void art_done(GObject *source, GAsyncResult *result, gpointer user) {
 }
 
 /* Looks up the pictures of the grid's playlists again, as they may have changed. */
-static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir) {
+static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir, int *hidden) {
   grid *g = grid_of(widget);
   g->art_gen++;
   guint n = g_list_model_get_n_items(G_LIST_MODEL(g->store));
@@ -383,13 +383,14 @@ static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir) 
   g_object_unref(task);
 }
 
-int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *art_dir) {
+int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *art_dir, int *hidden) {
   char keep[MC_UID_STRLEN];
   grid_keep(widget, keep);
   grid *g = grid_of(widget);
   mc_playlist_list *list = NULL;
-  if (lib && mc_library_list_playlists(lib, &list) != MC_OK) list = NULL;
+  if (lib && mc_library_list_playlists(lib, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
   guint n = list ? (guint)list->count : 0;
+  *hidden = list ? list->hidden : 0;
   AlbumItem **items = g_new0(AlbumItem *, n + 1);
   for (guint i = 0; i < n; i++) {
     const char *known = g->art ? g_hash_table_lookup(g->art, list->items[i].uid) : NULL;

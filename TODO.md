@@ -4,6 +4,12 @@
 
 - Android - smart playlists' art (still their first track's cover; mc_playlist_art() only knows manual playlists)
 - Linux - keyboard access to the track menu (Menu key, Shift+F10)
+- Playlists with nothing to play on this device are hidden (MC_LIST_PLAYABLE) on the Playlists page of every platform and in Android's Recents; Add to playlist and the sync profile pickers still list them all. Left to do:
+  - Windows and Linux - when they show smart playlists, pass MC_LIST_PLAYABLE too (the sidebar's Recents already do)
+  - Windows - "Add to playlist → New playlist…" with a track that has no file here makes a playlist that's hidden at once; say so, or grey the menu for such tracks
+  - Linux - a playlist made in the Add to playlist dialog and left empty is only reachable from that dialog until a track is added
+  - Linux - check the Playlists page under Xvfb once the -std=c11 core fix (68d61bf) and track_list_item_at() fix (3eaa789) are on master
+  - Removing a playlist's last playable track from its track list makes the playlist vanish from the grid with the track list closing; consider keeping the open one shown until it's left
 
 ## Keyboard Shortcuts
 
@@ -60,7 +66,7 @@ Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPR
 - Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Core - move removed untracked files to the Recycle Bin/trash instead of deleting them permanently (mc_trash() in util/platform.h does it; import's swaps use it)
 - Core - a stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
-- Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents(); artists need core uids rather than names
+- Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents() (with MC_LIST_PLAYABLE, so playlists with nothing here stay hidden); artists need core uids rather than names
 - Android - profile editor done (see ANDROID_PROGRESS.md); untested: the over-budget message, renaming a member, a group renaming the phone, dark theme, and sync on a real device over Wi-Fi
 
 ## Recents

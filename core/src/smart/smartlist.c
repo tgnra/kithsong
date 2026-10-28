@@ -586,6 +586,34 @@ mc_status mc_library_list_smart_albums(mc_library *lib, const char *smart_uid, m
   return st;
 }
 
+/* Whether a rule holds a track with a file here (TRACK_COLS's path, column 5) or an album with
+ * one (ALBUM_COLS's file, column 6), stopping at the first. */
+static mc_status rule_has_playable(mc_library *lib, mc_smart_subject subject, const char *rule, int *out) {
+  *out = 0;
+  sqlite3_stmt *stmt;
+  mc_status st = prepare(lib, subject, rule, &stmt);
+  if (st != MC_OK) return st;
+  int col = subject == MC_SMART_TRACKS ? 5 : 6, rc;
+  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW)
+    if (sqlite3_column_type(stmt, col) != SQLITE_NULL) {
+      *out = 1;
+      break;
+    }
+  if (rc != SQLITE_ROW && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out) {
+  *out = 0;
+  mc_smart_subject subject;
+  char *rule;
+  mc_status st = load(lib, smart_uid, &subject, &rule);
+  if (st == MC_OK) st = rule_has_playable(lib, subject, rule, out);
+  free(rule);
+  return st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG ? MC_OK : st;
+}
+
 /* Runs one write of up to three text parameters. MC_ERR_NOT_FOUND if it changed no row. */
 static mc_status write_one(mc_library *lib, const char *sql, const char *p1, const char *p2, const char *p3) {
   sqlite3_stmt *stmt;
@@ -685,7 +713,7 @@ mc_status mc_smart_reshuffle(mc_library *lib, const char *smart_uid) {
   return st;
 }
 
-mc_status mc_library_list_smart(mc_library *lib, mc_smart_list **out) {
+mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   mc_smart_list *list = calloc(1, sizeof *list);
@@ -700,6 +728,16 @@ mc_status mc_library_list_smart(mc_library *lib, mc_smart_list **out) {
     mc_smart_subject subject;
     /* Skip kinds of list from a newer app this build can't show. */
     if (!parse_subject(sqlite3_column_text(stmt, 2), &subject)) continue;
+    if (flags & MC_LIST_PLAYABLE) {
+      int playable = 0;
+      st = rule_has_playable(lib, subject, (const char *)sqlite3_column_text(stmt, 3), &playable);
+      if (st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG) st = MC_OK; /* holds nothing */
+      if (st != MC_OK) break;
+      if (!playable) {
+        list->hidden++;
+        continue;
+      }
+    }
     if (list->count == cap) {
       int grown = cap ? cap * 2 : 8;
       mc_smart_info *items = realloc(list->items, (size_t)grown * sizeof *items);

@@ -190,7 +190,11 @@ and a removal wins over an earlier open. `opened_ms` is the wall-clock part of t
 open is stamped with, so the newest change by hlc is also the newest `opened_ms`. There is
 no foreign key, since a row may name any of four tables; listing leaves out rows whose item
 is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
-`mc_library_remove_recent()` and `mc_library_clear_recents()`.
+`mc_library_remove_recent()` and `mc_library_clear_recents()`. With `MC_LIST_PLAYABLE`,
+listing also leaves out playlists and smart playlists with nothing to play on this device:
+no entry (or, for a smart one, no track its rule picks) has a `files` row here. The
+playlist and smart list listings take the same flag; `files` being device-local is what
+makes the answer differ between devices.
 
 ## Tables
 

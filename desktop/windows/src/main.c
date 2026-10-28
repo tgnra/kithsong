@@ -331,7 +331,7 @@ static void show_album(void) {
  * (they're recorded on other devices). */
 static void refresh_recents(void) {
   mc_recent_list *list = NULL;
-  if (!g_app.lib || mc_library_list_recents(g_app.lib, 0, &list) != MC_OK) list = NULL;
+  if (!g_app.lib || mc_library_list_recents(g_app.lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
   sidebar_recent items[MAX_RECENTS];
   wchar_t *names[MAX_RECENTS], *artists[MAX_RECENTS];
   int n = 0;

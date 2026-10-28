@@ -30,8 +30,8 @@ data class TrackInfo(
     val coverDir: String? = null,
 )
 
-/** mc_playlist_info. */
-data class PlaylistInfo(val uid: String, val name: String, val trackCount: Int)
+/** mc_playlist_info. [playableCount] is the entries whose track has a file on this device. */
+data class PlaylistInfo(val uid: String, val name: String, val trackCount: Int, val playableCount: Int)
 
 /** mc_smart_info: a smart playlist, or a smart album group if [isAlbums]. [rule] is its JSON. */
 data class SmartInfo(val uid: String, val name: String, val isAlbums: Boolean, val rule: String)
@@ -56,8 +56,12 @@ class CoreLibrary(dir: String) : AutoCloseable {
     fun albumTracks(albumUid: String): List<TrackInfo> =
         nativeListTracks(handle, TRACKS_ALBUM, albumUid).asList()
 
-    /** Every playlist, by name. */
-    fun playlists(): List<PlaylistInfo> = nativeListPlaylists(handle).asList()
+    /**
+     * Every playlist, by name; if [playableOnly], only those with a track that has a file on
+     * this device (MC_LIST_PLAYABLE), as the views for playing show. Pickers list them all.
+     */
+    fun playlists(playableOnly: Boolean = false): List<PlaylistInfo> =
+        nativeListPlaylists(handle, if (playableOnly) LIST_PLAYABLE else 0).asList()
 
     /** [playlistUid]'s tracks in playlist order; a track in it twice is listed twice. */
     fun playlistTracks(playlistUid: String): List<TrackInfo> =
@@ -81,8 +85,12 @@ class CoreLibrary(dir: String) : AutoCloseable {
     /** Every manual album group, by name. */
     fun albumGroups(): List<NamedInfo> = nativeListAlbumGroups(handle).asList()
 
-    /** Every smart list of either kind, by name. */
-    fun smartLists(): List<SmartInfo> = nativeListSmart(handle).asList()
+    /**
+     * Every smart list of either kind, by name; if [playableOnly], only those holding something
+     * with a file on this device (MC_LIST_PLAYABLE).
+     */
+    fun smartLists(playableOnly: Boolean = false): List<SmartInfo> =
+        nativeListSmart(handle, if (playableOnly) LIST_PLAYABLE else 0).asList()
 
     /** What smart playlist [smartUid] holds now, evaluated afresh. */
     fun smartTracks(smartUid: String): List<TrackInfo> =
@@ -107,6 +115,9 @@ class CoreLibrary(dir: String) : AutoCloseable {
         // mc_entity
         const val ENTITY_TRACKS = 2
 
+        // MC_LIST_PLAYABLE
+        const val LIST_PLAYABLE = 1
+
         // nativeListTracks' kinds
         const val TRACKS_ALBUM = 0
         const val TRACKS_PLAYLIST = 1
@@ -117,12 +128,12 @@ class CoreLibrary(dir: String) : AutoCloseable {
         @JvmStatic external fun nativeCount(handle: Long, entity: Int): Long
         @JvmStatic external fun nativeListAlbums(handle: Long): Array<AlbumInfo>
         @JvmStatic external fun nativeListTracks(handle: Long, kind: Int, uid: String): Array<TrackInfo>
-        @JvmStatic external fun nativeListPlaylists(handle: Long): Array<PlaylistInfo>
+        @JvmStatic external fun nativeListPlaylists(handle: Long, flags: Int): Array<PlaylistInfo>
         @JvmStatic external fun nativePlaylistArt(handle: Long, uid: String, cacheDir: String): String?
         @JvmStatic external fun nativePlaylistArtPrune(handle: Long, cacheDir: String)
         @JvmStatic external fun nativeListArtists(handle: Long): Array<NamedInfo>
         @JvmStatic external fun nativeListAlbumGroups(handle: Long): Array<NamedInfo>
-        @JvmStatic external fun nativeListSmart(handle: Long): Array<SmartInfo>
+        @JvmStatic external fun nativeListSmart(handle: Long, flags: Int): Array<SmartInfo>
         @JvmStatic external fun nativePreviewSmartAlbums(handle: Long, rule: String): Array<AlbumInfo>
         @JvmStatic external fun nativeRecordPlay(handle: Long, trackUid: String)
     }

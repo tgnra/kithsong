@@ -83,7 +83,7 @@ void recents_refresh(app *a) {
   /* Artists, album groups and smart playlists have no page here to open them on, so they're
    * left out (they're recorded on other devices). */
   mc_recent_list *list = NULL;
-  if (!a->lib || mc_library_list_recents(a->lib, 0, &list) != MC_OK) list = NULL;
+  if (!a->lib || mc_library_list_recents(a->lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
   int n = 0;
   for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
     const mc_recent_info *info = &list->items[i];

@@ -417,7 +417,13 @@ static void on_playlist_delete(void *user) {
 
 void app_reload_library(app *a) {
   int albums = album_grid_reload(a->album_grid, a->lib);
-  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir);
+  int hidden = 0;
+  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir, &hidden);
+  /* Playlists with nothing to play here are hidden; say so rather than "No playlists yet". */
+  adw_status_page_set_title(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE
+                                                           : MC_STR_NO_PLAYLISTS_TITLE));
+  adw_status_page_set_description(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT
+                                                                 : MC_STR_NO_PLAYLISTS_TEXT));
   const char *page = a->show_playlists ? (playlists > 0 ? "playlists" : "no-playlists")
                                        : (albums > 0 ? "grid" : "empty");
   gtk_stack_set_visible_child_name(a->albums, page);
@@ -518,6 +524,7 @@ static GtkWidget *build_albums(app *a) {
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(no_playlists), "view-list-symbolic");
   adw_status_page_set_title(ADW_STATUS_PAGE(no_playlists), mc_str(MC_STR_NO_PLAYLISTS_TITLE));
   adw_status_page_set_description(ADW_STATUS_PAGE(no_playlists), mc_str(MC_STR_NO_PLAYLISTS_TEXT));
+  a->no_playlists = ADW_STATUS_PAGE(no_playlists);
 
   GtkWidget *stack = gtk_stack_new();
   gtk_stack_add_named(GTK_STACK(stack), empty, "empty");

@@ -269,17 +269,19 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListTracks(JN
   return track_array(env, st, list);
 }
 
+/* flags are mc_library_list_playlists()'s (MC_LIST_PLAYABLE). */
 JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListPlaylists(JNIEnv *env,
                                                                                   jclass cls,
-                                                                                  jlong handle) {
+                                                                                  jlong handle,
+                                                                                  jint flags) {
   (void)cls;
   jclass info = (*env)->FindClass(env, "app/musicapp/PlaylistInfo");
   if (!info) return NULL;
-  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V");
+  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V");
   if (!ctor) return NULL;
 
   mc_playlist_list *list = NULL;
-  mc_status st = mc_library_list_playlists((mc_library *)(intptr_t)handle, &list);
+  mc_status st = mc_library_list_playlists((mc_library *)(intptr_t)handle, (unsigned)flags, &list);
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;
@@ -289,7 +291,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListPlaylists
     const mc_playlist_info *p = &list->items[i];
     jstring uid = new_string(env, p->uid);
     jstring name = new_string(env, p->name ? p->name : "");
-    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)p->track_count);
+    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)p->track_count, (jint)p->playable_count);
     if (!item) {
       out = NULL;
       break;
@@ -303,8 +305,9 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListPlaylists
   return out;
 }
 
+/* flags are mc_library_list_smart()'s (MC_LIST_PLAYABLE). */
 JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListSmart(JNIEnv *env, jclass cls,
-                                                                              jlong handle) {
+                                                                              jlong handle, jint flags) {
   (void)cls;
   jclass info = (*env)->FindClass(env, "app/musicapp/SmartInfo");
   if (!info) return NULL;
@@ -313,7 +316,7 @@ JNIEXPORT jobjectArray JNICALL Java_app_musicapp_CoreLibrary_nativeListSmart(JNI
   if (!ctor) return NULL;
 
   mc_smart_list *list = NULL;
-  mc_status st = mc_library_list_smart((mc_library *)(intptr_t)handle, &list);
+  mc_status st = mc_library_list_smart((mc_library *)(intptr_t)handle, (unsigned)flags, &list);
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;

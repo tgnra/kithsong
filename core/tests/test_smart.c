@@ -354,7 +354,7 @@ static void test_saved(mc_library *lib) {
   CHECK(exec(db, "INSERT INTO smart_lists (uid, name, subject, rule) VALUES ('s9', 'Future', 'artists', '{}')") ==
         SQLITE_OK);
   mc_smart_list *lists = NULL;
-  CHECK(mc_library_list_smart(lib, &lists) == MC_OK && lists && lists->count == 3);
+  CHECK(mc_library_list_smart(lib, 0, &lists) == MC_OK && lists && lists->count == 3);
   if (lists && lists->count == 3) {
     CHECK_STR(lists->items[0].name, "Least played");
     CHECK_STR(lists->items[1].name, "New albums");

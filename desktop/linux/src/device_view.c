@@ -679,7 +679,7 @@ static void fill_list(void) {
       }
       case TAB_PLAYLISTS: {
         mc_playlist_list *list = NULL;
-        st = mc_library_list_playlists(g_dv.lib, &list);
+        st = mc_library_list_playlists(g_dv.lib, 0, &list);
         for (int i = 0; st == MC_OK && list && i < list->count; i++)
           g_ptr_array_add(items, dv_item_new(list->items[i].uid, list->items[i].name, NULL));
         mc_playlist_list_free(list);
