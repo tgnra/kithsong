@@ -110,6 +110,11 @@ th, td { border-bottom: 1px solid var(--rule); padding: 0.5rem; text-align: left
   max-width: 34rem; margin: 1.25rem auto 2.25rem; color: var(--muted);
   font-size: clamp(1.125rem, 1rem + 0.6vw, 1.375rem); text-wrap: balance;
 }
+.word {
+  max-width: 34rem; margin: 1.25rem auto 0; color: var(--muted);
+  font-family: var(--serif); font-size: 0.95rem; font-style: italic; text-wrap: balance;
+}
+.word + .tagline { margin-top: 0.75rem; }
 .downloads { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.75rem; margin: 0; padding: 0; list-style: none; }
 .dl {
   display: flex; flex-direction: column; justify-content: center; min-width: 12rem; min-height: 3.5rem;

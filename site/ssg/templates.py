@@ -103,6 +103,8 @@ class Templates:
             logo = esc(site["title"])
         tagline = meta.get("tagline", "")
         tagline = f'<p class="tagline">{esc(tagline)}</p>' if tagline else ""
+        word = meta.get("word", "")
+        word = f'<p class="word">{esc(word)}</p>' if word else ""
         sections = []
         for text, media in features:
             m = re.search(r'<h2 id="([^"]+)"', text)
@@ -119,6 +121,7 @@ class Templates:
 <main id="main" tabindex="-1">
 <section class="hero" aria-labelledby="site-name">
 <h1 id="site-name" class="logo">{logo}</h1>
+{word}
 {tagline}
 {self.downloads()}
 </section>

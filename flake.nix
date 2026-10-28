@@ -35,6 +35,8 @@
               pkgs.pkg-config
               pkgs.gdb
               pkgs.glib.bin # glib-compile-schemas, gsettings
+              # The website generator in site/ (site/requirements.txt).
+              (pkgs.python3.withPackages (ps: [ ps.pillow ps.markdown ]))
             ];
             buildInputs = [
               pkgs.gtk4

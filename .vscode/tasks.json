@@ -16,8 +16,8 @@
   // (which defaults JAVA_HOME to Android Studio's JDK and ANDROID_HOME to
   // %LOCALAPPDATA%\Android\Sdk). `android: run` boots the Pixel_10 AVD unless it is running.
   //
-  // `site: build` writes the website to site/dist using the venv in site/.venv (see
-  // site/README.md to create it).
+  // `site: build` writes the website to site/dist. On Linux the dev shell provides Python,
+  // Pillow and Markdown; on Windows it uses the venv in site/.venv (see site/README.md).
   "version": "2.0.0",
   "windows": {
     "options": {
@@ -206,10 +206,11 @@
     {
       "label": "site: build",
       "type": "shell",
-      "command": "${workspaceFolder}/site/.venv/bin/python",
-      "args": ["-m", "ssg", "build"],
+      "command": "nix",
+      "args": ["develop", "-c", "python", "-m", "ssg", "build"],
       "windows": {
-        "command": "${workspaceFolder}\\site\\.venv\\Scripts\\python.exe"
+        "command": "${workspaceFolder}\\site\\.venv\\Scripts\\python.exe",
+        "args": ["-m", "ssg", "build"]
       },
       "options": { "cwd": "${workspaceFolder}/site" },
       "group": "build",

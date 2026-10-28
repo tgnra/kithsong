@@ -27,6 +27,7 @@ href = "#"
 """
 
 HOME = """---
+word: test (n.): a trial.
 tagline: A test tagline.
 ---
 
@@ -75,7 +76,7 @@ class SiteTest(unittest.TestCase):
         self.build()
         html = self.read("index.html")
         self.assertIn('<h1 id="site-name" class="logo">Test</h1>', html)
-        self.assertIn('<p class="tagline">A test tagline.</p>', html)
+        self.assertIn('<p class="word">test (n.): a trial.</p>\n<p class="tagline">A test tagline.</p>', html)
         self.assertIn('<a href="/docs/">Docs</a>', html)
         self.assertIn('<a href="https://github.com/example/test">GitHub</a>', html)
         # Downloads: one link per platform, in site.toml's order.
