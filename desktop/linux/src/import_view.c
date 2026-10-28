@@ -47,6 +47,7 @@ typedef struct review {
    * and from_item's file `file`. */
   GtkWidget *menu;
   GSimpleAction *assign;
+  GSimpleAction *use_file; /* the missing tracks' Choose File menus: (track, from_item, file) */
   int assign_track, assign_from, assign_file;
 } review;
 
@@ -611,9 +612,38 @@ static GtkWidget *file_row(const mc_import_file *f, const char *note) {
   return row;
 }
 
+/* A file Use as Track can make a missing track: from_item's file `file`, and how its files
+ * menu shows it. group is the related item's "Grouped separately: <album>", or NULL for this
+ * item's own files. */
+typedef struct candidate {
+  int from_item, file;
+  char *name, *group;
+} candidate;
+
+static void candidate_clear(gpointer data) {
+  candidate *c = data;
+  g_free(c->name);
+  g_free(c->group);
+}
+
+/* A menu label shows text as is: underscores doubled, so none is taken for a mnemonic. */
+static char *menu_label(const char *text) {
+  GString *s = g_string_new(NULL);
+  for (const char *p = text ? text : ""; *p; p++) {
+    if (*p == '_') g_string_append_c(s, '_');
+    g_string_append_c(s, *p);
+  }
+  return g_string_free(s, FALSE);
+}
+
+static void add_candidate(GArray *candidates, int from_item, int file, const char *path, const char *group) {
+  candidate c = {from_item, file, menu_label(file_name(path)), group ? g_strdup(group) : NULL};
+  g_array_append_val(candidates, c);
+}
+
 /* Files of other items from the same folder (mc_import_related), which Use as Track can make
- * tracks of this match. Returns how many were listed. */
-static int fill_related(review *r) {
+ * tracks of this match: listed, and added to candidates. Returns how many were listed. */
+static int fill_related(review *r, GArray *candidates) {
   import_view *v = r->v;
   int related[64];
   int n = mc_import_related(v->imp, r->item, related, 64), listed = 0;
@@ -628,12 +658,41 @@ static int fill_related(review *r) {
       GtkWidget *row = file_row(&other->files[i], note);
       set_review_row(row, -1, idx, i);
       gtk_list_box_append(GTK_LIST_BOX(r->tracks), row);
+      add_candidate(candidates, idx, i, other->files[i].path, note);
       listed++;
     }
     mc_free(note);
     mc_import_item_free(other);
   }
   return listed;
+}
+
+/* The files menu of missing track `track`: "Use as track N" over this item's own files, then a
+ * section per related item. Each runs review.use-file with (track, from_item, file). */
+static GMenuModel *files_menu(const mc_import_match *m, int track, GArray *candidates) {
+  GMenu *menu = g_menu_new(), *section = NULL;
+  char num[32];
+  track_number(m, &m->tracks[track], num, sizeof num);
+  char *heading = mc_format_alloc(mc_str(MC_STR_IMPORT_USE_AS_TRACK), MC_S(num));
+  const char *group = "";
+  for (guint i = 0; i < candidates->len; i++) {
+    const candidate *c = &g_array_index(candidates, candidate, i);
+    if (!section || g_strcmp0(c->group, group) != 0) {
+      if (section) g_menu_append_section(menu, group ? group : heading, G_MENU_MODEL(section));
+      g_clear_object(&section);
+      section = g_menu_new();
+      group = c->group;
+    }
+    GMenuItem *item = g_menu_item_new(c->name, NULL);
+    g_menu_item_set_action_and_target_value(item, "review.use-file",
+                                            g_variant_new("(iii)", track, c->from_item, c->file));
+    g_menu_append_item(section, item);
+    g_object_unref(item);
+  }
+  if (section) g_menu_append_section(menu, group ? group : heading, G_MENU_MODEL(section));
+  g_clear_object(&section);
+  mc_free(heading);
+  return G_MENU_MODEL(menu);
 }
 
 static void review_fill_tracks(review *r, int match) {
@@ -646,6 +705,9 @@ static void review_fill_tracks(review *r, int match) {
   char num[32], len[32], sub[1024];
   int missing = 0, loose = 0;
   gboolean *used = g_new0(gboolean, (size_t)it->file_count + 1);
+  GPtrArray *missing_rows = g_ptr_array_new();
+  GArray *candidates = g_array_new(FALSE, FALSE, sizeof(candidate));
+  g_array_set_clear_func(candidates, candidate_clear);
   if (match >= 0 && match < it->match_count) {
     const mc_import_match *m = &it->matches[match];
     for (int j = 0; j < m->track_count; j++) {
@@ -658,6 +720,7 @@ static void review_fill_tracks(review *r, int match) {
         title = g_strdup_printf("%s. %s", num, name);
       }
       sub[0] = '\0';
+      gboolean is_missing = FALSE;
       if (t->file >= 0 && t->file < it->file_count) {
         const mc_import_file *f = &it->files[t->file];
         used[t->file] = TRUE;
@@ -668,6 +731,7 @@ static void review_fill_tracks(review *r, int match) {
       } else {
         join(sub, sizeof sub, mc_str(MC_STR_IMPORT_TRACK_MISSING));
         missing++;
+        is_missing = TRUE;
       }
       GtkWidget *row = plain_row(title, sub);
       g_free(title);
@@ -675,6 +739,7 @@ static void review_fill_tracks(review *r, int match) {
       format_length(t->length_ms, len, sizeof len);
       adw_action_row_add_suffix(ADW_ACTION_ROW(row), dim_label(len));
       gtk_list_box_append(GTK_LIST_BOX(r->tracks), row);
+      if (is_missing) g_ptr_array_add(missing_rows, row);
     }
   }
   /* Files that weren't matched to any track: left untouched if this match is applied. */
@@ -683,23 +748,58 @@ static void review_fill_tracks(review *r, int match) {
     GtkWidget *row = file_row(&it->files[i], match >= 0 ? mc_str(MC_STR_IMPORT_NOT_MATCHED) : NULL);
     set_review_row(row, -1, r->item, i);
     gtk_list_box_append(GTK_LIST_BOX(r->tracks), row);
+    add_candidate(candidates, r->item, i, it->files[i].path, NULL);
     loose++;
   }
   g_free(used);
   /* With tracks missing, files from the same folder that ended up elsewhere may be them. */
-  if (missing && it->kind == MC_IMPORT_ALBUM) loose += fill_related(r);
+  if (missing && it->kind == MC_IMPORT_ALBUM) loose += fill_related(r, candidates);
+
+  /* Each missing track gets a Choose File button with the files it can take; activating the
+   * row (a click, Enter) opens it too (on_track_activated). */
+  gboolean can_assign = match >= 0 && missing && loose && it->kind == MC_IMPORT_ALBUM;
+  if (can_assign) {
+    const mc_import_match *m = &it->matches[match];
+    g_simple_action_set_enabled(r->use_file, !state_busy(it->state));
+    for (guint i = 0; i < missing_rows->len; i++) {
+      GtkWidget *row = g_ptr_array_index(missing_rows, i);
+      const review_row *rr = g_object_get_data(G_OBJECT(row), "review-row");
+      GtkWidget *button = gtk_menu_button_new();
+      gtk_menu_button_set_label(GTK_MENU_BUTTON(button), mc_str(MC_STR_IMPORT_CHOOSE_FILE));
+      gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
+      GMenuModel *model = files_menu(m, rr->track, candidates);
+      gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(button), model);
+      g_object_unref(model);
+      adw_action_row_add_suffix(ADW_ACTION_ROW(row), button);
+      gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
+      g_object_set_data(G_OBJECT(row), "choose-file", button);
+    }
+  }
+  g_ptr_array_free(missing_rows, TRUE);
+  g_array_free(candidates, TRUE);
 
   if (match >= 0) {
-    char *text = missing && loose ? g_strdup_printf("%s. %s", mc_str(MC_STR_LINUX_IMPORT_TRACKS_TEXT),
-                                                    mc_str(MC_STR_IMPORT_USE_AS_TRACK_HINT))
-                                  : g_strdup(mc_str(MC_STR_LINUX_IMPORT_TRACKS_TEXT));
+    char *text = can_assign ? g_strdup_printf("%s. %s", mc_str(MC_STR_LINUX_IMPORT_TRACKS_TEXT),
+                                              mc_str(MC_STR_IMPORT_USE_AS_TRACK_HINT))
+                            : g_strdup(mc_str(MC_STR_LINUX_IMPORT_TRACKS_TEXT));
     adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(r->tracks_group), text);
     g_free(text);
   }
 }
 
-/* Right-click on the track list: Use as Track N, for one missing track selected with one file
- * (Ctrl+click selects several rows). */
+/* A click on a missing track, or Enter on it, opens its Choose File menu; not a Ctrl or
+ * Shift+click, which selects it along with a file for the right-click menu. */
+static void on_track_activated(GtkListBox *list, GtkListBoxRow *row, gpointer data) {
+  (void)data;
+  GtkWidget *button = g_object_get_data(G_OBJECT(row), "choose-file");
+  if (!button) return;
+  GdkDevice *keyboard = gdk_seat_get_keyboard(gdk_display_get_default_seat(gtk_widget_get_display(GTK_WIDGET(list))));
+  if (keyboard && (gdk_device_get_modifier_state(keyboard) & (GDK_CONTROL_MASK | GDK_SHIFT_MASK))) return;
+  gtk_menu_button_popup(GTK_MENU_BUTTON(button));
+}
+
+/* Right-click on the track list: on a missing track selected with one file (Ctrl+click), Use
+ * as Track N; otherwise, on a missing track, its Choose File menu. */
 static void on_tracks_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer data) {
   (void)n_press;
   review *r = data;
@@ -724,6 +824,15 @@ static void on_tracks_menu(GtkGestureClick *click, int n_press, double x, double
     }
   }
   g_list_free(rows);
+  if (!(track && tracks == 1 && selected == 2 && files == 1)) {
+    GtkListBoxRow *at = gtk_list_box_get_row_at_y(GTK_LIST_BOX(r->tracks), (int)y);
+    GtkWidget *button = at ? g_object_get_data(G_OBJECT(at), "choose-file") : NULL;
+    if (button) {
+      gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+      gtk_menu_button_popup(GTK_MENU_BUTTON(button));
+      return;
+    }
+  }
   if (!track || tracks != 1) return; /* only for a missing track */
   gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
 
@@ -754,6 +863,20 @@ static void on_assign(GSimpleAction *action, GVariant *param, gpointer data) {
   if (!r->v->imp || r->assign_from < 0) return;
   if (mc_import_assign(r->v->imp, r->item, r->selected, r->assign_track, r->assign_from, r->assign_file) == MC_OK) {
     r->v->idle = FALSE; /* the import thread writes the item again; the dialog stays open */
+    update_status(r->v);
+  } else {
+    alert(GTK_WIDGET(r->dialog), mc_str(MC_STR_LINUX_IMPORT_ITEM_BUSY_TITLE), mc_str(MC_STR_IMPORT_ITEM_BUSY));
+  }
+}
+
+static void on_use_file(GSimpleAction *action, GVariant *param, gpointer data) {
+  (void)action;
+  review *r = data;
+  int track, from_item, file;
+  g_variant_get(param, "(iii)", &track, &from_item, &file);
+  if (!r->v->imp || r->selected < 0) return;
+  if (mc_import_assign(r->v->imp, r->item, r->selected, track, from_item, file) == MC_OK) {
+    r->v->idle = FALSE; /* as Use as Track: the item is written again and the dialog stays open */
     update_status(r->v);
   } else {
     alert(GTK_WIDGET(r->dialog), mc_str(MC_STR_LINUX_IMPORT_ITEM_BUSY_TITLE), mc_str(MC_STR_IMPORT_ITEM_BUSY));
@@ -981,13 +1104,14 @@ static void open_review(import_view *v, int idx) {
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(r->matches_group), r->matches);
 
   r->tracks = boxed_list();
-  /* Several rows can be selected (Ctrl+click): a missing track and a file, for Use as Track
-   * on the right-click menu. */
+  /* A missing track's row has a Choose File menu. Several rows can also be selected
+   * (Ctrl+click): a missing track and a file, for Use as Track on the right-click menu. */
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(r->tracks), GTK_SELECTION_MULTIPLE);
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
   g_signal_connect(click, "pressed", G_CALLBACK(on_tracks_menu), r);
   gtk_widget_add_controller(r->tracks, GTK_EVENT_CONTROLLER(click));
+  g_signal_connect(r->tracks, "row-activated", G_CALLBACK(on_track_activated), r);
   r->menu = gtk_popover_menu_new_from_model(NULL);
   gtk_popover_set_has_arrow(GTK_POPOVER(r->menu), FALSE);
   gtk_widget_set_halign(r->menu, GTK_ALIGN_START);
@@ -1040,6 +1164,10 @@ static void open_review(import_view *v, int idx) {
   g_signal_connect(r->assign, "activate", G_CALLBACK(on_assign), r);
   g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(r->assign));
   g_object_unref(r->assign); /* the group keeps it */
+  r->use_file = g_simple_action_new("use-file", G_VARIANT_TYPE("(iii)"));
+  g_signal_connect(r->use_file, "activate", G_CALLBACK(on_use_file), r);
+  g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(r->use_file));
+  g_object_unref(r->use_file);
   gtk_widget_insert_action_group(GTK_WIDGET(r->dialog), "review", G_ACTION_GROUP(group));
   g_object_unref(group);
 

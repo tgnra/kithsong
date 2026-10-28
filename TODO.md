@@ -111,6 +111,7 @@ Big pieces that haven't been started, or that only one platform has.
 - Core - duplicates: a swap keeps the library's album and track metadata and files the new file under the old name; the new file's tags come from its own match, so a release-group or by-name swap can leave tags naming another release than the library row
 - Core - duplicates: a byte-identical file is only recognised against files that were imported as-is or synced (matched imports are re-tagged in the library, so their bytes differ from the source)
 - All - Use as Track (mc_import_assign) works only within an import session: once Done is clicked the session's matches are gone, so an album already in the library can't be fixed that way. It would need the release's track list kept (or looked up again by mb_albumid) and a library-side "assign this file to that track"
+- Windows - a missing track's "Choose file… ▾" in the review is cell text with an arrow, not a real dropdown: UI Automation sees the row's text but no ExpandCollapse pattern (the menu opens with a click, Enter or the Menu key)
 - Core - Use as Track doesn't recompute the match's confidence, and rewriting an already imported item skips the duplicates check (its files are in the library), so a file brought in from outside the library replaces a library copy at the same path rather than being compared for quality
 - Core - extended search (docs/tagging-rules.md): not for singles, so a one-file album whose album tag equals its title (a DJ mix, e.g. "BREAK IT OLDSCHOOL [SRPC-L007]") gets only recording candidates; it would need release candidates for a single item
 - Core - grouping: an album tag with the disc in it ("危ないベースライン Disc1", "… Disc2") makes one item per disc folder; the folder name's title (search_keys.c) could join them
@@ -214,7 +215,7 @@ Things built but not checked properly.
 - The Settings scrobbling group on screen
 - Delete and restore in the running app
 - Import outcomes ("Replaced with higher quality", "Already in library", "Added missing tracks")
-- Import review's Use as Track N (multi-select track list, right-click menu, files of related items): written without a GTK build at hand, not even compiled yet
+- Import review's Use as Track: compiled, and run under Xvfb in Docker (GTK 4.18, libadwaita 1.7) with the mouse: a missing track's Choose File… menu (from a click on its row, Enter, or a right-click), Ctrl+click selecting without opening it, and the multi-select right-click Use as Track N all assign. Not checked: choosing inside the menu with the keyboard (keys didn't reach the popover under Xvfb), files of related items, and a real desktop session
 - The review's Search More Widely button (only compiled)
 - Playlists page, now the -std=c11 core fix (68d61bf) and track_list_item_at() fix (3eaa789) are in
 - Sync: pairing with Windows or Android, the over-budget estimate, a watch's icon, switching library while a device page is open, and a real LAN (only two Docker containers so far)
@@ -222,6 +223,7 @@ Things built but not checked properly.
 - An archive's sidebar row ("Offline. Keeps the whole library" under its name), only compiled
 
 ### Windows
+- Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
 - Firewall prompt: the success path after UAC, beyond one run
 - Deleting a track while it plays
 - Volume's fade (only silent test files so far)

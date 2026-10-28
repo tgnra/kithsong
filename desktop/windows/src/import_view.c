@@ -30,6 +30,8 @@ enum { COL_STATUS, COL_ARTIST, COL_ALBUM, COL_FILES, COL_MATCH, COL_CONFIDENCE, 
 
 /* Sent to the review dialog when its item changed. */
 #define WM_APP_REVIEW_REFRESH (WM_APP + 10)
+/* Sent to the review dialog to open the files menu of the missing track at list index wp. */
+#define WM_APP_FILES_MENU (WM_APP + 11)
 
 typedef struct view {
   HWND parent;
@@ -57,6 +59,8 @@ typedef struct view {
   struct review_row *rows;
   int row_count;
   int rows_match; /* the match the rows show; -1 if none */
+  int rows_gen;   /* bumped whenever the rows are rebuilt, e.g. while a menu is open */
+  BOOL can_assign; /* the rows have missing tracks, and files Use as Track can make them */
 } view;
 
 /* A row of the review's track list: a track of the match, with the file matched to it if
@@ -499,11 +503,21 @@ static int fill_related(HWND lv) {
   return listed;
 }
 
+/* The track list's row (lParam) at list index i, or NULL. */
+static const review_row *row_at(HWND lv, int i) {
+  LVITEMW li = {.mask = LVIF_PARAM, .iItem = i};
+  if (!SendMessageW(lv, LVM_GETITEMW, 0, (LPARAM)&li) || li.lParam < 0 || li.lParam >= g_view.row_count)
+    return NULL;
+  return &g_view.rows[li.lParam];
+}
+
 static void fill_tracks(HWND dlg, int match) {
   HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
   SendMessageW(lv, LVM_DELETEALLITEMS, 0, 0);
   g_view.row_count = 0;
   g_view.rows_match = -1;
+  g_view.rows_gen++;
+  g_view.can_assign = FALSE;
   SetDlgItemTextW(dlg, IDC_REV_TRACKS_HINT, L"");
   const mc_import_item *it = g_view.review_snap;
   if (!it) return;
@@ -542,19 +556,128 @@ static void fill_tracks(HWND dlg, int match) {
   free(used);
   /* With tracks missing, files from the same folder that ended up elsewhere may be them. */
   if (missing && it->kind == MC_IMPORT_ALBUM) loose += fill_related(lv);
-  if (missing && loose) SetDlgItemTextW(dlg, IDC_REV_TRACKS_HINT, mc_wstr(MC_STR_IMPORT_USE_AS_TRACK_HINT));
+  if (!missing || !loose || it->kind != MC_IMPORT_ALBUM) return;
+
+  /* The missing tracks' File cells read as a dropdown: clicking the row lists the files. */
+  g_view.can_assign = TRUE;
+  SetDlgItemTextW(dlg, IDC_REV_TRACKS_HINT, mc_wstr(MC_STR_IMPORT_USE_AS_TRACK_HINT));
+  wchar_t choose[128];
+  swprintf(choose, 128, L"%ls \x25BE", mc_wstr(MC_STR_IMPORT_CHOOSE_FILE));
+  const mc_import_match *m = &it->matches[match];
+  int count = (int)SendMessageW(lv, LVM_GETITEMCOUNT, 0, 0);
+  for (int i = 0; i < count; i++) {
+    const review_row *r = row_at(lv, i);
+    if (r && r->track >= 0 && r->track < m->track_count && m->tracks[r->track].file < 0) lv_set(lv, i, 3, choose);
+  }
 }
 
-/* The track list's row (lParam) at list index i, or NULL. */
-static const review_row *row_at(HWND lv, int i) {
-  LVITEMW li = {.mask = LVIF_PARAM, .iItem = i};
-  if (!SendMessageW(lv, LVM_GETITEMW, 0, (LPARAM)&li) || li.lParam < 0 || li.lParam >= g_view.row_count)
-    return NULL;
-  return &g_view.rows[li.lParam];
+/* The row at list index i if it's a missing track that Use as Track can fill, else NULL. */
+static const review_row *missing_row(HWND lv, int i) {
+  const mc_import_item *it = g_view.review_snap;
+  if (!g_view.can_assign || !it || g_view.rows_match < 0 || g_view.rows_match >= it->match_count) return NULL;
+  const review_row *r = i >= 0 ? row_at(lv, i) : NULL;
+  const mc_import_match *m = &it->matches[g_view.rows_match];
+  return r && r->track >= 0 && r->track < m->track_count && m->tracks[r->track].file < 0 ? r : NULL;
 }
 
-/* The track list's menu: Use as Track N, for one missing track selected with one file. pt is
- * in screen coordinates, or (-1, -1) from the keyboard. */
+static BOOL review_busy(void) {
+  const mc_import_item *it = g_view.review_snap;
+  return !it || it->state == MC_IMPORT_PENDING || it->state == MC_IMPORT_MATCHING || it->state == MC_IMPORT_WRITING;
+}
+
+/* "Use as track 3", for track `track` of the match the rows show, into text. */
+static void use_as_track_text(int track, wchar_t *text, size_t n) {
+  const mc_import_match *m = &g_view.review_snap->matches[g_view.rows_match];
+  wchar_t number[32];
+  track_number(m, &m->tracks[track], number, 32);
+  char num8[64];
+  WideCharToMultiByte(CP_UTF8, 0, number, -1, num8, sizeof num8, NULL, NULL);
+  mc_wformat(text, n, mc_str(MC_STR_IMPORT_USE_AS_TRACK), MC_S(num8));
+}
+
+/* Makes the file row's file the missing track row's track. */
+static void assign(HWND dlg, const review_row *track, const review_row *file) {
+  if (mc_import_assign(g_view.imp, g_view.review_item, g_view.rows_match, track->track, file->from_item,
+                       file->file) == MC_OK) {
+    g_view.idle = FALSE; /* the import thread writes the item again; the dialog stays open */
+    update_status();
+  } else {
+    MessageBoxW(dlg, mc_wstr(MC_STR_IMPORT_ITEM_BUSY), mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
+  }
+}
+
+/* A list cell's text into out, with '&' doubled for a menu item. */
+static void menu_cell(HWND lv, int row, int col, wchar_t *out, size_t n) {
+  wchar_t text[MAX_PATH];
+  LVITEMW li = {.iSubItem = col, .pszText = text, .cchTextMax = MAX_PATH};
+  text[0] = L'\0';
+  SendMessageW(lv, LVM_GETITEMTEXTW, (WPARAM)row, (LPARAM)&li);
+  size_t o = 0;
+  for (const wchar_t *p = text; *p && o + 2 < n; p++) {
+    if (*p == L'&') out[o++] = L'&';
+    out[o++] = *p;
+  }
+  out[o] = L'\0';
+}
+
+/* The menu of files to use as the missing track at list index `index`: this item's files no
+ * track took, then each related item's under its name. pt is in screen coordinates, or
+ * (-1, -1) to drop it down from the track's File cell (a click, Enter, the Menu key). */
+static void files_menu(HWND dlg, int index, POINT pt) {
+  HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
+  const review_row *track = missing_row(lv, index);
+  if (!track) return;
+  int gen = g_view.rows_gen;
+  UINT item_flags = MF_STRING | (review_busy() ? MF_GRAYED : 0);
+
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return;
+  /* No "Use as track N" heading: the arrow keys would stop on it, as on any disabled item.
+   * The menu drops down from the track's own row. */
+  wchar_t text[MAX_PATH * 2 + 64], cell[MAX_PATH * 2];
+  int count = (int)SendMessageW(lv, LVM_GETITEMCOUNT, 0, 0), from = g_view.review_item;
+  for (int i = 0; i < count; i++) {
+    const review_row *r = row_at(lv, i);
+    if (!r || r->track >= 0) continue;
+    if (r->from_item != from) { /* a related item's files, under "Grouped separately: <album>" */
+      from = r->from_item;
+      if (GetMenuItemCount(menu) > 0) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+      menu_cell(lv, i, 1, cell, sizeof cell / sizeof *cell);
+      AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, cell);
+    }
+    menu_cell(lv, i, 3, cell, sizeof cell / sizeof *cell);
+    wchar_t len[32];
+    LVITEMW li = {.iSubItem = 5, .pszText = len, .cchTextMax = 32};
+    len[0] = L'\0';
+    SendMessageW(lv, LVM_GETITEMTEXTW, (WPARAM)i, (LPARAM)&li);
+    if (len[0]) swprintf(text, sizeof text / sizeof *text, L"%ls\t%ls", cell, len);
+    else swprintf(text, sizeof text / sizeof *text, L"%ls", cell);
+    AppendMenuW(menu, item_flags, (UINT_PTR)i + 1, text);
+  }
+
+  TPMPARAMS tpm = {.cbSize = sizeof tpm};
+  if (pt.x == -1 && pt.y == -1) {
+    RECT rc = {.top = 3, .left = LVIR_BOUNDS};
+    if (!SendMessageW(lv, LVM_GETSUBITEMRECT, (WPARAM)index, (LPARAM)&rc)) GetClientRect(lv, &rc);
+    MapWindowPoints(lv, NULL, (POINT *)&rc, 2);
+    tpm.rcExclude = rc; /* so it opens above the cell when there's no room below */
+    pt.x = rc.left;
+    pt.y = rc.bottom;
+  }
+  UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_VERTICAL |
+               (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : TPM_LEFTALIGN);
+  int cmd = (int)TrackPopupMenuEx(menu, flags, pt.x, pt.y, dlg, &tpm);
+  DestroyMenu(menu);
+  /* The menu's loop may have let a refresh rebuild the rows; then the choice means nothing. */
+  if (cmd <= 0 || gen != g_view.rows_gen || review_busy()) return;
+  const review_row *file = row_at(lv, cmd - 1);
+  track = missing_row(lv, index);
+  if (track && file && file->track < 0) assign(dlg, track, file);
+}
+
+/* The track list's menu. On a missing track alone, the files it can take (files_menu); on a
+ * missing track selected with one file (Ctrl+click), Use as Track N. pt is in screen
+ * coordinates, or (-1, -1) from the keyboard. */
 static void tracks_menu(HWND dlg, POINT pt) {
   const mc_import_item *it = g_view.review_snap;
   int match = g_view.rows_match;
@@ -563,28 +686,31 @@ static void tracks_menu(HWND dlg, POINT pt) {
   HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
 
   const review_row *track = NULL, *file = NULL;
-  int selected = 0, tracks = 0, files = 0;
+  int selected = 0, tracks = 0, files = 0, track_index = -1;
   for (int i = -1; (i = (int)SendMessageW(lv, LVM_GETNEXTITEM, (WPARAM)i, LVNI_SELECTED)) >= 0;) {
     const review_row *r = row_at(lv, i);
     selected++;
     if (!r) continue;
     if (r->track >= 0) {
       tracks++;
-      if (r->track < m->track_count && m->tracks[r->track].file < 0) track = r;
+      if (r->track < m->track_count && m->tracks[r->track].file < 0) {
+        track = r;
+        track_index = i;
+      }
     } else {
       files++;
       file = r;
     }
   }
   if (!track || tracks != 1) return; /* only for a missing track */
+  if (selected == 1) {
+    files_menu(dlg, track_index, pt);
+    return;
+  }
 
-  BOOL busy = it->state == MC_IMPORT_PENDING || it->state == MC_IMPORT_MATCHING || it->state == MC_IMPORT_WRITING;
-  BOOL ok = !busy && selected == 2 && files == 1;
-  wchar_t number[32], text[128];
-  track_number(m, &m->tracks[track->track], number, 32);
-  char num8[64];
-  WideCharToMultiByte(CP_UTF8, 0, number, -1, num8, sizeof num8, NULL, NULL);
-  mc_wformat(text, 128, mc_str(MC_STR_IMPORT_USE_AS_TRACK), MC_S(num8));
+  BOOL ok = !review_busy() && selected == 2 && files == 1;
+  wchar_t text[128];
+  use_as_track_text(track->track, text, 128);
 
   if (pt.x == -1 && pt.y == -1) {
     RECT rc = {.left = LVIR_LABEL};
@@ -597,17 +723,48 @@ static void tracks_menu(HWND dlg, POINT pt) {
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
   AppendMenuW(menu, MF_STRING | (ok ? 0 : MF_GRAYED), 1, text);
+  int gen = g_view.rows_gen;
+  review_row t = *track, f = file ? *file : (review_row){-1, -1, -1};
   UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
   int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, dlg, NULL);
   DestroyMenu(menu);
-  if (cmd != 1 || !ok) return;
+  /* As in files_menu: only if the rows weren't rebuilt meanwhile. */
+  if (cmd == 1 && ok && gen == g_view.rows_gen && !review_busy()) assign(dlg, &t, &f);
+}
 
-  if (mc_import_assign(g_view.imp, g_view.review_item, match, track->track, file->from_item, file->file) == MC_OK) {
-    g_view.idle = FALSE; /* the import thread writes the item again; the dialog stays open */
-    update_status();
-  } else {
-    MessageBoxW(dlg, mc_wstr(MC_STR_IMPORT_ITEM_BUSY), mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
+/* The track list: Enter on a missing track opens its files menu instead of pressing the
+ * dialog's default button. */
+static LRESULT CALLBACK tracks_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+  (void)data;
+  switch (msg) {
+    case WM_GETDLGCODE: {
+      const MSG *m = (const MSG *)lp;
+      LRESULT code = DefSubclassProc(wnd, msg, wp, lp);
+      if (m && (m->message == WM_KEYDOWN || m->message == WM_CHAR) && m->wParam == VK_RETURN &&
+          missing_row(wnd, (int)SendMessageW(wnd, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_FOCUSED)))
+        code |= DLGC_WANTMESSAGE;
+      return code;
+    }
+    case WM_KEYDOWN:
+      if (wp == VK_RETURN) {
+        int focus = (int)SendMessageW(wnd, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_FOCUSED);
+        if (missing_row(wnd, focus)) {
+          /* Posted, so the key's WM_CHAR, already queued, is handled first: inside the
+           * menu's loop it would close the menu again. */
+          PostMessageW(GetParent(wnd), WM_APP_FILES_MENU, (WPARAM)focus, 0);
+          return 0;
+        }
+      }
+      break;
+    case WM_CHAR:
+      if (wp == L'\r' && missing_row(wnd, (int)SendMessageW(wnd, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_FOCUSED)))
+        return 0; /* the Enter above, without a beep */
+      break;
+    case WM_NCDESTROY:
+      RemoveWindowSubclass(wnd, tracks_proc, id);
+      break;
   }
+  return DefSubclassProc(wnd, msg, wp, lp);
 }
 
 static void load_review(HWND dlg) {
@@ -752,6 +909,7 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       g_view.review_terms_set = FALSE;
       init_review_text(dlg);
       init_review_columns(dlg);
+      SetWindowSubclass(GetDlgItem(dlg, IDC_REV_TRACKS), tracks_proc, 0, 0);
       load_review(dlg);
       theme_apply_window(dlg, FALSE);
       theme_apply_controls(dlg);
@@ -774,6 +932,9 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_REVIEW_REFRESH:
       load_review(dlg);
       return TRUE;
+    case WM_APP_FILES_MENU:
+      files_menu(dlg, (int)wp, (POINT){-1, -1});
+      return TRUE;
     case WM_CONTEXTMENU:
       if ((HWND)wp == GetDlgItem(dlg, IDC_REV_TRACKS)) {
         tracks_menu(dlg, (POINT){(short)LOWORD(lp), (short)HIWORD(lp)});
@@ -782,6 +943,13 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       break;
     case WM_NOTIFY: {
       const NMHDR *nm = (const NMHDR *)lp;
+      if (nm->idFrom == IDC_REV_TRACKS && nm->code == NM_CLICK) {
+        /* A plain click on a missing track drops its files menu down; Ctrl or Shift selects. */
+        const NMITEMACTIVATE *ia = (const NMITEMACTIVATE *)lp;
+        if (!(ia->uKeyFlags & (LVKF_CONTROL | LVKF_SHIFT)) && missing_row(nm->hwndFrom, ia->iItem))
+          files_menu(dlg, ia->iItem, (POINT){-1, -1});
+        break;
+      }
       if (nm->idFrom != IDC_REV_MATCHES) break;
       if (nm->code == LVN_ITEMCHANGED) {
         const NMLISTVIEW *lv = (const NMLISTVIEW *)lp;

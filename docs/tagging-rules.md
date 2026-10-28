@@ -61,8 +61,10 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    **Use as track N** fixes an assignment the tagger got wrong: the review's track list shows
    the missing tracks, the files no track took, and the files of other items from the same
    folder (`mc_import_related`, e.g. a file whose album tag put it in an item of its own).
-   Selecting a missing track and a file and choosing Use as Track N from the right-click
-   menu (`mc_import_assign`) makes the file that track and writes the item with that match,
+   Clicking a missing track (or Enter on it; on Linux its Choose File… button) lists the
+   files it can take, and choosing one (`mc_import_assign`), or selecting the missing track
+   and a file together and choosing Use as Track N from the right-click menu, makes the file
+   that track and writes the item with that match,
    whether it was in review or already imported (then its files are re-tagged and moved in
    place, and its library rows updated). A file taken from another item leaves it; if that
    item had imported it, its library row moves to this album, and an item left with no files
