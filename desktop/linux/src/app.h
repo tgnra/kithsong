@@ -12,9 +12,10 @@ typedef struct app {
   GtkApplication *gapp;
   GtkWindow *win;
   char *settings_dir;   /* ~/.config/musicapp */
-  GtkStack *pages;      /* "library": the album grid and track list | "import" */
+  GtkStack *pages;      /* "library": the album grid and track list | "import" | "device" */
   GtkWidget *import;    /* the import page, import_view.c */
   GtkWidget *sidebar;
+  GtkListBox *nav;      /* the sidebar's Albums, Artists and Playlists */
   GtkWidget *settings;  /* the header bar's Settings button */
   GtkStack *albums;     /* "empty" status page | "grid" | "no-playlists" status page | "playlists" */
   AdwStatusPage *empty; /* "No Albums" */

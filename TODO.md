@@ -34,8 +34,9 @@
 - Core - test PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
 - Core - albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
 - Core - changelog compaction must keep the rows that decide merges and archive demotions
-- Linux - the sync UI: show the pairing code, a device page with profiles, Sync now, Leave Group (Windows has them)
-- Windows and Linux - make a device an archive (mc_sync_set_archive) in the profile editor (Windows already shows the size estimate; Linux's device page needs it too)
+- Windows - make a device an archive (mc_sync_set_archive) in the profile editor (Linux and Android have it: a switch that asks first, with the size as originals)
+- Linux - a pairing request while the window is in the background goes unnoticed (Windows flashes the taskbar button); send a GNotification
+- Linux - sync UI untested: pairing with Windows or Android, the over-budget estimate, a watch's icon, switching library while a device page is open, and a real LAN (only two containers on one Docker network so far)
 - Frontends - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Core - move removed untracked files to the Recycle Bin/trash or a holding folder instead of deleting them permanently
 - Android - switch recents to the core's mc_library_record_opened()/mc_library_list_recents(); artists need core uids rather than names

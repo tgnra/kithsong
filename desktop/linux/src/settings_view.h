@@ -9,12 +9,20 @@
  *   |  | /home/me/Music                             | |
  *   |  | Open Another Library...                  > | |
  *   |  | Move Library...  (not available yet)       | |
+ *   |  Sync                                            |
+ *   |  Other devices show this computer by its name... |
+ *   |  | This Computer's Name         [Study PC   v] | |
+ *   |  | This Computer's Address                    | |
+ *   |  | 192.168.1.20:47823                         | |
+ *   |  |              Leave Group...                | |
  *   +--------------------------------------------------+
  *
  * The library folder is read from settings.json in settings_dir. Open Another Library picks a
  * folder and hands it to the caller's open_library; if that succeeds the choice is saved to
  * settings.json (unknown keys are kept). Moving the library isn't implemented yet, so its row
- * is disabled, as on Windows.
+ * is disabled, as on Windows. The Sync group renames this computer (through sync when it
+ * runs, and settings.json either way), shows where other devices reach it, and leaves the
+ * group after asking, as Windows' Settings does.
  *
  * Wiring it into main.c (settings_dir is ~/.config/musicapp, as main() already builds):
  *
@@ -44,12 +52,24 @@
 
 #include <adwaita.h>
 
+#include "musiccore/musiccore.h"
+
 /* Switches to the library in dir (UTF-8). Returns TRUE if it's now open; FALSE if it couldn't
  * be, after telling the user why. Runs on the main thread, while the dialog is open. */
 typedef gboolean (*settings_view_open_library_fn)(void *user, const char *dir);
 
-/* Shows the Settings dialog over parent (any widget in the main window). */
+/* What the Sync group needs of the app. Every member runs on the main thread. */
+typedef struct settings_view_sync {
+  mc_sync *(*get)(void);   /* the running sync, or NULL (it changes with the library) */
+  char *(*off_text)(void); /* why sync is off, "Sync is off (reason)."; g_free it */
+  void (*renamed)(void *user, const char *name); /* save the name, refresh the devices */
+  void (*group_changed)(void *user);             /* left the group: refresh the devices */
+} settings_view_sync;
+
+/* Shows the Settings dialog over parent (any widget in the main window). sync (copied) may be
+ * NULL, which leaves the Sync group out. */
 void settings_view_present(GtkWidget *parent, const char *settings_dir,
-                           settings_view_open_library_fn open_library, void *user);
+                           settings_view_open_library_fn open_library, const settings_view_sync *sync,
+                           void *user);
 
 #endif
