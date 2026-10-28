@@ -4,16 +4,12 @@
 
 Big pieces that haven't been started, or that only one platform has.
 
-- **Smart playlists UI** - the core is done (rules, preview, reshuffle); no platform can create, edit or open one. Needs a rule editor (built from mc_smart_field_get()), a page to open one on, and listing alongside playlists and album groups
-- **Album groups on Linux and Android** - only Windows has the UI
-- **Artist pages on Linux and Android** - Linux shows the album grid under Artists; Android derives artists from the album list instead of the core's artist API
-- **Playlist editing on Android** - the JNI bridge only lists playlists; no create, rename, delete, add, reorder or remove
-- **Search on Android** - the desktops have a Search page; Android has none
+- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; none can create, edit, rename or delete one. Needs a rule editor (built from mc_smart_field_get())
+- **Album group editing on Android** - Android lists and plays groups, but can't create, rename, delete or fill one
 - **Import on Android** - removed for now (music arrives by sync); see Android below
-- **Scrobbling UI** - the core can scrobble, but no platform can sign in, and Android has no JNI bridge for it
-- **Volume control** - nowhere yet; belongs in the core so Android can duck itself on Android 7
+- **Delete on Android** - the desktops delete albums, artists and tracks (with restore from the Recycle Bin/Trash); Android has no delete
+- **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard; no on-screen control anywhere, and Android doesn't duck with it yet
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
-- **Keyboard shortcuts** - beyond Space, media keys and Esc, the desktops have almost none (see Input)
 - **Screen readers on Windows** - the album grid, track list, sidebar and search page are custom-drawn and invisible to UI Automation
 - **AAC/M4A playback** - no decoder chosen
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists, artists or settings
@@ -25,77 +21,87 @@ Big pieces that haven't been started, or that only one platform has.
 | Feature | Windows | Linux | Android | Wear OS |
 |---|---|---|---|---|
 | Albums | yes | yes | yes | yes |
-| Artists | yes (no art, no menu) | album grid stand-in | own derivation | no |
+| Artists | yes (no art) | yes (no art) | yes (matched by name) | no |
 | Playlists: browse | yes | yes | yes | no |
-| Playlists: edit | yes | yes | no | no |
-| Album groups | yes | no | no | no |
-| Smart playlists | no | no | no | no |
-| Recents | yes (no smart playlists) | albums and playlists only | own implementation | no |
-| Search | yes | yes (unchecked) | no | no |
-| Shuffle | core's | core's | Media3's, not the core's | no |
+| Playlists: edit | yes | yes | yes | no |
+| Album groups | yes | yes | browse and play only | no |
+| Smart playlists | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
+| Recents | yes | yes | yes (core's) | no |
+| Search | yes | yes | yes | no |
+| Delete (with restore) | yes | yes | no | no |
+| Shuffle | core's | core's | core's | no |
+| Volume | keyboard only | keyboard only | core only, no UI | no |
 | Import | yes | yes | removed | no |
 | Sync | yes | yes (barely tested) | yes | mock-up |
 | Archive devices | no | yes | yes | no |
 | Move library | yes | yes | n/a (app storage) | n/a |
-| Scrobbling | no UI | no UI | no bridge | no |
-| OS media controls | SMTC (no shuffle) | MPRIS (no shuffle) | Media3 session | none |
+| Scrobbling | yes | yes (UI untested on screen) | yes | no |
+| OS media controls | SMTC (no shuffle) | MPRIS (no shuffle) | Media3 session (with shuffle) | none |
 
 ## Library and browsing
 
 ### Artists
 - Core - a track has one artist, so "A & B" or "A feat. B" credits only that combined artist; crediting each needs a track_artists table (and tag parsing on import)
+- Core - a per-device artist listing (album and track counts here) and artist uids on albums and tracks, so Android stops matching artists by name (two artists of the same name are both listed if either has something here)
 - All - a toggle between album artist and track artist in the artist list?
-- Android - switch to mc_library_list_artists() and the artist page's mc_library_list_artist_albums()/_tracks()
-- Linux - an artist page (Artists shows the album grid for now)
-- Windows - artist pictures, and a context menu (Add to playlist of all their tracks, say)
+- Windows and Linux - artist pictures; Windows - Add to playlist of all their tracks from the artist menu
 
 ### Playlists
-- Android - smart playlists' art (still their first track's cover; mc_playlist_art() only knows manual playlists)
-- Playlists with nothing to play on this device are hidden (MC_LIST_PLAYABLE) on every Playlists page and in Android's Recents; Add to playlist and the sync profile pickers still list them all. Left to do:
-  - Windows and Linux - when they show smart playlists, pass MC_LIST_PLAYABLE too (the sidebar's Recents already do)
+- Android and the desktops - smart playlists' art (still their first track's cover or a placeholder; mc_playlist_art() only knows manual playlists)
+- Playlists with nothing to play on this device are hidden (MC_LIST_PLAYABLE) on every Playlists page and in Recents; Add to playlist and the sync profile pickers still list them all. Left to do:
   - Windows - "Add to playlist → New playlist…" with a track that has no file here makes a playlist that's hidden at once; say so, or grey the menu for such tracks
   - Linux - a playlist made in the Add to playlist dialog and left empty is only reachable from that dialog until a track is added
-  - All - removing a playlist's last playable track makes the playlist vanish from the grid and its track list close; consider keeping the open one shown until it's left
+  - Windows and Linux - removing a playlist's last playable track makes the playlist vanish from the grid and its track list close; consider keeping the open one shown until it's left (Android closes the page)
+- Android - a new playlist can only be made from Add to playlist (empty ones are hidden there)
+- Android - drag-to-reorder only scrolls while the finger is moving
+- Android - failed edits are only logged; show a message
+- All - multi-select in track lists, so several tracks can be deleted or added to a playlist at once
 
 ### Album groups
-- Linux and Android - the UI Windows has (core API: mc_album_group_*() in playlist.h, mc_library_list_album_group_albums())
+- Android - create, rename, delete, add and remove albums (Windows and Linux have it)
 - Core - mc_album_group_move(), so albums in a group can be reordered
 - Windows - reorder albums in a group, and drag albums onto a group
-- Windows - play a whole group (queue its albums in order)
+- Windows and Linux - play a whole group, smart groups too (queue its albums in order; Android has Play)
 
 ### Smart playlists
-- All - rule editor (from mc_smart_field_get()), a page to open one on, list them alongside playlists and album groups, reshuffle button
+- All - rule editor (from mc_smart_field_get()), and rename/delete
+- All - the v10 example lists' names are stored as data, so they're always English
+- Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it
 - Core - limit by total duration ("an hour of music")
 
+### Delete
+- Linux - mc_trash() fails for a library on another file system from the home Trash; support `$topdir/.Trash-$uid`, or offer a permanent delete
+- Core - a peer that trashed an original after a remote delete keeps no restore record; restoring it there gets it swept as an unknown file
+- Windows and Linux - a "Restored N tracks" message after a restore from the bin
+- Android - delete (no recycle bin: confirm, then delete)
+
 ### Recents
-- Linux - artists, album groups and smart playlists are left out (and opening them isn't recorded) until there are pages for them
-- Windows - smart playlists are left out (and opening them isn't recorded) until there's a page for them
-- Android - switch to the core's mc_library_record_opened()/mc_library_list_recents() (with MC_LIST_PLAYABLE); artists need core uids rather than names
-- Windows and Linux - remove one, or clear them all (mc_library_remove_recent(), mc_library_clear_recents()), e.g. from a context menu
+- Windows and Linux - remove one, or clear them all (mc_library_remove_recent(), mc_library_clear_recents()), e.g. from a context menu; Android too
 - Windows and Linux - show cover art rather than the page's icon (no sidebar row has art yet)
+- Android - the one-time handover of the old prefs recents to the core is untested
 
 ### Search
-- Android - a Search page
-- Windows and Linux - smart playlist results don't open until there's a page for them; nor do artist and album group results on Linux
 - Windows - Up and Down move through album tiles one at a time, not by row
+- Android - only tested on the emulator with a tiny library
 
 ### Home
 - Windows and Linux - a home page (Home in the sidebar is greyed out until then)
 
 ## Playback
 
-- Core - volume control, so Android can duck itself on Android 7
 - Core - AAC/M4A: pick a decoder; the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
-- Android - use the core's shuffle (the toggle, Play/Shuffle buttons and the setting)
-- Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts
-- Linux - MPRIS's Shuffle property, so the desktop's media controls show and set it
+- Core - a public cover-file lookup (mc_coverart_find) so frontends don't look for cover.jpg/png themselves
+- All - an on-screen volume control (the desktops flash the level in the now-playing strip for now)
+- Android - duck with the core's volume (CorePlayer.setVolume; AudioFocusManager's setVolumeMultiplier is a no-op)
+- Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
+- Linux - MPRIS's Shuffle and Volume properties, so the desktop's media controls show and set them
 - Windows - the media flyout's shuffle button (SMTC IsShuffleEnabled and ShuffleEnabledChangeRequested)
 
 ### Scrobbling
-- All - UI: sign in (mc_scrobbler_auth_begin() opens the browser, then poll mc_scrobbler_auth_finish()), sign out, choose the service (Last.fm, Libre.fm or another URL), show pending plays and errors
-- Android - a JNI bridge for mc_scrobbler, then pass on plays (CoreMediaPlayer's onPlayed) and now playing
-- Core - cancel a call in progress on mc_scrobbler_free(), so quitting while the service is slow doesn't wait for curl's timeout (up to 30 seconds)
+- All - choose another service (Libre.fm or a custom URL) in the UI; mc_scrobbler_set_service() exists but no screen uses it
+- All - revoking access on Last.fm shows "turned down this sign-in" but doesn't sign out by itself
+- Core - cancel a call in progress on mc_scrobbler_free(), so quitting (or cancelling a sign-in, or closing the library during one) doesn't wait for curl's timeout (up to 30 seconds)
 
 ## Import and tagging
 
@@ -116,14 +122,14 @@ Big pieces that haven't been started, or that only one platform has.
 ### Core
 - Albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
 - Changelog compaction must keep the rows that decide merges and archive demotions
-- Move removed untracked files to the Recycle Bin/trash instead of deleting them (mc_trash() in util/platform.h does it; import's swaps use it)
+- Move removed untracked files to the Recycle Bin/trash instead of deleting them (mc_trash() in util/platform.h does it); deleted tracks' originals on peers already go to the trash, unknown files are still removed outright
 - A stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
 
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Windows - make a device an archive (mc_sync_set_archive) in the profile editor, as Linux and Android do (a switch that asks first, with the size as originals)
 - Linux - a pairing request while the window is in the background goes unnoticed (Windows flashes the taskbar button); send a GNotification
-- Linux - with no sync.db yet (first run), sync can fail to start with "sync.db open failed: not an error" and Devices says "Sync is off (database error)"; it starts on the next run (seen twice in Docker under Xvfb)
+- Linux - with no sync.db yet (first run), sync can fail to start with "sync.db open failed: not an error" and Devices says "Sync is off (database error)"; it starts on the next run (seen several times in Docker under Xvfb)
 
 ### Windows firewall
 - After "Don't ask again", a way to ask again (Settings, or the device page's Connections row when this PC is blocked)
@@ -142,15 +148,11 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Keyboard shortcuts
 
-Existing: Space (play/pause), media keys (WM_APPCOMMAND and SMTC on Windows, MPRIS on Linux), Esc closes the track pane, arrows/Home/End on a focused seek bar (5 s), Alt+letter mnemonics in the import page and dialogs (so no bare Alt+letter shortcuts). Windows' track list also has Enter, Delete, F2, Alt+Up/Down and the Menu key.
+Existing (see README.md): Space, media keys, Esc, Ctrl+Left/Right next/previous, Shift+Left/Right seek 5 s, Ctrl+Up/Down and +/- volume, Ctrl+M mute, Ctrl+S shuffle, Ctrl+F search, Ctrl+1-4 Albums/Artists/Playlists/Album groups, Ctrl+, settings, Alt+Left/Backspace/mouse back to go back, plus Alt+letter mnemonics in the import page and dialogs. Windows' track list also has Enter, Delete, F2, Alt+Up/Down and the Menu key.
 
 Windows and Linux:
-- Ctrl+Right/Ctrl+Left next/previous track (not Alt+Left/Right, which is Back)
-- Shift+Right/Shift+Left seek 5 s anywhere but text fields, as the seek bar's arrows do
-- Ctrl+Up/Ctrl+Down volume and Ctrl+M mute, once volume exists
-- Ctrl+F focus search; Windows also Ctrl+E/F3 as in Explorer, Linux also type to search (GNOME)
-- Ctrl+1/2/3 switch to Albums/Artists/Playlists (sidebar order)
-- Alt+Left and the mouse's back button go back (album -> grid, device page -> library); Esc keeps closing the pane
+- Ctrl+R repeat, once the core has repeat
+- Windows also Ctrl+E/F3 for search as in Explorer, Linux also type to search (GNOME)
 - Ctrl+O import, Ctrl+N new playlist
 - Delete on a selected sidebar playlist asks to delete it; F2 renames it
 - Show shortcuts in button tooltips (e.g. "Next (Ctrl+Right)")
@@ -158,10 +160,10 @@ Windows and Linux:
 Linux:
 - Delete, F2, Enter and Alt+Up/Down in the track list, as Windows has
 - The track menu from the keyboard (Menu key, Shift+F10)
-- Ctrl+, settings, Ctrl+? shortcuts dialog (AdwShortcutsDialog), F1 help/about, Ctrl+W close window, Ctrl+Q quit (GNOME HIG)
+- Ctrl+? shortcuts dialog (AdwShortcutsDialog), F1 help/about, Ctrl+W close window, Ctrl+Q quit (GNOME HIG)
 
 Windows:
-- Ctrl+, settings too (no menu bar, so no Alt+T,O); F1 about; Alt+F4 only to quit
+- F1 about; Alt+F4 only to quit
 
 ### Windows screen readers and custom-drawn controls
 - A UI Automation provider for the custom-drawn controls: album grid, track list, sidebar (a list box until recently) and search page
@@ -171,7 +173,7 @@ Windows:
 ## Android
 
 - Upgrade Kotlin to 2.4, then Coil and MaterialKolor
-- Everything listed under Broad strokes: playlist editing, album groups, artist pages, search, import, the core's shuffle and recents, scrobbling
+- Import, delete and album group editing (see above)
 
 ## Wear OS
 
@@ -190,8 +192,11 @@ Windows:
 Things built but not checked properly.
 
 ### Linux (mostly only compiled, or run under Xvfb)
-- Search page in the running app
 - Shuffle toggle and the track list's Play/Shuffle buttons
+- Artist page playback with real files, and album group covers
+- Smart list playback (no audio in the container)
+- The Settings scrobbling group on screen
+- Delete and restore in the running app
 - Import outcomes ("Replaced with higher quality", "Already in library", "Added missing tracks")
 - Playlists page, now the -std=c11 core fix (68d61bf) and track_list_item_at() fix (3eaa789) are in
 - Sync: pairing with Windows or Android, the over-budget estimate, a watch's icon, switching library while a device page is open, and a real LAN (only two Docker containers so far)
@@ -199,6 +204,8 @@ Things built but not checked properly.
 
 ### Windows
 - Firewall prompt: the success path after UAC, beyond one run
+- Deleting a track while it plays
+- Volume's fade (only silent test files so far)
 
 ### Android
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
@@ -207,8 +214,10 @@ Things built but not checked properly.
 - The themed launcher icon, and the sync notification icon
 
 ### Cross-platform
+- A real Last.fm sign-in and scrobble (only fake sessions so far), and the sign-in reaching another device over a real sync
 - Media keys with the window in the background: SMTC on Windows, MPRIS on GNOME and KDE
 - Recents arriving or going with a real sync between two devices
+- A delete and a restore going through a real sync
 - Sync PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
 
 ## Release

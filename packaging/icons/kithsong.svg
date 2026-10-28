@@ -1,8 +1,9 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- The app icon: android/app/src/main/res/drawable/ic_launcher_foreground.xml (Material Icons'
-     music_note, Apache 2.0) on the launcher background colour. Source for the Windows .ico and
-     the Linux icons; regenerate those with packaging/icons/render.py after editing. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- The app icon: android/app/src/main/res/drawable/ic_launcher_foreground.xml (Material Icons'
+       music_note, Apache 2.0) on the launcher background colour. Source for the Windows .ico and
+       the Linux icons; regenerate those with packaging/icons/render.py after editing.
+       Keep <svg> as the very first bytes: the Flatpak CI image's gdk-pixbuf recognises an SVG
+       only by that, and flatpak build-export rejects the icon otherwise. -->
   <rect x="8" y="8" width="112" height="112" rx="26" fill="#4F378B"/>
   <path transform="translate(28 28) scale(3)" fill="#FFFFFF"
         d="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z"/>
