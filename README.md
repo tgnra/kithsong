@@ -123,6 +123,9 @@ Optional CMake settings:
   account (from https://www.last.fm/api/account/create), for scrobbling to Last.fm. Keep
   them out of git too.
 
+How to get each of these, where to put them on every platform and how to test them:
+[docs/api-keys.md](docs/api-keys.md).
+
 
 ### Windows
 
