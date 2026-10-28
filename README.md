@@ -70,6 +70,11 @@ Priorities:
 - **No server:** any device can sync with any other. Edits are merged field by field using
   hybrid logical clocks, and playlist order merges cleanly even when it was changed on two
   devices.
+- **Remove from one device:** an album's or artist's menu has "Remove from this PC" (this
+  computer, this phone) next to "Delete from library". It takes the music off that device
+  only, at once, and it stays in the library and on your other devices; "Sync to this PC"
+  on the same menu brings it back. It's offered on devices that sync part of the library,
+  not on an archive or outside a group.
 - **Lossy copies:** a device can ask for a lossy format instead of the originals, e.g. a
   phone requesting Opus rather than FLAC. The sender transcodes and caches the
   copies, and the copies are never mistaken for originals.
