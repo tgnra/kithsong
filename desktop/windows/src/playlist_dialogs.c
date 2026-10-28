@@ -15,6 +15,8 @@ enum { MAX_NAME = 255 };
 typedef struct ask {
   const wchar_t *caption, *ok; /* the name dialog's title and OK label; Delete's title */
   const wchar_t *note;         /* Delete's note under the heading */
+  int title_id;                /* Delete's heading, an enum mc_str_id taking the name; 0: "Delete "{0}"?" */
+  const wchar_t *button;       /* Delete's button; NULL: Delete */
   const wchar_t *name;         /* the current name; NULL for a new playlist */
   wchar_t entered[MAX_NAME + 1];
   HFONT heading_font; /* Delete's */
@@ -177,11 +179,12 @@ static INT_PTR CALLBACK delete_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       SetWindowTextW(dlg, a->caption);
       wchar_t heading[MAX_NAME * 2 + 64];
       char *name = utf8(a->name ? a->name : L"");
-      mc_wformat(heading, sizeof heading / sizeof heading[0], mc_str(MC_STR_PLAYLIST_DELETE_TITLE), MC_S(name));
+      mc_wformat(heading, sizeof heading / sizeof heading[0],
+                 mc_str(a->title_id ? (enum mc_str_id)a->title_id : MC_STR_PLAYLIST_DELETE_TITLE), MC_S(name));
       free(name);
       SetDlgItemTextW(dlg, IDC_PL_HEADING, heading);
       SetDlgItemTextW(dlg, IDC_PL_NOTE, a->note);
-      SetDlgItemTextW(dlg, IDOK, mc_wstr_mnemonic(MC_STR_DELETE));
+      SetDlgItemTextW(dlg, IDOK, a->button ? a->button : mc_wstr_mnemonic(MC_STR_DELETE));
       SetDlgItemTextW(dlg, IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL));
       apply_theme(dlg);
       SetFocus(GetDlgItem(dlg, IDCANCEL));
@@ -210,6 +213,13 @@ static BOOL ask_delete(HWND owner, const wchar_t *caption, const wchar_t *note, 
 BOOL confirm_delete_dialog(HWND owner, const wchar_t *caption, const wchar_t *name, const wchar_t *note) {
   ask a = {.caption = caption, .note = note, .name = name};
   return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_LIBRARY_DELETE), owner, delete_proc,
+                         (LPARAM)&a) == IDOK;
+}
+
+BOOL confirm_remove_dialog(HWND owner, const wchar_t *caption, int title_id, const wchar_t *name,
+                           const wchar_t *note, const wchar_t *button) {
+  ask a = {.caption = caption, .note = note, .name = name, .title_id = title_id, .button = button};
+  return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_DEVICE_REMOVE), owner, delete_proc,
                          (LPARAM)&a) == IDOK;
 }
 

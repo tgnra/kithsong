@@ -15,6 +15,7 @@
 #include "cover.h"
 #include "delete_dialog.h"
 #include "playlist_dialogs.h"
+#include "remove_here.h"
 #include "scroller.h"
 #include "theme.h"
 #include "uia.h"
@@ -40,6 +41,8 @@ enum {
   CMD_RENAME_GROUP,
   CMD_DELETE_GROUP,
   CMD_DELETE_ALBUM,
+  CMD_REMOVE_HERE, /* Remove from this PC... */
+  CMD_SYNC_HERE,   /* Sync to this PC */
   CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
 };
 
@@ -948,8 +951,8 @@ static void reshuffle_group(void) {
                 MB_OK | MB_ICONERROR);
 }
 
-/* Add to Album Group, inside a (manual) group Remove from Album Group, and Delete Album...,
- * for album tile i. */
+/* Add to Album Group, inside a (manual) group Remove from Album Group, then Remove from This
+ * PC... or Sync to This PC where they apply, and Delete from Library..., for album tile i. */
 static void show_album_menu(int i, POINT pt) {
   char album[MC_UID_STRLEN], group[MC_UID_STRLEN];
   memcpy(album, g.tiles[i].uid, sizeof album);
@@ -965,6 +968,7 @@ static void show_album_menu(int i, POINT pt) {
     AppendMenuW(menu, MF_STRING, CMD_REMOVE_FROM_GROUP, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  remove_here_append_menu(menu, MC_PROFILE_ALBUM, album, CMD_REMOVE_HERE, CMD_SYNC_HERE);
   AppendMenuW(menu, MF_STRING, CMD_DELETE_ALBUM, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
@@ -972,6 +976,8 @@ static void show_album_menu(int i, POINT pt) {
   HWND owner = GetAncestor(g.wnd, GA_ROOT);
   BOOL changed = FALSE;
   if (cmd == CMD_DELETE_ALBUM) changed = delete_dialog(owner, g.lib, MC_DELETE_ALBUMS, album, title);
+  if (cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE)
+    changed = remove_here_command(owner, (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ALBUM, album, title);
   free(title);
   if (cmd >= CMD_GROUP_FIRST && groups && cmd - CMD_GROUP_FIRST < groups->count)
     changed = add_to_album_group(owner, g.lib, album, groups->items[cmd - CMD_GROUP_FIRST].uid);

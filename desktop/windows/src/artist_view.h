@@ -41,8 +41,9 @@
 #define ARN_OPEN 1
 #define ARN_BACK 2
 #define ARN_OPEN_ALBUM 3
-/* Posted after the right-click menu's Delete Artist... (on a row, or anywhere on an artist's
- * page) deleted the artist's tracks (delete_dialog.h): reload everything. */
+/* Posted after the right-click menu's Delete from Library... (on a row, or anywhere on an
+ * artist's page) deleted the artist's tracks (delete_dialog.h), or Remove from This PC... or
+ * Sync to This PC changed what's here (remove_here.h): reload everything. */
 #define ARN_LIBRARY_CHANGED 4
 
 /* Creates the page, hidden, as a child of parent. Only one exists at a time. */

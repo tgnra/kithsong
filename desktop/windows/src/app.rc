@@ -73,3 +73,16 @@ BEGIN
   PUSHBUTTON      "", IDOK, 143, 62, 52, 15
   DEFPUSHBUTTON   "", IDCANCEL, 201, 62, 52, 15
 END
+
+/* Remove from this PC (remove_here.c): the same, with room for a longer note (what goes,
+ * what stays, how to get it back). */
+IDD_DEVICE_REMOVE DIALOGEX 0, 0, 260, 100
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_HEADING, 7, 8, 246, 12, SS_NOPREFIX | SS_ENDELLIPSIS
+  LTEXT           "", IDC_PL_NOTE, 7, 24, 246, 46, SS_NOPREFIX
+  PUSHBUTTON      "", IDOK, 143, 78, 52, 15
+  DEFPUSHBUTTON   "", IDCANCEL, 201, 78, 52, 15
+END

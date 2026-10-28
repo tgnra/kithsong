@@ -13,6 +13,7 @@
 #include "canvas.h"
 #include "cover.h"
 #include "delete_dialog.h"
+#include "remove_here.h"
 #include "scroller.h"
 #include "theme.h"
 #include "wstr.h"
@@ -747,10 +748,11 @@ static void paint(HDC dc, const RECT *dirty) {
 
 /* --- Menu --- */
 
-enum { CMD_DELETE_ARTIST = 1 };
+enum { CMD_DELETE_ARTIST = 1, CMD_REMOVE_HERE, CMD_SYNC_HERE };
 
-/* WM_CONTEXTMENU: Delete Artist... for the row under the pointer (from the keyboard, lp -1,
- * the focused row), or anywhere on an artist's page for that artist. */
+/* WM_CONTEXTMENU: Remove from This PC... or Sync to This PC where they apply, and Delete from
+ * Library..., for the row under the pointer (from the keyboard, lp -1, the focused row), or
+ * anywhere on an artist's page for that artist. */
 static BOOL on_context_menu(LPARAM lp) {
   if (!v.lib) return FALSE;
   POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -776,12 +778,17 @@ static BOOL on_context_menu(LPARAM lp) {
   snprintf(uid, sizeof uid, "%s", is_open() ? v.open_uid : v.artists[i].uid);
   wchar_t *name = _wcsdup(is_open() ? (v.open_name ? v.open_name : L"") : v.artists[i].name);
   HMENU menu = CreatePopupMenu();
+  remove_here_append_menu(menu, MC_PROFILE_ARTIST, uid, CMD_REMOVE_HERE, CMD_SYNC_HERE);
   AppendMenuW(menu, MF_STRING, CMD_DELETE_ARTIST, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
   int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, v.wnd, NULL);
   DestroyMenu(menu);
   if (cmd == CMD_DELETE_ARTIST && name &&
       delete_dialog(GetAncestor(v.wnd, GA_ROOT), v.lib, MC_DELETE_ARTISTS, uid, name))
+    notify(ARN_LIBRARY_CHANGED, TRUE);
+  if ((cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE) && name &&
+      remove_here_command(GetAncestor(v.wnd, GA_ROOT), (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ARTIST,
+                          uid, name))
     notify(ARN_LIBRARY_CHANGED, TRUE);
   free(name);
   return TRUE;
