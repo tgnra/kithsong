@@ -41,6 +41,7 @@
 #include "musiccore/delete.h"
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
+#include "sync/libmerge.h"
 #include "sync/plan.h"
 #include "tagger/coverart.h"
 #include "tagger/organize.h"
@@ -1611,6 +1612,12 @@ static mc_status receive_turn(mc_session *s) {
   if (x && !s->user &&
       mc_profile_confirm_state(mc_sync_db_handle(s->conn->sdb),
                                mc_sync_db_device_uid(s->conn->sdb)) != MC_SYNC_CONFIRMED) {
+    s->files_paused = 1;
+    x = NULL;
+  }
+  /* A library set aside for a merge (libmerge.h) has files in its folder that no files row
+   * knows yet: nothing is fetched or deleted until they're merged in. */
+  if (x && mc_libmerge_pending(s->conn->lib, NULL)) {
     s->files_paused = 1;
     x = NULL;
   }

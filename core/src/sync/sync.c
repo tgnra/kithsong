@@ -32,6 +32,7 @@
 #include "discovery/local_addr.h"
 #include "library/library_internal.h"
 #include "sync/archive.h"
+#include "sync/libmerge.h"
 #include "sync/reach.h"
 #include "sync/rows.h"
 #include "sync/session.h"
@@ -191,6 +192,70 @@ void mc_sync_emit_progress(mc_sync *sync, const mc_sync_progress *p) {
   mc_mutex_lock(&sync->cb_lock);
   sync->ev.on_progress(sync->user, p);
   mc_mutex_unlock(&sync->cb_lock);
+}
+
+void mc_sync_emit_pair_merge(mc_sync *sync, const mc_pair_merge *m) {
+  if (!sync->ev.on_pair_merge) return;
+  mc_mutex_lock(&sync->cb_lock);
+  sync->ev.on_pair_merge(sync->user, m);
+  mc_mutex_unlock(&sync->cb_lock);
+}
+
+static void emit_merge_progress(void *user, const mc_merge_progress *p) {
+  mc_sync *sync = user;
+  if (!sync->ev.on_merge_progress) return;
+  mc_mutex_lock(&sync->cb_lock);
+  sync->ev.on_merge_progress(sync->user, p);
+  mc_mutex_unlock(&sync->cb_lock);
+}
+
+/* After a session that synced the library: if this device's library was set aside for a
+ * merge, the kept library is here now, so merge the copy in (libmerge.c). 1 if it ran. */
+static int run_pending_merge(mc_sync *sync, mc_sync_conn *c, const mc_sync_result *result) {
+  if (result->status != MC_OK || !result->library_synced || !c->lib ||
+      !mc_libmerge_pending(c->lib, NULL))
+    return 0;
+  mc_mutex_lock(&sync->lock);
+  int busy = sync->merge_running;
+  sync->merge_running = 1;
+  mc_kept_file *kept = busy ? NULL : sync->merge_kept;
+  int nkept = busy ? 0 : sync->merge_nkept;
+  char signed_out[MC_SYNC_NAME_MAX];
+  memcpy(signed_out, sync->merge_signed_out, sizeof signed_out);
+  int sent = sync->merge_sent, dropped = sync->merge_dropped;
+  if (!busy) {
+    sync->merge_kept = NULL;
+    sync->merge_nkept = 0;
+    sync->merge_signed_out[0] = '\0';
+    sync->merge_sent = sync->merge_dropped = 0;
+  }
+  mc_mutex_unlock(&sync->lock);
+  if (busy) return 0;
+
+  char *backup = NULL;
+  mc_libmerge_pending(c->lib, &backup);
+  mc_merge_result r;
+  mc_libmerge_run(c->lib, kept, nkept, emit_merge_progress, sync, &r);
+  r.backup_path = backup ? backup : "";
+  r.scrobble_signed_out = signed_out;
+  r.scrobbles_sent = sent;
+  r.scrobbles_dropped = dropped;
+  fprintf(stderr,
+          "musiccore: merge: %d added, %d attached, %d better here, %d skipped, %d mapped,"
+          " %d left out, %d failed (status %d)\n",
+          r.tracks_added, r.tracks_attached, r.tracks_better, r.tracks_skipped, r.tracks_mapped,
+          r.tracks_left_out, r.tracks_failed, (int)r.status);
+  if (sync->ev.on_merge_done) {
+    mc_mutex_lock(&sync->cb_lock);
+    sync->ev.on_merge_done(sync->user, &r);
+    mc_mutex_unlock(&sync->cb_lock);
+  }
+  free(backup);
+  free(kept);
+  mc_mutex_lock(&sync->lock);
+  sync->merge_running = 0;
+  mc_mutex_unlock(&sync->lock);
+  return 1;
 }
 
 static void emit_reach(mc_sync *sync, const char *uid) {
@@ -596,6 +661,8 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
     /* Before on_sync_done, so a frontend that asks then sees the new name. */
     mc_sync_take_group_name(sync, c);
   }
+  /* Also before it, so the library a frontend reads then is the merged one. */
+  int merged = run_pending_merge(sync, c, result);
   uint64_t now = mc_mono_ms();
   int changed = 0, online = 0, member = 0;
   mc_mutex_lock(&sync->lock);
@@ -632,6 +699,8 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
    * local change, so it is told to skip it. */
   sync->absorb = 1;
   if (rows_new > 0) trigger_members(sync, peer_uid, MC_TRIGGER_CHANGED, now + CHANGE_DELAY_MS);
+  /* The merge's rows are this device's own edits, which every member needs. */
+  if (merged) trigger_members(sync, NULL, MC_TRIGGER_CHANGED, now + CHANGE_DELAY_MS);
   if (follow_up && p && result->status == MC_OK) {
     p->trigger = MC_TRIGGER_CHANGED;
     p->trigger_ms = now;
@@ -1325,6 +1394,7 @@ void mc_sync_free(mc_sync *sync) {
   mc_sync_stop(sync);
   mc_sync_conn_close(&sync->api);
   mc_pair_responder_wipe(&sync->in_r);
+  free(sync->merge_kept);
   mc_cond_destroy(&sync->cond);
   mc_mutex_destroy(&sync->lock);
   mc_mutex_destroy(&sync->api_lock);
@@ -1467,6 +1537,7 @@ static mc_status start_pairing(mc_sync *sync, const char *host, uint16_t port,
     sync->out_active = 1;
     sync->out_has_code = 0;
     sync->out_cancel = 0;
+    sync->out_merge_wait = sync->out_merge_answer = 0;
   }
   mc_mutex_unlock(&sync->lock);
   if (st == MC_OK && (st = mc_sync_spawn(sync, mc_pairing_initiate, t)) != MC_OK) {
@@ -1529,6 +1600,29 @@ void mc_sync_pair_cancel(mc_sync *sync) {
   }
   mc_cond_broadcast(&sync->cond);
   mc_mutex_unlock(&sync->lock);
+}
+
+mc_status mc_sync_pair_merge_confirm(mc_sync *sync, int merge) {
+  if (!sync) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  mc_status st = MC_OK;
+  if (sync->out_active && sync->out_merge_wait && !sync->out_merge_answer)
+    sync->out_merge_answer = merge ? 1 : -1;
+  else if (sync->in_active && sync->in_merge_wait && !sync->in_merge_answer)
+    sync->in_merge_answer = merge ? 1 : -1;
+  else
+    st = MC_ERR_NOT_FOUND;
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+  return st;
+}
+
+int mc_sync_merge_pending(mc_sync *sync) {
+  if (!sync) return 0;
+  mc_mutex_lock(&sync->api_lock);
+  int pending = mc_libmerge_pending(sync->api.lib, NULL);
+  mc_mutex_unlock(&sync->api_lock);
+  return pending;
 }
 
 /* --- Group API --- */
@@ -2050,6 +2144,12 @@ void mc_sync_set_test_hints(mc_sync *sync, const char *json) {
 void mc_sync_set_test_reach_port(mc_sync *sync, uint16_t port) {
   mc_mutex_lock(&sync->lock);
   sync->reach_port_override = port;
+  mc_mutex_unlock(&sync->lock);
+}
+
+void mc_sync_set_test_no_merge(mc_sync *sync, int no_merge) {
+  mc_mutex_lock(&sync->lock);
+  sync->no_merge = no_merge;
   mc_mutex_unlock(&sync->lock);
 }
 

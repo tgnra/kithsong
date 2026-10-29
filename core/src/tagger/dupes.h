@@ -38,6 +38,10 @@ typedef enum mc_dupe_action {
 
 typedef struct mc_dupe_decision {
   mc_dupe_action action;
+  /* The library's copy of track_uid is on another device, and its quality came from
+   * mc_dupe_remote: ATTACH then means the incoming file is better than that copy (it is
+   * kept here, see mc_dupes_plan_remote()), SKIP that it is no better. */
+  int remote;
   char track_uid[MC_UID_STRLEN];
   char file_uid[MC_UID_STRLEN];
   char *old_path; /* relative */
@@ -57,6 +61,22 @@ typedef struct mc_dupe_plan {
 mc_status mc_dupes_plan(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
                         int count, mc_dupe_plan *out);
 void mc_dupe_plan_free(mc_dupe_plan *plan);
+
+/* Where the library's own copy of a track is on another device, what it sounds like: for
+ * merging libraries (sync/libmerge.c), whose kept library's files are on the other device.
+ * quality fills *out (its format string must outlive the plan call) and returns 1 when it
+ * knows track_uid's original, else 0. */
+typedef struct mc_dupe_remote {
+  int (*quality)(void *user, const char *track_uid, mc_audio_quality *out);
+  void *user;
+} mc_dupe_remote;
+
+/* As mc_dupes_plan(), but a library track with no file here whose quality remote knows
+ * counts as held: the release is judged against those copies too. Its incoming file is
+ * then SKIP when it's no better, or ATTACH with remote set when the release as a whole is
+ * better (never SWAP: the copy to swap out isn't here). remote may be NULL. */
+mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
+                               int count, const mc_dupe_remote *remote, mc_dupe_plan *out);
 
 /* The last step of a swap, once its rows are saved (mc_import_db_write with
  * replace_file_uid): the old file (old_rel) goes to the trash, and the new one, which waited

@@ -15,6 +15,7 @@
 
 #include "config.h"
 #include "scrobble/lastfm.h"
+#include "scrobble/scrobble_internal.h"
 #include "sync/sync_db.h"
 #include "util/platform.h"
 
@@ -414,6 +415,41 @@ static void run(void *arg) {
   free(refused);
   sqlite3_close_v2(lib);
   mc_sync_db_close(sdb);
+}
+
+/* --- For merging libraries (scrobble_internal.h) --- */
+
+int mc_scrobble_signed_in(sqlite3 *db, char **username) {
+  if (username) *username = NULL;
+  account acc;
+  if (!db || account_read(db, &acc) != MC_OK) return 0;
+  int in = acc.session_key != NULL;
+  if (in && username) *username = mc_strdup(acc.username ? acc.username : "");
+  account_clear(&acc);
+  return in;
+}
+
+mc_status mc_scrobble_flush_once(sqlite3 *db, int *sent, int *left) {
+  if (sent) *sent = 0;
+  if (left) *left = 0;
+  if (!db) return MC_ERR_INVALID_ARG;
+  account acc;
+  mc_status st = account_read(db, &acc);
+  if (st != MC_OK) return st;
+  int before = queue_count(db);
+  if (!acc.session_key) {
+    st = MC_ERR_AUTH;
+  } else {
+    mc_lastfm_service svc = service_of(&acc);
+    int batch = MC_LASTFM_BATCH, progress = 1;
+    while (progress && (st = submit(db, &svc, &batch, &progress)) == MC_OK) {
+    }
+  }
+  account_clear(&acc);
+  int after = queue_count(db);
+  if (sent) *sent = before > after ? before - after : 0;
+  if (left) *left = after;
+  return st;
 }
 
 /* --- API --- */

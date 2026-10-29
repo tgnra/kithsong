@@ -138,6 +138,7 @@ typedef struct lib_track {
   int disc, number;
   char *mb_trackid, *mb_releasetrackid;
   int has_file; /* the original's file is there */
+  int remote;   /* no file here, but another device's original has a known quality */
   char file_uid[MC_UID_STRLEN];
   char *path; /* relative */
   char format[16];
@@ -161,7 +162,8 @@ static char *col_dup(sqlite3_stmt *stmt, int col) {
 
 /* The album's tracks, each with its original (imported here first). The quality is read
  * from the file, or from the files row if the file can't be read. */
-static mc_status read_album(mc_library *lib, const char *album_uid, lib_track **out, int *count) {
+static mc_status read_album(mc_library *lib, const char *album_uid, const mc_dupe_remote *remote,
+                            lib_track **out, int *count) {
   *out = NULL;
   *count = 0;
   sqlite3_stmt *stmt = prepare(
@@ -213,6 +215,14 @@ static mc_status read_album(mc_library *lib, const char *album_uid, lib_track **
         r->quality.sample_rate = tags.sample_rate;
         r->quality.bits_per_sample = tags.bits_per_sample;
         mc_tags_clear(&tags);
+      }
+    } else if (remote && remote->quality) {
+      mc_audio_quality q = {0};
+      if (remote->quality(remote->user, r->uid, &q)) {
+        r->remote = 1;
+        snprintf(r->format, sizeof r->format, "%s", q.format ? q.format : "");
+        r->quality = q;
+        r->quality.format = r->format;
       }
     }
     free(abs);
@@ -282,8 +292,9 @@ static int find_artist(sqlite3 *db, const mc_db_artist *a, char uid[MC_UID_STRLE
 /* The library album holding the incoming release, or "": see tagger.h. On success the
  * album's tracks are in *tracks and pair[] says which incoming file is which. */
 static mc_status find_release(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
-                              int count, char album_uid[MC_UID_STRLEN], lib_track **tracks,
-                              int *ntracks, int *pair) {
+                              int count, const mc_dupe_remote *remote,
+                              char album_uid[MC_UID_STRLEN], lib_track **tracks, int *ntracks,
+                              int *pair) {
   sqlite3 *db = mc_library_db(lib);
   album_uid[0] = '\0';
   *tracks = NULL;
@@ -330,7 +341,7 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
   for (int c = 0; c < ncand; c++) {
     lib_track *t;
     int n;
-    mc_status st = read_album(lib, cands[c], &t, &n);
+    mc_status st = read_album(lib, cands[c], remote, &t, &n);
     if (st != MC_OK) return st;
     int paired = pair_tracks(in, count, t, n, album->singles, pair);
     /* A singles album is a match only for the tracks in it; an album by name needs at
@@ -418,6 +429,11 @@ void mc_dupe_plan_free(mc_dupe_plan *plan) {
 
 mc_status mc_dupes_plan(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
                         int count, mc_dupe_plan *out) {
+  return mc_dupes_plan_remote(lib, album, in, count, NULL, out);
+}
+
+mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
+                               int count, const mc_dupe_remote *remote, mc_dupe_plan *out) {
   if (!out) return MC_ERR_INVALID_ARG;
   memset(out, 0, sizeof *out);
   if (!lib || !album || count <= 0 || !in) return MC_ERR_INVALID_ARG;
@@ -432,7 +448,7 @@ mc_status mc_dupes_plan(mc_library *lib, const mc_db_album *album, const mc_dupe
 
   lib_track *t = NULL;
   int n = 0;
-  mc_status st = find_release(lib, album, in, count, out->album_uid, &t, &n, pair);
+  mc_status st = find_release(lib, album, in, count, remote, out->album_uid, &t, &n, pair);
   if (st != MC_OK) {
     free(pair);
     mc_dupe_plan_free(out);
@@ -442,7 +458,7 @@ mc_status mc_dupes_plan(mc_library *lib, const mc_db_album *album, const mc_dupe
   /* Judge the release as a whole, over the tracks this device has a file of. */
   int held = 0, covered = 0, better = 0, worse = 0;
   for (int j = 0; j < n; j++) {
-    if (!t[j].has_file) continue;
+    if (!t[j].has_file && !t[j].remote) continue;
     held++;
     if (t[j].paired < 0) continue;
     covered++;
@@ -458,7 +474,10 @@ mc_status mc_dupes_plan(mc_library *lib, const mc_db_album *album, const mc_dupe
     if (pair[i] < 0) continue;
     lib_track *lt = &t[pair[i]];
     memcpy(d->track_uid, lt->uid, MC_UID_STRLEN);
-    if (!lt->has_file) {
+    if (lt->remote) {
+      d->remote = 1;
+      d->action = swap ? MC_DUPE_ATTACH : MC_DUPE_SKIP;
+    } else if (!lt->has_file) {
       d->action = MC_DUPE_ATTACH;
     } else if (swap) {
       d->action = MC_DUPE_SWAP;

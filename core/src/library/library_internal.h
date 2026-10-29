@@ -76,4 +76,16 @@ mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out
  * order to apply them in from their foreign keys. */
 const mc_changelog_table *mc_library_tracked(size_t *count);
 
+/* meta values (not logged: meta never syncs). get: MC_ERR_NOT_FOUND if key isn't there.
+ * set: value NULL deletes the key. */
+mc_status mc_library_meta_get(mc_library *lib, const char *key, char *out, size_t cap);
+mc_status mc_library_meta_set(mc_library *lib, const char *key, const char *value);
+
+/* For merging libraries (sync/libmerge.c): empties the library in place without logging
+ * anything. Every library row, files, aliases, merge_keys and the changelog go, the example
+ * smart lists are seeded again as migration v10 does, and the library gets a new node uid.
+ * library_uid and the rest of meta stay. Other connections stay valid (it's the same file,
+ * and mc_library_begin_write() rereads the node uid). */
+mc_status mc_library_reset_for_merge(mc_library *lib);
+
 #endif

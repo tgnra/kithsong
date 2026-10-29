@@ -145,7 +145,7 @@ static void on_sync_done(void *user, const mc_sync_result *r) {
 }
 
 static const mc_sync_events k_events = {NULL, on_pair_code, on_pair_result, NULL, on_sync_done,
-                                        NULL};
+                                        NULL, NULL, NULL, NULL};
 
 static void dev_paths(dev *d, const char *root, const char *label) {
   d->label = label;

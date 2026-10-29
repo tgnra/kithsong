@@ -315,6 +315,46 @@ const mc_changelog_table *mc_sync_db_tracked(size_t *count) {
   return k_tracked;
 }
 
+mc_status mc_sync_db_forget_scrobble(mc_sync_db *sdb, int *dropped) {
+  if (dropped) *dropped = 0;
+  if (!sdb) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st != MC_OK) return st;
+  sdb->applying_remote = 1;
+  sqlite3_stmt *stmt;
+  if (dropped && sqlite3_prepare_v2(sdb->db, "SELECT count(*) FROM scrobble_queue", -1, &stmt,
+                                    NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) *dropped = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+  }
+  st = exec(sdb, "DELETE FROM scrobble_account");
+  if (st == MC_OK) st = exec(sdb, "DELETE FROM changelog WHERE entity = 'scrobble_account'");
+  if (st == MC_OK) st = exec(sdb, "DELETE FROM scrobble_queue");
+  sdb->applying_remote = 0;
+  if (st == MC_OK) st = mc_sync_db_commit(sdb);
+  if (st != MC_OK) mc_sync_db_rollback(sdb);
+  return st;
+}
+
+mc_status mc_sync_db_restamp_scrobble(mc_sync_db *sdb) {
+  if (!sdb) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st != MC_OK) return st;
+  char sql[512];
+  for (int i = 0; k_scrobble_cols[i] && st == MC_OK; i++) {
+    /* A changelog row per field, stamped now, as an edit setting it to what it is. */
+    snprintf(sql, sizeof sql,
+             "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
+             " SELECT mc_hlc_now(), mc_node_uid(), 'scrobble_account', uid, '%s', %s"
+             " FROM scrobble_account WHERE uid = '" MC_SCROBBLE_ACCOUNT_UID "'",
+             k_scrobble_cols[i], k_scrobble_cols[i]);
+    st = exec(sdb, sql);
+  }
+  if (st == MC_OK) st = mc_sync_db_commit(sdb);
+  if (st != MC_OK) mc_sync_db_rollback(sdb);
+  return st;
+}
+
 mc_status mc_sync_db_clear_group(mc_sync_db *sdb) {
   if (!sdb) return MC_ERR_INVALID_ARG;
   mc_status st = mc_sync_db_begin_write(sdb);

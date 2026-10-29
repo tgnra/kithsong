@@ -73,4 +73,14 @@ const mc_changelog_table *mc_sync_db_tracked(size_t *count);
  * doesn't sign the device out, and the account goes with it to the next group. */
 mc_status mc_sync_db_clear_group(mc_sync_db *sdb);
 
+/* Merging libraries, on the device whose library isn't kept (sync/pairing.c). */
+/* Signs this device out without telling anyone: the scrobbling account, its changes and the
+ * plays still queued are deleted unlogged, so the kept group's account arrives whole in the
+ * next session instead of merging field by field with this one. *dropped (may be NULL): how
+ * many queued plays went with it. */
+mc_status mc_sync_db_forget_scrobble(mc_sync_db *sdb, int *dropped);
+/* Logs every field of the scrobbling account again, stamped now, so that it wins over any
+ * older change the kept group has to the account (e.g. a sign-out) when they meet. */
+mc_status mc_sync_db_restamp_scrobble(mc_sync_db *sdb);
+
 #endif

@@ -25,6 +25,7 @@ target_link_libraries(test_noise PRIVATE mbedcrypto)  # known-answer tests of th
 kithsong_test(test_channel)
 kithsong_test(test_rows)
 kithsong_test(test_merge)
+kithsong_test(test_libmerge)
 kithsong_test(test_session)
 set_tests_properties(test_session PROPERTIES TIMEOUT 300)
 kithsong_test(test_sync_profile)

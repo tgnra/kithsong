@@ -430,6 +430,72 @@ mc_status mc_library_adopt_uid(mc_library *lib, const char *library_uid) {
   return MC_OK;
 }
 
+mc_status mc_library_meta_get(mc_library *lib, const char *key, char *out, size_t cap) {
+  if (!lib || !key || !out || !cap) return MC_ERR_INVALID_ARG;
+  out[0] = '\0';
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "SELECT value FROM meta WHERE key = ?1", -1, &stmt, NULL) !=
+      SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  mc_status st = rc == SQLITE_ROW ? MC_OK : rc == SQLITE_DONE ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+  if (st == MC_OK) {
+    const char *v = (const char *)sqlite3_column_text(stmt, 0);
+    snprintf(out, cap, "%s", v ? v : "");
+  }
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+mc_status mc_library_meta_set(mc_library *lib, const char *key, const char *value) {
+  if (!lib || !key) return MC_ERR_INVALID_ARG;
+  if (value) return write_meta(lib, key, value);
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "DELETE FROM meta WHERE key = ?1", -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+  mc_status st = sqlite3_step(stmt) == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+/* The migration that seeds the example smart lists (v10); see mc_library_reset_for_merge(). */
+#define EXAMPLES_MIGRATION 9
+
+mc_status mc_library_reset_for_merge(mc_library *lib) {
+  if (!lib) return MC_ERR_INVALID_ARG;
+  char fresh[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(fresh);
+  if (st != MC_OK) return st;
+  if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
+  /* Nothing here is logged: the library starts again with an empty changelog under a new
+   * node uid, as if just created (children before their parents, for the foreign keys). */
+  lib->applying_remote = 1;
+  static const char *const k_clear[] = {
+    "DELETE FROM files", "DELETE FROM playlist_entries", "DELETE FROM album_group_entries",
+    "DELETE FROM track_plays", "DELETE FROM recents", "DELETE FROM smart_lists",
+    "DELETE FROM playlists", "DELETE FROM album_groups", "DELETE FROM tracks",
+    "DELETE FROM albums", "DELETE FROM artists", "DELETE FROM aliases",
+    "DELETE FROM merge_keys", "DELETE FROM changelog", "DELETE FROM meta WHERE key = 'merge_seq'",
+  };
+  for (size_t i = 0; i < sizeof k_clear / sizeof k_clear[0] && st == MC_OK; i++)
+    st = exec(lib, k_clear[i]);
+  /* The example lists are migration rows every library has, unlogged; the kept library's
+   * edits to them arrive with its changelog. */
+  if (st == MC_OK && EXAMPLES_MIGRATION < MC_SCHEMA_VERSION)
+    st = exec(lib, k_migrations[EXAMPLES_MIGRATION]);
+  if (st == MC_OK) st = write_meta(lib, "node_uid", fresh);
+  lib->applying_remote = 0;
+  if (st == MC_OK) st = exec(lib, "COMMIT");
+  if (st != MC_OK) {
+    exec(lib, "ROLLBACK");
+    return st;
+  }
+  memcpy(lib->node_uid, fresh, MC_UID_STRLEN);
+  return MC_OK;
+}
+
 const char *mc_library_errmsg(const mc_library *lib) {
   return sqlite3_errmsg(lib->db);
 }

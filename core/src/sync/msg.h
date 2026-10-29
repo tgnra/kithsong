@@ -40,6 +40,10 @@
 #define MC_MSG_JPAKE_1 0x43
 #define MC_MSG_JPAKE_2 0x44
 #define MC_MSG_PAIR_ACCEPT 0x45
+/* Merging libraries, encrypted, after PAIR_ACCEPT: the merged device asks, the kept one
+ * answers with its originals (see "Merging libraries" in docs/sync-protocol.md). */
+#define MC_MSG_MERGE_REQ 0x46
+#define MC_MSG_MERGE_FILES 0x47
 
 /* Reach, in the clear. */
 #define MC_MSG_REACH_REQ 0x50

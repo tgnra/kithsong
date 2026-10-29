@@ -55,7 +55,10 @@ typedef enum mc_pair_reason {
   MC_PAIR_ALREADY_PAIRED,   /* both are already in the same group */
   MC_PAIR_BUSY,             /* the other device is pairing with someone else */
   MC_PAIR_CANCELLED,        /* mc_sync_pair_cancel() here, or the other side gave up */
-  MC_PAIR_FAILED            /* network error or timeout; see status */
+  MC_PAIR_FAILED,           /* network error or timeout; see status */
+  MC_PAIR_MERGE_DECLINED    /* both libraries have music and the user of the device whose
+                             * library would have been merged said no (here, or on the other
+                             * device); see "Merging libraries" below */
 } mc_pair_reason;
 
 typedef struct mc_pair_result {
@@ -75,7 +78,119 @@ typedef struct mc_pair_result {
    * version doesn't say). */
   const char *archive_name;
   int archives;
+  /* MC_PAIR_PAIRED by merging libraries (see "Merging libraries" below): merged is 1 on
+   * both devices; kept_here is 1 on the device whose library was kept (and 0 on the one
+   * that joined, whose music is merged in once the first session has brought the kept
+   * library: on_merge_progress and on_merge_done report it there). */
+  int merged;
+  int kept_here;
+  /* With merged: the user name of the scrobbling (Last.fm) account that was signed out
+   * because both devices had one, the merged library's; "" if none was. Known on both
+   * devices. */
+  const char *scrobble_signed_out;
 } mc_pair_result;
+
+/* --- Merging libraries ---
+ * Two devices whose libraries both have music can still pair: one library is kept (its
+ * database, uids and changelog) and the other device's music is merged into it, as an import
+ * would bring it in. See "Merging libraries" in docs/sync-protocol.md.
+ *
+ *  - Which is kept: the larger library, by track count, then by the size of the files each
+ *    device holds, then the older library (the smaller library uid). Both devices work it out
+ *    from what they told each other, so they agree. The user doesn't choose.
+ *  - Both devices get on_pair_merge as soon as the merge is known, before the code is
+ *    entered: the initiator after the other device answered, the one showing the code just
+ *    before on_pair_code. The device whose library is merged (needs_confirm) must confirm
+ *    with mc_sync_pair_merge_confirm(); the other device only shows what will happen.
+ *      - On the initiator (it types the code): confirm before or after the code is typed;
+ *        the pairing goes on once it has both. Declining ends it at once with
+ *        MC_PAIR_MERGE_DECLINED on both devices (the other one hears it as the user
+ *        cancelling: MC_PAIR_CANCELLED).
+ *      - On the device showing the code: confirm or decline next to the code. Declining
+ *        doesn't stop the code being shown by itself (the UI closes its dialog); the other
+ *        device hears MC_PAIR_MERGE_DECLINED when its user enters the code, and this one
+ *        gets on_pair_result with MC_PAIR_MERGE_DECLINED then (or when the other gives up).
+ *        Not answering for 5 minutes after the code was entered is declining.
+ *    mc_sync_pair_cancel() still cancels either side.
+ *  - After the code: the device whose library is merged signs its scrobbling account out if
+ *    both have one (after one attempt to send its queued plays; what can't be sent is
+ *    dropped), forgets its old group if it was in one (its paired devices are removed from
+ *    its sync.db; they have to pair again, with the kept group, to sync with it), sets its
+ *    library aside (a copy, library-before-merge-<date>.db in its library folder) and
+ *    empties it, then joins as a device with an empty library would. on_pair_result
+ *    reports MC_PAIR_PAIRED with merged set, and the first session brings the kept library.
+ *  - Then, on that device only, the music of the set-aside copy is merged in:
+ *    on_merge_progress, then on_merge_done. Its files stay where they are in the library
+ *    folder (originals imported on this device, so the kept group's archive fetches them as
+ *    for any import) unless the kept library already has the track in the same or better
+ *    quality, when the file goes to the Recycle Bin or trash. If the app stops before it
+ *    ran, it runs after the next session that syncs the library (mc_sync_merge_pending()).
+ *  - A frontend that leaves on_pair_merge NULL doesn't offer merging: pairing two libraries
+ *    with music is refused with MC_PAIR_LIBRARY_MISMATCH as before. So is pairing with a
+ *    device running a version without merging. */
+
+typedef struct mc_pair_merge {
+  const char *device_uid;  /* the other device */
+  const char *name;        /* its name */
+  int initiator;           /* 1 on the device that asked to pair (and enters the code) */
+  int kept_here;           /* 1: this device's library is kept and the other's music comes
+                            * into it; 0: this device's library is set aside and its music
+                            * goes into the other's */
+  int needs_confirm;       /* = !kept_here: call mc_sync_pair_merge_confirm() */
+  int64_t tracks_here, tracks_there; /* each library's track count */
+  int64_t bytes_here, bytes_there;   /* the files each device holds, in bytes */
+  /* Both devices are signed in to a scrobbling service, so the account of the library being
+   * merged is signed out (after one attempt to send its queued plays). scrobble_user is that
+   * account's user name when it is this device's (needs_confirm), else "". */
+  int scrobble_sign_out;
+  const char *scrobble_user;
+  /* needs_confirm only: this device is in a group of its own, and these are the other
+   * current members it will forget (they must pair again to sync with it), by name. */
+  int forget_count;
+  const char *const *forget_names;
+} mc_pair_merge;
+
+typedef enum mc_merge_phase {
+  MC_MERGE_PHASE_TRACKS, /* albums of the set-aside library, done of total */
+  MC_MERGE_PHASE_LISTS   /* playlists, album groups, smart lists, play counts, recents */
+} mc_merge_phase;
+
+typedef struct mc_merge_progress {
+  mc_merge_phase phase;
+  int done, total;
+} mc_merge_progress;
+
+typedef struct mc_merge_result {
+  mc_status status;        /* MC_OK, or why it stopped (what was written stays) */
+  const char *backup_path; /* the set-aside library (absolute); kept, never deleted */
+  /* Tracks of the set-aside library: */
+  int tracks_added;        /* new to the kept library, with this device's file */
+  int tracks_attached;     /* the kept library had them, with no copy whose quality is known
+                            * (none on the device that kept it): this device's file was added
+                            * to the kept track as this device's original */
+  int tracks_better;       /* the kept library had them, in lower quality on the other
+                            * device: this device's file was added as for tracks_attached
+                            * (the other device's copy stays as it is) */
+  int tracks_skipped;      /* the kept library had them in the same or better quality: this
+                            * device's file went to the Recycle Bin or trash */
+  int tracks_mapped;       /* no file on this device, but the kept library has the track (by
+                            * MusicBrainz id): only its playlist entries, plays and so on
+                            * came along */
+  int tracks_left_out;     /* no file on this device and not in the kept library: left out */
+  int tracks_failed;       /* couldn't be written */
+  int playlists;           /* playlists, album groups and smart lists carried over */
+  int playlists_renamed;   /* of those, renamed "Name (2)" and so on: the kept library had
+                            * one of the same name */
+  int album_groups;
+  int smart_lists;
+  int plays;               /* tracks whose play counts were carried over */
+  int recents;
+  /* As in mc_pair_result. Known only if the merge runs in the same run of the app as the
+   * pairing; "" otherwise. */
+  const char *scrobble_signed_out;
+  int scrobbles_sent;      /* queued plays sent under that account before signing it out */
+  int scrobbles_dropped;   /* queued plays that couldn't be sent, dropped */
+} mc_merge_result;
 
 typedef enum mc_sync_phase {
   MC_SYNC_PHASE_CONNECTING,
@@ -137,6 +252,12 @@ typedef struct mc_sync_events {
    * (see "Reachability" below). device_uid is this device's own when whether others can
    * reach it changed, and NULL when much changed at once (its network did). */
   void (*on_reach)(void *user, const char *device_uid);
+  /* Pairing needs the libraries merged (see "Merging libraries" above). Leave NULL to have
+   * such pairings refused with MC_PAIR_LIBRARY_MISMATCH instead. */
+  void (*on_pair_merge)(void *user, const mc_pair_merge *merge);
+  /* The merge of the set-aside library, on the device whose library was merged. */
+  void (*on_merge_progress)(void *user, const mc_merge_progress *progress);
+  void (*on_merge_done)(void *user, const mc_merge_result *result);
 } mc_sync_events;
 
 /* Opens this device's sync state in config_dir (the per-device config dir, which holds
@@ -183,6 +304,13 @@ mc_status mc_sync_pair_request_address(mc_sync *sync, const char *host, uint16_t
 mc_status mc_sync_pair_enter(mc_sync *sync, const char *code);
 /* Gives up the pairing in progress on this device, outgoing or incoming. */
 void mc_sync_pair_cancel(mc_sync *sync);
+/* The user's answer to on_pair_merge with needs_confirm: merge = 1 to merge this device's
+ * library into the other's, 0 to decline. Returns at once. MC_ERR_NOT_FOUND if no pairing
+ * here is waiting for one (an outgoing pairing is asked first if both are). */
+mc_status mc_sync_pair_merge_confirm(mc_sync *sync, int merge);
+/* 1 while this device's set-aside library hasn't been merged into the kept one yet (it runs
+ * after a session that syncs the library; see on_merge_done), else 0. */
+int mc_sync_merge_pending(mc_sync *sync);
 
 /* --- Group --- */
 

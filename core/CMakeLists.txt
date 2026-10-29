@@ -101,6 +101,7 @@ add_library(musiccore STATIC
   src/sync/here.c
   src/sync/archive.c
   src/sync/merge.c
+  src/sync/libmerge.c
   src/sync/rows.c
   src/sync/session.c
   src/sync/plan.c

@@ -99,7 +99,7 @@ static void on_reach(void *user, const char *uid) {
 }
 
 static const mc_sync_events k_events = {NULL, on_pair_code, on_pair_result, NULL, on_sync_done,
-                                        on_reach};
+                                        on_reach, NULL, NULL, NULL};
 
 static int dev_open(dev *d, const char *root, const char *label) {
   d->label = label;
