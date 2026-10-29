@@ -201,7 +201,6 @@ static gboolean open_library(void *user, const char *dir) {
   playback_set_library(lib, a->settings_dir);
   mc_library_close(a->lib);
   a->lib = lib;
-  a->keep_playlist[0] = '\0';
   set_empty_description(a);
   restore_deleted(a);
   app_reload_library(a);
@@ -302,7 +301,6 @@ static void on_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user
     GtkWidget *grid = shown_grid(a);
     if (grid) album_grid_unselect(grid);
     a->view = view;
-    a->keep_playlist[0] = '\0'; /* a new playlist with nothing to play here is hidden again */
     app_reload_library(a);
   }
   show_page(a, view == APP_VIEW_ARTISTS ? "artists" : "library");
@@ -768,11 +766,9 @@ static void on_playlists_changed(void *user) {
   app_reload_library(user);
 }
 
-/* The Playlists header's +: the new playlist opens, and stays on the page while it has
- * nothing to play here until another page is picked. */
+/* The Playlists header's +: the new playlist opens. */
 static void on_playlist_created(void *user, const char *uid) {
   app *a = user;
-  g_strlcpy(a->keep_playlist, uid, sizeof a->keep_playlist);
   app_reload_library(a);
   app_open(a, TRUE, uid);
 }
@@ -787,9 +783,9 @@ static void on_choose_sync(GtkButton *button, gpointer user) {
   devices_open_self();
 }
 
-static void on_track_add_to_playlist(void *user, const char *track_uid) {
+static void on_track_add_to_playlist(void *user, const char *track_uid, gboolean here) {
   app *a = user;
-  add_to_playlist_present(GTK_WIDGET(a->win), a->lib, track_uid, on_playlists_changed, a);
+  add_to_playlist_present(GTK_WIDGET(a->win), a->lib, track_uid, here, on_playlists_changed, a);
 }
 
 static void playlist_failed(app *a, const char *heading) {
@@ -849,8 +845,7 @@ static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
 
 void app_reload_library(app *a) {
   int albums = album_grid_reload(a->album_grid, a->lib);
-  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir, a->keep_playlist,
-                                              &a->hidden_playlists);
+  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir, &a->hidden_playlists);
   /* Playlists with nothing to play here are hidden; say so rather than "No playlists yet". */
   set_no_playlists(a);
   gtk_stack_set_visible_child_name(a->playlists, playlists > 0 ? "grid" : "none");

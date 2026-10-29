@@ -70,7 +70,8 @@ import java.io.File
  * Sync brings the whole library's data, but only some of its files may be on this phone, so
  * only what has a file here is listed: albums with a folder here, tracks with a file,
  * artists with such an album or track, album groups with such an album, and playlists and
- * smart lists with at least one such track or album (the core's MC_LIST_PLAYABLE).
+ * smart lists with at least one such track or album (the core's MC_LIST_PLAYABLE), or for a
+ * playlist, none at all: an empty one is waiting for tracks.
  * The sync profile editor's choices ([profileChoices]) still list every playlist.
  * Albums and tracks with no artist get [unknownArtist], looked up on every read so that it
  * follows the app's language.
@@ -537,8 +538,9 @@ class CoreLibrarySource(
         }
 
         // Smart playlists sit among the others, and smart album groups among the manual ones.
-        // Only those with a track or album to play here, which also keeps the rest out of
-        // Recents. Each shows the picture it last had until [lookUpArt] finds it again.
+        // Only those with a track or album to play here (or empty playlists), which also keeps
+        // the rest out of Recents. Each shows the picture it last had until [lookUpArt] finds it
+        // again.
         val here = albums.associateBy { it.uid }
         val smart = lib.smartLists(playableOnly = true)
         val known = savedArt()

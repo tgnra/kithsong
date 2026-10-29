@@ -72,7 +72,7 @@ static void on_playlist_activated(GtkListBox *list, GtkListBoxRow *row, gpointer
   g_object_unref(p->dialog);
 }
 
-void add_to_playlist_present(GtkWidget *parent, mc_library *lib, const char *track_uid,
+void add_to_playlist_present(GtkWidget *parent, mc_library *lib, const char *track_uid, gboolean here,
                              void (*changed)(void *user), void *user) {
   if (!lib || !track_uid || strlen(track_uid) >= MC_UID_STRLEN) return;
   picker *p = g_new0(picker, 1);
@@ -101,7 +101,20 @@ void add_to_playlist_present(GtkWidget *parent, mc_library *lib, const char *tra
   adw_entry_row_set_show_apply_button(ADW_ENTRY_ROW(p->name), TRUE);
   g_signal_connect(p->name, "apply", G_CALLBACK(on_create), p);
   gtk_list_box_append(GTK_LIST_BOX(create), p->name);
-  gtk_box_append(GTK_BOX(box), create);
+  if (here) {
+    gtk_box_append(GTK_BOX(box), create);
+  } else {
+    /* Added to a new playlist, it'd be hidden from the Playlists page at once: say so. */
+    GtkWidget *group = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_box_append(GTK_BOX(group), create);
+    GtkWidget *note = gtk_label_new(mc_str(MC_STR_NEW_PLAYLIST_TRACK_AWAY));
+    gtk_label_set_wrap(GTK_LABEL(note), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(note), 0);
+    gtk_widget_add_css_class(note, "dim-label");
+    gtk_widget_add_css_class(note, "caption");
+    gtk_box_append(GTK_BOX(group), note);
+    gtk_box_append(GTK_BOX(box), group);
+  }
 
   p->list = gtk_list_box_new();
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(p->list), GTK_SELECTION_NONE);

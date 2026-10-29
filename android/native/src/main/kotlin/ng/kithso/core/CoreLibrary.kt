@@ -61,7 +61,8 @@ class CoreLibrary(dir: String) : AutoCloseable {
 
     /**
      * Every playlist, by name; if [playableOnly], only those with a track that has a file on
-     * this device (MC_LIST_PLAYABLE), as the views for playing show. Pickers list them all.
+     * this device or no tracks at all (MC_LIST_PLAYABLE), as the views for playing show.
+     * Pickers list them all.
      */
     fun playlists(playableOnly: Boolean = false): List<PlaylistInfo> =
         nativeListPlaylists(handle, if (playableOnly) LIST_PLAYABLE else 0).asList()

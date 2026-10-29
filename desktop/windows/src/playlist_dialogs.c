@@ -14,7 +14,7 @@ enum { MAX_NAME = 255 };
 /* One dialog's state, passed in through DialogBoxParamW. */
 typedef struct ask {
   const wchar_t *caption, *ok; /* the name dialog's title and OK label; Delete's title */
-  const wchar_t *note;         /* Delete's note under the heading */
+  const wchar_t *note;         /* Delete's note under the heading; New's under the name, or NULL */
   int title_id;                /* Delete's heading, an enum mc_str_id taking the name; 0: "Delete "{0}"?" */
   const wchar_t *button;       /* Delete's button; NULL: Delete */
   const wchar_t *name;         /* the current name; NULL for a new playlist */
@@ -77,6 +77,35 @@ static BOOL common_message(HWND dlg, UINT msg, WPARAM wp, LPARAM lp, INT_PTR *re
 
 /* --- New and Rename --- */
 
+/* Shows the name dialog's note, under the name box, as tall as its lines: the buttons move
+ * down to make room. */
+static void show_note(HWND dlg, const wchar_t *text) {
+  HWND note = GetDlgItem(dlg, IDC_PL_NOTE);
+  SetWindowTextW(note, text);
+  RECT r;
+  GetWindowRect(note, &r);
+  RECT lines = {0, 0, r.right - r.left, 0};
+  HDC dc = GetDC(note);
+  HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageW(note, WM_GETFONT, 0, 0));
+  DrawTextW(dc, text, -1, &lines, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+  SelectObject(dc, old);
+  ReleaseDC(note, dc);
+  SetWindowPos(note, NULL, 0, 0, r.right - r.left, lines.bottom, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  RECT gap = {0, 0, 0, 4}; /* dialog units */
+  MapDialogRect(dlg, &gap);
+  int dy = lines.bottom + gap.bottom;
+  const int buttons[] = {IDOK, IDCANCEL};
+  for (int i = 0; i < 2; i++) {
+    HWND b = GetDlgItem(dlg, buttons[i]);
+    GetWindowRect(b, &r);
+    MapWindowPoints(NULL, dlg, (POINT *)&r, 2);
+    SetWindowPos(b, NULL, r.left, r.top + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+  GetWindowRect(dlg, &r);
+  SetWindowPos(dlg, NULL, r.left, r.top - dy / 2, r.right - r.left, r.bottom - r.top + dy, SWP_NOZORDER);
+  ShowWindow(note, SW_SHOW);
+}
+
 /* OK is only for a name that's there and, renaming, different. */
 static void update_ok(HWND dlg, const ask *a) {
   wchar_t name[MAX_NAME + 1];
@@ -100,6 +129,7 @@ static INT_PTR CALLBACK name_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       SendMessageW(edit, EM_LIMITTEXT, MAX_NAME, 0);
       SetWindowTextW(edit, a->name ? a->name : L"");
       SendMessageW(edit, EM_SETSEL, 0, -1);
+      if (a->note) show_note(dlg, a->note);
       update_ok(dlg, a);
       apply_theme(dlg);
       SetFocus(edit);
@@ -124,18 +154,21 @@ static INT_PTR CALLBACK name_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
   return FALSE;
 }
 
-/* Asks for a name; returns it as malloc'd UTF-8, or NULL if the user cancelled. */
-static char *ask_name(HWND owner, const wchar_t *caption, const wchar_t *ok, const wchar_t *current) {
-  ask a = {.caption = caption, .ok = ok, .name = current};
+/* Asks for a name, with note (or NULL) beneath; returns it as malloc'd UTF-8, or NULL if
+ * the user cancelled. */
+static char *ask_name(HWND owner, const wchar_t *caption, const wchar_t *ok, const wchar_t *current,
+                      const wchar_t *note) {
+  ask a = {.caption = caption, .ok = ok, .name = current, .note = note};
   if (DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_PLAYLIST_NAME), owner, name_proc,
                       (LPARAM)&a) != IDOK || !a.entered[0])
     return NULL;
   return utf8(a.entered);
 }
 
-BOOL playlist_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]) {
+BOOL playlist_create_dialog(HWND owner, mc_library *lib, BOOL playable, char out_uid[MC_UID_STRLEN]) {
   if (!lib) return FALSE;
-  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_PLAYLIST), mc_wstr_mnemonic(MC_STR_CREATE), NULL);
+  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_PLAYLIST), mc_wstr_mnemonic(MC_STR_CREATE), NULL,
+                        playable ? NULL : mc_wstr(MC_STR_NEW_PLAYLIST_TRACK_AWAY));
   if (!name) return FALSE;
   mc_status st = mc_playlist_create(lib, name, out_uid);
   free(name);
@@ -147,7 +180,7 @@ BOOL playlist_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STR
 BOOL playlist_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name) {
   if (!lib || !uid) return FALSE;
   char *entered = ask_name(owner, mc_wstr(MC_STR_PLAYLIST_RENAME_TITLE), mc_wstr_mnemonic(MC_STR_RENAME),
-                           name ? name : L"");
+                           name ? name : L"", NULL);
   if (!entered) return FALSE;
   mc_status st = mc_playlist_rename(lib, uid, entered);
   free(entered);
@@ -238,7 +271,7 @@ BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const 
 
 BOOL album_group_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]) {
   if (!lib) return FALSE;
-  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_ALBUM_GROUP), mc_wstr_mnemonic(MC_STR_CREATE), NULL);
+  char *name = ask_name(owner, mc_wstr(MC_STR_NEW_ALBUM_GROUP), mc_wstr_mnemonic(MC_STR_CREATE), NULL, NULL);
   if (!name) return FALSE;
   mc_status st = mc_album_group_create(lib, name, out_uid);
   free(name);
@@ -250,7 +283,7 @@ BOOL album_group_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_
 BOOL album_group_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name) {
   if (!lib || !uid) return FALSE;
   char *entered = ask_name(owner, mc_wstr(MC_STR_ALBUM_GROUP_RENAME_TITLE), mc_wstr_mnemonic(MC_STR_RENAME),
-                           name ? name : L"");
+                           name ? name : L"", NULL);
   if (!entered) return FALSE;
   mc_status st = mc_album_group_rename(lib, uid, entered);
   free(entered);
@@ -277,7 +310,7 @@ BOOL smart_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wch
   if (!lib || !uid) return FALSE;
   const wchar_t *caption = mc_wstr(subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_RENAME_PLAYLIST_TITLE
                                                              : MC_STR_WINDOWS_SMART_RENAME_GROUP_TITLE);
-  char *entered = ask_name(owner, caption, mc_wstr_mnemonic(MC_STR_RENAME), name ? name : L"");
+  char *entered = ask_name(owner, caption, mc_wstr_mnemonic(MC_STR_RENAME), name ? name : L"", NULL);
   if (!entered) return FALSE;
   mc_status st = mc_smart_rename(lib, uid, entered);
   free(entered);

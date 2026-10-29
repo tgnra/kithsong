@@ -735,7 +735,8 @@ static void on_track_request(int code) {
   BOOL changed = FALSE;
   switch (code) {
     case TLN_ADD_TO_PLAYLIST:
-      changed = add_to_playlist(g_app.wnd, g_app.lib, req->track_uid, req->playlist_uid[0] ? req->playlist_uid : NULL);
+      changed = add_to_playlist(g_app.wnd, g_app.lib, req->track_uid, req->here,
+                                req->playlist_uid[0] ? req->playlist_uid : NULL);
       break;
     case TLN_REMOVE:
       changed = mc_playlist_remove(g_app.lib, req->entry_uid) == MC_OK;

@@ -678,8 +678,9 @@ mc_status mc_library_list_playlists(mc_library *lib, unsigned flags, mc_playlist
   sqlite3_stmt *stmt = NULL;
   if (st == MC_OK && sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) st = MC_ERR_DB;
   while (st == MC_OK && list->count < total && sqlite3_step(stmt) == SQLITE_ROW) {
-    int playable = sqlite3_column_int(stmt, 3);
-    if ((flags & MC_LIST_PLAYABLE) && playable == 0) {
+    int entries = sqlite3_column_int(stmt, 2), playable = sqlite3_column_int(stmt, 3);
+    /* An empty one is kept: it's waiting for tracks, not missing them. */
+    if ((flags & MC_LIST_PLAYABLE) && entries > 0 && playable == 0) {
       list->hidden++;
       continue;
     }
@@ -687,7 +688,7 @@ mc_status mc_library_list_playlists(mc_library *lib, unsigned flags, mc_playlist
     const unsigned char *uid = sqlite3_column_text(stmt, 0);
     if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(p->uid, (const char *)uid);
     p->name = column_dup(stmt, 1);
-    p->track_count = sqlite3_column_int(stmt, 2);
+    p->track_count = entries;
     p->playable_count = playable;
   }
   sqlite3_finalize(stmt);
@@ -963,7 +964,8 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
   static const char sql[] =
     "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, s.name),"
     " aar.name, s.uid IS NOT NULL,"
-    " p.uid IS NULL OR EXISTS (SELECT 1 FROM playlist_entries e JOIN files f ON f.track_uid = e.track_uid"
+    " p.uid IS NULL OR NOT EXISTS (SELECT 1 FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
+    "  OR EXISTS (SELECT 1 FROM playlist_entries e JOIN files f ON f.track_uid = e.track_uid"
     "  WHERE e.playlist_uid = p.uid)"
     " FROM recents r"
     " LEFT JOIN albums al ON r.kind = 'album' AND al.uid = r.uid"

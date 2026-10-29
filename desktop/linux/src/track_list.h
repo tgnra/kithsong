@@ -36,7 +36,7 @@ typedef struct track_list_callbacks {
    * shuffled (shuffle on). */
   void (*play_all)(void *user, gboolean shuffled);
   void (*close)(void *user);
-  void (*add_to_playlist)(void *user, const char *track_uid);
+  void (*add_to_playlist)(void *user, const char *track_uid, gboolean here); /* here: it has a file here */
   /* In the shown playlist: take an entry out, or move it to after after_entry_uid (NULL =
    * to the start). */
   void (*remove)(void *user, const char *entry_uid);

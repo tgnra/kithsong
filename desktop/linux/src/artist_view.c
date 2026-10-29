@@ -134,6 +134,7 @@ static struct {
   GtkSingleSelection *track_selection;
   GtkWidget *track_view, *track_scroller, *menu;
   char menu_uid[MC_UID_STRLEN]; /* the track the menu was opened on */
+  gboolean menu_here;           /* and whether it has a file here */
   GPtrArray *rows;              /* bound track rows, to mark the playing one */
   char playing_uid[MC_UID_STRLEN];
 } v;
@@ -390,6 +391,7 @@ static void on_track_menu(GtkGestureClick *click, int n_press, double x, double 
   if (!r->track || !r->item) return;
   gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
   memcpy(v.menu_uid, r->track->uid, sizeof v.menu_uid);
+  v.menu_here = r->track->path != NULL;
   gtk_single_selection_set_selected(v.track_selection, gtk_list_item_get_position(r->item));
   GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
   graphene_point_t at;
@@ -470,6 +472,7 @@ static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer use
         !gtk_widget_compute_bounds(r->title, v.page, &at))
       continue;
     memcpy(v.menu_uid, r->track->uid, sizeof v.menu_uid);
+    v.menu_here = r->track->path != NULL;
     gtk_popover_set_pointing_to(GTK_POPOVER(v.menu),
                                 &(GdkRectangle){(int)at.origin.x, (int)(at.origin.y + at.size.height), 1, 1});
     gtk_popover_popup(GTK_POPOVER(v.menu));
@@ -506,7 +509,7 @@ static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer 
   (void)user;
   char uid[MC_UID_STRLEN];
   memcpy(uid, v.menu_uid, sizeof uid);
-  if (v.cb.add_to_playlist && uid[0]) v.cb.add_to_playlist(v.cb.user, uid);
+  if (v.cb.add_to_playlist && uid[0]) v.cb.add_to_playlist(v.cb.user, uid, v.menu_here);
 }
 
 /* The track menu's Delete from library... (delete_dialog.h). */

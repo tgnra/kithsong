@@ -738,12 +738,14 @@ static void show_menu(POINT pt) {
   if (cmd >= CMD_PLAYLIST_FIRST && lists && cmd - CMD_PLAYLIST_FIRST < lists->count) {
     strcpy(s.req.track_uid, s.rows[i].uid);
     strcpy(s.req.playlist_uid, lists->items[cmd - CMD_PLAYLIST_FIRST].uid);
+    s.req.here = s.rows[i].path != NULL;
     notify(TLN_ADD_TO_PLAYLIST);
   }
   mc_playlist_list_free(lists);
   switch (cmd) {
     case CMD_NEW_PLAYLIST:
       strcpy(s.req.track_uid, s.rows[i].uid);
+      s.req.here = s.rows[i].path != NULL;
       notify(TLN_ADD_TO_PLAYLIST);
       break;
     case CMD_MOVE_UP: request_move(i, i - 1); break;

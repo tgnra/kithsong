@@ -37,7 +37,8 @@ BEGIN
 END
 
 /* New Playlist and Rename Playlist (playlist_dialogs.c): the caption and the OK button's
- * label depend on which. */
+ * label depend on which. The note, hidden unless there is one, takes the buttons' place, as
+ * tall as its lines, and they move down beneath it. */
 IDD_PLAYLIST_NAME DIALOGEX 0, 0, 230, 70
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION ""
@@ -45,6 +46,7 @@ FONT 9, "Segoe UI", 0, 0, 1
 BEGIN
   LTEXT           "", IDC_PL_LABEL, 7, 9, 216, 9, SS_NOPREFIX
   EDITTEXT        IDC_PL_NAME, 7, 20, 216, 14, ES_AUTOHSCROLL
+  LTEXT           "", IDC_PL_NOTE, 7, 42, 216, 27, SS_NOPREFIX | NOT WS_VISIBLE
   DEFPUSHBUTTON   "", IDOK, 113, 48, 52, 15
   PUSHBUTTON      "", IDCANCEL, 171, 48, 52, 15
 END

@@ -75,6 +75,7 @@ static struct {
   GSimpleAction *move_up, *move_down;
   char menu_uid[MC_UID_STRLEN];   /* the track it was opened on */
   char menu_entry[MC_UID_STRLEN]; /* and its playlist entry, or "" */
+  gboolean menu_here;             /* and whether it has a file here */
   guint menu_pos;
   GtkWidget *playlist_button;     /* the header's menu, shown for playlists */
   GtkWidget *reshuffle_button;    /* shown for smart playlists in random order */
@@ -121,6 +122,7 @@ static gboolean menu_for(guint pos) {
   if (!t) return FALSE;
   memcpy(s.menu_uid, t->uid, sizeof s.menu_uid);
   memcpy(s.menu_entry, t->entry_uid, sizeof s.menu_entry);
+  s.menu_here = t->path != NULL;
   s.menu_pos = pos;
   gboolean playlist = showing_playlist() && s.menu_entry[0];
   gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(s.menu), playlist ? s.playlist_menu : s.album_menu);
@@ -431,7 +433,7 @@ static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer 
   (void)action;
   (void)param;
   (void)user;
-  if (s.cb.add_to_playlist && s.menu_uid[0]) s.cb.add_to_playlist(s.cb.user, s.menu_uid);
+  if (s.cb.add_to_playlist && s.menu_uid[0]) s.cb.add_to_playlist(s.cb.user, s.menu_uid, s.menu_here);
 }
 
 /* Move Up goes after the entry two above (or to the start); Move Down after the one below. */
