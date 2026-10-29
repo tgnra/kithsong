@@ -94,8 +94,11 @@ mc_status mc_delete_run_permanently(mc_library *lib, const mc_delete_plan *plan,
 
 /* Brings back deleted tracks whose files are back where they were (see above), and drops
  * records older than MC_DELETE_KEEP_DAYS. *restored (may be NULL) is how many files came
- * back: if it's not 0, the library changed. A missing deleted.db is not an error. */
-mc_status mc_delete_restore(mc_library *lib, const char *config_dir, int *restored);
+ * back: if it's not 0, the library changed. *tracks (may be NULL) is how many tracks came
+ * back with them, e.g. for a "Restored N tracks" message: fewer when a track had several
+ * files here (an original and a copy), or one of its files came back earlier. A missing
+ * deleted.db is not an error. */
+mc_status mc_delete_restore(mc_library *lib, const char *config_dir, int *restored, int *tracks);
 
 #ifdef __cplusplus
 }

@@ -19,7 +19,8 @@ typedef struct app {
   mc_library *lib;
   GtkApplication *gapp;
   GtkWindow *win;
-  char *settings_dir;   /* ~/.config/kithsong */
+  AdwToastOverlay *toasts; /* over the whole window, e.g. "Restored 3 tracks" */
+  char *settings_dir;  /* ~/.config/kithsong */
   char *art_dir;        /* settings_dir/playlist-art: playlists' and album groups' pictures, see
                          * mc_playlist_art() */
   GtkStack *pages;      /* "library": the album grids and track list | "artists" | "search"

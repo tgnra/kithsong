@@ -216,7 +216,7 @@ static void test_album(void) {
   CHECK(mc_delete_plan_files(plan) == 4); /* and the cover */
   CHECK(mc_delete_plan_has(plan, low[1]) && !mc_delete_plan_has(plan, mimi[0]));
   int restored = -1;
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 0); /* no store yet */
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 0); /* no store yet */
 
   mc_delete_result res;
   CHECK(mc_delete_run(lib, config, plan, &res) == MC_OK);
@@ -240,12 +240,14 @@ static void test_album(void) {
   CHECK(query_int(lib, sql) == 2);
 
   /* Nothing's back yet. */
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 0);
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 0);
   CHECK(records(config) == 3);
 
   /* Two come back. */
   CHECK(unbin("01.flac") && unbin("02.flac"));
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 2);
+  int tracks_back = -1;
+  CHECK(mc_delete_restore(lib, config, &restored, &tracks_back) == MC_OK && restored == 2 &&
+        tracks_back == 2);
   CHECK(records(config) == 1);
   CHECK(count_of(lib, MC_ENTITY_TRACKS) == 3 && count_of(lib, MC_ENTITY_ARTISTS) == 2);
   snprintf(sql, sizeof sql, "SELECT count(*) FROM albums WHERE uid = '%s'", album);
@@ -275,13 +277,13 @@ static void test_album(void) {
   snprintf(third, sizeof third, "%s%cLow%cThings%c03.flac", mc_library_dir(lib), MC_PATH_SEP,
            MC_PATH_SEP, MC_PATH_SEP);
   write_file(third, "something else entirely");
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 0);
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 0);
   CHECK(records(config) == 1);
   mc_remove(third);
   /* Its playlist went meanwhile: the track comes back without it. */
   CHECK(mc_playlist_delete(lib, playlist) == MC_OK);
   CHECK(unbin("03.flac"));
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 1);
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 1);
   CHECK(records(config) == 0 && count_of(lib, MC_ENTITY_TRACKS) == 4);
   CHECK(query_int(lib, "SELECT count(*) FROM playlist_entries") == 0);
   mc_library_close(lib);
@@ -354,7 +356,7 @@ static void test_artist(void) {
   /* The credited track comes back credited to the artist, who comes back too. */
   CHECK(unbin("Comp/02.flac"));
   int restored = 0;
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 1);
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 1);
   snprintf(sql, sizeof sql,
            "SELECT count(*) FROM tracks t JOIN artists a ON a.uid = t.artist_uid"
            " WHERE t.uid = '%s' AND a.uid = '%s'",
@@ -385,14 +387,14 @@ static void test_expiry(void) {
                      NULL, NULL) == SQLITE_OK);
   sqlite3_close(db);
   int restored = -1;
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 0);
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 0);
   CHECK(records(config) == 1);
 
   /* The second, imported again before it's restored: it's in the library already. */
   char again[2][MC_UID_STRLEN];
   CHECK(unbin("Old/02.flac"));
   add_album(lib, "Low", "Old", 2, NULL, again);
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 0);
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 0);
   CHECK(records(config) == 0);
   mc_library_close(lib);
 }
@@ -406,6 +408,44 @@ static mc_status counting_remove(const char *path) {
   mc_status st = mc_remove(path);
   if (st == MC_OK) g_removed++;
   return st;
+}
+
+/* A track with two files here (an original and a copy): each file counts as it comes back,
+ * the track only with the first. */
+static void test_two_files(void) {
+  char config[1200];
+  mc_library *lib = open_library("two_files", config);
+  if (!lib) return;
+  char t[1][MC_UID_STRLEN], sql[1024], copy[1600];
+  add_album(lib, "Low", "Twice", 1, NULL, t);
+  snprintf(copy, sizeof copy, "%s%cLow%cTwice%c01.opus", mc_library_dir(lib), MC_PATH_SEP, MC_PATH_SEP,
+           MC_PATH_SEP);
+  write_file(copy, "a copy");
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  snprintf(sql, sizeof sql,
+           "INSERT INTO files (uid, track_uid, path, format, size_bytes)"
+           " VALUES ('f0000000-0000-4000-8000-000000000001', '%s', 'Low/Twice/01.opus', 'opus', 6)",
+           t[0]);
+  CHECK(sqlite3_exec(mc_library_db(lib), sql, NULL, NULL, NULL) == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+
+  const char *uids[] = {t[0]};
+  mc_delete_plan *plan = NULL;
+  CHECK(mc_delete_plan_new(lib, MC_DELETE_TRACKS, uids, 1, &plan) == MC_OK);
+  mc_delete_result res;
+  CHECK(mc_delete_run(lib, config, plan, &res) == MC_OK);
+  mc_delete_plan_free(plan);
+  CHECK(res.tracks_deleted == 1 && res.files_trashed == 2);
+  CHECK(count_of(lib, MC_ENTITY_TRACKS) == 0);
+
+  int restored = -1, tracks = -1;
+  CHECK(unbin("Twice/01.opus"));
+  CHECK(mc_delete_restore(lib, config, &restored, &tracks) == MC_OK && restored == 1 && tracks == 1);
+  CHECK(count_of(lib, MC_ENTITY_TRACKS) == 1 && count_of(lib, MC_ENTITY_FILES) == 1);
+  CHECK(unbin("Twice/01.flac"));
+  CHECK(mc_delete_restore(lib, config, &restored, &tracks) == MC_OK && restored == 1 && tracks == 0);
+  CHECK(count_of(lib, MC_ENTITY_TRACKS) == 1 && count_of(lib, MC_ENTITY_FILES) == 2);
+  mc_library_close(lib);
 }
 
 static void test_permanent(void) {
@@ -451,7 +491,7 @@ static void test_permanent(void) {
            t[0], album);
   CHECK(query_int(lib, sql) == 2); /* logged, so sync deletes them everywhere */
   int restored = -1;
-  CHECK(mc_delete_restore(lib, config, &restored) == MC_OK && restored == 0);
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 0);
   CHECK(mc_delete_run_permanently(lib, NULL, &res) == MC_ERR_INVALID_ARG);
   mc_library_close(lib);
 }
@@ -468,6 +508,7 @@ int main(int argc, char **argv) {
   test_kept();
   test_artist();
   test_expiry();
+  test_two_files();
   test_permanent();
   return TEST_RESULT();
 }

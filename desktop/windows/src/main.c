@@ -932,12 +932,18 @@ static void rename_self(const char *name) {
 
 /* Deleted tracks whose files are back from the Recycle Bin come back into the library
  * (musiccore/delete.h). Cheap: run at startup, on switching libraries and whenever the
- * window is activated. */
+ * window is activated. The now-playing strip says how many tracks came back. */
 static void restore_deleted(void) {
-  int restored = 0;
-  if (g_app.lib && g_app.config_dir && mc_delete_restore(g_app.lib, g_app.config_dir, &restored) == MC_OK &&
-      restored)
-    refresh_library();
+  int restored = 0, tracks = 0;
+  if (!g_app.lib || !g_app.config_dir || mc_delete_restore(g_app.lib, g_app.config_dir, &restored, &tracks) != MC_OK ||
+      !restored)
+    return;
+  refresh_library();
+  if (tracks) {
+    wchar_t text[64];
+    mc_wformat(text, 64, mc_str_plural(MC_STR_DELETE_RESTORED, tracks), MC_D(tracks));
+    now_playing_flash(text);
+  }
 }
 
 /* Just before a delete trashes files: the playing file, and the next one the player may have

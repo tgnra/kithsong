@@ -2055,7 +2055,7 @@ void mc_transfer_end(mc_session *s, int ok) {
     if (!x->plan->archive) reconcile_files(s, x);
     else drop_stale_on_archive(s);
     /* Files the user took back out of the trash would look unknown: their rows first. */
-    mc_delete_restore(lib, s->sync->config_dir, NULL);
+    mc_delete_restore(lib, s->sync->config_dir, NULL, NULL);
     reconcile_unknown(s, x->plan->archive);
     mc_verify_result v;
     verify_files(lib, 0, &v);

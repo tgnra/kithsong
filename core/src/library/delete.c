@@ -850,8 +850,21 @@ static void forget(sqlite3 *store, mc_library *lib, const char *rel) {
   run(store, "DELETE FROM deleted WHERE library_uid = ?1 AND rel = ?2", mc_library_uid(lib), rel);
 }
 
-mc_status mc_delete_restore(mc_library *lib, const char *config_dir, int *restored) {
+/* Whether the track a record's rows are for is in the library: then its file coming back
+ * (another of its files did already) brings back no track. */
+static int track_present(sqlite3 *db, const char *rows) {
+  sqlite3_stmt *stmt =
+    prepare(db, "SELECT 1 FROM tracks WHERE uid = json_extract(?1, '$.tracks[0].uid')");
+  if (!stmt) return 0;
+  sqlite3_bind_text(stmt, 1, rows, -1, SQLITE_STATIC);
+  int present = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  return present;
+}
+
+mc_status mc_delete_restore(mc_library *lib, const char *config_dir, int *restored, int *tracks) {
   if (restored) *restored = 0;
+  if (tracks) *tracks = 0;
   if (!lib || !config_dir) return MC_ERR_INVALID_ARG;
   sqlite3 *store;
   mc_status st = store_open(config_dir, 0, &store);
@@ -883,10 +896,12 @@ mc_status mc_delete_restore(mc_library *lib, const char *config_dir, int *restor
       free(rel);
       break;
     }
+    int had_track = track_present(lib->db, r->rows);
     mc_status put = restore_rows(lib->db, r->rows, rel);
     if (put == MC_OK) put = mc_library_commit(lib);
     if (put == MC_OK) {
       if (restored) (*restored)++;
+      if (tracks && !had_track) (*tracks)++;
       forget(store, lib, r->rel);
     } else {
       fprintf(stderr, "musiccore: couldn't restore %s: %s\n", rel, sqlite3_errmsg(lib->db));

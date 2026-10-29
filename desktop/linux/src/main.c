@@ -156,10 +156,19 @@ GtkWidget *app_list_header(const char *title, const char *tooltip, GCallback cli
 
 /* Deleted tracks whose files are back from the Trash come back into the library
  * (musiccore/delete.h). Cheap: run when a library opens and whenever the window becomes
- * active. TRUE if any came back. */
+ * active. TRUE if any came back; a toast says how many tracks. */
 static gboolean restore_deleted(app *a) {
-  int restored = 0;
-  return a->lib && mc_delete_restore(a->lib, a->settings_dir, &restored) == MC_OK && restored;
+  int restored = 0, tracks = 0;
+  if (!a->lib || mc_delete_restore(a->lib, a->settings_dir, &restored, &tracks) != MC_OK || !restored) return FALSE;
+  if (tracks && a->toasts) {
+    char text[128];
+    mc_format(text, sizeof text, mc_str_plural(MC_STR_DELETE_RESTORED, tracks), MC_D(tracks));
+    AdwToast *toast = adw_toast_new("");
+    adw_toast_set_use_markup(toast, FALSE);
+    adw_toast_set_title(toast, text);
+    adw_toast_overlay_add_toast(a->toasts, toast);
+  }
+  return TRUE;
 }
 
 /* Settings' Open Another Library. The import view lets go of the old library first. */
@@ -1094,7 +1103,10 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   a->win = GTK_WINDOW(win);
   gtk_window_set_title(a->win, mc_str(MC_STR_APP_NAME));
   gtk_window_set_default_size(a->win, 1200, 800);
-  adw_application_window_set_content(ADW_APPLICATION_WINDOW(win), toolbar);
+  GtkWidget *toasts = adw_toast_overlay_new();
+  a->toasts = ADW_TOAST_OVERLAY(toasts);
+  adw_toast_overlay_set_child(a->toasts, toolbar);
+  adw_application_window_set_content(ADW_APPLICATION_WINDOW(win), toasts);
   g_signal_connect(win, "close-request", G_CALLBACK(on_close_request), a);
 
   /* Space plays or pauses. The shortcut is in the bubble phase, so entries, buttons and
