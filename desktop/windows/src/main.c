@@ -665,6 +665,13 @@ static void set_shuffle(BOOL on) {
   mc_settings_save(g_app.settings); /* failing, it's saved with the next setting */
 }
 
+/* Ctrl+S and the media flyout's shuffle button: says so in the now-playing strip for a
+ * moment, as the button may not be in sight. */
+static void set_shuffle_flash(BOOL on) {
+  set_shuffle(on);
+  now_playing_flash(mc_wstr(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
+}
+
 /* Volume 0 to 100, kept in the settings for next time. Changing it unmutes. Says so in the
  * now-playing strip for a moment, as there's no volume control to show it. */
 static void set_volume(int volume) {
@@ -1302,6 +1309,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       g_app.dpi = GetDpiForWindow(wnd);
       g_app.page = PAGE_ALBUMS; /* the sidebar starts there */
       playback_init(wnd, playback_changed);
+      playback_on_shuffle_requested(set_shuffle_flash);
       theme_apply_window(wnd, TRUE);
       create_controls();
       playback_set_shuffle(mc_settings_shuffle(g_app.settings)); /* as it was left */
@@ -1797,10 +1805,7 @@ static BOOL shortcut(const MSG *msg) {
         if (!repeat) toggle_muted();
         return TRUE;
       case 'S':
-        if (!repeat) {
-          set_shuffle(!playback_shuffle());
-          now_playing_flash(mc_wstr(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
-        }
+        if (!repeat) set_shuffle_flash(!playback_shuffle());
         return TRUE;
       case 'F':
         if (!repeat) shortcut_page(PAGE_SEARCH);

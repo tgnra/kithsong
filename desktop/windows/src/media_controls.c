@@ -20,6 +20,8 @@ typedef __FITypedEventHandler_2_Windows__CMedia__CSystemMediaTransportControls_W
   button_handler;
 typedef __FITypedEventHandler_2_Windows__CMedia__CSystemMediaTransportControls_Windows__CMedia__CPlaybackPositionChangeRequestedEventArgs
   seek_handler;
+typedef __FITypedEventHandler_2_Windows__CMedia__CSystemMediaTransportControls_Windows__CMedia__CShuffleEnabledChangeRequestedEventArgs
+  shuffle_handler;
 
 /* {94ea2b94-e9cc-49e0-c0ff-ee64ca8f5b90}: handlers that say they're agile are called on
  * whichever thread raised the event, rather than marshalled to the UI thread. */
@@ -29,7 +31,7 @@ static struct {
   ISystemMediaTransportControls *smtc;
   ISystemMediaTransportControls2 *smtc2; /* timeline; NULL before Windows 10 1607 */
   ISystemMediaTransportControlsTimelineProperties *timeline;
-  EventRegistrationToken button_token, seek_token;
+  EventRegistrationToken button_token, seek_token, shuffle_token;
   HWND notify;
   UINT msg;
   BOOL shown;
@@ -37,7 +39,7 @@ static struct {
 
 /* --- Event handlers --- */
 
-/* Both handlers are statics that live as long as the app, so they aren't reference counted. */
+/* The handlers are statics that live as long as the app, so they aren't reference counted. */
 static HRESULT handler_query(IUnknown *self, REFIID iid, const IID *own, void **out) {
   if (IsEqualIID(iid, own) || IsEqualIID(iid, &IID_IUnknown) || IsEqualIID(iid, &agile_iid)) {
     *out = self;
@@ -104,12 +106,39 @@ static HRESULT STDMETHODCALLTYPE seek_invoke(seek_handler *self, ISystemMediaTra
   return S_OK;
 }
 
+static ULONG STDMETHODCALLTYPE shuffle_addref(shuffle_handler *self) {
+  (void)self;
+  return 2;
+}
+
+static ULONG STDMETHODCALLTYPE shuffle_release(shuffle_handler *self) {
+  (void)self;
+  return 1;
+}
+
+static HRESULT STDMETHODCALLTYPE shuffle_query(shuffle_handler *self, REFIID iid, void **out) {
+  return handler_query((IUnknown *)self, iid, &IID_ITypedEventHandler_SystemMediaTransportControls_ShuffleEnabledChangeRequestedEventArgs, out);
+}
+
+static HRESULT STDMETHODCALLTYPE shuffle_invoke(shuffle_handler *self, ISystemMediaTransportControls *sender,
+                                                IShuffleEnabledChangeRequestedEventArgs *args) {
+  (void)self;
+  (void)sender;
+  boolean on;
+  if (SUCCEEDED(IShuffleEnabledChangeRequestedEventArgs_get_RequestedShuffleEnabled(args, &on)))
+    PostMessageW(s.notify, s.msg, MEDIA_SHUFFLE, on ? 1 : 0);
+  return S_OK;
+}
+
 static __FITypedEventHandler_2_Windows__CMedia__CSystemMediaTransportControls_Windows__CMedia__CSystemMediaTransportControlsButtonPressedEventArgsVtbl
   button_vtbl = {button_query, button_addref, button_release, button_invoke};
 static __FITypedEventHandler_2_Windows__CMedia__CSystemMediaTransportControls_Windows__CMedia__CPlaybackPositionChangeRequestedEventArgsVtbl
   seek_vtbl = {seek_query, seek_addref, seek_release, seek_invoke};
+static __FITypedEventHandler_2_Windows__CMedia__CSystemMediaTransportControls_Windows__CMedia__CShuffleEnabledChangeRequestedEventArgsVtbl
+  shuffle_vtbl = {shuffle_query, shuffle_addref, shuffle_release, shuffle_invoke};
 static button_handler button_obj = {&button_vtbl};
 static seek_handler seek_obj = {&seek_vtbl};
+static shuffle_handler shuffle_obj = {&shuffle_vtbl};
 
 /* --- Setup --- */
 
@@ -152,6 +181,7 @@ BOOL media_controls_init(HWND wnd, HWND notify, UINT msg) {
       WindowsDeleteString(name);
     }
     ISystemMediaTransportControls2_add_PlaybackPositionChangeRequested(s.smtc2, &seek_obj, &s.seek_token);
+    ISystemMediaTransportControls2_add_ShuffleEnabledChangeRequested(s.smtc2, &shuffle_obj, &s.shuffle_token);
   } else {
     s.smtc2 = NULL;
   }
@@ -161,6 +191,7 @@ BOOL media_controls_init(HWND wnd, HWND notify, UINT msg) {
 void media_controls_free(void) {
   if (s.smtc2) {
     ISystemMediaTransportControls2_remove_PlaybackPositionChangeRequested(s.smtc2, s.seek_token);
+    ISystemMediaTransportControls2_remove_ShuffleEnabledChangeRequested(s.smtc2, s.shuffle_token);
     ISystemMediaTransportControls2_Release(s.smtc2);
   }
   if (s.timeline) ISystemMediaTransportControlsTimelineProperties_Release(s.timeline);
@@ -240,7 +271,7 @@ void media_controls_set_track(const wchar_t *title, const wchar_t *artist, const
   ISystemMediaTransportControlsDisplayUpdater_Release(updater);
 }
 
-void media_controls_set_state(mc_player_state state, BOOL has_previous, BOOL has_next) {
+void media_controls_set_state(mc_player_state state, BOOL has_previous, BOOL has_next, BOOL shuffle) {
   if (!s.smtc || !s.shown) return;
   MediaPlaybackStatus status = state == MC_PLAYER_PLAYING ? MediaPlaybackStatus_Playing
                                : state == MC_PLAYER_PAUSED ? MediaPlaybackStatus_Paused
@@ -251,6 +282,7 @@ void media_controls_set_state(mc_player_state state, BOOL has_previous, BOOL has
   ISystemMediaTransportControls_put_IsStopEnabled(s.smtc, state != MC_PLAYER_STOPPED ? TRUE : FALSE);
   ISystemMediaTransportControls_put_IsPreviousEnabled(s.smtc, has_previous ? TRUE : FALSE);
   ISystemMediaTransportControls_put_IsNextEnabled(s.smtc, has_next ? TRUE : FALSE);
+  if (s.smtc2) ISystemMediaTransportControls2_put_ShuffleEnabled(s.smtc2, shuffle ? TRUE : FALSE);
 }
 
 void media_controls_set_timeline(int64_t position_ms, int64_t duration_ms) {

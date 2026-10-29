@@ -37,7 +37,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Archive devices | yes | yes | yes | no |
 | Move library | yes | yes | n/a (app storage) | n/a |
 | Scrobbling | yes | yes (UI untested on screen) | yes | no |
-| OS media controls | SMTC (no shuffle) | MPRIS (no shuffle) | Media3 session (with shuffle) | none |
+| OS media controls | SMTC (with shuffle) | MPRIS (no shuffle) | Media3 session (with shuffle) | none |
 
 ## Library and browsing
 
@@ -119,7 +119,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Android - duck with the core's volume (CorePlayer.setVolume; AudioFocusManager's setVolumeMultiplier is a no-op)
 - Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
 - Linux - MPRIS's Shuffle and Volume properties, so the desktop's media controls show and set them
-- Windows - the media flyout's shuffle button (SMTC IsShuffleEnabled and ShuffleEnabledChangeRequested)
 
 ### Scrobbling
 - All - choose another service (Libre.fm or a custom URL) in the UI; mc_scrobbler_set_service() exists but no screen uses it

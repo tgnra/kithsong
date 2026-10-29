@@ -37,6 +37,7 @@ static struct {
   mc_scrobbler *scrobbler;
   BOOL scrobble_off;              /* this device doesn't scrobble (the account is the group's) */
   void (*scrobbler_closing)(void);
+  void (*shuffle_requested)(BOOL on);
   int announced;       /* the item last sent as now playing, or -1 */
   item *items;
   int count;
@@ -127,7 +128,7 @@ static void refresh(void) {
   if (new_track || new_state || new_shuffle) {
     set_window_title(st.state != MC_PLAYER_STOPPED ? it : NULL);
     taskbar_set_state(it != NULL, st.state == MC_PLAYER_PLAYING, it != NULL, has_next);
-    media_controls_set_state(st.state, it != NULL, has_next);
+    media_controls_set_state(st.state, it != NULL, has_next, st.shuffle);
     media_controls_set_timeline(st.position_ms, duration_ms);
     if (st.state == MC_PLAYER_PLAYING) SetTimer(s.msgs, TICK_TIMER, TICK_MS, NULL);
     else KillTimer(s.msgs, TICK_TIMER);
@@ -151,6 +152,10 @@ static void on_media_button(media_button button, LPARAM lp) {
     case MEDIA_NEXT: mc_player_next(s.player); break;
     case MEDIA_PREVIOUS: mc_player_previous(s.player); break;
     case MEDIA_SEEK: playback_seek((int)lp); return;
+    case MEDIA_SHUFFLE:
+      if (s.shuffle_requested) s.shuffle_requested(lp != 0);
+      else playback_set_shuffle(lp != 0);
+      return;
   }
   refresh();
 }
@@ -247,7 +252,7 @@ void playback_clear(void) {
   now_playing_show(NULL, NULL, 0, NULL);
   now_playing_set_position(0);
   media_controls_set_track(NULL, NULL, NULL, NULL);
-  media_controls_set_state(MC_PLAYER_STOPPED, FALSE, FALSE);
+  media_controls_set_state(MC_PLAYER_STOPPED, FALSE, FALSE, s.shuffle);
   track_list_set_playing(NULL);
   set_window_title(NULL);
   taskbar_set_state(FALSE, FALSE, FALSE, FALSE);
@@ -391,6 +396,10 @@ mc_scrobbler *playback_scrobbler(void) {
 
 void playback_on_scrobbler_closing(void (*closing)(void)) {
   s.scrobbler_closing = closing;
+}
+
+void playback_on_shuffle_requested(void (*requested)(BOOL on)) {
+  s.shuffle_requested = requested;
 }
 
 void playback_set_scrobble(BOOL on) {
