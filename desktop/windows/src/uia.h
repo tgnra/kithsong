@@ -44,6 +44,7 @@ typedef struct uia_node {
   wchar_t help[256];          /* more, e.g. its tooltip; "" for none */
   wchar_t status[64];         /* ItemStatus, e.g. "Playing"; "" for none */
   const wchar_t *automation_id; /* a stable name for tests and tools, or NULL */
+  int live;                   /* a live region: a LiveSetting (Polite, Assertive), or 0 for none */
 } uia_node;
 
 typedef struct uia_ops {
@@ -71,6 +72,7 @@ typedef struct uia_host {
   UINT gen;           /* bumped when the nodes change into others */
   unsigned long sig;  /* what uia_changed() last saw */
   void *root;         /* the root's provider, once a client asked for it */
+  void *live;         /* the elements clients hold, for uia_refresh() */
 } uia_host;
 
 /* Call from WM_CREATE (or once the window exists). */
@@ -83,8 +85,12 @@ BOOL uia_message(uia_host *h, UINT msg, WPARAM wp, LPARAM lp, LRESULT *result);
 void uia_destroy(uia_host *h);
 
 /* The nodes may have changed: sig sums up which they are (see uia_hash()). If it differs
- * from last time, elements from before go and clients are told the tree changed. */
+ * from last time, elements from before go and clients are told the tree changed; if not,
+ * it's uia_refresh(). */
 void uia_changed(uia_host *h, unsigned long sig);
+/* The same nodes, but names or statuses may have changed (a rename, "Playing" moving):
+ * clients holding those elements are told of each that did. */
+void uia_refresh(uia_host *h);
 /* An FNV-1a hash of n bytes, continuing from sig (start from 0). */
 unsigned long uia_hash(unsigned long sig, const void *data, size_t n);
 
@@ -92,6 +98,8 @@ unsigned long uia_hash(unsigned long sig, const void *data, size_t n);
 void uia_focus(uia_host *h);
 /* Node i became the selected one. */
 void uia_selected(uia_host *h, int i);
+/* Live region i (or UIA_ROOT) has something new to say, its name: screen readers read it out. */
+void uia_announce(uia_host *h, int i);
 
 /* Joins the non-empty strings up to a NULL with ", " into n->name (or into buf of n
  * characters), e.g. a tile's "OK Computer, Radiohead". */

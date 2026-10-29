@@ -592,6 +592,7 @@ void track_list_set_playing(const char *uid) {
   if (!strcmp(now, s.playing_uid) || strlen(now) >= MC_UID_STRLEN) return;
   strcpy(s.playing_uid, now);
   if (s.wnd) InvalidateRect(s.wnd, &s.scroll.view, FALSE);
+  uia_refresh(&ui); /* "Playing" moved */
 }
 
 static void notify(int code) {

@@ -1210,6 +1210,7 @@ void sidebar_set_footer(const wchar_t *line1, const wchar_t *line2) {
   }
   for (int i = 0; i < s.nrows; i++)
     if (s.rows[i].kind == ROW_FOOTER) invalidate_row(i);
+  uia_refresh(&ui);
 }
 
 void sidebar_set_footer_tip(const wchar_t *tip) {

@@ -3,12 +3,14 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <uiautomation.h>
 #include <wchar.h>
 #include <windowsx.h>
 
 #include "canvas.h"
 #include "cover.h"
 #include "theme.h"
+#include "uia.h"
 #include "wstr.h"
 
 /* Metrics at 96 DPI. */
@@ -49,6 +51,9 @@ static struct {
   RECT art_rect, title_rect, cur_rect, left_rect, bar; /* bar: the row the rail and thumb sit in */
   BOOL hot, dragging, tracking;
 } s;
+
+/* Outside s, which is cleared when the window goes: elements clients still hold use it. */
+static uia_host ui;
 
 static int scale(int px) {
   return MulDiv(px, (int)s.dpi, USER_DEFAULT_SCREEN_DPI);
@@ -274,8 +279,28 @@ static void on_key(WPARAM key) {
   }
 }
 
+/* --- UI Automation: the strip is a live region, so screen readers read out a flash --- */
+
+static BOOL ui_node(int i, uia_node *n) {
+  if (i != UIA_ROOT) return FALSE;
+  lstrcpynW(n->name, s.flash, (int)(sizeof n->name / sizeof *n->name)); /* else the window's text, the track */
+  n->live = Polite;
+  return TRUE;
+}
+
+static int ui_focus(void) {
+  return UIA_ROOT;
+}
+
+static const uia_ops ui_ops = {.node = ui_node, .focus = ui_focus};
+
 static LRESULT CALLBACK now_playing_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
-  if (!s.wnd) s.wnd = wnd; /* messages arrive before CreateWindowExW returns */
+  if (!s.wnd) { /* messages arrive before CreateWindowExW returns */
+    s.wnd = wnd;
+    uia_init(&ui, wnd, &ui_ops);
+  }
+  LRESULT result;
+  if (uia_message(&ui, msg, wp, lp, &result)) return result;
   switch (msg) {
     case WM_NCHITTEST: { /* only the bar is ours; the rest is title bar */
       POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -342,7 +367,7 @@ static LRESULT CALLBACK now_playing_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM l
     case WM_TIMER:
       if (wp != FLASH_TIMER) break;
       KillTimer(wnd, FLASH_TIMER);
-      s.flash[0] = 0;
+      s.flash[0] = 0; /* the name goes back to the window's text, the track */
       InvalidateRect(wnd, NULL, FALSE);
       return 0;
     case WM_GETDLGCODE:
@@ -353,6 +378,7 @@ static LRESULT CALLBACK now_playing_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM l
       InvalidateRect(wnd, NULL, FALSE);
       break;
     case WM_DESTROY:
+      uia_destroy(&ui);
       KillTimer(wnd, FLASH_TIMER);
       free_art();
       free(s.title);
@@ -431,4 +457,5 @@ void now_playing_flash(const wchar_t *text) {
   if (s.flash[0]) SetTimer(s.wnd, FLASH_TIMER, FLASH_MS, NULL); /* restarts it */
   else KillTimer(s.wnd, FLASH_TIMER);
   InvalidateRect(s.wnd, NULL, FALSE);
+  if (s.flash[0]) uia_announce(&ui, UIA_ROOT);
 }

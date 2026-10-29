@@ -45,7 +45,13 @@ typedef struct prov {
   uia_host *host; /* static in the control, so it outlives every element */
   int index;
   UINT gen; /* the host's, when it was made */
+  /* In the host's list of live elements, for uia_refresh(); under live_lock, as the last
+   * release may come from another thread. */
+  struct prov *prev, *next;
+  unsigned long name_sig, status_sig; /* of what a client was last told, or could have read */
 } prov;
+
+static SRWLOCK live_lock = SRWLOCK_INIT;
 
 #define PROV(ptr, member) ((prov *)((char *)(ptr) - offsetof(prov, member)))
 
@@ -96,6 +102,10 @@ static void set_bstr(VARIANT *v, const wchar_t *s) {
   if (v->bstrVal) v->vt = VT_BSTR;
 }
 
+static unsigned long text_sig(const wchar_t *s) {
+  return uia_hash(0, s, wcslen(s) * sizeof *s);
+}
+
 static void set_bool(VARIANT *v, BOOL b) {
   v->vt = VT_BOOL;
   v->boolVal = b ? VARIANT_TRUE : VARIANT_FALSE;
@@ -125,7 +135,14 @@ static ULONG prov_addref(prov *p) {
 
 static ULONG prov_release(prov *p) {
   LONG refs = InterlockedDecrement(&p->refs);
-  if (!refs) free(p);
+  if (!refs) {
+    AcquireSRWLockExclusive(&live_lock);
+    if (p->prev) p->prev->next = p->next;
+    else if (p->host->live == p) p->host->live = p->next;
+    if (p->next) p->next->prev = p->prev;
+    ReleaseSRWLockExclusive(&live_lock);
+    free(p);
+  }
   return (ULONG)refs;
 }
 
@@ -205,10 +222,22 @@ static HRESULT STDMETHODCALLTYPE simple_property(IRawElementProviderSimple *This
         ret->lVal = n.type;
       }
       break;
-    case UIA_NamePropertyId: set_bstr(ret, n.name); break;
+    case UIA_NamePropertyId:
+      set_bstr(ret, n.name);
+      p->name_sig = text_sig(n.name);
+      break;
     case UIA_HelpTextPropertyId: set_bstr(ret, n.help); break;
-    case UIA_ItemStatusPropertyId: set_bstr(ret, n.status); break;
+    case UIA_ItemStatusPropertyId:
+      set_bstr(ret, n.status);
+      p->status_sig = text_sig(n.status);
+      break;
     case UIA_AutomationIdPropertyId: set_bstr(ret, n.automation_id); break;
+    case UIA_LiveSettingPropertyId:
+      if (n.live) {
+        ret->vt = VT_I4;
+        ret->lVal = n.live;
+      }
+      break;
     case UIA_HasKeyboardFocusPropertyId: /* the root's is the window's, which UI Automation then looks into */
       if (!root) set_bool(ret, GetFocus() == h->wnd && h->ops->focus() == p->index);
       break;
@@ -552,6 +581,16 @@ static prov *prov_new(uia_host *h, int index) {
   p->host = h;
   p->index = index;
   p->gen = h->gen;
+  uia_node n;
+  if (node_of(h, index, &n)) {
+    p->name_sig = text_sig(n.name);
+    p->status_sig = text_sig(n.status);
+  }
+  AcquireSRWLockExclusive(&live_lock);
+  p->next = h->live;
+  if (p->next) p->next->prev = p;
+  h->live = p;
+  ReleaseSRWLockExclusive(&live_lock);
   return p;
 }
 
@@ -608,7 +647,10 @@ unsigned long uia_hash(unsigned long sig, const void *data, size_t n) {
 }
 
 void uia_changed(uia_host *h, unsigned long sig) {
-  if (sig == h->sig) return;
+  if (sig == h->sig) {
+    uia_refresh(h); /* the same nodes, but perhaps renamed */
+    return;
+  }
   h->sig = sig;
   h->gen++;
   if (h->root && UiaClientsAreListening())
@@ -616,11 +658,63 @@ void uia_changed(uia_host *h, unsigned long sig) {
 }
 
 static void raise_event(uia_host *h, int i, EVENTID event) {
-  if (!h->wnd || !h->root || !UiaClientsAreListening()) return; /* no root yet: nobody's asked */
+  /* No root yet: nobody's asked, but for a live region, which a client listens for unasked. */
+  if (!h->wnd || (!h->root && event != UIA_LiveRegionChangedEventId) || !UiaClientsAreListening()) return;
   prov *p = prov_at(h, i);
   if (!p) return;
   UiaRaiseAutomationEvent(&p->simple, event);
   prov_release(p);
+}
+
+static void raise_text_changed(prov *p, PROPERTYID id, const wchar_t *text) {
+  VARIANT old, now;
+  VariantInit(&old); /* not kept: "unknown" is allowed */
+  VariantInit(&now);
+  now.vt = VT_BSTR;
+  now.bstrVal = SysAllocString(text);
+  if (now.bstrVal) UiaRaiseAutomationPropertyChangedEvent(&p->simple, id, old, now);
+  VariantClear(&now);
+}
+
+void uia_refresh(uia_host *h) {
+  if (!h->wnd || !h->root || !UiaClientsAreListening()) return;
+  /* The live elements, held while their events go out: a client may let go meanwhile. */
+  enum { MAX_LIVE = 256 };
+  prov *live[MAX_LIVE];
+  int n = 0;
+  AcquireSRWLockExclusive(&live_lock);
+  for (prov *p = h->live; p && n < MAX_LIVE; p = p->next)
+    if (p->index != UIA_ROOT && p->gen == h->gen) {
+      prov_addref(p);
+      live[n++] = p;
+    }
+  ReleaseSRWLockExclusive(&live_lock);
+  /* A node can have several elements; clients know it by its runtime id, so one event each. */
+  BOOL told_name[MAX_LIVE] = {0}, told_status[MAX_LIVE] = {0};
+  for (int i = 0; i < n; i++) {
+    prov *p = live[i];
+    uia_node node;
+    if (get(p, &node)) {
+      BOOL name_told = FALSE, status_told = FALSE;
+      for (int k = 0; k < i; k++)
+        if (live[k]->index == p->index) {
+          name_told |= told_name[k];
+          status_told |= told_status[k];
+        }
+      unsigned long name = text_sig(node.name), status = text_sig(node.status);
+      if (name != p->name_sig) {
+        p->name_sig = name;
+        if (!name_told) raise_text_changed(p, UIA_NamePropertyId, node.name);
+        told_name[i] = TRUE;
+      }
+      if (status != p->status_sig) {
+        p->status_sig = status;
+        if (!status_told) raise_text_changed(p, UIA_ItemStatusPropertyId, node.status);
+        told_status[i] = TRUE;
+      }
+    }
+  }
+  for (int i = 0; i < n; i++) prov_release(live[i]);
 }
 
 void uia_focus(uia_host *h) {
@@ -629,6 +723,10 @@ void uia_focus(uia_host *h) {
 
 void uia_selected(uia_host *h, int i) {
   if (i >= 0) raise_event(h, i, UIA_SelectionItem_ElementSelectedEventId);
+}
+
+void uia_announce(uia_host *h, int i) {
+  raise_event(h, i, UIA_LiveRegionChangedEventId);
 }
 
 static void join(wchar_t *buf, size_t n, va_list ap) {

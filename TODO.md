@@ -209,11 +209,9 @@ Windows:
 - F1 about; Alt+F4 only to quit
 
 ### Windows screen readers and custom-drawn controls
-The album grid, track list, sidebar and search page have UI Automation providers (uia.c), and the track list's Play and Shuffle are reachable from the keyboard. Still to do:
+The album grid, track list, sidebar and search page have UI Automation providers (uia.c), which raise name and status changes (a rename, "Playing" moving) as property-change events; the now-playing strip is a live region for its flash ("Volume 40%"); and the track list's Play and Shuffle are reachable from the keyboard. Still to do:
 - The artist page (kithsong_artists) is still custom-drawn without a provider, and the now-playing strip only has its title as its name: no seek bar or times
-- Name changes (a renamed album, a device going offline, "Playing" moving) aren't raised as property-change events; screen readers pick them up when they next look
 - The album group header's Back and More, and the track list's playlist menu and close buttons, can't be reached with the keyboard (Backspace, F2, the menu key and Escape do the same)
-- Live regions for the now-playing flash ("Volume 40%", "Shuffle on")
 
 ## Android
 
@@ -262,7 +260,7 @@ Things built but not checked properly.
 - Remove from this PC / Sync to this PC in a real group (the core is tested between two devices; on screen only the menu outside a group was looked at), including removing an album while it plays
 - Deleting a track while it plays
 - Volume's fade (only silent test files so far)
-- The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns and focus events
+- The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns, focus events, and listeners for property changes and live regions
 - The empty Playlists page's Choose what to sync (needs this PC in a group with every playlist hidden), pairing from the empty Albums page's menu, and the new header buttons and empty-page button through UI Automation
 - The pairing dialog's ended page with a real pairing: Choose what to sync, the archive explainer (and the dialog growing to fit it), Create a new library and Pair again
 
