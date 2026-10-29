@@ -104,6 +104,22 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeRecordOpened(JNIEnv 
   if (st != MC_OK) throw_status(env, st);
 }
 
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeRemoveRecent(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jstring uid) {
+  (void)cls;
+  const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
+  if (!cuid) return;
+  mc_status st = mc_library_remove_recent(lib_of(handle), cuid);
+  (*env)->ReleaseStringUTFChars(env, uid, cuid);
+  if (st != MC_OK && st != MC_ERR_NOT_FOUND) throw_status(env, st); /* gone already: sync took it */
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeClearRecents(JNIEnv *env, jclass cls, jlong handle) {
+  (void)cls;
+  mc_status st = mc_library_clear_recents(lib_of(handle));
+  if (st != MC_OK) throw_status(env, st);
+}
+
 /* flags are mc_library_list_recents()'s (MC_LIST_PLAYABLE). */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListRecents(JNIEnv *env, jclass cls,
                                                                                jlong handle, jint limit,

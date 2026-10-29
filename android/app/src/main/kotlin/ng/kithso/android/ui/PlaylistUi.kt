@@ -60,6 +60,8 @@ import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.PlaylistChoice
 import ng.kithso.android.data.PlaylistEditor
+import ng.kithso.android.data.Recent
+import ng.kithso.android.data.RecentsEditor
 import ng.kithso.android.data.Track
 import ng.kithso.core.HerePreview
 import ng.kithso.core.HereState
@@ -68,23 +70,29 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * The menus and dialogs for playlists, album groups, albums, artists and tracks, shown by
- * [PlaylistSheets] over everything: long-pressing a playlist, album group, album, artist or
- * track opens its menu ([playlistMenu], [albumGroupMenu], [albumMenu], [artistMenu],
- * [trackMenu]), and Add to playlist ([addToPlaylist]) opens the list of playlists to add to,
+ * The menus and dialogs for recents, playlists, album groups, albums, artists and tracks,
+ * shown by [PlaylistSheets] over everything: long-pressing a recent, playlist, album group,
+ * album, artist or track opens its menu ([recentMenu], [playlistMenu], [albumGroupMenu],
+ * [albumMenu], [artistMenu], [trackMenu]), and Add to playlist ([addToPlaylist]) opens the list of playlists to add to,
  * with New playlist… first; an album's Add to album group… likewise lists the album groups.
  * [editor] is null when the library can't be edited, and [deleter] when nothing can be
  * deleted from it (the made-up one): the menus then offer only playing. [remover] offers
- * Remove from this phone (or Sync to this phone) on albums and artists, where it applies.
+ * Remove from this phone (or Sync to this phone) on albums and artists, where it applies, and
+ * [recents] Remove from Recents and Clear Recents on a recent's.
  */
 @Stable
 class PlaylistActions(
     val editor: PlaylistEditor?,
     val deleter: LibraryDeleter? = null,
     val remover: DeviceRemover? = null,
+    val recents: RecentsEditor? = null,
 ) {
     internal var sheet by mutableStateOf<Sheet?>(null)
     internal var dialog by mutableStateOf<Dialog?>(null)
+
+    fun recentMenu(recent: Recent) {
+        sheet = Sheet.RecentMenu(recent)
+    }
 
     fun playlistMenu(playlist: Playlist) {
         sheet = Sheet.PlaylistMenu(playlist)
@@ -113,6 +121,7 @@ class PlaylistActions(
     }
 
     internal sealed interface Sheet {
+        data class RecentMenu(val recent: Recent) : Sheet
         data class PlaylistMenu(val playlist: Playlist) : Sheet
         data class AlbumGroupMenu(val group: AlbumGroup) : Sheet
         data class AlbumMenu(val album: Album, val groupUid: String?) : Sheet
@@ -177,6 +186,27 @@ fun PlaylistSheets(
     }
     when (val sheet = actions.sheet) {
         null -> Unit
+        is PlaylistActions.Sheet.RecentMenu -> {
+            val recent = sheet.recent
+            val recents = actions.recents
+            MenuSheet(
+                actions,
+                recent.title,
+                recent.subtitle(),
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(recent.ref, false) })
+                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(recent.ref, true) })
+                    if (recents != null) {
+                        add(SheetAction(stringResource(R.string.recent_remove_menu), Icons.Remove) {
+                            recents.removeRecent(recent.ref)
+                        })
+                        add(SheetAction(stringResource(R.string.recents_clear_menu), Icons.ClearAll) {
+                            recents.clearRecents()
+                        })
+                    }
+                },
+            )
+        }
         is PlaylistActions.Sheet.PlaylistMenu -> {
             val playlist = sheet.playlist
             val ref = CollectionRef(CollectionRef.Kind.Playlist, playlist.uid)

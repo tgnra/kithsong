@@ -34,8 +34,10 @@ import ng.kithso.core.renamePlaylist
 import ng.kithso.core.artistAlbums
 import ng.kithso.core.artistTracks
 import ng.kithso.core.previewSmartTracks
+import ng.kithso.core.clearRecents
 import ng.kithso.core.recents
 import ng.kithso.core.recordOpened
+import ng.kithso.core.removeRecent
 import ng.kithso.core.reshuffle
 import ng.kithso.core.search
 import ng.kithso.core.searchPrepare
@@ -58,7 +60,8 @@ import java.io.File
  * one per playlist and album group.
  *
  * Recents are the core's (mc_library_list_recents): what was last started playing, on any
- * device. Recents kept here before were in [prefs]; they're handed to the core once.
+ * device. Recents kept here before were in [prefs]; they're handed to the core once. They can
+ * be taken out one by one or all at once ([RecentsEditor]).
  *
  * Sync brings the whole library's data, but only some of its files may be on this phone, so
  * only what has a file here is listed: albums with a folder here, tracks with a file,
@@ -84,7 +87,7 @@ class CoreLibrarySource(
     private val prefs: SharedPreferences,
     private val scope: CoroutineScope,
     private val unknownArtist: () -> String,
-) : LibrarySource, PlaylistEditor, LibraryDeleter {
+) : LibrarySource, PlaylistEditor, LibraryDeleter, RecentsEditor {
     private val core = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow<Library?>(null)
     override val library: StateFlow<Library?> = state
@@ -266,6 +269,26 @@ class CoreLibrarySource(
                 lib.recordOpened(ref.kind.itemKind, ref.uid)
             } catch (e: MusicCoreException) {
                 Log.e(TAG, "Couldn't add $ref to the recents", e)
+                return@launch
+            }
+            state.value = state.value?.copy(recents = recents())
+            onChanged()
+        }
+    }
+
+    override fun removeRecent(ref: CollectionRef) = changeRecents("take $ref out of the recents") {
+        it.removeRecent(ref.uid)
+    }
+
+    override fun clearRecents() = changeRecents("clear the recents") { it.clearRecents() }
+
+    private fun changeRecents(what: String, change: (CoreLibrary) -> Unit) {
+        scope.launch(core) {
+            val lib = open() ?: return@launch
+            try {
+                change(lib)
+            } catch (e: MusicCoreException) {
+                Log.e(TAG, "Couldn't $what", e)
                 return@launch
             }
             state.value = state.value?.copy(recents = recents())

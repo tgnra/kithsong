@@ -241,7 +241,8 @@ fun MainScreen(
     // In a group, the empty library offers this phone's sync settings rather than pairing.
     inGroup: Boolean = false,
     onChooseWhatToSync: () -> Unit = {},
-    // Long-pressing a playlist, an album group, an album or an artist opens its menu.
+    // Long-pressing a recent, a playlist, an album group, an album or an artist opens its menu.
+    onRecentMenu: (Recent) -> Unit = {},
     onPlaylistMenu: (Playlist) -> Unit = {},
     onAlbumMenu: (Album) -> Unit = {},
     onArtistMenu: (Artist) -> Unit = {},
@@ -298,7 +299,11 @@ fun MainScreen(
                     MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(item.section, sections, { current }, picker, jumpTo)
                     is MainItem.RecentItem -> LibraryRow(
-                        item.recent.title, item.recent.subtitle(), item.recent.art, RoundedCornerShape(8.dp),
+                        item.recent.title,
+                        item.recent.subtitle(),
+                        item.recent.art,
+                        RoundedCornerShape(8.dp),
+                        onLongClick = { onRecentMenu(item.recent) },
                     ) { onOpen(item.recent.ref) }
                     is MainItem.PlaylistItem -> LibraryRow(
                         item.playlist.name,
@@ -592,7 +597,7 @@ private fun SectionPickerOverlay(
 
 /** What a recent shows under its title: an album's artist, or what kind of thing it is. */
 @Composable
-private fun Recent.subtitle(): String = artist ?: stringResource(
+internal fun Recent.subtitle(): String = artist ?: stringResource(
     when (ref.kind) {
         CollectionRef.Kind.Artist -> R.string.artist
         CollectionRef.Kind.AlbumGroup -> R.string.album_group

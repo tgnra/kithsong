@@ -55,6 +55,7 @@ object Icons {
     val DragHandle =icon("DragHandle", "M20,9H4v2h16V9zM4,15h16v-2H4v2z")
     val RemoveCircle = icon("RemoveCircle", "M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM17,13H7v-2h10v2z")
     val Remove = icon("Remove", "M19,13H5v-2h14v2z")
+    val ClearAll = icon("ClearAll", "M5,13h14v-2H5v2zM3,17h14v-2H3v2zM7,7v2h14V7H7z")
     val Edit = icon(
         "Edit",
         "M3,17.25V21h3.75L17.81,9.94l-3.75,-3.75L3,17.25zM20.71,7.04c0.39,-0.39 0.39,-1.02 0,-1.41l-2.34,-2.34" +

@@ -44,6 +44,7 @@ import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.PlaylistEditor
+import ng.kithso.android.data.RecentsEditor
 import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.sync.Syncer
@@ -121,7 +122,12 @@ fun App(
     val actions = remember(source) {
         // Remove from this phone only makes sense for the real library, which sync fills.
         val deleter = source as? LibraryDeleter
-        PlaylistActions(source as? PlaylistEditor, deleter, syncer.takeIf { deleter != null })
+        PlaylistActions(
+            source as? PlaylistEditor,
+            deleter,
+            syncer.takeIf { deleter != null },
+            source as? RecentsEditor,
+        )
     }
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
         scope.launch {
@@ -158,6 +164,7 @@ fun App(
                     }
                 },
                 modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen || searchOpen),
+                onRecentMenu = actions::recentMenu,
                 onPlaylistMenu = actions::playlistMenu,
                 onAlbumMenu = { actions.albumMenu(it) },
                 onArtistMenu = actions::artistMenu,

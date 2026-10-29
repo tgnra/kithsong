@@ -194,3 +194,15 @@ interface LibrarySource {
      */
     fun recordPlay(trackUid: String)
 }
+
+/**
+ * Taking things out of Recents, for a [LibrarySource] that can ([CoreLibrarySource]; the
+ * made-up library's recents stay as they are). Like opening, it syncs to every device.
+ */
+interface RecentsEditor {
+    /** Takes [ref] out of Recents until it's next played. */
+    fun removeRecent(ref: CollectionRef)
+
+    /** Empties Recents. */
+    fun clearRecents()
+}

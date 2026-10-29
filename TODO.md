@@ -93,7 +93,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Core - versions before exclusions ignore them: such a device would fetch the item again, and shows a device with exclusions under Sync everything as "changed" (its fingerprint differs)
 
 ### Recents
-- Windows and Linux - remove one, or clear them all (mc_library_remove_recent(), mc_library_clear_recents()), e.g. from a context menu; Android too
 - Windows and Linux - show cover art rather than the page's icon (no sidebar row has art yet)
 - Android - the one-time handover of the old prefs recents to the core is untested
 
@@ -274,6 +273,7 @@ Things built but not checked properly.
 
 ### Android
 - Remove from this phone / Sync to this phone on screen, in a real group (only built)
+- A recent's long-press menu (Play, Shuffle, Remove from Recents, Clear Recents) on screen (only built; the desktops' menus were run)
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
 - After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - mDNS discovery and sync over real Wi-Fi, on a real device

@@ -74,6 +74,12 @@ fun CoreLibrary.reshuffle(smartUid: String) = CoreBrowse.nativeReshuffle(handle,
 /** Notes that [uid], a [kind], was opened now, putting it first in the recents everywhere. */
 fun CoreLibrary.recordOpened(kind: ItemKind, uid: String) = CoreBrowse.nativeRecordOpened(handle, kind.ordinal, uid)
 
+/** Takes [uid] out of the recents everywhere until it's next opened; nothing if it isn't in them. */
+fun CoreLibrary.removeRecent(uid: String) = CoreBrowse.nativeRemoveRecent(handle, uid)
+
+/** Empties the recents, everywhere. */
+fun CoreLibrary.clearRecents() = CoreBrowse.nativeClearRecents(handle)
+
 /**
  * The recents, newest first, at most [limit]; if [playableOnly], without playlists and smart
  * lists that have nothing to play here (MC_LIST_PLAYABLE).
@@ -108,6 +114,8 @@ internal object CoreBrowse {
     @JvmStatic external fun nativeAlbumGroupArt(handle: Long, uid: String, cacheDir: String): String?
     @JvmStatic external fun nativeReshuffle(handle: Long, uid: String)
     @JvmStatic external fun nativeRecordOpened(handle: Long, kind: Int, uid: String)
+    @JvmStatic external fun nativeRemoveRecent(handle: Long, uid: String)
+    @JvmStatic external fun nativeClearRecents(handle: Long)
     @JvmStatic external fun nativeListRecents(handle: Long, limit: Int, flags: Int): Array<RecentInfo>
     @JvmStatic external fun nativeSearch(handle: Long, query: String, limit: Int): Array<SearchHit>
     @JvmStatic external fun nativeSearchPrepare(handle: Long)
