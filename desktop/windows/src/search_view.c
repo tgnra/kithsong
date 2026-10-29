@@ -103,6 +103,7 @@ static struct {
   section *sections;
   int nsections;
   int tile_w, tile_h, content_w;
+  int cols; /* album tiles in a row */
   BOOL cover_posted; /* WM_APP_COVER is on its way */
 
   int hot;     /* the opening hit under the mouse, or -1 */
@@ -252,7 +253,7 @@ static void layout(void) {
   int left = (w - v.content_w) / 2, gap = scale(TILE_GAP);
   v.tile_w = scale(TILE_W);
   v.tile_h = v.tile_w + scale(TEXT_GAP) + 2 * v.text_h;
-  int cols = max(1, (v.content_w - 2 * scale(HOVER_PAD) + gap) / (v.tile_w + gap));
+  int cols = v.cols = max(1, (v.content_w - 2 * scale(HOVER_PAD) + gap) / (v.tile_w + gap));
   int y = scale(RESULTS_TOP);
   for (int s = 0; s < v.nsections; s++) {
     section *sec = &v.sections[s];
@@ -512,6 +513,25 @@ static int next_hit(int from, int dir) {
   return -1;
 }
 
+/* Up or Down (dir -1 or +1) from hit from: a row at a time among album tiles, as the album
+ * grid moves, onto the row's last tile if the next row is shorter; otherwise the next hit
+ * that opens. -1 if there's none. */
+static int next_row(int from, int dir) {
+  if (from < 0 || from >= v.nhits || v.hits[from].kind != MC_SEARCH_ALBUM || v.cols < 1)
+    return next_hit(from, dir);
+  const section *sec = NULL;
+  for (int s = 0; s < v.nsections && !sec; s++)
+    if (from >= v.sections[s].first && from < v.sections[s].first + v.sections[s].count) sec = &v.sections[s];
+  if (!sec) return next_hit(from, dir);
+  int k = from - sec->first, row = k / v.cols, rows = (sec->count + v.cols - 1) / v.cols;
+  if (dir < 0 && row == 0) return next_hit(sec->first, -1);
+  if (dir > 0 && row == rows - 1) return next_hit(sec->first + sec->count - 1, +1);
+  int to = sec->first + (dir < 0 ? k - v.cols : min(k + v.cols, sec->count - 1));
+  if (v.hits[to].opens) return to;
+  /* An album the grid doesn't show: the nearest one that opens, that way. */
+  return next_hit(to - dir, dir);
+}
+
 static void open_hit(int i) {
   if (i < 0 || i >= v.nhits || !v.hits[i].opens) return;
   v.opened.kind = v.hits[i].kind;
@@ -543,21 +563,21 @@ static void on_scrolled(void) {
   update_hot();
 }
 
-/* The arrow keys, Home and End move the focus through the results; Up from the first goes
- * back to the box. Enter opens the focused one. */
+/* The arrow keys, Home and End move the focus through the results (Up and Down a row at a
+ * time among album tiles); Up from the first goes back to the box. Enter opens the focused one. */
 static void on_key(WPARAM key) {
   SendMessageW(GetAncestor(v.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
   int to;
   switch (key) {
     case VK_UP:
-    case VK_LEFT:
-      to = next_hit(v.focus, -1);
-      if (to < 0 && key == VK_UP) {
+      to = next_row(v.focus, -1);
+      if (to < 0) {
         SetFocus(v.edit);
         return;
       }
       break;
-    case VK_DOWN:
+    case VK_LEFT: to = next_hit(v.focus, -1); break;
+    case VK_DOWN: to = next_row(v.focus, +1); break;
     case VK_RIGHT: to = next_hit(v.focus, +1); break;
     case VK_HOME: to = next_hit(-1, +1); break;
     case VK_END: to = next_hit(v.nhits, -1); break;

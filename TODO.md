@@ -94,7 +94,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Android - the one-time handover of the old prefs recents to the core is untested
 
 ### Search
-- Windows - Up and Down move through album tiles one at a time, not by row
 - Android - only tested on the emulator with a tiny library
 
 ### Home
