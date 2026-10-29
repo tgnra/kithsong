@@ -24,6 +24,9 @@ GtkWidget *search_view_new(app *a);
 
 /* Puts the focus in the search box, as when the page is opened. */
 void search_view_focus(void);
+/* Type to search: replaces what's in the search box with text, typed elsewhere, with the
+ * focus and cursor after it. */
+void search_view_start(const char *text);
 
 /* Runs the last search again, so results that went with a library change go and the albums'
  * covers are up to date. Call whenever the library changes. */

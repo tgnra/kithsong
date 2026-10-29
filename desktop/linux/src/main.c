@@ -557,7 +557,16 @@ typedef enum shortcut {
   SC_SEARCH,
   SC_PAGE_1, /* ...to SC_PAGE_1 + 3 */
   SC_SETTINGS = SC_PAGE_1 + 4,
+  SC_IMPORT,
+  SC_NEW_PLAYLIST,
+  SC_SHORTCUTS,
+  SC_ABOUT,
+  SC_CLOSE,
 } shortcut;
+
+static void on_playlist_created(void *user, const char *uid);
+static void show_shortcuts(app *a);
+static void show_about(app *a);
 
 /* Whether the focus is in a text box, whose own keys (arrows, + and -) it keeps. */
 static gboolean text_focused(GtkWidget *win) {
@@ -608,6 +617,24 @@ static gboolean on_shortcut(GtkWidget *win, GVariant *args, gpointer user) {
     case SC_SETTINGS:
       if (gtk_widget_is_sensitive(a->settings)) on_settings(NULL, a);
       return TRUE;
+    case SC_IMPORT: /* the import page's Choose folders… */
+      show_page(a, "import");
+      import_view_choose_folders(a->import);
+      return TRUE;
+    case SC_NEW_PLAYLIST: /* the Playlists page's + */
+      if (!gtk_widget_is_sensitive(a->sidebar) || !a->lib) return TRUE;
+      activate_nav_row(a, APP_VIEW_PLAYLISTS);
+      playlist_create_present(GTK_WIDGET(a->win), a->lib, on_playlist_created, a);
+      return TRUE;
+    case SC_SHORTCUTS:
+      show_shortcuts(a);
+      return TRUE;
+    case SC_ABOUT:
+      show_about(a);
+      return TRUE;
+    case SC_CLOSE: /* Ctrl+W and Ctrl+Q: closing the window quits, as playback goes with it */
+      gtk_window_close(a->win);
+      return TRUE;
     default:
       if (gtk_widget_is_sensitive(a->sidebar)) activate_nav_row(a, sc - SC_PAGE_1);
       return TRUE;
@@ -640,6 +667,12 @@ static void add_shortcuts(app *a, GtkWidget *win) {
     {GDK_KEY_3, GDK_CONTROL_MASK, SC_PAGE_1 + 2},
     {GDK_KEY_4, GDK_CONTROL_MASK, SC_PAGE_1 + 3},
     {GDK_KEY_comma, GDK_CONTROL_MASK, SC_SETTINGS},
+    {GDK_KEY_o, GDK_CONTROL_MASK, SC_IMPORT},
+    {GDK_KEY_n, GDK_CONTROL_MASK, SC_NEW_PLAYLIST},
+    {GDK_KEY_question, GDK_CONTROL_MASK, SC_SHORTCUTS},
+    {GDK_KEY_F1, 0, SC_ABOUT},
+    {GDK_KEY_w, GDK_CONTROL_MASK, SC_CLOSE},
+    {GDK_KEY_q, GDK_CONTROL_MASK, SC_CLOSE},
   };
   GtkEventController *controller = gtk_shortcut_controller_new();
   gtk_event_controller_set_propagation_phase(controller, GTK_PHASE_CAPTURE);
@@ -936,6 +969,19 @@ static GtkWidget *steady_bin_new(AdwOverlaySplitView *split, GtkWidget *child) {
   return GTK_WIDGET(self);
 }
 
+/* Delete and F2 on the selected playlist (args TRUE for F2): the track list's Delete
+ * playlist… and Rename… for it. Not for smart playlists, which have neither here. */
+static gboolean on_playlist_key(GtkWidget *grid, GVariant *args, gpointer user) {
+  app *a = user;
+  AlbumItem *playlist = album_grid_selection(grid);
+  if (!a->lib || !playlist || !playlist->is_playlist || playlist->is_smart) return FALSE;
+  if (g_variant_get_boolean(args))
+    playlist_rename_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+  else
+    playlist_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+  return TRUE;
+}
+
 static GtkWidget *build_albums(app *a) {
   GtkWidget *empty = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(empty), "folder-music-symbolic");
@@ -962,6 +1008,15 @@ static GtkWidget *build_albums(app *a) {
   a->playlists = GTK_STACK(playlists);
   gtk_stack_add_named(a->playlists, no_playlists, "none");
   a->playlist_grid = album_grid_new(mc_str(MC_STR_SECTION_PLAYLISTS), on_album_changed, a);
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  const guint playlist_keys[] = {GDK_KEY_Delete, GDK_KEY_KP_Delete, GDK_KEY_F2};
+  for (size_t i = 0; i < G_N_ELEMENTS(playlist_keys); i++)
+    gtk_shortcut_controller_add_shortcut(
+      GTK_SHORTCUT_CONTROLLER(keys),
+      gtk_shortcut_new_with_arguments(gtk_keyval_trigger_new(playlist_keys[i], 0),
+                                      gtk_callback_action_new(on_playlist_key, a, NULL), "b",
+                                      playlist_keys[i] == GDK_KEY_F2));
+  gtk_widget_add_controller(a->playlist_grid, keys);
   gtk_stack_add_named(a->playlists, a->playlist_grid, "grid");
   GtkWidget *playlists_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_add_css_class(playlists_page, "view");
@@ -1040,6 +1095,143 @@ static void on_shutdown(GApplication *gapp, gpointer user) {
   playback_free();
   mpris_free();
   cover_cache_free();
+}
+
+/* --- About, the shortcuts list and type to search --- */
+
+#define WEBSITE "https://kithso.ng"
+
+/* F1. */
+static void show_about(app *a) {
+  AdwDialog *about = adw_about_dialog_new();
+  AdwAboutDialog *d = ADW_ABOUT_DIALOG(about);
+  adw_about_dialog_set_application_name(d, mc_str(MC_STR_APP_NAME));
+  adw_about_dialog_set_application_icon(d, "app.kithsong.Kithsong");
+  adw_about_dialog_set_version(d, mc_version());
+  adw_about_dialog_set_comments(d, mc_str(MC_STR_APP_SUMMARY));
+  adw_about_dialog_set_website(d, WEBSITE);
+  adw_dialog_present(about, GTK_WIDGET(a->win));
+}
+
+/* The shortcuts list (Ctrl+?), as in README.md, by section: a section's heading has no
+ * accel. accel is as GtkShortcutsShortcut takes it: alternatives separated by spaces. */
+static const struct {
+  enum mc_str_id title;
+  const char *accel;
+} shortcut_list[] = {
+  {MC_STR_LINUX_SHORTCUTS_GENERAL, NULL},
+  {MC_STR_LINUX_SHORTCUTS_SEARCH, "<Control>f"},
+  {MC_STR_SECTION_ALBUMS, "<Control>1"},
+  {MC_STR_SECTION_ARTISTS, "<Control>2"},
+  {MC_STR_SECTION_PLAYLISTS, "<Control>3"},
+  {MC_STR_SECTION_ALBUM_GROUPS, "<Control>4"},
+  {MC_STR_LINUX_SHORTCUTS_BACK, "<Alt>Left BackSpace"},
+  {MC_STR_IMPORT_MUSIC, "<Control>o"},
+  {MC_STR_NEW_PLAYLIST, "<Control>n"},
+  {MC_STR_SETTINGS, "<Control>comma"},
+  {MC_STR_LINUX_SHORTCUTS_SHORTCUTS, "<Control>question"},
+  {MC_STR_ABOUT_TITLE, "F1"},
+  {MC_STR_LINUX_SHORTCUTS_CLOSE, "<Control>w <Control>q"},
+  {MC_STR_LINUX_SHORTCUTS_PLAYBACK, NULL},
+  {MC_STR_LINUX_SHORTCUTS_PLAY_PAUSE, "space"},
+  {MC_STR_NEXT_TRACK, "<Control>Right"},
+  {MC_STR_PREVIOUS_TRACK, "<Control>Left"},
+  {MC_STR_LINUX_SHORTCUTS_SEEK_FORWARD, "<Shift>Right"},
+  {MC_STR_LINUX_SHORTCUTS_SEEK_BACK, "<Shift>Left"},
+  {MC_STR_LINUX_SHORTCUTS_VOLUME_UP, "<Control>Up plus"},
+  {MC_STR_LINUX_SHORTCUTS_VOLUME_DOWN, "<Control>Down minus"},
+  {MC_STR_LINUX_SHORTCUTS_MUTE, "<Control>m"},
+  {MC_STR_LINUX_SHORTCUTS_SHUFFLE, "<Control>s"},
+  {MC_STR_LINUX_SHORTCUTS_TRACK_LIST, NULL},
+  {MC_STR_LINUX_SHORTCUTS_PLAY_TRACK, "Return"},
+  {MC_STR_LINUX_SHORTCUTS_REMOVE_TRACK, "Delete"},
+  {MC_STR_MOVE_UP, "<Alt>Up"},
+  {MC_STR_MOVE_DOWN, "<Alt>Down"},
+  {MC_STR_LINUX_SHORTCUTS_RENAME_PLAYLIST, "F2"},
+  {MC_STR_LINUX_SHORTCUTS_DELETE_PLAYLIST, "Delete"},
+  {MC_STR_LINUX_SHORTCUTS_TRACK_MENU, "Menu <Shift>F10"},
+  {MC_STR_LINUX_SHORTCUTS_CLOSE_TRACKS, "Escape"},
+};
+
+/* shortcut_list[i]'s title, formatted into buf if it needs to be. */
+static const char *shortcut_title(size_t i, char *buf, size_t size) {
+  if (shortcut_list[i].title != MC_STR_ABOUT_TITLE) return mc_str(shortcut_list[i].title);
+  mc_format(buf, size, mc_str(MC_STR_ABOUT_TITLE), MC_S(mc_str(MC_STR_APP_NAME)));
+  return buf;
+}
+
+#if ADW_CHECK_VERSION(1, 8, 0)
+static void show_shortcuts(app *a) {
+  AdwDialog *dialog = adw_shortcuts_dialog_new();
+  AdwShortcutsSection *section = NULL;
+  for (size_t i = 0; i < G_N_ELEMENTS(shortcut_list); i++) {
+    char buf[128];
+    const char *title = shortcut_title(i, buf, sizeof buf);
+    if (!shortcut_list[i].accel) {
+      section = adw_shortcuts_section_new(title);
+      adw_shortcuts_dialog_add(ADW_SHORTCUTS_DIALOG(dialog), section);
+    } else if (section) {
+      adw_shortcuts_section_add(section, adw_shortcuts_item_new(title, shortcut_list[i].accel));
+    }
+  }
+  adw_dialog_present(dialog, GTK_WIDGET(a->win));
+}
+#else
+/* Before libadwaita 1.8's AdwShortcutsDialog, a GtkShortcutsWindow, made from a builder
+ * description so its deprecation (GTK 4.18) doesn't show at build time. */
+static void show_shortcuts(app *a) {
+  GString *ui = g_string_new("<interface><object class='GtkShortcutsWindow' id='window'>"
+                             "<property name='modal'>1</property>"
+                             "<child><object class='GtkShortcutsSection'>"
+                             "<property name='section-name'>shortcuts</property>");
+  gboolean in_group = FALSE;
+  for (size_t i = 0; i < G_N_ELEMENTS(shortcut_list); i++) {
+    char buf[128];
+    const char *title = shortcut_title(i, buf, sizeof buf);
+    char *item;
+    if (!shortcut_list[i].accel) {
+      if (in_group) g_string_append(ui, "</object></child>");
+      item = g_markup_printf_escaped("<child><object class='GtkShortcutsGroup'><property name='title'>%s</property>",
+                                     title);
+      in_group = TRUE;
+    } else {
+      item = g_markup_printf_escaped("<child><object class='GtkShortcutsShortcut'><property name='title'>%s</property>"
+                                     "<property name='accelerator'>%s</property></object></child>",
+                                     title, shortcut_list[i].accel);
+    }
+    g_string_append(ui, item);
+    g_free(item);
+  }
+  g_string_append(ui, "</object></child></object></child></object></interface>");
+  GtkBuilder *builder = gtk_builder_new_from_string(ui->str, -1);
+  g_string_free(ui, TRUE);
+  GtkWindow *window = GTK_WINDOW(gtk_builder_get_object(builder, "window"));
+  gtk_window_set_transient_for(window, a->win);
+  gtk_window_present(window);
+  g_object_unref(builder);
+}
+#endif
+
+/* Type to search, as in GNOME's apps: a letter, digit or other printable character typed
+ * where it isn't text (and isn't a shortcut) opens Search with it in the box. Not over a
+ * dialog, nor while an import has the sidebar locked. */
+static gboolean on_type_to_search(GtkEventControllerKey *keys, guint keyval, guint keycode, GdkModifierType state,
+                                  gpointer user) {
+  (void)keycode;
+  app *a = user;
+  GtkWidget *win = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(keys));
+  gunichar c = gdk_keyval_to_unicode(keyval);
+  if (!c || !g_unichar_isgraph(c) || (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SUPER_MASK | GDK_META_MASK)))
+    return FALSE;
+  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
+  if (text_focused(win) || (focus && gtk_widget_get_ancestor(focus, ADW_TYPE_DIALOG))) return FALSE;
+  if (!gtk_widget_is_sensitive(a->sidebar)) return FALSE;
+  char text[8] = "";
+  g_unichar_to_utf8(c, text);
+  gtk_list_box_select_row(a->top_nav, gtk_list_box_get_row_at_index(a->top_nav, 1));
+  on_top_nav_activated(a->top_nav, NULL, a);
+  search_view_start(text);
+  return TRUE;
 }
 
 static void on_activate(GtkApplication *gapp, gpointer user) {
@@ -1149,6 +1341,10 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
     gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_space, 0), gtk_callback_action_new(on_list_space, NULL, NULL)));
   gtk_widget_add_controller(win, list_keys);
   add_shortcuts(a, win);
+  /* Type to search: in the bubble phase too, after the focused widget has had the key. */
+  GtkEventController *typing = gtk_event_controller_key_new();
+  g_signal_connect(typing, "key-pressed", G_CALLBACK(on_type_to_search), a);
+  gtk_widget_add_controller(win, typing);
 
   playback_init(a->win, playback_changed, a);
   playback_set_library(a->lib, a->settings_dir);

@@ -280,6 +280,13 @@ void search_view_focus(void) {
   if (v.entry) gtk_widget_grab_focus(v.entry);
 }
 
+void search_view_start(const char *text) {
+  if (!v.entry) return;
+  gtk_widget_grab_focus(v.entry);
+  gtk_editable_set_text(GTK_EDITABLE(v.entry), text);
+  gtk_editable_set_position(GTK_EDITABLE(v.entry), -1);
+}
+
 void search_view_refresh(void) {
   if (!v.results) return;
   char *query = g_strdup(v.query);
