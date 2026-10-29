@@ -763,8 +763,7 @@ static void on_reshuffle(void *user) {
   app_reload_library(a);
 }
 
-/* The track menu's Delete from Library.... (Delete album... is on the album tiles' menu,
- * album_groups_album_menu().) */
+/* The track menu's Delete from library... (the album tiles' is in album_groups_album_menu().) */
 static void on_track_delete(void *user, const char *track_uid, const char *title) {
   app *a = user;
   delete_dialog_present(GTK_WIDGET(a->win), a->lib, a->settings_dir, MC_DELETE_TRACKS, track_uid, title,

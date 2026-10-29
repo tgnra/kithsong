@@ -269,7 +269,7 @@ class CoreSync(
         ) : Event
     }
 
-    private var handle = nativeNew(library.handle, configDir, deviceName, kind.ordinal, this)
+    internal var handle = nativeNew(library.handle, configDir, deviceName, kind.ordinal, this)
 
     /** This device's uid. */
     val deviceUid: String = nativeDeviceUid(handle)

@@ -138,9 +138,16 @@ static mc_status read_tracks(mc_library *lib, cand **out, int *count) {
   return MC_OK;
 }
 
-/* Marks the tracks one selected item names. */
+const char *mc_plan_excluded_kind(const char *kind) {
+  if (!kind) return NULL;
+  if (!strcmp(kind, MC_PLAN_EXCLUDE_ALBUM)) return "album";
+  if (!strcmp(kind, MC_PLAN_EXCLUDE_ARTIST)) return "artist";
+  return NULL;
+}
+
+/* Marks the tracks one selected item names as wanted, or with value 0 as not. */
 static mc_status mark_item(mc_library *lib, const char *kind, const char *ref, cand *cands,
-                           int n) {
+                           int n, int value) {
   const char *sql;
   if (!strcmp(kind, "album"))
     sql = "SELECT uid FROM tracks WHERE album_uid = ?1";
@@ -161,7 +168,7 @@ static mc_status mark_item(mc_library *lib, const char *kind, const char *ref, c
   while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     const char *uid = (const char *)sqlite3_column_text(stmt, 0);
     cand *c = uid ? bsearch(uid, cands, (size_t)n, sizeof *cands, cand_cmp) : NULL;
-    if (c) c->wanted = 1;
+    if (c) c->wanted = value;
   }
   sqlite3_finalize(stmt);
   return rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
@@ -170,13 +177,13 @@ static mc_status mark_item(mc_library *lib, const char *kind, const char *ref, c
 /* Marks the tracks of one item, an album or artist merged into another (sync/merge.h)
  * selected as the survivor. */
 static mc_status mark_ref(mc_library *lib, const char *kind, const char *ref, cand *cands,
-                          int n) {
+                          int n, int value) {
   char uid[MC_UID_STRLEN];
   memcpy(uid, ref, MC_UID_STRLEN);
   if ((!strcmp(kind, "album") || !strcmp(kind, "artist")) &&
       mc_merge_resolve(lib, ref, uid) != MC_OK)
     memcpy(uid, ref, MC_UID_STRLEN);
-  return mark_item(lib, kind, uid, cands, n);
+  return mark_item(lib, kind, uid, cands, n, value);
 }
 
 /* The stored selection's tracks. */
@@ -193,8 +200,8 @@ static mc_status mark_selected(mc_sync_db *sdb, mc_library *lib, const char *dev
   while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     const char *kind = (const char *)sqlite3_column_text(stmt, 0);
     const char *ref = (const char *)sqlite3_column_text(stmt, 1);
-    if (!kind || !is_uid(ref)) continue;
-    st = mark_ref(lib, kind, ref, cands, n);
+    if (!kind || !is_uid(ref) || mc_plan_excluded_kind(kind)) continue;
+    st = mark_ref(lib, kind, ref, cands, n, 1);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -210,8 +217,32 @@ static mc_status mark_items(mc_library *lib, const mc_profile_item *items, int c
     if (!kind || memchr(items[i].ref_uid, '\0', MC_UID_STRLEN) == NULL ||
         !is_uid(items[i].ref_uid))
       continue;
-    st = mark_ref(lib, kind, items[i].ref_uid, cands, n);
+    st = mark_ref(lib, kind, items[i].ref_uid, cands, n, 1);
   }
+  return st;
+}
+
+/* Unmarks the tracks of the device's stored exclusions (sync_here.h), whatever selected
+ * them. A profile in hand has none of its own: exclusions aren't part of what an editor
+ * edits, so the stored ones apply to it too. */
+static mc_status unmark_excluded(mc_sync_db *sdb, mc_library *lib, const char *device_uid,
+                                 cand *cands, int n) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
+                         "SELECT DISTINCT kind, ref_uid FROM profile_items WHERE device_uid = ?1"
+                         " AND kind IN ('" MC_PLAN_EXCLUDE_ALBUM "', '" MC_PLAN_EXCLUDE_ARTIST "')",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, device_uid, -1, SQLITE_STATIC);
+  mc_status st = MC_OK;
+  int rc;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *base = mc_plan_excluded_kind((const char *)sqlite3_column_text(stmt, 0));
+    const char *ref = (const char *)sqlite3_column_text(stmt, 1);
+    if (base && is_uid(ref)) st = mark_ref(lib, base, ref, cands, n, 0);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
   return st;
 }
 
@@ -358,6 +389,8 @@ mc_status mc_plan_compute_profile(mc_sync_db *sdb, mc_library *lib, const char *
       st = mark_items(lib, profile->items, profile->items ? profile->count : 0, cands, n);
     else
       st = mark_selected(sdb, lib, device_uid, cands, n);
+    /* An archive keeps everything; anyone else, everything but what was removed from it. */
+    if (st == MC_OK && !plan->archive) st = unmark_excluded(sdb, lib, device_uid, cands, n);
   }
   for (int i = 0; st == MC_OK && i < n; i++) plan->wanted += cands[i].wanted;
   if (st == MC_OK && (flags & MC_PLAN_SIZES))

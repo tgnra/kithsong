@@ -489,7 +489,7 @@ static void build_menu(GtkWidget *pane) {
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_TRACK_MENU), "track.delete");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "track.delete");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   s.album_menu = G_MENU_MODEL(model);
@@ -505,7 +505,7 @@ static void build_menu(GtkWidget *pane) {
   g_object_unref(section);
   section = g_menu_new();
   g_menu_append(section, mc_str_mnemonic(MC_STR_REMOVE_FROM_PLAYLIST), "track.remove");
-  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_TRACK_MENU), "track.delete");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "track.delete");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   s.playlist_menu = G_MENU_MODEL(model);

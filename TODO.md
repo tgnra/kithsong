@@ -28,6 +28,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Recents | yes | yes | yes (core's) | no |
 | Search | yes | yes | yes | no |
 | Delete (with restore) | yes | yes | yes (permanent: no trash to restore from) | no |
+| Remove from this device | albums, artists | albums, artists (only compiled) | albums, artists | no |
 | Shuffle | core's | core's | core's | no |
 | Volume | keyboard only | keyboard only | core only, no UI | no |
 | Import | yes | yes | removed | no |
@@ -78,6 +79,15 @@ Big pieces that haven't been started, or that only one platform has.
 - Android - delete from an album's page or the player too (only the album, artist and track long-press menus have it)
 - Android - a track that's deleted while it plays keeps playing to its end, and its later queue entries are skipped; the desktops stop playback first (Windows can't trash an open file)
 
+### Remove from this device
+Albums and artists can be removed from one device ("Remove from this PC", computer, phone) and synced to it again; see "Removing from one device" in docs/sync-protocol.md. Left to do:
+- All - single tracks: the profile model would take an `exclude_track` kind like the album and artist ones, but no track menu offers it yet
+- All - the profile editors (What to sync) don't show exclusions, so with Sync everything nothing lists what was removed from a device, and another device can't undo it; only that device's Sync to this device on the album's or artist's menu can (or, in a selection, ticking it)
+- All - an album removed only through its artist shows neither item; Sync to this device on the artist brings it back
+- All - an "Add to this device" for an album or artist a selection doesn't include (the menus only offer Sync to this device for what was removed)
+- Linux - the artist list's rows have no menu, so it's only on the artist page's "..."; Android and Windows have it on the rows
+- Core - versions before exclusions ignore them: such a device would fetch the item again, and shows a device with exclusions under Sync everything as "changed" (its fingerprint differs)
+
 ### Recents
 - Windows and Linux - remove one, or clear them all (mc_library_remove_recent(), mc_library_clear_recents()), e.g. from a context menu; Android too
 - Windows and Linux - show cover art rather than the page's icon (no sidebar row has art yet)
@@ -95,6 +105,7 @@ Big pieces that haven't been started, or that only one platform has.
 - Core - AAC/M4A: pick a decoder; the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
 - Core - a public cover-file lookup (mc_coverart_find) so frontends don't look for cover.jpg/png themselves
+- All - a play queue: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither), and a view of what's queued
 - All - an on-screen volume control (the desktops flash the level in the now-playing strip for now)
 - Android - duck with the core's volume (CorePlayer.setVolume; AudioFocusManager's setVolumeMultiplier is a no-op)
 - Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
@@ -236,10 +247,12 @@ Things built but not checked properly.
 - An archive's sidebar row ("Offline. Keeps the whole library" under its name), only compiled
 - The empty Albums page's Pair with a device… menu (opening it, pairing a device picked there, Add device by address…), the empty Playlists page's Choose what to sync, and the Album groups page's +: only compiled; under Xvfb the button showed, and the Playlists + made a playlist that stayed shown until another page was picked
 - The pairing dialog's ended page (only compiled): Choose what to sync, the archive explainer's bold "archive" (Pango markup), Create a new library (the folder picker, refusing a folder that isn't empty, then Pair again) and the button styles
+- Remove from this computer / Sync to this computer on the album tiles' and the artist page's menus (only compiled, in Docker)
 
 ### Windows
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
 - Firewall prompt: the success path after UAC, beyond one run
+- Remove from this PC / Sync to this PC in a real group (the core is tested between two devices; on screen only the menu outside a group was looked at), including removing an album while it plays
 - Deleting a track while it plays
 - Volume's fade (only silent test files so far)
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns and focus events
@@ -247,6 +260,7 @@ Things built but not checked properly.
 - The pairing dialog's ended page with a real pairing: Choose what to sync, the archive explainer (and the dialog growing to fit it), Create a new library and Pair again
 
 ### Android
+- Remove from this phone / Sync to this phone on screen, in a real group (only built)
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
 - After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - mDNS discovery and sync over real Wi-Fi, on a real device

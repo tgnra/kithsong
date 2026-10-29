@@ -80,6 +80,7 @@
 #include "build_info.h"
 #include "canvas.h"
 #include "delete_dialog.h"
+#include "remove_here.h"
 #include "device_view.h"
 #include "firewall.h"
 #include "import_view.h"
@@ -926,6 +927,15 @@ static void restore_deleted(void) {
 static void before_delete(const mc_delete_plan *plan) {
   for (int i = 0, n = playback_queue_count(); i < n; i++)
     if (mc_delete_plan_has(plan, playback_queue_uid(i))) {
+      playback_clear();
+      return;
+    }
+}
+
+/* The same before Remove from this PC: an open file can't be removed either. */
+static void before_remove_here(const mc_here_plan *plan) {
+  for (int i = 0, n = playback_queue_count(); i < n; i++)
+    if (mc_here_plan_has(plan, playback_queue_uid(i))) {
       playback_clear();
       return;
     }
@@ -1859,6 +1869,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     snprintf(g_app.art_dir, art_len, "%s\\%s", g_app.config_dir, MC_PLAYLIST_ART_CACHE_DIR);
   prune_art();
   delete_dialog_init(g_app.config_dir, before_delete);
+  remove_here_init(before_remove_here);
 
   WNDCLASSEXW wc = {
     .cbSize = sizeof wc,

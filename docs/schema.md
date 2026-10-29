@@ -56,7 +56,10 @@ a separate `sync.db` in the per-device config dir. See
 [core/src/sync/sync_db.c](../core/src/sync/sync_db.c): v2 (`devices.host`,
 `capabilities.addresses`, and the local-only `peer_contact`), v3 (`profiles.name`), v4
 (`scrobble_account`, and the local-only `scrobble_queue`) and v5
-(`devices.confirmed_profile`).
+(`devices.confirmed_profile`). Removing an album or artist from one device needed no
+migration: it's a `profile_items` row of a new kind, `exclude_album` or `exclude_artist`
+(see [Removing from one device](sync-protocol.md#removing-from-one-device)), which older
+versions keep and ignore.
 
 ## Deleted tracks
 

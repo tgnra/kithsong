@@ -92,7 +92,11 @@ fun App(
     // play a whole album or playlist from its start with shuffle off, or with shuffle on from
     // whichever track the core's shuffle starts with, as the desktops do. Deleting an album,
     // artist or track reads open track lists again, and one that's left empty closes itself.
-    val actions = remember(source) { PlaylistActions(source as? PlaylistEditor, source as? LibraryDeleter) }
+    val actions = remember(source) {
+        // Remove from this phone only makes sense for the real library, which sync fills.
+        val deleter = source as? LibraryDeleter
+        PlaylistActions(source as? PlaylistEditor, deleter, syncer.takeIf { deleter != null })
+    }
     val scope = rememberCoroutineScope()
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
         scope.launch {

@@ -879,6 +879,10 @@ static mc_sync *sync_of(jlong handle) {
   return ((jni_sync *)(intptr_t)handle)->sync;
 }
 
+mc_sync *jni_sync_of(jlong handle) {
+  return sync_of(handle);
+}
+
 JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jclass cls,
                                                               jlong library, jstring config_dir,
                                                               jstring device_name, jint kind,

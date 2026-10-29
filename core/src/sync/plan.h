@@ -1,4 +1,5 @@
-/* What a device should hold: its wanted set, worked out from its sync profile (see
+/* What a device should hold: its wanted set, worked out from its sync profile, less its
+ * exclusions (see
  * "Profiles and what a device holds" in docs/sync-protocol.md). Internal to core.
  *
  * plan.c computes it; transfer.c (the file phase) and reconcile use it. Both databases are
@@ -70,6 +71,14 @@ void mc_plan_free(mc_plan *plan);
 
 /* profile_items.kind for kind ("album", ...); NULL for a value out of range. */
 const char *mc_profile_kind_str(mc_profile_item_kind kind);
+
+/* profile_items.kind of an exclusion (musiccore/sync_here.h): the album's or artist's tracks
+ * are not wanted, whatever else selects them (but on an archive). Not an mc_profile_item_kind:
+ * editors neither see nor drop them. */
+#define MC_PLAN_EXCLUDE_ALBUM "exclude_album"
+#define MC_PLAN_EXCLUDE_ARTIST "exclude_artist"
+/* The kind an exclusion kind takes out ("album" or "artist"), or NULL if kind isn't one. */
+const char *mc_plan_excluded_kind(const char *kind);
 
 /* The bitrate an original of unknown size is estimated at, roughly a FLAC of a CD. */
 #define MC_PLAN_ORIGINAL_KBPS 1000

@@ -5,6 +5,7 @@
 #include "album_group_dialogs.h"
 #include "delete_dialog.h"
 #include "recents.h"
+#include "remove_here.h"
 
 static struct {
   app *a;
@@ -55,7 +56,9 @@ static char *group_name(const char *uid) {
 }
 
 /* --- Actions: albumgroup.add(uid), .new, .remove, .rename(uid), .delete(uid), and
- * .delete-album, which deletes the menu's album from the library (delete_dialog.h) --- */
+ * .delete-album, which deletes the menu's album from the library (delete_dialog.h), and
+ * .remove-here and .sync-here, which take it off this computer or bring it back
+ * (remove_here.h) --- */
 
 static void on_add(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
@@ -111,6 +114,21 @@ static void on_delete_album(GSimpleAction *action, GVariant *param, gpointer use
                           v.menu_title, on_library_changed, a);
 }
 
+static void on_remove_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (v.menu_album[0])
+    remove_here_present(GTK_WIDGET(a->win), MC_PROFILE_ALBUM, v.menu_album, v.menu_title, on_library_changed, a);
+}
+
+static void on_sync_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (v.menu_album[0]) remove_here_restore(GTK_WIDGET(a->win), MC_PROFILE_ALBUM, v.menu_album, on_library_changed, a);
+}
+
 /* On the window, so the album grids' menus and the header's find them. */
 static void ensure_actions(void) {
   if (v.actions || !v.a->win) return;
@@ -121,6 +139,8 @@ static void ensure_actions(void) {
     {"rename", on_rename, "s", NULL, NULL, {0}},
     {"delete", on_delete, "s", NULL, NULL, {0}},
     {"delete-album", on_delete_album, NULL, NULL, NULL, {0}},
+    {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
+    {"sync-here", on_sync_here, NULL, NULL, NULL, {0}},
   };
   GSimpleActionGroup *group = g_simple_action_group_new();
   g_action_map_add_action_entries(G_ACTION_MAP(group), entries, G_N_ELEMENTS(entries), v.a);
@@ -180,7 +200,8 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
     g_object_unref(section);
   }
   section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_ALBUM_MENU), "albumgroup.delete-album");
+  remove_here_append(section, MC_PROFILE_ALBUM, v.menu_album, "albumgroup.remove-here", "albumgroup.sync-here");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "albumgroup.delete-album");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   album_grid_popup(grid, G_MENU_MODEL(menu), x, y);

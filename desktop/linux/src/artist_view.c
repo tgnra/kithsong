@@ -6,6 +6,7 @@
 #include "delete_dialog.h"
 #include "playback.h"
 #include "recents.h"
+#include "remove_here.h"
 
 enum { LIST_AVATAR = 40, PAGE_AVATAR = 96 };
 
@@ -384,7 +385,34 @@ static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer use
   }
 }
 
-/* The header menu's Delete artist...: the open artist's tracks and own albums. */
+/* The header menu's Remove from this computer... and Sync to this computer (remove_here.h). */
+static void on_remove_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.open[0])
+    remove_here_present(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.open, open_name(), on_deleted, v.a);
+}
+
+static void on_sync_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.open[0]) remove_here_restore(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.open, on_deleted, v.a);
+}
+
+/* The header menu, made each time it opens: Remove from this computer... or Sync to this
+ * computer where they apply, then Delete from library. */
+static void make_artist_menu(GtkMenuButton *button, gpointer user) {
+  (void)user;
+  GMenu *menu = g_menu_new();
+  remove_here_append(menu, MC_PROFILE_ARTIST, v.open, "artist.remove-here", "artist.sync-here");
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete");
+  gtk_menu_button_set_menu_model(button, G_MENU_MODEL(menu));
+  g_object_unref(menu);
+}
+
+/* The header menu's Delete from library...: the open artist's tracks and own albums. */
 static void on_delete_artist(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -547,13 +575,10 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(text), v.actions);
   gtk_box_append(GTK_BOX(header), text);
 
-  /* Delete artist..., under "...". */
-  GMenu *menu = g_menu_new();
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_DELETE_ARTIST_MENU), "artist.delete");
+  /* Remove from this computer... and Delete from library..., under "...". */
   GtkWidget *more = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(more), "view-more-symbolic");
-  gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(more), G_MENU_MODEL(menu));
-  g_object_unref(menu);
+  gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(more), make_artist_menu, NULL, NULL);
   gtk_widget_set_tooltip_text(more, mc_str(MC_STR_LINUX_ARTIST_MENU));
   gtk_widget_add_css_class(more, "flat");
   gtk_widget_add_css_class(more, "circular");
@@ -618,7 +643,9 @@ static GtkWidget *build_page(void) {
   GSimpleActionGroup *actions = g_simple_action_group_new();
   const GActionEntry entries[] = {{"add-to-playlist", on_add_to_playlist, NULL, NULL, NULL, {0}},
                                   {"delete-track", on_delete_track, NULL, NULL, NULL, {0}},
-                                  {"delete", on_delete_artist, NULL, NULL, NULL, {0}}};
+                                  {"delete", on_delete_artist, NULL, NULL, NULL, {0}},
+                                  {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
+                                  {"sync-here", on_sync_here, NULL, NULL, NULL, {0}}};
   g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
   gtk_widget_insert_action_group(v.page, "artist", G_ACTION_GROUP(actions));
   g_object_unref(actions);
@@ -628,7 +655,7 @@ static GtkWidget *build_page(void) {
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_TRACK_MENU), "artist.delete-track");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete-track");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   v.menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));

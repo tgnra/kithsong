@@ -501,7 +501,10 @@ the plaintext limit.
   - the selection, one `profile_items` row per item: `kind` is `album`, `artist`,
     `playlist` (manual) or `album_group` (manual), and `ref_uid` the library uid it names.
     The selection is kept while the mode is `all`, so it comes back when the mode returns to
-    `selected`.
+    `selected`;
+  - its exclusions, `profile_items` rows of kind `exclude_album` or `exclude_artist`: what was
+    removed from this one device (see [Removing from one device](#removing-from-one-device)).
+    They apply in either mode, and aren't part of the selection an editor shows.
 
   A device with no `profiles` row receives no files until it has one (see below). Pairing
   writes the row straight away (the archive's for a new group, and the joiner's when it
@@ -519,7 +522,10 @@ the plaintext limit.
   - mode `selected`: the tracks of the selected albums ∪ the tracks whose `artist_uid` is a
     selected artist ∪ the tracks of the albums whose `artist_uid` is a selected artist ∪
     the tracks of the albums in the selected album groups ∪ the entries of the selected
-    playlists.
+    playlists;
+  - then, either way, less the tracks of each excluded album, and of each excluded artist
+    (counted as a selected artist is). An exclusion wins over everything that selects the
+    track, a playlist included. An archive has no exclusions: it wants every track.
 
   Selections that name a uid the library doesn't have are skipped, and so are items of
   kinds the device doesn't know.
@@ -605,8 +611,10 @@ profile and pressed Sync.
   stored: `archive` (an archive, counting a void demotion, is just that), else one line
   `<mode> <format> <kbps> <budget> <budget_bytes>` (`kbps` 0 for originals, `budget` `-` and
   `budget_bytes` 0 when the budget is off), then for mode `selected` one line
-  `<kind> <ref_uid>` per distinct `profile_items` row, sorted. Names, the selection while the
-  mode is `all`, and an archive's other fields leave it as it is. With no `profiles` row it
+  `<kind> <ref_uid>` per distinct `profile_items` row, sorted, and for mode `all` the same
+  for its exclusion rows only. Names, the selection while the mode is `all`, and an
+  archive's other fields leave it as it is. (Versions before exclusions hash no rows for
+  `all`, so they show a device with exclusions as changed.) With no `profiles` row it
   is the hash of `none`. Every device holding the same rows computes the same one.
 - `devices.confirmed_profile` is the fingerprint of the device's profile when it was last
   confirmed, written by the device itself (NULL until then). The device is *confirmed* while
@@ -625,6 +633,39 @@ profile and pressed Sync.
   receiving turn. That write comes after the group exchange, so the peer hears of it in the
   next session, as for the node uid. A sync started otherwise (`mc_sync_now()`, the
   scheduler, background work with `mc_sync_background()`) confirms nothing.
+
+### Removing from one device
+
+"Remove from this PC" (computer, phone) on an album's or artist's menu takes it off this
+device and leaves it in the library and on every other device (`mc_sync_remove_here()`,
+[musiccore/sync_here.h](../core/include/musiccore/sync_here.h)). Only a device in a group
+that isn't an archive offers it: an archive keeps the whole library, and with no group the
+music lives nowhere else.
+
+- **The profile edit**: an exclusion row (`exclude_album` or `exclude_artist`, `ref_uid` the
+  album or artist), inserted like any other item so it syncs and concurrent edits merge. In a
+  selection, the album's or artist's own row is deleted as well. A profile can only include,
+  so "Sync everything but this" needs the exclusion; turning `all` into a long selection
+  would also miss what's imported later.
+- **Editors** don't see exclusions: `mc_sync_get_profile()` leaves out kinds outside
+  `mc_profile_item_kind`, and `mc_sync_set_profile()` keeps stored rows of such kinds, so any
+  member's editor keeps them through a read-modify-write. Adding an album or artist to a
+  selection deletes its exclusion: what the user just chose to sync is synced.
+- **Bringing it back**: "Sync to this PC" on its menu (`mc_sync_restore_here()`) deletes the
+  exclusion and, in a selection, adds the album or artist; the files arrive at the next
+  sync. An album removed only through its artist is brought back from the artist's menu.
+- **The files go at once**, not at the next session: the item's tracks' `files` rows here and
+  their files, under the same one-receiver-at-a-time lock as the file phase. Files sync
+  brought are removed. Originals imported on this device go to the Recycle Bin or trash only
+  if another archive's `sync_status` shows it verified complete after the library's latest
+  change (the test `mc_sync_set_archive()` uses to let an archive step down); otherwise they
+  stay, and reconcile removes them after a session with an archive, as it does for any
+  original it no longer wants. A file that can't be removed (in use) keeps its row and goes
+  in a later reconcile. Album folders left with only a cover go, as in reconcile.
+- **Confirming**: the edit changes the fingerprint. If the profile was confirmed just before,
+  it's confirmed again straight away (the device's own user asked for it); a profile another
+  member changed meanwhile stays paused.
+- Tracks can't be removed one by one yet.
 
 ## Files
 

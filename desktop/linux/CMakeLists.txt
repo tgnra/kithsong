@@ -25,7 +25,8 @@ add_executable(kithsong
   src/album_groups.c
   src/album_group_dialogs.c
   src/artist_view.c
-  src/delete_dialog.c)
+  src/delete_dialog.c
+  src/remove_here.c)
 target_link_libraries(kithsong PRIVATE musiccore PkgConfig::ADW m)
 kithsong_warnings(kithsong)
 # GLib's headers trip -Wconversion / -Wpedantic; keep warnings strict for our code only.
