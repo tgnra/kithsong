@@ -41,6 +41,7 @@ import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.PlaylistEditor
+import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.sync.Syncer
 import ng.kithso.android.ui.theme.ArtTheme
@@ -53,8 +54,9 @@ import java.io.File
  * [CollectionRef]s and flags for settings, sync, the device open from sync, search and the
  * player, so each layer can own its slide-in, drag-to-dismiss and predictive back. A search
  * result opens its track list over search. The players take their colours from the album art.
- * [onPlay] is called when a track list starts playing. Pairing with another device shows over
- * everything, as it can start from the other device at any time. [libraryDir] is the library
+ * [onPlay] is called when a track list starts playing, and [onImportStarted] when an import
+ * starts; how it's going shows as a card under the main list's header. Pairing with another
+ * device shows over everything, as it can start from the other device at any time. [libraryDir] is the library
  * folder, for settings to show its size.
  */
 @Composable
@@ -62,11 +64,15 @@ fun App(
     source: LibrarySource,
     playback: Playback,
     syncer: Syncer,
+    importer: Importer,
     settings: AppSettings,
     libraryDir: File,
     onPlay: () -> Unit = {},
+    onImportStarted: () -> Unit = {},
 ) {
     val library by source.library.collectAsState()
+    val importProgress by importer.progress.collectAsState()
+    val importPickers = rememberImportPickers(importer, onImportStarted)
     val stack = rememberSaveable(saver = StackSaver) { SnapshotStateList<CollectionRef>() }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var syncOpen by rememberSaveable { mutableStateOf(false) }
@@ -115,6 +121,9 @@ fun App(
                 onSearch = { searchOpen = true },
                 onSync = { syncOpen = true },
                 onSettings = { settingsOpen = true },
+                importPickers = importPickers,
+                importRunning = importProgress?.phase?.isOver == false,
+                banner = importProgress?.let { progress -> { modifier -> ImportCard(progress, importer, modifier) } },
                 modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen || searchOpen),
                 onPlaylistMenu = actions::playlistMenu,
                 onAlbumMenu = { actions.albumMenu(it) },

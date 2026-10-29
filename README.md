@@ -41,8 +41,9 @@ Priorities:
   holds everything: the music, organised as `Artist/Album (Year)/01 Title.flac`, a
   `cover.jpg` per album, and the database as `library.db`. The app's own settings, i.e. where
   that folder is, live in `%LOCALAPPDATA%\kithsong` (`~/.config/kithsong` on Linux).
-- **Import**: drop folders on the window. Files are copied into the library; your originals
-  are never modified. Everything is scanned and matched against MusicBrainz in one go.
+- **Import**: drop folders or `.zip` files (a Bandcamp download, say) on the window; on
+  Android, pick a folder or files with the system picker, or share or open a zip with the app.
+  Files are copied into the library; your originals are never modified. Everything is scanned and matched against MusicBrainz in one go.
   Confident matches are imported straight away, with cover art from the Cover Art Archive
   or iTunes. Anything below the confidence threshold is listed for you to review: pick a
   match, search again, keep the existing tags or skip. AcoustID fingerprints for untagged

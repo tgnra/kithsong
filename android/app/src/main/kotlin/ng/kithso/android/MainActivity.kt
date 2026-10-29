@@ -2,6 +2,8 @@ package ng.kithso.android
 
 import ng.kithso.core.*
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -10,7 +12,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.IntentCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import ng.kithso.android.importer.ImportSource
 import ng.kithso.android.ui.App
 import ng.kithso.android.ui.theme.KithsongTheme
 
@@ -31,6 +35,9 @@ class MainActivity : ComponentActivity() {
             app.useFakeLibrary(empty)
         }
         Log.i(TAG, "musiccore ${NativeCore.version()}")
+        // A zip or audio files opened with or shared to the app: import them. Only on a fresh
+        // start, so turning the phone doesn't import them again.
+        if (savedInstanceState == null) importShared(intent)
 
         setContent {
             KithsongTheme {
@@ -38,12 +45,37 @@ class MainActivity : ComponentActivity() {
                     app.library,
                     app.playback,
                     app.syncer,
+                    app.importer,
                     app.settings,
                     app.libraryDir,
                     onPlay = ::askForNotificationsOnce,
+                    onImportStarted = ::askForNotificationsOnce,
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        importShared(intent)
+    }
+
+    // ACTION_VIEW of a zip ("Open with"), ACTION_SEND of a zip or audio file, ACTION_SEND_MULTIPLE
+    // of audio files (the share sheet). The intent's grant covers reading them; the importer
+    // copies them in straight away.
+    private fun importShared(intent: Intent?) {
+        val uris: List<Uri> = when (intent?.action) {
+            Intent.ACTION_VIEW -> listOfNotNull(intent.data)
+            Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+            Intent.ACTION_SEND_MULTIPLE ->
+                IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+            else -> emptyList()
+        }
+        if (uris.isEmpty()) return
+        val importer = (application as KithsongApp).importer
+        if (importer.start(ImportSource.Documents(uris))) askForNotificationsOnce()
+        else Log.w(TAG, "An import is already running; ${uris.size} shared files left out")
     }
 
     override fun onStart() {
@@ -57,7 +89,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // From Android 13 notifications need permission, asked for once, unprompted, on the first
-    // play: that's when there is one to show. Settings can ask again. The playback controls
+    // play or import: that's when there is one to show. Settings can ask again. The playback controls
     // show without it, being a media session's, but not in the list of notifications.
     private fun askForNotificationsOnce() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
