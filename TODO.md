@@ -212,7 +212,7 @@ Windows and Linux (pair_dialog.c and sync_bridge.c on each, the pending note in 
 
 ### Keyboard shortcuts
 
-Existing (see README.md): Space, media keys, Esc, Ctrl+Left/Right next/previous, Shift+Left/Right seek 5 s, Ctrl+Up/Down and +/- volume, Ctrl+M mute, Ctrl+S shuffle, Ctrl+F search, Ctrl+1-4 Albums/Artists/Playlists/Album groups, Ctrl+, settings, Alt+Left/Backspace/mouse back to go back, plus Alt+letter mnemonics in the import page and dialogs. Windows' track list also has Enter, Delete, F2, Alt+Up/Down and the Menu key.
+Existing (see README.md): Space, media keys, Esc, Ctrl+Left/Right next/previous, Shift+Left/Right seek 5 s, Ctrl+Up/Down and +/- volume, Ctrl+M mute, Ctrl+S shuffle, Ctrl+F search, Ctrl+1-4 Albums/Artists/Playlists/Album groups, Ctrl+, settings, Alt+Left/Backspace/mouse back to go back, plus Alt+letter mnemonics in the import page and dialogs. The track list also has Enter, Delete, F2, Alt+Up/Down and the Menu key (or Shift+F10).
 
 Windows and Linux:
 - Ctrl+R repeat, once the core has repeat
@@ -222,8 +222,6 @@ Windows and Linux:
 - Show shortcuts in button tooltips (e.g. "Next (Ctrl+Right)")
 
 Linux:
-- Delete, F2, Enter and Alt+Up/Down in the track list, as Windows has
-- The track menu from the keyboard (Menu key, Shift+F10)
 - Ctrl+? shortcuts dialog (AdwShortcutsDialog), F1 help/about, Ctrl+W close window, Ctrl+Q quit (GNOME HIG)
 
 Windows:

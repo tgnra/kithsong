@@ -11,12 +11,13 @@
  * Play and Shuffle play the whole list, in order or shuffled; they're insensitive when
  * nothing in it can be played here. Track numbers and durations are dimmed; on albums with
  * more than one disc the numbers read "2-5"; in a playlist they count its places.
- * Double-click or Enter plays a track; right-click opens its menu (Add to Playlist, Delete
- * from Library; in a playlist also Move Up, Move Down and Remove from Playlist). A playlist's
- * tracks can be dragged into another order too, and its header has a menu (the "..." beside
- * close) to rename or delete it. A smart playlist's tracks can't be moved or removed, and it
- * has no menu; in random order its header has a Reshuffle button instead. Escape or the
- * close button closes the pane. A GtkListView,
+ * Double-click or Enter plays a track; right-click, the Menu key or Shift+F10 opens its menu
+ * (Add to Playlist, Delete from Library; in a playlist also Move Up, Move Down and Remove from
+ * Playlist). A playlist's tracks can be dragged into another order too, or moved with Alt+Up
+ * and Alt+Down; Delete removes one. Its header has a menu (the "..." beside close, or F2, or
+ * the Menu key with no track selected) to rename or delete it. A smart playlist's tracks
+ * can't be moved or removed, and it has no menu; in random order its header has a Reshuffle
+ * button instead. Escape or the close button closes the pane. A GtkListView,
  * so long albums stay cheap. Only one list exists at a time.
  */
 #ifndef KITHSONG_TRACK_LIST_H

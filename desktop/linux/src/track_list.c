@@ -113,25 +113,39 @@ static GtkWidget *row_label(float xalign) {
   return l;
 }
 
+/* Makes the track menu (and the keys) act on the track at pos: in a playlist its items
+ * include Move Up, Move Down and Remove from Playlist. FALSE if there's no track there. */
+static gboolean menu_for(guint pos) {
+  TrackItem *t = pos != GTK_INVALID_LIST_POSITION ? track_at(pos) : NULL;
+  if (!t) return FALSE;
+  memcpy(s.menu_uid, t->uid, sizeof s.menu_uid);
+  memcpy(s.menu_entry, t->entry_uid, sizeof s.menu_entry);
+  s.menu_pos = pos;
+  gboolean playlist = showing_playlist() && s.menu_entry[0];
+  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(s.menu), playlist ? s.playlist_menu : s.album_menu);
+  g_simple_action_set_enabled(s.move_up, playlist && s.menu_pos > 0);
+  g_simple_action_set_enabled(s.move_down, playlist && s.menu_pos + 1 < g_list_model_get_n_items(G_LIST_MODEL(s.store)));
+  return TRUE;
+}
+
+/* Opens the track menu at x, y in the pane. */
+static void popup_menu_at(float x, float y) {
+  gtk_popover_set_pointing_to(GTK_POPOVER(s.menu), &(GdkRectangle){(int)x, (int)y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(s.menu));
+}
+
 /* Right-click: selects the row and opens the menu for its track where the pointer is. */
 static void on_row_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
   (void)n_press;
   row *r = user;
   if (!r->track || !r->item) return;
   gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
-  memcpy(s.menu_uid, r->track->uid, sizeof s.menu_uid);
-  memcpy(s.menu_entry, r->track->entry_uid, sizeof s.menu_entry);
-  s.menu_pos = gtk_list_item_get_position(r->item);
-  gtk_single_selection_set_selected(s.selection, s.menu_pos);
-  gboolean playlist = showing_playlist() && s.menu_entry[0];
-  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(s.menu), playlist ? s.playlist_menu : s.album_menu);
-  g_simple_action_set_enabled(s.move_up, playlist && s.menu_pos > 0);
-  g_simple_action_set_enabled(s.move_down, playlist && s.menu_pos + 1 < g_list_model_get_n_items(G_LIST_MODEL(s.store)));
+  guint pos = gtk_list_item_get_position(r->item);
+  gtk_single_selection_set_selected(s.selection, pos);
+  menu_for(pos);
   GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
   graphene_point_t at;
-  if (!gtk_widget_compute_point(widget, s.pane, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
-  gtk_popover_set_pointing_to(GTK_POPOVER(s.menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
-  gtk_popover_popup(GTK_POPOVER(s.menu));
+  if (gtk_widget_compute_point(widget, s.pane, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) popup_menu_at(at.x, at.y);
 }
 
 /* --- Dragging a playlist's tracks into another order --- */
@@ -340,6 +354,14 @@ static void on_reshuffle(GtkButton *button, gpointer user) {
   if (s.cb.reshuffle && s.album && s.album->is_smart) s.cb.reshuffle(s.cb.user);
 }
 
+/* A menu item that shows its key, as Windows' do. */
+static void append_with_key(GMenu *menu, enum mc_str_id label, const char *action, const char *accel) {
+  GMenuItem *item = g_menu_item_new(mc_str_mnemonic(label), action);
+  g_menu_item_set_attribute(item, "accel", "s", accel);
+  g_menu_append_item(menu, item);
+  g_object_unref(item);
+}
+
 static GtkWidget *build_header(void) {
   GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
   gtk_widget_set_margin_start(header, 18);
@@ -372,7 +394,7 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(header), text);
 
   GMenu *menu = g_menu_new();
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_RENAME_MENU), "playlist.rename");
+  append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
   g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_DELETE_MENU), "playlist.delete");
   s.playlist_button = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s.playlist_button), "view-more-symbolic");
@@ -457,6 +479,92 @@ static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer use
   if (s.cb.delete_track && t && !strcmp(t->uid, s.menu_uid)) s.cb.delete_track(s.cb.user, t->uid, t->title);
 }
 
+/* --- Keys: Delete, Alt+Up/Down, F2 and the Menu key, as on Windows (Enter is the view's) --- */
+
+static guint selected(void) {
+  return gtk_single_selection_get_selected(s.selection);
+}
+
+/* After Delete or Alt+Up/Down has reloaded the list: the focus back on the selected track,
+ * or after Delete on the one that took its place, so the keys can go on. Not if the
+ * playlist has gone (its last playable track removed). */
+static void refocus(const char *playlist_uid, guint pos) {
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(s.store));
+  if (!n || !s.album || strcmp(s.album->uid, playlist_uid)) return;
+  guint sel = selected();
+  if (sel == GTK_INVALID_LIST_POSITION) sel = pos < n ? pos : n - 1;
+  gtk_list_view_scroll_to(GTK_LIST_VIEW(s.view), sel, GTK_LIST_SCROLL_SELECT | GTK_LIST_SCROLL_FOCUS, NULL);
+}
+
+/* Delete: Remove from Playlist, for a playlist's selected track. An album's tracks stay. */
+static gboolean on_delete_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  guint pos = selected();
+  if (!showing_playlist() || !menu_for(pos) || !s.menu_entry[0]) return FALSE;
+  char playlist[MC_UID_STRLEN];
+  memcpy(playlist, s.album->uid, sizeof playlist);
+  on_remove(NULL, NULL, NULL);
+  refocus(playlist, pos);
+  return TRUE;
+}
+
+/* Alt+Up and Alt+Down: Move Up and Move Down, for a playlist's selected track. */
+static gboolean on_move_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  guint pos = selected();
+  if (!showing_playlist() || !menu_for(pos) || !s.menu_entry[0]) return FALSE;
+  char playlist[MC_UID_STRLEN];
+  memcpy(playlist, s.album->uid, sizeof playlist);
+  on_move(GPOINTER_TO_INT(user) ? s.move_up : s.move_down, NULL, NULL);
+  refocus(playlist, pos);
+  return TRUE;
+}
+
+/* F2: the header menu's Rename... */
+static gboolean on_rename_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  if (!showing_playlist()) return FALSE;
+  on_rename_playlist(NULL, NULL, NULL);
+  return TRUE;
+}
+
+/* The Menu key or Shift+F10: the selected track's menu, under its title; with no track
+ * selected, a playlist's header menu. A selected track scrolled out of sight is scrolled
+ * back first, and the menu hangs from the top of the list. */
+static gboolean on_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  guint pos = selected();
+  if (menu_for(pos)) {
+    graphene_rect_t at;
+    for (guint i = 0; i < s.rows->len; i++) {
+      row *r = g_ptr_array_index(s.rows, i);
+      if (r->item && gtk_list_item_get_position(r->item) == pos &&
+          gtk_widget_compute_bounds(r->title, s.pane, &at)) {
+        popup_menu_at(at.origin.x, at.origin.y + at.size.height);
+        return TRUE;
+      }
+    }
+    gtk_list_view_scroll_to(GTK_LIST_VIEW(s.view), pos, GTK_LIST_SCROLL_FOCUS, NULL);
+    if (gtk_widget_compute_bounds(s.scroller, s.pane, &at)) popup_menu_at(at.origin.x + 18, at.origin.y);
+    return TRUE;
+  }
+  if (!gtk_widget_get_visible(s.playlist_button)) return FALSE;
+  gtk_menu_button_popup(GTK_MENU_BUTTON(s.playlist_button));
+  return TRUE;
+}
+
+static void add_key(GtkEventController *keys, guint key, GdkModifierType mods, GtkShortcutFunc func, gpointer user) {
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys), gtk_shortcut_new(gtk_keyval_trigger_new(key, mods), gtk_callback_action_new(func, user, NULL)));
+}
+
 static GSimpleAction *add_action(GSimpleActionGroup *group, const char *name,
                                  void (*activate)(GSimpleAction *, GVariant *, gpointer)) {
   GSimpleAction *action = g_simple_action_new(name, NULL);
@@ -464,6 +572,13 @@ static GSimpleAction *add_action(GSimpleActionGroup *group, const char *name,
   g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(action));
   g_object_unref(action); /* the group keeps it */
   return action;
+}
+
+/* A closed menu gives the focus back to the list, as GTK would hand it elsewhere (the
+ * sidebar, under Xvfb), and the keys should go on where they were. */
+static void on_menu_closed(GtkPopover *menu, gpointer list) {
+  (void)menu;
+  gtk_widget_grab_focus(list);
 }
 
 /* The right-click menu, as the pane's child so its "track." actions resolve; and the
@@ -499,12 +614,12 @@ static void build_menu(GtkWidget *pane) {
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_MOVE_UP), "track.move-up");
-  g_menu_append(section, mc_str_mnemonic(MC_STR_MOVE_DOWN), "track.move-down");
+  append_with_key(section, MC_STR_MOVE_UP, "track.move-up", "<Alt>Up");
+  append_with_key(section, MC_STR_MOVE_DOWN, "track.move-down", "<Alt>Down");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
   section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_REMOVE_FROM_PLAYLIST), "track.remove");
+  append_with_key(section, MC_STR_REMOVE_FROM_PLAYLIST, "track.remove", "Delete");
   g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "track.delete");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
@@ -514,6 +629,7 @@ static void build_menu(GtkWidget *pane) {
   gtk_popover_set_has_arrow(GTK_POPOVER(s.menu), FALSE);
   gtk_widget_set_halign(s.menu, GTK_ALIGN_START);
   gtk_widget_set_parent(s.menu, pane);
+  g_signal_connect(s.menu, "closed", G_CALLBACK(on_menu_closed), s.view);
 }
 
 GtkWidget *track_list_new(const track_list_callbacks *cb) {
@@ -548,10 +664,18 @@ GtkWidget *track_list_new(const track_list_callbacks *cb) {
   build_menu(pane);
 
   GtkEventController *keys = gtk_shortcut_controller_new();
-  gtk_shortcut_controller_add_shortcut(
-    GTK_SHORTCUT_CONTROLLER(keys),
-    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Escape, 0), gtk_callback_action_new(on_escape, NULL, NULL)));
+  add_key(keys, GDK_KEY_Escape, 0, on_escape, NULL);
+  add_key(keys, GDK_KEY_F2, 0, on_rename_key, NULL);
+  add_key(keys, GDK_KEY_Menu, 0, on_menu_key, NULL);
+  add_key(keys, GDK_KEY_F10, GDK_SHIFT_MASK, on_menu_key, NULL);
   gtk_widget_add_controller(pane, keys);
+  /* The rest act on the selected track, so only from the list. */
+  keys = gtk_shortcut_controller_new();
+  add_key(keys, GDK_KEY_Delete, 0, on_delete_key, NULL);
+  add_key(keys, GDK_KEY_KP_Delete, 0, on_delete_key, NULL);
+  add_key(keys, GDK_KEY_Up, GDK_ALT_MASK, on_move_key, GINT_TO_POINTER(TRUE));
+  add_key(keys, GDK_KEY_Down, GDK_ALT_MASK, on_move_key, GINT_TO_POINTER(FALSE));
+  gtk_widget_add_controller(s.view, keys);
   return pane;
 }
 

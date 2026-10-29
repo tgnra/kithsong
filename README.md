@@ -123,6 +123,11 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 | Ctrl+, | Settings |
 | Alt+Left or Backspace | Back, from an artist's page or an album group |
 | Esc | Close the track list |
+| Enter | Play the selected track |
+| Delete | Remove the selected track from the playlist |
+| Alt+Up / Alt+Down | Move the selected track up / down the playlist |
+| F2 | Rename the playlist |
+| Menu key or Shift+F10 | The selected track's menu (with none selected, the playlist's) |
 
 In a text box (e.g. search) the arrow keys, + and - keep their usual meaning. The volume is
 the app's own and is remembered; there's no volume control on screen yet, so the level shows
