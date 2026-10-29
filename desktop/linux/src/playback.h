@@ -75,6 +75,9 @@ mc_player_state playback_state(void);
 /* Whether there's a current track, and one after it (always, shuffled). */
 gboolean playback_has_current(void);
 gboolean playback_has_next(void);
+/* What's queued: how many tracks, and track i's uid ("" past the end). */
+int playback_queue_count(void);
+const char *playback_queue_uid(int i);
 int64_t playback_position_ms(void);
 int64_t playback_duration_ms(void);
 

@@ -416,6 +416,16 @@ static void update_buttons(app *a) {
   set_action_enabled(a, "next", playback_has_next());
 }
 
+/* Just before a delete trashes files: playback stops if any queued track goes, as it would
+ * play on from the trashed file (and the next one the player may have opened already). */
+static void before_delete(const mc_delete_plan *plan) {
+  for (int i = 0, n = playback_queue_count(); i < n; i++)
+    if (mc_delete_plan_has(plan, playback_queue_uid(i))) {
+      playback_clear();
+      return;
+    }
+}
+
 static void playback_changed(void *user) {
   update_buttons(user);
 }
@@ -1126,6 +1136,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
 
   playback_init(a->win, playback_changed, a);
   playback_set_library(a->lib, a->settings_dir);
+  delete_dialog_init(before_delete);
   mc_settings *settings = NULL;
   if (mc_settings_load(a->settings_dir, &settings) == MC_OK) { /* shuffle and volume as they were left */
     playback_set_shuffle(mc_settings_shuffle(settings));

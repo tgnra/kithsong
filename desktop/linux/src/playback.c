@@ -323,6 +323,14 @@ mc_player_state playback_state(void) {
   return s.player ? s.state : MC_PLAYER_STOPPED;
 }
 
+int playback_queue_count(void) {
+  return s.player ? s.count : 0;
+}
+
+const char *playback_queue_uid(int i) {
+  return s.player && i >= 0 && i < s.count ? s.items[i].uid : "";
+}
+
 gboolean playback_has_current(void) {
   return s.player && s.index >= 0 && s.index < s.count;
 }

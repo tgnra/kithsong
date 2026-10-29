@@ -239,7 +239,7 @@ Things built but not checked properly.
 - Artist page playback with real files, and album group covers
 - Smart list playback (no audio in the container)
 - The Settings scrobbling group on screen
-- Delete and restore in the running app
+- Delete and restore in the running app, and that a delete taking a queued track stops playback first (only compiled; no audio in the container)
 - Import outcomes ("Replaced with higher quality", "Already in library", "Added missing tracks")
 - Import review's Use as Track: compiled, and run under Xvfb in Docker (GTK 4.18, libadwaita 1.7) with the mouse: a missing track's Choose File… menu (from a click on its row, Enter, or a right-click), Ctrl+click selecting without opening it, and the multi-select right-click Use as Track N all assign. Not checked: choosing inside the menu with the keyboard (keys didn't reach the popover under Xvfb), files of related items, and a real desktop session
 - The review's Search More Widely button (only compiled)

@@ -25,6 +25,11 @@
 
 #include "musiccore/musiccore.h"
 
+/* What to do just before files go: before_delete (may be NULL) gets the plan, e.g. to stop
+ * playing a track in it, which would otherwise play on from its trashed file. Call once at
+ * startup. */
+void delete_dialog_init(void (*before_delete)(const mc_delete_plan *plan));
+
 /* Asks over parent (any widget in the main window) about deleting uid (an album, artist or
  * track, by kind) named name, with deleted.db in config_dir, and calls changed once anything was
  * deleted. A failure is reported in a dialog of its own. */

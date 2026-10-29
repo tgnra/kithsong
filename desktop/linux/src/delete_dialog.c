@@ -6,6 +6,12 @@
 #error "delete_dialog.c needs libadwaita 1.5 or later (AdwAlertDialog)"
 #endif
 
+static void (*before_delete)(const mc_delete_plan *plan);
+
+void delete_dialog_init(void (*before)(const mc_delete_plan *plan)) {
+  before_delete = before;
+}
+
 /* Owned by the dialog: freed with it. */
 typedef struct ask {
   mc_library *lib;
@@ -34,6 +40,7 @@ static void on_response(AdwAlertDialog *dialog, const char *response, gpointer d
   (void)data;
   ask *a = g_object_get_data(G_OBJECT(dialog), "delete-dialog");
   if (strcmp(response, "delete")) return;
+  if (before_delete) before_delete(a->plan);
   mc_delete_result res;
   mc_status st = mc_delete_run(a->lib, a->config_dir, a->plan, &res);
   if ((res.tracks_deleted || res.files_trashed) && a->changed) a->changed(a->user);
