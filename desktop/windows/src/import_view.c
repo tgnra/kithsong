@@ -843,8 +843,7 @@ static void load_review(HWND dlg) {
   EnableWindow(GetDlgItem(dlg, IDC_REV_ASIS), !busy);
   EnableWindow(GetDlgItem(dlg, IDC_REV_SKIP), !busy && it->state != MC_IMPORT_DONE);
   EnableWindow(GetDlgItem(dlg, IDC_REV_SEARCH), !busy);
-  /* Only albums have the clues; once it has run, a manual search brings it back. */
-  ShowWindow(GetDlgItem(dlg, IDC_REV_WIDER), it->kind == MC_IMPORT_ALBUM ? SW_SHOW : SW_HIDE);
+  /* Albums and single tracks alike; once it has run, a manual search brings it back. */
   EnableWindow(GetDlgItem(dlg, IDC_REV_WIDER), !busy && !it->searched_wider && !g_view.offline);
 }
 

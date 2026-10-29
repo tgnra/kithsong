@@ -54,6 +54,7 @@ kithsong_test(test_import_wider)
 kithsong_test(test_import_db)
 kithsong_test(test_import_offline)
 kithsong_test(test_import_assign)
+kithsong_test(test_import_order)
 kithsong_test(test_import_zip)
 target_link_libraries(test_import_zip PRIVATE mc_miniz)  # builds the zips it imports
 kithsong_test(test_dupes)

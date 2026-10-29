@@ -365,7 +365,7 @@ private fun ReviewItem(key: ItemKey, progress: ImportProgress, importer: Importe
     ) {
         TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
         // Offline it would only wait (see mc_import_search_wider).
-        if (d.info.kind == CoreImport.Kind.Album && !progress.offline) {
+        if (!progress.offline) {
             OutlinedButton(onClick = { importer.searchWider(key) }, enabled = !busy) { Text(stringResource(R.string.import_search_wider)) }
         }
         OutlinedButton(onClick = { searching = true }, enabled = !busy) { Text(stringResource(R.string.import_search_again)) }

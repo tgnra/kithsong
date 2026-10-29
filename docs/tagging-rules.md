@@ -33,6 +33,24 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    - files with neither an album tag nor a release id are **singles**, one item each.
    - a lone file whose album tag equals its title is also a single.
    - untagged singles get artist and title from the file name: `03 - Artist - Title.mp3`.
+   - **disc folders**: albums whose album tag ends with a disc ("危ないベースライン Disc1",
+     "… Disc2"; also `Disc 2`, `CD1`, `disk_3`, `(Disc 1 of 2)`, `[CD 2/2]`), or whose folder
+     name does while the album tags agree, are items of their own at first. When several have
+     the same title once the disc is taken off, each a different disc, in the same folder or
+     folders side by side, they may be one album. Before they're matched, MusicBrainz is asked
+     (one release search for the title and album artist, up to 3 lookups): a release with as
+     many discs as there are items, on which at least half of each item's files are paired
+     with tracks of its own disc. If there is one, the items are joined into the first: its
+     files are all of theirs, in disc order (a file with no disc tag takes its item's disc),
+     its album is the title, its candidates those releases scored as usual, and the other
+     items are skipped as "Moved to another album". The joined item **always** waits for the
+     user, saying it was joined ("Joined 2 discs into one album: check that they belong
+     together"), however high it scores. If MusicBrainz has no such release, or can't be
+     reached, the items stay apart and are matched one by one. Two items claiming the same
+     disc are never joined.
+   - **matching order**: albums first, then one-file items (singles, a lone file of an
+     album, a DJ mix in one file), each in the order they were grouped, so the albums reach
+     the review first.
 3. **Identify**:
    - albums: if every file carries the same `MUSICBRAINZ_ALBUMID`, look that release up;
      then search releases by album and artist (not by artist when it is "Various Artists")
@@ -41,8 +59,10 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    - a one-file album also gets recording candidates, in case it is one track off a release.
    - singles: look up `MUSICBRAINZ_TRACKID` if present, then search recordings by title and
      artist (5 results).
-   - albums with no candidates, or only poor ones (best under 75%): the
+   - albums and one-file items with no candidates, or only poor ones (best under 75%): the
      [extended search](#extended-search), by catalogue number, other artists and the label.
+     It gives a one-file item release candidates, in case the file is a whole release (a DJ
+     mix whose album tag is its title, say).
 4. **Score** each candidate with a weighted distance, 0 to 1 (`match.c`):
    - strings are compared by normalised edit distance. Case, punctuation, common Latin
      accents, a leading "The" and `&`/"and" are ignored, and a bracketed or ` - ` suffix such
@@ -58,11 +78,13 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    written just to fill a slot.
 6. **Confirm**: confidence = 1 - distance. The best candidate is accepted automatically if
    its confidence is at least the threshold (default 0.9) **and** it is complete: no missing
-   tracks and no leftover files. Everything else waits for the user in the review dialog,
+   tracks and no leftover files (a recording candidate always is). Everything else waits for
+   the user in the review dialog,
    where they can pick another candidate, search again with their own terms, keep the
-   existing tags, or skip the item. Results of a manual search are never auto-accepted.
-   For an album they can also **search more widely** (the extended search on request,
-   whose results join the candidates and aren't auto-accepted either).
+   existing tags, or skip the item. Results of a manual search are never auto-accepted, and
+   nor are joined disc folders (see Group). They can also **search more widely** (the
+   extended search on request, for an album or a single, whose results join the candidates
+   and aren't auto-accepted either).
    **Use as track N** fixes an assignment the tagger got wrong: the review's track list shows
    the missing tracks, the files no track took, and the files of other items from the same
    folder (`mc_import_related`, e.g. a file whose album tag put it in an item of its own).
@@ -73,7 +95,11 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    whether it was in review or already imported (then its files are re-tagged and moved in
    place, and its library rows updated). A file taken from another item leaves it; if that
    item had imported it, its library row moves to this album, and an item left with no files
-   is skipped as "Moved to another album".
+   is skipped as "Moved to another album". The match's confidence (and its missing tracks and
+   leftover files) is then worked out again from the files and tracks as they're paired now,
+   with no new request, so a match that was low only for want of that track goes up; every
+   pair counts, even one the tagger would have dropped as too far apart. The other matches of
+   both items are rescored too, but keep their order.
 7. **Compare** with the library (`dupes.c`, see [Duplicates](#duplicates)): skip what it
    already has, or swap in a better copy of the release.
 8. **Write** (see [Library folder](#library-folder)): copy the files into the library folder
@@ -91,7 +117,8 @@ that album artist) then finds nothing, or only the wrong releases. The real arti
 release usually show up elsewhere (`search_keys.c` gathers them):
 
 - **catalogue numbers**: `CATALOGNUMBER` (or `CATALOGID`, `CATALOG`, `LABELNO`) tags, and
-  `[bracketed]` groups in the folder name, split at `/`. A catalogue number has an ASCII
+  `[bracketed]` groups in the album tag ("BREAK IT OLDSCHOOL [SRPC-L007]") and the folder
+  name, split at `/`. A catalogue number has an ASCII
   letter and at least three digits, so dates (`[2002.08.11]`), events (`(C89)`) and notes
   like `[24bit]` or `[FLAC]` don't count. `SRPC-0008LTD` also tries `SRPC-0008`.
 - **artists**: the parenthesised part of a `Label (Artist) - Title [CAT-001] (Event)` folder
@@ -103,7 +130,10 @@ release usually show up elsewhere (`search_keys.c` gathers them):
   artist would (the folder name's prefix, the album artist tag) when it has a parenthesised
   artist, or differs from the artist the tracks agree on, or the tracks are a compilation.
 - **titles**: the album tag, and the folder name's title (after ` - `, up to the first
-  `[group]`, without a trailing `(2004)`) when it differs.
+  `[group]`, without a trailing `(2004)`) when it differs. For a single, the album tag (its
+  title is the track's); without one, the folder name counts only when it looks like a
+  release (`Prefix - Title`, or with a catalogue number), since a loose track's folder is
+  often just where it was saved.
 - a **compilation**: "V.A." in the parentheses, or no artist on at least half the files.
 
 The queries, most specific first, each skipped when its keys are missing:
@@ -123,15 +153,18 @@ release best among the item's own, the keys' titles and artists, and "Various Ar
 compilation. Every release candidate is rescored this way, including the normal search's.
 "V.A." as a release artist counts as Various Artists.
 
-**When**: automatically for an album whose best candidate is below **75%** confidence, or that
-has none. The threshold comes from the scoring: the album artist is 5 of the release
+**When**: automatically for an album or a one-file item whose best candidate is below **75%**
+confidence, or that has none. The threshold comes from the scoring: the album artist is 5 of the release
 distance's 32.5 weight units, so the right release with a wrong album artist tag loses at
 most about 15 points and still scores around 85-90%; below 75%, the title, a quarter of the
 tracks or more, or both disagree too, which means the wrong release. Results are treated
 like the normal search's: the same threshold and completeness rules decide whether the best
 one is accepted. Above 75% but not accepted, the review offers **Search more widely**, which
 runs the same search on request; its results join the candidates and are never accepted by
-themselves. Singles don't have it (their keys are album clues). After a manual search, the
+themselves. Singles have it too: a one-file item may be a whole release, and its release
+candidates are scored like an album's, so one is accepted only if it has that one track (a
+recording candidate for a single isn't held to that). One-file items are matched after the
+albums, so their extended searches don't hold the albums up. After a manual search, the
 button is offered again.
 
 **Offline**: it isn't started while MusicBrainz can't be reached (the normal search failed

@@ -225,6 +225,52 @@ static void test_keys(void) {
   CHECK(has(k.labels, k.label_count, "SHARPNELSOUND"));
   CHECK_STR(k.folder_album, "x");
   mc_search_keys_clear(&k);
+
+  /* A DJ mix in one file: the catalogue number is in its album tag. */
+  mc_tags mix[1] = {0};
+  mix[0].artist = "DJ SHARPNEL";
+  mix[0].title = mix[0].album = "BREAK IT OLDSCHOOL [SRPC-L007]";
+  const char *mixp[1] = {"/d/Downloads/BREAK IT OLDSCHOOL.flac"};
+  CHECK(mc_search_keys_build("/d/Downloads", mix, mixp, 1, mix[0].album, "DJ SHARPNEL", &k) == MC_OK);
+  CHECK(k.catno_count == 1 && has(k.catnos, k.catno_count, "SRPC-L007"));
+  mc_search_keys_clear(&k);
+}
+
+/* The title without the disc, or NULL if mc_disc_suffix finds none; *disc gets the disc. */
+static char *disc_base(const char *title, int *disc) {
+  size_t len = 0;
+  static char buf[256];
+  *disc = mc_disc_suffix(title, &len);
+  if (!*disc || len >= sizeof buf) return NULL;
+  memcpy(buf, title, len);
+  buf[len] = '\0';
+  return buf;
+}
+
+static void test_disc_suffixes(void) {
+  int disc;
+  CHECK_STR(disc_base("\xE5\x8D\xB1\xE3\x81\xAA\xE3\x81\x84\xE3\x83\x99\xE3\x83\xBC\xE3\x82\xB9\xE3\x83\xA9"
+                      "\xE3\x82\xA4\xE3\x83\xB3 Disc1", &disc),
+            "\xE5\x8D\xB1\xE3\x81\xAA\xE3\x81\x84\xE3\x83\x99\xE3\x83\xBC\xE3\x82\xB9\xE3\x83\xA9"
+            "\xE3\x82\xA4\xE3\x83\xB3"); /* 危ないベースライン */
+  CHECK(disc == 1);
+  CHECK_STR(disc_base("Some Album - Disc 2", &disc), "Some Album");
+  CHECK(disc == 2);
+  CHECK_STR(disc_base("Some Album CD3", &disc), "Some Album");
+  CHECK(disc == 3);
+  CHECK_STR(disc_base("Some Album (Disc 1 of 2)", &disc), "Some Album");
+  CHECK(disc == 1);
+  CHECK_STR(disc_base("Some Album [cd 2/2]", &disc), "Some Album");
+  CHECK(disc == 2);
+  CHECK_STR(disc_base("Some Album disk_4", &disc), "Some Album");
+  CHECK(disc == 4);
+  /* Not a disc suffix: nothing before it, a word that only ends in "cd", no number, or more
+   * after it. */
+  CHECK(!disc_base("Disc 1", &disc));
+  CHECK(!disc_base("ABCD1", &disc));
+  CHECK(!disc_base("Some Album Disc", &disc));
+  CHECK(!disc_base("Some Album Disc 1 Remastered", &disc));
+  CHECK(!disc_base(NULL, &disc));
 }
 
 int main(void) {
@@ -232,5 +278,6 @@ int main(void) {
   test_catnos();
   test_file_names();
   test_keys();
+  test_disc_suffixes();
   return TEST_RESULT();
 }

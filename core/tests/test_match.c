@@ -112,6 +112,21 @@ static void test_release(void) {
   CHECK(map4[3] == -1);
   CHECK(s.extra == 1 && s.missing == 0);
 
+  /* The same map scores the same; a pair the user makes counts however far apart. */
+  mc_release_score again;
+  CHECK(mc_score_release_map(&rel, stray, 4, "Things We Lost in the Fire", "Low", map4, &again) == MC_OK);
+  CHECK(again.distance == s.distance && again.extra == 1 && again.missing == 0);
+  rel.track_count = 4;
+  mb_track four[4] = {tracks[0], tracks[1], tracks[2], track(4, "Bonus", 200000)};
+  rel.tracks = four;
+  CHECK(mc_score_release(&rel, stray, 4, "Things We Lost in the Fire", "Low", map4, &s) == MC_OK);
+  CHECK(map4[3] == -1 && s.missing == 1 && s.extra == 1);
+  map4[3] = 3;
+  CHECK(mc_score_release_map(&rel, stray, 4, "Things We Lost in the Fire", "Low", map4, &again) == MC_OK);
+  CHECK(again.missing == 0 && again.extra == 0 && again.distance < s.distance);
+  rel.tracks = tracks;
+  rel.track_count = 3;
+
   /* A different album title alone is enough to fall below the default 0.9 threshold. */
   mc_release_score right, wrong;
   mc_score_release(&rel, files, 3, "Things We Lost in the Fire", "Low", map, &right);
