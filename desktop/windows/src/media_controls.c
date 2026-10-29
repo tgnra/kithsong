@@ -6,6 +6,8 @@
 #define WIDL_using_Windows_Storage_Streams
 #include "media_controls.h"
 
+#include "cover.h" /* before initguid.h, which would define WIC's IIDs here too */
+
 #include <initguid.h> /* defines the WinRT IIDs below, which no import library has */
 #include <roapi.h>
 #include <shcore.h>
@@ -212,16 +214,13 @@ static HSTRING hstring(const wchar_t *text) {
   return h;
 }
 
-/* The album's cover.jpg (or .png) as a stream reference, or NULL. */
+/* The album's cover as a stream reference, or NULL. */
 static IRandomAccessStreamReference *cover_stream(const wchar_t *dir) {
-  static const wchar_t *const names[] = {L"cover.jpg", L"cover.png"};
+  wchar_t path[MAX_PATH * 2];
   IStream *file = NULL;
-  for (int i = 0; i < 2 && !file; i++) {
-    wchar_t path[MAX_PATH + 16];
-    if (swprintf(path, MAX_PATH + 16, L"%ls\\%ls", dir, names[i]) < 0) return NULL;
-    if (FAILED(SHCreateStreamOnFileEx(path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, NULL, &file))) file = NULL;
-  }
-  if (!file) return NULL;
+  if (!cover_find(dir, path, MAX_PATH * 2) ||
+      FAILED(SHCreateStreamOnFileEx(path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, NULL, &file)))
+    return NULL;
   IRandomAccessStream *stream = NULL;
   IRandomAccessStreamReferenceStatics *statics = NULL;
   IRandomAccessStreamReference *ref = NULL;

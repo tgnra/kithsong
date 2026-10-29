@@ -3,20 +3,26 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <wchar.h>
 
 #include "canvas.h"
+#include "musiccore/library.h"
+#include "wstr.h"
+
+BOOL cover_find(const wchar_t *dir, wchar_t *path, size_t n) {
+  char *utf8 = dir ? wstr_to_utf8(dir) : NULL;
+  char *found = utf8 ? mc_coverart_find(utf8) : NULL;
+  if (found) wstr_from_utf8(path, n, found);
+  free(utf8);
+  mc_free(found);
+  return found != NULL;
+}
 
 HBITMAP cover_decode(IWICImagingFactory *wic, const wchar_t *dir, int size, int radius,
                      const uint32_t **pixels) {
   wchar_t path[MAX_PATH * 2];
-  static const wchar_t *const names[] = {L"cover.jpg", L"cover.png"};
-  BOOL found = FALSE;
-  for (int i = 0; i < 2 && !found; i++) {
-    found = swprintf(path, MAX_PATH * 2, L"%ls\\%ls", dir, names[i]) > 0 &&
-            GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
-  }
-  return found ? cover_decode_file(wic, path, size, radius, pixels) : NULL;
+  return cover_find(dir, path, MAX_PATH * 2) ? cover_decode_file(wic, path, size, radius, pixels) : NULL;
 }
 
 /* WIC's JPEG decoder does most of the downscaling while decoding, which is what makes this

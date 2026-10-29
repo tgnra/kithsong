@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material3.Text
 import ng.kithso.core.AlbumInfo
+import ng.kithso.core.NativeCore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -38,7 +39,7 @@ private val placeholderColors = listOf(
 private val covers = LruCache<String, ImageBitmap>(32)
 
 /**
- * The cover of [album]: the cover.jpg or cover.png in its folder, or, when it has none, a
+ * The cover of [album]: the one in its folder ([NativeCore.coverFile]), or, when it has none, a
  * coloured square with the album's first letter, coloured by the title so it stays the same.
  */
 @Composable
@@ -73,8 +74,7 @@ fun AlbumArt(album: AlbumInfo, size: Dp, modifier: Modifier = Modifier) {
 
 /** Decodes the cover in [folder], subsampled to no less than [px] square. */
 private suspend fun loadCover(folder: String, px: Int): ImageBitmap? = withContext(Dispatchers.IO) {
-    val file = listOf("cover.jpg", "cover.png").map { File(folder, it) }.firstOrNull { it.isFile }
-        ?: return@withContext null
+    val file = NativeCore.coverFile(folder)?.let(::File) ?: return@withContext null
     val key = "${file.path}@$px"
     covers.get(key)?.let { return@withContext it }
 

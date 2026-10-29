@@ -11,6 +11,7 @@ import ng.kithso.core.DeleteKind
 import ng.kithso.core.DeviceKind
 import ng.kithso.core.ItemKind
 import ng.kithso.core.MusicCoreException
+import ng.kithso.core.NativeCore
 import ng.kithso.core.SearchKind
 import ng.kithso.core.TrackInfo
 import ng.kithso.core.addToAlbumGroup
@@ -587,8 +588,8 @@ class CoreLibrarySource(
     }
 
     /**
-     * Makes [ArtRef]s for covers in album folders: cover.jpg or cover.png, as the core and the
-     * desktop apps look for. Each folder is looked at once. Inner, for [unknownArtist].
+     * Makes [ArtRef]s for covers in album folders, as the core finds them ([NativeCore.coverFile]).
+     * Each folder is looked at once. Inner, for [unknownArtist].
      */
     private inner class Covers {
         private val found = HashMap<String, File?>()
@@ -628,8 +629,7 @@ class CoreLibrarySource(
 
         private fun ref(uid: String, label: String, file: File?) = artRef(uid, label, file)
 
-        private fun coverIn(dir: String): File? =
-            COVER_NAMES.asSequence().map { File(dir, it) }.firstOrNull { it.isFile }
+        private fun coverIn(dir: String): File? = NativeCore.coverFile(dir)?.let(::File)
     }
 
     private companion object {
@@ -639,7 +639,6 @@ class CoreLibrarySource(
         const val MAX_RECENTS = 8
         const val SEARCH_LIMIT = 20 // of each kind, as the desktops show
         const val ON_DEVICE_RULE = """{"v": 1, "match": {"field": "on_device", "op": "is", "value": true}}"""
-        val COVER_NAMES = listOf("cover.jpg", "cover.png")
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
 

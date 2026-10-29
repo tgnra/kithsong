@@ -69,7 +69,7 @@ typedef struct mc_album_info {
   char *artist;
   int year;
   int is_singles; /* an artist's "<artist> Singles" album */
-  int has_art;    /* folder holds cover.jpg or cover.png */
+  int has_art;    /* folder holds a cover (see mc_coverart_find()) */
   char *folder;   /* absolute path of the album's folder; NULL if it has no files here */
   /* From mc_library_list_artist_albums() only (0 elsewhere): the album's tracks, and how
    * many of them are credited to the artist. */
@@ -87,6 +87,13 @@ typedef struct mc_album_list {
  * Free with mc_album_list_free(). */
 mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out);
 void mc_album_list_free(mc_album_list *list);
+
+/* The cover in an album's folder (mc_album_info.folder, say): the first of cover, folder
+ * and front, each as .jpg, .jpeg or .png, in any case. The same file the importer writes and
+ * sync sends, so frontends needn't know the names. A full path to free with mc_free(), or
+ * NULL if there's none. Lists the folder, so keep it off a thread that mustn't wait on the
+ * disk. */
+char *mc_coverart_find(const char *dir);
 
 typedef struct mc_track_info {
   char uid[MC_UID_STRLEN];

@@ -3,6 +3,8 @@
 #include <glib/gstdio.h>
 #include <math.h>
 
+#include "musiccore/library.h"
+
 /* Decoded covers kept for scrolling back: about three screens of a big window at 2x. */
 enum { CACHE_BYTES = 96 * 1024 * 1024 };
 
@@ -30,14 +32,10 @@ static struct {
 } s;
 
 char *cover_path(const char *dir) {
-  static const char *const names[] = {"cover.jpg", "cover.png"};
-  if (!dir) return NULL;
-  for (size_t i = 0; i < G_N_ELEMENTS(names); i++) {
-    char *path = g_build_filename(dir, names[i], NULL);
-    if (g_file_test(path, G_FILE_TEST_IS_REGULAR)) return path;
-    g_free(path);
-  }
-  return NULL;
+  char *path = mc_coverart_find(dir);
+  char *copy = g_strdup(path);
+  mc_free(path);
+  return copy;
 }
 
 static gint64 file_mtime(const char *path) {

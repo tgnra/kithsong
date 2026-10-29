@@ -341,6 +341,39 @@ static void test_prune(mc_library *lib) {
 }
 
 /* Removes a folder's files (one level of subfolders deep), so each run starts clean. */
+static void touch_in(const char *dir, const char *name) {
+  char path[1200];
+  snprintf(path, sizeof path, "%s%c%s", dir, MC_PATH_SEP, name);
+  FILE *f = mc_fopen(path, "wb");
+  if (f) fclose(f);
+}
+
+/* Ends with name, matched exactly: the path keeps the file's own case. */
+static int found_is(char *path, const char *name) {
+  size_t n = path ? strlen(path) : 0, k = strlen(name);
+  int ok = n > k && !strcmp(path + n - k, name) && path[n - k - 1] == MC_PATH_SEP;
+  mc_free(path);
+  return ok;
+}
+
+/* mc_coverart_find(): the frontends' lookup. cover before folder before front, any case. */
+static void test_cover_find(void) {
+  char dir[1100];
+  snprintf(dir, sizeof dir, "%s%ccover-find", g_lib_dir, MC_PATH_SEP);
+  CHECK(mc_mkdirs(dir) == MC_OK);
+  CHECK(mc_coverart_find(NULL) == NULL);
+  CHECK(mc_coverart_find(dir) == NULL);
+  touch_in(dir, "notes.txt");
+  touch_in(dir, "front.png");
+  CHECK(found_is(mc_coverart_find(dir), "front.png"));
+  touch_in(dir, "Folder.JPG");
+  CHECK(found_is(mc_coverart_find(dir), "Folder.JPG"));
+  touch_in(dir, "cover.png");
+  CHECK(found_is(mc_coverart_find(dir), "cover.png"));
+  touch_in(dir, "Cover.jpeg");
+  CHECK(found_is(mc_coverart_find(dir), "Cover.jpeg"));
+}
+
 static void clear_dir(const char *dir);
 static void clear_entry(void *user, const char *name, int is_dir) {
   char p[1200];
@@ -371,6 +404,7 @@ int main(int argc, char **argv) {
   test_group(lib);
   test_bad_cover(lib);
   test_prune(lib);
+  test_cover_find();
 
   mc_library_close(lib);
   return TEST_RESULT();

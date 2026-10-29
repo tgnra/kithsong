@@ -148,6 +148,7 @@ static void on_cover_entry(void *user, const char *name, int is_dir) {
 }
 
 char *mc_coverart_find(const char *dir) {
+  if (!dir || !*dir) return NULL;
   cover_search s = {INT_MAX, NULL};
   mc_list_dir(dir, on_cover_entry, &s);
   if (!s.name) return NULL;

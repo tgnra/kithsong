@@ -69,6 +69,18 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_NativeCore_albumCount(JNIEnv *env, j
   return st == MC_OK ? (jlong)count : (jlong)st;
 }
 
+/* The cover file in an album folder (mc_coverart_find()), or null. */
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_NativeCore_coverFile(JNIEnv *env, jclass cls, jstring dir) {
+  (void)cls;
+  const char *cdir = (*env)->GetStringUTFChars(env, dir, NULL);
+  if (!cdir) return NULL;
+  char *path = mc_coverart_find(cdir);
+  (*env)->ReleaseStringUTFChars(env, dir, cdir);
+  jstring out = new_string(env, path);
+  mc_free(path);
+  return out;
+}
+
 /* --- CoreLibrary ------------------------------------------------------------------- */
 
 JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreLibrary_nativeOpen(JNIEnv *env, jclass cls,

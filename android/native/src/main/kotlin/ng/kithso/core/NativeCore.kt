@@ -37,4 +37,11 @@ object NativeCore {
 
     /** Album count of the library in folder [libraryDir], or a negative mc_status code. */
     @JvmStatic external fun albumCount(libraryDir: String): Long
+
+    /**
+     * The cover file in album folder [dir] (mc_coverart_find): the one the core writes on
+     * import and sync sends, whatever its name. Null if there's none. Lists the folder, so
+     * call it off the main thread.
+     */
+    @JvmStatic external fun coverFile(dir: String): String?
 }

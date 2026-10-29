@@ -1,4 +1,4 @@
-/* Album covers: the cover.jpg (or cover.png) in an album's folder, decoded on a worker
+/* Album covers: the cover in an album's folder (mc_coverart_find()), decoded on a worker
  * thread into square textures, and kept in a cache bounded by memory, so the album grid
  * scrolls smoothly however big the library is. The _file functions do the same for an
  * image file, such as a playlist's picture (mc_playlist_art()). Call everything on the UI

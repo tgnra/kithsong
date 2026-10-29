@@ -112,7 +112,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 
 - Core - AAC/M4A: pick a decoder; the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
-- Core - a public cover-file lookup (mc_coverart_find) so frontends don't look for cover.jpg/png themselves
 - All - a play queue: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither), and a view of what's queued
 - All - an on-screen volume control (the desktops flash the level in the now-playing strip for now)
 - Android - duck with the core's volume (CorePlayer.setVolume; AudioFocusManager's setVolumeMultiplier is a no-op)

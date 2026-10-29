@@ -1,4 +1,4 @@
-/* Album covers: the cover.jpg (or cover.png) in an album's folder, decoded with WIC. Playlists'
+/* Album covers: the cover in an album's folder (mc_coverart_find()), decoded with WIC. Playlists'
  * pictures (see mc_playlist_art()) are decoded the same way from their file. */
 #ifndef KITHSONG_COVER_H
 #define KITHSONG_COVER_H
@@ -7,6 +7,9 @@
 #include <wincodec.h>
 #include <windows.h>
 
+/* Puts the path of dir's cover in path (n characters with the NUL): FALSE if there's none.
+ * Lists the folder. */
+BOOL cover_find(const wchar_t *dir, wchar_t *path, size_t n);
 /* Decodes dir's cover to a size x size premultiplied, top-down DIB: scaled so the short side
  * fits, centre-cropped, and with rounded corners. Sets *pixels to its bits. Returns NULL if
  * there's no cover or it can't be decoded. Safe on any thread with COM initialised. */
