@@ -123,11 +123,12 @@ static struct {
   GtkWidget *none;
   GListStore *artists;
   GtkSingleSelection *artist_selection;
-  GtkWidget *list;
+  GtkWidget *list, *list_box, *row_menu; /* list_box holds the list and its rows' menu */
+  char menu_artist[MC_UID_STRLEN];       /* the artist the rows' or the header's menu is for */
 
   /* The open artist's page. */
   char open[MC_UID_STRLEN];
-  GtkWidget *page, *avatar, *name, *summary, *actions;
+  GtkWidget *page, *avatar, *name, *summary, *actions, *more;
   GtkWidget *albums_heading, *albums_scroller, *albums;
   GListStore *tracks;
   GtkSingleSelection *track_selection;
@@ -153,6 +154,118 @@ static void changed(void) {
   if (v.cb.changed) v.cb.changed(v.cb.user);
 }
 
+/* --- The artist menu: on the list's rows and under the page's "..." --- */
+
+/* An artist's name as the list has it, or NULL. */
+static const char *name_of(const char *uid) {
+  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.artists)); uid[0] && i < n; i++)
+    if (!strcmp(artist_at(i)->uid, uid)) return artist_at(i)->name;
+  return NULL;
+}
+
+/* The open artist's name, or NULL. */
+static const char *open_name(void) {
+  return name_of(v.open);
+}
+
+static void on_deleted(void *user) {
+  app_reload_library(user);
+}
+
+/* Remove from this computer... and Sync to this computer (remove_here.h). */
+static void on_remove_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.menu_artist[0])
+    remove_here_present(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.menu_artist, name_of(v.menu_artist), on_deleted,
+                        v.a);
+}
+
+static void on_sync_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.menu_artist[0]) remove_here_restore(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.menu_artist, on_deleted, v.a);
+}
+
+/* Delete from library...: the artist's tracks and own albums. */
+static void on_delete_artist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.menu_artist[0])
+    delete_dialog_present(GTK_WIDGET(v.a->win), v.a->lib, v.a->settings_dir, MC_DELETE_ARTISTS, v.menu_artist,
+                          name_of(v.menu_artist), on_deleted, v.a);
+}
+
+/* The menu for the artist with uid, made each time it opens: Remove from this computer... or
+ * Sync to this computer where they apply, then Delete from library. */
+static GMenuModel *artist_menu(const char *uid) {
+  g_strlcpy(v.menu_artist, uid, sizeof v.menu_artist);
+  GMenu *menu = g_menu_new();
+  remove_here_append(menu, MC_PROFILE_ARTIST, uid, "artist.remove-here", "artist.sync-here");
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete");
+  return G_MENU_MODEL(menu);
+}
+
+/* The header's "...": the open artist's. */
+static void make_artist_menu(GtkMenuButton *button, gpointer user) {
+  (void)user;
+  GMenuModel *menu = artist_menu(v.open);
+  gtk_menu_button_set_menu_model(button, menu);
+  g_object_unref(menu);
+}
+
+/* A row of the list's: its artist's, at x, y in widget. */
+static void popup_row_menu(GtkListItem *item, GtkWidget *widget, float x, float y) {
+  ArtistItem *artist = gtk_list_item_get_item(item);
+  graphene_point_t at;
+  if (!artist || !gtk_widget_compute_point(widget, v.list_box, &GRAPHENE_POINT_INIT(x, y), &at)) return;
+  GMenuModel *menu = artist_menu(artist->uid);
+  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(v.row_menu), menu);
+  g_object_unref(menu);
+  gtk_popover_set_pointing_to(GTK_POPOVER(v.row_menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(v.row_menu));
+}
+
+/* Right-click, or a long press on a touchscreen. */
+static void on_row_click(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  popup_row_menu(user, gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click)), (float)x, (float)y);
+}
+
+static void on_row_long_press(GtkGestureLongPress *press, double x, double y, gpointer user) {
+  gtk_gesture_set_state(GTK_GESTURE(press), GTK_EVENT_SEQUENCE_CLAIMED); /* not opening the artist too */
+  popup_row_menu(user, gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(press)), (float)x, (float)y);
+}
+
+/* A closed menu gives the focus back to the list, as GTK would hand it elsewhere (the
+ * sidebar, under Xvfb), and the keys should go on where they were. */
+static void on_menu_closed(GtkPopover *menu, gpointer list) {
+  (void)menu;
+  gtk_widget_grab_focus(list);
+}
+
+/* The Menu key or Shift+F10 on the list: the focused row's menu, under its name. */
+static gboolean on_list_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  GtkRoot *root = gtk_widget_get_root(v.list);
+  /* The focus is on the list's own row widget, the parent of ours. */
+  for (GtkWidget *w = root ? gtk_root_get_focus(root) : NULL; w && w != v.list; w = gtk_widget_get_parent(w)) {
+    GtkWidget *box = gtk_widget_get_first_child(w);
+    GtkListItem *item = box ? g_object_get_data(G_OBJECT(box), "item") : NULL;
+    if (!item || !gtk_list_item_get_item(item)) continue;
+    GtkWidget *text = gtk_widget_get_next_sibling(gtk_widget_get_first_child(box));
+    popup_row_menu(item, text, 0, (float)gtk_widget_get_height(text));
+    return TRUE;
+  }
+  return FALSE;
+}
+
 /* --- The list --- */
 
 static void artist_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
@@ -176,6 +289,16 @@ static void artist_setup(GtkSignalListItemFactory *factory, GtkListItem *item, g
   gtk_widget_add_css_class(sub, "caption");
   gtk_box_append(GTK_BOX(text), sub);
   gtk_box_append(GTK_BOX(box), text);
+
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "pressed", G_CALLBACK(on_row_click), item);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
+  GtkGesture *press = gtk_gesture_long_press_new();
+  gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(press), TRUE);
+  g_signal_connect(press, "pressed", G_CALLBACK(on_row_long_press), item);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(press));
+  g_object_set_data(G_OBJECT(box), "item", item); /* the box is the item's for good */
   gtk_list_item_set_child(item, box);
 }
 
@@ -330,6 +453,32 @@ static void track_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, g
   if (v.rows) g_ptr_array_remove_fast(v.rows, r); /* not if the page has gone */
 }
 
+/* The Menu key or Shift+F10 on the page: in the tracks, the selected one's menu under its
+ * title; elsewhere, or with none selected, the header's "...". */
+static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  if (!v.open[0]) return FALSE;
+  GtkRoot *root = gtk_widget_get_root(v.page);
+  GtkWidget *focus = root ? gtk_root_get_focus(root) : NULL;
+  guint pos = gtk_single_selection_get_selected(v.track_selection);
+  for (guint i = 0; focus && gtk_widget_is_ancestor(focus, v.track_view) && i < v.rows->len; i++) {
+    track_row *r = g_ptr_array_index(v.rows, i);
+    graphene_rect_t at;
+    if (!r->track || !r->item || gtk_list_item_get_position(r->item) != pos ||
+        !gtk_widget_compute_bounds(r->title, v.page, &at))
+      continue;
+    memcpy(v.menu_uid, r->track->uid, sizeof v.menu_uid);
+    gtk_popover_set_pointing_to(GTK_POPOVER(v.menu),
+                                &(GdkRectangle){(int)at.origin.x, (int)(at.origin.y + at.size.height), 1, 1});
+    gtk_popover_popup(GTK_POPOVER(v.menu));
+    return TRUE;
+  }
+  gtk_menu_button_popup(GTK_MENU_BUTTON(v.more));
+  return TRUE;
+}
+
 static void on_track_activated(GtkListView *view, guint position, gpointer user) {
   (void)view;
   (void)user;
@@ -360,17 +509,6 @@ static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer 
   if (v.cb.add_to_playlist && uid[0]) v.cb.add_to_playlist(v.cb.user, uid);
 }
 
-/* The open artist's name as the list has it, or NULL. */
-static const char *open_name(void) {
-  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.artists)); v.open[0] && i < n; i++)
-    if (!strcmp(artist_at(i)->uid, v.open)) return artist_at(i)->name;
-  return NULL;
-}
-
-static void on_deleted(void *user) {
-  app_reload_library(user);
-}
-
 /* The track menu's Delete from library... (delete_dialog.h). */
 static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
@@ -383,43 +521,6 @@ static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer use
                           on_deleted, v.a);
     return;
   }
-}
-
-/* The header menu's Remove from this computer... and Sync to this computer (remove_here.h). */
-static void on_remove_here(GSimpleAction *action, GVariant *param, gpointer user) {
-  (void)action;
-  (void)param;
-  (void)user;
-  if (v.open[0])
-    remove_here_present(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.open, open_name(), on_deleted, v.a);
-}
-
-static void on_sync_here(GSimpleAction *action, GVariant *param, gpointer user) {
-  (void)action;
-  (void)param;
-  (void)user;
-  if (v.open[0]) remove_here_restore(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.open, on_deleted, v.a);
-}
-
-/* The header menu, made each time it opens: Remove from this computer... or Sync to this
- * computer where they apply, then Delete from library. */
-static void make_artist_menu(GtkMenuButton *button, gpointer user) {
-  (void)user;
-  GMenu *menu = g_menu_new();
-  remove_here_append(menu, MC_PROFILE_ARTIST, v.open, "artist.remove-here", "artist.sync-here");
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete");
-  gtk_menu_button_set_menu_model(button, G_MENU_MODEL(menu));
-  g_object_unref(menu);
-}
-
-/* The header menu's Delete from library...: the open artist's tracks and own albums. */
-static void on_delete_artist(GSimpleAction *action, GVariant *param, gpointer user) {
-  (void)action;
-  (void)param;
-  (void)user;
-  if (v.open[0])
-    delete_dialog_present(GTK_WIDGET(v.a->win), v.a->lib, v.a->settings_dir, MC_DELETE_ARTISTS, v.open, open_name(),
-                          on_deleted, v.a);
 }
 
 /* An album's tile, with its year beneath it, or its artist when that's someone else. */
@@ -576,14 +677,14 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(header), text);
 
   /* Remove from this computer... and Delete from library..., under "...". */
-  GtkWidget *more = gtk_menu_button_new();
-  gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(more), "view-more-symbolic");
-  gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(more), make_artist_menu, NULL, NULL);
-  gtk_widget_set_tooltip_text(more, mc_str(MC_STR_LINUX_ARTIST_MENU));
-  gtk_widget_add_css_class(more, "flat");
-  gtk_widget_add_css_class(more, "circular");
-  gtk_widget_set_valign(more, GTK_ALIGN_START);
-  gtk_box_append(GTK_BOX(header), more);
+  v.more = gtk_menu_button_new();
+  gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(v.more), "view-more-symbolic");
+  gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(v.more), make_artist_menu, NULL, NULL);
+  gtk_widget_set_tooltip_text(v.more, mc_str(MC_STR_LINUX_ARTIST_MENU));
+  gtk_widget_add_css_class(v.more, "flat");
+  gtk_widget_add_css_class(v.more, "circular");
+  gtk_widget_set_valign(v.more, GTK_ALIGN_START);
+  gtk_box_append(GTK_BOX(header), v.more);
   return header;
 }
 
@@ -639,16 +740,8 @@ static GtkWidget *build_page(void) {
   gtk_box_append(GTK_BOX(v.page), heading(mc_str(MC_STR_TRACKS_TITLE)));
   gtk_box_append(GTK_BOX(v.page), build_tracks());
 
-  /* The tracks' right-click menu, as the page's child so its "artist." action resolves. */
-  GSimpleActionGroup *actions = g_simple_action_group_new();
-  const GActionEntry entries[] = {{"add-to-playlist", on_add_to_playlist, NULL, NULL, NULL, {0}},
-                                  {"delete-track", on_delete_track, NULL, NULL, NULL, {0}},
-                                  {"delete", on_delete_artist, NULL, NULL, NULL, {0}},
-                                  {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
-                                  {"sync-here", on_sync_here, NULL, NULL, NULL, {0}}};
-  g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
-  gtk_widget_insert_action_group(v.page, "artist", G_ACTION_GROUP(actions));
-  g_object_unref(actions);
+  /* The tracks' right-click menu, as the page's child so the "artist." actions (on the
+   * stack, artist_view_new()) resolve. */
   GMenu *model = g_menu_new();
   GMenu *section = g_menu_new();
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "artist.add-to-playlist");
@@ -663,6 +756,7 @@ static GtkWidget *build_page(void) {
   gtk_popover_set_has_arrow(GTK_POPOVER(v.menu), FALSE);
   gtk_widget_set_halign(v.menu, GTK_ALIGN_START);
   gtk_widget_set_parent(v.menu, v.page);
+  g_signal_connect(v.menu, "closed", G_CALLBACK(on_menu_closed), v.track_view);
 
   GtkEventController *keys = gtk_shortcut_controller_new();
   gtk_shortcut_controller_add_shortcut(
@@ -674,6 +768,13 @@ static GtkWidget *build_page(void) {
   gtk_shortcut_controller_add_shortcut(
     GTK_SHORTCUT_CONTROLLER(keys),
     gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_BackSpace, 0), gtk_callback_action_new(on_back_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Menu, 0), gtk_callback_action_new(on_page_menu_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_F10, GDK_SHIFT_MASK),
+                     gtk_callback_action_new(on_page_menu_key, NULL, NULL)));
   gtk_widget_add_controller(v.page, keys);
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 8); /* back */
@@ -716,14 +817,41 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
   gtk_accessible_update_property(GTK_ACCESSIBLE(v.list), GTK_ACCESSIBLE_PROPERTY_LABEL, mc_str(MC_STR_SECTION_ARTISTS),
                                  -1);
   g_signal_connect(v.list, "activate", G_CALLBACK(on_artist_activated), NULL);
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Menu, 0), gtk_callback_action_new(on_list_menu_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_F10, GDK_SHIFT_MASK),
+                     gtk_callback_action_new(on_list_menu_key, NULL, NULL)));
+  gtk_widget_add_controller(v.list, keys);
   GtkWidget *scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), v.list);
+  gtk_widget_set_vexpand(scroller, TRUE);
+  v.list_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(v.list_box), scroller);
+  v.row_menu = gtk_popover_menu_new_from_model(NULL);
+  gtk_popover_set_has_arrow(GTK_POPOVER(v.row_menu), FALSE);
+  gtk_widget_set_halign(v.row_menu, GTK_ALIGN_START);
+  gtk_widget_set_parent(v.row_menu, v.list_box);
+  g_signal_connect(v.row_menu, "closed", G_CALLBACK(on_menu_closed), v.list);
 
   v.stack = gtk_stack_new();
   gtk_stack_add_named(GTK_STACK(v.stack), v.none, "none");
-  gtk_stack_add_named(GTK_STACK(v.stack), scroller, "list");
+  gtk_stack_add_named(GTK_STACK(v.stack), v.list_box, "list");
   gtk_stack_add_named(GTK_STACK(v.stack), build_page(), "artist");
+  /* The menus' actions, for the list's rows and the page alike. */
+  GSimpleActionGroup *actions = g_simple_action_group_new();
+  const GActionEntry entries[] = {{"add-to-playlist", on_add_to_playlist, NULL, NULL, NULL, {0}},
+                                  {"delete-track", on_delete_track, NULL, NULL, NULL, {0}},
+                                  {"delete", on_delete_artist, NULL, NULL, NULL, {0}},
+                                  {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
+                                  {"sync-here", on_sync_here, NULL, NULL, NULL, {0}}};
+  g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
+  gtk_widget_insert_action_group(v.stack, "artist", G_ACTION_GROUP(actions));
+  g_object_unref(actions);
   g_signal_connect(v.stack, "destroy", G_CALLBACK(on_destroy), NULL);
   return v.stack;
 }

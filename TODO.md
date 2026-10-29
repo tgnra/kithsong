@@ -94,7 +94,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - All - the profile editors (What to sync) don't show exclusions, so with Sync everything nothing lists what was removed from a device, and another device can't undo it; only that device's Sync to this device on the album's or artist's menu can (or, in a selection, ticking it)
 - All - an album removed only through its artist shows neither item; Sync to this device on the artist brings it back
 - All - an "Add to this device" for an album or artist a selection doesn't include (the menus only offer Sync to this device for what was removed)
-- Linux - the artist list's rows have no menu, so it's only on the artist page's "..."; Android and Windows have it on the rows
 - Core - versions before exclusions ignore them: such a device would fetch the item again, and shows a device with exclusions under Sync everything as "changed" (its fingerprint differs)
 
 ### Recents
@@ -273,6 +272,7 @@ Things built but not checked properly.
 - The pairing dialog's ended page (only compiled): Choose what to sync, the archive explainer's bold "archive" (Pango markup), Create a new library (the folder picker, refusing a folder that isn't empty, then Pair again) and the button styles
 - Remove from this computer / Sync to this computer on the album tiles' and the artist page's menus (only compiled, in Docker)
 - The pairing request's notification while the window is in the background (only compiled): that it shows on GNOME and KDE, that clicking it brings the window up with the code (the app.show-pair-request action), and that it goes once the window is active, the request ends or its dialog closes
+- The track list's keys and the artist list's row menu: run under Xvfb in Docker (GTK 4.18, libadwaita 1.7). Seen working: Alt+Up/Down, Delete and F2 in a playlist, Enter, the Menu key and Shift+F10 (the menu shows Alt+Up, Alt+Down, Delete and F2 beside its items, and they don't act outside the list), right-click and the Menu key on an artist row (its Delete from library... names that artist), and the Menu key in an artist page's tracks and elsewhere on the page. Not checked: the long press (no touchscreen), the Menu key with no track selected (the playlist's header menu) or with the selected track scrolled out of sight, Remove from this computer / Sync to this computer on an artist row (needs a group), and a real desktop session
 
 ### Windows
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
