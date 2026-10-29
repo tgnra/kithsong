@@ -101,18 +101,31 @@ private fun PlayPause(playback: Playback) {
  * The full player, over a background coloured from the art: large art at the top, then title and byline, seekbar, and play/pause
  * between previous and next, with Add to playlist ([onAddToPlaylist], disabled if null) and
  * the shuffle toggle at the ends. [onCollapse] slides it away; it is also dismissed by swiping
- * down (see [DismissibleScreen]).
+ * down (see [DismissibleScreen]). [onMenu], if given, opens the track's menu from a button
+ * across from the collapse button.
  */
 @Composable
-fun FullPlayer(playback: Playback, track: Track, onCollapse: () -> Unit, onAddToPlaylist: (() -> Unit)? = null) {
+fun FullPlayer(
+    playback: Playback,
+    track: Track,
+    onCollapse: () -> Unit,
+    onAddToPlaylist: (() -> Unit)? = null,
+    onMenu: (() -> Unit)? = null,
+) {
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         ArtBackdrop(rememberArtColors(track.art), Modifier.fillMaxSize())
         BoxWithConstraints(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
             val wide = maxWidth > maxHeight
             Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
-                // Nudged so the icon, not its touch target, lines up with the art.
-                IconButton(onClick = onCollapse, modifier = Modifier.padding(top = 4.dp).offset(x = (-12).dp)) {
-                    Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_player))
+                // Nudged so the icons, not their touch targets, line up with the art.
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    IconButton(onClick = onCollapse, modifier = Modifier.offset(x = (-12).dp)) {
+                        Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_player))
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (onMenu != null) IconButton(onClick = onMenu, modifier = Modifier.offset(x = 12.dp)) {
+                        Icon(Icons.MoreVert, contentDescription = stringResource(R.string.track_menu))
+                    }
                 }
                 if (wide) {
                     Row(Modifier.fillMaxSize().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {

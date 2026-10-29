@@ -206,6 +206,10 @@ fun DetailScreen(
                         onBack,
                         editing = if (editable || editableGroup) isEditing else null,
                         onEdit = { editing = it },
+                        // An album's menu, as its long press elsewhere opens, for Delete from library and the rest.
+                        onMenu = if (ref.kind == CollectionRef.Kind.Album && list != null) ({
+                            actions.albumMenu(Album(ref.uid, list.title, list.artist, list.year, list.art))
+                        }) else null,
                     )
                 }
                 if (list != null && !isEditing && (tracks.isNotEmpty() || list.canReshuffle)) item(key = "actions", contentType = "actions") {
@@ -327,6 +331,7 @@ private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onReshuffle: (() -> Unit
  * (landscape, mostly) the back button goes beside them too, and the art is smaller, to leave
  * room for the tracks. A playlist that can be edited has Edit, or Done while [editing], at
  * the other end from the back button, as has a manual album group; [editing] is null for anything else.
+ * An album has a menu button there instead ([onMenu]).
  */
 @Composable
 private fun DetailHeader(
@@ -335,6 +340,7 @@ private fun DetailHeader(
     onBack: () -> Unit,
     editing: Boolean?,
     onEdit: (Boolean) -> Unit,
+    onMenu: (() -> Unit)? = null,
 ) {
     val short = isShortWindow()
     val back = @Composable {
@@ -346,6 +352,10 @@ private fun DetailHeader(
         if (editing != null) {
             TextButton(onClick = { onEdit(!editing) }, modifier = Modifier.padding(end = 8.dp, top = 4.dp)) {
                 Text(stringResource(if (editing) R.string.done else R.string.edit_playlist))
+            }
+        } else if (onMenu != null) {
+            IconButton(onClick = onMenu, modifier = Modifier.padding(end = 4.dp, top = 4.dp)) {
+                Icon(Icons.MoreVert, contentDescription = stringResource(R.string.album_menu))
             }
         }
     }

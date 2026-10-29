@@ -79,7 +79,6 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Delete
 - Core - a peer that trashed an original after a remote delete keeps no restore record; restoring it there gets it swept as an unknown file
-- Android - delete from an album's page or the player too (only the album, artist and track long-press menus have it)
 - Android - a track that's deleted while it plays keeps playing to its end, and its later queue entries are skipped; the desktops stop playback first (Windows can't trash an open file)
 
 ### Remove from this device

@@ -318,6 +318,10 @@ fun App(
                             onAddToPlaylist = if (actions.editor == null) null else {
                                 { actions.addToPlaylist(Addition.Tracks(listOf(track.uid))) }
                             },
+                            // The track's menu, for Delete from library; it isn't from a playlist here.
+                            onMenu = if (actions.editor == null && actions.deleter == null) null else {
+                                { actions.trackMenu(track, removable = false) }
+                            },
                         )
                     }
                 }

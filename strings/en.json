@@ -849,6 +849,8 @@
 
     "open_player": "Open the player",
     "close_player": "Close the player",
+    "album_menu": { "text": "Album menu", "note": "The menu button on an album's page; for accessibility." },
+    "track_menu": { "text": "Track menu", "note": "The menu button on the player, for the track playing; for accessibility." },
     "seek_state": { "text": "{0} of {1}", "note": "The seekbar's state for accessibility: elapsed time of total time." },
 
     "edit_playlist": { "text": "Edit", "note": "Button on a playlist's or album group's page that shows the controls to reorder and remove its tracks or albums." },
