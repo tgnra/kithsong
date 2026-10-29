@@ -10,7 +10,7 @@ Big pieces that haven't been started, or that only one platform has.
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar and search page have UI Automation providers, checked with a UI Automation tree walk but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **AAC/M4A playback** - no decoder chosen
-- **Merging libraries** - two devices that both have music can't pair (library_mismatch); see Sync → Merging libraries below
+- **Merging libraries** - core, Windows and Linux merge two libraries with music when pairing; Android still says library_mismatch until it sets on_pair_merge; see Sync → Merging libraries below
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists, artists or settings
 - **Releases** - no Windows installer or signing, no Flathub listing (Android: R8 on, licences in Settings; the watch has no licences screen yet)
 - **Translations** - strings/en.json is the only language
@@ -33,6 +33,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Volume | keyboard only | keyboard only | core only, no UI | no |
 | Import | yes | yes | removed | no |
 | Sync | yes | yes (barely tested) | yes | mock-up |
+| Merging libraries (pairing) | yes | yes (not built or run yet) | no (library mismatch) | no |
 | Archive devices | yes | yes | yes | no |
 | Move library | yes | yes | n/a (app storage) | n/a |
 | Scrobbling | yes | yes (UI untested on screen) | yes | no |
@@ -166,13 +167,19 @@ Left in the core:
 - Recents keep their old opened_ms under a new hlc, so "newest hlc is newest open" no longer holds for those rows
 
 #### For the UI agents (Windows, Linux, Android)
-- Set mc_sync_events.on_pair_merge, on_merge_progress and on_merge_done (until on_pair_merge is set, merging stays off and pairing two libraries with music still says library mismatch)
-- on_pair_merge: show the proposal in the pairing dialog on both devices: which library is kept (kept_here, tracks_here/there, bytes_here/there), and on the merged device (needs_confirm) a Merge / Don't merge choice calling mc_sync_pair_merge_confirm(sync, 1 or 0). On the initiator this comes before the code entry; on the device showing the code, next to the code (declining there doesn't close the dialog by itself)
-- Warn there about what goes: scrobble_sign_out with scrobble_user ("Your Last.fm account <user> will be signed out; <kept device>'s is used"), forget_count/forget_names ("These devices will no longer be paired with this one: ..."), and that this device's library is set aside and replaced by the merged one
-- on_pair_result: MC_PAIR_MERGE_DECLINED (new reason) needs a message; with merged, say whose library was kept and, if scrobble_signed_out isn't "", which Last.fm account was signed out
-- on_merge_progress (phase, done, total) and on_merge_done (counts, backup_path, scrobbles_dropped): show progress, then a summary including where the old library was set aside; mc_sync_merge_pending() says a merge is still to run after a restart
-- After merging, the merged device's profile is unconfirmed like any new member's: its files only move after Sync is pressed (on both devices, for the archive to fetch them)
-- Strings for all of this belong in strings/ (none added yet)
+Windows and Linux are done (pair_dialog.c and sync_bridge.c on each, the pending note in device_view.c); Android is still to do. The strings are in strings/en.json's shared section (pair_merge_*, paired_merged_*, merge_*), except the duplicates-moved line, which is per platform (windows.merge_tracks_recycled, linux.merge_tracks_trashed; Android has no trash, so it needs its own wording).
+- [x] Windows, Linux - set mc_sync_events.on_pair_merge, on_merge_progress and on_merge_done (until on_pair_merge is set, merging stays off and pairing two libraries with music still says library mismatch)
+- [x] Windows, Linux - on_pair_merge: the proposal in the pairing dialog on both devices. Merged device: which library is kept (track counts here and there), that this one is saved as a backup and replaced, the Last.fm account signed out (scrobble_user), the paired devices forgotten (forget_names), Merge and Cancel. The enter-code dialog shows it in place of the code until answered (title "Merge libraries?", Pair reads Merge), then goes back to the code with "The libraries will be merged once the devices are paired." The show-code dialog shows it under the code, with Merge beside Cancel; Cancel declines (mc_sync_pair_merge_confirm(0)) and closes the dialog. Kept device: a note under the code or the code entry ("... once <device> agrees")
+- [x] Windows, Linux - on_pair_result: MC_PAIR_MERGE_DECLINED says "The libraries weren't merged, so the devices weren't paired." (not shown on the device whose user declined); with merged, the Paired message says whose library was kept and which Last.fm account was signed out
+- [x] Windows, Linux - on_merge_progress and on_merge_done: a window of its own that doesn't disable the main one (albums done of total, then playlists and play counts, one bar), turning into a summary: tracks added, improved, already in the library, duplicates moved to the Recycle Bin/Trash, left out, failed; playlists carried over and renamed; Last.fm signed out and plays dropped; the backup's path; an error stated plainly. Closing it while it runs keeps it closed until the summary
+- [x] Windows, Linux - mc_sync_merge_pending(): this device's own page says "Music from your old library is merged into this one after the next sync with the group." until it has run
+- [x] Windows, Linux - library_mismatch now only comes from a device without merging (an older version, or Android until it's done): the message adds "Kithsong on <device> may be too old to merge libraries. Update it, then pair again to merge them.", and Create a new library stays
+- Android - all of the above. The strings are there to reuse; the bridge needs the three callbacks, the flat event fields as the desktops' sync_bridge.h has them (forget_names joined into one string, mc_merge_result's counts copied), and the dialogs
+- Windows, Linux - after merging, the merged device's profile is unconfirmed like any new member's: its files only move after Sync is pressed (on both devices, for the archive to fetch them). The Paired message already says to choose what syncs and press Sync now; nothing says it again after the merge's summary
+- Windows, Linux - the merge's progress window was only seen for an instant: a three-track test merge finishes at once, so the bar and the phase lines were never on screen long enough to check. The pending note after a restart wasn't seen either (the merge always ran before the app could be stopped), nor was the library_mismatch hint (it needs a peer running an older version)
+- Linux - written to match the GTK code but not built or run here (no GTK on the Windows machine this was done on): build it and walk through the scenarios Windows was tested with
+- Windows - debug builds take KITHSONG_DEBUG_PAIR=<host>:<port> to ask that device to pair shortly after startup, so test scripts can pair two scratch instances over localhost without clicks
+- All - "Merge" is the only choice on the merged device: there's no way to merge the other way round (keep the smaller library). Settled by the user, but worth checking it doesn't surprise anyone
 
 ### Pairing
 - Android - a pairing refused because the phone has music of its own (library mismatch) offers no way out: its library lives in app storage, so there's no folder to pick for a new one, as the desktops' Create a new library does. Merging (above) is the way out once the app sets on_pair_merge; a peer running an older version still refuses
