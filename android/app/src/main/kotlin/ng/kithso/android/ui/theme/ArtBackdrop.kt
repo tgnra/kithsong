@@ -131,10 +131,11 @@ fun rememberOnScreenArtColors(state: LazyListState, artAt: (Int) -> List<ArtRef>
  *
  * Colours of near hues count as one, their shares added, and so do all the neutral ones. Each
  * gets corners by its share of the whole, but at most [MaxCorners], so one colour can't fill
- * the background while the art has others, and one too small a part of it gets none. Corners
- * left over go to the biggest hue again, quieter each time. A colour's corners are across
- * from each other where they can be, and the colours take theirs in the order they first
- * come in [colors], so a list's top colours go to the top.
+ * the background while the art has others, and one too small a part of it gets none; grey
+ * gets one at most, when it's most of the art. Corners left over go to the biggest hue
+ * again, quieter each time. A colour's corners are across from each other where they can
+ * be, and the colours take theirs in the order they first come in [colors], so a list's top
+ * colours go to the top.
  */
 private fun glowColors(colors: List<ArtColor>, dark: Boolean): List<Color> {
     if (colors.isEmpty()) return emptyList()
@@ -154,12 +155,19 @@ private fun glowColors(colors: List<ArtColor>, dark: Boolean): List<Color> {
     if (groups.all { it.share == 0f }) groups.forEach { it.share = 1f }
     val whole = groups.sumOf { it.share.toDouble() }.toFloat()
     // Each corner to the colour furthest short of its share of them, if one is; otherwise to
-    // the biggest, a hue rather than grey if there's one.
+    // the biggest, a hue rather than grey if there's one. Grey only gets a corner, and only
+    // one, when there's more of it than of any hue, since it adds no colour.
+    val biggest = groups.maxBy { it.share }
     val owed = { group: Group -> group.share / whole * Corners.size - group.corners }
+    val mayHave = { group: Group ->
+        when {
+            group.neutral -> group === biggest && group.corners == 0
+            group.corners == 0 -> group.share / whole >= MinShare
+            else -> group.corners < MaxCorners && owed(group) > 0f
+        }
+    }
     repeat(Corners.size) {
-        val group = groups
-            .filter { it.corners < MaxCorners && if (it.corners == 0) it.share / whole >= MinShare else owed(it) > 0f }
-            .maxByOrNull(owed)
+        val group = groups.filter(mayHave).maxByOrNull(owed)
             ?: groups.maxWith(compareBy<Group> { !it.neutral }.thenBy { it.share })
         group.corners++
     }
@@ -196,7 +204,8 @@ private val Corners = listOf(Offset(0.1f, 0.05f), Offset(0.9f, 0.2f), Offset(0.1
 // towards the surface.
 private const val DarkTone = 30.0
 private const val LightTone = 86.0
-private const val MaxChroma = 48.0
+// Art's loudest colours still shout at those tones above this.
+private const val MaxChroma = 40.0
 // How much of its chroma a colour keeps each time it's used again.
 private const val RepeatChroma = 0.6
 // Hues closer than this, in degrees, count as one colour.
