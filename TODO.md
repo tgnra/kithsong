@@ -206,7 +206,6 @@ The album grid, track list, sidebar and search page have UI Automation providers
 
 ## Android
 
-- Upgrade Kotlin to 2.4, then Coil and MaterialKolor
 - Import (see above)
 
 ## Wear OS
