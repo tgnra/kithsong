@@ -839,6 +839,7 @@
     "albums": { "one": "{0:d} album", "other": "{0:d} albums" },
 
     "jump_to_section": "Jump to a section",
+    "jump_to_named_section": { "text": "Jump to {0}", "note": "An accessibility action on the main screen's section headings. {0} is a section, such as Albums." },
 
     "album_byline_year": { "text": "{0} – {1:d}", "note": "Track list screen: an album's artist and year." },
 

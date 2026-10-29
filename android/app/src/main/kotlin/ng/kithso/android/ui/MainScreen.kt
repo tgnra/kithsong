@@ -1,12 +1,19 @@
 package ng.kithso.android.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -16,11 +23,15 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
@@ -36,30 +47,52 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import ng.kithso.android.data.Album
@@ -74,7 +107,10 @@ import ng.kithso.android.ui.art.AlbumArt
 import ng.kithso.android.ui.art.PrefetchArt
 import ng.kithso.android.ui.theme.ArtBackdrop
 import ng.kithso.android.ui.theme.rememberOnScreenArtColors
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
 enum class Section(@StringRes val title: Int) {
     Recents(R.string.section_recents),
@@ -234,6 +270,8 @@ fun MainScreen(
         val jumpTo: (Int) -> Unit = remember(listState, statusBarPx) {
             { index -> scope.launch { listState.animateScrollToItem(index, -statusBarPx) } }
         }
+        // Holding a heading opens this over the list.
+        val picker = remember(density) { SectionPicker(with(density) { PickerItemHeight.toPx() }) }
 
         PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
         ArtBackdrop(
@@ -254,7 +292,7 @@ fun MainScreen(
                     MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning)
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
                     MainItem.Empty -> EmptyLibrary(importPickers, importRunning)
-                    is MainItem.Heading -> SectionHeading(item.section, sections, { current }, jumpTo)
+                    is MainItem.Heading -> SectionHeading(item.section, sections, { current }, picker, jumpTo)
                     is MainItem.RecentItem -> LibraryRow(
                         item.recent.title, item.recent.subtitle(), item.recent.art, RoundedCornerShape(8.dp),
                     ) { onOpen(item.recent.ref) }
@@ -283,6 +321,13 @@ fun MainScreen(
                 }
             }
         }
+        SectionPickerOverlay(
+            picker,
+            sections,
+            topInset = with(density) { statusBarPx.toDp() } + 8.dp,
+            bottomInset = bottomPadding + 8.dp,
+            modifier = Modifier.matchParentSize(),
+        )
     }
 }
 
@@ -315,30 +360,88 @@ private fun Header(
 }
 
 /**
- * A section's heading. Tapping it opens a list of every section, and picking one scrolls
- * there; [current] is the section at the top of the screen, marked in the list.
+ * A section's heading, a tap target across the whole row. Tapping it opens a list of every
+ * section, and picking one scrolls there; [current] is the section at the top of the screen,
+ * marked in the list. Holding it opens [picker] under the finger instead: dragging up and down
+ * moves through the sections, and letting go jumps to the one under the finger, all with one
+ * thumb. TalkBack gets the tap, and a jump to each other section as a custom action.
  */
 @Composable
 private fun SectionHeading(
     section: Section,
     sections: List<SectionStart>,
     current: () -> Section?,
+    picker: SectionPicker,
     onJump: (Int) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
-    Box(Modifier.padding(start = Gutter - 8.dp, top = 20.dp, bottom = 4.dp)) {
+    val interactions = remember { MutableInteractionSource() }
+    val haptics = LocalHapticFeedback.current
+    val placed = remember { Placed() }
+    val jumpLabel = stringResource(R.string.jump_to_section)
+    val jumpActions = sections.filter { it.section != section }.map { start ->
+        val label = stringResource(R.string.jump_to_named_section, stringResource(start.section.title))
+        CustomAccessibilityAction(label) { onJump(start.index); true }
+    }
+    Box(Modifier.padding(top = 12.dp)) {
         Row(
             Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClickLabel = stringResource(R.string.jump_to_section)) { open = true }
-                .padding(horizontal = 8.dp, vertical = 6.dp)
-                .semantics { heading() },
+                .fillMaxWidth()
+                .heightIn(min = 52.dp)
+                .onPlaced { placed.coordinates = it }
+                .indication(interactions, ripple())
+                .pointerInput(section, sections, picker) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        val press = PressInteraction.Press(down.position)
+                        interactions.tryEmit(press)
+                        // True for a tap, false for a scroll (or anything else taking the pointer), null for a hold.
+                        val tapped = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) { awaitTap(down) }
+                        val coordinates = placed.coordinates
+                        val start = sections.indexOfFirst { it.section == section }
+                        if (tapped != null || coordinates == null || start < 0) {
+                            if (tapped == true) {
+                                interactions.tryEmit(PressInteraction.Release(press))
+                                open = true
+                            } else {
+                                interactions.tryEmit(PressInteraction.Cancel(press))
+                            }
+                            return@awaitEachGesture
+                        }
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        picker.open(coordinates.localToWindow(down.position), start, sections.size)
+                        // Follow the finger until it lifts (jump) or the gesture is taken away (don't).
+                        var lifted = false
+                        try {
+                            while (true) {
+                                val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                                change.consume()
+                                if (!change.pressed) {
+                                    lifted = true
+                                    break
+                                }
+                                picker.fingerY = coordinates.localToWindow(change.position).y
+                            }
+                        } finally {
+                            val chosen = picker.selected
+                            picker.close()
+                            interactions.tryEmit(PressInteraction.Release(press))
+                            if (lifted) onJump(sections[chosen].index)
+                        }
+                    }
+                }
+                .semantics(mergeDescendants = true) {
+                    heading()
+                    onClick(jumpLabel) { open = true; true }
+                    customActions = jumpActions
+                }
+                .padding(horizontal = Gutter, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(stringResource(section.title), style = MaterialTheme.typography.titleLarge)
             Icon(Icons.ExpandMore, contentDescription = null, modifier = Modifier.padding(start = 4.dp))
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, offset = DpOffset(Gutter - 8.dp, 0.dp)) {
             val here = current()
             for (start in sections) {
                 DropdownMenuItem(
@@ -354,6 +457,130 @@ private fun SectionHeading(
                         onJump(start.index)
                     },
                 )
+            }
+        }
+    }
+}
+
+/** Waits for [down] to lift (true, a tap) or to move past the touch slop or be taken by a scroll (false). */
+private suspend fun AwaitPointerEventScope.awaitTap(down: PointerInputChange): Boolean {
+    while (true) {
+        val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return false
+        if (change.changedToUp()) {
+            change.consume()
+            return true
+        }
+        if (change.isConsumed || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) return false
+    }
+}
+
+/** Where a heading was last placed, kept out of state so scrolling doesn't recompose it. */
+private class Placed {
+    var coordinates: LayoutCoordinates? = null
+}
+
+private val PickerItemHeight = 56.dp
+
+/**
+ * The list of sections a held heading opens, shared by the headings (which open it and move
+ * the finger) and [SectionPickerOverlay] (which draws it), in window pixels. It opens with the
+ * held section under the finger, kept inside [area]. The section level with the finger is
+ * [selected], so sideways drift doesn't matter, and past either end is the end one.
+ */
+@Stable
+private class SectionPicker(val itemHeight: Float) {
+    var origin by mutableStateOf<Offset?>(null)
+        private set
+    var fingerY by mutableFloatStateOf(0f)
+    var area = Rect.Zero
+    private var start = 0
+    private var count = 0
+
+    val top: Float
+        get() = ((origin?.y ?: 0f) - (start + 0.5f) * itemHeight)
+            .coerceAtMost(area.bottom - count * itemHeight)
+            .coerceAtLeast(area.top)
+
+    val selected: Int
+        get() = floor((fingerY - top) / itemHeight).toInt().coerceIn(0, (count - 1).coerceAtLeast(0))
+
+    fun open(at: Offset, start: Int, count: Int) {
+        this.start = start
+        this.count = count
+        fingerY = at.y
+        origin = at
+    }
+
+    fun close() {
+        origin = null
+    }
+}
+
+/**
+ * [picker]'s list while it's open, over a dimmed screen: across, centred on the finger; down,
+ * clear of [topInset] and [bottomInset]. A haptic tick marks each change of section.
+ */
+@Composable
+private fun SectionPickerOverlay(
+    picker: SectionPicker,
+    sections: List<SectionStart>,
+    topInset: Dp,
+    bottomInset: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val placed = remember { Placed() }
+    Box(
+        modifier.onPlaced {
+            placed.coordinates = it
+            val bounds = it.boundsInWindow()
+            picker.area = with(density) {
+                Rect(bounds.left, bounds.top + topInset.toPx(), bounds.right, bounds.bottom - bottomInset.toPx())
+            }
+        },
+    ) {
+        val origin = picker.origin ?: return@Box
+        val haptics = LocalHapticFeedback.current
+        val selected by remember { derivedStateOf { picker.selected } }
+        LaunchedEffect(picker) {
+            snapshotFlow { picker.selected }.drop(1).collect { haptics.performHapticFeedback(HapticFeedbackType.SegmentTick) }
+        }
+        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.32f)))
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            tonalElevation = 6.dp,
+            shadowElevation = 8.dp,
+            modifier = Modifier.layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+                val corner = placed.coordinates?.localToWindow(Offset.Zero) ?: Offset.Zero
+                val margin = Gutter.toPx()
+                val x = (origin.x - corner.x - placeable.width / 2)
+                    .coerceAtMost(constraints.maxWidth - placeable.width - margin)
+                    .coerceAtLeast(margin)
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeable.place(x.roundToInt(), (picker.top - corner.y).roundToInt())
+                }
+            },
+        ) {
+            Column(Modifier.width(IntrinsicSize.Max).widthIn(min = 200.dp)) {
+                sections.forEachIndexed { i, start ->
+                    val here = i == selected
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(PickerItemHeight)
+                            .background(if (here) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+                            .padding(horizontal = 24.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Text(
+                            stringResource(start.section.title),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (here) MaterialTheme.colorScheme.onSecondaryContainer else Color.Unspecified,
+                            fontWeight = if (here) FontWeight.Bold else null,
+                        )
+                    }
+                }
             }
         }
     }
