@@ -10,6 +10,7 @@ dependency is added.
 | miniaudio | 0.11.21 | Public domain / MIT-0 | fetched, static |
 | dr_flac, dr_mp3, dr_wav | 0.13.x / 0.7.x (commit `ea33eed`) | Public domain / MIT-0 | fetched, static |
 | stb_image, stb_image_write | 2.30 / 1.16 (commit `f58f558`) | Public domain / MIT | fetched, static |
+| miniz | 3.0.2 | MIT | fetched, static |
 | mjansson/mdns | 1.4.3 | Public domain (Unlicense) | fetched, header-only |
 | Mozilla CA bundle | curl.se 2026-10-20 | MPL-2.0 | fetched, embedded |
 | TagLib | 2.0.2 | LGPL-2.1 **or** MPL-1.1 | fetched, static |

@@ -138,12 +138,12 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Core - extended search (docs/tagging-rules.md): not for singles, so a one-file album whose album tag equals its title (a DJ mix, e.g. "BREAK IT OLDSCHOOL [SRPC-L007]") gets only recording candidates; it would need release candidates for a single item
 - Core - grouping: an album tag with the disc in it ("危ないベースライン Disc1", "… Disc2") makes one item per disc folder; the folder name's title (search_keys.c) could join them
 - Windows - paths over MAX_PATH: the manifest isn't longPathAware, so TagLib can't open (and the copy can't read) files whose full path is 260 characters or more; they're left out of the import without a word
-- Android - bring import back:
-  - the UI (header button, folder sheet, progress card), the READ_MEDIA_AUDIO/READ_EXTERNAL_STORAGE permissions and their request flow, and the foreground ImportService (see the Phase 5 commit)
-  - the offline banner the desktops have (MC_IMPORT_EV_OFFLINE, mc_import_skip_tagging)
-  - a screen to review items one at a time
-  - files MediaStore hasn't indexed didn't appear in the folder sheet
-  - the "name: error" format for failed items was hard-coded
+- Android - import (SAF, no storage permission) is back; still missing:
+  - the review shows the candidates, Keep existing tags, Skip, Search again and Search more widely, but not the track list of a match, other items' files or Use as Track (mc_import_assign), nor the duplicate outcomes (replaced / added missing / already in library)
+  - an import cut short by the process dying isn't resumed: the next start deletes the copies and releases the folder's grant
+  - sharing files while an import runs leaves them out (only logged)
+  - a folder's .zip files are imported as batches of their own, but zips nested inside zips aren't extracted
+- Core - zips: only paths given to mc_import_start are extracted (a zip inside a dropped folder isn't), and the Info-ZIP Unicode Path extra field (0x7075) isn't read, so a CP437-flagged entry with a UTF-8 name in that field comes out as CP437
 
 ## Sync
 

@@ -45,7 +45,14 @@ FetchContent_Declare(cacert
   URL_HASH SHA256=796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe
   DOWNLOAD_NO_EXTRACT ON
   SOURCE_SUBDIR _none_)
-FetchContent_MakeAvailable(sqlite yyjson miniaudio dr_libs stb mdns cacert)
+# miniz: zip reading for importing .zip files (core/src/tagger/unzip.c). The release
+# archive holds the amalgamated miniz.c/miniz.h.
+FetchContent_Declare(miniz
+  URL https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip
+  URL_HASH SHA256=ada38db0b703a56d3dd6d57bf84a9c5d664921d870d8fea4db153979fb5332c5
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_MakeAvailable(sqlite yyjson miniaudio dr_libs stb mdns cacert miniz)
 
 add_library(mc_sqlite3 STATIC "${sqlite_SOURCE_DIR}/sqlite3.c")
 target_include_directories(mc_sqlite3 SYSTEM PUBLIC "${sqlite_SOURCE_DIR}")
@@ -99,6 +106,18 @@ add_library(mc_stb STATIC stb/stb.c)
 target_include_directories(mc_stb SYSTEM PUBLIC "${stb_SOURCE_DIR}")
 if(UNIX)
   target_link_libraries(mc_stb PUBLIC m)
+endif()
+
+# Zip reading for the importer. Files are opened by core (mc_fopen, so UTF-8 paths work on
+# Windows) and handed over as FILE *; no zip writing, and none of zlib's names, so nothing
+# can clash with another zlib.
+add_library(mc_miniz STATIC "${miniz_SOURCE_DIR}/miniz.c")
+target_include_directories(mc_miniz SYSTEM PUBLIC "${miniz_SOURCE_DIR}")
+target_compile_definitions(mc_miniz PUBLIC
+  MINIZ_NO_ZLIB_COMPATIBLE_NAMES MINIZ_NO_ARCHIVE_WRITING_APIS MINIZ_NO_TIME)
+if(NOT WIN32)
+  # 64-bit file offsets, for zips over 2 GB on 32-bit systems.
+  target_compile_definitions(mc_miniz PRIVATE _LARGEFILE64_SOURCE=1 _FILE_OFFSET_BITS=64)
 endif()
 
 # mDNS/DNS-SD for core/src/discovery. Header-only: every function is static inline. On

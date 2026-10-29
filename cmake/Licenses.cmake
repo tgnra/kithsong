@@ -12,6 +12,7 @@ set(_kithsong_license_files
     "miniaudio:LICENSE:miniaudio:Public domain / MIT-0"
     "dr_libs:LICENSE:dr_libs:Public domain / MIT-0"
     "stb:LICENSE:stb:Public domain / MIT"
+    "miniz:LICENSE:miniz:MIT"
     "mdns:LICENSE:mdns:Public domain (Unlicense)"
     "taglib:COPYING.MPL:TagLib:MPL-1.1"
     "utfcpp:LICENSE:utfcpp:BSL-1.0"

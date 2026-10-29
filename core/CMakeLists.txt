@@ -80,6 +80,7 @@ add_library(musiccore STATIC
   src/tagger/import_db.c
   src/tagger/dupes.c
   src/tagger/organize.c
+  src/tagger/unzip.c
   src/tagger/tagger.c
   src/net/http.c
   src/scrobble/lastfm.c
@@ -112,7 +113,7 @@ target_include_directories(musiccore
   PUBLIC include "${_strings_out}"
   PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(musiccore PRIVATE
-  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs mc_stb mc_mdns mc_opusenc mc_opusfile tag
+  mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs mc_stb mc_miniz mc_mdns mc_opusenc mc_opusfile tag
   CURL::libcurl mbedcrypto)
 if(WIN32)
   target_compile_definitions(musiccore PRIVATE _WIN32_WINNT=0x0A00)

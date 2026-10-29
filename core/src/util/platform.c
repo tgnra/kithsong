@@ -396,6 +396,14 @@ mc_status mc_free_space(const char *path, int64_t *out) {
   return MC_OK;
 }
 
+char *mc_temp_dir(void) {
+  wchar_t w[MAX_PATH + 2];
+  DWORD n = GetTempPathW(MAX_PATH + 1, w);
+  if (n == 0 || n > MAX_PATH + 1) return NULL;
+  while (n > 3 && (w[n - 1] == L'\\' || w[n - 1] == L'/')) w[--n] = L'\0';
+  return narrow(w);
+}
+
 mc_status mc_hostname(char *out, size_t cap) {
   if (!out || !cap) return MC_ERR_INVALID_ARG;
   out[0] = '\0';
@@ -818,6 +826,16 @@ mc_status mc_free_space(const char *path, int64_t *out) {
   return MC_OK;
 }
 
+char *mc_temp_dir(void) {
+  const char *dir = getenv("TMPDIR");
+  if (!dir || !*dir) dir = "/tmp";
+  char *out = mc_strdup(dir);
+  if (!out) return NULL;
+  size_t len = strlen(out);
+  while (len > 1 && out[len - 1] == '/') out[--len] = '\0';
+  return out;
+}
+
 mc_status mc_hostname(char *out, size_t cap) {
   if (!out || !cap) return MC_ERR_INVALID_ARG;
   char name[256];
@@ -832,6 +850,55 @@ mc_status mc_hostname(char *out, size_t cap) {
 }
 
 #endif
+
+typedef struct tree_entries {
+  char **names;
+  char *is_dir;
+  int count, cap;
+} tree_entries;
+
+static void collect_entry(void *user, const char *name, int is_dir) {
+  tree_entries *t = user;
+  if (t->count == t->cap) {
+    int cap = t->cap ? t->cap * 2 : 32;
+    char **names = realloc(t->names, (size_t)cap * sizeof *names);
+    if (names) t->names = names;
+    char *dirs = names ? realloc(t->is_dir, (size_t)cap) : NULL;
+    if (dirs) t->is_dir = dirs;
+    if (!names || !dirs) return;
+    t->cap = cap;
+  }
+  if (!(t->names[t->count] = mc_strdup(name))) return;
+  t->is_dir[t->count++] = (char)(is_dir != 0);
+}
+
+mc_status mc_remove_tree(const char *path) {
+  if (!path || !*path) return MC_ERR_INVALID_ARG;
+  if (!mc_file_exists(path)) return MC_OK;
+  /* A link (or junction) is removed itself; what it leads to is left alone. */
+  if (mc_is_link(path)) return mc_remove(path) == MC_OK || mc_rmdir(path) == MC_OK ? MC_OK : MC_ERR_IO;
+  tree_entries t = {0};
+  if (mc_list_dir(path, collect_entry, &t) != MC_OK) return mc_remove(path);
+  mc_status st = MC_OK;
+  size_t len = strlen(path);
+  for (int i = 0; i < t.count; i++) {
+    size_t n = len + strlen(t.names[i]) + 2;
+    char *full = malloc(n);
+    if (full) {
+      snprintf(full, n, "%s%c%s", path, MC_PATH_SEP, t.names[i]);
+      mc_status r = t.is_dir[i] ? mc_remove_tree(full) : mc_remove(full);
+      if (r != MC_OK) st = r;
+      free(full);
+    } else {
+      st = MC_ERR_NOMEM;
+    }
+    free(t.names[i]);
+  }
+  free(t.names);
+  free(t.is_dir);
+  if (mc_rmdir(path) != MC_OK && st == MC_OK) st = MC_ERR_IO;
+  return st;
+}
 
 char *mc_strdup(const char *s) {
   if (!s) return NULL;

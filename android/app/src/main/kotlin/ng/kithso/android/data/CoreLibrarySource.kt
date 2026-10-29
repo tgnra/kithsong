@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
 import ng.kithso.core.AlbumInfo
+import ng.kithso.core.CoreImport
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeleteKind
@@ -188,6 +189,13 @@ class CoreLibrarySource(
     private fun saveArt(art: Map<String, File>) {
         prefs.edit().putString(KEY_PLAYLIST_ART, art.entries.joinToString("\n") { (uid, file) -> "$uid:${file.path}" }).apply()
     }
+
+    /** Starts importing [paths] into the library; see [CoreImport]. Close it when done. */
+    suspend fun startImport(
+        paths: List<String>,
+        options: CoreImport.Options,
+        listener: (CoreImport.Event, Int) -> Unit,
+    ): CoreImport? = withContext(core) { open()?.let { CoreImport(it, paths, options, listener) } }
 
     /** Opens this phone's sync state in [configDir] for the library; see [CoreSync]. */
     suspend fun openSync(configDir: String, deviceName: String, listener: (CoreSync.Event) -> Unit): CoreSync? =

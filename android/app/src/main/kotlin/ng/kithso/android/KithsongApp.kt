@@ -11,6 +11,7 @@ import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.android.data.FakeLibrary
 import ng.kithso.android.data.LibrarySource
+import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.FakePlayback
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.playback.PlaybackService
@@ -26,10 +27,10 @@ import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.runBlocking
 
 /**
- * Holds the library, the player and sync for the life of the process, so they outlive the
- * activity. All come from the core; the player plays in [PlaybackService], and [playback] is
- * the UI's connection to it. Sync runs while the app is on screen and now and then in the
- * background ([Syncer]).
+ * Holds the library, the player, the importer and sync for the life of the process, so they
+ * outlive the activity. All come from the core; the player plays in [PlaybackService], and
+ * [playback] is the UI's connection to it. Imports run in the background too ([Importer]), and
+ * sync runs while the app is on screen and now and then in the background ([Syncer]).
  */
 class KithsongApp : Application(), SingletonImageLoader.Factory {
     /**
@@ -49,6 +50,10 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
 
     /** Passes plays on to Last.fm for the group's account (see [Scrobbling]). */
     lateinit var scrobbling: Scrobbling
+        private set
+
+    /** Imports into the core's library, even while the made-up one is shown. */
+    lateinit var importer: Importer
         private set
 
     /** Syncs the core's library with this phone's group, even while the made-up one is shown. */
@@ -86,6 +91,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
             settings.deviceName = renamed.takeIf { it != systemDeviceName() }
         }
         core.onChanged = syncer::notifyChanged
+        importer = Importer(this, core, MainScope())
         scrobbling = Scrobbling(libraryDir, File(noBackupFilesDir, "sync"), settings, MainScope())
     }
 

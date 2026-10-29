@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -95,6 +96,11 @@ private sealed interface MainItem {
         override val contentType get() = "header"
     }
 
+    data object Banner : MainItem {
+        override val key get() = "banner"
+        override val contentType get() = "banner"
+    }
+
     data object Empty : MainItem {
         override val key get() = "empty"
         override val contentType get() = "empty"
@@ -137,8 +143,9 @@ private sealed interface MainItem {
 }
 
 // Null while the library is being read: just the header, rather than a flash of the empty state.
-private fun mainItems(library: Library?, columns: Int): List<MainItem> = buildList {
+private fun mainItems(library: Library?, columns: Int, banner: Boolean): List<MainItem> = buildList {
     add(MainItem.Header)
+    if (banner) add(MainItem.Banner)
     if (library == null) return@buildList
     if (library.isEmpty) {
         add(MainItem.Empty)
@@ -178,7 +185,9 @@ private val ListArtSize = 56.dp
 /**
  * The main screen: one lazy list of a header and the library's sections, over a background
  * coloured from the art on screen. [bottomPadding] keeps the last items clear of the mini
- * player and navigation bar.
+ * player and navigation bar. [banner], if any, goes under the header: how an import is going.
+ * The header's import button and the empty library's open [importPickers], unless an import
+ * is [importRunning].
  */
 @Composable
 fun MainScreen(
@@ -188,6 +197,9 @@ fun MainScreen(
     onSearch: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
+    importPickers: ImportPickers,
+    importRunning: Boolean,
+    banner: (@Composable (Modifier) -> Unit)?,
     modifier: Modifier = Modifier,
     // Long-pressing a playlist, an album group, an album or an artist opens its menu.
     onPlaylistMenu: (Playlist) -> Unit = {},
@@ -205,7 +217,8 @@ fun MainScreen(
         val cellPx = with(density) { ((width - Gutter * 2 - CellSpacing * (columns - 1)) / columns).roundToPx() }
         val statusBarPx = WindowInsets.statusBars.getTop(density)
 
-        val items = remember(library, columns) { mainItems(library, columns) }
+        val hasBanner = banner != null
+        val items = remember(library, columns, hasBanner) { mainItems(library, columns, hasBanner) }
         val sections = remember(items) {
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
@@ -238,8 +251,9 @@ fun MainScreen(
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {
-                    MainItem.Header -> Header(onSearch, onSync, onSettings)
-                    MainItem.Empty -> EmptyLibrary()
+                    MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning)
+                    MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
+                    MainItem.Empty -> EmptyLibrary(importPickers, importRunning)
                     is MainItem.Heading -> SectionHeading(item.section, sections, { current }, jumpTo)
                     is MainItem.RecentItem -> LibraryRow(
                         item.recent.title, item.recent.subtitle(), item.recent.art, RoundedCornerShape(8.dp),
@@ -272,9 +286,15 @@ fun MainScreen(
     }
 }
 
-/** The app title, with search, sync and settings. It scrolls away with the list. */
+/** The app title, with import, search, sync and settings. It scrolls away with the list. */
 @Composable
-private fun Header(onSearch: () -> Unit, onSync: () -> Unit, onSettings: () -> Unit) {
+private fun Header(
+    onSearch: () -> Unit,
+    onSync: () -> Unit,
+    onSettings: () -> Unit,
+    importPickers: ImportPickers,
+    importRunning: Boolean,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -287,6 +307,7 @@ private fun Header(onSearch: () -> Unit, onSync: () -> Unit, onSettings: () -> U
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.weight(1f).semantics { heading() },
         )
+        ImportButton(importRunning, importPickers)
         IconButton(onClick = onSearch) { Icon(Icons.Search, contentDescription = stringResource(R.string.search)) }
         IconButton(onClick = onSync) { Icon(Icons.Sync, contentDescription = stringResource(R.string.sync)) }
         IconButton(onClick = onSettings) { Icon(Icons.Settings, contentDescription = stringResource(R.string.settings)) }
@@ -415,8 +436,9 @@ private fun AlbumRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) 
     }
 }
 
+/** No music yet: where it can come from, with an import button. */
 @Composable
-private fun LazyItemScope.EmptyLibrary() {
+private fun LazyItemScope.EmptyLibrary(importPickers: ImportPickers, importRunning: Boolean) {
     Column(
         Modifier.fillParentMaxWidth().fillParentMaxHeight(0.7f).padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -434,11 +456,19 @@ private fun LazyItemScope.EmptyLibrary() {
             modifier = Modifier.padding(top = 16.dp),
         )
         Text(
-            stringResource(R.string.empty_text_sync),
+            stringResource(R.string.empty_text_import),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp),
         )
+        var menu by remember { mutableStateOf(false) }
+        Box(Modifier.padding(top = 24.dp)) {
+            Button(onClick = { menu = true }) {
+                Icon(Icons.Import, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
+                Text(stringResource(R.string.import_music))
+            }
+            ImportMenu(menu, importRunning, importPickers, onDismiss = { menu = false })
+        }
     }
 }
