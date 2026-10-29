@@ -229,3 +229,40 @@ mc_status mc_album_group_remove(mc_library *lib, const char *group_uid, const ch
   return write_txn(lib, "DELETE FROM album_group_entries WHERE group_uid = ?1 AND album_uid = ?2", group_uid,
                    album_uid);
 }
+
+mc_status mc_album_group_move(mc_library *lib, const char *group_uid, const char *album_uid,
+                              const char *after_album_uid) {
+  if (!lib || !group_uid || !album_uid || (after_album_uid && !strcmp(album_uid, after_album_uid)))
+    return MC_ERR_INVALID_ARG;
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  /* As position_after(), but by album: an album is listed at its first entry, so it goes
+   * after after_album_uid's first entry and before the next album's, and every entry it has
+   * moves (should sync have left two). */
+  static const char first[] = "SELECT min(position) FROM album_group_entries WHERE group_uid = ?1 AND album_uid = ?2";
+  char *there = NULL, *before = NULL, *next = NULL, *position = NULL;
+  st = query_text(lib, first, group_uid, album_uid, NULL, &there);
+  if (st == MC_OK && !there) st = MC_ERR_NOT_FOUND;
+  if (st == MC_OK && after_album_uid) {
+    st = query_text(lib, first, group_uid, after_album_uid, NULL, &before);
+    if (st == MC_OK && !before) st = MC_ERR_NOT_FOUND;
+  }
+  if (st == MC_OK)
+    st = query_text(lib,
+                    "SELECT min(position) FROM album_group_entries WHERE group_uid = ?1"
+                    " AND (?2 IS NULL OR position > ?2) AND album_uid != ?3"
+                    " AND album_uid NOT IN (SELECT album_uid FROM album_group_entries"
+                    "  WHERE group_uid = ?1 AND position = ?2)",
+                    group_uid, before, album_uid, &next);
+  if (st == MC_OK && !(position = mc_frac_key_between(before, next))) st = MC_ERR_FORMAT;
+  if (st == MC_OK)
+    st = write_one(lib, "UPDATE album_group_entries SET position = ?3 WHERE group_uid = ?1 AND album_uid = ?2",
+                   group_uid, album_uid, position, NULL);
+  free(there);
+  free(before);
+  free(next);
+  free(position);
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}

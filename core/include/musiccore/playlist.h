@@ -82,6 +82,11 @@ mc_status mc_album_group_add(mc_library *lib, const char *group_uid, const char 
 /* Takes album_uid out of the group (every entry for it, should sync have left two).
  * MC_ERR_NOT_FOUND if it isn't in it. */
 mc_status mc_album_group_remove(mc_library *lib, const char *group_uid, const char *album_uid);
+/* Moves album_uid to after after_album_uid (NULL = to the start) within the group. Like
+ * mc_playlist_move(), only the moved album's position changes, so it merges with other
+ * devices' edits. MC_ERR_NOT_FOUND if either album isn't in the group. */
+mc_status mc_album_group_move(mc_library *lib, const char *group_uid, const char *album_uid,
+                              const char *after_album_uid);
 
 /* A group's cover, made as mc_playlist_art() makes a playlist's, into the same cache_dir,
  * except that the four covers are the group's first four (by distinct image, in the

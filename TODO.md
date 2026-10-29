@@ -63,7 +63,7 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Album groups
 - Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are); failed edits are only logged
-- Core - mc_album_group_move(), so albums in a group can be reordered (then Android too)
+- Android - reorder albums in a group (mc_album_group_move())
 - Windows - reorder albums in a group, and drag albums onto a group
 - Windows and Linux - play a whole group, smart groups too (queue its albums in order; Android has Play)
 

@@ -459,6 +459,17 @@ static void playlist_titles(mc_library *lib, const char *playlist, char *out, si
   mc_track_list_free(tracks);
 }
 
+static void group_titles(mc_library *lib, const char *group, char *out, size_t n) {
+  out[0] = '\0';
+  mc_album_list *albums = NULL;
+  if (mc_library_list_album_group_albums(lib, group, &albums) != MC_OK || !albums) return;
+  for (int i = 0; i < albums->count; i++) {
+    if (i) strncat(out, " ", n - strlen(out) - 1);
+    strncat(out, albums->items[i].title, n - strlen(out) - 1);
+  }
+  mc_album_list_free(albums);
+}
+
 /* Playlists: entries keep the order they were put in, a track can be in twice, and every
  * change is logged. */
 static void test_playlists(const char *scratch) {
@@ -867,6 +878,31 @@ static void test_album_group_edits(const char *scratch) {
   CHECK(mc_library_list_album_group_albums(lib, uid, &albums) == MC_OK && albums && albums->count == 3);
   if (albums && albums->count == 3) CHECK_STR(albums->items[0].title, "Two");
   mc_album_list_free(albums);
+  /* Moves change only positions; the album sync added twice moves whole. */
+  char titles[64];
+  int positions = changelog_count(db, "entity = 'album_group_entries' AND field = 'position'");
+  int logged = changelog_count(db, "entity = 'album_group_entries'");
+  CHECK(mc_album_group_move(lib, uid, "al2", "al3") == MC_OK);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "One Three Two") == 0);
+  CHECK(changelog_count(db, "entity = 'album_group_entries' AND field = 'position'") == positions + 2);
+  CHECK(changelog_count(db, "entity = 'album_group_entries'") == logged + 2);
+  CHECK(mc_album_group_move(lib, uid, "al3", NULL) == MC_OK);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "Three One Two") == 0);
+  CHECK(mc_album_group_move(lib, uid, "al3", "al1") == MC_OK);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "One Three Two") == 0);
+  CHECK(mc_album_group_move(lib, uid, "al2", NULL) == MC_OK);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "Two One Three") == 0);
+  CHECK(mc_album_group_move(lib, uid, "al2", "al2") == MC_ERR_INVALID_ARG);
+  CHECK(mc_album_group_move(lib, uid, "nope", NULL) == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_group_move(lib, uid, "al2", "nope") == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_group_move(lib, other, "al2", NULL) == MC_ERR_NOT_FOUND);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "Two One Three") == 0);
+
   CHECK(mc_album_group_remove(lib, uid, "al2") == MC_OK);
   CHECK(mc_album_group_remove(lib, uid, "al2") == MC_ERR_NOT_FOUND);
   CHECK(mc_library_list_album_group_albums(lib, uid, &albums) == MC_OK && albums && albums->count == 2);
