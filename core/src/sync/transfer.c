@@ -104,6 +104,8 @@ static char *join(const char *a, char sep, const char *b) {
   return out;
 }
 
+mc_status (*mc_transfer_trash)(const char *path) = mc_trash;
+
 static char *cache_dir(mc_sync *sync) {
   return join(sync->config_dir, MC_PATH_SEP, MC_TRANSCODE_CACHE_DIR);
 }
@@ -1751,7 +1753,7 @@ static void drop_deleted_tracks(mc_session *s) {
     int original = sqlite3_column_int(stmt, 1);
     char *abs = deletable_path(lib, rel);
     if (abs && mc_file_exists(abs) &&
-        ((original && mc_trash(abs) == MC_OK) || mc_remove(abs) == MC_OK)) {
+        ((original && mc_transfer_trash(abs) == MC_OK) || mc_remove(abs) == MC_OK)) {
       s->files_deleted++;
       prune_dirs(lib, rel);
     }
@@ -1846,8 +1848,13 @@ static int on_library_file(void *user, const char *path) {
 }
 
 /* Audio files (and stale .part files) in the library folder that no files row knows:
- * deleted, or on an archive only reported. Files younger than UNKNOWN_GRACE_MS are left for
- * an import that may be about to record them. */
+ * removed, or on an archive only reported. An audio file may be the user's own, put there by
+ * hand, so it goes to the trash where they can get it back; where there's no trash it can
+ * use (a library on another file system than the Linux home trash) it's deleted, as are
+ * .part files, which are only ever half a copy. Android has no trash, so there every one is
+ * deleted without trying mc_trash(): a trash under $HOME there would be one nobody can open,
+ * keeping the files out of sight but taking up space. Files younger than UNKNOWN_GRACE_MS
+ * are left for an import that may be about to record them. */
 static void reconcile_unknown(mc_session *s, int archive) {
   mc_library *lib = s->conn->lib;
   unknown_scan u = {lib, (int64_t)mc_wall_ms() - UNKNOWN_GRACE_MS, NULL, 0, 0};
@@ -1857,8 +1864,15 @@ static void reconcile_unknown(mc_session *s, int archive) {
     if (archive) {
       fprintf(stderr, "musiccore: sync: unknown file in the library folder: %s\n", u.paths[i]);
     } else {
+      char ext[16];
+      extension(u.paths[i], ext);
+#ifdef __ANDROID__
+      int trash = 0;
+#else
+      int trash = strcmp(ext, "part") != 0;
+#endif
       char *abs = deletable_path(lib, u.paths[i]);
-      if (abs && mc_remove(abs) == MC_OK) {
+      if (abs && ((trash && mc_transfer_trash(abs) == MC_OK) || mc_remove(abs) == MC_OK)) {
         s->files_deleted++;
         prune_dirs(lib, u.paths[i]);
       }

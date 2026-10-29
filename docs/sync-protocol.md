@@ -663,9 +663,11 @@ the plaintext limit.
     been deleted. It removes their `files` rows and any album folders left empty (holding
     nothing but a `cover.jpg` or `cover.png`, which go too). A wrong-format copy of a wanted
     track stays until a copy in the right format has arrived, so the track stays playable.
-  - It deletes files in the library folder that no `files` row knows about. Only audio
+  - It removes files in the library folder that no `files` row knows about. Only audio
     files (the extensions import takes) and stale `.part` files count, and only once they
-    are an hour old, so an import that is copying files in isn't raced.
+    are an hour old, so an import that is copying files in isn't raced. Audio files go to
+    the Recycle Bin or trash, since one may be the user's own (deleted if there's none, and
+    always on Android, which has no trash); `.part` files are deleted.
   - Deleted tracks: `files` rows go with their track (`ON DELETE CASCADE`) when the library
     exchange applies the delete, so the session notes the rows it deletes and removes their
     files: originals imported on this device go to its Recycle Bin or trash (removed if
@@ -693,10 +695,10 @@ the plaintext limit.
     not hold the original yet. With the archive receiving first (step 6 of
     [Session](#session)), the original's swap then takes one session. On an archive, only deleted
     tracks' files are removed, and unknown files are reported, not deleted.
-  - Deletes are permanent, and only of files inside the library folder: a path that is
-    absolute, has a `.` or `..` part or a colon, or passes through a symlink or junction is
-    left alone (its `files` row still goes), and the scan for unknown files doesn't follow
-    links. Library rows (tracks, albums, their art) are group data and stay: a device drops
+  - Other deletes are permanent, and all are only of files inside the library folder: a
+    path that is absolute, has a `.` or `..` part or a colon, or passes through a symlink or
+    junction is left alone (its `files` row still goes), and the scan for unknown files
+    doesn't follow links. Library rows (tracks, albums, their art) are group data and stay: a device drops
     only its own `files` rows, and frontends hide tracks without a file.
 - Every device receives the whole library database. Frontends list only tracks with a local
   file (`available_only`), except the profile picker, which lists everything.

@@ -145,7 +145,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 ### Core
 - Albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
 - Changelog compaction must keep the rows that decide merges and archive demotions
-- Move removed untracked files to the Recycle Bin/trash instead of deleting them (mc_trash() in util/platform.h does it); deleted tracks' originals on peers already go to the trash, unknown files are still removed outright
 - A stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
 
 ### Merging libraries

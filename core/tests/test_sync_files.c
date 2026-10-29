@@ -29,6 +29,7 @@
 #include "sync/rows.h"
 #include "sync/sync_db.h"
 #include "sync/sync_internal.h"
+#include "sync/transfer.h"
 #include "tagger/import_db.h"
 #include "test.h"
 #include "util/platform.h"
@@ -135,6 +136,27 @@ static int write_bytes(const char *path, const char *text) {
   if (!f) return 0;
   fputs(text, f);
   return fclose(f) == 0;
+}
+
+/* The trash sync uses: a folder under the scratch dir, never the Recycle Bin. Files are
+ * numbered in the order they arrive, keeping their names. */
+static char g_bin[1100];
+static int g_binned;
+
+static mc_status fake_trash(const char *path) {
+  const char *name = strrchr(path, '/'), *sep = strrchr(path, MC_PATH_SEP);
+  if (sep > name) name = sep;
+  char to[1300];
+  snprintf(to, sizeof to, "%s%c%d-%s", g_bin, MC_PATH_SEP, g_binned, name ? name + 1 : path);
+  mc_status st = mc_rename(path, to, 0);
+  if (st == MC_OK) g_binned++;
+  return st;
+}
+
+static int in_bin(int n, const char *name) {
+  char path[1300];
+  snprintf(path, sizeof path, "%s%c%d-%s", g_bin, MC_PATH_SEP, n, name);
+  return mc_file_exists(path);
 }
 
 /* A link to the folder target: a symlink, or on Windows a junction (needs no privilege). */
@@ -679,6 +701,9 @@ int main(int argc, char **argv) {
   char root[1024], sql[2048];
   snprintf(root, sizeof root, "%s/test_sync_files.d", scratch);
   remove_tree(root);
+  snprintf(g_bin, sizeof g_bin, "%s/bin", root);
+  CHECK(mc_mkdirs(g_bin) == MC_OK);
+  mc_transfer_trash = fake_trash;
 
   check_plan(root);
 
@@ -818,17 +843,22 @@ int main(int argc, char **argv) {
     CHECK(mc_file_exists(dir));
   }
 
-  /* Unknown files: deleted on B, only reported on the archive. New ones are left alone. */
+  /* Unknown files: to the trash on B (a stale .part file is just deleted), only reported on
+   * the archive. New ones are left alone. */
   {
-    char dir[1100], old_b[1200], new_b[1200], old_a[1200], text[1200];
+    char dir[1100], old_b[1200], new_b[1200], old_a[1200], text[1200], part[1200];
     snprintf(dir, sizeof dir, "%s/Junk", b.libdir);
     CHECK(mc_mkdirs(dir) == MC_OK);
     snprintf(old_b, sizeof old_b, "%s/old.mp3", dir);
     snprintf(new_b, sizeof new_b, "%s/new.mp3", dir);
     snprintf(text, sizeof text, "%s/notes.txt", dir);
-    CHECK(write_bytes(old_b, "x") && write_bytes(new_b, "y") && write_bytes(text, "z"));
+    snprintf(part, sizeof part, "%s/half.opus.part", dir);
+    CHECK(write_bytes(old_b, "x") && write_bytes(new_b, "y") && write_bytes(text, "z") &&
+          write_bytes(part, "p"));
     make_old(old_b);
     make_old(text);
+    make_old(part);
+    int binned = g_binned;
     snprintf(dir, sizeof dir, "%s/Junk", a.libdir);
     CHECK(mc_mkdirs(dir) == MC_OK);
     snprintf(old_a, sizeof old_a, "%s/old.mp3", dir);
@@ -836,7 +866,9 @@ int main(int argc, char **argv) {
     make_old(old_a);
     CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
     CHECK(!mc_file_exists(old_b) && mc_file_exists(new_b) && mc_file_exists(text));
-    CHECK(rb.files_unknown == 1);
+    CHECK(!mc_file_exists(part));
+    CHECK(rb.files_unknown == 2);
+    CHECK(g_binned == binned + 1 && in_bin(binned, "old.mp3"));
     CHECK(mc_file_exists(old_a) && ra.files_unknown == 1 && ra.files_deleted == 0);
     mc_remove(old_a);
   }

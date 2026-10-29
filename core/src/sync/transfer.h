@@ -31,6 +31,10 @@ void mc_transfer_end(mc_session *s, int ok);
  * last file phase left pending, so the group exchange carries it. */
 void mc_transfer_write_status(mc_sync *sync, mc_sync_conn *c);
 
+/* How a session moves a file to the trash: deleted tracks' originals, and unknown audio
+ * files. mc_trash(), unless a test swaps it before syncing. */
+extern mc_status (*mc_transfer_trash)(const char *path);
+
 /* Copies the session's file counts into r. */
 void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r);
 
