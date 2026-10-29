@@ -293,6 +293,62 @@ void mc_folder_name_parse(const char *name, mc_folder_name *out) {
   out->title = dup_trim(title, title_end);
 }
 
+/* --- Disc suffixes --- */
+
+static int is_alnum_ascii(char c) {
+  return (unsigned char)c < 0x80 && isalnum((unsigned char)c);
+}
+
+static const char *skip_disc_seps(const char *p) {
+  while (*p == ' ' || *p == '_' || *p == '-' || *p == '.') p++;
+  return p;
+}
+
+/* Whether p, to the end of the string, is "Disc 1", "CD2", "disk_3", "Disc 1 of 2" or
+ * "Disc 1/2", maybe closed by ")" or "]". Returns the disc number, or 0. */
+static int disc_tail(const char *p) {
+  static const char *const words[] = {"disc", "disk", "cd", NULL};
+  for (const char *const *w = words; *w; w++) {
+    size_t n = strlen(*w), i = 0;
+    while (i < n && tolower((unsigned char)p[i]) == (*w)[i]) i++;
+    if (i < n) continue;
+    const char *s = skip_disc_seps(p + n);
+    int disc = 0, digits = 0;
+    while (isdigit((unsigned char)*s) && digits < 3) disc = disc * 10 + (*s++ - '0'), digits++;
+    if (!disc || isdigit((unsigned char)*s)) continue;
+    while (*s == ' ') s++;
+    if ((tolower((unsigned char)s[0]) == 'o' && tolower((unsigned char)s[1]) == 'f') || *s == '/') {
+      s = skip_disc_seps(s + (*s == '/' ? 1 : 2));
+      if (!isdigit((unsigned char)*s)) continue;
+      while (isdigit((unsigned char)*s)) s++;
+    }
+    while (*s == ' ') s++;
+    if (*s == ')' || *s == ']') s++;
+    while (*s == ' ') s++;
+    if (!*s) return disc;
+  }
+  return 0;
+}
+
+int mc_disc_suffix(const char *title, size_t *base_len) {
+  if (!title) return 0;
+  for (const char *p = title; *p; p++) {
+    if (p > title && is_alnum_ascii(p[-1])) continue;
+    int disc = disc_tail(p);
+    if (!disc) continue;
+    const char *e = p;
+    for (;;) {
+      if (e > title && strchr(" -_([~,:", e[-1])) e--;
+      else if (e - title >= 3 && strncmp(e - 3, "\xE3\x80\x80", 3) == 0) e -= 3;
+      else break;
+    }
+    if (e == title) return 0; /* nothing but the disc */
+    *base_len = (size_t)(e - title);
+    return disc;
+  }
+  return 0;
+}
+
 void mc_folder_name_clear(mc_folder_name *f) {
   free(f->prefix);
   free(f->paren);
@@ -545,9 +601,15 @@ mc_status mc_search_keys_build(const char *folder, const mc_tags *files, const c
     c = add_labels(out->labels, c, fn.prefix, (const char *const *)out->artists, out->artist_count);
   out->label_count = c;
 
-  /* Catalogue numbers: tags first, then the folder name. */
+  /* Catalogue numbers: tags first, then [brackets] in the album tag ("Mix [SRPC-L007]"), then
+   * the folder name. */
   c = 0;
   for (int i = 0; i < n; i++) c = mc_catnos_add(out->catnos, c, MC_KEYS_MAX, files[i].catalog);
+  mc_folder_name in_album;
+  mc_folder_name_parse(album, &in_album);
+  for (int i = 0; i < in_album.catno_count; i++)
+    c = mc_catnos_add(out->catnos, c, MC_KEYS_MAX, in_album.catnos[i]);
+  mc_folder_name_clear(&in_album);
   for (int i = 0; i < fn.catno_count; i++) c = mc_catnos_add(out->catnos, c, MC_KEYS_MAX, fn.catnos[i]);
   out->catno_count = c;
 

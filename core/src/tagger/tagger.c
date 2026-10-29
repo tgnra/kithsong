@@ -58,6 +58,7 @@ typedef struct candidate {
   int missing;
   int extra;
   int *map; /* item file -> release track index, or -1 */
+  char *album, *artist; /* a release's distance was scored with these (see rescore_map) */
 } candidate;
 
 typedef struct item {
@@ -76,6 +77,9 @@ typedef struct item {
   int searched_wider; /* the candidates include an extended search's */
   mc_import_outcome outcome; /* guarded by lock, like state */
   int replaced, duplicates;
+  /* Disc folders (see join_discs): the disc this item looks like, and the first item of the
+   * discs it seems to be one of, or -1. Only the import thread uses them. */
+  int disc, disc_set;
 } item;
 
 /* REQ_RETRY matches an item waiting on MusicBrainz again (see auto_match), once it's back or
@@ -114,7 +118,8 @@ struct mc_import {
   /* Item state, error, chosen and candidates are guarded by lock once items are published,
    * and so are an item's files (mc_import_assign moves files between items). They change only
    * on the import thread, which can read them without the lock. Everything else about items
-   * and files is written only before publishing. */
+   * and files is written only before publishing, except what join_discs changes (an item's
+   * album, files' disc tags), under the lock too. */
   item *items;
   int item_count;
 
@@ -374,6 +379,7 @@ static item *add_item(item_list *l, mc_import_kind kind, const char *folder) {
   memset(it, 0, sizeof *it);
   it->kind = kind;
   it->chosen = -1;
+  it->disc_set = -1;
   it->folder = mc_strdup(folder);
   return it;
 }
@@ -457,11 +463,79 @@ done:
   return st;
 }
 
+/* The album an item looks like one disc of: its album tag without a disc suffix ("Title
+ * Disc1"), or its album tag when its folder's name has one ("Title CD2"). Returns the title
+ * (malloc'd) and sets *disc, or returns NULL. */
+static char *disc_album(const item *it, int *disc) {
+  size_t len;
+  *disc = 0;
+  if (it->kind != MC_IMPORT_ALBUM || !it->album || !it->folder) return NULL;
+  if ((*disc = mc_disc_suffix(it->album, &len))) {
+    char *title = malloc(len + 1);
+    if (title) {
+      memcpy(title, it->album, len);
+      title[len] = '\0';
+    }
+    return title;
+  }
+  const char *sep = last_sep(it->folder);
+  if ((*disc = mc_disc_suffix(sep ? sep + 1 : it->folder, &len))) return mc_strdup(it->album);
+  return NULL;
+}
+
+/* Whether two items' folders are the same or side by side in one folder. */
+static int side_by_side(const char *a, const char *b) {
+  if (strcmp(a, b) == 0) return 1;
+  const char *sa = last_sep(a), *sb = last_sep(b);
+  return sa && sb && sa - a == sb - b && strncmp(a, b, (size_t)(sa - a)) == 0;
+}
+
+/* Marks the items that look like the discs of one album: the same title once the disc is
+ * taken off, side by side, each a different disc. join_discs asks MusicBrainz about them. */
+static void find_disc_sets(item_list *l) {
+  char **titles = calloc((size_t)l->count + 1, sizeof *titles);
+  if (!titles) return;
+  for (int i = 0; i < l->count; i++) titles[i] = disc_album(&l->items[i], &l->items[i].disc);
+  for (int i = 0; i < l->count; i++) {
+    item *first = &l->items[i];
+    if (!titles[i] || first->disc_set != -1) continue;
+    int members = 1, clash = 0;
+    for (int j = i + 1; j < l->count; j++) {
+      item *other = &l->items[j];
+      if (!titles[j] || other->disc_set != -1 || !same_text(titles[i], titles[j]) ||
+          !side_by_side(first->folder, other->folder))
+        continue;
+      for (int k = i; k < j; k++) clash |= (k == i || l->items[k].disc_set == i) && l->items[k].disc == other->disc;
+      other->disc_set = i;
+      members++;
+    }
+    /* Two copies of a disc: leave them all apart (-2 until the end, so they stay out). */
+    for (int j = i + 1; j < l->count && clash; j++)
+      if (l->items[j].disc_set == i) l->items[j].disc_set = -2;
+    if (members >= 2) first->disc_set = clash ? -2 : i;
+  }
+  for (int i = 0; i < l->count; i++) {
+    if (l->items[i].disc_set == -2) l->items[i].disc_set = -1;
+    free(titles[i]);
+  }
+  free(titles);
+}
+
 /* --- Matching --- */
 
 static void candidate_clear(candidate *c) {
   mb_release_clear(&c->rel);
   free(c->map);
+  free(c->album);
+  free(c->artist);
+}
+
+/* Remembers the album title and artist a candidate's distance was scored with. */
+static void scored_with(candidate *c, const char *album, const char *artist) {
+  free(c->album);
+  free(c->artist);
+  c->album = mc_strdup(album);
+  c->artist = mc_strdup(artist);
 }
 
 static void candidates_free(candidate *c, int n) {
@@ -537,6 +611,7 @@ static void add_release(mc_import *imp, const item *it, const mc_tags *tags, con
   c->distance = score.distance;
   c->missing = score.missing;
   c->extra = score.extra;
+  scored_with(c, album, artist);
 }
 
 static void add_recording(mb_release *rel, const mc_tags *file, cand_list *l) {
@@ -591,9 +666,10 @@ static void search_recordings(mc_import *imp, const mc_tags *file, const char *a
 }
 
 static int should_accept(const item *it, const candidate *c, double threshold) {
+  (void)it;
   if (1.0 - c->distance < threshold) return 0;
   /* Never auto-accept a partial match: missing tracks or files that would be left out. */
-  return it->kind == MC_IMPORT_SINGLE || (c->missing == 0 && c->extra == 0);
+  return c->from_recording || (c->missing == 0 && c->extra == 0);
 }
 
 /* --- Extended search ---
@@ -603,9 +679,10 @@ static int should_accept(const item *it, const candidate *c, double threshold) {
  * with other keys from the files and the folder name (search_keys.h), and scores every
  * release candidate with whichever of those keys fits it best. */
 
-/* Whether the candidates (sorted) are poor enough to search more widely by default. */
+/* Whether the candidates (sorted) are poor enough to search more widely by default. Albums
+ * and one-file items both get it: a lone file may be a whole release, such as a DJ mix. */
 static int poor_match(const mc_import *imp, const item *it, const cand_list *l) {
-  if (it->kind != MC_IMPORT_ALBUM || l->net == MC_ERR_NET) return 0;
+  if (l->net == MC_ERR_NET) return 0;
   if (l->n == 0) return 1;
   return !should_accept(it, &l->c[0], imp->threshold) && 1.0 - l->c[0].distance < POOR_CONFIDENCE;
 }
@@ -632,11 +709,34 @@ static void rescore(const item *it, const mc_tags *tags, const mc_search_keys *k
       if (!artists[r]) continue;
       mc_release_score score;
       if (mc_score_release(&c->rel, tags, it->file_count, albums[a], artists[r], map, &score) == MC_OK &&
-          score.distance < c->distance)
+          score.distance < c->distance) {
         c->distance = score.distance;
+        scored_with(c, albums[a], artists[r]);
+      }
     }
   }
   free(map);
+}
+
+/* Scores a candidate again from its map as it is now, after mc_import_assign changed it:
+ * the pairs it has, scored with the album title and artist it was scored with before. */
+static void rescore_map(mc_import *imp, const item *it, candidate *c) {
+  mc_tags *tags = malloc(((size_t)it->file_count + 1) * sizeof *tags);
+  if (!tags) return;
+  for (int i = 0; i < it->file_count; i++) tags[i] = *item_tags(imp, it, i);
+  if (c->from_recording) {
+    c->distance = 1.0;
+    for (int i = 0; i < it->file_count; i++)
+      if (c->map[i] == 0) c->distance = mc_score_recording(&c->rel, &tags[i]);
+  } else {
+    mc_release_score score;
+    if (mc_score_release_map(&c->rel, tags, it->file_count, c->album, c->artist, c->map, &score) == MC_OK) {
+      c->distance = score.distance;
+      c->missing = score.missing;
+      c->extra = score.extra;
+    }
+  }
+  free(tags);
 }
 
 static int any_accepted(const mc_import *imp, const item *it, const cand_list *l) {
@@ -697,8 +797,22 @@ static int wide_search(mc_import *imp, const item *it, const mc_tags *tags, cons
 static void item_keys(mc_import *imp, const item *it, const mc_tags *tags, mc_search_keys *k) {
   const char **paths = malloc((size_t)it->file_count * sizeof *paths);
   for (int i = 0; paths && i < it->file_count; i++) paths[i] = imp->files[it->files[i]].path;
-  mc_search_keys_build(it->folder, tags, paths, it->file_count, it->album, it->artist, k);
+  /* A single's album is its title; the release it may be is in its album tag. */
+  const char *album = it->kind == MC_IMPORT_SINGLE ? tags[0].album : it->album;
+  mc_search_keys_build(it->folder, tags, paths, it->file_count, album, it->artist, k);
   free(paths);
+  /* A loose track's folder is often just where it was saved ("Downloads"): its name is a
+   * release title only if it looks like one, "Artist - Title" or with a catalogue number. */
+  if (it->kind == MC_IMPORT_SINGLE && !album && it->folder) {
+    const char *sep = last_sep(it->folder);
+    mc_folder_name fn;
+    mc_folder_name_parse(sep ? sep + 1 : it->folder, &fn);
+    if (!fn.prefix && !fn.paren && !fn.catno_count) {
+      free(k->album);
+      k->album = NULL;
+    }
+    mc_folder_name_clear(&fn);
+  }
 }
 
 static const char *searched_artist(const item *it) {
@@ -724,9 +838,11 @@ static int widen_item(mc_import *imp, int idx) {
   set_state(imp, idx, MC_IMPORT_MATCHING, NULL);
   mc_tags *tags = malloc((size_t)it->file_count * sizeof *tags);
   double *dist = malloc(((size_t)it->cand_count + 1) * sizeof *dist);
-  if (!tags || !dist) {
+  candidate *with = calloc((size_t)it->cand_count + 1, sizeof *with); /* what rescore chose */
+  if (!tags || !dist || !with) {
     free(tags);
     free(dist);
+    free(with);
     set_state(imp, idx, MC_IMPORT_REVIEW, NULL);
     return 0;
   }
@@ -739,8 +855,11 @@ static int widen_item(mc_import *imp, int idx) {
   int done = wide_search(imp, it, tags, &k, searched_artist(it), &l, it);
   for (int i = 0; i < it->cand_count; i++) {
     candidate c = it->cands[i];
+    c.album = c.artist = NULL; /* the item's own, until the lock is held */
     rescore(it, tags, &k, &c);
     dist[i] = c.distance;
+    with[i].album = c.album;
+    with[i].artist = c.artist;
   }
   mc_search_keys_clear(&k);
   free(tags);
@@ -749,7 +868,15 @@ static int widen_item(mc_import *imp, int idx) {
   const candidate *was = it->chosen >= 0 && it->chosen < it->cand_count ? &it->cands[it->chosen] : NULL;
   char *chosen_id = was ? mc_strdup(was->rel.id) : NULL;
   int chosen_rec = was ? was->from_recording : 0;
-  for (int i = 0; i < it->cand_count; i++) it->cands[i].distance = dist[i];
+  for (int i = 0; i < it->cand_count; i++) {
+    it->cands[i].distance = dist[i];
+    if (!with[i].album && !with[i].artist) continue; /* rescore kept the old score */
+    free(it->cands[i].album);
+    free(it->cands[i].artist);
+    it->cands[i].album = with[i].album;
+    it->cands[i].artist = with[i].artist;
+  }
+  free(with);
   candidate *grown = l.n ? realloc(it->cands, (size_t)(it->cand_count + l.n) * sizeof *grown) : it->cands;
   if (grown) {
     memcpy(grown + it->cand_count, l.c, (size_t)l.n * sizeof *l.c);
@@ -1438,6 +1565,134 @@ static void auto_match(mc_import *imp, mc_library *lib, int idx) {
   }
 }
 
+/* --- Disc folders ---
+ *
+ * An album tag or folder name with the disc in it ("Title Disc1", "Title Disc2") makes an
+ * item per disc. find_disc_sets marks the items that look like one album's discs; here
+ * MusicBrainz has to agree before they're joined: a release of that title with as many discs,
+ * each disc taking most of one item's files. */
+
+/* Whether every disc item has at least half its files on its own disc of the release. */
+static int discs_fit(const mb_release *rel, const int *map, const int *members, int n, const item *items) {
+  for (int m = 0, at = 0; m < n; m++) {
+    const item *it = &items[members[m]];
+    int on_disc = 0;
+    for (int i = 0; i < it->file_count; i++, at++)
+      on_disc += map[at] >= 0 && rel->tracks[map[at]].disc == it->disc;
+    if (on_disc * 2 < it->file_count) return 0;
+  }
+  return 1;
+}
+
+/* Joins item idx's disc set (see above) into its first item if MusicBrainz knows the album:
+ * all the files move there, the other items are skipped as moved, and the joined item waits
+ * for the user however good its match. Returns nonzero if idx was joined; else (no set,
+ * offline, nothing on MusicBrainz) the items stay as they were, to be matched one by one. */
+static int join_discs(mc_import *imp, int idx) {
+  int first = imp->items[idx].disc_set;
+  if (first < 0) return 0;
+  /* Tried once per set, whatever the outcome. */
+  int members[64], n = 0, files = 0;
+  for (int i = first; i < imp->item_count; i++) {
+    item *it = &imp->items[i];
+    if (it->disc_set != first) continue;
+    it->disc_set = -1;
+    if (it->state != MC_IMPORT_PENDING || n == 64) continue;
+    int j = n++;
+    while (j > 0 && imp->items[members[j - 1]].disc > it->disc) members[j] = members[j - 1], j--;
+    members[j] = i;
+    files += it->file_count;
+  }
+  if (n < 2 || skipping_tags(imp) || !online(imp) || cancelled(imp)) return 0;
+
+  item *lead = &imp->items[first];
+  int disc;
+  char *title = disc_album(lead, &disc);
+  mc_tags *tags = malloc((size_t)files * sizeof *tags);
+  int *order = malloc((size_t)files * sizeof *order);
+  if (!title || !tags || !order) {
+    free(title);
+    free(tags);
+    free(order);
+    return 0;
+  }
+  /* The files in disc order, numbered by their item's disc where their tags don't say. */
+  for (int m = 0, at = 0; m < n; m++) {
+    const item *it = &imp->items[members[m]];
+    for (int i = 0; i < it->file_count; i++, at++) {
+      order[at] = it->files[i];
+      tags[at] = imp->files[order[at]].tags;
+      if (!tags[at].disc) tags[at].disc = it->disc;
+    }
+  }
+  set_state(imp, idx, MC_IMPORT_MATCHING, NULL);
+
+  const char *artist = searched_artist(lead);
+  char ids[RELEASE_LOOKUPS][MC_UID_STRLEN];
+  int found = 0;
+  cand_list l = {0};
+  note_error(&l, mb_search_releases(artist, title, files, ids, RELEASE_LOOKUPS, &found));
+  for (int h = 0; h < found && !cancelled(imp) && l.net != MC_ERR_NET; h++) {
+    mb_release rel;
+    mc_status st = mb_lookup_release(ids[h], &rel);
+    note_error(&l, st);
+    if (st != MC_OK) continue;
+    candidate *c = rel.disc_total == n ? cand_push(&l) : NULL;
+    int *map = malloc((size_t)files * sizeof *map);
+    mc_release_score score;
+    if (!c || !map || mc_score_release(&rel, tags, files, title, lead->artist, map, &score) != MC_OK ||
+        !discs_fit(&rel, map, members, n, imp->items)) {
+      if (c) l.n--;
+      free(map);
+      mb_release_clear(&rel);
+      continue;
+    }
+    c->rel = rel;
+    c->map = map;
+    c->distance = score.distance;
+    c->missing = score.missing;
+    c->extra = score.extra;
+    scored_with(c, title, lead->artist);
+  }
+  free(tags);
+  if (l.n == 0) {
+    free(title);
+    free(order);
+    free(l.c);
+    return 0; /* idx is matched on its own now, which starts by setting its state */
+  }
+  if (l.n > 1) qsort(l.c, (size_t)l.n, sizeof *l.c, compare_candidates);
+
+  mc_mutex_lock(&imp->lock);
+  for (int m = 0, at = 0; m < n; m++) {
+    item *it = &imp->items[members[m]];
+    for (int i = 0; i < it->file_count; i++, at++)
+      if (!imp->files[order[at]].tags.disc) imp->files[order[at]].tags.disc = it->disc;
+    if (it == lead) continue;
+    free(it->files);
+    it->files = NULL;
+    it->file_count = 0;
+    it->state = MC_IMPORT_SKIPPED;
+    it->outcome = MC_IMPORT_OUTCOME_MOVED;
+  }
+  free(lead->files);
+  lead->files = order;
+  lead->file_count = files;
+  free(lead->album);
+  lead->album = title;
+  candidates_free(lead->cands, lead->cand_count);
+  lead->cands = l.c;
+  lead->cand_count = l.n;
+  mc_mutex_unlock(&imp->lock);
+
+  for (int m = 0; m < n; m++)
+    if (members[m] != first) emit(imp, MC_IMPORT_EV_ITEM_CHANGED, members[m]);
+  char *why = mc_format_alloc(mc_str_plural(MC_STR_IMPORT_JOINED_DISCS, n), MC_D(n));
+  set_state(imp, first, MC_IMPORT_REVIEW, why);
+  mc_free(why);
+  return 1;
+}
+
 static int busy(mc_import_state s) {
   return s == MC_IMPORT_PENDING || s == MC_IMPORT_MATCHING || s == MC_IMPORT_WRITING;
 }
@@ -1507,6 +1762,10 @@ static void assign_file(mc_import *imp, mc_library *lib, const request *r) {
       if (c->map[i] == r->track) c->map[i] = -1; /* the file that was on it stays, unmatched */
     c->map[file] = r->track;
     recount(c, it->file_count);
+    /* Scored again with the files as they are now, so a match that was low only for want of
+     * this track goes up. The order stays: matches are referred to by index. */
+    for (int k = 0; k < it->cand_count; k++) rescore_map(imp, it, &it->cands[k]);
+    for (int k = 0; r->from_item != r->item && k < from->cand_count; k++) rescore_map(imp, from, &from->cands[k]);
   }
   mc_mutex_unlock(&imp->lock);
   if (!ok) return;
@@ -1710,6 +1969,7 @@ static void import_thread(void *arg) {
    * failure, whatever was grouped so far is still imported. */
   item_list staged = {0};
   group_files(imp, &staged);
+  find_disc_sets(&staged);
   add_zip_items(imp, &staged);
   mc_mutex_lock(&imp->lock);
   imp->items = staged.items;
@@ -1720,12 +1980,21 @@ static void import_thread(void *arg) {
   /* One quick check up front, so an offline import says so before the first item. */
   if (lib && imp->item_count && !skipping_tags(imp) && !cancelled(imp)) probe(imp);
 
-  for (int i = 0; i < imp->item_count && !cancelled(imp); i++) {
+  /* Albums first, then one-file items (loose tracks, mixes), so the albums reach the review
+   * first; otherwise in the order they were grouped. */
+  int *order = malloc(((size_t)imp->item_count + 1) * sizeof *order);
+  for (int pass = 0, n = 0; order && pass < 2; pass++)
+    for (int i = 0; i < imp->item_count; i++)
+      if ((imp->items[i].file_count == 1) == pass) order[n++] = i;
+  for (int k = 0; k < imp->item_count && !cancelled(imp); k++) {
+    int i = order ? order[k] : k;
     drain_requests(imp, lib); /* the user's decisions come before more matching */
-    if (imp->items[i].state == MC_IMPORT_FAILED) continue; /* a zip that couldn't be extracted */
-    if (lib) auto_match(imp, lib, i);
-    else set_state(imp, i, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
+    /* A zip that couldn't be extracted, or a disc joined to another (join_discs). */
+    if (imp->items[i].state != MC_IMPORT_PENDING) continue;
+    if (!lib) set_state(imp, i, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
+    else if (!join_discs(imp, i)) auto_match(imp, lib, i);
   }
+  free(order);
   if (!cancelled(imp)) emit(imp, MC_IMPORT_EV_IDLE, 0);
 
   request *r;
@@ -2037,11 +2306,7 @@ int mc_import_related(mc_import *imp, int idx, int *out, int max) {
 }
 
 mc_status mc_import_search_wider(mc_import *imp, int idx) {
-  if (!imp) return MC_ERR_INVALID_ARG;
-  mc_mutex_lock(&imp->lock);
-  int album = idx >= 0 && idx < imp->item_count && imp->items[idx].kind == MC_IMPORT_ALBUM;
-  mc_mutex_unlock(&imp->lock);
-  return album ? enqueue(imp, REQ_WIDER, idx, -1, NULL, NULL) : MC_ERR_INVALID_ARG;
+  return enqueue(imp, REQ_WIDER, idx, -1, NULL, NULL);
 }
 
 mc_status mc_import_skip_tagging(mc_import *imp) {
