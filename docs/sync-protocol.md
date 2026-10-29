@@ -397,7 +397,7 @@ Message types:
 | 0x20 | `HAVE_REQ`    | `{"tracks": [uid], "format", "kbps"}` |
 | 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool, "verified": bool}]}` |
 | 0x22 | `FILE_REQ`    | `{"track", "format", "kbps"}`; `format` `"original"` or `"opus"` |
-| 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256"}` |
+| 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256", "source_sha256"?}` |
 | 0x24 | `FILE_DATA`   | raw bytes, in order, until `size` bytes have been sent |
 | 0x25 | `FILE_ERR`    | `{"track", "reason"}`, sent instead of `FILE_HDR` |
 | 0x26 | `PREPARE_REQ` | `{"device", "tracks": [uid], "kbps"}`: transcode into the cache for a device that is offline; no reply |
@@ -799,13 +799,18 @@ music lives nowhere else.
      file's size and mtime still match its row). `file` is the original's file uid: its own,
      or for a transcode the original it was made from. `format` is `"original"` when a lossy
      original stands in for the requested Opus. `ext` is the file's extension; a receiver
-     refuses one that isn't an audio extension import takes.
+     refuses one that isn't an audio extension import takes. With an original (`format`
+     `"original"`), `source_sha256` is its `files.source_sha256` when the sender has one:
+     the hash of the bytes it was imported from, before the import tagged it (see
+     "Duplicates" in tagger.h). Older senders leave it out, and older receivers ignore it.
    - The receiver waits up to 10 minutes for `FILE_HDR`, since the sender may be encoding.
    - The receiver writes to `<dest>.part` while hashing. On a match it renames the file into
      place and inserts a `files` row with `sha256` and `source_peer_uid` (the sender), plus
      for a transcode `source_file_uid` (`FILE_HDR.file`). A received original keeps
      `source_file_uid` NULL: it is still an original, served as one in turn, while a row
-     with `source_peer_uid` NULL too is an original imported on this device.
+     with `source_peer_uid` NULL too is an original imported on this device. It also keeps
+     `source_sha256`, so importing that source file on this device too is recognised as a
+     file the library has.
    - When the track's album has an `art_hash` (not singles) and its folder no cover yet,
      the receiver sends `COVER_REQ` for it right away, so the album shows with its art while
      the rest of it is still coming. Pictures embedded in received files are never used.

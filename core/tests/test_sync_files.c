@@ -723,6 +723,11 @@ int main(int argc, char **argv) {
   /* B has no profile row yet: nothing moves. */
   CHECK(b_files(&b, NULL) == 0);
 
+  /* Song One was imported on A from a file whose hash it knows (files.source_sha256). */
+  snprintf(sql, sizeof sql, "UPDATE files SET source_sha256 = '%064d' WHERE track_uid = '%s'", 7,
+           t1.uid);
+  CHECK(exec(mc_library_db(a.lib), sql) == SQLITE_OK);
+
   /* B: everything, originals. They arrive byte for byte, at the same organised paths. */
   set_profile(&a, b.uid, 0, NULL);
   mc_sync_result ra, rb;
@@ -753,6 +758,11 @@ int main(int argc, char **argv) {
       CHECK(lib_int(&b, sql) == 1);
     }
   }
+  /* The source hash came along with the original. */
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE track_uid = '%s'"
+                            " AND source_sha256 = '%064d'", t1.uid, 7);
+  CHECK(lib_int(&b, sql) == 1);
+  CHECK(lib_int(&b, "SELECT count(*) FROM files WHERE source_sha256 IS NOT NULL") == 1);
   CHECK(a.files_progress > 0 && b.files_progress > 0);
   /* Nothing more to do: a second session moves nothing, and carries B's sync_status. */
   CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);

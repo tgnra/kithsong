@@ -15,6 +15,8 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 7 | `recents` |
 | 8 | `aliases`, `merge_keys` (duplicate merging) |
 | 9 | `tracks.file_rev`, `files.file_rev` (a track's file replaced by a better one) |
+| 10 | example smart lists |
+| 11 | `files.source_sha256` (the bytes an imported file came from) |
 
 ## Location
 
@@ -244,7 +246,7 @@ makes the answer differ between devices.
 | `album_group_entries` | yes | ordered by `position`, like `playlist_entries` |
 | `smart_lists`      | yes    | `subject` is `'tracks'` or `'albums'`; `rule` is JSON; see [Smart lists](#smart-lists) |
 | `recents`          | yes    | last opened items, one row per item keyed by its uid; see [Recents](#recents) |
-| `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it; `file_rev` is the track's `file_rev` the file was made from (a copy whose `file_rev` differs from its track's is stale, see [Files](sync-protocol.md#files)) |
+| `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it; `file_rev` is the track's `file_rev` the file was made from (a copy whose `file_rev` differs from its track's is stale, see [Files](sync-protocol.md#files)); `source_sha256` (hex) of the bytes an original was imported from, before the import tagged it, which tells a re-import of the same file (see [Duplicates](tagging-rules.md#duplicates)), passed on with an original by sync |
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
 | `merge_keys`       | no     | the MusicBrainz ids (and singles albums' artists) ever logged per uid, which decide what merges |
 | `changelog`        | -      | field-level change log that sync is built on |

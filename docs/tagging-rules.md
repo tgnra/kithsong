@@ -192,9 +192,28 @@ The full rules are in `core/include/musiccore/tagger.h` ("Duplicates"); in short
   profiles keep them), the new file takes the old one's name with its own extension, and
   the old file goes to the Recycle Bin or trash. The track's `file_rev` changes, which tells
   other devices to replace their copies (see "Files" in sync-protocol.md).
+- **A swap re-tags the new file to match the library**: it is a better copy of the track the
+  library has, so it gets the library's title, artist, track and disc numbers, year and
+  MusicBrainz ids, and the album's title, album artist and ids (ids the library lacks are
+  removed), not those of its own match, which can be another release of the group or, found
+  by name, no release at all. A file attached to a track with no file on this device is
+  tagged and named the same way.
+- **Unless it's the whole release**: the album was found by release or release group id
+  (not by name, not a singles album), every one of its tracks pairs with an incoming file,
+  and every file of it on this device is swapped. Then the import's match wins: the new
+  files keep its tags and names, and the album and its tracks take its title, artists,
+  numbers, years and ids, keeping their uids. Typically a remaster or hi-res release of the
+  same release group replacing the whole CD rip. The old folder goes if that empties it,
+  its cover moving to the new one unless the import brings its own. An item imported with
+  its existing tags has no match to win, so it is re-tagged as above.
 - Otherwise the tracks the library has are **skipped**, with no ` (2)` copies; tracks it
-  lacks are added to its album either way. A file whose bytes are already in the library is
-  skipped too.
+  lacks are added to its album either way.
+- **The same file again** is skipped. Every file imported from outside the library records
+  the SHA-256 of the bytes it was imported from, before its copy was tagged
+  (`files.source_sha256`; sync passes it on with an original). An incoming file whose bytes
+  hash to a recorded source hash, or to a library file's `sha256` (or, without one, to the
+  bytes of a library file of the same size), is already in the library. Files imported
+  before this have no source hash and are only recognised by their current bytes.
 - The item says what happened: replaced with higher quality, added the missing tracks, or
   already in the library (the item is then skipped).
 

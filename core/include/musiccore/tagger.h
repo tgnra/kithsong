@@ -116,9 +116,25 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  *     playlists, album groups, play counts, recents and sync profiles keep them), and only
  *     then the old file goes to the Recycle Bin / trash (see mc_trash). The track gets a new
  *     tracks.file_rev, which sync uses to replace other devices' copies.
+ *   - A swapped-in file becomes a better copy of the track the library has: it is tagged as
+ *     the library's track (its title, artist, numbers and MusicBrainz ids, and its album's
+ *     title, album artist, year and ids; ids the library lacks are removed from the file) and
+ *     takes the old file's name with its own extension, whatever its own match said. So is
+ *     a file attached to a track that has no file on this device, named for that track.
+ *   - Except for the whole release: when the album was found by release or release group
+ *     id, every one of its tracks is paired, and every file of it on this device is
+ *     swapped, the item's MusicBrainz match wins instead. The new files keep the match's
+ *     tags and names (the old folder goes if that leaves it empty, its cover moving along
+ *     unless the item brings one), and the album and track rows take the match's title,
+ *     artists, numbers, years and ids, keeping their uids. Not for an album found by name,
+ *     a singles album, or an item imported with its existing tags.
  *   - Otherwise the tracks already in the library are skipped: no "(2)" copies.
- *   - Tracks of the release the library lacks are added to the existing album either way,
- *     and a file whose bytes are identical to a file in the library (SHA-256) is skipped.
+ *   - Tracks of the release the library lacks are added to the existing album either way.
+ *   - The same file again: every file imported from outside the library records the
+ *     SHA-256 of its bytes as they were before the import tagged its copy
+ *     (files.source_sha256). A file whose bytes hash to a recorded source hash, or to the
+ *     SHA-256 of a file in the library, is skipped as already there. Files imported before
+ *     this have no source hash: they're only found by their current bytes.
  *
  * mc_import_item.outcome says what happened.
  *

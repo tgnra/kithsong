@@ -7,7 +7,10 @@
 #include <stdint.h>
 
 #include "library/library_internal.h"
+#include "musiccore/tagger.h"
 #include "tagger/import_db.h"
+
+#define MC_SHA256_STRLEN 65 /* hex SHA-256 plus NUL */
 
 /* What one audio file sounds like, as far as comparing quality goes. */
 typedef struct mc_audio_quality {
@@ -45,6 +48,15 @@ typedef struct mc_dupe_decision {
   char track_uid[MC_UID_STRLEN];
   char file_uid[MC_UID_STRLEN];
   char *old_path; /* relative */
+  /* The SHA-256 (hex) of the incoming file's bytes, before the import tags its copy: what
+   * files.source_sha256 records (mc_db_track.source_sha256). "" for a SKIP, or when the
+   * file couldn't be read. */
+  char source_sha256[MC_SHA256_STRLEN];
+  /* A SWAP or ATTACH outside a whole release (see mc_dupe_plan.whole) becomes a copy of the
+   * library's track: tags is what the library says of track_uid, to write to the new file
+   * so it is tagged as that track (has_tags is set then). Owned by the plan. */
+  int has_tags;
+  mc_tags tags;
 } mc_dupe_decision;
 
 typedef struct mc_dupe_plan {
@@ -53,11 +65,19 @@ typedef struct mc_dupe_plan {
   mc_dupe_decision *d;           /* one per incoming file, in order */
   int count;
   int swaps, skips;
+  /* A better copy of the whole release: the album was found by MusicBrainz release or
+   * release group id (not by name; never a singles album), every one of its tracks is
+   * paired, and every file of it here is swapped (none is only on another device). The
+   * import's match then wins: the album and track rows take its metadata (their uids stay)
+   * and the new files keep their own tags and names. Otherwise each swapped or attached
+   * file is tagged as the library's track (has_tags) and keeps the old name. */
+  int whole;
 } mc_dupe_plan;
 
 /* Works out what to do with an incoming release (album describes it as mc_import_db_write
  * would get it). Reads the library's files from disk to tell their quality and compare
- * bytes. Free *out with mc_dupe_plan_free(). */
+ * bytes, and hashes every incoming file it doesn't skip. Free *out with
+ * mc_dupe_plan_free(). */
 mc_status mc_dupes_plan(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
                         int count, mc_dupe_plan *out);
 void mc_dupe_plan_free(mc_dupe_plan *plan);
