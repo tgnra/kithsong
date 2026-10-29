@@ -10,7 +10,8 @@
  * at most ten; the section hides while there are none. Picking one opens it on its page
  * (app_open(), app_open_artist(), app_open_album_group()). Playing an album or playlist
  * records it (app_play_album()), as opening an artist's or group's page does. Smart lists
- * are left out until there's a page for them. */
+ * are left out until there's a page for them. A row's menu (right-click, a long press, the
+ * Menu key or Shift+F10) has Remove from Recents and Clear Recents, which sync too. */
 #ifndef KITHSONG_RECENTS_H
 #define KITHSONG_RECENTS_H
 

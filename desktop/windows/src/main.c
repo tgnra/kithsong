@@ -19,7 +19,8 @@
  *
  * The sidebar picks the page beside it. Its RECENTS are the albums and playlists last
  * played and the artists and album groups last opened, here or on another device (they sync
- * with the library); clicking one shows it on its page. Home is greyed out until there's a
+ * with the library); clicking one shows it on its page, and its right-click menu removes it
+ * or clears them all. Home is greyed out until there's a
  * home page. Artists lists the artists (artist_view.c); an artist's page is that view's
  * header, with the track list beneath showing the artist's tracks, and Back returns to the
  * list. Search,
@@ -452,6 +453,14 @@ static void open_recent(void) {
   }
   show_page(kind == MC_RECENT_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUMS);
   album_grid_select(uid);
+}
+
+/* Remove from Recents or Clear Recents on a recent's menu in the sidebar. */
+static void remove_recents(BOOL all) {
+  const char *clicked = all ? NULL : sidebar_clicked_recent(NULL);
+  if (!g_app.lib || (!all && !clicked)) return;
+  mc_status st = all ? mc_library_clear_recents(g_app.lib) : mc_library_remove_recent(g_app.lib, clicked);
+  if (st == MC_OK || st == MC_ERR_NOT_FOUND) refresh_recents(); /* gone already: sync took it */
 }
 
 /* After the library changed: an import, a playlist edit, or rows from sync, which may have
@@ -1233,6 +1242,7 @@ static void on_command(int id, int code) {
       } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       else if (code == SBN_PAIR_DEVICE) pair_nearby_uid(sidebar_clicked_nearby());
       else if (code == SBN_OPEN_RECENT) open_recent();
+      else if (code == SBN_REMOVE_RECENT || code == SBN_CLEAR_RECENTS) remove_recents(code == SBN_CLEAR_RECENTS);
       else if (code == SBN_NEW_SMART_PLAYLIST || code == SBN_NEW_SMART_GROUP) {
         show_page(code == SBN_NEW_SMART_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUM_GROUPS);
         album_grid_new_smart();

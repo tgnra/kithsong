@@ -979,7 +979,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_KEYDOWN:
       on_key(wp);
       return 0;
-    case WM_CONTEXTMENU: { /* Playlists and Album Groups offer a new smart one */
+    case WM_CONTEXTMENU: { /* Playlists and Album Groups offer a new smart one, a recent its removal */
       POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
       int i;
       if (lp == -1) {
@@ -992,6 +992,22 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         ScreenToClient(wnd, &client);
         i = target_at(client.x, client.y);
       }
+      UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
+      if (i >= 0 && i < s.nrows && s.rows[i].kind == ROW_RECENT && clickable(i)) {
+        HMENU menu = CreatePopupMenu();
+        AppendMenuW(menu, MF_STRING, 1, mc_wstr_mnemonic(MC_STR_RECENT_REMOVE_MENU));
+        AppendMenuW(menu, MF_STRING, 2, mc_wstr_mnemonic(MC_STR_RECENTS_CLEAR_MENU));
+        int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, wnd, NULL);
+        DestroyMenu(menu);
+        if (cmd == 1) {
+          memcpy(s.clicked_recent, s.rows[i].uid, sizeof s.clicked_recent);
+          s.clicked_kind = (mc_recent_kind)s.rows[i].flags;
+        }
+        if (cmd)
+          SendMessageW(GetParent(wnd), WM_COMMAND,
+                       MAKEWPARAM(GetDlgCtrlID(wnd), cmd == 1 ? SBN_REMOVE_RECENT : SBN_CLEAR_RECENTS), (LPARAM)wnd);
+        return 0;
+      }
       if (i < 0 || i >= s.nrows || s.rows[i].kind != ROW_NAV || !enabled(i) ||
           (s.rows[i].page != PAGE_PLAYLISTS && s.rows[i].page != PAGE_ALBUM_GROUPS))
         break;
@@ -999,7 +1015,6 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       HMENU menu = CreatePopupMenu();
       AppendMenuW(menu, MF_STRING, 1,
                   mc_wstr_mnemonic(playlists ? MC_STR_WINDOWS_SMART_NEW_PLAYLIST_MENU : MC_STR_WINDOWS_SMART_NEW_GROUP_MENU));
-      UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
       int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, wnd, NULL);
       DestroyMenu(menu);
       if (cmd == 1)

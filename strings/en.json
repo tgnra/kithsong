@@ -33,6 +33,8 @@
     "section_artists": "Artists",
     "section_playlists": "Playlists",
     "section_recents": { "text": "Recents", "note": "Heading of the albums, playlists and artists last played, on any device: in the sidebar, or on the phone's main screen." },
+    "recent_remove_menu": { "text": "_Remove from Recents", "note": "On a recent's menu (right-click in the sidebar, long press on the phone): takes it out of Recents, on every device, until it's next played." },
+    "recents_clear_menu": { "text": "_Clear Recents", "note": "On a recent's menu: empties Recents, on every device." },
     "section_home": { "text": "Home", "note": "The sidebar's first page, above Search; not available yet, so it's greyed out." },
     "search_placeholder": { "text": "Search albums, artists, tracks and playlists", "note": "Placeholder of the Search page's search box." },
     "search_no_results_title": "No results",

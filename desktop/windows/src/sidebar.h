@@ -5,7 +5,9 @@
  * add a device by address (SBN_ADD_DEVICE).
  *
  * Under the pages: RECENTS, what was last played on any device (sidebar_set_recents), each
- * a button that opens it (SBN_OPEN_RECENT); the section is left out while there are none.
+ * a button that opens it (SBN_OPEN_RECENT), with a right-click menu to remove it or clear
+ * them all (SBN_REMOVE_RECENT, SBN_CLEAR_RECENTS); the section is left out while there are
+ * none.
  * Under DEVICES: this PC once it's in a group, the paired devices (each a PAGE_DEVICE row;
  * offline ones too, marked with a small glyph), and an "Unpaired devices (n)" accordion of
  * nearby devices, which ask to pair when clicked (SBN_PAIR_DEVICE). A two-line footer
@@ -52,6 +54,10 @@ typedef enum {
  * key on it): New Smart Playlist... or New Smart Album Group.... */
 #define SBN_NEW_SMART_PLAYLIST 0x104
 #define SBN_NEW_SMART_GROUP 0x105
+/* Sent the same way from a recent's right-click menu (or the menu key on it): Remove from
+ * Recents (sidebar_clicked_recent() says which) and Clear Recents. */
+#define SBN_REMOVE_RECENT 0x106
+#define SBN_CLEAR_RECENTS 0x107
 
 /* sidebar_device.flags */
 enum {
@@ -95,7 +101,7 @@ void sidebar_set_locked(BOOL locked);
 
 /* Replaces the recents, most recent first. */
 void sidebar_set_recents(const sidebar_recent *recents, int n);
-/* The recent of the last SBN_OPEN_RECENT, copying its kind to *kind, or NULL. Valid until
+/* The recent of the last SBN_OPEN_RECENT or SBN_REMOVE_RECENT, copying its kind to *kind, or NULL. Valid until
  * the recents change. */
 const char *sidebar_clicked_recent(mc_recent_kind *kind);
 
