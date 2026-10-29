@@ -18,11 +18,12 @@ Priorities:
   on the OS as little as possible.
 - **One brain.** A shared C core holds all the logic, so every platform behaves the same.
 
-> **Status:** early scaffold. The core opens and migrates its database, and the importer
-> tags folders against MusicBrainz and fetches cover art. The Windows frontend has the import
-> screen, the album grid and gapless playback, with media keys, taskbar buttons and Windows'
-> media controls; otherwise the frontends show an empty window. See
-> [docs/architecture.md](docs/architecture.md) for what's stubbed.
+> **Status:** in development. Windows, Linux and Android import, autotag, browse, play and
+> sync a library, including playlists, album groups, smart lists, search, scrobbling and
+> merging two libraries when pairing. Windows is the most complete and tested; the Linux
+> frontend has had the least testing, and Wear OS is a prototype (albums and a basic player,
+> with sync still a mock-up). What's left, and which platform has what, is in
+> [TODO.md](TODO.md); the core's modules are in [docs/architecture.md](docs/architecture.md).
 
 ## Platforms
 
@@ -133,10 +134,30 @@ In a text box (e.g. search) the arrow keys, + and - keep their usual meaning. Th
 the app's own and is remembered; there's no volume control on screen yet, so the level shows
 briefly in place of the track's name.
 
-**Mobile**
+**Android**
 
-- A Compose app that follows the system light/dark theme. The rest of the design is still
-  open.
+- A Compose app that follows the system light/dark theme, with colours taken from the album
+  art on screen.
+- One scrolling main screen: a header with **Import**, **Search**, **Sync** and **Settings**, then
+  **Recents**, **Playlists**, **Album groups**, an album grid and **Artists**. Tapping or
+  holding a section's heading jumps to another section, and tapping an item opens its track
+  list over the main screen; screens slide away with a swipe or the back gesture.
+- A mini player above the navigation bar opens the full player. Playback runs in the
+  background, with Android's media controls and notification.
+- Holding an album, artist, playlist or album group opens its menu (Play, Shuffle, Add to
+  playlist, Remove from this phone, Delete from library and so on); a playlist's tracks
+  reorder by dragging their handles.
+- **Sync** lists this phone and the other devices, pairs new ones, and opens each device's
+  page to choose what it syncs. **Settings** has scrobbling, storage, and the open source
+  licences.
+- An empty library suggests importing or, until the phone is paired, pairing it with a
+  computer; once it's in a group, choosing what to sync to it.
+
+**Wear OS**
+
+- A prototype: a menu of **Albums**, **Sync** and **Settings** (the open source licences so
+  far), the albums on the watch, and a basic player. Artists and playlists aren't built yet,
+  and sync is a mock-up.
 
 ## Architecture
 

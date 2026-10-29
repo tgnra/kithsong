@@ -306,8 +306,3 @@ Things built but not checked properly.
 - Linux - Flathub (every dependency in third_party/CMakeLists.txt as a Flatpak source), architectures other than x86_64
 - Android - the release workflow keeps only the APKs and AABs, so the R8 mapping files the scripts put in dist/ don't reach the GitHub release (the AABs carry them for Play)
 - All - translations (strings/en.json is the only language)
-
-## Docs
-
-- architecture.md - the playlist module is listed as a stub
-- README - the status note ("early scaffold… otherwise the frontends show an empty window") and the Mobile UI section are out of date
