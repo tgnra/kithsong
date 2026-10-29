@@ -3,6 +3,10 @@
  * parameter, so nothing from a rule is ever spliced into SQL. Every condition is coalesced to
  * 0 or 1, so "not" behaves as people expect where a value is missing: "not played within 180
  * days" includes tracks never played at all. The format is in docs/schema.md. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L /* localtime_r */
+#endif
+
 #include "musiccore/smartlist.h"
 
 #include <stdlib.h>
