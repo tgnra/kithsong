@@ -659,6 +659,7 @@
     "this_computer_address": { "text": "This computer's address", "note": "In Settings: where other devices reach it, to add it by address." },
     "computer_sync_settings_note": "Other devices show this computer by its name. Leaving the group stops syncing with its other devices; the music on this computer stays.",
     "pair_code_label": { "text": "Pairing code", "note": "The pairing code field's and label's name for accessibility." },
+    "pair_request_notification": { "text": "{0} wants to pair with this computer.", "note": "A desktop notification's text, under \"Pairing request\", while Kithsong is in the background. {0} is the other device's name, or \"The other device\"; clicking it shows the code." },
     "sync_everyone_tooltip": { "text": "Sync with every device in the group on this network", "note": "Tooltip of Sync now on this computer's own page." },
 
     "app_summary": { "text": "Music library, player and LAN sync", "note": "The app's one-line description in the applications menu and software centres." },
