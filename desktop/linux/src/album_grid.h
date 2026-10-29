@@ -89,6 +89,10 @@ void album_grid_unselect(GtkWidget *grid);
 gboolean album_grid_select(GtkWidget *grid, const char *uid);
 /* The grid's item with uid (a new reference), or NULL if it hasn't got it. */
 AlbumItem *album_grid_find(GtkWidget *grid, const char *uid);
+/* Where the item with uid is in the grid, or -1; and the uid of the item at i, or NULL if i
+ * is out of range (borrowed, until the grid is next reloaded). */
+int album_grid_index(GtkWidget *grid, const char *uid);
+const char *album_grid_uid_at(GtkWidget *grid, int i);
 
 /* One tile on its own, as the grid shows album (cover, title, artist or track count), for
  * places that aren't a grid view, e.g. search results. Its cover loads as the grid's do. */

@@ -633,6 +633,27 @@ AlbumItem *album_grid_find(GtkWidget *widget, const char *uid) {
   return NULL;
 }
 
+int album_grid_index(GtkWidget *widget, const char *uid) {
+  grid *g = grid_of(widget);
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(g->store));
+  for (guint i = 0; i < n; i++) {
+    AlbumItem *item = g_list_model_get_item(G_LIST_MODEL(g->store), i);
+    gboolean found = !strcmp(item->uid, uid);
+    g_object_unref(item);
+    if (found) return (int)i;
+  }
+  return -1;
+}
+
+const char *album_grid_uid_at(GtkWidget *widget, int i) {
+  grid *g = grid_of(widget);
+  if (i < 0 || (guint)i >= g_list_model_get_n_items(G_LIST_MODEL(g->store))) return NULL;
+  AlbumItem *item = g_list_model_get_item(G_LIST_MODEL(g->store), (guint)i);
+  const char *uid = item->uid;
+  g_object_unref(item); /* the store still holds it */
+  return uid;
+}
+
 gboolean album_grid_select(GtkWidget *widget, const char *uid) {
   grid *g = grid_of(widget);
   guint n = g_list_model_get_n_items(G_LIST_MODEL(g->store));

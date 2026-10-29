@@ -73,4 +73,7 @@ interface PlaylistEditor {
 
     /** Takes album [albumUid] out of album group [groupUid]. */
     fun removeFromAlbumGroup(groupUid: String, albumUid: String)
+
+    /** Moves album [albumUid] to after [afterAlbumUid] in album group [groupUid], or to the start if null. */
+    fun moveInAlbumGroup(groupUid: String, albumUid: String, afterAlbumUid: String?)
 }

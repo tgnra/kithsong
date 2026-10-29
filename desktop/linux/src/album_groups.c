@@ -22,6 +22,8 @@ static struct {
   gboolean smart;                 /* it's a smart group: nothing to rename, delete or remove */
   char menu_album[MC_UID_STRLEN]; /* the album a menu was opened on */
   char menu_group[MC_UID_STRLEN]; /* and the group it's in there, or "" */
+  char up_after[MC_UID_STRLEN];   /* where Move up puts it: after this album, or first if "" */
+  char down_after[MC_UID_STRLEN]; /* and Move down */
   char *menu_title;               /* and the album's title */
   gboolean actions;               /* the "albumgroup." actions are on the window */
 } v;
@@ -55,10 +57,10 @@ static char *group_name(const char *uid) {
   return name;
 }
 
-/* --- Actions: albumgroup.add(uid), .new, .remove, .rename(uid), .delete(uid), and
- * .delete-album, which deletes the menu's album from the library (delete_dialog.h), and
- * .remove-here and .sync-here, which take it off this computer or bring it back
- * (remove_here.h) --- */
+/* --- Actions: albumgroup.add(uid), .new, .remove, .move-up, .move-down, .rename(uid),
+ * .delete(uid), and .delete-album, which deletes the menu's album from the library
+ * (delete_dialog.h), and .remove-here and .sync-here, which take it off this computer or
+ * bring it back (remove_here.h) --- */
 
 static void on_add(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
@@ -85,6 +87,25 @@ static void on_remove(GSimpleAction *action, GVariant *param, gpointer user) {
   if (mc_album_group_remove(a->lib, v.menu_group, v.menu_album) != MC_OK)
     fail(mc_str(MC_STR_ALBUM_GROUP_REMOVE_FAILED));
   app_reload_library(a);
+}
+
+static void move(app *a, const char *after) {
+  if (!a->lib || !v.menu_album[0] || !v.menu_group[0]) return;
+  if (mc_album_group_move(a->lib, v.menu_group, v.menu_album, after[0] ? after : NULL) != MC_OK)
+    fail(mc_str(MC_STR_ALBUM_GROUP_MOVE_FAILED));
+  app_reload_library(a);
+}
+
+static void on_move_up(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  move(user, v.up_after);
+}
+
+static void on_move_down(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  move(user, v.down_after);
 }
 
 static void on_rename(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -136,6 +157,8 @@ static void ensure_actions(void) {
     {"add", on_add, "s", NULL, NULL, {0}},
     {"new", on_new, NULL, NULL, NULL, {0}},
     {"remove", on_remove, NULL, NULL, NULL, {0}},
+    {"move-up", on_move_up, NULL, NULL, NULL, {0}},
+    {"move-down", on_move_down, NULL, NULL, NULL, {0}},
     {"rename", on_rename, "s", NULL, NULL, {0}},
     {"delete", on_delete, "s", NULL, NULL, {0}},
     {"delete-album", on_delete_album, NULL, NULL, NULL, {0}},
@@ -194,7 +217,14 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
   g_menu_append_submenu(menu, mc_str_mnemonic(MC_STR_ADD_TO_ALBUM_GROUP), G_MENU_MODEL(add));
   g_object_unref(add);
   if (in_group) {
+    /* Move up and Move down where it can go: before the one before it, or after the next. */
+    int i = album_grid_index(grid, album->uid);
+    const char *up = album_grid_uid_at(grid, i - 2), *down = i >= 0 ? album_grid_uid_at(grid, i + 1) : NULL;
+    g_strlcpy(v.up_after, up ? up : "", sizeof v.up_after);
+    g_strlcpy(v.down_after, down ? down : "", sizeof v.down_after);
     section = g_menu_new();
+    if (i > 0) g_menu_append(section, mc_str_mnemonic(MC_STR_MOVE_UP), "albumgroup.move-up");
+    if (down) g_menu_append(section, mc_str_mnemonic(MC_STR_MOVE_DOWN), "albumgroup.move-down");
     g_menu_append(section, mc_str_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP), "albumgroup.remove");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
     g_object_unref(section);

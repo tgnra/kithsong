@@ -24,6 +24,7 @@ import ng.kithso.core.deleteAlbumGroup
 import ng.kithso.core.deletePermanently
 import ng.kithso.core.deletePlaylist
 import ng.kithso.core.deletePreview
+import ng.kithso.core.moveInAlbumGroup
 import ng.kithso.core.movePlaylistEntry
 import ng.kithso.core.playlistEntries
 import ng.kithso.core.removeFromAlbumGroup
@@ -351,6 +352,9 @@ class CoreLibrarySource(
 
     override fun removeFromAlbumGroup(groupUid: String, albumUid: String) =
         edit("remove album $albumUid from album group $groupUid") { it.removeFromAlbumGroup(groupUid, albumUid) }
+
+    override fun moveInAlbumGroup(groupUid: String, albumUid: String, afterAlbumUid: String?) =
+        edit("move album $albumUid in album group $groupUid") { it.moveInAlbumGroup(groupUid, albumUid, afterAlbumUid) }
 
     // On [core]. The tracks [what] adds: an album's that have a file here, as the album lists
     // them, since that's what this phone shows of it.

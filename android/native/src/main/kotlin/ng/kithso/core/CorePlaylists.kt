@@ -63,6 +63,10 @@ fun CoreLibrary.addToAlbumGroup(groupUid: String, albumUid: String) = AlbumGroup
 fun CoreLibrary.removeFromAlbumGroup(groupUid: String, albumUid: String) =
     AlbumGroupNatives.nativeRemove(handle, groupUid, albumUid)
 
+/** Moves [albumUid] to after [afterAlbumUid] in the group, or to the start if that's null. */
+fun CoreLibrary.moveInAlbumGroup(groupUid: String, albumUid: String, afterAlbumUid: String?) =
+    AlbumGroupNatives.nativeMove(handle, groupUid, albumUid, afterAlbumUid)
+
 internal object AlbumGroupNatives {
     init {
         System.loadLibrary("kithsong_jni")
@@ -73,4 +77,5 @@ internal object AlbumGroupNatives {
     @JvmStatic external fun nativeDelete(handle: Long, uid: String)
     @JvmStatic external fun nativeAdd(handle: Long, uid: String, albumUid: String)
     @JvmStatic external fun nativeRemove(handle: Long, uid: String, albumUid: String)
+    @JvmStatic external fun nativeMove(handle: Long, uid: String, albumUid: String, afterAlbumUid: String?)
 }

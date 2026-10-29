@@ -119,6 +119,7 @@
     "album_group_rename_failed": "Couldn't rename the album group",
     "album_group_delete_failed": "Couldn't delete the album group",
     "album_group_remove_failed": "Couldn't remove the album from the album group",
+    "album_group_move_failed": "Couldn't move the album",
 
     "delete_from_library_menu": { "text": "Delete from library…", "note": "On an album's, artist's or track's menu: deletes it, and its files, from the library on every device, unlike Remove from playlist or Remove from this PC (this computer, this phone). For an artist: every track credited to them, and their albums." },
     "delete_no_files_text": { "text": "It has no files on this device. It will be removed from the library on all your devices.", "note": "Under \"Delete “{0}”?\", for an album, artist or track that's only on other devices." },
@@ -847,11 +848,11 @@
     "close_player": "Close the player",
     "seek_state": { "text": "{0} of {1}", "note": "The seekbar's state for accessibility: elapsed time of total time." },
 
-    "edit_playlist": { "text": "Edit", "note": "Button on a playlist's page that shows the controls to reorder and remove its tracks." },
+    "edit_playlist": { "text": "Edit", "note": "Button on a playlist's or album group's page that shows the controls to reorder and remove its tracks or albums." },
     "playlist_added": { "text": "Added to {0}", "note": "{0} is a playlist's name." },
     "add_to_album_group_menu": { "text": "Add to album group…", "note": "On an album's menu: opens the list of album groups to add it to." },
     "album_group_added": { "text": "Added to {0}", "note": "{0} is an album group's name." },
-    "playlist_reorder": { "text": "Drag to reorder", "note": "A playlist track's drag handle, for accessibility." },
+    "playlist_reorder": { "text": "Drag to reorder", "note": "A playlist track's or album group album's drag handle, for accessibility." },
 
     "delete_permanently_text": { "one": "{0:d} file will be deleted for good and removed from the library on all your devices. This phone has no trash to restore it from.", "other": "{0:d} files will be deleted for good and removed from the library on all your devices. This phone has no trash to restore them from.", "note": "Under \"Delete “{0}”?\"; the files are an album's, artist's or track's, and its cover." },
     "delete_kept": { "one": "{0:d} track couldn't be deleted, so it's still in the library.", "other": "{0:d} tracks couldn't be deleted, so they're still in the library." },

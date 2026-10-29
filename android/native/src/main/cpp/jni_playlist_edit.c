@@ -222,3 +222,19 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeRemove(JNIEnv
   release(env, album, calbum);
   if (st != MC_OK) throw_status(env, st);
 }
+
+/* Moves album to after after_album (null = to the start) within the group. */
+JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeMove(JNIEnv *env, jclass cls,
+                                                                      jlong handle, jstring uid,
+                                                                      jstring album, jstring after_album) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = chars(env, uid, &ok);
+  const char *calbum = chars(env, album, &ok);
+  const char *cafter = chars(env, after_album, &ok);
+  mc_status st = ok ? mc_album_group_move(lib_of(handle), cuid ? cuid : "", calbum ? calbum : "", cafter) : MC_OK;
+  release(env, uid, cuid);
+  release(env, album, calbum);
+  release(env, after_album, cafter);
+  if (st != MC_OK) throw_status(env, st);
+}

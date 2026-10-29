@@ -84,7 +84,8 @@ import kotlinx.coroutines.launch
  *
  * A manual playlist has an Edit button, which shows each track with a button to remove it and
  * a handle to drag it elsewhere, until Done. Each change is made as it happens, and the list as
- * changed here ([edited]) is shown until the playlist has been read again.
+ * changed here ([edited]) is shown until the playlist has been read again. A manual album group
+ * has one too, which lists its albums the same way ([editedAlbums]).
  */
 @Composable
 fun DetailScreen(
@@ -104,17 +105,19 @@ fun DetailScreen(
     // An edit reads the list again, even when the library looks no different (after a move).
     val edits by (editor?.edits ?: remember { MutableStateFlow(0) }).collectAsState()
     var edited by remember { mutableStateOf<List<Track>?>(null) }
+    var editedAlbums by remember { mutableStateOf<List<Album>?>(null) }
     val loaded by produceState<TrackList?>(null, ref, edits, shuffles) {
         val list = source.trackList(ref)
         // An edit took the playlist's last track on this phone, or deleted it: it's gone.
         if (list == null && value != null) onBack()
         value = list
         edited = null
+        editedAlbums = null
     }
     val editable by produceState(false, ref, edits) {
         value = ref.kind == CollectionRef.Kind.Playlist && editor?.isEditable(ref.uid) == true
     }
-    // A manual album group's albums can be taken out of it, from their menus.
+    // A manual album group's albums can be taken out of it, from their menus, and reordered.
     val editableGroup by produceState(false, ref, edits) {
         value = ref.kind == CollectionRef.Kind.AlbumGroup && editor?.isEditableGroup(ref.uid) == true
     }
@@ -128,25 +131,41 @@ fun DetailScreen(
     val picture = remember(library, ref) { library?.artOf(ref) }
     val list = loaded?.let { if (picture != null) it.copy(art = picture) else it }
     val tracks = edited ?: list?.tracks.orEmpty()
-    val isEditing = editing && editable
+    val albums = editedAlbums ?: list?.albums.orEmpty()
+    val isEditing = editing && (editable || editableGroup)
 
     val listState = rememberLazyListState()
     val reorder = remember(listState) { ReorderState(listState) }
-    // Where the dragged track was before this drag.
+    // Where the dragged track or album was before this drag.
     var dragFrom by remember { mutableIntStateOf(-1) }
-    reorder.isMovable = { it is String && it.startsWith(ENTRY_KEY) }
+    reorder.isMovable = { it is String && (it.startsWith(ENTRY_KEY) || it.startsWith(ALBUM_KEY)) }
     reorder.onMove = { from, to ->
-        val i = tracks.indexOfFirst { entryKey(it) == from }
-        val j = tracks.indexOfFirst { entryKey(it) == to }
-        if (i >= 0 && j >= 0) {
-            if (dragFrom < 0) dragFrom = i
-            edited = tracks.toMutableList().apply { add(j, removeAt(i)) }
+        if (from is String && from.startsWith(ALBUM_KEY)) {
+            val i = albums.indexOfFirst { ALBUM_KEY + it.uid == from }
+            val j = albums.indexOfFirst { ALBUM_KEY + it.uid == to }
+            if (i >= 0 && j >= 0) {
+                if (dragFrom < 0) dragFrom = i
+                editedAlbums = albums.toMutableList().apply { add(j, removeAt(i)) }
+            }
+        } else {
+            val i = tracks.indexOfFirst { entryKey(it) == from }
+            val j = tracks.indexOfFirst { entryKey(it) == to }
+            if (i >= 0 && j >= 0) {
+                if (dragFrom < 0) dragFrom = i
+                edited = tracks.toMutableList().apply { add(j, removeAt(i)) }
+            }
         }
     }
     reorder.onDrop = { key ->
-        val i = tracks.indexOfFirst { entryKey(it) == key }
-        val entry = tracks.getOrNull(i)?.entryUid
-        if (entry != null && dragFrom >= 0 && i != dragFrom) editor?.moveEntry(entry, tracks.getOrNull(i - 1)?.entryUid)
+        if (key is String && key.startsWith(ALBUM_KEY)) {
+            val i = albums.indexOfFirst { ALBUM_KEY + it.uid == key }
+            val album = albums.getOrNull(i)?.uid
+            if (album != null && dragFrom >= 0 && i != dragFrom) editor?.moveInAlbumGroup(ref.uid, album, albums.getOrNull(i - 1)?.uid)
+        } else {
+            val i = tracks.indexOfFirst { entryKey(it) == key }
+            val entry = tracks.getOrNull(i)?.entryUid
+            if (entry != null && dragFrom >= 0 && i != dragFrom) editor?.moveEntry(entry, tracks.getOrNull(i - 1)?.entryUid)
+        }
         dragFrom = -1
     }
     // Moves a track by one place, for accessibility services.
@@ -158,11 +177,19 @@ fun DetailScreen(
             editor?.moveEntry(entry, moved.getOrNull(i + by - 1)?.entryUid)
         }
     }
+    // Likewise an album in a group.
+    val moveAlbumBy: (Int, Int) -> Unit = { i, by ->
+        val album = albums.getOrNull(i)?.uid
+        if (album != null && i + by in albums.indices) {
+            val moved = albums.toMutableList().apply { add(i + by, removeAt(i)) }
+            editedAlbums = moved
+            editor?.moveInAlbumGroup(ref.uid, album, moved.getOrNull(i + by - 1)?.uid)
+        }
+    }
 
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val columns = albumColumns(maxWidth)
-            val albums = list?.albums.orEmpty()
             val group = ref.kind == CollectionRef.Kind.AlbumGroup
             ArtBackdrop(rememberArtColors(picture ?: list?.art), Modifier.matchParentSize())
             LazyColumn(
@@ -173,7 +200,13 @@ fun DetailScreen(
                 modifier = Modifier.fillMaxSize(),
             ) {
                 item(key = "header", contentType = "header") {
-                    DetailHeader(ref.kind, list, onBack, editing = if (editable) isEditing else null, onEdit = { editing = it })
+                    DetailHeader(
+                        ref.kind,
+                        list,
+                        onBack,
+                        editing = if (editable || editableGroup) isEditing else null,
+                        onEdit = { editing = it },
+                    )
                 }
                 if (list != null && !isEditing && (tracks.isNotEmpty() || list.canReshuffle)) item(key = "actions", contentType = "actions") {
                     DetailActions(
@@ -185,6 +218,31 @@ fun DetailScreen(
                             }
                         }) else null,
                     )
+                }
+                if (group && isEditing) {
+                    itemsIndexed(albums, key = { _, album -> ALBUM_KEY + album.uid }, contentType = { _, _ -> "album" }) { i, album ->
+                        val key = ALBUM_KEY + album.uid
+                        val moveUp = stringResource(R.string.move_up)
+                        val moveDown = stringResource(R.string.move_down)
+                        EditAlbumRow(
+                            album,
+                            onRemove = {
+                                editedAlbums = albums.filterIndexed { j, _ -> j != i }
+                                editor?.removeFromAlbumGroup(ref.uid, album.uid)
+                            },
+                            handle = with(reorder) {
+                                Modifier.dragHandle(key).semantics {
+                                    customActions = buildList {
+                                        if (i > 0) add(CustomAccessibilityAction(moveUp) { moveAlbumBy(i, -1); true })
+                                        if (i < albums.lastIndex) add(CustomAccessibilityAction(moveDown) { moveAlbumBy(i, 1); true })
+                                    }
+                                }
+                            },
+                            lifted = key == reorder.dragged,
+                            modifier = if (key == reorder.dragged) with(reorder) { Modifier.dragged(key) } else Modifier.animateItem(),
+                        )
+                    }
+                    return@LazyColumn
                 }
                 if (group) {
                     items(albums.chunked(columns), key = { "albums:${it.first().uid}" }, contentType = { "albums" }) { row ->
@@ -268,7 +326,7 @@ private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onReshuffle: (() -> Unit
  * The back button, then the art, title and subtitle beside each other. In a short window
  * (landscape, mostly) the back button goes beside them too, and the art is smaller, to leave
  * room for the tracks. A playlist that can be edited has Edit, or Done while [editing], at
- * the other end from the back button; [editing] is null for anything else.
+ * the other end from the back button, as has a manual album group; [editing] is null for anything else.
  */
 @Composable
 private fun DetailHeader(
@@ -405,7 +463,38 @@ private fun EditTrackRow(track: Track, onRemove: () -> Unit, handle: Modifier, l
     )
 }
 
+/** An album group's album while editing, as [EditTrackRow] is a playlist's track. */
+@Composable
+private fun EditAlbumRow(album: Album, onRemove: () -> Unit, handle: Modifier, lifted: Boolean, modifier: Modifier) {
+    ListItem(
+        leadingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onRemove) {
+                    Icon(
+                        Icons.RemoveCircle,
+                        contentDescription = stringResource(R.string.remove_from_album_group),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+                AlbumArt(album.art, contentDescription = null, shape = RoundedCornerShape(6.dp), modifier = Modifier.size(40.dp))
+            }
+        },
+        headlineContent = { Text(album.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(album.artist, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        trailingContent = {
+            Box(handle.size(48.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.DragHandle, contentDescription = stringResource(R.string.playlist_reorder))
+            }
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = if (lifted) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
+        ),
+        modifier = modifier,
+    )
+}
+
 private const val ENTRY_KEY = "entry:"
+private const val ALBUM_KEY = "album:"
 
 // A playlist track's key in the list: its entry, which is unique and stays the same as it moves.
 private fun entryKey(track: Track): String? = track.entryUid?.let { ENTRY_KEY + it }

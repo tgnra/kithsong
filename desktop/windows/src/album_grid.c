@@ -41,6 +41,8 @@ enum {
 enum {
   CMD_NEW_GROUP = 1,
   CMD_REMOVE_FROM_GROUP,
+  CMD_MOVE_UP, /* within a group */
+  CMD_MOVE_DOWN,
   CMD_RENAME_GROUP,
   CMD_DELETE_GROUP,
   CMD_DELETE_ALBUM,
@@ -1151,20 +1153,29 @@ BOOL album_grid_action_rect(RECT *screen) {
   return TRUE;
 }
 
-/* Add to Album Group, inside a (manual) group Remove from Album Group, then Remove from This
- * PC... or Sync to This PC where they apply, and Delete from Library..., for album tile i. */
+/* Add to Album Group, inside a (manual) group Move Up, Move Down and Remove from Album Group,
+ * then Remove from This PC... or Sync to This PC where they apply, and Delete from Library...,
+ * for album tile i. */
 static void show_album_menu(int i, POINT pt) {
   char album[MC_UID_STRLEN], group[MC_UID_STRLEN];
   memcpy(album, g.tiles[i].uid, sizeof album);
   memcpy(group, g.group_uid, sizeof group);
   wchar_t *title = _wcsdup(g.tiles[i].title ? g.tiles[i].title : L"");
   BOOL in_group = g.tiles_view == AGV_GROUP && !g.group_smart;
+  /* Where Move Up and Move Down put it: after the album two before it (or first), or after
+   * the next. */
+  char up_after[MC_UID_STRLEN] = "", down_after[MC_UID_STRLEN] = "";
+  if (i >= 2) memcpy(up_after, g.tiles[i - 2].uid, sizeof up_after);
+  if (i + 1 < g.count) memcpy(down_after, g.tiles[i + 1].uid, sizeof down_after);
+  BOOL first = i == 0, last = i + 1 >= g.count;
   HMENU menu = CreatePopupMenu();
   mc_album_group_list *groups = NULL;
   HMENU add = add_to_album_group_menu(g.lib, CMD_GROUP_FIRST, CMD_NEW_GROUP, &groups);
   if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_ALBUM_GROUP));
   if (in_group) {
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING | (first ? MF_GRAYED : 0), CMD_MOVE_UP, mc_wstr_mnemonic(MC_STR_MOVE_UP));
+    AppendMenuW(menu, MF_STRING | (last ? MF_GRAYED : 0), CMD_MOVE_DOWN, mc_wstr_mnemonic(MC_STR_MOVE_DOWN));
     AppendMenuW(menu, MF_STRING, CMD_REMOVE_FROM_GROUP, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -1187,6 +1198,12 @@ static void show_album_menu(int i, POINT pt) {
     changed = g.lib && mc_album_group_remove(g.lib, group, album) == MC_OK;
     if (!changed)
       MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_REMOVE_FAILED), mc_wstr(MC_STR_ALBUM_GROUP), MB_OK | MB_ICONERROR);
+  }
+  if (cmd == CMD_MOVE_UP || cmd == CMD_MOVE_DOWN) {
+    const char *after = cmd == CMD_MOVE_UP ? up_after : down_after;
+    changed = g.lib && mc_album_group_move(g.lib, group, album, after[0] ? after : NULL) == MC_OK;
+    if (!changed)
+      MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_MOVE_FAILED), mc_wstr(MC_STR_ALBUM_GROUP), MB_OK | MB_ICONERROR);
   }
   if (changed) notify_changed();
 }

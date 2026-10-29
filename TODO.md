@@ -23,7 +23,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Artists | yes (no art) | yes (no art) | yes (matched by name) | no |
 | Playlists: browse | yes | yes | yes | no |
 | Playlists: edit | yes | yes | yes | no |
-| Album groups | yes | yes | yes (no reorder) | no |
+| Album groups | yes | yes | yes | no |
 | Smart playlists | yes (rule editor, rename, delete) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
 | Recents | yes | yes | yes (core's) | no |
 | Search | yes | yes | yes | no |
@@ -63,8 +63,7 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Album groups
 - Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are); failed edits are only logged
-- Android - reorder albums in a group (mc_album_group_move())
-- Windows - reorder albums in a group, and drag albums onto a group
+- Windows and Linux - albums in a group are reordered with Move up/Move down on their menus, not by dragging; Windows can't drag albums onto a group either
 - Windows and Linux - play a whole group, smart groups too (queue its albums in order; Android has Play)
 
 ### Smart playlists
