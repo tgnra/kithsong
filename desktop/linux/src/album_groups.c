@@ -376,6 +376,7 @@ static GtkWidget *build_group_page(app *a) {
   gtk_widget_set_margin_end(header, 18);
   gtk_widget_set_margin_top(header, 12);
   GtkWidget *back = round_button(gtk_button_new_from_icon_name("go-previous-symbolic"), mc_str(MC_STR_BACK));
+  app_set_tooltip(back, mc_str(MC_STR_BACK), "<Alt>Left");
   g_signal_connect(back, "clicked", G_CALLBACK(on_back), NULL);
   gtk_box_append(GTK_BOX(header), back);
   v.name = gtk_label_new(NULL);
@@ -452,7 +453,7 @@ GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*na
   GtkWidget *list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_add_css_class(list, "view");
   gtk_box_append(GTK_BOX(list), app_list_header(mc_str(MC_STR_SECTION_ALBUM_GROUPS), mc_str(MC_STR_NEW_ALBUM_GROUP),
-                                                G_CALLBACK(on_new_group), a));
+                                                NULL, G_CALLBACK(on_new_group), a));
   gtk_box_append(GTK_BOX(list), v.list_stack);
 
   v.stack = gtk_stack_new();

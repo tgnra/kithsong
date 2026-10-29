@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "app.h"
 #include "cover.h"
 #include "musiccore/musiccore.h"
 
@@ -94,7 +95,7 @@ static gboolean on_bar_event(GtkEventControllerLegacy *controller, GdkEvent *eve
 static void on_shuffle_toggled(GtkToggleButton *button, gpointer user) {
   (void)user;
   gboolean on = gtk_toggle_button_get_active(button);
-  gtk_widget_set_tooltip_text(GTK_WIDGET(button), mc_str(on ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
+  app_set_tooltip(GTK_WIDGET(button), mc_str(on ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF), "<Control>s");
   if (!s.updating && s.shuffle) s.shuffle(s.user, on);
 }
 
@@ -153,7 +154,7 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(voi
   gtk_widget_add_css_class(s.shuffle_button, "shuffle");
   gtk_widget_set_valign(s.shuffle_button, GTK_ALIGN_CENTER);
   gtk_widget_set_focus_on_click(s.shuffle_button, FALSE);
-  gtk_widget_set_tooltip_text(s.shuffle_button, mc_str(MC_STR_SHUFFLE_OFF));
+  app_set_tooltip(s.shuffle_button, mc_str(MC_STR_SHUFFLE_OFF), "<Control>s");
   gtk_accessible_update_property(GTK_ACCESSIBLE(s.shuffle_button), GTK_ACCESSIBLE_PROPERTY_LABEL,
                                  mc_str(MC_STR_SHUFFLE), -1);
   g_signal_connect(s.shuffle_button, "toggled", G_CALLBACK(on_shuffle_toggled), NULL);

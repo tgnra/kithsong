@@ -644,7 +644,7 @@ static GtkWidget *build_header(void) {
   gtk_widget_set_margin_end(header, 18);
   gtk_widget_set_margin_top(header, 12);
   GtkWidget *back = gtk_button_new_from_icon_name("go-previous-symbolic");
-  gtk_widget_set_tooltip_text(back, mc_str(MC_STR_BACK));
+  app_set_tooltip(back, mc_str(MC_STR_BACK), "<Alt>Left");
   gtk_widget_add_css_class(back, "flat");
   gtk_widget_add_css_class(back, "circular");
   gtk_widget_set_valign(back, GTK_ALIGN_START);

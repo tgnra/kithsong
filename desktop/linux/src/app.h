@@ -58,8 +58,10 @@ void app_reload_library(app *a);
 void app_update_empty_pages(app *a);
 
 /* A header for a list page, as an album group's: its name (title-2) and a round + button
- * with tooltip, which calls clicked(button, user). For Playlists and Album groups. */
-GtkWidget *app_list_header(const char *title, const char *tooltip, GCallback clicked, gpointer user);
+ * with tooltip (and its shortcut, accel, as app_set_tooltip() takes it, or NULL), which
+ * calls clicked(button, user). For Playlists and Album groups. */
+GtkWidget *app_list_header(const char *title, const char *tooltip, const char *accel, GCallback clicked,
+                           gpointer user);
 
 /* Plays the album or playlist shown in the track list, from track start on (or with start
  * -1 from the first track, which shuffled is any), and puts it first in the recents. */
@@ -81,5 +83,9 @@ void app_open_album_group(app *a, const char *uid);
  * it). TRUE if it's open; FALSE after telling the user why it couldn't be. Saves nothing:
  * settings_view_choose_library() does. */
 gboolean app_open_library(app *a, const char *dir);
+
+/* Sets widget's tooltip to label with its keyboard shortcut, "Next track (Ctrl+→)": accel
+ * as gtk_accelerator_parse() reads it, e.g. "<Control>Right", shown as GTK labels it. */
+void app_set_tooltip(GtkWidget *widget, const char *label, const char *accel);
 
 #endif

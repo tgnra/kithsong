@@ -134,7 +134,22 @@ void app_update_empty_pages(app *a) {
   set_no_playlists(a);
 }
 
-GtkWidget *app_list_header(const char *title, const char *tooltip, GCallback clicked, gpointer user) {
+void app_set_tooltip(GtkWidget *widget, const char *label, const char *accel) {
+  guint key = 0;
+  GdkModifierType mods = 0;
+  if (!accel || !gtk_accelerator_parse(accel, &key, &mods)) {
+    gtk_widget_set_tooltip_text(widget, label);
+    return;
+  }
+  char *keys = gtk_accelerator_get_label(key, mods);
+  char *text = mc_format_alloc(mc_str(MC_STR_TOOLTIP_SHORTCUT), MC_S(label), MC_S(keys));
+  gtk_widget_set_tooltip_text(widget, text ? text : label);
+  mc_free(text);
+  g_free(keys);
+}
+
+GtkWidget *app_list_header(const char *title, const char *tooltip, const char *accel, GCallback clicked,
+                           gpointer user) {
   GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   gtk_widget_set_margin_start(header, 18);
   gtk_widget_set_margin_end(header, 18);
@@ -145,7 +160,7 @@ GtkWidget *app_list_header(const char *title, const char *tooltip, GCallback cli
   gtk_widget_set_hexpand(label, TRUE);
   gtk_box_append(GTK_BOX(header), label);
   GtkWidget *add = gtk_button_new_from_icon_name("list-add-symbolic");
-  gtk_widget_set_tooltip_text(add, tooltip);
+  app_set_tooltip(add, tooltip, accel);
   gtk_widget_add_css_class(add, "flat");
   gtk_widget_add_css_class(add, "circular");
   gtk_widget_set_valign(add, GTK_ALIGN_CENTER);
@@ -410,7 +425,7 @@ static void update_buttons(app *a) {
   gboolean playing = playback_is_playing();
   gtk_button_set_icon_name(GTK_BUTTON(play_button),
                            playing ? "media-playback-pause-symbolic" : "media-playback-start-symbolic");
-  gtk_widget_set_tooltip_text(play_button, mc_str(playing ? MC_STR_PAUSE : MC_STR_PLAY));
+  app_set_tooltip(play_button, mc_str(playing ? MC_STR_PAUSE : MC_STR_PLAY), "space");
   set_action_enabled(a, "previous", playback_has_current());
   set_action_enabled(a, "play-pause", playback_has_current() || album_playable(a));
   set_action_enabled(a, "next", playback_has_next());
@@ -951,7 +966,7 @@ static GtkWidget *build_albums(app *a) {
   GtkWidget *playlists_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_add_css_class(playlists_page, "view");
   gtk_box_append(GTK_BOX(playlists_page), app_list_header(mc_str(MC_STR_SECTION_PLAYLISTS), mc_str(MC_STR_NEW_PLAYLIST),
-                                                          G_CALLBACK(on_new_playlist), a));
+                                                          "<Control>n", G_CALLBACK(on_new_playlist), a));
   gtk_box_append(GTK_BOX(playlists_page), playlists);
 
   GtkWidget *stack = gtk_stack_new();
@@ -967,16 +982,17 @@ static GtkWidget *build_albums(app *a) {
 
 /* --- Window --- */
 
-static GtkWidget *icon_button(const char *icon, const char *tooltip) {
+/* A button whose tooltip has its shortcut, accel (see app_set_tooltip()). */
+static GtkWidget *icon_button(const char *icon, const char *tooltip, const char *accel) {
   GtkWidget *b = gtk_button_new_from_icon_name(icon);
-  gtk_widget_set_tooltip_text(b, tooltip);
+  app_set_tooltip(b, tooltip, accel);
   return b;
 }
 
 /* The playback buttons don't take the focus when clicked, so Space after clicking Next still
  * plays or pauses rather than skipping again. */
-static GtkWidget *action_button(const char *icon, const char *tooltip, const char *action) {
-  GtkWidget *b = icon_button(icon, tooltip);
+static GtkWidget *action_button(const char *icon, const char *tooltip, const char *accel, const char *action) {
+  GtkWidget *b = icon_button(icon, tooltip, accel);
   gtk_actionable_set_action_name(GTK_ACTIONABLE(b), action);
   gtk_widget_set_focus_on_click(b, FALSE);
   return b;
@@ -1050,15 +1066,15 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   GtkWidget *header = adw_header_bar_new();
   adw_header_bar_pack_start(ADW_HEADER_BAR(header),
                             action_button("media-skip-backward-symbolic", mc_str(MC_STR_PREVIOUS_TRACK),
-                                          "app.previous"));
-  play_button = action_button("media-playback-start-symbolic", mc_str(MC_STR_PLAY), "app.play-pause");
+                                          "<Control>Left", "app.previous"));
+  play_button = action_button("media-playback-start-symbolic", mc_str(MC_STR_PLAY), "space", "app.play-pause");
   adw_header_bar_pack_start(ADW_HEADER_BAR(header), play_button);
-  adw_header_bar_pack_start(ADW_HEADER_BAR(header),
-                            action_button("media-skip-forward-symbolic", mc_str(MC_STR_NEXT_TRACK), "app.next"));
-  a->settings = icon_button("emblem-system-symbolic", mc_str(MC_STR_SETTINGS));
+  adw_header_bar_pack_start(ADW_HEADER_BAR(header), action_button("media-skip-forward-symbolic", mc_str(MC_STR_NEXT_TRACK),
+                                                                  "<Control>Right", "app.next"));
+  a->settings = icon_button("emblem-system-symbolic", mc_str(MC_STR_SETTINGS), "<Control>comma");
   g_signal_connect(a->settings, "clicked", G_CALLBACK(on_settings), a);
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), a->settings);
-  GtkWidget *import = icon_button("list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC));
+  GtkWidget *import = icon_button("list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC), "<Control>o");
   g_signal_connect(import, "clicked", G_CALLBACK(on_import), a);
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), import);
 

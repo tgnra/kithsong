@@ -3,6 +3,7 @@
 #include <adwaita.h>
 #include <string.h>
 
+#include "app.h"
 #include "cover.h"
 
 enum { HEADER_COVER = 96 };
@@ -417,7 +418,7 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(header), s.reshuffle_button);
 
   GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic");
-  gtk_widget_set_tooltip_text(close, mc_str(MC_STR_CLOSE));
+  app_set_tooltip(close, mc_str(MC_STR_CLOSE), "Escape");
   gtk_widget_add_css_class(close, "flat");
   gtk_widget_add_css_class(close, "circular");
   gtk_widget_set_valign(close, GTK_ALIGN_START);
