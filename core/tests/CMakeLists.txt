@@ -1,7 +1,9 @@
 # Unit tests. Each test_*.c is its own executable; tests that need scratch files get the
 # test binary directory as argv[1].
 function(kithsong_test name)
-  add_executable(${name} ${name}.c)
+  # safe_trash.c keeps what a test trashes out of the real Recycle Bin or trash.
+  add_executable(${name} ${name}.c safe_trash.c)
+  target_compile_definitions(${name} PRIVATE MC_TEST_TRASH_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-trash/${name}")
   target_link_libraries(${name} PRIVATE musiccore mc_sqlite3)
   # White-box tests may include core's private headers.
   target_include_directories(${name} PRIVATE "${PROJECT_SOURCE_DIR}/core/src")

@@ -409,7 +409,7 @@ mc_status mc_sync_remove_here(mc_sync *sync, const mc_here_plan *plan, mc_here_r
         gone[i] = 1; /* outside the library folder: left alone, as reconcile does */
       } else if (!mc_file_exists(abs)) {
         gone[i] = 1;
-      } else if ((f->imported && mc_trash(abs) == MC_OK) || mc_remove(abs) == MC_OK) {
+      } else if ((f->imported && mc_transfer_trash(abs) == MC_OK) || mc_remove(abs) == MC_OK) {
         gone[i] = 1;
         res.files_removed++;
       } else {

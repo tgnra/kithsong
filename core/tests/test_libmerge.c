@@ -344,10 +344,11 @@ static void test_merge(const char *root) {
   mc_libmerge_sort_kept(kept, 2);
 
   trashed = 0;
+  mc_status (*was)(const char *) = mc_dupes_trash; /* safe_trash.c's */
   mc_dupes_trash = fake_trash;
   mc_merge_result r;
   CHECK(mc_libmerge_run(lib, kept, 2, NULL, NULL, &r) == MC_OK);
-  mc_dupes_trash = mc_trash;
+  mc_dupes_trash = was;
   CHECK(r.status == MC_OK);
   CHECK(r.tracks_added == 1);    /* Fresh */
   CHECK(r.tracks_better == 1);   /* Better: this WAV beats the kept MP3 */

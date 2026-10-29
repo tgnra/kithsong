@@ -13,6 +13,7 @@
 #include "musiccore/musiccore.h"
 #include "sync/sync_db.h"
 #include "sync/sync_internal.h"
+#include "sync/transfer.h"
 #include "test.h"
 #include "util/platform.h"
 
@@ -415,6 +416,7 @@ static void select_albums(dev *editor, const char *device, const char *const *al
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
+  CHECK(mc_transfer_trash != mc_trash); /* safe_trash.c's stand-in, not the real trash */
   char root[1024], sql[1024];
   snprintf(root, sizeof root, "%s/test_sync_here.d", scratch);
   remove_tree(root);
