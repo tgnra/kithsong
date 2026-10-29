@@ -11,8 +11,8 @@ Big pieces that haven't been started, or that only one platform has.
 - **Screen readers on Windows** - the album grid, track list, sidebar and search page have UI Automation providers, checked with a UI Automation tree walk but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **AAC/M4A playback** - no decoder chosen
 - **Merging libraries** - core, Windows, Linux and Android merge two libraries with music when pairing; see Sync → Merging libraries below
-- **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists, artists or settings
-- **Releases** - no Windows installer or signing, no Flathub listing (Android: R8 on, licences in Settings; the watch has no licences screen yet)
+- **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
+- **Releases** - no Windows installer or signing, no Flathub listing (Android and Wear OS: R8 on, licences in Settings)
 - **Translations** - strings/en.json is the only language
 
 ### Parity at a glance
@@ -244,8 +244,8 @@ The album grid, track list, sidebar and search page have UI Automation providers
 - Sync - drive the sync screen from the core instead of SampleSync
 - Sync - request a Wi-Fi network while syncing; Wear OS keeps Wi-Fi off while the phone is connected over Bluetooth
 - Sync - sync in the background, not only while the sync screen is open
-- Artists, Playlists, Settings
-- Settings - an "Open source licences" screen like the phone's; the watch APK already carries the texts (assets/licenses/)
+- Artists, Playlists, and more in Settings (it has only Open source licences)
+- Settings - the licences screen is only built, never run: no Wear OS emulator here (Wear_OS_Small_Round isn't set up). Check it scrolls with the crown, the long texts' monospaced paragraphs are readable, and that a licence opened from the list shows its name
 
 ## Testing and verification
 

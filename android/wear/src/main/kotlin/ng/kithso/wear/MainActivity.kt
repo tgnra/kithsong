@@ -1,5 +1,6 @@
 package ng.kithso.wear
 
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -24,7 +25,10 @@ import ng.kithso.core.TrackInfo
 import ng.kithso.wear.ui.AlbumScreen
 import ng.kithso.wear.ui.AlbumsScreen
 import ng.kithso.wear.ui.HomeScreen
+import ng.kithso.wear.ui.LicenseTextScreen
+import ng.kithso.wear.ui.LicensesScreen
 import ng.kithso.wear.ui.PlayerScreen
+import ng.kithso.wear.ui.SettingsScreen
 import ng.kithso.wear.ui.SyncScreen
 
 class MainActivity : ComponentActivity() {
@@ -61,6 +65,7 @@ private fun WearApp() {
                 HomeScreen(
                     onAlbums = { navController.navigate("albums") },
                     onSync = { navController.navigate("sync") },
+                    onSettings = { navController.navigate("settings") },
                 )
             }
             composable("albums") {
@@ -95,6 +100,16 @@ private fun WearApp() {
                 // Discoverable, and syncing, only while this screen is open.
                 LaunchedEffect(Unit) { sync.run() }
                 SyncScreen(sync.state, onDismissRefusal = sync::dismissRefusal)
+            }
+            composable("settings") {
+                SettingsScreen(onLicenses = { navController.navigate("licenses") })
+            }
+            composable("licenses") {
+                // The asset's path has slashes: encoded here, decoded by the route.
+                LicensesScreen { navController.navigate("license/${Uri.encode(it)}") }
+            }
+            composable("license/{asset}") { entry ->
+                LicenseTextScreen(entry.arguments?.getString("asset") ?: return@composable)
             }
         }
     }

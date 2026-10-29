@@ -14,7 +14,7 @@ import androidx.wear.compose.material3.Text
 import ng.kithso.wear.R
 
 @Composable
-fun HomeScreen(onAlbums: () -> Unit, onSync: () -> Unit) {
+fun HomeScreen(onAlbums: () -> Unit, onSync: () -> Unit, onSettings: () -> Unit) {
     ListScreen { transform ->
         item {
             ListHeader(
@@ -29,7 +29,7 @@ fun HomeScreen(onAlbums: () -> Unit, onSync: () -> Unit) {
         menuItem(transform, R.string.section_artists, null)
         menuItem(transform, R.string.section_playlists, null)
         menuItem(transform, R.string.sync, onSync)
-        menuItem(transform, R.string.settings, null)
+        menuItem(transform, R.string.settings, onSettings)
     }
 }
 
@@ -55,7 +55,7 @@ private fun TransformingLazyColumnScope.menuItem(
 private fun HomeScreenPreview() {
     MaterialTheme {
         AppScaffold {
-            HomeScreen(onAlbums = {}, onSync = {})
+            HomeScreen(onAlbums = {}, onSync = {}, onSettings = {})
         }
     }
 }

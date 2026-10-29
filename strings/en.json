@@ -982,6 +982,10 @@
     "watch_paired_text": { "text": "Paired with {0}. Choose what this watch holds on one of them.", "note": "{0} is the list of paired devices' names." },
     "watch_refused_in_group": "This watch is already paired with other devices. Remove it there first.",
     "watch_refused_library_mismatch": { "text": "This watch holds music from a different library than {0}.", "note": "{0} is the name of the device asking to pair." },
-    "watch_refused_already_paired": { "text": "This watch is already paired with {0}.", "note": "{0} is the name of the device asking to pair." }
+    "watch_refused_already_paired": { "text": "This watch is already paired with {0}.", "note": "{0} is the name of the device asking to pair." },
+    "watch_licenses": { "text": "Open source licences", "note": "The watch's Settings entry, and the title of its screen: the third-party libraries in the watch app and their licences." },
+    "watch_licenses_native": { "text": "In the core", "note": "Heading on the watch's licences screen: the C libraries the native core is built from." },
+    "watch_licenses_overview": { "text": "Overview", "note": "The watch's licences screen: the list of every third-party library, its version and licence (LICENSES.md)." },
+    "watch_licenses_android": { "text": "In the watch app", "note": "Heading on the watch's licences screen: the Android/Kotlin libraries." }
   }
 }
