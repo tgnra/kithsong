@@ -1577,8 +1577,9 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       s.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, wnd, NULL,
                                   GetModuleHandleW(NULL), NULL);
+      wchar_t close_tip[64];
       TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = wnd, .uId = 1,
-                        .lpszText = (wchar_t *)mc_wstr(MC_STR_CLOSE)};
+                        .lpszText = wstr_tooltip(close_tip, 64, MC_STR_CLOSE, MC_STR_WINDOWS_SHORTCUT_CLOSE)};
       SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
       ti.uId = 2; /* the playlist menu's button; placed by relayout(), as are the rest */
       ti.lpszText = (wchar_t *)more_label();

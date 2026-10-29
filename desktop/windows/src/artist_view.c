@@ -923,8 +923,10 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
                                   GetModuleHandleW(NULL), NULL);
       const enum mc_str_id tips[] = {MC_STR_BACK, MC_STR_WINDOWS_SCROLL_LEFT, MC_STR_WINDOWS_SCROLL_RIGHT};
       for (int i = 0; i < 3; i++) {
+        wchar_t back_tip[64]; /* Back's has its shortcut */
         TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = wnd, .uId = (UINT_PTR)i + 1,
-                          .lpszText = (wchar_t *)mc_wstr(tips[i])};
+                          .lpszText = i == 0 ? wstr_tooltip(back_tip, 64, tips[i], MC_STR_WINDOWS_SHORTCUT_BACK)
+                                             : (wchar_t *)mc_wstr(tips[i])};
         SendMessageW(v.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
       }
       return 0;

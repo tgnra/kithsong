@@ -581,8 +581,11 @@ static void apply_theme(void) {
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
+static void set_button_label(HWND button, enum mc_str_id label, enum mc_str_id shortcut);
+
 static void create_controls(void) {
-  /* The labels aren't shown; they name the buttons for tooltips and screen readers. */
+  /* The labels aren't shown; they name the buttons for screen readers, and with their
+   * shortcuts are the tooltips (set_button_label()). */
   const wchar_t *const labels[NUM_BUTTONS] = {mc_wstr(MC_STR_PREVIOUS_TRACK), mc_wstr(MC_STR_PLAY),
                                               mc_wstr(MC_STR_NEXT_TRACK)};
   for (int i = 0; i < NUM_BUTTONS; i++) {
@@ -605,6 +608,10 @@ static void create_controls(void) {
   TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_IDISHWND | TTF_SUBCLASS, .hwnd = g_app.wnd,
                     .uId = (UINT_PTR)g_app.shuffle, .lpszText = (wchar_t *)mc_wstr(MC_STR_SHUFFLE_OFF)};
   SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+  set_button_label(g_app.buttons[ID_PREV - ID_PREV], MC_STR_PREVIOUS_TRACK, MC_STR_WINDOWS_SHORTCUT_PREVIOUS);
+  set_button_label(g_app.buttons[ID_NEXT - ID_PREV], MC_STR_NEXT_TRACK, MC_STR_WINDOWS_SHORTCUT_NEXT);
+  set_button_label(g_app.buttons[ID_PLAY - ID_PREV], MC_STR_PLAY, MC_STR_WINDOWS_SHORTCUT_PLAY_PAUSE);
+  set_button_label(g_app.shuffle, MC_STR_SHUFFLE_OFF, MC_STR_WINDOWS_SHORTCUT_SHUFFLE);
 
   g_app.sidebar = sidebar_create(g_app.wnd, ID_SIDEBAR);
 
@@ -651,10 +658,13 @@ static void play_album(int start) {
   if (count && g_app.lib && uid[0] && mc_library_record_opened(g_app.lib, kind, uid) == MC_OK) refresh_recents();
 }
 
-/* A button's name, for screen readers, and its tooltip. */
-static void set_button_label(HWND button, const wchar_t *label) {
-  SetWindowTextW(button, label);
-  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)button, .lpszText = (wchar_t *)label};
+/* A button's name, for screen readers, and its tooltip, which adds the button's shortcut:
+ * "Next track (Ctrl+Right)". */
+static void set_button_label(HWND button, enum mc_str_id label, enum mc_str_id shortcut) {
+  SetWindowTextW(button, mc_wstr(label));
+  wchar_t tip[128];
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)button,
+                    .lpszText = wstr_tooltip(tip, 128, label, shortcut)};
   SendMessageW(g_app.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
   InvalidateRect(button, NULL, FALSE);
 }
@@ -662,8 +672,10 @@ static void set_button_label(HWND button, const wchar_t *label) {
 /* The Play button turns into Pause while playing; Shuffle shows whether it's on. */
 static void playback_changed(void) {
   update_buttons();
-  set_button_label(g_app.buttons[ID_PLAY - ID_PREV], mc_wstr(playback_is_playing() ? MC_STR_PAUSE : MC_STR_PLAY));
-  set_button_label(g_app.shuffle, mc_wstr(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
+  set_button_label(g_app.buttons[ID_PLAY - ID_PREV], playback_is_playing() ? MC_STR_PAUSE : MC_STR_PLAY,
+                   MC_STR_WINDOWS_SHORTCUT_PLAY_PAUSE);
+  set_button_label(g_app.shuffle, playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF,
+                   MC_STR_WINDOWS_SHORTCUT_SHUFFLE);
 }
 
 /* Shuffle on or off, kept in the settings for next time. */

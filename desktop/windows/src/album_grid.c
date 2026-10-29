@@ -922,14 +922,25 @@ static const wchar_t *header_label(int part) {
   return mc_wstr(g.group_smart ? MC_STR_WINDOWS_SMART_GROUP_MENU : MC_STR_ALBUM_GROUP_MENU);
 }
 
+/* A header button's tooltip: its name, with its shortcut if it has one (Back's Alt+Left, New
+ * Playlist's Ctrl+N), into buf. */
+static wchar_t *header_tip(wchar_t *buf, size_t n, int part) {
+  if (part == PART_BACK) return wstr_tooltip(buf, n, MC_STR_BACK, MC_STR_WINDOWS_SHORTCUT_BACK);
+  if (part == PART_MORE && g.tiles_view == AGV_PLAYLISTS)
+    return wstr_tooltip(buf, n, MC_STR_NEW_PLAYLIST, MC_STR_WINDOWS_SHORTCUT_NEW);
+  lstrcpynW(buf, header_label(part), (int)n);
+  return buf;
+}
+
 /* The buttons' tooltips follow them as the header comes and goes and scrolls. */
 static void update_tips(void) {
   if (!g.tooltip) return;
   for (int part = PART_BACK; part <= PART_RESHUFFLE; part++) {
     BOOL shown = has_part(part);
+    wchar_t tip[128];
     TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g.wnd, .uId = (UINT_PTR)part,
                       .rect = shown ? header_button(part) : (RECT){0},
-                      .lpszText = (wchar_t *)header_label(part)};
+                      .lpszText = header_tip(tip, 128, part)};
     SendMessageW(g.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
     SendMessageW(g.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
   }

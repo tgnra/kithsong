@@ -45,4 +45,7 @@ wchar_t *wstr_field_label(wchar_t *buf, size_t n, enum mc_str_id id);
 /* "Rename…\tF2", a menu item with its shortcut, into buf. Returns buf. */
 wchar_t *wstr_menu_item(wchar_t *buf, size_t n, enum mc_str_id text, enum mc_str_id shortcut);
 
+/* "Next track (Ctrl+Right)", a button's tooltip with its shortcut, into buf. Returns buf. */
+wchar_t *wstr_tooltip(wchar_t *buf, size_t n, enum mc_str_id text, enum mc_str_id shortcut);
+
 #endif

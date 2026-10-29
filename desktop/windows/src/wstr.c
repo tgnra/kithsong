@@ -116,3 +116,7 @@ wchar_t *wstr_menu_item(wchar_t *buf, size_t n, enum mc_str_id text, enum mc_str
   if (n) buf[n - 1] = L'\0';
   return buf;
 }
+
+wchar_t *wstr_tooltip(wchar_t *buf, size_t n, enum mc_str_id text, enum mc_str_id shortcut) {
+  return mc_wformat(buf, n, mc_str(MC_STR_TOOLTIP_SHORTCUT), MC_S(mc_str(text)), MC_S(mc_str(shortcut)));
+}
