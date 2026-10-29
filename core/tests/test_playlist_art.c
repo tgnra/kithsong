@@ -277,6 +277,71 @@ static void test_group(mc_library *lib) {
   mc_free(path);
 }
 
+/* Smart lists: a smart playlist's cover is picked as a playlist's is, from the albums of the
+ * tracks its rule picks now; a smart album group's as a group's is, in the list's order. */
+#define SMART_BAD "00000000-0000-7000-8000-000000000021"
+#define SMART_ODD "00000000-0000-7000-8000-000000000022"
+static void test_smart(mc_library *lib) {
+  char *path = (char *)"x", *again = NULL, s1[MC_UID_STRLEN], s2[MC_UID_STRLEN], s3[MC_UID_STRLEN];
+  CHECK(mc_smart_art(lib, "s1", g_cache, &path) == MC_ERR_INVALID_ARG && !path);
+  CHECK(mc_smart_art(lib, PL1, g_cache, &path) == MC_ERR_NOT_FOUND && !path); /* a playlist's uid */
+
+  /* The first five tracks by title: albums 0 to 4. */
+  CHECK(mc_smart_create(lib, "S", MC_SMART_TRACKS, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit\":5}", s1) ==
+        MC_OK);
+  int order[ALBUMS];
+  CHECK(expected_order(s1, "01234", order) == 5);
+  CHECK(mc_smart_art(lib, s1, g_cache, &path) == MC_OK && in_cache(path));
+  CHECK(path && grid_is(path, order));
+
+  /* One more track: a new grid only if its album ranks among the four. */
+  int with5[ALBUMS];
+  expected_order(s1, "012345", with5);
+  CHECK(mc_smart_set_rule(lib, s1, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit\":6}") == MC_OK);
+  CHECK(mc_smart_art(lib, s1, g_cache, &again) == MC_OK && again);
+  if (with5[4] == 5 || with5[5] == 5) {
+    CHECK(again && path && !strcmp(again, path));
+  } else {
+    CHECK(again && path && strcmp(again, path) && grid_is(again, with5));
+    CHECK(path && !mc_file_exists(path));
+  }
+  mc_free(path);
+  path = NULL;
+
+  /* Albums by title, last first: No Art and Elsewhere have no cover here, nor has 7, and 6
+   * shares 5's image, so 6, 4, 3 and 2. */
+  CHECK(mc_smart_create(lib, "G", MC_SMART_ALBUMS, "{\"v\":1,\"order\":[{\"field\":\"title\",\"dir\":\"desc\"}]}",
+                        s2) == MC_OK);
+  static const int want[4] = {6, 4, 3, 2};
+  CHECK(mc_smart_art(lib, s2, g_cache, &path) == MC_OK && in_cache(path));
+  CHECK(path && grid_is(path, want));
+
+  /* One cover: that album's own. None, or a rule that can't be evaluated: no art. */
+  CHECK(mc_smart_create(lib, "One", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Album 3\"}}", s3) == MC_OK);
+  CHECK(mc_smart_art(lib, s3, g_cache, &again) == MC_OK && is_cover_of(again, 3));
+  mc_free(again);
+  CHECK(mc_smart_set_rule(lib, s3, "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"None\"}}") ==
+        MC_OK);
+  again = (char *)"x";
+  CHECK(mc_smart_art(lib, s3, g_cache, &again) == MC_OK && !again);
+  CHECK(exec(mc_library_db(lib), "INSERT INTO smart_lists (uid, name, subject, rule) VALUES"
+                                 " ('" SMART_BAD "', 'Future', 'tracks', '{\"v\":9}'),"
+                                 " ('" SMART_ODD "', 'Odd', 'artists', '{\"v\":1}')") == SQLITE_OK);
+  again = (char *)"x";
+  CHECK(mc_smart_art(lib, SMART_BAD, g_cache, &again) == MC_OK && !again);
+  again = (char *)"x";
+  CHECK(mc_smart_art(lib, SMART_ODD, g_cache, &again) == MC_OK && !again);
+
+  /* Pruning keeps a smart list's grid until the list goes. */
+  CHECK(mc_playlist_art_prune(lib, g_cache) == MC_OK);
+  CHECK(path && mc_file_exists(path));
+  CHECK(mc_smart_delete(lib, s1) == MC_OK && mc_smart_delete(lib, s2) == MC_OK);
+  CHECK(mc_playlist_art_prune(lib, g_cache) == MC_OK);
+  CHECK(path && !mc_file_exists(path));
+  mc_free(path);
+}
+
 /* A cover that won't decode gives way to the next; with fewer than four left, the best one
  * that does decode, alone. */
 static void test_bad_cover(mc_library *lib) {
@@ -402,6 +467,7 @@ int main(int argc, char **argv) {
   test_few(lib);
   test_grid(lib);
   test_group(lib);
+  test_smart(lib);
   test_bad_cover(lib);
   test_prune(lib);
   test_cover_find();

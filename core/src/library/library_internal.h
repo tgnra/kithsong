@@ -72,6 +72,18 @@ mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_l
  * MC_LIST_PLAYABLE). A rule that can't be evaluated holds nothing. In smartlist.c. */
 mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out);
 
+/* Any one file of album alias a, which finds the album's folder; originals first. */
+#define MC_ALBUM_FILE(a)                                                             \
+  "(SELECT f.path FROM tracks t2 JOIN files f ON f.track_uid = t2.uid"              \
+  "  WHERE t2.album_uid = " a ".uid ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)"
+
+/* The albums saved smart list smart_uid holds now, for its cover art: a prepared, bound query
+ * of (art_hash, MC_ALBUM_FILE) rows. A smart album group's come in the list's order, NULL
+ * art_hash included; a smart playlist's are its tracks' albums with art, in no order. The
+ * caller finalizes *stmt. MC_ERR_FORMAT if the rule can't be evaluated. In smartlist.c. */
+mc_status mc_smart_prepare_art(mc_library *lib, const char *smart_uid, mc_smart_subject *subject,
+                               sqlite3_stmt **stmt);
+
 /* The tables sync replicates (k_tracked) and their logged columns. Sync works out the
  * order to apply them in from their foreign keys. */
 const mc_changelog_table *mc_library_tracked(size_t *count);

@@ -11,7 +11,8 @@
  * so a replaced cover changes the key too. Nothing is stored in the database.
  *
  * Album groups get the same grid, but their covers rank by the group's order (so the first
- * four win) and share the cache folder: uids never clash. */
+ * four win) and share the cache folder: uids never clash. Smart lists do as their manual
+ * counterparts do, over the albums their rule picks now. */
 #include "musiccore/playlist.h"
 
 #include <stdint.h>
@@ -65,37 +66,47 @@ static int sha256_parts(const char *const *parts, int count, uint8_t digest[32])
   return rc;
 }
 
-/* Any one file finds the album's folder, as in ALBUM_COLS; originals first. */
-#define ALBUM_FILE                                                                   \
-  "(SELECT f.path FROM tracks t2 JOIN files f ON f.track_uid = t2.uid"              \
-  "  WHERE t2.album_uid = al.uid ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)"
+typedef enum art_kind { K_PLAYLIST, K_GROUP, K_SMART } art_kind;
 
-/* The playlist's (or album group's) albums with art, best ranked first. MC_ERR_NOT_FOUND if
- * there's no such playlist (or group). */
-static mc_status load_rows(mc_library *lib, const char *uid, int group, cover_row **out, int *count) {
+/* The playlist's (or album group's, or smart list's) albums with art, best ranked first.
+ * MC_ERR_NOT_FOUND if there's no such list. A smart list whose rule can't be evaluated has
+ * none. */
+static mc_status load_rows(mc_library *lib, const char *uid, art_kind kind, cover_row **out, int *count) {
   *out = NULL;
   *count = 0;
-  sqlite3_stmt *stmt;
-  const char *exists = group ? "SELECT 1 FROM album_groups WHERE uid = ?1" : "SELECT 1 FROM playlists WHERE uid = ?1";
-  if (sqlite3_prepare_v2(lib->db, exists, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
-  int rc = sqlite3_step(stmt);
-  sqlite3_finalize(stmt);
-  if (rc == SQLITE_DONE) return MC_ERR_NOT_FOUND;
-  if (rc != SQLITE_ROW) return MC_ERR_DB;
+  sqlite3_stmt *stmt = NULL;
+  int group = kind == K_GROUP, rc;
+  if (kind == K_SMART) {
+    mc_smart_subject subject;
+    mc_status st = mc_smart_prepare_art(lib, uid, &subject, &stmt);
+    if (st == MC_ERR_FORMAT) return MC_OK;
+    if (st != MC_OK) return st;
+    group = subject == MC_SMART_ALBUMS;
+  } else {
+    const char *exists = group ? "SELECT 1 FROM album_groups WHERE uid = ?1" : "SELECT 1 FROM playlists WHERE uid = ?1";
+    if (sqlite3_prepare_v2(lib->db, exists, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    stmt = NULL;
+    if (rc == SQLITE_DONE) return MC_ERR_NOT_FOUND;
+    if (rc != SQLITE_ROW) return MC_ERR_DB;
+  }
 
   static const char playlist_sql[] =
-    "SELECT al.art_hash, " ALBUM_FILE
+    "SELECT al.art_hash, " MC_ALBUM_FILE("al")
     " FROM albums al WHERE al.art_hash IS NOT NULL AND al.uid IN"
     "  (SELECT t.album_uid FROM playlist_entries e JOIN tracks t ON t.uid = e.track_uid"
     "   WHERE e.playlist_uid = ?1)";
   static const char group_sql[] =
-    "SELECT al.art_hash, " ALBUM_FILE
+    "SELECT al.art_hash, " MC_ALBUM_FILE("al")
     " FROM album_group_entries e JOIN albums al ON al.uid = e.album_uid"
     " WHERE e.group_uid = ?1 AND al.art_hash IS NOT NULL"
     " GROUP BY al.uid ORDER BY min(e.position), al.uid";
-  if (sqlite3_prepare_v2(lib->db, group ? group_sql : playlist_sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  if (!stmt) {
+    if (sqlite3_prepare_v2(lib->db, group ? group_sql : playlist_sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  }
 
   cover_row *rows = NULL;
   int n = 0, cap = 0;
@@ -335,8 +346,9 @@ static void remove_old_grids(const char *cache_dir, const char *playlist_uid, co
   free_names(&l);
 }
 
-/* mc_playlist_art(), or for group mc_album_group_art(); playlist_uid is either's uid. */
-static mc_status make_art(mc_library *lib, const char *playlist_uid, int group, const char *cache_dir,
+/* mc_playlist_art(), mc_album_group_art() or mc_smart_art(), by kind; playlist_uid is the
+ * list's uid. */
+static mc_status make_art(mc_library *lib, const char *playlist_uid, art_kind kind, const char *cache_dir,
                           char **out_path) {
   if (out_path) *out_path = NULL;
   if (!lib || !playlist_uid || strlen(playlist_uid) != MC_UID_STRLEN - 1 || !cache_dir || !*cache_dir ||
@@ -345,7 +357,7 @@ static mc_status make_art(mc_library *lib, const char *playlist_uid, int group, 
 
   cover_row *rows;
   int count, next = 0;
-  mc_status st = load_rows(lib, playlist_uid, group, &rows, &count);
+  mc_status st = load_rows(lib, playlist_uid, kind, &rows, &count);
   if (st != MC_OK) return st;
 
   /* The top four covers on this device. */
@@ -412,12 +424,16 @@ static mc_status make_art(mc_library *lib, const char *playlist_uid, int group, 
 
 mc_status mc_playlist_art(mc_library *lib, const char *playlist_uid, const char *cache_dir,
                           char **out_path) {
-  return make_art(lib, playlist_uid, 0, cache_dir, out_path);
+  return make_art(lib, playlist_uid, K_PLAYLIST, cache_dir, out_path);
 }
 
 mc_status mc_album_group_art(mc_library *lib, const char *group_uid, const char *cache_dir,
                              char **out_path) {
-  return make_art(lib, group_uid, 1, cache_dir, out_path);
+  return make_art(lib, group_uid, K_GROUP, cache_dir, out_path);
+}
+
+mc_status mc_smart_art(mc_library *lib, const char *smart_uid, const char *cache_dir, char **out_path) {
+  return make_art(lib, smart_uid, K_SMART, cache_dir, out_path);
 }
 
 mc_status mc_playlist_art_prune(mc_library *lib, const char *cache_dir) {
@@ -430,7 +446,8 @@ mc_status mc_playlist_art_prune(mc_library *lib, const char *cache_dir) {
   }
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(lib->db,
-                         "SELECT 1 FROM playlists WHERE uid = ?1 UNION ALL SELECT 1 FROM album_groups WHERE uid = ?1",
+                         "SELECT 1 FROM playlists WHERE uid = ?1 UNION ALL SELECT 1 FROM album_groups WHERE uid = ?1"
+                         " UNION ALL SELECT 1 FROM smart_lists WHERE uid = ?1",
                          -1, &stmt, NULL) != SQLITE_OK) {
     free_names(&l);
     return MC_ERR_DB;

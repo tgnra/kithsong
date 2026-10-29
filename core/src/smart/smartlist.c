@@ -468,10 +468,14 @@ static void put_order(query *q, yyjson_val *order) {
   put(q, k_default_order[q->subject]);
 }
 
-/* Compiles rule_json into q: the whole query, ready to prepare and bind. With count, the
- * query is instead one row of how many it picks: the order is checked but left out, since it
- * only matters to which rows a limit keeps, not to how many. */
-static mc_status compile(query *q, mc_smart_subject subject, const char *rule_json, int64_t now_ms, int count) {
+/* What a compiled query selects: the list itself, one row of how many it picks, or the
+ * albums for its cover art (see mc_smart_prepare_art()). */
+typedef enum mode { M_LIST, M_COUNT, M_ART } mode;
+
+/* Compiles rule_json into q: the whole query, ready to prepare and bind. For M_COUNT the
+ * order is checked but left out, since it only matters to which rows a limit keeps, not to
+ * how many. */
+static mc_status compile(query *q, mc_smart_subject subject, const char *rule_json, int64_t now_ms, mode m) {
   memset(q, 0, sizeof *q);
   q->subject = subject;
   q->now_ms = now_ms;
@@ -485,9 +489,15 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
       v != RULE_VERSION || (limit_val && (!get_int(limit_val, &limit) || limit < 1)))
     return q->st = MC_ERR_FORMAT;
 
+  int count = m == M_COUNT;
   if (count)
     put(q, subject == MC_SMART_TRACKS ? "SELECT count(*) FROM (SELECT 1 FROM tracks t" TRACK_JOINS
                                       : "SELECT count(*) FROM (SELECT 1 FROM albums a" ALBUM_JOINS);
+  else if (m == M_ART)
+    put(q, subject == MC_SMART_TRACKS
+             ? "SELECT pa.art_hash, " MC_ALBUM_FILE("pa") " FROM albums pa WHERE pa.art_hash IS NOT NULL"
+               " AND pa.uid IN (SELECT t.album_uid FROM tracks t" TRACK_JOINS
+             : "SELECT a.art_hash, " MC_ALBUM_FILE("a") " FROM albums a" ALBUM_JOINS);
   else
     put(q, subject == MC_SMART_TRACKS ? TRACK_COLS " FROM tracks t" TRACK_JOINS
                                       : ALBUM_COLS " FROM albums a" ALBUM_JOINS);
@@ -511,16 +521,16 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
     put(q, " LIMIT ");
     put_int(q, limit);
   }
-  if (count) put(q, ")");
+  if (count || (m == M_ART && subject == MC_SMART_TRACKS)) put(q, ")");
   return q->st;
 }
 
 /* Compiles and prepares rule_json; *stmt is NULL on failure. */
-static mc_status prepare(mc_library *lib, mc_smart_subject subject, const char *rule_json, int count,
+static mc_status prepare(mc_library *lib, mc_smart_subject subject, const char *rule_json, mode m,
                          sqlite3_stmt **stmt) {
   *stmt = NULL;
   query q;
-  mc_status st = compile(&q, subject, rule_json, (int64_t)lib->hlc.wall_ms(), count);
+  mc_status st = compile(&q, subject, rule_json, (int64_t)lib->hlc.wall_ms(), m);
   if (st == MC_OK && sqlite3_prepare_v2(lib->db, q.sql, -1, stmt, NULL) != SQLITE_OK) st = MC_ERR_DB;
   for (int i = 0; st == MC_OK && i < q.nbinds; i++) {
     int rc = q.binds[i].text ? sqlite3_bind_text(*stmt, i + 1, q.binds[i].text, -1, SQLITE_TRANSIENT)
@@ -537,7 +547,7 @@ static mc_status prepare(mc_library *lib, mc_smart_subject subject, const char *
 
 mc_status mc_smart_validate(mc_smart_subject subject, const char *rule_json) {
   query q;
-  mc_status st = compile(&q, subject, rule_json, 0, 0);
+  mc_status st = compile(&q, subject, rule_json, 0, M_LIST);
   query_free(&q);
   return st;
 }
@@ -546,7 +556,7 @@ mc_status mc_smart_preview_tracks(mc_library *lib, const char *rule_json, mc_tra
   if (!lib || !rule_json || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   sqlite3_stmt *stmt;
-  mc_status st = prepare(lib, MC_SMART_TRACKS, rule_json, 0, &stmt);
+  mc_status st = prepare(lib, MC_SMART_TRACKS, rule_json, M_LIST, &stmt);
   return st == MC_OK ? mc_library_read_tracks(lib, stmt, out) : st;
 }
 
@@ -554,7 +564,7 @@ mc_status mc_smart_preview_albums(mc_library *lib, const char *rule_json, mc_alb
   if (!lib || !rule_json || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   sqlite3_stmt *stmt;
-  mc_status st = prepare(lib, MC_SMART_ALBUMS, rule_json, 0, &stmt);
+  mc_status st = prepare(lib, MC_SMART_ALBUMS, rule_json, M_LIST, &stmt);
   return st == MC_OK ? mc_library_read_albums(lib, stmt, out) : st;
 }
 
@@ -562,7 +572,7 @@ mc_status mc_smart_count(mc_library *lib, mc_smart_subject subject, const char *
   if (!lib || !rule_json || !out) return MC_ERR_INVALID_ARG;
   *out = 0;
   sqlite3_stmt *stmt;
-  mc_status st = prepare(lib, subject, rule_json, 1, &stmt);
+  mc_status st = prepare(lib, subject, rule_json, M_COUNT, &stmt);
   if (st != MC_OK) return st;
   if (sqlite3_step(stmt) == SQLITE_ROW)
     *out = sqlite3_column_int(stmt, 0);
@@ -1026,7 +1036,7 @@ mc_status mc_library_list_smart_albums(mc_library *lib, const char *smart_uid, m
 static mc_status rule_has_playable(mc_library *lib, mc_smart_subject subject, const char *rule, int *out) {
   *out = 0;
   sqlite3_stmt *stmt;
-  mc_status st = prepare(lib, subject, rule, 0, &stmt);
+  mc_status st = prepare(lib, subject, rule, M_LIST, &stmt);
   if (st != MC_OK) return st;
   int col = subject == MC_SMART_TRACKS ? 5 : 6, rc;
   while ((rc = sqlite3_step(stmt)) == SQLITE_ROW)
@@ -1047,6 +1057,16 @@ mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out
   if (st == MC_OK) st = rule_has_playable(lib, subject, rule, out);
   free(rule);
   return st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG ? MC_OK : st;
+}
+
+mc_status mc_smart_prepare_art(mc_library *lib, const char *smart_uid, mc_smart_subject *subject,
+                               sqlite3_stmt **stmt) {
+  *stmt = NULL;
+  char *rule;
+  mc_status st = load(lib, smart_uid, subject, &rule);
+  if (st == MC_OK) st = prepare(lib, *subject, rule, M_ART, stmt);
+  free(rule);
+  return st;
 }
 
 /* Runs one write of up to three text parameters. MC_ERR_NOT_FOUND if it changed no row. */

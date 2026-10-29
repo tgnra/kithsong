@@ -62,8 +62,8 @@ mc_status mc_playlist_remove(mc_library *lib, const char *entry_uid);
 mc_status mc_playlist_art(mc_library *lib, const char *playlist_uid, const char *cache_dir,
                           char **out_path);
 
-/* Deletes cached grids in cache_dir for playlists and album groups that no longer exist,
- * and temp files from writes abandoned over an hour ago. Only files named as
+/* Deletes cached grids in cache_dir for playlists, album groups and smart lists that no
+ * longer exist, and temp files from writes abandoned over an hour ago. Only files named as
  * mc_playlist_art() names them are touched. A missing cache_dir is empty. */
 mc_status mc_playlist_art_prune(mc_library *lib, const char *cache_dir);
 
@@ -94,6 +94,15 @@ mc_status mc_album_group_move(mc_library *lib, const char *group_uid, const char
  * album's; with none, *out_path is NULL. */
 mc_status mc_album_group_art(mc_library *lib, const char *group_uid, const char *cache_dir,
                              char **out_path);
+
+/* A smart list's cover (smartlist.h), into the same cache_dir, made over what its rule picks
+ * now: a smart playlist's as mc_playlist_art() makes a playlist's, from its tracks' albums
+ * and seeded by its uid; a smart album group's as mc_album_group_art() makes a group's, from
+ * its first four covers in the list's order. So the picture only changes when one of the
+ * four covers comes or goes. A rule that can't be evaluated (MC_ERR_FORMAT elsewhere) has no
+ * covers: *out_path is NULL and the result MC_OK. MC_ERR_NOT_FOUND if there's no such smart
+ * list. A miss evaluates the rule as listing the list does, then decodes four covers. */
+mc_status mc_smart_art(mc_library *lib, const char *smart_uid, const char *cache_dir, char **out_path);
 
 #ifdef __cplusplus
 }

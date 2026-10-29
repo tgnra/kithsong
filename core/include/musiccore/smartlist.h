@@ -69,6 +69,8 @@ mc_status mc_library_list_smart_albums(mc_library *lib, const char *smart_uid, m
 /* What a rule would hold, without saving it: a live preview while editing. */
 mc_status mc_smart_preview_tracks(mc_library *lib, const char *rule_json, mc_track_list **out);
 mc_status mc_smart_preview_albums(mc_library *lib, const char *rule_json, mc_album_list **out);
+/* A saved list's cover art is mc_smart_art() in playlist.h, made as a playlist's or album
+ * group's is. */
 /* How many tracks or albums a rule picks (at most its limit, if it has one), counted in one
  * query without listing them: for the counts in an editor. To count what one condition
  * matches, pass a rule of just it, e.g. {"v":1,"match":<condition>}. */
