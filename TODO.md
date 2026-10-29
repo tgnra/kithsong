@@ -70,7 +70,6 @@ Big pieces that haven't been started, or that only one platform has.
 - Windows - text conditions don't offer the library's genres and artists as you type
 - Windows - the editor only shows a "not" where it means a negative operator (isn't, doesn't contain, isn't in the last, is empty's opposite), and groups one level deep; any other rule opens read-only, as its sentence
 - Windows - "months" in the editor are 30 days, and reopen as days (or weeks)
-- Windows - the editor doesn't lay itself out again when it moves to a monitor with another DPI
 - Windows - New Smart Playlist... and New Smart Album Group... are only on right-click menus (the pages' and the sidebar rows'), as there's no New button for manual playlists either
 - Core - mc_smart_describe() is English-shaped: conditions are joined as "field op value" clauses under "Tracks where …", and a language that needs grammatical case or agreement for a field or playlist name may need its own templates; dates use the smart_date template (local time), not the OS's date format
 - All - the v10 example lists' names are stored as data, so they're always English

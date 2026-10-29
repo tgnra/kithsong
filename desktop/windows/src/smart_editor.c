@@ -126,6 +126,9 @@ static struct {
   HWND match_label, match_box, match_of, add_cond, add_group;
   HWND sort_add, sorted, sorted_label, shuffled, shuffled_label, limit_check, limit_label, limit, limit_unit;
   HFONT font, icon_font;
+  HFONT own_font; /* the font for a DPI moved to, which ed.font then is; NULL for the dialog's */
+  UINT dpi;
+  int base_x, base_y; /* the dialog's base units, which dx() and dy() scale by */
   IAccPropServices *acc;
 
   mc_library *lib;
@@ -174,16 +177,14 @@ static struct {
 
 /* --- Little helpers --- */
 
+/* Dialog units, as MapDialogRect() has them, but from base units of our own: the dialog
+ * manager's stay those it started with, as the editor rescales itself for a new DPI. */
 static int dx(int n) {
-  RECT r = {0, 0, n, 0};
-  MapDialogRect(ed.dlg, &r);
-  return r.right;
+  return MulDiv(n, ed.base_x, 4);
 }
 
 static int dy(int n) {
-  RECT r = {0, 0, 0, n};
-  MapDialogRect(ed.dlg, &r);
-  return r.bottom;
+  return MulDiv(n, ed.base_y, 8);
 }
 
 static wchar_t *widen(const char *u) {
@@ -1028,7 +1029,7 @@ static void layout_panel(void) {
   put(&p, ed.sort_add, dx(RAIL_X), y, max(dx(BUTTON_W), text_width(ed.sort_add) + dx(8)), h, TRUE);
   EnableWindow(ed.sort_add, ed.nsorts < MAX_SORTS && ed.nsorts < ed.nsortable);
   y += h + dy(ROW_GAP);
-  int box = GetSystemMetrics(SM_CXMENUCHECK);
+  int box = GetSystemMetricsForDpi(SM_CXMENUCHECK, ed.dpi);
   x = dx(RAIL_X);
   put(&p, ed.sorted, x, y + (h - box) / 2, box, box, TRUE);
   put(&p, ed.shuffled, x + box + gap + text_width(ed.sorted_label) + dx(12), y + (h - box) / 2, box, box, TRUE);
@@ -1115,7 +1116,7 @@ static void layout_dialog(void) {
   }
   RECT lr;
   GetClientRect(ed.list, &lr);
-  int list_w = lr.right - (GetWindowLongW(ed.list, GWL_STYLE) & WS_VSCROLL ? 0 : GetSystemMetrics(SM_CXVSCROLL));
+  int list_w = lr.right - (GetWindowLongW(ed.list, GWL_STYLE) & WS_VSCROLL ? 0 : GetSystemMetricsForDpi(SM_CXVSCROLL, ed.dpi));
   int col = list_w / 2; /* with room for a scrollbar, so there's never a sideways one */
   ListView_SetColumnWidth(ed.list, 0, col);
   ListView_SetColumnWidth(ed.list, 1, list_w - col);
@@ -1681,10 +1682,19 @@ static HWND dlg_child(const wchar_t *cls, const wchar_t *text, DWORD style, DWOR
   return w;
 }
 
+static HFONT make_icon_font(void) {
+  return CreateFontW(-dy(7), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, theme_icon_face());
+}
+
 static void create_controls(void) {
   ed.font = (HFONT)SendMessageW(ed.dlg, WM_GETFONT, 0, 0);
-  ed.icon_font = CreateFontW(-dy(7), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, theme_icon_face());
+  ed.dpi = GetDpiForWindow(ed.dlg);
+  RECT units = {0, 0, 4, 8};
+  MapDialogRect(ed.dlg, &units);
+  ed.base_x = units.right;
+  ed.base_y = units.bottom;
+  ed.icon_font = make_icon_font();
   wchar_t label[64];
   ed.name_label = dlg_child(WC_STATICW, wstr_field_label(label, 64, MC_STR_NAME), SS_CENTERIMAGE, 0);
   ed.name = dlg_child(WC_EDITW, NULL, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 0);
@@ -1835,6 +1845,55 @@ static BOOL save(void) {
   return ok;
 }
 
+/* Every control, the panel's too, gets the font for the new DPI: the icon font's ✕ buttons
+ * their own, the rest the dialog's. */
+static BOOL CALLBACK refont_child(HWND w, LPARAM old_icon) {
+  HFONT f = (HFONT)SendMessageW(w, WM_GETFONT, 0, 0);
+  SendMessageW(w, WM_SETFONT, (WPARAM)(f && f == (HFONT)old_icon ? ed.icon_font : ed.font), FALSE);
+  wchar_t cls[32];
+  if (GetClassNameW(w, cls, 32) && !_wcsicmp(cls, WC_COMBOBOXW))
+    SendMessageW(w, CB_SETITEMHEIGHT, (WPARAM)-1, dy(ROW) - 6);
+  /* A centred edit's padding depends on its font. */
+  SetWindowPos(w, NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  return TRUE;
+}
+
+/* After a move to a monitor with another DPI (the dialog manager's own scaling is off, as it
+ * would miss the controls made here): the font scaled to it, base units from that font as
+ * Windows works them out (the average width of the letters, and the height), every control
+ * refonted, and the dialog moved to the suggested rect. */
+static void on_dpi_changed(UINT dpi, const RECT *suggested) {
+  LOGFONTW lf;
+  if (!dpi || dpi == ed.dpi || !GetObjectW(ed.font, sizeof lf, &lf)) return;
+  lf.lfHeight = MulDiv(lf.lfHeight, (int)dpi, (int)ed.dpi);
+  HFONT font = CreateFontIndirectW(&lf);
+  if (!font) return;
+  HDC dc = GetDC(ed.dlg);
+  HGDIOBJ old = SelectObject(dc, font);
+  TEXTMETRICW tm;
+  SIZE size;
+  static const wchar_t letters[] = L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  GetTextMetricsW(dc, &tm);
+  GetTextExtentPoint32W(dc, letters, 52, &size);
+  SelectObject(dc, old);
+  ReleaseDC(ed.dlg, dc);
+  ed.base_x = (size.cx / 26 + 1) / 2;
+  ed.base_y = tm.tmHeight;
+  ed.dpi = dpi;
+
+  HFONT old_font = ed.own_font, old_icon = ed.icon_font, icon = make_icon_font();
+  ed.font = ed.own_font = font;
+  if (icon) ed.icon_font = icon;
+  EnumChildWindows(ed.dlg, refont_child, (LPARAM)old_icon);
+  if (icon && old_icon) DeleteObject(old_icon);
+  if (old_font) DeleteObject(old_font);
+  if (ed.tip) SendMessageW(ed.tip, TTM_SETMAXTIPWIDTH, 0, dx(200));
+  SetWindowPos(ed.dlg, NULL, suggested->left, suggested->top, suggested->right - suggested->left,
+               suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
+  layout_dialog(); /* though the size may not have changed */
+  RedrawWindow(ed.dlg, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+
 static void free_rows(void) {
   for (int i = 0; i < ed.nitems; i++) free_item(ed.items[i]);
   ed.nitems = 0;
@@ -1851,6 +1910,7 @@ static INT_PTR CALLBACK editor_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_INITDIALOG: {
       const editor_args *a = (const editor_args *)lp;
       ed.dlg = dlg;
+      SetDialogDpiChangeBehavior(dlg, DDC_DISABLE_ALL, DDC_DISABLE_ALL); /* on_dpi_changed() does it */
       SetWindowTextW(dlg, a->caption);
       SetDlgItemTextW(dlg, IDOK, mc_wstr_mnemonic(ed.creating ? MC_STR_CREATE : MC_STR_OK));
       SetDlgItemTextW(dlg, IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL));
@@ -1895,6 +1955,9 @@ static INT_PTR CALLBACK editor_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       mm->ptMinTrackSize.y = r.bottom - r.top;
       return TRUE;
     }
+    case WM_DPICHANGED:
+      on_dpi_changed(HIWORD(wp), (const RECT *)lp);
+      return TRUE;
     case WM_TIMER:
       if (wp == TIMER_PREVIEW) request_preview();
       return TRUE;
@@ -1945,7 +2008,8 @@ static INT_PTR CALLBACK editor_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       HWND named[] = {ed.list, ed.match_box, ed.sorted, ed.shuffled, ed.limit_check, ed.limit};
       for (size_t i = 0; i < sizeof named / sizeof named[0]; i++) clear_name(named[i]);
       if (ed.icon_font) DeleteObject(ed.icon_font);
-      ed.icon_font = NULL;
+      if (ed.own_font) DeleteObject(ed.own_font);
+      ed.icon_font = ed.own_font = NULL;
       break;
   }
   return FALSE;
