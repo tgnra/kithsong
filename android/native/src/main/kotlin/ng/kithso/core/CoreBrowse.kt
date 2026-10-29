@@ -68,6 +68,15 @@ fun CoreLibrary.previewSmartTracks(rule: String): List<TrackInfo> =
 fun CoreLibrary.albumGroupArt(groupUid: String, cacheDir: String): String? =
     CoreBrowse.nativeAlbumGroupArt(handle, groupUid, cacheDir)
 
+/**
+ * The image file to show for smart list [smartUid] (mc_smart_art), of either kind: made as
+ * [CoreLibrary.playlistArt] or [albumGroupArt] makes its manual counterpart's, from what its
+ * rule picks now, into the same [cacheDir]; null for a placeholder, a rule that can't be
+ * evaluated included. Call it off the main thread.
+ */
+fun CoreLibrary.smartArt(smartUid: String, cacheDir: String): String? =
+    CoreBrowse.nativeSmartArt(handle, smartUid, cacheDir)
+
 /** Gives a smart list ordered by random a new order (mc_smart_reshuffle). */
 fun CoreLibrary.reshuffle(smartUid: String) = CoreBrowse.nativeReshuffle(handle, smartUid)
 
@@ -112,6 +121,7 @@ internal object CoreBrowse {
     @JvmStatic external fun nativeArtistTracks(handle: Long, uid: String): Array<TrackInfo>
     @JvmStatic external fun nativePreviewSmartTracks(handle: Long, rule: String): Array<TrackInfo>
     @JvmStatic external fun nativeAlbumGroupArt(handle: Long, uid: String, cacheDir: String): String?
+    @JvmStatic external fun nativeSmartArt(handle: Long, uid: String, cacheDir: String): String?
     @JvmStatic external fun nativeReshuffle(handle: Long, uid: String)
     @JvmStatic external fun nativeRecordOpened(handle: Long, kind: Int, uid: String)
     @JvmStatic external fun nativeRemoveRecent(handle: Long, uid: String)

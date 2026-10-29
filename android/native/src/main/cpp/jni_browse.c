@@ -58,11 +58,10 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativePreviewSmart
   return track_array(env, st, list);
 }
 
-/* The image to show for an album group (see mc_album_group_art()), or NULL for a placeholder. */
-JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreBrowse_nativeAlbumGroupArt(JNIEnv *env, jclass cls,
-                                                                            jlong handle, jstring uid,
-                                                                            jstring cache_dir) {
-  (void)cls;
+typedef mc_status (*art_fn)(mc_library *, const char *, const char *, char **);
+
+/* The image art makes for uid in cache_dir, or NULL for a placeholder. */
+static jstring art_of(JNIEnv *env, jlong handle, jstring uid, jstring cache_dir, art_fn art) {
   const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
   if (!cuid) return NULL;
   const char *cdir = (*env)->GetStringUTFChars(env, cache_dir, NULL);
@@ -71,7 +70,7 @@ JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreBrowse_nativeAlbumGroupArt(JNI
     return NULL;
   }
   char *path = NULL;
-  mc_status st = mc_album_group_art(lib_of(handle), cuid, cdir, &path);
+  mc_status st = art(lib_of(handle), cuid, cdir, &path);
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   (*env)->ReleaseStringUTFChars(env, cache_dir, cdir);
   if (st != MC_OK) {
@@ -81,6 +80,21 @@ JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreBrowse_nativeAlbumGroupArt(JNI
   jstring out = new_string(env, path);
   mc_free(path);
   return out;
+}
+
+/* The image to show for an album group (see mc_album_group_art()), or NULL for a placeholder. */
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreBrowse_nativeAlbumGroupArt(JNIEnv *env, jclass cls,
+                                                                            jlong handle, jstring uid,
+                                                                            jstring cache_dir) {
+  (void)cls;
+  return art_of(env, handle, uid, cache_dir, mc_album_group_art);
+}
+
+/* The image to show for a smart list (see mc_smart_art()), or NULL for a placeholder. */
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreBrowse_nativeSmartArt(JNIEnv *env, jclass cls, jlong handle,
+                                                                       jstring uid, jstring cache_dir) {
+  (void)cls;
+  return art_of(env, handle, uid, cache_dir, mc_smart_art);
 }
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeReshuffle(JNIEnv *env, jclass cls, jlong handle,

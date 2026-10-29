@@ -43,6 +43,7 @@ import ng.kithso.core.reshuffle
 import ng.kithso.core.search
 import ng.kithso.core.searchPrepare
 import ng.kithso.core.smartAlbums
+import ng.kithso.core.smartArt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -74,11 +75,11 @@ import java.io.File
  * Albums and tracks with no artist get [unknownArtist], looked up on every read so that it
  * follows the app's language.
  *
- * A playlist's or album group's picture is the core's (CoreLibrary.playlistArt and
- * albumGroupArt), cached in [artDir]. Making one decodes four covers, so after each read the
- * pictures are looked up on a thread and library connection of their own ([art]), and
- * [library] is updated with those that changed. Meanwhile each shows the picture it last
- * had, kept in [prefs] across launches. Smart lists show their first cover.
+ * A playlist's or album group's picture is the core's (CoreLibrary.playlistArt,
+ * albumGroupArt, and smartArt for smart ones), cached in [artDir]. Making one decodes four
+ * covers, so after each read the pictures are looked up on a thread and library connection
+ * of their own ([art]), and [library] is updated with those that changed. Meanwhile each
+ * shows the picture it last had, kept in [prefs] across launches.
  *
  * Manual playlists and album groups are edited here too ([PlaylistEditor]), and albums,
  * artists and tracks deleted ([LibraryDeleter]), on [core], each change followed by a
@@ -130,10 +131,7 @@ class CoreLibrarySource(
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't prepare search", e)
         }
-        lookUpArt(
-            (contents.playlists.keys - contents.smart) + (contents.albumGroups.keys - contents.smart),
-            ++artLookups,
-        )
+        lookUpArt(contents.playlists.keys + contents.albumGroups.keys, ++artLookups)
     }
 
     // On [core]. Looks up the pictures of playlists and album groups [uids] on [art], then puts
@@ -141,9 +139,10 @@ class CoreLibrarySource(
     private fun lookUpArt(uids: Set<String>, lookup: Int) {
         if (uids.isEmpty()) return
         val groups = contents.albumGroups.keys
+        val smart = contents.smart
         scope.launch(art) {
             val start = SystemClock.elapsedRealtime()
-            val found = uids.associateWith { uid -> pictureOf(uid, uid in groups) }
+            val found = uids.associateWith { uid -> pictureOf(uid, uid in groups, uid in smart) }
             Log.i(TAG, "Looked up ${uids.size} pictures in ${SystemClock.elapsedRealtime() - start} ms")
             withContext(core) {
                 if (lookup != artLookups) return@withContext
@@ -162,9 +161,9 @@ class CoreLibrarySource(
         }
     }
 
-    // On [art]. [uid]'s picture, a playlist's or if [group] an album group's, or an empty path
-    // for none (the placeholder).
-    private fun pictureOf(uid: String, group: Boolean): File {
+    // On [art]. [uid]'s picture, a playlist's or if [group] an album group's, a smart one's if
+    // [smart], or an empty path for none (the placeholder).
+    private fun pictureOf(uid: String, group: Boolean, smart: Boolean): File {
         val lib = artLib ?: try {
             CoreLibrary(dir.path).also { artLib = it }
         } catch (e: MusicCoreException) {
@@ -172,14 +171,19 @@ class CoreLibrarySource(
             return File("")
         }
         return try {
-            File((if (group) lib.albumGroupArt(uid, artDir.path) else lib.playlistArt(uid, artDir.path)).orEmpty())
+            val path = when {
+                smart -> lib.smartArt(uid, artDir.path)
+                group -> lib.albumGroupArt(uid, artDir.path)
+                else -> lib.playlistArt(uid, artDir.path)
+            }
+            File(path.orEmpty())
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't make $uid's picture", e)
             File("")
         }
     }
 
-    // On [art]. Clears out the pictures of playlists and album groups that have gone.
+    // On [art]. Clears out the pictures of playlists and album groups (smart ones too) that have gone.
     private fun pruneArt() {
         try {
             CoreLibrary(dir.path).use { it.playlistArtPrune(artDir.path) }
@@ -499,7 +503,7 @@ class CoreLibrarySource(
             }
             onChanged()
         }
-        // A smart list's picture is its first cover, which may have changed.
+        // A smart list's picture is made from what it holds, which may have changed.
         refresh().join()
     }
 
@@ -534,7 +538,7 @@ class CoreLibrarySource(
 
         // Smart playlists sit among the others, and smart album groups among the manual ones.
         // Only those with a track or album to play here, which also keeps the rest out of
-        // Recents. A manual one shows the picture it last had until [lookUpArt] finds it again.
+        // Recents. Each shows the picture it last had until [lookUpArt] finds it again.
         val here = albums.associateBy { it.uid }
         val smart = lib.smartLists(playableOnly = true)
         val known = savedArt()
@@ -543,15 +547,14 @@ class CoreLibrarySource(
             Playlist(info.uid, info.name, info.playableCount, knownArt(info.uid, info.name))
         } + smart.filter { !it.isAlbums }.map { info ->
             val tracks = lib.smartTracks(info.uid).here()
-            Playlist(info.uid, info.name, tracks.size, covers.playlist(info.uid, info.name, tracks))
+            Playlist(info.uid, info.name, tracks.size, knownArt(info.uid, info.name))
         }
         val albumGroups = lib.albumGroups().mapNotNull { info ->
             val count = lib.albumGroupAlbums(info.uid).count { it.uid in here }
             if (count == 0) null else AlbumGroup(info.uid, info.name, count, knownArt(info.uid, info.name))
         } + smart.filter { it.isAlbums }.map { info ->
-            val inGroup = lib.smartAlbums(info.uid).mapNotNull { here[it.uid] }
-            val cover = inGroup.firstOrNull { it.art.file != null }?.art
-            AlbumGroup(info.uid, info.name, inGroup.size, cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name))
+            val count = lib.smartAlbums(info.uid).count { it.uid in here }
+            AlbumGroup(info.uid, info.name, count, knownArt(info.uid, info.name))
         }
 
         return Contents(
@@ -665,13 +668,6 @@ class CoreLibrarySource(
 
         /** A found track's art: its album's, keyed by the album's title as a track's is. */
         fun found(album: Album): ArtRef = album.art.copy(uid = album.title, label = album.title)
-
-        /** A smart playlist shows its first track's cover; the core makes manual ones' pictures. */
-        fun playlist(uid: String, name: String, tracks: List<TrackInfo>): ArtRef {
-            val first = tracks.firstOrNull { it.coverDir != null }
-            val cover = first?.coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } }
-            return ref(uid, name, cover)
-        }
 
         private fun ref(uid: String, label: String, file: File?) = artRef(uid, label, file)
 
