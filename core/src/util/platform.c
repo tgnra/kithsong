@@ -135,11 +135,61 @@ static wchar_t *widen(const char *s) {
   return w;
 }
 
+/* Paths this long or longer get the \\?\ prefix: MAX_PATH, less the 12 characters that
+ * CreateDirectory keeps for an 8.3 file name inside. */
+#define LONG_PATH_LEN (MAX_PATH - 12)
+
+/* w (malloc'd, taken over) ready for the wide file calls: as it is if it's short, else made
+ * absolute and given the \\?\ prefix, which lifts MAX_PATH even when the process isn't
+ * long-path aware or Windows' long paths are off. The prefix skips Windows' own clean-up of
+ * the path, so GetFullPathName does that first ("/" to "\", "." and ".." parts). */
+static wchar_t *extend(wchar_t *w) {
+  if (!w) return NULL;
+  size_t len = wcslen(w);
+  int drive = len >= 3 && w[1] == L':' && (w[2] == L'\\' || w[2] == L'/');
+  int unc = len >= 2 && (w[0] == L'\\' || w[0] == L'/') && (w[1] == L'\\' || w[1] == L'/');
+  if ((drive || unc) && len < LONG_PATH_LEN) return w;
+  if (!wcsncmp(w, L"\\\\?\\", 4) || !wcsncmp(w, L"\\\\.\\", 4)) return w; /* already past MAX_PATH */
+  DWORD n = GetFullPathNameW(w, 0, NULL, NULL);
+  wchar_t *full = n ? malloc(n * sizeof *full) : NULL;
+  if (!full || GetFullPathNameW(w, n, full, NULL) >= n || wcslen(full) < LONG_PATH_LEN) {
+    free(full); /* short once absolute, or left for the call itself to fail on */
+    return w;
+  }
+  len = wcslen(full);
+  wchar_t *out = malloc((len + 9) * sizeof *out);
+  if (out) {
+    if (full[0] == L'\\' && full[1] == L'\\') swprintf(out, len + 9, L"\\\\?\\UNC\\%ls", full + 2);
+    else swprintf(out, len + 9, L"\\\\?\\%ls", full);
+  }
+  free(full);
+  free(w);
+  return out;
+}
+
+wchar_t *mc_win_path(const char *path) {
+  return path ? extend(widen(path)) : NULL;
+}
+
+int mc_long_path(const char *path) {
+  wchar_t *w = path ? widen(path) : NULL;
+  DWORD n = w ? GetFullPathNameW(w, 0, NULL, NULL) : 0;
+  free(w);
+  return n > MAX_PATH; /* n counts the NUL */
+}
+
 static char *narrow(const wchar_t *w) {
   int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
   if (n <= 0) return NULL;
   char *s = malloc((size_t)n);
   if (s) WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL);
+  return s;
+}
+
+char *mc_open_path(const char *path) {
+  wchar_t *w = mc_win_path(path);
+  char *s = w ? narrow(w) : NULL;
+  free(w);
   return s;
 }
 
@@ -150,6 +200,8 @@ static int walk_dir(const wchar_t *dir, mc_walk_fn fn, void *user) {
   if (!pattern) return 0;
   memcpy(pattern, dir, len * sizeof *pattern);
   wcscpy(pattern + len, L"\\*");
+  /* Only the search gets the prefix: the paths handed to fn stay as the caller wrote them. */
+  if (!(pattern = extend(pattern))) return 0;
 
   WIN32_FIND_DATAW fd;
   HANDLE h = FindFirstFileExW(pattern, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL,
@@ -190,7 +242,9 @@ mc_status mc_walk(const char *path, mc_walk_fn fn, void *user) {
   while (len > 3 && (w[len - 1] == L'\\' || w[len - 1] == L'/')) w[--len] = L'\0';
 
   mc_status st = MC_OK;
-  DWORD attrs = GetFileAttributesW(w);
+  wchar_t *ext = mc_win_path(path);
+  DWORD attrs = ext ? GetFileAttributesW(ext) : INVALID_FILE_ATTRIBUTES;
+  free(ext);
   if (attrs == INVALID_FILE_ATTRIBUTES) st = MC_ERR_NOT_FOUND;
   else if (attrs & FILE_ATTRIBUTE_DIRECTORY) walk_dir(w, fn, user);
   else fn(user, path);
@@ -199,7 +253,7 @@ mc_status mc_walk(const char *path, mc_walk_fn fn, void *user) {
 }
 
 FILE *mc_fopen(const char *path, const char *mode) {
-  wchar_t *wpath = widen(path), *wmode = widen(mode);
+  wchar_t *wpath = mc_win_path(path), *wmode = widen(mode);
   FILE *f = wpath && wmode ? _wfopen(wpath, wmode) : NULL;
   free(wpath);
   free(wmode);
@@ -207,7 +261,7 @@ FILE *mc_fopen(const char *path, const char *mode) {
 }
 
 mc_status mc_mkdirs(const char *path) {
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   if (!w) return MC_ERR_INVALID_ARG;
   /* Create each prefix in turn; failures on existing parents are expected. */
   for (wchar_t *p = w + 1; *p; p++) {
@@ -234,6 +288,7 @@ mc_status mc_list_dir(const char *dir, mc_list_fn fn, void *user) {
   memcpy(pattern, w, len * sizeof *pattern);
   wcscpy(pattern + len, L"\\*");
   free(w);
+  if (!(pattern = extend(pattern))) return MC_ERR_NOMEM;
 
   WIN32_FIND_DATAW fd;
   HANDLE h = FindFirstFileExW(pattern, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, 0);
@@ -250,7 +305,7 @@ mc_status mc_list_dir(const char *dir, mc_list_fn fn, void *user) {
 }
 
 int mc_file_exists(const char *path) {
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   if (!w) return 0;
   DWORD attrs = GetFileAttributesW(w);
   free(w);
@@ -258,7 +313,7 @@ int mc_file_exists(const char *path) {
 }
 
 int mc_is_link(const char *path) {
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   if (!w) return 0;
   WIN32_FIND_DATAW fd;
   HANDLE h = FindFirstFileExW(w, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL, 0);
@@ -272,7 +327,7 @@ int mc_is_link(const char *path) {
 }
 
 mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
-  wchar_t *ws = widen(src), *wd = widen(dst);
+  wchar_t *ws = mc_win_path(src), *wd = mc_win_path(dst);
   BOOL ok = ws && wd && CopyFileW(ws, wd, !overwrite);
   free(ws);
   free(wd);
@@ -280,7 +335,7 @@ mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
 }
 
 mc_status mc_rename(const char *src, const char *dst, int replace) {
-  wchar_t *ws = widen(src), *wd = widen(dst);
+  wchar_t *ws = mc_win_path(src), *wd = mc_win_path(dst);
   DWORD flags = MOVEFILE_COPY_ALLOWED | (replace ? MOVEFILE_REPLACE_EXISTING : 0);
   BOOL ok = ws && wd && MoveFileExW(ws, wd, flags);
   free(ws);
@@ -289,14 +344,14 @@ mc_status mc_rename(const char *src, const char *dst, int replace) {
 }
 
 mc_status mc_remove(const char *path) {
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   BOOL ok = w && DeleteFileW(w);
   free(w);
   return ok ? MC_OK : MC_ERR_IO;
 }
 
 mc_status mc_clear_read_only(const char *path) {
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   if (!w) return MC_ERR_NOMEM;
   DWORD attr = GetFileAttributesW(w);
   BOOL ok = attr != INVALID_FILE_ATTRIBUTES &&
@@ -323,7 +378,7 @@ mc_status mc_trash(const char *path) {
 }
 
 mc_status mc_rmdir(const char *path) {
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   BOOL ok = w && RemoveDirectoryW(w);
   free(w);
   return ok ? MC_OK : MC_ERR_IO;
@@ -338,17 +393,22 @@ int mc_same_path(const char *a, const char *b) {
 }
 
 mc_status mc_rename_in_place(const char *src, const char *dst) {
-  wchar_t *ws = widen(src), *wd = widen(dst);
+  wchar_t *ws = mc_win_path(src), *wd = mc_win_path(dst);
   BOOL ok = ws && wd && MoveFileExW(ws, wd, 0); /* no MOVEFILE_COPY_ALLOWED */
   free(ws);
   free(wd);
   return ok ? MC_OK : MC_ERR_IO;
 }
 
+/* A volume path without the \\?\ prefix that a long path's keeps: "\\?\C:\" as "C:\". */
+static const wchar_t *unprefixed(const wchar_t *v) {
+  return wcsncmp(v, L"\\\\?\\", 4) || wcsncmp(v + 5, L":\\", 2) ? v : v + 4;
+}
+
 int mc_same_volume(const char *a, const char *b) {
-  wchar_t *wa = widen(a), *wb = widen(b), va[MAX_PATH], vb[MAX_PATH];
+  wchar_t *wa = mc_win_path(a), *wb = mc_win_path(b), va[MAX_PATH], vb[MAX_PATH];
   int same = wa && wb && GetVolumePathNameW(wa, va, MAX_PATH) && GetVolumePathNameW(wb, vb, MAX_PATH) &&
-             CompareStringOrdinal(va, -1, vb, -1, TRUE) == CSTR_EQUAL;
+             CompareStringOrdinal(unprefixed(va), -1, unprefixed(vb), -1, TRUE) == CSTR_EQUAL;
   free(wa);
   free(wb);
   return same;
@@ -371,7 +431,7 @@ char *mc_full_path(const char *path) {
 }
 
 mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms) {
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   if (!w) return MC_ERR_INVALID_ARG;
   WIN32_FILE_ATTRIBUTE_DATA fad;
   BOOL ok = GetFileAttributesExW(w, GetFileExInfoStandard, &fad);
@@ -385,7 +445,7 @@ mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms) {
 }
 
 mc_status mc_touch(const char *path) {
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   if (!w) return MC_ERR_INVALID_ARG;
   HANDLE h = CreateFileW(w, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                          NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -400,7 +460,7 @@ mc_status mc_touch(const char *path) {
 
 mc_status mc_free_space(const char *path, int64_t *out) {
   if (!path || !out) return MC_ERR_INVALID_ARG;
-  wchar_t *w = widen(path);
+  wchar_t *w = mc_win_path(path);
   if (!w) return MC_ERR_INVALID_ARG;
   ULARGE_INTEGER avail;
   BOOL ok = GetDiskFreeSpaceExW(w, &avail, NULL, NULL);
@@ -595,6 +655,15 @@ mc_status mc_walk(const char *path, mc_walk_fn fn, void *user) {
   walk_dir(dir, fn, user);
   free(dir);
   return MC_OK;
+}
+
+int mc_long_path(const char *path) {
+  (void)path;
+  return 0;
+}
+
+char *mc_open_path(const char *path) {
+  return mc_strdup(path);
 }
 
 FILE *mc_fopen(const char *path, const char *mode) {

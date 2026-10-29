@@ -109,7 +109,9 @@ static int add_tags(OggOpusComments *c, const char *src_path) {
 static void add_cover(OggOpusComments *c, const char *src_path) {
   char *dir = parent_dir(src_path);
   char *cover = dir ? mc_coverart_find(dir) : NULL;
-  if (cover) ope_comments_add_picture(c, cover, -1, NULL);
+  char *cover_path = cover ? mc_open_path(cover) : NULL;
+  if (cover_path) ope_comments_add_picture(c, cover_path, -1, NULL);
+  free(cover_path);
   free(cover);
   free(dir);
 }
@@ -141,8 +143,11 @@ static mc_status encode(const char *src_path, const char *part_path, int kbps) {
 
   /* libopusenc resamples anything that isn't 48 kHz itself, with its Speex resampler. */
   int err;
-  enc = ope_encoder_create_file(part_path, comments, (opus_int32)mc_decoder_rate(dec), (int)out_channels, 0,
-                                &err);
+  char *out_path = mc_open_path(part_path);
+  enc = out_path ? ope_encoder_create_file(out_path, comments, (opus_int32)mc_decoder_rate(dec), (int)out_channels,
+                                           0, &err)
+                 : NULL;
+  free(out_path);
   st = MC_ERR_IO;
   if (!enc) goto done;
   if (ope_encoder_ctl(enc, OPUS_SET_BITRATE(kbps * 1000)) != OPE_OK ||

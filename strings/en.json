@@ -393,6 +393,7 @@
     "import_error_zip_too_big": { "text": "The zip is too big to import (over {0:d} GB unzipped)", "note": "An import item for a .zip file; {0} is the limit in gigabytes." },
     "import_error_zip_space": { "text": "Not enough free space to unzip it", "note": "An import item for a .zip file that wouldn't fit on the disk once extracted." },
     "import_error_zip_write": { "text": "Couldn't unzip it (is the disk full?)", "note": "An import item for a .zip file whose files couldn't be written out." },
+    "import_error_long_path": { "text": "Couldn't read this file (its path is 260 characters or longer)", "note": "An import item for one audio file that couldn't be read, whose full path (folders and file name) is longer than Windows allows by default." },
 
     "status_ok": { "text": "ok", "note": "Status reasons appear inside other messages, e.g. \"Couldn't start the import (out of memory).\", so they start in lower case." },
     "status_unimplemented": "not implemented",
@@ -727,6 +728,7 @@
     "remove_from_this_pc_title": "Remove “{0}” from this PC?",
     "remove_from_this_pc_back": "To get it back, choose Sync to this PC from its menu.",
     "import_drop_here": "Drop folders of music here",
+    "import_long_paths": { "one": "{0:d} file couldn't be read, and its path is 260 characters or longer. Windows allows paths that long only once long paths are turned on.\n\nTo turn them on, enable the Group Policy “Enable Win32 long paths” (Computer Configuration > Administrative Templates > System > Filesystem), or set the registry value LongPathsEnabled under HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem to 1. Then restart Kithsong and import the file again. Or move it to a folder with a shorter path.", "other": "{0:d} files couldn't be read, and their paths are 260 characters or longer. Windows allows paths that long only once long paths are turned on.\n\nTo turn them on, enable the Group Policy “Enable Win32 long paths” (Computer Configuration > Administrative Templates > System > Filesystem), or set the registry value LongPathsEnabled under HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem to 1. Then restart Kithsong and import the files again. Or move them to a folder with a shorter path.", "note": "Shown after an import when files with long paths were left out and Windows' long-path setting is off. Keep the policy name, its location and the registry names as Windows shows them in English; translations may use the policy's name in the Windows display language." },
     "col_status": "Status",
     "col_album_title": { "text": "Album / Title", "note": "Column of an album's name, or a single's title." },
     "col_files": "Files",

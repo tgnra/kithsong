@@ -128,7 +128,8 @@ struct mc_import {
 
   /* Zips (see "Zips" in tagger.h): where they're extracted, the session's own folder in it
    * (created with the first zip, deleted by mc_import_free), and the zips that couldn't be,
-   * which become failed items. Only touched on the import thread, and by mc_import_free. */
+   * which become failed items (as do audio files with long paths that couldn't be read: see
+   * scan_file). Only touched on the import thread, and by mc_import_free. */
   char *staging_parent;
   char *staging;
   struct zip_failure {
@@ -202,6 +203,8 @@ static const char *audio_format(const char *path) {
   return NULL;
 }
 
+static void add_zip_failure(mc_import *imp, const char *path, const char *error);
+
 static int scan_file(void *user, const char *path) {
   mc_import *imp = user;
   if (cancelled(imp)) return 1;
@@ -216,7 +219,12 @@ static int scan_file(void *user, const char *path) {
   }
   file_entry *f = &imp->files[imp->file_count];
   memset(f, 0, sizeof *f);
-  if (mc_tags_read(path, &f->tags) != MC_OK) return 0; /* not readable as audio: ignore */
+  if (mc_tags_read(path, &f->tags) != MC_OK) {
+    /* Not readable as audio: ignored, unless its path is past what Windows allows by default,
+     * which may be why; then it's a failed item, not dropped without a word. */
+    if (mc_long_path(path)) add_zip_failure(imp, path, mc_str(MC_STR_IMPORT_ERROR_LONG_PATH));
+    return 0;
+  }
   if (!(f->path = mc_strdup(path))) {
     mc_tags_clear(&f->tags);
     return 1;

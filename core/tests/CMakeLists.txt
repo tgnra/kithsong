@@ -57,6 +57,7 @@ kithsong_test(test_import_assign)
 kithsong_test(test_import_order)
 kithsong_test(test_import_zip)
 target_link_libraries(test_import_zip PRIVATE mc_miniz)  # builds the zips it imports
+kithsong_test(test_long_paths)
 kithsong_test(test_dupes)
 kithsong_test(test_import_dupes)
 kithsong_test(test_delete)
