@@ -71,13 +71,13 @@ dependencies {
     // The launch screen, in the system's light or dark colours, on every version back to 24.
     implementation("androidx.core:core-splashscreen:1.2.0")
     // Album art loading and caching; the art itself comes from ui/art/Art.kt's ArtSource.
-    implementation("io.coil-kt.coil3:coil-compose:3.4.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
     // The media session, notification and MediaController around the core's player. Only the
     // session: the core decodes and plays, so there's no ExoPlayer.
     implementation("androidx.media3:media3-session:1.11.1")
-    // Colour schemes from album art. 4.1.x is the last built with Kotlin 2.3, which the
-    // project's Kotlin 2.2 can still read; 5.x needs 2.4.
-    implementation("com.materialkolor:material-kolor:4.1.1")
+    // Colour schemes from album art. 5.x is built with Kotlin 2.4, so it needs the project on
+    // 2.4 too (the Compose compiler plugin's version in the root build.gradle.kts).
+    implementation("com.materialkolor:material-kolor:5.0.1")
     // Background sync now and then, on Wi-Fi, while the app isn't on screen (sync/SyncWorker.kt).
     implementation("androidx.work:work-runtime-ktx:2.11.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
