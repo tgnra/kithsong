@@ -1,13 +1,19 @@
 /* Duplicates on import (tagger/dupes.c): quality, finding the release in the library, and
  * what a swap does to the files and rows. The import thread's own steps (copy, tag, rows,
  * finish) are mirrored by apply() below, since the thread needs MusicBrainz. Also
- * mc_trash()'s freedesktop.org trash, on POSIX only: on Windows it's the real Recycle Bin. */
+ * mc_trash()'s freedesktop.org trashes (the home one and a top directory's), on POSIX
+ * only: on Windows it's the real Recycle Bin. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L /* setenv */
+#define _DEFAULT_SOURCE         /* realpath */
 #endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include "library/library_internal.h"
 #include "musiccore/library.h"
@@ -606,6 +612,93 @@ static void test_posix_trash(void) {
   CHECK(strstr(info, "/old%20song.mp3\n") != NULL && strstr(info, "DeletionDate=") != NULL);
   CHECK(mc_trash(a) != MC_OK); /* gone already */
 }
+
+static void read_text(const char *path, char *out, size_t size) {
+  out[0] = '\0';
+  FILE *f = mc_fopen(path, "rb");
+  if (!f) return;
+  out[fread(out, 1, size - 1, f)] = '\0';
+  fclose(f);
+}
+
+/* A file on another file system than the home trash goes to its top directory's trash:
+ * there's one file system here, so the scratch folder stands in for the top directory. */
+static void test_topdir_trash(void) {
+  char top[1200], a[1300], b[1300], p[1400], info[2048];
+  unsigned uid = (unsigned)getuid();
+  snprintf(top, sizeof top, "%s/top", g_scratch);
+  snprintf(p, sizeof p, "%s/music/x y", top);
+  CHECK(mc_mkdirs(p) == MC_OK);
+  snprintf(a, sizeof a, "%s/music/x y/song.mp3", top);
+  snprintf(b, sizeof b, "%s/music/x y/other.mp3", top);
+  write_file(a, "a");
+  write_file(b, "b");
+
+  /* The mount point is above the scratch folder, and on the same file system. */
+  char *found = mc_trash_topdir(a);
+  CHECK(found != NULL);
+  if (found) {
+    struct stat fs, ts;
+    CHECK(stat(found, &ts) == 0 && stat(a, &fs) == 0 && ts.st_dev == fs.st_dev);
+    char *real = realpath(g_scratch, NULL);
+    CHECK(real && (strcmp(found, "/") == 0 ||
+                   (strncmp(real, found, strlen(found)) == 0 && real[strlen(found)] == '/')));
+    free(real);
+    free(found);
+  }
+
+  /* No .Trash: .Trash-$uid is made, private, with the path relative to the top. */
+  CHECK(mc_trash_in_topdir(a, top) == MC_OK && !mc_file_exists(a));
+  snprintf(p, sizeof p, "%s/.Trash-%u", top, uid);
+  struct stat st;
+  CHECK(lstat(p, &st) == 0 && S_ISDIR(st.st_mode) && (st.st_mode & 0777) == 0700);
+  snprintf(p, sizeof p, "%s/.Trash-%u/files/song.mp3", top, uid);
+  CHECK(mc_file_exists(p));
+  snprintf(p, sizeof p, "%s/.Trash-%u/info/song.mp3.trashinfo", top, uid);
+  read_text(p, info, sizeof info);
+  CHECK(strncmp(info, "[Trash Info]\nPath=music/x%20y/song.mp3\nDeletionDate=", 52) == 0);
+
+  /* A .Trash that isn't sticky isn't used. */
+  snprintf(p, sizeof p, "%s/.Trash", top);
+  CHECK(mkdir(p, 0777) == 0 && chmod(p, 0777) == 0);
+  write_file(a, "a");
+  CHECK(mc_trash_in_topdir(a, top) == MC_OK);
+  snprintf(p, sizeof p, "%s/.Trash-%u/files/song.2.mp3", top, uid);
+  CHECK(mc_file_exists(p));
+  snprintf(p, sizeof p, "%s/.Trash/%u", top, uid);
+  CHECK(!mc_file_exists(p));
+
+  /* A sticky one is: .Trash/$uid is made in it. */
+  snprintf(p, sizeof p, "%s/.Trash", top);
+  CHECK(chmod(p, 01777) == 0);
+  CHECK(mc_trash_in_topdir(b, top) == MC_OK && !mc_file_exists(b));
+  snprintf(p, sizeof p, "%s/.Trash/%u/files/other.mp3", top, uid);
+  CHECK(mc_file_exists(p));
+  snprintf(p, sizeof p, "%s/.Trash/%u/info/other.mp3.trashinfo", top, uid);
+  read_text(p, info, sizeof info);
+  CHECK(strstr(info, "\nPath=music/x%20y/other.mp3\n") != NULL);
+
+  /* A .Trash that's a link to a sticky directory isn't. */
+  char real_trash[1300];
+  snprintf(real_trash, sizeof real_trash, "%s/elsewhere", g_scratch);
+  CHECK(mkdir(real_trash, 01777) == 0 && chmod(real_trash, 01777) == 0);
+  snprintf(p, sizeof p, "%s/.Trash", top);
+  CHECK(mc_remove_tree(p) == MC_OK && symlink(real_trash, p) == 0);
+  write_file(b, "b");
+  CHECK(mc_trash_in_topdir(b, top) == MC_OK);
+  snprintf(p, sizeof p, "%s/.Trash-%u/files/other.mp3", top, uid);
+  CHECK(mc_file_exists(p));
+  snprintf(p, sizeof p, "%s/%u", real_trash, uid);
+  CHECK(!mc_file_exists(p));
+
+  /* A file not under the top directory isn't trashed there. */
+  snprintf(p, sizeof p, "%s/music", top);
+  write_file(b, "b");
+  CHECK(mc_trash_in_topdir(b, p) == MC_OK); /* under it: fine */
+  snprintf(a, sizeof a, "%s/outside.mp3", g_scratch);
+  write_file(a, "a");
+  CHECK(mc_trash_in_topdir(a, p) == MC_ERR_INVALID_ARG && mc_file_exists(a));
+}
 #endif
 
 int main(int argc, char **argv) {
@@ -626,6 +719,7 @@ int main(int argc, char **argv) {
   test_single();
 #ifndef _WIN32
   test_posix_trash();
+  test_topdir_trash();
 #endif
   return TEST_RESULT();
 }

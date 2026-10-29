@@ -12,8 +12,8 @@
  *   +---------------------------------------------+
  *
  * Delete is destructive, Cancel the default. Afterwards a dialog says if any track stayed
- * because its file couldn't go to the Trash (the home Trash only takes files on its own file
- * system). Restoring is mc_delete_restore(), which main.c runs at startup and whenever the
+ * because its file couldn't go to the Trash (it's open elsewhere, or its file system has no
+ * trash Kithsong can use or make). Restoring is mc_delete_restore(), which main.c runs at startup and whenever the
  * window becomes active.
  *
  * Needs libadwaita 1.5 (AdwAlertDialog).

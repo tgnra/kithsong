@@ -728,22 +728,14 @@ static char *percent_encode(const char *s) {
   return out;
 }
 
-/* The freedesktop.org Trash specification's home trash: info/<name>.trashinfo is created
- * first (exclusively, which claims the name), then the file is renamed into files/<name>.
- * Only a rename: a file on another file system than the home trash isn't trashed. */
-mc_status mc_trash(const char *path) {
-  const char *data = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
-  char trash[4096], files[4200], info[4200], abs[4096];
-  if (data && *data) snprintf(trash, sizeof trash, "%s/Trash", data);
-  else if (home && *home) snprintf(trash, sizeof trash, "%s/.local/share/Trash", home);
-  else return MC_ERR_NOT_FOUND;
-  if (path[0] == '/') {
-    snprintf(abs, sizeof abs, "%s", path);
-  } else {
-    char cwd[2048];
-    if (!getcwd(cwd, sizeof cwd)) return MC_ERR_IO;
-    snprintf(abs, sizeof abs, "%s/%s", cwd, path);
-  }
+/* Moves abs (an absolute path) into the trash directory trash, per the freedesktop.org
+ * Trash specification: info/<name>.trashinfo is created first (exclusively, which claims
+ * the name), then the file is renamed into files/<name>. The info file's Path is shown,
+ * percent-encoded: the absolute path for the home trash, the path relative to the top
+ * directory for one there. Only a rename: a file on another file system than trash isn't
+ * trashed. */
+static mc_status trash_into(const char *trash, const char *abs, const char *shown) {
+  char files[4200], info[4200];
   snprintf(files, sizeof files, "%s/files", trash);
   snprintf(info, sizeof info, "%s/info", trash);
   if (mc_mkdirs(files) != MC_OK || mc_mkdirs(info) != MC_OK) return MC_ERR_IO;
@@ -753,7 +745,7 @@ mc_status mc_trash(const char *path) {
   const char *dot = strrchr(name, '.');
   if (!dot || dot == name) dot = name + strlen(name);
   if (strlen(name) > 240) return MC_ERR_INVALID_ARG; /* leaves room for ".<n>" */
-  char *encoded = percent_encode(abs);
+  char *encoded = percent_encode(shown);
   if (!encoded) return MC_ERR_NOMEM;
   char date[32];
   time_t now = time(NULL);
@@ -789,6 +781,117 @@ mc_status mc_trash(const char *path) {
   }
   free(encoded);
   return st;
+}
+
+/* abs with its folder resolved (links followed), as the top directory is found from that:
+ * malloc'd, or NULL. The file itself is left alone, so a link is trashed, not its target. */
+static char *resolve_dir(const char *abs) {
+  const char *slash = strrchr(abs, '/');
+  if (!slash || !slash[1]) return NULL;
+  char dir[4096];
+  snprintf(dir, sizeof dir, "%.*s", slash == abs ? 1 : (int)(slash - abs), abs);
+  char *real = realpath(dir, NULL);
+  if (!real) return NULL;
+  size_t n = strlen(real) + strlen(slash) + 1;
+  char *out = malloc(n);
+  if (out) snprintf(out, n, "%s%s", strcmp(real, "/") == 0 ? "" : real, slash);
+  free(real);
+  return out;
+}
+
+char *mc_trash_topdir(const char *path) {
+  char *abs = resolve_dir(path);
+  if (!abs) return NULL;
+  struct stat file;
+  if (lstat(abs, &file) != 0) {
+    free(abs);
+    return NULL;
+  }
+  /* Up from the file's folder while the parent is on the same file system. */
+  *strrchr(abs, '/') = '\0';
+  if (!*abs) strcpy(abs, "/");
+  while (strcmp(abs, "/") != 0) {
+    char *up = strrchr(abs, '/');
+    char parent[4096];
+    snprintf(parent, sizeof parent, "%.*s", up == abs ? 1 : (int)(up - abs), abs);
+    struct stat st;
+    if (stat(parent, &st) != 0 || st.st_dev != file.st_dev) break;
+    strcpy(abs, parent); /* shorter */
+  }
+  return abs;
+}
+
+/* Whether path is a directory (not a link to one) of this user's that no one else can
+ * get into, as the spec asks of a top directory trash. */
+static int own_private_dir(const char *path) {
+  struct stat st;
+  return lstat(path, &st) == 0 && S_ISDIR(st.st_mode) && st.st_uid == getuid() &&
+         (st.st_mode & 077) == 0;
+}
+
+mc_status mc_trash_in_topdir(const char *path, const char *topdir) {
+  if (path[0] != '/' || topdir[0] != '/') return MC_ERR_INVALID_ARG;
+  char *abs = resolve_dir(path);
+  if (!abs) return MC_ERR_IO;
+  /* The info file's Path is relative to topdir ("/" has no trailing part to drop). */
+  size_t tlen = strlen(topdir);
+  while (tlen > 1 && topdir[tlen - 1] == '/') tlen--;
+  if (tlen == 1) tlen = 0;
+  if (strncmp(abs, topdir, tlen) != 0 || abs[tlen] != '/') {
+    free(abs);
+    return MC_ERR_INVALID_ARG;
+  }
+  const char *rel = abs + tlen + 1;
+  unsigned uid = (unsigned)getuid();
+  char trash[4200];
+  mc_status st = MC_ERR_IO;
+  /* $topdir/.Trash/$uid, if the administrator made $topdir/.Trash: it has to be sticky and
+   * not a link, or another user could have made it to see what's trashed there. */
+  struct stat shared;
+  snprintf(trash, sizeof trash, "%.*s/.Trash", (int)tlen, topdir);
+  if (lstat(trash, &shared) == 0 && S_ISDIR(shared.st_mode) && (shared.st_mode & S_ISVTX)) {
+    snprintf(trash, sizeof trash, "%.*s/.Trash/%u", (int)tlen, topdir, uid);
+    if ((mkdir(trash, 0700) == 0 || errno == EEXIST) && own_private_dir(trash))
+      st = trash_into(trash, abs, rel);
+  }
+  /* Else $topdir/.Trash-$uid, made if need be. */
+  if (st != MC_OK) {
+    snprintf(trash, sizeof trash, "%.*s/.Trash-%u", (int)tlen, topdir, uid);
+    if ((mkdir(trash, 0700) == 0 || errno == EEXIST) && own_private_dir(trash))
+      st = trash_into(trash, abs, rel);
+  }
+  free(abs);
+  return st;
+}
+
+/* The home trash when the file is on its file system, else the trash at the top of the
+ * file's own file system. */
+mc_status mc_trash(const char *path) {
+  const char *data = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
+  char trash[4096], abs[4096];
+  if (data && *data) snprintf(trash, sizeof trash, "%s/Trash", data);
+  else if (home && *home) snprintf(trash, sizeof trash, "%s/.local/share/Trash", home);
+  else return MC_ERR_NOT_FOUND;
+  if (path[0] == '/') {
+    snprintf(abs, sizeof abs, "%s", path);
+  } else {
+    char cwd[2048];
+    if (!getcwd(cwd, sizeof cwd)) return MC_ERR_IO;
+    snprintf(abs, sizeof abs, "%s/%s", cwd, path);
+  }
+  struct stat file, home_trash;
+  if (lstat(abs, &file) != 0) return MC_ERR_IO;
+  if (mc_mkdirs(trash) != MC_OK || stat(trash, &home_trash) != 0) return MC_ERR_IO;
+  if (file.st_dev == home_trash.st_dev) return trash_into(trash, abs, abs);
+#ifdef __ANDROID__
+  return MC_ERR_NOT_FOUND; /* shared storage has no trash */
+#else
+  char *top = mc_trash_topdir(abs);
+  if (!top) return MC_ERR_IO;
+  mc_status st = mc_trash_in_topdir(abs, top);
+  free(top);
+  return st;
+#endif
 }
 
 mc_status mc_rmdir(const char *path) {

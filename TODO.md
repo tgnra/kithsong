@@ -80,7 +80,6 @@ Big pieces that haven't been started, or that only one platform has.
 - Core - limit by total duration ("an hour of music")
 
 ### Delete
-- Linux - mc_trash() fails for a library on another file system from the home Trash; support `$topdir/.Trash-$uid`, or offer a permanent delete
 - Core - a peer that trashed an original after a remote delete keeps no restore record; restoring it there gets it swept as an unknown file
 - Windows and Linux - a "Restored N tracks" message after a restore from the bin
 - Android - delete from an album's page or the player too (only the album, artist and track long-press menus have it)

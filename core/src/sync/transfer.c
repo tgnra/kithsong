@@ -1850,7 +1850,7 @@ static int on_library_file(void *user, const char *path) {
 /* Audio files (and stale .part files) in the library folder that no files row knows:
  * removed, or on an archive only reported. An audio file may be the user's own, put there by
  * hand, so it goes to the trash where they can get it back; where there's no trash it can
- * use (a library on another file system than the Linux home trash) it's deleted, as are
+ * use (e.g. a file system it can't make a .Trash-$uid on) it's deleted, as are
  * .part files, which are only ever half a copy. Android has no trash, so there every one is
  * deleted without trying mc_trash(): a trash under $HOME there would be one nobody can open,
  * keeping the files out of sight but taking up space. Files younger than UNKNOWN_GRACE_MS

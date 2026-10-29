@@ -113,12 +113,24 @@ mc_status mc_remove(const char *path);
  * and mc_rmdir(), and a copy keeps it. Elsewhere does nothing: removing needs only the
  * folder's permission. */
 mc_status mc_clear_read_only(const char *path);
-/* Moves a file to the Recycle Bin (Windows) or the user's freedesktop.org trash
- * ($XDG_DATA_HOME/Trash, POSIX), so the user can still get it back. Fails rather than
- * deleting when there is no trash it can use (e.g. a library on another file system than
- * the home trash, or Android); callers then leave the file where it is. On Windows a drive
- * without a Recycle Bin (some network and removable drives) deletes the file outright. */
+/* Moves a file to the Recycle Bin (Windows) or a freedesktop.org trash (POSIX), so the user
+ * can still get it back: the home trash ($XDG_DATA_HOME/Trash) when the file is on its file
+ * system, else the one at the top of the file's own (mc_trash_in_topdir()). Fails rather
+ * than deleting when there is no trash it can use (e.g. on Android, or a file system it
+ * can't make one on); callers then leave the file where it is. On Windows a drive without a
+ * Recycle Bin (some network and removable drives) deletes the file outright. */
 mc_status mc_trash(const char *path);
+#ifndef _WIN32
+/* The top directory of the file system path's file is on (its mount point), with the
+ * folders on the way resolved: malloc'd, or NULL. */
+char *mc_trash_topdir(const char *path);
+/* mc_trash() into topdir's trash, as the spec has it for a file system other than the home
+ * trash's: $topdir/.Trash/$uid if $topdir/.Trash is a sticky directory and not a link,
+ * else $topdir/.Trash-$uid (made, mode 0700, if need be), with the info file's Path
+ * relative to topdir. Both paths absolute; path must be under topdir. Separate so a test
+ * can give a topdir on its one file system. */
+mc_status mc_trash_in_topdir(const char *path, const char *topdir);
+#endif
 /* Removes a directory; fails if it isn't empty. */
 mc_status mc_rmdir(const char *path);
 /* Deletes path and, for a directory, everything in it, outright (no trash). Links and
