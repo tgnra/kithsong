@@ -23,8 +23,9 @@
 HMENU add_to_playlist_menu(mc_library *lib, UINT first_id, UINT new_id, mc_playlist_list **lists);
 
 /* Adds track_uid to the end of the playlist playlist_uid, or for NULL asks for a new
- * playlist to add it to. Reports failures itself. Returns TRUE if the library changed. */
-BOOL add_to_playlist(HWND owner, mc_library *lib, const char *track_uid, const char *playlist_uid);
+ * playlist to add it to (saying, unless the track is here, that the playlist won't show on
+ * the Playlists page). Reports failures itself. Returns TRUE if the library changed. */
+BOOL add_to_playlist(HWND owner, mc_library *lib, const char *track_uid, BOOL here, const char *playlist_uid);
 
 /* The same for album groups: the submenu (free *groups with mc_album_group_list_free()),
  * and adding album_uid to the end of group_uid, or for NULL to a new group. */

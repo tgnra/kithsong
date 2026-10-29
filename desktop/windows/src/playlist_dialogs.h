@@ -8,6 +8,10 @@
  *   |         [ Create ] [ Cancel ]|     |         [ Delete ] [ Cancel ]|
  *   +------------------------------+     +------------------------------+
  *
+ * New made for a track with no file on this PC (Add to Playlist's New Playlist...) says
+ * under the name box that the playlist won't show on the Playlists page until one of its
+ * tracks is here, as it'd be hidden at once.
+ *
  * Rename is the same dialog as New, with the current name filled in. Create and Rename are
  * the default button (Enter), and stay disabled while the name is blank or, renaming,
  * unchanged. Delete's default is Cancel. Escape cancels any of them. A failure is reported
@@ -24,8 +28,9 @@
 
 #include "musiccore/musiccore.h"
 
-/* Each returns TRUE if the library changed. owner is the main window. */
-BOOL playlist_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]);
+/* Each returns TRUE if the library changed. owner is the main window. playable is FALSE
+ * when the new playlist is for a track with no file here, which the dialog then says. */
+BOOL playlist_create_dialog(HWND owner, mc_library *lib, BOOL playable, char out_uid[MC_UID_STRLEN]);
 BOOL playlist_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
 BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
 

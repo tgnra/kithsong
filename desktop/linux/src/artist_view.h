@@ -42,7 +42,7 @@
 
 typedef struct artist_view_callbacks {
   void (*set_shuffle)(void *user, gboolean on); /* Play (off) and Shuffle (on), before playing */
-  void (*add_to_playlist)(void *user, const char *track_uid);
+  void (*add_to_playlist)(void *user, const char *track_uid, gboolean here); /* here: it has a file here */
   void (*open_album)(void *user, const char *album_uid);
   /* An artist's page opened or closed, or what it has to play changed: the playback
    * buttons may need updating. */

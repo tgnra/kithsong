@@ -41,12 +41,12 @@ HMENU add_to_playlist_menu(mc_library *lib, UINT first_id, UINT new_id, mc_playl
   return menu;
 }
 
-BOOL add_to_playlist(HWND owner, mc_library *lib, const char *track_uid, const char *playlist_uid) {
+BOOL add_to_playlist(HWND owner, mc_library *lib, const char *track_uid, BOOL here, const char *playlist_uid) {
   if (!lib || !track_uid || !*track_uid) return FALSE;
   char uid[MC_UID_STRLEN];
   BOOL created = FALSE;
   if (!playlist_uid) {
-    if (!playlist_create_dialog(owner, lib, uid)) return FALSE;
+    if (!playlist_create_dialog(owner, lib, here, uid)) return FALSE;
     playlist_uid = uid;
     created = TRUE;
   }

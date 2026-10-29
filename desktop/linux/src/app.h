@@ -39,8 +39,6 @@ typedef struct app {
   AdwStatusPage *no_playlists; /* "No playlists yet", or none to play here */
   GtkWidget *choose_sync;      /* its Choose what to sync button */
   GtkStack *playlists;         /* "none" (no_playlists) | "grid", under the Playlists header */
-  char keep_playlist[MC_UID_STRLEN]; /* made with New playlist: shown though it has nothing to
-                                      * play here, until another page is picked */
   int hidden_playlists;        /* playlists left out for having nothing to play here */
   GtkWidget *album_grid, *playlist_grid;
   app_view view;        /* the sidebar's library page picked last */

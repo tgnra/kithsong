@@ -35,7 +35,7 @@
  * changes nothing itself. The parent does it, then reloads the list with track_list_show.
  * track_list_last_request has the details. */
 #define TLN_PLAY 1
-#define TLN_ADD_TO_PLAYLIST 2 /* track_uid, to the end of playlist_uid ("" = a new playlist) */
+#define TLN_ADD_TO_PLAYLIST 2 /* track_uid, to the end of playlist_uid ("" = a new playlist); here */
 #define TLN_REMOVE 3          /* entry_uid, out of the shown playlist */
 #define TLN_MOVE 4            /* entry_uid, to after after_uid ("" = to the start) */
 #define TLN_RENAME_PLAYLIST 5 /* the shown playlist */
@@ -61,6 +61,7 @@ typedef struct track_list_request {
   char entry_uid[MC_UID_STRLEN];
   char after_uid[MC_UID_STRLEN];
   char playlist_uid[MC_UID_STRLEN];
+  BOOL here; /* track_uid has a file on this PC */
 } track_list_request;
 
 /* The request the last notification was for. */

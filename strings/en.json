@@ -94,6 +94,7 @@
 
     "add_to_playlist": "Add to playlist",
     "new_playlist": "New playlist",
+    "new_playlist_track_away": { "text": "This track isn't on this computer, so the playlist won't show on the Playlists page here until one of its tracks is.", "note": "Under the name box when making a playlist for a track (Add to playlist) that has no file on this computer: a playlist whose tracks have no file here is hidden from the Playlists page." },
     "playlist_rename_menu": "Rename…",
     "playlist_delete_menu": "Delete playlist…",
     "playlist_menu": { "text": "Playlist menu", "note": "The menu button on a playlist's track list: its tooltip, and its name for accessibility." },

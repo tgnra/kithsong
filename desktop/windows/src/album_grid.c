@@ -119,8 +119,6 @@ static struct {
   BOOL group_smart, group_random; /* it's a smart group, and in random order */
   wchar_t *group_rule;           /* a smart group's rule as a sentence, under its name; or NULL */
   int hidden;                    /* playlists left out for having nothing to play here */
-  char keep_uid[MC_UID_STRLEN];  /* a playlist made with New Playlist: shown, though it has
-                                  * nothing to play here, until the view changes */
   album_grid_sync sync_state;    /* whether the empty pages offer pairing or the sync profile */
   RECT action_rc;                /* the empty page's button, as last painted; empty if none */
   tile *tiles;
@@ -545,23 +543,19 @@ static void add_smart(mc_smart_subject subject, tile **tiles, wchar_t ***dirs, i
 }
 
 /* The playlists' tiles: the loader finds their pictures by uid, and the track count goes
- * beneath the name. Only those with a track to play here (as MC_LIST_PLAYABLE would list
- * them), and g.keep_uid's; the rest are counted in g.hidden. Smart playlists follow. */
+ * beneath the name. Only those MC_LIST_PLAYABLE lists (with a track to play here, or empty);
+ * the rest are counted in g.hidden. Smart playlists follow. */
 static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
   mc_playlist_list *list = NULL;
-  if (g.lib) mc_library_list_playlists(g.lib, 0, &list);
+  if (g.lib) mc_library_list_playlists(g.lib, MC_LIST_PLAYABLE, &list);
   int count = list ? list->count : 0;
   *n = 0;
-  g.hidden = 0;
+  g.hidden = list ? list->hidden : 0;
   *tiles = count ? calloc((size_t)count, sizeof **tiles) : NULL;
   *dirs = count ? calloc((size_t)count, sizeof **dirs) : NULL;
   if (count && (!*tiles || !*dirs)) count = 0;
   for (int i = 0; i < count; i++) {
     const mc_playlist_info *p = &list->items[i];
-    if (p->playable_count == 0 && strcmp(p->uid, g.keep_uid)) {
-      g.hidden++;
-      continue;
-    }
     tile *t = &(*tiles)[*n];
     memcpy(t->uid, p->uid, sizeof t->uid);
     (*dirs)[(*n)++] = widen(p->uid);
@@ -737,7 +731,6 @@ static void switch_view(album_grid_view view, const char *group, const char *sel
   if (view == g.view && (view != AGV_GROUP || !strcmp(group, g.group_uid))) return;
   BOOL had = g.selected_uid[0] != '\0';
   g.view = view;
-  g.keep_uid[0] = '\0'; /* a new playlist with nothing to play here is hidden again */
   if (view == AGV_GROUP) snprintf(g.group_uid, sizeof g.group_uid, "%s", group);
   g.selected = g.hot = -1;
   snprintf(g.selected_uid, sizeof g.selected_uid, "%s", select ? select : "");
@@ -796,7 +789,6 @@ void album_grid_set_playlist_art_dir(const char *dir) {
 }
 
 void album_grid_set_library(mc_library *lib) {
-  if (lib != g.lib) g.keep_uid[0] = '\0';
   g.lib = lib;
   g.dirty = TRUE;
   if (g.wnd) InvalidateRect(g.wnd, NULL, FALSE); /* reloads on the next paint, if visible */
@@ -1128,8 +1120,7 @@ static void reshuffle_group(void) {
 }
 
 /* The header's + on Playlists and Album Groups: asks for a name and makes an empty one. A
- * new group opens; a new playlist is selected, so the track list shows it, and kept on the
- * page while it has nothing to play here (g.keep_uid). */
+ * new group opens; a new playlist is selected, so the track list shows it. */
 static void new_list(void) {
   if (!g.lib) return;
   HWND owner = GetAncestor(g.wnd, GA_ROOT);
@@ -1139,8 +1130,7 @@ static void new_list(void) {
     notify_changed();
     album_grid_open_group(uid);
   } else if (g.tiles_view == AGV_PLAYLISTS) {
-    if (!playlist_create_dialog(owner, g.lib, uid)) return;
-    memcpy(g.keep_uid, uid, sizeof g.keep_uid);
+    if (!playlist_create_dialog(owner, g.lib, TRUE, uid)) return;
     g.dirty = TRUE;
     album_grid_select(uid); /* reloads first */
     notify_changed();
