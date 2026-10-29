@@ -34,7 +34,8 @@ import com.google.common.util.concurrent.ListenableFuture
  * shuffled order is published as the timeline's shuffle order ([OrderedTimeline]), so
  * controllers know what comes next; next and previous are still passed to the core as such,
  * and next is always offered while shuffled, as the core's shuffle never ends. The core's
- * [volume] (0 to 100) is set to begin with.
+ * [volume] (0 to 100) is set to begin with. Ducking for another app's sound lowers the core's
+ * volume for a while, then puts [volume] back.
  *
  * Use it on the main thread.
  */
@@ -42,7 +43,7 @@ import com.google.common.util.concurrent.ListenableFuture
 class CoreMediaPlayer(
     context: Context,
     private var shuffle: Boolean,
-    volume: Int,
+    private val volume: Int,
     private val onShuffleChanged: (Boolean) -> Unit,
     private val onNowPlaying: (String) -> Unit = {},
     private val onPlayed: (String, Long) -> Unit,
@@ -53,10 +54,10 @@ class CoreMediaPlayer(
         setVolume(volume)
     }
 
-    // No ducking here yet, though the core has a volume now. From Android 8 the system ducks
-    // the app itself, since music doesn't ask to be paused instead.
+    // From Android 8 the system ducks the app itself, without telling it, since music doesn't
+    // ask to be paused instead; before that the focus manager asks for it here.
     private val focus = AudioFocusManager(context, Looper.getMainLooper(), object : AudioFocusManager.PlayerControl {
-        override fun setVolumeMultiplier(volumeMultiplier: Float) = Unit
+        override fun setVolumeMultiplier(volumeMultiplier: Float) = duck(volumeMultiplier)
         override fun executePlayerCommand(playerCommand: Int) = onFocusCommand(playerCommand)
     }).apply { setAudioAttributes(AUDIO_ATTRIBUTES) }
     private val noisy = AudioBecomingNoisyManager(
@@ -243,6 +244,13 @@ class CoreMediaPlayer(
         takePlays()
         core.close()
         return Futures.immediateVoidFuture()
+    }
+
+    // Scales the output by [multiplier] (1 when not ducked) from [volume], which stays as the
+    // user left it. The core's volume is the cube root of its gain, so the multiplier's cube
+    // root scales it.
+    private fun duck(multiplier: Float) {
+        core.setVolume(Math.round(volume * Math.cbrt(multiplier.toDouble())).toInt())
     }
 
     // Asks for audio focus if playing is wanted, then plays or pauses to match.

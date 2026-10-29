@@ -6,7 +6,7 @@ Big pieces that haven't been started, or that only one platform has.
 
 - **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; only Windows can create, edit, rename or delete one (its rule editor, smart_editor.c). Linux and Android need theirs (built from mc_smart_field_get() and the mc_smart_*_label() words)
 - **Import on Android** - removed for now (music arrives by sync); see Android below
-- **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard; no on-screen control anywhere, and Android doesn't duck with it yet
+- **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard; no on-screen control anywhere
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar and search page have UI Automation providers, checked with a UI Automation tree walk but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **AAC/M4A playback** - no decoder chosen
@@ -106,7 +106,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
 - All - a play queue: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither), and a view of what's queued
 - All - an on-screen volume control (the desktops flash the level in the now-playing strip for now)
-- Android - duck with the core's volume (CorePlayer.setVolume; AudioFocusManager's setVolumeMultiplier is a no-op)
 - Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
 
 ### Scrobbling
@@ -274,7 +273,7 @@ Things built but not checked properly.
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
 - After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - mDNS discovery and sync over real Wi-Fi, on a real device
-- API 24-32 devices, audio focus during calls, plays landing in the core's database
+- API 24-32 devices, audio focus during calls, ducking (only API 24-25 duck through the core's volume; the emulator is API 37), plays landing in the core's database
 - The themed launcher icon, and the sync notification icon
 
 ### Cross-platform
