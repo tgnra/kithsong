@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -96,6 +97,9 @@ fun App(
     var playerOpen by rememberSaveable { mutableStateOf(false) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     val track = playback.track
+    // The player goes with the track, when a delete empties the queue, say; it doesn't come
+    // back open with the next one.
+    LaunchedEffect(track == null) { if (track == null) playerOpen = false }
 
     // Lists end clear of the mini player, which sits above the navigation bar.
     var miniPlayerHeight by remember { mutableIntStateOf(0) }
@@ -118,8 +122,9 @@ fun App(
     // Menus and Add to playlist, over everything. Their Play and Shuffle, and a track list's,
     // play a whole album or playlist from its start with shuffle off, or with shuffle on from
     // whichever track the core's shuffle starts with, as the desktops do. Deleting an album,
-    // artist or track reads open track lists again, and one that's left empty closes itself.
-    val actions = remember(source) {
+    // artist or track reads open track lists again, and one that's left empty closes itself;
+    // one that takes any of the queue's tracks stops playback first.
+    val actions = remember(source, playback) {
         // Remove from this phone only makes sense for the real library, which sync fills.
         val deleter = source as? LibraryDeleter
         PlaylistActions(
@@ -127,6 +132,7 @@ fun App(
             deleter,
             syncer.takeIf { deleter != null },
             source as? RecentsEditor,
+            playback,
         )
     }
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->

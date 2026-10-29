@@ -106,6 +106,20 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
         withController { it.shuffleModeEnabled = on }
     }
 
+    // Empty until the controller has connected; nothing has played before then.
+    override val queueUids: List<String>
+        get() = controller?.let { c -> List(c.mediaItemCount) { c.getMediaItemAt(it).mediaId } }.orEmpty()
+
+    override fun clear() {
+        track = null
+        positionMs = 0
+        withController {
+            it.stop()
+            // An empty queue, as clearMediaItems() asks to remove items, which the player ignores.
+            it.setMediaItems(emptyList())
+        }
+    }
+
     private fun withController(action: (MediaController) -> Unit) {
         val controller = controller
         if (controller != null) action(controller) else pending += action

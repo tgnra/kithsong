@@ -40,6 +40,12 @@ interface Playback {
     fun previous()
     /** Turns shuffle on or off, carrying on from the current track; set it before [play] to start shuffled. */
     fun setShuffle(on: Boolean)
+
+    /** The uids of the queue's tracks, in queue order. */
+    val queueUids: List<String>
+
+    /** Stops and empties the queue, so nothing is playing: before its tracks are deleted, say. */
+    fun clear()
 }
 
 /** Pretends to play: the position advances while playing and the queue moves on. */
@@ -89,6 +95,13 @@ class FakePlayback(private val scope: CoroutineScope) : Playback {
 
     override fun setShuffle(on: Boolean) {
         shuffleOn = on
+    }
+
+    override val queueUids: List<String> get() = queue.map { it.uid }
+
+    override fun clear() {
+        playOrPause(false)
+        load(emptyList(), 0)
     }
 
     private fun playOrPause(playing: Boolean) {

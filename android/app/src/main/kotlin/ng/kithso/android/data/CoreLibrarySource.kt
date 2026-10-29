@@ -24,6 +24,7 @@ import ng.kithso.core.deleteAlbumGroup
 import ng.kithso.core.deletePermanently
 import ng.kithso.core.deletePlaylist
 import ng.kithso.core.deletePreview
+import ng.kithso.core.deleteTakesAny
 import ng.kithso.core.moveInAlbumGroup
 import ng.kithso.core.movePlaylistEntry
 import ng.kithso.core.playlistEntries
@@ -418,6 +419,15 @@ class CoreLibrarySource(
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't find out what deleting $what takes", e)
             null
+        }
+    }
+
+    override suspend fun takesAny(what: Deletion, trackUids: List<String>): Boolean = withContext(core) {
+        try {
+            open()?.deleteTakesAny(what.kind.core, what.uid, trackUids) == true
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't find out what deleting $what takes", e)
+            false
         }
     }
 

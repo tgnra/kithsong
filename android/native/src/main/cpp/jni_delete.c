@@ -71,3 +71,29 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_DeleteNatives_nativeDelete(JNIEn
   jint values[] = {res.tracks_deleted, res.files_trashed, res.tracks_kept};
   return ints(env, values, 3);
 }
+
+/* Whether deleting uid would delete any of track_uids (a String[]), e.g. the play queue's, so
+ * playback can stop first as on the desktops. */
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_DeleteNatives_nativeTakesAny(JNIEnv *env, jclass cls,
+                                                                         jlong handle, jint kind,
+                                                                         jstring uid,
+                                                                         jobjectArray track_uids) {
+  (void)cls;
+  mc_delete_plan *plan = plan_of(env, handle, kind, uid);
+  if (!plan) return JNI_FALSE;
+  jboolean takes = JNI_FALSE;
+  jsize n = (*env)->GetArrayLength(env, track_uids);
+  for (jsize i = 0; i < n && !takes; i++) {
+    jstring s = (jstring)(*env)->GetObjectArrayElement(env, track_uids, i);
+    if (!s) continue;
+    const char *c = (*env)->GetStringUTFChars(env, s, NULL);
+    if (c) {
+      takes = mc_delete_plan_has(plan, c) ? JNI_TRUE : JNI_FALSE;
+      (*env)->ReleaseStringUTFChars(env, s, c);
+    }
+    (*env)->DeleteLocalRef(env, s);
+    if (!c) break; /* OutOfMemoryError pending */
+  }
+  mc_delete_plan_free(plan);
+  return takes;
+}

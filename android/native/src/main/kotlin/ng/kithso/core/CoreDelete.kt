@@ -26,6 +26,10 @@ data class DeleteResult(val tracksDeleted: Int, val filesRemoved: Int, val track
 fun CoreLibrary.deletePreview(kind: DeleteKind, uid: String): DeletePreview =
     DeleteNatives.nativePreview(handle, kind.code, uid).let { DeletePreview(it[0], it[1]) }
 
+/** Whether deleting [uid] of [kind] would delete any of [trackUids], e.g. the play queue's. */
+fun CoreLibrary.deleteTakesAny(kind: DeleteKind, uid: String, trackUids: List<String>): Boolean =
+    trackUids.isNotEmpty() && DeleteNatives.nativeTakesAny(handle, kind.code, uid, trackUids.toTypedArray())
+
 /** Deletes [uid] of [kind] from the library, and its files from this phone for good. */
 fun CoreLibrary.deletePermanently(kind: DeleteKind, uid: String): DeleteResult =
     DeleteNatives.nativeDelete(handle, kind.code, uid).let { DeleteResult(it[0], it[1], it[2]) }
@@ -37,4 +41,5 @@ internal object DeleteNatives {
 
     @JvmStatic external fun nativePreview(handle: Long, kind: Int, uid: String): IntArray
     @JvmStatic external fun nativeDelete(handle: Long, kind: Int, uid: String): IntArray
+    @JvmStatic external fun nativeTakesAny(handle: Long, kind: Int, uid: String, trackUids: Array<String>): Boolean
 }

@@ -34,13 +34,18 @@ sealed interface DeleteOutcome {
  * before it asks. Either way the delete is logged, so sync deletes the tracks on every device:
  * their copies are removed, originals imported there go to that device's trash.
  *
- * Unlike on Windows, playback carries on: a file that's playing can still be removed, and the
- * player skips queued tracks whose files have gone. [LibrarySource.library] follows the
- * delete, and an open track list is read again ([PlaylistEditor.edits]).
+ * A file that's playing could still be removed here, but the track would play on to its end
+ * and the queue's other deleted tracks be skipped, so as on Windows the UI stops playback
+ * first, emptying the queue, if the delete takes any of its tracks ([takesAny]).
+ * [LibrarySource.library] follows the delete, and an open track list is read again
+ * ([PlaylistEditor.edits]).
  */
 interface LibraryDeleter {
     /** What deleting [what] would take, to ask first; null if that couldn't be found out. */
     suspend fun deleteSize(what: Deletion): DeleteSize?
+
+    /** Whether deleting [what] would take any of [trackUids]; false if that couldn't be found out. */
+    suspend fun takesAny(what: Deletion, trackUids: List<String>): Boolean
 
     /** Deletes [what]. It goes on even if the caller is cancelled. */
     suspend fun delete(what: Deletion): DeleteOutcome

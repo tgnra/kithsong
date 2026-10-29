@@ -79,7 +79,7 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Delete
 - Core - a peer that trashed an original after a remote delete keeps no restore record; restoring it there gets it swept as an unknown file
-- Android - a track that's deleted while it plays keeps playing to its end, and its later queue entries are skipped; the desktops stop playback first (Windows can't trash an open file)
+- Android - Remove from this phone carries on playing a track it removes (and skips the queue's others); Windows stops playback first, as Android now does for Delete from library
 
 ### Remove from this device
 Albums and artists can be removed from one device ("Remove from this PC", computer, phone) and synced to it again; see "Removing from one device" in docs/sync-protocol.md. Left to do:

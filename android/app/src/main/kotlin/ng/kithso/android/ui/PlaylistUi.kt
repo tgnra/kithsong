@@ -64,6 +64,7 @@ import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.Recent
 import ng.kithso.android.data.RecentsEditor
 import ng.kithso.android.data.Track
+import ng.kithso.android.playback.Playback
 import ng.kithso.core.HerePreview
 import ng.kithso.core.HereState
 import ng.kithso.core.ProfileItemKind
@@ -79,7 +80,8 @@ import kotlinx.coroutines.launch
  * [editor] is null when the library can't be edited, and [deleter] when nothing can be
  * deleted from it (the made-up one): the menus then offer only playing. [remover] offers
  * Remove from this phone (or Sync to this phone) on albums and artists, where it applies, and
- * [recents] Remove from Recents and Clear Recents on a recent's.
+ * [recents] Remove from Recents and Clear Recents on a recent's. A delete that takes any of
+ * [playback]'s queue empties it first, as Windows does.
  */
 @Stable
 class PlaylistActions(
@@ -87,6 +89,7 @@ class PlaylistActions(
     val deleter: LibraryDeleter? = null,
     val remover: DeviceRemover? = null,
     val recents: RecentsEditor? = null,
+    val playback: Playback? = null,
 ) {
     internal var sheet by mutableStateOf<Sheet?>(null)
     internal var dialog by mutableStateOf<Dialog?>(null)
@@ -438,7 +441,7 @@ fun PlaylistSheets(
             },
         )
         is PlaylistActions.Dialog.DeleteFromLibrary -> if (deleter != null) {
-            DeleteFromLibraryDialog(deleter, dialog.what, scope, onDismiss = { actions.dialog = null })
+            DeleteFromLibraryDialog(deleter, actions.playback, dialog.what, scope, onDismiss = { actions.dialog = null })
         }
         is PlaylistActions.Dialog.RemoveHere -> if (remover != null) {
             RemoveHereDialog(remover, dialog, scope, onDismiss = { actions.dialog = null })
@@ -520,13 +523,14 @@ private fun RemoveHereDialog(
 /**
  * Asks before deleting [what] from the library, saying how many files go from this phone for
  * good (there's no trash to restore them from) and that it goes from every device, then
- * deletes it. Delete waits for the count; something that's gone already closes the dialog.
- * Afterwards a toast says if the delete failed, or some tracks stayed; the desktops show a
- * message box.
+ * deletes it, stopping [playback] first if its queue has any of the tracks. Delete waits for
+ * the count; something that's gone already closes the dialog. Afterwards a toast says if the
+ * delete failed, or some tracks stayed; the desktops show a message box.
  */
 @Composable
 private fun DeleteFromLibraryDialog(
     deleter: LibraryDeleter,
+    playback: Playback?,
     what: Deletion,
     // Outlives the dialog, which closes as the delete starts, for the toasts after it.
     scope: CoroutineScope,
@@ -557,6 +561,8 @@ private fun DeleteFromLibraryDialog(
                 onClick = {
                     onDismiss()
                     scope.launch {
+                        val queue = playback?.queueUids.orEmpty()
+                        if (queue.isNotEmpty() && deleter.takesAny(what, queue)) playback?.clear()
                         when (val outcome = deleter.delete(what)) {
                             DeleteOutcome.Deleted -> Unit
                             is DeleteOutcome.Kept -> Toast.makeText(
