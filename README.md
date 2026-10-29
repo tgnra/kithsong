@@ -119,16 +119,25 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 | Ctrl+Up / Ctrl+Down, or + / - | Volume up / down |
 | Ctrl+M | Mute or unmute |
 | Ctrl+S | Shuffle on or off |
-| Ctrl+F | Search |
+| Ctrl+F (on Windows also Ctrl+E or F3) | Search; on Linux, typing anywhere but a text box searches for it too |
 | Ctrl+1, 2, 3, 4 | Albums, Artists, Playlists, Album groups |
 | Ctrl+, | Settings |
+| Ctrl+O | Import: choose folders to import |
+| Ctrl+N | New playlist |
 | Alt+Left or Backspace | Back, from an artist's page or an album group |
+| F1 | About Kithsong |
 | Esc | Close the track list |
 | Enter | Play the selected track |
-| Delete | Remove the selected track from the playlist |
+| Delete | Remove the selected track from the playlist; on the Playlists page, delete the selected playlist |
 | Alt+Up / Alt+Down | Move the selected track up / down the playlist |
-| F2 | Rename the playlist |
+| F2 | Rename the playlist (in the track list, or the one selected on the Playlists page) |
 | Menu key or Shift+F10 | The selected track's menu (with none selected, the playlist's) |
+
+On Linux, Ctrl+? lists the shortcuts, and Ctrl+W or Ctrl+Q closes the window, which quits:
+playback stops with it, as nothing keeps playing in the background. On Windows Alt+F4 quits
+(there's no Ctrl+Q or Ctrl+W, as is usual there), and on the Playlists and Album groups
+pages Delete and F2 work on smart playlists and album groups too. The playback buttons' and
+other buttons' tooltips show their shortcuts.
 
 In a text box (e.g. search) the arrow keys, + and - keep their usual meaning. The volume is
 the app's own and is remembered; there's no volume control on screen yet, so the level shows

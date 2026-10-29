@@ -191,20 +191,14 @@ Windows and Linux (pair_dialog.c and sync_bridge.c on each, the pending note in 
 
 ### Keyboard shortcuts
 
-Existing (see README.md): Space, media keys, Esc, Ctrl+Left/Right next/previous, Shift+Left/Right seek 5 s, Ctrl+Up/Down and +/- volume, Ctrl+M mute, Ctrl+S shuffle, Ctrl+F search, Ctrl+1-4 Albums/Artists/Playlists/Album groups, Ctrl+, settings, Alt+Left/Backspace/mouse back to go back, plus Alt+letter mnemonics in the import page and dialogs. The track list also has Enter, Delete, F2, Alt+Up/Down and the Menu key (or Shift+F10).
+Existing (see README.md): Space, media keys, Esc, Ctrl+Left/Right next/previous, Shift+Left/Right seek 5 s, Ctrl+Up/Down and +/- volume, Ctrl+M mute, Ctrl+S shuffle, Ctrl+F search (Windows also Ctrl+E and F3, Linux also type to search), Ctrl+1-4 Albums/Artists/Playlists/Album groups, Ctrl+, settings, Ctrl+O import, Ctrl+N new playlist, F1 about, Alt+Left/Backspace/mouse back to go back, plus Alt+letter mnemonics in the import page and dialogs. The track list also has Enter, Delete, F2, Alt+Up/Down and the Menu key (or Shift+F10); a selected playlist tile Delete and F2. Linux also Ctrl+? (shortcuts list) and Ctrl+W/Ctrl+Q (close and quit); Windows quits with Alt+F4 only. Buttons' tooltips show their shortcuts.
 
 Windows and Linux:
 - Ctrl+R repeat, once the core has repeat
-- Windows also Ctrl+E/F3 for search as in Explorer, Linux also type to search (GNOME)
-- Ctrl+O import, Ctrl+N new playlist
-- Delete on a selected sidebar playlist asks to delete it; F2 renames it
-- Show shortcuts in button tooltips (e.g. "Next (Ctrl+Right)")
 
 Linux:
-- Ctrl+? shortcuts dialog (AdwShortcutsDialog), F1 help/about, Ctrl+W close window, Ctrl+Q quit (GNOME HIG)
-
-Windows:
-- F1 about; Alt+F4 only to quit
+- Delete and F2 on a selected smart playlist, once Linux can rename and delete smart playlists at all (Windows can)
+- The shortcuts list's AdwShortcutsDialog (libadwaita 1.8+) has only been written, not built: the Docker image has libadwaita 1.7, which gets the GtkShortcutsWindow fallback. Check it on a 1.8 system (e.g. the GNOME 49+ Flatpak runtime)
 
 ### Windows screen readers and custom-drawn controls
 The album grid, track list, sidebar and search page have UI Automation providers (uia.c), which raise name and status changes (a rename, "Playing" moving) as property-change events; the now-playing strip is a live region for its flash ("Volume 40%"); and the track list's and album grid's header buttons are reachable from the keyboard (Tab goes round them and the rows or tiles; Up from the first row or the top row reaches them). Still to do:
