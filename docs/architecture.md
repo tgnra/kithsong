@@ -41,7 +41,7 @@
 | sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing over the network with the join rules (merging two libraries that both have music, `libmerge.c`), group and library changelog sessions (field-level LWW), a scheduler, address hints; the file phase (`transfer.c`: fetching what each device's profile wants, originals or Opus copies, then reconciling its library folder) |
 | discovery   | `core/src/discovery`   | mDNS/DNS-SD announce and browse of `_kithsong._tcp` on a core thread (mjansson/mdns); peers reported online/offline through a callback; announces the host name |
 | transcode   | `core/src/transcode`   | Opus (libopusenc) with tags and cover, cached per file and bitrate with an LRU trim; size estimate; encode benchmark |
-| util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, text folding (case, accents) for comparison, UUIDv7, HLC |
+| util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, moving files to the Recycle Bin or Trash (`mc_trash()`), text folding (case, accents) for comparison, UUIDv7, HLC, the UI strings table and plural rules (`i18n.c`) |
 
 ## Startup budget
 

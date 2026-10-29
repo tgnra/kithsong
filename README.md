@@ -72,10 +72,11 @@ Priorities:
 
 - **Discovery:** each instance announces itself over mDNS. A background thread scans
   periodically and shows new devices for pairing.
-- **Pairing:** a short code links two devices once. The device that joins must have an empty
-  library (on Windows and Linux the pairing dialog offers to create a new one if it hasn't),
-  and no music moves until you've chosen what it holds and pressed **Sync now**. After that
-  they reconnect and sync automatically whenever both are online.
+- **Pairing:** a short code links two devices once. If both already have music, the smaller
+  library is merged into the larger one, once you agree on the device whose library is merged
+  (it keeps a backup copy of its old library). No music moves until you've chosen what the
+  joining device holds and pressed **Sync now**. After that they reconnect and sync
+  automatically whenever both are online.
 - **Archives:** the device whose music the group started from is its *archive*: it keeps the
   originals of everything. A device that joins a group says so once, naming the archive.
 - **No server:** any device can sync with any other. Edits are merged field by field using
@@ -107,7 +108,7 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
   on the right. The Playlists and Album groups pages have a **+** in their header to make a
   new, empty one.
 - An empty library suggests importing or, while the computer isn't paired yet, pairing it
-  with another device to sync that device's music (pairing only joins an empty library).
+  with another device to sync that device's music.
 
 **Keyboard shortcuts** (Windows and Linux)
 
@@ -154,8 +155,9 @@ briefly in place of the track's name.
 - A mini player above the navigation bar opens the full player. Playback runs in the
   background, with Android's media controls and notification.
 - Holding an album, artist, playlist or album group opens its menu (Play, Shuffle, Add to
-  playlist, Remove from this phone, Delete from library and so on); a playlist's tracks
-  reorder by dragging their handles.
+  playlist, Remove from this phone, Delete from library and so on), as do the menu buttons on
+  an album's page and the player; a playlist's tracks and an album group's albums reorder by
+  dragging their handles.
 - **Sync** lists this phone and the other devices, pairs new ones, and opens each device's
   page to choose what it syncs. **Settings** has scrobbling, storage, and the open source
   licences.
