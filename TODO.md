@@ -30,14 +30,14 @@ Big pieces that haven't been started, or that only one platform has.
 | Delete (with restore) | yes | yes | yes (permanent: no trash to restore from) | no |
 | Remove from this device | albums, artists | albums, artists (only compiled) | albums, artists | no |
 | Shuffle | core's | core's | core's | no |
-| Volume | keyboard only | keyboard only | core only, no UI | no |
+| Volume | keyboard only | keyboard, MPRIS | core only, no UI | no |
 | Import | yes | yes | removed | no |
 | Sync | yes | yes (barely tested) | yes | mock-up |
 | Merging libraries (pairing) | yes | yes (not built or run yet) | yes | no |
 | Archive devices | yes | yes | yes | no |
 | Move library | yes | yes | n/a (app storage) | n/a |
 | Scrobbling | yes | yes (UI untested on screen) | yes | no |
-| OS media controls | SMTC (with shuffle) | MPRIS (no shuffle) | Media3 session (with shuffle) | none |
+| OS media controls | SMTC (with shuffle) | MPRIS (with shuffle and volume) | Media3 session (with shuffle) | none |
 
 ## Library and browsing
 
@@ -118,7 +118,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - All - an on-screen volume control (the desktops flash the level in the now-playing strip for now)
 - Android - duck with the core's volume (CorePlayer.setVolume; AudioFocusManager's setVolumeMultiplier is a no-op)
 - Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
-- Linux - MPRIS's Shuffle and Volume properties, so the desktop's media controls show and set them
 
 ### Scrobbling
 - All - choose another service (Libre.fm or a custom URL) in the UI; mc_scrobbler_set_service() exists but no screen uses it
@@ -296,7 +295,7 @@ Things built but not checked properly.
 
 ### Cross-platform
 - A real Last.fm sign-in and scrobble (only fake sessions so far), and the sign-in reaching another device over a real sync
-- Media keys with the window in the background: SMTC on Windows, MPRIS on GNOME and KDE
+- Media keys with the window in the background: SMTC on Windows, MPRIS on GNOME and KDE. MPRIS's Shuffle and Volume were only checked with gdbus under Xvfb in Docker (get, set, clamping, and PropertiesChanged for changes from MPRIS and from the keyboard), not with GNOME's or KDE's controls
 - Recents arriving or going with a real sync between two devices
 - An Android delete reaching a desktop over a real sync (copies removed there, originals to its trash)
 - A delete and a restore going through a real sync

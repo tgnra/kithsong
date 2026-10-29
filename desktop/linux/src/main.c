@@ -22,9 +22,9 @@
  * its Devices section and sync are devices.c, which adds a device's page (device_view.c) to
  * the stack of pages as "device". The playback buttons
  * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
- * the actions'. Shuffle, which the strip's toggle and the track list's Play and Shuffle set,
- * is kept in settings.json, as is the volume, which only the keyboard shortcuts (on_shortcut(),
- * listed in README.md) change for now.
+ * the actions'. Shuffle, which the strip's toggle, the track list's Play and Shuffle and MPRIS
+ * set, is kept in settings.json, as is the volume, which only the keyboard shortcuts
+ * (on_shortcut(), listed in README.md) and MPRIS change for now.
  */
 #include <adwaita.h>
 #include <math.h>
@@ -496,6 +496,11 @@ static void set_volume(app *a, int volume) {
   flash_volume();
   if (save_volume_source) g_source_remove(save_volume_source);
   save_volume_source = g_timeout_add(SAVE_VOLUME_MS, save_volume, a);
+}
+
+/* MPRIS's Volume, set from the desktop's media controls: as the volume keys do. */
+static void on_mpris_volume(void *user, int volume) {
+  set_volume(user, volume);
 }
 
 /* The sidebar's row n of Albums, Artists, Playlists..., as clicking it does. */
@@ -1117,7 +1122,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   }
   mc_settings_free(settings);
 
-  mpris_init(gapp, a->win);
+  mpris_init(gapp, a->win, on_shuffle, on_mpris_volume, a);
   prune_art(a);
   restore_deleted(a);
   app_reload_library(a);

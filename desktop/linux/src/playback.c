@@ -225,8 +225,10 @@ void playback_play(const playback_track *tracks, int count, int start) {
 }
 
 void playback_set_shuffle(gboolean on) {
+  gboolean changed = !on != !s.shuffle;
   s.shuffle = on;
   now_playing_set_shuffle(on);
+  if (changed) mpris_shuffle_changed();
   if (s.player) {
     mc_player_set_shuffle(s.player, on);
     refresh();
@@ -291,8 +293,11 @@ void playback_seek_by(int64_t delta_ms) {
 }
 
 void playback_set_volume(int volume) {
-  s.volume = CLAMP(volume, 0, 100);
+  volume = CLAMP(volume, 0, 100);
+  if (volume == s.volume) return;
+  s.volume = volume;
   if (s.player) mc_player_set_volume(s.player, s.volume);
+  mpris_volume_changed();
 }
 
 int playback_volume(void) {
@@ -300,8 +305,10 @@ int playback_volume(void) {
 }
 
 void playback_set_muted(gboolean muted) {
+  if (!muted == !s.muted) return;
   s.muted = muted;
   if (s.player) mc_player_set_muted(s.player, muted);
+  mpris_volume_changed();
 }
 
 gboolean playback_muted(void) {

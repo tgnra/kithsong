@@ -1,5 +1,6 @@
 #include "mpris.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "cover.h"
@@ -41,10 +42,11 @@ static const char introspection[] =
   "    <property name='PlaybackStatus' type='s' access='read'/>"
   "    <property name='Rate' type='d' access='read'/>"
   "    <property name='Metadata' type='a{sv}' access='read'/>"
-  "    <property name='Volume' type='d' access='read'/>"
+  "    <property name='Volume' type='d' access='readwrite'/>"
   "    <property name='Position' type='x' access='read'>"
   "      <annotation name='org.freedesktop.DBus.Property.EmitsChangedSignal' value='false'/>"
   "    </property>"
+  "    <property name='Shuffle' type='b' access='readwrite'/>"
   "    <property name='MinimumRate' type='d' access='read'/>"
   "    <property name='MaximumRate' type='d' access='read'/>"
   "    <property name='CanGoNext' type='b' access='read'/>"
@@ -62,6 +64,9 @@ static struct {
   GDBusConnection *conn;
   GDBusNodeInfo *node;
   guint owner, root_id, player_id;
+  void (*set_shuffle)(void *user, gboolean on);
+  void (*set_volume)(void *user, int volume);
+  void *user;
 
   /* The track shown; trackid is NULL for none. */
   char *trackid, *title, *artist, *album, *art_url;
@@ -74,6 +79,11 @@ static struct {
 
 static const char *status_name(mc_player_state state) {
   return state == MC_PLAYER_PLAYING ? "Playing" : state == MC_PLAYER_PAUSED ? "Paused" : "Stopped";
+}
+
+/* MPRIS's 0.0 to 1.0; muted shows as 0. */
+static double volume(void) {
+  return playback_muted() ? 0.0 : playback_volume() / 100.0;
 }
 
 static gboolean can_seek(void) {
@@ -124,9 +134,10 @@ static GVariant *get_player(GDBusConnection *conn, const char *sender, const cha
   (void)error;
   (void)user;
   if (!strcmp(name, "PlaybackStatus")) return g_variant_new_string(status_name(s.state));
-  if (!strcmp(name, "Rate") || !strcmp(name, "MinimumRate") || !strcmp(name, "MaximumRate") ||
-      !strcmp(name, "Volume"))
+  if (!strcmp(name, "Rate") || !strcmp(name, "MinimumRate") || !strcmp(name, "MaximumRate"))
     return g_variant_new_double(1.0);
+  if (!strcmp(name, "Volume")) return g_variant_new_double(volume());
+  if (!strcmp(name, "Shuffle")) return g_variant_new_boolean(playback_shuffle());
   if (!strcmp(name, "Metadata")) return metadata();
   if (!strcmp(name, "Position")) return g_variant_new_int64(s.has_current ? playback_position_ms() * 1000 : 0);
   if (!strcmp(name, "CanGoNext")) return g_variant_new_boolean(s.has_next);
@@ -135,6 +146,29 @@ static GVariant *get_player(GDBusConnection *conn, const char *sender, const cha
   if (!strcmp(name, "CanSeek")) return g_variant_new_boolean(can_seek());
   if (!strcmp(name, "CanControl")) return g_variant_new_boolean(TRUE);
   return NULL;
+}
+
+/* PropertiesChanged comes from playback.c's setters, through mpris_*_changed(). */
+static gboolean set_player(GDBusConnection *conn, const char *sender, const char *path, const char *iface,
+                           const char *name, GVariant *value, GError **error, gpointer user) {
+  (void)conn;
+  (void)sender;
+  (void)path;
+  (void)iface;
+  (void)user;
+  if (!strcmp(name, "Shuffle")) {
+    if (s.set_shuffle) s.set_shuffle(s.user, g_variant_get_boolean(value));
+    return TRUE;
+  }
+  if (!strcmp(name, "Volume")) {
+    /* Below 0 is 0, as the spec says; above 1.0 is as loud as it goes. Setting it unmutes, as
+     * the volume keys do. */
+    double v = g_variant_get_double(value);
+    if (s.set_volume) s.set_volume(s.user, (int)lround(CLAMP(v, 0.0, 1.0) * 100));
+    return TRUE;
+  }
+  g_set_error(error, G_DBUS_ERROR, G_DBUS_ERROR_PROPERTY_READ_ONLY, "%s is read-only", name);
+  return FALSE;
 }
 
 /* --- Methods --- */
@@ -199,7 +233,7 @@ static void call_player(GDBusConnection *conn, const char *sender, const char *p
 }
 
 static const GDBusInterfaceVTable root_vtable = {call_root, get_root, NULL, {0}};
-static const GDBusInterfaceVTable player_vtable = {call_player, get_player, NULL, {0}};
+static const GDBusInterfaceVTable player_vtable = {call_player, get_player, set_player, {0}};
 
 /* --- Setup --- */
 
@@ -209,9 +243,13 @@ static void on_name_lost(GDBusConnection *conn, const char *name, gpointer user)
   g_warning("Couldn't take the D-Bus name %s; media controls won't show Kithsong", name);
 }
 
-void mpris_init(GtkApplication *gapp, GtkWindow *win) {
+void mpris_init(GtkApplication *gapp, GtkWindow *win, void (*set_shuffle)(void *user, gboolean on),
+                void (*set_volume)(void *user, int volume), void *user) {
   s.gapp = gapp;
   s.win = win;
+  s.set_shuffle = set_shuffle;
+  s.set_volume = set_volume;
+  s.user = user;
   s.conn = g_application_get_dbus_connection(G_APPLICATION(gapp));
   if (!s.conn) return; /* no session bus */
   g_object_ref(s.conn);
@@ -313,6 +351,22 @@ void mpris_set_state(mc_player_state state, gboolean has_current, gboolean has_n
     any = TRUE;
   }
   emit_changed(&b, any);
+}
+
+/* One property's PropertiesChanged. */
+static void emit_one(const char *name, GVariant *value) {
+  GVariantBuilder b;
+  g_variant_builder_init(&b, G_VARIANT_TYPE_VARDICT);
+  g_variant_builder_add(&b, "{sv}", name, value);
+  emit_changed(&b, TRUE);
+}
+
+void mpris_shuffle_changed(void) {
+  emit_one("Shuffle", g_variant_new_boolean(playback_shuffle()));
+}
+
+void mpris_volume_changed(void) {
+  emit_one("Volume", g_variant_new_double(volume()));
 }
 
 void mpris_seeked(int64_t position_ms) {
