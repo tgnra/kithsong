@@ -965,7 +965,8 @@
     "sync_notification_see_code": "Open Kithsong to see the code",
     "sync_notification_files": { "one": "{0:d} of {1:d} file", "other": "{0:d} of {1:d} files", "note": "Audio files received so far of those to fetch, under \"Syncing with …\". The plural follows {1}." },
     "sync_error_open": "Couldn't open this phone's sync data",
-    "sync_error_listen": "Couldn't listen on the network"
+    "sync_error_listen": "Couldn't listen on the network",
+    "merge_tracks_deleted": { "one": "{0:d} duplicate deleted from this phone", "other": "{0:d} duplicates deleted from this phone", "note": "Tracks the library had in the same or better quality: this phone's copy was deleted (Android has no trash). One item of merge_tracks' list." }
   },
   "wear": {
     "watch_empty_text": "No music on this watch yet. Pair it under Sync to add some.",
