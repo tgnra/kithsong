@@ -81,6 +81,8 @@ fun App(
     // Only the merge's state, so sync's other progress doesn't recompose everything.
     val merge by remember(syncer) { syncer.status.map { it.merge }.distinctUntilChanged() }
         .collectAsState(syncer.status.value.merge)
+    val inGroup by remember(syncer) { syncer.status.map { it.inGroup }.distinctUntilChanged() }
+        .collectAsState(syncer.status.value.inGroup)
     val importPickers = rememberImportPickers(importer, onImportStarted)
     val stack = rememberSaveable(saver = StackSaver) { SnapshotStateList<CollectionRef>() }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
@@ -160,6 +162,12 @@ fun App(
                 onAlbumMenu = { actions.albumMenu(it) },
                 onArtistMenu = actions::artistMenu,
                 onAlbumGroupMenu = actions::albumGroupMenu,
+                inGroup = inGroup,
+                // This phone's page, over Sync, as Choose what to sync after pairing opens it.
+                onChooseWhatToSync = {
+                    syncOpen = true
+                    deviceOpen = THIS_DEVICE
+                },
             )
             if (settingsOpen) {
                 DismissibleScreen(

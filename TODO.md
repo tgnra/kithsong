@@ -190,7 +190,6 @@ Windows and Linux (pair_dialog.c and sync_bridge.c on each, the pending note in 
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
 - Windows and Linux - an empty library in a group (nothing imported anywhere yet) just says "Use Import to add music."; it could say the music arrives from the group, or link to Choose what to sync
-- Android - the empty main screen always says to pair, even when the phone is already in a group and its profile holds nothing; say "choose what to sync" there instead
 - Linux - with no sync.db yet (first run), sync can fail to start with "sync.db open failed: not an error" and Devices says "Sync is off (database error)"; it starts on the next run (seen several times in Docker under Xvfb)
 
 ### Windows firewall

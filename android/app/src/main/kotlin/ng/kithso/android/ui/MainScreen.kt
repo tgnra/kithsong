@@ -49,6 +49,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -237,6 +238,9 @@ fun MainScreen(
     importRunning: Boolean,
     banner: (@Composable (Modifier) -> Unit)?,
     modifier: Modifier = Modifier,
+    // In a group, the empty library offers this phone's sync settings rather than pairing.
+    inGroup: Boolean = false,
+    onChooseWhatToSync: () -> Unit = {},
     // Long-pressing a playlist, an album group, an album or an artist opens its menu.
     onPlaylistMenu: (Playlist) -> Unit = {},
     onAlbumMenu: (Album) -> Unit = {},
@@ -291,7 +295,7 @@ fun MainScreen(
                 when (item) {
                     MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning)
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
-                    MainItem.Empty -> EmptyLibrary(importPickers, importRunning)
+                    MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(item.section, sections, { current }, picker, jumpTo)
                     is MainItem.RecentItem -> LibraryRow(
                         item.recent.title, item.recent.subtitle(), item.recent.art, RoundedCornerShape(8.dp),
@@ -663,9 +667,17 @@ private fun AlbumRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) 
     }
 }
 
-/** No music yet: where it can come from, with an import button. */
+/**
+ * No music yet: where it can come from, with an import button. While this phone is [inGroup]
+ * its sync settings hold nothing, so that's where its music comes from, not pairing.
+ */
 @Composable
-private fun LazyItemScope.EmptyLibrary(importPickers: ImportPickers, importRunning: Boolean) {
+private fun LazyItemScope.EmptyLibrary(
+    importPickers: ImportPickers,
+    importRunning: Boolean,
+    inGroup: Boolean,
+    onChooseWhatToSync: () -> Unit,
+) {
     Column(
         Modifier.fillParentMaxWidth().fillParentMaxHeight(0.7f).padding(32.dp),
         verticalArrangement = Arrangement.Center,
@@ -683,7 +695,7 @@ private fun LazyItemScope.EmptyLibrary(importPickers: ImportPickers, importRunni
             modifier = Modifier.padding(top = 16.dp),
         )
         Text(
-            stringResource(R.string.empty_text_import),
+            stringResource(if (inGroup) R.string.empty_text_choose else R.string.empty_text_import),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -696,6 +708,11 @@ private fun LazyItemScope.EmptyLibrary(importPickers: ImportPickers, importRunni
                 Text(stringResource(R.string.import_music))
             }
             ImportMenu(menu, importRunning, importPickers, onDismiss = { menu = false })
+        }
+        if (inGroup) {
+            TextButton(onClick = onChooseWhatToSync, modifier = Modifier.padding(top = 8.dp)) {
+                Text(stringResource(R.string.choose_what_to_sync))
+            }
         }
     }
 }

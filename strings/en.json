@@ -861,6 +861,7 @@
     "remove_from_this_phone_back": "To get it back, choose Sync to this phone from its menu.",
 
     "empty_text_import": "Import music from this phone, or pair it with Kithsong on a computer, under Sync, to bring your music here.",
+    "empty_text_choose": { "text": "This phone is paired, but none of your music is on it yet. Choose what to sync to it, or import music from this phone.", "note": "The empty main screen while this phone is in a sync group (its sync settings hold nothing, or nothing has arrived yet). Above the Import and Choose what to sync buttons." },
 
     "import_folder": { "text": "Import folder", "note": "Import menu item: opens the system's folder picker." },
     "import_files": { "text": "Import files or zip", "note": "Import menu item: opens the system's file picker, for audio files and .zip files such as Bandcamp downloads." },
