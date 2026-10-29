@@ -92,6 +92,20 @@ mc_status mc_walk(const char *path, mc_walk_fn fn, void *user);
 typedef void (*mc_list_fn)(void *user, const char *name, int is_dir);
 mc_status mc_list_dir(const char *dir, mc_list_fn fn, void *user);
 
+/* The file calls here take paths of any length on Windows, not just under MAX_PATH (260),
+ * with or without Windows' long-path setting. Whether path, made absolute, is 260 characters
+ * or more: too long for Windows code that has no way round the limit. Always 0 elsewhere. */
+int mc_long_path(const char *path);
+#ifdef _WIN32
+/* A UTF-8 path as UTF-16 for the wide Win32 and CRT file calls, malloc'd, or NULL: a long one
+ * absolute and with the \\?\ prefix, so the call works whatever MAX_PATH says. */
+wchar_t *mc_win_path(const char *path);
+#endif
+/* path as it should be given to a library that opens files by UTF-8 path itself (opusfile,
+ * libopusenc): on Windows a long one in its \\?\ form, elsewhere just a copy. malloc'd, or
+ * NULL. */
+char *mc_open_path(const char *path);
+
 /* fopen with a UTF-8 path on every platform. */
 FILE *mc_fopen(const char *path, const char *mode);
 /* Creates a directory and any missing parents. Succeeds if it already exists. */

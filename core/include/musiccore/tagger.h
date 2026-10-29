@@ -134,6 +134,12 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * The staging folder is deleted when the session is freed. Only zips named directly are
  * extracted, not zips found inside a folder.
  *
+ * Long paths. Files whose paths are 260 characters or more are imported like any other on
+ * Windows too. An audio file that can't be read is normally passed over as not being audio,
+ * but one with a path that long becomes a failed item the same way, with
+ * MC_STR_IMPORT_ERROR_LONG_PATH as its error (folder is its path, album its file name), so
+ * the frontend can say how to turn on Windows' long paths.
+ *
  * Callbacks run on the import thread; frontends marshal them to their UI thread. Every
  * other function may be called from any thread. */
 

@@ -8,11 +8,7 @@
 #include "dr_mp3.h"
 #include "dr_wav.h"
 #include "opusfile.h"
-
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
+#include "util/platform.h"
 
 typedef enum format { FMT_NONE, FMT_FLAC, FMT_MP3, FMT_WAV, FMT_OPUS } format;
 
@@ -55,9 +51,7 @@ mc_status mc_decoder_open(const char *path, mc_decoder **out) {
   if (!d) return MC_ERR_NOMEM;
   int ok = 0;
 #ifdef _WIN32
-  int n = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-  wchar_t *wpath = n > 0 ? malloc((size_t)n * sizeof *wpath) : NULL;
-  if (wpath) MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, n);
+  wchar_t *wpath = mc_win_path(path);
 #define OPEN_PATH wpath
 #define OPEN(fn) fn##_w
 #else
@@ -89,10 +83,13 @@ mc_status mc_decoder_open(const char *path, mc_decoder **out) {
           d->length = d->wav.totalPCMFrameCount;
         }
         break;
-      case FMT_OPUS:
+      case FMT_OPUS: {
         /* opusfile takes UTF-8 paths on Windows too. It trims the pre-skip and end padding,
          * and always decodes at 48 kHz; more than two channels are downmixed for us. */
-        if ((d->opus = op_open_file(path, NULL))) {
+        char *opus_path = mc_open_path(path);
+        d->opus = opus_path ? op_open_file(opus_path, NULL) : NULL;
+        free(opus_path);
+        if (d->opus) {
           ok = 1;
           d->channels = 2;
           d->rate = 48000;
@@ -100,6 +97,7 @@ mc_status mc_decoder_open(const char *path, mc_decoder **out) {
           d->length = total > 0 ? (uint64_t)total : 0;
         }
         break;
+      }
       case FMT_NONE:
         break;
     }
