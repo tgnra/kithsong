@@ -22,23 +22,16 @@ static int same_ci(const char *a, const char *b) {
 }
 
 int mc_quality_is_lossless(const mc_audio_quality *q) {
-  static const char *const lossy[] = {"mp3", "aac", "ogg", "oga", "opus", "wma", "mpc", NULL};
+  static const char *const lossy[] = {"mp3", "opus", NULL};
   if (!q->format) return 0;
   for (const char *const *f = lossy; *f; f++)
     if (same_ci(q->format, *f)) return 0;
-  /* .m4a and .mp4 hold AAC or ALAC: ALAC has a bit depth, AAC a modest bitrate. */
-  if (same_ci(q->format, "m4a") || same_ci(q->format, "mp4"))
-    return q->bits_per_sample > 0 || q->bitrate_kbps >= 500;
   return 1;
 }
 
 /* How many MP3 kbps one kbps of the codec is worth, roughly. */
 static double codec_weight(const char *format) {
-  if (same_ci(format, "opus")) return 1.6;
-  if (same_ci(format, "aac") || same_ci(format, "m4a") || same_ci(format, "mp4") ||
-      same_ci(format, "ogg") || same_ci(format, "oga"))
-    return 1.3;
-  return 1.0;
+  return same_ci(format, "opus") ? 1.6 : 1.0;
 }
 
 static int cmp_int(int a, int b) {

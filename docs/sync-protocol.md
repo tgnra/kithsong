@@ -634,8 +634,7 @@ the plaintext limit.
   nothing. An archive holds everything as originals whatever the rest of its row says.
 - **Target format** per track: `original`, or Opus at the profile's bitrate (for auto, the
   bitrate the budget picks). A lossy original that is already smaller than the Opus
-  estimate is sent as-is. Lossy means MP3, AAC, Ogg Vorbis, Opus, WMA or Musepack, or an
-  `.m4a`/`.mp4` with a known bitrate under 500 kbps (otherwise it may be ALAC). The sender
+  estimate is sent as-is. Lossy means MP3 or Opus. The sender
   applies the rule (it has the file), and answers a request for Opus with the original
   then; the receiver applies it too, to files it already holds.
 - **Budget mode** (the auto format): estimate each track as `duration_ms × kbps / 8 + 4096`

@@ -794,6 +794,7 @@ static void test_artists_and_groups(const char *scratch) {
     CHECK(albums->items[1].is_singles && albums->items[1].credited_count == 1);
     CHECK_STR(albums->items[2].title, "Tribute"); /* 2 of 3 */
     CHECK_STR(albums->items[2].artist, "Guest");
+    CHECK(strcmp(albums->items[2].artist_uid, "ar3") == 0);
     CHECK_STR(albums->items[3].title, "Mix"); /* 1 of 3 */
     CHECK(albums->items[3].track_count == 3 && albums->items[3].credited_count == 1);
   }
@@ -810,12 +811,48 @@ static void test_artists_and_groups(const char *scratch) {
     const char *const titles[] = {"Anon", "Belong", "Canada", "Over the Ocean", "Words"};
     for (int i = 0; i < 5; i++) CHECK_STR(tracks->items[i].title, titles[i]);
     CHECK_STR(tracks->items[4].artist, "Low");
+    CHECK(strcmp(tracks->items[4].artist_uid, "ar2") == 0); /* by its album */
     CHECK_STR(tracks->items[0].album, "Tribute");
   }
   mc_track_list_free(tracks);
   tracks = NULL;
   CHECK(mc_library_list_artist_tracks(lib, "ar3", &tracks) == MC_OK && tracks && tracks->count == 3);
   mc_track_list_free(tracks);
+
+  /* The artists with something here: nothing yet, then by the files there are. Words and
+   * Canada are Low's tracks here, and Secret Name their album here; Duet is Guest's track
+   * and Mix (by Canada's file) their album. A second Low with nothing here isn't listed. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar6', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid) VALUES ('al8', 'Other', 'ar6');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES ('t10', 'al8', NULL, 'Elsewhere');") ==
+        SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 0);
+  mc_artist_list_free(artists);
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES"
+                 " ('f1', 't1', 'a/1.flac', 'flac'), ('f2', 't2', 'a/2.flac', 'flac'),"
+                 " ('f4', 't4', 'b/4.flac', 'flac');") == SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) {
+    CHECK_STR(artists->items[0].name, "Guest");
+    CHECK(artists->items[0].album_count == 1 && artists->items[0].track_count == 1);
+    CHECK(strcmp(artists->items[1].uid, "ar2") == 0);
+    CHECK(artists->items[1].album_count == 1 && artists->items[1].track_count == 2);
+  }
+  mc_artist_list_free(artists);
+  /* With a file here the other Low is listed too, after the first by uid, with its own counts. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f10', 't10', 'c/10.flac', 'flac')") ==
+        SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 3);
+  if (artists && artists->count == 3) {
+    CHECK(strcmp(artists->items[1].uid, "ar2") == 0 && artists->items[1].track_count == 2);
+    CHECK(strcmp(artists->items[2].uid, "ar6") == 0);
+    CHECK(artists->items[2].album_count == 1 && artists->items[2].track_count == 1);
+  }
+  mc_artist_list_free(artists);
+  CHECK(mc_library_list_artists_here(NULL, &artists) == MC_ERR_INVALID_ARG);
 
   /* Groups by name, ignoring case, each with its number of albums. */
   CHECK(exec(db, "INSERT INTO album_groups (uid, name) VALUES ('g1', 'road trip'), ('g2', 'Empty'),"

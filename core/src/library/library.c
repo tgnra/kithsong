@@ -505,6 +505,12 @@ static char *column_dup(sqlite3_stmt *stmt, int col) {
   return s ? mc_strdup((const char *)s) : NULL;
 }
 
+/* Copies a uid column into dst, leaving it "" if the column is NULL or too long. */
+static void copy_uid(char dst[MC_UID_STRLEN], sqlite3_stmt *stmt, int col) {
+  const unsigned char *s = sqlite3_column_text(stmt, col);
+  if (s && strlen((const char *)s) < MC_UID_STRLEN) strcpy(dst, (const char *)s);
+}
+
 /* Grows a list's items array to hold one more, doubling as needed. */
 static int grow(void **items, int count, int *cap, size_t size) {
   if (count < *cap) return 1;
@@ -542,9 +548,10 @@ mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_l
       if (sep) *sep = '\0';
       a->folder = abs;
     }
-    if (sqlite3_column_count(stmt) > 8) { /* an artist's albums */
-      a->track_count = sqlite3_column_int(stmt, 7);
-      a->credited_count = sqlite3_column_int(stmt, 8);
+    copy_uid(a->artist_uid, stmt, 7);
+    if (sqlite3_column_count(stmt) > 9) { /* an artist's albums */
+      a->track_count = sqlite3_column_int(stmt, 8);
+      a->credited_count = sqlite3_column_int(stmt, 9);
     }
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
@@ -605,8 +612,8 @@ mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_l
       char *sep = t->cover_dir ? strrchr(t->cover_dir, MC_PATH_SEP) : NULL;
       if (sep) *sep = '\0';
     }
-    const unsigned char *entry = sqlite3_column_count(stmt) > 9 ? sqlite3_column_text(stmt, 9) : NULL;
-    if (entry && strlen((const char *)entry) < MC_UID_STRLEN) strcpy(t->entry_uid, (const char *)entry);
+    copy_uid(t->artist_uid, stmt, 9);
+    if (sqlite3_column_count(stmt) > 10) copy_uid(t->entry_uid, stmt, 10);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -707,16 +714,12 @@ void mc_playlist_list_free(mc_playlist_list *list) {
   free(list);
 }
 
-mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
+#define ARTIST_ORDER " ORDER BY coalesce(ar.sort_name, ar.name) COLLATE NOCASE, ar.name COLLATE NOCASE, ar.uid"
+
+/* Runs sql (uid, name, album count, then a track count if it has four columns) into a list. */
+static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
-  /* Artists nothing refers to any more are left out, as the albums and tracks views do. */
-  static const char sql[] =
-    "SELECT ar.uid, ar.name, (SELECT count(*) FROM albums a WHERE a.artist_uid = ar.uid) AS n_albums"
-    " FROM artists ar"
-    " WHERE n_albums > 0 OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)"
-    " ORDER BY coalesce(ar.sort_name, ar.name) COLLATE NOCASE, ar.name COLLATE NOCASE, ar.uid";
-
   mc_artist_list *list = calloc(1, sizeof *list);
   if (!list) return MC_ERR_NOMEM;
   sqlite3_stmt *stmt = NULL;
@@ -733,6 +736,7 @@ mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
     if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(a->uid, (const char *)uid);
     a->name = column_dup(stmt, 1);
     a->album_count = sqlite3_column_int(stmt, 2);
+    if (sqlite3_column_count(stmt) > 3) a->track_count = sqlite3_column_int(stmt, 3);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -742,6 +746,31 @@ mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
   }
   *out = list;
   return MC_OK;
+}
+
+mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
+  /* Artists nothing refers to any more are left out, as the albums and tracks views do. */
+  static const char sql[] =
+    "SELECT ar.uid, ar.name, (SELECT count(*) FROM albums a WHERE a.artist_uid = ar.uid) AS n_albums"
+    " FROM artists ar"
+    " WHERE n_albums > 0 OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)" ARTIST_ORDER;
+  return list_artists(lib, sql, out);
+}
+
+mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
+  /* Counted once for every artist rather than per artist: a track is its own artist's, else
+   * its album's, which no index finds. */
+  static const char sql[] =
+    "SELECT ar.uid, ar.name, coalesce(na.n, 0), coalesce(nt.n, 0) FROM artists ar"
+    " LEFT JOIN (SELECT a.artist_uid AS uid, count(*) AS n FROM albums a"
+    "  WHERE EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid)"
+    "  GROUP BY a.artist_uid) na ON na.uid = ar.uid"
+    " LEFT JOIN (SELECT coalesce(t.artist_uid, al.artist_uid) AS uid, count(*) AS n FROM tracks t"
+    "  LEFT JOIN albums al ON al.uid = t.album_uid"
+    "  WHERE EXISTS (SELECT 1 FROM files f WHERE f.track_uid = t.uid)"
+    "  GROUP BY 1) nt ON nt.uid = ar.uid"
+    " WHERE na.n > 0 OR nt.n > 0" ARTIST_ORDER;
+  return list_artists(lib, sql, out);
 }
 
 void mc_artist_list_free(mc_artist_list *list) {

@@ -36,6 +36,7 @@ AlbumItem *album_item_new(const mc_album_info *info) {
    * makes a different item, and its tile is bound again. */
   self->cover_file = info->has_art ? cover_path(info->folder) : NULL;
   self->year = info->year;
+  self->here = info->folder != NULL;
   return self;
 }
 
@@ -103,7 +104,7 @@ static gboolean album_item_equal(const AlbumItem *a, const AlbumItem *b) {
          !g_strcmp0(a->cover_file, b->cover_file) &&
          a->year == b->year && a->is_playlist == b->is_playlist && a->is_group == b->is_group &&
          a->track_count == b->track_count && !g_strcmp0(a->subtitle, b->subtitle) && a->is_smart == b->is_smart &&
-         a->random == b->random;
+         a->random == b->random && a->here == b->here;
 }
 
 /* The line beneath the title: the artist, a playlist's track count or a group's album
@@ -137,6 +138,9 @@ typedef struct grid {
   void *menu_user;
   void (*activate)(void *user, AlbumItem *item);
   void *activate_user;
+  GdkDragAction (*drop_over)(void *user, AlbumItem *target, const drag_item *item);
+  gboolean (*dropped)(void *user, AlbumItem *target, const drag_item *item, gboolean after);
+  void *drop_user;
   gboolean groups; /* it shows album groups: their pictures are mc_album_group_art()'s */
   gboolean quiet; /* selection changes aren't the user's */
   GHashTable *art; /* playlist uid -> its picture, or NULL for none, as last looked up */
@@ -245,6 +249,65 @@ static void on_tile_menu(GtkGestureClick *click, int n_press, double x, double y
   c->g->menu(c->g->menu_user, c->g->widget, album, at.x, at.y);
 }
 
+/* --- Dragging albums, and drops on tiles (drag.h) --- */
+
+/* An album's tile drags its album; playlists and groups don't drag. */
+static gboolean on_tile_drag(gpointer user, drag_item *item) {
+  cell *c = user;
+  AlbumItem *album = c->item ? gtk_list_item_get_item(c->item) : NULL;
+  if (!album || album->is_playlist || album->is_group) return FALSE;
+  item->kind = DRAG_ALBUM;
+  g_strlcpy(item->uid, album->uid, sizeof item->uid);
+  return TRUE;
+}
+
+/* Marks the tile for what a drop would do: a ring for adding to it, a line before or after
+ * it for moving there; 0 unmarks. */
+static void mark_tile(GtkWidget *tile, GdkDragAction action, gboolean after) {
+  const char *classes[] = {"drop-into", "drop-before", "drop-after"};
+  int on = action == GDK_ACTION_COPY ? 0 : action == GDK_ACTION_MOVE ? (after ? 2 : 1) : -1;
+  for (int i = 0; i < 3; i++) {
+    if (i == on) gtk_widget_add_css_class(tile, classes[i]);
+    else gtk_widget_remove_css_class(tile, classes[i]);
+  }
+}
+
+static gboolean drop_after(GtkWidget *tile, double x) {
+  return x > gtk_widget_get_width(tile) / 2.0;
+}
+
+static GdkDragAction on_tile_drop_motion(GtkDropTarget *target, double x, double y, gpointer user) {
+  (void)y;
+  cell *c = user;
+  GtkWidget *tile = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(target));
+  AlbumItem *album = c->item ? gtk_list_item_get_item(c->item) : NULL;
+  GdkDragAction action = album && c->g && c->g->drop_over && drag_from_us(target)
+                           ? c->g->drop_over(c->g->drop_user, album, drag_current())
+                           : 0;
+  mark_tile(tile, action, drop_after(tile, x));
+  return action;
+}
+
+static void on_tile_drop_leave(GtkDropTarget *target, gpointer user) {
+  (void)user;
+  mark_tile(gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(target)), 0, FALSE);
+}
+
+static gboolean on_tile_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer user) {
+  (void)value;
+  (void)y;
+  cell *c = user;
+  GtkWidget *tile = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(target));
+  mark_tile(tile, 0, FALSE);
+  AlbumItem *album = c->item ? gtk_list_item_get_item(c->item) : NULL;
+  if (!album || !c->g || !c->g->dropped || !drag_from_us(target)) return FALSE;
+  drag_item item = *drag_current(); /* copies: dropping reloads the grid, and this tile with it */
+  g_object_ref(album);
+  gboolean done = c->g->dropped(c->g->drop_user, album, &item, drop_after(tile, x));
+  g_object_unref(album);
+  return done;
+}
+
 static void tile_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
   (void)factory;
   GtkWidget *box = tile_build();
@@ -254,6 +317,12 @@ static void tile_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
   g_signal_connect(click, "pressed", G_CALLBACK(on_tile_menu), c);
   gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
+  drag_source_new(box, on_tile_drag, c);
+  GtkDropTarget *drop = drag_target_new(GDK_ACTION_COPY | GDK_ACTION_MOVE);
+  g_signal_connect(drop, "motion", G_CALLBACK(on_tile_drop_motion), c);
+  g_signal_connect(drop, "leave", G_CALLBACK(on_tile_drop_leave), c);
+  g_signal_connect(drop, "drop", G_CALLBACK(on_tile_drop), c);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(drop));
   gtk_list_item_set_child(item, box);
 }
 
@@ -593,6 +662,15 @@ void album_grid_set_menu(GtkWidget *widget,
   grid *g = grid_of(widget);
   g->menu = menu;
   g->menu_user = user;
+}
+
+void album_grid_set_drop(GtkWidget *widget, GdkDragAction (*over)(void *user, AlbumItem *target, const drag_item *item),
+                         gboolean (*dropped)(void *user, AlbumItem *target, const drag_item *item, gboolean after),
+                         void *user) {
+  grid *g = grid_of(widget);
+  g->drop_over = over;
+  g->dropped = dropped;
+  g->drop_user = user;
 }
 
 void album_grid_set_activate(GtkWidget *widget, gboolean single_click, void (*activate)(void *user, AlbumItem *item),

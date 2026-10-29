@@ -486,10 +486,8 @@ mc_status mc_delete_plan_new(mc_library *lib, mc_delete_kind kind, const char *c
   static const char *const k_select[] = {
     "SELECT uid FROM tracks WHERE uid = ?1",
     "SELECT uid FROM tracks WHERE album_uid = ?1",
-    "SELECT uid FROM tracks WHERE artist_uid = ?1"
-    " OR album_uid IN (SELECT uid FROM albums WHERE artist_uid = ?1)",
   };
-  if ((int)kind < 0 || (int)kind > MC_DELETE_ARTISTS) return MC_ERR_INVALID_ARG;
+  if ((int)kind < 0 || (int)kind > MC_DELETE_ALBUMS) return MC_ERR_INVALID_ARG;
   mc_delete_plan *plan = calloc(1, sizeof *plan);
   if (!plan) return MC_ERR_NOMEM;
   mc_status st = MC_OK;

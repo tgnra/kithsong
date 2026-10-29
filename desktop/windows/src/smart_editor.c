@@ -61,10 +61,8 @@ static const struct {
   const char *value;
   const wchar_t *label;
 } k_formats[] = {
-  {"flac", L"FLAC"}, {"mp3", L"MP3"},     {"m4a", L"M4A (AAC, ALAC)"}, {"aac", L"AAC"},  {"opus", L"Opus"},
-  {"ogg", L"Ogg"},   {"wav", L"WAV"},     {"aiff", L"AIFF"},           {"aif", L"AIF"},  {"wv", L"WavPack"},
-  {"ape", L"APE"},   {"wma", L"WMA"},     {"dsf", L"DSF"},             {"mp4", L"MP4"},  {"oga", L"OGA"},
-  {"mpc", L"MPC"},
+  {"flac", L"FLAC"}, {"mp3", L"MP3"},   {"opus", L"Opus"},
+  {"wav", L"WAV"},   {"aiff", L"AIFF"}, {"aif", L"AIF"},
 };
 #define FORMAT_COUNT ((int)(sizeof k_formats / sizeof k_formats[0]))
 

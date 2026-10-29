@@ -67,6 +67,7 @@ typedef struct mc_album_info {
   char uid[MC_UID_STRLEN];
   char *title;
   char *artist;
+  char artist_uid[MC_UID_STRLEN]; /* "" if it has no artist */
   int year;
   int is_singles; /* an artist's "<artist> Singles" album */
   int has_art;    /* folder holds a cover (see mc_coverart_find()) */
@@ -104,6 +105,7 @@ typedef struct mc_track_info {
   char *path; /* absolute path of the track's file on this device (the original, if there are
                * transcodes too); NULL if there's none here */
   char *artist;    /* the track's artist, else its album's; NULL if unknown */
+  char artist_uid[MC_UID_STRLEN]; /* that artist's uid; "" if unknown */
   char *album;     /* NULL if it has none */
   char *cover_dir; /* the folder holding its album's cover, or NULL if there's none here */
   char entry_uid[MC_UID_STRLEN]; /* its playlist entry, for mc_playlist_move() and
@@ -158,6 +160,9 @@ typedef struct mc_artist_info {
   char uid[MC_UID_STRLEN];
   char *name;
   int album_count; /* albums it's the album artist of; 0 if it's only credited on tracks */
+  /* From mc_library_list_artists_here() only (0 elsewhere): the tracks credited to it (see
+   * mc_library_list_artist_albums()) that have a file on this device. */
+  int track_count;
 } mc_artist_info;
 
 typedef struct mc_artist_list {
@@ -168,6 +173,12 @@ typedef struct mc_artist_list {
 /* Every artist, album artists and those credited only on tracks alike, by sort name. Free
  * with mc_artist_list_free(). */
 mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out);
+/* The artists with something to play on this device, in the same order: album_count is
+ * their albums with a file here, track_count their credited tracks with a file here, and
+ * one of them is above 0. "A file here" is the test that gives mc_album_info a folder and
+ * mc_track_info a path. Artists are told apart by uid, so two of the same name are listed
+ * and counted apart. Free with mc_artist_list_free(). */
+mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out);
 void mc_artist_list_free(mc_artist_list *list);
 
 /* A track is credited to its own artist, or to its album's when it has none; a track has one

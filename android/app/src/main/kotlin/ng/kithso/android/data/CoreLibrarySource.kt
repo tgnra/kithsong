@@ -34,7 +34,6 @@ import ng.kithso.core.renameAlbumGroup
 import ng.kithso.core.renamePlaylist
 import ng.kithso.core.artistAlbums
 import ng.kithso.core.artistTracks
-import ng.kithso.core.previewSmartTracks
 import ng.kithso.core.clearRecents
 import ng.kithso.core.recents
 import ng.kithso.core.recordOpened
@@ -521,20 +520,17 @@ class CoreLibrarySource(
 
     private fun read(lib: CoreLibrary): Contents {
         val covers = Covers()
-        val albums = lib.albums().filter { it.folder != null }.map { info -> Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info)) }
+        val albumInfos = lib.albums().filter { it.folder != null }
+        val albums = albumInfos.map { info -> Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info)) }
 
-        // The core's artists with an album or track here. Neither an album nor a track gives its
-        // artist's uid, so they're matched by name: two artists of the same name share both.
-        val albumsBy = albums.groupBy { it.artist }
-        val tracksBy = lib.previewSmartTracks(ON_DEVICE_RULE).groupingBy { it.artist ?: unknownArtist() }.eachCount()
-        val artists = lib.artists().mapNotNull { info ->
-            val own = albumsBy[info.name].orEmpty()
-            val trackCount = tracksBy[info.name] ?: 0
-            if (own.isEmpty() && trackCount == 0) return@mapNotNull null
+        // The core's artists with an album or track here, and each one's own albums for a cover.
+        val albumsBy = albumInfos.zip(albums).filter { it.first.artistUid != null }.groupBy({ it.first.artistUid }, { it.second })
+        val artists = lib.artistsHere().map { info ->
+            val own = albumsBy[info.uid].orEmpty()
             // A cover file before an audio file that may have no picture in it.
             val cover = (own.firstOrNull { album -> album.art.file?.let { File(it).extension.lowercase() in COVER_EXTENSIONS } == true }
                 ?: own.firstOrNull { it.art.file != null })?.art
-            Artist(info.uid, info.name, own.size, cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name), trackCount)
+            Artist(info.uid, info.name, info.albumCount, cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name), info.trackCount)
         }
 
         // Smart playlists sit among the others, and smart album groups among the manual ones.
@@ -682,7 +678,6 @@ class CoreLibrarySource(
         const val KEY_PLAYLIST_ART = "playlist_art"
         const val MAX_RECENTS = 8
         const val SEARCH_LIMIT = 20 // of each kind, as the desktops show
-        const val ON_DEVICE_RULE = """{"v": 1, "match": {"field": "on_device", "op": "is", "value": true}}"""
         val COVER_EXTENSIONS = listOf("jpg", "jpeg", "png") // what mc_coverart_find() takes
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
@@ -691,7 +686,6 @@ class CoreLibrarySource(
             get() = when (this) {
                 Deletion.Kind.Track -> DeleteKind.Track
                 Deletion.Kind.Album -> DeleteKind.Album
-                Deletion.Kind.Artist -> DeleteKind.Artist
             }
 
         val CollectionRef.Kind.itemKind: ItemKind

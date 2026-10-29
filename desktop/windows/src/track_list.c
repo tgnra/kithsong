@@ -12,6 +12,7 @@
 #include "add_to_playlist.h"
 #include "canvas.h"
 #include "cover.h"
+#include "drag.h"
 #include "scroller.h"
 #include "smart_editor.h"
 #include "theme.h"
@@ -120,12 +121,14 @@ static struct {
   char playing_uid[MC_UID_STRLEN];
   track_list_request req;
 
-  /* Dragging a playlist's track: pressed on drag_row at drag_from, and once it has moved
-   * far enough, dragging, with drop_at the place it would go (0 to count). */
+  /* Dragging a track: pressed on drag_row at drag_from, and once it has moved far enough,
+   * dragging. Over a playlist's own tracks, drop_at is the place it would go (0 to count);
+   * outside the list, drop_target is the playlist it would be added to (drag.h), or "". */
   int drag_row;
   POINT drag_from;
   BOOL dragging;
   int drop_at;
+  char drop_target[MC_UID_STRLEN];
 } s;
 
 /* Outside s, which is cleared when the window goes: elements clients still hold use it. */
@@ -761,7 +764,7 @@ static void show_menu(POINT pt) {
   }
 }
 
-/* --- Dragging a playlist's tracks into another order --- */
+/* --- Dragging tracks: a playlist's into another order, any onto a playlist --- */
 
 /* The place (0 to count) nearest y: between the rows either side of it. */
 static int drop_index(int y) {
@@ -799,6 +802,8 @@ static int drag_scroll_step(int y) {
   return 0;
 }
 
+/* Over the list, a playlist's track moves within it, and nothing else can be dropped; outside
+ * it, the window under the pointer says whether there's a playlist to add it to. */
 static void drag_to(int x, int y) {
   if (!s.dragging) {
     if (abs(x - s.drag_from.x) < GetSystemMetrics(SM_CXDRAG) && abs(y - s.drag_from.y) < GetSystemMetrics(SM_CYDRAG))
@@ -807,15 +812,28 @@ static void drag_to(int x, int y) {
     set_hot(-1);
     invalidate_row(s.drag_row);
   }
-  set_drop(drop_index(y));
-  if (drag_scroll_step(y)) SetTimer(s.wnd, TIMER_DRAG_SCROLL, 30, NULL);
+  RECT rc;
+  GetClientRect(s.wnd, &rc);
+  POINT pt = {x, y};
+  if (!PtInRect(&rc, pt)) {
+    set_drop(-1);
+    ClientToScreen(s.wnd, &pt);
+    drag_over(DRAG_TRACK, pt, s.drop_target);
+    return;
+  }
+  drag_leave();
+  s.drop_target[0] = '\0';
+  BOOL reorder = in_playlist(s.drag_row);
+  drag_set_cursor(reorder);
+  set_drop(reorder ? drop_index(y) : -1);
+  if (reorder && drag_scroll_step(y)) SetTimer(s.wnd, TIMER_DRAG_SCROLL, 30, NULL);
 }
 
 static void on_drag_timer(void) {
   POINT pt;
   GetCursorPos(&pt);
   ScreenToClient(s.wnd, &pt);
-  int step = s.dragging ? drag_scroll_step(pt.y) : 0;
+  int step = s.dragging && s.drop_at >= 0 ? drag_scroll_step(pt.y) : 0;
   if (!step) {
     KillTimer(s.wnd, TIMER_DRAG_SCROLL);
     return;
@@ -829,22 +847,36 @@ static void on_drag_timer(void) {
 static void end_drag(void) {
   BOOL was = s.drag_row >= 0;
   int row_was = s.drag_row;
+  BOOL dragged = s.dragging;
   s.drag_row = -1;
   s.dragging = FALSE;
+  s.drop_target[0] = '\0';
   set_drop(-1);
   if (s.wnd) KillTimer(s.wnd, TIMER_DRAG_SCROLL);
   if (was) {
     invalidate_row(row_was);
     if (GetCapture() == s.wnd) ReleaseCapture();
   }
+  if (dragged) drag_done();
 }
 
-/* The mouse button came up: moves the track if it was dragged somewhere else. */
+/* The mouse button came up: moves the track if it was dragged somewhere else in its
+ * playlist, or asks for it to be added to the playlist it was dropped on. */
 static void drop(void) {
   int from = s.drag_row, to = s.drop_at;
   BOOL moved = s.dragging;
+  char target[MC_UID_STRLEN];
+  memcpy(target, s.drop_target, sizeof target);
   end_drag();
-  if (moved) request_move(from, to);
+  if (!moved || from < 0 || from >= s.count) return;
+  if (to >= 0) {
+    request_move(from, to);
+  } else if (target[0]) {
+    memset(&s.req, 0, sizeof s.req);
+    strcpy(s.req.track_uid, s.rows[from].uid);
+    strcpy(s.req.playlist_uid, target);
+    notify(TLN_ADD_TO_PLAYLIST);
+  }
 }
 
 /* --- Painting --- */
@@ -1495,7 +1527,7 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
         int i = row_at(x, y);
         if (i >= 0) focus_action(-1);
         select_row(i);
-        if (msg == WM_LBUTTONDOWN && in_playlist(i)) { /* maybe the start of a drag */
+        if (msg == WM_LBUTTONDOWN && i >= 0) { /* maybe the start of a drag */
           s.drag_row = i;
           s.drag_from = (POINT){x, y};
           SetCapture(wnd);

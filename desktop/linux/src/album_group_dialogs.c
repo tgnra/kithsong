@@ -111,6 +111,8 @@ static void on_create_response(AdwAlertDialog *dialog, const char *response, gpo
   } else {
     if (a->uid[0] && mc_album_group_add(a->lib, group, a->uid) != MC_OK)
       fail(a->parent, mc_str(MC_STR_ALBUM_GROUP_ADD_FAILED));
+    else if (a->uid[0])
+      mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group); /* first in the recents */
     changed(a);
     if (a->created) a->created(a->user, group);
   }

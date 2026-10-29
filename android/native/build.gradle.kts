@@ -22,9 +22,6 @@ android {
                 // Pass e.g. -PkithsongContact=... to set the MusicBrainz User-Agent contact.
                 val contact = (project.findProperty("kithsongContact") as String?) ?: ""
                 arguments += listOf("-DKITHSONG_CONTACT=$contact")
-                // And -PkithsongAcoustidKey=... for fingerprinting; empty turns it off.
-                val acoustidKey = (project.findProperty("kithsongAcoustidKey") as String?) ?: ""
-                arguments += listOf("-DKITHSONG_ACOUSTID_KEY=$acoustidKey")
                 // And -PkithsongLastfmKey=... -PkithsongLastfmSecret=... for scrobbling to Last.fm.
                 // Without them CMake tries $KITHSONG_LASTFM_KEY/_SECRET, then the file
                 // -PkithsongLastfmFile=... names (default: last.fm.api at the top of the repo);

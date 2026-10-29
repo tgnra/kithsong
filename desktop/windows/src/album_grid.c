@@ -14,6 +14,7 @@
 #include "canvas.h"
 #include "cover.h"
 #include "delete_dialog.h"
+#include "drag.h"
 #include "playlist_dialogs.h"
 #include "remove_here.h"
 #include "scroller.h"
@@ -36,7 +37,13 @@ enum {
   HEADER_TEXT_GAP = 12,
   RULE_GAP = 4, /* a smart group's rule, under its header */
   HEADER_BUTTON_GAP = 4,
+  PLAY_H = 32,    /* a group's Play, Shuffle Albums and Shuffle Tracks, under its name */
+  PLAY_GAP = 8,   /* between them */
+  DROP_LINE = 3,  /* where a dragged album would go */
+  DRAG_EDGE = 48, /* the grid scrolls while an album is dragged this near its top or bottom */
 };
+
+enum { TIMER_DRAG_SCROLL = 103 }; /* the scroller has 101 and 102 */
 
 /* The right-click menus' commands. */
 enum {
@@ -58,8 +65,9 @@ enum {
 
 /* The parts of a page's header that act on a click (also their tooltips' ids), and the
  * empty page's button. On Playlists and Album Groups, PART_MORE is New Playlist or New
- * Album Group (a +). */
-enum { PART_NONE, PART_BACK, PART_MORE, PART_RESHUFFLE, PART_ACTION };
+ * Album Group (a +). A group's play buttons come last, in album_grid_play's order. */
+enum { PART_NONE, PART_BACK, PART_MORE, PART_RESHUFFLE, PART_ACTION, PART_PLAY, PART_SHUFFLE_ALBUMS, PART_SHUFFLE_TRACKS };
+enum { MAX_PARTS = 6 }; /* in a header at once: Back, Reshuffle, More and the play buttons */
 
 /* What the empty page's button does (see album_grid_set_sync_state()). */
 typedef enum { ACTION_NONE, ACTION_PAIR, ACTION_SYNC } empty_action;
@@ -79,6 +87,7 @@ typedef struct tile {
   BOOL failed; /* the cover couldn't be decoded; draw the placeholder */
   BOOL smart;  /* a smart playlist or group */
   BOOL random; /* a smart one in random order, which can be reshuffled */
+  BOOL here;   /* an album with a file on this device */
 } tile;
 
 typedef struct load_job {
@@ -142,6 +151,19 @@ static struct {
                                      * PART_NONE for the tiles */
   BOOL navigated;                   /* the last click went into or out of a group, so its
                                      * double click's second click is ignored */
+  album_grid_play play;             /* the play button last pressed */
+
+  /* Dragging an album: pressed on drag_tile at drag_from, and once it has moved far enough,
+   * dragging. Over a manual group's own albums, drop_slot is the place it would go (0 to
+   * count), its line before column drop_col (0 to cols) of row drop_row; outside the
+   * grid, drop_target is the group it would be added to (drag.h), or "". */
+  int drag_tile;
+  POINT drag_from;
+  BOOL dragging;
+  int drop_slot, drop_row, drop_col;
+  char drop_target[MC_UID_STRLEN];
+  int drop_tile; /* as a target: the playlist or group tile a track or album dragged from
+                  * elsewhere would be added to, or -1 */
 
   canvas buf;
   int loaded; /* thumbnails in memory */
@@ -276,6 +298,7 @@ static DWORD WINAPI loader_main(void *arg) {
 /* --- Layout --- */
 
 static void update_tips(void);
+static BOOL has_play(void);
 
 /* Tiles for a grid w wide: as many of at least 150 px (at 96 dpi) as fit, stretched to fill
  * the row. */
@@ -312,6 +335,7 @@ static void relayout(void) {
   g.text_h = tm.tmHeight;
   g.top = g.pad + (has_header(g.view) ? scale(HEADER_BUTTON + HEADER_GAP) : 0);
   if (g.view == AGV_GROUP && g.group_rule) g.top += scale(RULE_GAP) + g.text_h;
+  if (has_play()) g.top += scale(PLAY_H + HEADER_GAP);
   g.row_h = g.tile_w + g.text_gap + 2 * g.text_h + g.gap; /* the title, and the artist or track count */
 
   int rows = (g.count + g.cols - 1) / g.cols;
@@ -511,6 +535,7 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
     t->artist = a->artist && *a->artist ? widen(a->artist) : NULL;
     t->year = a->year;
     t->cover_dir = (*dirs)[i] = a->has_art ? widen(a->folder) : NULL;
+    t->here = a->folder != NULL;
   }
   mc_album_list_free(list);
 }
@@ -713,7 +738,7 @@ static void reload(void) {
   g.tiles = tiles;
   g.count = n;
   g.selected = selected;
-  g.hot = -1;
+  g.hot = g.drop_tile = -1;
   if (selected < 0 && g.selected_uid[0]) { /* the selected album went */
     g.selected_uid[0] = '\0';
     notify_selection();
@@ -836,7 +861,7 @@ static void update_hot(void) {
   POINT pt;
   GetCursorPos(&pt);
   ScreenToClient(g.wnd, &pt);
-  set_hot(g.tracking && !g.scroll.hot && !g.scroll.dragging ? tile_at(pt.x, pt.y) : -1);
+  set_hot(g.tracking && !g.scroll.hot && !g.scroll.dragging && !g.dragging ? tile_at(pt.x, pt.y) : -1);
 }
 
 static int ui_tile(int i);
@@ -877,8 +902,23 @@ static BOOL has_reshuffle(void) {
   return g.tiles_view == AGV_GROUP && g.group_smart && g.group_random;
 }
 
-/* The header's buttons there are now, left to right, into parts; returns how many. */
-static int header_parts(int parts[3]) {
+/* A group with albums has Play, Shuffle Albums and Shuffle Tracks across the grid, under its
+ * name (and a smart one's rule). */
+static BOOL has_play(void) {
+  return g.tiles_view == AGV_GROUP && g.view == AGV_GROUP && g.count > 0;
+}
+
+/* Whether any of the group's albums has a file here: its play buttons are greyed out
+ * otherwise. */
+static BOOL group_playable(void) {
+  for (int i = 0; has_play() && i < g.count; i++)
+    if (g.tiles[i].here) return TRUE;
+  return FALSE;
+}
+
+/* The header's buttons there are now, left to right, then the play buttons under them
+ * unless they're greyed out, into parts; returns how many. */
+static int header_parts(int parts[MAX_PARTS]) {
   int n = 0;
   if (!has_header(g.tiles_view)) return 0;
   if (g.tiles_view != AGV_GROUP) {
@@ -888,11 +928,13 @@ static int header_parts(int parts[3]) {
   parts[n++] = PART_BACK;
   if (has_reshuffle()) parts[n++] = PART_RESHUFFLE;
   parts[n++] = PART_MORE;
+  if (group_playable())
+    for (int part = PART_PLAY; part <= PART_SHUFFLE_TRACKS; part++) parts[n++] = part;
   return n;
 }
 
 static BOOL has_part(int part) {
-  int parts[3], n = header_parts(parts);
+  int parts[MAX_PARTS], n = header_parts(parts);
   for (int i = 0; i < n; i++)
     if (parts[i] == part) return TRUE;
   return FALSE;
@@ -900,6 +942,13 @@ static BOOL has_part(int part) {
 
 static RECT header_button(int part) {
   if (part == PART_ACTION) return g.action_rc;
+  if (part >= PART_PLAY) { /* thirds of the width, under the name and a smart group's rule */
+    int top = g.pad + scale(HEADER_BUTTON + HEADER_GAP) - g.scroll.pos, gap = scale(PLAY_GAP), k = part - PART_PLAY;
+    if (g.group_rule) top += scale(RULE_GAP) + g.text_h;
+    int left = g.pad, right = max(left, g.client_w - g.pad), w = max(0, (right - left - 2 * gap) / 3);
+    RECT r = {left + k * (w + gap), top, k == 2 ? right : left + k * (w + gap) + w, top + scale(PLAY_H)};
+    return r;
+  }
   int size = scale(HEADER_BUTTON), y = g.pad - g.scroll.pos;
   int x = part == PART_BACK ? g.pad : g.client_w - g.pad - size;
   if (part == PART_RESHUFFLE) x -= size + scale(HEADER_BUTTON_GAP);
@@ -910,6 +959,9 @@ static RECT header_button(int part) {
 /* What a header button is called, in its tooltip and to a screen reader. */
 static const wchar_t *header_label(int part) {
   if (part == PART_BACK) return mc_wstr(MC_STR_BACK);
+  if (part == PART_PLAY) return mc_wstr(MC_STR_PLAY);
+  if (part == PART_SHUFFLE_ALBUMS) return mc_wstr(MC_STR_SHUFFLE_ALBUMS);
+  if (part == PART_SHUFFLE_TRACKS) return mc_wstr(MC_STR_SHUFFLE_TRACKS);
   if (part == PART_RESHUFFLE) return mc_wstr(MC_STR_RESHUFFLE);
   if (g.tiles_view == AGV_PLAYLISTS) return mc_wstr(MC_STR_NEW_PLAYLIST);
   if (g.tiles_view == AGV_GROUPS) return mc_wstr(MC_STR_NEW_ALBUM_GROUP);
@@ -942,7 +994,7 @@ static void update_tips(void) {
 
 /* The header button, or the empty page's button, at a point. */
 static int header_part_at(int x, int y) {
-  int parts[3], n = header_parts(parts);
+  int parts[MAX_PARTS], n = header_parts(parts);
   POINT pt = {x, y};
   for (int i = 0; i < n; i++) {
     RECT r = header_button(parts[i]);
@@ -982,10 +1034,59 @@ static void set_focus_part(int part) {
 
 static const wchar_t *view_name(void);
 
+/* Play, an accent button as the track list's is, and Shuffle Albums and Shuffle Tracks,
+ * standard ones: an icon and a label, centred together. */
+static void paint_play_button(canvas *c, int part) {
+  RECT r = header_button(part);
+  if (r.right <= r.left) return;
+  int radius = scale(4);
+  BOOL enabled = group_playable();
+  control_state state = enabled && g.hot_part == part ? STATE_HOT : STATE_NORMAL;
+  COLORREF ink = theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), fg;
+  if (!enabled) {
+    canvas_fill(c, &r, radius, ink, theme.high_contrast ? 0 : 15);
+    if (theme.high_contrast) canvas_frame(c, &r, radius, 1, theme.text3, 255);
+    fg = theme.text3;
+  } else if (part == PART_PLAY) {
+    canvas_fill(c, &r, radius, theme.accent, theme.high_contrast || state == STATE_NORMAL ? 255 : 230);
+    if (theme.high_contrast && state != STATE_NORMAL) canvas_frame(c, &r, radius, scale(2), theme.text, 255);
+    fg = theme.on_accent;
+  } else {
+    if (!theme.high_contrast) canvas_fill(c, &r, radius, ink, theme.dark ? 15 : 6);
+    fg = theme_draw_state(c, &r, radius, state);
+    canvas_frame(c, &r, radius, 1, theme.high_contrast ? theme.text : theme.line, 255);
+  }
+  const wchar_t *glyph = part == PART_PLAY ? L"\xE768" : L"\xE8B1"; /* Play, Shuffle */
+  const wchar_t *label = header_label(part);
+  HGDIOBJ text_font = g.font ? (HGDIOBJ)g.font : GetStockObject(DEFAULT_GUI_FONT);
+  SIZE icon = {0}, text = {0};
+  SelectObject(c->dc, g.icon_font);
+  GetTextExtentPoint32W(c->dc, glyph, 1, &icon);
+  SelectObject(c->dc, text_font);
+  GetTextExtentPoint32W(c->dc, label, (int)wcslen(label), &text);
+  int gap = scale(8), x = r.left + max(0, (int)(r.right - r.left - icon.cx - gap - text.cx) / 2);
+  UINT one_line = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX;
+  RECT at = {x, r.top, x + icon.cx, r.bottom};
+  SetTextColor(c->dc, fg);
+  SelectObject(c->dc, g.icon_font);
+  DrawTextW(c->dc, glyph, 1, &at, one_line);
+  SetRect(&at, at.right + gap, r.top, r.right - scale(4), r.bottom);
+  SelectObject(c->dc, text_font);
+  DrawTextW(c->dc, label, -1, &at, one_line | DT_END_ELLIPSIS);
+  if (enabled && part == focus_part() && GetFocus() == g.wnd &&
+      !(SendMessageW(g.wnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS)) { /* the focus ring, just outside it */
+    InflateRect(&r, scale(FOCUS_OUT), scale(FOCUS_OUT));
+    canvas_frame(c, &r, radius + scale(FOCUS_OUT), scale(2), theme.text, 255);
+  }
+}
+
 static void paint_header(canvas *c) {
-  int parts[3], n = header_parts(parts);
+  int parts[MAX_PARTS], n = header_parts(parts);
   int radius = scale(HEADER_BUTTON) / 2;
+  if (has_play())
+    for (int part = PART_PLAY; part <= PART_SHUFFLE_TRACKS; part++) paint_play_button(c, part);
   for (int i = 0; i < n; i++) {
+    if (parts[i] >= PART_PLAY) continue; /* drawn above */
     RECT r = header_button(parts[i]);
     /* Back, Refresh (for Reshuffle), and More, or Add on Playlists and Album Groups */
     const wchar_t *glyph = parts[i] == PART_BACK        ? L"\xE72B"
@@ -1165,9 +1266,28 @@ static void do_action(void) {
                MAKEWPARAM(GetDlgCtrlID(g.wnd), a == ACTION_PAIR ? AGN_PAIR : AGN_SYNC_SETTINGS), (LPARAM)g.wnd);
 }
 
+/* A group's play buttons: posted, for the parent to queue its albums (album_grid_play_how()). */
+static void play_group(int part) {
+  g.play = (album_grid_play)(part - PART_PLAY);
+  PostMessageW(GetParent(g.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(g.wnd), AGN_PLAY_GROUP), (LPARAM)g.wnd);
+}
+
+album_grid_play album_grid_play_how(void) {
+  return g.play;
+}
+
+int album_grid_count(void) {
+  return g.wnd && g.tiles_view == AGV_GROUP ? g.count : 0;
+}
+
+const char *album_grid_uid_at(int i) {
+  return i >= 0 && i < album_grid_count() ? g.tiles[i].uid : NULL;
+}
+
 /* A click on a header button or the empty page's button, or the same from UI Automation. */
 static void press_part(int part) {
-  if (part == PART_BACK) go_back();
+  if (part >= PART_PLAY) play_group(part);
+  else if (part == PART_BACK) go_back();
   else if (part == PART_MORE && g.tiles_view != AGV_GROUP) new_list();
   else if (part == PART_RESHUFFLE) reshuffle_group();
   else if (part == PART_MORE) show_more_menu();
@@ -1296,6 +1416,154 @@ static BOOL on_context_menu(LPARAM lp) {
   return TRUE;
 }
 
+/* --- Dragging albums: a group's into another order, any onto a group --- */
+
+/* Only a manual group's albums have an order of their own to drag them into. */
+static BOOL can_reorder(void) {
+  return g.tiles_view == AGV_GROUP && !g.group_smart && g.count > 1;
+}
+
+/* The gap between tiles nearest a point: the place (0 to count) an album dropped there would
+ * go, and that gap's row and column (0, before the row's first tile, to cols, after its
+ * last). */
+static int slot_at(int x, int y, int *row, int *col) {
+  int pitch = g.tile_w + g.gap, rows = (g.count + g.cols - 1) / g.cols;
+  int cy = y + g.scroll.pos - g.top, cx = x - g.pad + g.gap / 2 + pitch / 2;
+  *row = cy > 0 ? min(cy / g.row_h, rows - 1) : 0;
+  *col = cx > 0 ? min(cx / pitch, g.cols) : 0;
+  int slot = *row * g.cols + *col;
+  if (slot >= g.count) { /* past the last album: after it */
+    slot = g.count;
+    *row = (g.count - 1) / g.cols;
+    *col = (g.count - 1) % g.cols + 1;
+  }
+  return slot;
+}
+
+/* The line marking the gap at row, col. */
+static RECT slot_rect(int row, int col) {
+  int x = g.pad - g.gap / 2 + col * (g.tile_w + g.gap), y = g.top + row * g.row_h - g.scroll.pos;
+  int w = scale(DROP_LINE);
+  RECT r = {x - w / 2, y, x - w / 2 + w, y + g.tile_w + g.text_gap + 2 * g.text_h};
+  return r;
+}
+
+static void set_drop_slot(int slot, int row, int col) {
+  if (slot == g.drop_slot && (slot < 0 || (row == g.drop_row && col == g.drop_col))) return;
+  RECT r;
+  if (g.drop_slot >= 0) InvalidateRect(g.wnd, (r = slot_rect(g.drop_row, g.drop_col), &r), FALSE);
+  g.drop_slot = slot;
+  g.drop_row = row;
+  g.drop_col = col;
+  if (slot >= 0) InvalidateRect(g.wnd, (r = slot_rect(row, col), &r), FALSE);
+}
+
+/* Near the top or bottom of the grid, it scrolls while an album is dragged: how far per tick. */
+static int drag_scroll_step(int y) {
+  int edge = scale(DRAG_EDGE), step = scale(16);
+  if (y < edge) return -step;
+  if (y > g.client_h - edge) return step;
+  return 0;
+}
+
+/* Over the grid, a manual group's album moves within it, and nothing else can be dropped;
+ * outside it, the window under the pointer says whether there's a group to add it to. */
+static void drag_to(int x, int y) {
+  if (!g.dragging) {
+    if (abs(x - g.drag_from.x) < GetSystemMetrics(SM_CXDRAG) && abs(y - g.drag_from.y) < GetSystemMetrics(SM_CYDRAG))
+      return;
+    g.dragging = TRUE;
+    set_hot(-1);
+    invalidate_tile(g.drag_tile);
+  }
+  POINT pt = {x, y};
+  RECT rc = {0, 0, g.client_w, g.client_h};
+  if (!PtInRect(&rc, pt)) {
+    set_drop_slot(-1, 0, 0);
+    ClientToScreen(g.wnd, &pt);
+    drag_over(DRAG_ALBUM, pt, g.drop_target);
+    return;
+  }
+  drag_leave();
+  g.drop_target[0] = '\0';
+  BOOL reorder = can_reorder();
+  drag_set_cursor(reorder);
+  int row = 0, col = 0, slot = reorder ? slot_at(x, y, &row, &col) : -1;
+  set_drop_slot(slot, row, col);
+  if (reorder && drag_scroll_step(y)) SetTimer(g.wnd, TIMER_DRAG_SCROLL, 30, NULL);
+}
+
+static void on_drag_timer(void) {
+  POINT pt;
+  GetCursorPos(&pt);
+  ScreenToClient(g.wnd, &pt);
+  int step = g.dragging && g.drop_slot >= 0 ? drag_scroll_step(pt.y) : 0;
+  if (!step) {
+    KillTimer(g.wnd, TIMER_DRAG_SCROLL);
+    return;
+  }
+  set_drop_slot(-1, 0, 0); /* it moves with the tiles */
+  scroller_jump(&g.scroll, g.scroll.pos + step);
+  int row, col, slot = slot_at(pt.x, pt.y, &row, &col);
+  set_drop_slot(slot, row, col);
+}
+
+/* Stops dragging, without moving anything. */
+static void end_drag(void) {
+  if (g.drag_tile < 0) return;
+  int was = g.drag_tile;
+  BOOL dragged = g.dragging;
+  g.drag_tile = -1;
+  g.dragging = FALSE;
+  g.drop_target[0] = '\0';
+  set_drop_slot(-1, 0, 0);
+  KillTimer(g.wnd, TIMER_DRAG_SCROLL);
+  invalidate_tile(was);
+  if (GetCapture() == g.wnd) ReleaseCapture();
+  if (dragged) drag_done();
+}
+
+/* The mouse button came up: moves the album if it was dragged somewhere else in its group,
+ * or adds it to the group it was dropped on. Either puts the group first in the recents. */
+static void drop(void) {
+  int from = g.drag_tile, slot = g.drop_slot;
+  BOOL dragged = g.dragging;
+  char target[MC_UID_STRLEN];
+  memcpy(target, g.drop_target, sizeof target);
+  end_drag();
+  if (!dragged || !g.lib || from < 0 || from >= g.count) return;
+  char album[MC_UID_STRLEN], group[MC_UID_STRLEN], after[MC_UID_STRLEN] = "";
+  memcpy(album, g.tiles[from].uid, sizeof album);
+  HWND owner = GetAncestor(g.wnd, GA_ROOT);
+  if (slot >= 0) {
+    if (slot == from || slot == from + 1) return; /* where it is already */
+    if (slot > 0) memcpy(after, g.tiles[slot - 1].uid, sizeof after);
+    memcpy(group, g.group_uid, sizeof group);
+    if (mc_album_group_move(g.lib, group, album, after[0] ? after : NULL) != MC_OK) {
+      MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_MOVE_FAILED), mc_wstr(MC_STR_ALBUM_GROUP), MB_OK | MB_ICONERROR);
+      return;
+    }
+    mc_library_record_opened(g.lib, MC_RECENT_ALBUM_GROUP, group);
+    notify_changed();
+  } else if (target[0] && add_to_album_group(owner, g.lib, album, target)) {
+    notify_changed();
+  }
+}
+
+/* As a drop target (drag.h): a track dragged onto a manual playlist's tile, or an album onto
+ * a manual group's, is added to it. The tile is marked while it's under the pointer. */
+static BOOL drop_hover(drag_kind kind, const POINT *pt, char uid[MC_UID_STRLEN]) {
+  int i = pt ? tile_at(pt->x, pt->y) : -1;
+  if (i >= 0 && (g.tiles_view != (kind == DRAG_TRACK ? AGV_PLAYLISTS : AGV_GROUPS) || g.tiles[i].smart)) i = -1;
+  if (i != g.drop_tile) {
+    invalidate_tile(g.drop_tile);
+    invalidate_tile(i);
+    g.drop_tile = i;
+  }
+  if (i >= 0) memcpy(uid, g.tiles[i].uid, MC_UID_STRLEN);
+  return i >= 0;
+}
+
 /* --- Scrolling and the mouse --- */
 
 static void on_mouse_move(int x, int y) {
@@ -1325,13 +1593,18 @@ static void on_mouse_down(int x, int y) {
     g.navigated = TRUE;
   } else {
     select_tile(i);
+    if (i >= 0 && (g.tiles_view == AGV_ALBUMS || g.tiles_view == AGV_GROUP)) { /* maybe the start of a drag */
+      g.drag_tile = i;
+      g.drag_from = (POINT){x, y};
+      SetCapture(g.wnd);
+    }
   }
 }
 
 /* Tab and Shift+Tab go round the header's buttons (a group's Back, Reshuffle and More, or
  * the + on Playlists and Album Groups) and the tiles, to the selected one or the first. */
 static void on_tab(BOOL back) {
-  int parts[3], n = header_parts(parts), at = n; /* n: the tiles */
+  int parts[MAX_PARTS], n = header_parts(parts), at = n; /* n: the tiles */
   for (int i = 0; i < n; i++)
     if (parts[i] == focus_part()) at = i;
   int to = (at + (back ? n : 1)) % (n + 1);
@@ -1344,7 +1617,7 @@ static void on_tab(BOOL back) {
 /* With the focus on a header button: Left and Right move between them, Enter and Space press
  * them, and Down, Home, End and Page Down go to the tiles. TRUE if key was handled. */
 static BOOL on_header_key(WPARAM key) {
-  int parts[3], n = header_parts(parts), at = 0;
+  int parts[MAX_PARTS], n = header_parts(parts), at = 0;
   for (int i = 0; i < n; i++)
     if (parts[i] == focus_part()) at = i;
   switch (key) {
@@ -1375,6 +1648,10 @@ static BOOL on_header_key(WPARAM key) {
  * them and the tiles. On the groups, Enter opens the selected one. In a group, Backspace
  * and Alt+Left go back. Returns FALSE for other keys. */
 static BOOL on_key(WPARAM key) {
+  if (key == VK_ESCAPE && g.drag_tile >= 0) {
+    end_drag();
+    return TRUE;
+  }
   if (key == VK_BACK || key == VK_BROWSER_BACK || (key == VK_LEFT && GetKeyState(VK_MENU) < 0)) {
     if (g.view != AGV_GROUP) return FALSE;
     go_back();
@@ -1434,10 +1711,10 @@ static BOOL on_key(WPARAM key) {
   }
   if (!g.count || !g.cols) return FALSE;
   int cur = g.selected, last = g.count - 1, page = max(1, g.client_h / g.row_h) * g.cols, to;
-  int parts[3];
+  int parts[MAX_PARTS];
   if (key == VK_UP && cur >= 0 && cur < g.cols && header_parts(parts)) { /* from the top row to the header */
     SendMessageW(GetAncestor(g.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
-    set_focus_part(parts[0]);
+    set_focus_part(has_part(PART_PLAY) ? PART_PLAY : parts[0]);
     scroller_reveal(&g.scroll, 0, g.top);
     return TRUE;
   }
@@ -1477,8 +1754,9 @@ static void paint_tile(canvas *c, int i) {
   RECT art, text, outer;
   tile_rects(i, &art, &text, &outer);
 
-  if (i == g.hot) theme_draw_state(c, &outer, scale(8), STATE_HOT);
-  if (i == g.selected) {
+  if (i == g.hot || i == g.drop_tile) theme_draw_state(c, &outer, scale(8), STATE_HOT);
+  else if (g.dragging && i == g.drag_tile) theme_draw_state(c, &outer, scale(8), STATE_PRESSED);
+  if (i == g.selected || i == g.drop_tile) {
     RECT ring = art;
     InflateRect(&ring, scale(RING_GAP + RING_W), scale(RING_GAP + RING_W));
     canvas_frame(c, &ring, scale(COVER_RADIUS + RING_GAP + RING_W), scale(RING_W), theme.accent, 255);
@@ -1587,6 +1865,10 @@ static void paint(HDC dc, const RECT *dirty) {
       tile_rects(i, &art, &text, &outer);
       if (IntersectRect(&isect, &outer, dirty)) paint_tile(c, i);
     }
+    if (g.drop_slot >= 0) { /* where the dragged album would go */
+      RECT line = slot_rect(g.drop_row, g.drop_col), isect;
+      if (IntersectRect(&isect, &line, dirty)) canvas_fill(c, &line, scale(1), theme.accent, 255);
+    }
   }
   SelectObject(c->dc, old_font);
   canvas_opaque(c, dirty);
@@ -1631,7 +1913,7 @@ void album_grid_theme_changed(void) {
  * group's rule is the pane's and the list's help text. */
 
 static int ui_buttons(void) {
-  int parts[3];
+  int parts[MAX_PARTS];
   return header_parts(parts);
 }
 
@@ -1663,14 +1945,17 @@ static BOOL ui_node(int i, uia_node *n) {
     return TRUE;
   }
   if (i >= 0 && i < list) { /* Back, Reshuffle, More (or +) */
-    int parts[3];
+    int parts[MAX_PARTS];
     header_parts(parts);
     int part = parts[i];
     n->type = UIA_ButtonControlTypeId;
     n->flags = UIA_FOCUSABLE | UIA_INVOKABLE;
     n->rect = header_button(part);
-    n->automation_id = part == PART_BACK        ? L"Back"
-                       : part == PART_RESHUFFLE ? L"Reshuffle"
+    n->automation_id = part == PART_BACK             ? L"Back"
+                       : part == PART_RESHUFFLE      ? L"Reshuffle"
+                       : part == PART_PLAY           ? L"Play"
+                       : part == PART_SHUFFLE_ALBUMS ? L"ShuffleAlbums"
+                       : part == PART_SHUFFLE_TRACKS ? L"ShuffleTracks"
                        : g.tiles_view != AGV_GROUP ? L"New"
                                                    : L"More";
     lstrcpynW(n->name, header_label(part), 512);
@@ -1720,7 +2005,7 @@ static BOOL ui_node(int i, uia_node *n) {
 }
 
 static int ui_focus(void) {
-  int parts[3], n = header_parts(parts);
+  int parts[MAX_PARTS], n = header_parts(parts);
   for (int i = 0; i < n; i++)
     if (parts[i] == focus_part()) return i;
   return g.selected >= 0 && g.selected < g.count ? ui_tile(g.selected) : UIA_ROOT;
@@ -1729,7 +2014,7 @@ static int ui_focus(void) {
 static int ui_at(POINT pt) {
   int part = header_part_at(pt.x, pt.y), i = tile_at(pt.x, pt.y);
   if (part == PART_ACTION) return ui_list() + 2;
-  int parts[3], n = header_parts(parts);
+  int parts[MAX_PARTS], n = header_parts(parts);
   for (int k = 0; k < n; k++)
     if (parts[k] == part) return k;
   return i >= 0 ? ui_tile(i) : UIA_ROOT;
@@ -1749,14 +2034,14 @@ static void ui_select(int i) {
 
 /* A header button takes the focus as Tab gives it; a tile is selected. */
 static void ui_set_focus(int i) {
-  int parts[3], n = header_parts(parts);
+  int parts[MAX_PARTS], n = header_parts(parts);
   if (i >= 0 && i < n) set_focus_part(parts[i]);
   else ui_select(i);
 }
 
 /* As a click: the header's buttons and the empty page's act, and a group opens. */
 static void ui_invoke(int i) {
-  int parts[3], list = header_parts(parts), t = i - list - 1;
+  int parts[MAX_PARTS], list = header_parts(parts), t = i - list - 1;
   if (i >= 0 && i < list) press_part(parts[i]);
   else if (g.count == 0 && t == 1) press_part(PART_ACTION);
   else if (g.tiles_view == AGV_GROUPS && t >= 0 && t < g.count) album_grid_open_group(g.tiles[t].uid);
@@ -1832,10 +2117,12 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       scroller_wheel(&g.scroll, GET_WHEEL_DELTA_WPARAM(wp));
       return 0;
     case WM_TIMER:
-      scroller_timer(&g.scroll, wp);
+      if (wp == TIMER_DRAG_SCROLL) on_drag_timer();
+      else scroller_timer(&g.scroll, wp);
       return 0;
     case WM_MOUSEMOVE:
-      on_mouse_move(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+      if (g.drag_tile >= 0) drag_to(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+      else on_mouse_move(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
       return 0;
     case WM_MOUSELEAVE:
       g.tracking = FALSE;
@@ -1862,9 +2149,11 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (on_context_menu(lp)) return 0;
       break;
     case WM_LBUTTONUP:
+      if (g.drag_tile >= 0) drop();
       scroller_mouse_up(&g.scroll);
       return 0;
     case WM_CAPTURECHANGED:
+      if (g.drag_tile >= 0 && (HWND)lp != wnd) end_drag(); /* lost it: e.g. a window came up */
       scroller_capture_changed(&g.scroll);
       return 0;
     case WM_KEYDOWN:
@@ -1913,7 +2202,7 @@ HWND album_grid_create(HWND parent, int id) {
 
   memset(&g, 0, sizeof g);
   g.busy_index = -1;
-  g.hot = g.selected = -1;
+  g.hot = g.selected = g.drag_tile = g.drop_slot = g.drop_tile = -1;
   g.scroll.moved = on_scrolled;
   g.dirty = TRUE;
   InitializeCriticalSection(&g.lock);
@@ -1922,6 +2211,7 @@ HWND album_grid_create(HWND parent, int id) {
   if (!g.wnd) return NULL;
   g.thread = CreateThread(NULL, 0, loader_main, NULL, 0, NULL);
   uia_init(&ui, g.wnd, &ui_ops);
+  drag_add_target(g.wnd, drop_hover);
 
   /* A group's Back, More and Reshuffle buttons; placed by update_tips(). */
   g.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,

@@ -47,8 +47,7 @@ Priorities:
   Files are copied into the library; your originals are never modified. Everything is scanned and matched against MusicBrainz in one go.
   Confident matches are imported straight away, with cover art from the Cover Art Archive
   or iTunes. Anything below the confidence threshold is listed for you to review: pick a
-  match, search again, keep the existing tags or skip. AcoustID fingerprints for untagged
-  files are planned.
+  match, search again, keep the existing tags or skip.
 - **Singles** don't become one-track albums. Each artist's singles live together in one
   album, "&lt;artist&gt; Singles".
 - The tagger is our own C code, not beets. That means no bundled Python, the same importer
@@ -83,8 +82,8 @@ Priorities:
   hybrid logical clocks, and playlist order merges cleanly even when it was changed on two
   devices.
 - **Remove from one device:** an album's or artist's menu has "Remove from this PC" (this
-  computer, this phone) next to "Delete from library". It takes the music off that device
-  only, at once, and it stays in the library and on your other devices; "Sync to this PC"
+  computer, this phone). Unlike "Delete from library" (on albums and tracks; an artist can't
+  be deleted), it takes the music off that device only, at once, and it stays in the library and on your other devices; "Sync to this PC"
   on the same menu brings it back. It's offered on devices that sync part of the library,
   not on an archive or outside a group.
 - **Lossy copies:** a device can ask for a lossy format instead of the originals, e.g. a
@@ -200,8 +199,6 @@ Optional CMake settings:
 
 - `-DKITHSONG_CONTACT=<url or email>`: sent in the MusicBrainz User-Agent. MusicBrainz
   asks every client to include one.
-- `-DKITHSONG_ACOUSTID_KEY=<key>`: enables fingerprint lookups. Keep it out of git, for
-  example in a `CMakeUserPresets.json`, which is already ignored.
 - `-DKITHSONG_LASTFM_KEY=<key>` and `-DKITHSONG_LASTFM_SECRET=<secret>`: a Last.fm API
   account (from https://www.last.fm/api/account/create), for scrobbling to Last.fm. Keep
   them out of git too. Or set the environment variables of the same names, or paste the

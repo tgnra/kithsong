@@ -87,17 +87,15 @@ Then set the API keys. They're baked into every platform's build:
 
 ```sh
 gh secret set KITHSONG_CONTACT
-gh secret set KITHSONG_ACOUSTID_KEY
 gh secret set KITHSONG_LASTFM_KEY
 gh secret set KITHSONG_LASTFM_SECRET
 ```
 
-`gh secret list` should now show all eight. The full list:
+`gh secret list` should now show all seven. The full list:
 
 | Secret | Local variable | What it is |
 |--------|----------------|------------|
 | `KITHSONG_CONTACT` | `KITHSONG_CONTACT` | Contact URL or email for the MusicBrainz User-Agent |
-| `KITHSONG_ACOUSTID_KEY` | `KITHSONG_ACOUSTID_KEY` | AcoustID application key, from <https://acoustid.org/new-application> |
 | `KITHSONG_LASTFM_KEY` | `KITHSONG_LASTFM_KEY` | Last.fm API key, for scrobbling, from <https://www.last.fm/api/account/create> |
 | `KITHSONG_LASTFM_SECRET` | `KITHSONG_LASTFM_SECRET` | Last.fm API shared secret |
 | `ANDROID_KEYSTORE_BASE64` | `KITHSONG_KEYSTORE` (a path) | The release keystore, base64-encoded |
@@ -137,7 +135,7 @@ To test the builds without a release, run the workflow by hand (Actions → Rele
 workflow, or `gh workflow run release.yml`). The files are attached to the run as artifacts.
 
 Windows builds also carry a build number, the 4th field of the exe's file version (e.g.
-`0.2.0.57`), shown in the app's sidebar footer. CMake takes it as `KITHSONG_BUILD_NUMBER`
+`0.2.0.57`), shown in the app's About box. CMake takes it as `KITHSONG_BUILD_NUMBER`
 (0-65535, default 0), and `scripts/release-windows.ps1` passes `$env:KITHSONG_BUILD_NUMBER`
 through. The workflow sets it to the run number (`github.run_number`), since its shallow
 checkouts can't count commits. Local builds are build 0 unless you set it.

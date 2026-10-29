@@ -184,11 +184,10 @@ static const char *extension(const char *path) {
   return dot && dot > (sep ? sep : path) ? dot + 1 : "";
 }
 
-/* The lowercase extension of an audio file ("flac", "mp3", ...), or NULL for other files. */
+/* The lowercase extension of an audio file the player decodes (decoder.c): "flac", "mp3",
+ * ..., or NULL for other files. */
 static const char *audio_format(const char *path) {
-  static const char *const exts[] = {"flac", "mp3", "m4a", "mp4", "aac", "ogg", "oga",
-                                     "opus", "wav", "aif", "aiff", "wv",  "ape", "mpc",
-                                     "wma",  "dsf", NULL};
+  static const char *const exts[] = {"flac", "mp3", "opus", "wav", "aif", "aiff", NULL};
   const char *ext = extension(path);
   for (const char *const *e = exts; *e; e++) {
     size_t i = 0;

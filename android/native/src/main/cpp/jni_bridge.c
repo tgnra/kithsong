@@ -120,7 +120,7 @@ jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) {
   jclass info = (*env)->FindClass(env, "ng/kithso/core/AlbumInfo");
   jmethodID ctor = info ? (*env)->GetMethodID(
                             env, info, "<init>",
-                            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;)V")
+                            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;Ljava/lang/String;)V")
                         : NULL;
   if (ctor) out = (*env)->NewObjectArray(env, list->count, info, NULL);
   for (int i = 0; out && i < list->count; i++) {
@@ -129,9 +129,10 @@ jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) {
     jstring title = new_string(env, a->title ? a->title : "");
     jstring artist = new_string(env, a->artist);
     jstring folder = new_string(env, a->folder);
+    jstring artist_uid = new_string(env, a->artist_uid[0] ? a->artist_uid : NULL);
     jobject item = (*env)->NewObject(env, info, ctor, uid, title, artist, (jint)a->year,
                                      (jboolean)(a->is_singles != 0), (jboolean)(a->has_art != 0),
-                                     folder);
+                                     folder, artist_uid);
     if (!item) {
       out = NULL;
       break;
@@ -142,6 +143,7 @@ jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) {
     (*env)->DeleteLocalRef(env, title);
     if (artist) (*env)->DeleteLocalRef(env, artist);
     if (folder) (*env)->DeleteLocalRef(env, folder);
+    if (artist_uid) (*env)->DeleteLocalRef(env, artist_uid);
   }
   mc_album_list_free(list);
   return out;
@@ -225,7 +227,7 @@ jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {
   jclass info = (*env)->FindClass(env, "ng/kithso/core/TrackInfo");
   jmethodID ctor = info ? (*env)->GetMethodID(env, info, "<init>",
                                               "(Ljava/lang/String;Ljava/lang/String;IIILjava/lang/String;"
-                                              "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")
+                                              "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")
                         : NULL;
   if (ctor) out = (*env)->NewObjectArray(env, list->count, info, NULL);
   for (int i = 0; out && i < list->count; i++) {
@@ -236,8 +238,9 @@ jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {
     jstring artist = new_string(env, t->artist);
     jstring album = new_string(env, t->album);
     jstring cover_dir = new_string(env, t->cover_dir);
+    jstring artist_uid = new_string(env, t->artist_uid[0] ? t->artist_uid : NULL);
     jobject item = (*env)->NewObject(env, info, ctor, uid, title, (jint)t->track_no, (jint)t->disc_no,
-                                     (jint)t->duration_ms, path, artist, album, cover_dir);
+                                     (jint)t->duration_ms, path, artist, album, cover_dir, artist_uid);
     if (!item) {
       out = NULL;
       break;
@@ -250,6 +253,7 @@ jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {
     if (artist) (*env)->DeleteLocalRef(env, artist);
     if (album) (*env)->DeleteLocalRef(env, album);
     if (cover_dir) (*env)->DeleteLocalRef(env, cover_dir);
+    if (artist_uid) (*env)->DeleteLocalRef(env, artist_uid);
   }
   mc_track_list_free(list);
   return out;
@@ -408,6 +412,41 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListArtists
   /* An empty list may be NULL. */
   jobjectArray out =
     named_array(env, list ? list->items : NULL, list ? list->count : 0, artist_at);
+  mc_artist_list_free(list);
+  return out;
+}
+
+/* The artists with something here (mc_library_list_artists_here()), as ArtistInfo[]. */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListArtistsHere(JNIEnv *env,
+                                                                                    jclass cls,
+                                                                                    jlong handle) {
+  (void)cls;
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/ArtistInfo");
+  if (!info) return NULL;
+  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V");
+  if (!ctor) return NULL;
+
+  mc_artist_list *list = NULL;
+  mc_status st = mc_library_list_artists_here((mc_library *)(intptr_t)handle, &list);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jobjectArray out = (*env)->NewObjectArray(env, list->count, info, NULL);
+  for (int i = 0; out && i < list->count; i++) {
+    const mc_artist_info *a = &list->items[i];
+    jstring uid = new_string(env, a->uid);
+    jstring name = new_string(env, a->name ? a->name : "");
+    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)a->album_count, (jint)a->track_count);
+    if (!item) {
+      out = NULL;
+      break;
+    }
+    (*env)->SetObjectArrayElement(env, out, i, item);
+    (*env)->DeleteLocalRef(env, item);
+    (*env)->DeleteLocalRef(env, uid);
+    (*env)->DeleteLocalRef(env, name);
+  }
   mc_artist_list_free(list);
   return out;
 }

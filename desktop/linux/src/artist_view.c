@@ -190,23 +190,13 @@ static void on_sync_here(GSimpleAction *action, GVariant *param, gpointer user) 
   if (v.menu_artist[0]) remove_here_restore(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.menu_artist, on_deleted, v.a);
 }
 
-/* Delete from library...: the artist's tracks and own albums. */
-static void on_delete_artist(GSimpleAction *action, GVariant *param, gpointer user) {
-  (void)action;
-  (void)param;
-  (void)user;
-  if (v.menu_artist[0])
-    delete_dialog_present(GTK_WIDGET(v.a->win), v.a->lib, v.a->settings_dir, MC_DELETE_ARTISTS, v.menu_artist,
-                          name_of(v.menu_artist), on_deleted, v.a);
-}
-
 /* The menu for the artist with uid, made each time it opens: Remove from this computer... or
- * Sync to this computer where they apply, then Delete from library. */
+ * Sync to this computer where they apply, so it may be empty. An artist can't be deleted from
+ * the library, only their albums and tracks. */
 static GMenuModel *artist_menu(const char *uid) {
   g_strlcpy(v.menu_artist, uid, sizeof v.menu_artist);
   GMenu *menu = g_menu_new();
   remove_here_append(menu, MC_PROFILE_ARTIST, uid, "artist.remove-here", "artist.sync-here");
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete");
   return G_MENU_MODEL(menu);
 }
 
@@ -224,6 +214,10 @@ static void popup_row_menu(GtkListItem *item, GtkWidget *widget, float x, float 
   graphene_point_t at;
   if (!artist || !gtk_widget_compute_point(widget, v.list_box, &GRAPHENE_POINT_INIT(x, y), &at)) return;
   GMenuModel *menu = artist_menu(artist->uid);
+  if (g_menu_model_get_n_items(menu) == 0) {
+    g_object_unref(menu);
+    return;
+  }
   gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(v.row_menu), menu);
   g_object_unref(menu);
   gtk_popover_set_pointing_to(GTK_POPOVER(v.row_menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
@@ -478,7 +472,7 @@ static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer use
     gtk_popover_popup(GTK_POPOVER(v.menu));
     return TRUE;
   }
-  gtk_menu_button_popup(GTK_MENU_BUTTON(v.more));
+  if (gtk_widget_get_visible(v.more)) gtk_menu_button_popup(GTK_MENU_BUTTON(v.more));
   return TRUE;
 }
 
@@ -552,6 +546,10 @@ static void load_page(void) {
   mc_album_list_free(albums);
   gtk_widget_set_visible(v.albums_heading, album_count > 0);
   gtk_widget_set_visible(v.albums_scroller, album_count > 0);
+  GMenu *more = g_menu_new(); /* not artist_menu(), which would retarget an open row menu */
+  remove_here_append(more, MC_PROFILE_ARTIST, v.open, "artist.remove-here", "artist.sync-here");
+  gtk_widget_set_visible(v.more, g_menu_model_get_n_items(G_MENU_MODEL(more)) > 0);
+  g_object_unref(more);
 
   /* The selected track stays selected, if it's still there. */
   char keep[MC_UID_STRLEN] = "";
@@ -679,7 +677,8 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(text), v.actions);
   gtk_box_append(GTK_BOX(header), text);
 
-  /* Remove from this computer... and Delete from library..., under "...". */
+  /* Remove from this computer... or Sync to this computer, under "..." (hidden when neither
+   * applies, by load_page()). */
   v.more = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(v.more), "view-more-symbolic");
   gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(v.more), make_artist_menu, NULL, NULL);
@@ -849,7 +848,6 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
   GSimpleActionGroup *actions = g_simple_action_group_new();
   const GActionEntry entries[] = {{"add-to-playlist", on_add_to_playlist, NULL, NULL, NULL, {0}},
                                   {"delete-track", on_delete_track, NULL, NULL, NULL, {0}},
-                                  {"delete", on_delete_artist, NULL, NULL, NULL, {0}},
                                   {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
                                   {"sync-here", on_sync_here, NULL, NULL, NULL, {0}}};
   g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);

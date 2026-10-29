@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "drag.h"
+
 enum { MAX_RECENTS = 10 };
 
 static struct {
@@ -18,6 +20,62 @@ static const char *kind_icon(mc_recent_kind kind) {
     case MC_RECENT_ALBUM_GROUP: return "folder-symbolic";
     default: return "media-optical-symbolic";
   }
+}
+
+/* --- Drops (drag.h): a track onto a manual playlist's row, an album onto a manual group's --- */
+
+/* Whether row takes what's being dragged now. */
+static gboolean row_takes(GtkWidget *row, GtkDropTarget *target) {
+  const drag_item *item = drag_current();
+  if (!drag_from_us(target) || g_object_get_data(G_OBJECT(row), "smart")) return FALSE;
+  mc_recent_kind kind = (mc_recent_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"));
+  return item->kind == DRAG_TRACK ? kind == MC_RECENT_PLAYLIST : kind == MC_RECENT_ALBUM_GROUP;
+}
+
+static GdkDragAction on_drop_motion(GtkDropTarget *target, double x, double y, gpointer user) {
+  (void)x;
+  (void)y;
+  GtkWidget *row = user;
+  gboolean takes = row_takes(row, target);
+  if (takes) gtk_widget_add_css_class(row, "drop-into");
+  else gtk_widget_remove_css_class(row, "drop-into");
+  return takes ? GDK_ACTION_COPY : 0;
+}
+
+static void on_drop_leave(GtkDropTarget *target, gpointer user) {
+  (void)target;
+  gtk_widget_remove_css_class(user, "drop-into");
+}
+
+static void reload_later(gpointer data) {
+  (void)data;
+  app_reload_library(r.a);
+}
+
+/* Adds the track or album to the row's playlist or group, which puts it first in the
+ * recents, as any change to one does. */
+static gboolean on_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer user) {
+  (void)value;
+  (void)x;
+  (void)y;
+  GtkWidget *row = user;
+  gtk_widget_remove_css_class(row, "drop-into");
+  const char *uid = g_object_get_data(G_OBJECT(row), "uid");
+  if (!r.a->lib || !uid || !row_takes(row, target)) return FALSE;
+  /* Copies: reloading rebuilds the rows. */
+  drag_item item = *drag_current();
+  char into[MC_UID_STRLEN];
+  g_strlcpy(into, uid, sizeof into);
+  gboolean track = item.kind == DRAG_TRACK;
+  mc_status st = track ? mc_playlist_append(r.a->lib, into, item.uid, NULL) : mc_album_group_add(r.a->lib, into, item.uid);
+  if (st != MC_OK) {
+    adw_toast_overlay_add_toast(r.a->toasts,
+                                adw_toast_new(mc_str(track ? MC_STR_PLAYLIST_ADD_FAILED : MC_STR_ALBUM_GROUP_ADD_FAILED)));
+    return FALSE;
+  }
+  mc_library_record_opened(r.a->lib, track ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM_GROUP, into);
+  g_idle_add_once(reload_later, NULL); /* not now: it rebuilds this row, which is still dropping */
+  return TRUE;
 }
 
 /* A row like the pages above it: the icon and the name, cut off if it's long, with the
@@ -51,6 +109,14 @@ static GtkWidget *recent_row(const mc_recent_info *info) {
   g_free(tip);
   g_object_set_data_full(G_OBJECT(row), "uid", g_strdup(info->uid), g_free);
   g_object_set_data(G_OBJECT(row), "kind", GINT_TO_POINTER(info->kind));
+  g_object_set_data(G_OBJECT(row), "smart", GINT_TO_POINTER(info->is_smart));
+  if (info->kind == MC_RECENT_PLAYLIST || info->kind == MC_RECENT_ALBUM_GROUP) {
+    GtkDropTarget *drop = drag_target_new(GDK_ACTION_COPY);
+    g_signal_connect(drop, "motion", G_CALLBACK(on_drop_motion), row);
+    g_signal_connect(drop, "leave", G_CALLBACK(on_drop_leave), row);
+    g_signal_connect(drop, "drop", G_CALLBACK(on_drop), row);
+    gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(drop));
+  }
   return row;
 }
 

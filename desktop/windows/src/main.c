@@ -63,6 +63,7 @@
  * so two instances can sync on one PC; the paths are imported. --add-firewall-rule alone is
  * firewall.c's elevated helper, which adds the Windows Firewall rule sync needs and exits.
  */
+#define _CRT_RAND_S /* rand_s(), for Shuffle Albums */
 #include <windows.h>
 #include <windowsx.h>
 #include <commctrl.h>
@@ -346,6 +347,7 @@ static void paint_background(HDC dc, const RECT *area) {
 }
 
 static void show_album(void);
+static void show_about(void);
 
 /* For PAGE_DEVICE, the device selected in the sidebar (sidebar_select_device()) is shown. */
 static void show_page(sidebar_page page) {
@@ -409,7 +411,7 @@ static void refresh_recents(void) {
                                   : r->kind == MC_RECENT_PLAYLIST ? (r->is_smart ? MC_STR_SMART_PLAYLIST : MC_STR_PLAYLIST)
                                   : r->is_smart                   ? MC_STR_SMART_ALBUM_GROUP
                                                                   : MC_STR_ALBUM_GROUP);
-    items[n] = (sidebar_recent){.kind = r->kind, .name = names[n], .detail = album ? artists[n] : kind};
+    items[n] = (sidebar_recent){.kind = r->kind, .smart = r->is_smart, .name = names[n], .detail = album ? artists[n] : kind};
     snprintf(items[n].uid, sizeof items[n].uid, "%s", r->uid);
     n++;
   }
@@ -727,6 +729,67 @@ static void play_all(BOOL shuffled) {
   play_album(shuffled ? -1 : 0);
 }
 
+/* A group's Play, Shuffle Albums and Shuffle Tracks (album_grid.h): its albums' tracks with a
+ * file here, each album's in its own order, the albums in the group's order or a random one,
+ * or every track shuffled. Playing it puts it first in the recents, as playing an album
+ * does. */
+static void play_group(void) {
+  album_grid_play how = album_grid_play_how();
+  int albums = album_grid_count(), n = 0, cap = 0;
+  int *order = albums ? malloc((size_t)albums * sizeof *order) : NULL;
+  if (!order || !g_app.lib) {
+    free(order);
+    return;
+  }
+  for (int i = 0; i < albums; i++) order[i] = i;
+  for (int i = albums - 1; how == AG_PLAY_SHUFFLE_ALBUMS && i > 0; i--) { /* Fisher-Yates */
+    unsigned r = 0;
+    rand_s(&r);
+    int j = (int)(r % (unsigned)(i + 1)), t = order[i];
+    order[i] = order[j];
+    order[j] = t;
+  }
+  playback_track *queue = NULL;
+  wchar_t **text = NULL; /* the queue's strings, freed once it has copied them */
+  mc_track_list **lists = calloc((size_t)albums, sizeof *lists);
+  for (int a = 0; lists && a < albums; a++) {
+    const char *uid = album_grid_uid_at(order[a]);
+    if (!uid || mc_library_list_album_tracks(g_app.lib, uid, &lists[a]) != MC_OK) continue;
+    for (int i = 0; i < lists[a]->count; i++) {
+      const mc_track_info *t = &lists[a]->items[i];
+      if (!t->path) continue;
+      if (n == cap) {
+        int grown = cap ? cap * 2 : 64;
+        playback_track *q = realloc(queue, (size_t)grown * sizeof *q);
+        wchar_t **w = q ? realloc(text, (size_t)grown * 4 * sizeof *w) : NULL;
+        if (q) queue = q;
+        if (!w) break;
+        text = w;
+        cap = grown;
+      }
+      wchar_t **mine = text + 4 * n;
+      mine[0] = wide_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
+      mine[1] = t->artist ? wide_from_utf8(t->artist) : NULL;
+      mine[2] = t->album ? wide_from_utf8(t->album) : NULL;
+      mine[3] = t->cover_dir ? wide_from_utf8(t->cover_dir) : NULL;
+      queue[n++] = (playback_track){t->uid, t->path, mine[0], mine[1], mine[2], mine[3], t->duration_ms};
+    }
+  }
+  if (n) {
+    set_shuffle(how == AG_PLAY_SHUFFLE_TRACKS);
+    playback_play(queue, n, how == AG_PLAY_SHUFFLE_TRACKS ? -1 : 0);
+  }
+  for (int i = 0; i < 4 * n; i++) free(text[i]);
+  free(text);
+  free(queue);
+  for (int a = 0; lists && a < albums; a++)
+    if (lists[a]) mc_track_list_free(lists[a]);
+  free(lists);
+  free(order);
+  const char *group = album_grid_group();
+  if (n && group && mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) refresh_recents();
+}
+
 /* The track list's requests to change a playlist (see track_list.h). */
 static void on_track_request(int code) {
   const track_list_request *req = track_list_last_request();
@@ -777,6 +840,10 @@ static void on_track_request(int code) {
         MessageBoxW(g_app.wnd, mc_wstr(MC_STR_RESHUFFLE_FAILED), mc_wstr(MC_STR_SMART_PLAYLIST), MB_OK | MB_ICONERROR);
       break;
   }
+  /* A change to the shown playlist's tracks puts it first in the recents, as adding to one
+   * does (add_to_playlist()). */
+  if (changed && (code == TLN_REMOVE || code == TLN_MOVE) && name)
+    mc_library_record_opened(g_app.lib, MC_RECENT_PLAYLIST, uid);
   if (changed) {
     refresh_library();
     UpdateWindow(g_app.grid); /* reload the grid now: a deleted playlist's tracks go at once */
@@ -793,37 +860,38 @@ static void format_address(wchar_t *out, size_t cap, const char *host, unsigned 
   free(w);
 }
 
-/* The sidebar's footer: the version, and where other devices reach this PC (the first
- * address; its tooltip lists them all). */
-static void update_footer(void) {
-  wchar_t line1[160], line2[160], tip[64 + MAX_ADDRESSES * 64] = L"";
-  if (g_app.lib)
-    mc_wformat(line1, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION_DB), MC_S(mc_version()), MC_D(KITHSONG_BUILD_NUMBER),
-               MC_D(mc_library_schema_version(g_app.lib)));
-  else
-    mc_wformat(line1, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION), MC_S(mc_version()), MC_D(KITHSONG_BUILD_NUMBER));
+/* For the About box: the library database's version, then where other devices reach this
+ * PC (every address), or why sync is off; one per line. */
+static void about_details(wchar_t *out, size_t cap) {
+  wchar_t line[160];
+  out[0] = 0;
+  if (g_app.lib) {
+    mc_wformat(line, 160, mc_str(MC_STR_WINDOWS_ABOUT_DB_VERSION), MC_D(mc_library_schema_version(g_app.lib)));
+    wcsncat_s(out, cap, line, _TRUNCATE);
+    wcsncat_s(out, cap, L"\n", _TRUNCATE);
+  }
 
   mc_sync *sync = sync_bridge_get();
   if (!sync) {
-    mc_wformat(line2, 160, mc_str(MC_STR_WINDOWS_FOOTER_SYNC_OFF),
+    mc_wformat(line, 160, mc_str(MC_STR_WINDOWS_ABOUT_SYNC_OFF),
                MC_S(g_app.lib ? mc_status_str(sync_bridge_error()) : mc_str(MC_STR_WINDOWS_NO_LIBRARY)));
-  } else {
-    char addrs[MAX_ADDRESSES][MC_SYNC_ADDR_STRLEN];
-    unsigned port = mc_sync_port(sync);
-    int n = mc_sync_local_addresses(addrs, MAX_ADDRESSES);
-    if (n > 0) format_address(line2, 160, addrs[0], port);
-    else mc_wformat(line2, 160, mc_str(MC_STR_WINDOWS_PORT_NO_NETWORK), MC_D(port));
-    size_t used = (size_t)swprintf(tip, 64, L"%ls",
-                                   mc_wstr(n > 0 ? MC_STR_WINDOWS_FOOTER_REACHED_AT : MC_STR_NO_NETWORK));
-    for (int i = 0; i < n; i++) {
-      wchar_t addr[64];
-      format_address(addr, 64, addrs[i], port);
-      int k = swprintf(tip + used, sizeof tip / sizeof tip[0] - used, L"\n%ls", addr);
-      if (k > 0) used += (size_t)k;
-    }
+    wcsncat_s(out, cap, line, _TRUNCATE);
+    return;
   }
-  sidebar_set_footer(line1, line2);
-  sidebar_set_footer_tip(tip[0] ? tip : NULL);
+  char addrs[MAX_ADDRESSES][MC_SYNC_ADDR_STRLEN];
+  unsigned port = mc_sync_port(sync);
+  int n = mc_sync_local_addresses(addrs, MAX_ADDRESSES);
+  if (n <= 0) {
+    mc_wformat(line, 160, mc_str(MC_STR_WINDOWS_PORT_NO_NETWORK), MC_D(port));
+    wcsncat_s(out, cap, line, _TRUNCATE);
+    return;
+  }
+  wcsncat_s(out, cap, mc_wstr(MC_STR_WINDOWS_ABOUT_REACHED_AT), _TRUNCATE);
+  for (int i = 0; i < n; i++) {
+    format_address(line, 160, addrs[i], port);
+    wcsncat_s(out, cap, L"\n", _TRUNCATE);
+    wcsncat_s(out, cap, line, _TRUNCATE);
+  }
 }
 
 /* Whether a sync session with uid is in progress, as far as the events have said. */
@@ -926,7 +994,6 @@ static void refresh_devices(void) {
   }
   if (sync) save_own_name(sync);
   settings_view_update_sync();
-  update_footer();
 }
 
 /* Refreshes the devices shortly, once for a burst of sync events. */
@@ -1004,8 +1071,6 @@ static void stop_sync(void) {
   device_view_open(NULL, NULL, NULL);
   sync_bridge_stop();
   playback_set_library(NULL, NULL);
-
-  update_footer();
 }
 
 static void on_sync_event(WPARAM wp, LPARAM lp) {
@@ -1255,6 +1320,7 @@ static void on_command(int id, int code) {
       } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       else if (code == SBN_PAIR_DEVICE) pair_nearby_uid(sidebar_clicked_nearby());
       else if (code == SBN_OPEN_RECENT) open_recent();
+      else if (code == SBN_ABOUT) show_about();
       else if (code == SBN_REMOVE_RECENT || code == SBN_CLEAR_RECENTS) remove_recents(code == SBN_CLEAR_RECENTS);
       else if (code == SBN_NEW_SMART_PLAYLIST || code == SBN_NEW_SMART_GROUP) {
         show_page(code == SBN_NEW_SMART_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUM_GROUPS);
@@ -1266,6 +1332,7 @@ static void on_command(int id, int code) {
       else if (code == AGN_LIBRARY_CHANGED) refresh_library();
       else if (code == AGN_PAIR) pair_menu();
       else if (code == AGN_SYNC_SETTINGS) show_own_page();
+      else if (code == AGN_PLAY_GROUP) play_group();
       else if (code == AGN_OPEN_GROUP && g_app.lib && album_grid_group() &&
                mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, album_grid_group()) == MC_OK)
         refresh_recents();
@@ -1780,11 +1847,14 @@ static HRESULT CALLBACK about_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp, LON
   return S_OK;
 }
 
-/* F1: the app's name, version and build, what it is, and its website. */
+/* F1, or About in the sidebar: the app's name, version and build, what it is, the library's
+ * database version, where other devices reach this PC, and its website. */
 static void show_about(void) {
-  wchar_t title[64], version[160];
+  wchar_t title[64], version[160], details[256 + MAX_ADDRESSES * 64], content[512 + MAX_ADDRESSES * 64];
   mc_wformat(title, 64, mc_str(MC_STR_ABOUT_TITLE), MC_S(mc_str(MC_STR_APP_NAME)));
-  mc_wformat(version, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION), MC_S(mc_version()), MC_D(KITHSONG_BUILD_NUMBER));
+  mc_wformat(version, 160, mc_str(MC_STR_WINDOWS_ABOUT_VERSION), MC_S(mc_version()), MC_D(KITHSONG_BUILD_NUMBER));
+  about_details(details, sizeof details / sizeof details[0]);
+  swprintf(content, sizeof content / sizeof content[0], L"%ls\n\n%ls", mc_wstr(MC_STR_APP_SUMMARY), details);
   TASKDIALOGCONFIG config = {
     .cbSize = sizeof config,
     .hwndParent = g_app.wnd,
@@ -1794,7 +1864,7 @@ static void show_about(void) {
     .pszWindowTitle = title,
     .pszMainIcon = MAKEINTRESOURCEW(IDI_APP),
     .pszMainInstruction = version,
-    .pszContent = mc_wstr(MC_STR_APP_SUMMARY),
+    .pszContent = content,
     .pszFooter = L"<a href=\"" WEBSITE L"\">" WEBSITE L"</a>",
     .pfCallback = about_proc,
   };

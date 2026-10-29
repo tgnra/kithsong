@@ -8,25 +8,22 @@ Big pieces that haven't been started, or that only one platform has.
 - **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard (Linux over MPRIS too); no on-screen control anywhere, and Android uses the core's volume only to duck (before Android 8)
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
-- **AAC/M4A playback** - no decoder chosen
-- **Merging libraries** - core, Windows, Linux and Android merge two libraries with music when pairing (Linux built, not run); see Sync → Merging libraries below
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
 - **Releases** - a portable zip on Windows (no installer or signing) and a Flatpak bundle on Linux (no Flathub listing); Android and Wear OS: signed APKs and AABs, R8 on, licences in Settings
-- **Translations** - strings/en.json is the only language
 
 ### Parity at a glance
 
 | Feature | Windows | Linux | Android | Wear OS |
 |---|---|---|---|---|
 | Albums | yes | yes | yes | yes |
-| Artists | yes (no art) | yes (no art) | yes (matched by name) | no |
+| Artists | yes (no art) | yes (no art) | yes | no |
 | Playlists: browse | yes | yes | yes | no |
 | Playlists: edit | yes | yes | yes | no |
 | Album groups | yes | yes | yes | no |
 | Smart playlists | yes (rule editor, rename, delete) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
 | Recents | yes | yes | yes | no |
 | Search | yes | yes | yes | no |
-| Delete (with restore) | yes | yes | yes (permanent: no trash to restore from) | no |
+| Delete (with restore) | albums, tracks | albums, tracks | albums, tracks (permanent: no trash to restore from) | no |
 | Remove from this device | albums, artists | albums, artists (only compiled) | albums, artists | no |
 | Shuffle | core's | core's | core's | no |
 | Volume | keyboard only | keyboard, MPRIS | system's (core's for ducking) | no |
@@ -41,15 +38,13 @@ Big pieces that haven't been started, or that only one platform has.
 ## Library and browsing
 
 ### Artists
-- Core - a track has one artist, so "A & B" or "A feat. B" credits only that combined artist; crediting each needs a track_artists table (and tag parsing on import)
-- Core - a per-device artist listing (album and track counts here) and artist uids on albums and tracks, so Android stops matching artists by name (two artists of the same name are both listed if either has something here)
-- All - a toggle between album artist and track artist in the artist list?
-- Windows and Linux - artist pictures; Windows - Add to playlist of all their tracks from the artist menu
+- Windows and Linux - artist pictures
 
 ### Album groups
 - Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are)
-- Windows and Linux - albums in a group are reordered with Move up/Move down on their menus, not by dragging; Windows can't drag albums onto a group either
-- Windows and Linux - play a whole group, smart groups too (queue its albums in order; Android has Play)
+- Android - Shuffle albums and Shuffle tracks for a group, as the desktops have beside Play
+- Android - adding to, removing from or reordering a playlist or group doesn't put it first in the recents; the desktops do, which is what lets a track or album be dragged onto it there
+- Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results; only from the album grid and the track list
 
 ### Smart playlists
 - Linux and Android - rule editor (from mc_smart_field_get()), and rename/delete; Windows has them
@@ -80,7 +75,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 
 ## Playback
 
-- Core - AAC/M4A: pick a decoder; the free ones are GPL or awkwardly licensed, and the OS codec breaks "no OS codecs"
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
 - Core - repeat (one, all); no frontend offers it (Ctrl+R is kept for it on the desktops)
 - All - a play queue: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither), and a view of what's queued
@@ -93,8 +87,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 
 ## Import and tagging
 
-- Core - AcoustID fingerprints (Chromaprint) for untagged files
-- Core - cover art for the singles album
 - Core - duplicates: a swap keeps the library's album and track metadata and files the new file under the old name; the new file's tags come from its own match, so a release-group or by-name swap can leave tags naming another release than the library row
 - Core - duplicates: a byte-identical file is only recognised against files that were imported as-is or synced (matched imports are re-tagged in the library, so their bytes differ from the source)
 - All - Use as Track (mc_import_assign) works only within an import session: once Done is clicked the session's matches are gone, so an album already in the library can't be fixed that way. It would need the release's track list kept (or looked up again by mb_albumid) and a library-side "assign this file to that track"
@@ -203,7 +195,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 - The pairing dialog's ended page (only compiled): Choose what to sync, the archive explainer's bold "archive" (Pango markup), Create a new library (the folder picker, refusing a folder that isn't empty, then Pair again) and the button styles
 - Remove from this computer / Sync to this computer on the album tiles' and the artist page's menus (only compiled, in Docker)
 - The notification while the window is in the background (only compiled), of a pairing request, a refusal shown before any code, and the merge's summary: that it shows on GNOME and KDE, that clicking it brings the window up with the code or message (the app.show-pair-request action; the merge's window over it), and that it goes once the window is active, the request ends, or its dialog or the merge's window closes
-- The track list's keys and the artist list's row menu: run under Xvfb in Docker (GTK 4.18, libadwaita 1.7). Seen working: Alt+Up/Down, Delete and F2 in a playlist, Enter, the Menu key and Shift+F10 (the menu shows Alt+Up, Alt+Down, Delete and F2 beside its items, and they don't act outside the list), right-click and the Menu key on an artist row (its Delete from library... names that artist), and the Menu key in an artist page's tracks and elsewhere on the page. Not checked: the long press (no touchscreen), the Menu key with no track selected (the playlist's header menu) or with the selected track scrolled out of sight, Remove from this computer / Sync to this computer on an artist row (needs a group), and a real desktop session
+- The track list's keys and the artist list's row menu: run under Xvfb in Docker (GTK 4.18, libadwaita 1.7). Seen working: Alt+Up/Down, Delete and F2 in a playlist, Enter, the Menu key and Shift+F10 (the menu shows Alt+Up, Alt+Down, Delete and F2 beside its items, and they don't act outside the list), and the Menu key in an artist page's tracks and elsewhere on the page. Not checked: the long press (no touchscreen), the Menu key with no track selected (the playlist's header menu) or with the selected track scrolled out of sight, Remove from this computer / Sync to this computer on an artist row (needs a group), and a real desktop session
 - The shortcuts list's AdwShortcutsDialog (libadwaita 1.8+) is written but not built: the Docker image has libadwaita 1.7, which gets the GtkShortcutsWindow fallback. Check it on a 1.8 system (e.g. the GNOME 49+ Flatpak runtime)
 
 ### Windows

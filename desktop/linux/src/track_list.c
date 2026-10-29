@@ -5,6 +5,7 @@
 
 #include "app.h"
 #include "cover.h"
+#include "drag.h"
 
 enum { HEADER_COVER = 96 };
 
@@ -151,17 +152,25 @@ static void on_row_menu(GtkGestureClick *click, int n_press, double x, double y,
   if (gtk_widget_compute_point(widget, s.pane, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) popup_menu_at(at.x, at.y);
 }
 
-/* --- Dragging a playlist's tracks into another order --- */
+/* --- Dragging tracks: a playlist's into another order, any onto a playlist (drag.h) --- */
 
-/* A playlist's row drags its entry uid. */
-static GdkContentProvider *on_drag_prepare(GtkDragSource *source, double x, double y, gpointer user) {
+/* A row drags its track, and in a playlist its entry too. */
+static gboolean on_drag_prepare(gpointer user, drag_item *item) {
   row *r = user;
-  if (!r->track || !r->track->entry_uid[0] || !showing_playlist()) return NULL;
-  GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(source));
-  GdkPaintable *icon = gtk_widget_paintable_new(widget);
-  gtk_drag_source_set_icon(source, icon, (int)x, (int)y);
-  g_object_unref(icon);
-  return gdk_content_provider_new_typed(G_TYPE_STRING, r->track->entry_uid);
+  if (!r->track) return FALSE;
+  item->kind = DRAG_TRACK;
+  g_strlcpy(item->uid, r->track->uid, sizeof item->uid);
+  if (showing_playlist()) g_strlcpy(item->entry, r->track->entry_uid, sizeof item->entry);
+  return TRUE;
+}
+
+/* The playlist entry being dragged, if it's one of the shown playlist's, else NULL. */
+static const char *dragged_entry(GtkDropTarget *target) {
+  const drag_item *item = drag_current();
+  if (!showing_playlist() || !drag_from_us(target) || item->kind != DRAG_TRACK || !item->entry[0]) return NULL;
+  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(s.store)); i < n; i++)
+    if (!strcmp(track_at(i)->entry_uid, item->entry)) return item->entry;
+  return NULL;
 }
 
 /* Whether a drop at y lands below the row's middle, i.e. after it. */
@@ -183,7 +192,7 @@ static void mark_drop(GtkDropTarget *target, int where) {
 static GdkDragAction on_drop_motion(GtkDropTarget *target, double x, double y, gpointer user) {
   (void)x;
   row *r = user;
-  if (!r->track || !showing_playlist()) return 0;
+  if (!r->track || !dragged_entry(target)) return 0; /* nothing else can be dropped in a track list */
   mark_drop(target, drop_below(target, y) ? 1 : -1);
   return GDK_ACTION_MOVE;
 }
@@ -196,14 +205,11 @@ static void on_drop_leave(GtkDropTarget *target, gpointer user) {
 static gboolean on_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer user) {
   (void)x;
   row *r = user;
+  (void)value;
   mark_drop(target, 0);
-  if (!r->track || !r->item || !showing_playlist() || !G_VALUE_HOLDS_STRING(value)) return FALSE;
-  const char *dragged = g_value_get_string(value);
   /* Only this playlist's entries: not text dragged in from elsewhere. */
-  gboolean ours = FALSE;
-  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(s.store)); dragged && i < n && !ours; i++)
-    ours = !strcmp(track_at(i)->entry_uid, dragged);
-  if (!ours) return FALSE;
+  const char *dragged = r->track && r->item ? dragged_entry(target) : NULL;
+  if (!dragged) return FALSE;
 
   /* Copies: moving reloads the list, and these with it. */
   char entry[MC_UID_STRLEN], after[MC_UID_STRLEN] = "";
@@ -256,11 +262,8 @@ static void row_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpoi
   g_signal_connect(click, "pressed", G_CALLBACK(on_row_menu), r);
   gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
 
-  GtkDragSource *drag = gtk_drag_source_new();
-  gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE);
-  g_signal_connect(drag, "prepare", G_CALLBACK(on_drag_prepare), r);
-  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(drag));
-  GtkDropTarget *drop = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_MOVE);
+  drag_source_new(box, on_drag_prepare, r);
+  GtkDropTarget *drop = drag_target_new(GDK_ACTION_MOVE);
   g_signal_connect(drop, "motion", G_CALLBACK(on_drop_motion), r);
   g_signal_connect(drop, "leave", G_CALLBACK(on_drop_leave), r);
   g_signal_connect(drop, "drop", G_CALLBACK(on_drop), r);

@@ -57,6 +57,10 @@ static const char css[] =
   ".album-grid > child { padding: 8px; border-radius: 12px; }"
   ".track-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
   ".track-list > row.drop-below { box-shadow: inset 0 -2px @accent_bg_color; }"
+  /* Where a dragged track or album would go (drag.h): onto a playlist or group, or beside an album. */
+  ".drop-into { box-shadow: inset 0 0 0 2px @accent_bg_color; border-radius: 8px; }"
+  ".album-grid > child > .drop-before { box-shadow: -10px 0 0 -7px @accent_bg_color; }"
+  ".album-grid > child > .drop-after { box-shadow: 10px 0 0 -7px @accent_bg_color; }"
   ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }"
   ".now-playing .shuffle:checked { color: @accent_color; }"
   ".pair-code { font-size: 20pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
@@ -703,6 +707,45 @@ void app_play_album(app *a, int start) {
   if (count && a->lib && mc_library_record_opened(a->lib, kind, album->uid) == MC_OK) recents_refresh(a);
 }
 
+void app_play_album_group(app *a, app_group_play how) {
+  GtkWidget *grid = album_groups_album_grid();
+  const char *group = album_groups_open_group();
+  int albums = 0;
+  while (grid && album_grid_uid_at(grid, albums)) albums++;
+  if (!a->lib || !albums) return;
+  int *order = g_new(int, albums);
+  for (int i = 0; i < albums; i++) order[i] = i;
+  for (int i = albums - 1; how == APP_PLAY_SHUFFLE_ALBUMS && i > 0; i--) { /* Fisher-Yates */
+    int j = g_random_int_range(0, i + 1), t = order[i];
+    order[i] = order[j];
+    order[j] = t;
+  }
+  GArray *queue = g_array_new(FALSE, FALSE, sizeof(playback_track));
+  mc_track_list **lists = g_new0(mc_track_list *, albums);
+  for (int k = 0; k < albums; k++) {
+    const char *uid = album_grid_uid_at(grid, order[k]);
+    if (!uid || mc_library_list_album_tracks(a->lib, uid, &lists[k]) != MC_OK) continue;
+    for (int i = 0; i < lists[k]->count; i++) {
+      const mc_track_info *t = &lists[k]->items[i];
+      if (!t->path) continue;
+      playback_track p = {t->uid, t->path, t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED), t->artist,
+                          t->album, t->cover_dir, t->duration_ms};
+      g_array_append_val(queue, p);
+    }
+  }
+  int count = (int)queue->len;
+  if (count) {
+    set_shuffle(a, how == APP_PLAY_SHUFFLE_TRACKS);
+    playback_play((playback_track *)(void *)queue->data, count, how == APP_PLAY_SHUFFLE_TRACKS ? -1 : 0);
+  }
+  g_array_free(queue, TRUE);
+  for (int k = 0; k < albums; k++)
+    if (lists[k]) mc_track_list_free(lists[k]);
+  g_free(lists);
+  g_free(order);
+  if (count && group && mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) recents_refresh(a);
+}
+
 /* --- Albums, playlists and tracks --- */
 
 /* The grid whose selection the track list shows: on Album groups, the open group's albums
@@ -794,18 +837,43 @@ static void playlist_failed(app *a, const char *heading) {
   adw_dialog_present(alert, GTK_WIDGET(a->win));
 }
 
+/* A change to the shown playlist's tracks puts it first in the recents, as adding to one does. */
+static void playlist_changed(app *a) {
+  AlbumItem *playlist = track_list_album();
+  if (playlist && playlist->is_playlist) mc_library_record_opened(a->lib, MC_RECENT_PLAYLIST, playlist->uid);
+}
+
 static void on_track_remove(void *user, const char *entry_uid) {
   app *a = user;
-  if (mc_playlist_remove(a->lib, entry_uid) != MC_OK)
-    playlist_failed(a, mc_str(MC_STR_PLAYLIST_REMOVE_FAILED));
+  if (mc_playlist_remove(a->lib, entry_uid) != MC_OK) playlist_failed(a, mc_str(MC_STR_PLAYLIST_REMOVE_FAILED));
+  else playlist_changed(a);
   app_reload_library(a);
 }
 
 static void on_track_move(void *user, const char *entry_uid, const char *after_entry_uid) {
   app *a = user;
-  if (mc_playlist_move(a->lib, entry_uid, after_entry_uid) != MC_OK)
-    playlist_failed(a, mc_str(MC_STR_PLAYLIST_MOVE_FAILED));
+  if (mc_playlist_move(a->lib, entry_uid, after_entry_uid) != MC_OK) playlist_failed(a, mc_str(MC_STR_PLAYLIST_MOVE_FAILED));
+  else playlist_changed(a);
   app_reload_library(a);
+}
+
+/* A track dragged onto a manual playlist's tile is added to it (drag.h). */
+static GdkDragAction on_playlist_drop_over(void *user, AlbumItem *target, const drag_item *item) {
+  (void)user;
+  return item->kind == DRAG_TRACK && target->is_playlist && !target->is_smart ? GDK_ACTION_COPY : 0;
+}
+
+static gboolean on_playlist_dropped(void *user, AlbumItem *target, const drag_item *item, gboolean after) {
+  (void)after;
+  app *a = user;
+  if (!a->lib || !on_playlist_drop_over(a, target, item)) return FALSE;
+  if (mc_playlist_append(a->lib, target->uid, item->uid, NULL) != MC_OK) {
+    playlist_failed(a, mc_str(MC_STR_PLAYLIST_ADD_FAILED));
+    return FALSE;
+  }
+  mc_library_record_opened(a->lib, MC_RECENT_PLAYLIST, target->uid);
+  app_reload_library(a);
+  return TRUE;
 }
 
 static void on_playlist_rename(void *user) {
@@ -1003,6 +1071,7 @@ static GtkWidget *build_albums(app *a) {
   a->playlists = GTK_STACK(playlists);
   gtk_stack_add_named(a->playlists, no_playlists, "none");
   a->playlist_grid = album_grid_new(mc_str(MC_STR_SECTION_PLAYLISTS), on_album_changed, a);
+  album_grid_set_drop(a->playlist_grid, on_playlist_drop_over, on_playlist_dropped, a);
   GtkEventController *keys = gtk_shortcut_controller_new();
   const guint playlist_keys[] = {GDK_KEY_Delete, GDK_KEY_KP_Delete, GDK_KEY_F2};
   for (size_t i = 0; i < G_N_ELEMENTS(playlist_keys); i++)

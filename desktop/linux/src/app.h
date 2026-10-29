@@ -65,6 +65,17 @@ GtkWidget *app_list_header(const char *title, const char *tooltip, const char *a
  * -1 from the first track, which shuffled is any), and puts it first in the recents. */
 void app_play_album(app *a, int start);
 
+/* How the open album group plays (album_groups.h): its albums in its order, or in a random
+ * order, each album's tracks in their own; or every track shuffled. */
+typedef enum app_group_play {
+  APP_PLAY_IN_ORDER,
+  APP_PLAY_SHUFFLE_ALBUMS,
+  APP_PLAY_SHUFFLE_TRACKS,
+} app_group_play;
+/* Plays the open album group's tracks that have a file here, as how says, and puts the group
+ * first in the recents. */
+void app_play_album_group(app *a, app_group_play how);
+
 /* Shows the album (or the playlist, if playlist) with uid selected on the Albums (or
  * Playlists) page, as picking it in Recents does. */
 void app_open(app *a, gboolean playlist, const char *uid);

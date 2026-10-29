@@ -45,7 +45,7 @@ static void test_layout(void) {
 
   CHECK_PATH(mc_track_file("Airbag", 1, 1, 1, "flac"), "01 Airbag.flac");
   CHECK_PATH(mc_track_file("Untitled", 2, 3, 7, "mp3"), "2-07 Untitled.mp3");
-  CHECK_PATH(mc_track_file("Hey Ya!", 0, 0, 0, "m4a"), "Hey Ya!.m4a");
+  CHECK_PATH(mc_track_file("Hey Ya!", 0, 0, 0, "mp3"), "Hey Ya!.mp3");
   CHECK_PATH(mc_track_file("Who/What?", 1, 1, 12, "flac"), "12 Who_What_.flac");
   CHECK_PATH(mc_track_file(NULL, 0, 0, 0, "flac"), "Untitled.flac");
 }

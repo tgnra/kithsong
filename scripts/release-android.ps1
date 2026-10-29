@@ -7,8 +7,8 @@
 #
 # Signs with the keystore at $env:KITHSONG_KEYSTORE ($env:KITHSONG_KEYSTORE_PASSWORD,
 # $env:KITHSONG_KEY_ALIAS, $env:KITHSONG_KEY_PASSWORD); without it the outputs are unsigned.
-# Bakes in $env:KITHSONG_CONTACT, $env:KITHSONG_ACOUSTID_KEY, $env:KITHSONG_LASTFM_KEY and
-# $env:KITHSONG_LASTFM_SECRET when they're set. JAVA_HOME and ANDROID_HOME as for
+# Bakes in $env:KITHSONG_CONTACT, $env:KITHSONG_LASTFM_KEY and $env:KITHSONG_LASTFM_SECRET
+# when they're set. JAVA_HOME and ANDROID_HOME as for
 # android\scripts\android.ps1.
 $ErrorActionPreference = 'Stop'
 
@@ -20,7 +20,6 @@ $signed = [bool]$env:KITHSONG_KEYSTORE
 if ($signed) { $env:KITHSONG_KEYSTORE = (Resolve-Path $env:KITHSONG_KEYSTORE).Path }
 else { Write-Warning 'KITHSONG_KEYSTORE is not set; the APKs and AABs will be unsigned.' }
 if (-not $env:KITHSONG_CONTACT) { Write-Warning 'KITHSONG_CONTACT is not set; MusicBrainz may block this build.' }
-if (-not $env:KITHSONG_ACOUSTID_KEY) { Write-Warning 'KITHSONG_ACOUSTID_KEY is not set; fingerprinting will be off in this build.' }
 if (-not ($env:KITHSONG_LASTFM_KEY -and $env:KITHSONG_LASTFM_SECRET)) { Write-Warning 'KITHSONG_LASTFM_KEY or KITHSONG_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build.' }
 
 # android.ps1 changes directory; keep the caller's.
@@ -28,7 +27,7 @@ Push-Location
 try {
     & "$root\android\scripts\android.ps1" gradle --no-daemon `
         :app:assembleRelease :app:bundleRelease :wear:assembleRelease :wear:bundleRelease `
-        "-PkithsongContact=$env:KITHSONG_CONTACT" "-PkithsongAcoustidKey=$env:KITHSONG_ACOUSTID_KEY" `
+        "-PkithsongContact=$env:KITHSONG_CONTACT" `
         "-PkithsongLastfmKey=$env:KITHSONG_LASTFM_KEY" "-PkithsongLastfmSecret=$env:KITHSONG_LASTFM_SECRET"
 
     if ($LASTEXITCODE) { Write-Error "Gradle failed (exit $LASTEXITCODE)" }

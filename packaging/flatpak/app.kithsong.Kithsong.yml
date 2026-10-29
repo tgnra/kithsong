@@ -17,7 +17,7 @@ finish-args:
   - --device=dri
   # miniaudio plays through PulseAudio (PipeWire's, on most systems).
   - --socket=pulseaudio
-  # LAN sync and mDNS discovery, MusicBrainz, AcoustID and cover art.
+  # LAN sync and mDNS discovery, MusicBrainz and cover art.
   - --share=network
   # The library defaults to the Music folder, and the tagger writes into it. Folders
   # elsewhere come in through the file chooser portal.
@@ -31,7 +31,7 @@ modules:
       build-args:
         - --share=network
     build-commands:
-      # secrets.local.cmake, written by the release script, sets the contact and AcoustID key.
+      # secrets.local.cmake, written by the release script, sets the contact and the Last.fm key and secret.
       - >-
         cmake -S . -B _build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/app
         -DKITHSONG_BUILD_TESTS=OFF

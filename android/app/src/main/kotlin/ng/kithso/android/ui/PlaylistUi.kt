@@ -328,13 +328,6 @@ fun PlaylistSheets(
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
                     add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
                     if (here != null) add(here)
-                    if (deleter != null) {
-                        add(SheetAction(stringResource(R.string.delete_from_library_menu), Icons.Delete) {
-                            actions.dialog = PlaylistActions.Dialog.DeleteFromLibrary(
-                                Deletion(Deletion.Kind.Artist, artist.uid, artist.name),
-                            )
-                        })
-                    }
                 },
             )
         }

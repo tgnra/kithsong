@@ -1,23 +1,21 @@
 # API keys and contact info
 
-The app talks to four online services. Two of them need credentials that you, as the person
-building the app, register for once and bake into every build:
+The app talks to three online services. Last.fm needs credentials that you, as the person
+building the app, register for once and bake into every build, and MusicBrainz needs a contact:
 
 | Service | What you need | Build setting | State in the code |
 |---------|---------------|---------------|-------------------|
 | MusicBrainz (and the Cover Art Archive) | no key; a contact URL or email for the User-Agent | `KITHSONG_CONTACT` | used by the importer on every platform |
 | Last.fm | an API key **and** a shared secret | `KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET` (or a `last.fm.api` file) | done: sign-in in Settings on Windows, Linux and Android; every platform sends plays |
-| AcoustID | an *application* (client) key | `KITHSONG_ACOUSTID_KEY` | **not implemented**: the key is plumbed through the build but nothing reads it |
 | iTunes Search (cover art fallback) | nothing | - | used by the importer |
 
 All of these are CMake cache variables, declared in [`CMakeLists.txt`](../CMakeLists.txt)
-and [`core/CMakeLists.txt`](../core/CMakeLists.txt). CMake writes the contact and the AcoustID
-key into a generated header, `build/<preset>/core/generated/config.h`, from
+and [`core/CMakeLists.txt`](../core/CMakeLists.txt). CMake writes the contact into a generated
+header, `build/<preset>/core/generated/config.h`, from
 [`core/src/config.h.in`](../core/src/config.h.in):
 
 ```c
 #define MC_CONTACT "@KITHSONG_CONTACT@"
-#define MC_ACOUSTID_KEY "@KITHSONG_ACOUSTID_KEY@"
 ```
 
 The Last.fm key and secret go into `build/<preset>/core/generated/lastfm_key.h` instead,
@@ -40,13 +38,13 @@ Values from 2 and 3 aren't stored in `CMakeCache.txt`. Configure prints which on
 nothing is read at run time.
 
 An empty value is always allowed and never breaks the build. It turns the feature off
-(Last.fm, AcoustID) or sends a placeholder contact (MusicBrainz, with a configure warning).
+(Last.fm) or sends a placeholder contact (MusicBrainz, with a configure warning).
 
 ---
 
 ## Where the values go
 
-Set the four values in one of these places. **None of them is committed**: `/build/`,
+Set the three values in one of these places. **None of them is committed**: `/build/`,
 `CMakeUserPresets.json`, `*.local.cmake` and `android/local.properties` are all in
 [`.gitignore`](../.gitignore). Never put a key in `CMakePresets.json`, `android/gradle.properties`,
 a workflow file or any other tracked file.
@@ -66,8 +64,7 @@ committed presets and adds the secrets:
       "cacheVariables": {
         "KITHSONG_CONTACT": "https://github.com/<you>/kithsong",
         "KITHSONG_LASTFM_KEY": "<32 hex chars>",
-        "KITHSONG_LASTFM_SECRET": "<32 hex chars>",
-        "KITHSONG_ACOUSTID_KEY": "<key>"
+        "KITHSONG_LASTFM_SECRET": "<32 hex chars>"
       }
     }
   ],
@@ -98,13 +95,12 @@ can point at it with `-DKITHSONG_LASTFM_FILE=<path>` (Gradle: `-PkithsongLastfmF
 
 ### Android: Gradle properties
 
-[`android/native/build.gradle.kts`](../android/native/build.gradle.kts) (lines 18-27) reads
-four Gradle project properties and passes them to CMake:
+[`android/native/build.gradle.kts`](../android/native/build.gradle.kts) (lines 22-34) reads
+three Gradle project properties and passes them to CMake:
 
 | Gradle property | CMake variable |
 |-----------------|----------------|
 | `kithsongContact` | `KITHSONG_CONTACT` |
-| `kithsongAcoustidKey` | `KITHSONG_ACOUSTID_KEY` |
 | `kithsongLastfmKey` | `KITHSONG_LASTFM_KEY` |
 | `kithsongLastfmSecret` | `KITHSONG_LASTFM_SECRET` |
 
@@ -122,7 +118,6 @@ elsewhere):
 kithsongContact=https://github.com/<you>/kithsong
 kithsongLastfmKey=<32 hex chars>
 kithsongLastfmSecret=<32 hex chars>
-kithsongAcoustidKey=<key>
 ```
 
 Not `android/gradle.properties`: that file is tracked. Not `android/local.properties`
@@ -131,8 +126,8 @@ values there.
 
 ### Release builds: environment variables and GitHub secrets
 
-The release scripts read `KITHSONG_CONTACT`, `KITHSONG_ACOUSTID_KEY`, `KITHSONG_LASTFM_KEY`
-and `KITHSONG_LASTFM_SECRET` from the environment and warn about any that are missing:
+The release scripts read `KITHSONG_CONTACT`, `KITHSONG_LASTFM_KEY` and `KITHSONG_LASTFM_SECRET`
+from the environment and warn about any that are missing:
 
 - [`scripts/release-windows.ps1`](../scripts/release-windows.ps1) turns them into `-D` options.
 - [`scripts/release-linux.sh`](../scripts/release-linux.sh) writes them to
@@ -144,8 +139,8 @@ and `KITHSONG_LASTFM_SECRET` from the environment and warn about any that are mi
 
 The Last.fm pair is only passed when **both** are set.
 
-In CI, [`.github/workflows/release.yml`](../.github/workflows/release.yml) (lines 19-23) maps
-four repository secrets of the same names into the environment. Set them with `gh secret set`;
+In CI, [`.github/workflows/release.yml`](../.github/workflows/release.yml) (lines 19-22) maps
+three repository secrets of the same names into the environment. Set them with `gh secret set`;
 see [RELEASING.md](RELEASING.md), step 4.
 
 ---
@@ -176,7 +171,7 @@ Application name/<version> ( contact-email )
 
   That gives e.g. `Kithsong/0.1.0 ( https://github.com/you/kithsong )`, which is the
   recommended format. It's the one HTTP client for the whole core, so the same header also
-  goes to the Cover Art Archive, iTunes, Last.fm and (later) AcoustID.
+  goes to the Cover Art Archive, iTunes and Last.fm.
 - **Rate limit**: [`core/src/tagger/musicbrainz.c`](../core/src/tagger/musicbrainz.c) line 26
   spaces requests 1.1 s apart, shared across every thread in the process. On a 503 it retries up
   to 3 times, waiting 2, 4 and 8 s (lines 39-45). Nothing to change here.
@@ -351,107 +346,6 @@ To try it without a Last.fm account at all, Libre.fm speaks the same API and tak
 
 ---
 
-## AcoustID fingerprinting
-
-### What it is and how it would fit
-
-[AcoustID](https://acoustid.org) identifies a recording by **how it sounds**, not by its tags.
-[Chromaprint](https://github.com/acoustid/chromaprint) decodes about the first two minutes of
-the audio and computes a compact fingerprint. The AcoustID web service matches it against its
-database and returns AcoustID track ids, each linked to one or more **MusicBrainz recording
-ids**. From a recording id, the existing MusicBrainz code can find the releases it's on.
-
-In this app's importer ([tagging-rules.md](tagging-rules.md), step 3 "Identify"), it's meant
-for the files that tags can't place: untagged or badly tagged files, where today the only
-clues are the file name (`03 - Artist - Title.mp3`) and its length. A fingerprint hit would
-give a recording id to look up, the way a `MUSICBRAINZ_TRACKID` tag does now.
-
-### How far it's implemented: not at all, apart from the key
-
-Being specific about it:
-
-- **There is a build setting for the key.** `KITHSONG_ACOUSTID_KEY` is in `CMakeLists.txt`
-  line 42, the Gradle property `kithsongAcoustidKey`, the release scripts, CI and RELEASING.md.
-  It ends up as `MC_ACOUSTID_KEY` in `config.h` ([`core/src/config.h.in`](../core/src/config.h.in)
-  line 11).
-- **No code reads `MC_ACOUSTID_KEY`.** There's no AcoustID client, no fingerprinting, and no
-  Chromaprint or FFmpeg in `third_party/`. Chromaprint is listed under "Planned" in
-  [LICENSES.md](../LICENSES.md). [TODO.md](../TODO.md) line 53, `docs/architecture.md`
-  ("no AcoustID yet"), `docs/tagging-rules.md` (*not yet*) and the README ("planned") all
-  agree.
-- The config header comment ("empty disables fingerprinting") and the release scripts'
-  warnings ("fingerprinting will be off in this build") describe the intended behaviour. Today
-  fingerprinting is off whatever you set.
-- The Android manifests and the Flatpak manifest mention AcoustID in comments about network
-  access. That's forward-looking too.
-
-So registering a key now is optional. It costs nothing and means release builds are ready
-when the feature lands.
-
-### Getting a key
-
-1. Sign in at <https://acoustid.org/new-application> with a MusicBrainz account (recommended),
-   a Google account or OpenID.
-2. Register an application. It gives you an **application API key**. In API calls it's the
-   `client` parameter, and every call needs it.
-3. Don't confuse it with a **user API key** (the `user` parameter). That one belongs to an
-   individual AcoustID user, is needed only to *submit* new fingerprints, and must never be
-   baked into the app. Each user would enter their own. The app only needs the application
-   key for lookups.
-
-Put the key where the others go: `KITHSONG_ACOUSTID_KEY` / `kithsongAcoustidKey` /
-the `KITHSONG_ACOUSTID_KEY` secret. Like the Last.fm secret it ends up readable in the binary,
-which is normal for AcoustID client keys. Keep it out of git anyway, and re-register if it's
-abused.
-
-Service rules (<https://acoustid.org/webservice>, checked 2026-10-28):
-
-- **No more than 3 requests per second.** The implementation should add a limiter for it, as
-  `musicbrainz.c` has (`mc_ratelimit_init(&rate, 334)` or a little more), shared across
-  threads.
-- The lookup endpoint is `https://api.acoustid.org/v2/lookup` with `client`, `duration` and
-  `fingerprint`. Add `meta=recordingids` to get MusicBrainz recording ids. `recordings`,
-  `releasegroups` and `compress` add more metadata.
-- The free service is for **non-commercial use only**. Commercial use goes through
-  acoustid.biz. Tell the AcoustID team in advance if you expect a lot of traffic.
-
-Each AcoustID hit will usually be followed by MusicBrainz lookups, and those stay under the 1
-request per second MusicBrainz limit. So in practice MusicBrainz, not AcoustID, sets the pace.
-
-### Chromaprint and its license
-
-There are two ways to get fingerprints:
-
-- **Link the Chromaprint library** (`libchromaprint`, C API `chromaprint_feed()` and so on)
-  and feed it PCM from the decoders the core already has (miniaudio, dr_libs, opusfile).
-  Doing your own decoding means fpcalc's FFmpeg isn't needed.
-- **Run `fpcalc`**, Chromaprint's command-line tool, which prints `DURATION=` and
-  `FINGERPRINT=`. It's simple, but it's an extra executable to ship on each platform, it's
-  awkward on Android, and fpcalc decodes through FFmpeg.
-
-Licensing (from Chromaprint's
-[LICENSE.md](https://github.com/acoustid/chromaprint/blob/master/LICENSE.md), checked
-2026-10-28):
-
-- Chromaprint's own code is **MIT**, but it includes parts of FFmpeg under **LGPL-2.1**, so
-  "as a whole, Chromaprint should be therefore considered to be licensed under the LGPL 2.1
-  license". This is what [LICENSES.md](../LICENSES.md) records: LGPL-2.1, MIT for parts.
-- The **FFT backend** matters too. **FFTW3 is GPL** and makes the resulting Chromaprint
-  binary GPL, so avoid it. KissFFT (bundled, permissive) is the safe choice. FFmpeg's FFT
-  keeps things at LGPL if FFmpeg is built without its GPL parts. On Apple there's vDSP.
-- This project links everything statically (see `BUILD_SHARED_LIBS OFF` in `CMakeLists.txt`).
-  LGPL-2.1 allows static linking only if you let users relink, e.g. by shipping the app's
-  object files. Otherwise link Chromaprint dynamically. LICENSES.md already says "link
-  dynamically or provide relinkable objects". Decide this before adding the dependency, then
-  move Chromaprint from "Planned" to the main table in LICENSES.md and add its license text
-  to the shipped licenses.
-- If you ship `fpcalc` instead, its FFmpeg build's license (LGPL or GPL, depending on how it
-  was configured) comes along with it.
-
-(This is a summary, not legal advice.)
-
----
-
 ## Checklist
 
 - [ ] **Contact**: choose a long-lived URL or email. Set `KITHSONG_CONTACT` locally
@@ -469,9 +363,4 @@ Licensing (from Chromaprint's
       (and the same for `libkithsong_jni.so` in the APK).
 - [ ] Run `manual_scrobble` against scratch folders. It should end with
       "Scrobbled as <user>", and the play should show on your Last.fm profile.
-- [ ] **AcoustID** (optional until it's implemented): register at
-      <https://acoustid.org/new-application>. Set `KITHSONG_ACOUSTID_KEY` /
-      `kithsongAcoustidKey` / the secret. It's the application key, never a user key.
-- [ ] `git status` shows no key anywhere. `gh secret list` shows all four.
-- [ ] Before AcoustID work starts: decide between linking Chromaprint dynamically and
-      shipping relinkable objects, use KissFFT (not FFTW3), and update LICENSES.md.
+- [ ] `git status` shows no key anywhere. `gh secret list` shows all three.

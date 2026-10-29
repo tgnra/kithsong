@@ -134,9 +134,7 @@ static void extension(const char *path, char out[16]) {
 
 /* The audio extensions import takes; a received file must have one of them. */
 static int audio_ext(const char *ext) {
-  static const char *const exts[] = {"flac", "mp3", "m4a", "mp4", "aac", "ogg", "oga",
-                                     "opus", "wav", "aif", "aiff", "wv",  "ape", "mpc",
-                                     "wma",  "dsf", NULL};
+  static const char *const exts[] = {"flac", "mp3", "opus", "wav", "aif", "aiff", NULL};
   for (const char *const *e = exts; *e; e++)
     if (!strcmp(ext, *e)) return 1;
   return 0;

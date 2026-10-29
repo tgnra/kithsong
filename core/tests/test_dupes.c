@@ -280,7 +280,6 @@ static void test_quality(void) {
   mc_audio_quality mp3_320 = {"mp3", 320, 44100, 0}, mp3_128 = {"mp3", 128, 44100, 0};
   mc_audio_quality mp3_245 = {"mp3", 245, 44100, 0}, mp3_256 = {"mp3", 256, 44100, 0};
   mc_audio_quality opus_160 = {"opus", 160, 48000, 0}, mp3_192 = {"mp3", 192, 44100, 0};
-  mc_audio_quality alac = {"m4a", 800, 44100, 16}, aac = {"m4a", 256, 44100, 0};
   mc_audio_quality unknown = {"mp3", 0, 0, 0};
 
   CHECK(mc_quality_compare(&flac16, &mp3_320) > 0); /* lossless beats lossy */
@@ -291,8 +290,6 @@ static void test_quality(void) {
   CHECK(mc_quality_compare(&mp3_320, &mp3_128) > 0);
   CHECK(mc_quality_compare(&mp3_256, &mp3_245) == 0); /* within 10%: VBR noise */
   CHECK(mc_quality_compare(&opus_160, &mp3_192) > 0); /* codec-aware */
-  CHECK(mc_quality_is_lossless(&alac) && !mc_quality_is_lossless(&aac));
-  CHECK(mc_quality_compare(&alac, &aac) > 0);
   CHECK(mc_quality_compare(&unknown, &mp3_128) == 0); /* can't tell: not better */
 }
 

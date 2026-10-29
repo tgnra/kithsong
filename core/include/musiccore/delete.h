@@ -1,5 +1,6 @@
-/* Deleting tracks, albums and artists from the library, and taking them back when their
- * files come back out of the Recycle Bin or trash.
+/* Deleting tracks and albums from the library, and taking them back when their files come
+ * back out of the Recycle Bin or trash. An artist isn't deleted as such: it goes when its
+ * last track does.
  *
  * Deleting moves each track's files on this device (the original, and any copies or
  * transcodes sync brought) to the Recycle Bin or trash with mc_trash(), then removes its
@@ -50,9 +51,7 @@ typedef struct mc_library mc_library;
 
 typedef enum mc_delete_kind {
   MC_DELETE_TRACKS,  /* the tracks named */
-  MC_DELETE_ALBUMS,  /* every track of the albums named */
-  MC_DELETE_ARTISTS  /* every track credited to the artists named, and every track of the
-                      * albums they're the album artist of */
+  MC_DELETE_ALBUMS  /* every track of the albums named */
 } mc_delete_kind;
 
 typedef struct mc_delete_plan mc_delete_plan;

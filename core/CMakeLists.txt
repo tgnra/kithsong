@@ -1,5 +1,5 @@
 set(KITHSONG_CONTACT "" CACHE STRING
-  "Contact URL or email sent in the MusicBrainz/AcoustID User-Agent (required by their terms)")
+  "Contact URL or email sent in the MusicBrainz User-Agent (required by their terms)")
 if(KITHSONG_CONTACT STREQUAL "")
   message(WARNING "KITHSONG_CONTACT is not set. MusicBrainz may block requests without contact "
                   "info; configure with -DKITHSONG_CONTACT=<url or email>.")

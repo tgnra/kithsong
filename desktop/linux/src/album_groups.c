@@ -18,6 +18,7 @@ static struct {
   GtkWidget *albums_stack; /* "empty" status page | "albums" */
   GtkWidget *name, *more;  /* the open group's header: its name and menu */
   GtkWidget *reshuffle;    /* in place of the menu, for a smart group in random order */
+  GtkWidget *play;         /* Play, Shuffle albums and Shuffle tracks, under the header */
   char open[MC_UID_STRLEN];       /* the open group, or "" */
   gboolean smart;                 /* it's a smart group: nothing to rename, delete or remove */
   char menu_album[MC_UID_STRLEN]; /* the album a menu was opened on */
@@ -66,8 +67,9 @@ static void on_add(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   app *a = user;
   if (!a->lib || !v.menu_album[0]) return;
-  if (mc_album_group_add(a->lib, g_variant_get_string(param, NULL), v.menu_album) != MC_OK)
-    fail(mc_str(MC_STR_ALBUM_GROUP_ADD_FAILED));
+  const char *group = g_variant_get_string(param, NULL);
+  if (mc_album_group_add(a->lib, group, v.menu_album) != MC_OK) fail(mc_str(MC_STR_ALBUM_GROUP_ADD_FAILED));
+  else mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group); /* changed: first in the recents */
   app_reload_library(a);
 }
 
@@ -84,8 +86,8 @@ static void on_remove(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)param;
   app *a = user;
   if (!a->lib || !v.menu_album[0] || !v.menu_group[0]) return;
-  if (mc_album_group_remove(a->lib, v.menu_group, v.menu_album) != MC_OK)
-    fail(mc_str(MC_STR_ALBUM_GROUP_REMOVE_FAILED));
+  if (mc_album_group_remove(a->lib, v.menu_group, v.menu_album) != MC_OK) fail(mc_str(MC_STR_ALBUM_GROUP_REMOVE_FAILED));
+  else mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, v.menu_group);
   app_reload_library(a);
 }
 
@@ -93,6 +95,7 @@ static void move(app *a, const char *after) {
   if (!a->lib || !v.menu_album[0] || !v.menu_group[0]) return;
   if (mc_album_group_move(a->lib, v.menu_group, v.menu_album, after[0] ? after : NULL) != MC_OK)
     fail(mc_str(MC_STR_ALBUM_GROUP_MOVE_FAILED));
+  else mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, v.menu_group);
   app_reload_library(a);
 }
 
@@ -257,6 +260,14 @@ static gboolean reload_open(app *a) {
   int n = album_grid_reload_group_albums(v.albums, a->lib, v.open, &found);
   if (!found) return FALSE;
   gtk_stack_set_visible_child_name(GTK_STACK(v.albums_stack), n ? "albums" : v.smart ? "smart-empty" : "empty");
+  gboolean here = FALSE;
+  for (int i = 0; i < n && !here; i++) {
+    AlbumItem *album = album_grid_find(v.albums, album_grid_uid_at(v.albums, i));
+    here = album && album->here;
+    if (album) g_object_unref(album);
+  }
+  gtk_widget_set_visible(v.play, n > 0);
+  gtk_widget_set_sensitive(v.play, here);
   char *name = group_name(v.open);
   if (*name) gtk_label_set_text(GTK_LABEL(v.name), name); /* renamed, maybe */
   g_free(name);
@@ -352,6 +363,93 @@ static void on_album_changed(void *user) {
   if (v.album_changed) v.album_changed(user);
 }
 
+/* --- Drops (drag.h) --- */
+
+/* An album dragged onto a manual group's tile is added to it. */
+static GdkDragAction on_group_drop_over(void *user, AlbumItem *target, const drag_item *item) {
+  (void)user;
+  return item->kind == DRAG_ALBUM && target->is_group && !target->is_smart ? GDK_ACTION_COPY : 0;
+}
+
+static gboolean on_group_dropped(void *user, AlbumItem *target, const drag_item *item, gboolean after) {
+  (void)after;
+  app *a = user;
+  if (!a->lib || !on_group_drop_over(a, target, item)) return FALSE;
+  if (mc_album_group_add(a->lib, target->uid, item->uid) != MC_OK) {
+    fail(mc_str(MC_STR_ALBUM_GROUP_ADD_FAILED));
+    return FALSE;
+  }
+  mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, target->uid);
+  app_reload_library(a);
+  return TRUE;
+}
+
+/* In a manual group, its own albums move to before or after the one they're dropped on. */
+static GdkDragAction on_album_drop_over(void *user, AlbumItem *target, const drag_item *item) {
+  (void)user;
+  (void)target;
+  return v.open[0] && !v.smart && item->kind == DRAG_ALBUM && album_grid_index(v.albums, item->uid) >= 0
+           ? GDK_ACTION_MOVE
+           : 0;
+}
+
+static gboolean on_album_dropped(void *user, AlbumItem *target, const drag_item *item, gboolean after) {
+  app *a = user;
+  if (!a->lib || !on_album_drop_over(a, target, item)) return FALSE;
+  char group[MC_UID_STRLEN], to_after[MC_UID_STRLEN] = "";
+  g_strlcpy(group, v.open, sizeof group);
+  int at = album_grid_index(v.albums, target->uid);
+  const char *before = after ? target->uid : album_grid_uid_at(v.albums, at - 1);
+  if (before) g_strlcpy(to_after, before, sizeof to_after);
+  /* Dropped where it is already: on its own tile, or the gap either side of it. */
+  if (!strcmp(target->uid, item->uid) || !strcmp(to_after, item->uid)) return FALSE;
+  if (mc_album_group_move(a->lib, group, item->uid, to_after[0] ? to_after : NULL) != MC_OK) {
+    fail(mc_str(MC_STR_ALBUM_GROUP_MOVE_FAILED));
+    return FALSE;
+  }
+  mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group);
+  app_reload_library(a);
+  return TRUE;
+}
+
+/* --- Playing a group --- */
+
+static void on_play(GtkButton *button, gpointer user) {
+  (void)user;
+  app_play_album_group(v.a, (app_group_play)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "how")));
+}
+
+/* A button with an icon and a label, a third of the row, as the track list's Play and
+ * Shuffle are half of theirs. */
+static GtkWidget *play_button(const char *icon, enum mc_str_id label, app_group_play how) {
+  GtkWidget *content = adw_button_content_new();
+  adw_button_content_set_icon_name(ADW_BUTTON_CONTENT(content), icon);
+  adw_button_content_set_label(ADW_BUTTON_CONTENT(content), mc_str(label));
+  GtkWidget *b = gtk_button_new();
+  gtk_button_set_child(GTK_BUTTON(b), content);
+  gtk_widget_set_hexpand(b, TRUE);
+  g_object_set_data(G_OBJECT(b), "how", GINT_TO_POINTER(how));
+  g_signal_connect(b, "clicked", G_CALLBACK(on_play), NULL);
+  return b;
+}
+
+/* Play, the suggested action, then Shuffle albums and Shuffle tracks, across the page. */
+static GtkWidget *build_play(void) {
+  v.play = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_box_set_homogeneous(GTK_BOX(v.play), TRUE);
+  gtk_widget_set_margin_start(v.play, 18);
+  gtk_widget_set_margin_end(v.play, 18);
+  gtk_widget_set_margin_top(v.play, 12);
+  gtk_widget_set_margin_bottom(v.play, 6);
+  GtkWidget *play = play_button("media-playback-start-symbolic", MC_STR_PLAY, APP_PLAY_IN_ORDER);
+  gtk_widget_add_css_class(play, "suggested-action");
+  gtk_box_append(GTK_BOX(v.play), play);
+  gtk_box_append(GTK_BOX(v.play), play_button("media-playlist-shuffle-symbolic", MC_STR_SHUFFLE_ALBUMS, APP_PLAY_SHUFFLE_ALBUMS));
+  gtk_box_append(GTK_BOX(v.play), play_button("media-playlist-shuffle-symbolic", MC_STR_SHUFFLE_TRACKS, APP_PLAY_SHUFFLE_TRACKS));
+  gtk_widget_set_visible(v.play, FALSE); /* until a group with albums opens */
+  return v.play;
+}
+
 /* --- The page --- */
 
 static GtkWidget *status_page(const char *icon, enum mc_str_id title, enum mc_str_id text) {
@@ -395,6 +493,7 @@ static GtkWidget *build_group_page(app *a) {
 
   v.albums = album_grid_new(mc_str(MC_STR_ALBUM_GROUP), on_album_changed, a);
   album_grid_set_menu(v.albums, on_album_menu, a);
+  album_grid_set_drop(v.albums, on_album_drop_over, on_album_dropped, a);
   v.albums_stack = gtk_stack_new();
   gtk_widget_set_vexpand(v.albums_stack, TRUE);
   gtk_stack_add_named(GTK_STACK(v.albums_stack),
@@ -408,6 +507,7 @@ static GtkWidget *build_group_page(app *a) {
   GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_add_css_class(page, "view"); /* the header on the grid's background */
   gtk_box_append(GTK_BOX(page), header);
+  gtk_box_append(GTK_BOX(page), build_play());
   gtk_box_append(GTK_BOX(page), v.albums_stack);
 
   GtkEventController *keys = gtk_shortcut_controller_new();
@@ -443,6 +543,7 @@ GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*na
   v.groups = album_grid_new(mc_str(MC_STR_SECTION_ALBUM_GROUPS), NULL, NULL);
   album_grid_set_activate(v.groups, TRUE, on_group_activated, a);
   album_grid_set_menu(v.groups, on_group_menu, a);
+  album_grid_set_drop(v.groups, on_group_drop_over, on_group_dropped, a);
 
   /* The groups under a header with the page's name and New album group (+). */
   v.list_stack = gtk_stack_new();
