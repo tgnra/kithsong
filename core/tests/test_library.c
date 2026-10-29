@@ -584,7 +584,7 @@ static void smart_names(mc_library *lib, unsigned flags, char *out, size_t n, in
 
 /* MC_LIST_PLAYABLE: playlists, smart lists and recents with nothing that has a file on this
  * device are left out, by the same test that gives a track its path; and they come back as
- * soon as a file does. */
+ * soon as a file does. An empty playlist is kept, as it's waiting for tracks. */
 static void test_playable(const char *scratch) {
   char path[1024];
   snprintf(path, sizeof path, "%s/test_library_playable.d", scratch);
@@ -633,8 +633,8 @@ static void test_playable(const char *scratch) {
   char names[256];
   int hidden;
   playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
-  CHECK(strcmp(names, "All here|Partly") == 0);
-  CHECK(hidden == 2);
+  CHECK(strcmp(names, "All here|Empty|Partly") == 0);
+  CHECK(hidden == 1);
   /* The same notion as the track list's: the hidden one's tracks all have no path. */
   mc_track_list *tracks = NULL;
   CHECK(mc_library_list_playlist_tracks(lib, away, &tracks) == MC_OK && tracks && tracks->count == 3);
@@ -665,7 +665,8 @@ static void test_playable(const char *scratch) {
   CHECK(strcmp(names, "Here albums|Ones") == 0);
   CHECK(hidden == 4);
 
-  /* Recents leave the same ones out with the flag, and still fill the limit. */
+  /* Recents leave the same ones out with the flag (keeping the empty playlist), and still
+   * fill the limit. */
   const struct {
     mc_recent_kind kind;
     const char *uid;
@@ -679,16 +680,17 @@ static void test_playable(const char *scratch) {
   CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 6);
   mc_recent_list_free(recents);
   recents = NULL;
-  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 3);
-  if (recents && recents->count == 3) {
-    CHECK(strcmp(recents->items[0].uid, partly) == 0);
-    CHECK(strcmp(recents->items[1].uid, all) == 0);
-    CHECK_STR(recents->items[2].uid, "al2"); /* other kinds are kept */
+  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 4);
+  if (recents && recents->count == 4) {
+    CHECK(strcmp(recents->items[0].uid, empty) == 0);
+    CHECK(strcmp(recents->items[1].uid, partly) == 0);
+    CHECK(strcmp(recents->items[2].uid, all) == 0);
+    CHECK_STR(recents->items[3].uid, "al2"); /* other kinds are kept */
   }
   mc_recent_list_free(recents);
   recents = NULL;
   CHECK(mc_library_list_recents(lib, 2, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 2);
-  if (recents && recents->count == 2) CHECK(strcmp(recents->items[1].uid, all) == 0);
+  if (recents && recents->count == 2) CHECK(strcmp(recents->items[1].uid, partly) == 0);
   mc_recent_list_free(recents);
 
   /* A file arriving (sync, an import) brings a playlist back; one going (a delete, sync
@@ -697,15 +699,30 @@ static void test_playable(const char *scratch) {
         SQLITE_OK);
   CHECK(exec(db, "DELETE FROM files WHERE uid = 'f1'") == SQLITE_OK);
   playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
-  CHECK(strcmp(names, "Away|Partly") == 0);
-  CHECK(hidden == 2);
+  CHECK(strcmp(names, "Away|Empty|Partly") == 0);
+  CHECK(hidden == 1);
   smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
   CHECK(strcmp(names, "Away albums|Fours|Here albums") == 0);
   /* A track that's gone takes its entries with it. */
   CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't3'") == SQLITE_OK);
   playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
-  CHECK(strcmp(names, "Away") == 0);
-  CHECK(hidden == 3);
+  CHECK(strcmp(names, "Away|Empty") == 0);
+  CHECK(hidden == 2);
+  /* The empty one is hidden once it has a track, if that track has no file here; and one
+   * whose tracks are all gone is empty, so it shows again. */
+  CHECK(mc_playlist_append(lib, empty, "t2", NULL) == MC_OK);
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't1'") == SQLITE_OK);
+  playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "All here|Away") == 0);
+  CHECK(hidden == 2);
+  /* Recents too: Away, Fours (t4 is here now), All here (empty), al2. */
+  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 4);
+  if (recents && recents->count == 4) {
+    CHECK(strcmp(recents->items[0].uid, away) == 0);
+    CHECK(strcmp(recents->items[1].uid, s_away) == 0);
+    CHECK(strcmp(recents->items[2].uid, all) == 0);
+  }
+  mc_recent_list_free(recents);
 
   CHECK(mc_library_list_playlists(NULL, MC_LIST_PLAYABLE, &lists) == MC_ERR_INVALID_ARG);
   mc_library_close(lib);

@@ -226,7 +226,8 @@ no foreign key, since a row may name any of four tables; listing leaves out rows
 is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
 `mc_library_remove_recent()` and `mc_library_clear_recents()`. With `MC_LIST_PLAYABLE`,
 listing also leaves out playlists and smart playlists with nothing to play on this device:
-no entry (or, for a smart one, no track its rule picks) has a `files` row here. The
+no entry (or, for a smart one, no track its rule picks) has a `files` row here. A playlist
+with no entries at all is kept, since it's waiting for tracks rather than missing them. The
 playlist and smart list listings take the same flag; `files` being device-local is what
 makes the answer differ between devices.
 

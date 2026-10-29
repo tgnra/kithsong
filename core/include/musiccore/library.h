@@ -124,14 +124,15 @@ void mc_track_list_free(mc_track_list *list);
 
 /* Flags for listing playlists, smart lists and recents.
  *
- * MC_LIST_PLAYABLE leaves out what has nothing to play on this device: a playlist none of
- * whose tracks has a file here (an original, or a copy or transcode sync brought), which
- * includes an empty one; a smart playlist whose rule picks no such track; a smart album group
- * with no album that has a file here. "Has a file here" is the same test that gives a
- * mc_track_info a path, which is what the track lists grey out or hide by. Views that are
- * about playing (the Playlists page, recents) pass it; pickers that are about choosing (Add to
- * playlist, a sync profile's playlists) don't, so a playlist that has nothing here yet can
- * still be added to or synced. A frontend lists again whenever files come or go (an import,
+ * MC_LIST_PLAYABLE leaves out what has nothing to play on this device: a playlist with tracks
+ * none of which has a file here (an original, or a copy or transcode sync brought); a smart
+ * playlist whose rule picks no such track; a smart album group with no album that has a file
+ * here. An empty playlist is kept, as it's waiting for tracks rather than missing them (a
+ * smart list is left out however its rule came to pick nothing). "Has a file here" is the
+ * same test that gives a mc_track_info a path, which is what the track lists grey out or
+ * hide by. Views that are about playing (the Playlists page, recents) pass it; pickers that
+ * are about choosing (Add to playlist, a sync profile's playlists) don't, so a playlist that
+ * has nothing here yet can still be added to or synced. A frontend lists again whenever files come or go (an import,
  * sync bringing or removing files, a delete), as it does for any library change. */
 #define MC_LIST_PLAYABLE 1u
 
@@ -149,7 +150,7 @@ typedef struct mc_playlist_list {
 } mc_playlist_list;
 
 /* Every playlist, by name; with MC_LIST_PLAYABLE in flags, only those with a track to play
- * here. Free with mc_playlist_list_free(). */
+ * here or no tracks at all. Free with mc_playlist_list_free(). */
 mc_status mc_library_list_playlists(mc_library *lib, unsigned flags, mc_playlist_list **out);
 void mc_playlist_list_free(mc_playlist_list *list);
 
