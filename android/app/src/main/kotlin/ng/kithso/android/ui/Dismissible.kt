@@ -130,7 +130,7 @@ fun DismissibleScreen(
                     flingBehavior = flingBehavior,
                 ),
         ) {
-            content(remember { { scope.launch { dismiss() }; Unit } })
+            content(remember { { scope.launch { dismiss() } } })
         }
     }
 }

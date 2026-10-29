@@ -10,7 +10,7 @@ import org.gradle.maven.MavenPomArtifact
 plugins {
     id("com.android.application") version "9.2.1" apply false
     id("com.android.library") version "9.2.1" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.2.21" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.4.21" apply false
 }
 
 // One version for every platform: the repo's VERSION file (see the root CMakeLists.txt).

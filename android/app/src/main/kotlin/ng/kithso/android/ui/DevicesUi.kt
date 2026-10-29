@@ -66,7 +66,7 @@ fun AddDeviceDialog(onConnect: (host: String, port: Int) -> Unit, onDismiss: () 
     var port by rememberSaveable { mutableStateOf(CoreSync.DEFAULT_PORT.toString()) }
     val portNumber = port.toIntOrNull()?.takeIf { it in 1..65535 }
     val valid = host.isNotBlank() && portNumber != null
-    val connect = { if (valid) onConnect(host.trim(), portNumber!!) }
+    val connect = { if (valid) onConnect(host.trim(), portNumber) }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     AlertDialog(
@@ -193,7 +193,7 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSetting
                 AlertDialog(
                     onDismissRequest = {},
                     title = { Text(stringResource(R.string.pair_merge_title)) },
-                    text = { MergeText(merge!!, pairing.peer, Modifier.verticalScroll(rememberScrollState())) },
+                    text = { MergeText(merge, pairing.peer, Modifier.verticalScroll(rememberScrollState())) },
                     confirmButton = {
                         TextButton(onClick = syncer::confirmMerge) { Text(stringResource(R.string.pair_merge_button)) }
                     },
