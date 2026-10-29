@@ -37,8 +37,14 @@ static void put32(FILE *f, uint32_t v) {
   put16(f, v >> 16);
 }
 
-/* Writes a zip of the n entries to path. */
-static int write_zip(const char *path, const zip_entry *e, int n) {
+/* An entry's extra field, in the central directory only. */
+typedef struct zip_extra {
+  const unsigned char *data;
+  size_t len;
+} zip_extra;
+
+/* Writes a zip of the n entries to path; extras (may be NULL) holds one per entry. */
+static int write_zip_ex(const char *path, const zip_entry *e, int n, const zip_extra *extras) {
   FILE *f = mc_fopen(path, "wb");
   if (!f) return 0;
   uint32_t *offsets = calloc((size_t)n, sizeof *offsets);
@@ -84,13 +90,14 @@ static int write_zip(const char *path, const zip_entry *e, int n) {
     put32(f, sizes[i]);
     put32(f, (uint32_t)e[i].len);
     put16(f, (unsigned)strlen(e[i].name));
-    put16(f, 0); /* extra */
+    put16(f, extras ? (unsigned)extras[i].len : 0);
     put16(f, 0); /* comment */
     put16(f, 0); /* disk */
     put16(f, 0); /* internal attributes */
     put32(f, 0); /* external attributes */
     put32(f, offsets[i]);
     fwrite(e[i].name, 1, strlen(e[i].name), f);
+    if (extras && extras[i].len) fwrite(extras[i].data, 1, extras[i].len, f);
   }
   uint32_t cd_size = (uint32_t)ftell(f) - cd;
   put32(f, 0x06054b50);
@@ -105,6 +112,10 @@ static int write_zip(const char *path, const zip_entry *e, int n) {
   free(crcs);
   free(sizes);
   return fclose(f) == 0;
+}
+
+static int write_zip(const char *path, const zip_entry *e, int n) {
+  return write_zip_ex(path, e, n, NULL);
 }
 
 /* --- Files --- */
@@ -170,6 +181,37 @@ static void path_join(char *out, size_t cap, const char *a, const char *b) {
 }
 
 /* --- Names and paths --- */
+
+/* Writes a Unicode Path extra field (0x7075) for the stored name raw into out, with the
+ * CRC-32 of raw, or of something else if stale. Returns its length. */
+static size_t unicode_path(unsigned char *out, const char *raw, const char *utf8, int stale) {
+  size_t n = strlen(utf8);
+  uint32_t crc = (uint32_t)mz_crc32(MZ_CRC32_INIT, (const unsigned char *)raw, strlen(raw));
+  out[0] = 0x75;
+  out[1] = 0x70;
+  out[2] = (unsigned char)(5 + n);
+  out[3] = 0;
+  out[4] = 1; /* version */
+  put_u32(out + 5, stale ? crc ^ 1 : crc);
+  memcpy(out + 9, utf8, n);
+  return 9 + n;
+}
+
+static void test_unicode_path(void) {
+  static const char raw[] = "Caf\x82.txt";
+  unsigned char f[64];
+  size_t n = unicode_path(f, raw, "Caf\xC3\xA9.txt", 0);
+  char *s = mc_unzip_unicode_path(f, n, raw, strlen(raw));
+  CHECK_STR(s, "Caf\xC3\xA9.txt");
+  free(s);
+  CHECK(mc_unzip_unicode_path(f, n, "Other.txt", 9) == NULL); /* the CRC-32 is of another name */
+  CHECK(mc_unzip_unicode_path(f, n - 1, raw, strlen(raw)) == NULL); /* cut short */
+  f[4] = 2;
+  CHECK(mc_unzip_unicode_path(f, n, raw, strlen(raw)) == NULL); /* an unknown version */
+  n = unicode_path(f, raw, "Caf\xC3", 0);
+  CHECK(mc_unzip_unicode_path(f, n, raw, strlen(raw)) == NULL); /* not UTF-8 */
+  CHECK(mc_unzip_unicode_path(NULL, 0, raw, strlen(raw)) == NULL);
+}
 
 static void test_names(void) {
   char *s;
@@ -277,6 +319,31 @@ static void test_extract(const char *root) {
   CHECK(!mc_file_exists(path));
   snprintf(path, sizeof path, "%s%cCaf\xC3\xA9", dest, MC_PATH_SEP);
   CHECK(count_entries(path) == 1);
+  mc_remove_tree(dest);
+
+  /* Unicode Path extra fields: an unflagged entry's UTF-8 name is taken from one whose CRC-32
+   * matches the stored name (here Shift-JIS, which would come out as CP437 junk; the field
+   * follows an extended timestamp field), and not from one left naming another (a stale
+   * CRC-32). */
+  unsigned char good[64], stale[64];
+  size_t good_len = 9; /* the timestamp: 0x5455, 5 bytes, flags and mtime */
+  memcpy(good, "\x55\x54\x05\x00\x01\x00\x00\x00\x00", good_len);
+  good_len += unicode_path(good + good_len, "\x93\xFA\x96{/03.txt", "\xE6\x97\xA5\xE6\x9C\xAC/03.txt", 0);
+  size_t stale_len = unicode_path(stale, "Caf\x82/04.txt", "Other/04.txt", 1);
+  zip_entry upaths[] = {
+      {"\x93\xFA\x96{/03.txt", text, 5, 0, 0},
+      {"Caf\x82/04.txt", text, 5, 0, 0},
+  };
+  zip_extra extras[] = {{good, good_len}, {stale, stale_len}};
+  path_join(zip, sizeof zip, root, "upath.zip");
+  path_join(dest, sizeof dest, root, "upath");
+  CHECK(write_zip_ex(zip, upaths, 2, extras));
+  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, &stats) == MC_UNZIP_OK);
+  CHECK(stats.files == 2);
+  snprintf(path, sizeof path, "%s%c\xE6\x97\xA5\xE6\x9C\xAC%c03.txt", dest, MC_PATH_SEP, MC_PATH_SEP);
+  CHECK(mc_file_exists(path));
+  snprintf(path, sizeof path, "%s%cCaf\xC3\xA9%c04.txt", dest, MC_PATH_SEP, MC_PATH_SEP);
+  CHECK(mc_file_exists(path));
   mc_remove_tree(dest);
 
   /* Over the size limit: nothing is written. */
@@ -412,6 +479,7 @@ int main(int argc, char **argv) {
   CHECK(mc_mkdirs(root) == MC_OK);
 
   test_names();
+  test_unicode_path();
   test_extract(root);
   test_import(root);
 

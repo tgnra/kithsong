@@ -22,7 +22,8 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    (`unzip.c`, miniz) into a staging folder named after it, in a temporary folder of the
    session's own that is deleted when the session is freed, then scanned like a folder, so
    its `cover.jpg` counts too. Names are UTF-8 if the entry's flag bit 11 says so, else
-   CP437; entries with an absolute path or `..` are dropped (zip slip), and so are
+   the name in its Info-ZIP Unicode Path extra field (0x7075) when that field's CRC-32
+   matches the stored name, else CP437; entries with an absolute path or `..` are dropped (zip slip), and so are
    `__MACOSX/` and `.DS_Store`. Zips over 8 GB unzipped, or bigger than the free space, are
    refused. A zip that can't be extracted shows as a failed item.
 2. **Group** files into items:

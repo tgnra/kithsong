@@ -30,7 +30,8 @@ typedef struct mc_unzip_stats {
 int mc_unzip_is_zip(const char *path);
 
 /* Extracts the zip at zip_path into dest (created if missing), keeping its folders. Entry
- * names are UTF-8 when the entry says so (general purpose flag bit 11), else CP437. Entries
+ * names are UTF-8 when the entry says so (general purpose flag bit 11); else they're taken
+ * from its Info-ZIP Unicode Path extra field when it has one that matches, else CP437. Entries
  * that are absolute or climb out with ".." are left out and counted in stats->unsafe;
  * __MACOSX/ folders and .DS_Store files are left out silently. On Windows, characters a file
  * name can't hold become '_'. An entry whose path is already taken (a repeated name) is left
@@ -44,6 +45,11 @@ mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_byt
 /* An entry's name as UTF-8, from its raw bytes: decoded as UTF-8 if utf8 is set and the
  * bytes are valid UTF-8, else as CP437. malloc'd, or NULL. For tests too. */
 char *mc_unzip_name(const char *raw, size_t len, int utf8);
+
+/* The name in an Info-ZIP Unicode Path field (0x7075) among an entry's extra fields, if
+ * there's one of version 1 whose CRC-32 matches raw (the name as stored, raw_len bytes) and
+ * whose name is valid UTF-8; else NULL, and the stored name stands. malloc'd. For tests too. */
+char *mc_unzip_unicode_path(const unsigned char *extra, size_t len, const char *raw, size_t raw_len);
 
 /* The entry name's path inside the zip made safe, with '/' between its parts, or NULL if it
  * must be left out (*unsafe set when that's because it's absolute or uses ".."). Empty and "."

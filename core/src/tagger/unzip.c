@@ -13,6 +13,9 @@
 /* Some room left over on the volume after extracting, for the copies into the library. */
 #define SPACE_MARGIN ((int64_t)64 * 1024 * 1024)
 #define ZIP_FLAG_UTF8 0x0800 /* general purpose bit 11: the name and comment are UTF-8 */
+#define ZIP_EXTRA_UNICODE_PATH 0x7075 /* Info-ZIP's Unicode Path extra field (APPNOTE 4.6.9) */
+#define ZIP_CDH_SIG 0x02014b50
+#define ZIP_CDH_LEN 46 /* a central directory header, before its name, extra field and comment */
 
 int mc_unzip_is_zip(const char *path) {
   if (!path) return 0;
@@ -104,6 +107,37 @@ char *mc_unzip_name(const char *raw, size_t len, int utf8) {
   }
   out[n] = '\0';
   return out;
+}
+
+static unsigned get16(const unsigned char *p) {
+  return p[0] | (unsigned)p[1] << 8;
+}
+
+static uint32_t get32(const unsigned char *p) {
+  return get16(p) | (uint32_t)get16(p + 2) << 16;
+}
+
+char *mc_unzip_unicode_path(const unsigned char *extra, size_t len, const char *raw, size_t raw_len) {
+  if (!extra || !raw) return NULL;
+  for (size_t i = 0; i + 4 <= len;) {
+    unsigned id = get16(extra + i), size = get16(extra + i + 2);
+    const unsigned char *d = extra + i + 4;
+    if (size > len - i - 4) break; /* damaged */
+    /* Version 1, then the CRC-32 of the name it stands for: a tool that renamed the entry
+     * without knowing this field left it naming the old one, so it's ignored. */
+    if (id == ZIP_EXTRA_UNICODE_PATH && size > 5 && d[0] == 1 &&
+        get32(d + 1) == (uint32_t)mz_crc32(MZ_CRC32_INIT, (const unsigned char *)raw, raw_len) &&
+        valid_utf8(d + 5, size - 5u)) {
+      char *out = malloc(size - 5u + 1);
+      if (out) {
+        memcpy(out, d + 5, size - 5u);
+        out[size - 5u] = '\0';
+      }
+      return out;
+    }
+    i += 4 + (size_t)size;
+  }
+  return NULL;
 }
 
 /* Makes one part of a path safe to create on this platform, in place. */
@@ -200,6 +234,25 @@ static size_t write_out(void *opaque, mz_uint64 ofs, const void *buf, size_t n) 
   return n;
 }
 
+/* The UTF-8 name in the entry's Unicode Path extra field, if its central directory header
+ * has one for raw, its name as stored; else NULL. miniz doesn't hand out extra fields, so the
+ * header is read again. */
+static char *unicode_path(mz_zip_archive *z, const mz_zip_archive_file_stat *st, const char *raw,
+                          size_t raw_len) {
+  mz_uint64 ofs = z->m_central_directory_file_ofs + st->m_central_dir_ofs;
+  unsigned char h[ZIP_CDH_LEN];
+  if (z->m_pRead(z->m_pIO_opaque, ofs, h, sizeof h) != sizeof h || get32(h) != ZIP_CDH_SIG ||
+      get16(h + 28) != raw_len)
+    return NULL;
+  size_t extra_len = get16(h + 30);
+  unsigned char *extra = extra_len ? malloc(extra_len) : NULL;
+  char *name = NULL;
+  if (extra && z->m_pRead(z->m_pIO_opaque, ofs + sizeof h + raw_len, extra, extra_len) == extra_len)
+    name = mc_unzip_unicode_path(extra, extra_len, raw, raw_len);
+  free(extra);
+  return name;
+}
+
 /* The entry's safe path, or NULL to leave it out (*unsafe set if for zip slip). */
 static char *entry_path(mz_zip_archive *z, mz_uint i, const mz_zip_archive_file_stat *st, int *unsafe) {
   *unsafe = 0;
@@ -208,7 +261,9 @@ static char *entry_path(mz_zip_archive *z, mz_uint i, const mz_zip_archive_file_
   char *raw = malloc(len);
   if (!raw) return NULL;
   mz_zip_reader_get_filename(z, i, raw, len);
-  char *name = mc_unzip_name(raw, len - 1, (st->m_bit_flag & ZIP_FLAG_UTF8) != 0);
+  int utf8 = (st->m_bit_flag & ZIP_FLAG_UTF8) != 0;
+  char *name = utf8 ? NULL : unicode_path(z, st, raw, len - 1);
+  if (!name) name = mc_unzip_name(raw, len - 1, utf8);
   free(raw);
   char *safe = name ? mc_unzip_safe_path(name, unsafe) : NULL;
   free(name);

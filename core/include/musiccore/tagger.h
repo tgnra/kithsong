@@ -126,7 +126,8 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * Zips. A path given to mc_import_start that is a .zip file is extracted into a staging
  * folder named after the zip without its extension (in a kithsong-import-* folder of its own
  * under mc_import_options.staging_dir), and that folder is imported as any other, cover.jpg
- * and all. Entry names are UTF-8 when the entry's flag bit 11 says so, else CP437; entries
+ * and all. Entry names are UTF-8 when the entry's flag bit 11 says so, else the UTF-8 name in
+ * its Info-ZIP Unicode Path extra field if it has a matching one, else CP437; entries
  * that are absolute or use ".." (zip slip) are left out, and so are __MACOSX/ and .DS_Store.
  * A zip holding more than 8 GB unzipped, or more than the staging folder's free space, isn't
  * extracted. A zip that can't be extracted becomes an item of its own with no files, in

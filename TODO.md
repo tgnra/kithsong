@@ -138,7 +138,7 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
   - an import cut short by the process dying isn't resumed: the next start deletes the copies and releases the folder's grant
   - sharing files while an import runs leaves them out (only logged)
   - a folder's .zip files are imported as batches of their own, but zips nested inside zips aren't extracted
-- Core - zips: only paths given to mc_import_start are extracted (a zip inside a dropped folder isn't), and the Info-ZIP Unicode Path extra field (0x7075) isn't read, so a CP437-flagged entry with a UTF-8 name in that field comes out as CP437
+- Core - zips: only paths given to mc_import_start are extracted (a zip inside a dropped folder isn't)
 
 ## Sync
 
