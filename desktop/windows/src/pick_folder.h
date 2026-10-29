@@ -12,4 +12,8 @@ char *pick_folder(HWND owner, const wchar_t *title, const char *initial);
  * malloc'd UTF-8 paths (free each, then the array), or NULL if cancelled. */
 char **pick_folders(HWND owner, const wchar_t *title, int *count);
 
+/* For a library folder picked: if dir (UTF-8) is inside a OneDrive folder, warns that sync
+ * can damage the database and asks whether to use it anyway. Returns whether to go ahead. */
+BOOL confirm_onedrive(HWND owner, const char *dir);
+
 #endif

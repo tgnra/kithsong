@@ -136,8 +136,14 @@ static char *choose(HWND owner, const char *src) {
     SetCursor(old);
     wchar_t text[1024];
     if (!problem_text(st, &info, dst, text, 1024)) {
-      free(initial);
-      return dst;
+      /* As Open another library warns; No picks again. */
+      if (confirm_onedrive(owner, dst)) {
+        free(initial);
+        return dst;
+      }
+      free(dst);
+      if (hook) break;
+      continue;
     }
     MessageBoxW(owner, text, mc_wstr(MC_STR_LIBRARY_MOVE_CANT_TITLE), MB_OK | MB_ICONWARNING);
     free(dst);

@@ -1606,23 +1606,6 @@ static char *music_folder(void) {
   return out;
 }
 
-/* Sync clients copy files while they're being written, which can corrupt the SQLite
- * database, and Windows often redirects Music into OneDrive. */
-static BOOL in_onedrive(const char *dir) {
-  static const wchar_t *const vars[] = {L"OneDrive", L"OneDriveConsumer", L"OneDriveCommercial"};
-  wchar_t *wdir = wide_from_utf8(dir);
-  BOOL inside = FALSE;
-  for (size_t i = 0; wdir && !inside && i < sizeof vars / sizeof vars[0]; i++) {
-    wchar_t root[MAX_PATH];
-    DWORD n = GetEnvironmentVariableW(vars[i], root, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) continue;
-    inside = CompareStringOrdinal(wdir, (int)min(n, wcslen(wdir)), root, (int)n, TRUE) == CSTR_EQUAL &&
-             (wdir[n] == L'\0' || wdir[n] == L'\\');
-  }
-  free(wdir);
-  return inside;
-}
-
 /* Asks where the library should live. On first run current is NULL and the Music folder
  * is offered; otherwise the folder picker opens straight away, titled title_id, and with
  * empty_only it takes only an empty folder. Returns a malloc'd UTF-8 path, or NULL if the
@@ -1648,13 +1631,9 @@ static char *choose_library_dir(HWND owner, const char *current, enum mc_str_id 
       free(dir);
       continue;
     }
-    if (in_onedrive(dir)) {
-      int answer = MessageBoxW(owner, mc_wstr(MC_STR_WINDOWS_ONEDRIVE_WARNING), mc_wstr(MC_STR_LIBRARY_FOLDER),
-                               MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
-      if (answer != IDYES) {
-        free(dir);
-        continue;
-      }
+    if (!confirm_onedrive(owner, dir)) {
+      free(dir);
+      continue;
     }
     free(suggested);
     return dir;

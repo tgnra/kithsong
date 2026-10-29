@@ -4,6 +4,8 @@
 #include <shobjidl.h>
 #include <stdlib.h>
 
+#include "wstr.h"
+
 /* The item's file system path, as a malloc'd UTF-8 string, or NULL. */
 static char *item_path(IShellItem *item) {
   wchar_t *path = NULL;
@@ -78,4 +80,27 @@ char **pick_folders(HWND owner, const wchar_t *title, int *count) {
   if (items) IShellItemArray_Release(items);
   IFileOpenDialog_Release(dlg);
   return result;
+}
+
+/* Sync clients copy files while they're being written, which can corrupt the SQLite
+ * database, and Windows often redirects Music into OneDrive. */
+static BOOL in_onedrive(const char *dir) {
+  static const wchar_t *const vars[] = {L"OneDrive", L"OneDriveConsumer", L"OneDriveCommercial"};
+  wchar_t wdir[MAX_PATH * 2];
+  wstr_from_utf8(wdir, MAX_PATH * 2, dir);
+  BOOL inside = FALSE;
+  for (size_t i = 0; !inside && i < sizeof vars / sizeof vars[0]; i++) {
+    wchar_t root[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(vars[i], root, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) continue;
+    inside = CompareStringOrdinal(wdir, (int)min(n, wcslen(wdir)), root, (int)n, TRUE) == CSTR_EQUAL &&
+             (wdir[n] == L'\0' || wdir[n] == L'\\');
+  }
+  return inside;
+}
+
+BOOL confirm_onedrive(HWND owner, const char *dir) {
+  if (!in_onedrive(dir)) return TRUE;
+  return MessageBoxW(owner, mc_wstr(MC_STR_WINDOWS_ONEDRIVE_WARNING), mc_wstr(MC_STR_LIBRARY_FOLDER),
+                     MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
 }
