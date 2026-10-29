@@ -27,6 +27,9 @@ typedef struct mc_db_album {
   /* An album already in the library to write into (a duplicate, see dupes.h): its row is
    * left as it is, apart from art_hash filling a missing cover. */
   const char *existing_uid;
+  /* With existing_uid: its row takes this album's title, artist, years and ids instead (a
+   * whole release swapped for a better one, see mc_dupe_plan.whole). Its uid stays. */
+  int update_existing;
 } mc_db_album;
 
 typedef struct mc_db_track {
@@ -53,6 +56,12 @@ typedef struct mc_db_track {
    * it, the file is added to the track. */
   const char *track_uid;
   const char *replace_file_uid;
+  /* With track_uid: the track's metadata follows this row after all (title, artist, numbers,
+   * year, ids, and the genre if set); its uid and album stay. For a whole release. */
+  int update_track;
+  /* The SHA-256 (hex) of the bytes the file was imported from, before it was tagged:
+   * files.source_sha256. NULL if unknown; a file updated in place then keeps its own. */
+  const char *source_sha256;
 } mc_db_track;
 
 /* Inserts or updates the album, its artists, tracks and files in one transaction. Artists

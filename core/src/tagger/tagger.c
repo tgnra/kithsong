@@ -1110,9 +1110,11 @@ static char *swap_path(const char *old_rel, const char *format) {
 }
 
 /* Compares the item with the library (dupes.c) and drops, retargets or redirects its files
- * to suit. Returns the new count; *planned is set when the comparison ran. */
+ * to suit; matched says the item has a MusicBrainz match (for a whole release, see dupes.h).
+ * Returns the new count; *planned is set when the comparison ran. */
 static int apply_dupes(mc_library *lib, mc_db_album *album, mc_db_track *rows,
-                       placement *places, int count, mc_dupe_plan *dp, int *planned) {
+                       placement *places, int count, int matched, mc_dupe_plan *dp,
+                       int *planned) {
   *planned = 0;
   if (count <= 0 || !all_outside(lib, places, count)) return count;
   mc_dupe_in *in = calloc((size_t)count, sizeof *in);
@@ -1129,8 +1131,11 @@ static int apply_dupes(mc_library *lib, mc_db_album *album, mc_db_track *rows,
   free(in);
   if (st != MC_OK) return count; /* import as before */
   *planned = 1;
+  if (!matched) dp->whole = 0; /* as-is: no match to win, so the library's tags do */
 
   if (dp->album_uid[0]) album->existing_uid = dp->album_uid;
+  album->update_existing = dp->whole;
+  const char *album_dir = dp->whole ? NULL : dp->album_dir;
   int kept = 0;
   for (int i = 0; i < count; i++) {
     mc_dupe_decision *d = &dp->d[i];
@@ -1140,16 +1145,30 @@ static int apply_dupes(mc_library *lib, mc_db_album *album, mc_db_track *rows,
       free(pl.dest_rel);
       continue;
     }
-    if (d->action == MC_DUPE_SWAP || d->action == MC_DUPE_ATTACH) row.track_uid = d->track_uid;
+    if (d->action == MC_DUPE_SWAP || d->action == MC_DUPE_ATTACH) {
+      row.track_uid = d->track_uid;
+      row.update_track = dp->whole;
+    }
+    row.source_sha256 = d->source_sha256[0] ? d->source_sha256 : NULL;
+    if (d->has_tags) { /* a copy of the library's track: tagged as it */
+      pl.tags = d->tags;
+      pl.write_tags = 1;
+    }
     char *dest = NULL;
     if (d->action == MC_DUPE_SWAP) {
       row.replace_file_uid = d->file_uid;
       pl.swap = 1;
       pl.old_rel = d->old_path;
-      pl.final_rel = swap_path(d->old_path, audio_format(pl.f->path));
+      /* The old name, or for a whole release the match's. */
+      pl.final_rel = dp->whole ? mc_strdup(pl.dest_rel)
+                               : swap_path(d->old_path, audio_format(pl.f->path));
       dest = mc_strdup(pl.final_rel);
-    } else if (dp->album_dir && pl.dest_rel) {
-      dest = join_rel(dp->album_dir, base_name(pl.dest_rel));
+    } else if (album_dir && pl.dest_rel) {
+      char *name = d->has_tags ? mc_track_file(d->tags.title, d->tags.disc, d->tags.disc_total,
+                                               d->tags.track, audio_format(pl.f->path))
+                               : NULL;
+      dest = join_rel(album_dir, name ? name : base_name(pl.dest_rel));
+      free(name);
     }
     if (dest || d->action == MC_DUPE_SWAP) {
       free(pl.dest_rel);
@@ -1162,12 +1181,21 @@ static int apply_dupes(mc_library *lib, mc_db_album *album, mc_db_track *rows,
   return kept;
 }
 
-/* After the rows are saved: the swapped-out files go to the trash, and new files waiting
- * next to them take their names. A file that can't be trashed stays where it is, no longer
- * in the library (sync's reconcile treats it as an unknown file). */
+/* After the rows are saved: the swapped-out files go to the trash, and then new files
+ * waiting next to them take their names (all old ones first, as a whole release's new names
+ * can be other tracks' old ones), and folders left empty go. A file that can't be trashed
+ * stays where it is, no longer in the library (sync's reconcile treats it as an unknown
+ * file). */
 static void finish_swaps(mc_library *lib, placement *p, int n) {
   for (int i = 0; i < n; i++)
-    if (p[i].swap) mc_dupes_finish_swap(lib, p[i].old_rel, p[i].final_rel, &p[i].dest_rel, &p[i].dest_abs);
+    if (p[i].swap) mc_dupes_finish_swap(lib, p[i].old_rel, NULL, &p[i].dest_rel, &p[i].dest_abs);
+  for (int i = 0; i < n; i++)
+    if (p[i].swap) mc_dupes_finish_swap(lib, NULL, p[i].final_rel, &p[i].dest_rel, &p[i].dest_abs);
+  for (int i = 0; i < n; i++) {
+    char *old = p[i].swap ? mc_library_abspath(lib, p[i].old_rel) : NULL;
+    if (old) prune_dirs(lib, dirname_of(old));
+    free(old);
+  }
 }
 
 /* Applies a candidate (or the existing tags, if match < 0): files are copied or moved into
@@ -1310,9 +1338,18 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   /* Already in the library? Skip, or swap in the better release (see tagger.h). */
   mc_dupe_plan dp = {0};
   int planned = 0;
-  if (!error) count = apply_dupes(lib, &album, rows, places, count, &dp, &planned);
+  if (!error) count = apply_dupes(lib, &album, rows, places, count, rel != NULL, &dp, &planned);
   int all_dupes = planned && count == 0;
-  const char *cover_dir = planned && dp.album_dir ? dp.album_dir : album_rel;
+  const char *cover_dir = planned && dp.album_dir && !dp.whole ? dp.album_dir : album_rel;
+  if (planned && dp.whole && dp.album_dir) {
+    /* A whole release may move folder: it keeps the old cover if it brings none. */
+    char *found = source_dir ? mc_coverart_find(source_dir) : NULL;
+    if (!found) {
+      free(source_dir);
+      source_dir = mc_library_abspath(lib, dp.album_dir);
+    }
+    free(found);
+  }
 
   /* join_rel and the path builders return NULL only when out of memory. */
   for (int i = 0; i < count && !error; i++)
