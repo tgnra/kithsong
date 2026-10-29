@@ -121,14 +121,11 @@ fun DetailScreen(
     val albumMenu: (Album) -> Unit = { actions.albumMenu(it, groupUid = ref.uid.takeIf { editableGroup }) }
     var editing by rememberSaveable { mutableStateOf(false) }
 
-    // A playlist's or album group's picture is looked up after the library is read, so it
-    // may come later.
+    // The art is the library's: it's known before the list is read, so the background starts
+    // in its colours. A playlist's or album group's picture is looked up after the library is
+    // read, so it may come later.
     val library by source.library.collectAsState()
-    val picture = when (ref.kind) {
-        CollectionRef.Kind.Playlist -> library?.playlists?.firstOrNull { it.uid == ref.uid }?.art
-        CollectionRef.Kind.AlbumGroup -> library?.albumGroups?.firstOrNull { it.uid == ref.uid }?.art
-        else -> null
-    }
+    val picture = remember(library, ref) { library?.artOf(ref) }
     val list = loaded?.let { if (picture != null) it.copy(art = picture) else it }
     val tracks = edited ?: list?.tracks.orEmpty()
     val isEditing = editing && editable
@@ -167,7 +164,7 @@ fun DetailScreen(
             val columns = albumColumns(maxWidth)
             val albums = list?.albums.orEmpty()
             val group = ref.kind == CollectionRef.Kind.AlbumGroup
-            ArtBackdrop(rememberArtColors(list?.art), Modifier.matchParentSize())
+            ArtBackdrop(rememberArtColors(picture ?: list?.art), Modifier.matchParentSize())
             LazyColumn(
                 state = listState,
                 contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)

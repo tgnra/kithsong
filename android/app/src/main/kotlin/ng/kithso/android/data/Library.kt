@@ -78,6 +78,17 @@ data class Library(
     val isEmpty: Boolean
         get() = recents.isEmpty() && playlists.isEmpty() && albums.isEmpty() && artists.isEmpty() && albumGroups.isEmpty()
 
+    /**
+     * The art of [ref], as its row shows it and its track list has it, or null if it isn't
+     * here: known before the track list is read, for the screen opening it.
+     */
+    fun artOf(ref: CollectionRef): ArtRef? = when (ref.kind) {
+        CollectionRef.Kind.Album -> albums.firstOrNull { it.uid == ref.uid }?.art
+        CollectionRef.Kind.Artist -> artists.firstOrNull { it.uid == ref.uid }?.art
+        CollectionRef.Kind.Playlist -> playlists.firstOrNull { it.uid == ref.uid }?.art
+        CollectionRef.Kind.AlbumGroup -> albumGroups.firstOrNull { it.uid == ref.uid }?.art
+    }
+
     companion object {
         val Empty = Library(emptyList(), emptyList(), emptyList(), emptyList())
     }

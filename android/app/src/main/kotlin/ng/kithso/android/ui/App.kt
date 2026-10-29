@@ -33,6 +33,7 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -46,6 +47,7 @@ import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.sync.Syncer
+import ng.kithso.android.ui.theme.ArtColors
 import ng.kithso.android.ui.theme.ArtTheme
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -98,7 +100,16 @@ fun App(
     val bottomPadding = if (track == null) navigationBar
     else navigationBar + with(LocalDensity.current) { miniPlayerHeight.toDp() } + MiniPlayerMargin * 2
 
-    val open: (CollectionRef) -> Unit = remember { { stack.add(it) } }
+    // Opening a list starts finding its art's colours at once, for art that wasn't on screen in
+    // the main list, so they're there as its screen slides in rather than fading in after.
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val open: (CollectionRef) -> Unit = remember {
+        { ref ->
+            library?.artOf(ref)?.let { art -> scope.launch { ArtColors.find(context, art) } }
+            stack.add(ref)
+        }
+    }
     val pop: () -> Unit = remember { { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) } }
 
     // Menus and Add to playlist, over everything. Their Play and Shuffle, and a track list's,
@@ -110,7 +121,6 @@ fun App(
         val deleter = source as? LibraryDeleter
         PlaylistActions(source as? PlaylistEditor, deleter, syncer.takeIf { deleter != null })
     }
-    val scope = rememberCoroutineScope()
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
         scope.launch {
             val tracks = source.trackList(ref)?.tracks ?: return@launch
