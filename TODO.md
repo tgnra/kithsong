@@ -191,7 +191,6 @@ Windows and Linux (pair_dialog.c and sync_bridge.c on each, the pending note in 
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
 - Windows and Linux - an empty library in a group (nothing imported anywhere yet) just says "Use Import to add music."; it could say the music arrives from the group, or link to Choose what to sync
 - Android - the empty main screen always says to pair, even when the phone is already in a group and its profile holds nothing; say "choose what to sync" there instead
-- Linux - Windows also flashes the taskbar button for a refused pairing shown before any code, and for the merge's summary; Linux only notifies of a pairing request
 - Linux - with no sync.db yet (first run), sync can fail to start with "sync.db open failed: not an error" and Devices says "Sync is off (database error)"; it starts on the next run (seen several times in Docker under Xvfb)
 
 ### Windows firewall
@@ -269,7 +268,7 @@ Things built but not checked properly.
 - The empty Albums page's Pair with a device… menu (opening it, pairing a device picked there, Add device by address…), the empty Playlists page's Choose what to sync, and the Album groups page's +: only compiled; under Xvfb the button showed, and the Playlists + made a playlist that stayed shown until another page was picked
 - The pairing dialog's ended page (only compiled): Choose what to sync, the archive explainer's bold "archive" (Pango markup), Create a new library (the folder picker, refusing a folder that isn't empty, then Pair again) and the button styles
 - Remove from this computer / Sync to this computer on the album tiles' and the artist page's menus (only compiled, in Docker)
-- The pairing request's notification while the window is in the background (only compiled): that it shows on GNOME and KDE, that clicking it brings the window up with the code (the app.show-pair-request action), and that it goes once the window is active, the request ends or its dialog closes
+- The notification while the window is in the background (only compiled), of a pairing request, a refusal shown before any code, and the merge's summary: that it shows on GNOME and KDE, that clicking it brings the window up with the code or message (the app.show-pair-request action; the merge's window over it), and that it goes once the window is active, the request ends, or its dialog or the merge's window closes
 - The track list's keys and the artist list's row menu: run under Xvfb in Docker (GTK 4.18, libadwaita 1.7). Seen working: Alt+Up/Down, Delete and F2 in a playlist, Enter, the Menu key and Shift+F10 (the menu shows Alt+Up, Alt+Down, Delete and F2 beside its items, and they don't act outside the list), right-click and the Menu key on an artist row (its Delete from library... names that artist), and the Menu key in an artist page's tracks and elsewhere on the page. Not checked: the long press (no touchscreen), the Menu key with no track selected (the playlist's header menu) or with the selected track scrolled out of sight, Remove from this computer / Sync to this computer on an artist row (needs a group), and a real desktop session
 
 ### Windows

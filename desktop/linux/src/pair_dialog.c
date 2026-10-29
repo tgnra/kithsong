@@ -13,8 +13,8 @@
 /* settings.json's record that this computer showed which device is the archive. */
 #define ARCHIVE_EXPLAINED_KEY "archive_explained"
 
-/* The notification of a pairing request while the window is in the background, and the
- * app action its default action runs. */
+/* The notification of a pairing request, a refusal or the merge's summary while the window
+ * is in the background (one at a time), and the app action its default action runs. */
 #define REQUEST_NOTIFICATION "pair-request"
 #define SHOW_REQUEST_ACTION "show-pair-request"
 
@@ -71,7 +71,7 @@ static struct {
   sync_event pending_merge;
   merge_wnd *merge_wnd; /* the merge's window, or NULL */
   gboolean merge_seen;  /* it opened for this merge's progress (and may have been closed) */
-  GtkWindow *notified;  /* the window the request's notification is for (weak), or NULL */
+  GtkWindow *notified;  /* the window the notification is for (weak), or NULL */
   gulong notified_active; /* its notify::is-active handler */
 } s;
 
@@ -209,11 +209,12 @@ static char *spaced_code(const char *code) {
   return g_string_free(out, FALSE);
 }
 
-/* --- The request's notification ---
+/* --- The notification ---
  * The counterpart of Windows flashing the taskbar button: a pairing request that comes while
  * the window is in the background is easily missed, and the other device waits for its code.
- * Withdrawn when the window comes to the front (as the flashing stops), the request ends, or
- * its dialog closes. */
+ * So are a refusal that comes before any code was shown, and the merge's summary, which
+ * Windows flashes for too. Withdrawn when the window comes to the front (as the flashing
+ * stops), the request ends, or the dialog or the merge's window closes. */
 
 static void withdraw_request(void) {
   if (!s.notified) return;
@@ -230,16 +231,18 @@ static void on_notified_active(GObject *win, GParamSpec *pspec, gpointer data) {
   if (gtk_window_is_active(GTK_WINDOW(win))) withdraw_request();
 }
 
-/* The notification's default action: the window, with the request's dialog on it. */
+/* The notification's default action: the window, with the dialog on it, and the merge's
+ * window over that if it's open. */
 static void on_show_request(GSimpleAction *action, GVariant *param, gpointer data) {
   (void)action;
   (void)param;
   GtkWindow *win = s.notified ? s.notified : gtk_application_get_active_window(data);
   if (win) gtk_window_present(win);
+  if (s.merge_wnd) gtk_window_present(GTK_WINDOW(s.merge_wnd->window));
 }
 
-/* Notifies of the request from peer unless parent's window is the active one. */
-static void notify_request(GtkWidget *parent, const char *peer) {
+/* Notifies with title and body unless parent's window is the active one. */
+static void notify_background(GtkWidget *parent, const char *title, const char *body) {
   GtkRoot *root = parent ? gtk_widget_get_root(parent) : NULL;
   if (!GTK_IS_WINDOW(root) || gtk_window_is_active(GTK_WINDOW(root))) return;
   GtkWindow *win = GTK_WINDOW(root);
@@ -254,15 +257,20 @@ static void notify_request(GtkWidget *parent, const char *peer) {
     g_set_weak_pointer(&s.notified, win);
     s.notified_active = g_signal_connect(win, "notify::is-active", G_CALLBACK(on_notified_active), NULL);
   }
-  GNotification *n = g_notification_new(mc_str(MC_STR_PAIR_REQUEST));
-  char *body = peer_text(MC_STR_LINUX_PAIR_REQUEST_NOTIFICATION, peer, TRUE);
+  GNotification *n = g_notification_new(title);
   g_notification_set_body(n, body);
-  g_free(body);
   g_notification_set_priority(n, G_NOTIFICATION_PRIORITY_HIGH);
   g_notification_set_default_action(n, "app." SHOW_REQUEST_ACTION);
   /* Replaces one already shown, for a new code. */
   g_application_send_notification(G_APPLICATION(app), REQUEST_NOTIFICATION, n);
   g_object_unref(n);
+}
+
+/* Notifies of the request from peer, as notify_background() does. */
+static void notify_request(GtkWidget *parent, const char *peer) {
+  char *body = peer_text(MC_STR_LINUX_PAIR_REQUEST_NOTIFICATION, peer, TRUE);
+  notify_background(parent, mc_str(MC_STR_PAIR_REQUEST), body);
+  g_free(body);
 }
 
 /* --- The dialog --- */
@@ -754,7 +762,10 @@ static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gbo
 static void on_merge_wnd_destroy(GtkWidget *window, gpointer data) {
   (void)window;
   merge_wnd *m = data;
-  if (s.merge_wnd == m) s.merge_wnd = NULL;
+  if (s.merge_wnd == m) {
+    s.merge_wnd = NULL;
+    if (m->done) withdraw_request(); /* the summary's notification */
+  }
   g_free(m);
 }
 
@@ -881,8 +892,11 @@ void pair_dialog_on_merge_event(GtkWidget *parent, const sync_event *ev) {
   gtk_widget_set_visible(m->bar, FALSE);
   char *text = merge_summary(ev);
   gtk_label_set_text(GTK_LABEL(m->status), text);
-  g_free(text);
   gtk_window_present(GTK_WINDOW(m->window));
+  /* Not while the merge's window was in front already (it opened for the progress). */
+  if (!gtk_window_is_active(GTK_WINDOW(m->window)))
+    notify_background(parent, gtk_window_get_title(GTK_WINDOW(m->window)), text);
+  g_free(text);
 }
 
 /* --- API --- */
@@ -1012,8 +1026,13 @@ static void responder_result(GtkWidget *parent, const sync_event *ev) {
       return;
     }
     d = open_dlg(&s.show, parent, NULL, FALSE, ev->name);
+    show_ended(d, ev);
+    char *text = ended_text(ev, FALSE, d->peer);
+    notify_background(parent, mc_str(ev->reason == MC_PAIR_PAIRED ? MC_STR_PAIRED : MC_STR_PAIR_FAILED), text);
+    g_free(text);
+  } else {
+    show_ended(d, ev);
   }
-  show_ended(d, ev);
   s.show_cancelled = FALSE;
 }
 
