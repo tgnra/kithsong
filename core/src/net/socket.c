@@ -393,12 +393,99 @@ fail:
   return MC_ERR_NET;
 }
 
+/* --- Name lookup ---
+ *
+ * getaddrinfo() has no timeout of its own, and a network with broken DNS can hold it for
+ * half a minute or more (each server's timeout, times its attempts). So a name is looked up
+ * on a thread of its own, which the caller stops waiting for at its deadline: one given up
+ * on runs on detached, then frees what it found and itself. Every platform's getaddrinfo()
+ * is safe to call from any thread. (The HTTP client is bounded separately: curl looks names
+ * up on a thread of its own in every build, and isn't made to wait for one; see http.c.) */
+
+uint32_t mc_socket_test_lookup_delay_ms;
+
+typedef struct lookup {
+  mc_mutex lock;
+  mc_cond done_cond;
+  int done, abandoned; /* under lock */
+  int rc;
+  struct addrinfo *res;
+  struct addrinfo hints;
+  char service[8];
+  char host[]; /* NUL-terminated */
+} lookup;
+
+static void lookup_free(lookup *l) {
+  mc_cond_destroy(&l->done_cond);
+  mc_mutex_destroy(&l->lock);
+  free(l);
+}
+
+static void lookup_main(void *arg) {
+  lookup *l = arg;
+  if (mc_socket_test_lookup_delay_ms) mc_sleep_ms(mc_socket_test_lookup_delay_ms);
+  struct addrinfo *res = NULL;
+  int rc = getaddrinfo(l->host, l->service, &l->hints, &res);
+  mc_mutex_lock(&l->lock);
+  l->rc = rc;
+  l->res = res;
+  l->done = 1;
+  int abandoned = l->abandoned;
+  mc_cond_broadcast(&l->done_cond);
+  mc_mutex_unlock(&l->lock);
+  if (abandoned) { /* else the caller owns l from here on */
+    if (res) freeaddrinfo(res);
+    lookup_free(l);
+  }
+}
+
+/* getaddrinfo(), giving up (non-zero) at deadline unless timeout_ms is MC_SOCKET_FOREVER.
+ * Address literals are taken at once, without a thread. */
+static int resolve(const char *host, const char *service, const struct addrinfo *hints,
+                   uint64_t deadline, int timeout_ms, struct addrinfo **res) {
+  *res = NULL;
+  struct addrinfo numeric = *hints;
+  numeric.ai_flags |= AI_NUMERICHOST;
+  if (getaddrinfo(host, service, &numeric, res) == 0) return 0;
+  *res = NULL;
+  if (timeout_ms < 0) return getaddrinfo(host, service, hints, res);
+
+  size_t len = strlen(host) + 1;
+  lookup *l = calloc(1, sizeof *l + len);
+  if (!l) return EAI_MEMORY;
+  memcpy(l->host, host, len);
+  snprintf(l->service, sizeof l->service, "%s", service);
+  l->hints = *hints;
+  mc_mutex_init(&l->lock);
+  mc_cond_init(&l->done_cond);
+  mc_thread thread;
+  if (mc_thread_start(&thread, lookup_main, l) != MC_OK) {
+    lookup_free(l);
+    return getaddrinfo(host, service, hints, res); /* unbounded, but better than nothing */
+  }
+  mc_thread_detach(&thread);
+
+  mc_mutex_lock(&l->lock);
+  int left;
+  while (!l->done && (left = remaining(deadline, timeout_ms)) > 0)
+    mc_cond_wait_ms(&l->done_cond, &l->lock, (uint32_t)left);
+  int done = l->done;
+  if (!done) l->abandoned = 1;
+  mc_mutex_unlock(&l->lock);
+  if (!done) return EAI_AGAIN; /* lookup_main() frees l */
+  int rc = l->rc;
+  *res = l->res;
+  lookup_free(l);
+  return rc;
+}
+
 mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_socket **out) {
   if (!host || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   mc_status st = mc_socket_init();
   if (st != MC_OK) return st;
 
+  uint64_t deadline = deadline_of(timeout_ms); /* the lookup's time counts too */
   char service[8];
   snprintf(service, sizeof service, "%u", (unsigned)port);
   struct addrinfo hints, *res = NULL;
@@ -407,9 +494,11 @@ mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = IPPROTO_TCP;
   hints.ai_flags = AI_NUMERICSERV;
-  if (getaddrinfo(host, service, &hints, &res) != 0 || !res) return MC_ERR_NET;
+  if (resolve(host, service, &hints, deadline, timeout_ms, &res) != 0 || !res) {
+    if (res) freeaddrinfo(res);
+    return MC_ERR_NET;
+  }
 
-  uint64_t deadline = deadline_of(timeout_ms);
   st = MC_ERR_NET;
   for (const struct addrinfo *ai = res; ai; ai = ai->ai_next) {
     sock_t fd;

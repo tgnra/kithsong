@@ -33,9 +33,13 @@ void mc_listener_stop(mc_listener *l);
 int mc_listener_stopped(mc_listener *l);
 void mc_listener_close(mc_listener *l);
 
-/* Connects to host (an IPv4/IPv6 literal or a name) and port. Name lookup itself isn't
- * bounded by the timeout; discovery hands out addresses, so it's rarely used. */
+/* Connects to host (an IPv4/IPv6 literal or a name) and port. The timeout covers the name
+ * lookup too: a lookup still running when it passes is left to finish on a thread of its
+ * own. */
 mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_socket **out);
+/* For tests: each name lookup (not an address literal) first waits this long, as a network
+ * with broken DNS would make it. */
+extern uint32_t mc_socket_test_lookup_delay_ms;
 /* For these two the timeout is one of inactivity: it restarts whenever bytes move, so a
  * long transfer at any steady pace doesn't time out, but a peer that goes silent does. */
 /* Sends all len bytes. MC_ERR_NET on error, timeout or a closed peer. */

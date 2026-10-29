@@ -122,6 +122,10 @@ void mc_thread_join(mc_thread *thread) {
   CloseHandle(thread->handle);
 }
 
+void mc_thread_detach(mc_thread *thread) {
+  CloseHandle(thread->handle);
+}
+
 /* UTF-8 -> UTF-16, malloc'd. */
 static wchar_t *widen(const char *s) {
   int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0);
@@ -545,6 +549,10 @@ mc_status mc_thread_start(mc_thread *thread, void (*fn)(void *), void *arg) {
 
 void mc_thread_join(mc_thread *thread) {
   pthread_join(thread->t, NULL);
+}
+
+void mc_thread_detach(mc_thread *thread) {
+  pthread_detach(thread->t);
 }
 
 static int walk_dir(const char *dir, mc_walk_fn fn, void *user) {

@@ -72,6 +72,9 @@ typedef struct mc_thread {
 
 mc_status mc_thread_start(mc_thread *thread, void (*fn)(void *), void *arg);
 void mc_thread_join(mc_thread *thread);
+/* Lets a thread run on unjoined: it cleans up after itself once it returns. Instead of
+ * mc_thread_join(), never as well. */
+void mc_thread_detach(mc_thread *thread);
 
 /* Native path separator, for building paths to show the user. */
 #ifdef _WIN32

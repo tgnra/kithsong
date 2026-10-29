@@ -15,6 +15,7 @@
 
 #include "musiccore/i18n.h"
 #include "musiccore/musiccore.h"
+#include "net/socket.h"
 #include "util/platform.h"
 #include "test.h"
 
@@ -203,6 +204,15 @@ int main(int argc, char **argv) {
   /* Nothing listens on port 1. */
   set_probe("127.0.0.1:1");
   CHECK(mc_musicbrainz_reachable(1000) == MC_ERR_NET);
+  /* Nor when it's named, and a name lookup that hangs (broken DNS) is given up on in time. */
+  set_probe("localhost:1");
+  CHECK(mc_musicbrainz_reachable(1000) == MC_ERR_NET);
+  mc_socket_test_lookup_delay_ms = 5000;
+  uint64_t t0 = mc_mono_ms();
+  CHECK(mc_musicbrainz_reachable(500) == MC_ERR_NET);
+  CHECK(mc_mono_ms() - t0 < 1500);
+  mc_socket_test_lookup_delay_ms = 0;
+  set_probe("127.0.0.1:1");
 
   const char *paths[] = {src};
   events ev = {0};
