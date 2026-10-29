@@ -60,6 +60,11 @@ Priorities:
 
 - One shared playlist structure, keyed by the stable track ids, so playlists survive sync
   and re-imports.
+- **Smart playlists and smart album groups** pick their tracks or albums by a rule, e.g. "jazz
+  I haven't played in six months, least played first, 10 tracks", worked out afresh each time
+  from play counts and this device's files. The rule syncs whole. On Windows they're made and
+  edited with a rule editor (right-click the Playlists or Album groups page), with a live
+  preview; elsewhere they can be opened, played and reshuffled so far.
 
 ### LAN sync
 

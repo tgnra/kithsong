@@ -13,6 +13,7 @@
 #include "canvas.h"
 #include "cover.h"
 #include "scroller.h"
+#include "smart_editor.h"
 #include "theme.h"
 #include "uia.h"
 #include "wstr.h"
@@ -40,7 +41,9 @@ enum {
   NUM_GAP = 12,
   DUR_W = 52,
   RADIUS = 4,
-  MORE_GAP = 4,  /* between the playlist menu's button and the close button */
+  MORE_GAP = 4,  /* between the playlist menu's button and the close button, and Reshuffle */
+  RULE_GAP = 10, /* a smart playlist's rule, between the cover and it */
+  RULE_LINES = 3,
   DROP_LINE = 2, /* where a dragged track would go */
 };
 
@@ -55,6 +58,7 @@ enum {
   CMD_RENAME,
   CMD_DELETE,
   CMD_DELETE_TRACK,
+  CMD_EDIT_SMART,
   CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
 };
 
@@ -83,8 +87,10 @@ static struct {
   mc_library *lib;
   char album_uid[MC_UID_STRLEN];
   BOOL playlist; /* the shown uid is a playlist's */
-  BOOL smart;    /* a smart playlist's: no entries to edit, and no playlist menu */
-  BOOL random;   /* a smart playlist in random order: the menu's button reshuffles it */
+  BOOL smart;    /* a smart playlist's: no entries to edit, and its menu edits its rule */
+  BOOL random;   /* a smart playlist in random order: a Reshuffle button beside the menu's */
+  wchar_t *rule; /* a smart playlist's rule as a sentence, under the cover; NULL if none */
+  int rule_top, rule_h;
   BOOL by_artist; /* an artist's: no header (the artist page has its own), and an album column */
   wchar_t *album_title;
   wchar_t *artist;     /* NULL if unknown */
@@ -106,6 +112,7 @@ static struct {
   int hot, selected;
   BOOL tracking;
   BOOL more_hot, more_open; /* the playlist menu's button */
+  BOOL reshuffle_hot;       /* a random smart playlist's Reshuffle */
   int play_index; /* the track TLN_PLAY was last sent for */
   char playing_uid[MC_UID_STRLEN];
   track_list_request req;
@@ -175,8 +182,22 @@ static BOOL in_close(int x, int y) {
 }
 
 static RECT more_rect(void);
+static RECT reshuffle_rect(void);
 static BOOL has_more(void);
+static BOOL has_reshuffle(void);
 static const wchar_t *more_label(void);
+
+/* A smart playlist's rule, wrapped to at most RULE_LINES lines across the pane: its height. */
+static int rule_height(int width) {
+  if (!s.rule || s.by_artist || width <= 0) return 0;
+  HDC dc = GetDC(s.wnd);
+  HGDIOBJ old = SelectObject(dc, s.sub_font);
+  RECT r = {0, 0, width, 0};
+  DrawTextW(dc, s.rule, -1, &r, DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_CALCRECT);
+  SelectObject(dc, old);
+  ReleaseDC(s.wnd, dc);
+  return min((int)r.bottom, RULE_LINES * font_height(s.sub_font));
+}
 
 static void relayout(void) {
   RECT rc;
@@ -184,6 +205,9 @@ static void relayout(void) {
   int text_h = 2 * font_height(s.title_font) + font_height(s.font) + font_height(s.sub_font) + 2 * scale(LINE_GAP);
   /* An artist's list has only Play and Shuffle above it: the artist page has its own header. */
   s.actions_top = s.by_artist ? scale(PAD_TOP) : scale(PAD_TOP) + max(scale(COVER), text_h) + scale(ACTIONS_GAP);
+  s.rule_h = rule_height(rc.right - 2 * scale(PAD_X));
+  s.rule_top = s.actions_top - scale(ACTIONS_GAP) + scale(RULE_GAP);
+  if (s.rule_h) s.actions_top = s.rule_top + s.rule_h + scale(ACTIONS_GAP);
   s.header_h = s.actions_top + scale(ACTION_H) + scale(HEADER_BOTTOM);
   RECT view = {0, s.header_h + 1, rc.right, rc.bottom}; /* below the header's divider */
   scroller_resize(&s.scroll, &view, s.count * scale(ROW_H) + 2 * scale(INSET));
@@ -193,6 +217,15 @@ static void relayout(void) {
     ti.uId = 2;
     ti.rect = has_more() ? more_rect() : (RECT){0};
     ti.lpszText = (wchar_t *)more_label();
+    SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+    SendMessageW(s.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+    ti.uId = 3;
+    ti.rect = has_reshuffle() ? reshuffle_rect() : (RECT){0};
+    SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+    ti.uId = 4; /* the whole rule, should it be cut short */
+    SetRect(&ti.rect, scale(PAD_X), s.rule_top, rc.right - scale(PAD_X), s.rule_top + s.rule_h);
+    if (!s.rule_h) SetRectEmpty(&ti.rect);
+    ti.lpszText = s.rule ? s.rule : (wchar_t *)L"";
     SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
     SendMessageW(s.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
   }
@@ -208,6 +241,13 @@ static RECT row_rect(int i) {
 /* The playlist menu's button, just left of the close button. */
 static RECT more_rect(void) {
   RECT r = close_rect();
+  OffsetRect(&r, -(scale(CLOSE) + scale(MORE_GAP)), 0);
+  return r;
+}
+
+/* A random smart playlist's Reshuffle, left of the menu's button. */
+static RECT reshuffle_rect(void) {
+  RECT r = more_rect();
   OffsetRect(&r, -(scale(CLOSE) + scale(MORE_GAP)), 0);
   return r;
 }
@@ -260,6 +300,8 @@ static void invalidate_row(int i) {
 static void invalidate_more(void) {
   RECT r = more_rect();
   InvalidateRect(s.wnd, &r, FALSE);
+  r = reshuffle_rect();
+  InvalidateRect(s.wnd, &r, FALSE);
 }
 
 static int row_at(int x, int y) {
@@ -272,21 +314,31 @@ static int row_at(int x, int y) {
   return -1;
 }
 
-/* The button left of the close button: a playlist's menu, or a random smart playlist's
- * Reshuffle. */
+/* The button left of the close button: a playlist's menu, smart or not. A random smart
+ * playlist has Reshuffle beside it too. */
 static BOOL has_more(void) {
-  return s.playlist && (!s.smart || s.random);
+  return s.playlist;
+}
+
+static BOOL has_reshuffle(void) {
+  return s.playlist && s.smart && s.random;
 }
 
 /* What it's called, in its tooltip and to a screen reader. */
 static const wchar_t *more_label(void) {
-  return mc_wstr(s.smart ? MC_STR_RESHUFFLE : MC_STR_PLAYLIST_MENU);
+  return mc_wstr(s.smart ? MC_STR_WINDOWS_SMART_PLAYLIST_MENU : MC_STR_PLAYLIST_MENU);
 }
 
 static BOOL on_more(int x, int y) {
   RECT r = more_rect();
   POINT pt = {x, y};
   return has_more() && PtInRect(&r, pt);
+}
+
+static BOOL on_reshuffle(int x, int y) {
+  RECT r = reshuffle_rect();
+  POINT pt = {x, y};
+  return has_reshuffle() && PtInRect(&r, pt);
 }
 
 static void set_hot(int i) {
@@ -299,6 +351,12 @@ static void set_hot(int i) {
 static void set_more_hot(BOOL hot) {
   if (hot == s.more_hot) return;
   s.more_hot = hot;
+  invalidate_more();
+}
+
+static void set_reshuffle_hot(BOOL hot) {
+  if (hot == s.reshuffle_hot) return;
+  s.reshuffle_hot = hot;
   invalidate_more();
 }
 
@@ -429,7 +487,9 @@ static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL pl
   s.smart = smart;
   s.random = random;
   s.hot = s.selected = s.action_hot = -1;
-  s.more_hot = FALSE;
+  s.more_hot = s.reshuffle_hot = FALSE;
+  free(s.rule);
+  s.rule = smart && lib && uid ? smart_describe(lib, uid) : NULL;
   if (!same) s.scroll.pos = s.scroll.target = 0;
   if (!same) s.focus_action = -1;
 
@@ -569,8 +629,9 @@ static void request_remove(int i) {
 }
 
 static void request_playlist(int code) {
-  /* A smart playlist can only be reshuffled here, and only a smart one can be. */
-  if (!s.playlist || (s.smart ? code != TLN_RESHUFFLE : code == TLN_RESHUFFLE) || !s.album_uid[0]) return;
+  /* Only a smart playlist can be reshuffled or have its rule edited. */
+  BOOL smart_only = code == TLN_RESHUFFLE || code == TLN_EDIT_SMART;
+  if (!s.playlist || (smart_only && !s.smart) || (code == TLN_RESHUFFLE && !s.random) || !s.album_uid[0]) return;
   memset(&s.req, 0, sizeof s.req);
   strcpy(s.req.playlist_uid, s.album_uid);
   notify(code);
@@ -582,16 +643,20 @@ static UINT menu_flags(void) {
   return TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
 }
 
-/* Rename... and Delete Playlist..., under the [...] button. */
+/* Rename... and Delete Playlist..., under the [...] button; a smart playlist's has Edit
+ * Rules... first. */
 static void show_playlist_menu(void) {
-  if (!s.playlist || s.smart) return;
+  if (!s.playlist) return;
   RECT r = more_rect();
   MapWindowPoints(s.wnd, NULL, (POINT *)&r, 2);
   HMENU menu = CreatePopupMenu();
   wchar_t item[128];
+  if (s.smart) AppendMenuW(menu, MF_STRING, CMD_EDIT_SMART, mc_wstr_mnemonic(MC_STR_WINDOWS_SMART_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, CMD_RENAME,
               wstr_menu_item(item, 128, MC_STR_PLAYLIST_RENAME_MENU, MC_STR_WINDOWS_SHORTCUT_RENAME));
-  AppendMenuW(menu, MF_STRING, CMD_DELETE, mc_wstr_mnemonic(MC_STR_PLAYLIST_DELETE_MENU));
+  if (s.smart) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_DELETE,
+              mc_wstr_mnemonic(s.smart ? MC_STR_WINDOWS_SMART_DELETE_PLAYLIST_MENU : MC_STR_PLAYLIST_DELETE_MENU));
   s.more_open = TRUE;
   invalidate_more();
   /* Hangs from the button's right edge, as the button sits at the window's. */
@@ -603,6 +668,7 @@ static void show_playlist_menu(void) {
   invalidate_more();
   if (cmd == CMD_RENAME) request_playlist(TLN_RENAME_PLAYLIST);
   else if (cmd == CMD_DELETE) request_playlist(TLN_DELETE_PLAYLIST);
+  else if (cmd == CMD_EDIT_SMART) request_playlist(TLN_EDIT_SMART);
 }
 
 /* The menu for the selected track, at pt (screen coordinates). */
@@ -796,15 +862,19 @@ static void paint_row(canvas *c, int i, BOOL focused) {
   DrawTextW(c->dc, r->title, -1, &title, one_line | DT_END_ELLIPSIS);
 }
 
-/* The playlist menu's button: round, like the close button beside it. */
+/* The playlist menu's button, and Reshuffle: round, like the close button beside them. */
 static void paint_more(canvas *c) {
   RECT r = more_rect();
   control_state state = s.more_open ? STATE_PRESSED : s.more_hot ? STATE_HOT : STATE_NORMAL;
   COLORREF color = theme_draw_state(c, &r, scale(CLOSE) / 2, state);
   SelectObject(c->dc, s.icon_font);
   SetTextColor(c->dc, color);
-  const wchar_t *glyph = s.smart ? L"\xE72C" : L"\xE712"; /* Refresh (for Reshuffle), More */
-  DrawTextW(c->dc, glyph, 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  DrawTextW(c->dc, L"\xE712", 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); /* More */
+  if (!has_reshuffle()) return;
+  r = reshuffle_rect();
+  color = theme_draw_state(c, &r, scale(CLOSE) / 2, s.reshuffle_hot ? STATE_HOT : STATE_NORMAL);
+  SetTextColor(c->dc, color);
+  DrawTextW(c->dc, L"\xE72C", 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); /* Refresh */
 }
 
 /* Play, an accent button as Windows 11's main action is, and Shuffle, a standard one beside
@@ -884,7 +954,7 @@ static void paint_header(canvas *c, int w, BOOL focused) {
   if (has_more()) paint_more(c);
 
   /* The text, centred against the cover. The title wraps onto a second line if it must. */
-  int buttons = has_more() ? more_rect().left : close.left;
+  int buttons = has_reshuffle() ? reshuffle_rect().left : has_more() ? more_rect().left : close.left;
   int left = cover.right + scale(COVER_GAP), right = max(left, buttons - scale(4));
   int title_line = font_height(s.title_font), artist_h = font_height(s.font), sub_h = font_height(s.sub_font);
   UINT wrap = DT_WORDBREAK | DT_EDITCONTROL | DT_END_ELLIPSIS | DT_NOPREFIX;
@@ -909,6 +979,10 @@ static void paint_header(canvas *c, int w, BOOL focused) {
   SelectObject(c->dc, s.sub_font);
   SetTextColor(c->dc, theme.text2);
   DrawTextW(c->dc, s.summary, -1, &sub, one_line);
+  if (s.rule_h) { /* a smart playlist's rule, across the pane under the cover */
+    RECT rule = {scale(PAD_X), s.rule_top, w - scale(PAD_X), s.rule_top + s.rule_h};
+    DrawTextW(c->dc, s.rule, -1, &rule, DT_WORDBREAK | DT_EDITCONTROL | DT_END_ELLIPSIS | DT_NOPREFIX);
+  }
   paint_action(c, 0, focused);
   paint_action(c, 1, focused);
 
@@ -1040,14 +1114,28 @@ static void on_key(WPARAM key) {
  * The nodes: the header's text and buttons, in the order below (an artist's list has only
  * Play and Shuffle), then the list, then its rows. */
 
-enum { UI_TITLE, UI_BYLINE, UI_SUMMARY, UI_PLAY, UI_SHUFFLE, UI_MORE, UI_CLOSE, UI_LIST, UI_PARTS };
+enum {
+  UI_TITLE,
+  UI_BYLINE,
+  UI_SUMMARY,
+  UI_RULE,
+  UI_PLAY,
+  UI_SHUFFLE,
+  UI_RESHUFFLE,
+  UI_MORE,
+  UI_CLOSE,
+  UI_LIST,
+  UI_PARTS
+};
 
 /* The header's parts there are now, in order, into parts; returns how many. */
 static int ui_parts(int parts[UI_PARTS]) {
   int n = 0;
   for (int part = 0; part < UI_PARTS; part++) {
     BOOL header = part <= UI_SUMMARY || part == UI_CLOSE;
-    if ((header && s.by_artist) || (part == UI_MORE && !has_more())) continue;
+    if ((header && s.by_artist) || (part == UI_MORE && !has_more()) || (part == UI_RESHUFFLE && !has_reshuffle()) ||
+        (part == UI_RULE && !s.rule_h))
+      continue;
     parts[n++] = part;
   }
   return n;
@@ -1100,7 +1188,8 @@ static BOOL ui_node(int i, uia_node *n) {
     return TRUE;
   }
   RECT text = {scale(PAD_X + COVER + COVER_GAP), scale(PAD_TOP),
-               (has_more() ? more_rect().left : close_rect().left) - scale(4), scale(PAD_TOP + COVER)};
+               (has_reshuffle() ? reshuffle_rect().left : has_more() ? more_rect().left : close_rect().left) - scale(4),
+               scale(PAD_TOP + COVER)};
   switch (ui_part(i)) {
     case UI_TITLE:
     case UI_BYLINE:
@@ -1116,6 +1205,11 @@ static BOOL ui_node(int i, uia_node *n) {
       lstrcpynW(n->name, what, 512);
       return TRUE;
     }
+    case UI_RULE:
+      n->type = UIA_TextControlTypeId;
+      SetRect(&n->rect, scale(PAD_X), s.rule_top, close_rect().right, s.rule_top + s.rule_h);
+      lstrcpynW(n->name, s.rule ? s.rule : L"", 512);
+      return TRUE;
     case UI_PLAY:
     case UI_SHUFFLE: {
       int action = ui_part(i) == UI_SHUFFLE;
@@ -1126,6 +1220,13 @@ static BOOL ui_node(int i, uia_node *n) {
       lstrcpynW(n->name, mc_wstr(action ? MC_STR_SHUFFLE : MC_STR_PLAY), 512);
       return TRUE;
     }
+    case UI_RESHUFFLE:
+      n->type = UIA_ButtonControlTypeId;
+      n->flags = UIA_INVOKABLE;
+      n->rect = reshuffle_rect();
+      n->automation_id = L"Reshuffle";
+      lstrcpynW(n->name, mc_wstr(MC_STR_RESHUFFLE), 512);
+      return TRUE;
     case UI_MORE:
       n->type = UIA_ButtonControlTypeId;
       n->flags = UIA_INVOKABLE;
@@ -1165,6 +1266,7 @@ static int ui_at(POINT pt) {
   }
   if (in_close(pt.x, pt.y)) return ui_index(UI_CLOSE);
   if (on_more(pt.x, pt.y)) return ui_index(UI_MORE);
+  if (on_reshuffle(pt.x, pt.y)) return ui_index(UI_RESHUFFLE);
   int r = row_at(pt.x, pt.y);
   return r >= 0 ? ui_row(r) : UIA_ROOT;
 }
@@ -1192,10 +1294,8 @@ static void ui_invoke(int i) {
   switch (ui_part(i)) {
     case UI_PLAY: press_action(0); break;
     case UI_SHUFFLE: press_action(1); break;
-    case UI_MORE:
-      if (s.smart) request_playlist(TLN_RESHUFFLE);
-      else show_playlist_menu();
-      break;
+    case UI_RESHUFFLE: request_playlist(TLN_RESHUFFLE); break;
+    case UI_MORE: show_playlist_menu(); break;
     case UI_CLOSE: notify(TLN_CLOSE); break;
     case UI_PARTS: play(i - ui_index(UI_LIST) - 1); break;
   }
@@ -1267,6 +1367,7 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       }
       set_close_hot(in_close(x, y));
       set_more_hot(on_more(x, y));
+      set_reshuffle_hot(on_reshuffle(x, y));
       set_action_hot(action_at(x, y));
       set_hot(scroller_mouse_move(&s.scroll, x, y) ? -1 : row_at(x, y));
       return 0;
@@ -1276,6 +1377,7 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       scroller_mouse_leave(&s.scroll);
       set_hot(-1);
       set_more_hot(FALSE);
+      set_reshuffle_hot(FALSE);
       if (!s.close_pressed) set_close_hot(FALSE);
       if (s.action_pressed < 0) set_action_hot(-1);
       return 0;
@@ -1302,8 +1404,11 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
         return 0;
       }
       if (on_more(x, y)) {
-        if (msg == WM_LBUTTONDOWN && s.smart) request_playlist(TLN_RESHUFFLE);
-        else if (msg == WM_LBUTTONDOWN) show_playlist_menu();
+        if (msg == WM_LBUTTONDOWN) show_playlist_menu();
+        return 0;
+      }
+      if (on_reshuffle(x, y)) {
+        if (msg == WM_LBUTTONDOWN) request_playlist(TLN_RESHUFFLE);
         return 0;
       }
       SetFocus(wnd);
@@ -1398,9 +1503,16 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = wnd, .uId = 1,
                         .lpszText = (wchar_t *)mc_wstr(MC_STR_CLOSE)};
       SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
-      ti.uId = 2; /* the playlist menu's button, or Reshuffle; placed by relayout() */
+      ti.uId = 2; /* the playlist menu's button; placed by relayout(), as are the rest */
       ti.lpszText = (wchar_t *)more_label();
       SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+      ti.uId = 3; /* Reshuffle */
+      ti.lpszText = (wchar_t *)mc_wstr(MC_STR_RESHUFFLE);
+      SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+      ti.uId = 4; /* a smart playlist's rule */
+      ti.lpszText = (wchar_t *)L"";
+      SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+      SendMessageW(s.tooltip, TTM_SETMAXTIPWIDTH, 0, 400);
       return 0;
     }
     case WM_DESTROY:
@@ -1409,6 +1521,7 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
       free(s.album_title);
       free(s.artist);
       free(s.cover_dir);
+      free(s.rule);
       free_art();
       if (s.wic) IWICImagingFactory_Release(s.wic);
       if (s.tooltip) DestroyWindow(s.tooltip);

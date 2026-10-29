@@ -41,9 +41,10 @@ void album_grid_set_library(mc_library *lib);
  *
  * Smart playlists and smart album groups (smartlist.h) follow the others, those with
  * something to play here, with a placeholder and "Smart playlist" or "Smart album group"
- * beneath the name. A smart group opens like a group, with the albums its rule picks; in
- * place of More it has a Reshuffle button if it's in random order (which the grid does
- * itself, notifying AGN_LIBRARY_CHANGED), and nothing to rename, delete or remove.
+ * beneath the name. A smart group opens like a group, with the albums its rule picks and the
+ * rule as a sentence under its name; its More button offers Edit Rules... (smart_editor.h),
+ * Rename... and Delete..., and in random order a Reshuffle button sits beside it (which the
+ * grid does itself, notifying AGN_LIBRARY_CHANGED). Its albums can't be removed from it.
  *
  * Playlists and album groups have a header too, with the page's name and a + button: New
  * Playlist or New Album Group, which asks for a name (playlist_dialogs.c) and makes an empty
@@ -73,8 +74,16 @@ BOOL album_grid_back(void);
 
 /* Right-clicking an album (on Albums or in a group) offers Add to Album Group, and in a
  * group Remove from Album Group; right-clicking a group (or its header) offers Rename and
- * Delete. The grid makes those changes itself (add_to_playlist.c, playlist_dialogs.c), then
- * notifies AGN_LIBRARY_CHANGED. */
+ * Delete, and a smart playlist or group Edit Rules..., Rename... and Delete.... F2 renames
+ * the open group, or the selected group or smart playlist. Right-clicking the Playlists or
+ * Album Groups page away from the tiles (or the menu key with nothing selected) offers New
+ * Smart Playlist... or New Smart Album Group.... The grid makes those changes itself
+ * (add_to_playlist.c, playlist_dialogs.c, smart_editor.c), then notifies
+ * AGN_LIBRARY_CHANGED. */
+
+/* New Smart Playlist... on the Playlists page, New Smart Album Group... on the Album Groups
+ * page, as their menus do: then selects the new playlist, or opens the new group. */
+void album_grid_new_smart(void);
 
 /* This PC's place in sync, for the empty pages: with no albums and no group, Albums suggests
  * pairing, with a Pair with a Device... button (AGN_PAIR); on Playlists, when every playlist

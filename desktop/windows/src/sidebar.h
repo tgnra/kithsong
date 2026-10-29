@@ -48,6 +48,10 @@ typedef enum {
 #define SBN_OPEN_RECENT 0x102
 /* Sent the same way on Enter on the selected page's row, to move the focus into the page. */
 #define SBN_ENTER_PAGE 0x103
+/* Sent the same way from the Playlists or Album Groups row's right-click menu (or the menu
+ * key on it): New Smart Playlist... or New Smart Album Group.... */
+#define SBN_NEW_SMART_PLAYLIST 0x104
+#define SBN_NEW_SMART_GROUP 0x105
 
 /* sidebar_device.flags */
 enum {

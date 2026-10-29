@@ -17,6 +17,7 @@
 #include "playlist_dialogs.h"
 #include "remove_here.h"
 #include "scroller.h"
+#include "smart_editor.h"
 #include "theme.h"
 #include "uia.h"
 #include "wstr.h"
@@ -32,6 +33,8 @@ enum {
   HEADER_BUTTON = 36, /* a group's Back and More buttons */
   HEADER_GAP = 16,    /* below them, above the tiles */
   HEADER_TEXT_GAP = 12,
+  RULE_GAP = 4, /* a smart group's rule, under its header */
+  HEADER_BUTTON_GAP = 4,
 };
 
 /* The right-click menus' commands. */
@@ -43,13 +46,17 @@ enum {
   CMD_DELETE_ALBUM,
   CMD_REMOVE_HERE, /* Remove from this PC... */
   CMD_SYNC_HERE,   /* Sync to this PC */
+  CMD_EDIT_SMART,
+  CMD_RENAME_SMART,
+  CMD_DELETE_SMART,
+  CMD_NEW_SMART,
   CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
 };
 
 /* The parts of a page's header that act on a click (also their tooltips' ids), and the
  * empty page's button. On Playlists and Album Groups, PART_MORE is New Playlist or New
  * Album Group (a +). */
-enum { PART_NONE, PART_BACK, PART_MORE, PART_ACTION };
+enum { PART_NONE, PART_BACK, PART_MORE, PART_RESHUFFLE, PART_ACTION };
 
 /* What the empty page's button does (see album_grid_set_sync_state()). */
 typedef enum { ACTION_NONE, ACTION_PAIR, ACTION_SYNC } empty_action;
@@ -107,6 +114,7 @@ static struct {
   char group_uid[MC_UID_STRLEN]; /* AGV_GROUP's group */
   wchar_t *group_name;           /* its name, as of the last reload */
   BOOL group_smart, group_random; /* it's a smart group, and in random order */
+  wchar_t *group_rule;           /* a smart group's rule as a sentence, under its name; or NULL */
   int hidden;                    /* playlists left out for having nothing to play here */
   char keep_uid[MC_UID_STRLEN];  /* a playlist made with New Playlist: shown, though it has
                                   * nothing to play here, until the view changes */
@@ -285,7 +293,6 @@ static void relayout(void) {
   g.pad = scale(20);
   g.gap = scale(20);
   g.text_gap = scale(8);
-  g.top = g.pad + (has_header(g.view) ? scale(HEADER_BUTTON + HEADER_GAP) : 0);
   fit(g.full_w > g.client_w ? g.full_w : g.client_w, &g.cols, &g.tile_w);
   g.cols = (g.client_w - 2 * g.pad + g.gap) / (g.tile_w + g.gap);
   if (g.cols < 1) fit(g.client_w, &g.cols, &g.tile_w); /* too narrow for full-width tiles */
@@ -297,6 +304,8 @@ static void relayout(void) {
   SelectObject(dc, old);
   ReleaseDC(g.wnd, dc);
   g.text_h = tm.tmHeight;
+  g.top = g.pad + (has_header(g.view) ? scale(HEADER_BUTTON + HEADER_GAP) : 0);
+  if (g.view == AGV_GROUP && g.group_rule) g.top += scale(RULE_GAP) + g.text_h;
   g.row_h = g.tile_w + g.text_gap + 2 * g.text_h + g.gap; /* the title, and the artist or track count */
 
   int rows = (g.count + g.cols - 1) / g.cols;
@@ -571,6 +580,9 @@ static void find_smart_group(void) {
     g.group_name = widen(s->name && *s->name ? s->name : mc_str(MC_STR_UNTITLED));
     g.group_smart = TRUE;
     g.group_random = s->random;
+    char *sentence = NULL;
+    if (mc_smart_describe(g.lib, MC_SMART_ALBUMS, s->rule, &sentence) == MC_OK) g.group_rule = widen(sentence);
+    mc_free(sentence);
   }
   mc_smart_list_free(list);
 }
@@ -586,7 +598,9 @@ static void read_groups(tile **tiles, wchar_t ***dirs, int *n) {
   *dirs = NULL;
   if (g.view == AGV_GROUP) {
     free(g.group_name);
+    free(g.group_rule);
     g.group_name = NULL;
+    g.group_rule = NULL;
     g.group_smart = g.group_random = FALSE;
     for (int i = 0; list && i < list->count; i++)
       if (!strcmp(list->items[i].uid, g.group_uid))
@@ -856,24 +870,40 @@ static void on_scrolled(void) {
 
 /* --- A group's header --- */
 
-/* A group's header: its Back button, at the top left, and its More button (Rename,
- * Delete), at the top right. A smart group has Reshuffle there instead, if it's in random
- * order, or nothing. On Playlists and Album Groups the header has no Back, and in place of
- * More a + (New Playlist, New Album Group) while a library is open. */
-static BOOL has_back(void) {
-  return g.tiles_view == AGV_GROUP;
+/* A page's header. A group's has its Back button, at the top left, and its More button (Edit
+ * Rules for a smart one, Rename, Delete), at the top right; a smart group in random order has
+ * Reshuffle left of More. On Playlists and Album Groups the header has no Back, and in place
+ * of More a + (New Playlist, New Album Group) while a library is open. */
+static BOOL has_reshuffle(void) {
+  return g.tiles_view == AGV_GROUP && g.group_smart && g.group_random;
 }
 
-static BOOL has_more(void) {
-  if (!has_header(g.tiles_view)) return FALSE;
-  if (g.tiles_view != AGV_GROUP) return g.lib != NULL;
-  return !g.group_smart || g.group_random;
+/* The header's buttons there are now, left to right, into parts; returns how many. */
+static int header_parts(int parts[3]) {
+  int n = 0;
+  if (!has_header(g.tiles_view)) return 0;
+  if (g.tiles_view != AGV_GROUP) {
+    if (g.lib) parts[n++] = PART_MORE;
+    return n;
+  }
+  parts[n++] = PART_BACK;
+  if (has_reshuffle()) parts[n++] = PART_RESHUFFLE;
+  parts[n++] = PART_MORE;
+  return n;
+}
+
+static BOOL has_part(int part) {
+  int parts[3], n = header_parts(parts);
+  for (int i = 0; i < n; i++)
+    if (parts[i] == part) return TRUE;
+  return FALSE;
 }
 
 static RECT header_button(int part) {
   if (part == PART_ACTION) return g.action_rc;
   int size = scale(HEADER_BUTTON), y = g.pad - g.scroll.pos;
   int x = part == PART_BACK ? g.pad : g.client_w - g.pad - size;
+  if (part == PART_RESHUFFLE) x -= size + scale(HEADER_BUTTON_GAP);
   RECT r = {x, y, x + size, y + size};
   return r;
 }
@@ -881,16 +911,17 @@ static RECT header_button(int part) {
 /* What a header button is called, in its tooltip and to a screen reader. */
 static const wchar_t *header_label(int part) {
   if (part == PART_BACK) return mc_wstr(MC_STR_BACK);
+  if (part == PART_RESHUFFLE) return mc_wstr(MC_STR_RESHUFFLE);
   if (g.tiles_view == AGV_PLAYLISTS) return mc_wstr(MC_STR_NEW_PLAYLIST);
   if (g.tiles_view == AGV_GROUPS) return mc_wstr(MC_STR_NEW_ALBUM_GROUP);
-  return mc_wstr(g.group_smart ? MC_STR_RESHUFFLE : MC_STR_ALBUM_GROUP_MENU);
+  return mc_wstr(g.group_smart ? MC_STR_WINDOWS_SMART_GROUP_MENU : MC_STR_ALBUM_GROUP_MENU);
 }
 
 /* The buttons' tooltips follow them as the header comes and goes and scrolls. */
 static void update_tips(void) {
   if (!g.tooltip) return;
-  for (int part = PART_BACK; part <= PART_MORE; part++) {
-    BOOL shown = part == PART_BACK ? has_back() : has_more();
+  for (int part = PART_BACK; part <= PART_RESHUFFLE; part++) {
+    BOOL shown = has_part(part);
     TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g.wnd, .uId = (UINT_PTR)part,
                       .rect = shown ? header_button(part) : (RECT){0},
                       .lpszText = (wchar_t *)header_label(part)};
@@ -901,10 +932,12 @@ static void update_tips(void) {
 
 /* The header button, or the empty page's button, at a point. */
 static int header_part_at(int x, int y) {
+  int parts[3], n = header_parts(parts);
   POINT pt = {x, y};
-  RECT back = header_button(PART_BACK), more = header_button(PART_MORE);
-  if (has_back() && PtInRect(&back, pt)) return PART_BACK;
-  if (has_more() && PtInRect(&more, pt)) return PART_MORE;
+  for (int i = 0; i < n; i++) {
+    RECT r = header_button(parts[i]);
+    if (PtInRect(&r, pt)) return parts[i];
+  }
   if (PtInRect(&g.action_rc, pt) && g.count == 0) return PART_ACTION;
   return PART_NONE;
 }
@@ -920,20 +953,25 @@ static void set_hot_part(int part) {
 static const wchar_t *view_name(void);
 
 static void paint_header(canvas *c) {
-  RECT back = header_button(PART_BACK), more = header_button(PART_MORE);
+  int parts[3], n = header_parts(parts);
   int radius = scale(HEADER_BUTTON) / 2;
-  /* Back, then Add, Refresh or More */
-  const wchar_t *glyphs[] = {L"\xE72B", g.tiles_view != AGV_GROUP ? L"\xE710" : g.group_smart ? L"\xE72C" : L"\xE712"};
-  RECT buttons[] = {back, more};
-  BOOL shown[] = {has_back(), has_more()};
-  for (int i = 0; i < 2; i++) {
-    if (!shown[i]) continue;
-    COLORREF color = theme_draw_state(c, &buttons[i], radius, g.hot_part == i + PART_BACK ? STATE_HOT : STATE_NORMAL);
+  for (int i = 0; i < n; i++) {
+    RECT r = header_button(parts[i]);
+    /* Back, Refresh (for Reshuffle), and More, or Add on Playlists and Album Groups */
+    const wchar_t *glyph = parts[i] == PART_BACK        ? L"\xE72B"
+                           : parts[i] == PART_RESHUFFLE ? L"\xE72C"
+                           : g.tiles_view != AGV_GROUP  ? L"\xE710"
+                                                        : L"\xE712";
+    COLORREF color = theme_draw_state(c, &r, radius, g.hot_part == parts[i] ? STATE_HOT : STATE_NORMAL);
     SelectObject(c->dc, g.icon_font);
     SetTextColor(c->dc, color);
-    DrawTextW(c->dc, glyphs[i], 1, &buttons[i], DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawTextW(c->dc, glyph, 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   }
-  RECT name = {has_back() ? back.right + scale(HEADER_TEXT_GAP) : g.pad, back.top, more.left - scale(HEADER_TEXT_GAP),
+  BOOL back_shown = n && parts[0] == PART_BACK;
+  int first_right = back_shown ? 1 : 0;
+  RECT back = header_button(PART_BACK);
+  int right = n > first_right ? header_button(parts[first_right]).left : g.client_w - g.pad;
+  RECT name = {back_shown ? back.right + scale(HEADER_TEXT_GAP) : g.pad, back.top, right - scale(HEADER_TEXT_GAP),
                back.bottom};
   SelectObject(c->dc, g.header_font ? g.header_font : g.font);
   SetTextColor(c->dc, theme.text);
@@ -941,6 +979,11 @@ static void paint_header(canvas *c) {
   if (title)
     DrawTextW(c->dc, title, -1, &name, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
   SelectObject(c->dc, g.font ? (HGDIOBJ)g.font : GetStockObject(DEFAULT_GUI_FONT));
+  if (g.group_rule) { /* a smart group's rule, under its name */
+    RECT rule = {name.left, back.bottom + scale(RULE_GAP), g.client_w - g.pad, back.bottom + scale(RULE_GAP) + g.text_h};
+    SetTextColor(c->dc, theme.text2);
+    DrawTextW(c->dc, g.group_rule, -1, &rule, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+  }
 }
 
 /* --- Menus --- */
@@ -974,14 +1017,63 @@ static void show_group_menu(const char *uid, const wchar_t *name, POINT pt) {
   if (changed) notify_changed();
 }
 
-/* The More button's menu: the shown group's, hanging from the button's right edge. Smart
- * groups have none. */
+/* Edit Rules..., Rename... and Delete... for smart playlist or group uid, named name, at pt
+ * (screen coordinates). */
+static void show_smart_menu(const char *uid, const wchar_t *name, mc_smart_subject subject, POINT pt) {
+  char smart[MC_UID_STRLEN]; /* copies, as show_group_menu's */
+  snprintf(smart, sizeof smart, "%s", uid);
+  wchar_t *title = _wcsdup(name ? name : L"");
+  HMENU menu = CreatePopupMenu();
+  wchar_t item[128];
+  AppendMenuW(menu, MF_STRING, CMD_EDIT_SMART, mc_wstr_mnemonic(MC_STR_WINDOWS_SMART_EDIT_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_RENAME_SMART,
+              wstr_menu_item(item, 128, MC_STR_PLAYLIST_RENAME_MENU, MC_STR_WINDOWS_SHORTCUT_RENAME));
+  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_SMART,
+              mc_wstr_mnemonic(subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_DELETE_PLAYLIST_MENU
+                                                          : MC_STR_WINDOWS_SMART_DELETE_GROUP_MENU));
+  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
+  DestroyMenu(menu);
+  HWND owner = GetAncestor(g.wnd, GA_ROOT);
+  BOOL changed = FALSE;
+  if (cmd == CMD_EDIT_SMART) changed = smart_edit_dialog(owner, g.lib, smart);
+  else if (cmd == CMD_RENAME_SMART) changed = smart_rename_dialog(owner, g.lib, smart, title, subject);
+  else if (cmd == CMD_DELETE_SMART) changed = smart_delete_dialog(owner, g.lib, smart, title, subject);
+  free(title);
+  if (changed) notify_changed();
+}
+
+/* The More button's menu: the shown group's, hanging from the button's right edge. */
 static void show_more_menu(void) {
-  if (g.tiles_view != AGV_GROUP || g.group_smart) return;
+  if (g.tiles_view != AGV_GROUP) return;
   RECT r = header_button(PART_MORE);
   POINT pt = {r.right, r.bottom};
   ClientToScreen(g.wnd, &pt);
-  show_group_menu(g.group_uid, g.group_name, pt);
+  if (g.group_smart) show_smart_menu(g.group_uid, g.group_name, MC_SMART_ALBUMS, pt);
+  else show_group_menu(g.group_uid, g.group_name, pt);
+}
+
+void album_grid_new_smart(void) {
+  if (!g.lib || (g.view != AGV_PLAYLISTS && g.view != AGV_GROUPS)) return;
+  BOOL tracks = g.view == AGV_PLAYLISTS;
+  char uid[MC_UID_STRLEN];
+  if (!smart_new_dialog(GetAncestor(g.wnd, GA_ROOT), g.lib, tracks ? MC_SMART_TRACKS : MC_SMART_ALBUMS, uid)) return;
+  g.dirty = TRUE;
+  if (tracks) album_grid_select(uid); /* if it has anything to play here; the grid leaves it out otherwise */
+  else album_grid_open_group(uid);
+  notify_changed();
+}
+
+/* On the Playlists or Album Groups page, away from the tiles: New Smart Playlist... or New
+ * Smart Album Group.... */
+static void show_new_menu(POINT pt) {
+  HMENU menu = CreatePopupMenu();
+  AppendMenuW(menu, MF_STRING, CMD_NEW_SMART,
+              mc_wstr_mnemonic(g.tiles_view == AGV_PLAYLISTS ? MC_STR_WINDOWS_SMART_NEW_PLAYLIST_MENU
+                                                             : MC_STR_WINDOWS_SMART_NEW_GROUP_MENU));
+  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
+  DestroyMenu(menu);
+  if (cmd == CMD_NEW_SMART) album_grid_new_smart();
 }
 
 /* The header's button for a smart group in random order: a new order for its albums. */
@@ -1038,7 +1130,7 @@ static void do_action(void) {
 static void press_part(int part) {
   if (part == PART_BACK) go_back();
   else if (part == PART_MORE && g.tiles_view != AGV_GROUP) new_list();
-  else if (part == PART_MORE && g.group_smart) reshuffle_group();
+  else if (part == PART_RESHUFFLE) reshuffle_group();
   else if (part == PART_MORE) show_more_menu();
   else if (part == PART_ACTION) do_action();
 }
@@ -1100,17 +1192,25 @@ static void show_album_menu(int i, POINT pt) {
 }
 
 /* WM_CONTEXTMENU: a tile's menu, or the group's on its header. From the keyboard (lp -1),
- * the selected tile's, under its cover. Playlists have none here: theirs is in the track
- * list. Nor do smart groups, though their albums do. */
+ * the selected tile's, under its cover. Manual playlists have none here: theirs is in the
+ * track list; smart ones have theirs here too. Away from the tiles, the Playlists and Album
+ * Groups pages offer a new smart one. */
 static BOOL on_context_menu(LPARAM lp) {
   if (!g.lib) return FALSE;
   POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+  BOOL lists = g.tiles_view == AGV_PLAYLISTS || g.tiles_view == AGV_GROUPS;
   int i;
   if (lp == -1) {
     i = g.selected;
     if (i < 0 && g.tiles_view == AGV_GROUP) {
       show_more_menu();
-      return !g.group_smart;
+      return TRUE;
+    }
+    if (i < 0 && lists) {
+      pt = (POINT){g.pad, g.pad};
+      ClientToScreen(g.wnd, &pt);
+      show_new_menu(pt);
+      return TRUE;
     }
     if (i < 0 || i >= g.count) return FALSE;
     RECT art, text, outer;
@@ -1122,14 +1222,21 @@ static BOOL on_context_menu(LPARAM lp) {
     POINT client = pt;
     ScreenToClient(g.wnd, &client);
     i = tile_at(client.x, client.y);
-    if (i < 0 && g.tiles_view == AGV_GROUP && client.y < g.top - g.scroll.pos && !g.group_smart) {
-      show_group_menu(g.group_uid, g.group_name, pt);
+    if (i < 0 && g.tiles_view == AGV_GROUP && client.y < g.top - g.scroll.pos) {
+      if (g.group_smart) show_smart_menu(g.group_uid, g.group_name, MC_SMART_ALBUMS, pt);
+      else show_group_menu(g.group_uid, g.group_name, pt);
+      return TRUE;
+    }
+    if (i < 0 && lists) {
+      show_new_menu(pt);
       return TRUE;
     }
     if (i < 0) return FALSE;
   }
-  if (g.tiles_view == AGV_GROUPS && g.tiles[i].smart) return FALSE;
-  if (g.tiles_view == AGV_GROUPS) show_group_menu(g.tiles[i].uid, g.tiles[i].title, pt);
+  if (lists && g.tiles[i].smart)
+    show_smart_menu(g.tiles[i].uid, g.tiles[i].title, g.tiles_view == AGV_PLAYLISTS ? MC_SMART_TRACKS : MC_SMART_ALBUMS,
+                    pt);
+  else if (g.tiles_view == AGV_GROUPS) show_group_menu(g.tiles[i].uid, g.tiles[i].title, pt);
   else if (g.tiles_view != AGV_PLAYLISTS) show_album_menu(i, pt);
   else return FALSE;
   return TRUE;
@@ -1181,6 +1288,33 @@ static BOOL on_key(WPARAM key) {
   }
   if (key == VK_RETURN && action() != ACTION_NONE) { /* the empty page's button */
     do_action();
+    return TRUE;
+  }
+  if (key == VK_F2 && g.lib) { /* renames the open group, or the selected smart playlist or group */
+    HWND owner = GetAncestor(g.wnd, GA_ROOT);
+    BOOL on_tile = g.selected >= 0 && g.selected < g.count && (g.tiles_view == AGV_PLAYLISTS || g.tiles_view == AGV_GROUPS);
+    BOOL changed = FALSE;
+    char uid[MC_UID_STRLEN];
+    wchar_t *name = NULL;
+    if (g.tiles_view == AGV_GROUP) {
+      snprintf(uid, sizeof uid, "%s", g.group_uid);
+      name = _wcsdup(g.group_name ? g.group_name : L"");
+      changed = g.group_smart ? smart_rename_dialog(owner, g.lib, uid, name, MC_SMART_ALBUMS)
+                              : album_group_rename_dialog(owner, g.lib, uid, name);
+    } else if (on_tile && g.tiles[g.selected].smart) {
+      snprintf(uid, sizeof uid, "%s", g.tiles[g.selected].uid);
+      name = _wcsdup(g.tiles[g.selected].title ? g.tiles[g.selected].title : L"");
+      changed = smart_rename_dialog(owner, g.lib, uid, name,
+                                    g.tiles_view == AGV_PLAYLISTS ? MC_SMART_TRACKS : MC_SMART_ALBUMS);
+    } else if (on_tile && g.tiles_view == AGV_GROUPS) {
+      snprintf(uid, sizeof uid, "%s", g.tiles[g.selected].uid);
+      name = _wcsdup(g.tiles[g.selected].title ? g.tiles[g.selected].title : L"");
+      changed = album_group_rename_dialog(owner, g.lib, uid, name);
+    } else {
+      return FALSE;
+    }
+    free(name);
+    if (changed) notify_changed();
     return TRUE;
   }
   if (!g.count || !g.cols) return FALSE;
@@ -1369,21 +1503,14 @@ void album_grid_theme_changed(void) {
 
 /* --- UI Automation (uia.h) ---
  *
- * The nodes: the header's buttons (a group's Back, then More or Reshuffle; the + on
- * Playlists and Album Groups), the list, and the list's tiles; while there are none, a text
- * saying why follows the list instead, and the empty page's button, if any. */
-
-/* The header's buttons' parts, in order; returns how many. */
-static int ui_parts(int parts[2]) {
-  int n = 0;
-  if (has_back()) parts[n++] = PART_BACK;
-  if (has_more()) parts[n++] = PART_MORE;
-  return n;
-}
+ * The nodes: the header's buttons (a group's Back, then Reshuffle if it has one, then More;
+ * the + on Playlists and Album Groups), the list, and the list's tiles; while there are none,
+ * a text saying why follows the list instead, and the empty page's button, if any. A smart
+ * group's rule is the pane's and the list's help text. */
 
 static int ui_buttons(void) {
-  int parts[2];
-  return ui_parts(parts);
+  int parts[3];
+  return header_parts(parts);
 }
 
 static int ui_list(void) {
@@ -1409,17 +1536,21 @@ static BOOL ui_node(int i, uia_node *n) {
   if (i == UIA_ROOT) {
     n->type = UIA_PaneControlTypeId;
     lstrcpynW(n->name, view_name(), 512);
+    if (g.tiles_view == AGV_GROUP && g.group_rule) lstrcpynW(n->help, g.group_rule, 256);
     n->count = list + 1 + (g.count == 0) + (g.count == 0 && action() != ACTION_NONE);
     return TRUE;
   }
-  if (i >= 0 && i < list) { /* Back, More (or +) */
-    int parts[2];
-    ui_parts(parts);
+  if (i >= 0 && i < list) { /* Back, Reshuffle, More (or +) */
+    int parts[3];
+    header_parts(parts);
     int part = parts[i];
     n->type = UIA_ButtonControlTypeId;
     n->flags = UIA_INVOKABLE;
     n->rect = header_button(part);
-    n->automation_id = part == PART_BACK ? L"Back" : g.tiles_view != AGV_GROUP ? L"New" : L"More";
+    n->automation_id = part == PART_BACK        ? L"Back"
+                       : part == PART_RESHUFFLE ? L"Reshuffle"
+                       : g.tiles_view != AGV_GROUP ? L"New"
+                                                   : L"More";
     lstrcpynW(n->name, header_label(part), 512);
     return TRUE;
   }
@@ -1431,6 +1562,7 @@ static BOOL ui_node(int i, uia_node *n) {
     n->count = g.count;
     n->automation_id = L"Tiles";
     lstrcpynW(n->name, view_name(), 512);
+    if (g.tiles_view == AGV_GROUP && g.group_rule) lstrcpynW(n->help, g.group_rule, 256);
     return TRUE;
   }
   int t = i - list - 1;
@@ -1472,7 +1604,7 @@ static int ui_focus(void) {
 static int ui_at(POINT pt) {
   int part = header_part_at(pt.x, pt.y), i = tile_at(pt.x, pt.y);
   if (part == PART_ACTION) return ui_list() + 2;
-  int parts[2], n = ui_parts(parts);
+  int parts[3], n = header_parts(parts);
   for (int k = 0; k < n; k++)
     if (parts[k] == part) return k;
   return i >= 0 ? ui_tile(i) : UIA_ROOT;
@@ -1491,7 +1623,7 @@ static void ui_select(int i) {
 
 /* As a click: the header's buttons and the empty page's act, and a group opens. */
 static void ui_invoke(int i) {
-  int parts[2], list = ui_parts(parts), t = i - list - 1;
+  int parts[3], list = header_parts(parts), t = i - list - 1;
   if (i >= 0 && i < list) press_part(parts[i]);
   else if (g.count == 0 && t == 1) press_part(PART_ACTION);
   else if (g.tiles_view == AGV_GROUPS && t >= 0 && t < g.count) album_grid_open_group(g.tiles[t].uid);
@@ -1623,6 +1755,7 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (g.icon_font) DeleteObject(g.icon_font);
       if (g.header_font) DeleteObject(g.header_font);
       free(g.group_name);
+      free(g.group_rule);
       DeleteCriticalSection(&g.lock);
       memset(&g, 0, sizeof g);
       return 0;
@@ -1649,11 +1782,11 @@ HWND album_grid_create(HWND parent, int id) {
   g.thread = CreateThread(NULL, 0, loader_main, NULL, 0, NULL);
   uia_init(&ui, g.wnd, &ui_ops);
 
-  /* A group's Back and More (or Reshuffle) buttons; placed by update_tips(). */
+  /* A group's Back, More and Reshuffle buttons; placed by update_tips(). */
   g.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, g.wnd, NULL,
                               GetModuleHandleW(NULL), NULL);
-  for (int part = PART_BACK; part <= PART_MORE; part++) {
+  for (int part = PART_BACK; part <= PART_RESHUFFLE; part++) {
     TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = g.wnd, .uId = (UINT_PTR)part,
                       .lpszText = (wchar_t *)header_label(part)};
     SendMessageW(g.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);

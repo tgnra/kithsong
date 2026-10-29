@@ -14,7 +14,8 @@
  * in a message box of its own.
  *
  * Album groups have the same three, with their own titles and Delete's note ("Its albums
- * stay in the library.").
+ * stay in the library."), and so do smart playlists and smart album groups, except that a
+ * new one comes from the smart list editor (smart_editor.h).
  */
 #ifndef KITHSONG_PLAYLIST_DIALOGS_H
 #define KITHSONG_PLAYLIST_DIALOGS_H
@@ -31,6 +32,10 @@ BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const 
 BOOL album_group_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_STRLEN]);
 BOOL album_group_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
 BOOL album_group_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name);
+
+/* subject says whether uid is a smart playlist or a smart album group. */
+BOOL smart_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name, mc_smart_subject subject);
+BOOL smart_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name, mc_smart_subject subject);
 
 /* The Delete dialog for anything else (delete_dialog.c): "Delete "name"?" with note, which
  * may run to three lines, beneath, titled caption. TRUE if the user chose Delete. */

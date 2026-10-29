@@ -979,6 +979,34 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_KEYDOWN:
       on_key(wp);
       return 0;
+    case WM_CONTEXTMENU: { /* Playlists and Album Groups offer a new smart one */
+      POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+      int i;
+      if (lp == -1) {
+        i = s.focus;
+        RECT rc = i >= 0 ? row_rect(i) : (RECT){0};
+        pt = (POINT){rc.left, rc.bottom};
+        ClientToScreen(wnd, &pt);
+      } else {
+        POINT client = pt;
+        ScreenToClient(wnd, &client);
+        i = target_at(client.x, client.y);
+      }
+      if (i < 0 || i >= s.nrows || s.rows[i].kind != ROW_NAV || !enabled(i) ||
+          (s.rows[i].page != PAGE_PLAYLISTS && s.rows[i].page != PAGE_ALBUM_GROUPS))
+        break;
+      BOOL playlists = s.rows[i].page == PAGE_PLAYLISTS;
+      HMENU menu = CreatePopupMenu();
+      AppendMenuW(menu, MF_STRING, 1,
+                  mc_wstr_mnemonic(playlists ? MC_STR_WINDOWS_SMART_NEW_PLAYLIST_MENU : MC_STR_WINDOWS_SMART_NEW_GROUP_MENU));
+      UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
+      int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, wnd, NULL);
+      DestroyMenu(menu);
+      if (cmd == 1)
+        SendMessageW(GetParent(wnd), WM_COMMAND,
+                     MAKEWPARAM(GetDlgCtrlID(wnd), playlists ? SBN_NEW_SMART_PLAYLIST : SBN_NEW_SMART_GROUP), (LPARAM)wnd);
+      return 0;
+    }
     case WM_GETDLGCODE:
       return DLGC_WANTARROWS;
     case WM_SETFOCUS:
