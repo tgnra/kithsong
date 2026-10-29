@@ -26,6 +26,10 @@ typedef enum {
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
                         * files_received, files_sent, bytes_*, cancelled */
   SYNC_EV_REACH,       /* on_reach: uid ("" when much changed at once) */
+  SYNC_EV_PAIR_MERGE,  /* on_pair_merge: uid, name, initiator, kept_here, needs_confirm,
+                        * tracks_*, scrobble_sign_out, scrobble_user, forget_* */
+  SYNC_EV_MERGE_PROGRESS, /* on_merge_progress: merge_phase, merge_done, merge_total */
+  SYNC_EV_MERGE_DONE,  /* on_merge_done: status, merge (counts), backup_path, scrobble_user */
 } sync_event_kind;
 
 /* One core event. Fields that don't apply to the kind are zero. */
@@ -52,6 +56,25 @@ typedef struct sync_event {
   /* Pair result: this computer joined, and the group's archive (the first of archives). */
   int joined, archives;
   char archive_name[MC_SYNC_DEVICE_NAME_MAX + 1];
+  /* Pair result: they paired by merging libraries, and this computer's was the one kept.
+   * Pair merge: kept_here as there, and needs_confirm (= !kept_here). */
+  int merged, kept_here, needs_confirm;
+  /* Pair merge: each library's track count; Last.fm is signed out on the merged side
+   * (scrobble_sign_out), and the paired devices this computer forgets (needs_confirm only). */
+  int64_t tracks_here, tracks_there;
+  int scrobble_sign_out;
+  int forget_count;
+  char forget_names[512]; /* joined with import_list_separator, cut short if long */
+  /* Pair merge: the Last.fm user signed out here, if this computer confirms. Pair result and
+   * merge done: the one signed out (on either device for the result); "" if none. */
+  char scrobble_user[128];
+  /* Merge progress. */
+  mc_merge_phase merge_phase;
+  int merge_done, merge_total;
+  /* Merge done: the counts (its two string pointers are NULL; see the fields below), and the
+   * set-aside library's path. */
+  mc_merge_result merge;
+  char backup_path[1024];
 } sync_event;
 
 /* Receives each event on the main thread. ev is valid during the call only. */

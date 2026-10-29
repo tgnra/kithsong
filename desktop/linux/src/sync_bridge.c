@@ -90,6 +90,9 @@ static void on_pair_result(void *user, const mc_pair_result *result) {
   p->ev.joined = result->joined;
   p->ev.archives = result->archives;
   copy_str(p->ev.archive_name, sizeof p->ev.archive_name, result->archive_name);
+  p->ev.merged = result->merged;
+  p->ev.kept_here = result->kept_here;
+  copy_str(p->ev.scrobble_user, sizeof p->ev.scrobble_user, result->scrobble_signed_out);
   post(p);
 }
 
@@ -172,6 +175,62 @@ static void on_reach(void *user, const char *device_uid) {
   post(p);
 }
 
+static void on_pair_merge(void *user, const mc_pair_merge *merge) {
+  posted *p = new_event(user, SYNC_EV_PAIR_MERGE);
+  copy_str(p->ev.uid, sizeof p->ev.uid, merge->device_uid);
+  copy_str(p->ev.name, sizeof p->ev.name, merge->name);
+  p->ev.initiator = merge->initiator;
+  p->ev.kept_here = merge->kept_here;
+  p->ev.needs_confirm = merge->needs_confirm;
+  p->ev.tracks_here = merge->tracks_here;
+  p->ev.tracks_there = merge->tracks_there;
+  p->ev.scrobble_sign_out = merge->scrobble_sign_out;
+  copy_str(p->ev.scrobble_user, sizeof p->ev.scrobble_user, merge->scrobble_user);
+  p->ev.forget_count = merge->forget_count;
+  /* The names as one list; a name that doesn't fit whole is left out. */
+  GString *names = g_string_new(NULL);
+  for (int i = 0; i < merge->forget_count && merge->forget_names; i++) {
+    const char *n = merge->forget_names[i] ? merge->forget_names[i] : "";
+    const char *sep = names->len ? mc_str(MC_STR_IMPORT_LIST_SEPARATOR) : "";
+    if (names->len + strlen(sep) + strlen(n) >= sizeof p->ev.forget_names) break;
+    g_string_append(names, sep);
+    g_string_append(names, n);
+  }
+  copy_str(p->ev.forget_names, sizeof p->ev.forget_names, names->str);
+  g_string_free(names, TRUE);
+  post(p);
+}
+
+/* Merge progress, at most one every PROGRESS_MS, but always a change of phase and the last of
+ * a phase. Only the merge callbacks touch these, one at a time. */
+static gint64 g_merge_at;
+static int g_merge_phase = -1;
+
+static void on_merge_progress(void *user, const mc_merge_progress *progress) {
+  gint64 now = g_get_monotonic_time();
+  gboolean last = progress->done >= progress->total;
+  if ((int)progress->phase == g_merge_phase && !last && now - g_merge_at < (gint64)PROGRESS_MS * 1000) return;
+  g_merge_at = now;
+  g_merge_phase = (int)progress->phase;
+  posted *p = new_event(user, SYNC_EV_MERGE_PROGRESS);
+  p->ev.merge_phase = progress->phase;
+  p->ev.merge_done = progress->done;
+  p->ev.merge_total = progress->total;
+  post(p);
+}
+
+static void on_merge_done(void *user, const mc_merge_result *result) {
+  g_merge_phase = -1;
+  posted *p = new_event(user, SYNC_EV_MERGE_DONE);
+  p->ev.status = result->status;
+  p->ev.merge = *result;
+  p->ev.merge.backup_path = NULL;
+  p->ev.merge.scrobble_signed_out = NULL;
+  copy_str(p->ev.backup_path, sizeof p->ev.backup_path, result->backup_path);
+  copy_str(p->ev.scrobble_user, sizeof p->ev.scrobble_user, result->scrobble_signed_out);
+  post(p);
+}
+
 void sync_bridge_start(mc_library *lib, const char *config_dir, const char *device_name,
                        sync_bridge_event_fn on_event, void *user) {
   sync_bridge_stop();
@@ -179,13 +238,14 @@ void sync_bridge_start(mc_library *lib, const char *config_dir, const char *devi
   g_bridge.user = user;
   memset(g_progress, 0, sizeof g_progress);
   g_progress_next = 0;
+  g_merge_phase = -1;
   if (!lib || !config_dir) {
     g_bridge.error = MC_ERR_INVALID_ARG; /* no library open */
     return;
   }
 
   static const mc_sync_events events = {on_peer, on_pair_code, on_pair_result, on_progress, on_sync_done,
-                                        on_reach, NULL, NULL, NULL};
+                                        on_reach, on_pair_merge, on_merge_progress, on_merge_done};
   mc_sync *sync = NULL;
   void *gen = GINT_TO_POINTER(g_atomic_int_get(&g_bridge.gen));
   mc_status st = mc_sync_new(lib, config_dir, device_name, MC_DEVICE_DESKTOP, &events, gen, &sync);

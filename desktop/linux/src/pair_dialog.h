@@ -55,7 +55,21 @@ void pair_dialog_show_code(GtkWidget *parent, mc_sync *sync, const sync_event *e
  * the archive). When this computer could have joined but has music of its own, it offers
  * Create a New Library, then to pair again. */
 gboolean pair_dialog_on_result(GtkWidget *parent, const sync_event *ev);
-/* Closes both dialogs without cancelling: call before sync stops. */
+/* Shows a SYNC_EV_PAIR_MERGE (both libraries have music, so pairing merges them) in the
+ * dialog it belongs to, as on Windows. On this computer when its library is the one merged
+ * (needs_confirm), the proposal says which library is kept, that this one is set aside as a
+ * backup, and what goes with it (a Last.fm account, the paired devices), with Merge in the
+ * header bar and Cancel, which call mc_sync_pair_merge_confirm(). The enter-code dialog
+ * shows it in place of the code until answered (the code can be typed after); the show-code
+ * dialog under the code, and Cancel there declines and closes it. On the computer whose
+ * library is kept, it's a note under the code. The show-code dialog isn't open yet when it
+ * arrives, so it's kept for it. */
+void pair_dialog_on_merge(const sync_event *ev);
+/* SYNC_EV_MERGE_PROGRESS and SYNC_EV_MERGE_DONE: the merge of this computer's old library,
+ * after pairing, in a window of its own beside parent (not modal). Progress opens it (or
+ * updates it); done turns it into a summary (opening it again if it was closed). */
+void pair_dialog_on_merge_event(GtkWidget *parent, const sync_event *ev);
+/* Closes the dialogs without cancelling: call before sync stops. */
 void pair_dialog_close_all(void);
 
 #endif

@@ -40,13 +40,32 @@ typedef struct pair_dlg {
   char target[MC_UID_STRLEN];   /* ACT_CHOOSE's device; the other device for the rest */
   char host[MC_SYNC_ADDR_STRLEN]; /* ACT_PAIR_AGAIN: where it was, "" if not known */
   guint16 port;
+  /* Merging libraries: confirming while this computer's answer is wanted (Merge shows in the
+   * header bar); proposing while the enter-code dialog shows the proposal in place of the
+   * code. merge is the proposal, a note, or that it will merge, under the status line. */
+  gboolean confirming, proposing;
+  GtkWidget *merge, *merge_button;
+  char *title; /* the enter-code dialog's own, while proposing */
 } pair_dlg;
+
+/* The window the merge runs in, after pairing. */
+typedef struct merge_wnd {
+  GtkWidget *window;
+  GtkWidget *intro, *bar, *status;
+  gboolean done;
+} merge_wnd;
 
 static struct {
   pair_dlg *enter; /* the enter-code dialog (initiator), or NULL */
   pair_dlg *show;  /* the show-code dialog (responder), or NULL */
   gboolean enter_cancelled, show_cancelled; /* Cancel was pressed: the CANCELLED to come is ours */
   const pair_dialog_host *host;
+  /* on_pair_merge comes just before on_pair_code on the device showing the code: kept for
+   * the show-code dialog to open with. */
+  gboolean has_pending_merge;
+  sync_event pending_merge;
+  merge_wnd *merge_wnd; /* the merge's window, or NULL */
+  gboolean merge_seen;  /* it opened for this merge's progress (and may have been closed) */
 } s;
 
 /* --- Texts --- */
@@ -115,23 +134,55 @@ static char *archive_explainer(const sync_event *ev) {
   return markup;
 }
 
+/* text, then more as a paragraph of its own; frees both, returns the joined text (g_free). */
+static char *join_para(char *text, char *more) {
+  if (!more || !*more) {
+    g_free(more);
+    return text;
+  }
+  char *both = *text ? g_strdup_printf("%s\n\n%s", text, more) : g_strdup(more);
+  g_free(text);
+  g_free(more);
+  return both;
+}
+
+/* mc_format_alloc()'s result as a g_free-able string. */
+static char *gformat(char *text) {
+  char *out = g_strdup(text ? text : "");
+  mc_free(text);
+  return out;
+}
+
+/* After pairing by merging: whose library was kept, and the Last.fm account signed out. */
+static char *merged_text(const sync_event *ev, const char *name) {
+  char *text = peer_text(ev->kept_here ? MC_STR_PAIRED_MERGED_KEPT_TEXT : MC_STR_PAIRED_MERGED_TEXT, name, TRUE);
+  if (ev->scrobble_user[0])
+    text = join_para(text, gformat(mc_format_alloc(mc_str(ev->kept_here ? MC_STR_PAIRED_MERGED_SCROBBLE_THERE
+                                                                         : MC_STR_PAIRED_MERGED_SCROBBLE_HERE),
+                                                   MC_S(ev->scrobble_user), MC_S(peer_name(name, FALSE)))));
+  return text;
+}
+
 /* How a pairing ended, as on Windows and Android; g_free it. */
 static char *ended_text(const sync_event *ev, gboolean initiator, const char *name) {
   switch (ev->reason) {
-    case MC_PAIR_PAIRED:
+    case MC_PAIR_PAIRED: {
       /* Nothing syncs yet: the device that joined has its sync settings to choose. */
-      return ev->joined ? peer_text(MC_STR_LINUX_COMPUTER_PAIRED_TEXT, name, FALSE)
-                        : peer_text(MC_STR_PAIRED_PEER_TEXT, name, TRUE);
+      char *text = ev->joined ? peer_text(MC_STR_LINUX_COMPUTER_PAIRED_TEXT, name, FALSE)
+                              : peer_text(MC_STR_PAIRED_PEER_TEXT, name, TRUE);
+      return ev->merged ? join_para(text, merged_text(ev, name)) : text;
+    }
+    case MC_PAIR_MERGE_DECLINED: return g_strdup(mc_str(MC_STR_PAIR_MERGE_DECLINED));
     case MC_PAIR_WRONG_CODE: return g_strdup(mc_str(MC_STR_PAIR_WRONG_CODE_TOO_OFTEN));
     /* Both are in groups, different ones (a device in no group just joins). */
     case MC_PAIR_IN_GROUP: return peer_text(MC_STR_LINUX_COMPUTER_PAIR_IN_GROUP, name, FALSE);
     case MC_PAIR_LIBRARY_MISMATCH: {
       char *text = initiator ? peer_text(MC_STR_LINUX_COMPUTER_PAIR_LIBRARY_MISMATCH, name, FALSE)
                              : peer_text(MC_STR_LINUX_COMPUTER_PAIR_LIBRARY_MISMATCH_INCOMING, name, TRUE);
+      /* This computer merges libraries, so the other device can't (yet). */
+      text = join_para(text, peer_text(MC_STR_PAIR_MERGE_UPDATE_HINT, name, FALSE));
       if (!could_join()) return text;
-      char *joined = g_strdup_printf("%s\n\n%s", text, mc_str(MC_STR_PAIR_NEW_LIBRARY_HINT));
-      g_free(text);
-      return joined;
+      return join_para(text, g_strdup(mc_str(MC_STR_PAIR_NEW_LIBRARY_HINT)));
     }
     case MC_PAIR_ALREADY_PAIRED: return peer_text(MC_STR_LINUX_COMPUTER_PAIR_ALREADY_PAIRED, name, FALSE);
     case MC_PAIR_BUSY: return peer_text(MC_STR_PAIR_BUSY, name, TRUE);
@@ -155,7 +206,7 @@ static char *spaced_code(const char *code) {
 
 static void set_status(pair_dlg *d, const char *text) {
   gtk_label_set_text(GTK_LABEL(d->status), text ? text : "");
-  gtk_widget_set_visible(d->status, text && *text);
+  gtk_widget_set_visible(d->status, text && *text && !d->proposing);
 }
 
 /* The digits typed, if there are all six. */
@@ -175,13 +226,19 @@ static void update_pair(pair_dlg *d) {
   if (d->pair) gtk_widget_set_sensitive(d->pair, !d->ended && !d->checking && code_text(d, code));
 }
 
+/* The merge label: text (a proposal or a note), hidden when NULL or "". */
+static void set_merge(pair_dlg *d, const char *text) {
+  gtk_label_set_text(GTK_LABEL(d->merge), text ? text : "");
+  gtk_widget_set_visible(d->merge, text && *text);
+}
+
 /* The enter-code dialog, ready for (another) code. */
 static void ready_for_code(pair_dlg *d) {
   d->checking = FALSE;
   gtk_widget_set_sensitive(d->code, TRUE);
   gtk_editable_set_text(GTK_EDITABLE(d->code), "");
   update_pair(d);
-  gtk_widget_grab_focus(d->code);
+  if (!d->proposing) gtk_widget_grab_focus(d->code);
 }
 
 static void close_quietly(pair_dlg *d) {
@@ -196,6 +253,8 @@ static void show_message(pair_dlg *d, const char *icon, gboolean good, const cha
                          ended_action next, enum mc_str_id action_id, enum mc_str_id ok_id) {
   d->ended = TRUE;
   d->checking = FALSE;
+  d->confirming = d->proposing = FALSE;
+  gtk_widget_set_visible(d->merge_button, FALSE);
   d->next = next;
   adw_dialog_set_title(d->dialog, title);
   gtk_image_set_from_icon_name(GTK_IMAGE(d->ended_icon), icon);
@@ -261,6 +320,89 @@ static void show_ended(pair_dlg *d, const sync_event *ev) {
   show_message(d, paired ? "object-select-symbolic" : "dialog-warning-symbolic", paired,
                mc_str(paired ? MC_STR_PAIRED : MC_STR_PAIR_FAILED), markup, next, action_id, MC_STR_OK);
   g_free(markup);
+}
+
+/* --- Merging libraries --- */
+
+/* "1,204 tracks"-style count (the tracks string); g_free it. */
+static char *track_count(int64_t count) {
+  return gformat(mc_format_alloc(mc_str_plural(MC_STR_TRACKS, (long)count), MC_D(count)));
+}
+
+/* What on_pair_merge proposes: on the computer whose library is merged, which library is kept
+ * and what goes with this one; on the one kept, a note. g_free it. */
+static char *merge_proposal(const sync_event *ev, const char *name) {
+  char *here = track_count(ev->tracks_here), *there = track_count(ev->tracks_there);
+  char *text;
+  if (!ev->needs_confirm) {
+    text = gformat(mc_format_alloc(mc_str(MC_STR_PAIR_MERGE_KEPT_TEXT), MC_S(peer_name(name, FALSE)), MC_S(here),
+                                   MC_S(there)));
+  } else {
+    text = gformat(mc_format_alloc(mc_str(MC_STR_PAIR_MERGE_TEXT), MC_S(peer_name(name, TRUE)), MC_S(there),
+                                   MC_S(here)));
+    text = join_para(text, g_strdup(mc_str(MC_STR_PAIR_MERGE_BACKUP)));
+    if (ev->scrobble_sign_out && ev->scrobble_user[0])
+      text = join_para(text, gformat(mc_format_alloc(mc_str(MC_STR_PAIR_MERGE_SCROBBLE), MC_S(ev->scrobble_user),
+                                                     MC_S(peer_name(name, FALSE)))));
+    if (ev->forget_count > 0)
+      text = join_para(text, gformat(mc_format_alloc(mc_str_plural(MC_STR_PAIR_MERGE_FORGET, ev->forget_count),
+                                                     MC_D(ev->forget_count), MC_S(ev->forget_names))));
+  }
+  g_free(here);
+  g_free(there);
+  return text;
+}
+
+/* Shows on_pair_merge in d. Wanting an answer, the enter-code dialog puts the proposal in
+ * place of the code, with Merge in Pair's place; the show-code dialog shows it under the
+ * code, with Merge at the end of the header bar. */
+static void show_merge(pair_dlg *d, const sync_event *ev) {
+  if (ev->name[0]) g_strlcpy(d->peer, ev->name, sizeof d->peer);
+  char *text = merge_proposal(ev, d->peer);
+  set_merge(d, text);
+  g_free(text);
+  d->confirming = ev->needs_confirm;
+  if (!d->confirming) return;
+  if (d->initiator) {
+    d->proposing = TRUE;
+    g_free(d->title);
+    d->title = g_strdup(adw_dialog_get_title(d->dialog));
+    adw_dialog_set_title(d->dialog, mc_str(MC_STR_PAIR_MERGE_TITLE));
+    gtk_widget_set_visible(d->text, FALSE);
+    gtk_widget_set_visible(d->code, FALSE);
+    gtk_widget_set_visible(d->status, FALSE);
+    if (d->pair) gtk_widget_set_visible(d->pair, FALSE);
+  }
+  gtk_widget_set_visible(d->merge_button, TRUE);
+  adw_dialog_set_default_widget(d->dialog, d->merge_button);
+  adw_dialog_set_focus(d->dialog, d->merge_button);
+}
+
+/* Merge pressed: this computer's library goes into the other's. The enter-code dialog goes
+ * back to the code (still waiting for one, or for the other device if it was sent already). */
+static void on_merge_clicked(GtkButton *button, gpointer data) {
+  (void)button;
+  pair_dlg *d = data;
+  if (!d->confirming || d->ended || !d->sync) return;
+  if (mc_sync_pair_merge_confirm(d->sync, 1) != MC_OK) return; /* over: its result follows */
+  d->confirming = FALSE;
+  gtk_widget_set_visible(d->merge_button, FALSE);
+  set_merge(d, mc_str(MC_STR_PAIR_MERGE_CONFIRMED));
+  if (d->initiator) {
+    d->proposing = FALSE;
+    if (d->title) adw_dialog_set_title(d->dialog, d->title);
+    gtk_widget_set_visible(d->text, TRUE);
+    gtk_widget_set_visible(d->code, TRUE);
+    gtk_widget_set_visible(d->status, *gtk_label_get_text(GTK_LABEL(d->status)) != '\0');
+    if (d->pair) {
+      gtk_widget_set_visible(d->pair, TRUE);
+      adw_dialog_set_default_widget(d->dialog, d->pair);
+    }
+    update_pair(d);
+    adw_dialog_set_focus(d->dialog, d->checking ? d->cancel : d->code);
+  } else {
+    adw_dialog_set_focus(d->dialog, d->cancel);
+  }
 }
 
 static void on_cancel_clicked(GtkButton *button, gpointer data) {
@@ -401,14 +543,18 @@ static void on_closed(AdwDialog *dialog, gpointer data) {
   (void)dialog;
   pair_dlg *d = data;
   if (!d->ended && !d->quiet) {
-    /* The CANCELLED result this brings needs no telling. */
+    /* The CANCELLED (or MERGE_DECLINED) result this brings needs no telling. */
     if (d->initiator) s.enter_cancelled = TRUE;
     else s.show_cancelled = TRUE;
-    if (d->sync) mc_sync_pair_cancel(d->sync);
+    /* While the merge is asked, closing declines it: that ends the pairing on the initiator,
+     * and on the device showing the code when the other enters it. */
+    if (d->sync && (!d->confirming || mc_sync_pair_merge_confirm(d->sync, 0) != MC_OK))
+      mc_sync_pair_cancel(d->sync);
   }
   if (s.enter == d) s.enter = NULL;
   if (s.show == d) s.show = NULL;
   g_object_unref(d->dialog);
+  g_free(d->title);
   g_free(d);
 }
 
@@ -446,6 +592,12 @@ static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gbo
     g_signal_connect(d->pair, "clicked", G_CALLBACK(on_pair_clicked), d);
     adw_header_bar_pack_end(d->header, d->pair);
   }
+  /* Merge, while this computer's answer to merging the libraries is wanted. */
+  d->merge_button = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_PAIR_MERGE_BUTTON));
+  gtk_widget_add_css_class(d->merge_button, "suggested-action");
+  gtk_widget_set_visible(d->merge_button, FALSE);
+  g_signal_connect(d->merge_button, "clicked", G_CALLBACK(on_merge_clicked), d);
+  adw_header_bar_pack_end(d->header, d->merge_button);
 
   GtkWidget *ask = gtk_box_new(GTK_ORIENTATION_VERTICAL, 18);
   gtk_widget_set_margin_start(ask, 24);
@@ -475,6 +627,12 @@ static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gbo
   d->status = wrapped_label("dim-label");
   gtk_widget_set_visible(d->status, FALSE);
   gtk_box_append(GTK_BOX(ask), d->status);
+  /* Merging libraries: paragraphs, so left-aligned. */
+  d->merge = wrapped_label(NULL);
+  gtk_label_set_justify(GTK_LABEL(d->merge), GTK_JUSTIFY_LEFT);
+  gtk_label_set_xalign(GTK_LABEL(d->merge), 0);
+  gtk_widget_set_visible(d->merge, FALSE);
+  gtk_box_append(GTK_BOX(ask), d->merge);
 
   /* How it ended, laid out as a status page (whose own scrolling would clip it here). */
   GtkWidget *ended = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
@@ -522,7 +680,158 @@ static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gbo
   return d;
 }
 
+/* --- The merge's window ---
+ * A small window of its own beside the main one, not modal: the merge runs on sync's
+ * threads. Its intro, a progress bar and a status line become a summary when it's done.
+ * Closing it only hides the merge from view; the summary opens it again. */
+
+static void on_merge_wnd_destroy(GtkWidget *window, gpointer data) {
+  (void)window;
+  merge_wnd *m = data;
+  if (s.merge_wnd == m) s.merge_wnd = NULL;
+  g_free(m);
+}
+
+/* The merge's window over parent's window, opened if it isn't. */
+static merge_wnd *merge_window(GtkWidget *parent) {
+  if (s.merge_wnd) return s.merge_wnd;
+  merge_wnd *m = g_new0(merge_wnd, 1);
+  m->window = adw_window_new();
+  gtk_window_set_title(GTK_WINDOW(m->window), mc_str(MC_STR_MERGE_TITLE));
+  gtk_window_set_default_size(GTK_WINDOW(m->window), 420, -1);
+  gtk_window_set_resizable(GTK_WINDOW(m->window), FALSE);
+  GtkRoot *root = parent ? gtk_widget_get_root(parent) : NULL;
+  if (root && GTK_IS_WINDOW(root)) gtk_window_set_transient_for(GTK_WINDOW(m->window), GTK_WINDOW(root));
+  gtk_window_set_modal(GTK_WINDOW(m->window), FALSE);
+
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+  gtk_widget_set_margin_start(box, 24);
+  gtk_widget_set_margin_end(box, 24);
+  gtk_widget_set_margin_top(box, 12);
+  gtk_widget_set_margin_bottom(box, 24);
+  m->intro = wrapped_label(NULL);
+  gtk_label_set_text(GTK_LABEL(m->intro), mc_str(MC_STR_MERGE_TEXT));
+  gtk_box_append(GTK_BOX(box), m->intro);
+  m->bar = gtk_progress_bar_new();
+  gtk_box_append(GTK_BOX(box), m->bar);
+  m->status = wrapped_label(NULL);
+  /* The summary's paragraphs read left-aligned; the backup's path can be copied. */
+  gtk_label_set_justify(GTK_LABEL(m->status), GTK_JUSTIFY_LEFT);
+  gtk_label_set_xalign(GTK_LABEL(m->status), 0);
+  gtk_label_set_wrap_mode(GTK_LABEL(m->status), PANGO_WRAP_WORD_CHAR);
+  gtk_label_set_selectable(GTK_LABEL(m->status), TRUE);
+  gtk_box_append(GTK_BOX(box), m->status);
+
+  GtkWidget *toolbar = adw_toolbar_view_new();
+  adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), adw_header_bar_new());
+  adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), box);
+  adw_window_set_content(ADW_WINDOW(m->window), toolbar);
+  g_signal_connect(m->window, "destroy", G_CALLBACK(on_merge_wnd_destroy), m);
+  s.merge_wnd = m;
+  gtk_window_present(GTK_WINDOW(m->window));
+  return m;
+}
+
+/* What the merge did, in short paragraphs; g_free it. */
+static char *merge_summary(const sync_event *ev) {
+  const mc_merge_result *r = &ev->merge;
+  char *text = g_strdup("");
+  if (ev->status != MC_OK)
+    text = join_para(text, gformat(mc_format_alloc(mc_str(MC_STR_MERGE_FAILED), MC_S(mc_status_str(ev->status)))));
+  static const enum mc_str_id ids[] = {MC_STR_MERGE_TRACKS_ADDED,    MC_STR_MERGE_TRACKS_BETTER,
+                                       MC_STR_MERGE_TRACKS_MATCHED,  MC_STR_LINUX_MERGE_TRACKS_TRASHED,
+                                       MC_STR_MERGE_TRACKS_LEFT_OUT, MC_STR_MERGE_TRACKS_FAILED};
+  const int counts[] = {r->tracks_added,    r->tracks_better,   r->tracks_attached + r->tracks_mapped,
+                        r->tracks_skipped,  r->tracks_left_out, r->tracks_failed};
+  GString *tracks = g_string_new(NULL);
+  for (size_t i = 0; i < G_N_ELEMENTS(ids); i++) {
+    if (counts[i] <= 0) continue;
+    char *item = mc_format_alloc(mc_str_plural(ids[i], counts[i]), MC_D(counts[i]));
+    if (tracks->len) g_string_append(tracks, mc_str(MC_STR_IMPORT_LIST_SEPARATOR));
+    g_string_append(tracks, item ? item : "");
+    mc_free(item);
+  }
+  if (tracks->len)
+    text = join_para(text, gformat(mc_format_alloc(mc_str(MC_STR_MERGE_TRACKS), MC_S(tracks->str))));
+  else text = join_para(text, g_strdup(mc_str(MC_STR_MERGE_TRACKS_NONE)));
+  g_string_free(tracks, TRUE);
+  if (r->playlists > 0) {
+    char *lists = gformat(mc_format_alloc(mc_str_plural(MC_STR_MERGE_PLAYLISTS, r->playlists), MC_D(r->playlists)));
+    if (r->playlists_renamed > 0) {
+      char *renamed = gformat(mc_format_alloc(mc_str_plural(MC_STR_MERGE_PLAYLISTS_RENAMED, r->playlists_renamed),
+                                              MC_D(r->playlists_renamed)));
+      char *both = g_strdup_printf("%s %s", lists, renamed);
+      g_free(lists);
+      g_free(renamed);
+      lists = both;
+    }
+    text = join_para(text, lists);
+  }
+  if (ev->scrobble_user[0]) {
+    char *lfm = gformat(mc_format_alloc(mc_str(MC_STR_MERGE_SCROBBLE_SIGNED_OUT), MC_S(ev->scrobble_user)));
+    if (r->scrobbles_dropped > 0) {
+      char *dropped = gformat(mc_format_alloc(mc_str_plural(MC_STR_MERGE_SCROBBLES_DROPPED, r->scrobbles_dropped),
+                                              MC_D(r->scrobbles_dropped)));
+      char *both = g_strdup_printf("%s %s", lfm, dropped);
+      g_free(lfm);
+      g_free(dropped);
+      lfm = both;
+    }
+    text = join_para(text, lfm);
+  }
+  if (ev->backup_path[0])
+    text = join_para(text, gformat(mc_format_alloc(mc_str(MC_STR_MERGE_BACKUP), MC_S(ev->backup_path))));
+  return text;
+}
+
+void pair_dialog_on_merge_event(GtkWidget *parent, const sync_event *ev) {
+  if (ev->kind == SYNC_EV_MERGE_PROGRESS) {
+    merge_wnd *m = s.merge_wnd;
+    if (!m) {
+      /* Closed while it runs: it stays closed until the summary. Opened the first time. */
+      if (s.merge_seen) return;
+      s.merge_seen = TRUE;
+      m = merge_window(parent);
+    }
+    if (m->done) return;
+    char *text = gformat(mc_format_alloc(mc_str(ev->merge_phase == MC_MERGE_PHASE_TRACKS ? MC_STR_MERGE_PROGRESS_TRACKS
+                                                                                         : MC_STR_MERGE_PROGRESS_LISTS),
+                                         MC_D(ev->merge_done), MC_D(ev->merge_total)));
+    gtk_label_set_text(GTK_LABEL(m->status), text);
+    g_free(text);
+    /* Albums take most of the time: the bar gives them nine tenths. */
+    double part = ev->merge_total > 0 ? (double)MIN(ev->merge_done, ev->merge_total) / ev->merge_total : 0.0;
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(m->bar),
+                                  ev->merge_phase == MC_MERGE_PHASE_TRACKS ? part * 0.9 : 0.9 + part * 0.1);
+    return;
+  }
+  if (ev->kind != SYNC_EV_MERGE_DONE) return;
+  s.merge_seen = FALSE;
+  merge_wnd *m = merge_window(parent);
+  m->done = TRUE;
+  gtk_window_set_title(GTK_WINDOW(m->window),
+                       mc_str(ev->status == MC_OK ? MC_STR_MERGE_DONE_TITLE : MC_STR_MERGE_FAILED_TITLE));
+  gtk_widget_set_visible(m->intro, FALSE);
+  gtk_widget_set_visible(m->bar, FALSE);
+  char *text = merge_summary(ev);
+  gtk_label_set_text(GTK_LABEL(m->status), text);
+  g_free(text);
+  gtk_window_present(GTK_WINDOW(m->window));
+}
+
 /* --- API --- */
+
+void pair_dialog_on_merge(const sync_event *ev) {
+  pair_dlg *d = ev->initiator ? s.enter : s.show;
+  if (d && !d->ended) {
+    show_merge(d, ev);
+  } else if (!ev->initiator) {
+    /* The code is on its way. */
+    s.pending_merge = *ev;
+    s.has_pending_merge = TRUE;
+  }
+  /* An initiator with no dialog cancelled already. */
+}
 
 void pair_dialog_init(const pair_dialog_host *host) {
   s.host = host;
@@ -575,6 +884,10 @@ void pair_dialog_show_code(GtkWidget *parent, mc_sync *sync, const sync_event *e
     gtk_label_set_text(GTK_LABEL(d->code), code);
   }
   g_free(code);
+  if (s.has_pending_merge) { /* asked just before the code */
+    s.has_pending_merge = FALSE;
+    show_merge(d, &s.pending_merge);
+  }
 }
 
 static void initiator_result(GtkWidget *parent, const sync_event *ev) {
@@ -606,6 +919,7 @@ static void initiator_result(GtkWidget *parent, const sync_event *ev) {
 
 static void responder_result(GtkWidget *parent, const sync_event *ev) {
   pair_dlg *d = s.show;
+  if (ev->reason != MC_PAIR_WRONG_CODE) s.has_pending_merge = FALSE; /* over */
   if (ev->reason == MC_PAIR_CANCELLED && (s.show_cancelled || !d || d->ended)) {
     s.show_cancelled = FALSE; /* ours, or nothing showing to cancel */
     return;
@@ -644,5 +958,7 @@ void pair_dialog_close_all(void) {
   close_quietly(s.enter);
   close_quietly(s.show);
   s.enter = s.show = NULL;
+  if (s.merge_wnd) gtk_window_destroy(GTK_WINDOW(s.merge_wnd->window)); /* frees it */
   s.enter_cancelled = s.show_cancelled = FALSE;
+  s.has_pending_merge = s.merge_seen = FALSE;
 }

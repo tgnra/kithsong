@@ -564,6 +564,19 @@ static void on_sync_event(void *user, const sync_event *ev) {
       if (ev->library_changed) schedule_library_refresh();
       device_view_on_sync_event(ev);
       break;
+    case SYNC_EV_PAIR_MERGE:
+      pair_dialog_on_merge(ev);
+      break;
+    case SYNC_EV_MERGE_PROGRESS:
+      /* Albums come into the library as it goes. */
+      pair_dialog_on_merge_event(window(), ev);
+      schedule_library_refresh();
+      break;
+    case SYNC_EV_MERGE_DONE:
+      pair_dialog_on_merge_event(window(), ev);
+      schedule_library_refresh();
+      schedule_refresh(); /* this computer's page: no merge waiting any more */
+      break;
   }
 }
 

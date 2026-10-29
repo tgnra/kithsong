@@ -105,6 +105,7 @@ static struct {
   int64_t last_sync_ms, expected, ok, missing, corrupt, bytes;
   mc_sync_lib_state lib_state;
   mc_sync_confirm_state confirm; /* files sync on their own only once confirmed */
+  gboolean merge_pending; /* this computer's own page: its old library is still to be merged in */
 
   /* Its profile, with the pending edits applied; NULL if it couldn't be read. */
   mc_sync_profile *profile;
@@ -330,6 +331,7 @@ static void load_device(void) {
   g_clear_pointer(&g_dv.others, g_free);
   g_clear_pointer(&g_dv.address, g_free);
   g_dv.lib_state = MC_SYNC_LIBRARY_GROUP;
+  g_dv.merge_pending = FALSE;
   if (!g_dv.sync) return;
   g_dv.is_self = !strcmp(g_dv.uid, mc_sync_device_uid(g_dv.sync));
   mc_sync_device_list *list = NULL;
@@ -377,6 +379,7 @@ static void load_device(void) {
   if (g_dv.is_self) {
     g_dv.online = 1;
     g_dv.address = self_address();
+    g_dv.merge_pending = mc_sync_merge_pending(g_dv.sync) != 0;
   }
   mc_sync_lib_state state;
   if (mc_sync_library_state(g_dv.sync, &state) == MC_OK) g_dv.lib_state = state;
@@ -525,6 +528,8 @@ static void update_status(void) {
     notice = mc_str(MC_STR_LINUX_COMPUTER_SYNC_OTHER_LIBRARY);
   } else if (g_dv.found && g_dv.lib_state == MC_SYNC_LIBRARY_UNKNOWN) {
     notice = mc_str(MC_STR_SYNC_UNKNOWN_LIBRARY);
+  } else if (g_dv.merge_pending) {
+    notice = mc_str(MC_STR_MERGE_PENDING);
   } else if (g_dv.found && !g_dv.removed && g_dv.confirm == MC_SYNC_UNCONFIRMED) {
     notice = mc_str(MC_STR_SYNC_UNCONFIRMED);
     button = TRUE;
