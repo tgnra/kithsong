@@ -32,7 +32,7 @@ enum {
   ACTIONS_GAP = 16, /* between the cover and the Play and Shuffle buttons */
   ACTION_H = 32,
   ACTION_GAP = 8, /* between Play and Shuffle */
-  FOCUS_OUT = 3,  /* Play's and Shuffle's focus rings, outside them */
+  FOCUS_OUT = 3,  /* the header buttons' focus rings, outside them */
   HEADER_BOTTOM = 18,
   ROW_H = 36,
   INSET = 8,   /* rows' fill from the edges */
@@ -63,6 +63,9 @@ enum {
 };
 
 enum { TIMER_DRAG_SCROLL = 103 }; /* the scroller has 101 and 102 */
+
+/* The header's buttons the keyboard can land on, in Tab order, then the rows. */
+enum { FA_PLAY, FA_SHUFFLE, FA_RESHUFFLE, FA_MORE, FA_CLOSE, FA_ROWS };
 
 typedef struct row {
   char uid[MC_UID_STRLEN];
@@ -108,7 +111,7 @@ static struct {
   int header_h;    /* the fixed part above the rows */
   int actions_top; /* the Play and Shuffle buttons' */
   int action_hot, action_pressed; /* 0 Play, 1 Shuffle, or -1 */
-  int focus_action; /* Play or Shuffle while it has the keyboard focus, else -1 (the rows) */
+  int focus_action; /* the header button (FA_*) with the keyboard focus, else -1 (the rows) */
   int hot, selected;
   BOOL tracking;
   BOOL more_hot, more_open; /* the playlist menu's button */
@@ -304,6 +307,36 @@ static void invalidate_more(void) {
   InvalidateRect(s.wnd, &r, FALSE);
 }
 
+/* Header button a (FA_*), and whether it's there and not greyed out. */
+static RECT target_rect(int a) {
+  switch (a) {
+    case FA_PLAY:
+    case FA_SHUFFLE: return action_rect(a);
+    case FA_RESHUFFLE: return reshuffle_rect();
+    case FA_MORE: return more_rect();
+    default: return close_rect();
+  }
+}
+
+static BOOL can_focus(int a) {
+  switch (a) {
+    case FA_PLAY:
+    case FA_SHUFFLE: return playable();
+    case FA_RESHUFFLE: return has_reshuffle();
+    case FA_MORE: return has_more();
+    case FA_CLOSE: return !s.by_artist;
+    default: return FALSE;
+  }
+}
+
+/* With its focus ring. */
+static void invalidate_target(int a) {
+  if (a < 0 || a >= FA_ROWS) return;
+  RECT r = target_rect(a);
+  InflateRect(&r, scale(FOCUS_OUT), scale(FOCUS_OUT));
+  InvalidateRect(s.wnd, &r, FALSE);
+}
+
 static int row_at(int x, int y) {
   POINT pt = {x, y};
   if (!PtInRect(&s.scroll.view, pt)) return -1;
@@ -377,11 +410,12 @@ static void select_row(int i) {
   uia_focus(&ui);
 }
 
-/* Moves the keyboard focus to Play (0) or Shuffle (1), or back to the rows (-1). */
+/* Moves the keyboard focus to header button i (FA_*), or back to the rows (-1). */
 static void focus_action(int i) {
   if (i == s.focus_action) return;
+  invalidate_target(s.focus_action);
+  invalidate_target(i);
   s.focus_action = i;
-  invalidate_actions();
   invalidate_row(s.selected);
   uia_focus(&ui);
 }
@@ -533,7 +567,7 @@ static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL pl
   if (!same) s.year = 0; /* until track_list_set_details */
   make_summary();
 
-  if (!playable()) s.focus_action = -1; /* greyed out */
+  if (s.focus_action >= 0 && !can_focus(s.focus_action)) s.focus_action = -1; /* gone or greyed out */
 
   relayout();
   if (same && s.selected >= 0) reveal_row(s.selected); /* a moved track stays in view */
@@ -953,6 +987,11 @@ static void paint_header(canvas *c, int w, BOOL focused) {
   SetTextColor(c->dc, close_color);
   DrawTextW(c->dc, L"\xE711", 1, &close, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); /* Cancel */
   if (has_more()) paint_more(c);
+  if (focused && s.focus_action >= FA_RESHUFFLE && can_focus(s.focus_action)) { /* round, just outside it */
+    RECT ring = target_rect(s.focus_action);
+    InflateRect(&ring, scale(FOCUS_OUT), scale(FOCUS_OUT));
+    canvas_frame(c, &ring, scale(CLOSE) / 2 + scale(FOCUS_OUT), scale(2), theme.text, 255);
+  }
 
   /* The text, centred against the cover. The title wraps onto a second line if it must. */
   int buttons = has_reshuffle() ? reshuffle_rect().left : has_more() ? more_rect().left : close.left;
@@ -1044,12 +1083,32 @@ static void press_action(int i) {
   if (i >= 0 && playable()) notify(i ? TLN_SHUFFLE_ALL : TLN_PLAY_ALL);
 }
 
-/* Tab and Shift+Tab go round Play, Shuffle and the rows (to the selected one, or the first);
- * Play and Shuffle are left out while they're greyed out. */
+/* Header button a, as a click on it does. */
+static void press_target(int a) {
+  if (!can_focus(a)) return;
+  switch (a) {
+    case FA_PLAY:
+    case FA_SHUFFLE: press_action(a); break;
+    case FA_RESHUFFLE: request_playlist(TLN_RESHUFFLE); break;
+    case FA_MORE: show_playlist_menu(); break;
+    case FA_CLOSE: notify(TLN_CLOSE); break;
+  }
+}
+
+/* The next header button there is after a (or FA_ROWS, the rows), forward or back and round. */
+static int next_target(int a, BOOL back) {
+  for (int k = 0; k < FA_ROWS; k++) {
+    a = (a + (back ? FA_ROWS : 1)) % (FA_ROWS + 1);
+    if (a == FA_ROWS || can_focus(a)) return a;
+  }
+  return FA_ROWS;
+}
+
+/* Tab and Shift+Tab go round Play, Shuffle, a playlist's Reshuffle and menu button, the close
+ * button and the rows (to the selected one, or the first); greyed-out buttons are left out. */
 static void on_tab(BOOL back) {
-  int at = s.focus_action >= 0 ? s.focus_action : 2;
-  int to = playable() ? (at + (back ? 2 : 1)) % 3 : 2;
-  if (to < 2) {
+  int to = next_target(s.focus_action >= 0 ? s.focus_action : FA_ROWS, back);
+  if (to < FA_ROWS) {
     focus_action(to);
     return;
   }
@@ -1057,15 +1116,19 @@ static void on_tab(BOOL back) {
   if (s.selected < 0) select_row(0);
 }
 
-/* With the focus on Play or Shuffle: Left and Right move between them, Enter and Space press
+/* With the focus on a header button: Left and Right move between them, Enter and Space press
  * them, and Down, Home, End and Page Down go to the rows. Escape and F2 do as they do on the
  * rows. TRUE if key was handled. */
 static BOOL on_action_key(WPARAM key) {
   switch (key) {
     case VK_LEFT:
-    case VK_RIGHT: focus_action(key == VK_RIGHT); return TRUE;
+    case VK_RIGHT: {
+      int to = next_target(s.focus_action, key == VK_LEFT);
+      if (to < FA_ROWS && (key == VK_LEFT) == (to < s.focus_action)) focus_action(to); /* not round */
+      return TRUE;
+    }
     case VK_RETURN:
-    case VK_SPACE: press_action(s.focus_action); return TRUE;
+    case VK_SPACE: press_target(s.focus_action); return TRUE;
     case VK_DOWN:
       focus_action(-1);
       if (s.selected < 0) select_row(0);
@@ -1091,8 +1154,8 @@ static void on_key(WPARAM key) {
   int page = (s.scroll.view.bottom - s.scroll.view.top) / scale(ROW_H);
   int cur = s.selected;
   switch (key) {
-    case VK_UP: /* from the first row up to Play */
-      if (cur <= 0 && playable()) focus_action(0);
+    case VK_UP: /* from the first row up to Play, or the first header button there is */
+      if (cur <= 0 && next_target(FA_ROWS, FALSE) < FA_ROWS) focus_action(next_target(FA_ROWS, FALSE));
       else select_row(cur > 0 ? cur - 1 : 0);
       break;
     case VK_DOWN: select_row(cur < s.count - 1 ? cur + 1 : s.count - 1); break;
@@ -1223,21 +1286,21 @@ static BOOL ui_node(int i, uia_node *n) {
     }
     case UI_RESHUFFLE:
       n->type = UIA_ButtonControlTypeId;
-      n->flags = UIA_INVOKABLE;
+      n->flags = UIA_FOCUSABLE | UIA_INVOKABLE;
       n->rect = reshuffle_rect();
       n->automation_id = L"Reshuffle";
       lstrcpynW(n->name, mc_wstr(MC_STR_RESHUFFLE), 512);
       return TRUE;
     case UI_MORE:
       n->type = UIA_ButtonControlTypeId;
-      n->flags = UIA_INVOKABLE;
+      n->flags = UIA_FOCUSABLE | UIA_INVOKABLE;
       n->rect = more_rect();
       n->automation_id = L"More";
       lstrcpynW(n->name, more_label(), 512);
       return TRUE;
     case UI_CLOSE:
       n->type = UIA_ButtonControlTypeId;
-      n->flags = UIA_INVOKABLE;
+      n->flags = UIA_FOCUSABLE | UIA_INVOKABLE;
       n->rect = close_rect();
       n->automation_id = L"Close";
       lstrcpynW(n->name, mc_wstr(MC_STR_CLOSE), 512);
@@ -1255,8 +1318,21 @@ static BOOL ui_node(int i, uia_node *n) {
   return FALSE;
 }
 
+/* The UI Automation part for header button a, and back. */
+static int ui_target_part(int a) {
+  static const int parts[] = {[FA_PLAY] = UI_PLAY, [FA_SHUFFLE] = UI_SHUFFLE, [FA_RESHUFFLE] = UI_RESHUFFLE,
+                              [FA_MORE] = UI_MORE, [FA_CLOSE] = UI_CLOSE};
+  return a >= 0 && a < FA_ROWS ? parts[a] : UI_PARTS;
+}
+
+static int ui_part_target(int part) {
+  for (int a = 0; a < FA_ROWS; a++)
+    if (ui_target_part(a) == part) return a;
+  return -1;
+}
+
 static int ui_focus(void) {
-  if (s.focus_action >= 0) return ui_index(s.focus_action ? UI_SHUFFLE : UI_PLAY);
+  if (s.focus_action >= 0) return ui_index(ui_target_part(s.focus_action));
   return s.selected >= 0 && s.selected < s.count ? ui_row(s.selected) : UIA_ROOT;
 }
 
@@ -1285,8 +1361,8 @@ static void ui_select(int i) {
 }
 
 static void ui_set_focus(int i) {
-  int part = ui_part(i);
-  if (part == UI_PLAY || part == UI_SHUFFLE) focus_action(part == UI_SHUFFLE);
+  int a = ui_part_target(ui_part(i));
+  if (a >= 0 && can_focus(a)) focus_action(a);
   else ui_select(i);
 }
 
@@ -1488,7 +1564,7 @@ static LRESULT CALLBACK track_list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
         return 0;
       }
       break;
-    case WM_GETDLGCODE: /* on Play or Shuffle, Space presses it rather than playing or pausing */
+    case WM_GETDLGCODE: /* on a header button, Space presses it rather than playing or pausing */
       return DLGC_WANTARROWS | DLGC_WANTTAB | (s.focus_action >= 0 ? DLGC_BUTTON : 0);
     case WM_SETFOCUS:
     case WM_KILLFOCUS:

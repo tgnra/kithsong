@@ -31,6 +31,7 @@ enum {
   RING_GAP = 2,  /* selection ring: gap from the cover, and width */
   RING_W = 2,
   HEADER_BUTTON = 36, /* a group's Back and More buttons */
+  FOCUS_OUT = 3,      /* their focus rings, outside them */
   HEADER_GAP = 16,    /* below them, above the tiles */
   HEADER_TEXT_GAP = 12,
   RULE_GAP = 4, /* a smart group's rule, under its header */
@@ -139,6 +140,8 @@ static struct {
   char selected_uid[MC_UID_STRLEN]; /* keeps the selection across reloads */
   BOOL tracking;                    /* asked for WM_MOUSELEAVE */
   int hot_part;                     /* PART_*: the header button under the mouse */
+  int focus_part;                   /* PART_*: the header button with the keyboard focus, or
+                                     * PART_NONE for the tiles */
   BOOL navigated;                   /* the last click went into or out of a group, so its
                                      * double click's second click is ignored */
 
@@ -738,7 +741,7 @@ static void switch_view(album_grid_view view, const char *group, const char *sel
   if (view == AGV_GROUP) snprintf(g.group_uid, sizeof g.group_uid, "%s", group);
   g.selected = g.hot = -1;
   snprintf(g.selected_uid, sizeof g.selected_uid, "%s", select ? select : "");
-  g.hot_part = PART_NONE;
+  g.hot_part = g.focus_part = PART_NONE;
   g.scroll.pos = g.scroll.target = 0;
   g.dirty = TRUE;
   if (g.wnd) InvalidateRect(g.wnd, NULL, FALSE);
@@ -952,6 +955,26 @@ static void set_hot_part(int part) {
   g.hot_part = part;
 }
 
+/* The header button with the keyboard focus, if it's still there, else PART_NONE. */
+static int focus_part(void) {
+  return g.focus_part != PART_NONE && has_part(g.focus_part) ? g.focus_part : PART_NONE;
+}
+
+/* Moves the keyboard focus to header button part, or back to the tiles (PART_NONE). */
+static void set_focus_part(int part) {
+  int was = focus_part();
+  g.focus_part = part;
+  if (part == was) return;
+  for (int k = 0; k < 2; k++) {
+    int at = k ? part : was;
+    if (at == PART_NONE) continue;
+    RECT r = header_button(at);
+    InflateRect(&r, scale(FOCUS_OUT), scale(FOCUS_OUT)); /* and its focus ring */
+    InvalidateRect(g.wnd, &r, FALSE);
+  }
+  uia_focus(&ui);
+}
+
 static const wchar_t *view_name(void);
 
 static void paint_header(canvas *c) {
@@ -968,6 +991,11 @@ static void paint_header(canvas *c) {
     SelectObject(c->dc, g.icon_font);
     SetTextColor(c->dc, color);
     DrawTextW(c->dc, glyph, 1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if (parts[i] == focus_part() && GetFocus() == g.wnd &&
+        !(SendMessageW(g.wnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS)) { /* the focus ring, just outside it */
+      InflateRect(&r, scale(FOCUS_OUT), scale(FOCUS_OUT));
+      canvas_frame(c, &r, radius + scale(FOCUS_OUT), scale(2), theme.text, 255);
+    }
   }
   BOOL back_shown = n && parts[0] == PART_BACK;
   int first_right = back_shown ? 1 : 0;
@@ -1276,6 +1304,7 @@ static void on_mouse_move(int x, int y) {
  * or open its menu. */
 static void on_mouse_down(int x, int y) {
   SetFocus(g.wnd); /* for keyboard scrolling */
+  set_focus_part(PART_NONE);
   g.navigated = FALSE;
   if (scroller_mouse_down(&g.scroll, x, y)) return;
   int part = header_part_at(x, y), i = tile_at(x, y);
@@ -1290,14 +1319,66 @@ static void on_mouse_down(int x, int y) {
   }
 }
 
+/* Tab and Shift+Tab go round the header's buttons (a group's Back, Reshuffle and More, or
+ * the + on Playlists and Album Groups) and the tiles, to the selected one or the first. */
+static void on_tab(BOOL back) {
+  int parts[3], n = header_parts(parts), at = n; /* n: the tiles */
+  for (int i = 0; i < n; i++)
+    if (parts[i] == focus_part()) at = i;
+  int to = (at + (back ? n : 1)) % (n + 1);
+  set_focus_part(to < n ? parts[to] : PART_NONE);
+  if (to == n && g.selected < 0 && g.count) select_tile(0);
+  if (to == n) reveal_tile(g.selected);
+  else scroller_reveal(&g.scroll, 0, g.top);
+}
+
+/* With the focus on a header button: Left and Right move between them, Enter and Space press
+ * them, and Down, Home, End and Page Down go to the tiles. TRUE if key was handled. */
+static BOOL on_header_key(WPARAM key) {
+  int parts[3], n = header_parts(parts), at = 0;
+  for (int i = 0; i < n; i++)
+    if (parts[i] == focus_part()) at = i;
+  switch (key) {
+    case VK_LEFT:
+    case VK_RIGHT: {
+      int to = at + (key == VK_LEFT ? -1 : 1);
+      if (to >= 0 && to < n) set_focus_part(parts[to]);
+      return TRUE;
+    }
+    case VK_RETURN:
+    case VK_SPACE: press_part(parts[at]); return TRUE;
+    case VK_DOWN:
+      set_focus_part(PART_NONE);
+      if (g.selected < 0 && g.count) select_tile(0);
+      reveal_tile(g.selected);
+      return TRUE;
+    case VK_HOME:
+    case VK_END:
+    case VK_NEXT: set_focus_part(PART_NONE); return FALSE;
+    case VK_UP:
+    case VK_PRIOR: return TRUE; /* nothing above them */
+    default: return FALSE;
+  }
+}
+
 /* The arrow keys, Home, End, Page Up and Page Down move the selection, as clicks would, and
- * scroll it into view; on the groups, Enter opens the selected one. In a group, Backspace
+ * scroll it into view; Up from the top row goes to the header's buttons, and Tab goes round
+ * them and the tiles. On the groups, Enter opens the selected one. In a group, Backspace
  * and Alt+Left go back. Returns FALSE for other keys. */
 static BOOL on_key(WPARAM key) {
   if (key == VK_BACK || key == VK_BROWSER_BACK || (key == VK_LEFT && GetKeyState(VK_MENU) < 0)) {
     if (g.view != AGV_GROUP) return FALSE;
     go_back();
     return TRUE;
+  }
+  if (key == VK_TAB) {
+    SendMessageW(GetAncestor(g.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+    on_tab(GetKeyState(VK_SHIFT) < 0);
+    return TRUE;
+  }
+  if (focus_part() != PART_NONE) {
+    SendMessageW(GetAncestor(g.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+    if (on_header_key(key)) return TRUE;
   }
   if (key == VK_RETURN && g.tiles_view == AGV_GROUPS && g.selected >= 0 && g.selected < g.count) {
     album_grid_open_group(g.tiles[g.selected].uid);
@@ -1336,6 +1417,13 @@ static BOOL on_key(WPARAM key) {
   }
   if (!g.count || !g.cols) return FALSE;
   int cur = g.selected, last = g.count - 1, page = max(1, g.client_h / g.row_h) * g.cols, to;
+  int parts[3];
+  if (key == VK_UP && cur >= 0 && cur < g.cols && header_parts(parts)) { /* from the top row to the header */
+    SendMessageW(GetAncestor(g.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+    set_focus_part(parts[0]);
+    scroller_reveal(&g.scroll, 0, g.top);
+    return TRUE;
+  }
   switch (key) {
     case VK_LEFT: to = cur < 0 ? 0 : cur - 1; break;
     case VK_RIGHT: to = cur < 0 ? 0 : cur + 1; break;
@@ -1562,7 +1650,7 @@ static BOOL ui_node(int i, uia_node *n) {
     header_parts(parts);
     int part = parts[i];
     n->type = UIA_ButtonControlTypeId;
-    n->flags = UIA_INVOKABLE;
+    n->flags = UIA_FOCUSABLE | UIA_INVOKABLE;
     n->rect = header_button(part);
     n->automation_id = part == PART_BACK        ? L"Back"
                        : part == PART_RESHUFFLE ? L"Reshuffle"
@@ -1615,6 +1703,9 @@ static BOOL ui_node(int i, uia_node *n) {
 }
 
 static int ui_focus(void) {
+  int parts[3], n = header_parts(parts);
+  for (int i = 0; i < n; i++)
+    if (parts[i] == focus_part()) return i;
   return g.selected >= 0 && g.selected < g.count ? ui_tile(g.selected) : UIA_ROOT;
 }
 
@@ -1634,8 +1725,16 @@ static int ui_selection(int i) {
 static void ui_select(int i) {
   int t = i - ui_list() - 1;
   if (t < 0 || t >= g.count) return;
+  set_focus_part(PART_NONE);
   select_tile(t);
   reveal_tile(t);
+}
+
+/* A header button takes the focus as Tab gives it; a tile is selected. */
+static void ui_set_focus(int i) {
+  int parts[3], n = header_parts(parts);
+  if (i >= 0 && i < n) set_focus_part(parts[i]);
+  else ui_select(i);
 }
 
 /* As a click: the header's buttons and the empty page's act, and a group opens. */
@@ -1659,7 +1758,7 @@ static const uia_ops ui_ops = {
   .select = ui_select,
   .invoke = ui_invoke,
   .reveal = ui_reveal,
-  .set_focus = ui_select,
+  .set_focus = ui_set_focus,
 };
 
 /* After a reload: what the nodes are, so clients only start over when they changed. */
@@ -1695,6 +1794,14 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_KILLFOCUS:
     case WM_UPDATEUISTATE:
       if (g.count == 0) InvalidateRect(wnd, &g.action_rc, FALSE); /* the button's focus ring */
+      if (focus_part() != PART_NONE) { /* a header button's */
+        RECT r = header_button(focus_part());
+        InflateRect(&r, scale(FOCUS_OUT), scale(FOCUS_OUT));
+        InvalidateRect(wnd, &r, FALSE);
+      }
+      break;
+    case WM_GETDLGCODE: /* on a header button, Space presses it rather than playing or pausing */
+      if (focus_part() != PART_NONE) return DLGC_BUTTON;
       break;
     case WM_PAINT: {
       if (g.dirty) reload(); /* deferred while hidden; painting means we're visible */

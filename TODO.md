@@ -56,7 +56,6 @@ Big pieces that haven't been started, or that only one platform has.
   - Windows and Linux - a playlist made with the Playlists page's + stays shown (and selected) only until another page is picked; after that an empty one is reachable from Add to playlist alone
 - Android - a new playlist can only be made from Add to playlist (empty ones are hidden there); the desktops' Playlists page has a +
 - Android - when every playlist is hidden for having nothing to play here, the Playlists section just isn't there; the desktops say so and link to Choose what to sync
-- Windows - the Playlists and Album groups headers' + can't be reached with the keyboard (as the group header's buttons); Ctrl+N (see Keyboard shortcuts) would do
 - All - multi-select in track lists, so several tracks can be deleted or added to a playlist at once
 
 ### Album groups
@@ -208,9 +207,8 @@ Windows:
 - F1 about; Alt+F4 only to quit
 
 ### Windows screen readers and custom-drawn controls
-The album grid, track list, sidebar and search page have UI Automation providers (uia.c), which raise name and status changes (a rename, "Playing" moving) as property-change events; the now-playing strip is a live region for its flash ("Volume 40%"); and the track list's Play and Shuffle are reachable from the keyboard. Still to do:
+The album grid, track list, sidebar and search page have UI Automation providers (uia.c), which raise name and status changes (a rename, "Playing" moving) as property-change events; the now-playing strip is a live region for its flash ("Volume 40%"); and the track list's and album grid's header buttons are reachable from the keyboard (Tab goes round them and the rows or tiles; Up from the first row or the top row reaches them). Still to do:
 - The artist page (kithsong_artists) is still custom-drawn without a provider, and the now-playing strip only has its title as its name: no seek bar or times
-- The album group header's Back and More, and the track list's playlist menu and close buttons, can't be reached with the keyboard (Backspace, F2, the menu key and Escape do the same)
 
 ## Android
 
