@@ -46,17 +46,6 @@ Big pieces that haven't been started, or that only one platform has.
 - All - a toggle between album artist and track artist in the artist list?
 - Windows and Linux - artist pictures; Windows - Add to playlist of all their tracks from the artist menu
 
-### Playlists
-- Android and the desktops - smart playlists' art (still their first track's cover or a placeholder; mc_playlist_art() only knows manual playlists)
-- Playlists with nothing to play on this device are hidden (MC_LIST_PLAYABLE) on every Playlists page and in Recents; Add to playlist and the sync profile pickers still list them all. Left to do:
-  - Windows - "Add to playlist → New playlist…" with a track that has no file here makes a playlist that's hidden at once; say so, or grey the menu for such tracks
-  - Linux - a playlist made in the Add to playlist dialog and left empty is only reachable from that dialog until a track is added
-  - Windows and Linux - removing a playlist's last playable track makes the playlist vanish from the grid and its track list close; consider keeping the open one shown until it's left (Android closes the page)
-  - Windows and Linux - a playlist made with the Playlists page's + stays shown (and selected) only until another page is picked; after that an empty one is reachable from Add to playlist alone
-- Android - a new playlist can only be made from Add to playlist (empty ones are hidden there); the desktops' Playlists page has a +
-- Android - when every playlist is hidden for having nothing to play here, the Playlists section just isn't there; the desktops say so and link to Choose what to sync
-- All - multi-select in track lists, so several tracks can be deleted or added to a playlist at once
-
 ### Album groups
 - Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are)
 - Windows and Linux - albums in a group are reordered with Move up/Move down on their menus, not by dragging; Windows can't drag albums onto a group either
@@ -196,6 +185,7 @@ The album grid, track list, sidebar and search page have UI Automation providers
 Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <host>:<port>` on Android pair two scratch instances without clicks; `--es fake_merge <scenario>` on Android shows one of the merge's screens with made-up data (Syncer.debugShowMerge).
 
 ### Linux (mostly only compiled, or run under Xvfb)
+- Not even compiled: smart playlists' and groups' pictures, empty playlists staying on the Playlists page (keep_playlist gone), and the Add to playlist dialog's note for a track that isn't on this computer
 - Shuffle toggle and the track list's Play/Shuffle buttons
 - Artist page playback with real files, and album group covers
 - Smart list playback (no audio in the container)
@@ -228,6 +218,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 - Merging libraries, also on Linux: the progress window was only seen for an instant (a three-track test merge finishes at once), and the pending note after a restart and the library_mismatch update hint (it needs a peer running an older version) were never seen
 
 ### Android and Wear OS
+- Smart playlists' and groups' pictures (mc_smart_art()), and empty playlists in the Playlists section and Recents, on screen (only built)
 - Remove from this phone / Sync to this phone on screen, in a real group (only built)
 - A recent's long-press menu (Play, Shuffle, Remove from Recents, Clear Recents) on screen (only built; the desktops' menus were run)
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
