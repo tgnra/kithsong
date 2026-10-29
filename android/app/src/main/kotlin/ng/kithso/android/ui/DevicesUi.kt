@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -49,6 +51,7 @@ import ng.kithso.core.DeviceKind
 import ng.kithso.android.AppSettings
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
+import ng.kithso.android.sync.MergeProposal
 import ng.kithso.android.sync.Pairing
 import ng.kithso.android.sync.SyncStatus
 import ng.kithso.android.sync.Syncer
@@ -113,6 +116,10 @@ fun PairingDialogs(syncer: Syncer, settings: AppSettings, onChooseWhatToSync: (S
  * syncs until the device that joined has its sync settings chosen, so Choose What to Sync
  * opens its page. The first time this phone joins a group, it also says which device is the
  * archive.
+ *
+ * When both devices have music, the smaller library is merged into the larger. If it's this
+ * phone's, its user is asked first (Merge, or Cancel to decline): in place of the code entry
+ * until answered, or under the code shown. If it's the other's, a note says so.
  */
 @Composable
 private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSettings, onChooseWhatToSync: (String) -> Unit) {
@@ -124,11 +131,15 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSetting
                 view.keepScreenOn = true
                 onDispose { view.keepScreenOn = false }
             }
+            val merge = pairing.merge
             AlertDialog(
                 onDismissRequest = {},
                 title = { Text(stringResource(R.string.pair_with_question, pairing.peer)) },
                 text = {
-                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         Text(stringResource(R.string.pair_show_code, pairing.peer), modifier = Modifier.fillMaxWidth())
                         Spacer(Modifier.height(16.dp))
                         val codeDescription = stringResource(R.string.pair_code_description, pairing.code.toList().joinToString(" "))
@@ -149,9 +160,23 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSetting
                                 textAlign = TextAlign.Center,
                             )
                         }
+                        if (merge != null) {
+                            Spacer(Modifier.height(16.dp))
+                            MergeText(merge, pairing.peer, Modifier.fillMaxWidth())
+                        }
                     }
                 },
-                confirmButton = { TextButton(onClick = syncer::cancelPairing) { Text(stringResource(R.string.cancel)) } },
+                // Asked to merge: Merge beside Cancel, which declines.
+                confirmButton = if (merge?.needsAnswer == true) {
+                    { TextButton(onClick = syncer::confirmMerge) { Text(stringResource(R.string.pair_merge_button)) } }
+                } else {
+                    { TextButton(onClick = syncer::cancelPairing) { Text(stringResource(R.string.cancel)) } }
+                },
+                dismissButton = if (merge?.needsAnswer == true) {
+                    { TextButton(onClick = syncer::cancelPairing) { Text(stringResource(R.string.cancel)) } }
+                } else {
+                    null
+                },
             )
         }
         is Pairing.EnterCode -> {
@@ -160,12 +185,27 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSetting
             LaunchedEffect(pairing.attemptsLeft) { if (pairing.attemptsLeft != null) code = "" }
             val submit = { if (code.length == CODE_LENGTH && !pairing.checking) syncer.enterCode(code) }
             val focus = remember { FocusRequester() }
-            LaunchedEffect(Unit) { focus.requestFocus() }
+            val merge = pairing.merge
+            // Asked to merge: the proposal in place of the code entry until answered.
+            val proposing = merge?.needsAnswer == true
+            LaunchedEffect(proposing) { if (!proposing && !pairing.checking) focus.requestFocus() }
+            if (proposing) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text(stringResource(R.string.pair_merge_title)) },
+                    text = { MergeText(merge!!, pairing.peer, Modifier.verticalScroll(rememberScrollState())) },
+                    confirmButton = {
+                        TextButton(onClick = syncer::confirmMerge) { Text(stringResource(R.string.pair_merge_button)) }
+                    },
+                    dismissButton = { TextButton(onClick = syncer::cancelPairing) { Text(stringResource(R.string.cancel)) } },
+                )
+                return
+            }
             AlertDialog(
                 onDismissRequest = {},
                 title = { Text(stringResource(R.string.pair_with, pairing.peer)) },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(stringResource(R.string.pair_enter_code, pairing.peer))
                         OutlinedTextField(
                             value = code,
@@ -180,6 +220,7 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSetting
                             keyboardActions = KeyboardActions(onDone = { submit() }),
                             modifier = Modifier.fillMaxWidth().focusRequester(focus),
                         )
+                        if (merge != null) MergeText(merge, pairing.peer)
                     }
                 },
                 confirmButton = {
@@ -233,6 +274,40 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSetting
     }
 }
 
+/**
+ * What the merge pairing needs means: on the phone whose library is merged, which library is
+ * kept and what happens to this one, until Merge is pressed, then that it will merge; on the
+ * phone whose library is kept, a note.
+ */
+@Composable
+private fun MergeText(merge: MergeProposal, peer: String, modifier: Modifier = Modifier) {
+    val here = tracksText(merge.tracksHere)
+    val there = tracksText(merge.tracksThere)
+    val paragraphs = when {
+        merge.keptHere -> listOf(stringResource(R.string.pair_merge_kept_text, peer, here, there))
+        merge.answered -> listOf(stringResource(R.string.pair_merge_confirmed))
+        else -> buildList {
+            add(stringResource(R.string.pair_merge_text, peer, there, here))
+            add(stringResource(R.string.pair_merge_backup))
+            if (merge.scrobbleUser.isNotEmpty()) add(stringResource(R.string.pair_merge_scrobble, merge.scrobbleUser, peer))
+            if (merge.forgetNames.isNotEmpty()) {
+                val n = merge.forgetNames.size
+                val names = merge.forgetNames.joinToString(stringResource(R.string.import_list_separator))
+                add(pluralStringResource(R.plurals.pair_merge_forget, n, n, names))
+            }
+        }
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        for (paragraph in paragraphs) Text(paragraph, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun tracksText(count: Long): String {
+    val n = count.coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+    return pluralStringResource(R.plurals.tracks, n, n)
+}
+
 /** Which device keeps the originals, its "**archive**" in bold. */
 @Composable
 private fun archiveExplainer(pairing: Pairing.Ended): AnnotatedString {
@@ -284,6 +359,7 @@ fun syncNotice(status: SyncStatus): Pair<String, Boolean>? = when {
     !status.onLan -> stringResource(R.string.sync_not_on_wifi) to true
     status.libraryState == CoreSync.LibraryState.Other -> stringResource(R.string.sync_other_library) to true
     status.libraryState == CoreSync.LibraryState.Unknown -> stringResource(R.string.sync_unknown_library) to false
+    status.inGroup && status.mergePending -> stringResource(R.string.merge_pending) to false
     status.inGroup && status.selfConfirm != null -> confirmText(status.selfConfirm)?.let { it to false }
     else -> null
 }
@@ -316,17 +392,36 @@ fun memberText(device: SyncDevice, syncing: Boolean): String {
 @Composable
 private fun endedText(pairing: Pairing.Ended): String = when (pairing.reason) {
     // Nothing syncs yet: the device that joined has its sync settings to choose.
-    CoreSync.PairReason.Paired -> if (pairing.joined) {
-        stringResource(R.string.paired_text, pairing.peer)
-    } else {
-        stringResource(R.string.paired_peer_text, pairing.peer)
-    }
+    CoreSync.PairReason.Paired -> listOfNotNull(
+        if (pairing.joined) {
+            stringResource(R.string.paired_text, pairing.peer)
+        } else {
+            stringResource(R.string.paired_peer_text, pairing.peer)
+        },
+        // Merged: whose library was kept, and the Last.fm account signed out.
+        if (!pairing.merged) {
+            null
+        } else if (pairing.keptHere) {
+            stringResource(R.string.paired_merged_kept_text, pairing.peer)
+        } else {
+            stringResource(R.string.paired_merged_text, pairing.peer)
+        },
+        if (!pairing.merged || pairing.scrobbleSignedOut.isEmpty()) {
+            null
+        } else if (pairing.keptHere) {
+            stringResource(R.string.paired_merged_scrobble_there, pairing.scrobbleSignedOut, pairing.peer)
+        } else {
+            stringResource(R.string.paired_merged_scrobble_here, pairing.scrobbleSignedOut, pairing.peer)
+        },
+    ).joinToString("\n\n")
+    CoreSync.PairReason.MergeDeclined -> stringResource(R.string.pair_merge_declined)
     CoreSync.PairReason.WrongCode -> stringResource(R.string.pair_wrong_code_too_often)
     CoreSync.PairReason.InGroup -> stringResource(R.string.pair_in_group, pairing.peer)
+    // This phone merges libraries, so the other device can't: it runs an older version.
     CoreSync.PairReason.LibraryMismatch -> stringResource(
         if (pairing.initiator) R.string.pair_library_mismatch else R.string.pair_library_mismatch_incoming,
         pairing.peer,
-    )
+    ) + "\n\n" + stringResource(R.string.pair_merge_update_hint, pairing.peer)
     CoreSync.PairReason.AlreadyPaired -> stringResource(R.string.pair_already_paired, pairing.peer)
     CoreSync.PairReason.Busy -> stringResource(R.string.pair_busy, pairing.peer)
     CoreSync.PairReason.Cancelled -> stringResource(R.string.pair_cancelled)

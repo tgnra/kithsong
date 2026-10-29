@@ -900,6 +900,7 @@ typedef struct jni_sync {
   mc_sync *sync;
   jobject listener; /* global ref to the CoreSync, whose on* methods get the events */
   jmethodID on_peer, on_pair_code, on_pair_result, on_progress, on_sync_done;
+  jmethodID on_pair_merge, on_merge_progress, on_merge_done;
 } jni_sync;
 
 /* The current core thread's JNIEnv, attaching the thread if the JVM doesn't know it, or NULL.
@@ -953,12 +954,86 @@ static void on_sync_pair_result(void *user, const mc_pair_result *r) {
   jstring uid = new_string(env, r->device_uid ? r->device_uid : "");
   jstring name = new_string(env, r->name ? r->name : "");
   jstring archive = new_string(env, r->archive_name ? r->archive_name : "");
+  jstring scrobble = new_string(env, r->scrobble_signed_out ? r->scrobble_signed_out : "");
   (*env)->CallVoidMethod(env, p->listener, p->on_pair_result, uid, name,
                          (jboolean)(r->initiator != 0), (jint)r->reason, (jint)r->attempts_left,
-                         (jint)r->status, (jboolean)(r->joined != 0), archive, (jint)r->archives);
+                         (jint)r->status, (jboolean)(r->joined != 0), archive, (jint)r->archives,
+                         (jboolean)(r->merged != 0), (jboolean)(r->kept_here != 0), scrobble);
   if (uid) (*env)->DeleteLocalRef(env, uid);
   if (name) (*env)->DeleteLocalRef(env, name);
   if (archive) (*env)->DeleteLocalRef(env, archive);
+  if (scrobble) (*env)->DeleteLocalRef(env, scrobble);
+  detach(env, attached);
+}
+
+/* Merging libraries: the proposal, with forget_names as a String[]. */
+static void on_sync_pair_merge(void *user, const mc_pair_merge *m) {
+  jni_sync *p = user;
+  int attached;
+  JNIEnv *env = attach(&attached);
+  if (!env) return;
+  jstring uid = new_string(env, m->device_uid ? m->device_uid : "");
+  jstring name = new_string(env, m->name ? m->name : "");
+  jstring scrobble = new_string(env, m->scrobble_user ? m->scrobble_user : "");
+  int count = m->forget_names && m->forget_count > 0 ? m->forget_count : 0;
+  jclass string_cls = (*env)->FindClass(env, "java/lang/String");
+  jobjectArray forget = string_cls ? (*env)->NewObjectArray(env, count, string_cls, NULL) : NULL;
+  for (int i = 0; forget && i < count; i++) {
+    jstring n = new_string(env, m->forget_names[i] ? m->forget_names[i] : "");
+    if (!n) break;
+    (*env)->SetObjectArrayElement(env, forget, i, n);
+    (*env)->DeleteLocalRef(env, n);
+  }
+  if (uid && name && scrobble && forget && !(*env)->ExceptionCheck(env)) {
+    (*env)->CallVoidMethod(env, p->listener, p->on_pair_merge, uid, name,
+                           (jboolean)(m->initiator != 0), (jboolean)(m->kept_here != 0),
+                           (jboolean)(m->needs_confirm != 0), (jlong)m->tracks_here,
+                           (jlong)m->tracks_there, (jlong)m->bytes_here, (jlong)m->bytes_there,
+                           (jboolean)(m->scrobble_sign_out != 0), scrobble, (jint)m->forget_count,
+                           forget);
+  }
+  if (uid) (*env)->DeleteLocalRef(env, uid);
+  if (name) (*env)->DeleteLocalRef(env, name);
+  if (scrobble) (*env)->DeleteLocalRef(env, scrobble);
+  if (forget) (*env)->DeleteLocalRef(env, forget);
+  if (string_cls) (*env)->DeleteLocalRef(env, string_cls);
+  detach(env, attached);
+}
+
+static void on_sync_merge_progress(void *user, const mc_merge_progress *pr) {
+  jni_sync *p = user;
+  int attached;
+  JNIEnv *env = attach(&attached);
+  if (!env) return;
+  (*env)->CallVoidMethod(env, p->listener, p->on_merge_progress, (jint)pr->phase, (jint)pr->done,
+                         (jint)pr->total);
+  detach(env, attached);
+}
+
+/* The counts go as an int[], in the order CoreSync.onMergeDone reads them. */
+static void on_sync_merge_done(void *user, const mc_merge_result *r) {
+  jni_sync *p = user;
+  int attached;
+  JNIEnv *env = attach(&attached);
+  if (!env) return;
+  const jint counts[] = {
+    r->tracks_added,      r->tracks_attached, r->tracks_better,    r->tracks_skipped,
+    r->tracks_mapped,     r->tracks_left_out, r->tracks_failed,    r->playlists,
+    r->playlists_renamed, r->album_groups,    r->smart_lists,      r->plays,
+    r->recents,           r->scrobbles_sent,  r->scrobbles_dropped,
+  };
+  const jsize n = (jsize)(sizeof counts / sizeof *counts);
+  jintArray jcounts = (*env)->NewIntArray(env, n);
+  if (jcounts) (*env)->SetIntArrayRegion(env, jcounts, 0, n, counts);
+  jstring backup = new_string(env, r->backup_path ? r->backup_path : "");
+  jstring scrobble = new_string(env, r->scrobble_signed_out ? r->scrobble_signed_out : "");
+  if (jcounts && backup && scrobble) {
+    (*env)->CallVoidMethod(env, p->listener, p->on_merge_done, (jint)r->status, backup, jcounts,
+                           scrobble);
+  }
+  if (jcounts) (*env)->DeleteLocalRef(env, jcounts);
+  if (backup) (*env)->DeleteLocalRef(env, backup);
+  if (scrobble) (*env)->DeleteLocalRef(env, scrobble);
   detach(env, attached);
 }
 
@@ -1016,12 +1091,16 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
   } methods[] = {
     {"onPeer", "(Ljava/lang/String;ZZ)V"},
     {"onPairCode", "(Ljava/lang/String;Ljava/lang/String;I)V"},
-    {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIIIZLjava/lang/String;I)V"},
+    {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIIIZLjava/lang/String;IZZLjava/lang/String;)V"},
     {"onProgress", "(Ljava/lang/String;IJJIIJJ)V"},
     {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJIZ)V"},
+    {"onPairMerge", "(Ljava/lang/String;Ljava/lang/String;ZZZJJJJZLjava/lang/String;I[Ljava/lang/String;)V"},
+    {"onMergeProgress", "(III)V"},
+    {"onMergeDone", "(ILjava/lang/String;[ILjava/lang/String;)V"},
   };
-  jmethodID *ids[] = {&p->on_peer, &p->on_pair_code, &p->on_pair_result, &p->on_progress,
-                      &p->on_sync_done};
+  jmethodID *ids[] = {&p->on_peer,       &p->on_pair_code,      &p->on_pair_result,
+                      &p->on_progress,   &p->on_sync_done,      &p->on_pair_merge,
+                      &p->on_merge_progress, &p->on_merge_done};
   int found = 1;
   for (size_t i = 0; found && i < sizeof methods / sizeof *methods; i++) {
     *ids[i] = (*env)->GetMethodID(env, lcls, methods[i].name, methods[i].sig);
@@ -1043,6 +1122,10 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
       .on_pair_result = on_sync_pair_result,
       .on_progress = on_sync_progress,
       .on_sync_done = on_sync_done,
+      /* Setting on_pair_merge is what lets pairing merge two libraries with music. */
+      .on_pair_merge = on_sync_pair_merge,
+      .on_merge_progress = on_sync_merge_progress,
+      .on_merge_done = on_sync_merge_done,
     };
     /* mc_sync_new copies the strings and the events. */
     st = mc_sync_new((mc_library *)(intptr_t)library, cdir, cname, (mc_device_kind)kind, &events,
@@ -1149,6 +1232,21 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativePairCancel(JNIEnv *env
   (void)env;
   (void)cls;
   mc_sync_pair_cancel(sync_of(handle));
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativePairMergeConfirm(JNIEnv *env, jclass cls,
+                                                                         jlong handle,
+                                                                         jboolean merge) {
+  (void)cls;
+  mc_status st = mc_sync_pair_merge_confirm(sync_of(handle), merge != JNI_FALSE);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreSync_nativeMergePending(JNIEnv *env, jclass cls,
+                                                                         jlong handle) {
+  (void)env;
+  (void)cls;
+  return mc_sync_merge_pending(sync_of(handle)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeLeaveGroup(JNIEnv *env, jclass cls,

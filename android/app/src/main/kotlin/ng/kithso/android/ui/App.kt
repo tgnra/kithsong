@@ -1,6 +1,8 @@
 package ng.kithso.android.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
@@ -45,6 +47,8 @@ import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.sync.Syncer
 import ng.kithso.android.ui.theme.ArtTheme
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -72,6 +76,9 @@ fun App(
 ) {
     val library by source.library.collectAsState()
     val importProgress by importer.progress.collectAsState()
+    // Only the merge's state, so sync's other progress doesn't recompose everything.
+    val merge by remember(syncer) { syncer.status.map { it.merge }.distinctUntilChanged() }
+        .collectAsState(syncer.status.value.merge)
     val importPickers = rememberImportPickers(importer, onImportStarted)
     val stack = rememberSaveable(saver = StackSaver) { SnapshotStateList<CollectionRef>() }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
@@ -127,7 +134,17 @@ fun App(
                 onSettings = { settingsOpen = true },
                 importPickers = importPickers,
                 importRunning = importProgress?.phase?.isOver == false,
-                banner = importProgress?.let { progress -> { modifier -> ImportCard(progress, importer, modifier) } },
+                // How an import is going, and the merge after pairing by merging libraries.
+                banner = if (importProgress == null && merge == null) {
+                    null
+                } else {
+                    { modifier ->
+                        Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            importProgress?.let { ImportCard(it, importer) }
+                            merge?.let { MergeCard(it, onDismiss = syncer::dismissMerge) }
+                        }
+                    }
+                },
                 modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen || searchOpen),
                 onPlaylistMenu = actions::playlistMenu,
                 onAlbumMenu = { actions.albumMenu(it) },

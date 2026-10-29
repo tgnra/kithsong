@@ -266,6 +266,15 @@ fun DeviceScreen(
                         supportingContent = { Text(stringResource(if (status.inGroup) R.string.this_phone_in_group else R.string.this_phone_alone)) },
                     )
                     InfoRow(stringResource(R.string.device_address), addressText(status.address?.takeIf { status.running }, status.port))
+                    // After pairing by merging, until the old library's music has come in.
+                    if (status.mergePending) {
+                        Text(
+                            stringResource(R.string.merge_pending),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
                     status.self?.let { FilesRows(it) }
                     // This phone's sessions with any member.
                     status.sessions.forEach { (memberUid, progress) ->

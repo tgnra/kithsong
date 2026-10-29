@@ -3,6 +3,7 @@ package ng.kithso.android
 import ng.kithso.core.*
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
@@ -33,6 +34,12 @@ class MainActivity : ComponentActivity() {
         val empty = intent.getBooleanExtra("fake_empty", false)
         if (savedInstanceState == null && (empty || intent.getBooleanExtra("fake", false))) {
             app.useFakeLibrary(empty)
+        }
+        // Debug builds: `--es fake_merge <scenario>` shows one of the merge's screens with
+        // made-up data (see Syncer.debugShowMerge).
+        val fakeMerge = intent.getStringExtra("fake_merge")
+        if (fakeMerge != null && applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            app.syncer.debugShowMerge(fakeMerge)
         }
         Log.i(TAG, "musiccore ${NativeCore.version()}")
         // A zip or audio files opened with or shared to the app: import them. Only on a fresh

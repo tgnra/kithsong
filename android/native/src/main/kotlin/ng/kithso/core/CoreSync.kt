@@ -187,7 +187,24 @@ class CoreSync(
     private val listener: (Event) -> Unit,
 ) : AutoCloseable {
     /** mc_pair_reason. */
-    enum class PairReason { Paired, WrongCode, InGroup, LibraryMismatch, AlreadyPaired, Busy, Cancelled, Failed }
+    enum class PairReason {
+        Paired, WrongCode, InGroup, LibraryMismatch, AlreadyPaired, Busy, Cancelled, Failed,
+
+        /**
+         * Both libraries have music, and the user of the device whose library would have been
+         * merged said no, here or on the other device (see [Event.PairMerge]).
+         */
+        MergeDeclined,
+    }
+
+    /** mc_merge_phase. */
+    enum class MergePhase {
+        /** Albums of the set-aside library. */
+        Tracks,
+
+        /** Playlists, album groups, smart lists, play counts and recents. */
+        Lists,
+    }
 
     /** mc_sync_phase. */
     enum class Phase { Connecting, Group, Library, Files, Done }
@@ -209,7 +226,11 @@ class CoreSync(
          * When paired, [joined] says this device joined (the other's group, or a new group
          * syncing the other's library): it holds nothing yet, and its sync settings are the
          * ones to choose. Then [archiveName] is the group's archive (the first by name of
-         * [archives]), "" and 0 if the other device didn't say.
+         * [archives]), "" and 0 if the other device didn't say. [merged]: they paired by
+         * merging libraries, and [keptHere] says this device's library was the one kept (the
+         * other, [joined], gets [MergeProgress] and [MergeDone] once the first session has
+         * brought the kept library). [scrobbleSignedOut] is the Last.fm user signed out on the
+         * merged device because both had one, "" if none was.
          */
         data class PairResult(
             val uid: String,
@@ -221,6 +242,69 @@ class CoreSync(
             val joined: Boolean = false,
             val archiveName: String = "",
             val archives: Int = 0,
+            val merged: Boolean = false,
+            val keptHere: Boolean = false,
+            val scrobbleSignedOut: String = "",
+        ) : Event
+
+        /**
+         * Pairing with [name] needs the libraries merged (mc_pair_merge), before the code is
+         * entered: on the initiator once the other device answered, on the device showing the
+         * code just before [PairCode]. The larger library is kept: this device's if
+         * [keptHere], else this device's library is set aside and its music merged into the
+         * other's, and then [needsConfirm]: answer with [CoreSync.pairMergeConfirm]. If both
+         * are signed in to Last.fm, [scrobbleSignOut]: the merged library's account is signed
+         * out ([scrobbleUser] when it's this device's). [forgetNames]: the paired devices this
+         * device forgets (needsConfirm only).
+         */
+        data class PairMerge(
+            val uid: String,
+            val name: String,
+            val initiator: Boolean,
+            val keptHere: Boolean,
+            val needsConfirm: Boolean,
+            val tracksHere: Long,
+            val tracksThere: Long,
+            val bytesHere: Long,
+            val bytesThere: Long,
+            val scrobbleSignOut: Boolean,
+            val scrobbleUser: String,
+            val forgetNames: List<String>,
+        ) : Event
+
+        /** The merge of the set-aside library, on the device whose library was merged. */
+        data class MergeProgress(val phase: MergePhase, val done: Int, val total: Int) : Event
+
+        /**
+         * The merge is over (mc_merge_result): [status] 0, or why it stopped (what was
+         * written stays). [backupPath] is the set-aside library, kept. Tracks of it: new to
+         * the kept library ([tracksAdded]); already there with no copy of known quality
+         * ([tracksAttached]) or in lower quality ([tracksBetter]), so this device's file was
+         * added; there in the same or better quality, so this device's file was deleted
+         * ([tracksSkipped]); with no file here but in the kept library ([tracksMapped]) or not
+         * ([tracksLeftOut]); couldn't be written ([tracksFailed]). [scrobbleSignedOut] is ""
+         * unless known (the merge ran in the same run of the app as the pairing).
+         */
+        data class MergeDone(
+            val status: Int,
+            val backupPath: String,
+            val tracksAdded: Int,
+            val tracksAttached: Int,
+            val tracksBetter: Int,
+            val tracksSkipped: Int,
+            val tracksMapped: Int,
+            val tracksLeftOut: Int,
+            val tracksFailed: Int,
+            /** Playlists, album groups and smart lists carried over; [playlistsRenamed] of them as "Name (2)". */
+            val playlists: Int,
+            val playlistsRenamed: Int,
+            val albumGroups: Int,
+            val smartLists: Int,
+            val plays: Int,
+            val recents: Int,
+            val scrobbleSignedOut: String,
+            val scrobblesSent: Int,
+            val scrobblesDropped: Int,
         ) : Event
 
         /**
@@ -303,6 +387,18 @@ class CoreSync(
 
     /** Gives up the pairing in progress, outgoing or incoming. */
     fun pairCancel() = nativePairCancel(handle)
+
+    /**
+     * The answer to [Event.PairMerge] with needsConfirm: [merge] this device's library into
+     * the other's, or decline. ERR_NOT_FOUND if no pairing here waits for one.
+     */
+    fun pairMergeConfirm(merge: Boolean) = nativePairMergeConfirm(handle, merge)
+
+    /**
+     * This device's set-aside library hasn't been merged into the kept one yet: it runs after
+     * the next session that syncs the library.
+     */
+    val mergePending: Boolean get() = nativeMergePending(handle)
 
     /** Leaves the group. Blocks for a few seconds at most, telling a member. */
     fun leaveGroup() = nativeLeaveGroup(handle)
@@ -448,7 +544,53 @@ class CoreSync(
         joined: Boolean,
         archiveName: String,
         archives: Int,
-    ) = listener(Event.PairResult(uid, name, initiator, PairReason.entries[reason], attemptsLeft, status, joined, archiveName, archives))
+        merged: Boolean,
+        keptHere: Boolean,
+        scrobbleSignedOut: String,
+    ) = listener(
+        Event.PairResult(
+            uid, name, initiator, PairReason.entries.getOrElse(reason) { PairReason.Failed }, attemptsLeft, status,
+            joined, archiveName, archives, merged, keptHere, scrobbleSignedOut,
+        ),
+    )
+
+    @Suppress("unused")
+    private fun onPairMerge(
+        uid: String,
+        name: String,
+        initiator: Boolean,
+        keptHere: Boolean,
+        needsConfirm: Boolean,
+        tracksHere: Long,
+        tracksThere: Long,
+        bytesHere: Long,
+        bytesThere: Long,
+        scrobbleSignOut: Boolean,
+        scrobbleUser: String,
+        forgetCount: Int,
+        forgetNames: Array<String>,
+    ) = listener(
+        Event.PairMerge(
+            uid, name, initiator, keptHere, needsConfirm, tracksHere, tracksThere, bytesHere, bytesThere,
+            scrobbleSignOut, scrobbleUser, forgetNames.take(forgetCount),
+        ),
+    )
+
+    @Suppress("unused")
+    private fun onMergeProgress(phase: Int, done: Int, total: Int) =
+        listener(Event.MergeProgress(MergePhase.entries.getOrElse(phase) { MergePhase.Lists }, done, total))
+
+    // counts: as jni_bridge.c's on_sync_merge_done orders them.
+    @Suppress("unused")
+    private fun onMergeDone(status: Int, backupPath: String, counts: IntArray, scrobbleSignedOut: String) {
+        val c = { i: Int -> counts.getOrElse(i) { 0 } }
+        listener(
+            Event.MergeDone(
+                status, backupPath, c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11), c(12),
+                scrobbleSignedOut, c(13), c(14),
+            ),
+        )
+    }
 
     @Suppress("unused")
     private fun onProgress(
@@ -533,6 +675,8 @@ class CoreSync(
         @JvmStatic private external fun nativePairRequestAddress(handle: Long, host: String, port: Int)
         @JvmStatic private external fun nativePairEnter(handle: Long, code: String)
         @JvmStatic private external fun nativePairCancel(handle: Long)
+        @JvmStatic private external fun nativePairMergeConfirm(handle: Long, merge: Boolean)
+        @JvmStatic private external fun nativeMergePending(handle: Long): Boolean
         @JvmStatic private external fun nativeLeaveGroup(handle: Long)
         @JvmStatic private external fun nativeNotifyChanged(handle: Long)
         @JvmStatic private external fun nativeLibraryState(handle: Long): Int

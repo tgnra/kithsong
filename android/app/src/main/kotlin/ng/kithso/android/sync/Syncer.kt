@@ -39,23 +39,59 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
+/**
+ * Pairing needs the two libraries merged (CoreSync.Event.PairMerge): the larger is kept. If
+ * [keptHere], this phone's is, and the other device's user is asked; else this phone's
+ * library is set aside and its music merged into the other's, once its user agrees
+ * ([answered] after Merge). [tracksHere] and [tracksThere] are each library's track count;
+ * [scrobbleUser] is this phone's Last.fm user, to be signed out ("" if none is), and
+ * [forgetNames] the paired devices this phone forgets.
+ */
+@Immutable
+data class MergeProposal(
+    val keptHere: Boolean,
+    val tracksHere: Long,
+    val tracksThere: Long,
+    val scrobbleUser: String = "",
+    val forgetNames: List<String> = emptyList(),
+    val answered: Boolean = false,
+) {
+    /** This phone's user is still to say Merge or Cancel. */
+    val needsAnswer: Boolean get() = !keptHere && !answered
+}
+
 /** Where a pairing has got to, as the pairing dialog shows it. */
 @Immutable
 sealed interface Pairing {
+    /** The merge pairing needs, if it does (shown with the code, or in its place until answered). */
+    val merge: MergeProposal?
+
     /**
      * This phone asked [peer] to pair, and [peer] shows a code for the user to type in here.
      * [attemptsLeft] is set after a wrong code; [checking] while a code is being tried.
      */
-    data class EnterCode(val peer: String, val attemptsLeft: Int? = null, val checking: Boolean = false) : Pairing
+    data class EnterCode(
+        val peer: String,
+        val attemptsLeft: Int? = null,
+        val checking: Boolean = false,
+        override val merge: MergeProposal? = null,
+    ) : Pairing
 
     /** [peer] asked to pair: its user types [code] in there. [attemptsLeft] drops after a wrong code. */
-    data class ShowCode(val peer: String, val code: String, val attemptsLeft: Int) : Pairing
+    data class ShowCode(
+        val peer: String,
+        val code: String,
+        val attemptsLeft: Int,
+        override val merge: MergeProposal? = null,
+    ) : Pairing
 
     /**
      * It's over: paired, or why not. [initiator]: this phone asked. When paired, [joined] says
      * this phone joined [peer]'s group (or a new one syncing [peer]'s library), so it's this
      * phone's sync settings that are to be chosen, else [peerUid]'s; [archiveName] is then the
-     * group's archive (the first of [archives]), "" if not known.
+     * group's archive (the first of [archives]), "" if not known. [merged]: paired by merging
+     * libraries, this phone's kept if [keptHere]; [scrobbleSignedOut] is the Last.fm user
+     * signed out on the merged device, "" if none was.
      */
     data class Ended(
         val peer: String,
@@ -65,7 +101,32 @@ sealed interface Pairing {
         val joined: Boolean = false,
         val archiveName: String = "",
         val archives: Int = 0,
-    ) : Pairing
+        val merged: Boolean = false,
+        val keptHere: Boolean = false,
+        val scrobbleSignedOut: String = "",
+    ) : Pairing {
+        override val merge: MergeProposal? get() = null
+    }
+}
+
+/**
+ * The merge of this phone's set-aside library into the one it now syncs, after pairing by
+ * merging: [done] of [total] in [phase] while it runs, then its [result] until dismissed.
+ */
+@Immutable
+data class MergeState(
+    val phase: CoreSync.MergePhase = CoreSync.MergePhase.Tracks,
+    val done: Int = 0,
+    val total: Int = 0,
+    val result: CoreSync.Event.MergeDone? = null,
+) {
+    val running: Boolean get() = result == null
+
+    /** How far it has got, 0 to 1: albums take most of the time, so nine tenths go to them. */
+    val fraction: Float get() {
+        val part = if (total > 0) done.coerceIn(0, total).toFloat() / total else 0f
+        return if (phase == CoreSync.MergePhase.Tracks) part * 0.9f else 0.9f + part * 0.1f
+    }
 }
 
 /** How far a session with a member has got (mc_sync_progress). */
@@ -114,14 +175,19 @@ data class SyncStatus(
     /** How the last session with each member since sync started ended, by member uid. */
     val results: Map<String, CoreSync.Event.SyncDone> = emptyMap(),
     val pairing: Pairing? = null,
+    /** The merge after pairing by merging libraries, while it runs and until its summary is dismissed. */
+    val merge: MergeState? = null,
+    /** This phone's old library is still to be merged in, after the next sync with the group. */
+    val mergePending: Boolean = false,
 ) {
     val inGroup: Boolean get() = libraryState != CoreSync.LibraryState.NoGroup
 
     /** The members a session is running with. */
     val syncing: Set<String> get() = sessions.keys
 
-    /** Something is under way that shouldn't be cut off: a session or a pairing. */
-    val busy: Boolean get() = syncing.isNotEmpty() || pairing is Pairing.EnterCode || pairing is Pairing.ShowCode
+    /** Something is under way that shouldn't be cut off: a session, a pairing or a merge. */
+    val busy: Boolean get() =
+        syncing.isNotEmpty() || pairing is Pairing.EnterCode || pairing is Pairing.ShowCode || merge?.running == true
 }
 
 /**
@@ -175,6 +241,14 @@ class Syncer(
     // touched on [thread].
     private var lastFilesRefresh = 0L
 
+    // Merging libraries, only touched on [thread]. The merge proposal comes just before the
+    // code on the phone showing it, so it waits here for the code. Once this phone's user
+    // declined a merge, the pairing's end needs no telling (on the phone showing the code it
+    // comes only when the other device's user enters it).
+    private var pendingMerge: MergeProposal? = null
+    private var declined = false
+    private var debugMergePending = false
+
     init {
         scope.launch(thread) {
             for (event in events) onEvent(event)
@@ -209,10 +283,49 @@ class Syncer(
         sync.pairEnter(code)
     }
 
-    /** Gives up the pairing in progress, either way round. */
+    /**
+     * Gives up the pairing in progress, either way round. While a merge waits for this phone's
+     * answer, it declines the merge instead, which ends the pairing (on the phone showing the
+     * code, once the other device's user enters it); the dialog closes either way.
+     */
     fun cancelPairing() = call { sync ->
-        sync.pairCancel()
-        if (state.value.pairing?.let { it !is Pairing.Ended } == true) update { copy(pairing = null) }
+        val pairing = state.value.pairing
+        if (pairing?.merge?.needsAnswer == true) {
+            declined = true
+            try {
+                sync.pairMergeConfirm(false)
+            } catch (e: MusicCoreException) {
+                sync.pairCancel()
+            }
+        } else {
+            sync.pairCancel()
+        }
+        if (pairing?.let { it !is Pairing.Ended } == true) update { copy(pairing = null) }
+    }
+
+    /** Merge pressed: this phone's library is merged into the other device's once they pair. */
+    fun confirmMerge() = call { sync ->
+        val pairing = state.value.pairing
+        if (pairing?.merge?.needsAnswer != true) return@call
+        // Not found: the pairing is over, and its result follows.
+        sync.pairMergeConfirm(true)
+        val merge = pairing.merge?.copy(answered = true)
+        update {
+            copy(
+                pairing = when (pairing) {
+                    is Pairing.EnterCode -> pairing.copy(merge = merge)
+                    is Pairing.ShowCode -> pairing.copy(merge = merge)
+                    is Pairing.Ended -> pairing
+                },
+            )
+        }
+    }
+
+    /** Forgets the merge's summary, once it has been seen. */
+    fun dismissMerge() {
+        scope.launch(thread) {
+            if (state.value.merge?.running == false) update { copy(merge = null) }
+        }
     }
 
     /** Forgets how the last pairing ended, once it has been seen. */
@@ -404,7 +517,50 @@ class Syncer(
         return true
     }
 
+    /**
+     * Debug builds only (MainActivity's fake_merge extra): shows one of the merge's screens
+     * with made-up data, for screenshots without a second device. The buttons on them call
+     * the core as usual, which has no such pairing.
+     */
+    fun debugShowMerge(scenario: String) {
+        scope.launch(thread) {
+            val peer = "Living room PC"
+            val ask = MergeProposal(false, 120, 1204, "tania_listens", listOf("Laptop", "Kitchen tablet"))
+            val kept = MergeProposal(true, 1204, 120)
+            val done = CoreSync.Event.MergeDone(
+                0, "/data/user/0/ng.kithso/files/library/library-before-merge-2026-10-29.db",
+                80, 6, 4, 30, 5, 2, 1, 6, 1, 2, 1, 40, 10, "tania_listens", 3, 2,
+            )
+            val ended = Pairing.Ended(peer, CoreSync.PairReason.Paired, initiator = true, peerUid = "fake", joined = true)
+            when (scenario) {
+                "enter_ask" -> update { copy(pairing = Pairing.EnterCode(peer, merge = ask)) }
+                "enter_confirmed" -> update { copy(pairing = Pairing.EnterCode(peer, merge = ask.copy(answered = true))) }
+                "enter_kept" -> update { copy(pairing = Pairing.EnterCode(peer, merge = kept)) }
+                "show_ask" -> update { copy(pairing = Pairing.ShowCode(peer, "123456", 3, ask)) }
+                "show_confirmed" -> update { copy(pairing = Pairing.ShowCode(peer, "123456", 3, ask.copy(answered = true))) }
+                "show_kept" -> update { copy(pairing = Pairing.ShowCode(peer, "123456", 3, kept)) }
+                "paired_merged" -> update {
+                    copy(pairing = ended.copy(merged = true, scrobbleSignedOut = "tania_listens"))
+                }
+                "paired_kept" -> update {
+                    copy(pairing = ended.copy(joined = false, merged = true, keptHere = true, scrobbleSignedOut = "tania_listens"))
+                }
+                "declined" -> update { copy(pairing = Pairing.Ended(peer, CoreSync.PairReason.MergeDeclined, true)) }
+                "mismatch" -> update { copy(pairing = Pairing.Ended(peer, CoreSync.PairReason.LibraryMismatch, true)) }
+                "progress" -> update { copy(merge = MergeState(CoreSync.MergePhase.Tracks, 12, 40)) }
+                "done" -> update { copy(merge = MergeState(result = done)) }
+                "failed" -> update { copy(merge = MergeState(result = done.copy(status = -4))) }
+                "pending" -> {
+                    debugMergePending = true
+                    update { copy(mergePending = true) }
+                }
+            }
+        }
+    }
+
     private fun startPairing(peer: String, request: (CoreSync) -> Unit) = call { sync ->
+        declined = false
+        pendingMerge = null
         try {
             request(sync)
             update { copy(pairing = Pairing.EnterCode(peer)) }
@@ -492,10 +648,33 @@ class Syncer(
         when (event) {
             is CoreSync.Event.Peer -> Unit
             is CoreSync.Event.PairCode -> {
-                update { copy(pairing = Pairing.ShowCode(event.requester, event.code, event.attemptsLeft)) }
+                // A merge declined here: the dialog stays closed, even for a new code.
+                if (declined) return
+                val merge = (pairing as? Pairing.ShowCode)?.merge ?: pendingMerge
+                pendingMerge = null
+                update { copy(pairing = Pairing.ShowCode(event.requester, event.code, event.attemptsLeft, merge)) }
                 startService()
             }
-            is CoreSync.Event.PairResult -> onPairResult(event, pairing)
+            is CoreSync.Event.PairResult -> if (!onPairResult(event, pairing)) return
+            is CoreSync.Event.PairMerge -> {
+                onPairMerge(event, pairing)
+                return
+            }
+            is CoreSync.Event.MergeProgress -> {
+                onMergeProgress(event)
+                return
+            }
+            is CoreSync.Event.MergeDone -> {
+                Log.i(
+                    TAG,
+                    "Merged the old library: status ${event.status}, ${event.tracksAdded} added, " +
+                        "${event.tracksBetter} better, ${event.tracksAttached + event.tracksMapped} matched, " +
+                        "${event.tracksSkipped} deleted, ${event.tracksLeftOut} left out, ${event.tracksFailed} failed",
+                )
+                update { copy(merge = (merge ?: MergeState()).copy(result = event)) }
+                source.refresh()
+                lastFilesRefresh = SystemClock.elapsedRealtime()
+            }
             is CoreSync.Event.Progress -> if (!onProgress(event)) return
             is CoreSync.Event.SyncDone -> {
                 Log.i(
@@ -555,8 +734,55 @@ class Syncer(
         return true
     }
 
+    // On [thread]. The proposal goes with the code: on the initiator it comes while the code
+    // is being entered (or once it has been); on the phone showing the code, just before it.
+    private fun onPairMerge(event: CoreSync.Event.PairMerge, pairing: Pairing?) {
+        val proposal = MergeProposal(
+            keptHere = event.keptHere,
+            tracksHere = event.tracksHere,
+            tracksThere = event.tracksThere,
+            scrobbleUser = if (event.scrobbleSignOut) event.scrobbleUser else "",
+            forgetNames = event.forgetNames,
+        )
+        Log.i(TAG, "Pairing with ${event.name} merges libraries; kept here: ${event.keptHere}")
+        when {
+            event.initiator -> if (pairing is Pairing.EnterCode) update { copy(pairing = pairing.copy(merge = proposal)) }
+            pairing is Pairing.ShowCode -> update { copy(pairing = pairing.copy(merge = proposal)) }
+            else -> {
+                // A new incoming pairing: one declined before is over.
+                declined = false
+                pendingMerge = proposal
+            }
+        }
+    }
+
     // On [thread].
-    private fun onPairResult(event: CoreSync.Event.PairResult, pairing: Pairing?) {
+    private fun onMergeProgress(event: CoreSync.Event.MergeProgress) {
+        val before = state.value.merge
+        update { copy(merge = MergeState(event.phase, event.done, event.total)) }
+        // Albums come into the library as it goes.
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFilesRefresh >= FILES_REFRESH_MS) {
+            lastFilesRefresh = now
+            source.refresh()
+        }
+        if (before?.running != true) startService()
+    }
+
+    // On [thread]. False if the result needs no telling, so nothing changed.
+    private fun onPairResult(event: CoreSync.Event.PairResult, pairing: Pairing?): Boolean {
+        if (event.reason != CoreSync.PairReason.WrongCode) pendingMerge = null
+        if (declined) {
+            // This phone's user declined the merge: the end it brings (MergeDeclined, or
+            // Cancelled) needs no telling, nor do wrong codes typed on the other device.
+            Log.i(TAG, "Pairing after declining the merge: ${event.reason}")
+            if (event.reason == CoreSync.PairReason.WrongCode) return false
+            declined = false
+            if (event.reason != CoreSync.PairReason.Paired) {
+                update { copy(pairing = null) }
+                return true
+            }
+        }
         val peer = event.name.ifEmpty {
             when (pairing) {
                 is Pairing.EnterCode -> pairing.peer
@@ -576,12 +802,18 @@ class Syncer(
             CoreSync.PairReason.Cancelled -> null
             CoreSync.PairReason.Paired -> {
                 source.refresh()
-                Pairing.Ended(peer, event.reason, event.initiator, event.uid, event.joined, event.archiveName, event.archives)
+                Pairing.Ended(
+                    peer, event.reason, event.initiator, event.uid, event.joined, event.archiveName, event.archives,
+                    event.merged, event.keptHere, event.scrobbleSignedOut,
+                )
             }
             else -> Pairing.Ended(peer, event.reason, event.initiator)
         }
-        Log.i(TAG, "Pairing with $peer: ${event.reason}, status ${event.status}")
-        update { copy(pairing = next) }
+        Log.i(TAG, "Pairing with $peer: ${event.reason}, status ${event.status}, merged ${event.merged}")
+        // Wrong codes keep the merge's proposal or note with the code.
+        val kept = if (next is Pairing.EnterCode) next.copy(merge = pairing?.merge) else next
+        update { copy(pairing = kept) }
+        return true
     }
 
     // On [thread]. Reads the group and what's nearby again.
@@ -589,6 +821,7 @@ class Syncer(
         try {
             val devices = sync.devices()
             val libraryState = sync.libraryState
+            val mergePending = sync.mergePending
             // Renamed here, or by another member in a session.
             val name = sync.deviceName
             if (name.isNotEmpty() && name != state.value.deviceName) onRenamed(name)
@@ -599,6 +832,7 @@ class Syncer(
                     self = devices.firstOrNull { it.isSelf },
                     members = devices.filter { !it.isSelf && !it.removed },
                     selfConfirm = devices.firstOrNull { it.isSelf }?.confirm,
+                    mergePending = mergePending || debugMergePending,
                     nearby = if (running) sync.nearby() else emptyList(),
                     onLan = context.isOnLan(),
                     address = context.lanAddress(),

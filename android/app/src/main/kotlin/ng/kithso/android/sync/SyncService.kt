@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import ng.kithso.android.MainActivity
 import ng.kithso.android.KithsongApp
 import ng.kithso.android.R
+import ng.kithso.core.CoreSync
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -91,10 +92,13 @@ class SyncService : Service() {
     private fun notification(status: SyncStatus): Notification {
         val pairing = status.pairing
         val names = status.members.filter { it.uid in status.syncing }.map { it.name }
+        // The merge after pairing by merging libraries, while no session or pairing is shown.
+        val merge = status.merge?.takeIf { it.running && names.isEmpty() && (pairing == null || pairing is Pairing.Ended) }
         val title = when (pairing) {
             is Pairing.EnterCode -> getString(R.string.sync_notification_pairing_with, pairing.peer)
             is Pairing.ShowCode -> getString(R.string.sync_notification_wants_to_pair, pairing.peer)
-            else -> if (names.isEmpty()) getString(R.string.syncing)
+            else -> if (merge != null) getString(R.string.merge_title)
+            else if (names.isEmpty()) getString(R.string.syncing)
             else getString(R.string.sync_notification_syncing_with, names.joinToString())
         }
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -112,6 +116,10 @@ class SyncService : Service() {
         val filesTotal = files.sumOf { it.filesTotal }
         if (pairing is Pairing.EnterCode || pairing is Pairing.ShowCode) {
             builder.addAction(0, getString(R.string.cancel), cancel(ACTION_CANCEL))
+        } else if (merge != null) {
+            val phase = if (merge.phase == CoreSync.MergePhase.Tracks) R.string.merge_progress_tracks else R.string.merge_progress_lists
+            builder.setContentText(getString(phase, merge.done, merge.total))
+            builder.setProgress(MERGE_STEPS, (merge.fraction * MERGE_STEPS).toInt(), false)
         } else {
             if (filesTotal > 0) {
                 builder.setContentText(resources.getQuantityString(R.plurals.sync_notification_files, filesTotal, filesDone, filesTotal))
@@ -154,6 +162,7 @@ class SyncService : Service() {
         private const val HOLDER = "service"
         private const val CHANNEL_ID = "sync"
         private const val NOTIFICATION_ID = 4
+        private const val MERGE_STEPS = 1000
         private const val ACTION_CANCEL = "ng.kithso.android.sync.CANCEL"
         private const val ACTION_CANCEL_SYNC = "ng.kithso.android.sync.CANCEL_SYNC"
         // A safety net, if sync goes this long without a step forward: the service releases it
