@@ -4,7 +4,7 @@
     <!-- Marks this as the watch build; Play serves it only to Wear OS devices. -->
     <uses-feature android:name="android.hardware.type.watch" />
 
-    <!-- MusicBrainz/AcoustID lookups and LAN sync. -->
+    <!-- MusicBrainz lookups and LAN sync. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- mDNS discovery needs a multicast lock. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />

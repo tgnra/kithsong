@@ -4,11 +4,8 @@
 
 #define MC_VERSION_STRING "@PROJECT_VERSION@"
 
-/* Sent in the User-Agent of every MusicBrainz/AcoustID request, as their terms require. */
+/* Sent in the User-Agent of every MusicBrainz request, as their terms require. */
 #define MC_CONTACT "@KITHSONG_CONTACT@"
-
-/* AcoustID application key, from -DKITHSONG_ACOUSTID_KEY=... (empty disables fingerprinting). */
-#define MC_ACOUSTID_KEY "@KITHSONG_ACOUSTID_KEY@"
 
 /* The Last.fm API key and secret aren't here: they're in lastfm_key.h, obscured (see
  * cmake/LastfmKey.cmake and core/src/scrobble/lastfm_key.c). */

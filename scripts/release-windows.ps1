@@ -5,8 +5,8 @@
 #   scripts\release-windows.ps1
 #
 # Needs w64devkit's gcc (on PATH, or at $env:W64DEVKIT), CMake >= 3.28 and Ninja. Bakes in
-# $env:KITHSONG_CONTACT, $env:KITHSONG_ACOUSTID_KEY, $env:KITHSONG_LASTFM_KEY and
-# $env:KITHSONG_LASTFM_SECRET when they're set, and stamps
+# $env:KITHSONG_CONTACT, $env:KITHSONG_LASTFM_KEY and $env:KITHSONG_LASTFM_SECRET when
+# they're set, and stamps
 
 # $env:KITHSONG_BUILD_NUMBER (0-65535) into the file version and the app.
 $ErrorActionPreference = 'Stop'
@@ -36,8 +36,6 @@ function Invoke-Checked {
 $configure = @('--preset', $preset, '-DKITHSONG_BUILD_TESTS=ON')
 if ($env:KITHSONG_CONTACT) { $configure += "-DKITHSONG_CONTACT=$env:KITHSONG_CONTACT" }
 else { Write-Warning 'KITHSONG_CONTACT is not set; MusicBrainz may block this build.' }
-if ($env:KITHSONG_ACOUSTID_KEY) { $configure += "-DKITHSONG_ACOUSTID_KEY=$env:KITHSONG_ACOUSTID_KEY" }
-else { Write-Warning 'KITHSONG_ACOUSTID_KEY is not set; fingerprinting will be off in this build.' }
 if ($env:KITHSONG_LASTFM_KEY -and $env:KITHSONG_LASTFM_SECRET) {
     $configure += "-DKITHSONG_LASTFM_KEY=$env:KITHSONG_LASTFM_KEY", "-DKITHSONG_LASTFM_SECRET=$env:KITHSONG_LASTFM_SECRET"
 } else { Write-Warning 'KITHSONG_LASTFM_KEY or KITHSONG_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build.' }

@@ -39,7 +39,6 @@ endif()
 option(KITHSONG_BUILD_WINDOWS "Build the Win32 desktop frontend" ${_default_windows})
 option(KITHSONG_BUILD_GTK     "Build the GTK4/libadwaita desktop frontend" ${_default_gtk})
 option(KITHSONG_BUILD_TESTS   "Build core unit tests" ${PROJECT_IS_TOP_LEVEL})
-set(KITHSONG_ACOUSTID_KEY "" CACHE STRING "AcoustID application API key (never commit this)")
 set(KITHSONG_LASTFM_KEY "" CACHE STRING "Last.fm API key, for scrobbling (never commit this)")
 set(KITHSONG_LASTFM_SECRET "" CACHE STRING "Last.fm API shared secret (never commit this)")
 set(KITHSONG_LASTFM_FILE "${CMAKE_CURRENT_SOURCE_DIR}/last.fm.api" CACHE FILEPATH

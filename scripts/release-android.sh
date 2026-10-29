@@ -8,8 +8,7 @@
 #
 # Signs with the keystore at $KITHSONG_KEYSTORE ($KITHSONG_KEYSTORE_PASSWORD,
 # $KITHSONG_KEY_ALIAS, $KITHSONG_KEY_PASSWORD); without it the outputs are unsigned. Bakes in
-# $KITHSONG_CONTACT, $KITHSONG_ACOUSTID_KEY, $KITHSONG_LASTFM_KEY and $KITHSONG_LASTFM_SECRET
-# when they're set. JAVA_HOME and ANDROID_HOME as for android/scripts/android.sh.
+# $KITHSONG_CONTACT, $KITHSONG_LASTFM_KEY and $KITHSONG_LASTFM_SECRET when they're set. JAVA_HOME and ANDROID_HOME as for android/scripts/android.sh.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,14 +25,12 @@ else
 fi
 [[ -n "${KITHSONG_CONTACT:-}" ]] ||
     echo "warning: KITHSONG_CONTACT is not set; MusicBrainz may block this build." >&2
-[[ -n "${KITHSONG_ACOUSTID_KEY:-}" ]] ||
-    echo "warning: KITHSONG_ACOUSTID_KEY is not set; fingerprinting will be off in this build." >&2
 [[ -n "${KITHSONG_LASTFM_KEY:-}" && -n "${KITHSONG_LASTFM_SECRET:-}" ]] ||
     echo "warning: KITHSONG_LASTFM_KEY or KITHSONG_LASTFM_SECRET is not set; scrobbling to Last.fm will be off in this build." >&2
 
 "$root/android/scripts/android.sh" gradle --no-daemon \
     :app:assembleRelease :app:bundleRelease :wear:assembleRelease :wear:bundleRelease \
-    "-PkithsongContact=${KITHSONG_CONTACT:-}" "-PkithsongAcoustidKey=${KITHSONG_ACOUSTID_KEY:-}" \
+    "-PkithsongContact=${KITHSONG_CONTACT:-}" \
     "-PkithsongLastfmKey=${KITHSONG_LASTFM_KEY:-}" "-PkithsongLastfmSecret=${KITHSONG_LASTFM_SECRET:-}"
 
 

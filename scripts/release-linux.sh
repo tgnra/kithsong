@@ -5,7 +5,7 @@
 #   scripts/release-linux.sh
 #
 # Needs flatpak and flatpak-builder. The GNOME SDK comes from Flathub (as a --user install)
-# if it isn't installed already. Bakes in $KITHSONG_CONTACT, $KITHSONG_ACOUSTID_KEY,
+# if it isn't installed already. Bakes in $KITHSONG_CONTACT,
 # $KITHSONG_LASTFM_KEY and $KITHSONG_LASTFM_SECRET when they're set.
 #
 # Install the result with `flatpak install --user <file>`; Flatpak fetches the GNOME runtime
@@ -40,11 +40,6 @@ if [[ -n "${KITHSONG_CONTACT:-}" ]]; then
     echo "set(KITHSONG_CONTACT $(cmake_quote "$KITHSONG_CONTACT") CACHE STRING \"\")" >>"$secrets"
 else
     echo "warning: KITHSONG_CONTACT is not set; MusicBrainz may block this build." >&2
-fi
-if [[ -n "${KITHSONG_ACOUSTID_KEY:-}" ]]; then
-    echo "set(KITHSONG_ACOUSTID_KEY $(cmake_quote "$KITHSONG_ACOUSTID_KEY") CACHE STRING \"\")" >>"$secrets"
-else
-    echo "warning: KITHSONG_ACOUSTID_KEY is not set; fingerprinting will be off in this build." >&2
 fi
 if [[ -n "${KITHSONG_LASTFM_KEY:-}" && -n "${KITHSONG_LASTFM_SECRET:-}" ]]; then
     echo "set(KITHSONG_LASTFM_KEY $(cmake_quote "$KITHSONG_LASTFM_KEY") CACHE STRING \"\")" >>"$secrets"

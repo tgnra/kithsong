@@ -23,12 +23,6 @@ dependency is added.
 | opusfile | 0.12 | BSD-3-Clause | fetched, static, without its HTTP support |
 | Miller Shuffle (`MillerShuffle_Large`) | Jan 2026 update ([RondeSC/Miller_Shuffle_Algo](https://github.com/RondeSC/Miller_Shuffle_Algo)) | Apache-2.0 | reimplemented in `core/src/playback/shuffle.c` (one function, adapted) |
 
-Planned:
-
-| Dependency | License | Notes |
-|------------|---------|-------|
-| Chromaprint | LGPL-2.1 (MIT for parts) | fingerprinting; link dynamically or provide relinkable objects |
-
 ## Obligations
 
 - **TagLib** is statically linked under its **MPL-1.1** option. MPL only requires the
