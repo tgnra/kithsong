@@ -481,7 +481,7 @@ class CoreLibrarySource(
             val trackCount = tracksBy[info.name] ?: 0
             if (own.isEmpty() && trackCount == 0) return@mapNotNull null
             // A cover file before an audio file that may have no picture in it.
-            val cover = (own.firstOrNull { album -> album.art.file?.let { File(it).name in COVER_NAMES } == true }
+            val cover = (own.firstOrNull { album -> album.art.file?.let { File(it).extension.lowercase() in COVER_EXTENSIONS } == true }
                 ?: own.firstOrNull { it.art.file != null })?.art
             Artist(info.uid, info.name, own.size, cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name), trackCount)
         }
@@ -639,6 +639,7 @@ class CoreLibrarySource(
         const val MAX_RECENTS = 8
         const val SEARCH_LIMIT = 20 // of each kind, as the desktops show
         const val ON_DEVICE_RULE = """{"v": 1, "match": {"field": "on_device", "op": "is", "value": true}}"""
+        val COVER_EXTENSIONS = listOf("jpg", "jpeg", "png") // what mc_coverart_find() takes
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
 
