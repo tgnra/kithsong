@@ -41,7 +41,13 @@ The database has two identities of its own in `meta`, both generated on first op
 - `library_uid` says which library this is. It's the same on every device that syncs the
   library, and a sync group never touches a library with a different one. A device joining a
   group takes on the group's `library_uid` with `mc_library_adopt_uid()`, which only works
-  while the library has no tracks, so two libraries are never merged.
+  while the library has no tracks, so two changelogs are never merged. Pairing two libraries
+  that both have music merges them another way: the smaller one is copied aside
+  (`library-before-merge-<date>.db` in its folder), emptied in place without logging
+  (`mc_library_reset_for_merge()`, which also gives it a new `node_uid`), joins as an empty
+  library, and then has the copy's current state imported as fresh edits; `meta.merge_source`
+  names the copy until then. No migration was needed. See
+  [Merging libraries](sync-protocol.md#merging-libraries).
 - `node_uid` is the origin stamped on every change made here. If sync finds that another
   device already uses it (for example, the library folder was copied),
   `mc_library_rotate_node_uid()` gives the library a new one. Changes logged under the old
@@ -242,7 +248,7 @@ makes the answer differ between devices.
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
 | `merge_keys`       | no     | the MusicBrainz ids (and singles albums' artists) ever logged per uid, which decide what merges |
 | `changelog`        | -      | field-level change log that sync is built on |
-| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to) and other per-library settings; see [Identity](#identity) |
+| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)) and other per-library settings |
 
 ## Change tracking
 

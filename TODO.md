@@ -154,16 +154,28 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - A stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
 
 ### Merging libraries
-Pairing two devices whose libraries both have music fails with library_mismatch. Instead, offer to merge: keep one library (its database, uids and changelog) and import the other device's music into it, as an import would, rather than merging the two changelogs. Syncing two changelogs would hit the duplicate rules' edges: a delete in one library kills the other's copy of that album, merge classes that never split join a once-mismatched album to the wrong release, metadata mixes field by field, and both archives would claim the whole library. Edge cases to settle:
-- Which library is kept: the archive's, or the larger one's? Let the user choose
-- Music without MusicBrainz ids (imported with Keep existing tags or without tagging) has nothing to match on; import it as tagged, and send albums the library already has through the import's duplicates check (higher quality replaces, same or lower is skipped)
-- Playlists, album groups, play counts and recents of the library that isn't kept: carry them over by mapping its tracks to the kept library's (a playlist of the same name: keep both, or merge?)
-- Its own sync group: its other devices must leave and pair again, or join with it
-- Two Last.fm accounts: unclear what's best; at least don't sign either out silently. Plays not yet scrobbled stay with the account they were played under
-- Files: originals copy over the network to the kept library's archive, then the other device drops them as its profile says
+Pairing two devices whose libraries both have music now merges them instead of failing with library_mismatch (core; see "Merging libraries" in docs/sync-protocol.md and musiccore/sync.h). Settled: the larger library is kept (tracks, then bytes held, then the older library uid), the user only confirms on the device whose library is merged; that device forgets its old group (its paired devices must pair again), signs its Last.fm account out if both have one (one try to send its queue, the rest dropped; if only it has one, it becomes the group's), copies its library aside as library-before-merge-<date>.db in its library folder, empties it and joins; after the first session its current state (no history) comes in through the import's duplicates check, with playlists ("Name (2)" on a clash: both kept), album groups, smart lists, play counts and recents mapped onto the kept tracks; its files become originals imported there, which the archive fetches. Peers without merging, and frontends that leave on_pair_merge NULL, still get library_mismatch.
+
+Left in the core:
+- A merged file better than the kept device's copy is only attached as the merged device's own original; the archive keeps its worse copy (a swap needs the copy on the device doing it, and the archive's own import is "never stale"). It would need the archive to swap it in, as an import there would
+- Quality is compared only with the kept device's originals (MERGE_FILES), from files.format and bitrate_kbps: no sample rate or bit depth, so two lossless files are always equal. A merge resumed after a restart has no MERGE_FILES and attaches every matched track
+- Tracks of the merged library with no file on that device (it synced a selection from its old group's archive) are left out unless the kept library has them by mb_releasetrackid; pairing the old group's archive instead brings everything
+- The old group's other devices aren't told: they keep the merged device as a member that never answers until they remove it
+- Declining on the device that shows the code before the code is typed holds its pairing slot (others get busy) until the other device enters the code or gives up (5 minutes)
+- Album folders emptied by trashed duplicates aren't pruned; the set-aside copy is never cleaned up (a user can delete it)
+- Recents keep their old opened_ms under a new hlc, so "newest hlc is newest open" no longer holds for those rows
+
+#### For the UI agents (Windows, Linux, Android)
+- Set mc_sync_events.on_pair_merge, on_merge_progress and on_merge_done (until on_pair_merge is set, merging stays off and pairing two libraries with music still says library mismatch)
+- on_pair_merge: show the proposal in the pairing dialog on both devices: which library is kept (kept_here, tracks_here/there, bytes_here/there), and on the merged device (needs_confirm) a Merge / Don't merge choice calling mc_sync_pair_merge_confirm(sync, 1 or 0). On the initiator this comes before the code entry; on the device showing the code, next to the code (declining there doesn't close the dialog by itself)
+- Warn there about what goes: scrobble_sign_out with scrobble_user ("Your Last.fm account <user> will be signed out; <kept device>'s is used"), forget_count/forget_names ("These devices will no longer be paired with this one: ..."), and that this device's library is set aside and replaced by the merged one
+- on_pair_result: MC_PAIR_MERGE_DECLINED (new reason) needs a message; with merged, say whose library was kept and, if scrobble_signed_out isn't "", which Last.fm account was signed out
+- on_merge_progress (phase, done, total) and on_merge_done (counts, backup_path, scrobbles_dropped): show progress, then a summary including where the old library was set aside; mc_sync_merge_pending() says a merge is still to run after a restart
+- After merging, the merged device's profile is unconfirmed like any new member's: its files only move after Sync is pressed (on both devices, for the archive to fetch them)
+- Strings for all of this belong in strings/ (none added yet)
 
 ### Pairing
-- Android - a pairing refused because the phone has music of its own (library mismatch) offers no way out: its library lives in app storage, so there's no folder to pick for a new one, as the desktops' Create a new library does. It would need a "start afresh" that sets the old library aside (or deletes it, after asking)
+- Android - a pairing refused because the phone has music of its own (library mismatch) offers no way out: its library lives in app storage, so there's no folder to pick for a new one, as the desktops' Create a new library does. Merging (above) is the way out once the app sets on_pair_merge; a peer running an older version still refuses
 - Windows and Linux - after Create a new library, Pair again asks by uid, else at the address discovery last saw; a device seen only by address (multicast blocked) on the side that was asked to pair has neither, so Pair again isn't offered there and the user pairs from the Devices list
 - Windows and Linux - Create a new library takes only an empty folder; a folder with an empty library already in it (from an earlier try) is refused too, so it's opened with Open another library instead
 - All - the archive explainer shows once per device, after it joins a group; a member running an older version doesn't send the archive's name (PAIR_ACCEPT's archive_names), and then nothing is shown (and it stays unshown for a later pairing)

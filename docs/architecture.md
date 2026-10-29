@@ -38,7 +38,7 @@
 | playlist    | `core/src/playlist`    | playlists ordered by fractional index; cover art as a 2x2 grid of album covers picked by a playlist-seeded hash, composited with stb_image and cached per device as a JPEG |
 | playback    | `core/src/playback`    | gapless play queue: a decoder thread fills a ring buffer that the miniaudio device reads; FLAC, MP3 (LAME delay/padding trimmed), WAV, AIFF via dr_libs; Opus via opusfile; decides when a play counts; shuffle (Miller Shuffle, endless rounds) |
 
-| sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing over the network with the join rules, group and library changelog sessions (field-level LWW), a scheduler, address hints; no file transfer yet |
+| sync        | `core/src/sync`        | `sync.db`; framing, Noise KK/XXpsk3, encrypted channel, J-PAKE pairing over the network with the join rules (merging two libraries that both have music, `libmerge.c`), group and library changelog sessions (field-level LWW), a scheduler, address hints; no file transfer yet |
 | discovery   | `core/src/discovery`   | mDNS/DNS-SD announce and browse of `_kithsong._tcp` on a core thread (mjansson/mdns); peers reported online/offline through a callback; announces the host name |
 | transcode   | `core/src/transcode`   | Opus (libopusenc) with tags and cover, cached per file and bitrate with an LRU trim; size estimate; encode benchmark |
 | util        | `core/src/util`        | clocks, RNG, threads, directory walk, UTF-8 file helpers, text folding (case, accents) for comparison, UUIDv7, HLC |

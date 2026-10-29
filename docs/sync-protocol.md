@@ -122,8 +122,12 @@ the code and A's user enters it.
 
 1. A connects in pairing mode and sends `PAIR_HELLO` in the clear:
    `{"dev", "name", "kind", "host", "grp", "library_uid", "tracks": <track count>,
-   "group_library_uid"}`. `library_uid` is A's open library; `group_library_uid`, sent only
-   when A is in a group, is the library its group syncs, which the join rules need.
+   "group_library_uid", "merge": 1, "bytes", "scrobbling": true}`. `library_uid` is A's
+   open library; `group_library_uid`, sent only when A is in a group, is the library its
+   group syncs, which the join rules need. `merge`, `bytes` (the size of the files the device
+   holds) and `scrobbling` (sent only when true: it is signed in to a scrobbling service) say
+   it can merge libraries (see [Merging libraries](#merging-libraries)); a device sends them
+   only when its frontend offers merging, and older versions never do.
 2. B checks the join rules (below). If pairing is impossible, B replies `PAIR_REFUSE`
    `{"reason": "in_group" | "library_mismatch" | "already_paired" | "busy" | "wrong_code"}` and closes.
    Otherwise B draws a 6-digit code (uniform, `000000`–`999999`), shows it through the
@@ -182,6 +186,99 @@ no tracks.
 A device joining with an empty library adopts the group's `library_uid` through
 `mc_library_adopt_uid()`, which refuses a library that has tracks.
 
+Where the table says `library_mismatch` or `in_group`, the pair is a **merge** instead when
+both `PAIR_HELLO`/`PAIR_READY` carry `"merge": 1`, both libraries have tracks and differ, and
+a device in a group has its group's library open. The larger library is kept and the other
+device joins as if its library were empty (see [Merging libraries](#merging-libraries)).
+Otherwise the refusal stands, so an older peer, or a frontend that offers no merging, sees
+what it always did.
+
+### Merging libraries
+
+Rather than merging two changelogs (a delete in one library would kill the other's copy of
+that album, duplicate classes that never split would join a once-mismatched album to the
+wrong release, metadata would mix field by field, and both archives would claim the whole
+library), one library is kept whole and the other device's music is brought into it as an
+import would bring it in. The API is in `core/include/musiccore/sync.h` ("Merging
+libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c`.
+
+- **Which library is kept:** the larger, by `tracks`, then by `bytes`, then the smaller
+  `library_uid` (the older library). Both devices work it out from the same two messages,
+  so they agree. The user doesn't choose. The device whose library isn't kept is the
+  *merged* device; the kept one is the *kept* device.
+- **Group:** if the kept device is in a group, the merged device joins it (`A_JOINS_B` or
+  `B_JOINS_A` as in the table); otherwise they make a new group syncing the kept library,
+  with the kept device as its archive.
+- **Confirming.** Both devices tell their users before the code is entered
+  (`on_pair_merge`): A once `PAIR_READY` has arrived, B just before it shows the code. Only
+  the merged device's user must confirm (`mc_sync_pair_merge_confirm()`).
+  - Merged device A: it waits for the answer as well as the code before J-PAKE. Declining
+    sends `PAIR_REFUSE {"reason": "cancelled"}` as giving up does; A reports
+    `merge_declined`, B `cancelled`.
+  - Merged device B: after the handshake B waits up to 5 minutes for the answer, then sends
+    either the rest of the pairing or an encrypted `PAIR_REFUSE {"reason":
+    "merge_declined"}`, which A reports. An answer given before A entered the code is kept
+    until then. A, as the kept device, waits up to 10 minutes for B's next message.
+- **Preparing** (the merged device, after the code, before it applies the pairing):
+  1. If it is in a group, it forgets it as a removed device does (`mc_sync_db_clear_group()`,
+     no message to anyone): its paired devices, their profiles and status are deleted
+     from its `sync.db`. They have to pair again, with the kept group, to sync with it; to
+     them it looks like a device that no longer answers. `on_pair_merge` lists their
+     names first so the user is warned.
+  2. Scrobbling. If both devices are signed in, the merged device's account is signed out:
+     one attempt is made to send its queued plays under that account (batches until one
+     fails, no retry), then the account row, its changelog rows and whatever is still
+     queued are deleted without logging, so the kept group's account arrives whole in the
+     first session instead of merging field by field. Plays not yet scrobbled stay with the
+     account they were played under: those that can't be sent then are dropped (counted in
+     the result). If only the merged device is signed in, its account is kept: every field
+     is logged again with a new hlc, so it wins over an older sign-out the kept group may
+     have logged. If only the kept device is, nothing changes.
+  3. Its library is copied aside with `VACUUM INTO` to `library-before-merge-YYYY-MM-DD.db`
+     (UTC, `-2` and so on if taken) in its library folder, then emptied in place without
+     logging (every row, `files`, `aliases`, `merge_keys`, the changelog; the example smart
+     lists are seeded again as migration v10 does), and it gets a new `node_uid`. The
+     `library_uid` stays until `apply_pairing` adopts the kept one. `meta.merge_source`
+     names the copy until the merge has run. The copy is never deleted by the app.
+- **After `PAIR_ACCEPT`**, encrypted, before the first `HELLO`: the merged device sends
+  `MERGE_REQ {"scrobble_signed_out"?: <user name>}`, and the kept device answers with its
+  originals in one or more `MERGE_FILES {"files": [[track_uid, format, kbps], ...],
+  "more": bool}` (600 per message, `more` false on the last), for the duplicates check. Both
+  then report `on_pair_result` (`merged`, `kept_here`, `scrobble_signed_out`), and the first
+  session runs as for any pairing.
+- **The merge** runs on the merged device at the end of a session that synced the library
+  (the first one, normally) while `meta.merge_source` is set: the copy's current state goes
+  in as fresh edits under the new node uid; none of its changelog does.
+  - Tracks, album by album (tracks with no album as singles of their artist), through the
+    import's duplicates check (`mc_dupes_plan_remote()`, "Duplicates" in
+    `core/include/musiccore/tagger.h`): matched by MusicBrainz release, release group or
+    artist and title, and track ids. Untagged music comes in as it is tagged. Each file stays
+    where it is in the library folder and becomes an original imported on this device, so
+    the archive fetches it as for any import.
+    - New to the kept library: added (keeping its `added_ms`).
+    - The kept library has it, and the kept device holds an original of it (from
+      `MERGE_FILES`): compared as an import compares. The same or lower quality is
+      skipped and the file goes to the Recycle Bin or trash. Better: the file is attached
+      to the kept track as this device's original; the kept device's copy stays as it is
+      (no `file_rev` swap: the copy to swap out isn't on this device).
+    - The kept library has it but no copy whose quality is known (the kept device holds
+      none): attached, as an import attaches a file to a track held elsewhere.
+    - Tracks of the copy with no file on this device are tied to the kept library's by
+      `mb_releasetrackid` for the lists below; others are left out.
+  - Playlists, album groups and user smart lists (not the examples) are created anew, their
+    entries pointed at the kept library's tracks and albums (entries whose track didn't come
+    along are left out), and smart rules' playlist and group uids rewritten. A name the kept
+    library already has (ignoring case) gets " (2)", " (3)" and so on: both are kept.
+  - Play counts: per track, the copy's rows summed (counts) and maxed (last play) into this
+    device's own `track_plays` row of the kept track.
+  - Recents: albums, artists (by MusicBrainz id, then name), playlists and groups mapped, a
+    newer `opened_ms` than the kept library's winning.
+  - Then `meta.merge_source` is cleared, `on_merge_done` reports what happened, and members
+    are told of the change. Until then the merged device's file phase fetches and deletes
+    nothing (its files have no `files` rows yet, so reconcile would take them for unknown
+    files). If the app stops first, the merge runs after the next session that syncs the
+    library, without `MERGE_FILES` (matched tracks are then attached).
+
 ## Group membership
 
 - `devices` rows are replicated like any other group data, so a pairing made between A and
@@ -216,7 +313,8 @@ before it joined a group merges with the group's account by last writer wins, fi
 Signing in on any member signs in the group; signing out, or changing the service, signs out
 the group. Each device scrobbles only its own plays, from `scrobble_queue`, which is never
 synced, and each decides for itself whether it scrobbles at all (`scrobble` in its
-settings.json or app preferences, never synced).
+settings.json or app preferences, never synced). Pairing that merges two libraries signs out the merged device's account when both have
+one (see [Merging libraries](#merging-libraries)).
 
 The session key is a long-lived credential (it lasts until the user revokes the app on
 Last.fm), so it travels only the way all group data does: in the changelog, inside a session's
@@ -312,6 +410,8 @@ Message types:
 | 0x43 | `JPAKE_1`     | `mbedtls_ecjpake_write_round_one` output |
 | 0x44 | `JPAKE_2`     | `mbedtls_ecjpake_write_round_two` output |
 | 0x45 | `PAIR_ACCEPT` | `{"group_uid", "library_uid", "archive": dev \| null, "archive_names"?: [name]}`, or `{}`; see [Pairing](#pairing) |
+| 0x46 | `MERGE_REQ`   | `{"scrobble_signed_out"?}`; see [Merging libraries](#merging-libraries) |
+| 0x47 | `MERGE_FILES` | `{"files": [[track_uid, format, kbps]], "more": bool}` |
 
 Steps:
 
