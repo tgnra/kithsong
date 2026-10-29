@@ -1,6 +1,7 @@
 {
   "shared": {
     "app_name": { "text": "Kithsong", "translatable": false },
+    "app_summary": { "text": "Music library, player and LAN sync", "note": "The app's one-line description: in the About box, and on Linux in the applications menu and software centres." },
 
     "cancel": "Cancel",
     "ok": "OK",
@@ -52,6 +53,7 @@
     "now_playing_artist": { "text": "— {0}", "note": "After the track's title in the now-playing bar, dimmed: its artist." },
     "volume_level": { "text": "Volume {0:d}%", "note": "Shown for a moment in place of the track in the now-playing bar after the volume changes from the keyboard. {0} is 0 to 100." },
     "volume_muted": { "text": "Muted", "note": "Shown for a moment in place of the track in the now-playing bar after the sound is muted from the keyboard." },
+    "about_title": { "text": "About {0}", "note": "Title of the About box (F1); on Linux also its entry in the keyboard shortcuts list. {0} is the app's name." },
 
     "empty_title": "No music yet",
     "empty_text": "Use Import to add music.",
@@ -666,7 +668,6 @@
     "pair_request_notification": { "text": "{0} wants to pair with this computer.", "note": "A desktop notification's text, under \"Pairing request\", while Kithsong is in the background. {0} is the other device's name, or \"The other device\"; clicking it shows the code." },
     "sync_everyone_tooltip": { "text": "Sync with every device in the group on this network", "note": "Tooltip of Sync now on this computer's own page." },
 
-    "app_summary": { "text": "Music library, player and LAN sync", "note": "The app's one-line description in the applications menu and software centres." },
     "app_description": { "text": "A music library manager and player. It autotags your collection against MusicBrainz and keeps every device in sync over the local network, with no server and no cloud.", "note": "The app's description in software centres." },
     "app_keywords": { "text": "music;audio;player;library;tags;sync;", "note": "Search terms for the applications menu, not shown. Each ends with a semicolon; translations may add the English ones." }
   },

@@ -1757,6 +1757,37 @@ static BOOL go_back(void) {
   return g_app.page == PAGE_ALBUM_GROUPS && album_grid_back();
 }
 
+#define WEBSITE L"https://kithso.ng"
+
+static HRESULT CALLBACK about_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp, LONG_PTR data) {
+  (void)dlg;
+  (void)wp;
+  (void)data;
+  if (msg == TDN_HYPERLINK_CLICKED) ShellExecuteW(NULL, L"open", (const wchar_t *)lp, NULL, NULL, SW_SHOWNORMAL);
+  return S_OK;
+}
+
+/* F1: the app's name, version and build, what it is, and its website. */
+static void show_about(void) {
+  wchar_t title[64], version[160];
+  mc_wformat(title, 64, mc_str(MC_STR_ABOUT_TITLE), MC_S(mc_str(MC_STR_APP_NAME)));
+  mc_wformat(version, 160, mc_str(MC_STR_WINDOWS_FOOTER_VERSION), MC_S(mc_version()), MC_D(KITHSONG_BUILD_NUMBER));
+  TASKDIALOGCONFIG config = {
+    .cbSize = sizeof config,
+    .hwndParent = g_app.wnd,
+    .hInstance = GetModuleHandleW(NULL),
+    .dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ENABLE_HYPERLINKS,
+    .dwCommonButtons = TDCBF_OK_BUTTON,
+    .pszWindowTitle = title,
+    .pszMainIcon = MAKEINTRESOURCEW(IDI_APP),
+    .pszMainInstruction = version,
+    .pszContent = mc_wstr(MC_STR_APP_SUMMARY),
+    .pszFooter = L"<a href=\"" WEBSITE L"\">" WEBSITE L"</a>",
+    .pfCallback = about_proc,
+  };
+  TaskDialogIndirect(&config, NULL, NULL, NULL);
+}
+
 /* A sidebar page from the keyboard, with the focus in it, as Enter in the sidebar does (or
  * on the sidebar for a page that has nowhere to put it, as a click does); not while an import
  * has the others greyed out. */
@@ -1769,8 +1800,9 @@ static void shortcut_page(sidebar_page page) {
 
 /* For the message loop: the keyboard shortcuts in the main window (see README.md), besides
  * Space. In a text box (the search box, Settings' fields) the arrow keys, + and - and
- * Backspace stay the box's; the Ctrl+letter, digit and comma ones work there too. Toggles
- * act once while a key is held; volume and seeking repeat. TRUE if msg was a shortcut. */
+ * Backspace stay the box's; the Ctrl+letter, digit and comma ones, F1 and F3 work there
+ * too. Toggles act once while a key is held; volume and seeking repeat. Alt+F4 is the only
+ * key that quits, as is usual on Windows. TRUE if msg was a shortcut. */
 static BOOL shortcut(const MSG *msg) {
   if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN) return FALSE;
   if (!g_app.wnd || GetAncestor(msg->hwnd, GA_ROOT) != g_app.wnd || !IsWindowEnabled(g_app.wnd)) return FALSE;
@@ -1782,6 +1814,12 @@ static BOOL shortcut(const MSG *msg) {
   if (alt || msg->message == WM_SYSKEYDOWN) /* Alt+Left, as in a browser; other Alt keys are mnemonics */
     return key == VK_LEFT && !ctrl && !shift && go_back();
   if (key == VK_BROWSER_BACK || (key == VK_BACK && !ctrl && !shift && !text)) return go_back();
+  if ((key == VK_F1 || key == VK_F3) && !ctrl && !shift) {
+    if (repeat) return TRUE;
+    if (key == VK_F1) show_about();
+    else shortcut_page(PAGE_SEARCH); /* F3, as in Explorer */
+    return TRUE;
+  }
 
   if (ctrl && !shift) {
     switch (key) {
@@ -1803,7 +1841,18 @@ static BOOL shortcut(const MSG *msg) {
         if (!repeat) set_shuffle_flash(!playback_shuffle());
         return TRUE;
       case 'F':
+      case 'E': /* as in Explorer */
         if (!repeat) shortcut_page(PAGE_SEARCH);
+        return TRUE;
+      case 'O': /* Import's Choose Folders... */
+        if (repeat || (g_app.locked && g_app.page != PAGE_IMPORT)) return TRUE;
+        show_page(PAGE_IMPORT);
+        import_view_browse();
+        return TRUE;
+      case 'N': /* the Playlists page's + */
+        if (repeat || g_app.locked || !g_app.lib) return TRUE;
+        shortcut_page(PAGE_PLAYLISTS);
+        album_grid_new_playlist();
         return TRUE;
       case '1':
       case '2':

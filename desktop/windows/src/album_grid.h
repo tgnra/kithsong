@@ -75,7 +75,8 @@ BOOL album_grid_back(void);
 /* Right-clicking an album (on Albums or in a group) offers Add to Album Group, and in a
  * group Remove from Album Group; right-clicking a group (or its header) offers Rename and
  * Delete, and a smart playlist or group Edit Rules..., Rename... and Delete.... F2 renames
- * the open group, or the selected group or smart playlist. Right-clicking the Playlists or
+ * the open group, or the selected playlist or group, and Delete asks to delete the selected
+ * playlist or group (smart ones too). Right-clicking the Playlists or
  * Album Groups page away from the tiles (or the menu key with nothing selected) offers New
  * Smart Playlist... or New Smart Album Group.... The grid makes those changes itself
  * (add_to_playlist.c, playlist_dialogs.c, smart_editor.c), then notifies
@@ -84,6 +85,9 @@ BOOL album_grid_back(void);
 /* New Smart Playlist... on the Playlists page, New Smart Album Group... on the Album Groups
  * page, as their menus do: then selects the new playlist, or opens the new group. */
 void album_grid_new_smart(void);
+/* The header's + on the Playlists page (Ctrl+N): New Playlist, which asks for a name, then
+ * selects the new, empty playlist. Nothing on other pages. */
+void album_grid_new_playlist(void);
 
 /* This PC's place in sync, for the empty pages: with no albums and no group, Albums suggests
  * pairing, with a Pair with a Device... button (AGN_PAIR); on Playlists, when every playlist

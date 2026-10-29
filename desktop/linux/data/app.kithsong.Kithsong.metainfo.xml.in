@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Configured by CMake with the release's version and build date, and the text in
-     strings/<lang>.json (linux.app_summary, app_description). -->
+     strings/<lang>.json (shared.app_summary, linux.app_description). -->
 <component type="desktop-application">
   <id>app.kithsong.Kithsong</id>
   <metadata_license>CC0-1.0</metadata_license>

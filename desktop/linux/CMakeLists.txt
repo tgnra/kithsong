@@ -39,8 +39,8 @@ include(Licenses)
 set(_app_id app.kithsong.Kithsong)
 string(TIMESTAMP KITHSONG_RELEASE_DATE "%Y-%m-%d" UTC)  # honours SOURCE_DATE_EPOCH
 
-# The .desktop file's and the metainfo's text is strings/en.json's (linux.app_summary,
-# app_description, app_keywords), plus a translated line for each strings/<lang>.json that
+# The .desktop file's and the metainfo's text is strings/en.json's (shared.app_summary,
+# linux.app_description and app_keywords), plus a translated line for each strings/<lang>.json that
 # has one. Editing a strings file reconfigures.
 
 # The text of section.key in a strings file's JSON, or "" if it has none.
@@ -81,7 +81,7 @@ foreach(_file IN LISTS _string_files)
   get_filename_component(_lang "${_file}" NAME_WE)
   string(REPLACE "-" "_" _locale "${_lang}")  # pt-BR -> pt_BR, as both files name locales
   file(READ "${_file}" _json)
-  _kithsong_string("${_json}" linux app_summary _summary)
+  _kithsong_string("${_json}" shared app_summary _summary)
   _kithsong_string("${_json}" linux app_description _description)
   _kithsong_string("${_json}" linux app_keywords _keywords)
   _kithsong_escape("${_summary}" _summary_desktop _summary_xml)

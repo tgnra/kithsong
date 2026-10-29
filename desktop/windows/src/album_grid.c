@@ -1136,6 +1136,12 @@ static void new_list(void) {
   }
 }
 
+void album_grid_new_playlist(void) {
+  if (g.view != AGV_PLAYLISTS) return;
+  UpdateWindow(g.wnd); /* the playlists' reload, if the grid has only just switched to them */
+  if (g.tiles_view == AGV_PLAYLISTS) new_list();
+}
+
 /* The empty page's button, if it has one (album_grid_set_sync_state()). */
 static empty_action action(void) {
   if (!g.lib || g.count) return ACTION_NONE;
@@ -1388,26 +1394,34 @@ static BOOL on_key(WPARAM key) {
     do_action();
     return TRUE;
   }
-  if (key == VK_F2 && g.lib) { /* renames the open group, or the selected smart playlist or group */
+  /* F2 renames the open group, or the selected playlist or group (smart ones too); Delete
+   * asks to delete the selected one. */
+  if ((key == VK_F2 || key == VK_DELETE) && g.lib) {
     HWND owner = GetAncestor(g.wnd, GA_ROOT);
+    BOOL rename = key == VK_F2;
     BOOL on_tile = g.selected >= 0 && g.selected < g.count && (g.tiles_view == AGV_PLAYLISTS || g.tiles_view == AGV_GROUPS);
+    BOOL playlists = g.tiles_view == AGV_PLAYLISTS;
     BOOL changed = FALSE;
     char uid[MC_UID_STRLEN];
-    wchar_t *name = NULL;
-    if (g.tiles_view == AGV_GROUP) {
+    wchar_t *name = NULL; /* copies, as the dialogs' message loops may reload the grid */
+    if (g.tiles_view == AGV_GROUP && rename) {
       snprintf(uid, sizeof uid, "%s", g.group_uid);
       name = _wcsdup(g.group_name ? g.group_name : L"");
       changed = g.group_smart ? smart_rename_dialog(owner, g.lib, uid, name, MC_SMART_ALBUMS)
                               : album_group_rename_dialog(owner, g.lib, uid, name);
-    } else if (on_tile && g.tiles[g.selected].smart) {
+    } else if (on_tile) {
       snprintf(uid, sizeof uid, "%s", g.tiles[g.selected].uid);
       name = _wcsdup(g.tiles[g.selected].title ? g.tiles[g.selected].title : L"");
-      changed = smart_rename_dialog(owner, g.lib, uid, name,
-                                    g.tiles_view == AGV_PLAYLISTS ? MC_SMART_TRACKS : MC_SMART_ALBUMS);
-    } else if (on_tile && g.tiles_view == AGV_GROUPS) {
-      snprintf(uid, sizeof uid, "%s", g.tiles[g.selected].uid);
-      name = _wcsdup(g.tiles[g.selected].title ? g.tiles[g.selected].title : L"");
-      changed = album_group_rename_dialog(owner, g.lib, uid, name);
+      if (g.tiles[g.selected].smart) {
+        mc_smart_subject subject = playlists ? MC_SMART_TRACKS : MC_SMART_ALBUMS;
+        changed = rename ? smart_rename_dialog(owner, g.lib, uid, name, subject)
+                         : smart_delete_dialog(owner, g.lib, uid, name, subject);
+      } else if (playlists) {
+        changed = rename ? playlist_rename_dialog(owner, g.lib, uid, name) : playlist_delete_dialog(owner, g.lib, uid, name);
+      } else {
+        changed = rename ? album_group_rename_dialog(owner, g.lib, uid, name)
+                         : album_group_delete_dialog(owner, g.lib, uid, name);
+      }
     } else {
       return FALSE;
     }
