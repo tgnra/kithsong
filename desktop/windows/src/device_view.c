@@ -117,6 +117,7 @@ static struct {
   int64_t last_sync_ms, expected, ok, missing, corrupt, bytes;
   mc_sync_lib_state lib_state;
   mc_sync_confirm_state confirm; /* files sync on their own only once confirmed */
+  int merge_pending; /* this PC's own page: its old library is still to be merged in */
 
   /* Its profile, with the pending edits applied; NULL if it couldn't be read. */
   mc_sync_profile *profile;
@@ -394,6 +395,7 @@ static void load_device(void) {
   g_dv.found = FALSE;
   g_dv.others[0] = L'\0';
   g_dv.lib_state = MC_SYNC_LIBRARY_GROUP;
+  g_dv.merge_pending = 0;
   if (!g_dv.sync) return;
   g_dv.is_self = !strcmp(g_dv.uid, mc_sync_device_uid(g_dv.sync));
   mc_sync_device_list *list = NULL;
@@ -427,6 +429,7 @@ static void load_device(void) {
     mc_sync_device_list_free(list);
   }
   if (g_dv.is_self) g_dv.online = 1;
+  g_dv.merge_pending = g_dv.is_self && mc_sync_merge_pending(g_dv.sync);
   mc_sync_lib_state state;
   if (mc_sync_library_state(g_dv.sync, &state) == MC_OK) g_dv.lib_state = state;
 }
@@ -566,6 +569,8 @@ static void update_status(void) {
     SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_WINDOWS_PC_SYNC_OTHER_LIBRARY));
   else if (g_dv.lib_state == MC_SYNC_LIBRARY_UNKNOWN)
     SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_UNKNOWN_LIBRARY));
+  else if (g_dv.merge_pending)
+    SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_MERGE_PENDING));
   else if (g_dv.found && !g_dv.removed && g_dv.confirm == MC_SYNC_UNCONFIRMED)
     SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_UNCONFIRMED));
   else if (g_dv.found && !g_dv.removed && g_dv.confirm == MC_SYNC_PROFILE_CHANGED)

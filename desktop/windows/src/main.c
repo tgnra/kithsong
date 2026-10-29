@@ -135,6 +135,7 @@ enum {
   TIMER_POLL_DEVICES,             /* repeating: renames elsewhere fire no event */
   TIMER_REFRESH_LIBRARY,          /* one-shot: sync brought library rows or files */
   TIMER_SAVE_VOLUME,              /* one-shot: the volume changed, so a held key saves once */
+  TIMER_DEBUG_PAIR,               /* debug builds: KITHSONG_DEBUG_PAIR, below */
   REFRESH_DEVICES_MS = 200,
   SAVE_VOLUME_MS = 1000,
   VOLUME_STEP = 5, /* per press of a volume shortcut */
@@ -1000,6 +1001,19 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
       if (ev->library_changed) schedule_library_refresh();
       device_view_on_sync_event(ev);
       break;
+    case SYNC_EV_PAIR_MERGE:
+      pair_dialog_on_merge(ev);
+      break;
+    case SYNC_EV_MERGE_PROGRESS:
+      /* Albums come into the library as it goes. */
+      pair_dialog_on_merge_event(ev);
+      schedule_library_refresh();
+      break;
+    case SYNC_EV_MERGE_DONE:
+      pair_dialog_on_merge_event(ev);
+      schedule_library_refresh();
+      schedule_refresh(); /* this PC's page: no merge waiting any more */
+      break;
   }
   free(ev);
 }
@@ -1081,6 +1095,22 @@ static void on_add_device_connect(void *user, const char *host, uint16_t port) {
   pair_started(st, NULL, address);
   if (st == MC_OK) pair_dialog_set_target(NULL, host, port);
 }
+
+#ifndef NDEBUG
+/* Debug builds, for test scripts: KITHSONG_DEBUG_PAIR=<IPv4 or host>:<port> asks that device
+ * to pair, as Add Device by Address does, shortly after startup. Two scratch instances can
+ * then pair over localhost with no clicks. */
+static void debug_pair(void) {
+  const wchar_t *value = _wgetenv(L"KITHSONG_DEBUG_PAIR");
+  char *spec = value ? utf8_from_wide(value) : NULL;
+  char *colon = spec ? strrchr(spec, ':') : NULL;
+  if (colon) {
+    *colon = '\0';
+    on_add_device_connect(NULL, spec, (uint16_t)atoi(colon + 1));
+  }
+  free(spec);
+}
+#endif
 
 /* The empty Albums page's Pair with a Device...: a menu of the devices nearby, as the
  * sidebar's DEVICES lists them, then Add Device by Address..., beneath the button. */
@@ -1394,6 +1424,13 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         save_volume();
         return 0;
       }
+#ifndef NDEBUG
+      if (wp == TIMER_DEBUG_PAIR) {
+        KillTimer(wnd, TIMER_DEBUG_PAIR);
+        debug_pair();
+        return 0;
+      }
+#endif
       break;
     case WM_APP_SYNC:
       on_sync_event(wp, lp);
@@ -1912,6 +1949,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   ShowWindow(wnd, show);
   pair_dialog_init(wnd, &k_pair_host);
   start_sync();
+#ifndef NDEBUG
+  if (_wgetenv(L"KITHSONG_DEBUG_PAIR")) SetTimer(wnd, TIMER_DEBUG_PAIR, 2000, NULL);
+#endif
   firewall_check_later(wnd, g_app.settings);
   import_args(&args);
   free_args(&args);

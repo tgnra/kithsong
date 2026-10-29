@@ -51,6 +51,19 @@ static void copy_name(wchar_t *dst, int cap, const char *src) {
   }
 }
 
+/* UTF-8 into a fixed buffer, cut short (at a character boundary) if it doesn't fit. */
+static void copy_utf8(char *dst, size_t cap, const char *src) {
+  dst[0] = '\0';
+  if (!src) return;
+  size_t len = strlen(src);
+  if (len >= cap) {
+    len = cap - 1;
+    while (len > 0 && ((unsigned char)src[len] & 0xC0) == 0x80) len--; /* not mid-character */
+  }
+  memcpy(dst, src, len);
+  dst[len] = '\0';
+}
+
 static sync_event *new_event(sync_event_kind kind) {
   sync_event *ev = calloc(1, sizeof *ev);
   if (ev) ev->kind = kind;
@@ -97,6 +110,9 @@ static void on_pair_result(void *user, const mc_pair_result *result) {
   ev->joined = result->joined;
   ev->archives = result->archives;
   copy_name(ev->archive_name, (int)(sizeof ev->archive_name / sizeof ev->archive_name[0]), result->archive_name);
+  ev->merged = result->merged;
+  ev->kept_here = result->kept_here;
+  copy_utf8(ev->scrobble_user, sizeof ev->scrobble_user, result->scrobble_signed_out);
   post(user, ev);
 }
 
@@ -174,18 +190,82 @@ static void on_sync_done(void *user, const mc_sync_result *result) {
   post(user, ev);
 }
 
+static void on_pair_merge(void *user, const mc_pair_merge *merge) {
+  sync_event *ev = new_event(SYNC_EV_PAIR_MERGE);
+  if (!ev) return;
+  copy_uid(ev->uid, merge->device_uid);
+  copy_name(ev->name, (int)(sizeof ev->name / sizeof ev->name[0]), merge->name);
+  ev->initiator = merge->initiator;
+  ev->kept_here = merge->kept_here;
+  ev->needs_confirm = merge->needs_confirm;
+  ev->tracks_here = merge->tracks_here;
+  ev->tracks_there = merge->tracks_there;
+  ev->scrobble_sign_out = merge->scrobble_sign_out;
+  copy_utf8(ev->scrobble_user, sizeof ev->scrobble_user, merge->scrobble_user);
+  ev->forget_count = merge->forget_count;
+  /* The names as one list; a name that doesn't fit whole is left out. */
+  const char *sep = mc_str(MC_STR_IMPORT_LIST_SEPARATOR);
+  size_t used = 0;
+  for (int i = 0; i < merge->forget_count && merge->forget_names; i++) {
+    const char *n = merge->forget_names[i] ? merge->forget_names[i] : "";
+    size_t need = (used ? strlen(sep) : 0) + strlen(n);
+    if (used + need >= sizeof ev->forget_names) break;
+    if (used) {
+      memcpy(ev->forget_names + used, sep, strlen(sep));
+      used += strlen(sep);
+    }
+    memcpy(ev->forget_names + used, n, strlen(n));
+    used += strlen(n);
+    ev->forget_names[used] = '\0';
+  }
+  post(user, ev);
+}
+
+/* Merge progress, at most one every PROGRESS_MS, but always a change of phase and the last of
+ * a phase. Only this callback touches these. */
+static ULONGLONG g_merge_at;
+static int g_merge_phase = -1;
+
+static void on_merge_progress(void *user, const mc_merge_progress *progress) {
+  ULONGLONG now = GetTickCount64();
+  BOOL last = progress->done >= progress->total;
+  if ((int)progress->phase == g_merge_phase && !last && now - g_merge_at < PROGRESS_MS) return;
+  g_merge_at = now;
+  g_merge_phase = (int)progress->phase;
+  sync_event *ev = new_event(SYNC_EV_MERGE_PROGRESS);
+  if (!ev) return;
+  ev->merge_phase = progress->phase;
+  ev->merge_done = progress->done;
+  ev->merge_total = progress->total;
+  post(user, ev);
+}
+
+static void on_merge_done(void *user, const mc_merge_result *result) {
+  g_merge_phase = -1;
+  sync_event *ev = new_event(SYNC_EV_MERGE_DONE);
+  if (!ev) return;
+  ev->status = result->status;
+  ev->merge = *result;
+  ev->merge.backup_path = NULL;
+  ev->merge.scrobble_signed_out = NULL;
+  copy_utf8(ev->backup_path, sizeof ev->backup_path, result->backup_path);
+  copy_utf8(ev->scrobble_user, sizeof ev->scrobble_user, result->scrobble_signed_out);
+  post(user, ev);
+}
+
 void sync_bridge_start(HWND wnd, mc_library *lib, const char *config_dir, const char *device_name) {
   sync_bridge_stop();
   g_bridge.wnd = wnd;
   memset(g_progress, 0, sizeof g_progress);
   g_progress_next = 0;
+  g_merge_phase = -1;
   if (!lib || !config_dir) {
     g_bridge.error = MC_ERR_INVALID_ARG; /* no library open */
     return;
   }
 
   static const mc_sync_events events = {on_peer, on_pair_code, on_pair_result, on_progress, on_sync_done,
-                                        NULL, NULL, NULL, NULL};
+                                        NULL,          on_pair_merge,  on_merge_progress, on_merge_done};
   mc_sync *sync = NULL;
   void *gen = (void *)(uintptr_t)(ULONG)g_bridge.gen;
   mc_status st = mc_sync_new(lib, config_dir, device_name, MC_DEVICE_DESKTOP, &events, gen, &sync);

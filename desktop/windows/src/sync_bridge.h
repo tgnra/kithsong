@@ -27,6 +27,10 @@ typedef enum {
                         * library_changed */
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
                         * files_received, files_sent, bytes_*, cancelled */
+  SYNC_EV_PAIR_MERGE,  /* on_pair_merge: uid, name, initiator, kept_here, needs_confirm,
+                        * tracks_*, scrobble_sign_out, scrobble_user, forget_* */
+  SYNC_EV_MERGE_PROGRESS, /* on_merge_progress: merge_phase, merge_done, merge_total */
+  SYNC_EV_MERGE_DONE,  /* on_merge_done: status, merge (counts), backup_path, scrobble_user */
 } sync_event_kind;
 
 /* One core event. No pointers inside: free() it whole. Fields that don't apply to the kind
@@ -54,6 +58,25 @@ typedef struct sync_event {
   /* Pair result: this PC joined, and the group's archive (the first of archives). */
   int joined, archives;
   wchar_t archive_name[128];
+  /* Pair result: they paired by merging libraries, and this PC's was the one kept. Pair
+   * merge: kept_here as there, and needs_confirm (= !kept_here). */
+  int merged, kept_here, needs_confirm;
+  /* Pair merge: each library's track count; Last.fm is signed out on the merged side
+   * (scrobble_sign_out), and the paired devices this PC forgets (needs_confirm only). */
+  int64_t tracks_here, tracks_there;
+  int scrobble_sign_out;
+  int forget_count;
+  char forget_names[512]; /* UTF-8, joined with import_list_separator, cut short if long */
+  /* UTF-8. Pair merge: the Last.fm user signed out here, if this PC confirms. Pair result and
+   * merge done: the one signed out (on either device for the result); "" if none. */
+  char scrobble_user[128];
+  /* Merge progress. */
+  mc_merge_phase merge_phase;
+  int merge_done, merge_total;
+  /* Merge done: the counts (its two string pointers are NULL; see the fields below), and the
+   * set-aside library's path (UTF-8). */
+  mc_merge_result merge;
+  char backup_path[1024];
 } sync_event;
 
 /* Creates and starts sync for lib, with sync.db in config_dir, reporting to wnd. device_name

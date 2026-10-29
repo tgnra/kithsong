@@ -1,5 +1,6 @@
 #include "pair_dialog.h"
 
+#include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,7 +46,20 @@ typedef struct pair_dlg {
   char target[MC_UID_STRLEN]; /* ACT_CHOOSE's device; the other device for the rest */
   char host[MC_SYNC_ADDR_STRLEN]; /* ACT_PAIR_AGAIN: where it was, "" if not known */
   uint16_t port;
+  /* Merging libraries: confirming while this PC's answer is wanted (Pair, or the hidden OK,
+   * reads Merge); proposing while the enter-code dialog shows the proposal in place of the
+   * code. merge_text follows the status line (the proposal, a note, or that it will merge). */
+  BOOL confirming, proposing;
+  wchar_t title[256];        /* the enter-code dialog's own, while proposing */
+  wchar_t status_base[1536]; /* the status line before merge_text */
+  wchar_t merge_text[1536];
 } pair_dlg;
+
+/* The window the merge runs in, after pairing. */
+typedef struct merge_wnd {
+  HWND wnd;
+  BOOL done;
+} merge_wnd;
 
 static struct {
   HWND owner;
@@ -55,6 +69,12 @@ static struct {
   pair_dlg *show;     /* the show-code dialog (responder), or NULL */
   BOOL enter_cancelled, show_cancelled; /* Cancel was pressed: the CANCELLED to come is ours */
   const pair_dialog_host *host;
+  /* on_pair_merge comes just before on_pair_code on the device showing the code: kept for
+   * the show-code dialog to open with. */
+  BOOL has_pending_merge;
+  sync_event pending_merge;
+  merge_wnd *merge;   /* the merge's window, or NULL */
+  BOOL merge_seen;    /* it opened for this merge's progress (and may have been closed) */
 } s;
 
 /* --- The template --- */
@@ -82,8 +102,10 @@ static void align_dword(tmpl *t) {
   if (t->n % 2) put_word(t, 0);
 }
 
-/* atom is a predefined class: 0x0080 button, 0x0081 edit, 0x0082 static. */
-static void put_item(tmpl *t, WORD atom, const wchar_t *text, DWORD style, int x, int y, int w, int h, int id) {
+/* atom is a predefined class: 0x0080 button, 0x0081 edit, 0x0082 static; or 0 for the class
+ * named cls. */
+static void put_item_class(tmpl *t, WORD atom, const wchar_t *cls, const wchar_t *text, DWORD style, int x, int y,
+                           int w, int h, int id) {
   align_dword(t);
   put_dword(t, 0); /* help id */
   put_dword(t, 0); /* extended style */
@@ -93,24 +115,29 @@ static void put_item(tmpl *t, WORD atom, const wchar_t *text, DWORD style, int x
   put_word(t, (WORD)w);
   put_word(t, (WORD)h);
   put_dword(t, (DWORD)id);
-  put_word(t, 0xFFFF);
-  put_word(t, atom);
+  if (atom) {
+    put_word(t, 0xFFFF);
+    put_word(t, atom);
+  } else {
+    put_string(t, cls);
+  }
   put_string(t, text);
   put_word(t, 0); /* no creation data */
 }
 
-/* Both dialogs: a line of text, the code, the status line, then Pair (or OK) and Cancel, and
- * the ended dialog's action button (hidden until then). The texts are set once it's
- * created. */
-static void build(tmpl *t, BOOL enter) {
-  enum { NUM_ITEMS = 6 };
+static void put_item(tmpl *t, WORD atom, const wchar_t *text, DWORD style, int x, int y, int w, int h, int id) {
+  put_item_class(t, atom, NULL, text, style, x, y, w, h, id);
+}
+
+/* The template's header, for a dialog of num_items items. */
+static void put_header(tmpl *t, int num_items) {
   t->n = 0;
   put_word(t, 1);      /* version */
   put_word(t, 0xFFFF); /* DLGTEMPLATEEX */
   put_dword(t, 0);     /* help id */
   put_dword(t, 0);     /* extended style */
   put_dword(t, DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU);
-  put_word(t, NUM_ITEMS);
+  put_word(t, (WORD)num_items);
   put_word(t, 0);
   put_word(t, 0);
   put_word(t, DLG_W);
@@ -122,7 +149,13 @@ static void build(tmpl *t, BOOL enter) {
   put_word(t, FW_NORMAL); /* weight */
   put_word(t, 0);         /* italic, charset */
   put_string(t, L"Segoe UI");
+}
 
+/* Both dialogs: a line of text, the code, the status line, then Pair (or OK) and Cancel, and
+ * the ended dialog's action button (hidden until then). The texts are set once it's
+ * created. */
+static void build(tmpl *t, BOOL enter) {
+  put_header(t, 6);
   int w = DLG_W - 2 * MARGIN;
   put_item(t, 0x0082, L"", SS_LEFT | SS_NOPREFIX, MARGIN, MARGIN, w, TEXT_H, ID_TEXT);
   if (enter) {
@@ -203,6 +236,28 @@ static BOOL could_join(void) {
          state == MC_SYNC_LIBRARY_NO_GROUP;
 }
 
+/* Appends text to out as a paragraph of its own (or as all of it, if out is empty). */
+static void append_para(wchar_t *out, size_t n, const wchar_t *text) {
+  size_t len = wcslen(out);
+  if (!*text || len + 2 >= n) return;
+  swprintf(out + len, n - len, len ? L"\n\n%ls" : L"%ls", text);
+}
+
+/* After pairing by merging: whose library was kept, and the Last.fm account signed out. */
+static void append_merged(wchar_t *out, size_t n, const sync_event *ev, const wchar_t *name) {
+  if (!ev->merged) return;
+  wchar_t text[512];
+  peer_text(text, 512, ev->kept_here ? MC_STR_PAIRED_MERGED_KEPT_TEXT : MC_STR_PAIRED_MERGED_TEXT, name, TRUE);
+  append_para(out, n, text);
+  if (ev->scrobble_user[0]) {
+    char *peer = wstr_to_utf8(peer_name(name, FALSE));
+    mc_wformat(text, 512, mc_str(ev->kept_here ? MC_STR_PAIRED_MERGED_SCROBBLE_THERE : MC_STR_PAIRED_MERGED_SCROBBLE_HERE),
+               MC_S(ev->scrobble_user), MC_S(peer));
+    free(peer);
+    append_para(out, n, text);
+  }
+}
+
 /* How a pairing ended, as on Android. */
 static void ended_text(wchar_t *out, size_t n, const sync_event *ev, BOOL initiator, const wchar_t *name) {
   mc_pair_reason reason = ev->reason;
@@ -210,7 +265,11 @@ static void ended_text(wchar_t *out, size_t n, const sync_event *ev, BOOL initia
     case MC_PAIR_PAIRED:
       /* Nothing syncs yet: the device that joined has its sync settings to choose. */
       peer_text(out, n, ev->joined ? MC_STR_WINDOWS_PC_PAIRED_TEXT : MC_STR_PAIRED_PEER_TEXT, name, !ev->joined);
+      append_merged(out, n, ev, name);
       append_archive_explainer(out, n, ev);
+      break;
+    case MC_PAIR_MERGE_DECLINED:
+      swprintf(out, n, L"%ls", mc_wstr(MC_STR_PAIR_MERGE_DECLINED));
       break;
     case MC_PAIR_WRONG_CODE:
       swprintf(out, n, L"%ls", mc_wstr(MC_STR_PAIR_WRONG_CODE_TOO_OFTEN));
@@ -222,10 +281,13 @@ static void ended_text(wchar_t *out, size_t n, const sync_event *ev, BOOL initia
     case MC_PAIR_LIBRARY_MISMATCH:
       if (initiator) peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_LIBRARY_MISMATCH, name, FALSE);
       else peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_LIBRARY_MISMATCH_INCOMING, name, TRUE);
-      if (could_join()) {
-        size_t len = wcslen(out);
-        if (len + 2 < n) swprintf(out + len, n - len, L"\n\n%ls", mc_wstr(MC_STR_PAIR_NEW_LIBRARY_HINT));
+      {
+        /* This PC merges libraries, so the other device can't (yet). */
+        wchar_t hint[512];
+        peer_text(hint, 512, MC_STR_PAIR_MERGE_UPDATE_HINT, name, FALSE);
+        append_para(out, n, hint);
       }
+      if (could_join()) append_para(out, n, mc_wstr(MC_STR_PAIR_NEW_LIBRARY_HINT));
       break;
     case MC_PAIR_ALREADY_PAIRED:
       peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_ALREADY_PAIRED, name, FALSE);
@@ -289,8 +351,20 @@ static void set_big_font(pair_dlg *d) {
   d->big_font = font;
 }
 
+static void relayout(pair_dlg *d);
+
+/* The status line: text, then merge_text as a paragraph of its own (alone while proposing).
+ * The dialog grows or shrinks to fit. */
 static void set_status(pair_dlg *d, const wchar_t *text) {
-  SetDlgItemTextW(d->wnd, IDC_PAIR_STATUS, text);
+  if (text != d->status_base) {
+    wcsncpy(d->status_base, text ? text : L"", sizeof d->status_base / sizeof d->status_base[0] - 1);
+    d->status_base[sizeof d->status_base / sizeof d->status_base[0] - 1] = L'\0';
+  }
+  wchar_t shown[3200] = L"";
+  if (!d->proposing) append_para(shown, 3200, d->status_base);
+  append_para(shown, 3200, d->merge_text);
+  SetDlgItemTextW(d->wnd, IDC_PAIR_STATUS, shown);
+  relayout(d);
 }
 
 /* The digits typed, if there are all six. */
@@ -308,7 +382,9 @@ static BOOL code_text(HWND dlg, char *code) {
 
 static void update_pair(pair_dlg *d) {
   char code[MC_PAIR_CODE_LEN + 1];
-  if (!d->ended) EnableWindow(GetDlgItem(d->wnd, IDOK), !d->checking && code_text(d->wnd, code));
+  if (d->ended) return;
+  if (d->confirming) EnableWindow(GetDlgItem(d->wnd, IDOK), d->proposing || !d->initiator);
+  else if (d->initiator) EnableWindow(GetDlgItem(d->wnd, IDOK), !d->checking && code_text(d->wnd, code));
 }
 
 /* The enter-code dialog, ready for (another) code. */
@@ -318,43 +394,70 @@ static void ready_for_code(pair_dlg *d) {
   EnableWindow(edit, TRUE);
   SetWindowTextW(edit, L"");
   update_pair(d);
-  if (GetActiveWindow() == d->wnd) SetFocus(edit);
+  if (GetActiveWindow() == d->wnd && !d->proposing) SetFocus(edit);
 }
 
-/* Moves a control down by dy pixels. */
-static void move_down(HWND dlg, int id, int dy) {
+/* Moves a control to y (pixels, in the dialog's client area), keeping its x. */
+static void move_to_y(HWND dlg, int id, int y) {
   HWND item = GetDlgItem(dlg, id);
   RECT r;
-  GetWindowRect(item, &r);
+  if (!item || !GetWindowRect(item, &r)) return;
   MapWindowPoints(NULL, dlg, (POINT *)&r, 2);
-  SetWindowPos(item, NULL, r.left, r.top + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  SetWindowPos(item, NULL, r.left, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-/* Makes the dialog taller if the status text needs more room than it has. */
-static void fit_status(pair_dlg *d) {
-  HWND status = GetDlgItem(d->wnd, IDC_PAIR_STATUS);
-  int len = GetWindowTextLengthW(status);
+/* The height text needs in the static control ctl at width w, in pixels. */
+static int text_height(HWND ctl, int w) {
+  int len = GetWindowTextLengthW(ctl);
   wchar_t *text = malloc(((size_t)len + 1) * sizeof *text);
-  if (!text) return;
-  GetWindowTextW(status, text, len + 1);
-  RECT have;
-  GetClientRect(status, &have);
-  RECT need = {0, 0, have.right, 0};
-  HDC dc = GetDC(status);
-  HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageW(status, WM_GETFONT, 0, 0));
+  if (!text) return 0;
+  GetWindowTextW(ctl, text, len + 1);
+  RECT need = {0, 0, w, 0};
+  HDC dc = GetDC(ctl);
+  HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageW(ctl, WM_GETFONT, 0, 0));
   DrawTextW(dc, text, -1, &need, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
   SelectObject(dc, old);
-  ReleaseDC(status, dc);
+  ReleaseDC(ctl, dc);
   free(text);
-  int dy = need.bottom - have.bottom;
-  if (dy <= 0) return;
-  RECT w;
-  GetWindowRect(d->wnd, &w);
-  SetWindowPos(d->wnd, NULL, w.left, w.top - dy / 2, w.right - w.left, w.bottom - w.top + dy,
-               SWP_NOZORDER | SWP_NOACTIVATE);
-  SetWindowPos(status, NULL, 0, 0, have.right, have.bottom + dy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-  move_down(d->wnd, IDOK, dy);
-  move_down(d->wnd, ID_ACTION, dy);
+  return need.bottom;
+}
+
+/* Lays out dlg's status line from top to at least bottom (dialog units), taller if its text
+ * needs it, the buttons under it, and the dialog's height to fit, growing or shrinking back
+ * and keeping its middle. */
+static void layout_status(HWND dlg, int top, int bottom) {
+  int by_dlu = DLG_H - MARGIN - BTN_H;
+  RECT st = {MARGIN, top, DLG_W - MARGIN, bottom};
+  RECT gap = {0, 0, MARGIN, MARGIN}, btn = {0, by_dlu, BTN_W, by_dlu + BTN_H};
+  MapDialogRect(dlg, &st);
+  MapDialogRect(dlg, &gap);
+  MapDialogRect(dlg, &btn);
+  HWND status = GetDlgItem(dlg, IDC_PAIR_STATUS);
+  int need = text_height(status, st.right - st.left);
+  if (st.top + need > st.bottom) st.bottom = st.top + need;
+  SetWindowPos(status, NULL, st.left, st.top, st.right - st.left, st.bottom - st.top, SWP_NOZORDER | SWP_NOACTIVATE);
+  int by = max(btn.top, st.bottom + gap.bottom);
+  move_to_y(dlg, IDOK, by);
+  move_to_y(dlg, IDCANCEL, by);
+  move_to_y(dlg, ID_ACTION, by);
+  int want = by + (btn.bottom - btn.top) + gap.bottom;
+  RECT client, w;
+  GetClientRect(dlg, &client);
+  GetWindowRect(dlg, &w);
+  int dy = want - client.bottom;
+  if (dy)
+    SetWindowPos(dlg, NULL, w.left, w.top - dy / 2, w.right - w.left, w.bottom - w.top + dy,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+  /* Now, parent first: a dialog doesn't clip its children, so an erase of the area its
+   * controls moved into that came after their own paint would wipe them out. */
+  RedrawWindow(dlg, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW | RDW_ERASENOW);
+}
+
+/* The status line starts under the code, or at the top once the text and code are hidden
+ * (ended, proposing), and is at least as tall as the template has it. */
+static void relayout(pair_dlg *d) {
+  BOOL top = d->ended || d->proposing;
+  layout_status(d->wnd, top ? MARGIN : STATUS_Y, top ? DLG_H - 2 * MARGIN - BTN_H : STATUS_Y + 28);
 }
 
 /* Turns the dialog into a message: title, text, and OK (labelled ok_id) in Cancel's place,
@@ -363,13 +466,13 @@ static void show_message(pair_dlg *d, const wchar_t *title, const wchar_t *text,
                          enum mc_str_id action_id, enum mc_str_id ok_id) {
   d->ended = TRUE;
   d->checking = FALSE;
+  d->confirming = d->proposing = FALSE;
+  d->merge_text[0] = L'\0';
   d->action = action;
   SetWindowTextW(d->wnd, title);
   ShowWindow(GetDlgItem(d->wnd, ID_TEXT), SW_HIDE);
   ShowWindow(GetDlgItem(d->wnd, IDC_PAIR_CODE), SW_HIDE);
   ShowWindow(GetDlgItem(d->wnd, IDCANCEL), SW_HIDE);
-  place(d->wnd, IDC_PAIR_STATUS, MARGIN, MARGIN, DLG_W - 2 * MARGIN, DLG_H - 3 * MARGIN - BTN_H);
-  set_status(d, text);
   HWND ok = GetDlgItem(d->wnd, IDOK), act = GetDlgItem(d->wnd, ID_ACTION);
   place(d->wnd, IDOK, DLG_W - MARGIN - BTN_W, DLG_H - MARGIN - BTN_H, BTN_W, BTN_H);
   SetWindowTextW(ok, mc_wstr_mnemonic(ok_id));
@@ -379,7 +482,7 @@ static void show_message(pair_dlg *d, const wchar_t *title, const wchar_t *text,
     SetWindowTextW(act, mc_wstr_mnemonic(action_id));
     ShowWindow(act, SW_SHOW);
   }
-  fit_status(d);
+  set_status(d, text); /* and lays it out */
   /* Enter takes the next step, except Create a New Library, which is a bigger one. */
   HWND def = action == ACT_NONE || action == ACT_NEW_LIBRARY ? ok : act;
   SendMessageW(d->wnd, DM_SETDEFID, (WPARAM)GetDlgCtrlID(def), 0);
@@ -392,8 +495,8 @@ static void show_message(pair_dlg *d, const wchar_t *title, const wchar_t *text,
 static void show_ended(pair_dlg *d, const sync_event *ev) {
   const wchar_t *name = ev->name[0] ? ev->name : d->peer;
   if (ev->name[0]) wcsncpy(d->peer, ev->name, sizeof d->peer / sizeof d->peer[0] - 1);
-  wchar_t text[1024];
-  ended_text(text, 1024, ev, d->initiator, name);
+  wchar_t text[2048];
+  ended_text(text, 2048, ev, d->initiator, name);
   ended_action action = ACT_NONE;
   enum mc_str_id action_id = MC_STR_OK;
   if (ev->reason == MC_PAIR_PAIRED && s.host && s.host->show_device) {
@@ -411,6 +514,91 @@ static void show_ended(pair_dlg *d, const sync_event *ev) {
   }
   show_message(d, mc_wstr(ev->reason == MC_PAIR_PAIRED ? MC_STR_PAIRED : MC_STR_PAIR_FAILED), text, action,
                action_id, MC_STR_OK);
+}
+
+/* --- Merging libraries --- */
+
+/* "1,204 tracks"-style count (the tracks string) as UTF-8. */
+static void track_count(char *out, size_t n, int64_t count) {
+  mc_format(out, n, mc_str_plural(MC_STR_TRACKS, (long)count), MC_D(count));
+}
+
+/* What on_pair_merge proposes: on the PC whose library is merged, which library is kept and
+ * what goes with this one; on the one kept, a note. */
+static void merge_proposal(wchar_t *out, size_t n, const sync_event *ev, const wchar_t *name) {
+  char *peer = wstr_to_utf8(peer_name(name, FALSE));
+  char *peer_start = wstr_to_utf8(peer_name(name, TRUE));
+  char here[64], there[64];
+  track_count(here, sizeof here, ev->tracks_here);
+  track_count(there, sizeof there, ev->tracks_there);
+  wchar_t para[768];
+  out[0] = L'\0';
+  if (!ev->needs_confirm) {
+    mc_wformat(out, n, mc_str(MC_STR_PAIR_MERGE_KEPT_TEXT), MC_S(peer), MC_S(here), MC_S(there));
+  } else {
+    mc_wformat(out, n, mc_str(MC_STR_PAIR_MERGE_TEXT), MC_S(peer_start), MC_S(there), MC_S(here));
+    append_para(out, n, mc_wstr(MC_STR_PAIR_MERGE_BACKUP));
+    if (ev->scrobble_sign_out && ev->scrobble_user[0]) {
+      mc_wformat(para, 768, mc_str(MC_STR_PAIR_MERGE_SCROBBLE), MC_S(ev->scrobble_user), MC_S(peer));
+      append_para(out, n, para);
+    }
+    if (ev->forget_count > 0) {
+      mc_wformat(para, 768, mc_str_plural(MC_STR_PAIR_MERGE_FORGET, ev->forget_count), MC_D(ev->forget_count),
+                 MC_S(ev->forget_names));
+      append_para(out, n, para);
+    }
+  }
+  free(peer);
+  free(peer_start);
+}
+
+/* Shows on_pair_merge in d. Wanting an answer, the enter-code dialog puts the proposal in
+ * place of the code, with Pair as Merge; the show-code dialog shows it under the code, with
+ * Merge (its hidden OK) beside Cancel. */
+static void show_merge(pair_dlg *d, const sync_event *ev) {
+  if (ev->name[0]) wcsncpy(d->peer, ev->name, sizeof d->peer / sizeof d->peer[0] - 1);
+  merge_proposal(d->merge_text, sizeof d->merge_text / sizeof d->merge_text[0], ev, d->peer);
+  d->confirming = ev->needs_confirm;
+  HWND ok = GetDlgItem(d->wnd, IDOK);
+  if (d->confirming) {
+    SetWindowTextW(ok, mc_wstr_mnemonic(MC_STR_PAIR_MERGE_BUTTON));
+    if (d->initiator) {
+      d->proposing = TRUE;
+      GetWindowTextW(d->wnd, d->title, sizeof d->title / sizeof d->title[0]);
+      SetWindowTextW(d->wnd, mc_wstr(MC_STR_PAIR_MERGE_TITLE));
+      ShowWindow(GetDlgItem(d->wnd, ID_TEXT), SW_HIDE);
+      ShowWindow(GetDlgItem(d->wnd, IDC_PAIR_CODE), SW_HIDE);
+    }
+    ShowWindow(ok, SW_SHOW);
+    update_pair(d);
+    SendMessageW(d->wnd, DM_SETDEFID, IDOK, 0);
+    if (GetActiveWindow() == d->wnd) SendMessageW(d->wnd, WM_NEXTDLGCTL, (WPARAM)ok, TRUE);
+  }
+  set_status(d, d->status_base);
+}
+
+/* Merge pressed: this PC's library goes into the other's. The enter-code dialog goes back to
+ * the code (still waiting for one, or for the other device if it was sent already). */
+static void answer_merge(pair_dlg *d) {
+  if (!d->confirming || !d->sync) return;
+  if (mc_sync_pair_merge_confirm(d->sync, 1) != MC_OK) return; /* over: its result follows */
+  d->confirming = FALSE;
+  swprintf(d->merge_text, sizeof d->merge_text / sizeof d->merge_text[0], L"%ls", mc_wstr(MC_STR_PAIR_MERGE_CONFIRMED));
+  HWND ok = GetDlgItem(d->wnd, IDOK);
+  if (d->initiator) {
+    d->proposing = FALSE;
+    SetWindowTextW(d->wnd, d->title);
+    SetWindowTextW(ok, mc_wstr_mnemonic(MC_STR_PAIR));
+    ShowWindow(GetDlgItem(d->wnd, ID_TEXT), SW_SHOW);
+    ShowWindow(GetDlgItem(d->wnd, IDC_PAIR_CODE), SW_SHOW);
+    update_pair(d);
+    HWND next = d->checking ? GetDlgItem(d->wnd, IDCANCEL) : GetDlgItem(d->wnd, IDC_PAIR_CODE);
+    SendMessageW(d->wnd, WM_NEXTDLGCTL, (WPARAM)next, TRUE);
+  } else {
+    ShowWindow(ok, SW_HIDE);
+    SendMessageW(d->wnd, WM_NEXTDLGCTL, (WPARAM)GetDlgItem(d->wnd, IDCANCEL), TRUE);
+  }
+  set_status(d, d->status_base);
 }
 
 static void apply_theme(HWND dlg) {
@@ -475,6 +663,10 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
             close_dlg(d);
             return TRUE;
           }
+          if (d->confirming) { /* Merge */
+            answer_merge(d);
+            return TRUE;
+          }
           /* Enter reaches here even while Pair is disabled or hidden. */
           char code[MC_PAIR_CODE_LEN + 1];
           if (!d->initiator || d->checking || !code_text(dlg, code)) return TRUE;
@@ -497,10 +689,14 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
           return TRUE;
         case IDCANCEL:
           if (!d->ended) {
-            /* Cancelling here: the CANCELLED result it brings needs no telling. */
+            /* Cancelling here: the CANCELLED (or MERGE_DECLINED) result it brings needs no
+             * telling. */
             if (d->initiator) s.enter_cancelled = TRUE;
             else s.show_cancelled = TRUE;
-            if (d->sync) mc_sync_pair_cancel(d->sync);
+            /* While the merge is asked, Cancel declines it: that ends the pairing on the
+             * initiator, and on the device showing the code when the other enters it. */
+            if (d->sync && (!d->confirming || mc_sync_pair_merge_confirm(d->sync, 0) != MC_OK))
+              mc_sync_pair_cancel(d->sync);
           }
           close_dlg(d);
           return TRUE;
@@ -618,7 +814,211 @@ static void run_action(pair_dlg *d) {
   }
 }
 
+/* --- The merge's window ---
+ *
+ *   +- Merging libraries ---------------- X -+      +- Libraries merged -------------- X -+
+ *   | The music from your old library is     |      | Tracks: 120 added, 4 improved, 30   |
+ *   | coming into this one. You can keep ... |  ->  | already in the library.             |
+ *   | [##########---------]                  |      | 3 playlists, ... carried over.      |
+ *   | Albums: 12 of 40                       |      | The old library is saved as C:\...  |
+ *   |                              [Close]   |      |                             [Close] |
+ *   +----------------------------------------+      +-------------------------------------+
+ *
+ * Modeless, and the main window stays enabled: the merge runs on sync's threads. Close only
+ * hides it from view; the summary opens it again. */
+
+enum { ID_MERGE_PROGRESS = 102, MERGE_BAR_Y = 29, MERGE_STATUS_Y = 43 };
+
+static void merge_layout(merge_wnd *m) {
+  layout_status(m->wnd, m->done ? MARGIN : MERGE_STATUS_Y, DLG_H - 2 * MARGIN - BTN_H);
+}
+
+static INT_PTR CALLBACK merge_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
+  merge_wnd *m = (merge_wnd *)GetWindowLongPtrW(dlg, DWLP_USER);
+  switch (msg) {
+    case WM_INITDIALOG:
+      m = (merge_wnd *)lp;
+      m->wnd = dlg;
+      SetWindowLongPtrW(dlg, DWLP_USER, lp);
+      SendDlgItemMessageW(dlg, ID_MERGE_PROGRESS, PBM_SETRANGE32, 0, 1000);
+      apply_theme(dlg);
+      return TRUE;
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN: {
+      HBRUSH brush = theme_ctlcolor(msg, (HDC)wp);
+      if (msg == WM_CTLCOLORSTATIC && (HWND)lp == GetDlgItem(dlg, IDC_PAIR_STATUS) && m && !m->done)
+        SetTextColor((HDC)wp, theme.text2);
+      return (INT_PTR)brush;
+    }
+    case WM_SETTINGCHANGE:
+    case WM_SYSCOLORCHANGE:
+    case WM_THEMECHANGED:
+      if (theme_is_change(msg, wp, lp)) {
+        theme_update();
+        apply_theme(dlg);
+        RedrawWindow(dlg, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+      }
+      break;
+    case WM_COMMAND:
+      if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+        DestroyWindow(dlg);
+        return TRUE;
+      }
+      break;
+    case WM_NCDESTROY:
+      if (s.merge == m) s.merge = NULL;
+      free(m);
+      SetWindowLongPtrW(dlg, DWLP_USER, 0);
+      break;
+  }
+  return FALSE;
+}
+
+/* The merge's window, opened if it isn't: intro text, progress bar, status line, Close. */
+static merge_wnd *merge_window(void) {
+  if (s.merge) return s.merge;
+  merge_wnd *m = calloc(1, sizeof *m);
+  tmpl *t = malloc(sizeof *t);
+  if (!m || !t) {
+    free(m);
+    free(t);
+    return NULL;
+  }
+  put_header(t, 4);
+  int w = DLG_W - 2 * MARGIN;
+  put_item(t, 0x0082, mc_wstr(MC_STR_MERGE_TEXT), SS_LEFT | SS_NOPREFIX, MARGIN, MARGIN, w, TEXT_H, ID_TEXT);
+  put_item_class(t, 0, PROGRESS_CLASSW, L"", 0, MARGIN, MERGE_BAR_Y, w, 9, ID_MERGE_PROGRESS);
+  /* Edit-control wrapping: the backup's path has no spaces to break at. */
+  put_item(t, 0x0082, L"", SS_LEFT | SS_NOPREFIX | SS_EDITCONTROL, MARGIN, MERGE_STATUS_Y, w, 20, IDC_PAIR_STATUS);
+  put_item(t, 0x0080, mc_wstr_mnemonic(MC_STR_CLOSE), BS_DEFPUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W,
+           DLG_H - MARGIN - BTN_H, BTN_W, BTN_H, IDOK);
+  HWND wnd = CreateDialogIndirectParamW(GetModuleHandleW(NULL), (const DLGTEMPLATE *)t->buf, s.owner, merge_proc,
+                                        (LPARAM)m);
+  free(t);
+  if (!wnd) {
+    free(m);
+    return NULL;
+  }
+  s.merge = m;
+  SetWindowTextW(wnd, mc_wstr(MC_STR_MERGE_TITLE));
+  merge_layout(m);
+  ShowWindow(wnd, SW_SHOWNOACTIVATE);
+  return m;
+}
+
+/* Appends item to a list being built in out (UTF-8), with the list separator. */
+static void list_add(char *out, size_t n, const char *item) {
+  size_t len = strlen(out);
+  if (len) snprintf(out + len, n - len, "%s%s", mc_str(MC_STR_IMPORT_LIST_SEPARATOR), item);
+  else snprintf(out, n, "%s", item);
+}
+
+static void list_add_count(char *out, size_t n, enum mc_str_id id, int count) {
+  if (count <= 0) return;
+  char item[128];
+  mc_format(item, sizeof item, mc_str_plural(id, count), MC_D(count));
+  list_add(out, n, item);
+}
+
+/* What the merge did, in short paragraphs. */
+static void merge_summary(wchar_t *out, size_t n, const sync_event *ev) {
+  const mc_merge_result *r = &ev->merge;
+  wchar_t para[1280];
+  out[0] = L'\0';
+  if (ev->status != MC_OK) {
+    mc_wformat(para, 1280, mc_str(MC_STR_MERGE_FAILED), MC_S(mc_status_str(ev->status)));
+    append_para(out, n, para);
+  }
+  char tracks[512] = "";
+  list_add_count(tracks, sizeof tracks, MC_STR_MERGE_TRACKS_ADDED, r->tracks_added);
+  list_add_count(tracks, sizeof tracks, MC_STR_MERGE_TRACKS_BETTER, r->tracks_better);
+  list_add_count(tracks, sizeof tracks, MC_STR_MERGE_TRACKS_MATCHED, r->tracks_attached + r->tracks_mapped);
+  list_add_count(tracks, sizeof tracks, MC_STR_WINDOWS_MERGE_TRACKS_RECYCLED, r->tracks_skipped);
+  list_add_count(tracks, sizeof tracks, MC_STR_MERGE_TRACKS_LEFT_OUT, r->tracks_left_out);
+  list_add_count(tracks, sizeof tracks, MC_STR_MERGE_TRACKS_FAILED, r->tracks_failed);
+  if (tracks[0]) mc_wformat(para, 1280, mc_str(MC_STR_MERGE_TRACKS), MC_S(tracks));
+  else swprintf(para, 1280, L"%ls", mc_wstr(MC_STR_MERGE_TRACKS_NONE));
+  append_para(out, n, para);
+  if (r->playlists > 0) {
+    mc_wformat(para, 1280, mc_str_plural(MC_STR_MERGE_PLAYLISTS, r->playlists), MC_D(r->playlists));
+    if (r->playlists_renamed > 0) {
+      size_t len = wcslen(para);
+      para[len++] = L' ';
+      mc_wformat(para + len, 1280 - len, mc_str_plural(MC_STR_MERGE_PLAYLISTS_RENAMED, r->playlists_renamed),
+                 MC_D(r->playlists_renamed));
+    }
+    append_para(out, n, para);
+  }
+  if (ev->scrobble_user[0]) {
+    mc_wformat(para, 1280, mc_str(MC_STR_MERGE_SCROBBLE_SIGNED_OUT), MC_S(ev->scrobble_user));
+    if (r->scrobbles_dropped > 0) {
+      size_t len = wcslen(para);
+      para[len++] = L' ';
+      mc_wformat(para + len, 1280 - len, mc_str_plural(MC_STR_MERGE_SCROBBLES_DROPPED, r->scrobbles_dropped),
+                 MC_D(r->scrobbles_dropped));
+    }
+    append_para(out, n, para);
+  }
+  if (ev->backup_path[0]) {
+    mc_wformat(para, 1280, mc_str(MC_STR_MERGE_BACKUP), MC_S(ev->backup_path));
+    append_para(out, n, para);
+  }
+}
+
+void pair_dialog_on_merge_event(const sync_event *ev) {
+  if (ev->kind == SYNC_EV_MERGE_PROGRESS) {
+    merge_wnd *m = s.merge;
+    if (!m) {
+      /* Closed while it runs: it stays closed until the summary. Opened the first time. */
+      if (s.merge_seen) return;
+      s.merge_seen = TRUE;
+      if (!(m = merge_window())) return;
+    }
+    if (m->done) return;
+    wchar_t text[128];
+    mc_wformat(text, 128, mc_str(ev->merge_phase == MC_MERGE_PHASE_TRACKS ? MC_STR_MERGE_PROGRESS_TRACKS
+                                                                          : MC_STR_MERGE_PROGRESS_LISTS),
+               MC_D(ev->merge_done), MC_D(ev->merge_total));
+    SetDlgItemTextW(m->wnd, IDC_PAIR_STATUS, text);
+    /* Albums take most of the time: the bar gives them nine tenths. */
+    int part = ev->merge_total > 0 ? MulDiv(min(ev->merge_done, ev->merge_total), 1000, ev->merge_total) : 0;
+    int pos = ev->merge_phase == MC_MERGE_PHASE_TRACKS ? part * 9 / 10 : 900 + part / 10;
+    SendDlgItemMessageW(m->wnd, ID_MERGE_PROGRESS, PBM_SETPOS, (WPARAM)pos, 0);
+    return;
+  }
+  if (ev->kind != SYNC_EV_MERGE_DONE) return;
+  s.merge_seen = FALSE;
+  merge_wnd *m = merge_window();
+  if (!m) return;
+  m->done = TRUE;
+  SetWindowTextW(m->wnd, mc_wstr(ev->status == MC_OK ? MC_STR_MERGE_DONE_TITLE : MC_STR_MERGE_FAILED_TITLE));
+  ShowWindow(GetDlgItem(m->wnd, ID_TEXT), SW_HIDE);
+  ShowWindow(GetDlgItem(m->wnd, ID_MERGE_PROGRESS), SW_HIDE);
+  wchar_t text[3200];
+  merge_summary(text, 3200, ev);
+  SetDlgItemTextW(m->wnd, IDC_PAIR_STATUS, text);
+  merge_layout(m);
+  ShowWindow(m->wnd, SW_SHOW);
+  if (s.owner) {
+    FLASHWINFO fi = {sizeof fi, s.owner, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0};
+    FlashWindowEx(&fi);
+  }
+}
+
 /* --- API --- */
+
+void pair_dialog_on_merge(const sync_event *ev) {
+  pair_dlg *d = ev->initiator ? s.enter : s.show;
+  if (d && !d->ended) {
+    show_merge(d, ev);
+  } else if (!ev->initiator) {
+    /* The code is on its way. */
+    s.pending_merge = *ev;
+    s.has_pending_merge = TRUE;
+  }
+  /* An initiator with no dialog cancelled already. */
+}
 
 void pair_dialog_init(HWND owner, const pair_dialog_host *host) {
   s.owner = owner;
@@ -683,6 +1083,10 @@ void pair_dialog_show_code(mc_sync *sync, const sync_event *ev) {
     SetDlgItemTextW(d->wnd, IDC_PAIR_CODE, code);
     ShowWindow(d->wnd, SW_SHOW);
   }
+  if (s.has_pending_merge) { /* asked just before the code */
+    s.has_pending_merge = FALSE;
+    show_merge(d, &s.pending_merge);
+  }
   if (s.owner) {
     FLASHWINFO fi = {sizeof fi, s.owner, FLASHW_TRAY | FLASHW_TIMERNOFG, 0, 0};
     FlashWindowEx(&fi);
@@ -721,6 +1125,7 @@ static void initiator_result(const sync_event *ev) {
 
 static void responder_result(const sync_event *ev) {
   pair_dlg *d = s.show;
+  if (ev->reason != MC_PAIR_WRONG_CODE) s.has_pending_merge = FALSE; /* over */
   if (ev->reason == MC_PAIR_CANCELLED && (s.show_cancelled || !d || d->ended)) {
     s.show_cancelled = FALSE; /* ours, or nothing showing to cancel */
     return;
@@ -766,11 +1171,14 @@ BOOL pair_dialog_on_result(const sync_event *ev) {
 BOOL pair_dialog_translate(MSG *msg) {
   if (s.enter && IsDialogMessageW(s.enter->wnd, msg)) return TRUE;
   if (s.show && IsDialogMessageW(s.show->wnd, msg)) return TRUE;
+  if (s.merge && IsDialogMessageW(s.merge->wnd, msg)) return TRUE;
   return FALSE;
 }
 
 void pair_dialog_close_all(void) {
   close_dlg(s.enter);
   close_dlg(s.show);
+  if (s.merge) DestroyWindow(s.merge->wnd); /* frees it */
   s.enter_cancelled = s.show_cancelled = FALSE;
+  s.has_pending_merge = s.merge_seen = FALSE;
 }

@@ -10,7 +10,9 @@
  *   +---------------------------------------+   +------------------------------------+
  *
  * Both are modeless, with the main window disabled while one is open, and both can be open
- * at once (this PC can be pairing each way). Each shows how its pairing ended, worded as on
+ * at once (this PC can be pairing each way). When both libraries have music, either dialog
+ * also proposes merging them (see pair_dialog_on_merge()); the merge itself runs after
+ * pairing, in a third window that doesn't disable the main one. Each shows how its pairing ended, worded as on
  * Android. The code and the status line have fixed ids, so test scripts can drive the
  * dialogs. The templates are built in memory, as in add_device.c, so they need no
  * resources. */
@@ -60,9 +62,22 @@ void pair_dialog_show_code(mc_sync *sync, const sync_event *ev);
  * device is the archive). When this PC could have joined but has music of its own, it offers
  * Create a New Library, then to pair again. */
 BOOL pair_dialog_on_result(const sync_event *ev);
+/* Shows a SYNC_EV_PAIR_MERGE (both libraries have music, so pairing merges them) in the
+ * dialog it belongs to. On this PC when its library is the one merged (needs_confirm), the
+ * proposal says which library is kept, that this one is set aside as a backup, and what goes
+ * with it (a Last.fm account, the paired devices), with Merge and Cancel, which call
+ * mc_sync_pair_merge_confirm(). The enter-code dialog shows it in place of the code until
+ * answered (the code can be typed after); the show-code dialog under the code, and Cancel
+ * there declines and closes it. On the PC whose library is kept, it's a note under the code.
+ * The show-code dialog isn't open yet when it arrives, so it's kept for it. */
+void pair_dialog_on_merge(const sync_event *ev);
+/* SYNC_EV_MERGE_PROGRESS and SYNC_EV_MERGE_DONE: the merge of this PC's old library, after
+ * pairing, in a window of its own that leaves the main window enabled. Progress opens it (or
+ * updates it); done turns it into a summary (opening it again if it was closed). */
+void pair_dialog_on_merge_event(const sync_event *ev);
 /* For the message loop: IsDialogMessage for the open dialogs. TRUE if msg was handled. */
 BOOL pair_dialog_translate(MSG *msg);
-/* Closes both dialogs without cancelling (call before sync stops) and re-enables the owner. */
+/* Closes the dialogs without cancelling (call before sync stops) and re-enables the owner. */
 void pair_dialog_close_all(void);
 
 #endif
