@@ -746,7 +746,10 @@ class Syncer(
         )
         Log.i(TAG, "Pairing with ${event.name} merges libraries; kept here: ${event.keptHere}")
         when {
-            event.initiator -> if (pairing is Pairing.EnterCode) update { copy(pairing = pairing.copy(merge = proposal)) }
+            // Its name, now it's known: asked by address, the dialog had the address.
+            event.initiator -> if (pairing is Pairing.EnterCode) {
+                update { copy(pairing = pairing.copy(peer = event.name.ifEmpty { pairing.peer }, merge = proposal)) }
+            }
             pairing is Pairing.ShowCode -> update { copy(pairing = pairing.copy(merge = proposal)) }
             else -> {
                 // A new incoming pairing: one declined before is over.

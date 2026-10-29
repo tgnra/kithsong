@@ -18,6 +18,10 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import ng.kithso.android.importer.ImportSource
 import ng.kithso.android.ui.App
 import ng.kithso.android.ui.theme.KithsongTheme
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MainActivity : ComponentActivity() {
     private val askForNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -37,9 +41,18 @@ class MainActivity : ComponentActivity() {
         }
         // Debug builds: `--es fake_merge <scenario>` shows one of the merge's screens with
         // made-up data (see Syncer.debugShowMerge).
+        val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         val fakeMerge = intent.getStringExtra("fake_merge")
-        if (fakeMerge != null && applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-            app.syncer.debugShowMerge(fakeMerge)
+        if (fakeMerge != null && debuggable) app.syncer.debugShowMerge(fakeMerge)
+        // Debug builds, for test scripts: `--es debug_pair <host>:<port>` asks that device to
+        // pair once sync runs, as Add device by address does (the desktops' KITHSONG_DEBUG_PAIR).
+        val debugPair = intent.getStringExtra("debug_pair")?.split(':')
+        if (debuggable && savedInstanceState == null && debugPair?.size == 2) {
+            val port = debugPair[1].toIntOrNull() ?: 0
+            MainScope().launch {
+                withTimeoutOrNull(10_000) { app.syncer.status.first { it.running } }
+                app.syncer.pair(debugPair[0], port)
+            }
         }
         Log.i(TAG, "musiccore ${NativeCore.version()}")
         // A zip or audio files opened with or shared to the app: import them. Only on a fresh
