@@ -33,8 +33,10 @@ typedef struct mc_scrobbler mc_scrobbler;
  * (the per-device config dir, as for mc_sync_new()). lib must stay open while the scrobbler
  * exists, but is only read here: the scrobbler opens its own connections. */
 mc_status mc_scrobbler_new(mc_library *lib, const char *config_dir, mc_scrobbler **out);
-/* Queues plays not yet queued, then stops; waits for a call to the service in progress to
- * finish or time out. NULL is a no-op. */
+/* Queues plays not yet queued, then stops. A call to the service in progress is cut short
+ * (within about a second; its plays stay queued), so this doesn't wait out a slow network.
+ * Stop any sign-in first (mc_scrobbler_auth_cancel(), then wait for its thread): the
+ * scrobbler mustn't be in use elsewhere while it's freed. NULL is a no-op. */
 void mc_scrobbler_free(mc_scrobbler *sc);
 
 /* track_uid has started playing. Best effort: sent once, if signed in and online. */
@@ -52,6 +54,11 @@ mc_status mc_scrobbler_scrobble(mc_scrobbler *sc, const char *track_uid, int64_t
  * service refused the API key, or the build has none for Last.fm. */
 mc_status mc_scrobbler_auth_begin(mc_scrobbler *sc, char **out_url);
 mc_status mc_scrobbler_auth_finish(mc_scrobbler *sc);
+/* Gives up on the sign-in under way: from any thread, a mc_scrobbler_auth_begin() or
+ * mc_scrobbler_auth_finish() in progress on another one stops within about a second with
+ * MC_ERR_NET, and so does every later mc_scrobbler_auth_finish() for its token. The next
+ * mc_scrobbler_auth_begin() starts afresh. */
+void mc_scrobbler_auth_cancel(mc_scrobbler *sc);
 /* Signs out, here and across the group. Queued plays wait for the next sign-in. */
 mc_status mc_scrobbler_sign_out(mc_scrobbler *sc);
 

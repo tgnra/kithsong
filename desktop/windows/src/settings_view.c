@@ -556,11 +556,12 @@ static void start_auth(void) {
 }
 
 /* Cancels a sign-in in progress and waits for its thread, which may be in the middle of a
- * call to the service (bounded by its timeout). Also called just before the scrobbler is
- * freed. */
+ * call to the service (cut short by mc_scrobbler_auth_cancel()). Also called just before
+ * the scrobbler is freed. */
 static void stop_auth(void) {
   if (!g_set.auth_thread) return;
   SetEvent(g_set.auth_cancel);
+  mc_scrobbler_auth_cancel(playback_scrobbler());
   WaitForSingleObject(g_set.auth_thread, INFINITE);
   CloseHandle(g_set.auth_thread);
   CloseHandle(g_set.auth_cancel);

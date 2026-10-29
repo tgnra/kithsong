@@ -141,6 +141,7 @@ class Scrobbling(
     /** Stops waiting for a sign-in to be approved. */
     fun cancelSignIn() {
         signIn?.cancel()
+        scrobbler?.authCancel() // the call it's blocked in, if any, and its token
         signIn = null
         mutableState.value = mutableState.value.copy(signingIn = false)
     }

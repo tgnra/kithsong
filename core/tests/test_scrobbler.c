@@ -44,10 +44,20 @@ static mc_status reply(mc_buffer *body, const char *json) {
   return body->data ? MC_OK : MC_ERR_NOMEM;
 }
 
-static mc_status fake_post(const char *url, const char *form, mc_buffer *body, long *http) {
+static int hang, hung; /* calls wait to be cancelled while hang is set; hung counts them */
+
+static mc_status fake_post(const char *url, const char *form, mc_buffer *body, long *http,
+                           const mc_http_cancel *cancel) {
   (void)url;
   *http = 200;
   mc_mutex_lock(&lock);
+  if (hang) { /* a network that never answers: up to curl's timeout, unless cancelled */
+    hung++;
+    mc_mutex_unlock(&lock);
+    uint64_t end = mc_mono_ms() + 30000;
+    while (!(cancel && cancel->cancelled(cancel->user)) && mc_mono_ms() < end) mc_sleep_ms(10);
+    return MC_ERR_NET;
+  }
   snprintf(last_form, sizeof last_form, "%s", form);
   mc_status st;
   if (strstr(form, "method=auth.getToken")) {
@@ -140,6 +150,18 @@ static int sign_in(mc_scrobbler *sc) {
   return ok;
 }
 
+typedef struct auth_job {
+  mc_scrobbler *sc;
+  mc_status st;
+} auth_job;
+
+static void auth_begin_main(void *arg) {
+  auth_job *job = arg;
+  char *url = NULL;
+  job->st = mc_scrobbler_auth_begin(job->sc, &url);
+  mc_free(url);
+}
+
 /* --- Tests --- */
 
 static void test_rule(void) {
@@ -163,6 +185,24 @@ static void test_sign(void) {
   CHECK(mbedtls_md5((const unsigned char *)plain, sizeof plain - 1, md5) == 0);
   for (int i = 0; i < 16; i++) snprintf(hex + i * 2, 3, "%02x", md5[i]);
   CHECK(strcmp(sig, hex) == 0);
+}
+
+static int cancel_after(void *user) {
+  return mc_mono_ms() >= *(uint64_t *)user;
+}
+
+/* A real request through curl gives up soon after it's cancelled. 10.255.255.1 isn't routed
+ * anywhere, so the connect would otherwise wait out its 10 s timeout (on a machine with no
+ * route at all it fails at once, which passes too). */
+static void test_http_cancel(void) {
+  uint64_t at = mc_mono_ms() + 300;
+  mc_http_cancel cancel = {cancel_after, &at};
+  mc_buffer body = {0};
+  long http = 0;
+  uint64_t t0 = mc_mono_ms();
+  CHECK(mc_http_post_form("https://10.255.255.1/", "a=b", &body, &http, &cancel) == MC_ERR_NET);
+  CHECK(mc_mono_ms() - t0 < 2500);
+  CHECK(body.data == NULL);
 }
 
 static int queue_rows(const char *config) {
@@ -228,6 +268,7 @@ int main(int argc, char **argv) {
 
   test_rule();
   test_sign();
+  test_http_cancel();
 
   mc_library *lib = NULL;
   CHECK(mc_library_open(lib_dir, &lib) == MC_OK);
@@ -407,6 +448,42 @@ int main(int argc, char **argv) {
     mc_sleep_ms(10);
   }
   CHECK(name == NULL);
+
+  /* Freeing the scrobbler cuts a call that's hanging short, and its play stays queued. */
+  CHECK(sign_in(sc));
+  set(&hang, 1);
+  CHECK(mc_scrobbler_scrobble(sc, T_OK, now) == MC_OK);
+  CHECK(wait_count(&hung, 1, 2000));
+  uint64_t t0 = mc_mono_ms();
+  mc_scrobbler_free(sc);
+  CHECK(mc_mono_ms() - t0 < 2000);
+  CHECK(queue_rows(config) == 1);
+  set(&hang, 0);
+  sc = NULL;
+  CHECK(mc_scrobbler_new(lib, config, &sc) == MC_OK);
+  if (!sc) return TEST_RESULT();
+  CHECK(wait_status(sc, 0, MC_OK, 2000));
+
+  /* So does cancelling a sign-in, from another thread; and a token whose sign-in was
+   * cancelled isn't turned into a session, even once approved. */
+  set(&hang, 1);
+  auth_job job = {sc, MC_OK};
+  mc_thread th;
+  CHECK(mc_thread_start(&th, auth_begin_main, &job) == MC_OK);
+  CHECK(wait_count(&hung, 2, 2000));
+  t0 = mc_mono_ms();
+  mc_scrobbler_auth_cancel(sc);
+  mc_thread_join(&th);
+  CHECK(mc_mono_ms() - t0 < 2000);
+  CHECK(job.st == MC_ERR_NET);
+  set(&hang, 0);
+  CHECK(mc_scrobbler_auth_begin(sc, &url) == MC_OK);
+  mc_free(url);
+  mc_scrobbler_auth_cancel(sc);
+  set(&approved, 1);
+  CHECK(mc_scrobbler_auth_finish(sc) == MC_ERR_NET);
+  set(&approved, 0);
+  CHECK(sign_in(sc)); /* a new one starts afresh */
 
   mc_scrobbler_free(sc);
   mc_library_close(lib);

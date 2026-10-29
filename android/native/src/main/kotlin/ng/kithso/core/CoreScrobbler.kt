@@ -36,6 +36,13 @@ class CoreScrobbler(library: CoreLibrary, configDir: String) : AutoCloseable {
      */
     fun authFinish(): Int = nativeAuthFinish(handle)
 
+    /**
+     * Gives up on the sign-in under way, from any thread: an [authBegin] or [authFinish]
+     * blocked on the network returns within about a second ([STATUS_NET]), and so does every
+     * later [authFinish] for its token.
+     */
+    fun authCancel() = nativeAuthCancel(handle)
+
     /** Signs out, here and across the group. */
     fun signOut() = nativeSignOut(handle)
 
@@ -65,6 +72,7 @@ class CoreScrobbler(library: CoreLibrary, configDir: String) : AutoCloseable {
         @JvmStatic external fun nativePost(handle: Long, trackUid: String, startedMs: Long)
         @JvmStatic external fun nativeAuthBegin(handle: Long): String
         @JvmStatic external fun nativeAuthFinish(handle: Long): Int
+        @JvmStatic external fun nativeAuthCancel(handle: Long)
         @JvmStatic external fun nativeSignOut(handle: Long)
         @JvmStatic external fun nativeStatus(handle: Long, out: LongArray): String?
     }

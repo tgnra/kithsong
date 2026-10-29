@@ -17,7 +17,7 @@
 #define MC_LASTFM_SIG_STRLEN 33
 
 typedef mc_status (*mc_lastfm_post_fn)(const char *url, const char *form, mc_buffer *body,
-                                       long *http_status);
+                                       long *http_status, const mc_http_cancel *cancel);
 /* How calls are sent: mc_http_post_form(), unless a test swaps it before making any. */
 extern mc_lastfm_post_fn mc_lastfm_post;
 
@@ -26,6 +26,7 @@ typedef struct mc_lastfm_service {
   const char *api_key;     /* NULL: the build's (mc_lastfm_build_key()) */
   const char *api_secret;  /* NULL: the build's, decoded only while a call is signed */
   const char *session_key; /* NULL for the auth calls */
+  const mc_http_cancel *cancel; /* NULL: calls run to their end or timeout */
 } mc_lastfm_service;
 
 /* The build's own Last.fm API account (lastfm_key.c), kept obscured in the binary. Room for

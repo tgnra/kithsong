@@ -48,8 +48,17 @@ static size_t on_body(char *ptr, size_t size, size_t nmemb, void *user) {
   return n;
 }
 
+/* Curl's progress callback: non-zero makes it stop with CURLE_ABORTED_BY_CALLBACK. */
+static int on_progress(void *user, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal,
+                       curl_off_t ulnow) {
+  (void)dltotal, (void)dlnow, (void)ultotal, (void)ulnow;
+  const mc_http_cancel *cancel = user;
+  return cancel->cancelled(cancel->user) ? 1 : 0;
+}
+
 /* GET url, or POST form when it isn't NULL. */
-static mc_status perform(const char *url, const char *form, mc_buffer *body, long *http_status) {
+static mc_status perform(const char *url, const char *form, mc_buffer *body, long *http_status,
+                         const mc_http_cancel *cancel) {
   if (!url || !body) return MC_ERR_INVALID_ARG;
   body->data = NULL;
   body->len = 0;
@@ -71,6 +80,15 @@ static mc_status perform(const char *url, const char *form, mc_buffer *body, lon
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 30000L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  /* A name lookup still running when the call times out or is cancelled is left to finish
+   * on curl's resolver thread rather than waited for: otherwise a network with broken DNS
+   * holds every failed call until the lookup itself gives up, whatever the timeouts say. */
+  curl_easy_setopt(curl, CURLOPT_QUICK_EXIT, 1L);
+  if (cancel && cancel->cancelled) {
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, on_progress);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, (void *)cancel);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  }
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, on_body);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, body);
   if (form) curl_easy_setopt(curl, CURLOPT_POSTFIELDS, form); /* form-urlencoded by default */
@@ -79,6 +97,10 @@ static mc_status perform(const char *url, const char *form, mc_buffer *body, lon
   if (rc == CURLE_OK && http_status) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, http_status);
   curl_easy_cleanup(curl);
 
+  if (rc == CURLE_ABORTED_BY_CALLBACK) { /* cancelled */
+    mc_buffer_free(body);
+    return MC_ERR_NET;
+  }
   if (rc != CURLE_OK) {
     fprintf(stderr, "musiccore: %s %s failed: %s\n", form ? "POST" : "GET", url,
             curl_easy_strerror(rc));
@@ -89,12 +111,13 @@ static mc_status perform(const char *url, const char *form, mc_buffer *body, lon
 }
 
 mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status) {
-  return perform(url, NULL, body, http_status);
+  return perform(url, NULL, body, http_status, NULL);
 }
 
-mc_status mc_http_post_form(const char *url, const char *form, mc_buffer *body, long *http_status) {
+mc_status mc_http_post_form(const char *url, const char *form, mc_buffer *body, long *http_status,
+                            const mc_http_cancel *cancel) {
   if (!form) return MC_ERR_INVALID_ARG;
-  return perform(url, form, body, http_status);
+  return perform(url, form, body, http_status, cancel);
 }
 
 void mc_ratelimit_init(mc_ratelimit *rl, uint32_t interval_ms) {

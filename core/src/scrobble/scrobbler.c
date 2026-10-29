@@ -46,6 +46,8 @@ struct mc_scrobbler {
   int nreqs, cap;
   int account_changed; /* reread the account and try again now */
   char *token;         /* from mc_scrobbler_auth_begin() */
+  unsigned auth_gen;   /* bumped by mc_scrobbler_auth_cancel(), stopping the calls before it */
+  unsigned token_gen;  /* auth_gen when the token's mc_scrobbler_auth_begin() started */
   mc_scrobbler_status status;
 };
 
@@ -115,7 +117,7 @@ static mc_status account_read(sqlite3 *db, account *a) {
 }
 
 static mc_lastfm_service service_of(const account *a) {
-  return (mc_lastfm_service){a->api_url, a->api_key, a->api_secret, a->session_key};
+  return (mc_lastfm_service){a->api_url, a->api_key, a->api_secret, a->session_key, NULL};
 }
 
 /* Runs sql against the account row, creating it first if need be: ?1 is its uid, ?2 on
@@ -306,6 +308,11 @@ static int quitting(mc_scrobbler *sc) {
   return quit;
 }
 
+/* The worker's calls stop when the scrobbler is freed. */
+static int worker_cancelled(void *user) {
+  return quitting(user);
+}
+
 static void run(void *arg) {
   mc_scrobbler *sc = arg;
   mc_sync_db *sdb = NULL;
@@ -366,6 +373,8 @@ static void run(void *arg) {
         else if (acc.session_key) enqueue(lib, db, &reqs[i]);
       }
       mc_lastfm_service svc = service_of(&acc);
+      mc_http_cancel cancel = {worker_cancelled, sc};
+      svc.cancel = &cancel;
       sending = acc.session_key && !refused && !quit;
       mc_status st = MC_OK;
       int called = 0;
@@ -373,7 +382,7 @@ static void run(void *arg) {
         st = now_playing(lib, &svc, playing);
         called = 1;
       }
-      if (sending && st != MC_ERR_AUTH && mc_mono_ms() >= next_try) {
+      if (sending && st != MC_ERR_AUTH && mc_mono_ms() >= next_try && !quitting(sc)) {
         int progress = 1;
         while (progress && (st = submit(db, &svc, &batch, &progress)) == MC_OK && !quitting(sc)) {
         }
@@ -542,14 +551,35 @@ static mc_status read_now(mc_scrobbler *sc, account *a) {
   return st;
 }
 
+/* A sign-in's calls stop once mc_scrobbler_auth_cancel() moves auth_gen past gen, or the
+ * scrobbler is being freed. */
+typedef struct auth_call {
+  mc_scrobbler *sc;
+  unsigned gen;
+} auth_call;
+
+static int auth_cancelled(void *user) {
+  auth_call *c = user;
+  mc_mutex_lock(&c->sc->lock);
+  int cancelled = c->sc->quit || c->sc->auth_gen != c->gen;
+  mc_mutex_unlock(&c->sc->lock);
+  return cancelled;
+}
+
 mc_status mc_scrobbler_auth_begin(mc_scrobbler *sc, char **out_url) {
   if (!sc || !out_url) return MC_ERR_INVALID_ARG;
   *out_url = NULL;
+  auth_call call = {sc, 0};
+  mc_mutex_lock(&sc->lock);
+  call.gen = sc->auth_gen;
+  mc_mutex_unlock(&sc->lock);
+  mc_http_cancel cancel = {auth_cancelled, &call};
   account a;
   mc_status st = read_now(sc, &a);
   if (st != MC_OK) return st;
   mc_lastfm_service svc = service_of(&a);
   svc.session_key = NULL;
+  svc.cancel = &cancel;
   char *token = NULL;
   int api_error;
   st = mc_lastfm_get_token(&svc, &token, &api_error);
@@ -573,6 +603,7 @@ mc_status mc_scrobbler_auth_begin(mc_scrobbler *sc, char **out_url) {
     mc_mutex_lock(&sc->lock);
     free(sc->token);
     sc->token = token;
+    sc->token_gen = call.gen;
     token = NULL;
     mc_mutex_unlock(&sc->lock);
   }
@@ -584,8 +615,15 @@ mc_status mc_scrobbler_auth_finish(mc_scrobbler *sc) {
   if (!sc) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&sc->lock);
   char *token = sc->token ? mc_strdup(sc->token) : NULL;
+  /* The sign-in the token began, so a cancel between two polls stops the next one too. */
+  auth_call call = {sc, sc->token_gen};
   mc_mutex_unlock(&sc->lock);
   if (!token) return MC_ERR_INVALID_ARG; /* no mc_scrobbler_auth_begin() */
+  mc_http_cancel cancel = {auth_cancelled, &call};
+  if (auth_cancelled(&call)) {
+    free(token);
+    return MC_ERR_NET;
+  }
 
   account a;
   mc_status st = read_now(sc, &a);
@@ -593,6 +631,7 @@ mc_status mc_scrobbler_auth_finish(mc_scrobbler *sc) {
   if (st == MC_OK) {
     mc_lastfm_service svc = service_of(&a);
     svc.session_key = NULL;
+    svc.cancel = &cancel;
     int api_error;
     st = mc_lastfm_get_session(&svc, token, &session_key, &username, &api_error);
     account_clear(&a);
@@ -618,6 +657,13 @@ mc_status mc_scrobbler_auth_finish(mc_scrobbler *sc) {
   free(session_key);
   free(username);
   return st;
+}
+
+void mc_scrobbler_auth_cancel(mc_scrobbler *sc) {
+  if (!sc) return;
+  mc_mutex_lock(&sc->lock);
+  sc->auth_gen++;
+  mc_mutex_unlock(&sc->lock);
 }
 
 mc_status mc_scrobbler_sign_out(mc_scrobbler *sc) {

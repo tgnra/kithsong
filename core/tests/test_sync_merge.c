@@ -428,9 +428,10 @@ static void fill_library(dev *d, const char *album, int n) {
 }
 
 static mc_status offline_post(const char *url, const char *form, mc_buffer *body,
-                              long *http_status) {
+                              long *http_status, const mc_http_cancel *cancel) {
   (void)url;
   (void)form;
+  (void)cancel;
   (void)body;
   *http_status = 0;
   return MC_ERR_NET;

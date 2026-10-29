@@ -436,7 +436,8 @@ static void start_auth(settings_view *s) {
 }
 
 /* Cancels a sign-in in progress and waits for its thread, which may be in a call to the
- * service (bounded by its timeout). Also called just before the scrobbler is freed. */
+ * service (cut short by mc_scrobbler_auth_cancel()). Also called just before the scrobbler
+ * is freed. */
 static void stop_auth(void) {
   if (!g_auth.thread) return;
   g_mutex_lock(&g_auth.lock);
@@ -444,6 +445,7 @@ static void stop_auth(void) {
   g_auth.generation++;
   g_cond_broadcast(&g_auth.wake);
   g_mutex_unlock(&g_auth.lock);
+  mc_scrobbler_auth_cancel(playback_scrobbler());
   g_thread_join(g_auth.thread);
   g_auth.thread = NULL;
   if (g_auth.shown) update_scrobble(g_auth.shown);

@@ -163,7 +163,7 @@ static mc_status call(const mc_lastfm_service *svc, const char *method,
 
   mc_buffer body = {0};
   long http = 0;
-  mc_status st = mc_lastfm_post(svc->api_url, form.s, &body, &http);
+  mc_status st = mc_lastfm_post(svc->api_url, form.s, &body, &http, svc->cancel);
   free(form.s);
   if (st != MC_OK) return st;
 

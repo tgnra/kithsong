@@ -121,7 +121,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 ### Scrobbling
 - All - choose another service (Libre.fm or a custom URL) in the UI; mc_scrobbler_set_service() exists but no screen uses it
 - All - revoking access on Last.fm shows "turned down this sign-in" but doesn't sign out by itself
-- Core - cancel a call in progress on mc_scrobbler_free(), so quitting (or cancelling a sign-in, or closing the library during one) doesn't wait for curl's timeout (up to 30 seconds)
 
 ## Import and tagging
 

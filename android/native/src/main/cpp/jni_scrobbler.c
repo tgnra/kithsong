@@ -74,6 +74,12 @@ JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreScrobbler_nativeAuthFinish(JNIEnv
   return mc_scrobbler_auth_finish(scrobbler_of(handle));
 }
 
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreScrobbler_nativeAuthCancel(JNIEnv *env, jclass cls, jlong handle) {
+  (void)env;
+  (void)cls;
+  mc_scrobbler_auth_cancel(scrobbler_of(handle));
+}
+
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreScrobbler_nativeSignOut(JNIEnv *env, jclass cls, jlong handle) {
   (void)cls;
   mc_status st = mc_scrobbler_sign_out(scrobbler_of(handle));
