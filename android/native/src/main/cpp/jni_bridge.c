@@ -443,9 +443,12 @@ static mc_import *import_of(jlong handle) {
   return ((jni_import *)(intptr_t)handle)->imp;
 }
 
+/* staging_dir may be null: then zips are extracted in the system's temporary folder. */
 JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreImport_nativeStart(JNIEnv *env, jclass cls,
                                                                   jlong library, jobjectArray paths,
                                                                   jboolean fetch_art,
+                                                                  jboolean skip_tagging,
+                                                                  jstring staging_dir,
                                                                   jobject listener) {
   (void)cls;
   jni_import *p = calloc(1, sizeof *p);
@@ -470,12 +473,20 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreImport_nativeStart(JNIEnv *env, 
     cpaths[got] = jpaths[got] ? (*env)->GetStringUTFChars(env, jpaths[got], NULL) : NULL;
     if (!cpaths[got]) st = MC_ERR_INVALID_ARG;
   }
-  /* mc_import_start copies the paths. */
-  mc_import_options opts = {.threshold = 0, .fetch_art = fetch_art ? 1 : 0};
+  const char *cstaging = staging_dir ? (*env)->GetStringUTFChars(env, staging_dir, NULL) : NULL;
+  if (staging_dir && !cstaging) st = MC_ERR_NOMEM;
+  /* mc_import_start copies the paths and the staging folder. */
+  mc_import_options opts = {
+      .threshold = 0,
+      .fetch_art = fetch_art ? 1 : 0,
+      .skip_tagging = skip_tagging ? 1 : 0,
+      .staging_dir = cstaging,
+  };
   if (st == MC_OK) {
     st = mc_import_start((mc_library *)(intptr_t)library, cpaths, count, &opts, on_import_event, p,
                          &p->imp);
   }
+  if (cstaging) (*env)->ReleaseStringUTFChars(env, staging_dir, cstaging);
   for (jsize i = 0; i < got; i++) {
     if (cpaths[i]) (*env)->ReleaseStringUTFChars(env, jpaths[i], cpaths[i]);
     if (jpaths[i]) (*env)->DeleteLocalRef(env, jpaths[i]);
@@ -561,18 +572,124 @@ JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreImport_nativeItemError(JNIEnv 
   return error;
 }
 
-/* The calls that resolve an item needing review: 0 accept as is, 1 skip. */
+/* Fills out[i] with s, or "" for NULL. Returns 0 if out of memory. */
+static int put_string(JNIEnv *env, jobjectArray out, jsize i, const char *s) {
+  jstring j = (*env)->NewStringUTF(env, s ? s : "");
+  if (!j) return 0;
+  (*env)->SetObjectArrayElement(env, out, i, j);
+  (*env)->DeleteLocalRef(env, j);
+  return 1;
+}
+
+static int put_int(JNIEnv *env, jobjectArray out, jsize i, long long v) {
+  char num[32];
+  snprintf(num, sizeof num, "%lld", v);
+  return put_string(env, out, i, num);
+}
+
+/* A snapshot of the item as strings, in CoreImport.ItemInfo's order: kind, state, file count,
+ * artist, album, folder, error, searched wider, outcome, chosen, match count. */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemInfo(JNIEnv *env, jclass cls,
+                                                                           jlong handle, jint item) {
+  (void)cls;
+  mc_import_item *it = NULL;
+  mc_status st = mc_import_item_get(import_of(handle), item, &it);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jclass string_class = (*env)->FindClass(env, "java/lang/String");
+  jobjectArray out = string_class ? (*env)->NewObjectArray(env, 11, string_class, NULL) : NULL;
+  if (out && !(put_int(env, out, 0, it->kind) && put_int(env, out, 1, it->state) &&
+               put_int(env, out, 2, it->file_count) && put_string(env, out, 3, it->artist) &&
+               put_string(env, out, 4, it->album) && put_string(env, out, 5, it->folder) &&
+               put_string(env, out, 6, it->error) && put_int(env, out, 7, it->searched_wider) &&
+               put_int(env, out, 8, it->outcome) && put_int(env, out, 9, it->chosen) &&
+               put_int(env, out, 10, it->match_count)))
+    out = NULL;
+  mc_import_item_free(it);
+  return out;
+}
+
+#define MATCH_FIELDS 10
+
+/* The item's candidates, best first, flattened MATCH_FIELDS strings each, in
+ * CoreImport.Match's order: album, album artist, release, year, confidence in thousandths,
+ * track count, format, country, label, whether it's a single. */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemMatches(JNIEnv *env, jclass cls,
+                                                                              jlong handle, jint item) {
+  (void)cls;
+  mc_import_item *it = NULL;
+  mc_status st = mc_import_item_get(import_of(handle), item, &it);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jclass string_class = (*env)->FindClass(env, "java/lang/String");
+  jobjectArray out =
+      string_class ? (*env)->NewObjectArray(env, it->match_count * MATCH_FIELDS, string_class, NULL) : NULL;
+  for (int i = 0; out && i < it->match_count; i++) {
+    const mc_import_match *m = &it->matches[i];
+    jsize at = i * MATCH_FIELDS;
+    if (!(put_string(env, out, at, m->album) && put_string(env, out, at + 1, m->album_artist) &&
+          put_string(env, out, at + 2, m->release) && put_int(env, out, at + 3, m->year) &&
+          put_int(env, out, at + 4, (long long)(m->confidence * 1000 + 0.5)) &&
+          put_int(env, out, at + 5, m->track_count) && put_string(env, out, at + 6, m->format) &&
+          put_string(env, out, at + 7, m->country) && put_string(env, out, at + 8, m->label) &&
+          put_int(env, out, at + 9, m->is_single)))
+      out = NULL;
+  }
+  mc_import_item_free(it);
+  return out;
+}
+
+/* The calls that resolve an item needing review: 0 accept as is, 1 skip, 2 search more widely. */
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeResolve(JNIEnv *env, jclass cls,
                                                                    jlong handle, jint item,
                                                                    jint how) {
   (void)cls;
-  static mc_status (*const calls[])(mc_import *, int) = {mc_import_accept_as_is, mc_import_skip};
+  static mc_status (*const calls[])(mc_import *, int) = {mc_import_accept_as_is, mc_import_skip,
+                                                         mc_import_search_wider};
   if (how < 0 || how >= (jint)(sizeof calls / sizeof *calls)) {
     throw_status(env, MC_ERR_INVALID_ARG);
     return;
   }
   mc_status st = calls[how](import_of(handle), item);
   if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeAccept(JNIEnv *env, jclass cls,
+                                                                  jlong handle, jint item,
+                                                                  jint match) {
+  (void)cls;
+  mc_status st = mc_import_accept(import_of(handle), item, match);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeSearch(JNIEnv *env, jclass cls,
+                                                                  jlong handle, jint item,
+                                                                  jstring artist, jstring title) {
+  (void)cls;
+  const char *a = artist ? (*env)->GetStringUTFChars(env, artist, NULL) : NULL;
+  const char *t = title ? (*env)->GetStringUTFChars(env, title, NULL) : NULL;
+  mc_status st = (artist && !a) || (title && !t) ? MC_ERR_NOMEM : mc_import_search(import_of(handle), item, a, t);
+  if (a) (*env)->ReleaseStringUTFChars(env, artist, a);
+  if (t) (*env)->ReleaseStringUTFChars(env, title, t);
+  if (st != MC_OK && !(*env)->ExceptionCheck(env)) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeSkipTagging(JNIEnv *env, jclass cls,
+                                                                       jlong handle) {
+  (void)cls;
+  mc_status st = mc_import_skip_tagging(import_of(handle));
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreImport_nativeOffline(JNIEnv *env, jclass cls,
+                                                                       jlong handle) {
+  (void)env;
+  (void)cls;
+  return mc_import_offline(import_of(handle)) ? JNI_TRUE : JNI_FALSE;
 }
 
 /* --- CorePlayer -------------------------------------------------------------------- */
