@@ -1009,7 +1009,7 @@ static void paint_header(canvas *c) {
   if (title)
     DrawTextW(c->dc, title, -1, &name, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
   SelectObject(c->dc, g.font ? (HGDIOBJ)g.font : GetStockObject(DEFAULT_GUI_FONT));
-  if (g.group_rule) { /* a smart group's rule, under its name */
+  if (g.tiles_view == AGV_GROUP && g.group_rule) { /* a smart group's rule, under its name */
     RECT rule = {name.left, back.bottom + scale(RULE_GAP), g.client_w - g.pad, back.bottom + scale(RULE_GAP) + g.text_h};
     SetTextColor(c->dc, theme.text2);
     DrawTextW(c->dc, g.group_rule, -1, &rule, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
