@@ -106,6 +106,10 @@ mc_status mc_copy_file(const char *src, const char *dst, int overwrite);
  * is set. */
 mc_status mc_rename(const char *src, const char *dst, int replace);
 mc_status mc_remove(const char *path);
+/* Clears a file's or directory's read-only attribute on Windows, where it stops mc_remove()
+ * and mc_rmdir(), and a copy keeps it. Elsewhere does nothing: removing needs only the
+ * folder's permission. */
+mc_status mc_clear_read_only(const char *path);
 /* Moves a file to the Recycle Bin (Windows) or the user's freedesktop.org trash
  * ($XDG_DATA_HOME/Trash, POSIX), so the user can still get it back. Fails rather than
  * deleting when there is no trash it can use (e.g. a library on another file system than

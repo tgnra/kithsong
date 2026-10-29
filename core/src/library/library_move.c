@@ -374,7 +374,9 @@ static mc_status rename_all(mover *m) {
   return st;
 }
 
-/* Removes entries [0, end) of the tree from dir, last first. Returns how many files stayed. */
+/* Removes entries [0, end) of the tree from dir, last first. Returns how many files stayed.
+ * A read-only file would stay on Windows, and its copy is read-only too, so that goes first:
+ * the copy, or the old file once the copy is complete, isn't wanted any more. */
 static int remove_entries(mover *m, const char *dir, int end) {
   int stayed = 0;
   for (int i = end - 1; i >= 0; i--) {
@@ -384,6 +386,7 @@ static int remove_entries(mover *m, const char *dir, int end) {
       stayed += !e->is_dir;
       continue;
     }
+    mc_clear_read_only(path);
     if (e->is_dir) mc_rmdir(path); /* fails if something stayed in it */
     else if (mc_remove(path) != MC_OK && mc_file_exists(path)) stayed++;
     free(path);

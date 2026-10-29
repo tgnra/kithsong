@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "library/library_internal.h"
 #include "library/move_internal.h"
@@ -63,6 +64,7 @@ static void rm_entry(void *user, const char *name, int is_dir) {
   rm_ctx *c = user;
   char p[1200];
   snprintf(p, sizeof p, "%s/%s", c->dir, name);
+  mc_clear_read_only(p);
   if (is_dir) remove_tree(p);
   else mc_remove(p);
 }
@@ -83,12 +85,18 @@ static const char *const k_files[][2] = {
 enum { NFILES = sizeof k_files / sizeof k_files[0] };
 
 /* A library in base/src: a database with one track, whose file row holds an absolute path
- * (as a database written by something else might), and some files. */
+ * (as a database written by something else might), and some files, all read-only (which on
+ * Windows the copies keep, and which stops a plain delete there). */
 static void make_library(void) {
   char src[1200], abs[1300];
   path(src, sizeof src, "src");
   remove_tree(src);
-  for (int i = 0; i < NFILES; i++) write_file(k_files[i][0], k_files[i][1]);
+  for (int i = 0; i < NFILES; i++) {
+    write_file(k_files[i][0], k_files[i][1]);
+    char p[1200];
+    path(p, sizeof p, k_files[i][0]);
+    CHECK(chmod(p, S_IRUSR) == 0);
+  }
   mc_library *lib = NULL;
   CHECK(mc_library_open(src, &lib) == MC_OK);
   if (!lib) return;

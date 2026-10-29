@@ -203,7 +203,6 @@ Windows and Linux (pair_dialog.c and sync_bridge.c on each, the pending note in 
 ## Move library
 
 - Core - can't be cancelled part-way (the progress window has no Cancel); progress is per file, so one huge file shows no movement while it copies
-- Windows - read-only files copy with their attribute, so undoing a failed copy, or removing the old files, can't delete them (they're counted as left behind); clear the attribute first
 - Windows - a desktop.ini at the top of the library stays in the old folder (it's the folder's own); Linux's .directory isn't treated the same way
 - Windows - no OneDrive warning for the new folder, as Open another library gives
 

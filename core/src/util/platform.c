@@ -291,6 +291,16 @@ mc_status mc_remove(const char *path) {
   return ok ? MC_OK : MC_ERR_IO;
 }
 
+mc_status mc_clear_read_only(const char *path) {
+  wchar_t *w = widen(path);
+  if (!w) return MC_ERR_NOMEM;
+  DWORD attr = GetFileAttributesW(w);
+  BOOL ok = attr != INVALID_FILE_ATTRIBUTES &&
+            (!(attr & FILE_ATTRIBUTE_READONLY) || SetFileAttributesW(w, attr & ~FILE_ATTRIBUTE_READONLY));
+  free(w);
+  return ok ? MC_OK : MC_ERR_IO;
+}
+
 mc_status mc_trash(const char *path) {
   wchar_t *w = widen(path);
   if (!w) return MC_ERR_NOMEM;
@@ -684,6 +694,11 @@ mc_status mc_rename(const char *src, const char *dst, int replace) {
 
 mc_status mc_remove(const char *path) {
   return unlink(path) == 0 ? MC_OK : MC_ERR_IO;
+}
+
+mc_status mc_clear_read_only(const char *path) {
+  (void)path;
+  return MC_OK;
 }
 
 /* "/a b" -> "/a%20b", as .trashinfo's Path wants. */
