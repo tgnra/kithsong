@@ -304,5 +304,4 @@ Things built but not checked properly.
 
 - Windows - installer, MSIX/Store package, code signing
 - Linux - Flathub (every dependency in third_party/CMakeLists.txt as a Flatpak source), architectures other than x86_64
-- Android - the release workflow keeps only the APKs and AABs, so the R8 mapping files the scripts put in dist/ don't reach the GitHub release (the AABs carry them for Play)
 - All - translations (strings/en.json is the only language)

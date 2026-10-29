@@ -146,6 +146,7 @@ jobs:
           path: |
             dist/*.apk
             dist/*.aab
+            dist/*-mapping.txt
           if-no-files-found: error
 
   release:

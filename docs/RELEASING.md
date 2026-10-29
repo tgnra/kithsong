@@ -7,11 +7,15 @@ the release workflow all read it.
 |----------|---------|--------|
 | Windows | `kithsong-<ver>-windows-x64.zip`, a portable folder with `kithsong.exe` and `LICENSES\` | `scripts/release-windows.ps1` (Windows) |
 | Linux | `kithsong-<ver>-linux-x86_64.flatpak`, a single-file Flatpak bundle | `scripts/release-linux.sh` (Linux) |
-| Android | `kithsong-<ver>-android.apk` / `.aab` | `scripts/release-android.sh` or `.ps1` |
-| Wear OS | `kithsong-<ver>-wearos.apk` / `.aab` | the same script |
+| Android | `kithsong-<ver>-android.apk` / `.aab`, and `-android-mapping.txt` | `scripts/release-android.sh` or `.ps1` |
+| Wear OS | `kithsong-<ver>-wearos.apk` / `.aab`, and `-wearos-mapping.txt` | the same script |
 
 Each script writes into `dist/`. The [release workflow](../.github/workflows/release.yml) runs
 the same scripts on GitHub Actions.
+
+The `-mapping.txt` files are R8's maps from the APKs' shrunk names back to the source's, for
+reading a stack trace from a release build (`retrace` in the SDK's cmdline-tools). The AABs
+carry the same map for Google Play.
 
 ## Setting up the workflow
 
@@ -126,7 +130,7 @@ decode, the base64 was probably wrapped: re-encode with `-w0`.
 1. Set `VERSION` to the new version, e.g. `0.2.0`, and commit.
 2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`. Use a tag such as `v0.2.0-rc1`
    for a prerelease. The suffix is ignored when checking the tag against `VERSION`.
-3. The workflow builds all four platforms and creates a **draft** release with the six files
+3. The workflow builds all four platforms and creates a **draft** release with the eight files
    attached. Review it on GitHub and publish it.
 
 To test the builds without a release, run the workflow by hand (Actions → Release → Run
@@ -160,7 +164,5 @@ unique.
 - Windows: no installer, MSIX/Store package or code signing.
 - Linux: not on Flathub. Flathub builds offline, so every fetched dependency in
   `third_party/CMakeLists.txt` would need to be a Flatpak source. x86_64 only.
-- Android: R8 isn't enabled (`isMinifyEnabled = false`), so the APKs carry all of Compose.
-  The third-party license texts aren't in the apps yet.
 - The icons in `packaging/icons/` are generated from `kithsong.svg` by `render.py`. Rerun it
   after changing the SVG.
