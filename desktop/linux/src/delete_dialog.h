@@ -1,6 +1,6 @@
-/* Deleting albums, artists and tracks from the library (musiccore/delete.h): Delete from
- * library... on the album tiles' menu (album_groups.c), the artist page's and the track
- * menus (track_list.c, artist_view.c). Asks first:
+/* Deleting albums and tracks from the library (musiccore/delete.h): Delete from library...
+ * on the album tiles' menu (album_groups.c) and the track menus (track_list.c,
+ * artist_view.c). Asks first:
  *
  *   +---------------------------------------------+
  *   |            Delete "OK Computer"?             |
@@ -30,8 +30,8 @@
  * startup. */
 void delete_dialog_init(void (*before_delete)(const mc_delete_plan *plan));
 
-/* Asks over parent (any widget in the main window) about deleting uid (an album, artist or
- * track, by kind) named name, with deleted.db in config_dir, and calls changed once anything was
+/* Asks over parent (any widget in the main window) about deleting uid (an album or track,
+ * by kind) named name, with deleted.db in config_dir, and calls changed once anything was
  * deleted. A failure is reported in a dialog of its own. */
 void delete_dialog_present(GtkWidget *parent, mc_library *lib, const char *config_dir, mc_delete_kind kind,
                            const char *uid, const char *name, void (*changed)(void *user), void *user);

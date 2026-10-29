@@ -18,6 +18,7 @@ add_executable(kithsong WIN32
   src/cover.c
   src/delete_dialog.c
   src/device_view.c
+  src/drag.c
   src/firewall.c
   src/import_view.c
   src/media_controls.c

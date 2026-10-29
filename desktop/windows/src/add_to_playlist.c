@@ -54,6 +54,7 @@ BOOL add_to_playlist(HWND owner, mc_library *lib, const char *track_uid, const c
     MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_ADD_FAILED), mc_wstr(MC_STR_ADD_TO_PLAYLIST), MB_OK | MB_ICONERROR);
     return created;
   }
+  mc_library_record_opened(lib, MC_RECENT_PLAYLIST, playlist_uid); /* changed: first in the recents */
   return TRUE;
 }
 
@@ -86,5 +87,6 @@ BOOL add_to_album_group(HWND owner, mc_library *lib, const char *album_uid, cons
     MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_ADD_FAILED), mc_wstr(MC_STR_ADD_TO_ALBUM_GROUP), MB_OK | MB_ICONERROR);
     return created;
   }
+  mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, group_uid);
   return TRUE;
 }

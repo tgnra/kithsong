@@ -12,7 +12,10 @@
  *    scrollbar that appears while the mouse moves over the grid or it scrolls.
  *
  * Clicking an album (or moving to it with the arrow keys, Home, End, Page Up or Page Down)
- * selects it (an accent ring around the cover). The grid also draws the
+ * selects it (an accent ring around the cover). An album can be dragged onto an album group
+ * elsewhere (drag.h: its recent in the sidebar), and in a manual group into another place
+ * in it, a line marking where it would go; either puts the group first in the recents. The
+ * playlists' and groups' tiles take tracks and albums dragged onto them likewise. The grid also draws the
  * content area's border and rounded top-left corner, which shows Mica outside it.
  *
  * Screen readers see the tiles as a list, and a group's header buttons (uia.h); those
@@ -37,7 +40,9 @@ void album_grid_set_library(mc_library *lib);
 /* What the grid shows. Playlists and album groups show their pictures (or a placeholder) with
  * the track or album count beneath the name. Clicking a group (or Enter on it) opens it:
  * AGV_GROUP, its albums under a header with Back (also Backspace, Alt+Left and the mouse's
- * back button), its name, and a More button with Rename and Delete.
+ * back button), its name, and a More button with Rename and Delete. Under that, across the
+ * grid, Play, Shuffle Albums and Shuffle Tracks play its albums (AGN_PLAY_GROUP), greyed out
+ * when none of them has a file here.
  *
  * Smart playlists and smart album groups (smartlist.h) follow the others, those with
  * something to play here, with a placeholder and "Smart playlist" or "Smart album group"
@@ -121,6 +126,21 @@ void album_grid_set_playlist_art_dir(const char *dir);
 /* Sent the same way when Choose What to Sync is pressed, for the parent to show this PC's
  * page. */
 #define AGN_SYNC_SETTINGS 5
+/* Sent the same way when one of a group's play buttons is pressed, for the parent to queue
+ * its albums' tracks (album_grid_count(), album_grid_uid_at()) as album_grid_play_how()
+ * says. */
+#define AGN_PLAY_GROUP 6
+
+typedef enum album_grid_play {
+  AG_PLAY_IN_ORDER,       /* Play: the albums in the group's order, each in its own */
+  AG_PLAY_SHUFFLE_ALBUMS, /* the albums in a random order, each in its own */
+  AG_PLAY_SHUFFLE_TRACKS, /* every track, shuffled */
+} album_grid_play;
+album_grid_play album_grid_play_how(void);
+/* In AGV_GROUP, the group's albums in its order (a smart one's as its rule picks them now);
+ * 0 elsewhere. A uid is valid until the grid next reloads. */
+int album_grid_count(void);
+const char *album_grid_uid_at(int i);
 
 /* The selected album (or playlist): copies its uid and returns its title, or returns NULL
  * if there's none. */

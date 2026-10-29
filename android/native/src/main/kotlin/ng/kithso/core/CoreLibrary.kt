@@ -3,7 +3,10 @@ package ng.kithso.core
 /** A musiccore failure; [status] is the negative mc_status code. */
 class MusicCoreException(val status: Int) : RuntimeException("musiccore status $status")
 
-/** mc_album_info. [folder] is null when none of the album's files are on this device. */
+/**
+ * mc_album_info. [folder] is null when none of the album's files are on this device;
+ * [artistUid] is [artist]'s uid, null when it has none.
+ */
 data class AlbumInfo(
     val uid: String,
     val title: String,
@@ -12,11 +15,13 @@ data class AlbumInfo(
     val isSingles: Boolean,
     val hasArt: Boolean,
     val folder: String?,
+    val artistUid: String? = null,
 )
 
 /**
  * mc_track_info. [path] is null when the track has no file on this device. [artist] is the
- * track's, else its album's; [coverDir] is the folder holding its album's cover, if any.
+ * track's, else its album's, and [artistUid] its uid; [coverDir] is the folder holding its
+ * album's cover, if any.
  */
 data class TrackInfo(
     val uid: String,
@@ -28,6 +33,7 @@ data class TrackInfo(
     val artist: String? = null,
     val album: String? = null,
     val coverDir: String? = null,
+    val artistUid: String? = null,
 )
 
 /** mc_playlist_info. [playableCount] is the entries whose track has a file on this device. */
@@ -44,6 +50,12 @@ data class SmartInfo(val uid: String, val name: String, val isAlbums: Boolean, v
  * if only credited on tracks), or an album group's albums.
  */
 data class NamedInfo(val uid: String, val name: String, val albumCount: Int)
+
+/**
+ * mc_artist_info from mc_library_list_artists_here(): [albumCount] is the artist's albums
+ * with a file on this device, [trackCount] the tracks credited to them with one.
+ */
+data class ArtistInfo(val uid: String, val name: String, val albumCount: Int, val trackCount: Int)
 
 /** An open library (mc_library), in folder [dir]. Not thread-safe; close it when done. */
 class CoreLibrary(dir: String) : AutoCloseable {
@@ -84,6 +96,9 @@ class CoreLibrary(dir: String) : AutoCloseable {
 
     /** Every artist, album artists and those credited only on tracks alike, by sort name. */
     fun artists(): List<NamedInfo> = nativeListArtists(handle).asList()
+
+    /** The artists with something to play on this device, in the same order, told apart by uid. */
+    fun artistsHere(): List<ArtistInfo> = nativeListArtistsHere(handle).asList()
 
     /** Every manual album group, by name. */
     fun albumGroups(): List<NamedInfo> = nativeListAlbumGroups(handle).asList()
@@ -135,6 +150,7 @@ class CoreLibrary(dir: String) : AutoCloseable {
         @JvmStatic external fun nativePlaylistArt(handle: Long, uid: String, cacheDir: String): String?
         @JvmStatic external fun nativePlaylistArtPrune(handle: Long, cacheDir: String)
         @JvmStatic external fun nativeListArtists(handle: Long): Array<NamedInfo>
+        @JvmStatic external fun nativeListArtistsHere(handle: Long): Array<ArtistInfo>
         @JvmStatic external fun nativeListAlbumGroups(handle: Long): Array<NamedInfo>
         @JvmStatic external fun nativeListSmart(handle: Long, flags: Int): Array<SmartInfo>
         @JvmStatic external fun nativePreviewSmartAlbums(handle: Long, rule: String): Array<AlbumInfo>

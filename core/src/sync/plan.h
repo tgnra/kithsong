@@ -100,7 +100,7 @@ typedef enum mc_file_kind {
 mc_file_kind mc_plan_file_kind(const char *source_file_uid, const char *source_peer_uid);
 
 /* Whether a file of this format ("flac", "mp3", ...) is lossy. bitrate_kbps (0 if unknown)
- * tells AAC from ALAC in an .m4a. */
+ * is unused: every format imported says by its extension alone. */
 int mc_plan_is_lossy(const char *format, int bitrate_kbps);
 
 /* "A lossy original that is already smaller than the Opus estimate is sent as-is": whether

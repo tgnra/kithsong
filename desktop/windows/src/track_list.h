@@ -17,7 +17,9 @@
  * double-clicking or Enter plays it. Right-click (or the menu key) opens a menu for the
  * track: Add to Playlist (add_to_playlist.c) and Delete from Library, and in a playlist also
  * Move Up, Move Down and Remove from Playlist. A playlist's tracks can be dragged into another order too, or moved
- * with Alt+Up and Alt+Down; Delete removes one. The [...] button (or F2, or the menu key
+ * with Alt+Up and Alt+Down; Delete removes one. Any track can be dragged onto a playlist
+ * outside the list (drag.h: a recent in the sidebar, a tile on the Playlists page), which
+ * asks for it to be added (TLN_ADD_TO_PLAYLIST). The [...] button (or F2, or the menu key
  * with no track selected) offers Rename... and Delete Playlist.... The close button or
  * Escape asks the parent to close the pane (TLN_CLOSE).
  *

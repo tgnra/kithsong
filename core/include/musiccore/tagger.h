@@ -1,4 +1,4 @@
-/* Tag reading/writing and the MusicBrainz/AcoustID autotagger. */
+/* Tag reading/writing and the MusicBrainz autotagger. */
 #ifndef MUSICCORE_TAGGER_H
 #define MUSICCORE_TAGGER_H
 
@@ -35,7 +35,7 @@ typedef struct mc_tags {
   int bitrate_kbps;
   int sample_rate;
   int channels;
-  int bits_per_sample; /* lossless formats (FLAC, WAV, AIFF, ALAC, WavPack, APE, DSF); else 0 */
+  int bits_per_sample; /* lossless formats (FLAC, WAV, AIFF); else 0 */
 } mc_tags;
 
 /* Reads tags and audio properties. On success *out must be released with mc_tags_clear(). */
@@ -102,11 +102,10 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  *     Incoming tracks are paired with the album's tracks by release track id, recording id,
  *     disc and track number with the same title, then title alone.
  *   - Quality of one file, best first:
- *       1. lossless beats lossy (lossy: MP3, AAC, Vorbis, Opus, WMA, Musepack, and .m4a/.mp4
- *          under 500 kbps; everything else, e.g. FLAC, WAV, AIFF, ALAC, WavPack, is lossless);
+ *       1. lossless beats lossy (lossy: MP3 and Opus; FLAC, WAV and AIFF are lossless);
  *       2. between lossless files: more bits per sample, then a higher sample rate;
  *       3. between lossy files: a higher effective bitrate, i.e. the bitrate weighted by
- *          codec (MP3, WMA, Musepack 1.0; AAC and Vorbis 1.3; Opus 1.6), and only when it is
+ *          codec (MP3 1.0, Opus 1.6), and only when it is
  *          more than 10% higher, so VBR noise doesn't count.
  *     Anything else is equal quality.
  *   - The incoming release replaces the library's when, taken as a whole, it is better: it

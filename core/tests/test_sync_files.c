@@ -613,8 +613,7 @@ static void check_plan(const char *root) {
     CHECK(x && x->format.format == MC_FORMAT_ORIGINAL && x->est_bytes == 1000);
     CHECK(mc_plan_keep_lossy("mp3", 0, 1000, 100000, 128));
     CHECK(!mc_plan_keep_lossy("flac", 0, 1000, 100000, 128));
-    CHECK(!mc_plan_keep_lossy("m4a", 0, 1000, 100000, 128)); /* might be ALAC */
-    CHECK(mc_plan_keep_lossy("m4a", 256, 1000, 100000, 128));
+    CHECK(mc_plan_keep_lossy("opus", 0, 1000, 100000, 128));
   }
   mc_plan_free(p);
 

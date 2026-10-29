@@ -47,7 +47,7 @@ void mc_library_rollback(mc_library *lib);
   "SELECT t.uid, t.title, t.track_no, t.disc_no, t.duration_ms," \
   " (SELECT f.path FROM files f WHERE f.track_uid = t.uid" \
   "  ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)," \
-  " coalesce(ar.name, aar.name), al.title, al.art_hash IS NOT NULL"
+  " coalesce(ar.name, aar.name), al.title, al.art_hash IS NOT NULL, coalesce(ar.uid, aar.uid)"
 #define TRACK_JOINS \
   " LEFT JOIN artists ar ON ar.uid = t.artist_uid" \
   " LEFT JOIN albums al ON al.uid = t.album_uid" \
@@ -59,7 +59,7 @@ void mc_library_rollback(mc_library *lib);
 #define ALBUM_COLS \
   "SELECT a.uid, a.title, ar.name, a.year, a.kind = 'singles', a.art_hash IS NOT NULL," \
   " (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid" \
-  "  WHERE t.album_uid = a.uid LIMIT 1)"
+  "  WHERE t.album_uid = a.uid LIMIT 1), ar.uid"
 #define ALBUM_JOINS " LEFT JOIN artists ar ON ar.uid = a.artist_uid"
 #define ALBUM_ORDER \
   "coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.kind = 'singles', a.year, a.title COLLATE NOCASE"

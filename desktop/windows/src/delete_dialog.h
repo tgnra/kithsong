@@ -1,6 +1,5 @@
-/* Deleting albums, artists and tracks from the library (musiccore/delete.h), from their
- * right-click menus: the album grid's tiles, the artist list's rows, the track list's
- * tracks. Asks first, in the playlist dialogs' Delete dialog:
+/* Deleting albums and tracks from the library (musiccore/delete.h), from their right-click
+ * menus: the album grid's tiles, the track list's tracks. Asks first, in the playlist dialogs' Delete dialog:
  *
  *   +- Delete from Library ----------------------+
  *   | Delete "OK Computer"?                       |
@@ -27,7 +26,7 @@
  * open file couldn't be moved. Call once at startup. */
 void delete_dialog_init(const char *config_dir, void (*before_delete)(const mc_delete_plan *plan));
 
-/* Asks, then deletes uid (an album, artist or track, by kind) named name. owner is the main
+/* Asks, then deletes uid (an album or track, by kind) named name. owner is the main
  * window. Returns TRUE if the library changed. */
 BOOL delete_dialog(HWND owner, mc_library *lib, mc_delete_kind kind, const char *uid, const wchar_t *name);
 

@@ -95,6 +95,10 @@ fun App(
     // The device whose page is open over sync: a member's uid, or THIS_DEVICE.
     var deviceOpen by rememberSaveable { mutableStateOf<String?>(null) }
     var playerOpen by rememberSaveable { mutableStateOf(false) }
+    // Each opening gets its own player layer. A tap that lands in the frame its last one is
+    // dismissed in would otherwise keep that layer, slid out and done with, and the player
+    // would never open again.
+    var playerOpenings by rememberSaveable { mutableIntStateOf(0) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     val track = playback.track
     // The player goes with the track, when a delete empties the queue, say; it doesn't come
@@ -303,7 +307,10 @@ fun App(
                 MiniPlayer(
                     playback,
                     track,
-                    onOpen = { playerOpen = true },
+                    onOpen = {
+                        playerOpen = true
+                        playerOpenings++
+                    },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .windowInsetsPadding(
@@ -315,7 +322,7 @@ fun App(
                         .onSizeChanged { miniPlayerHeight = it.height }
                         .coveredIf(playerOpen),
                 )
-                if (playerOpen) {
+                if (playerOpen) key(playerOpenings) {
                     DismissibleScreen(DismissDirection.Down, onDismissed = { playerOpen = false }) { dismiss ->
                         FullPlayer(
                             playback,

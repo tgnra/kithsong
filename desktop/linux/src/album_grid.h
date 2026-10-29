@@ -8,12 +8,16 @@
  * shows. Each grid has a selection of its own.
  *
  * Album groups show the same way, with their pictures (mc_album_group_art()) and the album
- * count beneath the name; a group's own page shows its albums in a grid of their own. */
+ * count beneath the name; a group's own page shows its albums in a grid of their own.
+ *
+ * An album's tile can be dragged (drag.h), and what a tile does with what's dropped on it
+ * is up to the grid's owner (album_grid_set_drop()). */
 #ifndef KITHSONG_ALBUM_GRID_H
 #define KITHSONG_ALBUM_GRID_H
 
 #include <gtk/gtk.h>
 
+#include "drag.h"
 #include "musiccore/musiccore.h"
 
 #define ALBUM_TYPE_ITEM (album_item_get_type())
@@ -35,6 +39,7 @@ struct _AlbumItem {
   char *subtitle;   /* shown beneath the title in place of the artist, or NULL */
   gboolean is_smart; /* a smart playlist or group (smartlist.h), whose rule picks what it holds */
   gboolean random;   /* a smart one in random order, which can be reshuffled */
+  gboolean here;     /* an album with a file on this device */
 };
 
 /* An album's item, as the album grid makes them. */
@@ -73,6 +78,14 @@ void album_grid_set_menu(GtkWidget *grid,
 /* Pops up menu in the grid at x, y (as menu above gives them). Its actions resolve from the
  * grid's ancestors, e.g. the window. */
 void album_grid_popup(GtkWidget *grid, GMenuModel *menu, double x, double y);
+/* Drops on the tiles (drag.h): over says what dropping item on target would do, as the
+ * pointer moves over it: GDK_ACTION_COPY to add it to target (a ring marks the tile),
+ * GDK_ACTION_MOVE to move it before or after target (a line marks which), or 0 to refuse it.
+ * dropped does it; after is whether it landed on target's right half. A grid with none set
+ * refuses everything. */
+void album_grid_set_drop(GtkWidget *grid, GdkDragAction (*over)(void *user, AlbumItem *target, const drag_item *item),
+                         gboolean (*dropped)(void *user, AlbumItem *target, const drag_item *item, gboolean after),
+                         void *user);
 /* A tile was activated: clicked, if single_click, else double-clicked; or Enter on it. For
  * grids whose tiles open somewhere else rather than being selected (album groups). */
 void album_grid_set_activate(GtkWidget *grid, gboolean single_click, void (*activate)(void *user, AlbumItem *item),

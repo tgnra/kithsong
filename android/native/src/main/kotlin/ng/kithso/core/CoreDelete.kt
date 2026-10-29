@@ -1,16 +1,14 @@
 package ng.kithso.core
 
-// Deleting albums, artists and tracks from an open CoreLibrary (musiccore/delete.h), bound in
+// Deleting albums and tracks from an open CoreLibrary (musiccore/delete.h), bound in
 // jni_delete.c. Android has no trash, so a delete removes the files for good
 // (mc_delete_run_permanently) and can't be restored; like any change it's logged, so sync
 // deletes the tracks on every device. Each throws MusicCoreException.
 
-/** What a delete takes: a track, an album's tracks, or an artist's (mc_delete_kind). */
+/** What a delete takes: a track, or an album's tracks (mc_delete_kind). */
 enum class DeleteKind(internal val code: Int) {
     Track(0),
     Album(1),
-    /** Every track credited to the artist, and every track of their albums. */
-    Artist(2),
 }
 
 /** What a delete would take: [tracks] from the library, [files] of them (and covers) from this phone. */

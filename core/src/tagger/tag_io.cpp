@@ -14,15 +14,11 @@
 #include <windows.h>
 #endif
 
-#include <ape/apeproperties.h>
 #include <audioproperties.h>
-#include <dsf/dsfproperties.h>
 #include <fileref.h>
 #include <flac/flacproperties.h>
-#include <mp4/mp4properties.h>
 #include <riff/aiff/aiffproperties.h>
 #include <riff/wav/wavproperties.h>
-#include <wavpack/wavpackproperties.h>
 #include <tpropertymap.h>
 #include <tvariant.h>
 
@@ -33,11 +29,6 @@ int bits_per_sample(const TagLib::AudioProperties *ap) {
   if (auto *p = dynamic_cast<const TagLib::FLAC::Properties *>(ap)) return p->bitsPerSample();
   if (auto *p = dynamic_cast<const TagLib::RIFF::WAV::Properties *>(ap)) return p->bitsPerSample();
   if (auto *p = dynamic_cast<const TagLib::RIFF::AIFF::Properties *>(ap)) return p->bitsPerSample();
-  if (auto *p = dynamic_cast<const TagLib::WavPack::Properties *>(ap)) return p->bitsPerSample();
-  if (auto *p = dynamic_cast<const TagLib::APE::Properties *>(ap)) return p->bitsPerSample();
-  if (auto *p = dynamic_cast<const TagLib::DSF::Properties *>(ap)) return p->bitsPerSample();
-  if (auto *p = dynamic_cast<const TagLib::MP4::Properties *>(ap))
-    return p->codec() == TagLib::MP4::Properties::ALAC ? p->bitsPerSample() : 0;
   return 0;
 }
 

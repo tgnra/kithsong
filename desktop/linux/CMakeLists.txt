@@ -15,6 +15,7 @@ add_executable(kithsong
   src/move_library.c
   src/add_device.c
   src/devices.c
+  src/drag.c
   src/recents.c
   src/search_view.c
   src/device_view.c

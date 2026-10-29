@@ -2,10 +2,13 @@ package ng.kithso.android.data
 
 import androidx.compose.runtime.Immutable
 
-/** An album, artist or track to delete from the library, with the [name] to ask about. */
+/**
+ * An album or track to delete from the library, with the [name] to ask about. An artist can't
+ * be deleted as such, only their albums and tracks.
+ */
 @Immutable
 data class Deletion(val kind: Kind, val uid: String, val name: String) {
-    enum class Kind { Track, Album, Artist }
+    enum class Kind { Track, Album }
 }
 
 /**
@@ -27,7 +30,7 @@ sealed interface DeleteOutcome {
 }
 
 /**
- * Deleting albums, artists and tracks from the library, as the desktops do, for a
+ * Deleting albums and tracks from the library, as the desktops do, for a
  * [LibrarySource] that can ([CoreLibrarySource]; the made-up library can't, and the UI then
  * offers no delete). The desktops move the files to the Recycle Bin or Trash, from which they
  * can be restored; Android has none, so here the files are removed for good, which the UI says

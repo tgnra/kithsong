@@ -7,15 +7,16 @@
  * Under the pages: RECENTS, what was last played on any device (sidebar_set_recents), each
  * a button that opens it (SBN_OPEN_RECENT), with a right-click menu to remove it or clear
  * them all (SBN_REMOVE_RECENT, SBN_CLEAR_RECENTS); the section is left out while there are
- * none.
+ * none. A manual playlist's recent takes tracks dragged onto it, and a manual group's albums
+ * (drag.h).
  * Under DEVICES: this PC once it's in a group, the paired devices (each a PAGE_DEVICE row;
  * offline ones too, marked with a small glyph), and an "Unpaired devices (n)" accordion of
- * nearby devices, which ask to pair when clicked (SBN_PAIR_DEVICE). A two-line footer
- * (version, address) sits below Settings, with a tooltip of its own.
+ * nearby devices, which ask to pair when clicked (SBN_PAIR_DEVICE). Below Settings, an
+ * About button (SBN_ABOUT), which works while the sidebar is locked too.
  *
  * Everything above Import scrolls when it's taller than the space left for it, with the
  * same overlay scrollbar as the album grid (scroller.c), which isn't drawn while everything
- * fits. Import, Settings and the footer stay put below it. The arrow keys, Home and End
+ * fits. Import, Settings and About stay put below it. The arrow keys, Home and End
  * move the focus through the pages and buttons (selecting a page as they land on it, and
  * scrolling it into view); Enter or Space presses a button, and Enter on the selected page
  * asks to move the focus into it (SBN_ENTER_PAGE). Screen readers see the rows as a list
@@ -58,6 +59,8 @@ typedef enum {
  * Recents (sidebar_clicked_recent() says which) and Clear Recents. */
 #define SBN_REMOVE_RECENT 0x106
 #define SBN_CLEAR_RECENTS 0x107
+/* Sent the same way when About is clicked. */
+#define SBN_ABOUT 0x108
 
 /* sidebar_device.flags */
 enum {
@@ -81,6 +84,7 @@ typedef struct sidebar_device {
 typedef struct sidebar_recent {
   char uid[MC_UID_STRLEN];
   mc_recent_kind kind; /* picks the icon */
+  BOOL smart;          /* a smart playlist or group: a track or album dragged onto it isn't taken */
   const wchar_t *name;
   const wchar_t *detail; /* the tooltip's second line, e.g. the album's artist; NULL for none */
 } sidebar_recent;
@@ -109,10 +113,6 @@ const char *sidebar_clicked_recent(mc_recent_kind *kind);
  * SB_DEV_SELF), nearby the devices discovery sees outside it. Keeps the selection by page
  * and uid; if the selected device is gone, selects Albums. Doesn't notify the parent. */
 void sidebar_set_devices(const sidebar_device *paired, int npaired, const sidebar_device *nearby, int nnearby);
-/* The two small lines at the bottom (NULL for none). */
-void sidebar_set_footer(const wchar_t *line1, const wchar_t *line2);
-/* The footer's tooltip, which may have several lines (NULL for none). */
-void sidebar_set_footer_tip(const wchar_t *tip);
 /* The uid of the device whose page is selected, or NULL if it isn't PAGE_DEVICE. Valid until
  * the devices change. */
 const char *sidebar_selected_device(void);

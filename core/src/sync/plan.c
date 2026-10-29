@@ -54,12 +54,11 @@ static int same_ci(const char *a, const char *b) {
 }
 
 int mc_plan_is_lossy(const char *format, int bitrate_kbps) {
-  static const char *const lossy[] = {"mp3", "aac", "ogg", "oga", "opus", "wma", "mpc", NULL};
+  static const char *const lossy[] = {"mp3", "opus", NULL};
+  (void)bitrate_kbps;
   if (!format) return 0;
   for (const char *const *f = lossy; *f; f++)
     if (same_ci(format, *f)) return 1;
-  /* .m4a and .mp4 hold AAC or ALAC; only a known, low bitrate says which. */
-  if (same_ci(format, "m4a") || same_ci(format, "mp4")) return bitrate_kbps > 0 && bitrate_kbps < 500;
   return 0;
 }
 

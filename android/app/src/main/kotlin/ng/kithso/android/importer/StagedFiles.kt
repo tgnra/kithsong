@@ -215,10 +215,7 @@ internal class StagedFiles(private val context: Context, private val root: File)
         )
 
         // The core's audio extensions (tagger.c's audio_format).
-        val AUDIO = setOf(
-            "flac", "mp3", "m4a", "mp4", "aac", "ogg", "oga", "opus", "wav", "aif", "aiff", "wv",
-            "ape", "mpc", "wma", "dsf",
-        )
+        val AUDIO = setOf("flac", "mp3", "opus", "wav", "aif", "aiff")
         // Covers the core picks up (coverart.c), and other pictures of the album.
         val PICTURES = setOf("jpg", "jpeg", "png")
         val ZIP_TYPES = setOf("application/zip", "application/x-zip-compressed", "application/x-zip")

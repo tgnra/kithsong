@@ -1,4 +1,4 @@
-/* Deleting tracks, albums and artists to the trash, and restoring them when their files come
+/* Deleting tracks and albums to the trash, and restoring them when their files come
  * back (library/delete.c). The trash is a folder under the scratch dir, never the Recycle
  * Bin: files "come back" when the test moves them back. */
 #include <stdio.h>
@@ -328,27 +328,26 @@ static void test_kept(void) {
   mc_library_close(lib);
 }
 
-/* An artist: their own albums whole, and tracks credited to them on others' albums. */
+/* An artist isn't deleted as such: it goes with its last track, and comes back with it. */
 static void test_artist(void) {
   char config[1200];
   mc_library *lib = open_library("artist", config);
   if (!lib) return;
-  char own[2][MC_UID_STRLEN], comp[3][MC_UID_STRLEN];
+  char comp[3][MC_UID_STRLEN];
   const char *credits[] = {"Ada", "Low", "Bea"};
-  add_album(lib, "Low", "Own", 2, NULL, own);
   add_album(lib, "Various", "Comp", 3, credits, comp);
   char low[MC_UID_STRLEN], sql[200];
   snprintf(sql, sizeof sql, "SELECT uid FROM artists WHERE name = 'Low'");
   query_text(lib, sql, low, sizeof low);
-  const char *uids[] = {low};
+  const char *uids[] = {comp[1]};
   mc_delete_plan *plan = NULL;
-  CHECK(mc_delete_plan_new(lib, MC_DELETE_ARTISTS, uids, 1, &plan) == MC_OK);
-  CHECK(mc_delete_plan_tracks(plan) == 3 && mc_delete_plan_files(plan) == 3);
-  CHECK(mc_delete_plan_has(plan, comp[1]) && !mc_delete_plan_has(plan, comp[0]));
+  CHECK(mc_delete_plan_new(lib, (mc_delete_kind)(MC_DELETE_ALBUMS + 1), uids, 1, &plan) == MC_ERR_INVALID_ARG);
+  CHECK(mc_delete_plan_new(lib, MC_DELETE_TRACKS, uids, 1, &plan) == MC_OK);
+  CHECK(mc_delete_plan_tracks(plan) == 1 && mc_delete_plan_files(plan) == 1);
   mc_delete_result res;
   CHECK(mc_delete_run(lib, config, plan, &res) == MC_OK);
   mc_delete_plan_free(plan);
-  CHECK(res.tracks_deleted == 3);
+  CHECK(res.tracks_deleted == 1);
   CHECK(count_of(lib, MC_ENTITY_TRACKS) == 2 && count_of(lib, MC_ENTITY_ALBUMS) == 1);
   CHECK(query_int(lib, "SELECT count(*) FROM artists WHERE name = 'Low'") == 0);
   CHECK(query_int(lib, "SELECT count(*) FROM artists WHERE name = 'Various'") == 1);

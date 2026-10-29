@@ -65,6 +65,7 @@ static void on_playlist_activated(GtkListBox *list, GtkListBoxRow *row, gpointer
     toast(p, mc_str(MC_STR_PLAYLIST_ADD_FAILED));
     return;
   }
+  mc_library_record_opened(p->lib, MC_RECENT_PLAYLIST, uid); /* changed: first in the recents */
   /* Close first: changed reloads the window behind. */
   g_object_ref(p->dialog);
   adw_dialog_close(ADW_DIALOG(p->dialog));

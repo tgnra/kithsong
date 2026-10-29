@@ -1,4 +1,4 @@
-/* JNI bindings for ng.kithso.core.DeleteNatives: deleting albums, artists and tracks
+/* JNI bindings for ng.kithso.core.DeleteNatives: deleting albums and tracks
  * (musiccore/delete.h) on an open CoreLibrary's handle. Kept apart from jni_bridge.c; as thin
  * as it is: marshal arguments, call musiccore, convert results. Android has no trash, so a
  * delete is mc_delete_run_permanently(). Failures throw ng.kithso.core.MusicCoreException. */
@@ -25,7 +25,7 @@ static jintArray ints(JNIEnv *env, const jint *values, jsize count) {
 
 /* The plan for deleting uid, of kind (mc_delete_kind), or NULL with an exception pending. */
 static mc_delete_plan *plan_of(JNIEnv *env, jlong handle, jint kind, jstring uid) {
-  if (kind < MC_DELETE_TRACKS || kind > MC_DELETE_ARTISTS) {
+  if (kind < MC_DELETE_TRACKS || kind > MC_DELETE_ALBUMS) {
     throw_status(env, MC_ERR_INVALID_ARG);
     return NULL;
   }

@@ -10,14 +10,13 @@
 | MusicBrainz `ws/2` | No | 1 req/s; descriptive User-Agent with contact info (`-DKITHSONG_CONTACT`) | release and recording search and lookup |
 | Cover Art Archive | No | - | front covers, by release, then by release group |
 | iTunes Search API | No | about 20 req/min (unofficial; we wait 3 s between requests) | front covers when the Cover Art Archive has none |
-| AcoustID | Yes, a free *application* key, set with `-DKITHSONG_ACOUSTID_KEY` and never committed | 3 req/s | fingerprint to recording id (*not yet*) |
 
 ## Pipeline
 
 Everything runs on one core-owned thread per import session (`tagger.c`).
 
 1. **Scan**: walk the dropped folders and files and read the existing tags of every audio
-   file (`flac mp3 m4a mp4 aac ogg oga opus wav aif aiff wv ape mpc wma dsf`). Hidden files,
+   file the player can play (`flac mp3 opus wav aif aiff`). Hidden files,
    symlinks and junctions are skipped. A `.zip` given to the import is first extracted
    (`unzip.c`, miniz) into a staging folder named after it, in a temporary folder of the
    session's own that is deleted when the session is freed, then scanned like a folder, so
@@ -44,7 +43,6 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      artist (5 results).
    - albums with no candidates, or only poor ones (best under 75%): the
      [extended search](#extended-search), by catalogue number, other artists and the label.
-   - fingerprinting with Chromaprint + AcoustID when tags aren't enough (*not yet*).
 4. **Score** each candidate with a weighted distance, 0 to 1 (`match.c`):
    - strings are compared by normalised edit distance. Case, punctuation, common Latin
      accents, a leading "The" and `&`/"and" are ignored, and a bracketed or ` - ` suffix such
@@ -186,7 +184,7 @@ The full rules are in `core/include/musiccore/tagger.h` ("Duplicates"); in short
   track list; for a single, the same recording in the artist's singles album. Tracks pair
   up by release track id, recording id, disc and track number with the title, then title.
 - **Quality** of a file: lossless beats lossy; then bits per sample and sample rate for
-  lossless, or bitrate weighted by codec for lossy (MP3 1.0, AAC and Vorbis 1.3, Opus 1.6;
+  lossless, or bitrate weighted by codec for lossy (MP3 1.0, Opus 1.6;
   less than 10% apart is equal).
 - **Better as a whole**: the incoming release has every track the library holds a file of,
   none worse, and more than half better. Then its files replace the library's in place: the
