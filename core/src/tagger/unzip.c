@@ -17,6 +17,8 @@
 #define ZIP_CDH_SIG 0x02014b50
 #define ZIP_CDH_LEN 46 /* a central directory header, before its name, extra field and comment */
 
+int64_t mc_unzip_session_max_bytes = MC_UNZIP_SESSION_MAX_BYTES;
+
 int mc_unzip_is_zip(const char *path) {
   if (!path) return 0;
   size_t n = strlen(path);
@@ -281,7 +283,8 @@ static char *join(const char *dir, const char *rel) {
 }
 
 mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_bytes,
-                         int (*cancel)(void *user), void *user, mc_unzip_stats *stats) {
+                         mc_unzip_budget *budget, int (*cancel)(void *user), void *user,
+                         mc_unzip_stats *stats) {
   mc_unzip_stats local = {0};
   if (!stats) stats = &local;
   memset(stats, 0, sizeof *stats);
@@ -310,9 +313,13 @@ mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_byt
     else if (st.m_uncomp_size > (mz_uint64)max_bytes) result = MC_UNZIP_TOO_BIG;
     else if (!st.m_is_directory && (total += (int64_t)st.m_uncomp_size) > max_bytes) result = MC_UNZIP_TOO_BIG;
   }
+  /* The session's other zips: what they hold counts towards its limit, and their files,
+   * still to be copied into the library, need room too. */
+  int64_t used = budget ? budget->used : 0;
+  if (result == MC_UNZIP_OK && budget && total > budget->max - used) result = MC_UNZIP_SESSION_FULL;
   if (result == MC_UNZIP_OK && mc_mkdirs(dest) != MC_OK) result = MC_UNZIP_WRITE;
   int64_t space = 0;
-  if (result == MC_UNZIP_OK && mc_free_space(dest, &space) == MC_OK && space < total + SPACE_MARGIN)
+  if (result == MC_UNZIP_OK && mc_free_space(dest, &space) == MC_OK && space < total + used + SPACE_MARGIN)
     result = MC_UNZIP_NO_SPACE;
 
   int64_t written = 0;
@@ -370,6 +377,7 @@ mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_byt
     free(path);
   }
   stats->bytes = written;
+  if (budget && result == MC_UNZIP_OK) budget->used += written;
   mz_zip_reader_end(&z);
   fclose(f);
   return result;

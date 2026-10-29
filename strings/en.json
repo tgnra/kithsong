@@ -390,6 +390,7 @@
     "import_error_cancelled": "Cancelled",
     "import_error_zip_bad": { "text": "Couldn't open the zip (is it damaged or password-protected?)", "note": "An import item for a .zip file that couldn't be extracted." },
     "import_error_zip_too_big": { "text": "The zip is too big to import (over {0:d} GB unzipped)", "note": "An import item for a .zip file; {0} is the limit in gigabytes." },
+    "import_error_zip_session_too_big": { "text": "Too much to unzip in one import (over {0:d} GB of zips in all): import this zip on its own", "note": "An import item for a .zip file left out because the zips imported together with it already hold the limit; {0} is the limit in gigabytes." },
     "import_error_zip_space": { "text": "Not enough free space to unzip it", "note": "An import item for a .zip file that wouldn't fit on the disk once extracted." },
     "import_error_zip_write": { "text": "Couldn't unzip it (is the disk full?)", "note": "An import item for a .zip file whose files couldn't be written out." },
 

@@ -3,7 +3,9 @@
  * with names in CP437 or flagged UTF-8, with zip-slip entries, Mac junk and a lying size.
  * Checks the name decoding and path checks on their own, extraction, and then a whole import
  * of a flat Bandcamp-style zip with skip_tagging (no network): its tracks and cover reach the
- * library, a broken zip becomes a failed item, and the staging folder is gone afterwards. */
+ * library, a broken zip becomes a failed item, and the staging folder is gone afterwards.
+ * Last, a dropped folder: its zips are extracted, a zip inside one of them isn't, and the
+ * session's limit on all its zips together leaves one out. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -286,7 +288,7 @@ static void test_extract(const char *root) {
   path_join(dest, sizeof dest, root, "slip");
   CHECK(write_zip(zip, slip, 5));
   mc_unzip_stats stats;
-  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, &stats) == MC_UNZIP_OK);
+  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, NULL, &stats) == MC_UNZIP_OK);
   CHECK(stats.files == 1);
   CHECK(stats.unsafe == 3);
   snprintf(path, sizeof path, "%s%cAlbum%cgood.txt", dest, MC_PATH_SEP, MC_PATH_SEP);
@@ -309,7 +311,7 @@ static void test_extract(const char *root) {
   path_join(zip, sizeof zip, root, "names.zip");
   path_join(dest, sizeof dest, root, "names");
   CHECK(write_zip(zip, names, 4));
-  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, &stats) == MC_UNZIP_OK);
+  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, NULL, &stats) == MC_UNZIP_OK);
   CHECK(stats.files == 2 && stats.unsafe == 0);
   snprintf(path, sizeof path, "%s%cCaf\xC3\xA9%c01.txt", dest, MC_PATH_SEP, MC_PATH_SEP);
   CHECK(mc_file_exists(path));
@@ -338,7 +340,7 @@ static void test_extract(const char *root) {
   path_join(zip, sizeof zip, root, "upath.zip");
   path_join(dest, sizeof dest, root, "upath");
   CHECK(write_zip_ex(zip, upaths, 2, extras));
-  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, &stats) == MC_UNZIP_OK);
+  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, NULL, &stats) == MC_UNZIP_OK);
   CHECK(stats.files == 2);
   snprintf(path, sizeof path, "%s%c\xE6\x97\xA5\xE6\x9C\xAC%c03.txt", dest, MC_PATH_SEP, MC_PATH_SEP);
   CHECK(mc_file_exists(path));
@@ -349,9 +351,28 @@ static void test_extract(const char *root) {
   /* Over the size limit: nothing is written. */
   path_join(zip, sizeof zip, root, "slip.zip");
   path_join(dest, sizeof dest, root, "big");
-  CHECK(mc_unzip(zip, dest, 4, NULL, NULL, &stats) == MC_UNZIP_TOO_BIG);
+  CHECK(mc_unzip(zip, dest, 4, NULL, NULL, NULL, &stats) == MC_UNZIP_TOO_BIG);
   CHECK(stats.files == 0);
   CHECK(!mc_file_exists(dest) || count_entries(dest) == 0);
+  mc_remove_tree(dest);
+
+  /* A session's budget: what's extracted counts towards it, and a zip that would take the
+   * session past it isn't extracted, though it fits on its own (slip.zip claims
+   * 20 bytes, of which 5 are written). */
+  mc_unzip_budget budget = {40, 0};
+  CHECK(mc_unzip(zip, dest, 0, &budget, NULL, NULL, &stats) == MC_UNZIP_OK);
+  CHECK(budget.used == 5 && stats.bytes == 5);
+  mc_remove_tree(dest);
+  budget.used = 25;
+  CHECK(mc_unzip(zip, dest, 0, &budget, NULL, NULL, &stats) == MC_UNZIP_SESSION_FULL);
+  CHECK(stats.files == 0 && budget.used == 25);
+  CHECK(!mc_file_exists(dest) || count_entries(dest) == 0);
+  mc_remove_tree(dest);
+  /* The free space must also hold what the session extracted before, to copy it. */
+  budget.max = INT64_MAX;
+  budget.used = INT64_MAX / 2;
+  CHECK(mc_unzip(zip, dest, 0, &budget, NULL, NULL, &stats) == MC_UNZIP_NO_SPACE);
+  CHECK(stats.files == 0 && budget.used == INT64_MAX / 2);
   mc_remove_tree(dest);
 
   /* Not a zip at all. */
@@ -362,7 +383,7 @@ static void test_extract(const char *root) {
     fclose(f);
   }
   path_join(dest, sizeof dest, root, "not");
-  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, &stats) == MC_UNZIP_BAD);
+  CHECK(mc_unzip(zip, dest, 0, NULL, NULL, NULL, &stats) == MC_UNZIP_BAD);
   mc_remove_tree(dest);
 }
 
@@ -471,6 +492,138 @@ static void test_import(const char *root) {
   CHECK(mc_file_exists(zip));
 }
 
+/* Writes an album of count tracks to the zip at path, flat, and inner (inner_len bytes, may be
+ * NULL) as "Nested.zip" beside them. *bytes is what it holds unzipped. */
+static int write_album_zip(const char *scratch, const char *path, const char *album, int count,
+                           const unsigned char *inner, size_t inner_len, int64_t *bytes) {
+  zip_entry e[4];
+  unsigned char *data[3] = {0};
+  char names[3][64];
+  int n = 0, ok = 1;
+  *bytes = 0;
+  for (int i = 0; i < count && i < 3; i++) {
+    snprintf(names[i], sizeof names[i], "%02d Track %d.wav", i + 1, i + 1);
+    size_t len = make_track(scratch, "Zip Folder Artist", album, names[i] + 3, i + 1, &data[i]);
+    ok &= len > 0;
+    e[n++] = (zip_entry){names[i], data[i], len, 0, 1};
+    *bytes += (int64_t)len;
+  }
+  if (inner) {
+    e[n++] = (zip_entry){"Nested.zip", inner, inner_len, 0, 0};
+    *bytes += (int64_t)inner_len;
+  }
+  ok &= write_zip(path, e, n);
+  for (int i = 0; i < 3; i++) free(data[i]);
+  return ok;
+}
+
+static unsigned char *read_file(const char *path, size_t *len) {
+  int64_t size = 0, mtime = 0;
+  if (mc_file_info(path, &size, &mtime) != MC_OK || size <= 0) return NULL;
+  unsigned char *out = malloc((size_t)size);
+  FILE *f = mc_fopen(path, "rb");
+  *len = f && out ? fread(out, 1, (size_t)size, f) : 0;
+  if (f) fclose(f);
+  return out;
+}
+
+/* Imports the folder at dir into lib and counts the items done and failed; *error gets the
+ * first failed item's error (malloc'd). */
+static void import_folder(mc_library *lib, const char *dir, const char *staging, int *done, int *failed,
+                          char **error) {
+  *done = *failed = 0;
+  *error = NULL;
+  const char *paths[] = {dir};
+  mc_import_options opts = {.fetch_art = 0, .skip_tagging = 1, .staging_dir = staging};
+  mc_import *imp = NULL;
+  CHECK(mc_import_start(lib, paths, 1, &opts, NULL, NULL, &imp) == MC_OK);
+  if (!imp) return;
+  CHECK(wait_settled(imp, 20000) > 0);
+  for (int i = 0; i < mc_import_item_count(imp); i++) {
+    mc_import_item *it;
+    if (mc_import_item_get(imp, i, &it) != MC_OK) continue;
+    if (it->state == MC_IMPORT_DONE) (*done)++;
+    if (it->state == MC_IMPORT_FAILED) {
+      if (!*failed && it->error) *error = mc_strdup(it->error);
+      (*failed)++;
+      CHECK(it->file_count == 0);
+    }
+    mc_import_item_free(it);
+  }
+  mc_import_free(imp);
+}
+
+/* Zips inside a dropped folder are extracted too, one level deep, within the session's
+ * limit on all its zips together. */
+static void test_import_folder(const char *root) {
+  char scratch[1200], drop[1200], sub[1300], lib_dir[1200], staging[1200], path[1500];
+  path_join(scratch, sizeof scratch, root, "folder-track.wav");
+  path_join(drop, sizeof drop, root, "drop");
+  path_join(sub, sizeof sub, drop, "Downloads");
+  path_join(lib_dir, sizeof lib_dir, root, "folder-lib");
+  path_join(staging, sizeof staging, root, "folder-staging");
+  CHECK(mc_mkdirs(sub) == MC_OK && mc_mkdirs(lib_dir) == MC_OK && mc_mkdirs(staging) == MC_OK);
+
+  /* A zip in the folder, and one in a folder of it that holds another zip. */
+  int64_t bytes;
+  path_join(path, sizeof path, root, "Nested.zip");
+  CHECK(write_album_zip(scratch, path, "Nested Album", 1, NULL, 0, &bytes));
+  size_t inner_len = 0;
+  unsigned char *inner = read_file(path, &inner_len);
+  CHECK(inner != NULL);
+  mc_remove(path);
+  path_join(path, sizeof path, drop, "Folder A.zip");
+  CHECK(write_album_zip(scratch, path, "Folder A", 2, NULL, 0, &bytes));
+  path_join(path, sizeof path, sub, "Folder B.zip");
+  CHECK(write_album_zip(scratch, path, "Folder B", 1, inner, inner_len, &bytes));
+  free(inner);
+  path_join(path, sizeof path, sub, "Broken.zip");
+  FILE *f = mc_fopen(path, "wb");
+  if (f) {
+    fputs("PK\x03\x04 but not a zip", f);
+    fclose(f);
+  }
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(lib_dir, &lib) == MC_OK);
+  if (!lib) return;
+  int done, failed;
+  char *error;
+  import_folder(lib, drop, staging, &done, &failed, &error);
+  CHECK(done == 2 && failed == 1);
+  CHECK_STR(error, mc_str(MC_STR_IMPORT_ERROR_ZIP_BAD));
+  free(error);
+  /* Nested.zip came out of Folder B.zip, so it wasn't extracted. */
+  int64_t tracks = -1;
+  mc_library_count(lib, MC_ENTITY_TRACKS, &tracks);
+  CHECK(tracks == 3);
+  CHECK(count_entries(staging) == 0);
+  /* The zips are untouched. */
+  path_join(path, sizeof path, drop, "Folder A.zip");
+  CHECK(mc_file_exists(path));
+  mc_remove_tree(drop);
+
+  /* The session's limit: room for C, then D (same size) is over it, though it'd fit alone. */
+  CHECK(mc_mkdirs(drop) == MC_OK);
+  path_join(path, sizeof path, drop, "Folder C.zip");
+  CHECK(write_album_zip(scratch, path, "Folder C", 2, NULL, 0, &bytes));
+  path_join(path, sizeof path, drop, "Folder D.zip");
+  CHECK(write_album_zip(scratch, path, "Folder D", 2, NULL, 0, &bytes));
+  int64_t was = mc_unzip_session_max_bytes;
+  mc_unzip_session_max_bytes = bytes + bytes / 2;
+  import_folder(lib, drop, staging, &done, &failed, &error);
+  mc_unzip_session_max_bytes = was;
+  CHECK(done == 1 && failed == 1);
+  char *want = mc_format_alloc(mc_str(MC_STR_IMPORT_ERROR_ZIP_SESSION_TOO_BIG), MC_D(0));
+  CHECK(error && want && strcmp(error, want) == 0);
+  mc_free(want);
+  free(error);
+  mc_library_count(lib, MC_ENTITY_TRACKS, &tracks);
+  CHECK(tracks == 5);
+  mc_library_close(lib);
+  mc_remove_tree(drop);
+}
+
 int main(int argc, char **argv) {
   CHECK(mc_init() == MC_OK);
   char root[1024];
@@ -482,6 +635,7 @@ int main(int argc, char **argv) {
   test_unicode_path();
   test_extract(root);
   test_import(root);
+  test_import_folder(root);
 
   mc_remove_tree(root);
   mc_shutdown();
