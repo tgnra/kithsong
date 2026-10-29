@@ -571,6 +571,45 @@ static void test_describe(mc_library *lib) {
   }
 }
 
+/* How many a rule picks, or -1 - status. */
+static int count(mc_library *lib, mc_smart_subject subject, const char *rule) {
+  int n = -99;
+  mc_status st = mc_smart_count(lib, subject, rule, &n);
+  return st == MC_OK ? n : -1 - (int)st;
+}
+
+static void test_count(mc_library *lib) {
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1}") == 5);
+  CHECK(count(lib, MC_SMART_ALBUMS, "{\"v\":1}") == 3);
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"field\":\"genre\",\"op\":\"contains\",\"value\":\"RO\"}}") ==
+        2);
+  CHECK(count(lib, MC_SMART_TRACKS,
+              "{\"v\":1,\"match\":{\"all\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"},"
+              "{\"field\":\"on_device\",\"op\":\"is\",\"value\":true}]}}") == 1);
+  CHECK(count(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"group\",\"op\":\"is\",\"value\":\"g1\"}}") == 1);
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"any\":[]}}") == 0);
+  /* The limit caps it, whatever the order; the order is still checked. */
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"order\":[{\"field\":\"plays\"}],\"limit\":3}") == 3);
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"limit\":30}") == 5);
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"order\":[{\"field\":\"random\",\"seed\":4}],\"limit\":2}") == 2);
+  CHECK(count(lib, MC_SMART_ALBUMS, "{\"v\":1,\"order\":[{\"field\":\"genre\"}]}") == -1 - MC_ERR_FORMAT);
+  CHECK(count(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"album\",\"op\":\"empty\"}}") ==
+        -1 - MC_ERR_FORMAT);
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":2}") == -1 - MC_ERR_FORMAT);
+  int n;
+  CHECK(mc_smart_count(lib, MC_SMART_TRACKS, NULL, &n) == MC_ERR_INVALID_ARG);
+  /* The same as listing them, for every rule in the track tests above. */
+  const char *rules[] = {"{\"v\":1,\"match\":{\"field\":\"last_played\",\"op\":\"not_within\",\"value\":{\"days\":30}}}",
+                         "{\"v\":1,\"match\":{\"field\":\"plays\",\"op\":\"<\",\"value\":3}}",
+                         "{\"v\":1,\"match\":{\"field\":\"playlist\",\"op\":\"is_not\",\"value\":\"pl1\"}}"};
+  for (size_t i = 0; i < sizeof rules / sizeof rules[0]; i++) {
+    mc_track_list *list = NULL;
+    CHECK(mc_smart_preview_tracks(lib, rules[i], &list) == MC_OK && list);
+    CHECK(list && count(lib, MC_SMART_TRACKS, rules[i]) == list->count);
+    mc_track_list_free(list);
+  }
+}
+
 int main(int argc, char **argv) {
   char path[1024];
   snprintf(path, sizeof path, "%s/test_smart.d", argc > 1 ? argv[1] : ".");
@@ -582,6 +621,7 @@ int main(int argc, char **argv) {
   populate(mc_library_db(lib));
 
   test_track_rules(lib);
+  test_count(lib);
   test_order(lib);
   test_album_rules(lib);
   test_invalid();

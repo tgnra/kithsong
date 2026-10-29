@@ -69,6 +69,10 @@ mc_status mc_library_list_smart_albums(mc_library *lib, const char *smart_uid, m
 /* What a rule would hold, without saving it: a live preview while editing. */
 mc_status mc_smart_preview_tracks(mc_library *lib, const char *rule_json, mc_track_list **out);
 mc_status mc_smart_preview_albums(mc_library *lib, const char *rule_json, mc_album_list **out);
+/* How many tracks or albums a rule picks (at most its limit, if it has one), counted in one
+ * query without listing them: for the counts in an editor. To count what one condition
+ * matches, pass a rule of just it, e.g. {"v":1,"match":<condition>}. */
+mc_status mc_smart_count(mc_library *lib, mc_smart_subject subject, const char *rule_json, int *out);
 
 /* A field a rule can test or order by. type says what a value looks like: "text", "int",
  * "duration" (seconds), "date" (Unix ms, or {"days": n} for within/not_within), "bool", or

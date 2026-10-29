@@ -1142,17 +1142,8 @@ static void free_result(preview_result *r) {
 
 /* How many a rule picks, or -1. */
 static int count_of(mc_library *lib, mc_smart_subject subject, const char *rule) {
-  int n = -1;
-  if (subject == MC_SMART_TRACKS) {
-    mc_track_list *list = NULL;
-    if (mc_smart_preview_tracks(lib, rule, &list) == MC_OK) n = list->count;
-    mc_track_list_free(list);
-  } else {
-    mc_album_list *list = NULL;
-    if (mc_smart_preview_albums(lib, rule, &list) == MC_OK) n = list->count;
-    mc_album_list_free(list);
-  }
-  return n;
+  int n;
+  return mc_smart_count(lib, subject, rule, &n) == MC_OK ? n : -1;
 }
 
 static DWORD WINAPI worker_main(void *arg) {
