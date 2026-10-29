@@ -77,7 +77,7 @@ typedef struct tile {
   int thumb_size;
   BOOL stale;  /* thumb is from before the last reload: drawn until it's decoded again */
   BOOL failed; /* the cover couldn't be decoded; draw the placeholder */
-  BOOL smart;  /* a smart playlist or group, which has no picture */
+  BOOL smart;  /* a smart playlist or group */
   BOOL random; /* a smart one in random order, which can be reshuffled */
 } tile;
 
@@ -192,7 +192,8 @@ typedef struct art_source {
 } art_source;
 
 /* The picture file of playlist uid (see mc_playlist_art()), or for group of album group uid,
- * or NULL if it has none. Opens the library in lib_dir first, if it isn't the one open. */
+ * or of smart list uid (mc_smart_art()), or NULL if it has none. Opens the library in lib_dir
+ * first, if it isn't the one open. */
 static wchar_t *playlist_art(art_source *src, const char *lib_dir, const char *art_dir, const wchar_t *uid,
                              BOOL group) {
   if (!lib_dir || !art_dir || !uid) return NULL;
@@ -205,8 +206,10 @@ static wchar_t *playlist_art(art_source *src, const char *lib_dir, const char *a
   if (!src->lib && mc_library_open(lib_dir, &src->lib) == MC_OK) src->dir = _strdup(lib_dir);
   if (!src->lib || !src->dir) return NULL;
   char *u = wstr_to_utf8(uid), *path = NULL;
-  if (u && group) mc_album_group_art(src->lib, u, art_dir, &path);
-  else if (u) mc_playlist_art(src->lib, u, art_dir, &path);
+  mc_status st = MC_ERR_NOT_FOUND;
+  if (u && group) st = mc_album_group_art(src->lib, u, art_dir, &path);
+  else if (u) st = mc_playlist_art(src->lib, u, art_dir, &path);
+  if (st == MC_ERR_NOT_FOUND && u) mc_smart_art(src->lib, u, art_dir, &path); /* uids never clash */
   free(u);
   wchar_t *file = widen(path);
   mc_free(path);
@@ -515,9 +518,9 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
 }
 
 /* Appends the smart lists of subject with something to play here to tiles and dirs (n of
- * each), after the others. They have no picture (mc_playlist_art() only makes manual
- * playlists' and groups'), and "Smart playlist" or "Smart album group" goes beneath the
- * name: counting what they hold would evaluate each rule again. */
+ * each), after the others. The loader finds their pictures by uid as the others' (see
+ * mc_smart_art()), and "Smart playlist" or "Smart album group" goes beneath the name:
+ * counting what they hold would evaluate each rule again. */
 static void add_smart(mc_smart_subject subject, tile **tiles, wchar_t ***dirs, int *n) {
   mc_smart_list *list = NULL;
   if (!g.lib || mc_library_list_smart(g.lib, MC_LIST_PLAYABLE, &list) != MC_OK) return;
@@ -538,8 +541,7 @@ static void add_smart(mc_smart_subject subject, tile **tiles, wchar_t ***dirs, i
     swprintf(t->sub, sizeof t->sub / sizeof t->sub[0], L"%ls", sub);
     t->smart = TRUE;
     t->random = s->random;
-    t->failed = TRUE; /* nothing for the loader to look for: the placeholder */
-    (*dirs)[(*n)++] = NULL;
+    (*dirs)[(*n)++] = widen(s->uid);
   }
   mc_smart_list_free(list);
 }
