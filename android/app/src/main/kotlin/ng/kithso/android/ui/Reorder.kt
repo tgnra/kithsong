@@ -1,23 +1,28 @@
 package ng.kithso.android.ui
 
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.zIndex
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * Dragging a LazyColumn's items by a handle ([dragHandle]) to reorder them. The list's owner
  * keeps the order: while an item is dragged over another, [onMove] is called with the two
  * items' keys and should move the first to where the second is; [onDrop] is called with the
  * dragged item's key once it's let go. Only items whose key [isMovable] take part, so headers
- * stay put. Dragging near the top or bottom scrolls the list.
+ * stay put. Holding the item near the top or bottom scrolls the list.
  */
 @Stable
 class ReorderState(private val listState: LazyListState) {
@@ -39,17 +44,31 @@ class ReorderState(private val listState: LazyListState) {
     fun Modifier.dragged(key: Any): Modifier =
         if (key == dragged) zIndex(1f).graphicsLayer { translationY = offset } else this
 
-    /** Makes this the handle of the item with [key]. */
+    /**
+     * Makes this the handle of the item with [key]. While it's held near an end of the list,
+     * the list scrolls each frame, whether or not the finger moves.
+     */
     fun Modifier.dragHandle(key: Any): Modifier = pointerInput(key) {
-        detectDragGestures(
-            onDragStart = { start(key) },
-            onDragEnd = { end() },
-            onDragCancel = { end() },
-            onDrag = { change, amount ->
-                change.consume()
-                drag(amount.y)
-            },
-        )
+        coroutineScope {
+            var scrolling: Job? = null
+            val stop = {
+                scrolling?.cancel()
+                scrolling = null
+                end()
+            }
+            detectDragGestures(
+                onDragStart = {
+                    start(key)
+                    scrolling = launch { autoScroll(key) }
+                },
+                onDragEnd = stop,
+                onDragCancel = stop,
+                onDrag = { change, amount ->
+                    change.consume()
+                    drag(amount.y)
+                },
+            )
+        }
     }
 
     private fun start(key: Any) {
@@ -67,35 +86,52 @@ class ReorderState(private val listState: LazyListState) {
     }
 
     private fun drag(dy: Float) {
-        val key = dragged ?: return
+        if (dragged == null) return
         offset += dy
+        follow()
+    }
+
+    // Moves the dragged item over the one its middle is now over, if any, and returns it as
+    // laid out; null if it isn't laid out yet.
+    private fun follow(): LazyListItemInfo? {
+        val key = dragged ?: return null
         val layout = listState.layoutInfo
-        val item = layout.visibleItemsInfo.firstOrNull { it.key == key } ?: return
-        if (awaiting != null && item.index != awaiting) return
+        val item = layout.visibleItemsInfo.firstOrNull { it.key == key } ?: return null
+        if (awaiting != null && item.index != awaiting) return null
         awaiting = null
 
-        val top = item.offset + offset
-        val centre = (top + item.size / 2).toInt()
+        val centre = (item.offset + offset + item.size / 2).toInt()
         val target = layout.visibleItemsInfo.firstOrNull {
             it.key != key && isMovable(it.key) && centre in it.offset until it.offset + it.size
         }
-        if (target != null) {
-            onMove(key, target.key)
-            // Its place is now the target's, so it's drawn as far from that.
-            offset += item.offset - target.offset
-            awaiting = target.index
-        }
+        if (target == null) return item
+        onMove(key, target.key)
+        // Its place is now the target's, so it's drawn as far from that.
+        offset += item.offset - target.offset
+        awaiting = target.index
+        return null
+    }
 
-        // Near an end, scroll by as much as it's over the edge zone.
-        val edge = item.size / 2f
-        val scroll = when {
-            top < layout.viewportStartOffset + edge -> top - (layout.viewportStartOffset + edge)
-            top + item.size > layout.viewportEndOffset - edge -> top + item.size - (layout.viewportEndOffset - edge)
-            else -> 0f
-        }
-        if (scroll != 0f) {
-            val scrolled = listState.dispatchRawDelta(scroll / 4)
-            offset += scrolled
+    // Once a frame while [key] is dragged: near an end, scroll by a quarter of how far it's
+    // into the edge zone (at most an eighth of the item), then keep it under the finger. Each
+    // frame sees the layout of the scroll before, so the item and [offset] agree.
+    private suspend fun autoScroll(key: Any) {
+        while (dragged == key) {
+            withFrameNanos {}
+            if (dragged != key) break
+            val item = follow() ?: continue
+            val layout = listState.layoutInfo
+            val top = item.offset + offset
+            val edge = item.size / 2f
+            val over = when {
+                top < layout.viewportStartOffset + edge -> top - (layout.viewportStartOffset + edge)
+                top + item.size > layout.viewportEndOffset - edge -> top + item.size - (layout.viewportEndOffset - edge)
+                else -> 0f
+            }
+            if (over != 0f) {
+                val max = item.size / 8f
+                offset += listState.dispatchRawDelta((over / 4).coerceIn(-max, max))
+            }
         }
     }
 }

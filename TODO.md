@@ -57,7 +57,6 @@ Big pieces that haven't been started, or that only one platform has.
 - Android - a new playlist can only be made from Add to playlist (empty ones are hidden there); the desktops' Playlists page has a +
 - Android - when every playlist is hidden for having nothing to play here, the Playlists section just isn't there; the desktops say so and link to Choose what to sync
 - Windows - the Playlists and Album groups headers' + can't be reached with the keyboard (as the group header's buttons); Ctrl+N (see Keyboard shortcuts) would do
-- Android - drag-to-reorder only scrolls while the finger is moving
 - All - multi-select in track lists, so several tracks can be deleted or added to a playlist at once
 
 ### Album groups
