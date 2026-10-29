@@ -46,7 +46,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -313,6 +315,8 @@ class CoreLibrarySource(
 
     private val editCount = MutableStateFlow(0)
     override val edits: StateFlow<Int> = editCount
+    private val failed = MutableSharedFlow<EditFailure>(extraBufferCapacity = 8)
+    override val failures: SharedFlow<EditFailure> = failed
 
     override suspend fun playlistChoices(): List<PlaylistChoice>? = withContext(core) {
         try {
@@ -328,24 +332,24 @@ class CoreLibrarySource(
     }
 
     override fun addToPlaylist(playlistUid: String, what: Addition) =
-        edit("add to playlist $playlistUid") { it.appendToPlaylist(playlistUid, trackUids(it, what)) }
+        edit(EditFailure.PlaylistAdd, "add to playlist $playlistUid") { it.appendToPlaylist(playlistUid, trackUids(it, what)) }
 
-    override fun addToNewPlaylist(name: String, what: Addition) = edit("make playlist $name") {
+    override fun addToNewPlaylist(name: String, what: Addition) = edit(EditFailure.PlaylistCreate, "make playlist $name") {
         val uid = it.createPlaylist(name)
         it.appendToPlaylist(uid, trackUids(it, what))
     }
 
     override fun renamePlaylist(playlistUid: String, name: String) =
-        edit("rename playlist $playlistUid") { it.renamePlaylist(playlistUid, name) }
+        edit(EditFailure.PlaylistRename, "rename playlist $playlistUid") { it.renamePlaylist(playlistUid, name) }
 
     override fun deletePlaylist(playlistUid: String) =
-        edit("delete playlist $playlistUid") { it.deletePlaylist(playlistUid) }
+        edit(EditFailure.PlaylistDelete, "delete playlist $playlistUid") { it.deletePlaylist(playlistUid) }
 
     override fun removeEntry(entryUid: String) =
-        edit("remove playlist entry $entryUid") { it.removePlaylistEntry(entryUid) }
+        edit(EditFailure.PlaylistRemove, "remove playlist entry $entryUid") { it.removePlaylistEntry(entryUid) }
 
     override fun moveEntry(entryUid: String, afterEntryUid: String?) =
-        edit("move playlist entry $entryUid") { it.movePlaylistEntry(entryUid, afterEntryUid) }
+        edit(EditFailure.PlaylistMove, "move playlist entry $entryUid") { it.movePlaylistEntry(entryUid, afterEntryUid) }
 
     override suspend fun albumGroupChoices(): List<PlaylistChoice>? = withContext(core) {
         try {
@@ -361,23 +365,23 @@ class CoreLibrarySource(
     }
 
     override fun addToAlbumGroup(groupUid: String, albumUid: String) =
-        edit("add album $albumUid to album group $groupUid") { it.addToAlbumGroup(groupUid, albumUid) }
+        edit(EditFailure.GroupAdd, "add album $albumUid to album group $groupUid") { it.addToAlbumGroup(groupUid, albumUid) }
 
-    override fun addToNewAlbumGroup(name: String, albumUid: String) = edit("make album group $name") {
+    override fun addToNewAlbumGroup(name: String, albumUid: String) = edit(EditFailure.GroupCreate, "make album group $name") {
         it.addToAlbumGroup(it.createAlbumGroup(name), albumUid)
     }
 
     override fun renameAlbumGroup(groupUid: String, name: String) =
-        edit("rename album group $groupUid") { it.renameAlbumGroup(groupUid, name) }
+        edit(EditFailure.GroupRename, "rename album group $groupUid") { it.renameAlbumGroup(groupUid, name) }
 
     override fun deleteAlbumGroup(groupUid: String) =
-        edit("delete album group $groupUid") { it.deleteAlbumGroup(groupUid) }
+        edit(EditFailure.GroupDelete, "delete album group $groupUid") { it.deleteAlbumGroup(groupUid) }
 
     override fun removeFromAlbumGroup(groupUid: String, albumUid: String) =
-        edit("remove album $albumUid from album group $groupUid") { it.removeFromAlbumGroup(groupUid, albumUid) }
+        edit(EditFailure.GroupRemove, "remove album $albumUid from album group $groupUid") { it.removeFromAlbumGroup(groupUid, albumUid) }
 
     override fun moveInAlbumGroup(groupUid: String, albumUid: String, afterAlbumUid: String?) =
-        edit("move album $albumUid in album group $groupUid") { it.moveInAlbumGroup(groupUid, albumUid, afterAlbumUid) }
+        edit(EditFailure.GroupMove, "move album $albumUid in album group $groupUid") { it.moveInAlbumGroup(groupUid, albumUid, afterAlbumUid) }
 
     // On [core]. The tracks [what] adds: an album's that have a file here, as the album lists
     // them, since that's what this phone shows of it.
@@ -387,13 +391,18 @@ class CoreLibrarySource(
     }
 
     // Makes a change on [core], then reads the library again and passes the change on to sync.
-    private fun edit(what: String, change: (CoreLibrary) -> Unit) {
+    // A failure is reported as [failure].
+    private fun edit(failure: EditFailure, what: String, change: (CoreLibrary) -> Unit) {
         scope.launch(core) {
-            val lib = open() ?: return@launch
+            val lib = open() ?: run {
+                failed.tryEmit(failure)
+                return@launch
+            }
             try {
                 change(lib)
             } catch (e: MusicCoreException) {
                 Log.e(TAG, "Couldn't $what", e)
+                failed.tryEmit(failure)
             }
             refresh().join()
             editCount.value++

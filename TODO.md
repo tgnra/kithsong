@@ -58,11 +58,10 @@ Big pieces that haven't been started, or that only one platform has.
 - Android - when every playlist is hidden for having nothing to play here, the Playlists section just isn't there; the desktops say so and link to Choose what to sync
 - Windows - the Playlists and Album groups headers' + can't be reached with the keyboard (as the group header's buttons); Ctrl+N (see Keyboard shortcuts) would do
 - Android - drag-to-reorder only scrolls while the finger is moving
-- Android - failed edits are only logged; show a message
 - All - multi-select in track lists, so several tracks can be deleted or added to a playlist at once
 
 ### Album groups
-- Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are); failed edits are only logged
+- Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are)
 - Windows and Linux - albums in a group are reordered with Move up/Move down on their menus, not by dragging; Windows can't drag albums onto a group either
 - Windows and Linux - play a whole group, smart groups too (queue its albums in order; Android has Play)
 

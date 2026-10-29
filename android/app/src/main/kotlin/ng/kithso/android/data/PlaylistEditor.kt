@@ -1,6 +1,7 @@
 package ng.kithso.android.data
 
 import androidx.compose.runtime.Immutable
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /** What Add to playlist adds: some tracks, or an album's tracks in order. */
@@ -14,18 +15,27 @@ sealed interface Addition {
 @Immutable
 data class PlaylistChoice(val uid: String, val name: String)
 
+/** A change to a playlist or album group that failed, as [PlaylistEditor.failures] reports it. */
+enum class EditFailure {
+    PlaylistAdd, PlaylistCreate, PlaylistRename, PlaylistDelete, PlaylistRemove, PlaylistMove,
+    GroupAdd, GroupCreate, GroupRename, GroupDelete, GroupRemove, GroupMove,
+}
+
 /**
  * Editing manual playlists and album groups, for a [LibrarySource] that can ([CoreLibrarySource]; the made-up
  * library can't, and the UI then offers no editing). The changes are made in the background;
  * [LibrarySource.library] follows, and [edits] counts them, so an open track list can be read
  * again even when the library looks no different (after a move, say). A change that fails is
- * logged and comes to nothing. Smart playlists can't be edited, nor can they be added to.
+ * logged and comes to nothing, and [failures] says so, for the UI to show. Smart playlists can't be edited, nor can they be added to.
  *
  * A playlist with nothing to play on this phone isn't listed (see [CoreLibrarySource]), so a
  * new one is only made with something added to it.
  */
 interface PlaylistEditor {
     val edits: StateFlow<Int>
+
+    /** Each change that failed, as it fails; none are kept for later collectors. */
+    val failures: SharedFlow<EditFailure>
 
     /** Every manual playlist by name, those with nothing to play here too; null on failure. */
     suspend fun playlistChoices(): List<PlaylistChoice>?

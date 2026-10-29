@@ -56,6 +56,7 @@ import ng.kithso.android.data.DeleteOutcome
 import ng.kithso.android.data.DeleteSize
 import ng.kithso.android.data.Deletion
 import ng.kithso.android.data.DeviceRemover
+import ng.kithso.android.data.EditFailure
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.PlaylistChoice
@@ -144,6 +145,23 @@ class PlaylistActions(
     }
 }
 
+@get:StringRes
+private val EditFailure.message: Int
+    get() = when (this) {
+        EditFailure.PlaylistAdd -> R.string.playlist_add_failed
+        EditFailure.PlaylistCreate -> R.string.playlist_create_failed
+        EditFailure.PlaylistRename -> R.string.playlist_rename_failed
+        EditFailure.PlaylistDelete -> R.string.playlist_delete_failed
+        EditFailure.PlaylistRemove -> R.string.playlist_remove_failed
+        EditFailure.PlaylistMove -> R.string.playlist_move_failed
+        EditFailure.GroupAdd -> R.string.album_group_add_failed
+        EditFailure.GroupCreate -> R.string.album_group_create_failed
+        EditFailure.GroupRename -> R.string.album_group_rename_failed
+        EditFailure.GroupDelete -> R.string.album_group_delete_failed
+        EditFailure.GroupRemove -> R.string.album_group_remove_failed
+        EditFailure.GroupMove -> R.string.album_group_move_failed
+    }
+
 /** One row of a menu sheet. */
 private class SheetAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
@@ -164,6 +182,12 @@ fun PlaylistSheets(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current.applicationContext
     val syncHereFailed = stringResource(R.string.sync_here_failed)
+    // A failed edit says so; most of them look like nothing happened otherwise.
+    if (editor != null) LaunchedEffect(editor) {
+        editor.failures.collect { failure ->
+            Toast.makeText(context, context.getString(failure.message), Toast.LENGTH_LONG).show()
+        }
+    }
     // Remove from this phone or Sync to this phone for an album or artist, where it applies.
     @Composable
     fun hereAction(kind: ProfileItemKind, uid: String, name: String): SheetAction? {
