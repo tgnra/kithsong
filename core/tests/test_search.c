@@ -172,6 +172,14 @@ static void test_album_uid(mc_library *lib) {
   mc_search_results_free(res);
 }
 
+/* Pablo Honey has one track here: a single, found as its track but not as an album. Abbey
+ * Road, with two, is an album. */
+static void test_singles(mc_library *lib) {
+  CHECK(!has(lib, "pablo honey", "A:Pablo Honey"));
+  CHECK(has(lib, "pablo honey", "T:Creep"));
+  CHECK(has(lib, "abbey road", "A:Abbey Road"));
+}
+
 static void test_kinds(mc_library *lib) {
   CHECK(has(lib, "road", "P:Road Trip"));
   CHECK_STR(first(lib, "swedish"), "G:Swedish Pop");
@@ -382,6 +390,7 @@ int main(int argc, char **argv) {
   test_folding(lib);
   test_fields(lib);
   test_album_uid(lib);
+  test_singles(lib);
   test_kinds(lib);
   test_fresh(lib, path);
   test_edges(lib);

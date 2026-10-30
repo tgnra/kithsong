@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/library_internal.h"
 #include "musiccore/musiccore.h"
 #include "tagger/musicbrainz.h"
 #include "util/platform.h"
@@ -169,14 +170,17 @@ static int64_t track_count(mc_library *lib) {
   return n;
 }
 
-/* The uid of the album titled title, or "" if there's none. */
+/* The uid of the album titled title, or "" if there's none. Not from the album list, which
+ * leaves out albums of one track. */
 static void album_uid(mc_library *lib, const char *title, char uid[MC_UID_STRLEN]) {
   uid[0] = '\0';
-  mc_album_list *list = NULL;
-  if (mc_library_list_albums(lib, &list) != MC_OK) return;
-  for (int i = 0; i < list->count; i++)
-    if (list->items[i].title && strcmp(list->items[i].title, title) == 0) memcpy(uid, list->items[i].uid, MC_UID_STRLEN);
-  mc_album_list_free(list);
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib), "SELECT uid FROM albums WHERE title = ?1", -1, &stmt, NULL) !=
+      SQLITE_OK)
+    return;
+  sqlite3_bind_text(stmt, 1, title, -1, SQLITE_STATIC);
+  if (sqlite3_step(stmt) == SQLITE_ROW) snprintf(uid, MC_UID_STRLEN, "%s", (const char *)sqlite3_column_text(stmt, 0));
+  sqlite3_finalize(stmt);
 }
 
 /* Checks the library has Test Album with all three tracks, track 3 being titled "Three" in

@@ -72,8 +72,9 @@ static const char *albums(mc_library *lib, const char *rule) {
 #define CHECK_TRACKS(rule, want) CHECK_STR(tracks(lib, rule), want)
 #define CHECK_ALBUMS(rule, want) CHECK_STR(albums(lib, rule), want)
 
-/* Abba and The Beatles (sorted as "Beatles, The") have an album each; Low has a singles
- * album. Plays: Come Together 7 over two devices, Dancing Queen 3, Money, Money 1. */
+/* Abba and The Beatles (sorted as "Beatles, The") have an album each; Low has an old singles
+ * album (kind 'singles', which means nothing now) of one track, so a single. Plays: Come
+ * Together 7 over two devices, Dancing Queen 3, Money, Money 1. */
 static void populate(sqlite3 *db) {
   char sql[4096];
   snprintf(sql, sizeof sql,
@@ -221,6 +222,28 @@ static void test_album_rules(mc_library *lib) {
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"on_device\",\"op\":\"is\",\"value\":true}}", "Arrival|Abbey Road");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"last_played\",\"op\":\"empty\"}}", "Low Singles");
   CHECK_ALBUMS("{\"v\":1,\"order\":[{\"field\":\"artist\"}]}", "Arrival|Abbey Road|Low Singles");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "Low Singles");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false}}", "Arrival|Abbey Road");
+}
+
+/* A single is a track alone on its album, or one with no album; an album is one when it has
+ * one track. Kinds don't count. */
+static void test_singles(mc_library *lib) {
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES ('t6', NULL, 'ar3', 'Loose');"
+                 "INSERT INTO albums (uid, title, artist_uid, kind) VALUES ('al4', 'Two Singles', 'ar3', 'singles');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t7', 'al4', 'One'), ('t8', 'al4', 'Two');") ==
+        SQLITE_OK);
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "Loose|Words");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false}}",
+               "Dancing Queen|Money, Money|Come Together|Something|One|Two");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "Low Singles");
+  /* Once Words has company, Low Singles is an album. */
+  CHECK(exec(db, "UPDATE tracks SET album_uid = 'al3' WHERE uid = 't6'") == SQLITE_OK);
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "");
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid IN ('t6', 't7', 't8'); DELETE FROM albums WHERE uid = 'al4';") ==
+        SQLITE_OK);
 }
 
 static void test_invalid(void) {
@@ -497,7 +520,7 @@ static void test_describe(mc_library *lib) {
   CHECK_DESC("{\"not\":" DEVICE "}", "it isn't on this device");
   CHECK_DESC("{\"field\":\"singles\",\"op\":\"is\",\"value\":true}", "it's a single");
   CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false}}"),
-            "Albums where it isn't a singles album");
+            "Albums where it isn't a single");
   CHECK_DESC("{\"field\":\"format\",\"op\":\"is\",\"value\":\"flac\"}", "it has a FLAC file");
   CHECK_DESC("{\"field\":\"format\",\"op\":\"is_not\",\"value\":\"opus\"}", "it has no OPUS file");
   CHECK_DESC("{\"field\":\"playlist\",\"op\":\"is\",\"value\":\"pl1\"}", "it's in the playlist “Mix”");
@@ -624,6 +647,7 @@ int main(int argc, char **argv) {
   test_count(lib);
   test_order(lib);
   test_album_rules(lib);
+  test_singles(lib);
   test_invalid();
   test_fields();
   test_examples(lib);

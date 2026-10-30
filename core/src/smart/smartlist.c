@@ -81,7 +81,12 @@ static const field_def k_fields[] = {
   {"added", F_DATE, {{"t.added_ms", NULL, NULL}, {"(SELECT max(tt.added_ms)" A_TRACKS, NULL, NULL}}},
   {"plays", F_INT, {{T_PLAYS, NULL, NULL}, {"(SELECT coalesce(sum(p.play_count), 0)" A_PLAYS, NULL, NULL}}},
   {"last_played", F_DATE, {{T_LAST, NULL, NULL}, {"(SELECT max(p.last_played_ms)" A_PLAYS, NULL, NULL}}},
-  {"singles", F_BOOL, {{"al.kind = 'singles'", NULL, NULL}, {"a.kind = 'singles'", NULL, NULL}}},
+  /* A single: a track alone on its album in the library, or on none; an album of one track. */
+  {"singles",
+   F_BOOL,
+   {{"(t.album_uid IS NULL OR (SELECT count(*) FROM tracks st WHERE st.album_uid = t.album_uid) = 1)", NULL,
+     NULL},
+    {ALBUM_IS_SINGLE, NULL, NULL}}},
   {"on_device",
    F_BOOL,
    {{"EXISTS (SELECT 1 FROM files f WHERE f.track_uid = t.uid)", NULL, NULL},
@@ -106,7 +111,7 @@ static const field_def k_fields[] = {
  * order; albums as mc_library_list_albums() has them. uid last, so ties always come out the
  * same way. */
 static const char *const k_default_order[] = {
-  "coalesce(aar.sort_name, aar.name) COLLATE NOCASE, al.kind = 'singles', al.year,"
+  "coalesce(aar.sort_name, aar.name) COLLATE NOCASE, al.year,"
   " al.title COLLATE NOCASE, al.uid, coalesce(t.disc_no, 0), t.track_no IS NULL, t.track_no,"
   " t.title COLLATE NOCASE, t.uid",
   ALBUM_ORDER ", a.uid",

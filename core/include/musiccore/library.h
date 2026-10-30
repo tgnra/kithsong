@@ -69,7 +69,10 @@ typedef struct mc_album_info {
   char *artist;
   char artist_uid[MC_UID_STRLEN]; /* "" if it has no artist */
   int year;
-  int is_singles; /* an artist's "<artist> Singles" album */
+  /* The album has exactly one track in the library: a single (see
+   * mc_library_list_artist_singles()). Always 0 from mc_library_list_albums() and
+   * mc_library_list_artist_albums(), which leave singles out. */
+  int is_singles;
   int has_art;    /* folder holds a cover (see mc_coverart_find()) */
   char *folder;   /* absolute path of the album's folder; NULL if it has no files here */
   /* From mc_library_list_artist_albums() only (0 elsewhere): the album's tracks, and how
@@ -83,8 +86,9 @@ typedef struct mc_album_list {
   int count;
 } mc_album_list;
 
-/* Every album, in display order: by artist (sort name), the artist's albums before their
- * singles, then by year and title. One query; cheap enough to call again after an import.
+/* Every album but the singles (albums with one track in the library, which the Artist view
+ * shows instead: see mc_library_list_artist_singles()), in display order: by artist (sort
+ * name), then by year and title. One query; cheap enough to call again after an import.
  * Free with mc_album_list_free(). */
 mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out);
 void mc_album_list_free(mc_album_list *list);
@@ -110,6 +114,8 @@ typedef struct mc_track_info {
   char *cover_dir; /* the folder holding its album's cover, or NULL if there's none here */
   char entry_uid[MC_UID_STRLEN]; /* its playlist entry, for mc_playlist_move() and
                                   * mc_playlist_remove(); "" outside playlists */
+  int year;                      /* the track's own, else its album's; 0 if unknown */
+  char album_uid[MC_UID_STRLEN]; /* "" if it has no album */
 } mc_track_info;
 
 typedef struct mc_track_list {
@@ -159,7 +165,8 @@ void mc_playlist_list_free(mc_playlist_list *list);
 typedef struct mc_artist_info {
   char uid[MC_UID_STRLEN];
   char *name;
-  int album_count; /* albums it's the album artist of; 0 if it's only credited on tracks */
+  int album_count; /* albums it's the album artist of, singles left out (as
+                    * mc_library_list_albums() leaves them); 0 if it's only on tracks */
   /* From mc_library_list_artists_here() only (0 elsewhere): the tracks credited to it (see
    * mc_library_list_artist_albums()) that have a file on this device. */
   int track_count;
@@ -185,13 +192,20 @@ void mc_artist_list_free(mc_artist_list *list);
  * artist, so a duet credited "A & B" is that one artist's.
  *
  * The albums artist_uid appears on, as the album artist or credited on any track, with
- * track_count and credited_count filled in. Their own albums come first: the album artist's,
- * then by the share of the tracks credited to them, most first; then singles last, by year
- * and title. Free with mc_album_list_free(). */
+ * track_count and credited_count filled in; singles are left out (see below). Their own
+ * albums come first: the album artist's, then by the share of the tracks credited to them,
+ * most first; then by year and title. Free with mc_album_list_free(). */
 mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid, mc_album_list **out);
 /* Every track credited to artist_uid, by title (then album and track number). Free with
  * mc_track_list_free(). */
 mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid, mc_track_list **out);
+/* artist_uid's singles: the tracks credited to them, or on an album of theirs, that are the
+ * only track of their album in the library, or have no album at all. Albums of one track are
+ * left out of the album listings, so this is where they show. By year (the track's, else its
+ * album's), then title. album_uid and album are the album's ("" and NULL for a track with
+ * none); cover_dir is set when that album has art and the file is here, the same test as
+ * mc_album_info.has_art. Free with mc_track_list_free(). */
+mc_status mc_library_list_artist_singles(mc_library *lib, const char *artist_uid, mc_track_list **out);
 
 typedef struct mc_album_group_info {
   char uid[MC_UID_STRLEN];

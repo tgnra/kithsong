@@ -172,7 +172,7 @@ static void test_migration_v4(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 11);
+  CHECK(mc_library_schema_version(lib) == 12);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
   CHECK(has_column(db, "files", "sha256"));
   CHECK(has_column(db, "files", "source_sha256"));
@@ -207,7 +207,7 @@ static void test_migration_v5(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 11);
+  CHECK(mc_library_schema_version(lib) == 12);
   CHECK(has_column(db, "album_groups", "name"));
   CHECK(has_column(db, "album_group_entries", "position"));
 
@@ -253,7 +253,7 @@ static void test_migration_v6(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 11);
+  CHECK(mc_library_schema_version(lib) == 12);
   CHECK(has_column(db, "smart_lists", "rule"));
   CHECK(has_column(db, "track_plays", "last_played_ms"));
 
@@ -324,12 +324,57 @@ static void test_migration_v10(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 11);
+  CHECK(mc_library_schema_version(lib) == 12);
   CHECK(query_int(db, "SELECT count(*) FROM smart_lists") == 5);
   CHECK(changelog_count(db, "entity = 'smart_lists'") == 0);
   CHECK(mc_smart_reshuffle(lib, "5e1ec7ed-0000-4000-8000-000000000003") == MC_OK);
   CHECK(changelog_count(db, "entity = 'smart_lists' AND row_uid = '5e1ec7ed-0000-4000-8000-000000000003'"
                             " AND origin_uid = mc_node_uid()") == 1);
+  mc_library_close(lib);
+}
+
+/* Migration v12: no singles albums. A v11 library's "<artist> Singles" album stays as it is,
+ * an ordinary album now, and albums.kind is no longer logged. */
+static void test_migration_v12(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v12.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  /* As v11 left it: the index, and kind's triggers (whose bodies don't matter here). */
+  lib->applying_remote = 1;
+  CHECK(exec(db, "CREATE INDEX albums_singles ON albums (artist_uid) WHERE kind = 'singles';"
+                 "CREATE TRIGGER mc_log_ins_albums_kind AFTER INSERT ON albums BEGIN SELECT 1; END;"
+                 "CREATE TRIGGER mc_log_upd_albums_kind AFTER UPDATE OF kind ON albums BEGIN SELECT 1; END;"
+                 "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid, kind) VALUES ('al1', 'Low Singles', 'ar1', 'singles');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'Canada'), ('t2', 'al1', 'Over');"
+                 "PRAGMA user_version = 11;") == SQLITE_OK);
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 12);
+  CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('albums_singles',"
+                      " 'mc_log_ins_albums_kind', 'mc_log_upd_albums_kind')") == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al1' AND title = 'Low Singles'"
+                      " AND kind = 'singles'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE album_uid = 'al1'") == 2);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums && albums->count == 1);
+  if (albums && albums->count == 1) CHECK_STR(albums->items[0].title, "Low Singles");
+  mc_album_list_free(albums);
+  /* A new album logs its fields, but no kind. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title, artist_uid) VALUES ('al2', 'Secret Name', 'ar1');"
+                 "UPDATE albums SET kind = 'singles' WHERE uid = 'al2';") == SQLITE_OK);
+  CHECK(changelog_count(db, "entity = 'albums' AND row_uid = 'al2' AND field = 'title'") == 1);
+  CHECK(changelog_count(db, "entity = 'albums' AND field = 'kind'") == 0);
   mc_library_close(lib);
 }
 
@@ -364,7 +409,7 @@ static void test_recents(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 11);
+  CHECK(mc_library_schema_version(lib) == 12);
   CHECK(has_column(db, "recents", "opened_ms"));
   CHECK(has_column(db, "tracks", "file_rev")); /* v9 */
   CHECK(has_column(db, "files", "file_rev"));
@@ -752,8 +797,10 @@ static void test_artists_and_groups(const char *scratch) {
   mc_artist_list_free(NULL);
   mc_album_group_list_free(NULL);
 
-  /* The Beatles sort under B, Low's singles count as an album, Guest is only on a track and
-   * Nobody is on nothing at all. */
+  /* The Beatles sort under B, Low's old singles album (kind 'singles', from before v12) is an
+   * album like any other, Guest is only on a track and Nobody is on nothing at all. Secret
+   * Name has one track so far, which makes it a single: not counted, but its artist is
+   * listed. */
   CHECK(exec(db, "INSERT INTO artists (uid, name, sort_name) VALUES"
                  " ('ar1', 'The Beatles', 'Beatles, The'), ('ar2', 'Low', NULL),"
                  " ('ar3', 'Guest', NULL), ('ar4', 'abba', NULL), ('ar5', 'Nobody', NULL);"
@@ -774,13 +821,13 @@ static void test_artists_and_groups(const char *scratch) {
     CHECK_STR(artists->items[2].name, "Guest");
     CHECK(artists->items[2].album_count == 0);
     CHECK_STR(artists->items[3].name, "Low");
-    CHECK(artists->items[3].album_count == 2);
+    CHECK(artists->items[3].album_count == 1);
   }
   mc_artist_list_free(artists);
 
   /* An artist's albums: Low's own first (Secret Name, though Guest sings on one of its two
-   * tracks, ties with their singles, which go after it), then where they're on most of the
-   * tracks, then least. A track with no artist of its own is its album artist's. */
+   * tracks), then where they're on most of the tracks, then least. A track with no artist of
+   * its own is its album artist's. Low Singles now has one track: a single, left out. */
   CHECK(exec(db, "INSERT INTO albums (uid, title, artist_uid, year) VALUES"
                  " ('al6', 'Mix', 'ar3', 2001), ('al7', 'Tribute', 'ar3', 1999);"
                  "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
@@ -789,17 +836,24 @@ static void test_artists_and_groups(const char *scratch) {
                  " ('t6', 'al6', 'ar3', 'Outro'), ('t7', 'al7', 'ar2', 'Anon'),"
                  " ('t8', 'al7', 'ar2', 'Belong'), ('t9', 'al7', 'ar1', 'Something');") == SQLITE_OK);
   mc_album_list *albums = NULL;
-  CHECK(mc_library_list_artist_albums(lib, "ar2", &albums) == MC_OK && albums && albums->count == 4);
-  if (albums && albums->count == 4) {
+  CHECK(mc_library_list_artist_albums(lib, "ar2", &albums) == MC_OK && albums && albums->count == 3);
+  if (albums && albums->count == 3) {
     CHECK_STR(albums->items[0].title, "Secret Name");
     CHECK(albums->items[0].track_count == 2 && albums->items[0].credited_count == 1);
-    CHECK_STR(albums->items[1].title, "Low Singles");
-    CHECK(albums->items[1].is_singles && albums->items[1].credited_count == 1);
-    CHECK_STR(albums->items[2].title, "Tribute"); /* 2 of 3 */
-    CHECK_STR(albums->items[2].artist, "Guest");
-    CHECK(strcmp(albums->items[2].artist_uid, "ar3") == 0);
-    CHECK_STR(albums->items[3].title, "Mix"); /* 1 of 3 */
-    CHECK(albums->items[3].track_count == 3 && albums->items[3].credited_count == 1);
+    CHECK(!albums->items[0].is_singles);
+    CHECK_STR(albums->items[1].title, "Tribute"); /* 2 of 3 */
+    CHECK_STR(albums->items[1].artist, "Guest");
+    CHECK(strcmp(albums->items[1].artist_uid, "ar3") == 0);
+    CHECK_STR(albums->items[2].title, "Mix"); /* 1 of 3 */
+    CHECK(albums->items[2].track_count == 3 && albums->items[2].credited_count == 1);
+  }
+  mc_album_list_free(albums);
+  /* Every album but the single, the empty ones included. */
+  albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums && albums->count == 6);
+  for (int i = 0; albums && i < albums->count; i++) {
+    CHECK(strcmp(albums->items[i].uid, "al4") != 0);
+    CHECK(!albums->items[i].is_singles);
   }
   mc_album_list_free(albums);
   albums = NULL;
@@ -821,6 +875,36 @@ static void test_artists_and_groups(const char *scratch) {
   tracks = NULL;
   CHECK(mc_library_list_artist_tracks(lib, "ar3", &tracks) == MC_OK && tracks && tracks->count == 3);
   mc_track_list_free(tracks);
+
+  /* Their singles: the track alone on Low Singles, and one with no album at all, by year. A
+   * single on someone else's album is there too when it's theirs. */
+  CHECK(exec(db, "UPDATE albums SET year = 1994 WHERE uid = 'al4';"
+                 "INSERT INTO albums (uid, title, artist_uid, year) VALUES ('al9', 'Promo', 'ar3', 2003);"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title, year) VALUES"
+                 " ('t11', NULL, 'ar2', 'Loose', 1999), ('t12', 'al9', 'ar2', 'Promo Edit', NULL);") ==
+        SQLITE_OK);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_singles(lib, "ar2", &tracks) == MC_OK && tracks && tracks->count == 3);
+  if (tracks && tracks->count == 3) {
+    CHECK_STR(tracks->items[0].title, "Over the Ocean");
+    CHECK(tracks->items[0].year == 1994); /* its album's */
+    CHECK_STR(tracks->items[0].album, "Low Singles");
+    CHECK(strcmp(tracks->items[0].album_uid, "al4") == 0);
+    CHECK_STR(tracks->items[1].title, "Loose");
+    CHECK(tracks->items[1].year == 1999 && !tracks->items[1].album && !tracks->items[1].album_uid[0]);
+    CHECK_STR(tracks->items[1].artist, "Low");
+    CHECK_STR(tracks->items[2].title, "Promo Edit");
+    CHECK(tracks->items[2].year == 2003 && strcmp(tracks->items[2].album_uid, "al9") == 0);
+  }
+  mc_track_list_free(tracks);
+  /* Guest's single album is theirs too, though the track is Low's. */
+  tracks = NULL;
+  CHECK(mc_library_list_artist_singles(lib, "ar3", &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) CHECK_STR(tracks->items[0].title, "Promo Edit");
+  mc_track_list_free(tracks);
+  CHECK(mc_library_list_artist_singles(lib, NULL, &tracks) == MC_ERR_INVALID_ARG);
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid IN ('t11', 't12'); DELETE FROM albums WHERE uid = 'al9';") ==
+        SQLITE_OK);
 
   /* The artists with something here: nothing yet, then by the files there are. Words and
    * Canada are Low's tracks here, and Secret Name their album here; Duet is Guest's track
@@ -851,8 +935,8 @@ static void test_artists_and_groups(const char *scratch) {
   CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 3);
   if (artists && artists->count == 3) {
     CHECK(strcmp(artists->items[1].uid, "ar2") == 0 && artists->items[1].track_count == 2);
-    CHECK(strcmp(artists->items[2].uid, "ar6") == 0);
-    CHECK(artists->items[2].album_count == 1 && artists->items[2].track_count == 1);
+    CHECK(strcmp(artists->items[2].uid, "ar6") == 0); /* listed for its single */
+    CHECK(artists->items[2].album_count == 0 && artists->items[2].track_count == 1);
   }
   mc_artist_list_free(artists);
   CHECK(mc_library_list_artists_here(NULL, &artists) == MC_ERR_INVALID_ARG);
@@ -1003,7 +1087,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 11);
+  CHECK(mc_library_schema_version(lib) == 12);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -1084,7 +1168,7 @@ int main(int argc, char **argv) {
   if (lib) {
     CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
     CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
-    CHECK(mc_library_schema_version(lib) == 11);
+    CHECK(mc_library_schema_version(lib) == 12);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }
@@ -1119,6 +1203,7 @@ int main(int argc, char **argv) {
   test_migration_v6(argc > 1 ? argv[1] : ".");
   test_recents(argc > 1 ? argv[1] : ".");
   test_migration_v10(argc > 1 ? argv[1] : ".");
+  test_migration_v12(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
   test_playable(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");
