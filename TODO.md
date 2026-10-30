@@ -5,7 +5,7 @@
 Big pieces that haven't been started, or that only one platform has.
 
 - **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; only Windows can create, edit, rename or delete one (its rule editor, smart_editor.c). Linux and Android need theirs (built from mc_smart_field_get() and the mc_smart_*_label() words)
-- **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard (Linux over MPRIS too); no on-screen control anywhere, and Android uses the core's volume only to duck (before Android 8)
+- **Volume UI** - the desktops have a speaker at the right of the header bar that drops down a volume slider and a mute button (volume_popup.c, volume_button.c), and change the volume from the keyboard too (Linux over MPRIS as well); Android keeps to the system's volume, using the core's only to duck (before Android 8), and Wear OS has none
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
@@ -26,7 +26,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Delete (with restore) | albums, tracks | albums, tracks | albums, tracks (permanent: no trash to restore from) | no |
 | Remove from this device | albums, artists | albums, artists (only compiled) | albums, artists | no |
 | Shuffle | core's | core's | core's | no |
-| Volume | keyboard only | keyboard, MPRIS | system's (core's for ducking) | no |
+| Volume | drop-down slider, keyboard | popover slider, keyboard, MPRIS | system's (core's for ducking) | no |
 | Import | yes | yes | yes (simpler review) | no |
 | Sync | yes | yes (barely tested) | yes | mock-up |
 | Merging libraries (pairing) | yes | yes (built, not run) | yes | no |
@@ -78,7 +78,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
 - Core - repeat (one, all); no frontend offers it (Ctrl+R is kept for it on the desktops)
 - All - a play queue: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither), and a view of what's queued
-- All - an on-screen volume control (the desktops flash the level in the now-playing strip for now)
 - Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
 
 ### Scrobbling
@@ -154,6 +153,7 @@ The desktops' shortcuts are listed in README.md (Linux also shows them with Ctrl
 ### Windows screen readers and custom-drawn controls
 The album grid, track list, sidebar and search page have UI Automation providers (uia.c) that raise name and status changes as property-change events; the now-playing strip is a live region for its flash ("Volume 40%"); the track list's and album grid's header buttons are reachable from the keyboard. Still to do:
 - The artist page (kithsong_artists) is custom-drawn without a provider, and the now-playing strip exposes only the flash or the track's name: no seek bar or times
+- The volume drop-down's slider is a Slider named by its level ("Volume 40%") with no RangeValue pattern, so a screen reader can't set it directly (the arrow keys do)
 
 ## Wear OS
 
@@ -192,6 +192,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 - The notification while the window is in the background (only compiled), of a pairing request, a refusal shown before any code, and the merge's summary: that it shows on GNOME and KDE, that clicking it brings the window up with the code or message (the app.show-pair-request action; the merge's window over it), and that it goes once the window is active, the request ends, or its dialog or the merge's window closes
 - The track list's keys and the artist list's row menu: run under Xvfb in Docker (GTK 4.18, libadwaita 1.7). Seen working: Alt+Up/Down, Delete and F2 in a playlist, Enter, the Menu key and Shift+F10 (the menu shows Alt+Up, Alt+Down, Delete and F2 beside its items, and they don't act outside the list), and the Menu key in an artist page's tracks and elsewhere on the page. Not checked: the long press (no touchscreen), the Menu key with no track selected (the playlist's header menu) or with the selected track scrolled out of sight, Remove from this computer / Sync to this computer on an artist row (needs a group), and a real desktop session
 - Go to album and Go to artist on the track list's and the artist page's track menus (only compiled): that each is hidden where it should be (a single's or no album, the album shown, the artist's own page), and that the album opens with the track selected
+- The header bar's volume control (volume_button.c): only compiled (GTK 4.14). Check the popover's slider taking the focus when it opens, its arrow keys, the speaker muting, and the icon and slider following the keyboard and MPRIS
 - The shortcuts list's AdwShortcutsDialog (libadwaita 1.8+) is written but not built: the Docker image has libadwaita 1.7, which gets the GtkShortcutsWindow fallback. Check it on a 1.8 system (e.g. the GNOME 49+ Flatpak runtime)
 
 ### Windows
@@ -201,6 +202,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 - Deleting a track while it plays
 - Go to Album and Go to Artist on the track list's and a single's menus: only syntax-checked with MinGW, never built or run
 - Volume's fade (only silent test files so far)
+- The volume drop-down (volume_popup.c): only cross-compiled with MinGW, never run. Check the main window keeping its active look and Mica while it's open, a click on the speaker closing it without opening it again, the focus going back on Escape, the wheel, Windows 10's border (no rounded corners there), high contrast, and the speaker and slider through UI Automation
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns, focus events, and listeners for property changes and live regions
 - The empty Playlists page's Choose what to sync (needs this PC in a group with every playlist hidden), pairing from the empty Albums page's menu, and the empty-page button through UI Automation
 - The pairing dialog's ended page with a real pairing: Choose what to sync, the archive explainer (and the dialog growing to fit it), Create a new library and Pair again
