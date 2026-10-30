@@ -15,13 +15,22 @@
  *   +------+ +------+ +------+ +---
  *   | art  | | art  | | art  | |       <- scrolls sideways
  *   +------+ +------+ +------+ +---
+ *   Singles
+ *   +------+ +------+
+ *   | art  | | art  |                  <- likewise
+ *   +------+ +------+
  *   Tracks
  *   Words                    I Could Live in Hope     3:22
  *   Lazy                     Long Division            4:51
  *
  * The albums are every one the artist is on, those most theirs first (see
  * mc_library_list_artist_albums()); beneath each is its year, or its artist when that's
- * someone else. Clicking one opens it on the Albums page. The tracks are every one credited
+ * someone else. Clicking one opens it on the Albums page. The singles are the artist's tracks
+ * that are alone on their album or have none (mc_library_list_artist_singles()), which the
+ * album listings leave out, as tiles with the year (or another artist) beneath; clicking one
+ * (or Enter) plays the singles from there, and they have the tracks' menu and drag onto
+ * playlists as tracks do (drag.h). Albums and Singles are hidden when the artist has none, so
+ * an artist of only singles shows those and the tracks. The tracks are every one credited
  * to the artist (mc_library_list_artist_tracks()), with their albums; double-click or Enter
  * plays the artist's tracks from there, and right-click (or the Menu key) gives Add to playlist
  * and Delete from library. Play and Shuffle play them all; the header's menu ("...", or the
@@ -52,9 +61,9 @@ typedef struct artist_view_callbacks {
 
 GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb);
 
-/* Lists the artists, and the open artist's albums and tracks, from a->lib again, keeping the
- * list's place; if the open artist has gone, back to the list. Call whenever the library
- * changes. */
+/* Lists the artists, and the open artist's albums, singles and tracks, from a->lib again,
+ * keeping the list's place; if the open artist has gone, back to the list. Call whenever the
+ * library changes. */
 void artist_view_reload(void);
 
 /* Opens the page of the artist with uid and records it in the recents. FALSE if the library
