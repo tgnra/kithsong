@@ -98,6 +98,12 @@ void mc_rows_applier_free(mc_rows_applier *a);
  * unknown entity or field are logged but never applied. *logged counts the new rows. */
 mc_status mc_rows_apply(mc_rows_applier *a, const mc_row *rows, int count, int *logged);
 
+/* Applies rows already in the changelog again, as if they had just arrived: those where
+ * (an SQL condition on changelog's columns) selects, each field they name set to its winner.
+ * For rows logged while this version didn't know their table or column, once a migration
+ * adds it. One transaction. */
+mc_status mc_rows_reapply(mc_rows_applier *a, const char *where);
+
 /* --- Reading and comparing --- */
 
 /* hex SHA-256 over the version vector: origins sorted, each "<origin>=<hlc>\n". */

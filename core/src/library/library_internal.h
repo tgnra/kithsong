@@ -40,6 +40,24 @@ char *mc_library_abspath(const mc_library *lib, const char *rel);
 mc_status mc_library_commit(mc_library *lib);
 void mc_library_rollback(mc_library *lib);
 
+/* Artist credits (docs/schema.md). A track or album credited "A feat. B" shows its
+ * artist_credit, else its first artist's name; a track with no artist of its own shows its
+ * album's. With t, ar, al and aar as in TRACK_COLS: */
+#define TRACK_ARTIST_NAME "coalesce(t.artist_credit, ar.name, al.artist_credit, aar.name)"
+
+/* The albums, and the tracks, credited to artist p (an SQL parameter or column): artist_uid
+ * is the first artist, and credit rows past position 0 the others. Row 0 repeats artist_uid
+ * and isn't read, so a peer of an older version that changes artist_uid alone is followed.
+ * A track with no artist of its own is credited as its album is. Queries of uids. */
+#define CREDITED_ALBUMS(p) \
+  "SELECT uid FROM albums WHERE artist_uid = " p \
+  " UNION SELECT album_uid FROM album_artists WHERE artist_uid = " p " AND position > 0"
+#define CREDITED_TRACKS(p) \
+  "SELECT uid FROM tracks WHERE artist_uid = " p \
+  " UNION SELECT track_uid FROM track_artists WHERE artist_uid = " p " AND position > 0" \
+  " UNION SELECT t0.uid FROM tracks t0 WHERE t0.artist_uid IS NULL" \
+  "  AND t0.album_uid IN (" CREDITED_ALBUMS(p) ")"
+
 /* The columns mc_library_read_tracks() reads, then the joins they need; t is the track, al
  * its album, ar its artist and aar the album's artist. The file is the original if there
  * are transcodes too. A playlist's query adds its entry's uid as a last column. */
@@ -47,7 +65,7 @@ void mc_library_rollback(mc_library *lib);
   "SELECT t.uid, t.title, t.track_no, t.disc_no, t.duration_ms," \
   " (SELECT f.path FROM files f WHERE f.track_uid = t.uid" \
   "  ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)," \
-  " coalesce(ar.name, aar.name), al.title, al.art_hash IS NOT NULL, coalesce(ar.uid, aar.uid)," \
+  " " TRACK_ARTIST_NAME ", al.title, al.art_hash IS NOT NULL, coalesce(ar.uid, aar.uid)," \
   " coalesce(t.year, al.year), al.uid"
 #define TRACK_JOINS \
   " LEFT JOIN artists ar ON ar.uid = t.artist_uid" \
@@ -62,7 +80,8 @@ void mc_library_rollback(mc_library *lib);
  * a is the album and ar its artist. The folder is wherever the album's files are: any one
  * file's directory will do. */
 #define ALBUM_COLS \
-  "SELECT a.uid, a.title, ar.name, a.year, " ALBUM_IS_SINGLE ", a.art_hash IS NOT NULL," \
+  "SELECT a.uid, a.title, coalesce(a.artist_credit, ar.name), a.year, " ALBUM_IS_SINGLE \
+  ", a.art_hash IS NOT NULL," \
   " (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid" \
   "  WHERE t.album_uid = a.uid LIMIT 1), ar.uid"
 #define ALBUM_JOINS " LEFT JOIN artists ar ON ar.uid = a.artist_uid"

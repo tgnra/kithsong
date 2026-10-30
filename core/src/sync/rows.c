@@ -740,6 +740,8 @@ static mc_status merge_classes(mc_rows_applier *a, mc_merge_pair **pairs, int *n
   return st;
 }
 
+static mc_status settle(mc_rows_applier *a, mc_status st);
+
 mc_status mc_rows_apply(mc_rows_applier *a, const mc_row *rows, int count, int *logged) {
   if (!a || (!rows && count) || count < 0) return MC_ERR_INVALID_ARG;
   if (logged) *logged = 0;
@@ -770,6 +772,45 @@ mc_status mc_rows_apply(mc_rows_applier *a, const mc_row *rows, int count, int *
     if (won && col >= 0) tc->won |= 1u << col;
   }
 
+  st = settle(a, st);
+  if (st == MC_OK && logged) *logged = n_new;
+  return st;
+}
+
+mc_status mc_rows_reapply(mc_rows_applier *a, const char *where) {
+  if (!a || !where) return MC_ERR_INVALID_ARG;
+  mc_status st = a->tg.begin(a->tg.owner);
+  if (st != MC_OK) return st;
+  *a->tg.applying_remote = 1;
+  a->ntouched = 0;
+  if (sqlite3_exec(a->tg.db, "PRAGMA defer_foreign_keys = ON", NULL, NULL, NULL) != SQLITE_OK)
+    st = MC_ERR_DB;
+  char *sql = sqlite3_mprintf("SELECT DISTINCT entity, row_uid, field FROM changelog WHERE %s", where);
+  sqlite3_stmt *s = NULL;
+  if (st == MC_OK && (!sql || sqlite3_prepare_v2(a->tg.db, sql, -1, &s, NULL) != SQLITE_OK))
+    st = MC_ERR_DB;
+  sqlite3_free(sql);
+  int rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(s)) == SQLITE_ROW) {
+    const char *entity = (const char *)sqlite3_column_text(s, 0);
+    const char *row_uid = (const char *)sqlite3_column_text(s, 1);
+    const char *field = (const char *)sqlite3_column_text(s, 2);
+    int t = entity ? find_table(a, entity) : -1;
+    if (t < 0 || !row_uid || strlen(row_uid) != UID_LEN || !field) continue;
+    int col = strcmp(field, "_deleted") ? col_index(&a->tables[t], field) : -1;
+    if (col < 0 && strcmp(field, "_deleted")) continue;
+    touched *tc = touch(a, t, row_uid);
+    if (!tc) st = MC_ERR_NOMEM;
+    else if (col >= 0) tc->won |= 1u << col; /* every field is set to its winner */
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(s);
+  return settle(a, st);
+}
+
+/* The rest of a batch once the touched rows are known: merges, rows brought in line with
+ * the changelog, references; then the commit (or, if st or any of it failed, the rollback). */
+static mc_status settle(mc_rows_applier *a, mc_status st) {
   mc_merge_pair *pairs = NULL;
   int npairs = 0;
   if (st == MC_OK && a->tg.merge) st = merge_classes(a, &pairs, &npairs);
@@ -796,7 +837,6 @@ mc_status mc_rows_apply(mc_rows_applier *a, const mc_row *rows, int count, int *
     a->tg.rollback(a->tg.owner);
     return st;
   }
-  if (logged) *logged = n_new;
   return MC_OK;
 }
 

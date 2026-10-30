@@ -41,8 +41,9 @@ static const char *const *const k_type_ops[] = {k_text_ops, k_int_ops,    k_int_
 
 /* A field's SQL for one subject. For text, int, duration and date fields expr is a value;
  * for the others it's a condition, with one ? for the value if it takes one. sort is what to
- * order by, if not expr. A field with wrap is true of an album if it's true of any of its
- * tracks: the condition on tt goes inside wrap and a closing parenthesis. */
+ * order by, if not expr. A field with wrap is true if it's true of any of the rows wrap
+ * ranges over (an album's tracks tt, a credit's names cn): the condition goes inside wrap
+ * and a closing parenthesis. */
 typedef struct field_sql {
   const char *expr, *sort, *wrap;
 } field_sql;
@@ -59,16 +60,37 @@ typedef struct field_def {
 #define A_PLAYS " FROM tracks tt JOIN track_plays p ON p.track_uid = tt.uid WHERE tt.album_uid = a.uid)"
 #define A_FILES " FROM tracks tt JOIN files f ON f.track_uid = tt.uid WHERE tt.album_uid = a.uid"
 
+/* An artist condition holds if it holds of the credit as shown ("A feat. B") or of any one of
+ * its artists, so "artist is B" finds what B is featured on. The names as rows cn.name, for
+ * a track (its own credit, else its album's), a track's album and an album. */
+#define CREDIT_NAMES(shown, first, rows) \
+  "EXISTS (SELECT 1 FROM (SELECT " shown " AS name UNION ALL SELECT " first \
+  " UNION ALL SELECT x.name FROM " rows " JOIN artists x ON x.uid = c.artist_uid" \
+  " WHERE c.position > 0) cn WHERE "
+#define T_ARTIST_NAMES                                                                       \
+  CREDIT_NAMES(TRACK_ARTIST_NAME, "coalesce(ar.name, aar.name)",                             \
+               "(SELECT artist_uid, position FROM track_artists WHERE track_uid = t.uid"     \
+               " UNION ALL SELECT artist_uid, position FROM album_artists"                   \
+               " WHERE t.artist_uid IS NULL AND album_uid = t.album_uid) c")
+#define T_ALBUM_ARTIST_NAMES                                         \
+  CREDIT_NAMES("coalesce(al.artist_credit, aar.name)", "aar.name", \
+               "(SELECT artist_uid, position FROM album_artists WHERE album_uid = t.album_uid) c")
+#define A_ARTIST_NAMES                                             \
+  CREDIT_NAMES("coalesce(a.artist_credit, ar.name)", "ar.name", \
+               "(SELECT artist_uid, position FROM album_artists WHERE album_uid = a.uid) c")
+
 static const field_def k_fields[] = {
   {"title", F_TEXT, {{"t.title", NULL, NULL}, {"a.title", NULL, NULL}}},
   {"artist",
    F_TEXT,
-   {{"coalesce(ar.name, aar.name)",
+   {{"cn.name",
      "CASE WHEN ar.uid IS NOT NULL THEN coalesce(ar.sort_name, ar.name)"
      " ELSE coalesce(aar.sort_name, aar.name) END",
-     NULL},
-    {"ar.name", "coalesce(ar.sort_name, ar.name)", NULL}}},
-  {"album_artist", F_TEXT, {{"aar.name", "coalesce(aar.sort_name, aar.name)", NULL}, {NULL, NULL, NULL}}},
+     T_ARTIST_NAMES},
+    {"cn.name", "coalesce(ar.sort_name, ar.name)", A_ARTIST_NAMES}}},
+  {"album_artist",
+   F_TEXT,
+   {{"cn.name", "coalesce(aar.sort_name, aar.name)", T_ALBUM_ARTIST_NAMES}, {NULL, NULL, NULL}}},
   {"album", F_TEXT, {{"al.title", NULL, NULL}, {NULL, NULL, NULL}}},
   {"genre",
    F_TEXT,
@@ -460,7 +482,10 @@ static void put_order(query *q, yyjson_val *order) {
     }
     const field_def *f = find_field(q->subject, name);
     const field_sql *s = f ? &f->sql[q->subject] : NULL;
-    if (!yyjson_is_obj(key) || !f || !sortable(f->type) || s->wrap || !only_keys(key, sort_keys) ||
+    /* A wrapped field's expr only means something inside its wrap; its sort, if it has one,
+     * stands alone. */
+    if (!yyjson_is_obj(key) || !f || !sortable(f->type) || (s->wrap && !s->sort) ||
+        !only_keys(key, sort_keys) ||
         (dir && !yyjson_equals_str(dir, "asc") && !yyjson_equals_str(dir, "desc"))) {
       bad(q);
       return;
