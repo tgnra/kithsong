@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -83,7 +84,7 @@ class MainActivity : ComponentActivity() {
 
     // ACTION_VIEW of a zip ("Open with"), ACTION_SEND of a zip or audio file, ACTION_SEND_MULTIPLE
     // of audio files (the share sheet). The intent's grant covers reading them; the importer
-    // copies them in straight away.
+    // copies them in straight away. While an import runs they're added to the end of it.
     private fun importShared(intent: Intent?) {
         val uris: List<Uri> = when (intent?.action) {
             Intent.ACTION_VIEW -> listOfNotNull(intent.data)
@@ -94,8 +95,13 @@ class MainActivity : ComponentActivity() {
         }
         if (uris.isEmpty()) return
         val importer = (application as KithsongApp).importer
-        if (importer.start(ImportSource.Documents(uris))) askForNotificationsOnce()
-        else Log.w(TAG, "An import is already running; ${uris.size} shared files left out")
+        if (importer.start(ImportSource.Documents(uris))) {
+            askForNotificationsOnce()
+        } else {
+            importer.add(uris)
+            val added = resources.getQuantityString(R.plurals.import_added, uris.size, uris.size)
+            Toast.makeText(this, added, Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onStart() {
