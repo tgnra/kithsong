@@ -40,6 +40,7 @@ add_executable(kithsong WIN32
   src/theme.c
   src/track_list.c
   src/uia.c
+  src/volume_popup.c
   src/wstr.c
   src/app.rc
   "${CMAKE_CURRENT_BINARY_DIR}/version.rc")

@@ -6,6 +6,7 @@
 #include "mpris.h"
 #include "now_playing.h"
 #include "track_list.h"
+#include "volume_button.h"
 
 enum { TICK_MS = 250 }; /* moves the seekbar on while playing */
 
@@ -298,6 +299,7 @@ void playback_set_volume(int volume) {
   s.volume = volume;
   if (s.player) mc_player_set_volume(s.player, s.volume);
   mpris_volume_changed();
+  volume_button_update();
 }
 
 int playback_volume(void) {
@@ -309,6 +311,7 @@ void playback_set_muted(gboolean muted) {
   s.muted = muted;
   if (s.player) mc_player_set_muted(s.player, muted);
   mpris_volume_changed();
+  volume_button_update();
 }
 
 gboolean playback_muted(void) {

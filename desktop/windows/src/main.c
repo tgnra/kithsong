@@ -1,7 +1,7 @@
 /* Win32 frontend. Layout:
  *
  *   +--------------------------------------------------------------+
- *   | |<  >  >| [] 0:00 ==o----------------- -3:12 [S]    _ [] X |  toolbar = title bar
+ *   | |<  >  >| [] 0:00 ==o--------------- -3:12 [S] [V]  _ [] X |  toolbar = title bar
  *   +-----------+.-----------------------------------+-------------+
  *   | Home      |                                    | track list  |
  *   | Search    |                                    | (shown when |
@@ -43,8 +43,9 @@
  * now_playing.c. The track list's Add to Playlist menu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
  * changes (a smart playlist's too: its rule's editor is smart_editor.c) and they're made
- * here. The toolbar buttons, and the shuffle toggle after the seekbar
- * ([S]), are owner-drawn here; shuffle is kept in the settings.
+ * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]) and the speaker
+ * before the caption buttons ([V]) are owner-drawn here; shuffle is kept in the settings, as
+ * is the volume, which the speaker's drop-down (volume_popup.c) and the keyboard change.
  *
  * Sync (sync_bridge.c) runs while a library is open, and stops before it closes, so switching
  * library restarts it. Its events arrive as WM_APP_SYNC. The sidebar's DEVICES section lists
@@ -102,6 +103,7 @@
 #include "sync_bridge.h"
 #include "theme.h"
 #include "track_list.h"
+#include "volume_popup.h"
 #include "wstr.h"
 
 enum {
@@ -115,6 +117,7 @@ enum {
   ID_SEARCH,
   ID_ARTISTS,
   ID_SHUFFLE, /* after the seekbar */
+  ID_VOLUME,  /* before the caption buttons: opens volume_popup.c */
   NUM_BUTTONS = ID_NEXT - ID_PREV + 1
 };
 
@@ -153,6 +156,7 @@ typedef struct app {
   HWND wnd;
   HWND buttons[NUM_BUTTONS];
   HWND shuffle; /* a toggle, drawn like the playback buttons */
+  HWND volume;  /* the speaker, drawn like them too */
   HWND tooltip;
   HWND sidebar;
   HWND grid;
@@ -235,6 +239,8 @@ static void update_font(void) {
   device_view_set_font(font, g_app.dpi);
   for (int i = 0; i < NUM_BUTTONS; i++) InvalidateRect(g_app.buttons[i], NULL, FALSE);
   InvalidateRect(g_app.shuffle, NULL, FALSE);
+  InvalidateRect(g_app.volume, NULL, FALSE);
+  volume_popup_close(); /* it opens again at the new size */
 
   if (g_app.font) DeleteObject(g_app.font);
   g_app.font = font;
@@ -264,15 +270,17 @@ static void layout(void) {
   int tracks_w = g_app.show_tracks ? g_app.tracks_w : 0;
   int grid_w = w - side_w - (tracks_w ? tracks_w + scale(1) : 0);
 
-  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 6);
+  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 7);
   int x = pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  /* The seekbar and the shuffle button after it take the space between the playback and
-   * caption buttons, up to a point, centred in the window where that leaves them clear of
+  int volume_x = w - caption_buttons_width() - pad - icon;
+  dwp = DeferWindowPos(dwp, g_app.volume, NULL, volume_x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
+  /* The seekbar and the shuffle button after it take the space between the playback buttons
+   * and the speaker, up to a point, centred in the window where that leaves them clear of
    * both. */
   int min_left = x - scale(2) + scale(NOW_PLAYING_GAP);
-  int max_right = w - caption_buttons_width() - scale(NOW_PLAYING_GAP);
+  int max_right = volume_x - scale(NOW_PLAYING_GAP);
   int np_w = max_right - min_left;
   if (np_w > scale(NOW_PLAYING_MAX)) np_w = scale(NOW_PLAYING_MAX);
   int np_left = (w - np_w) / 2;
@@ -525,9 +533,10 @@ static LRESULT CALLBACK button_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UI
   return DefSubclassProc(wnd, msg, wp, lp);
 }
 
-/* The playback buttons, and the shuffle button, are bare icons with a fill on hover. Drawn
- * with alpha, as they sit over Mica. Shuffle, while on, is in the accent colour with a dot
- * under it, as Windows' Media Player shows its toggles. */
+/* The playback buttons, and the shuffle and speaker buttons, are bare icons with a fill on
+ * hover. Drawn with alpha, as they sit over Mica. Shuffle, while on, is in the accent colour
+ * with a dot under it, as Windows' Media Player shows its toggles. The speaker shows the
+ * volume (volume_popup_glyph()), with the selected fill while its drop-down is open. */
 static void draw_button(const DRAWITEMSTRUCT *dis) {
   static const wchar_t glyphs[NUM_BUTTONS] = {0xE892, 0xE768, 0xE893}; /* Previous, Play, Next */
   RECT rc = {0, 0, dis->rcItem.right - dis->rcItem.left, dis->rcItem.bottom - dis->rcItem.top};
@@ -536,9 +545,11 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   canvas_clear(c, &rc, theme.frame, theme.mica ? 0 : 255);
 
   BOOL shuffle = dis->CtlID == ID_SHUFFLE, on = shuffle && playback_shuffle();
+  BOOL volume = dis->CtlID == ID_VOLUME;
   BOOL pressed = (dis->itemState & ODS_SELECTED) != 0, disabled = (dis->itemState & ODS_DISABLED) != 0;
   control_state state = disabled ? STATE_NORMAL
                         : pressed ? STATE_PRESSED
+                        : volume && volume_popup_is_open() ? STATE_SELECTED
                         : dis->hwndItem == g_app.hot_button ? STATE_HOT
                                                             : STATE_NORMAL;
   int radius = scale(6);
@@ -546,6 +557,7 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   if (disabled) color = theme.text3;
   else if (on && state != STATE_PRESSED) color = theme.accent;
   wchar_t glyph = shuffle ? 0xE8B1                                         /* Shuffle */
+                  : volume ? volume_popup_glyph()
                   : dis->CtlID == ID_PLAY && playback_is_playing() ? 0xE769 /* Pause */
                                                                    : glyphs[dis->CtlID - ID_PREV];
   canvas_text(c, &glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, g_app.icon_font,
@@ -572,6 +584,7 @@ static void apply_theme(void) {
   search_view_update(g_app.dpi, g_app.font);
   artist_view_update(g_app.dpi, g_app.font);
   album_grid_theme_changed();
+  volume_popup_close(); /* it opens again in the new colours */
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
@@ -607,6 +620,12 @@ static void create_controls(void) {
   set_button_label(g_app.buttons[ID_NEXT - ID_PREV], MC_STR_NEXT_TRACK, MC_STR_WINDOWS_SHORTCUT_NEXT);
   set_button_label(g_app.buttons[ID_PLAY - ID_PREV], MC_STR_PLAY, MC_STR_WINDOWS_SHORTCUT_PLAY_PAUSE);
   set_button_label(g_app.shuffle, MC_STR_SHUFFLE_OFF, MC_STR_WINDOWS_SHORTCUT_SHUFFLE);
+  /* Its name and tooltip stay "Volume"; the drop-down says the level. */
+  g_app.volume = child(WC_BUTTONW, mc_wstr(MC_STR_VOLUME), BS_OWNERDRAW, ID_VOLUME);
+  SetWindowSubclass(g_app.volume, button_proc, 0, 0);
+  ti.uId = (UINT_PTR)g_app.volume;
+  ti.lpszText = (wchar_t *)mc_wstr(MC_STR_VOLUME);
+  SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
 
   g_app.sidebar = sidebar_create(g_app.wnd, ID_SIDEBAR);
 
@@ -694,18 +713,38 @@ static void set_shuffle_flash(BOOL on) {
   now_playing_flash(mc_wstr(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
 }
 
-/* Volume 0 to 100, kept in the settings for next time. Changing it unmutes. Says so in the
- * now-playing strip for a moment, as there's no volume control to show it. */
-static void set_volume(int volume) {
+/* The speaker and its drop-down show the volume and muting. */
+static void volume_changed(void) {
+  InvalidateRect(g_app.volume, NULL, FALSE);
+  volume_popup_update();
+}
+
+/* Volume 0 to 100, kept in the settings for next time. Changing it unmutes. */
+static void change_volume(int volume) {
   playback_set_muted(FALSE);
   playback_set_volume(volume);
-  wchar_t text[64];
-  mc_wformat(text, 64, mc_str(MC_STR_VOLUME_LEVEL), MC_D(playback_volume()));
-  now_playing_flash(text);
+  volume_changed();
   mc_settings_set_volume(g_app.settings, playback_volume());
   g_app.volume_pending = TRUE;
   SetTimer(g_app.wnd, TIMER_SAVE_VOLUME, SAVE_VOLUME_MS, NULL);
 }
+
+/* From the keyboard: says so in the now-playing strip for a moment, as the speaker only
+ * shows the level roughly. */
+static void set_volume(int volume) {
+  change_volume(volume);
+  wchar_t text[64];
+  mc_wformat(text, 64, mc_str(MC_STR_VOLUME_LEVEL), MC_D(playback_volume()));
+  now_playing_flash(text);
+}
+
+/* The speaker's drop-down, which shows the change itself. */
+static void set_muted(BOOL muted) {
+  playback_set_muted(muted);
+  volume_changed();
+}
+
+static const volume_popup_host volume_host = {change_volume, set_muted};
 
 static void save_volume(void) {
   KillTimer(g_app.wnd, TIMER_SAVE_VOLUME);
@@ -714,7 +753,7 @@ static void save_volume(void) {
 }
 
 static void toggle_muted(void) {
-  playback_set_muted(!playback_muted());
+  set_muted(!playback_muted());
   wchar_t text[64];
   if (playback_muted()) lstrcpynW(text, mc_wstr(MC_STR_VOLUME_MUTED), 64);
   else mc_wformat(text, 64, mc_str(MC_STR_VOLUME_LEVEL), MC_D(playback_volume()));
@@ -1398,6 +1437,9 @@ static void on_command(int id, int code) {
     case ID_SHUFFLE:
       set_shuffle(!playback_shuffle());
       break;
+    case ID_VOLUME:
+      volume_popup_toggle(g_app.volume, g_app.dpi, &volume_host);
+      break;
     case ID_TRACKS:
       if (code == TLN_PLAY) play_album(track_list_play_index());
       else if (code == TLN_PLAY_ALL || code == TLN_SHUFFLE_ALL) play_all(code == TLN_SHUFFLE_ALL);
@@ -1504,7 +1546,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DRAWITEM: {
       const DRAWITEMSTRUCT *dis = (const DRAWITEMSTRUCT *)lp;
-      if ((dis->CtlID >= ID_PREV && dis->CtlID < ID_PREV + NUM_BUTTONS) || dis->CtlID == ID_SHUFFLE) draw_button(dis);
+      if ((dis->CtlID >= ID_PREV && dis->CtlID < ID_PREV + NUM_BUTTONS) || dis->CtlID == ID_SHUFFLE ||
+          dis->CtlID == ID_VOLUME)
+        draw_button(dis);
       else device_view_draw_item(dis);
       return TRUE;
     }

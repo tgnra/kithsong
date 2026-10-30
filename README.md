@@ -141,8 +141,9 @@ pages Delete and F2 work on smart playlists and album groups too. The playback b
 other buttons' tooltips show their shortcuts.
 
 In a text box (e.g. search) the arrow keys, + and - keep their usual meaning. The volume is
-the app's own and is remembered; there's no volume control on screen yet, so the level shows
-briefly in place of the track's name.
+the app's own and is remembered. The speaker at the right of the header bar drops down a
+slider for it, beside a mute button; from the keyboard, the level shows briefly in place of
+the track's name.
 
 **Android**
 
