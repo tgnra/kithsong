@@ -285,20 +285,71 @@ A single is filed as what it is on MusicBrainz: a track of a release, like any a
 - there's no "&lt;artist&gt; Singles" album any more. Albums and files made as one before
   stay as they are, as an album of that title, until the music is imported again.
 
+## Artist credits
+
+A track or album credited to "A feat. B", "A, B & C" or "A x B" belongs to each of A, B and
+C. The credit as written is what's shown and what goes in `ARTIST` / `ALBUMARTIST`; its
+artists, in order, each with the join phrase that follows it (" feat. ", " & "), are what
+the import passes on to the library (`mc_db_album.credit`, `mc_db_track.credit`). Folders
+stay under the whole album credit: `Jay-Z & Kanye West/Watch the Throne (2011)/`.
+
+Where the artists come from:
+
+1. **MusicBrainz**, for a matched import: the `artist-credit` array of the release and of
+   each track (of the recording, for a recording found on its own), as it is: each artist's
+   name as credited, id, sort name and join phrase. It is never split again. The files get
+   `ARTISTS` and `ALBUMARTISTS` (one value per artist, by name as credited) and every id in
+   `MUSICBRAINZ_ARTISTID` and `MUSICBRAINZ_ALBUMARTISTID`. A track with no album has its
+   album lists removed; a recording whose release can't be looked up has its first credited
+   artist as the album artist, so the album lists hold that one.
+2. **Multi-valued tags**, for an import as-is: `ARTISTS` with `MUSICBRAINZ_ARTISTID` for the
+   track, `ALBUMARTISTS` with `MUSICBRAINZ_ALBUMARTISTID` for the album (`ARTISTS` when the
+   album artist is the track artist). The ids go with the names only when there are as many
+   of each. The join phrases are what's between the names in the `ARTIST` string when they
+   are all there in order (ignoring case), else "; ". A single name that is the credit
+   itself is just the credit.
+3. **The credit string**, otherwise, split by `mc_credit_split_text` (`credit.c`):
+   - "feat."-style separators always split: ` feat. `, ` feat `, ` ft. `, ` ft `,
+     ` featuring `, and a closing `(feat. B)` or `[feat. B]` (with any of those words).
+   - Ambiguous separators split only where every resulting part is an artist the library
+     knows and the whole isn't one: ` & `, `, `, ` and `, ` x `, ` vs. `, ` vs `, ` with `,
+     ` / `, `; `, and the serial-comma forms `, & ` and `, and `. The longest known name is
+     taken first, so "Earth, Wind & Fire & The Emotions" keeps "Earth, Wind & Fire" whole
+     when it's known; when any part isn't known, the whole stretch stays one artist
+     ("Tyler, the Creator").
+   - An artist is known when the library has an `artists` row of that name (ignoring case)
+     that has a MusicBrainz id, or whose name has no separator at all. Older versions made
+     rows like "A & B" from whole credits; those don't count, but "Simon & Garfunkel" with
+     its MusicBrainz id does, and stays whole.
+   - Separators match ignoring case and need the spaces around them ("AC/DC", "Aftermath"
+     stay whole). Parts are trimmed and never empty: a credit that would give an empty part
+     ("A & & B", "A feat.") is one artist.
+
+From tags or the string, a credit of one artist under its own name is passed as the credit
+alone (`credit_count` 0), with the `MUSICBRAINZ_ARTISTID` the file has. The whole credit's
+MusicBrainz id is only set when one artist is credited.
+
 ## Field mapping
 
 | Library field | Tag property (TagLib) | Notes |
 |---------------|-----------------------|-------|
 | track title | `TITLE` | |
-| track artist | `ARTIST` | credited name as on the release |
+| track artist | `ARTIST` | credited name as on the release ("A feat. B") |
+| track's artists | `ARTISTS` | one value per credited artist; see [Artist credits](#artist-credits) |
 | album | `ALBUM` | removed for a track with no album |
-| album artist | `ALBUMARTIST` | |
+| album artist | `ALBUMARTIST` | credited name as on the release |
+| album's artists | `ALBUMARTISTS` | one value per credited artist; removed for a track with no album |
 | year | `DATE` | release date; original year for a track with no album |
 | original year | `ORIGINALDATE` | release group's first release |
 | track/disc | `TRACKNUMBER`, `DISCNUMBER` | written as `n/total`; not for a track with no album |
-| mb ids | `MUSICBRAINZ_TRACKID` (recording), `MUSICBRAINZ_RELEASETRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID` | artist ids only when a single artist is credited |
+| mb ids | `MUSICBRAINZ_TRACKID` (recording), `MUSICBRAINZ_RELEASETRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID` | `MUSICBRAINZ_ARTISTID` and `MUSICBRAINZ_ALBUMARTISTID` hold one id per credited artist, in order |
 
-Writing an empty string through `mc_tags_write()` removes that tag.
+Writing an empty string through `mc_tags_write()` removes that tag. Multi-valued properties
+are '\n'-separated lists in `mc_tags` (`artists`, `album_artists`, `mb_artistids`,
+`mb_albumartistids`); `mb_artistid` and `mb_albumartistid` read as the first value. In ID3v2
+(MP3, WAV) `ARTISTS` and the artist ids are `TXXX` frames ("ARTISTS", "MUSICBRAINZ ARTIST
+ID", as TagLib names them) with one value per string; in FLAC and Opus, one Vorbis comment
+per value.
 
 ## Cover art
 

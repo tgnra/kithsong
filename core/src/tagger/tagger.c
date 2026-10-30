@@ -23,12 +23,14 @@
 
 #include "library/library_internal.h"
 #include "tagger/coverart.h"
+#include "tagger/credit.h"
 #include "tagger/dupes.h"
 #include "tagger/import_db.h"
 #include "tagger/match.h"
 #include "tagger/musicbrainz.h"
 #include "tagger/organize.h"
 #include "tagger/search_keys.h"
+#include "tagger/tagger_internal.h"
 #include "tagger/unzip.h"
 #include "util/platform.h"
 
@@ -1017,6 +1019,161 @@ static void track_from_tags(const file_entry *f, mc_db_track *t) {
   t->mb_albumid = f->tags.mb_albumid;
 }
 
+/* --- Artist credits (docs/tagging-rules.md, "Artist credits") --- */
+
+/* What a write allocates for its rows and tags, freed when it ends. */
+typedef struct pool {
+  void **p;
+  int n, cap;
+} pool;
+
+/* Takes ownership of v; NULL (and v freed) when out of memory. */
+static void *pool_add(pool *pl, void *v) {
+  if (!v) return NULL;
+  if (pl->n == pl->cap) {
+    int cap = pl->cap ? pl->cap * 2 : 16;
+    void **more = realloc(pl->p, (size_t)cap * sizeof *more);
+    if (!more) {
+      free(v);
+      return NULL;
+    }
+    pl->p = more;
+    pl->cap = cap;
+  }
+  return pl->p[pl->n++] = v;
+}
+
+static void pool_free(pool *pl) {
+  for (int i = 0; i < pl->n; i++) free(pl->p[i]);
+  free(pl->p);
+}
+
+static char *pool_range(pool *pl, const char *b, size_t n) {
+  char *s = malloc(n + 1);
+  if (!s) return NULL;
+  memcpy(s, b, n);
+  s[n] = '\0';
+  return pool_add(pl, s);
+}
+
+/* A MusicBrainz credit as rows, as it is; NULL if it has no parts. */
+static const mc_db_credit_part *mb_credit_rows(pool *pl, const mb_credit *c) {
+  if (!c->count) return NULL;
+  mc_db_credit_part *parts = pool_add(pl, calloc((size_t)c->count, sizeof *parts));
+  for (int i = 0; parts && i < c->count; i++)
+    parts[i] = (mc_db_credit_part){{c->parts[i].name, c->parts[i].sort_name, c->parts[i].id},
+                                   c->parts[i].join};
+  return parts;
+}
+
+/* The credit's names (ids: its ids) one per line, for ARTISTS and the id tags; with no
+ * parts, the one artist given, and "" for none, which removes the tag. */
+static char *credit_tag(pool *pl, const mb_credit *c, int ids, const char *one) {
+  if (!c->count) return one ? (char *)one : "";
+  size_t len = 1;
+  for (int i = 0; i < c->count; i++) {
+    const char *s = ids ? c->parts[i].id : c->parts[i].name;
+    len += (s ? strlen(s) : 0) + 1;
+  }
+  char *out = pool_add(pl, malloc(len));
+  if (!out) return NULL;
+  out[0] = '\0';
+  for (int i = 0; i < c->count; i++) {
+    const char *s = ids ? c->parts[i].id : c->parts[i].name;
+    if (!s) continue;
+    if (*out) strcat(out, "\n");
+    strcat(out, s);
+  }
+  return out;
+}
+
+/* Lines of a '\n'-separated tag, at most max; returns how many. */
+static int tag_lines(const char *s, const char **b, size_t *len, int max) {
+  int n = 0;
+  while (s && *s && n < max) {
+    const char *nl = strchr(s, '\n');
+    size_t m = nl ? (size_t)(nl - s) : strlen(s);
+    if (m) {
+      b[n] = s;
+      len[n++] = m;
+    }
+    s += m + (nl ? 1 : 0);
+  }
+  return n;
+}
+
+/* Where name (len bytes) is in s, ignoring ASCII case, or NULL. */
+static const char *find_nocase(const char *s, const char *name, size_t len) {
+  for (; *s; s++) {
+    size_t k = 0;
+    while (k < len && s[k] && tolower((unsigned char)s[k]) == tolower((unsigned char)name[k])) k++;
+    if (k == len) return s;
+  }
+  return NULL;
+}
+
+#define MAX_CREDIT 32
+
+/* The rows for a credit as a file's tags have it: from ARTISTS-style tags (names, with ids
+ * when there are as many), else split from the credit string against the library's artists.
+ * Returns the number of parts; 0 when the credit is one artist, the credit itself. */
+static int tag_credit_rows(mc_library *lib, pool *pl, const char *credit, const char *names,
+                           const char *ids, const mc_db_credit_part **out) {
+  *out = NULL;
+  if (!credit || !*credit) return 0;
+  const char *nb[MAX_CREDIT], *ib[MAX_CREDIT];
+  size_t nl[MAX_CREDIT], il[MAX_CREDIT];
+  int n = tag_lines(names, nb, nl, MAX_CREDIT), ni = tag_lines(ids, ib, il, MAX_CREDIT);
+  mc_credit_split split = {0};
+  if (!n) {
+    if (mc_credit_split_text(credit, mc_credit_known_in_library, lib, &split) != MC_OK) return 0;
+    n = split.count < MAX_CREDIT ? split.count : MAX_CREDIT;
+    for (int i = 0; i < n; i++) {
+      nb[i] = split.parts[i].name;
+      nl[i] = strlen(nb[i]);
+    }
+  }
+  int count = 0;
+  const char *cb = credit, *ce = credit + strlen(credit);
+  while (cb < ce && isspace((unsigned char)*cb)) cb++;
+  while (ce > cb && isspace((unsigned char)ce[-1])) ce--;
+  /* One artist under its own name: the credit alone. */
+  if (n > 1 || (n == 1 && (nl[0] != (size_t)(ce - cb) || find_nocase(cb, nb[0], nl[0]) != cb))) {
+    mc_db_credit_part *parts = pool_add(pl, calloc((size_t)n, sizeof *parts));
+    /* Join phrases: what is between the names in the credit, when they're there in order. */
+    const char *at = credit, *pos[MAX_CREDIT];
+    int in_order = 1;
+    for (int i = 0; i < n && in_order; i++) {
+      pos[i] = find_nocase(at, nb[i], nl[i]);
+      if (!pos[i]) in_order = 0;
+      else at = pos[i] + nl[i];
+    }
+    for (int i = 0; parts && i < n; i++) {
+      parts[i].artist.name = pool_range(pl, nb[i], nl[i]);
+      if (ni == n) parts[i].artist.mb_artistid = pool_range(pl, ib[i], il[i]);
+      if (i + 1 < n) {
+        const char *jb = in_order ? pos[i] + nl[i] : NULL;
+        size_t jl = in_order ? (size_t)(pos[i + 1] - jb) : 0;
+        parts[i].join = jl ? pool_range(pl, jb, jl) : "; ";
+      }
+      if (!parts[i].artist.name) parts = NULL;
+    }
+    if (parts) {
+      *out = parts;
+      count = n;
+    }
+  }
+  mc_credit_split_clear(&split);
+  return count;
+}
+
+/* Tests watch what an import writes (tagger/tagger_internal.h). */
+static mc_import_db_write_fn g_db_write = mc_import_db_write;
+
+void mc_import_set_db_write(mc_import_db_write_fn fn) {
+  g_db_write = fn ? fn : mc_import_db_write;
+}
+
 /* --- Placing files in the library --- */
 
 /* One file on its way into the library folder. */
@@ -1373,6 +1530,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   source_dir = dirname_of(imp->files[it->files[0]].path);
 
   mc_db_album album = {0};
+  pool owned = {0}; /* credit rows and tags */
   mb_release full;
   int lone = c ? lookup_lone_release(imp, c, &full) : -1;
   const int *map = c ? c->map : NULL;
@@ -1400,9 +1558,18 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
     album.disc_total = rel->disc_total;
     album.mb_albumid = rel->id;
     album.mb_releasegroupid = rel->releasegroup_id;
+    /* Folders stay under the whole credit; the credit's artists are rows and tags. */
     if (!album.no_album) album_rel = mc_album_dir(album.artist.name, rel->title, rel->year);
+    static const mb_credit no_credit;
+    const mb_credit *album_credit = partial ? &no_credit : &rel->credit;
+    album.credit = mb_credit_rows(&owned, album_credit);
+    album.credit_count = album.credit ? album_credit->count : 0;
+    char *album_artists = credit_tag(&owned, album_credit, 0, album.artist.name);
+    char *album_artist_ids = credit_tag(&owned, album_credit, 1, album.artist.mb_artistid);
+    if (!album_artists || !album_artist_ids || (album_credit->count && !album.credit))
+      error = mc_str(MC_STR_IMPORT_ERROR_NOMEM);
 
-    for (int i = 0; i < it->file_count; i++) {
+    for (int i = 0; i < it->file_count && !error; i++) {
       if (map[i] < 0) continue; /* left untouched; the UI shows it as unmatched */
       file_entry *f = &imp->files[it->files[i]];
       const mb_track *tr = &rel->tracks[map[i]];
@@ -1416,11 +1583,14 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       tags.mb_trackid = tr->recording_id;
       tags.mb_releasetrackid = tr->id;
       tags.mb_artistid = tr->artist_id ? tr->artist_id : "";
+      tags.artists = credit_tag(&owned, &tr->credit, 0, tr->artist);
+      tags.mb_artistids = credit_tag(&owned, &tr->credit, 1, tr->artist_id);
       tags.original_year = rel->original_year;
       char *name;
       if (album.no_album) {
         /* No release, so no album tags either. */
         tags.album = tags.album_artist = tags.mb_albumartistid = "";
+        tags.album_artists = tags.mb_albumartistids = "";
         tags.mb_albumid = tags.mb_releasegroupid = "";
         tags.year = rel->original_year ? rel->original_year : rel->year;
         char *dir = mc_artist_dir(tr->artist ? tr->artist : album.artist.name);
@@ -1431,6 +1601,8 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
         tags.album = rel->title;
         tags.album_artist = (char *)album.artist.name;
         tags.mb_albumartistid = album.artist.mb_artistid ? (char *)album.artist.mb_artistid : "";
+        tags.album_artists = album_artists;
+        tags.mb_albumartistids = album_artist_ids;
         tags.mb_albumid = rel->id;
         tags.mb_releasegroupid = rel->releasegroup_id;
         tags.year = rel->year;
@@ -1450,6 +1622,10 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       track_from_tags(f, t);
       t->title = tr->title;
       t->artist = (mc_db_artist){tr->artist, NULL, tr->artist_id};
+      t->credit = mb_credit_rows(&owned, &tr->credit);
+      t->credit_count = t->credit ? tr->credit.count : 0;
+      if (!tags.artists || !tags.mb_artistids || (tr->credit.count && !t->credit))
+        error = mc_str(MC_STR_IMPORT_ERROR_NOMEM);
       t->track_no = album.no_album ? 0 : tr->number;
       t->disc_no = album.no_album ? 0 : tr->disc;
       t->year = tags.year;
@@ -1464,6 +1640,11 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
     album.title = first->album;
     album.artist.name = first->album_artist ? first->album_artist : first->artist ? first->artist : it->artist;
     album.artist.mb_artistid = first->mb_albumartistid;
+    album.credit_count = first->album_artist
+      ? tag_credit_rows(lib, &owned, album.artist.name, first->album_artists, first->mb_albumartistids, &album.credit)
+      : first->artist ? tag_credit_rows(lib, &owned, album.artist.name, first->artists, first->mb_artistids, &album.credit)
+                      : tag_credit_rows(lib, &owned, album.artist.name, NULL, NULL, &album.credit);
+    if (album.credit_count > 1) album.artist.mb_artistid = NULL; /* the first artist's, not the credit's */
     album.year = first->year;
     album.original_year = first->original_year;
     album.disc_total = first->disc_total;
@@ -1475,6 +1656,8 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       file_entry *f = &imp->files[it->files[i]];
       mc_db_track *t = &rows[count];
       track_from_tags(f, t);
+      t->credit_count = tag_credit_rows(lib, &owned, t->artist.name, f->tags.artists, f->tags.mb_artistids, &t->credit);
+      if (t->credit_count > 1) t->artist.mb_artistid = NULL;
       if (!t->title && it->kind == MC_IMPORT_SINGLE) t->title = it->album; /* from the file name */
       char *stem = t->title ? NULL : file_stem(f->path);
       const char *title = t->title ? t->title : stem;
@@ -1493,7 +1676,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       places[count].f = f;
     }
   }
-  if (count == 0) error = mc_str(MC_STR_IMPORT_ERROR_NO_FILES);
+  if (!error && count == 0) error = mc_str(MC_STR_IMPORT_ERROR_NO_FILES);
 
   /* Already in the library? Skip, or swap in the better release (see tagger.h). */
   mc_dupe_plan dp = {0};
@@ -1530,7 +1713,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       t->old_path = places[i].op == OP_MOVED ? places[i].src_rel : NULL;
       mc_file_info(places[i].dest_abs, &t->size_bytes, &t->mtime_ms);
     }
-    if (mc_import_db_write(lib, &album, rows, count) != MC_OK) error = mc_str(MC_STR_IMPORT_ERROR_SAVE);
+    if (g_db_write(lib, &album, rows, count) != MC_OK) error = mc_str(MC_STR_IMPORT_ERROR_SAVE);
   }
 
   if (error) {
@@ -1562,6 +1745,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   mc_mutex_unlock(&imp->lock);
 
   placements_free(places, count);
+  pool_free(&owned);
   mc_dupe_plan_free(&dp);
   free(rows);
   free(album_rel);
