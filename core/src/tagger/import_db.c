@@ -189,10 +189,11 @@ static mc_status read_album_credit(sqlite3 *db, const char *album_uid, credit_ro
     return st;
   }
   out->text = text;
-  stmt = prepare(db, "SELECT artist_uid, coalesce((SELECT joinphrase FROM album_artists"
-                     "  WHERE album_uid = ?1 AND position = 0), '') FROM albums WHERE uid = ?1"
-                     " UNION ALL SELECT * FROM (SELECT artist_uid, joinphrase FROM album_artists"
-                     "  WHERE album_uid = ?1 AND position > 0 ORDER BY position)");
+  stmt = prepare(db, "SELECT artist_uid, joinphrase FROM ("
+                     " SELECT 0 AS position, artist_uid, coalesce((SELECT joinphrase FROM album_artists"
+                     "  WHERE album_uid = ?1 AND position = 0), '') AS joinphrase FROM albums WHERE uid = ?1"
+                     " UNION ALL SELECT position, artist_uid, joinphrase FROM album_artists"
+                     "  WHERE album_uid = ?1 AND position > 0) ORDER BY position");
   if (!stmt) {
     credit_clear(out);
     return MC_ERR_DB;
