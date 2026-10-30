@@ -25,16 +25,25 @@
 mc_status (*mc_delete_trash)(const char *path) = mc_trash;
 mc_status (*mc_delete_remove)(const char *path) = mc_remove;
 
+/* Every artist track t's rows name: its own, its album's, and those of both credits. */
+#define TRACK_ARTISTS(t) \
+  "SELECT artist_uid FROM tracks WHERE uid = " t \
+  " UNION SELECT al.artist_uid FROM tracks tr JOIN albums al ON al.uid = tr.album_uid" \
+  "  WHERE tr.uid = " t \
+  " UNION SELECT artist_uid FROM track_artists WHERE track_uid = " t \
+  " UNION SELECT aa.artist_uid FROM tracks tr JOIN album_artists aa ON aa.album_uid = tr.album_uid" \
+  "  WHERE tr.uid = " t
+
 /* The tables a track's record holds, parents first, in the order they're restored. Each
  * selects the rows for track ?1. The file's own row goes last, under "files". */
 static const struct {
   const char *table, *where;
 } k_saved[] = {
-  {"artists", "uid IN (SELECT artist_uid FROM tracks WHERE uid = ?1"
-              " UNION SELECT al.artist_uid FROM tracks t JOIN albums al ON al.uid = t.album_uid"
-              " WHERE t.uid = ?1)"},
+  {"artists", "uid IN (" TRACK_ARTISTS("?1") ")"},
   {"albums", "uid = (SELECT album_uid FROM tracks WHERE uid = ?1)"},
+  {"album_artists", "album_uid = (SELECT album_uid FROM tracks WHERE uid = ?1)"},
   {"tracks", "uid = ?1"},
+  {"track_artists", "track_uid = ?1"},
   {"track_plays", "track_uid = ?1"},
   {"playlist_entries", "track_uid = ?1"},
   {"album_group_entries", "album_uid = (SELECT album_uid FROM tracks WHERE uid = ?1)"},
@@ -623,6 +632,7 @@ static mc_status delete_rows(mc_library *lib, const uid_set *gone, const uid_set
     const char *t = gone->items[i];
     if ((st = run(db, "DELETE FROM playlist_entries WHERE track_uid = ?1", t, NULL)) == MC_OK &&
         (st = run(db, "DELETE FROM track_plays WHERE track_uid = ?1", t, NULL)) == MC_OK &&
+        (st = run(db, "DELETE FROM track_artists WHERE track_uid = ?1", t, NULL)) == MC_OK &&
         (st = run(db, "DELETE FROM files WHERE track_uid = ?1", t, NULL)) == MC_OK)
       st = run(db, "DELETE FROM tracks WHERE uid = ?1", t, NULL);
   }
@@ -634,14 +644,19 @@ static mc_status delete_rows(mc_library *lib, const uid_set *gone, const uid_set
     char sql[256];
     snprintf(sql, sizeof sql, "DELETE FROM album_group_entries WHERE album_uid = ?1%s", empty);
     if ((st = run(db, sql, a, NULL)) != MC_OK) break;
+    snprintf(sql, sizeof sql, "DELETE FROM album_artists WHERE album_uid = ?1%s", empty);
+    if ((st = run(db, sql, a, NULL)) != MC_OK) break;
     snprintf(sql, sizeof sql, "DELETE FROM albums WHERE uid = ?1%s", empty);
     st = run(db, sql, a, NULL);
   }
+  /* An artist still credited anywhere, featured or not, stays. */
   for (int i = 0; st == MC_OK && i < artists->count; i++)
     st = run(db,
              "DELETE FROM artists WHERE uid = ?1"
              " AND NOT EXISTS (SELECT 1 FROM tracks WHERE artist_uid = ?1)"
-             " AND NOT EXISTS (SELECT 1 FROM albums WHERE artist_uid = ?1)",
+             " AND NOT EXISTS (SELECT 1 FROM albums WHERE artist_uid = ?1)"
+             " AND NOT EXISTS (SELECT 1 FROM track_artists WHERE artist_uid = ?1)"
+             " AND NOT EXISTS (SELECT 1 FROM album_artists WHERE artist_uid = ?1)",
              artists->items[i], NULL);
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) {
@@ -692,12 +707,7 @@ static mc_status delete_run(mc_library *lib, const char *config_dir, const mc_de
     if ((st = track_json(lib->db, t, &rows)) != MC_OK) break;
     if (!rows) continue; /* deleted since */
     st = select_uids(lib->db, "SELECT album_uid FROM tracks WHERE uid = ?1", t, &albums);
-    if (st == MC_OK)
-      st = select_uids(lib->db,
-                       "SELECT artist_uid FROM tracks WHERE uid = ?1 UNION"
-                       " SELECT al.artist_uid FROM tracks t JOIN albums al ON al.uid = t.album_uid"
-                       " WHERE t.uid = ?1",
-                       t, &artists);
+    if (st == MC_OK) st = select_uids(lib->db, TRACK_ARTISTS("?1"), t, &artists);
     int kept = 0;
     if (st == MC_OK)
       st = trash_track(lib, store, permanent, t, rows, &dirs, &trashed, &res.files_trashed, &kept);

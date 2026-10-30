@@ -302,8 +302,12 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
   /* Tracks with no album: the same recording (or, without ids, title) among the artist's
    * own tracks with no album. */
   if (album->no_album) {
-    const mc_db_artist *who = in[0].row->artist.name && *in[0].row->artist.name ? &in[0].row->artist
-                                                                              : &album->artist;
+    /* By the first credited artist, whose the tracks are by artist_uid. */
+    const mc_db_track *r = in[0].row;
+    const mc_db_artist *who = &album->artist;
+    if (r->credit_count > 0 && r->credit) who = &r->credit[0].artist;
+    else if (r->artist.name && *r->artist.name) who = &r->artist;
+    else if (album->credit_count > 0 && album->credit) who = &album->credit[0].artist;
     char artist[MC_UID_STRLEN];
     if (find_artist(db, who, artist)) {
       lib_track *t;
@@ -329,7 +333,7 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
     "SELECT uid FROM albums WHERE mb_albumid = ?1",
     "SELECT uid FROM albums WHERE mb_releasegroupid = ?1",
     "SELECT al.uid FROM albums al JOIN artists ar ON ar.uid = al.artist_uid"
-    " WHERE al.title = ?1 COLLATE NOCASE AND ar.name = ?2 COLLATE NOCASE"};
+    " WHERE al.title = ?1 COLLATE NOCASE AND coalesce(al.artist_credit, ar.name) = ?2 COLLATE NOCASE"};
   const char *keys[] = {album->mb_albumid, album->mb_releasegroupid, album->title};
   for (int k = 0; k < 3 && ncand < 8; k++) {
     if (!keys[k] || !*keys[k] || (k == 2 && (!album->artist.name || !*album->artist.name)))
@@ -399,23 +403,68 @@ static int same_bytes_in_library(mc_library *lib, const mc_dupe_in *in, const ch
   return same;
 }
 
+/* The artists of uid's credit (a track's or an album's) as multi-valued tags, '\n' between
+ * values: their names into *names, and their MusicBrainz ids into *ids if every one has an
+ * id, else NULL, leaving MUSICBRAINZ_ARTISTID to the first artist's (see mc_tags). */
+static mc_status credit_tags(mc_library *lib, const char *uid, char **names, char **ids) {
+  *names = *ids = NULL;
+  mc_credit_list *c = NULL;
+  mc_status st = mc_library_list_credit(lib, uid, &c);
+  if (st != MC_OK) return st;
+  size_t nlen = 1, ilen = 1;
+  char **mbid = calloc((size_t)(c->count ? c->count : 1), sizeof *mbid);
+  int all = c->count > 0;
+  sqlite3_stmt *stmt = mbid ? prepare(mc_library_db(lib), "SELECT mb_artistid FROM artists WHERE uid = ?1") : NULL;
+  for (int i = 0; stmt && i < c->count; i++) {
+    sqlite3_reset(stmt);
+    sqlite3_bind_text(stmt, 1, c->items[i].uid, -1, SQLITE_STATIC);
+    const char *v = sqlite3_step(stmt) == SQLITE_ROW ? (const char *)sqlite3_column_text(stmt, 0) : NULL;
+    if (v && *v) mbid[i] = mc_strdup(v);
+    if (!mbid[i]) all = 0;
+    else ilen += strlen(mbid[i]) + 1;
+    nlen += strlen(c->items[i].name) + 1;
+  }
+  sqlite3_finalize(stmt);
+  if (mbid && (*names = malloc(nlen)) && (!all || (*ids = malloc(ilen)))) {
+    (*names)[0] = '\0';
+    if (*ids) (*ids)[0] = '\0';
+    for (int i = 0; i < c->count; i++) {
+      if (i) strcat(*names, "\n");
+      strcat(*names, c->items[i].name);
+      if (*ids && i) strcat(*ids, "\n");
+      if (*ids) strcat(*ids, mbid[i]);
+    }
+  } else {
+    free(*names);
+    *names = NULL;
+    st = MC_ERR_NOMEM;
+  }
+  for (int i = 0; mbid && i < c->count; i++) free(mbid[i]);
+  free(mbid);
+  mc_credit_list_free(c);
+  return st;
+}
+
 /* What the library says of track_uid, as the importer tags a file (write_item in tagger.c;
  * for a track with no album, without album tags, release ids or numbers). Ids the library hasn't are ""
  * (removed from the file), so none of the new file's own can contradict the track; the
  * genre is left to the file unless the library has one. */
-static mc_status library_tags(sqlite3 *db, const char *track_uid, mc_tags *out) {
+static mc_status library_tags(mc_library *lib, const char *track_uid, mc_tags *out) {
+  sqlite3 *db = mc_library_db(lib);
   memset(out, 0, sizeof *out);
   sqlite3_stmt *stmt = prepare(
     db,
-    "SELECT t.title, coalesce(ta.name, aa.name), coalesce(ta.mb_artistid, ''), t.genre,"
+    "SELECT t.title, coalesce(t.artist_credit, ta.name, al.artist_credit, aa.name),"
+    " coalesce(ta.mb_artistid, ''), t.genre,"
     " t.track_no, t.disc_no, t.year, coalesce(t.mb_trackid, ''),"
-    " coalesce(t.mb_releasetrackid, ''), al.title, al.uid IS NULL, aa.name,"
+    " coalesce(t.mb_releasetrackid, ''), al.title, al.uid IS NULL,"
+    " coalesce(al.artist_credit, aa.name),"
     " coalesce(aa.mb_artistid, ''), al.year, al.original_year, al.disc_total,"
     " coalesce(al.mb_albumid, ''), coalesce(al.mb_releasegroupid, ''),"
     /* the disc's track count, when the library has the whole disc */
     " (SELECT CASE WHEN count(*) >= max(coalesce(u.track_no, 0)) THEN count(*) END"
     "  FROM tracks u WHERE u.album_uid = t.album_uid"
-    "  AND coalesce(u.disc_no, 1) = coalesce(t.disc_no, 1))"
+    "  AND coalesce(u.disc_no, 1) = coalesce(t.disc_no, 1)), al.uid"
     " FROM tracks t LEFT JOIN artists ta ON ta.uid = t.artist_uid"
     " LEFT JOIN albums al ON al.uid = t.album_uid LEFT JOIN artists aa ON aa.uid = al.artist_uid"
     " WHERE t.uid = ?1");
@@ -445,11 +494,26 @@ static mc_status library_tags(sqlite3 *db, const char *track_uid, mc_tags *out) 
     out->disc = sqlite3_column_int(stmt, 5);
     out->disc_total = sqlite3_column_int(stmt, 15);
   }
+  char *album_uid = no_album ? NULL : col_dup(stmt, 19);
   sqlite3_finalize(stmt);
-  if (!out->title || !out->mb_artistid || !out->mb_trackid || !out->mb_releasetrackid ||
-      !out->mb_albumartistid || !out->mb_albumid || !out->mb_releasegroupid) {
+  /* ARTISTS and ALBUMARTISTS with their ids, as an import writes them. */
+  mc_status st = credit_tags(lib, track_uid, &out->artists, &out->mb_artistids);
+  if (st == MC_OK && album_uid)
+    st = credit_tags(lib, album_uid, &out->album_artists, &out->mb_albumartistids);
+  else if (st == MC_OK && !(out->album_artists = mc_strdup("")))
+    st = MC_ERR_NOMEM;
+  free(album_uid);
+  if (st == MC_OK && (!out->title || !out->mb_artistid || !out->mb_trackid || !out->mb_releasetrackid ||
+                      !out->mb_albumartistid || !out->mb_albumid || !out->mb_releasegroupid))
+    st = MC_ERR_NOMEM;
+  if (st != MC_OK) {
+    free(out->artists);
+    free(out->album_artists);
+    free(out->mb_artistids);
+    free(out->mb_albumartistids);
+    out->artists = out->album_artists = out->mb_artistids = out->mb_albumartistids = NULL;
     mc_tags_clear(out);
-    return MC_ERR_NOMEM;
+    return st;
   }
   return MC_OK;
 }
@@ -580,7 +644,7 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
   for (int i = 0; i < count && st == MC_OK && !out->whole; i++) {
     mc_dupe_decision *d = &out->d[i];
     if (d->action != MC_DUPE_SWAP && (d->action != MC_DUPE_ATTACH || d->remote)) continue;
-    mc_status ts = library_tags(mc_library_db(lib), d->track_uid, &d->tags);
+    mc_status ts = library_tags(lib, d->track_uid, &d->tags);
     if (ts == MC_OK) d->has_tags = 1;
     else if (ts == MC_ERR_NOMEM) st = ts;
   }

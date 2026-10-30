@@ -18,6 +18,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 10 | example smart lists |
 | 11 | `files.source_sha256` (the bytes an imported file came from) |
 | 12 | no singles albums: `albums_singles` and `albums.kind`'s triggers dropped; no data changed |
+| 13 | artist credits: `tracks.artist_credit`, `albums.artist_credit`, `track_artists`, `album_artists`, `meta.artist_refresh` |
 
 ## Location
 
@@ -76,8 +77,9 @@ Deleting a track (`mc_delete_run()`, see
 or trash and deletes its rows like any other change, so the delete syncs. What's needed to
 bring it back is kept out of the library, in `deleted.db` in the per-device config dir: one
 row per trashed file with its old path, size, modification time, hash (if known), and the
-rows it takes back (the track, its album and artists, plays, playlist and album group
-entries, the file's own row) as JSON objects of column to value. Restoring inserts them
+rows it takes back (the track, its album and artists, both credits' rows and their artists,
+plays, playlist and album group entries, the file's own row) as JSON objects of column to
+value. Restoring inserts them
 again with their old uids, using whichever columns the table still has, so records outlive
 migrations. Records are dropped once their file is back, or after 90 days.
 
@@ -98,6 +100,48 @@ albums of that title, until their music is imported again. `albums.kind` stays i
 but nothing reads it, and it's no longer logged (its triggers and the `albums_singles` index
 are dropped), so new albums keep the column's default, `'album'`. `tracks.year` and
 `tracks.mb_albumid` stay too: every track has them.
+
+## Artist credits
+
+A track or album credited to "A feat. B" or "A, B & C" is each one's: every artist is an
+`artists` row of their own (never one row for the whole credit), and the track lists on each
+one's page. Where the credits come from and how a string is split is in
+[tagging-rules.md](tagging-rules.md#artist-credits).
+
+- `tracks.artist_credit` / `albums.artist_credit` is the credit as shown ("A feat. B"); NULL
+  means the first artist's own name. Listings, search and smart lists show
+  `coalesce(artist_credit, artist name)`, and a track with no artist of its own shows its
+  album's.
+- `tracks.artist_uid` / `albums.artist_uid` stay the **first** artist, so older versions and
+  every query that knows one artist keep working.
+- `track_artists` / `album_artists` hold the credit's artists in order: `(uid, track_uid` or
+  `album_uid, artist_uid, position, joinphrase)`, `position` from 0, `joinphrase` what follows
+  the artist in the credit (" feat. ", " & "; `''` after the last, never NULL, so a row
+  written again logs every field). Deleting the owner or the artist deletes the row.
+- A row's uid is derived from its owner and position (`mc_uid_derive()`: a version 8 UUID from
+  the SHA-256 of `<owner uid>/<position>`), so two devices crediting one track write the same
+  rows and field-level sync merges them. A shorter credit deletes the rows past its end; one
+  that grows again brings them back under the same uids.
+- What the credit tables say of the first artist is `artist_uid`, not row 0: row 0 repeats
+  it and is kept for completeness, but a peer of an older version changes `artist_uid` alone,
+  so readers take the first artist from `artist_uid` and only rows past 0 from the tables
+  (`CREDITED_TRACKS` and `CREDITED_ALBUMS` in `library_internal.h`). A device that joins
+  later has no row 0 for tracks credited before v13 (the backfill isn't logged); nothing
+  needs it.
+- An artist's albums, singles and tracks, and the artist list, go through the credit tables:
+  an album or track is an artist's if they're its first artist or in its credit rows, or, for
+  a track with no artist of its own, if its album is. `mc_library_list_credit()` lists a
+  credit's artists, for a frontend to link each one.
+- An import writes every credit it's given (each artist upserted as before: by MusicBrainz
+  id, then by name); `mc_import_db_set_credit()` replaces one in place.
+
+Migration v13 adds the columns and tables, writes one row 0 for every track and album with
+an artist (unlogged, as every migration's rows are: each device derives the same ones), and
+sets `meta.artist_refresh` to `'pending'` (`'done'` for a library with nothing in it). The
+refresh then splits the credits already there, in the background, once; see
+[tagging-rules.md](tagging-rules.md#artist-credits). Rows a newer peer logged while this
+device was older (an unknown table and column then; see
+[Applying rows](sync-protocol.md#applying-rows)) are applied when the migration runs.
 
 ## Play counts
 
@@ -178,8 +222,8 @@ worked out from the album's tracks.
 | Field | Type | | Notes |
 |-------|------|---|-------|
 | `title` | text | T A | |
-| `artist` | text | T A | track: the track's artist, else its album's; album: the album's |
-| `album_artist` | text | T | |
+| `artist` | text | T A | track: the track's artist credit, else its album's; album: the album's. True if it holds of the credit as shown ("A feat. B") or of any one of its artists, so `is "B"` finds what B is featured on; sorts by the first artist |
+| `album_artist` | text | T | the track's album's credit, as `artist` |
 | `album` | text | T | |
 | `genre` | text | T A | album: true if any track matches; can't be sorted on |
 | `year` | int | T A | track: the track's year, else its album's |
@@ -247,9 +291,11 @@ makes the answer differ between devices.
 
 | Table              | Synced | Notes |
 |--------------------|--------|-------|
-| `artists`          | yes    | |
-| `albums`           | yes    | `art_hash` is the SHA-256 of the album folder's `cover.jpg` |
-| `tracks`           | yes    | `added_ms`: when the track was first imported (Unix ms); NULL for tracks imported before v3. `file_rev`: a new uid each time an import replaces the track's original with a higher-quality file, NULL before the first time |
+| `artists`          | yes    | one artist each, never a credit of several |
+| `albums`           | yes    | `art_hash` is the SHA-256 of the album folder's `cover.jpg`. `artist_uid` is the first credited artist, `artist_credit` the credit as shown (NULL: that artist's name) |
+| `tracks`           | yes    | `added_ms`: when the track was first imported (Unix ms); NULL for tracks imported before v3. `file_rev`: a new uid each time an import replaces the track's original with a higher-quality file, NULL before the first time. `artist_uid` and `artist_credit` as for albums |
+| `track_artists`    | yes    | a track's credited artists in order, uid derived from the track and position; see [Artist credits](#artist-credits) |
+| `album_artists`    | yes    | an album's, the same way |
 | `track_plays`      | yes    | play counts and last plays, one row per track per device; see [Play counts](#play-counts) |
 | `playlists`        | yes    | |
 | `playlist_entries` | yes    | ordered by the fractional-index string `position` |
@@ -261,7 +307,7 @@ makes the answer differ between devices.
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
 | `merge_keys`       | no     | the MusicBrainz ids ever logged per uid, which decide what merges (rows of singles albums' artists from before v12 are left, unused) |
 | `changelog`        | -      | field-level change log that sync is built on |
-| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)) and other per-library settings |
+| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)) and other per-library settings |
 
 ## Change tracking
 
@@ -288,3 +334,8 @@ changes. That is deliberate.
 `k_migrations[i]` takes the database from `user_version` *i* to *i + 1*. Each migration runs
 in its own transaction. Only ever append. A database newer than the app is refused
 (`MC_ERR_FORMAT`).
+
+A migration that adds a logged table or column also lists, in `k_newly_known`, which
+changelog rows it makes known. Peers of a newer version may have sent such rows already,
+which were logged but not applied; once the migration has run they're applied
+(`mc_rows_reapply()`), so the device catches up without waiting for the next change.

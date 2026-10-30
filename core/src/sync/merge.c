@@ -26,7 +26,13 @@ static const merge_key k_keys[] = {
 };
 
 /* Columns that hold a mergeable uid. unique_with: the column is part of a UNIQUE key with
- * it, so two rows that would collide keep only the smaller uid. */
+ * it, so two rows that would collide keep only the smaller uid.
+ *
+ * Not here: track_artists.track_uid and album_artists.album_uid. A merged-away track's or
+ * album's credit rows aren't moved to the survivor, which keeps its own credit; they go
+ * with the loser's row (ON DELETE CASCADE), and a late one naming it is deleted by the
+ * reference check, its owner being NOT NULL. Moved, they would give the survivor two rows
+ * at each position. */
 typedef struct merge_ref {
   const char *table, *col, *parent, *unique_with;
 } merge_ref;
@@ -34,6 +40,8 @@ typedef struct merge_ref {
 static const merge_ref k_refs[] = {
   {"albums", "artist_uid", "artists", NULL},
   {"tracks", "artist_uid", "artists", NULL},
+  {"track_artists", "artist_uid", "artists", NULL},
+  {"album_artists", "artist_uid", "artists", NULL},
   {"tracks", "album_uid", "albums", NULL},
   {"album_group_entries", "album_uid", "albums", NULL},
   {"files", "track_uid", "tracks", NULL},

@@ -252,9 +252,12 @@ libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c
   - Tracks, album by album (tracks with no album one by one, staying without one), through the
     import's duplicates check (`mc_dupes_plan_remote()`, "Duplicates" in
     `core/include/musiccore/tagger.h`): matched by MusicBrainz release, release group or
-    artist and title, and track ids. Untagged music comes in as it is tagged. Each file stays
-    where it is in the library folder and becomes an original imported on this device, so
-    the archive fetches it as for any import.
+    artist and title, and track ids. Untagged music comes in as it is tagged, and each track
+    and album with its artist credit as the copy has it (`artist_credit` and the credit
+    rows' artists, upserted as an import's; a copy set aside before v13 has none, and each
+    artist comes in as a whole credit, as it was). Each file stays where it is in the
+    library folder and becomes an original imported on this device, so the archive fetches
+    it as for any import.
     - New to the kept library: added (keeping its `added_ms`).
     - The kept library has it, and the kept device holds an original of it (from
       `MERGE_FILES`): compared as an import compares. The same or lower quality is
@@ -381,6 +384,13 @@ with its own key (`mc_scrobbler_set_service()`) syncs that key and secret with t
   the same spot both keep their entry, ordered by `(position, uid)`.
 - **Recents** are keyed by the opened item's uid, so the same item opened on two devices is
   one row, and its newest open wins like any field.
+- **Artist credits** (`track_artists`, `album_artists`) are one row per position, keyed by a
+  uid derived from the owner and the position (see
+  [Artist credits](schema.md#artist-credits)), so two devices crediting one track write the
+  same rows and merge field by field: the newest artist and join phrase at each position
+  win. A shorter credit deletes the rows past its end; the same position written again later
+  is a newer insert of every field, which brings the row back. `artist_credit` on the owner
+  is an ordinary field.
 
 ## Session
 
@@ -467,7 +477,15 @@ Sessions are retried with backoff (10 s, doubling, up to 5 minutes).
 
 - A row already in the changelog (same hlc, origin, entity, row uid and field) is skipped.
 - A row naming an entity or field this version doesn't know is logged, so it is passed on,
-  but never applied.
+  but never applied. That is what lets versions mix: a newer peer's tables and columns
+  (v13's `track_artists`, `album_artists` and `artist_credit`, say) reach an older one, which
+  keeps them and sends them on, with no error either way; a peer that lacks them simply never
+  sends rows for them. When a migration later makes such rows known, they are applied then
+  (see [Migrations](schema.md#migrations)).
+- An older peer edits only what it knows: it changes `tracks.artist_uid` and leaves the
+  credit rows as they were. Readers take a credit's first artist from `artist_uid`, not
+  from its row 0, so its edit is followed; the featured artists past row 0 stay until a
+  newer device writes the credit again.
 - A row is *live* if one of its field changes is newer, by `(hlc, origin_uid)`, than its
   newest `_deleted`. A dead row that exists is deleted. A live row that exists gets each
   field the batch brought a new winner for. A live row that doesn't exist yet (new, or
@@ -504,13 +522,23 @@ way, without logging anything.
   class together, as if they were one row's: field by field the highest `(hlc, origin_uid)`
   wins, and a delete of any of them is the class's delete. Recents rows, keyed by the
   item's uid, merge the same way.
-- **References.** `tracks.album_uid` and `album_group_entries.album_uid`, `albums.artist_uid`
-  and `tracks.artist_uid`, and `playlist_entries.track_uid`, `track_plays.track_uid` and
-  the device-local `files.track_uid` are moved to the canonical uid, so each device's files
-  stay attached to the surviving track. Two `track_plays` rows that would then share a
+- **References.** `tracks.album_uid` and `album_group_entries.album_uid`, `albums.artist_uid`,
+  `tracks.artist_uid`, `track_artists.artist_uid` and `album_artists.artist_uid`, and
+  `playlist_entries.track_uid`, `track_plays.track_uid` and the device-local
+  `files.track_uid` are moved to the canonical uid, so each device's files stay attached to
+  the surviving track. Two `track_plays` rows that would then share a
   `(track_uid, node_uid)` keep only the smaller uid. If the whole class is deleted, the
   references go as ON DELETE takes them. Album groups or playlists that held both copies
   hold the survivor twice.
+- **Credits.** A merged-away track's or album's credit rows (`track_artists`,
+  `album_artists`) are not moved: they go with the loser's row (ON DELETE CASCADE), and the
+  survivor keeps its own credit rows. Their uids derive from the owner's uid, so the
+  survivor's are its own, and moving the loser's would give it two rows at each position.
+  The survivor's `artist_uid` and `artist_credit` are worked out over the class like any
+  field, so they can come from the loser's changelog while the rows past 0 are the
+  survivor's; the next import or refresh that writes the credit makes them one again. A late
+  credit row naming a merged-away owner is deleted by the reference check, its owner being
+  `NOT NULL`.
 - **Late rows.** A row naming a merged-away uid, from a device that hasn't merged yet, is
   logged as it is and applied to the canonical row; a row whose reference names one is
   pointed at the canonical uid.

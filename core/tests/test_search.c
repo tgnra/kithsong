@@ -275,6 +275,23 @@ static void test_edges(mc_library *lib) {
   mc_search_results_free(NULL);
 }
 
+/* An artist credit is what's matched as the artist: a featured artist finds the track, and a
+ * track with no artist of its own matches its album's credit. */
+static void test_credits(mc_library *lib) {
+  CHECK(exec(mc_library_db(lib),
+             "INSERT INTO albums (uid, title, artist_uid, artist_credit) VALUES"
+             " ('al8', 'Duets', 'ar4', 'Simon & Björk');"
+             "INSERT INTO tracks (uid, album_uid, artist_uid, artist_credit, title) VALUES"
+             " ('t9', 'al8', 'ar4', 'Simon & Björk feat. ABBA', 'Duet One'),"
+             " ('t10', 'al8', NULL, NULL, 'Duet Two');") == SQLITE_OK);
+  CHECK(mc_library_search_prepare(lib) == MC_OK);
+  mc_search_wait(lib);
+  CHECK(has(lib, "abba duet", "T:Duet One"));
+  CHECK(!has(lib, "abba duet", "T:Duet Two"));
+  CHECK(has(lib, "bjork duet two", "T:Duet Two"));
+  CHECK(has(lib, "bjork duets", "A:Duets"));
+}
+
 /* MC_SEARCH_BENCH=1: times a build and queries over 100k made-up tracks. Not a pass/fail. */
 static void bench(const char *dir) {
   static const char *const syl[] = {"ka", "lo", "mi", "ne", "ru", "sa", "to", "vi", "be", "dor",
@@ -394,6 +411,7 @@ int main(int argc, char **argv) {
   test_kinds(lib);
   test_fresh(lib, path);
   test_edges(lib);
+  test_credits(lib);
 
   mc_library_close(lib);
   return TEST_RESULT();

@@ -85,6 +85,17 @@ typedef struct mc_db_track {
 mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc_db_track *tracks,
                              int count);
 
+/* Replaces the artist credit of track uid (is_album 0) or album uid (1) in place, as an
+ * import writes one: artist and credit/credit_count as in mc_db_album (credit_count 0: the
+ * artist alone), each artist upserted as an import's, artist_uid the first, then
+ * artist_credit and the credit rows, the rows past a shorter credit deleted. Nothing else
+ * about the row changes, and artists left with nothing aren't deleted here. For the refresh
+ * after upgrading (docs/schema.md). One transaction; MC_ERR_NOT_FOUND if there's no such
+ * row. */
+mc_status mc_import_db_set_credit(mc_library *lib, int is_album, const char *uid,
+                                  const mc_db_artist *artist, const mc_db_credit_part *credit,
+                                  int credit_count);
+
 /* Changes the path of the files row at old_path (both relative). */
 mc_status mc_import_db_move_file(mc_library *lib, const char *old_path, const char *new_path);
 

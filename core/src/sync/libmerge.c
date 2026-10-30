@@ -187,6 +187,7 @@ typedef struct merge_ctx {
   mc_library *lib;
   sqlite3 *db;  /* lib's */
   sqlite3 *old; /* the set-aside copy, read-only */
+  int credits;  /* the copy has artist credits (v13) */
   const mc_kept_file *kept;
   int nkept;
   uid_map tracks, albums, playlists, groups, smart;
@@ -217,11 +218,81 @@ static int remote_quality(void *user, const char *track_uid, mc_audio_quality *o
   return 1;
 }
 
+/* An artist credit of the copy's (docs/schema.md), for an import row: its artists in order,
+ * parts pointing into the strings kept here. count 0: the artist alone. */
+typedef struct old_credit {
+  mc_db_credit_part *parts;
+  char **strs; /* name, sort name, id and join of each, in turn */
+  int count;
+} old_credit;
+
+static void old_credit_clear(old_credit *c) {
+  for (int i = 0; i < 4 * c->count; i++) free(c->strs[i]);
+  free(c->strs);
+  free(c->parts);
+  memset(c, 0, sizeof *c);
+}
+
+/* The credit of the copy's track (album 0) or album uid, first artist its artist_uid as
+ * listings read it. Left empty for an artist alone under its own name (text NULL), which
+ * the artist row says already. */
+static mc_status read_old_credit(merge_ctx *x, int album, const char *uid, const char *text,
+                                 old_credit *out) {
+  memset(out, 0, sizeof *out);
+  static const char *const sql[] = {
+    "SELECT ar.name, ar.sort_name, ar.mb_artistid, c.joinphrase FROM ("
+    " SELECT 0 AS position, o.artist_uid AS artist_uid, (SELECT joinphrase FROM track_artists"
+    "  WHERE track_uid = o.uid AND position = 0) AS joinphrase FROM tracks o WHERE o.uid = ?1"
+    " UNION ALL SELECT position, artist_uid, joinphrase FROM track_artists"
+    "  WHERE track_uid = ?1 AND position > 0) c"
+    " JOIN artists ar ON ar.uid = c.artist_uid ORDER BY c.position",
+    "SELECT ar.name, ar.sort_name, ar.mb_artistid, c.joinphrase FROM ("
+    " SELECT 0 AS position, o.artist_uid AS artist_uid, (SELECT joinphrase FROM album_artists"
+    "  WHERE album_uid = o.uid AND position = 0) AS joinphrase FROM albums o WHERE o.uid = ?1"
+    " UNION ALL SELECT position, artist_uid, joinphrase FROM album_artists"
+    "  WHERE album_uid = ?1 AND position > 0) c"
+    " JOIN artists ar ON ar.uid = c.artist_uid ORDER BY c.position",
+  };
+  if (!x->credits) return MC_OK;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(x->old, sql[album], -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  mc_status st = MC_OK;
+  int cap = 0;
+  while (st == MC_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+    if (out->count == cap) {
+      cap = cap ? cap * 2 : 4;
+      char **strs = realloc(out->strs, (size_t)cap * 4 * sizeof *strs);
+      if (!strs) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      out->strs = strs;
+    }
+    char **s = out->strs + 4 * out->count++;
+    for (int k = 0; k < 4; k++) s[k] = col_dup(stmt, k);
+  }
+  sqlite3_finalize(stmt);
+  if (st == MC_OK && out->count && (out->count > 1 || text)) {
+    out->parts = calloc((size_t)out->count, sizeof *out->parts);
+    if (!out->parts) st = MC_ERR_NOMEM;
+    for (int i = 0; out->parts && i < out->count; i++) {
+      char **s = out->strs + 4 * i;
+      out->parts[i].artist = (mc_db_artist){s[0], s[1], s[2]};
+      out->parts[i].join = s[3];
+    }
+  }
+  if (st != MC_OK || !out->parts) old_credit_clear(out);
+  return st;
+}
+
 /* One track of the copy. */
 typedef struct old_track {
   char uid[MC_UID_STRLEN];
   char *title, *genre, *mb_trackid, *mb_releasetrackid, *mb_albumid;
   char *artist, *artist_sort, *artist_mbid;
+  char *artist_credit; /* NULL: the artist's own name */
+  old_credit credit;
   char *path, *format, *abs;
   int track_no, disc_no, duration_ms, year, kbps;
   int64_t added_ms; /* 0 if unknown */
@@ -231,6 +302,8 @@ typedef struct old_track {
 
 static void old_tracks_free(old_track *t, int n) {
   for (int i = 0; i < n; i++) {
+    free(t[i].artist_credit);
+    old_credit_clear(&t[i].credit);
     free(t[i].title);
     free(t[i].genre);
     free(t[i].mb_trackid);
@@ -252,10 +325,14 @@ typedef struct old_album {
   int no_album;            /* a lone track */
   char *title, *mb_albumid, *mb_releasegroupid, *art_hash;
   char *artist, *artist_sort, *artist_mbid;
+  char *artist_credit; /* NULL: the artist's own name */
+  old_credit credit;
   int year, original_year, disc_total;
 } old_album;
 
 static void old_album_clear(old_album *a) {
+  free(a->artist_credit);
+  old_credit_clear(&a->credit);
   free(a->title);
   free(a->mb_albumid);
   free(a->mb_releasegroupid);
@@ -268,10 +345,10 @@ static void old_album_clear(old_album *a) {
 
 /* Track columns, then the best file this device had of it: an original imported here, then
  * one received, then a transcode. */
-#define OLD_TRACK_SQL \
+#define OLD_TRACK_SQL(credit) \
   "SELECT t.uid, t.title, t.track_no, t.disc_no, t.duration_ms, t.genre, t.mb_trackid," \
   " t.mb_releasetrackid, t.year, t.mb_albumid, t.added_ms, ar.name, ar.sort_name," \
-  " ar.mb_artistid, f.path, f.format, f.bitrate_kbps" \
+  " ar.mb_artistid, f.path, f.format, f.bitrate_kbps, " credit \
   " FROM tracks t LEFT JOIN artists ar ON ar.uid = t.artist_uid" \
   " LEFT JOIN files f ON f.uid = (SELECT g.uid FROM files g WHERE g.track_uid = t.uid" \
   "  ORDER BY g.source_file_uid IS NOT NULL, g.source_peer_uid IS NOT NULL, g.uid LIMIT 1)"
@@ -312,6 +389,8 @@ static mc_status read_tracks(merge_ctx *x, sqlite3_stmt *stmt, old_track **out, 
     o->path = col_dup(stmt, 14);
     o->format = col_dup(stmt, 15);
     o->kbps = sqlite3_column_int(stmt, 16);
+    o->artist_credit = col_dup(stmt, 17);
+    if ((st = read_old_credit(x, 0, o->uid, o->artist_credit, &o->credit)) != MC_OK) break;
     if (o->path) {
       o->abs = mc_library_abspath(x->lib, o->path);
       o->held = o->abs && !mc_is_link(o->abs) &&
@@ -364,7 +443,11 @@ static void merge_album(merge_ctx *x, const old_album *a, old_track *t, int n) {
     memset(&al, 0, sizeof al);
     al.no_album = a->no_album;
     al.title = a->title;
-    al.artist = (mc_db_artist){a->artist, a->artist_sort, a->artist_mbid};
+    /* The whole credit carries an id only when it's one artist. */
+    al.artist = (mc_db_artist){a->artist_credit ? a->artist_credit : a->artist, a->artist_sort,
+                               a->credit.count > 1 ? NULL : a->artist_mbid};
+    al.credit = a->credit.parts;
+    al.credit_count = a->credit.count;
     al.year = a->year;
     al.original_year = a->original_year;
     al.disc_total = a->disc_total;
@@ -383,7 +466,10 @@ static void merge_album(merge_ctx *x, const old_album *a, old_track *t, int n) {
       row->mtime_ms = o->mtime;
       row->bitrate_kbps = o->kbps;
       row->title = o->title;
-      row->artist = (mc_db_artist){o->artist, o->artist_sort, o->artist_mbid};
+      row->artist = (mc_db_artist){o->artist_credit ? o->artist_credit : o->artist, o->artist_sort,
+                                   o->credit.count > 1 ? NULL : o->artist_mbid};
+      row->credit = o->credit.parts;
+      row->credit_count = o->credit.count;
       row->track_no = o->track_no;
       row->disc_no = o->disc_no;
       row->duration_ms = o->duration_ms;
@@ -491,17 +577,21 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
   int done = 0;
   emit(fn, user, MC_MERGE_PHASE_TRACKS, 0, total);
   sqlite3_stmt *albums, *tracks;
-  if (sqlite3_prepare_v2(x->old,
-                         "SELECT a.uid, a.title, a.year, a.original_year, a.disc_total,"
-                         " a.mb_albumid, a.mb_releasegroupid, a.art_hash, ar.name, ar.sort_name,"
-                         " ar.mb_artistid FROM albums a LEFT JOIN artists ar ON ar.uid = a.artist_uid"
-                         " ORDER BY a.uid",
+#define OLD_ALBUM_SQL(credit) \
+  "SELECT a.uid, a.title, a.year, a.original_year, a.disc_total," \
+  " a.mb_albumid, a.mb_releasegroupid, a.art_hash, ar.name, ar.sort_name," \
+  " ar.mb_artistid, " credit " FROM albums a LEFT JOIN artists ar ON ar.uid = a.artist_uid" \
+  " ORDER BY a.uid"
+  if (sqlite3_prepare_v2(x->old, x->credits ? OLD_ALBUM_SQL("a.artist_credit") : OLD_ALBUM_SQL("NULL"),
                          -1, &albums, NULL) != SQLITE_OK)
     return MC_ERR_DB;
+#undef OLD_ALBUM_SQL
+#define ALBUM_TRACKS " WHERE t.album_uid = ?1 ORDER BY t.disc_no, t.track_no, t.uid"
   if (sqlite3_prepare_v2(x->old,
-                         OLD_TRACK_SQL " WHERE t.album_uid = ?1"
-                                       " ORDER BY t.disc_no, t.track_no, t.uid",
+                         x->credits ? OLD_TRACK_SQL("t.artist_credit") ALBUM_TRACKS
+                                    : OLD_TRACK_SQL("NULL") ALBUM_TRACKS,
                          -1, &tracks, NULL) != SQLITE_OK) {
+#undef ALBUM_TRACKS
     sqlite3_finalize(albums);
     return MC_ERR_DB;
   }
@@ -521,11 +611,13 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
     a.artist = col_dup(albums, 8);
     a.artist_sort = col_dup(albums, 9);
     a.artist_mbid = col_dup(albums, 10);
+    a.artist_credit = col_dup(albums, 11);
+    st = read_old_credit(x, 1, a.uid, a.artist_credit, &a.credit);
     sqlite3_reset(tracks);
     sqlite3_bind_text(tracks, 1, a.uid, -1, SQLITE_STATIC);
     old_track *t = NULL;
     int n = 0;
-    st = read_tracks(x, tracks, &t, &n);
+    if (st == MC_OK) st = read_tracks(x, tracks, &t, &n);
     if (st == MC_OK && n > 0) merge_album(x, &a, t, n);
     old_tracks_free(t, n);
     old_album_clear(&a);
@@ -537,12 +629,14 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
 
   /* Tracks with no album: each stays one, as an import of a lone file with no album tag. An
    * old "<artist> Singles" album is just an album above. */
+#define LONE_TRACKS \
+  " WHERE t.album_uid IS NULL OR t.album_uid NOT IN (SELECT uid FROM albums) ORDER BY t.uid"
   if (sqlite3_prepare_v2(x->old,
-                         OLD_TRACK_SQL " WHERE t.album_uid IS NULL"
-                                       " OR t.album_uid NOT IN (SELECT uid FROM albums)"
-                                       " ORDER BY t.uid",
+                         x->credits ? OLD_TRACK_SQL("t.artist_credit") LONE_TRACKS
+                                    : OLD_TRACK_SQL("NULL") LONE_TRACKS,
                          -1, &tracks, NULL) != SQLITE_OK)
     return MC_ERR_DB;
+#undef LONE_TRACKS
   old_track *t = NULL;
   int n = 0;
   st = read_tracks(x, tracks, &t, &n);
@@ -885,6 +979,9 @@ mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
     fprintf(stderr, "musiccore: merge: can't open %s\n", backup ? backup : "the set-aside copy");
     st = MC_ERR_IO;
   }
+  /* A copy set aside before v13 has no credits: its artists are whole credits, as then. */
+  x.credits = st == MC_OK && count_rows(x.old, "SELECT count(*) FROM sqlite_master"
+                                               " WHERE name IN ('track_artists', 'album_artists')") == 2;
   if (st == MC_OK) st = merge_tracks(&x, progress, user);
   if (st == MC_OK) st = merge_rest(&x, progress, user);
   /* Done, even if some tracks failed: their files stay in the folder, out of the library. */
