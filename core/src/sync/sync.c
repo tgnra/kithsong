@@ -2153,6 +2153,12 @@ void mc_sync_set_test_no_merge(mc_sync *sync, int no_merge) {
   mc_mutex_unlock(&sync->lock);
 }
 
+void mc_sync_set_test_no_files_plan(mc_sync *sync, int no_files_plan) {
+  mc_mutex_lock(&sync->lock);
+  sync->no_files_plan = no_files_plan;
+  mc_mutex_unlock(&sync->lock);
+}
+
 void mc_sync_set_test_send_delay(mc_sync *sync, uint32_t ms) {
   mc_mutex_lock(&sync->lock);
   sync->send_delay_ms = ms;

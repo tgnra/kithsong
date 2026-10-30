@@ -1101,7 +1101,8 @@ static void on_sync_progress(void *user, const mc_sync_progress *pr) {
   jstring uid = new_string(env, pr->device_uid ? pr->device_uid : "");
   (*env)->CallVoidMethod(env, p->listener, p->on_progress, uid, (jint)pr->phase,
                          (jlong)pr->rows_sent, (jlong)pr->rows_received, (jint)pr->files_done,
-                         (jint)pr->files_total, (jlong)pr->bytes_received, (jlong)pr->bytes_sent);
+                         (jint)pr->files_total, (jlong)pr->bytes_received, (jlong)pr->bytes_sent,
+                         (jint)pr->sends_done, (jint)pr->sends_total);
   if (uid) (*env)->DeleteLocalRef(env, uid);
   detach(env, attached);
 }
@@ -1148,7 +1149,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
     {"onPeer", "(Ljava/lang/String;ZZ)V"},
     {"onPairCode", "(Ljava/lang/String;Ljava/lang/String;I)V"},
     {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIIIZLjava/lang/String;IZZLjava/lang/String;)V"},
-    {"onProgress", "(Ljava/lang/String;IJJIIJJ)V"},
+    {"onProgress", "(Ljava/lang/String;IJJIIJJII)V"},
     {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJIZ)V"},
     {"onPairMerge", "(Ljava/lang/String;Ljava/lang/String;ZZZJJJJZLjava/lang/String;I[Ljava/lang/String;)V"},
     {"onMergeProgress", "(III)V"},

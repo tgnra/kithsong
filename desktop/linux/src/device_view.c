@@ -132,6 +132,7 @@ static struct {
   mc_sync_phase phase;
   int64_t sent, received;
   int files_done, files_total; /* the files this computer is fetching */
+  int sends_done, sends_total; /* the files the other device is fetching from it */
   int64_t bytes_received, bytes_sent;
   /* The last session ended and none is running: the bar shows full, with finished_text, for
    * FINISHED_MS. */
@@ -406,16 +407,18 @@ static gboolean syncing(void) {
   return g_dv.nbusy > 0;
 }
 
-/* Where the bar stands: a step for each phase, and the files phase by files fetched. */
+/* Where the bar stands: a step for each phase, and the files phase by files fetched and
+ * sent. */
 static double progress_fraction(void) {
   switch (g_dv.phase) {
     case MC_SYNC_PHASE_CONNECTING: return 0;
     case MC_SYNC_PHASE_GROUP: return 0.05;
     case MC_SYNC_PHASE_LIBRARY: return 0.15;
     case MC_SYNC_PHASE_FILES: {
-      if (g_dv.files_total <= 0) return 0.3;
-      int done = MIN(g_dv.files_done, g_dv.files_total);
-      return 0.3 + 0.7 * done / g_dv.files_total;
+      int total = g_dv.files_total + g_dv.sends_total;
+      if (total <= 0) return 0.3;
+      int done = MIN(g_dv.files_done, g_dv.files_total) + MIN(g_dv.sends_done, g_dv.sends_total);
+      return 0.3 + 0.7 * done / total;
     }
     default: return 1;
   }
@@ -492,12 +495,19 @@ static void update_status(void) {
     [MC_SYNC_PHASE_DONE] = MC_STR_PHASE_DONE,
   };
   gboolean busy = g_dv.found && (syncing() || g_dv.finished);
+  /* The other device's turn: it's fetching from this computer, or it's all there is. */
+  gboolean sending = g_dv.sends_total > 0 && (g_dv.sends_done < g_dv.sends_total || g_dv.files_total <= 0);
   text[0] = '\0';
   if (syncing()) {
     gboolean known = (unsigned)g_dv.phase <= (unsigned)MC_SYNC_PHASE_DONE;
     const char *phase = mc_str(known ? phases[g_dv.phase] : MC_STR_SYNCING_PROGRESS);
     if (g_dv.phase == MC_SYNC_PHASE_CONNECTING) {
       g_strlcpy(text, phase, sizeof text);
+    } else if (g_dv.phase == MC_SYNC_PHASE_FILES && sending) {
+      char done[32], total[32], size[32];
+      mc_format(text, sizeof text, mc_str_plural(MC_STR_PROGRESS_FILES_SENT, (long)g_dv.sends_total), MC_S(phase),
+                MC_S(fmt_count(g_dv.sends_done, done, sizeof done)), MC_S(fmt_count(g_dv.sends_total, total, sizeof total)),
+                MC_S(fmt_size(g_dv.bytes_sent, size, sizeof size)));
     } else if (g_dv.phase == MC_SYNC_PHASE_FILES && g_dv.files_total > 0) {
       char done[32], total[32], size[32];
       mc_format(text, sizeof text, mc_str_plural(MC_STR_PROGRESS_FILES, (long)g_dv.files_total), MC_S(phase),
@@ -1642,6 +1652,8 @@ void device_view_on_sync_event(const sync_event *ev) {
       g_dv.received = ev->rows_received;
       g_dv.files_done = ev->files_done;
       g_dv.files_total = ev->files_total;
+      g_dv.sends_done = ev->sends_done;
+      g_dv.sends_total = ev->sends_total;
       g_dv.bytes_received = ev->bytes_received;
       g_dv.bytes_sent = ev->bytes_sent;
       if (i < 0) set_message(NULL);

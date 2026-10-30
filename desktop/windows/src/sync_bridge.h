@@ -23,8 +23,8 @@ typedef enum {
   SYNC_EV_PAIR_CODE,   /* on_pair_code: code, name (the requester), attempts_left */
   SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status,
                         * joined, archive_name, archives */
-  SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_*, files_done, files_total, bytes_*,
-                        * library_changed */
+  SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_*, files_done, files_total, sends_*,
+                        * bytes_*, library_changed */
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
                         * files_received, files_sent, bytes_*, cancelled */
   SYNC_EV_PAIR_MERGE,  /* on_pair_merge: uid, name, initiator, kept_here, needs_confirm,
@@ -48,6 +48,7 @@ typedef struct sync_event {
   mc_sync_phase phase;
   int64_t rows_sent, rows_received;
   int files_done, files_total;   /* the files this device is fetching in the session */
+  int sends_done, sends_total;   /* the files the peer is fetching from it, as it announced */
   int files_received, files_sent;
   int64_t bytes_received, bytes_sent;
   int library_synced, converged;

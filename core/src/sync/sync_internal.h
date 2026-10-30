@@ -151,6 +151,7 @@ struct mc_sync {
   int out_merge_wait, out_merge_answer;
   int in_merge_wait, in_merge_answer;
   int no_merge; /* test hook: offer no merging, as an older version */
+  int no_files_plan; /* test hook: no FILES_PLAN either way, as an older version */
   /* The merge that runs after a session syncs the library (sync.c), with what the pairing
    * learnt: the kept device's originals (sorted; owned) and the account signed out. */
   int merge_running;
@@ -285,6 +286,10 @@ void mc_sync_set_test_send_delay(mc_sync *sync, uint32_t ms);
  * in PAIR_HELLO/PAIR_READY), so two libraries with music are refused as library_mismatch.
  * Any time; takes effect at the next pairing. */
 void mc_sync_set_test_no_merge(mc_sync *sync, int no_merge);
+/* no_files_plan = 1: this device syncs as a version without FILES_PLAN would (no
+ * "files_plan" in HELLO, and one sent all the same ends the session). Any time; takes
+ * effect at the next session. */
+void mc_sync_set_test_no_files_plan(mc_sync *sync, int no_files_plan);
 /* As if discovery had reported a peer online (online = 1) or gone (0). */
 void mc_sync_test_peer(mc_sync *sync, const char *device_uid, const char *name, const char *kind,
                        const char *group_hash, const char *address, uint16_t port, int online);

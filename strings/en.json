@@ -547,6 +547,7 @@
     "sync_is_off": "Sync is off",
     "progress_rows": { "text": "{0} {1} sent, {2} received", "note": "{0} is the sync step, e.g. \"Syncing library…\"; {1} and {2} count changes." },
     "progress_files": { "one": "{0} {1} of {2} file, {3}", "other": "{0} {1} of {2} files, {3}", "note": "{0} is the sync step, \"Syncing files…\"; {1} of {2} count the files this PC is fetching; {3} is the size received so far, e.g. \"12.5 MB\"." },
+    "progress_files_sent": { "one": "{0} {1} of {2} file sent, {3}", "other": "{0} {1} of {2} files sent, {3}", "note": "{0} is the sync step, \"Syncing files…\"; {1} of {2} count the files the other device is fetching from this PC; {3} is the size sent so far, e.g. \"12.5 MB\"." },
     "progress_sizes": { "text": "{0} {1} received, {2} sent", "note": "{0} is the sync step, \"Syncing files…\"; {1} and {2} are sizes, e.g. \"12.5 MB\"." },
     "sync_finished": "Sync complete",
     "sync_cancelled": "Sync cancelled",
@@ -1012,6 +1013,7 @@
     "sync_notification_syncing_with": "Syncing with {0}",
     "sync_notification_see_code": "Open Kithsong to see the code",
     "sync_notification_files": { "one": "{0:d} of {1:d} file", "other": "{0:d} of {1:d} files", "note": "Audio files received so far of those to fetch, under \"Syncing with …\". The plural follows {1}." },
+    "sync_notification_files_sent": { "one": "{0:d} of {1:d} file sent", "other": "{0:d} of {1:d} files sent", "note": "Audio files sent so far of those the other device is fetching from this phone, under \"Syncing with …\". The plural follows {1}." },
     "sync_error_open": "Couldn't open this phone's sync data",
     "sync_error_listen": "Couldn't listen on the network",
     "merge_tracks_deleted": { "one": "{0:d} duplicate deleted from this phone", "other": "{0:d} duplicates deleted from this phone", "note": "Tracks the library had in the same or better quality: this phone's copy was deleted (Android has no trash). One item of merge_tracks' list." }
