@@ -98,20 +98,15 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 
 ## Import and tagging
 
-- Core - duplicates: a swap keeps the library's album and track metadata and files the new file under the old name; the new file's tags come from its own match, so a release-group or by-name swap can leave tags naming another release than the library row
-- Core - duplicates: a byte-identical file is only recognised against files that were imported as-is or synced (matched imports are re-tagged in the library, so their bytes differ from the source)
-- All - Use as Track (mc_import_assign) works only within an import session: once Done is clicked the session's matches are gone, so an album already in the library can't be fixed that way. It would need the release's track list kept (or looked up again by mb_albumid) and a library-side "assign this file to that track"
 - Windows - a missing track's "Choose file… ▾" in the review is cell text with an arrow, not a real dropdown: UI Automation sees the row's text but no ExpandCollapse pattern (the menu opens with a click, Enter or the Menu key)
-- Core - Use as Track doesn't recompute the match's confidence, and rewriting an already imported item skips the duplicates check (its files are in the library), so a file brought in from outside the library replaces a library copy at the same path rather than being compared for quality
-- Core - extended search (docs/tagging-rules.md): not for singles, so a one-file album whose album tag equals its title (a DJ mix, e.g. "BREAK IT OLDSCHOOL [SRPC-L007]") gets only recording candidates; it would need release candidates for a single item
-- Core - grouping: an album tag with the disc in it ("危ないベースライン Disc1", "… Disc2") makes one item per disc folder; the folder name's title (search_keys.c) could join them
-- Windows - paths over MAX_PATH: the manifest isn't longPathAware, so TagLib can't open (and the copy can't read) files whose full path is 260 characters or more; they're left out of the import without a word
+- Core - joining disc folders is tried once, at the set's first match: if MusicBrainz can't be reached then, the discs stay separate. Keep existing tags on a joined item files every disc under the first disc's album tag ("Title Disc1"), and a manual search on it replaces the "joined" reason with the search's status
+- Core - source hashes (files.source_sha256) aren't recorded for files brought in by merging libraries, nor for files imported from inside the library folder
+- Core - a release-group swap adds the tracks the library lacks with their own match's tags, so they can name another release than the album row
+- Windows - long paths with Windows' long-path setting off: the core prefixes `\\?\` itself, but mc_trash (the shell's Recycle Bin call), a library.db path over 260 and the frontend's own path calls (cover images, the folder picker) still fail
 - Android - import (the system picker, or files shared with or opened in the app; no storage permission). Left to do:
   - the review shows the candidates, Keep existing tags, Skip, Search again and Search more widely, but not the track list of a match, other items' files or Use as Track (mc_import_assign), nor the duplicate outcomes (replaced / added missing / already in library)
-  - an import cut short by the process dying isn't resumed: the next start deletes the copies and releases the folder's grant
-  - sharing files while an import runs leaves them out (only logged)
-  - a folder's .zip files are imported as batches of their own, but zips nested inside zips aren't extracted
-- Core - zips: only paths given to mc_import_start are extracted (a zip inside a dropped folder isn't)
+  - the in-app Import menu still says an import is running; only shares and Open with add to it
+  - a folder's zips are batches of their own, so the 32 GB zip cap is per zip there, not per import
 
 ## Sync
 
