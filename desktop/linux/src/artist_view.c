@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "album_grid.h"
+#include "cover.h"
 #include "delete_dialog.h"
 #include "playback.h"
 #include "recents.h"
@@ -64,7 +65,7 @@ struct _ArtistTrack {
   GObject parent;
   char uid[MC_UID_STRLEN];
   char *title, *artist, *album, *cover_dir, *path; /* as mc_track_info has them */
-  int duration_ms;
+  int duration_ms, year;
   char duration[16]; /* "4:44", or "" if unknown */
 };
 
@@ -104,6 +105,7 @@ static ArtistTrack *artist_track_new(const mc_track_info *t) {
   self->cover_dir = g_strdup(t->cover_dir);
   self->path = g_strdup(t->path);
   self->duration_ms = t->duration_ms;
+  self->year = t->year;
   format_duration(t->duration_ms, self->duration, sizeof self->duration);
   return self;
 }
@@ -130,6 +132,8 @@ static struct {
   char open[MC_UID_STRLEN];
   GtkWidget *page, *avatar, *name, *summary, *actions, *more;
   GtkWidget *albums_heading, *albums_scroller, *albums;
+  GtkWidget *singles_heading, *singles_scroller, *singles_box;
+  GListStore *singles; /* ArtistTracks, in singles_box's order */
   GListStore *tracks;
   GtkSingleSelection *track_selection;
   GtkWidget *track_view, *track_scroller, *menu;
@@ -394,6 +398,15 @@ static void on_track_menu(GtkGestureClick *click, int n_press, double x, double 
   gtk_popover_popup(GTK_POPOVER(v.menu));
 }
 
+/* A track's row drags its track onto a playlist (drag.h). */
+static gboolean on_track_drag(gpointer user, drag_item *item) {
+  track_row *r = user;
+  if (!r->track) return FALSE;
+  item->kind = DRAG_TRACK;
+  g_strlcpy(item->uid, r->track->uid, sizeof item->uid);
+  return TRUE;
+}
+
 static void track_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
   (void)factory;
   (void)user;
@@ -419,6 +432,7 @@ static void track_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gp
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
   g_signal_connect(click, "pressed", G_CALLBACK(on_track_menu), r);
   gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
+  drag_source_new(box, on_track_drag, r);
   g_object_set_data_full(G_OBJECT(box), "row", r, g_free);
   gtk_list_item_set_child(item, box);
 }
@@ -449,8 +463,17 @@ static void track_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, g
   if (v.rows) g_ptr_array_remove_fast(v.rows, r); /* not if the page has gone */
 }
 
+/* Opens the track menu for t, pointing at x, y in the page. */
+static void popup_track_menu(const ArtistTrack *t, int x, int y) {
+  memcpy(v.menu_uid, t->uid, sizeof v.menu_uid);
+  v.menu_here = t->path != NULL;
+  gtk_popover_set_pointing_to(GTK_POPOVER(v.menu), &(GdkRectangle){x, y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(v.menu));
+}
+
 /* The Menu key or Shift+F10 on the page: in the tracks, the selected one's menu under its
- * title; elsewhere, or with none selected, the header's "...". */
+ * title; on a single's tile, its menu under the tile; elsewhere, or with no track
+ * selected, the header's "...". */
 static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
   (void)widget;
   (void)args;
@@ -458,6 +481,13 @@ static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer use
   if (!v.open[0]) return FALSE;
   GtkRoot *root = gtk_widget_get_root(v.page);
   GtkWidget *focus = root ? gtk_root_get_focus(root) : NULL;
+  for (GtkWidget *w = focus; w && w != v.singles_box; w = gtk_widget_get_parent(w)) {
+    ArtistTrack *t = g_object_get_data(G_OBJECT(w), "track"); /* on a single's flow box child */
+    graphene_rect_t at;
+    if (!t || !gtk_widget_compute_bounds(w, v.page, &at)) continue;
+    popup_track_menu(t, (int)at.origin.x, (int)(at.origin.y + at.size.height));
+    return TRUE;
+  }
   guint pos = gtk_single_selection_get_selected(v.track_selection);
   for (guint i = 0; focus && gtk_widget_is_ancestor(focus, v.track_view) && i < v.rows->len; i++) {
     track_row *r = g_ptr_array_index(v.rows, i);
@@ -465,11 +495,7 @@ static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer use
     if (!r->track || !r->item || gtk_list_item_get_position(r->item) != pos ||
         !gtk_widget_compute_bounds(r->title, v.page, &at))
       continue;
-    memcpy(v.menu_uid, r->track->uid, sizeof v.menu_uid);
-    v.menu_here = r->track->path != NULL;
-    gtk_popover_set_pointing_to(GTK_POPOVER(v.menu),
-                                &(GdkRectangle){(int)at.origin.x, (int)(at.origin.y + at.size.height), 1, 1});
-    gtk_popover_popup(GTK_POPOVER(v.menu));
+    popup_track_menu(r->track, (int)at.origin.x, (int)(at.origin.y + at.size.height));
     return TRUE;
   }
   if (gtk_widget_get_visible(v.more)) gtk_menu_button_popup(GTK_MENU_BUTTON(v.more));
@@ -497,6 +523,52 @@ static void on_album_activated(GtkFlowBox *box, GtkFlowBoxChild *child, gpointer
   if (v.cb.open_album) v.cb.open_album(v.cb.user, uid);
 }
 
+/* Plays tracks (ArtistTracks) from track start on, or with start -1 from the first
+ * (shuffled, any). Tracks with no file here are left out. */
+static void play_tracks(GListModel *tracks, int start) {
+  guint n = g_list_model_get_n_items(tracks);
+  if (!n) return;
+  playback_track *queue = g_new0(playback_track, n);
+  int count = 0, first = start < 0 ? -1 : 0;
+  for (guint i = 0; i < n; i++) {
+    ArtistTrack *t = g_list_model_get_item(tracks, i);
+    g_object_unref(t); /* the model keeps it */
+    if (!t->path) continue;
+    if (start >= 0 && (int)i <= start) first = count;
+    queue[count++] = (playback_track){t->uid, t->path, t->title, t->artist, t->album, t->cover_dir, t->duration_ms};
+  }
+  if (count) playback_play(queue, count, first);
+  g_free(queue);
+}
+
+/* A single's tile clicked, or Enter on it: plays the singles from there on, as a track's
+ * row plays the tracks. */
+static void on_single_activated(GtkFlowBox *box, GtkFlowBoxChild *child, gpointer user) {
+  (void)box;
+  (void)user;
+  play_tracks(G_LIST_MODEL(v.singles), gtk_flow_box_child_get_index(child));
+}
+
+/* Right-click on a single's tile: the track menu, where the pointer is. */
+static void on_single_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  ArtistTrack *t = g_object_get_data(G_OBJECT(user), "track");
+  GtkWidget *tile = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
+  graphene_point_t at;
+  if (!t || !gtk_widget_compute_point(tile, v.page, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  popup_track_menu(t, (int)at.x, (int)at.y);
+}
+
+/* A single's tile drags its track, as a track's row does. */
+static gboolean on_single_drag(gpointer user, drag_item *item) {
+  ArtistTrack *t = g_object_get_data(G_OBJECT(user), "track");
+  if (!t) return FALSE;
+  item->kind = DRAG_TRACK;
+  g_strlcpy(item->uid, t->uid, sizeof item->uid);
+  return TRUE;
+}
+
 static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -511,13 +583,18 @@ static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer use
   (void)action;
   (void)param;
   (void)user;
-  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.tracks)); v.menu_uid[0] && i < n; i++) {
-    ArtistTrack *t = track_at(i);
-    if (strcmp(t->uid, v.menu_uid)) continue;
-    delete_dialog_present(GTK_WIDGET(v.a->win), v.a->lib, v.a->settings_dir, MC_DELETE_TRACKS, t->uid, t->title,
-                          on_deleted, v.a);
-    return;
-  }
+  /* A single needn't be among the tracks: it can be on an album of theirs but credited to
+   * someone else. */
+  GListModel *lists[] = {G_LIST_MODEL(v.tracks), G_LIST_MODEL(v.singles)};
+  for (guint l = 0; l < G_N_ELEMENTS(lists); l++)
+    for (guint i = 0, n = g_list_model_get_n_items(lists[l]); v.menu_uid[0] && i < n; i++) {
+      ArtistTrack *t = g_list_model_get_item(lists[l], i);
+      g_object_unref(t); /* the model keeps it */
+      if (strcmp(t->uid, v.menu_uid)) continue;
+      delete_dialog_present(GTK_WIDGET(v.a->win), v.a->lib, v.a->settings_dir, MC_DELETE_TRACKS, t->uid, t->title,
+                            on_deleted, v.a);
+      return;
+    }
 }
 
 /* An album's tile, with its year beneath it, or its artist when that's someone else. */
@@ -532,7 +609,53 @@ static GtkWidget *album_child(const mc_album_info *info, const char *artist) {
   return child;
 }
 
-/* Fills the page from the library: the artist's name, albums and tracks. */
+/* A single's tile, as an album's but for one track: its cover and title, with its year
+ * beneath, or its artist when that's someone else. The child holds the track as "track". */
+static GtkWidget *single_child(ArtistTrack *t, const char *artist) {
+  AlbumItem *item = g_object_new(ALBUM_TYPE_ITEM, NULL);
+  memcpy(item->uid, t->uid, sizeof item->uid);
+  item->title = g_strdup(t->title);
+  item->artist = g_strdup(t->artist);
+  item->cover_file = t->cover_dir ? cover_path(t->cover_dir) : NULL;
+  item->year = t->year;
+  item->here = t->path != NULL;
+  if (!t->artist || g_strcmp0(t->artist, artist))
+    item->subtitle = g_strdup(t->artist ? t->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
+  else item->subtitle = t->year > 0 ? g_strdup_printf("%d", t->year) : g_strdup("");
+  GtkWidget *tile = album_tile_new(item);
+  g_object_unref(item);
+  if (!t->path) gtk_widget_set_tooltip_text(tile, mc_str(MC_STR_NOT_ON_DEVICE));
+  GtkWidget *child = gtk_flow_box_child_new();
+  gtk_flow_box_child_set_child(GTK_FLOW_BOX_CHILD(child), tile);
+  g_object_set_data_full(G_OBJECT(child), "track", g_object_ref(t), g_object_unref);
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "pressed", G_CALLBACK(on_single_menu), child);
+  gtk_widget_add_controller(tile, GTK_EVENT_CONTROLLER(click));
+  drag_source_new(tile, on_single_drag, child);
+  return child;
+}
+
+/* Fills the singles' row from the library (mc_library_list_artist_singles()), hiding it and
+ * its heading if there are none. */
+static void load_singles(const char *artist) {
+  gtk_flow_box_remove_all(GTK_FLOW_BOX(v.singles_box));
+  g_list_store_remove_all(v.singles);
+  mc_track_list *singles = NULL;
+  if (!v.a->lib || mc_library_list_artist_singles(v.a->lib, v.open, &singles) != MC_OK) singles = NULL;
+  int n = singles ? singles->count : 0;
+  for (int i = 0; i < n; i++) {
+    ArtistTrack *t = artist_track_new(&singles->items[i]);
+    g_list_store_append(v.singles, t);
+    gtk_flow_box_append(GTK_FLOW_BOX(v.singles_box), single_child(t, artist));
+    g_object_unref(t);
+  }
+  mc_track_list_free(singles);
+  gtk_widget_set_visible(v.singles_heading, n > 0);
+  gtk_widget_set_visible(v.singles_scroller, n > 0);
+}
+
+/* Fills the page from the library: the artist's name, albums, singles and tracks. */
 static void load_page(void) {
   const char *name = open_name();
   adw_avatar_set_text(ADW_AVATAR(v.avatar), name);
@@ -546,6 +669,7 @@ static void load_page(void) {
   mc_album_list_free(albums);
   gtk_widget_set_visible(v.albums_heading, album_count > 0);
   gtk_widget_set_visible(v.albums_scroller, album_count > 0);
+  load_singles(name);
   GMenu *more = g_menu_new(); /* not artist_menu(), which would retarget an open row menu */
   remove_here_append(more, MC_PROFILE_ARTIST, v.open, "artist.remove-here", "artist.sync-here");
   gtk_widget_set_visible(v.more, g_menu_model_get_n_items(G_MENU_MODEL(more)) > 0);
@@ -573,11 +697,11 @@ static void load_page(void) {
   g_free(items);
   gtk_widget_set_sensitive(v.actions, playable);
 
-  /* "12 albums · 140 tracks" */
+  /* "12 albums · 140 tracks", or "3 tracks" for an artist of only singles */
   char a[64], t[64];
   mc_format(a, sizeof a, mc_str_plural(MC_STR_COUNT_ALBUMS, album_count), MC_D(album_count));
   mc_format(t, sizeof t, mc_str_plural(MC_STR_TRACKS, n), MC_D(n));
-  char *summary = g_strdup_printf("%s%s%s", a, mc_str(MC_STR_SEPARATOR_DOT), t);
+  char *summary = album_count > 0 ? g_strdup_printf("%s%s%s", a, mc_str(MC_STR_SEPARATOR_DOT), t) : g_strdup(t);
   gtk_label_set_text(GTK_LABEL(v.summary), summary);
   g_free(summary);
 }
@@ -587,6 +711,8 @@ static void go_back(void) {
   v.open[0] = '\0';
   g_list_store_remove_all(v.tracks);
   gtk_flow_box_remove_all(GTK_FLOW_BOX(v.albums));
+  g_list_store_remove_all(v.singles);
+  gtk_flow_box_remove_all(GTK_FLOW_BOX(v.singles_box));
   gtk_stack_set_visible_child_name(GTK_STACK(v.stack),
                                    g_list_model_get_n_items(G_LIST_MODEL(v.artists)) ? "list" : "none");
   gtk_widget_grab_focus(v.list);
@@ -690,24 +816,24 @@ static GtkWidget *build_header(void) {
   return header;
 }
 
-/* The albums, in one row that scrolls sideways. */
-static GtkWidget *build_albums(void) {
-  v.albums = gtk_flow_box_new();
-  gtk_orientable_set_orientation(GTK_ORIENTABLE(v.albums), GTK_ORIENTATION_VERTICAL); /* columns of one */
-  gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(v.albums), 1);
-  gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(v.albums), 1);
-  gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(v.albums), GTK_SELECTION_NONE);
-  gtk_widget_add_css_class(v.albums, "search-albums");
-  gtk_widget_set_margin_start(v.albums, 10);
-  gtk_widget_set_margin_end(v.albums, 10);
-  gtk_widget_set_halign(v.albums, GTK_ALIGN_START);
-  gtk_accessible_update_property(GTK_ACCESSIBLE(v.albums), GTK_ACCESSIBLE_PROPERTY_LABEL,
-                                 mc_str(MC_STR_SECTION_ALBUMS), -1);
-  g_signal_connect(v.albums, "child-activated", G_CALLBACK(on_album_activated), NULL);
-  v.albums_scroller = gtk_scrolled_window_new();
-  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(v.albums_scroller), GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
-  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(v.albums_scroller), v.albums);
-  return v.albums_scroller;
+/* A row of tiles that scrolls sideways, for the albums or the singles: *box is its flow
+ * box, named label for screen readers; returns the scroller around it. */
+static GtkWidget *build_tile_row(const char *label, GCallback activated, GtkWidget **box) {
+  *box = gtk_flow_box_new();
+  gtk_orientable_set_orientation(GTK_ORIENTABLE(*box), GTK_ORIENTATION_VERTICAL); /* columns of one */
+  gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(*box), 1);
+  gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(*box), 1);
+  gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(*box), GTK_SELECTION_NONE);
+  gtk_widget_add_css_class(*box, "search-albums");
+  gtk_widget_set_margin_start(*box, 10);
+  gtk_widget_set_margin_end(*box, 10);
+  gtk_widget_set_halign(*box, GTK_ALIGN_START);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(*box), GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
+  g_signal_connect(*box, "child-activated", activated, NULL);
+  GtkWidget *scroller = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), *box);
+  return scroller;
 }
 
 static GtkWidget *build_tracks(void) {
@@ -738,7 +864,14 @@ static GtkWidget *build_page(void) {
   gtk_box_append(GTK_BOX(v.page), build_header());
   v.albums_heading = heading(mc_str(MC_STR_SECTION_ALBUMS));
   gtk_box_append(GTK_BOX(v.page), v.albums_heading);
-  gtk_box_append(GTK_BOX(v.page), build_albums());
+  v.albums_scroller = build_tile_row(mc_str(MC_STR_SECTION_ALBUMS), G_CALLBACK(on_album_activated), &v.albums);
+  gtk_box_append(GTK_BOX(v.page), v.albums_scroller);
+  v.singles_heading = heading(mc_str(MC_STR_ARTIST_SINGLES));
+  gtk_box_append(GTK_BOX(v.page), v.singles_heading);
+  v.singles = g_list_store_new(ARTIST_TYPE_TRACK);
+  v.singles_scroller =
+    build_tile_row(mc_str(MC_STR_ARTIST_SINGLES), G_CALLBACK(on_single_activated), &v.singles_box);
+  gtk_box_append(GTK_BOX(v.page), v.singles_scroller);
   gtk_box_append(GTK_BOX(v.page), heading(mc_str(MC_STR_TRACKS_TITLE)));
   gtk_box_append(GTK_BOX(v.page), build_tracks());
 
@@ -790,6 +923,7 @@ static void on_destroy(GtkWidget *widget, gpointer user) {
   (void)user;
   g_clear_object(&v.artist_selection);
   g_clear_object(&v.track_selection);
+  g_clear_object(&v.singles);
   g_clear_pointer(&v.rows, g_ptr_array_unref);
   memset(&v, 0, sizeof v);
 }
@@ -865,6 +999,8 @@ void artist_view_reload(void) {
   else {
     g_list_store_remove_all(v.tracks);
     gtk_flow_box_remove_all(GTK_FLOW_BOX(v.albums));
+    g_list_store_remove_all(v.singles);
+    gtk_flow_box_remove_all(GTK_FLOW_BOX(v.singles_box));
   }
   gtk_stack_set_visible_child_name(GTK_STACK(v.stack), v.open[0]                                         ? "artist"
                                                        : g_list_model_get_n_items(G_LIST_MODEL(v.artists)) ? "list"
@@ -885,6 +1021,7 @@ gboolean artist_view_open(const char *uid) {
   load_page();
   gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(v.track_scroller)), 0);
   gtk_adjustment_set_value(gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(v.albums_scroller)), 0);
+  gtk_adjustment_set_value(gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(v.singles_scroller)), 0);
   gtk_stack_set_visible_child_name(GTK_STACK(v.stack), "artist");
   gtk_widget_grab_focus(v.track_view); /* so Escape and the arrow keys work from the start */
   /* Where the list will be on the way back. */
@@ -899,6 +1036,17 @@ const char *artist_view_artist(void) {
   return v.open[0] ? v.open : NULL;
 }
 
+const char *artist_view_find(const char *name) {
+  const char *found = NULL;
+  for (guint i = 0, n = v.artists && name ? g_list_model_get_n_items(G_LIST_MODEL(v.artists)) : 0; i < n; i++) {
+    ArtistItem *artist = artist_at(i);
+    if (strcmp(artist->name, name)) continue;
+    if (found) return NULL; /* which one? */
+    found = artist->uid;
+  }
+  return found;
+}
+
 gboolean artist_view_playable(void) {
   if (!v.open[0]) return FALSE;
   for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.tracks)); i < n; i++)
@@ -907,18 +1055,7 @@ gboolean artist_view_playable(void) {
 }
 
 void artist_view_play(int start) {
-  guint n = v.open[0] ? g_list_model_get_n_items(G_LIST_MODEL(v.tracks)) : 0;
-  if (!n) return;
-  playback_track *queue = g_new0(playback_track, n);
-  int count = 0, first = start < 0 ? -1 : 0;
-  for (guint i = 0; i < n; i++) {
-    ArtistTrack *t = track_at(i);
-    if (!t->path) continue;
-    if (start >= 0 && (int)i <= start) first = count;
-    queue[count++] = (playback_track){t->uid, t->path, t->title, t->artist, t->album, t->cover_dir, t->duration_ms};
-  }
-  if (count) playback_play(queue, count, first);
-  g_free(queue);
+  if (v.open[0]) play_tracks(G_LIST_MODEL(v.tracks), start);
 }
 
 void artist_view_set_playing(const char *uid) {

@@ -932,7 +932,8 @@ static void review_load(review *r) {
     /* "Artist – Album", or for a single "Artist – Release → Track". */
     char *into = m->is_single ? mc_format_alloc(mc_str(MC_STR_IMPORT_MATCH_INTO),
                                                 MC_S(m->release ? m->release : unknown),
-                                                MC_S(m->album ? m->album : unknown))
+                                                MC_S(m->track_count && m->tracks[0].title ? m->tracks[0].title
+                                                                                          : unknown))
                               : NULL;
     char *title = mc_format_alloc(mc_str(MC_STR_TRACK_BYLINE), MC_S(m->album_artist ? m->album_artist : unknown),
                                   MC_S(m->is_single ? into : m->album ? m->album : unknown));
