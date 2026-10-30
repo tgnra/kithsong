@@ -9,6 +9,7 @@
 
 #include "canvas.h"
 #include "playback.h"
+#include "scrobble_service.h"
 #include "sync_bridge.h"
 #include "theme.h"
 #include "wstr.h"
@@ -33,6 +34,7 @@ enum {
   ID_SET_LFM_CHECK,
   ID_SET_LFM_CHECK_LABEL,
   ID_SET_LFM_NOTE,
+  ID_SET_LFM_SERVICE,
 };
 
 enum { MAX_ADDRESSES = 8 };
@@ -48,19 +50,20 @@ static struct {
   HWND parent;
   HWND title, heading, path, move, open, note;
   HWND sync_heading, name_label, name, addr_label, addr, leave, sync_note;
-  HWND lfm_heading, lfm_status, lfm_button, lfm_check, lfm_check_label, lfm_note;
+  HWND lfm_heading, lfm_status, lfm_button, lfm_service, lfm_check, lfm_check_label, lfm_note;
   HFONT font, title_font, heading_font;
   BOOL shown;
   mc_settings *settings;
   void (*devices_changed)(void);
   char shown_name[MC_SYNC_DEVICE_NAME_MAX + 1]; /* what the name box was last set to */
 
-  /* Signing in to Last.fm. */
+  /* Signing in to Last.fm (or the service chosen instead). */
   HANDLE auth_thread, auth_cancel; /* while signing in; auth_cancel is an event */
   mc_status auth_result;           /* of the last sign-in, shown until the next action */
   BOOL auth_timed_out;             /* it wasn't approved in time */
   wchar_t lfm_shown[512];          /* the status line as last set */
-  enum mc_str_id lfm_button_shown; /* and the button's text */
+  wchar_t lfm_button_shown[128];   /* the button's text */
+  wchar_t lfm_note_shown[512];     /* and the note's, which names the service */
 } g_set;
 
 static void update_scrobble(void);
@@ -123,13 +126,14 @@ void settings_view_create(HWND parent) {
   g_set.lfm_heading = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLING), label, ID_SET_LFM_HEADING);
   g_set.lfm_status = child(WC_STATICW, NULL, label, ID_SET_LFM_STATUS);
   SetWindowSubclass(g_set.lfm_status, lfm_status_proc, 0, 0); /* the auth thread's news, the timer */
-  g_set.lfm_button = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_SCROBBLE_SIGN_IN), BS_PUSHBUTTON | WS_TABSTOP,
-                           ID_SET_LFM_BUTTON);
+  g_set.lfm_button = child(WC_BUTTONW, NULL, BS_PUSHBUTTON | WS_TABSTOP, ID_SET_LFM_BUTTON); /* update_scrobble() */
+  g_set.lfm_service = child(WC_BUTTONW, mc_wstr(MC_STR_SCROBBLE_CHANGE_SERVICE), BS_PUSHBUTTON | WS_TABSTOP,
+                            ID_SET_LFM_SERVICE);
   /* No text of its own: a themed checkbox's text stays black in dark mode, so the label
    * beside it says it, and toggles it too (as on the device page). */
   g_set.lfm_check = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_SET_LFM_CHECK);
   g_set.lfm_check_label = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLE_SWITCH), label | SS_NOTIFY, ID_SET_LFM_CHECK_LABEL);
-  g_set.lfm_note = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLE_NOTE), label, ID_SET_LFM_NOTE);
+  g_set.lfm_note = child(WC_STATICW, NULL, label, ID_SET_LFM_NOTE); /* names the service: update_scrobble() */
   playback_on_scrobbler_closing(stop_auth);
 }
 
@@ -171,7 +175,7 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   HWND body[] = {g_set.path,       g_set.move,       g_set.open,       g_set.note,
                  g_set.name_label, g_set.name,       g_set.addr_label, g_set.addr,
                  g_set.leave,      g_set.sync_note,  g_set.lfm_status, g_set.lfm_button,
-                 g_set.lfm_check,  g_set.lfm_check_label, g_set.lfm_note};
+                 g_set.lfm_service, g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
 }
 
@@ -180,7 +184,7 @@ void settings_view_show(BOOL show) {
   HWND all[] = {g_set.title,      g_set.heading,      g_set.path,  g_set.move,       g_set.open,
                 g_set.note,       g_set.sync_heading, g_set.name_label, g_set.name,  g_set.addr_label,
                 g_set.addr,       g_set.leave,        g_set.sync_note, g_set.lfm_heading, g_set.lfm_status,
-                g_set.lfm_button, g_set.lfm_check,    g_set.lfm_check_label, g_set.lfm_note};
+                g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
   if (show) {
     settings_view_update_sync();
@@ -265,7 +269,9 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.lfm_status, left, top, text_w, sh, TRUE);
   top += sh + S(12);
 
-  MoveWindow(g_set.lfm_button, left, top, button_width(g_set.lfm_button, S(16)), btn_h, TRUE);
+  int sign_in_w = button_width(g_set.lfm_button, S(16));
+  MoveWindow(g_set.lfm_button, left, top, sign_in_w, btn_h, TRUE);
+  MoveWindow(g_set.lfm_service, left + sign_in_w + S(8), top, button_width(g_set.lfm_service, S(16)), btn_h, TRUE);
   top += btn_h + S(12);
 
   int box = GetSystemMetricsForDpi(SM_CXMENUCHECK, dpi);
@@ -432,57 +438,67 @@ static void leave_group(void) {
 
 /* --- Scrobbling --- */
 
-/* Brings the Scrobbling section up to date with the scrobbler: signed in or not, whether
- * the build can sign in at all, plays waiting and the last error. */
+/* Brings the Scrobbling section up to date with the scrobbler: the service, signed in or
+ * not, whether the build can sign in at all, plays waiting and the last error. */
 static void update_scrobble(void) {
   if (!g_set.lfm_status) return;
   mc_scrobbler *sc = playback_scrobbler();
   mc_scrobbler_status st = {0};
   BOOL have = sc && mc_scrobbler_status_get(sc, &st) == MC_OK;
   BOOL waiting = g_set.auth_thread != NULL;
-  wchar_t text[512], line[256];
-  text[0] = L'\0';
-  enum mc_str_id button = MC_STR_SCROBBLE_SIGN_IN;
+  const char *service = have && st.service_name ? st.service_name : mc_str(MC_STR_SCROBBLE_SERVICE);
+  wchar_t text[512], line[256], button[128], note[512];
+  mc_wformat(text, 511, mc_str(MC_STR_WINDOWS_SCROBBLE_SERVICE_CURRENT), MC_S(service));
+  wcscat(text, L"\n"); /* room was left for it */
+  size_t len = wcslen(text);
+  wstr_mnemonic_format(button, 128, MC_STR_SCROBBLE_SIGN_IN, service);
   BOOL enabled = have;
 
   if (waiting) {
-    wcscpy(text, mc_wstr(MC_STR_SCROBBLE_WAITING));
-    button = MC_STR_SCROBBLE_CANCEL_SIGN_IN;
+    mc_wformat(text + len, 512 - len, mc_str(MC_STR_SCROBBLE_WAITING), MC_S(service));
+    wcscpy(button, mc_wstr_mnemonic(MC_STR_SCROBBLE_CANCEL_SIGN_IN));
     enabled = TRUE;
   } else if (have && st.username) {
     char *name = st.username;
-    mc_wformat(text, 512, mc_str(MC_STR_SCROBBLE_SIGNED_IN), MC_S(name));
-    button = MC_STR_SCROBBLE_SIGN_OUT;
+    mc_wformat(text + len, 512 - len, mc_str(MC_STR_SCROBBLE_SIGNED_IN), MC_S(name));
+    wcscpy(button, mc_wstr_mnemonic(MC_STR_SCROBBLE_SIGN_OUT));
     line[0] = L'\0';
-    if (st.last_error == MC_ERR_AUTH) wcscpy(line, mc_wstr(MC_STR_SCROBBLE_REFUSED));
-    else if (st.last_error == MC_ERR_NET) wcscpy(line, mc_wstr(MC_STR_SCROBBLE_OFFLINE));
+    if (st.last_error == MC_ERR_AUTH) mc_wformat(line, 256, mc_str(MC_STR_SCROBBLE_REFUSED), MC_S(service));
+    else if (st.last_error == MC_ERR_NET) mc_wformat(line, 256, mc_str(MC_STR_SCROBBLE_OFFLINE), MC_S(service));
     else if (st.pending > 0) mc_wformat(line, 256, mc_str_plural(MC_STR_SCROBBLE_PENDING, st.pending), MC_D(st.pending));
     if (line[0]) {
-      wcscat(text, L"\n");
+      wcsncat(text, L"\n", 511 - wcslen(text));
       wcsncat(text, line, 511 - wcslen(text));
     }
   } else if (have && !st.has_key) {
-    wcscpy(text, mc_wstr(MC_STR_SCROBBLE_NO_KEY));
+    wcsncat(text, mc_wstr(MC_STR_SCROBBLE_NO_KEY), 511 - len);
     enabled = FALSE;
   } else {
-    wcscpy(text, mc_wstr(MC_STR_SCROBBLE_SIGNED_OUT));
+    wcsncat(text, mc_wstr(MC_STR_SCROBBLE_SIGNED_OUT), 511 - len);
   }
   if (!waiting && g_set.auth_result != MC_OK) {
     if (g_set.auth_timed_out)
       wcscpy(line, mc_wstr(MC_STR_SCROBBLE_SIGN_IN_TIMED_OUT));
     else
       mc_wformat(line, 256, mc_str(MC_STR_SCROBBLE_SIGN_IN_FAILED), MC_S(mc_status_str(g_set.auth_result)));
-    wcscat(text, L"\n");
+    wcsncat(text, L"\n", 511 - wcslen(text));
     wcsncat(text, line, 511 - wcslen(text));
   }
-  if (have) mc_scrobbler_status_clear(&st);
+  mc_wformat(note, 512, mc_str(MC_STR_SCROBBLE_NOTE), MC_S(service));
+  if (have) mc_scrobbler_status_clear(&st); /* not before: service may point into it */
 
   EnableWindow(g_set.lfm_button, enabled);
+  EnableWindow(g_set.lfm_service, sc != NULL);
   BOOL relayout = FALSE;
-  if (button != g_set.lfm_button_shown || !g_set.lfm_shown[0]) {
-    g_set.lfm_button_shown = button;
-    SetWindowTextW(g_set.lfm_button, mc_wstr_mnemonic(button));
+  if (wcscmp(button, g_set.lfm_button_shown)) {
+    wcscpy(g_set.lfm_button_shown, button);
+    SetWindowTextW(g_set.lfm_button, button);
     relayout = TRUE; /* its width */
+  }
+  if (wcscmp(note, g_set.lfm_note_shown)) {
+    wcscpy(g_set.lfm_note_shown, note);
+    SetWindowTextW(g_set.lfm_note, note);
+    relayout = TRUE; /* it may take more lines */
   }
   if (wcscmp(text, g_set.lfm_shown)) {
     wcscpy(g_set.lfm_shown, text);
@@ -561,14 +577,40 @@ static void stop_auth(void) {
   update_scrobble();
 }
 
-static void sign_out(void) {
+static void sign_out(const char *service) {
   mc_scrobbler *sc = playback_scrobbler();
   if (!sc) return;
-  if (MessageBoxW(g_set.parent, mc_wstr(MC_STR_SCROBBLE_SIGN_OUT_TEXT), mc_wstr(MC_STR_SCROBBLE_SIGN_OUT_TITLE),
+  wchar_t title[256];
+  mc_wformat(title, 256, mc_str(MC_STR_SCROBBLE_SIGN_OUT_TITLE), MC_S(service));
+  if (MessageBoxW(g_set.parent, mc_wstr(MC_STR_SCROBBLE_SIGN_OUT_TEXT), title,
                   MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
     return;
   g_set.auth_result = mc_scrobbler_sign_out(sc);
   g_set.auth_timed_out = FALSE;
+  update_scrobble();
+}
+
+/* Use a Different Service: the dialog, then the service it chose, which signs out if it's
+ * another one. A sign-in under way is given up first, since it's for the old service. */
+static void change_service(void) {
+  mc_scrobbler *sc = playback_scrobbler();
+  mc_scrobbler_status st;
+  if (!sc || mc_scrobbler_status_get(sc, &st) != MC_OK) return;
+  scrobble_service_choice c;
+  BOOL chosen = scrobble_service_show(g_set.parent, st.service, st.api_url, st.auth_url, &c);
+  mc_scrobbler_status_clear(&st);
+  if (!chosen) return;
+  stop_auth();
+  sc = playback_scrobbler(); /* the library may have changed while the dialog was open */
+  mc_status r = sc ? mc_scrobbler_set_service(sc, c.api_url, c.auth_url, c.api_key, c.api_secret) : MC_OK;
+  scrobble_service_choice_clear(&c);
+  g_set.auth_result = MC_OK;
+  g_set.auth_timed_out = FALSE;
+  if (r != MC_OK) {
+    wchar_t text[256];
+    mc_wformat(text, 256, mc_str(MC_STR_SCROBBLE_SERVICE_FAILED), MC_S(mc_status_str(r)));
+    MessageBoxW(g_set.parent, text, mc_wstr(MC_STR_SCROBBLE_SERVICE_TITLE), MB_OK | MB_ICONERROR);
+  }
   update_scrobble();
 }
 
@@ -578,10 +620,9 @@ static void on_scrobble_button(void) {
   if (g_set.auth_thread) {
     stop_auth();
   } else if (sc && mc_scrobbler_status_get(sc, &st) == MC_OK) {
-    BOOL signed_in = st.username != NULL;
-    mc_scrobbler_status_clear(&st);
-    if (signed_in) sign_out();
+    if (st.username) sign_out(st.service_name ? st.service_name : mc_str(MC_STR_SCROBBLE_SERVICE));
     else start_auth();
+    mc_scrobbler_status_clear(&st);
   }
 }
 
@@ -640,6 +681,7 @@ BOOL settings_view_on_command(int id, int code) {
       return TRUE;
     case ID_SET_LEAVE: leave_group(); return TRUE;
     case ID_SET_LFM_BUTTON: on_scrobble_button(); return TRUE;
+    case ID_SET_LFM_SERVICE: change_service(); return TRUE;
     case ID_SET_LFM_CHECK:
       if (code == BN_CLICKED) on_scrobble_check();
       return TRUE;

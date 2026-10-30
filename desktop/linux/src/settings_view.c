@@ -19,7 +19,7 @@ typedef struct settings_view {
   void *user;
   GtkWidget *dialog, *folder;
   GtkWidget *name, *address, *leave; /* the Sync group's rows */
-  GtkWidget *lfm_status, *lfm_button, *lfm_switch; /* the Scrobbling group's */
+  GtkWidget *lfm_group, *lfm_status, *lfm_button, *lfm_service, *lfm_switch; /* the Scrobbling group's */
   guint lfm_timer;
 } settings_view;
 
@@ -451,28 +451,30 @@ static void stop_auth(void) {
   if (g_auth.shown) update_scrobble(g_auth.shown);
 }
 
-/* Brings the Scrobbling group up to date: signed in or not, whether the build can sign in at
- * all, plays waiting and the last error. */
+/* Brings the Scrobbling group up to date: the service, signed in or not, whether the build
+ * can sign in at all, plays waiting and the last error. */
 static void update_scrobble(settings_view *s) {
   mc_scrobbler *sc = playback_scrobbler();
   mc_scrobbler_status st = {0};
   gboolean have = sc && mc_scrobbler_status_get(sc, &st) == MC_OK;
+  const char *service = have && st.service_name ? st.service_name : mc_str(MC_STR_SCROBBLE_SERVICE);
   GString *text = g_string_new(NULL);
-  enum mc_str_id button = MC_STR_SCROBBLE_SIGN_IN;
+  char button[256], line[256];
+  mc_format(button, sizeof button, mc_str(MC_STR_SCROBBLE_SIGN_IN), MC_S(service));
   gboolean enabled = have;
-  char line[256];
 
   if (g_auth.thread) {
-    g_string_append(text, mc_str(MC_STR_SCROBBLE_WAITING));
-    button = MC_STR_SCROBBLE_CANCEL_SIGN_IN;
+    mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_WAITING), MC_S(service));
+    g_string_append(text, line);
+    g_strlcpy(button, mc_str(MC_STR_SCROBBLE_CANCEL_SIGN_IN), sizeof button);
     enabled = TRUE;
   } else if (have && st.username) {
     mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_SIGNED_IN), MC_S(st.username));
     g_string_append(text, line);
-    button = MC_STR_SCROBBLE_SIGN_OUT;
+    g_strlcpy(button, mc_str(MC_STR_SCROBBLE_SIGN_OUT), sizeof button);
     line[0] = '\0';
-    if (st.last_error == MC_ERR_AUTH) g_strlcpy(line, mc_str(MC_STR_SCROBBLE_REFUSED), sizeof line);
-    else if (st.last_error == MC_ERR_NET) g_strlcpy(line, mc_str(MC_STR_SCROBBLE_OFFLINE), sizeof line);
+    if (st.last_error == MC_ERR_AUTH) mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_REFUSED), MC_S(service));
+    else if (st.last_error == MC_ERR_NET) mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_OFFLINE), MC_S(service));
     else if (st.pending > 0) mc_format(line, sizeof line, mc_str_plural(MC_STR_SCROBBLE_PENDING, st.pending), MC_D(st.pending));
     if (line[0]) g_string_append_printf(text, "\n%s", line);
   } else if (have && !st.has_key) {
@@ -488,12 +490,17 @@ static void update_scrobble(settings_view *s) {
       mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_SIGN_IN_FAILED), MC_S(mc_status_str(g_auth.result)));
     g_string_append_printf(text, "\n%s", line);
   }
-  if (have) mc_scrobbler_status_clear(&st);
 
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->lfm_status), service);
   adw_action_row_set_subtitle(ADW_ACTION_ROW(s->lfm_status), text->str);
   g_string_free(text, TRUE);
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->lfm_button), mc_str(button));
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->lfm_button), button);
   gtk_widget_set_sensitive(s->lfm_button, enabled);
+  gtk_widget_set_sensitive(s->lfm_service, sc != NULL);
+  char *note = mc_format_alloc(mc_str(MC_STR_SCROBBLE_NOTE), MC_S(service));
+  adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(s->lfm_group), note);
+  mc_free(note);
+  if (have) mc_scrobbler_status_clear(&st); /* not before: service may point into it */
 }
 
 static gboolean on_scrobble_tick(gpointer data) {
@@ -522,12 +529,16 @@ static void on_scrobble_button(GtkWidget *row, gpointer data) {
   }
   if (!sc || mc_scrobbler_status_get(sc, &st) != MC_OK) return;
   gboolean signed_in = st.username != NULL;
+  char *title = mc_format_alloc(mc_str(MC_STR_SCROBBLE_SIGN_OUT_TITLE),
+                                MC_S(st.service_name ? st.service_name : mc_str(MC_STR_SCROBBLE_SERVICE)));
   mc_scrobbler_status_clear(&st);
   if (!signed_in) {
+    mc_free(title);
     start_auth(s);
     return;
   }
-  AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SCROBBLE_SIGN_OUT_TITLE), mc_str(MC_STR_SCROBBLE_SIGN_OUT_TEXT));
+  AdwDialog *alert = adw_alert_dialog_new(title, mc_str(MC_STR_SCROBBLE_SIGN_OUT_TEXT));
+  mc_free(title);
   adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", mc_str_mnemonic(MC_STR_CANCEL), "sign-out",
                                  mc_str_mnemonic(MC_STR_SCROBBLE_SIGN_OUT), NULL);
   adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "cancel");
@@ -549,25 +560,173 @@ static void on_scrobble_switch(GObject *row, GParamSpec *pspec, gpointer data) {
   }
 }
 
-static GtkWidget *build_scrobble_group(settings_view *s) {
-  GtkWidget *group = adw_preferences_group_new();
-  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SCROBBLING));
-  adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SCROBBLE_NOTE));
+/* The Scrobbling service dialog: Last.fm, Libre.fm, or another service with Last.fm's API,
+ * entered by hand. Owned by the dialog: freed with it. */
+typedef struct service_dialog {
+  settings_view *s;
+  GtkWidget *alert, *kind, *hint;
+  GtkWidget *fields[4]; /* another service's: API address, sign-in page, API key, secret */
+} service_dialog;
 
+static gboolean web_address(const char *s) {
+  return (!g_ascii_strncasecmp(s, "http://", 7) && s[7]) || (!g_ascii_strncasecmp(s, "https://", 8) && s[8]);
+}
+
+/* A field's text, trimmed; g_free it. */
+static char *field_text(GtkWidget *row) {
+  return g_strstrip(g_strdup(gtk_editable_get_text(GTK_EDITABLE(row))));
+}
+
+/* Always for Last.fm and Libre.fm; for another service once every field is filled in and
+ * both addresses are web ones. */
+static gboolean service_valid(service_dialog *d) {
+  if (adw_combo_row_get_selected(ADW_COMBO_ROW(d->kind)) != MC_SCROBBLER_SERVICE_OTHER) return TRUE;
+  gboolean ok = TRUE;
+  for (int i = 0; i < 4; i++) {
+    char *text = field_text(d->fields[i]);
+    if (!*text || (i < 2 && !web_address(text))) ok = FALSE;
+    g_free(text);
+  }
+  return ok;
+}
+
+static void update_service_dialog(service_dialog *d) {
+  gboolean other = adw_combo_row_get_selected(ADW_COMBO_ROW(d->kind)) == MC_SCROBBLER_SERVICE_OTHER;
+  gboolean ok = service_valid(d);
+  for (int i = 0; i < 4; i++) gtk_widget_set_visible(d->fields[i], other);
+  gtk_widget_set_visible(d->hint, !ok);
+  adw_alert_dialog_set_response_enabled(ADW_ALERT_DIALOG(d->alert), "use", ok);
+}
+
+static void on_service_kind(GObject *row, GParamSpec *pspec, gpointer data) {
+  (void)row, (void)pspec;
+  update_service_dialog(data);
+}
+
+static void on_service_field_changed(GtkEditable *editable, gpointer data) {
+  (void)editable;
+  update_service_dialog(data);
+}
+
+static void on_service_response(AdwAlertDialog *alert, const char *response, gpointer data) {
+  (void)alert;
+  service_dialog *d = data;
+  if (strcmp(response, "use") || !service_valid(d)) return;
+  char *text[4] = {NULL, NULL, NULL, NULL}; /* NULLs: Last.fm */
+  switch (adw_combo_row_get_selected(ADW_COMBO_ROW(d->kind))) {
+    case MC_SCROBBLER_SERVICE_LIBREFM:
+      text[0] = g_strdup(MC_SCROBBLER_LIBREFM_API_URL);
+      text[1] = g_strdup(MC_SCROBBLER_LIBREFM_AUTH_URL);
+      text[2] = g_strdup(MC_SCROBBLER_LIBREFM_API_KEY);
+      text[3] = g_strdup(MC_SCROBBLER_LIBREFM_API_SECRET);
+      break;
+    case MC_SCROBBLER_SERVICE_OTHER:
+      for (int i = 0; i < 4; i++) text[i] = field_text(d->fields[i]);
+      break;
+  }
+  stop_auth(); /* a sign-in under way is for the old service */
+  mc_scrobbler *sc = playback_scrobbler();
+  mc_status st = sc ? mc_scrobbler_set_service(sc, text[0], text[1], text[2], text[3]) : MC_OK;
+  for (int i = 0; i < 4; i++) g_free(text[i]);
+  g_auth.result = MC_OK;
+  g_auth.timed_out = FALSE;
+  if (st != MC_OK) {
+    char line[256];
+    mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_SERVICE_FAILED), MC_S(mc_status_str(st)));
+    toast(d->s, line);
+  }
+  update_scrobble(d->s);
+}
+
+/* Use a Different Service: the dialog, starting from the service in use. Changing it signs
+ * out (here and across the group), as the text says. */
+static void on_service_activated(GtkWidget *row, gpointer data) {
+  (void)row;
+  settings_view *s = data;
+  mc_scrobbler *sc = playback_scrobbler();
+  mc_scrobbler_status st;
+  if (!sc || mc_scrobbler_status_get(sc, &st) != MC_OK) return;
+
+  service_dialog *d = g_new0(service_dialog, 1);
+  d->s = s;
+  d->alert = GTK_WIDGET(adw_alert_dialog_new(mc_str(MC_STR_SCROBBLE_SERVICE_TITLE), mc_str(MC_STR_SCROBBLE_SERVICE_TEXT)));
+  g_object_set_data_full(G_OBJECT(d->alert), "service-dialog", d, g_free);
+  AdwAlertDialog *alert = ADW_ALERT_DIALOG(d->alert);
+  adw_alert_dialog_add_responses(alert, "cancel", mc_str_mnemonic(MC_STR_CANCEL), "use", mc_str_mnemonic(MC_STR_OK),
+                                 NULL);
+  adw_alert_dialog_set_response_appearance(alert, "use", ADW_RESPONSE_SUGGESTED);
+  adw_alert_dialog_set_default_response(alert, "use");
+  adw_alert_dialog_set_close_response(alert, "cancel");
+  g_signal_connect(alert, "response", G_CALLBACK(on_service_response), d);
+
+  GtkWidget *list = gtk_list_box_new();
+  gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
+  gtk_widget_add_css_class(list, "boxed-list");
+
+  /* In mc_scrobbler_service's order. */
+  const char *const kinds[] = {mc_str(MC_STR_SCROBBLE_SERVICE), mc_str(MC_STR_SCROBBLE_SERVICE_LIBREFM),
+                               mc_str(MC_STR_SCROBBLE_SERVICE_OTHER), NULL};
+  GtkStringList *model = gtk_string_list_new(kinds);
+  d->kind = adw_combo_row_new();
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(d->kind), mc_str(MC_STR_SCROBBLE_SERVICE_TITLE));
+  adw_combo_row_set_model(ADW_COMBO_ROW(d->kind), G_LIST_MODEL(model));
+  g_object_unref(model);
+  adw_combo_row_set_selected(ADW_COMBO_ROW(d->kind), (guint)st.service);
+  gtk_list_box_append(GTK_LIST_BOX(list), d->kind);
+
+  static const enum mc_str_id titles[] = {MC_STR_SCROBBLE_SERVICE_API_URL, MC_STR_SCROBBLE_SERVICE_AUTH_URL,
+                                          MC_STR_SCROBBLE_SERVICE_API_KEY, MC_STR_SCROBBLE_SERVICE_API_SECRET};
+  for (int i = 0; i < 4; i++) {
+    d->fields[i] = i == 3 ? adw_password_entry_row_new() : adw_entry_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(d->fields[i]), mc_str(titles[i]));
+    gtk_list_box_append(GTK_LIST_BOX(list), d->fields[i]);
+  }
+  if (st.service == MC_SCROBBLER_SERVICE_OTHER) {
+    /* The key and secret aren't shown again: they're typed afresh. */
+    if (st.api_url) gtk_editable_set_text(GTK_EDITABLE(d->fields[0]), st.api_url);
+    if (st.auth_url) gtk_editable_set_text(GTK_EDITABLE(d->fields[1]), st.auth_url);
+  }
+  mc_scrobbler_status_clear(&st);
+  for (int i = 0; i < 4; i++) g_signal_connect(d->fields[i], "changed", G_CALLBACK(on_service_field_changed), d);
+  g_signal_connect(d->kind, "notify::selected", G_CALLBACK(on_service_kind), d);
+
+  d->hint = gtk_label_new(mc_str(MC_STR_SCROBBLE_SERVICE_INCOMPLETE));
+  gtk_label_set_wrap(GTK_LABEL(d->hint), TRUE);
+  gtk_label_set_xalign(GTK_LABEL(d->hint), 0);
+  gtk_widget_add_css_class(d->hint, "dim-label");
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+  gtk_box_append(GTK_BOX(box), list);
+  gtk_box_append(GTK_BOX(box), d->hint);
+
+  adw_alert_dialog_set_extra_child(alert, box);
+  update_service_dialog(d);
+  adw_dialog_present(ADW_DIALOG(d->alert), s->dialog);
+}
+
+static GtkWidget *build_scrobble_group(settings_view *s) {
+  GtkWidget *group = s->lfm_group = adw_preferences_group_new();
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SCROBBLING));
+
+  /* Titled with the service's name, plain text since it may come from an address. */
   s->lfm_status = adw_action_row_new();
   adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(s->lfm_status), FALSE);
-  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->lfm_status), mc_str(MC_STR_SCROBBLE_SERVICE));
   gtk_widget_add_css_class(s->lfm_status, "property");
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), s->lfm_status);
 
 #if ADW_CHECK_VERSION(1, 6, 0)
   s->lfm_button = adw_button_row_new();
 #else
-  s->lfm_button = nav_row(mc_str(MC_STR_SCROBBLE_SIGN_IN), NULL, FALSE);
+  s->lfm_button = nav_row("", NULL, FALSE);
   gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(s->lfm_button), TRUE);
 #endif
+  adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(s->lfm_button), FALSE); /* names the service */
   g_signal_connect(s->lfm_button, "activated", G_CALLBACK(on_scrobble_button), s);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), s->lfm_button);
+
+  s->lfm_service = nav_row(mc_str(MC_STR_SCROBBLE_CHANGE_SERVICE), NULL, TRUE);
+  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(s->lfm_service), TRUE);
+  g_signal_connect(s->lfm_service, "activated", G_CALLBACK(on_service_activated), s);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), s->lfm_service);
 
   s->lfm_switch = adw_switch_row_new();
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->lfm_switch), mc_str(MC_STR_SCROBBLE_SWITCH));

@@ -16,6 +16,13 @@ class CoreScrobbler(library: CoreLibrary, configDir: String) : AutoCloseable {
         val hasKey: Boolean,
         /** Of the last call to the service: [STATUS_AUTH] if it refused the session, [STATUS_NET] if unreachable. */
         val lastError: Int,
+        /** [SERVICE_LASTFM], [SERVICE_LIBREFM] or [SERVICE_OTHER]. */
+        val service: Int,
+        /** What to call it: "Last.fm", "Libre.fm", or another's host name. */
+        val serviceName: String,
+        val apiUrl: String,
+        /** Where its users approve a sign-in. */
+        val authUrl: String,
     )
 
     private var handle = nativeNew(library.handle, configDir)
@@ -46,11 +53,25 @@ class CoreScrobbler(library: CoreLibrary, configDir: String) : AutoCloseable {
     /** Signs out, here and across the group. */
     fun signOut() = nativeSignOut(handle)
 
+    /**
+     * Which service to scrobble to: [SERVICE_LASTFM] (the default), [SERVICE_LIBREFM], or
+     * [SERVICE_OTHER] at [apiUrl], signed in to on [authUrl] (http:// or https:// addresses)
+     * with its own [apiKey] and [apiSecret]; the strings are only for another service.
+     * Changing it signs out, here and across the group.
+     */
+    fun setService(
+        service: Int,
+        apiUrl: String? = null,
+        authUrl: String? = null,
+        apiKey: String? = null,
+        apiSecret: String? = null,
+    ) = nativeSetService(handle, service, apiUrl, authUrl, apiKey, apiSecret)
+
     val status: Status
         get() {
-            val v = LongArray(3)
-            val name = nativeStatus(handle, v)
-            return Status(name, v[0].toInt(), v[1] != 0L, v[2].toInt())
+            val v = LongArray(4)
+            val s = nativeStatus(handle, v)
+            return Status(s[0], v[0].toInt(), v[1] != 0L, v[2].toInt(), v[3].toInt(), s[1] ?: "", s[2] ?: "", s[3] ?: "")
         }
 
     override fun close() {
@@ -63,6 +84,11 @@ class CoreScrobbler(library: CoreLibrary, configDir: String) : AutoCloseable {
         const val STATUS_NET = -6 // MC_ERR_NET
         const val STATUS_AUTH = -12 // MC_ERR_AUTH
 
+        // mc_scrobbler_service
+        const val SERVICE_LASTFM = 0
+        const val SERVICE_LIBREFM = 1
+        const val SERVICE_OTHER = 2
+
         init {
             System.loadLibrary("kithsong_jni")
         }
@@ -74,6 +100,14 @@ class CoreScrobbler(library: CoreLibrary, configDir: String) : AutoCloseable {
         @JvmStatic external fun nativeAuthFinish(handle: Long): Int
         @JvmStatic external fun nativeAuthCancel(handle: Long)
         @JvmStatic external fun nativeSignOut(handle: Long)
-        @JvmStatic external fun nativeStatus(handle: Long, out: LongArray): String?
+        @JvmStatic external fun nativeSetService(
+            handle: Long,
+            service: Int,
+            apiUrl: String?,
+            authUrl: String?,
+            apiKey: String?,
+            apiSecret: String?,
+        )
+        @JvmStatic external fun nativeStatus(handle: Long, out: LongArray): Array<String?>
     }
 }

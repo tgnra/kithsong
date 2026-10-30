@@ -79,9 +79,36 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreScrobbler_nativeSignOut(JNIEnv *e
   if (st != MC_OK) throw_status(env, st);
 }
 
-/* The user name (null when signed out); out gets pending, has_key and last_error. */
-JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreScrobbler_nativeStatus(JNIEnv *env, jclass cls, jlong handle,
-                                                                       jlongArray out) {
+/* kind is an mc_scrobbler_service: Last.fm and Libre.fm take their own addresses (and
+ * Libre.fm its placeholder key), ignoring the strings; another service takes them. */
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreScrobbler_nativeSetService(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jint kind, jstring api_url, jstring auth_url,
+                                                                        jstring api_key, jstring api_secret) {
+  (void)cls;
+  mc_status st;
+  if (kind == MC_SCROBBLER_SERVICE_LASTFM) {
+    st = mc_scrobbler_set_service(scrobbler_of(handle), NULL, NULL, NULL, NULL);
+  } else if (kind == MC_SCROBBLER_SERVICE_LIBREFM) {
+    st = mc_scrobbler_set_service(scrobbler_of(handle), MC_SCROBBLER_LIBREFM_API_URL, MC_SCROBBLER_LIBREFM_AUTH_URL,
+                                  MC_SCROBBLER_LIBREFM_API_KEY, MC_SCROBBLER_LIBREFM_API_SECRET);
+  } else {
+    int ok = 1;
+    const char *url = jni_chars(env, api_url, &ok), *auth = jni_chars(env, auth_url, &ok);
+    const char *key = jni_chars(env, api_key, &ok), *secret = jni_chars(env, api_secret, &ok);
+    st = ok ? mc_scrobbler_set_service(scrobbler_of(handle), url, auth, key, secret) : MC_OK;
+    jni_release(env, api_url, url);
+    jni_release(env, auth_url, auth);
+    jni_release(env, api_key, key);
+    jni_release(env, api_secret, secret);
+    if (!ok) return; /* OutOfMemoryError is pending */
+  }
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* {user name (null when signed out), service name, API address, sign-in page}; out gets
+ * pending, has_key, last_error and service (an mc_scrobbler_service). */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreScrobbler_nativeStatus(JNIEnv *env, jclass cls, jlong handle,
+                                                                            jlongArray out) {
   (void)cls;
   mc_scrobbler_status status;
   mc_status st = mc_scrobbler_status_get(scrobbler_of(handle), &status);
@@ -89,9 +116,20 @@ JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreScrobbler_nativeStatus(JNIEnv 
     throw_status(env, st);
     return NULL;
   }
-  jlong v[3] = {status.pending, status.has_key, status.last_error};
-  (*env)->SetLongArrayRegion(env, out, 0, 3, v);
-  jstring name = status.username ? (*env)->NewStringUTF(env, status.username) : NULL;
+  jlong v[4] = {status.pending, status.has_key, status.last_error, status.service};
+  (*env)->SetLongArrayRegion(env, out, 0, 4, v);
+  const char *texts[] = {status.username, status.service_name, status.api_url, status.auth_url};
+  jclass string = (*env)->FindClass(env, "java/lang/String");
+  jobjectArray strings = string ? (*env)->NewObjectArray(env, 4, string, NULL) : NULL;
+  for (int i = 0; strings && i < 4; i++) {
+    jstring s = new_string(env, texts[i]);
+    if (texts[i] && !s) {
+      strings = NULL; /* OutOfMemoryError is pending */
+      break;
+    }
+    (*env)->SetObjectArrayElement(env, strings, i, s);
+    if (s) (*env)->DeleteLocalRef(env, s);
+  }
   mc_scrobbler_status_clear(&status);
-  return name;
+  return strings;
 }

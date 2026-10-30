@@ -81,7 +81,6 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
 
 ### Scrobbling
-- All - choose another service (Libre.fm or a custom URL) in the UI; mc_scrobbler_set_service() exists but no screen uses it
 - All - revoking access on Last.fm shows "turned down this sign-in" but doesn't sign out by itself
 
 ## Import and tagging
@@ -225,6 +224,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 
 ### Cross-platform
 - A real Last.fm sign-in and scrobble (only fake sessions so far), and the sign-in reaching another device over a real sync
+- Settings' "Use a different service…" (Libre.fm, or another entered by hand): never run. Windows was only syntax-checked with clang against mingw-w64's headers, Linux and Android not compiled at all. A real Libre.fm sign-in with the placeholder key wasn't tried either
 - Media keys with the window in the background: SMTC on Windows, MPRIS on GNOME and KDE. MPRIS's Shuffle and Volume were only checked with gdbus under Xvfb in Docker (get, set, clamping, and PropertiesChanged for changes from MPRIS and from the keyboard), not with GNOME's or KDE's controls
 - Recents arriving or going with a real sync between two devices
 - An Android delete reaching a desktop over a real sync (copies removed there, originals to its trash)
