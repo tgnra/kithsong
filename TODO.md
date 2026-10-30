@@ -34,6 +34,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Move library | yes | yes | n/a (app storage) | n/a |
 | Scrobbling | yes | yes (fake service only) | yes | no |
 | OS media controls | SMTC (with shuffle) | MPRIS (with shuffle and volume) | Media3 session (with shuffle) | none |
+| Car | n/a | n/a | Android Auto: Home (Recents), Playlists, Albums, Album groups; search and voice (only compiled) | n/a |
 
 ## Library and browsing
 
@@ -214,6 +215,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - mDNS discovery and sync over real Wi-Fi, on a real device
 - API 24-32 devices, audio focus during calls, ducking (only API 24-25 duck through the core's volume; the emulator is API 37), plays landing in the core's database
 - The themed launcher icon, and the sync notification icon
+- Android Auto, only compiled: browsing the four tabs and into albums, artists, playlists and groups on the Desktop Head Unit and in a car, the art in its lists (ArtProvider), playing a track from the middle of an album, voice and on-screen search, the tabs refreshing after a sync, and that the app's own player, notification and lock screen still work as before
 - Wear OS - the Settings and licences screens are only built, never run (no Wear OS emulator here): check they scroll with the crown, the long texts' monospaced paragraphs are readable, and a licence opened from the list shows its name
 
 ### Cross-platform

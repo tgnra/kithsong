@@ -70,6 +70,14 @@
             android:name=".sync.SyncService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- Album art for Android Auto's browse lists, which it loads itself from the items'
+             artwork URIs. Exported with no permission, as the session can't grant Auto (or
+             whatever else browses) each URI: it's read-only, and only ever serves art decoded
+             from the folders covers live in, never a file as it is. -->
+        <provider
+            android:name=".playback.ArtProvider"
+            android:authorities="${applicationId}.art"
+            android:exported="true" />
         <!-- Exported so media controllers (system UI, Bluetooth, Android Auto) can connect. -->
         <service
             android:name=".playback.PlaybackService"
@@ -77,7 +85,13 @@
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+        <!-- Android Auto: the app is a media app, which Auto browses through PlaybackService. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
     </application>
 </manifest>

@@ -25,10 +25,7 @@ fun Track.toMediaItem(): MediaItem {
     val uri = path?.let { Uri.fromFile(File(it)) }
     val extras = Bundle().apply {
         putInt(TRACK_NO, trackNo)
-        putString(ART_UID, art.uid)
-        putString(ART_LABEL, art.label)
-        putString(ART_FILE, art.file)
-        putLong(ART_VERSION, art.version)
+        putArtRef(art)
     }
     return MediaItem.Builder()
         .setMediaId(uid)
@@ -66,6 +63,14 @@ fun MediaItem.toTrack(): Track {
         art = mediaMetadata.artRef ?: ArtRef(mediaId, mediaMetadata.title?.toString().orEmpty()),
         path = path,
     )
+}
+
+/** Puts [art] in a MediaMetadata's extras, where [artRef] finds it. */
+fun Bundle.putArtRef(art: ArtRef) {
+    putString(ART_UID, art.uid)
+    putString(ART_LABEL, art.label)
+    putString(ART_FILE, art.file)
+    putLong(ART_VERSION, art.version)
 }
 
 /** The item's album art, for [ArtBitmapLoader]. */
