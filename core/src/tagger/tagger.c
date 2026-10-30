@@ -127,11 +127,16 @@ struct mc_import {
   int file_count, file_cap;
 
   /* Zips (see "Zips" in tagger.h): where they're extracted, the session's own folder in it
-   * (created with the first zip, deleted by mc_import_free), and the zips that couldn't be,
-   * which become failed items (as do audio files with long paths that couldn't be read: see
+   * (created with the first zip, deleted by mc_import_free), what all of them may hold, the
+   * zips found in the path being scanned, and the zips that couldn't be extracted, which
+   * become failed items (as do audio files with long paths that couldn't be read: see
    * scan_file). Only touched on the import thread, and by mc_import_free. */
   char *staging_parent;
   char *staging;
+  mc_unzip_budget zip_budget;
+  char **found_zips;
+  int found_zip_count, found_zip_cap;
+  int in_zip; /* scanning what a zip held: zips in it stay as they are */
   struct zip_failure {
     char *path;
     char *error;
@@ -204,11 +209,12 @@ static const char *audio_format(const char *path) {
 }
 
 static void add_zip_failure(mc_import *imp, const char *path, const char *error);
+static int note_zip(mc_import *imp, const char *path);
 
 static int scan_file(void *user, const char *path) {
   mc_import *imp = user;
   if (cancelled(imp)) return 1;
-  if (!audio_format(path)) return 0;
+  if (!audio_format(path)) return !imp->in_zip && mc_unzip_is_zip(path) ? note_zip(imp, path) : 0;
 
   if (imp->file_count == imp->file_cap) {
     int cap = imp->file_cap ? imp->file_cap * 2 : 256;
@@ -1894,10 +1900,23 @@ static int cancel_check(void *user) {
   return cancelled(user);
 }
 
-static void ignore_entry(void *user, const char *name, int is_dir) {
-  (void)user;
-  (void)name;
-  (void)is_dir;
+/* Keeps a zip found while scanning, to extract once the path it's in is walked. Non-zero to
+ * stop the walk (out of memory). */
+static int note_zip(mc_import *imp, const char *path) {
+  if (imp->found_zip_count == imp->found_zip_cap) {
+    int cap = imp->found_zip_cap ? imp->found_zip_cap * 2 : 8;
+    char **grown = realloc(imp->found_zips, (size_t)cap * sizeof *grown);
+    if (!grown) return 1;
+    imp->found_zips = grown;
+    imp->found_zip_cap = cap;
+  }
+  if (!(imp->found_zips[imp->found_zip_count] = mc_strdup(path))) return 1;
+  imp->found_zip_count++;
+  return 0;
+}
+
+static int compare_strings(const void *a, const void *b) {
+  return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
 static const char *zip_file_name(const char *path) {
@@ -1957,7 +1976,7 @@ static char *stage_zip(mc_import *imp, const char *path) {
     snprintf(dest, n, "%s%c%.*s (%d)", root, MC_PATH_SEP, stem, name, i);
 
   mc_unzip_stats stats;
-  mc_unzip_result r = mc_unzip(path, dest, MC_UNZIP_MAX_BYTES, cancel_check, imp, &stats);
+  mc_unzip_result r = mc_unzip(path, dest, MC_UNZIP_MAX_BYTES, &imp->zip_budget, cancel_check, imp, &stats);
   if (r == MC_UNZIP_OK) return dest;
   mc_remove_tree(dest);
   free(dest);
@@ -1965,6 +1984,11 @@ static char *stage_zip(mc_import *imp, const char *path) {
   switch (r) {
     case MC_UNZIP_TOO_BIG:
       text = mc_format_alloc(mc_str(MC_STR_IMPORT_ERROR_ZIP_TOO_BIG), MC_D(MC_UNZIP_MAX_BYTES >> 30));
+      add_zip_failure(imp, path, text ? text : mc_str(MC_STR_IMPORT_ERROR_ZIP_BAD));
+      mc_free(text);
+      break;
+    case MC_UNZIP_SESSION_FULL:
+      text = mc_format_alloc(mc_str(MC_STR_IMPORT_ERROR_ZIP_SESSION_TOO_BIG), MC_D(imp->zip_budget.max >> 30));
       add_zip_failure(imp, path, text ? text : mc_str(MC_STR_IMPORT_ERROR_ZIP_BAD));
       mc_free(text);
       break;
@@ -1977,16 +2001,23 @@ static char *stage_zip(mc_import *imp, const char *path) {
   return NULL;
 }
 
-/* Scans one of the paths the session was given, extracting it first if it's a zip. */
+/* Scans one of the paths the session was given, then extracts and scans the zips it is or
+ * holds (a folder that happens to end in .zip is a folder). In name order, so which zips fit
+ * within the session's limit doesn't depend on how the folder lists them. One level deep:
+ * zips that come out of a zip aren't extracted. */
 static void scan_path(mc_import *imp, const char *path) {
-  /* A folder that happens to end in .zip is scanned as a folder. */
-  if (mc_unzip_is_zip(path) && mc_file_exists(path) && mc_list_dir(path, ignore_entry, NULL) != MC_OK) {
-    char *dir = stage_zip(imp, path);
+  mc_walk(path, scan_file, imp);
+  if (imp->found_zip_count > 1)
+    qsort(imp->found_zips, (size_t)imp->found_zip_count, sizeof *imp->found_zips, compare_strings);
+  imp->in_zip = 1;
+  for (int i = 0; i < imp->found_zip_count; i++) {
+    char *dir = cancelled(imp) ? NULL : stage_zip(imp, imp->found_zips[i]);
     if (dir) mc_walk(dir, scan_file, imp);
     free(dir);
-    return;
+    free(imp->found_zips[i]);
   }
-  mc_walk(path, scan_file, imp);
+  imp->found_zip_count = 0;
+  imp->in_zip = 0;
 }
 
 /* Adds an item for each zip that couldn't be extracted: no files, failed with the reason. */
@@ -2069,6 +2100,7 @@ mc_status mc_import_start(mc_library *lib, const char *const *paths, int path_co
   imp->fetch_art = opts ? opts->fetch_art : 1;
   imp->skip_tagging = opts ? opts->skip_tagging : 0;
   imp->staging_parent = opts && opts->staging_dir ? mc_strdup(opts->staging_dir) : NULL;
+  imp->zip_budget.max = mc_unzip_session_max_bytes;
   imp->callback = callback;
   imp->user = user;
   imp->lib_dir = mc_strdup(mc_library_dir(lib));
@@ -2126,6 +2158,8 @@ void mc_import_free(mc_import *imp) {
     free(imp->zip_failures[i].error);
   }
   free(imp->zip_failures);
+  for (int i = 0; i < imp->found_zip_count; i++) free(imp->found_zips[i]);
+  free(imp->found_zips);
   free(imp->lib_dir);
   mc_cond_destroy(&imp->wake);
   mc_mutex_destroy(&imp->lock);

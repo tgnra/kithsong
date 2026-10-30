@@ -17,14 +17,20 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
 
 1. **Scan**: walk the dropped folders and files and read the existing tags of every audio
    file the player can play (`flac mp3 opus wav aif aiff`). Hidden files,
-   symlinks and junctions are skipped. A `.zip` given to the import is first extracted
-   (`unzip.c`, miniz) into a staging folder named after it, in a temporary folder of the
-   session's own that is deleted when the session is freed, then scanned like a folder, so
-   its `cover.jpg` counts too. Names are UTF-8 if the entry's flag bit 11 says so, else
+   symlinks and junctions are skipped. A `.zip` given to the import, or found in a folder
+   given to it, is extracted (`unzip.c`, miniz) into a staging folder named after it, in a
+   temporary folder of the session's own that is deleted when the session is freed, then
+   scanned like a folder, so its `cover.jpg` counts too. A folder's zips are extracted once
+   the folder is walked, in path order. One level deep: a zip that comes out of a zip is
+   left as it is, not extracted. Names are UTF-8 if the entry's flag bit 11 says so, else
    the name in its Info-ZIP Unicode Path extra field (0x7075) when that field's CRC-32
    matches the stored name, else CP437; entries with an absolute path or `..` are dropped (zip slip), and so are
-   `__MACOSX/` and `.DS_Store`. Zips over 8 GB unzipped, or bigger than the free space, are
-   refused. A zip that can't be extracted shows as a failed item.
+   `__MACOSX/` and `.DS_Store`. Zip bombs: sizes are checked against what the zip claims
+   before anything is written, and an entry that writes more than it claimed is stopped.
+   Refused: a zip over 8 GB unzipped; one that would take all the session's zips together
+   over 32 GB; and one bigger than the free space left once the zips the session already
+   extracted are counted again (they're still to be copied into the library). A zip that
+   can't be extracted shows as a failed item with the reason.
 2. **Group** files into items:
    - key = album folder + album tag (or the release id if there is no album tag). The album
      folder is the file's folder, or its parent for disc folders such as `CD1` or `Disc 2`,
