@@ -29,4 +29,12 @@ mc_status mc_credit_split_text(const char *credit, mc_known_artist_fn known, voi
 
 void mc_credit_split_clear(mc_credit_split *s);
 
+/* Whether name has any of the separators above in it. */
+int mc_credit_has_separator(const char *name);
+
+/* An mc_known_artist_fn over a library (user is the mc_library): an artists row of that name
+ * (NOCASE) that has a MusicBrainz id, or whose name has no separator. Rows like "A & B" made
+ * from whole credits by older versions don't count. */
+int mc_credit_known_in_library(void *lib, const char *name);
+
 #endif
