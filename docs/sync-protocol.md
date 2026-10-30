@@ -249,7 +249,7 @@ libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c
 - **The merge** runs on the merged device at the end of a session that synced the library
   (the first one, normally) while `meta.merge_source` is set: the copy's current state goes
   in as fresh edits under the new node uid; none of its changelog does.
-  - Tracks, album by album (tracks with no album as singles of their artist), through the
+  - Tracks, album by album (tracks with no album one by one, staying without one), through the
     import's duplicates check (`mc_dupes_plan_remote()`, "Duplicates" in
     `core/include/musiccore/tagger.h`): matched by MusicBrainz release, release group or
     artist and title, and track ids. Untagged music comes in as it is tagged. Each file stays
@@ -489,8 +489,12 @@ way, without logging anything.
 
 - **What is one.** Two artists are one when they share an `mb_artistid`, two albums when
   they share an `mb_albumid`, two tracks when they share an `mb_releasetrackid` (a track on
-  one release, so the same recording on two releases stays two tracks), and two singles
-  albums (`kind = 'singles'`) when their artists are one. Empty ids don't count. "Share"
+  one release, so the same recording on two releases stays two tracks). Empty ids don't
+  count. A single is an album like any other and merges by its release id; nothing merges by
+  artist. Older versions also merged two singles albums (`albums.kind = 'singles'`) of one
+  artist, and logged `kind`: this version doesn't log the field, and a `kind` row from an
+  older peer is logged and passed on as an unknown field, never applied, so its singles
+  albums are ordinary albums here and don't merge. "Share"
   means any value the changelog has ever held for the field, not only the current winner,
   so a class only ever grows as rows arrive: a later edit that changes or clears an id
   doesn't split it. The classes are therefore a function of the set of changelog rows, the
@@ -811,11 +815,11 @@ music lives nowhere else.
      with `source_peer_uid` NULL too is an original imported on this device. It also keeps
      `source_sha256`, so importing that source file on this device too is recognised as a
      file the library has.
-   - When the track's album has an `art_hash` (not singles) and its folder no cover yet,
+   - When the track's album has an `art_hash` and its folder no cover yet,
      the receiver sends `COVER_REQ` for it right away, so the album shows with its art while
      the rest of it is still coming. Pictures embedded in received files are never used.
    - Covers. After its fetches, the receiver sends `COVER_REQ` for each folder of its own
-     that holds files of an album with an `art_hash` (not singles) and has no cover image
+     that holds files of an album with an `art_hash` and has no cover image
      (`mc_coverart_find()`), for folders whose files were already here, and so a device that
      synced before this catches up in its next session. The sender answers with its cover:
      the image file in a folder holding the album's files (`cover`, `folder` or `front`,
@@ -830,9 +834,10 @@ music lives nowhere else.
      retry asks it again; the track is tried anew in the next session, possibly with
      another member.
 5. The receiver chooses the path itself, with the same organising rules as imports, so
-   paths are never taken from the peer: `<album artist>/<album> (<year>)/<track> <title>.<ext>`,
-   or `<artist>/<artist> Singles/<title>.<ext>` for singles, as `<name> (2).<ext>` and so on
-   if the path is taken on disk or in `files`.
+   paths are never taken from the peer: `<album artist>/<album> (<year>)/<track> <title>.<ext>`
+   (a single too: it's an album), or `<artist>/<title>.<ext>` for a track with no album, as
+   `<name> (2).<ext>` and so on if the path is taken on disk or in `files`. An older peer's
+   "&lt;artist&gt; Singles" album is an album like any other, filed under that title.
 6. After the file phase (and reconcile and the fast check) the receiver works out its
    `sync_status` (`expected`, `ok`, `missing`, `corrupt`, `bytes`, `verified_ms`). That row
    is group data, so every device can show "1,203 / 1,203 verified". `corrupt` counts the

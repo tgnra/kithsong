@@ -48,8 +48,9 @@ Priorities:
   Confident matches are imported straight away, with cover art from the Cover Art Archive
   or iTunes. Anything below the confidence threshold is listed for you to review: pick a
   match, search again, keep the existing tags or skip.
-- **Singles** don't become one-track albums. Each artist's singles live together in one
-  album, "&lt;artist&gt; Singles".
+- **Singles** are tagged and filed as the release they're from, like any album track, but an
+  album with one track in the library isn't shown with the albums: it's listed under the
+  artist, with their tracks that have no album.
 - The tagger is our own C code, not beets. That means no bundled Python, the same importer
   on every platform including Android, and tagging rules we control. See
   [docs/tagging-rules.md](docs/tagging-rules.md).
