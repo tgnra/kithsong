@@ -138,8 +138,10 @@ one's page. Where the credits come from and how a string is split is in
 Migration v13 adds the columns and tables, writes one row 0 for every track and album with
 an artist (unlogged, as every migration's rows are: each device derives the same ones), and
 sets `meta.artist_refresh` to `'pending'` (`'done'` for a library with nothing in it). The
-refresh then splits the credits already there, in the background, once; see
-[tagging-rules.md](tagging-rules.md#artist-credits). Rows a newer peer logged while this
+refresh then splits the credits already there, in the background, once: from MusicBrainz for
+albums with a release id, else from the string, retagging the files whose credit changed
+and deleting the artists left with nothing; see
+[Refresh after upgrading](tagging-rules.md#refresh-after-upgrading). Rows a newer peer logged while this
 device was older (an unknown table and column then; see
 [Applying rows](sync-protocol.md#applying-rows)) are applied when the migration runs.
 
@@ -307,7 +309,7 @@ makes the answer differ between devices.
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
 | `merge_keys`       | no     | the MusicBrainz ids ever logged per uid, which decide what merges (rows of singles albums' artists from before v12 are left, unused) |
 | `changelog`        | -      | field-level change log that sync is built on |
-| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)) and other per-library settings |
+| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), and other per-library settings |
 
 ## Change tracking
 

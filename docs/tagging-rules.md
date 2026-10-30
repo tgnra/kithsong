@@ -329,6 +329,62 @@ From tags or the string, a credit of one artist under its own name is passed as 
 alone (`credit_count` 0), with the `MUSICBRAINZ_ARTISTID` the file has. The whole credit's
 MusicBrainz id is only set when one artist is credited.
 
+### Refresh after upgrading
+
+Versions before artist credits (library v13) imported "Jay-Z feat. Rihanna" as one artist.
+Migration v13 sets `meta.artist_refresh` to `'pending'`, and opening the library then splits
+those credits once, by itself, in the background (`core/src/tagger/refresh.c`). Frontends
+don't start it and needn't show it; `mc_library_refresh_progress()` says whether it's running
+and how far it is.
+
+- **Where it runs.** `mc_library_open()` starts it on a thread of its own, with a connection
+  of its own, when the library is pending and `mc_init()` has run; `mc_library_close()` stops
+  it. It waits 3 s first, so a handle opened for a moment does nothing. One runs per library
+  folder in the process: the connections the core opens for itself (an import's, sync's, a
+  library move's check) use `mc_library_open_internal()`, which starts none, and a second
+  frontend handle on the same folder finds one running. Opening never waits for it.
+- **Albums with a release id** (`albums.mb_albumid`): one release lookup each (the shared 1
+  request/s limit, so it queues behind an import's), and the album's credit and each of its
+  tracks' (those with an artist of their own, paired by `mb_releasetrackid`, else by disc and
+  number) are rewritten from the release's artist-credit arrays, as an import writes them.
+  Skipped without a lookup: an album whose artist has a MusicBrainz id, and none of whose
+  credits (its own, its tracks') has a separator with an artist lacking an id, so music a
+  v13 import credited from MusicBrainz is left alone. A release MusicBrainz no longer has
+  goes to the splitter. If MusicBrainz can't be reached (`mc_musicbrainz_reachable()`, or a
+  lookup's network error), this step stops where it is and is tried again on a later open.
+- **Everything else**, and the albums the first step hasn't reached while offline: the
+  string splitter (`mc_credit_split_text`, against the library's artists), for credits with a
+  separator that aren't split yet. An artist it names that the library doesn't have gets a
+  uid derived from the name (`mc_uid_derive("artist/<name, ASCII lowercase>", 0)`), so two
+  devices splitting the same credit offline make one row rather than two that never merge.
+  Looked up later, such an artist is the one MusicBrainz names (matched by name, its id
+  filled in).
+- **Files.** Each track whose credit changed, or whose album's did, gets its files on this
+  device retagged: `ARTIST` and `ALBUMARTIST` (the credits as shown, unchanged), `ARTISTS`
+  and `ALBUMARTISTS`, and the artist id lists when every artist has an id; nothing else.
+  A tagged copy is written beside the file and renamed over it, so the player or sync reading
+  it sees the old bytes or the new, never half of each, and a crash leaves the old file. No
+  rename, no `file_rev`: the same file, newly tagged. Its `files` row takes the new size and
+  mtime, and the new `sha256` if it had one, in the same transaction as the rename, so sync's
+  checks and the import's duplicates check see a known, unchanged file; `source_sha256`
+  stays (it is what the file was imported from). A file that's missing, read-only, or not
+  what its row says (changed outside, or by an import just now) is left as it is.
+- **Empty artists.** An artist that no track, album or credit row names any more is deleted,
+  as `delete.c` deletes them, and the delete is logged so it syncs: the old whole-credit rows
+  go once the last credit naming them is split.
+- **Resuming.** Each album (or track with no album) is one write transaction: its credits,
+  the empty artists, the step's cursor in `meta` (`artist_refresh_mb`, `artist_refresh_split`,
+  `artist_refresh_loose`: the last uid done, or `'done'`) and the tracks to retag
+  (`artist_refresh_files`, cleared once they are). Closing stops it at its next step: a
+  lookup under way is given up, and a busy wait for another connection's lock too. The next
+  open retags what was left, then goes on after the cursors. When all three are `'done'`,
+  `artist_refresh` is `'done'` and the cursors go.
+- **Sync.** The changes are ordinary logged rows. Two devices refreshing the same library
+  write the same credit rows (their uids derive from the owner), the same split artists'
+  rows, and artists with MusicBrainz ids created on both merge by `mb_artistid` as any
+  duplicates do. A track's files are retagged on each device by its own refresh; sync
+  doesn't send them again (the track's `file_rev` didn't change).
+
 ## Field mapping
 
 | Library field | Tag property (TagLib) | Notes |
