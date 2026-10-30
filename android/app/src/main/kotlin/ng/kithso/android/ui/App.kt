@@ -334,19 +334,24 @@ fun App(
                             onAddToPlaylist = if (actions.editor == null) null else {
                                 { actions.addToPlaylist(Addition.Tracks(listOf(track.uid))) }
                             },
-                            // The track's menu, for Delete from library; it isn't from a playlist here.
-                            onMenu = if (actions.editor == null && actions.deleter == null) null else {
-                                { actions.trackMenu(track, removable = false) }
-                            },
+                            // The track's menu, for Go to album and artist and Delete from library; it
+                            // isn't from a playlist here.
+                            onMenu = { actions.trackMenu(track, removable = false) },
                         )
                     }
                 }
             }
             PlaylistSheets(
                 actions,
+                library,
                 onPlay = playAll,
                 // Closes the deleted playlist's or album group's page, if it's open.
                 onDeleted = { ref -> stack.removeAll { it == ref } },
+                // Go to album or artist: its page, from the player too, which makes way for it.
+                onOpen = { ref ->
+                    playerOpen = false
+                    if (stack.lastOrNull() != ref) open(ref)
+                },
             )
             // Over everything: another device may ask to pair at any time.
             PairingDialogs(syncer, settings) { uid ->
