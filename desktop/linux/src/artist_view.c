@@ -64,7 +64,8 @@ G_DECLARE_FINAL_TYPE(ArtistTrack, artist_track, ARTIST, TRACK, GObject)
 struct _ArtistTrack {
   GObject parent;
   char uid[MC_UID_STRLEN];
-  char *title, *artist, *album, *cover_dir, *path; /* as mc_track_info has them */
+  char album_uid[MC_UID_STRLEN], artist_uid[MC_UID_STRLEN]; /* as mc_track_info has them */
+  char *title, *artist, *album, *cover_dir, *path;
   int duration_ms, year;
   char duration[16]; /* "4:44", or "" if unknown */
 };
@@ -99,6 +100,8 @@ static void format_duration(int ms, char *out, size_t n) {
 static ArtistTrack *artist_track_new(const mc_track_info *t) {
   ArtistTrack *self = g_object_new(ARTIST_TYPE_TRACK, NULL);
   memcpy(self->uid, t->uid, sizeof self->uid);
+  memcpy(self->album_uid, t->album_uid, sizeof self->album_uid);
+  memcpy(self->artist_uid, t->artist_uid, sizeof self->artist_uid);
   self->title = g_strdup(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
   self->artist = g_strdup(t->artist);
   self->album = g_strdup(t->album);
@@ -139,6 +142,9 @@ static struct {
   GtkWidget *track_view, *track_scroller, *menu;
   char menu_uid[MC_UID_STRLEN]; /* the track the menu was opened on */
   gboolean menu_here;           /* and whether it has a file here */
+  char menu_track_album[MC_UID_STRLEN];  /* and its album, or "" */
+  char menu_track_artist[MC_UID_STRLEN]; /* and its artist, or "" */
+  GSimpleAction *go_to_album, *go_to_artist;
   GPtrArray *rows;              /* bound track rows, to mark the playing one */
   char playing_uid[MC_UID_STRLEN];
 } v;
@@ -382,14 +388,27 @@ static GtkWidget *row_label(float xalign) {
   return l;
 }
 
+/* Makes the track menu act on t. Go to album shows if its album is in the album grid (a
+ * single's isn't), and Go to artist if it's credited to someone else (a single on an album of
+ * the artist's can be). */
+static void menu_for(const ArtistTrack *t) {
+  memcpy(v.menu_uid, t->uid, sizeof v.menu_uid);
+  v.menu_here = t->path != NULL;
+  memcpy(v.menu_track_album, t->album_uid, sizeof v.menu_track_album);
+  memcpy(v.menu_track_artist, t->artist_uid, sizeof v.menu_track_artist);
+  AlbumItem *album = t->album_uid[0] ? album_grid_find(v.a->album_grid, t->album_uid) : NULL;
+  g_simple_action_set_enabled(v.go_to_album, album != NULL);
+  if (album) g_object_unref(album);
+  g_simple_action_set_enabled(v.go_to_artist, t->artist_uid[0] && strcmp(t->artist_uid, v.open));
+}
+
 /* Right-click: selects the row and opens its menu where the pointer is. */
 static void on_track_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
   (void)n_press;
   track_row *r = user;
   if (!r->track || !r->item) return;
   gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
-  memcpy(v.menu_uid, r->track->uid, sizeof v.menu_uid);
-  v.menu_here = r->track->path != NULL;
+  menu_for(r->track);
   gtk_single_selection_set_selected(v.track_selection, gtk_list_item_get_position(r->item));
   GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
   graphene_point_t at;
@@ -465,8 +484,7 @@ static void track_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, g
 
 /* Opens the track menu for t, pointing at x, y in the page. */
 static void popup_track_menu(const ArtistTrack *t, int x, int y) {
-  memcpy(v.menu_uid, t->uid, sizeof v.menu_uid);
-  v.menu_here = t->path != NULL;
+  menu_for(t);
   gtk_popover_set_pointing_to(GTK_POPOVER(v.menu), &(GdkRectangle){x, y, 1, 1});
   gtk_popover_popup(GTK_POPOVER(v.menu));
 }
@@ -576,6 +594,27 @@ static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer 
   char uid[MC_UID_STRLEN];
   memcpy(uid, v.menu_uid, sizeof uid);
   if (v.cb.add_to_playlist && uid[0]) v.cb.add_to_playlist(v.cb.user, uid, v.menu_here);
+}
+
+/* The track menu's Go to album, with the track selected there, and Go to artist. Copies:
+ * opening the page reloads this one. */
+static void on_go_to_album(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  char album[MC_UID_STRLEN], track[MC_UID_STRLEN];
+  memcpy(album, v.menu_track_album, sizeof album);
+  memcpy(track, v.menu_uid, sizeof track);
+  if (album[0]) app_open_track(v.a, album, track);
+}
+
+static void on_go_to_artist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  char artist[MC_UID_STRLEN];
+  memcpy(artist, v.menu_track_artist, sizeof artist);
+  if (artist[0]) app_open_artist(v.a, artist);
 }
 
 /* The track menu's Delete from library... (delete_dialog.h). */
@@ -882,6 +921,19 @@ static GtkWidget *build_page(void) {
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "artist.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
+  section = g_menu_new(); /* hidden while their actions are disabled (see menu_for()) */
+  const struct {
+    enum mc_str_id label;
+    const char *action;
+  } go_to[] = {{MC_STR_GO_TO_ALBUM, "artist.go-to-album"}, {MC_STR_GO_TO_ARTIST, "artist.go-to-artist"}};
+  for (size_t i = 0; i < G_N_ELEMENTS(go_to); i++) {
+    GMenuItem *item = g_menu_item_new(mc_str_mnemonic(go_to[i].label), go_to[i].action);
+    g_menu_item_set_attribute(item, "hidden-when", "s", "action-disabled");
+    g_menu_append_item(section, item);
+    g_object_unref(item);
+  }
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
   section = g_menu_new();
   g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete-track");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
@@ -985,6 +1037,15 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
                                   {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
                                   {"sync-here", on_sync_here, NULL, NULL, NULL, {0}}};
   g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
+  /* The track menu's Go to album and Go to artist, enabled for the track it's opened on. */
+  v.go_to_album = g_simple_action_new("go-to-album", NULL);
+  g_signal_connect(v.go_to_album, "activate", G_CALLBACK(on_go_to_album), NULL);
+  g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(v.go_to_album));
+  g_object_unref(v.go_to_album); /* the group keeps it */
+  v.go_to_artist = g_simple_action_new("go-to-artist", NULL);
+  g_signal_connect(v.go_to_artist, "activate", G_CALLBACK(on_go_to_artist), NULL);
+  g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(v.go_to_artist));
+  g_object_unref(v.go_to_artist);
   gtk_widget_insert_action_group(v.stack, "artist", G_ACTION_GROUP(actions));
   g_object_unref(actions);
   g_signal_connect(v.stack, "destroy", G_CALLBACK(on_destroy), NULL);

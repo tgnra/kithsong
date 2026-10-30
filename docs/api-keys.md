@@ -6,7 +6,7 @@ building the app, register for once and bake into every build, and MusicBrainz n
 | Service | What you need | Build setting | State in the code |
 |---------|---------------|---------------|-------------------|
 | MusicBrainz (and the Cover Art Archive) | no key; a contact URL or email for the User-Agent | `KITHSONG_CONTACT` | used by the importer on every platform |
-| Last.fm | an API key **and** a shared secret | `KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET` (or a `last.fm.api` file) | done: sign-in in Settings on Windows, Linux and Android; every platform sends plays |
+| Last.fm | an API key **and** a shared secret | `KITHSONG_LASTFM_KEY`, `KITHSONG_LASTFM_SECRET` (or a `last.fm.api` file) | done: sign-in in Settings on Windows, Linux and Android, which can switch to Libre.fm or another service; every platform sends plays |
 | iTunes Search (cover art fallback) | nothing | - | used by the importer |
 
 All of these are CMake cache variables, declared in [`CMakeLists.txt`](../CMakeLists.txt)
@@ -262,15 +262,16 @@ callback URL):
 
 Every call is a form POST to `https://ws.audioscrobbler.com/2.0/`, signed as Last.fm specifies:
 the MD5 of all parameters sorted by name, concatenated name-value, followed by the secret
-(`mc_lastfm_sign`, [`lastfm.c`](../core/src/scrobble/lastfm.c)). The addresses are in
-[`core/src/scrobble/lastfm.h`](../core/src/scrobble/lastfm.h) lines 11-12.
+(`mc_lastfm_sign`, [`lastfm.c`](../core/src/scrobble/lastfm.c)). The addresses are
+`MC_SCROBBLER_LASTFM_API_URL` and `MC_SCROBBLER_LASTFM_AUTH_URL` in
+[`scrobbler.h`](../core/include/musiccore/scrobbler.h).
 
-How the build's key is used: [`scrobbler.c`](../core/src/scrobble/scrobbler.c) lines 85-88
-fill in `MC_LASTFM_KEY` and `MC_LASTFM_SECRET` when the synced account names no key of its
-own. A service chosen with `mc_scrobbler_set_service()` (Libre.fm, say, which takes any key)
-can bring its own key and secret instead. If the build has none and the service is Last.fm,
+How the build's key is used: [`lastfm.c`](../core/src/scrobble/lastfm.c) (`call`) decodes the
+build's key and secret when the synced account names no key of its own. A service chosen with
+`mc_scrobbler_set_service()` (see [Other services](#5-other-services-librefm-and-your-own))
+brings its own key and secret instead. If the build has none and the service is Last.fm,
 every call fails with `MC_ERR_AUTH` before touching the network
-([`lastfm.c`](../core/src/scrobble/lastfm.c) line 120). That is "scrobbling off".
+([`lastfm.c`](../core/src/scrobble/lastfm.c) line 126). That is "scrobbling off".
 
 Rules the code already follows, so you don't have to: plays of tracks under 30 s and plays
 with no artist aren't sent. Batches hold at most 50. Plays older than 14 days are dropped. Now
@@ -343,6 +344,34 @@ What failures mean:
 
 To try it without a Last.fm account at all, Libre.fm speaks the same API and takes any key:
 `manual_scrobble <lib> <cfg> https://libre.fm/2.0/ https://libre.fm/api/auth/ anykey anysecret`.
+
+### 5. Other services: Libre.fm and your own
+
+Settings > Scrobbling > **Use a different service…** (on every platform) opens a dialog with
+three choices:
+
+- **Last.fm**, the default: the addresses above and the build's key. Choosing it again is how
+  to go back.
+- **Libre.fm**: `https://libre.fm/2.0/`, signed in to at `https://libre.fm/api/auth/`.
+  Libre.fm takes any API key and secret, so the app sends placeholders
+  (`MC_SCROBBLER_LIBREFM_API_KEY` and `_SECRET` in
+  [`scrobbler.h`](../core/include/musiccore/scrobbler.h)), not the build's Last.fm pair. It works in
+  a build without a Last.fm key too.
+- **Another service** that speaks the Last.fm 2.0 API (a GNU FM server of your own, say): its
+  API address, its sign-in page, and an API key and shared secret registered there, all
+  typed in. Both addresses must start with `http://` or `https://`.
+
+Every service signs in with the same desktop flow (`auth.getToken`, the user approving it on
+the sign-in page, then `auth.getSession`), so the app never asks for a password: no service
+needs `auth.getMobileSession`. Libre.fm's sign-in page is the GNU FM one, which takes the
+same `?api_key=...&token=...`.
+
+The choice is kept with the account in `sync.db`'s `scrobble_account` row (`api_url`,
+`auth_url`, `api_key`, `api_secret`) and synced to the device group like the sign-in.
+Changing it signs out, here and on the other devices once they sync, since a session belongs
+to the service and key that made it. A key and secret typed in are stored there in plain
+text, not obscured like the build's. Settings shows which service is in use: "Last.fm",
+"Libre.fm", or another's host name (`mc_scrobbler_status.service_name`).
 
 ---
 

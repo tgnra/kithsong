@@ -82,6 +82,8 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
                 trackNo = n,
                 durationMs = (150 + (n * 37 + album.year) % 180) * 1000L,
                 art = album.art,
+                albumUid = album.uid,
+                artistUid = "artist-${ARTISTS.indexOf(album.artist)}",
             )
         }
     }
@@ -99,6 +101,7 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
             trackNo = 1,
             durationMs = (190 + n * 23) * 1000L,
             art = ArtRef(album.ifEmpty { uid }, album.ifEmpty { title }),
+            artistUid = artist.uid,
         )
     }
 

@@ -388,7 +388,7 @@ Message types:
 
 | Type | Name          | Payload |
 |------|---------------|---------|
-| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "covers": true, "archive": bool, "caps": {...}}` (`user` only when pressed for; `covers`: it serves `COVER_REQ`; `archive`: the sender counts itself an archive, see step 6) |
+| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "covers": true, "files_plan": true, "archive": bool, "caps": {...}}` (`user` only when pressed for; `covers`: it serves `COVER_REQ`; `files_plan`: it takes `FILES_PLAN`; `archive`: the sender counts itself an archive, see step 6) |
 | 0x02 | `BYE`         | `{}` |
 | 0x03 | `ERROR`       | `{"reason", "msg"}` |
 | 0x10 | `VV`          | `{"db": "group" \| "library", "vv": {"<origin>": <hlc>}, "resend": true}` (`resend` only in the re-send round) |
@@ -404,6 +404,7 @@ Message types:
 | 0x27 | `FILES_DONE`  | `{}`: the receiver has asked for everything it wants; the turn passes |
 | 0x28 | `COVER_REQ`   | `{"album"}`; only to a peer whose `HELLO` has `"covers": true` |
 | 0x29 | `COVER_HDR`   | `{"album", "ext", "size", "sha256"}`, then the image as `FILE_DATA`; or `FILE_ERR {"album", "reason"}` instead |
+| 0x2A | `FILES_PLAN`  | `{"files", "bytes"}`: how many tracks the receiver's turn will `FILE_REQ`, and their estimated size; only when both `HELLO`s have `"files_plan": true` |
 | 0x40 | `PAIR_HELLO`  | pairing only; see [Pairing](#pairing) |
 | 0x41 | `PAIR_READY`  | |
 | 0x42 | `PAIR_REFUSE` | |
@@ -448,7 +449,8 @@ Steps:
    differs between the two new `VV`s. It doesn't retry further.
 6. **Files**, receiver-driven, when step 3 ran. See [Files](#files). Each side is the
    receiver in turn: the receiver sends `HAVE_REQ`, `FILE_REQ` and `PREPARE_REQ` while the
-   other only answers, and ends its turn with `FILES_DONE`. When both `HELLO`s carry
+   other only answers, and ends its turn with `FILES_DONE`; once it knows what it will
+   fetch, it says how much in `FILES_PLAN` (see [Files](#files)). When both `HELLO`s carry
    `archive` and exactly one says `true`, that side receives first; otherwise the initiator
    does. So an original imported on the other device reaches the archive in its turn, and
    the other's turn can fetch it in its own format and drop the original (see Reconcile)
@@ -797,7 +799,15 @@ music lives nowhere else.
    `all`/`original` without a budget). Each track goes to one of them by a hash of its uid,
    weighted by `cpu_score`, the same every time; one that falls to another member waits for
    the session with that member.
-4. `FILE_REQ` → `FILE_HDR` + `FILE_DATA` (or `FILE_ERR`, reasons `missing`, `no_transcode`,
+4. Before its first `FILE_REQ`, the receiver sends `FILES_PLAN`: `files`, the tracks it has
+   chosen to fetch, and `bytes`, their size as its plan estimates it (exact only for
+   originals whose size it knows). It is for progress only: both sides then show the turn
+   as `files` requests to answer (a retry of a mismatch is the same track), and the sender
+   checks nothing against it. It is sent, even with `files` 0, only when both `HELLO`s carry
+   `"files_plan": true`: older versions end the session on an unknown message, and send none
+   themselves, so their peer shows the turn without a total, as before. The second turn's
+   count is known only when it starts, since the first can change what it fetches.
+5. `FILE_REQ` → `FILE_HDR` + `FILE_DATA` (or `FILE_ERR`, reasons `missing`, `no_transcode`,
    `io`, `format`).
    - The sender computes `sha256` over the exact bytes it sends (the recorded one if the
      file's size and mtime still match its row). `file` is the original's file uid: its own,
@@ -833,12 +843,12 @@ music lives nowhere else.
      counts the track as corrupt. Within a session the only source is the peer, so the
      retry asks it again; the track is tried anew in the next session, possibly with
      another member.
-5. The receiver chooses the path itself, with the same organising rules as imports, so
+6. The receiver chooses the path itself, with the same organising rules as imports, so
    paths are never taken from the peer: `<album artist>/<album> (<year>)/<track> <title>.<ext>`
    (a single too: it's an album), or `<artist>/<title>.<ext>` for a track with no album, as
    `<name> (2).<ext>` and so on if the path is taken on disk or in `files`. An older peer's
    "&lt;artist&gt; Singles" album is an album like any other, filed under that title.
-6. After the file phase (and reconcile and the fast check) the receiver works out its
+7. After the file phase (and reconcile and the fast check) the receiver works out its
    `sync_status` (`expected`, `ok`, `missing`, `corrupt`, `bytes`, `verified_ms`). That row
    is group data, so every device can show "1,203 / 1,203 verified". `corrupt` counts the
    tracks that failed twice in the session; `missing` the other wanted tracks without a

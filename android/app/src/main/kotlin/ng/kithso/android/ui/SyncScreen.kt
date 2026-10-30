@@ -199,8 +199,8 @@ fun SyncScreen(syncer: Syncer, bottomPadding: Dp, onOpenDevice: (String) -> Unit
 private fun MemberRow(device: SyncDevice, status: SyncStatus, syncer: Syncer, onOpen: () -> Unit) {
     val syncing = device.uid in status.syncing
     val syncingLabel = stringResource(R.string.syncing)
-    // While files come in, how many of them.
-    val files = status.sessions[device.uid]?.takeIf { it.filesTotal > 0 }?.let { filesText(it) }
+    // While files come in or go out, how many of them.
+    val files = status.sessions[device.uid]?.takeIf { it.moving > 0 }?.let { filesText(it) }
     val text = listOfNotNull(memberText(device, syncing), files).joinToString(stringResource(R.string.separator_dot))
     ListItem(
         leadingContent = { Icon(device.kind.icon, contentDescription = null) },
@@ -424,7 +424,7 @@ private fun FilesRows(device: SyncDevice) {
 }
 
 // A session under way: [title] (else its step) over its step, files and bytes, and a bar for
-// the files once there are some to fetch.
+// the files once there are some to fetch or send.
 @Composable
 private fun SessionRow(progress: SyncProgress, title: String?) {
     val context = LocalContext.current
@@ -439,7 +439,7 @@ private fun SessionRow(progress: SyncProgress, title: String?) {
     )
     val details = listOfNotNull(
         phase.takeIf { title != null },
-        progress.takeIf { it.filesTotal > 0 }?.let { filesText(it) },
+        progress.takeIf { it.moving > 0 }?.let { filesText(it) },
         progress.takeIf { it.bytesReceived > 0 || it.bytesSent > 0 }?.let {
             stringResource(
                 R.string.progress_bytes,
@@ -453,9 +453,9 @@ private fun SessionRow(progress: SyncProgress, title: String?) {
         supportingContent = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (details.isNotEmpty()) Text(details.joinToString(stringResource(R.string.separator_dot)))
-                if (progress.filesTotal > 0) {
+                if (progress.moving > 0) {
                     LinearProgressIndicator(
-                        progress = { progress.filesDone.toFloat() / progress.filesTotal },
+                        progress = { progress.moved.toFloat() / progress.moving },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 } else {
@@ -466,10 +466,14 @@ private fun SessionRow(progress: SyncProgress, title: String?) {
     )
 }
 
-// "3 of 10 files", fetched so far in a session.
+// "3 of 10 files", fetched so far in a session, or "3 of 10 files sent" in the member's turn.
 @Composable
 private fun filesText(progress: SyncProgress): String =
-    pluralStringResource(R.plurals.sync_notification_files, progress.filesTotal, progress.filesDone, progress.filesTotal)
+    if (progress.sending) {
+        pluralStringResource(R.plurals.sync_notification_files_sent, progress.sendsTotal, progress.sendsDone, progress.sendsTotal)
+    } else {
+        pluralStringResource(R.plurals.sync_notification_files, progress.filesTotal, progress.filesDone, progress.filesTotal)
+    }
 
 // How the last session with a member went.
 @Composable

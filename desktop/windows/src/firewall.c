@@ -38,6 +38,17 @@ static struct {
   BOOL busy;            /* a check, the dialog or the helper is under way */
 } g_fw;
 
+/* Running from an MSIX package. Its manifest declares the rule, which Windows adds at
+ * install, and a packaged exe relaunched elevated needs a restricted capability (and may not
+ * match a rule naming its path), so the check and the helper are left out. */
+static BOOL packaged(void) {
+  typedef LONG(WINAPI * package_name_fn)(UINT32 *, PWSTR);
+  HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+  package_name_fn get = (package_name_fn)(void (*)(void))GetProcAddress(kernel, "GetCurrentPackageFullName");
+  UINT32 n = 0;
+  return get && get(&n, NULL) == ERROR_INSUFFICIENT_BUFFER; /* else APPMODEL_ERROR_NO_PACKAGE */
+}
+
 static BOOL find_exe(void) {
   DWORD n = GetModuleFileNameW(NULL, g_fw.exe, MAX_EXE);
   return n > 0 && n < MAX_EXE;
@@ -392,7 +403,8 @@ static LRESULT CALLBACK fw_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 void firewall_check_later(HWND owner, mc_settings *settings) {
-  if (g_fw.busy || !sync_bridge_get() || mc_settings_bool(settings, SETTING_DONT_ASK, 0) || !find_exe())
+  if (g_fw.busy || !sync_bridge_get() || mc_settings_bool(settings, SETTING_DONT_ASK, 0) || packaged() ||
+      !find_exe())
     return;
   if (!g_fw.wnd) {
     WNDCLASSW wc = {.lpfnWndProc = fw_proc, .hInstance = GetModuleHandleW(NULL), .lpszClassName = L"kithsong_firewall"};

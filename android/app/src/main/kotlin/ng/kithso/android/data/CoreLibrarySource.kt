@@ -692,6 +692,8 @@ class CoreLibrarySource(
                 durationMs = info.durationMs.toLong(),
                 art = ref(album.ifEmpty { info.uid }, album.ifEmpty { info.title }, file),
                 path = info.path,
+                albumUid = info.albumUid,
+                artistUid = info.artistUid,
             )
         }
 

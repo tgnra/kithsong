@@ -1,7 +1,7 @@
 /* GTK4 + libadwaita frontend. Layout:
  *
  *   AdwToolbarView
- *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar [shuffle]  [import][settings]
+ *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar [shuffle]  [vol][import][settings]
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
  *      |                    / Recents / Devices)
  *      +- GtkStack of pages: "library" | "artists" (artist_view.c) | "search" (search_view.c)
@@ -23,8 +23,9 @@
  * the stack of pages as "device". The playback buttons
  * are the app.previous, app.play-pause and app.next actions, so their sensitivity follows
  * the actions'. Shuffle, which the strip's toggle, the track list's Play and Shuffle and MPRIS
- * set, is kept in settings.json, as is the volume, which only the keyboard shortcuts
- * (on_shortcut(), listed in README.md) and MPRIS change for now.
+ * set, is kept in settings.json, as is the volume, which the volume control ([vol],
+ * volume_button.c), the keyboard shortcuts (on_shortcut(), listed in README.md) and MPRIS
+ * change.
  */
 #include <adwaita.h>
 #include <math.h>
@@ -49,6 +50,7 @@
 #include "search_view.h"
 #include "settings_view.h"
 #include "track_list.h"
+#include "volume_button.h"
 
 static const char css[] =
   ".album-cover { border-radius: 8px; background-color: alpha(currentColor, 0.08); }"
@@ -513,8 +515,8 @@ static gboolean save_volume(gpointer user) {
   return G_SOURCE_REMOVE;
 }
 
-/* Shows the volume (or Muted) for a moment in the now-playing strip, as there's no volume
- * control to show it. */
+/* Shows the volume (or Muted) for a moment in the now-playing strip, as the volume control
+ * only shows the level while it's open. */
 static void flash_volume(void) {
   if (playback_muted()) {
     now_playing_flash(mc_str(MC_STR_VOLUME_MUTED));
@@ -529,7 +531,6 @@ static void flash_volume(void) {
 static void set_volume(app *a, int volume) {
   playback_set_muted(FALSE);
   playback_set_volume(volume);
-  flash_volume();
   if (save_volume_source) g_source_remove(save_volume_source);
   save_volume_source = g_timeout_add(SAVE_VOLUME_MS, save_volume, a);
 }
@@ -537,6 +538,17 @@ static void set_volume(app *a, int volume) {
 /* MPRIS's Volume, set from the desktop's media controls: as the volume keys do. */
 static void on_mpris_volume(void *user, int volume) {
   set_volume(user, volume);
+  flash_volume();
+}
+
+/* The volume control's slider and speaker, which show the change themselves. */
+static void on_volume(void *user, int volume) {
+  set_volume(user, volume);
+}
+
+static void on_muted(void *user, gboolean muted) {
+  (void)user;
+  playback_set_muted(muted);
 }
 
 /* The sidebar's row n of Albums, Artists, Playlists..., as clicking it does. */
@@ -602,6 +614,7 @@ static gboolean on_shortcut(GtkWidget *win, GVariant *args, gpointer user) {
     case SC_VOLUME_DOWN:
       if (text) return FALSE;
       set_volume(a, playback_volume() + (sc == SC_VOLUME_UP ? VOLUME_STEP : -VOLUME_STEP));
+      flash_volume();
       return TRUE;
     case SC_MUTE:
       playback_set_muted(!playback_muted());
@@ -904,6 +917,15 @@ static void on_track_delete(void *user, const char *track_uid, const char *title
   app *a = user;
   delete_dialog_present(GTK_WIDGET(a->win), a->lib, a->settings_dir, MC_DELETE_TRACKS, track_uid, title,
                         on_playlists_changed, a);
+}
+
+/* The track menu's Go to album and Go to artist. */
+static void on_track_go_to_album(void *user, const char *album_uid, const char *track_uid) {
+  app_open_track(user, album_uid, track_uid);
+}
+
+static void on_track_go_to_artist(void *user, const char *artist_uid) {
+  app_open_artist(user, artist_uid);
 }
 
 static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
@@ -1333,6 +1355,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   GtkWidget *import = icon_button("list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC), "<Control>o");
   g_signal_connect(import, "clicked", G_CALLBACK(on_import), a);
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), import);
+  adw_header_bar_pack_end(ADW_HEADER_BAR(header), volume_button_new(on_volume, on_muted, a));
 
   /* The now-playing strip takes the title's place, up to a point. */
   GtkWidget *clamp = adw_clamp_new();
@@ -1352,7 +1375,8 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_overlay_split_view_set_max_sidebar_width(a->album_split, 420);
   const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
                                           on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete,
-                                          on_track_delete, on_reshuffle, a};
+                                          on_track_delete, on_reshuffle, on_track_go_to_album,
+                                          on_track_go_to_artist, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
   adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);

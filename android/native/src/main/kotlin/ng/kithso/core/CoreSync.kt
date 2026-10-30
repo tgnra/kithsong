@@ -310,8 +310,10 @@ class CoreSync(
         /**
          * A session's progress. Rows count the whole session so far. In [Phase.Files],
          * [filesDone] of [filesTotal] are the files this device is fetching (received, failed
-         * or refused), and the bytes count the whole session's files both ways; they're 0 in
-         * the other phases.
+         * or refused), [sendsDone] of [sendsTotal] the files the peer is fetching from it (as
+         * it announced them when its turn started; 0 before, and from a version too old to
+         * announce them), and the bytes count the whole session's files both ways; they're 0
+         * in the other phases.
          */
         data class Progress(
             val uid: String,
@@ -322,6 +324,8 @@ class CoreSync(
             val filesTotal: Int,
             val bytesReceived: Long,
             val bytesSent: Long,
+            val sendsDone: Int,
+            val sendsTotal: Int,
         ) : Event
 
         /**
@@ -602,8 +606,13 @@ class CoreSync(
         filesTotal: Int,
         bytesReceived: Long,
         bytesSent: Long,
+        sendsDone: Int,
+        sendsTotal: Int,
     ) = listener(
-        Event.Progress(uid, Phase.entries[phase], rowsSent, rowsReceived, filesDone, filesTotal, bytesReceived, bytesSent),
+        Event.Progress(
+            uid, Phase.entries[phase], rowsSent, rowsReceived, filesDone, filesTotal, bytesReceived, bytesSent,
+            sendsDone, sendsTotal,
+        ),
     )
 
     @Suppress("unused")

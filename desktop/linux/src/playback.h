@@ -64,7 +64,7 @@ void playback_seek_by(int64_t delta_ms);
 
 /* The volume, 0 to 100, and muted (see mc_player_set_volume()). 100 and not muted to begin
  * with; main.c keeps the volume in settings.json. They carry over to the player when it's
- * created. */
+ * created, and the header bar's volume control (volume_button.c) and MPRIS show them. */
 void playback_set_volume(int volume);
 int playback_volume(void);
 void playback_set_muted(gboolean muted);

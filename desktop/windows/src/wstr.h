@@ -50,6 +50,10 @@ wchar_t *mc_wformat_args(wchar_t *buf, size_t n, const char *fmt, const mc_arg *
  * mc_str_mnemonic(id), in '&' form, into buf. Returns buf. */
 wchar_t *wstr_field_label(wchar_t *buf, size_t n, enum mc_str_id id);
 
+/* "&Sign in to Libre.fm…": mc_str_mnemonic(id) with one plain string argument for its {0},
+ * in '&' form, into buf. The argument's own '_' and '&' show as they are. Returns buf. */
+wchar_t *wstr_mnemonic_format(wchar_t *buf, size_t n, enum mc_str_id id, const char *arg);
+
 /* "Rename…\tF2", a menu item with its shortcut, into buf. Returns buf. */
 wchar_t *wstr_menu_item(wchar_t *buf, size_t n, enum mc_str_id text, enum mc_str_id shortcut);
 

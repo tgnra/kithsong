@@ -25,9 +25,15 @@ extern "C" {
 
 typedef struct mc_scrobbler mc_scrobbler;
 
-/* Libre.fm's addresses, for mc_scrobbler_set_service(). It takes any API key. */
+/* Last.fm's addresses: the service scrobbled to until another is set. */
+#define MC_SCROBBLER_LASTFM_API_URL "https://ws.audioscrobbler.com/2.0/"
+#define MC_SCROBBLER_LASTFM_AUTH_URL "https://www.last.fm/api/auth/"
+/* Libre.fm's addresses, for mc_scrobbler_set_service(). It takes any API key and secret, so
+ * these placeholders (shaped like Last.fm's, 32 hex digits) do. */
 #define MC_SCROBBLER_LIBREFM_API_URL "https://libre.fm/2.0/"
 #define MC_SCROBBLER_LIBREFM_AUTH_URL "https://libre.fm/api/auth/"
+#define MC_SCROBBLER_LIBREFM_API_KEY "6b697468736f6e676b697468736f6e67"
+#define MC_SCROBBLER_LIBREFM_API_SECRET "6c696272652e666d6c696272652e666d"
 
 /* Starts scrobbling plays from library lib for this device, whose sync.db is in config_dir
  * (the per-device config dir, as for mc_sync_new()). lib must stay open while the scrobbler
@@ -62,15 +68,27 @@ void mc_scrobbler_auth_cancel(mc_scrobbler *sc);
 /* Signs out, here and across the group. Queued plays wait for the next sign-in. */
 mc_status mc_scrobbler_sign_out(mc_scrobbler *sc);
 
-/* Which service to scrobble to. NULLs mean Last.fm's addresses and the build's Last.fm API
- * key and secret; a service that wants its own key takes it here. Changing it signs out,
- * since a session belongs to the service and key that made it. Synced like the account. */
+/* Which service to scrobble to. NULLs (or "") mean Last.fm's addresses and the build's
+ * Last.fm API key and secret; a service that wants its own key takes it here. Any service
+ * signs in as Last.fm does, on the auth_url page in the browser. Changing it signs out,
+ * since a session belongs to the service and key that made it. Synced like the account.
+ * MC_ERR_INVALID_ARG for an address that isn't http:// or https://. */
 mc_status mc_scrobbler_set_service(mc_scrobbler *sc, const char *api_url, const char *auth_url,
                                    const char *api_key, const char *api_secret);
+
+/* The kind of service, as Settings shows it. */
+typedef enum mc_scrobbler_service {
+  MC_SCROBBLER_SERVICE_LASTFM,
+  MC_SCROBBLER_SERVICE_LIBREFM, /* by its API address, whatever the key */
+  MC_SCROBBLER_SERVICE_OTHER,
+} mc_scrobbler_service;
 
 typedef struct mc_scrobbler_status {
   char *username;     /* NULL when signed out */
   char *api_url;      /* the service's */
+  char *auth_url;     /* where its users approve a sign-in */
+  char *service_name; /* "Last.fm", "Libre.fm", or another's host name (from api_url) */
+  mc_scrobbler_service service;
   int pending;        /* plays queued here and not yet sent */
   int has_key;        /* 0 when the service has no API key: Last.fm in a build without one,
                        * where signing in fails with MC_ERR_AUTH; say so instead */

@@ -30,6 +30,7 @@
 #include "sync/transfer.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -224,7 +225,8 @@ static mc_status send_file_err(mc_channel *ch, const char *track, const char *re
 
 static void progress(mc_session *s) {
   mc_sync_progress p = {s->peer_uid,      MC_SYNC_PHASE_FILES, s->rows_sent,     s->rows_received,
-                        s->files_done,    s->files_total,      s->bytes_received, s->bytes_sent};
+                        s->files_done,    s->files_total,      s->bytes_received, s->bytes_sent,
+                        s->files_bytes,   s->sends_done,       s->sends_total,    s->sends_bytes};
   mc_sync_emit_progress(s->sync, &p);
 }
 
@@ -766,6 +768,9 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   if (is_uid(t)) memcpy(track, t, MC_UID_STRLEN);
   int ok = is_uid(t) && format && (opus ? valid_bitrate(kbps) : !strcmp(format, "original"));
   yyjson_doc_free(req);
+  /* Counted now: progress goes out once it's answered. */
+  if (!track[0] || strcmp(track, s->sends_last)) s->sends_done++;
+  memcpy(s->sends_last, track, MC_UID_STRLEN);
   if (!ok) return send_file_err(s->ch, track, "format");
 
   mc_library *lib = s->conn->lib;
@@ -811,6 +816,17 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   }
   if (original) held_free(&h);
   return st;
+}
+
+/* FILES_PLAN: how many files the peer's turn will ask for, and their size, for progress. */
+static mc_status serve_plan(mc_session *s, const unsigned char *payload, size_t len) {
+  yyjson_doc *req = parse(payload, len);
+  if (!req) return MC_ERR_FORMAT;
+  int64_t files = obj_int(req, "files"), bytes = obj_int(req, "bytes");
+  yyjson_doc_free(req);
+  s->sends_total = files > 0 && files <= INT_MAX ? (int)files : 0;
+  s->sends_bytes = bytes > 0 ? bytes : 0;
+  return MC_OK;
 }
 
 /* --- PREPARE_REQ, serving --- */
@@ -1027,6 +1043,8 @@ static mc_status serve_turn(mc_session *s) {
       st = serve_prepare(s, payload, len);
     else if (type == MC_MSG_COVER_REQ)
       st = serve_cover(s, payload, len);
+    else if (type == MC_MSG_FILES_PLAN && s->files_plan)
+      st = serve_plan(s, payload, len);
     else
       st = MC_ERR_FORMAT; /* an ERROR, or out of turn */
     if (st != MC_OK) break;
@@ -1303,6 +1321,16 @@ static void add_archived(mc_transfer *x, const char *uid) {
   memcpy(x->archived[x->narchived++], uid, MC_UID_STRLEN);
 }
 
+/* FILES_PLAN: what this turn is about to ask for, so the peer can show its progress. */
+static mc_status send_plan(mc_session *s) {
+  yyjson_mut_val *root;
+  yyjson_mut_doc *doc = new_doc(&root);
+  if (!doc) return MC_ERR_NOMEM;
+  yyjson_mut_obj_add_int(doc, root, "files", s->files_total);
+  yyjson_mut_obj_add_int(doc, root, "bytes", s->files_bytes);
+  return send_doc(s->ch, MC_MSG_FILES_PLAN, doc);
+}
+
 /* This device's turn as the receiver, with its plan in x. */
 static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   mc_library *lib = s->conn->lib;
@@ -1379,6 +1407,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   int *how = n ? calloc((size_t)n, sizeof *how) : NULL; /* 0 skip, 1 original, 2 opus */
   if (n && !how) st = MC_ERR_NOMEM;
   s->files_total = 0;
+  s->files_bytes = 0;
   for (int i = 0; st == MC_OK && i < n; i++) {
     /* Reconcile only looks this up for originals imported here. */
     if (peer_archive && w[i].original && w[i].verified) add_archived(x, w[i].uid);
@@ -1391,9 +1420,11 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
              (w[i].original && ntc && (w[i].imported || assigned_to_peer(tc, ntc, w[i].uid))))
       how[i] = 2;
     s->files_total += how[i] != 0;
+    if (how[i]) s->files_bytes += w[i].t->est_bytes;
   }
   if (x->narchived) qsort(x->archived, (size_t)x->narchived, sizeof *x->archived, uid_cmp);
   free(tc);
+  if (st == MC_OK && s->files_plan) st = send_plan(s);
   progress(s);
 
   for (int i = 0; st == MC_OK && i < n; i++) {

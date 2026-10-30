@@ -22,7 +22,7 @@ static struct {
   char uid[MC_UID_STRLEN];
   ULONGLONG at;
   mc_sync_phase phase;
-  int files_posted;      /* files_done in the last event posted */
+  int files_posted;      /* files fetched and sent in the last event posted */
   int64_t rows_received; /* in the last event seen, posted or not */
   int files_done;
   BOOL changed; /* the library changed since the last event posted */
@@ -144,13 +144,16 @@ static BOOL progress_due(const mc_sync_progress *p, BOOL *changed) {
   g_progress[slot].rows_received = p->rows_received;
   g_progress[slot].files_done = p->files_done;
 
-  BOOL files_finished = p->files_total > 0 && p->files_done >= p->files_total &&
-                        p->files_done != g_progress[slot].files_posted;
+  /* Files both ways: each turn's last file goes through. */
+  int moved = (p->files_done < p->files_total ? p->files_done : p->files_total) +
+              (p->sends_done < p->sends_total ? p->sends_done : p->sends_total);
+  int total = p->files_total + p->sends_total;
+  BOOL files_finished = total > 0 && moved >= total && moved != g_progress[slot].files_posted;
   if (!first && !files_finished && g_progress[slot].phase == p->phase && now - g_progress[slot].at < PROGRESS_MS)
     return FALSE;
   g_progress[slot].at = now;
   g_progress[slot].phase = p->phase;
-  g_progress[slot].files_posted = p->files_done;
+  g_progress[slot].files_posted = moved;
   *changed = g_progress[slot].changed;
   g_progress[slot].changed = FALSE;
   return TRUE;
@@ -167,6 +170,8 @@ static void on_progress(void *user, const mc_sync_progress *progress) {
   ev->rows_received = progress->rows_received;
   ev->files_done = progress->files_done;
   ev->files_total = progress->files_total;
+  ev->sends_done = progress->sends_done;
+  ev->sends_total = progress->sends_total;
   ev->bytes_received = progress->bytes_received;
   ev->bytes_sent = progress->bytes_sent;
   ev->library_changed = changed;

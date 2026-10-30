@@ -144,11 +144,61 @@ Android versionCodes are `major*100000 + minor*1000 + patch*10`, plus 0 for the 
 for the watch. The two apps share the `ng.kithso` id, so Play needs every code to be
 unique.
 
+## Microsoft Store (MSIX)
+
+`scripts/package-msix.ps1` packs the Windows build as an unsigned
+`dist/kithsong-<ver>-windows-x64.msix` for uploading to Partner Center, which signs it on
+ingestion. It isn't part of the release workflow. Run it on Windows with the Windows SDK
+installed (it finds `makeappx.exe` and `makepri.exe` on `PATH` or under
+`Windows Kits\10\bin`), plus what `release-windows.ps1` needs:
+
+```powershell
+scripts\package-msix.ps1 -IdentityName 12345Example.Kithsong `
+    -Publisher 'CN=01234567-89AB-CDEF-0123-456789ABCDEF' -PublisherDisplayName 'Example'
+```
+
+The three values are on Partner Center's Product management → Product identity page
+(`Package/Identity/Name`, `Package/Identity/Publisher` and
+`Package/Properties/PublisherDisplayName`), and must match exactly, or the upload is refused.
+They can also come from `$env:KITHSONG_MSIX_IDENTITY_NAME`, `$env:KITHSONG_MSIX_PUBLISHER` and
+`$env:KITHSONG_MSIX_PUBLISHER_NAME`. Left out, they're placeholders: the package still builds,
+with a warning, but the Store refuses it.
+
+The script runs `release-windows.ps1` (the same build, tests and zip), or packs an existing
+install with `-StageDir build\stage-windows\kithsong-<ver>`. It copies that into
+`build\msix\layout`, fills in `packaging/msix/AppxManifest.xml.in`, draws the Start, tile
+and Store icons into `Assets\` from `packaging/icons` (the `.ico`'s images for the small
+sizes, the PNGs scaled down for the rest), indexes them with `makepri` (`-NoPri` skips that)
+and runs `makeappx pack`.
+
+- **Version:** `VERSION` as `a.b.c.0`. The Store keeps the 4th field for itself, so the build
+  number isn't in it, and each submission needs a higher `VERSION` than the last.
+- **Capabilities:** `runFullTrust` (it's an ordinary Win32 app), `internetClient`
+  (MusicBrainz, cover art, Last.fm) and `privateNetworkClientServer` (sync). A full-trust app
+  isn't sandboxed by them, but the Store lists them.
+- **Firewall:** the manifest declares sync's inbound rule (TCP on any port, UDP 5353, Private
+  and Domain profiles), which Windows adds when the package installs and removes on uninstall.
+  So the packaged app skips its own firewall check and its elevated helper (`firewall.c`).
+- **Settings:** the install folder is read-only, but nothing is written beside the exe:
+  settings and `sync.db` are in `%LOCALAPPDATA%\kithsong`. Under MSIX Windows redirects the
+  app's new files there to `%LOCALAPPDATA%\Packages\<package family name>\LocalCache\Local\kithsong`,
+  which only the packaged app sees and which uninstalling deletes. So a Store install starts
+  with its own settings and pairings, not the zip build's, and loses them when uninstalled.
+  The library folder itself is the user's and isn't redirected.
+
+To try a package before submitting it, sign a copy with a test certificate whose subject is
+the `-Publisher` value (`New-SelfSignedCertificate -Type CodeSigningCert -Subject <publisher>
+-CertStoreLocation Cert:\CurrentUser\My`, trusted under Trusted People, then
+`signtool sign /fd SHA256 /sha1 <thumbprint> <msix>`) and install it with
+`Add-AppxPackage`. Or register the unpacked layout, unsigned, with Developer Mode on:
+`Add-AppxPackage -Register build\msix\layout\AppxManifest.xml`.
+
 ## Installing
 
 - **Windows:** unzip anywhere and run `kithsong.exe`. The build isn't code-signed, so
   SmartScreen warns on first launch (More info → Run anyway). To update, replace the folder.
-  Settings and the library live elsewhere, so they survive.
+  Settings and the library live elsewhere, so they survive. From the Store, see
+  [Microsoft Store (MSIX)](#microsoft-store-msix) for where settings go.
 - **Linux:** `flatpak install --user kithsong-<ver>-linux-x86_64.flatpak`. This fetches the
   GNOME runtime from Flathub if needed. To update, install the newer bundle. To uninstall,
   run `flatpak uninstall app.kithsong.Kithsong`. The sandbox can reach `~/Music`. Folders
@@ -159,7 +209,8 @@ unique.
 
 ## Not done yet
 
-- Windows: no installer, MSIX/Store package or code signing.
+- Windows: no installer or code signing. The MSIX package is built by hand, not by the
+  workflow, and is unsigned until the Store signs it.
 - Linux: not on Flathub. Flathub builds offline, so every fetched dependency in
   `third_party/CMakeLists.txt` would need to be a Flatpak source. x86_64 only.
 - The icons in `packaging/icons/` are generated from `kithsong.svg` by `render.py`. Rerun it

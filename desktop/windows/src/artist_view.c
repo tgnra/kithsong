@@ -70,6 +70,7 @@ typedef struct tile {
   BOOL failed; /* the cover couldn't be decoded; draw the placeholder */
   /* A single's, for the play queue. */
   wchar_t *artist, *album; /* NULL if unknown, or for no album */
+  char artist_uid[MC_UID_STRLEN]; /* "" if unknown */
   char *path;              /* UTF-8; NULL if it has no file on this device */
   int duration_ms;
 } tile;
@@ -518,6 +519,7 @@ static int load_singles(tile **out) {
     const mc_track_info *tr = &list->items[i];
     tile *t = &tiles[i];
     memcpy(t->uid, tr->uid, sizeof t->uid);
+    memcpy(t->artist_uid, tr->artist_uid, sizeof t->artist_uid);
     t->title = wstr_dup_from_utf8(tr->title && *tr->title ? tr->title : mc_str(MC_STR_UNTITLED));
     t->cover_dir = wstr_dup_from_utf8(tr->cover_dir); /* NULL for none */
     if (tr->year > 0 && (t->sub = malloc(16 * sizeof *t->sub))) swprintf(t->sub, 16, L"%d", tr->year);
@@ -913,6 +915,7 @@ enum {
   CMD_PLAY_NEXT,
   CMD_PLAY_LAST,
   CMD_DELETE_TRACK,
+  CMD_GO_TO_ARTIST,
   CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
 };
 
@@ -930,11 +933,13 @@ static void request_add(const char *track_uid, BOOL here, const char *playlist_u
 }
 
 /* Single i's menu, at pt (screen coordinates): Add to Playlist and Delete from Library, as a
- * track's in the track list. */
+ * track's in the track list, and Go to Artist when it's credited to someone else. A single has
+ * no album page to go to. */
 static void single_menu(int i, POINT pt) {
   /* Copies: the menu's message loop repaints the page, which may reload it. */
-  char uid[MC_UID_STRLEN];
+  char uid[MC_UID_STRLEN], artist[MC_UID_STRLEN];
   memcpy(uid, tile_at(i)->uid, sizeof uid);
+  memcpy(artist, tile_at(i)->artist_uid, sizeof artist);
   BOOL here = tile_at(i)->path != NULL;
   HMENU menu = CreatePopupMenu();
   mc_playlist_list *lists = NULL;
@@ -944,6 +949,10 @@ static void single_menu(int i, POINT pt) {
   /* Greyed out until there's a play queue to add to (see TODO.md, Playback). */
   AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
   AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  if (artist[0] && strcmp(artist, v.open_uid)) {
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, CMD_GO_TO_ARTIST, mc_wstr_mnemonic(MC_STR_GO_TO_ARTIST));
+  }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL);
@@ -958,6 +967,10 @@ static void single_menu(int i, POINT pt) {
     memset(&v.req, 0, sizeof v.req);
     memcpy(v.req.track_uid, uid, sizeof uid);
     notify(ARN_DELETE_TRACK, FALSE);
+  } else if (cmd == CMD_GO_TO_ARTIST) {
+    memset(&v.req, 0, sizeof v.req);
+    memcpy(v.req.artist_uid, artist, sizeof artist);
+    notify(ARN_GO_TO_ARTIST, FALSE);
   }
 }
 

@@ -67,6 +67,10 @@
 /* Posted when the open artist's header changed height (artist_view_header_height()): a strip
  * came or went. Lay the track list out again. */
 #define ARN_RESIZED 8
+/* A single's menu's Go to Artist, offered when the single is credited to someone else (it's
+ * on an album of the open artist's): open artist_uid's page, as the track list's
+ * TLN_GO_TO_ARTIST does. artist_view_last_request() has it. */
+#define ARN_GO_TO_ARTIST 9
 
 /* Creates the page, hidden, as a child of parent. Only one exists at a time. */
 HWND artist_view_create(HWND parent, int id);
@@ -98,7 +102,7 @@ int artist_view_single_count(void);
 track_list_item artist_view_single_at(int i);
 /* The single the last ARN_PLAY_SINGLE was for. */
 int artist_view_play_index(void);
-/* The request the last ARN_ADD_TO_PLAYLIST or ARN_DELETE_TRACK was for. */
+/* The request the last ARN_ADD_TO_PLAYLIST, ARN_DELETE_TRACK or ARN_GO_TO_ARTIST was for. */
 const track_list_request *artist_view_last_request(void);
 
 #endif

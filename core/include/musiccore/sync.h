@@ -210,6 +210,15 @@ typedef struct mc_sync_progress {
   int files_total;       /* asked for in this session */
   int64_t bytes_received; /* file bytes, for the whole session so far */
   int64_t bytes_sent;
+  int64_t files_bytes;   /* files_total's size, estimated from this device's plan */
+  /* MC_SYNC_PHASE_FILES: the files the peer is fetching from this device, as it announced
+   * them at the start of its turn. 0 until then, and with a version too old to announce
+   * them. The two turns run one after the other, so files_done + sends_done of
+   * files_total + sends_total is how far the whole file phase has got; the second turn's
+   * count is known only once it starts. */
+  int sends_done;        /* answered so far, sent or refused */
+  int sends_total;
+  int64_t sends_bytes;   /* sends_total's size, as the peer estimated it */
 } mc_sync_progress;
 
 typedef struct mc_sync_result {

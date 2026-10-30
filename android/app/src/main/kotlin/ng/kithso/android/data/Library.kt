@@ -35,7 +35,10 @@ data class Playlist(val uid: String, val name: String, val trackCount: Int, val 
 @Immutable
 data class AlbumGroup(val uid: String, val name: String, val albumCount: Int, val art: ArtRef)
 
-/** A track; [album] is empty for one on no album. */
+/**
+ * A track; [album] is empty for one on no album. [albumUid] and [artistUid] are its album's
+ * and artist's, for going to their pages; null when it has none, or isn't known.
+ */
 @Immutable
 data class Track(
     val uid: String,
@@ -49,6 +52,8 @@ data class Track(
     val path: String? = null,
     /** Its entry in the playlist it was listed from, for moving and removing it; else null. */
     val entryUid: String? = null,
+    val albumUid: String? = null,
+    val artistUid: String? = null,
 )
 
 /**

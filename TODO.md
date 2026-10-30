@@ -5,7 +5,7 @@
 Big pieces that haven't been started, or that only one platform has.
 
 - **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; only Windows can create, edit, rename or delete one (its rule editor, smart_editor.c). Linux and Android need theirs (built from mc_smart_field_get() and the mc_smart_*_label() words)
-- **Volume UI** - the core has volume and mute, and the desktops change them from the keyboard (Linux over MPRIS too); no on-screen control anywhere, and Android uses the core's volume only to duck (before Android 8)
+- **Volume UI** - the desktops have a speaker at the right of the header bar that drops down a volume slider and a mute button (volume_popup.c, volume_button.c), and change the volume from the keyboard too (Linux over MPRIS as well); Android keeps to the system's volume, using the core's only to duck (before Android 8), and Wear OS has none
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
@@ -26,7 +26,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Delete (with restore) | albums, tracks | albums, tracks | albums, tracks (permanent: no trash to restore from) | no |
 | Remove from this device | albums, artists | albums, artists (only compiled) | albums, artists | no |
 | Shuffle | core's | core's | core's | no |
-| Volume | keyboard only | keyboard, MPRIS | system's (core's for ducking) | no |
+| Volume | drop-down slider, keyboard | popover slider, keyboard, MPRIS | system's (core's for ducking) | no |
 | Import | yes | yes | yes (simpler review) | no |
 | Sync | yes | yes (two instances on one host) | yes | mock-up |
 | Merging libraries (pairing) | yes | yes | yes | no |
@@ -79,11 +79,9 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
 - Core - repeat (one, all); no frontend offers it (Ctrl+R is kept for it on the desktops)
 - All - a play queue: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither), and a view of what's queued
-- All - an on-screen volume control (the desktops flash the level in the now-playing strip for now)
 - Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
 
 ### Scrobbling
-- All - choose another service (Libre.fm or a custom URL) in the UI; mc_scrobbler_set_service() exists but no screen uses it
 - All - revoking access on Last.fm shows "turned down this sign-in" but doesn't sign out by itself
 
 ## Import and tagging
@@ -158,6 +156,7 @@ The desktops' shortcuts are listed in README.md (Linux also shows them with Ctrl
 ### Windows screen readers and custom-drawn controls
 The album grid, track list, sidebar and search page have UI Automation providers (uia.c) that raise name and status changes as property-change events; the now-playing strip is a live region for its flash ("Volume 40%"); the track list's and album grid's header buttons are reachable from the keyboard. Still to do:
 - The artist page (kithsong_artists) is custom-drawn without a provider, and the now-playing strip exposes only the flash or the track's name: no seek bar or times
+- The volume drop-down's slider is a Slider named by its level ("Volume 40%") with no RangeValue pattern, so a screen reader can't set it directly (the arrow keys do)
 
 ## Wear OS
 
@@ -191,13 +190,17 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - The archive's own sidebar row ("This computer. Keeps the whole library") is cut off at the default width
 - An album tile stays highlighted after its right-click menu closes, until the page reloads (maybe GTK 4.14)
 - "Recently added" plays each album last track first (each track is added a moment after the one before)
+- Go to album and Go to artist on the track list's and the artist page's track menus (only compiled): that each is hidden where it should be (a single's or no album, the album shown, the artist's own page), and that the album opens with the track selected
+- The header bar's volume control (volume_button.c): only compiled (GTK 4.14). Check the popover's slider taking the focus when it opens, its arrow keys, the speaker muting, and the icon and slider following the keyboard and MPRIS
 
 ### Windows
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
 - Firewall prompt: the success path after UAC, beyond one run
 - Remove from this PC / Sync to this PC in a real group (the core is tested between two devices; on screen only the menu outside a group was looked at), including removing an album while it plays
 - Deleting a track while it plays
+- Go to Album and Go to Artist on the track list's and a single's menus: only syntax-checked with MinGW, never built or run
 - Volume's fade (only silent test files so far)
+- The volume drop-down (volume_popup.c): only cross-compiled with MinGW, never run. Check the main window keeping its active look and Mica while it's open, a click on the speaker closing it without opening it again, the focus going back on Escape, the wheel, Windows 10's border (no rounded corners there), high contrast, and the speaker and slider through UI Automation
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns, focus events, and listeners for property changes and live regions
 - The empty Playlists page's Choose what to sync (needs this PC in a group with every playlist hidden), pairing from the empty Albums page's menu, and the empty-page button through UI Automation
 - The pairing dialog's ended page with a real pairing: Choose what to sync, the archive explainer (and the dialog growing to fit it), Create a new library and Pair again
@@ -207,6 +210,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - Smart playlists' and groups' pictures (mc_smart_art()), and empty playlists in the Playlists section and Recents, on screen (only built)
 - Remove from this phone / Sync to this phone on screen, in a real group (only built)
 - A recent's long-press menu (Play, Shuffle, Remove from Recents, Clear Recents) on screen (only built; the desktops' menus were run)
+- A track's Go to album and Go to artist, from track lists and the player (not even built: no Android SDK where they were written)
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
 - After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - Merging libraries: tested end to end on the emulator with a Windows scratch instance (both roles, Merge and decline, Last.fm sign-out, summary). Seen only with fake_merge: the progress card and bar, the forgotten-devices line, the merge_pending note, the failed summary and the library_mismatch hint; the merge's notification was never seen
@@ -220,6 +224,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 
 ### Cross-platform
 - A real Last.fm sign-in and scrobble (only fake sessions so far), and the sign-in reaching another device over a real sync
+- Settings' "Use a different service…" (Libre.fm, or another entered by hand): never run. Windows was only syntax-checked with clang against mingw-w64's headers, Linux and Android not compiled at all. A real Libre.fm sign-in with the placeholder key wasn't tried either
 - Media keys with the window in the background: SMTC on Windows, MPRIS on GNOME and KDE. MPRIS was only checked with gdbus and playerctl under Xvfb (play/pause, next/previous, seek, Raise, Shuffle, Volume, clamping, and PropertiesChanged, with the window unfocused or minimized), not with GNOME's or KDE's controls
 - Recents arriving or going with a real sync between two devices
 - An Android delete reaching a desktop over a real sync (copies removed there, originals to its trash)
