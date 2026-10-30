@@ -699,8 +699,13 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
    * local change, so it is told to skip it. */
   sync->absorb = 1;
   if (rows_new > 0) trigger_members(sync, peer_uid, MC_TRIGGER_CHANGED, now + CHANGE_DELAY_MS);
-  /* The merge's rows are this device's own edits, which every member needs. */
-  if (merged) trigger_members(sync, NULL, MC_TRIGGER_CHANGED, now + CHANGE_DELAY_MS);
+  /* The merge's rows are this device's own edits, which every member needs, and they
+   * shouldn't wait out the rate limit: the merge runs once. */
+  if (merged) {
+    for (int i = 0; i < sync->npeers; i++)
+      if (sync->peers[i].member) sync->peers[i].auto_after_ms = 0;
+    trigger_members(sync, NULL, MC_TRIGGER_CHANGED, now + CHANGE_DELAY_MS);
+  }
   if (follow_up && p && result->status == MC_OK) {
     p->trigger = MC_TRIGGER_CHANGED;
     p->trigger_ms = now;
@@ -1325,6 +1330,9 @@ static void on_discovered(const mc_peer_info *peer, int online, void *user) {
  * wouldn't have, for one interval at most. A last_sync_ms in the future (the clock went
  * back) counts as now. Before any thread runs. */
 static void seed_auto_after(mc_sync *sync) {
+  /* A merge of this device's old library still to run waits for the next session that
+   * syncs the library: don't hold that session back for the rate limit's hour. */
+  if (sync->api.lib && mc_libmerge_pending(sync->api.lib, NULL)) return;
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_sync_db_handle(sync->api.sdb),
                          "SELECT device_uid, last_sync_ms FROM peer_contact"

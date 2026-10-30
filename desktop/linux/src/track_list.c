@@ -318,6 +318,9 @@ static GtkWidget *action_button(const char *icon, const char *label, gboolean sh
   GtkWidget *b = gtk_button_new();
   gtk_button_set_child(GTK_BUTTON(b), content);
   gtk_widget_set_hexpand(b, TRUE);
+  /* Not focused by a click, so Space then pauses (the window's key) rather than starting the
+   * album over, as the header's Shuffle does. */
+  gtk_widget_set_focus_on_click(b, FALSE);
   g_signal_connect(b, "clicked", G_CALLBACK(on_play_all), GINT_TO_POINTER(shuffled));
   return b;
 }
@@ -539,26 +542,64 @@ static gboolean on_rename_key(GtkWidget *widget, GVariant *args, gpointer user) 
   return TRUE;
 }
 
+/* Whether the track at pos is wholly in sight, and if not, scrolls the list just enough to
+ * show it. Worked out from the list's adjustment, its rows being all the same height: the
+ * list keeps the focused row's widget when it's scrolled out of sight, and GTK 4.14 lays
+ * that widget out just under the rows in sight, so its bounds can't tell. */
+static gboolean scroll_into_sight(guint pos) {
+  GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(s.scroller));
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(s.store));
+  if (!n) return FALSE;
+  double h = gtk_adjustment_get_upper(adj) / n, y = pos * h, top = gtk_adjustment_get_value(adj);
+  double page = gtk_adjustment_get_page_size(adj);
+  if (y >= top - 0.5 && y + h <= top + page + 0.5) return FALSE;
+  /* A wheel or touchpad scroll may still be gliding on: stopped, so it doesn't take over. */
+  GtkScrolledWindow *sw = GTK_SCROLLED_WINDOW(s.scroller);
+  if (gtk_scrolled_window_get_kinetic_scrolling(sw)) {
+    gtk_scrolled_window_set_kinetic_scrolling(sw, FALSE);
+    gtk_scrolled_window_set_kinetic_scrolling(sw, TRUE);
+  }
+  gtk_adjustment_set_value(adj, y < top ? y : y + h - page);
+  return TRUE;
+}
+
+/* Opens the selected track's menu under its title (its row in sight). */
+static void popup_for_selected(guint pos) {
+  graphene_rect_t at;
+  for (guint i = 0; i < s.rows->len; i++) {
+    row *r = g_ptr_array_index(s.rows, i);
+    if (r->item && gtk_list_item_get_position(r->item) == pos &&
+        gtk_widget_compute_bounds(r->title, s.pane, &at)) {
+      popup_menu_at(at.origin.x, at.origin.y + at.size.height);
+      return;
+    }
+  }
+  if (gtk_widget_compute_bounds(s.scroller, s.pane, &at)) popup_menu_at(at.origin.x + 18, at.origin.y);
+}
+
+/* After scrolling the selected track back into sight: its menu, once the list has been
+ * laid out again. */
+static gboolean on_scrolled_back(GtkWidget *widget, GdkFrameClock *clock, gpointer user) {
+  (void)widget;
+  (void)clock;
+  guint *frames = user;
+  if (++*frames < 2) return G_SOURCE_CONTINUE;
+  guint pos = selected();
+  if (menu_for(pos)) popup_for_selected(pos);
+  return G_SOURCE_REMOVE;
+}
+
 /* The Menu key or Shift+F10: the selected track's menu, under its title; with no track
  * selected, a playlist's header menu. A selected track scrolled out of sight is scrolled
- * back first, and the menu hangs from the top of the list. */
+ * back first. */
 static gboolean on_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
   (void)widget;
   (void)args;
   (void)user;
   guint pos = selected();
   if (menu_for(pos)) {
-    graphene_rect_t at;
-    for (guint i = 0; i < s.rows->len; i++) {
-      row *r = g_ptr_array_index(s.rows, i);
-      if (r->item && gtk_list_item_get_position(r->item) == pos &&
-          gtk_widget_compute_bounds(r->title, s.pane, &at)) {
-        popup_menu_at(at.origin.x, at.origin.y + at.size.height);
-        return TRUE;
-      }
-    }
-    gtk_list_view_scroll_to(GTK_LIST_VIEW(s.view), pos, GTK_LIST_SCROLL_FOCUS, NULL);
-    if (gtk_widget_compute_bounds(s.scroller, s.pane, &at)) popup_menu_at(at.origin.x + 18, at.origin.y);
+    if (scroll_into_sight(pos)) gtk_widget_add_tick_callback(s.view, on_scrolled_back, g_new0(guint, 1), g_free);
+    else popup_for_selected(pos);
     return TRUE;
   }
   if (!gtk_widget_get_visible(s.playlist_button)) return FALSE;

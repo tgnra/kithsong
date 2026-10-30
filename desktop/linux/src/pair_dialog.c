@@ -736,6 +736,10 @@ static pair_dlg *open_dlg(pair_dlg **slot, GtkWidget *parent, mc_sync *sync, gbo
 
   d->stack = gtk_stack_new();
   gtk_stack_set_vhomogeneous(GTK_STACK(d->stack), FALSE);
+  /* Nor across: the hidden page is measured for the shown one's height, and a long
+   * wrapped label there (the kept device's merge note over a short ended page) then asks
+   * for a width of its own line, which widens the whole dialog. */
+  gtk_stack_set_hhomogeneous(GTK_STACK(d->stack), FALSE);
   gtk_stack_set_transition_type(GTK_STACK(d->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
   gtk_stack_add_named(GTK_STACK(d->stack), ask, "ask");
   gtk_stack_add_named(GTK_STACK(d->stack), ended, "ended");

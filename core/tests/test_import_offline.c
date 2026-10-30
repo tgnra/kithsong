@@ -3,7 +3,8 @@
  * session says so and puts every item in review without looking it up, that skipping
  * tagging then imports them all with their existing tags, and that a session started with
  * skip_tagging imports everything without checking at all. A picture embedded in a file is
- * written out as the album's cover.jpg. */
+ * written out as the album's cover.jpg. Two albums in one folder whose names differ only in
+ * their last character stay two items. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L /* setenv */
 #endif
@@ -273,6 +274,28 @@ int main(int argc, char **argv) {
   }
   CHECK(ev.offline_events == 0);
   CHECK(track_count(lib) == 3);
+  mc_library_close(lib);
+
+  /* "Vol. 1" and "Vol. 2" in one folder: the album key once dropped the tag's last
+   * character, which made them one item. */
+  char vols[1100], lib3[1100];
+  snprintf(vols, sizeof vols, "%s/vols", root);
+  snprintf(lib3, sizeof lib3, "%s/lib3", root);
+  CHECK(mc_mkdirs(vols) == MC_OK && mc_mkdirs(lib3) == MC_OK);
+  snprintf(path, sizeof path, "%s/a.wav", vols);
+  CHECK(write_track(path, "Nobody", "Vol. 1", "One", 1, 0));
+  snprintf(path, sizeof path, "%s/b.wav", vols);
+  CHECK(write_track(path, "Nobody", "Vol. 2", "Two", 1, 0));
+  const char *vol_paths[] = {vols};
+  lib = NULL;
+  imp = NULL;
+  CHECK(mc_library_open(lib3, &lib) == MC_OK);
+  CHECK(lib && mc_import_start(lib, vol_paths, 1, &opts, on_event, &ev, &imp) == MC_OK);
+  if (imp) {
+    CHECK(wait_all(imp, MC_IMPORT_DONE, 20000) == 2);
+    mc_import_free(imp);
+  }
+  CHECK(track_count(lib) == 2);
   mc_library_close(lib);
 
   /* Bad arguments. */

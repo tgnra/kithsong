@@ -302,18 +302,22 @@ static mc_status write_member(sqlite3 *db, const side *s, const unsigned char *k
 
 /* The group changes one device makes on a successful pairing, in one transaction:
  *  - group_uid: the group it is now in (local, not logged);
- *  - library_uid: the group's library, adopted first if this library is empty and has
- *    another uid;
+ *  - library_uid: the group's library, adopted first if this device is joining (adopt)
+ *    and its library is empty and has another uid. The device whose group it is keeps
+ *    whatever library it has open: it may have another one open (MC_SYNC_LIBRARY_OTHER),
+ *    with music, and only group data changes here;
  *  - archive (new groups only): the first archive, with sync_group and its profile;
  *  - the other device's row, and with a new group this device's own. */
 static mc_status apply_pairing(mc_sync_conn *c, const char *group_uid, const char *library_uid,
                                const char *archive, const side *me, const side *other,
-                               const unsigned char *other_key, const char *added_by) {
+                               const unsigned char *other_key, const char *added_by,
+                               int adopt) {
   char current[MC_UID_STRLEN];
   text_column(mc_library_db(c->lib), "SELECT value FROM meta WHERE key = ?1", "library_uid",
               current, sizeof current);
   mc_status st = MC_OK;
-  if (strcmp(current, library_uid) && (st = mc_library_adopt_uid(c->lib, library_uid)) != MC_OK)
+  if (adopt && strcmp(current, library_uid) &&
+      (st = mc_library_adopt_uid(c->lib, library_uid)) != MC_OK)
     return st;
 
   mc_sync_db *sdb = c->sdb;
@@ -889,7 +893,7 @@ void mc_pairing_initiate(void *arg) {
       const char *group = mc_sync_db_group_uid(c.sdb);
       snprintf(group_uid, sizeof group_uid, "%s", group ? group : "");
       st = apply_pairing(&c, group_uid, me.group_library_uid, NULL, &me, &peer, peer_key,
-                         me.dev);
+                         me.dev, 0);
       if (st == MC_OK)
         st = send_accept(ch, group_uid, me.group_library_uid, NULL, mc_sync_db_handle(c.sdb));
     } else {
@@ -899,7 +903,7 @@ void mc_pairing_initiate(void *arg) {
       }
       if (merging && !merge.kept_here) st = prepare_merge(sync, &c, &me, &peer, &merge);
       if (st == MC_OK)
-        st = apply_pairing(&c, group_uid, library_uid, NULL, &me, &peer, peer_key, NULL);
+        st = apply_pairing(&c, group_uid, library_uid, NULL, &me, &peer, peer_key, NULL, 1);
     }
     if (st == MC_OK && merging)
       st = merge.kept_here ? merge_answer(&c, ch, &merge) : merge_request(sync, ch, &merge);
@@ -1058,13 +1062,14 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
     if (st == MC_OK && !group_uid[0]) st = MC_ERR_FORMAT;
     if (st == MC_OK && merging) st = prepare_merge(sync, c, &me, &peer, &merge);
     if (st == MC_OK)
-      st = apply_pairing(c, group_uid, library_uid, NULL, &me, &peer, peer_key, NULL);
+      st = apply_pairing(c, group_uid, library_uid, NULL, &me, &peer, peer_key, NULL, 1);
   } else if (out == A_JOINS_B) {
     const char *group = mc_sync_db_group_uid(c->sdb);
     snprintf(group_uid, sizeof group_uid, "%s", group ? group : "");
     st = is_uid(me.group_library_uid) ? MC_OK : MC_ERR_NOT_FOUND;
     if (st == MC_OK)
-      st = apply_pairing(c, group_uid, me.group_library_uid, NULL, &me, &peer, peer_key, me.dev);
+      st = apply_pairing(c, group_uid, me.group_library_uid, NULL, &me, &peer, peer_key, me.dev,
+                         0);
     if (st == MC_OK)
       st = send_accept(ch, group_uid, me.group_library_uid, NULL, mc_sync_db_handle(c->sdb));
   } else {
@@ -1073,7 +1078,7 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
     st = mc_uid_new(group_uid);
     if (st == MC_OK && merging && !merge.kept_here) st = prepare_merge(sync, c, &me, &peer, &merge);
     if (st == MC_OK)
-      st = apply_pairing(c, group_uid, library_uid, holder->dev, &me, &peer, peer_key, me.dev);
+      st = apply_pairing(c, group_uid, library_uid, holder->dev, &me, &peer, peer_key, me.dev, 1);
     if (st == MC_OK) st = send_accept(ch, group_uid, library_uid, holder->dev, NULL);
   }
   if (st == MC_OK && merging)
