@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The MSIX package's manifest. scripts/package-msix.ps1 fills in the @...@ values (the
+     Identity ones must match Partner Center's Product identity page) and the version, which
+     is VERSION as a.b.c.0: the Store wants the 4th field 0. -->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap desktop2 rescap">
+
+  <Identity Name="@IDENTITY_NAME@" Publisher="@PUBLISHER@" Version="@VERSION@"
+            ProcessorArchitecture="x64"/>
+
+  <Properties>
+    <DisplayName>@DISPLAY_NAME@</DisplayName>
+    <PublisherDisplayName>@PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <!-- 1809 (17763): the oldest Windows 10 still widely serviced, and well past what the
+       firewall extension (1607) needs. The app itself asks for Windows 10 (WINVER 0x0A00). -->
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0"/>
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-US"/>
+  </Resources>
+
+  <Applications>
+    <Application Id="Kithsong" Executable="kithsong.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="@DISPLAY_NAME@" Description="@DESCRIPTION@"
+                          BackgroundColor="transparent"
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png"/>
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <!-- The inbound rule sync needs (see desktop/windows/src/firewall.h), added by Windows when
+       the package installs and removed when it uninstalls, so the packaged app needs no UAC
+       prompt for it: TCP on any port (the listener falls back to an ephemeral port when
+       47823 is taken) and mDNS, on the Private and Domain profiles like the app's own rule. -->
+  <Extensions>
+    <desktop2:Extension Category="windows.firewallRules">
+      <desktop2:FirewallRules Executable="kithsong.exe">
+        <desktop2:Rule Direction="in" IPProtocol="TCP" Profile="domainAndPrivate"/>
+        <desktop2:Rule Direction="in" IPProtocol="UDP" Profile="domainAndPrivate"
+                       LocalPortMin="5353" LocalPortMax="5353"/>
+      </desktop2:FirewallRules>
+    </desktop2:Extension>
+  </Extensions>
+
+  <!-- A full-trust app isn't held to these, but the Store lists them: MusicBrainz, cover art
+       and Last.fm (internetClient), and sync with devices on the local network
+       (privateNetworkClientServer). -->
+  <Capabilities>
+    <Capability Name="internetClient"/>
+    <Capability Name="privateNetworkClientServer"/>
+    <rescap:Capability Name="runFullTrust"/>
+  </Capabilities>
+</Package>
