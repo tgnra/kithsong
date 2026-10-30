@@ -10,8 +10,10 @@
 #include <wincodec.h>
 #include <windowsx.h>
 
+#include "add_to_playlist.h"
 #include "canvas.h"
 #include "cover.h"
+#include "drag.h"
 #include "remove_here.h"
 #include "scroller.h"
 #include "theme.h"
@@ -19,7 +21,10 @@
 
 #define WM_APP_COVER (WM_APP + 22) /* decode the next cover */
 
-enum { TIMER_STRIP = 1 }; /* the strip's easing (the list's scroller has 101 and 102) */
+/* An artist's page's strips of tiles, in order down the page. */
+enum { STRIP_ALBUMS, STRIP_SINGLES, NUM_STRIPS };
+
+enum { TIMER_STRIP = 1 }; /* plus the strip: its easing (the list's scroller has 101 and 102) */
 
 /* Metrics at 96 DPI. */
 enum {
@@ -42,8 +47,10 @@ enum {
   COVER_RADIUS = 6,
 };
 
-/* Hit codes besides rows and tiles (which are >= 0). */
-enum { HIT_NONE = -1, HIT_BACK = -2, HIT_LEFT = -3, HIT_RIGHT = -4 };
+/* Hit codes besides rows and tiles (which are >= 0; the tiles are numbered through the
+ * albums, then the singles). Strip sk's arrows are HIT_ARROWS - 2sk (left) and one below
+ * that (right): see arrow_hit(). */
+enum { HIT_NONE = -1, HIT_BACK = -2, HIT_ARROWS = -3 };
 
 typedef struct artist_row {
   char uid[MC_UID_STRLEN];
@@ -51,16 +58,29 @@ typedef struct artist_row {
   wchar_t sub[64]; /* "12 albums", or "" for one only credited on tracks */
 } artist_row;
 
-typedef struct album_tile {
-  char uid[MC_UID_STRLEN];
+/* An album, or a single: a track alone on its album here, or on none. */
+typedef struct tile {
+  char uid[MC_UID_STRLEN]; /* the album's, or the single's track's */
   wchar_t *title;
-  wchar_t *sub;       /* its year, or its artist when that's someone else; NULL for none */
+  wchar_t *sub;       /* its year, or an album's artist when that's someone else; NULL for none */
   wchar_t *cover_dir; /* NULL when the album has no cover */
   HBITMAP thumb;      /* premultiplied, with rounded corners */
   const uint32_t *pixels;
   int thumb_size;
   BOOL failed; /* the cover couldn't be decoded; draw the placeholder */
-} album_tile;
+  /* A single's, for the play queue. */
+  wchar_t *artist, *album; /* NULL if unknown, or for no album */
+  char *path;              /* UTF-8; NULL if it has no file on this device */
+  int duration_ms;
+} tile;
+
+typedef struct strip {
+  tile *tiles;
+  int n;
+  int pos, target;           /* scrolled sideways, and where the easing is heading */
+  RECT heading, left, right; /* in the client area; empty while it has no tiles */
+  int top;                   /* the tiles' */
+} strip;
 
 static struct {
   HWND wnd, tooltip;
@@ -82,15 +102,15 @@ static struct {
   char open_uid[MC_UID_STRLEN];
   wchar_t *open_name;
   wchar_t summary[128]; /* "12 albums · 140 tracks" */
-  album_tile *albums;
-  int nalbums;
-  int strip_pos, strip_target; /* scrolled sideways, and where the easing is heading */
-  BOOL cover_posted;           /* WM_APP_COVER is on its way */
+  strip strips[NUM_STRIPS];
+  BOOL cover_posted; /* WM_APP_COVER is on its way */
   char opened_album[MC_UID_STRLEN];
+  int play_index; /* the single ARN_PLAY_SINGLE was last sent for */
+  track_list_request req;
 
   /* Layout of the open artist's header, in the client area. */
-  RECT back, albums_heading, left, right, tracks_heading;
-  int strip_top, tile_h, header_h;
+  RECT back, tracks_heading;
+  int tile_h, header_h;
 
   int hot;     /* the hit under the mouse, or HIT_NONE */
   int pressed; /* the hit the mouse went down on: it acts on release */
@@ -98,6 +118,12 @@ static struct {
   int list_focus; /* the list's, kept while a page is open */
   BOOL reveal_focus; /* back from a page: show its row once the list has its size again */
   BOOL tracking;
+
+  /* Dragging the single pressed (v.pressed) onto a playlist, once it has moved far enough
+   * from drag_from; drop_target is the playlist it would be added to (drag.h), or "". */
+  POINT drag_from;
+  BOOL dragging;
+  char drop_target[MC_UID_STRLEN];
 } v;
 
 static int scale(int px) {
@@ -113,6 +139,45 @@ static void notify(int code, BOOL post) {
   WPARAM wp = MAKEWPARAM(GetDlgCtrlID(v.wnd), code);
   if (post) PostMessageW(parent, WM_COMMAND, wp, (LPARAM)v.wnd);
   else SendMessageW(parent, WM_COMMAND, wp, (LPARAM)v.wnd);
+}
+
+/* --- Tiles --- */
+
+static int num_tiles(void) {
+  return v.strips[STRIP_ALBUMS].n + v.strips[STRIP_SINGLES].n;
+}
+
+/* Tile i's strip, and with k its place there. */
+static int tile_strip(int i, int *k) {
+  int albums = v.strips[STRIP_ALBUMS].n, sk = i < albums ? STRIP_ALBUMS : STRIP_SINGLES;
+  if (k) *k = sk == STRIP_ALBUMS ? i : i - albums;
+  return sk;
+}
+
+/* The first tile of strip sk. */
+static int strip_first(int sk) {
+  return sk == STRIP_ALBUMS ? 0 : v.strips[STRIP_ALBUMS].n;
+}
+
+static tile *tile_at(int i) {
+  int k, sk = tile_strip(i, &k);
+  return &v.strips[sk].tiles[k];
+}
+
+static BOOL is_single(int i) {
+  return i >= v.strips[STRIP_ALBUMS].n && i < num_tiles();
+}
+
+static int arrow_hit(int sk, int dir) {
+  return HIT_ARROWS - 2 * sk - (dir > 0);
+}
+
+/* Whether hit is an arrow, and if so whose and which way. */
+static BOOL is_arrow(int hit, int *sk, int *dir) {
+  if (hit > HIT_ARROWS || hit <= HIT_ARROWS - 2 * NUM_STRIPS) return FALSE;
+  *sk = (HIT_ARROWS - hit) / 2;
+  *dir = (HIT_ARROWS - hit) % 2 ? +1 : -1;
+  return TRUE;
 }
 
 /* --- Layout --- */
@@ -131,17 +196,18 @@ static int tile_pitch(void) {
   return scale(TILE_W) + scale(TILE_GAP);
 }
 
-/* How far the strip scrolls: its tiles, with room for the hover fill, past the padding. */
-static int strip_max(void) {
+/* How far strip sk scrolls: its tiles, with room for the hover fill, past the padding. */
+static int strip_max(int sk) {
   RECT rc;
   GetClientRect(v.wnd, &rc);
-  int content = v.nalbums ? v.nalbums * tile_pitch() - scale(TILE_GAP) + 2 * scale(HOVER_PAD) : 0;
+  int n = v.strips[sk].n;
+  int content = n ? n * tile_pitch() - scale(TILE_GAP) + 2 * scale(HOVER_PAD) : 0;
   int view = rc.right - 2 * scale(PAD_X);
   return content > view ? content - view : 0;
 }
 
-static int clamp_strip(int pos) {
-  int max = strip_max();
+static int clamp_strip(int sk, int pos) {
+  int max = strip_max(sk);
   return pos < 0 ? 0 : pos > max ? max : pos;
 }
 
@@ -152,40 +218,54 @@ static void layout(void) {
   v.text_h = font_height(v.font);
   v.title_h = font_height(v.title_font);
 
-  /* An artist's header: the back button beside the name, then the strip, then a heading for
-   * the track list beneath. */
+  /* An artist's header: the back button beside the name, then the strips that have anything
+   * in them, each under its heading, then a heading for the track list beneath. */
   int name_block = v.title_h + scale(NAME_GAP) + v.text_h;
   int top = scale(HEAD_TOP);
   SetRect(&v.back, pad, top + (v.title_h - scale(BACK)) / 2, pad + scale(BACK), top + (v.title_h + scale(BACK)) / 2);
   int y = top + max(scale(BACK), name_block) + scale(HEAD_BOTTOM);
-  SetRect(&v.albums_heading, pad, y, w - pad, y + scale(HEADING_H));
-  int mid = y + scale(HEADING_H) / 2;
-  SetRect(&v.right, w - pad - scale(BACK), mid - scale(BACK) / 2, w - pad, mid + scale(BACK) / 2);
-  v.left = v.right;
-  OffsetRect(&v.left, -(scale(BACK) + scale(ARROW_GAP)), 0);
-  v.strip_top = v.albums_heading.bottom + scale(HOVER_PAD);
   v.tile_h = scale(TILE_W) + scale(TEXT_GAP) + 2 * v.text_h;
-  y = v.strip_top + v.tile_h + scale(HOVER_PAD);
+  for (int sk = 0; sk < NUM_STRIPS; sk++) {
+    strip *st = &v.strips[sk];
+    st->top = y;
+    if (!st->n) {
+      SetRectEmpty(&st->heading);
+      SetRectEmpty(&st->left);
+      SetRectEmpty(&st->right);
+      continue;
+    }
+    SetRect(&st->heading, pad, y, w - pad, y + scale(HEADING_H));
+    int mid = y + scale(HEADING_H) / 2;
+    SetRect(&st->right, w - pad - scale(BACK), mid - scale(BACK) / 2, w - pad, mid + scale(BACK) / 2);
+    st->left = st->right;
+    OffsetRect(&st->left, -(scale(BACK) + scale(ARROW_GAP)), 0);
+    st->top = st->heading.bottom + scale(HOVER_PAD);
+    y = st->top + v.tile_h + scale(HOVER_PAD);
+    st->pos = clamp_strip(sk, st->pos);
+    st->target = clamp_strip(sk, st->target);
+  }
   SetRect(&v.tracks_heading, pad, y, w - pad, y + scale(HEADING_H));
+  int was = v.header_h;
   v.header_h = v.tracks_heading.bottom;
-  v.strip_pos = clamp_strip(v.strip_pos);
-  v.strip_target = clamp_strip(v.strip_target);
+  if (is_open() && v.header_h != was) notify(ARN_RESIZED, TRUE);
 
   RECT view = rc;
   if (is_open()) SetRectEmpty(&view);
   scroller_resize(&v.scroll, &view, v.nartists ? v.nartists * scale(ROW_H) + 2 * scale(LIST_TOP) : 0);
 
-  if (v.tooltip) {
-    BOOL arrows = is_open() && strip_max() > 0;
+  if (v.tooltip) { /* Back's is 1, then each strip's arrows, left and right */
     RECT none = {0};
     TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = v.wnd, .uId = 1, .rect = is_open() ? v.back : none};
     SendMessageW(v.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
-    ti.uId = 2;
-    ti.rect = arrows ? v.left : none;
-    SendMessageW(v.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
-    ti.uId = 3;
-    ti.rect = arrows ? v.right : none;
-    SendMessageW(v.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+    for (int sk = 0; sk < NUM_STRIPS; sk++) {
+      BOOL arrows = is_open() && strip_max(sk) > 0;
+      ti.uId = 2 + 2 * (UINT_PTR)sk;
+      ti.rect = arrows ? v.strips[sk].left : none;
+      SendMessageW(v.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+      ti.uId++;
+      ti.rect = arrows ? v.strips[sk].right : none;
+      SendMessageW(v.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+    }
   }
 }
 
@@ -200,8 +280,10 @@ static RECT row_rect(int i) {
 
 /* Tile i's cover and text, in the client area. */
 static RECT tile_rect(int i) {
-  int x = scale(PAD_X) + scale(HOVER_PAD) + i * tile_pitch() - v.strip_pos;
-  RECT r = {x, v.strip_top, x + scale(TILE_W), v.strip_top + v.tile_h};
+  int k, sk = tile_strip(i, &k);
+  const strip *st = &v.strips[sk];
+  int x = scale(PAD_X) + scale(HOVER_PAD) + k * tile_pitch() - st->pos;
+  RECT r = {x, st->top, x + scale(TILE_W), st->top + v.tile_h};
   return r;
 }
 
@@ -212,20 +294,22 @@ static RECT tile_outer(int i) {
   return r;
 }
 
-/* Where the strip draws: the full width, so tiles slide out under the edges. */
-static RECT strip_rect(void) {
-  RECT rc;
+/* Where strip sk draws: the full width, so tiles slide out under the edges. Empty while it
+ * has no tiles. */
+static RECT strip_rect(int sk) {
+  RECT rc, r = {0};
   GetClientRect(v.wnd, &rc);
-  RECT r = {0, v.strip_top - scale(HOVER_PAD), rc.right, v.strip_top + v.tile_h + scale(HOVER_PAD)};
+  const strip *st = &v.strips[sk];
+  if (st->n) SetRect(&r, 0, st->top - scale(HOVER_PAD), rc.right, st->top + v.tile_h + scale(HOVER_PAD));
   return r;
 }
 
 static void invalidate_hit(int i) {
   RECT r;
+  int sk, dir;
   if (i == HIT_BACK) r = v.back;
-  else if (i == HIT_LEFT) r = v.left;
-  else if (i == HIT_RIGHT) r = v.right;
-  else if (i >= 0 && is_open() && i < v.nalbums) r = tile_outer(i);
+  else if (is_arrow(i, &sk, &dir)) r = dir < 0 ? v.strips[sk].left : v.strips[sk].right;
+  else if (i >= 0 && is_open() && i < num_tiles()) r = tile_outer(i);
   else if (i >= 0 && !is_open() && i < v.nartists) r = row_rect(i);
   else return;
   InvalidateRect(v.wnd, &r, FALSE);
@@ -241,13 +325,16 @@ static int hit_at(int x, int y) {
     return PtInRect(&r, pt) ? i : HIT_NONE;
   }
   if (PtInRect(&v.back, pt)) return HIT_BACK;
-  if (strip_max() > 0 && PtInRect(&v.left, pt)) return HIT_LEFT;
-  if (strip_max() > 0 && PtInRect(&v.right, pt)) return HIT_RIGHT;
-  RECT strip = strip_rect();
-  if (!PtInRect(&strip, pt)) return HIT_NONE;
-  for (int i = 0; i < v.nalbums; i++) {
-    RECT r = tile_outer(i);
-    if (PtInRect(&r, pt)) return i;
+  for (int sk = 0; sk < NUM_STRIPS; sk++) {
+    const strip *st = &v.strips[sk];
+    if (strip_max(sk) > 0 && PtInRect(&st->left, pt)) return arrow_hit(sk, -1);
+    if (strip_max(sk) > 0 && PtInRect(&st->right, pt)) return arrow_hit(sk, +1);
+    RECT band = strip_rect(sk);
+    if (!PtInRect(&band, pt)) continue;
+    for (int k = 0, first = strip_first(sk); k < st->n; k++) {
+      RECT r = tile_outer(first + k);
+      if (PtInRect(&r, pt)) return first + k;
+    }
   }
   return HIT_NONE;
 }
@@ -270,66 +357,74 @@ static void on_scrolled(void) {
   update_hot();
 }
 
-/* --- The strip's sideways scrolling --- */
+/* --- The strips' sideways scrolling --- */
 
-static void strip_jump(int pos) {
-  pos = clamp_strip(pos);
-  if (pos == v.strip_pos) return;
-  v.strip_pos = pos;
-  RECT r = strip_rect();
+static void strip_jump(int sk, int pos) {
+  strip *st = &v.strips[sk];
+  pos = clamp_strip(sk, pos);
+  if (pos == st->pos) return;
+  st->pos = pos;
+  RECT r = strip_rect(sk);
   InvalidateRect(v.wnd, &r, FALSE);
-  InvalidateRect(v.wnd, &v.left, FALSE); /* an arrow may grey out */
-  InvalidateRect(v.wnd, &v.right, FALSE);
+  InvalidateRect(v.wnd, &st->left, FALSE); /* an arrow may grey out */
+  InvalidateRect(v.wnd, &st->right, FALSE);
   update_hot();
 }
 
-static void strip_animate(int pos) {
-  v.strip_target = clamp_strip(pos);
-  if (v.strip_target != v.strip_pos) SetTimer(v.wnd, TIMER_STRIP, USER_TIMER_MINIMUM, NULL);
+static void strip_animate(int sk, int pos) {
+  strip *st = &v.strips[sk];
+  st->target = clamp_strip(sk, pos);
+  if (st->target != st->pos) SetTimer(v.wnd, TIMER_STRIP + sk, USER_TIMER_MINIMUM, NULL);
 }
 
 /* Eases towards the target, a quarter of the way each tick, as scroller.c does. */
-static void strip_tick(void) {
-  int diff = v.strip_target - v.strip_pos, step = diff / 4;
+static void strip_tick(int sk) {
+  strip *st = &v.strips[sk];
+  int diff = st->target - st->pos, step = diff / 4;
   if (step == 0) step = diff;
-  strip_jump(v.strip_pos + step);
-  if (v.strip_pos == v.strip_target || step == 0) KillTimer(v.wnd, TIMER_STRIP);
+  strip_jump(sk, st->pos + step);
+  if (st->pos == st->target || step == 0) KillTimer(v.wnd, TIMER_STRIP + sk);
+}
+
+static void strips_stop(void) {
+  for (int sk = 0; sk < NUM_STRIPS; sk++) KillTimer(v.wnd, TIMER_STRIP + sk);
 }
 
 /* A page of tiles back or forward. */
-static void strip_page(int dir) {
+static void strip_page(int sk, int dir) {
   RECT rc;
   GetClientRect(v.wnd, &rc);
   int view = rc.right - 2 * scale(PAD_X), whole = max(1, view / tile_pitch());
-  strip_animate(v.strip_target + dir * whole * tile_pitch());
+  strip_animate(sk, v.strips[sk].target + dir * whole * tile_pitch());
 }
 
 static void reveal_tile(int i) {
   RECT rc;
   GetClientRect(v.wnd, &rc);
+  int k, sk = tile_strip(i, &k), target = v.strips[sk].target;
   int view = rc.right - 2 * scale(PAD_X);
-  int left = i * tile_pitch(), right = left + scale(TILE_W) + 2 * scale(HOVER_PAD);
-  if (left < v.strip_target) strip_animate(left);
-  else if (right > v.strip_target + view) strip_animate(right - view);
+  int left = k * tile_pitch(), right = left + scale(TILE_W) + 2 * scale(HOVER_PAD);
+  if (left < target) strip_animate(sk, left);
+  else if (right > target + view) strip_animate(sk, right - view);
 }
 
 /* --- Covers --- */
 
-static void free_thumb(album_tile *t) {
+static void free_thumb(tile *t) {
   if (t->thumb) DeleteObject(t->thumb);
   t->thumb = NULL;
   t->pixels = NULL;
   t->thumb_size = 0;
 }
 
-static BOOL wants_cover(const album_tile *t) {
+static BOOL wants_cover(const tile *t) {
   return t->cover_dir && !t->failed && t->thumb_size != scale(TILE_W);
 }
 
 static void request_covers(void) {
   if (v.cover_posted) return;
-  for (int i = 0; i < v.nalbums; i++)
-    if (wants_cover(&v.albums[i])) {
+  for (int i = 0, n = num_tiles(); i < n; i++)
+    if (wants_cover(tile_at(i))) {
       v.cover_posted = PostMessageW(v.wnd, WM_APP_COVER, 0, 0);
       return;
     }
@@ -338,10 +433,10 @@ static void request_covers(void) {
 /* Decodes one cover, then asks for the next, so input between them goes first. */
 static void decode_next_cover(void) {
   v.cover_posted = FALSE;
-  int i = 0;
-  while (i < v.nalbums && !wants_cover(&v.albums[i])) i++;
-  if (i == v.nalbums) return;
-  album_tile *t = &v.albums[i];
+  int i = 0, n = num_tiles();
+  while (i < n && !wants_cover(tile_at(i))) i++;
+  if (i == n) return;
+  tile *t = tile_at(i);
   if (!v.wic)
     CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory, (void **)&v.wic);
   free_thumb(t);
@@ -368,14 +463,26 @@ static void free_artists(void) {
   v.nartists = 0;
 }
 
-static void free_albums(album_tile *tiles, int n) {
+static void free_tiles(tile *tiles, int n) {
   for (int i = 0; i < n; i++) {
     free(tiles[i].title);
     free(tiles[i].sub);
     free(tiles[i].cover_dir);
+    free(tiles[i].artist);
+    free(tiles[i].album);
+    free(tiles[i].path);
     free_thumb(&tiles[i]);
   }
   free(tiles);
+}
+
+static void free_strips(void) {
+  for (int sk = 0; sk < NUM_STRIPS; sk++) {
+    free_tiles(v.strips[sk].tiles, v.strips[sk].n);
+    v.strips[sk].tiles = NULL;
+    v.strips[sk].n = 0;
+    v.strips[sk].pos = v.strips[sk].target = 0;
+  }
 }
 
 static int find_artist(const char *uid) {
@@ -384,16 +491,58 @@ static int find_artist(const char *uid) {
   return -1;
 }
 
-/* The open artist's albums, keeping the covers already decoded so a reload doesn't flash. */
-static void load_albums(void) {
+/* Takes the cover t had in strip sk before a reload, if it's the same, so it doesn't flash. */
+static void keep_thumb(tile *t, int sk) {
+  strip *st = &v.strips[sk];
+  for (int k = 0; k < st->n; k++) {
+    tile *old = &st->tiles[k];
+    if (!old->thumb || strcmp(old->uid, t->uid) || !old->cover_dir || !t->cover_dir ||
+        wcscmp(old->cover_dir, t->cover_dir))
+      continue;
+    t->thumb = old->thumb;
+    t->pixels = old->pixels;
+    t->thumb_size = old->thumb_size;
+    old->thumb = NULL;
+    return;
+  }
+}
+
+/* The open artist's singles: their tracks alone on an album here, or on none. */
+static int load_singles(tile **out) {
+  mc_track_list *list = NULL;
+  if (!v.lib || mc_library_list_artist_singles(v.lib, v.open_uid, &list) != MC_OK) list = NULL;
+  int n = list ? list->count : 0;
+  tile *tiles = n ? calloc((size_t)n, sizeof *tiles) : NULL;
+  if (!tiles) n = 0;
+  for (int i = 0; i < n; i++) {
+    const mc_track_info *tr = &list->items[i];
+    tile *t = &tiles[i];
+    memcpy(t->uid, tr->uid, sizeof t->uid);
+    t->title = wstr_dup_from_utf8(tr->title && *tr->title ? tr->title : mc_str(MC_STR_UNTITLED));
+    t->cover_dir = wstr_dup_from_utf8(tr->cover_dir); /* NULL for none */
+    if (tr->year > 0 && (t->sub = malloc(16 * sizeof *t->sub))) swprintf(t->sub, 16, L"%d", tr->year);
+    t->artist = tr->artist && *tr->artist ? wstr_dup_from_utf8(tr->artist) : NULL;
+    t->album = tr->album && *tr->album ? wstr_dup_from_utf8(tr->album) : NULL;
+    t->path = tr->path ? _strdup(tr->path) : NULL;
+    t->duration_ms = tr->duration_ms;
+    keep_thumb(t, STRIP_SINGLES);
+  }
+  mc_track_list_free(list);
+  *out = tiles;
+  return n;
+}
+
+/* The open artist's albums and singles, keeping the covers already decoded so a reload
+ * doesn't flash. */
+static void load_tiles(void) {
   mc_album_list *list = NULL;
   if (!v.lib || mc_library_list_artist_albums(v.lib, v.open_uid, &list) != MC_OK) list = NULL;
   int n = list ? list->count : 0, tracks = 0;
-  album_tile *tiles = n ? calloc((size_t)n, sizeof *tiles) : NULL;
+  tile *tiles = n ? calloc((size_t)n, sizeof *tiles) : NULL;
   if (!tiles) n = 0;
   for (int i = 0; i < n; i++) {
     const mc_album_info *a = &list->items[i];
-    album_tile *t = &tiles[i];
+    tile *t = &tiles[i];
     memcpy(t->uid, a->uid, sizeof t->uid);
     t->title = wstr_dup_from_utf8(a->title && *a->title ? a->title : mc_str(MC_STR_UNTITLED));
     t->cover_dir = a->has_art ? wstr_dup_from_utf8(a->folder) : NULL;
@@ -406,42 +555,36 @@ static void load_albums(void) {
     }
     free(artist);
     tracks += a->credited_count;
-    for (int k = 0; k < v.nalbums; k++) {
-      album_tile *old = &v.albums[k];
-      if (!old->thumb || strcmp(old->uid, t->uid) || !old->cover_dir || !t->cover_dir ||
-          wcscmp(old->cover_dir, t->cover_dir))
-        continue;
-      t->thumb = old->thumb;
-      t->pixels = old->pixels;
-      t->thumb_size = old->thumb_size;
-      old->thumb = NULL;
-      break;
-    }
+    keep_thumb(t, STRIP_ALBUMS);
   }
   mc_album_list_free(list);
-  free_albums(v.albums, v.nalbums);
-  v.albums = tiles;
-  v.nalbums = n;
-  if (v.focus >= n) v.focus = n - 1;
+  tile *singles = NULL;
+  int nsingles = load_singles(&singles);
+  tracks += nsingles; /* their albums aren't among the albums */
+  free_tiles(v.strips[STRIP_ALBUMS].tiles, v.strips[STRIP_ALBUMS].n);
+  free_tiles(v.strips[STRIP_SINGLES].tiles, v.strips[STRIP_SINGLES].n);
+  v.strips[STRIP_ALBUMS].tiles = tiles;
+  v.strips[STRIP_ALBUMS].n = n;
+  v.strips[STRIP_SINGLES].tiles = singles;
+  v.strips[STRIP_SINGLES].n = nsingles;
+  if (v.focus >= num_tiles()) v.focus = num_tiles() - 1;
 
-  char a[64], t[64], text[160];
-  mc_format(a, sizeof a, mc_str_plural(MC_STR_COUNT_ALBUMS, n), MC_D(n));
+  /* "12 albums · 140 tracks", or with no albums "3 tracks". */
+  char a[64] = "", t[64], text[160];
+  if (n) mc_format(a, sizeof a, mc_str_plural(MC_STR_COUNT_ALBUMS, n), MC_D(n));
   mc_format(t, sizeof t, mc_str_plural(MC_STR_TRACKS, tracks), MC_D(tracks));
-  snprintf(text, sizeof text, "%s%s%s", a, mc_str(MC_STR_SEPARATOR_DOT), t);
+  snprintf(text, sizeof text, "%s%s%s", a, n ? mc_str(MC_STR_SEPARATOR_DOT) : "", t);
   wstr_from_utf8(v.summary, sizeof v.summary / sizeof v.summary[0], text);
   layout();
   request_covers();
 }
 
 static void close_artist(void) {
-  KillTimer(v.wnd, TIMER_STRIP);
+  strips_stop();
   v.open_uid[0] = '\0';
   free(v.open_name);
   v.open_name = NULL;
-  free_albums(v.albums, v.nalbums);
-  v.albums = NULL;
-  v.nalbums = 0;
-  v.strip_pos = v.strip_target = 0;
+  free_strips();
   v.hot = v.pressed = HIT_NONE;
   v.focus = v.list_focus;
   v.reveal_focus = TRUE;
@@ -480,7 +623,7 @@ static void reload(void) {
     }
     free(v.open_name);
     v.open_name = _wcsdup(v.artists[i].name);
-    load_albums();
+    load_tiles();
   }
   layout();
   InvalidateRect(v.wnd, NULL, FALSE);
@@ -501,22 +644,28 @@ static void go_back(void) {
   notify(ARN_BACK, FALSE);
 }
 
+/* An album opens on the Albums page; a single plays, and the singles after it. */
 static void open_tile(int i) {
-  if (i < 0 || i >= v.nalbums) return;
-  memcpy(v.opened_album, v.albums[i].uid, MC_UID_STRLEN);
+  if (i < 0 || i >= num_tiles()) return;
+  if (is_single(i)) {
+    v.play_index = i - strip_first(STRIP_SINGLES);
+    notify(ARN_PLAY_SINGLE, FALSE);
+    return;
+  }
+  memcpy(v.opened_album, tile_at(i)->uid, MC_UID_STRLEN);
   notify(ARN_OPEN_ALBUM, FALSE);
 }
 
 static void activate(int i) {
+  int sk, dir;
   if (i == HIT_BACK) go_back();
-  else if (i == HIT_LEFT) strip_page(-1);
-  else if (i == HIT_RIGHT) strip_page(+1);
+  else if (is_arrow(i, &sk, &dir)) strip_page(sk, dir);
   else if (is_open()) open_tile(i);
   else open_row(i);
 }
 
 static void set_focus(int i) {
-  int n = is_open() ? v.nalbums : v.nartists;
+  int n = is_open() ? num_tiles() : v.nartists;
   if (n == 0) return;
   i = i < 0 ? 0 : i >= n ? n - 1 : i;
   invalidate_hit(v.focus);
@@ -546,11 +695,23 @@ static void type_ahead(wchar_t ch) {
 static void on_key(WPARAM key) {
   SendMessageW(GetAncestor(v.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
   if (is_open()) {
+    /* Left, Right, Home and End stay in the focused tile's strip (with none focused, the
+     * first); Up and Down go to the other strip, to its tile in the same place or its last. */
+    int k = 0, sk = v.focus >= 0 ? tile_strip(v.focus, &k) : STRIP_ALBUMS;
+    if (!v.strips[sk].n) sk = STRIP_SINGLES;
+    int first = strip_first(sk), last = first + v.strips[sk].n - 1;
+    int other = sk == STRIP_ALBUMS ? STRIP_SINGLES : STRIP_ALBUMS;
     switch (key) {
-      case VK_LEFT: set_focus(v.focus - 1); break;
-      case VK_RIGHT: set_focus(v.focus < 0 ? 0 : v.focus + 1); break;
-      case VK_HOME: set_focus(0); break;
-      case VK_END: set_focus(v.nalbums - 1); break;
+      case VK_LEFT: set_focus(max(first, v.focus - 1)); break;
+      case VK_RIGHT: set_focus(v.focus < 0 ? first : min(last, v.focus + 1)); break;
+      case VK_HOME: set_focus(first); break;
+      case VK_END: set_focus(last); break;
+      case VK_UP:
+      case VK_DOWN:
+        if (v.focus < 0) set_focus(first);
+        else if ((key == VK_DOWN) == (other > sk) && v.strips[other].n)
+          set_focus(strip_first(other) + min(k, v.strips[other].n - 1));
+        break;
       case VK_RETURN: open_tile(v.focus); break;
       case VK_ESCAPE:
       case VK_BACK: go_back(); break;
@@ -608,15 +769,17 @@ static void paint_row(canvas *c, int i, BOOL last) {
 }
 
 static void paint_tile(canvas *c, int i) {
-  const album_tile *t = &v.albums[i];
+  const tile *t = tile_at(i);
   RECT art = tile_rect(i), outer = tile_outer(i);
   art.bottom = art.top + scale(TILE_W);
-  if (i == v.hot) theme_draw_state(c, &outer, scale(8), v.pressed == i ? STATE_PRESSED : STATE_HOT);
+  if (v.dragging && i == v.pressed) theme_draw_state(c, &outer, scale(8), STATE_PRESSED);
+  else if (i == v.hot) theme_draw_state(c, &outer, scale(8), v.pressed == i ? STATE_PRESSED : STATE_HOT);
   if (t->pixels) canvas_draw_image(c, &art, t->pixels, t->thumb_size, t->thumb_size);
   else paint_placeholder_cover(c, &art, !t->cover_dir || t->failed);
   RECT line = {art.left, art.bottom + scale(TEXT_GAP), art.right, art.bottom + scale(TEXT_GAP) + v.text_h};
   UINT one_line = DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
-  SetTextColor(c->dc, theme.text);
+  /* Greyed out: a single with no file on this device, as the track list shows one. */
+  SetTextColor(c->dc, is_single(i) && !t->path ? theme.text3 : theme.text);
   DrawTextW(c->dc, t->title, -1, &line, one_line);
   OffsetRect(&line, 0, v.text_h);
   SetTextColor(c->dc, theme.text2);
@@ -660,20 +823,24 @@ static void paint_header(canvas *c, const RECT *dirty) {
   SetTextColor(c->dc, theme.text2);
   DrawTextW(c->dc, v.summary, -1, &sub, one_line);
 
-  paint_heading(c, &v.albums_heading, MC_STR_SECTION_ALBUMS);
-  if (strip_max() > 0) {
-    paint_button(c, &v.left, HIT_LEFT, 0xE76B, v.strip_pos > 0); /* ChevronLeft */
-    paint_button(c, &v.right, HIT_RIGHT, 0xE76C, v.strip_pos < strip_max()); /* ChevronRight */
+  for (int sk = 0; sk < NUM_STRIPS; sk++) {
+    const strip *st = &v.strips[sk];
+    if (!st->n) continue;
+    paint_heading(c, &st->heading, sk == STRIP_ALBUMS ? MC_STR_SECTION_ALBUMS : MC_STR_SECTION_SINGLES);
+    if (strip_max(sk) > 0) {
+      paint_button(c, &st->left, arrow_hit(sk, -1), 0xE76B, st->pos > 0); /* ChevronLeft */
+      paint_button(c, &st->right, arrow_hit(sk, +1), 0xE76C, st->pos < strip_max(sk)); /* ChevronRight */
+    }
+    RECT band = strip_rect(sk);
+    HRGN clip = CreateRectRgnIndirect(&band);
+    SelectClipRgn(c->dc, clip);
+    for (int k = 0, first = strip_first(sk); k < st->n; k++) {
+      RECT r = tile_outer(first + k);
+      if (IntersectRect(&isect, &r, dirty) && IntersectRect(&isect, &r, &band)) paint_tile(c, first + k);
+    }
+    SelectClipRgn(c->dc, NULL);
+    DeleteObject(clip);
   }
-  RECT strip = strip_rect();
-  HRGN clip = CreateRectRgnIndirect(&strip);
-  SelectClipRgn(c->dc, clip);
-  for (int i = 0; i < v.nalbums; i++) {
-    RECT r = tile_outer(i);
-    if (IntersectRect(&isect, &r, dirty) && IntersectRect(&isect, &r, &strip)) paint_tile(c, i);
-  }
-  SelectClipRgn(c->dc, NULL);
-  DeleteObject(clip);
   paint_heading(c, &v.tracks_heading, MC_STR_TRACKS_TITLE);
 }
 
@@ -717,9 +884,9 @@ static void paint(HDC dc, const RECT *dirty) {
 
   BOOL focused = GetFocus() == v.wnd && !(SendMessageW(v.wnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS);
   if (focused && v.focus >= 0) {
-    if (is_open() && v.focus < v.nalbums) {
-      RECT ring = tile_outer(v.focus), strip = strip_rect(), isect;
-      if (IntersectRect(&isect, &ring, &strip)) canvas_frame(c, &ring, scale(8), scale(2), theme.text, 255);
+    if (is_open() && v.focus < num_tiles()) {
+      RECT ring = tile_outer(v.focus), band = strip_rect(tile_strip(v.focus, NULL)), isect;
+      if (IntersectRect(&isect, &ring, &band)) canvas_frame(c, &ring, scale(8), scale(2), theme.text, 255);
     } else if (!is_open() && v.focus < v.nartists) {
       RECT ring = row_rect(v.focus);
       InflateRect(&ring, 0, -scale(2));
@@ -738,25 +905,88 @@ static void paint(HDC dc, const RECT *dirty) {
 
 /* --- Menu --- */
 
-enum { CMD_REMOVE_HERE = 1, CMD_SYNC_HERE };
+/* A single's menu is the track list's track menu, Play Next and Play Last stubs included. */
+enum {
+  CMD_REMOVE_HERE = 1,
+  CMD_SYNC_HERE,
+  CMD_NEW_PLAYLIST,
+  CMD_PLAY_NEXT,
+  CMD_PLAY_LAST,
+  CMD_DELETE_TRACK,
+  CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
+};
+
+static UINT menu_flags(void) {
+  return TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
+}
+
+/* Asks the parent to add a single to playlist_uid, or to a new playlist for NULL. */
+static void request_add(const char *track_uid, BOOL here, const char *playlist_uid) {
+  memset(&v.req, 0, sizeof v.req);
+  snprintf(v.req.track_uid, sizeof v.req.track_uid, "%s", track_uid);
+  if (playlist_uid) snprintf(v.req.playlist_uid, sizeof v.req.playlist_uid, "%s", playlist_uid);
+  v.req.here = here;
+  notify(ARN_ADD_TO_PLAYLIST, FALSE);
+}
+
+/* Single i's menu, at pt (screen coordinates): Add to Playlist and Delete from Library, as a
+ * track's in the track list. */
+static void single_menu(int i, POINT pt) {
+  /* Copies: the menu's message loop repaints the page, which may reload it. */
+  char uid[MC_UID_STRLEN];
+  memcpy(uid, tile_at(i)->uid, sizeof uid);
+  BOOL here = tile_at(i)->path != NULL;
+  HMENU menu = CreatePopupMenu();
+  mc_playlist_list *lists = NULL;
+  HMENU add = add_to_playlist_menu(v.lib, CMD_PLAYLIST_FIRST, CMD_NEW_PLAYLIST, &lists);
+  if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_PLAYLIST));
+  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  /* Greyed out until there's a play queue to add to (see TODO.md, Playback). */
+  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
+  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL);
+  DestroyMenu(menu); /* and the submenu */
+
+  if (cmd >= CMD_PLAYLIST_FIRST && lists && cmd - CMD_PLAYLIST_FIRST < lists->count)
+    request_add(uid, here, lists->items[cmd - CMD_PLAYLIST_FIRST].uid);
+  mc_playlist_list_free(lists);
+  if (cmd == CMD_NEW_PLAYLIST) {
+    request_add(uid, here, NULL);
+  } else if (cmd == CMD_DELETE_TRACK) {
+    memset(&v.req, 0, sizeof v.req);
+    memcpy(v.req.track_uid, uid, sizeof uid);
+    notify(ARN_DELETE_TRACK, FALSE);
+  }
+}
 
 /* WM_CONTEXTMENU: Remove from This PC... or Sync to This PC where they apply (none if neither
  * does; an artist can't be deleted from the library), for the row under the pointer (from the
- * keyboard, lp -1, the focused row), or anywhere on an artist's page for that artist. */
+ * keyboard, lp -1, the focused row), or anywhere on an artist's page for that artist; but on a
+ * single, the single's menu. */
 static BOOL on_context_menu(LPARAM lp) {
   if (!v.lib) return FALSE;
   POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
   int i = -1;
-  if (!is_open()) {
-    if (lp == -1) {
-      i = v.focus;
-    } else {
-      POINT client = pt;
-      ScreenToClient(v.wnd, &client);
-      i = hit_at(client.x, client.y);
-    }
-    if (i < 0 || i >= v.nartists) return FALSE;
+  if (lp == -1) {
+    i = v.focus;
+  } else {
+    POINT client = pt;
+    ScreenToClient(v.wnd, &client);
+    i = hit_at(client.x, client.y);
   }
+  if (is_open() && is_single(i)) {
+    if (lp == -1) {
+      RECT r = tile_rect(i);
+      pt.x = r.left;
+      pt.y = r.top + scale(TILE_W);
+      ClientToScreen(v.wnd, &pt);
+    }
+    single_menu(i, pt);
+    return TRUE;
+  }
+  if (!is_open() && (i < 0 || i >= v.nartists)) return FALSE;
   if (lp == -1) {
     RECT r = is_open() ? v.back : row_rect(i);
     pt.x = r.left;
@@ -769,8 +999,7 @@ static BOOL on_context_menu(LPARAM lp) {
   wchar_t *name = _wcsdup(is_open() ? (v.open_name ? v.open_name : L"") : v.artists[i].name);
   HMENU menu = CreatePopupMenu();
   remove_here_append_menu(menu, MC_PROFILE_ARTIST, uid, CMD_REMOVE_HERE, CMD_SYNC_HERE);
-  UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
-  int cmd = GetMenuItemCount(menu) > 0 ? TrackPopupMenu(menu, flags, pt.x, pt.y, 0, v.wnd, NULL) : 0;
+  int cmd = GetMenuItemCount(menu) > 0 ? TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL) : 0;
   DestroyMenu(menu);
   if ((cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE) && name &&
       remove_here_command(GetAncestor(v.wnd, GA_ROOT), (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ARTIST,
@@ -780,7 +1009,57 @@ static BOOL on_context_menu(LPARAM lp) {
   return TRUE;
 }
 
+/* --- Dragging a single onto a playlist --- */
+
+/* The pressed single has moved to x, y: once far enough, it's dragged, and outside the page
+ * the window under the pointer says whether there's a playlist to add it to. Nothing on the
+ * page takes it. */
+static void drag_to(int x, int y) {
+  if (!v.dragging) {
+    if (abs(x - v.drag_from.x) < GetSystemMetrics(SM_CXDRAG) && abs(y - v.drag_from.y) < GetSystemMetrics(SM_CYDRAG))
+      return;
+    v.dragging = TRUE;
+    set_hot(HIT_NONE);
+    invalidate_hit(v.pressed);
+  }
+  RECT rc;
+  GetClientRect(v.wnd, &rc);
+  POINT pt = {x, y};
+  if (!PtInRect(&rc, pt)) {
+    ClientToScreen(v.wnd, &pt);
+    drag_over(DRAG_TRACK, pt, v.drop_target);
+    return;
+  }
+  drag_leave();
+  v.drop_target[0] = '\0';
+  drag_set_cursor(FALSE);
+}
+
+/* Stops dragging, without adding anything. */
+static void end_drag(void) {
+  if (!v.dragging) return;
+  v.dragging = FALSE;
+  v.drop_target[0] = '\0';
+  invalidate_hit(v.pressed);
+  drag_done();
+}
+
 /* --- Window --- */
+
+/* The strip the wheel scrolls, for the pointer at lp (screen coordinates): the one it's over,
+ * else the first that can scroll, else -1. */
+static int wheel_strip(LPARAM lp) {
+  POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+  ScreenToClient(v.wnd, &pt);
+  for (int sk = 0; sk < NUM_STRIPS; sk++) {
+    RECT r = strip_rect(sk);
+    r.top = v.strips[sk].heading.top;
+    if (v.strips[sk].n && PtInRect(&r, pt)) return sk;
+  }
+  for (int sk = 0; sk < NUM_STRIPS; sk++)
+    if (strip_max(sk) > 0) return sk;
+  return -1;
+}
 
 static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!v.wnd) v.wnd = v.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
@@ -806,7 +1085,7 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_TIMER:
-      if (wp == TIMER_STRIP) strip_tick();
+      if (wp >= TIMER_STRIP && wp < TIMER_STRIP + NUM_STRIPS) strip_tick((int)(wp - TIMER_STRIP));
       else scroller_timer(&v.scroll, wp);
       return 0;
     case WM_APP_COVER:
@@ -817,9 +1096,10 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       int delta = GET_WHEEL_DELTA_WPARAM(wp);
       if (!is_open()) {
         if (msg == WM_MOUSEWHEEL) scroller_wheel(&v.scroll, delta);
-      } else { /* nothing else in the header scrolls, so the wheel scrolls the strip */
+      } else { /* nothing else in the header scrolls, so the wheel scrolls a strip */
         if (msg == WM_MOUSEHWHEEL) delta = -delta;
-        strip_animate(v.strip_target - MulDiv(delta, tile_pitch(), WHEEL_DELTA));
+        int sk = wheel_strip(lp);
+        if (sk >= 0) strip_animate(sk, v.strips[sk].target - MulDiv(delta, tile_pitch(), WHEEL_DELTA));
       }
       return 0;
     }
@@ -830,6 +1110,10 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         v.tracking = TRUE;
       }
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+      if (v.pressed >= 0 && is_single(v.pressed) && (wp & MK_LBUTTON)) {
+        drag_to(x, y);
+        if (v.dragging) return 0;
+      }
       BOOL on_bar = !is_open() && scroller_mouse_move(&v.scroll, x, y);
       int i = on_bar ? HIT_NONE : hit_at(x, y);
       set_hot(v.pressed != HIT_NONE ? (i == v.pressed ? i : HIT_NONE) : i);
@@ -852,13 +1136,23 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         v.focus = i;
       }
       v.pressed = i;
+      v.drag_from.x = x;
+      v.drag_from.y = y;
       SetCapture(wnd);
       set_hot(i);
       invalidate_hit(i);
       return 0;
     }
     case WM_LBUTTONUP:
-      if (v.pressed != HIT_NONE) {
+      if (v.dragging) { /* dropped: onto a playlist, or nowhere */
+        char target[MC_UID_STRLEN], uid[MC_UID_STRLEN];
+        memcpy(target, v.drop_target, sizeof target);
+        memcpy(uid, tile_at(v.pressed)->uid, sizeof uid);
+        BOOL here = tile_at(v.pressed)->path != NULL;
+        end_drag();
+        ReleaseCapture();
+        if (target[0]) request_add(uid, here, target);
+      } else if (v.pressed != HIT_NONE) {
         int i = v.pressed;
         BOOL clicked = hit_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)) == i;
         ReleaseCapture(); /* WM_CAPTURECHANGED clears pressed */
@@ -868,6 +1162,7 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       return 0;
     case WM_CAPTURECHANGED:
+      end_drag();
       if (v.pressed != HIT_NONE) {
         invalidate_hit(v.pressed);
         v.pressed = HIT_NONE;
@@ -907,8 +1202,10 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       v.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                                   CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, wnd, NULL,
                                   GetModuleHandleW(NULL), NULL);
-      const enum mc_str_id tips[] = {MC_STR_BACK, MC_STR_WINDOWS_SCROLL_LEFT, MC_STR_WINDOWS_SCROLL_RIGHT};
-      for (int i = 0; i < 3; i++) {
+      /* Back, then each strip's arrows (see layout()). */
+      const enum mc_str_id tips[] = {MC_STR_BACK, MC_STR_WINDOWS_SCROLL_LEFT, MC_STR_WINDOWS_SCROLL_RIGHT,
+                                     MC_STR_WINDOWS_SCROLL_LEFT, MC_STR_WINDOWS_SCROLL_RIGHT};
+      for (int i = 0; i < 1 + 2 * NUM_STRIPS; i++) {
         wchar_t back_tip[64]; /* Back's has its shortcut */
         TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = wnd, .uId = (UINT_PTR)i + 1,
                           .lpszText = i == 0 ? wstr_tooltip(back_tip, 64, tips[i], MC_STR_WINDOWS_SHORTCUT_BACK)
@@ -918,9 +1215,9 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_DESTROY:
-      KillTimer(wnd, TIMER_STRIP);
+      strips_stop();
       free_artists();
-      free_albums(v.albums, v.nalbums);
+      free_strips();
       free(v.open_name);
       canvas_free(&v.buf);
       if (v.wic) IWICImagingFactory_Release(v.wic);
@@ -991,17 +1288,14 @@ BOOL artist_view_open(const char *uid) {
   if (i < 0) return FALSE;
   if (is_open() && !strcmp(v.open_uid, uid)) return TRUE;
   if (!is_open()) v.list_focus = i;
-  KillTimer(v.wnd, TIMER_STRIP);
-  free_albums(v.albums, v.nalbums);
-  v.albums = NULL;
-  v.nalbums = 0;
+  strips_stop();
+  free_strips();
   memcpy(v.open_uid, v.artists[i].uid, MC_UID_STRLEN);
   free(v.open_name);
   v.open_name = _wcsdup(v.artists[i].name);
-  v.strip_pos = v.strip_target = 0;
   v.hot = v.pressed = HIT_NONE;
   v.focus = -1;
-  load_albums();
+  load_tiles();
   InvalidateRect(v.wnd, NULL, FALSE);
   return TRUE;
 }
@@ -1020,4 +1314,30 @@ int artist_view_header_height(void) {
 
 const char *artist_view_opened_album(void) {
   return v.opened_album;
+}
+
+int artist_view_single_count(void) {
+  return is_open() ? v.strips[STRIP_SINGLES].n : 0;
+}
+
+track_list_item artist_view_single_at(int i) {
+  track_list_item item = {0};
+  if (i < 0 || i >= artist_view_single_count()) return item;
+  const tile *t = &v.strips[STRIP_SINGLES].tiles[i];
+  item.uid = t->uid;
+  item.title = t->title;
+  item.artist = t->artist;
+  item.album = t->album;
+  item.cover_dir = t->cover_dir;
+  item.duration_ms = t->duration_ms;
+  item.path = t->path;
+  return item;
+}
+
+int artist_view_play_index(void) {
+  return v.play_index;
+}
+
+const track_list_request *artist_view_last_request(void) {
+  return &v.req;
 }

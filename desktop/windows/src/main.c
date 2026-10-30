@@ -626,15 +626,16 @@ static void create_controls(void) {
   device_view_create(g_app.wnd, &host);
 }
 
-/* Plays the shown album, playlist or artist's tracks in order, from track start on; or with
- * start -1 from the first track, which shuffled is any. Tracks with no file on this device
- * are left out of the queue. Playing it puts it first in the recents, as on Android. */
-static void play_album(int start) {
-  int n = track_list_count(), count = 0, first = start < 0 ? -1 : 0;
+/* Plays n tracks, item_at's, in order from track start on; or with start -1 from the first
+ * track, which shuffled is any. Tracks with no file on this device are left out of the queue.
+ * Playing them puts the shown album, playlist or artist first in the recents, as on
+ * Android. */
+static void play_items(int n, track_list_item (*item_at)(int), int start) {
+  int count = 0, first = start < 0 ? -1 : 0;
   playback_track *queue = n ? calloc((size_t)n, sizeof *queue) : NULL;
   if (!queue) return;
   for (int i = 0; i < n; i++) {
-    track_list_item t = track_list_item_at(i);
+    track_list_item t = item_at(i);
     if (!t.path) continue;
     if (start >= 0 && i <= start) first = count;
     queue[count++] = (playback_track){t.uid, t.path, t.title, t.artist, t.album, t.cover_dir, t.duration_ms};
@@ -651,6 +652,11 @@ static void play_album(int start) {
     uid[0] = '\0';
   }
   if (count && g_app.lib && uid[0] && mc_library_record_opened(g_app.lib, kind, uid) == MC_OK) refresh_recents();
+}
+
+/* The shown album, playlist or artist's tracks (see play_items()). */
+static void play_album(int start) {
+  play_items(track_list_count(), track_list_item_at, start);
 }
 
 /* A button's name, for screen readers, and its tooltip, which adds the button's shortcut:
@@ -841,6 +847,30 @@ static void on_track_request(int code) {
     refresh_library();
     UpdateWindow(g_app.grid); /* reload the grid now: a deleted playlist's tracks go at once */
   }
+}
+
+/* An artist's page's requests for a single (see artist_view.h), as the track list's for a
+ * track. */
+static void on_single_request(int code) {
+  const track_list_request *req = artist_view_last_request();
+  BOOL changed = FALSE;
+  if (code == ARN_ADD_TO_PLAYLIST) {
+    changed = add_to_playlist(g_app.wnd, g_app.lib, req->track_uid, req->here,
+                              req->playlist_uid[0] ? req->playlist_uid : NULL);
+  } else if (code == ARN_DELETE_TRACK) {
+    for (int i = 0, n = artist_view_single_count(); i < n; i++) {
+      track_list_item it = artist_view_single_at(i);
+      if (strcmp(it.uid, req->track_uid)) continue;
+      /* Copies: the dialog's message loop repaints the page, which may reload it. */
+      char uid[MC_UID_STRLEN];
+      snprintf(uid, sizeof uid, "%s", req->track_uid);
+      wchar_t *title = _wcsdup(it.title);
+      if (title) changed = delete_dialog(g_app.wnd, g_app.lib, MC_DELETE_TRACKS, uid, title);
+      free(title);
+      break;
+    }
+  }
+  if (changed) refresh_library();
 }
 
 /* --- Sync --- */
@@ -1338,6 +1368,12 @@ static void on_command(int id, int code) {
       } else if (code == ARN_BACK) {
         show_album(); /* empties the track list */
         layout();
+      } else if (code == ARN_RESIZED) {
+        layout(); /* the track list goes beneath the header */
+      } else if (code == ARN_PLAY_SINGLE) {
+        play_items(artist_view_single_count(), artist_view_single_at, artist_view_play_index());
+      } else if (code == ARN_ADD_TO_PLAYLIST || code == ARN_DELETE_TRACK) {
+        on_single_request(code);
       } else if (code == ARN_OPEN_ALBUM) {
         char uid[MC_UID_STRLEN];
         snprintf(uid, sizeof uid, "%s", artist_view_opened_album());
