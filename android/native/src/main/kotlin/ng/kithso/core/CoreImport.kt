@@ -71,8 +71,10 @@ class CoreImport(
         val format: String,
         val country: String,
         val label: String,
-        /** It lands in "<artist> Singles". */
+        /** A recording found on its own, filed as its track on [album]; [track] is its title. */
         val isSingle: Boolean,
+        /** A single's track title; empty for a release. */
+        val track: String,
     )
 
     private var handle = nativeStart(
@@ -131,6 +133,7 @@ class CoreImport(
                 country = f[at + 7],
                 label = f[at + 8],
                 isSingle = f[at + 9] != "0",
+                track = f[at + 10],
             )
         }
     }
@@ -167,7 +170,7 @@ class CoreImport(
     }
 
     private companion object {
-        const val MATCH_FIELDS = 10 // jni_bridge.c
+        const val MATCH_FIELDS = 11 // jni_bridge.c
 
         init {
             System.loadLibrary("kithsong_jni")

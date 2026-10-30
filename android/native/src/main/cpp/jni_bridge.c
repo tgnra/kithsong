@@ -227,7 +227,8 @@ jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {
   jclass info = (*env)->FindClass(env, "ng/kithso/core/TrackInfo");
   jmethodID ctor = info ? (*env)->GetMethodID(env, info, "<init>",
                                               "(Ljava/lang/String;Ljava/lang/String;IIILjava/lang/String;"
-                                              "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")
+                                              "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I"
+                                              "Ljava/lang/String;)V")
                         : NULL;
   if (ctor) out = (*env)->NewObjectArray(env, list->count, info, NULL);
   for (int i = 0; out && i < list->count; i++) {
@@ -239,8 +240,10 @@ jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {
     jstring album = new_string(env, t->album);
     jstring cover_dir = new_string(env, t->cover_dir);
     jstring artist_uid = new_string(env, t->artist_uid[0] ? t->artist_uid : NULL);
+    jstring album_uid = new_string(env, t->album_uid[0] ? t->album_uid : NULL);
     jobject item = (*env)->NewObject(env, info, ctor, uid, title, (jint)t->track_no, (jint)t->disc_no,
-                                     (jint)t->duration_ms, path, artist, album, cover_dir, artist_uid);
+                                     (jint)t->duration_ms, path, artist, album, cover_dir, artist_uid,
+                                     (jint)t->year, album_uid);
     if (!item) {
       out = NULL;
       break;
@@ -254,6 +257,7 @@ jobjectArray track_array(JNIEnv *env, mc_status st, mc_track_list *list) {
     if (album) (*env)->DeleteLocalRef(env, album);
     if (cover_dir) (*env)->DeleteLocalRef(env, cover_dir);
     if (artist_uid) (*env)->DeleteLocalRef(env, artist_uid);
+    if (album_uid) (*env)->DeleteLocalRef(env, album_uid);
   }
   mc_track_list_free(list);
   return out;
@@ -662,11 +666,11 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemInfo(JNI
   return out;
 }
 
-#define MATCH_FIELDS 10
+#define MATCH_FIELDS 11
 
 /* The item's candidates, best first, flattened MATCH_FIELDS strings each, in
  * CoreImport.Match's order: album, album artist, release, year, confidence in thousandths,
- * track count, format, country, label, whether it's a single. */
+ * track count, format, country, label, whether it's a single, and a single's track title. */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemMatches(JNIEnv *env, jclass cls,
                                                                               jlong handle, jint item) {
   (void)cls;
@@ -687,7 +691,8 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemMatches(
           put_int(env, out, at + 4, (long long)(m->confidence * 1000 + 0.5)) &&
           put_int(env, out, at + 5, m->track_count) && put_string(env, out, at + 6, m->format) &&
           put_string(env, out, at + 7, m->country) && put_string(env, out, at + 8, m->label) &&
-          put_int(env, out, at + 9, m->is_single)))
+          put_int(env, out, at + 9, m->is_single) &&
+          put_string(env, out, at + 10, m->is_single && m->track_count ? m->tracks[0].title : NULL)))
       out = NULL;
   }
   mc_import_item_free(it);

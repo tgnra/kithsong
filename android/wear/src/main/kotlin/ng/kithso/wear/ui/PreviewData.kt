@@ -15,5 +15,5 @@ internal object PreviewData {
         .mapIndexed { i, title -> TrackInfo("t$i", title, i + 1, 1, 180_000, "/x/$i.flac") }
 
     private fun album(uid: String, title: String, artist: String) =
-        AlbumInfo(uid, title, artist, 2024, isSingles = false, hasArt = false, folder = null)
+        AlbumInfo(uid, title, artist, 2024, isSingle = false, hasArt = false, folder = null)
 }

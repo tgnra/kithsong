@@ -5,14 +5,15 @@ class MusicCoreException(val status: Int) : RuntimeException("musiccore status $
 
 /**
  * mc_album_info. [folder] is null when none of the album's files are on this device;
- * [artistUid] is [artist]'s uid, null when it has none.
+ * [artistUid] is [artist]'s uid, null when it has none. [isSingle] if it has just one track in
+ * the library, which only album groups and smart album groups list (see [artistSingles]).
  */
 data class AlbumInfo(
     val uid: String,
     val title: String,
     val artist: String?,
     val year: Int,
-    val isSingles: Boolean,
+    val isSingle: Boolean,
     val hasArt: Boolean,
     val folder: String?,
     val artistUid: String? = null,
@@ -21,7 +22,8 @@ data class AlbumInfo(
 /**
  * mc_track_info. [path] is null when the track has no file on this device. [artist] is the
  * track's, else its album's, and [artistUid] its uid; [coverDir] is the folder holding its
- * album's cover, if any.
+ * album's cover, if any. [year] is the track's, else its album's (0 if unknown); [album] and
+ * [albumUid] are null for a track on no album.
  */
 data class TrackInfo(
     val uid: String,
@@ -34,6 +36,8 @@ data class TrackInfo(
     val album: String? = null,
     val coverDir: String? = null,
     val artistUid: String? = null,
+    val year: Int = 0,
+    val albumUid: String? = null,
 )
 
 /** mc_playlist_info. [playableCount] is the entries whose track has a file on this device. */

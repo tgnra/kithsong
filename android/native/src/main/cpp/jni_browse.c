@@ -42,6 +42,18 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeArtistTracks
   return track_array(env, st, list);
 }
 
+/* An artist's singles: their tracks alone on their album, or on none. */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeArtistSingles(JNIEnv *env, jclass cls,
+                                                                                 jlong handle, jstring uid) {
+  (void)cls;
+  const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
+  if (!cuid) return NULL;
+  mc_track_list *list = NULL;
+  mc_status st = mc_library_list_artist_singles(jni_lib_of(handle), cuid, &list);
+  (*env)->ReleaseStringUTFChars(env, uid, cuid);
+  return track_array(env, st, list);
+}
+
 /* What a smart playlist with rule would hold, without saving it. */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativePreviewSmartTracks(JNIEnv *env, jclass cls,
                                                                                       jlong handle, jstring rule) {
