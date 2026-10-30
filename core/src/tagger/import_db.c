@@ -86,26 +86,6 @@ static mc_status upsert_artist(sqlite3 *db, const mc_db_artist *a, char uid[MC_U
   return step_done(stmt);
 }
 
-static mc_status upsert_singles_album(sqlite3 *db, const char *artist_uid, const char *artist_name,
-                                      char uid[MC_UID_STRLEN]) {
-  sqlite3_stmt *stmt =
-    prepare(db, "SELECT uid FROM albums WHERE kind = 'singles' AND artist_uid = ?1 LIMIT 1");
-  if (!stmt) return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, artist_uid, -1, SQLITE_STATIC);
-  if (select_uid(stmt, uid)) return MC_OK;
-
-  char title[512];
-  snprintf(title, sizeof title, "%s Singles", artist_name && *artist_name ? artist_name : "Unknown Artist");
-  mc_status st = mc_uid_new(uid);
-  if (st != MC_OK) return st;
-  stmt = prepare(db, "INSERT INTO albums (uid, title, artist_uid, kind) VALUES (?1, ?2, ?3, 'singles')");
-  if (!stmt) return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 2, title, -1, SQLITE_TRANSIENT);
-  sqlite3_bind_text(stmt, 3, artist_uid, -1, SQLITE_STATIC);
-  return step_done(stmt);
-}
-
 static mc_status upsert_album(sqlite3 *db, const mc_db_album *al, const char *artist_uid,
                               char uid[MC_UID_STRLEN]) {
   if (al->existing_uid) {
@@ -130,7 +110,7 @@ static mc_status upsert_album(sqlite3 *db, const mc_db_album *al, const char *ar
     found = select_uid(stmt, uid);
   }
   if (!found) {
-    if (!(stmt = prepare(db, "SELECT uid FROM albums WHERE kind = 'album' AND artist_uid = ?1"
+    if (!(stmt = prepare(db, "SELECT uid FROM albums WHERE artist_uid = ?1"
                              " AND title = ?2 COLLATE NOCASE AND (mb_albumid IS NULL OR ?3 IS NULL)"
                              " LIMIT 1")))
       return MC_ERR_DB;
@@ -149,8 +129,8 @@ static mc_status upsert_album(sqlite3 *db, const mc_db_album *al, const char *ar
     mc_status st = mc_uid_new(uid);
     if (st != MC_OK) return st;
     stmt = prepare(db, "INSERT INTO albums (uid, title, artist_uid, year, original_year, disc_total,"
-                       " mb_albumid, mb_releasegroupid, art_hash, kind)"
-                       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'album')");
+                       " mb_albumid, mb_releasegroupid, art_hash)"
+                       " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)");
   }
   if (!stmt) return MC_ERR_DB;
   sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
@@ -262,8 +242,8 @@ static mc_status attach_file(sqlite3 *db, const mc_db_track *t, const char *arti
   return sqlite3_changes(db) == 1 ? MC_OK : MC_ERR_NOT_FOUND;
 }
 
-/* Writes one track and its file row. *old_album receives the album the file's track was in
- * before, if it was already in the library. */
+/* Writes one track and its file row, in album_uid ("" for none). *old_album receives the
+ * album the file's track was in before, if it was already in the library. */
 static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *album_uid,
                               const char *artist_uid, char old_album[MC_UID_STRLEN]) {
   char track_uid[MC_UID_STRLEN], file_uid[MC_UID_STRLEN];
@@ -289,7 +269,7 @@ static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *alb
                          " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)");
   if (!stmt) return MC_ERR_DB;
   sqlite3_bind_text(stmt, 1, track_uid, -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 2, album_uid, -1, SQLITE_STATIC);
+  bind_text(stmt, 2, album_uid); /* "": no album */
   sqlite3_bind_text(stmt, 3, artist_uid, -1, SQLITE_STATIC);
   bind_text(stmt, 4, t->title && *t->title ? t->title : "Untitled");
   bind_int(stmt, 5, t->track_no);
@@ -371,18 +351,16 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
   mc_status st = mc_library_begin_write(lib);
   if (st != MC_OK) return st;
 
-  char album_artist[MC_UID_STRLEN], album_uid[MC_UID_STRLEN];
+  char album_artist[MC_UID_STRLEN], album_uid[MC_UID_STRLEN] = "";
   /* An existing album keeps its artist, which new tracks without one fall back to. */
-  sqlite3_stmt *stmt = album->existing_uid && !album->update_existing
-                         ? prepare(db, "SELECT artist_uid FROM albums WHERE uid = ?1"
-                                       " AND artist_uid IS NOT NULL")
-                         : NULL;
-  if (stmt) bind_text(stmt, 1, album->existing_uid);
+  const char *existing = album->no_album || album->update_existing ? NULL : album->existing_uid;
+  sqlite3_stmt *stmt = existing ? prepare(db, "SELECT artist_uid FROM albums WHERE uid = ?1"
+                                              " AND artist_uid IS NOT NULL")
+                                : NULL;
+  if (stmt) bind_text(stmt, 1, existing);
   if (!stmt || !select_uid(stmt, album_artist))
     if ((st = upsert_artist(db, &album->artist, album_artist)) != MC_OK) goto fail;
-  st = album->singles ? upsert_singles_album(db, album_artist, album->artist.name, album_uid)
-                      : upsert_album(db, album, album_artist, album_uid);
-  if (st != MC_OK) goto fail;
+  if (!album->no_album && (st = upsert_album(db, album, album_artist, album_uid)) != MC_OK) goto fail;
 
   for (int i = 0; i < count; i++) {
     const mc_db_track *t = &tracks[i];

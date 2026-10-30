@@ -1,6 +1,7 @@
 /* Search across the library: artists, albums, tracks, playlists and album groups (manual and
  * smart), by name, forgiving typos and matching the last word as a prefix so results can
- * follow each keystroke.
+ * follow each keystroke. Singles (albums with one track in the library, see library.h) aren't
+ * albums here either: their tracks are found as tracks.
  *
  * Each library handle keeps an in-memory index of the names, rebuilt on a core thread after
  * any of them changes, here or on another connection (an import, sync). Plays and recents

@@ -47,22 +47,27 @@ void mc_library_rollback(mc_library *lib);
   "SELECT t.uid, t.title, t.track_no, t.disc_no, t.duration_ms," \
   " (SELECT f.path FROM files f WHERE f.track_uid = t.uid" \
   "  ORDER BY f.source_file_uid IS NOT NULL LIMIT 1)," \
-  " coalesce(ar.name, aar.name), al.title, al.art_hash IS NOT NULL, coalesce(ar.uid, aar.uid)"
+  " coalesce(ar.name, aar.name), al.title, al.art_hash IS NOT NULL, coalesce(ar.uid, aar.uid)," \
+  " coalesce(t.year, al.year), al.uid"
 #define TRACK_JOINS \
   " LEFT JOIN artists ar ON ar.uid = t.artist_uid" \
   " LEFT JOIN albums al ON al.uid = t.album_uid" \
   " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
 
+/* Whether album a has exactly one track in the library: a single. Album listings leave those
+ * out, and mc_library_list_artist_singles() lists their tracks instead. */
+#define ALBUM_IS_SINGLE "((SELECT count(*) FROM tracks st WHERE st.album_uid = a.uid) = 1)"
+
 /* The columns mc_library_read_albums() reads, the join they need and the album display order;
  * a is the album and ar its artist. The folder is wherever the album's files are: any one
  * file's directory will do. */
 #define ALBUM_COLS \
-  "SELECT a.uid, a.title, ar.name, a.year, a.kind = 'singles', a.art_hash IS NOT NULL," \
+  "SELECT a.uid, a.title, ar.name, a.year, " ALBUM_IS_SINGLE ", a.art_hash IS NOT NULL," \
   " (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid" \
   "  WHERE t.album_uid = a.uid LIMIT 1), ar.uid"
 #define ALBUM_JOINS " LEFT JOIN artists ar ON ar.uid = a.artist_uid"
 #define ALBUM_ORDER \
-  "coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.kind = 'singles', a.year, a.title COLLATE NOCASE"
+  "coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.year, a.title COLLATE NOCASE"
 
 /* Step a prepared, bound TRACK_COLS or ALBUM_COLS query into a list. Both finalize stmt. */
 mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_list **out);

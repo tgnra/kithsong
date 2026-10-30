@@ -14,8 +14,9 @@ typedef struct mc_db_artist {
 } mc_db_artist;
 
 typedef struct mc_db_album {
-  /* The artist's "<artist> Singles" album; title, years and ids are then ignored. */
-  int singles;
+  /* Tracks with no album: no album row is written, and title, years, ids, art and
+   * existing_uid are ignored. The artist is still the tracks' fallback. */
+  int no_album;
   const char *title;
   mc_db_artist artist;
   int year;

@@ -3,7 +3,7 @@
  *
  * Which uids are one is a function of the changelog alone: two uids merge once the
  * changelog shows them sharing a MusicBrainz id (artists by mb_artistid, albums by
- * mb_albumid, tracks by mb_releasetrackid) or, for singles albums, an artist. "Shows" means
+ * mb_albumid, tracks by mb_releasetrackid). "Shows" means
  * any value ever logged, not only the current winner, so the relation only grows as rows
  * arrive and every device reaches the same classes whatever order it gets them in. The
  * merge is applied locally and never logged; see rows.c for how the applier uses this. */

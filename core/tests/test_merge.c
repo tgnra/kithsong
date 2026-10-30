@@ -1,7 +1,8 @@
 /* Duplicate merging: the same album imported on two devices becomes one, under the smaller
  * uid, on both, and on a third device that hears of the two in another order. Rows travel
  * between libraries the way a session moves them (reader, then applier), without the
- * network. */
+ * network. An older peer's singles albums (kind = 'singles') don't merge, nor break
+ * anything. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,31 +87,31 @@ static void exec_ok(mc_library *lib, const char *sql) {
 
 /* What one import of the album made on one device. */
 typedef struct import {
-  char artist[MC_UID_STRLEN], album[MC_UID_STRLEN], singles[MC_UID_STRLEN];
+  char artist[MC_UID_STRLEN], album[MC_UID_STRLEN], single_album[MC_UID_STRLEN];
   char tracks[3][MC_UID_STRLEN], single[MC_UID_STRLEN];
   int ntracks;
 } import;
 
 /* Imports "Things" (release REL, artist ART) as the importer would: ntracks tracks, each
- * with release track id RT<n> and a file, and the artist's single (release track RT9) in its
- * singles album. */
+ * with release track id RT<n> and a file, and the artist's single (release track RT9) as the
+ * one track of its own release, SREL. */
 static void import_album(mc_library *lib, const char *label, int ntracks, import *im) {
   char sql[1024];
   im->ntracks = ntracks;
   mc_uid_new(im->artist);
   mc_uid_new(im->album);
-  mc_uid_new(im->singles);
+  mc_uid_new(im->single_album);
   mc_uid_new(im->single);
   CHECK(mc_library_begin_write(lib) == MC_OK);
   snprintf(sql, sizeof sql,
            "INSERT INTO artists (uid, name, mb_artistid) VALUES ('%s', 'Low', 'ART');"
            "INSERT INTO albums (uid, title, artist_uid, year, mb_albumid)"
            " VALUES ('%s', 'Things', '%s', 1994, 'REL');"
-           "INSERT INTO albums (uid, title, artist_uid, kind)"
-           " VALUES ('%s', 'Low Singles', '%s', 'singles');"
+           "INSERT INTO albums (uid, title, artist_uid, year, mb_albumid)"
+           " VALUES ('%s', 'Single', '%s', 1996, 'SREL');"
            "INSERT INTO tracks (uid, album_uid, artist_uid, title, mb_releasetrackid)"
            " VALUES ('%s', '%s', '%s', 'Single', 'RT9');",
-           im->artist, im->album, im->artist, im->singles, im->artist, im->single, im->singles,
+           im->artist, im->album, im->artist, im->single_album, im->artist, im->single, im->single_album,
            im->artist);
   exec_ok(lib, sql);
   for (int i = 0; i < ntracks; i++) {
@@ -178,7 +179,7 @@ static void check_merged(mc_library *lib, const import *a, const import *b) {
   sqlite3 *db = mc_library_db(lib);
   char sql[512], text[256];
   const char *album = smaller(a->album, b->album), *artist = smaller(a->artist, b->artist);
-  const char *singles = smaller(a->singles, b->singles);
+  const char *single_album = smaller(a->single_album, b->single_album);
 
   CHECK(query_int(db, "SELECT count(*) FROM artists") == 1);
   query_text(db, "SELECT uid FROM artists", text, sizeof text);
@@ -186,7 +187,7 @@ static void check_merged(mc_library *lib, const import *a, const import *b) {
   CHECK(query_int(db, "SELECT count(*) FROM albums") == 2);
   snprintf(sql, sizeof sql,
            "SELECT count(*) FROM albums WHERE uid IN ('%s', '%s') AND artist_uid = '%s'", album,
-           singles, artist);
+           single_album, artist);
   CHECK(query_int(db, sql) == 2);
 
   /* RT1 and RT2 are one track each; B's RT3 joins the album; the single is one. */
@@ -203,7 +204,7 @@ static void check_merged(mc_library *lib, const import *a, const import *b) {
   snprintf(sql, sizeof sql, "SELECT album_uid FROM tracks WHERE uid = '%s'",
            smaller(a->single, b->single));
   query_text(db, sql, text, sizeof text);
-  CHECK_TEXT(text, singles);
+  CHECK_TEXT(text, single_album);
 
   /* References moved: the playlist entry, the album group entry, the plays, the recents. */
   snprintf(sql, sizeof sql, "SELECT track_uid FROM playlist_entries");
@@ -367,6 +368,41 @@ int main(int argc, char **argv) {
     query_text(mc_library_db(a), "SELECT uid FROM albums WHERE mb_albumid = 'REL2'", found,
                sizeof found);
     CHECK_TEXT(found, smaller(ia.album, ib.album));
+  }
+
+  /* An older peer's singles albums: two "Low Singles" of one artist, with kind = 'singles'.
+   * They're logged and kept for peers, but kind is a field this version doesn't know: the
+   * albums stay two ordinary albums, and nothing merges. */
+  {
+    char s1[MC_UID_STRLEN], s2[MC_UID_STRLEN];
+    mc_uid_new(s1);
+    mc_uid_new(s2);
+    const char *artist = smaller(ia.artist, ib.artist);
+    static const char *const sfields[] = {"title", "artist_uid", "kind"};
+    const char *svalues[] = {"Low Singles", artist, "singles"};
+    mc_row old[6];
+    memset(old, 0, sizeof old);
+    for (int i = 0; i < 6; i++) {
+      old[i].hlc = hlc + 10 + (uint64_t)i;
+      memcpy(old[i].origin, late, MC_UID_STRLEN);
+      old[i].tag = MC_VAL_TEXT;
+      snprintf(old[i].entity, sizeof old[i].entity, "albums");
+      memcpy(old[i].row_uid, i < 3 ? s1 : s2, MC_UID_STRLEN);
+      snprintf(old[i].field, sizeof old[i].field, "%s", sfields[i % 3]);
+      old[i].data = (const unsigned char *)svalues[i % 3];
+      old[i].len = (uint32_t)strlen(svalues[i % 3]);
+    }
+    mc_rows_target tg;
+    mc_rows_target_library(c, &tg);
+    mc_rows_applier *ap = NULL;
+    CHECK(mc_rows_applier_new(&tg, &ap) == MC_OK);
+    if (ap) CHECK(mc_rows_apply(ap, old, 6, NULL) == MC_OK);
+    mc_rows_applier_free(ap);
+    sqlite3 *cdb = mc_library_db(c);
+    CHECK(query_int(cdb, "SELECT count(*) FROM albums WHERE title = 'Low Singles' AND kind = 'album'") == 2);
+    CHECK(query_int(cdb, "SELECT count(*) FROM changelog WHERE field = 'kind' AND value = 'singles'") == 2);
+    CHECK(query_int(cdb, "SELECT count(*) FROM aliases") == 6);
+    CHECK(query_int(cdb, "SELECT count(*) FROM merge_keys WHERE field = 'kind'") == 0);
   }
 
   mc_library_close(a);

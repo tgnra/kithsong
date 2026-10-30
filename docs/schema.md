@@ -17,6 +17,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 9 | `tracks.file_rev`, `files.file_rev` (a track's file replaced by a better one) |
 | 10 | example smart lists |
 | 11 | `files.source_sha256` (the bytes an imported file came from) |
+| 12 | no singles albums: `albums_singles` and `albums.kind`'s triggers dropped; no data changed |
 
 ## Location
 
@@ -35,8 +36,7 @@ keys. Untagged files don't have them, and the same recording can appear on sever
 
 When two devices independently import the same album, they create different uids. Merging
 those duplicates (matched by MusicBrainz release id or by a content hash) is a sync-level
-operation; see [sync-protocol.md](sync-protocol.md). The same applies to singles albums,
-which are matched by artist and `kind = 'singles'` instead.
+operation; see [sync-protocol.md](sync-protocol.md).
 
 The database has two identities of its own in `meta`, both generated on first open:
 
@@ -84,10 +84,20 @@ migrations. Records are dropped once their file is back, or after 90 days.
 
 ## Singles
 
-Tracks that aren't part of an album live in one album per artist with `kind = 'singles'`,
-titled "&lt;artist&gt; Singles". Because the album has no year or release of its own, each of
-its tracks carries `year` and `mb_albumid` (the release it came from). Regular albums have
-`kind = 'album'`. See [tagging-rules.md](tagging-rules.md#singles).
+A single is an album with exactly one track in the library: an ordinary `albums` row of the
+release the track came from, or one whose other tracks aren't here. It's a count, not a
+kind, so importing more of the release makes it an album. A track can also have no album
+(`tracks.album_uid` NULL): a loose file imported as-is with no album tag. The album
+listings, search and the artist's albums leave singles out;
+`mc_library_list_artist_singles()` lists them, and the tracks with no album, for the
+artist's page. See [tagging-rules.md](tagging-rules.md#singles).
+
+Before v12 a loose track went into one album per artist, titled "&lt;artist&gt; Singles" with
+`kind = 'singles'` (v2). v12 doesn't move or rewrite anything: such albums stay, as ordinary
+albums of that title, until their music is imported again. `albums.kind` stays in the table
+but nothing reads it, and it's no longer logged (its triggers and the `albums_singles` index
+are dropped), so new albums keep the column's default, `'album'`. `tracks.year` and
+`tracks.mb_albumid` stay too: every track has them.
 
 ## Play counts
 
@@ -179,7 +189,7 @@ worked out from the album's tracks.
 | `added` | date | T A | album: its newest track's |
 | `plays` | int | T A | summed over devices; album: over its tracks |
 | `last_played` | date | T A | newest over devices; album: over its tracks |
-| `singles` | bool | T A | the track is on, or the album is, an artist's singles album |
+| `singles` | bool | T A | a single: the track is the only one of its album in the library, or has no album; the album has one track |
 | `on_device` | bool | T A | has a file on this device; album: any track does |
 | `format` | format | T A | has a file in this format, e.g. `"flac"`; album: any track does |
 | `playlist` | playlist | T | the track is in this playlist (uid) |
@@ -249,7 +259,7 @@ makes the answer differ between devices.
 | `recents`          | yes    | last opened items, one row per item keyed by its uid; see [Recents](#recents) |
 | `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it; `file_rev` is the track's `file_rev` the file was made from (a copy whose `file_rev` differs from its track's is stale, see [Files](sync-protocol.md#files)); `source_sha256` (hex) of the bytes an original was imported from, before the import tagged it, which tells a re-import of the same file (see [Duplicates](tagging-rules.md#duplicates)), passed on with an original by sync |
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
-| `merge_keys`       | no     | the MusicBrainz ids (and singles albums' artists) ever logged per uid, which decide what merges |
+| `merge_keys`       | no     | the MusicBrainz ids ever logged per uid, which decide what merges (rows of singles albums' artists from before v12 are left, unused) |
 | `changelog`        | -      | field-level change log that sync is built on |
 | `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)) and other per-library settings |
 

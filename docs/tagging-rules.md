@@ -64,7 +64,8 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      then earliest date, so the original release beats reissues.
    - a one-file album also gets recording candidates, in case it is one track off a release.
    - singles: look up `MUSICBRAINZ_TRACKID` if present, then search recordings by title and
-     artist (5 results).
+     artist (5 results). Each recording is credited to one of its releases (see
+     [Singles](#singles)).
    - albums and one-file items with no candidates, or only poor ones (best under 75%): the
      [extended search](#extended-search), by catalogue number, other artists and the label.
      It gives a one-file item release candidates, in case the file is a whole release (a DJ
@@ -187,7 +188,8 @@ database as `library.db` at the top and the music beneath it (`organize.c`):
 Radiohead/OK Computer (1997)/01 Airbag.flac
 Radiohead/OK Computer (1997)/cover.jpg
 Some Band/Double Album (2004)/2-07 Title.flac      (disc-track, when there are several discs)
-OutKast/OutKast Singles/Hey Ya!.flac
+OutKast/Hey Ya! (2003)/01 Hey Ya!.flac             (a single: its release, of one track)
+OutKast/Demo.flac                                  (a track with no album)
 library.db
 ```
 
@@ -203,8 +205,9 @@ library.db
 - if the destination is taken: the same release track imported again from outside the
   library replaces its old copy; anything else gets ` (2)`, ` (3)`, ... appended. (A release
   that's already in the library doesn't get this far: see [Duplicates](#duplicates).)
-- files with an album tag of "&lt;album artist&gt; Singles" are treated as singles when
-  scanned again, so re-importing the library folder keeps them in place.
+- a track with no album goes in its artist's folder, `<artist>/<title>.<ext>`.
+- files filed under "&lt;artist&gt; Singles" by older versions are albums of that title like any
+  other when scanned again: nothing treats the name specially any more.
 - `files.path` is stored relative to the library folder, with `/`, so the folder can be moved
   or mounted under another drive letter.
 - the library folder lives in per-device settings (`settings.json`, see
@@ -220,7 +223,8 @@ The full rules are in `core/include/musiccore/tagger.h` ("Duplicates"); in short
 
 - **Same release**: an album with the same MusicBrainz release id, else release group id,
   else the same album artist and title with at least half of the incoming tracks in its
-  track list; for a single, the same recording in the artist's singles album. Tracks pair
+  track list. A single is an album like these. A track with no album: the same recording
+  (else title) among the artist's tracks with no album, each judged on its own. Tracks pair
   up by release track id, recording id, disc and track number with the title, then title.
 - **Quality** of a file: lossless beats lossy; then bits per sample and sample rate for
   lossless, or bitrate weighted by codec for lossy (MP3 1.0, Opus 1.6;
@@ -236,9 +240,9 @@ The full rules are in `core/include/musiccore/tagger.h` ("Duplicates"); in short
   MusicBrainz ids, and the album's title, album artist and ids (ids the library lacks are
   removed), not those of its own match, which can be another release of the group or, found
   by name, no release at all. A file attached to a track with no file on this device is
-  tagged and named the same way.
+  tagged and named the same way. A track with no album gets no album tags, ids or numbers.
 - **Unless it's the whole release**: the album was found by release or release group id
-  (not by name, not a singles album), every one of its tracks pairs with an incoming file,
+  (not by name, not tracks with no album), every one of its tracks pairs with an incoming file,
   and every file of it on this device is swapped. Then the import's match wins: the new
   files keep its tags and names, and the album and its tracks take its title, artists,
   numbers, years and ids, keeping their uids. Typically a remaster or hi-res release of the
@@ -258,22 +262,28 @@ The full rules are in `core/include/musiccore/tagger.h` ("Duplicates"); in short
 
 ## Singles
 
-beets imports a single as a one-track album named after the song. We file every single
-under one album per artist instead:
+A single is filed as what it is on MusicBrainz: a track of a release, like any album track.
 
-- an item is a single if it is a loose track (see Group), or if its best match is a release
-  whose MusicBrainz release group has primary type *Single*.
-- it goes into the album **"&lt;artist&gt; Singles"**, where the artist is the first credited
-  artist. "Beyoncé feat. Jay-Z" files under "Beyoncé Singles", and the track keeps the full
-  credit.
-- in the library that album has `albums.kind = 'singles'`, one per artist. Each track keeps
-  its own `year` and the `mb_albumid` of the release it came from.
-- in the file tags, `ALBUM` is "&lt;artist&gt; Singles" and `ALBUMARTIST` is the artist.
-  `MUSICBRAINZ_ALBUMID` and `MUSICBRAINZ_RELEASEGROUPID` are removed, because they would
-  point at a release whose title isn't the album tag. Track and disc numbers aren't written.
-- the release a recording is credited to: official beats unofficial, a single beats an album
-  or EP, compilations come last, and ties go to the earliest date.
-- the singles album gets no cover art for now.
+- an item is a single if it is a loose track (see Group). It's matched to a recording, and
+  the recording is credited to one of its releases: official beats unofficial, a single
+  beats an album or EP, compilations come last, and ties go to the earliest date.
+- once accepted, that release is looked up in full and the file is written as its track
+  there: the release's `ALBUM`, `ALBUMARTIST`, `MUSICBRAINZ_ALBUMID`,
+  `MUSICBRAINZ_RELEASEGROUPID`, track and disc numbers and `DATE`, under
+  `<album artist>/<album> (<year>)/`. A one-track release is an album of one track; one
+  track of an album imported on its own is that album's track, of its total.
+- if the release can't be looked up, the search's release title and ids and the track's
+  number are written, with the recording's first credited artist as the album artist and
+  no track total. A recording on no release gets no album.
+- in the library a single is an ordinary album (`albums.kind` is unused, see schema.md).
+  An album with **one track in the library** is shown as a single: the album listings and
+  search leave it out, and the artist's page lists it with the artist's tracks that have
+  no album (`mc_library_list_artist_singles`). Importing more of its release makes it an
+  album again.
+- a loose track imported as-is with no album tag gets no album: `album_uid` is NULL and the
+  file goes in `<artist>/<title>.<ext>`.
+- there's no "&lt;artist&gt; Singles" album any more. Albums and files made as one before
+  stay as they are, as an album of that title, until the music is imported again.
 
 ## Field mapping
 
@@ -281,11 +291,11 @@ under one album per artist instead:
 |---------------|-----------------------|-------|
 | track title | `TITLE` | |
 | track artist | `ARTIST` | credited name as on the release |
-| album | `ALBUM` | "&lt;artist&gt; Singles" for singles |
+| album | `ALBUM` | removed for a track with no album |
 | album artist | `ALBUMARTIST` | |
-| year | `DATE` | release date; original year for singles |
+| year | `DATE` | release date; original year for a track with no album |
 | original year | `ORIGINALDATE` | release group's first release |
-| track/disc | `TRACKNUMBER`, `DISCNUMBER` | written as `n/total`; not for singles |
+| track/disc | `TRACKNUMBER`, `DISCNUMBER` | written as `n/total`; not for a track with no album |
 | mb ids | `MUSICBRAINZ_TRACKID` (recording), `MUSICBRAINZ_RELEASETRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID` | artist ids only when a single artist is credited |
 
 Writing an empty string through `mc_tags_write()` removes that tag.
@@ -307,12 +317,11 @@ device: pictures embedded in audio files are never shown, only copied out on imp
    both close (combined distance below 0.25). The 100 px artwork URL is rewritten to
    1200 px.
 
-Only JPEG and PNG up to 16 MB are downloaded. Singles albums get no cover. Art isn't
-embedded in the files yet.
+Only JPEG and PNG up to 16 MB are downloaded. A single gets its release's cover like any
+album; a track with no album gets none. Art isn't embedded in the files yet.
 
 ## Still to decide
 
 How to set sort names for multi-artist credits, which genre source to use (MusicBrainz
 tags/genres), whether the path format should be configurable, whether to embed cover art,
-whether the singles album should get a generated cover, and how to detect duplicates beyond
-"same release track, same place".
+and how to detect duplicates beyond "same release track, same place".

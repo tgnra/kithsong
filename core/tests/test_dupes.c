@@ -515,28 +515,28 @@ static void test_exact_file(void) {
   mc_library *lib = make_library("exact", MBID_ALBUM, "mp3", 128, 0, 0);
   CHECK(lib != NULL);
   if (!lib) return;
-  /* The same bytes as the library's track 2, coming in as a loose single without ids. */
+  /* The same bytes as the library's track 2, coming in as a loose track without ids. */
   char src[1300], *lib_copy = mc_library_abspath(lib, "Low/Things (2001)/02 Whore.mp3");
   snprintf(src, sizeof src, "%s%cloose-whore.mp3", g_scratch, MC_PATH_SEP);
   mc_remove(src);
   CHECK(lib_copy && mc_copy_file(lib_copy, src, 0) == MC_OK);
   free(lib_copy);
-  mc_db_album singles = {0};
-  singles.singles = 1;
-  singles.artist = (mc_db_artist){"Someone Else", NULL, NULL};
+  mc_db_album loose = {0};
+  loose.no_album = 1;
+  loose.artist = (mc_db_artist){"Someone Else", NULL, NULL};
   mc_db_track row = {0};
   row.title = "Not the Same Title";
   row.format = "mp3";
   mc_dupe_in in = {&row, src, file_size(src), {"mp3", 128, 44100, 0}};
   mc_dupe_plan p;
-  CHECK(mc_dupes_plan(lib, &singles, &in, 1, &p) == MC_OK);
+  CHECK(mc_dupes_plan(lib, &loose, &in, 1, &p) == MC_OK);
   CHECK(p.d[0].action == MC_DUPE_SKIP && p.skips == 1);
   mc_dupe_plan_free(&p);
 
   /* One byte different: imported. */
   write_file(src, "library copy of Whore at 128 kbpz");
   in.size = file_size(src);
-  CHECK(mc_dupes_plan(lib, &singles, &in, 1, &p) == MC_OK);
+  CHECK(mc_dupes_plan(lib, &loose, &in, 1, &p) == MC_OK);
   CHECK(p.d[0].action == MC_DUPE_IMPORT && p.skips == 0);
   mc_dupe_plan_free(&p);
   mc_library_close(lib);
@@ -676,46 +676,55 @@ static void test_source_hash(void) {
   if (abs) write_file(abs, "the copy, tagged since");
   free(abs);
 
-  /* The same source again, as a single of someone else: already in the library. */
-  mc_db_album singles = {0};
-  singles.singles = 1;
-  singles.artist = (mc_db_artist){"Someone Else", NULL, NULL};
-  CHECK(mc_dupes_plan(lib, &singles, x.in, 1, &p) == MC_OK);
+  /* The same source again, as someone else's track with no album: already in the library. */
+  mc_db_album loose = {0};
+  loose.no_album = 1;
+  loose.artist = (mc_db_artist){"Someone Else", NULL, NULL};
+  CHECK(mc_dupes_plan(lib, &loose, x.in, 1, &p) == MC_OK);
   CHECK(p.d[0].action == MC_DUPE_SKIP && p.skips == 1 && !p.d[0].source_sha256[0]);
   mc_dupe_plan_free(&p);
 
   /* A row with a recorded sha256 only, of another size, is found by it too. */
   CHECK(sqlite3_exec(mc_library_db(lib), "UPDATE files SET sha256 = source_sha256,"
                      " source_sha256 = NULL, size_bytes = 1", NULL, NULL, NULL) == SQLITE_OK);
-  CHECK(mc_dupes_plan(lib, &singles, x.in, 1, &p) == MC_OK);
+  CHECK(mc_dupes_plan(lib, &loose, x.in, 1, &p) == MC_OK);
   CHECK(p.d[0].action == MC_DUPE_SKIP);
   mc_dupe_plan_free(&p);
   mc_library_close(lib);
 }
 
-/* A single already in the artist's singles album. */
-static void test_single(void) {
+/* A track with no album already among the artist's tracks with no album. Each is judged on
+ * its own: the artist's other loose tracks don't count. */
+static void test_no_album(void) {
   char dir[1200];
-  snprintf(dir, sizeof dir, "%s%csingle", g_scratch, MC_PATH_SEP);
+  snprintf(dir, sizeof dir, "%s%cnoalbum", g_scratch, MC_PATH_SEP);
   mc_library *lib = NULL;
   CHECK(mc_library_open(dir, &lib) == MC_OK);
   if (!lib) return;
-  mc_db_album singles = {0};
-  singles.singles = 1;
-  singles.artist = (mc_db_artist){"Low", NULL, MBID_ARTIST};
+  mc_db_album loose = {0};
+  loose.no_album = 1;
+  loose.artist = (mc_db_artist){"Low", NULL, MBID_ARTIST};
   mc_db_track t = {0};
-  t.path = "Low/Low Singles/Canada.mp3";
+  t.path = "Low/Canada.mp3";
   t.format = "mp3";
   t.bitrate_kbps = 128;
   t.title = "Canada";
   t.mb_trackid = "d0000000-0000-4000-8000-000000000201";
-  char *abs = mc_library_abspath(lib, "Low/Low Singles");
+  mc_db_track other = t;
+  other.path = "Low/Monkey.mp3";
+  other.title = "Monkey";
+  other.mb_trackid = "d0000000-0000-4000-8000-000000000203";
+  char *abs = mc_library_abspath(lib, "Low");
   mc_mkdirs(abs);
   free(abs);
   abs = mc_library_abspath(lib, t.path);
   write_file(abs, "canada, 128");
   free(abs);
-  CHECK(mc_import_db_write(lib, &singles, &t, 1) == MC_OK);
+  abs = mc_library_abspath(lib, other.path);
+  write_file(abs, "monkey, 128");
+  free(abs);
+  CHECK(mc_import_db_write(lib, &loose, &t, 1) == MC_OK);
+  CHECK(mc_import_db_write(lib, &loose, &other, 1) == MC_OK);
 
   char src[1300];
   snprintf(src, sizeof src, "%s%ccanada.flac", g_scratch, MC_PATH_SEP);
@@ -725,24 +734,31 @@ static void test_single(void) {
   row.format = "flac";
   mc_dupe_in in = {&row, src, file_size(src), {"flac", 900, 44100, 16}};
   mc_dupe_plan p;
-  CHECK(mc_dupes_plan(lib, &singles, &in, 1, &p) == MC_OK);
+  CHECK(mc_dupes_plan(lib, &loose, &in, 1, &p) == MC_OK);
   CHECK(p.d[0].action == MC_DUPE_SWAP && p.swaps == 1);
   CHECK(!p.whole && p.d[0].has_tags);
-  CHECK_STR(p.d[0].tags.album, "Low Singles");
+  CHECK_STR(p.d[0].tags.album, ""); /* none, and so removed */
   CHECK_STR(p.d[0].tags.title, "Canada");
   CHECK_STR(p.d[0].tags.mb_albumid, "");
   CHECK(p.d[0].tags.track == 0);
+  CHECK(p.album_uid[0] == '\0' && !p.album_dir);
   mc_dupe_plan_free(&p);
 
   in.quality = (mc_audio_quality){"mp3", 96, 44100, 0};
-  CHECK(mc_dupes_plan(lib, &singles, &in, 1, &p) == MC_OK);
+  CHECK(mc_dupes_plan(lib, &loose, &in, 1, &p) == MC_OK);
   CHECK(p.d[0].action == MC_DUPE_SKIP);
   mc_dupe_plan_free(&p);
 
-  /* Another recording by the artist is new. */
+  /* Another recording by the artist is new, and so is one by someone else. */
   row.mb_trackid = "d0000000-0000-4000-8000-000000000202";
-  row.title = "Monkey";
-  CHECK(mc_dupes_plan(lib, &singles, &in, 1, &p) == MC_OK);
+  row.title = "Over the Ocean";
+  CHECK(mc_dupes_plan(lib, &loose, &in, 1, &p) == MC_OK);
+  CHECK(p.d[0].action == MC_DUPE_IMPORT);
+  mc_dupe_plan_free(&p);
+  row.mb_trackid = t.mb_trackid;
+  row.title = "Canada";
+  row.artist = (mc_db_artist){"Someone Else", NULL, NULL};
+  CHECK(mc_dupes_plan(lib, &loose, &in, 1, &p) == MC_OK);
   CHECK(p.d[0].action == MC_DUPE_IMPORT);
   mc_dupe_plan_free(&p);
   mc_library_close(lib);
@@ -885,7 +901,7 @@ int main(int argc, char **argv) {
   test_swap_retag();
   test_swap_whole_release();
   test_source_hash();
-  test_single();
+  test_no_album();
 #ifndef _WIN32
   test_posix_trash();
   test_topdir_trash();

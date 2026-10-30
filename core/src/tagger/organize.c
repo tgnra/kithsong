@@ -52,8 +52,12 @@ char *mc_path_component(const char *s, const char *fallback) {
   return out;
 }
 
+char *mc_artist_dir(const char *artist) {
+  return mc_path_component(artist, "Unknown Artist");
+}
+
 char *mc_album_dir(const char *album_artist, const char *album, int year) {
-  char *artist = mc_path_component(album_artist, "Unknown Artist");
+  char *artist = mc_artist_dir(album_artist);
   char *name;
   if (year > 0 && album) {
     size_t len = strlen(album) + 16;

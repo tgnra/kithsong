@@ -246,17 +246,17 @@ static void old_tracks_free(old_track *t, int n) {
   free(t);
 }
 
-/* An album of the copy (or a lone track with no album, as a single of its artist). */
+/* An album of the copy (or a lone track with no album, which keeps none). */
 typedef struct old_album {
   char uid[MC_UID_STRLEN]; /* "" for a lone track */
-  char *title, *kind, *mb_albumid, *mb_releasegroupid, *art_hash;
+  int no_album;            /* a lone track */
+  char *title, *mb_albumid, *mb_releasegroupid, *art_hash;
   char *artist, *artist_sort, *artist_mbid;
   int year, original_year, disc_total;
 } old_album;
 
 static void old_album_clear(old_album *a) {
   free(a->title);
-  free(a->kind);
   free(a->mb_albumid);
   free(a->mb_releasegroupid);
   free(a->art_hash);
@@ -362,7 +362,7 @@ static void merge_album(merge_ctx *x, const old_album *a, old_track *t, int n) {
     }
     mc_db_album al;
     memset(&al, 0, sizeof al);
-    al.singles = a->kind && !strcmp(a->kind, "singles");
+    al.no_album = a->no_album;
     al.title = a->title;
     al.artist = (mc_db_artist){a->artist, a->artist_sort, a->artist_mbid};
     al.year = a->year;
@@ -492,7 +492,7 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
   emit(fn, user, MC_MERGE_PHASE_TRACKS, 0, total);
   sqlite3_stmt *albums, *tracks;
   if (sqlite3_prepare_v2(x->old,
-                         "SELECT a.uid, a.title, a.kind, a.year, a.original_year, a.disc_total,"
+                         "SELECT a.uid, a.title, a.year, a.original_year, a.disc_total,"
                          " a.mb_albumid, a.mb_releasegroupid, a.art_hash, ar.name, ar.sort_name,"
                          " ar.mb_artistid FROM albums a LEFT JOIN artists ar ON ar.uid = a.artist_uid"
                          " ORDER BY a.uid",
@@ -512,16 +512,15 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
     memset(&a, 0, sizeof a);
     col_uid(albums, 0, a.uid);
     a.title = col_dup(albums, 1);
-    a.kind = col_dup(albums, 2);
-    a.year = sqlite3_column_int(albums, 3);
-    a.original_year = sqlite3_column_int(albums, 4);
-    a.disc_total = sqlite3_column_int(albums, 5);
-    a.mb_albumid = col_dup(albums, 6);
-    a.mb_releasegroupid = col_dup(albums, 7);
-    a.art_hash = col_dup(albums, 8);
-    a.artist = col_dup(albums, 9);
-    a.artist_sort = col_dup(albums, 10);
-    a.artist_mbid = col_dup(albums, 11);
+    a.year = sqlite3_column_int(albums, 2);
+    a.original_year = sqlite3_column_int(albums, 3);
+    a.disc_total = sqlite3_column_int(albums, 4);
+    a.mb_albumid = col_dup(albums, 5);
+    a.mb_releasegroupid = col_dup(albums, 6);
+    a.art_hash = col_dup(albums, 7);
+    a.artist = col_dup(albums, 8);
+    a.artist_sort = col_dup(albums, 9);
+    a.artist_mbid = col_dup(albums, 10);
     sqlite3_reset(tracks);
     sqlite3_bind_text(tracks, 1, a.uid, -1, SQLITE_STATIC);
     old_track *t = NULL;
@@ -536,7 +535,8 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
   sqlite3_finalize(albums);
   if (st != MC_OK) return st;
 
-  /* Tracks with no album: each a single of its artist, as an import of a lone file. */
+  /* Tracks with no album: each stays one, as an import of a lone file with no album tag. An
+   * old "<artist> Singles" album is just an album above. */
   if (sqlite3_prepare_v2(x->old,
                          OLD_TRACK_SQL " WHERE t.album_uid IS NULL"
                                        " OR t.album_uid NOT IN (SELECT uid FROM albums)"
@@ -550,7 +550,7 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
   for (int i = 0; st == MC_OK && i < n; i++) {
     old_album a;
     memset(&a, 0, sizeof a);
-    a.kind = mc_strdup("singles");
+    a.no_album = 1;
     a.artist = t[i].artist ? mc_strdup(t[i].artist) : NULL;
     a.artist_sort = t[i].artist_sort ? mc_strdup(t[i].artist_sort) : NULL;
     a.artist_mbid = t[i].artist_mbid ? mc_strdup(t[i].artist_mbid) : NULL;

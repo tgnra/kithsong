@@ -13,7 +13,8 @@ extern const unsigned char mc_schema_v1_sql[];
 static const char *const k_migrations[] = {
   (const char *)mc_schema_v1_sql,
   /* v2: singles. Tracks that aren't part of an album live in one "<artist> Singles" album
-   * per artist (kind = 'singles'), so each track keeps its own year and release id. */
+   * per artist (kind = 'singles'), so each track keeps its own year and release id. Undone
+   * by v12, but for the columns. */
   "ALTER TABLE albums ADD COLUMN kind TEXT NOT NULL DEFAULT 'album';"
   "ALTER TABLE tracks ADD COLUMN year INTEGER;"
   "ALTER TABLE tracks ADD COLUMN mb_albumid TEXT;"
@@ -68,9 +69,10 @@ static const char *const k_migrations[] = {
   "CREATE INDEX recents_opened ON recents (opened_ms);",
   /* v8: duplicate merging (sync/merge.c). The same artist, album or track imported on two
    * devices is one: aliases maps each merged-away uid to the smallest uid of its class, and
-   * merge_keys holds the MusicBrainz ids (and singles albums' artists) ever logged for each
-   * uid, which decide the classes. Both are derived from the changelog on every device, so
-   * they are never logged; meta.merge_seq is how far the changelog has been read. */
+   * merge_keys holds the MusicBrainz ids (and, until v12, singles albums' artists) ever
+   * logged for each uid, which decide the classes. Both are derived from the changelog on
+   * every device, so they are never logged; meta.merge_seq is how far the changelog has been
+   * read. */
   "CREATE TABLE aliases ("
   "  uid       TEXT PRIMARY KEY,"
   "  entity    TEXT NOT NULL,"
@@ -120,6 +122,14 @@ static const char *const k_migrations[] = {
    * this, and for files already in the library folder when they were imported. Not logged:
    * files are per device; sync sends it with an original (sync-protocol.md, "Files"). */
   "ALTER TABLE files ADD COLUMN source_sha256 TEXT;",
+  /* v12: no singles albums. A lone track is filed under the release it's from, like any
+   * album track, or under no album at all; albums of one track are singles by count (see
+   * ALBUM_IS_SINGLE), not by kind. Nothing is moved or rewritten: albums made as singles
+   * albums before stay, as ordinary albums titled "<artist> Singles". albums.kind stays too
+   * but is no longer read or logged, so its triggers and index go. */
+  "DROP INDEX IF EXISTS albums_singles;"
+  "DROP TRIGGER IF EXISTS mc_log_ins_albums_kind;"
+  "DROP TRIGGER IF EXISTS mc_log_upd_albums_kind;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -127,7 +137,7 @@ static const char *const k_migrations[] = {
 static const char *const k_artist_cols[] = {"name", "sort_name", "mb_artistid", NULL};
 static const char *const k_album_cols[] = {"title", "artist_uid", "year", "original_year",
                                            "disc_total", "mb_albumid", "mb_releasegroupid",
-                                           "art_hash", "kind", NULL};
+                                           "art_hash", NULL};
 static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "track_no",
                                            "disc_no", "duration_ms", "genre", "mb_trackid",
                                            "mb_releasetrackid", "year", "mb_albumid", "added_ms",
@@ -573,7 +583,8 @@ mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_l
 mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
-  static const char sql[] = ALBUM_COLS " FROM albums a" ALBUM_JOINS " ORDER BY " ALBUM_ORDER;
+  static const char sql[] =
+    ALBUM_COLS " FROM albums a" ALBUM_JOINS " WHERE NOT " ALBUM_IS_SINGLE " ORDER BY " ALBUM_ORDER;
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
   return mc_library_read_albums(lib, stmt, out);
@@ -619,7 +630,9 @@ mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_l
       if (sep) *sep = '\0';
     }
     copy_uid(t->artist_uid, stmt, 9);
-    if (sqlite3_column_count(stmt) > 10) copy_uid(t->entry_uid, stmt, 10);
+    t->year = sqlite3_column_int(stmt, 10);
+    copy_uid(t->album_uid, stmt, 11);
+    if (sqlite3_column_count(stmt) > 12) copy_uid(t->entry_uid, stmt, 12);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -757,11 +770,14 @@ static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list *
 }
 
 mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
-  /* Artists nothing refers to any more are left out, as the albums and tracks views do. */
+  /* Artists nothing refers to any more are left out, as the albums and tracks views do. An
+   * album artist of only singles is listed, with no albums, for its singles. */
   static const char sql[] =
-    "SELECT ar.uid, ar.name, (SELECT count(*) FROM albums a WHERE a.artist_uid = ar.uid) AS n_albums"
+    "SELECT ar.uid, ar.name,"
+    " (SELECT count(*) FROM albums a WHERE a.artist_uid = ar.uid AND NOT " ALBUM_IS_SINGLE ")"
     " FROM artists ar"
-    " WHERE n_albums > 0 OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)" ARTIST_ORDER;
+    " WHERE EXISTS (SELECT 1 FROM albums a WHERE a.artist_uid = ar.uid)"
+    "  OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)" ARTIST_ORDER;
   return list_artists(lib, sql, out);
 }
 
@@ -769,8 +785,9 @@ mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
   /* Counted once for every artist rather than per artist: a track is its own artist's, else
    * its album's, which no index finds. */
   static const char sql[] =
-    "SELECT ar.uid, ar.name, coalesce(na.n, 0), coalesce(nt.n, 0) FROM artists ar"
-    " LEFT JOIN (SELECT a.artist_uid AS uid, count(*) AS n FROM albums a"
+    "SELECT ar.uid, ar.name, coalesce(na.albums, 0), coalesce(nt.n, 0) FROM artists ar"
+    " LEFT JOIN (SELECT a.artist_uid AS uid, count(*) AS n,"
+    "   count(CASE WHEN NOT " ALBUM_IS_SINGLE " THEN 1 END) AS albums FROM albums a"
     "  WHERE EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid)"
     "  GROUP BY a.artist_uid) na ON na.uid = ar.uid"
     " LEFT JOIN (SELECT coalesce(t.artist_uid, al.artist_uid) AS uid, count(*) AS n FROM tracks t"
@@ -792,7 +809,8 @@ mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid,
   if (!lib || !artist_uid || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   /* c counts the tracks of just the albums the artist is on (by the two artist indexes). An
-   * album artist's album with no tracks has no c row, and counts as all theirs. */
+   * album artist's album with no tracks has no c row, and counts as all theirs. Singles, one
+   * track, are mc_library_list_artist_singles()'s. */
   static const char sql[] =
     ALBUM_COLS ", coalesce(c.n, 0), coalesce(c.credited, 0) FROM albums a" ALBUM_JOINS
     " LEFT JOIN (SELECT t.album_uid, count(*) AS n,"
@@ -801,8 +819,8 @@ mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid,
     "  WHERE t.album_uid IN (SELECT album_uid FROM tracks WHERE artist_uid = ?1"
     "   UNION SELECT uid FROM albums WHERE artist_uid = ?1)"
     "  GROUP BY t.album_uid) c ON c.album_uid = a.uid"
-    " WHERE c.credited > 0 OR a.artist_uid = ?1"
-    " ORDER BY max(a.artist_uid IS ?1, coalesce(c.credited * 1.0 / c.n, 0)) DESC, a.kind = 'singles', a.year,"
+    " WHERE (c.credited > 0 OR a.artist_uid = ?1) AND coalesce(c.n, 0) <> 1"
+    " ORDER BY max(a.artist_uid IS ?1, coalesce(c.credited * 1.0 / c.n, 0)) DESC, a.year,"
     "  a.title COLLATE NOCASE, a.uid";
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
@@ -821,6 +839,18 @@ mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid,
     "  UNION ALL SELECT t2.uid FROM albums a2 JOIN tracks t2 ON t2.album_uid = a2.uid"
     "  WHERE a2.artist_uid = ?1 AND t2.artist_uid IS NULL)"
     " ORDER BY t.title COLLATE NOCASE, al.title COLLATE NOCASE, coalesce(t.disc_no, 0), t.track_no, t.uid";
+  return list_tracks(lib, sql, artist_uid, out);
+}
+
+mc_status mc_library_list_artist_singles(mc_library *lib, const char *artist_uid, mc_track_list **out) {
+  /* Their own tracks and their albums' tracks, each by its index, that are alone on their
+   * album or have none. */
+  static const char sql[] =
+    TRACK_COLS " FROM tracks t" TRACK_JOINS
+    " WHERE t.uid IN (SELECT uid FROM tracks WHERE artist_uid = ?1"
+    "  UNION SELECT t2.uid FROM albums a2 JOIN tracks t2 ON t2.album_uid = a2.uid WHERE a2.artist_uid = ?1)"
+    " AND (t.album_uid IS NULL OR (SELECT count(*) FROM tracks st WHERE st.album_uid = t.album_uid) = 1)"
+    " ORDER BY coalesce(t.year, al.year), t.title COLLATE NOCASE, t.uid";
   return list_tracks(lib, sql, artist_uid, out);
 }
 

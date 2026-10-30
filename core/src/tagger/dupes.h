@@ -66,7 +66,7 @@ typedef struct mc_dupe_plan {
   int count;
   int swaps, skips;
   /* A better copy of the whole release: the album was found by MusicBrainz release or
-   * release group id (not by name; never a singles album), every one of its tracks is
+   * release group id (not by name; never tracks with no album), every one of its tracks is
    * paired, and every file of it here is swapped (none is only on another device). The
    * import's match then wins: the album and track rows take its metadata (their uids stay)
    * and the new files keep their own tags and names. Otherwise each swapped or attached

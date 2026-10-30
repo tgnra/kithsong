@@ -78,8 +78,13 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * The joined item is never imported straight away: it waits in MC_IMPORT_REVIEW, with error
  * saying it was joined, however high its confidence. Otherwise they're matched one by one.
  *
- * Singles: loose tracks, and releases MusicBrainz classes as singles, go into one album
- * per artist called "<artist> Singles" (albums.kind = 'singles').
+ * Singles: a loose track matched to a recording is filed as its track on the release it's
+ * credited to (an official single before an album or EP, compilations last, then the
+ * earliest), looked up in full when it's written: that release's album, album artist, ids,
+ * track and disc numbers and date, under Artist/Album (Year)/ like any album track. A loose
+ * track with no album tag imported as-is, or a recording on no release, gets no album and
+ * goes in Artist/. An album with one track in the library is a single: the album listings
+ * leave it out, and mc_library_list_artist_singles() lists it (library.h).
  *
  * Offline: before matching, and whenever a lookup fails with a network error, the session
  * checks whether MusicBrainz is reachable (mc_musicbrainz_reachable). While it isn't, items
@@ -109,8 +114,9 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  *
  *   - The same release already in the library: an album with the same MusicBrainz release
  *     id, else the same release group id, else the same album artist and title (ignoring
- *     case) with at least half of the incoming tracks in its track list. A single: the
- *     artist's singles album holding the same recording (or, without ids, the same title).
+ *     case) with at least half of the incoming tracks in its track list. A track with no
+ *     album: the artist's tracks with no album, holding the same recording (or, without
+ *     ids, the same title).
  *     Incoming tracks are paired with the album's tracks by release track id, recording id,
  *     disc and track number with the same title, then title alone.
  *   - Quality of one file, best first:
@@ -233,9 +239,9 @@ typedef struct mc_import_match_track {
 } mc_import_match_track;
 
 typedef struct mc_import_match {
-  char *album;        /* release title; for a single, the album it lands in */
-  char *album_artist;
-  char *release;      /* the MusicBrainz release title, e.g. the single's own title */
+  char *album;        /* release title, the album it lands in (for a single too) */
+  char *album_artist; /* for a single, its first credited artist (see is_single) */
+  char *release;      /* the MusicBrainz release title; the same as album */
   char *country;
   char *label;
   char *catalog;
@@ -243,7 +249,10 @@ typedef struct mc_import_match {
   char *release_type; /* "Album", "Single", "EP", ... */
   char *mb_albumid;
   int year;
-  int is_single;      /* lands in "<artist> Singles" */
+  /* A recording found on its own, credited to the release album: tracks holds just it.
+   * The release is looked up in full only when it's written, which may give it another
+   * album artist and its place in the tracklist. */
+  int is_single;
   double confidence;  /* 0..1 */
   int extra_files;    /* files left over after matching */
   mc_import_match_track *tracks;

@@ -1,5 +1,5 @@
-/* Library rows written for accepted import items: albums, singles, re-imports, and two
- * connections writing to one library. */
+/* Library rows written for accepted import items: albums, singles, tracks with no album,
+ * re-imports, and two connections writing to one library. */
 #include <stdio.h>
 #include <string.h>
 
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
   mc_db_track tracks[] = {track("/music/low/01.flac", "Sunflower", 1),
                           track("/music/low/02.flac", "Whore", 2)};
   CHECK(mc_import_db_write(lib, &album, tracks, 2) == MC_OK);
-  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE kind = 'album'") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums") == 1);
   CHECK(query_int(lib, "SELECT count(*) FROM tracks") == 2);
   CHECK(query_int(lib, "SELECT count(*) FROM files") == 2);
   CHECK(query_int(lib, "SELECT count(*) FROM artists") == 1); /* tracks fall back to album artist */
@@ -85,43 +85,54 @@ int main(int argc, char **argv) {
   CHECK(mc_import_db_is_track_at(lib, "/music/low/02.flac", "a1b2c3d4-0000-4000-8000-0000000000c2"));
   CHECK(!mc_import_db_is_track_at(lib, "/music/low/02.flac", "a1b2c3d4-0000-4000-8000-0000000000c3"));
 
-  /* Two singles by the same artist share one "<artist> Singles" album, matched to the
-   * existing artist by MusicBrainz id even though the name differs in case. */
-  mc_db_album singles = {0};
-  singles.singles = 1;
-  singles.artist = (mc_db_artist){"LOW", NULL, "a1b2c3d4-0000-4000-8000-000000000001"};
+  /* Tracks with no album get none: no album row, matched to the existing artist by
+   * MusicBrainz id even though the name differs in case. */
+  mc_db_album loose = {0};
+  loose.no_album = 1;
+  loose.title = "Ignored";
+  loose.artist = (mc_db_artist){"LOW", NULL, "a1b2c3d4-0000-4000-8000-000000000001"};
   mc_db_track s1 = track("/music/loose/just-like-christmas.mp3", "Just Like Christmas", 0);
   s1.year = 1999;
-  s1.mb_albumid = "a1b2c3d4-0000-4000-8000-0000000000bb";
   mc_db_track s2 = track("/music/loose/canada.mp3", "Canada", 0);
   s2.year = 2002;
-  CHECK(mc_import_db_write(lib, &singles, &s1, 1) == MC_OK);
-  CHECK(mc_import_db_write(lib, &singles, &s2, 1) == MC_OK);
-  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE kind = 'singles'") == 1);
-  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE kind = 'singles' AND title = 'LOW Singles'") == 1);
+  CHECK(mc_import_db_write(lib, &loose, &s1, 1) == MC_OK);
+  CHECK(mc_import_db_write(lib, &loose, &s2, 1) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums") == 1);
   CHECK(query_int(lib, "SELECT count(*) FROM artists") == 1);
-  CHECK(query_int(lib, "SELECT count(*) FROM tracks t JOIN albums a ON a.uid = t.album_uid"
-                       " WHERE a.kind = 'singles'") == 2);
-  /* Each single keeps its own year and release. */
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE album_uid IS NULL AND artist_uid IS NOT NULL") == 2);
   CHECK(query_int(lib, "SELECT year FROM tracks WHERE title = 'Canada'") == 2002);
-  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE title = 'Just Like Christmas'"
-                       " AND mb_albumid = 'a1b2c3d4-0000-4000-8000-0000000000bb'") == 1);
 
-  /* A featured artist gets their own row; the single still files under the main artist. */
+  /* A single from a release is an album like any other, of one track. Nothing is ever a
+   * 'singles' album. */
+  mc_db_album single = {0};
+  single.title = "Just Like Christmas";
+  single.artist = album.artist;
+  single.year = 1999;
+  single.mb_albumid = "a1b2c3d4-0000-4000-8000-0000000000bb";
+  mc_db_track c1 = track("/music/low/Just Like Christmas (1999)/01 Just Like Christmas.mp3",
+                         "Just Like Christmas", 1);
+  c1.mb_albumid = single.mb_albumid;
+  CHECK(mc_import_db_write(lib, &single, &c1, 1) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE mb_albumid = 'a1b2c3d4-0000-4000-8000-0000000000bb'"
+                       " AND year = 1999") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE kind <> 'album'") == 0);
+
+  /* A featured artist gets their own row; with no album, the track is theirs. */
   mc_db_track feat = track("/music/loose/feat.mp3", "Collab", 0);
   feat.artist = (mc_db_artist){"Low feat. Someone", NULL, NULL};
-  CHECK(mc_import_db_write(lib, &singles, &feat, 1) == MC_OK);
-  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE kind = 'singles'") == 1);
+  CHECK(mc_import_db_write(lib, &loose, &feat, 1) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums") == 2);
   CHECK(query_int(lib, "SELECT count(*) FROM artists") == 2);
 
-  /* Re-importing an album's files as singles moves the tracks, and the album is deleted
-   * once it's empty. */
-  CHECK(mc_import_db_write(lib, &singles, &tracks[0], 1) == MC_OK);
-  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE kind = 'album'") == 1);
-  CHECK(mc_import_db_write(lib, &singles, &tracks[1], 1) == MC_OK);
-  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE kind = 'album'") == 0);
-  CHECK(query_int(lib, "SELECT count(*) FROM tracks") == 5);
-  CHECK(query_int(lib, "SELECT count(*) FROM files") == 5);
+  /* Re-importing an album's files with no album moves the tracks out of it, and the album is
+   * deleted once it's empty. */
+  CHECK(mc_import_db_write(lib, &loose, &tracks[0], 1) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE title = 'Things We Lost in the Fire'") == 1);
+  CHECK(mc_import_db_write(lib, &loose, &tracks[1], 1) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE title = 'Things We Lost in the Fire'") == 0);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks") == 6);
+  CHECK(query_int(lib, "SELECT count(*) FROM files") == 6);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE album_uid IS NULL") == 5);
 
   /* A second connection (as the import thread uses) interleaving writes with the first
    * must not reuse or go back on change-log timestamps. */
@@ -140,19 +151,32 @@ int main(int argc, char **argv) {
   CHECK(query_int(lib, "SELECT count(*) FROM changelog c1 WHERE EXISTS (SELECT 1 FROM changelog c2"
                        " WHERE c2.seq > c1.seq AND c2.hlc <= c1.hlc)") == 0);
 
-  /* The album list for the grid: every album, by artist, albums before singles. */
+  /* The album list for the grid: by artist, but no singles (albums of one track). X has two
+   * tracks now; Just Like Christmas is a single, listed with Low's tracks with no album. */
   mc_album_list *albums = NULL;
   CHECK(mc_library_list_albums(lib, &albums) == MC_OK);
   if (albums) {
-    CHECK(albums->count == query_int(lib, "SELECT count(*) FROM albums"));
-    CHECK(albums->count >= 2);
-    CHECK_STR(albums->items[0].artist, "Low");
-    CHECK(albums->items[0].is_singles);
-    CHECK_STR(albums->items[0].title, "LOW Singles");
-    CHECK(albums->items[0].folder != NULL && !albums->items[0].has_art);
-    CHECK_STR(albums->items[albums->count - 1].artist, "Someone Else");
+    CHECK(albums->count == 1);
+    if (albums->count == 1) {
+      CHECK_STR(albums->items[0].title, "X");
+      CHECK_STR(albums->items[0].artist, "Someone Else");
+      CHECK(albums->items[0].folder != NULL && !albums->items[0].has_art && !albums->items[0].is_singles);
+    }
     mc_album_list_free(albums);
   }
+  char low[MC_UID_STRLEN] = "";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib), "SELECT uid FROM artists WHERE name = 'Low'", -1, &stmt, NULL) ==
+      SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) snprintf(low, sizeof low, "%s", (const char *)sqlite3_column_text(stmt, 0));
+    sqlite3_finalize(stmt);
+  }
+  mc_track_list *singles = NULL;
+  CHECK(mc_library_list_artist_singles(lib, low, &singles) == MC_OK && singles && singles->count == 5);
+  int with_album = 0;
+  for (int i = 0; singles && i < singles->count; i++) with_album += singles->items[i].album != NULL;
+  CHECK(with_album == 1);
+  mc_track_list_free(singles);
 
   mc_library_close(lib);
   return TEST_RESULT();
