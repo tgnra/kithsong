@@ -866,11 +866,11 @@ static GtkWidget *build_page(void) {
   gtk_box_append(GTK_BOX(v.page), v.albums_heading);
   v.albums_scroller = build_tile_row(mc_str(MC_STR_SECTION_ALBUMS), G_CALLBACK(on_album_activated), &v.albums);
   gtk_box_append(GTK_BOX(v.page), v.albums_scroller);
-  v.singles_heading = heading(mc_str(MC_STR_ARTIST_SINGLES));
+  v.singles_heading = heading(mc_str(MC_STR_SECTION_SINGLES));
   gtk_box_append(GTK_BOX(v.page), v.singles_heading);
   v.singles = g_list_store_new(ARTIST_TYPE_TRACK);
   v.singles_scroller =
-    build_tile_row(mc_str(MC_STR_ARTIST_SINGLES), G_CALLBACK(on_single_activated), &v.singles_box);
+    build_tile_row(mc_str(MC_STR_SECTION_SINGLES), G_CALLBACK(on_single_activated), &v.singles_box);
   gtk_box_append(GTK_BOX(v.page), v.singles_scroller);
   gtk_box_append(GTK_BOX(v.page), heading(mc_str(MC_STR_TRACKS_TITLE)));
   gtk_box_append(GTK_BOX(v.page), build_tracks());

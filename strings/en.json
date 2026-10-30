@@ -33,7 +33,6 @@
     "section_albums": "Albums",
     "section_singles": { "text": "Singles", "note": "Heading of an artist's singles on their page: their tracks that are the only track of their album in the library, or on no album." },
     "section_artists": "Artists",
-    "artist_singles": { "text": "Singles", "note": "Heading of an artist's singles on their page: their tracks that are the only track of their album in the library, or on no album." },
     "section_playlists": "Playlists",
     "section_recents": { "text": "Recents", "note": "Heading of the albums, playlists and artists last played, on any device: in the sidebar, or on the phone's main screen." },
     "recent_remove_menu": { "text": "_Remove from Recents", "note": "On a recent's menu (right-click in the sidebar, long press on the phone): takes it out of Recents, on every device, until it's next played." },
