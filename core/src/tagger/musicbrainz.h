@@ -5,12 +5,28 @@
 
 #include "musiccore/musiccore.h"
 
+/* One entry of a MusicBrainz artist-credit array. */
+typedef struct mb_credit_part {
+  char *name; /* as credited on this release ("name"), not the artist's own name */
+  char *id;
+  char *sort_name;
+  char *join; /* "joinphrase"; NULL if empty */
+} mb_credit_part;
+
+typedef struct mb_credit {
+  mb_credit_part *parts;
+  int count;
+} mb_credit;
+
+void mb_credit_clear(mb_credit *c);
+
 typedef struct mb_track {
   char *id; /* release track id */
   char *recording_id;
   char *title;
   char *artist;    /* as credited, e.g. "Jay-Z feat. Rihanna" */
   char *artist_id; /* only when a single artist is credited */
+  mb_credit credit; /* every credited artist, in order */
   int disc;
   int number;
   int length_ms;
@@ -31,6 +47,7 @@ typedef struct mb_release {
                          * release can't be looked up */
   char *primary_artist_id;
   char *primary_artist_sort;
+  mb_credit credit; /* every credited artist, in order */
   char *releasegroup_id;
   char *release_type; /* release group primary type: "Album", "Single", "EP", ... */
   char *country;

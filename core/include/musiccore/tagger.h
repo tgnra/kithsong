@@ -21,6 +21,15 @@ typedef struct mc_tags {
   char *mb_artistid;
   char *mb_albumartistid;
   char *mb_releasegroupid;
+  /* Multi-valued tags, values separated by '\n' (Picard's convention): ARTISTS and
+   * ALBUMARTISTS, one name per credited artist, and every MUSICBRAINZ_ARTISTID /
+   * MUSICBRAINZ_ALBUMARTISTID value. On read mb_artistid and mb_albumartistid stay the first
+   * value. On write a non-NULL list replaces that tag's values (an empty string removes it),
+   * and mb_artistids / mb_albumartistids win over mb_artistid / mb_albumartistid. */
+  char *artists;
+  char *album_artists;
+  char *mb_artistids;
+  char *mb_albumartistids;
   /* Read-only, ignored by mc_tags_write(); clues for the importer's extended search. */
   char *label;   /* LABEL, else ORGANIZATION or PUBLISHER */
   char *catalog; /* CATALOGNUMBER, else CATALOGID, CATALOG or LABELNO */

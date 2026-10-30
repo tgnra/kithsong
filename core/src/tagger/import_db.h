@@ -13,12 +13,23 @@ typedef struct mc_db_artist {
   const char *mb_artistid;
 } mc_db_artist;
 
+/* One artist of a credit, with the join phrase that follows it (" feat. ", " & ", or NULL
+ * after the last). See docs/tagging-rules.md, "Artist credits". */
+typedef struct mc_db_credit_part {
+  mc_db_artist artist;
+  const char *join;
+} mc_db_credit_part;
+
 typedef struct mc_db_album {
   /* Tracks with no album: no album row is written, and title, years, ids, art and
    * existing_uid are ignored. The artist is still the tracks' fallback. */
   int no_album;
   const char *title;
-  mc_db_artist artist;
+  mc_db_artist artist; /* the whole credit as credited ("A feat. B"); its id only if one artist */
+  /* The credit's artists in order: album_artists rows, and albums.artist_uid is the first.
+   * With credit_count 0 the credit is artist alone, one part. */
+  const mc_db_credit_part *credit;
+  int credit_count;
   int year;
   int original_year;
   int disc_total;
@@ -41,7 +52,9 @@ typedef struct mc_db_track {
   int64_t mtime_ms;
   int bitrate_kbps;
   const char *title;
-  mc_db_artist artist;
+  mc_db_artist artist; /* the whole credit, as for the album; name NULL: the album's */
+  const mc_db_credit_part *credit; /* track_artists rows; as for the album */
+  int credit_count;
   int track_no;
   int disc_no;
   int duration_ms;
