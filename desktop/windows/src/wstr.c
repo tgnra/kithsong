@@ -1,5 +1,6 @@
 #include "wstr.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
@@ -19,13 +20,17 @@ void wstr_init(void) {
   mc_strings_set_locale(utf8);
 }
 
-/* s as a malloc'd UTF-16 string; NULL if out of memory. NULL gives "". */
-static wchar_t *widen(const char *s) {
-  if (!s) s = "";
+wchar_t *wstr_dup_from_utf8(const char *s) {
+  if (!s) return NULL;
   int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
   wchar_t *w = n > 0 ? malloc((size_t)n * sizeof *w) : NULL;
   if (w) MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
   return w;
+}
+
+/* As wstr_dup_from_utf8(), with "" for NULL. */
+static wchar_t *widen(const char *s) {
+  return wstr_dup_from_utf8(s ? s : "");
 }
 
 /* Copies w into buf, cut short at n - 1 characters without splitting a surrogate pair. */
@@ -93,6 +98,18 @@ char *wstr_to_utf8(const wchar_t *w) {
   char *s = n > 0 ? malloc((size_t)n) : NULL;
   if (s) WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL);
   return s;
+}
+
+wchar_t *wstr_size(wchar_t *buf, size_t n, int64_t bytes) {
+  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_SIZE_KB, MC_STR_SIZE_MB, MC_STR_SIZE_GB,
+                                         MC_STR_SIZE_TB};
+  double v = (double)bytes;
+  int u = 0;
+  while (v >= 1024.0 && u < 4) v /= 1024.0, u++;
+  if (u == 0) return mc_wformat(buf, n, mc_str_plural(MC_STR_SIZE_BYTES, (long)bytes), MC_D(bytes));
+  char num[32];
+  snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
+  return mc_wformat(buf, n, mc_str(units[u]), MC_S(num));
 }
 
 wchar_t *mc_wformat_args(wchar_t *buf, size_t n, const char *fmt, const mc_arg *args, int nargs) {

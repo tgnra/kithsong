@@ -8,10 +8,6 @@
 
 #include "jni_bridge.h"
 
-static mc_library *lib_of(jlong handle) {
-  return (mc_library *)(intptr_t)handle;
-}
-
 /* The albums of an artist (kind 0), an album group (1) or a smart album group (2). */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListAlbums(JNIEnv *env, jclass cls,
                                                                               jlong handle, jint kind,
@@ -29,7 +25,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListAlbums(J
   const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
   if (!cuid) return NULL;
   mc_album_list *list = NULL;
-  mc_status st = lists[kind](lib_of(handle), cuid, &list);
+  mc_status st = lists[kind](jni_lib_of(handle), cuid, &list);
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   return album_array(env, st, list);
 }
@@ -41,7 +37,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeArtistTracks
   const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
   if (!cuid) return NULL;
   mc_track_list *list = NULL;
-  mc_status st = mc_library_list_artist_tracks(lib_of(handle), cuid, &list);
+  mc_status st = mc_library_list_artist_tracks(jni_lib_of(handle), cuid, &list);
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   return track_array(env, st, list);
 }
@@ -53,7 +49,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativePreviewSmart
   const char *crule = (*env)->GetStringUTFChars(env, rule, NULL);
   if (!crule) return NULL;
   mc_track_list *list = NULL;
-  mc_status st = mc_smart_preview_tracks(lib_of(handle), crule, &list);
+  mc_status st = mc_smart_preview_tracks(jni_lib_of(handle), crule, &list);
   (*env)->ReleaseStringUTFChars(env, rule, crule);
   return track_array(env, st, list);
 }
@@ -70,7 +66,7 @@ static jstring art_of(JNIEnv *env, jlong handle, jstring uid, jstring cache_dir,
     return NULL;
   }
   char *path = NULL;
-  mc_status st = art(lib_of(handle), cuid, cdir, &path);
+  mc_status st = art(jni_lib_of(handle), cuid, cdir, &path);
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   (*env)->ReleaseStringUTFChars(env, cache_dir, cdir);
   if (st != MC_OK) {
@@ -102,7 +98,7 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeReshuffle(JNIEnv *en
   (void)cls;
   const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
   if (!cuid) return;
-  mc_status st = mc_smart_reshuffle(lib_of(handle), cuid);
+  mc_status st = mc_smart_reshuffle(jni_lib_of(handle), cuid);
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   if (st != MC_OK) throw_status(env, st);
 }
@@ -113,7 +109,7 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeRecordOpened(JNIEnv 
   (void)cls;
   const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
   if (!cuid) return;
-  mc_status st = mc_library_record_opened(lib_of(handle), (mc_recent_kind)kind, cuid);
+  mc_status st = mc_library_record_opened(jni_lib_of(handle), (mc_recent_kind)kind, cuid);
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   if (st != MC_OK) throw_status(env, st);
 }
@@ -123,14 +119,14 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeRemoveRecent(JNIEnv 
   (void)cls;
   const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
   if (!cuid) return;
-  mc_status st = mc_library_remove_recent(lib_of(handle), cuid);
+  mc_status st = mc_library_remove_recent(jni_lib_of(handle), cuid);
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   if (st != MC_OK && st != MC_ERR_NOT_FOUND) throw_status(env, st); /* gone already: sync took it */
 }
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeClearRecents(JNIEnv *env, jclass cls, jlong handle) {
   (void)cls;
-  mc_status st = mc_library_clear_recents(lib_of(handle));
+  mc_status st = mc_library_clear_recents(jni_lib_of(handle));
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -146,7 +142,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListRecents(
   if (!ctor) return NULL;
 
   mc_recent_list *list = NULL;
-  mc_status st = mc_library_list_recents(lib_of(handle), (int)limit, (unsigned)flags, &list);
+  mc_status st = mc_library_list_recents(jni_lib_of(handle), (int)limit, (unsigned)flags, &list);
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;
@@ -188,7 +184,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeSearch(JNIEn
   const char *cquery = (*env)->GetStringUTFChars(env, query, NULL);
   if (!cquery) return NULL;
   mc_search_results *res = NULL;
-  mc_status st = mc_library_search(lib_of(handle), cquery, (int)limit, &res);
+  mc_status st = mc_library_search(jni_lib_of(handle), cquery, (int)limit, &res);
   (*env)->ReleaseStringUTFChars(env, query, cquery);
   if (st != MC_OK) {
     throw_status(env, st);
@@ -223,6 +219,6 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeSearch(JNIEn
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeSearchPrepare(JNIEnv *env, jclass cls, jlong handle) {
   (void)cls;
-  mc_status st = mc_library_search_prepare(lib_of(handle));
+  mc_status st = mc_library_search_prepare(jni_lib_of(handle));
   if (st != MC_OK) throw_status(env, st);
 }

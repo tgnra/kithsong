@@ -197,13 +197,6 @@ static char *utf8_from_wide(const wchar_t *w) {
   return s;
 }
 
-static wchar_t *wide_from_utf8(const char *s) {
-  int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
-  wchar_t *w = n > 0 ? malloc((size_t)n * sizeof *w) : NULL;
-  if (w) MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
-  return w;
-}
-
 /* The resize border, which a maximised window also hangs off the screen by. */
 static int frame_thickness(void) {
   return GetSystemMetricsForDpi(SM_CYFRAME, g_app.dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, g_app.dpi);
@@ -405,8 +398,8 @@ static void refresh_recents(void) {
   for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
     const mc_recent_info *r = &list->items[i];
     BOOL album = r->kind == MC_RECENT_ALBUM;
-    names[n] = wide_from_utf8(r->name ? r->name : "");
-    artists[n] = album ? wide_from_utf8(r->artist ? r->artist : mc_str(MC_STR_UNKNOWN_ARTIST)) : NULL;
+    names[n] = wstr_dup_from_utf8(r->name ? r->name : "");
+    artists[n] = album ? wstr_dup_from_utf8(r->artist ? r->artist : mc_str(MC_STR_UNKNOWN_ARTIST)) : NULL;
     const wchar_t *kind = mc_wstr(r->kind == MC_RECENT_ARTIST     ? MC_STR_ARTIST
                                   : r->kind == MC_RECENT_PLAYLIST ? (r->is_smart ? MC_STR_SMART_PLAYLIST : MC_STR_PLAYLIST)
                                   : r->is_smart                   ? MC_STR_SMART_ALBUM_GROUP
@@ -768,10 +761,10 @@ static void play_group(void) {
         cap = grown;
       }
       wchar_t **mine = text + 4 * n;
-      mine[0] = wide_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
-      mine[1] = t->artist ? wide_from_utf8(t->artist) : NULL;
-      mine[2] = t->album ? wide_from_utf8(t->album) : NULL;
-      mine[3] = t->cover_dir ? wide_from_utf8(t->cover_dir) : NULL;
+      mine[0] = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
+      mine[1] = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
+      mine[2] = t->album ? wstr_dup_from_utf8(t->album) : NULL;
+      mine[3] = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
       queue[n++] = (playback_track){t->uid, t->path, mine[0], mine[1], mine[2], mine[3], t->duration_ms};
     }
   }
@@ -854,7 +847,7 @@ static void on_track_request(int code) {
 
 /* "address:port", with an IPv6 address in brackets. */
 static void format_address(wchar_t *out, size_t cap, const char *host, unsigned port) {
-  wchar_t *w = wide_from_utf8(host);
+  wchar_t *w = wstr_dup_from_utf8(host);
   BOOL v6 = strchr(host, ':') != NULL;
   swprintf(out, cap, v6 ? L"[%ls]:%u" : L"%ls:%u", w ? w : L"", port);
   free(w);
@@ -960,7 +953,7 @@ static void refresh_devices(void) {
         if (d->removed || in_pass != pass) continue;
         sidebar_device *s = &devs[npaired];
         snprintf(s->uid, sizeof s->uid, "%s", d->uid);
-        s->name = names[npaired] = wide_from_utf8(d->name ? d->name : "");
+        s->name = names[npaired] = wstr_dup_from_utf8(d->name ? d->name : "");
         s->kind = (int)d->kind;
         s->flags = (d->is_self ? SB_DEV_SELF : 0) | (d->online || d->is_self ? SB_DEV_ONLINE : 0) |
                    (d->archive ? SB_DEV_ARCHIVE : 0) | (syncing_slot(d->uid) >= 0 ? SB_DEV_SYNCING : 0);
@@ -970,7 +963,7 @@ static void refresh_devices(void) {
       const mc_sync_nearby *d = &nearby->items[i];
       sidebar_device *s = &devs[npaired + nnearby];
       snprintf(s->uid, sizeof s->uid, "%s", d->uid);
-      s->name = names[npaired + nnearby] = wide_from_utf8(d->name ? d->name : "");
+      s->name = names[npaired + nnearby] = wstr_dup_from_utf8(d->name ? d->name : "");
       s->kind = (int)d->kind;
       s->flags = SB_DEV_ONLINE | (d->in_other_group ? SB_DEV_OTHER_GROUP : 0);
       nnearby++;
@@ -1170,7 +1163,7 @@ static void pair_nearby_uid(const char *clicked) {
   if (mc_sync_list_nearby(sync, &nearby) == MC_OK) {
     for (int i = 0; i < nearby->count; i++)
       if (!strcmp(nearby->items[i].uid, uid)) {
-        name = wide_from_utf8(nearby->items[i].name ? nearby->items[i].name : "");
+        name = wstr_dup_from_utf8(nearby->items[i].name ? nearby->items[i].name : "");
         break;
       }
     mc_sync_nearby_list_free(nearby);
@@ -1229,7 +1222,7 @@ static void pair_menu(void) {
   int n = nearby ? nearby->count : 0;
   for (int i = 0; i < n; i++) {
     const mc_sync_nearby *d = &nearby->items[i];
-    wchar_t *name = wide_from_utf8(d->name && *d->name ? d->name : mc_str(MC_STR_DEVICE_UNNAMED));
+    wchar_t *name = wstr_dup_from_utf8(d->name && *d->name ? d->name : mc_str(MC_STR_DEVICE_UNNAMED));
     AppendMenuW(menu, MF_STRING, CMD_DEVICE_FIRST + i, name ? name : L"");
     free(name);
   }

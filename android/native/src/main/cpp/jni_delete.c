@@ -7,21 +7,7 @@
 
 #include "musiccore/musiccore.h"
 
-/* Throws MusicCoreException(status). */
-static void throw_status(JNIEnv *env, mc_status st) {
-  jclass cls = (*env)->FindClass(env, "ng/kithso/core/MusicCoreException");
-  if (!cls) return; /* NoClassDefFoundError is already pending */
-  jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "(I)V");
-  jobject ex = ctor ? (*env)->NewObject(env, cls, ctor, (jint)st) : NULL;
-  if (ex) (*env)->Throw(env, (jthrowable)ex);
-}
-
-/* An int[] of count values, or NULL with OutOfMemoryError pending. */
-static jintArray ints(JNIEnv *env, const jint *values, jsize count) {
-  jintArray out = (*env)->NewIntArray(env, count);
-  if (out) (*env)->SetIntArrayRegion(env, out, 0, count, values);
-  return out;
-}
+#include "jni_bridge.h"
 
 /* The plan for deleting uid, of kind (mc_delete_kind), or NULL with an exception pending. */
 static mc_delete_plan *plan_of(JNIEnv *env, jlong handle, jint kind, jstring uid) {
@@ -51,7 +37,7 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_DeleteNatives_nativePreview(JNIE
   if (!plan) return NULL;
   jint values[] = {mc_delete_plan_tracks(plan), mc_delete_plan_files(plan)};
   mc_delete_plan_free(plan);
-  return ints(env, values, 2);
+  return jni_ints(env, values, 2);
 }
 
 /* Deletes uid for good: {tracks deleted, files removed, tracks kept}. */
@@ -69,7 +55,7 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_DeleteNatives_nativeDelete(JNIEn
     return NULL;
   }
   jint values[] = {res.tracks_deleted, res.files_trashed, res.tracks_kept};
-  return ints(env, values, 3);
+  return jni_ints(env, values, 3);
 }
 
 /* Whether deleting uid would delete any of track_uids (a String[]), e.g. the play queue's, so

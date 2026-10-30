@@ -1,7 +1,9 @@
 #include "canvas.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <uxtheme.h>
+#include <wchar.h>
 
 static HTHEME text_theme; /* any theme handle will do for DrawThemeTextEx */
 
@@ -205,4 +207,21 @@ void canvas_blit(canvas *c, HDC dc, int x, int y, const RECT *r) {
 void canvas_theme_changed(void) {
   if (text_theme) CloseThemeData(text_theme);
   text_theme = NULL;
+}
+
+int canvas_text_height(HWND wnd, HFONT font, int w, UINT format) {
+  int len = GetWindowTextLengthW(wnd);
+  wchar_t *text = malloc(((size_t)len + 2) * sizeof *text);
+  if (!text) return 0;
+  GetWindowTextW(wnd, text, len + 1);
+  if (!len) wcscpy(text, L" ");
+  if (!font) font = (HFONT)SendMessageW(wnd, WM_GETFONT, 0, 0);
+  HDC dc = GetDC(wnd);
+  HGDIOBJ old = SelectObject(dc, font);
+  RECT rc = {0, 0, w, 0};
+  DrawTextW(dc, text, -1, &rc, format | DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+  SelectObject(dc, old);
+  ReleaseDC(wnd, dc);
+  free(text);
+  return rc.bottom;
 }

@@ -104,14 +104,6 @@ static int scale(int px) {
   return MulDiv(px, (int)v.dpi, USER_DEFAULT_SCREEN_DPI);
 }
 
-static wchar_t *widen(const char *s) {
-  if (!s) return NULL;
-  int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
-  wchar_t *w = n > 0 ? malloc((size_t)n * sizeof *w) : NULL;
-  if (w) MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
-  return w;
-}
-
 static BOOL is_open(void) {
   return v.open_uid[0] != '\0';
 }
@@ -242,11 +234,11 @@ static void invalidate_hit(int i) {
 static int hit_at(int x, int y) {
   POINT pt = {x, y};
   if (!is_open()) {
-    for (int i = 0; i < v.nartists; i++) {
-      RECT r = row_rect(i);
-      if (PtInRect(&r, pt)) return i;
-    }
-    return HIT_NONE;
+    int rel = y - scale(LIST_TOP) + v.scroll.pos; /* from the first row's top */
+    int i = rel >= 0 ? rel / scale(ROW_H) : -1;
+    if (i < 0 || i >= v.nartists) return HIT_NONE;
+    RECT r = row_rect(i);
+    return PtInRect(&r, pt) ? i : HIT_NONE;
   }
   if (PtInRect(&v.back, pt)) return HIT_BACK;
   if (strip_max() > 0 && PtInRect(&v.left, pt)) return HIT_LEFT;
@@ -403,9 +395,9 @@ static void load_albums(void) {
     const mc_album_info *a = &list->items[i];
     album_tile *t = &tiles[i];
     memcpy(t->uid, a->uid, sizeof t->uid);
-    t->title = widen(a->title && *a->title ? a->title : mc_str(MC_STR_UNTITLED));
-    t->cover_dir = a->has_art ? widen(a->folder) : NULL;
-    wchar_t *artist = a->artist ? widen(a->artist) : NULL;
+    t->title = wstr_dup_from_utf8(a->title && *a->title ? a->title : mc_str(MC_STR_UNTITLED));
+    t->cover_dir = a->has_art ? wstr_dup_from_utf8(a->folder) : NULL;
+    wchar_t *artist = a->artist ? wstr_dup_from_utf8(a->artist) : NULL;
     if (artist && v.open_name && wcscmp(artist, v.open_name)) { /* someone else's */
       t->sub = artist;
       artist = NULL;
@@ -471,7 +463,7 @@ static void reload(void) {
     const mc_artist_info *a = &list->items[i];
     artist_row *r = &v.artists[i];
     memcpy(r->uid, a->uid, sizeof r->uid);
-    r->name = widen(a->name && *a->name ? a->name : mc_str(MC_STR_UNKNOWN_ARTIST));
+    r->name = wstr_dup_from_utf8(a->name && *a->name ? a->name : mc_str(MC_STR_UNKNOWN_ARTIST));
     if (a->album_count > 0) mc_wformat(r->sub, 64, mc_str_plural(MC_STR_COUNT_ALBUMS, a->album_count), MC_D(a->album_count));
   }
   v.nartists = n;
@@ -715,11 +707,10 @@ static void paint(HDC dc, const RECT *dirty) {
   } else if (!v.nartists) {
     paint_empty(c, &client);
   } else {
-    RECT isect;
-    for (int i = 0; i < v.nartists; i++) {
-      RECT r = row_rect(i);
-      if (IntersectRect(&isect, &r, dirty)) paint_row(c, i, i == v.nartists - 1);
-    }
+    /* The rows dirty touches, by arithmetic: a long list isn't walked each paint. */
+    int row_h = scale(ROW_H), base = scale(LIST_TOP) - v.scroll.pos;
+    int first = max(0, (dirty->top - base) / row_h), last = min(v.nartists - 1, (dirty->bottom - 1 - base) / row_h);
+    for (int i = first; i <= last; i++) paint_row(c, i, i == v.nartists - 1);
   }
   SelectObject(c->dc, old_font);
   canvas_opaque(c, dirty);

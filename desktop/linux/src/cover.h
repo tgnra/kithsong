@@ -8,7 +8,9 @@
 
 #include <gtk/gtk.h>
 
-/* dir's cover image, or NULL if it has none. Free with g_free(). */
+/* dir's cover image, or NULL if it has none. Free with g_free(). One found before is taken
+ * on trust while its file is still there, so asking for every album's on each reload costs a
+ * stat each, not a directory listing. */
 char *cover_path(const char *dir);
 
 /* Looks for dir's cover at size x size in the cache. Returns TRUE if it's there, with

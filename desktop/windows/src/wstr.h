@@ -3,6 +3,7 @@
 #define KITHSONG_WSTR_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <windows.h>
 
 #include "musiccore/i18n.h"
@@ -26,6 +27,13 @@ wchar_t *wstr_from_utf8(wchar_t *buf, size_t n, const char *s);
 /* w as a malloc'd UTF-8 string, for passing UI text to mc_format(); NULL for NULL or out of
  * memory. Free with free(). */
 char *wstr_to_utf8(const wchar_t *w);
+
+/* s as a malloc'd UTF-16 string; NULL for NULL or out of memory. Free with free(). */
+wchar_t *wstr_dup_from_utf8(const char *s);
+
+/* "12.5 MB": bytes in the strings' units (KB, MB, GB, TB, of 1024), into buf (n wide
+ * characters including the NUL). Returns buf. */
+wchar_t *wstr_size(wchar_t *buf, size_t n, int64_t bytes);
 
 /* mc_format() into a UTF-16 buffer: fmt (UTF-8, usually mc_str(..) or mc_str_plural(..))
  * with the tagged arguments, converted into buf (n wide characters including the NUL) and

@@ -7,13 +7,6 @@
 #include "jni_bridge.h"
 #include "musiccore/musiccore.h"
 
-/* An int[] of count values, or NULL with OutOfMemoryError pending. */
-static jintArray ints(JNIEnv *env, const jint *values, jsize count) {
-  jintArray out = (*env)->NewIntArray(env, count);
-  if (out) (*env)->SetIntArrayRegion(env, out, 0, count, values);
-  return out;
-}
-
 /* kind (an mc_profile_item_kind) checked: albums and artists only. */
 static int check_kind(JNIEnv *env, jint kind) {
   if (kind == MC_PROFILE_ALBUM || kind == MC_PROFILE_ARTIST) return 1;
@@ -59,7 +52,7 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_SyncHereNatives_nativePreview(JN
   if (!plan) return NULL;
   jint values[] = {mc_here_plan_files(plan), mc_here_plan_kept(plan)};
   mc_here_plan_free(plan);
-  return ints(env, values, 2);
+  return jni_ints(env, values, 2);
 }
 
 /* Removes uid from this phone: {files removed, files kept}. */
@@ -77,7 +70,7 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_SyncHereNatives_nativeRemove(JNI
     return NULL;
   }
   jint values[] = {res.files_removed, res.files_kept};
-  return ints(env, values, 2);
+  return jni_ints(env, values, 2);
 }
 
 /* Syncs uid to this phone again. */

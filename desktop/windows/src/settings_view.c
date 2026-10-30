@@ -7,6 +7,7 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "canvas.h"
 #include "playback.h"
 #include "sync_bridge.h"
 #include "theme.h"
@@ -190,19 +191,6 @@ void settings_view_show(BOOL show) {
   }
 }
 
-/* The height wnd's text needs at width w, wrapped as its static control wraps it. */
-static int text_height(HWND wnd, HFONT font, int w, UINT format) {
-  wchar_t buf[1024];
-  int n = GetWindowTextW(wnd, buf, 1024);
-  HDC dc = GetDC(wnd);
-  HGDIOBJ old = SelectObject(dc, font);
-  RECT rc = {0, 0, w, 0};
-  DrawTextW(dc, n ? buf : L" ", n ? n : 1, &rc, format | DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-  SelectObject(dc, old);
-  ReleaseDC(wnd, dc);
-  return rc.bottom;
-}
-
 static int button_width(HWND wnd, int pad) {
   wchar_t buf[128];
   int n = GetWindowTextW(wnd, buf, 128);
@@ -222,15 +210,15 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   int pad = S(32), text_w = min(w - 2 * pad, S(720));
   int left = x + pad, top = y + S(24);
 
-  int th = text_height(g_set.title, g_set.title_font, text_w, 0);
+  int th = canvas_text_height(g_set.title, g_set.title_font, text_w, 0);
   MoveWindow(g_set.title, left, top, text_w, th, TRUE);
   top += th + S(24);
 
-  int hh = text_height(g_set.heading, g_set.heading_font, text_w, 0);
+  int hh = canvas_text_height(g_set.heading, g_set.heading_font, text_w, 0);
   MoveWindow(g_set.heading, left, top, text_w, hh, TRUE);
   top += hh + S(8);
 
-  int ph = text_height(g_set.path, g_set.font, text_w, DT_SINGLELINE);
+  int ph = canvas_text_height(g_set.path, g_set.font, text_w, DT_SINGLELINE);
   MoveWindow(g_set.path, left, top, text_w, ph, TRUE);
   top += ph + S(12);
 
@@ -239,41 +227,41 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.open, left + move_w + S(8), top, open_w, btn_h, TRUE);
   top += btn_h + S(12);
 
-  int nh = text_height(g_set.note, g_set.font, text_w, 0);
+  int nh = canvas_text_height(g_set.note, g_set.font, text_w, 0);
   MoveWindow(g_set.note, left, top, text_w, nh, TRUE);
   top += nh + S(32);
 
   /* Sync */
-  hh = text_height(g_set.sync_heading, g_set.heading_font, text_w, 0);
+  hh = canvas_text_height(g_set.sync_heading, g_set.heading_font, text_w, 0);
   MoveWindow(g_set.sync_heading, left, top, text_w, hh, TRUE);
   top += hh + S(8);
 
-  int lh = text_height(g_set.name_label, g_set.font, text_w, 0);
+  int lh = canvas_text_height(g_set.name_label, g_set.font, text_w, 0);
   MoveWindow(g_set.name_label, left, top, text_w, lh, TRUE);
   top += lh + S(4);
   MoveWindow(g_set.name, left, top, min(text_w, S(320)), S(28), TRUE);
   top += S(28) + S(12);
 
-  lh = text_height(g_set.addr_label, g_set.font, text_w, 0);
+  lh = canvas_text_height(g_set.addr_label, g_set.font, text_w, 0);
   MoveWindow(g_set.addr_label, left, top, text_w, lh, TRUE);
   top += lh + S(4);
-  int ah = text_height(g_set.addr, g_set.font, text_w, DT_EDITCONTROL);
+  int ah = canvas_text_height(g_set.addr, g_set.font, text_w, DT_EDITCONTROL);
   MoveWindow(g_set.addr, left, top, text_w, ah, TRUE);
   top += ah + S(12);
 
   MoveWindow(g_set.leave, left, top, button_width(g_set.leave, S(16)), btn_h, TRUE);
   top += btn_h + S(12);
 
-  nh = text_height(g_set.sync_note, g_set.font, text_w, 0);
+  nh = canvas_text_height(g_set.sync_note, g_set.font, text_w, 0);
   MoveWindow(g_set.sync_note, left, top, text_w, nh, TRUE);
   top += nh + S(32);
 
   /* Scrobbling */
-  hh = text_height(g_set.lfm_heading, g_set.heading_font, text_w, 0);
+  hh = canvas_text_height(g_set.lfm_heading, g_set.heading_font, text_w, 0);
   MoveWindow(g_set.lfm_heading, left, top, text_w, hh, TRUE);
   top += hh + S(8);
 
-  int sh = text_height(g_set.lfm_status, g_set.font, text_w, 0);
+  int sh = canvas_text_height(g_set.lfm_status, g_set.font, text_w, 0);
   MoveWindow(g_set.lfm_status, left, top, text_w, sh, TRUE);
   top += sh + S(12);
 
@@ -281,13 +269,13 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   top += btn_h + S(12);
 
   int box = GetSystemMetricsForDpi(SM_CXMENUCHECK, dpi);
-  lh = text_height(g_set.lfm_check_label, g_set.font, text_w - box - S(8), 0);
+  lh = canvas_text_height(g_set.lfm_check_label, g_set.font, text_w - box - S(8), 0);
   int row_h = max(box, lh);
   MoveWindow(g_set.lfm_check, left, top + (row_h - box) / 2, box, box, TRUE);
   MoveWindow(g_set.lfm_check_label, left + box + S(8), top + (row_h - lh) / 2, text_w - box - S(8), lh, TRUE);
   top += row_h + S(12);
 
-  nh = text_height(g_set.lfm_note, g_set.font, text_w, 0);
+  nh = canvas_text_height(g_set.lfm_note, g_set.font, text_w, 0);
   MoveWindow(g_set.lfm_note, left, top, text_w, nh, TRUE);
 #undef S
 }

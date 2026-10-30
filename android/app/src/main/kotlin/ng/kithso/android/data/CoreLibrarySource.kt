@@ -107,6 +107,11 @@ class CoreLibrarySource(
     private val art = Dispatchers.IO.limitedParallelism(1)
     private var artLib: CoreLibrary? = null // only touched on [art]
 
+    // Covers found before, by folder, only touched on [core]: every read asks for every
+    // album's, and a stat is far cheaper than listing the folder. A folder without one is
+    // listed again each time, as a cover may yet arrive.
+    private val knownCovers = HashMap<String, File>()
+
     init {
         refresh()
         scope.launch(art) { pruneArt() }
@@ -669,7 +674,12 @@ class CoreLibrarySource(
 
         private fun ref(uid: String, label: String, file: File?) = artRef(uid, label, file)
 
-        private fun coverIn(dir: String): File? = NativeCore.coverFile(dir)?.let(::File)
+        private fun coverIn(dir: String): File? {
+            knownCovers[dir]?.takeIf { it.isFile }?.let { return it }
+            val found = NativeCore.coverFile(dir)?.let(::File)
+            if (found != null) knownCovers[dir] = found else knownCovers.remove(dir)
+            return found
+        }
     }
 
     private companion object {

@@ -132,6 +132,7 @@ static struct {
   RECT action_rc;                /* the empty page's button, as last painted; empty if none */
   tile *tiles;
   int count;
+  BOOL any_here; /* a tile has a file here: a group's play buttons are greyed out otherwise */
   UINT gen; /* bumped on every reload, so late thumbnails for old tiles are dropped */
   HFONT font, glyph_font, header_font, icon_font;
 
@@ -194,14 +195,6 @@ static int scale(int px) {
   return MulDiv(px, (int)GetDpiForWindow(g.wnd), USER_DEFAULT_SCREEN_DPI);
 }
 
-static wchar_t *widen(const char *s) {
-  if (!s) return NULL;
-  int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
-  wchar_t *w = n > 0 ? malloc((size_t)n * sizeof *w) : NULL;
-  if (w) MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
-  return w;
-}
-
 /* --- Cover loading (loader thread) --- */
 
 /* The loader's own connection to the library, for playlists' and groups' pictures: making
@@ -231,7 +224,7 @@ static wchar_t *playlist_art(art_source *src, const char *lib_dir, const char *a
   else if (u) st = mc_playlist_art(src->lib, u, art_dir, &path);
   if (st == MC_ERR_NOT_FOUND && u) mc_smart_art(src->lib, u, art_dir, &path); /* uids never clash */
   free(u);
-  wchar_t *file = widen(path);
+  wchar_t *file = wstr_dup_from_utf8(path);
   mc_free(path);
   return file;
 }
@@ -531,10 +524,10 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
     const mc_album_info *a = &list->items[i];
     tile *t = &(*tiles)[i];
     memcpy(t->uid, a->uid, sizeof t->uid);
-    t->title = widen(a->title && *a->title ? a->title : mc_str(MC_STR_UNTITLED));
-    t->artist = a->artist && *a->artist ? widen(a->artist) : NULL;
+    t->title = wstr_dup_from_utf8(a->title && *a->title ? a->title : mc_str(MC_STR_UNTITLED));
+    t->artist = a->artist && *a->artist ? wstr_dup_from_utf8(a->artist) : NULL;
     t->year = a->year;
-    t->cover_dir = (*dirs)[i] = a->has_art ? widen(a->folder) : NULL;
+    t->cover_dir = (*dirs)[i] = a->has_art ? wstr_dup_from_utf8(a->folder) : NULL;
     t->here = a->folder != NULL;
   }
   mc_album_list_free(list);
@@ -560,11 +553,11 @@ static void add_smart(mc_smart_subject subject, tile **tiles, wchar_t ***dirs, i
     tile *t = &(*tiles)[*n];
     memset(t, 0, sizeof *t);
     memcpy(t->uid, s->uid, sizeof t->uid);
-    t->title = widen(s->name && *s->name ? s->name : mc_str(MC_STR_UNTITLED));
+    t->title = wstr_dup_from_utf8(s->name && *s->name ? s->name : mc_str(MC_STR_UNTITLED));
     swprintf(t->sub, sizeof t->sub / sizeof t->sub[0], L"%ls", sub);
     t->smart = TRUE;
     t->random = s->random;
-    (*dirs)[(*n)++] = widen(s->uid);
+    (*dirs)[(*n)++] = wstr_dup_from_utf8(s->uid);
   }
   mc_smart_list_free(list);
 }
@@ -585,8 +578,8 @@ static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
     const mc_playlist_info *p = &list->items[i];
     tile *t = &(*tiles)[*n];
     memcpy(t->uid, p->uid, sizeof t->uid);
-    (*dirs)[(*n)++] = widen(p->uid);
-    t->title = widen(p->name && *p->name ? p->name : mc_str(MC_STR_UNTITLED));
+    (*dirs)[(*n)++] = wstr_dup_from_utf8(p->uid);
+    t->title = wstr_dup_from_utf8(p->name && *p->name ? p->name : mc_str(MC_STR_UNTITLED));
     mc_wformat(t->sub, sizeof t->sub / sizeof t->sub[0], mc_str_plural(MC_STR_TRACKS, p->track_count),
                MC_D(p->track_count));
   }
@@ -603,11 +596,11 @@ static void find_smart_group(void) {
   for (int i = 0; i < list->count; i++) {
     const mc_smart_info *s = &list->items[i];
     if (s->subject != MC_SMART_ALBUMS || strcmp(s->uid, g.group_uid)) continue;
-    g.group_name = widen(s->name && *s->name ? s->name : mc_str(MC_STR_UNTITLED));
+    g.group_name = wstr_dup_from_utf8(s->name && *s->name ? s->name : mc_str(MC_STR_UNTITLED));
     g.group_smart = TRUE;
     g.group_random = s->random;
     char *sentence = NULL;
-    if (mc_smart_describe(g.lib, MC_SMART_ALBUMS, s->rule, &sentence) == MC_OK) g.group_rule = widen(sentence);
+    if (mc_smart_describe(g.lib, MC_SMART_ALBUMS, s->rule, &sentence) == MC_OK) g.group_rule = wstr_dup_from_utf8(sentence);
     mc_free(sentence);
   }
   mc_smart_list_free(list);
@@ -630,7 +623,7 @@ static void read_groups(tile **tiles, wchar_t ***dirs, int *n) {
     g.group_smart = g.group_random = FALSE;
     for (int i = 0; list && i < list->count; i++)
       if (!strcmp(list->items[i].uid, g.group_uid))
-        g.group_name = widen(list->items[i].name && *list->items[i].name ? list->items[i].name : mc_str(MC_STR_UNTITLED));
+        g.group_name = wstr_dup_from_utf8(list->items[i].name && *list->items[i].name ? list->items[i].name : mc_str(MC_STR_UNTITLED));
     mc_album_group_list_free(list);
     if (!g.group_name) find_smart_group();
     return;
@@ -643,8 +636,8 @@ static void read_groups(tile **tiles, wchar_t ***dirs, int *n) {
     const mc_album_group_info *a = &list->items[i];
     tile *t = &(*tiles)[i];
     memcpy(t->uid, a->uid, sizeof t->uid);
-    (*dirs)[i] = widen(a->uid);
-    t->title = widen(a->name && *a->name ? a->name : mc_str(MC_STR_UNTITLED));
+    (*dirs)[i] = wstr_dup_from_utf8(a->uid);
+    t->title = wstr_dup_from_utf8(a->name && *a->name ? a->name : mc_str(MC_STR_UNTITLED));
     mc_wformat(t->sub, sizeof t->sub / sizeof t->sub[0], mc_str_plural(MC_STR_COUNT_ALBUMS, a->album_count),
                MC_D(a->album_count));
   }
@@ -737,6 +730,8 @@ static void reload(void) {
   LeaveCriticalSection(&g.lock);
   g.tiles = tiles;
   g.count = n;
+  g.any_here = FALSE;
+  for (int i = 0; i < n; i++) g.any_here |= tiles[i].here;
   g.selected = selected;
   g.hot = g.drop_tile = -1;
   if (selected < 0 && g.selected_uid[0]) { /* the selected album went */
@@ -909,11 +904,9 @@ static BOOL has_play(void) {
 }
 
 /* Whether any of the group's albums has a file here: its play buttons are greyed out
- * otherwise. */
+ * otherwise. Asked on every mouse move, so the reload works it out. */
 static BOOL group_playable(void) {
-  for (int i = 0; has_play() && i < g.count; i++)
-    if (g.tiles[i].here) return TRUE;
-  return FALSE;
+  return has_play() && g.any_here;
 }
 
 /* The header's buttons there are now, left to right, then the play buttons under them

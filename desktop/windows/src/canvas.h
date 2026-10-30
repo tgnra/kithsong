@@ -42,6 +42,10 @@ void canvas_text(canvas *c, const wchar_t *s, int n, const RECT *r, UINT format,
                  COLORREF color);
 /* Sets alpha to 255 in r, after GDI drew opaque things there. */
 void canvas_opaque(canvas *c, const RECT *r);
+/* The height wnd's text needs at width w, wrapped as DrawText wraps it, in font (the window's
+ * own for NULL) with format's DT_ flags added; one line for no text. For laying out static
+ * controls. */
+int canvas_text_height(HWND wnd, HFONT font, int w, UINT format);
 /* Copies r of the canvas to dc at (x, y), alpha included. */
 void canvas_blit(canvas *c, HDC dc, int x, int y, const RECT *r);
 

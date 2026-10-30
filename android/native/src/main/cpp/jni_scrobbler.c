@@ -6,14 +6,7 @@
 
 #include "musiccore/musiccore.h"
 
-static mc_status throw_status(JNIEnv *env, mc_status st) {
-  jclass cls = (*env)->FindClass(env, "ng/kithso/core/MusicCoreException");
-  if (!cls) return st; /* NoClassDefFoundError is already pending */
-  jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "(I)V");
-  jobject ex = ctor ? (*env)->NewObject(env, cls, ctor, (jint)st) : NULL;
-  if (ex) (*env)->Throw(env, (jthrowable)ex);
-  return st;
-}
+#include "jni_bridge.h"
 
 static mc_scrobbler *scrobbler_of(jlong handle) {
   return (mc_scrobbler *)(intptr_t)handle;

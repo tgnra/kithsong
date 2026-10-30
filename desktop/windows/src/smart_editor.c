@@ -185,14 +185,6 @@ static int dy(int n) {
   return MulDiv(n, ed.base_y, 8);
 }
 
-static wchar_t *widen(const char *u) {
-  if (!u) return NULL;
-  int n = MultiByteToWideChar(CP_UTF8, 0, u, -1, NULL, 0);
-  wchar_t *w = n > 0 ? malloc((size_t)n * sizeof *w) : NULL;
-  if (w) MultiByteToWideChar(CP_UTF8, 0, u, -1, w, n);
-  return w;
-}
-
 /* A window's text, without surrounding spaces, as UTF-8 (malloc'd; NULL if out of memory). */
 static char *text_of(HWND w) {
   wchar_t buf[MAX_VALUE + 1];
@@ -393,7 +385,7 @@ static void combo_add(HWND box, const wchar_t *text, LPARAM data) {
 }
 
 static void combo_add_utf8(HWND box, const char *text, LPARAM data) {
-  wchar_t *w = widen(text ? text : "");
+  wchar_t *w = wstr_dup_from_utf8(text ? text : "");
   if (w) combo_add(box, w, data);
   free(w);
 }
@@ -443,7 +435,7 @@ static void fill_choice(cond *c) {
     for (int i = 0; i < FORMAT_COUNT; i++) combo_add(c->choice, k_formats[i].label, i);
   }
   if (c->extra && type_is(c, "format")) {
-    wchar_t *w = widen(c->extra);
+    wchar_t *w = wstr_dup_from_utf8(c->extra);
     for (wchar_t *p = w; p && *p; p++) *p = towupper(*p);
     if (w) combo_add(c->choice, w, -2);
     free(w);
@@ -740,7 +732,7 @@ static cond *load_cond(yyjson_val *leaf, BOOL negated) {
   fill_ops(c);
   wchar_t buf[64];
   if (!strcmp(type, "text") && yyjson_is_str(value)) {
-    wchar_t *w = widen(yyjson_get_str(value));
+    wchar_t *w = wstr_dup_from_utf8(yyjson_get_str(value));
     SetWindowTextW(c->value, w ? w : L"");
     free(w);
   } else if (!strcmp(type, "int") || !strcmp(type, "duration")) {
@@ -1343,7 +1335,7 @@ static void rule_changed(void) {
   }
   char *sentence = NULL;
   wchar_t *w = NULL;
-  if (ed.rule && mc_smart_describe(ed.lib, ed.subject, ed.rule, &sentence) == MC_OK) w = widen(sentence);
+  if (ed.rule && mc_smart_describe(ed.lib, ed.subject, ed.rule, &sentence) == MC_OK) w = wstr_dup_from_utf8(sentence);
   mc_free(sentence);
   SetWindowTextW(ed.summary, w ? w : L"");
   free(w);
@@ -1789,7 +1781,7 @@ static void show_read_only(const char *rule) {
       *o++ = body[i];
     }
     *o = '\0';
-    wchar_t *w = widen(text);
+    wchar_t *w = wstr_dup_from_utf8(text);
     SetWindowTextW(ed.read_only_text, w ? w : L"");
     free(w);
   }
@@ -2146,7 +2138,7 @@ static BOOL find_smart(mc_library *lib, const char *uid, wchar_t **name, mc_smar
       const mc_smart_info *s = &list->items[i];
       if (strcmp(s->uid, uid)) continue;
       found = TRUE;
-      if (name) *name = widen(s->name ? s->name : "");
+      if (name) *name = wstr_dup_from_utf8(s->name ? s->name : "");
       if (subject) *subject = s->subject;
       if (rule) *rule = _strdup(s->rule ? s->rule : "");
     }
@@ -2183,7 +2175,7 @@ wchar_t *smart_describe(mc_library *lib, const char *uid) {
   wchar_t *w = NULL;
   if (find_smart(lib, uid, NULL, &subject, &rule) && rule &&
       mc_smart_describe(lib, subject, rule, &sentence) == MC_OK)
-    w = widen(sentence);
+    w = wstr_dup_from_utf8(sentence);
   mc_free(sentence);
   free(rule);
   return w;

@@ -13,27 +13,14 @@ static mc_settings *settings_of(jlong handle) {
   return (mc_settings *)(intptr_t)handle;
 }
 
-/* s's UTF-8, or NULL for a null s; *ok is cleared if it couldn't be had (OutOfMemoryError is
- * pending then). Release with release(). */
-static const char *chars(JNIEnv *env, jstring s, int *ok) {
-  if (!s) return NULL;
-  const char *c = (*env)->GetStringUTFChars(env, s, NULL);
-  if (!c) *ok = 0;
-  return c;
-}
-
-static void release(JNIEnv *env, jstring s, const char *c) {
-  if (c) (*env)->ReleaseStringUTFChars(env, s, c);
-}
-
 JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSettings_nativeLoad(JNIEnv *env, jclass cls, jstring dir) {
   (void)cls;
   int ok = 1;
-  const char *cdir = chars(env, dir, &ok);
+  const char *cdir = jni_chars(env, dir, &ok);
   if (!ok) return 0;
   mc_settings *s = NULL;
   mc_status st = mc_settings_load(cdir ? cdir : "", &s);
-  release(env, dir, cdir);
+  jni_release(env, dir, cdir);
   if (st != MC_OK) {
     throw_status(env, st);
     return 0;
@@ -63,10 +50,10 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSettings_nativeSetDeviceName(JNIE
                                                                            jlong handle, jstring name) {
   (void)cls;
   int ok = 1;
-  const char *cname = chars(env, name, &ok);
+  const char *cname = jni_chars(env, name, &ok);
   if (!ok) return;
   mc_status st = mc_settings_set_device_name(settings_of(handle), cname);
-  release(env, name, cname);
+  jni_release(env, name, cname);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -74,10 +61,10 @@ JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreSettings_nativeBool(JNIEnv *e
                                                                       jstring key, jboolean def) {
   (void)cls;
   int ok = 1;
-  const char *ckey = chars(env, key, &ok);
+  const char *ckey = jni_chars(env, key, &ok);
   if (!ok) return def;
   int value = mc_settings_bool(settings_of(handle), ckey ? ckey : "", def ? 1 : 0);
-  release(env, key, ckey);
+  jni_release(env, key, ckey);
   return value ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -85,10 +72,10 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSettings_nativeSetBool(JNIEnv *en
                                                                      jstring key, jboolean value) {
   (void)cls;
   int ok = 1;
-  const char *ckey = chars(env, key, &ok);
+  const char *ckey = jni_chars(env, key, &ok);
   if (!ok) return;
   mc_status st = mc_settings_set_bool(settings_of(handle), ckey ? ckey : "", value ? 1 : 0);
-  release(env, key, ckey);
+  jni_release(env, key, ckey);
   if (st != MC_OK) throw_status(env, st);
 }
 

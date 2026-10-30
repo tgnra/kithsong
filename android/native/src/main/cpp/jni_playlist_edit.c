@@ -7,42 +7,18 @@
 
 #include "musiccore/musiccore.h"
 
-/* Throws MusicCoreException(status). */
-static void throw_status(JNIEnv *env, mc_status st) {
-  jclass cls = (*env)->FindClass(env, "ng/kithso/core/MusicCoreException");
-  if (!cls) return; /* NoClassDefFoundError is already pending */
-  jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "(I)V");
-  jobject ex = ctor ? (*env)->NewObject(env, cls, ctor, (jint)st) : NULL;
-  if (ex) (*env)->Throw(env, (jthrowable)ex);
-}
-
-static mc_library *lib_of(jlong handle) {
-  return (mc_library *)(intptr_t)handle;
-}
-
-/* s's UTF-8, or NULL for a null s; *ok is cleared if it couldn't be had (OutOfMemoryError is
- * pending then). Release with release(). */
-static const char *chars(JNIEnv *env, jstring s, int *ok) {
-  if (!s) return NULL;
-  const char *c = (*env)->GetStringUTFChars(env, s, NULL);
-  if (!c) *ok = 0;
-  return c;
-}
-
-static void release(JNIEnv *env, jstring s, const char *c) {
-  if (c) (*env)->ReleaseStringUTFChars(env, s, c);
-}
+#include "jni_bridge.h"
 
 /* A new playlist called name; returns its uid. */
 JNIEXPORT jstring JNICALL Java_ng_kithso_core_PlaylistNatives_nativeCreate(JNIEnv *env, jclass cls,
                                                                          jlong handle, jstring name) {
   (void)cls;
   int ok = 1;
-  const char *cname = chars(env, name, &ok);
+  const char *cname = jni_chars(env, name, &ok);
   if (!ok) return NULL;
   char uid[MC_UID_STRLEN];
-  mc_status st = mc_playlist_create(lib_of(handle), cname ? cname : "", uid);
-  release(env, name, cname);
+  mc_status st = mc_playlist_create(jni_lib_of(handle), cname ? cname : "", uid);
+  jni_release(env, name, cname);
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;
@@ -55,11 +31,11 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_PlaylistNatives_nativeRename(JNIEnv *
                                                                       jstring name) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
-  const char *cname = chars(env, name, &ok);
-  mc_status st = ok ? mc_playlist_rename(lib_of(handle), cuid ? cuid : "", cname ? cname : "") : MC_OK;
-  release(env, uid, cuid);
-  release(env, name, cname);
+  const char *cuid = jni_chars(env, uid, &ok);
+  const char *cname = jni_chars(env, name, &ok);
+  mc_status st = ok ? mc_playlist_rename(jni_lib_of(handle), cuid ? cuid : "", cname ? cname : "") : MC_OK;
+  jni_release(env, uid, cuid);
+  jni_release(env, name, cname);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -67,10 +43,10 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_PlaylistNatives_nativeDelete(JNIEnv *
                                                                       jlong handle, jstring uid) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
+  const char *cuid = jni_chars(env, uid, &ok);
   if (!ok) return;
-  mc_status st = mc_playlist_delete(lib_of(handle), cuid ? cuid : "");
-  release(env, uid, cuid);
+  mc_status st = mc_playlist_delete(jni_lib_of(handle), cuid ? cuid : "");
+  jni_release(env, uid, cuid);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -80,20 +56,20 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_PlaylistNatives_nativeAppend(JNIEnv *
                                                                       jobjectArray track_uids) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
+  const char *cuid = jni_chars(env, uid, &ok);
   if (!ok) return;
-  mc_library *lib = lib_of(handle);
+  mc_library *lib = jni_lib_of(handle);
   mc_status st = MC_OK;
   jsize count = (*env)->GetArrayLength(env, track_uids);
   for (jsize i = 0; st == MC_OK && i < count; i++) {
     jstring track = (*env)->GetObjectArrayElement(env, track_uids, i);
-    const char *ctrack = chars(env, track, &ok);
+    const char *ctrack = jni_chars(env, track, &ok);
     if (!ok) st = MC_ERR_NOMEM;
     else st = mc_playlist_append(lib, cuid ? cuid : "", ctrack ? ctrack : "", NULL);
-    release(env, track, ctrack);
+    jni_release(env, track, ctrack);
     if (track) (*env)->DeleteLocalRef(env, track);
   }
-  release(env, uid, cuid);
+  jni_release(env, uid, cuid);
   if (st != MC_OK && !(*env)->ExceptionCheck(env)) throw_status(env, st);
 }
 
@@ -103,11 +79,11 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_PlaylistNatives_nativeMove(JNIEnv *en
                                                                     jstring after_entry) {
   (void)cls;
   int ok = 1;
-  const char *centry = chars(env, entry, &ok);
-  const char *cafter = chars(env, after_entry, &ok);
-  mc_status st = ok ? mc_playlist_move(lib_of(handle), centry ? centry : "", cafter) : MC_OK;
-  release(env, entry, centry);
-  release(env, after_entry, cafter);
+  const char *centry = jni_chars(env, entry, &ok);
+  const char *cafter = jni_chars(env, after_entry, &ok);
+  mc_status st = ok ? mc_playlist_move(jni_lib_of(handle), centry ? centry : "", cafter) : MC_OK;
+  jni_release(env, entry, centry);
+  jni_release(env, after_entry, cafter);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -115,10 +91,10 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_PlaylistNatives_nativeRemove(JNIEnv *
                                                                       jlong handle, jstring entry) {
   (void)cls;
   int ok = 1;
-  const char *centry = chars(env, entry, &ok);
+  const char *centry = jni_chars(env, entry, &ok);
   if (!ok) return;
-  mc_status st = mc_playlist_remove(lib_of(handle), centry ? centry : "");
-  release(env, entry, centry);
+  mc_status st = mc_playlist_remove(jni_lib_of(handle), centry ? centry : "");
+  jni_release(env, entry, centry);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -128,11 +104,11 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_PlaylistNatives_nativeEntries
                                                                                jlong handle, jstring uid) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
+  const char *cuid = jni_chars(env, uid, &ok);
   if (!ok) return NULL;
   mc_track_list *list = NULL;
-  mc_status st = mc_library_list_playlist_tracks(lib_of(handle), cuid ? cuid : "", &list);
-  release(env, uid, cuid);
+  mc_status st = mc_library_list_playlist_tracks(jni_lib_of(handle), cuid ? cuid : "", &list);
+  jni_release(env, uid, cuid);
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;
@@ -160,11 +136,11 @@ JNIEXPORT jstring JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeCreate(JNI
                                                                            jlong handle, jstring name) {
   (void)cls;
   int ok = 1;
-  const char *cname = chars(env, name, &ok);
+  const char *cname = jni_chars(env, name, &ok);
   if (!ok) return NULL;
   char uid[MC_UID_STRLEN];
-  mc_status st = mc_album_group_create(lib_of(handle), cname ? cname : "", uid);
-  release(env, name, cname);
+  mc_status st = mc_album_group_create(jni_lib_of(handle), cname ? cname : "", uid);
+  jni_release(env, name, cname);
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;
@@ -177,11 +153,11 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeRename(JNIEnv
                                                                         jstring name) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
-  const char *cname = chars(env, name, &ok);
-  mc_status st = ok ? mc_album_group_rename(lib_of(handle), cuid ? cuid : "", cname ? cname : "") : MC_OK;
-  release(env, uid, cuid);
-  release(env, name, cname);
+  const char *cuid = jni_chars(env, uid, &ok);
+  const char *cname = jni_chars(env, name, &ok);
+  mc_status st = ok ? mc_album_group_rename(jni_lib_of(handle), cuid ? cuid : "", cname ? cname : "") : MC_OK;
+  jni_release(env, uid, cuid);
+  jni_release(env, name, cname);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -189,10 +165,10 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeDelete(JNIEnv
                                                                         jlong handle, jstring uid) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
+  const char *cuid = jni_chars(env, uid, &ok);
   if (!ok) return;
-  mc_status st = mc_album_group_delete(lib_of(handle), cuid ? cuid : "");
-  release(env, uid, cuid);
+  mc_status st = mc_album_group_delete(jni_lib_of(handle), cuid ? cuid : "");
+  jni_release(env, uid, cuid);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -202,11 +178,11 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeAdd(JNIEnv *e
                                                                      jstring album) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
-  const char *calbum = chars(env, album, &ok);
-  mc_status st = ok ? mc_album_group_add(lib_of(handle), cuid ? cuid : "", calbum ? calbum : "") : MC_OK;
-  release(env, uid, cuid);
-  release(env, album, calbum);
+  const char *cuid = jni_chars(env, uid, &ok);
+  const char *calbum = jni_chars(env, album, &ok);
+  mc_status st = ok ? mc_album_group_add(jni_lib_of(handle), cuid ? cuid : "", calbum ? calbum : "") : MC_OK;
+  jni_release(env, uid, cuid);
+  jni_release(env, album, calbum);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -215,11 +191,11 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeRemove(JNIEnv
                                                                         jstring album) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
-  const char *calbum = chars(env, album, &ok);
-  mc_status st = ok ? mc_album_group_remove(lib_of(handle), cuid ? cuid : "", calbum ? calbum : "") : MC_OK;
-  release(env, uid, cuid);
-  release(env, album, calbum);
+  const char *cuid = jni_chars(env, uid, &ok);
+  const char *calbum = jni_chars(env, album, &ok);
+  mc_status st = ok ? mc_album_group_remove(jni_lib_of(handle), cuid ? cuid : "", calbum ? calbum : "") : MC_OK;
+  jni_release(env, uid, cuid);
+  jni_release(env, album, calbum);
   if (st != MC_OK) throw_status(env, st);
 }
 
@@ -229,12 +205,12 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_AlbumGroupNatives_nativeMove(JNIEnv *
                                                                       jstring album, jstring after_album) {
   (void)cls;
   int ok = 1;
-  const char *cuid = chars(env, uid, &ok);
-  const char *calbum = chars(env, album, &ok);
-  const char *cafter = chars(env, after_album, &ok);
-  mc_status st = ok ? mc_album_group_move(lib_of(handle), cuid ? cuid : "", calbum ? calbum : "", cafter) : MC_OK;
-  release(env, uid, cuid);
-  release(env, album, calbum);
-  release(env, after_album, cafter);
+  const char *cuid = jni_chars(env, uid, &ok);
+  const char *calbum = jni_chars(env, album, &ok);
+  const char *cafter = jni_chars(env, after_album, &ok);
+  mc_status st = ok ? mc_album_group_move(jni_lib_of(handle), cuid ? cuid : "", calbum ? calbum : "", cafter) : MC_OK;
+  jni_release(env, uid, cuid);
+  jni_release(env, album, calbum);
+  jni_release(env, after_album, cafter);
   if (st != MC_OK) throw_status(env, st);
 }

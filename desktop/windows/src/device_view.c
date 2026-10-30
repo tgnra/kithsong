@@ -205,22 +205,6 @@ static wchar_t *fmt_count(int64_t n, wchar_t *out, int cap) {
   return out;
 }
 
-static wchar_t *fmt_size(int64_t bytes, wchar_t *out, int cap) {
-  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_SIZE_KB, MC_STR_SIZE_MB,
-                                         MC_STR_SIZE_GB, MC_STR_SIZE_TB};
-  double v = (double)bytes;
-  int u = 0;
-  while (v >= 1024.0 && u < 4) v /= 1024.0, u++;
-  if (u == 0) {
-    mc_wformat(out, (size_t)cap, mc_str_plural(MC_STR_SIZE_BYTES, (long)bytes), MC_D((int)bytes));
-  } else {
-    char num[32];
-    snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
-    mc_wformat(out, (size_t)cap, mc_str(units[u]), MC_S(num));
-  }
-  return out;
-}
-
 static int64_t unix_ms_now(void) {
   FILETIME ft;
   GetSystemTimeAsFileTime(&ft);
@@ -526,7 +510,7 @@ static void update_status(void) {
                  MC_S(u8(fmt_count(g_dv.corrupt, n, 32))));
       used = wcslen(text);
     }
-    swprintf(text + used, 256 - used, L"%ls%ls", sep, fmt_size(g_dv.bytes, size, 32));
+    swprintf(text + used, 256 - used, L"%ls%ls", sep, wstr_size(size, 32, g_dv.bytes));
   }
   SetWindowTextW(g_dv.files, text);
 
@@ -547,12 +531,12 @@ static void update_status(void) {
       wchar_t done[32], total[32], size[32];
       mc_wformat(text, 256, mc_str_plural(MC_STR_PROGRESS_FILES, (long)g_dv.files_total), MC_S(u8(phase)),
                  MC_S(u8(fmt_count(g_dv.files_done, done, 32))), MC_S(u8(fmt_count(g_dv.files_total, total, 32))),
-                 MC_S(u8(fmt_size(g_dv.bytes_received, size, 32))));
+                 MC_S(u8(wstr_size(size, 32, g_dv.bytes_received))));
     } else if (g_dv.phase == MC_SYNC_PHASE_FILES) { /* fetching nothing; maybe serving */
       wchar_t received[32], sent[32];
       mc_wformat(text, 256, mc_str(MC_STR_PROGRESS_SIZES), MC_S(u8(phase)),
-                 MC_S(u8(fmt_size(g_dv.bytes_received, received, 32))),
-                 MC_S(u8(fmt_size(g_dv.bytes_sent, sent, 32))));
+                 MC_S(u8(wstr_size(received, 32, g_dv.bytes_received))),
+                 MC_S(u8(wstr_size(sent, 32, g_dv.bytes_sent))));
     } else {
       wchar_t sent[32], received[32];
       mc_wformat(text, 256, mc_str(MC_STR_PROGRESS_ROWS), MC_S(u8(phase)),
@@ -873,12 +857,12 @@ static void show_estimate(const estimate_job *job) {
     int64_t budget = job->profile.budget_bytes;
     BOOL by_free = e->free_bytes >= 0 && (budget <= 0 || e->limit_bytes < budget);
     mc_wformat(text, 256, mc_str(by_free ? MC_STR_ESTIMATE_OVER_FREE : MC_STR_ESTIMATE_OVER),
-               MC_S(u8(fmt_size(e->shortfall_bytes, a, 32))), MC_S(u8(fmt_size(e->limit_bytes, b, 32))));
+               MC_S(u8(wstr_size(a, 32, e->shortfall_bytes))), MC_S(u8(wstr_size(b, 32, e->limit_bytes))));
   } else if (job->status == MC_OK) {
     enum mc_str_id id = MC_STR_ESTIMATE_SIZE;
     if (job->profile.format.format == MC_FORMAT_AUTO && !e->archive)
       id = e->kbps ? MC_STR_ESTIMATE_AUTO_OPUS : MC_STR_ESTIMATE_AUTO_ORIGINAL;
-    mc_wformat(text, 256, mc_str_plural(id, e->tracks), MC_S(u8(fmt_size(e->total_bytes, a, 32))),
+    mc_wformat(text, 256, mc_str_plural(id, e->tracks), MC_S(u8(wstr_size(a, 32, e->total_bytes))),
                MC_S(u8(fmt_count(e->tracks, b, 32))), MC_D(e->kbps));
   } else if (job->status != MC_ERR_LIBRARY_MISMATCH && job->status != MC_ERR_NOT_FOUND) {
     /* Another library open, or the device gone: the page says so already. */
@@ -1166,7 +1150,7 @@ static void confirm_archive_estimated(const estimate_job *job) {
   if (!g_dv.confirm_dlg || job->seq != g_dv.est.archive_seq || job->status != MC_OK) return;
   wchar_t size[32];
   mc_wformat(g_dv.confirm_text, 512, mc_str(MC_STR_MAKE_ARCHIVE_TEXT),
-             MC_S(u8(fmt_size(job->est.total_bytes, size, 32))));
+             MC_S(u8(wstr_size(size, 32, job->est.total_bytes))));
   SendMessageW(g_dv.confirm_dlg, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, (LPARAM)g_dv.confirm_text);
 }
 
@@ -1572,19 +1556,6 @@ void device_view_show(BOOL show) {
   }
 }
 
-/* The height wnd's text needs at width w, wrapped as its static control wraps it. */
-static int text_height(HWND wnd, HFONT font, int w) {
-  wchar_t buf[1024];
-  int n = GetWindowTextW(wnd, buf, 1024);
-  HDC dc = GetDC(wnd);
-  HGDIOBJ old = SelectObject(dc, font);
-  RECT rc = {0, 0, w, 0};
-  DrawTextW(dc, n ? buf : L" ", n ? n : 1, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-  SelectObject(dc, old);
-  ReleaseDC(wnd, dc);
-  return rc.bottom;
-}
-
 static int text_width(HWND wnd, HFONT font) {
   wchar_t buf[256];
   int n = GetWindowTextW(wnd, buf, 256);
@@ -1637,11 +1608,11 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   if (!g_dv.shown || !g_dv.font) return;
 #define S(px) MulDiv((px), (int)dpi, USER_DEFAULT_SCREEN_DPI)
   int pad = S(32), text_w = min(w - 2 * pad, S(720));
-  int left = x + pad, top = y + S(24), line_h = text_height(g_dv.status, g_dv.font, S(1000));
+  int left = x + pad, top = y + S(24), line_h = canvas_text_height(g_dv.status, g_dv.font, S(1000), 0);
   BOOL on = g_dv.sync != NULL, dev = on && g_dv.found;
 
   /* Header: icon, name, buttons. */
-  int title_h = text_height(g_dv.title, g_dv.title_font, S(1000)), icon_w = S(40);
+  int title_h = canvas_text_height(g_dv.title, g_dv.title_font, S(1000), 0), icon_w = S(40);
   int btn_h = S(32), sync_w = text_width(g_dv.sync_now, g_dv.font) + S(32);
   int remove_w = text_width(g_dv.remove, g_dv.font) + S(32);
   int head_h = max(title_h, btn_h), right = left + text_w;
@@ -1664,11 +1635,11 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   place(g_dv.files, files, left, top, text_w, line_h);
   if (files) top += line_h + S(2);
   BOOL message = dev && has_text(g_dv.message);
-  int mh = message ? text_height(g_dv.message, g_dv.font, text_w) : 0;
+  int mh = message ? canvas_text_height(g_dv.message, g_dv.font, text_w, 0) : 0;
   place(g_dv.message, message, left, top + S(4), text_w, mh);
   if (message) top += mh + S(6);
   BOOL notice = dev && has_text(g_dv.notice);
-  int nh = notice ? text_height(g_dv.notice, g_dv.font, text_w) : 0;
+  int nh = notice ? canvas_text_height(g_dv.notice, g_dv.font, text_w, 0) : 0;
   place(g_dv.notice, notice, left, top + S(4), text_w, nh);
   if (notice) top += nh + S(6);
   top += S(16);
@@ -1717,17 +1688,17 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   place(g_dv.budget_unit, dev, bx, top + (field_h - line_h) / 2, unit_w, line_h);
   if (dev) top += field_h;
   BOOL estimate = dev && has_text(g_dv.estimate);
-  int eh = estimate ? text_height(g_dv.estimate, g_dv.font, right - field_x) : 0;
+  int eh = estimate ? canvas_text_height(g_dv.estimate, g_dv.font, right - field_x, 0) : 0;
   place(g_dv.estimate, estimate, field_x, top + S(4), right - field_x, eh);
   if (estimate) top += eh + S(4);
   if (dev) top += S(24);
 
   /* What to sync. */
-  int hh = text_height(g_dv.heading, g_dv.heading_font, text_w);
+  int hh = canvas_text_height(g_dv.heading, g_dv.heading_font, text_w, 0);
   place(g_dv.heading, dev, left, top, text_w, hh);
   if (dev) top += hh + S(8);
   BOOL note = dev && has_text(g_dv.note);
-  int noteh = note ? text_height(g_dv.note, g_dv.font, text_w) : 0;
+  int noteh = note ? canvas_text_height(g_dv.note, g_dv.font, text_w, 0) : 0;
   place(g_dv.note, note, left, top, text_w, noteh);
   if (note) top += noteh + S(8);
   int row_h = max(box, line_h);
@@ -1881,7 +1852,7 @@ void device_view_on_sync_event(const sync_event *ev) {
         wchar_t n[32], size[32];
         if (ev->files_received > 0)
           mc_wformat(g_dv.finished_text, 256, mc_str_plural(MC_STR_SYNC_FINISHED_FILES, ev->files_received),
-                     MC_S(u8(fmt_count(ev->files_received, n, 32))), MC_S(u8(fmt_size(ev->bytes_received, size, 32))));
+                     MC_S(u8(fmt_count(ev->files_received, n, 32))), MC_S(u8(wstr_size(size, 32, ev->bytes_received))));
         else swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_SYNC_FINISHED));
       }
       /* The last sync time, its files, maybe its profile, have changed. */

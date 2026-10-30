@@ -1198,7 +1198,22 @@ static device *copy_devices(const sidebar_device *from, int n) {
   return d;
 }
 
+/* Whether the devices have are the ones from gives, as they are. */
+static BOOL same_devices(const device *have, int nhave, const sidebar_device *from, int nfrom) {
+  if (nhave != nfrom) return FALSE;
+  for (int i = 0; i < nfrom; i++) {
+    const wchar_t *name = have[i].name ? have[i].name : L"", *given = from[i].name ? from[i].name : L"";
+    if (strcmp(have[i].uid, from[i].uid) || wcscmp(name, given) || have[i].kind != from[i].kind ||
+        have[i].flags != from[i].flags)
+      return FALSE;
+  }
+  return TRUE;
+}
+
 void sidebar_set_devices(const sidebar_device *paired, int npaired, const sidebar_device *nearby, int nnearby) {
+  /* Polled every few seconds: nothing to rebuild (or tell screen readers) when nothing changed. */
+  if (same_devices(s.paired, s.npaired, paired, npaired) && same_devices(s.nearby, s.nnearby, nearby, nnearby))
+    return;
   free_devices(s.paired, s.npaired);
   free_devices(s.nearby, s.nnearby);
   s.paired = copy_devices(paired, npaired);

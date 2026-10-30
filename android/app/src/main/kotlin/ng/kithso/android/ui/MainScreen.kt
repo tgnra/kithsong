@@ -15,12 +15,10 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.add
 import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -65,7 +63,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -214,9 +211,7 @@ private fun mainItems(library: Library?, columns: Int, banner: Boolean): List<Ma
 @Immutable
 private data class SectionStart(val section: Section, val index: Int)
 
-private val Gutter = 16.dp
-private val CellSpacing = 12.dp
-private val MinCellWidth = 150.dp
+private val Gutter = BrowseGutter
 private val ListArtSize = 56.dp
 
 /**
@@ -254,8 +249,8 @@ fun MainScreen(
         val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
         val layoutDirection = LocalLayoutDirection.current
         val width = maxWidth - with(density) { (sides.getLeft(density, layoutDirection) + sides.getRight(density, layoutDirection)).toDp() }
-        val columns = ((width - Gutter * 2 + CellSpacing) / (MinCellWidth + CellSpacing)).toInt().coerceAtLeast(2)
-        val cellPx = with(density) { ((width - Gutter * 2 - CellSpacing * (columns - 1)) / columns).roundToPx() }
+        val columns = albumColumns(width)
+        val cellPx = with(density) { ((width - Gutter * 2 - TileSpacing * (columns - 1)) / columns).roundToPx() }
         val statusBarPx = WindowInsets.statusBars.getTop(density)
 
         val hasBanner = banner != null
@@ -319,7 +314,7 @@ fun MainScreen(
                         RoundedCornerShape(8.dp),
                         onLongClick = { onAlbumGroupMenu(item.group) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.AlbumGroup, item.group.uid)) }
-                    is MainItem.AlbumRow -> AlbumRow(item.albums, columns, onOpen, onAlbumMenu)
+                    is MainItem.AlbumRow -> AlbumGridRow(item.albums, columns, onOpen, onAlbumMenu)
                     is MainItem.ArtistItem -> LibraryRow(
                         item.artist.name,
                         item.artist.subtitle(),
@@ -628,48 +623,6 @@ private fun LibraryRow(
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.combinedClickable(onLongClick = onLongClick, onClick = onClick),
     )
-}
-
-/** One row of the album grid; a short last row keeps the cells the same width. */
-@Composable
-private fun AlbumRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) -> Unit, onMenu: (Album) -> Unit) {
-    Row(
-        Modifier.padding(horizontal = Gutter).padding(bottom = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(CellSpacing),
-    ) {
-        for (album in albums) {
-            Column(
-                Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .combinedClickable(onLongClick = { onMenu(album) }) {
-                        onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid))
-                    },
-            ) {
-                AlbumArt(
-                    album.art,
-                    contentDescription = null,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-                )
-                Text(
-                    album.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-                Text(
-                    album.artist,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        repeat(columns - albums.size) { Spacer(Modifier.weight(1f)) }
-    }
 }
 
 /**

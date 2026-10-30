@@ -677,27 +677,29 @@ mc_status mc_library_list_playlists(mc_library *lib, unsigned flags, mc_playlist
 
   mc_playlist_list *list = calloc(1, sizeof *list);
   if (!list) return MC_ERR_NOMEM;
-  int64_t total = 0;
-  mc_status st = mc_library_count(lib, MC_ENTITY_PLAYLISTS, &total);
-  if (st == MC_OK && total > 0 && !(list->items = calloc((size_t)total, sizeof *list->items)))
-    st = MC_ERR_NOMEM;
-
   sqlite3_stmt *stmt = NULL;
-  if (st == MC_OK && sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) st = MC_ERR_DB;
-  while (st == MC_OK && list->count < total && sqlite3_step(stmt) == SQLITE_ROW) {
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     int entries = sqlite3_column_int(stmt, 2), playable = sqlite3_column_int(stmt, 3);
     /* An empty one is kept: it's waiting for tracks, not missing them. */
     if ((flags & MC_LIST_PLAYABLE) && entries > 0 && playable == 0) {
       list->hidden++;
       continue;
     }
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
     mc_playlist_info *p = &list->items[list->count++];
+    memset(p, 0, sizeof *p);
     const unsigned char *uid = sqlite3_column_text(stmt, 0);
     if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(p->uid, (const char *)uid);
     p->name = column_dup(stmt, 1);
     p->track_count = entries;
     p->playable_count = playable;
   }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
     mc_playlist_list_free(list);

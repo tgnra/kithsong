@@ -31,10 +31,22 @@ static struct {
   size_t bytes;
 } s;
 
+/* Covers found before, by folder. The album grid asks for every album's on every reload
+ * (after each import item, sync burst or edit), and listing a folder costs far more than a
+ * stat, so a cover found once is believed while its file is still there. A folder without
+ * one is listed again each time: that's where a cover may yet arrive. */
+static GHashTable *found_covers;
+
 char *cover_path(const char *dir) {
+  if (!dir) return NULL;
+  if (!found_covers) found_covers = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+  const char *known = g_hash_table_lookup(found_covers, dir);
+  if (known && g_file_test(known, G_FILE_TEST_IS_REGULAR)) return g_strdup(known);
   char *path = mc_coverart_find(dir);
   char *copy = g_strdup(path);
   mc_free(path);
+  if (copy) g_hash_table_insert(found_covers, g_strdup(dir), g_strdup(copy));
+  else g_hash_table_remove(found_covers, dir);
   return copy;
 }
 
@@ -211,6 +223,7 @@ GdkTexture *cover_get_file(const char *path, int size, GCancellable *cancellable
 }
 
 void cover_cache_free(void) {
+  g_clear_pointer(&found_covers, g_hash_table_destroy);
   if (!s.cache) return;
   g_queue_clear(&s.lru);
   g_hash_table_destroy(s.cache);

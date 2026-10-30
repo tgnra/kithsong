@@ -7,6 +7,7 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "canvas.h"
 #include "pick_folder.h"
 #include "theme.h"
 #include "wstr.h"
@@ -47,26 +48,9 @@ static int scale(int px) {
   return MulDiv(px, (int)g_move.dpi, USER_DEFAULT_SCREEN_DPI);
 }
 
-/* "12.5 MB", as the device page writes sizes. */
-static wchar_t *fmt_size(int64_t bytes, wchar_t *out, size_t cap) {
-  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_SIZE_KB, MC_STR_SIZE_MB, MC_STR_SIZE_GB,
-                                         MC_STR_SIZE_TB};
-  double v = (double)bytes;
-  int u = 0;
-  while (v >= 1024.0 && u < 4) v /= 1024.0, u++;
-  if (u == 0) {
-    mc_wformat(out, cap, mc_str_plural(MC_STR_SIZE_BYTES, (long)bytes), MC_D(bytes));
-  } else {
-    char num[32];
-    snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
-    mc_wformat(out, cap, mc_str(units[u]), MC_S(num));
-  }
-  return out;
-}
-
 static char *utf8_size(int64_t bytes) {
   wchar_t w[64];
-  return wstr_to_utf8(fmt_size(bytes, w, 64));
+  return wstr_to_utf8(wstr_size(w, 64, bytes));
 }
 
 /* --- Choosing the folder --- */
@@ -195,7 +179,7 @@ static void show_progress(void) {
   switch (p.phase) {
     case MC_MOVE_PHASE_COPYING: {
       wchar_t done[64], total[64];
-      char *d = wstr_to_utf8(fmt_size(p.bytes_done, done, 64)), *t = wstr_to_utf8(fmt_size(p.bytes_total, total, 64));
+      char *d = wstr_to_utf8(wstr_size(done, 64, p.bytes_done)), *t = wstr_to_utf8(wstr_size(total, 64, p.bytes_total));
       mc_wformat(status, 512, mc_str_plural(MC_STR_LIBRARY_MOVE_PROGRESS, p.files_total), MC_D(p.files_done),
                  MC_D(p.files_total), MC_S(d), MC_S(t));
       free(d);
@@ -214,24 +198,11 @@ static void show_progress(void) {
   SendMessageW(g_move.bar, PBM_SETPOS, (WPARAM)pos, 0);
 }
 
-/* The height wnd's text needs at width w. */
-static int text_height(HWND wnd, HFONT font, int w) {
-  wchar_t buf[1024];
-  int n = GetWindowTextW(wnd, buf, 1024);
-  HDC dc = GetDC(wnd);
-  HGDIOBJ old = SelectObject(dc, font);
-  RECT rc = {0, 0, w, 0};
-  DrawTextW(dc, n ? buf : L" ", n ? n : 1, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-  SelectObject(dc, old);
-  ReleaseDC(wnd, dc);
-  return rc.bottom;
-}
-
 /* Sizes the window to its content and centres it where the main window was. */
 static void layout(void) {
   int w = scale(WIN_W), pad = scale(PAD), gap = scale(GAP), text_w = w - 2 * pad;
-  int line = text_height(g_move.status, g_move.font, text_w);
-  int y = pad, hh = text_height(g_move.heading, g_move.heading_font, text_w);
+  int line = canvas_text_height(g_move.status, g_move.font, text_w, 0);
+  int y = pad, hh = canvas_text_height(g_move.heading, g_move.heading_font, text_w, 0);
   MoveWindow(g_move.heading, pad, y, text_w, hh, FALSE);
   y += hh + 2 * gap;
   MoveWindow(g_move.bar, pad, y, text_w, scale(BAR_H), FALSE);
@@ -240,7 +211,7 @@ static void layout(void) {
   y += line + gap / 2;
   MoveWindow(g_move.file, pad, y, text_w, line, FALSE);
   y += line + 2 * gap;
-  int nh = text_height(g_move.note, g_move.font, text_w);
+  int nh = canvas_text_height(g_move.note, g_move.font, text_w, 0);
   MoveWindow(g_move.note, pad, y, text_w, nh, FALSE);
   y += nh + pad;
 

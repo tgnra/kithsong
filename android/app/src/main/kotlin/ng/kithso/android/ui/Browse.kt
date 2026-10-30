@@ -31,7 +31,7 @@ import ng.kithso.android.ui.art.AlbumArt
 // group's in a grid. Laid out as the main screen's album grid is.
 
 internal val BrowseGutter = 16.dp
-private val TileSpacing = 12.dp
+internal val TileSpacing = 12.dp
 private val MinTileWidth = 150.dp
 private val StripTileWidth = 140.dp
 

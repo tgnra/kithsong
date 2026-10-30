@@ -468,13 +468,20 @@ static void put_order(query *q, yyjson_val *order) {
   put(q, k_default_order[q->subject]);
 }
 
-/* What a compiled query selects: the list itself, one row of how many it picks, or the
- * albums for its cover art (see mc_smart_prepare_art()). */
-typedef enum mode { M_LIST, M_COUNT, M_ART } mode;
+/* What a compiled query selects: the list itself, one row of how many it picks, the albums
+ * for its cover art (see mc_smart_prepare_art()), or one row if anything it picks has a file
+ * here (mc_smart_has_playable()). */
+typedef enum mode { M_LIST, M_COUNT, M_ART, M_PLAYABLE } mode;
+
+/* Whether a track, or any track of an album, has a file here. */
+#define TRACK_HERE(uid) "EXISTS (SELECT 1 FROM files f WHERE f.track_uid = " uid ")"
+#define ALBUM_HERE(uid) \
+  "EXISTS (SELECT 1 FROM tracks ft JOIN files f ON f.track_uid = ft.uid WHERE ft.album_uid = " uid ")"
 
 /* Compiles rule_json into q: the whole query, ready to prepare and bind. For M_COUNT the
  * order is checked but left out, since it only matters to which rows a limit keeps, not to
- * how many. */
+ * how many; so for M_PLAYABLE without a limit, which stops at the first row with a file
+ * whatever the order. With a limit, M_PLAYABLE looks through the ordered rows it keeps. */
 static mc_status compile(query *q, mc_smart_subject subject, const char *rule_json, int64_t now_ms, mode m) {
   memset(q, 0, sizeof *q);
   q->subject = subject;
@@ -489,10 +496,17 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
       v != RULE_VERSION || (limit_val && (!get_int(limit_val, &limit) || limit < 1)))
     return q->st = MC_ERR_FORMAT;
 
-  int count = m == M_COUNT;
+  int count = m == M_COUNT, tracks = subject == MC_SMART_TRACKS;
+  /* Only the rows a limit keeps are the rule's: they're picked, in order, first. */
+  int picked = m == M_PLAYABLE && limit_val;
   if (count)
-    put(q, subject == MC_SMART_TRACKS ? "SELECT count(*) FROM (SELECT 1 FROM tracks t" TRACK_JOINS
-                                      : "SELECT count(*) FROM (SELECT 1 FROM albums a" ALBUM_JOINS);
+    put(q, tracks ? "SELECT count(*) FROM (SELECT 1 FROM tracks t" TRACK_JOINS
+                  : "SELECT count(*) FROM (SELECT 1 FROM albums a" ALBUM_JOINS);
+  else if (picked)
+    put(q, tracks ? "SELECT 1 FROM (SELECT t.uid AS uid FROM tracks t" TRACK_JOINS
+                  : "SELECT 1 FROM (SELECT a.uid AS uid FROM albums a" ALBUM_JOINS);
+  else if (m == M_PLAYABLE)
+    put(q, tracks ? "SELECT 1 FROM tracks t" TRACK_JOINS : "SELECT 1 FROM albums a" ALBUM_JOINS);
   else if (m == M_ART)
     put(q, subject == MC_SMART_TRACKS
              ? "SELECT pa.art_hash, " MC_ALBUM_FILE("pa") " FROM albums pa WHERE pa.art_hash IS NOT NULL"
@@ -507,7 +521,8 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
     put_match(q, match, 0);
   else
     put(q, "1");
-  if (count) {
+  if (m == M_PLAYABLE && !picked) put(q, tracks ? " AND " TRACK_HERE("t.uid") : " AND " ALBUM_HERE("a.uid"));
+  if (count || (m == M_PLAYABLE && !picked)) {
     query order = {.subject = subject, .now_ms = now_ms};
     put_order(&order, yyjson_obj_get(root, "order"));
     if (order.st != MC_OK && q->st == MC_OK) q->st = order.st;
@@ -521,7 +536,9 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
     put(q, " LIMIT ");
     put_int(q, limit);
   }
-  if (count || (m == M_ART && subject == MC_SMART_TRACKS)) put(q, ")");
+  if (count || (m == M_ART && tracks)) put(q, ")");
+  else if (picked) put(q, tracks ? ") picked WHERE " TRACK_HERE("picked.uid") : ") picked WHERE " ALBUM_HERE("picked.uid"));
+  if (m == M_PLAYABLE) put(q, " LIMIT 1");
   return q->st;
 }
 
@@ -1031,19 +1048,15 @@ mc_status mc_library_list_smart_albums(mc_library *lib, const char *smart_uid, m
   return st;
 }
 
-/* Whether a rule holds a track with a file here (TRACK_COLS's path, column 5) or an album with
- * one (ALBUM_COLS's file, column 6), stopping at the first. */
+/* Whether a rule holds a track with a file here, or an album with one: M_PLAYABLE gives a
+ * row if so, without listing (or sorting) everything the rule picks. */
 static mc_status rule_has_playable(mc_library *lib, mc_smart_subject subject, const char *rule, int *out) {
   *out = 0;
   sqlite3_stmt *stmt;
-  mc_status st = prepare(lib, subject, rule, M_LIST, &stmt);
+  mc_status st = prepare(lib, subject, rule, M_PLAYABLE, &stmt);
   if (st != MC_OK) return st;
-  int col = subject == MC_SMART_TRACKS ? 5 : 6, rc;
-  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW)
-    if (sqlite3_column_type(stmt, col) != SQLITE_NULL) {
-      *out = 1;
-      break;
-    }
+  int rc = sqlite3_step(stmt);
+  *out = rc == SQLITE_ROW;
   if (rc != SQLITE_ROW && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
   return st;

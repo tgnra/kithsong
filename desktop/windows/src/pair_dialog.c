@@ -6,6 +6,8 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "canvas.h"
+#include "dlg_template.h"
 #include "theme.h"
 #include "wstr.h"
 
@@ -79,82 +81,20 @@ static struct {
 
 /* --- The template --- */
 
-/* A DLGTEMPLATEEX being written: WORDs, with items aligned to DWORDs. */
-typedef struct tmpl {
-  WORD buf[1024];
-  int n;
-} tmpl;
-
-static void put_word(tmpl *t, WORD w) {
-  if (t->n < (int)(sizeof t->buf / sizeof t->buf[0])) t->buf[t->n++] = w;
-}
-
-static void put_dword(tmpl *t, DWORD d) {
-  put_word(t, LOWORD(d));
-  put_word(t, HIWORD(d));
-}
-
-static void put_string(tmpl *t, const wchar_t *str) {
-  do put_word(t, *str); while (*str++);
-}
-
-static void align_dword(tmpl *t) {
-  if (t->n % 2) put_word(t, 0);
-}
-
-/* atom is a predefined class: 0x0080 button, 0x0081 edit, 0x0082 static; or 0 for the class
- * named cls. */
-static void put_item_class(tmpl *t, WORD atom, const wchar_t *cls, const wchar_t *text, DWORD style, int x, int y,
-                           int w, int h, int id) {
-  align_dword(t);
-  put_dword(t, 0); /* help id */
-  put_dword(t, 0); /* extended style */
-  put_dword(t, WS_CHILD | WS_VISIBLE | style);
-  put_word(t, (WORD)x);
-  put_word(t, (WORD)y);
-  put_word(t, (WORD)w);
-  put_word(t, (WORD)h);
-  put_dword(t, (DWORD)id);
-  if (atom) {
-    put_word(t, 0xFFFF);
-    put_word(t, atom);
-  } else {
-    put_string(t, cls);
-  }
-  put_string(t, text);
-  put_word(t, 0); /* no creation data */
-}
-
-static void put_item(tmpl *t, WORD atom, const wchar_t *text, DWORD style, int x, int y, int w, int h, int id) {
-  put_item_class(t, atom, NULL, text, style, x, y, w, h, id);
+/* The dialogs' items (dlg_template.h), of the predefined classes. */
+static void put_item(dlg_template *t, WORD atom, const wchar_t *text, DWORD style, int x, int y, int w, int h, int id) {
+  dlg_template_item(t, atom, NULL, text, style, x, y, w, h, id);
 }
 
 /* The template's header, for a dialog of num_items items. */
-static void put_header(tmpl *t, int num_items) {
-  t->n = 0;
-  put_word(t, 1);      /* version */
-  put_word(t, 0xFFFF); /* DLGTEMPLATEEX */
-  put_dword(t, 0);     /* help id */
-  put_dword(t, 0);     /* extended style */
-  put_dword(t, DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU);
-  put_word(t, (WORD)num_items);
-  put_word(t, 0);
-  put_word(t, 0);
-  put_word(t, DLG_W);
-  put_word(t, DLG_H);
-  put_word(t, 0); /* no menu */
-  put_word(t, 0); /* the standard dialog class */
-  put_string(t, L"");
-  put_word(t, 9);         /* point size */
-  put_word(t, FW_NORMAL); /* weight */
-  put_word(t, 0);         /* italic, charset */
-  put_string(t, L"Segoe UI");
+static void put_header(dlg_template *t, int num_items) {
+  dlg_template_header(t, num_items, DLG_W, DLG_H, L"");
 }
 
 /* Both dialogs: a line of text, the code, the status line, then Pair (or OK) and Cancel, and
  * the ended dialog's action button (hidden until then). The texts are set once it's
  * created. */
-static void build(tmpl *t, BOOL enter) {
+static void build(dlg_template *t, BOOL enter) {
   put_header(t, 6);
   int w = DLG_W - 2 * MARGIN;
   put_item(t, 0x0082, L"", SS_LEFT | SS_NOPREFIX, MARGIN, MARGIN, w, TEXT_H, ID_TEXT);
@@ -406,22 +346,6 @@ static void move_to_y(HWND dlg, int id, int y) {
   SetWindowPos(item, NULL, r.left, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-/* The height text needs in the static control ctl at width w, in pixels. */
-static int text_height(HWND ctl, int w) {
-  int len = GetWindowTextLengthW(ctl);
-  wchar_t *text = malloc(((size_t)len + 1) * sizeof *text);
-  if (!text) return 0;
-  GetWindowTextW(ctl, text, len + 1);
-  RECT need = {0, 0, w, 0};
-  HDC dc = GetDC(ctl);
-  HGDIOBJ old = SelectObject(dc, (HFONT)SendMessageW(ctl, WM_GETFONT, 0, 0));
-  DrawTextW(dc, text, -1, &need, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
-  SelectObject(dc, old);
-  ReleaseDC(ctl, dc);
-  free(text);
-  return need.bottom;
-}
-
 /* Lays out dlg's status line from top to at least bottom (dialog units), taller if its text
  * needs it, the buttons under it, and the dialog's height to fit, growing or shrinking back
  * and keeping its middle. */
@@ -433,7 +357,7 @@ static void layout_status(HWND dlg, int top, int bottom) {
   MapDialogRect(dlg, &gap);
   MapDialogRect(dlg, &btn);
   HWND status = GetDlgItem(dlg, IDC_PAIR_STATUS);
-  int need = text_height(status, st.right - st.left);
+  int need = canvas_text_height(status, NULL, st.right - st.left, DT_EDITCONTROL);
   if (st.top + need > st.bottom) st.bottom = st.top + need;
   SetWindowPos(status, NULL, st.left, st.top, st.right - st.left, st.bottom - st.top, SWP_NOZORDER | SWP_NOACTIVATE);
   int by = max(btn.top, st.bottom + gap.bottom);
@@ -719,7 +643,7 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
  * disabled throughout). Returns it, or NULL. */
 static pair_dlg *open_dlg(pair_dlg **slot, mc_sync *sync, BOOL initiator, const wchar_t *peer) {
   pair_dlg *d = calloc(1, sizeof *d);
-  tmpl *t = malloc(sizeof *t);
+  dlg_template *t = malloc(sizeof *t);
   if (!d || !t) {
     free(d);
     free(t);
@@ -879,7 +803,7 @@ static INT_PTR CALLBACK merge_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 static merge_wnd *merge_window(void) {
   if (s.merge) return s.merge;
   merge_wnd *m = calloc(1, sizeof *m);
-  tmpl *t = malloc(sizeof *t);
+  dlg_template *t = malloc(sizeof *t);
   if (!m || !t) {
     free(m);
     free(t);
@@ -888,7 +812,7 @@ static merge_wnd *merge_window(void) {
   put_header(t, 4);
   int w = DLG_W - 2 * MARGIN;
   put_item(t, 0x0082, mc_wstr(MC_STR_MERGE_TEXT), SS_LEFT | SS_NOPREFIX, MARGIN, MARGIN, w, TEXT_H, ID_TEXT);
-  put_item_class(t, 0, PROGRESS_CLASSW, L"", 0, MARGIN, MERGE_BAR_Y, w, 9, ID_MERGE_PROGRESS);
+  dlg_template_item(t, 0, PROGRESS_CLASSW, L"", 0, MARGIN, MERGE_BAR_Y, w, 9, ID_MERGE_PROGRESS);
   /* Edit-control wrapping: the backup's path has no spaces to break at. */
   put_item(t, 0x0082, L"", SS_LEFT | SS_NOPREFIX | SS_EDITCONTROL, MARGIN, MERGE_STATUS_Y, w, 20, IDC_PAIR_STATUS);
   put_item(t, 0x0080, mc_wstr_mnemonic(MC_STR_CLOSE), BS_DEFPUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W,

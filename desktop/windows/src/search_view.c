@@ -120,14 +120,6 @@ static int scale(int px) {
   return MulDiv(px, (int)v.dpi, USER_DEFAULT_SCREEN_DPI);
 }
 
-static wchar_t *widen(const char *s) {
-  if (!s) return NULL;
-  int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
-  wchar_t *w = n > 0 ? malloc((size_t)n * sizeof *w) : NULL;
-  if (w) MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
-  return w;
-}
-
 static const wchar_t *kind_heading(mc_search_kind kind) {
   switch (kind) {
     case MC_SEARCH_ARTIST: return mc_wstr(MC_STR_SECTION_ARTISTS);
@@ -179,7 +171,7 @@ static void load_lists(void) {
     for (int i = 0; i < v.nalbums; i++) {
       const mc_album_info *a = &albums->items[i];
       memcpy(v.albums[i].uid, a->uid, MC_UID_STRLEN);
-      v.albums[i].cover_dir = a->has_art ? widen(a->folder) : NULL;
+      v.albums[i].cover_dir = a->has_art ? wstr_dup_from_utf8(a->folder) : NULL;
     }
     qsort(v.albums, (size_t)v.nalbums, sizeof *v.albums, album_cmp);
   }
@@ -350,7 +342,7 @@ static void free_hits(hit *hits, int n) {
 static wchar_t *hit_sub(const mc_search_hit *h) {
   wchar_t buf[512];
   switch (h->kind) {
-    case MC_SEARCH_ALBUM: return widen(h->artist ? h->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
+    case MC_SEARCH_ALBUM: return wstr_dup_from_utf8(h->artist ? h->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
     case MC_SEARCH_PLAYLIST: return _wcsdup(mc_wstr(h->is_smart ? MC_STR_SMART_PLAYLIST : MC_STR_PLAYLIST));
     case MC_SEARCH_ALBUM_GROUP: return _wcsdup(mc_wstr(h->is_smart ? MC_STR_SMART_ALBUM_GROUP : MC_STR_ALBUM_GROUP));
     case MC_SEARCH_TRACK:
@@ -358,7 +350,7 @@ static wchar_t *hit_sub(const mc_search_hit *h) {
         mc_wformat(buf, 512, mc_str(MC_STR_TRACK_BYLINE), MC_S(h->artist), MC_S(h->album));
         return _wcsdup(buf);
       }
-      return widen(h->artist ? h->artist : h->album);
+      return wstr_dup_from_utf8(h->artist ? h->artist : h->album);
     default: return NULL;
   }
 }
@@ -416,7 +408,7 @@ static void show_results(BOOL keep) {
       h->kind = r->kind;
       memcpy(h->uid, r->uid, MC_UID_STRLEN);
       memcpy(h->album_uid, r->album_uid, MC_UID_STRLEN);
-      h->name = widen(r->name && *r->name ? r->name : mc_str(MC_STR_UNTITLED));
+      h->name = wstr_dup_from_utf8(r->name && *r->name ? r->name : mc_str(MC_STR_UNTITLED));
       h->sub = hit_sub(r);
       switch (r->kind) {
         case MC_SEARCH_ARTIST:

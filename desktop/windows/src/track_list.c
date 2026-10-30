@@ -107,6 +107,7 @@ static struct {
   int art_size;
   row *rows;
   int count;
+  BOOL has_playable; /* a shown track has a file here */
   BOOL close_hot, close_pressed;
 
   int header_h;    /* the fixed part above the rows */
@@ -136,14 +137,6 @@ static uia_host ui;
 
 static int scale(int px) {
   return MulDiv(px, (int)s.dpi, USER_DEFAULT_SCREEN_DPI);
-}
-
-static wchar_t *widen(const char *u) {
-  if (!u) return NULL;
-  int n = MultiByteToWideChar(CP_UTF8, 0, u, -1, NULL, 0);
-  wchar_t *w = n > 0 ? malloc((size_t)n * sizeof *w) : NULL;
-  if (w) MultiByteToWideChar(CP_UTF8, 0, u, -1, w, n);
-  return w;
 }
 
 static void format_duration(int ms, wchar_t *out, size_t n) {
@@ -270,9 +263,7 @@ static RECT action_rect(int i) {
 
 /* Whether any shown track can be played here: Play and Shuffle are greyed out otherwise. */
 static BOOL playable(void) {
-  for (int i = 0; i < s.count; i++)
-    if (s.rows[i].path) return TRUE;
-  return FALSE;
+  return s.has_playable;
 }
 
 static int action_at(int x, int y) {
@@ -342,12 +333,13 @@ static void invalidate_target(int a) {
 
 static int row_at(int x, int y) {
   POINT pt = {x, y};
-  if (!PtInRect(&s.scroll.view, pt)) return -1;
-  for (int i = 0; i < s.count; i++) {
-    RECT r = row_rect(i);
-    if (PtInRect(&r, pt)) return i;
-  }
-  return -1;
+  if (!PtInRect(&s.scroll.view, pt) || !s.count) return -1;
+  int rel = y - s.scroll.view.top - scale(INSET) + s.scroll.pos; /* from the first row's top */
+  if (rel < 0) return -1;
+  int i = rel / scale(ROW_H);
+  if (i >= s.count) return -1;
+  RECT r = row_rect(i);
+  return PtInRect(&r, pt) ? i : -1;
 }
 
 /* The button left of the close button: a playlist's menu, smart or not. A random smart
@@ -443,6 +435,7 @@ static void clear_rows(void) {
   free(s.rows);
   s.rows = NULL;
   s.count = 0;
+  s.has_playable = FALSE;
 }
 
 static void end_drag(void);
@@ -548,16 +541,17 @@ static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL pl
     row *r = &s.rows[i];
     memcpy(r->uid, t->uid, sizeof r->uid);
     memcpy(r->entry_uid, t->entry_uid, sizeof r->entry_uid);
-    r->title = widen(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
-    r->artist = t->artist && *t->artist ? widen(t->artist) : NULL;
-    r->album = t->album && *t->album ? widen(t->album) : NULL;
-    r->cover_dir = widen(t->cover_dir);
+    r->title = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
+    r->artist = t->artist && *t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
+    r->album = t->album && *t->album ? wstr_dup_from_utf8(t->album) : NULL;
+    r->cover_dir = wstr_dup_from_utf8(t->cover_dir);
     if (playlist || artist) swprintf(r->num, 16, L"%d", i + 1);
     else if (t->track_no && discs) swprintf(r->num, 16, L"%d-%d", t->disc_no ? t->disc_no : 1, t->track_no);
     else if (t->track_no) swprintf(r->num, 16, L"%d", t->track_no);
     format_duration(t->duration_ms, r->duration, 16);
     r->duration_ms = t->duration_ms;
     r->path = t->path ? _strdup(t->path) : NULL;
+    s.has_playable |= r->path != NULL;
     total_ms += t->duration_ms > 0 ? t->duration_ms : 0;
     if (keep[0] && s.selected < 0 && !strcmp(playlist ? r->entry_uid : r->uid, keep)) s.selected = i;
   }
@@ -1077,9 +1071,11 @@ static void paint(HDC dc, const RECT *dirty) {
   HRGN clip = CreateRectRgnIndirect(&s.scroll.view);
   SelectClipRgn(c->dc, clip);
   BOOL focused = GetFocus() == s.wnd && !(SendMessageW(s.wnd, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS);
-  for (int i = 0; i < s.count; i++) {
-    RECT r = row_rect(i), isect;
-    if (IntersectRect(&isect, &r, dirty) && IntersectRect(&isect, &r, &s.scroll.view)) paint_row(c, i, focused);
+  RECT shown; /* the rows dirty touches, by arithmetic: a long list isn't walked each paint */
+  if (s.count && IntersectRect(&shown, dirty, &s.scroll.view)) {
+    int row_h = scale(ROW_H), base = s.scroll.view.top + scale(INSET) - s.scroll.pos;
+    int first = max(0, (shown.top - base) / row_h), last = min(s.count - 1, (shown.bottom - 1 - base) / row_h);
+    for (int i = first; i <= last; i++) paint_row(c, i, focused);
   }
   SelectClipRgn(c->dc, NULL);
   DeleteObject(clip);

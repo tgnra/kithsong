@@ -32,7 +32,8 @@
 #define TILE (MC_PLAYLIST_ART_SIZE / 2)
 #define KEY_LEN 16                         /* hex digits of the cache key */
 #define MAX_COVER_BYTES (32u * 1024u * 1024u)
-#define MAX_COVER_SIDE 10000               /* pixels; bigger covers are passed over */
+#define MAX_COVER_SIDE 4096                /* pixels; bigger covers are passed over (a 10000 px
+                                            * square decodes to 300 MB, more than a phone has) */
 #define JPEG_QUALITY 90
 #define ART_VERSION "grid-1"               /* change to remake every cached grid */
 #define STALE_TMP_MS (60 * 60 * 1000)      /* a temp file this old was abandoned */

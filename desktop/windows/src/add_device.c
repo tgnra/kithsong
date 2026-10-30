@@ -6,6 +6,7 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "dlg_template.h"
 #include "theme.h"
 #include "wstr.h"
 
@@ -22,93 +23,30 @@ typedef struct result {
 
 /* --- The template --- */
 
-/* A DLGTEMPLATEEX being written: WORDs, with items aligned to DWORDs. */
-typedef struct tmpl {
-  WORD buf[2048];
-  int n;
-} tmpl;
-
-static void put_word(tmpl *t, WORD w) {
-  if (t->n < (int)(sizeof t->buf / sizeof t->buf[0])) t->buf[t->n++] = w;
-}
-
-static void put_dword(tmpl *t, DWORD d) {
-  put_word(t, LOWORD(d));
-  put_word(t, HIWORD(d));
-}
-
-static void put_string(tmpl *t, const wchar_t *s) {
-  do put_word(t, *s); while (*s++);
-}
-
-static void align_dword(tmpl *t) {
-  if (t->n % 2) put_word(t, 0);
-}
-
-/* cls is a predefined class atom (0x0080 button, 0x0081 edit, 0x0082 static) or 0 with name. */
-static void put_item(tmpl *t, WORD atom, const wchar_t *cls_name, const wchar_t *text, DWORD style, int x, int y,
-                     int w, int h, int id) {
-  align_dword(t);
-  put_dword(t, 0); /* help id */
-  put_dword(t, 0); /* extended style */
-  put_dword(t, WS_CHILD | WS_VISIBLE | style);
-  put_word(t, (WORD)x);
-  put_word(t, (WORD)y);
-  put_word(t, (WORD)w);
-  put_word(t, (WORD)h);
-  put_dword(t, (DWORD)id);
-  if (atom) {
-    put_word(t, 0xFFFF);
-    put_word(t, atom);
-  } else {
-    put_string(t, cls_name);
-  }
-  put_string(t, text);
-  put_word(t, 0); /* no creation data */
-}
-
-static void build(tmpl *t) {
-  enum { NUM_ITEMS = 8 };
-  t->n = 0;
-  put_word(t, 1);      /* version */
-  put_word(t, 0xFFFF); /* DLGTEMPLATEEX */
-  put_dword(t, 0);     /* help id */
-  put_dword(t, 0);     /* extended style */
-  put_dword(t, DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU);
-  put_word(t, NUM_ITEMS);
-  put_word(t, 0);
-  put_word(t, 0);
-  put_word(t, DLG_W);
-  put_word(t, DLG_H);
-  put_word(t, 0); /* no menu */
-  put_word(t, 0); /* the standard dialog class */
-  put_string(t, mc_wstr(MC_STR_ADD_DEVICE));
-  put_word(t, 9);         /* point size */
-  put_word(t, FW_NORMAL); /* weight */
-  put_word(t, 0);         /* italic, charset */
-  put_string(t, L"Segoe UI");
+static void build(dlg_template *t) {
+  dlg_template_header(t, 8, DLG_W, DLG_H, mc_wstr(MC_STR_ADD_DEVICE));
 
   int w = DLG_W - 2 * MARGIN, y = MARGIN;
-  put_item(t, 0x0082, NULL, mc_wstr(MC_STR_ADD_DEVICE_TEXT), SS_LEFT | SS_NOPREFIX, MARGIN, y, w, 18, ID_NOTE);
+  dlg_template_item(t, 0x0082, NULL, mc_wstr(MC_STR_ADD_DEVICE_TEXT), SS_LEFT | SS_NOPREFIX, MARGIN, y, w, 18, ID_NOTE);
   y += 25;
   wchar_t label[128];
-  put_item(t, 0x0082, NULL, wstr_field_label(label, 128, MC_STR_ADD_DEVICE_HOST), SS_LEFT, MARGIN, y, w, 9,
+  dlg_template_item(t, 0x0082, NULL, wstr_field_label(label, 128, MC_STR_ADD_DEVICE_HOST), SS_LEFT, MARGIN, y, w, 9,
            ID_ADDRESS_LABEL);
   y += 11;
-  put_item(t, 0x0081, NULL, L"", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, MARGIN, y, w, 14, ID_ADDRESS);
+  dlg_template_item(t, 0x0081, NULL, L"", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, MARGIN, y, w, 14, ID_ADDRESS);
   y += 20;
-  put_item(t, 0x0082, NULL, wstr_field_label(label, 128, MC_STR_ADD_DEVICE_PORT), SS_LEFT, MARGIN, y, w, 9,
+  dlg_template_item(t, 0x0082, NULL, wstr_field_label(label, 128, MC_STR_ADD_DEVICE_PORT), SS_LEFT, MARGIN, y, w, 9,
            ID_PORT_LABEL);
   y += 11;
-  put_item(t, 0x0081, NULL, L"", WS_BORDER | WS_TABSTOP | ES_NUMBER, MARGIN, y, 54, 14, ID_PORT);
+  dlg_template_item(t, 0x0081, NULL, L"", WS_BORDER | WS_TABSTOP | ES_NUMBER, MARGIN, y, 54, 14, ID_PORT);
   /* Attaches itself to the port box, the control before it. */
-  put_item(t, 0, UPDOWN_CLASSW, L"",
+  dlg_template_item(t, 0, UPDOWN_CLASSW, L"",
            UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS | UDS_NOTHOUSANDS | UDS_HOTTRACK, 0, 0,
            0, 0, ID_SPIN);
   int by = DLG_H - MARGIN - BTN_H;
-  put_item(t, 0x0080, NULL, mc_wstr_mnemonic(MC_STR_CONNECT), BS_DEFPUSHBUTTON | WS_TABSTOP | WS_DISABLED,
+  dlg_template_item(t, 0x0080, NULL, mc_wstr_mnemonic(MC_STR_CONNECT), BS_DEFPUSHBUTTON | WS_TABSTOP | WS_DISABLED,
            DLG_W - MARGIN - 2 * BTN_W - 4, by, BTN_W, BTN_H, IDOK);
-  put_item(t, 0x0080, NULL, mc_wstr_mnemonic(MC_STR_CANCEL), BS_PUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W, by,
+  dlg_template_item(t, 0x0080, NULL, mc_wstr_mnemonic(MC_STR_CANCEL), BS_PUSHBUTTON | WS_TABSTOP, DLG_W - MARGIN - BTN_W, by,
            BTN_W, BTN_H, IDCANCEL);
 }
 
@@ -211,7 +149,7 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 void add_device_show(HWND owner, add_device_connect_fn connect, void *user) {
   INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_UPDOWN_CLASS};
   InitCommonControlsEx(&icc);
-  tmpl *t = malloc(sizeof *t);
+  dlg_template *t = malloc(sizeof *t);
   if (!t) return;
   build(t);
   result r = {NULL, 0};

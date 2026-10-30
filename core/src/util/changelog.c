@@ -51,44 +51,69 @@ mc_status mc_changelog_register(sqlite3 *db, const mc_changelog_ctx *ctx) {
 
 /* --- Triggers --- */
 
+/* Whether the trigger called name exists as create (its CREATE TRIGGER statement, which
+ * sqlite_master keeps as written) already. */
+static int trigger_is(sqlite3 *db, const char *name, const char *create) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db, "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return 0;
+  sqlite3_bind_text(stmt, 1, name, -1, SQLITE_STATIC);
+  const unsigned char *sql = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_text(stmt, 0) : NULL;
+  int same = sql && strcmp((const char *)sql, create) == 0;
+  sqlite3_finalize(stmt);
+  return same;
+}
+
+/* Makes the trigger called name be create, replacing one that differs. One that's already as
+ * wanted is left alone: every open would otherwise rewrite the schema, and with it invalidate
+ * every other connection's prepared statements. */
+static mc_status ensure_trigger(sqlite3 *db, const char *name, const char *create) {
+  if (trigger_is(db, name, create)) return MC_OK;
+  char drop[160];
+  snprintf(drop, sizeof drop, "DROP TRIGGER IF EXISTS %s", name);
+  mc_status st = exec(db, drop);
+  return st == MC_OK ? exec(db, create) : st;
+}
+
 mc_status mc_changelog_install_triggers(sqlite3 *db, const mc_changelog_table *tables,
                                         size_t count) {
-  char sql[1024];
+  char name[128], sql[1024];
   if (exec(db, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
 
   for (size_t t = 0; t < count; t++) {
     const char *table = tables[t].table, *key = tables[t].key;
     for (const char *const *c = tables[t].cols; *c; c++) {
+      snprintf(name, sizeof name, "mc_log_ins_%s_%s", table, *c);
       snprintf(sql, sizeof sql,
-               "DROP TRIGGER IF EXISTS mc_log_ins_%s_%s;"
-               "CREATE TRIGGER mc_log_ins_%s_%s AFTER INSERT ON %s"
+               "CREATE TRIGGER %s AFTER INSERT ON %s"
                " WHEN new.%s IS NOT NULL AND mc_applying_remote() = 0 BEGIN"
                " INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
                " VALUES (mc_hlc_now(), mc_node_uid(), '%s', new.%s, '%s', new.%s);"
-               " END;",
-               table, *c, table, *c, table, *c, table, key, *c, *c);
-      if (exec(db, sql) != MC_OK) goto fail;
+               " END",
+               name, table, *c, table, key, *c, *c);
+      if (ensure_trigger(db, name, sql) != MC_OK) goto fail;
 
+      snprintf(name, sizeof name, "mc_log_upd_%s_%s", table, *c);
       snprintf(sql, sizeof sql,
-               "DROP TRIGGER IF EXISTS mc_log_upd_%s_%s;"
-               "CREATE TRIGGER mc_log_upd_%s_%s AFTER UPDATE OF %s ON %s"
+               "CREATE TRIGGER %s AFTER UPDATE OF %s ON %s"
                " WHEN old.%s IS NOT new.%s AND mc_applying_remote() = 0 BEGIN"
                " INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
                " VALUES (mc_hlc_now(), mc_node_uid(), '%s', new.%s, '%s', new.%s);"
-               " END;",
-               table, *c, table, *c, *c, table, *c, *c, table, key, *c, *c);
-      if (exec(db, sql) != MC_OK) goto fail;
+               " END",
+               name, *c, table, *c, *c, table, key, *c, *c);
+      if (ensure_trigger(db, name, sql) != MC_OK) goto fail;
     }
 
+    snprintf(name, sizeof name, "mc_log_del_%s", table);
     snprintf(sql, sizeof sql,
-             "DROP TRIGGER IF EXISTS mc_log_del_%s;"
-             "CREATE TRIGGER mc_log_del_%s AFTER DELETE ON %s"
+             "CREATE TRIGGER %s AFTER DELETE ON %s"
              " WHEN mc_applying_remote() = 0 BEGIN"
              " INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
              " VALUES (mc_hlc_now(), mc_node_uid(), '%s', old.%s, '_deleted', 1);"
-             " END;",
-             table, table, table, table, key);
-    if (exec(db, sql) != MC_OK) goto fail;
+             " END",
+             name, table, table, key);
+    if (ensure_trigger(db, name, sql) != MC_OK) goto fail;
   }
   return exec(db, "COMMIT");
 
