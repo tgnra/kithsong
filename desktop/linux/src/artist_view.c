@@ -1036,6 +1036,17 @@ const char *artist_view_artist(void) {
   return v.open[0] ? v.open : NULL;
 }
 
+const char *artist_view_find(const char *name) {
+  const char *found = NULL;
+  for (guint i = 0, n = v.artists && name ? g_list_model_get_n_items(G_LIST_MODEL(v.artists)) : 0; i < n; i++) {
+    ArtistItem *artist = artist_at(i);
+    if (strcmp(artist->name, name)) continue;
+    if (found) return NULL; /* which one? */
+    found = artist->uid;
+  }
+  return found;
+}
+
 gboolean artist_view_playable(void) {
   if (!v.open[0]) return FALSE;
   for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.tracks)); i < n; i++)

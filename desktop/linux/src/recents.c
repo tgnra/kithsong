@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "album_grid.h"
+#include "artist_view.h"
 #include "drag.h"
 
 enum { MAX_RECENTS = 10 };
@@ -110,6 +112,9 @@ static GtkWidget *recent_row(const mc_recent_info *info) {
   g_object_set_data_full(G_OBJECT(row), "uid", g_strdup(info->uid), g_free);
   g_object_set_data(G_OBJECT(row), "kind", GINT_TO_POINTER(info->kind));
   g_object_set_data(G_OBJECT(row), "smart", GINT_TO_POINTER(info->is_smart));
+  if (info->kind == MC_RECENT_ALBUM)
+    g_object_set_data_full(G_OBJECT(row), "artist",
+                           g_strdup(info->artist ? info->artist : mc_str(MC_STR_UNKNOWN_ARTIST)), g_free);
   if (info->kind == MC_RECENT_PLAYLIST || info->kind == MC_RECENT_ALBUM_GROUP) {
     GtkDropTarget *drop = drag_target_new(GDK_ACTION_COPY);
     g_signal_connect(drop, "motion", G_CALLBACK(on_drop_motion), row);
@@ -130,7 +135,19 @@ static void on_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
     case MC_RECENT_ARTIST: app_open_artist(user, copy); break;
     case MC_RECENT_ALBUM_GROUP: app_open_album_group(user, copy); break;
     case MC_RECENT_PLAYLIST: app_open(user, TRUE, copy); break;
-    default: app_open(user, FALSE, copy); break;
+    default: {
+      /* An album that has come down to one track is a single now, which the Albums page leaves
+       * out: its artist's page has it. */
+      app *a = user;
+      AlbumItem *album = album_grid_find(a->album_grid, copy);
+      const char *found = album ? NULL : artist_view_find(g_object_get_data(G_OBJECT(row), "artist"));
+      char artist[MC_UID_STRLEN];
+      g_strlcpy(artist, found ? found : "", sizeof artist); /* opening reloads the list it's from */
+      if (album) g_object_unref(album);
+      if (artist[0]) app_open_artist(a, artist);
+      else app_open(a, FALSE, copy);
+      break;
+    }
   }
 }
 

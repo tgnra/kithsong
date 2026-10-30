@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "album_grid.h"
+#include "artist_view.h"
 
 enum {
   LIMIT_PER_KIND = 20,
@@ -61,12 +62,18 @@ static void on_row_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user
   (void)user;
   const char *uid = g_object_get_data(G_OBJECT(row), "uid");
   const char *album_uid = g_object_get_data(G_OBJECT(row), "album-uid");
+  const char *artist_uid = g_object_get_data(G_OBJECT(row), "artist-uid");
   if (!uid) return;
-  char copy[MC_UID_STRLEN], album_copy[MC_UID_STRLEN];
+  char copy[MC_UID_STRLEN], album_copy[MC_UID_STRLEN], artist_copy[MC_UID_STRLEN];
   g_strlcpy(copy, uid, sizeof copy);
   g_strlcpy(album_copy, album_uid ? album_uid : "", sizeof album_copy);
+  g_strlcpy(artist_copy, artist_uid ? artist_uid : "", sizeof artist_copy);
   switch ((mc_search_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"))) {
-    case MC_SEARCH_TRACK: app_open_track(v.a, album_copy, copy); break;
+    case MC_SEARCH_TRACK:
+      /* A single (or a track with no album) isn't on the Albums page: its artist's page has it. */
+      if (album_copy[0]) app_open_track(v.a, album_copy, copy);
+      else app_open_artist(v.a, artist_copy);
+      break;
     case MC_SEARCH_ARTIST: app_open_artist(v.a, copy); break;
     case MC_SEARCH_ALBUM_GROUP: app_open_album_group(v.a, copy); break;
     case MC_SEARCH_PLAYLIST: app_open(v.a, TRUE, copy); break;
@@ -127,11 +134,19 @@ static gboolean grid_has(GtkWidget *grid, const char *uid) {
   return item != NULL;
 }
 
+/* The artist page to open a track hit on when its album isn't in the album grid: a single's,
+ * or a track's with no album. NULL if there's none to open (borrowed). */
+static const char *track_artist(const mc_search_hit *h) {
+  if (grid_has(v.a->album_grid, h->album_uid)) return NULL;
+  return artist_view_find(h->artist ? h->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
+}
+
 /* Whether this computer has a page to open the hit on. */
 static gboolean hit_opens(const mc_search_hit *h) {
   switch (h->kind) {
     case MC_SEARCH_ARTIST: return TRUE;
-    case MC_SEARCH_TRACK: return grid_has(v.a->album_grid, h->album_uid); /* gone since the index was built? */
+    case MC_SEARCH_TRACK: /* gone since the index was built? */
+      return grid_has(v.a->album_grid, h->album_uid) || track_artist(h);
     case MC_SEARCH_PLAYLIST: return grid_has(v.a->playlist_grid, h->uid); /* only playable ones */
     case MC_SEARCH_ALBUM_GROUP: return TRUE;
     default: return FALSE;
@@ -152,7 +167,10 @@ static GtkWidget *hit_row(const mc_search_hit *h) {
   if (opens) {
     g_object_set_data_full(G_OBJECT(row), "uid", g_strdup(h->uid), g_free);
     g_object_set_data(G_OBJECT(row), "kind", GINT_TO_POINTER(h->kind));
-    if (h->kind == MC_SEARCH_TRACK) g_object_set_data_full(G_OBJECT(row), "album-uid", g_strdup(h->album_uid), g_free);
+    const char *artist = h->kind == MC_SEARCH_TRACK ? track_artist(h) : NULL;
+    if (artist) g_object_set_data_full(G_OBJECT(row), "artist-uid", g_strdup(artist), g_free);
+    else if (h->kind == MC_SEARCH_TRACK)
+      g_object_set_data_full(G_OBJECT(row), "album-uid", g_strdup(h->album_uid), g_free);
     adw_action_row_add_suffix(ADW_ACTION_ROW(row), gtk_image_new_from_icon_name("go-next-symbolic"));
   }
   return row;

@@ -71,6 +71,10 @@ void artist_view_reload(void);
 gboolean artist_view_open(const char *uid);
 /* The artist whose page is open, or NULL while the list shows. */
 const char *artist_view_artist(void);
+/* The uid of the one artist in the list named name (borrowed, until the list next changes),
+ * or NULL if there's none or more than one. For singles found by search or in the recents,
+ * which have no album to open on and name their artist but give no uid. */
+const char *artist_view_find(const char *name);
 
 /* Whether the open artist has a track with a file here. */
 gboolean artist_view_playable(void);
