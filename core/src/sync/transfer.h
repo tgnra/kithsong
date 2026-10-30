@@ -6,8 +6,10 @@
  * Turns. The library exchange leaves the two devices in step, and one receives first
  * (session.h's receive_first: an archive facing a non-archive, else the initiator): it sends
  * HAVE_REQ, FILE_REQ and PREPARE_REQ while the other serves them, and ends its turn with
- * FILES_DONE. Then the roles swap. Each device's own reconcile waits
- * until after BYE, when the peer can no longer ask for a file it would delete. */
+ * FILES_DONE. Between its HAVE_REQs and its first FILE_REQ, FILES_PLAN tells the other how
+ * many files it will ask for, so both sides' progress has the turn's total. Then the roles
+ * swap. Each device's own reconcile waits until after BYE, when the peer can no longer ask
+ * for a file it would delete. */
 #ifndef MC_SYNC_TRANSFER_H
 #define MC_SYNC_TRANSFER_H
 

@@ -201,6 +201,9 @@ typedef struct dev {
   int ndone;
   int files_progress; /* MC_SYNC_PHASE_FILES progress events */
   int done_files, done_total; /* in the last MC_SYNC_PHASE_DONE progress */
+  int done_sends, done_sends_total;
+  int64_t done_files_bytes, done_sends_bytes;
+  int sends_ahead; /* sends_total in a files progress before any request was answered */
 } dev;
 
 static void on_pair_code(void *user, const char *code, const char *name, int attempts) {
@@ -227,9 +230,15 @@ static void on_progress(void *user, const mc_sync_progress *p) {
   dev *d = user;
   mc_mutex_lock(&d->m);
   if (p->phase == MC_SYNC_PHASE_FILES) d->files_progress++;
+  if (p->phase == MC_SYNC_PHASE_FILES && p->sends_done == 0 && p->sends_total > 0)
+    d->sends_ahead = p->sends_total;
   if (p->phase == MC_SYNC_PHASE_DONE) {
     d->done_files = p->files_done;
     d->done_total = p->files_total;
+    d->done_sends = p->sends_done;
+    d->done_sends_total = p->sends_total;
+    d->done_files_bytes = p->files_bytes;
+    d->done_sends_bytes = p->sends_bytes;
   }
   mc_mutex_unlock(&d->m);
 }
@@ -740,10 +749,16 @@ int main(int argc, char **argv) {
   CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
   CHECK(!ra.files_paused && !rb.files_paused);
   CHECK(rb.files_received == 4 && rb.files_missing == 0 && rb.files_corrupt == 0);
-  /* The closing progress carries the file counts, finished. */
+  /* The closing progress carries the file counts, finished. A, serving, knew from B's
+   * FILES_PLAN how many it would send, and their estimated size, before the first went. */
   mc_mutex_lock(&b.m);
-  CHECK(b.done_total == 4 && b.done_files == 4);
+  CHECK(b.done_total == 4 && b.done_files == 4 && b.done_files_bytes > 0);
+  CHECK(b.done_sends_total == 0 && b.done_sends == 0);
   mc_mutex_unlock(&b.m);
+  mc_mutex_lock(&a.m);
+  CHECK(a.sends_ahead == 4 && a.done_sends_total == 4 && a.done_sends == 4);
+  CHECK(a.done_sends_bytes == b.done_files_bytes);
+  mc_mutex_unlock(&a.m);
   CHECK(ra.files_sent == 4 && ra.bytes_sent == rb.bytes_received && rb.bytes_received > 0);
   CHECK(b_files(&b, NULL) == 4);
   CHECK(files_match(&b));
@@ -829,12 +844,21 @@ int main(int argc, char **argv) {
   }
 
   /* A track with no album arrives in its artist's folder, as import files it, and goes again
-   * when it's deleted. */
+   * when it's deleted. Each session has a side playing a version without FILES_PLAN (A,
+   * then B), which would end it on one: the other sends none, and announces nothing. */
   {
     track_ref loose;
     add_track(&a, "Low", NULL, 0, "Loose", 0, 770, &loose);
+    mc_sync_set_test_no_files_plan(a.sync, 1);
     CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    mc_sync_set_test_no_files_plan(a.sync, 0);
     CHECK(rb.files_received == 1);
+    mc_mutex_lock(&a.m);
+    CHECK(a.done_sends_total == 0 && a.done_sends == 1);
+    mc_mutex_unlock(&a.m);
+    mc_mutex_lock(&b.m);
+    CHECK(b.done_total == 1 && b.done_files == 1);
+    mc_mutex_unlock(&b.m);
     CHECK(lib_int(&b, "SELECT count(*) FROM files f JOIN tracks t ON t.uid = f.track_uid"
                       " WHERE f.path = 'Low/Loose.wav' AND t.album_uid IS NULL") == 1);
     CHECK(lib_file_exists(&b, "Low/Loose.wav"));
@@ -844,7 +868,9 @@ int main(int argc, char **argv) {
     CHECK(mc_library_commit(a.lib) == MC_OK);
     abs_path(&a, loose.rel, sql, sizeof sql);
     mc_remove(sql);
+    mc_sync_set_test_no_files_plan(b.sync, 1);
     CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    mc_sync_set_test_no_files_plan(b.sync, 0);
     CHECK(b_files(&b, NULL) == 4);
   }
 

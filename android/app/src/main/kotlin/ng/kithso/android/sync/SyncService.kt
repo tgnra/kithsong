@@ -110,10 +110,12 @@ class SyncService : Service() {
             .setSilent(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
         if (pairing is Pairing.ShowCode) builder.setContentText(getString(R.string.sync_notification_see_code))
-        // Files being fetched, in every session at once; usually there's just one.
-        val files = status.sessions.values.filter { it.filesTotal > 0 }
+        // Files being fetched or sent, in every session at once; usually there's just one.
+        val files = status.sessions.values.filter { it.moving > 0 }
         val filesDone = files.sumOf { it.filesDone }
         val filesTotal = files.sumOf { it.filesTotal }
+        val moved = files.sumOf { it.moved }
+        val moving = files.sumOf { it.moving }
         if (pairing is Pairing.EnterCode || pairing is Pairing.ShowCode) {
             builder.addAction(0, getString(R.string.cancel), cancel(ACTION_CANCEL))
         } else if (merge != null) {
@@ -121,9 +123,16 @@ class SyncService : Service() {
             builder.setContentText(getString(phase, merge.done, merge.total))
             builder.setProgress(MERGE_STEPS, (merge.fraction * MERGE_STEPS).toInt(), false)
         } else {
-            if (filesTotal > 0) {
-                builder.setContentText(resources.getQuantityString(R.plurals.sync_notification_files, filesTotal, filesDone, filesTotal))
-                builder.setProgress(filesTotal, filesDone, false)
+            if (moving > 0) {
+                val text = if (files.all { it.sending }) {
+                    val sendsDone = files.sumOf { it.sendsDone }
+                    val sendsTotal = files.sumOf { it.sendsTotal }
+                    resources.getQuantityString(R.plurals.sync_notification_files_sent, sendsTotal, sendsDone, sendsTotal)
+                } else {
+                    resources.getQuantityString(R.plurals.sync_notification_files, filesTotal, filesDone, filesTotal)
+                }
+                builder.setContentText(text)
+                builder.setProgress(moving, moved, false)
             } else {
                 builder.setProgress(0, 0, true)
             }

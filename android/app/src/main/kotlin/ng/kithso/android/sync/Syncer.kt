@@ -142,10 +142,24 @@ data class SyncProgress(
      */
     val filesDone: Int = 0,
     val filesTotal: Int = 0,
+    /**
+     * The files the member is fetching from this phone: [sendsDone] (answered) of [sendsTotal],
+     * as it announced them when its turn started; 0 before, and with a version too old to
+     * announce them. Kept as the files are.
+     */
+    val sendsDone: Int = 0,
+    val sendsTotal: Int = 0,
     /** File bytes both ways, for the whole session so far. */
     val bytesReceived: Long = 0,
     val bytesSent: Long = 0,
-)
+) {
+    /** Files both ways, for a bar over the whole files phase: [moved] of [moving]. */
+    val moving: Int get() = filesTotal + sendsTotal
+    val moved: Int get() = filesDone.coerceAtMost(filesTotal) + sendsDone.coerceAtMost(sendsTotal)
+
+    /** The member's turn: it's fetching from this phone, or that's all the session moves. */
+    val sending: Boolean get() = sendsTotal > 0 && (sendsDone < sendsTotal || filesTotal == 0)
+}
 
 /** What the devices section of settings and the pairing dialog show. */
 @Immutable
@@ -719,6 +733,8 @@ class Syncer(
             rowsReceived = event.rowsReceived,
             filesDone = if (files) event.filesDone else before?.filesDone ?: 0,
             filesTotal = if (files) event.filesTotal else before?.filesTotal ?: 0,
+            sendsDone = if (files) event.sendsDone else before?.sendsDone ?: 0,
+            sendsTotal = if (files) event.sendsTotal else before?.sendsTotal ?: 0,
             bytesReceived = if (files) event.bytesReceived else before?.bytesReceived ?: 0,
             bytesSent = if (files) event.bytesSent else before?.bytesSent ?: 0,
         )

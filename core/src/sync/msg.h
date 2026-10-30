@@ -32,6 +32,8 @@
 #define MC_MSG_FILES_DONE 0x27 /* the receiver has asked for all it wants; the turn passes */
 #define MC_MSG_COVER_REQ 0x28  /* only to a peer whose HELLO has "covers": true */
 #define MC_MSG_COVER_HDR 0x29
+#define MC_MSG_FILES_PLAN 0x2A /* what the receiver will ask for; only to a peer whose HELLO
+                                * has "files_plan": true */
 
 /* Pairing. PAIR_HELLO to JPAKE_2 travel in the clear, PAIR_ACCEPT encrypted. */
 #define MC_MSG_PAIR_HELLO 0x40

@@ -318,6 +318,10 @@ static mc_status send_hello(mc_session *s, int archive) {
   yyjson_mut_obj_add_strcpy(doc, root, "node_uid", mc_library_node_uid(s->conn->lib));
   if (s->user) yyjson_mut_obj_add_bool(doc, root, "user", true);
   yyjson_mut_obj_add_bool(doc, root, "covers", true);
+  mc_mutex_lock(&s->sync->lock);
+  s->files_plan = !s->sync->no_files_plan;
+  mc_mutex_unlock(&s->sync->lock);
+  if (s->files_plan) yyjson_mut_obj_add_bool(doc, root, "files_plan", true);
   yyjson_mut_obj_add_bool(doc, root, "archive", archive);
   yyjson_mut_val *caps = yyjson_mut_obj(doc);
   yyjson_mut_obj_add_val(doc, root, "caps", caps);
@@ -357,6 +361,7 @@ static mc_status recv_hello(mc_session *s, hello *h) {
     memcpy(h->node_uid, node, MC_UID_STRLEN);
     if (yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "user"))) s->user = 1;
     s->peer_covers = yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "covers"));
+    if (!yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "files_plan"))) s->files_plan = 0;
     yyjson_val *archive = yyjson_obj_get(yyjson_doc_get_root(doc), "archive");
     h->archive = yyjson_is_bool(archive) ? yyjson_get_bool(archive) : -1;
     st = MC_OK;
@@ -382,7 +387,9 @@ static void progress(mc_session *s, mc_sync_phase phase) {
   mc_sync_progress p = {.device_uid = s->peer_uid, .phase = phase, .rows_sent = s->rows_sent,
                         .rows_received = s->rows_received, .files_done = s->files_done,
                         .files_total = s->files_total, .bytes_received = s->bytes_received,
-                        .bytes_sent = s->bytes_sent};
+                        .bytes_sent = s->bytes_sent, .files_bytes = s->files_bytes,
+                        .sends_done = s->sends_done, .sends_total = s->sends_total,
+                        .sends_bytes = s->sends_bytes};
   mc_sync_emit_progress(s->sync, &p);
 }
 
