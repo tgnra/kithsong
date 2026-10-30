@@ -116,4 +116,8 @@ typedef struct mb_fake {
 
 void mb_set_fake(const mb_fake *fake);
 
+/* For tests: what mb_lookup_release and mb_search_recordings make of a response body. */
+mc_status mb_release_parse(const char *json, size_t len, mb_release *out);
+mc_status mb_recordings_parse(const char *json, size_t len, mb_release *out, int max, int *n);
+
 #endif
