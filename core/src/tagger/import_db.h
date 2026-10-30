@@ -95,6 +95,11 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
 mc_status mc_import_db_set_credit(mc_library *lib, int is_album, const char *uid,
                                   const mc_db_artist *artist, const mc_db_credit_part *credit,
                                   int credit_count);
+/* The same inside the caller's write transaction (mc_library_begin_write()), which it
+ * leaves open: on failure the caller rolls back. */
+mc_status mc_import_db_set_credit_locked(mc_library *lib, int is_album, const char *uid,
+                                         const mc_db_artist *artist,
+                                         const mc_db_credit_part *credit, int credit_count);
 
 /* Changes the path of the files row at old_path (both relative). */
 mc_status mc_import_db_move_file(mc_library *lib, const char *old_path, const char *new_path);

@@ -6,6 +6,7 @@
 
 #include "search/search_internal.h"
 #include "sync/rows.h"
+#include "tagger/refresh.h"
 #include "util/platform.h"
 #include "util/uid.h"
 
@@ -360,7 +361,7 @@ static mc_status load_meta_uid(mc_library *lib, const char *key, char out[MC_UID
 
 /* --- Public API --- */
 
-mc_status mc_library_open(const char *dir, mc_library **out) {
+static mc_status library_open(const char *dir, int background, mc_library **out) {
   if (!dir || !*dir || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
 
@@ -419,6 +420,9 @@ mc_status mc_library_open(const char *dir, mc_library **out) {
   if (apply_newly_known(lib, from) != MC_OK)
     fprintf(stderr, "musiccore: library open: couldn't apply rows newer peers logged: %s\n",
             sqlite3_errmsg(lib->db));
+  /* Splits the credits from before v13 (docs/tagging-rules.md, "Refresh after upgrading"),
+   * on a thread and connection of its own. */
+  if (background) lib->refresh = mc_refresh_start(lib);
 
   *out = lib;
   return MC_OK;
@@ -430,8 +434,17 @@ fail:
   return st;
 }
 
+mc_status mc_library_open(const char *dir, mc_library **out) {
+  return library_open(dir, 1, out);
+}
+
+mc_status mc_library_open_internal(const char *dir, mc_library **out) {
+  return library_open(dir, 0, out);
+}
+
 void mc_library_close(mc_library *lib) {
   if (!lib) return;
+  mc_refresh_stop(lib->refresh);
   mc_search_free(lib->search);
   sqlite3_close_v2(lib->db);
   free(lib->dir);
@@ -487,6 +500,10 @@ mc_status mc_library_commit(mc_library *lib) {
 
 void mc_library_rollback(mc_library *lib) {
   exec(lib, "ROLLBACK");
+}
+
+int mc_library_refresh_progress(mc_library *lib, int *done, int *total) {
+  return mc_refresh_progress(lib ? lib->refresh : NULL, done, total);
 }
 
 int mc_library_schema_version(const mc_library *lib) {

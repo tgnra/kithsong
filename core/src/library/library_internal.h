@@ -19,7 +19,13 @@ struct mc_library {
   int applying_remote;
   mc_changelog_ctx log; /* points the trigger functions at hlc, node_uid, applying_remote */
   struct mc_search *search; /* search.c's index and its builder; NULL until first used */
+  struct mc_refresh *refresh; /* the artist refresh this handle started (tagger/refresh.h) */
 };
+
+/* mc_library_open() without starting background work of its own (the artist refresh after
+ * upgrading): for connections the core opens for itself, on an import's or sync's thread,
+ * which come and go while the frontend's handle stays open. */
+mc_status mc_library_open_internal(const char *dir, mc_library **out);
 
 static inline sqlite3 *mc_library_db(mc_library *lib) {
   return lib->db;

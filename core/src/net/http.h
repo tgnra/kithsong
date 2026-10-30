@@ -32,6 +32,9 @@ typedef struct mc_http_cancel {
 /* GET url into *body. *http_status receives the HTTP status code (may be NULL).
  * Transport failures return MC_ERR_NET; any HTTP status counts as success. */
 mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status);
+/* mc_http_get() that cancel (NULL: none) can give up on. */
+mc_status mc_http_get_cancel(const char *url, mc_buffer *body, long *http_status,
+                             const mc_http_cancel *cancel);
 
 /* POSTs form (application/x-www-form-urlencoded, already escaped) to url; otherwise as
  * mc_http_get(). cancel may be NULL. */
@@ -49,5 +52,8 @@ typedef struct mc_ratelimit {
 void mc_ratelimit_init(mc_ratelimit *rl, uint32_t interval_ms);
 /* Blocks until the caller may send its request. */
 void mc_ratelimit_wait(mc_ratelimit *rl);
+/* Likewise, but gives up once cancel (NULL: never) says so, asked every 100 ms: then
+ * returns non-zero, and the slot it held goes unused. */
+int mc_ratelimit_wait_cancel(mc_ratelimit *rl, const mc_http_cancel *cancel);
 
 #endif

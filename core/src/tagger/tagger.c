@@ -2239,7 +2239,7 @@ static void add_zip_items(mc_import *imp, item_list *l) {
 static void import_thread(void *arg) {
   mc_import *imp = arg;
   mc_library *lib = NULL;
-  if (mc_library_open(imp->lib_dir, &lib) != MC_OK) lib = NULL;
+  if (mc_library_open_internal(imp->lib_dir, &lib) != MC_OK) lib = NULL;
 
   for (int i = 0; i < imp->path_count && !cancelled(imp); i++) scan_path(imp, imp->paths[i]);
   if (imp->file_count > 1) qsort(imp->files, (size_t)imp->file_count, sizeof *imp->files, compare_paths);

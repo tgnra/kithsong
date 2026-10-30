@@ -568,16 +568,15 @@ fail:
   return st;
 }
 
-mc_status mc_import_db_set_credit(mc_library *lib, int is_album, const char *uid,
-                                  const mc_db_artist *artist, const mc_db_credit_part *credit,
-                                  int credit_count) {
+mc_status mc_import_db_set_credit_locked(mc_library *lib, int is_album, const char *uid,
+                                         const mc_db_artist *artist,
+                                         const mc_db_credit_part *credit, int credit_count) {
   if (!lib || !uid || !artist || (credit_count > 0 && !credit)) return MC_ERR_INVALID_ARG;
   sqlite3 *db = mc_library_db(lib);
-  mc_status st = mc_library_begin_write(lib);
-  if (st != MC_OK) return st;
   const char *table = is_album ? "albums" : "tracks";
   credit_rows c = {0};
-  if ((st = resolve_credit(db, artist, credit, credit_count, &c)) == MC_OK) {
+  mc_status st = resolve_credit(db, artist, credit, credit_count, &c);
+  if (st == MC_OK) {
     char sql[96];
     snprintf(sql, sizeof sql, "UPDATE %s SET artist_uid = ?2 WHERE uid = ?1", table);
     sqlite3_stmt *stmt = prepare(db, sql);
@@ -588,8 +587,18 @@ mc_status mc_import_db_set_credit(mc_library *lib, int is_album, const char *uid
     if ((st = step_done(stmt)) == MC_OK && sqlite3_changes(db) != 1) st = MC_ERR_NOT_FOUND;
   }
   if (st == MC_OK) st = write_credit(db, table, uid, &c);
+  credit_clear(&c);
+  return st;
+}
+
+mc_status mc_import_db_set_credit(mc_library *lib, int is_album, const char *uid,
+                                  const mc_db_artist *artist, const mc_db_credit_part *credit,
+                                  int credit_count) {
+  if (!lib || !uid || !artist || (credit_count > 0 && !credit)) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  st = mc_import_db_set_credit_locked(lib, is_album, uid, artist, credit, credit_count);
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) mc_library_rollback(lib);
-  credit_clear(&c);
   return st;
 }

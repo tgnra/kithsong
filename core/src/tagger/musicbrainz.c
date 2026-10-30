@@ -33,7 +33,8 @@ void mc_musicbrainz_global_init(void) {
   mc_ratelimit_init(&g_mb_rate, 1100); /* a little over 1 s for clock slack */
 }
 
-static mc_status mb_get_json(const char *path, yyjson_doc **out) {
+/* cancel (NULL: none) gives up on the request, as if offline (MC_ERR_NET). */
+static mc_status mb_get_json_cancel(const char *path, yyjson_doc **out, const mc_http_cancel *cancel) {
   size_t len = strlen(MB_API) + strlen(path) + 16;
   char *url = malloc(len);
   if (!url) return MC_ERR_NOMEM;
@@ -44,11 +45,20 @@ static mc_status mb_get_json(const char *path, yyjson_doc **out) {
   long http = 0;
   mc_status st;
   for (int attempt = 0;; attempt++) {
-    mc_ratelimit_wait(&g_mb_rate);
-    st = mc_http_get(url, &body, &http);
+    if (mc_ratelimit_wait_cancel(&g_mb_rate, cancel)) {
+      free(url);
+      return MC_ERR_NET;
+    }
+    st = mc_http_get_cancel(url, &body, &http, cancel);
     if (st != MC_OK || http != 503 || attempt == 3) break;
     mc_buffer_free(&body);
-    mc_sleep_ms(2000u << attempt);
+    for (uint32_t waited = 0; waited < (2000u << attempt); waited += 100) {
+      if (cancel && cancel->cancelled && cancel->cancelled(cancel->user)) {
+        free(url);
+        return MC_ERR_NET;
+      }
+      mc_sleep_ms(100);
+    }
   }
   if (st == MC_OK && http != 200 && http != 404)
     fprintf(stderr, "musiccore: MusicBrainz returned HTTP %ld for %s\n", http, url);
@@ -60,6 +70,10 @@ static mc_status mb_get_json(const char *path, yyjson_doc **out) {
   else if (!(*out = yyjson_read(body.data, body.len, 0))) st = MC_ERR_FORMAT;
   mc_buffer_free(&body);
   return st;
+}
+
+static mc_status mb_get_json(const char *path, yyjson_doc **out) {
+  return mb_get_json_cancel(path, out, NULL);
 }
 
 mc_status mc_musicbrainz_ping(char **out_name) {
@@ -465,6 +479,10 @@ mc_status mb_search_releases_by(const mb_release_query *q, int track_count,
 static mc_status release_from(yyjson_val *root, mb_release *out);
 
 mc_status mb_lookup_release(const char *id, mb_release *out) {
+  return mb_lookup_release_cancel(id, out, NULL);
+}
+
+mc_status mb_lookup_release_cancel(const char *id, mb_release *out, const mc_http_cancel *cancel) {
   memset(out, 0, sizeof *out);
   if (!is_mbid(id)) return MC_ERR_INVALID_ARG;
   if (g_fake) return g_fake->lookup_release ? g_fake->lookup_release(id, out) : MC_ERR_NOT_FOUND;
@@ -472,7 +490,7 @@ mc_status mb_lookup_release(const char *id, mb_release *out) {
   snprintf(path, sizeof path, "/release/%s?inc=recordings+artist-credits+release-groups+labels",
            id);
   yyjson_doc *doc;
-  mc_status st = mb_get_json(path, &doc);
+  mc_status st = mb_get_json_cancel(path, &doc, cancel);
   if (st != MC_OK) return st;
   st = release_from(yyjson_doc_get_root(doc), out);
   yyjson_doc_free(doc);

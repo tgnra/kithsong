@@ -109,7 +109,7 @@ static void clean_name(const char *name, char out[MC_SYNC_NAME_MAX]) {
 mc_status mc_sync_conn_open(mc_sync *sync, mc_sync_conn *c) {
   memset(c, 0, sizeof *c);
   mc_status st = mc_sync_db_open(sync->config_dir, &c->sdb);
-  if (st == MC_OK) st = mc_library_open(sync->lib_dir, &c->lib);
+  if (st == MC_OK) st = mc_library_open_internal(sync->lib_dir, &c->lib);
   if (st != MC_OK) mc_sync_conn_close(c);
   return st;
 }

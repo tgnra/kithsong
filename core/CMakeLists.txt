@@ -83,6 +83,7 @@ add_library(musiccore STATIC
   src/tagger/organize.c
   src/tagger/unzip.c
   src/tagger/tagger.c
+  src/tagger/refresh.c
   src/net/http.c
   src/scrobble/lastfm.c
   src/scrobble/lastfm_key.c

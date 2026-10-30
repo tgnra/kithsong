@@ -96,7 +96,7 @@ static char *dirname_of(const char *rel) {
   return d;
 }
 
-static mc_status sha256_file(const char *path, char out[SHA_STRLEN]) {
+mc_status mc_sha256_file(const char *path, char out[MC_SHA256_STRLEN]) {
   static const char hex[] = "0123456789abcdef";
   FILE *f = mc_fopen(path, "rb");
   if (!f) return MC_ERR_IO;
@@ -395,7 +395,7 @@ static int same_bytes_in_library(mc_library *lib, const mc_dupe_in *in, const ch
     int64_t size = 0, mtime = 0;
     char theirs[SHA_STRLEN];
     if (abs && mc_file_info(abs, &size, &mtime) == MC_OK && size == in->size &&
-        sha256_file(abs, theirs) == MC_OK)
+        mc_sha256_file(abs, theirs) == MC_OK)
       same = strcmp(theirs, sha) == 0;
     free(abs);
   }
@@ -406,7 +406,7 @@ static int same_bytes_in_library(mc_library *lib, const mc_dupe_in *in, const ch
 /* The artists of uid's credit (a track's or an album's) as multi-valued tags, '\n' between
  * values: their names into *names, and their MusicBrainz ids into *ids if every one has an
  * id, else NULL, leaving MUSICBRAINZ_ARTISTID to the first artist's (see mc_tags). */
-static mc_status credit_tags(mc_library *lib, const char *uid, char **names, char **ids) {
+mc_status mc_dupes_credit_tags(mc_library *lib, const char *uid, char **names, char **ids) {
   *names = *ids = NULL;
   mc_credit_list *c = NULL;
   mc_status st = mc_library_list_credit(lib, uid, &c);
@@ -497,9 +497,9 @@ static mc_status library_tags(mc_library *lib, const char *track_uid, mc_tags *o
   char *album_uid = no_album ? NULL : col_dup(stmt, 19);
   sqlite3_finalize(stmt);
   /* ARTISTS and ALBUMARTISTS with their ids, as an import writes them. */
-  mc_status st = credit_tags(lib, track_uid, &out->artists, &out->mb_artistids);
+  mc_status st = mc_dupes_credit_tags(lib, track_uid, &out->artists, &out->mb_artistids);
   if (st == MC_OK && album_uid)
-    st = credit_tags(lib, album_uid, &out->album_artists, &out->mb_albumartistids);
+    st = mc_dupes_credit_tags(lib, album_uid, &out->album_artists, &out->mb_albumartistids);
   else if (st == MC_OK && !(out->album_artists = mc_strdup("")))
     st = MC_ERR_NOMEM;
   free(album_uid);
@@ -629,7 +629,7 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
    * the library already, anywhere. */
   for (int i = 0; i < count; i++) {
     mc_dupe_decision *d = &out->d[i];
-    if (d->action != MC_DUPE_SKIP && sha256_file(in[i].src_path, d->source_sha256) != MC_OK)
+    if (d->action != MC_DUPE_SKIP && mc_sha256_file(in[i].src_path, d->source_sha256) != MC_OK)
       d->source_sha256[0] = '\0';
     if ((d->action == MC_DUPE_IMPORT || d->action == MC_DUPE_ATTACH) &&
         same_bytes_in_library(lib, &in[i], d->source_sha256)) {

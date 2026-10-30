@@ -4,6 +4,7 @@
 #define MC_TAGGER_MUSICBRAINZ_H
 
 #include "musiccore/musiccore.h"
+#include "net/http.h"
 
 /* One entry of a MusicBrainz artist-credit array. */
 typedef struct mb_credit_part {
@@ -89,6 +90,9 @@ mc_status mb_search_releases_by(const mb_release_query *q, int track_count,
 
 /* Full release with tracklist, artist credits, label and release group. */
 mc_status mb_lookup_release(const char *id, mb_release *out);
+/* The same, given up (MC_ERR_NET) once cancel says so, waiting for the rate limit included.
+ * cancel may be NULL. */
+mc_status mb_lookup_release_cancel(const char *id, mb_release *out, const mc_http_cancel *cancel);
 
 /* Recordings matching artist/title (artist may be NULL), each as a one-track release. When
  * a recording has several releases, the earliest official single is preferred, else the

@@ -12,6 +12,14 @@
 
 #define MC_SHA256_STRLEN 65 /* hex SHA-256 plus NUL */
 
+/* The SHA-256 of a file's bytes, in lowercase hex. */
+mc_status mc_sha256_file(const char *path, char out[MC_SHA256_STRLEN]);
+
+/* ARTISTS (or ALBUMARTISTS) and their MusicBrainz ids for track or album uid's credit, as an
+ * import writes them: one name per line, and the ids the same way, or *ids NULL unless every
+ * artist has one. Both malloc'd. */
+mc_status mc_dupes_credit_tags(mc_library *lib, const char *uid, char **names, char **ids);
+
 /* What one audio file sounds like, as far as comparing quality goes. */
 typedef struct mc_audio_quality {
   const char *format; /* lowercase extension: "flac", "mp3", ... */

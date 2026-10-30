@@ -29,6 +29,17 @@ typedef enum mc_entity {
 mc_status mc_library_open(const char *dir, mc_library **out);
 void mc_library_close(mc_library *lib);
 
+/* Opening a library last opened by a version before artist credits (schema v13) starts a
+ * refresh in the background, once: credits such as "A feat. B" imported as one artist are
+ * split into their artists, from MusicBrainz where the album has a release id and it can be
+ * reached, else from the string, and the files' artist tags rewritten to match. It needs
+ * mc_init(), starts a few seconds after the open, goes on from where it was if the library
+ * was closed, and tries MusicBrainz again on a later open if it couldn't reach it. Nothing
+ * waits for it. This says whether this handle's refresh is running (1) or not (0), and how
+ * many of the albums and tracks with no album it found to do are done; done and total may
+ * be NULL. A frontend may show it; it needn't. */
+int mc_library_refresh_progress(mc_library *lib, int *done, int *total);
+
 /* Schema version the database is at (PRAGMA user_version). */
 int mc_library_schema_version(const mc_library *lib);
 
