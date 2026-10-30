@@ -32,8 +32,9 @@
  * playlists as tracks do (drag.h). Albums and Singles are hidden when the artist has none, so
  * an artist of only singles shows those and the tracks. The tracks are every one credited
  * to the artist (mc_library_list_artist_tracks()), with their albums; double-click or Enter
- * plays the artist's tracks from there, and right-click (or the Menu key) gives Add to playlist
- * and Delete from library. Play and Shuffle play them all; the header's menu ("...", or the
+ * plays the artist's tracks from there, and right-click (or the Menu key) gives Add to playlist,
+ * Go to album (unless it's a single, or on none), Go to artist (when it's someone else's) and
+ * Delete from library. Play and Shuffle play them all; the header's menu ("...", or the
  * Menu key elsewhere on the page) has Remove from this
  * computer... or Sync to this computer where they apply (remove_here.h), and Delete from
  * library..., which deletes their tracks and their own albums (delete_dialog.h); in the list,

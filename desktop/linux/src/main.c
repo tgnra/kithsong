@@ -906,6 +906,15 @@ static void on_track_delete(void *user, const char *track_uid, const char *title
                         on_playlists_changed, a);
 }
 
+/* The track menu's Go to album and Go to artist. */
+static void on_track_go_to_album(void *user, const char *album_uid, const char *track_uid) {
+  app_open_track(user, album_uid, track_uid);
+}
+
+static void on_track_go_to_artist(void *user, const char *artist_uid) {
+  app_open_artist(user, artist_uid);
+}
+
 static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
   (void)pspec;
   if (gtk_window_is_active(GTK_WINDOW(win)) && restore_deleted(user)) app_reload_library(user);
@@ -1352,7 +1361,8 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_overlay_split_view_set_max_sidebar_width(a->album_split, 420);
   const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
                                           on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete,
-                                          on_track_delete, on_reshuffle, a};
+                                          on_track_delete, on_reshuffle, on_track_go_to_album,
+                                          on_track_go_to_artist, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
   adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);
