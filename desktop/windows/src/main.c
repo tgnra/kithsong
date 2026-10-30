@@ -861,7 +861,12 @@ static void on_single_request(int code) {
     for (int i = 0, n = artist_view_single_count(); i < n; i++) {
       track_list_item it = artist_view_single_at(i);
       if (strcmp(it.uid, req->track_uid)) continue;
-      changed = delete_dialog(g_app.wnd, g_app.lib, MC_DELETE_TRACKS, req->track_uid, it.title);
+      /* Copies: the dialog's message loop repaints the page, which may reload it. */
+      char uid[MC_UID_STRLEN];
+      snprintf(uid, sizeof uid, "%s", req->track_uid);
+      wchar_t *title = _wcsdup(it.title);
+      if (title) changed = delete_dialog(g_app.wnd, g_app.lib, MC_DELETE_TRACKS, uid, title);
+      free(title);
       break;
     }
   }
