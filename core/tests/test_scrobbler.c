@@ -1,6 +1,6 @@
-/* The scrobbler against a fake service: the request signature, signing in, what gets queued
- * and sent, batching, backing off, a refused session, and the account reaching another
- * device through group sync. Also the play-counting rule they share with play counts. */
+/* The scrobbler against a fake service: the request signature, signing in, choosing the
+ * service, what gets queued and sent, batching, backing off, a refused session, and the
+ * account reaching another device through group sync. Also the play-counting rule they share with play counts. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -303,6 +303,10 @@ int main(int argc, char **argv) {
     mc_scrobbler_status st;
     CHECK(mc_scrobbler_status_get(sc, &st) == MC_OK);
     CHECK(st.has_key == mc_lastfm_build_key_present());
+    CHECK(st.service == MC_SCROBBLER_SERVICE_LASTFM);
+    CHECK_STR(st.service_name, "Last.fm");
+    CHECK_STR(st.api_url, MC_SCROBBLER_LASTFM_API_URL);
+    CHECK_STR(st.auth_url, MC_SCROBBLER_LASTFM_AUTH_URL);
     mc_scrobbler_status_clear(&st);
   }
   if (mc_lastfm_build_key_present()) {
@@ -332,6 +336,22 @@ int main(int argc, char **argv) {
   CHECK(mc_scrobbler_auth_finish(sc) == MC_OK);
   set(&approved, 0);
   char *name = username(sc);
+  CHECK_STR(name, "tania");
+  mc_free(name);
+  {
+    mc_scrobbler_status st;
+    CHECK(mc_scrobbler_status_get(sc, &st) == MC_OK);
+    CHECK(st.service == MC_SCROBBLER_SERVICE_OTHER && st.has_key);
+    CHECK_STR(st.service_name, "scrobble.invalid");
+    CHECK_STR(st.auth_url, "https://scrobble.invalid/auth/");
+    mc_scrobbler_status_clear(&st);
+  }
+  /* Only web addresses: anything else is turned down, and keeps the session. */
+  CHECK(mc_scrobbler_set_service(sc, "ftp://scrobble.invalid/2.0/", "https://scrobble.invalid/auth/",
+                                 "key", "secret") == MC_ERR_INVALID_ARG);
+  CHECK(mc_scrobbler_set_service(sc, "https://scrobble.invalid/2.0/", "https://", "key", "secret") ==
+        MC_ERR_INVALID_ARG);
+  name = username(sc);
   CHECK_STR(name, "tania");
   mc_free(name);
 
@@ -440,13 +460,26 @@ int main(int argc, char **argv) {
   CHECK(get(&scrobbled) == sent);
   CHECK(sign_in(sc));
   CHECK(mc_scrobbler_set_service(sc, MC_SCROBBLER_LIBREFM_API_URL, MC_SCROBBLER_LIBREFM_AUTH_URL,
-                                 "key", "secret") == MC_OK);
+                                 MC_SCROBBLER_LIBREFM_API_KEY, MC_SCROBBLER_LIBREFM_API_SECRET) == MC_OK);
+  {
+    /* Shown at once, signed out. */
+    mc_scrobbler_status st;
+    CHECK(mc_scrobbler_status_get(sc, &st) == MC_OK);
+    CHECK(st.username == NULL && st.has_key);
+    CHECK(st.service == MC_SCROBBLER_SERVICE_LIBREFM);
+    CHECK_STR(st.service_name, "Libre.fm");
+    mc_scrobbler_status_clear(&st);
+  }
   uint64_t end = mc_mono_ms() + 2000;
   while ((name = username(sc)) && mc_mono_ms() < end) {
     mc_free(name);
     mc_sleep_ms(10);
   }
   CHECK(name == NULL);
+  CHECK(mc_scrobbler_auth_begin(sc, &url) == MC_OK);
+  CHECK_STR(url, MC_SCROBBLER_LIBREFM_AUTH_URL "?api_key=" MC_SCROBBLER_LIBREFM_API_KEY "&token=tok123");
+  mc_free(url);
+  url = NULL;
 
   /* Freeing the scrobbler cuts a call that's hanging short, and its play stays queued. */
   CHECK(sign_in(sc));
@@ -459,8 +492,12 @@ int main(int argc, char **argv) {
   CHECK(queue_rows(config) == 1);
   set(&hang, 0);
   sc = NULL;
+  sent = get(&scrobbled);
   CHECK(mc_scrobbler_new(lib, config, &sc) == MC_OK);
   if (!sc) return TEST_RESULT();
+  /* The play is sent (not just a fresh status, which reads the same), so nothing of the
+   * worker's hangs below. */
+  CHECK(wait_count(&scrobbled, sent + 1, 2000));
   CHECK(wait_status(sc, 0, MC_OK, 2000));
 
   /* So does cancelling a sign-in, from another thread; and a token whose sign-in was
@@ -483,6 +520,18 @@ int main(int argc, char **argv) {
   CHECK(mc_scrobbler_auth_finish(sc) == MC_ERR_NET);
   set(&approved, 0);
   CHECK(sign_in(sc)); /* a new one starts afresh */
+
+  /* Back to Last.fm, which signs out, and its key is the build's again. */
+  CHECK(mc_scrobbler_set_service(sc, NULL, NULL, NULL, NULL) == MC_OK);
+  {
+    mc_scrobbler_status st;
+    CHECK(mc_scrobbler_status_get(sc, &st) == MC_OK);
+    CHECK(st.username == NULL && st.has_key == mc_lastfm_build_key_present());
+    CHECK(st.service == MC_SCROBBLER_SERVICE_LASTFM);
+    CHECK_STR(st.service_name, "Last.fm");
+    CHECK_STR(st.auth_url, MC_SCROBBLER_LASTFM_AUTH_URL);
+    mc_scrobbler_status_clear(&st);
+  }
 
   mc_scrobbler_free(sc);
   mc_library_close(lib);

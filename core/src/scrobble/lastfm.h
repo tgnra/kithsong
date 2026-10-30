@@ -9,8 +9,8 @@
 #include "musiccore/musiccore.h"
 #include "net/http.h"
 
-#define MC_LASTFM_API_URL "https://ws.audioscrobbler.com/2.0/"
-#define MC_LASTFM_AUTH_URL "https://www.last.fm/api/auth/"
+#define MC_LASTFM_API_URL MC_SCROBBLER_LASTFM_API_URL
+#define MC_LASTFM_AUTH_URL MC_SCROBBLER_LASTFM_AUTH_URL
 /* Scrobbles per track.scrobble call: the API's limit. */
 #define MC_LASTFM_BATCH 50
 /* Hex MD5 and its NUL. */

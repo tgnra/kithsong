@@ -7,6 +7,7 @@
  * its next poll. */
 #include "musiccore/scrobbler.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,6 +119,50 @@ static mc_status account_read(sqlite3 *db, account *a) {
 
 static mc_lastfm_service service_of(const account *a) {
   return (mc_lastfm_service){a->api_url, a->api_key, a->api_secret, a->session_key, NULL};
+}
+
+/* What Settings calls the service at api_url, and its kind: Last.fm, Libre.fm, or the
+ * address's host (with its port, if it has one). NULL if out of memory. */
+static char *service_name(const char *api_url, mc_scrobbler_service *kind) {
+  if (!strcmp(api_url, MC_LASTFM_API_URL)) {
+    *kind = MC_SCROBBLER_SERVICE_LASTFM;
+    return mc_strdup("Last.fm");
+  }
+  if (!strcmp(api_url, MC_SCROBBLER_LIBREFM_API_URL)) {
+    *kind = MC_SCROBBLER_SERVICE_LIBREFM;
+    return mc_strdup("Libre.fm");
+  }
+  *kind = MC_SCROBBLER_SERVICE_OTHER;
+  const char *host = strstr(api_url, "://");
+  host = host ? host + 3 : api_url;
+  size_t len = strcspn(host, "/?#");
+  const char *at = memchr(host, '@', len); /* a user name in the address isn't the name */
+  if (at) {
+    len -= (size_t)(at + 1 - host);
+    host = at + 1;
+  }
+  if (!len) return mc_strdup(api_url);
+  char *name = malloc(len + 1);
+  if (name) {
+    memcpy(name, host, len);
+    name[len] = '\0';
+  }
+  return name;
+}
+
+/* Shows a's user name and service in the status, taking them from a. Under lock. */
+static void show_account(mc_scrobbler *sc, account *a) {
+  mc_scrobbler_status *s = &sc->status;
+  free(s->username);
+  free(s->api_url);
+  free(s->auth_url);
+  free(s->service_name);
+  s->username = a->username;
+  s->api_url = a->api_url;
+  s->auth_url = a->auth_url;
+  a->username = a->api_url = a->auth_url = NULL;
+  s->service = MC_SCROBBLER_SERVICE_LASTFM;
+  s->service_name = s->api_url ? service_name(s->api_url, &s->service) : NULL;
 }
 
 /* Runs sql against the account row, creating it first if need be: ?1 is its uid, ?2 on
@@ -402,11 +447,7 @@ static void run(void *arg) {
     free(reqs);
 
     mc_mutex_lock(&sc->lock);
-    free(sc->status.username);
-    free(sc->status.api_url);
-    sc->status.username = acc.username;
-    sc->status.api_url = acc.api_url;
-    acc.username = acc.api_url = NULL;
+    show_account(sc, &acc);
     sc->status.pending = pending;
     sc->status.has_key = has_key;
     sc->status.last_error = last_error;
@@ -677,17 +718,40 @@ mc_status mc_scrobbler_sign_out(mc_scrobbler *sc) {
   return st;
 }
 
+/* Whether s is NULL, "", or an address starting http:// or https:// (in any case) with more
+ * after it. */
+static int web_address_or_none(const char *s) {
+  if (!s || !*s) return 1;
+  static const char *const schemes[] = {"http://", "https://"};
+  for (int i = 0; i < 2; i++) {
+    size_t n = 0;
+    while (schemes[i][n] && tolower((unsigned char)s[n]) == schemes[i][n]) n++;
+    if (!schemes[i][n] && s[n]) return 1;
+  }
+  return 0;
+}
+
 mc_status mc_scrobbler_set_service(mc_scrobbler *sc, const char *api_url, const char *auth_url,
                                    const char *api_key, const char *api_secret) {
-  if (!sc) return MC_ERR_INVALID_ARG;
+  if (!sc || !web_address_or_none(api_url) || !web_address_or_none(auth_url)) return MC_ERR_INVALID_ARG;
   const char *texts[] = {api_url, auth_url, api_key, api_secret};
   /* Only a change signs out: setting the service it's already on keeps the session. */
-  return write_account(sc,
-                       "UPDATE scrobble_account SET api_url = ?2, auth_url = ?3, api_key = ?4,"
-                       " api_secret = ?5, session_key = NULL, username = NULL"
-                       " WHERE uid = ?1 AND (api_url IS NOT ?2 OR auth_url IS NOT ?3"
-                       " OR api_key IS NOT ?4 OR api_secret IS NOT ?5)",
-                       texts, 4);
+  mc_status st = write_account(sc,
+                               "UPDATE scrobble_account SET api_url = ?2, auth_url = ?3, api_key = ?4,"
+                               " api_secret = ?5, session_key = NULL, username = NULL"
+                               " WHERE uid = ?1 AND (api_url IS NOT ?2 OR auth_url IS NOT ?3"
+                               " OR api_key IS NOT ?4 OR api_secret IS NOT ?5)",
+                               texts, 4);
+  /* Shown straight away, rather than once the worker has read it. */
+  account a;
+  if (st == MC_OK && read_now(sc, &a) == MC_OK) {
+    mc_mutex_lock(&sc->lock);
+    sc->status.has_key = account_has_key(&a);
+    show_account(sc, &a);
+    mc_mutex_unlock(&sc->lock);
+    account_clear(&a);
+  }
+  return st;
 }
 
 mc_status mc_scrobbler_status_get(mc_scrobbler *sc, mc_scrobbler_status *out) {
@@ -697,7 +761,10 @@ mc_status mc_scrobbler_status_get(mc_scrobbler *sc, mc_scrobbler_status *out) {
   *out = sc->status;
   out->username = sc->status.username ? mc_strdup(sc->status.username) : NULL;
   out->api_url = sc->status.api_url ? mc_strdup(sc->status.api_url) : NULL;
-  int nomem = (sc->status.username && !out->username) || (sc->status.api_url && !out->api_url);
+  out->auth_url = sc->status.auth_url ? mc_strdup(sc->status.auth_url) : NULL;
+  out->service_name = sc->status.service_name ? mc_strdup(sc->status.service_name) : NULL;
+  int nomem = (sc->status.username && !out->username) || (sc->status.api_url && !out->api_url) ||
+              (sc->status.auth_url && !out->auth_url) || (sc->status.service_name && !out->service_name);
   mc_mutex_unlock(&sc->lock);
   if (nomem) {
     mc_scrobbler_status_clear(out);
@@ -710,5 +777,7 @@ void mc_scrobbler_status_clear(mc_scrobbler_status *status) {
   if (!status) return;
   free(status->username);
   free(status->api_url);
+  free(status->auth_url);
+  free(status->service_name);
   memset(status, 0, sizeof *status);
 }

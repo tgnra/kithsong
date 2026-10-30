@@ -128,6 +128,26 @@ wchar_t *wstr_field_label(wchar_t *buf, size_t n, enum mc_str_id id) {
   return buf;
 }
 
+wchar_t *wstr_mnemonic_format(wchar_t *buf, size_t n, enum mc_str_id id, const char *arg) {
+  /* The argument's underscores doubled, so the '&' form keeps them. */
+  size_t len = arg ? strlen(arg) : 0, k = 0;
+  char *escaped = malloc(len * 2 + 1);
+  if (escaped) {
+    for (size_t i = 0; i < len; i++) {
+      if (arg[i] == '_') escaped[k++] = '_';
+      escaped[k++] = arg[i];
+    }
+    escaped[k] = '\0';
+  }
+  char *s = mc_format_alloc(mc_str_mnemonic(id), MC_S(escaped ? escaped : ""));
+  wchar_t *w = ampersand_form(s);
+  copy_into(buf, n, w);
+  free(w);
+  mc_free(s);
+  free(escaped);
+  return buf;
+}
+
 wchar_t *wstr_menu_item(wchar_t *buf, size_t n, enum mc_str_id text, enum mc_str_id shortcut) {
   _snwprintf(buf, n, L"%ls\t%ls", mc_wstr_mnemonic(text), mc_wstr(shortcut));
   if (n) buf[n - 1] = L'\0';

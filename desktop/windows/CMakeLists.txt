@@ -30,6 +30,7 @@ add_executable(kithsong WIN32
   src/playback.c
   src/playlist_dialogs.c
   src/remove_here.c
+  src/scrobble_service.c
   src/scroller.c
   src/search_view.c
   src/settings_view.c

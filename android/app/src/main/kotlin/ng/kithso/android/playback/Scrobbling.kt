@@ -43,6 +43,14 @@ class Scrobbling(
         /** The last sign-in wasn't approved in time. */
         val timedOut: Boolean = false,
         val enabled: Boolean = true,
+        /** The service: [CoreScrobbler.SERVICE_LASTFM] and so on, with its name and addresses. */
+        val service: Int = CoreScrobbler.SERVICE_LASTFM,
+        /** "" until read. */
+        val serviceName: String = "",
+        val apiUrl: String = "",
+        val authUrl: String = "",
+        /** Of the last change of service, shown until the next one: a status code, or null. */
+        val serviceFailure: Int? = null,
     )
 
     private val mutableState = MutableStateFlow(State(enabled = settings.scrobble))
@@ -102,6 +110,10 @@ class Scrobbling(
             hasKey = status.hasKey,
             pending = status.pending,
             lastError = status.lastError,
+            service = status.service,
+            serviceName = status.serviceName,
+            apiUrl = status.apiUrl,
+            authUrl = status.authUrl,
         )
     }
 
@@ -158,6 +170,38 @@ class Scrobbling(
                 }
             }
             mutableState.value = mutableState.value.copy(failure = failure, timedOut = false)
+            refresh()
+        }
+    }
+
+    /**
+     * Scrobbles to another service from now on ([CoreScrobbler.setService]: the strings are
+     * only for [CoreScrobbler.SERVICE_OTHER]). Changing it signs out, here and on the group's
+     * other devices when they sync. A sign-in under way is given up first: it's for the old
+     * service. Call on the main thread.
+     */
+    fun setService(
+        service: Int,
+        apiUrl: String? = null,
+        authUrl: String? = null,
+        apiKey: String? = null,
+        apiSecret: String? = null,
+    ) {
+        if (signIn?.isActive == true) cancelSignIn()
+        scope.launch {
+            val failure = withContext(Dispatchers.IO) {
+                try {
+                    open()?.setService(service, apiUrl, authUrl, apiKey, apiSecret)
+                    null
+                } catch (e: MusicCoreException) {
+                    e.status
+                }
+            }
+            mutableState.value = mutableState.value.copy(
+                failure = null,
+                timedOut = false,
+                serviceFailure = failure,
+            )
             refresh()
         }
     }
