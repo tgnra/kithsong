@@ -158,9 +158,10 @@ static mc_status write_account(mc_scrobbler *sc, const char *sql, const char *co
 /* --- Plays --- */
 
 /* A track as scrobbled: a single goes with the album it's from, a track with no album
- * without one, nor a track number. */
+ * without one, nor a track number. Artists as credited ("A feat. B"), as the files say. */
 static const char k_track_sql[] =
-  "SELECT coalesce(ar.name, aar.name), t.title, al.title, aar.name,"
+  "SELECT coalesce(t.artist_credit, ar.name, al.artist_credit, aar.name), t.title, al.title,"
+  " coalesce(al.artist_credit, aar.name),"
   " CASE WHEN al.uid IS NULL THEN NULL ELSE t.track_no END,"
   " t.duration_ms, t.mb_trackid"
   " FROM tracks t"
