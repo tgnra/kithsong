@@ -41,6 +41,9 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
      */
     val libraryDir: File get() = File(noBackupFilesDir, "library")
 
+    /** Playlists' and album groups' pictures, which the core makes again if the system clears them away. */
+    val playlistArtDir: File get() = File(cacheDir, PLAYLIST_ART_DIR)
+
     lateinit var library: LibrarySource
         private set
     lateinit var playback: Playback
@@ -75,7 +78,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         NativeCore.followLocale(resources.configuration)
         val core = CoreLibrarySource(
             libraryDir,
-            File(cacheDir, PLAYLIST_ART_DIR),
+            playlistArtDir,
             getSharedPreferences("library", MODE_PRIVATE),
             MainScope(),
         ) { getString(R.string.unknown_artist) }
@@ -134,7 +137,6 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
 
     private companion object {
         const val TAG = "kithsong"
-        // Playlists' pictures, which the core makes again if the system clears them away.
         const val PLAYLIST_ART_DIR = "playlist-art" // MC_PLAYLIST_ART_CACHE_DIR
     }
 }

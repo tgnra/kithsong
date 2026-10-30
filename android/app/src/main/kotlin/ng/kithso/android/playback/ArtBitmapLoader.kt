@@ -19,8 +19,9 @@ import java.io.IOException
 
 /**
  * Art for the notification and lock screen, from a queue item's [artRef] through the app's
- * image loader, so covers come out as they do in the app, and from its caches.
- * Items carry no artwork URI: the system couldn't read files in app storage anyway.
+ * image loader, so covers come out as they do in the app, and from its caches. Queue items
+ * carry no artwork URI; browse items carry an [ArtProvider] one for Android Auto, and an item
+ * with only that has its art loaded from what the URI says, the same way.
  */
 @OptIn(UnstableApi::class)
 class ArtBitmapLoader(private val context: Context, private val scope: CoroutineScope) : BitmapLoader {
@@ -30,11 +31,14 @@ class ArtBitmapLoader(private val context: Context, private val scope: Coroutine
         BitmapFactory.decodeByteArray(data, 0, data.size)
     }
 
-    override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
-        Futures.immediateFailedFuture(UnsupportedOperationException("Art comes from MediaMetadata.artRef"))
+    override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
+        val art = ArtProvider.artFor(context, uri)
+            ?: return Futures.immediateFailedFuture(UnsupportedOperationException("Art comes from MediaMetadata.artRef"))
+        return load { loadArtBitmap(context, art, ART_PX) }
+    }
 
     override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? {
-        val art = metadata.artRef ?: return null
+        val art = metadata.artRef ?: metadata.artworkUri?.let { ArtProvider.artFor(context, it) } ?: return null
         return load { loadArtBitmap(context, art, ART_PX) }
     }
 
