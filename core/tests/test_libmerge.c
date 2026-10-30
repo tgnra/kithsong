@@ -11,6 +11,7 @@
 #include "library/library_internal.h"
 #include "sync/libmerge.h"
 #include "tagger/dupes.h"
+#include "tagger/import_db.h"
 #include "test.h"
 #include "util/platform.h"
 
@@ -451,9 +452,88 @@ static void test_merge(const char *root) {
   remove_tree(dir);
 }
 
+/* For editing a copy outside the library: its triggers log nothing. */
+static void sql_remote(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  (void)argv;
+  sqlite3_result_int(ctx, 1);
+}
+
+/* Credits come along with the copy's tracks and albums; a copy set aside before v13 (no
+ * credit tables) merges as before, each artist a whole credit. */
+static void test_merge_credits(const char *root, int old_copy) {
+  char dir[1024];
+  snprintf(dir, sizeof dir, "%s/libmerge-credits-%d", root, old_copy);
+  remove_tree(dir);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(dir, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  track duet = {"Home", "Tapes", NULL, "Duet", NULL, 1, 1, "", "", ""};
+  track solo = {"Home", "Tapes", NULL, "Solo", NULL, 2, 1, "", "", ""};
+  add_track(lib, &duet, 7);
+  add_track(lib, &solo, 8);
+  const mc_db_credit_part pair[] = {{{"Home", NULL, NULL}, " & "}, {{"Guest", NULL, "GUEST"}, NULL}};
+  const mc_db_credit_part feat[] = {{{"Home", NULL, NULL}, " feat. "}, {{"Guest", NULL, "GUEST"}, NULL}};
+  mc_db_artist whole = {"Home & Guest", NULL, NULL};
+  CHECK(mc_import_db_set_credit(lib, 1, duet.album_uid, &whole, pair, 2) == MC_OK);
+  whole.name = "Home feat. Guest";
+  CHECK(mc_import_db_set_credit(lib, 0, duet.uid, &whole, feat, 2) == MC_OK);
+
+  char *backup = NULL;
+  CHECK(mc_libmerge_set_aside(lib, &backup) == MC_OK);
+  if (old_copy && backup) {
+    sqlite3 *copy = NULL;
+    CHECK(sqlite3_open_v2(backup, &copy, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK);
+    const char *const fns[] = {"mc_applying_remote", "mc_hlc_now", "mc_node_uid"};
+    for (int i = 0; i < 3; i++)
+      sqlite3_create_function(copy, fns[i], 0, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, sql_remote, NULL, NULL);
+    /* Triggers first: they name the columns. */
+    CHECK(exec(copy, "DROP TRIGGER mc_log_ins_tracks_artist_credit; DROP TRIGGER mc_log_upd_tracks_artist_credit;"
+                     "DROP TRIGGER mc_log_ins_albums_artist_credit; DROP TRIGGER mc_log_upd_albums_artist_credit;"
+                     "DROP TABLE track_artists; DROP TABLE album_artists;"
+                     "ALTER TABLE tracks DROP COLUMN artist_credit; ALTER TABLE albums DROP COLUMN artist_credit;"
+                     "UPDATE artists SET name = 'Home feat. Guest' WHERE name = 'Home';"
+                     "PRAGMA user_version = 12;") == SQLITE_OK);
+    sqlite3_close(copy);
+  }
+  mc_merge_result r;
+  CHECK(mc_libmerge_run(lib, NULL, 0, NULL, NULL, &r) == MC_OK && r.tracks_added == 2 && r.tracks_failed == 0);
+  char text[256];
+  if (!old_copy) {
+    CHECK(query_int(db, "SELECT count(*) FROM artists") == 2);
+    query_text(db, "SELECT a.artist_credit || '/' || ar.name FROM albums a JOIN artists ar ON ar.uid = a.artist_uid",
+               text, sizeof text);
+    CHECK(strcmp(text, "Home & Guest/Home") == 0);
+    query_text(db,
+               "SELECT group_concat(row, ';') FROM (SELECT t.title || ':' || c.position || ':' || ar.name ||"
+               " ':' || c.joinphrase AS row FROM track_artists c JOIN tracks t ON t.uid = c.track_uid"
+               " JOIN artists ar ON ar.uid = c.artist_uid ORDER BY 1)",
+               text, sizeof text);
+    CHECK(strcmp(text, "Duet:0:Home: feat. ;Duet:1:Guest:;Solo:0:Home:") == 0);
+    CHECK(query_int(db, "SELECT count(*) FROM album_artists") == 2);
+    CHECK(query_int(db, "SELECT count(*) FROM artists WHERE name = 'Guest' AND mb_artistid = 'GUEST'") == 1);
+    query_text(db, "SELECT artist_credit FROM tracks WHERE title = 'Duet'", text, sizeof text);
+    CHECK(strcmp(text, "Home feat. Guest") == 0);
+    CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE title = 'Solo' AND artist_credit IS NULL") == 1);
+  } else {
+    /* As v12 had it: one artist row by the whole credit, its own row 0. */
+    CHECK(query_int(db, "SELECT count(*) FROM artists") == 1);
+    CHECK(query_int(db, "SELECT count(*) FROM artists WHERE name = 'Home feat. Guest'") == 1);
+    CHECK(query_int(db, "SELECT count(*) FROM track_artists") == 2);
+    CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE artist_credit IS NOT NULL") == 0);
+  }
+  CHECK(query_int(db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
+  free(backup);
+  mc_library_close(lib);
+  remove_tree(dir);
+}
+
 int main(int argc, char **argv) {
   const char *root = argc > 1 ? argv[1] : ".";
   test_kept_choice();
   test_merge(root);
+  test_merge_credits(root, 0);
+  test_merge_credits(root, 1);
   return TEST_RESULT();
 }

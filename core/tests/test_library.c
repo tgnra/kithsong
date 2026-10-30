@@ -5,6 +5,7 @@
 #include "musiccore/musiccore.h"
 #include "test.h"
 #include "util/platform.h"
+#include "util/uid.h"
 
 static int changelog_count(sqlite3 *db, const char *where) {
   char sql[256];
@@ -386,6 +387,228 @@ static void test_migration_v12(const char *scratch) {
                  "UPDATE albums SET kind = 'singles' WHERE uid = 'al2';") == SQLITE_OK);
   CHECK(changelog_count(db, "entity = 'albums' AND row_uid = 'al2' AND field = 'title'") == 1);
   CHECK(changelog_count(db, "entity = 'albums' AND field = 'kind'") == 0);
+  mc_library_close(lib);
+}
+
+/* The first column of sql's first row, into out ("" if none). */
+static void query_text(sqlite3 *db, const char *sql, char *out, size_t cap) {
+  sqlite3_stmt *stmt;
+  out[0] = '\0';
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
+  if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_text(stmt, 0))
+    snprintf(out, cap, "%s", (const char *)sqlite3_column_text(stmt, 0));
+  sqlite3_finalize(stmt);
+}
+
+/* Migration v13: artist credits. A v12 library gets one credit row per track and album with
+ * an artist, under the uid every device derives, unlogged; the refresh is pending. Rows a
+ * newer peer logged before the upgrade (kept, not applied, as an unknown table and column)
+ * are applied once the migration has run. */
+static void test_migration_v13(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v13.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  char s[256];
+  query_text(db, "SELECT value FROM meta WHERE key = 'artist_refresh'", s, sizeof s);
+  CHECK_STR(s, "done"); /* nothing to refresh in a new library */
+
+  char t1_0[MC_UID_STRLEN], t1_1[MC_UID_STRLEN], t3_0[MC_UID_STRLEN], al1_0[MC_UID_STRLEN];
+  CHECK(mc_uid_derive("t1", 0, t1_0) == MC_OK && mc_uid_derive("t1", 1, t1_1) == MC_OK &&
+        mc_uid_derive("t3", 0, t3_0) == MC_OK && mc_uid_derive("al1", 0, al1_0) == MC_OK);
+  CHECK(strcmp(t1_0, t1_1) != 0 && strlen(t1_0) == MC_UID_STRLEN - 1 && t1_0[14] == '8');
+  char again[MC_UID_STRLEN];
+  CHECK(mc_uid_derive("t1", 1, again) == MC_OK && strcmp(again, t1_1) == 0);
+
+  /* As v12 had it, with what a v13 peer logged: Mimi featured on Starfire. */
+  char sql[2048];
+  snprintf(sql, sizeof sql,
+           V12_CREDITS
+           "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low'), ('ar2', 'Mimi');"
+           "INSERT INTO albums (uid, title, artist_uid) VALUES ('al1', 'Secret Name', 'ar1'),"
+           " ('al2', 'Nobody', NULL);"
+           "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES ('t1', 'al1', 'ar1', 'Starfire'),"
+           " ('t2', 'al1', NULL, 'Bright'), ('t3', NULL, 'ar2', 'Alone');"
+           "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
+           " (1000, 'peer0000-0000-7000-8000-000000000000', 'tracks', 't1', 'artist_credit', 'Low feat. Mimi'),"
+           " (1001, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'track_uid', 't1'),"
+           " (1002, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'artist_uid', 'ar1'),"
+           " (1003, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'position', 0),"
+           " (1004, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'joinphrase', ' feat. '),"
+           " (1005, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'track_uid', 't1'),"
+           " (1006, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'artist_uid', 'ar2'),"
+           " (1007, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'position', 1),"
+           " (1008, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'joinphrase', '');"
+           "PRAGMA user_version = 12;",
+           t1_0, t1_0, t1_0, t1_0, t1_1, t1_1, t1_1, t1_1);
+  lib->applying_remote = 1;
+  CHECK(exec(db, sql) == SQLITE_OK);
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 13);
+  CHECK(has_column(db, "tracks", "artist_credit") && has_column(db, "albums", "artist_credit"));
+  query_text(db, "SELECT value FROM meta WHERE key = 'artist_refresh'", s, sizeof s);
+  CHECK_STR(s, "pending");
+  /* One row each where there's an artist, at position 0. */
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE uid = '%s' AND track_uid = 't3'"
+                            " AND artist_uid = 'ar2' AND position = 0 AND joinphrase = ''", t3_0);
+  CHECK(query_int(db, sql) == 1);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM album_artists WHERE uid = '%s' AND album_uid = 'al1'"
+                            " AND artist_uid = 'ar1' AND position = 0", al1_0);
+  CHECK(query_int(db, sql) == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM track_artists WHERE track_uid = 't2'") == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM album_artists WHERE album_uid = 'al2'") == 0);
+  /* The peer's rows, applied: its row 0 is the backfilled one, now with its join. */
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE uid = '%s' AND joinphrase = ' feat. '", t1_0);
+  CHECK(query_int(db, sql) == 1);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE uid = '%s' AND artist_uid = 'ar2'"
+                            " AND position = 1", t1_1);
+  CHECK(query_int(db, sql) == 1);
+  query_text(db, "SELECT artist_credit FROM tracks WHERE uid = 't1'", s, sizeof s);
+  CHECK_STR(s, "Low feat. Mimi");
+  /* Nothing of it logged here: the changelog is the peer's rows. */
+  CHECK(changelog_count(db, "1") == 9);
+
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "ar2", &tracks) == MC_OK && tracks && tracks->count == 2);
+  if (tracks && tracks->count == 2) {
+    CHECK_STR(tracks->items[0].title, "Alone");
+    CHECK_STR(tracks->items[1].title, "Starfire");
+    CHECK_STR(tracks->items[1].artist, "Low feat. Mimi");
+    CHECK(strcmp(tracks->items[1].artist_uid, "ar1") == 0);
+  }
+  mc_track_list_free(tracks);
+  mc_credit_list *credit = NULL;
+  CHECK(mc_library_list_credit(lib, "t1", &credit) == MC_OK && credit && credit->count == 2);
+  if (credit && credit->count == 2) {
+    CHECK_STR(credit->items[0].name, "Low");
+    CHECK_STR(credit->items[0].join, " feat. ");
+    CHECK_STR(credit->items[1].name, "Mimi");
+    CHECK_STR(credit->items[1].join, "");
+  }
+  mc_credit_list_free(credit);
+  /* A track with no artist has its album's; an album its own; nothing else is found. */
+  credit = NULL;
+  CHECK(mc_library_list_credit(lib, "t2", &credit) == MC_OK && credit && credit->count == 1);
+  if (credit && credit->count == 1) CHECK(strcmp(credit->items[0].uid, "ar1") == 0);
+  mc_credit_list_free(credit);
+  credit = NULL;
+  CHECK(mc_library_list_credit(lib, "al2", &credit) == MC_OK && credit && credit->count == 0);
+  mc_credit_list_free(credit);
+  CHECK(mc_library_list_credit(lib, "nope", &credit) == MC_ERR_NOT_FOUND);
+  mc_library_close(lib);
+}
+
+/* Featured artists: an album or track credited to several is each one's, on the artist list
+ * and on each one's page. */
+static void test_credited_artists(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_credits.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+
+  /* Duets is A & B's, d1 A & B's own, d2 the album's; d3 (no album) and d4 (a single) are
+   * C feat. B's. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('A', 'Anna'), ('B', 'Bo'), ('C', 'Cy');"
+                 "INSERT INTO albums (uid, title, artist_uid, artist_credit) VALUES"
+                 " ('al1', 'Duets', 'A', 'Anna & Bo'), ('al2', 'One Off', 'C', 'Cy feat. Bo');"
+                 "INSERT INTO album_artists (uid, album_uid, artist_uid, position, joinphrase) VALUES"
+                 " ('aa1', 'al1', 'A', 0, ' & '), ('aa2', 'al1', 'B', 1, ''),"
+                 " ('aa3', 'al2', 'C', 0, ' feat. '), ('aa4', 'al2', 'B', 1, '');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, artist_credit, title, year) VALUES"
+                 " ('d1', 'al1', 'A', 'Anna & Bo', 'First', NULL), ('d2', 'al1', NULL, NULL, 'Second', NULL),"
+                 " ('d3', NULL, 'C', 'Cy feat. Bo', 'Third', 2001), ('d4', 'al2', 'C', 'Cy feat. Bo', 'Fourth', 2002);"
+                 "INSERT INTO track_artists (uid, track_uid, artist_uid, position, joinphrase) VALUES"
+                 " ('ta1', 'd1', 'A', 0, ' & '), ('ta2', 'd1', 'B', 1, ''),"
+                 " ('ta3', 'd3', 'C', 0, ' feat. '), ('ta4', 'd3', 'B', 1, ''),"
+                 " ('ta5', 'd4', 'C', 0, ' feat. '), ('ta6', 'd4', 'B', 1, '');") == SQLITE_OK);
+
+  mc_artist_list *artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 3);
+  if (artists && artists->count == 3) {
+    CHECK_STR(artists->items[1].name, "Bo");
+    CHECK(artists->items[1].album_count == 1); /* Duets; One Off is a single */
+    CHECK(artists->items[2].album_count == 0);
+  }
+  mc_artist_list_free(artists);
+
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_artist_albums(lib, "B", &albums) == MC_OK && albums && albums->count == 1);
+  if (albums && albums->count == 1) {
+    CHECK_STR(albums->items[0].title, "Duets");
+    CHECK_STR(albums->items[0].artist, "Anna & Bo");
+    CHECK(albums->items[0].track_count == 2 && albums->items[0].credited_count == 2);
+  }
+  mc_album_list_free(albums);
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_artist_singles(lib, "B", &tracks) == MC_OK && tracks && tracks->count == 2);
+  if (tracks && tracks->count == 2) {
+    CHECK_STR(tracks->items[0].title, "Third");
+    CHECK_STR(tracks->items[0].artist, "Cy feat. Bo");
+    CHECK_STR(tracks->items[1].title, "Fourth");
+  }
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "B", &tracks) == MC_OK && tracks && tracks->count == 4);
+  if (tracks && tracks->count == 4) CHECK_STR(tracks->items[2].artist, "Anna & Bo"); /* Second, the album's */
+  mc_track_list_free(tracks);
+  albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums && albums->count == 1);
+  if (albums && albums->count == 1) CHECK_STR(albums->items[0].artist, "Anna & Bo");
+  mc_album_list_free(albums);
+
+  /* Here: Bo by d3's file alone; then Duets by d2's, which is Bo's through the album. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f3', 'd3', 'x/3.flac', 'flac')") ==
+        SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) {
+    CHECK_STR(artists->items[0].name, "Bo");
+    CHECK(artists->items[0].album_count == 0 && artists->items[0].track_count == 1);
+  }
+  mc_artist_list_free(artists);
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f2', 'd2', 'x/2.flac', 'flac')") ==
+        SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 3);
+  if (artists && artists->count == 3) {
+    CHECK_STR(artists->items[1].name, "Bo");
+    CHECK(artists->items[1].album_count == 1 && artists->items[1].track_count == 2);
+  }
+  mc_artist_list_free(artists);
+
+  /* A peer of an older version moves d1 to Cy by artist_uid alone: d1 is Cy's, and Anna's no
+   * longer, though its row 0 still says Anna. Bo stays featured. */
+  CHECK(exec(db, "UPDATE tracks SET artist_uid = 'C' WHERE uid = 'd1'") == SQLITE_OK);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "A", &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) CHECK_STR(tracks->items[0].title, "Second");
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "C", &tracks) == MC_OK && tracks && tracks->count == 3);
+  mc_track_list_free(tracks);
+  mc_credit_list *credit = NULL;
+  CHECK(mc_library_list_credit(lib, "d1", &credit) == MC_OK && credit && credit->count == 2);
+  if (credit && credit->count == 2) CHECK(strcmp(credit->items[0].uid, "C") == 0);
+  mc_credit_list_free(credit);
+  /* Recents show an album's credit. */
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "al1") == MC_OK);
+  mc_recent_list *recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 1);
+  if (recents && recents->count == 1) CHECK_STR(recents->items[0].artist, "Anna & Bo");
+  mc_recent_list_free(recents);
   mc_library_close(lib);
 }
 
@@ -1215,6 +1438,8 @@ int main(int argc, char **argv) {
   test_recents(argc > 1 ? argv[1] : ".");
   test_migration_v10(argc > 1 ? argv[1] : ".");
   test_migration_v12(argc > 1 ? argv[1] : ".");
+  test_migration_v13(argc > 1 ? argv[1] : ".");
+  test_credited_artists(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
   test_playable(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");

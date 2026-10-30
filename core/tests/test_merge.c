@@ -10,8 +10,10 @@
 #include "library/library_internal.h"
 #include "musiccore/musiccore.h"
 #include "sync/rows.h"
+#include "tagger/import_db.h"
 #include "test.h"
 #include "util/platform.h"
+#include "util/uid.h"
 
 #define CHECK_TEXT(a, b) CHECK(strcmp((a), (b)) == 0)
 
@@ -222,6 +224,202 @@ static void check_merged(mc_library *lib, const import *a, const import *b) {
   CHECK(query_int(db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
 }
 
+/* The credit tables as text, owners and artists by name (uids differ between runs). */
+static void dump_credits(mc_library *lib, char *out, size_t cap) {
+  query_text(mc_library_db(lib),
+             "SELECT group_concat(row, ';') FROM (SELECT o.title || ':' || c.position || ':' || ar.name"
+             " || ':' || c.joinphrase AS row FROM track_artists c JOIN tracks o ON o.uid = c.track_uid"
+             " JOIN artists ar ON ar.uid = c.artist_uid"
+             " UNION ALL SELECT o.title || ':' || c.position || ':' || ar.name || ':' || c.joinphrase"
+             " FROM album_artists c JOIN albums o ON o.uid = c.album_uid"
+             " JOIN artists ar ON ar.uid = c.artist_uid ORDER BY 1)",
+             out, cap);
+}
+
+/* What one device's import of a credited album made. */
+typedef struct credited {
+  char album[MC_UID_STRLEN], track[MC_UID_STRLEN], mimi[MC_UID_STRLEN];
+} credited;
+
+/* "Duets" by Low & Mimi (release DREL), with two tracks: D1, Low feat. Mimi, and D2, the
+ * album's. Each device makes its own uids, so two such imports are duplicates. */
+static void import_credited(mc_library *lib, const char *dir, credited *out) {
+  const mc_db_credit_part duo[] = {{{"Low", NULL, "ART"}, " & "}, {{"Mimi", NULL, "MIMI"}, NULL}};
+  const mc_db_credit_part feat[] = {{{"Low", NULL, "ART"}, " feat. "}, {{"Mimi", NULL, "MIMI"}, NULL}};
+  mc_db_album al = {0};
+  al.title = "Duets";
+  al.artist = (mc_db_artist){"Low & Mimi", NULL, NULL};
+  al.credit = duo;
+  al.credit_count = 2;
+  al.mb_albumid = "DREL";
+  char p1[256], p2[256];
+  snprintf(p1, sizeof p1, "%s/01.flac", dir);
+  snprintf(p2, sizeof p2, "%s/02.flac", dir);
+  mc_db_track t[2] = {{0}, {0}};
+  t[0].path = p1;
+  t[0].format = "flac";
+  t[0].title = "D1";
+  t[0].track_no = 1;
+  t[0].artist = (mc_db_artist){"Low feat. Mimi", NULL, NULL};
+  t[0].credit = feat;
+  t[0].credit_count = 2;
+  t[0].mb_releasetrackid = "DRT1";
+  t[1].path = p2;
+  t[1].format = "flac";
+  t[1].title = "D2";
+  t[1].track_no = 2;
+  t[1].mb_releasetrackid = "DRT2";
+  CHECK(mc_import_db_write(lib, &al, t, 2) == MC_OK);
+  sqlite3 *db = mc_library_db(lib);
+  query_text(db, "SELECT uid FROM albums WHERE mb_albumid = 'DREL'", out->album, sizeof out->album);
+  query_text(db, "SELECT uid FROM tracks WHERE mb_releasetrackid = 'DRT1'", out->track, sizeof out->track);
+  query_text(db, "SELECT uid FROM artists WHERE mb_artistid = 'MIMI'", out->mimi, sizeof out->mimi);
+}
+
+/* Credits through duplicate merging: the artists' rows follow the merged artist, a merged-away
+ * album's or track's credit rows go and the survivor keeps its own, and a late row for a
+ * loser's credit doesn't come back. Both devices end up the same. */
+static void test_credits(const char *scratch) {
+  char pa[1024], pb[1024];
+  snprintf(pa, sizeof pa, "%s/test_merge_credits_a.d", scratch);
+  snprintf(pb, sizeof pb, "%s/test_merge_credits_b.d", scratch);
+  remove_db(pa);
+  remove_db(pb);
+  mc_library *a = NULL, *b = NULL;
+  CHECK(mc_library_open(pa, &a) == MC_OK);
+  CHECK(mc_library_open(pb, &b) == MC_OK);
+  if (!a || !b) return;
+  credited ca, cb;
+  import_credited(a, "Low & Mimi/Duets", &ca);
+  import_credited(b, "Low & Mimi/Duets", &cb);
+  send(a, b, 5);
+  send(b, a, 5);
+  CHECK(same_digest(a, b));
+
+  const char *album = smaller(ca.album, cb.album), *track = smaller(ca.track, cb.track);
+  const char *mimi = smaller(ca.mimi, cb.mimi);
+  const char *lose_track = track == ca.track ? cb.track : ca.track;
+  for (int i = 0; i < 2; i++) {
+    sqlite3 *db = mc_library_db(i ? b : a);
+    char sql[512], text[512];
+    CHECK(query_int(db, "SELECT count(*) FROM artists") == 2);
+    CHECK(query_int(db, "SELECT count(*) FROM albums") == 1 && query_int(db, "SELECT count(*) FROM tracks") == 2);
+    /* Each owner has its own rows only, under uids derived from it, naming the survivors. */
+    CHECK(query_int(db, "SELECT count(*) FROM album_artists") == 2);
+    CHECK(query_int(db, "SELECT count(*) FROM track_artists") == 4);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM album_artists WHERE album_uid = '%s'", album);
+    CHECK(query_int(db, sql) == 2);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE track_uid = '%s'", track);
+    CHECK(query_int(db, sql) == 2);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE track_uid = '%s'", lose_track);
+    CHECK(query_int(db, sql) == 0);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE artist_uid = '%s' AND position = 1", mimi);
+    CHECK(query_int(db, sql) == 2);
+    CHECK(query_int(db, "SELECT count(*) FROM track_artists WHERE artist_uid NOT IN (SELECT uid FROM artists)") == 0);
+    snprintf(sql, sizeof sql, "SELECT artist_credit FROM tracks WHERE uid = '%s'", track);
+    query_text(db, sql, text, sizeof text);
+    CHECK_TEXT(text, "Low feat. Mimi");
+    CHECK(query_int(db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
+    /* Mimi's page lists both tracks and the album. */
+    mc_track_list *tracks = NULL;
+    CHECK(mc_library_list_artist_tracks(i ? b : a, mimi, &tracks) == MC_OK && tracks && tracks->count == 2);
+    mc_track_list_free(tracks);
+  }
+  char da[1024], db_[1024];
+  dump_credits(a, da, sizeof da);
+  dump_credits(b, db_, sizeof db_);
+  CHECK_TEXT(da, db_);
+  CHECK_TEXT(da, "D1:0:Low: feat. ;D1:1:Mimi:;D2:0:Low: & ;D2:1:Mimi:;Duets:0:Low: & ;Duets:1:Mimi:");
+
+  /* Edits sync like any other: A drops Mimi from D1, B puts her back with another join. Row 1
+   * is deleted and then live again under the same uid, its join the newest. */
+  mc_db_artist low = {"Low", NULL, "ART"};
+  CHECK(mc_import_db_set_credit(a, 0, track, &low, NULL, 0) == MC_OK);
+  send(a, b, 5);
+  dump_credits(b, db_, sizeof db_);
+  CHECK_TEXT(db_, "D1:0:Low:;D2:0:Low: & ;D2:1:Mimi:;Duets:0:Low: & ;Duets:1:Mimi:");
+  char q[256], text[64];
+  snprintf(q, sizeof q, "SELECT coalesce(artist_credit, '<null>') FROM tracks WHERE uid = '%s'", track);
+  query_text(mc_library_db(b), q, text, sizeof text);
+  CHECK_TEXT(text, "<null>");
+  const mc_db_credit_part with[] = {{{"Low", NULL, "ART"}, " with "}, {{"Mimi", NULL, "MIMI"}, NULL}};
+  mc_db_artist whole = {"Low with Mimi", NULL, NULL};
+  CHECK(mc_import_db_set_credit(b, 0, track, &whole, with, 2) == MC_OK);
+  send(b, a, 5);
+  dump_credits(a, da, sizeof da);
+  CHECK_TEXT(da, "D1:0:Low: with ;D1:1:Mimi:;D2:0:Low: & ;D2:1:Mimi:;Duets:0:Low: & ;Duets:1:Mimi:");
+  query_text(mc_library_db(a), q, text, sizeof text);
+  CHECK_TEXT(text, "Low with Mimi");
+  CHECK(same_digest(a, b));
+
+  /* A late row for the losing track's credit, from a device that hasn't merged: it names an
+   * owner that's gone, and goes. */
+  char row_uid[MC_UID_STRLEN], origin[MC_UID_STRLEN];
+  CHECK(mc_uid_derive(lose_track, 2, row_uid) == MC_OK);
+  mc_uid_new(origin);
+  static const char *const fields[] = {"track_uid", "artist_uid", "position", "joinphrase"};
+  mc_row rows[4];
+  memset(rows, 0, sizeof rows);
+  const char *values[] = {lose_track, mimi, NULL, ""};
+  for (int i = 0; i < 4; i++) {
+    rows[i].hlc = a->hlc.last + 100 + (uint64_t)i;
+    memcpy(rows[i].origin, origin, MC_UID_STRLEN);
+    snprintf(rows[i].entity, sizeof rows[i].entity, "track_artists");
+    memcpy(rows[i].row_uid, row_uid, MC_UID_STRLEN);
+    snprintf(rows[i].field, sizeof rows[i].field, "%s", fields[i]);
+    if (values[i]) {
+      rows[i].tag = MC_VAL_TEXT;
+      rows[i].data = (const unsigned char *)values[i];
+      rows[i].len = (uint32_t)strlen(values[i]);
+    } else {
+      rows[i].tag = MC_VAL_INT;
+      rows[i].i = 2;
+    }
+  }
+  mc_rows_target tg;
+  mc_rows_target_library(a, &tg);
+  mc_rows_applier *ap = NULL;
+  CHECK(mc_rows_applier_new(&tg, &ap) == MC_OK);
+  if (ap) CHECK(mc_rows_apply(ap, rows, 4, NULL) == MC_OK);
+  mc_rows_applier_free(ap);
+  char sql[256];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE uid = '%s'", row_uid);
+  CHECK(query_int(mc_library_db(a), sql) == 0);
+  CHECK(query_int(mc_library_db(a), "SELECT count(*) FROM pragma_foreign_key_check") == 0);
+
+  /* A newer peer's rows for a table and a column this version doesn't have: logged, passed
+   * on, never applied, and no error. */
+  mc_row newer[2];
+  memset(newer, 0, sizeof newer);
+  for (int i = 0; i < 2; i++) {
+    newer[i].hlc = a->hlc.last + 200 + (uint64_t)i;
+    memcpy(newer[i].origin, origin, MC_UID_STRLEN);
+    newer[i].tag = MC_VAL_TEXT;
+    newer[i].data = (const unsigned char *)"x";
+    newer[i].len = 1;
+  }
+  snprintf(newer[0].entity, sizeof newer[0].entity, "track_moods");
+  mc_uid_new(newer[0].row_uid);
+  snprintf(newer[0].field, sizeof newer[0].field, "mood");
+  snprintf(newer[1].entity, sizeof newer[1].entity, "tracks");
+  memcpy(newer[1].row_uid, track, MC_UID_STRLEN);
+  snprintf(newer[1].field, sizeof newer[1].field, "mood");
+  ap = NULL;
+  CHECK(mc_rows_applier_new(&tg, &ap) == MC_OK);
+  int logged = 0;
+  if (ap) CHECK(mc_rows_apply(ap, newer, 2, &logged) == MC_OK && logged == 2);
+  mc_rows_applier_free(ap);
+  send(a, b, 5);
+  CHECK(query_int(mc_library_db(b), "SELECT count(*) FROM changelog WHERE field = 'mood'") == 2);
+  CHECK(same_digest(a, b));
+  mc_library_close(a);
+  mc_library_close(b);
+  if (!test_failures) {
+    remove_db(pa);
+    remove_db(pb);
+  }
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
@@ -408,6 +606,7 @@ int main(int argc, char **argv) {
   mc_library_close(a);
   mc_library_close(b);
   mc_library_close(c);
+  test_credits(scratch);
   mc_shutdown();
   if (!test_failures) {
     remove_db(pa);

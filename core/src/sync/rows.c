@@ -796,10 +796,12 @@ mc_status mc_rows_reapply(mc_rows_applier *a, const char *where) {
     const char *row_uid = (const char *)sqlite3_column_text(s, 1);
     const char *field = (const char *)sqlite3_column_text(s, 2);
     int t = entity ? find_table(a, entity) : -1;
-    if (t < 0 || !row_uid || strlen(row_uid) != UID_LEN || !field) continue;
+    if (t < 0 || !row_uid || strlen(row_uid) >= MC_UID_STRLEN || !field) continue;
     int col = strcmp(field, "_deleted") ? col_index(&a->tables[t], field) : -1;
     if (col < 0 && strcmp(field, "_deleted")) continue;
-    touched *tc = touch(a, t, row_uid);
+    char uid[MC_UID_STRLEN];
+    snprintf(uid, sizeof uid, "%s", row_uid);
+    touched *tc = touch(a, t, uid);
     if (!tc) st = MC_ERR_NOMEM;
     else if (col >= 0) tc->won |= 1u << col; /* every field is set to its winner */
   }

@@ -883,6 +883,46 @@ static void test_topdir_trash(void) {
 }
 #endif
 
+/* A release credited to several is found by its credit as shown, and a file swapped in is
+ * tagged with the library's credit: ARTIST as credited, ARTISTS one per artist, the ids
+ * only where every artist has one. */
+static void test_credited(void) {
+  mc_library *lib = make_library("credited", NULL, "mp3", 128, 0, 0);
+  CHECK(lib != NULL);
+  if (!lib) return;
+  char album_uid[64], track1[64];
+  query_text(lib, "SELECT uid FROM albums", album_uid, sizeof album_uid);
+  query_text(lib, "SELECT uid FROM tracks WHERE track_no = 1", track1, sizeof track1);
+  const mc_db_credit_part duo[] = {{{"Low", NULL, MBID_ARTIST}, " & "}, {{"Mimi", NULL, NULL}, NULL}};
+  const mc_db_credit_part feat[] = {{{"Low", NULL, MBID_ARTIST}, " feat. "}, {{"Mimi", NULL, NULL}, NULL}};
+  mc_db_artist whole = {"Low & Mimi", NULL, NULL};
+  CHECK(mc_import_db_set_credit(lib, 1, album_uid, &whole, duo, 2) == MC_OK);
+  whole.name = "Low feat. Mimi";
+  CHECK(mc_import_db_set_credit(lib, 0, track1, &whole, feat, 2) == MC_OK);
+
+  incoming x;
+  make_incoming(&x, "credited", 3, NULL, "flac", 900, 44100, 16);
+  mc_db_album a = album_desc(NULL);
+  a.artist = (mc_db_artist){"Low & Mimi", NULL, NULL};
+  mc_dupe_plan p;
+  CHECK(mc_dupes_plan(lib, &a, x.in, 3, &p) == MC_OK);
+  CHECK(!strcmp(p.album_uid, album_uid));
+  CHECK(p.swaps == 3);
+  mc_tags *t = &p.d[0].tags;
+  CHECK(p.d[0].action == MC_DUPE_SWAP && p.d[0].has_tags);
+  CHECK_STR(t->artist, "Low feat. Mimi");
+  CHECK_STR(t->artists, "Low\nMimi");
+  CHECK_STR(t->mb_artistid, MBID_ARTIST);
+  CHECK(t->mb_artistids == NULL); /* Mimi has none */
+  CHECK_STR(t->album_artist, "Low & Mimi");
+  CHECK_STR(t->album_artists, "Low\nMimi");
+  /* The others were imported as Low's, and stay so: a track keeps its own credit. */
+  CHECK_STR(p.d[1].tags.artist, "Low");
+  CHECK_STR(p.d[1].tags.artists, "Low");
+  mc_dupe_plan_free(&p);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   snprintf(g_scratch, sizeof g_scratch, "%s%ctest_dupes.d", argc > 1 ? argv[1] : ".",
            MC_PATH_SEP);
@@ -902,6 +942,7 @@ int main(int argc, char **argv) {
   test_swap_whole_release();
   test_source_hash();
   test_no_album();
+  test_credited();
 #ifndef _WIN32
   test_posix_trash();
   test_topdir_trash();
