@@ -52,6 +52,11 @@ internal class StagedFiles(private val context: Context, private val root: File)
      * The batches of the tree [tree]: its audio files grouped by album folder (a disc folder
      * such as "CD1" goes with its parent), with the covers and other pictures in those folders,
      * and each zip on its own. Paths keep the picked folder's name and everything under it.
+     *
+     * The core would extract a zip that came in its folder's batch too, but a batch is copied
+     * into the cache whole: a folder of downloads would be copied all at once, then extracted
+     * beside its copies. On its own, a zip is copied, extracted and imported before the next,
+     * and the core extracts it as on the desktops, one level deep.
      */
     fun planFolder(tree: Uri): List<Batch> {
         val rootId = DocumentsContract.getTreeDocumentId(tree)

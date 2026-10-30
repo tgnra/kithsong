@@ -114,6 +114,12 @@ static const char *const k_migrations[] = {
   " ('5e1ec7ed-0000-4000-8000-000000000005', 'Random albums', 'albums',"
   "  '{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false},"
   "\"order\":[{\"field\":\"random\",\"seed\":1}],\"limit\":24}');",
+  /* v11: files.source_sha256 is the SHA-256 (hex) of the bytes a file was imported from,
+   * before the import tagged its copy, so importing that file again is recognised as
+   * importing what the library has (tagger.h, "Duplicates"). NULL for files imported before
+   * this, and for files already in the library folder when they were imported. Not logged:
+   * files are per device; sync sends it with an original (sync-protocol.md, "Files"). */
+  "ALTER TABLE files ADD COLUMN source_sha256 TEXT;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 

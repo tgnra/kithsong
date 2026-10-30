@@ -980,8 +980,7 @@ static void review_load(review *r) {
   gtk_widget_set_sensitive(r->as_is, !busy);
   gtk_widget_set_sensitive(r->skip, !busy && it->state != MC_IMPORT_DONE);
   gtk_widget_set_sensitive(r->search, !busy);
-  /* Only albums have the clues; once it has run, a manual search brings it back. */
-  gtk_widget_set_visible(r->wider, it->kind == MC_IMPORT_ALBUM);
+  /* Albums and single tracks alike; once it has run, a manual search brings it back. */
   gtk_widget_set_sensitive(r->wider, !busy && !it->searched_wider && !v->offline);
 }
 

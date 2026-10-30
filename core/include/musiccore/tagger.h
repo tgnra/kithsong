@@ -66,7 +66,17 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * the confidence threshold it is imported straight away: the files are copied into the
  * library folder (moved, if they're already inside it) under Artist/Album (Year)/, tagged,
  * given a cover.jpg, and added to the database. The originals are never modified.
- * Otherwise the item waits in MC_IMPORT_REVIEW until the frontend resolves it.
+ * Otherwise the item waits in MC_IMPORT_REVIEW until the frontend resolves it. Albums are
+ * matched first, then one-file items, so the albums reach the review first.
+ *
+ * Disc folders. Albums whose album tag (or folder name) ends with a disc ("Title Disc1",
+ * "Title CD 2", "Title (Disc 1 of 2)") are grouped one item per disc. When several such items
+ * share a title without the disc, in one folder or folders side by side, the session asks
+ * MusicBrainz before matching them: if a release of that title has as many discs, and each
+ * item's files fit its disc's tracks, they're joined into the first item (album = the title,
+ * files in disc order) and the others become MC_IMPORT_SKIPPED with MC_IMPORT_OUTCOME_MOVED.
+ * The joined item is never imported straight away: it waits in MC_IMPORT_REVIEW, with error
+ * saying it was joined, however high its confidence. Otherwise they're matched one by one.
  *
  * Singles: loose tracks, and releases MusicBrainz classes as singles, go into one album
  * per artist called "<artist> Singles" (albums.kind = 'singles').
@@ -80,15 +90,17 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  *
  * Extended search. Albums often carry a label or circle in the album artist tag rather than
  * the artist ("SHARPNELSOUND"), and then the normal search (album title and album artist)
- * finds nothing, or nothing good. When an album's best candidate is below 75% confidence
- * (or there is none), the session searches more widely by itself before deciding: by the
- * catalogue numbers in its tags (CATALOGNUMBER, CATALOGID, ...) and in [brackets] in the
+ * finds nothing, or nothing good. When the best candidate of an album or a one-file item (a
+ * single, which may be a whole release such as a DJ mix) is below 75% confidence (or there is
+ * none), the session searches more widely by itself before deciding: by the catalogue numbers
+ * in its tags (CATALOGNUMBER, CATALOGID, ...) and in [brackets] in the album tag and the
  * folder name; by the album title with the artists found in "Label (Artist) - Title" folder
  * names, the album artist tag, the track artists and the file names; with the label (label
  * tags, or the name standing where the artist would); and by the title alone. At most 4
  * more searches and 6 more release lookups per album. Every release candidate is then
  * scored with the best fitting of those artists and titles; tracks, lengths and the rest
- * are scored as usual, and the same rules decide whether the best one is accepted. Above
+ * are scored as usual, and the same rules decide whether the best one is accepted (a
+ * release candidate must be complete, for a single too). Above
  * 75%, mc_import_search_wider() runs it on request. It's skipped while MusicBrainz can't be
  * reached, and a network error ends it early (then searched_wider stays 0).
  *
@@ -116,23 +128,48 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  *     playlists, album groups, play counts, recents and sync profiles keep them), and only
  *     then the old file goes to the Recycle Bin / trash (see mc_trash). The track gets a new
  *     tracks.file_rev, which sync uses to replace other devices' copies.
+ *   - A swapped-in file becomes a better copy of the track the library has: it is tagged as
+ *     the library's track (its title, artist, numbers and MusicBrainz ids, and its album's
+ *     title, album artist, year and ids; ids the library lacks are removed from the file) and
+ *     takes the old file's name with its own extension, whatever its own match said. So is
+ *     a file attached to a track that has no file on this device, named for that track.
+ *   - Except for the whole release: when the album was found by release or release group
+ *     id, every one of its tracks is paired, and every file of it on this device is
+ *     swapped, the item's MusicBrainz match wins instead. The new files keep the match's
+ *     tags and names (the old folder goes if that leaves it empty, its cover moving along
+ *     unless the item brings one), and the album and track rows take the match's title,
+ *     artists, numbers, years and ids, keeping their uids. Not for an album found by name,
+ *     a singles album, or an item imported with its existing tags.
  *   - Otherwise the tracks already in the library are skipped: no "(2)" copies.
- *   - Tracks of the release the library lacks are added to the existing album either way,
- *     and a file whose bytes are identical to a file in the library (SHA-256) is skipped.
+ *   - Tracks of the release the library lacks are added to the existing album either way.
+ *   - The same file again: every file imported from outside the library records the
+ *     SHA-256 of its bytes as they were before the import tagged its copy
+ *     (files.source_sha256). A file whose bytes hash to a recorded source hash, or to the
+ *     SHA-256 of a file in the library, is skipped as already there. Files imported before
+ *     this have no source hash: they're only found by their current bytes.
  *
  * mc_import_item.outcome says what happened.
  *
- * Zips. A path given to mc_import_start that is a .zip file is extracted into a staging
- * folder named after the zip without its extension (in a kithsong-import-* folder of its own
- * under mc_import_options.staging_dir), and that folder is imported as any other, cover.jpg
- * and all. Entry names are UTF-8 when the entry's flag bit 11 says so, else the UTF-8 name in
+ * Zips. A path given to mc_import_start that is a .zip file, and a .zip file found in a
+ * folder given to it, is extracted into a staging folder named after the zip without its
+ * extension (in a kithsong-import-* folder of its own under mc_import_options.staging_dir),
+ * and that folder is imported as any other, cover.jpg and all. A folder's zips are extracted
+ * after the folder is scanned, in path order. Only one level deep: zips that come out of a
+ * zip are left as they are. Entry names are UTF-8 when the entry's flag bit 11 says so, else the UTF-8 name in
  * its Info-ZIP Unicode Path extra field if it has a matching one, else CP437; entries
  * that are absolute or use ".." (zip slip) are left out, and so are __MACOSX/ and .DS_Store.
- * A zip holding more than 8 GB unzipped, or more than the staging folder's free space, isn't
- * extracted. A zip that can't be extracted becomes an item of its own with no files, in
- * MC_IMPORT_FAILED with the reason in error (folder is the zip's path, album its file name).
- * The staging folder is deleted when the session is freed. Only zips named directly are
- * extracted, not zips found inside a folder.
+ * A zip isn't extracted if it holds more than 8 GB unzipped, if it would take all the zips
+ * the session extracts together over 32 GB, or if it holds more than the staging folder's
+ * free space less what the session's earlier zips extracted (their files are still to be
+ * copied into the library). A zip that can't be extracted becomes an item of its own with no
+ * files, in MC_IMPORT_FAILED with the reason in error (folder is the zip's path, album its
+ * file name). The staging folder is deleted when the session is freed.
+ *
+ * Long paths. Files whose paths are 260 characters or more are imported like any other on
+ * Windows too. An audio file that can't be read is normally passed over as not being audio,
+ * but one with a path that long becomes a failed item the same way, with
+ * MC_STR_IMPORT_ERROR_LONG_PATH as its error (folder is its path, album its file name), so
+ * the frontend can say how to turn on Windows' long paths.
  *
  * Callbacks run on the import thread; frontends marshal them to their UI thread. Every
  * other function may be called from any thread. */
@@ -172,7 +209,8 @@ typedef enum mc_import_outcome {
                                 * already there in equal or better quality */
   MC_IMPORT_OUTCOME_DUPLICATE, /* SKIPPED: already in the library in equal or better quality */
   MC_IMPORT_OUTCOME_MOVED      /* SKIPPED: its files were all assigned to another item's
-                                * tracks (mc_import_assign); it has none left */
+                                * tracks (mc_import_assign), or it was a disc joined to
+                                * another item ("Disc folders" above); it has none left */
 } mc_import_outcome;
 
 typedef struct mc_import_options {
@@ -275,7 +313,10 @@ mc_status mc_import_search(mc_import *imp, int item, const char *artist, const c
  * and if from_item had already put it in the library, its library row moves to this album
  * (an album left empty is deleted). A from_item with no files left becomes MC_IMPORT_SKIPPED
  * with MC_IMPORT_OUTCOME_MOVED. A file already on that track stays in the item, unmatched.
- * The match's confidence isn't recomputed.
+ * The match's confidence, extra_files and missing tracks are then recomputed from the files
+ * and tracks as they're paired now (no new lookup), every pair counting, so a match that was
+ * low only for want of that track goes up. The items' other matches are rescored too, but
+ * matches keep their order (and indices), so they may no longer be best first.
  *
  * Neither item may be busy (pending, matching or writing): MC_ERR_INVALID_ARG, as for bad
  * indices. File indices of both items change, so frontends read them again on
@@ -287,9 +328,9 @@ mc_status mc_import_assign(mc_import *imp, int item, int match, int track, int f
  * returns how many there are in all. */
 int mc_import_related(mc_import *imp, int item, int *out, int max);
 
-/* Searches more widely for an album (see "Extended search" above); the candidates found join
- * the item's, and the item stays in review. MC_ERR_INVALID_ARG for a single. While offline
- * it waits for the next request instead, so frontends offer it only while online. */
+/* Searches more widely for an album or a single (see "Extended search" above); the candidates
+ * found join the item's, and the item stays in review. While offline it waits for the next
+ * request instead, so frontends offer it only while online. */
 mc_status mc_import_search_wider(mc_import *imp, int item);
 
 /* Stops tagging for the rest of the session, as if it had been started with skip_tagging:

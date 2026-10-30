@@ -10,7 +10,7 @@
 #include "musiccore/tagger.h"
 #include "util/platform.h"
 
-#define SHA_STRLEN 65
+#define SHA_STRLEN MC_SHA256_STRLEN
 
 /* --- Quality --- */
 
@@ -283,15 +283,17 @@ static int find_artist(sqlite3 *db, const mc_db_artist *a, char uid[MC_UID_STRLE
 }
 
 /* The library album holding the incoming release, or "": see tagger.h. On success the
- * album's tracks are in *tracks and pair[] says which incoming file is which. */
+ * album's tracks are in *tracks, pair[] says which incoming file is which, and *found_by_id
+ * whether the album has the release's MusicBrainz release or release group id. */
 static mc_status find_release(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
                               int count, const mc_dupe_remote *remote,
                               char album_uid[MC_UID_STRLEN], lib_track **tracks, int *ntracks,
-                              int *pair) {
+                              int *pair, int *found_by_id) {
   sqlite3 *db = mc_library_db(lib);
   album_uid[0] = '\0';
   *tracks = NULL;
   *ntracks = 0;
+  *found_by_id = 0;
 
   /* Candidate albums, best evidence first. A name match must share the track list. */
   char cands[8][MC_UID_STRLEN];
@@ -344,6 +346,7 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
       memcpy(album_uid, cands[c], MC_UID_STRLEN);
       *tracks = t;
       *ntracks = n;
+      *found_by_id = !album->singles && by_id[c];
       return MC_OK;
     }
     lib_tracks_free(t, n);
@@ -352,24 +355,26 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
   return MC_OK;
 }
 
-/* Whether some file in the library has exactly the bytes of the incoming file: same size,
- * then the same SHA-256 (the recorded one, else hashed now). */
-static int same_bytes_in_library(mc_library *lib, const mc_dupe_in *in, char sha[SHA_STRLEN]) {
-  if (in->size <= 0) return 0;
-  sqlite3_stmt *stmt = prepare(mc_library_db(lib),
-                               "SELECT path, sha256 FROM files WHERE size_bytes = ?1");
+/* Whether the library has the incoming file (whose SHA-256 is sha) already, byte for byte:
+ * a file imported from those bytes (files.source_sha256), or holding them (the recorded
+ * sha256, else, for a file of the same size, hashed now). */
+static int same_bytes_in_library(mc_library *lib, const mc_dupe_in *in, const char *sha) {
+  if (!sha[0]) return 0;
+  sqlite3_stmt *stmt = prepare(mc_library_db(lib), "SELECT 1 FROM files"
+                                                   " WHERE source_sha256 = ?1 OR sha256 = ?1");
+  if (!stmt) return 0;
+  sqlite3_bind_text(stmt, 1, sha, -1, SQLITE_STATIC);
+  int same = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  if (same || in->size <= 0) return same;
+
+  stmt = prepare(mc_library_db(lib), "SELECT path FROM files WHERE size_bytes = ?1"
+                                     " AND (sha256 IS NULL OR length(sha256) <> 64)");
   if (!stmt) return 0;
   sqlite3_bind_int64(stmt, 1, in->size);
-  int same = 0;
   while (!same && sqlite3_step(stmt) == SQLITE_ROW) {
     const char *rel = (const char *)sqlite3_column_text(stmt, 0);
-    const char *recorded = (const char *)sqlite3_column_text(stmt, 1);
     if (!rel) continue;
-    if (!sha[0] && sha256_file(in->src_path, sha) != MC_OK) break;
-    if (recorded && strlen(recorded) == SHA_STRLEN - 1) {
-      same = strcmp(recorded, sha) == 0;
-      continue;
-    }
     char *abs = mc_library_abspath(lib, rel);
     int64_t size = 0, mtime = 0;
     char theirs[SHA_STRLEN];
@@ -380,6 +385,62 @@ static int same_bytes_in_library(mc_library *lib, const mc_dupe_in *in, char sha
   }
   sqlite3_finalize(stmt);
   return same;
+}
+
+/* What the library says of track_uid, as the importer tags a file (write_item in tagger.c;
+ * for a singles album's track, without release ids or numbers). Ids the library hasn't are ""
+ * (removed from the file), so none of the new file's own can contradict the track; the
+ * genre is left to the file unless the library has one. */
+static mc_status library_tags(sqlite3 *db, const char *track_uid, mc_tags *out) {
+  memset(out, 0, sizeof *out);
+  sqlite3_stmt *stmt = prepare(
+    db,
+    "SELECT t.title, coalesce(ta.name, aa.name), coalesce(ta.mb_artistid, ''), t.genre,"
+    " t.track_no, t.disc_no, t.year, coalesce(t.mb_trackid, ''),"
+    " coalesce(t.mb_releasetrackid, ''), al.title, al.kind = 'singles', aa.name,"
+    " coalesce(aa.mb_artistid, ''), al.year, al.original_year, al.disc_total,"
+    " CASE WHEN al.kind = 'singles' THEN '' ELSE coalesce(al.mb_albumid, '') END,"
+    " CASE WHEN al.kind = 'singles' THEN '' ELSE coalesce(al.mb_releasegroupid, '') END,"
+    /* the disc's track count, when the library has the whole disc */
+    " (SELECT CASE WHEN count(*) >= max(coalesce(u.track_no, 0)) THEN count(*) END"
+    "  FROM tracks u WHERE u.album_uid = t.album_uid"
+    "  AND coalesce(u.disc_no, 1) = coalesce(t.disc_no, 1))"
+    " FROM tracks t LEFT JOIN artists ta ON ta.uid = t.artist_uid"
+    " LEFT JOIN albums al ON al.uid = t.album_uid LEFT JOIN artists aa ON aa.uid = al.artist_uid"
+    " WHERE t.uid = ?1");
+  if (!stmt) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, track_uid, -1, SQLITE_STATIC);
+  if (sqlite3_step(stmt) != SQLITE_ROW) {
+    sqlite3_finalize(stmt);
+    return MC_ERR_NOT_FOUND;
+  }
+  int singles = sqlite3_column_int(stmt, 10);
+  out->title = col_dup(stmt, 0);
+  out->artist = col_dup(stmt, 1);
+  out->mb_artistid = col_dup(stmt, 2);
+  out->genre = col_dup(stmt, 3);
+  out->mb_trackid = col_dup(stmt, 7);
+  out->mb_releasetrackid = col_dup(stmt, 8);
+  out->album = col_dup(stmt, 9);
+  out->album_artist = col_dup(stmt, 11);
+  out->mb_albumartistid = col_dup(stmt, 12);
+  out->original_year = sqlite3_column_int(stmt, 14);
+  out->year = sqlite3_column_int(stmt, 6) ? sqlite3_column_int(stmt, 6) : sqlite3_column_int(stmt, 13);
+  out->mb_albumid = col_dup(stmt, 16);
+  out->mb_releasegroupid = col_dup(stmt, 17);
+  if (!singles) {
+    out->track = sqlite3_column_int(stmt, 4);
+    out->track_total = out->track ? sqlite3_column_int(stmt, 18) : 0;
+    out->disc = sqlite3_column_int(stmt, 5);
+    out->disc_total = sqlite3_column_int(stmt, 15);
+  }
+  sqlite3_finalize(stmt);
+  if (!out->title || !out->mb_artistid || !out->mb_trackid || !out->mb_releasetrackid ||
+      !out->mb_albumartistid || !out->mb_albumid || !out->mb_releasegroupid) {
+    mc_tags_clear(out);
+    return MC_ERR_NOMEM;
+  }
+  return MC_OK;
 }
 
 /* --- Finishing a swap --- */
@@ -414,7 +475,10 @@ void mc_dupes_finish_swap(mc_library *lib, const char *old_rel, const char *fina
 
 void mc_dupe_plan_free(mc_dupe_plan *plan) {
   if (!plan) return;
-  for (int i = 0; i < plan->count; i++) free(plan->d[i].old_path);
+  for (int i = 0; i < plan->count; i++) {
+    free(plan->d[i].old_path);
+    if (plan->d[i].has_tags) mc_tags_clear(&plan->d[i].tags);
+  }
   free(plan->d);
   free(plan->album_dir);
   memset(plan, 0, sizeof *plan);
@@ -440,8 +504,8 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
   out->count = count;
 
   lib_track *t = NULL;
-  int n = 0;
-  mc_status st = find_release(lib, album, in, count, remote, out->album_uid, &t, &n, pair);
+  int n = 0, by_id = 0;
+  mc_status st = find_release(lib, album, in, count, remote, out->album_uid, &t, &n, pair, &by_id);
   if (st != MC_OK) {
     free(pair);
     mc_dupe_plan_free(out);
@@ -460,6 +524,10 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
     worse += c < 0;
   }
   int swap = held > 0 && covered == held && worse == 0 && 2 * better > covered;
+  /* The whole release, if every track of the album is paired and none is held elsewhere. */
+  out->whole = swap && by_id;
+  for (int j = 0; j < n; j++)
+    if (t[j].paired < 0 || t[j].remote) out->whole = 0;
 
   for (int i = 0; i < count; i++) {
     mc_dupe_decision *d = &out->d[i];
@@ -481,15 +549,28 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
     }
   }
 
-  /* New files that are byte for byte in the library already, anywhere. */
+  /* The source hash of every file that goes in, and new files that are byte for byte in
+   * the library already, anywhere. */
   for (int i = 0; i < count; i++) {
     mc_dupe_decision *d = &out->d[i];
-    char sha[SHA_STRLEN] = "";
+    if (d->action != MC_DUPE_SKIP && sha256_file(in[i].src_path, d->source_sha256) != MC_OK)
+      d->source_sha256[0] = '\0';
     if ((d->action == MC_DUPE_IMPORT || d->action == MC_DUPE_ATTACH) &&
-        same_bytes_in_library(lib, &in[i], sha))
+        same_bytes_in_library(lib, &in[i], d->source_sha256)) {
       d->action = MC_DUPE_SKIP;
+      d->source_sha256[0] = '\0';
+    }
     out->swaps += d->action == MC_DUPE_SWAP;
     out->skips += d->action == MC_DUPE_SKIP;
+  }
+
+  /* A file becoming a copy of a library track is tagged as that track. */
+  for (int i = 0; i < count && st == MC_OK && !out->whole; i++) {
+    mc_dupe_decision *d = &out->d[i];
+    if (d->action != MC_DUPE_SWAP && (d->action != MC_DUPE_ATTACH || d->remote)) continue;
+    mc_status ts = library_tags(mc_library_db(lib), d->track_uid, &d->tags);
+    if (ts == MC_OK) d->has_tags = 1;
+    else if (ts == MC_ERR_NOMEM) st = ts;
   }
 
   /* New tracks of a release that's here go in the folder its files are in. */

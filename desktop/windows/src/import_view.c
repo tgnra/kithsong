@@ -50,6 +50,7 @@ typedef struct view {
   mc_import_state *states;
   BOOL offline;      /* MusicBrainz can't be reached: show the banner */
   BOOL skipped_tags; /* the banner's button was used; it stays hidden from then on */
+  BOOL long_paths_told; /* the session's long-path hint was shown */
 
   HWND review; /* open review dialog, if any */
   int review_item;
@@ -295,6 +296,7 @@ static void close_session(void) {
   g_view.scanned_files = 0;
   g_view.offline = FALSE;
   g_view.skipped_tags = FALSE;
+  g_view.long_paths_told = FALSE;
   SendMessageW(g_view.list, LVM_DELETEALLITEMS, 0, 0);
   SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, FALSE, 0);
 }
@@ -843,8 +845,7 @@ static void load_review(HWND dlg) {
   EnableWindow(GetDlgItem(dlg, IDC_REV_ASIS), !busy);
   EnableWindow(GetDlgItem(dlg, IDC_REV_SKIP), !busy && it->state != MC_IMPORT_DONE);
   EnableWindow(GetDlgItem(dlg, IDC_REV_SEARCH), !busy);
-  /* Only albums have the clues; once it has run, a manual search brings it back. */
-  ShowWindow(GetDlgItem(dlg, IDC_REV_WIDER), it->kind == MC_IMPORT_ALBUM ? SW_SHOW : SW_HIDE);
+  /* Albums and single tracks alike; once it has run, a manual search brings it back. */
   EnableWindow(GetDlgItem(dlg, IDC_REV_WIDER), !busy && !it->searched_wider && !g_view.offline);
 }
 
@@ -1017,6 +1018,34 @@ static void open_review(int idx) {
 
 /* --- Events --- */
 
+/* Whether Windows' long paths are on: LongPathsEnabled, which the "Enable Win32 long paths"
+ * policy sets too. With the manifest's longPathAware, every Win32 call then takes them. */
+static BOOL long_paths_enabled(void) {
+  DWORD on = 0, size = sizeof on;
+  return RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\FileSystem", L"LongPathsEnabled",
+                      RRF_RT_REG_DWORD, NULL, &on, &size) == ERROR_SUCCESS &&
+         on == 1;
+}
+
+/* Once a session, when files were left out for their long paths (see "Long paths" in
+ * tagger.h) and long paths are off: how to turn them on. */
+static void tell_long_paths(void) {
+  if (g_view.long_paths_told) return;
+  const char *why = mc_str(MC_STR_IMPORT_ERROR_LONG_PATH);
+  int n = 0;
+  for (int i = 0; i < g_view.item_count; i++) {
+    mc_import_item *it;
+    if (g_view.states[i] != MC_IMPORT_FAILED || mc_import_item_get(g_view.imp, i, &it) != MC_OK) continue;
+    n += it->error && strcmp(it->error, why) == 0;
+    mc_import_item_free(it);
+  }
+  g_view.long_paths_told = TRUE; /* also when there are none: they're all found by now */
+  if (!n || long_paths_enabled()) return;
+  wchar_t text[1024];
+  mc_wformat(text, 1024, mc_str_plural(MC_STR_WINDOWS_IMPORT_LONG_PATHS, n), MC_D(n));
+  MessageBoxW(g_view.parent, text, mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONWARNING);
+}
+
 void import_view_on_event(WPARAM wp, LPARAM lp) {
   if (!g_view.imp || HIWORD(wp) != g_view.generation) return; /* from a closed session */
   int arg = (int)lp;
@@ -1043,6 +1072,8 @@ void import_view_on_event(WPARAM wp, LPARAM lp) {
       break;
     case MC_IMPORT_EV_IDLE:
       g_view.idle = TRUE;
+      update_status();
+      tell_long_paths(); /* modal: after the status says the import is done */
       break;
     case MC_IMPORT_EV_OFFLINE:
       if (g_view.offline != (arg != 0)) {

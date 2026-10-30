@@ -23,6 +23,12 @@ typedef struct mc_folder_name {
 void mc_folder_name_parse(const char *name, mc_folder_name *out);
 void mc_folder_name_clear(mc_folder_name *f);
 
+/* The disc in a title that ends with one: "危ないベースライン Disc1", "Title - Disc 2",
+ * "Title CD1", "Title (Disc 1 of 2)", "Title [CD 2/2]". Returns the disc number and sets
+ * *base_len to the length of the title without it (and the separators before it), or
+ * returns 0 when there's no disc suffix or nothing before it ("Disc 1"). */
+int mc_disc_suffix(const char *title, size_t *base_len);
+
 /* Whether text (one bracket group or tag value, already split at "/") looks like a
  * catalogue number: 3 to 24 characters of ASCII letters, digits, spaces and "-._", with a
  * letter and at least three digits, and not a format or quality note like "24bit" or

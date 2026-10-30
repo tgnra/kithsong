@@ -111,6 +111,7 @@ static void remove_tree(const char *dir) {
 /* --- Fixtures --- */
 
 #define MBID_ALBUM "d0000000-0000-4000-8000-0000000000a1"
+#define MBID_REISSUE "d0000000-0000-4000-8000-0000000000a2" /* another release of the group */
 #define MBID_GROUP "d0000000-0000-4000-8000-0000000000b1"
 #define MBID_ARTIST "d0000000-0000-4000-8000-0000000000c1"
 
@@ -118,6 +119,9 @@ static const char *const k_titles[] = {"Sunflower", "Whore", "Dinosaur Act"};
 static const char *const k_rtids[] = {"d0000000-0000-4000-8000-000000000101",
                                       "d0000000-0000-4000-8000-000000000102",
                                       "d0000000-0000-4000-8000-000000000103"};
+static const char *const k_reissue_rtids[] = {"d0000000-0000-4000-8000-000000000111",
+                                              "d0000000-0000-4000-8000-000000000112",
+                                              "d0000000-0000-4000-8000-000000000113"};
 
 static mc_db_album album_desc(const char *mbid) {
   mc_db_album a = {0};
@@ -211,12 +215,14 @@ static void make_incoming(incoming *x, const char *tag, int n, const char *mbid,
 }
 
 /* What write_item does with a plan: copy the files in (a swapped file waits next to the old
- * one when its name is taken), save the rows, then finish the swaps. */
+ * one when its name is taken), save the rows, then finish the swaps. (Files keep the old
+ * names here even for a whole release, whose new names are the same.) */
 static mc_status apply(mc_library *lib, mc_db_album *album, incoming *x, mc_dupe_plan *p) {
   mc_db_track rows[3];
   char *dest_rel[3] = {0}, *dest_abs[3] = {0};
   int idx[3], n = 0;
   if (p->album_uid[0]) album->existing_uid = p->album_uid;
+  album->update_existing = p->whole;
   for (int i = 0; i < x->n; i++) {
     mc_dupe_decision *d = &p->d[i];
     if (d->action == MC_DUPE_SKIP) continue;
@@ -247,6 +253,8 @@ static mc_status apply(mc_library *lib, mc_db_album *album, incoming *x, mc_dupe
     rows[n].size_bytes = file_size(abs);
     if (d->action == MC_DUPE_SWAP || d->action == MC_DUPE_ATTACH) rows[n].track_uid = d->track_uid;
     if (d->action == MC_DUPE_SWAP) rows[n].replace_file_uid = d->file_uid;
+    rows[n].update_track = p->whole;
+    rows[n].source_sha256 = d->source_sha256[0] ? d->source_sha256 : NULL;
     idx[n++] = i;
   }
   mc_status st = n ? mc_import_db_write(lib, album, rows, n) : MC_OK;
@@ -316,7 +324,11 @@ static void test_swap(void) {
   CHECK(!strcmp(p.album_uid, album_uid));
   CHECK(p.swaps == 3 && p.skips == 0);
   CHECK(p.album_dir && !strcmp(p.album_dir, "Low/Things (2001)"));
-  for (int i = 0; i < 3; i++) CHECK(p.d[i].action == MC_DUPE_SWAP);
+  CHECK(p.whole); /* every track of the release, found by its id */
+  for (int i = 0; i < 3; i++) {
+    CHECK(p.d[i].action == MC_DUPE_SWAP);
+    CHECK(strlen(p.d[i].source_sha256) == 64 && !p.d[i].has_tags);
+  }
   int trashed = g_trashed;
   CHECK(apply(lib, &a, &x, &p) == MC_OK);
   mc_dupe_plan_free(&p);
@@ -355,7 +367,8 @@ static void test_swap(void) {
                        " WHERE f.file_rev = t.file_rev") == 3);
   CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE entity = 'tracks'"
                        " AND field = 'file_rev'") == 3);
-  /* Only that (and the duration): the swap rewrites no other group data. */
+  /* Only that (and the duration): the swap rewrites no other group data, as the match
+   * says what the library did. */
   snprintf(sql, sizeof sql, "SELECT count(*) FROM changelog WHERE seq > %d AND NOT"
                             " (entity = 'tracks' AND field IN ('file_rev', 'duration_ms'))",
            seq_before);
@@ -529,6 +542,157 @@ static void test_exact_file(void) {
   mc_library_close(lib);
 }
 
+/* A swap that isn't the whole release: the new files are tagged as the library's tracks,
+ * whatever their own match said. Here a reissue in the same release group, for the two
+ * tracks this device holds (the third has no file anywhere). */
+static void test_swap_retag(void) {
+  mc_library *lib = make_library("retag", MBID_ALBUM, "mp3", 128, 0, 0);
+  CHECK(lib != NULL);
+  if (!lib) return;
+  CHECK(sqlite3_exec(mc_library_db(lib), "DELETE FROM files WHERE path LIKE '%03 %'", NULL, NULL,
+                     NULL) == SQLITE_OK);
+  char album_uid[64];
+  query_text(lib, "SELECT uid FROM albums", album_uid, sizeof album_uid);
+  incoming x;
+  make_incoming(&x, "reissue", 2, MBID_REISSUE, "flac", 900, 44100, 16);
+  for (int i = 0; i < 2; i++) x.row[i].mb_releasetrackid = k_reissue_rtids[i];
+  mc_db_album a = album_desc(MBID_REISSUE);
+  a.title = "Things We Lost in the Fire (Deluxe)";
+  a.year = 2021;
+  mc_dupe_plan p;
+  CHECK(mc_dupes_plan(lib, &a, x.in, 2, &p) == MC_OK);
+  CHECK(!strcmp(p.album_uid, album_uid)); /* by release group */
+  CHECK(p.swaps == 2 && !p.whole);         /* track 3 isn't paired */
+  for (int i = 0; i < 2; i++) {
+    const mc_dupe_decision *d = &p.d[i];
+    CHECK(d->action == MC_DUPE_SWAP && d->has_tags);
+    CHECK_STR(d->tags.title, k_titles[i]);
+    CHECK_STR(d->tags.album, "Things We Lost in the Fire");
+    CHECK_STR(d->tags.album_artist, "Low");
+    CHECK_STR(d->tags.artist, "Low");
+    CHECK_STR(d->tags.mb_albumid, MBID_ALBUM); /* the library's release, not the reissue */
+    CHECK_STR(d->tags.mb_releasegroupid, MBID_GROUP);
+    CHECK_STR(d->tags.mb_releasetrackid, k_rtids[i]);
+    CHECK_STR(d->tags.mb_trackid, ""); /* none in the library: the file's own are removed */
+    CHECK_STR(d->tags.mb_albumartistid, MBID_ARTIST);
+    CHECK(d->tags.year == 2001 && d->tags.track == i + 1 && d->tags.disc == 1);
+    CHECK(d->tags.track_total == 3);
+  }
+  int seq_before = query_int(lib, "SELECT max(seq) FROM changelog");
+  CHECK(apply(lib, &a, &x, &p) == MC_OK);
+  mc_dupe_plan_free(&p);
+  /* The library's records are as they were. */
+  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE mb_albumid = '" MBID_ALBUM "'"
+                       " AND title = 'Things We Lost in the Fire' AND year = 2001") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE mb_releasetrackid LIKE '%10_'") == 3);
+  char sql[256];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM changelog WHERE seq > %d AND NOT"
+                            " (entity = 'tracks' AND field IN ('file_rev', 'duration_ms'))",
+           seq_before);
+  CHECK(query_int(lib, sql) == 0);
+  mc_library_close(lib);
+}
+
+/* The whole release swapped for another release of its group: the match wins, and the
+ * library's album and tracks take its metadata, keeping their uids. */
+static void test_swap_whole_release(void) {
+  mc_library *lib = make_library("whole", MBID_ALBUM, "mp3", 128, 0, 0);
+  CHECK(lib != NULL);
+  if (!lib) return;
+  char album_uid[64], track1[64];
+  query_text(lib, "SELECT uid FROM albums", album_uid, sizeof album_uid);
+  query_text(lib, "SELECT uid FROM tracks WHERE track_no = 1", track1, sizeof track1);
+  incoming x;
+  make_incoming(&x, "whole", 3, MBID_REISSUE, "flac", 900, 44100, 16);
+  for (int i = 0; i < 3; i++) x.row[i].mb_releasetrackid = k_reissue_rtids[i];
+  mc_db_album a = album_desc(MBID_REISSUE);
+  a.title = "Things We Lost in the Fire (Deluxe)";
+  a.year = 2021;
+  mc_dupe_plan p;
+  CHECK(mc_dupes_plan(lib, &a, x.in, 3, &p) == MC_OK);
+  CHECK(!strcmp(p.album_uid, album_uid));
+  CHECK(p.swaps == 3 && p.whole);
+  for (int i = 0; i < 3; i++) CHECK(!p.d[i].has_tags);
+  CHECK(apply(lib, &a, &x, &p) == MC_OK);
+  mc_dupe_plan_free(&p);
+
+  CHECK(query_int(lib, "SELECT count(*) FROM albums") == 1);
+  char now[64];
+  query_text(lib, "SELECT uid FROM albums WHERE mb_albumid = '" MBID_REISSUE "'"
+                  " AND title = 'Things We Lost in the Fire (Deluxe)' AND year = 2021",
+             now, sizeof now);
+  CHECK(!strcmp(now, album_uid));
+  query_text(lib, "SELECT uid FROM tracks WHERE mb_releasetrackid = '" "d0000000-0000-4000-8000-000000000111" "'",
+             now, sizeof now);
+  CHECK(!strcmp(now, track1));
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE mb_albumid = '" MBID_REISSUE "'") == 3);
+  CHECK(query_int(lib, "SELECT count(*) FROM files WHERE format = 'flac'") == 3);
+  /* Logged, so other devices see the new release. */
+  CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE entity = 'albums'"
+                       " AND field = 'mb_albumid' AND value = '" MBID_REISSUE "'") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE entity = 'tracks'"
+                       " AND field = 'mb_releasetrackid'") >= 3);
+
+  /* Found by name only, it's never the whole release: the library's records stay. */
+  mc_library_close(lib);
+  lib = make_library("whole-byname", NULL, "mp3", 128, 0, 0);
+  CHECK(lib != NULL);
+  if (!lib) return;
+  a = album_desc(NULL);
+  make_incoming(&x, "whole-byname", 3, NULL, "flac", 900, 44100, 16);
+  CHECK(mc_dupes_plan(lib, &a, x.in, 3, &p) == MC_OK);
+  CHECK(p.swaps == 3 && !p.whole);
+  CHECK(p.d[0].has_tags && !strcmp(p.d[0].tags.mb_albumid, ""));
+  mc_dupe_plan_free(&p);
+  mc_library_close(lib);
+}
+
+/* A file the library was imported from is known by its source hash, though the library's
+ * copy has other bytes now (the import tagged it). */
+static void test_source_hash(void) {
+  mc_library *lib = make_library("source", MBID_ALBUM, "mp3", 128, 0, 0);
+  CHECK(lib != NULL);
+  if (!lib) return;
+  mc_db_album other = album_desc(NULL);
+  other.title = "Something New";
+  incoming x;
+  make_incoming(&x, "source", 1, NULL, "mp3", 320, 44100, 0);
+  x.row[0].title = "New Song";
+  mc_dupe_plan p;
+  CHECK(mc_dupes_plan(lib, &other, x.in, 1, &p) == MC_OK);
+  CHECK(p.d[0].action == MC_DUPE_IMPORT && strlen(p.d[0].source_sha256) == 64);
+  CHECK(apply(lib, &other, &x, &p) == MC_OK);
+  char sql[256];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE source_sha256 = '%s'",
+           p.d[0].source_sha256);
+  CHECK(query_int(lib, sql) == 1);
+  mc_dupe_plan_free(&p);
+
+  /* As if the import had tagged the copy. */
+  char rel[256];
+  query_text(lib, "SELECT path FROM files WHERE source_sha256 IS NOT NULL", rel, sizeof rel);
+  char *abs = mc_library_abspath(lib, rel);
+  CHECK(abs != NULL);
+  if (abs) write_file(abs, "the copy, tagged since");
+  free(abs);
+
+  /* The same source again, as a single of someone else: already in the library. */
+  mc_db_album singles = {0};
+  singles.singles = 1;
+  singles.artist = (mc_db_artist){"Someone Else", NULL, NULL};
+  CHECK(mc_dupes_plan(lib, &singles, x.in, 1, &p) == MC_OK);
+  CHECK(p.d[0].action == MC_DUPE_SKIP && p.skips == 1 && !p.d[0].source_sha256[0]);
+  mc_dupe_plan_free(&p);
+
+  /* A row with a recorded sha256 only, of another size, is found by it too. */
+  CHECK(sqlite3_exec(mc_library_db(lib), "UPDATE files SET sha256 = source_sha256,"
+                     " source_sha256 = NULL, size_bytes = 1", NULL, NULL, NULL) == SQLITE_OK);
+  CHECK(mc_dupes_plan(lib, &singles, x.in, 1, &p) == MC_OK);
+  CHECK(p.d[0].action == MC_DUPE_SKIP);
+  mc_dupe_plan_free(&p);
+  mc_library_close(lib);
+}
+
 /* A single already in the artist's singles album. */
 static void test_single(void) {
   char dir[1200];
@@ -563,6 +727,11 @@ static void test_single(void) {
   mc_dupe_plan p;
   CHECK(mc_dupes_plan(lib, &singles, &in, 1, &p) == MC_OK);
   CHECK(p.d[0].action == MC_DUPE_SWAP && p.swaps == 1);
+  CHECK(!p.whole && p.d[0].has_tags);
+  CHECK_STR(p.d[0].tags.album, "Low Singles");
+  CHECK_STR(p.d[0].tags.title, "Canada");
+  CHECK_STR(p.d[0].tags.mb_albumid, "");
+  CHECK(p.d[0].tags.track == 0);
   mc_dupe_plan_free(&p);
 
   in.quality = (mc_audio_quality){"mp3", 96, 44100, 0};
@@ -713,6 +882,9 @@ int main(int argc, char **argv) {
   test_partial();
   test_by_name_and_gaps();
   test_exact_file();
+  test_swap_retag();
+  test_swap_whole_release();
+  test_source_hash();
   test_single();
 #ifndef _WIN32
   test_posix_trash();

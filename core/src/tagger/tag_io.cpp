@@ -12,6 +12,9 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+extern "C" {
+#include "util/platform.h"
+}
 #endif
 
 #include <audioproperties.h>
@@ -62,14 +65,15 @@ int prop_int(const TagLib::PropertyMap &props, const char *key) {
   return std::atoi(it->second.front().toCString(true));  // "2003-05-01" -> 2003
 }
 
-// Opens a file with a UTF-8 path on every platform.
+// Opens a file with a UTF-8 path on every platform, of any length on Windows.
 TagLib::FileRef open_file(const char *path, bool read_audio) {
 #ifdef _WIN32
-  int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, nullptr, 0);
-  if (n <= 0) return TagLib::FileRef();
-  std::wstring wide(static_cast<size_t>(n), L'\0');
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide.data(), n);
-  return TagLib::FileRef(wide.c_str(), read_audio, TagLib::AudioProperties::Average);
+  wchar_t *wide = mc_win_path(path);
+  if (!wide) return TagLib::FileRef();
+  // TagLib::FileName keeps its own copy of the name.
+  TagLib::FileRef f(wide, read_audio, TagLib::AudioProperties::Average);
+  std::free(wide);
+  return f;
 #else
   return TagLib::FileRef(path, read_audio, TagLib::AudioProperties::Average);
 #endif

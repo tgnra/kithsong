@@ -32,6 +32,13 @@ mc_status mc_score_release(const mb_release *rel, const mc_tags *files, int file
                            const char *album, const char *artist, int *map,
                            mc_release_score *out);
 
+/* Scores a release against files already assigned to its tracks (map as filled by
+ * mc_score_release, or changed by the user): the same distance, without the assignment, and
+ * every pair in map counts however far apart they are. */
+mc_status mc_score_release_map(const mb_release *rel, const mc_tags *files, int file_count,
+                               const char *album, const char *artist, const int *map,
+                               mc_release_score *out);
+
 /* Scores a one-track release (a recording found for a loose track) against one file. */
 double mc_score_recording(const mb_release *rec, const mc_tags *file);
 

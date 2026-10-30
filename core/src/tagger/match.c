@@ -261,19 +261,28 @@ mc_status mc_score_release(const mb_release *rel, const mc_tags *files, int file
     return st;
   }
 
+  for (int i = 0; i < n; i++)
+    if (map[i] >= 0 && cost[(size_t)i * (size_t)m + (size_t)map[i]] > TRACK_MATCH_MAX) map[i] = -1;
+  free(cost);
+  return mc_score_release_map(rel, files, file_count, album, artist, map, out);
+}
+
+mc_status mc_score_release_map(const mb_release *rel, const mc_tags *files, int file_count,
+                               const char *album, const char *artist, const int *map,
+                               mc_release_score *out) {
+  int n = file_count, m = rel->track_count;
+  out->distance = 1.0;
+  out->missing = m;
+  out->extra = n;
+  if (n == 0 || m == 0) return MC_OK;
+
   int matched = 0;
   double track_sum = 0;
   for (int i = 0; i < n; i++) {
-    if (map[i] < 0) continue;
-    double d = cost[(size_t)i * (size_t)m + (size_t)map[i]];
-    if (d > TRACK_MATCH_MAX) {
-      map[i] = -1;
-      continue;
-    }
-    track_sum += d;
+    if (map[i] < 0 || map[i] >= m) continue;
+    track_sum += mc_track_distance(&files[i], &rel->tracks[map[i]], map[i]);
     matched++;
   }
-  free(cost);
 
   out->missing = m - matched;
   out->extra = n - matched;

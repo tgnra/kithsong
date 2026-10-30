@@ -377,6 +377,7 @@ typedef struct held {
   int64_t size, mtime;
   char sha[SHA_STRLEN]; /* "" if not recorded */
   int duration_ms;
+  char source_sha[SHA_STRLEN]; /* an original's files.source_sha256, or "" */
 } held;
 
 static void held_free(held *h) {
@@ -384,8 +385,8 @@ static void held_free(held *h) {
   h->path = NULL;
 }
 
-/* Fills h from a row of uid, path, format, bitrate, size, mtime, sha256, duration. 1 if the
- * file is there. */
+/* Fills h from a row of uid, path, format, bitrate, size, mtime, sha256, duration, and
+ * optionally source_sha256. 1 if the file is there. */
 static int held_from_row(mc_library *lib, sqlite3_stmt *stmt, held *h) {
   memset(h, 0, sizeof *h);
   const char *uid = (const char *)sqlite3_column_text(stmt, 0);
@@ -400,6 +401,9 @@ static int held_from_row(mc_library *lib, sqlite3_stmt *stmt, held *h) {
   h->mtime = sqlite3_column_int64(stmt, 5);
   if (is_sha(sha)) memcpy(h->sha, sha, SHA_STRLEN);
   h->duration_ms = sqlite3_column_int(stmt, 7);
+  const char *source_sha = sqlite3_column_count(stmt) > 8
+                             ? (const char *)sqlite3_column_text(stmt, 8) : NULL;
+  if (is_sha(source_sha)) memcpy(h->source_sha, source_sha, SHA_STRLEN);
   h->path = mc_library_abspath(lib, path);
   if (h->path && mc_file_exists(h->path)) return 1;
   held_free(h);
@@ -413,7 +417,8 @@ static int find_original(mc_library *lib, const char *track, held *h) {
   int found = 0;
   if (sqlite3_prepare_v2(mc_library_db(lib),
                          "SELECT f.uid, f.path, f.format, f.bitrate_kbps, f.size_bytes, f.mtime_ms,"
-                         " f.sha256, t.duration_ms FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                         " f.sha256, t.duration_ms, f.source_sha256"
+                         " FROM files f JOIN tracks t ON t.uid = f.track_uid"
                          " WHERE f.track_uid = ?1 AND f.source_file_uid IS NULL"
                          " AND f.file_rev IS t.file_rev"
                          " ORDER BY f.source_peer_uid IS NOT NULL, f.uid",
@@ -651,8 +656,9 @@ static mc_status drop_file(mc_library *lib, const char *file_uid, const char *re
 /* --- Serving --- */
 
 /* FILE_HDR then the bytes of path. The hash is the recorded one when the file is unchanged
- * since it was recorded, else computed first. Should the file shrink while it's sent, the
- * rest is zeros: the receiver's hash check then fails, as it should. */
+ * since it was recorded, else computed first. An original says what it was imported from
+ * (source_sha256), if known. Should the file shrink while it's sent, the rest is zeros: the
+ * receiver's hash check then fails, as it should. */
 static mc_status send_file(mc_session *s, const char *track, const held *h, const char *format,
                            int kbps) {
   int64_t size = 0, mtime = 0;
@@ -679,6 +685,8 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
     yyjson_mut_obj_add_strcpy(doc, root, "ext", ext);
     yyjson_mut_obj_add_int(doc, root, "size", size);
     yyjson_mut_obj_add_strcpy(doc, root, "sha256", sha);
+    if (!strcmp(format, "original") && h->source_sha[0])
+      yyjson_mut_obj_add_strcpy(doc, root, "source_sha256", h->source_sha);
     st = send_doc(s->ch, MC_MSG_FILE_HDR, doc);
   }
   unsigned char *buf = st == MC_OK ? malloc(MC_CHANNEL_MAX_PAYLOAD) : NULL;
@@ -1044,7 +1052,8 @@ enum { GOT_OK, GOT_REFUSED, GOT_MISMATCH, GOT_FAILED };
 
 static mc_status insert_file(mc_library *lib, const char *track, const char *rel,
                              const char *format, int kbps, int64_t size, int64_t mtime,
-                             const char *source_file, const char *peer, const char *sha) {
+                             const char *source_file, const char *peer, const char *sha,
+                             const char *source_sha) {
   char uid[MC_UID_STRLEN];
   mc_status st = mc_uid_new(uid);
   if (st != MC_OK) return st;
@@ -1052,9 +1061,10 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
                          "INSERT INTO files (uid, track_uid, path, format, bitrate_kbps,"
-                         " size_bytes, mtime_ms, source_file_uid, source_peer_uid, sha256, file_rev)"
+                         " size_bytes, mtime_ms, source_file_uid, source_peer_uid, sha256, file_rev,"
+                         " source_sha256)"
                          " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,"
-                         "  (SELECT file_rev FROM tracks WHERE uid = ?2))",
+                         "  (SELECT file_rev FROM tracks WHERE uid = ?2), ?11)",
                          -1, &stmt, NULL) != SQLITE_OK) {
     st = MC_ERR_DB;
   } else {
@@ -1068,6 +1078,7 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
     if (source_file) sqlite3_bind_text(stmt, 8, source_file, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 9, peer, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 10, sha, -1, SQLITE_STATIC);
+    if (source_sha) sqlite3_bind_text(stmt, 11, source_sha, -1, SQLITE_STATIC);
     if (sqlite3_step(stmt) != SQLITE_DONE) st = MC_ERR_DB;
     sqlite3_finalize(stmt);
   }
@@ -1144,14 +1155,15 @@ static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got
   if (!hdr) return MC_ERR_FORMAT;
   const char *h_track = obj_str(hdr, "track"), *h_file = obj_str(hdr, "file"),
              *h_format = obj_str(hdr, "format"), *h_ext = obj_str(hdr, "ext"),
-             *h_sha = obj_str(hdr, "sha256");
+             *h_sha = obj_str(hdr, "sha256"), *h_source_sha = obj_str(hdr, "source_sha256");
   int64_t size = obj_int(hdr, "size");
   int kbps = (int)obj_int(hdr, "kbps");
   if (!h_track || strcmp(h_track, t->track_uid) != 0 || size < 0 || size > MAX_FILE_BYTES) {
     yyjson_doc_free(hdr);
     return MC_ERR_FORMAT; /* can't even tell how much follows */
   }
-  char file_uid[MC_UID_STRLEN] = "", ext[16] = "", sha[SHA_STRLEN] = "";
+  char file_uid[MC_UID_STRLEN] = "", ext[16] = "", sha[SHA_STRLEN] = "",
+       source_sha[SHA_STRLEN] = "";
   int sent_opus = h_format && !strcmp(h_format, "opus");
   int sent_original = h_format && !strcmp(h_format, "original");
   if (is_uid(h_file)) memcpy(file_uid, h_file, MC_UID_STRLEN);
@@ -1160,6 +1172,7 @@ static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got
     ext[strlen(h_ext)] = '\0';
   }
   if (is_sha(h_sha)) memcpy(sha, h_sha, SHA_STRLEN);
+  if (sent_original && is_sha(h_source_sha)) memcpy(source_sha, h_source_sha, SHA_STRLEN);
   yyjson_doc_free(hdr);
   /* An original stands in for Opus when it is lossy and small enough; nothing else does. */
   int accept = file_uid[0] && sha[0] && audio_ext(ext) &&
@@ -1208,7 +1221,8 @@ static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got
     mc_file_info(abs, &fsize, &mtime);
     /* A received original keeps no source_file_uid: it is still an original. */
     if (insert_file(lib, t->track_uid, rel, ext, sent_opus ? kbps : 0, fsize, mtime,
-                    sent_opus ? file_uid : NULL, s->peer_uid, sha) == MC_OK) {
+                    sent_opus ? file_uid : NULL, s->peer_uid, sha,
+                    source_sha[0] ? source_sha : NULL) == MC_OK) {
       *got = GOT_OK;
       s->files_received++;
       st = ensure_cover(s, t->track_uid, abs);

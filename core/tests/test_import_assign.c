@@ -279,6 +279,7 @@ int main(int argc, char **argv) {
     if (it->match_count == 1) {
       CHECK(it->matches[0].tracks[2].file == 2);
       CHECK(it->matches[0].extra_files == 0);
+      CHECK(it->matches[0].confidence > 0.99); /* the file fits the track it was given */
     }
     mc_import_item_free(it);
     CHECK(mc_import_item_get(imp, 1, &it) == MC_OK);
@@ -320,17 +321,25 @@ int main(int argc, char **argv) {
     mc_import_item *it;
     CHECK(mc_import_item_get(imp, 0, &it) == MC_OK);
     CHECK(it->file_count == 3 && it->match_count == 1);
+    double before = 1;
     if (it->match_count == 1) {
       CHECK(it->matches[0].tracks[2].file == -1);
       CHECK(it->matches[0].extra_files == 1);
+      before = it->matches[0].confidence;
     }
     mc_import_item_free(it);
+    CHECK(before < 0.9); /* the missing track keeps it in review */
     CHECK(mc_import_related(imp, 0, NULL, 0) == 0);
 
     CHECK(mc_import_assign(imp, 0, 0, 2, 0, 2) == MC_OK);
     CHECK(wait_all(imp, 1, MC_IMPORT_DONE, 20000));
     CHECK(mc_import_item_get(imp, 0, &it) == MC_OK);
-    if (it->match_count == 1) CHECK(it->matches[0].tracks[2].file == 2 && it->matches[0].extra_files == 0);
+    if (it->match_count == 1) {
+      CHECK(it->matches[0].tracks[2].file == 2 && it->matches[0].extra_files == 0);
+      /* Scored again with the file on the track: up, though its title and number are wrong. */
+      CHECK(it->matches[0].confidence > before + 0.1);
+      CHECK(it->matches[0].confidence < 1.0);
+    }
     mc_import_item_free(it);
     mc_import_free(imp);
   }
