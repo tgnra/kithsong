@@ -31,6 +31,7 @@
 
     "settings": "Settings",
     "section_albums": "Albums",
+    "section_singles": { "text": "Singles", "note": "Heading of an artist's singles, after their albums: their tracks that are the only one of their album in the library, or on no album." },
     "section_artists": "Artists",
     "section_playlists": "Playlists",
     "section_recents": { "text": "Recents", "note": "Heading of the albums, playlists and artists last played, on any device: in the sidebar, or on the phone's main screen." },

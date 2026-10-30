@@ -12,6 +12,7 @@ import ng.kithso.core.DeviceKind
 import ng.kithso.core.ItemKind
 import ng.kithso.core.MusicCoreException
 import ng.kithso.core.NativeCore
+import ng.kithso.core.SearchHit
 import ng.kithso.core.SearchKind
 import ng.kithso.core.TrackInfo
 import ng.kithso.core.addToAlbumGroup
@@ -33,6 +34,7 @@ import ng.kithso.core.removePlaylistEntry
 import ng.kithso.core.renameAlbumGroup
 import ng.kithso.core.renamePlaylist
 import ng.kithso.core.artistAlbums
+import ng.kithso.core.artistSingles
 import ng.kithso.core.artistTracks
 import ng.kithso.core.clearRecents
 import ng.kithso.core.recents
@@ -240,11 +242,12 @@ class CoreLibrarySource(
                 CollectionRef.Kind.Album -> contents.albums[ref.uid]?.let { album ->
                     TrackList(album.title, album.art, lib.albumTracks(album.uid).here().map { covers.track(it) }, album.artist, album.year)
                 }
-                // The albums it's on, its own first, then every track credited to it.
+                // The albums it's on, its own first, its singles, then every track credited to it.
                 CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { artist ->
                     val albums = lib.artistAlbums(artist.uid).mapNotNull { contents.albums[it.uid] }
+                    val singles = lib.artistSingles(artist.uid).here().map { covers.track(it) }
                     val tracks = lib.artistTracks(artist.uid).here().map { covers.track(it) }
-                    TrackList(artist.name, artist.art, tracks, albumCount = albums.size, albums = albums)
+                    TrackList(artist.name, artist.art, tracks, albumCount = albums.size, albums = albums, singles = singles)
                 }
                 CollectionRef.Kind.Playlist -> contents.playlists[ref.uid]?.let { playlist ->
                     val tracks = if (ref.uid in contents.smart) {
@@ -460,8 +463,9 @@ class CoreLibrarySource(
     }.await()
 
     override suspend fun search(query: String): SearchResults = withContext(core) {
+        val lib = open()
         val hits = try {
-            open()?.search(query, SEARCH_LIMIT).orEmpty()
+            lib?.search(query, SEARCH_LIMIT).orEmpty()
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't search for \"$query\"", e)
             emptyList()
@@ -476,17 +480,39 @@ class CoreLibrarySource(
         val tracks = ArrayList<FoundTrack>()
         val playlists = ArrayList<Playlist>()
         val albumGroups = ArrayList<AlbumGroup>()
+        // The singles of the artists found tracks are by, looked up once each.
+        val singlesBy = HashMap<String, List<TrackInfo>>()
+        fun single(hit: SearchHit): Track? {
+            val artists = c.artists.values.filter { it.name == hit.artist }
+            val info = artists.firstNotNullOfOrNull { artist ->
+                singlesBy.getOrPut(artist.uid) {
+                    try {
+                        lib?.artistSingles(artist.uid)?.here().orEmpty()
+                    } catch (e: MusicCoreException) {
+                        Log.e(TAG, "Couldn't list the singles of ${artist.name}", e)
+                        emptyList()
+                    }
+                }.firstOrNull { it.uid == hit.uid }
+            }
+            return info?.let { covers.track(it) }
+        }
         for (hit in hits) {
             val kind = when (hit.kind) {
                 SearchKind.Artist -> c.artists[hit.uid]?.let(artists::add)?.let { SearchResults.Kind.Artists }
                 SearchKind.Album -> c.albums[hit.uid]?.let(albums::add)?.let { SearchResults.Kind.Albums }
                 SearchKind.Track -> {
-                    // A track is found by its album, whose art and tracks are here.
-                    val album = hit.albumUid?.let { c.albums[it] } ?: continue
-                    tracks += FoundTrack(
-                        hit.uid, hit.name, hit.artist ?: unknownArtist(), hit.album.orEmpty(), album.uid,
-                        covers.found(album),
-                    )
+                    // A track is found by its album, whose art and tracks are here; a single
+                    // (alone on its album, or on none) among its artist's singles, to play alone.
+                    val album = hit.albumUid?.let { c.albums[it] }
+                    if (album != null) {
+                        tracks += FoundTrack(
+                            hit.uid, hit.name, hit.artist ?: unknownArtist(), hit.album.orEmpty(), album.uid,
+                            covers.found(album),
+                        )
+                    } else {
+                        val track = single(hit) ?: continue
+                        tracks += FoundTrack(hit.uid, hit.name, track.artist, track.album, null, track.art, track)
+                    }
                     SearchResults.Kind.Tracks
                 }
                 SearchKind.Playlist -> c.playlists[hit.uid]?.let(playlists::add)?.let { SearchResults.Kind.Playlists }

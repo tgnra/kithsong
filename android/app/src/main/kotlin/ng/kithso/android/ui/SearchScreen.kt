@@ -171,7 +171,7 @@ private fun LazyListScope.results(
             }
         }
         SearchResults.Kind.Tracks -> items(found.tracks, key = { "track:${it.uid}" }) { track ->
-            ResultRow(track.title, stringResource(R.string.track_byline, track.artist, track.album), track.art, rounded) {
+            ResultRow(track.title, trackByline(track.artist, track.album), track.art, rounded) {
                 onPlayTrack(track)
             }
         }

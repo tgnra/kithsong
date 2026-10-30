@@ -41,9 +41,13 @@ import ng.kithso.android.ui.art.AlbumArt
 import ng.kithso.android.ui.theme.ArtBackdrop
 import ng.kithso.android.ui.theme.rememberArtColors
 
-/** "Artist - Album", under a track's title. */
+/** "Artist - Album", under a track's title; just the artist for a track on no album. */
 @Composable
-private fun Track.byline() = stringResource(R.string.track_byline, artist, album)
+internal fun trackByline(artist: String, album: String) =
+    if (album.isEmpty()) artist else stringResource(R.string.track_byline, artist, album)
+
+@Composable
+private fun Track.byline() = trackByline(artist, album)
 
 /**
  * The floating player above the content: art, title and byline, play/pause, and a seekbar
@@ -148,7 +152,7 @@ fun FullPlayer(
 private fun PlayerArt(track: Track, modifier: Modifier) {
     AlbumArt(
         track.art,
-        contentDescription = stringResource(R.string.cover_of, track.album),
+        contentDescription = stringResource(R.string.cover_of, track.album.ifEmpty { track.title }),
         shape = RoundedCornerShape(24.dp),
         modifier = modifier.widthIn(max = 480.dp).aspectRatio(1f),
     )
