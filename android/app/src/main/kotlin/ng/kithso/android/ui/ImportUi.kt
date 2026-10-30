@@ -340,9 +340,12 @@ private fun ReviewItem(key: ItemKey, progress: ImportProgress, importer: Importe
         LazyColumn(Modifier.heightIn(max = 320.dp)) {
             items(d.matches.size) { i ->
                 val m = d.matches[i]
-                val heading = if (m.year > 0) stringResource(R.string.import_match_year, m.albumArtist, m.album, m.year)
-                else stringResource(R.string.track_byline, m.albumArtist, m.album)
+                // A single by its track's title, with the release it's filed on among the facts.
+                val title = if (m.isSingle) m.track.ifEmpty { m.album } else m.album
+                val heading = if (m.year > 0) stringResource(R.string.import_match_year, m.albumArtist, title, m.year)
+                else stringResource(R.string.track_byline, m.albumArtist, title)
                 val facts = listOfNotNull(
+                    m.release.takeIf { m.isSingle && it.isNotEmpty() && it != title },
                     stringResource(R.string.import_match_details, (m.confidence * 100).toInt()),
                     pluralStringResource(R.plurals.import_match_tracks, m.trackCount, m.trackCount).takeIf { m.trackCount > 0 },
                     m.format.ifEmpty { null },
