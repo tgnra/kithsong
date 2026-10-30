@@ -633,6 +633,32 @@ static void test_count(mc_library *lib) {
   }
 }
 
+/* Artist conditions hold of the credit as shown or of any of its artists: Abba featured on
+ * Something, and on Abbey Road's credit, is an artist of both, and of Come Together, which
+ * has no artist but its album's. Last, as it changes the data. */
+static void test_credits(mc_library *lib) {
+  CHECK(exec(mc_library_db(lib),
+             "UPDATE tracks SET artist_uid = 'ar1', artist_credit = 'The Beatles feat. Abba' WHERE uid = 't2';"
+             "INSERT INTO track_artists (uid, track_uid, artist_uid, position, joinphrase) VALUES"
+             " ('c1', 't2', 'ar1', 0, ' feat. '), ('c2', 't2', 'ar2', 1, '');"
+             "UPDATE albums SET artist_credit = 'The Beatles & Abba' WHERE uid = 'al1';"
+             "INSERT INTO album_artists (uid, album_uid, artist_uid, position, joinphrase) VALUES"
+             " ('c3', 'al1', 'ar1', 0, ' & '), ('c4', 'al1', 'ar2', 1, '');") == SQLITE_OK);
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is\",\"value\":\"abba\"}}",
+               "Dancing Queen|Money, Money|Come Together|Something");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is_not\",\"value\":\"Abba\"}}", "Words");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"contains\",\"value\":\"feat\"}}", "Something");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is\",\"value\":\"The Beatles\"}}",
+               "Come Together|Something");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"album_artist\",\"op\":\"is\",\"value\":\"Abba\"}}",
+               "Dancing Queen|Money, Money|Come Together|Something");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is\",\"value\":\"Abba\"}}", "Arrival|Abbey Road");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"starts_with\",\"value\":\"The Beatles &\"}}",
+               "Abbey Road");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"empty\"}}", "");
+  CHECK_TRACKS("{\"v\":1,\"order\":[{\"field\":\"artist\"}],\"limit\":2}", "Dancing Queen|Money, Money");
+}
+
 int main(int argc, char **argv) {
   char path[1024];
   snprintf(path, sizeof path, "%s/test_smart.d", argc > 1 ? argv[1] : ".");
@@ -653,6 +679,7 @@ int main(int argc, char **argv) {
   test_examples(lib);
   test_saved(lib);
   test_describe(lib);
+  test_credits(lib);
 
   mc_library_close(lib);
   return TEST_RESULT();

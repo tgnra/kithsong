@@ -75,6 +75,7 @@ add_library(musiccore STATIC
   src/tagger/tag_io.cpp
   src/tagger/musicbrainz.c
   src/tagger/match.c
+  src/tagger/credit.c
   src/tagger/search_keys.c
   src/tagger/coverart.c
   src/tagger/import_db.c
@@ -82,6 +83,7 @@ add_library(musiccore STATIC
   src/tagger/organize.c
   src/tagger/unzip.c
   src/tagger/tagger.c
+  src/tagger/refresh.c
   src/net/http.c
   src/scrobble/lastfm.c
   src/scrobble/lastfm_key.c

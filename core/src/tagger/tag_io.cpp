@@ -49,6 +49,23 @@ char *prop_str(const TagLib::PropertyMap &props, const char *key) {
   return dup_utf8(it->second.front());
 }
 
+// Every value of a property, joined with '\n'; NULL if it has none.
+char *prop_list(const TagLib::PropertyMap &props, const char *key) {
+  auto it = props.find(key);
+  if (it == props.end() || it->second.isEmpty()) return nullptr;
+  std::string joined;
+  for (const TagLib::String &v : it->second) {
+    std::string utf8 = v.to8Bit(true);
+    if (utf8.empty() || utf8.find('\n') != std::string::npos) continue;  // can't be told apart
+    if (!joined.empty()) joined += '\n';
+    joined += utf8;
+  }
+  if (joined.empty()) return nullptr;
+  char *out = static_cast<char *>(std::malloc(joined.size() + 1));
+  if (out) std::memcpy(out, joined.c_str(), joined.size() + 1);
+  return out;
+}
+
 // Parses "3" or "3/12" into number and total.
 void prop_pair(const TagLib::PropertyMap &props, const char *key, int *num, int *total) {
   auto it = props.find(key);
@@ -86,6 +103,20 @@ void set_str(TagLib::PropertyMap &props, const char *key, const char *value) {
   else props.replace(key, TagLib::StringList(TagLib::String(value, TagLib::String::UTF8)));
 }
 
+// A '\n'-separated list as the property's values; NULL leaves it alone, "" removes it.
+void set_list(TagLib::PropertyMap &props, const char *key, const char *value) {
+  if (!value) return;
+  TagLib::StringList values;
+  for (const char *p = value; *p;) {
+    const char *nl = std::strchr(p, '\n');
+    size_t n = nl ? static_cast<size_t>(nl - p) : std::strlen(p);
+    if (n) values.append(TagLib::String(std::string(p, n), TagLib::String::UTF8));
+    p += n + (nl ? 1 : 0);
+  }
+  if (values.isEmpty()) props.erase(key);
+  else props.replace(key, values);
+}
+
 void set_pair(TagLib::PropertyMap &props, const char *key, int num, int total) {
   if (num <= 0) return;
   std::string v = std::to_string(num);
@@ -115,6 +146,10 @@ extern "C" mc_status mc_tags_read(const char *path, mc_tags *out) {
     out->mb_artistid = prop_str(props, "MUSICBRAINZ_ARTISTID");
     out->mb_albumartistid = prop_str(props, "MUSICBRAINZ_ALBUMARTISTID");
     out->mb_releasegroupid = prop_str(props, "MUSICBRAINZ_RELEASEGROUPID");
+    out->artists = prop_list(props, "ARTISTS");
+    out->album_artists = prop_list(props, "ALBUMARTISTS");
+    out->mb_artistids = prop_list(props, "MUSICBRAINZ_ARTISTID");
+    out->mb_albumartistids = prop_list(props, "MUSICBRAINZ_ALBUMARTISTID");
     for (const char *key : {"LABEL", "ORGANIZATION", "PUBLISHER"})
       if (!out->label) out->label = prop_str(props, key);
     for (const char *key : {"CATALOGNUMBER", "CATALOGID", "CATALOG", "LABELNO"})
@@ -159,8 +194,12 @@ extern "C" mc_status mc_tags_write(const char *path, const mc_tags *tags) {
     set_str(props, "MUSICBRAINZ_TRACKID", tags->mb_trackid);
     set_str(props, "MUSICBRAINZ_RELEASETRACKID", tags->mb_releasetrackid);
     set_str(props, "MUSICBRAINZ_ALBUMID", tags->mb_albumid);
-    set_str(props, "MUSICBRAINZ_ARTISTID", tags->mb_artistid);
-    set_str(props, "MUSICBRAINZ_ALBUMARTISTID", tags->mb_albumartistid);
+    if (tags->mb_artistids) set_list(props, "MUSICBRAINZ_ARTISTID", tags->mb_artistids);
+    else set_str(props, "MUSICBRAINZ_ARTISTID", tags->mb_artistid);
+    if (tags->mb_albumartistids) set_list(props, "MUSICBRAINZ_ALBUMARTISTID", tags->mb_albumartistids);
+    else set_str(props, "MUSICBRAINZ_ALBUMARTISTID", tags->mb_albumartistid);
+    set_list(props, "ARTISTS", tags->artists);
+    set_list(props, "ALBUMARTISTS", tags->album_artists);
     set_str(props, "MUSICBRAINZ_RELEASEGROUPID", tags->mb_releasegroupid);
     if (tags->year > 0) set_str(props, "DATE", std::to_string(tags->year).c_str());
     if (tags->original_year > 0)
@@ -217,8 +256,9 @@ extern "C" void mc_tags_clear(mc_tags *tags) {
   char **strs[] = {&tags->title,      &tags->artist,     &tags->album,
                    &tags->album_artist, &tags->genre,    &tags->mb_trackid,
                    &tags->mb_releasetrackid, &tags->mb_albumid, &tags->mb_artistid,
-                   &tags->mb_albumartistid, &tags->mb_releasegroupid, &tags->label,
-                   &tags->catalog};
+                   &tags->mb_albumartistid, &tags->mb_releasegroupid, &tags->artists,
+                   &tags->album_artists, &tags->mb_artistids, &tags->mb_albumartistids,
+                   &tags->label, &tags->catalog};
   for (char **s : strs) std::free(*s);
   std::memset(tags, 0, sizeof *tags);
 }

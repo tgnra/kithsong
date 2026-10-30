@@ -114,6 +114,11 @@ mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status) {
   return perform(url, NULL, body, http_status, NULL);
 }
 
+mc_status mc_http_get_cancel(const char *url, mc_buffer *body, long *http_status,
+                             const mc_http_cancel *cancel) {
+  return perform(url, NULL, body, http_status, cancel);
+}
+
 mc_status mc_http_post_form(const char *url, const char *form, mc_buffer *body, long *http_status,
                             const mc_http_cancel *cancel) {
   if (!form) return MC_ERR_INVALID_ARG;
@@ -135,4 +140,23 @@ void mc_ratelimit_wait(mc_ratelimit *rl) {
   mc_mutex_unlock(&rl->lock);
 
   if (slot > now) mc_sleep_ms((uint32_t)(slot - now));
+}
+
+int mc_ratelimit_wait_cancel(mc_ratelimit *rl, const mc_http_cancel *cancel) {
+  if (!cancel || !cancel->cancelled) {
+    mc_ratelimit_wait(rl);
+    return 0;
+  }
+  mc_mutex_lock(&rl->lock);
+  uint64_t now = mc_mono_ms();
+  uint64_t slot = rl->next_ms > now ? rl->next_ms : now;
+  rl->next_ms = slot + rl->interval_ms;
+  mc_mutex_unlock(&rl->lock);
+
+  for (;;) {
+    if (cancel->cancelled(cancel->user)) return 1;
+    now = mc_mono_ms();
+    if (now >= slot) return 0;
+    mc_sleep_ms(slot - now < 100 ? (uint32_t)(slot - now) : 100);
+  }
 }

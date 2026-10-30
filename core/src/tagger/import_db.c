@@ -1,10 +1,12 @@
 #include "tagger/import_db.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "library/library_internal.h"
 #include "util/platform.h"
+#include "util/uid.h"
 
 static void bind_text(sqlite3_stmt *stmt, int i, const char *s) {
   if (s && *s) sqlite3_bind_text(stmt, i, s, -1, SQLITE_STATIC);
@@ -83,6 +85,167 @@ static mc_status upsert_artist(sqlite3 *db, const mc_db_artist *a, char uid[MC_U
   bind_text(stmt, 2, name);
   bind_text(stmt, 3, a->sort_name);
   bind_text(stmt, 4, a->mb_artistid);
+  return step_done(stmt);
+}
+
+/* --- Artist credits (docs/schema.md) --- */
+
+/* A credit resolved to library rows: each artist's uid and the join phrase after it, and
+ * artist_credit (NULL for the first artist's own name). */
+typedef struct credit_rows {
+  char (*uids)[MC_UID_STRLEN];
+  char **joins;
+  int count;
+  char *text;
+} credit_rows;
+
+static void credit_clear(credit_rows *c) {
+  for (int i = 0; i < c->count; i++) free(c->joins[i]);
+  free(c->uids);
+  free(c->joins);
+  free(c->text);
+  memset(c, 0, sizeof *c);
+}
+
+static mc_status credit_alloc(credit_rows *c, int n) {
+  memset(c, 0, sizeof *c);
+  c->uids = calloc((size_t)(n ? n : 1), sizeof *c->uids);
+  c->joins = calloc((size_t)(n ? n : 1), sizeof *c->joins);
+  if (!c->uids || !c->joins) {
+    credit_clear(c);
+    return MC_ERR_NOMEM;
+  }
+  return MC_OK;
+}
+
+/* Upserts each artist of a credit (whole, or the n parts), as upsert_artist() does one. With
+ * no parts the credit is whole's artist alone. */
+static mc_status resolve_credit(sqlite3 *db, const mc_db_artist *whole,
+                                const mc_db_credit_part *parts, int n, credit_rows *out) {
+  mc_status st = credit_alloc(out, n);
+  if (st != MC_OK) return st;
+  if (n <= 0 || !parts) {
+    out->count = 1;
+    if ((st = upsert_artist(db, whole, out->uids[0])) != MC_OK) credit_clear(out);
+    return st;
+  }
+  size_t len = 1;
+  for (int i = 0; i < n; i++) {
+    const char *name = parts[i].artist.name && *parts[i].artist.name ? parts[i].artist.name : "Unknown Artist";
+    const char *join = i < n - 1 && parts[i].join ? parts[i].join : "";
+    len += strlen(name) + strlen(join);
+    out->joins[out->count] = mc_strdup(join);
+    if (!out->joins[out->count]) st = MC_ERR_NOMEM;
+    out->count++;
+    if (st == MC_OK) st = upsert_artist(db, &parts[i].artist, out->uids[i]);
+    if (st != MC_OK) {
+      credit_clear(out);
+      return st;
+    }
+  }
+  /* The credit as credited, else as its parts spell it; a lone artist under its own name is
+   * just that artist. */
+  if (whole && whole->name && *whole->name) {
+    out->text = mc_strdup(whole->name);
+  } else if ((out->text = malloc(len))) {
+    out->text[0] = '\0';
+    for (int i = 0; i < n; i++) {
+      strcat(out->text, parts[i].artist.name && *parts[i].artist.name ? parts[i].artist.name : "Unknown Artist");
+      strcat(out->text, out->joins[i]);
+    }
+  }
+  if (!out->text) {
+    credit_clear(out);
+    return MC_ERR_NOMEM;
+  }
+  if (n == 1 && parts[0].artist.name && !strcmp(out->text, parts[0].artist.name)) {
+    free(out->text);
+    out->text = NULL;
+  }
+  return MC_OK;
+}
+
+/* Reads album_uid's credit as it is, for tracks that fall back to it. Its first artist is
+ * artist_uid, as listings read it. 0 rows if it has no artist. */
+static mc_status read_album_credit(sqlite3 *db, const char *album_uid, credit_rows *out) {
+  memset(out, 0, sizeof *out);
+  sqlite3_stmt *stmt =
+    prepare(db, "SELECT (SELECT count(*) FROM album_artists WHERE album_uid = ?1 AND position > 0),"
+                " artist_credit FROM albums WHERE uid = ?1 AND artist_uid IS NOT NULL");
+  if (!stmt) return MC_ERR_DB;
+  bind_text(stmt, 1, album_uid);
+  int extra = -1;
+  char *text = NULL;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    extra = sqlite3_column_int(stmt, 0);
+    const char *v = (const char *)sqlite3_column_text(stmt, 1);
+    text = v ? mc_strdup(v) : NULL;
+  }
+  sqlite3_finalize(stmt);
+  if (extra < 0) return credit_alloc(out, 0);
+  mc_status st = credit_alloc(out, extra + 1);
+  if (st != MC_OK) {
+    free(text);
+    return st;
+  }
+  out->text = text;
+  stmt = prepare(db, "SELECT artist_uid, joinphrase FROM ("
+                     " SELECT 0 AS position, artist_uid, coalesce((SELECT joinphrase FROM album_artists"
+                     "  WHERE album_uid = ?1 AND position = 0), '') AS joinphrase FROM albums WHERE uid = ?1"
+                     " UNION ALL SELECT position, artist_uid, joinphrase FROM album_artists"
+                     "  WHERE album_uid = ?1 AND position > 0) ORDER BY position");
+  if (!stmt) {
+    credit_clear(out);
+    return MC_ERR_DB;
+  }
+  bind_text(stmt, 1, album_uid);
+  while (st == MC_OK && out->count <= extra && sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *u = (const char *)sqlite3_column_text(stmt, 0);
+    const char *j = (const char *)sqlite3_column_text(stmt, 1);
+    if (!u || strlen(u) >= MC_UID_STRLEN) continue;
+    strcpy(out->uids[out->count], u);
+    if (!(out->joins[out->count++] = mc_strdup(j ? j : ""))) st = MC_ERR_NOMEM;
+  }
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) credit_clear(out);
+  return st;
+}
+
+/* Writes owner's artist_credit and its credit rows (table "tracks" or "albums"), each row's
+ * uid derived from owner and position, and deletes the rows past the credit's end. The
+ * caller has set owner's artist_uid to the first artist. */
+static mc_status write_credit(sqlite3 *db, const char *table, const char *owner, const credit_rows *c) {
+  int album = !strcmp(table, "albums");
+  char sql[320];
+  snprintf(sql, sizeof sql, "UPDATE %s SET artist_credit = ?2 WHERE uid = ?1", table);
+  sqlite3_stmt *stmt = prepare(db, sql);
+  if (!stmt) return MC_ERR_DB;
+  bind_text(stmt, 1, owner);
+  bind_text(stmt, 2, c->text);
+  mc_status st = step_done(stmt);
+  const char *rows = album ? "album_artists" : "track_artists";
+  const char *key = album ? "album_uid" : "track_uid";
+  for (int i = 0; st == MC_OK && i < c->count; i++) {
+    char uid[MC_UID_STRLEN];
+    if ((st = mc_uid_derive(owner, i, uid)) != MC_OK) break;
+    snprintf(sql, sizeof sql,
+             "INSERT INTO %s (uid, %s, artist_uid, position, joinphrase) VALUES (?1, ?2, ?3, ?4, ?5)"
+             " ON CONFLICT (uid) DO UPDATE SET %s = excluded.%s, artist_uid = excluded.artist_uid,"
+             " position = excluded.position, joinphrase = excluded.joinphrase",
+             rows, key, key, key);
+    if (!(stmt = prepare(db, sql))) return MC_ERR_DB;
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+    bind_text(stmt, 2, owner);
+    sqlite3_bind_text(stmt, 3, c->uids[i], -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 4, i);
+    sqlite3_bind_text(stmt, 5, c->joins[i] ? c->joins[i] : "", -1, SQLITE_STATIC);
+    st = step_done(stmt);
+  }
+  if (st != MC_OK) return st;
+  snprintf(sql, sizeof sql, "DELETE FROM %s WHERE %s = ?1 AND position >= ?2", rows, key);
+  if (!(stmt = prepare(db, sql))) return MC_ERR_DB;
+  bind_text(stmt, 1, owner);
+  sqlite3_bind_int(stmt, 2, c->count);
   return step_done(stmt);
 }
 
@@ -173,8 +336,9 @@ static int find_file(sqlite3 *db, const char *path, char track_uid[MC_UID_STRLEN
 
 /* A file for a track already in the library (t->track_uid): swapped in for the files row
  * t->replace_file_uid, or added. The track's metadata stays as it is, unless
- * t->update_track (then its artist is artist_uid). */
-static mc_status attach_file(sqlite3 *db, const mc_db_track *t, const char *artist_uid) {
+ * t->update_track (then its artists are credit). */
+static mc_status attach_file(sqlite3 *db, const mc_db_track *t, const credit_rows *credit) {
+  const char *artist_uid = credit ? credit->uids[0] : NULL;
   char file_uid[MC_UID_STRLEN], rev[MC_UID_STRLEN];
   mc_status st;
   if ((st = mc_uid_new(file_uid)) != MC_OK || (st = mc_uid_new(rev)) != MC_OK) return st;
@@ -197,6 +361,8 @@ static mc_status attach_file(sqlite3 *db, const mc_db_track *t, const char *arti
     bind_int(stmt, 9, t->year);
     bind_text(stmt, 10, t->mb_albumid);
     if ((st = step_done(stmt)) != MC_OK) return st;
+    if (sqlite3_changes(db) == 1 && (st = write_credit(db, "tracks", t->track_uid, credit)) != MC_OK)
+      return st;
   }
 
   stmt = prepare(db, swap ? "UPDATE tracks SET duration_ms = coalesce(?2, duration_ms),"
@@ -245,7 +411,8 @@ static mc_status attach_file(sqlite3 *db, const mc_db_track *t, const char *arti
 /* Writes one track and its file row, in album_uid ("" for none). *old_album receives the
  * album the file's track was in before, if it was already in the library. */
 static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *album_uid,
-                              const char *artist_uid, char old_album[MC_UID_STRLEN]) {
+                              const credit_rows *credit, char old_album[MC_UID_STRLEN]) {
+  const char *artist_uid = credit->uids[0];
   char track_uid[MC_UID_STRLEN], file_uid[MC_UID_STRLEN];
   old_album[0] = '\0';
 
@@ -282,6 +449,7 @@ static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *alb
   bind_text(stmt, 12, t->mb_albumid);
   if (!found) sqlite3_bind_int64(stmt, 13, (sqlite3_int64)mc_wall_ms());
   if ((st = step_done(stmt)) != MC_OK) return st;
+  if ((st = write_credit(db, "tracks", track_uid, credit)) != MC_OK) return st;
 
   /* A row still claiming the destination path is stale: the importer only writes to paths
    * that are free on disk (or hold this very track). */
@@ -351,43 +519,86 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
   mc_status st = mc_library_begin_write(lib);
   if (st != MC_OK) return st;
 
-  char album_artist[MC_UID_STRLEN], album_uid[MC_UID_STRLEN] = "";
-  /* An existing album keeps its artist, which new tracks without one fall back to. */
+  char album_uid[MC_UID_STRLEN] = "";
+  credit_rows album_credit = {0}, track_credit = {0};
+  /* An existing album keeps its credit, which new tracks without one fall back to. */
   const char *existing = album->no_album || album->update_existing ? NULL : album->existing_uid;
-  sqlite3_stmt *stmt = existing ? prepare(db, "SELECT artist_uid FROM albums WHERE uid = ?1"
-                                              " AND artist_uid IS NOT NULL")
-                                : NULL;
-  if (stmt) bind_text(stmt, 1, existing);
-  if (!stmt || !select_uid(stmt, album_artist))
-    if ((st = upsert_artist(db, &album->artist, album_artist)) != MC_OK) goto fail;
-  if (!album->no_album && (st = upsert_album(db, album, album_artist, album_uid)) != MC_OK) goto fail;
+  if (existing && (st = read_album_credit(db, existing, &album_credit)) != MC_OK) goto fail;
+  if (!album_credit.count) {
+    credit_clear(&album_credit);
+    if ((st = resolve_credit(db, &album->artist, album->credit, album->credit_count, &album_credit)) !=
+        MC_OK)
+      goto fail;
+  }
+  if (!album->no_album) {
+    if ((st = upsert_album(db, album, album_credit.uids[0], album_uid)) != MC_OK) goto fail;
+    if (!existing && (st = write_credit(db, "albums", album_uid, &album_credit)) != MC_OK) goto fail;
+  }
 
   for (int i = 0; i < count; i++) {
     const mc_db_track *t = &tracks[i];
-    char artist_uid[MC_UID_STRLEN], old_album[MC_UID_STRLEN];
+    char old_album[MC_UID_STRLEN];
     if (t->track_uid && !t->update_track) {
       if ((st = attach_file(db, t, NULL)) != MC_OK) goto fail;
       continue;
     }
-    if (t->artist.name && *t->artist.name) {
-      if ((st = upsert_artist(db, &t->artist, artist_uid)) != MC_OK) goto fail;
-    } else {
-      strcpy(artist_uid, album_artist);
+    const credit_rows *credit = &album_credit;
+    if ((t->artist.name && *t->artist.name) || t->credit_count > 0) {
+      if ((st = resolve_credit(db, &t->artist, t->credit, t->credit_count, &track_credit)) != MC_OK)
+        goto fail;
+      credit = &track_credit;
     }
-    if (t->track_uid) {
-      if ((st = attach_file(db, t, artist_uid)) != MC_OK) goto fail;
-      continue;
-    }
-    if ((st = upsert_track(db, t, album_uid, artist_uid, old_album)) != MC_OK) goto fail;
-    if (old_album[0] && strcmp(old_album, album_uid) != 0 &&
-        (st = delete_if_empty(db, old_album)) != MC_OK)
-      goto fail;
+    if (t->track_uid)
+      st = attach_file(db, t, credit);
+    else if ((st = upsert_track(db, t, album_uid, credit, old_album)) == MC_OK && old_album[0] &&
+             strcmp(old_album, album_uid) != 0)
+      st = delete_if_empty(db, old_album);
+    credit_clear(&track_credit);
+    if (st != MC_OK) goto fail;
   }
   if ((st = mc_library_commit(lib)) != MC_OK) goto fail;
+  credit_clear(&album_credit);
   return MC_OK;
 
 fail:
   fprintf(stderr, "musiccore: import write failed: %s\n", sqlite3_errmsg(db));
   mc_library_rollback(lib);
+  credit_clear(&album_credit);
+  credit_clear(&track_credit);
+  return st;
+}
+
+mc_status mc_import_db_set_credit_locked(mc_library *lib, int is_album, const char *uid,
+                                         const mc_db_artist *artist,
+                                         const mc_db_credit_part *credit, int credit_count) {
+  if (!lib || !uid || !artist || (credit_count > 0 && !credit)) return MC_ERR_INVALID_ARG;
+  sqlite3 *db = mc_library_db(lib);
+  const char *table = is_album ? "albums" : "tracks";
+  credit_rows c = {0};
+  mc_status st = resolve_credit(db, artist, credit, credit_count, &c);
+  if (st == MC_OK) {
+    char sql[96];
+    snprintf(sql, sizeof sql, "UPDATE %s SET artist_uid = ?2 WHERE uid = ?1", table);
+    sqlite3_stmt *stmt = prepare(db, sql);
+    if (stmt) {
+      bind_text(stmt, 1, uid);
+      sqlite3_bind_text(stmt, 2, c.uids[0], -1, SQLITE_STATIC);
+    }
+    if ((st = step_done(stmt)) == MC_OK && sqlite3_changes(db) != 1) st = MC_ERR_NOT_FOUND;
+  }
+  if (st == MC_OK) st = write_credit(db, table, uid, &c);
+  credit_clear(&c);
+  return st;
+}
+
+mc_status mc_import_db_set_credit(mc_library *lib, int is_album, const char *uid,
+                                  const mc_db_artist *artist, const mc_db_credit_part *credit,
+                                  int credit_count) {
+  if (!lib || !uid || !artist || (credit_count > 0 && !credit)) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  st = mc_import_db_set_credit_locked(lib, is_album, uid, artist, credit, credit_count);
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
   return st;
 }

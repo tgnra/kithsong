@@ -285,20 +285,127 @@ A single is filed as what it is on MusicBrainz: a track of a release, like any a
 - there's no "&lt;artist&gt; Singles" album any more. Albums and files made as one before
   stay as they are, as an album of that title, until the music is imported again.
 
+## Artist credits
+
+A track or album credited to "A feat. B", "A, B & C" or "A x B" belongs to each of A, B and
+C. The credit as written is what's shown and what goes in `ARTIST` / `ALBUMARTIST`; its
+artists, in order, each with the join phrase that follows it (" feat. ", " & "), are what
+the import passes on to the library (`mc_db_album.credit`, `mc_db_track.credit`). Folders
+stay under the whole album credit: `Jay-Z & Kanye West/Watch the Throne (2011)/`.
+
+Where the artists come from:
+
+1. **MusicBrainz**, for a matched import: the `artist-credit` array of the release and of
+   each track (of the recording, for a recording found on its own), as it is: each artist's
+   name as credited, id, sort name and join phrase. It is never split again. The files get
+   `ARTISTS` and `ALBUMARTISTS` (one value per artist, by name as credited) and every id in
+   `MUSICBRAINZ_ARTISTID` and `MUSICBRAINZ_ALBUMARTISTID`. A track with no album has its
+   album lists removed; a recording whose release can't be looked up has its first credited
+   artist as the album artist, so the album lists hold that one.
+2. **Multi-valued tags**, for an import as-is: `ARTISTS` with `MUSICBRAINZ_ARTISTID` for the
+   track, `ALBUMARTISTS` with `MUSICBRAINZ_ALBUMARTISTID` for the album (`ARTISTS` when the
+   album artist is the track artist). The ids go with the names only when there are as many
+   of each. The join phrases are what's between the names in the `ARTIST` string when they
+   are all there in order (ignoring case), else "; ". A single name that is the credit
+   itself is just the credit.
+3. **The credit string**, otherwise, split by `mc_credit_split_text` (`credit.c`):
+   - "feat."-style separators always split: ` feat. `, ` feat `, ` ft. `, ` ft `,
+     ` featuring `, and a closing `(feat. B)` or `[feat. B]` (with any of those words).
+   - Ambiguous separators split only where every resulting part is an artist the library
+     knows and the whole isn't one: ` & `, `, `, ` and `, ` x `, ` vs. `, ` vs `, ` with `,
+     ` / `, `; `, and the serial-comma forms `, & ` and `, and `. The longest known name is
+     taken first, so "Earth, Wind & Fire & The Emotions" keeps "Earth, Wind & Fire" whole
+     when it's known; when any part isn't known, the whole stretch stays one artist
+     ("Tyler, the Creator").
+   - An artist is known when the library has an `artists` row of that name (ignoring case)
+     that has a MusicBrainz id, or whose name has no separator at all. Older versions made
+     rows like "A & B" from whole credits; those don't count, but "Simon & Garfunkel" with
+     its MusicBrainz id does, and stays whole.
+   - Separators match ignoring case and need the spaces around them ("AC/DC", "Aftermath"
+     stay whole). Parts are trimmed and never empty: a credit that would give an empty part
+     ("A & & B", "A feat.") is one artist.
+
+From tags or the string, a credit of one artist under its own name is passed as the credit
+alone (`credit_count` 0), with the `MUSICBRAINZ_ARTISTID` the file has. The whole credit's
+MusicBrainz id is only set when one artist is credited.
+
+### Refresh after upgrading
+
+Versions before artist credits (library v13) imported "Jay-Z feat. Rihanna" as one artist.
+Migration v13 sets `meta.artist_refresh` to `'pending'`, and opening the library then splits
+those credits once, by itself, in the background (`core/src/tagger/refresh.c`). Frontends
+don't start it and needn't show it; `mc_library_refresh_progress()` says whether it's running
+and how far it is.
+
+- **Where it runs.** `mc_library_open()` starts it on a thread of its own, with a connection
+  of its own, when the library is pending and `mc_init()` has run; `mc_library_close()` stops
+  it. It waits 3 s first, so a handle opened for a moment does nothing. One runs per library
+  folder in the process: the connections the core opens for itself (an import's, sync's, a
+  library move's check) use `mc_library_open_internal()`, which starts none, and a second
+  frontend handle on the same folder finds one running. Opening never waits for it.
+- **Albums with a release id** (`albums.mb_albumid`): one release lookup each (the shared 1
+  request/s limit, so it queues behind an import's), and the album's credit and each of its
+  tracks' (those with an artist of their own, paired by `mb_releasetrackid`, else by disc and
+  number) are rewritten from the release's artist-credit arrays, as an import writes them.
+  Skipped without a lookup: an album whose artist has a MusicBrainz id, and none of whose
+  credits (its own, its tracks') has a separator with an artist lacking an id, so music a
+  v13 import credited from MusicBrainz is left alone. A release MusicBrainz no longer has
+  goes to the splitter. If MusicBrainz can't be reached (`mc_musicbrainz_reachable()`, or a
+  lookup's network error), this step stops where it is and is tried again on a later open.
+- **Everything else**, and the albums the first step hasn't reached while offline: the
+  string splitter (`mc_credit_split_text`, against the library's artists), for credits with a
+  separator that aren't split yet. An artist it names that the library doesn't have gets a
+  uid derived from the name (`mc_uid_derive("artist/<name, ASCII lowercase>", 0)`), so two
+  devices splitting the same credit offline make one row rather than two that never merge.
+  Looked up later, such an artist is the one MusicBrainz names (matched by name, its id
+  filled in).
+- **Files.** Each track whose credit changed, or whose album's did, gets its files on this
+  device retagged: `ARTIST` and `ALBUMARTIST` (the credits as shown, unchanged), `ARTISTS`
+  and `ALBUMARTISTS`, and the artist id lists when every artist has an id; nothing else.
+  A tagged copy is written beside the file and renamed over it, so the player or sync reading
+  it sees the old bytes or the new, never half of each, and a crash leaves the old file. No
+  rename, no `file_rev`: the same file, newly tagged. Its `files` row takes the new size and
+  mtime, and the new `sha256` if it had one, in the same transaction as the rename, so sync's
+  checks and the import's duplicates check see a known, unchanged file; `source_sha256`
+  stays (it is what the file was imported from). A file that's missing, read-only, or not
+  what its row says (changed outside, or by an import just now) is left as it is.
+- **Empty artists.** An artist that no track, album or credit row names any more is deleted,
+  as `delete.c` deletes them, and the delete is logged so it syncs: the old whole-credit rows
+  go once the last credit naming them is split.
+- **Resuming.** Each album (or track with no album) is one write transaction: its credits,
+  the empty artists, the step's cursor in `meta` (`artist_refresh_mb`, `artist_refresh_split`,
+  `artist_refresh_loose`: the last uid done, or `'done'`) and the tracks to retag
+  (`artist_refresh_files`, cleared once they are). Closing stops it at its next step: a
+  lookup under way is given up, and a busy wait for another connection's lock too. The next
+  open retags what was left, then goes on after the cursors. When all three are `'done'`,
+  `artist_refresh` is `'done'` and the cursors go.
+- **Sync.** The changes are ordinary logged rows. Two devices refreshing the same library
+  write the same credit rows (their uids derive from the owner), the same split artists'
+  rows, and artists with MusicBrainz ids created on both merge by `mb_artistid` as any
+  duplicates do. A track's files are retagged on each device by its own refresh; sync
+  doesn't send them again (the track's `file_rev` didn't change).
+
 ## Field mapping
 
 | Library field | Tag property (TagLib) | Notes |
 |---------------|-----------------------|-------|
 | track title | `TITLE` | |
-| track artist | `ARTIST` | credited name as on the release |
+| track artist | `ARTIST` | credited name as on the release ("A feat. B") |
+| track's artists | `ARTISTS` | one value per credited artist; see [Artist credits](#artist-credits) |
 | album | `ALBUM` | removed for a track with no album |
-| album artist | `ALBUMARTIST` | |
+| album artist | `ALBUMARTIST` | credited name as on the release |
+| album's artists | `ALBUMARTISTS` | one value per credited artist; removed for a track with no album |
 | year | `DATE` | release date; original year for a track with no album |
 | original year | `ORIGINALDATE` | release group's first release |
 | track/disc | `TRACKNUMBER`, `DISCNUMBER` | written as `n/total`; not for a track with no album |
-| mb ids | `MUSICBRAINZ_TRACKID` (recording), `MUSICBRAINZ_RELEASETRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID` | artist ids only when a single artist is credited |
+| mb ids | `MUSICBRAINZ_TRACKID` (recording), `MUSICBRAINZ_RELEASETRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID` | `MUSICBRAINZ_ARTISTID` and `MUSICBRAINZ_ALBUMARTISTID` hold one id per credited artist, in order |
 
-Writing an empty string through `mc_tags_write()` removes that tag.
+Writing an empty string through `mc_tags_write()` removes that tag. Multi-valued properties
+are '\n'-separated lists in `mc_tags` (`artists`, `album_artists`, `mb_artistids`,
+`mb_albumartistids`); `mb_artistid` and `mb_albumartistid` read as the first value. In ID3v2
+(MP3, WAV) `ARTISTS` and the artist ids are `TXXX` frames ("ARTISTS", "MUSICBRAINZ ARTIST
+ID", as TagLib names them) with one value per string; in FLAC and Opus, one Vorbis comment
+per value.
 
 ## Cover art
 

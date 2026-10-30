@@ -479,7 +479,7 @@ static mc_status check_db(mover *m) {
   if (!has_db) return MC_OK; /* a library that has never been opened */
 
   mc_library *lib = NULL;
-  mc_status st = mc_library_open(m->dst, &lib);
+  mc_status st = mc_library_open_internal(m->dst, &lib);
   if (st != MC_OK) return st;
   sqlite3_stmt *stmt = NULL;
   if (sqlite3_prepare_v2(mc_library_db(lib), "PRAGMA quick_check", -1, &stmt, NULL) != SQLITE_OK ||

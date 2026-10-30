@@ -7,6 +7,7 @@
 #include "config.h"
 #include "tagger/coverart.h"
 #include "tagger/musicbrainz.h"
+#include "tagger/refresh.h"
 
 const char *mc_version(void) {
   return MC_VERSION_STRING;
@@ -36,6 +37,7 @@ mc_status mc_init(void) {
   if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) return MC_ERR_NET;
   mc_musicbrainz_global_init();
   mc_coverart_global_init();
+  mc_refresh_global_init();
   return MC_OK;
 }
 

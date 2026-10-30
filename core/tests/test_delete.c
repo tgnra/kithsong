@@ -364,6 +364,61 @@ static void test_artist(void) {
   mc_library_close(lib);
 }
 
+/* An artist featured in a credit counts as on the track: it stays while any credit names it,
+ * goes with the last, and comes back, credit rows and all, with a restored track. */
+static void test_featured(void) {
+  char config[1200];
+  mc_library *lib = open_library("featured", config);
+  if (!lib) return;
+  char pair[2][MC_UID_STRLEN];
+  add_album(lib, "Duo", "Pair", 2, NULL, pair);
+  const mc_db_credit_part feat[] = {{{"Duo", NULL, NULL}, " feat. "}, {{"Guest", NULL, NULL}, NULL}};
+  const mc_db_credit_part and[] = {{{"Duo", NULL, NULL}, " & "}, {{"Guest", NULL, NULL}, NULL}};
+  mc_db_artist whole = {"Duo feat. Guest", NULL, NULL};
+  CHECK(mc_import_db_set_credit(lib, 0, pair[0], &whole, feat, 2) == MC_OK);
+  whole.name = "Duo & Guest";
+  CHECK(mc_import_db_set_credit(lib, 0, pair[1], &whole, and, 2) == MC_OK);
+
+  const char *uids[] = {pair[0]};
+  mc_delete_plan *plan = NULL;
+  mc_delete_result res;
+  CHECK(mc_delete_plan_new(lib, MC_DELETE_TRACKS, uids, 1, &plan) == MC_OK);
+  CHECK(mc_delete_run(lib, config, plan, &res) == MC_OK && res.tracks_deleted == 1);
+  mc_delete_plan_free(plan);
+  CHECK(query_int(lib, "SELECT count(*) FROM artists WHERE name = 'Guest'") == 1); /* still on Pair 2 */
+  char sql[300];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE track_uid = '%s'", pair[0]);
+  CHECK(query_int(lib, sql) == 0);
+  CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE entity = 'track_artists' AND field = '_deleted'") == 2);
+
+  uids[0] = pair[1];
+  CHECK(mc_delete_plan_new(lib, MC_DELETE_TRACKS, uids, 1, &plan) == MC_OK);
+  CHECK(mc_delete_run(lib, config, plan, &res) == MC_OK && res.tracks_deleted == 1);
+  mc_delete_plan_free(plan);
+  CHECK(count_of(lib, MC_ENTITY_ARTISTS) == 0 && count_of(lib, MC_ENTITY_ALBUMS) == 0);
+  CHECK(query_int(lib, "SELECT count(*) FROM album_artists") == 0);
+
+  /* Pair 1 comes back as it was credited. */
+  CHECK(unbin("Pair/01.flac"));
+  int restored = 0;
+  CHECK(mc_delete_restore(lib, config, &restored, NULL) == MC_OK && restored == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM artists") == 2);
+  snprintf(sql, sizeof sql,
+           "SELECT count(*) FROM track_artists c JOIN artists a ON a.uid = c.artist_uid"
+           " WHERE c.track_uid = '%s' AND ((c.position = 0 AND a.name = 'Duo' AND c.joinphrase = ' feat. ')"
+           " OR (c.position = 1 AND a.name = 'Guest'))",
+           pair[0]);
+  CHECK(query_int(lib, sql) == 2);
+  CHECK(query_int(lib, "SELECT count(*) FROM album_artists") == 1);
+  mc_track_list *tracks = NULL;
+  char guest[MC_UID_STRLEN];
+  query_text(lib, "SELECT uid FROM artists WHERE name = 'Guest'", guest, sizeof guest);
+  CHECK(mc_library_list_artist_tracks(lib, guest, &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) CHECK_STR(tracks->items[0].artist, "Duo feat. Guest");
+  mc_track_list_free(tracks);
+  mc_library_close(lib);
+}
+
 /* Old records expire; a file imported again since drops its record. */
 static void test_expiry(void) {
   char config[1200];
@@ -506,6 +561,7 @@ int main(int argc, char **argv) {
   test_album();
   test_kept();
   test_artist();
+  test_featured();
   test_expiry();
   test_two_files();
   test_permanent();

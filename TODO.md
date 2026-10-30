@@ -100,6 +100,7 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 
 ### Core
 - Albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
+- Sync profile "artist" selections pick tracks by `tracks.artist_uid` and the album's artist only, not featured credits (`track_artists` / `album_artists` past the first): selecting Rihanna doesn't sync "Jay-Z feat. Rihanna". And a selection of an old whole-credit artist ("Jay-Z feat. Rihanna") selects nothing once the refresh after upgrading has split and deleted it
 - Changelog compaction must keep the rows that decide merges and archive demotions
 - A stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
 

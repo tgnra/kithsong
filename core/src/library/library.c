@@ -5,7 +5,10 @@
 #include <string.h>
 
 #include "search/search_internal.h"
+#include "sync/rows.h"
+#include "tagger/refresh.h"
 #include "util/platform.h"
+#include "util/uid.h"
 
 extern const unsigned char mc_schema_v1_sql[];
 
@@ -130,6 +133,41 @@ static const char *const k_migrations[] = {
   "DROP INDEX IF EXISTS albums_singles;"
   "DROP TRIGGER IF EXISTS mc_log_ins_albums_kind;"
   "DROP TRIGGER IF EXISTS mc_log_upd_albums_kind;",
+  /* v13: artist credits. A track or album credited "A feat. B" is each one's: artist_credit
+   * is the credit as shown (NULL: the artist's own name), artist_uid stays the first artist,
+   * and track_artists / album_artists list them all in order. A row's uid comes from its
+   * owner and position (mc_credit_uid), so every device fills in the same rows here, and the
+   * same rows when two devices credit one track. The refresh after upgrading splits the
+   * credits already there (meta.artist_refresh; docs/schema.md). */
+  "ALTER TABLE tracks ADD COLUMN artist_credit TEXT;"
+  "ALTER TABLE albums ADD COLUMN artist_credit TEXT;"
+  "CREATE TABLE track_artists ("
+  "  uid        TEXT PRIMARY KEY,"
+  "  track_uid  TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
+  "  artist_uid TEXT NOT NULL REFERENCES artists (uid) ON DELETE CASCADE,"
+  "  position   INTEGER NOT NULL,"
+  "  joinphrase TEXT NOT NULL DEFAULT ''"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX track_artists_track ON track_artists (track_uid, position);"
+  "CREATE INDEX track_artists_artist ON track_artists (artist_uid);"
+  "CREATE TABLE album_artists ("
+  "  uid        TEXT PRIMARY KEY,"
+  "  album_uid  TEXT NOT NULL REFERENCES albums (uid) ON DELETE CASCADE,"
+  "  artist_uid TEXT NOT NULL REFERENCES artists (uid) ON DELETE CASCADE,"
+  "  position   INTEGER NOT NULL,"
+  "  joinphrase TEXT NOT NULL DEFAULT ''"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX album_artists_album ON album_artists (album_uid, position);"
+  "CREATE INDEX album_artists_artist ON album_artists (artist_uid);"
+  "INSERT INTO track_artists (uid, track_uid, artist_uid, position)"
+  " SELECT mc_credit_uid(uid, 0), uid, artist_uid, 0 FROM tracks"
+  " WHERE artist_uid IN (SELECT uid FROM artists);"
+  "INSERT INTO album_artists (uid, album_uid, artist_uid, position)"
+  " SELECT mc_credit_uid(uid, 0), uid, artist_uid, 0 FROM albums"
+  " WHERE artist_uid IN (SELECT uid FROM artists);"
+  "INSERT OR REPLACE INTO meta (key, value) VALUES ('artist_refresh',"
+  " CASE WHEN EXISTS (SELECT 1 FROM tracks) OR EXISTS (SELECT 1 FROM albums)"
+  " THEN 'pending' ELSE 'done' END);",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -137,11 +175,15 @@ static const char *const k_migrations[] = {
 static const char *const k_artist_cols[] = {"name", "sort_name", "mb_artistid", NULL};
 static const char *const k_album_cols[] = {"title", "artist_uid", "year", "original_year",
                                            "disc_total", "mb_albumid", "mb_releasegroupid",
-                                           "art_hash", NULL};
+                                           "art_hash", "artist_credit", NULL};
 static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "track_no",
                                            "disc_no", "duration_ms", "genre", "mb_trackid",
                                            "mb_releasetrackid", "year", "mb_albumid", "added_ms",
-                                           "file_rev", NULL};
+                                           "file_rev", "artist_credit", NULL};
+static const char *const k_track_artist_cols[] = {"track_uid", "artist_uid", "position",
+                                                  "joinphrase", NULL};
+static const char *const k_album_artist_cols[] = {"album_uid", "artist_uid", "position",
+                                                  "joinphrase", NULL};
 static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", "last_played_ms",
                                           NULL};
 static const char *const k_playlist_cols[] = {"name", NULL};
@@ -155,6 +197,8 @@ static const mc_changelog_table k_tracked[] = {
   {"artists", "uid", k_artist_cols},
   {"albums", "uid", k_album_cols},
   {"tracks", "uid", k_track_cols},
+  {"track_artists", "uid", k_track_artist_cols},
+  {"album_artists", "uid", k_album_artist_cols},
   {"track_plays", "uid", k_play_cols},
   {"playlists", "uid", k_playlist_cols},
   {"playlist_entries", "uid", k_entry_cols},
@@ -179,8 +223,9 @@ static int user_version(sqlite3 *db) {
   return version;
 }
 
-static mc_status migrate(mc_library *lib) {
-  int version = user_version(lib->db);
+/* *from: the version the database was at. */
+static mc_status migrate(mc_library *lib, int *from) {
+  int version = *from = user_version(lib->db);
   if (version < 0) return MC_ERR_DB;
   if (version > MC_SCHEMA_VERSION) return MC_ERR_FORMAT; /* written by a newer app */
 
@@ -217,6 +262,43 @@ static void sql_shuffle_key(sqlite3_context *ctx, int argc, sqlite3_value **argv
   h = (h ^ (h >> 27)) * 0x94d049bb133111ebu;
   h ^= h >> 31;
   sqlite3_result_int64(ctx, (sqlite3_int64)(h >> 1));
+}
+
+/* mc_credit_uid(owner, position): an artist credit row's uid (mc_uid_derive()). */
+static void sql_credit_uid(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  const char *owner = (const char *)sqlite3_value_text(argv[0]);
+  char uid[MC_UID_STRLEN];
+  if (owner && mc_uid_derive(owner, sqlite3_value_int(argv[1]), uid) == MC_OK)
+    sqlite3_result_text(ctx, uid, -1, SQLITE_TRANSIENT);
+  else
+    sqlite3_result_null(ctx);
+}
+
+/* Rows a peer with a newer schema logged here are kept but not applied (see "Applying rows"
+ * in docs/sync-protocol.md). Once a migration gives this library their table or column, the
+ * changelog is applied to them as if they had just arrived, so a device upgrading late
+ * catches up with what newer peers already wrote. Migrations that add something logged list
+ * here which changelog rows that is, by the version they take the database to. */
+static const struct {
+  int version;
+  const char *rows;
+} k_newly_known[] = {
+  {13, "entity IN ('track_artists', 'album_artists')"
+       " OR (entity IN ('tracks', 'albums') AND field = 'artist_credit')"},
+};
+
+static mc_status apply_newly_known(mc_library *lib, int from) {
+  mc_status st = MC_OK;
+  for (size_t i = 0; st == MC_OK && i < sizeof k_newly_known / sizeof k_newly_known[0]; i++) {
+    if (from >= k_newly_known[i].version || from == 0) continue; /* a new library has no rows */
+    mc_rows_target tg;
+    mc_rows_target_library(lib, &tg);
+    mc_rows_applier *a = NULL;
+    if ((st = mc_rows_applier_new(&tg, &a)) == MC_OK) st = mc_rows_reapply(a, k_newly_known[i].rows);
+    mc_rows_applier_free(a);
+  }
+  return st;
 }
 
 /* --- Identity --- */
@@ -279,7 +361,7 @@ static mc_status load_meta_uid(mc_library *lib, const char *key, char out[MC_UID
 
 /* --- Public API --- */
 
-mc_status mc_library_open(const char *dir, mc_library **out) {
+static mc_status library_open(const char *dir, int background, mc_library **out) {
   if (!dir || !*dir || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
 
@@ -319,17 +401,28 @@ mc_status mc_library_open(const char *dir, mc_library **out) {
   if ((st = mc_changelog_register(lib->db, &lib->log)) != MC_OK) goto fail;
   if (sqlite3_create_function(lib->db, "mc_shuffle_key", 2,
                               SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
-                              sql_shuffle_key, NULL, NULL) != SQLITE_OK) {
+                              sql_shuffle_key, NULL, NULL) != SQLITE_OK ||
+      sqlite3_create_function(lib->db, "mc_credit_uid", 2,
+                              SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
+                              sql_credit_uid, NULL, NULL) != SQLITE_OK) {
     st = MC_ERR_DB;
     goto fail;
   }
-  if ((st = migrate(lib)) != MC_OK) goto fail;
+  int from;
+  if ((st = migrate(lib, &from)) != MC_OK) goto fail;
   if ((st = mc_changelog_install_triggers(lib->db, k_tracked,
                                           sizeof k_tracked / sizeof k_tracked[0])) != MC_OK)
     goto fail;
   if ((st = load_meta_uid(lib, "node_uid", lib->node_uid)) != MC_OK) goto fail;
   if ((st = load_meta_uid(lib, "library_uid", lib->library_uid)) != MC_OK) goto fail;
   mc_hlc_init(&lib->hlc, mc_wall_ms, mc_changelog_max_hlc(lib->db));
+  /* Not fatal: the library opens as it is, the rows wait for their next change. */
+  if (apply_newly_known(lib, from) != MC_OK)
+    fprintf(stderr, "musiccore: library open: couldn't apply rows newer peers logged: %s\n",
+            sqlite3_errmsg(lib->db));
+  /* Splits the credits from before v13 (docs/tagging-rules.md, "Refresh after upgrading"),
+   * on a thread and connection of its own. */
+  if (background) lib->refresh = mc_refresh_start(lib);
 
   *out = lib;
   return MC_OK;
@@ -341,8 +434,17 @@ fail:
   return st;
 }
 
+mc_status mc_library_open(const char *dir, mc_library **out) {
+  return library_open(dir, 1, out);
+}
+
+mc_status mc_library_open_internal(const char *dir, mc_library **out) {
+  return library_open(dir, 0, out);
+}
+
 void mc_library_close(mc_library *lib) {
   if (!lib) return;
+  mc_refresh_stop(lib->refresh);
   mc_search_free(lib->search);
   sqlite3_close_v2(lib->db);
   free(lib->dir);
@@ -398,6 +500,10 @@ mc_status mc_library_commit(mc_library *lib) {
 
 void mc_library_rollback(mc_library *lib) {
   exec(lib, "ROLLBACK");
+}
+
+int mc_library_refresh_progress(mc_library *lib, int *done, int *total) {
+  return mc_refresh_progress(lib ? lib->refresh : NULL, done, total);
 }
 
 int mc_library_schema_version(const mc_library *lib) {
@@ -490,7 +596,8 @@ mc_status mc_library_reset_for_merge(mc_library *lib) {
   lib->applying_remote = 1;
   static const char *const k_clear[] = {
     "DELETE FROM files", "DELETE FROM playlist_entries", "DELETE FROM album_group_entries",
-    "DELETE FROM track_plays", "DELETE FROM recents", "DELETE FROM smart_lists",
+    "DELETE FROM track_plays", "DELETE FROM track_artists", "DELETE FROM album_artists",
+    "DELETE FROM recents", "DELETE FROM smart_lists",
     "DELETE FROM playlists", "DELETE FROM album_groups", "DELETE FROM tracks",
     "DELETE FROM albums", "DELETE FROM artists", "DELETE FROM aliases",
     "DELETE FROM merge_keys", "DELETE FROM changelog", "DELETE FROM meta WHERE key = 'merge_seq'",
@@ -771,29 +878,43 @@ static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list *
 
 mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
   /* Artists nothing refers to any more are left out, as the albums and tracks views do. An
-   * album artist of only singles is listed, with no albums, for its singles. */
+   * album artist of only singles is listed, with no albums, for its singles; an artist only
+   * featured on tracks, for those. */
   static const char sql[] =
     "SELECT ar.uid, ar.name,"
-    " (SELECT count(*) FROM albums a WHERE a.artist_uid = ar.uid AND NOT " ALBUM_IS_SINGLE ")"
+    " (SELECT count(*) FROM albums a WHERE a.uid IN (" CREDITED_ALBUMS("ar.uid") ")"
+    "  AND NOT " ALBUM_IS_SINGLE ")"
     " FROM artists ar"
     " WHERE EXISTS (SELECT 1 FROM albums a WHERE a.artist_uid = ar.uid)"
-    "  OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)" ARTIST_ORDER;
+    "  OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)"
+    "  OR EXISTS (SELECT 1 FROM track_artists c WHERE c.artist_uid = ar.uid AND c.position > 0)"
+    "  OR EXISTS (SELECT 1 FROM album_artists c WHERE c.artist_uid = ar.uid AND c.position > 0)"
+    ARTIST_ORDER;
   return list_artists(lib, sql, out);
 }
 
 mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
-  /* Counted once for every artist rather than per artist: a track is its own artist's, else
-   * its album's, which no index finds. */
+  /* Counted once for every artist rather than per artist, over (artist, album) and (artist,
+   * track) pairs as CREDITED_ALBUMS and CREDITED_TRACKS have them: a track with no artist of
+   * its own is its album's, which no index finds. */
   static const char sql[] =
     "SELECT ar.uid, ar.name, coalesce(na.albums, 0), coalesce(nt.n, 0) FROM artists ar"
-    " LEFT JOIN (SELECT a.artist_uid AS uid, count(*) AS n,"
-    "   count(CASE WHEN NOT " ALBUM_IS_SINGLE " THEN 1 END) AS albums FROM albums a"
+    " LEFT JOIN (SELECT c.uid, count(*) AS n,"
+    "   count(CASE WHEN NOT " ALBUM_IS_SINGLE " THEN 1 END) AS albums"
+    "  FROM (SELECT artist_uid AS uid, uid AS album_uid FROM albums WHERE artist_uid IS NOT NULL"
+    "   UNION SELECT artist_uid, album_uid FROM album_artists WHERE position > 0) c"
+    "  JOIN albums a ON a.uid = c.album_uid"
     "  WHERE EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid)"
-    "  GROUP BY a.artist_uid) na ON na.uid = ar.uid"
-    " LEFT JOIN (SELECT coalesce(t.artist_uid, al.artist_uid) AS uid, count(*) AS n FROM tracks t"
-    "  LEFT JOIN albums al ON al.uid = t.album_uid"
-    "  WHERE EXISTS (SELECT 1 FROM files f WHERE f.track_uid = t.uid)"
-    "  GROUP BY 1) nt ON nt.uid = ar.uid"
+    "  GROUP BY c.uid) na ON na.uid = ar.uid"
+    " LEFT JOIN (SELECT c.uid, count(*) AS n"
+    "  FROM (SELECT coalesce(t.artist_uid, al.artist_uid) AS uid, t.uid AS track_uid FROM tracks t"
+    "    LEFT JOIN albums al ON al.uid = t.album_uid"
+    "   UNION SELECT artist_uid, track_uid FROM track_artists WHERE position > 0"
+    "   UNION SELECT aa.artist_uid, t.uid FROM tracks t"
+    "    JOIN album_artists aa ON aa.album_uid = t.album_uid AND aa.position > 0"
+    "    WHERE t.artist_uid IS NULL) c"
+    "  WHERE EXISTS (SELECT 1 FROM files f WHERE f.track_uid = c.track_uid)"
+    "  GROUP BY c.uid) nt ON nt.uid = ar.uid"
     " WHERE na.n > 0 OR nt.n > 0" ARTIST_ORDER;
   return list_artists(lib, sql, out);
 }
@@ -808,20 +929,21 @@ void mc_artist_list_free(mc_artist_list *list) {
 mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid, mc_album_list **out) {
   if (!lib || !artist_uid || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
-  /* c counts the tracks of just the albums the artist is on (by the two artist indexes). An
-   * album artist's album with no tracks has no c row, and counts as all theirs. Singles, one
+  /* c counts the tracks of just the albums the artist is on (by the artist indexes). An album
+   * credited to them with no tracks has no c row, and counts as all theirs. Singles, one
    * track, are mc_library_list_artist_singles()'s. */
   static const char sql[] =
+    "WITH mine (uid) AS (" CREDITED_ALBUMS("?1") "), cr (uid) AS (" CREDITED_TRACKS("?1") ")"
     ALBUM_COLS ", coalesce(c.n, 0), coalesce(c.credited, 0) FROM albums a" ALBUM_JOINS
     " LEFT JOIN (SELECT t.album_uid, count(*) AS n,"
-    "   count(CASE WHEN coalesce(t.artist_uid, al.artist_uid) = ?1 THEN 1 END) AS credited"
-    "  FROM tracks t JOIN albums al ON al.uid = t.album_uid"
-    "  WHERE t.album_uid IN (SELECT album_uid FROM tracks WHERE artist_uid = ?1"
-    "   UNION SELECT uid FROM albums WHERE artist_uid = ?1)"
+    "   count(CASE WHEN t.uid IN (SELECT uid FROM cr) THEN 1 END) AS credited"
+    "  FROM tracks t"
+    "  WHERE t.album_uid IN (SELECT album_uid FROM tracks WHERE uid IN (SELECT uid FROM cr)"
+    "   UNION SELECT uid FROM mine)"
     "  GROUP BY t.album_uid) c ON c.album_uid = a.uid"
-    " WHERE (c.credited > 0 OR a.artist_uid = ?1) AND coalesce(c.n, 0) <> 1"
-    " ORDER BY max(a.artist_uid IS ?1, coalesce(c.credited * 1.0 / c.n, 0)) DESC, a.year,"
-    "  a.title COLLATE NOCASE, a.uid";
+    " WHERE (c.credited > 0 OR a.uid IN (SELECT uid FROM mine)) AND coalesce(c.n, 0) <> 1"
+    " ORDER BY max(a.uid IN (SELECT uid FROM mine), coalesce(c.credited * 1.0 / c.n, 0)) DESC,"
+    "  a.year, a.title COLLATE NOCASE, a.uid";
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
   if (sqlite3_bind_text(stmt, 1, artist_uid, -1, SQLITE_STATIC) != SQLITE_OK) {
@@ -832,26 +954,106 @@ mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid,
 }
 
 mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid, mc_track_list **out) {
-  /* Their own tracks, and those with no artist on their albums, each by its index. */
+  /* Their own tracks, those they're featured on, and those with no artist on their albums,
+   * each by its index. */
   static const char sql[] =
     TRACK_COLS " FROM tracks t" TRACK_JOINS
-    " WHERE t.uid IN (SELECT uid FROM tracks WHERE artist_uid = ?1"
-    "  UNION ALL SELECT t2.uid FROM albums a2 JOIN tracks t2 ON t2.album_uid = a2.uid"
-    "  WHERE a2.artist_uid = ?1 AND t2.artist_uid IS NULL)"
+    " WHERE t.uid IN (" CREDITED_TRACKS("?1") ")"
     " ORDER BY t.title COLLATE NOCASE, al.title COLLATE NOCASE, coalesce(t.disc_no, 0), t.track_no, t.uid";
   return list_tracks(lib, sql, artist_uid, out);
 }
 
 mc_status mc_library_list_artist_singles(mc_library *lib, const char *artist_uid, mc_track_list **out) {
-  /* Their own tracks and their albums' tracks, each by its index, that are alone on their
-   * album or have none. */
+  /* Their tracks and their albums' tracks, each by its index, that are alone on their album
+   * or have none. */
   static const char sql[] =
     TRACK_COLS " FROM tracks t" TRACK_JOINS
-    " WHERE t.uid IN (SELECT uid FROM tracks WHERE artist_uid = ?1"
-    "  UNION SELECT t2.uid FROM albums a2 JOIN tracks t2 ON t2.album_uid = a2.uid WHERE a2.artist_uid = ?1)"
+    " WHERE t.uid IN (" CREDITED_TRACKS("?1")
+    "  UNION SELECT t2.uid FROM tracks t2 WHERE t2.album_uid IN (" CREDITED_ALBUMS("?1") "))"
     " AND (t.album_uid IS NULL OR (SELECT count(*) FROM tracks st WHERE st.album_uid = t.album_uid) = 1)"
     " ORDER BY coalesce(t.year, al.year), t.title COLLATE NOCASE, t.uid";
   return list_tracks(lib, sql, artist_uid, out);
+}
+
+mc_status mc_library_list_credit(mc_library *lib, const char *uid, mc_credit_list **out) {
+  if (!lib || !uid || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* Whose credit it is: the album's for a track with no artist of its own. */
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db,
+                         "SELECT 0, CASE WHEN t.artist_uid IS NULL AND al.uid IS NOT NULL"
+                         " THEN al.uid ELSE t.uid END, t.artist_uid IS NULL AND al.uid IS NOT NULL"
+                         " FROM tracks t LEFT JOIN albums al ON al.uid = t.album_uid WHERE t.uid = ?1"
+                         " UNION ALL SELECT 1, uid, 1 FROM albums WHERE uid = ?1",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  char owner[MC_UID_STRLEN] = "";
+  int album = 0, rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    copy_uid(owner, stmt, 1);
+    album = sqlite3_column_int(stmt, 2);
+  }
+  sqlite3_finalize(stmt);
+  if (rc == SQLITE_DONE) return MC_ERR_NOT_FOUND;
+  if (rc != SQLITE_ROW) return MC_ERR_DB;
+
+  /* The first artist is artist_uid, whatever row 0 says (see CREDITED_TRACKS). */
+  static const char *const sql[] = {
+    "SELECT ar.uid, ar.name, c.joinphrase FROM ("
+    " SELECT 0 AS position, o.artist_uid AS artist_uid, coalesce((SELECT joinphrase FROM"
+    "  track_artists WHERE track_uid = o.uid AND position = 0), '') AS joinphrase"
+    "  FROM tracks o WHERE o.uid = ?1"
+    " UNION ALL SELECT position, artist_uid, joinphrase FROM track_artists"
+    "  WHERE track_uid = ?1 AND position > 0) c"
+    " JOIN artists ar ON ar.uid = c.artist_uid ORDER BY c.position",
+    "SELECT ar.uid, ar.name, c.joinphrase FROM ("
+    " SELECT 0 AS position, o.artist_uid AS artist_uid, coalesce((SELECT joinphrase FROM"
+    "  album_artists WHERE album_uid = o.uid AND position = 0), '') AS joinphrase"
+    "  FROM albums o WHERE o.uid = ?1"
+    " UNION ALL SELECT position, artist_uid, joinphrase FROM album_artists"
+    "  WHERE album_uid = ?1 AND position > 0) c"
+    " JOIN artists ar ON ar.uid = c.artist_uid ORDER BY c.position",
+  };
+  mc_credit_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql[album], -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  if (st == MC_OK) sqlite3_bind_text(stmt, 1, owner, -1, SQLITE_STATIC);
+  int cap = 0;
+  rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_credit_artist *c = &list->items[list->count++];
+    memset(c, 0, sizeof *c);
+    copy_uid(c->uid, stmt, 0);
+    c->name = column_dup(stmt, 1);
+    const unsigned char *join = sqlite3_column_text(stmt, 2);
+    c->join = mc_strdup(join ? (const char *)join : "");
+    if (!c->name || !c->join) st = MC_ERR_NOMEM;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_credit_list_free(list);
+    return st;
+  }
+  /* The last has nothing after it, whatever a stale row says. */
+  if (list->count) list->items[list->count - 1].join[0] = '\0';
+  *out = list;
+  return MC_OK;
+}
+
+void mc_credit_list_free(mc_credit_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].name);
+    free(list->items[i].join);
+  }
+  free(list->items);
+  free(list);
 }
 
 mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **out) {
@@ -1030,7 +1232,7 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
    * version doesn't know, matches nothing and is left out. */
   static const char sql[] =
     "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, s.name),"
-    " aar.name, s.uid IS NOT NULL,"
+    " coalesce(al.artist_credit, aar.name), s.uid IS NOT NULL,"
     " p.uid IS NULL OR NOT EXISTS (SELECT 1 FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
     "  OR EXISTS (SELECT 1 FROM playlist_entries e JOIN files f ON f.track_uid = e.track_uid"
     "  WHERE e.playlist_uid = p.uid)"

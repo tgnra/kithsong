@@ -504,7 +504,8 @@ static char *dest_path(mc_library *lib, const char *track, const char *ext) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
                          "SELECT t.title, t.track_no, t.disc_no, al.uid, al.title, al.year,"
-                         " al.disc_total, aar.name, ar.name"
+                         " al.disc_total, coalesce(al.artist_credit, aar.name),"
+                         " coalesce(t.artist_credit, ar.name)"
                          " FROM tracks t LEFT JOIN albums al ON al.uid = t.album_uid"
                          " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
                          " LEFT JOIN artists ar ON ar.uid = t.artist_uid WHERE t.uid = ?1",
