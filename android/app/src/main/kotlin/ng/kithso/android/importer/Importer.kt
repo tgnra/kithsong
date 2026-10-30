@@ -13,9 +13,11 @@ import ng.kithso.core.MusicCoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -102,6 +104,8 @@ data class ImportProgress(
  * items are all settled is closed and its copies deleted, so the cache holds only the batch
  * being imported and the ones with items waiting for a decision. Documents are all copied up
  * front instead, as access to shared ones can end with the activity that received them.
+ * Documents shared while an import runs are copied straight away too, and imported after
+ * everything it was already doing ([add]).
  *
  * While a folder is being imported the app holds a persistable grant for it, released when
  * the import is over (or, after the process died mid-import, on the next start).
@@ -156,6 +160,15 @@ class Importer(
     private var batchTotal = 0
     private val copyProblems = mutableListOf<String>()
     private var lastRefresh = 0L
+    /** Documents [add]ed, being copied or waiting for the batches before them, in order. */
+    private val added = ArrayDeque<Deferred<List<Staged>>>()
+    /** The import's own batches; those [add]ed are numbered after them, in the order they run. */
+    private var sourceBatches = 0
+    private var addedRun = 0
+    private var addedCount = 0
+
+    // A batch of documents [add]ed, copied into [dir]; [path] is what the core gets, or null.
+    private class Staged(val batch: StagedFiles.Batch, val dir: File, val path: File?)
 
     init {
         scope.launch(thread) {
@@ -182,6 +195,10 @@ class Importer(
             scanning = false
             batchIndex = 0
             batchTotal = 0
+            added.clear()
+            sourceBatches = 0
+            addedRun = 0
+            addedCount = 0
             cleanUp()
             if (what is ImportSource.Folder) {
                 // For as long as the import runs, so the folder stays readable whatever
@@ -196,6 +213,30 @@ class Importer(
             runner = scope.launch(Dispatchers.IO) { run(what) }
         }
         return true
+    }
+
+    /**
+     * Adds documents shared while an import runs to the end of it, or starts one with them if
+     * it's over by now. They're copied straight away, as their grant can end with the activity
+     * they came to. A core session takes its paths up front, so they get sessions of their
+     * own, as the import's batches do, started once the batches before have nothing more to
+     * do on their own.
+     */
+    fun add(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        scope.launch(thread) {
+            if (over) {
+                start(ImportSource.Documents(uris))
+                return@launch
+            }
+            val n = addedCount++
+            added += scope.async(Dispatchers.IO) { copyAdded(uris, File(root, "a$n")) }
+            // Everything so far is waiting for the user: a runner for these.
+            if (runnerDone) {
+                runnerDone = false
+                runner = scope.launch(Dispatchers.IO) { runAdded() }
+            }
+        }
     }
 
     /** Imports the items waiting for a decision with the tags they have. */
@@ -243,6 +284,8 @@ class Importer(
         scope.launch(thread) {
             if (over) return@launch
             runner?.cancel()
+            added.forEach { it.cancel() }
+            added.clear()
             finish(ImportProgress.Phase.Cancelled)
         }
     }
@@ -264,7 +307,8 @@ class Importer(
                 is ImportSource.Documents -> files.planDocuments(what.uris)
             }
             withContext(thread) {
-                batchTotal = plan.size
+                sourceBatches = plan.size
+                batchTotal += plan.size
                 copyProblems += files.takeProblems()
                 publish()
             }
@@ -294,6 +338,7 @@ class Importer(
                     if (path != null) runBatch(i, batch, path)
                 }
             }
+            runAddedBatches()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -303,13 +348,74 @@ class Importer(
         } finally {
             withContext(NonCancellable + thread) {
                 copyProblems += files.takeProblems()
-                runnerDone = true
-                copying = null
-                scanning = false
-                publish()
-                maybeFinish()
+                runnerFinished()
             }
         }
+    }
+
+    // A runner for documents [add]ed once the last one was done, or as it stopped.
+    private suspend fun runAdded() {
+        try {
+            runAddedBatches()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Import stopped", e)
+        } finally {
+            withContext(NonCancellable + thread) { runnerFinished() }
+        }
+    }
+
+    private suspend fun runAddedBatches() {
+        while (true) {
+            val next = withContext(thread) { added.removeFirstOrNull() } ?: return
+            for (staged in next.await()) {
+                if (staged.path == null) continue
+                val index = withContext(thread) { sourceBatches + addedRun++ }
+                runBatch(index, staged.batch, staged.path, staged.dir)
+            }
+        }
+    }
+
+    // Copies documents [add]ed under [dir] (a folder each for their batches), as [run] does.
+    private suspend fun copyAdded(uris: List<Uri>, dir: File): List<Staged> {
+        val files = StagedFiles(context, root)
+        try {
+            val plan = files.planDocuments(uris)
+            withContext(thread) {
+                batchTotal += plan.size
+                publish()
+            }
+            return plan.mapIndexed { i, batch ->
+                val to = File(dir, "$i")
+                Staged(batch, to, files.copy(batch, to) {})
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Couldn't copy the shared files", e)
+            withContext(thread) { copyProblems += context.getString(R.string.import_read_failed) }
+            return emptyList()
+        } finally {
+            withContext(NonCancellable + thread) {
+                copyProblems += files.takeProblems()
+                publish()
+            }
+        }
+    }
+
+    // As a runner stops, on [thread]: documents added meanwhile get one of their own,
+    // otherwise the import finishes once its items are settled.
+    private fun runnerFinished() {
+        copying = null
+        scanning = false
+        if (!over && added.isNotEmpty()) {
+            runner = scope.launch(Dispatchers.IO) { runAdded() }
+        } else {
+            runnerDone = true
+        }
+        publish()
+        maybeFinish()
     }
 
     private suspend fun onCopied(done: Int, total: Int) {
@@ -322,13 +428,13 @@ class Importer(
 
     // Starts a session for the batch copied to [path] and waits until it has nothing more to
     // do on its own.
-    private suspend fun runBatch(index: Int, planned: StagedFiles.Batch, path: File) {
+    private suspend fun runBatch(index: Int, planned: StagedFiles.Batch, path: File, dir: File = File(root, "b$index")) {
         val batch = withContext(thread) {
             batchIndex = index
             copying = null
             scanning = true
             publish()
-            val batch = Batch(batches.size, File(root, "b$index"), if (planned.isZip) path else null)
+            val batch = Batch(batches.size, dir, if (planned.isZip) path else null)
             batches += batch
             val options = CoreImport.Options(
                 fetchArt = true,

@@ -908,6 +908,7 @@
     "import_folder": { "text": "Import folder", "note": "Import menu item: opens the system's folder picker." },
     "import_files": { "text": "Import files or zip", "note": "Import menu item: opens the system's file picker, for audio files and .zip files such as Bandcamp downloads." },
     "import_files_folder": { "text": "Shared files", "note": "Folder name given to audio files picked or shared one by one, while they're imported; it can show in an import item's name." },
+    "import_added": { "one": "{0:d} shared file added to the import", "other": "{0:d} shared files added to the import", "note": "Toast when files are shared with the app while an import runs: they're imported after what it's already doing." },
     "import_channel": { "text": "Import", "note": "Notification channel name." },
     "import_copying": "Copying music to import",
     "import_copying_files": { "one": "{0:d} of {1:d} file", "other": "{0:d} of {1:d} files", "note": "Files copied so far of those picked. The plural follows {1}." },
