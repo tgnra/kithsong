@@ -60,6 +60,8 @@ enum {
   CMD_DELETE,
   CMD_DELETE_TRACK,
   CMD_EDIT_SMART,
+  CMD_GO_TO_ALBUM,
+  CMD_GO_TO_ARTIST,
   CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
 };
 
@@ -71,6 +73,8 @@ enum { FA_PLAY, FA_SHUFFLE, FA_RESHUFFLE, FA_MORE, FA_CLOSE, FA_ROWS };
 typedef struct row {
   char uid[MC_UID_STRLEN];
   char entry_uid[MC_UID_STRLEN]; /* its place in a playlist, else "" */
+  char album_uid[MC_UID_STRLEN];  /* "" if it has no album */
+  char artist_uid[MC_UID_STRLEN]; /* "" if unknown */
   wchar_t *title;
   wchar_t *artist, *album, *cover_dir;
   wchar_t num[16];
@@ -541,6 +545,8 @@ static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL pl
     row *r = &s.rows[i];
     memcpy(r->uid, t->uid, sizeof r->uid);
     memcpy(r->entry_uid, t->entry_uid, sizeof r->entry_uid);
+    memcpy(r->album_uid, t->album_uid, sizeof r->album_uid);
+    memcpy(r->artist_uid, t->artist_uid, sizeof r->artist_uid);
     r->title = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
     r->artist = t->artist && *t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
     r->album = t->album && *t->album ? wstr_dup_from_utf8(t->album) : NULL;
@@ -703,6 +709,24 @@ static void show_playlist_menu(void) {
   else if (cmd == CMD_EDIT_SMART) request_playlist(TLN_EDIT_SMART);
 }
 
+/* Whether row i's album has a page to go to: it has one, it isn't the album shown, and it
+ * isn't a single (an album of one track), which the album grid leaves out. */
+static BOOL album_to_go_to(int i) {
+  const row *r = &s.rows[i];
+  if (!r->album_uid[0] || (!s.playlist && !s.by_artist && !strcmp(r->album_uid, s.album_uid))) return FALSE;
+  mc_track_list *list = NULL;
+  if (!s.lib || mc_library_list_album_tracks(s.lib, r->album_uid, &list) != MC_OK) return FALSE;
+  BOOL more = list->count > 1;
+  mc_track_list_free(list);
+  return more;
+}
+
+/* Whether row i's artist has a page to go to that isn't the one shown. */
+static BOOL artist_to_go_to(int i) {
+  const row *r = &s.rows[i];
+  return r->artist_uid[0] && !(s.by_artist && !strcmp(r->artist_uid, s.album_uid));
+}
+
 /* The menu for the selected track, at pt (screen coordinates). */
 static void show_menu(POINT pt) {
   int i = s.selected;
@@ -715,6 +739,10 @@ static void show_menu(POINT pt) {
   /* Greyed out until there's a play queue to add to (see TODO.md, Playback). */
   AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
   AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  BOOL album = album_to_go_to(i), artist = artist_to_go_to(i);
+  if (album || artist) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  if (album) AppendMenuW(menu, MF_STRING, CMD_GO_TO_ALBUM, mc_wstr_mnemonic(MC_STR_GO_TO_ALBUM));
+  if (artist) AppendMenuW(menu, MF_STRING, CMD_GO_TO_ARTIST, mc_wstr_mnemonic(MC_STR_GO_TO_ARTIST));
   if (in_playlist(i)) {
     wchar_t item[128];
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -751,6 +779,15 @@ static void show_menu(POINT pt) {
     case CMD_DELETE_TRACK:
       strcpy(s.req.track_uid, s.rows[i].uid);
       notify(TLN_DELETE_TRACK);
+      break;
+    case CMD_GO_TO_ALBUM:
+      strcpy(s.req.track_uid, s.rows[i].uid);
+      strcpy(s.req.album_uid, s.rows[i].album_uid);
+      notify(TLN_GO_TO_ALBUM);
+      break;
+    case CMD_GO_TO_ARTIST:
+      strcpy(s.req.artist_uid, s.rows[i].artist_uid);
+      notify(TLN_GO_TO_ARTIST);
       break;
     case CMD_PLAY_NEXT: /* greyed out: needs a play queue */
     case CMD_PLAY_LAST:
