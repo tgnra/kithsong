@@ -103,20 +103,32 @@ static int user_version(sqlite3 *db) {
   return version;
 }
 
+/* Another connection (sync's, the scrobbler's: both open on their own threads at startup)
+ * may be migrating the same new file at once, so the version is read again once this one
+ * holds the write lock, and steps it already made are skipped rather than run twice. */
 static mc_status migrate(mc_sync_db *sdb) {
-  int version = user_version(sdb->db);
-  if (version < 0) return MC_ERR_DB;
-  if (version > MC_SYNC_SCHEMA_VERSION) return MC_ERR_FORMAT; /* written by a newer app */
+  int v = user_version(sdb->db);
+  if (v < 0) return MC_ERR_DB;
+  if (v > MC_SYNC_SCHEMA_VERSION) return MC_ERR_FORMAT; /* written by a newer app */
 
-  for (int v = version; v < MC_SYNC_SCHEMA_VERSION; v++) {
-    char bump[64];
-    snprintf(bump, sizeof bump, "PRAGMA user_version = %d", v + 1);
+  while (v < MC_SYNC_SCHEMA_VERSION) {
     if (exec(sdb, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
-    if (exec(sdb, k_migrations[v]) != MC_OK || exec(sdb, bump) != MC_OK) {
+    int now = user_version(sdb->db);
+    if (now < 0 || now > MC_SYNC_SCHEMA_VERSION) {
       exec(sdb, "ROLLBACK");
-      return MC_ERR_DB;
+      return now < 0 ? MC_ERR_DB : MC_ERR_FORMAT;
+    }
+    if (now == v) {
+      char bump[64];
+      snprintf(bump, sizeof bump, "PRAGMA user_version = %d", v + 1);
+      if (exec(sdb, k_migrations[v]) != MC_OK || exec(sdb, bump) != MC_OK) {
+        exec(sdb, "ROLLBACK");
+        return MC_ERR_DB;
+      }
+      now = v + 1;
     }
     if (exec(sdb, "COMMIT") != MC_OK) return MC_ERR_DB;
+    v = now;
   }
   return MC_OK;
 }
@@ -231,8 +243,16 @@ mc_status mc_sync_db_open(const char *config_dir, mc_sync_db **out) {
   if (sqlite3_open_v2(db_path, &sdb->db, flags, NULL) != SQLITE_OK) goto fail;
 
   sqlite3_busy_timeout(sdb->db, 5000);
-  if ((st = exec(sdb, "PRAGMA journal_mode = WAL;"
-                      "PRAGMA synchronous = NORMAL;"
+  /* Turning a new file to WAL while another connection opens it too (sync's and the
+   * scrobbler's, on their own threads, on the first run) can be SQLITE_BUSY without the busy
+   * handler being called, so it's retried here for up to the same five seconds. */
+  int rc;
+  for (int tries = 0; (rc = sqlite3_exec(sdb->db, "PRAGMA journal_mode = WAL", NULL, NULL, NULL)) == SQLITE_BUSY &&
+                      tries < 250;
+       tries++)
+    sqlite3_sleep(20);
+  if (rc != SQLITE_OK) goto fail;
+  if ((st = exec(sdb, "PRAGMA synchronous = NORMAL;"
                       "PRAGMA trusted_schema = OFF;")) != MC_OK)
     goto fail;
   if ((st = mc_changelog_register(sdb->db, &sdb->log)) != MC_OK) goto fail;

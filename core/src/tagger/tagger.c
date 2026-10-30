@@ -402,7 +402,7 @@ static mc_status group_files(mc_import *imp, item_list *out) {
     if (!folder) goto done;
     if (t->album || t->mb_albumid) {
       const char *v = t->album ? t->album : t->mb_albumid;
-      size_t len = strlen(folder) + strlen(v) + 4;
+      size_t len = strlen(folder) + strlen(v) + 5; /* "\x1f" "al:" and the NUL */
       if ((keys[i] = malloc(len))) {
         snprintf(keys[i], len, "%s\x1f%s:%s", folder, t->album ? "al" : "id", v);
         for (char *k = keys[i]; *k; k++) *k = (char)tolower((unsigned char)*k);
