@@ -15,8 +15,8 @@
  * secondary text; in a playlist the numbers count its places. Tracks with no file on this
  * device are greyed out. Clicking selects a track;
  * double-clicking or Enter plays it. Right-click (or the menu key) opens a menu for the
- * track: Add to Playlist (add_to_playlist.c) and Delete from Library, and in a playlist also
- * Move Up, Move Down and Remove from Playlist. A playlist's tracks can be dragged into another order too, or moved
+ * track: Add to Playlist (add_to_playlist.c), Go to Album and Go to Artist, and Delete from
+ * Library, and in a playlist also Move Up, Move Down and Remove from Playlist. A playlist's tracks can be dragged into another order too, or moved
  * with Alt+Up and Alt+Down; Delete removes one. Any track can be dragged onto a playlist
  * outside the list (drag.h: a recent in the sidebar, a tile on the Playlists page), which
  * asks for it to be added (TLN_ADD_TO_PLAYLIST). The [...] button (or F2, or the menu key
@@ -57,12 +57,20 @@
  * Its Rename... (or F2) and Delete... send TLN_RENAME_PLAYLIST and TLN_DELETE_PLAYLIST, as a
  * playlist's do. */
 #define TLN_EDIT_SMART 12
+/* The track menu's Go to Album and Go to Artist: open album_uid on the Albums page with
+ * track_uid selected, or artist_uid's page. Offered only where there's such a page to go to
+ * and it isn't the one shown: not for a track with no album, or a single, whose album the
+ * grid leaves out (an album of one track, see mc_library_list_artist_singles()). */
+#define TLN_GO_TO_ALBUM 13
+#define TLN_GO_TO_ARTIST 14
 
 typedef struct track_list_request {
   char track_uid[MC_UID_STRLEN];
   char entry_uid[MC_UID_STRLEN];
   char after_uid[MC_UID_STRLEN];
   char playlist_uid[MC_UID_STRLEN];
+  char album_uid[MC_UID_STRLEN];
+  char artist_uid[MC_UID_STRLEN];
   BOOL here; /* track_uid has a file on this PC */
 } track_list_request;
 

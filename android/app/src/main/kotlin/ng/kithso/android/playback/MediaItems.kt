@@ -16,6 +16,8 @@ private const val ART_UID = "art_uid"
 private const val ART_LABEL = "art_label"
 private const val ART_FILE = "art_file"
 private const val ART_VERSION = "art_version"
+private const val ALBUM_UID = "album_uid"
+private const val ARTIST_UID = "artist_uid"
 
 /**
  * The file goes in the request metadata as well as the URI, because a MediaItem crossing from
@@ -29,6 +31,8 @@ fun Track.toMediaItem(): MediaItem {
         putString(ART_LABEL, art.label)
         putString(ART_FILE, art.file)
         putLong(ART_VERSION, art.version)
+        putString(ALBUM_UID, albumUid)
+        putString(ARTIST_UID, artistUid)
     }
     return MediaItem.Builder()
         .setMediaId(uid)
@@ -65,6 +69,8 @@ fun MediaItem.toTrack(): Track {
         durationMs = mediaMetadata.durationMs ?: 0,
         art = mediaMetadata.artRef ?: ArtRef(mediaId, mediaMetadata.title?.toString().orEmpty()),
         path = path,
+        albumUid = extras.getString(ALBUM_UID),
+        artistUid = extras.getString(ARTIST_UID),
     )
 }
 

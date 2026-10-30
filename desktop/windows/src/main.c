@@ -430,6 +430,22 @@ static void open_artist(const char *uid) {
   if (artist_view_open(uid)) artist_opened();
 }
 
+/* The Albums page with the album with uid selected, and in the track list its track
+ * track_uid if that isn't NULL, as clicking an album on an artist's page or Go to Album on a
+ * track's menu opens it. */
+static void open_album(const char *uid, const char *track_uid) {
+  show_page(PAGE_ALBUMS);
+  /* The track list comes in now, narrowing the grid, which drops a scroll under way;
+   * selecting again scrolls the album into view at the grid's new width. */
+  if (!album_grid_select(uid)) return;
+  show_album();
+  album_grid_select(uid);
+  if (track_uid) {
+    track_list_select(track_uid);
+    SetFocus(g_app.tracks);
+  }
+}
+
 /* A recent was clicked in the sidebar: its page, with it selected. */
 static void open_recent(void) {
   mc_recent_kind kind;
@@ -1377,13 +1393,11 @@ static void on_command(int id, int code) {
       } else if (code == ARN_OPEN_ALBUM) {
         char uid[MC_UID_STRLEN];
         snprintf(uid, sizeof uid, "%s", artist_view_opened_album());
-        show_page(PAGE_ALBUMS);
-        /* The track list comes in now, narrowing the grid, which drops a scroll under way;
-         * selecting again scrolls the album into view at the grid's new width. */
-        if (album_grid_select(uid)) {
-          show_album();
-          album_grid_select(uid);
-        }
+        open_album(uid, NULL);
+      } else if (code == ARN_GO_TO_ARTIST) {
+        char uid[MC_UID_STRLEN];
+        snprintf(uid, sizeof uid, "%s", artist_view_last_request()->artist_uid);
+        open_artist(uid);
       }
       break;
     case ID_PREV:
@@ -1409,6 +1423,15 @@ static void on_command(int id, int code) {
       } else if (code == TLN_CLOSE) { /* unselecting the album hides the list */
         album_grid_unselect();
         SetFocus(g_app.grid);
+      } else if (code == TLN_GO_TO_ALBUM) {
+        char uid[MC_UID_STRLEN], track[MC_UID_STRLEN];
+        snprintf(uid, sizeof uid, "%s", track_list_last_request()->album_uid);
+        snprintf(track, sizeof track, "%s", track_list_last_request()->track_uid);
+        open_album(uid, track);
+      } else if (code == TLN_GO_TO_ARTIST) {
+        char uid[MC_UID_STRLEN];
+        snprintf(uid, sizeof uid, "%s", track_list_last_request()->artist_uid);
+        open_artist(uid);
       } else on_track_request(code);
       break;
     case ID_SEARCH:

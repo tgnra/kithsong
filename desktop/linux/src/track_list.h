@@ -12,8 +12,8 @@
  * nothing in it can be played here. Track numbers and durations are dimmed; on albums with
  * more than one disc the numbers read "2-5"; in a playlist they count its places.
  * Double-click or Enter plays a track; right-click, the Menu key or Shift+F10 opens its menu
- * (Add to Playlist, Delete from Library; in a playlist also Move Up, Move Down and Remove from
- * Playlist). A playlist's tracks can be dragged into another order too, or moved with Alt+Up
+ * (Add to Playlist, Go to Album and Go to Artist where there's a page to go to, Delete from
+ * Library; in a playlist also Move Up, Move Down and Remove from Playlist). A playlist's tracks can be dragged into another order too, or moved with Alt+Up
  * and Alt+Down; Delete removes one. Its header has a menu (the "..." beside close, or F2, or
  * the Menu key with no track selected) to rename or delete it. A smart playlist's tracks
  * can't be moved or removed, and it has no menu; in random order its header has a Reshuffle
@@ -48,6 +48,11 @@ typedef struct track_list_callbacks {
   void (*delete_track)(void *user, const char *track_uid, const char *title);
   /* The Reshuffle button, for the shown smart playlist. */
   void (*reshuffle)(void *user);
+  /* The track menu's Go to album, with the track to select there, and Go to artist. Go to
+   * album isn't offered on the album shown, or for a track with no album or a single, whose
+   * album the album grid leaves out (an album of one track). */
+  void (*go_to_album)(void *user, const char *album_uid, const char *track_uid);
+  void (*go_to_artist)(void *user, const char *artist_uid);
   void *user;
 } track_list_callbacks;
 

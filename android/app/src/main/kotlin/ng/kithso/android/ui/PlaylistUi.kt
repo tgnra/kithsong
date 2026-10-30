@@ -57,6 +57,7 @@ import ng.kithso.android.data.DeleteSize
 import ng.kithso.android.data.Deletion
 import ng.kithso.android.data.DeviceRemover
 import ng.kithso.android.data.EditFailure
+import ng.kithso.android.data.Library
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.PlaylistChoice
@@ -115,9 +116,12 @@ class PlaylistActions(
         sheet = Sheet.ArtistMenu(artist)
     }
 
-    /** [removable]: the track is listed from a manual playlist and can be taken out of it. */
-    fun trackMenu(track: Track, removable: Boolean) {
-        sheet = Sheet.TrackMenu(track, removable && track.entryUid != null)
+    /**
+     * [removable]: the track is listed from a manual playlist and can be taken out of it.
+     * [from]: the page it's listed on, which its Go to album or Go to artist would only open again.
+     */
+    fun trackMenu(track: Track, removable: Boolean, from: CollectionRef? = null) {
+        sheet = Sheet.TrackMenu(track, removable && track.entryUid != null, from)
     }
 
     fun addToPlaylist(what: Addition) {
@@ -130,7 +134,7 @@ class PlaylistActions(
         data class AlbumGroupMenu(val group: AlbumGroup) : Sheet
         data class AlbumMenu(val album: Album, val groupUid: String?) : Sheet
         data class ArtistMenu(val artist: Artist) : Sheet
-        data class TrackMenu(val track: Track, val removable: Boolean) : Sheet
+        data class TrackMenu(val track: Track, val removable: Boolean, val from: CollectionRef?) : Sheet
         data class AddTo(val what: Addition) : Sheet
         data class AddToGroup(val albumUid: String) : Sheet
     }
@@ -171,13 +175,17 @@ private class SheetAction(val label: String, val icon: ImageVector, val onClick:
 /**
  * Shows [actions]' open menu or dialog, if any. [onPlay] plays a collection from its start,
  * or shuffled; [onDeleted] is called with a playlist or album group once it's been deleted,
- * to close its page.
+ * to close its page. A track's Go to album and Go to artist call [onOpen], and are offered
+ * when [library] has the page: not for a track on no album, or a single, whose album isn't
+ * listed.
  */
 @Composable
 fun PlaylistSheets(
     actions: PlaylistActions,
+    library: Library?,
     onPlay: (CollectionRef, shuffle: Boolean) -> Unit,
     onDeleted: (CollectionRef) -> Unit,
+    onOpen: (CollectionRef) -> Unit,
 ) {
     val editor = actions.editor
     val deleter = actions.deleter
@@ -333,6 +341,11 @@ fun PlaylistSheets(
         }
         is PlaylistActions.Sheet.TrackMenu -> {
             val track = sheet.track
+            // Pages the library has (a single's album isn't listed), other than the one it's on.
+            val album = track.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
+                ?.takeIf { it != sheet.from && library?.artOf(it) != null }
+            val artist = track.artistUid?.let { CollectionRef(CollectionRef.Kind.Artist, it) }
+                ?.takeIf { it != sheet.from && library?.artOf(it) != null }
             MenuSheet(
                 actions,
                 track.title,
@@ -343,6 +356,8 @@ fun PlaylistSheets(
                             actions.addToPlaylist(Addition.Tracks(listOf(track.uid)))
                         })
                     }
+                    if (album != null) add(SheetAction(stringResource(R.string.go_to_album), Icons.Album) { onOpen(album) })
+                    if (artist != null) add(SheetAction(stringResource(R.string.go_to_artist), Icons.Person) { onOpen(artist) })
                     val entry = track.entryUid
                     if (editor != null && sheet.removable && entry != null) {
                         add(SheetAction(stringResource(R.string.remove_from_playlist), Icons.Remove) { editor.removeEntry(entry) })

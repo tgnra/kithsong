@@ -18,6 +18,8 @@ struct _TrackItem {
   GObject parent;
   char uid[MC_UID_STRLEN];
   char entry_uid[MC_UID_STRLEN]; /* its place in a playlist, else "" */
+  char album_uid[MC_UID_STRLEN];  /* "" if it has no album */
+  char artist_uid[MC_UID_STRLEN]; /* "" if unknown */
   char *title;
   char num[16];      /* "3", "2-5" with several discs, or ""; in a playlist, its place */
   char duration[16]; /* "4:44", or "" if unknown */
@@ -64,6 +66,7 @@ typedef struct row {
 static struct {
   track_list_callbacks cb;
 
+  mc_library *lib; /* the shown album's or playlist's */
   GListStore *store;
   GtkSingleSelection *selection;
   GtkWidget *view, *scroller;
@@ -73,9 +76,11 @@ static struct {
   GPtrArray *rows; /* bound rows, to mark the playing one */
   GtkWidget *pane, *menu;         /* menu: the tracks' right-click menu */
   GMenuModel *album_menu, *playlist_menu; /* what it shows */
-  GSimpleAction *move_up, *move_down;
+  GSimpleAction *move_up, *move_down, *go_to_album, *go_to_artist;
   char menu_uid[MC_UID_STRLEN];   /* the track it was opened on */
   char menu_entry[MC_UID_STRLEN]; /* and its playlist entry, or "" */
+  char menu_album[MC_UID_STRLEN]; /* and its album and artist, or "" */
+  char menu_artist[MC_UID_STRLEN];
   gboolean menu_here;             /* and whether it has a file here */
   guint menu_pos;
   GtkWidget *playlist_button;     /* the header's menu, shown for playlists */
@@ -116,13 +121,29 @@ static GtkWidget *row_label(float xalign) {
   return l;
 }
 
+/* Whether album_uid has a page to go to: it isn't the album shown, or a single (an album of
+ * one track), which the album grid leaves out. */
+static gboolean album_to_go_to(const char *album_uid) {
+  if (!album_uid[0] || !s.lib || (s.album && !s.album->is_playlist && !strcmp(s.album->uid, album_uid))) return FALSE;
+  mc_track_list *list = NULL;
+  if (mc_library_list_album_tracks(s.lib, album_uid, &list) != MC_OK) return FALSE;
+  gboolean more = list->count > 1;
+  mc_track_list_free(list);
+  return more;
+}
+
 /* Makes the track menu (and the keys) act on the track at pos: in a playlist its items
- * include Move Up, Move Down and Remove from Playlist. FALSE if there's no track there. */
+ * include Move Up, Move Down and Remove from Playlist. Go to album and Go to artist show
+ * where there's a page to go to. FALSE if there's no track there. */
 static gboolean menu_for(guint pos) {
   TrackItem *t = pos != GTK_INVALID_LIST_POSITION ? track_at(pos) : NULL;
   if (!t) return FALSE;
   memcpy(s.menu_uid, t->uid, sizeof s.menu_uid);
   memcpy(s.menu_entry, t->entry_uid, sizeof s.menu_entry);
+  memcpy(s.menu_album, t->album_uid, sizeof s.menu_album);
+  memcpy(s.menu_artist, t->artist_uid, sizeof s.menu_artist);
+  g_simple_action_set_enabled(s.go_to_album, album_to_go_to(s.menu_album));
+  g_simple_action_set_enabled(s.go_to_artist, s.menu_artist[0] != '\0');
   s.menu_here = t->path != NULL;
   s.menu_pos = pos;
   gboolean playlist = showing_playlist() && s.menu_entry[0];
@@ -476,6 +497,21 @@ static void on_delete_playlist(GSimpleAction *action, GVariant *param, gpointer 
   if (s.cb.delete_playlist && showing_playlist()) s.cb.delete_playlist(s.cb.user);
 }
 
+/* The track menu's Go to album and Go to artist. Copies: opening the page reloads the list. */
+static void on_go_to(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)param;
+  (void)user;
+  char track[MC_UID_STRLEN], uid[MC_UID_STRLEN];
+  memcpy(track, s.menu_uid, sizeof track);
+  if (action == s.go_to_album) {
+    memcpy(uid, s.menu_album, sizeof uid);
+    if (s.cb.go_to_album && uid[0]) s.cb.go_to_album(s.cb.user, uid, track);
+  } else {
+    memcpy(uid, s.menu_artist, sizeof uid);
+    if (s.cb.go_to_artist && uid[0]) s.cb.go_to_artist(s.cb.user, uid);
+  }
+}
+
 /* The track menu's Delete from Library... */
 static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
@@ -580,6 +616,23 @@ static GSimpleAction *add_action(GSimpleActionGroup *group, const char *name,
   return action;
 }
 
+/* Go to album and Go to artist, hidden while their actions are disabled (see menu_for()). */
+static void append_go_to(GMenu *model) {
+  GMenu *section = g_menu_new();
+  const struct {
+    enum mc_str_id label;
+    const char *action;
+  } items[] = {{MC_STR_GO_TO_ALBUM, "track.go-to-album"}, {MC_STR_GO_TO_ARTIST, "track.go-to-artist"}};
+  for (size_t i = 0; i < G_N_ELEMENTS(items); i++) {
+    GMenuItem *item = g_menu_item_new(mc_str_mnemonic(items[i].label), items[i].action);
+    g_menu_item_set_attribute(item, "hidden-when", "s", "action-disabled");
+    g_menu_append_item(section, item);
+    g_object_unref(item);
+  }
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+}
+
 /* A closed menu gives the focus back to the list, as GTK would hand it elsewhere (the
  * sidebar, under Xvfb), and the keys should go on where they were. */
 static void on_menu_closed(GtkPopover *menu, gpointer list) {
@@ -596,6 +649,8 @@ static void build_menu(GtkWidget *pane) {
   s.move_down = add_action(actions, "move-down", on_move);
   add_action(actions, "remove", on_remove);
   add_action(actions, "delete", on_delete_track);
+  s.go_to_album = add_action(actions, "go-to-album", on_go_to);
+  s.go_to_artist = add_action(actions, "go-to-artist", on_go_to);
   gtk_widget_insert_action_group(pane, "track", G_ACTION_GROUP(actions));
   g_object_unref(actions);
   actions = g_simple_action_group_new();
@@ -609,6 +664,7 @@ static void build_menu(GtkWidget *pane) {
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
+  append_go_to(model);
   section = g_menu_new();
   g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "track.delete");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
@@ -619,6 +675,7 @@ static void build_menu(GtkWidget *pane) {
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
+  append_go_to(model);
   section = g_menu_new();
   append_with_key(section, MC_STR_MOVE_UP, "track.move-up", "<Alt>Up");
   append_with_key(section, MC_STR_MOVE_DOWN, "track.move-down", "<Alt>Down");
@@ -717,6 +774,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   if (album) g_object_ref(album);
   g_clear_object(&s.album);
   s.album = album;
+  s.lib = lib;
 
   mc_track_list *list = NULL;
   mc_status st = MC_OK;
@@ -735,6 +793,8 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
     TrackItem *it = items[i] = g_object_new(TRACK_TYPE_ITEM, NULL);
     memcpy(it->uid, t->uid, sizeof it->uid);
     memcpy(it->entry_uid, t->entry_uid, sizeof it->entry_uid);
+    memcpy(it->album_uid, t->album_uid, sizeof it->album_uid);
+    memcpy(it->artist_uid, t->artist_uid, sizeof it->artist_uid);
     it->title = g_strdup(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
     if (album->is_playlist) g_snprintf(it->num, sizeof it->num, "%d", i + 1);
     else if (t->track_no && discs) g_snprintf(it->num, sizeof it->num, "%d-%d", t->disc_no ? t->disc_no : 1, t->track_no);

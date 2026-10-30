@@ -191,6 +191,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 - Remove from this computer / Sync to this computer on the album tiles' and the artist page's menus (only compiled, in Docker)
 - The notification while the window is in the background (only compiled), of a pairing request, a refusal shown before any code, and the merge's summary: that it shows on GNOME and KDE, that clicking it brings the window up with the code or message (the app.show-pair-request action; the merge's window over it), and that it goes once the window is active, the request ends, or its dialog or the merge's window closes
 - The track list's keys and the artist list's row menu: run under Xvfb in Docker (GTK 4.18, libadwaita 1.7). Seen working: Alt+Up/Down, Delete and F2 in a playlist, Enter, the Menu key and Shift+F10 (the menu shows Alt+Up, Alt+Down, Delete and F2 beside its items, and they don't act outside the list), and the Menu key in an artist page's tracks and elsewhere on the page. Not checked: the long press (no touchscreen), the Menu key with no track selected (the playlist's header menu) or with the selected track scrolled out of sight, Remove from this computer / Sync to this computer on an artist row (needs a group), and a real desktop session
+- Go to album and Go to artist on the track list's and the artist page's track menus (only compiled): that each is hidden where it should be (a single's or no album, the album shown, the artist's own page), and that the album opens with the track selected
 - The shortcuts list's AdwShortcutsDialog (libadwaita 1.8+) is written but not built: the Docker image has libadwaita 1.7, which gets the GtkShortcutsWindow fallback. Check it on a 1.8 system (e.g. the GNOME 49+ Flatpak runtime)
 
 ### Windows
@@ -198,6 +199,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 - Firewall prompt: the success path after UAC, beyond one run
 - Remove from this PC / Sync to this PC in a real group (the core is tested between two devices; on screen only the menu outside a group was looked at), including removing an album while it plays
 - Deleting a track while it plays
+- Go to Album and Go to Artist on the track list's and a single's menus: only syntax-checked with MinGW, never built or run
 - Volume's fade (only silent test files so far)
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns, focus events, and listeners for property changes and live regions
 - The empty Playlists page's Choose what to sync (needs this PC in a group with every playlist hidden), pairing from the empty Albums page's menu, and the empty-page button through UI Automation
@@ -208,6 +210,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 - Smart playlists' and groups' pictures (mc_smart_art()), and empty playlists in the Playlists section and Recents, on screen (only built)
 - Remove from this phone / Sync to this phone on screen, in a real group (only built)
 - A recent's long-press menu (Play, Shuffle, Remove from Recents, Clear Recents) on screen (only built; the desktops' menus were run)
+- A track's Go to album and Go to artist, from track lists and the player (not even built: no Android SDK where they were written)
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
 - After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - Merging libraries: tested end to end on the emulator with a Windows scratch instance (both roles, Merge and decline, Last.fm sign-out, summary). Seen only with fake_merge: the progress card and bar, the forgotten-devices line, the merge_pending note, the failed summary and the library_mismatch hint; the merge's notification was never seen

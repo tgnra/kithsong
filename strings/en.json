@@ -115,6 +115,8 @@
     "playlist_move_failed": "Couldn't move the track",
     "add_to_playlist_menu": "Add to playlist…",
     "new_playlist_menu": "New playlist…",
+    "go_to_album": { "text": "Go to album", "note": "On a track's menu: opens the page of the album it's on." },
+    "go_to_artist": { "text": "Go to artist", "note": "On a track's menu: opens the page of the artist it's credited to." },
     "create": "Create",
 
     "album_group": "Album group",

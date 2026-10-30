@@ -270,7 +270,7 @@ fun DetailScreen(
                             TrackRow(
                                 track,
                                 showAlbum = true,
-                                onLongClick = { actions.trackMenu(track, removable = false) },
+                                onLongClick = { actions.trackMenu(track, removable = false, from = ref) },
                                 onClick = { onPlay(singles, i) },
                             )
                         }
@@ -307,7 +307,7 @@ fun DetailScreen(
                         TrackRow(
                             track,
                             showAlbum = ref.kind != CollectionRef.Kind.Album,
-                            onLongClick = { actions.trackMenu(track, removable = editable) },
+                            onLongClick = { actions.trackMenu(track, removable = editable, from = ref) },
                             onClick = { onPlay(tracks, i) },
                         )
                     }
