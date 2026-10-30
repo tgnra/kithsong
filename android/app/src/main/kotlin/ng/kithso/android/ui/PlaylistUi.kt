@@ -336,7 +336,7 @@ fun PlaylistSheets(
             MenuSheet(
                 actions,
                 track.title,
-                stringResource(R.string.track_byline, track.artist, track.album),
+                trackByline(track.artist, track.album),
                 buildList {
                     if (editor != null) {
                         add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {

@@ -254,13 +254,29 @@ fun DetailScreen(
                     }
                     return@LazyColumn
                 }
-                if (ref.kind == CollectionRef.Kind.Artist && albums.isNotEmpty()) {
-                    item(key = "albums", contentType = "albums") {
+                // An artist's albums, then their singles, which play among themselves, then all
+                // their tracks; the headings only when there's more than the tracks.
+                if (ref.kind == CollectionRef.Kind.Artist) {
+                    val singles = list?.singles.orEmpty()
+                    if (albums.isNotEmpty()) item(key = "albums", contentType = "albums") {
                         Column {
                             BrowseHeading(stringResource(R.string.section_albums))
                             AlbumStrip(albums, list?.title.orEmpty(), onOpen, albumMenu)
-                            if (tracks.isNotEmpty()) BrowseHeading(stringResource(R.string.tracks_title))
                         }
+                    }
+                    if (singles.isNotEmpty()) {
+                        item(key = "singles", contentType = "heading") { BrowseHeading(stringResource(R.string.section_singles)) }
+                        itemsIndexed(singles, key = { _, track -> SINGLE_KEY + track.uid }, contentType = { _, _ -> "track" }) { i, track ->
+                            TrackRow(
+                                track,
+                                showAlbum = true,
+                                onLongClick = { actions.trackMenu(track, removable = false) },
+                                onClick = { onPlay(singles, i) },
+                            )
+                        }
+                    }
+                    if ((albums.isNotEmpty() || singles.isNotEmpty()) && tracks.isNotEmpty()) {
+                        item(key = "tracks", contentType = "heading") { BrowseHeading(stringResource(R.string.tracks_title)) }
                     }
                 }
                 // A playlist can hold a track twice, so the uid alone isn't a unique key. Its
@@ -432,7 +448,7 @@ private fun TrackRow(track: Track, showAlbum: Boolean, onLongClick: () -> Unit, 
         },
         headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = if (showAlbum) {
-            { Text(stringResource(R.string.track_byline, track.artist, track.album), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            { Text(trackByline(track.artist, track.album), maxLines = 1, overflow = TextOverflow.Ellipsis) }
         } else null,
         trailingContent = { Text(formatTime(track.durationMs)) },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
@@ -459,7 +475,7 @@ private fun EditTrackRow(track: Track, onRemove: () -> Unit, handle: Modifier, l
         },
         headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
-            Text(stringResource(R.string.track_byline, track.artist, track.album), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(trackByline(track.artist, track.album), maxLines = 1, overflow = TextOverflow.Ellipsis)
         },
         trailingContent = {
             Box(handle.size(48.dp), contentAlignment = Alignment.Center) {
@@ -505,6 +521,7 @@ private fun EditAlbumRow(album: Album, onRemove: () -> Unit, handle: Modifier, l
 
 private const val ENTRY_KEY = "entry:"
 private const val ALBUM_KEY = "album:"
+private const val SINGLE_KEY = "single:"
 
 // A playlist track's key in the list: its entry, which is unique and stays the same as it moves.
 private fun entryKey(track: Track): String? = track.entryUid?.let { ENTRY_KEY + it }

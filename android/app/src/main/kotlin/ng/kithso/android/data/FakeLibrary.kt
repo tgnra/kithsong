@@ -22,7 +22,11 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
             }
             CollectionRef.Kind.Artist -> lib.artists.firstOrNull { it.uid == ref.uid }?.let { artist ->
                 val albums = lib.albums.filter { it.artist == artist.name }
-                TrackList(artist.name, artist.art, albums.flatMap(::tracksOf), albumCount = albums.size, albums = albums)
+                val singles = singlesOf(artist)
+                TrackList(
+                    artist.name, artist.art, singles + albums.flatMap(::tracksOf),
+                    albumCount = albums.size, albums = albums, singles = singles,
+                )
             }
             CollectionRef.Kind.AlbumGroup -> lib.albumGroups.firstOrNull { it.uid == ref.uid }?.let { group ->
                 val albums = groupAlbums(lib, group)
@@ -80,6 +84,22 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
                 art = album.art,
             )
         }
+    }
+
+    // Two singles each: one released on its own, one on no album.
+    private fun singlesOf(artist: Artist): List<Track> = (0..1).map { n ->
+        val title = TRACK_WORDS[(artist.name.length * 5 + n * 11) % TRACK_WORDS.size]
+        val album = if (n == 0) title else ""
+        val uid = "${artist.uid}-single-$n"
+        Track(
+            uid = uid,
+            title = title,
+            artist = artist.name,
+            album = album,
+            trackNo = 1,
+            durationMs = (190 + n * 23) * 1000L,
+            art = ArtRef(album.ifEmpty { uid }, album.ifEmpty { title }),
+        )
     }
 
     private companion object {

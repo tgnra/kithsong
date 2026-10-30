@@ -35,6 +35,7 @@ data class Playlist(val uid: String, val name: String, val trackCount: Int, val 
 @Immutable
 data class AlbumGroup(val uid: String, val name: String, val albumCount: Int, val art: ArtRef)
 
+/** A track; [album] is empty for one on no album. */
 @Immutable
 data class Track(
     val uid: String,
@@ -96,7 +97,8 @@ data class Library(
 
 /**
  * A track list screen's contents. An album has its [artist] and [year] (0 if unknown), an
- * artist its [albumCount]. An artist and an album group have their [albums] here too; a
+ * artist its [albumCount] and [singles] (its tracks alone on their album or on none, which
+ * aren't among its [albums]). An artist and an album group have their [albums] here too; a
  * group's [tracks] are its albums' in turn, for playing it. [canReshuffle] is a smart list
  * ordered by random, which [LibrarySource.reshuffle] gives a new order.
  */
@@ -109,10 +111,14 @@ data class TrackList(
     val year: Int = 0,
     val albumCount: Int = 0,
     val albums: List<Album> = emptyList(),
+    val singles: List<Track> = emptyList(),
     val canReshuffle: Boolean = false,
 )
 
-/** A track search found; [albumUid] is its album, null if it has none on this phone. */
+/**
+ * A track search found; [albumUid] is its album, played from the track on. A single has none
+ * (its album isn't listed, or it's on no album): it's [track], played alone.
+ */
 @Immutable
 data class FoundTrack(
     val uid: String,
@@ -121,6 +127,7 @@ data class FoundTrack(
     val album: String,
     val albumUid: String?,
     val art: ArtRef,
+    val track: Track? = null,
 )
 
 /**

@@ -258,13 +258,16 @@ fun App(
                         bottomPadding,
                         onOpen = open,
                         onPlayTrack = { found ->
-                            // Its album, from the track on.
+                            // Its album, from the track on; a single by itself.
                             val album = found.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
                             if (album != null) scope.launch {
                                 val tracks = source.trackList(album)?.tracks.orEmpty()
                                 if (tracks.isEmpty()) return@launch
                                 playback.play(tracks, tracks.indexOfFirst { it.uid == found.uid }.coerceAtLeast(0))
                                 source.notePlayed(album)
+                                onPlay()
+                            } else if (found.track != null) {
+                                playback.play(listOf(found.track), 0)
                                 onPlay()
                             }
                         },

@@ -40,13 +40,20 @@ data class SearchHit(
 /** mc_search_kind, in its order. */
 enum class SearchKind { Artist, Album, Track, Playlist, AlbumGroup }
 
-/** An artist's albums: as album artist first, then those they're credited on, then singles. */
+/** An artist's albums: as album artist first, then those they're credited on. Singles are left out ([artistSingles]). */
 fun CoreLibrary.artistAlbums(artistUid: String): List<AlbumInfo> =
     CoreBrowse.nativeListAlbums(handle, CoreBrowse.ALBUMS_ARTIST, artistUid).asList()
 
 /** Every track credited to [artistUid], by title. */
 fun CoreLibrary.artistTracks(artistUid: String): List<TrackInfo> =
     CoreBrowse.nativeArtistTracks(handle, artistUid).asList()
+
+/**
+ * [artistUid]'s singles: their tracks that are the only one of their album in the library, or
+ * on no album, by year then title (mc_library_list_artist_singles).
+ */
+fun CoreLibrary.artistSingles(artistUid: String): List<TrackInfo> =
+    CoreBrowse.nativeArtistSingles(handle, artistUid).asList()
 
 /** A manual album group's albums, in the group's order. */
 fun CoreLibrary.albumGroupAlbums(groupUid: String): List<AlbumInfo> =
@@ -119,6 +126,7 @@ internal object CoreBrowse {
 
     @JvmStatic external fun nativeListAlbums(handle: Long, kind: Int, uid: String): Array<AlbumInfo>
     @JvmStatic external fun nativeArtistTracks(handle: Long, uid: String): Array<TrackInfo>
+    @JvmStatic external fun nativeArtistSingles(handle: Long, uid: String): Array<TrackInfo>
     @JvmStatic external fun nativePreviewSmartTracks(handle: Long, rule: String): Array<TrackInfo>
     @JvmStatic external fun nativeAlbumGroupArt(handle: Long, uid: String, cacheDir: String): String?
     @JvmStatic external fun nativeSmartArt(handle: Long, uid: String, cacheDir: String): String?
