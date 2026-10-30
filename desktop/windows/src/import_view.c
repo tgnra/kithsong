@@ -813,10 +813,10 @@ static void load_review(HWND dlg) {
     swprintf(buf, 64, L"%.0f%%", m->confidence * 100);
     lv_set(lv, row, 0, buf);
     lv_set_utf8(lv, row, 1, m->album_artist);
-    if (m->is_single) {
+    if (m->is_single && m->track_count && m->tracks[0].title) { /* the release, then the track it's found as */
       char into[512];
       mc_format(into, sizeof into, mc_str(MC_STR_IMPORT_MATCH_INTO),
-                MC_S(m->release ? m->release : mc_str(MC_STR_UNKNOWN_VALUE)), MC_S(m->album));
+                MC_S(m->release ? m->release : mc_str(MC_STR_UNKNOWN_VALUE)), MC_S(m->tracks[0].title));
       lv_set_utf8(lv, row, 2, into);
     } else {
       lv_set_utf8(lv, row, 2, m->album);
