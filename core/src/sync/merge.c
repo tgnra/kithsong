@@ -123,8 +123,6 @@ typedef struct scan {
   int count, cap;
 } scan;
 
-static mc_status singles_check(scan *sc, const char *album);
-
 /* Joins the classes of x and y in table. */
 static mc_status join(scan *sc, const char *table, const char *x, const char *y) {
   char cx[MC_UID_STRLEN], cy[MC_UID_STRLEN];
@@ -157,56 +155,16 @@ static mc_status join(scan *sc, const char *table, const char *x, const char *y)
   mc_merge_pair *p = &sc->pairs[sc->count++];
   snprintf(p->table, sizeof p->table, "%s", table);
   memcpy(p->loser, l, MC_UID_STRLEN);
-
-  /* Two artists becoming one may make their singles albums one too. */
-  if (strcmp(table, "artists")) return MC_OK;
-  uid_list albums = {0};
-  st = run(sc->db,
-           "SELECT DISTINCT uid FROM merge_keys WHERE entity = 'albums' AND field = 'artist_uid'"
-           " AND (value = ?1 OR value IN (SELECT uid FROM aliases WHERE canonical = ?1))",
-           c, NULL, &albums);
-  for (int i = 0; st == MC_OK && i < albums.count; i++) st = singles_check(sc, albums.items[i]);
-  free(albums.items);
-  return st;
-}
-
-/* Singles albums ("<artist> Singles", kind = 'singles') have no release id: two are one when
- * their artists are. */
-static mc_status singles_check(scan *sc, const char *album) {
-  char is_singles[MC_UID_STRLEN];
-  mc_status st = one_uid(sc->db,
-                         "SELECT uid FROM merge_keys WHERE entity = 'albums' AND field = 'kind'"
-                         " AND value = 'singles' AND uid = ?1",
-                         album, NULL, is_singles);
-  if (st != MC_OK || !is_singles[0]) return st;
-  uid_list artists = {0}, others = {0};
-  st = run(sc->db,
-           "SELECT DISTINCT coalesce((SELECT canonical FROM aliases WHERE uid = k.value), k.value)"
-           " FROM merge_keys k WHERE k.entity = 'albums' AND k.field = 'artist_uid' AND k.uid = ?1",
-           album, NULL, &artists);
-  for (int i = 0; st == MC_OK && i < artists.count; i++)
-    st = run(sc->db,
-             "SELECT DISTINCT k.uid FROM merge_keys k JOIN merge_keys s ON s.entity = 'albums'"
-             " AND s.field = 'kind' AND s.value = 'singles' AND s.uid = k.uid"
-             " WHERE k.entity = 'albums' AND k.field = 'artist_uid' AND k.uid <> ?2"
-             " AND (k.value = ?1 OR k.value IN (SELECT uid FROM aliases WHERE canonical = ?1))",
-             artists.items[i], album, &others);
-  for (int i = 0; st == MC_OK && i < others.count; i++)
-    st = join(sc, "albums", album, others.items[i]);
-  free(artists.items);
-  free(others.items);
-  return st;
+  return MC_OK;
 }
 
 /* One changelog row: records its key, and joins the uids that share it. */
 static mc_status scan_row(scan *sc, const char *table, const char *uid, const char *field,
                           const char *value) {
-  int key = 0, singles = 0;
+  int key = 0;
   for (size_t i = 0; i < COUNT(k_keys); i++)
     if (!strcmp(k_keys[i].table, table) && !strcmp(k_keys[i].field, field)) key = 1;
-  if (!strcmp(table, "albums"))
-    singles = !strcmp(field, "artist_uid") || (!strcmp(field, "kind") && !strcmp(value, "singles"));
-  if (!key && !singles) return MC_OK;
+  if (!key) return MC_OK;
 
   sqlite3_stmt *s;
   if (sqlite3_prepare_v2(sc->db,
@@ -222,7 +180,6 @@ static mc_status scan_row(scan *sc, const char *table, const char *uid, const ch
   sqlite3_finalize(s);
   if (rc != SQLITE_DONE) return MC_ERR_DB;
   if (!sqlite3_changes(sc->db)) return MC_OK; /* seen before: nothing new */
-  if (singles) return singles_check(sc, uid);
 
   uid_list same = {0};
   char sql[200];
@@ -252,8 +209,8 @@ mc_status mc_merge_scan(sqlite3 *db, mc_merge_pair **pairs, int *count) {
   if (sqlite3_prepare_v2(db,
                          "SELECT seq, entity, row_uid, field, value FROM changelog WHERE seq > ?1"
                          " AND entity IN ('artists', 'albums', 'tracks')"
-                         " AND field IN ('mb_artistid', 'mb_albumid', 'mb_releasetrackid', 'kind',"
-                         " 'artist_uid') ORDER BY seq",
+                         " AND field IN ('mb_artistid', 'mb_albumid', 'mb_releasetrackid')"
+                         " ORDER BY seq",
                          -1, &s, NULL) != SQLITE_OK)
     return MC_ERR_DB;
   sqlite3_bind_int64(s, 1, from);

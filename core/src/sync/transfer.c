@@ -502,7 +502,7 @@ static char *dest_path(mc_library *lib, const char *track, const char *ext) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
                          "SELECT t.title, t.track_no, t.disc_no, al.uid, al.title, al.year,"
-                         " al.disc_total, al.kind = 'singles', aar.name, ar.name"
+                         " al.disc_total, aar.name, ar.name"
                          " FROM tracks t LEFT JOIN albums al ON al.uid = t.album_uid"
                          " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
                          " LEFT JOIN artists ar ON ar.uid = t.artist_uid WHERE t.uid = ?1",
@@ -512,18 +512,12 @@ static char *dest_path(mc_library *lib, const char *track, const char *ext) {
   char *rel = NULL;
   if (sqlite3_step(stmt) == SQLITE_ROW) {
     const char *title = (const char *)sqlite3_column_text(stmt, 0);
-    int singles = sqlite3_column_type(stmt, 3) == SQLITE_NULL || sqlite3_column_int(stmt, 7);
-    const char *album_artist = (const char *)sqlite3_column_text(stmt, 8);
-    const char *artist = (const char *)sqlite3_column_text(stmt, 9);
+    const char *album_artist = (const char *)sqlite3_column_text(stmt, 7);
+    const char *artist = (const char *)sqlite3_column_text(stmt, 8);
     if (!album_artist || !*album_artist) album_artist = artist;
     char *dir, *name;
-    if (singles) {
-      const char *who = album_artist && *album_artist ? album_artist : "Unknown Artist";
-      size_t len = strlen(who) + 9;
-      char *album = malloc(len);
-      if (album) snprintf(album, len, "%s Singles", who);
-      dir = album ? mc_album_dir(album_artist, album, 0) : NULL;
-      free(album);
+    if (sqlite3_column_type(stmt, 3) == SQLITE_NULL) { /* no album */
+      dir = mc_artist_dir(artist);
       name = mc_track_file(title, 0, 0, 0, ext);
     } else {
       dir = mc_album_dir(album_artist, (const char *)sqlite3_column_text(stmt, 4),
@@ -1099,7 +1093,7 @@ static mc_status ensure_cover(mc_session *s, const char *track, const char *abs)
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(s->conn->lib),
                          "SELECT al.uid FROM tracks t JOIN albums al ON al.uid = t.album_uid"
-                         " WHERE t.uid = ?1 AND al.art_hash IS NOT NULL AND al.kind <> 'singles'",
+                         " WHERE t.uid = ?1 AND al.art_hash IS NOT NULL",
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_OK;
   sqlite3_bind_text(stmt, 1, track, -1, SQLITE_STATIC);
@@ -1478,7 +1472,7 @@ static mc_status fetch_cover(mc_session *s, const char *album, const char *dir) 
 /* Asks the peer for the cover of each folder here that holds files of an album with art
  * (albums.art_hash) but has no cover. A folder usually gets one as its first file arrives
  * (ensure_cover()); this catches up folders whose files were already here, or a device that
- * synced before covers were sent. Singles share a folder and get none. */
+ * synced before covers were sent. */
 static mc_status fetch_covers(mc_session *s) {
   if (!s->peer_covers) return MC_OK; /* an older peer would end the session */
   mc_library *lib = s->conn->lib;
@@ -1487,7 +1481,7 @@ static mc_status fetch_covers(mc_session *s) {
                          "SELECT al.uid, f.path FROM albums al"
                          " JOIN tracks t ON t.album_uid = al.uid"
                          " JOIN files f ON f.track_uid = t.uid"
-                         " WHERE al.art_hash IS NOT NULL AND al.kind <> 'singles'"
+                         " WHERE al.art_hash IS NOT NULL"
                          " ORDER BY al.uid, f.path",
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;

@@ -275,14 +275,13 @@ int main(int argc, char **argv) {
   if (!lib) return TEST_RESULT();
   CHECK(sqlite3_exec(mc_library_db(lib),
                      "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
-                     "INSERT INTO albums (uid, title, artist_uid, kind) VALUES"
-                     " ('al1', 'Things We Lost in the Fire', 'ar1', 'album'),"
-                     " ('al2', 'Low Singles', 'ar1', 'singles');"
+                     "INSERT INTO albums (uid, title, artist_uid) VALUES"
+                     " ('al1', 'Things We Lost in the Fire', 'ar1');"
                      "INSERT INTO tracks (uid, title, album_uid, artist_uid, track_no, duration_ms)"
                      " VALUES ('" T_OK "', 'Sunflower', 'al1', 'ar1', 1, 280000),"
                      " ('" T_SHORT "', 'Interlude', 'al1', 'ar1', 2, 20000),"
                      " ('" T_NO_ARTIST "', 'Untitled', NULL, NULL, NULL, 200000),"
-                     " ('" T_SINGLE "', 'Just Like Christmas', 'al2', 'ar1', 7, 180000),"
+                     " ('" T_SINGLE "', 'Just Like Christmas', NULL, 'ar1', 7, 180000),"
                      " ('" T_BAD "', 'Bad', 'al1', 'ar1', 3, 200000);",
                      NULL, NULL, NULL) == SQLITE_OK);
 
@@ -336,8 +335,8 @@ int main(int argc, char **argv) {
   CHECK_STR(name, "tania");
   mc_free(name);
 
-  /* Now playing, and plays: too short and artistless ones are skipped; a single goes
-   * without its singles album. */
+  /* Now playing, and plays: too short and artistless ones are skipped; a track with no album
+   * goes without one, nor its track number. */
   CHECK(mc_scrobbler_now_playing(sc, T_OK) == MC_OK);
   CHECK(wait_count(&now_playing_calls, 1, 2000));
   CHECK(strstr(last_form, "artist=Low&") && strstr(last_form, "track=Sunflower&"));

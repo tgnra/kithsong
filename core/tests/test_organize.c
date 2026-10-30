@@ -41,7 +41,9 @@ static void test_layout(void) {
   CHECK_PATH(mc_album_dir("Radiohead", "OK Computer", 1997), "Radiohead/OK Computer (1997)");
   CHECK_PATH(mc_album_dir("Low", "Secret Name", 0), "Low/Secret Name");
   CHECK_PATH(mc_album_dir(NULL, NULL, 0), "Unknown Artist/Unknown Album");
-  CHECK_PATH(mc_album_dir("OutKast", "OutKast Singles", 0), "OutKast/OutKast Singles");
+  CHECK_PATH(mc_artist_dir("OutKast"), "OutKast");
+  CHECK_PATH(mc_artist_dir(NULL), "Unknown Artist");
+  CHECK_PATH(mc_artist_dir("AC/DC"), "AC_DC");
 
   CHECK_PATH(mc_track_file("Airbag", 1, 1, 1, "flac"), "01 Airbag.flac");
   CHECK_PATH(mc_track_file("Untitled", 2, 3, 7, "mp3"), "2-07 Untitled.mp3");

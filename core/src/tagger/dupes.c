@@ -153,22 +153,26 @@ static char *col_dup(sqlite3_stmt *stmt, int col) {
   return mc_strdup((const char *)sqlite3_column_text(stmt, col));
 }
 
-/* The album's tracks, each with its original (imported here first). The quality is read
- * from the file, or from the files row if the file can't be read. */
-static mc_status read_album(mc_library *lib, const char *album_uid, const mc_dupe_remote *remote,
-                            lib_track **out, int *count) {
+/* The album's tracks, each with its original (imported here first); or, with album_uid
+ * NULL, artist_uid's tracks with no album. The quality is read from the file, or from the
+ * files row if the file can't be read. */
+static mc_status read_album(mc_library *lib, const char *album_uid, const char *artist_uid,
+                            const mc_dupe_remote *remote, lib_track **out, int *count) {
   *out = NULL;
   *count = 0;
+#define READ_TRACKS \
+  "SELECT t.uid, t.title, t.disc_no, t.track_no, t.mb_trackid, t.mb_releasetrackid," \
+  " f.uid, f.path, f.format, f.bitrate_kbps" \
+  " FROM tracks t LEFT JOIN files f ON f.uid =" \
+  "  (SELECT g.uid FROM files g WHERE g.track_uid = t.uid AND g.source_file_uid IS NULL" \
+  "   ORDER BY g.source_peer_uid IS NOT NULL, g.uid LIMIT 1)"
   sqlite3_stmt *stmt = prepare(
     mc_library_db(lib),
-    "SELECT t.uid, t.title, t.disc_no, t.track_no, t.mb_trackid, t.mb_releasetrackid,"
-    " f.uid, f.path, f.format, f.bitrate_kbps"
-    " FROM tracks t LEFT JOIN files f ON f.uid ="
-    "  (SELECT g.uid FROM files g WHERE g.track_uid = t.uid AND g.source_file_uid IS NULL"
-    "   ORDER BY g.source_peer_uid IS NOT NULL, g.uid LIMIT 1)"
-    " WHERE t.album_uid = ?1 ORDER BY t.disc_no, t.track_no, t.uid");
+    album_uid ? READ_TRACKS " WHERE t.album_uid = ?1 ORDER BY t.disc_no, t.track_no, t.uid"
+              : READ_TRACKS " WHERE t.artist_uid = ?1 AND t.album_uid IS NULL ORDER BY t.uid");
+#undef READ_TRACKS
   if (!stmt) return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, album_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, album_uid ? album_uid : artist_uid, -1, SQLITE_STATIC);
   lib_track *t = NULL;
   int n = 0, cap = 0;
   mc_status st = MC_OK;
@@ -232,13 +236,13 @@ static mc_status read_album(mc_library *lib, const char *album_uid, const mc_dup
 
 /* Pairs incoming files with the album's tracks, strongest evidence first. pair[i] is the
  * library track of incoming file i, or -1. Returns how many were paired. */
-static int pair_tracks(const mc_dupe_in *in, int count, lib_track *t, int n, int singles,
+static int pair_tracks(const mc_dupe_in *in, int count, lib_track *t, int n, int no_album,
                        int *pair) {
   for (int i = 0; i < count; i++) pair[i] = -1;
   for (int j = 0; j < n; j++) t[j].paired = -1;
   int paired = 0;
   for (int pass = 0; pass < 4; pass++) {
-    if (singles && (pass == 0 || pass == 2)) continue; /* no release or track numbers */
+    if (no_album && (pass == 0 || pass == 2)) continue; /* no release or track numbers */
     for (int i = 0; i < count; i++) {
       if (pair[i] >= 0) continue;
       const mc_db_track *r = in[i].row;
@@ -295,58 +299,66 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
   *ntracks = 0;
   *found_by_id = 0;
 
+  /* Tracks with no album: the same recording (or, without ids, title) among the artist's
+   * own tracks with no album. */
+  if (album->no_album) {
+    const mc_db_artist *who = in[0].row->artist.name && *in[0].row->artist.name ? &in[0].row->artist
+                                                                              : &album->artist;
+    char artist[MC_UID_STRLEN];
+    if (find_artist(db, who, artist)) {
+      lib_track *t;
+      int n;
+      mc_status st = read_album(lib, NULL, artist, remote, &t, &n);
+      if (st != MC_OK) return st;
+      if (pair_tracks(in, count, t, n, 1, pair) > 0) {
+        *tracks = t;
+        *ntracks = n;
+        return MC_OK;
+      }
+      lib_tracks_free(t, n);
+    }
+    for (int i = 0; i < count; i++) pair[i] = -1;
+    return MC_OK;
+  }
+
   /* Candidate albums, best evidence first. A name match must share the track list. */
   char cands[8][MC_UID_STRLEN];
   int by_id[8], ncand = 0;
   sqlite3_stmt *stmt;
-  if (album->singles) {
-    char artist[MC_UID_STRLEN];
-    if (find_artist(db, &album->artist, artist) &&
-        (stmt = prepare(db, "SELECT uid FROM albums WHERE kind = 'singles' AND artist_uid = ?1"))) {
-      sqlite3_bind_text(stmt, 1, artist, -1, SQLITE_STATIC);
-      while (ncand < 8 && sqlite3_step(stmt) == SQLITE_ROW) {
-        copy_uid(cands[ncand], sqlite3_column_text(stmt, 0));
-        by_id[ncand++] = 1; /* a single needs only its own track */
-      }
-      sqlite3_finalize(stmt);
+  static const char *const by[] = {
+    "SELECT uid FROM albums WHERE mb_albumid = ?1",
+    "SELECT uid FROM albums WHERE mb_releasegroupid = ?1",
+    "SELECT al.uid FROM albums al JOIN artists ar ON ar.uid = al.artist_uid"
+    " WHERE al.title = ?1 COLLATE NOCASE AND ar.name = ?2 COLLATE NOCASE"};
+  const char *keys[] = {album->mb_albumid, album->mb_releasegroupid, album->title};
+  for (int k = 0; k < 3 && ncand < 8; k++) {
+    if (!keys[k] || !*keys[k] || (k == 2 && (!album->artist.name || !*album->artist.name)))
+      continue;
+    if (!(stmt = prepare(db, by[k]))) return MC_ERR_DB;
+    bind_text(stmt, 1, keys[k]);
+    if (k == 2) bind_text(stmt, 2, album->artist.name);
+    while (ncand < 8 && sqlite3_step(stmt) == SQLITE_ROW) {
+      copy_uid(cands[ncand], sqlite3_column_text(stmt, 0));
+      int dup = 0;
+      for (int c = 0; c < ncand; c++) dup |= !strcmp(cands[c], cands[ncand]);
+      if (!dup && cands[ncand][0]) by_id[ncand++] = k < 2;
     }
-  } else {
-    static const char *const by[] = {
-      "SELECT uid FROM albums WHERE kind = 'album' AND mb_albumid = ?1",
-      "SELECT uid FROM albums WHERE kind = 'album' AND mb_releasegroupid = ?1",
-      "SELECT al.uid FROM albums al JOIN artists ar ON ar.uid = al.artist_uid"
-      " WHERE al.kind = 'album' AND al.title = ?1 COLLATE NOCASE AND ar.name = ?2 COLLATE NOCASE"};
-    const char *keys[] = {album->mb_albumid, album->mb_releasegroupid, album->title};
-    for (int k = 0; k < 3 && ncand < 8; k++) {
-      if (!keys[k] || !*keys[k] || (k == 2 && (!album->artist.name || !*album->artist.name)))
-        continue;
-      if (!(stmt = prepare(db, by[k]))) return MC_ERR_DB;
-      bind_text(stmt, 1, keys[k]);
-      if (k == 2) bind_text(stmt, 2, album->artist.name);
-      while (ncand < 8 && sqlite3_step(stmt) == SQLITE_ROW) {
-        copy_uid(cands[ncand], sqlite3_column_text(stmt, 0));
-        int dup = 0;
-        for (int c = 0; c < ncand; c++) dup |= !strcmp(cands[c], cands[ncand]);
-        if (!dup && cands[ncand][0]) by_id[ncand++] = k < 2;
-      }
-      sqlite3_finalize(stmt);
-    }
+    sqlite3_finalize(stmt);
   }
 
   for (int c = 0; c < ncand; c++) {
     lib_track *t;
     int n;
-    mc_status st = read_album(lib, cands[c], remote, &t, &n);
+    mc_status st = read_album(lib, cands[c], NULL, remote, &t, &n);
     if (st != MC_OK) return st;
-    int paired = pair_tracks(in, count, t, n, album->singles, pair);
-    /* A singles album is a match only for the tracks in it; an album by name needs at
-     * least half of the incoming tracks in its track list. */
-    int ok = album->singles ? paired > 0 : by_id[c] || 2 * paired >= count;
+    int paired = pair_tracks(in, count, t, n, 0, pair);
+    /* An album by name needs at least half of the incoming tracks in its track list. */
+    int ok = by_id[c] || 2 * paired >= count;
     if (ok) {
       memcpy(album_uid, cands[c], MC_UID_STRLEN);
       *tracks = t;
       *ntracks = n;
-      *found_by_id = !album->singles && by_id[c];
+      *found_by_id = by_id[c];
       return MC_OK;
     }
     lib_tracks_free(t, n);
@@ -388,7 +400,7 @@ static int same_bytes_in_library(mc_library *lib, const mc_dupe_in *in, const ch
 }
 
 /* What the library says of track_uid, as the importer tags a file (write_item in tagger.c;
- * for a singles album's track, without release ids or numbers). Ids the library hasn't are ""
+ * for a track with no album, without album tags, release ids or numbers). Ids the library hasn't are ""
  * (removed from the file), so none of the new file's own can contradict the track; the
  * genre is left to the file unless the library has one. */
 static mc_status library_tags(sqlite3 *db, const char *track_uid, mc_tags *out) {
@@ -397,10 +409,9 @@ static mc_status library_tags(sqlite3 *db, const char *track_uid, mc_tags *out) 
     db,
     "SELECT t.title, coalesce(ta.name, aa.name), coalesce(ta.mb_artistid, ''), t.genre,"
     " t.track_no, t.disc_no, t.year, coalesce(t.mb_trackid, ''),"
-    " coalesce(t.mb_releasetrackid, ''), al.title, al.kind = 'singles', aa.name,"
+    " coalesce(t.mb_releasetrackid, ''), al.title, al.uid IS NULL, aa.name,"
     " coalesce(aa.mb_artistid, ''), al.year, al.original_year, al.disc_total,"
-    " CASE WHEN al.kind = 'singles' THEN '' ELSE coalesce(al.mb_albumid, '') END,"
-    " CASE WHEN al.kind = 'singles' THEN '' ELSE coalesce(al.mb_releasegroupid, '') END,"
+    " coalesce(al.mb_albumid, ''), coalesce(al.mb_releasegroupid, ''),"
     /* the disc's track count, when the library has the whole disc */
     " (SELECT CASE WHEN count(*) >= max(coalesce(u.track_no, 0)) THEN count(*) END"
     "  FROM tracks u WHERE u.album_uid = t.album_uid"
@@ -414,21 +425,21 @@ static mc_status library_tags(sqlite3 *db, const char *track_uid, mc_tags *out) 
     sqlite3_finalize(stmt);
     return MC_ERR_NOT_FOUND;
   }
-  int singles = sqlite3_column_int(stmt, 10);
+  int no_album = sqlite3_column_int(stmt, 10);
   out->title = col_dup(stmt, 0);
   out->artist = col_dup(stmt, 1);
   out->mb_artistid = col_dup(stmt, 2);
   out->genre = col_dup(stmt, 3);
   out->mb_trackid = col_dup(stmt, 7);
   out->mb_releasetrackid = col_dup(stmt, 8);
-  out->album = col_dup(stmt, 9);
-  out->album_artist = col_dup(stmt, 11);
+  out->album = no_album ? mc_strdup("") : col_dup(stmt, 9);
+  out->album_artist = no_album ? mc_strdup("") : col_dup(stmt, 11);
   out->mb_albumartistid = col_dup(stmt, 12);
   out->original_year = sqlite3_column_int(stmt, 14);
   out->year = sqlite3_column_int(stmt, 6) ? sqlite3_column_int(stmt, 6) : sqlite3_column_int(stmt, 13);
   out->mb_albumid = col_dup(stmt, 16);
   out->mb_releasegroupid = col_dup(stmt, 17);
-  if (!singles) {
+  if (!no_album) {
     out->track = sqlite3_column_int(stmt, 4);
     out->track_total = out->track ? sqlite3_column_int(stmt, 18) : 0;
     out->disc = sqlite3_column_int(stmt, 5);
@@ -512,10 +523,11 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
     return st;
   }
 
-  /* Judge the release as a whole, over the tracks this device has a file of. */
+  /* Judge the release as a whole, over the tracks this device has a file of. Tracks with no
+   * album aren't a release: only the paired ones count. */
   int held = 0, covered = 0, better = 0, worse = 0;
   for (int j = 0; j < n; j++) {
-    if (!t[j].has_file && !t[j].remote) continue;
+    if ((!t[j].has_file && !t[j].remote) || (album->no_album && t[j].paired < 0)) continue;
     held++;
     if (t[j].paired < 0) continue;
     covered++;
@@ -573,8 +585,9 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
     else if (ts == MC_ERR_NOMEM) st = ts;
   }
 
-  /* New tracks of a release that's here go in the folder its files are in. */
-  for (int j = 0; j < n && !out->album_dir && st == MC_OK; j++)
+  /* New tracks of a release that's here go in the folder its files are in. Tracks with no
+   * album have no such folder. */
+  for (int j = 0; j < n && !album->no_album && !out->album_dir && st == MC_OK; j++)
     if (t[j].has_file && t[j].path) out->album_dir = dirname_of(t[j].path);
 
   lib_tracks_free(t, n);

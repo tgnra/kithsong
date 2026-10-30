@@ -17,14 +17,18 @@ typedef struct mb_track {
 } mb_track;
 
 /* A release with its tracklist. A recording found for a loose track is represented as a
- * one-track release with is_single set. */
+ * one-track release with is_single set: the release it's credited to (id, title, release
+ * group, year), with the recording as its one track (numbered as on that release when the
+ * search says), and the recording's artist credit for the release's, since the search
+ * doesn't give the release's own. */
 typedef struct mb_release {
   char *id;
   char *title;
   char *artist;      /* as credited */
   char *artist_id;   /* id and sort name only when a single artist is credited */
   char *artist_sort;
-  char *primary_artist; /* first credited artist: whose "<artist> Singles" a single joins */
+  char *primary_artist; /* first credited artist: the album artist of a recording whose
+                         * release can't be looked up */
   char *primary_artist_id;
   char *primary_artist_sort;
   char *releasegroup_id;
@@ -36,7 +40,7 @@ typedef struct mb_release {
   int year;
   int original_year;
   int disc_total;
-  int is_single;
+  int is_single; /* a recording found on its own (above), not a release looked up */
   mb_track *tracks;
   int track_count;
 } mb_release;

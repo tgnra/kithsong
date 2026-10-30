@@ -428,7 +428,6 @@ mc_status mb_lookup_release(const char *id, mb_release *out) {
   out->year = json_year(root, "date");
   out->original_year = json_year(rg, "first-release-date");
   out->disc_total = (int)yyjson_arr_size(media);
-  out->is_single = out->release_type && strcmp(out->release_type, "Single") == 0;
 
   yyjson_val *li = yyjson_arr_get_first(yyjson_obj_get(root, "label-info"));
   out->label = json_strdup(yyjson_obj_get(li, "label"), "name");
@@ -462,7 +461,7 @@ mc_status mb_lookup_release(const char *id, mb_release *out) {
   return st;
 }
 
-/* --- Recordings (singles) --- */
+/* --- Recordings (loose tracks) --- */
 
 static int str_is(const char *s, const char *want) {
   return s && strcmp(s, want) == 0;
@@ -534,6 +533,11 @@ static mc_status recording_to_release(yyjson_val *rec, mb_release *out) {
     out->format = media_formats(media);
     out->year = json_year(best, "date");
     t->id = json_strdup(track, "id");
+    /* Where it is on that release, for when the release can't be looked up in full. */
+    t->disc = json_int(m, "position");
+    yyjson_val *offset = yyjson_obj_get(m, "track-offset");
+    const char *number = yyjson_get_str(yyjson_obj_get(track, "number"));
+    t->number = yyjson_is_num(offset) ? (int)yyjson_get_num(offset) + 1 : number ? atoi(number) : 0;
   }
   if (!out->year) out->year = out->original_year;
   if (!out->original_year) out->original_year = out->year;

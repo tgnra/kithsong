@@ -293,18 +293,6 @@ static int same_text(const char *a, const char *b) {
   return a && b && mc_string_distance(a, b) == 0.0;
 }
 
-static char *singles_title(const char *artist);
-
-/* A file we tagged as one of an artist's singles: album "<album artist> Singles". */
-static int is_singles_album(const mc_tags *t) {
-  const char *artist = t->album_artist ? t->album_artist : t->artist;
-  if (!t->album || !artist) return 0;
-  char *expected = singles_title(artist);
-  int same = expected && strcmp(t->album, expected) == 0;
-  free(expected);
-  return same;
-}
-
 /* Most frequent non-empty value of a tag field across an item's files, and whether every
  * file that has the field agrees. */
 static const char *common_tag(mc_import *imp, const int *files, int n, size_t offset, int *all_same) {
@@ -407,13 +395,12 @@ static mc_status group_files(mc_import *imp, item_list *out) {
   if (!keys || !item_of) goto done;
 
   /* Key each file by album folder + album tag (or release id if there's no album tag).
-   * Files with neither are singles, and so are files we filed under "<artist> Singles"
-   * before. The folder keeps two copies of one album apart. */
+   * Files with neither are singles. The folder keeps two copies of one album apart. */
   for (int i = 0; i < n; i++) {
     const mc_tags *t = &imp->files[i].tags;
     char *folder = album_folder(imp->files[i].path);
     if (!folder) goto done;
-    if ((t->album || t->mb_albumid) && !is_singles_album(t)) {
+    if (t->album || t->mb_albumid) {
       const char *v = t->album ? t->album : t->mb_albumid;
       size_t len = strlen(folder) + strlen(v) + 4;
       if ((keys[i] = malloc(len))) {
@@ -980,18 +967,34 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
 
 /* --- Writing --- */
 
-static char *singles_title(const char *artist) {
-  const char *name = artist && *artist ? artist : "Unknown Artist";
-  size_t len = strlen(name) + 9;
-  char *s = malloc(len);
-  if (s) snprintf(s, len, "%s Singles", name);
-  return s;
-}
-
 static int disc_track_total(const mb_release *rel, int disc) {
   int n = 0;
   for (int i = 0; i < rel->track_count; i++) n += rel->tracks[i].disc == disc;
   return n;
+}
+
+/* The index of track want in rel's tracklist: by release track id, else the first with its
+ * recording; -1 if it isn't there. */
+static int release_track_of(const mb_release *rel, const mb_track *want) {
+  for (int i = 0; want->id && i < rel->track_count; i++)
+    if (rel->tracks[i].id && strcmp(rel->tracks[i].id, want->id) == 0) return i;
+  for (int i = 0; want->recording_id && i < rel->track_count; i++)
+    if (rel->tracks[i].recording_id && strcmp(rel->tracks[i].recording_id, want->recording_id) == 0)
+      return i;
+  return -1;
+}
+
+/* A recording found on its own (a candidate from_recording) is credited to one of its
+ * releases (see mb_search_recordings). Looks up that whole release into *full, so the file
+ * is tagged and filed as its track there like any album track, and returns which track it
+ * is; -1, with *full empty, if the release can't be looked up or hasn't the recording. */
+static int lookup_lone_release(mc_import *imp, const candidate *c, mb_release *full) {
+  memset(full, 0, sizeof *full);
+  if (!c->from_recording || !c->rel.id || c->rel.track_count != 1 || cancelled(imp)) return -1;
+  if (mb_lookup_release(c->rel.id, full) != MC_OK) return -1;
+  int i = release_track_of(full, &c->rel.tracks[0]);
+  if (i < 0) mb_release_clear(full);
+  return i;
 }
 
 /* Library rows for a file, from its tags as they are now. The caller sets the paths. */
@@ -1356,7 +1359,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   const mb_release *rel = c ? &c->rel : NULL;
   const char *error = NULL;
   char hash[MC_ART_HASH_LEN];
-  char *singles = NULL, *album_rel = NULL, *source_dir = NULL;
+  char *album_rel = NULL, *source_dir = NULL;
   mc_db_track *rows = calloc((size_t)it->file_count, sizeof *rows);
   placement *places = calloc((size_t)it->file_count, sizeof *places);
   int count = 0;
@@ -1370,27 +1373,39 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   source_dir = dirname_of(imp->files[it->files[0]].path);
 
   mc_db_album album = {0};
+  mb_release full;
+  int lone = c ? lookup_lone_release(imp, c, &full) : -1;
+  const int *map = c ? c->map : NULL;
+  int *lone_map = lone >= 0 ? malloc((size_t)it->file_count * sizeof *lone_map) : NULL;
+  if (lone_map) {
+    /* The file the recording was matched to is that track of the full release. */
+    for (int i = 0; i < it->file_count; i++) lone_map[i] = c->map[i] >= 0 ? lone : -1;
+    rel = &full;
+    map = lone_map;
+  } else if (lone >= 0) {
+    mb_release_clear(&full);
+    lone = -1;
+  }
   if (rel) {
-    album.singles = rel->is_single;
-    if (rel->is_single) {
-      album.artist = (mc_db_artist){rel->primary_artist, rel->primary_artist_sort, rel->primary_artist_id};
-      singles = singles_title(rel->primary_artist);
-      album_rel = mc_album_dir(rel->primary_artist, singles, 0);
-    } else {
-      album.title = rel->title;
-      album.artist = (mc_db_artist){rel->artist, rel->artist_sort, rel->artist_id};
-      album.year = rel->year;
-      album.original_year = rel->original_year;
-      album.disc_total = rel->disc_total;
-      album.mb_albumid = rel->id;
-      album.mb_releasegroupid = rel->releasegroup_id;
-      album_rel = mc_album_dir(rel->artist, rel->title, rel->year);
-    }
+    /* A recording whose release couldn't be looked up keeps what the search had: the
+     * release's title and ids, but no tracklist or album artist, for which its first
+     * credited artist stands in. A recording on no release has no album. */
+    int partial = c->from_recording && lone < 0;
+    album.no_album = !rel->id || !rel->title;
+    album.title = rel->title;
+    album.artist = partial ? (mc_db_artist){rel->primary_artist, rel->primary_artist_sort, rel->primary_artist_id}
+                           : (mc_db_artist){rel->artist, rel->artist_sort, rel->artist_id};
+    album.year = rel->year;
+    album.original_year = rel->original_year;
+    album.disc_total = rel->disc_total;
+    album.mb_albumid = rel->id;
+    album.mb_releasegroupid = rel->releasegroup_id;
+    if (!album.no_album) album_rel = mc_album_dir(album.artist.name, rel->title, rel->year);
 
     for (int i = 0; i < it->file_count; i++) {
-      if (c->map[i] < 0) continue; /* left untouched; the UI shows it as unmatched */
+      if (map[i] < 0) continue; /* left untouched; the UI shows it as unmatched */
       file_entry *f = &imp->files[it->files[i]];
-      const mb_track *tr = &rel->tracks[c->map[i]];
+      const mb_track *tr = &rel->tracks[map[i]];
       placement *pl = &places[count];
       mc_db_track *t = &rows[count];
       count++;
@@ -1402,50 +1417,50 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       tags.mb_releasetrackid = tr->id;
       tags.mb_artistid = tr->artist_id ? tr->artist_id : "";
       tags.original_year = rel->original_year;
-      if (rel->is_single) {
-        /* The album tag says "<artist> Singles", so drop ids that point at another release. */
-        tags.album = singles;
-        tags.album_artist = rel->primary_artist;
-        tags.mb_albumartistid = rel->primary_artist_id ? rel->primary_artist_id : "";
-        tags.mb_albumid = "";
-        tags.mb_releasegroupid = "";
+      char *name;
+      if (album.no_album) {
+        /* No release, so no album tags either. */
+        tags.album = tags.album_artist = tags.mb_albumartistid = "";
+        tags.mb_albumid = tags.mb_releasegroupid = "";
         tags.year = rel->original_year ? rel->original_year : rel->year;
+        char *dir = mc_artist_dir(tr->artist ? tr->artist : album.artist.name);
+        name = mc_track_file(tr->title, 0, 0, 0, audio_format(f->path));
+        pl->dest_rel = join_rel(dir, name);
+        free(dir);
       } else {
         tags.album = rel->title;
-        tags.album_artist = rel->artist;
-        tags.mb_albumartistid = rel->artist_id ? rel->artist_id : "";
+        tags.album_artist = (char *)album.artist.name;
+        tags.mb_albumartistid = album.artist.mb_artistid ? (char *)album.artist.mb_artistid : "";
         tags.mb_albumid = rel->id;
         tags.mb_releasegroupid = rel->releasegroup_id;
         tags.year = rel->year;
         tags.track = tr->number;
-        tags.track_total = disc_track_total(rel, tr->disc);
+        tags.track_total = partial ? 0 : disc_track_total(rel, tr->disc);
         tags.disc = tr->disc;
         tags.disc_total = rel->disc_total;
+        name = mc_track_file(tr->title, tr->disc, rel->disc_total, tr->number, audio_format(f->path));
+        pl->dest_rel = join_rel(album_rel, name);
       }
+      free(name);
       pl->f = f;
       pl->tags = tags;
       pl->write_tags = 1;
       pl->releasetrackid = tr->id;
-      char *name = rel->is_single ? mc_track_file(tr->title, 0, 0, 0, audio_format(f->path))
-                                  : mc_track_file(tr->title, tr->disc, rel->disc_total, tr->number,
-                                                  audio_format(f->path));
-      pl->dest_rel = join_rel(album_rel, name);
-      free(name);
 
       track_from_tags(f, t);
       t->title = tr->title;
       t->artist = (mc_db_artist){tr->artist, NULL, tr->artist_id};
-      t->track_no = rel->is_single ? 0 : tr->number;
-      t->disc_no = rel->is_single ? 0 : tr->disc;
+      t->track_no = album.no_album ? 0 : tr->number;
+      t->disc_no = album.no_album ? 0 : tr->disc;
       t->year = tags.year;
       t->mb_trackid = tr->recording_id;
       t->mb_releasetrackid = tr->id;
       t->mb_albumid = rel->id;
     }
   } else {
-    /* As-is: file the tracks under their existing tags. */
+    /* As-is: file the tracks under their existing tags; with no album tag, under no album. */
     const mc_tags *first = item_tags(imp, it, 0);
-    album.singles = it->kind == MC_IMPORT_SINGLE || !first->album;
+    album.no_album = !first->album;
     album.title = first->album;
     album.artist.name = first->album_artist ? first->album_artist : first->artist ? first->artist : it->artist;
     album.artist.mb_artistid = first->mb_albumartistid;
@@ -1454,9 +1469,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
     album.disc_total = first->disc_total;
     album.mb_albumid = first->mb_albumid;
     album.mb_releasegroupid = first->mb_releasegroupid;
-    if (album.singles) singles = singles_title(album.artist.name);
-    album_rel = album.singles ? mc_album_dir(album.artist.name, singles, 0)
-                              : mc_album_dir(album.artist.name, album.title, album.year);
+    if (!album.no_album) album_rel = mc_album_dir(album.artist.name, album.title, album.year);
 
     for (int i = 0; i < it->file_count; i++, count++) {
       file_entry *f = &imp->files[it->files[i]];
@@ -1464,14 +1477,20 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
       track_from_tags(f, t);
       if (!t->title && it->kind == MC_IMPORT_SINGLE) t->title = it->album; /* from the file name */
       char *stem = t->title ? NULL : file_stem(f->path);
-      char *name = album.singles
-                     ? mc_track_file(t->title ? t->title : stem, 0, 0, 0, audio_format(f->path))
-                     : mc_track_file(t->title ? t->title : stem, f->tags.disc, f->tags.disc_total,
-                                     f->tags.track, audio_format(f->path));
+      const char *title = t->title ? t->title : stem;
+      if (album.no_album) {
+        char *dir = mc_artist_dir(t->artist.name ? t->artist.name : album.artist.name);
+        char *name = mc_track_file(title, 0, 0, 0, audio_format(f->path));
+        places[count].dest_rel = join_rel(dir, name);
+        free(dir);
+        free(name);
+      } else {
+        char *name = mc_track_file(title, f->tags.disc, f->tags.disc_total, f->tags.track, audio_format(f->path));
+        places[count].dest_rel = join_rel(album_rel, name);
+        free(name);
+      }
       free(stem);
       places[count].f = f;
-      places[count].dest_rel = join_rel(album_rel, name);
-      free(name);
     }
   }
   if (count == 0) error = mc_str(MC_STR_IMPORT_ERROR_NO_FILES);
@@ -1504,7 +1523,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   }
 
   if (!error && !all_dupes) {
-    if (!album.singles) album.art_hash = ensure_cover(imp, lib, cover_dir, source_dir, places, count, rel, hash);
+    if (!album.no_album) album.art_hash = ensure_cover(imp, lib, cover_dir, source_dir, places, count, rel, hash);
     for (int i = 0; i < count; i++) {
       mc_db_track *t = &rows[i];
       t->path = places[i].dest_rel;
@@ -1545,9 +1564,10 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   placements_free(places, count);
   mc_dupe_plan_free(&dp);
   free(rows);
-  free(singles);
   free(album_rel);
   free(source_dir);
+  if (lone >= 0) mb_release_clear(&full);
+  free(lone_map);
   set_state(imp, idx, error ? MC_IMPORT_FAILED : all_dupes ? MC_IMPORT_SKIPPED : MC_IMPORT_DONE,
             error);
 }
@@ -2176,7 +2196,9 @@ int mc_import_item_count(mc_import *imp) {
 
 static void copy_match(const item *it, const candidate *c, mc_import_match *m) {
   const mb_release *rel = &c->rel;
-  m->album = rel->is_single ? singles_title(rel->primary_artist) : mc_strdup(rel->title);
+  /* A recording's release isn't looked up until it's written (see lookup_lone_release), so
+   * its first credited artist stands in for the release's. */
+  m->album = mc_strdup(rel->title);
   m->album_artist = mc_strdup(rel->is_single ? rel->primary_artist : rel->artist);
   m->release = mc_strdup(rel->title);
   m->country = mc_strdup(rel->country);
@@ -2185,7 +2207,7 @@ static void copy_match(const item *it, const candidate *c, mc_import_match *m) {
   m->format = mc_strdup(rel->format);
   m->release_type = mc_strdup(rel->release_type);
   m->mb_albumid = mc_strdup(rel->id);
-  m->year = rel->is_single && rel->original_year ? rel->original_year : rel->year;
+  m->year = rel->year;
   m->is_single = rel->is_single;
   m->confidence = c->distance < 0 ? 1.0 : c->distance > 1 ? 0.0 : 1.0 - c->distance;
   m->extra_files = c->extra;

@@ -447,22 +447,23 @@ typedef struct track_ref {
   char rel[256];
 } track_ref;
 
-/* Adds a track (and its album, artist) with a WAV original at its organised path. */
+/* Adds a track (and its album, artist) with a WAV original at its organised path; with album
+ * NULL, a track with no album. */
 static void add_track(dev *d, const char *artist, const char *album, int year, const char *title,
                       int no, double pitch, track_ref *out) {
   sqlite3 *db = mc_library_db(d->lib);
-  char ar[MC_UID_STRLEN], al[MC_UID_STRLEN], sql[1024];
+  char ar[MC_UID_STRLEN], al[MC_UID_STRLEN] = "", sql[1024];
   snprintf(sql, sizeof sql, "SELECT uid FROM artists WHERE name = '%s'", artist);
   query_text(db, sql, ar, sizeof ar);
-  snprintf(sql, sizeof sql, "SELECT uid FROM albums WHERE title = '%s'", album);
-  query_text(db, sql, al, sizeof al);
+  snprintf(sql, sizeof sql, "SELECT uid FROM albums WHERE title = '%s'", album ? album : "");
+  if (album) query_text(db, sql, al, sizeof al);
   CHECK(mc_library_begin_write(d->lib) == MC_OK);
   if (!ar[0]) {
     mc_uid_new(ar);
     snprintf(sql, sizeof sql, "INSERT INTO artists (uid, name) VALUES ('%s', '%s')", ar, artist);
     CHECK(exec(db, sql) == SQLITE_OK);
   }
-  if (!al[0]) {
+  if (album && !al[0]) {
     mc_uid_new(al);
     snprintf(sql, sizeof sql,
              "INSERT INTO albums (uid, title, artist_uid, year) VALUES ('%s', '%s', '%s', %d)", al,
@@ -473,12 +474,17 @@ static void add_track(dev *d, const char *artist, const char *album, int year, c
   mc_uid_new(out->file);
   snprintf(sql, sizeof sql,
            "INSERT INTO tracks (uid, album_uid, artist_uid, title, track_no, duration_ms)"
-           " VALUES ('%s', '%s', '%s', '%s', %d, 1500)",
+           " VALUES ('%s', nullif('%s', ''), '%s', '%s', nullif(%d, 0), 1500)",
            out->uid, al, ar, title, no);
   CHECK(exec(db, sql) == SQLITE_OK);
-  snprintf(out->rel, sizeof out->rel, "%s/%s (%d)/%02d %s.wav", artist, album, year, no, title);
   char dir[2048], p[2048];
-  snprintf(dir, sizeof dir, "%s/%s/%s (%d)", d->libdir, artist, album, year);
+  if (album) {
+    snprintf(out->rel, sizeof out->rel, "%s/%s (%d)/%02d %s.wav", artist, album, year, no, title);
+    snprintf(dir, sizeof dir, "%s/%s/%s (%d)", d->libdir, artist, album, year);
+  } else {
+    snprintf(out->rel, sizeof out->rel, "%s/%s.wav", artist, title);
+    snprintf(dir, sizeof dir, "%s/%s", d->libdir, artist);
+  }
   CHECK(mc_mkdirs(dir) == MC_OK);
   abs_path(d, out->rel, p, sizeof p);
   CHECK(write_wav(p, 1500, pitch));
@@ -820,6 +826,26 @@ int main(int argc, char **argv) {
     CHECK(!lib_file_exists(&b, "Low/Other (1996)/cover.jpg"));
     CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
     CHECK(rb.covers_received == 0 && ra.covers_received == 0);
+  }
+
+  /* A track with no album arrives in its artist's folder, as import files it, and goes again
+   * when it's deleted. */
+  {
+    track_ref loose;
+    add_track(&a, "Low", NULL, 0, "Loose", 0, 770, &loose);
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.files_received == 1);
+    CHECK(lib_int(&b, "SELECT count(*) FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                      " WHERE f.path = 'Low/Loose.wav' AND t.album_uid IS NULL") == 1);
+    CHECK(lib_file_exists(&b, "Low/Loose.wav"));
+    CHECK(mc_library_begin_write(a.lib) == MC_OK);
+    snprintf(sql, sizeof sql, "DELETE FROM tracks WHERE uid = '%s'", loose.uid);
+    CHECK(exec(mc_library_db(a.lib), sql) == SQLITE_OK);
+    CHECK(mc_library_commit(a.lib) == MC_OK);
+    abs_path(&a, loose.rel, sql, sizeof sql);
+    mc_remove(sql);
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(b_files(&b, NULL) == 4);
   }
 
   /* B: Opus at 64 kbps. A transcodes; B swaps its WAVs for Opus files. */
