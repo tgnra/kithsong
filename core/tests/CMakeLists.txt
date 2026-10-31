@@ -64,7 +64,7 @@ kithsong_test(test_import_dupes)
 kithsong_test(test_delete)
 kithsong_test(test_organize)
 kithsong_test(test_transcode)
-target_link_libraries(test_transcode PRIVATE mc_opusfile)  # reads the output back directly
+target_link_libraries(test_transcode PRIVATE mc_opusfile mbedcrypto)  # reads the output back, hashes it
 kithsong_test(test_scrobbler)
 target_link_libraries(test_scrobbler PRIVATE mbedcrypto mc_yyjson)  # checks the signature independently
 target_include_directories(test_scrobbler PRIVATE "${PROJECT_BINARY_DIR}/core/generated")  # config.h
