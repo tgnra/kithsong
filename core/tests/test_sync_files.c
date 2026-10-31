@@ -4,8 +4,9 @@
  * 64 kbps, then a selection. Also checksums, reconcile (unwanted, wrong-format, deleted and
  * unknown files, and the originals imported on B that go once the archive holds them),
  * album covers that exist only as an image file beside the originals, sync_status,
- * mc_sync_verify(), and a track whose original an import on A replaced with a better file
- * (B's copy made from the old one is replaced too). */
+ * mc_sync_verify(), the hashes a sender keeps (an imported original's in its row, a cached
+ * transcode's in its sidecar), and a track whose original an import on A replaced with a
+ * better file (B's copy made from the old one is replaced too). */
 #ifndef _WIN32
 #define _DEFAULT_SOURCE /* symlink */
 #endif
@@ -777,6 +778,10 @@ int main(int argc, char **argv) {
                " AND format = 'wav'",
                all[i]->uid, all[i]->rel, ha, a.uid);
       CHECK(lib_int(&b, sql) == 1);
+      /* A imported it, so had no hash for it: it hashed it to send it, and kept that. */
+      snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE uid = '%s' AND sha256 = '%s'",
+               all[i]->file, ha);
+      CHECK(lib_int(&a, sql) == 1);
     }
   }
   /* The source hash came along with the original. */
@@ -886,9 +891,42 @@ int main(int argc, char **argv) {
   CHECK(lib_int(&b, "SELECT count(*) FROM files WHERE path = 'Low/Things (1994)/01 Song One.opus'") == 1);
   CHECK(!lib_file_exists(&b, t1.rel));
   {
-    char cached[2048];
+    char cached[2048], side[2048], sha[65], got[65], p[2048];
+    int64_t size, mtime, side_size, side_mtime;
     snprintf(cached, sizeof cached, "%s/transcode-cache/%s/opus-64.opus", a.config, t1.file);
+    snprintf(side, sizeof side, "%s/transcode-cache/%s/opus-64.sha256", a.config, t1.file);
     CHECK(mc_file_exists(cached));
+    /* Its sidecar has the hash B checked it against, at the file's size and mtime. */
+    file_sha(cached, sha);
+    CHECK(mc_file_info(cached, &size, &mtime) == MC_OK);
+    CHECK(mc_transcode_sha_read(cached, got, &side_size, &side_mtime) == MC_OK);
+    CHECK(!strcmp(got, sha) && side_size == size && side_mtime == mtime);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE track_uid = '%s' AND sha256 = '%s'",
+             t1.uid, sha);
+    CHECK(lib_int(&b, sql) == 1);
+
+    /* B loses its copy and fetches it again. A sidecar that matches the file is what A
+     * sends, unread: a wrong hash in it makes the copy fail B's check, twice. */
+    const char *rel = "Low/Things (1994)/01 Song One.opus";
+    snprintf(sql, sizeof sql, "DELETE FROM files WHERE track_uid = '%s'", t1.uid);
+    CHECK(exec(mc_library_db(b.lib), sql) == SQLITE_OK);
+    abs_path(&b, rel, p, sizeof p);
+    CHECK(mc_remove(p) == MC_OK);
+    char wrong[65];
+    snprintf(wrong, sizeof wrong, "%064d", 0);
+    CHECK(mc_transcode_sha_write(cached, wrong, size, mtime) == MC_OK);
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.files_received == 0 && rb.files_corrupt == 1);
+    CHECK(!lib_file_exists(&b, rel));
+    /* A stale one (the file's mtime has moved on) is ignored: A hashes the file, B gets it,
+     * and the sidecar is right again. */
+    CHECK(mc_transcode_sha_write(cached, wrong, size, mtime - 1000) == MC_OK);
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.files_received == 1 && rb.files_corrupt == 0);
+    CHECK(lib_file_exists(&b, rel) && files_match(&b));
+    CHECK(mc_transcode_sha_read(cached, got, &side_size, &side_mtime) == MC_OK);
+    CHECK(!strcmp(got, sha) && side_size == size && side_mtime == mtime);
+    CHECK(mc_file_exists(side));
   }
   CHECK(b_files(&a, NULL) == 4 && lib_file_exists(&a, t1.rel)); /* the archive keeps all */
 

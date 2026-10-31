@@ -1,12 +1,14 @@
 /* Opus transcoding: a generated, tagged WAV with a cover.jpg beside it is transcoded and
  * read back with opusfile, with the player's decoder, and with TagLib. Also the cache hit,
- * the size estimate, the LRU trim, failures leaving nothing behind, two encodes at once,
- * and the benchmark. */
+ * the sidecar with the file's hash, the size estimate, the LRU trim, failures leaving nothing
+ * behind, two encodes at once, and the benchmark. */
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <mbedtls/sha256.h>
 
 #include "musiccore/musiccore.h"
 #include "opusfile.h"
@@ -72,6 +74,33 @@ static int64_t file_size(const char *path) {
 }
 
 /* A 1×1 baseline JPEG header: enough for libopusenc to recognise and measure it. */
+/* hex SHA-256 of a file, "" if it can't be read. */
+static void file_sha(const char *path, char out[65]) {
+  out[0] = '\0';
+  FILE *f = mc_fopen(path, "rb");
+  if (!f) return;
+  mbedtls_sha256_context ctx;
+  mbedtls_sha256_init(&ctx);
+  mbedtls_sha256_starts(&ctx, 0);
+  unsigned char buf[8192], digest[32];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof buf, f)) > 0) mbedtls_sha256_update(&ctx, buf, n);
+  fclose(f);
+  mbedtls_sha256_finish(&ctx, digest);
+  mbedtls_sha256_free(&ctx);
+  for (int i = 0; i < 32; i++) snprintf(out + 2 * i, 3, "%02x", digest[i]);
+}
+
+/* Whether path's sidecar holds the file's hash, size and mtime as they are now. */
+static int sidecar_valid(const char *path) {
+  char want[65], sha[65];
+  int64_t size, mtime, side_size, side_mtime;
+  file_sha(path, want);
+  return want[0] && mc_file_info(path, &size, &mtime) == MC_OK &&
+         mc_transcode_sha_read(path, sha, &side_size, &side_mtime) == MC_OK &&
+         !strcmp(sha, want) && side_size == size && side_mtime == mtime;
+}
+
 static const unsigned char k_jpeg[] = {0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00,
                                        0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xD9};
 
@@ -122,8 +151,17 @@ static void check_transcode(const char *dir) {
            cache, MC_PATH_SEP, MC_PATH_SEP);
   CHECK_STR(out, expected);
   CHECK(out && mc_file_exists(out));
-  char part[1100];
+  char part[1200];
   snprintf(part, sizeof part, "%s.part", expected);
+  CHECK(!mc_file_exists(part));
+
+  /* Its sidecar, opus-128.sha256, holds the hash of what was written, and its size and
+   * mtime. No part file of it is left either. */
+  char side[1100];
+  snprintf(side, sizeof side, "%.*s.sha256", (int)(strlen(expected) - strlen(".opus")), expected);
+  CHECK(mc_file_exists(side));
+  CHECK(sidecar_valid(expected));
+  snprintf(part, sizeof part, "%s.part", side);
   CHECK(!mc_file_exists(part));
 
   /* opusfile reads it back at 48 kHz, stereo, 1.5 s long (±20 ms). */
@@ -189,6 +227,32 @@ static void check_transcode(const char *dir) {
   CHECK_STR(again, expected);
   CHECK(file_size(expected) == size);
   mc_free(again);
+  CHECK(sidecar_valid(expected)); /* moved along with the mtime */
+
+  /* A file changed since its sidecar makes the sidecar stale, and a hit leaves a stale one
+   * as it is. A sidecar that doesn't parse is none. */
+  {
+    char sha[65], want[65];
+    int64_t side_size, side_mtime, side_mtime2, fsize, fmtime;
+    CHECK(mc_transcode_sha_read(expected, sha, &side_size, &side_mtime) == MC_OK);
+    mc_sleep_ms(20);
+    CHECK(mc_touch(expected) == MC_OK);
+    CHECK(mc_file_info(expected, &fsize, &fmtime) == MC_OK && fmtime != side_mtime);
+    CHECK(!sidecar_valid(expected));
+    CHECK(mc_transcode_cached(cache, "0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e", src, &opts, &again) == MC_OK);
+    mc_free(again);
+    CHECK(mc_transcode_sha_read(expected, sha, &side_size, &side_mtime2) == MC_OK);
+    CHECK(side_mtime2 == side_mtime);
+    CHECK(write_bytes(side, "nonsense", 8));
+    CHECK(mc_transcode_sha_read(expected, sha, &side_size, &side_mtime) == MC_ERR_NOT_FOUND);
+    CHECK(mc_transcode_sha_write(expected, "not a hash", 1, 1) == MC_ERR_INVALID_ARG);
+    /* A sender that hashed the file writes it anew. */
+    file_sha(expected, want);
+    CHECK(mc_file_info(expected, &fsize, &fmtime) == MC_OK);
+    CHECK(mc_transcode_sha_write(expected, want, fsize, fmtime) == MC_OK);
+    CHECK(sidecar_valid(expected));
+    CHECK(!mc_file_exists(part));
+  }
 
   /* Original needs no transcode. */
   mc_transcode_opts original = {MC_FORMAT_ORIGINAL, 0};
@@ -236,25 +300,36 @@ static void check_transcode(const char *dir) {
   of = b.out ? op_open_file(b.out, NULL) : NULL;
   CHECK(of && op_channel_count(of, -1) == 1);
   if (of) op_free(of);
+  CHECK(a.out && sidecar_valid(a.out) && b.out && sidecar_valid(b.out));
   mc_free(a.out);
   mc_free(b.out);
 
-  /* Trim: everything fits, then only the most recently used, then nothing. */
+  /* Trim: everything fits, then only the most recently used, then nothing. A file and its
+   * sidecar go together, and the sidecars' bytes don't count; a sidecar without its file
+   * goes. */
+  char *orphan_dir = join(cache, "orphan");
+  char *orphan = join(orphan_dir, "opus-64.sha256");
+  mc_mkdirs(orphan_dir);
+  CHECK(write_bytes(orphan, "x", 1));
   CHECK(mc_transcode_cache_trim(cache, INT64_MAX) == MC_OK);
-  CHECK(mc_file_exists(expected));
+  CHECK(mc_file_exists(expected) && mc_file_exists(side));
+  CHECK(!mc_file_exists(orphan));
+  mc_rmdir(orphan_dir);
   mc_sleep_ms(20);
   CHECK(mc_transcode_cached(cache, "0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e", src, &opts, &again) == MC_OK);
   mc_free(again); /* touched: now the most recently used */
   CHECK(mc_transcode_cache_trim(cache, size) == MC_OK);
-  CHECK(mc_file_exists(expected));
+  CHECK(mc_file_exists(expected) && sidecar_valid(expected));
   char *surround_dir = join(cache, "surround");
-  CHECK(!mc_file_exists(surround_dir)); /* emptied directories go too */
+  CHECK(!mc_file_exists(surround_dir)); /* emptied directories go too, sidecar and all */
   CHECK(mc_transcode_cache_trim(cache, 0) == MC_OK);
-  CHECK(!mc_file_exists(expected));
+  CHECK(!mc_file_exists(expected) && !mc_file_exists(side));
   char *missing_cache = join(dir, "no_such_cache");
   CHECK(mc_transcode_cache_trim(missing_cache, 0) == MC_OK);
 
   mc_free(out);
+  free(orphan);
+  free(orphan_dir);
   free(missing_cache);
   free(surround_dir);
   free(surround);

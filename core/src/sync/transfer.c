@@ -13,7 +13,9 @@
  * Serving. Originals are sent as they are; Opus copies come from the transcode cache
  * (<config>/transcode-cache, see transcode.h), from a transcode this device received at
  * that bitrate, or are encoded on demand when this device may transcode. A lossy original
- * no bigger than the Opus would be is sent instead of a transcode.
+ * no bigger than the Opus would be is sent instead of a transcode. FILE_HDR's hash is the
+ * one recorded in the files row or a cached transcode's sidecar while the file is unchanged,
+ * else the file is hashed first and the hash kept (keep_sha), so the next send reads it once.
  *
  * Files rows. A received original gets source_peer_uid (who sent it) but no
  * source_file_uid, so it is still an original and may be served as one; a transcode gets
@@ -380,6 +382,9 @@ typedef struct held {
   char sha[SHA_STRLEN]; /* "" if not recorded */
   int duration_ms;
   char source_sha[SHA_STRLEN]; /* an original's files.source_sha256, or "" */
+  /* Where send_file() keeps a hash it had to compute: nowhere, the files row (an original's,
+   * whose uid is file_uid), or a cached transcode's sidecar. */
+  enum { KEEP_NONE, KEEP_ROW, KEEP_SIDECAR } keep;
 } held;
 
 static void held_free(held *h) {
@@ -429,6 +434,7 @@ static int find_original(mc_library *lib, const char *track, held *h) {
   sqlite3_bind_text(stmt, 1, track, -1, SQLITE_STATIC);
   while (!found && sqlite3_step(stmt) == SQLITE_ROW) found = held_from_row(lib, stmt, h);
   sqlite3_finalize(stmt);
+  if (found) h->keep = KEEP_ROW;
   return found;
 }
 
@@ -652,10 +658,44 @@ static mc_status drop_file(mc_library *lib, const char *file_uid, const char *re
 
 /* --- Serving --- */
 
+/* Keeps a hash send_file() computed (see held.keep), if the file didn't change while it was
+ * hashed. An original's row gets it only if it has none and the file is as the row says, as
+ * a deep check would record it (see verify_files()). */
+static void keep_sha(mc_library *lib, const held *h, const char *sha, int64_t size,
+                     int64_t mtime) {
+  int64_t now_size, now_mtime;
+  if (h->keep == KEEP_NONE || mc_file_info(h->path, &now_size, &now_mtime) != MC_OK ||
+      now_size != size || now_mtime != mtime)
+    return;
+  if (h->keep == KEEP_SIDECAR) {
+    mc_transcode_sha_write(h->path, sha, size, mtime);
+    return;
+  }
+  if (h->sha[0] || size != h->size || mtime != h->mtime || mc_library_begin_write(lib) != MC_OK)
+    return;
+  sqlite3_stmt *stmt;
+  int done = 0;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "UPDATE files SET sha256 = ?2 WHERE uid = ?1 AND source_file_uid IS NULL"
+                         " AND size_bytes = ?3 AND mtime_ms = ?4"
+                         " AND (sha256 IS NULL OR length(sha256) <> 64)",
+                         -1, &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, h->file_uid, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, sha, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 3, size);
+    sqlite3_bind_int64(stmt, 4, mtime);
+    done = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+  }
+  if (done) mc_library_commit(lib);
+  else mc_library_rollback(lib);
+}
+
 /* FILE_HDR then the bytes of path. The hash is the recorded one when the file is unchanged
- * since it was recorded, else computed first. An original says what it was imported from
- * (source_sha256), if known. Should the file shrink while it's sent, the rest is zeros: the
- * receiver's hash check then fails, as it should. */
+ * since it was recorded (in its row, or a cached transcode's sidecar), else computed first
+ * and kept for next time. An original says what it was imported from (source_sha256), if
+ * known. Should the file shrink while it's sent, the rest is zeros: the receiver's hash check
+ * then fails, as it should. */
 static mc_status send_file(mc_session *s, const char *track, const held *h, const char *format,
                            int kbps) {
   int64_t size = 0, mtime = 0;
@@ -666,6 +706,8 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
     memcpy(sha, h->sha, SHA_STRLEN);
   else if (hash_file(h->path, sha) != MC_OK)
     return send_file_err(s->ch, track, "io");
+  else
+    keep_sha(s->conn->lib, h, sha, size, mtime);
   FILE *f = mc_fopen(h->path, "rb");
   if (!f) return send_file_err(s->ch, track, "io");
   char ext[16];
@@ -757,6 +799,16 @@ static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t 
   return send_doc(s->ch, MC_MSG_HAVE_RESP, doc);
 }
 
+/* h, but sending the cached transcode at path (owned by the caller), with the hash its
+ * sidecar recorded, if any. */
+static held cached_copy(const held *h, char *path) {
+  held c = *h;
+  c.path = path;
+  c.keep = KEEP_SIDECAR;
+  if (mc_transcode_sha_read(path, c.sha, &c.size, &c.mtime) != MC_OK) c.sha[0] = '\0';
+  return c;
+}
+
 /* FILE_REQ. *transcoded is set if this encoded something. */
 static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t len,
                             int *transcoded) {
@@ -785,9 +837,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   } else {
     char *cached = original ? cache_path(s->sync, h.file_uid, kbps) : NULL;
     if (cached && mc_file_exists(cached)) {
-      held c = h;
-      c.path = cached;
-      c.sha[0] = '\0';
+      held c = cached_copy(&h, cached);
       st = send_file(s, track, &c, "opus", kbps);
     } else if (find_transcode(lib, track, kbps, &tr)) {
       st = send_file(s, track, &tr, "opus", kbps);
@@ -801,9 +851,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
       free(dir);
       if (enc == MC_OK) {
         *transcoded = 1;
-        held c = h;
-        c.path = out;
-        c.sha[0] = '\0';
+        held c = cached_copy(&h, out);
         st = send_file(s, track, &c, "opus", kbps);
       } else {
         fprintf(stderr, "musiccore: sync: transcoding %s failed: %s\n", track, mc_status_str(enc));

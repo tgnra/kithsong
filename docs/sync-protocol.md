@@ -722,7 +722,8 @@ the plaintext limit.
     copies. The device learns that in a session with an archive: its `HAVE_REQ` there also
     lists the tracks of such originals it no longer wants as they are, and the archive's
     `HAVE_RESP` says `original` and `verified` (its copy has a recorded `sha256`, i.e. it
-    arrived with a matching checksum or passed a deep check). A wanted track whose Opus is
+    arrived with a matching checksum, passed a deep check, or was hashed whole to be sent
+    while unchanged since its row was written). A wanted track whose Opus is
     missing while such an original is here is transcoded by the archive whenever it may
     transcode, rather than split across transcoders as in [Files](#files): the others may
     not hold the original yet. With the archive receiving first (step 6 of
@@ -838,7 +839,12 @@ music lives nowhere else.
 5. `FILE_REQ` → `FILE_HDR` + `FILE_DATA` (or `FILE_ERR`, reasons `missing`, `no_transcode`,
    `io`, `format`).
    - The sender computes `sha256` over the exact bytes it sends (the recorded one if the
-     file's size and mtime still match its row). `file` is the original's file uid: its own,
+     file's size and mtime still match its row, or for a cached transcode its sidecar's if
+     they match the sidecar, see [Lossy copies](#lossy-copies)). A hash it had to compute
+     is kept: in the sidecar for a cached transcode, and in `files.sha256` for an original
+     that has none (one imported here) if the file still has its row's size and mtime, the
+     same condition under which a deep check records it (see [Verification](#verification)).
+     The hash is still worked out before `FILE_HDR`, which carries it. `file` is the original's file uid: its own,
      or for a transcode the original it was made from. `format` is `"original"` when a lossy
      original stands in for the requested Opus. `ext` is the file's extension; a receiver
      refuses one that isn't an audio extension import takes. With an original (`format`
@@ -906,6 +912,19 @@ encodes in the background, so the session goes on; one that may not transcode ig
   `<config>/transcode-cache/<file_uid>/opus-<kbps>.opus`, with an LRU size cap of 8 GiB,
   trimmed after a session or `PREPARE_REQ` that encoded something. One encode runs at a
   time per device.
+- Beside each cached file is its sidecar, `opus-<kbps>.sha256`: one line
+  `<sha256> <size> <mtime_ms>`, the file's hash and the size and mtime it had then. The
+  hash is taken from the bytes as the encoder writes them, and the sidecar is written
+  (atomically, through a `.part` file) once the file is in place, so a cached transcode is
+  read once to be sent rather than twice. A sidecar whose size or mtime differ from the
+  file's is stale and ignored: the sender hashes the file and writes the sidecar again. A
+  cache hit that marks the file as recently used carries its sidecar's mtime along. The
+  trim counts a file and its sidecar as one entry (the sidecar's few bytes aren't counted),
+  deletes them together, and deletes a sidecar whose file is gone.
+- Encoder settings: VBR, signal music, and complexity by bitrate: 10 at 64 and 96 kbps, 8
+  at 128 and 160, 7 at 192 and 256. At the higher bitrates the spare bits leave nothing
+  audible for the extra analysis to win, so it only costs time. The CPU benchmark
+  (`cpu_score`) always encodes at 128 kbps and complexity 10: it only ranks devices.
 - The receiver stores the copy as a `files` row with `source_file_uid` and
   `source_peer_uid` set. It is linked to the same `track_uid`, so it is never imported as a
   new track and never offered back to anyone as an original.
@@ -924,7 +943,8 @@ encodes in the background, so the session goes on; one that may not transcode ig
   - Originals imported on the device are never deleted by a check (there may be no other
     copy): they are only counted as failed.
   - A deep check records the hash of a file that has none (an imported original), which
-    then counts as verified.
+    then counts as verified. Sending such a file records it too, under the same condition
+    (the file's size and mtime still match its row), since it is read whole either way.
   - Scheduling the weekly deep check is left to the frontend.
 
 ## Open questions
