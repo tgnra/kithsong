@@ -67,6 +67,7 @@ kithsong_test(test_import_dupes)
 kithsong_test(test_delete)
 kithsong_test(test_organize)
 kithsong_test(test_transcode)
+kithsong_test(test_encode_pool)
 target_link_libraries(test_transcode PRIVATE mc_opusfile mbedcrypto)  # reads the output back, hashes it
 kithsong_test(test_scrobbler)
 target_link_libraries(test_scrobbler PRIVATE mbedcrypto mc_yyjson)  # checks the signature independently

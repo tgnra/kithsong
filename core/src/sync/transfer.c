@@ -13,9 +13,12 @@
  * Serving. Originals are sent as they are; Opus copies come from the transcode cache
  * (<config>/transcode-cache, see transcode.h), from a transcode this device received at
  * that bitrate, or are encoded on demand when this device may transcode. A lossy original
- * no bigger than the Opus would be is sent instead of a transcode. FILE_HDR's hash is the
- * one recorded in the files row or a cached transcode's sidecar while the file is unchanged,
- * else the file is hashed first and the hash kept (keep_sha), so the next send reads it once.
+ * no bigger than the Opus would be is sent instead of a transcode. Encodes run on the
+ * device's encode pool (encode.h), shared by its sessions: the receiver's PREPARE_REQ for
+ * itself (encode-ahead) queues the encodes it is about to ask for, in order, and a FILE_REQ
+ * waits for its track's job rather than encoding it again. FILE_HDR's hash is the one
+ * recorded in the files row or a cached transcode's sidecar while the file is unchanged, else
+ * the file is hashed first and the hash kept (keep_sha), so the next send reads it once.
  *
  * Files rows. A received original gets source_peer_uid (who sent it) but no
  * source_file_uid, so it is still an original and may be served as one; a transcode gets
@@ -809,9 +812,8 @@ static held cached_copy(const held *h, char *path) {
   return c;
 }
 
-/* FILE_REQ. *transcoded is set if this encoded something. */
-static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t len,
-                            int *transcoded) {
+/* FILE_REQ. */
+static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t len) {
   yyjson_doc *req = parse(payload, len);
   if (!req) return MC_ERR_FORMAT;
   char track[MC_UID_STRLEN] = "";
@@ -835,6 +837,8 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   } else if (original && mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps)) {
     st = send_file(s, track, &h, "original", 0);
   } else {
+    mc_encode_pool *pool = s->sync->enc;
+    mc_encode_pool_hold(pool); /* so the trim leaves the cached file alone till it's sent */
     char *cached = original ? cache_path(s->sync, h.file_uid, kbps) : NULL;
     if (cached && mc_file_exists(cached)) {
       held c = cached_copy(&h, cached);
@@ -843,14 +847,10 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
       st = send_file(s, track, &tr, "opus", kbps);
       held_free(&tr);
     } else if (original && self_transcodes(s)) {
-      char *dir = cache_dir(s->sync), *out = NULL;
-      mc_transcode_opts opts = {MC_FORMAT_OPUS, kbps};
-      mc_mutex_lock(&s->sync->transcode_lock);
-      mc_status enc = dir ? mc_transcode_cached(dir, h.file_uid, h.path, &opts, &out) : MC_ERR_NOMEM;
-      mc_mutex_unlock(&s->sync->transcode_lock);
-      free(dir);
+      /* Its encode-ahead job if it has one (queued or running), else a job of its own. */
+      char *out = NULL;
+      mc_status enc = mc_encode_pool_encode(pool, h.file_uid, h.path, kbps, &out);
       if (enc == MC_OK) {
-        *transcoded = 1;
         held c = cached_copy(&h, out);
         st = send_file(s, track, &c, "opus", kbps);
       } else {
@@ -862,6 +862,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
       st = send_file_err(s->ch, track, original ? "no_transcode" : "missing");
     }
     free(cached);
+    mc_encode_pool_release(pool);
   }
   if (original) held_free(&h);
   return st;
@@ -880,73 +881,43 @@ static mc_status serve_plan(mc_session *s, const unsigned char *payload, size_t 
 
 /* --- PREPARE_REQ, serving --- */
 
-typedef struct prepare_job {
-  mc_sync *sync;
-  int kbps;
-  int count;
-  char (*tracks)[MC_UID_STRLEN];
-} prepare_job;
-
-/* Fills the transcode cache for a device that is offline, in the background so the session
- * goes on. Stops early when sync stops. */
-static void prepare_worker(void *arg) {
-  prepare_job *j = arg;
-  mc_sync *sync = j->sync;
-  mc_sync_conn c;
-  char *dir = cache_dir(sync);
-  if (dir && mc_sync_conn_open(sync, &c) == MC_OK) {
-    mc_transcode_opts opts = {MC_FORMAT_OPUS, j->kbps};
-    int made = 0;
-    for (int i = 0; i < j->count; i++) {
-      mc_mutex_lock(&sync->lock);
-      int stop = sync->stopping;
-      mc_mutex_unlock(&sync->lock);
-      if (stop) break;
-      held h;
-      if (!find_original(c.lib, j->tracks[i], &h)) continue;
-      if (!mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, j->kbps)) {
-        char *out = NULL;
-        mc_mutex_lock(&sync->transcode_lock);
-        if (mc_transcode_cached(dir, h.file_uid, h.path, &opts, &out) == MC_OK) made++;
-        mc_mutex_unlock(&sync->transcode_lock);
-        free(out);
-      }
-      held_free(&h);
-    }
-    if (made) mc_transcode_cache_trim(dir, MC_TRANSCODE_CACHE_MAX);
-    mc_sync_conn_close(&c);
-  }
-  free(dir);
-  free(j->tracks);
-  free(j);
-}
-
+/* Queues the encodes of PREPARE_REQ's tracks on the pool, in its order, but for those it can
+ * send without one. For an offline member they run in the background, after any
+ * encode-ahead, and go on after the session; for the peer itself (encode-ahead) they are the
+ * session's, dropped when its turn ends (serve_turn()). No reply either way; one that may
+ * not transcode just ignores it. */
 static mc_status serve_prepare(mc_session *s, const unsigned char *payload, size_t len) {
   yyjson_doc *req = parse(payload, len);
   if (!req) return MC_ERR_FORMAT;
   yyjson_val *tracks = yyjson_obj_get(yyjson_doc_get_root(req), "tracks");
+  const char *device = obj_str(req, "device");
   int kbps = (int)obj_int(req, "kbps");
-  if (!yyjson_is_arr(tracks) || !valid_bitrate(kbps)) {
+  int ok = yyjson_is_arr(tracks) && valid_bitrate(kbps);
+  if (!ok || !self_transcodes(s)) {
     yyjson_doc_free(req);
-    return MC_ERR_FORMAT;
+    return ok ? MC_OK : MC_ERR_FORMAT;
   }
-  /* No reply either way; one that may not transcode just ignores it. */
-  prepare_job *j = self_transcodes(s) ? calloc(1, sizeof *j) : NULL;
-  size_t n = yyjson_arr_size(tracks);
-  if (j && n) j->tracks = malloc(n * sizeof *j->tracks);
-  if (j && j->tracks) {
-    j->sync = s->sync;
-    j->kbps = kbps;
-    size_t idx, max;
-    yyjson_val *v;
-    yyjson_arr_foreach(tracks, idx, max, v) {
-      const char *track = yyjson_get_str(v);
-      if (is_uid(track)) memcpy(j->tracks[j->count++], track, MC_UID_STRLEN);
+  int ahead = device && !strcmp(device, s->peer_uid);
+  mc_library *lib = s->conn->lib;
+  size_t idx, max;
+  yyjson_val *v;
+  yyjson_arr_foreach(tracks, idx, max, v) {
+    const char *track = yyjson_get_str(v);
+    held h, tr;
+    if (!is_uid(track) || !find_original(lib, track, &h)) continue;
+    char *cached = cache_path(s->sync, h.file_uid, kbps);
+    int needed = cached && !mc_file_exists(cached) &&
+                 !mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps);
+    if (needed && find_transcode(lib, track, kbps, &tr)) {
+      needed = 0; /* the one received is sent */
+      held_free(&tr);
     }
-    if (mc_sync_spawn(s->sync, prepare_worker, j) == MC_OK) j = NULL;
+    if (needed)
+      mc_encode_pool_queue(s->sync->enc, h.file_uid, h.path, kbps,
+                           ahead ? MC_ENCODE_AHEAD : MC_ENCODE_BACKGROUND, ahead ? s : NULL);
+    free(cached);
+    held_free(&h);
   }
-  if (j) free(j->tracks);
-  free(j);
   yyjson_doc_free(req);
   return MC_OK;
 }
@@ -1073,10 +1044,25 @@ static mc_status serve_cover(mc_session *s, const unsigned char *payload, size_t
   return st;
 }
 
+/* Whether this device is on mains power, as its capabilities row says. */
+static int self_on_power(mc_session *s) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(s->conn->sdb),
+                         "SELECT on_power FROM capabilities WHERE device_uid = ?1", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return 0;
+  sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(s->conn->sdb), -1, SQLITE_STATIC);
+  int yes = sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0);
+  sqlite3_finalize(stmt);
+  return yes;
+}
+
 /* The other side's turn: serves its requests until FILES_DONE. */
 static mc_status serve_turn(mc_session *s) {
-  int transcoded = 0;
   mc_status st = MC_OK;
+  /* Encodes at once: a core is left for the rest, and on battery there is just one. */
+  int cores = mc_cpu_count() - 1;
+  mc_encode_pool_set_size(s->sync->enc, self_on_power(s) && cores > 1 ? cores : 1);
   for (;;) {
     uint8_t type;
     const unsigned char *payload;
@@ -1087,7 +1073,7 @@ static mc_status serve_turn(mc_session *s) {
     if (type == MC_MSG_HAVE_REQ)
       st = serve_have(s, payload, len);
     else if (type == MC_MSG_FILE_REQ)
-      st = serve_file(s, payload, len, &transcoded);
+      st = serve_file(s, payload, len);
     else if (type == MC_MSG_PREPARE_REQ)
       st = serve_prepare(s, payload, len);
     else if (type == MC_MSG_COVER_REQ)
@@ -1099,11 +1085,8 @@ static mc_status serve_turn(mc_session *s) {
     if (st != MC_OK) break;
     progress(s);
   }
-  if (transcoded) {
-    char *dir = cache_dir(s->sync);
-    if (dir) mc_transcode_cache_trim(dir, MC_TRANSCODE_CACHE_MAX);
-    free(dir);
-  }
+  /* Encode-ahead it didn't ask for after all. The pool trims the cache once it's idle. */
+  mc_encode_pool_drop(s->sync->enc, s);
   return st;
 }
 
@@ -1380,6 +1363,34 @@ static mc_status send_plan(mc_session *s) {
   return send_doc(s->ch, MC_MSG_FILES_PLAN, doc);
 }
 
+/* Encode-ahead: PREPARE_REQ with this device as the device, for the Opus tracks about to be
+ * fetched that the peer has to encode (how 2, not cached), in fetch order, so the peer
+ * encodes while it sends. A new message where kbps changes. */
+static mc_status send_ahead(mc_session *s, const want *w, const int *how, int n) {
+  const char *me = mc_sync_db_device_uid(s->conn->sdb);
+  mc_status st = MC_OK;
+  for (int at = 0; st == MC_OK && at < n;) {
+    while (at < n && (how[at] != 2 || w[at].cached)) at++;
+    if (at == n) break;
+    int kbps = w[at].t->format.bitrate_kbps;
+    yyjson_mut_val *root;
+    yyjson_mut_doc *doc = new_doc(&root);
+    if (!doc) return MC_ERR_NOMEM;
+    yyjson_mut_obj_add_strcpy(doc, root, "device", me);
+    yyjson_mut_val *arr = yyjson_mut_arr(doc);
+    yyjson_mut_obj_add_val(doc, root, "tracks", arr);
+    for (int added = 0; at < n && added < PREPARE_CHUNK; at++) {
+      if (how[at] != 2 || w[at].cached) continue;
+      if (w[at].t->format.bitrate_kbps != kbps) break;
+      yyjson_mut_arr_add_strcpy(doc, arr, w[at].uid);
+      added++;
+    }
+    yyjson_mut_obj_add_int(doc, root, "kbps", kbps);
+    st = send_doc(s->ch, MC_MSG_PREPARE_REQ, doc);
+  }
+  return st;
+}
+
 /* This device's turn as the receiver, with its plan in x. */
 static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   mc_library *lib = s->conn->lib;
@@ -1475,6 +1486,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   free(tc);
   if (st == MC_OK && s->files_plan) st = send_plan(s);
   progress(s);
+  if (st == MC_OK) st = send_ahead(s, w, how, n);
 
   for (int i = 0; st == MC_OK && i < n; i++) {
     if (!how[i]) continue;

@@ -1,7 +1,7 @@
 /* Opus transcoding: a generated, tagged WAV with a cover.jpg beside it is transcoded and
  * read back with opusfile, with the player's decoder, and with TagLib. Also the cache hit,
  * the sidecar with the file's hash, the size estimate, the LRU trim, failures leaving nothing
- * behind, two encodes at once, and the benchmark. */
+ * behind, encodes at once (two files, and three of one file), and the benchmark. */
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -73,7 +73,6 @@ static int64_t file_size(const char *path) {
   return size;
 }
 
-/* A 1×1 baseline JPEG header: enough for libopusenc to recognise and measure it. */
 /* hex SHA-256 of a file, "" if it can't be read. */
 static void file_sha(const char *path, char out[65]) {
   out[0] = '\0';
@@ -101,6 +100,7 @@ static int sidecar_valid(const char *path) {
          !strcmp(sha, want) && side_size == size && side_mtime == mtime;
 }
 
+/* A 1×1 baseline JPEG header: enough for libopusenc to recognise and measure it. */
 static const unsigned char k_jpeg[] = {0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00,
                                        0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xD9};
 
@@ -109,6 +109,18 @@ typedef struct job {
   mc_status st;
   char *out;
 } job;
+
+static void count_entry(void *user, const char *name, int is_dir) {
+  (void)name;
+  (void)is_dir;
+  (*(int *)user)++;
+}
+
+/* Entries directly in dir. */
+static int dir_entries(const char *dir) {
+  int n = 0;
+  return mc_list_dir(dir, count_entry, &n) == MC_OK ? n : -1;
+}
 
 static void run_job(void *arg) {
   job *j = arg;
@@ -151,18 +163,16 @@ static void check_transcode(const char *dir) {
            cache, MC_PATH_SEP, MC_PATH_SEP);
   CHECK_STR(out, expected);
   CHECK(out && mc_file_exists(out));
-  char part[1200];
-  snprintf(part, sizeof part, "%s.part", expected);
-  CHECK(!mc_file_exists(part));
+  char uid_dir[1100];
+  snprintf(uid_dir, sizeof uid_dir, "%s%c0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e", cache, MC_PATH_SEP);
+  CHECK(dir_entries(uid_dir) == 2); /* the file and its sidecar: no part file left */
 
   /* Its sidecar, opus-128.sha256, holds the hash of what was written, and its size and
-   * mtime. No part file of it is left either. */
+   * mtime. */
   char side[1100];
   snprintf(side, sizeof side, "%.*s.sha256", (int)(strlen(expected) - strlen(".opus")), expected);
   CHECK(mc_file_exists(side));
   CHECK(sidecar_valid(expected));
-  snprintf(part, sizeof part, "%s.part", side);
-  CHECK(!mc_file_exists(part));
 
   /* opusfile reads it back at 48 kHz, stereo, 1.5 s long (±20 ms). */
   OggOpusFile *of = out ? op_open_file(out, NULL) : NULL;
@@ -251,7 +261,9 @@ static void check_transcode(const char *dir) {
     CHECK(mc_file_info(expected, &fsize, &fmtime) == MC_OK);
     CHECK(mc_transcode_sha_write(expected, want, fsize, fmtime) == MC_OK);
     CHECK(sidecar_valid(expected));
-    CHECK(!mc_file_exists(part));
+    char side_part[1200];
+    snprintf(side_part, sizeof side_part, "%s.part", side);
+    CHECK(!mc_file_exists(side_part));
   }
 
   /* Original needs no transcode. */
@@ -303,6 +315,41 @@ static void check_transcode(const char *dir) {
   CHECK(a.out && sidecar_valid(a.out) && b.out && sidecar_valid(b.out));
   mc_free(a.out);
   mc_free(b.out);
+
+  /* Three encodes of the same file at once: each writes its own part file, so the one left
+   * is whole, and nothing else is. */
+  {
+    job same[3];
+    mc_thread ts[3];
+    for (int i = 0; i < 3; i++) {
+      same[i] = (job){cache, "same", src, MC_ERR_IO, NULL};
+      CHECK(mc_thread_start(&ts[i], run_job, &same[i]) == MC_OK);
+    }
+    for (int i = 0; i < 3; i++) mc_thread_join(&ts[i]);
+    for (int i = 0; i < 3; i++) {
+      CHECK(same[i].st == MC_OK);
+      CHECK(same[i].out && same[0].out && !strcmp(same[i].out, same[0].out));
+    }
+    /* The sidecar is the file's or stale, never another encode's hash. */
+    char sha[65], got[65];
+    int64_t ss = 0, sm = 0, fs = 0, fm = 0;
+    if (same[0].out && mc_transcode_sha_read(same[0].out, sha, &ss, &sm) == MC_OK &&
+        mc_file_info(same[0].out, &fs, &fm) == MC_OK && ss == fs && sm == fm) {
+      file_sha(same[0].out, got);
+      CHECK(!strcmp(sha, got));
+    }
+    of = same[0].out ? op_open_file(same[0].out, NULL) : NULL;
+    CHECK(of != NULL);
+    if (of) {
+      ogg_int64_t total = op_pcm_total(of, -1);
+      CHECK(total >= 72000 - 960 && total <= 72000 + 960);
+      op_free(of);
+    }
+    char *same_dir = join(cache, "same");
+    CHECK(dir_entries(same_dir) == 2); /* the file and its sidecar */
+    free(same_dir);
+    for (int i = 0; i < 3; i++) mc_free(same[i].out);
+  }
 
   /* Trim: everything fits, then only the most recently used, then nothing. A file and its
    * sidecar go together, and the sidecars' bytes don't count; a sidecar without its file

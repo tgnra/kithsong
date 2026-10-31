@@ -1,8 +1,11 @@
 /* Opus transcodes for sync.
  *
  *   decoder (playback/decoder.c) -> downmix to stereo -> libopusenc (Speex resampler to
- *   48 kHz, then libopus) -> <path>.part, hashed as it's written -> rename into place ->
- *   sidecar with the hash
+ *   48 kHz, then libopus) -> <path>.<random>.part, hashed as it's written -> rename into
+ *   place -> sidecar with the hash
+ *
+ * Each encode writes a part file of its own, so two of the same file can run at once: the
+ * last rename wins, and both files are whole.
  *
  * Tags are read from the source with TagLib (tag_io.cpp) and written as Opus comments while
  * encoding, so the file is complete the moment it's renamed into place. The cover is the
@@ -332,19 +335,38 @@ mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const
   snprintf(name, sizeof name, "opus-%d.opus", opts->bitrate_kbps);
   char *uid_dir = concat(cache_dir, MC_PATH_SEP, file_uid);
   char *path = uid_dir ? concat(uid_dir, MC_PATH_SEP, name) : NULL;
-  char *part = path ? concat(path, 0, ".part") : NULL;
-  mc_status st = MC_ERR_NOMEM;
+  unsigned char nonce[6];
+  char suffix[32];
+  mc_status st = mc_random_bytes(nonce, sizeof nonce);
+  snprintf(suffix, sizeof suffix, ".%02x%02x%02x%02x%02x%02x.part", nonce[0], nonce[1],
+           nonce[2], nonce[3], nonce[4], nonce[5]);
+  char *part = path && st == MC_OK ? concat(path, 0, suffix) : NULL;
+  st = MC_ERR_NOMEM;
   if (part && mc_file_exists(path)) {
     mark_used(path);
     st = MC_OK;
-  } else if (part && (st = mc_mkdirs(uid_dir)) == MC_OK) {
-    char sha[65];
-    st = encode(src_path, part, opts->bitrate_kbps, sha);
-    if (st == MC_OK) st = mc_rename(part, path, 1);
-    if (st == MC_OK) write_sidecar(path, sha);
-    if (st != MC_OK) {
+  } else if (part) {
+    /* Twice if another encode's cleanup took the folder away from under this one. */
+    for (int tries = 0; tries < 2; tries++) {
+      if ((st = mc_mkdirs(uid_dir)) != MC_OK) break;
+      char sha[65];
+      st = encode(src_path, part, opts->bitrate_kbps, sha);
+      if (st == MC_OK) {
+        /* The size and mtime are the part file's (a rename keeps them), so should another
+         * encode of it (whose bytes differ: a new Ogg serial) replace it before the sidecar
+         * is written, the sidecar is stale rather than wrong. */
+        int64_t size = 0, mtime_ms = 0;
+        int info = mc_file_info(part, &size, &mtime_ms) == MC_OK;
+        st = mc_rename(part, path, 1);
+        if (st == MC_OK && info) mc_transcode_sha_write(path, sha, size, mtime_ms);
+        /* Another encode of it got there first (on Windows, it may be open to be sent). */
+        else if (st != MC_OK && mc_file_exists(path)) st = MC_OK;
+      }
+      if (st == MC_OK) break;
+      int gone = !mc_file_exists(uid_dir);
       if (mc_file_exists(part)) mc_remove(part);
       mc_rmdir(uid_dir); /* only if it's empty */
+      if (!gone) break;
     }
   }
   if (st == MC_OK) {
