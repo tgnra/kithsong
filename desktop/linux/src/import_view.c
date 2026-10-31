@@ -49,6 +49,16 @@ typedef struct review {
   GSimpleAction *assign;
   GSimpleAction *use_file; /* the missing tracks' Choose File menus: (track, from_item, file) */
   int assign_track, assign_from, assign_file;
+  GArray *candidates; /* of candidate: what the Choose File menus list, built when one opens */
+
+  /* A file made a missing track (mc_import_assign) that the import thread hasn't taken up
+   * yet, which may be a while if it's matching another item: the track list shows it
+   * already, and the review takes no other decision until the item is being written (the
+   * file indices it would use change then). */
+  struct {
+    gboolean active;
+    int match, track, from_item, file;
+  } pending;
 } review;
 
 /* What a row of the review's track list is (its "review-row" data): a track of the match,
@@ -408,6 +418,11 @@ static void on_event(import_view *v, mc_import_event ev, int arg) {
     }
     case MC_IMPORT_EV_IDLE:
       v->idle = TRUE;
+      /* Nothing is queued, so a pending file was taken up (or turned out not to apply). */
+      if (v->rev && v->rev->pending.active) {
+        v->rev->pending.active = FALSE;
+        review_load(v->rev);
+      }
       break;
     case MC_IMPORT_EV_OFFLINE:
       v->offline = arg != 0;
@@ -695,6 +710,24 @@ static GMenuModel *files_menu(const mc_import_match *m, int track, GArray *candi
   return G_MENU_MODEL(menu);
 }
 
+/* A Choose File button's menu, made the first time it opens: building every missing track's
+ * menu (and so its popover) up front would slow each refresh of the track list. */
+static void create_files_menu(GtkMenuButton *button, gpointer data) {
+  review *r = data;
+  const mc_import_item *it = r->snap;
+  if (gtk_menu_button_get_menu_model(button) || !it || !r->candidates || r->selected < 0 ||
+      r->selected >= it->match_count)
+    return;
+  const mc_import_match *m = &it->matches[r->selected];
+  int track = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "track"));
+  if (track < 0 || track >= m->track_count) return;
+  GMenuModel *model = files_menu(m, track, r->candidates);
+  gtk_menu_button_set_menu_model(button, model);
+  g_object_unref(model);
+}
+
+static void show_pending(review *r);
+
 static void review_fill_tracks(review *r, int match) {
   r->selected = match;
   gtk_list_box_remove_all(GTK_LIST_BOX(r->tracks));
@@ -706,6 +739,7 @@ static void review_fill_tracks(review *r, int match) {
   int missing = 0, loose = 0;
   gboolean *used = g_new0(gboolean, (size_t)it->file_count + 1);
   GPtrArray *missing_rows = g_ptr_array_new();
+  g_clear_pointer(&r->candidates, g_array_unref);
   GArray *candidates = g_array_new(FALSE, FALSE, sizeof(candidate));
   g_array_set_clear_func(candidates, candidate_clear);
   if (match >= 0 && match < it->match_count) {
@@ -759,24 +793,23 @@ static void review_fill_tracks(review *r, int match) {
    * row (a click, Enter) opens it too (on_track_activated). */
   gboolean can_assign = match >= 0 && missing && loose && it->kind == MC_IMPORT_ALBUM;
   if (can_assign) {
-    const mc_import_match *m = &it->matches[match];
-    g_simple_action_set_enabled(r->use_file, !state_busy(it->state));
+    g_simple_action_set_enabled(r->use_file, !state_busy(it->state) && !r->pending.active);
     for (guint i = 0; i < missing_rows->len; i++) {
       GtkWidget *row = g_ptr_array_index(missing_rows, i);
       const review_row *rr = g_object_get_data(G_OBJECT(row), "review-row");
       GtkWidget *button = gtk_menu_button_new();
       gtk_menu_button_set_label(GTK_MENU_BUTTON(button), mc_str(MC_STR_IMPORT_CHOOSE_FILE));
       gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
-      GMenuModel *model = files_menu(m, rr->track, candidates);
-      gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(button), model);
-      g_object_unref(model);
+      g_object_set_data(G_OBJECT(button), "track", GINT_TO_POINTER(rr->track));
+      gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(button), create_files_menu, r, NULL);
       adw_action_row_add_suffix(ADW_ACTION_ROW(row), button);
       gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
       g_object_set_data(G_OBJECT(row), "choose-file", button);
     }
+    r->candidates = g_array_ref(candidates);
   }
   g_ptr_array_free(missing_rows, TRUE);
-  g_array_free(candidates, TRUE);
+  g_array_unref(candidates);
 
   if (match >= 0) {
     char *text = can_assign ? g_strdup_printf("%s. %s", mc_str(MC_STR_LINUX_IMPORT_TRACKS_TEXT),
@@ -785,6 +818,56 @@ static void review_fill_tracks(review *r, int match) {
     adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(r->tracks_group), text);
     g_free(text);
   }
+  show_pending(r);
+}
+
+/* The review's buttons and track list actions, for an item that is busy (or has a file
+ * mc_import_assign is waiting on). */
+static void review_set_busy(review *r, gboolean busy) {
+  const mc_import_item *it = r->snap;
+  gtk_widget_set_sensitive(r->use, !busy && it->match_count > 0);
+  gtk_widget_set_sensitive(r->as_is, !busy);
+  gtk_widget_set_sensitive(r->skip, !busy && it->state != MC_IMPORT_DONE);
+  gtk_widget_set_sensitive(r->search, !busy);
+  /* Albums and single tracks alike; once it has run, a manual search brings it back. */
+  gtk_widget_set_sensitive(r->wider, !busy && !it->searched_wider && !r->v->offline);
+  if (busy) g_simple_action_set_enabled(r->use_file, FALSE);
+}
+
+/* Shows the pending file (r->pending) as its track already: on the track's row in place of
+ * its Choose File menu, and its own row gone. The rows are as the snapshot from before the
+ * assign has them. */
+static void show_pending(review *r) {
+  if (!r->pending.active || r->pending.match != r->selected) return;
+  GtkWidget *track = NULL, *file = NULL;
+  for (GtkWidget *w = gtk_widget_get_first_child(r->tracks); w; w = gtk_widget_get_next_sibling(w)) {
+    const review_row *rr = g_object_get_data(G_OBJECT(w), "review-row");
+    if (!rr) continue;
+    if (rr->track >= 0 && rr->track == r->pending.track) track = w;
+    else if (rr->track < 0 && rr->from_item == r->pending.from_item && rr->file == r->pending.file) file = w;
+  }
+  if (!track || !file) return;
+  mc_import_item *other = NULL;
+  const mc_import_item *from = r->snap;
+  if (r->pending.from_item != r->item) {
+    if (!r->v->imp || mc_import_item_get(r->v->imp, r->pending.from_item, &other) != MC_OK) return;
+    from = other;
+  }
+  if (r->pending.file < from->file_count) {
+    const mc_import_file *f = &from->files[r->pending.file];
+    char sub[1024] = "", len[32];
+    join(sub, sizeof sub, file_name(f->path));
+    join(sub, sizeof sub, f->title);
+    format_length(f->duration_ms, len, sizeof len);
+    join(sub, sizeof sub, len);
+    adw_action_row_set_subtitle(ADW_ACTION_ROW(track), sub);
+    GtkWidget *button = g_object_get_data(G_OBJECT(track), "choose-file");
+    if (button) adw_action_row_remove(ADW_ACTION_ROW(track), button);
+    g_object_set_data(G_OBJECT(track), "choose-file", NULL);
+    gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(track), FALSE);
+    gtk_list_box_remove(GTK_LIST_BOX(r->tracks), file);
+  }
+  mc_import_item_free(other);
 }
 
 /* A click on a missing track, or Enter on it, opens its Choose File menu; not a Ctrl or
@@ -836,7 +919,7 @@ static void on_tracks_menu(GtkGestureClick *click, int n_press, double x, double
   if (!track || tracks != 1) return; /* only for a missing track */
   gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
 
-  gboolean ok = !state_busy(it->state) && selected == 2 && files == 1;
+  gboolean ok = !state_busy(it->state) && !r->pending.active && selected == 2 && files == 1;
   r->assign_track = track->track;
   r->assign_from = ok ? file->from_item : -1;
   r->assign_file = ok ? file->file : -1;
@@ -857,30 +940,37 @@ static void on_tracks_menu(GtkGestureClick *click, int n_press, double x, double
   gtk_popover_popup(GTK_POPOVER(r->menu));
 }
 
-static void on_assign(GSimpleAction *action, GVariant *param, gpointer data) {
-  (void)action, (void)param;
-  review *r = data;
-  if (!r->v->imp || r->assign_from < 0) return;
-  if (mc_import_assign(r->v->imp, r->item, r->selected, r->assign_track, r->assign_from, r->assign_file) == MC_OK) {
-    r->v->idle = FALSE; /* the import thread writes the item again; the dialog stays open */
+/* Makes from_item's file `file` track `track` of the shown match. The track list shows it at
+ * once; the import thread writes the item when it gets to it, and the review refreshes then
+ * (the dialog stays open). */
+static void review_assign(review *r, int track, int from_item, int file) {
+  if (!r->v->imp || r->selected < 0 || r->pending.active) return;
+  if (mc_import_assign(r->v->imp, r->item, r->selected, track, from_item, file) == MC_OK) {
+    r->v->idle = FALSE; /* the import thread writes the item again */
+    r->pending.active = TRUE;
+    r->pending.match = r->selected;
+    r->pending.track = track;
+    r->pending.from_item = from_item;
+    r->pending.file = file;
+    show_pending(r);
+    review_set_busy(r, TRUE);
     update_status(r->v);
   } else {
     alert(GTK_WIDGET(r->dialog), mc_str(MC_STR_LINUX_IMPORT_ITEM_BUSY_TITLE), mc_str(MC_STR_IMPORT_ITEM_BUSY));
   }
 }
 
+static void on_assign(GSimpleAction *action, GVariant *param, gpointer data) {
+  (void)action, (void)param;
+  review *r = data;
+  if (r->assign_from >= 0) review_assign(r, r->assign_track, r->assign_from, r->assign_file);
+}
+
 static void on_use_file(GSimpleAction *action, GVariant *param, gpointer data) {
   (void)action;
-  review *r = data;
   int track, from_item, file;
   g_variant_get(param, "(iii)", &track, &from_item, &file);
-  if (!r->v->imp || r->selected < 0) return;
-  if (mc_import_assign(r->v->imp, r->item, r->selected, track, from_item, file) == MC_OK) {
-    r->v->idle = FALSE; /* as Use as Track: the item is written again and the dialog stays open */
-    update_status(r->v);
-  } else {
-    alert(GTK_WIDGET(r->dialog), mc_str(MC_STR_LINUX_IMPORT_ITEM_BUSY_TITLE), mc_str(MC_STR_IMPORT_ITEM_BUSY));
-  }
+  review_assign(data, track, from_item, file); /* as Use as Track */
 }
 
 static void on_match_toggled(GtkCheckButton *check, gpointer data) {
@@ -901,6 +991,7 @@ static void review_load(review *r) {
   }
   const mc_import_item *it = r->snap;
   gboolean busy = state_busy(it->state);
+  if (it->state == MC_IMPORT_WRITING) r->pending.active = FALSE; /* the thread has taken it up */
 
   const char *unknown = mc_str(MC_STR_UNKNOWN_VALUE);
   const char *album = it->album ? it->album : it->file_count ? file_name(it->files[0].path) : unknown;
@@ -976,13 +1067,7 @@ static void review_load(review *r) {
     : it->error             ? mc_str(MC_STR_LINUX_IMPORT_MATCHES_NONE_YET)
                             : mc_str(MC_STR_LINUX_IMPORT_MATCHES_NOTHING));
   review_fill_tracks(r, sel); /* and the tracks' description */
-
-  gtk_widget_set_sensitive(r->use, !busy && it->match_count > 0);
-  gtk_widget_set_sensitive(r->as_is, !busy);
-  gtk_widget_set_sensitive(r->skip, !busy && it->state != MC_IMPORT_DONE);
-  gtk_widget_set_sensitive(r->search, !busy);
-  /* Albums and single tracks alike; once it has run, a manual search brings it back. */
-  gtk_widget_set_sensitive(r->wider, !busy && !it->searched_wider && !v->offline);
+  review_set_busy(r, busy || r->pending.active);
 }
 
 static void review_done(review *r, mc_status st) {
@@ -1042,6 +1127,7 @@ static void on_review_closed(AdwDialog *dialog, gpointer data) {
   if (r->v->rev == r) r->v->rev = NULL;
   g_clear_pointer(&r->menu, gtk_widget_unparent);
   mc_import_item_free(r->snap);
+  g_clear_pointer(&r->candidates, g_array_unref);
   g_atomic_rc_box_release(r->v);
   g_free(r);
 }
