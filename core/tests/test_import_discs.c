@@ -194,14 +194,23 @@ static mc_import_item *get(mc_import *imp, int idx) {
   return it;
 }
 
+/* Whether path ends in tail, taking '/' and '\\' as the same. */
+static int ends_with_path(const char *path, const char *tail) {
+  size_t len = path ? strlen(path) : 0, n = strlen(tail);
+  if (len < n) return 0;
+  for (const char *a = path + len - n; *tail; a++, tail++) {
+    int sa = *a == '/' || *a == '\\', st = *tail == '/' || *tail == '\\';
+    if (sa != st || (!sa && *a != *tail)) return 0;
+  }
+  return 1;
+}
+
 /* The item whose folder ends in folder, or -1. */
 static int find_item(mc_import *imp, const char *folder) {
-  size_t n = strlen(folder);
   for (int i = 0; i < mc_import_item_count(imp); i++) {
     mc_import_item *it = get(imp, i);
     if (!it) continue;
-    size_t len = it->folder ? strlen(it->folder) : 0;
-    int same = len >= n && strcmp(it->folder + len - n, folder) == 0;
+    int same = ends_with_path(it->folder, folder);
     mc_import_item_free(it);
     if (same) return i;
   }
