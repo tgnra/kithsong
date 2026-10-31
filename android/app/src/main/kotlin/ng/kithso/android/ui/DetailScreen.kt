@@ -52,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -192,6 +193,24 @@ fun DetailScreen(
             val columns = albumColumns(maxWidth)
             val group = ref.kind == CollectionRef.Kind.AlbumGroup
             ArtBackdrop(rememberArtColors(picture ?: list?.art), Modifier.matchParentSize())
+            val density = LocalDensity.current
+            val statusBarPx = WindowInsets.statusBars.getTop(density)
+            val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            // An artist's page jumps between its headings, and through its tracks by title.
+            val scrollEntries = if (ref.kind == CollectionRef.Kind.Artist && list != null) {
+                val titles = listOf(
+                    stringResource(R.string.section_albums),
+                    stringResource(R.string.section_singles),
+                    stringResource(R.string.tracks_title),
+                )
+                val other = stringResource(R.string.fast_scroll_other)
+                val hasActions = !isEditing && (tracks.isNotEmpty() || list.canReshuffle)
+                remember(list, albums, tracks, hasActions, titles, other) {
+                    artistScrollEntries(albums.size, list.singles.size, tracks, hasActions, titles, other)
+                }
+            } else {
+                emptyList()
+            }
             LazyColumn(
                 state = listState,
                 contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
@@ -313,9 +332,51 @@ fun DetailScreen(
                     }
                 }
             }
+            FastScroller(
+                listState,
+                scrollEntries,
+                scrollOffset = -statusBarPx,
+                modifier = Modifier
+                    .matchParentSize()
+                    .windowInsetsPadding(sides)
+                    .padding(top = with(density) { statusBarPx.toDp() } + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
+            )
         }
     }
 }
+
+/**
+ * The fast scroll strip's entries for an artist's page, laid out as [DetailScreen] lays it out:
+ * the header, the play buttons if [actions], then the [albumCount] albums' strip, the
+ * [singleCount] singles and the [tracks] (in order of title), with headings ([titles]: albums,
+ * singles, tracks) only when there's more than the tracks. Letters for a long enough list of
+ * tracks; [other] is the label of tracks under [OTHER_LETTER].
+ */
+private fun artistScrollEntries(
+    albumCount: Int,
+    singleCount: Int,
+    tracks: List<Track>,
+    actions: Boolean,
+    titles: List<String>,
+    other: String,
+): List<FastScrollEntry> = buildList {
+    val (albumsTitle, singlesTitle, tracksTitle) = titles
+    var i = if (actions) 2 else 1
+    if (albumCount > 0) add(FastScrollEntry(albumsTitle, i++, heading = true))
+    if (singleCount > 0) {
+        add(FastScrollEntry(singlesTitle, i, heading = true))
+        i += 1 + singleCount
+    }
+    val headed = (albumCount > 0 || singleCount > 0) && tracks.isNotEmpty()
+    if (headed) add(FastScrollEntry(tracksTitle, i++, heading = true))
+    val start = i
+    if (tracks.size >= TRACK_LETTERS_FROM) {
+        letterEntries(this, tracks.map { it.title }, other, tracksTitle.takeIf { headed }) { start + it }
+    }
+}
+
+/** How many tracks an artist's page has before the fast scroll strip has their letters. */
+private const val TRACK_LETTERS_FROM = 12
 
 /** Play and Shuffle ([onPlay], with whether to shuffle), and Reshuffle, if given. */
 @Composable

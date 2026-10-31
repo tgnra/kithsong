@@ -388,13 +388,6 @@ static jobjectArray named_array(JNIEnv *env, const void *items, int n,
   return out;
 }
 
-static void artist_at(const void *items, int i, const char **uid, const char **name, int *count) {
-  const mc_artist_info *a = &((const mc_artist_info *)items)[i];
-  *uid = a->uid;
-  *name = a->name;
-  *count = a->album_count;
-}
-
 static void album_group_at(const void *items, int i, const char **uid, const char **name,
                            int *count) {
   const mc_album_group_info *g = &((const mc_album_group_info *)items)[i];
@@ -403,6 +396,39 @@ static void album_group_at(const void *items, int i, const char **uid, const cha
   *count = g->album_count;
 }
 
+/* An ArtistInfo[] of list's artists, or NULL with an exception pending. Frees list, which may
+ * be NULL when it's empty. */
+static jobjectArray artist_array(JNIEnv *env, mc_artist_list *list) {
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/ArtistInfo");
+  jmethodID ctor =
+    info ? (*env)->GetMethodID(env, info, "<init>",
+                               "(Ljava/lang/String;Ljava/lang/String;IILjava/lang/String;)V")
+         : NULL;
+  int n = list ? list->count : 0;
+  jobjectArray out = ctor ? (*env)->NewObjectArray(env, n, info, NULL) : NULL;
+  for (int i = 0; out && i < n; i++) {
+    const mc_artist_info *a = &list->items[i];
+    const char *cname = a->name ? a->name : "";
+    jstring uid = new_string(env, a->uid);
+    jstring name = new_string(env, cname);
+    jstring sort = new_string(env, a->sort_name ? a->sort_name : cname);
+    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)a->album_count,
+                                     (jint)a->track_count, sort);
+    if (!item) {
+      out = NULL;
+      break;
+    }
+    (*env)->SetObjectArrayElement(env, out, i, item);
+    (*env)->DeleteLocalRef(env, item);
+    (*env)->DeleteLocalRef(env, uid);
+    (*env)->DeleteLocalRef(env, name);
+    (*env)->DeleteLocalRef(env, sort);
+  }
+  mc_artist_list_free(list);
+  return out;
+}
+
+/* Every artist (mc_library_list_artists()), as ArtistInfo[] with no track counts. */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListArtists(JNIEnv *env,
                                                                                 jclass cls,
                                                                                 jlong handle) {
@@ -413,11 +439,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListArtists
     throw_status(env, st);
     return NULL;
   }
-  /* An empty list may be NULL. */
-  jobjectArray out =
-    named_array(env, list ? list->items : NULL, list ? list->count : 0, artist_at);
-  mc_artist_list_free(list);
-  return out;
+  return artist_array(env, list);
 }
 
 /* The artists with something here (mc_library_list_artists_here()), as ArtistInfo[]. */
@@ -425,34 +447,13 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListArtists
                                                                                     jclass cls,
                                                                                     jlong handle) {
   (void)cls;
-  jclass info = (*env)->FindClass(env, "ng/kithso/core/ArtistInfo");
-  if (!info) return NULL;
-  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V");
-  if (!ctor) return NULL;
-
   mc_artist_list *list = NULL;
   mc_status st = mc_library_list_artists_here((mc_library *)(intptr_t)handle, &list);
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;
   }
-  jobjectArray out = (*env)->NewObjectArray(env, list->count, info, NULL);
-  for (int i = 0; out && i < list->count; i++) {
-    const mc_artist_info *a = &list->items[i];
-    jstring uid = new_string(env, a->uid);
-    jstring name = new_string(env, a->name ? a->name : "");
-    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)a->album_count, (jint)a->track_count);
-    if (!item) {
-      out = NULL;
-      break;
-    }
-    (*env)->SetObjectArrayElement(env, out, i, item);
-    (*env)->DeleteLocalRef(env, item);
-    (*env)->DeleteLocalRef(env, uid);
-    (*env)->DeleteLocalRef(env, name);
-  }
-  mc_artist_list_free(list);
-  return out;
+  return artist_array(env, list);
 }
 
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListAlbumGroups(JNIEnv *env,

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
@@ -498,20 +499,37 @@ private fun ProfileItemsDialog(
                         error != null -> Note(stringResource(R.string.list_failed, statusText(context, error!!)))
                         list == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                         list.isEmpty() -> Note(stringResource(kind.emptyText))
-                        else -> LazyColumn(
-                            contentPadding = WindowInsets.navigationBars.union(WindowInsets(bottom = 8.dp)).asPaddingValues(),
-                            modifier = Modifier.fillMaxSize(),
-                        ) {
-                            items(list, key = { it.uid }) { choice ->
-                                val item = ProfileItem(kind, choice.uid)
-                                val checked = item in selected
-                                ListItem(
-                                    leadingContent = { Checkbox(checked = checked, onCheckedChange = null) },
-                                    headlineContent = { Text(choice.name) },
-                                    supportingContent = choiceDetail(choice)?.let { detail -> { Text(detail) } },
-                                    modifier = Modifier.toggleable(checked, role = Role.Checkbox) { onToggle(item, it) },
-                                )
+                        else -> {
+                            val listState = rememberLazyListState()
+                            // Each list is in the core's order: albums by artist, the rest by name.
+                            val other = stringResource(R.string.fast_scroll_other)
+                            val scrollEntries = remember(list, other) {
+                                buildList<FastScrollEntry> { letterEntries(this, list.map { it.sortKey }, other) { it } }
                             }
+                            LazyColumn(
+                                state = listState,
+                                contentPadding = WindowInsets.navigationBars.union(WindowInsets(bottom = 8.dp)).asPaddingValues(),
+                                modifier = Modifier.fillMaxSize(),
+                            ) {
+                                items(list, key = { it.uid }) { choice ->
+                                    val item = ProfileItem(kind, choice.uid)
+                                    val checked = item in selected
+                                    ListItem(
+                                        leadingContent = { Checkbox(checked = checked, onCheckedChange = null) },
+                                        headlineContent = { Text(choice.name) },
+                                        supportingContent = choiceDetail(choice)?.let { detail -> { Text(detail) } },
+                                        modifier = Modifier.toggleable(checked, role = Role.Checkbox) { onToggle(item, it) },
+                                    )
+                                }
+                            }
+                            FastScroller(
+                                listState,
+                                scrollEntries,
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .windowInsetsPadding(WindowInsets.navigationBars)
+                                    .padding(top = 8.dp, bottom = 8.dp, end = 2.dp),
+                            )
                         }
                     }
                 }
