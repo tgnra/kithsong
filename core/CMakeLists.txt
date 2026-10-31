@@ -106,6 +106,7 @@ add_library(musiccore STATIC
   src/sync/session.c
   src/sync/plan.c
   src/sync/transfer.c
+  src/sync/encode.c
   src/sync/reach.c
   "${_sync_schema_c}")
 add_library(musiccore::musiccore ALIAS musiccore)

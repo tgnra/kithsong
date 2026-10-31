@@ -1,7 +1,7 @@
 /* Opus transcoding: a generated, tagged WAV with a cover.jpg beside it is transcoded and
  * read back with opusfile, with the player's decoder, and with TagLib. Also the cache hit,
- * the size estimate, the LRU trim, failures leaving nothing behind, two encodes at once,
- * and the benchmark. */
+ * the size estimate, the LRU trim, failures leaving nothing behind, encodes at once (two
+ * files, and three of one file), and the benchmark. */
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -81,6 +81,18 @@ typedef struct job {
   char *out;
 } job;
 
+static void count_entry(void *user, const char *name, int is_dir) {
+  (void)name;
+  (void)is_dir;
+  (*(int *)user)++;
+}
+
+/* Entries directly in dir. */
+static int dir_entries(const char *dir) {
+  int n = 0;
+  return mc_list_dir(dir, count_entry, &n) == MC_OK ? n : -1;
+}
+
 static void run_job(void *arg) {
   job *j = arg;
   mc_transcode_opts opts = {MC_FORMAT_OPUS, 96};
@@ -122,9 +134,9 @@ static void check_transcode(const char *dir) {
            cache, MC_PATH_SEP, MC_PATH_SEP);
   CHECK_STR(out, expected);
   CHECK(out && mc_file_exists(out));
-  char part[1100];
-  snprintf(part, sizeof part, "%s.part", expected);
-  CHECK(!mc_file_exists(part));
+  char uid_dir[1100];
+  snprintf(uid_dir, sizeof uid_dir, "%s%c0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e", cache, MC_PATH_SEP);
+  CHECK(dir_entries(uid_dir) == 1); /* no part file left */
 
   /* opusfile reads it back at 48 kHz, stereo, 1.5 s long (±20 ms). */
   OggOpusFile *of = out ? op_open_file(out, NULL) : NULL;
@@ -238,6 +250,33 @@ static void check_transcode(const char *dir) {
   if (of) op_free(of);
   mc_free(a.out);
   mc_free(b.out);
+
+  /* Three encodes of the same file at once: each writes its own part file, so the one left
+   * is whole, and nothing else is. */
+  {
+    job same[3];
+    mc_thread ts[3];
+    for (int i = 0; i < 3; i++) {
+      same[i] = (job){cache, "same", src, MC_ERR_IO, NULL};
+      CHECK(mc_thread_start(&ts[i], run_job, &same[i]) == MC_OK);
+    }
+    for (int i = 0; i < 3; i++) mc_thread_join(&ts[i]);
+    for (int i = 0; i < 3; i++) {
+      CHECK(same[i].st == MC_OK);
+      CHECK(same[i].out && same[0].out && !strcmp(same[i].out, same[0].out));
+    }
+    of = same[0].out ? op_open_file(same[0].out, NULL) : NULL;
+    CHECK(of != NULL);
+    if (of) {
+      ogg_int64_t total = op_pcm_total(of, -1);
+      CHECK(total >= 72000 - 960 && total <= 72000 + 960);
+      op_free(of);
+    }
+    char *same_dir = join(cache, "same");
+    CHECK(dir_entries(same_dir) == 1);
+    free(same_dir);
+    for (int i = 0; i < 3; i++) mc_free(same[i].out);
+  }
 
   /* Trim: everything fits, then only the most recently used, then nothing. */
   CHECK(mc_transcode_cache_trim(cache, INT64_MAX) == MC_OK);

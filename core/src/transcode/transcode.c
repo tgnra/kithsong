@@ -1,7 +1,10 @@
 /* Opus transcodes for sync.
  *
  *   decoder (playback/decoder.c) -> downmix to stereo -> libopusenc (Speex resampler to
- *   48 kHz, then libopus) -> <path>.part -> rename into place
+ *   48 kHz, then libopus) -> <path>.<random>.part -> rename into place
+ *
+ * Each encode writes a part file of its own, so two of the same file can run at once: the
+ * last rename wins, and both files are whole.
  *
  * Tags are read from the source with TagLib (tag_io.cpp) and written as Opus comments while
  * encoding, so the file is complete the moment it's renamed into place. The cover is the
@@ -194,17 +197,31 @@ mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const
   snprintf(name, sizeof name, "opus-%d.opus", opts->bitrate_kbps);
   char *uid_dir = concat(cache_dir, MC_PATH_SEP, file_uid);
   char *path = uid_dir ? concat(uid_dir, MC_PATH_SEP, name) : NULL;
-  char *part = path ? concat(path, 0, ".part") : NULL;
-  mc_status st = MC_ERR_NOMEM;
+  unsigned char nonce[6];
+  char suffix[32];
+  mc_status st = mc_random_bytes(nonce, sizeof nonce);
+  snprintf(suffix, sizeof suffix, ".%02x%02x%02x%02x%02x%02x.part", nonce[0], nonce[1],
+           nonce[2], nonce[3], nonce[4], nonce[5]);
+  char *part = path && st == MC_OK ? concat(path, 0, suffix) : NULL;
+  st = MC_ERR_NOMEM;
   if (part && mc_file_exists(path)) {
     mc_touch(path); /* for the LRU trim */
     st = MC_OK;
-  } else if (part && (st = mc_mkdirs(uid_dir)) == MC_OK) {
-    st = encode(src_path, part, opts->bitrate_kbps);
-    if (st == MC_OK) st = mc_rename(part, path, 1);
-    if (st != MC_OK) {
+  } else if (part) {
+    /* Twice if another encode's cleanup took the folder away from under this one. */
+    for (int tries = 0; tries < 2; tries++) {
+      if ((st = mc_mkdirs(uid_dir)) != MC_OK) break;
+      st = encode(src_path, part, opts->bitrate_kbps);
+      if (st == MC_OK) {
+        st = mc_rename(part, path, 1);
+        /* Another encode of it got there first (on Windows, it may be open to be sent). */
+        if (st != MC_OK && mc_file_exists(path)) st = MC_OK;
+      }
+      if (st == MC_OK) break;
+      int gone = !mc_file_exists(uid_dir);
       if (mc_file_exists(part)) mc_remove(part);
       mc_rmdir(uid_dir); /* only if it's empty */
+      if (!gone) break;
     }
   }
   if (st == MC_OK) {

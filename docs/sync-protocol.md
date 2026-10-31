@@ -400,7 +400,7 @@ Message types:
 | 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256", "source_sha256"?}` |
 | 0x24 | `FILE_DATA`   | raw bytes, in order, until `size` bytes have been sent |
 | 0x25 | `FILE_ERR`    | `{"track", "reason"}`, sent instead of `FILE_HDR` |
-| 0x26 | `PREPARE_REQ` | `{"device", "tracks": [uid], "kbps"}`: transcode into the cache for a device that is offline; no reply |
+| 0x26 | `PREPARE_REQ` | `{"device", "tracks": [uid], "kbps"}`: transcode into the cache for a device that is offline, or (`device` the receiver itself) ahead of its `FILE_REQ`s; no reply |
 | 0x27 | `FILES_DONE`  | `{}`: the receiver has asked for everything it wants; the turn passes |
 | 0x28 | `COVER_REQ`   | `{"album"}`; only to a peer whose `HELLO` has `"covers": true` |
 | 0x29 | `COVER_HDR`   | `{"album", "ext", "size", "sha256"}`, then the image as `FILE_DATA`; or `FILE_ERR {"album", "reason"}` instead |
@@ -798,7 +798,16 @@ music lives nowhere else.
    weighted by `cpu_score`, the same every time; one that falls to another member waits for
    the session with that member.
 4. `FILE_REQ` → `FILE_HDR` + `FILE_DATA` (or `FILE_ERR`, reasons `missing`, `no_transcode`,
-   `io`, `format`).
+   `io`, `format`), one file at a time.
+   - Encode-ahead. Before its first `FILE_REQ`, the receiver sends `PREPARE_REQ` with its
+     own uid as `device`, listing the Opus tracks it is about to fetch that weren't `cached`
+     and fall to the peer, in the order it will ask for them (up to 1000 per message, a new
+     one where `kbps` changes). The sender queues their encodes in that order, behind any
+     `FILE_REQ` waiting for one and ahead of `PREPARE_REQ`s for offline members, so it
+     encodes while it sends and is usually ahead of the requests. A `FILE_REQ` for a track
+     whose encode is queued moves it to the front, and one for a track being encoded waits
+     for that encode: no file is encoded twice at once. What is still queued when the turn
+     ends is dropped, unless a `PREPARE_REQ` for an offline member wants it too. A sender that may not transcode ignores it, as any `PREPARE_REQ`.
    - The sender computes `sha256` over the exact bytes it sends (the recorded one if the
      file's size and mtime still match its row). `file` is the original's file uid: its own,
      or for a transcode the original it was made from. `format` is `"original"` when a lossy
@@ -860,14 +869,21 @@ up to 1000 tracks, if the session's peer is the best online holder: it may trans
 every original, and has the highest `cpu_score` of those (the lower uid on a tie). It sends
 once per change in the Opus tracks that member wants, as far as this device remembers
 (in memory: after a restart it sends again, and cached files make that cheap). The holder
-encodes in the background, so the session goes on; one that may not transcode ignores it.
+encodes in the background (on the pool, after any encode-ahead; see
+[Lossy copies](#lossy-copies)), so the session goes on, and keeps at it after the session
+ends; one that may not transcode ignores it.
 
 ## Lossy copies
 
 - Transcodes are Opus (libopusenc), cached on the transcoding device in
-  `<config>/transcode-cache/<file_uid>/opus-<kbps>.opus`, with an LRU size cap of 8 GiB,
-  trimmed after a session or `PREPARE_REQ` that encoded something. One encode runs at a
-  time per device.
+  `<config>/transcode-cache/<file_uid>/opus-<kbps>.opus`, with an LRU size cap of 8 GiB.
+  Each encode writes a part file of its own and renames it into place, so two encodes of
+  the same file can't corrupt it.
+- Encodes run on a pool shared by every session, `FILE_REQ`s and `PREPARE_REQ`s alike: as
+  many encodes at once as the device has logical cores less one (at least one), or one
+  when it isn't `on_power`. Once the pool has encoded something, the cache is trimmed when
+  no encode is queued or running and no cached file is being sent, so the trim never
+  deletes a file being written or about to be sent.
 - The receiver stores the copy as a `files` row with `source_file_uid` and
   `source_peer_uid` set. It is linked to the same `track_uid`, so it is never imported as a
   new track and never offered back to anyone as an original.

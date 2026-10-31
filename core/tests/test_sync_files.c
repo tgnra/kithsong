@@ -3,7 +3,8 @@
  * is the group's archive; B's profile decides what it fetches: originals, then Opus at
  * 64 kbps, then a selection. Also checksums, reconcile (unwanted, wrong-format, deleted and
  * unknown files, and the originals imported on B that go once the archive holds them),
- * album covers that exist only as an image file beside the originals, sync_status,
+ * album covers that exist only as an image file beside the originals, encode-ahead of the
+ * Opus copies, sync_status,
  * mc_sync_verify(), and a track whose original an import on A replaced with a better file
  * (B's copy made from the old one is replaced too). */
 #ifndef _WIN32
@@ -848,9 +849,18 @@ int main(int argc, char **argv) {
     CHECK(b_files(&b, NULL) == 4);
   }
 
-  /* B: Opus at 64 kbps. A transcodes; B swaps its WAVs for Opus files. */
+  /* B: Opus at 64 kbps. A transcodes; B swaps its WAVs for Opus files. B asks for the
+   * encodes ahead (encode-ahead), so each FILE_REQ finds its track queued, being encoded or
+   * in the cache, and nothing is encoded twice. The cache is trimmed once A is idle. */
   set_profile(&a, b.uid, 64, NULL);
+  mc_encode_stats before, after;
+  mc_encode_pool_stats(a.sync->enc, &before);
   CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+  mc_encode_pool_stats(a.sync->enc, &after);
+  CHECK(after.encoded - before.encoded == 4);
+  CHECK(after.unasked == before.unasked);
+  CHECK(after.trims > before.trims);
+  CHECK(after.peak >= 1 && after.peak <= (mc_cpu_count() > 2 ? mc_cpu_count() - 1 : 1));
   CHECK(rb.files_received == 4 && rb.files_deleted == 4 && rb.files_missing == 0);
   CHECK(b_files(&b, NULL) == 4);
   CHECK(b_files(&b, "format = 'opus' AND bitrate_kbps = 64") == 4);

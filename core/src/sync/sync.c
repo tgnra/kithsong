@@ -1362,7 +1362,6 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
     return MC_ERR_NOMEM;
   }
   mc_mutex_init(&sync->cb_lock);
-  mc_mutex_init(&sync->transcode_lock);
   mc_mutex_init(&sync->api_lock);
   mc_mutex_init(&sync->lock);
   mc_cond_init(&sync->cond);
@@ -1376,7 +1375,12 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   clean_name(device_name, sync->name);
   if (!sync->name[0]) clean_name(sync->host[0] ? sync->host : "Kithsong", sync->name);
 
-  mc_status st = mc_sync_conn_open(sync, &sync->api);
+  size_t len = strlen(config_dir) + sizeof MC_TRANSCODE_CACHE_DIR + 1;
+  char *cache = malloc(len);
+  if (cache) snprintf(cache, len, "%s%c%s", config_dir, MC_PATH_SEP, MC_TRANSCODE_CACHE_DIR);
+  mc_status st = cache ? mc_encode_pool_new(cache, MC_TRANSCODE_CACHE_MAX, &sync->enc) : MC_ERR_NOMEM;
+  free(cache);
+  if (st == MC_OK) st = mc_sync_conn_open(sync, &sync->api);
   if (st != MC_OK) {
     mc_sync_free(sync);
     return st;
@@ -1399,7 +1403,7 @@ void mc_sync_free(mc_sync *sync) {
   mc_mutex_destroy(&sync->lock);
   mc_mutex_destroy(&sync->api_lock);
   mc_mutex_destroy(&sync->cb_lock);
-  mc_mutex_destroy(&sync->transcode_lock);
+  mc_encode_pool_free(sync->enc);
   free(sync->peers);
   free(sync->chans);
   free(sync->config_dir);
@@ -1434,6 +1438,7 @@ mc_status mc_sync_start(mc_sync *sync) {
   sync->stopping = 0;
   sync->started = 1;
   mc_mutex_unlock(&sync->lock);
+  mc_encode_pool_resume(sync->enc);
   char hints[MC_SYNC_HINTS_MAX];
   compute_hints(sync, hints);
   mc_mutex_lock(&sync->lock);
@@ -1501,6 +1506,8 @@ void mc_sync_stop(mc_sync *sync) {
   mc_thread_join(&sync->listen_thread);
   mc_thread_join(&sync->sched_thread);
   mc_discovery_stop(d);
+  /* Queued encodes go and a session waiting for one gives up; running ones finish. */
+  mc_encode_pool_stop(sync->enc);
   /* Workers may still be connecting; whatever they open now is aborted at once. */
   reap(sync, 1);
 

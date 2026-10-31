@@ -1,8 +1,9 @@
 /* What sync.c, session.c and pairing.c share: the mc_sync object, its peer table, and the
  * hooks tests use to run without discovery. Internal to core.
  *
- * Threads: the caller's (the API), the listener, the scheduler, discovery's, and one worker
- * per session or pairing. Each thread that touches the databases opens its own connections
+ * Threads: the caller's (the API), the listener, the scheduler, discovery's, one worker per
+ * session or pairing, and the encode pool's (encode.h), which touch no database and no
+ * session. Each thread that touches the databases opens its own connections
  * (mc_sync_conn), since a connection is used by one thread at a time. Everything in
  * mc_sync under "lock" is guarded by it; callbacks run under cb_lock, never under lock. */
 #ifndef MC_SYNC_INTERNAL_H
@@ -14,6 +15,7 @@
 #include "musiccore/library.h"
 #include "musiccore/sync.h"
 #include "sync/channel.h"
+#include "sync/encode.h"
 #include "sync/pair.h"
 #include "sync/sync_db.h"
 #include "util/platform.h"
@@ -102,9 +104,9 @@ struct mc_sync {
   void *user;
 
   mc_mutex cb_lock; /* one callback at a time */
-  mc_mutex transcode_lock; /* one transcode at a time: mc_transcode_cached() needs it per file */
   mc_mutex api_lock;
   mc_sync_conn api; /* the API's connections, under api_lock */
+  mc_encode_pool *enc; /* encodes into the transcode cache, for every session */
 
   mc_mutex lock;
   mc_cond cond; /* the scheduler waits here; also session and pairing hand-offs */

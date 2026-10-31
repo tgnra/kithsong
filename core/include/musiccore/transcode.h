@@ -3,8 +3,10 @@
  *
  *   <cache_dir>/<file_uid>/opus-<kbps>.opus
  *
- * Every function may be called from any thread. Calls for different files run
- * independently; two calls for the same file uid and bitrate must not overlap. */
+ * Every function may be called from any thread, and calls may overlap, even two for the same
+ * file uid and bitrate: each encode writes a part file of its own and renames it into place.
+ * A trim may delete a finished file the moment it appears, so callers keep it from running
+ * while they use one. */
 #ifndef MUSICCORE_TRANSCODE_H
 #define MUSICCORE_TRANSCODE_H
 
