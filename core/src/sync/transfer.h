@@ -37,6 +37,9 @@ void mc_transfer_write_status(mc_sync *sync, mc_sync_conn *c);
  * originals that mc_sync_remove_here() takes off this device. mc_trash(), unless a test
  * swaps it first. */
 extern mc_status (*mc_transfer_trash)(const char *path);
+/* Tests only: when set, called for each file received whole, before its hash is checked;
+ * non-zero fails the check. NULL by default. */
+extern int (*mc_transfer_test_corrupt)(const char *track);
 
 /* Copies the session's file counts into r. */
 void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r);

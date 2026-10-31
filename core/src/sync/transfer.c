@@ -6,9 +6,11 @@
  * wanted track is missing when no files row holds it in that format. The receiver asks the
  * peer what it has (HAVE_REQ), then fetches each missing track it can: an original, a
  * cached transcode, or a transcode the peer makes for it if the peer may transcode and the
- * work falls to it (see assigned_to_peer). Each file is written to <dest>.part while it is
- * hashed, and renamed into place only if the hash matches FILE_HDR's. A mismatch is retried
- * once; a second one counts the track as corrupt for this session.
+ * work falls to it (see assigned_to_peer). Requests are pipelined, up to FETCH_AHEAD of
+ * them out at once, and the peer answers them in order. Each file is written to
+ * <dest>.part while it is hashed, and renamed into place only if the hash matches
+ * FILE_HDR's. A mismatch is retried once, asked again behind the requests already out; a
+ * second one counts the track as corrupt for this session.
  *
  * Serving. Originals are sent as they are; Opus copies come from the transcode cache
  * (<config>/transcode-cache, see transcode.h), from a transcode this device received at
@@ -56,8 +58,11 @@
 #define HAVE_CHUNK 400
 #define HAVE_MAX 600
 #define PREPARE_CHUNK 1000
-/* How long a receiver waits for FILE_HDR: the sender may be encoding the file. */
+/* How long a receiver waits for each FILE_HDR: the sender may be encoding the file. */
 #define FETCH_WAIT_MS (10 * 60 * 1000)
+/* Requests (FILE_REQ, COVER_REQ) a receiver keeps outstanding, so the sender goes from one
+ * file to the next without waiting a round trip. */
+#define FETCH_AHEAD 3
 #define MAX_FILE_BYTES ((int64_t)4 << 30)
 /* The largest cover COVER_HDR may announce; a cover is held in memory whole. */
 #define MAX_COVER_BYTES ((int64_t)32 << 20)
@@ -822,10 +827,10 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   int kbps = (int)obj_int(req, "kbps");
   if (is_uid(t)) memcpy(track, t, MC_UID_STRLEN);
   int ok = is_uid(t) && format && (opus ? valid_bitrate(kbps) : !strcmp(format, "original"));
+  int retry = yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(req), "retry"));
   yyjson_doc_free(req);
-  /* Counted now: progress goes out once it's answered. */
-  if (!track[0] || strcmp(track, s->sends_last)) s->sends_done++;
-  memcpy(s->sends_last, track, MC_UID_STRLEN);
+  /* Counted now: progress goes out once it's answered. A retry is the same track. */
+  if (!retry) s->sends_done++;
   if (!ok) return send_file_err(s->ch, track, "format");
 
   mc_library *lib = s->conn->lib;
@@ -1131,23 +1136,27 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
   return st;
 }
 
-static mc_status fetch_cover(mc_session *s, const char *album, const char *dir);
+int (*mc_transfer_test_corrupt)(const char *track) = NULL;
 
-/* The album folder of a received file gets the peer's cover as soon as the file is in, when
+static mc_status ask_cover(mc_session *s, const char *album);
+static mc_status recv_cover(mc_session *s, const char *album, const char *dir);
+
+/* The folder of a received file (abs) gets the peer's cover as soon as the file is in, when
  * the album has art (albums.art_hash) and the folder no cover yet, so the album shows with
  * its art while the rest of it is still coming. Pictures embedded in the file are never
  * used: the cover file is the album's art. fetch_covers() catches any folder this missed.
- * abs is the received file. The return value is only for errors that end the session. */
-static mc_status ensure_cover(mc_session *s, const char *track, const char *abs) {
-  if (!s->peer_covers) return MC_OK; /* an older peer would end the session */
+ * Returns that folder, with its album in album, or NULL if it needs none. */
+static char *cover_needed(mc_session *s, const char *track, const char *abs,
+                          char album[MC_UID_STRLEN]) {
+  if (!s->peer_covers) return NULL; /* an older peer would end the session */
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(s->conn->lib),
                          "SELECT al.uid FROM tracks t JOIN albums al ON al.uid = t.album_uid"
                          " WHERE t.uid = ?1 AND al.art_hash IS NOT NULL",
                          -1, &stmt, NULL) != SQLITE_OK)
-    return MC_OK;
+    return NULL;
   sqlite3_bind_text(stmt, 1, track, -1, SQLITE_STATIC);
-  char album[MC_UID_STRLEN] = "";
+  album[0] = '\0';
   if (sqlite3_step(stmt) == SQLITE_ROW) {
     const char *a = (const char *)sqlite3_column_text(stmt, 0);
     if (is_uid(a)) memcpy(album, a, MC_UID_STRLEN);
@@ -1156,53 +1165,69 @@ static mc_status ensure_cover(mc_session *s, const char *track, const char *abs)
   char *dir = album[0] ? mc_strdup(abs) : NULL, *sep = dir ? strrchr(dir, MC_PATH_SEP) : NULL;
   if (!sep) {
     free(dir);
-    return MC_OK;
+    return NULL;
   }
   *sep = '\0';
   char *cover = mc_coverart_find(dir);
-  mc_status st = cover ? MC_OK : fetch_cover(s, album, dir);
-  free(cover);
-  free(dir);
-  return st;
+  if (cover) {
+    free(cover);
+    free(dir);
+    return NULL;
+  }
+  return dir;
 }
 
-/* FILE_REQ for t, then FILE_HDR and FILE_DATA into <dest>.part, renamed into place and
- * recorded if the hash matches. *got says how it went; the return value is only for errors
- * that end the session. */
-static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got) {
-  *got = GOT_FAILED;
-  mc_library *lib = s->conn->lib;
+/* FILE_REQ for t; retry marks the second ask after a mismatch, so the peer counts the
+ * track once. */
+static mc_status ask_file(mc_session *s, const mc_plan_track *t, int opus, int retry) {
   yyjson_mut_val *root;
   yyjson_mut_doc *doc = new_doc(&root);
   if (!doc) return MC_ERR_NOMEM;
   yyjson_mut_obj_add_strcpy(doc, root, "track", t->track_uid);
   yyjson_mut_obj_add_str(doc, root, "format", opus ? "opus" : "original");
   yyjson_mut_obj_add_int(doc, root, "kbps", opus ? t->format.bitrate_kbps : 0);
-  mc_status st = send_doc(s->ch, MC_MSG_FILE_REQ, doc);
-  if (st != MC_OK) return st;
+  if (retry) yyjson_mut_obj_add_bool(doc, root, "retry", true);
+  return send_doc(s->ch, MC_MSG_FILE_REQ, doc);
+}
 
+/* The answer to ask_file(s, t, opus): FILE_HDR and FILE_DATA into <dest>.part, renamed into
+ * place and recorded if the hash matches, or FILE_ERR. *got says how it went, and on GOT_OK
+ * *landed is the file's absolute path. The return value is only for errors that end the
+ * session. */
+static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int *got,
+                           char **landed) {
+  *got = GOT_FAILED;
+  *landed = NULL;
+  mc_library *lib = s->conn->lib;
   uint8_t type;
   const unsigned char *payload;
   size_t len;
   mc_channel_set_timeout(s->ch, FETCH_WAIT_MS); /* it may be encoding */
-  st = mc_channel_recv(s->ch, &type, &payload, &len);
+  mc_status st = mc_channel_recv(s->ch, &type, &payload, &len);
   mc_channel_set_timeout(s->ch, mc_channel_default_timeout());
   if (st != MC_OK) return st;
+  if (type != MC_MSG_FILE_HDR && type != MC_MSG_FILE_ERR) return MC_ERR_FORMAT;
+
+  /* The header, copied out before the next receive. Answers come in the order asked, so
+   * either one must be t's. */
+  yyjson_doc *hdr = parse(payload, len);
+  if (!hdr) return MC_ERR_FORMAT;
+  const char *h_track = obj_str(hdr, "track");
+  if (!h_track || strcmp(h_track, t->track_uid) != 0) {
+    yyjson_doc_free(hdr);
+    return MC_ERR_FORMAT;
+  }
   if (type == MC_MSG_FILE_ERR) {
+    yyjson_doc_free(hdr);
     *got = GOT_REFUSED;
     return MC_OK;
   }
-  if (type != MC_MSG_FILE_HDR) return MC_ERR_FORMAT;
-
-  /* The header, copied out before the next receive. */
-  yyjson_doc *hdr = parse(payload, len);
-  if (!hdr) return MC_ERR_FORMAT;
-  const char *h_track = obj_str(hdr, "track"), *h_file = obj_str(hdr, "file"),
-             *h_format = obj_str(hdr, "format"), *h_ext = obj_str(hdr, "ext"),
-             *h_sha = obj_str(hdr, "sha256"), *h_source_sha = obj_str(hdr, "source_sha256");
+  const char *h_file = obj_str(hdr, "file"), *h_format = obj_str(hdr, "format"),
+             *h_ext = obj_str(hdr, "ext"), *h_sha = obj_str(hdr, "sha256"),
+             *h_source_sha = obj_str(hdr, "source_sha256");
   int64_t size = obj_int(hdr, "size");
   int kbps = (int)obj_int(hdr, "kbps");
-  if (!h_track || strcmp(h_track, t->track_uid) != 0 || size < 0 || size > MAX_FILE_BYTES) {
+  if (size < 0 || size > MAX_FILE_BYTES) {
     yyjson_doc_free(hdr);
     return MC_ERR_FORMAT; /* can't even tell how much follows */
   }
@@ -1253,8 +1278,9 @@ static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got
   mbedtls_sha256_free(&ctx);
   hex(digest, got_sha);
   if (f && fclose(f) != 0) write_ok = 0;
+  int corrupt = st == MC_OK && mc_transfer_test_corrupt && mc_transfer_test_corrupt(t->track_uid);
 
-  if (st == MC_OK && accept && write_ok && strcmp(got_sha, sha) != 0) {
+  if (st == MC_OK && accept && write_ok && (corrupt || strcmp(got_sha, sha) != 0)) {
     fprintf(stderr, "musiccore: sync: %s from %s failed its checksum\n", t->track_uid,
             s->peer_uid);
     *got = GOT_MISMATCH;
@@ -1269,7 +1295,8 @@ static mc_status fetch(mc_session *s, const mc_plan_track *t, int opus, int *got
                     source_sha[0] ? source_sha : NULL) == MC_OK) {
       *got = GOT_OK;
       s->files_received++;
-      st = ensure_cover(s, t->track_uid, abs);
+      *landed = abs;
+      abs = NULL;
     } else {
       mc_remove(abs); /* the track went meanwhile, or the database failed */
     }
@@ -1289,6 +1316,14 @@ typedef struct want {
   int original, cached, verified;
   int imported; /* this device holds an original of it imported here, in the wrong format */
 } want;
+
+/* A request awaiting its answer: FILE_REQ for want i (the retry after a mismatch if retry),
+ * or with i < 0, COVER_REQ for album, to be saved in dir. */
+typedef struct asked {
+  int i, retry;
+  char album[MC_UID_STRLEN];
+  char *dir;
+} asked;
 
 static int want_cmp(const void *key, const void *elem) {
   return strcmp(key, ((const want *)elem)->uid);
@@ -1488,18 +1523,54 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   progress(s);
   if (st == MC_OK) st = send_ahead(s, w, how, n);
 
-  for (int i = 0; st == MC_OK && i < n; i++) {
-    if (!how[i]) continue;
-    int got = GOT_FAILED;
-    st = fetch(s, w[i].t, how[i] == 2, &got);
-    if (st == MC_OK && got == GOT_MISMATCH) {
-      /* Once more; this session has only this peer to ask. */
-      st = fetch(s, w[i].t, how[i] == 2, &got);
-      if (st == MC_OK && got == GOT_MISMATCH) s->files_corrupt++;
+  /* Up to FETCH_AHEAD requests out, q[head] the oldest; the peer answers them in order. Each
+   * answer taken frees a slot for at most one new request (a retry or a cover) before more
+   * files are asked for, so q never overflows. */
+  asked q[FETCH_AHEAD];
+  int head = 0, nq = 0;
+  for (int next = 0; st == MC_OK;) {
+    for (; st == MC_OK && nq < FETCH_AHEAD && next < n; next++) {
+      if (!how[next]) continue;
+      st = ask_file(s, w[next].t, how[next] == 2, 0);
+      if (st == MC_OK) q[(head + nq++) % FETCH_AHEAD] = (asked){next, 0, "", NULL};
     }
+    if (st != MC_OK || !nq) break;
+    asked a = q[head];
+    head = (head + 1) % FETCH_AHEAD;
+    nq--;
+    if (a.i < 0) {
+      st = recv_cover(s, a.album, a.dir);
+      free(a.dir);
+      continue;
+    }
+    int got = GOT_FAILED;
+    char *landed = NULL;
+    st = recv_file(s, w[a.i].t, how[a.i] == 2, &got, &landed);
+    if (st == MC_OK && got == GOT_MISMATCH && !a.retry) {
+      /* Once more, behind what is already asked; this session has only this peer to ask. */
+      st = ask_file(s, w[a.i].t, how[a.i] == 2, 1);
+      if (st == MC_OK) q[(head + nq++) % FETCH_AHEAD] = (asked){a.i, 1, "", NULL};
+      continue;
+    }
+    if (st == MC_OK && got == GOT_MISMATCH) s->files_corrupt++;
+    asked c = {-1, 0, "", NULL};
+    c.dir = landed ? cover_needed(s, w[a.i].t->track_uid, landed, c.album) : NULL;
+    for (int k = 0; c.dir && k < nq; k++) {
+      const asked *o = &q[(head + k) % FETCH_AHEAD];
+      if (o->i < 0 && !strcmp(o->dir, c.dir)) { /* asked already */
+        free(c.dir);
+        c.dir = NULL;
+      }
+    }
+    if (c.dir && st == MC_OK) st = ask_cover(s, c.album);
+    if (c.dir && st == MC_OK) q[(head + nq++) % FETCH_AHEAD] = c;
+    else free(c.dir);
+    free(landed);
     s->files_done++;
     progress(s);
   }
+  /* Only after a session error: answers that won't be read. */
+  for (; nq; nq--, head = (head + 1) % FETCH_AHEAD) free(q[head].dir);
   free(how);
   free(w);
   return st;
@@ -1507,30 +1578,37 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
 
 /* --- Covers, asking --- */
 
-/* COVER_REQ for album, saving a good answer as dir's cover. The return value is only for
- * errors that end the session. */
-static mc_status fetch_cover(mc_session *s, const char *album, const char *dir) {
+/* COVER_REQ for album. */
+static mc_status ask_cover(mc_session *s, const char *album) {
   yyjson_mut_val *root;
   yyjson_mut_doc *doc = new_doc(&root);
   if (!doc) return MC_ERR_NOMEM;
   yyjson_mut_obj_add_strcpy(doc, root, "album", album);
-  mc_status st = send_doc(s->ch, MC_MSG_COVER_REQ, doc);
+  return send_doc(s->ch, MC_MSG_COVER_REQ, doc);
+}
+
+/* The answer to ask_cover(s, album), saving a good one as dir's cover. The return value is
+ * only for errors that end the session. */
+static mc_status recv_cover(mc_session *s, const char *album, const char *dir) {
   uint8_t type;
   const unsigned char *payload;
   size_t len;
-  if (st == MC_OK) st = mc_channel_recv(s->ch, &type, &payload, &len);
+  mc_status st = mc_channel_recv(s->ch, &type, &payload, &len);
   if (st != MC_OK) return st;
-  if (type == MC_MSG_FILE_ERR) return MC_OK;
-  if (type != MC_MSG_COVER_HDR) return MC_ERR_FORMAT;
+  if (type != MC_MSG_COVER_HDR && type != MC_MSG_FILE_ERR) return MC_ERR_FORMAT;
   yyjson_doc *hdr = parse(payload, len);
   if (!hdr) return MC_ERR_FORMAT;
   const char *h_album = obj_str(hdr, "album"), *h_sha = obj_str(hdr, "sha256");
   int64_t size = obj_int(hdr, "size");
   char sha[SHA_STRLEN] = "";
-  int ok = h_album && !strcmp(h_album, album) && size > 0 && size <= MAX_COVER_BYTES;
+  /* Answers come in the order asked, so either one must be album's. */
+  int ok = h_album && !strcmp(h_album, album);
+  int none = type == MC_MSG_FILE_ERR;
+  ok = ok && (none || (size > 0 && size <= MAX_COVER_BYTES));
   if (ok && is_sha(h_sha)) memcpy(sha, h_sha, SHA_STRLEN);
   yyjson_doc_free(hdr);
   if (!ok) return MC_ERR_FORMAT; /* can't tell how much follows */
+  if (none) return MC_OK;
 
   unsigned char *img = malloc((size_t)size);
   if (!img) return MC_ERR_NOMEM;
@@ -1563,8 +1641,9 @@ static mc_status fetch_cover(mc_session *s, const char *album, const char *dir) 
 
 /* Asks the peer for the cover of each folder here that holds files of an album with art
  * (albums.art_hash) but has no cover. A folder usually gets one as its first file arrives
- * (ensure_cover()); this catches up folders whose files were already here, or a device that
- * synced before covers were sent. */
+ * (cover_needed()); this catches up folders whose files were already here, or a device that
+ * synced before covers were sent. Nothing else is outstanding by now, so each is asked for
+ * and answered in turn. */
 static mc_status fetch_covers(mc_session *s) {
   if (!s->peer_covers) return MC_OK; /* an older peer would end the session */
   mc_library *lib = s->conn->lib;
@@ -1605,8 +1684,9 @@ static mc_status fetch_covers(mc_session *s) {
   mc_status st = MC_OK;
   for (int i = 0; i < n; i++) {
     char *cover = st == MC_OK ? mc_coverart_find(ns[i].dir) : NULL;
-    if (st == MC_OK && !cover && mc_file_exists(ns[i].dir))
-      st = fetch_cover(s, ns[i].album, ns[i].dir);
+    int ask = st == MC_OK && !cover && mc_file_exists(ns[i].dir);
+    if (ask) st = ask_cover(s, ns[i].album);
+    if (ask && st == MC_OK) st = recv_cover(s, ns[i].album, ns[i].dir);
     free(cover);
     free(ns[i].dir);
   }

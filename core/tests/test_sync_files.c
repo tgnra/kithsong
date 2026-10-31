@@ -6,7 +6,9 @@
  * album covers that exist only as an image file beside the originals, encode-ahead of the
  * Opus copies, sync_status, mc_sync_verify(), the hashes a sender keeps (an imported
  * original's in its row, a cached transcode's in its sidecar), and a track whose original an
- * import on A replaced with a better file (B's copy made from the old one is replaced too). */
+ * import on A replaced with a better file (B's copy made from the old one is replaced too).
+ * Then, on two other devices, pipelined requests whose answers mix files, a FILE_ERR,
+ * checksum retries and covers. */
 #ifndef _WIN32
 #define _DEFAULT_SOURCE /* symlink */
 #endif
@@ -710,6 +712,191 @@ static int64_t b_files(dev *b, const char *where) {
   return lib_int(b, sql);
 }
 
+/* --- Pipelined requests --- */
+
+/* Partial files left anywhere under dir. */
+static int count_parts(const char *dir) {
+  names n = {NULL, 0};
+  mc_list_dir(dir, collect, &n);
+  int parts = 0;
+  for (int i = 0; i < n.count; i++) {
+    char path[2048];
+    snprintf(path, sizeof path, "%s/%s", dir, n.items[i] + 1);
+    size_t len = strlen(path);
+    if (n.items[i][0] == 'd') parts += count_parts(path);
+    else if (len > 5 && !strcmp(path + len - 5, ".part")) parts++;
+  }
+  free(n.items);
+  return parts;
+}
+
+/* For mc_transfer_test_corrupt: the first received file of g_corrupt_once fails its
+ * checksum, and each file received of album Many notes whether its folder had the cover. */
+static char g_corrupt_once[MC_UID_STRLEN];
+static track_ref *g_many;
+static int g_nmany, g_many_calls, g_many_last_covered;
+static char g_many_cover[2048];
+
+static int corrupt_hook(const char *track) {
+  for (int i = 0; i < g_nmany; i++)
+    if (!strcmp(g_many[i].uid, track)) {
+      g_many_calls++;
+      g_many_last_covered = mc_file_exists(g_many_cover);
+    }
+  if (strcmp(track, g_corrupt_once) != 0) return 0;
+  g_corrupt_once[0] = '\0';
+  return 1;
+}
+
+/* Writes a JPEG-looking cover.jpg into folder on d and records it as the album's art. */
+static void put_cover(dev *d, const char *album_uid, const char *folder, int seed) {
+  char p[2048], sha[65], sql[512];
+  snprintf(p, sizeof p, "%s/%s/cover.jpg", d->libdir, folder);
+  FILE *f = mc_fopen(p, "wb");
+  CHECK(f != NULL);
+  if (!f) return;
+  static const unsigned char head[] = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'};
+  fwrite(head, 1, sizeof head, f);
+  for (int i = 0; i < 150000; i++) fputc((i * seed) & 0xFF, f); /* several frames */
+  fclose(f);
+  file_sha(p, sha);
+  CHECK(mc_library_begin_write(d->lib) == MC_OK);
+  snprintf(sql, sizeof sql, "UPDATE albums SET art_hash = '%s' WHERE uid = '%s'", sha, album_uid);
+  CHECK(exec(mc_library_db(d->lib), sql) == SQLITE_OK);
+  CHECK(mc_library_commit(d->lib) == MC_OK);
+}
+
+/* D fetches Opus copies of everything from C with its requests pipelined, the answers a mix:
+ * files that arrive, a FILE_ERR (an original C can't read), a lossy original standing
+ * in whose recorded hash is wrong (a mismatch, retried, then corrupt), and a file that fails
+ * its checksum only the first time (the retry brings it). Each album's cover comes in the
+ * stream, before the album's last files, and nothing is left half-written. */
+static void check_pipeline(const char *root) {
+  static dev c, d;
+  char sql[2048];
+  dev_paths(&c, root, "c");
+  dev_paths(&d, root, "d");
+  if (!dev_start(&c) || !dev_start(&d)) return;
+  enum { MANY = 9, TWO = 2 };
+  track_ref many[MANY], two[TWO];
+  for (int i = 0; i < MANY; i++) {
+    char title[32];
+    snprintf(title, sizeof title, "Part %d", i + 1);
+    add_track(&c, "Pipe", "Many", 2000, title, i + 1, 300 + 40 * i, &many[i]);
+  }
+  for (int i = 0; i < TWO; i++) {
+    char title[32];
+    snprintf(title, sizeof title, "Side %d", i + 1);
+    add_track(&c, "Pipe", "Two", 2001, title, i + 1, 500 + 50 * i, &two[i]);
+  }
+  /* many[0] is a small MP3 original by its row, but a folder on disk: C offers it (the path
+   * exists) and answers FILE_ERR io when it can't read it. */
+  {
+    char rel[256], p[2048];
+    snprintf(rel, sizeof rel, "Pipe/Many (2000)/01 Part 1.mp3");
+    abs_path(&c, many[0].rel, p, sizeof p);
+    mc_remove(p);
+    abs_path(&c, rel, p, sizeof p);
+    CHECK(mc_mkdirs(p) == MC_OK);
+    snprintf(sql, sizeof sql,
+             "UPDATE files SET path = '%s', format = 'mp3', bitrate_kbps = 32, size_bytes = 3000"
+             " WHERE uid = '%s'",
+             rel, many[0].file);
+    CHECK(exec(mc_library_db(c.lib), sql) == SQLITE_OK);
+  }
+  /* many[1] is a small MP3 original, which stands in for Opus, recorded with a wrong hash
+   * that the sender trusts as the file's size and mtime match. */
+  {
+    char rel[256], p[2048], junk[3001];
+    snprintf(rel, sizeof rel, "Pipe/Many (2000)/02 Part 2.mp3");
+    abs_path(&c, many[1].rel, p, sizeof p);
+    mc_remove(p);
+    abs_path(&c, rel, p, sizeof p);
+    memset(junk, 'm', sizeof junk - 1);
+    junk[sizeof junk - 1] = '\0';
+    CHECK(write_bytes(p, junk));
+    int64_t size = 0, mtime = 0;
+    CHECK(mc_file_info(p, &size, &mtime) == MC_OK);
+    snprintf(sql, sizeof sql,
+             "UPDATE files SET path = '%s', format = 'mp3', bitrate_kbps = 32, size_bytes = %lld,"
+             " mtime_ms = %lld, sha256 = '%064d' WHERE uid = '%s'",
+             rel, (long long)size, (long long)mtime, 1, many[1].file);
+    CHECK(exec(mc_library_db(c.lib), sql) == SQLITE_OK);
+  }
+  char many_uid[MC_UID_STRLEN], two_uid[MC_UID_STRLEN];
+  query_text(mc_library_db(c.lib), "SELECT uid FROM albums WHERE title = 'Many'", many_uid,
+             sizeof many_uid);
+  query_text(mc_library_db(c.lib), "SELECT uid FROM albums WHERE title = 'Two'", two_uid,
+             sizeof two_uid);
+  put_cover(&c, many_uid, "Pipe/Many (2000)", 7);
+  put_cover(&c, two_uid, "Pipe/Two (2001)", 11);
+
+  CHECK(pair(&c, &d) == MC_PAIR_PAIRED);
+  /* Until D's own profile row (written as it takes its name) has reached C, an edit made on
+   * C can lose its format field to that row's defaults. Sessions that confirm nothing bring
+   * it, and move no files. */
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM profiles WHERE device_uid = '%s'", d.uid);
+  for (int i = 0; i < 5 && group_int(&c, sql) != 1; i++) {
+    int sc = done_seen(&c, d.uid), sd = done_seen(&d, c.uid);
+    CHECK(mc_sync_now(c.sync, d.uid) == MC_OK);
+    CHECK(wait_done(&c, d.uid, sc, NULL) == MC_OK);
+    wait_done(&d, c.uid, sd, NULL);
+  }
+  CHECK(group_int(&c, sql) == 1);
+  snprintf(g_corrupt_once, sizeof g_corrupt_once, "%s", many[2].uid);
+  g_many = many;
+  g_nmany = MANY;
+  snprintf(g_many_cover, sizeof g_many_cover, "%s/Pipe/Many (2000)/cover.jpg", d.libdir);
+  mc_transfer_test_corrupt = corrupt_hook;
+  set_profile(&c, d.uid, 64, NULL);
+  mc_sync_result rc, rd;
+  CHECK(sync_now(&c, &d, &rc, &rd) == MC_OK);
+  /* Seven good ones of Many (many[2] on its second try) and both of Two. */
+  CHECK(rd.files_received == MANY - 2 + TWO);
+  CHECK(rd.files_corrupt == 1);
+  CHECK(!g_corrupt_once[0]);
+  mc_mutex_lock(&d.m);
+  CHECK(d.done_total == MANY + TWO && d.done_files == MANY + TWO);
+  mc_mutex_unlock(&d.m);
+  /* Every file sent once, many[2] once more and many[1] twice; many[0] never. */
+  CHECK(rc.files_sent == MANY - 2 + TWO + 3);
+  CHECK(rc.bytes_sent == rd.bytes_received);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE track_uid IN ('%s', '%s')",
+           many[0].uid, many[1].uid);
+  CHECK(lib_int(&d, sql) == 0);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE track_uid = '%s'", many[2].uid);
+  CHECK(lib_int(&d, sql) == 1);
+  CHECK(lib_int(&d, "SELECT count(*) FROM files WHERE format = 'opus' AND bitrate_kbps = 64") ==
+        MANY - 2 + TWO);
+  CHECK(files_match(&d));
+  CHECK(count_parts(d.libdir) == 0);
+  /* Both covers, byte for byte; Many's was there before its last file came. */
+  CHECK(rd.covers_received == 2);
+  {
+    const char *folders[] = {"Pipe/Many (2000)/cover.jpg", "Pipe/Two (2001)/cover.jpg"};
+    for (int i = 0; i < 2; i++) {
+      char pc[2048], pd[2048], hc[65], hd[65];
+      abs_path(&c, folders[i], pc, sizeof pc);
+      abs_path(&d, folders[i], pd, sizeof pd);
+      file_sha(pc, hc);
+      file_sha(pd, hd);
+      CHECK(hc[0] && !strcmp(hc, hd));
+    }
+  }
+  CHECK(g_many_calls == MANY - 2 + 1 + 2 && g_many_last_covered);
+
+  /* The next session asks again for the two that failed and gets them no better. */
+  CHECK(sync_now(&c, &d, &rc, &rd) == MC_OK);
+  CHECK(rd.files_received == 0 && rd.files_corrupt == 1 && rd.covers_received == 0);
+  CHECK(count_parts(d.libdir) == 0);
+
+  mc_transfer_test_corrupt = NULL;
+  g_many = NULL;
+  g_nmany = 0;
+  dev_stop(&c);
+  dev_stop(&d);
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
@@ -1172,6 +1359,9 @@ int main(int argc, char **argv) {
 
   dev_stop(&a);
   dev_stop(&b);
+
+  check_pipeline(root);
+
   remove_tree(root);
   mc_shutdown();
   return TEST_RESULT();

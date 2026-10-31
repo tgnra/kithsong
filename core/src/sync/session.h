@@ -34,10 +34,9 @@ typedef struct mc_session {
   int files_done, files_total; /* this side's requests, for progress */
   int64_t files_bytes;         /* their estimated size */
   /* The peer's requests, as its FILES_PLAN announced them (0 until then), and how many of
-   * them this side has answered. A retry of the track just answered isn't counted again. */
+   * them this side has answered. A retry (FILE_REQ "retry") isn't counted again. */
   int sends_done, sends_total;
   int64_t sends_bytes;
-  char sends_last[MC_UID_STRLEN];
   int covers_received;
   int64_t bytes_received, bytes_sent;
   struct mc_transfer *xfer; /* between mc_transfer_begin() and mc_transfer_end() */
