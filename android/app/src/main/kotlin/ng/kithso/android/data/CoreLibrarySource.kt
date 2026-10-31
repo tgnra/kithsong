@@ -226,9 +226,13 @@ class CoreLibrarySource(
      */
     suspend fun profileChoices(): ProfileChoices = withContext(core) {
         val lib = open() ?: throw MusicCoreException(CoreSync.ERR_NOT_FOUND)
+        val artists = lib.artists()
+        val sortNames = artists.associate { it.uid to it.sortName }
         ProfileChoices(
-            albums = lib.albums().map { ProfileChoice(it.uid, it.title, it.artist ?: unknownArtist(), it.year) },
-            artists = lib.artists().map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount) },
+            albums = lib.albums().map {
+                ProfileChoice(it.uid, it.title, it.artist ?: unknownArtist(), it.year, sortKey = albumSortKey(it, sortNames))
+            },
+            artists = artists.map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount, sortKey = it.sortName) },
             playlists = lib.playlists().map { ProfileChoice(it.uid, it.name) },
             albumGroups = lib.albumGroups().map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount) },
         )
@@ -552,16 +556,27 @@ class CoreLibrarySource(
     private fun read(lib: CoreLibrary): Contents {
         val covers = Covers()
         val albumInfos = lib.albums().filter { it.folder != null }
-        val albums = albumInfos.map { info -> Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info)) }
+        val artistInfos = lib.artistsHere()
+        val sortNames = artistInfos.associate { it.uid to it.sortName }
+        val albums = albumInfos.map { info ->
+            Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info), albumSortKey(info, sortNames))
+        }
 
         // The core's artists with an album or track here, and each one's own albums for a cover.
         val albumsBy = albumInfos.zip(albums).filter { it.first.artistUid != null }.groupBy({ it.first.artistUid }, { it.second })
-        val artists = lib.artistsHere().map { info ->
+        val artists = artistInfos.map { info ->
             val own = albumsBy[info.uid].orEmpty()
             // A cover file before an audio file that may have no picture in it.
             val cover = (own.firstOrNull { album -> album.art.file?.let { File(it).extension.lowercase() in COVER_EXTENSIONS } == true }
                 ?: own.firstOrNull { it.art.file != null })?.art
-            Artist(info.uid, info.name, info.albumCount, cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name), info.trackCount)
+            Artist(
+                info.uid,
+                info.name,
+                info.albumCount,
+                cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name),
+                info.trackCount,
+                info.sortName,
+            )
         }
 
         // Smart playlists sit among the others, and smart album groups among the manual ones.
@@ -743,3 +758,10 @@ class CoreLibrarySource(
             }
     }
 }
+
+/**
+ * What the core orders [info] by among the albums: its artist's sort name, from [sortNames]
+ * by artist uid. An album with no artist has none, and comes first.
+ */
+private fun albumSortKey(info: AlbumInfo, sortNames: Map<String, String>): String =
+    info.artistUid?.let { sortNames[it] ?: info.artist } ?: ""
