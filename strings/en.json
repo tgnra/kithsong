@@ -376,7 +376,8 @@
     "import_choose_file": { "text": "Choose file…", "note": "Button on a missing track in an import's track list (Linux), and the hint in its File column (Windows, followed by a dropdown arrow): opens a menu of the files that could be that track." },
     "col_confidence": { "text": "Confidence", "note": "How sure an import match is, as a percentage: a column heading, and the tooltip of the percentage." },
     "import_state_moved": { "text": "Moved to another album", "note": "An import item whose files were all made tracks of another album with \"Use as track\", or that was one disc of an album and was joined to its other discs." },
-    "import_joined_discs": { "one": "Joined {0:d} disc into one album: check that it belongs.", "other": "Joined {0:d} discs into one album: check that they belong together.", "note": "Why an import item waits for the user: items that looked like the discs of one album (\"Title Disc1\", \"Title Disc2\") were made one album, matched to a release on MusicBrainz with that many discs. {0} is the number of discs; always 2 or more." },
+    "import_joined_discs": { "one": "Joined {0:d} disc into one album: check that it belongs.", "other": "Joined {0:d} discs into one album: check that they belong together.", "note": "Why an import item waits for the user: items that looked like the discs of one album (\"Title Disc1\", \"Title Disc2\") were made one album, matched to a release on MusicBrainz with that many discs; or an item matched to some discs of a release was joined by items found to be its other discs. {0} is the number of discs; always 2 or more." },
+    "import_waiting_for_discs": { "one": "Waiting for the album's other disc", "other": "Waiting for the album's other {0:d} discs", "note": "Why an import item isn't ready for the user yet: MusicBrainz says its album has more discs than it has files for, and other items still to be matched may be them. They're joined into it if they are, and it's ready once they're matched. {0} is the number of discs it lacks." },
     "import_skip": "S_kip",
     "import_as_tagged": "_Keep existing tags",
     "import_use_match": "_Use this match",
@@ -901,6 +902,9 @@
 
     "jump_to_section": "Jump to a section",
     "jump_to_named_section": { "text": "Jump to {0}", "note": "An accessibility action on the main screen's section headings. {0} is a section, such as Albums." },
+    "fast_scroll": { "text": "Fast scroll", "note": "For accessibility: the strip of letters (and section markers) down the right edge of a long list, for jumping through it." },
+    "fast_scroll_other": { "text": "#", "note": "In the fast scroll strip: where names starting with a digit, a symbol or a letter outside A to Z are. Translate only if another mark is usual for this." },
+    "fast_scroll_letter_in": { "text": "{0}, {1}", "note": "For accessibility: where the fast scroll strip is, a letter in a section. {0} is a letter, such as K; {1} a section, such as Artists." },
 
     "album_byline_year": { "text": "{0} – {1:d}", "note": "Track list screen: an album's artist and year." },
 

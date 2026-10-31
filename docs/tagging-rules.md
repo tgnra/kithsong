@@ -54,6 +54,18 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      together"), however high it scores. If MusicBrainz has no such release, or can't be
      reached, the items stay apart and are matched one by one. Two items claiming the same
      disc are never joined.
+   - **other discs**: an album matched to a release with discs it has no files on (disc 1 of
+     2, say) waits rather than going to the user while items that may be those discs are
+     still to be matched: albums whose files carry the release's id, or whose title without
+     a disc is the album's or the release's, with no more files than those discs have
+     tracks. It shows as waiting ("Waiting for the album's other disc"). An item matched
+     meanwhile whose candidates have that release, with at least half its files paired with
+     tracks on discs the waiting album has none on, is joined into it as disc folders are:
+     its files join the album's in disc order (a file with no disc tag takes its track's),
+     both items' releases are scored again against all the files, and it is skipped as
+     "Moved to another album". The album goes to the user once it has every disc, or once
+     nothing that may be them is left to match, at the end of the matching at the latest.
+     It is never accepted by itself, and says it was joined if it was.
    - **matching order**: albums first, then one-file items (singles, a lone file of an
      album, a DJ mix in one file), each in the order they were grouped, so the albums reach
      the review first.
@@ -89,7 +101,7 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    the user in the review dialog,
    where they can pick another candidate, search again with their own terms, keep the
    existing tags, or skip the item. Results of a manual search are never auto-accepted, and
-   nor are joined disc folders (see Group). They can also **search more widely** (the
+   nor are joined disc folders or other discs (see Group). They can also **search more widely** (the
    extended search on request, for an album or a single, whose results join the candidates
    and aren't auto-accepted either).
    **Use as track N** fixes an assignment the tagger got wrong: the review's track list shows

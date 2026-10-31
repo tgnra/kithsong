@@ -176,6 +176,8 @@ void mc_playlist_list_free(mc_playlist_list *list);
 typedef struct mc_artist_info {
   char uid[MC_UID_STRLEN];
   char *name;
+  /* What artists are ordered by: its sort name ("Beatles, The"), or its name if it has none. */
+  char *sort_name;
   int album_count; /* albums credited to it (as an album artist, featured or not), singles
                     * left out (as mc_library_list_albums() leaves them); 0 if it's only on
                     * tracks */

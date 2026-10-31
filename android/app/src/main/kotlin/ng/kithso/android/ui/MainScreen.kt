@@ -207,6 +207,45 @@ private fun mainItems(library: Library?, columns: Int, banner: Boolean): List<Ma
     }
 }
 
+/** How many items a section has before the fast scroll strip has its letters as well as its heading. */
+private const val LETTERS_FROM = 12
+
+/**
+ * The fast scroll strip's entries for [items]: each section's heading, then the letters of an
+ * alphabetical section long enough for them (playlists and album groups by name, albums by
+ * artist, artists by sort name, as the library orders them). Recents aren't alphabetical.
+ */
+private fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, String>, other: String): List<FastScrollEntry> =
+    buildList {
+        var i = 0
+        while (i < items.size) {
+            val heading = items[i] as? MainItem.Heading
+            if (heading == null) {
+                i++
+                continue
+            }
+            val title = titles.getValue(heading.section)
+            add(FastScrollEntry(title, i, heading = true))
+            val start = i + 1
+            var end = start
+            while (end < items.size && items[end] !is MainItem.Heading) end++
+            // Each item's position, and the sort key of each name in turn.
+            val at = ArrayList<Int>()
+            val keys = ArrayList<String>()
+            for (j in start until end) {
+                when (val item = items[j]) {
+                    is MainItem.PlaylistItem -> { at += j; keys += item.playlist.name }
+                    is MainItem.AlbumGroupItem -> { at += j; keys += item.group.name }
+                    is MainItem.ArtistItem -> { at += j; keys += item.artist.sortName }
+                    is MainItem.AlbumRow -> item.albums.forEach { at += j; keys += it.sortKey }
+                    else -> {}
+                }
+            }
+            if (keys.size >= LETTERS_FROM) letterEntries(this, keys, other, title) { at[it] }
+            i = end
+        }
+    }
+
 /** A section heading's place in the list, for jumping there. */
 @Immutable
 private data class SectionStart(val section: Section, val index: Int)
@@ -270,6 +309,9 @@ fun MainScreen(
         val jumpTo: (Int) -> Unit = remember(listState, statusBarPx) {
             { index -> scope.launch { listState.animateScrollToItem(index, -statusBarPx) } }
         }
+        val other = stringResource(R.string.fast_scroll_other)
+        val titles = Section.entries.associateWith { stringResource(it.title) }
+        val scrollEntries = remember(items, titles, other) { fastScrollEntries(items, titles, other) }
         // Holding a heading opens this over the list.
         val picker = remember(density) { SectionPicker(with(density) { PickerItemHeight.toPx() }) }
 
@@ -325,6 +367,15 @@ fun MainScreen(
                 }
             }
         }
+        FastScroller(
+            listState,
+            scrollEntries,
+            scrollOffset = -statusBarPx,
+            modifier = Modifier
+                .matchParentSize()
+                .windowInsetsPadding(sides)
+                .padding(top = with(density) { statusBarPx.toDp() } + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
+        )
         SectionPickerOverlay(
             picker,
             sections,

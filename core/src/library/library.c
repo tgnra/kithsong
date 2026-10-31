@@ -844,7 +844,8 @@ void mc_playlist_list_free(mc_playlist_list *list) {
 
 #define ARTIST_ORDER " ORDER BY coalesce(ar.sort_name, ar.name) COLLATE NOCASE, ar.name COLLATE NOCASE, ar.uid"
 
-/* Runs sql (uid, name, album count, then a track count if it has four columns) into a list. */
+/* Runs sql (uid, name, sort name, album count, then a track count if it has five columns) into
+ * a list. */
 static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
@@ -863,8 +864,9 @@ static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list *
     const unsigned char *uid = sqlite3_column_text(stmt, 0);
     if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(a->uid, (const char *)uid);
     a->name = column_dup(stmt, 1);
-    a->album_count = sqlite3_column_int(stmt, 2);
-    if (sqlite3_column_count(stmt) > 3) a->track_count = sqlite3_column_int(stmt, 3);
+    a->sort_name = column_dup(stmt, 2);
+    a->album_count = sqlite3_column_int(stmt, 3);
+    if (sqlite3_column_count(stmt) > 4) a->track_count = sqlite3_column_int(stmt, 4);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -881,7 +883,7 @@ mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
    * album artist of only singles is listed, with no albums, for its singles; an artist only
    * featured on tracks, for those. */
   static const char sql[] =
-    "SELECT ar.uid, ar.name,"
+    "SELECT ar.uid, ar.name, coalesce(ar.sort_name, ar.name),"
     " (SELECT count(*) FROM albums a WHERE a.uid IN (" CREDITED_ALBUMS("ar.uid") ")"
     "  AND NOT " ALBUM_IS_SINGLE ")"
     " FROM artists ar"
@@ -898,7 +900,7 @@ mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
    * track) pairs as CREDITED_ALBUMS and CREDITED_TRACKS have them: a track with no artist of
    * its own is its album's, which no index finds. */
   static const char sql[] =
-    "SELECT ar.uid, ar.name, coalesce(na.albums, 0), coalesce(nt.n, 0) FROM artists ar"
+    "SELECT ar.uid, ar.name, coalesce(ar.sort_name, ar.name), coalesce(na.albums, 0), coalesce(nt.n, 0) FROM artists ar"
     " LEFT JOIN (SELECT c.uid, count(*) AS n,"
     "   count(CASE WHEN NOT " ALBUM_IS_SINGLE " THEN 1 END) AS albums"
     "  FROM (SELECT artist_uid AS uid, uid AS album_uid FROM albums WHERE artist_uid IS NOT NULL"
@@ -921,7 +923,10 @@ mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
 
 void mc_artist_list_free(mc_artist_list *list) {
   if (!list) return;
-  for (int i = 0; i < list->count; i++) free(list->items[i].name);
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].name);
+    free(list->items[i].sort_name);
+  }
   free(list->items);
   free(list);
 }

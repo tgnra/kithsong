@@ -1049,7 +1049,9 @@ static void test_artists_and_groups(const char *scratch) {
   if (artists && artists->count == 4) {
     CHECK_STR(artists->items[0].name, "abba"); /* by sort name, ignoring case */
     CHECK(artists->items[0].album_count == 1);
+    CHECK_STR(artists->items[0].sort_name, "abba"); /* no sort name: the name */
     CHECK_STR(artists->items[1].name, "The Beatles");
+    CHECK_STR(artists->items[1].sort_name, "Beatles, The");
     CHECK(strcmp(artists->items[1].uid, "ar1") == 0);
     CHECK(artists->items[1].album_count == 2);
     CHECK_STR(artists->items[2].name, "Guest");

@@ -12,6 +12,10 @@ import kotlinx.coroutines.flow.StateFlow
 @Immutable
 data class ArtRef(val uid: String, val label: String, val file: String? = null, val version: Long = 0)
 
+/**
+ * An album. [sortKey] is what the library's album list is ordered by, its artist's sort name
+ * ("Beatles, The"): empty for an album with no artist, which comes first.
+ */
 @Immutable
 data class Album(
     val uid: String,
@@ -19,14 +23,23 @@ data class Album(
     val artist: String,
     val year: Int,
     val art: ArtRef,
+    val sortKey: String = artist,
 )
 
 /**
  * An artist with something on this phone: [albumCount] albums here as album artist, and
- * [trackCount] tracks here credited to them.
+ * [trackCount] tracks here credited to them. [sortName] is what artists are ordered by: their
+ * sort name ("Beatles, The"), else their name.
  */
 @Immutable
-data class Artist(val uid: String, val name: String, val albumCount: Int, val art: ArtRef, val trackCount: Int = 0)
+data class Artist(
+    val uid: String,
+    val name: String,
+    val albumCount: Int,
+    val art: ArtRef,
+    val trackCount: Int = 0,
+    val sortName: String = name,
+)
 
 @Immutable
 data class Playlist(val uid: String, val name: String, val trackCount: Int, val art: ArtRef)
@@ -159,7 +172,8 @@ data class SearchResults(
 
 /**
  * Something a sync profile can select: an album (with its [artist] and [year], 0 if unknown),
- * an artist or an album group (with its [albumCount]), or a playlist.
+ * an artist or an album group (with its [albumCount]), or a playlist. [sortKey] is what its
+ * list is ordered by (see [Album.sortKey] and [Artist.sortName]).
  */
 @Immutable
 data class ProfileChoice(
@@ -168,6 +182,7 @@ data class ProfileChoice(
     val artist: String? = null,
     val year: Int = 0,
     val albumCount: Int = 0,
+    val sortKey: String = name,
 )
 
 /**

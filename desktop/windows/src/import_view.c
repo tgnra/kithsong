@@ -62,6 +62,15 @@ typedef struct view {
   int rows_match; /* the match the rows show; -1 if none */
   int rows_gen;   /* bumped whenever the rows are rebuilt, e.g. while a menu is open */
   BOOL can_assign; /* the rows have missing tracks, and files Use as Track can make them */
+  BOOL review_loading; /* load_review is selecting the chosen match; it fills the rows itself */
+  /* A file made a missing track (assign) that the import thread hasn't taken up yet, which
+   * may be a while if it's matching another item: the rows show it already, and the review
+   * takes no other decision until the item is being written (the file indices it would use
+   * change then). */
+  struct {
+    BOOL active;
+    int match, track, from_item, file;
+  } pending;
 } view;
 
 /* A row of the review's track list: a track of the match, with the file matched to it if
@@ -513,7 +522,7 @@ static const review_row *row_at(HWND lv, int i) {
   return &g_view.rows[li.lParam];
 }
 
-static void fill_tracks(HWND dlg, int match) {
+static void fill_track_rows(HWND dlg, int match) {
   HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
   SendMessageW(lv, LVM_DELETEALLITEMS, 0, 0);
   g_view.row_count = 0;
@@ -573,10 +582,25 @@ static void fill_tracks(HWND dlg, int match) {
   }
 }
 
+static void show_pending(HWND dlg);
+
+/* The track list for match `match`, with any pending file shown as its track. Drawn once
+ * it's filled, not row by row. */
+static void fill_tracks(HWND dlg, int match) {
+  HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
+  SendMessageW(lv, WM_SETREDRAW, FALSE, 0);
+  fill_track_rows(dlg, match);
+  show_pending(dlg);
+  SendMessageW(lv, WM_SETREDRAW, TRUE, 0);
+  InvalidateRect(lv, NULL, TRUE);
+}
+
 /* The row at list index i if it's a missing track that Use as Track can fill, else NULL. */
 static const review_row *missing_row(HWND lv, int i) {
   const mc_import_item *it = g_view.review_snap;
-  if (!g_view.can_assign || !it || g_view.rows_match < 0 || g_view.rows_match >= it->match_count) return NULL;
+  if (!g_view.can_assign || g_view.pending.active || !it || g_view.rows_match < 0 ||
+      g_view.rows_match >= it->match_count)
+    return NULL;
   const review_row *r = i >= 0 ? row_at(lv, i) : NULL;
   const mc_import_match *m = &it->matches[g_view.rows_match];
   return r && r->track >= 0 && r->track < m->track_count && m->tracks[r->track].file < 0 ? r : NULL;
@@ -584,7 +608,8 @@ static const review_row *missing_row(HWND lv, int i) {
 
 static BOOL review_busy(void) {
   const mc_import_item *it = g_view.review_snap;
-  return !it || it->state == MC_IMPORT_PENDING || it->state == MC_IMPORT_MATCHING || it->state == MC_IMPORT_WRITING;
+  return g_view.pending.active || !it || it->state == MC_IMPORT_PENDING || it->state == MC_IMPORT_MATCHING ||
+         it->state == MC_IMPORT_WRITING;
 }
 
 /* "Use as track 3", for track `track` of the match the rows show, into text. */
@@ -597,11 +622,53 @@ static void use_as_track_text(int track, wchar_t *text, size_t n) {
   mc_wformat(text, n, mc_str(MC_STR_IMPORT_USE_AS_TRACK), MC_S(num8));
 }
 
-/* Makes the file row's file the missing track row's track. */
+/* The review's buttons, for an item that is busy (or has a file assign is waiting on). */
+static void enable_review_buttons(HWND dlg, const mc_import_item *it, BOOL busy) {
+  EnableWindow(GetDlgItem(dlg, IDOK), !busy && it->match_count > 0);
+  EnableWindow(GetDlgItem(dlg, IDC_REV_ASIS), !busy);
+  EnableWindow(GetDlgItem(dlg, IDC_REV_SKIP), !busy && it->state != MC_IMPORT_DONE);
+  EnableWindow(GetDlgItem(dlg, IDC_REV_SEARCH), !busy);
+  /* Albums and single tracks alike; once it has run, a manual search brings it back. */
+  EnableWindow(GetDlgItem(dlg, IDC_REV_WIDER), !busy && !it->searched_wider && !g_view.offline);
+}
+
+/* Shows the pending file (g_view.pending) as its track already: its cells on the track's
+ * row, and its own row gone. The rows are as the snapshot from before the assign has them. */
+static void show_pending(HWND dlg) {
+  if (!g_view.pending.active || g_view.pending.match != g_view.rows_match) return;
+  HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
+  int count = (int)SendMessageW(lv, LVM_GETITEMCOUNT, 0, 0), track = -1, file = -1;
+  for (int i = 0; i < count; i++) {
+    const review_row *r = row_at(lv, i);
+    if (!r) continue;
+    if (r->track >= 0 && r->track == g_view.pending.track) track = i;
+    else if (r->track < 0 && r->from_item == g_view.pending.from_item && r->file == g_view.pending.file) file = i;
+  }
+  if (track < 0 || file < 0) return;
+  for (int col = 3; col <= 5; col++) {
+    wchar_t text[MAX_PATH];
+    LVITEMW li = {.iSubItem = col, .pszText = text, .cchTextMax = MAX_PATH};
+    text[0] = L'\0';
+    SendMessageW(lv, LVM_GETITEMTEXTW, (WPARAM)file, (LPARAM)&li);
+    lv_set(lv, track, col, text);
+  }
+  SendMessageW(lv, LVM_DELETEITEM, (WPARAM)file, 0);
+  g_view.rows_gen++;
+}
+
+/* Makes the file row's file the missing track row's track. The rows show it at once; the
+ * import thread writes the item when it gets to it, and the review refreshes then. */
 static void assign(HWND dlg, const review_row *track, const review_row *file) {
-  if (mc_import_assign(g_view.imp, g_view.review_item, g_view.rows_match, track->track, file->from_item,
-                       file->file) == MC_OK) {
+  int t = track->track, from = file->from_item, f = file->file;
+  if (mc_import_assign(g_view.imp, g_view.review_item, g_view.rows_match, t, from, f) == MC_OK) {
     g_view.idle = FALSE; /* the import thread writes the item again; the dialog stays open */
+    g_view.pending.active = TRUE;
+    g_view.pending.match = g_view.rows_match;
+    g_view.pending.track = t;
+    g_view.pending.from_item = from;
+    g_view.pending.file = f;
+    show_pending(dlg);
+    enable_review_buttons(dlg, g_view.review_snap, TRUE);
     update_status();
   } else {
     MessageBoxW(dlg, mc_wstr(MC_STR_IMPORT_ITEM_BUSY), mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
@@ -780,6 +847,7 @@ static void load_review(HWND dlg) {
   const mc_import_item *it = g_view.review_snap;
   BOOL busy = it->state == MC_IMPORT_MATCHING || it->state == MC_IMPORT_WRITING ||
               it->state == MC_IMPORT_PENDING;
+  if (it->state == MC_IMPORT_WRITING) g_view.pending.active = FALSE; /* the thread has taken it up */
 
   char header[1200];
   const char *artist = it->artist ? it->artist : mc_str(MC_STR_UNKNOWN_VALUE);
@@ -805,6 +873,7 @@ static void load_review(HWND dlg) {
   }
 
   HWND lv = GetDlgItem(dlg, IDC_REV_MATCHES);
+  SendMessageW(lv, WM_SETREDRAW, FALSE, 0);
   SendMessageW(lv, LVM_DELETEALLITEMS, 0, 0);
   wchar_t buf[64];
   for (int i = 0; i < it->match_count; i++) {
@@ -836,17 +905,17 @@ static void load_review(HWND dlg) {
   }
   int sel = it->chosen >= 0 && it->chosen < it->match_count ? it->chosen : it->match_count ? 0 : -1;
   if (sel >= 0) {
+    /* Its LVN_ITEMCHANGED would fill the tracks; they're filled once, below. */
+    g_view.review_loading = TRUE;
     LVITEMW li = {.stateMask = LVIS_SELECTED | LVIS_FOCUSED, .state = LVIS_SELECTED | LVIS_FOCUSED};
     SendMessageW(lv, LVM_SETITEMSTATE, (WPARAM)sel, (LPARAM)&li);
+    g_view.review_loading = FALSE;
   }
+  SendMessageW(lv, WM_SETREDRAW, TRUE, 0);
+  InvalidateRect(lv, NULL, TRUE);
   fill_tracks(dlg, sel);
 
-  EnableWindow(GetDlgItem(dlg, IDOK), !busy && it->match_count > 0);
-  EnableWindow(GetDlgItem(dlg, IDC_REV_ASIS), !busy);
-  EnableWindow(GetDlgItem(dlg, IDC_REV_SKIP), !busy && it->state != MC_IMPORT_DONE);
-  EnableWindow(GetDlgItem(dlg, IDC_REV_SEARCH), !busy);
-  /* Albums and single tracks alike; once it has run, a manual search brings it back. */
-  EnableWindow(GetDlgItem(dlg, IDC_REV_WIDER), !busy && !it->searched_wider && !g_view.offline);
+  enable_review_buttons(dlg, it, busy || g_view.pending.active);
 }
 
 /* The dialog's fixed text; the template has none (app.rc). */
@@ -908,6 +977,7 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       g_view.review = dlg;
       g_view.review_item = (int)lp;
       g_view.review_terms_set = FALSE;
+      g_view.pending.active = FALSE;
       init_review_text(dlg);
       init_review_columns(dlg);
       SetWindowSubclass(GetDlgItem(dlg, IDC_REV_TRACKS), tracks_proc, 0, 0);
@@ -954,7 +1024,7 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       if (nm->idFrom != IDC_REV_MATCHES) break;
       if (nm->code == LVN_ITEMCHANGED) {
         const NMLISTVIEW *lv = (const NMLISTVIEW *)lp;
-        if ((lv->uNewState & LVIS_SELECTED) && !(lv->uOldState & LVIS_SELECTED))
+        if ((lv->uNewState & LVIS_SELECTED) && !(lv->uOldState & LVIS_SELECTED) && !g_view.review_loading)
           fill_tracks(dlg, lv->iItem);
       } else if (nm->code == NM_DBLCLK && selected_match(dlg) >= 0 &&
                  IsWindowEnabled(GetDlgItem(dlg, IDOK))) {
@@ -1072,6 +1142,11 @@ void import_view_on_event(WPARAM wp, LPARAM lp) {
       break;
     case MC_IMPORT_EV_IDLE:
       g_view.idle = TRUE;
+      /* Nothing is queued, so a pending file was taken up (or turned out not to apply). */
+      if (g_view.pending.active) {
+        g_view.pending.active = FALSE;
+        if (g_view.review) SendMessageW(g_view.review, WM_APP_REVIEW_REFRESH, 0, 0);
+      }
       update_status();
       tell_long_paths(); /* modal: after the status says the import is done */
       break;
