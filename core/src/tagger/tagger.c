@@ -3,7 +3,8 @@
  *   2. group files into items: albums by release id, then album tag and folder; files with
  *      no album tag are singles
  *   3. look up candidates on MusicBrainz (musicbrainz.c) and score them (match.c)
- *   4. auto-accept confident matches; leave the rest in REVIEW for the user. While
+ *   4. auto-accept confident matches; leave the rest in REVIEW for the user, an album
+ *      lacking discs of its release once the items that may be them are matched. While
  *      MusicBrainz can't be reached, items skip 3 and go straight to REVIEW; with tagging
  *      skipped, they're imported as they are.
  *   5. on accept: compare with what the library has (dupes.c: skip duplicates, or swap in a
@@ -82,6 +83,10 @@ typedef struct item {
   /* Disc folders (see join_discs): the disc this item looks like, and the first item of the
    * discs it seems to be one of, or -1. Only the import thread uses them. */
   int disc, disc_set;
+  /* Other discs (see defer_for_discs): waiting in PENDING for items that may be the rest of
+   * its best release, and whether items were joined into it so. Only the import thread uses
+   * them. */
+  int held, joined;
 } item;
 
 /* REQ_RETRY matches an item waiting on MusicBrainz again (see auto_match), once it's back or
@@ -120,8 +125,8 @@ struct mc_import {
   /* Item state, error, chosen and candidates are guarded by lock once items are published,
    * and so are an item's files (mc_import_assign moves files between items). They change only
    * on the import thread, which can read them without the lock. Everything else about items
-   * and files is written only before publishing, except what join_discs changes (an item's
-   * album, files' disc tags), under the lock too. */
+   * and files is written only before publishing, except what join_discs and join_held change
+   * (an item's album, files' disc tags), under the lock too. */
   item *items;
   int item_count;
 
@@ -907,6 +912,7 @@ static int widen_item(mc_import *imp, int idx) {
 }
 
 static void write_item(mc_import *imp, mc_library *lib, int idx, int match);
+static int defer_for_discs(mc_import *imp, int idx);
 
 /* Finds and scores candidates for an item. artist/title override the item's own tags (a
  * search the user typed); such results are never auto-accepted. Returns nonzero if nothing
@@ -963,7 +969,8 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
 
   if (accept) write_item(imp, lib, idx, 0);
   else if (unreachable) set_unreachable(imp, idx);
-  else set_state(imp, idx, MC_IMPORT_REVIEW, why);
+  /* Some discs of a release whose others may be still to come: not for the user yet. */
+  else if (manual || !defer_for_discs(imp, idx)) set_state(imp, idx, MC_IMPORT_REVIEW, why);
   return unreachable;
 }
 
@@ -1948,6 +1955,292 @@ static int join_discs(mc_import *imp, int idx) {
   return 1;
 }
 
+/* --- Other discs ---
+ *
+ * An item can be only some discs of the release it matches best, its other discs grouped
+ * apart (another folder, another album tag) and not matched yet. Rather than ask the user
+ * about part of an album, the item is held: it stays in PENDING, saying it's waiting for its
+ * other discs, while items that may be them are still to be matched. An item whose
+ * candidates have the same release, with its files on discs the held item has none on, is
+ * joined into it as disc folders are (see join_discs). The held item goes to review once
+ * its discs are all there, or once no item that may be them is left to match: at the end of
+ * the matching at the latest. */
+
+#define MAX_DISCS 64
+
+typedef uint64_t disc_mask; /* bit d - 1 for disc d */
+
+static disc_mask disc_bit(int disc) {
+  return disc >= 1 && disc <= MAX_DISCS ? (disc_mask)1 << (disc - 1) : 0;
+}
+
+static int disc_count(disc_mask m) {
+  int n = 0;
+  for (; m; m &= m - 1) n++;
+  return n;
+}
+
+static disc_mask release_discs(const mb_release *rel) {
+  disc_mask m = 0;
+  for (int i = 0; i < rel->track_count; i++) m |= disc_bit(rel->tracks[i].disc);
+  return m;
+}
+
+/* The discs of a release candidate that its map puts a file on. */
+static disc_mask discs_with_files(const candidate *c, int file_count) {
+  disc_mask m = 0;
+  for (int i = 0; c->map && i < file_count; i++)
+    if (c->map[i] >= 0 && c->map[i] < c->rel.track_count) m |= disc_bit(c->rel.tracks[c->map[i]].disc);
+  return m;
+}
+
+/* The discs of an item's best candidate that it has no file on, if that's a release. */
+static disc_mask lacking_discs(const item *it) {
+  if (it->kind != MC_IMPORT_ALBUM || it->cand_count == 0 || it->cands[0].from_recording) return 0;
+  const candidate *c = &it->cands[0];
+  disc_mask have = discs_with_files(c, it->file_count);
+  return have ? release_discs(&c->rel) & ~have : 0;
+}
+
+/* The title an item's album tag names, without a disc ("Title Disc2": "Title"); malloc'd. */
+static char *album_title(const item *it) {
+  int disc;
+  char *title = disc_album(it, &disc);
+  return title ? title : mc_strdup(it->album);
+}
+
+/* Whether item `other` may be discs that item idx's best candidate has and idx lacks: an album
+ * not matched yet, with no more files than those discs have tracks, whose files carry that
+ * release's id or whose title (without a disc) is idx's or the release's. */
+static int may_be_other_discs(mc_import *imp, int idx, int other) {
+  const item *it = &imp->items[idx], *o = &imp->items[other];
+  if (other == idx || o->state != MC_IMPORT_PENDING || o->held || o->kind != MC_IMPORT_ALBUM ||
+      o->file_count == 0)
+    return 0;
+  disc_mask lacking = lacking_discs(it);
+  if (!lacking) return 0;
+  const mb_release *rel = &it->cands[0].rel;
+  int room = 0;
+  for (int i = 0; i < rel->track_count; i++) room += (disc_bit(rel->tracks[i].disc) & lacking) != 0;
+  if (o->file_count > room) return 0;
+  for (int i = 0; rel->id && i < o->file_count; i++) {
+    const char *id = imp->files[o->files[i]].tags.mb_albumid;
+    if (id && strcmp(id, rel->id) == 0) return 1;
+  }
+  char *mine = album_title(it), *theirs = album_title(o);
+  int same = same_text(theirs, mine) || same_text(theirs, rel->title);
+  free(mine);
+  free(theirs);
+  return same;
+}
+
+static int other_discs_pending(mc_import *imp, int idx) {
+  for (int i = 0; i < imp->item_count; i++)
+    if (may_be_other_discs(imp, idx, i)) return 1;
+  return 0;
+}
+
+/* Holds item idx (see above), or updates how many discs it's waiting for. */
+static void hold(mc_import *imp, int idx) {
+  int lacking = disc_count(lacking_discs(&imp->items[idx]));
+  imp->items[idx].held = 1;
+  char *why = mc_format_alloc(mc_str_plural(MC_STR_IMPORT_WAITING_FOR_DISCS, lacking), MC_D(lacking));
+  set_state(imp, idx, MC_IMPORT_PENDING, why);
+  mc_free(why);
+}
+
+/* Puts a held item in review after all, saying so if other discs were joined into it. */
+static void unhold(mc_import *imp, int idx) {
+  item *it = &imp->items[idx];
+  it->held = 0;
+  char *why = NULL;
+  if (it->joined) {
+    int n = it->cand_count ? disc_count(discs_with_files(&it->cands[0], it->file_count)) : 0;
+    if (n < 2) n = 2;
+    why = mc_format_alloc(mc_str_plural(MC_STR_IMPORT_JOINED_DISCS, n), MC_D(n));
+  }
+  set_state(imp, idx, MC_IMPORT_REVIEW, why);
+  mc_free(why);
+}
+
+/* Puts the held items whose other discs can't come any more in review; with all, every one. */
+static void release_held(mc_import *imp, int all) {
+  for (int i = 0; i < imp->item_count; i++)
+    if (imp->items[i].held && (all || !other_discs_pending(imp, i))) unhold(imp, i);
+}
+
+/* The index of item it's candidate for release id, or -1. */
+static int release_candidate(const item *it, const char *id) {
+  for (int i = 0; id && i < it->cand_count; i++)
+    if (!it->cands[i].from_recording && it->cands[i].rel.id && strcmp(it->cands[i].rel.id, id) == 0)
+      return i;
+  return -1;
+}
+
+/* Whether item b is discs that held item a lacks: b's candidate for a's best release (its
+ * index into *k) pairs at least half of b's files, all on discs a has no file on. */
+static int fits_held(const item *a, const item *b, int *k) {
+  const candidate *ca = &a->cands[0];
+  if ((*k = release_candidate(b, ca->rel.id)) < 0) return 0;
+  const candidate *cb = &b->cands[*k];
+  disc_mask have = discs_with_files(ca, a->file_count), adds = discs_with_files(cb, b->file_count);
+  int paired = 0;
+  for (int i = 0; i < b->file_count; i++) paired += cb->map[i] >= 0;
+  return adds && !(adds & have) && paired * 2 >= b->file_count;
+}
+
+/* Scores release candidate c against the files in tags, with the better of the album title
+ * and artist given and those it was scored with, into *out (its map malloc'd). */
+static int score_joined(const candidate *c, const mc_tags *tags, int n, const char *album,
+                        const char *artist, candidate *out) {
+  memset(out, 0, sizeof *out);
+  out->distance = 2.0;
+  int *map = malloc((size_t)n * sizeof *map);
+  if (!map || !(out->map = malloc((size_t)n * sizeof *out->map))) {
+    free(map);
+    return 0;
+  }
+  const char *albums[2] = {album, c->album}, *artists[2] = {artist, c->artist};
+  for (int t = 0; t < 2; t++) {
+    if (t && !albums[t] && !artists[t]) continue;
+    mc_release_score score;
+    if (mc_score_release(&c->rel, tags, n, albums[t], artists[t], map, &score) != MC_OK ||
+        score.distance >= out->distance)
+      continue;
+    out->distance = score.distance;
+    out->missing = score.missing;
+    out->extra = score.extra;
+    memcpy(out->map, map, (size_t)n * sizeof *map);
+    scored_with(out, albums[t], artists[t]);
+  }
+  free(map);
+  if (out->distance > 1.0) {
+    candidate_clear(out);
+    return 0;
+  }
+  return 1;
+}
+
+/* Joins item b into held item a: a gets b's files, in disc order (a file with no disc tag
+ * takes the disc of the track it was paired with; b's candidate k says b's), and as
+ * candidates the releases of both scored against all of them; b is skipped as moved.
+ * Returns zero, with nothing changed, when out of memory. */
+static int join_held(mc_import *imp, int ai, int bi, int k) {
+  item *a = &imp->items[ai], *b = &imp->items[bi];
+  int files = a->file_count + b->file_count, sources = a->cand_count + b->cand_count;
+  int *order = malloc((size_t)files * sizeof *order);
+  mc_tags *tags = malloc((size_t)files * sizeof *tags);
+  candidate *scored = calloc((size_t)sources, sizeof *scored);
+  char *title = album_title(a);
+  if (!order || !tags || !scored || !title) {
+    free(order);
+    free(tags);
+    free(scored);
+    free(title);
+    return 0;
+  }
+
+  mc_mutex_lock(&imp->lock);
+  for (int m = 0; m < 2; m++) {
+    const item *it = m ? b : a;
+    const candidate *c = m ? &b->cands[k] : &a->cands[0];
+    for (int i = 0; i < it->file_count; i++) {
+      mc_tags *t = &imp->files[it->files[i]].tags;
+      if (!t->disc && c->map[i] >= 0) t->disc = c->rel.tracks[c->map[i]].disc;
+    }
+  }
+  mc_mutex_unlock(&imp->lock);
+  for (int i = 0; i < files; i++) {
+    int f = i < a->file_count ? a->files[i] : b->files[i - a->file_count], at;
+    for (at = i; at > 0 && file_order(&imp->files[order[at - 1]], &imp->files[f]) > 0; at--) order[at] = order[at - 1];
+    order[at] = f;
+  }
+  for (int i = 0; i < files; i++) tags[i] = imp->files[order[i]].tags;
+
+  /* Each release once, whichever item found it; recordings were for one file, not these. */
+  int n = 0;
+  for (int s = 0; s < sources; s++) {
+    const candidate *c = s < a->cand_count ? &a->cands[s] : &b->cands[s - a->cand_count];
+    int seen = c->from_recording || !c->rel.id;
+    for (int j = 0; j < s && !seen; j++) {
+      const candidate *o = j < a->cand_count ? &a->cands[j] : &b->cands[j - a->cand_count];
+      seen = !o->from_recording && o->rel.id && strcmp(o->rel.id, c->rel.id) == 0;
+    }
+    if (!seen && score_joined(c, tags, files, title, a->artist, &scored[s])) n++;
+    else scored[s].distance = -1.0; /* not taken */
+  }
+  free(tags);
+  candidate *cands = n ? malloc((size_t)n * sizeof *cands) : NULL;
+  if (!n || !cands) {
+    for (int s = 0; s < sources; s++)
+      if (scored[s].distance >= 0) candidate_clear(&scored[s]);
+    free(scored);
+    free(order);
+    free(title);
+    return 0;
+  }
+
+  mc_mutex_lock(&imp->lock);
+  for (int s = 0, at = 0; s < sources; s++) {
+    candidate *c = s < a->cand_count ? &a->cands[s] : &b->cands[s - a->cand_count];
+    if (scored[s].distance < 0) {
+      candidate_clear(c);
+      continue;
+    }
+    candidate *to = &cands[at++];
+    *to = scored[s];
+    to->rel = c->rel; /* moves over */
+    free(c->map);
+    free(c->album);
+    free(c->artist);
+  }
+  free(scored);
+  if (n > 1) qsort(cands, (size_t)n, sizeof *cands, compare_candidates);
+  free(a->cands);
+  a->cands = cands;
+  a->cand_count = n;
+  free(a->files);
+  a->files = order;
+  a->file_count = files;
+  free(a->album);
+  a->album = title;
+  a->joined = 1;
+  free(b->cands);
+  b->cands = NULL;
+  b->cand_count = 0;
+  free(b->files);
+  b->files = NULL;
+  b->file_count = 0;
+  b->state = MC_IMPORT_SKIPPED;
+  b->outcome = MC_IMPORT_OUTCOME_MOVED;
+  free(b->error);
+  b->error = NULL;
+  mc_mutex_unlock(&imp->lock);
+  emit(imp, MC_IMPORT_EV_ITEM_CHANGED, bi);
+
+  /* Still lacking discs that may come: held on, else for the user (never accepted as is,
+   * like joined disc folders). */
+  if (lacking_discs(a) && other_discs_pending(imp, ai)) hold(imp, ai);
+  else unhold(imp, ai);
+  return 1;
+}
+
+/* For an album about to wait for the user: joins it into a held item whose other discs it
+ * is, or holds it while its own may still come (see above). Returns nonzero if it did. */
+static int defer_for_discs(mc_import *imp, int idx) {
+  const item *it = &imp->items[idx];
+  if (it->kind != MC_IMPORT_ALBUM || it->cand_count == 0) return 0;
+  for (int i = 0; i < imp->item_count; i++) {
+    int k;
+    if (i != idx && imp->items[i].held && imp->items[i].cand_count &&
+        fits_held(&imp->items[i], it, &k) && join_held(imp, i, idx, k))
+      return 1;
+  }
+  if (!lacking_discs(it) || !other_discs_pending(imp, idx)) return 0;
+  hold(imp, idx);
+  return 1;
+}
+
 static int busy(mc_import_state s) {
   return s == MC_IMPORT_PENDING || s == MC_IMPORT_MATCHING || s == MC_IMPORT_WRITING;
 }
@@ -2270,12 +2563,17 @@ static void import_thread(void *arg) {
     int i = order ? order[k] : k;
     drain_requests(imp, lib); /* the user's decisions come before more matching */
     /* A zip that couldn't be extracted, or a disc joined to another (join_discs). */
-    if (imp->items[i].state != MC_IMPORT_PENDING) continue;
+    if (imp->items[i].state != MC_IMPORT_PENDING || imp->items[i].held) continue;
     if (!lib) set_state(imp, i, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
     else if (!join_discs(imp, i)) auto_match(imp, lib, i);
+    release_held(imp, 0); /* those whose other discs can't come any more */
   }
   free(order);
-  if (!cancelled(imp)) emit(imp, MC_IMPORT_EV_IDLE, 0);
+  /* Albums whose other discs never came wait for the user last. */
+  if (!cancelled(imp)) {
+    release_held(imp, 1);
+    emit(imp, MC_IMPORT_EV_IDLE, 0);
+  }
 
   request *r;
   while ((r = next_request(imp, 1))) {

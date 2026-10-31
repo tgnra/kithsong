@@ -87,6 +87,19 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * The joined item is never imported straight away: it waits in MC_IMPORT_REVIEW, with error
  * saying it was joined, however high its confidence. Otherwise they're matched one by one.
  *
+ * Other discs. An album whose best candidate is a release with discs it has no files on
+ * (disc 1 of 2, say), while items that may be those discs are still to be matched (albums
+ * whose files carry the release's id, or whose title without a disc is the album's or the
+ * release's, with no more files than those discs have tracks), isn't put to the user yet:
+ * it stays in MC_IMPORT_PENDING, with error saying it's waiting for its other discs. An
+ * item matched meanwhile whose candidates include that release, with at least half its
+ * files paired with tracks on discs the waiting item has none on, is joined into it as disc
+ * folders are (its files and its release candidates, scored again against all the files;
+ * the other item becomes MC_IMPORT_SKIPPED with MC_IMPORT_OUTCOME_MOVED). The waiting item
+ * goes to MC_IMPORT_REVIEW once it has every disc, or once no item that may be them is left
+ * to match, so at the end of the matching at the latest; never imported straight away, and
+ * saying it was joined if it was.
+ *
  * Singles: a loose track matched to a recording is filed as its track on the release it's
  * credited to (an official single before an album or EP, compilations last, then the
  * earliest), looked up in full when it's written: that release's album, album artist, ids,
@@ -197,7 +210,7 @@ typedef enum mc_import_kind {
 } mc_import_kind;
 
 typedef enum mc_import_state {
-  MC_IMPORT_PENDING,   /* scanned, waiting to be matched */
+  MC_IMPORT_PENDING,   /* scanned, waiting to be matched; or waiting for its other discs */
   MC_IMPORT_MATCHING,  /* searching MusicBrainz */
   MC_IMPORT_REVIEW,    /* needs the user: low confidence or no candidates */
   MC_IMPORT_WRITING,   /* accepted; tags, art and library rows being written */
@@ -290,7 +303,7 @@ typedef struct mc_import_item {
   int match_count;
   int chosen;   /* index of the applied match; -1 if imported as-is or not yet decided */
   int searched_wider; /* the matches include an extended search's (see above) */
-  char *error;  /* set when state is MC_IMPORT_FAILED */
+  char *error;  /* set when state is MC_IMPORT_FAILED; may say why it's in review or pending */
   mc_import_outcome outcome;
   int replaced_files;  /* files swapped for higher quality ones */
   int duplicate_files; /* files skipped because the library already has them */
