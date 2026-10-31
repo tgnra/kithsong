@@ -807,17 +807,27 @@ music lives nowhere else.
      `"original"`), `source_sha256` is its `files.source_sha256` when the sender has one:
      the hash of the bytes it was imported from, before the import tagged it (see
      "Duplicates" in tagger.h). Older senders leave it out, and older receivers ignore it.
-   - The receiver waits up to 10 minutes for `FILE_HDR`, since the sender may be encoding.
+   - Requests are pipelined: the receiver keeps up to 3 of them outstanding (`FILE_REQ`s,
+     and the `COVER_REQ`s below), sending the next before it receives the current file, so
+     the sender goes from one file to the next without waiting a round trip. The sender
+     answers one request at a time, in the order they came. Each answer belongs to the
+     oldest request still open: its `track` (`album` for a cover) must be that request's,
+     in `FILE_ERR` too, or the receiver ends the session. Requests are small, so sending
+     them never waits on the sender's data.
+   - The receiver waits up to 10 minutes for each `FILE_HDR`, from the end of the answer
+     before it, since the sender may be encoding.
    - The receiver writes to `<dest>.part` while hashing. On a match it renames the file into
      place and inserts a `files` row with `sha256` and `source_peer_uid` (the sender), plus
      for a transcode `source_file_uid` (`FILE_HDR.file`). A received original keeps
      `source_file_uid` NULL: it is still an original, served as one in turn, while a row
      with `source_peer_uid` NULL too is an original imported on this device. It also keeps
      `source_sha256`, so importing that source file on this device too is recognised as a
-     file the library has.
-   - When the track's album has an `art_hash` and its folder no cover yet,
-     the receiver sends `COVER_REQ` for it right away, so the album shows with its art while
-     the rest of it is still coming. Pictures embedded in received files are never used.
+     file the library has. Only the file being received has a part file, so a session that
+     fails with requests outstanding leaves none behind.
+   - When the track's album has an `art_hash` and its folder no cover yet (nor a
+     `COVER_REQ` for it outstanding), the receiver sends `COVER_REQ` for it right away, in
+     line with its outstanding `FILE_REQ`s, so the album shows with its art while the rest
+     of it is still coming. Pictures embedded in received files are never used.
    - Covers. After its fetches, the receiver sends `COVER_REQ` for each folder of its own
      that holds files of an album with an `art_hash` and has no cover image
      (`mc_coverart_find()`), for folders whose files were already here, and so a device that
@@ -831,8 +841,8 @@ music lives nowhere else.
      the album's `art_hash` has since changed.
    - On a mismatch it deletes the part file and retries once from another source, then
      counts the track as corrupt. Within a session the only source is the peer, so the
-     retry asks it again; the track is tried anew in the next session, possibly with
-     another member.
+     retry asks it again, behind the requests already outstanding; the track is tried anew
+     in the next session, possibly with another member.
 5. The receiver chooses the path itself, with the same organising rules as imports, so
    paths are never taken from the peer: `<album artist>/<album> (<year>)/<track> <title>.<ext>`
    (a single too: it's an album), or `<artist>/<title>.<ext>` for a track with no album, as
