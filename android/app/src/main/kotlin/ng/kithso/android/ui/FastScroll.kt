@@ -154,6 +154,9 @@ private val StripWidth = 28.dp
 private val MinSlotHeight = 14.dp
 private val BubbleHeight = 64.dp
 
+/** A typical list row's height, for how many items make a screen. */
+private val NominalRowHeight = 64.dp
+
 /** How much of the screen's height the strip takes, if there's room. */
 private const val STRIP_SCREEN_FRACTION = 0.8f
 
@@ -164,8 +167,9 @@ private const val HIDE_AFTER_MS = 1500L
  * The strip for [state]'s list, over the list's right edge: [modifier] places it (the parent
  * box's size, inside the bars and mini player). Jumping puts the entry's item at the top,
  * [scrollOffset] pixels in (negative to land below a status bar the list scrolls under).
- * [entries] are grouped about a screen to a place (see [groupEntries]). There's none while the
- * list is under [MIN_SCREENS] screens long, or has fewer than two places.
+ * [entries] are grouped about a screen to a place (see [groupEntries]), a screen being the
+ * list's height in [NominalRowHeight] rows, so the places don't change as it scrolls. There's
+ * none while the list is under [MIN_SCREENS] screens long, or has fewer than two places.
  */
 @Composable
 fun FastScroller(
@@ -174,19 +178,16 @@ fun FastScroller(
     modifier: Modifier = Modifier,
     scrollOffset: Int = 0,
 ) {
-    val perScreen by remember(state) { derivedStateOf { state.layoutInfo.visibleItemsInfo.size } }
-    val long by remember(state) {
-        derivedStateOf {
-            val info = state.layoutInfo
-            val visible = info.visibleItemsInfo.size
-            visible > 0 && info.totalItemsCount > visible * MIN_SCREENS
-        }
+    // A screen's worth of items, from the list's height and a typical row's rather than the
+    // rows on screen, so the places stay the same wherever the list is.
+    val rowPx = with(LocalDensity.current) { NominalRowHeight.toPx() }
+    val perScreen by remember(state, rowPx) {
+        derivedStateOf { (state.layoutInfo.viewportSize.height / rowPx).toInt().coerceAtLeast(1) }
     }
-    // A screen's worth of items, kept until it changes by a quarter, so the places don't
-    // shift as rows of different heights scroll by.
-    val held = remember { IntArray(1) }
-    if (held[0] == 0 || perScreen > 0 && (perScreen * 4 < held[0] * 3 || perScreen * 4 > held[0] * 5)) held[0] = perScreen
-    val places = remember(entries, held[0]) { groupEntries(entries, held[0].coerceAtLeast(1)) }
+    val long by remember(state) {
+        derivedStateOf { state.layoutInfo.totalItemsCount > perScreen * MIN_SCREENS }
+    }
+    val places = remember(entries, perScreen) { groupEntries(entries, perScreen) }
     if (!long || places.size < 2) return
     val scope = rememberCoroutineScope()
     FastScroller(
