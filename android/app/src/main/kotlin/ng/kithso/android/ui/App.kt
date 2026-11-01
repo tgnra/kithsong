@@ -195,7 +195,6 @@ fun App(
                 ) { dismiss ->
                     SettingsScreen(
                         settings, libraryDir, bottomPadding,
-                        onSync = { syncOpen = true },
                         onLicenses = { licensesOpen = true },
                         onBack = dismiss,
                     )

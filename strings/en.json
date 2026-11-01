@@ -904,6 +904,7 @@
     "jump_to_named_section": { "text": "Jump to {0}", "note": "An accessibility action on the main screen's section headings. {0} is a section, such as Albums." },
     "fast_scroll": { "text": "Fast scroll", "note": "For accessibility: the strip of letters (and section markers) down the right edge of a long list, for jumping through it." },
     "fast_scroll_other": { "text": "#", "note": "In the fast scroll strip: where names starting with a digit, a symbol or a letter outside A to Z are. Translate only if another mark is usual for this." },
+    "fast_scroll_letters": { "text": "{0}–{1}", "note": "In the fast scroll strip's bubble: a run of letters a single place in the strip covers, such as A–C. {0} is the first letter, {1} the last." },
     "fast_scroll_letter_in": { "text": "{0}, {1}", "note": "For accessibility: where the fast scroll strip is, a letter in a section. {0} is a letter, such as K; {1} a section, such as Artists." },
 
     "album_byline_year": { "text": "{0} – {1:d}", "note": "Track list screen: an album's artist and year." },
@@ -961,7 +962,6 @@
     "import_search_title": { "text": "Album, or track for a single", "note": "Field of the import's search: what to search MusicBrainz for." },
     "import_files_count": { "one": "{0:d} file", "other": "{0:d} files" },
 
-    "settings_sync_text": "The devices this phone syncs with, and pairing new ones",
     "settings_permissions": "Permissions",
     "permission_notifications": "Notifications",
     "permission_notifications_allowed": "Allowed, for playback and sync",
