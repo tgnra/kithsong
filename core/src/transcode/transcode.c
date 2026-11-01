@@ -61,6 +61,17 @@ static char *concat(const char *a, char sep, const char *b) {
   return s;
 }
 
+/* A part file of path's own, malloc'd: path.<random>.part. Each writer has its own, since on
+ * Windows one another writer has open can be neither renamed nor removed. */
+static char *part_path(const char *path) {
+  unsigned char nonce[6];
+  char suffix[32];
+  if (mc_random_bytes(nonce, sizeof nonce) != MC_OK) return NULL;
+  snprintf(suffix, sizeof suffix, ".%02x%02x%02x%02x%02x%02x.part", nonce[0], nonce[1],
+           nonce[2], nonce[3], nonce[4], nonce[5]);
+  return concat(path, 0, suffix);
+}
+
 /* The directory part of path, malloc'd; NULL if it has none. */
 static char *parent_dir(const char *path) {
   const char *sep = strrchr(path, '/');
@@ -284,7 +295,7 @@ mc_status mc_transcode_sha_write(const char *path, const char *sha, int64_t size
                                  int64_t mtime_ms) {
   if (!path || !sha || strlen(sha) != 64 || !hex64(sha) || size < 0) return MC_ERR_INVALID_ARG;
   char *side = sidecar_path(path);
-  char *part = side ? concat(side, 0, ".part") : NULL;
+  char *part = side ? part_path(side) : NULL;
   mc_status st = MC_ERR_NOMEM;
   FILE *f = part ? mc_fopen(part, "wb") : NULL;
   if (part && !f) st = MC_ERR_IO;
@@ -335,13 +346,8 @@ mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const
   snprintf(name, sizeof name, "opus-%d.opus", opts->bitrate_kbps);
   char *uid_dir = concat(cache_dir, MC_PATH_SEP, file_uid);
   char *path = uid_dir ? concat(uid_dir, MC_PATH_SEP, name) : NULL;
-  unsigned char nonce[6];
-  char suffix[32];
-  mc_status st = mc_random_bytes(nonce, sizeof nonce);
-  snprintf(suffix, sizeof suffix, ".%02x%02x%02x%02x%02x%02x.part", nonce[0], nonce[1],
-           nonce[2], nonce[3], nonce[4], nonce[5]);
-  char *part = path && st == MC_OK ? concat(path, 0, suffix) : NULL;
-  st = MC_ERR_NOMEM;
+  char *part = path ? part_path(path) : NULL;
+  mc_status st = MC_ERR_NOMEM;
   if (part && mc_file_exists(path)) {
     mark_used(path);
     st = MC_OK;
@@ -360,7 +366,10 @@ mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const
         st = mc_rename(part, path, 1);
         if (st == MC_OK && info) mc_transcode_sha_write(path, sha, size, mtime_ms);
         /* Another encode of it got there first (on Windows, it may be open to be sent). */
-        else if (st != MC_OK && mc_file_exists(path)) st = MC_OK;
+        else if (st != MC_OK && mc_file_exists(path)) {
+          mc_remove(part);
+          st = MC_OK;
+        }
       }
       if (st == MC_OK) break;
       int gone = !mc_file_exists(uid_dir);
