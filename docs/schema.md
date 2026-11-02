@@ -48,8 +48,9 @@ The database has two identities of its own in `meta`, both generated on first op
   that both have music merges them another way: the smaller one is copied aside
   (`library-before-merge-<date>.db` in its folder), emptied in place without logging
   (`mc_library_reset_for_merge()`, which also gives it a new `node_uid`), joins as an empty
-  library, and then has the copy's current state imported as fresh edits; `meta.merge_source`
-  names the copy until then. No migration was needed. See
+  library, and then, once its profile is confirmed, has the copy's current state imported as
+  fresh edits; `meta.merge_source` names the copy until then, and `meta.merge_wait` says it
+  still waits for the profile. No migration was needed. See
   [Merging libraries](sync-protocol.md#merging-libraries).
 - `node_uid` is the origin stamped on every change made here. If sync finds that another
   device already uses it (for example, the library folder was copied),
@@ -309,7 +310,7 @@ makes the answer differ between devices.
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
 | `merge_keys`       | no     | the MusicBrainz ids ever logged per uid, which decide what merges (rows of singles albums' artists from before v12 are left, unused) |
 | `changelog`        | -      | field-level change log that sync is built on |
-| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), and other per-library settings |
+| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `merge_wait` (set with it until this device's profile is confirmed: the merge waits for that, see [Merging libraries](sync-protocol.md#merging-libraries)), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), and other per-library settings |
 
 ## Change tracking
 

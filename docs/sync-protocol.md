@@ -247,8 +247,19 @@ libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c
   then report `on_pair_result` (`merged`, `kept_here`, `scrobble_signed_out`), and the first
   session runs as for any pairing.
 - **The merge** runs on the merged device at the end of a session that synced the library
-  (the first one, normally) while `meta.merge_source` is set: the copy's current state goes
-  in as fresh edits under the new node uid; none of its changelog does.
+  while `meta.merge_source` is set, once its profile has been confirmed (see
+  [Confirming profiles](#confirming-profiles)): the copy's current state goes in as fresh
+  edits under the new node uid; none of its changelog does.
+  - **Waiting for the profile.** Setting the library aside also sets `meta.merge_wait`, and
+    the merge doesn't run while it is set, so neither library visibly changes (no merged
+    playlists, recents or tracks arrive on the kept device) before a user has looked at the
+    new member's profile and pressed Sync: until then the merged device holds the kept
+    library only, as any new member does, so its profile can be chosen from it. Confirming
+    this device's profile clears it: `mc_sync_confirm_now()` here, or a session carrying
+    `"user": true` (Sync pressed on the other device for this one). The merge then runs at
+    the end of the next session that syncs the library, normally the one the press starts.
+    A copy set aside by an older version has no `meta.merge_wait`, and is merged as before.
+    Nothing goes over the wire, so the kept device needs no newer version for this.
   - Tracks, album by album (tracks with no album one by one, staying without one), through the
     import's duplicates check (`mc_dupes_plan_remote()`, "Duplicates" in
     `core/include/musiccore/tagger.h`): matched by MusicBrainz release, release group or

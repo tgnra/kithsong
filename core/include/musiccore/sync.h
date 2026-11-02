@@ -80,8 +80,8 @@ typedef struct mc_pair_result {
   int archives;
   /* MC_PAIR_PAIRED by merging libraries (see "Merging libraries" below): merged is 1 on
    * both devices; kept_here is 1 on the device whose library was kept (and 0 on the one
-   * that joined, whose music is merged in once the first session has brought the kept
-   * library: on_merge_progress and on_merge_done report it there). */
+   * that joined, whose music is merged in once its profile has been confirmed and a session
+   * has brought the kept library: on_merge_progress and on_merge_done report it there). */
   int merged;
   int kept_here;
   /* With merged: the user name of the scrobbling (Last.fm) account that was signed out
@@ -120,11 +120,15 @@ typedef struct mc_pair_result {
  *    empties it, then joins as a device with an empty library would. on_pair_result
  *    reports MC_PAIR_PAIRED with merged set, and the first session brings the kept library.
  *  - Then, on that device only, the music of the set-aside copy is merged in:
- *    on_merge_progress, then on_merge_done. Its files stay where they are in the library
+ *    on_merge_progress, then on_merge_done. Not before its profile has been confirmed
+ *    (mc_sync_confirm_now() on that device, or on the kept one for it; see
+ *    "Confirming profiles" in docs/sync-protocol.md): until then neither library visibly
+ *    changes, and the merged device holds just the kept library, as any new member does. Its files stay where they are in the library
  *    folder (originals imported on this device, so the kept group's archive fetches them as
  *    for any import) unless the kept library already has the track in the same or better
  *    quality, when the file goes to the Recycle Bin or trash. If the app stops before it
- *    ran, it runs after the next session that syncs the library (mc_sync_merge_pending()).
+ *    ran, it runs after the next session that syncs the library once the profile is
+ *    confirmed (mc_sync_merge_pending()).
  *  - A frontend that leaves on_pair_merge NULL doesn't offer merging: pairing two libraries
  *    with music is refused with MC_PAIR_LIBRARY_MISMATCH as before. So is pairing with a
  *    device running a version without merging. */
@@ -319,7 +323,8 @@ void mc_sync_pair_cancel(mc_sync *sync);
  * here is waiting for one (an outgoing pairing is asked first if both are). */
 mc_status mc_sync_pair_merge_confirm(mc_sync *sync, int merge);
 /* 1 while this device's set-aside library hasn't been merged into the kept one yet (it runs
- * after a session that syncs the library; see on_merge_done), else 0. */
+ * after a session that syncs the library, once this device's profile has been confirmed;
+ * see on_merge_done), else 0. */
 int mc_sync_merge_pending(mc_sync *sync);
 
 /* --- Group --- */

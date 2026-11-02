@@ -210,10 +210,12 @@ static void emit_merge_progress(void *user, const mc_merge_progress *p) {
 }
 
 /* After a session that synced the library: if this device's library was set aside for a
- * merge, the kept library is here now, so merge the copy in (libmerge.c). 1 if it ran. */
+ * merge, the kept library is here now, so merge the copy in (libmerge.c). Not before this
+ * device's profile has been confirmed (mc_libmerge_waiting()): until then neither library
+ * visibly changes. 1 if it ran. */
 static int run_pending_merge(mc_sync *sync, mc_sync_conn *c, const mc_sync_result *result) {
   if (result->status != MC_OK || !result->library_synced || !c->lib ||
-      !mc_libmerge_pending(c->lib, NULL))
+      !mc_libmerge_pending(c->lib, NULL) || mc_libmerge_waiting(c->lib))
     return 0;
   mc_mutex_lock(&sync->lock);
   int busy = sync->merge_running;
@@ -1822,6 +1824,9 @@ mc_status mc_sync_confirm_now(mc_sync *sync, const char *device_uid) {
    * write is group data, which the change poll passes on. */
   mc_mutex_lock(&sync->api_lock);
   mc_status st = mc_profile_confirm(sync->api.sdb, NULL);
+  /* A merge of this device's old library waited for this; it runs after the session the
+   * press starts (best effort: a failed write leaves it waiting for the next press). */
+  if (st == MC_OK && sync->api.lib) mc_libmerge_release(sync->api.lib);
   mc_mutex_unlock(&sync->api_lock);
   if (st != MC_OK && st != MC_ERR_NOT_FOUND) return st;
   uint64_t now = mc_mono_ms();

@@ -478,7 +478,20 @@ int main(int argc, char **argv) {
     CHECK(a.pm.forget_count == 0);
     CHECK(a.merged && b.merged && !a.kept_here && b.kept_here);
     CHECK(!strcmp(a.signed_out, "alice") && !strcmp(b.signed_out, "alice"));
-    /* The merge ran after the first session. */
+    /* The first session brought B's library, but the merge waits for A's profile to be
+     * confirmed: until then neither library shows anything of A's old one. */
+    CHECK(a.merge_dones == 0);
+    CHECK(mc_sync_merge_pending(a.sync));
+    CHECK(lib_int(&a, "SELECT count(*) FROM tracks") == 3);
+    CHECK(lib_int(&b, "SELECT count(*) FROM tracks") == 3);
+    /* A sync that confirms nothing doesn't run it either. */
+    CHECK(sync_now(&a, &b) == MC_OK);
+    CHECK(a.merge_dones == 0);
+    CHECK(mc_sync_merge_pending(a.sync));
+    CHECK(lib_int(&a, "SELECT count(*) FROM tracks WHERE title = 'Alpha 1'") == 0);
+    CHECK(lib_int(&b, "SELECT count(*) FROM tracks") == 3);
+    /* A's user presses Sync: the merge runs after the session that starts. */
+    CHECK(mc_sync_confirm_now(a.sync, b.uid) == MC_OK);
     CHECK(wait_count(&a, &a.merge_dones, 0));
     CHECK(a.mr.status == MC_OK && a.mr.tracks_added == 1);
     CHECK(!strcmp(a.mr_signed_out, "alice"));
@@ -525,6 +538,14 @@ int main(int argc, char **argv) {
     CHECK(d.pm.forget_count == 1 && !strcmp(d.pm_forget, "e"));
     CHECK(c.merged && d.merged && c.kept_here && !d.kept_here);
     CHECK(!strcmp(c.signed_out, "") && !strcmp(d.signed_out, ""));
+    /* The merge waits for D's profile to be confirmed. */
+    CHECK(d.merge_dones == 0);
+    CHECK(mc_sync_merge_pending(d.sync));
+    CHECK(lib_int(&d, "SELECT count(*) FROM tracks") == 5);
+    CHECK(lib_int(&c, "SELECT count(*) FROM tracks") == 5);
+    /* C's user presses Sync for D: the session carries the press, so D confirms its own
+     * profile in it, and merges at its end. */
+    CHECK(mc_sync_confirm_now(c.sync, d.uid) == MC_OK);
     CHECK(wait_count(&d, &d.merge_dones, 0));
     CHECK(d.mr.status == MC_OK && d.mr.tracks_added == 2);
     CHECK(lib_int(&d, "SELECT count(*) FROM tracks") == 7);

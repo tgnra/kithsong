@@ -9,6 +9,7 @@
 #include "library/library_internal.h"
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
+#include "sync/libmerge.h"
 #include "sync/rows.h"
 #include "sync/transfer.h"
 
@@ -757,8 +758,12 @@ mc_status mc_session_run(mc_session *s) {
    * the group exchange left it. Written after the exchange, so the peer hears of it next
    * time, as above. */
   int confirmed = 0;
-  if (s->user && mc_profile_confirm(s->conn->sdb, &confirmed) == MC_OK && confirmed)
-    s->follow_up = 1;
+  if (s->user && mc_profile_confirm(s->conn->sdb, &confirmed) == MC_OK) {
+    if (confirmed) s->follow_up = 1;
+    /* A merge of this device's old library waited for this: it runs once this session has
+     * synced the library (sync.c). */
+    if (s->conn->lib) mc_libmerge_release(s->conn->lib);
+  }
 
   if (removed_here(s)) s->we_removed = 1;
   int lib = !s->we_removed && library_matches(s, &peer);

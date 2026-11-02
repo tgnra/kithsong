@@ -539,7 +539,9 @@ static void update_status(void) {
   } else if (g_dv.found && g_dv.lib_state == MC_SYNC_LIBRARY_UNKNOWN) {
     notice = mc_str(MC_STR_SYNC_UNKNOWN_LIBRARY);
   } else if (g_dv.merge_pending) {
+    /* The merge waits for this computer's profile to be confirmed, which Sync now does. */
     notice = mc_str(MC_STR_MERGE_PENDING);
+    button = TRUE;
   } else if (g_dv.found && !g_dv.removed && g_dv.confirm == MC_SYNC_UNCONFIRMED) {
     notice = mc_str(MC_STR_SYNC_UNCONFIRMED);
     button = TRUE;

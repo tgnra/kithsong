@@ -16,6 +16,11 @@
 /* meta key holding the set-aside copy's file name (in the library folder) until the merge
  * has run. Never logged, like all of meta. */
 #define MC_LIBMERGE_META "merge_source"
+/* meta key set ("1") with MC_LIBMERGE_META: the merge waits until this device's user has
+ * confirmed its profile (see "Confirming profiles" in docs/sync-protocol.md), so neither
+ * library visibly changes before then. Cleared by mc_libmerge_release(). A copy set aside by
+ * an older version has none, and is merged at once as it was then. */
+#define MC_LIBMERGE_WAIT_META "merge_wait"
 /* The copy's name: MC_LIBMERGE_PREFIX "YYYY-MM-DD" (UTC) ".db", with "-2" and so on before
  * ".db" if that's taken. */
 #define MC_LIBMERGE_PREFIX "library-before-merge-"
@@ -36,20 +41,28 @@ typedef struct mc_kept_file {
 
 /* Copies the library to a new file in its folder (VACUUM INTO; the copy has no WAL), then
  * empties it with mc_library_reset_for_merge() and records the copy in meta
- * (MC_LIBMERGE_META). *backup_abs (may be NULL) gets the copy's absolute path, malloc'd. */
+ * (MC_LIBMERGE_META), waiting for the profile to be confirmed (MC_LIBMERGE_WAIT_META). *backup_abs (may be NULL) gets the copy's absolute path, malloc'd. */
 mc_status mc_libmerge_set_aside(mc_library *lib, char **backup_abs);
 
 /* 1 if a set-aside copy is waiting to be merged in; *backup_abs (may be NULL) gets its
  * absolute path, malloc'd. */
 int mc_libmerge_pending(mc_library *lib, char **backup_abs);
 
+/* 1 while a pending merge waits for this device's profile to be confirmed. */
+int mc_libmerge_waiting(mc_library *lib);
+
+/* This device's profile was confirmed: a pending merge may run after the next session that
+ * syncs the library. Nothing to do (MC_OK) if none waits. */
+mc_status mc_libmerge_release(mc_library *lib);
+
 typedef void (*mc_libmerge_progress_fn)(void *user, const mc_merge_progress *progress);
 
 /* Merges the pending copy into lib, which must hold the kept library by now. kept (sorted by
  * track uid, may be NULL) is the kept device's originals; without them tracks the kept
  * library has are attached rather than compared. progress (may be NULL) is called as it
- * goes. Fills *out (strings NULL; the caller sets backup_path and the scrobble fields) and
- * clears MC_LIBMERGE_META once done, even if some tracks failed; an error before that
+ * goes. It doesn't look at MC_LIBMERGE_WAIT_META (the caller does). Fills *out (strings
+ * NULL; the caller sets backup_path and the scrobble fields) and clears MC_LIBMERGE_META
+ * (and MC_LIBMERGE_WAIT_META) once done, even if some tracks failed; an error before that
  * (the copy can't be opened, a database error) leaves it pending for another try.
  * MC_ERR_NOT_FOUND if nothing is pending. */
 mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,

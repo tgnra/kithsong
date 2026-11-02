@@ -120,6 +120,7 @@ Left in the core:
 
 Left in the frontends:
 - Windows, Linux - after merging, the merged device's profile is unconfirmed like any new member's: its files only move after Sync is pressed (on both devices, for the archive to fetch them). The Paired message already says to choose what syncs and press Sync now; nothing says it again after the merge's summary
+- All - the merge itself now waits for the merged device's profile to be confirmed (meta.merge_wait), so neither library changes before Sync is pressed. Until then the merged device shows the kept library only (its own is in the backup), and its old music isn't there to choose from in its profile. The kept device's originals list (MERGE_FILES) is only kept in memory, so a restart before Sync is pressed means matched tracks are attached rather than compared. Linux's own-page banner offers Sync now while the merge waits; Windows and Android only say so in merge_pending's text
 - Linux - on the device that started the pairing, after Merge nothing has keyboard focus, so typing the code does nothing until the field is clicked or Tab pressed (on_merge_clicked() does focus it; not yet understood)
 - All - "Merge" is the only choice on the merged device: there's no way to merge the other way round (keep the smaller library). Settled by the user, but worth checking it doesn't surprise anyone
 

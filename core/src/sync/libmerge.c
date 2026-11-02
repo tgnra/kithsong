@@ -79,6 +79,8 @@ mc_status mc_libmerge_set_aside(mc_library *lib, char **backup_abs) {
   sqlite3_finalize(stmt);
   /* Only once the copy is whole is the library emptied. */
   if (st == MC_OK) st = mc_library_reset_for_merge(lib);
+  /* The wait first, so the copy is never pending without it. */
+  if (st == MC_OK) st = mc_library_meta_set(lib, MC_LIBMERGE_WAIT_META, "1");
   if (st == MC_OK) st = mc_library_meta_set(lib, MC_LIBMERGE_META, name);
   free(name);
   if (st == MC_OK && backup_abs)
@@ -95,6 +97,16 @@ int mc_libmerge_pending(mc_library *lib, char **backup_abs) {
     return 0;
   if (backup_abs) *backup_abs = mc_library_abspath(lib, name);
   return 1;
+}
+
+int mc_libmerge_waiting(mc_library *lib) {
+  char v[8];
+  return lib && mc_library_meta_get(lib, MC_LIBMERGE_WAIT_META, v, sizeof v) == MC_OK && v[0];
+}
+
+mc_status mc_libmerge_release(mc_library *lib) {
+  if (!lib) return MC_ERR_INVALID_ARG;
+  return mc_libmerge_waiting(lib) ? mc_library_meta_set(lib, MC_LIBMERGE_WAIT_META, NULL) : MC_OK;
 }
 
 /* --- Maps from the copy's uids to the kept library's --- */
@@ -986,6 +998,7 @@ mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
   if (st == MC_OK) st = merge_rest(&x, progress, user);
   /* Done, even if some tracks failed: their files stay in the folder, out of the library. */
   if (st == MC_OK) st = mc_library_meta_set(lib, MC_LIBMERGE_META, NULL);
+  if (st == MC_OK) mc_library_meta_set(lib, MC_LIBMERGE_WAIT_META, NULL);
   if (st == MC_OK) exec_sql(x.db, "PRAGMA wal_checkpoint(PASSIVE)");
   sqlite3_close_v2(x.old);
   free(x.tracks.v);
