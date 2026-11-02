@@ -28,6 +28,7 @@ enum {
   HIT_PAD = 5,      /* the bar takes clicks this far above and below its row */
   KEY_STEP_MS = 5000,
   FLASH_MS = 1500,
+  NOTICE_MS = 8000, /* a sentence to read, rather than a word to glance at */
   FLASH_TIMER = 1,
 };
 
@@ -45,7 +46,7 @@ static struct {
   const uint32_t *art_px;
   int art_size;
   int duration_ms, pos_ms;
-  wchar_t flash[64]; /* shown instead of the track while FLASH_TIMER runs; "" for none */
+  wchar_t flash[192]; /* shown instead of the track while FLASH_TIMER runs; "" for none */
 
   /* Layout, in device pixels. */
   RECT art_rect, title_rect, cur_rect, left_rect, bar; /* bar: the row the rail and thumb sit in */
@@ -451,11 +452,19 @@ int now_playing_position(void) {
   return s.pos_ms;
 }
 
-void now_playing_flash(const wchar_t *text) {
+static void flash_for(const wchar_t *text, UINT ms) {
   if (!s.wnd) return;
   lstrcpynW(s.flash, text ? text : L"", (int)(sizeof s.flash / sizeof *s.flash));
-  if (s.flash[0]) SetTimer(s.wnd, FLASH_TIMER, FLASH_MS, NULL); /* restarts it */
+  if (s.flash[0]) SetTimer(s.wnd, FLASH_TIMER, ms, NULL); /* restarts it */
   else KillTimer(s.wnd, FLASH_TIMER);
   InvalidateRect(s.wnd, NULL, FALSE);
   if (s.flash[0]) uia_announce(&ui, UIA_ROOT);
+}
+
+void now_playing_flash(const wchar_t *text) {
+  flash_for(text, FLASH_MS);
+}
+
+void now_playing_notice(const wchar_t *text) {
+  flash_for(text, NOTICE_MS);
 }

@@ -239,7 +239,9 @@ libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c
      logging (every row, `files`, `aliases`, `merge_keys`, the changelog; the example smart
      lists are seeded again as migration v10 does), and it gets a new `node_uid`. The
      `library_uid` stays until `apply_pairing` adopts the kept one. `meta.merge_source`
-     names the copy until the merge has run. The copy is never deleted by the app.
+     names the copy until the merge has run. The copy is never deleted by the app. Before
+     step 1, `sync.db` is copied aside too, so that the pairing can be undone while the
+     merge waits (see "Abandoning a merge" below).
 - **After `PAIR_ACCEPT`**, encrypted, before the first `HELLO`: the merged device sends
   `MERGE_REQ {"scrobble_signed_out"?: <user name>}`, and the kept device answers with its
   originals in one or more `MERGE_FILES {"files": [[track_uid, format, kbps], ...],
@@ -292,6 +294,43 @@ libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c
     nothing (its files have no `files` rows yet, so reconcile would take them for unknown
     files). If the app stops first, the merge runs after the next session that syncs the
     library, without `MERGE_FILES` (matched tracks are then attached).
+- **Abandoning a merge.** While `meta.merge_wait` is set the pairing isn't finished, and it is
+  undone if the app stops (`merge_wait` holds the run that set it, so the next run knows), if
+  the merged device leaves the kept group or is removed from it, or if the pairing fails after
+  the library was set aside. The device goes back to exactly where it was before it paired.
+  The code is in `core/src/sync/librestore.c`.
+  - **What's kept for it.** Preparing copies `sync.db` (after the one try to send queued
+    plays, so they aren't sent twice) to `sync-before-merge/sync.db` in the config folder
+    before anything else changes, and setting the library aside records the kept device's
+    name and this device's (`meta.merge_with`, `meta.merge_name`) in the same transaction
+    that empties the library. While the merge waits, nothing on disk but the two databases
+    changes: the file phase fetches and deletes nothing, and the set-aside copy holds every
+    `files` row. So putting the two databases back is all of it.
+  - **Undoing it**, in steps that each commit whole, so a restore that stops part way carries
+    on at the next start and ends as one restore would:
+    1. At library open, before anything reads the library (or straight away, for a leave or
+       a failed pairing): the set-aside copy, brought up to the current schema in a scratch
+       copy (the backup itself isn't touched), replaces every table of `library.db`, `meta`
+       included, in one unlogged transaction, with `meta.merge_restored` (for the frontend)
+       and `meta.merge_restore_sync` (step 2 to do). The set-aside copy stays, as after a merge.
+    2. At `mc_sync_new()` (or straight away): if the device is still in the kept group (a
+       restart), that group's `sync.db` is copied to `sync-leave-notice/sync.db` with the
+       device marked removed, and the group's scrobbling account signed out there if it is
+       still the one this device brought (only it was signed in). Then `sync-before-merge`
+       replaces every table of `sync.db` in one transaction: its old group, if any, its
+       profiles, its scrobbling account and queue are back. The name it had is taken on
+       again, and `meta.merge_restore_sync` is cleared; then the copy goes.
+    3. Once sync runs, a session from the leave notice tells one member of the kept group, as
+       leaving does (retried every minute while none can be reached, for 30 days); then the
+       notice goes. Leaving rather than restarting tells the member at once, the same way.
+  - **On the kept device** nothing of the merged device's old library ever arrived, as the
+    merge waited. What it keeps is what any device that joined and left leaves: its
+    `devices` row (removed), its profile, and edits its user made to the kept library on it
+    while the merge waited (plays, Recents). A notice that reaches no member leaves it as a
+    member that never answers, as a leave that reaches no one does.
+  - `mc_sync_take_merge_restored()` then reports it once, with the kept device's name, for
+    the frontend's notice; a device with a merge pending doesn't offer merging again until
+    that merge has run or been undone.
 
 ## Group membership
 

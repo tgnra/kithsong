@@ -6,7 +6,14 @@
  *  - the merged device is asked, is in a group of its own (forgotten), and confirms next to
  *    the code; only it has an account, which becomes the group's;
  *  - the merged device declines;
- *  - the other device runs a version without merging: library_mismatch as before. */
+ *  - the other device runs a version without merging: library_mismatch as before;
+ * and undoing a pairing whose merge still waits for Sync now (libmerge.h, "Abandoning a
+ * merge"):
+ *  - the merged device restarts: its library and sync.db are exactly as before the pairing,
+ *    its name too, and the kept device drops it and has nothing of its old library;
+ *  - the merged device, which had a group of its own, leaves: its old group is back;
+ *  - once the merge has run, a restart undoes nothing;
+ *  - a restore cut short at each step carries on at the next start. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,6 +87,7 @@ typedef struct done_event {
 
 typedef struct dev {
   const char *label;
+  const char *name; /* the name it starts under (as a frontend saved it), else label */
   char config[1024], libdir[1024];
   mc_library *lib;
   mc_sync *sync;
@@ -199,8 +207,8 @@ static int dev_start(dev *d) {
   mc_cond_init(&d->c);
   if (!d->lib) CHECK(mc_library_open(d->libdir, &d->lib) == MC_OK);
   if (!d->lib) return 0;
-  CHECK(mc_sync_new(d->lib, d->config, d->label, MC_DEVICE_DESKTOP, &k_events, d, &d->sync) ==
-        MC_OK);
+  CHECK(mc_sync_new(d->lib, d->config, d->name ? d->name : d->label, MC_DEVICE_DESKTOP, &k_events,
+                    d, &d->sync) == MC_OK);
   if (!d->sync) return 0;
   snprintf(d->uid, sizeof d->uid, "%s", mc_sync_device_uid(d->sync));
   mc_sync_set_test_options(d->sync, 0, 0);
@@ -356,6 +364,76 @@ static int lib_int(dev *d, const char *sql) {
   return query_int(mc_library_db(d->lib), sql);
 }
 
+/* Waits until sql on d's sync.db gives want. */
+static int wait_group_int(dev *d, const char *sql, int want) {
+  uint64_t end = mc_mono_ms() + WAIT_MS;
+  int n;
+  while ((n = group_int(d, sql)) != want && mc_mono_ms() < end) mc_sleep_ms(50);
+  return n == want;
+}
+
+/* Every row of every table in db, in a stable order, to compare two states; sqlite3_free. */
+static char *dump(sqlite3 *db) {
+  sqlite3_str *out = sqlite3_str_new(db);
+  sqlite3_stmt *tables;
+  if (sqlite3_prepare_v2(db,
+                         "SELECT name FROM sqlite_master WHERE type = 'table'"
+                         " AND name NOT LIKE 'sqlite!_%' ESCAPE '!' ORDER BY name",
+                         -1, &tables, NULL) != SQLITE_OK)
+    return sqlite3_str_finish(out);
+  while (sqlite3_step(tables) == SQLITE_ROW) {
+    const char *t = (const char *)sqlite3_column_text(tables, 0);
+    char cols[512], expr[4096];
+    sqlite3_snprintf(sizeof cols, cols,
+                     "SELECT group_concat('quote(\"' || name || '\")', ' || '','' || ')"
+                     " FROM pragma_table_info('%q')",
+                     t);
+    query_text(db, cols, expr, sizeof expr);
+    char *sql = sqlite3_mprintf("SELECT group_concat(r, char(10)) FROM (SELECT %s AS r FROM \"%w\""
+                          " ORDER BY r)",
+                          expr, t);
+    char *rows = NULL;
+    sqlite3_stmt *stmt;
+    if (sql && sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+      if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_text(stmt, 0))
+        rows = sqlite3_mprintf("%s", (const char *)sqlite3_column_text(stmt, 0));
+      sqlite3_finalize(stmt);
+    }
+    sqlite3_str_appendf(out, "[%s]\n%s\n", t, rows ? rows : "");
+    sqlite3_free(rows);
+    sqlite3_free(sql);
+  }
+  sqlite3_finalize(tables);
+  return sqlite3_str_finish(out);
+}
+
+static char *group_dump(dev *d) {
+  mc_sync_db *sdb = NULL;
+  if (mc_sync_db_open(d->config, &sdb) != MC_OK) return NULL;
+  char *s = dump(mc_sync_db_handle(sdb));
+  mc_sync_db_close(sdb);
+  return s;
+}
+
+/* Two dumps the same; on a difference, both are printed. */
+static int same_dump(const char *a, const char *b) {
+  if (a && b && !strcmp(a, b)) return 1;
+  fprintf(stderr, "--- before:\n%s\n--- after:\n%s\n", a ? a : "(none)", b ? b : "(none)");
+  return 0;
+}
+
+/* d's config dir/name. */
+static void config_path(dev *d, const char *name, char *out, size_t cap) {
+  snprintf(out, cap, "%s/%s", d->config, name);
+}
+
+/* Waits until path is gone. */
+static int wait_gone(const char *path) {
+  uint64_t end = mc_mono_ms() + WAIT_MS;
+  while (mc_file_exists(path) && mc_mono_ms() < end) mc_sleep_ms(50);
+  return !mc_file_exists(path);
+}
+
 /* A signed-in scrobbling account in d's sync.db (logged, as a sign-in is), and plays
  * queued under it. Before dev_start(). */
 static void sign_in(dev *d, const char *user, int queued) {
@@ -427,6 +505,36 @@ static void fill_library(dev *d, const char *album, int n) {
   mc_library_close(lib);
 }
 
+/* A playlist holding the album's first track, plays of it here and the album in Recents,
+ * logged as edits: more of a library to put back. */
+static void add_extras(dev *d) {
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(d->libdir, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  char pl[MC_UID_STRLEN], en[MC_UID_STRLEN], pc[MC_UID_STRLEN], sql[1024];
+  mc_uid_new(pl);
+  mc_uid_new(en);
+  mc_uid_new(pc);
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  snprintf(sql, sizeof sql, "INSERT INTO playlists (uid, name) VALUES ('%s', 'Road')", pl);
+  CHECK(exec(db, sql) == SQLITE_OK);
+  snprintf(sql, sizeof sql,
+           "INSERT INTO playlist_entries (uid, playlist_uid, track_uid, position)"
+           " SELECT '%s', '%s', uid, 'a0' FROM tracks ORDER BY track_no LIMIT 1",
+           en, pl);
+  CHECK(exec(db, sql) == SQLITE_OK);
+  snprintf(sql, sizeof sql,
+           "INSERT INTO track_plays (uid, track_uid, node_uid, play_count, last_played_ms)"
+           " SELECT '%s', uid, '%s', 3, 1700000000000 FROM tracks ORDER BY track_no LIMIT 1",
+           pc, mc_library_node_uid(lib));
+  CHECK(exec(db, sql) == SQLITE_OK);
+  CHECK(exec(db, "INSERT INTO recents (uid, kind, opened_ms)"
+                 " SELECT uid, 'album', 1700000000000 FROM albums LIMIT 1") == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+  mc_library_close(lib);
+}
+
 static mc_status offline_post(const char *url, const char *form, mc_buffer *body,
                               long *http_status, const mc_http_cancel *cancel) {
   (void)url;
@@ -447,6 +555,7 @@ int main(int argc, char **argv) {
   mc_lastfm_post = offline_post;
 
   dev a = {0}, b = {0}, c = {0}, d = {0}, e = {0}, f = {0}, g = {0}, h = {0};
+  dev p = {0}, q = {0}, r = {0}, s = {0}, t = {0}, u = {0}, v = {0};
   dev_paths(&a, base, "a");
   dev_paths(&b, base, "b");
   dev_paths(&c, base, "c");
@@ -455,6 +564,13 @@ int main(int argc, char **argv) {
   dev_paths(&f, base, "f");
   dev_paths(&g, base, "g");
   dev_paths(&h, base, "h");
+  dev_paths(&p, base, "p");
+  dev_paths(&q, base, "q");
+  dev_paths(&r, base, "r");
+  dev_paths(&s, base, "s");
+  dev_paths(&t, base, "t");
+  dev_paths(&u, base, "u");
+  dev_paths(&v, base, "v");
 
   /* 1. A (1 track) asks B (3 tracks): B's library is kept, A confirms. Both are signed in;
    * A's two queued plays can't be sent (offline), so they're dropped with its account. */
@@ -517,6 +633,19 @@ int main(int argc, char **argv) {
     CHECK(lib_int(&b, "SELECT count(*) FROM tracks WHERE title = 'Alpha 1'") == 1);
     group_text(&b, "SELECT username FROM scrobble_account", user, sizeof user);
     CHECK(!strcmp(user, "bob"));
+
+    /* 7. Once the merge has run, a restart undoes nothing. */
+    dev_stop(&a);
+    mc_libmerge_test_new_run();
+    if (dev_start(&a)) {
+      CHECK(!mc_sync_take_merge_restored(a.sync, NULL, 0));
+      CHECK(lib_int(&a, "SELECT count(*) FROM tracks") == 4);
+      query_text(mc_library_db(a.lib), "SELECT value FROM meta WHERE key = 'library_uid'", uid,
+                 sizeof uid);
+      CHECK(!strcmp(uid, b_lib));
+      CHECK(group_int(&a, "SELECT count(*) FROM local WHERE group_uid IS NOT NULL") == 1);
+      CHECK(has_backup(a.libdir));
+    }
   }
   dev_stop(&a);
   dev_stop(&b);
@@ -596,6 +725,223 @@ int main(int argc, char **argv) {
   dev_stop(&f);
   dev_stop(&g);
   dev_stop(&h);
+
+  /* 5. P (1 track, a playlist, plays, Recents; signed in alone) asks Q (3 tracks) and
+   * confirms: P's library is set aside and the merge waits for Sync now. P is renamed while
+   * it waits, then restarts before Sync is pressed: the pairing is undone. P is exactly as it
+   * was before it, name included, and out of Q's group, which hears that it left; nothing of
+   * P's old library ever reached Q. */
+  fill_library(&p, "Pi", 1);
+  add_extras(&p);
+  sign_in(&p, "pat", 1);
+  fill_library(&q, "Qoppa", 3);
+  p.answer = 1;
+  if (dev_start(&p) && dev_start(&q)) {
+    char p_lib[MC_UID_STRLEN], path[1200], other[128] = "?", name[128] = "", sql[256];
+    snprintf(p_lib, sizeof p_lib, "%s", mc_library_uid(p.lib));
+    char *lib_before = dump(mc_library_db(p.lib));
+    char *group_before = group_dump(&p);
+    CHECK(pair(&p, &q) == MC_PAIR_PAIRED);
+    CHECK(p.merged && !p.kept_here && q.kept_here);
+    CHECK(mc_sync_merge_pending(p.sync));
+    CHECK(lib_int(&p, "SELECT count(*) FROM tracks") == 3);
+    CHECK(group_int(&p, "SELECT count(*) FROM local WHERE group_uid IS NOT NULL") == 1);
+    config_path(&p, MC_LIBMERGE_SYNC_BACKUP_DIR "/sync.db", path, sizeof path);
+    CHECK(mc_file_exists(path));
+    CHECK(!mc_sync_take_merge_restored(p.sync, other, sizeof other) && !other[0]);
+    CHECK(mc_sync_set_device_name(p.sync, "Pat's laptop") == MC_OK);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM devices WHERE uid = '%s' AND removed = 0", p.uid);
+    CHECK(group_int(&q, sql) == 1);
+
+    dev_stop(&p);
+    mc_libmerge_test_new_run();
+    p.name = "Pat's laptop"; /* as the frontend saved it */
+    if (dev_start(&p)) {
+      CHECK(mc_sync_take_merge_restored(p.sync, other, sizeof other) == 1);
+      CHECK(!strcmp(other, "q"));
+      CHECK(mc_sync_take_merge_restored(p.sync, other, sizeof other) == 0);
+      CHECK(!mc_sync_merge_pending(p.sync));
+      char *lib_after = dump(mc_library_db(p.lib));
+      char *group_after = group_dump(&p);
+      CHECK(same_dump(lib_before, lib_after));
+      CHECK(same_dump(group_before, group_after));
+      sqlite3_free(lib_after);
+      sqlite3_free(group_after);
+      CHECK(!strcmp(mc_library_uid(p.lib), p_lib));
+      CHECK(lib_int(&p, "SELECT count(*) FROM tracks") == 1);
+      CHECK(lib_int(&p, "SELECT count(*) FROM playlists WHERE name = 'Road'") == 1);
+      CHECK(lib_int(&p, "SELECT play_count FROM track_plays") == 3);
+      CHECK(group_int(&p, "SELECT count(*) FROM local WHERE group_uid IS NULL") == 1);
+      CHECK(group_int(&p, "SELECT count(*) FROM scrobble_queue") == 1);
+      mc_sync_get_device_name(p.sync, name, sizeof name);
+      CHECK(!strcmp(name, "p"));
+      CHECK(has_backup(p.libdir)); /* the set-aside copy stays, as after a merge */
+      CHECK(!mc_file_exists(path));
+      /* Q is told that P left, as by mc_sync_leave_group(). */
+      snprintf(sql, sizeof sql, "SELECT removed FROM devices WHERE uid = '%s'", p.uid);
+      CHECK(wait_group_int(&q, sql, 1));
+      config_path(&p, MC_LIBMERGE_LEAVE_DIR, path, sizeof path);
+      CHECK(wait_gone(path));
+      /* The merge waited, so nothing of P's old library ever went to Q. */
+      CHECK(lib_int(&q, "SELECT count(*) FROM tracks") == 3);
+      CHECK(lib_int(&q, "SELECT count(*) FROM tracks WHERE title LIKE 'Pi %'") == 0);
+      CHECK(lib_int(&q, "SELECT count(*) FROM playlists") == 0);
+      CHECK(lib_int(&q, "SELECT count(*) FROM track_plays") == 0);
+      CHECK(lib_int(&q, "SELECT count(*) FROM recents") == 0);
+      char user[64];
+      group_text(&q, "SELECT coalesce(username, '') FROM scrobble_account", user, sizeof user);
+      CHECK(strcmp(user, "pat") != 0);
+    }
+    sqlite3_free(lib_before);
+    sqlite3_free(group_before);
+  }
+  dev_stop(&p);
+  dev_stop(&q);
+
+  /* 6. R (2 tracks) is in a group with S. T (4 tracks) asks R, which confirms: R forgets S
+   * and waits. R leaves T's group before Sync is pressed: the pairing is undone, its library
+   * is exactly as before, its group with S is back and works, and T dropped it. */
+  fill_library(&r, "Rho", 2);
+  fill_library(&t, "Tau", 4);
+  if (dev_start(&r) && dev_start(&s) && dev_start(&t)) {
+    CHECK(pair(&s, &r) == MC_PAIR_PAIRED); /* S's library is empty: it joins R's */
+    CHECK(sync_now(&s, &r) == MC_OK);
+    char old_group[64], group[64], sql[256], other[128];
+    group_text(&r, "SELECT group_uid FROM local", old_group, sizeof old_group);
+    CHECK(old_group[0]);
+    char *lib_before = dump(mc_library_db(r.lib));
+    r.answer = 1;
+    CHECK(pair(&t, &r) == MC_PAIR_PAIRED);
+    CHECK(r.merged && !r.kept_here);
+    CHECK(mc_sync_merge_pending(r.sync));
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM devices WHERE uid = '%s'", s.uid);
+    CHECK(group_int(&r, sql) == 0);
+    CHECK(mc_sync_leave_group(r.sync) == MC_OK);
+    CHECK(mc_sync_take_merge_restored(r.sync, other, sizeof other) == 1);
+    CHECK(!strcmp(other, "t"));
+    CHECK(!mc_sync_merge_pending(r.sync));
+    char *lib_after = dump(mc_library_db(r.lib));
+    CHECK(same_dump(lib_before, lib_after));
+    sqlite3_free(lib_after);
+    sqlite3_free(lib_before);
+    group_text(&r, "SELECT group_uid FROM local", group, sizeof group);
+    CHECK(!strcmp(group, old_group));
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM devices WHERE uid = '%s' AND removed = 0",
+             s.uid);
+    CHECK(group_int(&r, sql) == 1);
+    snprintf(sql, sizeof sql, "SELECT removed FROM devices WHERE uid = '%s'", r.uid);
+    CHECK(wait_group_int(&t, sql, 1));
+    CHECK(lib_int(&t, "SELECT count(*) FROM tracks") == 4);
+    CHECK(lib_int(&t, "SELECT count(*) FROM tracks WHERE title LIKE 'Rho %'") == 0);
+    /* The old group syncs again. */
+    CHECK(sync_now(&r, &s) == MC_OK);
+    CHECK(lib_int(&s, "SELECT count(*) FROM tracks") == 2);
+  }
+  dev_stop(&r);
+  dev_stop(&s);
+  dev_stop(&t);
+
+  /* 8. U (1 track) asks V (2 tracks), confirms, and stops while the merge waits. The restore
+   * is then cut short twice: after putting the library back (as if the app stopped before
+   * sync started), and after putting sync.db back but before saying so. Each time the next
+   * start carries on, and ends as one restore would: once. */
+  fill_library(&u, "Upsilon", 1);
+  fill_library(&v, "Vau", 2);
+  u.answer = 1;
+  if (dev_start(&u) && dev_start(&v)) {
+    char *lib_before = dump(mc_library_db(u.lib));
+    char *group_before = group_dump(&u);
+    CHECK(pair(&u, &v) == MC_PAIR_PAIRED);
+    CHECK(mc_sync_merge_pending(u.sync));
+    dev_stop(&u);
+    mc_libmerge_test_new_run();
+
+    /* Left over from a try that stopped part way. */
+    char path[1200], saved[1200], junk[1300];
+    snprintf(junk, sizeof junk, "%s/.merge-restore", u.libdir);
+    CHECK(mc_mkdirs(junk) == MC_OK);
+    snprintf(junk, sizeof junk, "%s/.merge-restore/library.db", u.libdir);
+    FILE *fp = mc_fopen(junk, "wb");
+    if (fp) {
+      fputs("not a database", fp);
+      fclose(fp);
+    }
+    config_path(&u, MC_LIBMERGE_LEAVE_DIR ".part", path, sizeof path);
+    CHECK(mc_mkdirs(path) == MC_OK);
+
+    /* The library alone: put back, sync.db not yet. */
+    mc_library *lib = NULL;
+    CHECK(mc_library_open(u.libdir, &lib) == MC_OK);
+    if (lib) {
+      CHECK(query_int(mc_library_db(lib), "SELECT count(*) FROM tracks") == 1);
+      char flag[8] = "";
+      CHECK(mc_library_meta_get(lib, MC_LIBMERGE_RESTORE_SYNC_META, flag, sizeof flag) == MC_OK);
+      CHECK(!strcmp(flag, "1"));
+      CHECK(!mc_libmerge_pending(lib, NULL));
+      mc_library_close(lib);
+      lib = NULL;
+    }
+    snprintf(junk, sizeof junk, "%s/.merge-restore", u.libdir);
+    CHECK(!mc_file_exists(junk));
+    CHECK(group_int(&u, "SELECT count(*) FROM local WHERE group_uid IS NOT NULL") == 1);
+    /* Opened again, nothing is put back twice. */
+    CHECK(mc_library_open(u.libdir, &lib) == MC_OK);
+    if (lib) {
+      CHECK(query_int(mc_library_db(lib), "SELECT count(*) FROM tracks") == 1);
+      mc_library_close(lib);
+      lib = NULL;
+    }
+
+    /* sync.db put back, then a stop before the keys saying so were cleared: the same state
+     * again, with the copy kept aside here and put back where it was. */
+    config_path(&u, MC_LIBMERGE_SYNC_BACKUP_DIR "/sync.db", path, sizeof path);
+    snprintf(saved, sizeof saved, "%s/../saved-sync.db", u.config);
+    CHECK(mc_copy_file(path, saved, 1) == MC_OK);
+    mc_sync_db *sdb = NULL;
+    CHECK(mc_sync_db_open(u.config, &sdb) == MC_OK);
+    CHECK(mc_library_open(u.libdir, &lib) == MC_OK);
+    if (sdb && lib) {
+      char own[128] = "?";
+      int leave = 0;
+      CHECK(mc_libmerge_restore_sync(lib, sdb, u.config, own, sizeof own, &leave) == MC_OK);
+      CHECK(!strcmp(own, "u") && leave == 1);
+      CHECK(!mc_sync_db_group_uid(sdb));
+      CHECK(!mc_file_exists(path));
+      config_path(&u, MC_LIBMERGE_SYNC_BACKUP_DIR, junk, sizeof junk);
+      CHECK(mc_mkdirs(junk) == MC_OK);
+      CHECK(mc_copy_file(saved, path, 1) == MC_OK);
+      CHECK(mc_library_meta_set(lib, MC_LIBMERGE_RESTORE_SYNC_META, "1") == MC_OK);
+      CHECK(mc_library_meta_set(lib, MC_LIBMERGE_RESTORED_NAME_META, "u") == MC_OK);
+    }
+    mc_library_close(lib);
+    mc_sync_db_close(sdb);
+    mc_remove(saved);
+
+    if (dev_start(&u)) {
+      char other[128] = "";
+      CHECK(mc_sync_take_merge_restored(u.sync, other, sizeof other) == 1);
+      CHECK(!strcmp(other, "v"));
+      char *lib_after = dump(mc_library_db(u.lib));
+      char *group_after = group_dump(&u);
+      CHECK(same_dump(lib_before, lib_after));
+      CHECK(same_dump(group_before, group_after));
+      sqlite3_free(lib_after);
+      sqlite3_free(group_after);
+      CHECK(!mc_file_exists(path));
+      config_path(&u, MC_LIBMERGE_LEAVE_DIR ".part", junk, sizeof junk);
+      CHECK(!mc_file_exists(junk));
+      char sql[256];
+      snprintf(sql, sizeof sql, "SELECT removed FROM devices WHERE uid = '%s'", u.uid);
+      CHECK(wait_group_int(&v, sql, 1));
+      config_path(&u, MC_LIBMERGE_LEAVE_DIR, junk, sizeof junk);
+      CHECK(wait_gone(junk));
+      CHECK(lib_int(&v, "SELECT count(*) FROM tracks") == 2);
+    }
+    sqlite3_free(lib_before);
+    sqlite3_free(group_before);
+  }
+  dev_stop(&u);
+  dev_stop(&v);
 
   remove_tree(base);
   return TEST_RESULT();

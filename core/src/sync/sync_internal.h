@@ -165,6 +165,10 @@ struct mc_sync {
   int merge_nkept;
   char merge_signed_out[MC_SYNC_NAME_MAX];
   int merge_sent, merge_dropped;
+  /* A pairing undone before its merge ran (librestore.c): the kept group still to be told
+   * this device left it, from the notice in MC_LIBMERGE_LEAVE_DIR. Under lock. */
+  int leave_pending, leave_running;
+  uint64_t leave_next_ms; /* mono: the next try */
 
   /* Options, set before mc_sync_start(); see the test hooks below. */
   int use_discovery;
@@ -204,8 +208,15 @@ int mc_sync_release(mc_sync *sync, const char *peer_uid);
 
 /* After this device joined or left a group: the announced group hash and the members. */
 void mc_sync_group_changed(mc_sync *sync, mc_sync_conn *c);
-/* This device was removed: forget the group. */
+/* This device was removed: forget the group (and undo a pairing whose merge still waits, as
+ * mc_sync_abandon_merge() does). */
 void mc_sync_forget_group(mc_sync *sync, mc_sync_conn *c);
+/* If a merge of this device's old library still waits for Sync now, the pairing is undone:
+ * the library and sync.db go back to how they were before it (sync/libmerge.h, "Abandoning
+ * a merge"), with the name it had then, and a leave notice is sent to the kept group if it
+ * still holds this device. For the device leaving or removed, and a pairing that failed
+ * after setting the library aside. Through c, not under lock. */
+void mc_sync_abandon_merge(mc_sync *sync, mc_sync_conn *c);
 /* A session ended. rows_new: rows that were new here, which other members may lack too.
  * follow_up: it wrote group rows the peer hasn't seen yet, so sync with it again soon.
  * address and port, if given, are where we reached the peer. */

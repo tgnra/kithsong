@@ -416,6 +416,13 @@ class CoreSync(
      */
     val mergePending: Boolean get() = nativeMergePending(handle)
 
+    /**
+     * Once after this device went back to how it was before a pairing that merged libraries,
+     * because the pairing wasn't finished (the app stopped, or the device left the group,
+     * before Sync now was pressed): the other device's name, "" if not known. Null otherwise.
+     */
+    fun takeMergeRestored(): String? = nativeTakeMergeRestored(handle)
+
     /** Leaves the group. Blocks for a few seconds at most, telling a member. */
     fun leaveGroup() = nativeLeaveGroup(handle)
 
@@ -710,6 +717,7 @@ class CoreSync(
         @JvmStatic private external fun nativePairCancel(handle: Long)
         @JvmStatic private external fun nativePairMergeConfirm(handle: Long, merge: Boolean)
         @JvmStatic private external fun nativeMergePending(handle: Long): Boolean
+        @JvmStatic private external fun nativeTakeMergeRestored(handle: Long): String?
         @JvmStatic private external fun nativeLeaveGroup(handle: Long)
         @JvmStatic private external fun nativeNotifyChanged(handle: Long)
         @JvmStatic private external fun nativeSetAutomatic(handle: Long, on: Boolean)

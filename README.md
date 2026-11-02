@@ -75,9 +75,10 @@ Priorities:
 - **Pairing:** a short code links two devices once. If both already have music, the smaller
   library is merged into the larger one, once you agree on the device whose library is merged
   (it keeps a backup copy of its old library). No music moves until you've chosen what the
-  joining device holds and pressed **Sync now**. After that they reconnect and sync
-  automatically whenever both are online (on Android, while the app is on screen: a phone
-  doesn't sync in the background, though a sync it was in the middle of finishes).
+  joining device holds and pressed **Sync now**; closing the app or leaving the group before
+  then undoes the pairing, and the joining device is back as it was. After that they reconnect
+  and sync automatically whenever both are online (on Android, while the app is on screen: a
+  phone doesn't sync in the background, though a sync it was in the middle of finishes).
 - **Quiet when there's nothing to show:** checking whether a device is there shows nothing; a
   spinner appears once it answers and syncing starts, or straight away when you press
   **Sync now**, and only syncs you asked for or that got going report failing.

@@ -58,7 +58,8 @@ static char *backup_name(mc_library *lib) {
   return NULL;
 }
 
-mc_status mc_libmerge_set_aside(mc_library *lib, char **backup_abs) {
+mc_status mc_libmerge_set_aside(mc_library *lib, const char *kept_name, const char *own_name,
+                                char **backup_abs) {
   if (backup_abs) *backup_abs = NULL;
   if (!lib) return MC_ERR_INVALID_ARG;
   char *name = backup_name(lib);
@@ -77,11 +78,13 @@ mc_status mc_libmerge_set_aside(mc_library *lib, char **backup_abs) {
     }
   }
   sqlite3_finalize(stmt);
-  /* Only once the copy is whole is the library emptied. */
-  if (st == MC_OK) st = mc_library_reset_for_merge(lib);
-  /* The wait first, so the copy is never pending without it. */
-  if (st == MC_OK) st = mc_library_meta_set(lib, MC_LIBMERGE_WAIT_META, "1");
-  if (st == MC_OK) st = mc_library_meta_set(lib, MC_LIBMERGE_META, name);
+  /* Only once the copy is whole is the library emptied, in the same transaction as the keys
+   * that say so: the copy is never pending without its wait, nor the library empty without
+   * either. The wait names this run, so a later one knows it wasn't finished. */
+  const char *meta[] = {MC_LIBMERGE_WAIT_META, mc_libmerge_run_token(), MC_LIBMERGE_META, name,
+                        MC_LIBMERGE_WITH_META, kept_name ? kept_name : "",
+                        MC_LIBMERGE_NAME_META, own_name ? own_name : ""};
+  if (st == MC_OK) st = mc_library_reset_for_merge(lib, meta, 4);
   free(name);
   if (st == MC_OK && backup_abs)
     *backup_abs = abs;
@@ -998,7 +1001,11 @@ mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
   if (st == MC_OK) st = merge_rest(&x, progress, user);
   /* Done, even if some tracks failed: their files stay in the folder, out of the library. */
   if (st == MC_OK) st = mc_library_meta_set(lib, MC_LIBMERGE_META, NULL);
-  if (st == MC_OK) mc_library_meta_set(lib, MC_LIBMERGE_WAIT_META, NULL);
+  if (st == MC_OK) {
+    mc_library_meta_set(lib, MC_LIBMERGE_WAIT_META, NULL);
+    mc_library_meta_set(lib, MC_LIBMERGE_WITH_META, NULL);
+    mc_library_meta_set(lib, MC_LIBMERGE_NAME_META, NULL);
+  }
   if (st == MC_OK) exec_sql(x.db, "PRAGMA wal_checkpoint(PASSIVE)");
   sqlite3_close_v2(x.old);
   free(x.tracks.v);

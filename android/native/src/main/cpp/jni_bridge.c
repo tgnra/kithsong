@@ -1309,6 +1309,15 @@ JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreSync_nativeMergePending(JNIEn
   return mc_sync_merge_pending(sync_of(handle)) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreSync_nativeTakeMergeRestored(JNIEnv *env,
+                                                                             jclass cls,
+                                                                             jlong handle) {
+  (void)cls;
+  char other[MC_SYNC_DEVICE_NAME_MAX + 1];
+  if (!mc_sync_take_merge_restored(sync_of(handle), other, sizeof other)) return NULL;
+  return new_string(env, other);
+}
+
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeLeaveGroup(JNIEnv *env, jclass cls,
                                                                     jlong handle) {
   (void)cls;

@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.runtime.Immutable
 import ng.kithso.core.ConfirmState
 import ng.kithso.core.CoreSync
@@ -378,7 +379,10 @@ class Syncer(
         refreshLists(sync)
     }
 
-    /** Leaves the group. The library stays as it is. */
+    /**
+     * Leaves the group. The library stays as it is, unless the merge of a pairing still
+     * waited for Sync now: then the library from before that pairing is back.
+     */
     fun leaveGroup() = call { sync ->
         sync.leaveGroup()
         refreshLists(sync)
@@ -820,6 +824,7 @@ class Syncer(
     // On [thread]. Reads the group and what's nearby again.
     private fun refreshLists(sync: CoreSync) {
         try {
+            sayRestored(sync)
             val devices = sync.devices()
             val libraryState = sync.libraryState
             val mergePending = sync.mergePending
@@ -843,6 +848,21 @@ class Syncer(
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't read the sync group", e)
         }
+    }
+
+    // On [thread]. A pairing that merged libraries wasn't finished (the app stopped, or this
+    // phone left the group, before Sync now), so the core put everything back as it was: a
+    // toast says so once, and the old library is read again.
+    private fun sayRestored(sync: CoreSync) {
+        val other = sync.takeMergeRestored() ?: return
+        val text = if (other.isEmpty()) {
+            context.getString(R.string.merge_restored_unnamed)
+        } else {
+            context.getString(R.string.merge_restored, other)
+        }
+        Log.i(TAG, "Pairing wasn't finished: the library from before it is back")
+        scope.launch(Dispatchers.Main) { Toast.makeText(context, text, Toast.LENGTH_LONG).show() }
+        source.refresh()
     }
 
     companion object {

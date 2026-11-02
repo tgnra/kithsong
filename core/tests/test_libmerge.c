@@ -270,7 +270,7 @@ static void test_merge(const char *root) {
 
   /* Set aside: a copy, then an empty library under a new node uid with the same uid. */
   char *backup = NULL;
-  CHECK(mc_libmerge_set_aside(lib, &backup) == MC_OK);
+  CHECK(mc_libmerge_set_aside(lib, NULL, NULL, &backup) == MC_OK);
   CHECK(backup && mc_file_exists(backup));
   CHECK(backup && strstr(backup, MC_LIBMERGE_PREFIX) != NULL);
   CHECK(mc_libmerge_pending(lib, NULL) == 1);
@@ -296,9 +296,9 @@ static void test_merge(const char *root) {
     snprintf(odir, sizeof odir, "%s-other", dir);
     remove_tree(odir);
     CHECK(mc_library_open(odir, &other) == MC_OK);
-    CHECK(mc_libmerge_set_aside(other, &again) == MC_OK);
+    CHECK(mc_libmerge_set_aside(other, NULL, NULL, &again) == MC_OK);
     char *third = NULL;
-    CHECK(mc_libmerge_set_aside(other, &third) == MC_OK);
+    CHECK(mc_libmerge_set_aside(other, NULL, NULL, &third) == MC_OK);
     CHECK(again && third && strcmp(again, third) != 0);
     free(again);
     free(third);
@@ -481,7 +481,7 @@ static void test_merge_credits(const char *root, int old_copy) {
   CHECK(mc_import_db_set_credit(lib, 0, duet.uid, &whole, feat, 2) == MC_OK);
 
   char *backup = NULL;
-  CHECK(mc_libmerge_set_aside(lib, &backup) == MC_OK);
+  CHECK(mc_libmerge_set_aside(lib, NULL, NULL, &backup) == MC_OK);
   if (old_copy && backup) {
     sqlite3 *copy = NULL;
     CHECK(sqlite3_open_v2(backup, &copy, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK);

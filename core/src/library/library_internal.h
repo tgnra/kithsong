@@ -26,6 +26,13 @@ struct mc_library {
  * upgrading): for connections the core opens for itself, on an import's or sync's thread,
  * which come and go while the frontend's handle stays open. */
 mc_status mc_library_open_internal(const char *dir, mc_library **out);
+/* mc_library_open_internal() that never undoes an abandoned pairing (sync/libmerge.h): for
+ * the copy of the library from before it, which undoing it opens to bring up to date. */
+mc_status mc_library_open_plain(const char *dir, mc_library **out);
+
+/* Rereads node_uid and library_uid from meta into this handle, after the library's contents
+ * were replaced (sync/libmerge.h). */
+mc_status mc_library_reload_ids(mc_library *lib);
 
 static inline sqlite3 *mc_library_db(mc_library *lib) {
   return lib->db;
@@ -126,8 +133,9 @@ mc_status mc_library_meta_set(mc_library *lib, const char *key, const char *valu
 /* For merging libraries (sync/libmerge.c): empties the library in place without logging
  * anything. Every library row, files, aliases, merge_keys and the changelog go, the example
  * smart lists are seeded again as migration v10 does, and the library gets a new node uid.
- * library_uid and the rest of meta stay. Other connections stay valid (it's the same file,
- * and mc_library_begin_write() rereads the node uid). */
-mc_status mc_library_reset_for_merge(mc_library *lib);
+ * library_uid and the rest of meta stay. meta (nmeta key/value pairs, values not NULL; may
+ * be NULL with 0) is written in the same transaction. Other connections stay valid (it's the
+ * same file, and mc_library_begin_write() rereads the node uid). */
+mc_status mc_library_reset_for_merge(mc_library *lib, const char *const *meta, int nmeta);
 
 #endif

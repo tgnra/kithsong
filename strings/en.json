@@ -484,6 +484,8 @@
     "merge_scrobble_signed_out": { "text": "Last.fm user {0} was signed out.", "note": "{0} is the Last.fm user name of the old library." },
     "merge_scrobbles_dropped": { "one": "{0:d} play couldn't be sent to Last.fm before signing out, and was dropped.", "other": "{0:d} plays couldn't be sent to Last.fm before signing out, and were dropped." },
     "merge_pending": { "text": "Music from your old library is merged into this one at the first sync after Sync now is pressed.", "note": "On this device's page, after pairing by merging, until the merge has run. It waits until this device's sync settings are confirmed with Sync now (here, or on another device for this one), then for a sync with the group." },
+    "merge_restored": { "text": "Pairing with {0} wasn't finished, so your library is back as it was.", "note": "Shown once, as a passing notice, after pairing with {0} by merging libraries was undone because Sync now hadn't been pressed yet when the app was closed, or when this device left the group. This device's own library, group and settings are back as they were before the pairing, and it is no longer in {0}'s group. Reassuring, not an error." },
+    "merge_restored_unnamed": { "text": "Pairing wasn't finished, so your library is back as it was.", "note": "As merge_restored, when the other device's name isn't known." },
     "sync_now": "Sync now",
     "cancel_sync": { "text": "Cancel sync", "note": "Stops the sync in progress. It doesn't start again by itself for an hour, unless Sync now is pressed." },
     "remove_from_group": "Remove from group",

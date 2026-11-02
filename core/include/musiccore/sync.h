@@ -129,6 +129,12 @@ typedef struct mc_pair_result {
  *    quality, when the file goes to the Recycle Bin or trash. If the app stops before it
  *    ran, it runs after the next session that syncs the library once the profile is
  *    confirmed (mc_sync_merge_pending()).
+ *  - Until the profile is confirmed the pairing isn't finished, and it is undone if the app
+ *    stops (the next mc_library_open() and mc_sync_new() do it), or the device leaves or is
+ *    removed from the group: its library, sync settings, old group and name go back to how
+ *    they were before it paired, and it leaves the kept group (whose members are told once
+ *    one can be reached). mc_sync_take_merge_restored() then says so once. A pairing that
+ *    fails after the library was set aside is undone the same way.
  *  - A frontend that leaves on_pair_merge NULL doesn't offer merging: pairing two libraries
  *    with music is refused with MC_PAIR_LIBRARY_MISMATCH as before. So is pairing with a
  *    device running a version without merging. */
@@ -352,13 +358,23 @@ mc_status mc_sync_pair_merge_confirm(mc_sync *sync, int merge);
  * after a session that syncs the library, once this device's profile has been confirmed;
  * see on_merge_done), else 0. */
 int mc_sync_merge_pending(mc_sync *sync);
+/* 1 once after this device went back to how it was before a pairing that merged libraries,
+ * because the pairing wasn't finished: the app stopped, or the device left or was removed
+ * from the group, while the merge still waited for Sync now (see "Merging libraries" above).
+ * Its library, its old group (if any), its scrobbling account and its name are as they were,
+ * and it has left the kept group. other (cap bytes) gets the kept device's name, "" if not
+ * known, for a frontend to say so once; 0 otherwise. A frontend asks at start, after
+ * mc_sync_leave_group() and after sessions, and reloads the library when it's 1. */
+int mc_sync_take_merge_restored(mc_sync *sync, char *other, size_t cap);
 
 /* --- Group --- */
 
 /* Leaves the group: marks this device removed, tells one reachable member so the group
  * learns of it (blocking for a few seconds at most), then forgets the group's data here.
  * MC_ERR_LOCKED if this device is the group's only archive and others remain;
- * MC_ERR_NOT_FOUND if not in a group. */
+ * MC_ERR_NOT_FOUND if not in a group. If this device's library was merged in pairing and the
+ * merge still waits for Sync now, the pairing is undone too: see
+ * mc_sync_take_merge_restored(). */
 mc_status mc_sync_leave_group(mc_sync *sync);
 /* Removes another member (or this device, as mc_sync_leave_group()). Members then refuse
  * it, and it forgets the group when it next talks to one. MC_ERR_LOCKED if it is the

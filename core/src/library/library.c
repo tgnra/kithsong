@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "search/search_internal.h"
+#include "sync/libmerge.h"
 #include "sync/rows.h"
 #include "tagger/refresh.h"
 #include "util/platform.h"
@@ -361,7 +362,9 @@ static mc_status load_meta_uid(mc_library *lib, const char *key, char out[MC_UID
 
 /* --- Public API --- */
 
-static mc_status library_open(const char *dir, int background, mc_library **out) {
+/* restore: whether a pairing abandoned in an earlier run is undone here (sync/libmerge.h);
+ * not for the copy that undoing it opens itself. */
+static mc_status library_open(const char *dir, int background, int restore, mc_library **out) {
   if (!dir || !*dir || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
 
@@ -413,6 +416,10 @@ static mc_status library_open(const char *dir, int background, mc_library **out)
   if ((st = mc_changelog_install_triggers(lib->db, k_tracked,
                                           sizeof k_tracked / sizeof k_tracked[0])) != MC_OK)
     goto fail;
+  /* A merge that still waited for Sync now when the app last stopped: the pairing wasn't
+   * finished, so the library is put back as it was before it, before anyone reads it (and
+   * before the uids below are loaded). Not fatal: it's tried again at the next open. */
+  if (restore) mc_libmerge_restore_on_open(lib);
   if ((st = load_meta_uid(lib, "node_uid", lib->node_uid)) != MC_OK) goto fail;
   if ((st = load_meta_uid(lib, "library_uid", lib->library_uid)) != MC_OK) goto fail;
   mc_hlc_init(&lib->hlc, mc_wall_ms, mc_changelog_max_hlc(lib->db));
@@ -435,11 +442,15 @@ fail:
 }
 
 mc_status mc_library_open(const char *dir, mc_library **out) {
-  return library_open(dir, 1, out);
+  return library_open(dir, 1, 1, out);
 }
 
 mc_status mc_library_open_internal(const char *dir, mc_library **out) {
-  return library_open(dir, 0, out);
+  return library_open(dir, 0, 1, out);
+}
+
+mc_status mc_library_open_plain(const char *dir, mc_library **out) {
+  return library_open(dir, 0, 0, out);
 }
 
 void mc_library_close(mc_library *lib) {
@@ -519,7 +530,23 @@ const char *mc_library_node_uid(const mc_library *lib) {
 }
 
 const char *mc_library_uid(const mc_library *lib) {
+  /* Reread: another connection may have put back the library from before a pairing
+   * (sync/libmerge.h), uid and all. Kept as it was if it can't be read. */
+  mc_library *l = (mc_library *)lib;
+  char uid[MC_UID_STRLEN];
+  if (read_meta_uid(l, "library_uid", uid) == MC_OK) memcpy(l->library_uid, uid, MC_UID_STRLEN);
   return lib->library_uid;
+}
+
+mc_status mc_library_reload_ids(mc_library *lib) {
+  if (!lib) return MC_ERR_INVALID_ARG;
+  char node[MC_UID_STRLEN], uid[MC_UID_STRLEN];
+  mc_status st = read_meta_uid(lib, "node_uid", node);
+  if (st == MC_OK) st = read_meta_uid(lib, "library_uid", uid);
+  if (st != MC_OK) return st;
+  memcpy(lib->node_uid, node, MC_UID_STRLEN);
+  memcpy(lib->library_uid, uid, MC_UID_STRLEN);
+  return MC_OK;
 }
 
 mc_status mc_library_rotate_node_uid(mc_library *lib) {
@@ -585,8 +612,8 @@ mc_status mc_library_meta_set(mc_library *lib, const char *key, const char *valu
 /* The migration that seeds the example smart lists (v10); see mc_library_reset_for_merge(). */
 #define EXAMPLES_MIGRATION 9
 
-mc_status mc_library_reset_for_merge(mc_library *lib) {
-  if (!lib) return MC_ERR_INVALID_ARG;
+mc_status mc_library_reset_for_merge(mc_library *lib, const char *const *meta, int nmeta) {
+  if (!lib || (nmeta > 0 && !meta)) return MC_ERR_INVALID_ARG;
   char fresh[MC_UID_STRLEN];
   mc_status st = mc_uid_new(fresh);
   if (st != MC_OK) return st;
@@ -609,6 +636,9 @@ mc_status mc_library_reset_for_merge(mc_library *lib) {
   if (st == MC_OK && EXAMPLES_MIGRATION < MC_SCHEMA_VERSION)
     st = exec(lib, k_migrations[EXAMPLES_MIGRATION]);
   if (st == MC_OK) st = write_meta(lib, "node_uid", fresh);
+  /* The caller's keys in the same transaction, so the library is never emptied without
+   * them. */
+  for (int i = 0; i < nmeta && st == MC_OK; i++) st = write_meta(lib, meta[2 * i], meta[2 * i + 1]);
   lib->applying_remote = 0;
   if (st == MC_OK) st = exec(lib, "COMMIT");
   if (st != MC_OK) {

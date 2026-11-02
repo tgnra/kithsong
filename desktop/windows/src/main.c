@@ -1053,11 +1053,29 @@ static void save_own_name(mc_sync *sync) {
 }
 
 /* Rebuilds the sidebar's devices from sync, and everything that shows them. */
+static void schedule_library_refresh(void);
+
+/* A pairing that merged libraries wasn't finished (the app closed, or this PC left the group,
+ * before Sync now), so the core put everything back as it was: the now-playing strip says so
+ * once, and the library views show the old library again. */
+static void say_restored(mc_sync *sync) {
+  char other[MC_SYNC_DEVICE_NAME_MAX + 1];
+  if (!sync || !mc_sync_take_merge_restored(sync, other, sizeof other)) return;
+  wchar_t text[192];
+  if (other[0])
+    mc_wformat(text, 192, mc_str(MC_STR_MERGE_RESTORED), MC_S(other));
+  else
+    lstrcpynW(text, mc_wstr(MC_STR_MERGE_RESTORED_UNNAMED), 192);
+  now_playing_notice(text);
+  schedule_library_refresh();
+}
+
 static void refresh_devices(void) {
   KillTimer(g_app.wnd, TIMER_REFRESH_DEVICES);
   g_app.refresh_pending = FALSE;
 
   mc_sync *sync = sync_bridge_get();
+  say_restored(sync);
   mc_sync_device_list *paired = NULL;
   mc_sync_nearby_list *nearby = NULL;
   if (sync && mc_sync_list_devices(sync, &paired) != MC_OK) paired = NULL;

@@ -38,5 +38,7 @@ int now_playing_position(void);
 
 /* Shows text in the track's place for a moment, e.g. "Volume 40%" after a shortcut. */
 void now_playing_flash(const wchar_t *text);
+/* The same for a sentence, held long enough to read (e.g. that a pairing was undone). */
+void now_playing_notice(const wchar_t *text);
 
 #endif

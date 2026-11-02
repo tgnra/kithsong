@@ -179,9 +179,33 @@ static void show_albums(void) {
 }
 
 /* Rebuilds the section from sync, and everything that shows the devices. */
+static void schedule_library_refresh(void);
+
+/* A pairing that merged libraries wasn't finished (the app closed, or this computer left the
+ * group, before Sync now), so the core put everything back as it was: a toast says so once,
+ * and the library views show the old library again. */
+static void say_restored(mc_sync *sync) {
+  char other[MC_SYNC_DEVICE_NAME_MAX + 1];
+  if (!sync || !mc_sync_take_merge_restored(sync, other, sizeof other)) return;
+  char text[512];
+  if (other[0])
+    mc_format(text, sizeof text, mc_str(MC_STR_MERGE_RESTORED), MC_S(other));
+  else
+    g_strlcpy(text, mc_str(MC_STR_MERGE_RESTORED_UNNAMED), sizeof text);
+  if (d.a->toasts) {
+    AdwToast *toast = adw_toast_new("");
+    adw_toast_set_use_markup(toast, FALSE);
+    adw_toast_set_title(toast, text);
+    adw_toast_set_timeout(toast, 8);
+    adw_toast_overlay_add_toast(d.a->toasts, toast);
+  }
+  schedule_library_refresh();
+}
+
 static void refresh_devices(void) {
   g_clear_handle_id(&d.refresh_source, g_source_remove);
   mc_sync *sync = sync_bridge_get();
+  say_restored(sync);
   mc_sync_device_list *paired = NULL;
   mc_sync_nearby_list *nearby = NULL;
   if (sync && mc_sync_list_devices(sync, &paired) != MC_OK) paired = NULL;

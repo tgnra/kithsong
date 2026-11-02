@@ -49,6 +49,10 @@
 #define ACCEPT_WAIT_MS 1000
 #define CLAIM_WAIT_MS 5000
 #define MAX_ADDRS 8
+/* A pairing undone before its merge ran: how often to try telling the kept group again that
+ * this device left it, while none of its members can be reached, and for how long. */
+#define LEAVE_RETRY_MS 60000
+#define LEAVE_GIVE_UP_MS (30LL * 24 * 60 * 60 * 1000)
 /* How long a press of Sync waits for a session to carry it: long enough for a member that
  * only it can reach out from to call back, not so long that a press confirms edits made
  * long after it. */
@@ -238,6 +242,8 @@ static int run_pending_merge(mc_sync *sync, mc_sync_conn *c, const mc_sync_resul
   mc_libmerge_pending(c->lib, &backup);
   mc_merge_result r;
   mc_libmerge_run(c->lib, kept, nkept, emit_merge_progress, sync, &r);
+  /* Merged: sync.db's copy from before the pairing has nothing left to undo. */
+  if (!mc_libmerge_pending(c->lib, NULL)) mc_libmerge_drop_sync_backup(sync->config_dir);
   r.backup_path = backup ? backup : "";
   r.scrobble_signed_out = signed_out;
   r.scrobbles_sent = sent;
@@ -622,6 +628,51 @@ void mc_sync_forget_group(mc_sync *sync, mc_sync_conn *c) {
   for (int i = 0; i < sync->npeers; i++) sync->peers[i].member = 0;
   mc_mutex_unlock(&sync->lock);
   mc_sync_group_changed(sync, c);
+  /* Removed while its merge still waited: the pairing is undone, as for leaving. */
+  mc_sync_abandon_merge(sync, c);
+}
+
+/* --- A pairing undone before its merge ran (librestore.c) --- */
+
+/* The second step of undoing it, through c: sync.db as it was before the pairing, and the
+ * name with it. starting: in mc_sync_new(), before anything else runs; otherwise the device
+ * takes the name on as a rename, and tells its old group's members, if any, that it's back. */
+static void finish_restore(mc_sync *sync, mc_sync_conn *c, int starting) {
+  char own[MC_SYNC_NAME_MAX], name[MC_SYNC_NAME_MAX];
+  int leave = 0;
+  if (mc_libmerge_restore_sync(c->lib, c->sdb, sync->config_dir, own, sizeof own, &leave) !=
+      MC_OK)
+    return;
+  clean_name(own, name);
+  if (name[0] && starting)
+    memcpy(sync->name, name, sizeof name);
+  else if (name[0])
+    adopt_name(sync, c, name);
+  if (!starting) {
+    mc_sync_group_changed(sync, c);
+    mc_sync_notify_changed(sync);
+  }
+  mc_mutex_lock(&sync->lock);
+  if (leave) {
+    sync->leave_pending = 1;
+    sync->leave_next_ms = 0;
+  }
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+}
+
+void mc_sync_abandon_merge(mc_sync *sync, mc_sync_conn *c) {
+  if (!c->lib || !mc_libmerge_waiting(c->lib) || !mc_libmerge_pending(c->lib, NULL)) return;
+  if (mc_libmerge_restore(c->lib) != MC_OK) return;
+  /* What the pairing learnt for the merge goes with it. */
+  mc_mutex_lock(&sync->lock);
+  free(sync->merge_kept);
+  sync->merge_kept = NULL;
+  sync->merge_nkept = 0;
+  sync->merge_signed_out[0] = '\0';
+  sync->merge_sent = sync->merge_dropped = 0;
+  mc_mutex_unlock(&sync->lock);
+  finish_restore(sync, c, 0);
 }
 
 /* Under lock: every member but skip is due soon, from either side. */
@@ -644,9 +695,13 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
                            const char *address, uint16_t port) {
   if (result->status == MC_OK && c->sdb) {
     sqlite3_stmt *stmt;
+    /* Members only: a session that found this device removed has forgotten the group (and
+     * may have put back the one from before a pairing it undid), so nothing of it is kept. */
     if (sqlite3_prepare_v2(mc_sync_db_handle(c->sdb),
                            "INSERT INTO peer_contact (device_uid, address, port, last_sync_ms)"
-                           " VALUES (?1, ?2, ?3, ?4) ON CONFLICT (device_uid) DO UPDATE SET"
+                           " SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM devices"
+                           " WHERE uid = ?1 AND removed = 0)"
+                           " ON CONFLICT (device_uid) DO UPDATE SET"
                            " address = coalesce(excluded.address, peer_contact.address),"
                            " port = coalesce(excluded.port, peer_contact.port),"
                            " last_sync_ms = excluded.last_sync_ms",
@@ -1125,6 +1180,120 @@ static int load_members(mc_sync_conn *c, member_row **out) {
   return n;
 }
 
+/* --- Telling the kept group of a pairing undone (librestore.c) --- */
+
+/* uid's key, if it's a member in c's sync.db. */
+static int member_key(mc_sync_conn *c, const char *uid, unsigned char key[MC_SYNC_KEY_LEN]) {
+  int have = 0;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(c->sdb),
+                         "SELECT public_key FROM devices WHERE uid = ?1 AND removed = 0"
+                         " AND length(public_key) = ?2",
+                         -1, &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, MC_SYNC_KEY_LEN);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      memcpy(key, sqlite3_column_blob(stmt, 0), MC_SYNC_KEY_LEN);
+      have = 1;
+    }
+    sqlite3_finalize(stmt);
+  }
+  return have;
+}
+
+/* One session with member j from the leave notice's sync.db, where this device is marked
+ * removed, so the member learns of it as from mc_sync_leave_group()'s. Nothing else happens
+ * in it: a removed device syncs no library. 1 if the member knows now. */
+static int tell_left(mc_sync *sync, mc_sync_conn *c, session_job *j) {
+  unsigned char key[MC_SYNC_KEY_LEN];
+  if (!member_key(c, j->uid, key)) return 0;
+  mc_channel *ch = NULL;
+  for (int i = 0; i < j->n && !ch && !stopping(sync); i++)
+    if (mc_channel_connect(j->host[i], j->port[i], MC_MODE_SESSION, CONNECT_MS, &ch) != MC_OK)
+      ch = NULL;
+  if (!ch) return 0;
+  mc_session s;
+  memset(&s, 0, sizeof s);
+  s.sync = sync;
+  s.conn = c;
+  s.ch = ch;
+  memcpy(s.peer_uid, j->uid, MC_UID_STRLEN);
+  mc_sync_track(sync, ch);
+  int claimed = mc_sync_claim(sync, j->uid, strcmp(sync->device_uid, j->uid) < 0, ch);
+  mc_status st = claimed ? mc_session_handshake_initiate(&s, key) : MC_ERR_LOCKED;
+  if (st == MC_OK) st = mc_session_run(&s);
+  if (claimed) mc_sync_release(sync, j->uid);
+  mc_sync_untrack(sync, ch);
+  mc_channel_close(ch);
+  /* "removed" from the member: it had already dropped this device. */
+  return st == MC_OK || s.we_removed;
+}
+
+/* Sends the leave notice to one member it can reach. 1 once it's done with: a member was
+ * told, none is left to tell, or it's too old to matter (the group goes on holding this
+ * device as one that never answers, as when leaving reaches no member). */
+static int send_leave_notice(mc_sync *sync) {
+  size_t len = strlen(sync->config_dir) + sizeof MC_LIBMERGE_LEAVE_DIR + sizeof MC_SYNC_DB_NAME + 2;
+  char *dir = malloc(len), *path = malloc(len);
+  if (!dir || !path) {
+    free(dir);
+    free(path);
+    return 0;
+  }
+  snprintf(dir, len, "%s%c%s", sync->config_dir, MC_PATH_SEP, MC_LIBMERGE_LEAVE_DIR);
+  snprintf(path, len, "%s%c%s", dir, MC_PATH_SEP, MC_SYNC_DB_NAME);
+  int64_t size = 0, mtime = 0;
+  int done = !mc_file_exists(path) ||
+             (mc_file_info(path, &size, &mtime) == MC_OK && mc_wall_ms() - mtime > LEAVE_GIVE_UP_MS);
+  mc_sync_conn c;
+  memset(&c, 0, sizeof c);
+  if (!done && mc_sync_db_open(dir, &c.sdb) == MC_OK &&
+      mc_library_open_internal(sync->lib_dir, &c.lib) == MC_OK) {
+    member_row *ms = NULL;
+    int n = load_members(&c, &ms);
+    done = n == 0;
+    for (int i = 0; i < n && !done && !stopping(sync); i++) {
+      session_job j;
+      memset(&j, 0, sizeof j);
+      j.sync = sync;
+      memcpy(j.uid, ms[i].uid, MC_UID_STRLEN);
+      char host[MC_SYNC_ADDR_MAX] = "";
+      uint16_t port = 0;
+      mc_mutex_lock(&sync->lock);
+      mc_sync_peer *p = find_peer(sync, j.uid, 0);
+      if (p && p->discovered) {
+        memcpy(host, p->address, sizeof host);
+        port = p->port;
+      }
+      mc_mutex_unlock(&sync->lock);
+      job_addresses(&c, &j, host, port);
+      done = tell_left(sync, &c, &j);
+    }
+    free(ms);
+  }
+  mc_sync_conn_close(&c);
+  if (done) {
+    mc_remove_tree(dir);
+    fprintf(stderr, "musiccore: merge: the group the pairing was undone with knows it's left\n");
+  }
+  free(dir);
+  free(path);
+  return done;
+}
+
+static void leave_worker(void *arg) {
+  mc_sync *sync = arg;
+  int done = send_leave_notice(sync);
+  mc_mutex_lock(&sync->lock);
+  sync->leave_running = 0;
+  if (done)
+    sync->leave_pending = 0;
+  else
+    sync->leave_next_ms = mc_mono_ms() + LEAVE_RETRY_MS;
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+}
+
 static void sched_main(void *arg) {
   mc_sync *sync = arg;
   mc_sync_conn c;
@@ -1189,6 +1358,13 @@ static void sched_main(void *arg) {
       }
     }
     free(ms);
+    int send_leave = 0;
+    if (sync->leave_pending && !sync->leave_running) {
+      if (now >= sync->leave_next_ms)
+        send_leave = sync->leave_running = 1;
+      else if (sync->leave_next_ms < wake)
+        wake = sync->leave_next_ms;
+    }
     if (sync->changed_ms && now >= sync->changed_ms + CHANGE_DELAY_MS) {
       sync->changed_ms = 0;
       trigger_members(sync, NULL, MC_TRIGGER_CHANGED, now);
@@ -1280,6 +1456,12 @@ static void sched_main(void *arg) {
 
     for (int i = 0; i < njobs; i++)
       if (mc_sync_spawn(sync, session_worker, jobs[i]) != MC_OK) free(jobs[i]);
+    if (send_leave && mc_sync_spawn(sync, leave_worker, sync) != MC_OK) {
+      mc_mutex_lock(&sync->lock);
+      sync->leave_running = 0;
+      sync->leave_next_ms = now + LEAVE_RETRY_MS;
+      mc_mutex_unlock(&sync->lock);
+    }
     for (int i = 0; i < nchecks; i++) {
       if (mc_sync_spawn(sync, reach_worker, checks[i]) == MC_OK) continue;
       reach_done(sync, checks[i]->uid);
@@ -1408,6 +1590,20 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   if (st != MC_OK) {
     mc_sync_free(sync);
     return st;
+  }
+  /* A pairing undone at library open (its merge still waited for Sync now when the app
+   * stopped) gets its sync.db back here, before anything reads it; and a notice to its kept
+   * group that this device left may still wait to be sent. */
+  finish_restore(sync, &sync->api, 1);
+  {
+    size_t plen = strlen(config_dir) + sizeof MC_LIBMERGE_LEAVE_DIR + sizeof MC_SYNC_DB_NAME + 2;
+    char *path = malloc(plen);
+    if (path) {
+      snprintf(path, plen, "%s%c%s%c%s", config_dir, MC_PATH_SEP, MC_LIBMERGE_LEAVE_DIR,
+               MC_PATH_SEP, MC_SYNC_DB_NAME);
+      if (mc_file_exists(path)) sync->leave_pending = 1;
+      free(path);
+    }
   }
   memcpy(sync->device_uid, mc_sync_db_device_uid(sync->api.sdb), MC_UID_STRLEN);
   seed_auto_after(sync);
@@ -1656,6 +1852,19 @@ int mc_sync_merge_pending(mc_sync *sync) {
   return pending;
 }
 
+int mc_sync_take_merge_restored(mc_sync *sync, char *other, size_t cap) {
+  if (other && cap) other[0] = '\0';
+  if (!sync) return 0;
+  char name[MC_SYNC_NAME_MAX];
+  mc_mutex_lock(&sync->api_lock);
+  int found = mc_library_meta_get(sync->api.lib, MC_LIBMERGE_RESTORED_META, name, sizeof name) ==
+              MC_OK;
+  if (found) mc_library_meta_set(sync->api.lib, MC_LIBMERGE_RESTORED_META, NULL);
+  mc_mutex_unlock(&sync->api_lock);
+  if (found && other && cap) snprintf(other, cap, "%s", name);
+  return found;
+}
+
 /* --- Group API --- */
 
 static int count_query(sqlite3 *db, const char *sql, const char *arg) {
@@ -1697,13 +1906,20 @@ mc_status mc_sync_leave_group(mc_sync *sync) {
   if (!sync) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&sync->api_lock);
   sqlite3 *db = mc_sync_db_handle(sync->api.sdb);
-  mc_status st = mc_sync_db_group_uid(sync->api.sdb) ? MC_OK : MC_ERR_NOT_FOUND;
+  const char *group = mc_sync_db_group_uid(sync->api.sdb);
+  char left[MC_UID_STRLEN];
+  snprintf(left, sizeof left, "%s", group ? group : "");
+  mc_status st = group ? MC_OK : MC_ERR_NOT_FOUND;
   int others = 0;
   if (st == MC_OK) {
     others = count_query(db, "SELECT count(*) FROM devices WHERE removed = 0 AND uid <> ?1",
                          sync->device_uid);
     if (others > 0) st = check_not_last_archive(db, sync->device_uid);
   }
+  /* Leaving while its merge still waits undoes the pairing (below): the scrobbling account it
+   * brought into the group goes with it, as the group hears with the leave. Best effort. */
+  if (st == MC_OK && others > 0)
+    mc_libmerge_sign_out_brought(sync->api.lib, sync->api.sdb, sync->config_dir);
   if (st == MC_OK && others > 0) st = mark_removed(sync->api.sdb, sync->device_uid);
   member_row *ms = NULL;
   int n = st == MC_OK && others > 0 ? load_members(&sync->api, &ms) : 0;
@@ -1740,12 +1956,18 @@ mc_status mc_sync_leave_group(mc_sync *sync) {
   free(ms);
 
   mc_mutex_lock(&sync->api_lock);
-  if (mc_sync_db_group_uid(sync->api.sdb)) st = mc_sync_db_clear_group(sync->api.sdb);
+  /* The session may have forgotten it already, and put back a group from before a pairing
+   * it undid (below): only the group being left is cleared. */
+  group = mc_sync_db_group_uid(sync->api.sdb);
+  if (group && !strcmp(group, left)) st = mc_sync_db_clear_group(sync->api.sdb);
   mc_sync_group_changed(sync, &sync->api);
-  mc_mutex_unlock(&sync->api_lock);
   mc_mutex_lock(&sync->lock);
   for (int i = 0; i < sync->npeers; i++) sync->peers[i].member = 0;
   mc_mutex_unlock(&sync->lock);
+  /* Left while its merge still waited for Sync now: the pairing is undone, and the device is
+   * back as it was before it. */
+  if (st == MC_OK) mc_sync_abandon_merge(sync, &sync->api);
+  mc_mutex_unlock(&sync->api_lock);
   return st;
 }
 

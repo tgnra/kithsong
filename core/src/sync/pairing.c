@@ -170,6 +170,8 @@ static mc_status my_side(mc_sync *sync, mc_sync_conn *c, side *me) {
   mc_mutex_lock(&sync->lock);
   me->merge = sync->ev.on_pair_merge && !sync->no_merge;
   mc_mutex_unlock(&sync->lock);
+  /* One merge at a time: a library still to be merged in pairs as if it couldn't merge. */
+  if (mc_libmerge_pending(c->lib, NULL)) me->merge = 0;
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(c->lib), "SELECT coalesce(sum(size_bytes), 0) FROM files",
                          -1, &stmt, NULL) == SQLITE_OK) {
@@ -581,25 +583,29 @@ static int wait_merge_answer(mc_sync *sync, int outgoing, uint64_t deadline) {
 }
 
 /* The merged device, before it applies the pairing: its old group and scrobbling account
- * go, and its library is set aside and emptied, so it joins as an empty library would. */
+ * go, and its library is set aside and emptied, so it joins as an empty library would.
+ * sync.db is copied aside first, so that all of it can be undone while the merge waits for
+ * Sync now (libmerge.h, "Abandoning a merge"). */
 static mc_status prepare_merge(mc_sync *sync, mc_sync_conn *c, const side *me, const side *peer,
                                merge_state *m) {
-  mc_status st = MC_OK;
   sqlite3 *db = mc_sync_db_handle(c->sdb);
+  char *user = NULL;
+  int signed_in = mc_scrobble_signed_in(db, &user);
+  /* The kept group's account is the group's. Plays not yet sent stay with the account they
+   * were played under: one try to send them (before the copy, so that undoing the pairing
+   * doesn't send them twice), and what's left is dropped. */
+  int left = 0;
+  if (signed_in && peer->scrobbling) mc_scrobble_flush_once(db, &m->sent, &left);
+  mc_status st = mc_libmerge_backup_sync(c->sdb, sync->config_dir);
   /* Its paired devices are forgotten: they must pair again, with the kept group. */
-  if (mc_sync_db_group_uid(c->sdb)) {
-    if ((st = mc_sync_db_clear_group(c->sdb)) != MC_OK) return st;
+  if (st == MC_OK && mc_sync_db_group_uid(c->sdb)) {
+    st = mc_sync_db_clear_group(c->sdb);
     mc_mutex_lock(&sync->lock);
     for (int i = 0; i < sync->npeers; i++) sync->peers[i].member = 0;
     mc_mutex_unlock(&sync->lock);
   }
-  char *user = NULL;
-  if (mc_scrobble_signed_in(db, &user)) {
+  if (st == MC_OK && signed_in) {
     if (peer->scrobbling) {
-      /* The kept group's account is the group's. Plays not yet sent stay with the account
-       * they were played under: one try to send them, and what's left is dropped. */
-      int left = 0;
-      mc_scrobble_flush_once(db, &m->sent, &left);
       st = mc_sync_db_forget_scrobble(c->sdb, &m->dropped);
       snprintf(m->signed_out, sizeof m->signed_out, "%s", user ? user : "");
       fprintf(stderr, "musiccore: merge: signed out %s (%d plays sent, %d dropped)\n",
@@ -611,9 +617,14 @@ static mc_status prepare_merge(mc_sync *sync, mc_sync_conn *c, const side *me, c
     }
   }
   free(user);
-  (void)me;
-  if (st == MC_OK) st = mc_libmerge_set_aside(c->lib, NULL);
-  if (st != MC_OK) fprintf(stderr, "musiccore: merge: preparing failed (%d)\n", (int)st);
+  if (st == MC_OK) st = mc_libmerge_set_aside(c->lib, peer->name, me->name, NULL);
+  if (st != MC_OK) {
+    fprintf(stderr, "musiccore: merge: preparing failed (%d)\n", (int)st);
+    /* The library is as it was (it's emptied last, in one transaction): so is sync.db. */
+    mc_libmerge_unprepare_sync(c->sdb, sync->config_dir);
+    m->signed_out[0] = '\0';
+    m->dropped = 0;
+  }
   return st;
 }
 
@@ -910,6 +921,8 @@ void mc_pairing_initiate(void *arg) {
       st = merge.kept_here ? merge_answer(&c, ch, &merge) : merge_request(sync, ch, &merge);
     if (st != MC_OK) {
       reason = st == MC_ERR_LIBRARY_MISMATCH ? MC_PAIR_LIBRARY_MISMATCH : MC_PAIR_FAILED;
+      /* Set aside but not paired: everything goes back as it was. */
+      if (merging && !merge.kept_here) mc_sync_abandon_merge(sync, &c);
       break;
     }
     reason = MC_PAIR_PAIRED;
@@ -1085,6 +1098,8 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   if (st == MC_OK && merging)
     st = merge.kept_here ? merge_answer(c, ch, &merge) : merge_request(sync, ch, &merge);
   if (st != MC_OK) {
+    /* Set aside but not paired: everything goes back as it was. */
+    if (merging && !merge.kept_here) mc_sync_abandon_merge(sync, c);
     result(sync, &peer, 0,
            st == MC_ERR_LIBRARY_MISMATCH ? MC_PAIR_LIBRARY_MISMATCH : MC_PAIR_FAILED, 0, st);
     goto done;

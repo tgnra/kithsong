@@ -606,6 +606,12 @@ static mc_status stale(sqlite3 *db, mc_search_index *ix, int *out, int64_t *seq)
   *out = 0;
   mc_status st = query_int64(db, "SELECT coalesce(max(seq), 0) FROM changelog", 0, seq);
   if (st != MC_OK || *seq == ix->seq) return st;
+  if (*seq < ix->seq) {
+    /* The changelog went back: the library's contents were replaced (an undone pairing puts
+     * back the library from before it, sync/libmerge.h). */
+    *out = 1;
+    return st;
+  }
   st = query_int64(db,
                    "SELECT EXISTS (SELECT 1 FROM changelog WHERE seq > ?1"
                    " AND entity IN (" INDEXED_ENTITIES "))",
