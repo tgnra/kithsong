@@ -772,6 +772,7 @@ typedef struct session_job {
   char host[MAX_ADDRS][MC_SYNC_ADDR_MAX];
   uint16_t port[MAX_ADDRS];
   int n;
+  int user; /* this device's user asked for it: see "Showing sync" in sync.h */
 } session_job;
 
 static void job_add(session_job *j, const char *host, uint16_t port) {
@@ -827,7 +828,10 @@ static int stopping(mc_sync *sync) {
   return s;
 }
 
-/* Connects to a member and runs a session as the initiator. */
+/* Connects to a member and runs a session as the initiator. quiet: an attempt that gets no
+ * session (unreachable, or one with it is running already) goes unreported, but for the
+ * MC_SYNC_PHASE_DONE that ends its CONNECTING. One the user asked for (j->user) is reported
+ * when nothing answered, so a press of Sync that can't get through says so. */
 static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int quiet) {
   unsigned char key[MC_SYNC_KEY_LEN];
   int have_key = 0;
@@ -846,11 +850,12 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   }
   if (!have_key) return MC_ERR_NOT_FOUND;
 
-  mc_sync_progress prog = {.device_uid = j->uid, .phase = MC_SYNC_PHASE_CONNECTING};
+  mc_sync_progress prog = {.device_uid = j->uid, .phase = MC_SYNC_PHASE_CONNECTING,
+                          .user = j->user};
   mc_sync_emit_progress(sync, &prog);
   mc_channel *ch = NULL;
   mc_status st = MC_ERR_NET;
-  int at = -1;
+  int at = -1, answered = 0, handshook = 0;
   for (int i = 0; i < j->n && !ch && !stopping(sync); i++) {
     if (mc_channel_connect(j->host[i], j->port[i], MC_MODE_SESSION, CONNECT_MS, &ch) == MC_OK)
       at = i;
@@ -865,20 +870,23 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   s.conn = c;
   s.ch = ch;
   memcpy(s.peer_uid, j->uid, MC_UID_STRLEN);
+  s.asked = j->user;
   int claimed = 0, cancelled = 0;
   if (ch) {
+    answered = 1;
     mc_sync_track(sync, ch);
     claimed = mc_sync_claim(sync, j->uid, strcmp(sync->device_uid, j->uid) < 0, ch);
     if (claimed) s.user = mc_sync_take_user(sync, j->uid);
     st = claimed ? MC_OK : MC_ERR_LOCKED;
     if (st == MC_OK) st = mc_session_handshake_initiate(&s, key);
+    handshook = st == MC_OK;
     if (st == MC_OK) st = mc_session_run(&s);
     if (claimed) cancelled = mc_sync_release(sync, j->uid) && st != MC_OK;
     mc_sync_untrack(sync, ch);
     mc_channel_close(ch);
   }
   if (s.we_removed) mc_sync_forget_group(sync, c);
-  if (!claimed && quiet) {
+  if (!claimed && quiet && (answered || !j->user)) {
     /* Unreachable, or someone else is syncing with it: nothing to report, but the
      * CONNECTING above said a session began, so say it's over. */
     prog.phase = MC_SYNC_PHASE_DONE;
@@ -887,7 +895,8 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   }
   mc_sync_result r = {.device_uid = j->uid, .status = st, .library_synced = s.library_synced,
                       .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
-                      .rows_received = s.rows_received, .cancelled = cancelled};
+                      .rows_received = s.rows_received, .cancelled = cancelled,
+                      .user = j->user, .connected = handshook};
   mc_transfer_fill_result(&s, &r);
   mc_sync_session_ended(sync, c, j->uid, &r, s.rows_new, s.follow_up, at >= 0 ? j->host[at] : NULL,
                         at >= 0 ? j->port[at] : 0);
@@ -1016,13 +1025,15 @@ static void serve_worker(void *arg) {
     reach_note(sync, s.peer_uid, REACH_IN_OK, mc_channel_peer_addr(ch), 1);
     if (mc_sync_claim(sync, s.peer_uid, strcmp(s.peer_uid, sync->device_uid) < 0, ch)) {
       s.user = mc_sync_take_user(sync, s.peer_uid);
+      s.asked = s.user; /* pressed here, and the other device called back */
       st = mc_session_run(&s);
       int cancelled = mc_sync_release(sync, s.peer_uid) && st != MC_OK;
       if (s.we_removed) mc_sync_forget_group(sync, &c);
       mc_sync_result r = {.device_uid = s.peer_uid, .status = st,
                           .library_synced = s.library_synced,
                           .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
-                          .rows_received = s.rows_received, .cancelled = cancelled};
+                          .rows_received = s.rows_received, .cancelled = cancelled,
+                          .user = s.asked, .connected = 1};
       mc_transfer_fill_result(&s, &r);
       mc_sync_session_ended(sync, &c, s.peer_uid, &r, s.rows_new, s.follow_up, NULL, 0);
     } else {
@@ -1234,6 +1245,8 @@ static void sched_main(void *arg) {
       j->sync = sync;
       memcpy(j->uid, p->uid, MC_UID_STRLEN);
       if (p->discovered) job_add(j, p->address, p->port);
+      j->user = p->asked && p->trigger == MC_TRIGGER_NOW;
+      p->asked = 0;
       /* Until the session reports back. */
       p->due_ms = now + PERIOD_MS;
       p->trigger = MC_TRIGGER_PERIODIC;
@@ -1706,6 +1719,7 @@ mc_status mc_sync_leave_group(mc_sync *sync) {
       session_job j;
       memset(&j, 0, sizeof j);
       j.sync = sync;
+      j.user = 1; /* the user is leaving */
       memcpy(j.uid, ms[i].uid, MC_UID_STRLEN);
       mc_mutex_lock(&sync->lock);
       mc_sync_peer *p = find_peer(sync, j.uid, 0);
@@ -1784,6 +1798,7 @@ static mc_status sync_soon(mc_sync *sync, const char *device_uid, mc_sync_trigge
 static void cancel_peer(mc_sync_peer *p, uint64_t until) {
   p->held_ms = until;
   p->user_ms = 0; /* a press no session has carried yet is withdrawn */
+  p->asked = 0;
   if (p->trigger == MC_TRIGGER_NOW) p->trigger = MC_TRIGGER_PERIODIC;
   if (p->busy) {
     p->cancel = 1;
@@ -1834,10 +1849,19 @@ mc_status mc_sync_confirm_now(mc_sync *sync, const char *device_uid) {
   mc_mutex_lock(&sync->lock);
   if (device_uid) {
     mc_sync_peer *p = find_peer(sync, device_uid, 1);
-    if (p) p->user_ms = now;
+    if (p) {
+      p->user_ms = now;
+      p->asked = 1;
+    }
   } else {
-    for (int i = 0; i < sync->npeers; i++)
-      if (sync->peers[i].member) sync->peers[i].user_ms = now;
+    /* For every member: shown only for those online, so a press doesn't show (or report)
+     * an attempt at each member that is away. */
+    for (int i = 0; i < sync->npeers; i++) {
+      mc_sync_peer *p = &sync->peers[i];
+      if (!p->member) continue;
+      p->user_ms = now;
+      p->asked = p->discovered || p->reached;
+    }
   }
   mc_mutex_unlock(&sync->lock);
   return mc_sync_now(sync, device_uid);

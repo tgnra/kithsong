@@ -390,7 +390,7 @@ static void progress(mc_session *s, mc_sync_phase phase) {
                         .files_total = s->files_total, .bytes_received = s->bytes_received,
                         .bytes_sent = s->bytes_sent, .files_bytes = s->files_bytes,
                         .sends_done = s->sends_done, .sends_total = s->sends_total,
-                        .sends_bytes = s->sends_bytes};
+                        .sends_bytes = s->sends_bytes, .user = s->asked, .connected = 1};
   mc_sync_emit_progress(s->sync, &p);
 }
 

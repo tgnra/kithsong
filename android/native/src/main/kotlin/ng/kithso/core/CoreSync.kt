@@ -314,6 +314,12 @@ class CoreSync(
          * it announced them when its turn started; 0 before, and from a version too old to
          * announce them), and the bytes count the whole session's files both ways; they're 0
          * in the other phases.
+         *
+         * [user]: this device's user asked for the session (the Sync button, pairing, leaving
+         * the group). [connected]: the member has answered; false only in [Phase.Connecting]
+         * and in the [Phase.Done] ending an attempt that never got that far. Show a session
+         * once it's [connected], or from the start if [user]: most attempts are automatic
+         * ones at members that may well be away ("Showing sync" in sync.h).
          */
         data class Progress(
             val uid: String,
@@ -326,6 +332,8 @@ class CoreSync(
             val bytesSent: Long,
             val sendsDone: Int,
             val sendsTotal: Int,
+            val user: Boolean = false,
+            val connected: Boolean = true,
         ) : Event
 
         /**
@@ -335,7 +343,9 @@ class CoreSync(
          * deleted (no longer wanted, or failed the check after the session), and unknown to
          * the library (deleted, except on an archive). [filesSent] were served to the peer.
          * [coversReceived]: album covers fetched for folders here that had none. [cancelled]:
-         * [CoreSync.cancel] here cut it short ([status] isn't 0 then).
+         * [CoreSync.cancel] here cut it short ([status] isn't 0 then). [user] and [connected]
+         * as in [Progress]: a failure with neither is an automatic attempt that got no proper
+         * answer, which needs no telling.
          */
         data class SyncDone(
             val uid: String,
@@ -354,6 +364,8 @@ class CoreSync(
             val bytesSent: Long,
             val coversReceived: Int = 0,
             val cancelled: Boolean = false,
+            val user: Boolean = false,
+            val connected: Boolean = true,
         ) : Event
     }
 
@@ -608,10 +620,12 @@ class CoreSync(
         bytesSent: Long,
         sendsDone: Int,
         sendsTotal: Int,
+        user: Boolean,
+        connected: Boolean,
     ) = listener(
         Event.Progress(
             uid, Phase.entries[phase], rowsSent, rowsReceived, filesDone, filesTotal, bytesReceived, bytesSent,
-            sendsDone, sendsTotal,
+            sendsDone, sendsTotal, user, connected,
         ),
     )
 
@@ -633,11 +647,13 @@ class CoreSync(
         bytesSent: Long,
         coversReceived: Int,
         cancelled: Boolean,
+        user: Boolean,
+        connected: Boolean,
     ) = listener(
         Event.SyncDone(
             uid, status, librarySynced, converged, rowsSent, rowsReceived, filesReceived, filesMissing,
             filesCorrupt, filesDeleted, filesUnknown, filesSent, bytesReceived, bytesSent, coversReceived,
-            cancelled,
+            cancelled, user, connected,
         ),
     )
 

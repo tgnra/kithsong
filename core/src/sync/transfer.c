@@ -243,7 +243,8 @@ static mc_status send_file_err(mc_channel *ch, const char *track, const char *re
 static void progress(mc_session *s) {
   mc_sync_progress p = {s->peer_uid,      MC_SYNC_PHASE_FILES, s->rows_sent,     s->rows_received,
                         s->files_done,    s->files_total,      s->bytes_received, s->bytes_sent,
-                        s->files_bytes,   s->sends_done,       s->sends_total,    s->sends_bytes};
+                        s->files_bytes,   s->sends_done,       s->sends_total,    s->sends_bytes,
+                        s->asked,         1};
   mc_sync_emit_progress(s->sync, &p);
 }
 

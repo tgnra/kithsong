@@ -3,6 +3,10 @@
  * sync_event (strings copied, names converted to UTF-16) and posted to the main window as
  * WM_APP_SYNC. Progress is throttled to one event every 150 ms per session, except a change
  * of phase and the one that finishes the session's files, which always go through.
+ * Automatic attempts that get no answer are left out altogether (see "Showing sync" in
+ * sync.h): progress until the other device answers, and on_sync_done unless it did, come
+ * through only for sessions the user asked for, so nothing shows while sync is only trying
+ * a device that may be away.
  *
  * Stopping bumps a generation counter carried in wParam, so events still queued from the
  * old mc_sync are dropped by sync_bridge_receive(). Every function runs on the UI thread. */

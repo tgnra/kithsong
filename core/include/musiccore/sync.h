@@ -223,6 +223,11 @@ typedef struct mc_sync_progress {
   int sends_done;        /* answered so far, sent or refused */
   int sends_total;
   int64_t sends_bytes;   /* sends_total's size, as the peer estimated it */
+  /* See "Showing sync" below. user: this device's user asked for the session. connected: the
+   * other device has answered (the handshake is done); 0 only in MC_SYNC_PHASE_CONNECTING
+   * and in the MC_SYNC_PHASE_DONE that ends an attempt that never got that far. */
+  int user;
+  int connected;
 } mc_sync_progress;
 
 typedef struct mc_sync_result {
@@ -247,7 +252,27 @@ typedef struct mc_sync_result {
                           * confirmed (see mc_sync_confirm_now()) */
   int covers_received;   /* album covers fetched for folders here that had none */
   int cancelled;         /* mc_sync_cancel() here cut the session short; status is not MC_OK */
+  int user;              /* as in mc_sync_progress */
+  int connected;         /* as in mc_sync_progress: 0 if it failed before the handshake ended */
 } mc_sync_result;
+
+/* --- Showing sync ---
+ * Most attempts are automatic, and many are only finding out whether a member is there: the
+ * scheduler tries members at their last known addresses, every few minutes and when
+ * discovery sees them, whether or not they are online. A frontend shouldn't show those: no
+ * spinner, "Connecting…" or error for an attempt nobody asked for that gets no answer. So:
+ *  - Show a session once progress has connected set (the other device answered and data is
+ *    moving), or from MC_SYNC_PHASE_CONNECTING on when user is set: the user pressed Sync
+ *    for that device (mc_sync_confirm_now(); for NULL, for each member that is online), or
+ *    paired with it (the first session), or left the group (telling a member).
+ *  - Report a failed session (on_sync_done with status not MC_OK) only when user or
+ *    connected is set. on_sync_done never reports an automatic attempt that found the
+ *    device unreachable or busy; one the user asked for is reported, MC_ERR_NET if nothing
+ *    answered. An automatic attempt that reached the device but failed its handshake is
+ *    reported with neither set, for logging.
+ * Sessions the other device starts arrive connected, with user set when this device's user
+ * pressed Sync for it a short while before (and the other device called back). Reach checks
+ * (see "Reachability") send no progress at all; on_reach reports only what they found. */
 
 /* Every member may be NULL. All run on core threads; see the top of this file. */
 typedef struct mc_sync_events {
@@ -259,7 +284,8 @@ typedef struct mc_sync_events {
                        int attempts_left);
   void (*on_pair_result)(void *user, const mc_pair_result *result);
   /* A session's progress. Each that starts ends with MC_SYNC_PHASE_DONE, even one that
-   * on_sync_done won't report (a scheduled attempt that found the device unreachable). */
+   * on_sync_done won't report (a scheduled attempt that found the device unreachable). See
+   * "Showing sync" above for which to show. */
   void (*on_progress)(void *user, const mc_sync_progress *progress);
   void (*on_sync_done)(void *user, const mc_sync_result *result);
   /* What's known of whether device_uid and this device can connect to each other changed
@@ -341,8 +367,8 @@ mc_status mc_sync_remove_device(mc_sync *sync, const char *device_uid);
 /* Syncs with device_uid, or with every reachable member for NULL, as soon as possible,
  * whatever MC_SYNC_AUTO_INTERVAL_MS says. Returns at once; on_sync_done reports each session.
  * Requires mc_sync_start(). It confirms nothing, so a device whose profile isn't confirmed
- * fetches no files. A Sync button calls mc_sync_confirm_now(); background work calls
- * mc_sync_background(). */
+ * fetches no files, and its sessions are automatic ones for "Showing sync" (user is 0). A
+ * Sync button calls mc_sync_confirm_now(); background work calls mc_sync_background(). */
 mc_status mc_sync_now(mc_sync *sync, const char *device_uid);
 /* As mc_sync_now(), for background work (a periodic job, say): an automatic sync, so a member
  * this device had a complete session with less than MC_SYNC_AUTO_INTERVAL_MS ago gets none

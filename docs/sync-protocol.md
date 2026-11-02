@@ -608,6 +608,9 @@ way, without logging anything.
   file being fetched when the connection goes is abandoned and its `.part` deleted, as for
   any failed transfer (see [Files](#files)); files that arrived whole stay. The hold is kept
   in memory only, so a restart of the app ends it.
+- **Showing it.** Most automatic attempts only find out whether a member is there, so the
+  frontends show a session once the member has answered, or at once when the user asked for
+  it, and report failures only for those ("Showing sync" in `sync.h`).
 
 ### `ROWS`
 

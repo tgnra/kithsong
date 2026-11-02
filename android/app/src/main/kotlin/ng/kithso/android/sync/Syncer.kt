@@ -698,8 +698,11 @@ class Syncer(
                         "${event.filesSent} out, ${event.filesDeleted} deleted, ${event.filesMissing} missing, " +
                         "${event.filesCorrupt} corrupt, ${event.coversReceived} covers in",
                 )
-                update { copy(sessions = sessions - event.uid, results = results + (event.uid to event)) }
                 done.value += event.uid
+                // An automatic attempt the member never properly answered: nothing was shown
+                // for it, so its failure isn't either.
+                if (!event.user && !event.connected) return
+                update { copy(sessions = sessions - event.uid, results = results + (event.uid to event)) }
                 // Albums, playlists and plays from the other devices, and the files and covers
                 // that arrived or went: the library and Recents. Files that arrived before a
                 // session failed are kept, so they count either way.
@@ -724,8 +727,12 @@ class Syncer(
             // Never got past connecting: a scheduled attempt that found it unreachable, which
             // no SyncDone reports.
             if (before == null || before.phase == CoreSync.Phase.Connecting) done.value += event.uid
-            return true
+            // Nothing to read again after an attempt that was never shown.
+            return before != null
         }
+        // An automatic attempt (the core trying members now and then, whether or not they're
+        // there) shows nothing until the member answers; one the user asked for shows at once.
+        if (!event.user && !event.connected) return false
         val files = event.phase == CoreSync.Phase.Files
         val progress = SyncProgress(
             phase = event.phase,

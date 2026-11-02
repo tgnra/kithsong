@@ -445,6 +445,7 @@ static void first_session(mc_sync *sync, mc_sync_conn *c, mc_channel *ch, const 
   s.conn = c;
   s.ch = ch;
   snprintf(s.peer_uid, sizeof s.peer_uid, "%s", peer);
+  s.asked = 1; /* a user on each side is looking at the pairing */
   int initiator = mc_channel_is_initiator(ch);
   int lower = initiator ? strcmp(sync->device_uid, peer) < 0 : strcmp(peer, sync->device_uid) < 0;
   if (!mc_sync_claim(sync, peer, lower, ch)) return; /* a session is already running */
@@ -455,7 +456,7 @@ static void first_session(mc_sync *sync, mc_sync_conn *c, mc_channel *ch, const 
   if (st == MC_OK && !s.we_removed && mc_sync_seed_profile_name(sync, c)) s.follow_up = 1;
   mc_sync_result r = {.device_uid = peer, .status = st, .library_synced = s.library_synced,
                       .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
-                      .rows_received = s.rows_received};
+                      .rows_received = s.rows_received, .user = 1, .connected = 1};
   mc_transfer_fill_result(&s, &r);
   r.cancelled = mc_sync_release(sync, peer) && st != MC_OK;
   if (s.we_removed) mc_sync_forget_group(sync, c);

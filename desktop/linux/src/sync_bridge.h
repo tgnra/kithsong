@@ -3,7 +3,10 @@
  * on its own threads; each is copied into a flat sync_event (strings copied) and handed to
  * the main loop with g_idle_add(). Progress is throttled to one event every 150 ms per
  * device, except a change of phase and the one that finishes the session's files, which
- * always go through.
+ * always go through. Automatic attempts that get no answer are left out altogether (see
+ * "Showing sync" in sync.h): progress until the other device answers, and on_sync_done
+ * unless it did, come through only for sessions the user asked for, so nothing shows while
+ * sync is only trying a device that may be away.
  *
  * Stopping bumps a generation counter carried with each event, so events still queued from
  * the old mc_sync are dropped rather than delivered. Every function runs on the main thread,

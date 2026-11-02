@@ -77,6 +77,9 @@ Priorities:
   (it keeps a backup copy of its old library). No music moves until you've chosen what the
   joining device holds and pressed **Sync now**. After that they reconnect and sync
   automatically whenever both are online.
+- **Quiet when there's nothing to show:** checking whether a device is there shows nothing; a
+  spinner appears once it answers and syncing starts, or straight away when you press
+  **Sync now**, and only syncs you asked for or that got going report failing.
 - **Archives:** the device whose music the group started from is its *archive*: it keeps the
   originals of everything. A device that joins a group says so once, naming the archive.
 - **No server:** any device can sync with any other. Edits are merged field by field using

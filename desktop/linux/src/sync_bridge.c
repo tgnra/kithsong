@@ -141,7 +141,8 @@ static gboolean progress_due(const mc_sync_progress *pr, gboolean *changed) {
 
 static void on_progress(void *user, const mc_sync_progress *progress) {
   gboolean changed = FALSE;
-  if (!progress_due(progress, &changed)) return;
+  /* Through the throttle first, so it sees every session start. */
+  if (!progress_due(progress, &changed) || (!progress->connected && !progress->user)) return;
   posted *p = new_event(user, SYNC_EV_PROGRESS);
   copy_str(p->ev.uid, sizeof p->ev.uid, progress->device_uid);
   p->ev.phase = progress->phase;
@@ -158,6 +159,7 @@ static void on_progress(void *user, const mc_sync_progress *progress) {
 }
 
 static void on_sync_done(void *user, const mc_sync_result *result) {
+  if (!result->connected && !result->user) return; /* an automatic attempt nothing answered */
   posted *p = new_event(user, SYNC_EV_DONE);
   copy_str(p->ev.uid, sizeof p->ev.uid, result->device_uid);
   p->ev.status = result->status;

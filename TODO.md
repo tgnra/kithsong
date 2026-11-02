@@ -236,6 +236,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - An Android delete reaching a desktop over a real sync (copies removed there, originals to its trash)
 - A delete and a restore going through a real sync
 - Sync PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
+- Quiet automatic sync ("Showing sync" in sync.h): nothing shown for attempts at members that are away, "Connecting…" at once and a failure for a press of Sync that can't get through. Not built or run where it was written (no dependencies to configure CMake, no Android SDK): the core, both bridges and the JNI were only syntax-checked, and the new checks in test_sync_rate.c never ran
 
 ## Release
 

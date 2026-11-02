@@ -1,8 +1,9 @@
 /* The rate limit on automatic sync (MC_SYNC_AUTO_INTERVAL_MS): after a complete session
  * with a member, this device starts no automatic one with it for an interval, but serves
  * the member's, still syncs on mc_sync_now() / mc_sync_confirm_now(), retries after a
- * failure, and syncs again once the interval is over. Two devices in one process over
- * loopback, discovery off, as in test_sync_timeout.c. */
+ * failure, and syncs again once the interval is over. Also what sessions say of who asked
+ * for them and whether the other device answered ("Showing sync" in sync.h). Two devices in
+ * one process over loopback, discovery off, as in test_sync_timeout.c. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,7 +72,10 @@ typedef struct dev {
   mc_pair_reason reason;
   mc_status done[MAX_EVENTS]; /* the peer is always the other device */
   uint64_t done_ms[MAX_EVENTS];
+  int done_user[MAX_EVENTS], done_connected[MAX_EVENTS];
   int ndone;
+  int connecting_user;  /* user in the latest MC_SYNC_PHASE_CONNECTING */
+  int unconnected_data; /* progress past connecting that said it wasn't connected */
 } dev;
 
 static void on_pair_code(void *user, const char *code, const char *name, int attempts) {
@@ -99,14 +103,28 @@ static void on_sync_done(void *user, const mc_sync_result *r) {
   mc_mutex_lock(&d->m);
   if (d->ndone < MAX_EVENTS) {
     d->done_ms[d->ndone] = mc_mono_ms();
+    d->done_user[d->ndone] = r->user;
+    d->done_connected[d->ndone] = r->connected;
     d->done[d->ndone++] = r->status;
   }
   mc_cond_broadcast(&d->c);
   mc_mutex_unlock(&d->m);
 }
 
-static const mc_sync_events k_events = {NULL, on_pair_code, on_pair_result, NULL, on_sync_done, NULL,
-                                        NULL, NULL, NULL};
+static void on_progress(void *user, const mc_sync_progress *p) {
+  dev *d = user;
+  mc_mutex_lock(&d->m);
+  if (p->phase == MC_SYNC_PHASE_CONNECTING) {
+    d->connecting_user = p->user;
+    if (p->connected) d->unconnected_data++; /* not yet, by definition */
+  } else if (p->phase != MC_SYNC_PHASE_DONE && !p->connected) {
+    d->unconnected_data++;
+  }
+  mc_mutex_unlock(&d->m);
+}
+
+static const mc_sync_events k_events = {NULL, on_pair_code, on_pair_result, on_progress, on_sync_done,
+                                        NULL, NULL, NULL, NULL};
 
 static int dev_open(dev *d, const char *root, const char *label) {
   d->label = label;
@@ -216,6 +234,14 @@ static int settle(dev *x, dev *y) {
   return 0;
 }
 
+/* d's seen-th session report: user and connected. */
+static void done_flags(dev *d, int seen, int *user, int *connected) {
+  mc_mutex_lock(&d->m);
+  *user = seen < d->ndone ? d->done_user[seen] : -1;
+  *connected = seen < d->ndone ? d->done_connected[seen] : -1;
+  mc_mutex_unlock(&d->m);
+}
+
 /* What x's mc_sync_list_devices() says of y's auto_after_ms; -1 if y isn't listed. */
 static int64_t listed_auto_after(dev *x, dev *y) {
   mc_sync_device_list *list = NULL;
@@ -243,7 +269,23 @@ int main(int argc, char **argv) {
   dev *a = strcmp(d1.uid, d2.uid) < 0 ? &d1 : &d2, *b = a == &d1 ? &d2 : &d1;
   if (!dev_start(a) || !dev_start(b)) return TEST_RESULT();
   if (!pair(a, b)) return TEST_RESULT();
+  {
+    /* The first session, after pairing: the users of both are looking on. */
+    int user = 0, connected = 0;
+    done_flags(a, 0, &user, &connected);
+    CHECK(user == 1 && connected == 1);
+    done_flags(b, 0, &user, &connected);
+    CHECK(user == 1 && connected == 1);
+  }
   CHECK(settle(a, b));
+  {
+    /* mc_sync_now() isn't the user's; the other side's report is a session it served. */
+    int user = 1, connected = 0;
+    done_flags(a, count_done(a) - 1, &user, &connected);
+    CHECK(user == 0 && connected == 1);
+    done_flags(b, count_done(b) - 1, &user, &connected);
+    CHECK(user == 0 && connected == 1);
+  }
 
   /* A complete session sets the limit on both ends: the initiator's and the server's. */
   uint64_t now = mc_mono_ms();
@@ -336,6 +378,44 @@ int main(int argc, char **argv) {
     CHECK(at >= after);
     mc_sync_set_test_manual(a->sync, 1);
     mc_sleep_ms(1000); /* whatever a started on its own before going manual is over */
+  }
+
+  /* "Showing sync": an automatic attempt at an address that answers TCP and nothing more is
+   * reported (it got an answer of sorts) with neither user nor connected, so frontends keep
+   * it quiet; a press of Sync there is the user's. */
+  {
+    mc_listener *quiet = NULL;
+    CHECK(mc_listener_open(0, &quiet) == MC_OK);
+    if (!quiet) return TEST_RESULT();
+    mc_channel_set_default_timeout(1000);
+    point_at(a, b, mc_listener_port(quiet));
+    int sa = count_done(a), user = -1, connected = -1;
+    CHECK(mc_sync_background(a->sync, b->uid) == MC_OK);
+    CHECK(wait_done(a, sa, WAIT_MS) == MC_ERR_NET);
+    done_flags(a, sa, &user, &connected);
+    CHECK(user == 0 && connected == 0);
+    mc_mutex_lock(&a->m);
+    CHECK(a->connecting_user == 0);
+    mc_mutex_unlock(&a->m);
+    CHECK(mc_sync_confirm_now(a->sync, b->uid) == MC_OK);
+    CHECK(wait_done(a, sa + 1, WAIT_MS) == MC_ERR_NET);
+    done_flags(a, sa + 1, &user, &connected);
+    CHECK(user == 1 && connected == 0);
+    mc_mutex_lock(&a->m);
+    CHECK(a->connecting_user == 1);
+    mc_mutex_unlock(&a->m);
+    mc_channel_set_default_timeout(MC_CHANNEL_TIMEOUT_MS);
+    point_at(a, b, mc_sync_port(b->sync));
+    mc_listener_close(quiet);
+    /* The press reaches b now, and its session is the user's, connected. */
+    sa = count_done(a);
+    CHECK(mc_sync_confirm_now(a->sync, b->uid) == MC_OK);
+    CHECK(wait_done(a, sa, WAIT_MS) == MC_OK);
+    done_flags(a, sa, &user, &connected);
+    CHECK(user == 1 && connected == 1);
+    mc_mutex_lock(&a->m);
+    CHECK(a->unconnected_data == 0);
+    mc_mutex_unlock(&a->m);
   }
 
   /* The limit survives a restart: it is seeded from the last session in sync.db. */

@@ -70,6 +70,10 @@ typedef struct mc_sync_peer {
   /* mono: this device's user pressed Sync for it (mc_sync_confirm_now()), which the next
    * session with it carries; 0 = not, or already carried. */
   uint64_t user_ms;
+  /* The press is to be shown (mc_sync_progress.user): it named this device, or it was for
+   * every member and this one was online. The next session this device starts with it on
+   * that press carries it; 0 once one has. */
+  int asked;
   /* Reachability: mono times of the latest evidence each way; 0 = none. out: we connected
    * to it, or failed to while it was online. in: it connected to us, or a reach check says
    * it couldn't. */

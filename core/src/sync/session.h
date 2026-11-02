@@ -15,6 +15,9 @@ typedef struct mc_session {
   /* A user pressed Sync for it: set before run if on this device (mc_sync_take_user()),
    * and by run if the peer's HELLO says so. Both ends then confirm their profiles. */
   int user;
+  /* This device's user asked for this session, so it is shown from the start and its failure
+   * reported (mc_sync_progress.user): unlike user, never set from the peer's HELLO. */
+  int asked;
   /* The peer's HELLO says it serves COVER_REQ (older versions end the session on it). */
   int peer_covers;
   /* Both HELLOs say they take FILES_PLAN (older versions end the session on it). */
