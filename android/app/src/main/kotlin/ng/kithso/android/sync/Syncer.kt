@@ -34,10 +34,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Pairing needs the two libraries merged (CoreSync.Event.PairMerge): the larger is kept. If
@@ -207,9 +205,16 @@ data class SyncStatus(
 /**
  * LAN sync with the other devices in this phone's group, through the core ([CoreSync]). It
  * belongs to the process, not the UI. The core listens, discovers and syncs on its own threads
- * while sync runs, and sync runs while something [hold]s it: the app on screen, [SyncService]
- * while a session or pairing is under way, and [SyncWorker] now and then in the background. A
- * phone app in the background may be frozen at any moment, so it doesn't listen all the time.
+ * while sync runs, and sync runs while something [hold]s it: the app on screen, and
+ * [SyncService] while a session or pairing is under way. A phone app in the background may be
+ * frozen at any moment, so it doesn't listen all the time.
+ *
+ * Sync starts sessions by itself only while the app is on screen: as it comes on screen, as
+ * members appear and every few minutes after, as the core schedules them (a member synced
+ * completely within the hour waits for the hour, as on the desktops). Nothing syncs in the
+ * background. Once the app leaves the screen, [SyncService] only lets what's under way finish:
+ * the core starts nothing new by itself ([CoreSync.setAutomatic]), though it still serves a
+ * session another device starts meanwhile, and sync stops as soon as it's idle.
  *
  * Synced data and audio files land in [source]'s library folder, in the app's own storage (the
  * core's file phase writes into the library folder, never anywhere else, so never on an SD
@@ -246,10 +251,6 @@ class Syncer(
             ?.apply { setReferenceCounted(false) }
     }
     private val events = Channel<CoreSync.Event>(Channel.UNLIMITED)
-    private var scheduled: Boolean? = null
-
-    // Sessions that have ended, for [syncOnce] to wait on. Only touched on [thread].
-    private val done = MutableStateFlow(emptySet<String>())
 
     // When the library was last read again for files that arrived (elapsed realtime). Only
     // touched on [thread].
@@ -269,18 +270,28 @@ class Syncer(
         }
     }
 
-    /** Keeps sync running until [release] by the same [holder]. */
+    /**
+     * Keeps sync running until [release] by the same [holder]. Only [HOLDER_APP], the app on
+     * screen, lets it start sessions by itself.
+     */
     fun hold(holder: String) {
         scope.launch(thread) {
             holders += holder
             val sync = sync
-            if (!state.value.running) start() else if (sync != null) refreshLists(sync)
+            if (!state.value.running) {
+                start()
+            } else if (sync != null) {
+                if (holder == HOLDER_APP) sync.setAutomatic(true)
+                refreshLists(sync)
+            }
         }
     }
 
     fun release(holder: String) {
         scope.launch(thread) {
             holders -= holder
+            // Off the screen: what's under way may finish, but nothing new starts.
+            if (holder == HOLDER_APP) sync?.setAutomatic(false)
             stopIfIdle()
         }
     }
@@ -349,7 +360,7 @@ class Syncer(
 
     /**
      * The Sync button: syncs with [uid] (every member for null) now, confirming this phone's
-     * profile and its, so their files sync from then on. Background work uses [syncOnce].
+     * profile and its, so their files sync from then on.
      */
     fun syncNow(uid: String? = null) = call { sync ->
         sync.confirmSyncNow(uid)
@@ -498,40 +509,6 @@ class Syncer(
     }
 
     /**
-     * Syncs with every member once, for [SyncWorker]: runs sync if it isn't running, and waits
-     * until each member has had a session or [timeoutMs] has passed. False if the app can't
-     * reach the network now, so it should try again later. This is automatic sync, so the
-     * core's hourly limit applies: a member synced completely within the last hour gets no
-     * session until [SyncDevice.autoSyncAfterMs]. It is waited for only if that comes early
-     * in the run (as it does when the last run synced it), and otherwise left to a later run.
-     */
-    suspend fun syncOnce(timeoutMs: Long): Boolean {
-        // In the background Android may block the app's network, even while WorkManager runs
-        // the work in-process, and the core's connections then hang rather than fail.
-        if (!context.isOnLan()) return false
-        hold(HOLDER_ONCE)
-        try {
-            val ready = withTimeoutOrNull(START_TIMEOUT_MS) { state.first { it.running || it.error != null } }
-            if (ready?.running != true || !ready.inGroup) return true
-            val members = withContext(thread) {
-                val sync = sync ?: return@withContext emptySet<String>()
-                done.value = emptySet()
-                sync.syncBackground(null)
-                // Read after the call, so the limit is as the core has it now.
-                val due = System.currentTimeMillis() + timeoutMs / 2
-                sync.devices().filter { !it.isSelf && !it.removed && it.autoSyncAfterMs < due }
-                    .mapTo(HashSet()) { it.uid }
-            }
-            if (members.isNotEmpty()) withTimeoutOrNull(timeoutMs) { done.first { it.containsAll(members) } }
-        } catch (e: MusicCoreException) {
-            Log.w(TAG, "Couldn't sync", e)
-        } finally {
-            release(HOLDER_ONCE)
-        }
-        return true
-    }
-
-    /**
      * Debug builds only (MainActivity's fake_merge extra): shows one of the merge's screens
      * with made-up data, for screenshots without a second device. The buttons on them call
      * the core as usual, which has no such pairing.
@@ -588,9 +565,9 @@ class Syncer(
         startService()
     }
 
-    // On [thread]: keeps the process going until a session or pairing is over. Only while the
-    // app is on screen: from the background Android won't start it, and there [SyncWorker]'s
-    // job keeps the process going instead.
+    // On [thread]: keeps the process going until a session or pairing is over, should the app
+    // leave the screen meanwhile. Only started while the app is on screen: from the background
+    // Android won't start it, and nothing starts there anyway.
     private fun startService() {
         if (HOLDER_APP in holders) SyncService.start(context)
     }
@@ -630,6 +607,8 @@ class Syncer(
             return
         }
         multicastLock?.acquire()
+        // Started for the service alone (the app left the screen just before): no new sessions.
+        sync.setAutomatic(HOLDER_APP in holders)
         try {
             sync.start()
         } catch (e: MusicCoreException) {
@@ -698,7 +677,6 @@ class Syncer(
                         "${event.filesSent} out, ${event.filesDeleted} deleted, ${event.filesMissing} missing, " +
                         "${event.filesCorrupt} corrupt, ${event.coversReceived} covers in",
                 )
-                done.value += event.uid
                 // An automatic attempt the member never properly answered: nothing was shown
                 // for it, so its failure isn't either.
                 if (!event.user && !event.connected) return
@@ -724,9 +702,6 @@ class Syncer(
         val before = state.value.sessions[event.uid]
         if (event.phase == CoreSync.Phase.Done) {
             update { copy(sessions = sessions - event.uid) }
-            // Never got past connecting: a scheduled attempt that found it unreachable, which
-            // no SyncDone reports.
-            if (before == null || before.phase == CoreSync.Phase.Connecting) done.value += event.uid
             // Nothing to read again after an attempt that was never shown.
             return before != null
         }
@@ -868,11 +843,6 @@ class Syncer(
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't read the sync group", e)
         }
-        val inGroup = state.value.inGroup
-        if (scheduled != inGroup) {
-            scheduled = inGroup
-            SyncWorker.schedule(context, inGroup)
-        }
     }
 
     companion object {
@@ -880,8 +850,6 @@ class Syncer(
         const val HOLDER_APP = "app"
 
         private const val TAG = "kithsong"
-        private const val HOLDER_ONCE = "once"
-        private const val START_TIMEOUT_MS = 10_000L
         private const val FILES_REFRESH_MS = 10_000L
     }
 }

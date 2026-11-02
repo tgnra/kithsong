@@ -1206,6 +1206,7 @@ static void sched_main(void *arg) {
       if (p->busy || (sync->manual_only && p->trigger != MC_TRIGGER_NOW &&
                       p->trigger != MC_TRIGGER_AUTO))
         continue;
+      if (sync->no_auto && p->trigger != MC_TRIGGER_NOW) continue; /* kept for later */
       if (now < p->held_ms) {
         /* Cancelled: whatever is due waits until the hold runs out. */
         if (p->held_ms < wake) wake = p->held_ms;
@@ -1259,7 +1260,7 @@ static void sched_main(void *arg) {
     for (int i = 0; i < sync->npeers && nchecks < 16; i++) {
       mc_sync_peer *p = &sync->peers[i];
       if (p->reaching) continue;
-      int online = !sync->manual_only && (p->reached || reach_alive(p, now));
+      int online = !sync->manual_only && !sync->no_auto && (p->reached || reach_alive(p, now));
       uint64_t due = p->reach_ms ? p->reach_ms + REACH_EVERY_MS : now;
       if (!p->reach_now && !(online && now >= due)) {
         if (online && due < wake) wake = due;
@@ -1865,6 +1866,14 @@ mc_status mc_sync_confirm_now(mc_sync *sync, const char *device_uid) {
   }
   mc_mutex_unlock(&sync->lock);
   return mc_sync_now(sync, device_uid);
+}
+
+void mc_sync_set_automatic(mc_sync *sync, int on) {
+  if (!sync) return;
+  mc_mutex_lock(&sync->lock);
+  sync->no_auto = !on;
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
 }
 
 void mc_sync_notify_changed(mc_sync *sync) {

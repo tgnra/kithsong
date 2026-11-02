@@ -104,16 +104,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onStart() {
-        super.onStart()
-        (application as KithsongApp).isVisible = true
-    }
-
-    override fun onStop() {
-        (application as KithsongApp).isVisible = false
-        super.onStop()
-    }
-
     // From Android 13 notifications need permission, asked for once, unprompted, on the first
     // play or import: that's when there is one to show. Settings can ask again. The playback controls
     // show without it, being a media session's, but not in the list of notifications.

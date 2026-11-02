@@ -2,7 +2,8 @@
  * with a member, this device starts no automatic one with it for an interval, but serves
  * the member's, still syncs on mc_sync_now() / mc_sync_confirm_now(), retries after a
  * failure, and syncs again once the interval is over. Also what sessions say of who asked
- * for them and whether the other device answered ("Showing sync" in sync.h). Two devices in
+ * for them and whether the other device answered ("Showing sync" in sync.h), and
+ * mc_sync_set_automatic(). Two devices in
  * one process over loopback, discovery off, as in test_sync_timeout.c. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -416,6 +417,29 @@ int main(int argc, char **argv) {
     mc_mutex_lock(&a->m);
     CHECK(a->unconnected_data == 0);
     mc_mutex_unlock(&a->m);
+  }
+
+  /* mc_sync_set_automatic(0): a starts nothing by itself, not for a change nor a background
+   * request; switched back on, what waited goes ahead. mc_sync_now() works either way. */
+  {
+    mc_sync_set_automatic(a->sync, 0);
+    mc_sync_set_test_manual(a->sync, 0);
+    int sa = count_done(a), sb = count_done(b);
+    mc_sync_notify_changed(a->sync);
+    CHECK(mc_sync_background(a->sync, b->uid) == MC_OK);
+    mc_sleep_ms(HOLD_MS);
+    CHECK(count_done(a) == sa);
+    CHECK(count_done(b) == sb);
+    mc_sync_set_automatic(a->sync, 1);
+    CHECK(wait_done(a, sa, WAIT_MS) == MC_OK);
+    mc_sync_set_automatic(a->sync, 0);
+    mc_sleep_ms(1000); /* whatever a started before is over */
+    sa = count_done(a);
+    CHECK(mc_sync_now(a->sync, b->uid) == MC_OK);
+    CHECK(wait_done(a, sa, WAIT_MS) == MC_OK);
+    mc_sync_set_automatic(a->sync, 1);
+    mc_sync_set_test_manual(a->sync, 1);
+    mc_sleep_ms(1000);
   }
 
   /* The limit survives a restart: it is seeded from the last session in sync.db. */

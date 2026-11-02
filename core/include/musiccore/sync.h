@@ -385,6 +385,13 @@ mc_status mc_sync_background(mc_sync *sync, const char *device_uid);
  * mc_sync_start(), but not mc_sync_free(). */
 #define MC_SYNC_CANCEL_HOLD_MS MC_SYNC_AUTO_INTERVAL_MS
 mc_status mc_sync_cancel(mc_sync *sync, const char *device_uid);
+/* on = 0 stops this device starting sessions or reach checks by itself, for an app that may
+ * only start them while it's on screen but lets what's under way finish when it leaves:
+ * sessions running go on, sessions other devices start are still served, and
+ * mc_sync_now() and mc_sync_confirm_now() still start one. Whatever falls due meanwhile
+ * (mc_sync_background() included) waits, and goes ahead once on = 1 again, the default.
+ * Lasts across mc_sync_stop() and mc_sync_start(). Any thread. */
+void mc_sync_set_automatic(mc_sync *sync, int on);
 
 /* --- Confirming profiles ---
  * A device fetches and deletes files only for a profile its user has confirmed: sessions

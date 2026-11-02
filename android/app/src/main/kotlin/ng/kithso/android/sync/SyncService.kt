@@ -30,6 +30,13 @@ import kotlinx.coroutines.launch
  * screen off doesn't cut it off halfway. It stops itself once [Syncer] is idle. Most sessions
  * take a second or two, and Android 12+ holds back a foreground service's notification for
  * the first few seconds, so it's seldom seen.
+ *
+ * It only ever finishes what began on screen: it's started as a session the app shows or a
+ * pairing begins, which happens only while the app is on screen, and once the app has left,
+ * [Syncer] has the core start nothing new by itself. A file transfer cut off would leave the
+ * rest for the next time the app is opened, and a pairing cut off would have to start over,
+ * so letting them finish is worth the notification; starting sessions from the background
+ * isn't done at all.
  */
 class SyncService : Service() {
     private val scope = MainScope()
@@ -179,8 +186,9 @@ class SyncService : Service() {
         private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L
 
         /**
-         * Starts the service as a session or pairing begins. If the system won't let it start
-         * (the app is in the background), sync carries on while the process lives.
+         * Starts the service as a session or pairing begins, while the app is on screen. If the
+         * system won't let it start even so (the app was just leaving), nothing holds sync once
+         * the app has gone, and it stops there, cutting off what was under way.
          */
         fun start(context: Context) {
             try {

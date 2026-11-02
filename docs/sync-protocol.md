@@ -608,6 +608,12 @@ way, without logging anything.
   file being fetched when the connection goes is abandoned and its `.part` deleted, as for
   any failed transfer (see [Files](#files)); files that arrived whole stay. The hold is kept
   in memory only, so a restart of the app ends it.
+- **Automatic sync off.** `mc_sync_set_automatic(0)` stops a device starting sessions and
+  reach checks by itself; sessions under way go on, the ones members start are served, and a
+  press of Sync still starts one. Triggers that fall due meanwhile wait and go ahead once it's
+  back on. Android turns it off when the app leaves the screen, so the foreground service
+  only finishes what's under way, and sync stops once it's idle: a phone syncs only while
+  the app is on screen.
 - **Showing it.** Most automatic attempts only find out whether a member is there, so the
   frontends show a session once the member has answered, or at once when the user asked for
   it, and report failures only for those ("Showing sync" in `sync.h`).

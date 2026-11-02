@@ -447,6 +447,14 @@ class CoreSync(
     /** The library changed here, so members should hear of it soon. Any thread. */
     fun notifyChanged() = nativeNotifyChanged(handle)
 
+    /**
+     * Whether this device starts sessions and reach checks by itself (true, the default). Off,
+     * sessions under way go on, the ones other devices start are still served, and [syncNow]
+     * and [confirmSyncNow] still start one; whatever falls due waits until it's on again. It
+     * lasts across [stop] and [start]. For an app that syncs by itself only while on screen.
+     */
+    fun setAutomatic(on: Boolean) = nativeSetAutomatic(handle, on)
+
     val libraryState: LibraryState get() = LibraryState.entries[nativeLibraryState(handle)]
 
     /** The group's members, this device included, by name. Empty when not in a group. */
@@ -704,6 +712,7 @@ class CoreSync(
         @JvmStatic private external fun nativeMergePending(handle: Long): Boolean
         @JvmStatic private external fun nativeLeaveGroup(handle: Long)
         @JvmStatic private external fun nativeNotifyChanged(handle: Long)
+        @JvmStatic private external fun nativeSetAutomatic(handle: Long, on: Boolean)
         @JvmStatic private external fun nativeLibraryState(handle: Long): Int
         @JvmStatic private external fun nativeListDevices(handle: Long): Array<SyncDevice>
         @JvmStatic private external fun nativeListNearby(handle: Long): Array<NearbyDevice>

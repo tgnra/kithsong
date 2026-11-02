@@ -78,7 +78,10 @@ dependencies {
     // Colour schemes from album art. 5.x is built with Kotlin 2.4, so it needs the project on
     // 2.4 too (the Compose compiler plugin's version in the root build.gradle.kts).
     implementation("com.materialkolor:material-kolor:5.0.1")
-    // Background sync now and then, on Wi-Fi, while the app isn't on screen (sync/SyncWorker.kt).
+    // Whether the app is on screen, for sync (KithsongApp.isVisible). The lifecycle libraries
+    // keep their versions in step, so this follows the newer one the others bring.
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
+    // Only to cancel the background sync job versions up to 0.4.2 scheduled (KithsongApp).
     implementation("androidx.work:work-runtime-ktx:2.11.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

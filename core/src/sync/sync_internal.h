@@ -169,6 +169,7 @@ struct mc_sync {
   /* Options, set before mc_sync_start(); see the test hooks below. */
   int use_discovery;
   int manual_only; /* sessions only on mc_sync_now(), for tests; under lock */
+  int no_auto;     /* mc_sync_set_automatic(0): only mc_sync_now() starts sessions; under lock */
   int listen_port; /* -1: the default with fallback */
   uint32_t auto_interval_ms; /* MC_SYNC_AUTO_INTERVAL_MS, but in tests; under lock */
   char hint_override[MC_SYNC_HINTS_MAX];

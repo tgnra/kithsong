@@ -7,6 +7,10 @@ import android.content.res.Configuration
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.work.WorkManager
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.android.data.FakeLibrary
@@ -29,8 +33,8 @@ import kotlinx.coroutines.runBlocking
 /**
  * Holds the library, the player, the importer and sync for the life of the process, so they
  * outlive the activity. All come from the core; the player plays in [PlaybackService], and
- * [playback] is the UI's connection to it. Imports run in the background too ([Importer]), and
- * sync runs while the app is on screen and now and then in the background ([Syncer]).
+ * [playback] is the UI's connection to it. Imports run in the background too ([Importer]); sync
+ * runs only while the app is on screen, and while what it was doing then finishes ([Syncer]).
  */
 class KithsongApp : Application(), SingletonImageLoader.Factory {
     /**
@@ -63,9 +67,12 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
     lateinit var syncer: Syncer
         private set
 
-    /** Whether the activity is on screen; set by [MainActivity]. Sync runs while it is. */
+    /**
+     * Whether the app is on screen, as the process lifecycle has it (which waits a moment
+     * before saying it's gone, so turning the phone doesn't count). Sync runs while it is.
+     */
     var isVisible = false
-        set(value) {
+        private set(value) {
             if (value == field) return
             field = value
             if (value) syncer.hold(Syncer.HOLDER_APP) else syncer.release(Syncer.HOLDER_APP)
@@ -96,6 +103,19 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         core.onChanged = syncer::notifyChanged
         importer = Importer(this, core, MainScope())
         scrobbling = Scrobbling(libraryDir, File(noBackupFilesDir, "sync"), settings, MainScope())
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) {
+                isVisible = true
+            }
+
+            override fun onStop(owner: LifecycleOwner) {
+                isVisible = false
+            }
+        })
+        // Up to 0.4.2 a WorkManager job synced every hour or so in the background. Sync runs
+        // only on screen now, so a job an older version scheduled is cancelled. It's a no-op
+        // once gone; it can go when nobody upgrades from 0.4.2 or older any more.
+        WorkManager.getInstance(this).cancelUniqueWork(OLD_SYNC_WORK)
     }
 
     // The system language changed: the core's text follows it, and the library is read again
@@ -138,5 +158,6 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
     private companion object {
         const val TAG = "kithsong"
         const val PLAYLIST_ART_DIR = "playlist-art" // MC_PLAYLIST_ART_CACHE_DIR
+        const val OLD_SYNC_WORK = "sync" // the unique work name SyncWorker was scheduled under
     }
 }

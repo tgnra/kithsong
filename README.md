@@ -76,7 +76,8 @@ Priorities:
   library is merged into the larger one, once you agree on the device whose library is merged
   (it keeps a backup copy of its old library). No music moves until you've chosen what the
   joining device holds and pressed **Sync now**. After that they reconnect and sync
-  automatically whenever both are online.
+  automatically whenever both are online (on Android, while the app is on screen: a phone
+  doesn't sync in the background, though a sync it was in the middle of finishes).
 - **Quiet when there's nothing to show:** checking whether a device is there shows nothing; a
   spinner appears once it answers and syncing starts, or straight away when you press
   **Sync now**, and only syncs you asked for or that got going report failing.
@@ -167,7 +168,9 @@ the track's name.
   each of its artists; a playlist's tracks and an album group's albums reorder by
   dragging their handles.
 - **Sync** lists this phone and the other devices, pairs new ones, and opens each device's
-  page to choose what it syncs. **Settings** has scrobbling, storage, and the open source
+  page to choose what it syncs. The phone syncs only while the app is on screen; a sync or
+  pairing under way when it leaves the screen finishes, under a notification, but nothing new
+  starts in the background. **Settings** has scrobbling, storage, and the open source
   licences.
 - An empty library suggests importing or, until the phone is paired, pairing it with a
   computer; once it's in a group, choosing what to sync to it.

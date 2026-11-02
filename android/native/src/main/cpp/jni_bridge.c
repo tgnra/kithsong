@@ -1323,6 +1323,13 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeNotifyChanged(JNIEnv *
   mc_sync_notify_changed(sync_of(handle));
 }
 
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeSetAutomatic(JNIEnv *env, jclass cls,
+                                                                      jlong handle, jboolean on) {
+  (void)env;
+  (void)cls;
+  mc_sync_set_automatic(sync_of(handle), on != JNI_FALSE);
+}
+
 /* The mc_sync_lib_state. */
 JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreSync_nativeLibraryState(JNIEnv *env, jclass cls,
                                                                       jlong handle) {
