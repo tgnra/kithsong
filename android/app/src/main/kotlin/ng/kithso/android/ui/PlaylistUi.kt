@@ -57,6 +57,7 @@ import ng.kithso.android.data.DeleteSize
 import ng.kithso.android.data.Deletion
 import ng.kithso.android.data.DeviceRemover
 import ng.kithso.android.data.EditFailure
+import ng.kithso.android.data.FoundTrack
 import ng.kithso.android.data.Library
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.Playlist
@@ -76,7 +77,7 @@ import kotlinx.coroutines.launch
  * The menus and dialogs for recents, playlists, album groups, albums, artists and tracks,
  * shown by [PlaylistSheets] over everything: long-pressing a recent, playlist, album group,
  * album, artist or track opens its menu ([recentMenu], [playlistMenu], [albumGroupMenu],
- * [albumMenu], [artistMenu], [trackMenu]), and Add to playlist ([addToPlaylist]) opens the list of playlists to add to,
+ * [albumMenu], [artistMenu], [trackMenu], and [foundTrackMenu] for a track in search), and Add to playlist ([addToPlaylist]) opens the list of playlists to add to,
  * with New playlist… first; an album's Add to album group… likewise lists the album groups.
  * [editor] is null when the library can't be edited, and [deleter] when nothing can be
  * deleted from it (the made-up one): the menus then offer only playing. [remover] offers
@@ -124,6 +125,14 @@ class PlaylistActions(
         sheet = Sheet.TrackMenu(track, removable && track.entryUid != null, from)
     }
 
+    /**
+     * A search result's menu: Add to playlist, and Go to its album and its [artists] (those it's
+     * credited to that are listed here, see [ng.kithso.android.data.LibrarySource.trackArtists]).
+     */
+    fun foundTrackMenu(track: FoundTrack, artists: List<Artist>) {
+        sheet = Sheet.FoundTrackMenu(track, artists)
+    }
+
     fun addToPlaylist(what: Addition) {
         if (editor != null) sheet = Sheet.AddTo(what)
     }
@@ -135,6 +144,7 @@ class PlaylistActions(
         data class AlbumMenu(val album: Album, val groupUid: String?) : Sheet
         data class ArtistMenu(val artist: Artist) : Sheet
         data class TrackMenu(val track: Track, val removable: Boolean, val from: CollectionRef?) : Sheet
+        data class FoundTrackMenu(val track: FoundTrack, val artists: List<Artist>) : Sheet
         data class AddTo(val what: Addition) : Sheet
         data class AddToGroup(val albumUid: String) : Sheet
     }
@@ -369,6 +379,34 @@ fun PlaylistSheets(
                                 Deletion(Deletion.Kind.Track, track.uid, name),
                             )
                         })
+                    }
+                },
+            )
+        }
+        is PlaylistActions.Sheet.FoundTrackMenu -> {
+            val track = sheet.track
+            // A single's album isn't listed, so it has no page to go to.
+            val album = track.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
+                ?.takeIf { library?.artOf(it) != null }
+            val artists = sheet.artists
+            MenuSheet(
+                actions,
+                track.title,
+                trackByline(track.artist, track.album),
+                buildList {
+                    if (editor != null) {
+                        add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {
+                            actions.addToPlaylist(Addition.Tracks(listOf(track.uid)))
+                        })
+                    }
+                    if (album != null) add(SheetAction(stringResource(R.string.go_to_album), Icons.Album) { onOpen(album) })
+                    // One artist is Go to artist; each of several goes by name. An unknown
+                    // artist has none.
+                    for (artist in artists) {
+                        val ref = CollectionRef(CollectionRef.Kind.Artist, artist.uid)
+                        val label = if (artists.size == 1) stringResource(R.string.go_to_artist)
+                        else stringResource(R.string.go_to_named_artist, artist.name)
+                        add(SheetAction(label, Icons.Person) { onOpen(ref) })
                     }
                 },
             )

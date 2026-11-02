@@ -270,6 +270,10 @@ fun App(
                                 onPlay()
                             }
                         },
+                        // Its menu, once its artists are looked up, for Go to album and artist.
+                        onTrackMenu = { found ->
+                            scope.launch { actions.foundTrackMenu(found, source.trackArtists(found.uid)) }
+                        },
                         onBack = dismiss,
                     )
                 }

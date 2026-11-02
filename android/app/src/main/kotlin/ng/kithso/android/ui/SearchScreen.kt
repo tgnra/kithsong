@@ -1,6 +1,6 @@
 package ng.kithso.android.ui
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,7 +63,8 @@ import kotlinx.coroutines.delay
 /**
  * Search: a box at the top, and what matches beneath, by kind, the kind with the best match
  * first, as on the desktops. A result opens its page; a track plays its album from there
- * ([onPlayTrack]). The core's search is quick, so results follow the typing after a short
+ * ([onPlayTrack]), and holding it opens its menu ([onTrackMenu]), to go to its album or
+ * artists. The core's search is quick, so results follow the typing after a short
  * pause. [onBack] slides the screen away; it is also dismissed by swiping right.
  */
 @Composable
@@ -72,6 +73,7 @@ fun SearchScreen(
     bottomPadding: Dp,
     onOpen: (CollectionRef) -> Unit,
     onPlayTrack: (FoundTrack) -> Unit,
+    onTrackMenu: (FoundTrack) -> Unit,
     onBack: () -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -134,7 +136,7 @@ fun SearchScreen(
                 when {
                     found == null || query.isBlank() -> Unit
                     found.isEmpty -> item(key = "none") { NoResults(query) }
-                    else -> for (kind in found.order) results(kind, found, onOpen, onPlayTrack)
+                    else -> for (kind in found.order) results(kind, found, onOpen, onPlayTrack, onTrackMenu)
                 }
             }
         }
@@ -149,6 +151,7 @@ private fun LazyListScope.results(
     found: SearchResults,
     onOpen: (CollectionRef) -> Unit,
     onPlayTrack: (FoundTrack) -> Unit,
+    onTrackMenu: (FoundTrack) -> Unit,
 ) {
     val heading = when (kind) {
         SearchResults.Kind.Artists -> R.string.section_artists
@@ -171,9 +174,13 @@ private fun LazyListScope.results(
             }
         }
         SearchResults.Kind.Tracks -> items(found.tracks, key = { "track:${it.uid}" }) { track ->
-            ResultRow(track.title, trackByline(track.artist, track.album), track.art, rounded) {
-                onPlayTrack(track)
-            }
+            ResultRow(
+                track.title,
+                trackByline(track.artist, track.album),
+                track.art,
+                rounded,
+                onLongClick = { onTrackMenu(track) },
+            ) { onPlayTrack(track) }
         }
         SearchResults.Kind.Playlists -> items(found.playlists, key = { "playlist:${it.uid}" }) { playlist ->
             ResultRow(playlist.name, stringResource(R.string.playlist), playlist.art, rounded) {
@@ -189,12 +196,19 @@ private fun LazyListScope.results(
 }
 
 @Composable
-private fun ResultRow(title: String, subtitle: String, art: ArtRef, artShape: Shape, onClick: () -> Unit) {
+private fun ResultRow(
+    title: String,
+    subtitle: String,
+    art: ArtRef,
+    artShape: Shape,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     ListItem(
         headlineContent = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = { Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         leadingContent = { AlbumArt(art, contentDescription = null, shape = artShape, modifier = Modifier.size(48.dp)) },
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier.combinedClickable(onLongClick = onLongClick, onClick = onClick),
     )
 }
 

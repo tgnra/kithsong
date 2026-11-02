@@ -158,7 +158,8 @@ the track's name.
   background, with Android's media controls and notification.
 - Holding an album, artist, playlist or album group opens its menu (Play, Shuffle, Add to
   playlist, Remove from this phone, Delete from library and so on), as do the menu buttons on
-  an album's page and the player; a playlist's tracks and an album group's albums reorder by
+  an album's page and the player; holding a track in search results offers its album and
+  each of its artists; a playlist's tracks and an album group's albums reorder by
   dragging their handles.
 - **Sync** lists this phone and the other devices, pairs new ones, and opens each device's
   page to choose what it syncs. **Settings** has scrobbling, storage, and the open source

@@ -21,6 +21,7 @@ import ng.kithso.core.albumGroupArt
 import ng.kithso.core.appendToPlaylist
 import ng.kithso.core.createAlbumGroup
 import ng.kithso.core.createPlaylist
+import ng.kithso.core.credit
 import ng.kithso.core.deleteAlbumGroup
 import ng.kithso.core.deletePermanently
 import ng.kithso.core.deletePlaylist
@@ -525,6 +526,19 @@ class CoreLibrarySource(
             if (kind !in order) order += kind
         }
         SearchResults(order, artists, albums, tracks, playlists, albumGroups)
+    }
+
+    override suspend fun trackArtists(trackUid: String): List<Artist> = withContext(core) {
+        val lib = open() ?: return@withContext emptyList()
+        val credit = try {
+            lib.credit(trackUid)
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't read the credit of $trackUid", e)
+            return@withContext emptyList()
+        }
+        // As listed here, which an artist with nothing on this phone isn't; once each.
+        val c = contents
+        credit.mapNotNull { c.artists[it.uid] }.distinctBy { it.uid }
     }
 
     override suspend fun reshuffle(ref: CollectionRef) {

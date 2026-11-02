@@ -214,6 +214,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - Remove from this phone / Sync to this phone on screen, in a real group (only built)
 - A recent's long-press menu (Play, Shuffle, Remove from Recents, Clear Recents) on screen (only built; the desktops' menus were run)
 - A track's Go to album and Go to artist, from track lists and the player (not even built: no Android SDK where they were written)
+- A search result track's menu (Add to playlist, Go to album, Go to artist or to each of several, from mc_library_list_credit through the new nativeListCredit): not even built either (jni_browse.c only syntax-checked with the host's gcc)
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
 - After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - Merging libraries: tested end to end on the emulator with a Windows scratch instance (both roles, Merge and decline, Last.fm sign-out, summary). Seen only with fake_merge: the progress card and bar, the forgotten-devices line, the merge_pending note, the failed summary and the library_mismatch hint; the merge's notification was never seen

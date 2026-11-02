@@ -211,6 +211,13 @@ interface LibrarySource {
     /** What matches [query] (see the core's search.h), among what's on this phone. */
     suspend fun search(query: String): SearchResults
 
+    /**
+     * The artists track [trackUid] is credited to that are listed here, in the credit's order
+     * ("A feat. B" is A, then B): its album's for a track with none of its own, and none for
+     * an unknown artist.
+     */
+    suspend fun trackArtists(trackUid: String): List<Artist>
+
     /** Gives smart list [ref], which is ordered by random, a new order. */
     suspend fun reshuffle(ref: CollectionRef)
 

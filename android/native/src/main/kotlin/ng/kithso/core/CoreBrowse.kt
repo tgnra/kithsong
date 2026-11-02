@@ -40,6 +40,19 @@ data class SearchHit(
 /** mc_search_kind, in its order. */
 enum class SearchKind { Artist, Album, Track, Playlist, AlbumGroup }
 
+/**
+ * mc_credit_artist: one artist of a credit, [name] their own name (which the credit may spell
+ * otherwise) and [join] what follows them in it ("A feat. B" is A, " feat. ", then B, "").
+ */
+data class CreditArtist(val uid: String, val name: String, val join: String)
+
+/**
+ * The artists track or album [uid] is credited to, in order; a track with no artist of its own
+ * has its album's (mc_library_list_credit). Empty if there are none.
+ */
+fun CoreLibrary.credit(uid: String): List<CreditArtist> =
+    CoreBrowse.nativeListCredit(handle, uid).asList()
+
 /** An artist's albums: as album artist first, then those they're credited on. Singles are left out ([artistSingles]). */
 fun CoreLibrary.artistAlbums(artistUid: String): List<AlbumInfo> =
     CoreBrowse.nativeListAlbums(handle, CoreBrowse.ALBUMS_ARTIST, artistUid).asList()
@@ -137,4 +150,5 @@ internal object CoreBrowse {
     @JvmStatic external fun nativeListRecents(handle: Long, limit: Int, flags: Int): Array<RecentInfo>
     @JvmStatic external fun nativeSearch(handle: Long, query: String, limit: Int): Array<SearchHit>
     @JvmStatic external fun nativeSearchPrepare(handle: Long)
+    @JvmStatic external fun nativeListCredit(handle: Long, uid: String): Array<CreditArtist>
 }

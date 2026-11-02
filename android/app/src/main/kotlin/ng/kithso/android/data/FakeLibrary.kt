@@ -65,6 +65,9 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
         return SearchResults(order, artists, albums, playlists = playlists, albumGroups = groups)
     }
 
+    // Its search finds no tracks.
+    override suspend fun trackArtists(trackUid: String): List<Artist> = emptyList()
+
     override suspend fun reshuffle(ref: CollectionRef) = Unit
 
     private fun groupAlbums(lib: Library, group: AlbumGroup): List<Album> =

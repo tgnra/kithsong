@@ -1,5 +1,5 @@
 /* JNI bindings for ng.kithso.core.CoreBrowse: browsing the library beyond the album grid
- * (artists' pages, album groups, smart album groups), recents and search. Thin like
+ * (artists' pages, album groups, smart album groups, credits), recents and search. Thin like
  * jni_bridge.c, whose helpers it shares. */
 #include <jni.h>
 #include <stdint.h>
@@ -233,4 +233,45 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeSearchPrepare(JNIEnv
   (void)cls;
   mc_status st = mc_library_search_prepare(jni_lib_of(handle));
   if (st != MC_OK) throw_status(env, st);
+}
+
+/* The artists a track or album is credited to, in order (mc_library_list_credit). */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListCredit(JNIEnv *env, jclass cls,
+                                                                              jlong handle, jstring uid) {
+  (void)cls;
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/CreditArtist");
+  if (!info) return NULL;
+  jmethodID ctor =
+    (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+  if (!ctor) return NULL;
+
+  const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
+  if (!cuid) return NULL;
+  mc_credit_list *list = NULL;
+  mc_status st = mc_library_list_credit(jni_lib_of(handle), cuid, &list);
+  (*env)->ReleaseStringUTFChars(env, uid, cuid);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  int n = list ? list->count : 0;
+  jobjectArray out = (*env)->NewObjectArray(env, n, info, NULL);
+  for (int i = 0; out && i < n; i++) {
+    const mc_credit_artist *a = &list->items[i];
+    jstring artist_uid = new_string(env, a->uid);
+    jstring name = new_string(env, a->name ? a->name : "");
+    jstring join = new_string(env, a->join ? a->join : "");
+    jobject item = (*env)->NewObject(env, info, ctor, artist_uid, name, join);
+    if (!item) {
+      out = NULL;
+      break;
+    }
+    (*env)->SetObjectArrayElement(env, out, i, item);
+    (*env)->DeleteLocalRef(env, item);
+    (*env)->DeleteLocalRef(env, artist_uid);
+    (*env)->DeleteLocalRef(env, name);
+    (*env)->DeleteLocalRef(env, join);
+  }
+  mc_credit_list_free(list);
+  return out;
 }
