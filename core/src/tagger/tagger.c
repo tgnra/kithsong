@@ -1349,10 +1349,44 @@ static void unplace_files(mc_library *lib, placement *p, int n) {
   }
 }
 
-/* Makes sure the album folder has a cover: keep one that's there, else bring the one from
- * the folder the files came from, else write out a picture embedded in one of the files
- * (p, n of them), else download one. Returns the cover's hash in hash, or NULL if the album
- * has none. Failures here never fail the import. */
+/* The cover next to the files an item came from (source_dir, the first file's folder): for
+ * files in a disc folder ("Album/CD1"), the album folder's above it, which is the whole
+ * album's, else the disc folder's own. NULL if there's none. */
+static char *source_cover(const char *source_dir) {
+  if (!source_dir) return NULL;
+  const char *sep = last_sep(source_dir);
+  char *cover = NULL;
+  if (sep && is_disc_folder(sep + 1)) {
+    char *parent = dirname_of(source_dir);
+    cover = parent ? mc_coverart_find(parent) : NULL;
+    free(parent);
+  }
+  return cover ? cover : mc_coverart_find(source_dir);
+}
+
+/* Copies a cover file into dir as cover.jpg or cover.png; the copy's path, or NULL if that
+ * failed. */
+static char *copy_cover(const char *source, const char *dir) {
+  const char *ext = strrchr(source, '.');
+  size_t len = strlen(dir) + 16;
+  char *dest = malloc(len);
+  if (!dest) return NULL;
+  snprintf(dest, len, "%s%ccover%s", dir, MC_PATH_SEP,
+           ext && (strcmp(ext, ".png") == 0 || strcmp(ext, ".PNG") == 0) ? ".png" : ".jpg");
+  if (mc_copy_file(source, dest, 0) == MC_OK) return dest;
+  free(dest);
+  return NULL;
+}
+
+/* Makes sure the album folder has a cover (see "Cover art" in docs/tagging-rules.md). One
+ * that's there already is kept, and so is one brought from inside the library (the old
+ * folder of a whole release that moves, files moved within the library). Otherwise the
+ * local cover, the one in the folder the files came from (source_cover()), else the first
+ * picture embedded in one of the files (p, n of them), is used unless it's low resolution
+ * (MC_COVER_LOW_RES) and a download is bigger; with no local cover, a download is. Nothing
+ * is downloaded for local art that's big enough, or whose size its header doesn't give.
+ * Returns the cover's hash in hash, or NULL if the album has none. Failures here never fail
+ * the import. */
 static const char *ensure_cover(mc_import *imp, mc_library *lib, const char *album_rel,
                                 const char *source_dir, const placement *p, int n,
                                 const mb_release *rel, char hash[MC_ART_HASH_LEN]) {
@@ -1360,31 +1394,43 @@ static const char *ensure_cover(mc_import *imp, mc_library *lib, const char *alb
   if (!dir) return NULL;
   char *cover = mc_coverart_find(dir);
 
-  char *source = !cover && source_dir ? mc_coverart_find(source_dir) : NULL;
-  if (source) {
-    const char *ext = strrchr(source, '.');
-    size_t len = strlen(dir) + 16;
-    char *dest = malloc(len);
-    if (dest) {
-      snprintf(dest, len, "%s%ccover%s", dir, MC_PATH_SEP,
-               ext && (strcmp(ext, ".png") == 0 || strcmp(ext, ".PNG") == 0) ? ".png" : ".jpg");
-      if (mc_copy_file(source, dest, 0) == MC_OK) cover = dest;
-      else free(dest);
-    }
-    free(source);
-  }
+  char *source = !cover ? source_cover(source_dir) : NULL;
+  char *source_rel = source ? mc_library_relpath(lib, source) : NULL;
+  if (source_rel) {
+    cover = copy_cover(source, dir);
+  } else if (!cover) {
+    /* The embedded picture, or the source file's bytes (only to measure them). */
+    mc_buffer image = {NULL, 0};
+    const char *ext = NULL;
+    if (source) mc_coverart_read_file(source, &image);
+    for (int i = 0; i < n && !source && !image.data; i++)
+      mc_coverart_read_embedded(p[i].dest_abs, &image, &ext);
+    int local = source || image.data;
+    int side = image.data ? mc_coverart_short_side(&image) : 0;
+    if (source) mc_buffer_free(&image);
 
-  for (int i = 0; i < n && !cover; i++)
-    if (mc_coverart_save_embedded(dir, p[i].dest_abs) == MC_OK) cover = mc_coverart_find(dir);
-
-  if (!cover && rel && imp->fetch_art && !cancelled(imp)) {
-    mc_buffer img;
-    const char *ext;
-    if (mc_coverart_fetch(rel->id, rel->releasegroup_id, rel->artist, rel->title, &img, &ext) == MC_OK) {
-      if (mc_coverart_save(dir, &img, ext) == MC_OK) cover = mc_coverart_find(dir);
-      mc_buffer_free(&img);
+    if ((!local || (side > 0 && side < MC_COVER_LOW_RES)) && rel && imp->fetch_art && !cancelled(imp)) {
+      mc_buffer img;
+      const char *img_ext;
+      if (mc_coverart_fetch(rel->id, rel->releasegroup_id, rel->artist, rel->title, &img, &img_ext) == MC_OK) {
+        /* Never swapped for one that isn't bigger. */
+        if (!local || mc_coverart_short_side(&img) > side) {
+          free(source);
+          source = NULL;
+          mc_buffer_free(&image);
+          image = img;
+          ext = img_ext;
+        } else {
+          mc_buffer_free(&img);
+        }
+      }
     }
+    if (source) cover = copy_cover(source, dir);
+    else if (image.data && mc_coverart_save(dir, &image, ext) == MC_OK) cover = mc_coverart_find(dir);
+    mc_buffer_free(&image);
   }
+  free(source_rel);
+  free(source);
 
   const char *result = cover && mc_coverart_hash(cover, hash) == MC_OK ? hash : NULL;
   free(cover);
@@ -1693,7 +1739,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   const char *cover_dir = planned && dp.album_dir && !dp.whole ? dp.album_dir : album_rel;
   if (planned && dp.whole && dp.album_dir) {
     /* A whole release may move folder: it keeps the old cover if it brings none. */
-    char *found = source_dir ? mc_coverart_find(source_dir) : NULL;
+    char *found = source_cover(source_dir);
     if (!found) {
       free(source_dir);
       source_dir = mc_library_abspath(lib, dp.album_dir);

@@ -243,7 +243,8 @@ typedef enum mc_import_outcome {
 
 typedef struct mc_import_options {
   double threshold; /* auto-accept at or above this confidence (0..1); 0 = default 0.9 */
-  int fetch_art;    /* download front covers (Cover Art Archive, then iTunes) */
+  int fetch_art;    /* download a front cover (Cover Art Archive, then iTunes) for albums
+                     * whose own art is missing or low resolution (docs/tagging-rules.md) */
   int skip_tagging; /* no MusicBrainz lookups: import every item with its existing tags */
   /* Where zips are extracted (see "Zips" above); NULL for the system's temporary folder.
    * Must not be inside the library folder. Copied. */

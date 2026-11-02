@@ -123,9 +123,9 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    already has, or swap in a better copy of the release.
 8. **Write** (see [Library folder](#library-folder)): copy the files into the library folder
    (or move them, if they're already inside it), write the tags to the copies, make sure
-   the album folder has a cover, then write the library rows in one transaction
-   (`import_db.c`). If any step fails, the files are put back. Files that weren't matched to
-   a track aren't imported.
+   the album folder has a cover (see [Cover art](#cover-art)), then write the library rows
+   in one transaction (`import_db.c`). If any step fails, the files are put back. Files
+   that weren't matched to a track aren't imported.
 
 ## Extended search
 
@@ -423,21 +423,53 @@ per value.
 
 Each album folder gets a `cover.jpg` (or `cover.png`). `albums.art_hash` holds its SHA-256,
 so devices can tell whether they have the same image. That file is the album's art on every
-device: pictures embedded in audio files are never shown, only copied out on import. In order:
+device: pictures embedded in audio files are never shown, only copied out on import (the
+files themselves are left as they are). The rule is **local art first**, and a download only
+where the local art is missing or low resolution:
 
-1. a cover already in the album folder is kept.
-2. a cover in the folder the files came from (`cover`, `folder` or `front`, `.jpg`/`.jpeg`/
-   `.png`, any case) is copied.
-3. a picture embedded in one of the imported files (the front cover, else the first one;
-   JPEG or PNG up to 16 MB) is written out.
-4. Cover Art Archive `release/<id>/front-1200`.
-5. Cover Art Archive `release-group/<id>/front-1200`.
-6. iTunes Search (`entity=album`). A result is used only if its album and artist names are
-   both close (combined distance below 0.25). The 100 px artwork URL is rewritten to
-   1200 px.
+1. a cover already in the album folder is kept as it is, whatever its size: an album that's
+   already in the library (tracks added to it, files moved or re-tagged in place) keeps its
+   cover, and nothing is downloaded for it. So does a cover brought from inside the library
+   (a whole release moving to a new folder takes its old cover along, see
+   [Duplicates](#duplicates)).
+2. otherwise the **local cover** is the first of:
+   - a cover in the folder the files came from (`cover`, `folder` or `front`, `.jpg`/`.jpeg`/
+     `.png`, any case, in that order). For files in a disc folder (`Album/CD1`, see Group),
+     the album folder's above it comes first, as the whole album's; then the disc folder's.
+   - a picture embedded in one of the imported files (the front cover, else the first one;
+     JPEG or PNG up to 16 MB): the first file that has one, in disc and track order. So
+     where only some tracks embed art, the first of those gives it; where each disc embeds
+     its own, disc 1's is the album's.
+3. a local cover whose shorter side is at least **500 px** (`MC_COVER_LOW_RES` in
+   `coverart.h`) is used, with no request. Its size comes from the JPEG or PNG header
+   (`stbi_info`), nothing is decoded; a header that can't be read counts as big enough, so
+   the cover is kept as before rather than replaced on a guess.
+4. a local cover below 500 px, or none, and the item is matched (as-is imports have no
+   release to look up) and downloading is on (`mc_import_options.fetch_art`): one download
+   is tried, the first of
+   1. Cover Art Archive `release/<id>/front-1200`,
+   2. Cover Art Archive `release-group/<id>/front-1200`,
+   3. iTunes Search (`entity=album`). A result is used only if its album and artist names
+      are both close (combined distance below 0.25). The 100 px artwork URL is rewritten to
+      1200 px.
+
+   With no local cover the download is the cover. Otherwise it replaces the local one only
+   if its shorter side is bigger; one as big or smaller, or whose size can't be read, leaves
+   the local cover. The downloaded image is written once, as `cover.jpg` or `cover.png`, and
+   the source folder and files aren't touched.
+
+Why 500: the biggest views draw a cover at about 300-350 logical pixels: the desktop album
+grids' tiles (160 px on Linux; at least 150 px on Windows, stretched to fill the row, so up
+to about 320) and the phone's full player (the screen's width less 48 dp, at most 480 dp).
+At 2-3x that's 600-1100 device pixels, so below 500 a cover is stretched more than twice
+there and looks soft. Covers of 500 and 600 px, what most stores embedded for years, pass,
+so most local art is kept without a request; downloads are at most 1200 px anyway.
 
 Only JPEG and PNG up to 16 MB are downloaded. A single gets its release's cover like any
-album; a track with no album gets none. Art isn't embedded in the files yet.
+album; a track with no album gets none. Art isn't embedded in the files yet. Frontends read
+the folder's cover through `mc_coverart_find()`, and the Linux and Android caches key on its
+path and modification time, so a cover is picked up as soon as it's written (before the
+album's rows are).
 
 ## Still to decide
 

@@ -62,6 +62,7 @@ kithsong_test(test_import_order)
 kithsong_test(test_import_discs)
 kithsong_test(test_import_single)
 kithsong_test(test_import_credit)
+kithsong_test(test_import_cover)
 kithsong_test(test_artist_refresh)
 kithsong_test(test_import_zip)
 target_link_libraries(test_import_zip PRIVATE mc_miniz)  # builds the zips it imports

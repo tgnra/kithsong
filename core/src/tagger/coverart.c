@@ -2,11 +2,13 @@
 
 #include <ctype.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <mbedtls/sha256.h>
+#include <stb_image.h>
 #include <yyjson.h>
 
 #include "tagger/match.h"
@@ -19,6 +21,12 @@
 
 /* Apple doesn't publish a limit; about 20 requests a minute is the commonly cited one. */
 static mc_ratelimit g_itunes_rate;
+
+static mc_coverart_fetch_fn g_fake;
+
+void mc_coverart_set_fake(mc_coverart_fetch_fn fetch) {
+  g_fake = fetch;
+}
 
 void mc_coverart_global_init(void) {
   mc_ratelimit_init(&g_itunes_rate, 3000);
@@ -110,6 +118,7 @@ mc_status mc_coverart_fetch(const char *mb_albumid, const char *mb_releasegroupi
                             const char **ext) {
   img->data = NULL;
   img->len = 0;
+  if (g_fake) return g_fake(mb_albumid, mb_releasegroupid, artist, album, img, ext);
   mc_status st = MC_ERR_NOT_FOUND;
   if (mb_albumid) st = from_caa("release", mb_albumid, img, ext);
   if (st != MC_OK && mb_releasegroupid) st = from_caa("release-group", mb_releasegroupid, img, ext);
@@ -184,16 +193,52 @@ mc_status mc_coverart_save(const char *dir, const mc_buffer *img, const char *ex
   return st;
 }
 
-mc_status mc_coverart_save_embedded(const char *dir, const char *audio_path) {
+mc_status mc_coverart_read_embedded(const char *audio_path, mc_buffer *img, const char **ext) {
   unsigned char *data;
   size_t len;
+  img->data = NULL;
+  img->len = 0;
   mc_status st = mc_tags_read_picture(audio_path, &data, &len);
   if (st != MC_OK) return st;
-  mc_buffer img = {(char *)data, len};
-  const char *ext = len <= MAX_IMAGE_BYTES ? image_ext(&img) : NULL;
-  st = ext ? mc_coverart_save(dir, &img, ext) : MC_ERR_FORMAT;
-  free(data);
-  return st;
+  mc_buffer pic = {(char *)data, len};
+  if (len > MAX_IMAGE_BYTES || !(*ext = image_ext(&pic))) {
+    free(data);
+    return MC_ERR_FORMAT;
+  }
+  *img = pic;
+  return MC_OK;
+}
+
+mc_status mc_coverart_read_file(const char *path, mc_buffer *img) {
+  img->data = NULL;
+  img->len = 0;
+  int64_t size = 0, mtime;
+  mc_status st = mc_file_info(path, &size, &mtime);
+  if (st != MC_OK) return st;
+  if (size < 0 || size > (int64_t)MAX_IMAGE_BYTES) return MC_ERR_FORMAT;
+  FILE *f = mc_fopen(path, "rb");
+  if (!f) return MC_ERR_IO;
+  char *data = malloc((size_t)size + 1);
+  size_t len = data ? fread(data, 1, (size_t)size, f) : 0;
+  int failed = ferror(f);
+  fclose(f);
+  if (!data) return MC_ERR_NOMEM;
+  if (failed) {
+    free(data);
+    return MC_ERR_IO;
+  }
+  data[len] = '\0';
+  img->data = data;
+  img->len = len;
+  return MC_OK;
+}
+
+int mc_coverart_short_side(const mc_buffer *img) {
+  int w = 0, h = 0, comp = 0;
+  if (!img->data || img->len > INT_MAX ||
+      !stbi_info_from_memory((const stbi_uc *)img->data, (int)img->len, &w, &h, &comp) || w <= 0 || h <= 0)
+    return 0;
+  return w < h ? w : h;
 }
 
 mc_status mc_coverart_hash(const char *path, char hash[MC_ART_HASH_LEN]) {
