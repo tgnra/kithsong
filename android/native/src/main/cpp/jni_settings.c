@@ -93,6 +93,20 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSettings_nativeSetShuffle(JNIEnv 
   if (st != MC_OK) throw_status(env, st);
 }
 
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreSettings_nativeAlbumInOrder(JNIEnv *env, jclass cls,
+                                                                              jlong handle) {
+  (void)env;
+  (void)cls;
+  return mc_settings_album_in_order(settings_of(handle)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSettings_nativeSetAlbumInOrder(JNIEnv *env, jclass cls,
+                                                                             jlong handle, jboolean on) {
+  (void)cls;
+  mc_status st = mc_settings_set_album_in_order(settings_of(handle), on ? 1 : 0);
+  if (st != MC_OK) throw_status(env, st);
+}
+
 JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreSettings_nativeVolume(JNIEnv *env, jclass cls, jlong handle) {
   (void)env;
   (void)cls;

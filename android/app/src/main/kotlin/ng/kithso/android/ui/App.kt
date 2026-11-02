@@ -289,6 +289,8 @@ fun App(
                             actions,
                             bottomPadding,
                             onPlay = { tracks, index ->
+                                // From an album, in order from the track, as the desktops do.
+                                if (ref.kind == CollectionRef.Kind.Album && settings.albumInOrder) playback.setShuffle(false)
                                 playback.play(tracks, index)
                                 source.notePlayed(ref)
                                 onPlay()

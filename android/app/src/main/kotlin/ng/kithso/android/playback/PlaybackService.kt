@@ -18,6 +18,7 @@ import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
+import ng.kithso.android.AppSettings
 import ng.kithso.android.MainActivity
 import ng.kithso.android.KithsongApp
 import ng.kithso.android.R
@@ -68,7 +69,7 @@ class PlaybackService : MediaLibraryService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val tree = BrowseTree(this) { app.library }
-        val session = MediaLibrarySession.Builder(this, player, Callback(tree))
+        val session = MediaLibrarySession.Builder(this, player, Callback(tree, settings))
             .setSessionActivity(openApp)
             .setBitmapLoader(ArtBitmapLoader(this, scope))
             .setMediaButtonPreferences(shuffleButtons(settings.shuffle))
@@ -112,7 +113,8 @@ class PlaybackService : MediaLibraryService() {
             .build(),
     )
 
-    private inner class Callback(private val tree: BrowseTree) : MediaLibrarySession.Callback {
+    private inner class Callback(private val tree: BrowseTree, private val settings: AppSettings) :
+        MediaLibrarySession.Callback {
         // Every controller may use the shuffle button, the notification's among them, and
         // browse the library.
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
@@ -166,6 +168,9 @@ class PlaybackService : MediaLibraryService() {
             if (mediaItems.all { it.path != null }) {
                 return Futures.immediateFuture(MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs))
             }
+            // A track of an album's plays the album in order from it, as in the app.
+            val item = mediaItems.singleOrNull()
+            if (item != null && settings.albumInOrder && tree.isAlbumTrack(item)) mediaSession.player.shuffleModeEnabled = false
             return future {
                 // A browser plays one item at a time, so where it starts is the item's to say.
                 mediaItems.singleOrNull()?.let { tree.queue(it) }

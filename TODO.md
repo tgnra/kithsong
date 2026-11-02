@@ -133,6 +133,7 @@ Left in the frontends:
 
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
+- All - a switch in Settings for mc_settings_album_in_order() (playing a track from an album turns shuffle off, so the album plays in order; on by default). Every platform follows it, Android Auto too, but none shows it yet
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
 - Windows and Linux - an empty library in a group (nothing imported anywhere yet) just says "Use Import to add music."; Android's says to choose what to sync, with a button to this phone's page
 

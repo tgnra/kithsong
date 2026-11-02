@@ -790,8 +790,19 @@ static void on_album_changed(void *user) {
   show_album(user);
 }
 
+/* A track played from the track list. From an album (not a playlist), shuffle goes off
+ * first so the album plays in order, unless mc_settings_album_in_order() says not to. */
 static void on_track_play(void *user, int index) {
-  app_play_album(user, index);
+  app *a = user;
+  AlbumItem *album = track_list_album();
+  if (album && !album->is_playlist && !album->is_group && playback_shuffle()) {
+    mc_settings *settings = NULL;
+    gboolean in_order = TRUE;
+    if (mc_settings_load(a->settings_dir, &settings) == MC_OK) in_order = mc_settings_album_in_order(settings);
+    mc_settings_free(settings);
+    if (in_order) set_shuffle(a, FALSE);
+  }
+  app_play_album(a, index);
 }
 
 /* The track list's Play and Shuffle: the whole album or playlist, in order from the first

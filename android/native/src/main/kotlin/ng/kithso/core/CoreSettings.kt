@@ -25,6 +25,14 @@ class CoreSettings(dir: String) : AutoCloseable {
         @Synchronized get() = nativeShuffle(handle)
         @Synchronized set(value) = nativeSetShuffle(handle, value)
 
+    /**
+     * Whether playing a track from an album's track list turns shuffle off, so the album plays
+     * in order (mc_settings_album_in_order). On if never set.
+     */
+    var albumInOrder: Boolean
+        @Synchronized get() = nativeAlbumInOrder(handle)
+        @Synchronized set(value) = nativeSetAlbumInOrder(handle, value)
+
     /** The playback volume, 0 to 100, as it was left (CorePlayer.setVolume). 100 if never set. */
     var volume: Int
         @Synchronized get() = nativeVolume(handle)
@@ -57,6 +65,8 @@ class CoreSettings(dir: String) : AutoCloseable {
         @JvmStatic external fun nativeSetBool(handle: Long, key: String, value: Boolean)
         @JvmStatic external fun nativeShuffle(handle: Long): Boolean
         @JvmStatic external fun nativeSetShuffle(handle: Long, on: Boolean)
+        @JvmStatic external fun nativeAlbumInOrder(handle: Long): Boolean
+        @JvmStatic external fun nativeSetAlbumInOrder(handle: Long, on: Boolean)
         @JvmStatic external fun nativeVolume(handle: Long): Int
         @JvmStatic external fun nativeSetVolume(handle: Long, volume: Int)
         @JvmStatic external fun nativeScrobble(handle: Long): Boolean

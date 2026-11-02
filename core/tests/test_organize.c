@@ -64,6 +64,8 @@ static void test_settings(const char *base) {
   CHECK(mc_settings_library_dir(s) == NULL);
   CHECK(!mc_settings_shuffle(s));
   CHECK(mc_settings_set_shuffle(s, 1) == MC_OK);
+  CHECK(mc_settings_album_in_order(s)); /* on to begin with */
+  CHECK(mc_settings_set_album_in_order(s, 0) == MC_OK);
   CHECK(mc_settings_volume(s) == 100);
   CHECK(mc_settings_set_volume(s, 140) == MC_OK); /* clamped */
   CHECK(mc_settings_volume(s) == 100);
@@ -82,6 +84,7 @@ static void test_settings(const char *base) {
   CHECK(mc_settings_load(dir, &s) == MC_OK);
   CHECK_STR(mc_settings_library_dir(s), "D:\\M\xC3\xBAsica");
   CHECK(mc_settings_shuffle(s));
+  CHECK(!mc_settings_album_in_order(s));
   CHECK(mc_settings_volume(s) == 35);
   CHECK(mc_settings_bool(s, "frontend_flag", 0));
   mc_settings_free(s);

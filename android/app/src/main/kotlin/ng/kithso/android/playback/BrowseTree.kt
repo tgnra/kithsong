@@ -144,6 +144,10 @@ internal class BrowseTree(private val context: Context, private val source: () -
         return queueOf(parseRef(id) ?: return null, null)
     }
 
+    /** Whether [request] is a track of an album's, which plays the album from it. */
+    fun isAlbumTrack(request: MediaItem): Boolean =
+        request.mediaId.startsWith(TRACK) && parseTrack(request.mediaId)?.first?.kind == CollectionRef.Kind.Album
+
     private suspend fun queueForSearch(query: String): MediaItemsWithStartPosition? {
         if (query.isEmpty()) {
             val library = library()

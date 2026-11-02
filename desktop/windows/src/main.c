@@ -802,6 +802,18 @@ static void toggle_muted(void) {
   now_playing_flash(text);
 }
 
+/* A track played from the track list. From an album (on Albums or in a group; not a
+ * playlist or an artist's tracks), shuffle goes off first so the album plays in order, unless
+ * mc_settings_album_in_order() says not to. */
+static void play_track(int index) {
+  album_grid_view shown = album_grid_shown();
+  char uid[MC_UID_STRLEN];
+  if (!artist_page() && (shown == AGV_ALBUMS || shown == AGV_GROUP) && album_grid_selection(uid) &&
+      mc_settings_album_in_order(g_app.settings))
+    set_shuffle(FALSE);
+  play_album(index);
+}
+
 /* The track list's Play and Shuffle buttons: the whole album, playlist or artist's tracks,
  * in order from the first track, or shuffled. */
 static void play_all(BOOL shuffled) {
@@ -1481,7 +1493,7 @@ static void on_command(int id, int code) {
       volume_popup_toggle(g_app.volume, g_app.dpi, &volume_host);
       break;
     case ID_TRACKS:
-      if (code == TLN_PLAY) play_album(track_list_play_index());
+      if (code == TLN_PLAY) play_track(track_list_play_index());
       else if (code == TLN_PLAY_ALL || code == TLN_SHUFFLE_ALL) play_all(code == TLN_SHUFFLE_ALL);
       else if (code == TLN_CLOSE && artist_page()) { /* Escape on an artist's page: back to the list */
         artist_view_back();

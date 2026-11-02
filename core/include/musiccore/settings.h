@@ -46,6 +46,12 @@ mc_status mc_settings_set_bool(mc_settings *s, const char *key, int value);
 int mc_settings_shuffle(const mc_settings *s);
 mc_status mc_settings_set_shuffle(mc_settings *s, int on);
 
+/* Whether playing a track from an album's track list turns shuffle off, so the album plays
+ * in order from it. Only an album's: not a playlist's, an artist's, search results or the
+ * recents. On if never set. */
+int mc_settings_album_in_order(const mc_settings *s);
+mc_status mc_settings_set_album_in_order(mc_settings *s, int on);
+
 /* The playback volume (mc_player_set_volume()), 0 to 100, as it was left. 100 if never set. */
 int mc_settings_volume(const mc_settings *s);
 mc_status mc_settings_set_volume(mc_settings *s, int volume);

@@ -147,6 +147,12 @@ int mc_settings_shuffle(const mc_settings *s) { return mc_settings_bool(s, "shuf
 
 mc_status mc_settings_set_shuffle(mc_settings *s, int on) { return mc_settings_set_bool(s, "shuffle", on); }
 
+int mc_settings_album_in_order(const mc_settings *s) { return mc_settings_bool(s, "album_in_order", 1); }
+
+mc_status mc_settings_set_album_in_order(mc_settings *s, int on) {
+  return mc_settings_set_bool(s, "album_in_order", on);
+}
+
 int mc_settings_volume(const mc_settings *s) {
   if (!s) return 100;
   yyjson_mut_val *v = yyjson_mut_obj_get(yyjson_mut_doc_get_root(s->doc), "volume");
