@@ -1,7 +1,7 @@
 /* Win32 frontend. Layout:
  *
  *   +--------------------------------------------------------------+
- *   | |<  >  >| [] 0:00 ==o--------------- -3:12 [S] [V]  _ [] X |  toolbar = title bar
+ *   | [K] |<  >  >| [] 0:00 ==o----------- -3:12 [S] [V]  _ [] X |  toolbar = title bar
  *   +-----------+.-----------------------------------+-------------+
  *   | Home      |                                    | track list  |
  *   | Search    |                                    | (shown when |
@@ -33,7 +33,9 @@
  *
  * The toolbar is the title bar: WM_NCCALCSIZE removes the standard one, and the frame is
  * extended into the client area (DwmExtendFrameIntoClientArea) so Windows still draws the
- * minimise, maximise and close buttons. On Windows 11 the toolbar and sidebar show Mica
+ * minimise, maximise and close buttons. [K] is the Kithsong logo (paint_logo()), drawn on
+ * the toolbar itself rather than as a control, so it's part of the title bar: it drags the
+ * window and isn't a UI Automation element. On Windows 11 the toolbar and sidebar show Mica
  * through the extended frame. Everything drawn there needs real alpha, which GDI doesn't
  * give, so it's drawn with canvas.c.
  *
@@ -129,6 +131,7 @@ enum {
   TRACKS_W = 320,
   PAD = 8,
   ICON_BTN = 36,
+  LOGO = ICON_BTN, /* the logo's square, as tall as the playback buttons */
   NOW_PLAYING_GAP = 16, /* either side of the seekbar strip and the shuffle button */
   SHUFFLE_GAP = 6,      /* between the seekbar strip and the shuffle button */
   NOW_PLAYING_MAX = 640,
@@ -257,6 +260,25 @@ static BOOL artist_page(void) {
   return g_app.page == PAGE_ARTISTS && artist_view_artist();
 }
 
+/* Where the logo goes: at the start of the toolbar, before the playback buttons and level
+ * with them. */
+static RECT logo_rect(void) {
+  int size = scale(LOGO), pad = scale(PAD), top = (scale(BAR_H) - size) / 2;
+  RECT r = {pad, top, pad + size, top + size};
+  return r;
+}
+
+/* The Kithsong logo, in logo_rect(). For now a placeholder, a rounded square in the theme's
+ * colours, as the album grid's placeholders are; the real logo goes in here (e.g.
+ * canvas_draw_image() of a premultiplied image at the DPI's size). */
+static void paint_logo(canvas *c) {
+  RECT r = logo_rect();
+  int radius = scale(6);
+  COLORREF ink = theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0);
+  if (!theme.high_contrast) canvas_fill(c, &r, radius, ink, theme.dark ? 15 : 6);
+  canvas_frame(c, &r, radius, 1, theme.high_contrast ? theme.text : theme.line, 255);
+}
+
 static void layout(void) {
   RECT rc;
   GetClientRect(g_app.wnd, &rc);
@@ -271,7 +293,7 @@ static void layout(void) {
   int grid_w = w - side_w - (tracks_w ? tracks_w + scale(1) : 0);
 
   HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 7);
-  int x = pad;
+  int x = logo_rect().right + pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
   int volume_x = w - caption_buttons_width() - pad - icon;
@@ -330,7 +352,11 @@ static void paint_background(HDC dc, const RECT *area) {
   int w = client.right, h = client.bottom, bar = scale(BAR_H), side_w = scale(SIDE_W);
   int frame_alpha = theme.mica ? 0 : 255;
   RECT toolbar = {0, 0, w, bar}, side = {0, bar, side_w, h}, content = {side_w, bar, w, h}, r;
-  if (IntersectRect(&r, &toolbar, area)) canvas_clear(c, &r, theme.frame, frame_alpha);
+  if (IntersectRect(&r, &toolbar, area)) {
+    canvas_clear(c, &r, theme.frame, frame_alpha);
+    RECT logo = logo_rect();
+    if (IntersectRect(&r, &logo, area)) paint_logo(c);
+  }
   if (IntersectRect(&r, &side, area)) canvas_clear(c, &r, theme.frame, frame_alpha);
   if (IntersectRect(&r, &content, area)) {
     /* The content area's border and rounded corner, as the album grid draws them. */

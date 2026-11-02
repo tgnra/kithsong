@@ -1,7 +1,7 @@
 /* GTK4 + libadwaita frontend. Layout:
  *
  *   AdwToolbarView
- *   +- AdwHeaderBar: [prev][play][next]  [art] now playing + seekbar [shuffle]  [vol][import][settings]
+ *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle]  [vol][import][settings]
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
  *      |                    / Recents / Devices)
  *      +- GtkStack of pages: "library" | "artists" (artist_view.c) | "search" (search_view.c)
@@ -55,6 +55,9 @@
 static const char css[] =
   ".album-cover { border-radius: 8px; background-color: alpha(currentColor, 0.08); }"
   ".now-playing .album-cover { border-radius: 4px; }"
+  /* The logo's placeholder until there's art (logo_new()). */
+  ".app-logo { border-radius: 6px; background-color: alpha(currentColor, 0.08);"
+  " box-shadow: inset 0 0 0 1px alpha(currentColor, 0.15); }"
   ".album-grid { padding: 12px; }"
   ".album-grid > child { padding: 8px; border-radius: 12px; }"
   ".track-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
@@ -75,6 +78,7 @@ static GtkWidget *play_button;
 static guint save_volume_source; /* a timeout, so a held key saves the volume once */
 
 enum {
+  LOGO = 36, /* the logo's square, as tall as the playback buttons (and the now-playing cover) */
   VOLUME_STEP = 5, /* per press of a volume shortcut */
   SEEK_STEP_MS = 5000,
   SAVE_VOLUME_MS = 1000,
@@ -1130,6 +1134,19 @@ static GtkWidget *icon_button(const char *icon, const char *tooltip, const char 
   return b;
 }
 
+/* The Kithsong logo, at the start of the header bar before the playback buttons: a LOGO x
+ * LOGO square. For now a rounded placeholder in the theme's colours (.app-logo); the real
+ * logo goes in here, e.g. a GtkPicture of the same size. It's only decoration: screen
+ * readers skip it, and clicks go through to the header bar, so it drags the window. */
+static GtkWidget *logo_new(void) {
+  GtkWidget *logo = g_object_new(GTK_TYPE_BOX, "accessible-role", GTK_ACCESSIBLE_ROLE_PRESENTATION, NULL);
+  gtk_widget_add_css_class(logo, "app-logo");
+  gtk_widget_set_size_request(logo, LOGO, LOGO);
+  gtk_widget_set_valign(logo, GTK_ALIGN_CENTER);
+  gtk_widget_set_can_target(logo, FALSE);
+  return logo;
+}
+
 /* The playback buttons don't take the focus when clicked, so Space after clicking Next still
  * plays or pauses rather than skipping again. */
 static GtkWidget *action_button(const char *icon, const char *tooltip, const char *accel, const char *action) {
@@ -1342,6 +1359,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   g_action_map_add_action_entries(G_ACTION_MAP(gapp), actions, G_N_ELEMENTS(actions), a);
 
   GtkWidget *header = adw_header_bar_new();
+  adw_header_bar_pack_start(ADW_HEADER_BAR(header), logo_new());
   adw_header_bar_pack_start(ADW_HEADER_BAR(header),
                             action_button("media-skip-backward-symbolic", mc_str(MC_STR_PREVIOUS_TRACK),
                                           "<Control>Left", "app.previous"));
