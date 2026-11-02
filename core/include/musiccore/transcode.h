@@ -51,6 +51,10 @@ extern "C" {
  * (moving a valid sidecar's mtime along). For
  * MC_FORMAT_ORIGINAL nothing is cached and the result is src_path itself.
  *
+ * src_path is the track's original (file_uid is its uid), whatever its format: sync never
+ * passes a transcode, which would be encoded twice (see "Lossy copies" in
+ * docs/sync-protocol.md).
+ *
  * Encoding: the source is decoded (FLAC, MP3, WAV, AIFF or Opus), downmixed to stereo if it
  * has more than two channels, resampled to 48 kHz and encoded as Opus VBR at the bitrate.
  * Tags are copied, and the album's cover (the image file beside the source) is embedded. The

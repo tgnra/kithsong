@@ -22,6 +22,13 @@
  * recorded in the files row or a cached transcode's sidecar while the file is unchanged, else
  * the file is hashed first and the hash kept (keep_sha), so the next send reads it once.
  *
+ * Encoding is only ever from the track's original, whatever its format (a lossy original
+ * such as an MP3 is still the original): never from a transcode, which would be encoded
+ * twice. Every job given to the pool goes through encode_original(), which refuses
+ * anything else. A received transcode is sent only as it is, at the bitrate it was made at;
+ * asked for another, this device has nothing to give, and the receiver's track stays
+ * missing (not failed) until it meets a device holding the original.
+ *
  * Files rows. A received original gets source_peer_uid (who sent it) but no
  * source_file_uid, so it is still an original and may be served as one; a transcode gets
  * both. Originals imported here have neither: they are never deleted by verification, and
@@ -393,6 +400,7 @@ typedef struct held {
   /* Where send_file() keeps a hash it had to compute: nowhere, the files row (an original's,
    * whose uid is file_uid), or a cached transcode's sidecar. */
   enum { KEEP_NONE, KEEP_ROW, KEEP_SIDECAR } keep;
+  int transcode; /* a transcode received from a peer (find_transcode): never encoded */
 } held;
 
 static void held_free(held *h) {
@@ -462,7 +470,23 @@ static int find_transcode(mc_library *lib, const char *track, int kbps, held *h)
   sqlite3_bind_int(stmt, 2, kbps);
   while (!found && sqlite3_step(stmt) == SQLITE_ROW) found = held_from_row(lib, stmt, h);
   sqlite3_finalize(stmt);
+  if (found) h->transcode = 1;
   return found;
+}
+
+/* The one way to the encode pool: Opus at kbps from orig, this device's original of the
+ * track (find_original), into the transcode cache. With MC_ENCODE_NOW it waits, and *out is
+ * the cached file (hold the pool around it and the sending); otherwise the job is queued at
+ * prio for owner and out is unused. Anything but an original is refused: a transcode is
+ * never encoded again (see the top of this file). */
+static mc_status encode_original(mc_sync *sync, const held *orig, int kbps, mc_encode_prio prio,
+                                 const void *owner, char **out) {
+  if (out) *out = NULL;
+  if (orig->transcode) return MC_ERR_INVALID_ARG;
+  if (prio == MC_ENCODE_NOW)
+    return out ? mc_encode_pool_encode(sync->enc, orig->file_uid, orig->path, kbps, out)
+               : MC_ERR_INVALID_ARG;
+  return mc_encode_pool_queue(sync->enc, orig->file_uid, orig->path, kbps, prio, owner);
 }
 
 /* Whether some file of track here is in the format t wants, and not stale. */
@@ -854,7 +878,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
     } else if (original && self_transcodes(s)) {
       /* Its encode-ahead job if it has one (queued or running), else a job of its own. */
       char *out = NULL;
-      mc_status enc = mc_encode_pool_encode(pool, h.file_uid, h.path, kbps, &out);
+      mc_status enc = encode_original(s->sync, &h, kbps, MC_ENCODE_NOW, NULL, &out);
       if (enc == MC_OK) {
         held c = cached_copy(&h, out);
         st = send_file(s, track, &c, "opus", kbps);
@@ -864,6 +888,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
       }
       free(out);
     } else {
+      /* Holding only a transcode at another bitrate is "missing": it isn't a source. */
       st = send_file_err(s->ch, track, original ? "no_transcode" : "missing");
     }
     free(cached);
@@ -909,7 +934,7 @@ static mc_status serve_prepare(mc_session *s, const unsigned char *payload, size
   yyjson_arr_foreach(tracks, idx, max, v) {
     const char *track = yyjson_get_str(v);
     held h, tr;
-    if (!is_uid(track) || !find_original(lib, track, &h)) continue;
+    if (!is_uid(track) || !find_original(lib, track, &h)) continue; /* a transcode is no source */
     char *cached = cache_path(s->sync, h.file_uid, kbps);
     int needed = cached && !mc_file_exists(cached) &&
                  !mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps);
@@ -918,8 +943,8 @@ static mc_status serve_prepare(mc_session *s, const unsigned char *payload, size
       held_free(&tr);
     }
     if (needed)
-      mc_encode_pool_queue(s->sync->enc, h.file_uid, h.path, kbps,
-                           ahead ? MC_ENCODE_AHEAD : MC_ENCODE_BACKGROUND, ahead ? s : NULL);
+      encode_original(s->sync, &h, kbps, ahead ? MC_ENCODE_AHEAD : MC_ENCODE_BACKGROUND,
+                      ahead ? s : NULL, NULL);
     free(cached);
     held_free(&h);
   }

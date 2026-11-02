@@ -89,7 +89,9 @@ Priorities:
   not on an archive or outside a group.
 - **Lossy copies:** a device can ask for a lossy format instead of the originals, e.g. a
   phone requesting Opus rather than FLAC. The sender transcodes and caches the
-  copies, and the copies are never mistaken for originals.
+  copies, and the copies are never mistaken for originals. A copy is only ever made from
+  the original, never from another copy: a track only a copy at another bitrate can be had
+  of waits until a device holding the original is reachable.
 
 Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 

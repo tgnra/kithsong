@@ -826,6 +826,8 @@ music lives nowhere else.
      an original), and the file is there.
    - `cached`: it can send the requested Opus without encoding: from its transcode cache,
      a transcode it received at that bitrate, or a lossy original small enough to stand in.
+     A transcode at another bitrate counts for nothing: it is never encoded again (see
+     [Lossy copies](#lossy-copies)).
    - `verified`: its original has a recorded `sha256` (see Reconcile above).
 3. It chooses a source per track:
    1. a device with a cached transcode, or with the original when the target is `original`;
@@ -941,6 +943,15 @@ ends; one that may not transcode ignores it.
 
 ## Lossy copies
 
+- A transcode is only ever made from the track's original, whatever its format: a lossy
+  original (an MP3, say) is still the original, so it is sent as-is when small enough (see
+  Target format) and encoded once otherwise. A transcode is never encoded again: a device
+  holding only a transcode sends it only as it is, to a device wanting that very bitrate,
+  and answers any other with `missing` (in `HAVE_RESP`, neither `original` nor `cached`).
+  A device wanting the track at another bitrate fetches nothing for it: the track stays
+  missing in its `sync_status`, which is not an error, until a session with a device that
+  has a copy at that bitrate, or holds the original and may transcode, brings it. A copy
+  it already holds in another format stays meanwhile, as in Reconcile.
 - Transcodes are Opus (libopusenc), cached on the transcoding device in
   `<config>/transcode-cache/<file_uid>/opus-<kbps>.opus`, with an LRU size cap of 8 GiB.
   Each encode writes a part file of its own and renames it into place, so two encodes of
