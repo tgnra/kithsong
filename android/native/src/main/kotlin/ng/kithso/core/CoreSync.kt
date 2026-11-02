@@ -157,6 +157,42 @@ data class VerifyResult(
     val deleted: Long,
 )
 
+/** A member holding tracks that wait for it (mc_sync_waiting_device). */
+data class WaitingDevice(
+    val uid: String,
+    /** What the group calls it. */
+    val name: String,
+    private val kindCode: Int,
+    /** Of the waiting tracks, those it holds. */
+    val tracks: Int,
+) {
+    val kind: DeviceKind get() = DeviceKind.entries.getOrElse(kindCode) { DeviceKind.Desktop }
+}
+
+/**
+ * Tracks this device's profile wants that only members it can't reach now hold
+ * (mc_sync_waiting): "12 tracks are waiting for Tania's desktop to come online." [tracks]
+ * counts each once; [devices] are the members holding them, most tracks first, and a track
+ * several of them hold counts for each. "Can't reach" is how the last session with a member
+ * went, not discovery, so it doesn't flicker; [CoreSync.Event.Waiting] says when it changed.
+ */
+data class SyncWaiting(val tracks: Int, val devices: List<WaitingDevice>) {
+    // For jni_bridge.c, which passes the devices as parallel arrays.
+    @Suppress("unused")
+    private constructor(
+        tracks: Int,
+        uids: Array<String>,
+        names: Array<String>,
+        kinds: IntArray,
+        counts: IntArray,
+    ) : this(tracks, uids.indices.map { WaitingDevice(uids[it], names[it], kinds[it], counts[it]) })
+
+    companion object {
+        /** Nothing waits. */
+        val NONE = SyncWaiting(0, emptyList())
+    }
+}
+
 /** A device discovery sees that isn't in this device's group (mc_sync_nearby). */
 data class NearbyDevice(
     val uid: String,
@@ -367,6 +403,9 @@ class CoreSync(
             val user: Boolean = false,
             val connected: Boolean = true,
         ) : Event
+
+        /** The tracks waiting for a device changed: read [CoreSync.waiting] again. */
+        data object Waiting : Event
     }
 
     internal var handle = nativeNew(library.handle, configDir, deviceName, kind.ordinal, this)
@@ -469,6 +508,9 @@ class CoreSync(
 
     /** Devices discovery sees that aren't in the group, by name. */
     fun nearby(): List<NearbyDevice> = nativeListNearby(handle).asList()
+
+    /** The tracks waiting for a device this one can't reach now, as sync last worked them out. Doesn't block. */
+    fun waiting(): SyncWaiting = nativeWaiting(handle)
 
     /**
      * [uid]'s profile, any member's, this device's included. One with none stored yet reads as
@@ -624,6 +666,9 @@ class CoreSync(
     }
 
     @Suppress("unused")
+    private fun onWaiting() = listener(Event.Waiting)
+
+    @Suppress("unused")
     private fun onProgress(
         uid: String,
         phase: Int,
@@ -724,6 +769,7 @@ class CoreSync(
         @JvmStatic private external fun nativeLibraryState(handle: Long): Int
         @JvmStatic private external fun nativeListDevices(handle: Long): Array<SyncDevice>
         @JvmStatic private external fun nativeListNearby(handle: Long): Array<NearbyDevice>
+        @JvmStatic private external fun nativeWaiting(handle: Long): SyncWaiting
         @JvmStatic private external fun nativeGetProfile(handle: Long, uid: String): SyncProfile
         @JvmStatic private external fun nativeSetProfile(
             handle: Long,

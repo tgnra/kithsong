@@ -43,6 +43,7 @@ typedef struct app {
   GtkWidget *album_grid, *playlist_grid;
   app_view view;        /* the sidebar's library page picked last */
   AdwOverlaySplitView *album_split; /* the track list is its sidebar, at the end */
+  AdwBanner *waiting;   /* above the pages: tracks waiting for a device (app_update_waiting()) */
 } app;
 
 /* Reloads the album and playlist grids, the album groups, the artists and the shown tracks
@@ -50,6 +51,12 @@ typedef struct app {
  * changes, e.g. after an import. */
 void app_reload_library(app *a);
 
+/* Reads the tracks waiting for a device that can't be reached now (mc_sync_get_waiting())
+ * into the banner above the pages: "12 tracks are waiting for Tania's desktop to come
+ * online." It shows on the "library" page (Albums, Playlists and Album groups, as on
+ * Windows) while there are any, and goes by itself once they've arrived. Call when sync says
+ * they changed (SYNC_EV_WAITING) and when sync starts. */
+void app_update_waiting(app *a);
 /* Updates what the empty Albums and Playlists pages suggest from this computer's place in
  * sync (devices_sync_state()): pairing while it isn't in a group, Choose what to sync once
  * it is. */

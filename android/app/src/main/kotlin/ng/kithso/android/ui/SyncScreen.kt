@@ -4,6 +4,7 @@ import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.add
@@ -19,6 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -55,6 +59,7 @@ import ng.kithso.core.CoreSync
 import ng.kithso.core.MusicCoreException
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
+import ng.kithso.core.SyncWaiting
 import ng.kithso.android.sync.SyncProgress
 import ng.kithso.android.sync.SyncStatus
 import ng.kithso.android.sync.Syncer
@@ -545,4 +550,46 @@ private fun addressText(address: String?, port: Int): String = when {
     address == null -> stringResource(R.string.device_address_unknown)
     port != CoreSync.DEFAULT_PORT && port != 0 -> stringResource(R.string.device_address_port, address, port)
     else -> address
+}
+
+/**
+ * Under the main list's header while tracks of this phone's sync settings can only come from
+ * members it can't reach now: "12 tracks are waiting for Tania's desktop to come online."
+ * Calm, with nothing to press or dismiss: it goes by itself once they've arrived.
+ */
+@Composable
+fun WaitingCard(waiting: SyncWaiting, modifier: Modifier = Modifier) {
+    val top = waiting.devices.firstOrNull() ?: return
+    val name = top.name.ifEmpty { stringResource(R.string.device_unnamed) }
+    val others = waiting.devices.size - 1
+    val text = if (others == 0) {
+        pluralStringResource(R.plurals.sync_waiting, waiting.tracks, waiting.tracks, name)
+    } else {
+        pluralStringResource(
+            R.plurals.sync_waiting_others,
+            waiting.tracks,
+            waiting.tracks,
+            name,
+            pluralStringResource(R.plurals.sync_waiting_other_devices, others, others),
+        )
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Sync,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 12.dp).size(20.dp),
+            )
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+    }
 }

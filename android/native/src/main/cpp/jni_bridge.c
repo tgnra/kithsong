@@ -957,7 +957,7 @@ typedef struct jni_sync {
   mc_sync *sync;
   jobject listener; /* global ref to the CoreSync, whose on* methods get the events */
   jmethodID on_peer, on_pair_code, on_pair_result, on_progress, on_sync_done;
-  jmethodID on_pair_merge, on_merge_progress, on_merge_done;
+  jmethodID on_pair_merge, on_merge_progress, on_merge_done, on_waiting;
 } jni_sync;
 
 /* The current core thread's JNIEnv, attaching the thread if the JVM doesn't know it, or NULL.
@@ -1094,6 +1094,15 @@ static void on_sync_merge_done(void *user, const mc_merge_result *r) {
   detach(env, attached);
 }
 
+static void on_sync_waiting(void *user) {
+  jni_sync *p = user;
+  int attached;
+  JNIEnv *env = attach(&attached);
+  if (!env) return;
+  (*env)->CallVoidMethod(env, p->listener, p->on_waiting);
+  detach(env, attached);
+}
+
 static void on_sync_progress(void *user, const mc_sync_progress *pr) {
   jni_sync *p = user;
   int attached;
@@ -1157,10 +1166,11 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
     {"onPairMerge", "(Ljava/lang/String;Ljava/lang/String;ZZZJJJJZLjava/lang/String;I[Ljava/lang/String;)V"},
     {"onMergeProgress", "(III)V"},
     {"onMergeDone", "(ILjava/lang/String;[ILjava/lang/String;)V"},
+    {"onWaiting", "()V"},
   };
   jmethodID *ids[] = {&p->on_peer,       &p->on_pair_code,      &p->on_pair_result,
                       &p->on_progress,   &p->on_sync_done,      &p->on_pair_merge,
-                      &p->on_merge_progress, &p->on_merge_done};
+                      &p->on_merge_progress, &p->on_merge_done, &p->on_waiting};
   int found = 1;
   for (size_t i = 0; found && i < sizeof methods / sizeof *methods; i++) {
     *ids[i] = (*env)->GetMethodID(env, lcls, methods[i].name, methods[i].sig);
@@ -1186,6 +1196,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
       .on_pair_merge = on_sync_pair_merge,
       .on_merge_progress = on_sync_merge_progress,
       .on_merge_done = on_sync_merge_done,
+      .on_waiting = on_sync_waiting,
     };
     /* mc_sync_new copies the strings and the events. */
     st = mc_sync_new((mc_library *)(intptr_t)library, cdir, cname, (mc_device_kind)kind, &events,
@@ -1491,6 +1502,46 @@ static void profile_args_free(mc_sync_profile *p) {
 
 /* device_uid's profile as a SyncProfile, made with its private constructor that takes the
  * items as parallel kinds and uids. */
+/* The waiting tracks as a SyncWaiting, its devices as parallel arrays. */
+JNIEXPORT jobject JNICALL Java_ng_kithso_core_CoreSync_nativeWaiting(JNIEnv *env, jclass cls,
+                                                                    jlong handle) {
+  (void)cls;
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/SyncWaiting");
+  if (!info) return NULL;
+  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
+                                       "(I[Ljava/lang/String;[Ljava/lang/String;[I[I)V");
+  jclass string_cls = ctor ? (*env)->FindClass(env, "java/lang/String") : NULL;
+  if (!string_cls) return NULL;
+  mc_sync_waiting *w = NULL;
+  mc_status st = mc_sync_get_waiting(sync_of(handle), &w);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jobject out = NULL;
+  jobjectArray uids = (*env)->NewObjectArray(env, w->count, string_cls, NULL);
+  jobjectArray names = uids ? (*env)->NewObjectArray(env, w->count, string_cls, NULL) : NULL;
+  jintArray kinds = names ? (*env)->NewIntArray(env, w->count) : NULL;
+  jintArray counts = kinds ? (*env)->NewIntArray(env, w->count) : NULL;
+  int ok = counts != NULL;
+  for (int i = 0; ok && i < w->count; i++) {
+    const mc_sync_waiting_device *d = &w->devices[i];
+    jint kind = (jint)d->kind, tracks = (jint)d->tracks;
+    (*env)->SetIntArrayRegion(env, kinds, i, 1, &kind);
+    (*env)->SetIntArrayRegion(env, counts, i, 1, &tracks);
+    jstring uid = new_string(env, d->uid);
+    jstring name = new_string(env, d->name ? d->name : "");
+    ok = uid && name;
+    if (uid) (*env)->SetObjectArrayElement(env, uids, i, uid);
+    if (name) (*env)->SetObjectArrayElement(env, names, i, name);
+    if (uid) (*env)->DeleteLocalRef(env, uid);
+    if (name) (*env)->DeleteLocalRef(env, name);
+  }
+  if (ok) out = (*env)->NewObject(env, info, ctor, (jint)w->tracks, uids, names, kinds, counts);
+  mc_sync_waiting_free(w);
+  return out;
+}
+
 JNIEXPORT jobject JNICALL Java_ng_kithso_core_CoreSync_nativeGetProfile(JNIEnv *env, jclass cls,
                                                                        jlong handle, jstring uid) {
   (void)cls;

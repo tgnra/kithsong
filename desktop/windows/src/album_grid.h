@@ -168,6 +168,9 @@ BOOL album_grid_select(const char *uid);
  * that would leave the grid none. Call before each layout. */
 int album_grid_set_full_width(int full_w, int min_w);
 
+/* Whether the grid is below the waiting banner (waiting_banner.h), which then draws the
+ * content area's top border and rounded corner: the grid draws only its left border. */
+void album_grid_set_below_banner(BOOL below);
 /* Call after theme_update. */
 void album_grid_theme_changed(void);
 

@@ -103,6 +103,7 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - Sync profile "artist" selections pick tracks by `tracks.artist_uid` and the album's artist only, not featured credits (`track_artists` / `album_artists` past the first): selecting Rihanna doesn't sync "Jay-Z feat. Rihanna". And a selection of an old whole-credit artist ("Jay-Z feat. Rihanna") selects nothing once the refresh after upgrading has split and deleted it
 - Changelog compaction must keep the rows that decide merges and archive demotions
 - A stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
+- Tracks waiting for a device (mc_sync_get_waiting()) guess who holds what from profiles and who imported each track: nothing records a member's files, so a member still short of its own profile (its sync_status shows missing) is named as if it had them. "Reachable" is the last session attempt, so a member that went away soon after a complete session is only noticed when the rate limit lets the next attempt run (up to MC_SYNC_AUTO_INTERVAL_MS)
 
 ### Merging libraries
 Pairing two devices whose libraries both have music merges them (see "Merging libraries" in docs/sync-protocol.md). The larger library is kept; the user confirms on the device whose library is merged, which sets its library aside as library-before-merge-<date>.db, forgets its old group, signs its Last.fm account out if both have one, and after the first session brings its current state (no history) in through the import's duplicates check. Windows, Linux and Android show the proposal, the results, the merge's progress and summary, and the pending note (strings pair_merge_*, paired_merged_*, merge_*). Peers without merging still get library_mismatch, with a hint to update them.
@@ -136,6 +137,7 @@ Left in the frontends:
 
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
+- All - the waiting-for-a-device banner has no Show that filters the library to those tracks (the core only gives counts); Windows' banner, Linux's AdwBanner and Android's card are built but not yet seen running
 - All - a switch in Settings for mc_settings_album_in_order() (playing a track from an album turns shuffle off, so the album plays in order; on by default). Every platform follows it, Android Auto too, but none shows it yet
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
 - Windows and Linux - an empty library in a group (nothing imported anywhere yet) just says "Use Import to add music."; Android's says to choose what to sync, with a button to this phone's page

@@ -34,6 +34,13 @@ typedef enum mc_sync_trigger {
   MC_TRIGGER_AUTO      /* mc_sync_background() */
 } mc_sync_trigger;
 
+/* The last session attempt with a member, this run of sync (since mc_sync_start()). */
+typedef enum mc_sync_contact {
+  MC_CONTACT_NONE,    /* not tried yet */
+  MC_CONTACT_REACHED, /* a session completed */
+  MC_CONTACT_FAILED   /* a session failed, or connecting to it did */
+} mc_sync_contact;
+
 /* What this device knows of another one's whereabouts, and for members, the schedule. */
 typedef struct mc_sync_peer {
   char uid[MC_UID_STRLEN];
@@ -82,6 +89,9 @@ typedef struct mc_sync_peer {
   uint64_t reach_ms; /* mono: when the last reach check with it started; 0 = never */
   int reaching;      /* a reach check with it is running */
   int reach_now;     /* mc_sync_check_reach() asked for one */
+  /* How the last session attempt with it went, for the waiting tracks (waiting.h): only
+   * sessions and their connections count, never discovery or a reach check. */
+  mc_sync_contact contact;
 } mc_sync_peer;
 
 typedef struct mc_sync_worker {
@@ -169,6 +179,13 @@ struct mc_sync {
    * this device left it, from the notice in MC_LIBMERGE_LEAVE_DIR. Under lock. */
   int leave_pending, leave_running;
   uint64_t leave_next_ms; /* mono: the next try */
+  /* Tracks waiting for a device (waiting.h), as the scheduler last worked them out (NULL:
+   * none yet, which reads as empty); waiting_dirty asks it to work them out again. Members
+   * not tried yet count as reachable until waiting_grace_ms (mono), a while after start. */
+  struct mc_sync_waiting *waiting;
+  int waiting_dirty;
+  int waiting_announce; /* the answer was dropped (a pairing undone): say so with the next */
+  uint64_t waiting_grace_ms;
 
   /* Options, set before mc_sync_start(); see the test hooks below. */
   int use_discovery;
@@ -241,6 +258,10 @@ int mc_sync_seed_profile_name(mc_sync *sync, mc_sync_conn *c);
 /* Whether this device's user pressed Sync for peer_uid a short while ago and no session has
  * carried it yet; clears it. For a session that has just claimed the peer. */
 int mc_sync_take_user(mc_sync *sync, const char *peer_uid);
+
+/* Something the waiting tracks depend on changed (files arrived or went, the group's data
+ * changed): the scheduler works them out again soon. Any thread, not under lock. */
+void mc_sync_waiting_changed(mc_sync *sync);
 
 /* Whether a member is online: discovery sees it, or the last session with it succeeded. */
 int mc_sync_peer_online(mc_sync *sync, const char *uid);

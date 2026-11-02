@@ -511,6 +511,10 @@ static int track_satisfied(mc_library *lib, const mc_plan_track *t) {
   return yes;
 }
 
+int mc_transfer_track_satisfied(mc_library *lib, const mc_plan_track *t) {
+  return track_satisfied(lib, t);
+}
+
 /* --- Paths --- */
 
 static int path_known(mc_library *lib, const char *rel) {
@@ -2329,6 +2333,8 @@ mc_status mc_sync_verify(mc_sync *sync, mc_verify_mode mode, mc_verify_result *o
   }
   mc_mutex_unlock(&sync->api_lock);
   files_release(sync);
+  /* Deleted copies are missing again, and may wait for a device. */
+  if (state == MC_SYNC_LIBRARY_GROUP && r.deleted) mc_sync_waiting_changed(sync);
   if (state == MC_SYNC_LIBRARY_GROUP && r.failed) mc_sync_notify_changed(sync);
   if (out) *out = r;
   return MC_OK;

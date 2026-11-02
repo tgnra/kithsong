@@ -304,6 +304,10 @@ typedef struct mc_sync_events {
   /* The merge of the set-aside library, on the device whose library was merged. */
   void (*on_merge_progress)(void *user, const mc_merge_progress *progress);
   void (*on_merge_done)(void *user, const mc_merge_result *result);
+  /* What mc_sync_get_waiting() returns changed: a banner showing it reads it again. Only
+   * when it changed, never for a reach check or discovery coming and going (see "Waiting
+   * for a device" below). */
+  void (*on_waiting)(void *user);
 } mc_sync_events;
 
 /* Opens this device's sync state in config_dir (the per-device config dir, which holds
@@ -544,6 +548,58 @@ typedef struct mc_sync_nearby_list {
 /* Devices discovery currently sees that aren't in our group, ordered by name. */
 mc_status mc_sync_list_nearby(mc_sync *sync, mc_sync_nearby_list **out);
 void mc_sync_nearby_list_free(mc_sync_nearby_list *list);
+
+/* --- Waiting for a device ---
+ * Tracks this device's profile wants that it doesn't hold in the right form, which only
+ * members it can't reach now could give it: "12 tracks are waiting for Tania's desktop to
+ * come online." A member gives a track if it holds the original (its profile has it as one,
+ * or it imported it), or a copy at exactly the Opus bitrate this device wants; a copy at
+ * another bitrate is no source, since a copy is only ever made from the original. A track
+ * no member is known to hold doesn't count.
+ *
+ * "Can't reach" is what the last real session attempt with the member said, kept across
+ * mc_sync_stop() and mc_sync_start(): a session that completed counts as reached, and so does
+ * one running now; one that never got past connecting (mc_sync_result.connected = 0), or a
+ * connection that failed, counts as not. One that answered and then failed changes nothing
+ * until the retry. Discovery and reach checks don't count, so devices coming and going on
+ * the network don't make it flicker. A member not tried yet counts as reached while
+ * automatic sync is off (mc_sync_set_automatic()), which tries nobody, and for the first
+ * minute after mc_sync_start() or automatic sync coming back on, so the sessions sync starts
+ * have their chance first; after that if its last complete session
+ * (mc_sync_device.last_sync_ms) was within MC_SYNC_AUTO_INTERVAL_MS.
+ *
+ * Sync works it out on its own thread when something it depends on changes: a session
+ * ended (files arrived, profiles or members changed), a member could no longer be reached,
+ * group data changed here. on_waiting says when the answer changed. Empty outside a group,
+ * when the open library isn't the group's, while this device's profile isn't confirmed or
+ * is over budget, while a merged library waits to come in, and before it was first worked
+ * out. A pairing undone (mc_sync_take_merge_restored()) drops it, and what was known of the
+ * kept group's members, and it's worked out again for the group the device is back in. */
+
+typedef struct mc_sync_waiting_device {
+  char uid[MC_UID_STRLEN];
+  char *name;            /* the name the group shows for it */
+  mc_device_kind kind;
+  int tracks;            /* of the waiting tracks, those it holds */
+} mc_sync_waiting_device;
+
+typedef struct mc_sync_waiting {
+  int tracks;                      /* waiting tracks, each counted once */
+  mc_sync_waiting_device *devices; /* the unreachable members holding them, most tracks
+                                    * first (then by name); a track several of them hold
+                                    * counts for each */
+  int count;
+} mc_sync_waiting;
+
+/* The waiting tracks as last worked out; never NULL on MC_OK. Doesn't block on the
+ * databases. Free with mc_sync_waiting_free(). */
+mc_status mc_sync_get_waiting(mc_sync *sync, mc_sync_waiting **out);
+void mc_sync_waiting_free(mc_sync_waiting *waiting);
+/* The banner's sentence for w in the current language (i18n.h), e.g. "12 tracks are waiting
+ * for Tania's desktop to come online.", naming the member holding the most and how many others
+ * there are ("... for Tania's desktop and 2 other devices ..."). Like snprintf: returns the
+ * length it wanted, and writes "" for an empty w. */
+size_t mc_sync_waiting_text(const mc_sync_waiting *w, char *buf, size_t size);
 
 /* --- Names and addresses --- */
 

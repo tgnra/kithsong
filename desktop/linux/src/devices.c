@@ -601,6 +601,9 @@ static void on_sync_event(void *user, const sync_event *ev) {
       schedule_library_refresh();
       schedule_refresh(); /* this computer's page: no merge waiting any more */
       break;
+    case SYNC_EV_WAITING:
+      app_update_waiting(d.a);
+      break;
   }
 }
 
@@ -683,6 +686,7 @@ void devices_start(app *a) {
   if (d.selected[0]) device_view_open(sync_bridge_get(), a->lib, d.selected);
   if (!d.poll_source) d.poll_source = g_timeout_add_seconds(POLL_DEVICES_S, on_poll, NULL);
   refresh_devices();
+  app_update_waiting(a); /* the old sync's banner goes; the new one's comes with its event */
 }
 
 void devices_stop(app *a) {

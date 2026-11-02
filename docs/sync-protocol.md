@@ -1028,6 +1028,51 @@ ends; one that may not transcode ignores it.
 - Tag edits made on the phone are metadata changes and sync back normally. The lossy file's
   embedded tags are rewritten locally and are not authoritative.
 
+## Waiting for a device
+
+A device shows which of its wanted tracks can only come from members it can't reach now:
+"12 tracks are waiting for Tania's desktop to come online.", or with several members
+"... for Tania's desktop and 2 other devices ...", naming the one holding the most. It is a
+calm notice at the top of the library on every platform, with no button, and it goes once
+the tracks arrive. `mc_sync_get_waiting()` gives it (total tracks, then each member with the
+tracks it holds, most first) and `mc_sync_waiting_text()` the sentence; `on_waiting` says when
+it changed. The rules are in `core/src/sync/waiting.h`:
+
+- **Waiting tracks:** this device's plan, less the tracks it holds in the target format (as
+  `sync_status.missing` counts them), that some member could give it and no reachable one
+  can. Nothing is worked out while the device fetches nothing: outside a group, another
+  library, an unconfirmed or over-budget profile, a merge still to come in.
+- **Who holds a track.** `files` is local, so it's worked out from what the group records:
+  - each other current member's plan from its profile: as an original, or as Opus at exactly
+    this device's bitrate (a copy at another bitrate is no source, see
+    [Lossy copies](#lossy-copies)). A member that never confirmed a profile holds nothing yet;
+  - the member that imported the track's current original: the origin of the newest
+    `tracks.file_rev` change in the library changelog, else of the track's first change,
+    mapped through `devices.node_uid`. It keeps that original until an archive holds a
+    verified copy (Reconcile), and the archive is a holder then.
+
+  A track no member is known to hold doesn't count: it isn't waiting for anyone.
+- **Reachable** means how the last real session attempt with the member went, kept while
+  the `mc_sync` exists (across stop and start): a session that completed, or one running
+  now. One that never got past connecting (`connected` 0 in its result: no answer, or a
+  failed handshake), or a connection that failed, is unreachable; one that answered and then
+  failed changes nothing until its retry. Discovery and reach checks don't count, so a member
+  coming and going on the network, or a background check, never makes the notice flicker.
+  A member not tried yet counts as reachable while automatic sync is off
+  (`mc_sync_set_automatic(0)`, as on a phone off screen: nobody is tried, so nothing is
+  learnt), for the first minute after sync starts or automatic sync comes back on (the
+  sessions it starts go first), and after that if its last complete session
+  (`peer_contact.last_sync_ms`) was within `MC_SYNC_AUTO_INTERVAL_MS`.
+- **Merging libraries.** While a merged library waits to come in nothing is fetched, so
+  nothing waits. A pairing undone before its merge ran drops the answer and what the last
+  sessions said of the kept group's members; it's worked out again for the group the device
+  is back in.
+- **When.** The scheduler works it out again (each member's plan is one read of every
+  track) only when something it depends on changed: a session ended (files arrived or went,
+  profiles or members changed), a member that was reachable failed to connect, the group's
+  data changed here (a profile edit, a confirmation, a removal), a check deleted files, and
+  once the first minute after start is over. `on_waiting` fires only when the answer differs.
+
 ## Verification
 
 - Transit is authenticated by Noise. File checksums catch truncation and disk errors, and

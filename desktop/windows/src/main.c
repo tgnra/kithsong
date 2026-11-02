@@ -50,7 +50,8 @@
  * is the volume, which the speaker's drop-down (volume_popup.c) and the keyboard change.
  *
  * Sync (sync_bridge.c) runs while a library is open, and stops before it closes, so switching
- * library restarts it. Its events arrive as WM_APP_SYNC. The sidebar's DEVICES section lists
+ * library restarts it. Its events arrive as WM_APP_SYNC. While tracks wait for a device this PC
+ * can't reach, a strip above the album grid says so (waiting_banner.c). The sidebar's DEVICES section lists
  * the group's devices and the nearby ones, refreshed shortly after sync events and every 10
  * seconds (a rename elsewhere fires no event). A paired device's page is device_view.c, the
  * pairing dialogs pair_dialog.c, and the Add Device dialog (the + on the DEVICES heading),
@@ -106,6 +107,7 @@
 #include "theme.h"
 #include "track_list.h"
 #include "volume_popup.h"
+#include "waiting_banner.h"
 #include "wstr.h"
 
 enum {
@@ -120,6 +122,7 @@ enum {
   ID_ARTISTS,
   ID_SHUFFLE, /* after the seekbar */
   ID_VOLUME,  /* before the caption buttons: opens volume_popup.c */
+  ID_WAITING, /* the waiting banner, above the album grid */
   NUM_BUTTONS = ID_NEXT - ID_PREV + 1
 };
 
@@ -163,6 +166,7 @@ typedef struct app {
   HWND tooltip;
   HWND sidebar;
   HWND grid;
+  HWND waiting; /* above the grid while tracks wait for a device (waiting_banner.c) */
   HWND tracks;
   HWND now_playing;
   HWND search;
@@ -233,6 +237,7 @@ static void update_font(void) {
   sidebar_update(g_app.dpi);
 
   SendMessageW(g_app.grid, WM_SETFONT, (WPARAM)font, TRUE);
+  waiting_banner_set_font(font, g_app.dpi);
   track_list_update(g_app.dpi);
   now_playing_update(g_app.dpi);
   search_view_update(g_app.dpi, font);
@@ -292,7 +297,7 @@ static void layout(void) {
   int tracks_w = g_app.show_tracks ? g_app.tracks_w : 0;
   int grid_w = w - side_w - (tracks_w ? tracks_w + scale(1) : 0);
 
-  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 7);
+  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 8);
   int x = logo_rect().right + pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
@@ -314,7 +319,13 @@ static void layout(void) {
                        (bar - icon) / 2, icon, icon, SWP_NOZORDER);
   dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
   UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
-  dwp = DeferWindowPos(dwp, g_app.grid, NULL, side_w, bar, grid_w, h - bar, SWP_NOZORDER | library);
+  /* Tracks waiting for a device: a strip over the grid, beside the track list. */
+  int waiting_h = library_page() && waiting_banner_shown() ? min(waiting_banner_height(), h - bar) : 0;
+  dwp = DeferWindowPos(dwp, g_app.waiting, NULL, side_w, bar, grid_w, waiting_h,
+                       SWP_NOZORDER | (waiting_h ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  album_grid_set_below_banner(waiting_h > 0);
+  dwp = DeferWindowPos(dwp, g_app.grid, NULL, side_w, bar + waiting_h, grid_w, h - bar - waiting_h,
+                       SWP_NOZORDER | library);
   int artist_h = artist_page() ? min(artist_view_header_height(), h - bar) : h - bar;
   dwp = DeferWindowPos(dwp, g_app.artists, NULL, side_w, bar, w - side_w, artist_h,
                        SWP_NOZORDER | (g_app.page == PAGE_ARTISTS ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
@@ -626,6 +637,7 @@ static void apply_theme(void) {
   search_view_update(g_app.dpi, g_app.font);
   artist_view_update(g_app.dpi, g_app.font);
   album_grid_theme_changed();
+  waiting_banner_theme_changed();
   volume_popup_close(); /* it opens again in the new colours */
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
@@ -673,6 +685,7 @@ static void create_controls(void) {
 
   g_app.grid = album_grid_create(g_app.wnd, ID_GRID);
   album_grid_set_playlist_art_dir(g_app.art_dir);
+  g_app.waiting = waiting_banner_create(g_app.wnd, ID_WAITING);
   g_app.tracks = track_list_create(g_app.wnd, ID_TRACKS);
   g_app.now_playing = now_playing_create(g_app.wnd, ID_NOW_PLAYING);
   g_app.search = search_view_create(g_app.wnd, ID_SEARCH);
@@ -1197,6 +1210,7 @@ static void start_sync(void) {
    * the refresh finds the device gone). */
   if (g_app.page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
   refresh_devices();
+  if (waiting_banner_update(sync_bridge_get())) layout(); /* nothing yet: it comes with SYNC_EV_WAITING */
 }
 
 /* Before the library closes: sync reads it. Pairing dialogs go first, as they use sync. */
@@ -1205,6 +1219,7 @@ static void stop_sync(void) {
   device_view_open(NULL, NULL, NULL);
   sync_bridge_stop();
   playback_set_library(NULL, NULL);
+  if (waiting_banner_update(NULL)) layout();
 }
 
 static void on_sync_event(WPARAM wp, LPARAM lp) {
@@ -1247,6 +1262,9 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
       pair_dialog_on_merge_event(ev);
       schedule_library_refresh();
       schedule_refresh(); /* this PC's page: no merge waiting any more */
+      break;
+    case SYNC_EV_WAITING:
+      if (waiting_banner_update(sync)) layout();
       break;
   }
   free(ev);

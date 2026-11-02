@@ -141,6 +141,7 @@ static struct {
   int top; /* of the first row: pad, plus a group's header */
   int client_w, client_h;
   int full_w; /* the width the tiles are sized for; see album_grid_set_full_width */
+  BOOL below_banner; /* album_grid_set_below_banner(): the content area starts above it */
   scroller scroll;
 
   int hot;                          /* tile under the mouse, or -1 */
@@ -1868,11 +1869,13 @@ static void paint(HDC dc, const RECT *dirty) {
 
   scroller_paint(&g.scroll, c);
 
-  /* The content area's border and rounded corner, against the sidebar and toolbar. */
+  /* The content area's border and rounded corner, against the sidebar and toolbar. Below
+   * the waiting banner, which has them, just the left border, carried on from it. */
   int radius = scale(CONTENT_RADIUS);
   RECT all = {0, 0, g.client_w, g.client_h}, border = {0, 0, g.client_w + radius, g.client_h + radius};
+  if (g.below_banner) border.top = -2 * radius;
   canvas_frame(c, &border, radius, 1, theme.line, 255);
-  canvas_round_corners(c, &all, radius, CORNER_TL, theme.frame, theme.mica ? 0 : 255);
+  if (!g.below_banner) canvas_round_corners(c, &all, radius, CORNER_TL, theme.frame, theme.mica ? 0 : 255);
 
   canvas_blit(c, dc, dirty->left, dirty->top, dirty);
 }
@@ -1890,6 +1893,12 @@ int album_grid_set_full_width(int full_w, int min_w) {
   pitch = tile_w + scale(20);
   int n = (min_w + pitch - 1) / pitch;
   return n < cols ? n * pitch : 0;
+}
+
+void album_grid_set_below_banner(BOOL below) {
+  if (g.below_banner == below) return;
+  g.below_banner = below;
+  if (g.wnd) InvalidateRect(g.wnd, NULL, FALSE);
 }
 
 void album_grid_theme_changed(void) {

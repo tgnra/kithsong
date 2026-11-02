@@ -260,6 +260,10 @@ static void on_merge_done(void *user, const mc_merge_result *result) {
   post(user, ev);
 }
 
+static void on_waiting(void *user) {
+  post(user, new_event(SYNC_EV_WAITING));
+}
+
 void sync_bridge_start(HWND wnd, mc_library *lib, const char *config_dir, const char *device_name) {
   sync_bridge_stop();
   g_bridge.wnd = wnd;
@@ -271,8 +275,10 @@ void sync_bridge_start(HWND wnd, mc_library *lib, const char *config_dir, const 
     return;
   }
 
-  static const mc_sync_events events = {on_peer, on_pair_code, on_pair_result, on_progress, on_sync_done,
-                                        NULL,          on_pair_merge,  on_merge_progress, on_merge_done};
+  static const mc_sync_events events = {on_peer,       on_pair_code,      on_pair_result,
+                                        on_progress,   on_sync_done,      NULL,
+                                        on_pair_merge, on_merge_progress, on_merge_done,
+                                        on_waiting};
   mc_sync *sync = NULL;
   void *gen = (void *)(uintptr_t)(ULONG)g_bridge.gen;
   mc_status st = mc_sync_new(lib, config_dir, device_name, MC_DEVICE_DESKTOP, &events, gen, &sync);

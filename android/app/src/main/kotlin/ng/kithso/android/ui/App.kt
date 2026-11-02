@@ -85,6 +85,9 @@ fun App(
         .collectAsState(syncer.status.value.merge)
     val inGroup by remember(syncer) { syncer.status.map { it.inGroup }.distinctUntilChanged() }
         .collectAsState(syncer.status.value.inGroup)
+    // Tracks waiting for a member this phone can't reach: a card under the main list's header.
+    val waiting by remember(syncer) { syncer.status.map { it.waiting }.distinctUntilChanged() }
+        .collectAsState(syncer.status.value.waiting)
     val importPickers = rememberImportPickers(importer, onImportStarted)
     val stack = rememberSaveable(saver = StackSaver) { SnapshotStateList<CollectionRef>() }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
@@ -162,14 +165,16 @@ fun App(
                 onSettings = { settingsOpen = true },
                 importPickers = importPickers,
                 importRunning = importProgress?.phase?.isOver == false,
-                // How an import is going, and the merge after pairing by merging libraries.
-                banner = if (importProgress == null && merge == null) {
+                // How an import is going, the merge after pairing by merging libraries, and
+                // tracks waiting for a device.
+                banner = if (importProgress == null && merge == null && waiting.tracks == 0) {
                     null
                 } else {
                     { modifier ->
                         Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             importProgress?.let { ImportCard(it, importer) }
                             merge?.let { MergeCard(it, onDismiss = syncer::dismissMerge) }
+                            if (waiting.tracks > 0) WaitingCard(waiting)
                         }
                     }
                 },

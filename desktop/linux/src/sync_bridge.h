@@ -33,6 +33,7 @@ typedef enum {
                         * tracks_*, scrobble_sign_out, scrobble_user, forget_* */
   SYNC_EV_MERGE_PROGRESS, /* on_merge_progress: merge_phase, merge_done, merge_total */
   SYNC_EV_MERGE_DONE,  /* on_merge_done: status, merge (counts), backup_path, scrobble_user */
+  SYNC_EV_WAITING,     /* on_waiting: read mc_sync_get_waiting() again */
 } sync_event_kind;
 
 /* One core event. Fields that don't apply to the kind are zero. */

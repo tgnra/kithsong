@@ -4,6 +4,7 @@
  *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle]  [vol][import][settings]
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
  *      |                    / Recents / Devices)
+ *      +- AdwBanner: tracks waiting for a device (app_update_waiting()), on the library's pages
  *      +- GtkStack of pages: "library" | "artists" (artist_view.c) | "search" (search_view.c)
  *         | "import" (import_view.c) | "device" (device_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
@@ -1348,6 +1349,28 @@ static gboolean on_type_to_search(GtkEventControllerKey *keys, guint keyval, gui
   return TRUE;
 }
 
+/* --- Waiting for a device --- */
+
+void app_update_waiting(app *a) {
+  if (!a->waiting) return;
+  const char *page = gtk_stack_get_visible_child_name(a->pages);
+  gboolean library = page && !strcmp(page, "library");
+  char text[512] = "";
+  mc_sync *sync = devices_sync();
+  mc_sync_waiting *w = NULL;
+  if (sync && mc_sync_get_waiting(sync, &w) == MC_OK) mc_sync_waiting_text(w, text, sizeof text);
+  mc_sync_waiting_free(w);
+  /* The title stays while the banner slides away. */
+  if (text[0]) adw_banner_set_title(a->waiting, text);
+  adw_banner_set_revealed(a->waiting, library && text[0]);
+}
+
+static void on_page_changed(GObject *pages, GParamSpec *pspec, gpointer user) {
+  (void)pages;
+  (void)pspec;
+  app_update_waiting(user);
+}
+
 static void on_activate(GtkApplication *gapp, gpointer user) {
   app *a = user;
   if (a->win) { /* launched again: the app was already running */
@@ -1423,10 +1446,20 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   a->import = import_view_new(a->lib, &import_cb);
   gtk_stack_add_named(a->pages, a->import, "import");
 
+  /* Tracks waiting for a device, above the library's pages: calm, no button, not dismissed. */
+  GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *waiting = adw_banner_new("");
+  a->waiting = ADW_BANNER(waiting);
+  adw_banner_set_use_markup(a->waiting, FALSE);
+  gtk_box_append(GTK_BOX(content), waiting);
+  gtk_widget_set_vexpand(pages, TRUE);
+  gtk_box_append(GTK_BOX(content), pages);
+  g_signal_connect(pages, "notify::visible-child-name", G_CALLBACK(on_page_changed), a);
+
   a->sidebar = build_sidebar(a);
   GtkWidget *nav_split = adw_overlay_split_view_new();
   adw_overlay_split_view_set_sidebar(ADW_OVERLAY_SPLIT_VIEW(nav_split), a->sidebar);
-  adw_overlay_split_view_set_content(ADW_OVERLAY_SPLIT_VIEW(nav_split), pages);
+  adw_overlay_split_view_set_content(ADW_OVERLAY_SPLIT_VIEW(nav_split), content);
 
   GtkWidget *toolbar = adw_toolbar_view_new();
   adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);

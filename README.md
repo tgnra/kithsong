@@ -98,6 +98,9 @@ Priorities:
   copies, and the copies are never mistaken for originals. A copy is only ever made from
   the original, never from another copy: a track only a copy at another bitrate can be had
   of waits until a device holding the original is reachable.
+- **Waiting for a device:** when some of the music a device should hold can only come from
+  devices it can't reach, the top of the library says so, calmly: "12 tracks are waiting for
+  Tania's desktop to come online." It goes by itself once they arrive.
 
 Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 

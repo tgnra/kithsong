@@ -22,7 +22,13 @@
  * Reachability (mc_sync_reach in sync.h). Every connection made to a peer, or failed while
  * it is online, and every session it starts here, is evidence of which way connections get
  * through; so is a reach check (reach.c), which the scheduler runs with each online peer
- * when first seen and every REACH_EVERY_MS. The latest evidence each way wins. */
+ * when first seen and every REACH_EVERY_MS. The latest evidence each way wins.
+ *
+ * Waiting tracks (waiting.h). The scheduler works them out again when something they depend
+ * on changed (mc_sync_waiting_changed(): a session ended, a member stopped answering, the
+ * group's data changed here) and reports a different answer through on_waiting. Whether a
+ * member is reachable is the last session attempt with it (mc_sync_peer.contact), so
+ * discovery and reach checks, which come and go, never move it. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +44,7 @@
 #include "sync/session.h"
 #include "sync/sync_internal.h"
 #include "sync/transfer.h"
+#include "sync/waiting.h"
 
 #define PERIOD_MS (5 * 60 * 1000)
 #define CHANGE_DELAY_MS 3000
@@ -61,6 +68,10 @@
 #define REACH_EVERY_MS (15 * 60 * 1000)
 /* A device that connected to us counts as online this long (see reach_alive()). */
 #define REACH_ALIVE_MS (PERIOD_MS + HIGHER_GRACE_MS)
+/* After start, members not tried yet count as reachable for the waiting tracks this long:
+ * the sessions the scheduler starts at once (and the higher uid's, after its grace) go
+ * first, so a member about to sync isn't named for a moment. */
+#define WAITING_GRACE_MS (HIGHER_GRACE_MS + 30000)
 
 /* --- Small helpers --- */
 
@@ -270,6 +281,13 @@ static void emit_reach(mc_sync *sync, const char *uid) {
   if (!sync->ev.on_reach) return;
   mc_mutex_lock(&sync->cb_lock);
   sync->ev.on_reach(sync->user, uid);
+  mc_mutex_unlock(&sync->cb_lock);
+}
+
+static void emit_waiting(mc_sync *sync) {
+  if (!sync->ev.on_waiting) return;
+  mc_mutex_lock(&sync->cb_lock);
+  sync->ev.on_waiting(sync->user);
   mc_mutex_unlock(&sync->cb_lock);
 }
 
@@ -661,6 +679,23 @@ static void finish_restore(mc_sync *sync, mc_sync_conn *c, int starting) {
   mc_mutex_unlock(&sync->lock);
 }
 
+/* After a pairing was undone: the waiting tracks were the kept group's, and so was what the
+ * last sessions said of its members. Both go; they're worked out again for the old group,
+ * whose members get the grace a start gives, and on_waiting says so from the scheduler (this
+ * may be the API's thread, where no callback runs). */
+static void forget_waiting(mc_sync *sync) {
+  mc_mutex_lock(&sync->lock);
+  mc_sync_waiting *old = sync->waiting;
+  sync->waiting = NULL;
+  for (int i = 0; i < sync->npeers; i++) sync->peers[i].contact = MC_CONTACT_NONE;
+  if (sync->started) sync->waiting_grace_ms = mc_mono_ms() + WAITING_GRACE_MS;
+  sync->waiting_dirty = 1;
+  if (old && old->tracks > 0) sync->waiting_announce = 1;
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+  mc_sync_waiting_free(old);
+}
+
 void mc_sync_abandon_merge(mc_sync *sync, mc_sync_conn *c) {
   if (!c->lib || !mc_libmerge_waiting(c->lib) || !mc_libmerge_pending(c->lib, NULL)) return;
   if (mc_libmerge_restore(c->lib) != MC_OK) return;
@@ -673,6 +708,7 @@ void mc_sync_abandon_merge(mc_sync *sync, mc_sync_conn *c) {
   sync->merge_sent = sync->merge_dropped = 0;
   mc_mutex_unlock(&sync->lock);
   finish_restore(sync, c, 0);
+  forget_waiting(sync);
 }
 
 /* Under lock: every member but skip is due soon, from either side. */
@@ -729,6 +765,7 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
     p->contact_ms = now;
     if (result->status == MC_OK) {
       p->reached = 1;
+      p->contact = MC_CONTACT_REACHED;
       p->seen_ms = now;
       p->backoff_ms = 0;
       p->due_ms = now + PERIOD_MS;
@@ -743,6 +780,10 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
       }
     } else if (result->status != MC_ERR_LOCKED && !result->cancelled) {
       p->reached = 0;
+      /* For the waiting tracks: one that never got past connecting (its handshake included)
+       * couldn't be reached. One that answered and then failed was there a moment ago: the
+       * retry below says which it is now. */
+      if (!result->connected) p->contact = MC_CONTACT_FAILED;
       p->auto_after_ms = 0; /* the retries below go ahead */
       p->backoff_ms = p->backoff_ms ? p->backoff_ms * 2 : BACKOFF_MIN_MS;
       if (p->backoff_ms > PERIOD_MS) p->backoff_ms = PERIOD_MS;
@@ -755,6 +796,8 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
   /* What we just learnt, the others may lack too. The changelog poll would see it as a
    * local change, so it is told to skip it. */
   sync->absorb = 1;
+  /* Files may have come or gone, and profiles or members changed. */
+  sync->waiting_dirty = 1;
   if (rows_new > 0) trigger_members(sync, peer_uid, MC_TRIGGER_CHANGED, now + CHANGE_DELAY_MS);
   /* The merge's rows are this device's own edits, which every member needs, and they
    * shouldn't wait out the rate limit: the merge runs once. */
@@ -883,6 +926,19 @@ static int stopping(mc_sync *sync) {
   return s;
 }
 
+/* A session couldn't connect to uid: for the waiting tracks it can't be reached now. Only a
+ * change asks for them again, so a member that stays away costs nothing. */
+static void contact_failed(mc_sync *sync, const char *uid) {
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, uid, 0);
+  if (p && p->contact != MC_CONTACT_FAILED) {
+    p->contact = MC_CONTACT_FAILED;
+    sync->waiting_dirty = 1;
+    mc_cond_broadcast(&sync->cond);
+  }
+  mc_mutex_unlock(&sync->lock);
+}
+
 /* Connects to a member and runs a session as the initiator. quiet: an attempt that gets no
  * session (unreachable, or one with it is running already) goes unreported, but for the
  * MC_SYNC_PHASE_DONE that ends its CONNECTING. One the user asked for (j->user) is reported
@@ -917,8 +973,10 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   }
   if (ch)
     reach_note(sync, j->uid, REACH_OUT_OK, NULL, 0);
-  else if (j->n && !stopping(sync))
+  else if (j->n && !stopping(sync)) {
     reach_note(sync, j->uid, REACH_OUT_FAIL, NULL, 0);
+    contact_failed(sync, j->uid);
+  }
   mc_session s;
   memset(&s, 0, sizeof s);
   s.sync = sync;
@@ -1294,6 +1352,81 @@ static void leave_worker(void *arg) {
   mc_mutex_unlock(&sync->lock);
 }
 
+/* --- Waiting tracks --- */
+
+typedef struct waiting_ctx {
+  mc_sync *sync;
+  mc_sync_conn *c;
+} waiting_ctx;
+
+/* mc_waiting_reach_fn: the last real session attempt with uid (kept across stop and start),
+ * or one running with it. Automatic sync being off makes no attempts, so nothing changes then.
+ * For a member not tried yet: reachable while automatic sync is off or within the grace after
+ * start, then if its last complete session was recent. */
+static int waiting_reachable(void *user, const char *uid) {
+  waiting_ctx *x = user;
+  mc_sync *sync = x->sync;
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, uid, 0);
+  mc_sync_contact contact = p ? p->contact : MC_CONTACT_NONE;
+  int busy = p && p->busy;
+  /* Not tried yet: no news while the scheduler may not try it (automatic sync is off, as on
+   * a phone off screen) or hasn't had its chance since it started or came back on. */
+  int unknown = sync->waiting_grace_ms != 0 || sync->no_auto;
+  mc_mutex_unlock(&sync->lock);
+  if (busy || contact == MC_CONTACT_REACHED) return 1;
+  if (contact == MC_CONTACT_FAILED) return 0;
+  if (unknown) return 1;
+  int64_t last = 0;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(x->c->sdb),
+                         "SELECT last_sync_ms FROM peer_contact WHERE device_uid = ?1", -1, &stmt,
+                         NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_ROW) last = sqlite3_column_int64(stmt, 0);
+    sqlite3_finalize(stmt);
+  }
+  int64_t now = (int64_t)mc_wall_ms();
+  return last > 0 && now - last < MC_SYNC_AUTO_INTERVAL_MS;
+}
+
+/* On the scheduler's thread: works the waiting tracks out again, and says if they changed.
+ * On an error the last answer stands. */
+static void update_waiting(mc_sync *sync, mc_sync_conn *c) {
+  waiting_ctx x = {sync, c};
+  mc_sync_waiting *w = NULL;
+  if (mc_waiting_compute(c->sdb, c->lib, waiting_reachable, &x, &w) != MC_OK) return;
+  mc_mutex_lock(&sync->lock);
+  int changed = !mc_waiting_equal(sync->waiting, w) || sync->waiting_announce;
+  sync->waiting_announce = 0;
+  if (changed) {
+    mc_sync_waiting *old = sync->waiting;
+    sync->waiting = w;
+    w = old;
+  }
+  mc_mutex_unlock(&sync->lock);
+  mc_sync_waiting_free(w);
+  if (changed) emit_waiting(sync);
+}
+
+void mc_sync_waiting_changed(mc_sync *sync) {
+  mc_mutex_lock(&sync->lock);
+  sync->waiting_dirty = 1;
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+}
+
+mc_status mc_sync_get_waiting(mc_sync *sync, mc_sync_waiting **out) {
+  if (out) *out = NULL;
+  if (!sync || !out) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  *out = mc_waiting_copy(sync->waiting);
+  mc_mutex_unlock(&sync->lock);
+  return *out ? MC_OK : MC_ERR_NOMEM;
+}
+
+/* --- Scheduler loop --- */
+
 static void sched_main(void *arg) {
   mc_sync *sync = arg;
   mc_sync_conn c;
@@ -1329,10 +1462,23 @@ static void sched_main(void *arg) {
         sync->absorb = 0;
       else if ((lib != seen_lib || group != seen_group) && !sync->changed_ms)
         sync->changed_ms = now;
+      /* Profiles, members or confirmations changed, here or applied by a session. The
+       * library's changes (plays, edits) leave the waiting tracks as they were, and a
+       * session that brings new tracks asks for them on its own. */
+      if (group != seen_group) sync->waiting_dirty = 1;
       mc_mutex_unlock(&sync->lock);
       seen_lib = lib;
       seen_group = group;
     }
+    mc_mutex_lock(&sync->lock);
+    if (sync->waiting_grace_ms && now >= sync->waiting_grace_ms) {
+      sync->waiting_grace_ms = 0; /* over: work them out with what's known */
+      sync->waiting_dirty = 1;
+    }
+    int redo_waiting = sync->waiting_dirty;
+    sync->waiting_dirty = 0;
+    mc_mutex_unlock(&sync->lock);
+    if (redo_waiting) update_waiting(sync, &c);
 
     member_row *ms;
     int n = load_members(&c, &ms);
@@ -1619,6 +1765,7 @@ void mc_sync_free(mc_sync *sync) {
   mc_sync_conn_close(&sync->api);
   mc_pair_responder_wipe(&sync->in_r);
   free(sync->merge_kept);
+  mc_sync_waiting_free(sync->waiting);
   mc_cond_destroy(&sync->cond);
   mc_mutex_destroy(&sync->lock);
   mc_mutex_destroy(&sync->api_lock);
@@ -1657,6 +1804,7 @@ mc_status mc_sync_start(mc_sync *sync) {
   sync->port = mc_listener_port(l);
   sync->stopping = 0;
   sync->started = 1;
+  sync->waiting_grace_ms = mc_mono_ms() + WAITING_GRACE_MS;
   mc_mutex_unlock(&sync->lock);
   mc_encode_pool_resume(sync->enc);
   char hints[MC_SYNC_HINTS_MAX];
@@ -2093,6 +2241,9 @@ mc_status mc_sync_confirm_now(mc_sync *sync, const char *device_uid) {
 void mc_sync_set_automatic(mc_sync *sync, int on) {
   if (!sync) return;
   mc_mutex_lock(&sync->lock);
+  /* Back on: members get their sessions before any not tried yet counts as away. */
+  if (on && sync->no_auto && sync->started)
+    sync->waiting_grace_ms = mc_mono_ms() + WAITING_GRACE_MS;
   sync->no_auto = !on;
   mc_cond_broadcast(&sync->cond);
   mc_mutex_unlock(&sync->lock);

@@ -20,6 +20,7 @@ import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncEstimate
 import ng.kithso.core.SyncProfile
+import ng.kithso.core.SyncWaiting
 import ng.kithso.core.VerifyResult
 import ng.kithso.core.hereState as coreHereState
 import ng.kithso.core.herePreview as coreHerePreview
@@ -192,6 +193,8 @@ data class SyncStatus(
     val merge: MergeState? = null,
     /** This phone's old library is still to be merged in, after the next sync with the group. */
     val mergePending: Boolean = false,
+    /** Tracks waiting for a member this phone can't reach now, for the main list's card. */
+    val waiting: SyncWaiting = SyncWaiting.NONE,
 ) {
     val inGroup: Boolean get() = libraryState != CoreSync.LibraryState.NoGroup
 
@@ -644,6 +647,8 @@ class Syncer(
         val pairing = state.value.pairing
         when (event) {
             is CoreSync.Event.Peer -> Unit
+            // Read by refreshLists below.
+            CoreSync.Event.Waiting -> Unit
             is CoreSync.Event.PairCode -> {
                 // A merge declined here: the dialog stays closed, even for a new code.
                 if (declined) return
@@ -828,6 +833,7 @@ class Syncer(
             val devices = sync.devices()
             val libraryState = sync.libraryState
             val mergePending = sync.mergePending
+            val waiting = sync.waiting()
             // Renamed here, or by another member in a session.
             val name = sync.deviceName
             if (name.isNotEmpty() && name != state.value.deviceName) onRenamed(name)
@@ -839,6 +845,7 @@ class Syncer(
                     members = devices.filter { !it.isSelf && !it.removed },
                     selfConfirm = devices.firstOrNull { it.isSelf }?.confirm,
                     mergePending = mergePending || debugMergePending,
+                    waiting = waiting,
                     nearby = if (running) sync.nearby() else emptyList(),
                     onLan = context.isOnLan(),
                     address = context.lanAddress(),
