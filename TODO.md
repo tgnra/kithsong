@@ -218,6 +218,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
 - Merging libraries: tested end to end on the emulator with a Windows scratch instance (both roles, Merge and decline, Last.fm sign-out, summary). Seen only with fake_merge: the progress card and bar, the forgotten-devices line, the merge_pending note, the failed summary and the library_mismatch hint; the merge's notification was never seen
 - Search, only on the emulator with a tiny library
+- Pulling the main list down from its top to open search: not even built (no Android SDK where it was written). Check the threshold's feel and tick, that flings reaching the top and drags started lower down don't pull, and the fast scroll strip and mini player alongside
 - The one-time handover of the old prefs recents to the core
 - mDNS discovery and sync over real Wi-Fi, on a real device
 - API 24-32 devices, audio focus during calls, ducking (only API 24-25 duck through the core's volume; the emulator is API 37), plays landing in the core's database

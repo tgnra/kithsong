@@ -152,7 +152,8 @@ the track's name.
 - One scrolling main screen: a header with **Import**, **Search**, **Sync** and **Settings**, then
   **Recents**, **Playlists**, **Album groups**, an album grid and **Artists**. Tapping or
   holding a section's heading jumps to another section, and tapping an item opens its track
-  list over the main screen; screens slide away with a swipe or the back gesture.
+  list over the main screen; screens slide away with a swipe or the back gesture. Pulling the
+  list down from its top opens search too.
 - A mini player above the navigation bar opens the full player. Playback runs in the
   background, with Android's media controls and notification.
 - Holding an album, artist, playlist or album group opens its menu (Play, Shuffle, Add to

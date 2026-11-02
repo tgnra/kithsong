@@ -228,7 +228,8 @@ private val ListArtSize = 56.dp
  * coloured from the art on screen. [bottomPadding] keeps the last items clear of the mini
  * player and navigation bar. [banner], if any, goes under the header: how an import is going.
  * The header's import button and the empty library's open [importPickers], unless an import
- * is [importRunning].
+ * is [importRunning]. [onSearch] is the header's search button, and pulling the list down
+ * from its top (see [pullToSearch]).
  */
 @Composable
 fun MainScreen(
@@ -282,6 +283,8 @@ fun MainScreen(
         val other = stringResource(R.string.fast_scroll_other)
         val titles = Section.entries.associateWith { stringResource(it.title) }
         val scrollEntries = remember(items, titles, other) { fastScrollEntries(items, titles, other) }
+        // Pulling down from the top opens search, as the header's button does.
+        val pull = rememberPullToSearch(onSearch)
 
         PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
         ArtBackdrop(
@@ -295,7 +298,7 @@ fun MainScreen(
             contentPadding = sides
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().pullToSearch(pull, listState),
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {
@@ -343,6 +346,10 @@ fun MainScreen(
                 .matchParentSize()
                 .windowInsetsPadding(sides)
                 .padding(top = with(density) { statusBarPx.toDp() } + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
+        )
+        PullToSearchIndicator(
+            pull,
+            Modifier.matchParentSize().padding(top = with(density) { statusBarPx.toDp() }),
         )
     }
 }
