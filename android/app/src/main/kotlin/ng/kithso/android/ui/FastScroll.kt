@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,7 +59,6 @@ import ng.kithso.android.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.Normalizer
-import kotlin.math.floor
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -106,6 +106,78 @@ internal fun groupEntries(entries: List<FastScrollEntry>, perScreen: Int): List<
     }
     close()
     return groups
+}
+
+/**
+ * How much of the strip's height each of [places] takes, as fractions adding up to 1: the same
+ * for each, except that a section [minShares] names (by its title) with more than its heading
+ * takes at least that share of the strip, whatever its size, the other places sharing what's
+ * left as before. So on the main screen Albums always takes more of the strip than Artists,
+ * however many artists there are. The shares should add up to well under 1.
+ */
+internal fun placeShares(places: List<FastScrollEntry>, minShares: Map<String, Float>): FloatArray {
+    val n = places.size
+    if (n == 0) return FloatArray(0)
+    // A heading is in the section it heads, as the letters under it are.
+    val sectionOf = places.map { if (it.heading) it.label else it.section }
+    val counts = sectionOf.groupingBy { it }.eachCount()
+    // A section that's just its heading keeps its place's height; the rest is shared out.
+    val alone = counts.count { it.value == 1 }
+    // The sections held to their minimum: those under it while the places of the others share
+    // what's left equally, until no more are.
+    val held = HashMap<String, Float>()
+    fun restCount() = n - alone - held.keys.sumOf { counts.getValue(it) }
+    fun restShare() = 1f - alone.toFloat() / n - held.values.sum()
+    while (true) {
+        val restCount = restCount()
+        if (restCount <= 0) break
+        val restShare = restShare()
+        val under = minShares.filter { (section, min) ->
+            section !in held && (counts[section] ?: 0) > 1 && counts.getValue(section).toFloat() / restCount * restShare < min
+        }
+        if (under.isEmpty()) break
+        held.putAll(under)
+    }
+    val restCount = restCount()
+    val restShare = restShare().coerceAtLeast(MIN_REST_SHARE)
+    val shares = FloatArray(n) { i ->
+        val section = sectionOf[i]
+        val min = section?.let { held[it] }
+        when {
+            min != null -> min / counts.getValue(section)
+            counts.getValue(section) == 1 -> 1f / n
+            else -> restShare / restCount
+        }
+    }
+    val sum = shares.sum()
+    for (i in 0 until n) shares[i] /= sum
+    return shares
+}
+
+/** What's left to the places of sections without a minimum, at least ([placeShares]). */
+private const val MIN_REST_SHARE = 0.05f
+
+/** What the strip draws for an entry: its label (or a heading's mark), a dot, or nothing. */
+internal enum class Mark { Label, Dot, None }
+
+/**
+ * What the strip draws for each entry, given where it [starts] down the strip and the share
+ * of it it [spans], as fractions of its height; [minSlot] is [MinSlotHeight] as one. A mark is
+ * drawn only [minSlot] or more below the last; where the entries are closer together than that,
+ * every other one drawn is a dot, though a heading keeps its mark.
+ */
+internal fun stripMarks(entries: List<FastScrollEntry>, starts: FloatArray, spans: FloatArray, minSlot: Float): Array<Mark> {
+    var last = Float.NEGATIVE_INFINITY
+    var dotNext = false
+    return Array(entries.size) { i ->
+        val centre = starts[i] + spans[i] / 2
+        if (centre - last < minSlot) return@Array Mark.None
+        val crowded = spans[i] < minSlot
+        val mark = if (crowded && dotNext && !entries[i].heading) Mark.Dot else Mark.Label
+        dotNext = crowded && mark == Mark.Label
+        last = centre
+        mark
+    }
 }
 
 /**
@@ -170,6 +242,7 @@ private const val HIDE_AFTER_MS = 1500L
  * [entries] are grouped about a screen to a place (see [groupEntries]), a screen being the
  * list's height in [NominalRowHeight] rows, so the places don't change as it scrolls. There's
  * none while the list is under [MIN_SCREENS] screens long, or has fewer than two places.
+ * [minShares] holds sections (by title) to a share of the strip at least (see [placeShares]).
  */
 @Composable
 fun FastScroller(
@@ -177,6 +250,7 @@ fun FastScroller(
     entries: List<FastScrollEntry>,
     modifier: Modifier = Modifier,
     scrollOffset: Int = 0,
+    minShares: Map<String, Float> = emptyMap(),
 ) {
     // A screen's worth of items, from the list's height and a typical row's rather than the
     // rows on screen, so the places stay the same wherever the list is.
@@ -188,6 +262,7 @@ fun FastScroller(
         derivedStateOf { state.layoutInfo.totalItemsCount > perScreen * MIN_SCREENS }
     }
     val places = remember(entries, perScreen) { groupEntries(entries, perScreen) }
+    val shares = remember(places, minShares) { placeShares(places, minShares) }
     if (!long || places.size < 2) return
     val scope = rememberCoroutineScope()
     FastScroller(
@@ -196,14 +271,17 @@ fun FastScroller(
         onJump = { index -> scope.launch { state.scrollToItem(index, scrollOffset) } },
         scrolling = state.isScrollInProgress,
         modifier = modifier,
+        shares = shares,
     )
 }
 
 /**
  * The strip for any list: [entries] in list order, [current] the first item on screen, and
  * [onJump] scrolls to an item. The strip is centred down the right edge of [modifier]'s
- * area, [STRIP_SCREEN_FRACTION] of the screen tall or as fits; when the entries don't all fit,
- * every other slot is a dot, and dragging still goes through every entry. It fades in while
+ * area, [STRIP_SCREEN_FRACTION] of the screen tall or as fits. Each entry takes its [shares] of
+ * its height (fractions adding up to 1, see [placeShares]), or all the same; where they're too
+ * close together for every label, every other mark is a dot or some go unmarked ([stripMarks]),
+ * and dragging still goes through every entry. It fades in while
  * the list is [scrolling] and out [HIDE_AFTER_MS] after, and while hidden doesn't take
  * touches, which go to the list. Touching it jumps to the entry under the finger and follows
  * it, with a haptic tick at each new one. For accessibility it's an adjustable control, an
@@ -216,10 +294,20 @@ fun FastScroller(
     onJump: (Int) -> Unit,
     scrolling: Boolean,
     modifier: Modifier = Modifier,
+    shares: FloatArray? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
+    // Each entry's share of the strip, and where it starts down it, as fractions of its height.
+    val spans = remember(entries, shares) {
+        shares?.takeIf { it.size == entries.size } ?: FloatArray(entries.size) { 1f / entries.size }
+    }
+    val starts = remember(spans) {
+        var at = 0f
+        FloatArray(spans.size) { i -> at.also { at += spans[i] } }
+    }
     val currentEntries by rememberUpdatedState(entries)
+    val currentStarts by rememberUpdatedState(starts)
     val jump by rememberUpdatedState(onJump)
     // The entry under the finger while dragging, else -1, and where the finger is in the strip.
     var selected by remember { mutableIntStateOf(-1) }
@@ -252,7 +340,8 @@ fun FastScroller(
     BoxWithConstraints(modifier) {
         val count = entries.size
         val stripHeight = min(maxHeight.value, (screenHeight * STRIP_SCREEN_FRACTION).value).dp
-        val slots = min(count, floor(stripHeight / MinSlotHeight).toInt()).coerceAtLeast(1)
+        val minSlot = MinSlotHeight / stripHeight
+        val marks = remember(entries, starts, spans, minSlot) { stripMarks(entries, starts, spans, minSlot) }
         val stripTop = (maxHeight - stripHeight) / 2
 
         Column(
@@ -280,7 +369,9 @@ fun FastScroller(
                         val list = currentEntries
                         if (list.isEmpty()) return
                         fingerY = y.coerceIn(0f, size.height.toFloat())
-                        val i = floor(fingerY / size.height * list.size).toInt().coerceIn(0, list.lastIndex)
+                        // The entry whose part of the strip the finger is in.
+                        val at = fingerY / size.height
+                        val i = currentStarts.indexOfLast { it <= at }.coerceIn(0, list.lastIndex)
                         if (i != selected) {
                             selected = i
                             haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
@@ -307,22 +398,25 @@ fun FastScroller(
                     }
                 } else Modifier),
         ) {
-            for (slot in 0 until slots) {
-                // The entry at the slot's middle, as a touch there picks.
-                val i = ((slot + 0.5f) * count / slots).toInt().coerceIn(0, count - 1)
+            for (i in 0 until count) {
                 val entry = entries[i]
-                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                // Each entry's part of the strip, as a touch there picks it. A mark may be
+                // taller than its part, which the marks' spacing leaves room for.
+                Box(Modifier.fillMaxWidth().weight(spans[i]), contentAlignment = Alignment.Center) {
                     val here = i == selected
                     val color = if (here) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    val mark = Modifier.wrapContentHeight(unbounded = true)
                     when {
-                        slots < count && slot % 2 == 1 -> Box(Modifier.size(3.dp).background(color, CircleShape))
-                        entry.heading -> Box(Modifier.width(10.dp).height(3.dp).background(color, RoundedCornerShape(2.dp)))
+                        marks[i] == Mark.None -> Unit
+                        marks[i] == Mark.Dot -> Box(mark.size(3.dp).background(color, CircleShape))
+                        entry.heading -> Box(mark.width(10.dp).height(3.dp).background(color, RoundedCornerShape(2.dp)))
                         else -> Text(
                             entry.label,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = if (here) FontWeight.Bold else FontWeight.Medium,
                             color = color,
                             maxLines = 1,
+                            modifier = mark,
                         )
                     }
                 }

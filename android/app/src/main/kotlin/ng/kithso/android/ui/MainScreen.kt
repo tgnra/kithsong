@@ -180,6 +180,9 @@ private fun mainItems(library: Library?, columns: Int, banner: Boolean): List<Ma
 /** How many items a section has before the fast scroll strip has its letters as well as its heading. */
 private const val LETTERS_FROM = 12
 
+/** How much of the fast scroll strip Albums takes at least, once it has letters (see [placeShares]). */
+private const val ALBUMS_MIN_SHARE = 0.6f
+
 /**
  * The fast scroll strip's entries for [items]: each section's heading, then the letters of an
  * alphabetical section long enough for them (playlists and album groups by name, albums by
@@ -342,6 +345,9 @@ fun MainScreen(
             listState,
             scrollEntries,
             scrollOffset = -statusBarPx,
+            // Albums come a grid row at a time, so few places, and the artists' letters would
+            // otherwise take most of the strip.
+            minShares = mapOf(titles.getValue(Section.Albums) to ALBUMS_MIN_SHARE),
             modifier = Modifier
                 .matchParentSize()
                 .windowInsetsPadding(sides)
