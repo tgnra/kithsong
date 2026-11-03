@@ -8,8 +8,8 @@
  *      +- GtkStack of pages: "library" | "artists" (artist_view.c) | "search" (search_view.c)
  *         | "import" (import_view.c) | "device" (device_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
- *            +- GtkStack: empty-state page | GtkGridView of albums (virtualised)
- *                         | empty-state page | GtkGridView of playlists
+ *            +- GtkStack: empty-state page (over the logo's glows, brand_backdrop.c) | GtkGridView of albums
+ *                         | empty-state page (glowing too) | GtkGridView of playlists
  *                         | album groups and a group's albums (album_groups.c)
  *
  * The album and playlist grids are album_grid.c, the track list track_list.c, the
@@ -37,6 +37,7 @@
 #include "album_groups.h"
 #include "app.h"
 #include "art_backdrop.h"
+#include "brand_backdrop.h"
 #include "artist_view.h"
 #include "cover.h"
 #include "delete_dialog.h"
@@ -1084,6 +1085,12 @@ static gboolean on_playlist_key(GtkWidget *grid, GVariant *args, gpointer user) 
   return TRUE;
 }
 
+/* The Playlists page glows in the logo's colours while it has none to show (brand_backdrop.h). */
+static void on_playlists_shown(GtkStack *playlists, GParamSpec *pspec, gpointer page) {
+  (void)pspec;
+  brand_backdrop_set_lit(page, !g_strcmp0(gtk_stack_get_visible_child_name(playlists), "none"));
+}
+
 static GtkWidget *build_albums(app *a) {
   GtkWidget *empty = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(empty), "folder-music-symbolic");
@@ -1121,14 +1128,19 @@ static GtkWidget *build_albums(app *a) {
                                       playlist_keys[i] == GDK_KEY_F2));
   gtk_widget_add_controller(a->playlist_grid, keys);
   gtk_stack_add_named(a->playlists, a->playlist_grid, "grid");
-  GtkWidget *playlists_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *playlists_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(playlists_box), app_list_header(mc_str(MC_STR_SECTION_PLAYLISTS), mc_str(MC_STR_NEW_PLAYLIST),
+                                                         "<Control>n", G_CALLBACK(on_new_playlist), a));
+  gtk_box_append(GTK_BOX(playlists_box), playlists);
+  /* The whole page glows, header and all, so the glow has no edge under the header; the
+   * view background is the backdrop's, beneath its glows. */
+  GtkWidget *playlists_page = brand_backdrop_new(playlists_box);
   gtk_widget_add_css_class(playlists_page, "view");
-  gtk_box_append(GTK_BOX(playlists_page), app_list_header(mc_str(MC_STR_SECTION_PLAYLISTS), mc_str(MC_STR_NEW_PLAYLIST),
-                                                          "<Control>n", G_CALLBACK(on_new_playlist), a));
-  gtk_box_append(GTK_BOX(playlists_page), playlists);
+  g_signal_connect(playlists, "notify::visible-child-name", G_CALLBACK(on_playlists_shown), playlists_page);
+  on_playlists_shown(a->playlists, NULL, playlists_page);
 
   GtkWidget *stack = gtk_stack_new();
-  gtk_stack_add_named(GTK_STACK(stack), empty, "empty");
+  gtk_stack_add_named(GTK_STACK(stack), brand_backdrop_new(empty), "empty");
   a->album_grid = album_grid_new(mc_str(MC_STR_SECTION_ALBUMS), on_album_changed, a);
   album_grid_set_menu(a->album_grid, on_album_menu, a);
   gtk_stack_add_named(GTK_STACK(stack), a->album_grid, "grid");
