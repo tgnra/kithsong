@@ -408,15 +408,20 @@ int main(int argc, char **argv) {
     mc_channel_set_default_timeout(MC_CHANNEL_TIMEOUT_MS);
     point_at(a, b, mc_sync_port(b->sync));
     mc_listener_close(quiet);
-    /* The press reaches b now, and its session is the user's, connected. */
+    /* The press reaches b now, and its session is the user's, connected. b's report of it
+     * is waited for too: it can come a little after a's (on a slow machine, well into the
+     * next block's watch for sessions that mustn't happen). */
     sa = count_done(a);
+    int sb = count_done(b);
     CHECK(mc_sync_confirm_now(a->sync, b->uid) == MC_OK);
     CHECK(wait_done(a, sa, WAIT_MS) == MC_OK);
+    CHECK(wait_done(b, sb, WAIT_MS) == MC_OK);
     done_flags(a, sa, &user, &connected);
     CHECK(user == 1 && connected == 1);
     mc_mutex_lock(&a->m);
     CHECK(a->unconnected_data == 0);
     mc_mutex_unlock(&a->m);
+    CHECK(settle(a, b)); /* a press can have a follow-up: none is left for the next block */
   }
 
   /* mc_sync_set_automatic(0): a starts nothing by itself, not for a change nor a background

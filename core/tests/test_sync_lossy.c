@@ -103,12 +103,19 @@ static void file_sha(const char *path, char out[65]) {
   for (int i = 0; i < 32; i++) snprintf(out + 2 * i, 3, "%02x", digest[i]);
 }
 
-/* The length of an audio file in ms, as the player's decoder reads it; -1 if it can't. */
+/* The length of an audio file in ms, as the player's decoder reads it; -1 if it can't. An
+ * MP3 without a Xing/Info header (write_mp3()'s) has no length until it's decoded, so its
+ * frames are counted. */
 static int64_t audio_ms(const char *path) {
   mc_decoder *d = NULL;
   if (mc_decoder_open(path, &d) != MC_OK) return -1;
   uint64_t frames = mc_decoder_length(d);
-  unsigned rate = mc_decoder_rate(d);
+  unsigned rate = mc_decoder_rate(d), channels = mc_decoder_channels(d);
+  if (!frames && channels && channels <= 8) {
+    static float buf[1024 * 8];
+    uint64_t n;
+    while ((n = mc_decoder_read(d, buf, 1024)) > 0) frames += n;
+  }
   mc_decoder_close(d);
   return rate ? (int64_t)(frames * 1000 / rate) : -1;
 }
@@ -412,7 +419,9 @@ int main(int argc, char **argv) {
 
   static dev a, b;
   if (!dev_start(&a, root, "a") || !dev_start(&b, root, "b")) return TEST_RESULT();
-  CHECK(pair(&a, &b) == MC_PAIR_PAIRED); /* A asked: A is the new group's archive */
+  /* Both libraries are empty, so the new group syncs the asked device's, which becomes its
+   * archive (docs/sync-protocol.md): B asks, so A is the archive. */
+  CHECK(pair(&b, &a) == MC_PAIR_PAIRED);
 
   /* Lossless: a WAV original on A. */
   char lossless[MC_UID_STRLEN], lossless_file[MC_UID_STRLEN];
