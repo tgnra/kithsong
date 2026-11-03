@@ -95,9 +95,9 @@ void album_grid_new_smart(void);
 void album_grid_new_playlist(void);
 
 /* This PC's place in sync, for the empty pages: with no albums and no group, Albums suggests
- * pairing, with a Pair with a Device... button (AGN_PAIR); on Playlists, when every playlist
- * is hidden for having nothing to play here and this PC is in a group, a Choose What to Sync
- * button (AGN_SYNC_SETTINGS). */
+ * pairing, with a Pair with a Device... button (AGN_PAIR); with no albums in a group, it
+ * suggests choosing what to sync, with a Choose What to Sync button (AGN_SYNC_SETTINGS), as
+ * Playlists does when every playlist is hidden for having nothing to play here. */
 typedef enum album_grid_sync {
   AG_SYNC_OFF,     /* sync isn't running: neither */
   AG_SYNC_ALONE,   /* running, and this PC isn't in a group */

@@ -36,6 +36,7 @@ typedef struct app {
                          * | "groups" (album_groups.c) */
   AdwStatusPage *empty;        /* "No Albums" */
   GtkWidget *pair;             /* its Pair with a device… button (devices_pair_button()) */
+  GtkWidget *empty_choose_sync; /* its Choose what to sync button, in place of pair in a group */
   AdwStatusPage *no_playlists; /* "No playlists yet", or none to play here */
   GtkWidget *choose_sync;      /* its Choose what to sync button */
   GtkStack *playlists;         /* "none" (no_playlists) | "grid", under the Playlists header */
