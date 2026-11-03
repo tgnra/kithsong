@@ -53,7 +53,6 @@ fun HomeScreen(
         }
         menuItem(transform, R.string.section_albums, onAlbums)
         // Not built yet.
-        menuItem(transform, R.string.section_artists, null)
         menuItem(transform, R.string.section_playlists, null)
         menuItem(transform, R.string.sync, onSync)
         menuItem(transform, R.string.settings, onSettings)

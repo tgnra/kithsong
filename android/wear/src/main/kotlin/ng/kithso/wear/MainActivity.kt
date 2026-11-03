@@ -5,16 +5,16 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
@@ -23,8 +23,6 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
-import ng.kithso.core.AlbumInfo
-import ng.kithso.core.MusicCoreException
 import ng.kithso.core.TrackInfo
 import ng.kithso.wear.ui.AlbumScreen
 import ng.kithso.wear.ui.AlbumsScreen
@@ -54,15 +52,9 @@ private fun WearApp() {
     val app = context.applicationContext as KithsongApp
     val playback = app.playback
     val outputs = app.outputs
-    // Only albums with files on the watch; the library lists everything it knows about.
-    var albums by remember { mutableStateOf(emptyList<AlbumInfo>()) }
-    LaunchedEffect(Unit) {
-        albums = libraryCall(emptyList()) { app.library.albums().filter { it.folder != null } }
-    }
-    val sync = remember {
-        val name = Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
-        SampleSync(name ?: Build.MODEL, libraryCall(0) { app.library.trackCount.toInt() })
-    }
+    // What has files on the watch, read again as sync brings more.
+    val contents by app.library.contents.collectAsState()
+    val albums = contents.albums
 
     // Android 13 on: the playback notification needs leave to show, asked for on the first
     // play and otherwise left to the system, which stops asking after two refusals. Playing
@@ -104,10 +96,9 @@ private fun WearApp() {
             composable("album/{id}") { entry ->
                 val uid = entry.arguments?.getString("id")
                 val album = albums.firstOrNull { it.uid == uid } ?: return@composable
-                val tracks = remember(uid) {
-                    libraryCall(emptyList<TrackInfo>()) {
-                        app.library.albumTracks(album.uid).filter { it.path != null }
-                    }
+                // Read again with the library, as the album's files arrive.
+                val tracks by produceState(emptyList<TrackInfo>(), album.uid, contents) {
+                    value = app.library.albumTracks(album.uid)
                 }
                 AlbumScreen(album, tracks, playingUid = playback.track?.uid) { track ->
                     startPlaying { playback.play(tracks, track) }
@@ -146,9 +137,10 @@ private fun WearApp() {
                 )
             }
             composable("sync") {
-                // Discoverable, and syncing, only while this screen is open.
-                LaunchedEffect(Unit) { sync.run() }
-                SyncScreen(sync.state, onDismissRefusal = sync::dismissRefusal)
+                // Sync runs while the app is on screen (KithsongApp), not just while this
+                // screen is open; the screen only shows where it has got to.
+                val state by app.syncer.screen.collectAsState()
+                SyncScreen(state, onDismissRefusal = app.syncer::dismissRefusal)
             }
             composable("settings") {
                 SettingsScreen(onLicenses = { navController.navigate("licenses") })
@@ -163,12 +155,3 @@ private fun WearApp() {
         }
     }
 }
-
-/** [block]'s result, or [fallback] if the library can't be read. */
-private inline fun <T> libraryCall(fallback: T, block: () -> T): T =
-    try {
-        block()
-    } catch (e: MusicCoreException) {
-        Log.e("kithsong", "Library read failed", e)
-        fallback
-    }

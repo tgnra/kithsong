@@ -710,7 +710,11 @@
     "scrobble_service_api_key": "API key",
     "scrobble_service_api_secret": { "text": "Shared secret", "note": "The service's word for the second half of an app's API key." },
     "scrobble_service_incomplete": "Fill in all four, with addresses that start with https:// or http://.",
-    "scrobble_service_failed": { "text": "Couldn't change the service ({0}).", "note": "{0} is the reason." }
+    "scrobble_service_failed": { "text": "Couldn't change the service ({0}).", "note": "{0} is the reason." },
+    "pairing": { "text": "Pairing", "note": "A pairing is under way: a button's label while the code is checked, and the title of the watch's notification." },
+    "syncing": { "text": "Syncing", "note": "A sync is under way: a button's label, and the title of the watch's notification." },
+    "sync_notification_files": { "one": "{0:d} of {1:d} file", "other": "{0:d} of {1:d} files", "note": "Audio files received so far of those to fetch, under \"Syncing with …\" (on the watch, under \"Syncing\"). The plural follows {1}." },
+    "sync_error_listen": "Couldn't listen on the network"
   },
 
   "linux": {
@@ -1047,13 +1051,11 @@
     "devices_nearby": "On this network",
     "device_in_other_group": "Syncs with other devices. Remove it from them to pair it here",
     "device_tap_to_pair": "Tap to pair",
-    "pairing": "Pairing",
     "devices_looking": "Looking for devices on this network",
     "devices_looking_text": "Open Kithsong on your computer. If it doesn't show up, add it by its address",
     "add_device_by_address_text": "For networks where devices can't find each other",
     "leave_group_text": "Stop syncing with these devices. The music on this phone stays",
     "leave_group_confirm": "This phone stops syncing with {0}. To sync again, pair it again.",
-    "syncing": "Syncing",
     "sync_now_with": "Sync now with {0}",
     "pair_with_question": "Pair with {0}?",
     "pair_code_description": { "text": "Code {0}", "note": "The pairing code read out digit by digit, e.g. \"Code 1 2 3 4 5 6\"." },
@@ -1073,10 +1075,8 @@
     "sync_notification_wants_to_pair": "{0} wants to pair",
     "sync_notification_syncing_with": "Syncing with {0}",
     "sync_notification_see_code": "Open Kithsong to see the code",
-    "sync_notification_files": { "one": "{0:d} of {1:d} file", "other": "{0:d} of {1:d} files", "note": "Audio files received so far of those to fetch, under \"Syncing with …\". The plural follows {1}." },
     "sync_notification_files_sent": { "one": "{0:d} of {1:d} file sent", "other": "{0:d} of {1:d} files sent", "note": "Audio files sent so far of those the other device is fetching from this phone, under \"Syncing with …\". The plural follows {1}." },
     "sync_error_open": "Couldn't open this phone's sync data",
-    "sync_error_listen": "Couldn't listen on the network",
     "merge_tracks_deleted": { "one": "{0:d} duplicate deleted from this phone", "other": "{0:d} duplicates deleted from this phone", "note": "Tracks the library had in the same or better quality: this phone's copy was deleted (Android has no trash). One item of merge_tracks' list." }
   },
   "wear": {
@@ -1087,7 +1087,12 @@
     "watch_enter_code": { "text": "Enter this code on {0}", "note": "{0} is the name of the device asking to pair." },
     "watch_syncing": { "one": "Syncing {0:d} of {1:d} track", "other": "Syncing {0:d} of {1:d} tracks", "note": "The plural follows {1}, the number of tracks to sync." },
     "watch_tracks": { "one": "{0:d} track on this watch", "other": "{0:d} tracks on this watch" },
-    "watch_paired_text": { "text": "Paired with {0}. Choose what this watch holds on one of them.", "note": "{0} is the list of paired devices' names." },
+    "watch_paired_with": { "text": "Paired with {0}.", "note": "On the watch's Sync screen. {0} is the list of the other devices in its group, by name." },
+    "watch_sync_unconfirmed": { "text": "Nothing syncs yet. Choose what this watch holds on one of them, then press Sync there.", "note": "The watch was just paired and its sync settings were never confirmed. They're chosen and confirmed on the other devices: the watch has no editor and no Sync button." },
+    "watch_sync_paused": { "text": "Paused until you press Sync for this watch on one of them.", "note": "The watch's sync settings changed since they were last confirmed, so no files move until Sync is pressed for it on another device." },
+    "watch_tracks_of": { "one": "{0:d} of {1:d} track on this watch", "other": "{0:d} of {1:d} tracks on this watch", "note": "What the watch holds of what its sync settings want. The plural follows {1}." },
+    "watch_refused_failed": { "text": "Pairing with {0} didn't work. Try again from there.", "note": "{0} is the name of the device asking to pair." },
+    "watch_sync_error_open": "Couldn't open this watch's sync data",
     "watch_refused_in_group": "This watch is already paired with other devices. Remove it there first.",
     "watch_refused_library_mismatch": { "text": "This watch holds music from a different library than {0}.", "note": "{0} is the name of the device asking to pair." },
     "watch_refused_already_paired": { "text": "This watch is already paired with {0}.", "note": "{0} is the name of the device asking to pair." },

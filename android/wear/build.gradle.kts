@@ -78,5 +78,9 @@ dependencies {
     // SwipeDismissableNavHost: swipe right to go back, as on every Wear OS app.
     implementation("androidx.wear.compose:compose-navigation:1.7.1")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    // Whether the app is on screen, for sync (KithsongApp); the phone's version.
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
+    // The hourly background sync on the charger (SyncWorker).
+    implementation("androidx.work:work-runtime-ktx:2.11.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

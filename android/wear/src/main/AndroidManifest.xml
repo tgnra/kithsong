@@ -8,12 +8,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- mDNS discovery needs a multicast lock. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Sync asks for a Wi-Fi network while it runs (ConnectivityManager.requestNetwork):
+         Wear OS keeps Wi-Fi off while the phone is connected over Bluetooth. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <!-- Background playback: PlaybackService runs in the foreground while playing (with the
-         permission for its type, API 34+), and holds a wake lock. -->
+         permission for its type, API 34+), and SyncService while a sync session or pairing
+         finishes after the app left the screen (the dataSync type); both hold a wake lock. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- The playback notification, API 33+. Asked for once, on first play. -->
+    <!-- Their notifications, API 33+. Asked for once, on first play; sync's service runs
+         without it. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -45,5 +52,9 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+        <service
+            android:name=".SyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
