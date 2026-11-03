@@ -10,10 +10,15 @@
 
 /* The largest frame body, set by the 16-bit length. A Noise message has the same limit. */
 #define MC_FRAME_MAX 65535
+#define MC_FRAME_HDR_LEN 2
 
 /* Sends one frame of len <= MC_FRAME_MAX bytes. timeout_ms bounds the header and the body
  * separately. */
 mc_status mc_frame_send(mc_socket *s, const void *data, size_t len, int timeout_ms);
+/* The same, but the header is written into the MC_FRAME_HDR_LEN bytes before body, which
+ * must be the caller's to use, and goes out with the body in one send (one system call for
+ * a whole frame, where the socket takes it). */
+mc_status mc_frame_send_in_place(mc_socket *s, unsigned char *body, size_t len, int timeout_ms);
 /* Receives one frame into buf. MC_ERR_FORMAT if it is longer than cap, which leaves the
  * connection unusable; a cap of MC_FRAME_MAX always suffices. */
 mc_status mc_frame_recv(mc_socket *s, void *buf, size_t cap, size_t *len, int timeout_ms);

@@ -96,6 +96,7 @@ add_library(musiccore STATIC
   src/sync/sync.c
   src/sync/sync_db.c
   src/sync/frame.c
+  src/sync/filepipe.c
   src/sync/noise.c
   src/sync/channel.c
   src/sync/pair.c
