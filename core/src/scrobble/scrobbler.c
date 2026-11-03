@@ -203,24 +203,28 @@ static mc_status write_account(mc_scrobbler *sc, const char *sql, const char *co
 /* --- Plays --- */
 
 /* A track as scrobbled: a single goes with the album it's from, a track with no album
- * without one, nor a track number. Artists as credited ("A feat. B"), as the files say. */
+ * without one, nor a track number. Artists as credited ("A feat. B"), as the files say. The
+ * last column isn't sent: it's whether the album keeps its tracks from being scrobbled. */
 static const char k_track_sql[] =
   "SELECT coalesce(t.artist_credit, ar.name, al.artist_credit, aar.name), t.title, al.title,"
   " coalesce(al.artist_credit, aar.name),"
   " CASE WHEN al.uid IS NULL THEN NULL ELSE t.track_no END,"
-  " t.duration_ms, t.mb_trackid"
+  " t.duration_ms, t.mb_trackid, al.no_scrobble"
   " FROM tracks t"
   " LEFT JOIN artists ar ON ar.uid = t.artist_uid"
   " LEFT JOIN albums al ON al.uid = t.album_uid"
   " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
   " WHERE t.uid = ?1";
 
-/* Steps k_track_sql for uid: 1 with a row Last.fm will take (an artist, and not too short),
- * else 0. stmt is left for the caller to finalize. */
+/* Steps k_track_sql for uid: 1 with a row to send, one Last.fm will take (an artist, and not
+ * too short) of an album not flagged no_scrobble, else 0. stmt is left for the caller to
+ * finalize. */
 static int find_track(sqlite3 *lib, const char *uid, sqlite3_stmt **stmt) {
   if (sqlite3_prepare_v2(lib, k_track_sql, -1, stmt, NULL) != SQLITE_OK) return 0;
   sqlite3_bind_text(*stmt, 1, uid, -1, SQLITE_STATIC);
-  if (sqlite3_step(*stmt) != SQLITE_ROW || sqlite3_column_type(*stmt, 0) == SQLITE_NULL) return 0;
+  if (sqlite3_step(*stmt) != SQLITE_ROW || sqlite3_column_type(*stmt, 0) == SQLITE_NULL ||
+      sqlite3_column_int(*stmt, 7))
+    return 0;
   return sqlite3_column_type(*stmt, 5) == SQLITE_NULL || sqlite3_column_int64(*stmt, 5) >= MIN_TRACK_MS;
 }
 

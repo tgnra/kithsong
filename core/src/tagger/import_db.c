@@ -505,10 +505,21 @@ int mc_import_db_is_track_at(mc_library *lib, const char *path, const char *mb_r
   return found;
 }
 
-static mc_status delete_if_empty(sqlite3 *db, const char *album_uid) {
-  sqlite3_stmt *stmt = prepare(db, "DELETE FROM albums WHERE uid = ?1"
+/* Deletes album_uid if a track moving to album into took the last of it. into then takes on
+ * its flags (edit.h): the same music, matched anew, is still what the user flagged. */
+static mc_status delete_if_empty(sqlite3 *db, const char *album_uid, const char *into) {
+  sqlite3_stmt *stmt = prepare(db, "UPDATE albums SET no_scrobble = max(albums.no_scrobble, o.no_scrobble),"
+                                   " mix = max(albums.mix, o.mix) FROM albums o"
+                                   " WHERE albums.uid = ?2 AND o.uid = ?1"
                                    " AND NOT EXISTS (SELECT 1 FROM tracks WHERE album_uid = ?1)");
   if (!stmt) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, album_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, into, -1, SQLITE_STATIC);
+  mc_status st = step_done(stmt);
+  if (st != MC_OK) return st;
+  if (!(stmt = prepare(db, "DELETE FROM albums WHERE uid = ?1"
+                           " AND NOT EXISTS (SELECT 1 FROM tracks WHERE album_uid = ?1)")))
+    return MC_ERR_DB;
   sqlite3_bind_text(stmt, 1, album_uid, -1, SQLITE_STATIC);
   return step_done(stmt);
 }
@@ -556,7 +567,7 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
       st = attach_file(db, t, credit);
     else if ((st = upsert_track(db, t, album_uid, added_ms, credit, old_album)) == MC_OK && old_album[0] &&
              strcmp(old_album, album_uid) != 0)
-      st = delete_if_empty(db, old_album);
+      st = delete_if_empty(db, old_album, album_uid);
     credit_clear(&track_credit);
     if (st != MC_OK) goto fail;
   }

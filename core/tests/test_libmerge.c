@@ -479,6 +479,8 @@ static void test_merge_credits(const char *root, int old_copy) {
   CHECK(mc_import_db_set_credit(lib, 1, duet.album_uid, &whole, pair, 2) == MC_OK);
   whole.name = "Home feat. Guest";
   CHECK(mc_import_db_set_credit(lib, 0, duet.uid, &whole, feat, 2) == MC_OK);
+  mc_album_flags flags = {.no_scrobble = 1, .mix = 1};
+  CHECK(mc_album_flags_set(lib, duet.album_uid, &flags) == MC_OK);
 
   char *backup = NULL;
   CHECK(mc_libmerge_set_aside(lib, NULL, NULL, &backup) == MC_OK);
@@ -489,7 +491,10 @@ static void test_merge_credits(const char *root, int old_copy) {
     for (int i = 0; i < 3; i++)
       sqlite3_create_function(copy, fns[i], 0, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, sql_remote, NULL, NULL);
     /* Triggers first: they name the columns. */
-    CHECK(exec(copy, "DROP TRIGGER mc_log_ins_tracks_artist_credit; DROP TRIGGER mc_log_upd_tracks_artist_credit;"
+    CHECK(exec(copy, "DROP TRIGGER mc_log_ins_albums_no_scrobble; DROP TRIGGER mc_log_upd_albums_no_scrobble;"
+                     "DROP TRIGGER mc_log_ins_albums_mix; DROP TRIGGER mc_log_upd_albums_mix;"
+                     "ALTER TABLE albums DROP COLUMN no_scrobble; ALTER TABLE albums DROP COLUMN mix;"
+                     "DROP TRIGGER mc_log_ins_tracks_artist_credit; DROP TRIGGER mc_log_upd_tracks_artist_credit;"
                      "DROP TRIGGER mc_log_ins_albums_artist_credit; DROP TRIGGER mc_log_upd_albums_artist_credit;"
                      "DROP TABLE track_artists; DROP TABLE album_artists;"
                      "ALTER TABLE tracks DROP COLUMN artist_credit; ALTER TABLE albums DROP COLUMN artist_credit;"
@@ -516,12 +521,17 @@ static void test_merge_credits(const char *root, int old_copy) {
     query_text(db, "SELECT artist_credit FROM tracks WHERE title = 'Duet'", text, sizeof text);
     CHECK(strcmp(text, "Home feat. Guest") == 0);
     CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE title = 'Solo' AND artist_credit IS NULL") == 1);
+    /* The album's flags come over, logged so the other devices hear of them. */
+    CHECK(query_int(db, "SELECT count(*) FROM albums WHERE no_scrobble = 1 AND mix = 1") == 1);
+    CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'albums'"
+                        " AND field IN ('no_scrobble', 'mix') AND value = 1") == 2);
   } else {
     /* As v12 had it: one artist row by the whole credit, its own row 0. */
     CHECK(query_int(db, "SELECT count(*) FROM artists") == 1);
     CHECK(query_int(db, "SELECT count(*) FROM artists WHERE name = 'Home feat. Guest'") == 1);
     CHECK(query_int(db, "SELECT count(*) FROM track_artists") == 2);
     CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE artist_credit IS NOT NULL") == 0);
+    CHECK(query_int(db, "SELECT count(*) FROM albums WHERE no_scrobble = 0 AND mix = 0") == 1);
   }
   CHECK(query_int(db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
   free(backup);

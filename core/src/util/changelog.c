@@ -76,6 +76,12 @@ static mc_status ensure_trigger(sqlite3 *db, const char *name, const char *creat
   return st == MC_OK ? exec(db, create) : st;
 }
 
+static int is_flag(const mc_changelog_table *t, const char *col) {
+  for (const char *const *f = t->flags; f && *f; f++)
+    if (!strcmp(*f, col)) return 1;
+  return 0;
+}
+
 mc_status mc_changelog_install_triggers(sqlite3 *db, const mc_changelog_table *tables,
                                         size_t count) {
   char name[128], sql[1024];
@@ -87,11 +93,11 @@ mc_status mc_changelog_install_triggers(sqlite3 *db, const mc_changelog_table *t
       snprintf(name, sizeof name, "mc_log_ins_%s_%s", table, *c);
       snprintf(sql, sizeof sql,
                "CREATE TRIGGER %s AFTER INSERT ON %s"
-               " WHEN new.%s IS NOT NULL AND mc_applying_remote() = 0 BEGIN"
+               " WHEN new.%s %s AND mc_applying_remote() = 0 BEGIN"
                " INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
                " VALUES (mc_hlc_now(), mc_node_uid(), '%s', new.%s, '%s', new.%s);"
                " END",
-               name, table, *c, table, key, *c, *c);
+               name, table, *c, is_flag(&tables[t], *c) ? "<> 0" : "IS NOT NULL", table, key, *c, *c);
       if (ensure_trigger(db, name, sql) != MC_OK) goto fail;
 
       snprintf(name, sizeof name, "mc_log_upd_%s_%s", table, *c);
