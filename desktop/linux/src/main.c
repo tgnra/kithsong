@@ -1245,10 +1245,10 @@ static GtkWidget *icon_button(const char *icon, const char *tooltip, const char 
  * only decoration: screen readers skip it, and clicks go through to the header bar, so it
  * drags the window. */
 static GtkWidget *logo_new(void) {
-  GtkWidget *logo = g_object_new(GTK_TYPE_PICTURE, "accessible-role", GTK_ACCESSIBLE_ROLE_PRESENTATION,
-                                 "paintable", brand_logo(), "content-fit", GTK_CONTENT_FIT_CONTAIN,
-                                 "can-shrink", TRUE, NULL);
-  gtk_widget_set_size_request(logo, LOGO, LOGO);
+  /* A GtkImage, not a GtkPicture: it asks for pixel-size, where a picture would ask for the
+   * texture's 128 pixels and make the header bar that tall. */
+  GtkWidget *logo = g_object_new(GTK_TYPE_IMAGE, "accessible-role", GTK_ACCESSIBLE_ROLE_PRESENTATION,
+                                 "paintable", brand_logo(), "pixel-size", LOGO, NULL);
   gtk_widget_set_valign(logo, GTK_ALIGN_CENTER);
   gtk_widget_set_can_target(logo, FALSE);
   return logo;
