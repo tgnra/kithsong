@@ -28,8 +28,10 @@ add_executable(kithsong
   src/artist_view.c
   src/delete_dialog.c
   src/remove_here.c
-  src/volume_button.c)
-target_link_libraries(kithsong PRIVATE musiccore PkgConfig::ADW m)
+  src/volume_button.c
+  src/smart_editor.c)
+# yyjson for the smart list editor, which reads and writes rules (smart_editor.c).
+target_link_libraries(kithsong PRIVATE musiccore mc_yyjson PkgConfig::ADW m)
 kithsong_warnings(kithsong)
 # GLib's headers trip -Wconversion / -Wpedantic; keep warnings strict for our code only.
 target_compile_options(kithsong PRIVATE -Wno-pedantic)
