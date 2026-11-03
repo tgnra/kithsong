@@ -111,6 +111,7 @@ add_library(musiccore STATIC
   src/sync/plan.c
   src/sync/transfer.c
   src/sync/encode.c
+  src/sync/hashahead.c
   src/sync/reach.c
   src/sync/waiting.c
   "${_sync_schema_c}")
