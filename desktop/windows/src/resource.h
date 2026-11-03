@@ -4,6 +4,9 @@
 
 /* The app icon, version.rc.in. */
 #define IDI_APP 1
+/* The wordmark as PNGs, version.rc.in. */
+#define IDR_WORDMARK 2
+#define IDR_WORDMARK_DARK 3
 
 #define IDD_REVIEW 100
 #define IDC_REV_HEADER 1001

@@ -55,9 +55,6 @@ typedef enum devices_state {
   DEVICES_GROUPED,  /* this computer is in a group */
 } devices_state;
 devices_state devices_sync_state(void);
-/* The empty Albums page's Pair with a device… button: a menu of the nearby devices, as the
- * section lists them (picking one asks it to pair), then Add device by address…. */
-GtkWidget *devices_pair_button(void);
 /* Shows this computer's page, where What to sync is, while it's in a group. */
 void devices_open_self(void);
 

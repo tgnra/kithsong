@@ -92,6 +92,7 @@
 #include "remove_here.h"
 #include "device_view.h"
 #include "firewall.h"
+#include "first_run.h"
 #include "import_view.h"
 #include "move_library.h"
 #include "musiccore/musiccore.h"
@@ -1345,9 +1346,8 @@ static void pair_started(mc_status st, const wchar_t *name, const wchar_t *addre
   MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
 }
 
-/* Asks nearby device clicked to pair: one clicked in the sidebar, or picked from the empty
- * Albums page's Pair with a Device... menu. Even one in another group: pairing then says why
- * it can't. */
+/* Asks nearby device clicked, in the sidebar, to pair. Even one in another group: pairing
+ * then says why it can't. */
 static void pair_nearby_uid(const char *clicked) {
   mc_sync *sync = sync_bridge_get();
   if (!clicked) return;
@@ -1403,45 +1403,6 @@ static void debug_pair(void) {
   free(spec);
 }
 #endif
-
-/* The empty Albums page's Pair with a Device...: a menu of the devices nearby, as the
- * sidebar's DEVICES lists them, then Add Device by Address..., beneath the button. */
-static void pair_menu(void) {
-  enum { CMD_ADDRESS = 1, CMD_DEVICE_FIRST = 100 };
-  mc_sync *sync = sync_bridge_get();
-  if (!sync) {
-    sync_off_message();
-    return;
-  }
-  RECT button;
-  if (!album_grid_action_rect(&button)) return;
-  mc_sync_nearby_list *nearby = NULL;
-  if (mc_sync_list_nearby(sync, &nearby) != MC_OK) nearby = NULL;
-  HMENU menu = CreatePopupMenu();
-  int n = nearby ? nearby->count : 0;
-  for (int i = 0; i < n; i++) {
-    const mc_sync_nearby *d = &nearby->items[i];
-    wchar_t *name = wstr_dup_from_utf8(d->name && *d->name ? d->name : mc_str(MC_STR_DEVICE_UNNAMED));
-    AppendMenuW(menu, MF_STRING, CMD_DEVICE_FIRST + i, name ? name : L"");
-    free(name);
-  }
-  if (n == 0) AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, mc_wstr(MC_STR_DEVICES_NONE));
-  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_ADDRESS, mc_wstr_mnemonic(MC_STR_ADD_DEVICE_BY_ADDRESS_MENU));
-  UINT flags = TPM_RETURNCMD | TPM_LEFTBUTTON | TPM_CENTERALIGN | TPM_TOPALIGN;
-  TPMPARAMS avoid = {sizeof avoid, button};
-  int cmd = TrackPopupMenuEx(menu, flags, (button.left + button.right) / 2, button.bottom, g_app.wnd, &avoid);
-  DestroyMenu(menu);
-  if (cmd >= CMD_DEVICE_FIRST && cmd - CMD_DEVICE_FIRST < n) {
-    char uid[MC_UID_STRLEN];
-    snprintf(uid, sizeof uid, "%s", nearby->items[cmd - CMD_DEVICE_FIRST].uid);
-    mc_sync_nearby_list_free(nearby);
-    pair_nearby_uid(uid);
-    return;
-  }
-  mc_sync_nearby_list_free(nearby);
-  if (cmd == CMD_ADDRESS) add_device_show(g_app.wnd, on_add_device_connect, NULL);
-}
 
 /* The empty Albums and Playlists pages' Choose What to Sync: this PC's own page, whose
  * What to Sync picks what it holds. */
@@ -1522,7 +1483,7 @@ static void on_command(int id, int code) {
     case ID_GRID:
       if (code == AGN_SELCHANGE) show_album();
       else if (code == AGN_LIBRARY_CHANGED) refresh_library();
-      else if (code == AGN_PAIR) pair_menu();
+      else if (code == AGN_IMPORT) show_page(PAGE_IMPORT);
       else if (code == AGN_SYNC_SETTINGS) show_own_page();
       else if (code == AGN_PLAY_GROUP) play_group();
       else if (code == AGN_OPEN_GROUP && g_app.lib && album_grid_group() &&
@@ -2029,35 +1990,13 @@ static BOOL claim_instance(const char *dir, const app_args *args) {
 
 /* --- Library location --- */
 
-/* The user's Music folder: the suggested library location. */
-static char *music_folder(void) {
-  wchar_t *path = NULL;
-  char *out = NULL;
-  if (SUCCEEDED(SHGetKnownFolderPath(&FOLDERID_Music, 0, NULL, &path))) out = utf8_from_wide(path);
-  CoTaskMemFree(path);
-  return out;
-}
-
-/* Asks where the library should live. On first run current is NULL and the Music folder
- * is offered; otherwise the folder picker opens straight away, titled title_id, and with
- * empty_only it takes only an empty folder. Returns a malloc'd UTF-8 path, or NULL if the
- * user gave up. */
+/* Asks where the library should live instead: the folder picker, titled title_id, opening
+ * in current; with empty_only it takes only an empty folder. Returns a malloc'd UTF-8 path,
+ * or NULL if the user gave up. (The first run asks with first_run.c.) */
 static char *choose_library_dir(HWND owner, const char *current, enum mc_str_id title_id, BOOL empty_only) {
-  char *suggested = current ? NULL : music_folder();
   for (;;) {
-    char *dir = NULL;
-    if (!current && suggested) {
-      wchar_t text[2048];
-      mc_wformat(text, 2048, mc_str(MC_STR_WINDOWS_WELCOME_TEXT), MC_S(suggested));
-      int answer = MessageBoxW(owner, text, mc_wstr(MC_STR_WINDOWS_WELCOME_TITLE), MB_YESNOCANCEL | MB_ICONQUESTION);
-      if (answer == IDCANCEL) break;
-      if (answer == IDYES && (dir = malloc(strlen(suggested) + 1))) strcpy(dir, suggested);
-    }
-    if (!dir) dir = pick_folder(owner, mc_wstr(title_id), current ? current : suggested);
-    if (!dir) {
-      if (current) break; /* changing location: cancel means keep the current one */
-      continue;
-    }
+    char *dir = pick_folder(owner, mc_wstr(title_id), current);
+    if (!dir) return NULL;
     if (empty_only && !mc_folder_is_empty(dir)) {
       MessageBoxW(owner, mc_wstr(MC_STR_LIBRARY_NOT_EMPTY), mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
       free(dir);
@@ -2067,11 +2006,8 @@ static char *choose_library_dir(HWND owner, const char *current, enum mc_str_id 
       free(dir);
       continue;
     }
-    free(suggested);
     return dir;
   }
-  free(suggested);
-  return NULL;
 }
 
 /* Clears playlists' pictures out of the cache when their playlists have gone, on a thread
@@ -2117,6 +2053,25 @@ static mc_library *open_library(const char *dir) {
     return NULL;
   }
   return lib;
+}
+
+/* The first run, over the main window: asks where the library goes, then opens it there.
+ * FALSE if the user closed it instead. */
+static BOOL open_first_library(void) {
+  album_grid_set_first_run(TRUE);
+  char *dir = first_run_choose(g_app.wnd);
+  album_grid_set_first_run(FALSE);
+  if (!dir) return FALSE;
+  mc_settings_set_library_dir(g_app.settings, dir);
+  if (mc_settings_save(g_app.settings) != MC_OK)
+    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_WINDOWS_SETTINGS_FIRST_SAVE_FAILED), mc_wstr(MC_STR_APP_NAME),
+                MB_OK | MB_ICONWARNING);
+  g_app.lib = open_library(dir); /* on failure the window says so */
+  free(dir);
+  import_view_set_library(g_app.lib);
+  settings_view_set_library_dir(mc_settings_library_dir(g_app.settings));
+  refresh_library();
+  return TRUE;
 }
 
 /* Settings' Open Another Library: switch to the library in another folder. The new one opens
@@ -2360,7 +2315,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   mc_init();
   theme_update();
 
-  /* Settings say where the library folder is; the first run asks. */
+  /* Settings say where the library folder is; the first run asks, once the window is up. */
   wchar_t shown_dir[MAX_PATH];
   g_app.config_dir = config_dir(&args, shown_dir, MAX_PATH);
   if (g_app.config_dir && !claim_instance(g_app.config_dir, &args)) {
@@ -2388,20 +2343,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     free_args(&args);
     return 1;
   }
-  if (!mc_settings_library_dir(g_app.settings)) {
-    char *dir = choose_library_dir(NULL, NULL, MC_STR_LIBRARY_FOLDER_CHOOSE, FALSE);
-    if (!dir) return 0;
-    mc_settings_set_library_dir(g_app.settings, dir);
-    free(dir);
-    if (mc_settings_save(g_app.settings) != MC_OK)
-      MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_SETTINGS_FIRST_SAVE_FAILED), mc_wstr(MC_STR_APP_NAME),
-                  MB_OK | MB_ICONWARNING);
-  }
-  g_app.lib = open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
+  BOOL first_run = !mc_settings_library_dir(g_app.settings);
+  if (!first_run) g_app.lib = open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
   size_t art_len = strlen(g_app.config_dir) + sizeof "\\" MC_PLAYLIST_ART_CACHE_DIR;
   if ((g_app.art_dir = malloc(art_len)))
     snprintf(g_app.art_dir, art_len, "%s\\%s", g_app.config_dir, MC_PLAYLIST_ART_CACHE_DIR);
-  prune_art();
   delete_dialog_init(g_app.config_dir, before_delete);
   remove_here_init(before_remove_here);
 
@@ -2431,13 +2377,18 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   if (g_instance_key) SetPropW(wnd, INSTANCE_PROP, (HANDLE)g_instance_key);
   DragAcceptFiles(wnd, TRUE);
   ShowWindow(wnd, show);
-  pair_dialog_init(wnd, &k_pair_host);
-  start_sync();
+  if (first_run && !open_first_library()) {
+    DestroyWindow(wnd); /* the first run was closed: quit */
+  } else {
+    prune_art();
+    pair_dialog_init(wnd, &k_pair_host);
+    start_sync();
 #ifndef NDEBUG
-  if (_wgetenv(L"KITHSONG_DEBUG_PAIR")) SetTimer(wnd, TIMER_DEBUG_PAIR, 2000, NULL);
+    if (_wgetenv(L"KITHSONG_DEBUG_PAIR")) SetTimer(wnd, TIMER_DEBUG_PAIR, 2000, NULL);
 #endif
-  firewall_check_later(wnd, g_app.settings);
-  import_args(&args);
+    firewall_check_later(wnd, g_app.settings);
+    import_args(&args);
+  }
   free_args(&args);
 
   MSG msg;
