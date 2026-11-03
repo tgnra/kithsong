@@ -2,23 +2,20 @@
 # Microsoft Store, which signs it on ingestion. Builds with release-windows.ps1 first, unless
 # -StageDir names a folder it already installed (build\stage-windows\kithsong-<version>).
 #
-#   scripts\package-msix.ps1 -IdentityName 12345Example.Kithsong `
-#       -Publisher 'CN=01234567-89AB-CDEF-0123-456789ABCDEF' -PublisherDisplayName 'Example'
-#
 # The three Identity values must match Partner Center's Product management → Product
 # identity page (Package/Identity/Name, Package/Identity/Publisher and
 # Package/Properties/PublisherDisplayName). They default to $env:KITHSONG_MSIX_IDENTITY_NAME,
-# $env:KITHSONG_MSIX_PUBLISHER and $env:KITHSONG_MSIX_PUBLISHER_NAME, then to placeholders,
-# which still pack (for a local look at the package) but which the Store rejects.
+# $env:KITHSONG_MSIX_PUBLISHER and $env:KITHSONG_MSIX_PUBLISHER_NAME, then to Kithsong's own
+# (not secret: every installed package's manifest shows them).
 #
 # Needs the Windows SDK (makeappx.exe and makepri.exe, found on PATH or under Windows Kits\10)
 # and, to build, what release-windows.ps1 needs. The manifest is
 # packaging\msix\AppxManifest.xml.in; the tile and Start icons are made from
 # packaging\icons\kithsong.ico's and kithsong-*.png's images.
 param(
-    [string]$IdentityName = $(if ($env:KITHSONG_MSIX_IDENTITY_NAME) { $env:KITHSONG_MSIX_IDENTITY_NAME } else { 'PLACEHOLDER.Kithsong' }),
-    [string]$Publisher = $(if ($env:KITHSONG_MSIX_PUBLISHER) { $env:KITHSONG_MSIX_PUBLISHER } else { 'CN=00000000-0000-0000-0000-000000000000' }),
-    [string]$PublisherDisplayName = $(if ($env:KITHSONG_MSIX_PUBLISHER_NAME) { $env:KITHSONG_MSIX_PUBLISHER_NAME } else { 'PLACEHOLDER' }),
+    [string]$IdentityName = $(if ($env:KITHSONG_MSIX_IDENTITY_NAME) { $env:KITHSONG_MSIX_IDENTITY_NAME } else { 'tgnra.Kithsong' }),
+    [string]$Publisher = $(if ($env:KITHSONG_MSIX_PUBLISHER) { $env:KITHSONG_MSIX_PUBLISHER } else { 'CN=ED86BA9B-1FC2-415A-A900-58A61046A46D' }),
+    [string]$PublisherDisplayName = $(if ($env:KITHSONG_MSIX_PUBLISHER_NAME) { $env:KITHSONG_MSIX_PUBLISHER_NAME } else { 'tgnra' }),
     # A release-windows.ps1 install to pack instead of building.
     [string]$StageDir,
     # Leaves out resources.pri. The scale and targetsize icons then go unused.
@@ -43,9 +40,6 @@ $msixVersion = ($fields -join '.') + '.0'
 
 if ($IdentityName -notmatch '^[A-Za-z0-9.-]{3,50}$') { Write-Error "IdentityName '$IdentityName' isn't 3-50 letters, digits, dots or dashes." }
 if ($Publisher -notmatch '^CN=') { Write-Error "Publisher '$Publisher' isn't a distinguished name (CN=...)." }
-if ($IdentityName -like 'PLACEHOLDER*' -or $Publisher -eq 'CN=00000000-0000-0000-0000-000000000000' -or $PublisherDisplayName -eq 'PLACEHOLDER') {
-    Write-Warning 'Packing with placeholder Identity values; the Store will reject this package. Pass the ones from Partner Center.'
-}
 
 # Runs a native command and stops on failure, which $ErrorActionPreference doesn't do.
 function Invoke-Checked {
