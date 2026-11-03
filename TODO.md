@@ -4,7 +4,7 @@
 
 Big pieces that haven't been started, or that only one platform has.
 
-- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; only Windows can create, edit, rename or delete one (its rule editor, smart_editor.c). Linux and Android need theirs (built from mc_smart_field_get() and the mc_smart_*_label() words)
+- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; Windows and Linux can create, edit, rename or delete one (their rule editors, smart_editor.c each: Windows' a dialog of nested rows, Linux's a page per group). Android needs its own (built from mc_smart_field_get() and the mc_smart_*_label() words)
 - **Volume UI** - the desktops have a speaker at the right of the header bar that drops down a volume slider and a mute button (volume_popup.c, volume_button.c), and change the volume from the keyboard too (Linux over MPRIS as well); Android keeps to the system's volume, using the core's only to duck (before Android 8), and Wear OS has none
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
@@ -20,7 +20,7 @@ Big pieces that haven't been started, or that only one platform has.
 | Playlists: browse | yes | yes | yes | no |
 | Playlists: edit | yes | yes | yes | no |
 | Album groups | yes | yes | yes | no |
-| Smart playlists | yes (rule editor, rename, delete) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
+| Smart playlists | yes (rule editor, rename, delete) | yes (rule editor with a page per group, rename, delete) | open, play, reshuffle (no editor) | no |
 | Recents | yes | yes | yes | no |
 | Search | yes | yes | yes | no |
 | Delete (with restore) | albums, tracks | albums, tracks | albums, tracks (permanent: no trash to restore from) | no |
@@ -48,15 +48,19 @@ Big pieces that haven't been started, or that only one platform has.
 - Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results; only from the album grid and the track list
 
 ### Smart playlists
-- Linux and Android - rule editor (from mc_smart_field_get()), and rename/delete; Windows has them
+- Android - rule editor (from mc_smart_field_get()), and rename/delete; Windows and Linux have them
+- Linux - group names and empty groups (docs/schema.md) are written as the rule format has them, but a core that doesn't take names yet gets each rule without them (core_rule() in smart_editor.c), so saving there drops the names; take that out once every core takes them
+- Linux - a condition or group can't be moved to another group, or up and down within one; it's deleted and made again
+- Linux - "months" are 30 days and reopen as days (or weeks), and text conditions don't offer the library's genres and artists as you type, as on Windows
+- Linux - the editor only shows a "not" where it means a negative operator, or "none of" (a "not" around an "any"); any other rule opens read-only, as its sentence
+- Windows - New Smart Playlist... and New Smart Album Group... are only on right-click menus (the pages' and the sidebar rows'), as there's no New button for manual playlists either; Linux has them on the arrow beside the pages' +
 - Windows - the editor's date picker (Date added or Last played before or after a date) stays light in dark mode: there's no dark theme for it
 - Windows - text conditions don't offer the library's genres and artists as you type
 - Windows - the editor only shows a "not" where it means a negative operator (isn't, doesn't contain, isn't in the last, is empty's opposite), and groups one level deep; any other rule opens read-only, as its sentence
 - Windows - "months" in the editor are 30 days, and reopen as days (or weeks)
-- Windows - New Smart Playlist... and New Smart Album Group... are only on right-click menus (the pages' and the sidebar rows'), as there's no New button for manual playlists either
 - Core - mc_smart_describe() is English-shaped: conditions are joined as "field op value" clauses under "Tracks where …", and a language that needs grammatical case or agreement for a field or playlist name may need its own templates; dates use the smart_date template (local time), not the OS's date format
 - All - the v10 example lists' names are stored as data, so they're always English
-- Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it, and on Windows a new smart playlist that picks nothing playable isn't selected after Create (a new smart group still opens)
+- Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it, and on Windows a new smart playlist that picks nothing playable isn't selected after Create (a new smart group still opens); on Linux neither opens
 - Core - limit by total duration ("an hour of music")
 
 ### Delete
@@ -158,7 +162,6 @@ Left in the frontends:
 ### Keyboard shortcuts
 The desktops' shortcuts are listed in README.md (Linux also shows them with Ctrl+?), and buttons' tooltips name them. Left to do:
 - Windows and Linux - Ctrl+R repeat, once the core has repeat
-- Linux - Delete and F2 on a selected smart playlist, once Linux can rename and delete smart playlists at all (Windows can)
 
 ### Windows screen readers and custom-drawn controls
 The album grid, track list, sidebar and search page have UI Automation providers (uia.c) that raise name and status changes as property-change events; the now-playing strip is a live region for its flash ("Volume 40%"); the track list's and album grid's header buttons are reachable from the keyboard. Still to do:
@@ -199,6 +202,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - "Recently added" plays each album last track first (each track is added a moment after the one before)
 - Go to album and Go to artist on the track list's and the artist page's track menus (only compiled): that each is hidden where it should be (a single's or no album, the album shown, the artist's own page), and that the album opens with the track selected
 - The header bar's volume control (volume_button.c): only compiled (GTK 4.14). Check the popover's slider taking the focus when it opens, its arrow keys, the speaker muting, and the icon and slider following the keyboard and MPRIS
+- The smart list editor (smart_editor.c) was only run under Xvfb with GTK 4.22 and libadwaita 1.9, against a core that doesn't take group names yet: seen were the ready-made rules, a page per group with its path, counts and preview, the problems card's Show, Escape going back a group, read-only and nested rules, saving, and Edit rules, Rename and Delete from the track list and a smart group's page. Not seen: GTK 4.14 and libadwaita 1.5, a screen reader, dark mode, a narrow window, and names kept through a save
 
 ### Windows
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
