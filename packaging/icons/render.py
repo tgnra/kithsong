@@ -1,7 +1,8 @@
 """Renders kithsong.svg to the committed PNGs and kithsong.ico.
 
-Run by hand after editing the SVG; nothing in the build calls it. Needs Microsoft Edge (or
-Chrome, via $BROWSER) for the SVG rendering and nothing beyond the standard library.
+Run by hand after generate.sh; nothing in the build calls it. Renders with resvg if it's on
+PATH (e.g. nix shell nixpkgs#resvg), else Microsoft Edge (or Chrome, via $BROWSER); needs
+nothing beyond the standard library.
 
     python packaging/icons/render.py
 """
@@ -21,6 +22,7 @@ PNG_SIZES = [128, 256, 512]
 
 def find_browser():
     candidates = [
+        shutil.which("resvg"),
         os.environ.get("BROWSER"),
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -35,6 +37,10 @@ def find_browser():
 
 
 def render(browser, svg, size, out, tmp):
+    if Path(browser).name.startswith("resvg"):
+        subprocess.run([browser, "-w", str(size), "-h", str(size), str(svg), str(out)],
+                       check=True, capture_output=True, timeout=60)
+        return
     page = tmp / f"icon{size}.html"
     page.write_text(
         "<!doctype html><html><body style='margin:0;background:transparent'>"
