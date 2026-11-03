@@ -23,6 +23,10 @@
  *   Words                    I Could Live in Hope     3:22
  *   Lazy                     Long Division            4:51
  *
+ * Behind the header are soft glows in the colours of the first few covers on the page (the
+ * albums', then the singles'; art_backdrop.h), thinning out above Albums, so the tiles and
+ * tracks stay on the page's own background; an artist with no art leaves it clear.
+ *
  * The albums are every one the artist is on, those most theirs first (see
  * mc_library_list_artist_albums()); beneath each is its year, or its artist when that's
  * someone else. Clicking one opens it on the Albums page. The singles are the artist's tracks

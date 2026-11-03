@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "album_grid.h"
+#include "art_backdrop.h"
 #include "cover.h"
 #include "delete_dialog.h"
 #include "playback.h"
@@ -10,6 +11,12 @@
 #include "remove_here.h"
 
 enum { LIST_AVATAR = 40, PAGE_AVATAR = 96 };
+
+/* The page header's backdrop takes its colours from this many covers at most: the albums
+ * most the artist's first, then the singles. */
+enum { BACKDROP_ARTS = 4 };
+/* How much of the backdrop's height, at its bottom, its glows thin out over. */
+#define BACKDROP_FADE 0.4
 
 /* --- ArtistItem: one row of the list --- */
 
@@ -134,6 +141,7 @@ static struct {
   /* The open artist's page. */
   char open[MC_UID_STRLEN];
   GtkWidget *page, *avatar, *name, *summary, *actions, *more;
+  GtkWidget *backdrop; /* the covers' colours behind the header */
   GtkWidget *albums_heading, *albums_scroller, *albums;
   GtkWidget *singles_heading, *singles_scroller, *singles_box;
   GListStore *singles; /* ArtistTracks, in singles_box's order */
@@ -704,11 +712,30 @@ static void load_page(void) {
   mc_album_list *albums = NULL;
   if (!v.a->lib || mc_library_list_artist_albums(v.a->lib, v.open, &albums) != MC_OK) albums = NULL;
   int album_count = albums ? albums->count : 0;
-  for (int i = 0; i < album_count; i++) gtk_flow_box_append(GTK_FLOW_BOX(v.albums), album_child(&albums->items[i], name));
+  char *arts[BACKDROP_ARTS];
+  int art_count = 0;
+  for (int i = 0; i < album_count; i++) {
+    const mc_album_info *album = &albums->items[i];
+    gtk_flow_box_append(GTK_FLOW_BOX(v.albums), album_child(album, name));
+    if (art_count < BACKDROP_ARTS && album->has_art && album->folder) {
+      char *path = cover_path(album->folder);
+      if (path) arts[art_count++] = path;
+    }
+  }
   mc_album_list_free(albums);
   gtk_widget_set_visible(v.albums_heading, album_count > 0);
   gtk_widget_set_visible(v.albums_scroller, album_count > 0);
   load_singles(name);
+  /* The backdrop: the first covers, the albums' and then the singles', in the page's order,
+   * so the colours go as the art does (an artist with none leaves it clear). */
+  for (guint i = 0; art_count < BACKDROP_ARTS && i < g_list_model_get_n_items(G_LIST_MODEL(v.singles)); i++) {
+    ArtistTrack *t = g_list_model_get_item(G_LIST_MODEL(v.singles), i);
+    char *path = t->cover_dir ? cover_path(t->cover_dir) : NULL;
+    if (path) arts[art_count++] = path;
+    g_object_unref(t);
+  }
+  art_backdrop_set_files(ART_BACKDROP(v.backdrop), (const char *const *)arts, art_count);
+  for (int i = 0; i < art_count; i++) g_free(arts[i]);
   GMenu *more = g_menu_new(); /* not artist_menu(), which would retarget an open row menu */
   remove_here_append(more, MC_PROFILE_ARTIST, v.open, "artist.remove-here", "artist.sync-here");
   gtk_widget_set_visible(v.more, g_menu_model_get_n_items(G_MENU_MODEL(more)) > 0);
@@ -752,6 +779,7 @@ static void go_back(void) {
   gtk_flow_box_remove_all(GTK_FLOW_BOX(v.albums));
   g_list_store_remove_all(v.singles);
   gtk_flow_box_remove_all(GTK_FLOW_BOX(v.singles_box));
+  art_backdrop_set_files(ART_BACKDROP(v.backdrop), NULL, 0);
   gtk_stack_set_visible_child_name(GTK_STACK(v.stack),
                                    g_list_model_get_n_items(G_LIST_MODEL(v.artists)) ? "list" : "none");
   gtk_widget_grab_focus(v.list);
@@ -900,7 +928,12 @@ static GtkWidget *build_tracks(void) {
 
 static GtkWidget *build_page(void) {
   v.page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_box_append(GTK_BOX(v.page), build_header());
+  /* The covers' colours behind the header, thinning out above the albums, which stay on the
+   * page's own background. */
+  v.backdrop = art_backdrop_new();
+  art_backdrop_set_fade_bottom(ART_BACKDROP(v.backdrop), BACKDROP_FADE);
+  art_backdrop_set_child(ART_BACKDROP(v.backdrop), build_header());
+  gtk_box_append(GTK_BOX(v.page), v.backdrop);
   v.albums_heading = heading(mc_str(MC_STR_SECTION_ALBUMS));
   gtk_box_append(GTK_BOX(v.page), v.albums_heading);
   v.albums_scroller = build_tile_row(mc_str(MC_STR_SECTION_ALBUMS), G_CALLBACK(on_album_activated), &v.albums);
