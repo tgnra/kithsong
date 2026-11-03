@@ -357,6 +357,44 @@ static void test_album_groups(fixture *f) {
 }
 
 /* The reader sends what a peer lacks, in hlc order; resend sends differing origins whole. */
+/* An album's flags are fields like any other: newest wins, in any order. A peer too old to
+ * know them sends no rows for them, and a field newer than this version is logged only. */
+static void test_album_flags(fixture *f) {
+  char al[MC_UID_STRLEN], sql[160];
+  mc_uid_new(al);
+  const char *o = f->lo;
+  mc_album_flags flags = {1, 1};
+
+  mc_row b1[] = {text_row(5000, o, "albums", al, "title", "From an older peer")};
+  CHECK(apply(f, b1, 1) == 1);
+  CHECK(mc_album_flags_get(f->lib, al, &flags) == MC_OK && !flags.no_scrobble && !flags.mix);
+
+  mc_row b2[] = {int_row(5002, o, "albums", al, "mix", 1), int_row(5001, o, "albums", al, "no_scrobble", 1)};
+  CHECK(apply(f, b2, 2) == 2);
+  CHECK(mc_album_flags_get(f->lib, al, &flags) == MC_OK && flags.no_scrobble && flags.mix);
+
+  /* Older than what's there: logged, not applied. Then a newer one. */
+  mc_row b3[] = {int_row(5000, f->hi, "albums", al, "mix", 0)};
+  CHECK(apply(f, b3, 1) == 1);
+  CHECK(mc_album_flags_get(f->lib, al, &flags) == MC_OK && flags.mix);
+  mc_row b4[] = {int_row(5003, f->hi, "albums", al, "mix", 0)};
+  CHECK(apply(f, b4, 1) == 1);
+  CHECK(mc_album_flags_get(f->lib, al, &flags) == MC_OK && !flags.mix && flags.no_scrobble);
+
+  mc_row b5[] = {int_row(5004, o, "albums", al, "from_the_future", 1)};
+  CHECK(apply(f, b5, 1) == 1);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM changelog WHERE row_uid = '%s' AND field = 'from_the_future'", al);
+  CHECK(query_int(f->db, sql) == 1);
+
+  /* A delete and an edit bringing the row back: the changelog still knows its flags. */
+  mc_row b6[] = {int_row(5005, o, "albums", al, "_deleted", 1)};
+  CHECK(apply(f, b6, 1) == 1);
+  CHECK(mc_album_flags_get(f->lib, al, &flags) == MC_ERR_NOT_FOUND);
+  mc_row b7[] = {text_row(5006, o, "albums", al, "title", "Back")};
+  CHECK(apply(f, b7, 1) == 1);
+  CHECK(mc_album_flags_get(f->lib, al, &flags) == MC_OK && !flags.mix && flags.no_scrobble);
+}
+
 static void test_reader(fixture *f) {
   mc_origin_hlc *mine;
   int n;
@@ -443,6 +481,7 @@ int main(int argc, char **argv) {
     test_lww(&f);
     test_new_rows(&f);
     test_album_groups(&f);
+    test_album_flags(&f);
     test_reader(&f);
   }
   mc_rows_applier_free(f.a);

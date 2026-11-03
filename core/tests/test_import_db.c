@@ -244,6 +244,63 @@ static void test_credits(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* Importing a flagged album again keeps its flags, and matching its tracks to another album
+ * takes them along. */
+static void test_flags(const char *scratch) {
+  char path[1024], db_file[1100];
+  snprintf(path, sizeof path, "%s/test_import_db_flags.d", scratch);
+  snprintf(db_file, sizeof db_file, "%s/" MC_LIBRARY_DB_NAME, path);
+  remove_db(db_file);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+
+  mc_db_album album = {0};
+  album.title = "Invisible Trigger";
+  album.artist = (mc_db_artist){"Nobody", NULL, NULL};
+  album.mb_albumid = "a1b2c3d4-0000-4000-8000-0000000000dd";
+  mc_db_track tracks[] = {track("m/01.flac", "One", 1), track("m/02.flac", "Two", 2)};
+  CHECK(mc_import_db_write(lib, &album, tracks, 2) == MC_OK);
+  char al[MC_UID_STRLEN];
+  query_text(lib, "SELECT uid FROM albums", al, sizeof al);
+  mc_album_flags f = {.no_scrobble = 1, .mix = 1};
+  CHECK(mc_album_flags_set(lib, al, &f) == MC_OK);
+
+  /* The same release again, and a new track of it. */
+  album.year = 2001;
+  CHECK(mc_import_db_write(lib, &album, tracks, 2) == MC_OK);
+  mc_db_track more = track("m/03.flac", "Three", 3);
+  CHECK(mc_import_db_write(lib, &album, &more, 1) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums") == 1);
+  memset(&f, 0, sizeof f);
+  CHECK(mc_album_flags_get(lib, al, &f) == MC_OK && f.no_scrobble && f.mix);
+
+  /* As a whole release swapped for another: its uid stays, and its flags. */
+  mc_db_album swapped = album;
+  swapped.title = "Invisible Trigger (Deluxe)";
+  swapped.existing_uid = al;
+  swapped.update_existing = 1;
+  CHECK(mc_import_db_write(lib, &swapped, &more, 1) == MC_OK);
+  memset(&f, 0, sizeof f);
+  CHECK(mc_album_flags_get(lib, al, &f) == MC_OK && f.no_scrobble && f.mix);
+
+  /* Two tracks move to another album: it isn't flagged while the old one lives on... */
+  mc_db_album other = {0};
+  other.title = "Invisible Trigger Remastered";
+  other.artist = album.artist;
+  other.mb_albumid = "a1b2c3d4-0000-4000-8000-0000000000ee";
+  CHECK(mc_import_db_write(lib, &other, tracks, 2) == MC_OK);
+  char to[MC_UID_STRLEN], sql[160];
+  snprintf(sql, sizeof sql, "SELECT uid FROM albums WHERE uid <> '%s'", al);
+  query_text(lib, sql, to, sizeof to);
+  CHECK(mc_album_flags_get(lib, to, &f) == MC_OK && !f.no_scrobble && !f.mix);
+  /* ...and is when the last one follows and the old album goes. */
+  CHECK(mc_import_db_write(lib, &other, &more, 1) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums") == 1);
+  CHECK(mc_album_flags_get(lib, to, &f) == MC_OK && f.no_scrobble && f.mix);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   char path[1024], db_file[1100];
   snprintf(path, sizeof path, "%s/test_import_db.d", argc > 1 ? argv[1] : ".");
@@ -389,5 +446,6 @@ int main(int argc, char **argv) {
 
   mc_library_close(lib);
   test_credits(argc > 1 ? argv[1] : ".");
+  test_flags(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();
 }

@@ -10,7 +10,9 @@
  * The player says when a play counts (MC_PLAYER_EVENT_PLAYED); the frontend passes it on
  * with mc_scrobbler_scrobble(), and each new track with mc_scrobbler_now_playing(). A worker
  * thread looks the track up and does the rest. Plays of tracks under 30 seconds, or with no
- * artist, aren't scrobbled, as Last.fm asks.
+ * artist, aren't scrobbled, as Last.fm asks. Nor are the tracks of an album flagged
+ * no_scrobble (edit.h), which aren't sent as now playing either; a play already queued when
+ * the flag is set still goes.
  *
  * Unlike most handles, a scrobbler may be used from any thread.
  */

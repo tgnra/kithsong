@@ -20,6 +20,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 12 | no singles albums: `albums_singles` and `albums.kind`'s triggers dropped; no data changed |
 | 13 | artist credits: `tracks.artist_credit`, `albums.artist_credit`, `track_artists`, `album_artists`, `meta.artist_refresh` |
 | 14 | `recycle_bin` (deletes made here that no other device has heard of yet), `meta.changelog_epoch` |
+| 15 | album flags: `albums.no_scrobble`, `albums.mix` |
 
 ## Location
 
@@ -131,7 +132,9 @@ kind, so importing more of the release makes it an album. A track can also have 
 (`tracks.album_uid` NULL): a loose file imported as-is with no album tag. The album
 listings, search and the artist's albums leave singles out;
 `mc_library_list_artist_singles()` lists them, and the tracks with no album, for the
-artist's page. See [tagging-rules.md](tagging-rules.md#singles).
+artist's page. See [tagging-rules.md](tagging-rules.md#singles). The exception is a mix of
+one track, which search finds as an album (see [Album flags](#album-flags)); the listings
+still leave it out.
 
 Before v12 a loose track went into one album per artist, titled "&lt;artist&gt; Singles" with
 `kind = 'singles'` (v2). v12 doesn't move or rewrite anything: such albums stay, as ordinary
@@ -139,6 +142,28 @@ albums of that title, until their music is imported again. `albums.kind` stays i
 but nothing reads it, and it's no longer logged (its triggers and the `albums_singles` index
 are dropped), so new albums keep the column's default, `'album'`. `tracks.year` and
 `tracks.mb_albumid` stay too: every track has them.
+
+## Album flags
+
+What an album's tags can't say, set by hand (`mc_album_flags_set()`, `musiccore/edit.h`) and
+never written to its files. Both are 0 or 1, and sync as logged fields of the album.
+
+- `albums.no_scrobble`: its tracks are never scrobbled nor sent as now playing, whichever
+  frontend plays them; the scrobbler decides when it looks the track up, so a play queued
+  before the flag was set still goes. Plays are still counted.
+- `albums.mix`: a continuous mix, one piece of music split into tracks (a DJ mix). Its tracks
+  aren't search results: a query matching one finds the album instead, once, scored as the
+  best of the album and its tracks, and a mix of one track is an album to search, not a
+  single. Smart playlists never pick its tracks, whatever the rule; smart album groups can
+  pick the album. Everything else lists its tracks as any album's.
+
+Flags are logged when set, not when a row is made: an album inserted with a flag at 0 logs
+nothing for it (`mc_changelog_table.flags`). So the only values in the changelog are
+someone's choice, and when duplicates merge a flag set on either comes through, however
+much later the other was imported (see [Duplicates](sync-protocol.md#duplicates)). Importing
+never touches them: an album imported again keeps its flags, and one whose last track an
+import moves to another album passes them on as it goes. Merging libraries keeps a flag
+either library's album had.
 
 ## Artist credits
 
@@ -271,7 +296,8 @@ into a mix of both. The API is in `musiccore/smartlist.h`, and the evaluator in
   `"order": [{"field": "plays"}], "limit": 10` is the 10 least played.
 
 Fields (`T` for smart playlists, `A` for smart album groups). For albums the value is
-worked out from the album's tracks.
+worked out from the album's tracks. A smart playlist never picks the tracks of a continuous
+mix, whatever its rule says (see [Album flags](#album-flags)).
 
 | Field | Type | | Notes |
 |-------|------|---|-------|
@@ -349,7 +375,7 @@ makes the answer differ between devices.
 | Table              | Synced | Notes |
 |--------------------|--------|-------|
 | `artists`          | yes    | one artist each, never a credit of several |
-| `albums`           | yes    | `art_hash` is the SHA-256 of the album folder's `cover.jpg`. `artist_uid` is the first credited artist, `artist_credit` the credit as shown (NULL: that artist's name) |
+| `albums`           | yes    | `art_hash` is the SHA-256 of the album folder's `cover.jpg`. `artist_uid` is the first credited artist, `artist_credit` the credit as shown (NULL: that artist's name). `no_scrobble`, `mix`: see [Album flags](#album-flags) |
 | `tracks`           | yes    | `added_ms`: when the track was first imported (Unix ms); NULL for tracks imported before v3. `file_rev`: a new uid each time an import replaces the track's original with a higher-quality file, NULL before the first time. `artist_uid` and `artist_credit` as for albums |
 | `track_artists`    | yes    | a track's credited artists in order, uid derived from the track and position; see [Artist credits](#artist-credits) |
 | `album_artists`    | yes    | an album's, the same way |

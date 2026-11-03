@@ -420,6 +420,71 @@ static void test_credits(const char *scratch) {
   }
 }
 
+/* Two devices import one release and flag it apart: the merged album has both flags, however
+ * late the second import, and a flag cleared on it stays cleared on both. */
+static void test_flags(const char *scratch) {
+  char pa[1024], pb[1024];
+  snprintf(pa, sizeof pa, "%s/test_merge_flags_a.d", scratch);
+  snprintf(pb, sizeof pb, "%s/test_merge_flags_b.d", scratch);
+  remove_db(pa);
+  remove_db(pb);
+  mc_library *a = NULL, *b = NULL;
+  CHECK(mc_library_open(pa, &a) == MC_OK && mc_library_open(pb, &b) == MC_OK);
+  if (!a || !b) {
+    mc_library_close(a);
+    mc_library_close(b);
+    return;
+  }
+  static import ia, ib, ic;
+  import_album(a, "A", 2, &ia);
+  mc_album_flags f = {.no_scrobble = 1};
+  CHECK(mc_album_flags_set(a, ia.album, &f) == MC_OK);
+  mc_sleep_ms(5); /* B's rows are all newer than A's flag */
+  import_album(b, "B", 2, &ib);
+  send(a, b, 1000);
+  send(b, a, 1000);
+  CHECK(same_digest(a, b));
+  const char *album = smaller(ia.album, ib.album);
+  CHECK(mc_album_flags_get(a, album, &f) == MC_OK && f.no_scrobble && !f.mix);
+  CHECK(mc_album_flags_get(b, album, &f) == MC_OK && f.no_scrobble && !f.mix);
+
+  /* A third import, on a device that has neither, merged into the class later. */
+  mc_sleep_ms(5);
+  mc_library *c = NULL;
+  char pc[1024];
+  snprintf(pc, sizeof pc, "%s/test_merge_flags_c.d", scratch);
+  remove_db(pc);
+  CHECK(mc_library_open(pc, &c) == MC_OK);
+  if (c) {
+    import_album(c, "C", 1, &ic);
+    f = (mc_album_flags){.mix = 1};
+    CHECK(mc_album_flags_set(c, ic.album, &f) == MC_OK);
+    send(c, a, 1000);
+    send(a, c, 1000);
+    const char *all = smaller(album, ic.album);
+    CHECK(mc_album_flags_get(a, all, &f) == MC_OK && f.no_scrobble && f.mix);
+    CHECK(mc_album_flags_get(c, all, &f) == MC_OK && f.no_scrobble && f.mix);
+    send(a, b, 1000);
+    CHECK(mc_album_flags_get(b, all, &f) == MC_OK && f.no_scrobble && f.mix);
+
+    /* Cleared on the merged album: the older flags under the other uids don't bring it back. */
+    f = (mc_album_flags){.mix = 1};
+    CHECK(mc_album_flags_set(b, all, &f) == MC_OK);
+    send(b, a, 1000);
+    send(b, c, 1000);
+    CHECK(mc_album_flags_get(a, all, &f) == MC_OK && !f.no_scrobble && f.mix);
+    CHECK(mc_album_flags_get(c, all, &f) == MC_OK && !f.no_scrobble && f.mix);
+    mc_library_close(c);
+  }
+  mc_library_close(a);
+  mc_library_close(b);
+  if (!test_failures) {
+    remove_db(pa);
+    remove_db(pb);
+    remove_db(pc);
+  }
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
@@ -607,6 +672,7 @@ int main(int argc, char **argv) {
   mc_library_close(b);
   mc_library_close(c);
   test_credits(scratch);
+  test_flags(scratch);
   mc_shutdown();
   if (!test_failures) {
     remove_db(pa);

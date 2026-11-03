@@ -520,6 +520,10 @@ static void put_order(query *q, yyjson_val *order) {
   put(q, k_default_order[q->subject]);
 }
 
+/* A continuous mix's tracks are never picked, whatever the rule (edit.h); a smart album group
+ * can pick the album. al as in TRACK_JOINS. */
+#define TRACK_NOT_IN_MIX "coalesce(al.mix, 0) = 0"
+
 /* What a compiled query selects: the list itself, one row of how many it picks, the albums
  * for its cover art (see mc_smart_prepare_art()), or one row if anything it picks has a file
  * here (mc_smart_has_playable()). */
@@ -568,6 +572,7 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
     put(q, subject == MC_SMART_TRACKS ? TRACK_COLS " FROM tracks t" TRACK_JOINS
                                       : ALBUM_COLS " FROM albums a" ALBUM_JOINS);
   put(q, " WHERE ");
+  if (tracks) put(q, TRACK_NOT_IN_MIX " AND ");
   /* Without a match, or with one that's ignored, everything matches. */
   yyjson_val *match = yyjson_obj_get(root, "match");
   if (!match || !put_match(q, match, 0, 0)) put(q, "1");

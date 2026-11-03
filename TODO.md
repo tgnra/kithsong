@@ -28,6 +28,12 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Android - a new album group can only be made from an album's Add to album group…
 - All - tracks imported before 81dcc23 keep a timestamp each, a moment apart, so "Recently added" plays those albums last track first (no migration: the column syncs)
 
+- All - a continuous mix's tracks still show as tracks outside search and smart playlists: the artist's page track list (mc_library_list_artist_tracks()), and a mix of one track among the artist's singles
+- Android and Linux - no way to set an album's flags ("Continuous mix", no scrobbling) yet; they sync and work there once set on Windows. The core's API is mc_album_flags_get/set
+- All - nothing shows that an album is a continuous mix: mc_album_info doesn't carry the flags, so a frontend would have to ask mc_album_flags_get() per album
+- Core - a play queued for scrobbling before its album was flagged no_scrobble still goes (scrobble_queue keeps what to send, not the track)
+- Core - a one-track mix is found by search but left out of album listings, like any single; decide whether the album grid should show it too
+
 ### Smart playlists
 - All - localise the v10 example lists' names (decided; they're stored as data, so always English today)
 - Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it; on Linux a new one that picks nothing playable doesn't open after it's made
