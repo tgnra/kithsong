@@ -740,9 +740,15 @@ mc_status mc_session_run(mc_session *s) {
   mc_sync_db *sdb = s->conn->sdb;
   int archive = mc_archive_is(mc_sync_db_handle(sdb), mc_sync_db_device_uid(sdb)) > 0;
   hello peer;
+  uint64_t t0 = mc_mono_ms();
+  mc_sync_trace("session %.8s: start, initiator %d", s->peer_uid, mc_channel_is_initiator(s->ch));
   mc_status st = send_hello(s, archive);
   if (st == MC_OK) st = recv_hello(s, &peer);
+  mc_sync_trace("session %.8s: hellos +%llu ms", s->peer_uid, (unsigned long long)(mc_mono_ms() - t0));
   if (st == MC_OK) st = exchange_db(s, MC_ROWS_GROUP, NULL, 0);
+  mc_sync_trace("session %.8s: group data +%llu ms, rows sent %lld received %lld", s->peer_uid,
+                (unsigned long long)(mc_mono_ms() - t0), (long long)s->rows_sent,
+                (long long)s->rows_received);
   if (st != MC_OK) return st;
   s->receive_first = peer.archive >= 0 && peer.archive != archive ? archive
                                                                   : mc_channel_is_initiator(s->ch);
@@ -777,7 +783,11 @@ mc_status mc_session_run(mc_session *s) {
       mc_transfer_begin(s);
       st = exchange_db(s, MC_ROWS_LIBRARY, NULL, 0);
       s->library_synced = st == MC_OK;
+      mc_sync_trace("session %.8s: library data +%llu ms, rows sent %lld received %lld", s->peer_uid,
+                    (unsigned long long)(mc_mono_ms() - t0), (long long)s->rows_sent,
+                    (long long)s->rows_received);
       if (st == MC_OK) st = mc_transfer_run(s); /* step 6 */
+      mc_sync_trace("session %.8s: files +%llu ms", s->peer_uid, (unsigned long long)(mc_mono_ms() - t0));
     }
     if (st == MC_OK) st = mc_channel_send(s->ch, MC_MSG_BYE, "{}", 2);
     if (st == MC_OK) st = recv_msg(s, &type, &payload, &len);
@@ -798,14 +808,21 @@ mc_status mc_session_run(mc_session *s) {
       st = exchange_db(s, MC_ROWS_LIBRARY, vv, len);
       free(vv);
       s->library_synced = st == MC_OK;
+      mc_sync_trace("session %.8s: library data +%llu ms, rows sent %lld received %lld", s->peer_uid,
+                    (unsigned long long)(mc_mono_ms() - t0), (long long)s->rows_sent,
+                    (long long)s->rows_received);
       if (st == MC_OK) st = mc_transfer_run(s); /* step 6 */
+      mc_sync_trace("session %.8s: files +%llu ms", s->peer_uid, (unsigned long long)(mc_mono_ms() - t0));
       if (st == MC_OK) st = recv_msg(s, &type, &payload, &len);
     }
     if (st == MC_OK && type != MC_MSG_BYE) st = MC_ERR_FORMAT;
     if (st == MC_OK) st = mc_channel_send(s->ch, MC_MSG_BYE, "{}", 2);
   }
   /* Reconcile and the fast check, once the peer is done with our files. */
+  mc_sync_trace("session %.8s: bye +%llu ms", s->peer_uid, (unsigned long long)(mc_mono_ms() - t0));
   mc_transfer_end(s, st == MC_OK);
+  mc_sync_trace("session %.8s: end +%llu ms (%s)", s->peer_uid, (unsigned long long)(mc_mono_ms() - t0),
+                mc_status_str(st));
   if (st == MC_OK && removed_here(s)) s->we_removed = 1;
   progress(s, MC_SYNC_PHASE_DONE);
   return st;

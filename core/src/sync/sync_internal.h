@@ -272,6 +272,10 @@ void mc_sync_emit_pair_code(mc_sync *sync, const char *code, const char *name, i
 void mc_sync_emit_pair_result(mc_sync *sync, const mc_pair_result *r);
 void mc_sync_emit_progress(mc_sync *sync, const mc_sync_progress *p);
 void mc_sync_emit_pair_merge(mc_sync *sync, const mc_pair_merge *m);
+/* KITHSONG_SYNC_TRACE=1: mc_sync_trace() writes one timestamped line to stderr, for timing a
+ * session's steps. */
+int mc_sync_tracing(void);
+void mc_sync_trace(const char *fmt, ...);
 
 /* --- Confirming profiles (profile.c) --- */
 

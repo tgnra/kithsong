@@ -29,6 +29,7 @@
  * group's data changed here) and reports a different answer through on_waiting. Whether a
  * member is reachable is the last session attempt with it (mc_sync_peer.contact), so
  * discovery and reach checks, which come and go, never move it. */
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -207,6 +208,26 @@ void mc_sync_emit_progress(mc_sync *sync, const mc_sync_progress *p) {
   mc_mutex_lock(&sync->cb_lock);
   sync->ev.on_progress(sync->user, p);
   mc_mutex_unlock(&sync->cb_lock);
+}
+
+int mc_sync_tracing(void) {
+  static int on = -1; /* the environment doesn't change, so a race only reads it twice */
+  if (on < 0) {
+    const char *v = getenv("KITHSONG_SYNC_TRACE");
+    on = v && *v && strcmp(v, "0") != 0;
+  }
+  return on;
+}
+
+void mc_sync_trace(const char *fmt, ...) {
+  if (!mc_sync_tracing()) return;
+  char line[1024];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(line, sizeof line, fmt, ap);
+  va_end(ap);
+  fprintf(stderr, "[sync %9.3f] %s\n", (double)(mc_mono_ms() % 1000000000) / 1000.0, line);
+  fflush(stderr);
 }
 
 void mc_sync_emit_pair_merge(mc_sync *sync, const mc_pair_merge *m) {
@@ -967,10 +988,13 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   mc_channel *ch = NULL;
   mc_status st = MC_ERR_NET;
   int at = -1, answered = 0, handshook = 0;
+  uint64_t t0 = mc_mono_ms();
   for (int i = 0; i < j->n && !ch && !stopping(sync); i++) {
     if (mc_channel_connect(j->host[i], j->port[i], MC_MODE_SESSION, CONNECT_MS, &ch) == MC_OK)
       at = i;
   }
+  mc_sync_trace("initiate %.8s: connect %s in %llu ms (%d addresses)", j->uid, ch ? "ok" : "failed",
+                (unsigned long long)(mc_mono_ms() - t0), j->n);
   if (ch)
     reach_note(sync, j->uid, REACH_OUT_OK, NULL, 0);
   else if (j->n && !stopping(sync)) {
@@ -993,6 +1017,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
     st = claimed ? MC_OK : MC_ERR_LOCKED;
     if (st == MC_OK) st = mc_session_handshake_initiate(&s, key);
     handshook = st == MC_OK;
+    mc_sync_trace("initiate %.8s: handshake +%llu ms", j->uid, (unsigned long long)(mc_mono_ms() - t0));
     if (st == MC_OK) st = mc_session_run(&s);
     if (claimed) cancelled = mc_sync_release(sync, j->uid) && st != MC_OK;
     mc_sync_untrack(sync, ch);

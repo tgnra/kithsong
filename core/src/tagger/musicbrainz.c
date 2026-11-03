@@ -2,6 +2,7 @@
  * No API key; the requirements are a descriptive User-Agent and at most 1 request/second. */
 #include "tagger/musicbrainz.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,7 @@
 #include "musiccore/tagger.h"
 #include "net/http.h"
 #include "net/socket.h"
+#include "tagger/search_keys.h"
 #include "util/platform.h"
 
 #define MB_HOST "musicbrainz.org"
@@ -29,36 +31,108 @@ void mb_set_fake(const mb_fake *fake) {
   g_fake = fake;
 }
 
+int mb_tracing(void) {
+  static int on = -1; /* the environment doesn't change, so a race only reads it twice */
+  if (on < 0) {
+    const char *v = getenv("KITHSONG_TAGGER_TRACE");
+    on = v && *v && strcmp(v, "0") != 0;
+  }
+  return on;
+}
+
+void mb_trace(const char *fmt, ...) {
+  if (!mb_tracing()) return;
+  char line[2048];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(line, sizeof line, fmt, ap);
+  va_end(ap);
+  fprintf(stderr, "[tagger %6.1f] %s\n", (double)(mc_mono_ms() % 1000000) / 1000.0, line);
+  fflush(stderr);
+}
+
 void mc_musicbrainz_global_init(void) {
   mc_ratelimit_init(&g_mb_rate, 1100); /* a little over 1 s for clock slack */
 }
 
-/* cancel (NULL: none) gives up on the request, as if offline (MC_ERR_NET). */
-static mc_status mb_get_json_cancel(const char *path, yyjson_doc **out, const mc_http_cancel *cancel) {
+/* A request that fails for a reason that passes (a dropped connection, a timeout, or
+ * MusicBrainz busy: 502, 503, 504) is tried again: after 2 s, doubling up to 30 s. Its
+ * servers drop a good share of new connections at times, so giving up at the first failure
+ * would put albums in review that only needed another try. Every third failure in a row
+ * checks whether MusicBrainz can be reached at all and stops if it can't, so an offline
+ * import is told so instead; and after 10 minutes of failures it stops anyway. */
+#define RETRY_FIRST_MS 2000u
+#define RETRY_MAX_MS 30000u
+#define RETRY_GIVE_UP_MS (10u * 60u * 1000u)
+#define RETRY_CHECK_EVERY 3
+#define RETRY_CHECK_MS 8000
+
+static int call_cancelled(const mc_http_cancel *cancel) {
+  return cancel && cancel->cancelled && cancel->cancelled(cancel->user);
+}
+
+/* Waits ms, or less if cancel says so. Returns nonzero if cancelled. */
+static int wait_cancel(uint32_t ms, const mc_http_cancel *cancel) {
+  for (uint32_t waited = 0; waited < ms; waited += 100) {
+    if (call_cancelled(cancel)) return 1;
+    mc_sleep_ms(ms - waited < 100 ? ms - waited : 100);
+  }
+  return call_cancelled(cancel);
+}
+
+/* call may be NULL (see mb_call). */
+static mc_status mb_get_json(const char *path, yyjson_doc **out, mb_call *call) {
+  const mc_http_cancel *cancel = call ? call->cancel : NULL;
+  char *why = call ? call->why : NULL;
+  size_t why_len = call ? sizeof call->why : 0;
   size_t len = strlen(MB_API) + strlen(path) + 16;
   char *url = malloc(len);
   if (!url) return MC_ERR_NOMEM;
   snprintf(url, len, MB_API "%s%cfmt=json", path, strchr(path, '?') ? '&' : '?');
 
-  /* 503 means MusicBrainz is shedding load or we went over the rate; back off and retry. */
   mc_buffer body;
-  long http = 0;
+  long http;
   mc_status st;
-  for (int attempt = 0;; attempt++) {
+  uint64_t first_failure = 0;
+  uint32_t delay = RETRY_FIRST_MS;
+  for (int failures = 0;;) {
     if (mc_ratelimit_wait_cancel(&g_mb_rate, cancel)) {
       free(url);
       return MC_ERR_NET;
     }
-    st = mc_http_get_cancel(url, &body, &http, cancel);
-    if (st != MC_OK || http != 503 || attempt == 3) break;
-    mc_buffer_free(&body);
-    for (uint32_t waited = 0; waited < (2000u << attempt); waited += 100) {
-      if (cancel && cancel->cancelled && cancel->cancelled(cancel->user)) {
-        free(url);
-        return MC_ERR_NET;
-      }
-      mc_sleep_ms(100);
+    http = 0;
+    uint64_t t0 = mc_mono_ms();
+    st = mc_http_get_cancel(url, &body, &http, cancel, why, why_len);
+    mb_trace("GET %s -> %s %ld (%llu ms)", url, st == MC_OK ? "HTTP" : "failed", http,
+             (unsigned long long)(mc_mono_ms() - t0));
+    int busy = st == MC_OK && (http == 502 || http == 503 || http == 504);
+    if (call_cancelled(cancel) || (st != MC_ERR_NET && !busy)) break;
+
+    if (busy) {
+      mc_buffer_free(&body);
+      if (why_len) snprintf(why, why_len, "HTTP %ld, MusicBrainz is busy", http);
     }
+    uint64_t now = mc_mono_ms();
+    if (failures++ == 0) first_failure = now;
+    int give_up = now - first_failure >= RETRY_GIVE_UP_MS;
+    /* MusicBrainz can't be reached at all: why says so now. */
+    if (!give_up && failures % RETRY_CHECK_EVERY == 0)
+      give_up = mb_reachable_why(RETRY_CHECK_MS, cancel, why, why_len) != MC_OK;
+    if (give_up) {
+      mb_trace("giving up on %s after %d failures: %s", url, failures, why ? why : "");
+      free(url);
+      return MC_ERR_NET;
+    }
+    mb_trace("retrying in %u ms (failure %d)", delay, failures);
+    if (wait_cancel(delay, cancel)) {
+      free(url);
+      return MC_ERR_NET;
+    }
+    delay = delay * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : delay * 2;
+  }
+  if (st == MC_OK && call_cancelled(cancel)) {
+    mc_buffer_free(&body);
+    st = MC_ERR_NET;
   }
   if (st == MC_OK && http != 200 && http != 404)
     fprintf(stderr, "musiccore: MusicBrainz returned HTTP %ld for %s\n", http, url);
@@ -66,14 +140,13 @@ static mc_status mb_get_json_cancel(const char *path, yyjson_doc **out, const mc
   if (st != MC_OK) return st;
 
   if (http == 404) st = MC_ERR_NOT_FOUND;
-  else if (http != 200) st = MC_ERR_NET;
+  else if (http != 200) {
+    st = MC_ERR_NET;
+    if (why_len) snprintf(why, why_len, "HTTP %ld", http);
+  }
   else if (!(*out = yyjson_read(body.data, body.len, 0))) st = MC_ERR_FORMAT;
   mc_buffer_free(&body);
   return st;
-}
-
-static mc_status mb_get_json(const char *path, yyjson_doc **out) {
-  return mb_get_json_cancel(path, out, NULL);
 }
 
 mc_status mc_musicbrainz_ping(char **out_name) {
@@ -81,7 +154,7 @@ mc_status mc_musicbrainz_ping(char **out_name) {
   *out_name = NULL;
 
   yyjson_doc *doc;
-  mc_status st = mb_get_json("/artist/" MB_PING_ARTIST, &doc);
+  mc_status st = mb_get_json("/artist/" MB_PING_ARTIST, &doc, NULL);
   if (st != MC_OK) return st;
 
   const char *name = yyjson_get_str(yyjson_obj_get(yyjson_doc_get_root(doc), "name"));
@@ -92,6 +165,10 @@ mc_status mc_musicbrainz_ping(char **out_name) {
 }
 
 mc_status mc_musicbrainz_reachable(int timeout_ms) {
+  return mb_reachable_why(timeout_ms, NULL, NULL, 0);
+}
+
+mc_status mb_reachable_why(int timeout_ms, const mc_http_cancel *cancel, char *why, size_t why_len) {
   if (g_fake) return MC_OK;
   char host[256];
   uint16_t port = 443;
@@ -103,9 +180,8 @@ mc_status mc_musicbrainz_reachable(int timeout_ms) {
     snprintf(host, sizeof host, "%.*s", (int)(colon - probe), probe);
     port = (uint16_t)atoi(colon + 1);
   }
-  mc_socket *s;
-  mc_status st = mc_socket_connect(host, port, timeout_ms, &s);
-  if (st == MC_OK) mc_socket_close(s);
+  mc_status st = mc_socket_probe(host, port, timeout_ms, cancel ? cancel->cancelled : NULL,
+                                 cancel ? cancel->user : NULL, why, why_len);
   return st == MC_OK ? MC_OK : MC_ERR_NET;
 }
 
@@ -282,6 +358,26 @@ static char *media_formats(yyjson_val *media) {
   return *buf ? mc_strdup(buf) : NULL;
 }
 
+/* Medium formats that hold video (https://musicbrainz.org/doc/Release/Format): "DVD-Video",
+ * "DVD-R Video", the DVD-Video sides of DVDplus and DualDisc, Blu-ray, tapes and the rest. A
+ * plain "DVD" can be either, so release_from goes by its recordings' flags; so do CDV and
+ * Enhanced CD, which carry audio tracks beside a video. */
+static int video_format(const char *fmt) {
+  static const char *const formats[] = {"Blu-ray", "Blu-ray-R", "HD-DVD", "VCD",     "SVCD",
+                                        "UMD",     "VHS",       "VHD",    "Betamax", "CED"};
+  if (!fmt) return 0;
+  if (strstr(fmt, "Video")) return 1;
+  size_t n = strlen(fmt);
+  if (n >= 9 && strcmp(fmt + n - 9, "LaserDisc") == 0) return 1; /* also 8" and 12" */
+  for (size_t i = 0; i < sizeof formats / sizeof formats[0]; i++)
+    if (strcmp(fmt, formats[i]) == 0) return 1;
+  return 0;
+}
+
+static int recording_is_video(yyjson_val *track) {
+  return yyjson_get_bool(yyjson_obj_get(yyjson_obj_get(track, "recording"), "video"));
+}
+
 void mb_release_clear(mb_release *rel) {
   if (!rel) return;
   for (int i = 0; i < rel->track_count; i++) {
@@ -370,9 +466,9 @@ static int better_hit(yyjson_val *a, yyjson_val *b, int track_count) {
 
 /* Runs a release search and fills ids with the hits, ranked (see better_hit). */
 static mc_status release_ids_from(const char *path, int track_count, char (*ids)[MC_UID_STRLEN],
-                                  int max, int *n) {
+                                  int max, int *n, mb_call *call) {
   yyjson_doc *doc;
-  mc_status st = mb_get_json(path, &doc);
+  mc_status st = mb_get_json(path, &doc, call);
   if (st != MC_OK) return st;
 
   /* Rank: expected track count first, then search score, then earliest date, so that among
@@ -404,15 +500,21 @@ static mc_status release_ids_from(const char *path, int track_count, char (*ids)
 }
 
 mc_status mb_search_releases(const char *artist, const char *album, int track_count,
-                             char (*ids)[MC_UID_STRLEN], int max, int *n) {
+                             char (*ids)[MC_UID_STRLEN], int max, int *n, mb_call *call) {
   *n = 0;
   if (!album || !*album) return MC_ERR_INVALID_ARG;
-  if (g_fake)
-    return g_fake->search_releases ? g_fake->search_releases(artist, album, track_count, ids, max, n) : MC_OK;
-  char *path = search_path("release", "release", album, "artist", artist, 15);
-  if (!path) return MC_ERR_NOMEM;
-  mc_status st = release_ids_from(path, track_count, ids, max, n);
-  free(path);
+  /* "(Promo CDr)" and the like only narrow the search; the scoring still sees them. */
+  char *terms = mc_search_title(album);
+  if (!terms) return MC_ERR_NOMEM;
+  mc_status st = MC_OK;
+  if (g_fake) {
+    if (g_fake->search_releases) st = g_fake->search_releases(artist, terms, track_count, ids, max, n);
+  } else {
+    char *path = search_path("release", "release", terms, "artist", artist, 15);
+    st = path ? release_ids_from(path, track_count, ids, max, n, call) : MC_ERR_NOMEM;
+    free(path);
+  }
+  free(terms);
   return st;
 }
 
@@ -438,10 +540,25 @@ static int append_clause(char *q, size_t cap, const char *field, const char *con
   return 1;
 }
 
+static mc_status search_releases_by(const mb_release_query *q, int track_count,
+                                    char (*ids)[MC_UID_STRLEN], int max, int *n, mb_call *call);
+
 mc_status mb_search_releases_by(const mb_release_query *q, int track_count,
-                                char (*ids)[MC_UID_STRLEN], int max, int *n) {
+                                char (*ids)[MC_UID_STRLEN], int max, int *n, mb_call *call) {
   *n = 0;
   if (!q) return MC_ERR_INVALID_ARG;
+  /* As in mb_search_releases: the title without its edition notes. */
+  mb_release_query terms = *q;
+  char *album = q->album ? mc_search_title(q->album) : NULL;
+  if (q->album && !album) return MC_ERR_NOMEM;
+  terms.album = album;
+  mc_status st = search_releases_by(&terms, track_count, ids, max, n, call);
+  free(album);
+  return st;
+}
+
+static mc_status search_releases_by(const mb_release_query *q, int track_count,
+                                    char (*ids)[MC_UID_STRLEN], int max, int *n, mb_call *call) {
   if (g_fake)
     return g_fake->search_releases_by ? g_fake->search_releases_by(q, track_count, ids, max, n) : MC_OK;
   size_t cap = 64;
@@ -469,7 +586,7 @@ mc_status mb_search_releases_by(const mb_release_query *q, int track_count,
   mc_status st = MC_ERR_NOMEM;
   if (path) {
     snprintf(path, plen, "/release?query=%s&limit=15", esc);
-    st = release_ids_from(path, track_count, ids, max, n);
+    st = release_ids_from(path, track_count, ids, max, n, call);
   }
   free(path);
   free(esc);
@@ -478,11 +595,7 @@ mc_status mb_search_releases_by(const mb_release_query *q, int track_count,
 
 static mc_status release_from(yyjson_val *root, mb_release *out);
 
-mc_status mb_lookup_release(const char *id, mb_release *out) {
-  return mb_lookup_release_cancel(id, out, NULL);
-}
-
-mc_status mb_lookup_release_cancel(const char *id, mb_release *out, const mc_http_cancel *cancel) {
+mc_status mb_lookup_release(const char *id, mb_release *out, mb_call *call) {
   memset(out, 0, sizeof *out);
   if (!is_mbid(id)) return MC_ERR_INVALID_ARG;
   if (g_fake) return g_fake->lookup_release ? g_fake->lookup_release(id, out) : MC_ERR_NOT_FOUND;
@@ -490,7 +603,7 @@ mc_status mb_lookup_release_cancel(const char *id, mb_release *out, const mc_htt
   snprintf(path, sizeof path, "/release/%s?inc=recordings+artist-credits+release-groups+labels",
            id);
   yyjson_doc *doc;
-  mc_status st = mb_get_json_cancel(path, &doc, cancel);
+  mc_status st = mb_get_json(path, &doc, call);
   if (st != MC_OK) return st;
   st = release_from(yyjson_doc_get_root(doc), out);
   yyjson_doc_free(doc);
@@ -535,6 +648,10 @@ static mc_status release_from(yyjson_val *root, mb_release *out) {
   yyjson_arr_foreach(media, mi, mmax, m) {
     if (st != MC_OK) break;
     int disc = json_int(m, "position");
+    const char *fmt = yyjson_get_str(yyjson_obj_get(m, "format"));
+    int video = video_format(fmt);
+    if (!video && fmt && strcmp(fmt, "DVD") == 0)
+      yyjson_arr_foreach(yyjson_obj_get(m, "tracks"), ti, tmax, t) video |= recording_is_video(t);
     yyjson_arr_foreach(yyjson_obj_get(m, "tracks"), ti, tmax, t) {
       mb_track *tr = &out->tracks[out->track_count++];
       yyjson_val *rec = yyjson_obj_get(t, "recording");
@@ -546,6 +663,7 @@ static mc_status release_from(yyjson_val *root, mb_release *out) {
       tr->number = json_int(t, "position");
       tr->length_ms = json_int(t, "length");
       if (!tr->length_ms) tr->length_ms = json_int(rec, "length");
+      tr->video = video || recording_is_video(t);
     }
   }
 
@@ -655,10 +773,11 @@ static mc_status recordings_from_doc(yyjson_doc *doc, mb_release *out, int max, 
   return st;
 }
 
-static mc_status recordings_from(const char *path, mb_release *out, int max, int *n) {
+static mc_status recordings_from(const char *path, mb_release *out, int max, int *n,
+                                 mb_call *call) {
   *n = 0;
   yyjson_doc *doc;
-  mc_status st = mb_get_json(path, &doc);
+  mc_status st = mb_get_json(path, &doc, call);
   if (st != MC_OK) return st;
   st = recordings_from_doc(doc, out, max, n);
   yyjson_doc_free(doc);
@@ -675,19 +794,19 @@ mc_status mb_recordings_parse(const char *json, size_t len, mb_release *out, int
 }
 
 mc_status mb_search_recordings(const char *artist, const char *title, mb_release *out, int max,
-                               int *n) {
+                               int *n, mb_call *call) {
   *n = 0;
   if (!title || !*title) return MC_ERR_INVALID_ARG;
   if (g_fake)
     return g_fake->search_recordings ? g_fake->search_recordings(artist, title, out, max, n) : MC_OK;
   char *path = search_path("recording", "recording", title, "artist", artist, max);
   if (!path) return MC_ERR_NOMEM;
-  mc_status st = recordings_from(path, out, max, n);
+  mc_status st = recordings_from(path, out, max, n, call);
   free(path);
   return st;
 }
 
-mc_status mb_lookup_recording(const char *id, mb_release *out) {
+mc_status mb_lookup_recording(const char *id, mb_release *out, mb_call *call) {
   /* A search by id returns the same shape as a text search, including the release's track
    * entry, which a plain lookup doesn't. */
   memset(out, 0, sizeof *out);
@@ -696,7 +815,7 @@ mc_status mb_lookup_recording(const char *id, mb_release *out) {
   char path[96];
   snprintf(path, sizeof path, "/recording?query=rid:%s&limit=1", id);
   int n = 0;
-  mc_status st = recordings_from(path, out, 1, &n);
+  mc_status st = recordings_from(path, out, 1, &n, call);
   if (st == MC_OK && n == 0) st = MC_ERR_NOT_FOUND;
   return st;
 }

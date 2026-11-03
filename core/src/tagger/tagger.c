@@ -38,11 +38,14 @@
 #define DEFAULT_THRESHOLD 0.9
 #define RELEASE_LOOKUPS 3   /* full release lookups per album; each costs a second */
 #define RECORDING_RESULTS 5
-#define PROBE_TIMEOUT_MS 3000   /* offline check: connecting to MusicBrainz */
+/* Offline check: connecting to MusicBrainz. Enough for two lost SYNs, resent after 1 s and
+ * 2 s more, which its servers see often enough to call an import offline at 3 s. */
+#define PROBE_TIMEOUT_MS 8000
 #define PROBE_INTERVAL_MS 30000 /* while offline, how often to check again */
 /* Extended search (docs/tagging-rules.md): it runs by itself when the best candidate's
- * confidence is below POOR_CONFIDENCE, and costs at most WIDE_SEARCHES searches plus
- * WIDE_LOOKUPS release lookups, i.e. about 10 s at MusicBrainz's 1 request/second. */
+ * confidence, scored with the search keys, is below POOR_CONFIDENCE, and costs at most
+ * WIDE_SEARCHES searches plus WIDE_LOOKUPS release lookups, i.e. about 10 s at
+ * MusicBrainz's 1 request/second. */
 #define POOR_CONFIDENCE 0.75
 #define WIDE_SEARCHES 4
 #define WIDE_LOOKUPS 6
@@ -113,6 +116,7 @@ struct mc_import {
   void *user;
   mc_thread thread;
   int thread_started;
+  mc_http_cancel http_cancel; /* gives up on the network once cancelled (cancel_check) */
 
   mc_mutex lock;
   mc_cond wake;
@@ -120,6 +124,7 @@ struct mc_import {
   int cancel;
   int skip_tagging; /* import as-is from now on */
   int offline;      /* MusicBrainz was unreachable at the last check */
+  char offline_why[160]; /* why, in English (mb_reachable_why), or "" */
   uint64_t next_probe_ms; /* while offline: when to check again */
   request *head, *tail;
   /* Item state, error, chosen and candidates are guarded by lock once items are published,
@@ -173,14 +178,17 @@ static void set_state(mc_import *imp, int idx, mc_import_state state, const char
   emit(imp, MC_IMPORT_EV_ITEM_CHANGED, idx);
 }
 
-/* Puts an item in review because MusicBrainz couldn't be reached. */
-static void set_unreachable(mc_import *imp, int idx) {
+/* Puts an item in review because MusicBrainz couldn't be reached; why (NULL or "": not
+ * known) says what went wrong, in English. */
+static void set_unreachable(mc_import *imp, int idx, const char *why) {
+  char *error = why && *why ? mc_format_alloc(mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE_WHY), MC_S(why))
+                            : mc_strdup(mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE));
   mc_mutex_lock(&imp->lock);
   item *it = &imp->items[idx];
   it->state = MC_IMPORT_REVIEW;
   it->unreachable = 1;
   free(it->error);
-  it->error = mc_strdup(mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE));
+  it->error = error;
   mc_mutex_unlock(&imp->lock);
   emit(imp, MC_IMPORT_EV_ITEM_CHANGED, idx);
 }
@@ -566,7 +574,16 @@ typedef struct cand_list {
   candidate *c;
   int n, cap;
   mc_status net; /* first network error, for the "why are there no candidates" message */
+  char why[160]; /* and what it was, if MC_ERR_NET (mb_call) */
+  mb_call call;  /* for every lookup filling the list */
 } cand_list;
+
+/* An empty list whose lookups give up once the session is cancelled. */
+static cand_list cand_list_for(mc_import *imp) {
+  cand_list l = {0};
+  l.call.cancel = &imp->http_cancel;
+  return l;
+}
 
 static candidate *cand_push(cand_list *l) {
   if (l->n == l->cap) {
@@ -582,7 +599,9 @@ static candidate *cand_push(cand_list *l) {
 }
 
 static void note_error(cand_list *l, mc_status st) {
-  if (st != MC_OK && st != MC_ERR_NOT_FOUND && l->net == MC_OK) l->net = st;
+  if (st == MC_OK || st == MC_ERR_NOT_FOUND || l->net != MC_OK) return;
+  l->net = st;
+  if (st == MC_ERR_NET) snprintf(l->why, sizeof l->why, "%s", l->call.why);
 }
 
 static int have_release(const cand_list *l, const char *id) {
@@ -601,7 +620,7 @@ static void add_release(mc_import *imp, const item *it, const mc_tags *tags, con
                         const char *album, const char *id, cand_list *l) {
   if (have_release(l, id) || cancelled(imp)) return;
   mb_release rel;
-  mc_status st = mb_lookup_release(id, &rel);
+  mc_status st = mb_lookup_release(id, &rel, &l->call);
   note_error(l, st);
   if (st != MC_OK) return;
   candidate *c = cand_push(l);
@@ -650,7 +669,8 @@ static void search_releases(mc_import *imp, const item *it, const mc_tags *tags,
     char ids[RELEASE_LOOKUPS][MC_UID_STRLEN];
     int n = 0;
     const char *search_artist = artist && mc_string_distance(artist, "Various Artists") != 0.0 ? artist : NULL;
-    mc_status st = mb_search_releases(search_artist, album, it->file_count, ids, RELEASE_LOOKUPS, &n);
+    mc_status st = mb_search_releases(search_artist, album, it->file_count, ids, RELEASE_LOOKUPS, &n,
+                                      &l->call);
     note_error(l, st);
     for (int i = 0; i < n; i++) add_release(imp, it, tags, artist, album, ids[i], l);
   }
@@ -660,14 +680,14 @@ static void search_recordings(mc_import *imp, const mc_tags *file, const char *a
                               const char *title, cand_list *l) {
   mb_release rel;
   if (file->mb_trackid && !cancelled(imp)) {
-    mc_status st = mb_lookup_recording(file->mb_trackid, &rel);
+    mc_status st = mb_lookup_recording(file->mb_trackid, &rel, &l->call);
     note_error(l, st);
     if (st == MC_OK) add_recording(&rel, file, l);
   }
   if (title && !cancelled(imp)) {
     mb_release found[RECORDING_RESULTS];
     int n = 0;
-    mc_status st = mb_search_recordings(artist, title, found, RECORDING_RESULTS, &n);
+    mc_status st = mb_search_recordings(artist, title, found, RECORDING_RESULTS, &n, &l->call);
     note_error(l, st);
     for (int i = 0; i < n; i++) add_recording(&found[i], file, l);
   }
@@ -684,13 +704,13 @@ static int should_accept(const item *it, const candidate *c, double threshold) {
  *
  * For albums the normal search can't place, typically because the album artist tag names
  * a label or circle ("SHARPNELSOUND") rather than the artist: searches MusicBrainz again
- * with other keys from the files and the folder name (search_keys.h), and scores every
- * release candidate with whichever of those keys fits it best. */
+ * with other keys from the files and the folder name (search_keys.h). Every release
+ * candidate, the normal search's too and whether or not the extended search runs, is
+ * scored with whichever of those keys fits it best. */
 
 /* Whether the candidates (sorted) are poor enough to search more widely by default. Albums
  * and one-file items both get it: a lone file may be a whole release, such as a DJ mix. */
 static int poor_match(const mc_import *imp, const item *it, const cand_list *l) {
-  if (l->net == MC_ERR_NET) return 0;
   if (l->n == 0) return 1;
   return !should_accept(it, &l->c[0], imp->threshold) && 1.0 - l->c[0].distance < POOR_CONFIDENCE;
 }
@@ -784,7 +804,7 @@ static int wide_search(mc_import *imp, const item *it, const mc_tags *tags, cons
     if (cancelled(imp)) return 0;
     char ids[8][MC_UID_STRLEN];
     int n = 0;
-    mc_status st = mb_search_releases_by(&plan[i].q, it->file_count, ids, 8, &n);
+    mc_status st = mb_search_releases_by(&plan[i].q, it->file_count, ids, 8, &n, &l->call);
     searches++;
     note_error(l, st);
     if (st == MC_ERR_NET) return 0;
@@ -827,15 +847,22 @@ static const char *searched_artist(const item *it) {
   return it->artist && mc_string_distance(it->artist, "Various Artists") != 0.0 ? it->artist : NULL;
 }
 
-/* The extended search on top of the normal search's candidates in l, which it rescores
- * too. Returns what wide_search did. */
-static int widen(mc_import *imp, const item *it, const mc_tags *tags, cand_list *l) {
+/* Rescores the normal search's candidates in l with the item's keys, so an album artist
+ * tag naming a label ("Label (Artist)") doesn't hold back the right release, then runs the
+ * extended search if they're still poor and may_search. Returns nonzero if the extended
+ * search ran to the end. */
+static int widen(mc_import *imp, const item *it, const mc_tags *tags, cand_list *l,
+                 int may_search) {
   mc_search_keys k;
   item_keys(imp, it, tags, &k);
-  int done = wide_search(imp, it, tags, &k, searched_artist(it), l, NULL);
   for (int i = 0; i < l->n; i++) rescore(it, tags, &k, &l->c[i]);
-  mc_search_keys_clear(&k);
   if (l->n > 1) qsort(l->c, (size_t)l->n, sizeof *l->c, compare_candidates);
+  int done = 0;
+  if (may_search && poor_match(imp, it, l)) {
+    done = wide_search(imp, it, tags, &k, searched_artist(it), l, NULL); /* rescores its own */
+    if (l->n > 1) qsort(l->c, (size_t)l->n, sizeof *l->c, compare_candidates);
+  }
+  mc_search_keys_clear(&k);
   return done;
 }
 
@@ -859,7 +886,7 @@ static int widen_item(mc_import *imp, int idx) {
   /* Only this thread changes an item's candidates, so it can read them without the lock. */
   mc_search_keys k;
   item_keys(imp, it, tags, &k);
-  cand_list l = {0};
+  cand_list l = cand_list_for(imp);
   int done = wide_search(imp, it, tags, &k, searched_artist(it), &l, it);
   for (int i = 0; i < it->cand_count; i++) {
     candidate c = it->cands[i];
@@ -917,6 +944,73 @@ static int defer_for_discs(mc_import *imp, int idx);
 /* Finds and scores candidates for an item. artist/title override the item's own tags (a
  * search the user typed); such results are never auto-accepted. Returns nonzero if nothing
  * was found because a request failed with a network error. */
+static void probe(mc_import *imp);
+
+/* --- Trace (KITHSONG_TAGGER_TRACE, see musicbrainz.h) --- */
+
+static void trace_length(int ms, char *out, size_t n) {
+  if (ms > 0) snprintf(out, n, "%d:%02d", ms / 60000, ms / 1000 % 60);
+  else snprintf(out, n, "?:??");
+}
+
+static void trace_item(const item *it, int idx, const mc_tags *tags, const char *artist,
+                       const char *title) {
+  if (!mb_tracing()) return;
+  mb_trace("=== item %d: %s, %d file%s, folder \"%s\"", idx,
+           it->kind == MC_IMPORT_ALBUM ? "album" : "single", it->file_count,
+           it->file_count == 1 ? "" : "s", it->folder ? it->folder : "");
+  mb_trace("    searching artist \"%s\", %s \"%s\"", artist ? artist : "", it->kind == MC_IMPORT_ALBUM ? "album" : "title",
+           title ? title : "");
+  for (int i = 0; i < it->file_count; i++) {
+    const mc_tags *t = &tags[i];
+    char len[16];
+    trace_length(t->duration_ms, len, sizeof len);
+    mb_trace("    file %d: %d.%02d \"%s\" by \"%s\" (%s) album \"%s\" / \"%s\"%s%s%s%s", i, t->disc,
+             t->track, t->title ? t->title : "", t->artist ? t->artist : "", len,
+             t->album ? t->album : "", t->album_artist ? t->album_artist : "",
+             t->mb_albumid ? " release " : "", t->mb_albumid ? t->mb_albumid : "",
+             t->catalog ? " cat " : "", t->catalog ? t->catalog : "");
+  }
+}
+
+#define TRACE_CANDIDATES 8
+
+static void trace_candidates(const item *it, const mc_tags *tags, const cand_list *l, int wide,
+                             const char *decision) {
+  if (!mb_tracing()) return;
+  mb_trace("    %d candidate%s%s", l->n, l->n == 1 ? "" : "s", wide ? " (after the extended search)" : "");
+  for (int c = 0; c < l->n && c < TRACE_CANDIDATES; c++) {
+    const candidate *k = &l->c[c];
+    const mb_release *r = &k->rel;
+    mb_trace("    #%d %5.1f%% %s \"%s\" by \"%s\" %d %s %s %s, %d tracks, missing %d, extra %d, id %s%s%s%s%s",
+             c + 1, (1.0 - k->distance) * 100, k->from_recording ? "recording on" : "release",
+             r->title ? r->title : "", r->artist ? r->artist : "", r->year,
+             r->country ? r->country : "-", r->format ? r->format : "-",
+             r->release_type ? r->release_type : "-", r->track_count, k->missing, k->extra,
+             r->id ? r->id : "", k->album || k->artist ? ", scored as \"" : "", k->artist ? k->artist : "",
+             k->album || k->artist ? "\" - \"" : "", k->album ? k->album : "");
+    if (c > 0 || !k->map) continue;
+    /* How the best one paired the files with its tracks. */
+    for (int i = 0; i < it->file_count; i++) {
+      char flen[16], tlen[16];
+      trace_length(tags[i].duration_ms, flen, sizeof flen);
+      int t = k->map[i];
+      if (t < 0 || t >= r->track_count) {
+        mb_trace("         file %d \"%s\" (%s) -> no track", i, tags[i].title ? tags[i].title : "", flen);
+        continue;
+      }
+      const mb_track *tr = &r->tracks[t];
+      trace_length(tr->length_ms, tlen, sizeof tlen);
+      mb_trace("         file %d \"%s\" (%s) -> %d.%02d \"%s\" by \"%s\" (%s)", i,
+               tags[i].title ? tags[i].title : "", flen, tr->disc, tr->number, tr->title ? tr->title : "",
+               tr->artist ? tr->artist : "", tlen);
+    }
+  }
+  if (l->n > TRACE_CANDIDATES) mb_trace("    ... and %d more", l->n - TRACE_CANDIDATES);
+  if (l->net != MC_OK) mb_trace("    network error %d: %s", (int)l->net, l->why);
+  mb_trace("    -> %s", decision);
+}
+
 static int match_item(mc_import *imp, mc_library *lib, int idx, const char *artist,
                        const char *title) {
   item *it = &imp->items[idx];
@@ -933,6 +1027,7 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
     return 0;
   }
   for (int i = 0; i < it->file_count; i++) tags[i] = *item_tags(imp, it, i);
+  trace_item(it, idx, tags, artist, title);
 
   /* For a single, score against the search terms where the tags have nothing (a title
    * guessed from the file name) or the user typed something else. */
@@ -942,7 +1037,7 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
     if (title && *title && (manual || !scored.title)) scored.title = (char *)title;
   }
 
-  cand_list l = {0};
+  cand_list l = cand_list_for(imp);
   int wide = 0;
   if (it->kind == MC_IMPORT_ALBUM) {
     search_releases(imp, it, tags, artist, title, &l);
@@ -952,13 +1047,33 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
     search_recordings(imp, &scored, artist, title, &l);
   }
   if (l.n > 1) qsort(l.c, (size_t)l.n, sizeof *l.c, compare_candidates);
-  /* Nothing, or nothing good: search more widely before deciding. */
-  if (!manual && poor_match(imp, it, &l)) wide = widen(imp, it, tags, &l);
-  free(tags);
+  /* Score with the keys' artists and titles too, and if that's still nothing good, search
+   * more widely before deciding. A lookup that failed even after its retries (musicbrainz.c)
+   * doesn't stop that, unless MusicBrainz can't be reached: the release it would have found
+   * may turn up another way, by catalogue number say. */
+  int reachable = 1;
+  if (l.net == MC_ERR_NET) {
+    probe(imp);
+    reachable = !mc_import_offline(imp);
+  }
+  if (!manual) wide = widen(imp, it, tags, &l, reachable);
 
   int unreachable = l.n == 0 && l.net == MC_ERR_NET;
   const char *why = l.n == 0 && !unreachable ? mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES) : NULL;
   int accept = !manual && l.n > 0 && should_accept(it, &l.c[0], imp->threshold);
+  if (mb_tracing()) {
+    char decision[160];
+    if (accept) snprintf(decision, sizeof decision, "accepted #1");
+    else if (unreachable) snprintf(decision, sizeof decision, "review: couldn't reach MusicBrainz");
+    else if (manual) snprintf(decision, sizeof decision, "review: the user's own search");
+    else if (l.n == 0) snprintf(decision, sizeof decision, "review: no candidates");
+    else
+      snprintf(decision, sizeof decision, "review: #1 is %.1f%% (threshold %.0f%%)%s", (1.0 - l.c[0].distance) * 100,
+               imp->threshold * 100,
+               l.c[0].missing || l.c[0].extra ? ", and partial matches are never accepted" : "");
+    trace_candidates(it, tags, &l, wide, decision);
+  }
+  free(tags);
 
   mc_mutex_lock(&imp->lock);
   candidates_free(it->cands, it->cand_count);
@@ -968,7 +1083,7 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
   mc_mutex_unlock(&imp->lock);
 
   if (accept) write_item(imp, lib, idx, 0);
-  else if (unreachable) set_unreachable(imp, idx);
+  else if (unreachable) set_unreachable(imp, idx, l.why);
   /* Some discs of a release whose others may be still to come: not for the user yet. */
   else if (manual || !defer_for_discs(imp, idx)) set_state(imp, idx, MC_IMPORT_REVIEW, why);
   return unreachable;
@@ -1000,7 +1115,8 @@ static int release_track_of(const mb_release *rel, const mb_track *want) {
 static int lookup_lone_release(mc_import *imp, const candidate *c, mb_release *full) {
   memset(full, 0, sizeof *full);
   if (!c->from_recording || !c->rel.id || c->rel.track_count != 1 || cancelled(imp)) return -1;
-  if (mb_lookup_release(c->rel.id, full) != MC_OK) return -1;
+  mb_call call = {&imp->http_cancel, ""};
+  if (mb_lookup_release(c->rel.id, full, &call) != MC_OK) return -1;
   int i = release_track_of(full, &c->rel.tracks[0]);
   if (i < 0) mb_release_clear(full);
   return i;
@@ -1412,7 +1528,8 @@ static const char *ensure_cover(mc_import *imp, mc_library *lib, const char *alb
     if ((!local || (side > 0 && side < MC_COVER_LOW_RES)) && rel && imp->fetch_art && !cancelled(imp)) {
       mc_buffer img;
       const char *img_ext;
-      if (mc_coverart_fetch(rel->id, rel->releasegroup_id, rel->artist, rel->title, &img, &img_ext) == MC_OK) {
+      if (mc_coverart_fetch(rel->id, rel->releasegroup_id, rel->artist, rel->title, &img, &img_ext,
+                            &imp->http_cancel) == MC_OK) {
         /* Never swapped for one that isn't bigger. */
         if (!local || mc_coverart_short_side(&img) > side) {
           free(source);
@@ -1833,10 +1950,11 @@ static mc_status push_request_locked(mc_import *imp, req_kind kind, int idx) {
 
 /* --- Offline --- */
 
-static void set_offline(mc_import *imp, int offline) {
+static void set_offline(mc_import *imp, int offline, const char *why) {
   mc_mutex_lock(&imp->lock);
   int changed = imp->offline != offline;
   imp->offline = offline;
+  snprintf(imp->offline_why, sizeof imp->offline_why, "%s", offline ? why : "");
   if (offline) imp->next_probe_ms = mc_mono_ms() + PROBE_INTERVAL_MS;
   /* Back online: match the items that were waiting on MusicBrainz after all, unless tagging
    * is being skipped (then they were queued as-is already). */
@@ -1849,7 +1967,9 @@ static void set_offline(mc_import *imp, int offline) {
 
 /* Checks whether MusicBrainz can be reached, and reports a change. */
 static void probe(mc_import *imp) {
-  set_offline(imp, mc_musicbrainz_reachable(PROBE_TIMEOUT_MS) != MC_OK);
+  char why[sizeof imp->offline_why] = "";
+  mc_status st = mb_reachable_why(PROBE_TIMEOUT_MS, &imp->http_cancel, why, sizeof why);
+  if (!cancelled(imp)) set_offline(imp, st != MC_OK, why);
 }
 
 /* While offline, checks again once the interval has passed. Returns nonzero if online. */
@@ -1865,7 +1985,13 @@ static int online(mc_import *imp) {
  * offline, else against MusicBrainz. */
 static void auto_match(mc_import *imp, mc_library *lib, int idx) {
   if (skipping_tags(imp)) write_item(imp, lib, idx, -1);
-  else if (!online(imp)) set_unreachable(imp, idx);
+  else if (!online(imp)) {
+    char why[sizeof imp->offline_why];
+    mc_mutex_lock(&imp->lock);
+    snprintf(why, sizeof why, "%s", imp->offline_why);
+    mc_mutex_unlock(&imp->lock);
+    set_unreachable(imp, idx, why);
+  }
   else if (match_item(imp, lib, idx, NULL, NULL)) {
     probe(imp); /* a network error: offline? */
     /* Tagging was skipped while this item was being looked up. */
@@ -1879,6 +2005,18 @@ static void auto_match(mc_import *imp, mc_library *lib, int idx) {
  * item per disc. find_disc_sets marks the items that look like one album's discs; here
  * MusicBrainz has to agree before they're joined: a release of that title with as many discs,
  * each disc taking most of one item's files. */
+
+/* How many of a release's discs files go on: 2CD + DVD-Video is two (see mc_track_left_out). */
+static int audio_discs(const mb_release *rel) {
+  int n = 0;
+  for (int d = 1; d <= rel->disc_total; d++)
+    for (int i = 0; i < rel->track_count; i++)
+      if (rel->tracks[i].disc == d && !mc_track_left_out(rel, i)) {
+        n++;
+        break;
+      }
+  return n;
+}
 
 /* Whether every disc item has at least half its files on its own disc of the release. */
 static int discs_fit(const mb_release *rel, const int *map, const int *members, int n, const item *items) {
@@ -1938,14 +2076,14 @@ static int join_discs(mc_import *imp, int idx) {
   const char *artist = searched_artist(lead);
   char ids[RELEASE_LOOKUPS][MC_UID_STRLEN];
   int found = 0;
-  cand_list l = {0};
-  note_error(&l, mb_search_releases(artist, title, files, ids, RELEASE_LOOKUPS, &found));
+  cand_list l = cand_list_for(imp);
+  note_error(&l, mb_search_releases(artist, title, files, ids, RELEASE_LOOKUPS, &found, &l.call));
   for (int h = 0; h < found && !cancelled(imp) && l.net != MC_ERR_NET; h++) {
     mb_release rel;
-    mc_status st = mb_lookup_release(ids[h], &rel);
+    mc_status st = mb_lookup_release(ids[h], &rel, &l.call);
     note_error(&l, st);
     if (st != MC_OK) continue;
-    candidate *c = rel.disc_total == n ? cand_push(&l) : NULL;
+    candidate *c = audio_discs(&rel) == n ? cand_push(&l) : NULL;
     int *map = malloc((size_t)files * sizeof *map);
     mc_release_score score;
     if (!c || !map || mc_score_release(&rel, tags, files, title, lead->artist, map, &score) != MC_OK ||
@@ -2026,9 +2164,12 @@ static int disc_count(disc_mask m) {
   return n;
 }
 
+/* The discs of a release that files go on: not a DVD-Video beside the CD (see
+ * mc_track_left_out), which nothing waits for. */
 static disc_mask release_discs(const mb_release *rel) {
   disc_mask m = 0;
-  for (int i = 0; i < rel->track_count; i++) m |= disc_bit(rel->tracks[i].disc);
+  for (int i = 0; i < rel->track_count; i++)
+    if (!mc_track_left_out(rel, i)) m |= disc_bit(rel->tracks[i].disc);
   return m;
 }
 
@@ -2067,7 +2208,8 @@ static int may_be_other_discs(mc_import *imp, int idx, int other) {
   if (!lacking) return 0;
   const mb_release *rel = &it->cands[0].rel;
   int room = 0;
-  for (int i = 0; i < rel->track_count; i++) room += (disc_bit(rel->tracks[i].disc) & lacking) != 0;
+  for (int i = 0; i < rel->track_count; i++)
+    room += (disc_bit(rel->tracks[i].disc) & lacking) != 0 && !mc_track_left_out(rel, i);
   if (o->file_count > room) return 0;
   for (int i = 0; rel->id && i < o->file_count; i++) {
     const char *id = imp->files[o->files[i]].tags.mb_albumid;
@@ -2291,11 +2433,16 @@ static int busy(mc_import_state s) {
   return s == MC_IMPORT_PENDING || s == MC_IMPORT_MATCHING || s == MC_IMPORT_WRITING;
 }
 
-/* Counts a candidate's missing tracks and extra files from its map. */
+/* Counts a candidate's missing tracks and extra files from its map (as
+ * mc_score_release_map does: left-out tracks aren't missing). */
 static void recount(candidate *c, int file_count) {
-  int matched = 0;
-  for (int i = 0; i < file_count; i++) matched += c->map[i] >= 0;
-  c->missing = c->rel.track_count - matched;
+  int matched = 0, tracks = 0;
+  for (int j = 0; j < c->rel.track_count; j++) tracks += !mc_track_left_out(&c->rel, j);
+  c->missing = tracks;
+  for (int i = 0; i < file_count; i++) {
+    matched += c->map[i] >= 0;
+    c->missing -= c->map[i] >= 0 && !mc_track_left_out(&c->rel, c->map[i]);
+  }
   c->extra = file_count - matched;
 }
 
@@ -2651,6 +2798,7 @@ mc_status mc_import_start(mc_library *lib, const char *const *paths, int path_co
   imp->zip_budget.max = mc_unzip_session_max_bytes;
   imp->callback = callback;
   imp->user = user;
+  imp->http_cancel = (mc_http_cancel){cancel_check, imp};
   imp->lib_dir = mc_strdup(mc_library_dir(lib));
   imp->paths = calloc((size_t)path_count, sizeof *imp->paths);
   mc_status st = imp->lib_dir && imp->paths ? MC_OK : MC_ERR_NOMEM;
@@ -2776,6 +2924,7 @@ mc_status mc_import_item_get(mc_import *imp, int idx, mc_import_item **out) {
   snap->album = mc_strdup(it->album);
   snap->chosen = it->chosen;
   snap->searched_wider = it->searched_wider;
+  snap->unreachable = it->unreachable;
   snap->error = mc_strdup(it->error);
   snap->outcome = it->outcome;
   snap->replaced_files = it->replaced;
@@ -2948,6 +3097,21 @@ mc_status mc_import_skip_tagging(mc_import *imp) {
       if (imp->items[i].state == MC_IMPORT_REVIEW && imp->items[i].unreachable)
         st = push_request_locked(imp, REQ_RETRY, i); /* as-is now */
     mc_cond_broadcast(&imp->wake); /* the thread may be waiting to check the network again */
+  }
+  mc_mutex_unlock(&imp->lock);
+  return st;
+}
+
+mc_status mc_import_retry_unreachable(mc_import *imp) {
+  if (!imp) return MC_ERR_INVALID_ARG;
+  mc_status st = MC_OK;
+  mc_mutex_lock(&imp->lock);
+  if (!imp->skip_tagging) {
+    for (int i = 0; i < imp->item_count && st == MC_OK; i++)
+      if (imp->items[i].state == MC_IMPORT_REVIEW && imp->items[i].unreachable)
+        st = push_request_locked(imp, REQ_RETRY, i);
+    imp->next_probe_ms = 0; /* while offline, check again before the first of them */
+    mc_cond_broadcast(&imp->wake);
   }
   mc_mutex_unlock(&imp->lock);
   return st;

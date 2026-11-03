@@ -40,25 +40,27 @@ static const char *image_ext(const mc_buffer *b) {
 }
 
 /* GETs url and keeps the body only if it is a reasonably sized JPEG or PNG. */
-static mc_status get_image(const char *url, mc_buffer *img, const char **ext) {
+static mc_status get_image(const char *url, mc_buffer *img, const char **ext,
+                           const mc_http_cancel *cancel) {
   long http = 0;
-  mc_status st = mc_http_get(url, img, &http);
+  mc_status st = mc_http_get_cancel(url, img, &http, cancel, NULL, 0);
   if (st != MC_OK) return st;
   if (http == 200 && img->len <= MAX_IMAGE_BYTES && (*ext = image_ext(img))) return MC_OK;
   mc_buffer_free(img);
   return http == 404 || http == 200 ? MC_ERR_NOT_FOUND : MC_ERR_NET;
 }
 
-static mc_status from_caa(const char *entity, const char *id, mc_buffer *img, const char **ext) {
+static mc_status from_caa(const char *entity, const char *id, mc_buffer *img, const char **ext,
+                          const mc_http_cancel *cancel) {
   char url[160];
   /* 1200 px thumbnails are JPEG, unlike the original upload, which can be anything. */
   snprintf(url, sizeof url, CAA_API "/%s/%s/front-1200", entity, id);
-  return get_image(url, img, ext);
+  return get_image(url, img, ext, cancel);
 }
 
 /* Best iTunes album for artist + album, or MC_ERR_NOT_FOUND if none is close enough. */
 static mc_status from_itunes(const char *artist, const char *album, mc_buffer *img,
-                             const char **ext) {
+                             const char **ext, const mc_http_cancel *cancel) {
   size_t tlen = strlen(artist) + strlen(album) + 2;
   char *term = malloc(tlen);
   if (!term) return MC_ERR_NOMEM;
@@ -76,10 +78,13 @@ static mc_status from_itunes(const char *artist, const char *album, mc_buffer *i
   snprintf(url, ulen, ITUNES_API "?term=%s&media=music&entity=album&limit=10", esc);
   free(esc);
 
-  mc_ratelimit_wait(&g_itunes_rate);
+  if (mc_ratelimit_wait_cancel(&g_itunes_rate, cancel)) {
+    free(url);
+    return MC_ERR_NET;
+  }
   mc_buffer body;
   long http = 0;
-  mc_status st = mc_http_get(url, &body, &http);
+  mc_status st = mc_http_get_cancel(url, &body, &http, cancel, NULL, 0);
   free(url);
   if (st != MC_OK) return st;
   yyjson_doc *doc = http == 200 ? yyjson_read(body.data, body.len, 0) : NULL;
@@ -106,7 +111,7 @@ static mc_status from_itunes(const char *artist, const char *album, mc_buffer *i
     const char *size = strstr(best, "100x100bb");
     if (size && strlen(best) < sizeof art - 8) {
       snprintf(art, sizeof art, "%.*s1200x1200bb%s", (int)(size - best), best, size + 9);
-      st = get_image(art, img, ext);
+      st = get_image(art, img, ext, cancel);
     }
   }
   yyjson_doc_free(doc);
@@ -115,14 +120,15 @@ static mc_status from_itunes(const char *artist, const char *album, mc_buffer *i
 
 mc_status mc_coverart_fetch(const char *mb_albumid, const char *mb_releasegroupid,
                             const char *artist, const char *album, mc_buffer *img,
-                            const char **ext) {
+                            const char **ext, const mc_http_cancel *cancel) {
   img->data = NULL;
   img->len = 0;
   if (g_fake) return g_fake(mb_albumid, mb_releasegroupid, artist, album, img, ext);
   mc_status st = MC_ERR_NOT_FOUND;
-  if (mb_albumid) st = from_caa("release", mb_albumid, img, ext);
-  if (st != MC_OK && mb_releasegroupid) st = from_caa("release-group", mb_releasegroupid, img, ext);
-  if (st != MC_OK && artist && album) st = from_itunes(artist, album, img, ext);
+  if (mb_albumid) st = from_caa("release", mb_albumid, img, ext, cancel);
+  if (st != MC_OK && mb_releasegroupid)
+    st = from_caa("release-group", mb_releasegroupid, img, ext, cancel);
+  if (st != MC_OK && artist && album) st = from_itunes(artist, album, img, ext, cancel);
   return st;
 }
 

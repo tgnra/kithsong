@@ -11,6 +11,39 @@
 extern const unsigned char mc_cacert_pem[];
 extern const size_t mc_cacert_pem_len;
 
+/* Shared by every request: open connections, so requests to one host one after another
+ * reuse one rather than each making a new TLS handshake (some servers, MusicBrainz's among
+ * them, drop a share of new connections when busy), TLS sessions, so a new connection can
+ * resume one, and name lookups. NULL if it couldn't be made: then nothing is shared. */
+static CURLSH *g_share;
+static mc_mutex g_share_locks[CURL_LOCK_DATA_LAST];
+
+static void share_lock(CURL *handle, curl_lock_data data, curl_lock_access access, void *user) {
+  (void)handle, (void)access, (void)user;
+  mc_mutex_lock(&g_share_locks[data]);
+}
+
+static void share_unlock(CURL *handle, curl_lock_data data, void *user) {
+  (void)handle, (void)user;
+  mc_mutex_unlock(&g_share_locks[data]);
+}
+
+void mc_http_global_init(void) {
+  for (int i = 0; i < CURL_LOCK_DATA_LAST; i++) mc_mutex_init(&g_share_locks[i]);
+  g_share = curl_share_init();
+  if (!g_share) return;
+  curl_share_setopt(g_share, CURLSHOPT_LOCKFUNC, share_lock);
+  curl_share_setopt(g_share, CURLSHOPT_UNLOCKFUNC, share_unlock);
+  curl_share_setopt(g_share, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT);
+  curl_share_setopt(g_share, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
+  curl_share_setopt(g_share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+}
+
+void mc_http_global_cleanup(void) {
+  /* Still in use (a request on a thread that outlived mc_shutdown): left as it is. */
+  if (g_share && curl_share_cleanup(g_share) == CURLSHE_OK) g_share = NULL;
+}
+
 void mc_buffer_free(mc_buffer *buf) {
   free(buf->data);
   buf->data = NULL;
@@ -56,12 +89,14 @@ static int on_progress(void *user, curl_off_t dltotal, curl_off_t dlnow, curl_of
   return cancel->cancelled(cancel->user) ? 1 : 0;
 }
 
-/* GET url, or POST form when it isn't NULL. */
+/* GET url, or POST form when it isn't NULL. A transport failure's reason goes in why (if
+ * why_len isn't 0). */
 static mc_status perform(const char *url, const char *form, mc_buffer *body, long *http_status,
-                         const mc_http_cancel *cancel) {
+                         const mc_http_cancel *cancel, char *why, size_t why_len) {
   if (!url || !body) return MC_ERR_INVALID_ARG;
   body->data = NULL;
   body->len = 0;
+  char err[CURL_ERROR_SIZE] = "";
 
   CURL *curl = curl_easy_init();
   if (!curl) return MC_ERR_NOMEM;
@@ -80,6 +115,8 @@ static mc_status perform(const char *url, const char *form, mc_buffer *body, lon
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 30000L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, err);
+  if (g_share) curl_easy_setopt(curl, CURLOPT_SHARE, g_share);
   /* A name lookup still running when the call times out or is cancelled is left to finish
    * on curl's resolver thread rather than waited for: otherwise a network with broken DNS
    * holds every failed call until the lookup itself gives up, whatever the timeouts say. */
@@ -102,8 +139,11 @@ static mc_status perform(const char *url, const char *form, mc_buffer *body, lon
     return MC_ERR_NET;
   }
   if (rc != CURLE_OK) {
-    fprintf(stderr, "musiccore: %s %s failed: %s\n", form ? "POST" : "GET", url,
-            curl_easy_strerror(rc));
+    /* The error buffer has the details ("Failed to connect to ... after 10002 ms: Timed
+     * out"); the code's own text is the fallback. */
+    const char *reason = *err ? err : curl_easy_strerror(rc);
+    fprintf(stderr, "musiccore: %s %s failed: %s\n", form ? "POST" : "GET", url, reason);
+    if (why_len) snprintf(why, why_len, "%s", reason);
     mc_buffer_free(body);
     return rc == CURLE_WRITE_ERROR ? MC_ERR_NOMEM : MC_ERR_NET;
   }
@@ -111,18 +151,18 @@ static mc_status perform(const char *url, const char *form, mc_buffer *body, lon
 }
 
 mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status) {
-  return perform(url, NULL, body, http_status, NULL);
+  return perform(url, NULL, body, http_status, NULL, NULL, 0);
 }
 
 mc_status mc_http_get_cancel(const char *url, mc_buffer *body, long *http_status,
-                             const mc_http_cancel *cancel) {
-  return perform(url, NULL, body, http_status, cancel);
+                             const mc_http_cancel *cancel, char *why, size_t why_len) {
+  return perform(url, NULL, body, http_status, cancel, why, why_len);
 }
 
 mc_status mc_http_post_form(const char *url, const char *form, mc_buffer *body, long *http_status,
                             const mc_http_cancel *cancel) {
   if (!form) return MC_ERR_INVALID_ARG;
-  return perform(url, form, body, http_status, cancel);
+  return perform(url, form, body, http_status, cancel, NULL, 0);
 }
 
 void mc_ratelimit_init(mc_ratelimit *rl, uint32_t interval_ms) {

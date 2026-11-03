@@ -737,6 +737,7 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
                            int kbps) {
   int64_t size = 0, mtime = 0;
   char sha[SHA_STRLEN];
+  uint64_t t0 = mc_mono_ms();
   if (mc_file_info(h->path, &size, &mtime) != MC_OK || size > MAX_FILE_BYTES)
     return send_file_err(s->ch, track, "io");
   if (h->sha[0] && size == h->size && mtime == h->mtime)
@@ -745,6 +746,7 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
     return send_file_err(s->ch, track, "io");
   else
     keep_sha(s->conn->lib, h, sha, size, mtime);
+  uint64_t hashed = mc_mono_ms();
   FILE *f = mc_fopen(h->path, "rb");
   if (!f) return send_file_err(s->ch, track, "io");
   char ext[16];
@@ -783,6 +785,8 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
   free(buf);
   fclose(f);
   if (st == MC_OK) s->files_sent++;
+  mc_sync_trace("send %.8s: %lld bytes, hash %llu ms, send %llu ms", track, (long long)size,
+                (unsigned long long)(hashed - t0), (unsigned long long)(mc_mono_ms() - hashed));
   return st;
 }
 
@@ -1232,11 +1236,13 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
   uint8_t type;
   const unsigned char *payload;
   size_t len;
+  uint64_t t0 = mc_mono_ms();
   mc_channel_set_timeout(s->ch, FETCH_WAIT_MS); /* it may be encoding */
   mc_status st = mc_channel_recv(s->ch, &type, &payload, &len);
   mc_channel_set_timeout(s->ch, mc_channel_default_timeout());
   if (st != MC_OK) return st;
   if (type != MC_MSG_FILE_HDR && type != MC_MSG_FILE_ERR) return MC_ERR_FORMAT;
+  uint64_t t_hdr = mc_mono_ms();
 
   /* The header, copied out before the next receive. Answers come in the order asked, so
    * either one must be t's. */
@@ -1302,6 +1308,7 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
     have += (int64_t)len;
     s->bytes_received += (int64_t)len;
   }
+  uint64_t t_data = mc_mono_ms();
   unsigned char digest[32];
   char got_sha[SHA_STRLEN];
   mbedtls_sha256_finish(&ctx, digest);
@@ -1333,6 +1340,9 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
   }
   if (part && mc_file_exists(part)) mc_remove(part);
   if (rel && *got != GOT_OK) prune_dirs(lib, rel);
+  mc_sync_trace("recv %.8s: %lld bytes, wait %llu ms, data %llu ms, finish %llu ms", t->track_uid,
+                (long long)size, (unsigned long long)(t_hdr - t0),
+                (unsigned long long)(t_data - t_hdr), (unsigned long long)(mc_mono_ms() - t_data));
   free(part);
   free(abs);
   free(rel);
@@ -1836,14 +1846,18 @@ static mc_status receive_turn(mc_session *s) {
     x->receiving = 1;
     int64_t free_bytes = -1;
     if (mc_free_space(mc_library_dir(s->conn->lib), &free_bytes) != MC_OK) free_bytes = -1;
+    uint64_t t0 = mc_mono_ms();
     if (mc_plan_compute(s->conn->sdb, s->conn->lib, mc_sync_db_device_uid(s->conn->sdb),
                         free_bytes, &x->plan) == MC_OK &&
         x->plan->status == MC_PLAN_OK) {
+      mc_sync_trace("receive: plan %llu ms", (unsigned long long)(mc_mono_ms() - t0));
       x->fetched = 1;
       st = fetch_missing(s, x);
+      mc_sync_trace("receive: fetched +%llu ms", (unsigned long long)(mc_mono_ms() - t0));
       if (st == MC_OK) st = fetch_covers(s);
     }
     if (st == MC_OK) st = send_prepares(s);
+    mc_sync_trace("receive: done +%llu ms", (unsigned long long)(mc_mono_ms() - t0));
   }
   if (st == MC_OK) st = mc_channel_send(s->ch, MC_MSG_FILES_DONE, "{}", 2);
   return st;
@@ -2257,6 +2271,7 @@ void mc_transfer_end(mc_session *s, int ok) {
   mc_transfer *x = s->xfer;
   if (!x) return;
   mc_library *lib = s->conn->lib;
+  uint64_t t0 = mc_mono_ms();
   drop_deleted_tracks(s);
   sqlite3_exec(mc_library_db(lib), k_unwatch_sql, NULL, NULL, NULL);
   if (ok && x->fetched) {
@@ -2265,8 +2280,10 @@ void mc_transfer_end(mc_session *s, int ok) {
     /* Files the user took back out of the trash would look unknown: their rows first. */
     mc_delete_restore(lib, s->sync->config_dir, NULL, NULL);
     reconcile_unknown(s, x->plan->archive);
+    mc_sync_trace("end: reconcile %llu ms", (unsigned long long)(mc_mono_ms() - t0));
     mc_verify_result v;
     verify_files(lib, 0, &v);
+    mc_sync_trace("end: verify +%llu ms", (unsigned long long)(mc_mono_ms() - t0));
     s->files_deleted += (int)v.deleted;
     status_row row;
     int64_t latest;

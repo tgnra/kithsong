@@ -40,6 +40,12 @@ int mc_is_catno(const char *s, size_t len);
  * ("SRPC-0008") is added too. Returns the new count. */
 int mc_catnos_add(char **list, int count, int max, const char *text);
 
+/* An album title as search terms: without bracketed edition notes ("(Promo CDr)",
+ * "[Bonus Track Version]", "(初回限定盤)") or catalogue numbers ("[SRPC-L007]"), which the
+ * database's titles seldom have. A copy of title if nothing else would be left. Free with
+ * free(). */
+char *mc_search_title(const char *title);
+
 /* The artist in a file name like "03. Artist — Title.flac" or "Artist - Title.mp3", or NULL.
  * With a title tag, the side that isn't the title is the artist; without one, the left side.
  * Free with free(). */

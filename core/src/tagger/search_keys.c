@@ -357,6 +357,70 @@ void mc_folder_name_clear(mc_folder_name *f) {
   memset(f, 0, sizeof *f);
 }
 
+/* --- Search titles --- */
+
+/* Whether a bracket group's text is an edition note or a catalogue number. */
+static int is_edition_note(const char *s, size_t len) {
+  static const char *const words[] = {"promo", "promotional", "cdr", "limited", "ltd", "edition",
+                                      "version", "ver", "bonus", "comiket", "reissue", "remaster",
+                                      "remastered", "deluxe", "anniversary", "pressing", NULL};
+  static const char *const cjk[] = {"\xE9\x99\x90\xE5\xAE\x9A", "\xE5\x88\x9D\xE5\x9B\x9E", /* 限定 初回 */
+                                    "\xE7\x9B\xA4", "\xE7\x89\x88", NULL};                  /* 盤 版 */
+  if (mc_is_catno(s, len)) return 1;
+  char prev[16] = "";
+  for (size_t i = 0; i < len;) {
+    while (i < len && !is_alnum_ascii(s[i])) i++;
+    size_t start = i;
+    while (i < len && is_alnum_ascii(s[i])) i++;
+    size_t n = i - start;
+    if (!n || n >= sizeof prev) continue;
+    char w[16];
+    for (size_t k = 0; k < n; k++) w[k] = (char)tolower((unsigned char)s[start + k]);
+    w[n] = '\0';
+    if (strcmp(prev, "cd") == 0 && strcmp(w, "r") == 0) return 1; /* "CD-R" */
+    for (const char *const *word = words; *word; word++)
+      if (strcmp(w, *word) == 0) return 1;
+    memcpy(prev, w, n + 1);
+  }
+  for (const char *const *c = cjk; *c; c++) {
+    size_t m = strlen(*c);
+    for (size_t i = 0; i + m <= len; i++)
+      if (memcmp(s + i, *c, m) == 0) return 1;
+  }
+  return 0;
+}
+
+char *mc_search_title(const char *title) {
+  if (!title) return NULL;
+  char *out = malloc(strlen(title) + 1);
+  if (!out) return NULL;
+  size_t o = 0, len;
+  for (const char *p = title; *p;) {
+    const char *g = bracket_at(p, &len) > 0 ? group_end(p) : NULL;
+    if (g) {
+      const char *close = g - 1;
+      while (close > p && ((unsigned char)*close & 0xC0) == 0x80) close--;
+      if (is_edition_note(p + len, (size_t)(close - (p + len)))) {
+        /* The group goes, and its words don't run into the next ones. */
+        while (o && out[o - 1] == ' ') o--;
+        if (o && *g && *g != ' ') out[o++] = ' ';
+      } else {
+        memcpy(out + o, p, (size_t)(g - p));
+        o += (size_t)(g - p);
+      }
+      p = g;
+      continue;
+    }
+    memcpy(out + o, p, len);
+    o += len;
+    p += len;
+  }
+  out[o] = '\0';
+  char *trimmed = dup_trim(out, out + o);
+  free(out);
+  return trimmed ? trimmed : mc_strdup(title);
+}
+
 /* --- Artists in file names and titles --- */
 
 char *mc_main_artist(const char *artist) {

@@ -404,6 +404,9 @@ fail:
 
 uint32_t mc_socket_test_lookup_delay_ms;
 
+/* How many of a name's addresses mc_socket_probe() tries (wait_ready's limit). */
+#define PROBE_MAX 4
+
 typedef struct lookup {
   mc_mutex lock;
   mc_cond done_cond;
@@ -441,8 +444,11 @@ static void lookup_main(void *arg) {
 
 /* getaddrinfo(), giving up (non-zero) at deadline unless timeout_ms is MC_SOCKET_FOREVER.
  * Address literals are taken at once, without a thread. */
+/* cancelled (NULL: never) is asked every 100 ms while the lookup runs; once it says so the
+ * lookup is given up on, as at the deadline. */
 static int resolve(const char *host, const char *service, const struct addrinfo *hints,
-                   uint64_t deadline, int timeout_ms, struct addrinfo **res) {
+                   uint64_t deadline, int timeout_ms, int (*cancelled)(void *user), void *user,
+                   struct addrinfo **res) {
   *res = NULL;
   struct addrinfo numeric = *hints;
   numeric.ai_flags |= AI_NUMERICHOST;
@@ -467,8 +473,16 @@ static int resolve(const char *host, const char *service, const struct addrinfo 
 
   mc_mutex_lock(&l->lock);
   int left;
-  while (!l->done && (left = remaining(deadline, timeout_ms)) > 0)
-    mc_cond_wait_ms(&l->done_cond, &l->lock, (uint32_t)left);
+  while (!l->done && (left = remaining(deadline, timeout_ms)) > 0) {
+    if (cancelled) {
+      mc_mutex_unlock(&l->lock);
+      int stop = cancelled(user);
+      mc_mutex_lock(&l->lock);
+      if (stop) break;
+      if (left > 100) left = 100;
+    }
+    if (!l->done) mc_cond_wait_ms(&l->done_cond, &l->lock, (uint32_t)left);
+  }
   int done = l->done;
   if (!done) l->abandoned = 1;
   mc_mutex_unlock(&l->lock);
@@ -494,7 +508,7 @@ mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_protocol = IPPROTO_TCP;
   hints.ai_flags = AI_NUMERICSERV;
-  if (resolve(host, service, &hints, deadline, timeout_ms, &res) != 0 || !res) {
+  if (resolve(host, service, &hints, deadline, timeout_ms, NULL, NULL, &res) != 0 || !res) {
     if (res) freeaddrinfo(res);
     return MC_ERR_NET;
   }
@@ -509,6 +523,84 @@ mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_
     if (remaining(deadline, timeout_ms) == 0) break;
   }
   freeaddrinfo(res);
+  return st;
+}
+
+mc_status mc_socket_probe(const char *host, uint16_t port, int timeout_ms,
+                          int (*cancelled)(void *user), void *user, char *why, size_t why_len) {
+  if (!host || timeout_ms < 0) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_socket_init();
+  if (st != MC_OK) return st;
+
+  uint64_t deadline = deadline_of(timeout_ms);
+  char service[8];
+  snprintf(service, sizeof service, "%u", (unsigned)port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_protocol = IPPROTO_TCP;
+  hints.ai_flags = AI_NUMERICSERV;
+  int rc = resolve(host, service, &hints, deadline, timeout_ms, cancelled, user, &res);
+  if (rc != 0 || !res) {
+    if (res) freeaddrinfo(res);
+    if (!why_len || (cancelled && cancelled(user))) return MC_ERR_NET;
+    if (remaining(deadline, timeout_ms) == 0)
+      snprintf(why, why_len, "looking up %s took over %d ms", host, timeout_ms);
+    else
+      snprintf(why, why_len, "couldn't look up %s (error %d)", host, rc);
+    return MC_ERR_NET;
+  }
+
+  /* Every address at once: the first to accept answers it, so one whose packets are lost
+   * (or that isn't routed at all) can't hold up the others. */
+  sock_t fds[PROBE_MAX];
+  int n = 0, tried = 0;
+  st = MC_ERR_NET;
+  for (const struct addrinfo *ai = res; ai && n < PROBE_MAX && st != MC_OK; ai = ai->ai_next) {
+    sock_t fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (fd == BAD_SOCK) continue;
+    tried++;
+    if (prepare(fd) != 0) {
+      close_sock(fd);
+    } else if (connect(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0) {
+      st = MC_OK;
+      close_sock(fd);
+    } else if (CONNECTING(sock_error())) {
+      fds[n++] = fd;
+    } else {
+      close_sock(fd);
+    }
+  }
+  freeaddrinfo(res);
+
+  int timed_out = 0;
+  while (st != MC_OK && n > 0) {
+    if (cancelled && cancelled(user)) break;
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0) {
+      timed_out = 1;
+      break;
+    }
+    int i = wait_ready(fds, n, 1, left < 100 ? left : 100); /* asking cancelled in between */
+    if (i == -2) break;
+    if (i < 0) continue;
+    int err = 0;
+    socklen_t len = sizeof err;
+    if (getsockopt(fds[i], SOL_SOCKET, SO_ERROR, (char *)&err, &len) == 0 && err == 0) st = MC_OK;
+    close_sock(fds[i]);
+    fds[i] = fds[--n];
+  }
+  for (int i = 0; i < n; i++) close_sock(fds[i]);
+
+  if (st != MC_OK && why_len && !(cancelled && cancelled(user))) {
+    if (timed_out)
+      snprintf(why, why_len, "no connection to %s within %d ms (%d address%s tried)", host,
+               timeout_ms, tried, tried == 1 ? "" : "es");
+    else
+      snprintf(why, why_len, "couldn't connect to %s (%d address%s tried)", host, tried,
+               tried == 1 ? "" : "es");
+  }
   return st;
 }
 

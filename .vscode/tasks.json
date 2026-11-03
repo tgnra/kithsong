@@ -1,7 +1,6 @@
 {
-  // Windows build tasks. Needs CMake, Ninja and w64devkit. If w64devkit's bin directory is
-  // not on PATH, set the W64DEVKIT environment variable to its root (e.g. C:\w64devkit).
-  // The CMake and Ninja bundled with Visual Studio 2022 Build Tools are used as a fallback
+  // Windows build tasks. Needs CMake, Ninja and w64devkit. w64devkit is looked for at
+  // %W64DEVKIT% if set, then ~\Tools\w64devkit, then on PATH. The CMake and Ninja bundled with Visual Studio 2022 Build Tools are used as a fallback
   // when they are not on PATH.
   //
   // Linux build tasks. Run everything inside the flake's dev shell (`nix develop`), which
@@ -23,7 +22,7 @@
   "windows": {
     "options": {
       "env": {
-        "PATH": "${env:W64DEVKIT}\\bin;${env:PATH};C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja"
+        "PATH": "${env:W64DEVKIT}\\bin;${userHome}\\Tools\\w64devkit\\bin;${env:PATH};C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja"
       }
     }
   },

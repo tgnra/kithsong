@@ -12,7 +12,7 @@
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb.exe",
-      "environment": [{ "name": "PATH", "value": "${env:W64DEVKIT}\\bin;${env:PATH}" }],
+      "environment": [{ "name": "PATH", "value": "${env:W64DEVKIT}\\bin;${userHome}\\Tools\\w64devkit\\bin;${env:PATH}" }],
       "externalConsole": false,
       "preLaunchTask": "windows: build",
       "setupCommands": [

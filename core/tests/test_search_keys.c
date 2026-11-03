@@ -273,11 +273,39 @@ static void test_disc_suffixes(void) {
   CHECK(!disc_base(NULL, &disc));
 }
 
+static int search_title_is(const char *title, const char *want) {
+  char *s = mc_search_title(title);
+  int ok = s && strcmp(s, want) == 0;
+  if (!ok) fprintf(stderr, "  mc_search_title(\"%s\") = \"%s\"\n", title, s ? s : "(null)");
+  free(s);
+  return ok;
+}
+
+static void test_search_titles(void) {
+  CHECK(search_title_is("SEX -Sound of EXtreme- (Promo CDr)", "SEX -Sound of EXtreme-"));
+  CHECK(search_title_is("Album (Limited Edition)", "Album"));
+  CHECK(search_title_is("Album (Comiket Version)", "Album"));
+  CHECK(search_title_is("Album [Bonus Track Version]", "Album"));
+  CHECK(search_title_is("Album (CD-R)", "Album"));
+  CHECK(search_title_is("BREAK IT OLDSCHOOL [SRPC-L007]", "BREAK IT OLDSCHOOL"));
+  CHECK(search_title_is("Album \xEF\xBC\x88\xE5\x88\x9D\xE5\x9B\x9E\xE9\x99\x90\xE5\xAE\x9A\xE7\x9B\xA4\xEF\xBC\x89",
+                        "Album")); /* （初回限定盤） */
+  CHECK(search_title_is("Album (Promo) Part Two", "Album Part Two"));
+  CHECK(search_title_is("Album (Promo)Part Two", "Album Part Two"));
+  /* Kept: brackets that are part of the title, and a title that is only a note. */
+  CHECK(search_title_is("Lalala (Want Somebody)", "Lalala (Want Somebody)"));
+  CHECK(search_title_is("Album (Live) [2004]", "Album (Live) [2004]"));
+  CHECK(search_title_is("Conversion (Remix)", "Conversion (Remix)"));
+  CHECK(search_title_is("(Limited Edition)", "(Limited Edition)"));
+  CHECK(mc_search_title(NULL) == NULL);
+}
+
 int main(void) {
   test_folder_names();
   test_catnos();
   test_file_names();
   test_keys();
   test_disc_suffixes();
+  test_search_titles();
   return TEST_RESULT();
 }

@@ -22,6 +22,7 @@ enum {
   ID_IMP_DONE,
   ID_IMP_BANNER,
   ID_IMP_SKIP_TAGGING,
+  ID_IMP_RETRY,
 };
 
 enum { GROUP_REVIEW = 1, GROUP_ACTIVE, GROUP_DONE, GROUP_SKIPPED, GROUP_FAILED };
@@ -36,7 +37,7 @@ enum { COL_STATUS, COL_ARTIST, COL_ALBUM, COL_FILES, COL_MATCH, COL_CONFIDENCE, 
 typedef struct view {
   HWND parent;
   HWND drop, browse, status, progress, list, done;
-  HWND banner, skip_tagging; /* the offline banner, and its button (a child of it) */
+  HWND banner, skip_tagging, retry; /* the offline banner, and its buttons (children of it) */
   HFONT font;
   UINT dpi;
   BOOL shown;
@@ -48,6 +49,8 @@ typedef struct view {
   int scanned_files;
   int item_count;
   mc_import_state *states;
+  BOOL *unreachable; /* by item: in review because MusicBrainz couldn't be reached */
+  int unreachable_count;
   BOOL offline;      /* MusicBrainz can't be reached: show the banner */
   BOOL skipped_tags; /* the banner's button was used; it stays hidden from then on */
   BOOL long_paths_told; /* the session's long-path hint was shown */
@@ -261,13 +264,19 @@ static LRESULT CALLBACK banner_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       DrawTextW(dc, L"\xE946", 1, &ir, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
       SelectObject(dc, g_view.font ? (HGDIOBJ)g_view.font : GetStockObject(DEFAULT_GUI_FONT));
       RECT btn = {0};
-      if (IsWindowVisible(g_view.skip_tagging)) {
-        GetWindowRect(g_view.skip_tagging, &btn);
+      HWND first = IsWindowVisible(g_view.retry) ? g_view.retry : g_view.skip_tagging;
+      if (IsWindowVisible(first)) {
+        GetWindowRect(first, &btn);
         MapWindowPoints(NULL, wnd, (POINT *)&btn, 2);
       }
       RECT tr = {ir.right + pad / 2 + pad / 4, rc.top, btn.left ? btn.left - pad : rc.right - pad, rc.bottom};
-      DrawTextW(dc, mc_wstr(MC_STR_IMPORT_OFFLINE), -1, &tr,
-                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+      /* Offline, or online with items whose lookups failed anyway (their errors say why). */
+      wchar_t text[256];
+      if (g_view.offline) swprintf(text, 256, L"%ls", mc_wstr(MC_STR_IMPORT_OFFLINE));
+      else
+        mc_wformat(text, 256, mc_str_plural(MC_STR_IMPORT_UNREACHABLE_ITEMS, g_view.unreachable_count),
+                   MC_D(g_view.unreachable_count));
+      DrawTextW(dc, text, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
       SelectObject(dc, old_font);
       DeleteObject(icon_font);
       EndPaint(wnd, &ps);
@@ -287,6 +296,10 @@ static void skip_tagging(void) {
   SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, TRUE, 0); /* relayout without the banner */
 }
 
+static void retry_unreachable(void) {
+  if (g_view.imp) mc_import_retry_unreachable(g_view.imp); /* the items say how it went */
+}
+
 /* --- Session --- */
 
 static void on_import_event(void *user, mc_import_event ev, int arg) {
@@ -301,6 +314,9 @@ static void close_session(void) {
   g_view.imp = NULL;
   free(g_view.states);
   g_view.states = NULL;
+  free(g_view.unreachable);
+  g_view.unreachable = NULL;
+  g_view.unreachable_count = 0;
   g_view.item_count = 0;
   g_view.scanned_files = 0;
   g_view.offline = FALSE;
@@ -354,6 +370,14 @@ static void refresh_row(int idx) {
   mc_import_item *it;
   if (mc_import_item_get(g_view.imp, idx, &it) != MC_OK) return;
   g_view.states[idx] = it->state;
+  if (g_view.unreachable[idx] != (it->unreachable != 0)) {
+    g_view.unreachable[idx] = it->unreachable != 0;
+    int was = g_view.unreachable_count;
+    g_view.unreachable_count += it->unreachable ? 1 : -1;
+    if (!was != !g_view.unreachable_count)
+      SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, TRUE, 0); /* relayout: banner in or out */
+    else InvalidateRect(g_view.banner, NULL, TRUE); /* the count */
+  }
 
   HWND lv = g_view.list;
   LVITEMW li = {.mask = LVIF_GROUPID, .iItem = idx, .iGroupId = state_group(it->state)};
@@ -1126,7 +1150,8 @@ void import_view_on_event(WPARAM wp, LPARAM lp) {
     case MC_IMPORT_EV_SCANNED:
       g_view.item_count = mc_import_item_count(g_view.imp);
       g_view.states = calloc((size_t)g_view.item_count + 1, sizeof *g_view.states);
-      if (!g_view.states) g_view.item_count = 0;
+      g_view.unreachable = calloc((size_t)g_view.item_count + 1, sizeof *g_view.unreachable);
+      if (!g_view.states || !g_view.unreachable) g_view.item_count = 0;
       SendMessageW(g_view.list, WM_SETREDRAW, FALSE, 0);
       for (int i = 0; i < g_view.item_count; i++) {
         lv_append(g_view.list, i, GROUP_ACTIVE);
@@ -1166,6 +1191,7 @@ BOOL import_view_on_command(int id) {
     case ID_IMP_BROWSE: import_view_browse(); return TRUE;
     case ID_IMP_DONE: PostMessageW(g_view.parent, WM_APP_IMPORT_CLOSE, 0, 0); return TRUE;
     case ID_IMP_SKIP_TAGGING: skip_tagging(); return TRUE;
+    case ID_IMP_RETRY: retry_unreachable(); return TRUE;
     default: return FALSE;
   }
 }
@@ -1215,6 +1241,9 @@ void import_view_create(HWND parent, mc_library *lib) {
   g_view.skip_tagging = CreateWindowExW(0, WC_BUTTONW, mc_wstr_mnemonic(MC_STR_IMPORT_SKIP_TAGGING),
                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, g_view.banner,
                                         (HMENU)(INT_PTR)ID_IMP_SKIP_TAGGING, GetModuleHandleW(NULL), NULL);
+  g_view.retry = CreateWindowExW(0, WC_BUTTONW, mc_wstr_mnemonic(MC_STR_IMPORT_RETRY_UNREACHABLE),
+                                 WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, g_view.banner,
+                                 (HMENU)(INT_PTR)ID_IMP_RETRY, GetModuleHandleW(NULL), NULL);
   g_view.list = child(WC_LISTVIEWW, NULL, LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER,
                       ID_IMP_LIST);
   SendMessageW(g_view.list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
@@ -1246,7 +1275,7 @@ void import_view_set_library(mc_library *lib) {
 
 void import_view_set_font(HFONT font) {
   g_view.font = font;
-  HWND controls[] = {g_view.browse, g_view.status, g_view.done, g_view.list, g_view.skip_tagging};
+  HWND controls[] = {g_view.browse, g_view.status, g_view.done, g_view.list, g_view.skip_tagging, g_view.retry};
   for (size_t i = 0; i < sizeof controls / sizeof controls[0]; i++)
     SendMessageW(controls[i], WM_SETFONT, (WPARAM)font, TRUE);
   InvalidateRect(g_view.drop, NULL, TRUE);
@@ -1266,7 +1295,7 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi) {
 #define S(px) MulDiv((px), (int)dpi, USER_DEFAULT_SCREEN_DPI)
   int pad = S(16);
   BOOL session = g_view.imp != NULL;
-  BOOL banner = session && g_view.offline && !g_view.skipped_tags;
+  BOOL banner = session && (g_view.offline || g_view.unreachable_count) && !g_view.skipped_tags;
   g_view.dpi = dpi;
 
   int btn_w = S(88), btn_h = S(28);
@@ -1292,10 +1321,14 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_view.progress, x + pad, y + pad + btn_h + S(8), w - 2 * pad, S(6), TRUE);
   int list_y = y + pad + btn_h + S(22);
   if (banner) {
-    /* Offline: a banner across the top of the list, its button at the right. */
-    int banner_h = S(44), skip_w = S(180);
+    /* Offline: a banner across the top of the list, its buttons at the right; Retry only
+     * while there are items to retry. */
+    int banner_h = S(44), skip_w = S(180), retry_w = S(150);
+    int skip_x = w - 2 * pad - S(8) - skip_w;
     MoveWindow(g_view.banner, x + pad, list_y, w - 2 * pad, banner_h, TRUE);
-    MoveWindow(g_view.skip_tagging, w - 2 * pad - S(8) - skip_w, (banner_h - btn_h) / 2, skip_w, btn_h, TRUE);
+    MoveWindow(g_view.skip_tagging, skip_x, (banner_h - btn_h) / 2, skip_w, btn_h, TRUE);
+    MoveWindow(g_view.retry, skip_x - S(8) - retry_w, (banner_h - btn_h) / 2, retry_w, btn_h, TRUE);
+    ShowWindow(g_view.retry, g_view.unreachable_count ? SW_SHOW : SW_HIDE);
     InvalidateRect(g_view.banner, NULL, TRUE);
     list_y += banner_h + S(10);
   }

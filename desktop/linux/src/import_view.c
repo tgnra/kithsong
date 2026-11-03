@@ -89,7 +89,10 @@ struct import_view {
 
   GtkWidget *status, *progress;
   GtkWidget *banner; /* "You're offline", with Import Without Tagging */
+  GtkWidget *retry_banner; /* "3 items couldn't be looked up", with Retry MusicBrainz */
   gboolean offline, skipped_tags;
+  gboolean *unreachable; /* by item: in review because MusicBrainz couldn't be reached */
+  int unreachable_count;
   GtkWidget *groups[NUM_GROUPS], *lists[NUM_GROUPS];
 
   review *rev; /* open review dialog, if any */
@@ -232,9 +235,24 @@ static void on_import_event(void *user, mc_import_event ev, int arg) {
   g_idle_add(deliver_event, e);
 }
 
-/* The offline banner shows while MusicBrainz can't be reached, until its button is used. */
+/* The offline banner shows while MusicBrainz can't be reached, and the retry banner while
+ * items wait on it (their rows say why), until Import Without Tagging is used. */
 static void update_banner(import_view *v) {
-  if (v->root) adw_banner_set_revealed(ADW_BANNER(v->banner), v->imp && v->offline && !v->skipped_tags);
+  if (!v->root) return;
+  adw_banner_set_revealed(ADW_BANNER(v->banner), v->imp && v->offline && !v->skipped_tags);
+  gboolean retry = v->imp && v->unreachable_count && !v->skipped_tags;
+  if (retry) {
+    char text[256];
+    count_text(MC_STR_IMPORT_UNREACHABLE_ITEMS, v->unreachable_count, text, sizeof text);
+    adw_banner_set_title(ADW_BANNER(v->retry_banner), text);
+  }
+  adw_banner_set_revealed(ADW_BANNER(v->retry_banner), retry);
+}
+
+static void on_retry_unreachable(AdwBanner *banner, gpointer data) {
+  (void)banner;
+  import_view *v = data;
+  if (v->imp) mc_import_retry_unreachable(v->imp); /* the rows say how it went */
 }
 
 static void on_skip_tagging(AdwBanner *banner, gpointer data) {
@@ -267,6 +285,9 @@ static void close_session(import_view *v) {
   v->rows = NULL;
   g_free(v->states);
   v->states = NULL;
+  g_free(v->unreachable);
+  v->unreachable = NULL;
+  v->unreachable_count = 0;
   v->item_count = 0;
   v->scanned_files = 0;
   v->offline = FALSE;
@@ -330,6 +351,11 @@ static void refresh_row(import_view *v, int idx) {
   mc_import_item *it;
   if (mc_import_item_get(v->imp, idx, &it) != MC_OK) return;
   v->states[idx] = it->state;
+  if (v->unreachable[idx] != (it->unreachable != 0)) {
+    v->unreachable[idx] = it->unreachable != 0;
+    v->unreachable_count += it->unreachable ? 1 : -1;
+    update_banner(v);
+  }
   item_row *r = &v->rows[idx];
 
   const char *title = it->album        ? it->album
@@ -401,6 +427,7 @@ static void on_event(import_view *v, mc_import_event ev, int arg) {
     case MC_IMPORT_EV_SCANNED:
       v->item_count = mc_import_item_count(v->imp);
       v->states = g_new0(mc_import_state, (size_t)v->item_count + 1);
+      v->unreachable = g_new0(gboolean, (size_t)v->item_count + 1);
       v->rows = g_new0(item_row, (size_t)v->item_count + 1);
       for (int i = 0; i < v->item_count; i++) {
         new_item_row(v, i);
@@ -1372,9 +1399,14 @@ GtkWidget *import_view_new(mc_library *lib, const import_view_callbacks *cb) {
   adw_banner_set_use_markup(ADW_BANNER(v->banner), FALSE);
   adw_banner_set_button_label(ADW_BANNER(v->banner), mc_str_mnemonic(MC_STR_IMPORT_SKIP_TAGGING));
   g_signal_connect(v->banner, "button-clicked", G_CALLBACK(on_skip_tagging), v);
+  v->retry_banner = adw_banner_new("");
+  adw_banner_set_use_markup(ADW_BANNER(v->retry_banner), FALSE);
+  adw_banner_set_button_label(ADW_BANNER(v->retry_banner), mc_str_mnemonic(MC_STR_IMPORT_RETRY_UNREACHABLE));
+  g_signal_connect(v->retry_banner, "button-clicked", G_CALLBACK(on_retry_unreachable), v);
 
   GtkWidget *session = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_box_append(GTK_BOX(session), v->banner);
+  gtk_box_append(GTK_BOX(session), v->retry_banner);
   gtk_box_append(GTK_BOX(session), clamp);
   gtk_box_append(GTK_BOX(session), page);
 

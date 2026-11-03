@@ -60,9 +60,9 @@ void mc_tags_clear(mc_tags *tags);
  * returns its name in *out_name (free with mc_free). */
 mc_status mc_musicbrainz_ping(char **out_name);
 
-/* Cheap offline check: opens (and closes) a TCP connection to the MusicBrainz server,
- * waiting at most timeout_ms for the name lookup and the connection together, so broken DNS
- * can't hold it longer. MC_OK if it connected, MC_ERR_NET if not. Blocks.
+/* Cheap offline check: opens (and closes) a TCP connection to the MusicBrainz server, to all
+ * its addresses at once, waiting at most timeout_ms for the name lookup and the connection
+ * together, so broken DNS can't hold it longer. MC_OK if it connected, MC_ERR_NET if not. Blocks.
  * For testing, KITHSONG_MUSICBRAINZ_PROBE=host:port in the environment checks that address
  * instead, e.g. 127.0.0.1:1 to simulate being offline. */
 mc_status mc_musicbrainz_reachable(int timeout_ms);
@@ -113,23 +113,36 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * aren't looked up but go straight to MC_IMPORT_REVIEW ("Couldn't reach MusicBrainz"), so an
  * offline import doesn't wait on a timeout per item, and MC_IMPORT_EV_OFFLINE tells the
  * frontend, which can offer mc_import_skip_tagging(). The check is repeated every 30 s; once
- * MusicBrainz answers again the items waiting on it are matched after all.
+ * MusicBrainz answers again the items waiting on it are matched after all. An item whose
+ * lookups failed while the check still connects (MusicBrainz busy, a request timing out)
+ * stays in review the same way, until mc_import_retry_unreachable(). Either way the item's
+ * error says why when it's known ("Couldn't reach MusicBrainz: HTTP 503, MusicBrainz is
+ * busy"), and its unreachable is set. Cancelling (mc_import_free) gives up on a lookup or
+ * cover download in progress.
  *
  * Extended search. Albums often carry a label or circle in the album artist tag rather than
- * the artist ("SHARPNELSOUND"), and then the normal search (album title and album artist)
- * finds nothing, or nothing good. When the best candidate of an album or a one-file item (a
- * single, which may be a whole release such as a DJ mix) is below 75% confidence (or there is
- * none), the session searches more widely by itself before deciding: by the catalogue numbers
- * in its tags (CATALOGNUMBER, CATALOGID, ...) and in [brackets] in the album tag and the
- * folder name; by the album title with the artists found in "Label (Artist) - Title" folder
- * names, the album artist tag, the track artists and the file names; with the label (label
- * tags, or the name standing where the artist would); and by the title alone. At most 4
- * more searches and 6 more release lookups per album. Every release candidate is then
- * scored with the best fitting of those artists and titles; tracks, lengths and the rest
- * are scored as usual, and the same rules decide whether the best one is accepted (a
- * release candidate must be complete, for a single too). Above
- * 75%, mc_import_search_wider() runs it on request. It's skipped while MusicBrainz can't be
- * reached, and a network error ends it early (then searched_wider stays 0).
+ * the artist ("SHARPNELSOUND", "SHARPNELSOUND (m1dy)"), and then the normal search (album
+ * title and album artist) finds nothing, or nothing good. The session gathers other keys
+ * from the files and the folder name: the catalogue numbers in its tags (CATALOGNUMBER,
+ * CATALOGID, ...) and in [brackets] in the album tag and the folder name; the artists found
+ * in "Label (Artist) - Title" folder names, the album artist tag, the track artists and the
+ * file names; the label (label tags, or the name standing where the artist would); and the
+ * folder's title. Every release candidate, the normal search's too, is scored with the best
+ * fitting of those artists and titles (no requests needed); tracks, lengths and the rest are
+ * scored as usual, and the same rules decide whether the best one is accepted (a release
+ * candidate must be complete, for a single too). When the best candidate of an album or a
+ * one-file item (a single, which may be a whole release such as a DJ mix) is still below 75%
+ * confidence (or there is none), the session searches more widely by itself before
+ * deciding: by the catalogue numbers, by the album title with those artists, with the label,
+ * and by the title alone. At most 4 more searches and 6 more release lookups per album, and
+ * its candidates are scored the same way. Above 75%, mc_import_search_wider() runs it on
+ * request. It's skipped while MusicBrainz can't be reached, and a network error ends it early (then searched_wider stays 0); a lookup of the
+ * normal search that failed doesn't stop it while MusicBrainz can still be reached.
+ *
+ * Retries. A lookup that fails for a reason that passes (a dropped connection, a timeout,
+ * MusicBrainz busy) is tried again, waiting 2 s and then up to 30 s between tries, for as
+ * long as 10 minutes, unless the check finds MusicBrainz unreachable meanwhile: an item
+ * waits in MC_IMPORT_MATCHING rather than going to review because one connection failed.
  *
  * Duplicates. Before an accepted item is written, it is compared with the library (only
  * files from outside the library folder; files inside it are being re-filed, not added):
@@ -304,6 +317,7 @@ typedef struct mc_import_item {
   int match_count;
   int chosen;   /* index of the applied match; -1 if imported as-is or not yet decided */
   int searched_wider; /* the matches include an extended search's (see above) */
+  int unreachable; /* in review because MusicBrainz couldn't be reached (see "Offline") */
   char *error;  /* set when state is MC_IMPORT_FAILED; may say why it's in review or pending */
   mc_import_outcome outcome;
   int replaced_files;  /* files swapped for higher quality ones */
@@ -370,6 +384,12 @@ mc_status mc_import_search_wider(mc_import *imp, int item);
  * imported with their existing tags. Items that already have candidates stay in review, and
  * mc_import_search() still searches. For an offline import. */
 mc_status mc_import_skip_tagging(mc_import *imp);
+
+/* Matches again every item in review because MusicBrainz couldn't be reached (unreachable
+ * set), checking first whether MusicBrainz is back if the session found it offline. Those
+ * that still can't reach it go back to review with the new reason. Does nothing once tagging
+ * is skipped. Queued like the calls above. */
+mc_status mc_import_retry_unreachable(mc_import *imp);
 
 /* Whether the session last found MusicBrainz unreachable (see MC_IMPORT_EV_OFFLINE). */
 int mc_import_offline(mc_import *imp);

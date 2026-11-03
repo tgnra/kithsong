@@ -45,7 +45,7 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      the same title once the disc is taken off, each a different disc, in the same folder or
      folders side by side, they may be one album. Before they're matched, MusicBrainz is asked
      (one release search for the title and album artist, up to 3 lookups): a release with as
-     many discs as there are items, on which at least half of each item's files are paired
+     many discs as there are items (video discs aside, see Score), on which at least half of each item's files are paired
      with tracks of its own disc. If there is one, the items are joined into the first: its
      files are all of theirs, in disc order (a file with no disc tag takes its item's disc),
      its album is the title, its candidates those releases scored as usual, and the other
@@ -55,7 +55,7 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      reached, the items stay apart and are matched one by one. Two items claiming the same
      disc are never joined.
    - **other discs**: an album matched to a release with discs it has no files on (disc 1 of
-     2, say) waits rather than going to the user while items that may be those discs are
+     2, say; a video disc doesn't count) waits rather than going to the user while items that may be those discs are
      still to be matched: albums whose files carry the release's id, or whose title without
      a disc is the album's or the release's, with no more files than those discs have
      tracks. It shows as waiting ("Waiting for the album's other disc"). An item matched
@@ -73,7 +73,14 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    - albums: if every file carries the same `MUSICBRAINZ_ALBUMID`, look that release up;
      then search releases by album and artist (not by artist when it is "Various Artists")
      and look up the best 3. Hits are ranked by expected track count, then search score,
-     then earliest date, so the original release beats reissues.
+     then earliest date, so the original release beats reissues. The album title is searched
+     without bracketed edition notes and catalogue numbers ("SEX -Sound of EXtreme- (Promo
+     CDr)" as "SEX -Sound of EXtreme-"; also "(Limited Edition)", "(Comiket Version)",
+     "[Bonus Track Version]", "（初回限定盤）", "[SRPC-L007]"): a group goes if it has a word
+     such as promo, CD-R, limited, edition, version, bonus, reissue or remaster(ed), or 限定,
+     初回, 盤 or 版, or is a catalogue number (see [Extended search](#extended-search)). This
+     holds for every release search, the extended search's and a manual one's too; the
+     scoring still compares the whole title.
    - a one-file album also gets recording candidates, in case it is one track off a release.
    - singles: look up `MUSICBRAINZ_TRACKID` if present, then search recordings by title and
      artist (5 results). Each recording is credited to one of its releases (see
@@ -85,11 +92,46 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
 4. **Score** each candidate with a weighted distance, 0 to 1 (`match.c`):
    - strings are compared by normalised edit distance. Case, punctuation, common Latin
      accents, a leading "The" and `&`/"and" are ignored, and a bracketed or ` - ` suffix such
-     as "(2011 Remaster)" costs at most 0.1.
+     as "(2011 Remaster)" costs at most 0.1. Since punctuation is ignored, so are dashes and
+     tildes around part of a title ("SHARPNELSOUND COLLECTION -壱-" is "SHARPNELSOUND
+     COLLECTION 壱"), and so are hyphens inside words ("X-RATED", "J-CORE").
+   - a subtitle after a space and a tilde (`~`, `～`, `〜`: "HARDDRIVE 150BPM ～LIFE IS GAME")
+     or wrapped in dashes after a space ("S.E.X. -Sound of EXtreme-") is a suffix like
+     "(2011 Remaster)"; a hyphen with no space before it, or one that isn't closed, isn't.
+   - a translation added to a title costs at most 0.1: "アニメガバイト ANIME GABBA IT!" vs
+     "アニメガバイト". It is the words after a space that follows letters of one script (Latin,
+     Greek, Cyrillic, or CJK: kana, Han, Hangul), when every letter after it is in another
+     script. Only one of the two titles loses it, so two titles that share just their first
+     word stay apart. More words in the same script ("SPEEDCORE DANDY" vs "SPEEDCORE DANDY
+     XXX") or a number ("SPF INFINI 2", "アニメガバイト 2") are compared in full, as different
+     releases.
+   - DJ-mix markers at the end of a title are ignored, since the release's track titles
+     leave them out: "(Mixed)", "[Mixed]", " - Mixed", "(Mixed Version)", "(Mixed Edit)",
+     "(Mix Cut)" and "(Original Mix)", also as the last part of a bracket ("(Paul Copping
+     Remix - Mixed)" is "(Paul Copping Remix)"). A title that is only "Mixed" stays.
+   - digit 0 and letter O count as the same character ("H20" is "H2O").
    - per track: title 3, length 2 (no penalty within ±10 s, full penalty from ±30 s), track
      number 1 (per disc or straight through), artist 1.
    - per release: album title 5, album artist 5, mean track distance 6, fraction of release
-     tracks with no file 10, fraction of files with no track 6, year 0.5.
+     tracks with no file 10, fraction of files with no track 6, year 0.5. The album title and
+     artist are whichever fit the release best among the item's own and the
+     [extended search](#extended-search)'s keys, so an album artist tag such as
+     "SHARPNELSOUND (m1dy)" doesn't cost a release by "m1dy" anything. This needs no requests
+     and is done for every release candidate before the confirm step, extended search or not.
+   - a **compilation**, a release whose credit includes Various Artists (MusicBrainz's
+     special artist, or "Various Artists" or "V.A." by name), alone or beside others ("DJ
+     SHARPNEL & V.A."), has no album artist part: its album artist tag usually names the
+     label, the circle or the DJ, and the track artists are scored anyway.
+   - **video tracks** are left out when the release has audio tracks too: those on a video
+     medium (any format with "Video" in it, such as "DVD-Video", "DVD-R Video" or the
+     DVD-Video side of a DualDisc; "Blu-ray", "Blu-ray-R", "HD-DVD", "VCD", "SVCD", "UMD",
+     LaserDiscs, "VHS", "VHD", "Betamax", "CED"; a plain "DVD" when any of its recordings is
+     flagged as a video), and any recording flagged as a video. No file is paired with one,
+     and one with no file isn't missing, so a CD + DVD-Video release matches the CD's files
+     fully. They stay in the release otherwise: the review lists them, a file can be made
+     one with Use as Track N, and the tags keep MusicBrainz's numbering, so the CD's files
+     are `DISCNUMBER` 1/2 and named `1-01 Title`. A release that is all video (the sound of a
+     concert DVD) is scored as usual.
    - per recording: title 3, artist 3, length 2.
    - ties go to the earliest original release.
 5. **Assign** files to release tracks with the Hungarian algorithm over the per-track
@@ -169,14 +211,17 @@ among the candidates aren't looked up again.
 **Scoring** is the normal one (tracks, lengths, track numbers, missing and extra files all
 count as before), except that the album title and album artist parts use whichever fits the
 release best among the item's own, the keys' titles and artists, and "Various Artists" for a
-compilation. Every release candidate is rescored this way, including the normal search's.
+compilation. Every release candidate is scored this way, the normal search's too, whether or
+not the extended search runs: the keys are gathered from the files and the folder name, so
+it costs no requests, and a release the normal search found with a label in the album artist
+tag is accepted if it is otherwise complete and right.
 "V.A." as a release artist counts as Various Artists.
 
-**When**: automatically for an album or a one-file item whose best candidate is below **75%**
-confidence, or that has none. The threshold comes from the scoring: the album artist is 5 of the release
-distance's 32.5 weight units, so the right release with a wrong album artist tag loses at
-most about 15 points and still scores around 85-90%; below 75%, the title, a quarter of the
-tracks or more, or both disagree too, which means the wrong release. Results are treated
+**When**: automatically for an album or a one-file item whose best candidate, scored as above,
+is below **75%** confidence, or that has none. The threshold comes from the scoring: the album artist is 5 of the release
+distance's 32.5 weight units, so the right release with a wrong album artist tag that no key
+corrects loses at most about 15 points and still scores around 85-90%; below 75%, the title,
+a quarter of the tracks or more, or both disagree too, which means the wrong release. Results are treated
 like the normal search's: the same threshold and completeness rules decide whether the best
 one is accepted. Above 75% but not accepted, the review offers **Search more widely**, which
 runs the same search on request; its results join the candidates and are never accepted by

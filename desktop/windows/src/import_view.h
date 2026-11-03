@@ -17,9 +17,11 @@
  * missing track and a file (Ctrl+click) and choosing Use as Track N from the right-click menu
  * makes the file that track (mc_import_assign), in review or already imported. Folders can be
  * dropped anywhere on the window.
- * While MusicBrainz can't be reached, a banner above the list says so and offers Import
- * Without Tagging (mc_import_skip_tagging); it goes away once MusicBrainz answers again or
- * it's used.
+ * While MusicBrainz can't be reached, or items are waiting because their lookups failed, a
+ * banner above the list says so and offers Retry MusicBrainz (mc_import_retry_unreachable,
+ * while there are such items) and Import Without Tagging (mc_import_skip_tagging); it goes
+ * away once nothing is waiting on MusicBrainz, or Import Without Tagging is used. Each
+ * item's error says why its lookups failed.
  */
 #ifndef KITHSONG_IMPORT_VIEW_H
 #define KITHSONG_IMPORT_VIEW_H

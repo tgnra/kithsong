@@ -31,6 +31,7 @@ typedef struct mb_track {
   int disc;
   int number;
   int length_ms;
+  int video; /* a video: its recording is flagged as one, or it's on a video medium (DVD-Video) */
 } mb_track;
 
 /* A release with its tracklist. A recording found for a loose track is represented as a
@@ -68,10 +69,36 @@ void mb_release_clear(mb_release *rel);
 /* Called from mc_init(). */
 void mc_musicbrainz_global_init(void);
 
+/* What a caller's lookups share, passed as call to the functions below (NULL: nothing).
+ * cancel (NULL: never) gives a lookup up, waiting for the rate limit and retries included,
+ * as if offline (MC_ERR_NET). A lookup that fails for a reason that passes (a dropped
+ * connection, MusicBrainz busy) is retried, for minutes if need be, unless MusicBrainz
+ * can't be reached at all (musicbrainz.c). When a lookup fails with MC_ERR_NET other than by
+ * being cancelled, why receives the reason in English: "HTTP 503, MusicBrainz is busy", or
+ * what went wrong with the connection. */
+typedef struct mb_call {
+  const mc_http_cancel *cancel;
+  char why[160];
+} mb_call;
+
+/* mc_musicbrainz_reachable() that cancel (NULL: never) can give up on, and that, when
+ * MusicBrainz can't be reached, puts why in why (if why_len isn't 0), in English. */
+mc_status mb_reachable_why(int timeout_ms, const mc_http_cancel *cancel, char *why, size_t why_len);
+
+/* With KITHSONG_TAGGER_TRACE set (and not "0"), what the importer does is written to stderr:
+ * every MusicBrainz request, and each item's tags, candidates and decision. For working out
+ * why a release was matched as it was. mb_trace() writes one line when it's on. */
+int mb_tracing(void);
+#if defined(__GNUC__)
+__attribute__((format(printf, 1, 2)))
+#endif
+void mb_trace(const char *fmt, ...);
+
 /* Release ids for an artist/album search, most relevant first. Releases whose track count
- * equals track_count (if > 0) are moved to the front. artist may be NULL. */
+ * equals track_count (if > 0) are moved to the front. artist may be NULL. The album is
+ * searched without its edition notes (mc_search_title). */
 mc_status mb_search_releases(const char *artist, const char *album, int track_count,
-                             char (*ids)[MC_UID_STRLEN], int max, int *n);
+                             char (*ids)[MC_UID_STRLEN], int max, int *n, mb_call *call);
 
 /* A release search by any of: title, artist, label names (any of them) and catalogue
  * numbers (any of them). Fields left NULL / 0 aren't searched; at least one must be set. */
@@ -86,22 +113,19 @@ typedef struct mb_release_query {
 
 /* Like mb_search_releases, with the fields of q. */
 mc_status mb_search_releases_by(const mb_release_query *q, int track_count,
-                                char (*ids)[MC_UID_STRLEN], int max, int *n);
+                                char (*ids)[MC_UID_STRLEN], int max, int *n, mb_call *call);
 
 /* Full release with tracklist, artist credits, label and release group. */
-mc_status mb_lookup_release(const char *id, mb_release *out);
-/* The same, given up (MC_ERR_NET) once cancel says so, waiting for the rate limit included.
- * cancel may be NULL. */
-mc_status mb_lookup_release_cancel(const char *id, mb_release *out, const mc_http_cancel *cancel);
+mc_status mb_lookup_release(const char *id, mb_release *out, mb_call *call);
 
 /* Recordings matching artist/title (artist may be NULL), each as a one-track release. When
  * a recording has several releases, the earliest official single is preferred, else the
  * earliest release. *n receives the number filled; free each with mb_release_clear(). */
 mc_status mb_search_recordings(const char *artist, const char *title, mb_release *out, int max,
-                               int *n);
+                               int *n, mb_call *call);
 
 /* One recording by id, as a one-track release (see mb_search_recordings). */
-mc_status mb_lookup_recording(const char *id, mb_release *out);
+mc_status mb_lookup_recording(const char *id, mb_release *out, mb_call *call);
 
 /* For tests: answers the lookups above instead of musicbrainz.org, without the rate limit,
  * until set back to NULL. A NULL function finds nothing. While a fake is set,

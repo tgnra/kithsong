@@ -27,11 +27,12 @@
 /* Called from mc_init(). */
 void mc_coverart_global_init(void);
 
-/* Downloads a front cover. Any argument may be NULL. On success *img holds JPEG or PNG
- * bytes (free with mc_buffer_free) and *ext is "jpg" or "png". */
+/* Downloads a front cover. Any of the ids and names may be NULL. On success *img holds JPEG
+ * or PNG bytes (free with mc_buffer_free) and *ext is "jpg" or "png". cancel (NULL: never)
+ * gives up on it, as for mc_http_get_cancel(). */
 mc_status mc_coverart_fetch(const char *mb_albumid, const char *mb_releasegroupid,
                             const char *artist, const char *album, mc_buffer *img,
-                            const char **ext);
+                            const char **ext, const mc_http_cancel *cancel);
 
 /* Saves the image as <dir>/cover.<ext>, replacing any older one. */
 mc_status mc_coverart_save(const char *dir, const mc_buffer *img, const char *ext);

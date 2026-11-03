@@ -5,6 +5,7 @@
 #include <curl/curl.h>
 
 #include "config.h"
+#include "net/http.h"
 #include "tagger/coverart.h"
 #include "tagger/musicbrainz.h"
 #include "tagger/refresh.h"
@@ -35,6 +36,7 @@ const char *mc_status_str(mc_status status) {
 
 mc_status mc_init(void) {
   if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) return MC_ERR_NET;
+  mc_http_global_init();
   mc_musicbrainz_global_init();
   mc_coverart_global_init();
   mc_refresh_global_init();
@@ -42,6 +44,7 @@ mc_status mc_init(void) {
 }
 
 void mc_shutdown(void) {
+  mc_http_global_cleanup();
   curl_global_cleanup();
 }
 

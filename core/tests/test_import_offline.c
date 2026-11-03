@@ -4,7 +4,9 @@
  * tagging then imports them all with their existing tags, and that a session started with
  * skip_tagging imports everything without checking at all. A picture embedded in a file is
  * written out as the album's cover.jpg. Two albums in one folder whose names differ only in
- * their last character stay two items. */
+ * their last character stay two items. Items say why MusicBrainz couldn't be reached, and
+ * mc_import_retry_unreachable() looks them up again, also those whose lookups failed while
+ * the check still connected (a fake MusicBrainz that fails, then answers). */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L /* setenv */
 #endif
@@ -17,6 +19,7 @@
 #include "musiccore/i18n.h"
 #include "musiccore/musiccore.h"
 #include "net/socket.h"
+#include "tagger/musicbrainz.h"
 #include "util/platform.h"
 #include "test.h"
 
@@ -130,16 +133,66 @@ typedef struct events {
   mc_mutex lock;
   int offline_events;
   int offline; /* the last OFFLINE event's arg */
+  int changed; /* ITEM_CHANGED events */
 } events;
 
 static void on_event(void *user, mc_import_event ev, int arg) {
   events *e = user;
-  if (ev != MC_IMPORT_EV_OFFLINE) return;
+  if (ev != MC_IMPORT_EV_OFFLINE && ev != MC_IMPORT_EV_ITEM_CHANGED) return;
   mc_mutex_lock(&e->lock);
-  e->offline_events++;
-  e->offline = arg;
+  if (ev == MC_IMPORT_EV_ITEM_CHANGED) {
+    e->changed++;
+  } else {
+    e->offline_events++;
+    e->offline = arg;
+  }
   mc_mutex_unlock(&e->lock);
 }
+
+static int changed_count(events *e) {
+  mc_mutex_lock(&e->lock);
+  int n = e->changed;
+  mc_mutex_unlock(&e->lock);
+  return n;
+}
+
+/* Waits until the session has items and every one is in review with unreachable as given,
+ * or timeout_ms passes. */
+static int wait_review(mc_import *imp, int unreachable, uint32_t timeout_ms) {
+  uint64_t deadline = mc_mono_ms() + timeout_ms;
+  while (mc_mono_ms() < deadline) {
+    int n = mc_import_item_count(imp), match = 0;
+    for (int i = 0; i < n; i++) {
+      mc_import_item *it;
+      if (mc_import_item_get(imp, i, &it) != MC_OK) continue;
+      match += it->state == MC_IMPORT_REVIEW && !it->unreachable == !unreachable;
+      mc_import_item_free(it);
+    }
+    if (n > 0 && match == n) return n;
+    mc_sleep_ms(20);
+  }
+  return 0;
+}
+
+/* --- A MusicBrainz that fails until told otherwise --- */
+
+static volatile int g_mb_failing;
+
+static mc_status fail_search(const char *artist, const char *album, int track_count,
+                             char (*ids)[MC_UID_STRLEN], int max, int *n) {
+  (void)artist, (void)album, (void)track_count, (void)ids, (void)max;
+  *n = 0;
+  return g_mb_failing ? MC_ERR_NET : MC_OK;
+}
+
+static mc_status fail_recordings(const char *artist, const char *title, mb_release *out, int max,
+                                 int *n) {
+  (void)artist, (void)title, (void)out, (void)max;
+  *n = 0;
+  return g_mb_failing ? MC_ERR_NET : MC_OK;
+}
+
+static const mb_fake k_failing = {fail_search, NULL, fail_recordings, NULL, NULL};
 
 /* Waits until the session has items and every one is in state, or timeout_ms passes. */
 static int wait_all(mc_import *imp, mc_import_state state, uint32_t timeout_ms) {
@@ -234,13 +287,28 @@ int main(int argc, char **argv) {
     mc_mutex_lock(&ev.lock);
     CHECK(ev.offline_events == 1 && ev.offline == 1);
     mc_mutex_unlock(&ev.lock);
+    /* Each says why: nothing answered on the probed address. */
+    char want[256];
+    mc_format(want, sizeof want, mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE_WHY), MC_S("x"));
+    want[strlen(want) - 1] = '\0'; /* the text before the reason */
     for (int i = 0; i < 2; i++) {
       mc_import_item *it;
       CHECK(mc_import_item_get(imp, i, &it) == MC_OK);
-      CHECK_STR(it->error, mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE));
+      CHECK(it->error && strncmp(it->error, want, strlen(want)) == 0);
+      CHECK(it->error && strstr(it->error, "127.0.0.1"));
+      CHECK(it->unreachable == 1);
       CHECK(it->match_count == 0);
       mc_import_item_free(it);
     }
+
+    /* Retrying while still offline checks again, and they're back in review for it. */
+    int changed = changed_count(&ev);
+    CHECK(mc_import_retry_unreachable(imp) == MC_OK);
+    uint64_t until = mc_mono_ms() + 10000;
+    while (changed_count(&ev) < changed + 2 && mc_mono_ms() < until) mc_sleep_ms(20);
+    CHECK(changed_count(&ev) >= changed + 2);
+    CHECK(wait_review(imp, 1, 5000) == 2);
+    CHECK(mc_import_offline(imp) == 1);
 
     CHECK(mc_import_skip_tagging(imp) == MC_OK);
     CHECK(wait_all(imp, MC_IMPORT_DONE, 20000) == 2);
@@ -258,6 +326,37 @@ int main(int argc, char **argv) {
   snprintf(path, sizeof path, "%s/Nobody/Offline Album/cover.jpg", lib1);
   CHECK(file_equals(path, k_jpeg, sizeof k_jpeg));
   CHECK(album_has_art(lib, "Offline Album"));
+  mc_library_close(lib);
+
+  /* Lookups failing while MusicBrainz still connects (busy, say): the items wait in review
+   * as unreachable without the session going offline, and a retry once it answers matches
+   * them (no candidates on this fake, so they stay in review for that). */
+  char lib4[1100];
+  snprintf(lib4, sizeof lib4, "%s/lib4", root);
+  CHECK(mc_mkdirs(lib4) == MC_OK);
+  mb_set_fake(&k_failing); /* reachable while it's set */
+  g_mb_failing = 1;
+  ev.offline_events = 0;
+  lib = NULL;
+  imp = NULL;
+  CHECK(mc_library_open(lib4, &lib) == MC_OK);
+  CHECK(lib && mc_import_start(lib, paths, 1, &opts, on_event, &ev, &imp) == MC_OK);
+  if (imp) {
+    CHECK(wait_review(imp, 1, 20000) == 2);
+    CHECK(mc_import_offline(imp) == 0);
+    g_mb_failing = 0;
+    CHECK(mc_import_retry_unreachable(imp) == MC_OK);
+    CHECK(wait_review(imp, 0, 20000) == 2);
+    for (int i = 0; i < 2; i++) {
+      mc_import_item *it;
+      CHECK(mc_import_item_get(imp, i, &it) == MC_OK);
+      CHECK_STR(it->error, mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES));
+      mc_import_item_free(it);
+    }
+    mc_import_free(imp);
+  }
+  CHECK(ev.offline_events == 0);
+  mb_set_fake(NULL);
   mc_library_close(lib);
 
   /* skip_tagging from the start: imported as-is, no check, no OFFLINE event. */
@@ -300,6 +399,7 @@ int main(int argc, char **argv) {
 
   /* Bad arguments. */
   CHECK(mc_import_skip_tagging(NULL) == MC_ERR_INVALID_ARG);
+  CHECK(mc_import_retry_unreachable(NULL) == MC_ERR_INVALID_ARG);
   CHECK(mc_import_offline(NULL) == 0);
 
   mc_mutex_destroy(&ev.lock);

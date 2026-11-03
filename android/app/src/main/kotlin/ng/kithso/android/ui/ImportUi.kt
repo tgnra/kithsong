@@ -150,7 +150,8 @@ fun ImportButton(running: Boolean, pickers: ImportPickers) {
 
 /**
  * How the import is going, under the main screen's header: what it's doing, a progress bar,
- * and a way to cancel; the offline banner, with a way to import without tagging; the items
+ * and a way to cancel; the offline banner, with ways to retry MusicBrainz and to import without
+ * tagging (also shown while items couldn't be looked up though it's reachable); the items
  * with no sure match, to review one by one or settle all at once; then a summary with what
  * failed, until dismissed.
  */
@@ -184,14 +185,20 @@ fun ImportCard(progress: ImportProgress, importer: Importer, modifier: Modifier 
                     LinearProgressIndicator(progress = { progress.settled.toFloat() / progress.items.coerceAtLeast(1) }, modifier = bar)
                 else -> Unit
             }
-            if (progress.offline) {
+            if (progress.offline || progress.unreachable > 0) {
                 Text(
-                    stringResource(R.string.import_offline),
+                    if (progress.offline) stringResource(R.string.import_offline)
+                    else pluralStringResource(R.plurals.import_unreachable_items, progress.unreachable, progress.unreachable),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 12.dp, end = 8.dp),
                 )
-                TextButton(onClick = importer::skipTagging) { Text(stringResource(R.string.import_skip_tagging)) }
+                FlowRow {
+                    if (progress.unreachable > 0) {
+                        TextButton(onClick = importer::retryUnreachable) { Text(stringResource(R.string.import_retry_unreachable)) }
+                    }
+                    TextButton(onClick = importer::skipTagging) { Text(stringResource(R.string.import_skip_tagging)) }
+                }
             }
             for (problem in progress.problems.take(MAX_PROBLEMS)) {
                 Text(

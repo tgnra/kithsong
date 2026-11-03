@@ -36,7 +36,7 @@
 #define KEY_LOOSE "artist_refresh_loose"
 #define KEY_FILES "artist_refresh_files"
 
-#define PROBE_TIMEOUT_MS 3000
+#define PROBE_TIMEOUT_MS 8000 /* as the import's (tagger.c) */
 #define BUSY_WAIT_MS 5000 /* as long as mc_library_open() waits for a lock */
 
 struct mc_refresh {
@@ -739,6 +739,7 @@ static mc_status retag_pending(mc_refresh *r, mc_library *lib) {
 static mc_status step_mb(mc_refresh *r, mc_library *lib, char cursor[MC_UID_STRLEN], int *offline) {
   int probed = 0;
   mc_http_cancel cancel = {http_cancelled, r};
+  mb_call call = {&cancel, ""};
   for (;;) {
     if (stopping(r)) return MC_OK;
     char uid[MC_UID_STRLEN], mbid[MC_UID_STRLEN];
@@ -751,13 +752,13 @@ static mc_status step_mb(mc_refresh *r, mc_library *lib, char cursor[MC_UID_STRL
     }
     if (!probed) {
       probed = 1;
-      if (mc_musicbrainz_reachable(PROBE_TIMEOUT_MS) != MC_OK) {
-        *offline = 1;
+      if (mb_reachable_why(PROBE_TIMEOUT_MS, &cancel, NULL, 0) != MC_OK) {
+        if (!stopping(r)) *offline = 1;
         return MC_OK;
       }
     }
     mb_release rel;
-    st = mb_lookup_release_cancel(mbid, &rel, &cancel);
+    st = mb_lookup_release(mbid, &rel, &call);
     if (st == MC_ERR_NET) {
       mb_release_clear(&rel);
       if (!stopping(r)) *offline = 1;

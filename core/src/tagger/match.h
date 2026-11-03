@@ -8,8 +8,10 @@
 #include "tagger/musicbrainz.h"
 
 /* Normalised edit distance. Ignores case, punctuation, common Latin accents, a leading
- * "The" and, if that brings the strings closer, bracketed suffixes like "(Remastered)".
- * Returns -1 if either string is missing, meaning "unknown, don't count it". */
+ * "The", DJ-mix markers like "(Mixed)", digit 0 for letter O and, if that brings the strings
+ * closer, suffixes like "(Remastered)" or "～Subtitle" and a translation added to one of them
+ * (each at a cost of 0.1). Returns -1 if either string is missing, meaning "unknown, don't
+ * count it". */
 double mc_string_distance(const char *a, const char *b);
 
 /* Distance between one file and one release track. */
@@ -20,9 +22,14 @@ double mc_track_distance(const mc_tags *file, const mb_track *track, int abs_ind
  * possible when rows > cols). */
 mc_status mc_assign(const double *cost, int rows, int cols, int *out);
 
+/* Whether release track i is left out when scoring audio files: a video (a DVD-Video's
+ * tracks, say) on a release that has audio tracks too. A left-out track isn't missing when
+ * no file has it, and mc_score_release pairs no file with it. */
+int mc_track_left_out(const mb_release *rel, int i);
+
 typedef struct mc_release_score {
   double distance;
-  int missing; /* release tracks with no file */
+  int missing; /* release tracks with no file, left-out ones aside */
   int extra;   /* files with no release track */
 } mc_release_score;
 

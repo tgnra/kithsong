@@ -18,7 +18,9 @@
  * review dialog, where the user picks a candidate, searches again, keeps the existing tags or
  * skips it. A session lasts from the start of an import until Done.
  * While MusicBrainz can't be reached, a banner says so and offers Import Without Tagging
- * (mc_import_skip_tagging); it goes away once MusicBrainz answers again or it's used.
+ * (mc_import_skip_tagging); it goes away once MusicBrainz answers again or it's used. While
+ * items wait because their lookups failed (each row says why), another offers Retry
+ * MusicBrainz (mc_import_retry_unreachable).
  *
  * Wiring it into main.c:
  *

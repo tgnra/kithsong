@@ -37,6 +37,13 @@ void mc_listener_close(mc_listener *l);
  * lookup too: a lookup still running when it passes is left to finish on a thread of its
  * own. */
 mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_socket **out);
+/* Whether host accepts a connection on port: MC_OK once one of its addresses does (up to four
+ * are tried at once, then closed), else MC_ERR_NET. timeout_ms (not -1) covers the name lookup
+ * too. cancelled (NULL: never) is asked every 100 ms; once it says so the probe gives up
+ * (MC_ERR_NET). Otherwise, on MC_ERR_NET, why (if why_len isn't 0) says why in English: the
+ * lookup failed or took too long, or no address answered. */
+mc_status mc_socket_probe(const char *host, uint16_t port, int timeout_ms,
+                          int (*cancelled)(void *user), void *user, char *why, size_t why_len);
 /* For tests: each name lookup (not an address literal) first waits this long, as a network
  * with broken DNS would make it. */
 extern uint32_t mc_socket_test_lookup_delay_ms;

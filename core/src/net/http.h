@@ -16,6 +16,11 @@ typedef struct mc_buffer {
 
 void mc_buffer_free(mc_buffer *buf);
 
+/* Called from mc_init() and mc_shutdown(): what requests share (connections kept open, TLS
+ * sessions, name lookups). */
+void mc_http_global_init(void);
+void mc_http_global_cleanup(void);
+
 /* Percent-encodes s for use in a URL query (RFC 3986 unreserved characters pass through).
  * Returns a malloc'd string, or NULL on allocation failure. */
 char *mc_url_escape(const char *s);
@@ -32,9 +37,11 @@ typedef struct mc_http_cancel {
 /* GET url into *body. *http_status receives the HTTP status code (may be NULL).
  * Transport failures return MC_ERR_NET; any HTTP status counts as success. */
 mc_status mc_http_get(const char *url, mc_buffer *body, long *http_status);
-/* mc_http_get() that cancel (NULL: none) can give up on. */
+/* mc_http_get() that cancel (NULL: none) can give up on. When it fails with MC_ERR_NET, other
+ * than by being cancelled, why (if why_len isn't 0) receives curl's reason in English, e.g.
+ * "Could not resolve host: musicbrainz.org". */
 mc_status mc_http_get_cancel(const char *url, mc_buffer *body, long *http_status,
-                             const mc_http_cancel *cancel);
+                             const mc_http_cancel *cancel, char *why, size_t why_len);
 
 /* POSTs form (application/x-www-form-urlencoded, already escaped) to url; otherwise as
  * mc_http_get(). cancel may be NULL. */

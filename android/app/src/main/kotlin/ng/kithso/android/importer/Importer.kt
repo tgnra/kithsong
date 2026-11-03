@@ -69,6 +69,8 @@ data class ImportProgress(
     val failed: Int = 0,
     /** MusicBrainz can't be reached: items wait for a decision without a lookup. */
     val offline: Boolean = false,
+    /** Items waiting for a decision because MusicBrainz couldn't be reached, offline or not. */
+    val unreachable: Int = 0,
     /** Tagging was skipped, so everything is imported with the tags it has. */
     val taggingSkipped: Boolean = false,
     /** The items waiting for a decision, in order. */
@@ -265,6 +267,19 @@ class Importer(
                 }
             }
             publish()
+        }
+    }
+
+    /** Looks up again everything that couldn't reach MusicBrainz, in every batch. */
+    fun retryUnreachable() {
+        scope.launch(thread) {
+            for (batch in batches) {
+                try {
+                    batch.session?.retryUnreachable()
+                } catch (e: MusicCoreException) {
+                    Log.w(TAG, "Couldn't retry MusicBrainz", e)
+                }
+            }
         }
     }
 
@@ -568,10 +583,16 @@ class Importer(
             skipped = counts[CoreImport.State.Skipped] ?: 0,
             failed = counts[CoreImport.State.Failed] ?: 0,
             offline = !skipTagging && batches.any { !it.closed && it.offline },
+            unreachable = if (skipTagging) 0 else unreachableCount(),
             taggingSkipped = skipTagging,
             reviewItems = reviewEntries(),
             problems = copyProblems + failures(),
         )
+    }
+
+    private fun unreachableCount(): Int = batches.sumOf { batch ->
+        val session = batch.session ?: return@sumOf 0
+        batch.states.indices.count { batch.states[it] == CoreImport.State.Review && session.itemUnreachable(it) }
     }
 
     private fun reviewEntries(): List<ReviewEntry> = batches.flatMap { batch ->

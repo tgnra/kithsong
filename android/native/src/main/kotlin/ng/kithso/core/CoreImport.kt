@@ -100,6 +100,9 @@ class CoreImport(
      */
     fun itemError(item: Int): String? = nativeItemError(handle, item)
 
+    /** Whether the item is in review because MusicBrainz couldn't be reached; [itemError] says why. */
+    fun itemUnreachable(item: Int): Boolean = nativeItemUnreachable(handle, item)
+
     fun itemInfo(item: Int): ItemInfo {
         val f = nativeItemInfo(handle, item)
         return ItemInfo(
@@ -154,6 +157,12 @@ class CoreImport(
     /** Imports everything not matched yet with its existing tags, for an offline import. */
     fun skipTagging() = nativeSkipTagging(handle)
 
+    /**
+     * Looks up again every item in review because MusicBrainz couldn't be reached, checking
+     * first whether it's back if the session found it offline.
+     */
+    fun retryUnreachable() = nativeRetryUnreachable(handle)
+
     /** Whether MusicBrainz was unreachable at the last check (see [Event.Offline]). */
     val offline: Boolean get() = nativeOffline(handle)
 
@@ -189,12 +198,14 @@ class CoreImport(
         @JvmStatic external fun nativeItemState(handle: Long, item: Int): Int
         @JvmStatic external fun nativeItemName(handle: Long, item: Int): String
         @JvmStatic external fun nativeItemError(handle: Long, item: Int): String?
+        @JvmStatic external fun nativeItemUnreachable(handle: Long, item: Int): Boolean
         @JvmStatic external fun nativeItemInfo(handle: Long, item: Int): Array<String>
         @JvmStatic external fun nativeItemMatches(handle: Long, item: Int): Array<String>
         @JvmStatic external fun nativeResolve(handle: Long, item: Int, how: Int)
         @JvmStatic external fun nativeAccept(handle: Long, item: Int, match: Int)
         @JvmStatic external fun nativeSearch(handle: Long, item: Int, artist: String?, title: String?)
         @JvmStatic external fun nativeSkipTagging(handle: Long)
+        @JvmStatic external fun nativeRetryUnreachable(handle: Long)
         @JvmStatic external fun nativeOffline(handle: Long): Boolean
     }
 }

@@ -449,9 +449,12 @@
     "import_as_tagged": "_Keep existing tags",
     "import_use_match": "_Use this match",
     "import_offline": { "text": "You're offline, so music can't be tagged from MusicBrainz until you're back online.", "note": "Banner on the Import page when the internet (MusicBrainz, the online music database used to tag files) can't be reached." },
+    "import_unreachable_items": { "one": "{0:d} item couldn't be looked up on MusicBrainz.", "other": "{0:d} items couldn't be looked up on MusicBrainz.", "note": "Banner on the Import page while MusicBrainz (the online music database used to tag files) is reachable again, but some albums or tracks failed to be looked up on it, e.g. because it was busy. Each item says why." },
+    "import_retry_unreachable": { "text": "_Retry MusicBrainz", "note": "Button on the Import page, shown while some albums couldn't be looked up because MusicBrainz (the online music database used to tag files) couldn't be reached: looks them all up again." },
     "import_skip_tagging": { "text": "Import _without tagging", "note": "Button on the offline banner: imports the remaining items with the tags their files already have, without looking them up on MusicBrainz." },
 
     "import_error_unreachable": "Couldn't reach MusicBrainz",
+    "import_error_unreachable_why": { "text": "Couldn't reach MusicBrainz: {0}", "note": "Why an album is waiting in the import review. {0} is the technical reason, always in English, e.g. \"HTTP 503, MusicBrainz is busy\" or \"no connection to musicbrainz.org within 3000 ms (2 addresses tried)\"." },
     "import_error_no_matches": "No matches on MusicBrainz",
     "import_error_nomem": "Out of memory",
     "import_error_no_files": "No files matched this release",

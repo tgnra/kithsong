@@ -742,6 +742,27 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeSkipTagging(JNIEnv *
   if (st != MC_OK) throw_status(env, st);
 }
 
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeRetryUnreachable(JNIEnv *env, jclass cls,
+                                                                            jlong handle) {
+  (void)cls;
+  mc_status st = mc_import_retry_unreachable(import_of(handle));
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreImport_nativeItemUnreachable(JNIEnv *env, jclass cls,
+                                                                              jlong handle, jint item) {
+  (void)cls;
+  mc_import_item *it = NULL;
+  mc_status st = mc_import_item_get(import_of(handle), item, &it);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return JNI_FALSE;
+  }
+  jboolean unreachable = it->unreachable ? JNI_TRUE : JNI_FALSE;
+  mc_import_item_free(it);
+  return unreachable;
+}
+
 JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreImport_nativeOffline(JNIEnv *env, jclass cls,
                                                                        jlong handle) {
   (void)env;
