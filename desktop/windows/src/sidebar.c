@@ -1032,7 +1032,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       BOOL playlists = s.rows[i].page == PAGE_PLAYLISTS;
       HMENU menu = CreatePopupMenu();
       AppendMenuW(menu, MF_STRING, 1,
-                  mc_wstr_mnemonic(playlists ? MC_STR_WINDOWS_SMART_NEW_PLAYLIST_MENU : MC_STR_WINDOWS_SMART_NEW_GROUP_MENU));
+                  mc_wstr_mnemonic(playlists ? MC_STR_SMART_NEW_PLAYLIST_MENU : MC_STR_SMART_NEW_GROUP_MENU));
       int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, wnd, NULL);
       DestroyMenu(menu);
       if (cmd == 1)

@@ -959,7 +959,7 @@ static const wchar_t *header_label(int part) {
   if (part == PART_RESHUFFLE) return mc_wstr(MC_STR_RESHUFFLE);
   if (g.tiles_view == AGV_PLAYLISTS) return mc_wstr(MC_STR_NEW_PLAYLIST);
   if (g.tiles_view == AGV_GROUPS) return mc_wstr(MC_STR_NEW_ALBUM_GROUP);
-  return mc_wstr(g.group_smart ? MC_STR_WINDOWS_SMART_GROUP_MENU : MC_STR_ALBUM_GROUP_MENU);
+  return mc_wstr(g.group_smart ? MC_STR_SMART_GROUP_MENU : MC_STR_ALBUM_GROUP_MENU);
 }
 
 /* A header button's tooltip: its name, with its shortcut if it has one (Back's Alt+Left, New
@@ -1155,13 +1155,13 @@ static void show_smart_menu(const char *uid, const wchar_t *name, mc_smart_subje
   wchar_t *title = _wcsdup(name ? name : L"");
   HMENU menu = CreatePopupMenu();
   wchar_t item[128];
-  AppendMenuW(menu, MF_STRING, CMD_EDIT_SMART, mc_wstr_mnemonic(MC_STR_WINDOWS_SMART_EDIT_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_EDIT_SMART, mc_wstr_mnemonic(MC_STR_SMART_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, CMD_RENAME_SMART,
               wstr_menu_item(item, 128, MC_STR_PLAYLIST_RENAME_MENU, MC_STR_WINDOWS_SHORTCUT_RENAME));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   AppendMenuW(menu, MF_STRING, CMD_DELETE_SMART,
-              mc_wstr_mnemonic(subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_DELETE_PLAYLIST_MENU
-                                                          : MC_STR_WINDOWS_SMART_DELETE_GROUP_MENU));
+              mc_wstr_mnemonic(subject == MC_SMART_TRACKS ? MC_STR_SMART_DELETE_PLAYLIST_MENU
+                                                          : MC_STR_SMART_DELETE_GROUP_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
   DestroyMenu(menu);
   HWND owner = GetAncestor(g.wnd, GA_ROOT);
@@ -1199,8 +1199,8 @@ void album_grid_new_smart(void) {
 static void show_new_menu(POINT pt) {
   HMENU menu = CreatePopupMenu();
   AppendMenuW(menu, MF_STRING, CMD_NEW_SMART,
-              mc_wstr_mnemonic(g.tiles_view == AGV_PLAYLISTS ? MC_STR_WINDOWS_SMART_NEW_PLAYLIST_MENU
-                                                             : MC_STR_WINDOWS_SMART_NEW_GROUP_MENU));
+              mc_wstr_mnemonic(g.tiles_view == AGV_PLAYLISTS ? MC_STR_SMART_NEW_PLAYLIST_MENU
+                                                             : MC_STR_SMART_NEW_GROUP_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
   DestroyMenu(menu);
   if (cmd == CMD_NEW_SMART) album_grid_new_smart();

@@ -308,13 +308,13 @@ BOOL album_group_delete_dialog(HWND owner, mc_library *lib, const char *uid, con
 
 BOOL smart_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wchar_t *name, mc_smart_subject subject) {
   if (!lib || !uid) return FALSE;
-  const wchar_t *caption = mc_wstr(subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_RENAME_PLAYLIST_TITLE
-                                                             : MC_STR_WINDOWS_SMART_RENAME_GROUP_TITLE);
+  const wchar_t *caption = mc_wstr(subject == MC_SMART_TRACKS ? MC_STR_SMART_RENAME_PLAYLIST_TITLE
+                                                             : MC_STR_SMART_RENAME_GROUP_TITLE);
   char *entered = ask_name(owner, caption, mc_wstr_mnemonic(MC_STR_RENAME), name ? name : L"", NULL);
   if (!entered) return FALSE;
   mc_status st = mc_smart_rename(lib, uid, entered);
   free(entered);
-  if (st != MC_OK) MessageBoxW(owner, mc_wstr(MC_STR_WINDOWS_SMART_RENAME_FAILED), caption, MB_OK | MB_ICONERROR);
+  if (st != MC_OK) MessageBoxW(owner, mc_wstr(MC_STR_SMART_RENAME_FAILED), caption, MB_OK | MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -326,6 +326,6 @@ BOOL smart_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wch
   if (!ask_delete(owner, caption, mc_wstr(tracks ? MC_STR_PLAYLIST_DELETE_TEXT : MC_STR_ALBUM_GROUP_DELETE_TEXT), name))
     return FALSE;
   mc_status st = mc_smart_delete(lib, uid);
-  if (st != MC_OK) MessageBoxW(owner, mc_wstr(MC_STR_WINDOWS_SMART_DELETE_FAILED), caption, MB_OK | MB_ICONERROR);
+  if (st != MC_OK) MessageBoxW(owner, mc_wstr(MC_STR_SMART_DELETE_FAILED), caption, MB_OK | MB_ICONERROR);
   return st == MC_OK;
 }
