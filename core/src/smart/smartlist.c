@@ -418,45 +418,67 @@ static void put_leaf(query *q, yyjson_val *leaf) {
   free(cond.binds);
 }
 
-static void put_match(query *q, yyjson_val *node, int depth) {
-  if (q->st != MC_OK) return;
+/* Takes back what was written since the query was len long. */
+static void unput(query *q, size_t len) {
+  if (q->st != MC_OK || !q->sql) return;
+  q->len = len;
+  q->sql[len] = '\0';
+}
+
+/* Writes node's condition; returns 0, having written nothing, if it's ignored: a group with
+ * nothing in it but ignored nodes, or a "not" around one. A group may have a "name", a string
+ * that's only a label (a "not" may too if it's around a group, which then has none of its
+ * own); in_not says node is a "not"'s. */
+static int put_match(query *q, yyjson_val *node, int depth, int in_not) {
+  if (q->st != MC_OK) return 0;
   if (depth > MAX_DEPTH || !yyjson_is_obj(node)) {
     bad(q);
-    return;
+    return 0;
   }
   yyjson_val *all = yyjson_obj_get(node, "all"), *any = yyjson_obj_get(node, "any");
   yyjson_val *not = yyjson_obj_get(node, "not");
   if (!all && !any && !not) {
     put_leaf(q, node);
-    return;
+    return 1;
   }
-  if (yyjson_obj_size(node) != 1) {
+  yyjson_val *name = yyjson_obj_get(node, "name");
+  int around_group = not && (yyjson_obj_get(not, "all") || yyjson_obj_get(not, "any"));
+  if (yyjson_obj_size(node) != 1u + !!name ||
+      (name && (!yyjson_is_str(name) || in_not || (not && !around_group)))) {
     bad(q);
-    return;
+    return 0;
   }
+  size_t start = q->len;
   if (not) {
     put(q, "NOT (");
-    put_match(q, not, depth + 1);
+    if (!put_match(q, not, depth + 1, 1)) {
+      unput(q, start);
+      return 0;
+    }
     put(q, ")");
-    return;
+    return 1;
   }
   yyjson_val *list = all ? all : any;
   if (!yyjson_is_arr(list)) {
     bad(q);
-    return;
-  }
-  if (yyjson_arr_size(list) == 0) {
-    put(q, all ? "1" : "0");
-    return;
+    return 0;
   }
   put(q, "(");
+  int written = 0;
   size_t idx, max;
   yyjson_val *child;
   yyjson_arr_foreach(list, idx, max, child) {
-    if (idx) put(q, all ? " AND " : " OR ");
-    put_match(q, child, depth + 1);
+    size_t before = q->len;
+    if (written) put(q, all ? " AND " : " OR ");
+    if (put_match(q, child, depth + 1, 0)) written = 1;
+    else unput(q, before);
+  }
+  if (!written) {
+    unput(q, start);
+    return 0;
   }
   put(q, ")");
+  return 1;
 }
 
 static void put_order(query *q, yyjson_val *order) {
@@ -546,11 +568,9 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
     put(q, subject == MC_SMART_TRACKS ? TRACK_COLS " FROM tracks t" TRACK_JOINS
                                       : ALBUM_COLS " FROM albums a" ALBUM_JOINS);
   put(q, " WHERE ");
+  /* Without a match, or with one that's ignored, everything matches. */
   yyjson_val *match = yyjson_obj_get(root, "match");
-  if (match)
-    put_match(q, match, 0);
-  else
-    put(q, "1");
+  if (!match || !put_match(q, match, 0, 0)) put(q, "1");
   if (m == M_PLAYABLE && !picked) put(q, tracks ? " AND " TRACK_HERE("t.uid") : " AND " ALBUM_HERE("a.uid"));
   if (count || (m == M_PLAYABLE && !picked)) {
     query order = {.subject = subject, .now_ms = now_ms};
@@ -898,43 +918,70 @@ static char *join(char **parts, int n, int all) {
   return acc;
 }
 
-/* Whether node, under negated "not"s, always matches (1), never does (0), or depends (-1):
- * it's an empty group, maybe inside "not"s and groups of one. */
-static int constant(yyjson_val *node, int negated) {
-  for (;;) {
-    yyjson_val *not = yyjson_obj_get(node, "not");
-    yyjson_val *all = yyjson_obj_get(node, "all"), *any = yyjson_obj_get(node, "any");
-    size_t n = yyjson_arr_size(all ? all : any);
-    if (not) {
-      negated = !negated;
-      node = not;
-    } else if ((all || any) && n == 1) {
-      node = yyjson_arr_get_first(all ? all : any);
-    } else {
-      return (all || any) && n == 0 ? !!all != negated : -1;
-    }
+/* Whether node is left out of the rule, as put_match() leaves it out: a group with nothing in
+ * it but ignored nodes, or a "not" around one. */
+static int ignored(yyjson_val *node) {
+  yyjson_val *not = yyjson_obj_get(node, "not");
+  if (not) return ignored(not);
+  yyjson_val *all = yyjson_obj_get(node, "all"), *any = yyjson_obj_get(node, "any");
+  if (!all && !any) return 0;
+  size_t idx, max;
+  yyjson_val *child;
+  yyjson_arr_foreach(all ? all : any, idx, max, child) {
+    if (!ignored(child)) return 0;
   }
+  return 1;
+}
+
+/* A group's name with the spaces around it trimmed (malloc'd), or NULL if it has none or it's
+ * blank. */
+static char *group_name(yyjson_val *node) {
+  const char *s = yyjson_get_str(yyjson_obj_get(node, "name"));
+  if (!s) return NULL;
+  size_t n = strlen(s);
+  while (*s == ' ' || (*s >= '\t' && *s <= '\r')) s++, n--;
+  while (n && (s[n - 1] == ' ' || (s[n - 1] >= '\t' && s[n - 1] <= '\r'))) n--;
+  if (!n) return NULL;
+  char *name = malloc(n + 1);
+  if (name) {
+    memcpy(name, s, n);
+    name[n] = '\0';
+  }
+  return name;
 }
 
 /* node as a phrase. nested says it's inside a group, so a group of its own needs
- * parentheses. A "not" goes into the condition it's around ("isn't", "doesn't contain"),
- * and around a group reads as "none of" or "not all of". */
+ * parentheses, and a named one reads as its name. A "not" goes into the condition it's around
+ * ("isn't", "doesn't contain"), and around a group reads as "none of" or "not all of". Ignored
+ * nodes are left out. */
 static char *describe_match(describer *d, yyjson_val *node, int negated, int nested) {
   yyjson_val *not = yyjson_obj_get(node, "not");
-  if (not) return describe_match(d, not, !negated, nested);
   yyjson_val *all = yyjson_obj_get(node, "all"), *any = yyjson_obj_get(node, "any");
-  if (!all && !any) return describe_leaf(d, node, negated);
+  if (!not && !all && !any) return describe_leaf(d, node, negated);
+  if (nested && yyjson_obj_get(node, "name")) {
+    char *name = group_name(node);
+    if (name) {
+      char *quoted = fmt1(MC_STR_SMART_QUOTED, MC_S(name));
+      char *s = quoted ? fmt1(negated ? MC_STR_SMART_NOT_NAMED : MC_STR_SMART_NAMED, MC_S(quoted)) : NULL;
+      free(quoted);
+      free(name);
+      return s;
+    }
+  }
+  if (not) return describe_match(d, not, !negated, nested);
   yyjson_val *list = all ? all : any;
-  int n = (int)yyjson_arr_size(list);
-  if (n == 0) return mc_strdup(mc_str(!!all != negated ? MC_STR_SMART_ALWAYS : MC_STR_SMART_NEVER));
-  if (n == 1) return describe_match(d, yyjson_arr_get_first(list), negated, nested);
+  int n = 0;
+  size_t idx, max;
+  yyjson_val *child, *only = NULL;
+  yyjson_arr_foreach(list, idx, max, child) {
+    if (!ignored(child)) n++, only = child;
+  }
+  if (n == 1) return describe_match(d, only, negated, nested);
   char **parts = calloc((size_t)n, sizeof *parts);
   if (!parts) return NULL;
-  int ok = 1;
-  size_t idx, max;
-  yyjson_val *child;
+  int ok = 1, k = 0;
   yyjson_arr_foreach(list, idx, max, child) {
-    if (ok && !(parts[idx] = describe_match(d, child, 0, 1))) ok = 0;
+    if (ok && !ignored(child) && !(parts[k++] = describe_match(d, child, 0, 1))) ok = 0;
   }
   char *joined = NULL;
   if (ok) {
@@ -984,11 +1031,8 @@ mc_status mc_smart_describe(mc_library *lib, mc_smart_subject subject, const cha
   char *parts[3] = {NULL, NULL, NULL};
   int nparts = 0, ok = 1;
   yyjson_val *match = yyjson_obj_get(root, "match");
-  int always = match ? constant(match, 0) : 1;
-  if (always >= 0) {
-    enum mc_str_id id = always ? (tracks ? MC_STR_SMART_ALL_TRACKS : MC_STR_SMART_ALL_ALBUMS)
-                               : (tracks ? MC_STR_NO_TRACKS : MC_STR_SMART_NO_ALBUMS);
-    ok = !!(parts[nparts++] = mc_strdup(mc_str(id)));
+  if (!match || ignored(match)) {
+    ok = !!(parts[nparts++] = mc_strdup(mc_str(tracks ? MC_STR_SMART_ALL_TRACKS : MC_STR_SMART_ALL_ALBUMS)));
   } else {
     char *conds = describe_match(&d, match, 0, 0);
     ok = conds && (parts[nparts++] = fmt1(tracks ? MC_STR_SMART_TRACKS_WHERE : MC_STR_SMART_ALBUMS_WHERE,

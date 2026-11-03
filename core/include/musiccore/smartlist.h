@@ -72,8 +72,9 @@ mc_status mc_smart_preview_albums(mc_library *lib, const char *rule_json, mc_alb
 /* A saved list's cover art is mc_smart_art() in playlist.h, made as a playlist's or album
  * group's is. */
 /* How many tracks or albums a rule picks (at most its limit, if it has one), counted in one
- * query without listing them: for the counts in an editor. To count what one condition
- * matches, pass a rule of just it, e.g. {"v":1,"match":<condition>}. */
+ * query without listing them: for the counts in an editor. To count what one condition or
+ * group matches, pass a rule of just it, e.g. {"v":1,"match":<condition>}. An empty group
+ * is ignored, so a rule of one matches everything. */
 mc_status mc_smart_count(mc_library *lib, mc_smart_subject subject, const char *rule_json, int *out);
 
 /* A field a rule can test or order by. type says what a value looks like: "text", "int",
@@ -115,10 +116,13 @@ const char *mc_smart_order_label(const char *field, int desc);
  * where genre contains “jazz” and (play count is less than 3 or last played isn't in the last
  * 180 days) · least played first · 10 tracks": the conditions, the order and the limit,
  * joined with " · " (each left out if the rule has none); "All tracks" / "All albums" if
- * everything matches. Playlists and album groups are named as they're called in lib now (one
- * that's been deleted reads as "a deleted playlist"), dates are in local time, and the words
- * are in the current language. MC_ERR_FORMAT if the rule isn't valid for subject. Free *out
- * with mc_free(). Runs one small query per playlist or group the rule names. */
+ * everything matches, as when the rule's groups are all empty. A group with a name reads as
+ * "it matches “<name>”" inside a longer sentence, but the match itself reads in full: so an
+ * editor can describe one group, e.g. as an unnamed group's title, by passing
+ * {"v":1,"match":<group>}. Playlists and album groups are named as they're called in lib
+ * now (one that's been deleted reads as "a deleted playlist"), dates are in local time, and
+ * the words are in the current language. MC_ERR_FORMAT if the rule isn't valid for subject.
+ * Free *out with mc_free(). Runs one small query per playlist or group the rule names. */
 mc_status mc_smart_describe(mc_library *lib, mc_smart_subject subject, const char *rule_json, char **out);
 
 #ifdef __cplusplus

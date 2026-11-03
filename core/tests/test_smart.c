@@ -163,8 +163,28 @@ static void test_track_rules(mc_library *lib) {
   CHECK_TRACKS("{\"v\":1,\"match\":{\"all\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"},"
                "{\"field\":\"plays\",\"op\":\">\",\"value\":1}]}}",
                "Dancing Queen");
-  CHECK_TRACKS("{\"v\":1,\"match\":{\"all\":[]}}", "Dancing Queen|Money, Money|Come Together|Something|Words");
-  CHECK_TRACKS("{\"v\":1,\"match\":{\"any\":[]}}", "");
+  /* Empty groups are left out, as if they weren't there: a rule of nothing else matches
+   * everything. */
+#define ALL_TRACKS "Dancing Queen|Money, Money|Come Together|Something|Words"
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"all\":[]}}", ALL_TRACKS);
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"any\":[]}}", ALL_TRACKS);
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"not\":{\"any\":[]}}}", ALL_TRACKS);
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"not\":{\"all\":[]}}}", ALL_TRACKS);
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"all\":[{\"any\":[]},{\"not\":{\"all\":[{\"any\":[]}]}},{\"all\":[]}]}}",
+               ALL_TRACKS);
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"any\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"},{\"all\":[]}]}}",
+               "Dancing Queen|Money, Money");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"all\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"},{\"any\":[]},"
+               "{\"not\":{\"any\":[{\"all\":[]}]}}]}}",
+               "Dancing Queen|Money, Money");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"not\":{\"any\":[{\"any\":[]},{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"}]}}}",
+               "Come Together|Something|Words");
+
+  /* A group's name is only a label. */
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"all\":[{\"name\":\"Pop\",\"any\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":"
+               "\"pop\"}]},{\"name\":\"Unplayed\",\"not\":{\"any\":[{\"field\":\"plays\",\"op\":\">\",\"value\":1}]}}]}}",
+               "Money, Money");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"name\":\"Nothing yet\",\"any\":[]}}", ALL_TRACKS);
 
   /* Values are bound, never spliced into the SQL. */
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"x' OR 1=1 --\"}}", "");
@@ -276,6 +296,19 @@ static void test_invalid(void) {
     "{\"v\":1,\"match\":{\"all\":{}}}",
     "{\"v\":1,\"match\":{\"all\":[],\"any\":[]}}",
     "{\"v\":1,\"match\":{\"not\":[]}}",
+    "{\"v\":1,\"match\":{\"name\":3,\"all\":[]}}",
+    "{\"v\":1,\"match\":{\"name\":null,\"any\":[]}}",
+    "{\"v\":1,\"match\":{\"name\":\"a\",\"all\":[],\"label\":\"b\"}}",
+    "{\"v\":1,\"match\":{\"name\":\"a\",\"all\":[],\"any\":[]}}",
+    "{\"v\":1,\"match\":{\"name\":\"a\"}}",
+    "{\"v\":1,\"match\":{\"name\":\"a\",\"field\":\"title\",\"op\":\"empty\"}}",
+    "{\"v\":1,\"match\":{\"name\":\"a\",\"not\":{\"field\":\"title\",\"op\":\"empty\"}}}",
+    "{\"v\":1,\"match\":{\"name\":\"a\",\"not\":{\"not\":{\"any\":[]}}}}",
+    "{\"v\":1,\"match\":{\"not\":{\"name\":\"a\",\"any\":[]}}}",
+    "{\"v\":1,\"match\":{\"name\":\"a\",\"not\":{\"name\":\"b\",\"any\":[]}}}",
+    "{\"v\":1,\"match\":{\"all\":[{\"name\":[],\"any\":[]}]}}",
+    "{\"v\":1,\"match\":{\"all\":[{\"any\":[{\"field\":\"nope\",\"op\":\"is\",\"value\":\"x\"}]},{\"all\":[]}]}}",
+    "{\"v\":1,\"match\":{\"all\":[{\"any\":[]},{\"any\":{}}]}}",
     "{\"v\":1,\"order\":{}}",
     "{\"v\":1,\"order\":[{\"field\":\"singles\"}]}",
     "{\"v\":1,\"order\":[{\"field\":\"title\",\"dir\":\"up\"}]}",
@@ -291,6 +324,22 @@ static void test_invalid(void) {
   CHECK(mc_smart_validate(MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"album\",\"op\":\"empty\"}}") ==
         MC_ERR_FORMAT);
   CHECK(mc_smart_validate(MC_SMART_ALBUMS, "{\"v\":1,\"order\":[{\"field\":\"genre\"}]}") == MC_ERR_FORMAT);
+
+  /* Names: on a group, or on a "not" around one; a blank one is as good as none. Ignored
+   * groups are still checked, above. */
+  const char *good[] = {
+    "{\"v\":1,\"match\":{\"name\":\"Fresh\",\"all\":[]}}",
+    "{\"v\":1,\"match\":{\"any\":[],\"name\":\"\"}}",
+    "{\"v\":1,\"match\":{\"name\":\"  \",\"any\":[]}}",
+    "{\"v\":1,\"match\":{\"name\":\"None\",\"not\":{\"any\":[{\"field\":\"title\",\"op\":\"empty\"}]}}}",
+    "{\"v\":1,\"match\":{\"name\":\"Not all\",\"not\":{\"all\":[]}}}",
+    "{\"v\":1,\"match\":{\"not\":{\"all\":[{\"name\":\"a\",\"any\":[]}]}}}",
+  };
+  for (size_t i = 0; i < sizeof good / sizeof good[0]; i++) {
+    mc_status st = mc_smart_validate(MC_SMART_TRACKS, good[i]);
+    if (st != MC_OK) fprintf(stderr, "refused: %s\n", good[i]);
+    CHECK(st == MC_OK);
+  }
 
   /* Nesting is capped. */
   char deep[1024] = "{\"v\":1,\"match\":";
@@ -455,8 +504,10 @@ static void test_describe(mc_library *lib) {
   CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1}"), "All tracks");
   CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1}"), "All albums");
   CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"all\":[]}}"), "All tracks");
-  CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"any\":[]}}"), "No tracks");
-  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"not\":{\"all\":[{\"all\":[]}]}}}"), "No albums");
+  CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"any\":[]}}"), "All tracks");
+  CHECK_STR(describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"not\":{\"all\":[{\"all\":[]}]}}}"), "All albums");
+  CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"name\":\"Later\",\"any\":[{\"not\":{\"any\":[]}}]}}"),
+            "All tracks");
 
   /* docs/schema.md's example. */
   CHECK_STR(describe(lib, MC_SMART_TRACKS,
@@ -544,7 +595,27 @@ static void test_describe(mc_library *lib) {
   CHECK_DESC("{\"any\":[" DEVICE ",{\"all\":[" GENRE("is", "a") ",{\"not\":{\"any\":[" PLAYS("=", 1) "," PLAYS("=", 2)
              "]}}]}]}",
              "it's on this device or (genre is “a” and none of (play count is 1 or play count is 2))");
-  CHECK_DESC("{\"all\":[" DEVICE ",{\"any\":[]}]}", "it's on this device and nothing matches");
+  /* Empty groups are left out. */
+  CHECK_DESC("{\"all\":[" DEVICE ",{\"any\":[]}]}", "it's on this device");
+  CHECK_DESC("{\"any\":[{\"all\":[]}," GENRE("is", "a") ",{\"not\":{\"any\":[{\"all\":[]}]}}," DEVICE "]}",
+             "genre is “a” or it's on this device");
+  CHECK_DESC("{\"not\":{\"any\":[{\"any\":[]}," GENRE("is", "a") "]}}", "genre isn't “a”");
+
+  /* A named group reads as its name inside a longer sentence, but in full as the whole rule
+   * (so a group wrapped as a rule of its own describes what's in it). A blank name is none. */
+#define FRESH "{\"name\":\" Fresh stuff \",\"any\":[" PLAYS("<", 3) "," GENRE("is", "a") "]}"
+  CHECK_DESC("{\"all\":[" DEVICE "," FRESH "]}", "it's on this device and it matches “Fresh stuff”");
+  CHECK_DESC(FRESH, "play count is less than 3 or genre is “a”");
+  CHECK_DESC("{\"all\":[" FRESH "]}", "play count is less than 3 or genre is “a”");
+  CHECK_DESC("{\"all\":[" DEVICE ",{\"name\":\"Old\",\"not\":{\"any\":[" PLAYS("<", 3) "," GENRE("is", "a") "]}}]}",
+             "it's on this device and it matches “Old”");
+  CHECK_DESC("{\"name\":\"Old\",\"not\":{\"any\":[" PLAYS("<", 3) "," GENRE("is", "a") "]}}",
+             "none of (play count is less than 3 or genre is “a”)");
+  CHECK_DESC("{\"any\":[" DEVICE ",{\"not\":{\"all\":[" FRESH "]}}]}",
+             "it's on this device or it doesn't match “Fresh stuff”");
+  CHECK_DESC("{\"all\":[" DEVICE ",{\"name\":\" \",\"any\":[" PLAYS("<", 3) "," GENRE("is", "a") "]}]}",
+             "it's on this device and (play count is less than 3 or genre is “a”)");
+  CHECK_DESC("{\"all\":[" DEVICE ",{\"name\":\"Empty\",\"any\":[]}]}", "it's on this device");
 
   /* Order and limit. */
   CHECK_STR(describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"order\":[{\"field\":\"random\",\"seed\":7}]}"),
@@ -610,7 +681,11 @@ static void test_count(mc_library *lib) {
               "{\"v\":1,\"match\":{\"all\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"},"
               "{\"field\":\"on_device\",\"op\":\"is\",\"value\":true}]}}") == 1);
   CHECK(count(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"field\":\"group\",\"op\":\"is\",\"value\":\"g1\"}}") == 1);
-  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"any\":[]}}") == 0);
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"match\":{\"any\":[]}}") == 5);
+  CHECK(count(lib, MC_SMART_ALBUMS, "{\"v\":1,\"match\":{\"not\":{\"all\":[{\"any\":[]}]}}}") == 3);
+  CHECK(count(lib, MC_SMART_TRACKS,
+              "{\"v\":1,\"match\":{\"name\":\"Pop\",\"any\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"},"
+              "{\"all\":[]}]}}") == 2);
   /* The limit caps it, whatever the order; the order is still checked. */
   CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"order\":[{\"field\":\"plays\"}],\"limit\":3}") == 3);
   CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1,\"limit\":30}") == 5);
