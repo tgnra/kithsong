@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "art_accent.h"
 #include "cover.h"
 #include "musiccore/musiccore.h"
 
@@ -17,7 +18,7 @@ static struct {
   void (*shuffle)(void *user, gboolean on);
   void *user;
 
-  GtkWidget *picture, *title, *cur, *left, *bar, *shuffle_button;
+  GtkWidget *box, *picture, *title, *cur, *left, *bar, *shuffle_button;
   GCancellable *cover_loading;
   gboolean playing; /* there's a track */
   int duration_ms;
@@ -115,6 +116,7 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(voi
 
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   gtk_widget_add_css_class(box, "now-playing");
+  s.box = box;
   gtk_box_append(GTK_BOX(box), cover_frame_new(ART, 16, &s.picture));
 
   GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -212,6 +214,10 @@ void now_playing_show(const char *title, const char *artist, int duration_ms, co
   }
   gtk_picture_set_paintable(GTK_PICTURE(s.picture), GDK_PAINTABLE(texture));
   g_clear_object(&texture);
+  /* The bar's fill and shuffle in the playing track's accent. */
+  char *cover = title && cover_dir ? cover_path(cover_dir) : NULL;
+  art_accent_set_file(s.box, cover);
+  g_free(cover);
 }
 
 void now_playing_set_shuffle(gboolean on) {

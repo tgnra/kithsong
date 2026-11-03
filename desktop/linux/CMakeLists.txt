@@ -29,6 +29,7 @@ add_executable(kithsong
   src/delete_dialog.c
   src/remove_here.c
   src/volume_button.c
+  src/art_accent.c
   src/art_backdrop.c)
 target_link_libraries(kithsong PRIVATE musiccore PkgConfig::ADW m)
 kithsong_warnings(kithsong)

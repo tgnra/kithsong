@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "art_accent.h"
 #include "art_backdrop.h"
 #include "cover.h"
 #include "drag.h"
@@ -892,6 +893,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
     gtk_picture_set_paintable(GTK_PICTURE(s.cover), GDK_PAINTABLE(texture));
     g_clear_object(&texture);
     art_backdrop_set_file(ART_BACKDROP(s.backdrop), album ? album->cover_file : NULL);
+    art_accent_set_file(s.pane, album ? album->cover_file : NULL);
   }
 }
 
