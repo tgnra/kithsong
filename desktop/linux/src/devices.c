@@ -129,10 +129,15 @@ static GtkWidget *device_row(const char *uid, int kind, const char *name, const 
   if (sub) {
     GtkWidget *line = gtk_label_new(sub);
     gtk_label_set_xalign(GTK_LABEL(line), 0);
+    /* The sidebar is narrow: an archive's "This computer. Keeps the whole library" wraps onto
+     * a second line, and only past that is cut short, with the whole of it as the tooltip. */
+    gtk_label_set_wrap(GTK_LABEL(line), TRUE);
+    gtk_label_set_wrap_mode(GTK_LABEL(line), PANGO_WRAP_WORD_CHAR);
+    gtk_label_set_lines(GTK_LABEL(line), 2);
     gtk_label_set_ellipsize(GTK_LABEL(line), PANGO_ELLIPSIZE_END);
     gtk_widget_add_css_class(line, "caption");
     gtk_widget_add_css_class(line, "dim-label");
-    gtk_widget_set_tooltip_text(line, sub); /* the sidebar is narrow: the line may be cut short */
+    gtk_widget_set_tooltip_text(line, sub);
     gtk_box_append(GTK_BOX(text), line);
   }
   gtk_box_append(GTK_BOX(box), text);
