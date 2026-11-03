@@ -1,252 +1,166 @@
 # Todo
 
-## Broad strokes
+What's left to build, fix and check. Platform first, then the item. "Decided:" marks a choice already made.
 
-Big pieces that haven't been started, or that only one platform has.
+## For 1.0
 
-- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; only Linux can create or edit one (its rule editor, smart_editor.c, a page per group), and Windows and Linux rename or delete one. Windows' editor was taken out, so Windows and Android both lack one (an Android editor would be built from mc_smart_field_get() and the mc_smart_*_label() words)
-- **Home page** - Home in the desktop sidebars is greyed out until it exists
-- **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
-- **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
-- **Releases** - a portable zip and an unsigned MSIX for the Store (scripts/package-msix.ps1) on Windows (no installer or signing), and a Flatpak bundle on Linux (no Flathub listing); Android and Wear OS: signed APKs and AABs, R8 on, licences in Settings
+- **Smart playlist editor on Windows and Android** (being worked on) - only Linux can create or edit one (smart_editor.c, a page per group); Windows' dialog was taken out. Android also needs rename and delete (Windows and Linux have them). An Android editor would be built from mc_smart_field_get() and the mc_smart_*_label() words
+- **Android delete with restore** (being worked on) - deletes are permanent there; the desktops have a trash to restore from
+- **Home page** - Home in the desktop sidebars stays greyed out until it exists
+- **Repeat and a play queue** - Core: repeat (one, all). All: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither) and a view of what's queued. Windows and Linux: Ctrl+R for repeat (kept free for it)
+- **Wear OS** - from prototype to a real app:
+  - Playback: a foreground MediaSessionService, so the system doesn't kill playback in the background and the watch's media controls work
+  - Playback: route to Bluetooth headphones and prompt to connect them, rather than the watch speaker
+  - Playback: progress and seeking on the player screen, and a way back to the player from the home screen
+  - Playback: count plays and scrobble them (CorePlayer's Played event, as the phone does)
+  - Sync: drive the sync screen from the core instead of SampleSync, request a Wi-Fi network while syncing (Wear OS keeps Wi-Fi off while the phone is connected over Bluetooth), and sync in the background, not only while the sync screen is open
+  - Artists, Playlists, and more in Settings (it has only the licences)
 
-### Parity at a glance
+## Release
 
-Only where the platforms differ. Windows, Linux and Android all have albums, playlists (browse and edit), album groups, recents, search, the core's shuffle, merging libraries and archive devices. Wear OS has albums and a basic player only, and its sync is a mock-up.
-
-| Feature | Windows | Linux | Android |
-|---|---|---|---|
-| Artists | no art | no art | yes |
-| Smart playlists | rename, delete (no editor) | rule editor with a page per group, rename, delete | open, play, reshuffle (no editor) |
-| Delete | with restore | with restore | permanent (no trash to restore from) |
-| Remove from this device | yes | only compiled | yes |
-| Volume | drop-down slider, keyboard | popover slider, keyboard, MPRIS | system's (core's for ducking) |
-| Import | yes | yes | simpler review |
-| Sync | yes | only seen between two instances on one host | yes |
-| Move library | yes | yes | n/a (app storage) |
-| Reset the app's settings | Settings' Reset Kithsong… | Settings' Reset Kithsong… | system's Clear storage |
-| Scrobbling | yes | only against a fake service | yes |
-| OS media controls | SMTC (with shuffle) | MPRIS (with shuffle and volume) | Media3 session (with shuffle) |
-| Car | n/a | n/a | Android Auto (search and voice only compiled) |
+- Windows - Store submission (scripts/package-msix.ps1 packs an unsigned MSIX; the Store signs it), a winget manifest for the website to show, and the portable zip under the website's Other downloads. Decided: no traditional installer
+- Windows - the MSIX declares the firewall rule (the desktop2 windows.firewallRules extension, Private/Domain, as firewall.c adds it), so a Store install never shows the prompt; the zip keeps the prompt
+- Linux - Flathub. Decided: yes. Every dependency in third_party/CMakeLists.txt becomes a Flatpak source in packaging/flatpak/app.kithsong.Kithsong.yml (it fetches them at build time today, which Flathub forbids); then architectures other than x86_64
 
 ## Library and browsing
 
-### Artists
 - Windows and Linux - artist pictures
-
-### Album groups
-- Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are)
-- Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results; only from the album grid and the track list
+- Windows and Linux - Recents show cover art rather than the page's icon (no sidebar row has art yet)
+- Windows - an all-singles Albums page says "No music yet"; use Linux's "No albums" text, which points to the artists' Singles and search (move its strings from the linux section to shared)
+- Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results
+- Android - a new album group can only be made from an album's Add to album group…
+- All - tracks imported before 81dcc23 keep a timestamp each, a moment apart, so "Recently added" plays those albums last track first (no migration: the column syncs)
 
 ### Smart playlists
-- Android - rule editor (from mc_smart_field_get()), and rename/delete; Linux has them
-- Windows - no rule editor (the dialog was taken out): smart lists are made and edited on Linux and arrive by sync; Windows can still open, play, reshuffle, rename and delete them
-- Linux - group names and empty groups (docs/schema.md) are written as the rule format has them, but a core that doesn't take names yet gets each rule without them (core_rule() in smart_editor.c), so saving there drops the names; take that out once every core takes them
-- Linux - a condition or group can't be moved to another group, or up and down within one; it's deleted and made again
-- Linux - "months" are 30 days and reopen as days (or weeks), and text conditions don't offer the library's genres and artists as you type
-- Linux - the editor only shows a "not" where it means a negative operator, or "none of" (a "not" around an "any"); any other rule opens read-only, as its sentence
-- Core - mc_smart_describe() is English-shaped: conditions are joined as "field op value" clauses under "Tracks where …", and a language that needs grammatical case or agreement for a field or playlist name may need its own templates; dates use the smart_date template (local time), not the OS's date format
-- All - the v10 example lists' names are stored as data, so they're always English
+- All - localise the v10 example lists' names (decided; they're stored as data, so always English today)
 - Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it; on Linux a new one that picks nothing playable doesn't open after it's made
+- Linux - move a condition or group to another group, or up and down within one (today it's deleted and made again)
+- Linux - text conditions could offer the library's genres and artists as you type
+- Linux - the editor only edits a "not" that means a negative operator, or "none of"; any other rule opens read-only, as its sentence
 - Core - limit by total duration ("an hour of music")
+- Core - mc_smart_describe() is English-shaped ("field op value" clauses under "Tracks where …"): languages with grammatical case or agreement may need their own templates; dates use the smart_date template, not the OS's date format
 
 ### Delete
 - Core - a peer that trashed an original after a remote delete keeps no restore record; restoring it there gets it swept as an unknown file
 
 ### Remove from this device
-Albums and artists can be removed from one device ("Remove from this PC", computer, phone) and synced to it again; see "Removing from one device" in docs/sync-protocol.md. Left to do:
-- All - single tracks: the profile model would take an `exclude_track` kind like the album and artist ones, but no track menu offers it yet
-- All - the profile editors (What to sync) don't show exclusions, so with Sync everything nothing lists what was removed from a device, and another device can't undo it; only that device's Sync to this device on the album's or artist's menu can (or, in a selection, ticking it)
+See "Removing from one device" in docs/sync-protocol.md.
+- All - What to sync shows Sync everything as everything ticked except what was removed (decided). Store it as mode `all` plus exclusions, so later imports still sync; unticking an album there adds an exclusion. Today the editors don't show exclusions at all, so nothing lists what was removed and only that device's Sync to this device can undo it
+- Core - a ticked playlist keeps its tracks on the device even when their album or artist was removed, until the playlist is unticked (decided; today an exclusion wins over a playlist). Update the wanted set in docs/sync-protocol.md. The removal says when some tracks stay because of a playlist
 - All - an album removed only through its artist shows neither item; Sync to this device on the artist brings it back
 - All - an "Add to this device" for an album or artist a selection doesn't include (the menus only offer Sync to this device for what was removed)
-- Core - versions before exclusions ignore them: such a device would fetch the item again, and shows a device with exclusions under Sync everything as "changed" (its fingerprint differs)
-
-### Albums
-- Windows - an Albums page whose every album has one track (all singles) says "No music yet"; Linux says "No albums" and points to the artists' Singles and search (its strings are in the linux section, and would move to shared)
-- All - tracks imported before 81dcc23 keep a timestamp each, a moment apart, so "Recently added" still plays those albums last track first (no migration: the column syncs)
-
-### Recents
-- Windows and Linux - show cover art rather than the page's icon (no sidebar row has art yet)
+- Core - versions before exclusions ignore them: such a device fetches the item again, and shows a device with exclusions under Sync everything as "changed"
+- Decided: no removal of single tracks, as there's no syncing of single tracks
 
 ## Playback
 
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
-- Core - repeat (one, all); no frontend offers it (Ctrl+R is kept for it on the desktops)
-- All - a play queue: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither), and a view of what's queued
-- Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts (settings now live in files/settings.json)
-
-### Scrobbling
+- Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts
 - All - revoking access on Last.fm shows "turned down this sign-in" but doesn't sign out by itself
 
 ## Import and tagging
 
-- Windows - a missing track's "Choose file… ▾" in the review is cell text with an arrow, not a real dropdown: UI Automation sees the row's text but no ExpandCollapse pattern (the menu opens with a click, Enter or the Menu key)
 - Core - joining disc folders is tried once, at the set's first match: if MusicBrainz can't be reached then, the discs stay separate. Keep existing tags on a joined item files every disc under the first disc's album tag ("Title Disc1"), and a manual search on it replaces the "joined" reason with the search's status
 - Core - source hashes (files.source_sha256) aren't recorded for files brought in by merging libraries, nor for files imported from inside the library folder
 - Core - a release-group swap adds the tracks the library lacks with their own match's tags, so they can name another release than the album row
-- Windows - long paths with Windows' long-path setting off: the core prefixes `\\?\` itself, but mc_trash (the shell's Recycle Bin call), a library.db path over 260 and the frontend's own path calls (cover images, the folder picker) still fail
-- Android - import (the system picker, or files shared with or opened in the app; no storage permission). Left to do:
-  - the review shows the candidates, Keep existing tags, Skip, Search again and Search more widely, but not the track list of a match, other items' files or Use as Track (mc_import_assign), nor the duplicate outcomes (replaced / added missing / already in library)
-  - the in-app Import menu still says an import is running; only shares and Open with add to it
-  - a folder's zips are batches of their own, so the 32 GB zip cap is per zip there, not per import
+- Windows - long paths with Windows' long-path setting off (decided: support them throughout). The core prefixes `\\?\` itself, but mc_trash (the shell's Recycle Bin call), a library.db path over 260 and the frontend's own path calls (cover images, the folder picker) still fail
+- Windows - a missing track's "Choose file… ▾" in the review is cell text with an arrow: UI Automation sees no ExpandCollapse pattern
+- Android - the review lacks a match's track list, other items' files, Use as Track (mc_import_assign) and the duplicate outcomes (replaced / added missing / already in library)
+- Android - the in-app Import menu still says an import is running; only shares and Open with add to it
+- Android - a folder's zips are batches of their own, so the 32 GB zip cap is per zip there, not per import
 
 ## Sync
 
 ### Core
-- test_sync_lossy fails on master as of a18ec5e (first at line 466: the transcode's source isn't the lossless file; mc_sync_set_profile then fails); maybe since 892740e "transcode only from the original"
-- Albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
-- Sync profile "artist" selections pick tracks by `tracks.artist_uid` and the album's artist only, not featured credits (`track_artists` / `album_artists` past the first): selecting Rihanna doesn't sync "Jay-Z feat. Rihanna". And a selection of an old whole-credit artist ("Jay-Z feat. Rihanna") selects nothing once the refresh after upgrading has split and deleted it
-- Changelog compaction must keep the rows that decide merges and archive demotions
+- Albums and artists without MusicBrainz ids never merge, and a playlist or album group that held both copies lists the survivor twice. Decided: match them fuzzily (by name and artist), in sync's duplicates and when merging libraries
+- Sync profile "artist" selections pick tracks by `tracks.artist_uid` and the album's artist only, not featured credits (`track_artists` / `album_artists` past the first): selecting Rihanna doesn't sync "Jay-Z feat. Rihanna". A selection of an old whole-credit artist selects nothing once the refresh after upgrading has split and deleted it
+- The version vector (mc_changelog_version_vector) scans the whole changelog every time: about 0.3 s at 400k rows (a ~23k-track library) on a desktop, more on a phone or watch. An index on (origin_uid, hlc), with a max(hlc) per origin, makes it instant
 - A stale copy replaced after another device swapped in a better file (tracks.file_rev) arrives as "<name> (2).<ext>" when the old copy had the same name, and keeps that name
-- Tracks waiting for a device (mc_sync_get_waiting()) guess who holds what from profiles and who imported each track: nothing records a member's files, so a member still short of its own profile (its sync_status shows missing) is named as if it had them. "Reachable" is the last session attempt, so a member that went away soon after a complete session is only noticed when the rate limit lets the next attempt run (up to MC_SYNC_AUTO_INTERVAL_MS)
+- Tracks waiting for a device (mc_sync_get_waiting()) guess who holds what from profiles and who imported each track, so a member still short of its own profile is named as if it had them. A member that went away soon after a complete session is only noticed when the next attempt runs (up to MC_SYNC_AUTO_INTERVAL_MS)
+- Changelog compaction, keeping the rows that decide merges and archive demotions. Not urgent: a real 786-track library's changelog is 13.6k rows (3 MB of 4.4 MB) with only 5 superseded, so it would free almost nothing
+
+### Verifying files
+- All - run mc_sync_verify(deep) weekly while on mains power (a desktop always; a laptop, phone or watch on the charger)
+- All - problems show as a warning card at the top of the library, like the waiting-for-a-device one, including the unknown files an archive reports
+- All - on an archive, files missing for good get a button that removes those tracks from the library. First fetch any that another member still has, since removing deletes them on every device
 
 ### Merging libraries
-Pairing two devices whose libraries both have music merges them (see "Merging libraries" in docs/sync-protocol.md). The larger library is kept; the user confirms on the device whose library is merged, which sets its library aside as library-before-merge-<date>.db, forgets its old group, signs its Last.fm account out if both have one, and after the first session brings its current state (no history) in through the import's duplicates check. Windows, Linux and Android show the proposal, the results, the merge's progress and summary, and the pending note (strings pair_merge_*, paired_merged_*, merge_*). Peers without merging still get library_mismatch, with a hint to update them.
-
-Left in the core:
-- A merged file better than the kept device's copy is only attached as the merged device's own original; the archive keeps its worse copy (a swap needs the copy on the device doing it, and the archive's own import is "never stale"). It would need the archive to swap it in, as an import there would
-- Quality is compared only with the kept device's originals (MERGE_FILES), from files.format and bitrate_kbps: no sample rate or bit depth, so two lossless files are always equal. A merge resumed after a restart has no MERGE_FILES and attaches every matched track
-- Tracks of the merged library with no file on that device (it synced a selection from its old group's archive) are left out unless the kept library has them by mb_releasetrackid; pairing the old group's archive instead brings everything
-- The old group's other devices aren't told: they keep the merged device as a member that never answers until they remove it
-- Declining on the device that shows the code before the code is typed holds its pairing slot (others get busy) until the other device enters the code or gives up (5 minutes)
-- Album folders emptied by trashed duplicates aren't pruned; the set-aside copy is never cleaned up (a user can delete it)
-- Recents keep their old opened_ms under a new hlc, so "newest hlc is newest open" no longer holds for those rows
-- Originals an archive fetches from another device are stored without a bitrate (transfer.c asks for 0 kbps), so a later merge keeping that archive's library compares quality without it
-- Progress counts albums, so one long album holds the bar still (about 8 s for 27 tracks)
-- Abandoning a merge (librestore.c): built and covered by test_sync_merge, but neither the test nor the core was built or run where it was written (no mbedTLS 3.6 there; only gcc -fsyntax-only). Run test_sync_merge first. Known limits: a restart of any kind undoes a pairing whose merge still waits, including Android freezing and killing the app in the background before Sync now is pressed; a second instance of the app opening the same library while the first waits would undo it too (Windows has no single-instance guard). Being removed by another member while waiting undoes it as well, but the scrobbling account this device brought stays with the group then (leaving signs it out). Only one leave notice is kept: a second pairing undone before the first notice reached its group replaces nothing and that group isn't told. Plays and Recents made on the kept library while waiting stay with the kept group
-
-Left in the frontends:
-- Windows, Linux - after merging, the merged device's profile is unconfirmed like any new member's: its files only move after Sync is pressed (on both devices, for the archive to fetch them). The Paired message already says to choose what syncs and press Sync now; nothing says it again after the merge's summary
-- All - the merge itself now waits for the merged device's profile to be confirmed (meta.merge_wait), so neither library changes before Sync is pressed. Until then the merged device shows the kept library only (its own is in the backup), and its old music isn't there to choose from in its profile. Restarting or leaving the group before Sync is pressed undoes the pairing (the device is back as it was, and says so once: merge_restored, a toast on Linux and Android, the now-playing strip for 8 s on Windows); nothing says beforehand that it would. Linux's own-page banner offers Sync now while the merge waits; Windows and Android only say so in merge_pending's text
-- All - merge_restored's notice was never seen on any platform (Android's not even built); on Windows check the sentence fits the now-playing strip (it's ellipsized when narrow)
-- Linux - on the device that started the pairing, after Merge nothing has keyboard focus, so typing the code does nothing until the field is clicked or Tab pressed (on_merge_clicked() does focus it; not yet understood)
-- All - "Merge" is the only choice on the merged device: there's no way to merge the other way round (keep the smaller library). Settled by the user, but worth checking it doesn't surprise anyone
+See "Merging libraries" in docs/sync-protocol.md.
+- Core - a merged file better than the kept device's copy is only attached as the merged device's own original; the archive keeps its worse copy. The archive would need to swap it in, as an import there would
+- Core - quality is compared from files.format and bitrate_kbps only, so two lossless files are always equal (no sample rate or bit depth). A merge resumed after a restart has no MERGE_FILES and attaches every matched track
+- Core - originals an archive fetches from another device are stored without a bitrate (transfer.c asks for 0 kbps), so a later merge compares quality without it
+- Core - tracks of the merged library with no file on that device are left out unless the kept library has them by mb_releasetrackid
+- Core - the old group's other devices aren't told: they keep the merged device as a member that never answers until they remove it
+- Core - declining on the device that shows the code before the code is typed holds its pairing slot for up to 5 minutes
+- Core - album folders emptied by trashed duplicates aren't pruned; the set-aside library-before-merge-<date>.db is never cleaned up
+- Core - Recents keep their old opened_ms under a new hlc, so "newest hlc is newest open" no longer holds for those rows
+- Core - progress counts albums, so one long album holds the bar still
+- All - nothing warns beforehand that restarting or leaving the group before Sync is pressed undoes a waiting merge. Linux's own-page banner offers Sync now while the merge waits; Windows and Android only say so in merge_pending's text
+- Windows and Linux - after the merge's summary, nothing says again to choose what syncs and press Sync now
+- Linux - on the device that started the pairing, after Merge nothing has keyboard focus, so typing the code does nothing until the field is clicked or Tab pressed (on_merge_clicked() does focus it; not understood yet)
 
 ### Pairing
-- Android - a pairing refused because the phone has music of its own (library mismatch) now only comes from a peer running a version without merging, and the message says to update it; there's still no Create a new library (the library lives in app storage), so updating the other device is the only way out
-- Windows and Linux - after Create a new library, Pair again asks by uid, else at the address discovery last saw; a device seen only by address (multicast blocked) on the side that was asked to pair has neither, so Pair again isn't offered there and the user pairs from the Devices list
-- Windows and Linux - Create a new library takes only an empty folder; a folder with an empty library already in it (from an earlier try) is refused too, so it's opened with Open another library instead
-- All - the archive explainer shows once per device, after it joins a group; a member running an older version doesn't send the archive's name (PAIR_ACCEPT's archive_names), and then nothing is shown (and it stays unshown for a later pairing)
-- Windows and Linux - a library mismatch always adds that the other device "may be too old to merge", also when both run this version and one side is in a group with another library than its group's open (can_merge() in pairing.c). Only that side knows why: the other needs PAIR_REFUSE to say
-- All - after pairing, the dialog no longer opens the other device's page by itself; Choose what to sync opens the page of the device that joined (this one's own when it joined). Check this feels right
+- Android - there's no Create a new library (the library lives in app storage), so a library mismatch with an older peer can only be solved by updating it
+- Windows and Linux - after Create a new library, a device seen only by address (multicast blocked) on the side that was asked to pair gets no Pair again; the user pairs from the Devices list
+- Windows and Linux - Create a new library refuses a folder that already holds an empty library from an earlier try
+- Windows and Linux - a library mismatch always adds "may be too old to merge", even when both run this version (can_merge() in pairing.c); PAIR_REFUSE would need to say why
+- All - a member running an older version doesn't send the archive's name, so the archive explainer isn't shown, and stays unshown for a later pairing
 
 ### Frontends
-- All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
-- All - the waiting-for-a-device banner has no Show that filters the library to those tracks (the core only gives counts); Windows' banner, Linux's AdwBanner and Android's card are built but not yet seen running
+- All - the waiting-for-a-device banner has no Show that filters the library to those tracks (the core only gives counts)
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
-
-### Windows firewall
-- Offer it when the network is public too (today it stays quiet unless Private is uncovered, and only says so after adding the rule)
-- The installer, once there is one, should add the rule (program-scoped, Private/Domain, as firewall.c does) and remove it on uninstall, so the prompt never shows
+- Windows - offer the firewall rule when the network is public too (today it stays quiet unless Private is uncovered)
 
 ## Move library
 
-- Core - can't be cancelled part-way (the progress window has no Cancel); progress is per file, so one huge file shows no movement while it copies
-- Windows - a desktop.ini at the top of the library stays in the old folder (it's the folder's own); Linux's .directory isn't treated the same way
+- Core - can't be cancelled part-way, and progress is per file, so one huge file shows no movement while it copies
+- Windows - a desktop.ini at the top of the library stays in the old folder; Linux's .directory isn't treated the same way
 
-## Input and accessibility
+## Windows
 
-### Keyboard shortcuts
-The desktops' shortcuts are listed in README.md (Linux also shows them with Ctrl+?), and buttons' tooltips name them. Left to do:
-- Windows and Linux - Ctrl+R repeat, once the core has repeat
+- The Settings page needs a scrollbar: on a short window or at a large text size, Scrobbling and Reset are cut off
+- Screen readers: the artist page (kithsong_artists) has no UI Automation provider; the now-playing strip exposes no seek bar or times; the volume slider has no RangeValue pattern
 
-### Windows screen readers and custom-drawn controls
-The album grid, track list, sidebar and search page have UI Automation providers (uia.c) that raise name and status changes as property-change events; the now-playing strip is a live region for its flash ("Volume 40%"); the track list's and album grid's header buttons are reachable from the keyboard. Still to do:
-- The artist page (kithsong_artists) is custom-drawn without a provider, and the now-playing strip exposes only the flash or the track's name: no seek bar or times
-- The volume drop-down's slider is a Slider named by its level ("Volume 40%") with no RangeValue pattern, so a screen reader can't set it directly (the arrow keys do)
+## Testing
 
-## Wear OS
+Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <host>:<port>` on Android pair two scratch instances without clicks; `--es fake_merge <scenario>` on Android shows one of the merge's screens with made-up data.
 
-- Playback - a foreground MediaSessionService, so the system doesn't kill playback in the background and the watch's media controls work
-- Playback - route to Bluetooth headphones and prompt to connect them, rather than the watch speaker
-- Playback - progress and seeking on the player screen
-- Playback - a way back to the player from the home screen
-- Playback - count plays and scrobble them: CorePlayer's Played event, as the phone does
-- Sync - drive the sync screen from the core instead of SampleSync
-- Sync - request a Wi-Fi network while syncing; Wear OS keeps Wi-Fi off while the phone is connected over Bluetooth
-- Sync - sync in the background, not only while the sync screen is open
-- Artists, Playlists, and more in Settings (it has only Open source licences)
+### First
+- test_sync_merge on a real build: abandoning a merge (librestore.c) was only syntax-checked where it was written
 
-## Testing and verification
-
-Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <host>:<port>` on Android pair two scratch instances without clicks; `--es fake_merge <scenario>` on Android shows one of the merge's screens with made-up data (Syncer.debugShowMerge).
-
-### Linux (run under Xvfb, never on a real desktop)
-Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, audio to a PulseAudio null sink, and sync between two instances on one host; earlier runs were in Docker (GTK 4.18, libadwaita 1.7). Seen working there: smart lists' and groups' pictures, empty playlists staying, artist page and smart list playback, album group covers, the Playlists page, shuffle and the Play/Shuffle buttons, delete and restore (a delete taking a queued track stops playback first), the import outcomes, Use as Track with the keyboard and with related items' files, Search More Widely, the over-budget estimates, switching library with a device page open, the archive's sidebar row, the empty pages' buttons, the pairing dialog's ended page, Remove from / Sync to this computer (tiles, artist page, artist rows), the Add to playlist note, merging libraries in both roles, Move library's refused close under openbox, and the AdwShortcutsDialog (built against the GNOME 49 SDK). Left:
-- A real GNOME and KDE session (Wayland too) for all of the above
-- Settings' Reset Kithsong… (only built): the confirmation, the window closing, the next start clearing ~/.config/kithsong (the core's part is test_settings_reset) and its failure alert
-- Sync: pairing with Windows or Android, and a real LAN. A watch's icon was only seen with a core-only stand-in: this Adwaita has no smartwatch-symbolic, so it showed the phone's
-- Merging libraries: the library_mismatch update hint (needs a peer running an older version) and the merge's notification
-- Restore from a real file manager's Trash (only done by hand: file moved back, .trashinfo removed)
-- Scrobbling with a real Last.fm account (the whole flow ran against a fake service). With no browser, Sign in fails silently and the row says "Waiting…" with no link to copy
-- Import: Search More Widely while offline. After a Use as Track choice, focus goes back to the first row rather than the next missing track, and the Choose file menu's items have no accessible names (nor have other popover menus' on GTK 4.14)
-- The track list's long press (no touch device here)
-- "Recently added" playing a newly imported album in order (the core's fix is covered by test_import_db only, not seen after a real import)
-- The notification while the window is in the background: seen with stand-in notification servers (both protocols), its action bringing the window up with the code, and going when the window is active, the request ends or the dialog closes. Not seen: the merge's summary (openbox focuses the merge's window, so it's rightly skipped), real GNOME Shell and KDE bubbles, and the portal
-- Move library's refused close under mutter or KWin; the AdwShortcutsDialog in a real Flatpak build of the app
-- Removing an album while it plays lets the track play to its end, then stops; the bar then keeps the removed track, with Play doing nothing. The artist page's album tiles have no menu (singles' do)
-- Settings' Play albums in order switch: seen toggling and saving under Xvfb, but not that playing an album's track then leaves shuffle on, nor its save-failure toast
-- The empty Albums page in a group: its text and Choose what to sync button in place of Pair with a device… (only built)
-- An album tile stays highlighted after its right-click menu closes, until the page reloads (maybe GTK 4.14)
-- Go to album and Go to artist on the track list's and the artist page's track menus (only compiled): that each is hidden where it should be (a single's or no album, the album shown, the artist's own page), and that the album opens with the track selected
-- The header bar's volume control (volume_button.c): only compiled (GTK 4.14). Check the popover's slider taking the focus when it opens, its arrow keys, the speaker muting, and the icon and slider following the keyboard and MPRIS
-- The art backdrop (art_backdrop.c) behind the track list's header: only seen in a stand-in window under Xvfb (GTK 4.22, libadwaita 1.9, the cairo renderer), with made-up covers: the glows in light and dark, grey art leaving it plain, and a cover change mid-fade. Not seen: in the app itself (opening, switching and closing albums, playlists' and smart lists' pictures, a cover arriving after the pane opens), high contrast, animations turned off, the GL and Vulkan renderers, GTK 4.14 and libadwaita 1.5, and a real desktop's theme switch while it shows
-- The art backdrop behind the artist page's header (artist_view.c, from its first four covers): only seen in a stand-in for the header under Xvfb as above, with two made-up covers and with grey art, light and dark. Not seen: in the app itself (opening one artist after another, an artist of only singles, an artist with no art, covers that sync brings while the page is open), and a narrow window, where the strip is short and wide
-- The logo's glows (brand_backdrop.c) behind the empty Albums page and the Playlists page while it has none: seen in the app under Xvfb (GTK 4.22, libadwaita 1.9, the cairo renderer) with an empty home, in light and dark. Not seen: the Playlists glow fading out as a first playlist arrives (or in as the last goes), high contrast, animations turned off, the GL and Vulkan renderers, GTK 4.14 and libadwaita 1.5. The logo is one purple, so the glows are all that purple, unlike the site's four colours (orange, purple, rose, amber); the empty album groups page (album_groups.c), the artist page's empty state, search's "No results" and import's start page don't glow yet, and the About dialog doesn't either: AdwAboutDialog has no place for a backdrop short of styling its internal nodes
-- The accent from art (art_accent.c) in the track list pane and the now-playing strip: only seen in a stand-in window under Xvfb (GTK 4.22, libadwaita 1.9, the cairo renderer), with made-up covers: Play, the playing row, the bar's fill and the shuffle toggle in light and dark, grey art keeping the desktop's accent, a cover change, and the libadwaita 1.5 rules (the variables left out, still on 1.9). Not seen: in the app itself, high contrast, a real libadwaita 1.5 or GTK 4.14 (whether its suggested-action hover and the scale still read with the colour set), and a desktop accent change while it shows. The accent changes at once rather than fading as Android's does
-- The smart list editor (smart_editor.c) was only run under Xvfb with GTK 4.22 and libadwaita 1.9: seen were the ready-made rules, a page per group with its path, counts and preview, the problems card's Show, Escape going back a group, read-only and nested rules, saving, and Edit rules, Rename and Delete from the track list and a smart group's page. Not seen: GTK 4.14 and libadwaita 1.5, a screen reader, dark mode and a narrow window
+### Linux
+- Known bugs to fix:
+  - after Use as Track, focus returns to the first row rather than the next missing track
+  - the Choose file menu's items have no accessible names
+  - removing an album while it plays leaves the removed track in the bar, with Play doing nothing
+  - the artist page's album tiles have no menu (singles' do)
+  - an album tile stays highlighted after its right-click menu closes
 
 ### Windows
-- Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
-- Firewall prompt: the success path after UAC, beyond one run
-- Firewall: Settings' "Ask about Windows Firewall again" and the elevated helper's removal of rules left for a moved exe (renamed to a unique name, then removed): firewall.c and settings_view.c only compiled to objects with mingw-w64, never linked or run. Check that renaming a rule taken from the policy's collection takes effect before Remove
-- Remove from this PC / Sync to this PC in a real group (the core is tested between two devices; on screen only the menu outside a group was looked at), including removing an album while it plays
-- Deleting a track while it plays
-- Go to Album and Go to Artist on the track list's and a single's menus: only syntax-checked with MinGW, never built or run
-- Volume's fade (only silent test files so far)
-- Settings' Play albums in order checkbox (only syntax-checked with MinGW): its layout in both themes, and its screen-reader name
-- Settings' Reset Kithsong… (only syntax-checked with MinGW): the confirmation, the window closing, and the next start clearing %LOCALAPPDATA%\kithsong (the core's part is test_settings_reset) and asking for a library folder again
-- The Settings page doesn't scroll: on a short window (or at a large text size) its last sections, Scrobbling and Reset, are cut off
-- The volume drop-down (volume_popup.c): only cross-compiled with MinGW, never run. Check the main window keeping its active look and Mica while it's open, a click on the speaker closing it without opening it again, the focus going back on Escape, the wheel, Windows 10's border (no rounded corners there), high contrast, and the speaker and slider through UI Automation
-- The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns, focus events, and listeners for property changes and live regions
-- The empty Albums page's Choose What to Sync in a group (only syntax-checked with MinGW)
-- The empty Playlists page's Choose what to sync (needs this PC in a group with every playlist hidden), pairing from the empty Albums page's menu, and the empty-page button through UI Automation
-- The pairing dialog's ended page with a real pairing: Choose what to sync, the archive explainer (and the dialog growing to fit it), Create a new library and Pair again
-- Merging libraries: the progress window was only seen for an instant (a three-track test merge finishes at once), and the pending note after a restart was never seen (both seen on Linux); the library_mismatch update hint (it needs a peer running an older version) has been seen nowhere
+- Firewall: the success path after UAC, Settings' "Ask about Windows Firewall again", and the elevated helper removing rules left for a moved exe (only compiled to objects, never linked or run)
+- Narrator and NVDA with the UI Automation providers
+- The volume drop-down on Windows 10 (no rounded corners) and in high contrast; Play albums in order's screen-reader name
+- The empty Albums page's Choose What to Sync in a group, the empty Playlists page's Choose what to sync, and the empty-page button through UI Automation
+- The pairing dialog's ended page with a real pairing: the archive explainer (the dialog growing to fit it), Create a new library and Pair again
+- The import review's Choose file menu with files of related items ("Grouped separately: …")
 
 ### Android and Wear OS
-- Smart playlists' and groups' pictures (mc_smart_art()), and empty playlists in the Playlists section and Recents, on screen (only built)
-- Remove from this phone / Sync to this phone on screen, in a real group (only built), including stopping playback when it takes a queued track
-- Settings' Play albums in order switch (only built)
-- An album group's Play, Shuffle albums and Shuffle tracks (only built; check they wrap on a narrow screen), and an edited playlist or group moving first in the recents (only built)
-- A recent's long-press menu (Play, Shuffle, Remove from Recents, Clear Recents) on screen (only built; the desktops' menus were run)
-- A track's Go to album and Go to artist, from track lists and the player (not even built: no Android SDK where they were written)
-- A search result track's menu (Add to playlist, Go to album, Go to artist or to each of several, from mc_library_list_credit through the new nativeListCredit): not even built either (jni_browse.c only syntax-checked with the host's gcc)
+- Android Auto on the Desktop Head Unit and in a car: the four tabs, art in its lists (ArtProvider), playing from the middle of an album, voice and on-screen search, refreshing after a sync, and the app's own player and lock screen still working
+- Remove from this phone / Sync to this phone in a real group, including stopping playback when it takes a queued track
+- Smart lists' and groups' pictures, and empty playlists in Playlists and Recents
+- An album group's Play, Shuffle albums and Shuffle tracks wrapping on a narrow screen; an edited playlist or group moving first in Recents
+- A recent's long-press menu; Settings' Play albums in order
 - Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
-- After pairing: Choose what to sync opening the device's page, and the one-time archive explainer (only built)
-- Merging libraries: tested end to end on the emulator with a Windows scratch instance (both roles, Merge and decline, Last.fm sign-out, summary). Seen only with fake_merge: the progress card and bar, the forgotten-devices line, the merge_pending note, the failed summary and the library_mismatch hint; the merge's notification was never seen
-- Search, only on the emulator with a tiny library
-- Pulling the main list down from its top to open search: not even built (no Android SDK where it was written). Check the threshold's feel and tick, that flings reaching the top and drags started lower down don't pull, and the fast scroll strip and mini player alongside
-- The fast scroll strip's shares on the main screen (Albums at least 0.6 of it once it has letters, the artists' letters crowded into dots instead): not built either; check its labels and dots don't overlap where the shares change, and that dragging lands where it shows
+- After pairing: Choose what to sync and the one-time archive explainer
+- Merging: the progress card, the forgotten-devices line, the merge_pending note, the failed summary and the merge's notification (only seen with fake_merge)
+- Search with a large library
+- A pairing finishing after leaving the app, and an upgrade from 0.4.2 leaving no WorkManager job (`adb shell dumpsys jobscheduler`)
 - The one-time handover of the old prefs recents to the core
-- mDNS discovery and sync over real Wi-Fi, on a real device
-- Sync only while the app is on screen (no WorkManager job; the old one cancelled on start; ProcessLifecycleOwner holding sync; mc_sync_set_automatic(0) once the app leaves, so SyncService only finishes what's under way): not even built where it was written (no Android SDK), and the core's new checks in test_sync_rate.c never ran. Check a session and a pairing finish after leaving the app, that nothing starts after, that turning the phone doesn't restart sync, and that an upgrade from 0.4.2 leaves no job behind (`adb shell dumpsys jobscheduler`)
-- API 24-32 devices, audio focus during calls, ducking (only API 24-25 duck through the core's volume; the emulator is API 37), plays landing in the core's database
-- The themed launcher icon, and the sync notification icon
-- Android Auto, only compiled: browsing the four tabs and into albums, artists, playlists and groups on the Desktop Head Unit and in a car, the art in its lists (ArtProvider), playing a track from the middle of an album, voice and on-screen search, the tabs refreshing after a sync, and that the app's own player, notification and lock screen still work as before
-- Wear OS - the Settings and licences screens are only built, never run (no Wear OS emulator here): check they scroll with the crown, the long texts' monospaced paragraphs are readable, and a licence opened from the list shows its name
+- API 24-32 devices (API 24-25 duck through the core's volume)
+- Wear OS: the Settings and licences screens scrolling with the crown, and a licence opened from the list showing its name
 
 ### Cross-platform
-- A real Last.fm sign-in and scrobble (only fake sessions so far), and the sign-in reaching another device over a real sync
-- Settings' "Use a different service…" (Libre.fm, or another entered by hand): never run. Windows was only syntax-checked with clang against mingw-w64's headers, Linux and Android not compiled at all. A real Libre.fm sign-in with the placeholder key wasn't tried either
-- Media keys with the window in the background: SMTC on Windows, MPRIS on GNOME and KDE. MPRIS was only checked with gdbus and playerctl under Xvfb (play/pause, next/previous, seek, Raise, Shuffle, Volume, clamping, and PropertiesChanged, with the window unfocused or minimized), not with GNOME's or KDE's controls
-- Recents arriving or going with a real sync between two devices
-- An Android delete reaching a desktop over a real sync (copies removed there, originals to its trash)
-- A delete and a restore going through a real sync
+- merge_restored's notice (never seen anywhere); on Windows, that it fits the now-playing strip
+- The library_mismatch update hint (needs a peer running an older version)
+- The waiting-for-a-device banner and card running
 - Sync PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
-- Quiet automatic sync ("Showing sync" in sync.h): nothing shown for attempts at members that are away, "Connecting…" at once and a failure for a press of Sync that can't get through. Not built or run where it was written (no dependencies to configure CMake, no Android SDK): the core, both bridges and the JNI were only syntax-checked, and the new checks in test_sync_rate.c never ran
-
-## Release
-
-- Windows - installer, code signing, and a Store submission (scripts/package-msix.ps1 packs an unsigned MSIX)
-- Linux - Flathub (every dependency in third_party/CMakeLists.txt as a Flatpak source; the Flatpak manifest fetches them at build time, which Flathub forbids), architectures other than x86_64
