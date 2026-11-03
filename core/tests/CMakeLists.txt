@@ -41,6 +41,8 @@ kithsong_test(test_sync_reach)
 kithsong_test(test_sync_cancel)
 kithsong_test(test_sync_confirm)
 set_tests_properties(test_sync_confirm PROPERTIES TIMEOUT 300)
+kithsong_test(test_sync_budget)
+set_tests_properties(test_sync_budget PROPERTIES TIMEOUT 300)
 kithsong_test(test_sync_files)
 target_link_libraries(test_sync_files PRIVATE mbedcrypto)  # hashes the files it compares
 set_tests_properties(test_sync_files PROPERTIES TIMEOUT 300)

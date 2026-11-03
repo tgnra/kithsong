@@ -292,6 +292,26 @@ int mc_profile_confirm_state(sqlite3 *db, const char *uid);
  * (may be NULL): it changed. MC_ERR_NOT_FOUND if not in a group. */
 mc_status mc_profile_confirm(mc_sync_db *sdb, int *wrote);
 
+/* "Budget mode": a device whose profile nobody has confirmed yet (devices.confirmed_profile
+ * NULL), that wants originals with no budget, and whose wanted set as originals is more than
+ * its free space and what it already holds of the set, turns its own budget on, so it
+ * fills with what fits instead of running out of room. A logged edit through c, so every
+ * member's editor shows it. budget_bytes gets nine tenths of that room rounded down to a
+ * whole GiB (at least one) unless the row already holds a size. Nothing changes for an
+ * archive, a profile in another format, one confirmed with the budget off (the user's
+ * choice), unknown free space, or a library that isn't the group's. Call it before
+ * mc_profile_confirm(), so the press confirms the budget too, and before the device's plan
+ * is worked out. *wrote (may be NULL): it changed. */
+mc_status mc_profile_auto_budget(mc_sync_conn *c, int *wrote);
+
+/* This device's free space in bytes, on its library folder's volume; -1 if unknown. Every
+ * plan for this device, and its capabilities, measure it through here. */
+int64_t mc_sync_free_space(mc_library *lib);
+/* Test hook for mc_sync_free_space(): stands in for mc_free_space() when set, given the
+ * library folder (so a test running two devices in one process can answer for one of
+ * them). Set before the devices start; NULL measures. */
+extern mc_status (*mc_sync_test_free_space)(const char *dir, int64_t *out);
+
 /* --- Pairing (pairing.c) --- */
 
 /* The thread of an outgoing pairing; arg is a heap mc_pair_target, freed here. */

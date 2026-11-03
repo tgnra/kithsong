@@ -39,6 +39,10 @@ typedef struct mc_plan {
   int64_t total_bytes; /* the set at kbps; MC_PLAN_OVER_BUDGET: at 64 kbps */
   int64_t shortfall_bytes; /* MC_PLAN_OVER_BUDGET: how much too big at 64 kbps */
   int64_t limit_bytes;     /* with a budget, what the set had to fit in; else -1 */
+  /* Bytes this device already holds of the wanted set, in any format, whatever the status:
+   * what budget mode adds to the free space. Only it knows (files is local), so 0 for
+   * another device. */
+  int64_t held_bytes;
   /* With MC_PLAN_SIZES: the set's size at each step of the ladder (index 0 originals, then
    * mc_opus_bitrates' order), whatever the profile's own format. */
   int64_t step_bytes[MC_PLAN_STEPS];

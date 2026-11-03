@@ -2234,6 +2234,10 @@ mc_status mc_sync_confirm_now(mc_sync *sync, const char *device_uid) {
   /* This device's profile at once, so it's confirmed even if no member is in reach. The
    * write is group data, which the change poll passes on. */
   mc_mutex_lock(&sync->api_lock);
+  /* "Budget mode": a profile nobody has confirmed yet that wants more originals than this
+   * device has room for gets its budget first, so the press confirms it with the budget
+   * (best effort: a failed write leaves the profile as it is). */
+  mc_profile_auto_budget(&sync->api, NULL);
   mc_status st = mc_profile_confirm(sync->api.sdb, NULL);
   /* A merge of this device's old library waited for this; it runs after the session the
    * press starts (best effort: a failed write leaves it waiting for the next press). */

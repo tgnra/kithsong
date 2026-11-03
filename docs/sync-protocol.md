@@ -749,6 +749,8 @@ the plaintext limit.
     space is measured for the device running it and taken from `capabilities.free_bytes`
     for another. A device with no `profiles` row is estimated as if the candidate were
     stored.
+  - A device whose profile has never been confirmed turns the budget on itself when its
+    originals wouldn't fit (see [Confirming profiles](#confirming-profiles)).
 - **Reconcile**, at the end of every session on the receiving device, after `BYE`, when its
   plan is not over budget:
   - It deletes files of tracks that are no longer wanted, are in the wrong format, or have
@@ -828,6 +830,27 @@ profile and pressed Sync.
   receiving turn. That write comes after the group exchange, so the peer hears of it in the
   next session, as for the node uid. A sync started otherwise (`mc_sync_now()`, the
   scheduler, background work with `mc_sync_background()`) confirms nothing.
+- **A budget from free space.** A new member's default profile (everything, originals, no
+  budget) ignores free space, so a watch with 8 GB free joining a 60 GB library would try
+  to fetch it all. So, while its `confirmed_profile` is still NULL (nobody has looked at
+  the profile yet), a device that isn't an archive, whose profile wants originals with the
+  budget off, and whose wanted set as originals (sizes as the plan estimates them) is more
+  than its room, i.e. its free space plus the bytes it already holds of the set, sets
+  `budget_enabled = 1` on its own profile. `budget_bytes` gets nine tenths of that room
+  rounded down to a whole GiB, at least 1 GiB (the editors show and store whole GB, and
+  read NULL as their default size), unless the row already holds a size, which stays. It's
+  a logged edit like any other, so every member's editor shows "Budget: on" and older
+  versions apply it as one. The device does it in each session after the group exchange,
+  before the confirm step and the file phase, so the plan of that same turn already fits
+  the budget; the library exchange follows, so a new member's first session (pairing)
+  sees an empty library and the next session, or the press of Sync, decides. Pressing Sync
+  on the device (`mc_sync_confirm_now()`) applies it before confirming, so the budget is
+  part of what the press confirms. Nothing changes for an archive, a profile set to a
+  bitrate (the user chose a format), a device whose free space is unknown (`-1`), a library
+  that isn't the group's, or a profile ever confirmed: a user who confirms with the budget
+  off has chosen, and that stays. Other members don't set it for the device (their
+  `capabilities.free_bytes` for it may be stale, and the edit would race the device's own);
+  they see it after the follow-up session.
 
 ### Removing from one device
 

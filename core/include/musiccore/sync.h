@@ -421,7 +421,17 @@ void mc_sync_set_automatic(mc_sync *sync, int on);
  * the device's profile; any later change to it (from any member) pauses the device again
  * until the next press. A new member starts unconfirmed, so pairing alone never moves
  * files. Names don't count as changes, nor do edits that leave what the device holds as it
- * was (the selection while it syncs everything, an archive's fields). */
+ * was (the selection while it syncs everything, an archive's fields).
+ *
+ * A budget from free space. While its profile has never been confirmed, a device that isn't
+ * an archive and wants originals with no budget, but has less room (free space plus what it
+ * already holds of the set) than those originals take, turns its own budget on before it's
+ * confirmed or its files are worked out, with budget_bytes nine tenths of that room in
+ * whole GiB (at least one) unless a size was stored already: a watch joining a large
+ * library fills with what fits instead of running out of room. It's an ordinary logged
+ * profile edit, so every member's editor shows it. A profile confirmed with the budget off
+ * is the user's choice and stays; so does one in another format, or on a device whose free
+ * space is unknown. */
 
 typedef enum mc_sync_confirm_state {
   MC_SYNC_CONFIRMED,      /* its profile is as its user last confirmed: files sync on their own */
@@ -650,7 +660,9 @@ typedef struct mc_sync_profile {
    * mc_sync_estimate). */
   mc_transcode_opts format;
   int budget_enabled;
-  int64_t budget_bytes;     /* the budget; 0 = the device's free space alone. Kept while
+  int64_t budget_bytes;     /* the budget; 0 = the device's free space alone (editors show
+                             * and store a figure, so a budget the core sets itself has
+                             * one; see "Confirming profiles" below). Kept while
                              * !budget_enabled so it comes back. */
   mc_profile_item *items;   /* the selection; kept while sync_all so it comes back */
   int count;

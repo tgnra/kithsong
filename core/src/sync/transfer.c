@@ -1844,8 +1844,7 @@ static mc_status receive_turn(mc_session *s) {
   /* Another session already fetching skips this turn: its peer may have it all anyway. */
   if (x && files_try(s->sync)) {
     x->receiving = 1;
-    int64_t free_bytes = -1;
-    if (mc_free_space(mc_library_dir(s->conn->lib), &free_bytes) != MC_OK) free_bytes = -1;
+    int64_t free_bytes = mc_sync_free_space(s->conn->lib);
     uint64_t t0 = mc_mono_ms();
     if (mc_plan_compute(s->conn->sdb, s->conn->lib, mc_sync_db_device_uid(s->conn->sdb),
                         free_bytes, &x->plan) == MC_OK &&
@@ -2330,8 +2329,7 @@ mc_status mc_sync_verify(mc_sync *sync, mc_verify_mode mode, mc_verify_result *o
   mc_verify_result r;
   verify_files(sync->api.lib, mode == MC_VERIFY_DEEP, &r);
   if (state == MC_SYNC_LIBRARY_GROUP) {
-    int64_t free_bytes = -1;
-    if (mc_free_space(mc_library_dir(sync->api.lib), &free_bytes) != MC_OK) free_bytes = -1;
+    int64_t free_bytes = mc_sync_free_space(sync->api.lib);
     mc_plan *plan = NULL;
     if (mc_plan_compute(sync->api.sdb, sync->api.lib, sync->device_uid, free_bytes, &plan) ==
             MC_OK &&

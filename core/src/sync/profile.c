@@ -592,16 +592,147 @@ mc_status mc_sync_set_archive(mc_sync *sync, const char *device_uid, int archive
   return st;
 }
 
+/* --- Free space --- */
+
+mc_status (*mc_sync_test_free_space)(const char *dir, int64_t *out) = NULL;
+
+int64_t mc_sync_free_space(mc_library *lib) {
+  const char *dir = lib ? mc_library_dir(lib) : NULL;
+  if (!dir) return -1;
+  int64_t free_bytes = -1;
+  mc_status st = mc_sync_test_free_space ? mc_sync_test_free_space(dir, &free_bytes)
+                                         : mc_free_space(dir, &free_bytes);
+  return st == MC_OK && free_bytes >= 0 ? free_bytes : -1;
+}
+
+/* --- A budget set from free space --- */
+
+/* Budgets are set and shown in whole GiB. */
+#define AUTO_BUDGET_UNIT ((int64_t)1 << 30)
+
+/* Whether the open library is the group's (as mc_sync_library_state() decides): a plan over
+ * any other library says nothing about what this device will hold. */
+static int library_is_groups(mc_sync_conn *c) {
+  const char *group = mc_sync_db_group_uid(c->sdb);
+  if (!group) return 0;
+  char group_lib[MC_UID_STRLEN] = "", mine[MC_UID_STRLEN] = "";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(c->sdb),
+                         "SELECT library_uid FROM sync_group WHERE uid = ?1", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return 0;
+  sqlite3_bind_text(stmt, 1, group, -1, SQLITE_STATIC);
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *v = (const char *)sqlite3_column_text(stmt, 0);
+    if (is_uid(v)) memcpy(group_lib, v, MC_UID_STRLEN);
+  }
+  sqlite3_finalize(stmt);
+  if (sqlite3_prepare_v2(mc_library_db(c->lib), "SELECT value FROM meta WHERE key = 'library_uid'",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *v = (const char *)sqlite3_column_text(stmt, 0);
+    if (is_uid(v)) memcpy(mine, v, MC_UID_STRLEN);
+  }
+  sqlite3_finalize(stmt);
+  return group_lib[0] && !strcmp(group_lib, mine);
+}
+
+/* Whether uid's profile has ever been confirmed (devices.confirmed_profile set). */
+static int ever_confirmed(sqlite3 *db, const char *uid) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db, "SELECT confirmed_profile FROM devices WHERE uid = ?1", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return 0;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  int yes = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *v = (const char *)sqlite3_column_text(stmt, 0);
+    yes = v && *v;
+  }
+  sqlite3_finalize(stmt);
+  return yes;
+}
+
+/* The budget for a device with room bytes for music: nine tenths, so the volume isn't
+ * filled to the last byte (the OS, the databases and covers need some), rounded down to
+ * whole GiB as the editors show it, and at least one so it never reads as unset. */
+static int64_t tidy_budget(int64_t room) {
+  int64_t budget = room - room / 10;
+  budget -= budget % AUTO_BUDGET_UNIT;
+  return budget < AUTO_BUDGET_UNIT ? AUTO_BUDGET_UNIT : budget;
+}
+
+mc_status mc_profile_auto_budget(mc_sync_conn *c, int *wrote) {
+  if (wrote) *wrote = 0;
+  if (!c || !c->sdb || !c->lib || !mc_sync_db_group_uid(c->sdb)) return MC_OK;
+  sqlite3 *db = mc_sync_db_handle(c->sdb);
+  const char *me = mc_sync_db_device_uid(c->sdb);
+  /* The cheap checks first: most sessions stop here. */
+  if (ever_confirmed(db, me)) return MC_OK;
+  mc_sync_profile p;
+  int exists = 0;
+  mc_status st = read_fields(db, me, &p, &exists);
+  if (st != MC_OK) return st;
+  free(p.name);
+  if (!exists || p.archive || p.budget_enabled || p.format.format != MC_FORMAT_ORIGINAL) return MC_OK;
+  int64_t free_bytes = mc_sync_free_space(c->lib);
+  if (free_bytes < 0 || !library_is_groups(c)) return MC_OK;
+
+  mc_plan *plan = NULL;
+  st = mc_plan_compute(c->sdb, c->lib, me, free_bytes, &plan);
+  if (st != MC_OK) return st;
+  int64_t room = free_bytes + plan->held_bytes;
+  int fits = plan->status != MC_PLAN_OK || plan->total_bytes <= room;
+  int64_t total = plan->total_bytes;
+  mc_plan_free(plan);
+  if (fits) return MC_OK;
+
+  int64_t budget = tidy_budget(room);
+  st = mc_sync_db_begin_write(c->sdb);
+  if (st != MC_OK) return st;
+  /* The conditions again, inside the write, so an edit that arrived meanwhile wins; the
+   * update trigger logs only the columns that change. A size the row already holds (set
+   * with the budget off) is the user's and stays. */
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db,
+                         "UPDATE profiles SET budget_enabled = 1,"
+                         " budget_bytes = coalesce(nullif(budget_bytes, 0), ?2)"
+                         " WHERE device_uid = ?1 AND coalesce(budget_enabled, 0) = 0"
+                         " AND coalesce(format, 'original') = 'original'"
+                         " AND coalesce(archive, 0) = 0"
+                         " AND coalesce((SELECT confirmed_profile FROM devices WHERE uid = ?1), '') = ''",
+                         -1, &stmt, NULL) != SQLITE_OK) {
+    mc_sync_db_rollback(c->sdb);
+    return MC_ERR_DB;
+  }
+  sqlite3_bind_text(stmt, 1, me, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 2, budget);
+  st = run(stmt);
+  sqlite3_finalize(stmt);
+  int changes = st == MC_OK ? sqlite3_changes(db) : 0;
+  if (st == MC_OK) st = mc_sync_db_commit(c->sdb);
+  if (st != MC_OK) {
+    mc_sync_db_rollback(c->sdb);
+    return st;
+  }
+  if (changes > 0) {
+    fprintf(stderr,
+            "musiccore: sync: this device's profile wants %lld bytes of originals but has room"
+            " for %lld: storage budget turned on\n",
+            (long long)total, (long long)room);
+    if (wrote) *wrote = 1;
+  }
+  return MC_OK;
+}
+
 /* --- Size estimate --- */
 
 /* device_uid's free space: measured here for this device, else from its capabilities row.
  * -1 if unknown. */
 static int64_t free_space(mc_sync *sync, const char *device_uid) {
   int64_t free_bytes = -1;
-  if (!strcmp(device_uid, mc_sync_device_uid(sync))) {
-    if (mc_free_space(mc_library_dir(sync->api.lib), &free_bytes) != MC_OK) free_bytes = -1;
-    return free_bytes;
-  }
+  if (!strcmp(device_uid, mc_sync_device_uid(sync))) return mc_sync_free_space(sync->api.lib);
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_sync_db_handle(sync->api.sdb),
                          "SELECT free_bytes FROM capabilities WHERE device_uid = ?1", -1, &stmt,

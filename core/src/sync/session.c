@@ -213,8 +213,8 @@ mc_status mc_session_refresh_self(mc_sync *sync, mc_sync_conn *c) {
   /* What's true now. The benchmark runs once and is kept in this row. */
   int new_score = (int)score;
   if (!has_score && mc_transcode_benchmark(&new_score) != MC_OK) new_score = 0;
-  int64_t new_free = 0;
-  if (mc_free_space(mc_library_dir(c->lib), &new_free) != MC_OK) new_free = 0;
+  int64_t new_free = mc_sync_free_space(c->lib);
+  if (new_free < 0) new_free = 0;
   /* Placeholders until the platforms report them: desktops are on mains and transcode. */
   int desktop = sync->kind == MC_DEVICE_DESKTOP;
   char hints[MC_SYNC_HINTS_MAX];
@@ -759,6 +759,14 @@ mc_status mc_session_run(mc_session *s) {
    * same rows meanwhile, so all of them count us as an archive anyway. */
   int restored = 0;
   if (mc_archive_restore(s->conn->sdb, &restored) == MC_OK && restored) s->follow_up = 1;
+
+  /* "Budget mode": with the group's rows here, a profile of ours that nobody has confirmed
+   * yet and that wants more originals than this device has room for gets a budget, before
+   * a press confirms it and before the file phase works out what to fetch. The library
+   * exchange hasn't run yet, so this reads the library as the last session left it; a new
+   * member's first session (pairing) sees an empty one and the next session decides. */
+  int budgeted = 0;
+  if (mc_profile_auto_budget(s->conn, &budgeted) == MC_OK && budgeted) s->follow_up = 1;
 
   /* "Confirming profiles": a press of Sync at either end confirms this device's profile as
    * the group exchange left it. Written after the exchange, so the peer hears of it next

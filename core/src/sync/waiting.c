@@ -197,8 +197,7 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
     return MC_OK;
   }
 
-  int64_t free_bytes = -1;
-  if (mc_free_space(mc_library_dir(lib), &free_bytes) != MC_OK) free_bytes = -1;
+  int64_t free_bytes = mc_sync_free_space(lib);
   mc_plan *plan = NULL;
   mc_status st = mc_plan_compute(sdb, lib, mc_sync_db_device_uid(sdb), free_bytes, &plan);
   if (st != MC_OK || plan->status != MC_PLAN_OK) {

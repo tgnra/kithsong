@@ -395,16 +395,17 @@ mc_status mc_plan_compute_profile(mc_sync_db *sdb, mc_library *lib, const char *
   if (st == MC_OK && (flags & MC_PLAN_SIZES))
     for (int l = 0; l < MC_PLAN_STEPS; l++) plan->step_bytes[l] = total_at(cands, n, ladder[l]);
 
+  /* What this device already holds of the set counts as room it has: those bytes are spent
+   * on the set already. Another device's files aren't known here. */
+  if (st == MC_OK && !strcmp(device_uid, mc_sync_db_device_uid(sdb)))
+    for (int i = 0; i < n; i++)
+      if (cands[i].wanted) plan->held_bytes += cands[i].held;
+
   int chosen = start;
   if (st == MC_OK && budget) {
     int64_t limit = budget_bytes > 0 ? budget_bytes : INT64_MAX;
-    if (free_bytes >= 0) {
-      int64_t held = 0;
-      if (!strcmp(device_uid, mc_sync_db_device_uid(sdb)))
-        for (int i = 0; i < n; i++)
-          if (cands[i].wanted) held += cands[i].held;
-      if (free_bytes + held < limit) limit = free_bytes + held;
-    }
+    if (free_bytes >= 0 && free_bytes + plan->held_bytes < limit)
+      limit = free_bytes + plan->held_bytes;
     if (limit != INT64_MAX) plan->limit_bytes = limit;
     chosen = -1;
     int64_t total = 0;
