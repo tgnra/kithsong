@@ -221,7 +221,6 @@
     "smart_albums_where": { "text": "Albums where {0}", "note": "A smart album group's rule as a sentence; {0} is its conditions." },
     "smart_all_tracks": { "text": "All tracks", "note": "A smart playlist's rule that picks every track." },
     "smart_all_albums": { "text": "All albums", "note": "A smart album group's rule that picks every album." },
-    "smart_no_albums": { "text": "No albums", "note": "A smart album group's rule that can't pick any album." },
     "smart_quoted": { "text": "“{0}”", "note": "A text value in a smart list's rule, e.g. genre contains “jazz”." },
     "smart_and_two": { "text": "{0} and {1}", "note": "Two of a smart list rule's conditions that must all be true." },
     "smart_and_more": { "text": "{0}, {1}", "note": "Joins all but the last of three or more conditions that must all be true: {0} is the first ones." },
@@ -232,8 +231,8 @@
     "smart_parens": { "text": "({0})", "note": "A group of conditions inside a smart list's rule." },
     "smart_none_of": { "text": "none of ({0})", "note": "In a smart list's rule: none of these conditions is true. {0} is the conditions joined with \"or\"." },
     "smart_not_all_of": { "text": "not all of ({0})", "note": "In a smart list's rule: at least one of these conditions is false. {0} is the conditions joined with \"and\"." },
-    "smart_always": { "text": "anything matches", "note": "An empty group of conditions that's always true, inside a smart list's rule." },
-    "smart_never": { "text": "nothing matches", "note": "An empty group of conditions that's never true, inside a smart list's rule." },
+    "smart_named": { "text": "it matches {0}", "note": "A named group of conditions inside a smart list's rule, read as its name: {0} is the name in quotes (smart_quoted), e.g. \"genre contains “jazz” and it matches “Fresh stuff”\"." },
+    "smart_not_named": "it doesn't match {0}",
 
     "smart_cond_is": { "text": "{0} is {1}", "note": "A smart list rule's condition. In smart_cond_*, {0} is a field (smart_field_*_in_text) and {1} a value, e.g. “jazz” or 1969." },
     "smart_cond_is_not": "{0} isn't {1}",

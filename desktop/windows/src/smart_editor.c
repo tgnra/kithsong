@@ -81,6 +81,7 @@ typedef struct item {
   int mode;
   cond *kids[MAX_KIDS];
   int nkids;
+  char *name; /* a group's name, if it had one: not shown, but written back as it was */
   HWND label, mode_box, of_label, count, remove, add;
 } item;
 
@@ -146,6 +147,7 @@ static struct {
   mc_album_group_list *groups;
 
   int mode;
+  char *match_name; /* the top-level group's name, as an item's */
   item *items[MAX_ITEMS];
   int nitems;
   sort_key sorts[MAX_SORTS];
@@ -527,6 +529,7 @@ static void free_item(item *it) {
   if (!it) return;
   free_cond(it->c);
   for (int i = 0; i < it->nkids; i++) free_cond(it->kids[i]);
+  free(it->name);
   HWND *ws[] = {&it->label, &it->mode_box, &it->of_label, &it->count, &it->remove, &it->add};
   for (size_t i = 0; i < sizeof ws / sizeof ws[0]; i++) destroy(ws[i]);
   free(it);
@@ -622,14 +625,19 @@ static yyjson_mut_val *cond_json(yyjson_mut_doc *d, cond *c) {
   return obj;
 }
 
-/* {"all": [...]}, {"any": [...]} or, for none, {"not": {"any": [...]}}. */
-static yyjson_mut_val *mode_json(yyjson_mut_doc *d, int mode, yyjson_mut_val *list) {
-  yyjson_mut_val *obj = yyjson_mut_obj(d);
+/* {"all": [...]}, {"any": [...]} or, for none, {"not": {"any": [...]}}, with name (if not
+ * NULL) on the outermost of them. */
+static yyjson_mut_val *mode_json(yyjson_mut_doc *d, int mode, yyjson_mut_val *list, const char *name) {
+  yyjson_mut_val *obj = yyjson_mut_obj(d), *top = obj;
+  if (mode == MODE_NONE) {
+    top = yyjson_mut_obj(d);
+    if (name) yyjson_mut_obj_add_strcpy(d, top, "name", name);
+    yyjson_mut_obj_add_val(d, top, "not", obj);
+  } else if (name) {
+    yyjson_mut_obj_add_strcpy(d, obj, "name", name);
+  }
   yyjson_mut_obj_add_val(d, obj, mode == MODE_ALL ? "all" : "any", list);
-  if (mode != MODE_NONE) return obj;
-  yyjson_mut_val *not = yyjson_mut_obj(d);
-  yyjson_mut_obj_add_val(d, not, "not", obj);
-  return not;
+  return top;
 }
 
 static yyjson_mut_val *item_json(yyjson_mut_doc *d, item *it, BOOL *ok) {
@@ -644,7 +652,7 @@ static yyjson_mut_val *item_json(yyjson_mut_doc *d, item *it, BOOL *ok) {
     *ok &= v != NULL;
     if (v) yyjson_mut_arr_append(list, v);
   }
-  return mode_json(d, it->mode, list);
+  return mode_json(d, it->mode, list, it->name);
 }
 
 /* The rule as it stands (malloc'd), or NULL if anything in it is missing. prefix >= 0 makes
@@ -660,13 +668,14 @@ static char *build(int prefix, BOOL with_limit) {
   BOOL ok = TRUE;
   int n = prefix >= 0 ? prefix + 1 : ed.nitems;
   int mode = prefix >= 0 ? MODE_ALL : ed.mode;
-  if (n || mode != MODE_ALL) {
+  const char *name = prefix >= 0 ? NULL : ed.match_name;
+  if (n || name) { /* an empty group is ignored, so it's left out unless it has a name to keep */
     yyjson_mut_val *list = yyjson_mut_arr(d);
     for (int i = 0; i < n; i++) {
       yyjson_mut_val *v = item_json(d, ed.items[i], &ok);
       if (v) yyjson_mut_arr_append(list, v);
     }
-    yyjson_mut_obj_add_val(d, root, "match", mode_json(d, mode, list));
+    yyjson_mut_obj_add_val(d, root, "match", mode_json(d, mode, list, name));
   }
   if (prefix < 0) {
     yyjson_mut_val *order = yyjson_mut_arr(d);
@@ -798,10 +807,12 @@ static BOOL load_leaf(yyjson_val *node, cond **out) {
   return (*out = load_cond(not ? not : node, not != NULL)) != NULL;
 }
 
-/* {"all": [...]}, {"any": [...]} or {"not": {"any": [...]}}: its mode and list. FALSE for
+/* {"all": [...]}, {"any": [...]} or {"not": {"any": [...]}}: its mode, list and name (NULL if
+ * it has none; the rule has been validated, so it's on the outermost of them). FALSE for
  * anything else. */
-static BOOL group_of(yyjson_val *node, int *mode, yyjson_val **list) {
+static BOOL group_of(yyjson_val *node, int *mode, yyjson_val **list, const char **name) {
   yyjson_val *not = yyjson_obj_get(node, "not");
+  *name = yyjson_get_str(yyjson_obj_get(node, "name"));
   if (not) {
     *list = yyjson_obj_get(not, "any");
     *mode = MODE_NONE;
@@ -821,9 +832,12 @@ static BOOL load_rule(const char *rule) {
   ed.mode = MODE_ALL;
   yyjson_val *list = NULL;
   cond *c;
-  if (ok && match && !group_of(match, &ed.mode, &list)) { /* one condition on its own */
+  const char *name = NULL;
+  if (ok && match && !group_of(match, &ed.mode, &list, &name)) { /* one condition on its own */
     ok = load_leaf(match, &c) && (ed.items[ed.nitems] = new_item(c)) != NULL;
     ed.nitems += ok;
+  } else if (ok && match && name) {
+    ok = (ed.match_name = _strdup(name)) != NULL;
   }
   size_t idx, max;
   yyjson_val *node;
@@ -833,10 +847,10 @@ static BOOL load_rule(const char *rule) {
     yyjson_val *kids;
     if (ed.nitems >= MAX_ITEMS) {
       ok = FALSE;
-    } else if (group_of(node, &mode, &kids)) {
+    } else if (group_of(node, &mode, &kids, &name)) {
       item *g = new_group(mode);
       ed.items[ed.nitems++] = g;
-      ok = g != NULL;
+      ok = g != NULL && (!name || (g->name = _strdup(name)) != NULL);
       size_t k, kmax;
       yyjson_val *kid;
       yyjson_arr_foreach(kids, k, kmax, kid) {
@@ -1887,6 +1901,8 @@ static void on_dpi_changed(UINT dpi, const RECT *suggested) {
 static void free_rows(void) {
   for (int i = 0; i < ed.nitems; i++) free_item(ed.items[i]);
   ed.nitems = 0;
+  free(ed.match_name);
+  ed.match_name = NULL;
   while (ed.nsorts) remove_sort(ed.nsorts - 1);
 }
 
