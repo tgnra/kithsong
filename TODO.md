@@ -4,17 +4,15 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## For 1.0
 
-- **Smart playlist editor on Windows and Android** (being worked on) - only Linux can create or edit one (smart_editor.c, a page per group); Windows' dialog was taken out. Android also needs rename and delete (Windows and Linux have them). An Android editor would be built from mc_smart_field_get() and the mc_smart_*_label() words
-- **Android delete with restore** (being worked on) - deletes are permanent there; the desktops have a trash to restore from
 - **Home page** - Home in the desktop sidebars stays greyed out until it exists
 - **Repeat and a play queue** - Core: repeat (one, all). All: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither) and a view of what's queued. Windows and Linux: Ctrl+R for repeat (kept free for it)
-- **Wear OS** - from prototype to a real app:
-  - Playback: a foreground MediaSessionService, so the system doesn't kill playback in the background and the watch's media controls work
-  - Playback: route to Bluetooth headphones and prompt to connect them, rather than the watch speaker
-  - Playback: progress and seeking on the player screen, and a way back to the player from the home screen
-  - Playback: count plays and scrobble them (CorePlayer's Played event, as the phone does)
-  - Sync: drive the sync screen from the core instead of SampleSync, request a Wi-Fi network while syncing (Wear OS keeps Wi-Fi off while the phone is connected over Bluetooth), and sync in the background, not only while the sync screen is open
-  - Artists, Playlists, and more in Settings (it has only the licences)
+- **Wear OS** - small on purpose: albums, playlists and album groups (what has files on the watch; a long press adds to an existing playlist or group), background playback through a media session, and sync through the core (pairs as device B; its profile is chosen on the other devices). Left:
+  - Playback: a drag to seek on the player (the crown seeks; a horizontal drag would fight swipe-to-dismiss)
+  - Sync: a watch removed from its group keeps its library, so it can only re-pair with an empty one (library_mismatch): a way to forget its library in Settings, or let a watch join over a mismatch
+  - Sync: check on a real watch that the Wi-Fi request (TRANSPORT_WIFI while sync runs) and the charger job's unmetered constraint bring Wi-Fi up, and the listener and discovery follow it (only seen on an emulator with a cellular network)
+  - Core: a member editing a never-confirmed device's profile doesn't see the budget it set itself from free space until the next session; the editor could estimate it from capabilities.free_bytes
+  - Playlists and album groups: the watch only adds (no removing, reordering or renaming)
+  - Decided: no artists, search, recents or smart lists for now; Settings has only the licences
 
 ## Release
 
@@ -24,7 +22,6 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## Library and browsing
 
-- Windows and Linux - artist pictures
 - Windows and Linux - Recents show cover art rather than the page's icon (no sidebar row has art yet)
 - Windows - an all-singles Albums page says "No music yet"; use Linux's "No albums" text, which points to the artists' Singles and search (move its strings from the linux section to shared)
 - Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results
@@ -157,7 +154,11 @@ Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <
 - A pairing finishing after leaving the app, and an upgrade from 0.4.2 leaving no WorkManager job (`adb shell dumpsys jobscheduler`)
 - The one-time handover of the old prefs recents to the core
 - API 24-32 devices (API 24-25 duck through the core's volume)
-- Wear OS: the Settings and licences screens scrolling with the crown, and a licence opened from the list showing its name
+- Wear OS: sync on a real watch and with a desktop peer (only seen between Wear and phone emulators); a wrong code, the refusals, the waiting sentence and the failure line; the service's notification
+- Wear OS: headphones connecting or unplugging mid-play, a real crown's seeking, album art in the media controls, a real scrobble
+- Wear OS: playlists' and groups' long-press haptic, failure notice and TalkBack labels, and the watch's additions reaching a peer
+- Wear OS: a licence's long text scrolling with the crown and showing its name
+- Android: the smart list editor and the recycle bin on a device (Restore, Empty, the sync button's dot)
 
 ### Cross-platform
 - merge_restored's notice (never seen anywhere); on Windows, that it fits the now-playing strip
