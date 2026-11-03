@@ -7,12 +7,12 @@ Big pieces that haven't been started, or that only one platform has.
 - **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; only Linux can create or edit one (its rule editor, smart_editor.c, a page per group), and Windows and Linux rename or delete one. Windows' editor was taken out, so Windows and Android both lack one (an Android editor would be built from mc_smart_field_get() and the mc_smart_*_label() words)
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
-- **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
+- **Wear OS** - small on purpose: albums, playlists and album groups (only what has files on the watch; a long press adds to an existing playlist or group, none are created), a player in the background through a media session, and sync through the core (the watch pairs as device B and its profile is chosen and confirmed on the other devices: no profile editor or Sync button; it syncs on screen, finishes a transfer in the background, and runs about hourly on the charger). No artists, no search, no recents; Settings has only the licences
 - **Releases** - a portable zip and an unsigned MSIX for the Store (scripts/package-msix.ps1) on Windows (no installer or signing), and a Flatpak bundle on Linux (no Flathub listing); Android and Wear OS: signed APKs and AABs, R8 on, licences in Settings
 
 ### Parity at a glance
 
-Only where the platforms differ. Windows, Linux and Android all have albums, playlists (browse and edit), album groups, recents, search, the core's shuffle, merging libraries and archive devices. Wear OS has albums and a basic player only, and its sync is a mock-up.
+Only where the platforms differ. Windows, Linux and Android all have albums, playlists (browse and edit), album groups, recents, search, the core's shuffle, merging libraries and archive devices. Wear OS has albums, playlists and album groups (browse, and add to an existing one), a player and sync, but no artists, search, recents, smart lists, profile editing or Sync button.
 
 | Feature | Windows | Linux | Android |
 |---|---|---|---|
@@ -157,15 +157,12 @@ The album grid, track list, sidebar and search page have UI Automation providers
 
 ## Wear OS
 
-- Playback - a foreground MediaSessionService, so the system doesn't kill playback in the background and the watch's media controls work
-- Playback - route to Bluetooth headphones and prompt to connect them, rather than the watch speaker
-- Playback - progress and seeking on the player screen
-- Playback - a way back to the player from the home screen
-- Playback - count plays and scrobble them: CorePlayer's Played event, as the phone does
-- Sync - drive the sync screen from the core instead of SampleSync
-- Sync - request a Wi-Fi network while syncing; Wear OS keeps Wi-Fi off while the phone is connected over Bluetooth
-- Sync - sync in the background, not only while the sync screen is open
-- Artists, Playlists, and more in Settings (it has only Open source licences)
+- Playback - a drag to seek on the player (the crown seeks; a horizontal drag would fight swipe-to-dismiss)
+- Sync - a watch removed from its group keeps a library with tracks, so it can only re-pair with an empty library (library_mismatch): it needs a way to forget its library (Settings), or the core could let a watch join over a mismatch
+- Sync - the Wi-Fi request (requestNetwork for TRANSPORT_WIFI while sync runs) and the charger job's unmetered constraint only ran on an emulator whose network is cellular: check on a watch that Wi-Fi comes up and the listener and discovery follow it
+- Core - a member editing a never-confirmed device's profile doesn't see the budget the device sets itself from its free space until the follow-up session; the editor could estimate it from capabilities.free_bytes if that proves confusing
+- Playlists and album groups - the watch only adds: no removing or reordering entries, no renaming (no text entry)
+- Not planned for now: artists, search, recents and smart lists; Settings has only Open source licences (no device name, no leaving the group)
 
 ## Testing and verification
 
@@ -215,6 +212,10 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - Merging libraries: the progress window was only seen for an instant (a three-track test merge finishes at once), and the pending note after a restart was never seen (both seen on Linux); the library_mismatch update hint (it needs a peer running an older version) has been seen nowhere
 
 ### Android and Wear OS
+- Wear OS sync, only on the Wear emulator with a phone emulator as the peer (pairing, the remote Sync press confirming the watch, files arriving with progress, the service finishing a transfer after Home, the hourly job holding back a member synced within the hour): never a real watch or a desktop peer. Not seen live: a wrong code, the refusals (in_group, library_mismatch, already_paired), the waiting sentence and the failure line (previews only), the service's notification in the tray. Two emulators are both 10.0.2.15, and the core tries a member's address hints before the address that last worked, so each first connected to itself: the test needed each app on a different port; skipping hints equal to the device's own addresses would be a core improvement
+- Wear OS playback, only on the emulator: headphones connecting or unplugging mid-play (Media3's becoming-noisy pause), a real crown's feel for seeking (5 s per detent, seen only with injected rotary events), album art in the media controls, a real scrobble (the scrobbler opens and queues; no account on the emulator), and the notification permission prompt on a real watch
+- Wear OS playlists and album groups, only on the emulator with a seeded library: the long press's haptic, the failure notice, TalkBack's reading of the long-press labels, and the watch's additions reaching a peer by sync (only the changelog rows were checked) were not seen
+- A watch joining a large library: the budget turns on by itself before the first Sync (log line "storage budget turned on"), and the other devices' profile editors show Budget on after the next sync (test_sync_budget covers the core; never seen on a device)
 - Smart playlists' and groups' pictures (mc_smart_art()), and empty playlists in the Playlists section and Recents, on screen (only built)
 - Remove from this phone / Sync to this phone on screen, in a real group (only built), including stopping playback when it takes a queued track
 - Settings' Play albums in order switch (only built)
@@ -234,7 +235,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - API 24-32 devices, audio focus during calls, ducking (only API 24-25 duck through the core's volume; the emulator is API 37), plays landing in the core's database
 - The themed launcher icon, and the sync notification icon
 - Android Auto, only compiled: browsing the four tabs and into albums, artists, playlists and groups on the Desktop Head Unit and in a car, the art in its lists (ArtProvider), playing a track from the middle of an album, voice and on-screen search, the tabs refreshing after a sync, and that the app's own player, notification and lock screen still work as before
-- Wear OS - the Settings and licences screens are only built, never run (no Wear OS emulator here): check they scroll with the crown, the long texts' monospaced paragraphs are readable, and a licence opened from the list shows its name
+- Wear OS - the licences screens: Settings and the list open on the emulator, but a licence's long monospaced text was never read through: check it scrolls with the crown and shows its name
 
 ### Cross-platform
 - A real Last.fm sign-in and scrobble (only fake sessions so far), and the sign-in reaching another device over a real sync
