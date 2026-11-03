@@ -32,4 +32,8 @@
 #define IDC_PL_HEADING 1103
 #define IDC_PL_NOTE 1104
 
+/* The smart list editor, smart_editor.c, whose controls other than Save and Cancel are
+ * made at run time. */
+#define IDD_SMART_EDITOR 105
+
 #endif

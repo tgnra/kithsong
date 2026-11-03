@@ -68,10 +68,11 @@ Priorities:
   and re-imports.
 - **Smart playlists and smart album groups** pick their tracks or albums by a rule, e.g. "jazz
   I haven't played in six months, least played first, 10 tracks", worked out afresh each time
-  from play counts and this device's files. The rule syncs whole. On Linux they're made and
-  edited with a rule editor, with a live preview (the arrow beside the page's +, where each
-  group of conditions opens as a page of its own); on Windows they can be opened, played,
-  reshuffled, renamed and deleted, and on Android opened, played and reshuffled so far.
+  from play counts and this device's files. The rule syncs whole. On Windows and Linux they're
+  made and edited with a rule editor, where each group of conditions opens as a page of its
+  own, with a live preview (on Windows right-click the Playlists or Album groups page; on
+  Linux the arrow beside the page's +); on Android they can be opened, played and reshuffled
+  so far.
 
 ### LAN sync
 

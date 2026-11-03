@@ -4,7 +4,7 @@
 
 Big pieces that haven't been started, or that only one platform has.
 
-- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; only Linux can create or edit one (its rule editor, smart_editor.c, a page per group), and Windows and Linux rename or delete one. Windows' editor was taken out, so Windows and Android both lack one (an Android editor would be built from mc_smart_field_get() and the mc_smart_*_label() words)
+- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; Windows and Linux can create, edit, rename or delete one (their rule editors, smart_editor.c each, show a page per group). Android needs its own (built from mc_smart_field_get() and the mc_smart_*_label() words)
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
@@ -17,7 +17,7 @@ Only where the platforms differ. Windows, Linux and Android all have albums, pla
 | Feature | Windows | Linux | Android |
 |---|---|---|---|
 | Artists | no art | no art | yes |
-| Smart playlists | rename, delete (no editor) | rule editor with a page per group, rename, delete | open, play, reshuffle (no editor) |
+| Smart playlists | rule editor with a page per group, rename, delete | rule editor with a page per group, rename, delete | open, play, reshuffle (no editor) |
 | Delete | with restore | with restore | permanent (no trash to restore from) |
 | Remove from this device | yes | only compiled | yes |
 | Volume | drop-down slider, keyboard | popover slider, keyboard, MPRIS | system's (core's for ducking) |
@@ -39,15 +39,16 @@ Only where the platforms differ. Windows, Linux and Android all have albums, pla
 - Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results; only from the album grid and the track list
 
 ### Smart playlists
-- Android - rule editor (from mc_smart_field_get()), and rename/delete; Linux has them
-- Windows - no rule editor (the dialog was taken out): smart lists are made and edited on Linux and arrive by sync; Windows can still open, play, reshuffle, rename and delete them
-- Linux - group names and empty groups (docs/schema.md) are written as the rule format has them, but a core that doesn't take names yet gets each rule without them (core_rule() in smart_editor.c), so saving there drops the names; take that out once every core takes them
-- Linux - a condition or group can't be moved to another group, or up and down within one; it's deleted and made again
-- Linux - "months" are 30 days and reopen as days (or weeks), and text conditions don't offer the library's genres and artists as you type
-- Linux - the editor only shows a "not" where it means a negative operator, or "none of" (a "not" around an "any"); any other rule opens read-only, as its sentence
+- Android - rule editor (from mc_smart_field_get()), and rename/delete; Windows and Linux have them
+- Windows - the rule editor (smart_editor.c) follows Linux's: a page per group in one resizable dialog, with the path (and a Back button) across the top, the preview beside the conditions (below them in a narrow window), and the problems in a box above Save. New Smart Playlist... and New Smart Album Group... are only on right-click menus (the Playlists and Album Groups pages' and the sidebar rows'), as there's no New button for manual playlists either; Linux has them on the arrow beside the pages' +
+- Windows and Linux - the list's own group's name, if a rule has one, isn't shown and isn't written back (only groups inside it keep theirs)
+- Windows and Linux - a condition or group can't be moved to another group, or up and down within one; it's deleted and made again
+- Windows and Linux - "months" are 30 days and reopen as days (or weeks), and text conditions don't offer the library's genres and artists as you type
+- Windows and Linux - the editor only shows a "not" where it means a negative operator, or "none of" (a "not" around an "any"); any other rule opens read-only, as its sentence
+- Windows - the editor's date picker (Date added or Last played before or after a date) stays light in dark mode: there's no dark theme for it
 - Core - mc_smart_describe() is English-shaped: conditions are joined as "field op value" clauses under "Tracks where …", and a language that needs grammatical case or agreement for a field or playlist name may need its own templates; dates use the smart_date template (local time), not the OS's date format
 - All - the v10 example lists' names are stored as data, so they're always English
-- Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it; on Linux a new one that picks nothing playable doesn't open after it's made
+- Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it, and on Windows a new smart playlist that picks nothing playable isn't selected after Create (a new smart group still opens); on Linux neither opens
 - Core - limit by total duration ("an hour of music")
 
 ### Delete
@@ -197,6 +198,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - The smart list editor (smart_editor.c) was only run under Xvfb with GTK 4.22 and libadwaita 1.9: seen were the ready-made rules, a page per group with its path, counts and preview, the problems card's Show, Escape going back a group, read-only and nested rules, saving, and Edit rules, Rename and Delete from the track list and a smart group's page. Not seen: GTK 4.14 and libadwaita 1.5, a screen reader, dark mode and a narrow window
 
 ### Windows
+- The smart list editor (smart_editor.c) was run on Windows 11 with a seeded scratch library, driven by posted messages and seen through PrintWindow, in light and dark: seen were the ready-made rules (both subjects), a page per group with its path, counts and preview, nested named groups opened by click and by Enter, every value control (text, number, between, days, date picker, Yes/No, playlist), the problems box and its Show, Escape, Alt+Left and the path going back a group, Escape on the list's page cancelling, read-only rules (and Escape from their text), a top-level "none of", removing a group, Shuffled, saving (group names kept) and creating, and Edit rules from a smart playlist's tile, its track list's menu and a smart group's page. Not seen: real keyboard and mouse input (the mouse's back button, hovering), a screen reader, high contrast, another DPI or moving between monitors, a narrow window (the preview below), more than four problems, and New Smart Playlist... from the right-click menus themselves (the sidebar's command was posted)
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
 - Firewall prompt: the success path after UAC, beyond one run
 - Firewall: Settings' "Ask about Windows Firewall again" and the elevated helper's removal of rules left for a moved exe (renamed to a unique name, then removed): firewall.c and settings_view.c only compiled to objects with mingw-w64, never linked or run. Check that renaming a rule taken from the policy's collection takes effect before Remove
