@@ -19,6 +19,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 11 | `files.source_sha256` (the bytes an imported file came from) |
 | 12 | no singles albums: `albums_singles` and `albums.kind`'s triggers dropped; no data changed |
 | 13 | artist credits: `tracks.artist_credit`, `albums.artist_credit`, `track_artists`, `album_artists`, `meta.artist_refresh` |
+| 14 | `recycle_bin` (deletes made here that no other device has heard of yet), `meta.changelog_epoch` |
 
 ## Location
 
@@ -71,7 +72,8 @@ a separate `sync.db` in the per-device config dir. See
 (`devices.confirmed_profile`). Removing an album or artist from one device needed no
 migration: it's a `profile_items` row of a new kind, `exclude_album` or `exclude_artist`
 (see [Removing from one device](sync-protocol.md#removing-from-one-device)), which older
-versions keep and ignore.
+versions keep and ignore. A track's delete taken back out of the recycle bin is the same
+with `exclude_track`.
 
 ## Deleted tracks
 
@@ -85,6 +87,40 @@ plays, playlist and album group entries, the file's own row) as JSON objects of 
 value. Restoring inserts them
 again with their old uids, using whichever columns the table still has, so records outlive
 migrations. Records are dropped once their file is back, or after 90 days.
+
+## Recycle bin
+
+A device with no trash (Android) removes a deleted track's files outright. In a sync group,
+where it isn't an archive, `mc_delete_run_to_bin()` keeps the delete in the library's
+`recycle_bin` table as well, so it can be taken back until the next sync (see
+[Recycle bin](sync-protocol.md#recycle-bin)). The table is this device's own: it isn't
+logged, and its rows only make sense against this library's changelog. One row per delete:
+
+| Column | |
+|--------|---|
+| `id` | the entry, `mc_bin_entry.id` |
+| `deleted_ms` | when (Unix ms) |
+| `kind` | `'albums'` or `'tracks'`: what was asked to be deleted |
+| `items` | JSON array of the album or track uids asked for (the tracks that went, for `'tracks'`) |
+| `title`, `artist` | the first item's title and artist credit as shown, for the bin's list |
+| `tracks` | tracks the delete took out of the library |
+| `seq_first`, `seq_last` | the `changelog` rows the delete logged: every one in between is the delete's, as it ran in one write transaction |
+| `rows` | JSON array, one record per track as `deleted.db` keeps (the track, its album and artists, both credits' rows, plays, playlist and album group places), without the file's row |
+
+The delete writes its row in the same transaction as the delete itself. Taking an entry back
+(`mc_delete_bin_take()`, in one transaction) deletes its changelog rows, puts the rows back
+with logging off (the changelog already holds their inserts and edits, as before the delete),
+and deletes the entry. If a later entry's delete took a row this one's records hold (the album
+of a track, gone with the album's last track), that entry is taken back too. A sync that sends
+the library's rows deletes every entry first (`mc_delete_bin_seal()`), so a delete can't be
+taken back once any other device may have it.
+
+Taking changelog rows out can lower `max(seq)`, and `seq` (an `INTEGER PRIMARY KEY`, not
+`AUTOINCREMENT`) is then given out again. Two readers count on it only growing: duplicate
+merging, whose `meta.merge_seq` is wound back to before the rows taken out, and search, which
+also compares `meta.changelog_epoch`, a counter each take bumps, so an index built before
+isn't taken for current. Merging libraries' reset (`mc_library_reset_for_merge()`) empties the
+bin with the changelog.
 
 
 ## Singles
@@ -328,7 +364,8 @@ makes the answer differ between devices.
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
 | `merge_keys`       | no     | the MusicBrainz ids ever logged per uid, which decide what merges (rows of singles albums' artists from before v12 are left, unused) |
 | `changelog`        | -      | field-level change log that sync is built on |
-| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `merge_wait` (set with it until this device's profile is confirmed: the merge waits for that, see [Merging libraries](sync-protocol.md#merging-libraries); its value is the run of the app that set it, and a later run finding it undoes the pairing), `merge_with` and `merge_name` (with them: the kept device's name and this device's own before pairing), `merge_restored` (the kept device's name, after a pairing was undone, until a frontend has said so), `merge_restore_sync` and `merge_restored_name` (while an undone pairing's `sync.db` and name are still to be put back; see "Abandoning a merge" there), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), and other per-library settings |
+| `recycle_bin`      | no     | deletes made here that no other device has heard of yet, which can be taken back; see [Recycle bin](#recycle-bin) |
+| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `merge_wait` (set with it until this device's profile is confirmed: the merge waits for that, see [Merging libraries](sync-protocol.md#merging-libraries); its value is the run of the app that set it, and a later run finding it undoes the pairing), `merge_with` and `merge_name` (with them: the kept device's name and this device's own before pairing), `merge_restored` (the kept device's name, after a pairing was undone, until a frontend has said so), `merge_restore_sync` and `merge_restored_name` (while an undone pairing's `sync.db` and name are still to be put back; see "Abandoning a merge" there), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), `changelog_epoch` (bumped each time a delete is taken back out of the recycle bin, which takes changelog rows out; see [Recycle bin](#recycle-bin)), and other per-library settings |
 
 ## Change tracking
 

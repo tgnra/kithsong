@@ -23,8 +23,11 @@ import ng.kithso.core.appendToPlaylist
 import ng.kithso.core.createAlbumGroup
 import ng.kithso.core.createPlaylist
 import ng.kithso.core.credit
+import ng.kithso.core.BinEntry
+import ng.kithso.core.binEntries as coreBinEntries
 import ng.kithso.core.deleteAlbumGroup
 import ng.kithso.core.deletePermanently
+import ng.kithso.core.deleteToBin
 import ng.kithso.core.deletePlaylist
 import ng.kithso.core.deletePreview
 import ng.kithso.core.deleteTakesAny
@@ -109,6 +112,9 @@ class CoreLibrarySource(
 
     /** Called after a change made here, for sync to pass on soon. */
     var onChanged: () -> Unit = {}
+
+    /** Whether a delete goes to the recycle bin: in a sync group, as sync says ([RecycleBin]). */
+    var binOffered: suspend () -> Boolean = { false }
 
     // Only touched on [core].
     private var lib: CoreLibrary? = null
@@ -588,7 +594,8 @@ class CoreLibrarySource(
 
     override suspend fun deleteSize(what: Deletion): DeleteSize? = withContext(core) {
         try {
-            open()?.deletePreview(what.kind.core, what.uid)?.let { DeleteSize(it.tracks, it.files) }
+            val toBin = binOffered()
+            open()?.deletePreview(what.kind.core, what.uid)?.let { DeleteSize(it.tracks, it.files, toBin) }
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't find out what deleting $what takes", e)
             null
@@ -608,9 +615,14 @@ class CoreLibrarySource(
     // asked goes away.
     override suspend fun delete(what: Deletion): DeleteOutcome = scope.async(core) {
         val lib = open() ?: return@async DeleteOutcome.Failed
+        val toBin = binOffered()
         val outcome = try {
-            val result = lib.deletePermanently(what.kind.core, what.uid)
-            Log.i(TAG, "Deleted $what: ${result.tracksDeleted} tracks, ${result.filesRemoved} files, ${result.tracksKept} kept")
+            val result = if (toBin) lib.deleteToBin(what.kind.core, what.uid) else lib.deletePermanently(what.kind.core, what.uid)
+            Log.i(
+                TAG,
+                "Deleted $what${if (toBin) " to the recycle bin" else ""}: ${result.tracksDeleted} tracks, " +
+                    "${result.filesRemoved} files, ${result.tracksKept} kept",
+            )
             if (result.tracksKept > 0) DeleteOutcome.Kept(result.tracksKept) else DeleteOutcome.Deleted
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't delete $what", e)
@@ -622,6 +634,16 @@ class CoreLibrarySource(
         onChanged()
         outcome
     }.await()
+
+    /** The recycle bin's entries, newest first ([RecycleBin]); empty if they couldn't be read. */
+    suspend fun binEntries(): List<BinEntry> = withContext(core) {
+        try {
+            open()?.coreBinEntries().orEmpty()
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't read the recycle bin", e)
+            emptyList()
+        }
+    }
 
     override suspend fun search(query: String): SearchResults = withContext(core) {
         val lib = open()

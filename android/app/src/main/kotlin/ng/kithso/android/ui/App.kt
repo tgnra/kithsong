@@ -90,11 +90,19 @@ fun App(
     // Tracks waiting for a member this phone can't reach: a card under the main list's header.
     val waiting by remember(syncer) { syncer.status.map { it.waiting }.distinctUntilChanged() }
         .collectAsState(syncer.status.value.waiting)
+    // The recycle bin: how many deletes wait for a sync (null outside a group, where deletes
+    // don't go there), and the sync button's red dot while one could sync.
+    val binCount by remember(syncer) {
+        syncer.status.map { s -> s.binCount.takeIf { s.binOffered || it > 0 } }.distinctUntilChanged()
+    }.collectAsState(null)
+    val binDot by remember(syncer) { syncer.status.map { it.binDot }.distinctUntilChanged() }
+        .collectAsState(syncer.status.value.binDot)
     val importPickers = rememberImportPickers(importer, onImportStarted)
     val stack = rememberSaveable(saver = StackSaver) { SnapshotStateList<CollectionRef>() }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var syncOpen by rememberSaveable { mutableStateOf(false) }
     var licensesOpen by rememberSaveable { mutableStateOf(false) }
+    var binOpen by rememberSaveable { mutableStateOf(false) }
     // The licence text open over the licences: its asset's path.
     var licenseOpen by rememberSaveable { mutableStateOf<String?>(null) }
     // The device whose page is open over sync: a member's uid, or THIS_DEVICE.
@@ -191,6 +199,7 @@ fun App(
                 onArtistMenu = actions::artistMenu,
                 onAlbumGroupMenu = actions::albumGroupMenu,
                 onNewSmart = if (actions.smart != null) actions::newSmart else null,
+                syncDot = binDot,
                 inGroup = inGroup,
                 // This phone's page, over Sync, as Choose what to sync after pairing opens it.
                 onChooseWhatToSync = {
@@ -202,13 +211,15 @@ fun App(
                 DismissibleScreen(
                     DismissDirection.Right,
                     onDismissed = { settingsOpen = false },
-                    backEnabled = !playerOpen && !syncOpen && !licensesOpen && !smartOpen,
-                    modifier = Modifier.coveredIf(playerOpen || syncOpen || licensesOpen),
+                    backEnabled = !playerOpen && !syncOpen && !licensesOpen && !smartOpen && !binOpen,
+                    modifier = Modifier.coveredIf(playerOpen || syncOpen || licensesOpen || binOpen),
                 ) { dismiss ->
                     SettingsScreen(
                         settings, libraryDir, bottomPadding,
                         onLicenses = { licensesOpen = true },
                         onBack = dismiss,
+                        binCount = binCount,
+                        onRecycleBin = { binOpen = true },
                     )
                 }
             }
@@ -238,10 +249,24 @@ fun App(
                 DismissibleScreen(
                     DismissDirection.Right,
                     onDismissed = { syncOpen = false },
-                    backEnabled = !playerOpen && deviceOpen == null && !smartOpen,
-                    modifier = Modifier.coveredIf(playerOpen || deviceOpen != null),
+                    backEnabled = !playerOpen && deviceOpen == null && !smartOpen && !binOpen,
+                    modifier = Modifier.coveredIf(playerOpen || deviceOpen != null || binOpen),
                 ) { dismiss ->
-                    SyncScreen(syncer, bottomPadding, onOpenDevice = { deviceOpen = it }, onBack = dismiss)
+                    SyncScreen(
+                        syncer, bottomPadding, onOpenDevice = { deviceOpen = it }, onBack = dismiss,
+                        onOpenBin = { binOpen = true },
+                    )
+                }
+            }
+            // Over Settings or Sync, either of which opens it.
+            if (binOpen) {
+                DismissibleScreen(
+                    DismissDirection.Right,
+                    onDismissed = { binOpen = false },
+                    backEnabled = !playerOpen && !smartOpen,
+                    modifier = Modifier.coveredIf(playerOpen),
+                ) { dismiss ->
+                    RecycleBinScreen(syncer, binCount ?: 0, bottomPadding, onBack = dismiss)
                 }
             }
             deviceOpen?.let { uid ->

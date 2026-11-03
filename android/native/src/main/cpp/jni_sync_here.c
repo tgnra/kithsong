@@ -110,3 +110,30 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_SyncHereNatives_nativeRestore(JNIEnv 
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   if (st != MC_OK) throw_status(env, st);
 }
+
+/* The recycle bin (musiccore/delete.h): whether deletes here go to it. */
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_SyncHereNatives_nativeBinOffered(JNIEnv *env, jclass cls,
+                                                                             jlong handle) {
+  (void)env;
+  (void)cls;
+  return mc_sync_bin_offered(jni_sync_of(handle)) ? JNI_TRUE : JNI_FALSE;
+}
+
+/* How many entries it holds; while any, sync waits for the Sync button. */
+JNIEXPORT jint JNICALL Java_ng_kithso_core_SyncHereNatives_nativeBinCount(JNIEnv *env, jclass cls,
+                                                                       jlong handle) {
+  (void)env;
+  (void)cls;
+  int n = mc_sync_bin_count(jni_sync_of(handle));
+  return n < 0 ? 0 : n;
+}
+
+/* Takes entry id back out of it, as removed from this phone: how many entries came back. */
+JNIEXPORT jint JNICALL Java_ng_kithso_core_SyncHereNatives_nativeBinRestore(JNIEnv *env, jclass cls,
+                                                                         jlong handle, jlong id) {
+  (void)cls;
+  int entries = 0;
+  mc_status st = mc_sync_bin_restore(jni_sync_of(handle), (int64_t)id, &entries);
+  if (st != MC_OK) throw_status(env, st);
+  return entries;
+}

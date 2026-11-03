@@ -72,6 +72,7 @@ typedef struct mc_search_index mc_search_index;
 
 struct mc_search_index {
   int64_t seq; /* the changelog seq it was built from, or moved on to by stale() */
+  int64_t epoch; /* meta.changelog_epoch then (see EPOCH_SQL) */
   item *items;
   size_t nitems, items_cap;
   char *text; /* the items' names, artists and albums, each ending in '\0' */
@@ -448,6 +449,12 @@ static mc_status build(sqlite3 *db, mc_search_index **out) {
   return MC_OK;
 }
 
+/* Bumped whenever changelog rows are taken out rather than added (a delete taken back from
+ * the recycle bin, library/delete.c), so the seq alone can't tell the library changed: the
+ * next rows reuse the seqs taken out. */
+#define EPOCH_SQL \
+  "SELECT coalesce((SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'changelog_epoch'), 0)"
+
 static mc_status query_int64(sqlite3 *db, const char *sql, int64_t arg, int64_t *out) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
@@ -484,13 +491,17 @@ struct mc_search {
  * s->snap_seq and the index. */
 static mc_status build_snapshot(mc_search *s, sqlite3 *db, mc_search_index **out) {
   if (sqlite3_exec(db, "BEGIN", NULL, NULL, NULL) != SQLITE_OK) return MC_ERR_DB;
-  int64_t seq = 0;
+  int64_t seq = 0, epoch = 0;
   mc_status st = query_int64(db, "SELECT coalesce(max(seq), 0) FROM changelog", 0, &seq);
+  if (st == MC_OK) st = query_int64(db, EPOCH_SQL, 0, &epoch);
   if (st == MC_OK) {
     mc_mutex_lock(&s->mutex);
     s->snap_seq = seq;
     mc_mutex_unlock(&s->mutex);
-    if ((st = build(db, out)) == MC_OK) (*out)->seq = seq;
+    if ((st = build(db, out)) == MC_OK) {
+      (*out)->seq = seq;
+      (*out)->epoch = epoch;
+    }
   }
   sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
   return st;
@@ -532,8 +543,9 @@ static void worker(void *arg) {
  * whose snapshot is older, another round of it. Under s->mutex. */
 static mc_status start_build(mc_search *s, int64_t seq) {
   if (s->running) {
-    /* A worker that hasn't read its snapshot yet will see the change anyway. */
-    if (s->snap_seq >= 0 && seq > s->snap_seq) s->again = 1;
+    /* A worker that hasn't read its snapshot yet will see the change anyway. A seq that
+     * went back (rows taken out) may be one it has read already. */
+    if (s->snap_seq >= 0 && seq != s->snap_seq) s->again = 1;
     return MC_OK;
   }
   if (s->joinable) mc_thread_join(&s->thread); /* finished; only closing its connection */
@@ -604,7 +616,13 @@ int mc_search_builds(const mc_library *lib) {
 static mc_status stale(sqlite3 *db, mc_search_index *ix, int *out, int64_t *seq) {
   int64_t changed = 0;
   *out = 0;
+  int64_t epoch = 0;
   mc_status st = query_int64(db, "SELECT coalesce(max(seq), 0) FROM changelog", 0, seq);
+  if (st == MC_OK) st = query_int64(db, EPOCH_SQL, 0, &epoch);
+  if (st == MC_OK && epoch != ix->epoch) {
+    *out = 1; /* rows were taken out: the seq may have come back to where it was */
+    return st;
+  }
   if (st != MC_OK || *seq == ix->seq) return st;
   if (*seq < ix->seq) {
     /* The changelog went back: the library's contents were replaced (an undone pairing puts

@@ -218,6 +218,15 @@ int mc_sync_take_user(mc_sync *sync, const char *peer_uid) {
   return user;
 }
 
+int mc_sync_pressed(mc_sync *sync, const char *peer_uid) {
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, peer_uid, 0);
+  int pressed = p && ((p->user_ms && mc_mono_ms() < p->user_ms + USER_WINDOW_MS) ||
+                      p->trigger == MC_TRIGGER_NOW);
+  mc_mutex_unlock(&sync->lock);
+  return pressed;
+}
+
 /* --- Callbacks --- */
 
 static void emit_peer(mc_sync *sync, const char *uid, int online, int member) {
@@ -995,6 +1004,7 @@ typedef struct session_job {
   uint16_t port[MAX_ADDRS];
   int n;
   int user; /* this device's user asked for it: see "Showing sync" in sync.h */
+  int now;  /* started for mc_sync_now(): the recycle bin's deletes may go (here.c) */
 } session_job;
 
 static void job_add(session_job *j, const char *host, uint16_t port) {
@@ -1111,6 +1121,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   s.ch = ch;
   memcpy(s.peer_uid, j->uid, MC_UID_STRLEN);
   s.asked = j->user;
+  s.pressed = j->now;
   int claimed = 0, cancelled = 0;
   if (ch) {
     answered = 1;
@@ -1264,7 +1275,12 @@ static void serve_worker(void *arg) {
   mc_status st = mc_session_handshake_respond(&s);
   if (st == MC_OK) {
     reach_note(sync, s.peer_uid, REACH_IN_OK, mc_channel_peer_addr(ch), 1);
-    if (mc_sync_claim(sync, s.peer_uid, strcmp(s.peer_uid, sync->device_uid) < 0, ch)) {
+    s.pressed = mc_sync_pressed(sync, s.peer_uid);
+    if (!s.pressed && c.lib && mc_delete_bin_count(c.lib) > 0) {
+      /* Deletes in the recycle bin wait for this device's user to press Sync: the other
+       * device keeps its schedule, as for a cancelled one. */
+      mc_session_refuse(ch, "busy", "deletes here wait for a press of Sync");
+    } else if (mc_sync_claim(sync, s.peer_uid, strcmp(s.peer_uid, sync->device_uid) < 0, ch)) {
       s.user = mc_sync_take_user(sync, s.peer_uid);
       s.asked = s.user; /* pressed here, and the other device called back */
       st = mc_session_run(&s);
@@ -1610,6 +1626,8 @@ static void sched_main(void *arg) {
 
     member_row *ms;
     int n = load_members(&c, &ms);
+    /* While the recycle bin holds deletes, only a press of Sync starts a session. */
+    int bin_held = c.lib && mc_delete_bin_count(c.lib) > 0;
     session_job *jobs[16];
     int njobs = 0;
     uint64_t wake = next_poll < next_hints ? next_poll : next_hints;
@@ -1657,6 +1675,8 @@ static void sched_main(void *arg) {
                       p->trigger != MC_TRIGGER_AUTO))
         continue;
       if (sync->no_auto && p->trigger != MC_TRIGGER_NOW) continue; /* kept for later */
+      /* Deletes in the recycle bin go only when this device's user says so. */
+      if (bin_held && p->trigger != MC_TRIGGER_NOW) continue;
       if (now < p->held_ms) {
         /* Cancelled: whatever is due waits until the hold runs out. */
         if (p->held_ms < wake) wake = p->held_ms;
@@ -1697,6 +1717,7 @@ static void sched_main(void *arg) {
       memcpy(j->uid, p->uid, MC_UID_STRLEN);
       if (p->discovered) job_add(j, p->address, p->port);
       j->user = p->asked && p->trigger == MC_TRIGGER_NOW;
+      j->now = p->trigger == MC_TRIGGER_NOW;
       p->asked = 0;
       /* Until the session reports back. */
       p->due_ms = now + PERIOD_MS;

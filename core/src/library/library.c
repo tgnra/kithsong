@@ -169,6 +169,22 @@ static const char *const k_migrations[] = {
   "INSERT OR REPLACE INTO meta (key, value) VALUES ('artist_refresh',"
   " CASE WHEN EXISTS (SELECT 1 FROM tracks) OR EXISTS (SELECT 1 FROM albums)"
   " THEN 'pending' ELSE 'done' END);",
+  /* v14: the recycle bin (musiccore/delete.h): deletes made on this device that no other
+   * device has heard of yet, so they can still be taken back. seq_first..seq_last are the
+   * changelog rows the delete logged. This device's own: never logged. (IF NOT EXISTS: tests
+   * that wind user_version back keep their tables.) */
+  "CREATE TABLE IF NOT EXISTS recycle_bin ("
+  "  id         INTEGER PRIMARY KEY,"
+  "  deleted_ms INTEGER NOT NULL,"
+  "  kind       TEXT NOT NULL,"
+  "  items      TEXT NOT NULL,"
+  "  title      TEXT,"
+  "  artist     TEXT,"
+  "  tracks     INTEGER NOT NULL,"
+  "  seq_first  INTEGER NOT NULL,"
+  "  seq_last   INTEGER NOT NULL,"
+  "  rows       TEXT NOT NULL"
+  ");",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -628,6 +644,7 @@ mc_status mc_library_reset_for_merge(mc_library *lib, const char *const *meta, i
     "DELETE FROM playlists", "DELETE FROM album_groups", "DELETE FROM tracks",
     "DELETE FROM albums", "DELETE FROM artists", "DELETE FROM aliases",
     "DELETE FROM merge_keys", "DELETE FROM changelog", "DELETE FROM meta WHERE key = 'merge_seq'",
+    "DELETE FROM recycle_bin", /* its deletes were the old changelog's */
   };
   for (size_t i = 0; i < sizeof k_clear / sizeof k_clear[0] && st == MC_OK; i++)
     st = exec(lib, k_clear[i]);

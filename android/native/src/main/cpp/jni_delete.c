@@ -1,7 +1,8 @@
 /* JNI bindings for ng.kithso.core.DeleteNatives: deleting albums and tracks
  * (musiccore/delete.h) on an open CoreLibrary's handle. Kept apart from jni_bridge.c; as thin
  * as it is: marshal arguments, call musiccore, convert results. Android has no trash, so a
- * delete is mc_delete_run_permanently(). Failures throw ng.kithso.core.MusicCoreException. */
+ * delete is mc_delete_run_permanently(), or in a group mc_delete_run_to_bin(), which keeps it
+ * in the recycle bin until the next sync. Failures throw ng.kithso.core.MusicCoreException. */
 #include <jni.h>
 #include <stdint.h>
 
@@ -82,4 +83,58 @@ JNIEXPORT jboolean JNICALL Java_ng_kithso_core_DeleteNatives_nativeTakesAny(JNIE
   }
   mc_delete_plan_free(plan);
   return takes;
+}
+
+/* Deletes uid into the recycle bin (in a group, where mc_sync_bin_offered() says so): as
+ * nativeDelete, but it can be taken back until the next sync. */
+JNIEXPORT jintArray JNICALL Java_ng_kithso_core_DeleteNatives_nativeDeleteToBin(JNIEnv *env, jclass cls,
+                                                                              jlong handle, jint kind,
+                                                                              jstring uid) {
+  (void)cls;
+  mc_delete_plan *plan = plan_of(env, handle, kind, uid);
+  if (!plan) return NULL;
+  mc_delete_result res;
+  mc_status st = mc_delete_run_to_bin((mc_library *)(intptr_t)handle, plan, &res);
+  mc_delete_plan_free(plan);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jint values[] = {res.tracks_deleted, res.files_trashed, res.tracks_kept};
+  return jni_ints(env, values, 3);
+}
+
+/* The recycle bin's entries, newest first, as a BinEntry[]. */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_DeleteNatives_nativeBinList(JNIEnv *env, jclass cls,
+                                                                             jlong handle) {
+  (void)cls;
+  mc_bin_list *list = NULL;
+  mc_status st = mc_delete_bin_list((mc_library *)(intptr_t)handle, &list);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jobjectArray out = NULL;
+  jclass entry = (*env)->FindClass(env, "ng/kithso/core/BinEntry");
+  jmethodID ctor = entry ? (*env)->GetMethodID(env, entry, "<init>",
+                                               "(JIILjava/lang/String;Ljava/lang/String;IJ)V")
+                         : NULL;
+  if (ctor) out = (*env)->NewObjectArray(env, list->count, entry, NULL);
+  for (int i = 0; out && i < list->count; i++) {
+    const mc_bin_entry *e = &list->items[i];
+    jstring title = new_string(env, e->title);
+    jstring artist = new_string(env, e->artist);
+    jobject item = (*env)->NewObject(env, entry, ctor, (jlong)e->id, (jint)e->kind, (jint)e->items,
+                                     title, artist, (jint)e->tracks, (jlong)e->deleted_ms);
+    if (!item) {
+      out = NULL;
+      break;
+    }
+    (*env)->SetObjectArrayElement(env, out, i, item);
+    (*env)->DeleteLocalRef(env, item);
+    if (title) (*env)->DeleteLocalRef(env, title);
+    if (artist) (*env)->DeleteLocalRef(env, artist);
+  }
+  mc_delete_bin_list_free(list);
+  return out;
 }

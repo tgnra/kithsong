@@ -2,8 +2,10 @@ package ng.kithso.core
 
 // Deleting albums and tracks from an open CoreLibrary (musiccore/delete.h), bound in
 // jni_delete.c. Android has no trash, so a delete removes the files for good
-// (mc_delete_run_permanently) and can't be restored; like any change it's logged, so sync
-// deletes the tracks on every device. Each throws MusicCoreException.
+// (mc_delete_run_permanently); like any change it's logged, so sync deletes the tracks on every
+// device. In a group ([binOffered]) it goes to the recycle bin as well (mc_delete_run_to_bin),
+// from which it can be taken back until the next sync ([binRestore]). Each throws
+// MusicCoreException.
 
 /** What a delete takes: a track, or an album's tracks (mc_delete_kind). */
 enum class DeleteKind(internal val code: Int) {
@@ -32,6 +34,29 @@ fun CoreLibrary.deleteTakesAny(kind: DeleteKind, uid: String, trackUids: List<St
 fun CoreLibrary.deletePermanently(kind: DeleteKind, uid: String): DeleteResult =
     DeleteNatives.nativeDelete(handle, kind.code, uid).let { DeleteResult(it[0], it[1], it[2]) }
 
+/** As [deletePermanently], keeping the delete in the recycle bin until the next sync. */
+fun CoreLibrary.deleteToBin(kind: DeleteKind, uid: String): DeleteResult =
+    DeleteNatives.nativeDeleteToBin(handle, kind.code, uid).let { DeleteResult(it[0], it[1], it[2]) }
+
+/**
+ * A delete in the recycle bin (mc_bin_entry): [items] albums or tracks by [kind], the first
+ * called [title] by [artist], [tracks] in all, deleted at [deletedMs] (Unix ms).
+ */
+data class BinEntry(
+    val id: Long,
+    private val kindCode: Int,
+    val items: Int,
+    val title: String?,
+    val artist: String?,
+    val tracks: Int,
+    val deletedMs: Long,
+) {
+    val kind: DeleteKind get() = DeleteKind.entries.firstOrNull { it.code == kindCode } ?: DeleteKind.Track
+}
+
+/** The recycle bin's entries, newest first. */
+fun CoreLibrary.binEntries(): List<BinEntry> = DeleteNatives.nativeBinList(handle).toList()
+
 internal object DeleteNatives {
     init {
         System.loadLibrary("kithsong_jni")
@@ -40,4 +65,6 @@ internal object DeleteNatives {
     @JvmStatic external fun nativePreview(handle: Long, kind: Int, uid: String): IntArray
     @JvmStatic external fun nativeDelete(handle: Long, kind: Int, uid: String): IntArray
     @JvmStatic external fun nativeTakesAny(handle: Long, kind: Int, uid: String, trackUids: Array<String>): Boolean
+    @JvmStatic external fun nativeDeleteToBin(handle: Long, kind: Int, uid: String): IntArray
+    @JvmStatic external fun nativeBinList(handle: Long): Array<BinEntry>
 }

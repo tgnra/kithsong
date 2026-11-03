@@ -101,6 +101,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
             settings.deviceName = renamed.takeIf { it != systemDeviceName() }
         }
         core.onChanged = syncer::notifyChanged
+        core.binOffered = syncer::binOffered
         importer = Importer(this, core, MainScope())
         scrobbling = Scrobbling(libraryDir, File(noBackupFilesDir, "sync"), settings, MainScope())
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {

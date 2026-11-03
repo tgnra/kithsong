@@ -396,7 +396,7 @@ static void test_online(const char *root) {
   mc_library *lib = NULL;
   CHECK(mc_library_open(dir, &lib) == MC_OK);
   if (!lib) return;
-  CHECK(mc_library_schema_version(lib) == 13);
+  CHECK(mc_library_schema_version(lib) == 14);
   mc_refresh_wait(lib);
   CHECK(mc_library_refresh_progress(lib, NULL, NULL) == 0);
   sqlite3 *db = mc_library_db(lib);

@@ -141,6 +141,7 @@ const char *mc_plan_excluded_kind(const char *kind) {
   if (!kind) return NULL;
   if (!strcmp(kind, MC_PLAN_EXCLUDE_ALBUM)) return "album";
   if (!strcmp(kind, MC_PLAN_EXCLUDE_ARTIST)) return "artist";
+  if (!strcmp(kind, MC_PLAN_EXCLUDE_TRACK)) return "track";
   return NULL;
 }
 
@@ -158,6 +159,8 @@ static mc_status mark_item(mc_library *lib, const char *kind, const char *ref, c
           " WHERE e.group_uid = ?1";
   else if (!strcmp(kind, "playlist"))
     sql = "SELECT track_uid FROM playlist_entries WHERE playlist_uid = ?1";
+  else if (!strcmp(kind, "track") && !value)
+    sql = "SELECT uid FROM tracks WHERE uid = ?1"; /* only ever excluded, never selected */
   else
     return MC_OK; /* a kind this version doesn't know */
   sqlite3_stmt *stmt;
@@ -179,7 +182,7 @@ static mc_status mark_ref(mc_library *lib, const char *kind, const char *ref, ca
                           int n, int value) {
   char uid[MC_UID_STRLEN];
   memcpy(uid, ref, MC_UID_STRLEN);
-  if ((!strcmp(kind, "album") || !strcmp(kind, "artist")) &&
+  if ((!strcmp(kind, "album") || !strcmp(kind, "artist") || !strcmp(kind, "track")) &&
       mc_merge_resolve(lib, ref, uid) != MC_OK)
     memcpy(uid, ref, MC_UID_STRLEN);
   return mark_item(lib, kind, uid, cands, n, value);
@@ -229,7 +232,8 @@ static mc_status unmark_excluded(mc_sync_db *sdb, mc_library *lib, const char *d
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
                          "SELECT DISTINCT kind, ref_uid FROM profile_items WHERE device_uid = ?1"
-                         " AND kind IN ('" MC_PLAN_EXCLUDE_ALBUM "', '" MC_PLAN_EXCLUDE_ARTIST "')",
+                         " AND kind IN ('" MC_PLAN_EXCLUDE_ALBUM "', '" MC_PLAN_EXCLUDE_ARTIST
+                         "', '" MC_PLAN_EXCLUDE_TRACK "')",
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
   sqlite3_bind_text(stmt, 1, device_uid, -1, SQLITE_STATIC);

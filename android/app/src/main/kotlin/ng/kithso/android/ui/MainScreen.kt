@@ -30,6 +30,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -259,6 +261,8 @@ fun MainScreen(
     onArtistMenu: (Artist) -> Unit = {},
     onAlbumGroupMenu: (AlbumGroup) -> Unit = {},
     onNewSmart: ((isAlbums: Boolean) -> Unit)? = null,
+    // A red dot on the sync button: deletes wait in the recycle bin while a member is online.
+    syncDot: Boolean = false,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -310,7 +314,7 @@ fun MainScreen(
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {
-                    MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning)
+                    MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning, syncDot)
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
                     MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(
@@ -385,6 +389,7 @@ private fun Header(
     onSettings: () -> Unit,
     importPickers: ImportPickers,
     importRunning: Boolean,
+    syncDot: Boolean,
 ) {
     Row(
         Modifier
@@ -403,7 +408,11 @@ private fun Header(
         }
         ImportButton(importRunning, importPickers)
         IconButton(onClick = onSearch) { Icon(Icons.Search, contentDescription = stringResource(R.string.search)) }
-        IconButton(onClick = onSync) { Icon(Icons.Sync, contentDescription = stringResource(R.string.sync)) }
+        IconButton(onClick = onSync) {
+            BadgedBox(badge = { if (syncDot) Badge() }) {
+                Icon(Icons.Sync, contentDescription = stringResource(if (syncDot) R.string.sync_bin_waiting else R.string.sync))
+            }
+        }
         IconButton(onClick = onSettings) { Icon(Icons.Settings, contentDescription = stringResource(R.string.settings)) }
     }
 }
