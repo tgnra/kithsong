@@ -408,9 +408,10 @@ static mc_status attach_file(sqlite3 *db, const mc_db_track *t, const credit_row
   return sqlite3_changes(db) == 1 ? MC_OK : MC_ERR_NOT_FOUND;
 }
 
-/* Writes one track and its file row, in album_uid ("" for none). *old_album receives the
- * album the file's track was in before, if it was already in the library. */
-static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *album_uid,
+/* Writes one track and its file row, in album_uid ("" for none); a new track was added at
+ * added_ms. *old_album receives the album the file's track was in before, if it was already
+ * in the library. */
+static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *album_uid, int64_t added_ms,
                               const credit_rows *credit, char old_album[MC_UID_STRLEN]) {
   const char *artist_uid = credit->uids[0];
   char track_uid[MC_UID_STRLEN], file_uid[MC_UID_STRLEN];
@@ -447,7 +448,7 @@ static mc_status upsert_track(sqlite3 *db, const mc_db_track *t, const char *alb
   bind_text(stmt, 10, t->mb_releasetrackid);
   bind_int(stmt, 11, t->year);
   bind_text(stmt, 12, t->mb_albumid);
-  if (!found) sqlite3_bind_int64(stmt, 13, (sqlite3_int64)mc_wall_ms());
+  if (!found) sqlite3_bind_int64(stmt, 13, (sqlite3_int64)added_ms);
   if ((st = step_done(stmt)) != MC_OK) return st;
   if ((st = write_credit(db, "tracks", track_uid, credit)) != MC_OK) return st;
 
@@ -535,6 +536,9 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
     if (!existing && (st = write_credit(db, "albums", album_uid, &album_credit)) != MC_OK) goto fail;
   }
 
+  /* The album's new tracks are all added at once: newest first ("Recently added") then
+   * leaves them in album order rather than last track first. */
+  int64_t added_ms = (int64_t)mc_wall_ms();
   for (int i = 0; i < count; i++) {
     const mc_db_track *t = &tracks[i];
     char old_album[MC_UID_STRLEN];
@@ -550,7 +554,7 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
     }
     if (t->track_uid)
       st = attach_file(db, t, credit);
-    else if ((st = upsert_track(db, t, album_uid, credit, old_album)) == MC_OK && old_album[0] &&
+    else if ((st = upsert_track(db, t, album_uid, added_ms, credit, old_album)) == MC_OK && old_album[0] &&
              strcmp(old_album, album_uid) != 0)
       st = delete_if_empty(db, old_album);
     credit_clear(&track_credit);
