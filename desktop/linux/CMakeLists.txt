@@ -29,8 +29,21 @@ add_executable(kithsong
   src/delete_dialog.c
   src/remove_here.c
   src/volume_button.c
-  src/art_backdrop.c)
+  src/art_backdrop.c
+  src/brand_backdrop.c)
 target_link_libraries(kithsong PRIVATE musiccore PkgConfig::ADW m)
+
+# The logo, built in for the empty pages' glows (brand_backdrop.c), so they're coloured
+# without the icon installed.
+set(_logo_png "${PROJECT_SOURCE_DIR}/packaging/icons/kithsong-128.png")
+set(_logo_c "${CMAKE_CURRENT_BINARY_DIR}/generated/kithsong_logo_png.c")
+add_custom_command(
+  OUTPUT "${_logo_c}"
+  COMMAND "${CMAKE_COMMAND}" -DINPUT=${_logo_png} -DOUTPUT=${_logo_c} -DSYMBOL=kithsong_logo_png
+    -P "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+  DEPENDS "${_logo_png}" "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+  COMMENT "Embedding the logo")
+target_sources(kithsong PRIVATE "${_logo_c}")
 kithsong_warnings(kithsong)
 # GLib's headers trip -Wconversion / -Wpedantic; keep warnings strict for our code only.
 target_compile_options(kithsong PRIVATE -Wno-pedantic)
