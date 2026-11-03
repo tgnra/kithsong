@@ -43,6 +43,9 @@ enum {
   ID_SET_ORDER_CHECK,
   ID_SET_ORDER_CHECK_LABEL,
   ID_SET_ORDER_NOTE,
+  ID_SET_RESET_HEADING,
+  ID_SET_RESET,
+  ID_SET_RESET_NOTE,
 };
 
 enum { MAX_ADDRESSES = 8 };
@@ -61,6 +64,7 @@ static struct {
   BOOL firewall_shown; /* Ask about Windows Firewall again is: firewall_can_ask_again() */
   HWND play_heading, order_check, order_check_label, order_note;
   HWND lfm_heading, lfm_status, lfm_button, lfm_service, lfm_check, lfm_check_label, lfm_note;
+  HWND reset_heading, reset, reset_note;
   HFONT font, title_font, heading_font;
   IAccPropServices *acc; /* names order_check for screen readers */
   BOOL shown;
@@ -162,6 +166,10 @@ void settings_view_create(HWND parent) {
   g_set.lfm_check = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_SET_LFM_CHECK);
   g_set.lfm_check_label = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLE_SWITCH), label | SS_NOTIFY, ID_SET_LFM_CHECK_LABEL);
   g_set.lfm_note = child(WC_STATICW, NULL, label, ID_SET_LFM_NOTE); /* names the service: update_scrobble() */
+
+  g_set.reset_heading = child(WC_STATICW, mc_wstr(MC_STR_SETTINGS_RESET), label, ID_SET_RESET_HEADING);
+  g_set.reset = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_RESET_APP_BUTTON), BS_PUSHBUTTON | WS_TABSTOP, ID_SET_RESET);
+  g_set.reset_note = child(WC_STATICW, mc_wstr(MC_STR_RESET_APP_TEXT), label, ID_SET_RESET_NOTE);
   playback_on_scrobbler_closing(stop_auth);
 }
 
@@ -207,12 +215,13 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   SendMessageW(g_set.sync_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.play_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.lfm_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  SendMessageW(g_set.reset_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   HWND body[] = {g_set.path,       g_set.move,       g_set.open,       g_set.note,
                  g_set.name_label, g_set.name,       g_set.addr_label, g_set.addr,
                  g_set.leave,      g_set.sync_note,  g_set.order_check, g_set.order_check_label,
                  g_set.order_note, g_set.lfm_status, g_set.lfm_button,
                  g_set.lfm_service, g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
-                 g_set.firewall};
+                 g_set.firewall, g_set.reset, g_set.reset_note};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
 }
 
@@ -222,7 +231,8 @@ void settings_view_show(BOOL show) {
                 g_set.note,       g_set.sync_heading, g_set.name_label, g_set.name,  g_set.addr_label,
                 g_set.addr,       g_set.leave,        g_set.sync_note, g_set.play_heading, g_set.order_check,
                 g_set.order_check_label, g_set.order_note, g_set.lfm_heading, g_set.lfm_status,
-                g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note};
+                g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
+                g_set.reset_heading, g_set.reset, g_set.reset_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
   update_firewall();
   if (show) {
@@ -339,6 +349,16 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
 
   nh = canvas_text_height(g_set.lfm_note, g_set.font, text_w, 0);
   MoveWindow(g_set.lfm_note, left, top, text_w, nh, TRUE);
+  top += nh + S(32);
+
+  /* Reset */
+  hh = canvas_text_height(g_set.reset_heading, g_set.heading_font, text_w, 0);
+  MoveWindow(g_set.reset_heading, left, top, text_w, hh, TRUE);
+  top += hh + S(8);
+  MoveWindow(g_set.reset, left, top, button_width(g_set.reset, S(16)), btn_h, TRUE);
+  top += btn_h + S(12);
+  nh = canvas_text_height(g_set.reset_note, g_set.font, text_w, 0);
+  MoveWindow(g_set.reset_note, left, top, text_w, nh, TRUE);
 #undef S
 }
 
@@ -510,6 +530,17 @@ static void leave_group(void) {
   }
   if (g_set.devices_changed) g_set.devices_changed();
   settings_view_update_sync();
+}
+
+/* --- Reset --- */
+
+/* Reset Kithsong…: once confirmed, the main window marks the settings folder and closes
+ * (WM_APP_RESET); the next start clears the folder. */
+static void reset_app(void) {
+  if (MessageBoxW(g_set.parent, mc_wstr(MC_STR_RESET_APP_CONFIRM), mc_wstr(MC_STR_RESET_APP_TITLE),
+                  MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+    return;
+  PostMessageW(g_set.parent, WM_APP_RESET, 0, 0);
 }
 
 /* --- Scrobbling --- */
@@ -766,6 +797,7 @@ BOOL settings_view_on_command(int id, int code) {
       if (code == EN_KILLFOCUS) apply_name();
       return TRUE;
     case ID_SET_LEAVE: leave_group(); return TRUE;
+    case ID_SET_RESET: reset_app(); return TRUE;
     case ID_SET_FIREWALL: ask_firewall_again(); return TRUE;
     case ID_SET_LFM_BUTTON: on_scrobble_button(); return TRUE;
     case ID_SET_LFM_SERVICE: change_service(); return TRUE;

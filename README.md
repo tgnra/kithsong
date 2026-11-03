@@ -41,7 +41,10 @@ Priorities:
 - **One library folder.** You choose it on first run (default: your Music folder). It
   holds everything: the music, organised as `Artist/Album (Year)/01 Title.flac`, a
   `cover.jpg` per album, and the database as `library.db`. The app's own settings, i.e. where
-  that folder is, live in `%LOCALAPPDATA%\kithsong` (`~/.config/kithsong` on Linux).
+  that folder is, live in `%LOCALAPPDATA%\kithsong` (`~/.config/kithsong` on Linux), with this
+  device's pairing (`sync.db`) and what Restore can bring back. On Windows and Linux, Settings'
+  **Reset Kithsong…** clears that folder after asking: the app closes, and starts next time as
+  on a first run. The library folder isn't touched.
 - **Import**: drop folders or `.zip` files (a Bandcamp download, say) on the window; on
   Android, pick a folder or files with the system picker, or share or open a zip with the app.
   Files are copied into the library; your originals are never modified. Everything is scanned and matched against MusicBrainz in one go.

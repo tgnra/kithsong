@@ -23,6 +23,23 @@ void mc_settings_free(mc_settings *s);
  * empty. */
 void mc_settings_move_old_dir(const char *old_dir, const char *dir);
 
+/* Resetting the app on this device (Settings' Reset Kithsong…): clearing everything in dir,
+ * the per-device folder, which holds settings.json, sync.db (this device's pairing), the
+ * trash's deleted.db and the playlists' pictures. The library folder isn't touched.
+ *
+ * mc_settings_request_reset() marks dir to be cleared: the frontend then quits, and the next
+ * start clears it with mc_settings_reset_if_requested() before anything opens it, so nothing
+ * in it is open while it goes. */
+mc_status mc_settings_request_reset(const char *dir);
+/* Clears dir if mc_settings_request_reset() marked it; call before mc_settings_load(dir)
+ * and before anything else opens a file in it. Sets *reset to whether it was marked. dir is
+ * first renamed aside (to dir.old) and made again empty, then the old one is deleted, so the
+ * app starts afresh even if some of it can't be deleted. On failure *left_behind (mc_free
+ * it; may be NULL) is the folder that still holds old files: dir itself if it couldn't be
+ * renamed (it stays marked, for the next start to try again), else dir.old. A dir.old left
+ * by an earlier reset is deleted here too, quietly. */
+mc_status mc_settings_reset_if_requested(const char *dir, int *reset, char **left_behind);
+
 /* Writes the settings back, creating dir if needed. Keys this version doesn't know about
  * are kept. */
 mc_status mc_settings_save(const mc_settings *s);

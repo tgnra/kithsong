@@ -285,12 +285,28 @@ static void move_library(void *user) {
   move_library_start(a->win, a->settings_dir, &host);
 }
 
+/* Settings' Reset Kithsong…, once confirmed: marks the settings folder to be cleared and
+ * closes the window, so the app quits; the next start clears the folder (main()). */
+static void reset_app(void *user) {
+  app *a = user;
+  mc_status st = mc_settings_request_reset(a->settings_dir);
+  if (st != MC_OK) {
+    char *text = mc_format_alloc(mc_str(MC_STR_RESET_APP_FAILED), MC_S(a->settings_dir), MC_S(mc_status_str(st)));
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS_RESET), text);
+    mc_free(text);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    adw_dialog_present(alert, GTK_WIDGET(a->win));
+    return;
+  }
+  gtk_window_close(a->win);
+}
+
 static void on_settings(GtkButton *button, gpointer user) {
   (void)button;
   app *a = user;
   static const settings_view_sync sync = {devices_sync, devices_sync_off_text, on_settings_renamed,
                                           on_settings_group_changed};
-  settings_view_present(GTK_WIDGET(a->win), a->settings_dir, open_library, move_library, &sync, a);
+  settings_view_present(GTK_WIDGET(a->win), a->settings_dir, open_library, move_library, reset_app, &sync, a);
 }
 
 static void close_confirmed(void *user, gboolean closed) {
@@ -1613,6 +1629,13 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   g_signal_connect(win, "notify::is-active", G_CALLBACK(on_active_changed), a);
   g_signal_connect(win, "destroy", G_CALLBACK(on_window_destroy), a);
   gtk_window_present(a->win);
+  if (a->reset_failed) {
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS_RESET), a->reset_failed);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    adw_dialog_present(alert, GTK_WIDGET(a->win));
+    mc_free(a->reset_failed);
+    a->reset_failed = NULL;
+  }
 }
 
 /* The UI language: LANGUAGE's first choice, else LC_ALL, LC_MESSAGES or LANG, as GLib
@@ -1635,6 +1658,13 @@ int main(int argc, char **argv) {
   char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
   mc_settings_move_old_dir(old_dir, settings_dir);
   g_free(old_dir);
+  /* Settings' Reset Kithsong… marked the folder and quit: clear it before anything opens it. */
+  char *left = NULL;
+  mc_status reset = mc_settings_reset_if_requested(settings_dir, NULL, &left);
+  if (reset != MC_OK)
+    a.reset_failed = mc_format_alloc(mc_str(MC_STR_RESET_APP_FAILED), MC_S(left ? left : settings_dir),
+                                     MC_S(mc_status_str(reset)));
+  mc_free(left);
   mc_settings *settings = NULL;
   if (mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings)) {
     const char *music = g_get_user_special_dir(G_USER_DIRECTORY_MUSIC);
@@ -1659,6 +1689,7 @@ int main(int argc, char **argv) {
   mc_library_close(a.lib);
   g_free(a.settings_dir);
   g_free(a.art_dir);
+  mc_free(a.reset_failed);
   mc_shutdown();
   return status;
 }

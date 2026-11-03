@@ -10,6 +10,7 @@
 
 #define SETTINGS_FILE "settings.json"
 #define MAX_SETTINGS_BYTES (1u << 20)
+#define RESET_FILE "reset" /* in dir: clear it on the next start (mc_settings_request_reset()) */
 
 struct mc_settings {
   char *path; /* dir/settings.json */
@@ -70,6 +71,58 @@ void mc_settings_free(mc_settings *s) {
 
 void mc_settings_move_old_dir(const char *old_dir, const char *dir) {
   if (old_dir && dir && !mc_file_exists(dir) && mc_file_exists(old_dir)) mc_rename(old_dir, dir, 0);
+}
+
+/* dir with suffix appended: malloc'd, or NULL. */
+static char *with_suffix(const char *dir, const char *suffix) {
+  size_t n = strlen(dir) + strlen(suffix) + 1;
+  char *p = malloc(n);
+  if (p) snprintf(p, n, "%s%s", dir, suffix);
+  return p;
+}
+
+/* dir/reset, the mark mc_settings_request_reset() leaves: malloc'd, or NULL. */
+static char *mark_path(const char *dir) {
+  size_t n = strlen(dir) + sizeof RESET_FILE + 1;
+  char *p = malloc(n);
+  if (p) snprintf(p, n, "%s%c" RESET_FILE, dir, MC_PATH_SEP);
+  return p;
+}
+
+mc_status mc_settings_request_reset(const char *dir) {
+  if (!dir) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_mkdirs(dir);
+  if (st != MC_OK) return st;
+  char *mark = mark_path(dir);
+  if (!mark) return MC_ERR_NOMEM;
+  FILE *f = mc_fopen(mark, "wb");
+  st = f && fclose(f) == 0 ? MC_OK : MC_ERR_IO;
+  free(mark);
+  return st;
+}
+
+mc_status mc_settings_reset_if_requested(const char *dir, int *reset, char **left_behind) {
+  if (reset) *reset = 0;
+  if (left_behind) *left_behind = NULL;
+  if (!dir) return MC_ERR_INVALID_ARG;
+  char *mark = mark_path(dir);
+  char *old = with_suffix(dir, ".old");
+  mc_status st = mark && old ? MC_OK : MC_ERR_NOMEM;
+  if (st == MC_OK) mc_remove_tree(old); /* an earlier reset's leftovers, if any */
+  if (st == MC_OK && mc_file_exists(mark)) {
+    if (reset) *reset = 1;
+    st = mc_rename(dir, old, 0);
+    if (st != MC_OK) { /* still marked, so the next start tries again */
+      if (left_behind) *left_behind = mc_strdup(dir);
+    } else {
+      mc_mkdirs(dir); /* empty, as on a first run; saving makes it again if this fails */
+      st = mc_remove_tree(old);
+      if (st != MC_OK && left_behind) *left_behind = mc_strdup(old);
+    }
+  }
+  free(mark);
+  free(old);
+  return st;
 }
 
 mc_status mc_settings_save(const mc_settings *s) {

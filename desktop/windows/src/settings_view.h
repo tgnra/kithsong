@@ -21,11 +21,17 @@
  *   | [Sign Out]                                       |
  *   | [x] Scrobble what I play on this device          |
  *   | Signing in opens Last.fm in your browser ...     |
+ *   |                                                  |
+ *   | Reset                                            |
+ *   | [Reset Kithsong...]                              |
+ *   | Clears Kithsong's settings on this device ...    |
  *   +--------------------------------------------------+
  *
  * Move Library posts WM_APP_MOVE_LIBRARY to the main window, which moves it (move_library.c).
  * Open Another Library posts WM_APP_OPEN_LIBRARY to the main window, which asks for the
- * folder.
+ * folder. Reset Kithsong..., after asking, posts WM_APP_RESET to the main window, which marks
+ * the settings folder to be cleared (mc_settings_request_reset()) and closes; the next start
+ * clears it.
  *
  * The name applies on Enter or when the box loses the focus: through sync, which shows it
  * to other devices, and into settings.json for next time. Leave Group is enabled while this
@@ -46,6 +52,7 @@
 
 #define WM_APP_OPEN_LIBRARY (WM_APP + 5)
 #define WM_APP_MOVE_LIBRARY (WM_APP + 7)
+#define WM_APP_RESET (WM_APP + 8)
 
 void settings_view_create(HWND parent);
 void settings_view_destroy(void);

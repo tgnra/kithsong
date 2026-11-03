@@ -14,6 +14,7 @@ typedef struct settings_view {
   char *settings_dir;
   settings_view_open_library_fn open_library;
   settings_view_move_library_fn move_library;
+  settings_view_reset_fn reset;
   settings_view_sync sync;
   gboolean has_sync;
   void *user;
@@ -779,14 +780,57 @@ static GtkWidget *build_scrobble_group(settings_view *s) {
   return group;
 }
 
+/* --- Reset --- */
+
+static void on_reset_response(AdwAlertDialog *alert, const char *response, gpointer data) {
+  (void)alert;
+  settings_view *s = data;
+  if (strcmp(response, "reset")) return;
+  settings_view_reset_fn reset = s->reset;
+  void *user = s->user;
+  adw_dialog_close(ADW_DIALOG(s->dialog)); /* may free s */
+  if (reset) reset(user);
+}
+
+static void on_reset_activated(GtkWidget *row, gpointer data) {
+  (void)row;
+  settings_view *s = data;
+  AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_RESET_APP_TITLE), mc_str(MC_STR_RESET_APP_CONFIRM));
+  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", mc_str_mnemonic(MC_STR_CANCEL), "reset",
+                                 mc_str_mnemonic(MC_STR_RESET_APP_CONFIRM_BUTTON), NULL);
+  adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "reset", ADW_RESPONSE_DESTRUCTIVE);
+  adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "cancel");
+  adw_alert_dialog_set_close_response(ADW_ALERT_DIALOG(alert), "cancel");
+  g_signal_connect(alert, "response", G_CALLBACK(on_reset_response), s);
+  adw_dialog_present(alert, s->dialog);
+}
+
+static GtkWidget *build_reset_group(settings_view *s) {
+  GtkWidget *group = adw_preferences_group_new();
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SETTINGS_RESET));
+  adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_RESET_APP_TEXT));
+#if ADW_CHECK_VERSION(1, 6, 0)
+  GtkWidget *button = adw_button_row_new();
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(button), mc_str(MC_STR_RESET_APP_BUTTON));
+  gtk_widget_add_css_class(button, "destructive-action");
+#else
+  GtkWidget *button = nav_row(mc_str(MC_STR_RESET_APP_BUTTON), NULL, FALSE);
+  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(button), TRUE);
+#endif
+  g_signal_connect(button, "activated", G_CALLBACK(on_reset_activated), s);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), button);
+  return group;
+}
+
 void settings_view_present(GtkWidget *parent, const char *settings_dir,
                            settings_view_open_library_fn open_library,
-                           settings_view_move_library_fn move_library, const settings_view_sync *sync,
-                           void *user) {
+                           settings_view_move_library_fn move_library, settings_view_reset_fn reset,
+                           const settings_view_sync *sync, void *user) {
   settings_view *s = g_new0(settings_view, 1);
   s->settings_dir = g_strdup(settings_dir);
   s->open_library = open_library;
   s->move_library = move_library;
+  s->reset = reset;
   s->user = user;
   if (sync) {
     s->sync = *sync;
@@ -823,6 +867,7 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
   if (s->has_sync) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_sync_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_playback_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_scrobble_group(s)));
+  if (s->reset) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_reset_group(s)));
 
   s->dialog = GTK_WIDGET(adw_preferences_dialog_new());
   adw_dialog_set_title(ADW_DIALOG(s->dialog), mc_str(MC_STR_SETTINGS));

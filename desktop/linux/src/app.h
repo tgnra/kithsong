@@ -21,6 +21,8 @@ typedef struct app {
   GtkWindow *win;
   AdwToastOverlay *toasts; /* over the whole window, e.g. "Restored 3 tracks" */
   char *settings_dir;  /* ~/.config/kithsong */
+  char *reset_failed;  /* why Reset Kithsong… couldn't clear all of settings_dir as this
+                        * start began, to say once the window is up; else NULL */
   char *art_dir;        /* settings_dir/playlist-art: playlists' and album groups' pictures, see
                          * mc_playlist_art() */
   GtkStack *pages;      /* "library": the album grids and track list | "artists" | "search"

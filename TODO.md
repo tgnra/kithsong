@@ -24,6 +24,7 @@ Only where the platforms differ. Windows, Linux and Android all have albums, pla
 | Import | yes | yes | simpler review |
 | Sync | yes | only seen between two instances on one host | yes |
 | Move library | yes | yes | n/a (app storage) |
+| Reset the app's settings | Settings' Reset Kithsong… | Settings' Reset Kithsong… | system's Clear storage |
 | Scrobbling | yes | only against a fake service | yes |
 | OS media controls | SMTC (with shuffle) | MPRIS (with shuffle and volume) | Media3 session (with shuffle) |
 | Car | n/a | n/a | Android Auto (search and voice only compiled) |
@@ -173,6 +174,7 @@ Things built but not checked properly. Debug hooks for test scripts: KITHSONG_DE
 ### Linux (run under Xvfb, never on a real desktop)
 Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, audio to a PulseAudio null sink, and sync between two instances on one host; earlier runs were in Docker (GTK 4.18, libadwaita 1.7). Seen working there: smart lists' and groups' pictures, empty playlists staying, artist page and smart list playback, album group covers, the Playlists page, shuffle and the Play/Shuffle buttons, delete and restore (a delete taking a queued track stops playback first), the import outcomes, Use as Track with the keyboard and with related items' files, Search More Widely, the over-budget estimates, switching library with a device page open, the archive's sidebar row, the empty pages' buttons, the pairing dialog's ended page, Remove from / Sync to this computer (tiles, artist page, artist rows), the Add to playlist note, merging libraries in both roles, Move library's refused close under openbox, and the AdwShortcutsDialog (built against the GNOME 49 SDK). Left:
 - A real GNOME and KDE session (Wayland too) for all of the above
+- Settings' Reset Kithsong… (only built): the confirmation, the window closing, the next start clearing ~/.config/kithsong (the core's part is test_settings_reset) and its failure alert
 - Sync: pairing with Windows or Android, and a real LAN. A watch's icon was only seen with a core-only stand-in: this Adwaita has no smartwatch-symbolic, so it showed the phone's
 - Merging libraries: the library_mismatch update hint (needs a peer running an older version) and the merge's notification
 - Restore from a real file manager's Trash (only done by hand: file moved back, .trashinfo removed)
@@ -203,6 +205,8 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - Go to Album and Go to Artist on the track list's and a single's menus: only syntax-checked with MinGW, never built or run
 - Volume's fade (only silent test files so far)
 - Settings' Play albums in order checkbox (only syntax-checked with MinGW): its layout in both themes, and its screen-reader name
+- Settings' Reset Kithsong… (only syntax-checked with MinGW): the confirmation, the window closing, and the next start clearing %LOCALAPPDATA%\kithsong (the core's part is test_settings_reset) and asking for a library folder again
+- The Settings page doesn't scroll: on a short window (or at a large text size) its last sections, Scrobbling and Reset, are cut off
 - The volume drop-down (volume_popup.c): only cross-compiled with MinGW, never run. Check the main window keeping its active look and Mica while it's open, a click on the speaker closing it without opening it again, the focus going back on Escape, the wheel, Windows 10's border (no rounded corners there), high contrast, and the speaker and slider through UI Automation
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns, focus events, and listeners for property changes and live regions
 - The empty Albums page's Choose What to Sync in a group (only syntax-checked with MinGW)

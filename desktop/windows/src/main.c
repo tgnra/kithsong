@@ -1757,6 +1757,18 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_MOVE_LIBRARY:
       move_library();
       return 0;
+    case WM_APP_RESET: { /* Settings' Reset Kithsong…, confirmed: the next start clears the folder */
+      mc_status st = mc_settings_request_reset(g_app.config_dir);
+      if (st != MC_OK) {
+        wchar_t text[MAX_PATH + 512];
+        mc_wformat(text, MAX_PATH + 512, mc_str(MC_STR_RESET_APP_FAILED), MC_S(g_app.config_dir),
+                   MC_S(mc_status_str(st)));
+        MessageBoxW(wnd, text, mc_wstr(MC_STR_SETTINGS_RESET), MB_OK | MB_ICONERROR);
+        return 0;
+      }
+      PostMessageW(wnd, WM_CLOSE, 0, 0);
+      return 0;
+    }
     case WM_CLOSE:
       if (import_view_confirm_close()) DestroyWindow(wnd);
       return 0;
@@ -2218,6 +2230,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   /* Settings say where the library folder is; the first run asks. */
   wchar_t shown_dir[MAX_PATH];
   g_app.config_dir = config_dir(&args, shown_dir, MAX_PATH);
+  /* Settings' Reset Kithsong… marked the folder and quit: clear it before anything opens it. */
+  char *left = NULL;
+  mc_status reset = g_app.config_dir ? mc_settings_reset_if_requested(g_app.config_dir, NULL, &left) : MC_OK;
+  if (reset != MC_OK) {
+    wchar_t text[MAX_PATH + 512];
+    mc_wformat(text, MAX_PATH + 512, mc_str(MC_STR_RESET_APP_FAILED), MC_S(left ? left : g_app.config_dir),
+               MC_S(mc_status_str(reset)));
+    MessageBoxW(NULL, text, mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONWARNING);
+  }
+  mc_free(left);
   if (!g_app.config_dir || mc_settings_load(g_app.config_dir, &g_app.settings) != MC_OK) {
     wchar_t text[MAX_PATH + 128];
     char *shown = wstr_to_utf8(shown_dir);

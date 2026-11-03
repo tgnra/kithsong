@@ -21,6 +21,9 @@
  *   |  | Signed in as tania                         | |
  *   |  |                 Sign Out                   | |
  *   |  | Scrobble what I play on this device   [==] | |
+ *   |  Reset                                           |
+ *   |  Clears Kithsong's settings on this device...    |
+ *   |  |              Reset Kithsong...             | |
  *   +--------------------------------------------------+
  *
  * The library folder is read from settings.json in settings_dir. Open Another Library picks a
@@ -30,7 +33,8 @@
  * sync when it runs, and settings.json either way), shows where other devices reach it, and
  * leaves the group after asking, as Windows' Settings does. The Scrobbling group signs in
  * with playback_scrobbler(), in the browser; a sign-in carries on if the dialog closes. The
- * switch is this computer's own (settings.json); the account is the sync group's.
+ * switch is this computer's own (settings.json); the account is the sync group's. Reset
+ * Kithsong..., after asking, closes the dialog and calls the caller's reset.
  *
  * Wiring it into main.c (settings_dir is ~/.config/kithsong, as main() already builds):
  *
@@ -47,7 +51,7 @@
  *   }
  *
  *   // the header bar's Settings button:
- *   settings_view_present(win, a->settings_dir, open_library, move_library, a);
+ *   settings_view_present(win, a->settings_dir, open_library, move_library, reset_app, &sync, a);
  *
  * Windows locks the sidebar (so Settings can't be reached) while an import session is open;
  * do the same here by making the Settings button insensitive from the import view's
@@ -67,6 +71,9 @@
 typedef gboolean (*settings_view_open_library_fn)(void *user, const char *dir);
 /* Moves the library somewhere the user picks. Called once the dialog has closed. */
 typedef void (*settings_view_move_library_fn)(void *user);
+/* Resets the app on this device, once the user has confirmed: marks the settings folder
+ * (mc_settings_request_reset()) and quits. Called once the dialog has closed. */
+typedef void (*settings_view_reset_fn)(void *user);
 /* How settings_view_choose_library() ended: dir is the library open now, or NULL if it
  * didn't change; saved, whether settings.json names it. */
 typedef void (*settings_view_chosen_fn)(gpointer data, const char *dir, gboolean saved);
@@ -83,8 +90,8 @@ typedef struct settings_view_sync {
  * NULL, which leaves the Sync group out. */
 void settings_view_present(GtkWidget *parent, const char *settings_dir,
                            settings_view_open_library_fn open_library,
-                           settings_view_move_library_fn move_library, const settings_view_sync *sync,
-                           void *user);
+                           settings_view_move_library_fn move_library, settings_view_reset_fn reset,
+                           const settings_view_sync *sync, void *user);
 
 /* Open Another Library's steps, for Settings and for the pairing dialog's Create a New
  * Library (empty_only): a folder picker over parent; with empty_only, a folder with anything
