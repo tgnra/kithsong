@@ -5,6 +5,7 @@
 #include <curl/curl.h>
 
 #include "config.h"
+#include "library/edit_internal.h"
 #include "net/http.h"
 #include "tagger/coverart.h"
 #include "tagger/musicbrainz.h"
@@ -29,6 +30,8 @@ const char *mc_status_str(mc_status status) {
     case MC_ERR_IN_GROUP: return mc_str(MC_STR_STATUS_IN_GROUP);
     case MC_ERR_LIBRARY_MISMATCH: return mc_str(MC_STR_STATUS_LIBRARY_MISMATCH);
     case MC_ERR_AUTH: return mc_str(MC_STR_STATUS_AUTH);
+    case MC_ERR_IN_USE: return mc_str(MC_STR_STATUS_IN_USE);
+    case MC_ERR_EXISTS: return mc_str(MC_STR_STATUS_EXISTS);
 
   }
   return mc_str(MC_STR_STATUS_UNKNOWN);
@@ -40,6 +43,7 @@ mc_status mc_init(void) {
   mc_musicbrainz_global_init();
   mc_coverart_global_init();
   mc_refresh_global_init();
+  mc_edit_global_init();
   return MC_OK;
 }
 

@@ -793,6 +793,9 @@ the plaintext limit.
     originals and transcodes whose `file_rev` is current, and the swapped file gets a new
     file uid, so no transcode cached for the old one is sent. An original imported on a
     device is never stale there: another device's better file doesn't replace it.
+  - A hand edit isn't a new file: it rewrites this device's originals' tags and updates their
+    `files` rows, `sha256` too, with no new `file_rev`, so nothing is fetched and peers keep
+    their copies and old tags (see "Hand edits" in tagging-rules.md).
   - Exceptions: originals imported on that device are kept until an archive holds verified
     copies. The device learns that in a session with an archive: its `HAVE_REQ` there also
     lists the tracks of such originals it no longer wants as they are, and the archive's
