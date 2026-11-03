@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/edit_internal.h"
 #include "search/search_internal.h"
 #include "sync/libmerge.h"
 #include "sync/rows.h"
@@ -445,7 +446,10 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
             sqlite3_errmsg(lib->db));
   /* Splits the credits from before v13 (docs/tagging-rules.md, "Refresh after upgrading"),
    * on a thread and connection of its own. */
-  if (background) lib->refresh = mc_refresh_start(lib);
+  if (background) {
+    mc_edit_recover(lib);
+    lib->refresh = mc_refresh_start(lib);
+  }
 
   *out = lib;
   return MC_OK;

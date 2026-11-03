@@ -350,6 +350,19 @@ mc_status mc_remove(const char *path) {
   return ok ? MC_OK : MC_ERR_IO;
 }
 
+int mc_file_in_use(const char *path) {
+  wchar_t *w = mc_win_path(path);
+  if (!w) return 0;
+  /* Asking for what a rename needs, while sharing everything: only a handle that doesn't let
+   * others delete refuses. */
+  HANDLE h = CreateFileW(w, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  DWORD err = h == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+  if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+  free(w);
+  return err == ERROR_SHARING_VIOLATION || err == ERROR_LOCK_VIOLATION;
+}
+
 mc_status mc_clear_read_only(const char *path) {
   wchar_t *w = mc_win_path(path);
   if (!w) return MC_ERR_NOMEM;
@@ -771,6 +784,11 @@ mc_status mc_rename(const char *src, const char *dst, int replace) {
 
 mc_status mc_remove(const char *path) {
   return unlink(path) == 0 ? MC_OK : MC_ERR_IO;
+}
+
+int mc_file_in_use(const char *path) {
+  (void)path;
+  return 0;
 }
 
 mc_status mc_clear_read_only(const char *path) {

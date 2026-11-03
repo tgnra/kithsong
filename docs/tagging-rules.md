@@ -475,6 +475,79 @@ and how far it is.
   duplicates do. A track's files are retagged on each device by its own refresh; sync
   doesn't send them again (the track's `file_rev` didn't change).
 
+## Hand edits
+
+The edit dialog's album, artist and track tags, and matching an album to another release
+(`core/include/musiccore/edit.h`, `core/src/library/edit.c`). The rows are the source of truth:
+an edit changes them, logged like any change, and they are what every device shows. Files
+follow on this device only.
+
+- **Credits.** A credit that was changed is split as an import splits a string (see
+  [Artist credits](#artist-credits)): artists are found or made as an import's, and the credit
+  rows, `artist_uid` and `artist_credit` are written the same way. One left as it is isn't
+  touched, so a credit MusicBrainz gave keeps its ids however often the dialog is saved. Tracks
+  credited exactly as their album was follow its new credit, and tracks with the album's year
+  follow its year. A track's artist cleared goes back to the album's: no artist of its own. An
+  artist nothing names any more is deleted, logged, as the artist refresh deletes them, so a
+  typo put right leaves nothing behind.
+- **Renaming an artist.** The row changes, and with it credits that spell the old name out
+  ("Ann & Bob", when the artists are Ann and Bob); one that credits them otherwise stays. A name
+  another artist has doesn't merge them: artists are told apart by uid, and merged by
+  `mb_artistid` alone, as sync does. Two with the same id are one already, and two without may
+  well be different people.
+- **File tags.** Each original on this device whose tags the edit changes is rewritten with
+  `mc_tags_write()`: only the tags that changed, so what the rows don't know about stays. A
+  transcode keeps its tags, and nothing outside the library folder is touched. The `files` row
+  takes the new size, mtime and `sha256` (if it had one; a file with none is left for a deep
+  check), and `source_sha256` stays, being what was imported. `file_rev` doesn't change, so no
+  device fetches the file again, and peers' copies keep their old tags. That's safe for sync
+  because `files.sha256` is only ever compared on the device that recorded it: a sender hashes
+  what it sends, `HAVE_RESP.verified` says only that a hash is recorded, a deep check compares a
+  file with its own row, and an archive's status counts files, not hashes. The transcode cache
+  is keyed by the file's uid, which stays, and the audio it holds is still right.
+- **A file that doesn't match.** A file with a recorded hash is checked against it first. If its
+  bytes don't match it's left as it is: it would otherwise get a new hash over bad bytes, and
+  the deep check would never report it. So is one whose size or mtime differs from its row, or
+  that's missing or read-only. None of these stops the edit: the rows change, and the file keeps
+  its place and tags.
+- **Filing.** A file moves when the edit changes where `organize.c` files it, to where an import
+  would put it, with the same ` (2)` when that's taken, on disk or in `files`. A file this edit
+  moves away doesn't count, so tracks can trade names. One filed elsewhere stays there through
+  edits that don't change its place. Transcodes move too. The cover is copied to the album's new
+  folder unless it has one, and folders left empty or holding only a cover go, as usual. `files`
+  doesn't sync, so only the device that made the edit moves anything. A disc number past the
+  album's last raises `disc_total`, which renames all its files; nothing lowers it.
+- **All or nothing.** A failed copy, tag write or rename leaves rows and files exactly as they
+  were. Neither goes first. In a write transaction the rows change, what that means for each
+  file is worked out by comparing tags and paths before and after, and it's rolled back. With no
+  lock held, a tagged copy of each file is made beside it, and everything likely to fail fails
+  here. In a second transaction the rows change again, the plan is checked, every file is
+  renamed to a backup, every copy into place, and it's committed; the backups go last. A failed
+  rename puts everything back. `meta.edit_swap` lists what's under way, and turns from `undo` to
+  `done` in the commit, so a crash is put right either way when a frontend next opens the
+  library. If something else changed the rows or files meanwhile, the edit plans again.
+- **An open file.** On Windows the player and sync open files without sharing delete, so they
+  can't be renamed. Each file is checked as the plan is made, before any copying, and a rename
+  catches one opened since. The edit returns `MC_ERR_IN_USE` with nothing changed, the frontend
+  says so, and it can be tried again once playback has moved on. Only the files the edit touches
+  count, so tagging one track of an album while another plays is fine. Elsewhere an open file
+  can be renamed and goes on playing the old bytes.
+- **Another release.** `mc_release_search()` searches as an import does, sharing MusicBrainz's
+  rate limit, looks up the best 5 and scores them against the album's tracks with `match.c`.
+  `mc_album_tags_set()` with a new `mb_albumid` looks it up and pairs the tracks the same way,
+  dropping pairs over 0.6 apart. The album takes the release's title, credit, years, disc total
+  and ids, but for what the caller changed itself; paired tracks take its title, credit, number,
+  disc, year and ids; the others keep theirs. Then tags and filing as above. A cover is fetched
+  only if the album has none and has a file here to put it beside; failing to get one doesn't
+  fail the edit. `""` unlinks: `mb_albumid`, `mb_releasegroupid` and the tracks' `mb_albumid` and
+  `mb_releasetrackid` go, and the rest stays.
+- **A release that's taken.** Sync takes two rows that have ever shared an id for one, for good,
+  and a delete of one for a delete of both (see "Duplicates" in sync-protocol.md). So a release
+  another album has, or ever had, is refused with `MC_ERR_EXISTS`, a deleted album's included,
+  and a track isn't paired with a release track another track has ever had: it keeps its tags.
+  The same rule means an album stays tied to every release it was linked to: one imported later
+  with a release this album once held merges into it.
+
 ## Field mapping
 
 | Library field | Tag property (TagLib) | Notes |
@@ -490,7 +563,8 @@ and how far it is.
 | track/disc | `TRACKNUMBER`, `DISCNUMBER` | written as `n/total`; not for a track with no album |
 | mb ids | `MUSICBRAINZ_TRACKID` (recording), `MUSICBRAINZ_RELEASETRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `MUSICBRAINZ_ALBUMARTISTID`, `MUSICBRAINZ_RELEASEGROUPID` | `MUSICBRAINZ_ARTISTID` and `MUSICBRAINZ_ALBUMARTISTID` hold one id per credited artist, in order |
 
-Writing an empty string through `mc_tags_write()` removes that tag. Multi-valued properties
+Writing an empty string through `mc_tags_write()` removes that tag, and so does a negative
+year, track or disc. Multi-valued properties
 are '\n'-separated lists in `mc_tags` (`artists`, `album_artists`, `mb_artistids`,
 `mb_albumartistids`); `mb_artistid` and `mb_albumartistid` read as the first value. In ID3v2
 (MP3, WAV) `ARTISTS` and the artist ids are `TXXX` frames ("ARTISTS", "MUSICBRAINZ ARTIST

@@ -28,6 +28,16 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Android - a new album group can only be made from an album's Add to album group…
 - All - tracks imported before 81dcc23 keep a timestamp each, a moment apart, so "Recently added" plays those albums last track first (no migration: the column syncs)
 
+### Hand edits
+- Core - no way to cancel an edit or a release search under way, nor to see how far it is: an artist with many albums copies every file first, and mc_release_search() can wait minutes while MusicBrainz is busy (mb_call has the cancel; edit.h has no way to pass one)
+- Core - renaming an artist is one swap of every file credited, so it needs that much free space; per album would need less, but a failure could leave it half done
+- Core - merging two artists by hand (renaming one to the other's name leaves two)
+- Core - a folder an album moves into that has a cover keeps it, so the album's own goes with its old folder and its art_hash no longer matches; only for two albums sharing a folder
+- Core - disc_total is only ever raised by a track's disc number
+- Windows - when a folder's name changes only in case, files take the new case in their rows and the folder keeps the old one
+- All - the player could open files sharing delete, so tagging the track playing wouldn't need MC_ERR_IN_USE on Windows (dr_libs' _w openers use _wfopen)
+- Decided: peers' files keep their old tags and places; the rows are what they show, and fetching audio again for a tag isn't worth it
+
 ### Smart playlists
 - All - localise the v10 example lists' names (decided; they're stored as data, so always English today)
 - Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it; on Linux a new one that picks nothing playable doesn't open after it's made

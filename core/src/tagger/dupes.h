@@ -20,6 +20,10 @@ mc_status mc_sha256_file(const char *path, char out[MC_SHA256_STRLEN]);
  * artist has one. Both malloc'd. */
 mc_status mc_dupes_credit_tags(mc_library *lib, const char *uid, char **names, char **ids);
 
+/* What the library says of track_uid, as an import tags a file; ids it hasn't are "". Release
+ * with mc_tags_clear(). MC_ERR_NOT_FOUND if there's no such track. */
+mc_status mc_dupes_library_tags(mc_library *lib, const char *track_uid, mc_tags *out);
+
 /* What one audio file sounds like, as far as comparing quality goes. */
 typedef struct mc_audio_quality {
   const char *format; /* lowercase extension: "flac", "mp3", ... */
