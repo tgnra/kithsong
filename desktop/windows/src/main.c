@@ -64,8 +64,10 @@
  *
  * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
- * so two instances can sync on one PC; the paths are imported. --add-firewall-rule alone is
- * firewall.c's elevated helper, which adds the Windows Firewall rule sync needs and exits.
+ * so two instances can sync on one PC; the paths are imported. Launching it again with the
+ * same config folder brings the open window forward and hands it the paths instead, as
+ * GApplication does on Linux (claim_instance). --add-firewall-rule alone is firewall.c's
+ * elevated helper, which adds the Windows Firewall rule sync needs and exits.
  */
 #define _CRT_RAND_S /* rand_s(), for Shuffle Albums */
 #include <windows.h>
@@ -154,7 +156,7 @@ enum {
   POLL_DEVICES_MS = 10000,
   MAX_SYNCING = 16, /* devices marked as syncing in the sidebar at once */
   MAX_ADDRESSES = 8,
-  MAX_RECENTS = 10, /* in the sidebar */
+  MAX_RECENTS = 3, /* in the sidebar */
 };
 
 typedef struct app {
@@ -195,6 +197,14 @@ static BOOL change_library(BOOL new_empty);
 static void move_library(void);
 static void schedule_refresh(void);
 static void rename_self(const char *name);
+static void import_forwarded(wchar_t *list);
+
+/* The window property holding its config folder's instance key (see claim_instance). */
+#define INSTANCE_PROP L"Kithsong.Instance"
+#define INSTANCE_PATHS 0x4B535041     /* WM_COPYDATA's dwData: paths, NUL-separated */
+#define WM_APP_FORWARDED (WM_APP + 9) /* lParam: those paths, malloc'd and ending in "\0\0" */
+
+static ULONG_PTR g_instance_key;
 
 static int scale(int px) {
   return MulDiv(px, (int)g_app.dpi, USER_DEFAULT_SCREEN_DPI);
@@ -1730,6 +1740,21 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_SYNC:
       on_sync_event(wp, lp);
       return 0;
+    case WM_COPYDATA: {
+      /* Another launch's paths. Imported once its SendMessage has returned, as the import
+       * may show a message box. */
+      const COPYDATASTRUCT *cds = (const COPYDATASTRUCT *)lp;
+      if (cds->dwData != INSTANCE_PATHS || !cds->cbData || cds->cbData % sizeof(wchar_t)) break;
+      wchar_t *list = malloc(cds->cbData + 2 * sizeof *list);
+      if (!list) return TRUE;
+      memcpy(list, cds->lpData, cds->cbData);
+      list[cds->cbData / sizeof *list] = list[cds->cbData / sizeof *list + 1] = L'\0';
+      if (!PostMessageW(wnd, WM_APP_FORWARDED, 0, (LPARAM)list)) free(list);
+      return TRUE;
+    }
+    case WM_APP_FORWARDED:
+      import_forwarded((wchar_t *)lp);
+      return 0;
     case WM_DROPFILES:
       if (g_app.page != PAGE_IMPORT) show_page(PAGE_IMPORT);
       import_view_drop((HDROP)wp);
@@ -1773,6 +1798,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (import_view_confirm_close()) DestroyWindow(wnd);
       return 0;
     case WM_DESTROY:
+      RemovePropW(wnd, INSTANCE_PROP);
       KillTimer(wnd, TIMER_REFRESH_DEVICES);
       KillTimer(wnd, TIMER_POLL_DEVICES);
       KillTimer(wnd, TIMER_REFRESH_LIBRARY);
@@ -1879,19 +1905,117 @@ static char *config_dir(const app_args *args, wchar_t *shown, DWORD cap) {
   return utf8_from_wide(dir);
 }
 
-/* Folders or files on the command line (including ones dropped onto the exe or a shortcut)
- * are imported straight away. */
-static void import_args(const app_args *args) {
-  char **paths = args->npaths ? calloc((size_t)args->npaths, sizeof *paths) : NULL;
+static void import_paths(const wchar_t *const *wide, int count) {
+  char **paths = count ? calloc((size_t)count, sizeof *paths) : NULL;
   int n = 0;
-  for (int i = 0; paths && i < args->npaths; i++)
-    if ((paths[n] = utf8_from_wide(args->paths[i]))) n++;
+  for (int i = 0; paths && i < count; i++)
+    if ((paths[n] = utf8_from_wide(wide[i]))) n++;
   if (n > 0) {
     show_page(PAGE_IMPORT);
     import_view_start((const char *const *)paths, n);
   }
   for (int i = 0; i < n; i++) free(paths[i]);
   free(paths);
+}
+
+/* Folders or files on the command line (including ones dropped onto the exe or a shortcut)
+ * are imported straight away. */
+static void import_args(const app_args *args) {
+  import_paths(args->paths, args->npaths);
+}
+
+/* Paths another launch handed over (forward_instance), imported as the command line's are.
+ * Dropped while a dialog is open or the window is hidden (moving the library), as a drop
+ * onto the window would be. Frees list. */
+static void import_forwarded(wchar_t *list) {
+  int count = 0;
+  for (const wchar_t *p = list; *p; p += wcslen(p) + 1) count++;
+  const wchar_t **paths = calloc((size_t)count + 1, sizeof *paths);
+  if (paths && IsWindowEnabled(g_app.wnd) && IsWindowVisible(g_app.wnd)) {
+    int i = 0;
+    for (const wchar_t *p = list; *p; p += wcslen(p) + 1) paths[i++] = p;
+    import_paths(paths, count);
+  }
+  free(paths);
+  free(list);
+}
+
+/* --- One instance per config folder --- */
+
+/* Its key: FNV-1a of the folder, ASCII lower-cased, with / as \ and no trailing separator. */
+static ULONG_PTR instance_key(const char *dir) {
+  size_t n = strlen(dir);
+  while (n > 3 && (dir[n - 1] == '\\' || dir[n - 1] == '/')) n--;
+  unsigned long long h = 14695981039346656037ull;
+  for (size_t i = 0; i < n; i++) {
+    unsigned char c = (unsigned char)dir[i];
+    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+    if (c == '/') c = '\\';
+    h = (h ^ c) * 1099511628211ull;
+  }
+  return (ULONG_PTR)h;
+}
+
+typedef struct instance_find {
+  ULONG_PTR key;
+  HWND found;
+} instance_find;
+
+static BOOL CALLBACK find_instance(HWND wnd, LPARAM lp) {
+  instance_find *f = (instance_find *)lp;
+  wchar_t cls[16];
+  if (GetClassNameW(wnd, cls, 16) && !wcscmp(cls, L"kithsong") && (ULONG_PTR)GetPropW(wnd, INSTANCE_PROP) == f->key) {
+    f->found = wnd;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+/* Brings the open instance's window forward, unless it's hidden (moving the library), and
+ * sends it args' paths, made absolute, as its working folder may not be this one's. */
+static void forward_instance(HWND wnd, const app_args *args) {
+  if (IsWindowVisible(wnd)) {
+    if (IsIconic(wnd)) ShowWindow(wnd, SW_RESTORE);
+    SetForegroundWindow(GetLastActivePopup(wnd)); /* a dialog it has open, or the window */
+  }
+  size_t len = 0;
+  for (int i = 0; i < args->npaths; i++) len += GetFullPathNameW(args->paths[i], 0, NULL, NULL);
+  wchar_t *list = len ? malloc(len * sizeof *list) : NULL;
+  if (!list) return;
+  size_t used = 0;
+  for (int i = 0; i < args->npaths; i++) {
+    DWORD n = GetFullPathNameW(args->paths[i], (DWORD)(len - used), list + used, NULL);
+    if (n && n < len - used) used += n + 1;
+  }
+  COPYDATASTRUCT cds = {INSTANCE_PATHS, (DWORD)(used * sizeof *list), list};
+  DWORD_PTR result;
+  if (used) SendMessageTimeoutW(wnd, WM_COPYDATA, 0, (LPARAM)&cds, SMTO_ABORTIFHUNG, 5000, &result);
+  free(list);
+}
+
+/* Makes this the config folder's one instance, holding a named mutex until it exits. Local\
+ * names are per session, and a packaged desktop app's are the same as the zip's, so the
+ * Store and zip builds share it; another --config-dir is another instance. Returns FALSE
+ * when another instance has it, after bringing that one forward (or giving up after 10 s). */
+static BOOL claim_instance(const char *dir, const app_args *args) {
+  g_instance_key = instance_key(dir);
+  wchar_t name[64];
+  swprintf(name, 64, L"Local\\Kithsong-%016llx", (unsigned long long)g_instance_key);
+  HANDLE mutex = CreateMutexW(NULL, FALSE, name);
+  if (!mutex) return TRUE; /* can't tell, so carry on as before */
+  /* The other instance may still be starting (no window yet) or closing (its window gone,
+   * the mutex held while sync stops): wait for its window, or for the mutex. */
+  for (int i = 0; i < 100; i++) {
+    if (WaitForSingleObject(mutex, i ? 100 : 0) != WAIT_TIMEOUT) return TRUE; /* kept until exit */
+    instance_find f = {g_instance_key, NULL};
+    EnumWindows(find_instance, (LPARAM)&f);
+    if (f.found) {
+      forward_instance(f.found, args);
+      break;
+    }
+  }
+  CloseHandle(mutex);
+  return FALSE;
 }
 
 /* --- Library location --- */
@@ -2230,6 +2354,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   /* Settings say where the library folder is; the first run asks. */
   wchar_t shown_dir[MAX_PATH];
   g_app.config_dir = config_dir(&args, shown_dir, MAX_PATH);
+  if (g_app.config_dir && !claim_instance(g_app.config_dir, &args)) {
+    free(g_app.config_dir);
+    free_args(&args);
+    return 0;
+  }
   /* Settings' Reset Kithsong… marked the folder and quit: clear it before anything opens it. */
   char *left = NULL;
   mc_status reset = g_app.config_dir ? mc_settings_reset_if_requested(g_app.config_dir, NULL, &left) : MC_OK;
@@ -2290,6 +2419,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   HWND wnd = CreateWindowExW(0, L"kithsong", title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                              CW_USEDEFAULT, CW_USEDEFAULT, 1200, 800, NULL, NULL, inst, NULL);
   if (!wnd) return 1;
+  if (g_instance_key) SetPropW(wnd, INSTANCE_PROP, (HANDLE)g_instance_key);
   DragAcceptFiles(wnd, TRUE);
   ShowWindow(wnd, show);
   pair_dialog_init(wnd, &k_pair_host);

@@ -6,7 +6,7 @@
 #include "artist_view.h"
 #include "drag.h"
 
-enum { MAX_RECENTS = 10 };
+enum { MAX_RECENTS = 3 };
 
 static struct {
   app *a;
