@@ -46,6 +46,13 @@ import ng.kithso.core.search
 import ng.kithso.core.searchPrepare
 import ng.kithso.core.smartAlbums
 import ng.kithso.core.smartArt
+import ng.kithso.core.countSmart
+import ng.kithso.core.createSmart
+import ng.kithso.core.deleteSmart
+import ng.kithso.core.describeSmart
+import ng.kithso.core.previewSmartTracks
+import ng.kithso.core.renameSmart
+import ng.kithso.core.setSmartRule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -84,9 +91,9 @@ import java.io.File
  * of their own ([art]), and [library] is updated with those that changed. Meanwhile each
  * shows the picture it last had, kept in [prefs] across launches.
  *
- * Manual playlists and album groups are edited here too ([PlaylistEditor]), and albums,
- * artists and tracks deleted ([LibraryDeleter]), on [core], each change followed by a
- * [refresh].
+ * Manual playlists and album groups are edited here too ([PlaylistEditor]), smart lists made
+ * and edited ([SmartListEditor]), and albums, artists and tracks deleted ([LibraryDeleter]),
+ * on [core], each change followed by a [refresh].
  */
 class CoreLibrarySource(
     private val dir: File,
@@ -94,7 +101,7 @@ class CoreLibrarySource(
     private val prefs: SharedPreferences,
     private val scope: CoroutineScope,
     private val unknownArtist: () -> String,
-) : LibrarySource, PlaylistEditor, LibraryDeleter, RecentsEditor {
+) : LibrarySource, PlaylistEditor, SmartListEditor, LibraryDeleter, RecentsEditor {
     private val core = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow<Library?>(null)
     override val library: StateFlow<Library?> = state
@@ -109,6 +116,10 @@ class CoreLibrarySource(
 
     private val art = Dispatchers.IO.limitedParallelism(1)
     private var artLib: CoreLibrary? = null // only touched on [art]
+
+    // The smart list editor's counts and previews, likewise ([SmartListEditor]).
+    private val counting = Dispatchers.IO.limitedParallelism(1)
+    private var countLib: CoreLibrary? = null // only touched on [counting]
 
     // Covers found before, by folder, only touched on [core]: every read asks for every
     // album's, and a stat is far cheaper than listing the folder. A folder without one is
@@ -459,6 +470,118 @@ class CoreLibrarySource(
             onChanged()
         }
     }
+
+    // --- SmartListEditor ---
+
+    override suspend fun isSmart(uid: String): Boolean = withContext(core) { uid in contents.smart }
+
+    override suspend fun smartList(uid: String): SmartListInfo? = withContext(core) {
+        try {
+            // Every one, as one with nothing to play here can still be edited from its sentence.
+            open()?.smartLists()?.firstOrNull { it.uid == uid }?.let { SmartListInfo(it.uid, it.name, it.isAlbums, it.rule) }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't read smart list $uid", e)
+            null
+        }
+    }
+
+    override suspend fun smartChoices(): Pair<List<PlaylistChoice>, List<PlaylistChoice>>? = withContext(core) {
+        try {
+            val lib = open() ?: return@withContext null
+            lib.playlists().map { PlaylistChoice(it.uid, it.name) } to lib.albumGroups().map { PlaylistChoice(it.uid, it.name) }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't list the playlists and album groups", e)
+            null
+        }
+    }
+
+    override suspend fun describeRule(isAlbums: Boolean, rule: String): String? = withContext(core) {
+        try {
+            open()?.describeSmart(isAlbums, rule)
+        } catch (e: MusicCoreException) {
+            null // a rule being edited, which may not be valid yet
+        }
+    }
+
+    override suspend fun countRule(isAlbums: Boolean, rule: String): Int? = withContext(counting) {
+        try {
+            countingLib()?.countSmart(isAlbums, rule)
+        } catch (e: MusicCoreException) {
+            null
+        }
+    }
+
+    override suspend fun previewRule(isAlbums: Boolean, rule: String, max: Int): SmartPreview? = withContext(counting) {
+        try {
+            val lib = countingLib() ?: return@withContext null
+            if (isAlbums) {
+                val albums = lib.previewSmartAlbums(rule)
+                SmartPreview(albums.take(max).map { SmartPreviewItem(it.title, it.artist ?: unknownArtist()) }, albums.size)
+            } else {
+                val tracks = lib.previewSmartTracks(rule)
+                SmartPreview(tracks.take(max).map { SmartPreviewItem(it.title, it.artist ?: unknownArtist()) }, tracks.size)
+            }
+        } catch (e: MusicCoreException) {
+            null
+        }
+    }
+
+    // On [counting]: its own library connection, opened once.
+    private fun countingLib(): CoreLibrary? = countLib ?: try {
+        CoreLibrary(dir.path).also { countLib = it }
+    } catch (e: MusicCoreException) {
+        Log.e(TAG, "Couldn't open the library in $dir for the smart list editor", e)
+        null
+    }
+
+    // In [scope], so it's seen through and the library read again even if the editor goes away.
+    override suspend fun createSmart(name: String, isAlbums: Boolean, rule: String): String? = scope.async(core) {
+        val uid = open()?.let { lib ->
+            try {
+                lib.createSmart(name, isAlbums, rule).also {
+                    changed(lib, if (isAlbums) ItemKind.AlbumGroup else ItemKind.Playlist, it)
+                }
+            } catch (e: MusicCoreException) {
+                Log.e(TAG, "Couldn't make smart list $name", e)
+                null
+            }
+        }
+        if (uid == null) failed.tryEmit(EditFailure.SmartCreate)
+        refresh().join()
+        editCount.value++
+        onChanged()
+        uid
+    }.await()
+
+    override suspend fun saveSmart(uid: String, name: String?, rule: String?): Boolean = scope.async(core) {
+        val lib = open()
+        var failure: EditFailure? = if (lib == null) EditFailure.SmartSave else null
+        if (lib != null) {
+            try {
+                if (name != null) {
+                    failure = EditFailure.SmartRename
+                    lib.renameSmart(uid, name)
+                }
+                if (rule != null) {
+                    failure = EditFailure.SmartSave
+                    lib.setSmartRule(uid, rule)
+                }
+                failure = null
+            } catch (e: MusicCoreException) {
+                Log.e(TAG, "Couldn't save smart list $uid", e)
+            }
+        }
+        failure?.let { failed.tryEmit(it) }
+        refresh().join()
+        editCount.value++
+        onChanged()
+        failure == null
+    }.await()
+
+    override fun renameSmart(uid: String, name: String) =
+        edit(EditFailure.SmartRename, "rename smart list $uid") { it.renameSmart(uid, name) }
+
+    override fun deleteSmart(uid: String) = edit(EditFailure.SmartDelete, "delete smart list $uid") { it.deleteSmart(uid) }
 
     // --- LibraryDeleter ---
 

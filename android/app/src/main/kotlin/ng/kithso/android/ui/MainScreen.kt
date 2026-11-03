@@ -148,7 +148,8 @@ private sealed interface MainItem {
 }
 
 // Null while the library is being read: just the header, rather than a flash of the empty state.
-private fun mainItems(library: Library?, columns: Int, banner: Boolean): List<MainItem> = buildList {
+// With [smart] lists to make, Playlists and Album groups show even when empty, for their + buttons.
+private fun mainItems(library: Library?, columns: Int, banner: Boolean, smart: Boolean): List<MainItem> = buildList {
     add(MainItem.Header)
     if (banner) add(MainItem.Banner)
     if (library == null) return@buildList
@@ -160,11 +161,11 @@ private fun mainItems(library: Library?, columns: Int, banner: Boolean): List<Ma
         add(MainItem.Heading(Section.Recents))
         library.recents.mapTo(this, MainItem::RecentItem)
     }
-    if (library.playlists.isNotEmpty()) {
+    if (library.playlists.isNotEmpty() || smart) {
         add(MainItem.Heading(Section.Playlists))
         library.playlists.mapTo(this, MainItem::PlaylistItem)
     }
-    if (library.albumGroups.isNotEmpty()) {
+    if (library.albumGroups.isNotEmpty() || smart) {
         add(MainItem.Heading(Section.AlbumGroups))
         library.albumGroups.mapTo(this, MainItem::AlbumGroupItem)
     }
@@ -233,7 +234,8 @@ private val ListArtSize = 56.dp
  * player and navigation bar. [banner], if any, goes under the header: how an import is going.
  * The header's import button and the empty library's open [importPickers], unless an import
  * is [importRunning]. [onSearch] is the header's search button, and pulling the list down
- * from its top (see [pullToSearch]).
+ * from its top (see [pullToSearch]). With [onNewSmart], the Playlists and Album groups headings
+ * have a + for a new smart playlist or (with true) smart album group.
  */
 @Composable
 fun MainScreen(
@@ -256,6 +258,7 @@ fun MainScreen(
     onAlbumMenu: (Album) -> Unit = {},
     onArtistMenu: (Artist) -> Unit = {},
     onAlbumGroupMenu: (AlbumGroup) -> Unit = {},
+    onNewSmart: ((isAlbums: Boolean) -> Unit)? = null,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -268,7 +271,8 @@ fun MainScreen(
         val statusBarPx = WindowInsets.statusBars.getTop(density)
 
         val hasBanner = banner != null
-        val items = remember(library, columns, hasBanner) { mainItems(library, columns, hasBanner) }
+        val smart = onNewSmart != null
+        val items = remember(library, columns, hasBanner, smart) { mainItems(library, columns, hasBanner, smart) }
         val sections = remember(items) {
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
@@ -309,7 +313,19 @@ fun MainScreen(
                     MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning)
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
                     MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onChooseWhatToSync)
-                    is MainItem.Heading -> SectionHeading(item.section, sections, { current }, jumpTo)
+                    is MainItem.Heading -> SectionHeading(
+                        item.section,
+                        sections,
+                        { current },
+                        jumpTo,
+                        onNew = onNewSmart?.let { new ->
+                            when (item.section) {
+                                Section.Playlists -> ({ new(false) })
+                                Section.AlbumGroups -> ({ new(true) })
+                                else -> null
+                            }
+                        },
+                    )
                     is MainItem.RecentItem -> LibraryRow(
                         item.recent.title,
                         item.recent.subtitle(),
@@ -396,6 +412,7 @@ private fun Header(
  * A section's heading, a tap target across the whole row. Tapping it opens a list of every
  * section, and picking one scrolls there; [current] is the section at the top of the screen,
  * marked in the list. TalkBack gets the tap, and a jump to each other section as a custom action.
+ * With [onNew], a + at the end makes a new smart playlist or smart album group.
  */
 @Composable
 private fun SectionHeading(
@@ -403,6 +420,7 @@ private fun SectionHeading(
     sections: List<SectionStart>,
     current: () -> Section?,
     onJump: (Int) -> Unit,
+    onNew: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     val jumpLabel = stringResource(R.string.jump_to_section)
@@ -425,6 +443,19 @@ private fun SectionHeading(
         ) {
             Text(stringResource(section.title), style = MaterialTheme.typography.titleLarge)
             Icon(Icons.ExpandMore, contentDescription = null, modifier = Modifier.padding(start = 4.dp))
+        }
+        if (onNew != null) {
+            IconButton(
+                onClick = onNew,
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+            ) {
+                Icon(
+                    Icons.Add,
+                    contentDescription = stringResource(
+                        if (section == Section.AlbumGroups) R.string.smart_new_group_menu else R.string.smart_new_playlist_menu,
+                    ),
+                )
+            }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, offset = DpOffset(Gutter - 8.dp, 0.dp)) {
             val here = current()

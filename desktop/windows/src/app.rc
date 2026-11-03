@@ -88,3 +88,14 @@ BEGIN
   PUSHBUTTON      "", IDOK, 143, 78, 52, 15
   DEFPUSHBUTTON   "", IDCANCEL, 201, 78, 52, 15
 END
+
+/* The smart list editor (smart_editor.c): resizable, with everything but Save and Cancel
+ * made at run time, as each page's rows come and go. */
+IDD_SMART_EDITOR DIALOGEX 0, 0, 560, 360
+STYLE DS_SHELLFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  DEFPUSHBUTTON   "", IDOK, 446, 338, 52, 15
+  PUSHBUTTON      "", IDCANCEL, 501, 338, 52, 15
+END

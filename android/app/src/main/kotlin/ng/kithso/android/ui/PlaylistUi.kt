@@ -65,6 +65,7 @@ import ng.kithso.android.data.PlaylistChoice
 import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.Recent
 import ng.kithso.android.data.RecentsEditor
+import ng.kithso.android.data.SmartListEditor
 import ng.kithso.android.data.Track
 import ng.kithso.android.playback.Playback
 import ng.kithso.core.HerePreview
@@ -84,6 +85,10 @@ import kotlinx.coroutines.launch
  * Remove from this phone (or Sync to this phone) on albums and artists, where it applies, and
  * [recents] Remove from Recents and Clear Recents on a recent's. A delete or removal that
  * takes any of [playback]'s queue empties it first, as Windows does.
+ *
+ * With [smart], a smart playlist's or smart album group's menu has Edit rules…, Rename… and
+ * Delete, as on Linux, and [newSmart] makes one: both open the rule editor
+ * ([SmartEditorScreen]), which [smartEditing] says is open.
  */
 @Stable
 class PlaylistActions(
@@ -92,9 +97,23 @@ class PlaylistActions(
     val remover: DeviceRemover? = null,
     val recents: RecentsEditor? = null,
     val playback: Playback? = null,
+    val smart: SmartListEditor? = null,
 ) {
     internal var sheet by mutableStateOf<Sheet?>(null)
     internal var dialog by mutableStateOf<Dialog?>(null)
+
+    /** What the smart list editor is open on, or null. */
+    var smartEditing by mutableStateOf<SmartEditTarget?>(null)
+
+    /** New smart playlist…, or New smart album group… if [isAlbums]. */
+    fun newSmart(isAlbums: Boolean) {
+        if (smart != null) smartEditing = SmartEditTarget.New(isAlbums)
+    }
+
+    /** Edit rules… on smart list [uid]. */
+    fun editSmart(uid: String) {
+        if (smart != null) smartEditing = SmartEditTarget.Edit(uid)
+    }
 
     fun recentMenu(recent: Recent) {
         sheet = Sheet.RecentMenu(recent)
@@ -152,9 +171,9 @@ class PlaylistActions(
     internal sealed interface Dialog {
         data class NewPlaylist(val what: Addition) : Dialog
         data class NewGroup(val albumUid: String) : Dialog
-        // A playlist's, or if [group] an album group's.
-        data class Rename(val uid: String, val name: String, val group: Boolean = false) : Dialog
-        data class Delete(val uid: String, val name: String, val group: Boolean = false) : Dialog
+        // A playlist's, or if [group] an album group's; a smart one's if [smart].
+        data class Rename(val uid: String, val name: String, val group: Boolean = false, val smart: Boolean = false) : Dialog
+        data class Delete(val uid: String, val name: String, val group: Boolean = false, val smart: Boolean = false) : Dialog
         /** Deleting an album, artist or track from the library, which is asked first. */
         data class DeleteFromLibrary(val what: Deletion) : Dialog
         /** Removing an album or artist from this phone only, which is asked first. */
@@ -177,10 +196,29 @@ private val EditFailure.message: Int
         EditFailure.GroupDelete -> R.string.album_group_delete_failed
         EditFailure.GroupRemove -> R.string.album_group_remove_failed
         EditFailure.GroupMove -> R.string.album_group_move_failed
+        EditFailure.SmartCreate -> R.string.smart_create_failed
+        EditFailure.SmartSave -> R.string.smart_save_failed
+        EditFailure.SmartRename -> R.string.smart_rename_failed
+        EditFailure.SmartDelete -> R.string.smart_delete_failed
     }
 
 /** One row of a menu sheet. */
 private class SheetAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
+
+/** A smart playlist's (or if [group] smart album group's) Edit rules…, Rename… and Delete, as on Linux. */
+@Composable
+private fun smartActions(actions: PlaylistActions, uid: String, name: String, group: Boolean): List<SheetAction> = listOf(
+    SheetAction(stringResource(R.string.smart_edit_menu), Icons.Edit) { actions.editSmart(uid) },
+    SheetAction(stringResource(R.string.playlist_rename_menu), Icons.Edit) {
+        actions.dialog = PlaylistActions.Dialog.Rename(uid, name, group = group, smart = true)
+    },
+    SheetAction(
+        stringResource(if (group) R.string.smart_delete_group_menu else R.string.smart_delete_playlist_menu),
+        Icons.Delete,
+    ) {
+        actions.dialog = PlaylistActions.Dialog.Delete(uid, name, group = group, smart = true)
+    },
+)
 
 /**
  * Shows [actions]' open menu or dialog, if any. [onPlay] plays a collection from its start,
@@ -255,8 +293,9 @@ fun PlaylistSheets(
         is PlaylistActions.Sheet.PlaylistMenu -> {
             val playlist = sheet.playlist
             val ref = CollectionRef(CollectionRef.Kind.Playlist, playlist.uid)
-            // Smart playlists can only be played.
+            // A smart playlist's rules are edited in the rule editor.
             val editable by produceState(false, playlist.uid) { value = editor?.isEditable(playlist.uid) == true }
+            val smart by produceState(false, playlist.uid) { value = actions.smart?.isSmart(playlist.uid) == true }
             MenuSheet(
                 actions,
                 playlist.name,
@@ -272,14 +311,16 @@ fun PlaylistSheets(
                             actions.dialog = PlaylistActions.Dialog.Delete(playlist.uid, playlist.name)
                         })
                     }
+                    if (smart) addAll(smartActions(actions, playlist.uid, playlist.name, group = false))
                 },
             )
         }
         is PlaylistActions.Sheet.AlbumGroupMenu -> {
             val group = sheet.group
             val ref = CollectionRef(CollectionRef.Kind.AlbumGroup, group.uid)
-            // Smart album groups can only be played.
+            // A smart album group's rules are edited in the rule editor.
             val editable by produceState(false, group.uid) { value = editor?.isEditableGroup(group.uid) == true }
+            val smart by produceState(false, group.uid) { value = actions.smart?.isSmart(group.uid) == true }
             MenuSheet(
                 actions,
                 group.name,
@@ -295,6 +336,7 @@ fun PlaylistSheets(
                             actions.dialog = PlaylistActions.Dialog.Delete(group.uid, group.name, group = true)
                         })
                     }
+                    if (smart) addAll(smartActions(actions, group.uid, group.name, group = true))
                 },
             )
         }
@@ -455,12 +497,21 @@ fun PlaylistSheets(
             onDismiss = { actions.dialog = null },
         )
         is PlaylistActions.Dialog.Rename -> NameDialog(
-            title = stringResource(if (dialog.group) R.string.album_group_rename_title else R.string.playlist_rename_title),
+            title = stringResource(
+                when {
+                    dialog.smart -> if (dialog.group) R.string.smart_rename_group_title else R.string.smart_rename_playlist_title
+                    else -> if (dialog.group) R.string.album_group_rename_title else R.string.playlist_rename_title
+                },
+            ),
             initial = dialog.name,
             confirm = stringResource(R.string.rename),
             onConfirm = { name ->
                 if (name != dialog.name) {
-                    if (dialog.group) editor?.renameAlbumGroup(dialog.uid, name) else editor?.renamePlaylist(dialog.uid, name)
+                    when {
+                        dialog.smart -> actions.smart?.renameSmart(dialog.uid, name)
+                        dialog.group -> editor?.renameAlbumGroup(dialog.uid, name)
+                        else -> editor?.renamePlaylist(dialog.uid, name)
+                    }
                 }
             },
             onDismiss = { actions.dialog = null },
@@ -472,13 +523,12 @@ fun PlaylistSheets(
             confirmButton = {
                 TextButton(onClick = {
                     actions.dialog = null
-                    if (dialog.group) {
-                        editor?.deleteAlbumGroup(dialog.uid)
-                        onDeleted(CollectionRef(CollectionRef.Kind.AlbumGroup, dialog.uid))
-                    } else {
-                        editor?.deletePlaylist(dialog.uid)
-                        onDeleted(CollectionRef(CollectionRef.Kind.Playlist, dialog.uid))
+                    when {
+                        dialog.smart -> actions.smart?.deleteSmart(dialog.uid)
+                        dialog.group -> editor?.deleteAlbumGroup(dialog.uid)
+                        else -> editor?.deletePlaylist(dialog.uid)
                     }
+                    onDeleted(CollectionRef(if (dialog.group) CollectionRef.Kind.AlbumGroup else CollectionRef.Kind.Playlist, dialog.uid))
                 }) {
                     Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
                 }

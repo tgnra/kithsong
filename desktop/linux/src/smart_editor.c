@@ -203,8 +203,8 @@ static int default_op(int field) {
 /* An operator's label. A date's empty and not_empty read as never and any time: "Last played
  * is never". */
 static const char *op_label(const char *type, const char *op) {
-  if (!strcmp(type, "date") && !strcmp(op, "empty")) return mc_str(MC_STR_LINUX_SMART_OP_NEVER);
-  if (!strcmp(type, "date") && !strcmp(op, "not_empty")) return mc_str(MC_STR_LINUX_SMART_OP_EVER);
+  if (!strcmp(type, "date") && !strcmp(op, "empty")) return mc_str(MC_STR_SMART_OP_NEVER);
+  if (!strcmp(type, "date") && !strcmp(op, "not_empty")) return mc_str(MC_STR_SMART_OP_EVER);
   const char *label = mc_smart_op_label(type, op);
   return label ? label : op;
 }
@@ -746,10 +746,10 @@ static gboolean load_rule(const char *rule) {
 
 static const char *problem_text(int problem) {
   switch (problem) {
-    case PROBLEM_NUMBER: return mc_str(MC_STR_LINUX_SMART_PROBLEM_NUMBER);
-    case PROBLEM_DURATION: return mc_str(MC_STR_LINUX_SMART_PROBLEM_DURATION);
-    case PROBLEM_CHOICE: return mc_str(MC_STR_LINUX_SMART_PROBLEM_CHOICE);
-    default: return mc_str(MC_STR_LINUX_SMART_PROBLEM_VALUE);
+    case PROBLEM_NUMBER: return mc_str(MC_STR_SMART_PROBLEM_NUMBER);
+    case PROBLEM_DURATION: return mc_str(MC_STR_SMART_PROBLEM_DURATION);
+    case PROBLEM_CHOICE: return mc_str(MC_STR_SMART_PROBLEM_CHOICE);
+    default: return mc_str(MC_STR_SMART_PROBLEM_VALUE);
   }
 }
 
@@ -774,19 +774,19 @@ static gboolean check_group(node *g) {
 static const char *group_title(const node *g) {
   if (!g->parent) return ed->name && *ed->name ? ed->name : mc_str(MC_STR_UNTITLED);
   if (named(g)) return g->name;
-  return g->desc ? g->desc : mc_str(MC_STR_LINUX_SMART_GROUP_UNTITLED);
+  return g->desc ? g->desc : mc_str(MC_STR_SMART_GROUP_UNTITLED);
 }
 
 /* "Fresh stuff › Artist: needs a value". g_free it. */
 static char *problem_line(const node *c) {
   GString *where = g_string_new(NULL);
   for (const node *g = c->parent; g && g->parent; g = g->parent) {
-    if (where->len) g_string_prepend(where, mc_str(MC_STR_LINUX_SMART_PATH_SEPARATOR));
+    if (where->len) g_string_prepend(where, mc_str(MC_STR_SMART_PATH_SEPARATOR));
     g_string_prepend(where, group_title(g));
   }
-  if (where->len) g_string_append(where, mc_str(MC_STR_LINUX_SMART_PATH_SEPARATOR));
+  if (where->len) g_string_append(where, mc_str(MC_STR_SMART_PATH_SEPARATOR));
   g_string_append(where, mc_smart_field_label(field_of(c)->name));
-  char *line = mc_format_alloc(mc_str(MC_STR_LINUX_SMART_PROBLEM), MC_S(where->str), MC_S(problem_text(c->problem)));
+  char *line = mc_format_alloc(mc_str(MC_STR_SMART_PROBLEM), MC_S(where->str), MC_S(problem_text(c->problem)));
   g_string_free(where, TRUE);
   char *out = g_strdup(line ? line : "");
   mc_free(line);
@@ -871,7 +871,7 @@ static void update_cond_row(row *r, node *c) {
 
 static void update_group_row(row *r, node *g) {
   AdwPreferencesRow *pr = ADW_PREFERENCES_ROW(r->widget);
-  const char *sub = !g->kids->len ? mc_str(MC_STR_LINUX_SMART_GROUP_EMPTY_HINT) : named(g) ? g->desc : NULL;
+  const char *sub = !g->kids->len ? mc_str(MC_STR_SMART_GROUP_EMPTY_HINT) : named(g) ? g->desc : NULL;
   adw_preferences_row_set_title(pr, group_title(g));
   adw_action_row_set_subtitle(ADW_ACTION_ROW(r->widget), sub ? sub : "");
   gtk_widget_set_visible(r->warn, g->bad);
@@ -1037,7 +1037,7 @@ static void fill_values(row *r, node *c) {
     g_free(text);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(button), pop);
     gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
-    gtk_widget_set_tooltip_text(button, mc_str(MC_STR_LINUX_SMART_PICK_DATE));
+    gtk_widget_set_tooltip_text(button, mc_str(MC_STR_SMART_PICK_DATE));
     set_label(button, mc_str(MC_STR_SMART_VALUE_NAME));
     g_object_set_data(G_OBJECT(cal), "button", button);
     g_signal_connect(cal, "day-selected", G_CALLBACK(on_day_selected), GUINT_TO_POINTER(c->id));
@@ -1193,13 +1193,13 @@ static row *group_row(node *g) {
   adw_action_row_set_title_lines(ADW_ACTION_ROW(r->widget), 1);
   adw_action_row_set_subtitle_lines(ADW_ACTION_ROW(r->widget), 2);
   gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(r->widget), TRUE);
-  gtk_widget_set_tooltip_text(r->widget, mc_str(MC_STR_LINUX_SMART_OPEN_GROUP));
+  gtk_widget_set_tooltip_text(r->widget, mc_str(MC_STR_SMART_OPEN_GROUP));
   r->count = count_label();
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->widget), r->count);
   r->warn = gtk_image_new_from_icon_name("dialog-warning-symbolic");
   gtk_widget_add_css_class(r->warn, "error");
-  gtk_widget_set_tooltip_text(r->warn, mc_str(MC_STR_LINUX_SMART_GROUP_HAS_PROBLEM));
-  set_label(r->warn, mc_str(MC_STR_LINUX_SMART_GROUP_HAS_PROBLEM));
+  gtk_widget_set_tooltip_text(r->warn, mc_str(MC_STR_SMART_GROUP_HAS_PROBLEM));
+  set_label(r->warn, mc_str(MC_STR_SMART_GROUP_HAS_PROBLEM));
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->widget), r->warn);
   GtkWidget *remove = flat_button("window-close-symbolic", mc_str(MC_STR_SMART_REMOVE_GROUP));
   g_signal_connect(remove, "clicked", G_CALLBACK(on_remove), GUINT_TO_POINTER(g->id));
@@ -1299,7 +1299,7 @@ static void fill_preview(page *p, const mc_track_list *tracks, const mc_album_li
   }
   gtk_widget_set_visible(p->preview, shown > 0);
   char more[64] = "";
-  if (n > shown) mc_format(more, sizeof more, mc_str_plural(MC_STR_LINUX_SMART_MORE, n - shown), MC_D(n - shown));
+  if (n > shown) mc_format(more, sizeof more, mc_str_plural(MC_STR_SMART_MORE, n - shown), MC_D(n - shown));
   gtk_label_set_text(GTK_LABEL(p->preview_more), more);
   gtk_widget_set_visible(p->preview_more, n > shown);
 }
@@ -1414,13 +1414,13 @@ static void on_limit(GtkSpinButton *spin, gpointer data) {
  *  | [x] Only the first           [10] tracks |  */
 static GtkWidget *build_order(page *p) {
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
-  gtk_box_append(GTK_BOX(box), heading(mc_str(MC_STR_LINUX_SMART_ORDER_HEADING)));
+  gtk_box_append(GTK_BOX(box), heading(mc_str(MC_STR_SMART_ORDER_HEADING)));
   p->sorts = gtk_list_box_new();
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(p->sorts), GTK_SELECTION_NONE);
   gtk_widget_add_css_class(p->sorts, "boxed-list");
   set_label(p->sorts, mc_str(MC_STR_SMART_SORT_NAME));
   gtk_box_append(GTK_BOX(box), p->sorts);
-  p->sort_add = add_button(MC_STR_LINUX_SMART_ADD_SORT_BUTTON);
+  p->sort_add = add_button(MC_STR_SMART_ADD_SORT_BUTTON);
   gtk_widget_set_halign(p->sort_add, GTK_ALIGN_START);
   g_signal_connect(p->sort_add, "clicked", G_CALLBACK(on_sort_add), p);
   gtk_box_append(GTK_BOX(box), p->sort_add);
@@ -1486,7 +1486,7 @@ static AdwNavigationPage *page_new(node *g) {
   gtk_widget_set_margin_bottom(box, 18);
 
   /* The name: the list's, or the group's with its sentence as placeholder. */
-  GtkWidget *name_label = gtk_label_new(mc_str(g->parent ? MC_STR_LINUX_SMART_GROUP_NAME : MC_STR_NAME));
+  GtkWidget *name_label = gtk_label_new(mc_str(g->parent ? MC_STR_SMART_GROUP_NAME : MC_STR_NAME));
   gtk_widget_add_css_class(name_label, "heading");
   gtk_label_set_xalign(GTK_LABEL(name_label), 0);
   gtk_box_append(GTK_BOX(box), name_label);
@@ -1530,16 +1530,16 @@ static AdwNavigationPage *page_new(node *g) {
     p->list = boxed_list(); /* unused, so the rows have somewhere to be */
   } else {
     /* All, any or none of the following, and a row each. */
-    const char *modes[] = {mc_str(MC_STR_LINUX_SMART_MODE_ALL), mc_str(MC_STR_LINUX_SMART_MODE_ANY),
-                           mc_str(MC_STR_LINUX_SMART_MODE_NONE), NULL};
-    p->mode = drop_down(modes, mc_str(MC_STR_LINUX_SMART_MODE_NAME));
+    const char *modes[] = {mc_str(MC_STR_SMART_MODE_ALL), mc_str(MC_STR_SMART_MODE_ANY),
+                           mc_str(MC_STR_SMART_MODE_NONE), NULL};
+    p->mode = drop_down(modes, mc_str(MC_STR_SMART_MODE_NAME));
     gtk_widget_set_halign(p->mode, GTK_ALIGN_START);
     gtk_widget_set_margin_top(p->mode, 12);
     gtk_drop_down_set_selected(GTK_DROP_DOWN(p->mode), (guint)g->mode);
     g_signal_connect(p->mode, "notify::selected", G_CALLBACK(on_mode_changed), p);
     gtk_box_append(GTK_BOX(box), p->mode);
     p->list = boxed_list();
-    p->placeholder = gtk_label_new(mc_str(g->parent ? MC_STR_LINUX_SMART_GROUP_EMPTY_HINT : MC_STR_LINUX_SMART_NO_CONDITIONS));
+    p->placeholder = gtk_label_new(mc_str(g->parent ? MC_STR_SMART_GROUP_EMPTY_HINT : MC_STR_SMART_NO_CONDITIONS));
     gtk_label_set_wrap(GTK_LABEL(p->placeholder), TRUE);
     gtk_widget_add_css_class(p->placeholder, "dim-label");
     gtk_widget_set_margin_top(p->placeholder, 18);
@@ -1551,10 +1551,10 @@ static AdwNavigationPage *page_new(node *g) {
     fill_rows(p);
 
     GtkWidget *adds = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    p->add_condition = add_button(MC_STR_LINUX_SMART_ADD_CONDITION_BUTTON);
+    p->add_condition = add_button(MC_STR_SMART_ADD_CONDITION_BUTTON);
     g_signal_connect(p->add_condition, "clicked", G_CALLBACK(on_add_condition), p);
     gtk_box_append(GTK_BOX(adds), p->add_condition);
-    GtkWidget *add_group = add_button(MC_STR_LINUX_SMART_ADD_GROUP_BUTTON);
+    GtkWidget *add_group = add_button(MC_STR_SMART_ADD_GROUP_BUTTON);
     g_signal_connect(add_group, "clicked", G_CALLBACK(on_add_group), p);
     gtk_box_append(GTK_BOX(adds), add_group);
     gtk_box_append(GTK_BOX(box), adds);
@@ -1562,7 +1562,7 @@ static AdwNavigationPage *page_new(node *g) {
     if (!g->parent) gtk_box_append(GTK_BOX(box), build_order(p));
 
     /* What the list holds, or what the group matches on its own. */
-    p->preview_heading = heading(mc_str(g->parent ? MC_STR_LINUX_SMART_GROUP_PREVIEW : MC_STR_SMART_PREVIEW));
+    p->preview_heading = heading(mc_str(g->parent ? MC_STR_SMART_GROUP_PREVIEW : MC_STR_SMART_PREVIEW));
     gtk_box_append(GTK_BOX(box), p->preview_heading);
     gtk_widget_set_visible(p->preview_heading, !g->parent || g->kids->len);
     p->preview_note = gtk_label_new(NULL);
@@ -1571,7 +1571,7 @@ static AdwNavigationPage *page_new(node *g) {
     gtk_widget_set_visible(p->preview_note, FALSE);
     gtk_box_append(GTK_BOX(box), p->preview_note);
     p->preview = boxed_list();
-    set_label(p->preview, mc_str(g->parent ? MC_STR_LINUX_SMART_GROUP_PREVIEW : MC_STR_SMART_PREVIEW));
+    set_label(p->preview, mc_str(g->parent ? MC_STR_SMART_GROUP_PREVIEW : MC_STR_SMART_PREVIEW));
     gtk_widget_set_visible(p->preview, FALSE);
     gtk_box_append(GTK_BOX(box), p->preview);
     p->preview_more = gtk_label_new(NULL);
@@ -1645,7 +1645,7 @@ static void update_path(void) {
       GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
       if (g->bad) {
         GtkWidget *warn = gtk_image_new_from_icon_name("dialog-warning-symbolic");
-        gtk_widget_set_tooltip_text(warn, mc_str(MC_STR_LINUX_SMART_GROUP_HAS_PROBLEM));
+        gtk_widget_set_tooltip_text(warn, mc_str(MC_STR_SMART_GROUP_HAS_PROBLEM));
         gtk_box_append(GTK_BOX(content), warn);
         gtk_widget_add_css_class(content, "error");
       }
@@ -1683,7 +1683,7 @@ static void update_problems(void) {
   gtk_widget_set_visible(ed->problems, n > 0);
   if (!n) return;
   char title[128];
-  mc_format(title, sizeof title, mc_str_plural(MC_STR_LINUX_SMART_PROBLEMS_TITLE, (long)n), MC_D(n));
+  mc_format(title, sizeof title, mc_str_plural(MC_STR_SMART_PROBLEMS_TITLE, (long)n), MC_D(n));
   gtk_label_set_text(GTK_LABEL(ed->problems_title), title);
   for (guint i = 0; i < n && i < PROBLEM_ROWS; i++) {
     node *c = g_ptr_array_index(ed->bad, i);
@@ -1695,7 +1695,7 @@ static void update_problems(void) {
     gtk_widget_set_hexpand(label, TRUE);
     gtk_widget_set_tooltip_text(label, line);
     gtk_box_append(GTK_BOX(box), label);
-    GtkWidget *show = gtk_button_new_with_label(mc_str(MC_STR_LINUX_SMART_PROBLEM_SHOW));
+    GtkWidget *show = gtk_button_new_with_label(mc_str(MC_STR_SMART_PROBLEM_SHOW));
     gtk_widget_add_css_class(show, "flat");
     gtk_widget_set_valign(show, GTK_ALIGN_CENTER);
     gtk_accessible_update_relation(GTK_ACCESSIBLE(show), GTK_ACCESSIBLE_RELATION_DESCRIBED_BY, label, NULL, -1);
@@ -1705,7 +1705,7 @@ static void update_problems(void) {
     g_free(line);
   }
   char more[64] = "";
-  if (n > PROBLEM_ROWS) mc_format(more, sizeof more, mc_str_plural(MC_STR_LINUX_SMART_MORE, (long)(n - PROBLEM_ROWS)), MC_D(n - PROBLEM_ROWS));
+  if (n > PROBLEM_ROWS) mc_format(more, sizeof more, mc_str_plural(MC_STR_SMART_MORE, (long)(n - PROBLEM_ROWS)), MC_D(n - PROBLEM_ROWS));
   gtk_label_set_text(GTK_LABEL(ed->problems_more), more);
   gtk_widget_set_visible(ed->problems_more, n > PROBLEM_ROWS);
 }
@@ -1912,7 +1912,7 @@ static gboolean on_result(gpointer data) {
       char note[128] = "";
       if (g->parent && r->preview_ok)
         mc_format(note, sizeof note,
-                  mc_str_plural(ed->subject == MC_SMART_TRACKS ? MC_STR_LINUX_SMART_GROUP_TRACKS : MC_STR_LINUX_SMART_GROUP_ALBUMS, n),
+                  mc_str_plural(ed->subject == MC_SMART_TRACKS ? MC_STR_SMART_GROUP_TRACKS : MC_STR_SMART_GROUP_ALBUMS, n),
                   MC_D(n));
       gtk_label_set_text(GTK_LABEL(p->preview_note), note);
       gtk_widget_set_visible(p->preview_note, *note);
@@ -2109,7 +2109,7 @@ static void build_dialog(const char *title) {
   ed->cancel = gtk_button_new_with_mnemonic(mc_str_mnemonic(ed->read_only ? MC_STR_CLOSE : MC_STR_CANCEL));
   g_signal_connect(ed->cancel, "clicked", G_CALLBACK(on_cancel), ed->dialog);
   adw_header_bar_pack_start(ADW_HEADER_BAR(header), ed->cancel);
-  ed->save = gtk_button_new_with_mnemonic(mc_str_mnemonic(ed->creating ? MC_STR_CREATE : MC_STR_LINUX_SAVE));
+  ed->save = gtk_button_new_with_mnemonic(mc_str_mnemonic(ed->creating ? MC_STR_CREATE : MC_STR_SAVE));
   gtk_widget_add_css_class(ed->save, "suggested-action");
   gtk_widget_set_sensitive(ed->save, FALSE);
   gtk_widget_set_visible(ed->save, !ed->read_only);
@@ -2118,7 +2118,7 @@ static void build_dialog(const char *title) {
   adw_dialog_set_default_widget(ed->dialog, ed->save);
 
   ed->path = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
-  set_label(ed->path, mc_str(MC_STR_LINUX_SMART_PATH_NAME));
+  set_label(ed->path, mc_str(MC_STR_SMART_PATH_NAME));
   gtk_widget_set_margin_start(ed->path, 6);
   gtk_widget_set_margin_end(ed->path, 6);
   gtk_widget_set_margin_bottom(ed->path, 6);
@@ -2280,7 +2280,7 @@ static AdwNavigationPage *presets_page(void) {
   gtk_widget_set_margin_end(box, 12);
   gtk_widget_set_margin_top(box, 12);
   gtk_widget_set_margin_bottom(box, 18);
-  GtkWidget *title = gtk_label_new(mc_str(MC_STR_LINUX_SMART_PRESET_TITLE));
+  GtkWidget *title = gtk_label_new(mc_str(MC_STR_SMART_PRESET_TITLE));
   gtk_widget_add_css_class(title, "heading");
   gtk_label_set_xalign(GTK_LABEL(title), 0);
   gtk_box_append(GTK_BOX(box), title);
@@ -2305,7 +2305,7 @@ static AdwNavigationPage *presets_page(void) {
   GtkWidget *scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), clamp);
-  AdwNavigationPage *nav = adw_navigation_page_new(scroller, mc_str(MC_STR_LINUX_SMART_PRESET_TITLE));
+  AdwNavigationPage *nav = adw_navigation_page_new(scroller, mc_str(MC_STR_SMART_PRESET_TITLE));
   g_object_set_data(G_OBJECT(nav), "first-row", gtk_list_box_get_row_at_index(GTK_LIST_BOX(list), 0));
   return nav;
 }

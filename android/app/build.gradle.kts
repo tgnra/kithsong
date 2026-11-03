@@ -86,4 +86,6 @@ dependencies {
     // Only to cancel the background sync job versions up to 0.4.2 scheduled (KithsongApp).
     implementation("androidx.work:work-runtime-ktx:2.11.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    // Unit tests of what runs without a device, such as the smart list editor's rule model.
+    testImplementation("junit:junit:4.13.2")
 }

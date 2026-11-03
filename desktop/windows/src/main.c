@@ -44,7 +44,7 @@
  * sidebar sidebar.c, the track list track_list.c and the seekbar beside the playback buttons
  * now_playing.c. The track list's Add to Playlist menu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
- * changes (a smart playlist's rename and delete too) and they're made
+ * changes (a smart playlist's too: its rule's editor is smart_editor.c) and they're made
  * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]) and the speaker
  * before the caption buttons ([V]) are owner-drawn here; shuffle is kept in the settings, as
  * is the volume, which the speaker's drop-down (volume_popup.c) and the keyboard change.
@@ -104,6 +104,7 @@
 #include "search_view.h"
 #include "settings_view.h"
 #include "sidebar.h"
+#include "smart_editor.h"
 #include "sync_bridge.h"
 #include "theme.h"
 #include "track_list.h"
@@ -965,6 +966,10 @@ static void on_track_request(int code) {
       if (album_grid_selection_smart(NULL)) changed = smart_delete_dialog(g_app.wnd, g_app.lib, uid, name, MC_SMART_TRACKS);
       else changed = playlist_delete_dialog(g_app.wnd, g_app.lib, uid, name);
       break;
+    case TLN_EDIT_SMART: /* a smart playlist's rule */
+      if (name && !strcmp(uid, req->playlist_uid) && album_grid_selection_smart(NULL))
+        changed = smart_edit_dialog(g_app.wnd, g_app.lib, uid);
+      break;
     case TLN_DELETE_TRACK:
       for (int i = 0, n = track_list_count(); i < n; i++) {
         track_list_item it = track_list_item_at(i);
@@ -1509,6 +1514,10 @@ static void on_command(int id, int code) {
       else if (code == SBN_OPEN_RECENT) open_recent();
       else if (code == SBN_ABOUT) show_about();
       else if (code == SBN_REMOVE_RECENT || code == SBN_CLEAR_RECENTS) remove_recents(code == SBN_CLEAR_RECENTS);
+      else if (code == SBN_NEW_SMART_PLAYLIST || code == SBN_NEW_SMART_GROUP) {
+        show_page(code == SBN_NEW_SMART_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUM_GROUPS);
+        album_grid_new_smart();
+      }
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) show_album();

@@ -997,7 +997,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_KEYDOWN:
       on_key(wp);
       return 0;
-    case WM_CONTEXTMENU: { /* A recent offers its removal */
+    case WM_CONTEXTMENU: { /* Playlists and Album Groups offer a new smart one, a recent its removal */
       POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
       int i;
       if (lp == -1) {
@@ -1026,7 +1026,19 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
                        MAKEWPARAM(GetDlgCtrlID(wnd), cmd == 1 ? SBN_REMOVE_RECENT : SBN_CLEAR_RECENTS), (LPARAM)wnd);
         return 0;
       }
-      break;
+      if (i < 0 || i >= s.nrows || s.rows[i].kind != ROW_NAV || !enabled(i) ||
+          (s.rows[i].page != PAGE_PLAYLISTS && s.rows[i].page != PAGE_ALBUM_GROUPS))
+        break;
+      BOOL playlists = s.rows[i].page == PAGE_PLAYLISTS;
+      HMENU menu = CreatePopupMenu();
+      AppendMenuW(menu, MF_STRING, 1,
+                  mc_wstr_mnemonic(playlists ? MC_STR_SMART_NEW_PLAYLIST_MENU : MC_STR_SMART_NEW_GROUP_MENU));
+      int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, wnd, NULL);
+      DestroyMenu(menu);
+      if (cmd == 1)
+        SendMessageW(GetParent(wnd), WM_COMMAND,
+                     MAKEWPARAM(GetDlgCtrlID(wnd), playlists ? SBN_NEW_SMART_PLAYLIST : SBN_NEW_SMART_GROUP), (LPARAM)wnd);
+      return 0;
     }
     case WM_GETDLGCODE:
       return DLGC_WANTARROWS;

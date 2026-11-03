@@ -18,8 +18,8 @@
  * in a message box of its own.
  *
  * Album groups have the same three, with their own titles and Delete's note ("Its albums
- * stay in the library."). Smart playlists and smart album groups have Rename and Delete
- * only: Windows has no rule editor, so they're made on another device and arrive by sync.
+ * stay in the library."), and so do smart playlists and smart album groups, except that a
+ * new one comes from the smart list editor (smart_editor.h).
  */
 #ifndef KITHSONG_PLAYLIST_DIALOGS_H
 #define KITHSONG_PLAYLIST_DIALOGS_H
