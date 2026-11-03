@@ -18,8 +18,10 @@ struct mc_channel {
   mc_noise_cipher send, recv;
   unsigned char peer_key[MC_NOISE_KEY_LEN];
   int has_peer_key;
-  /* Separate buffers, so a received payload stays valid while replying. */
-  unsigned char sbuf[MC_FRAME_MAX];
+  /* Separate buffers, so a received payload stays valid while replying. sbuf points into
+   * sframe past room for the frame header, so a frame goes out in one send. */
+  unsigned char sframe[MC_FRAME_HDR_LEN + MC_FRAME_MAX];
+  unsigned char *sbuf;
   unsigned char rbuf[MC_FRAME_MAX];
 };
 
@@ -47,6 +49,7 @@ static mc_channel *channel_new(mc_socket *sock, int initiator, int mode) {
   ch->initiator = initiator;
   ch->mode = mode;
   ch->timeout_ms = g_default_timeout_ms;
+  ch->sbuf = ch->sframe + MC_FRAME_HDR_LEN;
   make_preamble(ch->preamble, mode);
   return ch;
 }
@@ -156,13 +159,13 @@ static mc_status run_handshake(mc_channel *ch, mc_noise_handshake *hs) {
   while (st == MC_OK && !mc_noise_handshake_complete(hs)) {
     size_t n;
     if (mc_noise_handshake_my_turn(hs)) {
-      st = mc_noise_write_message(hs, NULL, 0, ch->sbuf, sizeof ch->sbuf, &n);
-      if (st == MC_OK) st = mc_frame_send(ch->sock, ch->sbuf, n, ch->timeout_ms);
+      st = mc_noise_write_message(hs, NULL, 0, ch->sbuf, MC_FRAME_MAX, &n);
+      if (st == MC_OK) st = mc_frame_send_in_place(ch->sock, ch->sbuf, n, ch->timeout_ms);
     } else {
       st = mc_frame_recv(ch->sock, ch->rbuf, sizeof ch->rbuf, &n, ch->timeout_ms);
       size_t ignored;
       if (st == MC_OK)
-        st = mc_noise_read_message(hs, ch->rbuf, n, ch->sbuf, sizeof ch->sbuf, &ignored);
+        st = mc_noise_read_message(hs, ch->rbuf, n, ch->sbuf, MC_FRAME_MAX, &ignored);
     }
   }
   return st;
@@ -209,7 +212,7 @@ mc_status mc_channel_handshake_kk(mc_channel *ch, const unsigned char s_priv[MC_
       if (mc_noise_handshake_init(&hs, MC_NOISE_KK, 0, ch->preamble, MC_PREAMBLE_LEN, s_priv,
                                   s_pub, peers[i], NULL) != MC_OK)
         break;
-      if (mc_noise_read_message(&hs, ch->rbuf, n, ch->sbuf, sizeof ch->sbuf, &ignored) == MC_OK)
+      if (mc_noise_read_message(&hs, ch->rbuf, n, ch->sbuf, MC_FRAME_MAX, &ignored) == MC_OK)
         st = MC_OK;
       else
         mc_noise_handshake_wipe(&hs);
@@ -252,7 +255,8 @@ mc_status mc_channel_send(mc_channel *ch, uint8_t type, const void *payload, siz
   ch->sbuf[0] = type;
   if (len) memcpy(ch->sbuf + 1, payload, len);
   mc_status st = mc_noise_encrypt(&ch->send, NULL, 0, ch->sbuf, len + 1, ch->sbuf);
-  if (st == MC_OK) st = mc_frame_send(ch->sock, ch->sbuf, len + 1 + MC_NOISE_TAG_LEN, ch->timeout_ms);
+  if (st == MC_OK)
+    st = mc_frame_send_in_place(ch->sock, ch->sbuf, len + 1 + MC_NOISE_TAG_LEN, ch->timeout_ms);
   mbedtls_platform_zeroize(ch->sbuf, len + 1 + MC_NOISE_TAG_LEN);
   return st;
 }
@@ -312,7 +316,7 @@ mc_status mc_channel_send_clear(mc_channel *ch, uint8_t type, const void *payloa
     return MC_ERR_INVALID_ARG;
   ch->sbuf[0] = type;
   if (len) memcpy(ch->sbuf + 1, payload, len);
-  return mc_frame_send(ch->sock, ch->sbuf, len + 1, ch->timeout_ms);
+  return mc_frame_send_in_place(ch->sock, ch->sbuf, len + 1, ch->timeout_ms);
 }
 
 mc_status mc_channel_recv_clear(mc_channel *ch, uint8_t *type, const unsigned char **payload,

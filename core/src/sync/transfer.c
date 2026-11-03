@@ -10,7 +10,9 @@
  * them out at once, and the peer answers them in order. Each file is written to
  * <dest>.part while it is hashed, and renamed into place only if the hash matches
  * FILE_HDR's. A mismatch is retried once, asked again behind the requests already out; a
- * second one counts the track as corrupt for this session.
+ * second one counts the track as corrupt for this session. The hashing and writing run on a
+ * thread of their own (filepipe.h), behind the session's thread receiving and decrypting,
+ * as the sender's reading runs ahead of its encrypting and sending.
  *
  * Serving. Originals are sent as they are; Opus copies come from the transcode cache
  * (<config>/transcode-cache, see transcode.h), from a transcode this device received at
@@ -56,6 +58,7 @@
 #include "musiccore/delete.h"
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
+#include "sync/filepipe.h"
 #include "sync/libmerge.h"
 #include "sync/plan.h"
 #include "tagger/coverart.h"
@@ -767,22 +770,20 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
       yyjson_mut_obj_add_strcpy(doc, root, "source_sha256", h->source_sha);
     st = send_doc(s->ch, MC_MSG_FILE_HDR, doc);
   }
-  unsigned char *buf = st == MC_OK ? malloc(MC_CHANNEL_MAX_PAYLOAD) : NULL;
-  if (st == MC_OK && !buf) st = MC_ERR_NOMEM;
+  /* Read ahead on another thread, while this one encrypts and sends. */
+  mc_file_reader *rd = NULL;
+  if (st == MC_OK) st = mc_file_reader_start(f, size, &rd);
   mc_mutex_lock(&s->sync->lock);
   uint32_t delay = s->sync->send_delay_ms; /* tests only */
   mc_mutex_unlock(&s->sync->lock);
-  for (int64_t sent = 0; st == MC_OK && sent < size;) {
+  const unsigned char *chunk;
+  size_t len;
+  while (st == MC_OK && (chunk = mc_file_reader_next(rd, &len)) != NULL) {
     if (delay) mc_sleep_ms(delay);
-    size_t want = size - sent < MC_CHANNEL_MAX_PAYLOAD ? (size_t)(size - sent)
-                                                        : MC_CHANNEL_MAX_PAYLOAD;
-    size_t n = fread(buf, 1, want, f);
-    if (n < want) memset(buf + n, 0, want - n);
-    st = mc_channel_send(s->ch, MC_MSG_FILE_DATA, buf, want);
-    sent += (int64_t)want;
-    s->bytes_sent += (int64_t)want;
+    st = mc_channel_send(s->ch, MC_MSG_FILE_DATA, chunk, len);
+    s->bytes_sent += (int64_t)len;
   }
-  free(buf);
+  mc_file_reader_free(rd);
   fclose(f);
   if (st == MC_OK) s->files_sent++;
   mc_sync_trace("send %.8s: %lld bytes, hash %llu ms, send %llu ms", track, (long long)size,
@@ -1293,27 +1294,25 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
     if (dir && mc_mkdirs(dir) == MC_OK) f = mc_fopen(part, "wb");
     free(dir);
   }
-  int write_ok = f != NULL;
-  mbedtls_sha256_context ctx;
-  mbedtls_sha256_init(&ctx);
-  mbedtls_sha256_starts(&ctx, 0);
+  /* Hash and write on another thread, while this one receives and decrypts. Without a
+   * writer (nowhere to put the file) the data is only drained. */
+  mc_file_writer *w = NULL;
+  if (f && mc_file_writer_start(f, &w) != MC_OK) w = NULL;
   for (int64_t have = 0; have < size;) {
     if ((st = mc_channel_recv(s->ch, &type, &payload, &len)) != MC_OK) break;
     if (type != MC_MSG_FILE_DATA || (int64_t)len > size - have) {
       st = MC_ERR_FORMAT;
       break;
     }
-    mbedtls_sha256_update(&ctx, payload, len);
-    if (f && write_ok && fwrite(payload, 1, len, f) != len) write_ok = 0;
+    if (w) mc_file_writer_put(w, payload, len);
     have += (int64_t)len;
     s->bytes_received += (int64_t)len;
   }
-  uint64_t t_data = mc_mono_ms();
   unsigned char digest[32];
-  char got_sha[SHA_STRLEN];
-  mbedtls_sha256_finish(&ctx, digest);
-  mbedtls_sha256_free(&ctx);
-  hex(digest, got_sha);
+  char got_sha[SHA_STRLEN] = "";
+  int write_ok = w && mc_file_writer_finish(w, digest);
+  uint64_t t_data = mc_mono_ms();
+  if (write_ok) hex(digest, got_sha);
   if (f && fclose(f) != 0) write_ok = 0;
   int corrupt = st == MC_OK && mc_transfer_test_corrupt && mc_transfer_test_corrupt(t->track_uid);
 
