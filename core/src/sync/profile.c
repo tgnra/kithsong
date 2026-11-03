@@ -704,7 +704,8 @@ mc_status mc_profile_fingerprint(sqlite3 *db, const char *uid, char out[MC_PROFI
       if (sqlite3_prepare_v2(db,
                              all ? "SELECT DISTINCT kind, ref_uid FROM profile_items"
                                    " WHERE device_uid = ?1 AND kind IN ('" MC_PLAN_EXCLUDE_ALBUM
-                                   "', '" MC_PLAN_EXCLUDE_ARTIST "') ORDER BY kind, ref_uid"
+                                   "', '" MC_PLAN_EXCLUDE_ARTIST "', '" MC_PLAN_EXCLUDE_TRACK
+                                   "') ORDER BY kind, ref_uid"
                                  : "SELECT DISTINCT kind, ref_uid FROM profile_items"
                                    " WHERE device_uid = ?1 ORDER BY kind, ref_uid",
                              -1, &stmt, NULL) != SQLITE_OK) {

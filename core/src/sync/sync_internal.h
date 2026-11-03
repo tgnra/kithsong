@@ -186,6 +186,10 @@ struct mc_sync {
   int waiting_dirty;
   int waiting_announce; /* the answer was dropped (a pairing undone): say so with the next */
   uint64_t waiting_grace_ms;
+  /* The recycle bin (here.c): library exchanges that may be sending rows, which a restore
+   * waits out (it's refused meanwhile), and a restore under way, which they wait for. Under
+   * lock. */
+  int bin_sending, bin_restoring;
 
   /* Options, set before mc_sync_start(); see the test hooks below. */
   int use_discovery;
@@ -258,6 +262,22 @@ int mc_sync_seed_profile_name(mc_sync *sync, mc_sync_conn *c);
 /* Whether this device's user pressed Sync for peer_uid a short while ago and no session has
  * carried it yet; clears it. For a session that has just claimed the peer. */
 int mc_sync_take_user(mc_sync *sync, const char *peer_uid);
+/* Whether a session with peer_uid now would be one this device's user asked for: a press of
+ * Sync (mc_sync_confirm_now()) no session has carried yet, or an mc_sync_now() still to be
+ * acted on. Clears nothing. The recycle bin's deletes go only in such a session. */
+int mc_sync_pressed(mc_sync *sync, const char *peer_uid);
+
+/* --- The recycle bin (here.c; musiccore/delete.h) --- */
+
+/* Before a library exchange: waits for a restore under way, then empties the bin through
+ * lib, as its deletes may reach the peer from now on. With pressed 0 (the user didn't ask
+ * for this session) a bin that holds anything stays as it is, and MC_ERR_LOCKED says the
+ * exchange mustn't run. On MC_OK, call mc_sync_bin_send_end() after the exchange, whatever
+ * became of it. */
+mc_status mc_sync_bin_send_begin(mc_sync *sync, mc_library *lib, int pressed);
+/* Empties the bin again (deletes made while the rows were being read may have gone too),
+ * then lets restores go ahead. */
+void mc_sync_bin_send_end(mc_sync *sync, mc_library *lib);
 
 /* Something the waiting tracks depend on changed (files arrived or went, the group's data
  * changed): the scheduler works them out again soon. Any thread, not under lock. */

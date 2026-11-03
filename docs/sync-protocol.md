@@ -653,6 +653,12 @@ way, without logging anything.
   back on. Android turns it off when the app leaves the screen, so the foreground service
   only finishes what's under way, and sync stops once it's idle: a phone syncs only while
   the app is on screen.
+- **Recycle bin.** While this device's recycle bin holds deletes (see
+  [Recycle bin](#recycle-bin)), it starts no session but for a press of Sync
+  (`mc_sync_now()`, `mc_sync_confirm_now()`): every other trigger waits, as with automatic
+  sync off. A session a member starts is refused with `ERROR {"reason": "busy"}` unless this
+  device's user pressed Sync for that member and no session has carried the press yet, so the
+  member keeps its schedule. Reach checks go on.
 - **Showing it.** Most automatic attempts only find out whether a member is there, so the
   frontends show a session once the member has answered, or at once when the user asked for
   it, and report failures only for those ("Showing sync" in `sync.h`).
@@ -695,9 +701,11 @@ the plaintext limit.
     `playlist` (manual) or `album_group` (manual), and `ref_uid` the library uid it names.
     The selection is kept while the mode is `all`, so it comes back when the mode returns to
     `selected`;
-  - its exclusions, `profile_items` rows of kind `exclude_album` or `exclude_artist`: what was
-    removed from this one device (see [Removing from one device](#removing-from-one-device)).
-    They apply in either mode, and aren't part of the selection an editor shows.
+  - its exclusions, `profile_items` rows of kind `exclude_album`, `exclude_artist` or
+    `exclude_track`: what was removed from this one device (see
+    [Removing from one device](#removing-from-one-device); `exclude_track` only comes from the
+    [Recycle bin](#recycle-bin)). They apply in either mode, and aren't part of the selection
+    an editor shows.
 
   A device with no `profiles` row receives no files until it has one (see below). Pairing
   writes the row straight away (the archive's for a new group, and the joiner's when it
@@ -716,9 +724,10 @@ the plaintext limit.
     selected artist ∪ the tracks of the albums whose `artist_uid` is a selected artist ∪
     the tracks of the albums in the selected album groups ∪ the entries of the selected
     playlists;
-  - then, either way, less the tracks of each excluded album, and of each excluded artist
-    (counted as a selected artist is). An exclusion wins over everything that selects the
-    track, a playlist included. An archive has no exclusions: it wants every track.
+  - then, either way, less the tracks of each excluded album, of each excluded artist
+    (counted as a selected artist is), and each excluded track. An exclusion wins over
+    everything that selects the track, a playlist included. An archive has no exclusions: it
+    wants every track.
 
   Selections that name a uid the library doesn't have are skipped, and so are items of
   kinds the device doesn't know.
@@ -807,7 +816,7 @@ profile and pressed Sync.
   `<mode> <format> <kbps> <budget> <budget_bytes>` (`kbps` 0 for originals, `budget` `-` and
   `budget_bytes` 0 when the budget is off), then for mode `selected` one line
   `<kind> <ref_uid>` per distinct `profile_items` row, sorted, and for mode `all` the same
-  for its exclusion rows only. Names, the selection while the mode is `all`, and an
+  for its exclusion rows only (`exclude_album`, `exclude_artist`, `exclude_track`). Names, the selection while the mode is `all`, and an
   archive's other fields leave it as it is. (Versions before exclusions hash no rows for
   `all`, so they show a device with exclusions as changed.) With no `profiles` row it
   is the hash of `none`. Every device holding the same rows computes the same one.
@@ -860,7 +869,44 @@ music lives nowhere else.
 - **Confirming**: the edit changes the fingerprint. If the profile was confirmed just before,
   it's confirmed again straight away (the device's own user asked for it); a profile another
   member changed meanwhile stays paused.
-- Tracks can't be removed one by one yet.
+- Tracks can't be removed one by one yet, but a track's delete taken back out of the recycle
+  bin (below) leaves an `exclude_track` row, which takes that track out of the wanted set as
+  the others do. Versions before it keep the row and ignore it (so they'd fetch the track
+  again), and hash it in the fingerprint under "Sync everything" only if they know the kind.
+
+### Recycle bin
+
+A device with no trash (Android) deletes a track's files outright, to free the space. In a
+group, on a device that isn't an archive (`mc_sync_bin_offered()`), such a delete can still
+be taken back until the next sync: `mc_delete_run_to_bin()` logs it as any other and also
+keeps it in the library's `recycle_bin` table (see
+[Recycle bin](schema.md#recycle-bin) in schema.md): the changelog rows it logged, and the
+rows it took.
+
+- **Taking it back** (`mc_sync_bin_restore()`, musiccore/sync_here.h) relies on no other
+  device having heard of the delete: it deletes the delete's changelog rows and puts the rows
+  back unlogged, so to every device it's as if nothing was deleted, and the version vectors
+  never carried it. The device's own profile then excludes what it deleted (`exclude_album`
+  for an album, `exclude_track` for a track, in a selection the album's own row goes too), so
+  the music counts as [removed from this device](#removing-from-one-device): its files stay
+  gone here, and it stays in the library and on the other devices, to be synced here again
+  with Sync to this device. The library is written first, then the profile: should the profile
+  write fail, the music syncs back to the device at the next session rather than being lost.
+  An entry whose rows need a row a later entry's delete took (a track's album, deleted with
+  the album's last track) brings that entry back too.
+- **Sending it.** Before each library exchange (step 3 of [Session](#session)), either side
+  empties its bin in a write of its own, and does again once the exchange has ended, however
+  it ended: from then on a delete can't be taken back, since the peer may have it, and a
+  session cut off halfway just leaves it to go with the next. A restore is refused while an
+  exchange is under way, and an exchange waits for a restore under way. A library exchange
+  runs with a bin that holds anything only in a session this device's user asked for
+  ([Scheduling](#scheduling)): an initiator leaves the library out otherwise (and the session
+  doesn't count as complete), a responder answers `ERROR {"reason": "busy"}`. A delete made
+  while an exchange runs may go with it, and is then sealed with the rest. Nothing goes over
+  the wire for the bin.
+- **Frontends** show the bin's entries (`mc_delete_bin_list()`) with Restore, say on the sync
+  screen that the user must press Sync, which makes the deletes permanent, and on Android put a
+  red dot on the sync button while the bin holds anything and a member is online.
 
 ## Files
 

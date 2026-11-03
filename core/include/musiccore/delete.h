@@ -13,7 +13,9 @@
  *
  * Where there's no trash (Android), mc_delete_run_permanently() does the same but removes
  * the files outright and records nothing, so there's nothing to restore; the frontend says
- * so before it deletes. Sync passes it on the same way.
+ * so before it deletes. Sync passes it on the same way. In a sync group,
+ * mc_delete_run_to_bin() keeps such a delete in a recycle bin until the next sync, from which
+ * it can be taken back (below).
  *
  * What's needed to take a track back is kept outside the library, in deleted.db in the
  * config dir (next to settings.json and sync.db): for each trashed file, where it was, its
@@ -90,6 +92,50 @@ mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete
  * file that can't be removed keeps its track. */
 mc_status mc_delete_run_permanently(mc_library *lib, const mc_delete_plan *plan,
                                     mc_delete_result *out);
+
+/* --- The recycle bin ---
+ * Where there's no trash but the device is in a sync group (Android, in a group and not an
+ * archive: mc_sync_bin_offered()), a delete can still be taken back until the next sync. The
+ * files go for good at once, as with mc_delete_run_permanently(), to free the space, and the
+ * delete is logged as any other; but it's also kept in the library's recycle_bin table: the
+ * changelog rows it logged and the rows it took. Until a sync sends this device's library
+ * rows, no other device has heard of it, so taking it back (mc_sync_bin_restore()) can simply
+ * delete those changelog rows and put the rows back unlogged. The music then counts as
+ * removed from this device (its profile excludes it, see musiccore/sync_here.h) rather than
+ * deleted: its files stay gone here, and it stays in the library and on the other devices.
+ *
+ * A sync that sends the library's rows empties the bin first, so a delete can never be
+ * taken back once another device may have it, a sync cut off halfway included. While the
+ * bin holds anything, this device starts no sync by itself and refuses those other devices
+ * start: only a press of Sync here (mc_sync_now(), mc_sync_confirm_now()) sends the deletes,
+ * which makes them for good. See "Recycle bin" in docs/sync-protocol.md. */
+
+/* mc_delete_run_permanently() that keeps the delete in the recycle bin as well, to be taken
+ * back before the next sync. A frontend calls it where mc_sync_bin_offered() says so; with no
+ * group, or on an archive, there's nothing to take back to. */
+mc_status mc_delete_run_to_bin(mc_library *lib, const mc_delete_plan *plan, mc_delete_result *out);
+
+/* One delete in the bin. */
+typedef struct mc_bin_entry {
+  int64_t id;
+  mc_delete_kind kind;
+  int items;          /* albums or tracks it was asked to delete */
+  char *title;        /* the first one's title, NULL if it had none */
+  char *artist;       /* its artist credit as shown, NULL if none */
+  int tracks;         /* tracks it deleted */
+  int64_t deleted_ms; /* Unix ms */
+} mc_bin_entry;
+
+typedef struct mc_bin_list {
+  mc_bin_entry *items;
+  int count;
+} mc_bin_list;
+
+/* The bin's entries, newest first. Free with mc_delete_bin_list_free(). */
+mc_status mc_delete_bin_list(mc_library *lib, mc_bin_list **out);
+void mc_delete_bin_list_free(mc_bin_list *list);
+/* How many entries the bin holds; -1 if that couldn't be read. Cheap. */
+int mc_delete_bin_count(mc_library *lib);
 
 /* Brings back deleted tracks whose files are back where they were (see above), and drops
  * records older than MC_DELETE_KEEP_DAYS. *restored (may be NULL) is how many files came

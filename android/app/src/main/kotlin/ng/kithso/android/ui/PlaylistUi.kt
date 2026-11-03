@@ -573,7 +573,8 @@ private fun RemoveHereDialog(
 
 /**
  * Asks before deleting [what] from the library, saying how many files go from this phone for
- * good (there's no trash to restore them from) and that it goes from every device, then
+ * good (there's no trash to restore them from; in a group, the recycle bin keeps the delete
+ * until the next sync) and that it goes from every device, then
  * deletes it, stopping [playback] first if its queue has any of the tracks. Delete waits for
  * the count; something that's gone already closes the dialog. Afterwards a toast says if the
  * delete failed, or some tracks stayed; the desktops show a message box.
@@ -601,8 +602,12 @@ private fun DeleteFromLibraryDialog(
         text = {
             size?.let {
                 Text(
-                    if (it.files > 0) pluralStringResource(R.plurals.delete_permanently_text, it.files, it.files)
-                    else stringResource(R.string.delete_no_files_text),
+                    when {
+                        it.files == 0 -> stringResource(R.string.delete_no_files_text)
+                        // In a group: restorable from the recycle bin until the next sync.
+                        it.toBin -> pluralStringResource(R.plurals.delete_to_bin_text, it.files, it.files)
+                        else -> pluralStringResource(R.plurals.delete_permanently_text, it.files, it.files)
+                    },
                 )
             }
         },

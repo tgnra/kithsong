@@ -18,7 +18,7 @@ Only where the platforms differ. Windows, Linux and Android all have albums, pla
 |---|---|---|---|
 | Artists | no art | no art | yes |
 | Smart playlists | rename, delete (no editor) | rule editor with a page per group, rename, delete | open, play, reshuffle (no editor) |
-| Delete | with restore | with restore | permanent (no trash to restore from) |
+| Delete | with restore | with restore | permanent; in a group, a recycle bin until the next sync |
 | Remove from this device | yes | only compiled | yes |
 | Volume | drop-down slider, keyboard | popover slider, keyboard, MPRIS | system's (core's for ducking) |
 | Import | yes | yes | simpler review |
@@ -53,9 +53,17 @@ Only where the platforms differ. Windows, Linux and Android all have albums, pla
 ### Delete
 - Core - a peer that trashed an original after a remote delete keeps no restore record; restoring it there gets it swept as an unknown file
 
+### Recycle bin
+On Android in a group, deletes wait in the core's recycle bin until the next sync and can be restored as "removed from this phone"; automatic sync is off meanwhile and only Sync now sends them (see "Recycle bin" in docs/sync-protocol.md). Left to do:
+- Windows and Linux - no recycle bin: they delete to the system's Recycle Bin or Trash and restore from there (mc_delete_restore()), which brings a delete back everywhere after it synced. The core's bin (mc_delete_run_to_bin(), mc_delete_bin_list(), mc_sync_bin_restore()) would serve a desktop too, e.g. for a library on a drive without a trash (Windows' delete_kept_recycle_bin case), with a bin page and the sync notice; the scheduler's hold and the refused sessions already apply to any device whose bin holds something
+- Android - a restored album or track is removed from this phone, so the phone no longer lists it, and its menu's Sync to this phone can't be reached: an album comes back by ticking it under What to sync (in a selection), but nothing undoes an `exclude_track` (no editor shows exclusions, see below). The bin could keep restored items listed with Sync to this phone, or the profile editor show exclusions
+- Core - a session started meanwhile by the other device, or by pairing, is refused (busy) or leaves the library out while the bin holds anything: a desktop whose user presses Sync for the phone gets "busy", and a device that pairs with the phone gets its library only after a press of Sync on the phone. Pairing could count as a press
+- Core - a delete made while a library exchange runs may go with that exchange (the bin is emptied again as it ends), even one that wasn't pressed for; only the deletes in the bin when it began are held back
+- Core - `seq` is given out again after a restore takes the newest changelog rows out (search and duplicate merging allow for it: meta.changelog_epoch, merge_seq); any new reader of the changelog by seq must too
+
 ### Remove from this device
 Albums and artists can be removed from one device ("Remove from this PC", computer, phone) and synced to it again; see "Removing from one device" in docs/sync-protocol.md. Left to do:
-- All - single tracks: the profile model would take an `exclude_track` kind like the album and artist ones, but no track menu offers it yet
+- All - single tracks: the profile model has an `exclude_track` kind (written by a restore from the recycle bin), but no track menu offers it yet
 - All - the profile editors (What to sync) don't show exclusions, so with Sync everything nothing lists what was removed from a device, and another device can't undo it; only that device's Sync to this device on the album's or artist's menu can (or, in a selection, ticking it)
 - All - an album removed only through its artist shows neither item; Sync to this device on the artist brings it back
 - All - an "Add to this device" for an album or artist a selection doesn't include (the menus only offer Sync to this device for what was removed)

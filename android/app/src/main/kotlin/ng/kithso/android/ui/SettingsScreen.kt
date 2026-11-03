@@ -49,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -74,6 +75,8 @@ import kotlinx.coroutines.withContext
  * The app's settings: how albums play, signing in to Last.fm, the permissions it has, the storage it uses, and
  * its version. [libraryDir] is the library folder, whose size is shown. [onLicenses] opens the
  * open source licences. [onBack] slides the screen away; it is also dismissed by swiping right.
+ * In a sync group, [binCount] is how many deletes the recycle bin holds, under Storage, which
+ * [onRecycleBin] opens; null leaves it out.
  */
 @Composable
 fun SettingsScreen(
@@ -82,6 +85,8 @@ fun SettingsScreen(
     bottomPadding: Dp,
     onLicenses: () -> Unit,
     onBack: () -> Unit,
+    binCount: Int? = null,
+    onRecycleBin: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
@@ -136,6 +141,18 @@ fun SettingsScreen(
                                 ?: stringResource(R.string.measuring),
                         )
                     },
+                )
+                // What was deleted here since the last sync, which can still be restored.
+                if (binCount != null) ListItem(
+                    leadingContent = { Icon(Icons.Delete, contentDescription = null) },
+                    headlineContent = { Text(stringResource(R.string.recycle_bin)) },
+                    supportingContent = {
+                        Text(
+                            if (binCount > 0) pluralStringResource(R.plurals.recycle_bin_summary, binCount, binCount)
+                            else stringResource(R.string.recycle_bin_summary_empty),
+                        )
+                    },
+                    modifier = Modifier.clickable(onClick = onRecycleBin),
                 )
                 var cleared by remember { mutableIntStateOf(0) }
                 val cacheBytes by produceState<Long?>(null, cleared) {

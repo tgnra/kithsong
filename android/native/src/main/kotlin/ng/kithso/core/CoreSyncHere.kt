@@ -48,6 +48,26 @@ fun CoreSync.removeHere(kind: ProfileItemKind, uid: String): HereResult =
 fun CoreSync.restoreHere(kind: ProfileItemKind, uid: String) =
     SyncHereNatives.nativeRestore(handle, kind.code(), uid)
 
+/**
+ * Whether deletes here go to the recycle bin ([CoreLibrary.deleteToBin]): in a group, and not
+ * an archive, as for [removeHere].
+ */
+val CoreSync.binOffered: Boolean get() = SyncHereNatives.nativeBinOffered(handle)
+
+/**
+ * How many deletes the recycle bin holds. While any, sync starts nothing by itself and turns
+ * other devices away: only [CoreSync.confirmSyncNow] or [CoreSync.syncNow] send them, for good.
+ */
+val CoreSync.binCount: Int get() = SyncHereNatives.nativeBinCount(handle)
+
+/**
+ * Takes [id] back out of the recycle bin: it's back in the library, removed from this phone
+ * (its files stay gone), and no other device hears of the delete. Returns how many entries
+ * came back (one, or more where a later delete took what it needs). ERR_NOT_FOUND once a sync
+ * has sent it, ERR_LOCKED while one is sending.
+ */
+fun CoreSync.binRestore(id: Long): Int = SyncHereNatives.nativeBinRestore(handle, id)
+
 internal object SyncHereNatives {
     init {
         System.loadLibrary("kithsong_jni")
@@ -58,4 +78,7 @@ internal object SyncHereNatives {
     @JvmStatic external fun nativeTakesAny(handle: Long, kind: Int, uid: String, trackUids: Array<String>): Boolean
     @JvmStatic external fun nativeRemove(handle: Long, kind: Int, uid: String): IntArray
     @JvmStatic external fun nativeRestore(handle: Long, kind: Int, uid: String)
+    @JvmStatic external fun nativeBinOffered(handle: Long): Boolean
+    @JvmStatic external fun nativeBinCount(handle: Long): Int
+    @JvmStatic external fun nativeBinRestore(handle: Long, id: Long): Int
 }

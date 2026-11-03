@@ -773,9 +773,18 @@ mc_status mc_session_run(mc_session *s) {
   const unsigned char *payload;
   size_t len;
   if (mc_channel_is_initiator(s->ch)) {
+    /* The recycle bin's deletes go only in a session this device's user asked for; else
+     * the library waits (the responder takes BYE in place of VV), and the session isn't a
+     * complete one, so the rate limit doesn't hold the next. */
+    if (lib && mc_sync_bin_send_begin(s->sync, s->conn->lib, s->pressed) != MC_OK) {
+      lib = 0;
+      s->bin_held = 1;
+      s->follow_up = 1;
+    }
     if (lib) {
       mc_transfer_begin(s);
       st = exchange_db(s, MC_ROWS_LIBRARY, NULL, 0);
+      mc_sync_bin_send_end(s->sync, s->conn->lib);
       s->library_synced = st == MC_OK;
       if (st == MC_OK) st = mc_transfer_run(s); /* step 6 */
     }
@@ -790,12 +799,23 @@ mc_status mc_session_run(mc_session *s) {
         mc_session_refuse(s->ch, "library", "not the group's library here");
         return MC_ERR_LIBRARY_MISMATCH;
       }
+      /* The recycle bin's deletes wait for a press of Sync here. The session was refused at
+       * the start if the bin held any then; this is one made since. */
+      if (mc_sync_bin_send_begin(s->sync, s->conn->lib, s->pressed) != MC_OK) {
+        s->bin_held = 1;
+        mc_session_refuse(s->ch, "busy", "deletes here wait for a press of Sync");
+        return MC_ERR_LOCKED;
+      }
       /* The payload lives in the channel's buffer; copy it before the next receive. */
       unsigned char *vv = malloc(len ? len : 1);
-      if (!vv) return MC_ERR_NOMEM;
+      if (!vv) {
+        mc_sync_bin_send_end(s->sync, s->conn->lib);
+        return MC_ERR_NOMEM;
+      }
       memcpy(vv, payload, len);
       mc_transfer_begin(s);
       st = exchange_db(s, MC_ROWS_LIBRARY, vv, len);
+      mc_sync_bin_send_end(s->sync, s->conn->lib);
       free(vv);
       s->library_synced = st == MC_OK;
       if (st == MC_OK) st = mc_transfer_run(s); /* step 6 */

@@ -77,7 +77,9 @@ const char *mc_profile_kind_str(mc_profile_item_kind kind);
  * editors neither see nor drop them. */
 #define MC_PLAN_EXCLUDE_ALBUM "exclude_album"
 #define MC_PLAN_EXCLUDE_ARTIST "exclude_artist"
-/* The kind an exclusion kind takes out ("album" or "artist"), or NULL if kind isn't one. */
+/* A single track: a delete taken back out of the recycle bin (musiccore/delete.h). */
+#define MC_PLAN_EXCLUDE_TRACK "exclude_track"
+/* The kind an exclusion kind takes out ("album", "artist" or "track"), or NULL if kind isn't one. */
 const char *mc_plan_excluded_kind(const char *kind);
 
 /* The bitrate an original of unknown size is estimated at, roughly a FLAC of a CD. */

@@ -27,8 +27,13 @@ import ng.kithso.core.herePreview as coreHerePreview
 import ng.kithso.core.hereTakesAny as coreHereTakesAny
 import ng.kithso.core.removeHere as coreRemoveHere
 import ng.kithso.core.restoreHere as coreRestoreHere
+import ng.kithso.core.BinEntry
+import ng.kithso.core.binCount as coreBinCount
+import ng.kithso.core.binOffered as coreBinOffered
+import ng.kithso.core.binRestore as coreBinRestore
 import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.android.data.DeviceRemover
+import ng.kithso.android.data.RecycleBin
 import ng.kithso.android.data.ProfileChoices
 import java.io.File
 import java.net.Inet4Address
@@ -196,8 +201,18 @@ data class SyncStatus(
     val mergePending: Boolean = false,
     /** Tracks waiting for a member this phone can't reach now, for the main list's card. */
     val waiting: SyncWaiting = SyncWaiting.NONE,
+    /** Deletes go to the recycle bin here ([Syncer.binEntries]): in a group, not an archive. */
+    val binOffered: Boolean = false,
+    /** Deletes in the recycle bin: while any, this phone syncs only when Sync is pressed. */
+    val binCount: Int = 0,
 ) {
     val inGroup: Boolean get() = libraryState != CoreSync.LibraryState.NoGroup
+
+    /**
+     * The sync button's red dot: deletes wait in the recycle bin while a member is online, so
+     * a sync could run but won't until the user presses Sync.
+     */
+    val binDot: Boolean get() = binCount > 0 && members.any { it.online }
 
     /** The members a session is running with. */
     val syncing: Set<String> get() = sessions.keys
@@ -241,7 +256,7 @@ class Syncer(
     deviceName: String,
     private val scope: CoroutineScope,
     private val onRenamed: (String) -> Unit = {},
-) : DeviceRemover {
+) : DeviceRemover, RecycleBin {
     private val thread = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow(SyncStatus(deviceName))
     val status: StateFlow<SyncStatus> = state
@@ -407,8 +422,14 @@ class Syncer(
         }
     }
 
-    /** The library changed here, so the other devices should hear of it soon. */
-    fun notifyChanged() = call { it.notifyChanged() }
+    /**
+     * The library changed here, so the other devices should hear of it soon; a delete may
+     * have gone to the recycle bin, which holds syncing back.
+     */
+    fun notifyChanged() = call { sync ->
+        sync.notifyChanged()
+        refreshLists(sync)
+    }
 
     // Profiles. These work whenever sync has been opened, running or not (the app holds it
     // while on screen), and throw MusicCoreException: ERR_NOT_FOUND if it hasn't been or this
@@ -503,11 +524,37 @@ class Syncer(
 
     override suspend fun restoreHere(kind: ProfileItemKind, uid: String): Boolean = try {
         onCore { it.coreRestoreHere(kind, uid) }
-        syncNow() // bring it back soon, rather than at the next scheduled sync
+        // Bring it back soon, rather than at the next scheduled sync; but not while deletes
+        // wait in the recycle bin, which a sync would make for good.
+        if (state.value.binCount == 0) syncNow()
         true
     } catch (e: MusicCoreException) {
         Log.w(TAG, "Couldn't sync $uid to this phone again", e)
         false
+    }
+
+    // The recycle bin ([RecycleBin]): the core keeps it in the library, and takes an entry back
+    // through sync, as it becomes a removal from this phone.
+
+    /** Whether deletes go to the recycle bin now; false if sync hasn't been opened. */
+    suspend fun binOffered(): Boolean = try {
+        onCore { it.coreBinOffered }
+    } catch (e: MusicCoreException) {
+        false
+    }
+
+    override suspend fun binEntries(): List<BinEntry> = source.binEntries()
+
+    override suspend fun binRestore(entry: BinEntry): Int? = try {
+        onCore { sync -> sync.coreBinRestore(entry.id).also { refreshLists(sync) } }.also {
+            Log.i(TAG, "Restored ${entry.title} from the recycle bin ($it entries)")
+            source.refresh()
+        }
+    } catch (e: MusicCoreException) {
+        Log.w(TAG, "Couldn't restore ${entry.title} from the recycle bin", e)
+        // A sync may have emptied it meanwhile.
+        withContext(thread) { sync?.let { refreshLists(it) } }
+        null
     }
 
     /** What a profile can select, from the whole library. Throws MusicCoreException. */
@@ -842,6 +889,8 @@ class Syncer(
             val libraryState = sync.libraryState
             val mergePending = sync.mergePending
             val waiting = sync.waiting()
+            val binOffered = sync.coreBinOffered
+            val binCount = sync.coreBinCount
             // Renamed here, or by another member in a session.
             val name = sync.deviceName
             if (name.isNotEmpty() && name != state.value.deviceName) onRenamed(name)
@@ -854,6 +903,8 @@ class Syncer(
                     selfConfirm = devices.firstOrNull { it.isSelf }?.confirm,
                     mergePending = mergePending || debugMergePending,
                     waiting = waiting,
+                    binOffered = binOffered,
+                    binCount = binCount,
                     nearby = if (running) sync.nearby() else emptyList(),
                     onLan = context.isOnLan(),
                     address = context.lanAddress(),

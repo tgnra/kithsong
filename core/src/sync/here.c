@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/delete_internal.h"
 #include "library/library_internal.h"
 #include "sync/archive.h"
 #include "sync/merge.h"
@@ -88,24 +89,32 @@ static int excluded(mc_sync *sync, const char *kind, const char *uid) {
   return found;
 }
 
+/* Whether this device keeps a part of the library: it's a member of a group (and not
+ * removed) and not an archive, which keeps the whole library. Under api_lock, the library
+ * being the group's. 1, 0, -1. */
+static int keeps_part(mc_sync *sync) {
+  mc_sync_db *sdb = sync->api.sdb;
+  sqlite3 *db = mc_sync_db_handle(sdb);
+  if (!mc_sync_db_group_uid(sdb)) return 0;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db, "SELECT 1 FROM devices WHERE uid = ?1 AND removed = 0", -1, &stmt,
+                         NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, sync->device_uid, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc != SQLITE_ROW) return rc == SQLITE_DONE ? 0 : -1;
+  int archive = mc_archive_is(db, sync->device_uid);
+  return archive < 0 ? -1 : !archive;
+}
+
 /* The state of uid (resolved), under api_lock, the library being the group's. */
 static mc_status read_state(mc_sync *sync, mc_profile_item_kind kind, const char *uid,
                             mc_here_state *out) {
   *out = MC_HERE_UNAVAILABLE;
-  mc_sync_db *sdb = sync->api.sdb;
-  sqlite3 *db = mc_sync_db_handle(sdb);
-  if (!mc_sync_db_group_uid(sdb)) return MC_OK;
   sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db, "SELECT 1 FROM devices WHERE uid = ?1 AND removed = 0", -1, &stmt,
-                         NULL) != SQLITE_OK)
-    return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, sync->device_uid, -1, SQLITE_STATIC);
-  int rc = sqlite3_step(stmt);
-  sqlite3_finalize(stmt);
-  if (rc != SQLITE_ROW) return rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
-  int archive = mc_archive_is(db, sync->device_uid);
-  if (archive < 0) return MC_ERR_DB;
-  if (archive) return MC_OK; /* it keeps the whole library */
+  int part = keeps_part(sync);
+  if (part <= 0) return part < 0 ? MC_ERR_DB : MC_OK;
   int ex = excluded(sync, exclusion_kind(kind), uid);
   if (ex < 0) return MC_ERR_DB;
   if (ex) {
@@ -455,6 +464,135 @@ mc_status mc_sync_restore_here(mc_sync *sync, mc_profile_item_kind kind, const c
   if (st == MC_OK && state != MC_HERE_REMOVED) st = MC_ERR_LOCKED;
   if (st == MC_OK) st = edit_profile(sync, kind, resolved, 0);
   mc_mutex_unlock(&sync->api_lock);
+  if (st == MC_OK) mc_sync_notify_changed(sync);
+  return st;
+}
+
+/* --- The recycle bin (musiccore/delete.h) --- */
+
+mc_status mc_sync_bin_send_begin(mc_sync *sync, mc_library *lib, int pressed) {
+  if (!lib) return MC_OK;
+  if (sync) {
+    mc_mutex_lock(&sync->lock);
+    while (sync->bin_restoring && !sync->stopping) mc_cond_wait_ms(&sync->cond, &sync->lock, 200);
+    sync->bin_sending++;
+    mc_mutex_unlock(&sync->lock);
+  }
+  int pending = 0;
+  mc_status st = mc_delete_bin_seal(lib, pressed, &pending);
+  if (st == MC_OK && pending)
+    fprintf(stderr, "musiccore: sync: sending %d delete%s from the recycle bin\n", pending,
+            pending == 1 ? "" : "s");
+  if (st != MC_OK && sync) {
+    mc_mutex_lock(&sync->lock);
+    sync->bin_sending--;
+    mc_cond_broadcast(&sync->cond);
+    mc_mutex_unlock(&sync->lock);
+  }
+  return st;
+}
+
+void mc_sync_bin_send_end(mc_sync *sync, mc_library *lib) {
+  if (!lib) return;
+  /* A delete made while the exchange read its rows may have gone with them. */
+  if (mc_delete_bin_seal(lib, 1, NULL) != MC_OK)
+    fprintf(stderr, "musiccore: sync: couldn't empty the recycle bin after a sync\n");
+  if (!sync) return;
+  mc_mutex_lock(&sync->lock);
+  sync->bin_sending--;
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+}
+
+int mc_sync_bin_offered(mc_sync *sync) {
+  if (!sync) return 0;
+  mc_sync_lib_state lib_state;
+  mc_status st = mc_sync_library_state(sync, &lib_state);
+  if (st != MC_OK || lib_state != MC_SYNC_LIBRARY_GROUP) return 0;
+  mc_mutex_lock(&sync->api_lock);
+  int part = keeps_part(sync);
+  mc_mutex_unlock(&sync->api_lock);
+  return part > 0;
+}
+
+int mc_sync_bin_count(mc_sync *sync) {
+  if (!sync) return -1;
+  mc_mutex_lock(&sync->api_lock);
+  int n = sync->api.lib ? mc_delete_bin_count(sync->api.lib) : 0;
+  mc_mutex_unlock(&sync->api_lock);
+  return n;
+}
+
+/* Under api_lock: takes what taken names off this device's profile, in a write of its own,
+ * then confirms it again if it was confirmed before (as edit_profile()). An item excluded
+ * already is left as it is. */
+static mc_status exclude_taken(mc_sync *sync, const mc_bin_taken *taken) {
+  mc_sync_db *sdb = sync->api.sdb;
+  sqlite3 *db = mc_sync_db_handle(sdb);
+  const char *me = sync->device_uid;
+  int confirmed = mc_profile_confirm_state(db, me) == MC_SYNC_CONFIRMED;
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st != MC_OK) return st;
+  int selected = is_selection(db, me);
+  if (selected < 0) st = MC_ERR_DB;
+  for (int i = 0; st == MC_OK && i < taken->count; i++) {
+    int album = taken->items[i].kind == MC_DELETE_ALBUMS;
+    const char *kind = album ? MC_PLAN_EXCLUDE_ALBUM : MC_PLAN_EXCLUDE_TRACK;
+    char uid[MC_UID_STRLEN];
+    resolve(sync->api.lib, taken->items[i].uid, uid);
+    int ex = excluded(sync, kind, uid);
+    if (ex < 0) st = MC_ERR_DB;
+    if (st != MC_OK || ex) continue;
+    if (album && selected) {
+      /* As Remove from this device does: the editor shows it unticked. */
+      mc_profile_item item;
+      memset(&item, 0, sizeof item);
+      item.kind = MC_PROFILE_ALBUM;
+      memcpy(item.ref_uid, uid, MC_UID_STRLEN);
+      st = mc_profile_delete_rows(db, sync->api.lib, me, mc_profile_kind_str(MC_PROFILE_ALBUM), &item);
+    }
+    if (st == MC_OK) st = insert_item(db, me, kind, uid);
+  }
+  if (st == MC_OK) st = mc_sync_db_commit(sdb);
+  if (st != MC_OK) {
+    mc_sync_db_rollback(sdb);
+    return st;
+  }
+  if (confirmed && mc_profile_confirm(sdb, NULL) != MC_OK)
+    fprintf(stderr, "musiccore: sync: couldn't confirm the profile again after a restore\n");
+  return MC_OK;
+}
+
+mc_status mc_sync_bin_restore(mc_sync *sync, int64_t id, int *entries) {
+  if (entries) *entries = 0;
+  if (!sync) return MC_ERR_INVALID_ARG;
+  if (!mc_sync_bin_offered(sync)) return MC_ERR_LOCKED;
+  /* Not while a library exchange may be sending rows: it empties the bin as it ends. */
+  mc_mutex_lock(&sync->lock);
+  int sending = sync->bin_sending > 0 || sync->bin_restoring;
+  if (!sending) sync->bin_restoring = 1;
+  mc_mutex_unlock(&sync->lock);
+  if (sending) return MC_ERR_LOCKED;
+
+  mc_mutex_lock(&sync->api_lock);
+  mc_bin_taken taken;
+  mc_status st = mc_delete_bin_take(sync->api.lib, id, &taken);
+  if (st == MC_OK) {
+    if (entries) *entries = taken.entries;
+    mc_status pst = exclude_taken(sync, &taken);
+    if (pst != MC_OK)
+      fprintf(stderr, "musiccore: sync: a restore from the recycle bin couldn't edit the profile (%d);"
+                      " it syncs here again\n", pst);
+    mc_bin_taken_free(&taken);
+  }
+  mc_mutex_unlock(&sync->api_lock);
+
+  mc_mutex_lock(&sync->lock);
+  sync->bin_restoring = 0;
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+  /* The profile edit is group data for the others, and with the bin empty the scheduler may
+   * start sessions again. */
   if (st == MC_OK) mc_sync_notify_changed(sync);
   return st;
 }

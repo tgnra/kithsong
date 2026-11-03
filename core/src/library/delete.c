@@ -352,11 +352,12 @@ static mc_status insert_json(sqlite3 *db, const char *table, const char *obj, in
 }
 
 /* Puts back every row of record rows (JSON), the file's own row with its path set to rel.
- * In the caller's transaction. MC_ERR_NOT_FOUND if the file's row couldn't go in. */
+ * In the caller's transaction. MC_ERR_NOT_FOUND if the file's row couldn't go in. With rel
+ * NULL there's no file: only the track's rows (a recycle bin record). */
 static mc_status restore_rows(sqlite3 *db, const char *rows, const char *rel) {
   mc_status st = MC_OK;
   size_t ntables = sizeof k_saved / sizeof k_saved[0];
-  for (size_t i = 0; st == MC_OK && i <= ntables; i++) {
+  for (size_t i = 0; st == MC_OK && i <= ntables - (rel ? 0 : 1); i++) {
     const char *table = i < ntables ? k_saved[i].table : "files";
     char path[80];
     snprintf(path, sizeof path, "$.%s", table);
@@ -418,6 +419,8 @@ static mc_status store_open(const char *config_dir, int create, sqlite3 **out) {
 /* --- Plans --- */
 
 struct mc_delete_plan {
+  mc_delete_kind kind;
+  uid_set named; /* the albums or tracks asked for that exist, in the order given */
   uid_set tracks;
   int files;
 };
@@ -497,11 +500,17 @@ mc_status mc_delete_plan_new(mc_library *lib, mc_delete_kind kind, const char *c
     "SELECT uid FROM tracks WHERE album_uid = ?1",
   };
   if ((int)kind < 0 || (int)kind > MC_DELETE_ALBUMS) return MC_ERR_INVALID_ARG;
+  static const char *const k_exists[] = {
+    "SELECT uid FROM tracks WHERE uid = ?1",
+    "SELECT uid FROM albums WHERE uid = ?1",
+  };
   mc_delete_plan *plan = calloc(1, sizeof *plan);
   if (!plan) return MC_ERR_NOMEM;
+  plan->kind = kind;
   mc_status st = MC_OK;
   for (int i = 0; st == MC_OK && i < count; i++)
-    if (uids[i]) st = select_uids(lib->db, k_select[kind], uids[i], &plan->tracks);
+    if (uids[i] && (st = select_uids(lib->db, k_exists[kind], uids[i], &plan->named)) == MC_OK)
+      st = select_uids(lib->db, k_select[kind], uids[i], &plan->tracks);
   set_finish(&plan->tracks);
 
   str_list files = {0}, dirs = {0};
@@ -523,6 +532,7 @@ mc_status mc_delete_plan_new(mc_library *lib, mc_delete_kind kind, const char *c
 
 void mc_delete_plan_free(mc_delete_plan *plan) {
   if (!plan) return;
+  free(plan->named.items);
   free(plan->tracks.items);
   free(plan);
 }
@@ -620,13 +630,109 @@ static mc_status trash_track(mc_library *lib, sqlite3 *store, int permanent,
   return st;
 }
 
+/* --- The recycle bin --- */
+
+/* What a delete into the recycle bin keeps, besides the changelog rows it logs. */
+typedef struct bin_record {
+  const mc_delete_plan *plan;
+  char *rows;          /* JSON array of the gone tracks' records (track_json(), closed) */
+  size_t rows_len;
+  char *title, *artist; /* the first item's, for the bin's list */
+} bin_record;
+
+static void bin_record_free(bin_record *b) {
+  free(b->rows);
+  free(b->title);
+  free(b->artist);
+}
+
+static int64_t max_seq(sqlite3 *db) {
+  sqlite3_stmt *stmt = prepare(db, "SELECT coalesce(max(seq), 0) FROM changelog");
+  if (!stmt) return -1;
+  int64_t seq = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : -1;
+  sqlite3_finalize(stmt);
+  return seq;
+}
+
+/* The first item's title and artist (as shown), before it's deleted. */
+static void bin_names(sqlite3 *db, bin_record *b) {
+  if (!b->plan->named.count) return;
+  sqlite3_stmt *stmt = prepare(
+    db, b->plan->kind == MC_DELETE_ALBUMS
+          ? "SELECT al.title, coalesce(al.artist_credit, ar.name) FROM albums al"
+            " LEFT JOIN artists ar ON ar.uid = al.artist_uid WHERE al.uid = ?1"
+          : "SELECT t.title, coalesce(t.artist_credit, ar.name, al.artist_credit, aar.name)"
+            " FROM tracks t LEFT JOIN artists ar ON ar.uid = t.artist_uid"
+            " LEFT JOIN albums al ON al.uid = t.album_uid"
+            " LEFT JOIN artists aar ON aar.uid = al.artist_uid WHERE t.uid = ?1");
+  if (!stmt) return;
+  sqlite3_bind_text(stmt, 1, b->plan->named.items[0], -1, SQLITE_STATIC);
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *title = (const char *)sqlite3_column_text(stmt, 0);
+    const char *artist = (const char *)sqlite3_column_text(stmt, 1);
+    if (title) b->title = mc_strdup(title);
+    if (artist) b->artist = mc_strdup(artist);
+  }
+  sqlite3_finalize(stmt);
+}
+
+/* Adds a gone track's record (track_json()'s, unclosed) to b->rows. */
+static mc_status bin_add_track(bin_record *b, const char *track_rows) {
+  mc_status st = append(&b->rows, &b->rows_len, b->rows_len ? "," : "[");
+  if (st == MC_OK) st = append(&b->rows, &b->rows_len, track_rows);
+  if (st == MC_OK) st = append(&b->rows, &b->rows_len, "}");
+  return st;
+}
+
+/* The bin's row for a delete whose changelog rows are those after seq before. In the
+ * delete's transaction. */
+static mc_status bin_save(sqlite3 *db, bin_record *b, const uid_set *gone, int64_t before) {
+  int64_t after = max_seq(db);
+  if (before < 0 || after < 0) return MC_ERR_DB;
+  if (after <= before || !gone->count || !b->rows_len) return MC_OK; /* nothing went */
+  mc_status st = append(&b->rows, &b->rows_len, "]");
+  /* What was asked for: the albums, or the tracks that went. */
+  const uid_set *items = b->plan->kind == MC_DELETE_ALBUMS ? &b->plan->named : gone;
+  char *json = NULL;
+  size_t len = 0;
+  for (int i = 0; st == MC_OK && i < items->count; i++) {
+    st = append(&json, &len, i ? ",\"" : "[\"");
+    if (st == MC_OK) st = append(&json, &len, items->items[i]);
+    if (st == MC_OK) st = append(&json, &len, "\"");
+  }
+  if (st == MC_OK) st = append(&json, &len, items->count ? "]" : "[]");
+  sqlite3_stmt *stmt = st == MC_OK ? prepare(db, "INSERT INTO recycle_bin (deleted_ms, kind, items,"
+                                                 " title, artist, tracks, seq_first, seq_last, rows)"
+                                                 " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
+                                   : NULL;
+  if (st == MC_OK && !stmt) st = MC_ERR_DB;
+  if (stmt) {
+    sqlite3_bind_int64(stmt, 1, (sqlite3_int64)mc_wall_ms());
+    sqlite3_bind_text(stmt, 2, b->plan->kind == MC_DELETE_ALBUMS ? "albums" : "tracks", -1,
+                      SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, json, -1, SQLITE_STATIC);
+    if (b->title) sqlite3_bind_text(stmt, 4, b->title, -1, SQLITE_STATIC);
+    if (b->artist) sqlite3_bind_text(stmt, 5, b->artist, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 6, gone->count);
+    sqlite3_bind_int64(stmt, 7, before + 1);
+    sqlite3_bind_int64(stmt, 8, after);
+    sqlite3_bind_text(stmt, 9, b->rows, -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) != SQLITE_DONE) st = MC_ERR_DB;
+    sqlite3_finalize(stmt);
+  }
+  free(json);
+  return st;
+}
+
 /* Removes the rows of the tracks in gone, the trashed files of the tracks that stay, and
- * the albums and artists that leaves empty. In one transaction. */
+ * the albums and artists that leaves empty. In one transaction, which also records the
+ * delete in the recycle bin if bin isn't NULL. */
 static mc_status delete_rows(mc_library *lib, const uid_set *gone, const uid_set *trashed,
-                             const uid_set *albums, const uid_set *artists) {
+                             const uid_set *albums, const uid_set *artists, bin_record *bin) {
   mc_status st = mc_library_begin_write(lib);
   if (st != MC_OK) return st;
   sqlite3 *db = lib->db;
+  int64_t before = bin ? max_seq(db) : 0;
   /* The children one by one rather than by cascade, so each delete is plainly logged. */
   for (int i = 0; st == MC_OK && i < gone->count; i++) {
     const char *t = gone->items[i];
@@ -658,6 +764,10 @@ static mc_status delete_rows(mc_library *lib, const uid_set *gone, const uid_set
              " AND NOT EXISTS (SELECT 1 FROM track_artists WHERE artist_uid = ?1)"
              " AND NOT EXISTS (SELECT 1 FROM album_artists WHERE artist_uid = ?1)",
              artists->items[i], NULL);
+  /* The files are gone already, so the delete goes ahead even if the bin can't keep it: it
+   * can't be taken back then, and syncs as any other. */
+  if (st == MC_OK && bin && bin_save(db, bin, gone, before) != MC_OK)
+    fprintf(stderr, "musiccore: delete: couldn't keep it in the recycle bin: %s\n", sqlite3_errmsg(db));
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) {
     fprintf(stderr, "musiccore: delete failed: %s\n", sqlite3_errmsg(db));
@@ -690,9 +800,11 @@ static int tidy_folder(mc_library *lib, const char *dir, int permanent) {
 /* mc_delete_run(), or with config_dir NULL mc_delete_run_permanently(): files are removed
  * rather than trashed, and nothing is recorded for restoring. */
 static mc_status delete_run(mc_library *lib, const char *config_dir, const mc_delete_plan *plan,
-                            mc_delete_result *out) {
+                            int to_bin, mc_delete_result *out) {
   int permanent = !config_dir;
   sqlite3 *store = NULL;
+  bin_record bin = {plan, NULL, 0, NULL, NULL};
+  if (to_bin) bin_names(lib->db, &bin);
   if (!permanent && plan->tracks.count && store_open(config_dir, 1, &store) != MC_OK)
     fprintf(stderr, "musiccore: delete: deleted tracks can't be restored from the trash\n");
   if (store) sqlite3_exec(store, "BEGIN", NULL, NULL, NULL);
@@ -711,6 +823,7 @@ static mc_status delete_run(mc_library *lib, const char *config_dir, const mc_de
     int kept = 0;
     if (st == MC_OK)
       st = trash_track(lib, store, permanent, t, rows, &dirs, &trashed, &res.files_trashed, &kept);
+    if (st == MC_OK && !kept && to_bin) st = bin_add_track(&bin, rows);
     free(rows);
     if (st == MC_OK && kept) res.tracks_kept++;
     else if (st == MC_OK) st = set_add(&gone, t);
@@ -725,7 +838,7 @@ static mc_status delete_run(mc_library *lib, const char *config_dir, const mc_de
   set_finish(&artists);
 
   /* Rows go even after an error above, for the files already trashed. */
-  mc_status write = delete_rows(lib, &gone, &trashed, &albums, &artists);
+  mc_status write = delete_rows(lib, &gone, &trashed, &albums, &artists, to_bin ? &bin : NULL);
   if (st == MC_OK) st = write;
   if (write == MC_OK) {
     res.tracks_deleted = gone.count;
@@ -737,6 +850,7 @@ static mc_status delete_run(mc_library *lib, const char *config_dir, const mc_de
   free(albums.items);
   free(artists.items);
   list_free(&dirs);
+  bin_record_free(&bin);
   if (out) *out = res;
   return st;
 }
@@ -745,14 +859,20 @@ mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete
                         mc_delete_result *out) {
   if (out) memset(out, 0, sizeof *out);
   if (!lib || !config_dir || !plan) return MC_ERR_INVALID_ARG;
-  return delete_run(lib, config_dir, plan, out);
+  return delete_run(lib, config_dir, plan, 0, out);
 }
 
 mc_status mc_delete_run_permanently(mc_library *lib, const mc_delete_plan *plan,
                                     mc_delete_result *out) {
   if (out) memset(out, 0, sizeof *out);
   if (!lib || !plan) return MC_ERR_INVALID_ARG;
-  return delete_run(lib, NULL, plan, out);
+  return delete_run(lib, NULL, plan, 0, out);
+}
+
+mc_status mc_delete_run_to_bin(mc_library *lib, const mc_delete_plan *plan, mc_delete_result *out) {
+  if (out) memset(out, 0, sizeof *out);
+  if (!lib || !plan) return MC_ERR_INVALID_ARG;
+  return delete_run(lib, NULL, plan, 1, out);
 }
 
 /* --- Restoring --- */
@@ -921,5 +1041,289 @@ mc_status mc_delete_restore(mc_library *lib, const char *config_dir, int *restor
   for (int i = 0; i < n; i++) record_free(&recs[i]);
   free(recs);
   sqlite3_close_v2(store);
+  return st;
+}
+
+/* --- The recycle bin: listing, taking back, sealing --- */
+
+int mc_delete_bin_count(mc_library *lib) {
+  if (!lib) return -1;
+  sqlite3_stmt *stmt = prepare(lib->db, "SELECT count(*) FROM recycle_bin");
+  if (!stmt) return -1;
+  int n = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int(stmt, 0) : -1;
+  sqlite3_finalize(stmt);
+  return n;
+}
+
+static char *text_dup(sqlite3_stmt *stmt, int col) {
+  const char *s = (const char *)sqlite3_column_text(stmt, col);
+  return s ? mc_strdup(s) : NULL;
+}
+
+mc_status mc_delete_bin_list(mc_library *lib, mc_bin_list **out) {
+  if (out) *out = NULL;
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  sqlite3_stmt *stmt = prepare(lib->db, "SELECT id, kind, json_array_length(items), title, artist,"
+                                        " tracks, deleted_ms FROM recycle_bin ORDER BY id DESC");
+  if (!stmt) return MC_ERR_DB;
+  mc_bin_list *list = calloc(1, sizeof *list);
+  mc_status st = list ? MC_OK : MC_ERR_NOMEM;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (list->count == cap) {
+      int grown = cap ? cap * 2 : 8;
+      mc_bin_entry *more = realloc(list->items, (size_t)grown * sizeof *more);
+      if (!more) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      list->items = more;
+      cap = grown;
+    }
+    mc_bin_entry *e = &list->items[list->count++];
+    memset(e, 0, sizeof *e);
+    const char *kind = (const char *)sqlite3_column_text(stmt, 1);
+    e->id = sqlite3_column_int64(stmt, 0);
+    e->kind = kind && !strcmp(kind, "albums") ? MC_DELETE_ALBUMS : MC_DELETE_TRACKS;
+    e->items = sqlite3_column_int(stmt, 2);
+    e->title = text_dup(stmt, 3);
+    e->artist = text_dup(stmt, 4);
+    e->tracks = sqlite3_column_int(stmt, 5);
+    e->deleted_ms = sqlite3_column_int64(stmt, 6);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_delete_bin_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_delete_bin_list_free(mc_bin_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].title);
+    free(list->items[i].artist);
+  }
+  free(list->items);
+  free(list);
+}
+
+typedef struct bin_row {
+  int64_t id, first, last;
+  int tracks;
+  mc_delete_kind kind;
+  char *items, *rows;
+  int take;
+} bin_row;
+
+static void bin_rows_free(bin_row *r, int n) {
+  for (int i = 0; i < n; i++) {
+    free(r[i].items);
+    free(r[i].rows);
+  }
+  free(r);
+}
+
+/* Every entry, oldest first. */
+static mc_status read_bin(sqlite3 *db, bin_row **out, int *count) {
+  *out = NULL;
+  *count = 0;
+  sqlite3_stmt *stmt = prepare(db, "SELECT id, seq_first, seq_last, tracks, kind, items, rows"
+                                   " FROM recycle_bin ORDER BY id");
+  if (!stmt) return MC_ERR_DB;
+  bin_row *rows = NULL;
+  int n = 0, cap = 0, rc = SQLITE_DONE;
+  mc_status st = MC_OK;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (n == cap) {
+      int grown = cap ? cap * 2 : 8;
+      bin_row *more = realloc(rows, (size_t)grown * sizeof *more);
+      if (!more) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      rows = more;
+      cap = grown;
+    }
+    bin_row *r = &rows[n++];
+    memset(r, 0, sizeof *r);
+    r->id = sqlite3_column_int64(stmt, 0);
+    r->first = sqlite3_column_int64(stmt, 1);
+    r->last = sqlite3_column_int64(stmt, 2);
+    r->tracks = sqlite3_column_int(stmt, 3);
+    const char *kind = (const char *)sqlite3_column_text(stmt, 4);
+    r->kind = kind && !strcmp(kind, "albums") ? MC_DELETE_ALBUMS : MC_DELETE_TRACKS;
+    r->items = text_dup(stmt, 5);
+    r->rows = text_dup(stmt, 6);
+    if (!r->items || !r->rows) st = MC_ERR_NOMEM;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    bin_rows_free(rows, n);
+    return st;
+  }
+  *out = rows;
+  *count = n;
+  return MC_OK;
+}
+
+/* Whether entry b's delete took a row that a's records hold: then a's rows can't come back
+ * without b's (a track's album, say, deleted along with the album's last track by a later
+ * delete). 1, 0, -1. */
+static int needs(sqlite3 *db, const bin_row *a, const bin_row *b) {
+  sqlite3_stmt *stmt = prepare(db, "SELECT EXISTS (SELECT 1 FROM changelog WHERE seq BETWEEN ?2 AND ?3"
+                                   " AND field = '_deleted' AND row_uid IN"
+                                   " (SELECT value FROM json_tree(?1) WHERE key = 'uid'))");
+  if (!stmt) return -1;
+  sqlite3_bind_text(stmt, 1, a->rows, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 2, b->first);
+  sqlite3_bind_int64(stmt, 3, b->last);
+  int r = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int(stmt, 0) : -1;
+  sqlite3_finalize(stmt);
+  return r;
+}
+
+/* Runs sql with integer parameters a (and b if it takes two). */
+static mc_status run_int(sqlite3 *db, const char *sql, int64_t a, int64_t b) {
+  sqlite3_stmt *stmt = prepare(db, sql);
+  if (!stmt) return MC_ERR_DB;
+  sqlite3_bind_int64(stmt, 1, a);
+  if (sqlite3_bind_parameter_count(stmt) > 1) sqlite3_bind_int64(stmt, 2, b);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+}
+
+/* Puts back every track record of rows (a JSON array), in the caller's transaction. */
+static mc_status put_back(sqlite3 *db, const char *rows) {
+  sqlite3_stmt *stmt = prepare(db, "SELECT value FROM json_each(?1)");
+  if (!stmt) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, rows, -1, SQLITE_STATIC);
+  str_list recs = {0};
+  mc_status st = MC_OK;
+  while (st == MC_OK && sqlite3_step(stmt) == SQLITE_ROW)
+    st = list_add(&recs, mc_strdup((const char *)sqlite3_column_text(stmt, 0)));
+  sqlite3_finalize(stmt);
+  for (int i = 0; st == MC_OK && i < recs.count; i++) st = restore_rows(db, recs.items[i], NULL);
+  list_free(&recs);
+  return st;
+}
+
+/* Adds the uids of r's items to out. */
+static mc_status taken_items(sqlite3 *db, const bin_row *r, mc_bin_taken *out) {
+  sqlite3_stmt *stmt = prepare(db, "SELECT value FROM json_each(?1)");
+  if (!stmt) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, r->items, -1, SQLITE_STATIC);
+  mc_status st = MC_OK;
+  while (st == MC_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *uid = (const char *)sqlite3_column_text(stmt, 0);
+    if (!uid || strlen(uid) != MC_UID_STRLEN - 1) continue;
+    mc_bin_item *more = realloc(out->items, (size_t)(out->count + 1) * sizeof *more);
+    if (!more) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    out->items = more;
+    out->items[out->count].kind = r->kind;
+    memcpy(out->items[out->count].uid, uid, MC_UID_STRLEN);
+    out->count++;
+  }
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+mc_status mc_delete_bin_take(mc_library *lib, int64_t id, mc_bin_taken *out) {
+  if (out) memset(out, 0, sizeof *out);
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  /* Under the write lock from the start, so a seal (a sync about to send its rows) can't come
+   * between deciding what to take and taking it. */
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  sqlite3 *db = lib->db;
+  bin_row *rows = NULL;
+  int n = 0;
+  st = read_bin(db, &rows, &n);
+  int at = -1;
+  for (int i = 0; st == MC_OK && i < n; i++)
+    if (rows[i].id == id) at = i;
+  if (st == MC_OK && at < 0) st = MC_ERR_NOT_FOUND; /* sealed by a sync, or taken already */
+  if (st == MC_OK) rows[at].take = 1;
+  /* Whatever the taken entries' rows need comes back with them. */
+  for (int grew = st == MC_OK; grew && st == MC_OK;) {
+    grew = 0;
+    for (int i = 0; st == MC_OK && i < n; i++) {
+      if (!rows[i].take) continue;
+      for (int j = 0; st == MC_OK && j < n; j++) {
+        if (rows[j].take) continue;
+        int r = needs(db, &rows[i], &rows[j]);
+        if (r < 0) st = MC_ERR_DB;
+        else if (r) rows[j].take = grew = 1;
+      }
+    }
+  }
+  int64_t first = INT64_MAX;
+  for (int i = 0; st == MC_OK && i < n; i++) {
+    if (!rows[i].take) continue;
+    /* Its changelog rows go, so no other device ever hears of the delete. */
+    st = run_int(db, "DELETE FROM changelog WHERE seq BETWEEN ?1 AND ?2", rows[i].first, rows[i].last);
+    if (rows[i].first < first) first = rows[i].first;
+  }
+  /* Then the rows, unlogged: the changelog has them already, as they were before the delete.
+   * Newest first, though each record holds its own parents. */
+  lib->applying_remote = 1;
+  for (int i = n - 1; st == MC_OK && i >= 0; i--)
+    if (rows[i].take) st = put_back(db, rows[i].rows);
+  lib->applying_remote = 0;
+  for (int i = 0; st == MC_OK && i < n; i++) {
+    if (!rows[i].take) continue;
+    st = run_int(db, "DELETE FROM recycle_bin WHERE id = ?1", rows[i].id, 0);
+    if (st == MC_OK) st = taken_items(db, &rows[i], out);
+    out->entries++;
+    out->tracks += rows[i].tracks;
+  }
+  /* The seqs taken out may be given out again: duplicate merging reads on from before them,
+   * and search learns the changelog went back from the epoch. */
+  if (st == MC_OK)
+    st = run_int(db, "UPDATE meta SET value = min(CAST(value AS INTEGER), ?1) WHERE key = 'merge_seq'",
+                 first - 1, 0);
+  if (st == MC_OK)
+    st = run_int(db, "INSERT OR REPLACE INTO meta (key, value) VALUES ('changelog_epoch',"
+                     " coalesce((SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'changelog_epoch'), 0)"
+                     " + ?1)",
+                 1, 0);
+  bin_rows_free(rows, n);
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) {
+    if (st != MC_ERR_NOT_FOUND)
+      fprintf(stderr, "musiccore: recycle bin: couldn't take back %lld: %s\n", (long long)id,
+              sqlite3_errmsg(db));
+    mc_library_rollback(lib);
+    mc_bin_taken_free(out);
+  }
+  return st;
+}
+
+void mc_bin_taken_free(mc_bin_taken *t) {
+  if (!t) return;
+  free(t->items);
+  memset(t, 0, sizeof *t);
+}
+
+mc_status mc_delete_bin_seal(mc_library *lib, int allow, int *pending) {
+  if (pending) *pending = 0;
+  if (!lib) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  int n = mc_delete_bin_count(lib);
+  if (n < 0) st = MC_ERR_DB;
+  if (pending && n > 0) *pending = n;
+  if (st == MC_OK && n > 0 && !allow) st = MC_ERR_LOCKED;
+  if (st == MC_OK && n > 0) st = run(lib->db, "DELETE FROM recycle_bin", NULL, NULL);
+  if (st == MC_OK) st = mc_library_commit(lib);
+  else mc_library_rollback(lib);
   return st;
 }

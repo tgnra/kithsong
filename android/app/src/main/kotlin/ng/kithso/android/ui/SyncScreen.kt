@@ -74,10 +74,18 @@ const val THIS_DEVICE = ""
  * the ones on the network it could pair with, adding one by address, and leaving the group.
  * Tapping a device, this phone included, calls [onOpenDevice] with its uid ([THIS_DEVICE] for
  * this phone). Pairing itself shows in [PairingDialogs], wherever the app is. [onBack] slides
- * the screen away; it is also dismissed by swiping right.
+ * the screen away; it is also dismissed by swiping right. While deletes wait in the recycle bin,
+ * a notice at the top says the phone only syncs when Sync now is pressed, which makes them
+ * permanent; [onOpenBin] opens the bin from it.
  */
 @Composable
-fun SyncScreen(syncer: Syncer, bottomPadding: Dp, onOpenDevice: (String) -> Unit, onBack: () -> Unit) {
+fun SyncScreen(
+    syncer: Syncer,
+    bottomPadding: Dp,
+    onOpenDevice: (String) -> Unit,
+    onBack: () -> Unit,
+    onOpenBin: () -> Unit = {},
+) {
     val status by syncer.status.collectAsState()
     var adding by rememberSaveable { mutableStateOf(false) }
     var leaving by rememberSaveable { mutableStateOf(false) }
@@ -89,6 +97,10 @@ fun SyncScreen(syncer: Syncer, bottomPadding: Dp, onOpenDevice: (String) -> Unit
             modifier = Modifier.fillMaxSize(),
         ) {
             item(key = "header") { ScreenHeader(stringResource(R.string.sync), onBack) }
+
+            if (status.binCount > 0) item(key = "bin") {
+                BinNotice(status.binCount, onOpenBin, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            }
 
             item(key = "self") {
                 syncNotice(status)?.let { (text, isError) ->
@@ -557,6 +569,33 @@ private fun addressText(address: String?, port: Int): String = when {
  * members it can't reach now: "12 tracks are waiting for Tania's desktop to come online."
  * Calm, with nothing to press or dismiss: it goes by itself once they've arrived.
  */
+/**
+ * Deletes made here wait in the recycle bin ([count] of them), so this phone doesn't sync by
+ * itself: Sync now, below, sends them for good. [onOpenBin] opens the bin, to restore any.
+ */
+@Composable
+private fun BinNotice(count: Int, onOpenBin: () -> Unit, modifier: Modifier = Modifier) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        ),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) {
+            Text(stringResource(R.string.sync_bin_title), style = MaterialTheme.typography.titleMedium)
+            Text(
+                pluralStringResource(R.plurals.sync_bin_text, count, count),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            TextButton(onClick = onOpenBin, modifier = Modifier.align(Alignment.End)) {
+                Text(stringResource(R.string.sync_bin_open), color = MaterialTheme.colorScheme.onErrorContainer)
+            }
+        }
+    }
+}
+
 @Composable
 fun WaitingCard(waiting: SyncWaiting, modifier: Modifier = Modifier) {
     val top = waiting.devices.firstOrNull() ?: return
