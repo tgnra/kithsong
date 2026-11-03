@@ -1,6 +1,8 @@
+#define COBJMACROS
 #include "settings_view.h"
 
 #include <commctrl.h>
+#include <oleacc.h>
 #include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +39,10 @@ enum {
   ID_SET_LFM_NOTE,
   ID_SET_LFM_SERVICE,
   ID_SET_FIREWALL,
+  ID_SET_PLAY_HEADING,
+  ID_SET_ORDER_CHECK,
+  ID_SET_ORDER_CHECK_LABEL,
+  ID_SET_ORDER_NOTE,
 };
 
 enum { MAX_ADDRESSES = 8 };
@@ -53,8 +59,10 @@ static struct {
   HWND title, heading, path, move, open, note;
   HWND sync_heading, name_label, name, addr_label, addr, leave, firewall, sync_note;
   BOOL firewall_shown; /* Ask about Windows Firewall again is: firewall_can_ask_again() */
+  HWND play_heading, order_check, order_check_label, order_note;
   HWND lfm_heading, lfm_status, lfm_button, lfm_service, lfm_check, lfm_check_label, lfm_note;
   HFONT font, title_font, heading_font;
+  IAccPropServices *acc; /* names order_check for screen readers */
   BOOL shown;
   mc_settings *settings;
   void (*devices_changed)(void);
@@ -129,6 +137,20 @@ void settings_view_create(HWND parent) {
                          ID_SET_FIREWALL); /* shown by update_firewall() */
   g_set.sync_note = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_SETTINGS_NOTE), label, ID_SET_SYNC_NOTE);
 
+  g_set.play_heading = child(WC_STATICW, mc_wstr(MC_STR_SETTINGS_PLAYBACK), label, ID_SET_PLAY_HEADING);
+  /* Like Scrobbling's checkbox below: the label beside it says it and toggles it. A button
+   * without text has no name for screen readers, so it's given the label's. */
+  g_set.order_check = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_SET_ORDER_CHECK);
+  g_set.order_check_label =
+    child(WC_STATICW, mc_wstr(MC_STR_ALBUM_IN_ORDER), label | SS_NOTIFY, ID_SET_ORDER_CHECK_LABEL);
+  g_set.order_note = child(WC_STATICW, mc_wstr(MC_STR_ALBUM_IN_ORDER_TEXT), label, ID_SET_ORDER_NOTE);
+  if (SUCCEEDED(CoCreateInstance(&CLSID_AccPropServices, NULL, CLSCTX_INPROC_SERVER, &IID_IAccPropServices,
+                                 (void **)&g_set.acc)))
+    IAccPropServices_SetHwndPropStr(g_set.acc, g_set.order_check, OBJID_CLIENT, CHILDID_SELF, PROPID_ACC_NAME,
+                                    mc_wstr(MC_STR_ALBUM_IN_ORDER));
+  else
+    g_set.acc = NULL;
+
   g_set.lfm_heading = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLING), label, ID_SET_LFM_HEADING);
   g_set.lfm_status = child(WC_STATICW, NULL, label, ID_SET_LFM_STATUS);
   SetWindowSubclass(g_set.lfm_status, lfm_status_proc, 0, 0); /* the auth thread's news, the timer */
@@ -146,6 +168,12 @@ void settings_view_create(HWND parent) {
 void settings_view_destroy(void) {
   stop_auth();
   playback_on_scrobbler_closing(NULL);
+  if (g_set.acc) {
+    MSAAPROPID props[] = {PROPID_ACC_NAME};
+    IAccPropServices_ClearHwndProps(g_set.acc, g_set.order_check, OBJID_CLIENT, CHILDID_SELF, props, 1);
+    IAccPropServices_Release(g_set.acc);
+    g_set.acc = NULL;
+  }
   if (g_set.title_font) DeleteObject(g_set.title_font);
   if (g_set.heading_font) DeleteObject(g_set.heading_font);
   g_set.title_font = g_set.heading_font = NULL;
@@ -177,10 +205,12 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   SendMessageW(g_set.title, WM_SETFONT, (WPARAM)g_set.title_font, TRUE);
   SendMessageW(g_set.heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.sync_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  SendMessageW(g_set.play_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.lfm_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   HWND body[] = {g_set.path,       g_set.move,       g_set.open,       g_set.note,
                  g_set.name_label, g_set.name,       g_set.addr_label, g_set.addr,
-                 g_set.leave,      g_set.sync_note,  g_set.lfm_status, g_set.lfm_button,
+                 g_set.leave,      g_set.sync_note,  g_set.order_check, g_set.order_check_label,
+                 g_set.order_note, g_set.lfm_status, g_set.lfm_button,
                  g_set.lfm_service, g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
                  g_set.firewall};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
@@ -190,7 +220,8 @@ void settings_view_show(BOOL show) {
   g_set.shown = show;
   HWND all[] = {g_set.title,      g_set.heading,      g_set.path,  g_set.move,       g_set.open,
                 g_set.note,       g_set.sync_heading, g_set.name_label, g_set.name,  g_set.addr_label,
-                g_set.addr,       g_set.leave,        g_set.sync_note, g_set.lfm_heading, g_set.lfm_status,
+                g_set.addr,       g_set.leave,        g_set.sync_note, g_set.play_heading, g_set.order_check,
+                g_set.order_check_label, g_set.order_note, g_set.lfm_heading, g_set.lfm_status,
                 g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
   update_firewall();
@@ -270,6 +301,22 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.sync_note, left, top, text_w, nh, TRUE);
   top += nh + S(32);
 
+  /* Playback */
+  hh = canvas_text_height(g_set.play_heading, g_set.heading_font, text_w, 0);
+  MoveWindow(g_set.play_heading, left, top, text_w, hh, TRUE);
+  top += hh + S(8);
+
+  int box = GetSystemMetricsForDpi(SM_CXMENUCHECK, dpi);
+  lh = canvas_text_height(g_set.order_check_label, g_set.font, text_w - box - S(8), 0);
+  int row_h = max(box, lh);
+  MoveWindow(g_set.order_check, left, top + (row_h - box) / 2, box, box, TRUE);
+  MoveWindow(g_set.order_check_label, left + box + S(8), top + (row_h - lh) / 2, text_w - box - S(8), lh, TRUE);
+  top += row_h + S(12);
+
+  nh = canvas_text_height(g_set.order_note, g_set.font, text_w, 0);
+  MoveWindow(g_set.order_note, left, top, text_w, nh, TRUE);
+  top += nh + S(32);
+
   /* Scrobbling */
   hh = canvas_text_height(g_set.lfm_heading, g_set.heading_font, text_w, 0);
   MoveWindow(g_set.lfm_heading, left, top, text_w, hh, TRUE);
@@ -284,9 +331,8 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.lfm_service, left + sign_in_w + S(8), top, button_width(g_set.lfm_service, S(16)), btn_h, TRUE);
   top += btn_h + S(12);
 
-  int box = GetSystemMetricsForDpi(SM_CXMENUCHECK, dpi);
   lh = canvas_text_height(g_set.lfm_check_label, g_set.font, text_w - box - S(8), 0);
-  int row_h = max(box, lh);
+  row_h = max(box, lh);
   MoveWindow(g_set.lfm_check, left, top + (row_h - box) / 2, box, box, TRUE);
   MoveWindow(g_set.lfm_check_label, left + box + S(8), top + (row_h - lh) / 2, text_w - box - S(8), lh, TRUE);
   top += row_h + S(12);
@@ -304,6 +350,8 @@ void settings_view_init_sync(mc_settings *settings, void (*devices_changed)(void
   BOOL on = !settings || mc_settings_scrobble(settings);
   playback_set_scrobble(on);
   SendMessageW(g_set.lfm_check, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+  BOOL in_order = !settings || mc_settings_album_in_order(settings);
+  SendMessageW(g_set.order_check, BM_SETCHECK, in_order ? BST_CHECKED : BST_UNCHECKED, 0);
   settings_view_update_sync();
 }
 
@@ -663,6 +711,15 @@ static void on_scrobble_check(void) {
   }
 }
 
+/* Playing a track reads it from the settings main.c keeps, these ones. */
+static void on_album_in_order_check(void) {
+  BOOL on = SendMessageW(g_set.order_check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  if (g_set.settings) {
+    mc_settings_set_album_in_order(g_set.settings, on);
+    mc_settings_save(g_set.settings); /* failing, it's saved with the next setting */
+  }
+}
+
 static LRESULT CALLBACK lfm_status_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
   (void)data;
   switch (msg) {
@@ -722,19 +779,30 @@ BOOL settings_view_on_command(int id, int code) {
         on_scrobble_check();
       }
       return TRUE;
+    case ID_SET_ORDER_CHECK:
+      if (code == BN_CLICKED) on_album_in_order_check();
+      return TRUE;
+    case ID_SET_ORDER_CHECK_LABEL:
+      if (code == STN_CLICKED) {
+        BOOL on = SendMessageW(g_set.order_check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        SendMessageW(g_set.order_check, BM_SETCHECK, on ? BST_UNCHECKED : BST_CHECKED, 0);
+        on_album_in_order_check();
+      }
+      return TRUE;
     default: return FALSE;
   }
 }
 
 HBRUSH settings_view_ctlcolor(HWND wnd, HDC dc) {
-  if (wnd == g_set.lfm_check) { /* WM_CTLCOLORBTN: just its background */
+  if (wnd == g_set.lfm_check || wnd == g_set.order_check) { /* WM_CTLCOLORBTN: just its background */
     SetBkColor(dc, theme.bg);
     return theme.bg_brush;
   }
-  BOOL note = wnd == g_set.note || wnd == g_set.sync_note || wnd == g_set.lfm_note;
+  BOOL note = wnd == g_set.note || wnd == g_set.sync_note || wnd == g_set.order_note || wnd == g_set.lfm_note;
   if (!note && wnd != g_set.title && wnd != g_set.heading && wnd != g_set.path && wnd != g_set.sync_heading &&
-      wnd != g_set.name_label && wnd != g_set.addr_label && wnd != g_set.addr && wnd != g_set.lfm_heading &&
-      wnd != g_set.lfm_status && wnd != g_set.lfm_check_label)
+      wnd != g_set.name_label && wnd != g_set.addr_label && wnd != g_set.addr && wnd != g_set.play_heading &&
+      wnd != g_set.order_check_label && wnd != g_set.lfm_heading && wnd != g_set.lfm_status &&
+      wnd != g_set.lfm_check_label)
     return NULL;
   SetTextColor(dc, note ? theme.text2 : theme.text);
   SetBkColor(dc, theme.bg);

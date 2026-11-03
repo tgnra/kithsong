@@ -28,11 +28,13 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -68,7 +71,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The app's settings: signing in to Last.fm, the permissions it has, the storage it uses, and
+ * The app's settings: how albums play, signing in to Last.fm, the permissions it has, the storage it uses, and
  * its version. [libraryDir] is the library folder, whose size is shown. [onLicenses] opens the
  * open source licences. [onBack] slides the screen away; it is also dismissed by swiping right.
  */
@@ -89,6 +92,20 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             item(key = "header") { ScreenHeader(stringResource(R.string.settings), onBack) }
+
+            item(key = "playback") {
+                SettingsHeading(stringResource(R.string.settings_playback))
+                var inOrder by remember { mutableStateOf(settings.albumInOrder) }
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.album_in_order)) },
+                    supportingContent = { Text(stringResource(R.string.album_in_order_text)) },
+                    trailingContent = { Switch(checked = inOrder, onCheckedChange = null) },
+                    modifier = Modifier.toggleable(inOrder, role = Role.Switch) { on ->
+                        settings.albumInOrder = on
+                        inOrder = on
+                    },
+                )
+            }
 
             item(key = "scrobbling") {
                 SettingsHeading(stringResource(R.string.scrobbling))

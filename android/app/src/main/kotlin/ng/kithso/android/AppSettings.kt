@@ -70,9 +70,14 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
 
     /**
      * Whether playing a track from an album turns shuffle off, so the album plays in order. On
-     * if never set; nothing sets it yet.
+     * if never set.
      */
-    val albumInOrder: Boolean get() = core.albumInOrder
+    var albumInOrder: Boolean
+        get() = core.albumInOrder
+        set(value) {
+            core.albumInOrder = value
+            save()
+        }
 
     /** The playback volume, 0 to 100, as it was left; nothing sets it yet. */
     val volume: Int get() = core.volume
