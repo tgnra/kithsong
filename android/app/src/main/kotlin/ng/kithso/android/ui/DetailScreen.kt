@@ -80,7 +80,9 @@ import kotlinx.coroutines.launch
  * from there ([onPlay]), shuffled or not as shuffle is; long-pressing one opens its menu
  * ([PlaylistActions.trackMenu]). An artist's albums come before their tracks, and an album
  * group shows its albums; [onOpen] opens an album, and long-pressing one opens its menu
- * ([PlaylistActions.albumMenu]), which in a manual album group can take it out. A smart list in random order has a button
+ * ([PlaylistActions.albumMenu]), which in a manual album group can take it out. As on the
+ * desktops, an album group has Play, Shuffle albums (its albums in a random order, each one's
+ * tracks in theirs) and Shuffle tracks. A smart list in random order has a button
  * to reshuffle it. [onBack] slides the screen away; it is also dismissed by swiping right.
  *
  * A manual playlist has an Edit button, which shows each track with a button to remove it and
@@ -234,6 +236,7 @@ fun DetailScreen(
                 if (list != null && !isEditing && (tracks.isNotEmpty() || list.canReshuffle)) item(key = "actions", contentType = "actions") {
                     DetailActions(
                         onPlay = if (tracks.isNotEmpty()) ({ shuffle -> onPlayAll(tracks, shuffle) }) else null,
+                        onShuffleAlbums = if (group && tracks.isNotEmpty()) ({ onPlayAll(shuffleAlbums(tracks), false) }) else null,
                         onReshuffle = if (list.canReshuffle) ({
                             scope.launch {
                                 source.reshuffle(ref)
@@ -378,9 +381,27 @@ private fun artistScrollEntries(
 /** How many tracks an artist's page has before the fast scroll strip has their letters. */
 private const val TRACK_LETTERS_FROM = 12
 
-/** Play and Shuffle ([onPlay], with whether to shuffle), and Reshuffle, if given. */
+/**
+ * [tracks], an album group's albums' in turn, with the albums in a random order and each
+ * one's tracks in theirs, for Shuffle albums.
+ */
+private fun shuffleAlbums(tracks: List<Track>): List<Track> {
+    val albums = ArrayList<MutableList<Track>>()
+    for (track in tracks) {
+        val last = albums.lastOrNull()
+        if (last != null && last.last().albumUid == track.albumUid) last += track else albums += mutableListOf(track)
+    }
+    albums.shuffle()
+    return albums.flatten()
+}
+
+/**
+ * Play and Shuffle ([onPlay], with whether to shuffle), and Reshuffle, if given. With
+ * [onShuffleAlbums], an album group's, Shuffle albums comes between them and Shuffle is
+ * Shuffle tracks, as on the desktops.
+ */
 @Composable
-private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onReshuffle: (() -> Unit)?) {
+private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onShuffleAlbums: (() -> Unit)?, onReshuffle: (() -> Unit)?) {
     FlowRow(
         Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -391,9 +412,16 @@ private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onReshuffle: (() -> Unit
                 Icon(Icons.Play, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
                 Text(stringResource(R.string.play), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
             }
+            if (onShuffleAlbums != null) FilledTonalButton(onClick = onShuffleAlbums) {
+                Icon(Icons.Shuffle, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                Text(stringResource(R.string.shuffle_albums), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+            }
             FilledTonalButton(onClick = { onPlay(true) }) {
                 Icon(Icons.Shuffle, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
-                Text(stringResource(R.string.shuffle), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+                Text(
+                    stringResource(if (onShuffleAlbums != null) R.string.shuffle_tracks else R.string.shuffle),
+                    modifier = Modifier.padding(start = ButtonDefaults.IconSpacing),
+                )
             }
         }
         if (onReshuffle != null) OutlinedButton(onClick = onReshuffle) {
