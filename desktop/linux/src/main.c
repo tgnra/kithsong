@@ -117,15 +117,19 @@ static void on_import_done(void *user) {
 }
 
 /* The empty Albums page suggests pairing while this computer isn't in a group, with the Pair
- * with a device… button. */
+ * with a device… button, and choosing what to sync once it is, with Choose what to sync. */
 static void set_empty_description(app *a) {
-  gboolean alone = a->lib && devices_sync_state() == DEVICES_ALONE;
-  enum mc_str_id text = !a->lib ? MC_STR_LIBRARY_OPEN_FAILED : alone ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
-                                                                     : MC_STR_EMPTY_TEXT;
+  devices_state state = devices_sync_state();
+  gboolean alone = a->lib && state == DEVICES_ALONE, grouped = a->lib && state == DEVICES_GROUPED;
+  enum mc_str_id text = !a->lib   ? MC_STR_LIBRARY_OPEN_FAILED
+                        : alone   ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
+                        : grouped ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_CHOOSE
+                                  : MC_STR_EMPTY_TEXT;
   char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION), MC_S(mc_str(text)), MC_S(mc_version()));
   adw_status_page_set_description(a->empty, desc);
   mc_free(desc);
   if (a->pair) gtk_widget_set_visible(a->pair, alone);
+  if (a->empty_choose_sync) gtk_widget_set_visible(a->empty_choose_sync, grouped);
 }
 
 /* Choose what to sync shows under "none of them have tracks on this device" once this
@@ -1090,7 +1094,15 @@ static GtkWidget *build_albums(app *a) {
   a->empty = ADW_STATUS_PAGE(empty);
   a->pair = devices_pair_button();
   gtk_widget_set_visible(a->pair, FALSE);
-  adw_status_page_set_child(a->empty, a->pair);
+  a->empty_choose_sync = gtk_button_new_with_label(mc_str(MC_STR_CHOOSE_WHAT_TO_SYNC));
+  gtk_widget_add_css_class(a->empty_choose_sync, "pill");
+  gtk_widget_set_halign(a->empty_choose_sync, GTK_ALIGN_CENTER);
+  gtk_widget_set_visible(a->empty_choose_sync, FALSE);
+  g_signal_connect(a->empty_choose_sync, "clicked", G_CALLBACK(on_choose_sync), a);
+  GtkWidget *empty_buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0); /* one shows at a time */
+  gtk_box_append(GTK_BOX(empty_buttons), a->pair);
+  gtk_box_append(GTK_BOX(empty_buttons), a->empty_choose_sync);
+  adw_status_page_set_child(a->empty, empty_buttons);
   set_empty_description(a);
 
   GtkWidget *no_playlists = adw_status_page_new();

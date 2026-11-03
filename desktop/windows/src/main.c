@@ -1403,8 +1403,8 @@ static void pair_menu(void) {
   if (cmd == CMD_ADDRESS) add_device_show(g_app.wnd, on_add_device_connect, NULL);
 }
 
-/* The empty Playlists page's Choose What to Sync: this PC's own page, whose What to Sync
- * picks the playlists it holds. */
+/* The empty Albums and Playlists pages' Choose What to Sync: this PC's own page, whose
+ * What to Sync picks what it holds. */
 static void show_own_page(void) {
   mc_sync *sync = sync_bridge_get();
   if (!sync) return;
