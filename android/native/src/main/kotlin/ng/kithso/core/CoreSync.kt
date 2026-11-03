@@ -214,6 +214,10 @@ data class NearbyDevice(
  * [listener] gets each [Event] on one of the core's threads, one at a time, possibly before the
  * constructor has returned, so it should hand them to another thread. Every other call should
  * come from one thread at a time, except [notifyChanged], which any thread may call.
+ *
+ * With [offerMerge], pairing two libraries that both have music merges them ([Event.PairMerge]).
+ * A frontend with no screens for that passes false: such a pairing is then refused with
+ * [PairReason.LibraryMismatch], as by a version without merging, and no [Event.PairMerge] comes.
  */
 class CoreSync(
     library: CoreLibrary,
@@ -221,6 +225,7 @@ class CoreSync(
     deviceName: String,
     kind: DeviceKind,
     private val listener: (Event) -> Unit,
+    offerMerge: Boolean = true,
 ) : AutoCloseable {
     /** mc_pair_reason. */
     enum class PairReason {
@@ -408,7 +413,7 @@ class CoreSync(
         data object Waiting : Event
     }
 
-    internal var handle = nativeNew(library.handle, configDir, deviceName, kind.ordinal, this)
+    internal var handle = nativeNew(library.handle, configDir, deviceName, kind.ordinal, offerMerge, this)
 
     /** This device's uid. */
     val deviceUid: String = nativeDeviceUid(handle)
@@ -747,6 +752,7 @@ class CoreSync(
             configDir: String,
             deviceName: String,
             kind: Int,
+            offerMerge: Boolean,
             listener: CoreSync,
         ): Long
         @JvmStatic private external fun nativeFree(handle: Long)

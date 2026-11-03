@@ -1168,7 +1168,7 @@ mc_sync *jni_sync_of(jlong handle) {
 JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jclass cls,
                                                               jlong library, jstring config_dir,
                                                               jstring device_name, jint kind,
-                                                              jobject listener) {
+                                                              jboolean offer_merge, jobject listener) {
   (void)cls;
   jni_sync *p = calloc(1, sizeof *p);
   if (!p) {
@@ -1213,8 +1213,10 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
       .on_pair_result = on_sync_pair_result,
       .on_progress = on_sync_progress,
       .on_sync_done = on_sync_done,
-      /* Setting on_pair_merge is what lets pairing merge two libraries with music. */
-      .on_pair_merge = on_sync_pair_merge,
+      /* Setting on_pair_merge is what lets pairing merge two libraries with music. A
+       * frontend with no screens for that (the watch) leaves it out, and such a pairing is
+       * refused with MC_PAIR_LIBRARY_MISMATCH, as by a version without merging. */
+      .on_pair_merge = offer_merge != JNI_FALSE ? on_sync_pair_merge : NULL,
       .on_merge_progress = on_sync_merge_progress,
       .on_merge_done = on_sync_merge_done,
       .on_waiting = on_sync_waiting,
