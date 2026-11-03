@@ -613,6 +613,62 @@ static void test_credited_artists(const char *scratch) {
 }
 
 /* Uids of the recents in order, joined with spaces, into out. */
+/* An artist's picture is the cover of their first own album here with one, by year then
+ * title; singles, albums with nothing here and those they're only featured on don't count. */
+static void test_artist_cover(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_artist_cover.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+
+  /* A's: Old (1999) has no art, Gone (2001) no file here, One (2002) one track, a single;
+   * Later and Alpha are both 2005, so Alpha by title. B is only featured on Alpha. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('A', 'Anna'), ('B', 'Bo');"
+                 "INSERT INTO albums (uid, title, artist_uid, year, art_hash) VALUES"
+                 " ('al1', 'Old', 'A', 1999, NULL), ('al2', 'Gone', 'A', 2001, 'h'),"
+                 " ('al3', 'One', 'A', 2002, 'h'), ('al4', 'Later', 'A', 2005, 'h'),"
+                 " ('al5', 'Alpha', 'A', 2005, 'h');"
+                 "INSERT INTO album_artists (uid, album_uid, artist_uid, position, joinphrase) VALUES"
+                 " ('aa1', 'al5', 'A', 0, ' & '), ('aa2', 'al5', 'B', 1, '');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
+                 " ('t1', 'al1', 'A', '1'), ('t2', 'al1', 'A', '2'), ('t3', 'al2', 'A', '3'),"
+                 " ('t4', 'al2', 'A', '4'), ('t5', 'al3', 'A', '5'), ('t6', 'al4', 'A', '6'),"
+                 " ('t7', 'al4', 'A', '7'), ('t8', 'al5', 'A', '8'), ('t9', 'al5', 'B', '9');"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES"
+                 " ('f1', 't1', 'Anna/Old/1.flac', 'flac'), ('f5', 't5', 'Anna/One/5.flac', 'flac'),"
+                 " ('f6', 't6', 'Anna/Later/6.flac', 'flac'), ('f9', 't9', 'Anna/Alpha/9.flac', 'flac');") ==
+        SQLITE_OK);
+
+  char want[1200];
+  snprintf(want, sizeof want, "%s%cAnna%cAlpha", mc_library_dir(lib), MC_PATH_SEP, MC_PATH_SEP);
+  mc_artist_list *artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) {
+    CHECK_STR(artists->items[0].cover_dir, want);
+    CHECK(artists->items[1].cover_dir == NULL);
+  }
+  mc_artist_list_free(artists);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) {
+    CHECK_STR(artists->items[0].cover_dir, want);
+    CHECK(artists->items[1].cover_dir == NULL);
+  }
+  mc_artist_list_free(artists);
+
+  /* Alpha's file goes: Later's cover is next. */
+  CHECK(exec(db, "DELETE FROM files WHERE uid = 'f9'") == SQLITE_OK);
+  snprintf(want, sizeof want, "%s%cAnna%cLater", mc_library_dir(lib), MC_PATH_SEP, MC_PATH_SEP);
+  artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) CHECK_STR(artists->items[0].cover_dir, want);
+  mc_artist_list_free(artists);
+  mc_library_close(lib);
+}
+
 static void recent_uids(mc_library *lib, int limit, char *out, size_t n) {
   out[0] = '\0';
   mc_recent_list *list = NULL;
@@ -1442,6 +1498,7 @@ int main(int argc, char **argv) {
   test_migration_v12(argc > 1 ? argv[1] : ".");
   test_migration_v13(argc > 1 ? argv[1] : ".");
   test_credited_artists(argc > 1 ? argv[1] : ".");
+  test_artist_cover(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
   test_playable(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");

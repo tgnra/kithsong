@@ -47,8 +47,10 @@
  * back button, Escape, Alt+Left, Backspace or the mouse's
  * back button; the list keeps its place meanwhile.
  *
- * Only one exists at a time. As on Windows, artists have no pictures yet: their initials
- * stand in. */
+ * Only one exists at a time. An artist's picture, in the list and on their page, is the cover
+ * of their first own album here that has one (mc_artist_info.cover_dir), loaded on the cover
+ * thread as the album grid's are (cover.h); their initials stand in until it's there, or when
+ * they have none. */
 #ifndef KITHSONG_ARTIST_VIEW_H
 #define KITHSONG_ARTIST_VIEW_H
 

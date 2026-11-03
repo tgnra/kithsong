@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
 import ng.kithso.core.AlbumInfo
+import ng.kithso.core.ArtistInfo
 import ng.kithso.core.CoreImport
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CoreSync
@@ -731,21 +732,10 @@ class CoreLibrarySource(
             Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info), albumSortKey(info, sortNames))
         }
 
-        // The core's artists with an album or track here, and each one's own albums for a cover.
-        val albumsBy = albumInfos.zip(albums).filter { it.first.artistUid != null }.groupBy({ it.first.artistUid }, { it.second })
+        // The core's artists with an album or track here, each with the picture the core picks
+        // for them (one of their albums' covers).
         val artists = artistInfos.map { info ->
-            val own = albumsBy[info.uid].orEmpty()
-            // A cover file before an audio file that may have no picture in it.
-            val cover = (own.firstOrNull { album -> album.art.file?.let { File(it).extension.lowercase() in COVER_EXTENSIONS } == true }
-                ?: own.firstOrNull { it.art.file != null })?.art
-            Artist(
-                info.uid,
-                info.name,
-                info.albumCount,
-                cover?.copy(uid = info.uid, label = info.name) ?: ArtRef(info.uid, info.name),
-                info.trackCount,
-                info.sortName,
-            )
+            Artist(info.uid, info.name, info.albumCount, covers.artist(info), info.trackCount, info.sortName)
         }
 
         // Smart playlists sit among the others, and smart album groups among the manual ones.
@@ -881,6 +871,10 @@ class CoreLibrarySource(
             )
         }
 
+        /** An artist's picture: the cover in [ArtistInfo.coverDir], keyed by the artist. */
+        fun artist(info: ArtistInfo): ArtRef =
+            ref(info.uid, info.name, info.coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } })
+
         /** A found track's art: its album's, keyed by the album's title as a track's is. */
         fun found(album: Album): ArtRef = album.art.copy(uid = album.title, label = album.title)
 
@@ -900,7 +894,6 @@ class CoreLibrarySource(
         const val KEY_PLAYLIST_ART = "playlist_art"
         const val MAX_RECENTS = 8
         const val SEARCH_LIMIT = 20 // of each kind, as the desktops show
-        val COVER_EXTENSIONS = listOf("jpg", "jpeg", "png") // what mc_coverart_find() takes
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
 

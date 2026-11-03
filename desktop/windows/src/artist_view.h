@@ -9,8 +9,8 @@
  * Clicking one (or Enter on it) opens its page in place of the list. The page's header is
  * this view; the main window puts the track list (track_list_show_artist) beneath it:
  *
- *   (<-) Low
- *        12 albums · 140 tracks
+ *   (<-) ( pic ) Low
+ *        (     ) 12 albums · 140 tracks
  *   Albums                                    (<) (>)
  *   +------+ +------+ +------+ +------+ +---
  *   | art  | | art  | | art  | | art  | |       <- scrolls sideways
@@ -35,8 +35,14 @@
  * or the mouse's back button (ARN_BACK); the list keeps its place meanwhile.
  *
  * In the list the arrow keys, Page Up, Page Down, Home and End move the focus, and typing a
- * letter goes to the next artist starting with it. Covers are decoded on the UI thread, one
- * per message, as the search page does. */
+ * letter goes to the next artist starting with it.
+ *
+ * An artist's picture (the (o) in the list, and beside the name on their page) is the cover of
+ * their first own album here that has one (mc_artist_info.cover_dir), round; a faint disc
+ * stands in until it's decoded, with the Artists glyph on it when there's none. Covers and
+ * pictures are decoded on the UI thread, one per message, as the search page does: the open
+ * page's picture, then its tiles; in the list only the rows in view, and those a few screens
+ * away let theirs go. */
 #ifndef KITHSONG_ARTIST_VIEW_H
 #define KITHSONG_ARTIST_VIEW_H
 

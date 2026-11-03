@@ -874,8 +874,17 @@ void mc_playlist_list_free(mc_playlist_list *list) {
 
 #define ARTIST_ORDER " ORDER BY coalesce(ar.sort_name, ar.name) COLLATE NOCASE, ar.name COLLATE NOCASE, ar.uid"
 
-/* Runs sql (uid, name, sort name, album count, then a track count if it has five columns) into
- * a list. */
+/* A file of artist ar's picture's album (see mc_artist_info.cover_dir): of their first own
+ * album with art and a file here, by year then title, as the album listings take the folder
+ * (ALBUM_COLS); NULL if there's none. */
+#define ARTIST_COVER_FILE \
+  "(SELECT (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid LIMIT 1)" \
+  " FROM albums a WHERE a.artist_uid = ar.uid AND a.art_hash IS NOT NULL AND NOT " ALBUM_IS_SINGLE \
+  "  AND EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid)" \
+  " ORDER BY a.year, a.title COLLATE NOCASE, a.uid LIMIT 1)"
+
+/* Runs sql (uid, name, sort name, album count, ARTIST_COVER_FILE, then a track count if it has
+ * six columns) into a list. */
 static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
@@ -896,7 +905,14 @@ static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list *
     a->name = column_dup(stmt, 1);
     a->sort_name = column_dup(stmt, 2);
     a->album_count = sqlite3_column_int(stmt, 3);
-    if (sqlite3_column_count(stmt) > 4) a->track_count = sqlite3_column_int(stmt, 4);
+    const unsigned char *file = sqlite3_column_text(stmt, 4);
+    if (file) {
+      char *abs = mc_library_abspath(lib, (const char *)file);
+      char *sep = abs ? strrchr(abs, MC_PATH_SEP) : NULL;
+      if (sep) *sep = '\0';
+      a->cover_dir = abs;
+    }
+    if (sqlite3_column_count(stmt) > 5) a->track_count = sqlite3_column_int(stmt, 5);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -915,7 +931,7 @@ mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
   static const char sql[] =
     "SELECT ar.uid, ar.name, coalesce(ar.sort_name, ar.name),"
     " (SELECT count(*) FROM albums a WHERE a.uid IN (" CREDITED_ALBUMS("ar.uid") ")"
-    "  AND NOT " ALBUM_IS_SINGLE ")"
+    "  AND NOT " ALBUM_IS_SINGLE "), " ARTIST_COVER_FILE
     " FROM artists ar"
     " WHERE EXISTS (SELECT 1 FROM albums a WHERE a.artist_uid = ar.uid)"
     "  OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)"
@@ -930,7 +946,8 @@ mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
    * track) pairs as CREDITED_ALBUMS and CREDITED_TRACKS have them: a track with no artist of
    * its own is its album's, which no index finds. */
   static const char sql[] =
-    "SELECT ar.uid, ar.name, coalesce(ar.sort_name, ar.name), coalesce(na.albums, 0), coalesce(nt.n, 0) FROM artists ar"
+    "SELECT ar.uid, ar.name, coalesce(ar.sort_name, ar.name), coalesce(na.albums, 0), " ARTIST_COVER_FILE
+    ", coalesce(nt.n, 0) FROM artists ar"
     " LEFT JOIN (SELECT c.uid, count(*) AS n,"
     "   count(CASE WHEN NOT " ALBUM_IS_SINGLE " THEN 1 END) AS albums"
     "  FROM (SELECT artist_uid AS uid, uid AS album_uid FROM albums WHERE artist_uid IS NOT NULL"
@@ -956,6 +973,7 @@ void mc_artist_list_free(mc_artist_list *list) {
   for (int i = 0; i < list->count; i++) {
     free(list->items[i].name);
     free(list->items[i].sort_name);
+    free(list->items[i].cover_dir);
   }
   free(list->items);
   free(list);

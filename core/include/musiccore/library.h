@@ -184,6 +184,11 @@ typedef struct mc_artist_info {
   /* From mc_library_list_artists_here() only (0 elsewhere): the tracks credited to it (see
    * mc_library_list_artist_albums()) that have a file on this device. */
   int track_count;
+  /* The artist's picture: the folder holding the cover of their first album here that has
+   * one (as mc_album_info.folder; see mc_coverart_find()), their own albums (artist_uid
+   * theirs) by year then title, singles left out. NULL if none has a cover here, for which
+   * frontends show a placeholder. */
+  char *cover_dir;
 } mc_artist_info;
 
 typedef struct mc_artist_list {

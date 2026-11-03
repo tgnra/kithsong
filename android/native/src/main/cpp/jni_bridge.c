@@ -402,7 +402,7 @@ static jobjectArray artist_array(JNIEnv *env, mc_artist_list *list) {
   jclass info = (*env)->FindClass(env, "ng/kithso/core/ArtistInfo");
   jmethodID ctor =
     info ? (*env)->GetMethodID(env, info, "<init>",
-                               "(Ljava/lang/String;Ljava/lang/String;IILjava/lang/String;)V")
+                               "(Ljava/lang/String;Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V")
          : NULL;
   int n = list ? list->count : 0;
   jobjectArray out = ctor ? (*env)->NewObjectArray(env, n, info, NULL) : NULL;
@@ -412,8 +412,9 @@ static jobjectArray artist_array(JNIEnv *env, mc_artist_list *list) {
     jstring uid = new_string(env, a->uid);
     jstring name = new_string(env, cname);
     jstring sort = new_string(env, a->sort_name ? a->sort_name : cname);
+    jstring cover = a->cover_dir ? new_string(env, a->cover_dir) : NULL;
     jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)a->album_count,
-                                     (jint)a->track_count, sort);
+                                     (jint)a->track_count, sort, cover);
     if (!item) {
       out = NULL;
       break;
@@ -423,6 +424,7 @@ static jobjectArray artist_array(JNIEnv *env, mc_artist_list *list) {
     (*env)->DeleteLocalRef(env, uid);
     (*env)->DeleteLocalRef(env, name);
     (*env)->DeleteLocalRef(env, sort);
+    if (cover) (*env)->DeleteLocalRef(env, cover);
   }
   mc_artist_list_free(list);
   return out;
