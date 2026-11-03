@@ -6,7 +6,8 @@
  *
  * The cover sits in a rounded square, the track above the seekbar, with the time so far on
  * its left and the time left on its right, then the shuffle toggle (in the accent colour
- * while on). Dragging the bar (or the arrow keys once it has focus) moves the position; a
+ * while on). The bar's fill and the toggle take the playing track's cover's accent
+ * (art_accent.h). Dragging the bar (or the arrow keys once it has focus) moves the position; a
  * drag seeks when it's let go. With nothing playing the bar is greyed out. Only one strip
  * exists at a time.
  */

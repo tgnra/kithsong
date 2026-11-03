@@ -54,6 +54,15 @@ int mc_art_glows(const mc_art_color *colors, int count, int dark, uint32_t out[M
  * height (*y): pulled in from the corner a little, so its brightest part is on screen. */
 void mc_art_glow_center(int corner, float *x, float *y);
 
+/* An accent colour from count colours from mc_art_colors(): the first that isn't grey, with
+ * its hue and chroma kept, as Material's Content scheme keeps a seed's. *bg is for behind the
+ * accent's white text (a suggested button, a slider's fill), with at least 4.5:1 contrast
+ * against white; *text is for the accent as text or an icon on the theme's background (dark
+ * or light), with at least 4.5:1 against it, from white to a light sidebar's grey or from
+ * black to a dark sidebar's. Both opaque; either may be NULL. Returns 1, or 0 (outs
+ * untouched) if none of the colours has colour enough to be an accent. */
+int mc_art_accent(const mc_art_color *colors, int count, int dark, uint32_t *bg, uint32_t *text);
+
 #ifdef __cplusplus
 }
 #endif

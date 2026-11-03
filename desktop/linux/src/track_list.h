@@ -10,7 +10,8 @@
  *
  * Behind the header and Play and Shuffle is the art's colour, as soft glows (art_backdrop.h)
  * from the cover, or a playlist's or smart list's picture, thinning out above the tracks,
- * which stay on the pane's own background; art with no colour but grey leaves it plain.
+ * which stay on the pane's own background; art with no colour but grey leaves it plain. The
+ * pane's accent (Play, the playing track) is the same art's (art_accent.h).
  *
  * Play and Shuffle play the whole list, in order or shuffled; they're insensitive when
  * nothing in it can be played here. Track numbers and durations are dimmed; on albums with

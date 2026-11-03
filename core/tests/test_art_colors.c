@@ -1,6 +1,7 @@
 /* Art colours and the backdrop's glows (artcolors.h): grey art has no colours, a colour's
  * share follows how much of the art it is, much grey adds a neutral colour, and one loud
- * colour leaves a corner to a smaller one. */
+ * colour leaves a corner to a smaller one; the accent reads, white on it and it as text. */
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,19 @@ static int blue(uint32_t c) { return c & 255; }
 static int is_blueish(uint32_t c) { return blue(c) > red(c) + 10 && blue(c) > green(c); }
 static int is_orangeish(uint32_t c) { return red(c) > blue(c) + 10 && red(c) >= green(c); }
 static int brightness(uint32_t c) { return red(c) + green(c) + blue(c); }
+
+/* WCAG's contrast ratio between two colours (0xRRGGBB; alpha ignored). */
+static double channel(int v) {
+  double c = v / 255.0;
+  return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+static double relative_luminance(uint32_t c) {
+  return 0.2126 * channel(red(c)) + 0.7152 * channel(green(c)) + 0.0722 * channel(blue(c));
+}
+static double contrast_ratio(uint32_t a, uint32_t b) {
+  double la = relative_luminance(a), lb = relative_luminance(b);
+  return la > lb ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
+}
 
 int main(void) {
   mc_art_color colors[MC_ART_COLORS_MAX];
@@ -125,6 +139,26 @@ int main(void) {
   for (int i = 0; i < MC_ART_GLOWS; i++) greys += abs(red(glows[i]) - green(glows[i])) < 6;
   CHECK(greys == 1);
   free(art);
+
+  /* The accent: none for grey or no colours, otherwise the art's hue at tones that read,
+   * white on it and it on the theme's background, at 4.5:1 or more. */
+  mc_art_color grey = {0xFF808080u, 1.0f, 1};
+  uint32_t bg = 0, text = 0;
+  CHECK(mc_art_accent(NULL, 0, 0, &bg, &text) == 0);
+  CHECK(mc_art_accent(&grey, 1, 0, &bg, &text) == 0 && bg == 0 && text == 0);
+  /* A pale yellow and a near-black blue, the hardest to keep readable, and a plain green. */
+  const uint32_t seeds[] = {0xFFFFF59Du, 0xFF0A0A40u, 0xFF30A040u};
+  for (size_t i = 0; i < sizeof seeds / sizeof *seeds; i++)
+    for (int dark_theme = 0; dark_theme <= 1; dark_theme++) {
+      mc_art_color c[2] = {grey, {seeds[i], 0.5f, 0}};
+      CHECK(mc_art_accent(c, 2, dark_theme, &bg, &text) == 1);
+      CHECK(bg >> 24 == 255 && text >> 24 == 255);
+      CHECK(contrast_ratio(bg, 0xFFFFFFu) >= 4.5);
+      CHECK(contrast_ratio(text, dark_theme ? 0x303034u : 0xEBEBEDu) >= 4.5);
+      CHECK(contrast_ratio(text, dark_theme ? 0x000000u : 0xFFFFFFu) >= 4.5);
+    }
+  mc_art_color green_seed = {0xFF30A040u, 1.0f, 0};
+  CHECK(mc_art_accent(&green_seed, 1, 0, &bg, NULL) == 1 && green(bg) > red(bg) + 20 && green(bg) > blue(bg));
 
   /* The glows' centres, pulled in from each corner. */
   float x, y;
