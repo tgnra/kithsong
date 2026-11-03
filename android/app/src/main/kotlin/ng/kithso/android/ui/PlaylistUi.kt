@@ -369,8 +369,9 @@ fun PlaylistSheets(
                     if (album != null) add(SheetAction(stringResource(R.string.go_to_album), Icons.Album) { onOpen(album) })
                     if (artist != null) add(SheetAction(stringResource(R.string.go_to_artist), Icons.Person) { onOpen(artist) })
                     val entry = track.entryUid
-                    if (editor != null && sheet.removable && entry != null) {
-                        add(SheetAction(stringResource(R.string.remove_from_playlist), Icons.Remove) { editor.removeEntry(entry) })
+                    val playlist = sheet.from?.takeIf { it.kind == CollectionRef.Kind.Playlist }?.uid
+                    if (editor != null && sheet.removable && entry != null && playlist != null) {
+                        add(SheetAction(stringResource(R.string.remove_from_playlist), Icons.Remove) { editor.removeEntry(playlist, entry) })
                     }
                     if (deleter != null) {
                         val name = track.title.ifEmpty { stringResource(R.string.unknown_value) }

@@ -165,7 +165,7 @@ fun DetailScreen(
         } else {
             val i = tracks.indexOfFirst { entryKey(it) == key }
             val entry = tracks.getOrNull(i)?.entryUid
-            if (entry != null && dragFrom >= 0 && i != dragFrom) editor?.moveEntry(entry, tracks.getOrNull(i - 1)?.entryUid)
+            if (entry != null && dragFrom >= 0 && i != dragFrom) editor?.moveEntry(ref.uid, entry, tracks.getOrNull(i - 1)?.entryUid)
         }
         dragFrom = -1
     }
@@ -175,7 +175,7 @@ fun DetailScreen(
         if (entry != null && i + by in tracks.indices) {
             val moved = tracks.toMutableList().apply { add(i + by, removeAt(i)) }
             edited = moved
-            editor?.moveEntry(entry, moved.getOrNull(i + by - 1)?.entryUid)
+            editor?.moveEntry(ref.uid, entry, moved.getOrNull(i + by - 1)?.entryUid)
         }
     }
     // Likewise an album in a group.
@@ -309,7 +309,7 @@ fun DetailScreen(
                             track,
                             onRemove = {
                                 edited = tracks.filterIndexed { j, _ -> j != i }
-                                track.entryUid?.let { editor?.removeEntry(it) }
+                                track.entryUid?.let { editor?.removeEntry(ref.uid, it) }
                             },
                             handle = with(reorder) {
                                 Modifier.dragHandle(key).semantics {
