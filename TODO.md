@@ -199,6 +199,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - "Recently added" plays each album last track first (each track is added a moment after the one before)
 - Go to album and Go to artist on the track list's and the artist page's track menus (only compiled): that each is hidden where it should be (a single's or no album, the album shown, the artist's own page), and that the album opens with the track selected
 - The header bar's volume control (volume_button.c): only compiled (GTK 4.14). Check the popover's slider taking the focus when it opens, its arrow keys, the speaker muting, and the icon and slider following the keyboard and MPRIS
+- The art backdrop (art_backdrop.c) behind the track list's header: only seen in a stand-in window under Xvfb (GTK 4.22, libadwaita 1.9, the cairo renderer), with made-up covers: the glows in light and dark, grey art leaving it plain, and a cover change mid-fade. Not seen: in the app itself (opening, switching and closing albums, playlists' and smart lists' pictures, a cover arriving after the pane opens), high contrast, animations turned off, the GL and Vulkan renderers, GTK 4.14 and libadwaita 1.5, and a real desktop's theme switch while it shows
 
 ### Windows
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files

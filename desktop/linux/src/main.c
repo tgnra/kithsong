@@ -36,6 +36,7 @@
 #include "album_grid.h"
 #include "album_groups.h"
 #include "app.h"
+#include "art_backdrop.h"
 #include "artist_view.h"
 #include "cover.h"
 #include "delete_dialog.h"
@@ -1210,6 +1211,7 @@ static void on_shutdown(GApplication *gapp, gpointer user) {
   playback_free();
   mpris_free();
   cover_cache_free();
+  art_colors_cache_free();
 }
 
 /* --- About, the shortcuts list and type to search --- */
