@@ -3,8 +3,9 @@
  *
  * Threads: the caller's (the API), the listener, the scheduler, discovery's, one worker per
  * session or pairing, and the encode pool's (encode.h), which touch no database and no
- * session. Each thread that touches the databases opens its own connections
- * (mc_sync_conn), since a connection is used by one thread at a time. Everything in
+ * session. Each thread that touches the databases has connections of its own
+ * (mc_sync_conn), since a connection is used by one thread at a time; session workers
+ * borrow theirs (mc_sync_conn_take()), and hand them on when done. Everything in
  * mc_sync under "lock" is guarded by it; callbacks run under cb_lock, never under lock. */
 #ifndef MC_SYNC_INTERNAL_H
 #define MC_SYNC_INTERNAL_H
@@ -106,6 +107,10 @@ typedef struct mc_sync_conn {
   mc_library *lib;
 } mc_sync_conn;
 
+/* How many finished sessions' connections are kept for the next ones: one per session that
+ * may run at once with a small group, either way. */
+#define MC_SYNC_IDLE_CONNS 4
+
 struct mc_sync {
   /* Fixed at mc_sync_new(), but for name. */
   char *config_dir;
@@ -133,6 +138,8 @@ struct mc_sync {
   mc_sync_peer *peers;
   int npeers;
   mc_sync_worker *workers;
+  mc_sync_conn idle[MC_SYNC_IDLE_CONNS]; /* see mc_sync_conn_take() */
+  int nidle;
   struct mc_sync_tracked {
     mc_channel *ch;
     int role; /* 0 session, 1 outgoing pairing, 2 incoming pairing */
@@ -202,6 +209,13 @@ struct mc_sync {
 
 mc_status mc_sync_conn_open(mc_sync *sync, mc_sync_conn *c);
 void mc_sync_conn_close(mc_sync_conn *c);
+/* A session's connections: ones an earlier session gave back, else new ones. Opening the
+ * two databases takes tens of milliseconds (over a hundred at times on Windows), which each
+ * side of a session would otherwise pay before HELLO. Not under lock. */
+mc_status mc_sync_conn_take(mc_sync *sync, mc_sync_conn *c);
+/* Keeps c for the next session (or closes it: when enough are kept, when sync is stopping,
+ * or if a transaction was left open on it) and clears it. Not under lock. */
+void mc_sync_conn_give(mc_sync *sync, mc_sync_conn *c);
 
 const char *mc_sync_kind_str(mc_device_kind kind);
 mc_device_kind mc_sync_kind_parse(const char *s);
@@ -273,7 +287,9 @@ void mc_sync_emit_pair_result(mc_sync *sync, const mc_pair_result *r);
 void mc_sync_emit_progress(mc_sync *sync, const mc_sync_progress *p);
 void mc_sync_emit_pair_merge(mc_sync *sync, const mc_pair_merge *m);
 /* KITHSONG_SYNC_TRACE=1: mc_sync_trace() writes one timestamped line to stderr, for timing a
- * session's steps. */
+ * session's steps. The lines go out from a thread of their own every 20 ms, so tracing
+ * doesn't slow what it times; other stderr output may come out ahead of lines made just
+ * before it. */
 int mc_sync_tracing(void);
 void mc_sync_trace(const char *fmt, ...);
 

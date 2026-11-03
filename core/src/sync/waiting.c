@@ -217,7 +217,7 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
   for (int i = 0; st == MC_OK && i < n; i++) ms[i].reachable = reachable(user, ms[i].uid) != 0;
 
   sqlite3 *ldb = mc_library_db(lib);
-  sqlite3_stmt *rev = NULL, *first = NULL;
+  sqlite3_stmt *rev = NULL, *first = NULL, *satisfied = NULL;
   if (st == MC_OK &&
       (sqlite3_prepare_v2(ldb,
                           "SELECT origin_uid FROM changelog WHERE entity = 'tracks'"
@@ -233,7 +233,7 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
   if (st == MC_OK && n && !held) st = MC_ERR_NOMEM;
   for (int t = 0; st == MC_OK && n && t < plan->count; t++) {
     const mc_plan_track *track = &plan->tracks[t];
-    if (mc_transfer_track_satisfied(lib, track)) continue;
+    if (mc_transfer_track_satisfied(lib, &satisfied, track)) continue;
     int any = 0, reached = 0;
     for (int i = 0; i < n; i++) {
       held[i] = ms[i].plan && holds(&ms[i], track);
@@ -253,6 +253,7 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
   free(held);
   sqlite3_finalize(rev);
   sqlite3_finalize(first);
+  sqlite3_finalize(satisfied);
   mc_plan_free(plan);
 
   for (int i = 0; st == MC_OK && i < n; i++) {

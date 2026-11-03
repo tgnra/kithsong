@@ -490,15 +490,19 @@ static mc_status encode_original(mc_sync *sync, const held *orig, int kbps, mc_e
   return mc_encode_pool_queue(sync->enc, orig->file_uid, orig->path, kbps, prio, owner);
 }
 
-/* Whether some file of track here is in the format t wants, and not stale. */
-static int track_satisfied(mc_library *lib, const mc_plan_track *t) {
-  sqlite3_stmt *stmt;
+/* Whether some file of track here is in the format t wants, and not stale. The query is
+ * kept in *cache between calls (NULL: just this once); the caller finalizes it. Every
+ * planned track is asked about before a turn fetches anything, and preparing the query
+ * each time was most of that with a large library. */
+static int track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_track *t) {
+  sqlite3_stmt *stmt = cache ? *cache : NULL;
   int yes = 0;
-  if (sqlite3_prepare_v2(mc_library_db(lib),
-                         "SELECT f.format, f.bitrate_kbps, f.size_bytes, f.source_file_uid,"
-                         " f.source_peer_uid FROM files f JOIN tracks t ON t.uid = f.track_uid"
-                         " WHERE f.track_uid = ?1 AND NOT " STALE_SQL,
-                         -1, &stmt, NULL) != SQLITE_OK)
+  if (!stmt && sqlite3_prepare_v2(mc_library_db(lib),
+                                  "SELECT f.format, f.bitrate_kbps, f.size_bytes,"
+                                  " f.source_file_uid, f.source_peer_uid FROM files f"
+                                  " JOIN tracks t ON t.uid = f.track_uid"
+                                  " WHERE f.track_uid = ?1 AND NOT " STALE_SQL,
+                                  -1, &stmt, NULL) != SQLITE_OK)
     return 0;
   sqlite3_bind_text(stmt, 1, t->track_uid, -1, SQLITE_STATIC);
   while (!yes && sqlite3_step(stmt) == SQLITE_ROW) {
@@ -507,12 +511,18 @@ static int track_satisfied(mc_library *lib, const mc_plan_track *t) {
     yes = mc_plan_file_satisfies(t, kind, (const char *)sqlite3_column_text(stmt, 0),
                                  sqlite3_column_int(stmt, 1), sqlite3_column_int64(stmt, 2));
   }
-  sqlite3_finalize(stmt);
+  if (cache) {
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    *cache = stmt;
+  } else {
+    sqlite3_finalize(stmt);
+  }
   return yes;
 }
 
-int mc_transfer_track_satisfied(mc_library *lib, const mc_plan_track *t) {
-  return track_satisfied(lib, t);
+int mc_transfer_track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_track *t) {
+  return track_satisfied(lib, cache, t);
 }
 
 /* --- Paths --- */
@@ -1473,10 +1483,11 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   want *w = NULL;
   int n = 0, cap = 0;
   mc_status st = MC_OK;
+  sqlite3_stmt *satisfied = NULL;
 
   /* Missing wanted tracks (plan order is uid order). */
   for (int i = 0; i < plan->count && st == MC_OK; i++) {
-    if (track_satisfied(lib, &plan->tracks[i])) continue;
+    if (track_satisfied(lib, &satisfied, &plan->tracks[i])) continue;
     if (n == cap) {
       int grown = cap ? cap * 2 : 64;
       want *more = realloc(w, (size_t)grown * sizeof *more);
@@ -1511,7 +1522,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
                                         (const char *)sqlite3_column_text(stmt, 1),
                                         sqlite3_column_int(stmt, 2), sqlite3_column_int64(stmt, 3)))
           continue;
-        if (t && !track_satisfied(lib, t)) { /* asked about already, as missing */
+        if (t && !track_satisfied(lib, &satisfied, t)) { /* asked about already, as missing */
           want *m = bsearch(uid, w, (size_t)nmissing, sizeof *w, want_cmp);
           if (m) m->imported = 1;
           continue;
@@ -1534,6 +1545,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     }
     if (n) qsort(w, (size_t)n, sizeof *w, want_sort);
   }
+  sqlite3_finalize(satisfied);
   if (st == MC_OK && n) st = ask_have(s, w, n, plan);
 
   transcoder *tc = NULL;
@@ -2158,7 +2170,10 @@ static void compute_status(mc_library *lib, const mc_plan *plan, int corrupt, st
   memset(v, 0, sizeof *v);
   v->verified_ms = (int64_t)mc_wall_ms();
   v->expected = plan->count;
-  for (int i = 0; i < plan->count; i++) v->ok += track_satisfied(lib, &plan->tracks[i]);
+  sqlite3_stmt *satisfied = NULL;
+  for (int i = 0; i < plan->count; i++)
+    v->ok += track_satisfied(lib, &satisfied, &plan->tracks[i]);
+  sqlite3_finalize(satisfied);
   v->corrupt = corrupt < v->expected - v->ok ? corrupt : v->expected - v->ok;
   v->missing = v->expected - v->ok - v->corrupt;
   *latest_ms = 0;
