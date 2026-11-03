@@ -44,11 +44,16 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      name does while the album tags agree, are items of their own at first. When several have
      the same title once the disc is taken off, each a different disc, in the same folder or
      folders side by side, they may be one album. Before they're matched, MusicBrainz is asked
-     (one release search for the title and album artist, up to 3 lookups): a release with as
+     (one release search for the title and album artist, up to 3 lookups; if that finds
+     none, as when the album artist tag names a label, the
+     [extended search](#extended-search)'s keys from all the discs' files and the folder
+     name: `catno:` with their catalogue numbers, then the title with each other artist, at
+     most 3 searches and 4 lookups more, stopping once a release would be accepted): a release with as
      many discs as there are items (video discs aside, see Score), on which at least half of each item's files are paired
      with tracks of its own disc. If there is one, the items are joined into the first: its
      files are all of theirs, in disc order (a file with no disc tag takes its item's disc),
-     its album is the title, its candidates those releases scored as usual, and the other
+     its album is the title, its candidates those releases scored as usual (with the keys'
+     best-fitting title and artist, see Score), and the other
      items are skipped as "Moved to another album". The joined item **always** waits for the
      user, saying it was joined ("Joined 2 discs into one album: check that they belong
      together"), however high it scores. If MusicBrainz has no such release, or can't be
@@ -105,6 +110,22 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      word stay apart. More words in the same script ("SPEEDCORE DANDY" vs "SPEEDCORE DANDY
      XXX") or a number ("SPF INFINI 2", "アニメガバイト 2") are compared in full, as different
      releases.
+   - a subtitle after a colon (`: ` or a fullwidth `：`) added to one of the two titles costs
+     at most 0.1 too: "DupleX EP: 204 vs SHARPNEL" vs "DupleX EP". As with translations,
+     only one title loses it, so "Op. 5: I. Allegro" and "Op. 5: II. Adagio" stay apart, and
+     a colon inside a word ("Re:Mix") isn't one. Nor is one before what only numbers a part
+     (digits, roman numerals up to four letters, "One" to "Ten", with words such as "Vol.",
+     "Part", "Disc", "Chapter"): "Title" vs "Title: Part 2" are compared in full, as
+     different releases. ` - Subtitle` is already a suffix (above).
+   - album titles only (track titles that differ this way are more often different tracks):
+     - the same words in another order cost 0.05: "SHOCKWAVE GREATEST HITS 1994-2002
+       MEGAMIX!!!" vs "SHOCKWAVE GREATEST HITS MEGAMIX 1994-2002". It takes at least two
+       words, all of them, as often each, and any numbers in the same order, so "SPEEDCORE
+       DANDY" vs "SPEEDCORE DANDY XXX" and "Part 1 Chapter 2" vs "Part 2 Chapter 1" are
+       compared in full.
+     - a title quoted in full in the other (`「…」`, `『…』`, `“…”` or `"…"`) costs 0.1 plus
+       the distance to what's quoted: "未収録作品集 「別名：おにぎりトラックス」1998-2001" vs
+       "別名おにぎりトラックス".
    - DJ-mix markers at the end of a title are ignored, since the release's track titles
      leave them out: "(Mixed)", "[Mixed]", " - Mixed", "(Mixed Version)", "(Mixed Edit)",
      "(Mix Cut)" and "(Original Mix)", also as the last part of a bracket ("(Paul Copping
@@ -118,6 +139,15 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      [extended search](#extended-search)'s keys, so an album artist tag such as
      "SHARPNELSOUND (m1dy)" doesn't cost a release by "m1dy" anything. This needs no requests
      and is done for every release candidate before the confirm step, extended search or not.
+   - an artist (album artist, track artist, recording artist) is compared with the credit as
+     shown and with the credit in its artists' own names and in their sort names, a
+     person's also turned around ("Smith, John" as "John Smith"), and the closest counts:
+     "Niwapnel" fits a release credited to "ニワプネル", whose sort name is "Niwapnel". Each
+     form is tried for the whole credit, so one artist of two isn't a match for both.
+   - an album artist tag that names one of the release's labels (distance under 0.1, so
+     "SHARPNELSOUND (m1dy)" doesn't) has no album artist part, like a compilation: doujin
+     labels' releases are often tagged "SHARPNELSOUND" whoever made them. Unless the
+     release's artist fits the tag better still; any other label still counts against it.
    - a **compilation**, a release whose credit includes Various Artists (MusicBrainz's
      special artist, or "Various Artists" or "V.A." by name), alone or beside others ("DJ
      SHARPNEL & V.A."), has no album artist part: its album artist tag usually names the
@@ -206,7 +236,10 @@ The queries, most specific first, each skipped when its keys are missing:
 
 The budget is 4 searches and 6 release lookups beyond the normal search (about 10 s at
 1 request/second), and it stops early once a candidate would be accepted. Hits already
-among the candidates aren't looked up again.
+among the candidates aren't looked up again. Disc folders that the title and album artist
+don't find are searched for with the same keys before they're joined (see Group), at most 3
+searches and 4 lookups more for the set; if they're then matched one by one, each may still
+get its own extended search.
 
 **Scoring** is the normal one (tracks, lengths, track numbers, missing and extra files all
 count as before), except that the album title and album artist parts use whichever fits the

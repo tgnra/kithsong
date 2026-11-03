@@ -221,6 +221,7 @@ void mb_credit_clear(mb_credit *c) {
     free(c->parts[i].id);
     free(c->parts[i].sort_name);
     free(c->parts[i].join);
+    free(c->parts[i].artist_name);
   }
   free(c->parts);
   c->parts = NULL;
@@ -242,6 +243,8 @@ static mb_credit credit_parts(yyjson_val *credits) {
     p->id = json_strdup(a, "id");
     p->sort_name = json_strdup(a, "sort-name");
     p->join = json_strdup(v, "joinphrase");
+    const char *own = yyjson_get_str(yyjson_obj_get(a, "name"));
+    if (own && strcmp(own, p->name) != 0) p->artist_name = mc_strdup(own);
     c.count++;
   }
   if (c.count) {
@@ -261,7 +264,7 @@ static mb_credit credit_copy(const mb_credit *from) {
   for (int i = 0; i < from->count; i++) {
     const mb_credit_part *f = &from->parts[i];
     c.parts[i] = (mb_credit_part){mc_strdup(f->name), mc_strdup(f->id), mc_strdup(f->sort_name),
-                                  mc_strdup(f->join)};
+                                  mc_strdup(f->join), mc_strdup(f->artist_name)};
   }
   c.count = from->count;
   return c;
@@ -391,6 +394,8 @@ void mb_release_clear(mb_release *rel) {
   }
   free(rel->tracks);
   mb_credit_clear(&rel->credit);
+  for (int i = 0; i < rel->label_count; i++) free(rel->labels[i]);
+  free(rel->labels);
   char *strs[] = {rel->id,           rel->title,   rel->artist,  rel->artist_id,
                   rel->artist_sort,  rel->primary_artist,      rel->primary_artist_id,
                   rel->primary_artist_sort,       rel->releasegroup_id,
@@ -636,9 +641,18 @@ static mc_status release_from(yyjson_val *root, mb_release *out) {
   out->original_year = json_year(rg, "first-release-date");
   out->disc_total = (int)yyjson_arr_size(media);
 
-  yyjson_val *li = yyjson_arr_get_first(yyjson_obj_get(root, "label-info"));
+  yyjson_val *infos = yyjson_obj_get(root, "label-info");
+  yyjson_val *li = yyjson_arr_get_first(infos);
   out->label = json_strdup(yyjson_obj_get(li, "label"), "name");
   out->catalog = json_strdup(li, "catalog-number");
+  /* All of them, for scoring: an album artist tag may name any of the release's labels. */
+  size_t n_li = yyjson_arr_size(infos), lidx, lmax;
+  if (n_li && !(out->labels = calloc(n_li, sizeof *out->labels))) st = MC_ERR_NOMEM;
+  yyjson_arr_foreach(infos, lidx, lmax, li) {
+    if (st != MC_OK) break;
+    char *name = json_strdup(yyjson_obj_get(li, "label"), "name");
+    if (name) out->labels[out->label_count++] = name;
+  }
 
   size_t total = 0, mi, mmax, ti, tmax;
   yyjson_val *m, *t;

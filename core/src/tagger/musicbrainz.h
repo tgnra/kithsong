@@ -12,6 +12,7 @@ typedef struct mb_credit_part {
   char *id;
   char *sort_name;
   char *join; /* "joinphrase"; NULL if empty */
+  char *artist_name; /* the artist's own name, when it isn't the credited one; else NULL */
 } mb_credit_part;
 
 typedef struct mb_credit {
@@ -53,7 +54,9 @@ typedef struct mb_release {
   char *releasegroup_id;
   char *release_type; /* release group primary type: "Album", "Single", "EP", ... */
   char *country;
-  char *label;
+  char *label;   /* the first label */
+  char **labels; /* every label's name, in order (label is the first) */
+  int label_count;
   char *catalog;
   char *format;
   int year;

@@ -84,6 +84,10 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * MusicBrainz before matching them: if a release of that title has as many discs, and each
  * item's files fit its disc's tracks, they're joined into the first item (album = the title,
  * files in disc order) and the others become MC_IMPORT_SKIPPED with MC_IMPORT_OUTCOME_MOVED.
+ * The release is searched for by the title and album artist, and if that finds none (the tag
+ * names a label, say) with the extended search's keys (see below) from all the discs: the
+ * catalogue numbers, then the title with each other artist, at most 3 searches and 4
+ * lookups more. Its candidates are scored with the keys' best fitting title and artist.
  * The joined item is never imported straight away: it waits in MC_IMPORT_REVIEW, with error
  * saying it was joined, however high its confidence. Otherwise they're matched one by one.
  *
@@ -134,7 +138,8 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * one-file item (a single, which may be a whole release such as a DJ mix) is still below 75%
  * confidence (or there is none), the session searches more widely by itself before
  * deciding: by the catalogue numbers, by the album title with those artists, with the label,
- * and by the title alone. At most 4 more searches and 6 more release lookups per album, and
+ * and by the title alone. At most 4 more searches and 6 more release lookups per album (and
+ * up to 3 and 4 for a disc set before it's joined, see "Disc folders"), and
  * its candidates are scored the same way. Above 75%, mc_import_search_wider() runs it on
  * request. It's skipped while MusicBrainz can't be reached, and a network error ends it early (then searched_wider stays 0); a lookup of the
  * normal search that failed doesn't stop it while MusicBrainz can still be reached.

@@ -49,6 +49,11 @@
 #define POOR_CONFIDENCE 0.75
 #define WIDE_SEARCHES 4
 #define WIDE_LOOKUPS 6
+/* Disc folders (join_discs) that the title and album artist don't find are searched for
+ * with the extended search's keys, at most JOIN_SEARCHES searches plus JOIN_LOOKUPS
+ * release lookups more. */
+#define JOIN_SEARCHES 3
+#define JOIN_LOOKUPS 4
 
 typedef struct file_entry {
   char *path;
@@ -941,9 +946,6 @@ static int widen_item(mc_import *imp, int idx) {
 static void write_item(mc_import *imp, mc_library *lib, int idx, int match);
 static int defer_for_discs(mc_import *imp, int idx);
 
-/* Finds and scores candidates for an item. artist/title override the item's own tags (a
- * search the user typed); such results are never auto-accepted. Returns nonzero if nothing
- * was found because a request failed with a network error. */
 static void probe(mc_import *imp);
 
 /* --- Trace (KITHSONG_TAGGER_TRACE, see musicbrainz.h) --- */
@@ -1011,6 +1013,9 @@ static void trace_candidates(const item *it, const mc_tags *tags, const cand_lis
   mb_trace("    -> %s", decision);
 }
 
+/* Finds and scores candidates for an item. artist/title override the item's own tags (a
+ * search the user typed); such results are never auto-accepted. Returns nonzero if nothing
+ * was found because a request failed with a network error. */
 static int match_item(mc_import *imp, mc_library *lib, int idx, const char *artist,
                        const char *title) {
   item *it = &imp->items[idx];
@@ -1086,6 +1091,7 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
   else if (unreachable) set_unreachable(imp, idx, l.why);
   /* Some discs of a release whose others may be still to come: not for the user yet. */
   else if (manual || !defer_for_discs(imp, idx)) set_state(imp, idx, MC_IMPORT_REVIEW, why);
+  else mb_trace("    -> not yet: held for its other discs, or joined to a held one");
   return unreachable;
 }
 
@@ -2030,6 +2036,82 @@ static int discs_fit(const mb_release *rel, const int *map, const int *members, 
   return 1;
 }
 
+/* A disc set taken as one item, for looking up and scoring its releases. */
+typedef struct disc_set {
+  const item *joined; /* the first item with all the files, in disc order, and the title */
+  const mc_tags *tags;
+  const mc_search_keys *k;
+  const int *members; /* the items, in disc order */
+  int n;
+  char tried[RELEASE_LOOKUPS + JOIN_LOOKUPS][MC_UID_STRLEN]; /* looked up already */
+  int tried_count;
+} disc_set;
+
+/* Looks up release id and adds it to l if it has a disc per item and every item's files fit
+ * their disc, scored with the set's title and album artist, then the keys' best fit.
+ * Returns zero if it was looked up already, so cost nothing. */
+static int add_disc_release(mc_import *imp, disc_set *s, const char *id, cand_list *l) {
+  for (int i = 0; i < s->tried_count; i++)
+    if (strcmp(s->tried[i], id) == 0) return 0;
+  if (s->tried_count < (int)(sizeof s->tried / sizeof *s->tried)) memcpy(s->tried[s->tried_count++], id, MC_UID_STRLEN);
+  const item *it = s->joined;
+  mb_release rel;
+  mc_status st = mb_lookup_release(id, &rel, &l->call);
+  note_error(l, st);
+  if (st != MC_OK) return 1;
+  candidate *c = audio_discs(&rel) == s->n ? cand_push(l) : NULL;
+  int *map = malloc((size_t)it->file_count * sizeof *map);
+  mc_release_score score;
+  if (!c || !map || mc_score_release(&rel, s->tags, it->file_count, it->album, it->artist, map, &score) != MC_OK ||
+      !discs_fit(&rel, map, s->members, s->n, imp->items)) {
+    if (c) l->n--;
+    free(map);
+    mb_release_clear(&rel);
+    return 1;
+  }
+  c->rel = rel;
+  c->map = map;
+  c->distance = score.distance;
+  c->missing = score.missing;
+  c->extra = score.extra;
+  scored_with(c, it->album, it->artist);
+  rescore(it, s->tags, s->k, c); /* "Label" as the album artist mustn't cost the right one */
+  return 1;
+}
+
+/* When the title and album artist find nothing (the album artist tag names a label, say),
+ * searches as the extended search would: by the catalogue numbers, then the title with
+ * each other artist, until the budget is spent or a candidate would be accepted. searched
+ * is the artist the first search used, if any. */
+static void join_search(mc_import *imp, disc_set *s, const char *searched, cand_list *l) {
+  const mc_search_keys *k = s->k;
+  wide_query plan[1 + MC_KEYS_MAX];
+  int np = 0;
+  if (k->catno_count)
+    plan[np++] = (wide_query){{.catnos = (const char *const *)k->catnos, .catno_count = k->catno_count}, 3};
+  for (int i = 0; i < k->artist_count; i++)
+    if (!same_text(k->artists[i], searched))
+      plan[np++] = (wide_query){{.album = s->joined->album, .artist = k->artists[i]}, 2};
+
+  int searches = 0, lookups = 0;
+  for (int i = 0; i < np && searches < JOIN_SEARCHES && lookups < JOIN_LOOKUPS; i++) {
+    if (cancelled(imp)) return;
+    char ids[8][MC_UID_STRLEN];
+    int found = 0;
+    mc_status st = mb_search_releases_by(&plan[i].q, s->joined->file_count, ids, 8, &found, &l->call);
+    searches++;
+    note_error(l, st);
+    if (st == MC_ERR_NET) return;
+    for (int j = 0, taken = 0; j < found && taken < plan[i].lookups && lookups < JOIN_LOOKUPS; j++) {
+      if (!add_disc_release(imp, s, ids[j], l)) continue;
+      lookups++;
+      taken++;
+      if (cancelled(imp) || l->net == MC_ERR_NET) return;
+    }
+    if (any_accepted(imp, s->joined, l)) break;
+  }
+}
+
 /* Joins item idx's disc set (see above) into its first item if MusicBrainz knows the album:
  * all the files move there, the other items are skipped as moved, and the joined item waits
  * for the user however good its match. Returns nonzero if idx was joined; else (no set,
@@ -2073,33 +2155,23 @@ static int join_discs(mc_import *imp, int idx) {
   }
   set_state(imp, idx, MC_IMPORT_MATCHING, NULL);
 
+  /* The set as one item (read only): its keys come from all the discs' files. */
+  item joined = *lead;
+  joined.files = order;
+  joined.file_count = files;
+  joined.album = title;
+  mc_search_keys k;
+  item_keys(imp, &joined, tags, &k);
+  disc_set s = {.joined = &joined, .tags = tags, .k = &k, .members = members, .n = n};
+
   const char *artist = searched_artist(lead);
   char ids[RELEASE_LOOKUPS][MC_UID_STRLEN];
   int found = 0;
   cand_list l = cand_list_for(imp);
   note_error(&l, mb_search_releases(artist, title, files, ids, RELEASE_LOOKUPS, &found, &l.call));
-  for (int h = 0; h < found && !cancelled(imp) && l.net != MC_ERR_NET; h++) {
-    mb_release rel;
-    mc_status st = mb_lookup_release(ids[h], &rel, &l.call);
-    note_error(&l, st);
-    if (st != MC_OK) continue;
-    candidate *c = audio_discs(&rel) == n ? cand_push(&l) : NULL;
-    int *map = malloc((size_t)files * sizeof *map);
-    mc_release_score score;
-    if (!c || !map || mc_score_release(&rel, tags, files, title, lead->artist, map, &score) != MC_OK ||
-        !discs_fit(&rel, map, members, n, imp->items)) {
-      if (c) l.n--;
-      free(map);
-      mb_release_clear(&rel);
-      continue;
-    }
-    c->rel = rel;
-    c->map = map;
-    c->distance = score.distance;
-    c->missing = score.missing;
-    c->extra = score.extra;
-    scored_with(c, title, lead->artist);
-  }
+  for (int h = 0; h < found && !cancelled(imp) && l.net != MC_ERR_NET; h++) add_disc_release(imp, &s, ids[h], &l);
+  if (l.n == 0 && l.net != MC_ERR_NET) join_search(imp, &s, artist, &l);
+  mc_search_keys_clear(&k);
   free(tags);
   if (l.n == 0) {
     free(title);

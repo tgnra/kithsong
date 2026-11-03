@@ -9,10 +9,14 @@
 
 /* Normalised edit distance. Ignores case, punctuation, common Latin accents, a leading
  * "The", DJ-mix markers like "(Mixed)", digit 0 for letter O and, if that brings the strings
- * closer, suffixes like "(Remastered)" or "～Subtitle" and a translation added to one of them
- * (each at a cost of 0.1). Returns -1 if either string is missing, meaning "unknown, don't
- * count it". */
+ * closer, suffixes like "(Remastered)" or "～Subtitle", and a translation or a ": Subtitle"
+ * added to one of them (each at a cost of 0.1). Returns -1 if either string is missing,
+ * meaning "unknown, don't count it". */
 double mc_string_distance(const char *a, const char *b);
+
+/* mc_string_distance for album titles, which also allows the same words in another order (at
+ * a cost of 0.05) and one title quoted in the other, "「Title」" (0.1). */
+double mc_album_distance(const char *a, const char *b);
 
 /* Distance between one file and one release track. */
 double mc_track_distance(const mc_tags *file, const mb_track *track, int abs_index);

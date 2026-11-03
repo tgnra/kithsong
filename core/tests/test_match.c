@@ -100,6 +100,65 @@ static void test_title_mix_markers(void) {
   CHECK(mc_string_distance("H20", "H2") > 0);
 }
 
+/* A subtitle after a colon, a title quoted in the other, and words in another order. */
+static void test_title_subtitles(void) {
+  double sub = mc_string_distance("DupleX EP: 204 vs SHARPNEL", "DupleX EP");
+  CHECK(sub > 0 && sub <= 0.1 + 1e-9);
+  CHECK(NEAR(mc_string_distance("DupleX EP", "DupleX EP: 204 vs SHARPNEL"), sub));
+  /* 別名：おにぎりトラックス, with a fullwidth colon */
+  sub = mc_string_distance("\xE5\x88\xA5\xE5\x90\x8D\xEF\xBC\x9A\xE3\x81\x8A\xE3\x81\xAB\xE3\x81\x8E\xE3\x82\x8A",
+                           "\xE5\x88\xA5\xE5\x90\x8D");
+  CHECK(sub > 0 && sub <= 0.1 + 1e-9);
+  CHECK(mc_string_distance("Title: Subtitle: More", "Title: Subtitle") <= 0.1 + 1e-9);
+  /* A colon inside a word ("Re:Mix", "12:00") isn't one. */
+  CHECK(mc_string_distance("Re:Mix", "Re") > 0.5);
+  /* Only one side's: movements of one work stay apart. */
+  CHECK(mc_string_distance("Op. 5: I. Allegro", "Op. 5: II. Adagio") > 0.3);
+  /* Numbering after the colon is another release, compared in full. */
+  CHECK(mc_string_distance("Title: Part 2", "Title") > 0.25);
+  CHECK(mc_string_distance("Title: Vol. 2", "Title") > 0.25);
+  CHECK(mc_string_distance("Title: Volume II", "Title") > 0.25);
+  CHECK(mc_string_distance("Title: Disc Two", "Title") > 0.25);
+  CHECK(mc_string_distance("Title: Vol. 2 (Remastered)", "Title") > 0.25);
+  CHECK(mc_string_distance("SPF INFINI: 2", "SPF INFINI") >= 0.1 - 1e-9);
+  CHECK(mc_string_distance("Title: Part 1", "Title: Part 2") > 0);
+
+  /* 未収録作品集 「別名：おにぎりトラックス」1998-2001 vs 別名おにぎりトラックス */
+  const char *onigiri = "\xE5\x88\xA5\xE5\x90\x8D\xE3\x81\x8A\xE3\x81\xAB\xE3\x81\x8E\xE3\x82\x8A"
+                        "\xE3\x83\x88\xE3\x83\xA9\xE3\x83\x83\xE3\x82\xAF\xE3\x82\xB9";
+  const char *collected = "\xE6\x9C\xAA\xE5\x8F\x8E\xE9\x8C\xB2\xE4\xBD\x9C\xE5\x93\x81\xE9\x9B\x86 "
+                          "\xE3\x80\x8C\xE5\x88\xA5\xE5\x90\x8D\xEF\xBC\x9A\xE3\x81\x8A\xE3\x81\xAB"
+                          "\xE3\x81\x8E\xE3\x82\x8A\xE3\x83\x88\xE3\x83\xA9\xE3\x83\x83\xE3\x82\xAF"
+                          "\xE3\x82\xB9\xE3\x80\x8D" "1998-2001";
+  double q = mc_album_distance(collected, onigiri);
+  CHECK(q > 0 && q <= 0.1 + 1e-9);
+  CHECK(NEAR(mc_album_distance(onigiri, collected), q));
+  CHECK(mc_string_distance(collected, onigiri) > 0.3); /* album titles only */
+  q = mc_album_distance("Best of \xE2\x80\x9CThe Wall\xE2\x80\x9D", "The Wall"); /* “” */
+  CHECK(q > 0 && q <= 0.1 + 1e-9);
+  q = mc_album_distance("Songs from \"Rocky\" (OST)", "Rocky");
+  CHECK(q > 0 && q <= 0.1 + 1e-9);
+  /* The whole of the other title must be what's quoted. */
+  CHECK(mc_album_distance("Songs from \xE3\x80\x8E" "Foo\xE3\x80\x8F", "Foo Bar") > 0.2);
+  CHECK(mc_album_distance("Songs from \xE3\x80\x8E" "Foo Bar\xE3\x80\x8F", "Foo") > 0.2);
+  CHECK(mc_album_distance("Songs from \"Foo", "Foo") > 0.2); /* not closed */
+
+  double order = mc_album_distance("SHOCKWAVE GREATEST HITS 1994-2002 MEGAMIX!!!",
+                                   "SHOCKWAVE GREATEST HITS MEGAMIX 1994-2002");
+  CHECK(order > 0 && order <= 0.05 + 1e-9);
+  CHECK(mc_string_distance("SHOCKWAVE GREATEST HITS 1994-2002 MEGAMIX!!!",
+                           "SHOCKWAVE GREATEST HITS MEGAMIX 1994-2002") > 0.1); /* album titles only */
+  CHECK(NEAR(mc_album_distance("Abbey Road", "Abbey Road"), 0));
+  /* Most words in common isn't the same words. */
+  CHECK(mc_album_distance("SPEEDCORE DANDY", "SPEEDCORE DANDY XXX") > 0.15);
+  CHECK(mc_album_distance("SPF INFINI", "SPF INFINI 2") >= 0.1 - 1e-9);
+  CHECK(mc_album_distance("Hits Greatest", "Greatest Hits Hits") > 0.1);
+  /* Numbers in another order are another release. */
+  CHECK(mc_album_distance("Part 1 Chapter 2", "Part 2 Chapter 1") > 0.1);
+  /* One word is no order. */
+  CHECK(mc_album_distance("Abc", "Cba") > 0.5);
+}
+
 static void test_assign(void) {
   /* Optimum is 0->1, 1->0, 2->2 (cost 1 + 2 + 2 = 5). */
   const double square[] = {4, 1, 3,
@@ -288,7 +347,7 @@ static void test_various(void) {
   tracks[0].artist = "Neon Genesis Gabbangelion";
   tracks[1].artist = tracks[2].artist = "DJ SHARPNEL";
   mb_credit_part va = {"Various Artists", "89ad4ac3-39f7-470e-963a-56509c546377", "Various Artists",
-                       NULL};
+                       NULL, NULL};
   mb_release rel = {0};
   rel.title = "SHARPNELSOUND COLLECTION \xE5\xA3\xB1";
   rel.artist = "Various Artists";
@@ -309,8 +368,8 @@ static void test_various(void) {
 
   /* A DJ with Various Artists is a compilation too. */
   mb_credit_part dj_va[] = {
-    {"DJ SHARPNEL", "11111111-2222-3333-4444-555555555555", "DJ SHARPNEL", " & "},
-    {"V.A.", "89ad4ac3-39f7-470e-963a-56509c546377", "Various Artists", NULL}};
+    {"DJ SHARPNEL", "11111111-2222-3333-4444-555555555555", "DJ SHARPNEL", " & ", NULL},
+    {"V.A.", "89ad4ac3-39f7-470e-963a-56509c546377", "Various Artists", NULL, NULL}};
   rel.artist = "DJ SHARPNEL & V.A.";
   rel.credit = (mb_credit){dj_va, 2};
   CHECK(mc_score_release(&rel, files, 3, album, "SHARPNELSOUND", map, &s) == MC_OK);
@@ -326,6 +385,109 @@ static void test_various(void) {
   CHECK(mc_score_release(&rel, files, 3, album, "SHARPNELSOUND", map, &s) == MC_OK);
   CHECK(right.distance < 0.02);
   CHECK(s.distance > right.distance + 0.05);
+}
+
+/* Two labels, and an artist credited under another name than their own. */
+static const char k_labels_json[] =
+  "{\"id\":\"r1\",\"title\":\"EARLY STYLE OF OTAKUSPEEDVIBE 1996\xE2\x86\x92" "1998\","
+  "\"artist-credit\":[{\"name\":\"PROJECT GABBANGELION\",\"joinphrase\":\"\","
+  "\"artist\":{\"id\":\"a1\",\"name\":\"Project Gabbangelion\",\"sort-name\":\"Project Gabbangelion\"}}],"
+  "\"label-info\":[{\"catalog-number\":\"SRPC-0011\",\"label\":{\"name\":\"Other Label\"}},"
+  "{\"catalog-number\":\"SRPC-0011\",\"label\":{\"name\":\"SHARPNELSOUND\"}}],"
+  "\"media\":[{\"position\":1,\"tracks\":[{\"id\":\"t1\",\"position\":1,\"title\":\"lol it out\","
+  "\"length\":349000,\"recording\":{\"id\":\"rec1\"}},{\"id\":\"t2\",\"position\":2,"
+  "\"title\":\"Gabba Mt.Fuji\",\"length\":235000,\"recording\":{\"id\":\"rec2\"}}]}]}";
+
+/* "EARLY STYLE OF OTAKUSPEEDVIBE": by PROJECT GABBANGELION, tagged with its label. */
+static void test_label(void) {
+  mb_release rel = {0};
+  CHECK(mb_release_parse(k_labels_json, sizeof k_labels_json - 1, &rel) == MC_OK);
+  CHECK_STR(rel.label, "Other Label");
+  CHECK(rel.label_count == 2);
+  if (rel.label_count == 2) CHECK_STR(rel.labels[1], "SHARPNELSOUND");
+  CHECK(rel.credit.count == 1);
+  if (rel.credit.count == 1) CHECK_STR(rel.credit.parts[0].artist_name, "Project Gabbangelion");
+
+  mc_tags files[] = {file(1, "lol it out", 349000), file(2, "Gabba Mt.Fuji", 235000)};
+  for (int i = 0; i < 2; i++) files[i].artist = "jea", files[i].album = rel.title;
+  int map[2];
+  mc_release_score s, right;
+  CHECK(mc_score_release(&rel, files, 2, rel.title, "PROJECT GABBANGELION", map, &right) == MC_OK);
+  CHECK(right.distance < 0.02);
+  /* Any of its labels, the second one too. */
+  CHECK(mc_score_release(&rel, files, 2, rel.title, "SHARPNELSOUND", map, &s) == MC_OK);
+  CHECK(s.missing == 0 && s.extra == 0);
+  CHECK(s.distance < 0.02);
+
+  /* Some other label, or a label with an artist after it, is still a wrong album artist. */
+  CHECK(mc_score_release(&rel, files, 2, rel.title, "MAD BLAST TRAXX", map, &s) == MC_OK);
+  CHECK(s.distance > 0.1);
+  CHECK(mc_score_release(&rel, files, 2, rel.title, "SHARPNELSOUND (m1dy)", map, &s) == MC_OK);
+  CHECK(s.distance > 0.1);
+  mb_release_clear(&rel);
+
+  /* Hand-made releases with only the first label set. */
+  mb_track tracks[] = {track(1, "lol it out", 349000)};
+  tracks[0].artist = "jea";
+  mb_release one = {0};
+  one.title = "EARLY STYLE";
+  one.artist = "PROJECT GABBANGELION";
+  one.label = "SHARPNELSOUND";
+  one.tracks = tracks;
+  one.track_count = 1;
+  CHECK(mc_score_release(&one, files, 1, "EARLY STYLE", "SHARPNELSOUND", map, &s) == MC_OK);
+  CHECK(s.distance < 0.02);
+}
+
+/* "DupleX EP": credited to ニワプネル, sort name Niwapnel; and a person's "Last, First". */
+static void test_sort_names(void) {
+  mb_track tracks[] = {track(1, "DupleX", 381000), track(2, "SimpleX", 309000)};
+  tracks[0].artist = tracks[1].artist = "Niwapnel";
+  mb_credit_part niwapnel = {"\xE3\x83\x8B\xE3\x83\xAF\xE3\x83\x97\xE3\x83\x8D\xE3\x83\xAB", "a2",
+                             "Niwapnel", NULL, NULL};
+  mb_release rel = {0};
+  rel.title = "DupleX EP";
+  rel.artist = niwapnel.name;
+  rel.credit = (mb_credit){&niwapnel, 1};
+  rel.tracks = tracks;
+  rel.track_count = 2;
+
+  mc_tags files[] = {file(1, "DupleX", 381000), file(2, "SimpleX", 309000)};
+  for (int i = 0; i < 2; i++) files[i].artist = "Niwapnel", files[i].album = "DupleX EP";
+  int map[2];
+  mc_release_score s;
+  CHECK(mc_score_release(&rel, files, 2, "DupleX EP", "Niwapnel", map, &s) == MC_OK);
+  CHECK(s.distance < 0.02);
+  CHECK(mc_score_release(&rel, files, 2, "DupleX EP", "Somebody Else", map, &s) == MC_OK);
+  CHECK(s.distance > 0.1);
+
+  /* The artist's own name, when credited under another. */
+  niwapnel.sort_name = NULL;
+  niwapnel.artist_name = "Niwapnel";
+  CHECK(mc_score_release(&rel, files, 2, "DupleX EP", "Niwapnel", map, &s) == MC_OK);
+  CHECK(s.distance < 0.02);
+
+  /* "Smith, John" turned around; and in a credit of two, each artist's own form. */
+  mb_credit_part people[] = {{"J. Smith", "a3", "Smith, John", " & ", NULL},
+                             {"Jane Doe", "a4", "Doe, Jane", NULL, NULL}};
+  rel.artist = "J. Smith";
+  rel.credit = (mb_credit){people, 1};
+  people[0].join = NULL;
+  CHECK(mc_score_release(&rel, files, 2, "DupleX EP", "John Smith", map, &s) == MC_OK);
+  CHECK(s.distance < 0.02);
+  people[0].join = " & ";
+  rel.artist = "J. Smith & Jane Doe";
+  rel.credit = (mb_credit){people, 2};
+  CHECK(mc_score_release(&rel, files, 2, "DupleX EP", "John Smith & Jane Doe", map, &s) == MC_OK);
+  CHECK(s.distance < 0.02);
+  /* One of the two isn't the whole credit. */
+  CHECK(mc_score_release(&rel, files, 2, "DupleX EP", "John Smith", map, &s) == MC_OK);
+  CHECK(s.distance > 0.05);
+
+  /* Track artists the same way. */
+  tracks[0].artist = niwapnel.name;
+  tracks[0].credit = (mb_credit){&niwapnel, 1};
+  CHECK(NEAR(mc_track_distance(&files[0], &tracks[0], 0), 0));
 }
 
 static void test_recording(void) {
@@ -354,10 +516,13 @@ int main(void) {
   test_strings();
   test_title_decorations();
   test_title_mix_markers();
+  test_title_subtitles();
   test_assign();
   test_release();
   test_video_discs();
   test_various();
+  test_label();
+  test_sort_names();
   test_recording();
   return TEST_RESULT();
 }

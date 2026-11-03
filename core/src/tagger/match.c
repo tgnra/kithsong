@@ -139,6 +139,63 @@ static const char *suffix_start(const char *s) {
   return end;
 }
 
+/* Whether [s, s + n) is one of words, ignoring case. */
+static int is_word(const char *s, size_t n, const char *const *words) {
+  for (; *words; words++) {
+    size_t i = 0;
+    if (strlen(*words) != n) continue;
+    while (i < n && lower_ascii(s[i]) == (*words)[i]) i++;
+    if (i == n) return 1;
+  }
+  return 0;
+}
+
+/* Whether [s, e) only numbers a part: "2", "Vol. 2", "Part II", "Disc Two", "2nd Season",
+ * up to any bracketed suffix. */
+static int is_numbering(const char *s, const char *e) {
+  static const char *const labels[] = {"vol", "volume", "part", "pt", "no", "number", "disc",
+                                       "disk", "cd", "chapter", "ch", "episode", "act", "book",
+                                       "season", "st", "nd", "rd", "th", NULL};
+  static const char *const numbers[] = {"one", "two", "three", "four", "five", "six", "seven",
+                                        "eight", "nine", "ten", NULL};
+  int number = 0;
+  while (s < e) {
+    unsigned char c = (unsigned char)*s;
+    if (c >= 0x80) return 0;
+    if (c == '(' || c == '[') break; /* a suffix: "Vol. 2 (Remastered)" still numbers */
+    if (c >= '0' && c <= '9') {
+      while (s < e && *s >= '0' && *s <= '9') s++;
+      number = 1;
+      continue;
+    }
+    if (lower_ascii((char)c) < 'a' || lower_ascii((char)c) > 'z') {
+      s++;
+      continue;
+    }
+    const char *w = s;
+    int roman = 1;
+    while (s < e && lower_ascii(*s) >= 'a' && lower_ascii(*s) <= 'z') {
+      char l = (char)lower_ascii(*s++);
+      roman &= l == 'i' || l == 'v' || l == 'x';
+    }
+    size_t n = (size_t)(s - w);
+    if ((roman && n <= 4) || is_word(w, n, numbers)) number = 1;
+    else if (!is_word(w, n, labels)) return 0;
+  }
+  return number;
+}
+
+/* The next colon from p on that starts a subtitle, or NULL: ": " or a fullwidth "：", not at
+ * the start of s, and not before what only numbers a part ("Title: Part 2"). */
+static const char *colon_from(const char *s, const char *p) {
+  const char *end = s + strlen(s);
+  for (p = p > s ? p : s + 1; *p; p++) {
+    size_t len = p[0] == ':' && p[1] == ' ' ? 1 : strncmp(p, "\xEF\xBC\x9A", 3) == 0 ? 3 : 0;
+    if (len && !is_numbering(p + len, end)) return p;
+  }
+  return NULL;
+}
+
 enum { SCRIPT_NONE, SCRIPT_LATIN, SCRIPT_GREEK, SCRIPT_CYRILLIC, SCRIPT_CJK };
 
 /* The script of a letter; SCRIPT_NONE for digits, punctuation and what isn't classified. */
@@ -231,8 +288,188 @@ double mc_string_distance(const char *a, const char *b) {
     double stripped = distance_range(a, a_end, b, bt) + 0.1;
     if (stripped < d) d = stripped;
   }
+  /* "DupleX EP: 204 vs SHARPNEL" vs "DupleX EP": the title plus a subtitle. Also only one
+   * side's, so movements ("Op. 5: I. Allegro", "Op. 5: II. Adagio") stay apart. */
+  for (const char *c = colon_from(a, a); d > 0.1 && c; c = colon_from(a, c + 1)) {
+    double stripped = distance_range(a, c, b, b_end) + 0.1;
+    if (stripped < d) d = stripped;
+  }
+  for (const char *c = colon_from(b, b); d > 0.1 && c; c = colon_from(b, c + 1)) {
+    double stripped = distance_range(a, a_end, b, c) + 0.1;
+    if (stripped < d) d = stripped;
+  }
   free(ma);
   free(mb);
+  return d;
+}
+
+typedef struct word {
+  const uint32_t *s;
+  size_t n;
+} word;
+
+/* Splits s into its normalised words: buf gets their letters, words where each is. Returns
+ * the count; buf needs room for normalize's output, words for one per byte. */
+static size_t words_of(const char *s, uint32_t *buf, word *words) {
+  size_t count = 0, n = 0;
+  int in_word = 0;
+  const unsigned char *p = (const unsigned char *)s;
+  while (*p) {
+    int k = mc_text_fold(mc_utf8_next(&p), buf + n);
+    if (k == MC_FOLD_SPACE || k == MC_FOLD_PUNCT) in_word = 0;
+    if (k <= 0) continue;
+    if (!in_word) words[count++] = (word){buf + n, 0};
+    in_word = 1;
+    words[count - 1].n += (size_t)k;
+    n += (size_t)k;
+  }
+  return count;
+}
+
+static int word_cmp(const void *x, const void *y) {
+  const word *a = x, *b = y;
+  for (size_t i = 0; i < a->n && i < b->n; i++)
+    if (a->s[i] != b->s[i]) return a->s[i] < b->s[i] ? -1 : 1;
+  return a->n < b->n ? -1 : a->n > b->n;
+}
+
+static int has_digit(const word *w) {
+  for (size_t i = 0; i < w->n; i++)
+    if (w->s[i] >= '0' && w->s[i] <= '9') return 1;
+  return 0;
+}
+
+/* Whether a and b have the same words in another order: "SHOCKWAVE GREATEST HITS 1994-2002
+ * MEGAMIX!!!" and "SHOCKWAVE GREATEST HITS MEGAMIX 1994-2002". Their numbers must be in the
+ * same order, so "Part 1 Chapter 2" and "Part 2 Chapter 1" stay apart. */
+static int same_words(const char *a, const char *b) {
+  size_t la = strlen(a), lb = strlen(b);
+  uint32_t *ba = malloc((la * 3 + 1) * sizeof *ba), *bb = malloc((lb * 3 + 1) * sizeof *bb);
+  word *wa = malloc((la + 1) * sizeof *wa), *wb = malloc((lb + 1) * sizeof *wb);
+  int same = 0;
+  if (ba && bb && wa && wb) {
+    size_t n = words_of(a, ba, wa), m = words_of(b, bb, wb);
+    same = n == m && n >= 2;
+    for (size_t i = 0, j = 0; same && (i < n || j < m); i++, j++) {
+      while (i < n && !has_digit(&wa[i])) i++;
+      while (j < m && !has_digit(&wb[j])) j++;
+      same = (i < n) == (j < m) && (i == n || word_cmp(&wa[i], &wb[j]) == 0);
+    }
+    qsort(wa, n, sizeof *wa, word_cmp);
+    qsort(wb, m, sizeof *wb, word_cmp);
+    for (size_t i = 0; same && i < n; i++) same = word_cmp(&wa[i], &wb[i]) == 0;
+  }
+  free(ba);
+  free(bb);
+  free(wa);
+  free(wb);
+  return same;
+}
+
+/* The next quoted part of s from p on: 「…」, 『…』, “…” or "…". Sets [*in, *in_end) to what's
+ * inside and returns what follows the closing quote, or NULL if there's none. */
+static const char *next_quote(const char *p, const char **in, const char **in_end) {
+  static const char *const pairs[][2] = {{"\xE3\x80\x8C", "\xE3\x80\x8D"}, /* 「」 */
+                                         {"\xE3\x80\x8E", "\xE3\x80\x8F"}, /* 『』 */
+                                         {"\xE2\x80\x9C", "\xE2\x80\x9D"}, /* “” */
+                                         {"\"", "\""}};
+  for (; *p; p++)
+    for (size_t k = 0; k < sizeof pairs / sizeof *pairs; k++) {
+      size_t len = strlen(pairs[k][0]);
+      if (strncmp(p, pairs[k][0], len) != 0) continue;
+      const char *close = strstr(p + len, pairs[k][1]);
+      if (!close) continue;
+      *in = p + len;
+      *in_end = close;
+      return close + strlen(pairs[k][1]);
+    }
+  return NULL;
+}
+
+/* The smallest distance between the whole of b and a part of a quoted in it, plus 0.1, or 1. */
+static double quoted_distance(const char *a, const char *b) {
+  double d = 1.0;
+  const char *in, *in_end;
+  for (const char *p = next_quote(a, &in, &in_end); p; p = next_quote(p, &in, &in_end)) {
+    double q = distance_range(in, in_end, b, b + strlen(b)) + 0.1;
+    if (q < d) d = q;
+  }
+  return d;
+}
+
+double mc_album_distance(const char *a, const char *b) {
+  double d = mc_string_distance(a, b);
+  /* Word order: rarer and riskier in track titles, so only here. */
+  if (d > 0.05 && same_words(a, b)) d = 0.05;
+  /* 「別名：おにぎりトラックス」 quoted in a longer title is the title. */
+  if (d > 0.1) {
+    double q = quoted_distance(a, b), r = quoted_distance(b, a);
+    if (q < d) d = q;
+    if (r < d) d = r;
+  }
+  return d;
+}
+
+/* --- Artists --- */
+
+/* "Smith, John" -> "John Smith", as a person's MusicBrainz sort name turned around; NULL if
+ * it has no ", ". */
+static char *turned_sort_name(const char *sort) {
+  const char *comma = sort ? strstr(sort, ", ") : NULL;
+  if (!comma || comma == sort || !comma[2]) return NULL;
+  size_t head = (size_t)(comma - sort), tail = strlen(comma + 2);
+  char *out = malloc(head + tail + 2);
+  if (!out) return NULL;
+  memcpy(out, comma + 2, tail);
+  out[tail] = ' ';
+  memcpy(out + tail + 1, sort, head);
+  out[head + tail + 1] = '\0';
+  return out;
+}
+
+enum { FORM_OWN, FORM_SORT, FORM_SORT_TURNED, FORM_COUNT };
+
+/* The credit with each artist's name in one form (their own name, sort name, sort name
+ * turned around) where they have it, as credited where not; NULL if none has it. */
+static char *credit_in_form(const mb_credit *c, int form) {
+  char **names = calloc((size_t)c->count, sizeof *names);
+  size_t len = 1;
+  int any = 0;
+  for (int i = 0; names && i < c->count; i++) {
+    const mb_credit_part *p = &c->parts[i];
+    const char *s = form == FORM_OWN ? p->artist_name : form == FORM_SORT ? p->sort_name : NULL;
+    names[i] = form == FORM_SORT_TURNED ? turned_sort_name(p->sort_name) : mc_strdup(s);
+    if (names[i] && strcmp(names[i], p->name) == 0) {
+      free(names[i]); /* nothing new to compare */
+      names[i] = NULL;
+    }
+    any |= names[i] != NULL;
+    len += strlen(names[i] ? names[i] : p->name) + (p->join ? strlen(p->join) : 0);
+  }
+  char *out = names && any ? malloc(len) : NULL;
+  if (out) {
+    out[0] = '\0';
+    for (int i = 0; i < c->count; i++) {
+      strcat(out, names[i] ? names[i] : c->parts[i].name);
+      if (c->parts[i].join) strcat(out, c->parts[i].join);
+    }
+  }
+  for (int i = 0; names && i < c->count; i++) free(names[i]);
+  free(names);
+  return out;
+}
+
+/* How far an artist tag is from a credit: the best of the credit as shown and as its
+ * artists' own names and sort names, so "Niwapnel" fits a release credited to "ニワプネル"
+ * (sort name "Niwapnel") and "John Smith" one by "Smith, John". */
+static double artist_distance(const char *artist, const char *credited, const mb_credit *c) {
+  double d = mc_string_distance(artist, credited);
+  for (int f = 0; d != 0.0 && artist && f < FORM_COUNT; f++) {
+    char *s = credit_in_form(c, f);
+    double e = mc_string_distance(artist, s);
+    if (e >= 0 && (d < 0 || e < d)) d = e;
+    free(s);
+  }
   return d;
 }
 
@@ -271,7 +508,7 @@ double mc_track_distance(const mc_tags *file, const mb_track *track, int abs_ind
                file->track == abs_index + 1;
     add(&w, same ? 0.0 : 1.0, 1.0);
   }
-  add(&w, mc_string_distance(file->artist, track->artist), 1.0);
+  add(&w, artist_distance(file->artist, track->artist, &track->credit), 1.0);
   return w.weight > 0 ? w.sum / w.weight : 0.5;
 }
 
@@ -376,6 +613,20 @@ static int is_compilation(const mb_release *rel) {
   return is_various(rel->artist);
 }
 
+/* Closer than this, an album artist tag names one of the release's labels. Below the 0.1 a
+ * suffix costs, so "SHARPNELSOUND (m1dy)" doesn't: its artist is still scored. */
+#define LABEL_MATCH_MAX 0.1
+
+/* How close the album artist tag is to the nearest of the release's labels, or -1. */
+static double label_distance(const mb_release *rel, const char *artist) {
+  double best = rel->label_count ? -1.0 : mc_string_distance(artist, rel->label);
+  for (int i = 0; i < rel->label_count; i++) {
+    double d = mc_string_distance(artist, rel->labels[i]);
+    if (d >= 0 && (best < 0 || d < best)) best = d;
+  }
+  return best;
+}
+
 static int has_audio(const mb_release *rel) {
   for (int j = 0; j < rel->track_count; j++)
     if (!rel->tracks[j].video) return 1;
@@ -463,8 +714,13 @@ mc_status mc_score_release_map(const mb_release *rel, const mc_tags *files, int 
 
   weighted w = {0, 0};
   /* Heavy enough that a wrong title or artist alone drops below the default threshold. */
-  add(&w, mc_string_distance(album, rel->title), 5.0);
-  if (!is_compilation(rel)) add(&w, mc_string_distance(artist, rel->artist), 5.0);
+  add(&w, mc_album_distance(album, rel->title), 5.0);
+  /* An album artist tag that names the release's label (a doujin label's releases tagged
+   * "SHARPNELSOUND") says nothing about who it's credited to: no part, as for a compilation. */
+  double artist_d = artist_distance(artist, rel->artist, &rel->credit);
+  double label_d = label_distance(rel, artist);
+  int names_label = label_d >= 0 && label_d < LABEL_MATCH_MAX && (artist_d < 0 || label_d < artist_d);
+  if (!is_compilation(rel) && !names_label) add(&w, artist_d, 5.0);
   add(&w, matched ? track_sum / matched : 1.0, 6.0);
   add(&w, (double)out->missing / scored, 10.0);
   add(&w, (double)out->extra / n, 6.0);
@@ -479,7 +735,7 @@ double mc_score_recording(const mb_release *rec, const mc_tags *file) {
   weighted w = {0, 0};
   double title = mc_string_distance(file->title, t->title);
   add(&w, title < 0 ? 1.0 : title, 3.0);
-  add(&w, mc_string_distance(file->artist, t->artist), 3.0);
+  add(&w, artist_distance(file->artist, t->artist, &t->credit), 3.0);
   add(&w, length_distance(file->duration_ms, t->length_ms), 2.0);
   return w.sum / w.weight;
 }
