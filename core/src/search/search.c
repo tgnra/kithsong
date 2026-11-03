@@ -21,6 +21,7 @@
 #define MAX_FIELDS 3
 #define KIND_COUNT 5
 #define NO_TEXT UINT32_MAX
+#define NO_ITEM UINT32_MAX
 
 /* How much a match in each field counts: the name first, then the artist and album that
  * tell an album or track apart. */
@@ -54,6 +55,7 @@ typedef struct item {
   uint32_t name, artist, album;  /* in text, or NO_TEXT */
   uint32_t key, key_len;        /* the name folded, its words joined by ' ', in the arena */
   int words;                    /* how many words the name has */
+  uint32_t found_as;            /* a mix's track: its album's item, found instead; or NO_ITEM */
 } item;
 
 typedef struct word {
@@ -75,6 +77,7 @@ struct mc_search_index {
   int64_t epoch; /* meta.changelog_epoch then (see EPOCH_SQL) */
   item *items;
   size_t nitems, items_cap;
+  size_t albums, nalbums; /* where the albums are in items, in uid order */
   char *text; /* the items' names, artists and albums, each ending in '\0' */
   size_t text_len, text_cap;
   uint32_t *arena; /* vocabulary words and item keys */
@@ -281,6 +284,7 @@ static int add_item(mc_search_index *ix, mc_search_kind kind, int is_smart, cons
   memset(it, 0, sizeof *it);
   it->kind = kind;
   it->is_smart = is_smart;
+  it->found_as = NO_ITEM;
   snprintf(it->uid, sizeof it->uid, "%s", uid ? uid : "");
   snprintf(it->album_uid, sizeof it->album_uid, "%s", album_uid ? album_uid : "");
   int64_t at[3] = {text_put(ix, name ? name : ""), text_put(ix, artist), text_put(ix, album)};
@@ -315,6 +319,19 @@ static const char *col(sqlite3_stmt *stmt, int i) {
   return (const char *)sqlite3_column_text(stmt, i);
 }
 
+/* The item of album uid, or NO_ITEM. */
+static uint32_t album_item(const mc_search_index *ix, const char *uid) {
+  size_t lo = ix->albums, hi = ix->albums + ix->nalbums;
+  while (uid && lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    int c = strcmp(uid, ix->items[mid].uid);
+    if (!c) return (uint32_t)mid;
+    if (c < 0) hi = mid;
+    else lo = mid + 1;
+  }
+  return NO_ITEM;
+}
+
 /* Adds the rows of sql as items of kind; see build() for the columns. */
 static mc_status load(sqlite3 *db, mc_search_index *ix, mc_search_kind kind, const char *sql) {
   sqlite3_stmt *stmt;
@@ -329,10 +346,13 @@ static mc_status load(sqlite3 *db, mc_search_index *ix, mc_search_kind kind, con
       ok = add_item(ix, kind, 0, uid, name, NULL, NULL, NULL, col(stmt, 2));
       break;
     case MC_SEARCH_ALBUM:
+      if (!ix->nalbums++) ix->albums = ix->nitems;
       ok = add_item(ix, kind, 0, uid, name, col(stmt, 2), NULL, NULL, NULL);
       break;
     case MC_SEARCH_TRACK:
       ok = add_item(ix, kind, 0, uid, name, col(stmt, 2), col(stmt, 3), col(stmt, 4), NULL);
+      if (ok && sqlite3_column_int(stmt, 5))
+        ix->items[ix->nitems - 1].found_as = album_item(ix, col(stmt, 4));
       break;
     case MC_SEARCH_PLAYLIST:
     case MC_SEARCH_ALBUM_GROUP: {
@@ -434,9 +454,9 @@ static mc_status build(sqlite3 *db, mc_search_index **out) {
   if ((st = load(db, ix, MC_SEARCH_ARTIST, "SELECT uid, name, sort_name FROM artists")) != MC_OK ||
       (st = load(db, ix, MC_SEARCH_ALBUM,
                  "SELECT a.uid, a.title, coalesce(a.artist_credit, ar.name) FROM albums a" ALBUM_JOINS
-                 " WHERE NOT " ALBUM_IS_SINGLE)) != MC_OK ||
+                 " WHERE a.mix OR NOT " ALBUM_IS_SINGLE " ORDER BY a.uid")) != MC_OK ||
       (st = load(db, ix, MC_SEARCH_TRACK,
-                 "SELECT t.uid, t.title, " TRACK_ARTIST_NAME ", al.title, al.uid FROM tracks t"
+                 "SELECT t.uid, t.title, " TRACK_ARTIST_NAME ", al.title, al.uid, al.mix FROM tracks t"
                  TRACK_JOINS)) != MC_OK ||
       (st = load(db, ix, MC_SEARCH_PLAYLIST, "SELECT uid, name FROM playlists")) != MC_OK ||
       (st = load(db, ix, MC_SEARCH_ALBUM_GROUP, "SELECT uid, name FROM album_groups")) != MC_OK ||
@@ -808,7 +828,8 @@ static void keep_best(candidate *top, size_t *n, size_t limit, const candidate *
   top[i] = *c;
 }
 
-/* The items in seen that every query word matched, scored, best first; clears the scratch.
+/* The items in seen that every query word matched, scored, best first; clears the scratch. A
+ * mix's track counts for its album, listed once with the best score of itself and its tracks.
  * With a small limit, only the best limit of each kind: a short list on every keystroke
  * shouldn't sort every match. NULL if out of memory. */
 static candidate *rank_items(mc_search_index *ix, size_t nseen, int words, const uint32_t *qkey,
@@ -817,21 +838,30 @@ static candidate *rank_items(mc_search_index *ix, size_t nseen, int words, const
   int all = !limit || limit > 64 || limit >= nseen;
   /* All of them in one run, or a slice of limit per kind. */
   candidate *cands = malloc((all ? (nseen ? nseen : 1) : KIND_COUNT * limit) * sizeof *cands);
-  size_t per_kind[KIND_COUNT] = {0}, nc = 0;
+  size_t per_kind[KIND_COUNT] = {0}, nc = 0, nfound = 0;
   for (size_t t = 0; t < nseen; t++) {
     uint32_t i = ix->seen[t];
-    if (cands && ix->mask[i] == full) {
+    if (ix->mask[i] == full) {
       const item *it = &ix->items[i];
-      const uint32_t *key = ix->arena + it->key;
       double s = ix->total[i] + BONUS_SHORT / (1 + it->words);
-      if (qkey_len && it->key_len >= qkey_len && memcmp(key, qkey, qkey_len * sizeof *qkey) == 0)
+      if (qkey_len && it->key_len >= qkey_len &&
+          memcmp(ix->arena + it->key, qkey, qkey_len * sizeof *qkey) == 0)
         s += it->key_len == qkey_len ? BONUS_WHOLE : BONUS_START;
-      candidate c = {s, key, it->key_len, i};
-      if (all) cands[nc++] = c;
-      else keep_best(cands + it->kind * limit, &per_kind[it->kind], limit, &c);
+      uint32_t found = it->found_as != NO_ITEM ? it->found_as : i;
+      if (ix->best[found] == 0) ix->touched[nfound++] = found;
+      if (s > ix->best[found]) ix->best[found] = s;
     }
     ix->total[i] = 0;
     ix->mask[i] = 0;
+  }
+  for (size_t t = 0; t < nfound; t++) {
+    uint32_t i = ix->touched[t];
+    const item *it = &ix->items[i];
+    candidate c = {ix->best[i], ix->arena + it->key, it->key_len, i};
+    ix->best[i] = 0;
+    if (!cands) continue;
+    if (all) cands[nc++] = c;
+    else keep_best(cands + it->kind * limit, &per_kind[it->kind], limit, &c);
   }
   if (!cands) return NULL;
   for (int kind = 0; !all && kind < KIND_COUNT; kind++) {

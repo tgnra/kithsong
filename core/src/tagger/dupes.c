@@ -449,7 +449,7 @@ mc_status mc_dupes_credit_tags(mc_library *lib, const char *uid, char **names, c
  * for a track with no album, without album tags, release ids or numbers). Ids the library hasn't are ""
  * (removed from the file), so none of the new file's own can contradict the track; the
  * genre is left to the file unless the library has one. */
-static mc_status library_tags(mc_library *lib, const char *track_uid, mc_tags *out) {
+mc_status mc_dupes_library_tags(mc_library *lib, const char *track_uid, mc_tags *out) {
   sqlite3 *db = mc_library_db(lib);
   memset(out, 0, sizeof *out);
   sqlite3_stmt *stmt = prepare(
@@ -644,7 +644,7 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
   for (int i = 0; i < count && st == MC_OK && !out->whole; i++) {
     mc_dupe_decision *d = &out->d[i];
     if (d->action != MC_DUPE_SWAP && (d->action != MC_DUPE_ATTACH || d->remote)) continue;
-    mc_status ts = library_tags(lib, d->track_uid, &d->tags);
+    mc_status ts = mc_dupes_library_tags(lib, d->track_uid, &d->tags);
     if (ts == MC_OK) d->has_tags = 1;
     else if (ts == MC_ERR_NOMEM) st = ts;
   }

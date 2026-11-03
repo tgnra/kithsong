@@ -734,6 +734,83 @@ static void test_credits(mc_library *lib) {
   CHECK_TRACKS("{\"v\":1,\"order\":[{\"field\":\"artist\"}],\"limit\":2}", "Dancing Queen|Money, Money");
 }
 
+/* How many albums a saved list's art would come from. */
+static int art_rows(mc_library *lib, const char *uid) {
+  mc_smart_subject subject;
+  sqlite3_stmt *stmt = NULL;
+  CHECK(mc_smart_prepare_art(lib, uid, &subject, &stmt) == MC_OK);
+  int n = 0;
+  while (stmt && sqlite3_step(stmt) == SQLITE_ROW) n++;
+  sqlite3_finalize(stmt);
+  return n;
+}
+
+/* A mix's tracks aren't picked, on any path; the album still is. */
+static void test_mix(mc_library *lib) {
+#define MIX_ALBUM "{\"field\":\"album\",\"op\":\"is\",\"value\":\"Invisible Trigger\"}"
+  static const char rule[] = "{\"v\":1,\"match\":" MIX_ALBUM "}";
+  static const char limited[] = "{\"v\":1,\"match\":" MIX_ALBUM ",\"limit\":1}";
+  /* A rule that only ever says no to something else, and one of alternatives. */
+  static const char negated[] = "{\"v\":1,\"match\":{\"not\":{\"field\":\"album\",\"op\":\"is\",\"value\":\"Arrival\"}}}";
+  static const char either[] =
+    "{\"v\":1,\"match\":{\"any\":[" MIX_ALBUM ",{\"field\":\"title\",\"op\":\"is\",\"value\":\"Words\"}]}}";
+  static const char albums_rule[] = "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Invisible Trigger\"}}";
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO albums (uid, title, artist_uid, year, art_hash) VALUES"
+                 " ('al9', 'Invisible Trigger', 'ar3', 2001, 'abcd');"
+                 "INSERT INTO tracks (uid, album_uid, title, track_no) VALUES"
+                 " ('tm1', 'al9', 'Neon', 1), ('tm2', 'al9', 'Tide', 2);"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES ('fm1', 'tm1', 'Mix/01.flac', 'flac');"
+                 "INSERT INTO playlist_entries (uid, playlist_uid, track_uid, position) VALUES ('em1', 'pl1', 'tm2', 'a1');") ==
+        SQLITE_OK);
+  char list[MC_UID_STRLEN], small[MC_UID_STRLEN], group[MC_UID_STRLEN];
+  CHECK(mc_smart_create(lib, "Mix tracks", MC_SMART_TRACKS, rule, list) == MC_OK);
+  CHECK(mc_smart_create(lib, "One mix track", MC_SMART_TRACKS, limited, small) == MC_OK);
+  CHECK(mc_smart_create(lib, "Mix album", MC_SMART_ALBUMS, albums_rule, group) == MC_OK);
+
+  int all = count(lib, MC_SMART_TRACKS, "{\"v\":1}");
+  int playable = 0;
+  CHECK_TRACKS(rule, "Neon|Tide");
+  CHECK(count(lib, MC_SMART_TRACKS, rule) == 2);
+  CHECK(art_rows(lib, list) == 1 && art_rows(lib, small) == 1);
+  CHECK(mc_smart_has_playable(lib, list, &playable) == MC_OK && playable);
+  CHECK(mc_smart_has_playable(lib, small, &playable) == MC_OK && playable);
+
+  mc_album_flags f = {.mix = 1};
+  CHECK(mc_album_flags_set(lib, "al9", &f) == MC_OK);
+  CHECK_TRACKS(rule, "");
+  CHECK_TRACKS(limited, "");
+  CHECK(!strstr(tracks(lib, negated), "Neon") && !strstr(tracks(lib, negated), "Tide"));
+  CHECK_TRACKS(either, "Words");
+  /* Being in a playlist doesn't get a track in either. */
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"playlist\",\"op\":\"is\",\"value\":\"pl1\"}}", "Something");
+  CHECK(count(lib, MC_SMART_TRACKS, rule) == 0);
+  CHECK(count(lib, MC_SMART_TRACKS, limited) == 0);
+  CHECK(count(lib, MC_SMART_TRACKS, "{\"v\":1}") == all - 2);
+  CHECK(art_rows(lib, list) == 0 && art_rows(lib, small) == 0);
+  CHECK(mc_smart_has_playable(lib, list, &playable) == MC_OK && !playable);
+  CHECK(mc_smart_has_playable(lib, small, &playable) == MC_OK && !playable);
+  mc_track_list *picked = NULL;
+  CHECK(mc_library_list_smart_tracks(lib, list, &picked) == MC_OK && picked && picked->count == 0);
+  mc_track_list_free(picked);
+
+  /* The album itself is still there to pick, its art and files with it. */
+  CHECK_ALBUMS(albums_rule, "Invisible Trigger");
+  CHECK(count(lib, MC_SMART_ALBUMS, albums_rule) == 1);
+  CHECK(art_rows(lib, group) == 1);
+  CHECK(mc_smart_has_playable(lib, group, &playable) == MC_OK && playable);
+
+  /* Only the flag does it: no_scrobble alone doesn't. */
+  f = (mc_album_flags){.no_scrobble = 1};
+  CHECK(mc_album_flags_set(lib, "al9", &f) == MC_OK);
+  CHECK_TRACKS(rule, "Neon|Tide");
+
+  CHECK(mc_smart_delete(lib, list) == MC_OK && mc_smart_delete(lib, small) == MC_OK &&
+        mc_smart_delete(lib, group) == MC_OK);
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid IN ('tm1', 'tm2'); DELETE FROM albums WHERE uid = 'al9';") == SQLITE_OK);
+#undef MIX_ALBUM
+}
+
 int main(int argc, char **argv) {
   char path[1024];
   snprintf(path, sizeof path, "%s/test_smart.d", argc > 1 ? argv[1] : ".");
@@ -755,6 +832,7 @@ int main(int argc, char **argv) {
   test_saved(lib);
   test_describe(lib);
   test_credits(lib);
+  test_mix(lib);
 
   mc_library_close(lib);
   return TEST_RESULT();

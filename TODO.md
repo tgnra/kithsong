@@ -32,6 +32,22 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Windows - after an edit, what's queued and the now-playing strip keep the old title and artist until the track changes
 - All - tracks imported before 81dcc23 keep a timestamp each, a moment apart, so "Recently added" plays those albums last track first (no migration: the column syncs)
 
+- All - a continuous mix's tracks still show as tracks outside search and smart playlists: the artist's page track list (mc_library_list_artist_tracks()), and a mix of one track among the artist's singles
+- Android and Linux - no way to set an album's flags ("Continuous mix", no scrobbling) yet; they sync and work there once set on Windows. The core's API is mc_album_flags_get/set
+- All - nothing shows that an album is a continuous mix: mc_album_info doesn't carry the flags, so a frontend would have to ask mc_album_flags_get() per album
+- Core - a play queued for scrobbling before its album was flagged no_scrobble still goes (scrobble_queue keeps what to send, not the track)
+- Core - a one-track mix is found by search but left out of album listings, like any single; decide whether the album grid should show it too
+
+### Hand edits
+- Core - no way to cancel an edit or a release search under way, nor to see how far it is: an artist with many albums copies every file first, and mc_release_search() can wait minutes while MusicBrainz is busy (mb_call has the cancel; edit.h has no way to pass one)
+- Core - renaming an artist is one swap of every file credited, so it needs that much free space; per album would need less, but a failure could leave it half done
+- Core - merging two artists by hand (renaming one to the other's name leaves two)
+- Core - a folder an album moves into that has a cover keeps it, so the album's own goes with its old folder and its art_hash no longer matches; only for two albums sharing a folder
+- Core - disc_total is only ever raised by a track's disc number
+- Windows - when a folder's name changes only in case, files take the new case in their rows and the folder keeps the old one
+- All - the player could open files sharing delete, so tagging the track playing wouldn't need MC_ERR_IN_USE on Windows (dr_libs' _w openers use _wfopen)
+- Decided: peers' files keep their old tags and places; the rows are what they show, and fetching audio again for a tag isn't worth it
+
 ### Smart playlists
 - All - localise the v10 example lists' names (decided; they're stored as data, so always English today)
 - Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it; on Linux a new one that picks nothing playable doesn't open after it's made

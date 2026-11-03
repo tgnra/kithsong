@@ -70,6 +70,16 @@ static int has_column(sqlite3 *db, const char *table, const char *column) {
   "ALTER TABLE albums DROP COLUMN artist_credit;" \
   "DELETE FROM meta WHERE key = 'artist_refresh';"
 
+/* Takes a library back before v15: no album flags. Every winding back needs it, since v15
+ * is run again. */
+#define V14_FLAGS \
+  "DROP TRIGGER mc_log_ins_albums_no_scrobble;" \
+  "DROP TRIGGER mc_log_upd_albums_no_scrobble;" \
+  "DROP TRIGGER mc_log_ins_albums_mix;" \
+  "DROP TRIGGER mc_log_upd_albums_mix;" \
+  "ALTER TABLE albums DROP COLUMN no_scrobble;" \
+  "ALTER TABLE albums DROP COLUMN mix;"
+
 static void remove_db(const char *dir) {
   const char *const names[] = {MC_LIBRARY_DB_NAME, MC_LIBRARY_DB_NAME "-wal",
                                MC_LIBRARY_DB_NAME "-shm"};
@@ -172,7 +182,7 @@ static void test_migration_v4(const char *scratch) {
                  "DROP TABLE merge_keys;"
                  "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS V8_FILE_REV V10_SOURCE_SHA V12_CREDITS
-                 "PRAGMA user_version = 3;") == SQLITE_OK);
+                 V14_FLAGS "PRAGMA user_version = 3;") == SQLITE_OK);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -184,7 +194,7 @@ static void test_migration_v4(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 14);
+  CHECK(mc_library_schema_version(lib) == 15);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
   CHECK(has_column(db, "files", "sha256"));
   CHECK(has_column(db, "files", "source_sha256"));
@@ -212,14 +222,14 @@ static void test_migration_v5(const char *scratch) {
                  "DROP TABLE merge_keys;"
                  "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS V8_FILE_REV V10_SOURCE_SHA V12_CREDITS
-                 "PRAGMA user_version = 4;") == SQLITE_OK);
+                 V14_FLAGS "PRAGMA user_version = 4;") == SQLITE_OK);
   mc_library_close(lib);
 
   lib = NULL;
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 14);
+  CHECK(mc_library_schema_version(lib) == 15);
   CHECK(has_column(db, "album_groups", "name"));
   CHECK(has_column(db, "album_group_entries", "position"));
 
@@ -258,14 +268,14 @@ static void test_migration_v6(const char *scratch) {
                  "DROP TABLE merge_keys;"
                  "DROP TABLE smart_lists;"
                  "DROP TABLE track_plays;" V5_TRACK_PLAYS V8_FILE_REV V10_SOURCE_SHA V12_CREDITS
-                 "PRAGMA user_version = 5;") == SQLITE_OK);
+                 V14_FLAGS "PRAGMA user_version = 5;") == SQLITE_OK);
   mc_library_close(lib);
 
   lib = NULL;
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 14);
+  CHECK(mc_library_schema_version(lib) == 15);
   CHECK(has_column(db, "smart_lists", "rule"));
   CHECK(has_column(db, "track_plays", "last_played_ms"));
 
@@ -329,14 +339,14 @@ static void test_migration_v10(const char *scratch) {
 
   /* Back to v9 with the triggers in place: the migration runs again without logging. */
   lib->applying_remote = 1;
-  CHECK(exec(db, "DELETE FROM smart_lists;" V10_SOURCE_SHA V12_CREDITS "PRAGMA user_version = 9;") == SQLITE_OK);
+  CHECK(exec(db, "DELETE FROM smart_lists;" V10_SOURCE_SHA V12_CREDITS V14_FLAGS "PRAGMA user_version = 9;") == SQLITE_OK);
   lib->applying_remote = 0;
   mc_library_close(lib);
   lib = NULL;
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 14);
+  CHECK(mc_library_schema_version(lib) == 15);
   CHECK(query_int(db, "SELECT count(*) FROM smart_lists") == 5);
   CHECK(changelog_count(db, "entity = 'smart_lists'") == 0);
   CHECK(mc_smart_reshuffle(lib, "5e1ec7ed-0000-4000-8000-000000000003") == MC_OK);
@@ -364,7 +374,7 @@ static void test_migration_v12(const char *scratch) {
                  "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
                  "INSERT INTO albums (uid, title, artist_uid, kind) VALUES ('al1', 'Low Singles', 'ar1', 'singles');"
                  "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'Canada'), ('t2', 'al1', 'Over');"
-                 "PRAGMA user_version = 11;") == SQLITE_OK);
+                 V14_FLAGS "PRAGMA user_version = 11;") == SQLITE_OK);
   lib->applying_remote = 0;
   mc_library_close(lib);
 
@@ -372,7 +382,7 @@ static void test_migration_v12(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 14);
+  CHECK(mc_library_schema_version(lib) == 15);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('albums_singles',"
                       " 'mc_log_ins_albums_kind', 'mc_log_upd_albums_kind')") == 0);
   CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al1' AND title = 'Low Singles'"
@@ -425,7 +435,7 @@ static void test_migration_v13(const char *scratch) {
   CHECK(mc_uid_derive("t1", 1, again) == MC_OK && strcmp(again, t1_1) == 0);
 
   /* As v12 had it, with what a v13 peer logged: Mimi featured on Starfire. */
-  char sql[2048];
+  char sql[3072];
   snprintf(sql, sizeof sql,
            V12_CREDITS
            "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low'), ('ar2', 'Mimi');"
@@ -443,7 +453,7 @@ static void test_migration_v13(const char *scratch) {
            " (1006, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'artist_uid', 'ar2'),"
            " (1007, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'position', 1),"
            " (1008, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'joinphrase', '');"
-           "PRAGMA user_version = 12;",
+           V14_FLAGS "PRAGMA user_version = 12;",
            t1_0, t1_0, t1_0, t1_0, t1_1, t1_1, t1_1, t1_1);
   lib->applying_remote = 1;
   CHECK(exec(db, sql) == SQLITE_OK);
@@ -454,7 +464,7 @@ static void test_migration_v13(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 14);
+  CHECK(mc_library_schema_version(lib) == 15);
   CHECK(has_column(db, "tracks", "artist_credit") && has_column(db, "albums", "artist_credit"));
   query_text(db, "SELECT value FROM meta WHERE key = 'artist_refresh'", s, sizeof s);
   CHECK_STR(s, "pending");
@@ -505,6 +515,73 @@ static void test_migration_v13(const char *scratch) {
   CHECK(mc_library_list_credit(lib, "al2", &credit) == MC_OK && credit && credit->count == 0);
   mc_credit_list_free(credit);
   CHECK(mc_library_list_credit(lib, "nope", &credit) == MC_ERR_NOT_FOUND);
+  mc_library_close(lib);
+}
+
+/* v15's album flags: what a newer peer logged is applied on upgrading, and they're logged
+ * when set, not when a row is made. */
+static void test_migration_v15(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v15.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  lib->applying_remote = 1;
+  CHECK(exec(db, V14_FLAGS
+                 "INSERT INTO albums (uid, title) VALUES ('al1', 'Invisible Trigger'), ('al2', 'Changed Mind'),"
+                 " ('al3', 'Untouched');"
+                 "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
+                 " (1000, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al1', 'mix', 1),"
+                 " (1001, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al1', 'no_scrobble', 1),"
+                 " (1002, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'no_scrobble', 1),"
+                 " (1003, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'no_scrobble', 0);"
+                 "PRAGMA user_version = 14;") == SQLITE_OK);
+  CHECK(!has_column(db, "albums", "mix"));
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 15);
+  mc_album_flags f;
+  CHECK(mc_album_flags_get(lib, "al1", &f) == MC_OK && f.mix == 1 && f.no_scrobble == 1);
+  CHECK(mc_album_flags_get(lib, "al2", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
+  CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
+  CHECK(changelog_count(db, "1") == 4); /* nothing of it logged here */
+
+  /* Set: only what changed is logged. */
+  f = (mc_album_flags){.no_scrobble = 1};
+  CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
+  CHECK(changelog_count(db, "1") == 5);
+  CHECK(changelog_count(db, "entity = 'albums' AND row_uid = 'al3' AND field = 'no_scrobble'") == 1);
+  CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
+  CHECK(changelog_count(db, "1") == 5);
+  f = (mc_album_flags){.no_scrobble = 7, .mix = 7}; /* any true value */
+  CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
+  CHECK(changelog_count(db, "1") == 6);
+  CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 1 && f.no_scrobble == 1);
+  f = (mc_album_flags){0};
+  CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
+  CHECK(changelog_count(db, "1") == 8);
+  CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
+
+  CHECK(mc_album_flags_get(lib, "nope", &f) == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_flags_set(lib, "nope", &f) == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_flags_get(NULL, "al1", &f) == MC_ERR_INVALID_ARG);
+  CHECK(mc_album_flags_set(lib, NULL, &f) == MC_ERR_INVALID_ARG);
+
+  /* A new row's 0 isn't anyone's choice, so it isn't logged. One that comes with a flag (a
+   * restored album) is. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al4', 'New');"
+                 "INSERT INTO albums (uid, title, mix) VALUES ('al5', 'Restored', 1);") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'al4' AND field IN ('no_scrobble', 'mix')") == 0);
+  CHECK(changelog_count(db, "row_uid = 'al4' AND field = 'title'") == 1);
+  CHECK(changelog_count(db, "row_uid = 'al5' AND field IN ('no_scrobble', 'mix')") == 1);
   mc_library_close(lib);
 }
 
@@ -692,14 +769,14 @@ static void test_recents(const char *scratch) {
   if (!lib) return;
   sqlite3 *db = mc_library_db(lib);
   CHECK(exec(db, "DROP TABLE recents; DROP TABLE aliases; DROP TABLE merge_keys;" V8_FILE_REV V10_SOURCE_SHA V12_CREDITS
-                 "PRAGMA user_version = 6;") == SQLITE_OK);
+                 V14_FLAGS "PRAGMA user_version = 6;") == SQLITE_OK);
   mc_library_close(lib);
 
   lib = NULL;
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 14);
+  CHECK(mc_library_schema_version(lib) == 15);
   CHECK(has_column(db, "recents", "opened_ms"));
   CHECK(has_column(db, "tracks", "file_rev")); /* v9 */
   CHECK(has_column(db, "files", "file_rev"));
@@ -1379,7 +1456,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 14);
+  CHECK(mc_library_schema_version(lib) == 15);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -1460,7 +1537,7 @@ int main(int argc, char **argv) {
   if (lib) {
     CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
     CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
-    CHECK(mc_library_schema_version(lib) == 14);
+    CHECK(mc_library_schema_version(lib) == 15);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }
@@ -1497,6 +1574,7 @@ int main(int argc, char **argv) {
   test_migration_v10(argc > 1 ? argv[1] : ".");
   test_migration_v12(argc > 1 ? argv[1] : ".");
   test_migration_v13(argc > 1 ? argv[1] : ".");
+  test_migration_v15(argc > 1 ? argv[1] : ".");
   test_credited_artists(argc > 1 ? argv[1] : ".");
   test_artist_cover(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");

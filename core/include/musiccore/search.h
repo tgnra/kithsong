@@ -3,6 +3,10 @@
  * follow each keystroke. Singles (albums with one track in the library, see library.h) aren't
  * albums here either: their tracks are found as tracks.
  *
+ * A continuous mix (mc_album_flags, edit.h) is the other way round: its tracks aren't results.
+ * A query that matches one finds the album instead, once however many of them match, scored
+ * as the best of those and the album itself. A mix of one track is an album here, not a single.
+ *
  * Each library handle keeps an in-memory index of the names, rebuilt on a core thread after
  * any of them changes, here or on another connection (an import, sync). Plays and recents
  * don't count as changes. A build reads the whole library, so it takes far longer than a

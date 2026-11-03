@@ -123,6 +123,10 @@ mc_status mc_copy_file(const char *src, const char *dst, int overwrite);
  * is set. */
 mc_status mc_rename(const char *src, const char *dst, int replace);
 mc_status mc_remove(const char *path);
+/* Whether something has path open so that it can't be renamed or removed: on Windows, a handle
+ * that doesn't share deleting, which is what fopen and so the player's decoders open. Elsewhere
+ * an open file can always be renamed, so 0. */
+int mc_file_in_use(const char *path);
 /* Clears a file's or directory's read-only attribute on Windows, where it stops mc_remove()
  * and mc_rmdir(), and a copy keeps it. Elsewhere does nothing: removing needs only the
  * folder's permission. */

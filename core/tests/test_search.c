@@ -293,6 +293,91 @@ static void test_credits(mc_library *lib) {
 }
 
 /* MC_SEARCH_BENCH=1: times a build and queries over 100k made-up tracks. Not a pass/fail. */
+/* Flags a mix's album on or off and waits for the index to follow. */
+static void set_mix(mc_library *lib, const char *album, int mix) {
+  int builds = mc_search_builds(lib);
+  mc_album_flags f = {.mix = mix};
+  CHECK(mc_album_flags_set(lib, album, &f) == MC_OK);
+  CHECK(mc_library_search_prepare(lib) == MC_OK);
+  mc_search_wait(lib);
+  CHECK(mc_search_builds(lib) == builds + 1); /* the flag alone is a change */
+}
+
+/* A mix's tracks aren't results: a match on one finds the album, once. */
+static void test_mix(mc_library *lib) {
+  CHECK(exec(mc_library_db(lib),
+             "INSERT INTO artists (uid, name) VALUES ('ar7', 'Sasha Vale');"
+             "INSERT INTO albums (uid, title, artist_uid) VALUES ('alm', 'Invisible Trigger', 'ar7'),"
+             " ('aln', 'Harbour Lights', 'ar7'), ('alo', 'Long Night Out', 'ar7');"
+             "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
+             " ('tm1', 'alm', NULL, 'Neon Harbour'), ('tm2', 'alm', NULL, 'Neon Tide'),"
+             " ('tm3', 'alm', 'ar5', 'Hair Trigger'), ('tm4', 'alm', NULL, 'Creep'),"
+             " ('tm5', 'aln', NULL, 'Bay'), ('tm6', 'aln', NULL, 'Quay'),"
+             " ('tm7', 'alo', NULL, 'Whole Night');") == SQLITE_OK);
+  CHECK(mc_library_search_prepare(lib) == MC_OK);
+  mc_search_wait(lib);
+  CHECK(has(lib, "neon", "T:Neon Harbour") && has(lib, "neon", "T:Neon Tide"));
+  CHECK(!has(lib, "neon", "A:Invisible Trigger"));
+
+  set_mix(lib, "alm", 1);
+  CHECK(count_kind(lib, "neon", 0, 'T') == 0);
+  CHECK(count_kind(lib, "neon", 0, 'A') == 1); /* two tracks, one album */
+  CHECK_STR(first(lib, "neon"), "A:Invisible Trigger");
+  CHECK_STR(search(lib, "neon tide", 0), "A:Invisible Trigger");
+  /* A typo, and the track's artist. */
+  CHECK(has(lib, "harbuor", "A:Invisible Trigger"));
+  CHECK(has(lib, "radiohead hair", "A:Invisible Trigger"));
+  CHECK(!has(lib, "radiohead hair", "T:Hair Trigger"));
+  /* Every word still has to match one track, or the album: not one word each of two tracks. */
+  CHECK(!has(lib, "tide hair", "A:Invisible Trigger"));
+
+  /* Both the album and tracks match: once, as well as the better of them. */
+  CHECK(count_kind(lib, "trigger", 0, 'A') == 1);
+  CHECK(count_kind(lib, "trigger", 0, 'T') == 0);
+  CHECK_STR(first(lib, "invisible trigger"), "A:Invisible Trigger");
+  /* A track's score carries over: all of its title counts for more than a word of the album's. */
+  mc_search_results *res = NULL;
+  double track_score = 0, album_score = 0;
+  CHECK(mc_library_search(lib, "hair trigger", 0, &res) == MC_OK && res && res->count == 1);
+  if (res && res->count) track_score = res->items[0].score;
+  mc_search_results_free(res);
+  res = NULL;
+  CHECK(mc_library_search(lib, "trigger", 0, &res) == MC_OK && res && res->count == 1);
+  if (res && res->count) album_score = res->items[0].score;
+  mc_search_results_free(res);
+  CHECK(track_score > album_score);
+
+  /* The other tracks that match stay, with the album beside them. */
+  CHECK(has(lib, "creep", "T:Creep") && has(lib, "creep", "A:Invisible Trigger"));
+  CHECK(count_kind(lib, "creep", 0, 'T') == 1);
+
+  /* With a small limit, which ranks only the best of each kind: still once, and it counts as
+   * one against the limit. */
+  CHECK(count_kind(lib, "neon", 1, 'A') == 1);
+  CHECK(count_kind(lib, "trigger", 1, 'A') == 1);
+  CHECK(count_kind(lib, "harbour", 1, 'A') == 1);
+  CHECK(count_kind(lib, "harbour", 2, 'A') == 2);
+
+  /* A mix of one track is an album here, where a single wouldn't be. */
+  CHECK(has(lib, "whole night", "T:Whole Night"));
+  CHECK(!has(lib, "long night", "A:Long Night Out"));
+  set_mix(lib, "alo", 1);
+  CHECK(has(lib, "long night", "A:Long Night Out"));
+  CHECK_STR(search(lib, "whole night", 0), "A:Long Night Out");
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums);
+  for (int i = 0; albums && i < albums->count; i++) CHECK(strcmp(albums->items[i].title, "Long Night Out") != 0);
+  mc_album_list_free(albums);
+
+  /* Taken off, all is as it was. */
+  set_mix(lib, "alo", 0);
+  CHECK(!has(lib, "long night", "A:Long Night Out"));
+  CHECK(has(lib, "whole night", "T:Whole Night"));
+  set_mix(lib, "alm", 0);
+  CHECK(has(lib, "neon", "T:Neon Harbour") && has(lib, "neon", "T:Neon Tide"));
+  CHECK(!has(lib, "neon", "A:Invisible Trigger"));
+}
+
 static void bench(const char *dir) {
   static const char *const syl[] = {"ka", "lo", "mi", "ne", "ru", "sa", "to", "vi", "be", "dor",
                                     "fen", "gal", "hu", "jin", "qua", "wes", "yor", "zel", "an", "el"};
@@ -412,6 +497,7 @@ int main(int argc, char **argv) {
   test_fresh(lib, path);
   test_edges(lib);
   test_credits(lib);
+  test_mix(lib);
 
   mc_library_close(lib);
   return TEST_RESULT();
