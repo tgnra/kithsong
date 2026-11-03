@@ -65,9 +65,11 @@ Priorities:
   and re-imports.
 - **Smart playlists and smart album groups** pick their tracks or albums by a rule, e.g. "jazz
   I haven't played in six months, least played first, 10 tracks", worked out afresh each time
-  from play counts and this device's files. The rule syncs whole. On Windows they're made and
-  edited with a rule editor (right-click the Playlists or Album groups page), with a live
-  preview; elsewhere they can be opened, played and reshuffled so far.
+  from play counts and this device's files. The rule syncs whole. On Windows and Linux they're
+  made and edited with a rule editor, with a live preview (on Windows right-click the
+  Playlists or Album groups page; on Linux the arrow beside the page's +, where each group of
+  conditions opens as a page of its own); on Android they can be opened, played and
+  reshuffled so far.
 
 ### LAN sync
 
@@ -146,7 +148,8 @@ Details: [docs/sync-protocol.md](docs/sync-protocol.md).
 | Menu key or Shift+F10 | The selected track's menu (with none selected, the playlist's) |
 
 On Linux, Ctrl+? lists the shortcuts, and Ctrl+W or Ctrl+Q closes the window, which quits:
-playback stops with it, as nothing keeps playing in the background. On Windows Alt+F4 quits
+playback stops with it, as nothing keeps playing in the background; on the Playlists page
+Delete and F2 work on smart playlists too. On Windows Alt+F4 quits
 (there's no Ctrl+Q or Ctrl+W, as is usual there), and on the Playlists and Album groups
 pages Delete and F2 work on smart playlists and album groups too. The playback buttons' and
 other buttons' tooltips show their shortcuts.
