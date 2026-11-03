@@ -82,8 +82,8 @@ import kotlinx.coroutines.launch
  * [editor] is null when the library can't be edited, and [deleter] when nothing can be
  * deleted from it (the made-up one): the menus then offer only playing. [remover] offers
  * Remove from this phone (or Sync to this phone) on albums and artists, where it applies, and
- * [recents] Remove from Recents and Clear Recents on a recent's. A delete that takes any of
- * [playback]'s queue empties it first, as Windows does.
+ * [recents] Remove from Recents and Clear Recents on a recent's. A delete or removal that
+ * takes any of [playback]'s queue empties it first, as Windows does.
  */
 @Stable
 class PlaylistActions(
@@ -490,7 +490,7 @@ fun PlaylistSheets(
             DeleteFromLibraryDialog(deleter, actions.playback, dialog.what, scope, onDismiss = { actions.dialog = null })
         }
         is PlaylistActions.Dialog.RemoveHere -> if (remover != null) {
-            RemoveHereDialog(remover, dialog, scope, onDismiss = { actions.dialog = null })
+            RemoveHereDialog(remover, actions.playback, dialog, scope, onDismiss = { actions.dialog = null })
         }
     }
 }
@@ -498,12 +498,14 @@ fun PlaylistSheets(
 /**
  * Asks before removing an album or artist from this phone only: how many files go from here,
  * how many originals imported here stay until an archive has them, that it stays in the
- * library and on the other devices, and how to get it back. Remove waits for the count.
- * Afterwards a toast says if it failed, or if some files couldn't be removed.
+ * library and on the other devices, and how to get it back. Remove waits for the count, and
+ * stops [playback] first if its queue has any of the tracks. Afterwards a toast says if it
+ * failed, or if some files couldn't be removed.
  */
 @Composable
 private fun RemoveHereDialog(
     remover: DeviceRemover,
+    playback: Playback?,
     what: PlaylistActions.Dialog.RemoveHere,
     // Outlives the dialog, which closes as the removal starts, for the toasts after it.
     scope: CoroutineScope,
@@ -543,6 +545,8 @@ private fun RemoveHereDialog(
                     val kept = preview?.kept ?: 0
                     onDismiss()
                     scope.launch {
+                        val queue = playback?.queueUids.orEmpty()
+                        if (queue.isNotEmpty() && remover.takesAny(what.kind, what.uid, queue)) playback?.clear()
                         val result = remover.removeHere(what.kind, what.uid)
                         if (result == null) {
                             Toast.makeText(context, failed, Toast.LENGTH_LONG).show()

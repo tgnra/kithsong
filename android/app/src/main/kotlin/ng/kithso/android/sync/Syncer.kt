@@ -24,6 +24,7 @@ import ng.kithso.core.SyncWaiting
 import ng.kithso.core.VerifyResult
 import ng.kithso.core.hereState as coreHereState
 import ng.kithso.core.herePreview as coreHerePreview
+import ng.kithso.core.hereTakesAny as coreHereTakesAny
 import ng.kithso.core.removeHere as coreRemoveHere
 import ng.kithso.core.restoreHere as coreRestoreHere
 import ng.kithso.android.data.CoreLibrarySource
@@ -484,6 +485,13 @@ class Syncer(
     } catch (e: MusicCoreException) {
         Log.w(TAG, "Couldn't work out removing $uid", e)
         null
+    }
+
+    override suspend fun takesAny(kind: ProfileItemKind, uid: String, trackUids: List<String>): Boolean = try {
+        onCore { it.coreHereTakesAny(kind, uid, trackUids) }
+    } catch (e: MusicCoreException) {
+        Log.w(TAG, "Couldn't work out removing $uid", e)
+        false
     }
 
     override suspend fun removeHere(kind: ProfileItemKind, uid: String): HereResult? = try {

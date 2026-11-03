@@ -55,6 +55,32 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_SyncHereNatives_nativePreview(JN
   return jni_ints(env, values, 2);
 }
 
+/* Whether removing uid would remove a file of any of track_uids (the play queue's), so the app
+ * can stop playing them first. */
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_SyncHereNatives_nativeTakesAny(JNIEnv *env, jclass cls,
+                                                                            jlong handle, jint kind,
+                                                                            jstring uid,
+                                                                            jobjectArray track_uids) {
+  (void)cls;
+  mc_here_plan *plan = plan_of(env, handle, kind, uid);
+  if (!plan) return JNI_FALSE;
+  jboolean takes = JNI_FALSE;
+  jsize n = (*env)->GetArrayLength(env, track_uids);
+  for (jsize i = 0; i < n && !takes; i++) {
+    jstring s = (jstring)(*env)->GetObjectArrayElement(env, track_uids, i);
+    if (!s) continue;
+    const char *c = (*env)->GetStringUTFChars(env, s, NULL);
+    if (c) {
+      takes = mc_here_plan_has(plan, c) ? JNI_TRUE : JNI_FALSE;
+      (*env)->ReleaseStringUTFChars(env, s, c);
+    }
+    (*env)->DeleteLocalRef(env, s);
+    if (!c) break; /* OutOfMemoryError pending */
+  }
+  mc_here_plan_free(plan);
+  return takes;
+}
+
 /* Removes uid from this phone: {files removed, files kept}. */
 JNIEXPORT jintArray JNICALL Java_ng_kithso_core_SyncHereNatives_nativeRemove(JNIEnv *env, jclass cls,
                                                                            jlong handle, jint kind,
