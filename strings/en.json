@@ -386,6 +386,7 @@
     "smart_remove_sort": "Remove sort order",
     "smart_sort_name": { "text": "Sort order", "note": "Name for accessibility of a sort order picker in the smart list editor." },
     "smart_limit_count_name": { "text": "How many to keep", "note": "Name for accessibility of the number in \"Only the first [10] tracks\"." },
+
     "save": { "text": "_Save", "note": "Button: keeps the changes made in a dialog, e.g. the smart list editor's." },
     "smart_preset_title": { "text": "Start from", "note": "Heading over the ready-made rules a new smart playlist or smart album group can start from." },
     "smart_mode_all": { "text": "All of the following", "note": "Smart list editor: picker entry above a group's conditions, which must all be true." },
@@ -404,6 +405,7 @@
     "smart_op_never": { "text": "is never", "note": "Smart list editor: picker entry after a date field when it has no date, e.g. Last played [is never]." },
     "smart_op_ever": { "text": "is any time", "note": "Smart list editor: picker entry after a date field when it has a date, e.g. Last played [is any time]." },
     "smart_order_heading": { "text": "Order", "note": "Smart list editor: heading of the sort order, shuffle and limit." },
+    "smart_pick_date": { "text": "Choose a date", "note": "Smart list editor: tooltip of the button showing a condition's date, which opens a calendar." },
     "smart_problems_title": { "one": "Fix this to save", "other": "Fix these {0:d} to save", "note": "Smart list editor: heading of the list of conditions whose values are missing or wrong." },
     "smart_problem": { "text": "{0}: {1}", "note": "One problem in the smart list editor: {0} is where (the groups' names and the field, e.g. \"Fresh stuff › Artist\"), {1} what's wrong (a smart_problem_* string)." },
     "smart_path_separator": { "text": " › ", "note": "Between the names of groups nested in each other, e.g. \"Fresh stuff › Old favourites\"." },
@@ -803,8 +805,6 @@
     "pair_code_label": { "text": "Pairing code", "note": "The pairing code field's and label's name for accessibility." },
     "pair_request_notification": { "text": "{0} wants to pair with this computer.", "note": "A desktop notification's text, under \"Pairing request\", while Kithsong is in the background. {0} is the other device's name, or \"The other device\"; clicking it shows the code." },
     "sync_everyone_tooltip": { "text": "Sync with every device in the group on this network", "note": "Tooltip of Sync now on this computer's own page." },
-
-    "smart_pick_date": { "text": "Choose a date", "note": "Smart list editor: tooltip of the button showing a condition's date, which opens a calendar." },
 
     "shortcuts_general": { "text": "General", "note": "Heading in the keyboard shortcuts list (Ctrl+?)." },
     "shortcuts_playback": { "text": "Playback", "note": "Heading in the keyboard shortcuts list." },

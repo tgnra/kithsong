@@ -4,7 +4,7 @@
 
 Big pieces that haven't been started, or that only one platform has.
 
-- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; Windows and Linux can create, edit, rename or delete one (their rule editors, smart_editor.c each, show a page per group). Android needs its own (built from mc_smart_field_get() and the mc_smart_*_label() words)
+- **Smart playlists editing** - every platform can list, open, play and reshuffle smart playlists and smart album groups; Windows, Linux and Android can create, edit, rename or delete one (each with a rule editor of a page per group: smart_editor.c on each desktop, and SmartEditorUi.kt built from mc_smart_field_get() and the mc_smart_*_label() words); Wear OS can't
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
@@ -17,7 +17,7 @@ Only where the platforms differ. Windows, Linux and Android all have albums, pla
 | Feature | Windows | Linux | Android |
 |---|---|---|---|
 | Artists | no art | no art | yes |
-| Smart playlists | rule editor with a page per group, rename, delete | rule editor with a page per group, rename, delete | open, play, reshuffle (no editor) |
+| Smart playlists | rule editor with a page per group, rename, delete | rule editor with a page per group, rename, delete | rule editor with a page per group, rename, delete |
 | Delete | with restore | with restore | permanent (no trash to restore from) |
 | Remove from this device | yes | only compiled | yes |
 | Volume | drop-down slider, keyboard | popover slider, keyboard, MPRIS | system's (core's for ducking) |
@@ -39,12 +39,12 @@ Only where the platforms differ. Windows, Linux and Android all have albums, pla
 - Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results; only from the album grid and the track list
 
 ### Smart playlists
-- Android - rule editor (from mc_smart_field_get()), and rename/delete; Windows and Linux have them
+- Android - the rule editor (SmartEditorUi.kt, its model SmartRule.kt) is the Linux one's port. An edit under way is lost if the activity is recreated (turning the phone, a language change), as the app's other dialogs are; and a new list with nothing playable here isn't opened after it's made (it isn't listed)
 - Windows - the rule editor (smart_editor.c) follows Linux's: a page per group in one resizable dialog, with the path (and a Back button) across the top, the preview beside the conditions (below them in a narrow window), and the problems in a box above Save. New Smart Playlist... and New Smart Album Group... are only on right-click menus (the Playlists and Album Groups pages' and the sidebar rows'), as there's no New button for manual playlists either; Linux has them on the arrow beside the pages' +
 - Windows and Linux - the list's own group's name, if a rule has one, isn't shown and isn't written back (only groups inside it keep theirs)
-- Windows and Linux - a condition or group can't be moved to another group, or up and down within one; it's deleted and made again
-- Windows and Linux - "months" are 30 days and reopen as days (or weeks), and text conditions don't offer the library's genres and artists as you type
-- Windows and Linux - the editor only shows a "not" where it means a negative operator, or "none of" (a "not" around an "any"); any other rule opens read-only, as its sentence
+- All editors - a condition or group can't be moved to another group, or up and down within one; it's deleted and made again
+- All editors - "months" are 30 days and reopen as days (or weeks), and text conditions don't offer the library's genres and artists as you type
+- All editors - the editor only shows a "not" where it means a negative operator, or "none of" (a "not" around an "any"); any other rule opens read-only, as its sentence
 - Windows - the editor's date picker (Date added or Last played before or after a date) stays light in dark mode: there's no dark theme for it
 - Core - mc_smart_describe() is English-shaped: conditions are joined as "field op value" clauses under "Tracks where …", and a language that needs grammatical case or agreement for a field or playlist name may need its own templates; dates use the smart_date template (local time), not the OS's date format
 - All - the v10 example lists' names are stored as data, so they're always English
@@ -217,6 +217,7 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - Merging libraries: the progress window was only seen for an instant (a three-track test merge finishes at once), and the pending note after a restart was never seen (both seen on Linux); the library_mismatch update hint (it needs a peer running an older version) has been seen nowhere
 
 ### Android and Wear OS
+- The smart list editor (SmartEditorUi.kt) was run on the Pixel_10 emulator (API 37) with a small library of sine-tone albums: seen were the + on the Playlists and Album groups headings, the ready-made rules with their sentences, a page per group with its path (marked where something needs fixing) and back going up a group, every row's count, the preview and the "N tracks match · N in the list" line, the problems card's Show opening the group and focusing the box, a date picked for is after, the order and limit, creating (the new list opening), Edit rules, Rename and Delete from a smart list's page menu (and its long-press menu on the main list), and Cancel or back on the list's page dropping the edit. The rule model's reading and writing has JVM unit tests (SmartRuleTest). Not seen: the read-only page (only unit-tested), a playlist or album group condition, TalkBack, dark theme, landscape and a tablet, a large library (each change previews the whole list through the JNI). Once, after creating a list, its page closed by itself before its menu was tapped; it didn't happen again in three more tries
 - Smart playlists' and groups' pictures (mc_smart_art()), and empty playlists in the Playlists section and Recents, on screen (only built)
 - Remove from this phone / Sync to this phone on screen, in a real group (only built), including stopping playback when it takes a queued track
 - Settings' Play albums in order switch (only built)

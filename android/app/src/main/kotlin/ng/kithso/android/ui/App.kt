@@ -46,6 +46,7 @@ import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.RecentsEditor
+import ng.kithso.android.data.SmartListEditor
 import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.sync.Syncer
@@ -64,7 +65,8 @@ import java.io.File
  * result opens its track list over search. The players take their colours from the album art.
  * [onPlay] is called when a track list starts playing, and [onImportStarted] when an import
  * starts; how it's going shows as a card under the main list's header. Pairing with another
- * device shows over everything, as it can start from the other device at any time. [libraryDir] is the library
+ * device shows over everything, as it can start from the other device at any time, and so
+ * does the smart list editor ([SmartEditorScreen]) while it's open. [libraryDir] is the library
  * folder, for settings to show its size.
  */
 @Composable
@@ -140,8 +142,12 @@ fun App(
             syncer.takeIf { deleter != null },
             source as? RecentsEditor,
             playback,
+            source as? SmartListEditor,
         )
     }
+    // The smart list editor covers everything, the players too, until it's closed.
+    val smartTarget = actions.smartEditing
+    val smartOpen = smartTarget != null
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
         scope.launch {
             val tracks = source.trackList(ref)?.tracks ?: return@launch
@@ -178,12 +184,13 @@ fun App(
                         }
                     }
                 },
-                modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen || searchOpen),
+                modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen || settingsOpen || syncOpen || searchOpen || smartOpen),
                 onRecentMenu = actions::recentMenu,
                 onPlaylistMenu = actions::playlistMenu,
                 onAlbumMenu = { actions.albumMenu(it) },
                 onArtistMenu = actions::artistMenu,
                 onAlbumGroupMenu = actions::albumGroupMenu,
+                onNewSmart = if (actions.smart != null) actions::newSmart else null,
                 inGroup = inGroup,
                 // This phone's page, over Sync, as Choose what to sync after pairing opens it.
                 onChooseWhatToSync = {
@@ -195,7 +202,7 @@ fun App(
                 DismissibleScreen(
                     DismissDirection.Right,
                     onDismissed = { settingsOpen = false },
-                    backEnabled = !playerOpen && !syncOpen && !licensesOpen,
+                    backEnabled = !playerOpen && !syncOpen && !licensesOpen && !smartOpen,
                     modifier = Modifier.coveredIf(playerOpen || syncOpen || licensesOpen),
                 ) { dismiss ->
                     SettingsScreen(
@@ -209,7 +216,7 @@ fun App(
                 DismissibleScreen(
                     DismissDirection.Right,
                     onDismissed = { licensesOpen = false },
-                    backEnabled = !playerOpen && licenseOpen == null,
+                    backEnabled = !playerOpen && licenseOpen == null && !smartOpen,
                     modifier = Modifier.coveredIf(playerOpen || licenseOpen != null),
                 ) { dismiss ->
                     LicensesScreen(bottomPadding, onOpen = { licenseOpen = it }, onBack = dismiss)
@@ -220,7 +227,7 @@ fun App(
                     DismissibleScreen(
                         DismissDirection.Right,
                         onDismissed = { licenseOpen = null },
-                        backEnabled = !playerOpen,
+                        backEnabled = !playerOpen && !smartOpen,
                         modifier = Modifier.coveredIf(playerOpen),
                     ) { dismiss ->
                         LicenseTextScreen(asset, bottomPadding, onBack = dismiss)
@@ -231,7 +238,7 @@ fun App(
                 DismissibleScreen(
                     DismissDirection.Right,
                     onDismissed = { syncOpen = false },
-                    backEnabled = !playerOpen && deviceOpen == null,
+                    backEnabled = !playerOpen && deviceOpen == null && !smartOpen,
                     modifier = Modifier.coveredIf(playerOpen || deviceOpen != null),
                 ) { dismiss ->
                     SyncScreen(syncer, bottomPadding, onOpenDevice = { deviceOpen = it }, onBack = dismiss)
@@ -242,7 +249,7 @@ fun App(
                     DismissibleScreen(
                         DismissDirection.Right,
                         onDismissed = { deviceOpen = null },
-                        backEnabled = !playerOpen,
+                        backEnabled = !playerOpen && !smartOpen,
                         modifier = Modifier.coveredIf(playerOpen),
                     ) { dismiss ->
                         DeviceScreen(syncer, uid, bottomPadding, onBack = dismiss, onRename = syncer::rename)
@@ -254,7 +261,7 @@ fun App(
                 DismissibleScreen(
                     DismissDirection.Right,
                     onDismissed = { searchOpen = false },
-                    backEnabled = stack.isEmpty() && !playerOpen,
+                    backEnabled = stack.isEmpty() && !playerOpen && !smartOpen,
                     modifier = Modifier.coveredIf(stack.isNotEmpty() || playerOpen),
                 ) { dismiss ->
                     SearchScreen(
@@ -289,7 +296,7 @@ fun App(
                     DismissibleScreen(
                         DismissDirection.Right,
                         onDismissed = pop,
-                        backEnabled = top && !playerOpen,
+                        backEnabled = top && !playerOpen && !smartOpen,
                         modifier = Modifier.coveredIf(!top || playerOpen),
                     ) { dismiss ->
                         DetailScreen(
@@ -336,7 +343,7 @@ fun App(
                         .coveredIf(playerOpen),
                 )
                 if (playerOpen) key(playerOpenings) {
-                    DismissibleScreen(DismissDirection.Down, onDismissed = { playerOpen = false }) { dismiss ->
+                    DismissibleScreen(DismissDirection.Down, onDismissed = { playerOpen = false }, backEnabled = !smartOpen) { dismiss ->
                         FullPlayer(
                             playback,
                             track,
@@ -350,6 +357,26 @@ fun App(
                         )
                     }
                 }
+            }
+            val smart = actions.smart
+            if (smartTarget != null && smart != null) key(smartTarget) {
+                SmartEditorScreen(
+                    smart,
+                    smartTarget,
+                    // A new list opens once it's made, if it holds something to play here
+                    // (else it isn't listed); an edited one's page reads it again itself.
+                    onSaved = { uid, created ->
+                        if (created) scope.launch {
+                            val albums = smartTarget is SmartEditTarget.New && smartTarget.isAlbums
+                            val ref = CollectionRef(if (albums) CollectionRef.Kind.AlbumGroup else CollectionRef.Kind.Playlist, uid)
+                            if (source.trackList(ref) != null) {
+                                playerOpen = false
+                                open(ref)
+                            }
+                        }
+                    },
+                    onClose = { if (actions.smartEditing == smartTarget) actions.smartEditing = null },
+                )
             }
             PlaylistSheets(
                 actions,

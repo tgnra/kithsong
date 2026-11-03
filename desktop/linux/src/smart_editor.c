@@ -1037,7 +1037,7 @@ static void fill_values(row *r, node *c) {
     g_free(text);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(button), pop);
     gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
-    gtk_widget_set_tooltip_text(button, mc_str(MC_STR_LINUX_SMART_PICK_DATE));
+    gtk_widget_set_tooltip_text(button, mc_str(MC_STR_SMART_PICK_DATE));
     set_label(button, mc_str(MC_STR_SMART_VALUE_NAME));
     g_object_set_data(G_OBJECT(cal), "button", button);
     g_signal_connect(cal, "day-selected", G_CALLBACK(on_day_selected), GUINT_TO_POINTER(c->id));
