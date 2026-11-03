@@ -34,7 +34,8 @@ typedef struct app {
   GtkWidget *settings;  /* the header bar's Settings button */
   GtkStack *albums;     /* "empty" status page | "grid" | "playlists" (a header over playlists)
                          * | "groups" (album_groups.c) */
-  AdwStatusPage *empty;        /* "No Albums" */
+  AdwStatusPage *empty;        /* "No music yet", or "No albums" when the music is all singles */
+  gboolean all_singles;        /* the Albums page has nothing, but the library has tracks */
   GtkWidget *pair;             /* its Pair with a device… button (devices_pair_button()) */
   AdwStatusPage *no_playlists; /* "No playlists yet", or none to play here */
   GtkWidget *choose_sync;      /* its Choose what to sync button */

@@ -117,11 +117,17 @@ static void on_import_done(void *user) {
 }
 
 /* The empty Albums page suggests pairing while this computer isn't in a group, with the Pair
- * with a device… button. */
+ * with a device… button. When the library has tracks but they're all singles (which the page
+ * leaves out), it says where they are instead. */
 static void set_empty_description(app *a) {
-  gboolean alone = a->lib && devices_sync_state() == DEVICES_ALONE;
-  enum mc_str_id text = !a->lib ? MC_STR_LIBRARY_OPEN_FAILED : alone ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
-                                                                     : MC_STR_EMPTY_TEXT;
+  if (!a->empty) return; /* not built yet */
+  gboolean singles = a->lib && a->all_singles;
+  gboolean alone = a->lib && !singles && devices_sync_state() == DEVICES_ALONE;
+  enum mc_str_id text = !a->lib   ? MC_STR_LIBRARY_OPEN_FAILED
+                        : singles ? MC_STR_LINUX_ALBUMS_ALL_SINGLES_TEXT
+                        : alone   ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
+                                  : MC_STR_EMPTY_TEXT;
+  adw_status_page_set_title(a->empty, mc_str(singles ? MC_STR_LINUX_ALBUMS_ALL_SINGLES_TITLE : MC_STR_EMPTY_TITLE));
   char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION), MC_S(mc_str(text)), MC_S(mc_version()));
   adw_status_page_set_description(a->empty, desc);
   mc_free(desc);
@@ -952,6 +958,11 @@ static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
 void app_reload_library(app *a) {
   int albums = album_grid_reload(a->album_grid, a->lib);
   int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir, &a->hidden_playlists);
+  /* No albums but some tracks: they're all singles, so the empty page mustn't say no music. */
+  int64_t tracks = 0;
+  if (albums > 0 || !a->lib || mc_library_count(a->lib, MC_ENTITY_TRACKS, &tracks) != MC_OK) tracks = 0;
+  a->all_singles = tracks > 0;
+  set_empty_description(a);
   /* Playlists with nothing to play here are hidden; say so rather than "No playlists yet". */
   set_no_playlists(a);
   gtk_stack_set_visible_child_name(a->playlists, playlists > 0 ? "grid" : "none");
@@ -1086,7 +1097,6 @@ static gboolean on_playlist_key(GtkWidget *grid, GVariant *args, gpointer user) 
 static GtkWidget *build_albums(app *a) {
   GtkWidget *empty = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(empty), "folder-music-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(empty), mc_str(MC_STR_EMPTY_TITLE));
   a->empty = ADW_STATUS_PAGE(empty);
   a->pair = devices_pair_button();
   gtk_widget_set_visible(a->pair, FALSE);

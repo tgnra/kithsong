@@ -646,6 +646,8 @@
   "linux": {
     "empty_with_version": { "text": "{0}\n\nmusiccore {1}", "note": "{0} is the empty-library message, {1} the core library's version number. musiccore is a name." },
     "playlists_list_failed": "Couldn't list the playlists",
+    "albums_all_singles_title": { "text": "No albums", "note": "The Albums page when the library has music but every album in it has one track: singles, which the page leaves out." },
+    "albums_all_singles_text": { "text": "Every album here has only one track, so they're singles. Find them on the Artists page, under each artist's Singles, or by searching.", "note": "Under \"No albums\". Artists is the sidebar's page; Singles the heading on an artist's page." },
     "album_tile_name": { "text": "{0}, {1}", "note": "An album tile's name for accessibility: its title, then its artist or track count." },
     "artist_menu": { "text": "Artist menu", "note": "The menu button on an artist's page; for accessibility." },
     "delete_to_trash_text": { "one": "{0:d} file will be moved to the Trash and removed from the library on all your devices. Restore it from the Trash to bring it back.", "other": "{0:d} files will be moved to the Trash and removed from the library on all your devices. Restore them from the Trash to bring them back.", "note": "Under \"Delete “{0}”?\"; the files are an album's or track's, and its cover." },
