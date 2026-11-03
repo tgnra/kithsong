@@ -21,8 +21,9 @@ Priorities:
 > **Status:** in development. Windows, Linux and Android import, autotag, browse, play and
 > sync a library, including playlists, album groups, smart lists, search, scrobbling and
 > merging two libraries when pairing. Windows is the most complete and tested; the Linux
-> frontend has had the least testing, and Wear OS is a prototype (albums and a basic player,
-> with sync still a mock-up). What's left, and which platform has what, is in
+> frontend has had the least testing, and Wear OS is deliberately small: albums, playlists
+> and album groups, a player, and sync with its profile chosen on the other devices. What's
+> left, and which platform has what, is in
 > [TODO.md](TODO.md); the core's modules are in [docs/architecture.md](docs/architecture.md).
 
 ## Platforms
@@ -102,6 +103,10 @@ Priorities:
   copies, and the copies are never mistaken for originals. A copy is only ever made from
   the original, never from another copy: a track only a copy at another bitrate can be had
   of waits until a device holding the original is reachable.
+- **Room on small devices:** a device that joins with less free space than the music it would
+  hold as originals gives itself a storage budget before anyone confirms its profile, so a
+  watch fills with what fits (Opus at the highest bitrate that does) instead of running out
+  of space. Once a profile has been confirmed, the budget is whatever its user chose.
 - **Waiting for a device:** when some of the music a device should hold can only come from
   devices it can't reach, the top of the library says so, calmly: "12 tracks are waiting for
   Tania's desktop to come online." It goes by itself once they arrive.
@@ -187,9 +192,18 @@ the track's name.
 
 **Wear OS**
 
-- A prototype: a menu of **Albums**, **Sync** and **Settings** (the open source licences so
-  far), the albums on the watch, and a basic player. Artists and playlists aren't built yet,
-  and sync is a mock-up.
+- A small app on purpose: a menu of **Now playing** (while something is queued), **Albums**,
+  **Playlists**, **Album groups**, **Sync** and **Settings** (the open source licences). Every
+  list shows only what has files on the watch. A long press on a track adds it to an existing
+  playlist, and on an album to an existing album group; the watch creates neither. The player
+  plays in the background through a media session the watch's media controls drive, shows
+  progress and seeks with the crown, counts plays and scrobbles them, and asks for Bluetooth
+  headphones before playing (or plays on the watch's speaker).
+- **Sync** shows the pairing code when a computer or phone adds the watch, then the group,
+  what's on the watch of what its sync settings want, and whether it's paused until Sync is
+  pressed for it on another device: the watch has no profile editor and no Sync button of its
+  own. It syncs while the app is on screen (a transfer finishes in the background), and about
+  once an hour while charging on Wi-Fi.
 
 ## Architecture
 
@@ -205,6 +219,7 @@ desktop/windows  Win32 frontend
 desktop/linux    GTK4 + libadwaita frontend
 android/         Gradle project
   native/        core built with the NDK + JNI bridge, shared by both apps
+  playback/      the core's player as a Media3 Player, shared by both apps
   app/           phone app (Compose)
   wear/          Wear OS app (Compose for Wear OS)
 third_party/     CMake glue for dependencies; all are fetched at configure time, none committed
