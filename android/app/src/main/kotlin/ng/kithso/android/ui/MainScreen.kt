@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -360,7 +361,7 @@ fun MainScreen(
     }
 }
 
-/** The app title, with import, search, sync and settings. It scrolls away with the list. */
+/** The wordmark, with import, search, sync and settings. It scrolls away with the list. */
 @Composable
 private fun Header(
     onSearch: () -> Unit,
@@ -376,11 +377,14 @@ private fun Header(
             .padding(start = Gutter, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            stringResource(R.string.app_name),
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.weight(1f).semantics { heading() },
-        )
+        // The tile's own margin lines it up with the gutter's content, as the title text did.
+        Box(Modifier.weight(1f)) {
+            Wordmark(
+                height = 48.dp,
+                description = stringResource(R.string.app_name),
+                modifier = Modifier.offset(x = (-4).dp).semantics { heading() },
+            )
+        }
         ImportButton(importRunning, importPickers)
         IconButton(onClick = onSearch) { Icon(Icons.Search, contentDescription = stringResource(R.string.search)) }
         IconButton(onClick = onSync) { Icon(Icons.Sync, contentDescription = stringResource(R.string.sync)) }

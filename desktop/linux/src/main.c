@@ -59,9 +59,6 @@
 static const char css[] =
   ".album-cover { border-radius: 8px; background-color: alpha(currentColor, 0.08); }"
   ".now-playing .album-cover { border-radius: 4px; }"
-  /* The logo's placeholder until there's art (logo_new()). */
-  ".app-logo { border-radius: 6px; background-color: alpha(currentColor, 0.08);"
-  " box-shadow: inset 0 0 0 1px alpha(currentColor, 0.15); }"
   ".album-grid { padding: 12px; }"
   ".album-grid > child { padding: 8px; border-radius: 12px; }"
   ".track-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
@@ -1243,13 +1240,14 @@ static GtkWidget *icon_button(const char *icon, const char *tooltip, const char 
   return b;
 }
 
-/* The Kithsong logo, at the start of the header bar before the playback buttons: a LOGO x
- * LOGO square. For now a rounded placeholder in the theme's colours (.app-logo); the real
- * logo goes in here, e.g. a GtkPicture of the same size. It's only decoration: screen
- * readers skip it, and clicks go through to the header bar, so it drags the window. */
+/* The Kithsong logo, at the start of the header bar before the playback buttons: the icon
+ * (built in, brand_logo()) in a LOGO x LOGO square, empty if it couldn't be decoded. It's
+ * only decoration: screen readers skip it, and clicks go through to the header bar, so it
+ * drags the window. */
 static GtkWidget *logo_new(void) {
-  GtkWidget *logo = g_object_new(GTK_TYPE_BOX, "accessible-role", GTK_ACCESSIBLE_ROLE_PRESENTATION, NULL);
-  gtk_widget_add_css_class(logo, "app-logo");
+  GtkWidget *logo = g_object_new(GTK_TYPE_PICTURE, "accessible-role", GTK_ACCESSIBLE_ROLE_PRESENTATION,
+                                 "paintable", brand_logo(), "content-fit", GTK_CONTENT_FIT_CONTAIN,
+                                 "can-shrink", TRUE, NULL);
   gtk_widget_set_size_request(logo, LOGO, LOGO);
   gtk_widget_set_valign(logo, GTK_ALIGN_CENTER);
   gtk_widget_set_can_target(logo, FALSE);

@@ -166,6 +166,9 @@ fun SettingsScreen(
 
             item(key = "about") {
                 SettingsHeading(stringResource(R.string.settings_about))
+                // Decoration: the row under it says the name. The tile's margin lines it up
+                // with the rows' text.
+                Wordmark(height = 64.dp, description = null, modifier = Modifier.padding(start = 10.dp, top = 4.dp))
                 val version = remember { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
                 ListItem(
                     headlineContent = { Text(stringResource(R.string.app_name)) },

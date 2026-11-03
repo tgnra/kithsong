@@ -98,7 +98,13 @@ class Templates:
     def home(self, meta, features):
         site = self.site
         if site["logo"]:
-            logo = f'<img class="logo-img" src="{esc(site["logo"])}" alt="{esc(site["title"])}">'
+            # With a dark version, style.css shows whichever matches the theme; the hidden
+            # one is display: none, so screen readers say the title once.
+            dark = site["logo_dark"]
+            logo = (f'<img class="logo-img{" logo-light" if dark else ""}" src="{esc(site["logo"])}" '
+                    f'alt="{esc(site["title"])}">')
+            if dark:
+                logo += f'<img class="logo-img logo-dark" src="{esc(dark)}" alt="{esc(site["title"])}">'
         else:
             logo = esc(site["title"])
         tagline = meta.get("tagline", "")

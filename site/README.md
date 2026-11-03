@@ -43,7 +43,9 @@ Your devices find each other on your local network. …
 ```
 
 The logo is the site title as text. Set `logo` in `site.toml` to an image (e.g. put
-`logo.svg` in `static/` and set `logo = "/logo.svg"`) to use that instead.
+`logo.svg` in `static/` and set `logo = "/logo.svg"`) to use that instead, and `logo_dark`
+to one shown in the dark theme. The Kithsong wordmark's two, and `favicon.svg`, are written
+by `packaging/icons/generate.sh`.
 
 ### Download links
 

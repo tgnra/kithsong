@@ -10,9 +10,9 @@
   --accent: #a8401a;
   --accent-fg: #fff;
   --focus: #1d4ed8;
-  /* The background's glows (see body::before): the accent's orange, the logo's purple, a
-     rose and an amber, at HCT tone 87 (28 dark) and chroma 48, at 80% opacity. */
-  --glow-1: #ffd0becc; --glow-2: #e1d3ffcc; --glow-3: #ffcce3cc; --glow-4: #ffd398cc;
+  /* The background's sunrise (see body::before): the icon's purple sky, its orange horizon
+     with an amber sun, and its green ground, at HCT tone about 87 (28 dark), at 80% opacity. */
+  --glow-1: #e1d3ffcc; --glow-2: #ffd0becc; --glow-3: #ffd398cc; --glow-4: #bdecb6cc;
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "URW Palladio L", Georgia, serif;
 }
 /* Dark: follows the system unless the toggle chose light; or chosen explicitly. */
@@ -27,7 +27,7 @@
     --accent: #f4a06b;
     --accent-fg: #1b0f07;
     --focus: #8ab4ff;
-    --glow-1: #752a06cc; --glow-2: #4a3285cc; --glow-3: #722552cc; --glow-4: #5c3b00cc;
+    --glow-1: #4a3285cc; --glow-2: #752a06cc; --glow-3: #5c3b00cc; --glow-4: #1e4a28cc;
   }
 }
 :root[data-theme="dark"] {
@@ -40,7 +40,7 @@
   --accent: #f4a06b;
   --accent-fg: #1b0f07;
   --focus: #8ab4ff;
-  --glow-1: #752a06cc; --glow-2: #4a3285cc; --glow-3: #722552cc; --glow-4: #5c3b00cc;
+  --glow-1: #4a3285cc; --glow-2: #752a06cc; --glow-3: #5c3b00cc; --glow-4: #1e4a28cc;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -55,23 +55,23 @@ body {
   font: clamp(1rem, 0.95rem + 0.25vw, 1.0625rem) / 1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   overflow-wrap: break-word;
 }
-/* The background, as Android's ArtBackdrop draws it behind a screen: four soft glows, one
-   towards each corner, each from 80% to clear over three quarters of the screen's longer
-   side. Its colours are fixed here rather than the art's. Their tones are the app's (86
-   light, 30 dark) moved a step further from the text's, so muted text and links keep 4.5:1
-   on the brightest part. A fixed layer the large viewport's height, so it doesn't scroll or
-   resize as a phone's address bar comes and goes. */
+/* The background: the app icon's sunrise (packaging/icons/generate.sh) across the window.
+   A purple glow overhead, an orange one around the middle with an amber heart, and green
+   rising from the bottom like the icon's ground, the green level so the horizon stays flat.
+   Their tones are the app's (86 light, 30 dark) moved a step further from the text's, so
+   muted text and links keep 4.5:1 on the brightest part. A fixed layer the large viewport's
+   height, so it doesn't scroll or resize as a phone's address bar comes and goes. */
 body::before {
   content: ""; position: fixed; top: 0; left: 0; z-index: -1; width: 100%; height: 100vh; height: 100lvh;
   pointer-events: none;
-  --r: 75vmax;
+  --r: 1vmax;
   background:
-    radial-gradient(circle at 10% 5%, var(--glow-1), transparent var(--r)),
-    radial-gradient(circle at 90% 20%, var(--glow-2), transparent var(--r)),
-    radial-gradient(circle at 15% 75%, var(--glow-3), transparent var(--r)),
-    radial-gradient(circle at 90% 95%, var(--glow-4), transparent var(--r));
+    linear-gradient(to bottom, transparent 58%, var(--glow-4) 100%),
+    radial-gradient(circle at 50% 52%, var(--glow-3), transparent calc(24 * var(--r))),
+    radial-gradient(circle at 50% 60%, var(--glow-2), transparent calc(62 * var(--r))),
+    radial-gradient(circle at 50% -10%, var(--glow-1), transparent calc(95 * var(--r)));
 }
-@supports (width: 1lvmax) { body::before { --r: 75lvmax; } }
+@supports (width: 1lvmax) { body::before { --r: 1lvmax; } }
 
 a { color: var(--accent); text-underline-offset: 0.15em; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
@@ -127,7 +127,15 @@ th, td { border-bottom: 1px solid var(--rule); padding: 0.5rem; text-align: left
   font-family: var(--serif); font-size: clamp(3.75rem, 1.5rem + 10vw, 8rem); font-weight: 600;
   letter-spacing: -0.025em; line-height: 1; margin: 0;
 }
-.logo-img { display: block; max-width: min(100%, 32rem); height: auto; margin-inline: auto; }
+.logo-img { display: block; width: min(100%, 32rem); height: auto; margin-inline: auto; }
+/* A logo with a dark version: the one that matches the theme, as the colours above choose. */
+.logo-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .logo-light { display: none; }
+  :root:not([data-theme="light"]) .logo-dark { display: block; }
+}
+:root[data-theme="dark"] .logo-light { display: none; }
+:root[data-theme="dark"] .logo-dark { display: block; }
 .tagline {
   max-width: 34rem; margin: 1.25rem auto 2.25rem; color: var(--muted);
   font-size: clamp(1.125rem, 1rem + 0.6vw, 1.375rem); text-wrap: balance;

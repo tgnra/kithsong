@@ -36,8 +36,8 @@ add_executable(kithsong
 # yyjson for the smart list editor, which reads and writes rules (smart_editor.c).
 target_link_libraries(kithsong PRIVATE musiccore mc_yyjson PkgConfig::ADW m)
 
-# The logo, built in for the empty pages' glows (brand_backdrop.c), so they're coloured
-# without the icon installed.
+# The logo, built in for the header bar and the empty pages' glows (brand_backdrop.c), so
+# they show without the icon installed.
 set(_logo_png "${PROJECT_SOURCE_DIR}/packaging/icons/kithsong-128.png")
 set(_logo_c "${CMAKE_CURRENT_BINARY_DIR}/generated/kithsong_logo_png.c")
 add_custom_command(

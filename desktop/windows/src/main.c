@@ -272,15 +272,45 @@ static RECT logo_rect(void) {
   return r;
 }
 
-/* The Kithsong logo, in logo_rect(). For now a placeholder, a rounded square in the theme's
- * colours, as the album grid's placeholders are; the real logo goes in here (e.g.
- * canvas_draw_image() of a premultiplied image at the DPI's size). */
+/* The app icon (IDI_APP) as a size x size premultiplied, top-down image, for the logo: kept
+ * until the size changes (the DPI does). LoadIconWithScaleDown() takes the .ico's nearest
+ * bigger size and scales it down well. NULL if it can't be loaded. */
+static const uint32_t *logo_image(int size) {
+  static uint32_t *image;
+  static int image_size;
+  if (image && image_size == size) return image;
+  free(image);
+  image = NULL;
+  image_size = size;
+  HICON icon;
+  if (FAILED(LoadIconWithScaleDown(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDI_APP), size, size, &icon))) return NULL;
+  ICONINFO info;
+  if (GetIconInfo(icon, &info)) {
+    BITMAPINFO bi = {.bmiHeader = {.biSize = sizeof bi.bmiHeader, .biWidth = size, .biHeight = -size,
+                                   .biPlanes = 1, .biBitCount = 32, .biCompression = BI_RGB}};
+    image = malloc((size_t)size * (size_t)size * sizeof *image);
+    HDC dc = GetDC(NULL);
+    if (image && !GetDIBits(dc, info.hbmColor, 0, (UINT)size, image, &bi, DIB_RGB_COLORS)) {
+      free(image);
+      image = NULL;
+    }
+    ReleaseDC(NULL, dc);
+    for (int i = 0; image && i < size * size; i++) { /* the icon's alpha is straight */
+      uint32_t p = image[i], a = p >> 24;
+      image[i] = a << 24 | ((p >> 16 & 255) * a / 255) << 16 | ((p >> 8 & 255) * a / 255) << 8 | (p & 255) * a / 255;
+    }
+    DeleteObject(info.hbmColor);
+    DeleteObject(info.hbmMask);
+  }
+  DestroyIcon(icon);
+  return image;
+}
+
+/* The Kithsong logo, in logo_rect(): the app icon at the DPI's size. */
 static void paint_logo(canvas *c) {
   RECT r = logo_rect();
-  int radius = scale(6);
-  COLORREF ink = theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0);
-  if (!theme.high_contrast) canvas_fill(c, &r, radius, ink, theme.dark ? 15 : 6);
-  canvas_frame(c, &r, radius, 1, theme.high_contrast ? theme.text : theme.line, 255);
+  int size = r.right - r.left;
+  canvas_draw_image(c, &r, logo_image(size), size, size);
 }
 
 static void layout(void) {

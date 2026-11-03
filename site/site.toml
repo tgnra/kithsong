@@ -3,9 +3,10 @@ description = "A local-only music player that keeps your library perfectly organ
 base_url = "https://kithso.ng"
 language = "en"
 github = "https://github.com/tgnra/kithsong"
-# An image shown instead of the title text, e.g. "/logo.svg" from static/. Its alt text
-# is the title.
-logo = ""
+# An image shown instead of the title text, e.g. "/logo.svg" from static/, and optionally
+# one for the dark theme. Their alt text is the title.
+logo = "/logo.svg"
+logo_dark = "/logo-dark.svg"
 
 # The home page's download links, in this order. download.js makes the visitor's own
 # platform (windows, linux or android) the main button. Replace each href with the

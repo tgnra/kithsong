@@ -18,6 +18,7 @@ DEFAULTS = {
     "language": "en",
     "github": "",
     "logo": "",
+    "logo_dark": "",
     "downloads": [],
 }
 

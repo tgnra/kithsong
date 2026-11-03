@@ -223,10 +223,11 @@ EOF
   echo "</vector>"
 } >"$APP_RES/drawable/ic_notification.xml"
 
-# The header's and About's wordmark, on light and dark surfaces. 141 x 40dp; the tile's
-# corners match the icon's (25 of 108).
+# The header's and About's wordmark, ic_wordmark: drawable for light, drawable-night for dark,
+# as the theme follows the system. 141 x 40dp; the tile's corners match the icon's (25 of 108).
 for theme in light dark; do
-  if [ $theme = light ]; then word=("${WORD_LIGHT[@]}"); else word=("${WORD_DARK[@]}"); fi
+  if [ $theme = light ]; then word=("${WORD_LIGHT[@]}"); dir=drawable; else word=("${WORD_DARK[@]}"); dir=drawable-night; fi
+  mkdir -p "$APP_RES/$dir"
   {
     vd_open 140.8 40 352 100 "The Kithsong wordmark for a $theme surface: the icon's tile, then the name in Merienda Bold."
     cat <<EOF
@@ -240,7 +241,7 @@ $(vd_mark 17.36 17.36 0.733 "$MARK" "        ")
     </group>
 </vector>
 EOF
-  } >"$APP_RES/drawable/ic_wordmark_$theme.xml"
+  } >"$APP_RES/$dir/ic_wordmark.xml"
 done
 
 echo "Wrote the icon, wordmark, site images and Android drawables. Now run render.py."
