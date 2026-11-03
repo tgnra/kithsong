@@ -8,6 +8,11 @@
  *    1   Airbag                        4:44
  *   >)   Paranoid Android              6:23   <- playing, in the accent colour
  *
+ * Behind the header and Play and Shuffle is the art's colour, as soft glows (art_backdrop.h)
+ * from the cover, or a playlist's or smart list's picture, thinning out above the tracks,
+ * which stay on the pane's own background; art with no colour but grey leaves it plain. The
+ * pane's accent (Play, the playing track) is the same art's (art_accent.h).
+ *
  * Play and Shuffle play the whole list, in order or shuffled; they're insensitive when
  * nothing in it can be played here. Track numbers and durations are dimmed; on albums with
  * more than one disc the numbers read "2-5"; in a playlist they count its places.

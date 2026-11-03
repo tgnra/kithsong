@@ -22,6 +22,7 @@ dependency is added.
 | libopusenc | 0.2.1 | BSD-3-Clause | fetched, static (includes the Speex resampler, BSD-3-Clause) |
 | opusfile | 0.12 | BSD-3-Clause | fetched, static, without its HTTP support |
 | Miller Shuffle (`MillerShuffle_Large`) | Jan 2026 update ([RondeSC/Miller_Shuffle_Algo](https://github.com/RondeSC/Miller_Shuffle_Algo)) | Apache-2.0 | reimplemented in `core/src/playback/shuffle.c` (one function, adapted) |
+| material-color-utilities (HCT on CAM16, the Wu and WSMeans quantizers, Score) | Java sources, as Android reaches them through MaterialKolor 5.0.1 ([material-foundation/material-color-utilities](https://github.com/material-foundation/material-color-utilities)) | Apache-2.0 | reimplemented in `core/src/art/art_colors.c` (ported to C, adapted) |
 
 ## Obligations
 
@@ -29,7 +30,7 @@ dependency is added.
   source of TagLib's own files (including any modifications) to stay available, so static
   linking into a closed or open app is fine. If the LGPL option is used instead, static
   linking requires shipping relinkable object files.
-- **Apache-2.0 (Mbed TLS, Miller Shuffle), MIT (yyjson), curl, BSL (utfcpp), MPL (CA bundle),
+- **Apache-2.0 (Mbed TLS, Miller Shuffle, material-color-utilities), MIT (yyjson), curl, BSL (utfcpp), MPL (CA bundle),
   BSD-3-Clause (libogg, libopus, libopusenc, opusfile)**: include their license texts in an
   "About / Licenses" screen or a `LICENSES` folder in each distributed package.
 - **Miller Shuffle** (Copyright 2022 Ronald R. Miller): the repository's LICENSE is
@@ -38,6 +39,10 @@ dependency is added.
   version. We go by the LICENSE file. Apache-2.0 asks that changed files say so:
   `shuffle.c` credits the original and lists the changes (its static state worked out per
   call, so it's thread-safe; n = 0 for 2^32 items dropped). The project has no NOTICE file.
+- **material-color-utilities** (Copyright 2021-2022 Google LLC): Apache-2.0, with no NOTICE
+  file. `art_colors.c` credits it and lists the changes (one C file; WSMeans compares each
+  point with every cluster; pixels that aren't opaque left out; a bisection for HCT's
+  solver).
 
 ## Where the texts ship
 

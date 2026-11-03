@@ -4,10 +4,14 @@
 #include <string.h>
 
 #include "app.h"
+#include "art_accent.h"
+#include "art_backdrop.h"
 #include "cover.h"
 #include "drag.h"
 
 enum { HEADER_COVER = 96 };
+/* How much of the backdrop's height, at its bottom, its glows thin out over. */
+#define BACKDROP_FADE 0.4
 
 /* --- TrackItem: one row --- */
 
@@ -87,6 +91,7 @@ static struct {
   GMenuModel *header_menu, *smart_header_menu; /* what it shows: a smart one's has Edit rules… */
   GtkWidget *reshuffle_button;    /* shown for smart playlists in random order */
   GtkWidget *actions;             /* Play and Shuffle */
+  GtkWidget *backdrop;            /* the art's colours behind the header and actions */
   char playing_uid[MC_UID_STRLEN];
 } s;
 
@@ -778,9 +783,17 @@ GtkWidget *track_list_new(const track_list_callbacks *cb) {
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(s.scroller), s.view);
   gtk_widget_set_vexpand(s.scroller, TRUE);
 
+  /* The art's colours behind the header and Play and Shuffle, thinning out above the
+   * tracks, which stay on the pane's own background. */
+  GtkWidget *top = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(top), build_header());
+  gtk_box_append(GTK_BOX(top), build_actions());
+  s.backdrop = art_backdrop_new();
+  art_backdrop_set_fade_bottom(ART_BACKDROP(s.backdrop), BACKDROP_FADE);
+  art_backdrop_set_child(ART_BACKDROP(s.backdrop), top);
+
   GtkWidget *pane = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_box_append(GTK_BOX(pane), build_header());
-  gtk_box_append(GTK_BOX(pane), build_actions());
+  gtk_box_append(GTK_BOX(pane), s.backdrop);
   gtk_box_append(GTK_BOX(pane), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
   gtk_box_append(GTK_BOX(pane), s.scroller);
   s.pane = pane;
@@ -901,6 +914,8 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
     }
     gtk_picture_set_paintable(GTK_PICTURE(s.cover), GDK_PAINTABLE(texture));
     g_clear_object(&texture);
+    art_backdrop_set_file(ART_BACKDROP(s.backdrop), album ? album->cover_file : NULL);
+    art_accent_set_file(s.pane, album ? album->cover_file : NULL);
   }
 }
 

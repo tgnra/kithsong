@@ -71,6 +71,7 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "musiccore/sync.h"
 #include "musiccore/sync_here.h"
 #include "musiccore/scrobbler.h"
+#include "musiccore/artcolors.h"
 
 #include "musiccore/i18n.h"
 
