@@ -28,6 +28,7 @@ struct _ArtistItem {
   char uid[MC_UID_STRLEN];
   char *name; /* "Unknown artist" if it has none */
   char *sub;  /* "12 albums", or NULL if it's only credited on tracks */
+  char *cover_dir; /* the folder of its picture's cover (mc_artist_info), or NULL for none */
 };
 
 G_DEFINE_FINAL_TYPE(ArtistItem, artist_item, G_TYPE_OBJECT)
@@ -36,6 +37,7 @@ static void artist_item_finalize(GObject *obj) {
   ArtistItem *self = ARTIST_ITEM(obj);
   g_free(self->name);
   g_free(self->sub);
+  g_free(self->cover_dir);
   G_OBJECT_CLASS(artist_item_parent_class)->finalize(obj);
 }
 
@@ -56,11 +58,13 @@ static ArtistItem *artist_item_new(const mc_artist_info *info) {
     mc_format(sub, sizeof sub, mc_str_plural(MC_STR_COUNT_ALBUMS, info->album_count), MC_D(info->album_count));
     self->sub = g_strdup(sub);
   }
+  self->cover_dir = g_strdup(info->cover_dir);
   return self;
 }
 
 static gboolean artist_item_equal(const ArtistItem *a, const ArtistItem *b) {
-  return !strcmp(a->uid, b->uid) && !strcmp(a->name, b->name) && !g_strcmp0(a->sub, b->sub);
+  return !strcmp(a->uid, b->uid) && !strcmp(a->name, b->name) && !g_strcmp0(a->sub, b->sub) &&
+         !g_strcmp0(a->cover_dir, b->cover_dir);
 }
 
 /* --- ArtistTrack: one row of an artist's tracks --- */
@@ -175,11 +179,17 @@ static void changed(void) {
 
 /* --- The artist menu: on the list's rows and under the page's "..." --- */
 
+/* An artist as the list has it, or NULL. */
+static ArtistItem *find_artist(const char *uid) {
+  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.artists)); uid[0] && i < n; i++)
+    if (!strcmp(artist_at(i)->uid, uid)) return artist_at(i);
+  return NULL;
+}
+
 /* An artist's name as the list has it, or NULL. */
 static const char *name_of(const char *uid) {
-  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.artists)); uid[0] && i < n; i++)
-    if (!strcmp(artist_at(i)->uid, uid)) return artist_at(i)->name;
-  return NULL;
+  ArtistItem *artist = find_artist(uid);
+  return artist ? artist->name : NULL;
 }
 
 /* The open artist's name, or NULL. */
@@ -279,6 +289,38 @@ static gboolean on_list_menu_key(GtkWidget *widget, GVariant *args, gpointer use
   return FALSE;
 }
 
+/* --- Pictures --- */
+
+/* An avatar's picture on its way, kept on the avatar as "loading": dropping it cancels it. */
+static void cancel_loading(gpointer data) {
+  g_cancellable_cancel(data);
+  g_object_unref(data);
+}
+
+static void picture_loaded(GdkTexture *texture, gpointer user) {
+  adw_avatar_set_custom_image(ADW_AVATAR(user), texture ? GDK_PAINTABLE(texture) : NULL);
+  g_object_set_data(G_OBJECT(user), "loading", NULL);
+}
+
+/* Shows the cover in dir (an artist's picture, mc_artist_info.cover_dir) on avatar, size
+ * across, loading it on the cover thread if it isn't cached; its initials show until then, or
+ * for no dir. */
+static void set_picture(GtkWidget *avatar, const char *dir, int size) {
+  g_object_set_data(G_OBJECT(avatar), "loading", NULL); /* cancels one on its way */
+  adw_avatar_set_custom_image(ADW_AVATAR(avatar), NULL);
+  if (!dir) return;
+  int px = size * gtk_widget_get_scale_factor(avatar);
+  GdkTexture *texture = NULL;
+  if (cover_lookup(dir, px, &texture)) {
+    adw_avatar_set_custom_image(ADW_AVATAR(avatar), texture ? GDK_PAINTABLE(texture) : NULL);
+    g_clear_object(&texture);
+    return;
+  }
+  GCancellable *loading = g_cancellable_new();
+  g_object_set_data_full(G_OBJECT(avatar), "loading", loading, cancel_loading);
+  cover_load(dir, px, loading, picture_loaded, avatar);
+}
+
 /* --- The list --- */
 
 static void artist_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
@@ -324,10 +366,18 @@ static void artist_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gp
   GtkWidget *text = gtk_widget_get_next_sibling(avatar);
   GtkWidget *name = gtk_widget_get_first_child(text), *sub = gtk_widget_get_next_sibling(name);
   adw_avatar_set_text(ADW_AVATAR(avatar), artist->name);
+  set_picture(avatar, artist->cover_dir, LIST_AVATAR);
   gtk_label_set_text(GTK_LABEL(name), artist->name);
   gtk_label_set_text(GTK_LABEL(sub), artist->sub ? artist->sub : "");
   gtk_widget_set_visible(sub, artist->sub != NULL);
   gtk_list_item_set_accessible_label(item, artist->name);
+}
+
+/* A row scrolled away: its picture needn't load, so a fast scroll leaves no backlog. */
+static void artist_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  set_picture(gtk_widget_get_first_child(gtk_list_item_get_child(item)), NULL, LIST_AVATAR);
 }
 
 static void on_artist_activated(GtkListView *view, guint position, gpointer user) {
@@ -705,7 +755,9 @@ static void load_singles(const char *artist) {
 /* Fills the page from the library: the artist's name, albums, singles and tracks. */
 static void load_page(void) {
   const char *name = open_name();
+  ArtistItem *artist = find_artist(v.open);
   adw_avatar_set_text(ADW_AVATAR(v.avatar), name);
+  set_picture(v.avatar, artist ? artist->cover_dir : NULL, PAGE_AVATAR);
   gtk_label_set_text(GTK_LABEL(v.name), name ? name : "");
 
   gtk_flow_box_remove_all(GTK_FLOW_BOX(v.albums));
@@ -780,6 +832,7 @@ static void go_back(void) {
   g_list_store_remove_all(v.singles);
   gtk_flow_box_remove_all(GTK_FLOW_BOX(v.singles_box));
   art_backdrop_set_files(ART_BACKDROP(v.backdrop), NULL, 0);
+  set_picture(v.avatar, NULL, PAGE_AVATAR);
   gtk_stack_set_visible_child_name(GTK_STACK(v.stack),
                                    g_list_model_get_n_items(G_LIST_MODEL(v.artists)) ? "list" : "none");
   gtk_widget_grab_focus(v.list);
@@ -1029,6 +1082,7 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
   GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
   g_signal_connect(factory, "setup", G_CALLBACK(artist_setup), NULL);
   g_signal_connect(factory, "bind", G_CALLBACK(artist_bind), NULL);
+  g_signal_connect(factory, "unbind", G_CALLBACK(artist_unbind), NULL);
   /* The view takes both; the selection stays ours too. */
   v.list = gtk_list_view_new(GTK_SELECTION_MODEL(g_object_ref(v.artist_selection)), factory);
   gtk_list_view_set_single_click_activate(GTK_LIST_VIEW(v.list), TRUE);

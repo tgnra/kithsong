@@ -57,8 +57,17 @@ data class NamedInfo(val uid: String, val name: String, val albumCount: Int)
  * with a file on this device and [trackCount] the tracks credited to them with one; from
  * mc_library_list_artists(), [albumCount] is all their albums and [trackCount] 0. [sortName]
  * is what artists are ordered by: their sort name ("Beatles, The"), else their name.
+ * [coverDir] holds their picture: the cover of their first own album here that has one
+ * ([NativeCore.coverFile] finds it); null if none has.
  */
-data class ArtistInfo(val uid: String, val name: String, val albumCount: Int, val trackCount: Int, val sortName: String)
+data class ArtistInfo(
+    val uid: String,
+    val name: String,
+    val albumCount: Int,
+    val trackCount: Int,
+    val sortName: String,
+    val coverDir: String? = null,
+)
 
 /** An open library (mc_library), in folder [dir]. Not thread-safe; close it when done. */
 class CoreLibrary(dir: String) : AutoCloseable {

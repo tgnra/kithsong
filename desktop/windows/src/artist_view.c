@@ -31,7 +31,11 @@ enum {
   PAD_X = 24,
   LIST_TOP = 12, /* above the first artist, and below the last */
   ROW_H = 52,
-  ROW_ICON_W = 44,
+  ROW_ICON_W = 56,  /* the picture, with room on both sides */
+  ROW_PICTURE = 36, /* an artist's picture in the list, round */
+  ROW_PICTURE_X = 8,
+  PAGE_PICTURE = 96, /* and on their page, beside the back button */
+  PICTURE_GAP = 16,  /* between that and the name */
   RADIUS = 6,
   HEAD_TOP = 20,
   BACK = 32, /* the back button's square, and the arrows' */
@@ -52,10 +56,21 @@ enum {
  * that (right): see arrow_hit(). */
 enum { HIT_NONE = -1, HIT_BACK = -2, HIT_ARROWS = -3 };
 
+/* An artist's picture, decoded round and premultiplied: the cover of one of their albums
+ * (mc_artist_info.cover_dir). */
+typedef struct picture {
+  HBITMAP bmp;
+  const uint32_t *pixels;
+  int size;    /* what it was decoded at; 0 for not yet */
+  BOOL failed; /* the cover couldn't be decoded; draw the placeholder */
+} picture;
+
 typedef struct artist_row {
   char uid[MC_UID_STRLEN];
   wchar_t *name;
-  wchar_t sub[64]; /* "12 albums", or "" for one only credited on tracks */
+  wchar_t sub[64];    /* "12 albums", or "" for one only credited on tracks */
+  wchar_t *cover_dir; /* NULL when the artist has no picture */
+  picture pic;        /* decoded only near the list's view */
 } artist_row;
 
 /* An album, or a single: a track alone on its album here, or on none. */
@@ -102,6 +117,8 @@ static struct {
   /* The open artist, if any. */
   char open_uid[MC_UID_STRLEN];
   wchar_t *open_name;
+  wchar_t *open_cover_dir; /* its picture's, or NULL */
+  picture open_pic;
   wchar_t summary[128]; /* "12 albums · 140 tracks" */
   strip strips[NUM_STRIPS];
   BOOL cover_posted; /* WM_APP_COVER is on its way */
@@ -110,7 +127,7 @@ static struct {
   track_list_request req;
 
   /* Layout of the open artist's header, in the client area. */
-  RECT back, tracks_heading;
+  RECT back, picture, tracks_heading;
   int tile_h, header_h;
 
   int hot;     /* the hit under the mouse, or HIT_NONE */
@@ -219,12 +236,15 @@ static void layout(void) {
   v.text_h = font_height(v.font);
   v.title_h = font_height(v.title_font);
 
-  /* An artist's header: the back button beside the name, then the strips that have anything
-   * in them, each under its heading, then a heading for the track list beneath. */
+  /* An artist's header: the back button, their picture, and the name beside it, then the
+   * strips that have anything in them, each under its heading, then a heading for the track
+   * list beneath. */
   int name_block = v.title_h + scale(NAME_GAP) + v.text_h;
   int top = scale(HEAD_TOP);
   SetRect(&v.back, pad, top + (v.title_h - scale(BACK)) / 2, pad + scale(BACK), top + (v.title_h + scale(BACK)) / 2);
-  int y = top + max(scale(BACK), name_block) + scale(HEAD_BOTTOM);
+  SetRect(&v.picture, v.back.right + scale(BACK_GAP), top, v.back.right + scale(BACK_GAP) + scale(PAGE_PICTURE),
+          top + scale(PAGE_PICTURE));
+  int y = top + max(max(scale(BACK), name_block), scale(PAGE_PICTURE)) + scale(HEAD_BOTTOM);
   v.tile_h = scale(TILE_W) + scale(TEXT_GAP) + 2 * v.text_h;
   for (int sk = 0; sk < NUM_STRIPS; sk++) {
     strip *st = &v.strips[sk];
@@ -354,8 +374,11 @@ static void update_hot(void) {
   set_hot(v.tracking && !v.scroll.hot && !v.scroll.dragging && v.pressed == HIT_NONE ? hit_at(pt.x, pt.y) : HIT_NONE);
 }
 
+static void request_covers(void);
+
 static void on_scrolled(void) {
   update_hot();
+  request_covers(); /* the rows come into view */
 }
 
 /* --- The strips' sideways scrolling --- */
@@ -422,28 +445,95 @@ static BOOL wants_cover(const tile *t) {
   return t->cover_dir && !t->failed && t->thumb_size != scale(TILE_W);
 }
 
-static void request_covers(void) {
-  if (v.cover_posted) return;
-  for (int i = 0, n = num_tiles(); i < n; i++)
-    if (wants_cover(tile_at(i))) {
-      v.cover_posted = PostMessageW(v.wnd, WM_APP_COVER, 0, 0);
-      return;
-    }
+static void free_picture(picture *p) {
+  if (p->bmp) DeleteObject(p->bmp);
+  memset(p, 0, sizeof *p);
 }
 
-/* Decodes one cover, then asks for the next, so input between them goes first. */
-static void decode_next_cover(void) {
-  v.cover_posted = FALSE;
-  int i = 0, n = num_tiles();
-  while (i < n && !wants_cover(tile_at(i))) i++;
-  if (i == n) return;
-  tile *t = tile_at(i);
+static BOOL wants_picture(const picture *p, const wchar_t *dir, int size) {
+  return dir && !p->failed && p->size != size;
+}
+
+/* The list's rows in view, and screens more of them either side; first > last while a page
+ * is open. */
+static void row_range(int screens, int *first, int *last) {
+  int row_h = scale(ROW_H), view = v.scroll.view.bottom - v.scroll.view.top, extra = screens * view;
+  *first = max(0, (v.scroll.pos - scale(LIST_TOP) - extra) / row_h);
+  *last = is_open() || view <= 0 ? -1 : min(v.nartists - 1, (v.scroll.pos + view + extra - scale(LIST_TOP)) / row_h);
+}
+
+/* The row in view whose picture is still to decode, or -1. */
+static int wanted_row(void) {
+  int first, last;
+  row_range(0, &first, &last);
+  for (int i = first; i <= last; i++)
+    if (wants_picture(&v.artists[i].pic, v.artists[i].cover_dir, scale(ROW_PICTURE))) return i;
+  return -1;
+}
+
+/* Lets go of the pictures of rows a few screens away, so a long list holds only those near
+ * its view. */
+static void trim_pictures(void) {
+  int first, last;
+  row_range(3, &first, &last);
+  if (last < 0) return; /* a page is open: the list keeps what it had */
+  for (int i = 0; i < v.nartists; i++)
+    if ((i < first || i > last) && v.artists[i].pic.size) free_picture(&v.artists[i].pic);
+}
+
+static void request_covers(void) {
+  if (v.cover_posted) return;
+  trim_pictures();
+  BOOL any = is_open() && wants_picture(&v.open_pic, v.open_cover_dir, scale(PAGE_PICTURE));
+  for (int i = 0, n = num_tiles(); !any && i < n; i++) any = wants_cover(tile_at(i));
+  if (any || wanted_row() >= 0) v.cover_posted = PostMessageW(v.wnd, WM_APP_COVER, 0, 0);
+}
+
+static BOOL have_wic(void) {
   if (!v.wic)
     CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory, (void **)&v.wic);
+  return v.wic != NULL;
+}
+
+/* Decodes dir's cover into p, size x size and round. */
+static void decode_picture(picture *p, const wchar_t *dir, int size) {
+  free_picture(p);
+  const uint32_t *px = NULL;
+  HBITMAP bmp = have_wic() ? cover_decode(v.wic, dir, size, size / 2, &px) : NULL;
+  if (bmp) {
+    p->bmp = bmp;
+    p->pixels = px;
+    p->size = size;
+  } else {
+    p->failed = TRUE;
+  }
+}
+
+/* Decodes one cover, then asks for the next, so input between them goes first: the open
+ * artist's picture, then their tiles; or the rows' pictures in the list's view. */
+static void decode_next_cover(void) {
+  v.cover_posted = FALSE;
+  if (is_open() && wants_picture(&v.open_pic, v.open_cover_dir, scale(PAGE_PICTURE))) {
+    decode_picture(&v.open_pic, v.open_cover_dir, scale(PAGE_PICTURE));
+    InvalidateRect(v.wnd, &v.picture, FALSE);
+    request_covers();
+    return;
+  }
+  int i = 0, n = num_tiles();
+  while (i < n && !wants_cover(tile_at(i))) i++;
+  if (i == n) {
+    int row = wanted_row();
+    if (row < 0) return;
+    decode_picture(&v.artists[row].pic, v.artists[row].cover_dir, scale(ROW_PICTURE));
+    invalidate_hit(row);
+    request_covers();
+    return;
+  }
+  tile *t = tile_at(i);
   free_thumb(t);
   const uint32_t *px = NULL;
   int size = scale(TILE_W);
-  HBITMAP bmp = v.wic ? cover_decode(v.wic, t->cover_dir, size, scale(COVER_RADIUS), &px) : NULL;
+  HBITMAP bmp = have_wic() ? cover_decode(v.wic, t->cover_dir, size, scale(COVER_RADIUS), &px) : NULL;
   if (bmp) {
     t->thumb = bmp;
     t->pixels = px;
@@ -457,11 +547,27 @@ static void decode_next_cover(void) {
 
 /* --- Data --- */
 
+static void free_rows(artist_row *rows, int n) {
+  for (int i = 0; i < n; i++) {
+    free(rows[i].name);
+    free(rows[i].cover_dir);
+    free_picture(&rows[i].pic);
+  }
+  free(rows);
+}
+
 static void free_artists(void) {
-  for (int i = 0; i < v.nartists; i++) free(v.artists[i].name);
-  free(v.artists);
+  free_rows(v.artists, v.nartists);
   v.artists = NULL;
   v.nartists = 0;
+}
+
+/* Sets the open artist's picture's folder, letting go of the picture if it changed. */
+static void set_open_cover(const wchar_t *dir) {
+  if (dir && v.open_cover_dir && !wcscmp(dir, v.open_cover_dir)) return;
+  free(v.open_cover_dir);
+  v.open_cover_dir = dir ? _wcsdup(dir) : NULL;
+  free_picture(&v.open_pic);
 }
 
 static void free_tiles(tile *tiles, int n) {
@@ -586,19 +692,22 @@ static void close_artist(void) {
   v.open_uid[0] = '\0';
   free(v.open_name);
   v.open_name = NULL;
+  set_open_cover(NULL);
   free_strips();
   v.hot = v.pressed = HIT_NONE;
   v.focus = v.list_focus;
   v.reveal_focus = TRUE;
   layout();
   InvalidateRect(v.wnd, NULL, FALSE);
+  request_covers(); /* the rows' */
 }
 
 /* Lists the artists again, and the open one's albums; if it has left the library, back to
  * the list. */
 static void reload(void) {
   v.stale = FALSE;
-  free_artists();
+  artist_row *old = v.artists;
+  int nold = v.nartists, j = 0;
   mc_artist_list *list = NULL;
   v.status = v.lib ? mc_library_list_artists(v.lib, &list) : MC_OK;
   int n = list ? list->count : 0;
@@ -610,9 +719,22 @@ static void reload(void) {
     memcpy(r->uid, a->uid, sizeof r->uid);
     r->name = wstr_dup_from_utf8(a->name && *a->name ? a->name : mc_str(MC_STR_UNKNOWN_ARTIST));
     if (a->album_count > 0) mc_wformat(r->sub, 64, mc_str_plural(MC_STR_COUNT_ALBUMS, a->album_count), MC_D(a->album_count));
+    r->cover_dir = wstr_dup_from_utf8(a->cover_dir); /* NULL for none */
+    /* The picture it had before, if it's the same, so a reload doesn't flash: the old rows
+     * are in the same order, so only a few ahead of the last one taken are looked at. */
+    for (int k = j; k < nold && k < j + 8; k++) {
+      if (strcmp(old[k].uid, r->uid)) continue;
+      if (old[k].cover_dir && r->cover_dir && !wcscmp(old[k].cover_dir, r->cover_dir)) {
+        r->pic = old[k].pic;
+        memset(&old[k].pic, 0, sizeof old[k].pic);
+      }
+      j = k + 1;
+      break;
+    }
   }
   v.nartists = n;
   mc_artist_list_free(list);
+  free_rows(old, nold);
   if (v.list_focus >= n) v.list_focus = n - 1;
   if (!is_open() && v.focus >= n) v.focus = n - 1;
 
@@ -625,10 +747,12 @@ static void reload(void) {
     }
     free(v.open_name);
     v.open_name = _wcsdup(v.artists[i].name);
+    set_open_cover(v.artists[i].cover_dir);
     load_tiles();
   }
   layout();
   InvalidateRect(v.wnd, NULL, FALSE);
+  request_covers();
 }
 
 /* --- Navigation --- */
@@ -743,6 +867,21 @@ static void paint_placeholder_cover(canvas *c, const RECT *art, BOOL glyph) {
   SelectObject(c->dc, f);
 }
 
+/* An artist's picture in r, round; or until it's decoded a faint disc, with the person glyph
+ * on it (as Artists) if there's no picture to come. */
+static void paint_picture(canvas *c, const RECT *r, const picture *p, const wchar_t *dir, HFONT glyph) {
+  if (p->pixels) {
+    canvas_draw_image(c, r, p->pixels, p->size, p->size);
+    return;
+  }
+  canvas_fill(c, r, (r->right - r->left) / 2, theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), 15);
+  if (dir && !p->failed) return;
+  HGDIOBJ old = SelectObject(c->dc, glyph);
+  SetTextColor(c->dc, theme.text2);
+  DrawTextW(c->dc, L"\xE77B", 1, (RECT *)r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+  SelectObject(c->dc, old);
+}
+
 static void paint_row(canvas *c, int i, BOOL last) {
   const artist_row *a = &v.artists[i];
   RECT rc = row_rect(i), fill = rc;
@@ -753,10 +892,9 @@ static void paint_row(canvas *c, int i, BOOL last) {
     canvas_clear(c, &line, theme.line, 255);
   }
   RECT icon = {rc.left, rc.top, rc.left + scale(ROW_ICON_W), rc.bottom};
-  HGDIOBJ old = SelectObject(c->dc, v.icon_font);
-  SetTextColor(c->dc, theme.text2);
-  DrawTextW(c->dc, L"\xE77B", 1, &icon, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); /* as Artists */
-  SelectObject(c->dc, old);
+  int mid = (rc.top + rc.bottom) / 2, size = scale(ROW_PICTURE), x = rc.left + scale(ROW_PICTURE_X);
+  RECT pic = {x, mid - size / 2, x + size, mid - size / 2 + size};
+  paint_picture(c, &pic, &a->pic, a->cover_dir, v.icon_font);
 
   UINT one_line = DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
   int lines = a->sub[0] ? 2 : 1, top = rc.top + (rc.bottom - rc.top - lines * v.text_h) / 2;
@@ -814,8 +952,11 @@ static void paint_header(canvas *c, const RECT *dirty) {
   paint_button(c, &v.back, HIT_BACK, 0xE72B, TRUE); /* Back */
   RECT rc;
   GetClientRect(v.wnd, &rc);
-  int left = v.back.right + scale(BACK_GAP), right = rc.right - scale(PAD_X);
-  RECT name = {left, scale(HEAD_TOP), right, scale(HEAD_TOP) + v.title_h};
+  paint_picture(c, &v.picture, &v.open_pic, v.open_cover_dir, v.glyph_font);
+  /* The name and summary, centred on the picture. */
+  int left = v.picture.right + scale(PICTURE_GAP), right = rc.right - scale(PAD_X);
+  int top = v.picture.top + (v.picture.bottom - v.picture.top - (v.title_h + scale(NAME_GAP) + v.text_h)) / 2;
+  RECT name = {left, top, right, top + v.title_h};
   UINT one_line = DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
   HGDIOBJ old = SelectObject(c->dc, v.title_font);
   SetTextColor(c->dc, theme.text);
@@ -1080,6 +1221,7 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
       layout();
       InvalidateRect(wnd, NULL, FALSE);
+      request_covers();
       return 0;
     case WM_ERASEBKGND:
       return 1;
@@ -1232,6 +1374,7 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       free_artists();
       free_strips();
       free(v.open_name);
+      set_open_cover(NULL);
       canvas_free(&v.buf);
       if (v.wic) IWICImagingFactory_Release(v.wic);
       if (v.tooltip) DestroyWindow(v.tooltip);
@@ -1306,6 +1449,7 @@ BOOL artist_view_open(const char *uid) {
   memcpy(v.open_uid, v.artists[i].uid, MC_UID_STRLEN);
   free(v.open_name);
   v.open_name = _wcsdup(v.artists[i].name);
+  set_open_cover(v.artists[i].cover_dir);
   v.hot = v.pressed = HIT_NONE;
   v.focus = -1;
   load_tiles();

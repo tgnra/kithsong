@@ -29,7 +29,7 @@
 
 | Module      | Path                   | Status   |
 |-------------|------------------------|----------|
-| library     | `core/src/library`     | library folder, schema, migrations, change-log triggers, counts; deleting tracks to a trash and restoring them (`delete.c`); moving the library to another folder (`library_move.c`) |
+| library     | `core/src/library`     | library folder, schema, migrations, change-log triggers, counts; listings, an artist's picture among them (the cover of their first own album here with one, `mc_artist_info.cover_dir`); deleting tracks to a trash and restoring them (`delete.c`); moving the library to another folder (`library_move.c`) |
 | search      | `core/src/search`      | in-memory index of artist, album, track, playlist and album group names, rebuilt on a core thread (own read-only connection) after one changes, while searches use the previous index; typo-tolerant word matching (bounded Damerau-Levenshtein), the last word as a prefix |
 | settings    | `core/src/settings.c`  | per-device settings (library folder location) as JSON |
 | tagger      | `core/src/tagger`      | tag read/write (TagLib), importer: MusicBrainz matching, scoring, singles (a lone track as its release's), cover art, copying into the library folder (see [tagging-rules.md](tagging-rules.md)) |
