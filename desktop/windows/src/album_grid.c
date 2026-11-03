@@ -18,7 +18,6 @@
 #include "playlist_dialogs.h"
 #include "remove_here.h"
 #include "scroller.h"
-#include "smart_editor.h"
 #include "theme.h"
 #include "uia.h"
 #include "wstr.h"
@@ -56,10 +55,8 @@ enum {
   CMD_DELETE_ALBUM,
   CMD_REMOVE_HERE, /* Remove from this PC... */
   CMD_SYNC_HERE,   /* Sync to this PC */
-  CMD_EDIT_SMART,
   CMD_RENAME_SMART,
   CMD_DELETE_SMART,
-  CMD_NEW_SMART,
   CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
 };
 
@@ -1147,7 +1144,7 @@ static void show_group_menu(const char *uid, const wchar_t *name, POINT pt) {
   if (changed) notify_changed();
 }
 
-/* Edit Rules..., Rename... and Delete... for smart playlist or group uid, named name, at pt
+/* Rename... and Delete... for smart playlist or group uid, named name, at pt
  * (screen coordinates). */
 static void show_smart_menu(const char *uid, const wchar_t *name, mc_smart_subject subject, POINT pt) {
   char smart[MC_UID_STRLEN]; /* copies, as show_group_menu's */
@@ -1155,7 +1152,6 @@ static void show_smart_menu(const char *uid, const wchar_t *name, mc_smart_subje
   wchar_t *title = _wcsdup(name ? name : L"");
   HMENU menu = CreatePopupMenu();
   wchar_t item[128];
-  AppendMenuW(menu, MF_STRING, CMD_EDIT_SMART, mc_wstr_mnemonic(MC_STR_SMART_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, CMD_RENAME_SMART,
               wstr_menu_item(item, 128, MC_STR_PLAYLIST_RENAME_MENU, MC_STR_WINDOWS_SHORTCUT_RENAME));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -1166,8 +1162,7 @@ static void show_smart_menu(const char *uid, const wchar_t *name, mc_smart_subje
   DestroyMenu(menu);
   HWND owner = GetAncestor(g.wnd, GA_ROOT);
   BOOL changed = FALSE;
-  if (cmd == CMD_EDIT_SMART) changed = smart_edit_dialog(owner, g.lib, smart);
-  else if (cmd == CMD_RENAME_SMART) changed = smart_rename_dialog(owner, g.lib, smart, title, subject);
+  if (cmd == CMD_RENAME_SMART) changed = smart_rename_dialog(owner, g.lib, smart, title, subject);
   else if (cmd == CMD_DELETE_SMART) changed = smart_delete_dialog(owner, g.lib, smart, title, subject);
   free(title);
   if (changed) notify_changed();
@@ -1181,29 +1176,6 @@ static void show_more_menu(void) {
   ClientToScreen(g.wnd, &pt);
   if (g.group_smart) show_smart_menu(g.group_uid, g.group_name, MC_SMART_ALBUMS, pt);
   else show_group_menu(g.group_uid, g.group_name, pt);
-}
-
-void album_grid_new_smart(void) {
-  if (!g.lib || (g.view != AGV_PLAYLISTS && g.view != AGV_GROUPS)) return;
-  BOOL tracks = g.view == AGV_PLAYLISTS;
-  char uid[MC_UID_STRLEN];
-  if (!smart_new_dialog(GetAncestor(g.wnd, GA_ROOT), g.lib, tracks ? MC_SMART_TRACKS : MC_SMART_ALBUMS, uid)) return;
-  g.dirty = TRUE;
-  if (tracks) album_grid_select(uid); /* if it has anything to play here; the grid leaves it out otherwise */
-  else album_grid_open_group(uid);
-  notify_changed();
-}
-
-/* On the Playlists or Album Groups page, away from the tiles: New Smart Playlist... or New
- * Smart Album Group.... */
-static void show_new_menu(POINT pt) {
-  HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, CMD_NEW_SMART,
-              mc_wstr_mnemonic(g.tiles_view == AGV_PLAYLISTS ? MC_STR_SMART_NEW_PLAYLIST_MENU
-                                                             : MC_STR_SMART_NEW_GROUP_MENU));
-  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
-  DestroyMenu(menu);
-  if (cmd == CMD_NEW_SMART) album_grid_new_smart();
 }
 
 /* The header's button for a smart group in random order: a new order for its albums. */
@@ -1362,8 +1334,7 @@ static void show_album_menu(int i, POINT pt) {
 
 /* WM_CONTEXTMENU: a tile's menu, or the group's on its header. From the keyboard (lp -1),
  * the selected tile's, under its cover. Manual playlists have none here: theirs is in the
- * track list; smart ones have theirs here too. Away from the tiles, the Playlists and Album
- * Groups pages offer a new smart one. */
+ * track list; smart ones have theirs here too. */
 static BOOL on_context_menu(LPARAM lp) {
   if (!g.lib) return FALSE;
   POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -1373,12 +1344,6 @@ static BOOL on_context_menu(LPARAM lp) {
     i = g.selected;
     if (i < 0 && g.tiles_view == AGV_GROUP) {
       show_more_menu();
-      return TRUE;
-    }
-    if (i < 0 && lists) {
-      pt = (POINT){g.pad, g.pad};
-      ClientToScreen(g.wnd, &pt);
-      show_new_menu(pt);
       return TRUE;
     }
     if (i < 0 || i >= g.count) return FALSE;
@@ -1394,10 +1359,6 @@ static BOOL on_context_menu(LPARAM lp) {
     if (i < 0 && g.tiles_view == AGV_GROUP && client.y < g.top - g.scroll.pos) {
       if (g.group_smart) show_smart_menu(g.group_uid, g.group_name, MC_SMART_ALBUMS, pt);
       else show_group_menu(g.group_uid, g.group_name, pt);
-      return TRUE;
-    }
-    if (i < 0 && lists) {
-      show_new_menu(pt);
       return TRUE;
     }
     if (i < 0) return FALSE;

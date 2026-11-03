@@ -47,8 +47,7 @@ void album_grid_set_library(mc_library *lib);
  * Smart playlists and smart album groups (smartlist.h) follow the others, those with
  * something to play here, with a placeholder and "Smart playlist" or "Smart album group"
  * beneath the name. A smart group opens like a group, with the albums its rule picks and the
- * rule as a sentence under its name; its More button offers Edit Rules... (smart_editor.h),
- * Rename... and Delete..., and in random order a Reshuffle button sits beside it (which the
+ * rule as a sentence under its name; its More button offers Rename... and Delete..., and in random order a Reshuffle button sits beside it (which the
  * grid does itself, notifying AGN_LIBRARY_CHANGED). Its albums can't be removed from it.
  *
  * Playlists and album groups have a header too, with the page's name and a + button: New
@@ -79,17 +78,12 @@ BOOL album_grid_back(void);
 
 /* Right-clicking an album (on Albums or in a group) offers Add to Album Group, and in a
  * group Remove from Album Group; right-clicking a group (or its header) offers Rename and
- * Delete, and a smart playlist or group Edit Rules..., Rename... and Delete.... F2 renames
- * the open group, or the selected playlist or group, and Delete asks to delete the selected
- * playlist or group (smart ones too). Right-clicking the Playlists or
- * Album Groups page away from the tiles (or the menu key with nothing selected) offers New
- * Smart Playlist... or New Smart Album Group.... The grid makes those changes itself
- * (add_to_playlist.c, playlist_dialogs.c, smart_editor.c), then notifies
- * AGN_LIBRARY_CHANGED. */
+ * Delete, and a smart playlist or group Rename... and Delete.... F2 renames the open group,
+ * or the selected playlist or group, and Delete asks to delete the selected playlist or
+ * group (smart ones too). Smart ones can't be made or have their rules edited here: there's
+ * no rule editor on Windows. The grid makes those changes itself (add_to_playlist.c,
+ * playlist_dialogs.c), then notifies AGN_LIBRARY_CHANGED. */
 
-/* New Smart Playlist... on the Playlists page, New Smart Album Group... on the Album Groups
- * page, as their menus do: then selects the new playlist, or opens the new group. */
-void album_grid_new_smart(void);
 /* The header's + on the Playlists page (Ctrl+N): New Playlist, which asks for a name, then
  * selects the new, empty playlist. Nothing on other pages. */
 void album_grid_new_playlist(void);

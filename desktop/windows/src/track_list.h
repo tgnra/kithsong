@@ -53,10 +53,6 @@
 #define TLN_DELETE_TRACK 10
 /* A random smart playlist's Reshuffle button: give the shown one a new order. */
 #define TLN_RESHUFFLE 11
-/* A smart playlist's menu's Edit Rules...: open the shown one in the editor (smart_editor.h).
- * Its Rename... (or F2) and Delete... send TLN_RENAME_PLAYLIST and TLN_DELETE_PLAYLIST, as a
- * playlist's do. */
-#define TLN_EDIT_SMART 12
 /* The track menu's Go to Album and Go to Artist: open album_uid on the Albums page with
  * track_uid selected, or artist_uid's page. Offered only where there's such a page to go to
  * and it isn't the one shown: not for a track with no album, or a single, whose album the
@@ -92,7 +88,7 @@ void track_list_show(mc_library *lib, const char *uid, const wchar_t *title, BOO
 void track_list_show_artist(mc_library *lib, const char *artist_uid);
 /* Shows smart playlist uid's tracks, as its rule picks them now, with "Smart playlist" for
  * the artist and the rule as a sentence across the pane under the cover. Nothing can be
- * moved or removed; the menu's button offers Edit Rules..., Rename... and Delete..., and in
+ * moved or removed; the menu's button offers Rename... and Delete..., and in
  * random order (random) a Reshuffle button sits beside it (TLN_RESHUFFLE). */
 void track_list_show_smart(mc_library *lib, const char *uid, const wchar_t *title, BOOL random);
 /* The header's details for the album shown: its artist (NULL shows "Unknown Artist"), year

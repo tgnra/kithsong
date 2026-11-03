@@ -14,7 +14,6 @@
 #include "cover.h"
 #include "drag.h"
 #include "scroller.h"
-#include "smart_editor.h"
 #include "theme.h"
 #include "uia.h"
 #include "wstr.h"
@@ -59,7 +58,6 @@ enum {
   CMD_RENAME,
   CMD_DELETE,
   CMD_DELETE_TRACK,
-  CMD_EDIT_SMART,
   CMD_GO_TO_ALBUM,
   CMD_GO_TO_ARTIST,
   CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
@@ -428,6 +426,25 @@ static void on_scrolled(void) {
 
 /* --- Data --- */
 
+/* Smart list uid's rule as a sentence (mc_smart_describe()), malloc'd; NULL if it's gone or
+ * its rule can't be read. */
+static wchar_t *smart_describe(mc_library *lib, const char *uid) {
+  mc_smart_list *list = NULL;
+  wchar_t *w = NULL;
+  if (mc_library_list_smart(lib, 0, &list) == MC_OK)
+    for (int i = 0; i < list->count; i++) {
+      const mc_smart_info *si = &list->items[i];
+      char *sentence = NULL;
+      if (strcmp(si->uid, uid)) continue;
+      if (si->rule && mc_smart_describe(lib, si->subject, si->rule, &sentence) == MC_OK)
+        w = wstr_dup_from_utf8(sentence);
+      mc_free(sentence);
+      break;
+    }
+  mc_smart_list_free(list);
+  return w;
+}
+
 static void clear_rows(void) {
   for (int i = 0; i < s.count; i++) {
     free(s.rows[i].title);
@@ -667,9 +684,8 @@ static void request_remove(int i) {
 }
 
 static void request_playlist(int code) {
-  /* Only a smart playlist can be reshuffled or have its rule edited. */
-  BOOL smart_only = code == TLN_RESHUFFLE || code == TLN_EDIT_SMART;
-  if (!s.playlist || (smart_only && !s.smart) || (code == TLN_RESHUFFLE && !s.random) || !s.album_uid[0]) return;
+  /* Only a smart playlist in random order can be reshuffled. */
+  if (!s.playlist || (code == TLN_RESHUFFLE && (!s.smart || !s.random)) || !s.album_uid[0]) return;
   memset(&s.req, 0, sizeof s.req);
   strcpy(s.req.playlist_uid, s.album_uid);
   notify(code);
@@ -681,18 +697,15 @@ static UINT menu_flags(void) {
   return TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
 }
 
-/* Rename... and Delete Playlist..., under the [...] button; a smart playlist's has Edit
- * Rules... first. */
+/* Rename... and Delete Playlist... (or Delete Smart Playlist...), under the [...] button. */
 static void show_playlist_menu(void) {
   if (!s.playlist) return;
   RECT r = more_rect();
   MapWindowPoints(s.wnd, NULL, (POINT *)&r, 2);
   HMENU menu = CreatePopupMenu();
   wchar_t item[128];
-  if (s.smart) AppendMenuW(menu, MF_STRING, CMD_EDIT_SMART, mc_wstr_mnemonic(MC_STR_SMART_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, CMD_RENAME,
               wstr_menu_item(item, 128, MC_STR_PLAYLIST_RENAME_MENU, MC_STR_WINDOWS_SHORTCUT_RENAME));
-  if (s.smart) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   AppendMenuW(menu, MF_STRING, CMD_DELETE,
               mc_wstr_mnemonic(s.smart ? MC_STR_SMART_DELETE_PLAYLIST_MENU : MC_STR_PLAYLIST_DELETE_MENU));
   s.more_open = TRUE;
@@ -706,7 +719,6 @@ static void show_playlist_menu(void) {
   invalidate_more();
   if (cmd == CMD_RENAME) request_playlist(TLN_RENAME_PLAYLIST);
   else if (cmd == CMD_DELETE) request_playlist(TLN_DELETE_PLAYLIST);
-  else if (cmd == CMD_EDIT_SMART) request_playlist(TLN_EDIT_SMART);
 }
 
 /* Whether row i's album has a page to go to: it has one, it isn't the album shown, and it

@@ -918,27 +918,7 @@
     "firewall_rule_description": { "text": "Lets Kithsong on your other devices find this PC and sync with it on the local network.", "note": "Description of the rule shown in Windows Firewall's settings." },
 
     "smart_delete_playlist_caption": "Delete smart playlist",
-    "smart_delete_group_caption": "Delete smart album group",
-
-    "smart_preset_heading": { "text": "Start from:", "note": "Above the choice of ready-made rules a new smart playlist or smart album group can start from." },
-    "next": { "text": "_Next", "note": "Button: goes on to the next step, e.g. from the ready-made rules to the editor." },
-
-    "smart_tracks_matching": { "text": "Tracks matching", "note": "In the smart playlist editor, before a choice of all, any or none, then smart_of_these: \"Tracks matching [all] of these:\"." },
-    "smart_albums_matching": { "text": "Albums matching", "note": "As smart_tracks_matching, for a smart album group." },
-    "smart_group_matching": { "text": "Matching", "note": "At the start of a group of conditions inside a smart list's rule: \"Matching [any] of these:\"." },
-    "smart_match_all": { "text": "all", "note": "Picker entry: every condition must be true." },
-    "smart_match_any": { "text": "any", "note": "Picker entry: one condition is enough." },
-    "smart_match_none": { "text": "none", "note": "Picker entry: no condition may be true." },
-    "smart_of_these": { "text": "of these:", "note": "After the all/any/none picker, e.g. \"Tracks matching [all] of these:\"." },
-    "smart_add_condition": { "text": "+ Condition", "note": "Button in the smart list editor: adds a condition." },
-    "smart_add_group": { "text": "+ Group", "note": "Button in the smart list editor: adds a group of conditions, matching any of them, say." },
-    "smart_add_sort": { "text": "+ Sort", "note": "Button in the smart list editor: adds another sort order, for ties in the ones before." },
-    "smart_sorted": { "text": "Sorted", "note": "Smart list editor: the list keeps the sort order above (radio button)." },
-    "smart_needs_value": { "text": "Enter a value", "note": "Under a smart list condition whose value is missing or can't be read, e.g. a number box left empty." },
-    "smart_prefix_count": { "text": "→ {0}", "note": "Beside each top-level condition: how many match it and every condition above it. {0} is a number." },
-    "smart_prefix_count_name": { "one": "{0:d} matches up to here", "other": "{0:d} match up to here", "note": "smart_prefix_count, for screen readers." },
-    "smart_group_mode_name": { "text": "Group matches", "note": "Name for accessibility of a group's all/any/none picker." },
-    "smart_match_name": { "text": "Matches", "note": "Name for accessibility of the rule's all/any/none picker." }
+    "smart_delete_group_caption": "Delete smart album group"
   },
 
   "android": {
