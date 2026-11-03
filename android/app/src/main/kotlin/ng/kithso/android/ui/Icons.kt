@@ -110,6 +110,15 @@ object Icons {
         "M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z",
     )
 
+    // The smart list editor.
+    val ChevronRight = icon("ChevronRight", "M10,6L8.59,7.41 13.17,12l-4.58,4.59L10,18l6,-6z")
+    val Warning = icon("Warning", "M1,21h22L12,2 1,21zM13,18h-2v-2h2v2zM13,14h-2v-4h2v4z")
+    val Event = icon(
+        "Event",
+        "M17,12h-5v5h5v-5zM16,1v2H8V1H6v2H5c-1.11,0 -1.99,0.9 -1.99,2L3,19c0,1.1 0.89,2 2,2h14c1.1,0 2,-0.9 2,-2V5" +
+            "c0,-1.1 -0.9,-2 -2,-2h-1V1h-2zM19,19H5V8h14v11z",
+    )
+
     private fun icon(name: String, pathData: String) =
         ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f)
             .addPath(addPathNodes(pathData), fill = SolidColor(Color.Black))

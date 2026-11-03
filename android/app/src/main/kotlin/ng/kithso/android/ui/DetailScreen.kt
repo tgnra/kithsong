@@ -64,8 +64,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import ng.kithso.android.data.Album
+import ng.kithso.android.data.AlbumGroup
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.LibrarySource
+import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.Track
 import ng.kithso.android.data.TrackList
 import ng.kithso.android.ui.art.AlbumArt
@@ -83,7 +85,8 @@ import kotlinx.coroutines.launch
  * ([PlaylistActions.albumMenu]), which in a manual album group can take it out. As on the
  * desktops, an album group has Play, Shuffle albums (its albums in a random order, each one's
  * tracks in theirs) and Shuffle tracks. A smart list in random order has a button
- * to reshuffle it. [onBack] slides the screen away; it is also dismissed by swiping right.
+ * to reshuffle it, and a smart list a menu button for Edit rules…, Rename… and Delete. [onBack]
+ * slides the screen away; it is also dismissed by swiping right.
  *
  * A manual playlist has an Edit button, which shows each track with a button to remove it and
  * a handle to drag it elsewhere, until Done. Each change is made as it happens, and the list as
@@ -125,6 +128,11 @@ fun DetailScreen(
         value = ref.kind == CollectionRef.Kind.AlbumGroup && editor?.isEditableGroup(ref.uid) == true
     }
     val albumMenu: (Album) -> Unit = { actions.albumMenu(it, groupUid = ref.uid.takeIf { editableGroup }) }
+    // A smart list's menu, for Edit rules…, Rename… and Delete.
+    val smart by produceState(false, ref) {
+        value = (ref.kind == CollectionRef.Kind.Playlist || ref.kind == CollectionRef.Kind.AlbumGroup) &&
+            actions.smart?.isSmart(ref.uid) == true
+    }
     var editing by rememberSaveable { mutableStateOf(false) }
 
     // The art is the library's: it's known before the list is read, so the background starts
@@ -227,10 +235,32 @@ fun DetailScreen(
                         onBack,
                         editing = if (editable || editableGroup) isEditing else null,
                         onEdit = { editing = it },
-                        // An album's menu, as its long press elsewhere opens, for Delete from library and the rest.
-                        onMenu = if (ref.kind == CollectionRef.Kind.Album && list != null) ({
-                            actions.albumMenu(Album(ref.uid, list.title, list.artist, list.year, list.art))
-                        }) else null,
+                        // An album's menu, as its long press elsewhere opens, for Delete from library
+                        // and the rest; a smart list's likewise.
+                        onMenu = when {
+                            list == null -> null
+                            ref.kind == CollectionRef.Kind.Album -> ({
+                                actions.albumMenu(Album(ref.uid, list.title, list.artist, list.year, list.art))
+                            })
+                            smart && ref.kind == CollectionRef.Kind.Playlist -> ({
+                                actions.playlistMenu(
+                                    library?.playlists?.firstOrNull { it.uid == ref.uid } ?: Playlist(ref.uid, list.title, tracks.size, list.art),
+                                )
+                            })
+                            smart -> ({
+                                actions.albumGroupMenu(
+                                    library?.albumGroups?.firstOrNull { it.uid == ref.uid } ?: AlbumGroup(ref.uid, list.title, list.albumCount, list.art),
+                                )
+                            })
+                            else -> null
+                        },
+                        menuDescription = stringResource(
+                            when {
+                                !smart -> R.string.album_menu
+                                ref.kind == CollectionRef.Kind.Playlist -> R.string.smart_playlist_menu
+                                else -> R.string.smart_group_menu
+                            },
+                        ),
                     )
                 }
                 if (list != null && !isEditing && (tracks.isNotEmpty() || list.canReshuffle)) item(key = "actions", contentType = "actions") {
@@ -436,7 +466,7 @@ private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onShuffleAlbums: (() -> 
  * (landscape, mostly) the back button goes beside them too, and the art is smaller, to leave
  * room for the tracks. A playlist that can be edited has Edit, or Done while [editing], at
  * the other end from the back button, as has a manual album group; [editing] is null for anything else.
- * An album has a menu button there instead ([onMenu]).
+ * An album or a smart list has a menu button there instead ([onMenu], [menuDescription] for accessibility).
  */
 @Composable
 private fun DetailHeader(
@@ -446,6 +476,7 @@ private fun DetailHeader(
     editing: Boolean?,
     onEdit: (Boolean) -> Unit,
     onMenu: (() -> Unit)? = null,
+    menuDescription: String = "",
 ) {
     val short = isShortWindow()
     val back = @Composable {
@@ -460,7 +491,7 @@ private fun DetailHeader(
             }
         } else if (onMenu != null) {
             IconButton(onClick = onMenu, modifier = Modifier.padding(end = 4.dp, top = 4.dp)) {
-                Icon(Icons.MoreVert, contentDescription = stringResource(R.string.album_menu))
+                Icon(Icons.MoreVert, contentDescription = menuDescription)
             }
         }
     }

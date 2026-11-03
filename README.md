@@ -70,8 +70,9 @@ Priorities:
   I haven't played in six months, least played first, 10 tracks", worked out afresh each time
   from play counts and this device's files. The rule syncs whole. On Linux they're made and
   edited with a rule editor, with a live preview (the arrow beside the page's +, where each
-  group of conditions opens as a page of its own); on Windows they can be opened, played,
-  reshuffled, renamed and deleted, and on Android opened, played and reshuffled so far.
+  group of conditions opens as a page of its own), and on Android likewise (the + on the
+  Playlists and Album groups headings, and Edit rules… on a smart list's menu); on Windows
+  they can be opened, played, reshuffled, renamed and deleted.
 
 ### LAN sync
 

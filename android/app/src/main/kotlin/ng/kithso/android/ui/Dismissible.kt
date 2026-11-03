@@ -45,7 +45,8 @@ private enum class Layer { Shown, Hidden }
  * else, or if the system takes the touch, it springs back. Predictive back moves it part of
  * the way with the gesture, so the screen beneath shows. [onDismissed] is called once it is
  * off screen; remove the layer then. Only the top layer should have [backEnabled].
- * [content] gets a function that slides the layer out, for its own close button.
+ * [content] gets a function that slides the layer out, for its own close button. A layer that
+ * isn't [draggable] only goes on back or that function, where a stray swipe would lose work.
  *
  * The drag, the slide in and out, and predictive back all move one [AnchoredDraggableState]:
  * drag steps apply as they come, under the same lock as the animations, so each takes over
@@ -57,6 +58,7 @@ fun DismissibleScreen(
     onDismissed: () -> Unit,
     modifier: Modifier = Modifier,
     backEnabled: Boolean = true,
+    draggable: Boolean = true,
     content: @Composable (dismiss: () -> Unit) -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -127,6 +129,7 @@ fun DismissibleScreen(
                 .anchoredDraggable(
                     state,
                     orientation = if (direction == DismissDirection.Down) Orientation.Vertical else Orientation.Horizontal,
+                    enabled = draggable,
                     flingBehavior = flingBehavior,
                 ),
         ) {
