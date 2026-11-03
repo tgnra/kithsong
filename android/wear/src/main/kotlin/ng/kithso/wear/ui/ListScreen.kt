@@ -2,6 +2,8 @@ package ng.kithso.wear.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScope
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumnScope
@@ -35,3 +37,9 @@ class ItemTransform(private val spec: TransformationSpec) {
     fun modifier(scope: TransformingLazyColumnItemScope): Modifier =
         Modifier.transformedHeight(scope, spec)
 }
+
+/**
+ * The tick for a long press that opened a menu. The Wear buttons don't make one themselves,
+ * and without it nothing says the press was long enough until the menu appears.
+ */
+fun HapticFeedback.longPressed() = performHapticFeedback(HapticFeedbackType.LongPress)

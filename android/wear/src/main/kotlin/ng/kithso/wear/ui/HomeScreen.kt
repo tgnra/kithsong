@@ -21,6 +21,8 @@ fun HomeScreen(
     nowPlaying: TrackInfo?,
     onNowPlaying: () -> Unit,
     onAlbums: () -> Unit,
+    onPlaylists: () -> Unit,
+    onAlbumGroups: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -33,6 +35,9 @@ fun HomeScreen(
                 Text(stringResource(R.string.app_name))
             }
         }
+        menuItem(transform, R.string.section_albums, onAlbums)
+        menuItem(transform, R.string.section_playlists, onPlaylists)
+        menuItem(transform, R.string.section_album_groups, onAlbumGroups)
         if (nowPlaying != null) {
             item {
                 FilledTonalButton(
@@ -51,24 +56,20 @@ fun HomeScreen(
                 )
             }
         }
-        menuItem(transform, R.string.section_albums, onAlbums)
-        // Not built yet.
-        menuItem(transform, R.string.section_playlists, null)
         menuItem(transform, R.string.sync, onSync)
         menuItem(transform, R.string.settings, onSettings)
     }
 }
 
-/** A menu entry; greyed out when [onClick] is null. */
+/** A menu entry. */
 private fun TransformingLazyColumnScope.menuItem(
     transform: ItemTransform,
     @StringRes label: Int,
-    onClick: (() -> Unit)?,
+    onClick: () -> Unit,
 ) {
     item {
         FilledTonalButton(
-            onClick = { onClick?.invoke() },
-            enabled = onClick != null,
+            onClick = onClick,
             modifier = transform.modifier(this).fillMaxWidth(),
             transformation = transform.surface(this),
             label = { Text(stringResource(label)) },
@@ -81,7 +82,10 @@ private fun TransformingLazyColumnScope.menuItem(
 private fun HomeScreenPreview() {
     MaterialTheme {
         AppScaffold {
-            HomeScreen(PreviewData.tracks[1], onNowPlaying = {}, onAlbums = {}, onSync = {}, onSettings = {})
+            HomeScreen(
+                PreviewData.tracks[1],
+                onNowPlaying = {}, onAlbums = {}, onPlaylists = {}, onAlbumGroups = {}, onSync = {}, onSettings = {},
+            )
         }
     }
 }

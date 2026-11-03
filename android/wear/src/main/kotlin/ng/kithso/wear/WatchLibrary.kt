@@ -33,8 +33,9 @@ import java.io.File
  * albums, one per album for its tracks (the count), one for the playlists and one per album
  * group.
  *
- * Playlists and album groups can be added to here ([appendToPlaylist], [addToAlbumGroup]); each
- * change is followed by a [refresh] and told to sync through [onChanged].
+ * Playlists and album groups can be added to here ([appendToPlaylist], [appendAlbumToPlaylist],
+ * [addToAlbumGroup]); each change is followed by a [refresh] and told to sync through
+ * [onChanged].
  */
 class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
     /** What the watch holds, as the screens list it. */
@@ -43,7 +44,7 @@ class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
         val albums: List<AlbumInfo> = emptyList(),
         /** Manual playlists with a track that has a file here, by name. */
         val playlists: List<PlaylistInfo> = emptyList(),
-        /** Manual album groups with an album that has a file here, by name. */
+        /** Manual album groups with an album that has a file here, by name, counting those albums. */
         val albumGroups: List<NamedInfo> = emptyList(),
         /** The tracks with a file here. */
         val trackCount: Int = 0,
@@ -70,9 +71,14 @@ class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
             val albums = lib.albums().filter { it.folder != null }
             val tracks = albums.sumOf { album -> lib.albumTracks(album.uid).count { it.path != null } }
             // MC_LIST_PLAYABLE keeps empty playlists too, as a place for tracks to go; the
-            // watch has nowhere to add from yet, so only ones with something to play.
+            // watch shows only what's present, so only ones with something to play.
             val playlists = lib.playlists(playableOnly = true).filter { it.playableCount > 0 }
-            val groups = lib.albumGroups().filter { group -> lib.albumGroupAlbums(group.uid).any { it.folder != null } }
+            // Each group's count is of its albums here, as a playlist's playableCount is of
+            // its tracks: the watch shows only what's present.
+            val groups = lib.albumGroups().mapNotNull { group ->
+                val here = lib.albumGroupAlbums(group.uid).count { it.folder != null }
+                if (here > 0) group.copy(albumCount = here) else null
+            }
             state.value = Contents(albums, playlists, groups, tracks)
             Log.i(TAG, "Read ${albums.size} albums, $tracks tracks, ${playlists.size} playlists, ${groups.size} album groups here")
         } catch (e: MusicCoreException) {
@@ -95,6 +101,16 @@ class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
     /** Adds [trackUids] at the end of [playlistUid], for every device; false if the core refused. */
     suspend fun appendToPlaylist(playlistUid: String, trackUids: List<String>): Boolean =
         change("add to playlist $playlistUid") { it.appendToPlaylist(playlistUid, trackUids) }
+
+    /**
+     * Adds all of [albumUid]'s tracks at the end of [playlistUid], in album order, for every
+     * device: the album is one thing to the person adding it, so the tracks not on the watch
+     * go too, and other devices see the whole album in the playlist. False if the core refused.
+     */
+    suspend fun appendAlbumToPlaylist(playlistUid: String, albumUid: String): Boolean =
+        change("add album $albumUid to playlist $playlistUid") {
+            it.appendToPlaylist(playlistUid, it.albumTracks(albumUid).map { track -> track.uid })
+        }
 
     /** Adds [albumUid] at the end of album group [groupUid], for every device; false if the core refused. */
     suspend fun addToAlbumGroup(groupUid: String, albumUid: String): Boolean =

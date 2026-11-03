@@ -127,6 +127,11 @@
     "playlist_remove_failed": "Couldn't remove the track",
     "playlist_move_failed": "Couldn't move the track",
     "add_to_playlist_menu": "Add to playlist…",
+    "add_to_album_group_menu": { "text": "Add to album group…", "note": "On an album's menu: opens the list of album groups to add it to." },
+    "playlist_added": { "text": "Added to {0}", "note": "A passing notice after Add to playlist. {0} is the playlist's name." },
+    "album_group_added": { "text": "Added to {0}", "note": "A passing notice after Add to album group. {0} is the album group's name." },
+    "album_menu": { "text": "Album menu", "note": "An album's menu: the menu button on its page on the phone, the long press on the watch; for accessibility." },
+    "track_menu": { "text": "Track menu", "note": "A track's menu: the menu button on the phone's player, the long press on the watch; for accessibility." },
     "new_playlist_menu": "New playlist…",
     "go_to_album": { "text": "Go to album", "note": "On a track's menu: opens the page of the album it's on." },
     "go_to_artist": { "text": "Go to artist", "note": "On a track's menu: opens the page of the artist it's credited to." },
@@ -953,15 +958,10 @@
 
     "open_player": "Open the player",
     "close_player": "Close the player",
-    "album_menu": { "text": "Album menu", "note": "The menu button on an album's page; for accessibility." },
-    "track_menu": { "text": "Track menu", "note": "The menu button on the player, for the track playing; for accessibility." },
     "go_to_named_artist": { "text": "Go to {0}", "note": "On a track's menu, for a track credited to several artists (\"A feat. B\"): one for each, opening that artist's page. {0} is the artist's name." },
     "seek_state": { "text": "{0} of {1}", "note": "The seekbar's state for accessibility: elapsed time of total time." },
 
     "edit_playlist": { "text": "Edit", "note": "Button on a playlist's or album group's page that shows the controls to reorder and remove its tracks or albums." },
-    "playlist_added": { "text": "Added to {0}", "note": "{0} is a playlist's name." },
-    "add_to_album_group_menu": { "text": "Add to album group…", "note": "On an album's menu: opens the list of album groups to add it to." },
-    "album_group_added": { "text": "Added to {0}", "note": "{0} is an album group's name." },
     "playlist_reorder": { "text": "Drag to reorder", "note": "A playlist track's or album group album's drag handle, for accessibility." },
 
     "delete_permanently_text": { "one": "{0:d} file will be deleted for good and removed from the library on all your devices. This phone has no trash to restore it from.", "other": "{0:d} files will be deleted for good and removed from the library on all your devices. This phone has no trash to restore them from.", "note": "Under \"Delete “{0}”?\"; the files are an album's or track's, and its cover." },
@@ -1107,6 +1107,8 @@
     "watch_headphones_text": "Pair Bluetooth headphones to listen, or play through the watch's speaker.",
     "watch_headphones_text_no_speaker": { "text": "Pair Bluetooth headphones to listen.", "note": "As watch_headphones_text, on a watch with no speaker." },
     "watch_bluetooth_settings": { "text": "Bluetooth settings", "note": "Button opening the watch's Bluetooth settings." },
-    "watch_play_on_watch": { "text": "Play on the watch", "note": "Button: play through the watch's own speaker rather than headphones." }
+    "watch_play_on_watch": { "text": "Play on the watch", "note": "Button: play through the watch's own speaker rather than headphones." },
+    "watch_no_playlists": { "text": "No playlists with music on this watch.", "note": "The watch's Playlists page, and its Add to playlist picker, while no playlist has a track with a file on the watch; the others are hidden." },
+    "watch_no_album_groups": { "text": "No album groups with music on this watch.", "note": "The watch's Album groups page, and its Add to album group picker, while no album group has an album with files on the watch." }
   }
 }

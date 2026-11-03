@@ -77,8 +77,8 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) {
     }
 
     /**
-     * Plays [tracks] (an album's tracks with a file on the watch, in order) from [track], which
-     * is shown as current at once, before the session says so.
+     * Plays [tracks] (an album's or a playlist's tracks with a file on the watch, in order) from
+     * [track], which is shown as current at once, before the session says so.
      */
     fun play(tracks: List<TrackInfo>, track: TrackInfo) {
         val start = tracks.indexOf(track)
@@ -87,9 +87,12 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) {
         positionMs = 0
         durationMs = track.durationMs.toLong()
         scope.launch {
-            // Finding the cover lists the album's folder, so it's done off the main thread.
-            val cover = track.coverDir?.let { dir -> withContext(Dispatchers.IO) { NativeCore.coverFile(dir) } }
-            val items = tracks.map { it.toMediaItem(cover) }
+            // Finding a cover lists the album's folder, so it's done off the main thread, once
+            // per album: a playlist's tracks come from several.
+            val covers = withContext(Dispatchers.IO) {
+                tracks.mapNotNull { it.coverDir }.distinct().associateWith { NativeCore.coverFile(it) }
+            }
+            val items = tracks.map { it.toMediaItem(it.coverDir?.let(covers::get)) }
             withController {
                 it.setMediaItems(items, start, 0)
                 it.prepare()

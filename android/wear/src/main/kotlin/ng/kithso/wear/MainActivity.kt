@@ -9,6 +9,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -16,21 +18,36 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.wear.compose.material3.AppScaffold
+import androidx.wear.compose.material3.ConfirmationDialog
+import androidx.wear.compose.material3.ConfirmationDialogDefaults
+import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.Text
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
+import kotlinx.coroutines.launch
+import ng.kithso.core.AlbumInfo
 import ng.kithso.core.TrackInfo
+import ng.kithso.wear.ui.AlbumGroupsScreen
 import ng.kithso.wear.ui.AlbumScreen
 import ng.kithso.wear.ui.AlbumsScreen
+import ng.kithso.wear.ui.Choice
+import ng.kithso.wear.ui.ChoiceScreen
 import ng.kithso.wear.ui.HeadphonesScreen
 import ng.kithso.wear.ui.HomeScreen
+import ng.kithso.wear.ui.Icons
 import ng.kithso.wear.ui.LicenseTextScreen
 import ng.kithso.wear.ui.LicensesScreen
 import ng.kithso.wear.ui.PlayerScreen
+import ng.kithso.wear.ui.PlaylistScreen
+import ng.kithso.wear.ui.PlaylistsScreen
 import ng.kithso.wear.ui.SettingsScreen
 import ng.kithso.wear.ui.SyncScreen
 
@@ -45,6 +62,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** A passing word after adding to a playlist or album group: what was done, or that it failed. */
+private class Notice(val text: String, val success: Boolean)
+
 @Composable
 private fun WearApp() {
     val navController = rememberSwipeDismissableNavController()
@@ -52,6 +72,7 @@ private fun WearApp() {
     val app = context.applicationContext as KithsongApp
     val playback = app.playback
     val outputs = app.outputs
+    val scope = rememberCoroutineScope()
     // What has files on the watch, read again as sync brings more.
     val contents by app.library.contents.collectAsState()
     val albums = contents.albums
@@ -78,6 +99,26 @@ private fun WearApp() {
         }
     }
 
+    // The track whose menu is open, kept here because the library has no lookup of one track:
+    // the menu and the picker under it read it, checking the uid in their route against it.
+    var menuTrack by remember { mutableStateOf<TrackInfo?>(null) }
+    // The notice stays while the dialog fades out, so it's separate from whether it shows.
+    var notice by remember { mutableStateOf<Notice?>(null) }
+    var noticeShown by remember { mutableStateOf(false) }
+
+    /**
+     * Adds through [add] (a WatchLibrary helper) and says so, then leaves the menu and its
+     * picker at once, back to the list the long press was on: [menuRoute] is the menu's.
+     */
+    fun addAndLeave(menuRoute: String, name: String, @StringRes added: Int, @StringRes failed: Int, add: suspend () -> Boolean) {
+        scope.launch {
+            val ok = add()
+            notice = Notice(if (ok) context.getString(added, name) else context.getString(failed), ok)
+            noticeShown = true
+        }
+        navController.popBackStack(menuRoute, inclusive = true)
+    }
+
     // AppScaffold shows the time at the top of every screen.
     AppScaffold {
         SwipeDismissableNavHost(navController = navController, startDestination = "home") {
@@ -86,12 +127,18 @@ private fun WearApp() {
                     nowPlaying = playback.track,
                     onNowPlaying = { navController.navigate("player") },
                     onAlbums = { navController.navigate("albums") },
+                    onPlaylists = { navController.navigate("playlists") },
+                    onAlbumGroups = { navController.navigate("groups") },
                     onSync = { navController.navigate("sync") },
                     onSettings = { navController.navigate("settings") },
                 )
             }
             composable("albums") {
-                AlbumsScreen(albums) { navController.navigate("album/${it.uid}") }
+                AlbumsScreen(
+                    albums,
+                    onAlbum = { navController.navigate("album/${it.uid}") },
+                    onAlbumMenu = { navController.navigate("album/${it.uid}/menu") },
+                )
             }
             composable("album/{id}") { entry ->
                 val uid = entry.arguments?.getString("id")
@@ -100,9 +147,127 @@ private fun WearApp() {
                 val tracks by produceState(emptyList<TrackInfo>(), album.uid, contents) {
                     value = app.library.albumTracks(album.uid)
                 }
-                AlbumScreen(album, tracks, playingUid = playback.track?.uid) { track ->
-                    startPlaying { playback.play(tracks, track) }
+                AlbumScreen(
+                    album,
+                    tracks,
+                    playingUid = playback.track?.uid,
+                    onTrack = { track -> startPlaying { playback.play(tracks, track) } },
+                    onAlbumMenu = { navController.navigate("album/${album.uid}/menu") },
+                    onTrackMenu = { track ->
+                        menuTrack = track
+                        navController.navigate("track/${track.uid}/menu")
+                    },
+                )
+            }
+            composable("album/{id}/menu") { entry ->
+                val uid = entry.arguments?.getString("id")
+                val album = albums.firstOrNull { it.uid == uid } ?: return@composable
+                ChoiceScreen(
+                    album.title,
+                    listOf(
+                        Choice("playlist", stringResource(R.string.add_to_playlist_menu)) {
+                            navController.navigate("album/${album.uid}/add-to-playlist")
+                        },
+                        Choice("group", stringResource(R.string.add_to_album_group_menu)) {
+                            navController.navigate("album/${album.uid}/add-to-group")
+                        },
+                    ),
+                )
+            }
+            composable("album/{id}/add-to-playlist") { entry ->
+                // Only playlists with music here are offered, like everywhere on the watch:
+                // there's no New playlist, since the watch can't name one.
+                val uid = entry.arguments?.getString("id") ?: return@composable
+                ChoiceScreen(
+                    stringResource(R.string.add_to_playlist),
+                    contents.playlists.map { playlist ->
+                        Choice(playlist.uid, playlist.name) {
+                            addAndLeave("album/$uid/menu", playlist.name, R.string.playlist_added, R.string.playlist_add_failed) {
+                                app.library.appendAlbumToPlaylist(playlist.uid, uid)
+                            }
+                        }
+                    },
+                    emptyText = stringResource(R.string.watch_no_playlists),
+                )
+            }
+            composable("album/{id}/add-to-group") { entry ->
+                val uid = entry.arguments?.getString("id") ?: return@composable
+                ChoiceScreen(
+                    stringResource(R.string.add_to_album_group),
+                    contents.albumGroups.map { group ->
+                        Choice(group.uid, group.name) {
+                            addAndLeave("album/$uid/menu", group.name, R.string.album_group_added, R.string.album_group_add_failed) {
+                                app.library.addToAlbumGroup(group.uid, uid)
+                            }
+                        }
+                    },
+                    emptyText = stringResource(R.string.watch_no_album_groups),
+                )
+            }
+            composable("track/{id}/menu") { entry ->
+                val track = menuTrack?.takeIf { it.uid == entry.arguments?.getString("id") } ?: return@composable
+                ChoiceScreen(
+                    track.title,
+                    listOf(
+                        Choice("playlist", stringResource(R.string.add_to_playlist_menu)) {
+                            navController.navigate("track/${track.uid}/add-to-playlist")
+                        },
+                    ),
+                )
+            }
+            composable("track/{id}/add-to-playlist") { entry ->
+                val track = menuTrack?.takeIf { it.uid == entry.arguments?.getString("id") } ?: return@composable
+                ChoiceScreen(
+                    stringResource(R.string.add_to_playlist),
+                    contents.playlists.map { playlist ->
+                        Choice(playlist.uid, playlist.name) {
+                            addAndLeave("track/${track.uid}/menu", playlist.name, R.string.playlist_added, R.string.playlist_add_failed) {
+                                app.library.appendToPlaylist(playlist.uid, listOf(track.uid))
+                            }
+                        }
+                    },
+                    emptyText = stringResource(R.string.watch_no_playlists),
+                )
+            }
+            composable("playlists") {
+                PlaylistsScreen(contents.playlists) { navController.navigate("playlist/${it.uid}") }
+            }
+            composable("playlist/{id}") { entry ->
+                val uid = entry.arguments?.getString("id")
+                val playlist = contents.playlists.firstOrNull { it.uid == uid } ?: return@composable
+                // Read again as sync brings more of it, or something is added here.
+                val tracks by produceState(emptyList<TrackInfo>(), playlist.uid, contents) {
+                    value = app.library.playlistTracks(playlist.uid)
                 }
+                PlaylistScreen(
+                    playlist,
+                    tracks,
+                    playingUid = playback.track?.uid,
+                    // The queue is the playlist's tracks that are here, from the one tapped.
+                    onTrack = { track -> startPlaying { playback.play(tracks, track) } },
+                    onTrackMenu = { track ->
+                        menuTrack = track
+                        navController.navigate("track/${track.uid}/menu")
+                    },
+                )
+            }
+            composable("groups") {
+                AlbumGroupsScreen(contents.albumGroups) { navController.navigate("group/${it.uid}") }
+            }
+            composable("group/{id}") { entry ->
+                val uid = entry.arguments?.getString("id")
+                val group = contents.albumGroups.firstOrNull { it.uid == uid } ?: return@composable
+                val groupAlbums by produceState(emptyList<AlbumInfo>(), group.uid, contents) {
+                    value = app.library.albumGroupAlbums(group.uid)
+                }
+                // The group is listed only while an album of it is here, so no empty text.
+                AlbumsScreen(
+                    groupAlbums,
+                    title = group.name,
+                    emptyText = null,
+                    onAlbum = { navController.navigate("album/${it.uid}") },
+                    onAlbumMenu = { navController.navigate("album/${it.uid}/menu") },
+                )
             }
             composable("headphones") {
                 // Headphones connected, or the speaker chosen: play, and put the player where
@@ -151,6 +316,20 @@ private fun WearApp() {
             }
             composable("license/{asset}") { entry ->
                 LicenseTextScreen(entry.arguments?.getString("asset") ?: return@composable)
+            }
+        }
+        // "Added to Favourites", with a tick, for a moment over whatever screen is up.
+        val current = notice
+        ConfirmationDialog(
+            visible = noticeShown,
+            onDismissRequest = { noticeShown = false },
+            text = { Text(current?.text.orEmpty()) },
+            colors = if (current?.success != false) ConfirmationDialogDefaults.successColors() else ConfirmationDialogDefaults.colors(),
+        ) {
+            if (current?.success != false) {
+                ConfirmationDialogDefaults.SuccessIcon(Modifier.size(ConfirmationDialogDefaults.SmallIconSize))
+            } else {
+                Icon(Icons.Close, contentDescription = null, modifier = Modifier.size(ConfirmationDialogDefaults.SmallIconSize))
             }
         }
     }

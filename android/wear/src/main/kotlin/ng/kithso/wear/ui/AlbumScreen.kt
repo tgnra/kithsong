@@ -1,5 +1,6 @@
 package ng.kithso.wear.ui
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,6 +10,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -21,10 +28,12 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import ng.kithso.core.AlbumInfo
 import ng.kithso.core.TrackInfo
+import ng.kithso.wear.R
 
 /**
  * [album]'s cover and [tracks]. [playingUid] is the track the player is on, if it is one of
- * them.
+ * them. A long press on the cover opens the album's menu ([onAlbumMenu]), one on a track the
+ * track's ([onTrackMenu]).
  */
 @Composable
 fun AlbumScreen(
@@ -32,12 +41,37 @@ fun AlbumScreen(
     tracks: List<TrackInfo>,
     playingUid: String?,
     onTrack: (TrackInfo) -> Unit,
+    onAlbumMenu: () -> Unit,
+    onTrackMenu: (TrackInfo) -> Unit,
 ) {
+    val haptics = LocalHapticFeedback.current
+    val albumMenuLabel = stringResource(R.string.album_menu)
+    val trackMenuLabel = stringResource(R.string.track_menu)
     ListScreen { transform ->
         item {
             Column(
-                // Not transformed: shrinking would distort the cover.
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
+                // Not transformed: shrinking would distort the cover. The header isn't a
+                // button, so the long press is its own gesture, with the menu as an action
+                // for accessibility.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, bottom = 8.dp)
+                    .pointerInput(onAlbumMenu) {
+                        detectTapGestures(
+                            onLongPress = {
+                                haptics.longPressed()
+                                onAlbumMenu()
+                            },
+                        )
+                    }
+                    .semantics {
+                        customActions = listOf(
+                            CustomAccessibilityAction(albumMenuLabel) {
+                                onAlbumMenu()
+                                true
+                            },
+                        )
+                    },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 AlbumArt(album, 56.dp)
@@ -62,6 +96,11 @@ fun AlbumScreen(
         items(tracks, key = { it.uid }) { track ->
             Button(
                 onClick = { onTrack(track) },
+                onLongClick = {
+                    haptics.longPressed()
+                    onTrackMenu(track)
+                },
+                onLongClickLabel = trackMenuLabel,
                 modifier = transform.modifier(this).fillMaxWidth(),
                 transformation = transform.surface(this),
                 // The playing track stands out in the primary colour.
@@ -93,6 +132,8 @@ private fun AlbumScreenPreview() {
                 PreviewData.tracks,
                 playingUid = PreviewData.tracks[1].uid,
                 onTrack = {},
+                onAlbumMenu = {},
+                onTrackMenu = {},
             )
         }
     }
