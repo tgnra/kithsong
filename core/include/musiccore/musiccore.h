@@ -64,6 +64,7 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "musiccore/playlist.h"
 #include "musiccore/smartlist.h"
 #include "musiccore/search.h"
+#include "musiccore/edit.h"
 #include "musiccore/playback.h"
 #include "musiccore/tagger.h"
 #include "musiccore/transcode.h"
