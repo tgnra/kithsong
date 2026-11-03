@@ -67,7 +67,7 @@ enum { PART_NONE, PART_BACK, PART_MORE, PART_RESHUFFLE, PART_ACTION, PART_PLAY, 
 enum { MAX_PARTS = 6 }; /* in a header at once: Back, Reshuffle, More and the play buttons */
 
 /* What the empty page's button does (see album_grid_set_sync_state()). */
-typedef enum { ACTION_NONE, ACTION_PAIR, ACTION_SYNC } empty_action;
+typedef enum { ACTION_NONE, ACTION_IMPORT, ACTION_SYNC } empty_action;
 
 typedef struct tile {
   char uid[MC_UID_STRLEN];
@@ -125,7 +125,8 @@ static struct {
   BOOL group_smart, group_random; /* it's a smart group, and in random order */
   wchar_t *group_rule;           /* a smart group's rule as a sentence, under its name; or NULL */
   int hidden;                    /* playlists left out for having nothing to play here */
-  album_grid_sync sync_state;    /* whether the empty pages offer pairing or the sync profile */
+  album_grid_sync sync_state;    /* whether the empty pages offer importing or the sync profile */
+  BOOL first_run;                /* no library yet, while the first run asks where it goes */
   RECT action_rc;                /* the empty page's button, as last painted; empty if none */
   tile *tiles;
   int count;
@@ -1215,14 +1216,13 @@ void album_grid_new_playlist(void) {
 /* The empty page's button, if it has one (album_grid_set_sync_state()). */
 static empty_action action(void) {
   if (!g.lib || g.count) return ACTION_NONE;
-  if (g.tiles_view == AGV_ALBUMS && g.sync_state == AG_SYNC_ALONE) return ACTION_PAIR;
-  if (g.tiles_view == AGV_ALBUMS && g.sync_state == AG_SYNC_GROUPED) return ACTION_SYNC;
+  if (g.tiles_view == AGV_ALBUMS) return g.sync_state == AG_SYNC_GROUPED ? ACTION_SYNC : ACTION_IMPORT;
   if (g.tiles_view == AGV_PLAYLISTS && g.hidden && g.sync_state == AG_SYNC_GROUPED) return ACTION_SYNC;
   return ACTION_NONE;
 }
 
 static const wchar_t *action_label(empty_action a) {
-  return mc_wstr(a == ACTION_PAIR ? MC_STR_PAIR_WITH_DEVICE_MENU : MC_STR_CHOOSE_WHAT_TO_SYNC);
+  return mc_wstr(a == ACTION_IMPORT ? MC_STR_IMPORT_MUSIC : MC_STR_CHOOSE_WHAT_TO_SYNC);
 }
 
 /* Posted: the parent shows a menu or another page. */
@@ -1230,7 +1230,7 @@ static void do_action(void) {
   empty_action a = action();
   if (a == ACTION_NONE) return;
   PostMessageW(GetParent(g.wnd), WM_COMMAND,
-               MAKEWPARAM(GetDlgCtrlID(g.wnd), a == ACTION_PAIR ? AGN_PAIR : AGN_SYNC_SETTINGS), (LPARAM)g.wnd);
+               MAKEWPARAM(GetDlgCtrlID(g.wnd), a == ACTION_IMPORT ? AGN_IMPORT : AGN_SYNC_SETTINGS), (LPARAM)g.wnd);
 }
 
 /* A group's play buttons: posted, for the parent to queue its albums (album_grid_play_how()). */
@@ -1261,6 +1261,11 @@ static void press_part(int part) {
   else if (part == PART_ACTION) do_action();
 }
 
+void album_grid_set_first_run(BOOL first_run) {
+  g.first_run = first_run;
+  if (g.wnd) InvalidateRect(g.wnd, NULL, FALSE);
+}
+
 void album_grid_set_sync_state(album_grid_sync state) {
   if (state == g.sync_state) return;
   g.sync_state = state;
@@ -1268,13 +1273,6 @@ void album_grid_set_sync_state(album_grid_sync state) {
     InvalidateRect(g.wnd, NULL, FALSE);
     ui_changed();
   }
-}
-
-BOOL album_grid_action_rect(RECT *screen) {
-  if (!g.wnd || action() == ACTION_NONE || IsRectEmpty(&g.action_rc)) return FALSE;
-  *screen = g.action_rc;
-  MapWindowPoints(g.wnd, NULL, (POINT *)screen, 2);
-  return TRUE;
 }
 
 /* Add to Album Group, inside a (manual) group Move Up, Move Down and Remove from Album Group,
@@ -1750,7 +1748,7 @@ static void empty_text(wchar_t *buf, size_t n, const wchar_t *sep) {
   BOOL playlists = g.tiles_view == AGV_PLAYLISTS;
   enum mc_str_id title, text;
   if (!g.lib) {
-    swprintf(buf, n, L"%ls", mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
+    swprintf(buf, n, L"%ls", g.first_run ? L"" : mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
     return;
   }
   if (playlists && g.hidden) title = MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE, text = MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT;
@@ -1944,7 +1942,7 @@ static BOOL ui_node(int i, uia_node *n) {
     empty_text(n->name, 512, L" ");
     return TRUE;
   }
-  if (g.count == 0 && t == 1 && action() != ACTION_NONE) { /* Pair with a Device..., Choose What to Sync */
+  if (g.count == 0 && t == 1 && action() != ACTION_NONE) { /* Import, Choose What to Sync */
     n->type = UIA_ButtonControlTypeId;
     n->flags = UIA_INVOKABLE;
     n->rect = g.action_rc;

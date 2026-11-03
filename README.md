@@ -38,7 +38,10 @@ Priorities:
 
 ### Library and autotagging
 
-- **One library folder.** You choose it on first run (default: your Music folder). It
+- **One library folder.** You choose it on first run: on Windows the suggestion is
+  `Kithsong Library` in your Music folder, and a folder you pick that already has other
+  things in it gets a `Kithsong Library` folder inside it (Linux still suggests the Music
+  folder itself). It
   holds everything: the music, organised as `Artist/Album (Year)/01 Title.flac`, a
   `cover.jpg` per album, and the database as `library.db`. The app's own settings, i.e. where
   that folder is, live in `%LOCALAPPDATA%\kithsong` (`~/.config/kithsong` on Linux), with this

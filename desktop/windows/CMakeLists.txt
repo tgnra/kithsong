@@ -4,6 +4,8 @@ enable_language(RC)
 # KITHSONG_BUILD_NUMBER, so they're configured.
 set(KITHSONG_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/kithsong.manifest")
 set(KITHSONG_ICON "${PROJECT_SOURCE_DIR}/packaging/icons/kithsong.ico")
+set(KITHSONG_WORDMARK "${PROJECT_SOURCE_DIR}/packaging/icons/kithsong-wordmark.png")
+set(KITHSONG_WORDMARK_DARK "${PROJECT_SOURCE_DIR}/packaging/icons/kithsong-wordmark-dark.png")
 configure_file(src/kithsong.manifest.in "${KITHSONG_MANIFEST}" @ONLY)
 configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/version.rc" @ONLY)
 configure_file(src/build_info.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.h" @ONLY)
@@ -21,6 +23,7 @@ add_executable(kithsong WIN32
   src/dlg_template.c
   src/drag.c
   src/firewall.c
+  src/first_run.c
   src/import_view.c
   src/media_controls.c
   src/move_library.c
@@ -48,7 +51,7 @@ add_executable(kithsong WIN32
 # version.rc lives in the build dir but includes resource.h; build_info.h is generated.
 target_include_directories(kithsong PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/version.rc" APPEND PROPERTY
-  OBJECT_DEPENDS "${KITHSONG_MANIFEST}" "${KITHSONG_ICON}")
+  OBJECT_DEPENDS "${KITHSONG_MANIFEST}" "${KITHSONG_ICON}" "${KITHSONG_WORDMARK}" "${KITHSONG_WORDMARK_DARK}")
 target_link_libraries(kithsong PRIVATE musiccore comctl32 ole32 oleaut32 uuid shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi uiautomationcore oleacc)
 target_compile_definitions(kithsong PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)

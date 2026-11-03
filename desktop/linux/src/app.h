@@ -38,8 +38,8 @@ typedef struct app {
                          * | "groups" (album_groups.c) */
   AdwStatusPage *empty;        /* "No music yet", or "No albums" when the music is all singles */
   gboolean all_singles;        /* the Albums page has nothing, but the library has tracks */
-  GtkWidget *pair;             /* its Pair with a device… button (devices_pair_button()) */
-  GtkWidget *empty_choose_sync; /* its Choose what to sync button, in place of pair in a group */
+  GtkWidget *empty_import;     /* its Import button */
+  GtkWidget *empty_choose_sync; /* its Choose what to sync button, in place of Import in a group */
   AdwStatusPage *no_playlists; /* "No playlists yet", or none to play here */
   GtkWidget *choose_sync;      /* its Choose what to sync button */
   GtkStack *playlists;         /* "none" (no_playlists) | "grid", under the Playlists header */

@@ -308,7 +308,7 @@ fun MainScreen(
                 when (item) {
                     MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning)
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
-                    MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onChooseWhatToSync)
+                    MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onSync, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(item.section, sections, { current }, jumpTo)
                     is MainItem.RecentItem -> LibraryRow(
                         item.recent.title,
@@ -483,14 +483,16 @@ private fun LibraryRow(
 }
 
 /**
- * No music yet: where it can come from, with an import button. While this phone is [inGroup]
- * its sync settings hold nothing, so that's where its music comes from, not pairing.
+ * No music yet: where it can come from. A phone's music usually comes from a computer, so Sync
+ * comes first, with Import beneath it. While this phone is [inGroup] its sync settings hold
+ * nothing, so Choose what to sync takes Sync's place.
  */
 @Composable
 private fun LazyItemScope.EmptyLibrary(
     importPickers: ImportPickers,
     importRunning: Boolean,
     inGroup: Boolean,
+    onSync: () -> Unit,
     onChooseWhatToSync: () -> Unit,
 ) {
     Column(
@@ -516,18 +518,17 @@ private fun LazyItemScope.EmptyLibrary(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp),
         )
+        Button(onClick = if (inGroup) onChooseWhatToSync else onSync, modifier = Modifier.padding(top = 24.dp)) {
+            if (!inGroup) Icon(Icons.Sync, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
+            Text(stringResource(if (inGroup) R.string.choose_what_to_sync else R.string.sync))
+        }
         var menu by remember { mutableStateOf(false) }
-        Box(Modifier.padding(top = 24.dp)) {
-            Button(onClick = { menu = true }) {
+        Box(Modifier.padding(top = 8.dp)) {
+            TextButton(onClick = { menu = true }) {
                 Icon(Icons.Import, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
                 Text(stringResource(R.string.import_music))
             }
             ImportMenu(menu, importRunning, importPickers, onDismiss = { menu = false })
-        }
-        if (inGroup) {
-            TextButton(onClick = onChooseWhatToSync, modifier = Modifier.padding(top = 8.dp)) {
-                Text(stringResource(R.string.choose_what_to_sync))
-            }
         }
     }
 }

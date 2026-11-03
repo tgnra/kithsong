@@ -36,6 +36,9 @@ HWND album_grid_create(HWND parent, int id);
  * the next time the grid paints, so calling this while it's hidden (e.g. after each item of
  * an import) costs nothing. Call it again whenever the library changes. */
 void album_grid_set_library(mc_library *lib);
+/* While the first run asks where the library goes, there's no library yet, and the grid
+ * shows nothing rather than that it couldn't be opened. */
+void album_grid_set_first_run(BOOL first_run);
 
 /* What the grid shows. Playlists and album groups show their pictures (or a placeholder) with
  * the track or album count beneath the name. Clicking a group (or Enter on it) opens it:
@@ -89,7 +92,7 @@ BOOL album_grid_back(void);
 void album_grid_new_playlist(void);
 
 /* This PC's place in sync, for the empty pages: with no albums and no group, Albums suggests
- * pairing, with a Pair with a Device... button (AGN_PAIR); with no albums in a group, it
+ * importing, with an Import button (AGN_IMPORT); with no albums in a group, it
  * suggests choosing what to sync, with a Choose What to Sync button (AGN_SYNC_SETTINGS), as
  * Playlists does when every playlist is hidden for having nothing to play here. */
 typedef enum album_grid_sync {
@@ -98,8 +101,6 @@ typedef enum album_grid_sync {
   AG_SYNC_GROUPED, /* this PC is in a group */
 } album_grid_sync;
 void album_grid_set_sync_state(album_grid_sync state);
-/* The empty page's button, in screen coordinates (for AGN_PAIR's menu); FALSE if none. */
-BOOL album_grid_action_rect(RECT *screen);
 
 /* Where playlists' pictures are cached (UTF-8; see mc_playlist_art()). Without one,
  * playlists show the placeholder. */
@@ -114,9 +115,9 @@ void album_grid_set_playlist_art_dir(const char *dir);
 /* Sent the same way after the grid changed the library (see above), for the parent to
  * refresh what shows it. */
 #define AGN_LIBRARY_CHANGED 3
-/* Sent the same way when the empty page's Pair with a Device... is pressed, for the parent to
- * offer the devices to pair with (at album_grid_action_rect()). */
-#define AGN_PAIR 4
+/* Sent the same way when the empty page's Import is pressed, for the parent to show the
+ * Import page. */
+#define AGN_IMPORT 4
 /* Sent the same way when Choose What to Sync is pressed, for the parent to show this PC's
  * page. */
 #define AGN_SYNC_SETTINGS 5

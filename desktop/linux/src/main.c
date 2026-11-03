@@ -116,8 +116,8 @@ static void on_import_done(void *user) {
   show_page(user, "library");
 }
 
-/* The empty Albums page suggests pairing while this computer isn't in a group, with the Pair
- * with a device… button, and choosing what to sync once it is, with Choose what to sync. When
+/* The empty Albums page suggests importing while this computer isn't in a group, with an
+ * Import button, and choosing what to sync once it is, with Choose what to sync. When
  * the library has tracks but they're all singles (which the page leaves out), it says where
  * they are instead. */
 static void set_empty_description(app *a) {
@@ -135,7 +135,7 @@ static void set_empty_description(app *a) {
   char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION), MC_S(mc_str(text)), MC_S(mc_version()));
   adw_status_page_set_description(a->empty, desc);
   mc_free(desc);
-  if (a->pair) gtk_widget_set_visible(a->pair, alone);
+  if (a->empty_import) gtk_widget_set_visible(a->empty_import, a->lib && !singles && !grouped);
   if (a->empty_choose_sync) gtk_widget_set_visible(a->empty_choose_sync, grouped);
 }
 
@@ -1182,15 +1182,19 @@ static GtkWidget *build_albums(app *a) {
   GtkWidget *empty = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(empty), "folder-music-symbolic");
   a->empty = ADW_STATUS_PAGE(empty);
-  a->pair = devices_pair_button();
-  gtk_widget_set_visible(a->pair, FALSE);
+  a->empty_import = gtk_button_new_with_label(mc_str(MC_STR_IMPORT_MUSIC));
+  gtk_widget_add_css_class(a->empty_import, "pill");
+  gtk_widget_add_css_class(a->empty_import, "suggested-action");
+  gtk_widget_set_halign(a->empty_import, GTK_ALIGN_CENTER);
+  gtk_widget_set_visible(a->empty_import, FALSE);
+  g_signal_connect(a->empty_import, "clicked", G_CALLBACK(on_import), a);
   a->empty_choose_sync = gtk_button_new_with_label(mc_str(MC_STR_CHOOSE_WHAT_TO_SYNC));
   gtk_widget_add_css_class(a->empty_choose_sync, "pill");
   gtk_widget_set_halign(a->empty_choose_sync, GTK_ALIGN_CENTER);
   gtk_widget_set_visible(a->empty_choose_sync, FALSE);
   g_signal_connect(a->empty_choose_sync, "clicked", G_CALLBACK(on_choose_sync), a);
   GtkWidget *empty_buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0); /* one shows at a time */
-  gtk_box_append(GTK_BOX(empty_buttons), a->pair);
+  gtk_box_append(GTK_BOX(empty_buttons), a->empty_import);
   gtk_box_append(GTK_BOX(empty_buttons), a->empty_choose_sync);
   adw_status_page_set_child(a->empty, empty_buttons);
   set_empty_description(a);

@@ -1,5 +1,5 @@
 /* Configured by CMake into the build dir: everything in the exe's resources that carries the
- * version, plus the icon. app.rc has the rest. */
+ * version, plus the icon and the wordmark, which live outside src. app.rc has the rest. */
 #include <windows.h>
 
 #include "resource.h"
@@ -8,6 +8,10 @@ CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "@KITHSONG_MANIFEST@"
 
 /* The lowest-numbered icon, so it's the one Explorer and the taskbar show. */
 IDI_APP ICON "@KITHSONG_ICON@"
+
+/* The first run's logo (first_run.c), for light and dark backgrounds. */
+IDR_WORDMARK RCDATA "@KITHSONG_WORDMARK@"
+IDR_WORDMARK_DARK RCDATA "@KITHSONG_WORDMARK_DARK@"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,@KITHSONG_BUILD_NUMBER@
