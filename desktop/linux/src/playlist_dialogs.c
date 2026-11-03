@@ -13,6 +13,7 @@ typedef struct ask {
   char *name;
   GtkWidget *parent, *entry; /* entry: Rename's and Create's */
   const char *ok;            /* the response the entry enables: "rename" or "create" */
+  gboolean smart;            /* uid is a smart list's */
   void (*changed)(void *user);
   void (*created)(void *user, const char *uid);
   void *user;
@@ -93,21 +94,34 @@ static void on_rename_response(AdwAlertDialog *dialog, const char *response, gpo
     g_free(name);
     return;
   }
-  if (mc_playlist_rename(a->lib, a->uid, name) == MC_OK) {
+  mc_status st = a->smart ? mc_smart_rename(a->lib, a->uid, name) : mc_playlist_rename(a->lib, a->uid, name);
+  if (st == MC_OK) {
     if (a->changed) a->changed(a->user);
   } else {
-    fail(a->parent, mc_str(MC_STR_PLAYLIST_RENAME_FAILED));
+    fail(a->parent, mc_str(a->smart ? MC_STR_SMART_RENAME_FAILED : MC_STR_PLAYLIST_RENAME_FAILED));
   }
   g_free(name);
 }
 
-void playlist_rename_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
-                             void (*changed)(void *user), void *user) {
+static void rename_present(const char *title, gboolean smart, GtkWidget *parent, mc_library *lib, const char *uid,
+                           const char *name, void (*changed)(void *user), void *user) {
   if (!lib || !uid || strlen(uid) >= MC_UID_STRLEN) return;
-  AdwDialog *dialog = name_dialog(mc_str(MC_STR_PLAYLIST_RENAME_TITLE), parent, lib, uid, name, "rename",
-                                  MC_STR_RENAME, changed, user);
+  AdwDialog *dialog = name_dialog(title, parent, lib, uid, name, "rename", MC_STR_RENAME, changed, user);
+  ask *a = g_object_get_data(G_OBJECT(dialog), "playlist-dialog");
+  a->smart = smart;
   g_signal_connect(dialog, "response", G_CALLBACK(on_rename_response), NULL);
   adw_dialog_present(dialog, parent);
+}
+
+void playlist_rename_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                             void (*changed)(void *user), void *user) {
+  rename_present(mc_str(MC_STR_PLAYLIST_RENAME_TITLE), FALSE, parent, lib, uid, name, changed, user);
+}
+
+void smart_rename_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                          mc_smart_subject subject, void (*changed)(void *user), void *user) {
+  rename_present(mc_str(subject == MC_SMART_TRACKS ? MC_STR_SMART_RENAME_PLAYLIST_TITLE : MC_STR_SMART_RENAME_GROUP_TITLE),
+                 TRUE, parent, lib, uid, name, changed, user);
 }
 
 /* --- New --- */
@@ -142,20 +156,21 @@ static void on_delete_response(AdwAlertDialog *dialog, const char *response, gpo
   (void)data;
   ask *a = g_object_get_data(G_OBJECT(dialog), "playlist-dialog");
   if (strcmp(response, "delete")) return;
-  if (mc_playlist_delete(a->lib, a->uid) == MC_OK) {
+  mc_status st = a->smart ? mc_smart_delete(a->lib, a->uid) : mc_playlist_delete(a->lib, a->uid);
+  if (st == MC_OK) {
     if (a->changed) a->changed(a->user);
   } else {
-    fail(a->parent, mc_str(MC_STR_PLAYLIST_DELETE_FAILED));
+    fail(a->parent, mc_str(a->smart ? MC_STR_SMART_DELETE_FAILED : MC_STR_PLAYLIST_DELETE_FAILED));
   }
 }
 
-void playlist_delete_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
-                             void (*changed)(void *user), void *user) {
+static void delete_present(enum mc_str_id text, gboolean smart, GtkWidget *parent, mc_library *lib, const char *uid,
+                           const char *name, void (*changed)(void *user), void *user) {
   if (!lib || !uid || strlen(uid) >= MC_UID_STRLEN) return;
-  char *heading = mc_format_alloc(mc_str(MC_STR_PLAYLIST_DELETE_TITLE), MC_S(name));
-  AdwDialog *dialog = adw_alert_dialog_new(heading, mc_str(MC_STR_PLAYLIST_DELETE_TEXT));
+  char *heading = mc_format_alloc(mc_str(MC_STR_PLAYLIST_DELETE_TITLE), MC_S(name ? name : ""));
+  AdwDialog *dialog = adw_alert_dialog_new(heading, mc_str(text));
   mc_free(heading);
-  ask_new(dialog, parent, lib, uid, name, changed, user);
+  ask_new(dialog, parent, lib, uid, name, changed, user)->smart = smart;
   adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(dialog), "cancel", mc_str_mnemonic(MC_STR_CANCEL), "delete",
                                  mc_str_mnemonic(MC_STR_DELETE), NULL);
   adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(dialog), "delete", ADW_RESPONSE_DESTRUCTIVE);
@@ -163,4 +178,16 @@ void playlist_delete_present(GtkWidget *parent, mc_library *lib, const char *uid
   adw_alert_dialog_set_close_response(ADW_ALERT_DIALOG(dialog), "cancel");
   g_signal_connect(dialog, "response", G_CALLBACK(on_delete_response), NULL);
   adw_dialog_present(dialog, parent);
+}
+
+void playlist_delete_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                             void (*changed)(void *user), void *user) {
+  delete_present(MC_STR_PLAYLIST_DELETE_TEXT, FALSE, parent, lib, uid, name, changed, user);
+}
+
+/* What it holds stays in the library either way, as for its manual counterpart. */
+void smart_delete_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                          mc_smart_subject subject, void (*changed)(void *user), void *user) {
+  delete_present(subject == MC_SMART_TRACKS ? MC_STR_PLAYLIST_DELETE_TEXT : MC_STR_ALBUM_GROUP_DELETE_TEXT, TRUE,
+                 parent, lib, uid, name, changed, user);
 }

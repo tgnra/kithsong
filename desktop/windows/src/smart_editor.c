@@ -442,7 +442,7 @@ static void fill_choice(cond *c) {
     if (w) combo_add(c->choice, w, -2);
     free(w);
   } else if (c->extra) {
-    combo_add(c->choice, mc_wstr(MC_STR_WINDOWS_SMART_DELETED_MEMBER), -2);
+    combo_add(c->choice, mc_wstr(MC_STR_SMART_DELETED_MEMBER), -2);
   }
   SendMessageW(c->choice, CB_SETCURSEL, 0, 0);
 }
@@ -455,7 +455,7 @@ static void style_value(cond *c) {
     LONG style = GetWindowLongW(boxes[i], GWL_STYLE);
     SetWindowLongW(boxes[i], GWL_STYLE, digits ? style | ES_NUMBER : style & ~ES_NUMBER);
     SendMessageW(boxes[i], EM_SETCUEBANNER, FALSE,
-                 (LPARAM)(type_is(c, "duration") ? mc_wstr(MC_STR_WINDOWS_SMART_DURATION_CUE) : L""));
+                 (LPARAM)(type_is(c, "duration") ? mc_wstr(MC_STR_SMART_DURATION_CUE) : L""));
   }
 }
 
@@ -464,28 +464,28 @@ static cond *new_cond(int field) {
   if (!c) return NULL;
   c->field = field;
   c->op = default_op(field);
-  c->field_box = make_combo(mc_wstr(MC_STR_WINDOWS_SMART_FIELD_NAME));
+  c->field_box = make_combo(mc_wstr(MC_STR_SMART_FIELD_NAME));
   for (int i = 0; i < ed.nfields; i++) combo_add_utf8(c->field_box, mc_smart_field_label(ed.fields[i].name), i);
   SendMessageW(c->field_box, CB_SETCURSEL, field, 0);
-  c->op_box = make_combo(mc_wstr(MC_STR_WINDOWS_SMART_OP_NAME));
+  c->op_box = make_combo(mc_wstr(MC_STR_SMART_OP_NAME));
   add_tip(c->op_box);
   c->value = make(WC_EDITW, NULL, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL);
   SendMessageW(c->value, EM_LIMITTEXT, MAX_VALUE, 0);
-  set_name(c->value, mc_wstr(MC_STR_WINDOWS_SMART_VALUE_NAME));
-  c->and_label = make_label(mc_wstr(MC_STR_WINDOWS_SMART_BETWEEN_AND));
+  set_name(c->value, mc_wstr(MC_STR_SMART_VALUE_NAME));
+  c->and_label = make_label(mc_wstr(MC_STR_SMART_BETWEEN_AND));
   c->value2 = make(WC_EDITW, NULL, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL);
   SendMessageW(c->value2, EM_LIMITTEXT, MAX_VALUE, 0);
-  set_name(c->value2, mc_wstr(MC_STR_WINDOWS_SMART_VALUE_HIGH_NAME));
-  c->unit = make_combo(mc_wstr(MC_STR_WINDOWS_SMART_UNIT_NAME));
-  combo_add(c->unit, mc_wstr(MC_STR_WINDOWS_SMART_UNIT_DAYS), UNIT_DAYS);
-  combo_add(c->unit, mc_wstr(MC_STR_WINDOWS_SMART_UNIT_WEEKS), UNIT_WEEKS);
-  combo_add(c->unit, mc_wstr(MC_STR_WINDOWS_SMART_UNIT_MONTHS), UNIT_MONTHS);
+  set_name(c->value2, mc_wstr(MC_STR_SMART_VALUE_HIGH_NAME));
+  c->unit = make_combo(mc_wstr(MC_STR_SMART_UNIT_NAME));
+  combo_add(c->unit, mc_wstr(MC_STR_SMART_UNIT_DAYS), UNIT_DAYS);
+  combo_add(c->unit, mc_wstr(MC_STR_SMART_UNIT_WEEKS), UNIT_WEEKS);
+  combo_add(c->unit, mc_wstr(MC_STR_SMART_UNIT_MONTHS), UNIT_MONTHS);
   SendMessageW(c->unit, CB_SETCURSEL, UNIT_DAYS, 0);
   c->date = make(DATETIMEPICK_CLASSW, NULL, WS_TABSTOP | DTS_SHORTDATEFORMAT);
-  set_name(c->date, mc_wstr(MC_STR_WINDOWS_SMART_VALUE_NAME));
-  c->choice = make_combo(mc_wstr(MC_STR_WINDOWS_SMART_VALUE_NAME));
+  set_name(c->date, mc_wstr(MC_STR_SMART_VALUE_NAME));
+  c->choice = make_combo(mc_wstr(MC_STR_SMART_VALUE_NAME));
   c->count = make(WC_STATICW, NULL, SS_NOPREFIX | SS_CENTERIMAGE | SS_RIGHT);
-  c->remove = make_remove(MC_STR_WINDOWS_SMART_REMOVE_CONDITION);
+  c->remove = make_remove(MC_STR_SMART_REMOVE_CONDITION);
   c->hint = make(WC_STATICW, NULL, SS_NOPREFIX | SS_LEFTNOWORDWRAP);
   fill_ops(c);
   fill_choice(c);
@@ -513,7 +513,7 @@ static item *new_group(int mode) {
   combo_select_data(it->mode_box, mode);
   it->of_label = make_label(mc_wstr(MC_STR_WINDOWS_SMART_OF_THESE));
   it->count = make(WC_STATICW, NULL, SS_NOPREFIX | SS_CENTERIMAGE | SS_RIGHT);
-  it->remove = make_remove(MC_STR_WINDOWS_SMART_REMOVE_GROUP);
+  it->remove = make_remove(MC_STR_SMART_REMOVE_GROUP);
   it->add = make(WC_BUTTONW, mc_wstr(MC_STR_WINDOWS_SMART_ADD_CONDITION), BS_PUSHBUTTON | WS_TABSTOP);
   return it;
 }
@@ -539,15 +539,15 @@ static void free_item(item *it) {
 static sort_key *add_sort(int sortable_index, BOOL desc) {
   if (ed.nsorts >= MAX_SORTS) return NULL;
   sort_key *k = &ed.sorts[ed.nsorts++];
-  k->label = make_label(mc_wstr(ed.nsorts == 1 ? MC_STR_WINDOWS_SMART_SORT_BY : MC_STR_WINDOWS_SMART_SORT_THEN));
-  k->box = make_combo(mc_wstr(MC_STR_WINDOWS_SMART_SORT_NAME));
+  k->label = make_label(mc_wstr(ed.nsorts == 1 ? MC_STR_SMART_SORT_BY : MC_STR_SMART_SORT_THEN));
+  k->box = make_combo(mc_wstr(MC_STR_SMART_SORT_NAME));
   for (int i = 0; i < ed.nsortable; i++)
     for (int d = 0; d < 2; d++) {
       const char *label = mc_smart_order_label(ed.fields[ed.sortable[i]].name, d);
       if (label) combo_add_utf8(k->box, label, i * 2 + d);
     }
   combo_select_data(k->box, sortable_index * 2 + (desc ? 1 : 0));
-  k->remove = make_remove(MC_STR_WINDOWS_SMART_REMOVE_SORT);
+  k->remove = make_remove(MC_STR_SMART_REMOVE_SORT);
   return k;
 }
 
@@ -558,7 +558,7 @@ static void remove_sort(int i) {
   memmove(&ed.sorts[i], &ed.sorts[i + 1], (size_t)(ed.nsorts - i - 1) * sizeof ed.sorts[0]);
   ed.nsorts--;
   /* The first one says "Sort by", the rest "then". */
-  if (ed.nsorts) SetWindowTextW(ed.sorts[0].label, mc_wstr(MC_STR_WINDOWS_SMART_SORT_BY));
+  if (ed.nsorts) SetWindowTextW(ed.sorts[0].label, mc_wstr(MC_STR_SMART_SORT_BY));
 }
 
 /* --- The rule as JSON --- */
@@ -923,7 +923,7 @@ static int text_width(HWND w) {
 static const wchar_t *hint_text(const cond *c) {
   if (c->invalid) return mc_wstr(MC_STR_WINDOWS_SMART_NEEDS_VALUE);
   if (!strcmp(field_of(c)->name, "on_device") || !strcmp(field_of(c)->name, "format"))
-    return mc_wstr(MC_STR_WINDOWS_SMART_HINT_DEVICE);
+    return mc_wstr(MC_STR_SMART_HINT_DEVICE);
   return NULL;
 }
 
@@ -1225,14 +1225,14 @@ static void stop_worker(void) {
 static void set_counts_text(void) {
   wchar_t text[256] = L"";
   if (ed.rule && !ed.counted) {
-    wcscpy(text, mc_wstr(MC_STR_WINDOWS_SMART_COUNTING));
+    wcscpy(text, mc_wstr(MC_STR_SMART_COUNTING));
   } else if (ed.rule) {
-    enum mc_str_id id = ed.subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_TRACKS_MATCH : MC_STR_WINDOWS_SMART_ALBUMS_MATCH;
+    enum mc_str_id id = ed.subject == MC_SMART_TRACKS ? MC_STR_SMART_TRACKS_MATCH : MC_STR_SMART_ALBUMS_MATCH;
     char part[128], all[256];
     mc_format(part, sizeof part, mc_str_plural(id, ed.total), MC_D(ed.total));
     if (SendMessageW(ed.limit_check, BM_GETCHECK, 0, 0) == BST_CHECKED) {
       char in_list[128];
-      mc_format(in_list, sizeof in_list, mc_str(MC_STR_WINDOWS_SMART_IN_LIST), MC_D(ed.shown));
+      mc_format(in_list, sizeof in_list, mc_str(MC_STR_SMART_IN_LIST), MC_D(ed.shown));
       snprintf(all, sizeof all, "%s%s%s", part, mc_str(MC_STR_SEPARATOR_DOT), in_list);
     } else {
       snprintf(all, sizeof all, "%s", part);
@@ -1538,16 +1538,16 @@ static void on_tip(NMTTDISPINFOW *info) {
     enum mc_str_id field = in_text_id(field_of(c)->name);
     if (field != MC_STR_COUNT && (op_is(c, "is_not") || op_is(c, "not_contains")))
       mc_wformat(text, 256,
-                 mc_str(ed.subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_HINT_MISSING_TRACKS
-                                                     : MC_STR_WINDOWS_SMART_HINT_MISSING_ALBUMS),
+                 mc_str(ed.subject == MC_SMART_TRACKS ? MC_STR_SMART_HINT_MISSING_TRACKS
+                                                     : MC_STR_SMART_HINT_MISSING_ALBUMS),
                  MC_S(mc_str(field)));
   } else if (c) {
-    wcscpy(text, mc_wstr(MC_STR_WINDOWS_SMART_REMOVE_CONDITION));
+    wcscpy(text, mc_wstr(MC_STR_SMART_REMOVE_CONDITION));
   } else {
     for (int i = 0; i < ed.nitems; i++)
-      if (w == ed.items[i]->remove) wcscpy(text, mc_wstr(MC_STR_WINDOWS_SMART_REMOVE_GROUP));
+      if (w == ed.items[i]->remove) wcscpy(text, mc_wstr(MC_STR_SMART_REMOVE_GROUP));
     for (int i = 0; i < ed.nsorts; i++)
-      if (w == ed.sorts[i].remove) wcscpy(text, mc_wstr(MC_STR_WINDOWS_SMART_REMOVE_SORT));
+      if (w == ed.sorts[i].remove) wcscpy(text, mc_wstr(MC_STR_SMART_REMOVE_SORT));
   }
   info->lpszText = text;
 }
@@ -1714,7 +1714,7 @@ static void create_controls(void) {
   ed.panel = dlg_child(L"kithsong_smart_rows", NULL, WS_VSCROLL | WS_CLIPCHILDREN, WS_EX_CONTROLPARENT);
   ed.read_only_text = dlg_child(WC_EDITW, NULL, ES_MULTILINE | ES_READONLY | WS_VSCROLL | WS_TABSTOP, 0);
   ShowWindow(ed.read_only_text, SW_HIDE);
-  ed.preview_label = dlg_child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SMART_PREVIEW), SS_NOPREFIX, 0);
+  ed.preview_label = dlg_child(WC_STATICW, mc_wstr(MC_STR_SMART_PREVIEW), SS_NOPREFIX, 0);
   ed.list = dlg_child(WC_LISTVIEWW, NULL,
                       LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | WS_BORDER |
                         WS_TABSTOP,
@@ -1725,7 +1725,7 @@ static void create_controls(void) {
   ListView_InsertColumn(ed.list, 0, &col);
   col.pszText = (wchar_t *)mc_wstr(MC_STR_ARTIST);
   ListView_InsertColumn(ed.list, 1, &col);
-  set_name(ed.list, mc_wstr(MC_STR_WINDOWS_SMART_PREVIEW));
+  set_name(ed.list, mc_wstr(MC_STR_SMART_PREVIEW));
   ed.summary = dlg_child(WC_STATICW, NULL, SS_NOPREFIX | SS_EDITCONTROL, 0);
   ed.counts = dlg_child(WC_STATICW, NULL, SS_NOPREFIX | SS_CENTERIMAGE, 0);
 
@@ -1748,17 +1748,17 @@ static void create_controls(void) {
   ed.sorted = make(WC_BUTTONW, NULL, BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP);
   ed.shuffled = make(WC_BUTTONW, NULL, BS_AUTORADIOBUTTON);
   ed.sorted_label = make(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SMART_SORTED), SS_NOPREFIX | SS_NOTIFY | SS_CENTERIMAGE | WS_GROUP);
-  ed.shuffled_label = make(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SMART_SHUFFLED), SS_NOPREFIX | SS_NOTIFY | SS_CENTERIMAGE);
+  ed.shuffled_label = make(WC_STATICW, mc_wstr(MC_STR_SMART_SHUFFLED), SS_NOPREFIX | SS_NOTIFY | SS_CENTERIMAGE);
   set_name(ed.sorted, mc_wstr(MC_STR_WINDOWS_SMART_SORTED));
-  set_name(ed.shuffled, mc_wstr(MC_STR_WINDOWS_SMART_SHUFFLED));
+  set_name(ed.shuffled, mc_wstr(MC_STR_SMART_SHUFFLED));
   ed.limit_check = make(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP);
-  ed.limit_label = make(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SMART_LIMIT), SS_NOPREFIX | SS_NOTIFY | SS_CENTERIMAGE);
-  set_name(ed.limit_check, mc_wstr(MC_STR_WINDOWS_SMART_LIMIT));
+  ed.limit_label = make(WC_STATICW, mc_wstr(MC_STR_SMART_LIMIT), SS_NOPREFIX | SS_NOTIFY | SS_CENTERIMAGE);
+  set_name(ed.limit_check, mc_wstr(MC_STR_SMART_LIMIT));
   ed.limit = make(WC_EDITW, L"25", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL | ES_NUMBER);
   SendMessageW(ed.limit, EM_LIMITTEXT, 7, 0);
-  set_name(ed.limit, mc_wstr(MC_STR_WINDOWS_SMART_LIMIT_COUNT_NAME));
-  ed.limit_unit = make_label(mc_wstr(ed.subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_LIMIT_TRACKS
-                                                                   : MC_STR_WINDOWS_SMART_LIMIT_ALBUMS));
+  set_name(ed.limit, mc_wstr(MC_STR_SMART_LIMIT_COUNT_NAME));
+  ed.limit_unit = make_label(mc_wstr(ed.subject == MC_SMART_TRACKS ? MC_STR_SMART_LIMIT_TRACKS
+                                                                   : MC_STR_SMART_LIMIT_ALBUMS));
 
   /* Tab order: the name, the rows, the preview, the sentence, then OK and Cancel. */
   HWND order[] = {ed.name_label, ed.name, ed.panel, ed.read_only_text, ed.preview_label, ed.list, ed.summary, ed.counts,
@@ -1787,9 +1787,9 @@ static void show_read_only(const char *rule) {
   const char *body = described ? sentence : rule;
   size_t n = strlen(body), extra = 0;
   for (size_t i = 0; i < n; i++) extra += body[i] == '\n';
-  char *text = malloc(n + extra + strlen(mc_str(MC_STR_WINDOWS_SMART_READ_ONLY)) + 8);
+  char *text = malloc(n + extra + strlen(mc_str(MC_STR_SMART_READ_ONLY)) + 8);
   if (text) {
-    char *o = text + sprintf(text, "%s\r\n\r\n", mc_str(MC_STR_WINDOWS_SMART_READ_ONLY));
+    char *o = text + sprintf(text, "%s\r\n\r\n", mc_str(MC_STR_SMART_READ_ONLY));
     for (size_t i = 0; i < n; i++) {
       if (body[i] == '\n') *o++ = '\r';
       *o++ = body[i];
@@ -1824,13 +1824,13 @@ static BOOL save(void) {
   *end = L'\0';
   char *name8 = wstr_to_utf8(start), *rule = build(-1, TRUE);
   BOOL ok = name8 && *name8 && rule && mc_smart_validate(ed.subject, rule) == MC_OK;
-  enum mc_str_id failed = ed.creating ? MC_STR_WINDOWS_SMART_CREATE_FAILED : MC_STR_WINDOWS_SMART_SAVE_FAILED;
+  enum mc_str_id failed = ed.creating ? MC_STR_SMART_CREATE_FAILED : MC_STR_SMART_SAVE_FAILED;
   if (ok && ed.creating) {
     ok = mc_smart_create(ed.lib, name8, ed.subject, rule, ed.uid) == MC_OK;
   } else if (ok) {
     if (!ed.old_name || wcscmp(start, ed.old_name)) {
       ok = mc_smart_rename(ed.lib, ed.uid, name8) == MC_OK;
-      if (!ok) failed = MC_STR_WINDOWS_SMART_RENAME_FAILED;
+      if (!ok) failed = MC_STR_SMART_RENAME_FAILED;
       ed.changed |= ok;
     }
     if (ok && (!ed.old_rule || strcmp(rule, ed.old_rule))) {
@@ -2048,35 +2048,35 @@ typedef struct preset {
 } preset;
 
 static const preset k_track_presets[] = {
-  {MC_STR_WINDOWS_SMART_PRESET_RECENT,
+  {MC_STR_SMART_PRESET_RECENT,
    "{\"v\":1,\"match\":{\"all\":[{\"field\":\"added\",\"op\":\"within\",\"value\":{\"days\":30}}]},"
    "\"order\":[{\"field\":\"added\",\"dir\":\"desc\"}]}"},
-  {MC_STR_WINDOWS_SMART_PRESET_LEAST_PLAYED,
+  {MC_STR_SMART_PRESET_LEAST_PLAYED,
    "{\"v\":1,\"match\":{\"all\":[{\"field\":\"on_device\",\"op\":\"is\",\"value\":true}]},"
    "\"order\":[{\"field\":\"plays\",\"dir\":\"asc\"},{\"field\":\"last_played\",\"dir\":\"asc\"}],\"limit\":100}"},
-  {MC_STR_WINDOWS_SMART_PRESET_NOT_PLAYED,
+  {MC_STR_SMART_PRESET_NOT_PLAYED,
    "{\"v\":1,\"match\":{\"all\":[{\"field\":\"last_played\",\"op\":\"not_within\",\"value\":{\"days\":180}}]},"
    "\"order\":[{\"field\":\"last_played\",\"dir\":\"asc\"}]}"},
-  {MC_STR_WINDOWS_SMART_PRESET_FLAC,
+  {MC_STR_SMART_PRESET_FLAC,
    "{\"v\":1,\"match\":{\"all\":[{\"field\":\"on_device\",\"op\":\"is\",\"value\":true},"
    "{\"field\":\"format\",\"op\":\"is\",\"value\":\"flac\"}]}}"},
-  {MC_STR_WINDOWS_SMART_PRESET_BLANK, "{\"v\":1}"},
+  {MC_STR_SMART_PRESET_BLANK, "{\"v\":1}"},
 };
 
 static const preset k_album_presets[] = {
-  {MC_STR_WINDOWS_SMART_PRESET_RECENT_ALBUMS,
+  {MC_STR_SMART_PRESET_RECENT_ALBUMS,
    "{\"v\":1,\"match\":{\"all\":[{\"field\":\"added\",\"op\":\"within\",\"value\":{\"days\":30}}]},"
    "\"order\":[{\"field\":\"added\",\"dir\":\"desc\"}]}"},
-  {MC_STR_WINDOWS_SMART_PRESET_LEAST_PLAYED_ALBUMS,
+  {MC_STR_SMART_PRESET_LEAST_PLAYED_ALBUMS,
    "{\"v\":1,\"match\":{\"all\":[{\"field\":\"on_device\",\"op\":\"is\",\"value\":true}]},"
    "\"order\":[{\"field\":\"plays\",\"dir\":\"asc\"},{\"field\":\"last_played\",\"dir\":\"asc\"}],\"limit\":20}"},
-  {MC_STR_WINDOWS_SMART_PRESET_NOT_PLAYED_ALBUMS,
+  {MC_STR_SMART_PRESET_NOT_PLAYED_ALBUMS,
    "{\"v\":1,\"match\":{\"all\":[{\"field\":\"last_played\",\"op\":\"not_within\",\"value\":{\"days\":180}}]},"
    "\"order\":[{\"field\":\"last_played\",\"dir\":\"asc\"}]}"},
-  {MC_STR_WINDOWS_SMART_PRESET_FLAC_ALBUMS,
+  {MC_STR_SMART_PRESET_FLAC_ALBUMS,
    "{\"v\":1,\"match\":{\"all\":[{\"field\":\"on_device\",\"op\":\"is\",\"value\":true},"
    "{\"field\":\"format\",\"op\":\"is\",\"value\":\"flac\"}]}}"},
-  {MC_STR_WINDOWS_SMART_PRESET_BLANK, "{\"v\":1}"},
+  {MC_STR_SMART_PRESET_BLANK, "{\"v\":1}"},
 };
 #define PRESET_COUNT 5
 
@@ -2127,8 +2127,8 @@ static INT_PTR CALLBACK preset_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
 
 BOOL smart_new_dialog(HWND owner, mc_library *lib, mc_smart_subject subject, char out_uid[MC_UID_STRLEN]) {
   if (!lib) return FALSE;
-  const wchar_t *caption = mc_wstr(subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_NEW_PLAYLIST_TITLE
-                                                             : MC_STR_WINDOWS_SMART_NEW_GROUP_TITLE);
+  const wchar_t *caption = mc_wstr(subject == MC_SMART_TRACKS ? MC_STR_SMART_NEW_PLAYLIST_TITLE
+                                                             : MC_STR_SMART_NEW_GROUP_TITLE);
   preset_ask pa = {caption, subject == MC_SMART_TRACKS ? k_track_presets : k_album_presets, -1};
   if (DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_SMART_PRESET), owner, preset_proc, (LPARAM)&pa) !=
         IDOK ||
@@ -2139,7 +2139,7 @@ BOOL smart_new_dialog(HWND owner, mc_library *lib, mc_smart_subject subject, cha
   ed.subject = subject;
   ed.creating = TRUE;
   const preset *p = &pa.presets[pa.chosen];
-  BOOL blank = p->name == MC_STR_WINDOWS_SMART_PRESET_BLANK;
+  BOOL blank = p->name == MC_STR_SMART_PRESET_BLANK;
   BOOL created = run_editor(owner, caption, blank ? L"" : mc_wstr(p->name), p->rule);
   if (created && out_uid) memcpy(out_uid, ed.uid, MC_UID_STRLEN);
   return created;
@@ -2177,8 +2177,8 @@ BOOL smart_edit_dialog(HWND owner, mc_library *lib, const char *uid) {
   snprintf(ed.uid, sizeof ed.uid, "%s", uid);
   ed.old_name = name;
   BOOL changed = run_editor(owner,
-                            mc_wstr(subject == MC_SMART_TRACKS ? MC_STR_WINDOWS_SMART_EDIT_PLAYLIST_TITLE
-                                                               : MC_STR_WINDOWS_SMART_EDIT_GROUP_TITLE),
+                            mc_wstr(subject == MC_SMART_TRACKS ? MC_STR_SMART_EDIT_PLAYLIST_TITLE
+                                                               : MC_STR_SMART_EDIT_GROUP_TITLE),
                             name, rule);
   free(name);
   free(rule);

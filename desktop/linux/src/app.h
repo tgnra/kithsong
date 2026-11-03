@@ -66,9 +66,10 @@ void app_update_empty_pages(app *a);
 
 /* A header for a list page, as an album group's: its name (title-2) and a round + button
  * with tooltip (and its shortcut, accel, as app_set_tooltip() takes it, or NULL), which
- * calls clicked(button, user). For Playlists and Album groups. */
+ * calls clicked(button, user). For Playlists and Album groups. With a menu, the + has an
+ * arrow beside it that drops it down (New smart playlist…), whose tooltip is menu_tooltip. */
 GtkWidget *app_list_header(const char *title, const char *tooltip, const char *accel, GCallback clicked,
-                           gpointer user);
+                           gpointer user, GMenuModel *menu, const char *menu_tooltip);
 
 /* Plays the album or playlist shown in the track list, from track start on (or with start
  * -1 from the first track, which shuffled is any), and puts it first in the recents. */
