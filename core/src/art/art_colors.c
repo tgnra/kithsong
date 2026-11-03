@@ -818,3 +818,54 @@ int mc_art_glows(const mc_art_color *colors, int count, int dark, uint32_t out[M
   free(groups);
   return MC_ART_GLOWS;
 }
+
+/* --- Accent --- */
+
+/* Tones Material's Content scheme gives a seed's primary colour, near which the accent
+ * starts: behind the accent's white text, and as text on the theme's background. */
+#define ACCENT_BG_TONE 40.0
+#define ACCENT_LIGHT_TEXT_TONE 35.0
+#define ACCENT_DARK_TEXT_TONE 75.0
+#define ACCENT_CONTRAST 4.5 /* WCAG AA for body text */
+/* The backgrounds accent text is checked against: the darkest light one (Adwaita's light
+ * sidebar, about #EBEBED) and the lightest dark one (its dark sidebar, about #303034). */
+#define LIGHT_BACKGROUND 0xFFEBEBEDu
+#define DARK_BACKGROUND 0xFF303034u
+
+static double luminance(uint32_t c) {
+  double xyz[3];
+  xyz_from_argb(c, xyz);
+  return xyz[1] / 100.0;
+}
+
+static double contrast(uint32_t a, uint32_t b) {
+  double la = luminance(a), lb = luminance(b);
+  return la > lb ? (la + 0.05) / (lb + 0.05) : (lb + 0.05) / (la + 0.05);
+}
+
+/* h's hue and chroma at the first tone from start, stepping by step, with ACCENT_CONTRAST
+ * against against. */
+static uint32_t accent_at(const viewing *v, hct h, double start, double step, uint32_t against) {
+  uint32_t c = 0;
+  for (double tone = start; tone >= 0.0 && tone <= 100.0; tone += step) {
+    c = argb_from_hct(v, h.hue, h.chroma, tone);
+    if (contrast(c, against) >= ACCENT_CONTRAST) break;
+  }
+  return c | 0xFF000000u;
+}
+
+int mc_art_accent(const mc_art_color *colors, int count, int dark, uint32_t *bg, uint32_t *text) {
+  if (!colors || count <= 0) return 0;
+  viewing v = default_viewing();
+  for (int i = 0; i < count; i++) {
+    if (colors[i].neutral) continue;
+    hct h = hct_from_argb(&v, colors[i].argb);
+    if (h.chroma < NEUTRAL_CHROMA) continue;
+    if (bg) *bg = accent_at(&v, h, ACCENT_BG_TONE, -1.0, 0xFFFFFFFFu);
+    if (text)
+      *text = dark ? accent_at(&v, h, ACCENT_DARK_TEXT_TONE, 1.0, DARK_BACKGROUND)
+                   : accent_at(&v, h, ACCENT_LIGHT_TEXT_TONE, -1.0, LIGHT_BACKGROUND);
+    return 1;
+  }
+  return 0;
+}
