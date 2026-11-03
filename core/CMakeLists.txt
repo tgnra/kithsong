@@ -72,6 +72,7 @@ add_library(musiccore STATIC
   src/playback/decoder.c
   src/playback/player.c
   src/playback/shuffle.c
+  src/art/art_colors.c
   src/tagger/tag_io.cpp
   src/tagger/musicbrainz.c
   src/tagger/match.c
@@ -126,6 +127,9 @@ if(WIN32)
   # ws2_32 for sockets (sync and discovery), iphlpapi for discovery's interface list,
   # shell32 for the Recycle Bin (mc_trash).
   target_link_libraries(musiccore PRIVATE bcrypt ws2_32 iphlpapi shell32)
+endif()
+if(UNIX)
+  target_link_libraries(musiccore PRIVATE m)  # art_colors.c
 endif()
 kithsong_warnings(musiccore)
 
