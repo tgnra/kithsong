@@ -43,8 +43,9 @@ extern mc_status (*mc_transfer_trash)(const char *path);
 extern int (*mc_transfer_test_corrupt)(const char *track);
 
 /* Whether some file of t's track here is in the format t wants, and not stale (made from an
- * older file of the track): the track isn't missing. */
-int mc_transfer_track_satisfied(mc_library *lib, const mc_plan_track *t);
+ * older file of the track): the track isn't missing. *cache keeps the query for the next
+ * call (NULL: none); finalize it once done. */
+int mc_transfer_track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_track *t);
 
 /* Copies the session's file counts into r. */
 void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r);

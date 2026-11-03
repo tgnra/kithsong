@@ -938,8 +938,13 @@ music lives nowhere else.
      is kept: in the sidecar for a cached transcode, and in `files.sha256` for an original
      that has none (one imported here) if the file still has its row's size and mtime, the
      same condition under which a deep check records it (see [Verification](#verification)).
-     The hash is still worked out before `FILE_HDR`, which carries it. `file` is the original's file uid: its own,
-     or for a transcode the original it was made from. `format` is `"original"` when a lossy
+     The hash is still worked out before `FILE_HDR`, which carries it, but for an original
+     with none recorded the sender usually has it already: it hashes ahead, on a thread of
+     its own, the originals that the `HAVE_REQ`s before the requests asked about (in their
+     order, which is the order they will be asked for), a few past the one it is sending.
+     A hash worked out ahead is kept the same way, also for a file not asked for after all.
+     `file` is the original's file uid: its own, or for a transcode the original it was
+     made from. `format` is `"original"` when a lossy
      original stands in for the requested Opus. `ext` is the file's extension; a receiver
      refuses one that isn't an audio extension import takes. With an original (`format`
      `"original"`), `source_sha256` is its `files.source_sha256` when the sender has one:

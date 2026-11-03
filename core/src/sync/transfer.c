@@ -10,7 +10,9 @@
  * them out at once, and the peer answers them in order. Each file is written to
  * <dest>.part while it is hashed, and renamed into place only if the hash matches
  * FILE_HDR's. A mismatch is retried once, asked again behind the requests already out; a
- * second one counts the track as corrupt for this session.
+ * second one counts the track as corrupt for this session. The hashing and writing run on a
+ * thread of their own (filepipe.h), behind the session's thread receiving and decrypting,
+ * as the sender's reading runs ahead of its encrypting and sending.
  *
  * Serving. Originals are sent as they are; Opus copies come from the transcode cache
  * (<config>/transcode-cache, see transcode.h), from a transcode this device received at
@@ -21,6 +23,9 @@
  * waits for its track's job rather than encoding it again. FILE_HDR's hash is the one
  * recorded in the files row or a cached transcode's sidecar while the file is unchanged, else
  * the file is hashed first and the hash kept (keep_sha), so the next send reads it once.
+ * Originals with no recorded hash (those imported here) are hashed ahead (hashahead.h): the
+ * HAVE_REQs before the requests list them in the order they'll be asked for, so a worker
+ * hashes the next few while the one before is sent, and FILE_HDR rarely waits for a hash.
  *
  * Encoding is only ever from the track's original, whatever its format (a lossy original
  * such as an MP3 is still the original): never from a transcode, which would be encoded
@@ -56,6 +61,8 @@
 #include "musiccore/delete.h"
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
+#include "sync/filepipe.h"
+#include "sync/hashahead.h"
 #include "sync/libmerge.h"
 #include "sync/plan.h"
 #include "tagger/coverart.h"
@@ -70,6 +77,9 @@
 /* Requests (FILE_REQ, COVER_REQ) a receiver keeps outstanding, so the sender goes from one
  * file to the next without waiting a round trip. */
 #define FETCH_AHEAD 3
+/* Originals a sender hashes beyond the one it is sending: what the receiver has asked for
+ * meanwhile, and the next. */
+#define HASH_AHEAD (FETCH_AHEAD + 1)
 #define MAX_FILE_BYTES ((int64_t)4 << 30)
 /* The largest cover COVER_HDR may announce; a cover is held in memory whole. */
 #define MAX_COVER_BYTES ((int64_t)32 << 20)
@@ -90,6 +100,7 @@ typedef struct mc_transfer {
   /* Tracks whose originals imported here an archive peer holds verified copies of. */
   char (*archived)[MC_UID_STRLEN];
   int narchived, archived_cap;
+  mc_hash_ahead *hashes; /* serving: originals' hashes, from the first HAVE_REQ on */
 } mc_transfer;
 
 /* --- Small helpers --- */
@@ -490,15 +501,19 @@ static mc_status encode_original(mc_sync *sync, const held *orig, int kbps, mc_e
   return mc_encode_pool_queue(sync->enc, orig->file_uid, orig->path, kbps, prio, owner);
 }
 
-/* Whether some file of track here is in the format t wants, and not stale. */
-static int track_satisfied(mc_library *lib, const mc_plan_track *t) {
-  sqlite3_stmt *stmt;
+/* Whether some file of track here is in the format t wants, and not stale. The query is
+ * kept in *cache between calls (NULL: just this once); the caller finalizes it. Every
+ * planned track is asked about before a turn fetches anything, and preparing the query
+ * each time was most of that with a large library. */
+static int track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_track *t) {
+  sqlite3_stmt *stmt = cache ? *cache : NULL;
   int yes = 0;
-  if (sqlite3_prepare_v2(mc_library_db(lib),
-                         "SELECT f.format, f.bitrate_kbps, f.size_bytes, f.source_file_uid,"
-                         " f.source_peer_uid FROM files f JOIN tracks t ON t.uid = f.track_uid"
-                         " WHERE f.track_uid = ?1 AND NOT " STALE_SQL,
-                         -1, &stmt, NULL) != SQLITE_OK)
+  if (!stmt && sqlite3_prepare_v2(mc_library_db(lib),
+                                  "SELECT f.format, f.bitrate_kbps, f.size_bytes,"
+                                  " f.source_file_uid, f.source_peer_uid FROM files f"
+                                  " JOIN tracks t ON t.uid = f.track_uid"
+                                  " WHERE f.track_uid = ?1 AND NOT " STALE_SQL,
+                                  -1, &stmt, NULL) != SQLITE_OK)
     return 0;
   sqlite3_bind_text(stmt, 1, t->track_uid, -1, SQLITE_STATIC);
   while (!yes && sqlite3_step(stmt) == SQLITE_ROW) {
@@ -507,12 +522,18 @@ static int track_satisfied(mc_library *lib, const mc_plan_track *t) {
     yes = mc_plan_file_satisfies(t, kind, (const char *)sqlite3_column_text(stmt, 0),
                                  sqlite3_column_int(stmt, 1), sqlite3_column_int64(stmt, 2));
   }
-  sqlite3_finalize(stmt);
+  if (cache) {
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    *cache = stmt;
+  } else {
+    sqlite3_finalize(stmt);
+  }
   return yes;
 }
 
-int mc_transfer_track_satisfied(mc_library *lib, const mc_plan_track *t) {
-  return track_satisfied(lib, t);
+int mc_transfer_track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_track *t) {
+  return track_satisfied(lib, cache, t);
 }
 
 /* --- Paths --- */
@@ -728,6 +749,33 @@ static void keep_sha(mc_library *lib, const held *h, const char *sha, int64_t si
   else mc_library_rollback(lib);
 }
 
+/* For an original with no recorded hash: the one hash-ahead worked out, if it has it, kept as
+ * send_file() would keep its own, and put in h as if recorded, so send_file() uses it while
+ * the file is still as it was then. */
+static void take_hash(mc_session *s, held *h) {
+  mc_hash_ahead *ha = s->xfer ? s->xfer->hashes : NULL;
+  mc_hash_ahead_result r;
+  if (h->sha[0] || h->keep != KEEP_ROW || !ha || !mc_hash_ahead_take(ha, h->file_uid, &r))
+    return;
+  keep_sha(s->conn->lib, h, r.sha, r.size, r.mtime);
+  memcpy(h->sha, r.sha, SHA_STRLEN);
+  h->size = r.size;
+  h->mtime = r.mtime;
+}
+
+/* A hash worked out ahead for a file that wasn't asked for after all: kept all the same. */
+static void keep_unused(void *user, const char *key, const char *path,
+                        const mc_hash_ahead_result *r) {
+  held h;
+  memset(&h, 0, sizeof h);
+  snprintf(h.file_uid, sizeof h.file_uid, "%s", key);
+  h.path = (char *)path;
+  h.size = r->size;
+  h.mtime = r->mtime;
+  h.keep = KEEP_ROW;
+  keep_sha(user, &h, r->sha, r->size, r->mtime);
+}
+
 /* FILE_HDR then the bytes of path. The hash is the recorded one when the file is unchanged
  * since it was recorded (in its row, or a cached transcode's sidecar), else computed first
  * and kept for next time. An original says what it was imported from (source_sha256), if
@@ -767,22 +815,20 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
       yyjson_mut_obj_add_strcpy(doc, root, "source_sha256", h->source_sha);
     st = send_doc(s->ch, MC_MSG_FILE_HDR, doc);
   }
-  unsigned char *buf = st == MC_OK ? malloc(MC_CHANNEL_MAX_PAYLOAD) : NULL;
-  if (st == MC_OK && !buf) st = MC_ERR_NOMEM;
+  /* Read ahead on another thread, while this one encrypts and sends. */
+  mc_file_reader *rd = NULL;
+  if (st == MC_OK) st = mc_file_reader_start(f, size, &rd);
   mc_mutex_lock(&s->sync->lock);
   uint32_t delay = s->sync->send_delay_ms; /* tests only */
   mc_mutex_unlock(&s->sync->lock);
-  for (int64_t sent = 0; st == MC_OK && sent < size;) {
+  const unsigned char *chunk;
+  size_t len;
+  while (st == MC_OK && (chunk = mc_file_reader_next(rd, &len)) != NULL) {
     if (delay) mc_sleep_ms(delay);
-    size_t want = size - sent < MC_CHANNEL_MAX_PAYLOAD ? (size_t)(size - sent)
-                                                        : MC_CHANNEL_MAX_PAYLOAD;
-    size_t n = fread(buf, 1, want, f);
-    if (n < want) memset(buf + n, 0, want - n);
-    st = mc_channel_send(s->ch, MC_MSG_FILE_DATA, buf, want);
-    sent += (int64_t)want;
-    s->bytes_sent += (int64_t)want;
+    st = mc_channel_send(s->ch, MC_MSG_FILE_DATA, chunk, len);
+    s->bytes_sent += (int64_t)len;
   }
-  free(buf);
+  mc_file_reader_free(rd);
   fclose(f);
   if (st == MC_OK) s->files_sent++;
   mc_sync_trace("send %.8s: %lld bytes, hash %llu ms, send %llu ms", track, (long long)size,
@@ -791,7 +837,8 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
 }
 
 /* HAVE_REQ: for each track, whether this device has its original (and whether that copy is
- * verified: its sha256 is recorded) and whether it can send the requested Opus at once. */
+ * verified: its sha256 is recorded) and whether it can send the requested Opus at once.
+ * Originals it would send with no recorded hash are queued for hash-ahead, in this order. */
 static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t len) {
   yyjson_doc *req = parse(payload, len);
   if (!req) return MC_ERR_FORMAT;
@@ -810,6 +857,8 @@ static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t 
   }
   yyjson_mut_val *arr = yyjson_mut_arr(doc);
   yyjson_mut_obj_add_val(doc, root, "tracks", arr);
+  mc_transfer *x = s->xfer;
+  if (x && !x->hashes && mc_hash_ahead_new(HASH_AHEAD, &x->hashes) != MC_OK) x->hashes = NULL;
   size_t idx, max;
   yyjson_val *v;
   yyjson_arr_foreach(tracks, idx, max, v) {
@@ -817,6 +866,9 @@ static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t 
     if (!is_uid(track)) continue;
     held h;
     int original = find_original(s->conn->lib, track, &h), cached = 0;
+    if (original && !h.sha[0] && x && x->hashes &&
+        (!kbps || mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps)))
+      mc_hash_ahead_queue(x->hashes, h.file_uid, h.path);
     if (kbps && valid_bitrate(kbps)) {
       if (original && mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps))
         cached = 1;
@@ -871,8 +923,10 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   int original = find_original(lib, track, &h);
   mc_status st;
   if (!opus) {
+    if (original) take_hash(s, &h);
     st = original ? send_file(s, track, &h, "original", 0) : send_file_err(s->ch, track, "missing");
   } else if (original && mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps)) {
+    take_hash(s, &h);
     st = send_file(s, track, &h, "original", 0);
   } else {
     mc_encode_pool *pool = s->sync->enc;
@@ -1126,6 +1180,15 @@ static mc_status serve_turn(mc_session *s) {
   }
   /* Encode-ahead it didn't ask for after all. The pool trims the cache once it's idle. */
   mc_encode_pool_drop(s->sync->enc, s);
+  mc_hash_ahead *ha = s->xfer ? s->xfer->hashes : NULL;
+  if (ha) {
+    int hashed, taken;
+    mc_hash_ahead_stats(ha, &hashed, &taken);
+    mc_hash_ahead_finish(ha, keep_unused, s->conn->lib);
+    mc_hash_ahead_free(ha);
+    s->xfer->hashes = NULL;
+    mc_sync_trace("serve: %d hashed ahead, %d of them sent", hashed, taken);
+  }
   return st;
 }
 
@@ -1293,27 +1356,25 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
     if (dir && mc_mkdirs(dir) == MC_OK) f = mc_fopen(part, "wb");
     free(dir);
   }
-  int write_ok = f != NULL;
-  mbedtls_sha256_context ctx;
-  mbedtls_sha256_init(&ctx);
-  mbedtls_sha256_starts(&ctx, 0);
+  /* Hash and write on another thread, while this one receives and decrypts. Without a
+   * writer (nowhere to put the file) the data is only drained. */
+  mc_file_writer *w = NULL;
+  if (f && mc_file_writer_start(f, &w) != MC_OK) w = NULL;
   for (int64_t have = 0; have < size;) {
     if ((st = mc_channel_recv(s->ch, &type, &payload, &len)) != MC_OK) break;
     if (type != MC_MSG_FILE_DATA || (int64_t)len > size - have) {
       st = MC_ERR_FORMAT;
       break;
     }
-    mbedtls_sha256_update(&ctx, payload, len);
-    if (f && write_ok && fwrite(payload, 1, len, f) != len) write_ok = 0;
+    if (w) mc_file_writer_put(w, payload, len);
     have += (int64_t)len;
     s->bytes_received += (int64_t)len;
   }
-  uint64_t t_data = mc_mono_ms();
   unsigned char digest[32];
-  char got_sha[SHA_STRLEN];
-  mbedtls_sha256_finish(&ctx, digest);
-  mbedtls_sha256_free(&ctx);
-  hex(digest, got_sha);
+  char got_sha[SHA_STRLEN] = "";
+  int write_ok = w && mc_file_writer_finish(w, digest);
+  uint64_t t_data = mc_mono_ms();
+  if (write_ok) hex(digest, got_sha);
   if (f && fclose(f) != 0) write_ok = 0;
   int corrupt = st == MC_OK && mc_transfer_test_corrupt && mc_transfer_test_corrupt(t->track_uid);
 
@@ -1473,10 +1534,11 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   want *w = NULL;
   int n = 0, cap = 0;
   mc_status st = MC_OK;
+  sqlite3_stmt *satisfied = NULL;
 
   /* Missing wanted tracks (plan order is uid order). */
   for (int i = 0; i < plan->count && st == MC_OK; i++) {
-    if (track_satisfied(lib, &plan->tracks[i])) continue;
+    if (track_satisfied(lib, &satisfied, &plan->tracks[i])) continue;
     if (n == cap) {
       int grown = cap ? cap * 2 : 64;
       want *more = realloc(w, (size_t)grown * sizeof *more);
@@ -1511,7 +1573,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
                                         (const char *)sqlite3_column_text(stmt, 1),
                                         sqlite3_column_int(stmt, 2), sqlite3_column_int64(stmt, 3)))
           continue;
-        if (t && !track_satisfied(lib, t)) { /* asked about already, as missing */
+        if (t && !track_satisfied(lib, &satisfied, t)) { /* asked about already, as missing */
           want *m = bsearch(uid, w, (size_t)nmissing, sizeof *w, want_cmp);
           if (m) m->imported = 1;
           continue;
@@ -1534,6 +1596,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     }
     if (n) qsort(w, (size_t)n, sizeof *w, want_sort);
   }
+  sqlite3_finalize(satisfied);
   if (st == MC_OK && n) st = ask_have(s, w, n, plan);
 
   transcoder *tc = NULL;
@@ -2157,7 +2220,10 @@ static void compute_status(mc_library *lib, const mc_plan *plan, int corrupt, st
   memset(v, 0, sizeof *v);
   v->verified_ms = (int64_t)mc_wall_ms();
   v->expected = plan->count;
-  for (int i = 0; i < plan->count; i++) v->ok += track_satisfied(lib, &plan->tracks[i]);
+  sqlite3_stmt *satisfied = NULL;
+  for (int i = 0; i < plan->count; i++)
+    v->ok += track_satisfied(lib, &satisfied, &plan->tracks[i]);
+  sqlite3_finalize(satisfied);
   v->corrupt = corrupt < v->expected - v->ok ? corrupt : v->expected - v->ok;
   v->missing = v->expected - v->ok - v->corrupt;
   *latest_ms = 0;

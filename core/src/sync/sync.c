@@ -137,6 +137,44 @@ void mc_sync_conn_close(mc_sync_conn *c) {
   c->sdb = NULL;
 }
 
+/* Kept connections stay valid: the databases are only ever changed in place, never
+ * replaced, while sync runs. What a handle caches of the library's identity is read again,
+ * since a pairing or another session may have changed it since (the other handles do the
+ * same). */
+mc_status mc_sync_conn_take(mc_sync *sync, mc_sync_conn *c) {
+  memset(c, 0, sizeof *c);
+  mc_mutex_lock(&sync->lock);
+  if (sync->nidle) *c = sync->idle[--sync->nidle];
+  mc_mutex_unlock(&sync->lock);
+  if (c->lib && mc_library_reload_ids(c->lib) == MC_OK) return MC_OK;
+  mc_sync_conn_close(c);
+  return mc_sync_conn_open(sync, c);
+}
+
+void mc_sync_conn_give(mc_sync *sync, mc_sync_conn *c) {
+  int keep = c->lib && c->sdb && sqlite3_get_autocommit(mc_library_db(c->lib)) &&
+             sqlite3_get_autocommit(mc_sync_db_handle(c->sdb));
+  mc_mutex_lock(&sync->lock);
+  keep = keep && !sync->stopping && sync->started && sync->nidle < MC_SYNC_IDLE_CONNS;
+  if (keep) sync->idle[sync->nidle++] = *c;
+  mc_mutex_unlock(&sync->lock);
+  if (keep)
+    memset(c, 0, sizeof *c);
+  else
+    mc_sync_conn_close(c);
+}
+
+/* After the workers are gone (mc_sync_stop()). */
+static void close_idle(mc_sync *sync) {
+  mc_mutex_lock(&sync->lock);
+  int n = sync->nidle;
+  mc_sync_conn idle[MC_SYNC_IDLE_CONNS];
+  memcpy(idle, sync->idle, sizeof idle);
+  sync->nidle = 0;
+  mc_mutex_unlock(&sync->lock);
+  for (int i = 0; i < n; i++) mc_sync_conn_close(&idle[i]);
+}
+
 /* Under lock. */
 static mc_sync_peer *find_peer(mc_sync *sync, const char *uid, int create) {
   for (int i = 0; i < sync->npeers; i++)
@@ -219,15 +257,80 @@ int mc_sync_tracing(void) {
   return on;
 }
 
+/* Trace lines wait in a buffer for trace_main(). Written where they're made, each would
+ * cost a write to stderr, and when stderr is a file on Windows that is 15 ms or more (over
+ * 100 at times): more than most of the steps it times. Process-wide, as tracing is, so
+ * under SQLite's static mutexes, which need no setup: APP2 for the buffer, APP3 for writing
+ * it out in order. */
+static char *g_trace_buf;
+static size_t g_trace_len, g_trace_cap;
+static int g_trace_writer;
+
+static void trace_flush(void) {
+  sqlite3_mutex *out = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP3);
+  sqlite3_mutex *buf = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP2);
+  sqlite3_mutex_enter(out);
+  sqlite3_mutex_enter(buf);
+  char *text = g_trace_buf;
+  size_t len = g_trace_len;
+  g_trace_buf = NULL;
+  g_trace_len = g_trace_cap = 0;
+  sqlite3_mutex_leave(buf);
+  if (len) {
+    fwrite(text, 1, len, stderr);
+    fflush(stderr);
+  }
+  sqlite3_mutex_leave(out);
+  free(text);
+}
+
+static void trace_main(void *arg) {
+  (void)arg;
+  for (;;) {
+    mc_sleep_ms(20);
+    trace_flush();
+  }
+}
+
 void mc_sync_trace(const char *fmt, ...) {
   if (!mc_sync_tracing()) return;
   char line[1024];
+  int n = snprintf(line, sizeof line, "[sync %9.3f] ",
+                   (double)(mc_mono_ms() % 1000000000) / 1000.0);
   va_list ap;
   va_start(ap, fmt);
-  vsnprintf(line, sizeof line, fmt, ap);
+  vsnprintf(line + n, sizeof line - (size_t)n - 1, fmt, ap);
   va_end(ap);
-  fprintf(stderr, "[sync %9.3f] %s\n", (double)(mc_mono_ms() % 1000000000) / 1000.0, line);
-  fflush(stderr);
+  size_t len = strlen(line);
+  line[len++] = '\n';
+  sqlite3_mutex *buf = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP2);
+  sqlite3_mutex_enter(buf);
+  if (g_trace_len + len > g_trace_cap) {
+    size_t cap = g_trace_cap ? g_trace_cap * 2 : 16384;
+    while (cap < g_trace_len + len) cap *= 2;
+    char *grown = realloc(g_trace_buf, cap);
+    if (grown) {
+      g_trace_buf = grown;
+      g_trace_cap = cap;
+    }
+  }
+  if (g_trace_len + len <= g_trace_cap) {
+    memcpy(g_trace_buf + g_trace_len, line, len);
+    g_trace_len += len;
+  }
+  int start = !g_trace_writer;
+  g_trace_writer = 1;
+  sqlite3_mutex_leave(buf);
+  mc_thread writer;
+  if (!start) return;
+  if (mc_thread_start(&writer, trace_main, NULL) == MC_OK) {
+    mc_thread_detach(&writer);
+  } else {
+    sqlite3_mutex_enter(buf);
+    g_trace_writer = 0; /* the next line tries again */
+    sqlite3_mutex_leave(buf);
+    trace_flush();
+  }
 }
 
 void mc_sync_emit_pair_merge(mc_sync *sync, const mc_pair_merge *m) {
@@ -1044,10 +1147,10 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
 static void session_worker(void *arg) {
   session_job *j = arg;
   mc_sync_conn c;
-  if (mc_sync_conn_open(j->sync, &c) == MC_OK) {
+  if (mc_sync_conn_take(j->sync, &c) == MC_OK) {
     job_addresses(&c, j, NULL, 0);
     initiate(j->sync, &c, j, 1);
-    mc_sync_conn_close(&c);
+    mc_sync_conn_give(j->sync, &c);
   }
   free(j);
 }
@@ -1074,9 +1177,9 @@ static void reach_worker(void *arg) {
   uint16_t port = sync->reach_port_override ? sync->reach_port_override : sync->port;
   mc_mutex_unlock(&sync->lock);
   mc_sync_conn c;
-  if (member && mc_sync_conn_open(sync, &c) == MC_OK) {
+  if (member && mc_sync_conn_take(sync, &c) == MC_OK) {
     job_addresses(&c, j, NULL, 0);
-    mc_sync_conn_close(&c);
+    mc_sync_conn_give(sync, &c);
   }
   for (int i = 0, n = j->n; from[0] && i < n; i++) job_add(j, from, j->port[i]);
 
@@ -1136,21 +1239,21 @@ static void serve_worker(void *arg) {
   /* Tracked from the start, so stopping cuts short a peer that never sends a thing. */
   mc_sync_track(sync, ch);
   mc_sync_conn c;
-  if (mc_channel_read_preamble(ch) != MC_OK || mc_sync_conn_open(sync, &c) != MC_OK) {
+  if (mc_channel_read_preamble(ch) != MC_OK || mc_sync_conn_take(sync, &c) != MC_OK) {
     mc_sync_untrack(sync, ch);
     mc_channel_close(ch);
     return;
   }
   if (mc_channel_mode(ch) == MC_MODE_PAIRING) {
     mc_pairing_respond(sync, &c, ch);
-    mc_sync_conn_close(&c);
+    mc_sync_conn_close(&c); /* rare, and it may set the library aside: not kept */
     return;
   }
   if (mc_channel_mode(ch) == MC_MODE_REACH) {
     serve_reach(sync, ch);
     mc_sync_untrack(sync, ch);
     mc_channel_close(ch);
-    mc_sync_conn_close(&c);
+    mc_sync_conn_give(sync, &c);
     return;
   }
   mc_session s;
@@ -1181,7 +1284,7 @@ static void serve_worker(void *arg) {
   }
   mc_sync_untrack(sync, ch);
   mc_channel_close(ch);
-  mc_sync_conn_close(&c);
+  mc_sync_conn_give(sync, &c);
 }
 
 static void listen_main(void *arg) {
@@ -1798,6 +1901,7 @@ void mc_sync_free(mc_sync *sync) {
   mc_encode_pool_free(sync->enc);
   free(sync->peers);
   free(sync->chans);
+  if (mc_sync_tracing()) trace_flush(); /* the app may be about to exit */
   free(sync->config_dir);
   free(sync->lib_dir);
   free(sync);
@@ -1903,6 +2007,7 @@ void mc_sync_stop(mc_sync *sync) {
   mc_encode_pool_stop(sync->enc);
   /* Workers may still be connecting; whatever they open now is aborted at once. */
   reap(sync, 1);
+  close_idle(sync);
 
   mc_mutex_lock(&sync->lock);
   mc_listener_close(sync->listener);

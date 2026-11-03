@@ -96,6 +96,7 @@ add_library(musiccore STATIC
   src/sync/sync.c
   src/sync/sync_db.c
   src/sync/frame.c
+  src/sync/filepipe.c
   src/sync/noise.c
   src/sync/channel.c
   src/sync/pair.c
@@ -111,6 +112,7 @@ add_library(musiccore STATIC
   src/sync/plan.c
   src/sync/transfer.c
   src/sync/encode.c
+  src/sync/hashahead.c
   src/sync/reach.c
   src/sync/waiting.c
   "${_sync_schema_c}")
