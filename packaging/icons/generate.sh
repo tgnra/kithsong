@@ -216,12 +216,15 @@ $(vd_mark 21.5 21.5 0.65 "$MARK" "            ")
 EOF
 } >"$APP_RES/mipmap/ic_launcher.xml"
 
-# The status bar icon: the mark alone, 22dp across, as Android draws only its shape.
-{
-  vd_open 24 24 24 24 "The status bar icon for playback, import and sync: white on transparent, as Android draws only its shape."
-  vd_mark -1.924 -1.37 0.2785 "#FFFFFF" "    "
-  echo "</vector>"
-} >"$APP_RES/drawable/ic_notification.xml"
+# The status bar icon: the mark alone, 22dp across, as Android draws only its shape. The
+# watch has it too, for its playback notification.
+for res in "$APP_RES" "$WEAR_RES"; do
+  {
+    vd_open 24 24 24 24 "The status bar icon for playback, import and sync: white on transparent, as Android draws only its shape."
+    vd_mark -1.924 -1.37 0.2785 "#FFFFFF" "    "
+    echo "</vector>"
+  } >"$res/drawable/ic_notification.xml"
+done
 
 # The header's and About's wordmark, ic_wordmark: drawable for light, drawable-night for dark,
 # as the theme follows the system. 141 x 40dp; the tile's corners match the icon's (25 of 108).

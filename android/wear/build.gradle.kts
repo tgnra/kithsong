@@ -64,6 +64,10 @@ extra["kithsongStringSections"] = listOf("shared", "wear")
 
 dependencies {
     implementation(project(":native"))
+    // CoreMediaPlayer, the core's player as a Media3 Player, shared with the phone app, and
+    // the media session around it: background playback and the watch's media controls.
+    implementation(project(":playback"))
+    implementation("androidx.media3:media3-session:1.11.1")
 
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)

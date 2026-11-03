@@ -1,12 +1,16 @@
 package ng.kithso.wear
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,6 +28,7 @@ import ng.kithso.core.MusicCoreException
 import ng.kithso.core.TrackInfo
 import ng.kithso.wear.ui.AlbumScreen
 import ng.kithso.wear.ui.AlbumsScreen
+import ng.kithso.wear.ui.HeadphonesScreen
 import ng.kithso.wear.ui.HomeScreen
 import ng.kithso.wear.ui.LicenseTextScreen
 import ng.kithso.wear.ui.LicensesScreen
@@ -47,7 +52,8 @@ private fun WearApp() {
     val navController = rememberSwipeDismissableNavController()
     val context = LocalContext.current
     val app = context.applicationContext as KithsongApp
-    val player = app.player
+    val playback = app.playback
+    val outputs = app.outputs
     // Only albums with files on the watch; the library lists everything it knows about.
     var albums by remember { mutableStateOf(emptyList<AlbumInfo>()) }
     LaunchedEffect(Unit) {
@@ -58,11 +64,35 @@ private fun WearApp() {
         SampleSync(name ?: Build.MODEL, libraryCall(0) { app.library.trackCount.toInt() })
     }
 
+    // Android 13 on: the playback notification needs leave to show, asked for on the first
+    // play and otherwise left to the system, which stops asking after two refusals. Playing
+    // doesn't wait for the answer.
+    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    // What to play once there's an output for it (see AudioOutputs): while there's none, the
+    // headphones screen holds it.
+    var pendingPlay by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun startPlaying(play: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (outputs.ready) {
+            play()
+            navController.navigate("player")
+        } else {
+            pendingPlay = play
+            navController.navigate("headphones")
+        }
+    }
+
     // AppScaffold shows the time at the top of every screen.
     AppScaffold {
         SwipeDismissableNavHost(navController = navController, startDestination = "home") {
             composable("home") {
                 HomeScreen(
+                    nowPlaying = playback.track,
+                    onNowPlaying = { navController.navigate("player") },
                     onAlbums = { navController.navigate("albums") },
                     onSync = { navController.navigate("sync") },
                     onSettings = { navController.navigate("settings") },
@@ -79,21 +109,40 @@ private fun WearApp() {
                         app.library.albumTracks(album.uid).filter { it.path != null }
                     }
                 }
-                AlbumScreen(album, tracks, playingUid = player.track?.uid) {
-                    player.play(album, tracks, it)
-                    navController.navigate("player")
+                AlbumScreen(album, tracks, playingUid = playback.track?.uid) { track ->
+                    startPlaying { playback.play(tracks, track) }
                 }
             }
+            composable("headphones") {
+                // Headphones connected, or the speaker chosen: play, and put the player where
+                // this screen was, so swiping back from it goes to the album.
+                val ready = outputs.ready
+                LaunchedEffect(ready) {
+                    if (!ready) return@LaunchedEffect
+                    pendingPlay?.invoke()
+                    pendingPlay = null
+                    navController.navigate("player") { popUpTo("headphones") { inclusive = true } }
+                }
+                HeadphonesScreen(
+                    hasSpeaker = outputs.hasSpeaker,
+                    onBluetoothSettings = outputs::openBluetoothSettings,
+                    onPlayOnWatch = { outputs.useSpeaker = true },
+                )
+            }
             composable("player") {
+                val track = playback.track
                 PlayerScreen(
-                    title = player.track?.title,
-                    artist = player.album?.artist,
-                    isPlaying = player.isPlaying,
-                    hasPrevious = player.hasPrevious,
-                    hasNext = player.hasNext,
-                    onPrevious = player::skipPrevious,
-                    onPlayPause = player::togglePlayPause,
-                    onNext = player::skipNext,
+                    title = track?.title,
+                    artist = track?.artist,
+                    isPlaying = playback.isPlaying,
+                    hasPrevious = playback.hasPrevious,
+                    hasNext = playback.hasNext,
+                    positionMs = { playback.positionMs },
+                    durationMs = playback.durationMs,
+                    onPrevious = playback::previous,
+                    onPlayPause = playback::toggle,
+                    onNext = playback::next,
+                    onSeek = playback::seekTo,
                 )
             }
             composable("sync") {

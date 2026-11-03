@@ -1094,6 +1094,14 @@
     "watch_licenses": { "text": "Open source licences", "note": "The watch's Settings entry, and the title of its screen: the third-party libraries in the watch app and their licences." },
     "watch_licenses_native": { "text": "In the core", "note": "Heading on the watch's licences screen: the C libraries the native core is built from." },
     "watch_licenses_overview": { "text": "Overview", "note": "The watch's licences screen: the list of every third-party library, its version and licence (LICENSES.md)." },
-    "watch_licenses_android": { "text": "In the watch app", "note": "Heading on the watch's licences screen: the Android/Kotlin libraries." }
+    "watch_licenses_android": { "text": "In the watch app", "note": "Heading on the watch's licences screen: the Android/Kotlin libraries." },
+    "watch_now_playing": { "text": "Now playing", "note": "Entry on the watch's home screen that opens the player while something is queued; the track is its second line." },
+    "watch_title_artist": { "text": "{0} · {1}", "note": "A track on one line: {0} its title, {1} its artist." },
+    "watch_times": { "text": "{0} / {1}", "note": "Under the watch player's buttons: {0} the time played, {1} the track's length, both m:ss." },
+    "watch_connect_headphones": { "text": "Connect headphones", "note": "Title of the watch's screen shown before playing while no Bluetooth headphones are connected." },
+    "watch_headphones_text": "Pair Bluetooth headphones to listen, or play through the watch's speaker.",
+    "watch_headphones_text_no_speaker": { "text": "Pair Bluetooth headphones to listen.", "note": "As watch_headphones_text, on a watch with no speaker." },
+    "watch_bluetooth_settings": { "text": "Bluetooth settings", "note": "Button opening the watch's Bluetooth settings." },
+    "watch_play_on_watch": { "text": "Play on the watch", "note": "Button: play through the watch's own speaker rather than headphones." }
   }
 }
