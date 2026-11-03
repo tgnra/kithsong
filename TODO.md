@@ -9,32 +9,25 @@ Big pieces that haven't been started, or that only one platform has.
 - **Home page** - Home in the desktop sidebars is greyed out until it exists
 - **Screen readers on Windows** - the album grid, track list, sidebar, search page and now-playing flash have UI Automation providers, checked with UI Automation clients but not yet with Narrator or NVDA; the artist page and the now-playing seek bar are still invisible to it
 - **Wear OS** - a prototype: albums and a basic player; sync is a mock-up (SampleSync), no background playback, no playlists or artists; Settings has only the licences
-- **Releases** - a portable zip on Windows (no installer or signing) and a Flatpak bundle on Linux (no Flathub listing); Android and Wear OS: signed APKs and AABs, R8 on, licences in Settings
+- **Releases** - a portable zip and an unsigned MSIX for the Store (scripts/package-msix.ps1) on Windows (no installer or signing), and a Flatpak bundle on Linux (no Flathub listing); Android and Wear OS: signed APKs and AABs, R8 on, licences in Settings
 
 ### Parity at a glance
 
-| Feature | Windows | Linux | Android | Wear OS |
-|---|---|---|---|---|
-| Albums | yes | yes | yes | yes |
-| Artists | yes (no art) | yes (no art) | yes | no |
-| Playlists: browse | yes | yes | yes | no |
-| Playlists: edit | yes | yes | yes | no |
-| Album groups | yes | yes | yes | no |
-| Smart playlists | yes (rule editor, rename, delete) | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) | no |
-| Recents | yes | yes | yes | no |
-| Search | yes | yes | yes | no |
-| Delete (with restore) | albums, tracks | albums, tracks | albums, tracks (permanent: no trash to restore from) | no |
-| Remove from this device | albums, artists | albums, artists (only compiled) | albums, artists | no |
-| Shuffle | core's | core's | core's | no |
-| Volume | drop-down slider, keyboard | popover slider, keyboard, MPRIS | system's (core's for ducking) | no |
-| Import | yes | yes | yes (simpler review) | no |
-| Sync | yes | yes (two instances on one host) | yes | mock-up |
-| Merging libraries (pairing) | yes | yes | yes | no |
-| Archive devices | yes | yes | yes | no |
-| Move library | yes | yes | n/a (app storage) | n/a |
-| Scrobbling | yes | yes (fake service only) | yes | no |
-| OS media controls | SMTC (with shuffle) | MPRIS (with shuffle and volume) | Media3 session (with shuffle) | none |
-| Car | n/a | n/a | Android Auto: Home (Recents), Playlists, Albums, Album groups; search and voice (only compiled) | n/a |
+Only where the platforms differ. Windows, Linux and Android all have albums, playlists (browse and edit), album groups, recents, search, the core's shuffle, merging libraries and archive devices. Wear OS has albums and a basic player only, and its sync is a mock-up.
+
+| Feature | Windows | Linux | Android |
+|---|---|---|---|
+| Artists | no art | no art | yes |
+| Smart playlists | rule editor, rename, delete | open, play, reshuffle (no editor) | open, play, reshuffle (no editor) |
+| Delete | with restore | with restore | permanent (no trash to restore from) |
+| Remove from this device | yes | only compiled | yes |
+| Volume | drop-down slider, keyboard | popover slider, keyboard, MPRIS | system's (core's for ducking) |
+| Import | yes | yes | simpler review |
+| Sync | yes | only seen between two instances on one host | yes |
+| Move library | yes | yes | n/a (app storage) |
+| Scrobbling | yes | only against a fake service | yes |
+| OS media controls | SMTC (with shuffle) | MPRIS (with shuffle and volume) | Media3 session (with shuffle) |
+| Car | n/a | n/a | Android Auto (search and voice only compiled) |
 
 ## Library and browsing
 
@@ -43,8 +36,6 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Album groups
 - Android - a new group can only be made from an album's Add to album group… (groups with no album here are hidden, as playlists are)
-- Android - Shuffle albums and Shuffle tracks for a group, as the desktops have beside Play
-- Android - adding to, removing from or reordering a playlist or group doesn't put it first in the recents; the desktops do, which is what lets a track or album be dragged onto it there
 - Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results; only from the album grid and the track list
 
 ### Smart playlists
@@ -61,7 +52,6 @@ Big pieces that haven't been started, or that only one platform has.
 
 ### Delete
 - Core - a peer that trashed an original after a remote delete keeps no restore record; restoring it there gets it swept as an unknown file
-- Android - Remove from this phone carries on playing a track it removes (and skips the queue's others); Windows stops playback first, as Android now does for Delete from library
 
 ### Remove from this device
 Albums and artists can be removed from one device ("Remove from this PC", computer, phone) and synced to it again; see "Removing from one device" in docs/sync-protocol.md. Left to do:
@@ -70,6 +60,10 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 - All - an album removed only through its artist shows neither item; Sync to this device on the artist brings it back
 - All - an "Add to this device" for an album or artist a selection doesn't include (the menus only offer Sync to this device for what was removed)
 - Core - versions before exclusions ignore them: such a device would fetch the item again, and shows a device with exclusions under Sync everything as "changed" (its fingerprint differs)
+
+### Albums
+- Windows - an Albums page whose every album has one track (all singles) says "No music yet"; Linux says "No albums" and points to the artists' Singles and search (its strings are in the linux section, and would move to shared)
+- All - tracks imported before 81dcc23 keep a timestamp each, a moment apart, so "Recently added" still plays those albums last track first (no migration: the column syncs)
 
 ### Recents
 - Windows and Linux - show cover art rather than the page's icon (no sidebar row has art yet)
@@ -99,6 +93,7 @@ Albums and artists can be removed from one device ("Remove from this PC", comput
 ## Sync
 
 ### Core
+- test_sync_lossy fails on master as of a18ec5e (first at line 466: the transcode's source isn't the lossless file; mc_sync_set_profile then fails); maybe since 892740e "transcode only from the original"
 - Albums and artists without MusicBrainz ids never merge; a playlist or album group that held both copies lists the survivor twice
 - Sync profile "artist" selections pick tracks by `tracks.artist_uid` and the album's artist only, not featured credits (`track_artists` / `album_artists` past the first): selecting Rihanna doesn't sync "Jay-Z feat. Rihanna". And a selection of an old whole-credit artist ("Jay-Z feat. Rihanna") selects nothing once the refresh after upgrading has split and deleted it
 - Changelog compaction must keep the rows that decide merges and archive demotions
@@ -138,14 +133,10 @@ Left in the frontends:
 ### Frontends
 - All - run mc_sync_verify(deep) weekly, and show the unknown files an archive reports
 - All - the waiting-for-a-device banner has no Show that filters the library to those tracks (the core only gives counts); Windows' banner, Linux's AdwBanner and Android's card are built but not yet seen running
-- All - a switch in Settings for mc_settings_album_in_order() (playing a track from an album turns shuffle off, so the album plays in order; on by default). Every platform follows it, Android Auto too, but none shows it yet
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
-- Windows and Linux - an empty library in a group (nothing imported anywhere yet) just says "Use Import to add music."; Android's says to choose what to sync, with a button to this phone's page
 
 ### Windows firewall
-- After "Don't ask again", a way to ask again (Settings, or the device page's Connections row when this PC is blocked)
 - Offer it when the network is public too (today it stays quiet unless Private is uncovered, and only says so after adding the rule)
-- A stale rule left for an old exe path (portable zip moved) is never cleaned up
 - The installer, once there is one, should add the rule (program-scoped, Private/Domain, as firewall.c does) and remove it on uninstall, so the prompt never shows
 
 ## Move library
@@ -190,32 +181,37 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 - Scrobbling with a real Last.fm account (the whole flow ran against a fake service). With no browser, Sign in fails silently and the row says "Waiting…" with no link to copy
 - Import: Search More Widely while offline. After a Use as Track choice, focus goes back to the first row rather than the next missing track, and the Choose file menu's items have no accessible names (nor have other popover menus' on GTK 4.14)
 - The track list's long press (no touch device here)
+- "Recently added" playing a newly imported album in order (the core's fix is covered by test_import_db only, not seen after a real import)
 - The notification while the window is in the background: seen with stand-in notification servers (both protocols), its action bringing the window up with the code, and going when the window is active, the request ends or the dialog closes. Not seen: the merge's summary (openbox focuses the merge's window, so it's rightly skipped), real GNOME Shell and KDE bubbles, and the portal
 - Move library's refused close under mutter or KWin; the AdwShortcutsDialog in a real Flatpak build of the app
 - Removing an album while it plays lets the track play to its end, then stops; the bar then keeps the removed track, with Play doing nothing. The artist page's album tiles have no menu (singles' do)
-- An Albums page whose every album has one track (all singles) says "No music yet"
-- The archive's own sidebar row ("This computer. Keeps the whole library") is cut off at the default width
+- Settings' Play albums in order switch: seen toggling and saving under Xvfb, but not that playing an album's track then leaves shuffle on, nor its save-failure toast
+- The empty Albums page in a group: its text and Choose what to sync button in place of Pair with a device… (only built)
 - An album tile stays highlighted after its right-click menu closes, until the page reloads (maybe GTK 4.14)
-- "Recently added" plays each album last track first (each track is added a moment after the one before)
 - Go to album and Go to artist on the track list's and the artist page's track menus (only compiled): that each is hidden where it should be (a single's or no album, the album shown, the artist's own page), and that the album opens with the track selected
 - The header bar's volume control (volume_button.c): only compiled (GTK 4.14). Check the popover's slider taking the focus when it opens, its arrow keys, the speaker muting, and the icon and slider following the keyboard and MPRIS
 
 ### Windows
 - Import review's Choose file menu with files of related items (grouped under "Grouped separately: …"): only tried with the item's own unmatched files
 - Firewall prompt: the success path after UAC, beyond one run
+- Firewall: Settings' "Ask about Windows Firewall again" and the elevated helper's removal of rules left for a moved exe (renamed to a unique name, then removed): firewall.c and settings_view.c only compiled to objects with mingw-w64, never linked or run. Check that renaming a rule taken from the policy's collection takes effect before Remove
 - Remove from this PC / Sync to this PC in a real group (the core is tested between two devices; on screen only the menu outside a group was looked at), including removing an album while it plays
 - Deleting a track while it plays
 - Go to Album and Go to Artist on the track list's and a single's menus: only syntax-checked with MinGW, never built or run
 - Volume's fade (only silent test files so far)
+- Settings' Play albums in order checkbox (only syntax-checked with MinGW): its layout in both themes, and its screen-reader name
 - The volume drop-down (volume_popup.c): only cross-compiled with MinGW, never run. Check the main window keeping its active look and Mica while it's open, a click on the speaker closing it without opening it again, the focus going back on Escape, the wheel, Windows 10's border (no rounded corners there), high contrast, and the speaker and slider through UI Automation
 - The UI Automation providers with a real screen reader (Narrator, NVDA): only checked with System.Windows.Automation tree walks, patterns, focus events, and listeners for property changes and live regions
+- The empty Albums page's Choose What to Sync in a group (only syntax-checked with MinGW)
 - The empty Playlists page's Choose what to sync (needs this PC in a group with every playlist hidden), pairing from the empty Albums page's menu, and the empty-page button through UI Automation
 - The pairing dialog's ended page with a real pairing: Choose what to sync, the archive explainer (and the dialog growing to fit it), Create a new library and Pair again
 - Merging libraries: the progress window was only seen for an instant (a three-track test merge finishes at once), and the pending note after a restart was never seen (both seen on Linux); the library_mismatch update hint (it needs a peer running an older version) has been seen nowhere
 
 ### Android and Wear OS
 - Smart playlists' and groups' pictures (mc_smart_art()), and empty playlists in the Playlists section and Recents, on screen (only built)
-- Remove from this phone / Sync to this phone on screen, in a real group (only built)
+- Remove from this phone / Sync to this phone on screen, in a real group (only built), including stopping playback when it takes a queued track
+- Settings' Play albums in order switch (only built)
+- An album group's Play, Shuffle albums and Shuffle tracks (only built; check they wrap on a narrow screen), and an edited playlist or group moving first in the recents (only built)
 - A recent's long-press menu (Play, Shuffle, Remove from Recents, Clear Recents) on screen (only built; the desktops' menus were run)
 - A track's Go to album and Go to artist, from track lists and the player (not even built: no Android SDK where they were written)
 - A search result track's menu (Add to playlist, Go to album, Go to artist or to each of several, from mc_library_list_credit through the new nativeListCredit): not even built either (jni_browse.c only syntax-checked with the host's gcc)
@@ -245,5 +241,5 @@ Run on Ubuntu 24.04 (GTK 4.14, libadwaita 1.5) under Xvfb, mostly with openbox, 
 
 ## Release
 
-- Windows - installer, MSIX/Store package, code signing
+- Windows - installer, code signing, and a Store submission (scripts/package-msix.ps1 packs an unsigned MSIX)
 - Linux - Flathub (every dependency in third_party/CMakeLists.txt as a Flatpak source; the Flatpak manifest fetches them at build time, which Flathub forbids), architectures other than x86_64
