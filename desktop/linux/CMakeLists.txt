@@ -31,8 +31,10 @@ add_executable(kithsong
   src/volume_button.c
   src/art_accent.c
   src/art_backdrop.c
-  src/brand_backdrop.c)
-target_link_libraries(kithsong PRIVATE musiccore PkgConfig::ADW m)
+  src/brand_backdrop.c
+  src/smart_editor.c)
+# yyjson for the smart list editor, which reads and writes rules (smart_editor.c).
+target_link_libraries(kithsong PRIVATE musiccore mc_yyjson PkgConfig::ADW m)
 
 # The logo, built in for the empty pages' glows (brand_backdrop.c), so they're coloured
 # without the icon installed.

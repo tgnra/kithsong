@@ -88,6 +88,7 @@ static struct {
   gboolean menu_here;             /* and whether it has a file here */
   guint menu_pos;
   GtkWidget *playlist_button;     /* the header's menu, shown for playlists */
+  GMenuModel *header_menu, *smart_header_menu; /* what it shows: a smart one's has Edit rules… */
   GtkWidget *reshuffle_button;    /* shown for smart playlists in random order */
   GtkWidget *actions;             /* Play and Shuffle */
   GtkWidget *backdrop;            /* the art's colours behind the header and actions */
@@ -104,6 +105,11 @@ static TrackItem *track_at(guint i) {
 /* A playlist whose entries can be moved, removed, renamed and deleted: not a smart one. */
 static gboolean showing_playlist(void) {
   return s.album && s.album->is_playlist && !s.album->is_smart;
+}
+
+/* A playlist that can be renamed and deleted: a smart one too. */
+static gboolean showing_any_playlist(void) {
+  return s.album && s.album->is_playlist;
 }
 
 static void row_update(row *r) {
@@ -431,10 +437,15 @@ static GtkWidget *build_header(void) {
   GMenu *menu = g_menu_new();
   append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
   g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_DELETE_MENU), "playlist.delete");
+  s.header_menu = G_MENU_MODEL(menu);
+  menu = g_menu_new();
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_EDIT_MENU), "playlist.edit-rules");
+  append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_DELETE_PLAYLIST_MENU), "playlist.delete");
+  s.smart_header_menu = G_MENU_MODEL(menu);
   s.playlist_button = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s.playlist_button), "view-more-symbolic");
-  gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), G_MENU_MODEL(menu));
-  g_object_unref(menu);
+  gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), s.header_menu);
   gtk_widget_set_tooltip_text(s.playlist_button, mc_str(MC_STR_PLAYLIST_MENU));
   gtk_widget_add_css_class(s.playlist_button, "flat");
   gtk_widget_add_css_class(s.playlist_button, "circular");
@@ -495,14 +506,21 @@ static void on_rename_playlist(GSimpleAction *action, GVariant *param, gpointer 
   (void)action;
   (void)param;
   (void)user;
-  if (s.cb.rename_playlist && showing_playlist()) s.cb.rename_playlist(s.cb.user);
+  if (s.cb.rename_playlist && showing_any_playlist()) s.cb.rename_playlist(s.cb.user);
 }
 
 static void on_delete_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
   (void)user;
-  if (s.cb.delete_playlist && showing_playlist()) s.cb.delete_playlist(s.cb.user);
+  if (s.cb.delete_playlist && showing_any_playlist()) s.cb.delete_playlist(s.cb.user);
+}
+
+static void on_edit_rules(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (s.cb.edit_rules && s.album && s.album->is_smart) s.cb.edit_rules(s.cb.user);
 }
 
 /* The track menu's Go to album and Go to artist. Copies: opening the page reloads the list. */
@@ -578,7 +596,7 @@ static gboolean on_rename_key(GtkWidget *widget, GVariant *args, gpointer user) 
   (void)widget;
   (void)args;
   (void)user;
-  if (!showing_playlist()) return FALSE;
+  if (!showing_any_playlist()) return FALSE;
   on_rename_playlist(NULL, NULL, NULL);
   return TRUE;
 }
@@ -702,6 +720,7 @@ static void build_menu(GtkWidget *pane) {
   actions = g_simple_action_group_new();
   add_action(actions, "rename", on_rename_playlist);
   add_action(actions, "delete", on_delete_playlist);
+  add_action(actions, "edit-rules", on_edit_rules);
   gtk_widget_insert_action_group(pane, "playlist", G_ACTION_GROUP(actions));
   g_object_unref(actions);
 
@@ -877,7 +896,10 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
                                           : album && album->artist      ? album->artist
                                                                         : mc_str(MC_STR_UNKNOWN_ARTIST));
   set_summary(album ? album->year : 0, n, total_ms);
-  gtk_widget_set_visible(s.playlist_button, entries);
+  gboolean smart = album && album->is_smart;
+  gtk_widget_set_visible(s.playlist_button, album && album->is_playlist);
+  gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), smart ? s.smart_header_menu : s.header_menu);
+  gtk_widget_set_tooltip_text(s.playlist_button, mc_str(smart ? MC_STR_SMART_PLAYLIST_MENU : MC_STR_PLAYLIST_MENU));
   gtk_widget_set_visible(s.reshuffle_button, album && album->is_smart && album->random);
   gtk_widget_set_sensitive(s.actions, playable);
   if (!same) gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(s.scroller)), 0);

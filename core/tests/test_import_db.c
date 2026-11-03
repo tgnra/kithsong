@@ -267,6 +267,8 @@ int main(int argc, char **argv) {
   CHECK(query_int(lib, "SELECT count(*) FROM tracks") == 2);
   CHECK(query_int(lib, "SELECT count(*) FROM files") == 2);
   CHECK(query_int(lib, "SELECT count(*) FROM artists") == 1); /* tracks fall back to album artist */
+  /* An album's tracks are added at the same moment, so newest first keeps them in order. */
+  CHECK(query_int(lib, "SELECT count(DISTINCT added_ms) FROM tracks") == 1);
 
   /* Importing the same album again updates it in place. */
   tracks[0].title = "Sunflower (corrected)";

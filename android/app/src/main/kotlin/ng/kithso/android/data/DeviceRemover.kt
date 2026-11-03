@@ -13,6 +13,11 @@ import ng.kithso.core.ProfileItemKind
  * ([HereState.Unavailable]), where Delete from library is the only honest option. The sync
  * side ([ng.kithso.android.sync.Syncer]) does it; [kind] is [ProfileItemKind.Album] or
  * [ProfileItemKind.Artist].
+ *
+ * As with a delete ([LibraryDeleter]), a file that's playing could still be removed here, but
+ * the track would play on to its end and the queue's other removed tracks be skipped, so as
+ * on Windows the UI stops playback first, emptying the queue, if the removal takes any of its
+ * tracks ([takesAny]).
  */
 interface DeviceRemover {
     /** What [uid]'s menu offers; [HereState.Unavailable] if sync isn't open. */
@@ -20,6 +25,9 @@ interface DeviceRemover {
 
     /** What removing [uid] would do, to ask first; null if that couldn't be found out. */
     suspend fun herePreview(kind: ProfileItemKind, uid: String): HerePreview?
+
+    /** Whether removing [uid] would remove a file of any of [trackUids]; false if that couldn't be found out. */
+    suspend fun takesAny(kind: ProfileItemKind, uid: String, trackUids: List<String>): Boolean
 
     /** Removes [uid] from this phone, then reads the library again; null if it failed. */
     suspend fun removeHere(kind: ProfileItemKind, uid: String): HereResult?

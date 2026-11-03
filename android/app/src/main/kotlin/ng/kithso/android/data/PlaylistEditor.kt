@@ -27,6 +27,8 @@ enum class EditFailure {
  * [LibrarySource.library] follows, and [edits] counts them, so an open track list can be read
  * again even when the library looks no different (after a move, say). A change that fails is
  * logged and comes to nothing, and [failures] says so, for the UI to show. Smart playlists can't be edited, nor can they be added to.
+ * Adding to, removing from or reordering a playlist or group puts it first in the recents, as
+ * on the desktops; renaming doesn't.
  *
  * A playlist with nothing to play on this phone isn't listed (see [CoreLibrarySource]), so a
  * new one is only made with something added to it.
@@ -54,11 +56,11 @@ interface PlaylistEditor {
     /** Deletes the playlist; its tracks stay in the library. */
     fun deletePlaylist(playlistUid: String)
 
-    /** Takes entry [entryUid] (see [Track.entryUid]) out of its playlist. */
-    fun removeEntry(entryUid: String)
+    /** Takes entry [entryUid] (see [Track.entryUid]) out of its playlist, [playlistUid]. */
+    fun removeEntry(playlistUid: String, entryUid: String)
 
-    /** Moves entry [entryUid] to after [afterEntryUid] in its playlist, or to the start if null. */
-    fun moveEntry(entryUid: String, afterEntryUid: String?)
+    /** Moves entry [entryUid] to after [afterEntryUid] in its playlist, [playlistUid], or to the start if null. */
+    fun moveEntry(playlistUid: String, entryUid: String, afterEntryUid: String?)
 
     // Album groups, the playlists of albums, are edited likewise. An album is in a group at
     // most once. As with playlists, a group with no album on this phone isn't listed, so a new

@@ -1,4 +1,4 @@
-/* Renaming and deleting a playlist, from the track list's header menu:
+/* Renaming and deleting a playlist (or a smart list), from the track list's header menu:
  *
  *   +------------------------------+     +------------------------------+
  *   |       Rename Playlist        |     |      Delete "Driving"?       |
@@ -30,5 +30,11 @@ void playlist_delete_present(GtkWidget *parent, mc_library *lib, const char *uid
  * with Create. Makes an empty playlist and calls created with its uid. */
 void playlist_create_present(GtkWidget *parent, mc_library *lib, void (*created)(void *user, const char *uid),
                              void *user);
+/* Rename and Delete for a smart playlist or smart album group (subject says which), titled
+ * Rename smart playlist and so on. Its rule is the editor's (smart_editor.h). */
+void smart_rename_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                          mc_smart_subject subject, void (*changed)(void *user), void *user);
+void smart_delete_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                          mc_smart_subject subject, void (*changed)(void *user), void *user);
 
 #endif

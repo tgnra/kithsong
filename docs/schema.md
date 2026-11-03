@@ -202,9 +202,22 @@ into a mix of both. The API is in `musiccore/smartlist.h`, and the evaluator in
 - **`match`** (optional; without it, everything matches) is one of the following.
   Nesting is limited to 32 levels.
   - A condition, `{"field", "op", "value"}`.
-  - `{"all": [...]}`. An empty `all` matches everything.
-  - `{"any": [...]}`. An empty `any` matches nothing.
+  - `{"all": [...]}`.
+  - `{"any": [...]}`.
   - `{"not": {...}}`.
+- **Empty groups are ignored:** a group with nothing in it, or nothing but ignored groups,
+  is left out of the group it's in, as if it weren't there, and so is a `not` around one.
+  So `{"all": [A, {"any": []}]}` is just A, and a `match` that's ignored altogether
+  matches everything, as without one. An ignored group must still be valid.
+- **Names:** a group may have a `"name"`, a label for an editor to show it by, which
+  `mc_smart_describe()` also reads it by. It's only a label: nothing refers to it, names
+  needn't be unique, and the rule matches the same without them.
+  - It's on the group, `{"name": "Fresh stuff", "any": [...]}`, or on a `not` around a
+    group, `{"name": "Old stuff", "not": {"any": [...]}}`: the latter is how an editor's
+    "none of" group is written. A group right inside a `not` can't have one of its own.
+  - It must be a string. A blank one (empty, or only spaces) is as good as none.
+  - No other key goes beside `all`, `any` or `not`. Builds from before names refuse a rule
+    with one, as one they can't read.
 - **Missing values:** a condition on a missing value is false, so `not` and the negative ops
   include it. "Not played within 180 days" includes tracks never played, and "genre is not
   rock" includes tracks with no genre.
@@ -262,8 +275,11 @@ the words for its pickers ("Last played", "is less than", "least played first"),
 platform uses the same ones. `mc_smart_describe()` puts a whole rule as one sentence in the
 current language, e.g. "Tracks where genre contains “jazz” and (play count is less than 3 or
 last played isn't in the last 180 days) · least played first, then newest added first · 10
-tracks", naming playlists and groups by their current names. Its words are the `smart_*`
-strings in `strings/en.json`.
+tracks", naming playlists and groups by their current names. A named group inside the rule
+reads as "it matches “Fresh stuff”", but the `match` itself, or a group that's all there is
+to it, reads in full, so an editor can describe one group on its own as
+`{"v": 1, "match": <group>}` (and count what it matches with `mc_smart_count()` the same
+way). Its words are the `smart_*` strings in `strings/en.json`.
 
 A rule can't refer to another smart list. A playlist or group a rule names that has since
 been deleted just matches nothing.

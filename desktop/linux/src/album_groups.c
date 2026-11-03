@@ -4,8 +4,10 @@
 
 #include "album_group_dialogs.h"
 #include "delete_dialog.h"
+#include "playlist_dialogs.h"
 #include "recents.h"
 #include "remove_here.h"
+#include "smart_editor.h"
 
 static struct {
   app *a;
@@ -56,6 +58,14 @@ static char *group_name(const char *uid) {
   char *name = g_strdup(group ? group->title : "");
   if (group) g_object_unref(group);
   return name;
+}
+
+/* Whether the group with uid is a smart one. */
+static gboolean group_is_smart(const char *uid) {
+  AlbumItem *group = album_grid_find(v.groups, uid);
+  gboolean smart = group && group->is_smart;
+  if (group) g_object_unref(group);
+  return smart;
 }
 
 /* --- Actions: albumgroup.add(uid), .new, .remove, .move-up, .move-down, .rename(uid),
@@ -116,7 +126,10 @@ static void on_rename(GSimpleAction *action, GVariant *param, gpointer user) {
   app *a = user;
   const char *uid = g_variant_get_string(param, NULL);
   char *name = group_name(uid);
-  album_group_rename_present(GTK_WIDGET(a->win), a->lib, uid, name, on_library_changed, a);
+  if (group_is_smart(uid))
+    smart_rename_present(GTK_WIDGET(a->win), a->lib, uid, name, MC_SMART_ALBUMS, on_library_changed, a);
+  else
+    album_group_rename_present(GTK_WIDGET(a->win), a->lib, uid, name, on_library_changed, a);
   g_free(name);
 }
 
@@ -125,8 +138,34 @@ static void on_delete(GSimpleAction *action, GVariant *param, gpointer user) {
   app *a = user;
   const char *uid = g_variant_get_string(param, NULL);
   char *name = group_name(uid);
-  album_group_delete_present(GTK_WIDGET(a->win), a->lib, uid, name, on_library_changed, a);
+  if (group_is_smart(uid))
+    smart_delete_present(GTK_WIDGET(a->win), a->lib, uid, name, MC_SMART_ALBUMS, on_library_changed, a);
+  else
+    album_group_delete_present(GTK_WIDGET(a->win), a->lib, uid, name, on_library_changed, a);
   g_free(name);
+}
+
+static void on_smart_saved(void *user, const char *uid) {
+  (void)uid;
+  app_reload_library(user);
+}
+
+/* A smart group's Edit rules…. */
+static void on_edit_rules(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  app *a = user;
+  if (a->lib) smart_editor_edit(GTK_WIDGET(a->win), a->lib, g_variant_get_string(param, NULL), on_smart_saved, a);
+}
+
+static void on_group_created(void *user, const char *uid);
+
+/* The header's New smart album group…: the new group opens, if it has something to play
+ * here. */
+static void on_new_smart(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (a->lib) smart_editor_new(GTK_WIDGET(a->win), a->lib, MC_SMART_ALBUMS, on_group_created, a);
 }
 
 static void on_delete_album(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -164,6 +203,8 @@ static void ensure_actions(void) {
     {"move-down", on_move_down, NULL, NULL, NULL, {0}},
     {"rename", on_rename, "s", NULL, NULL, {0}},
     {"delete", on_delete, "s", NULL, NULL, {0}},
+    {"edit-rules", on_edit_rules, "s", NULL, NULL, {0}},
+    {"new-smart", on_new_smart, NULL, NULL, NULL, {0}},
     {"delete-album", on_delete_album, NULL, NULL, NULL, {0}},
     {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
     {"sync-here", on_sync_here, NULL, NULL, NULL, {0}},
@@ -175,17 +216,19 @@ static void ensure_actions(void) {
   v.actions = TRUE;
 }
 
-/* Rename... and Delete album group... for group uid. */
-static GMenuModel *group_menu(const char *uid) {
+static void append_for(GMenu *menu, enum mc_str_id label, const char *action, const char *uid) {
+  GMenuItem *item = g_menu_item_new(mc_str_mnemonic(label), NULL);
+  g_menu_item_set_action_and_target_value(item, action, g_variant_new_string(uid));
+  g_menu_append_item(menu, item);
+  g_object_unref(item);
+}
+
+/* Rename... and Delete album group... for group uid; for a smart one, Edit rules... first. */
+static GMenuModel *group_menu(const char *uid, gboolean smart) {
   GMenu *menu = g_menu_new();
-  GMenuItem *item = g_menu_item_new(mc_str_mnemonic(MC_STR_PLAYLIST_RENAME_MENU), NULL);
-  g_menu_item_set_action_and_target_value(item, "albumgroup.rename", g_variant_new_string(uid));
-  g_menu_append_item(menu, item);
-  g_object_unref(item);
-  item = g_menu_item_new(mc_str_mnemonic(MC_STR_ALBUM_GROUP_DELETE_MENU), NULL);
-  g_menu_item_set_action_and_target_value(item, "albumgroup.delete", g_variant_new_string(uid));
-  g_menu_append_item(menu, item);
-  g_object_unref(item);
+  if (smart) append_for(menu, MC_STR_SMART_EDIT_MENU, "albumgroup.edit-rules", uid);
+  append_for(menu, MC_STR_PLAYLIST_RENAME_MENU, "albumgroup.rename", uid);
+  append_for(menu, smart ? MC_STR_SMART_DELETE_GROUP_MENU : MC_STR_ALBUM_GROUP_DELETE_MENU, "albumgroup.delete", uid);
   return G_MENU_MODEL(menu);
 }
 
@@ -281,10 +324,10 @@ gboolean album_groups_open(app *a, const char *uid) {
   g_strlcpy(v.open, group->uid, sizeof v.open);
   gtk_label_set_text(GTK_LABEL(v.name), group->title);
   v.smart = group->is_smart;
-  gtk_widget_set_visible(v.more, !group->is_smart);
+  gtk_widget_set_tooltip_text(v.more, mc_str(v.smart ? MC_STR_SMART_GROUP_MENU : MC_STR_ALBUM_GROUP_MENU));
   gtk_widget_set_visible(v.reshuffle, group->is_smart && group->random);
   g_object_unref(group);
-  GMenuModel *menu = group_menu(v.open);
+  GMenuModel *menu = group_menu(v.open, v.smart);
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(v.more), menu);
   g_object_unref(menu);
   clear_albums();
@@ -339,9 +382,8 @@ static void on_group_activated(void *user, AlbumItem *group) {
 
 static void on_group_menu(void *user, GtkWidget *grid, AlbumItem *group, double x, double y) {
   (void)user;
-  if (group->is_smart) return; /* nothing to rename or delete */
   ensure_actions();
-  GMenuModel *menu = group_menu(group->uid);
+  GMenuModel *menu = group_menu(group->uid, group->is_smart);
   album_grid_popup(grid, menu, x, y);
   g_object_unref(menu);
 }
@@ -553,8 +595,12 @@ GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*na
   gtk_stack_add_named(GTK_STACK(v.list_stack), v.groups, "groups");
   GtkWidget *list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_add_css_class(list, "view");
+  GMenu *new_menu = g_menu_new();
+  g_menu_append(new_menu, mc_str_mnemonic(MC_STR_SMART_NEW_GROUP_MENU), "albumgroup.new-smart");
   gtk_box_append(GTK_BOX(list), app_list_header(mc_str(MC_STR_SECTION_ALBUM_GROUPS), mc_str(MC_STR_NEW_ALBUM_GROUP),
-                                                NULL, G_CALLBACK(on_new_group), a));
+                                                NULL, G_CALLBACK(on_new_group), a, G_MENU_MODEL(new_menu),
+                                                mc_str(MC_STR_SMART_NEW_GROUP_TITLE)));
+  g_object_unref(new_menu);
   gtk_box_append(GTK_BOX(list), v.list_stack);
 
   v.stack = gtk_stack_new();

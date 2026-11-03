@@ -34,8 +34,10 @@ typedef struct app {
   GtkWidget *settings;  /* the header bar's Settings button */
   GtkStack *albums;     /* "empty" status page | "grid" | "playlists" (a header over playlists)
                          * | "groups" (album_groups.c) */
-  AdwStatusPage *empty;        /* "No Albums" */
+  AdwStatusPage *empty;        /* "No music yet", or "No albums" when the music is all singles */
+  gboolean all_singles;        /* the Albums page has nothing, but the library has tracks */
   GtkWidget *pair;             /* its Pair with a device… button (devices_pair_button()) */
+  GtkWidget *empty_choose_sync; /* its Choose what to sync button, in place of pair in a group */
   AdwStatusPage *no_playlists; /* "No playlists yet", or none to play here */
   GtkWidget *choose_sync;      /* its Choose what to sync button */
   GtkStack *playlists;         /* "none" (no_playlists) | "grid", under the Playlists header */
@@ -64,9 +66,10 @@ void app_update_empty_pages(app *a);
 
 /* A header for a list page, as an album group's: its name (title-2) and a round + button
  * with tooltip (and its shortcut, accel, as app_set_tooltip() takes it, or NULL), which
- * calls clicked(button, user). For Playlists and Album groups. */
+ * calls clicked(button, user). For Playlists and Album groups. With a menu, the + has an
+ * arrow beside it that drops it down (New smart playlist…), whose tooltip is menu_tooltip. */
 GtkWidget *app_list_header(const char *title, const char *tooltip, const char *accel, GCallback clicked,
-                           gpointer user);
+                           gpointer user, GMenuModel *menu, const char *menu_tooltip);
 
 /* Plays the album or playlist shown in the track list, from track start on (or with start
  * -1 from the first track, which shuffled is any), and puts it first in the recents. */

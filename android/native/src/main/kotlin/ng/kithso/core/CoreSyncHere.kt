@@ -36,6 +36,10 @@ fun CoreSync.hereState(kind: ProfileItemKind, uid: String): HereState =
 fun CoreSync.herePreview(kind: ProfileItemKind, uid: String): HerePreview =
     SyncHereNatives.nativePreview(handle, kind.code(), uid).let { HerePreview(it[0], it[1]) }
 
+/** Whether removing [uid] from this phone would remove a file of any of [trackUids], e.g. the play queue's. */
+fun CoreSync.hereTakesAny(kind: ProfileItemKind, uid: String, trackUids: List<String>): Boolean =
+    trackUids.isNotEmpty() && SyncHereNatives.nativeTakesAny(handle, kind.code(), uid, trackUids.toTypedArray())
+
 /** Removes [uid] from this phone: its profile, then its files here. */
 fun CoreSync.removeHere(kind: ProfileItemKind, uid: String): HereResult =
     SyncHereNatives.nativeRemove(handle, kind.code(), uid).let { HereResult(it[0], it[1]) }
@@ -51,6 +55,7 @@ internal object SyncHereNatives {
 
     @JvmStatic external fun nativeState(handle: Long, kind: Int, uid: String): Int
     @JvmStatic external fun nativePreview(handle: Long, kind: Int, uid: String): IntArray
+    @JvmStatic external fun nativeTakesAny(handle: Long, kind: Int, uid: String, trackUids: Array<String>): Boolean
     @JvmStatic external fun nativeRemove(handle: Long, kind: Int, uid: String): IntArray
     @JvmStatic external fun nativeRestore(handle: Long, kind: Int, uid: String)
 }

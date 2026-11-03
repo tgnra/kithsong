@@ -52,6 +52,7 @@
 #include "recents.h"
 #include "search_view.h"
 #include "settings_view.h"
+#include "smart_editor.h"
 #include "track_list.h"
 #include "volume_button.h"
 
@@ -119,15 +120,26 @@ static void on_import_done(void *user) {
 }
 
 /* The empty Albums page suggests pairing while this computer isn't in a group, with the Pair
- * with a device… button. */
+ * with a device… button, and choosing what to sync once it is, with Choose what to sync. When
+ * the library has tracks but they're all singles (which the page leaves out), it says where
+ * they are instead. */
 static void set_empty_description(app *a) {
-  gboolean alone = a->lib && devices_sync_state() == DEVICES_ALONE;
-  enum mc_str_id text = !a->lib ? MC_STR_LIBRARY_OPEN_FAILED : alone ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
-                                                                     : MC_STR_EMPTY_TEXT;
+  if (!a->empty) return; /* not built yet */
+  devices_state state = devices_sync_state();
+  gboolean singles = a->lib && a->all_singles;
+  gboolean alone = a->lib && !singles && state == DEVICES_ALONE;
+  gboolean grouped = a->lib && !singles && state == DEVICES_GROUPED;
+  enum mc_str_id text = !a->lib   ? MC_STR_LIBRARY_OPEN_FAILED
+                        : singles ? MC_STR_LINUX_ALBUMS_ALL_SINGLES_TEXT
+                        : alone   ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
+                        : grouped ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_CHOOSE
+                                  : MC_STR_EMPTY_TEXT;
+  adw_status_page_set_title(a->empty, mc_str(singles ? MC_STR_LINUX_ALBUMS_ALL_SINGLES_TITLE : MC_STR_EMPTY_TITLE));
   char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION), MC_S(mc_str(text)), MC_S(mc_version()));
   adw_status_page_set_description(a->empty, desc);
   mc_free(desc);
   if (a->pair) gtk_widget_set_visible(a->pair, alone);
+  if (a->empty_choose_sync) gtk_widget_set_visible(a->empty_choose_sync, grouped);
 }
 
 /* Choose what to sync shows under "none of them have tracks on this device" once this
@@ -162,7 +174,7 @@ void app_set_tooltip(GtkWidget *widget, const char *label, const char *accel) {
 }
 
 GtkWidget *app_list_header(const char *title, const char *tooltip, const char *accel, GCallback clicked,
-                           gpointer user) {
+                           gpointer user, GMenuModel *menu, const char *menu_tooltip) {
   GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   gtk_widget_set_margin_start(header, 18);
   gtk_widget_set_margin_end(header, 18);
@@ -172,10 +184,18 @@ GtkWidget *app_list_header(const char *title, const char *tooltip, const char *a
   gtk_label_set_xalign(GTK_LABEL(label), 0);
   gtk_widget_set_hexpand(label, TRUE);
   gtk_box_append(GTK_BOX(header), label);
-  GtkWidget *add = gtk_button_new_from_icon_name("list-add-symbolic");
+  GtkWidget *add;
+  if (menu) {
+    add = adw_split_button_new();
+    adw_split_button_set_icon_name(ADW_SPLIT_BUTTON(add), "list-add-symbolic");
+    adw_split_button_set_menu_model(ADW_SPLIT_BUTTON(add), menu);
+    adw_split_button_set_dropdown_tooltip(ADW_SPLIT_BUTTON(add), menu_tooltip);
+  } else {
+    add = gtk_button_new_from_icon_name("list-add-symbolic");
+    gtk_widget_add_css_class(add, "circular");
+  }
   app_set_tooltip(add, tooltip, accel);
   gtk_widget_add_css_class(add, "flat");
-  gtk_widget_add_css_class(add, "circular");
   gtk_widget_set_valign(add, GTK_ALIGN_CENTER);
   g_signal_connect(add, "clicked", clicked, user);
   gtk_box_append(GTK_BOX(header), add);
@@ -852,6 +872,31 @@ static void on_new_playlist(GtkButton *button, gpointer user) {
   playlist_create_present(GTK_WIDGET(button), a->lib, on_playlist_created, a);
 }
 
+/* The + menu's New smart playlist… (smart.new-playlist): the new one opens, if it holds
+ * something to play here. */
+static void on_new_smart_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (a->lib) smart_editor_new(GTK_WIDGET(a->win), a->lib, MC_SMART_TRACKS, on_playlist_created, a);
+}
+
+/* The "smart." actions, on the window. */
+static void add_smart_actions(app *a) {
+  const GActionEntry entries[] = {{"new-playlist", on_new_smart_playlist, NULL, NULL, NULL, {0}}};
+  GSimpleActionGroup *group = g_simple_action_group_new();
+  g_action_map_add_action_entries(G_ACTION_MAP(group), entries, G_N_ELEMENTS(entries), a);
+  gtk_widget_insert_action_group(GTK_WIDGET(a->win), "smart", G_ACTION_GROUP(group));
+  g_object_unref(group);
+}
+
+/* The Playlists header's + menu. */
+static GMenuModel *new_playlist_menu(void) {
+  GMenu *menu = g_menu_new();
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_NEW_PLAYLIST_MENU), "smart.new-playlist");
+  return G_MENU_MODEL(menu);
+}
+
 static void on_choose_sync(GtkButton *button, gpointer user) {
   (void)button, (void)user;
   devices_open_self();
@@ -907,18 +952,44 @@ static gboolean on_playlist_dropped(void *user, AlbumItem *target, const drag_it
   return TRUE;
 }
 
-static void on_playlist_rename(void *user) {
-  app *a = user;
-  AlbumItem *playlist = track_list_album();
-  if (playlist && playlist->is_playlist && !playlist->is_smart)
+/* Rename… and Delete… for a playlist, smart or not. */
+static void rename_playlist(app *a, AlbumItem *playlist) {
+  if (!a->lib || !playlist || !playlist->is_playlist) return;
+  if (playlist->is_smart)
+    smart_rename_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, MC_SMART_TRACKS,
+                         on_playlists_changed, a);
+  else
     playlist_rename_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
 }
 
+static void delete_playlist(app *a, AlbumItem *playlist) {
+  if (!a->lib || !playlist || !playlist->is_playlist) return;
+  if (playlist->is_smart)
+    smart_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, MC_SMART_TRACKS,
+                         on_playlists_changed, a);
+  else
+    playlist_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+}
+
+static void on_playlist_rename(void *user) {
+  rename_playlist(user, track_list_album());
+}
+
 static void on_playlist_delete(void *user) {
+  delete_playlist(user, track_list_album());
+}
+
+static void on_smart_saved(void *user, const char *uid) {
+  (void)uid;
+  app_reload_library(user);
+}
+
+/* Edit rules… for the shown smart playlist. */
+static void on_playlist_edit_rules(void *user) {
   app *a = user;
   AlbumItem *playlist = track_list_album();
-  if (playlist && playlist->is_playlist && !playlist->is_smart)
-    playlist_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+  if (a->lib && playlist && playlist->is_smart)
+    smart_editor_edit(GTK_WIDGET(a->win), a->lib, playlist->uid, on_smart_saved, a);
 }
 
 /* A new order for the shown smart playlist, which is in random order. */
@@ -954,6 +1025,11 @@ static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
 void app_reload_library(app *a) {
   int albums = album_grid_reload(a->album_grid, a->lib);
   int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir, &a->hidden_playlists);
+  /* No albums but some tracks: they're all singles, so the empty page mustn't say no music. */
+  int64_t tracks = 0;
+  if (albums > 0 || !a->lib || mc_library_count(a->lib, MC_ENTITY_TRACKS, &tracks) != MC_OK) tracks = 0;
+  a->all_singles = tracks > 0;
+  set_empty_description(a);
   /* Playlists with nothing to play here are hidden; say so rather than "No playlists yet". */
   set_no_playlists(a);
   gtk_stack_set_visible_child_name(a->playlists, playlists > 0 ? "grid" : "none");
@@ -1072,16 +1148,14 @@ static GtkWidget *steady_bin_new(AdwOverlaySplitView *split, GtkWidget *child) {
   return GTK_WIDGET(self);
 }
 
-/* Delete and F2 on the selected playlist (args TRUE for F2): the track list's Delete
- * playlist… and Rename… for it. Not for smart playlists, which have neither here. */
+/* Delete and F2 on the selected playlist, smart or not (args TRUE for F2): the track list's
+ * Delete playlist… and Rename… for it. */
 static gboolean on_playlist_key(GtkWidget *grid, GVariant *args, gpointer user) {
   app *a = user;
   AlbumItem *playlist = album_grid_selection(grid);
-  if (!a->lib || !playlist || !playlist->is_playlist || playlist->is_smart) return FALSE;
-  if (g_variant_get_boolean(args))
-    playlist_rename_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
-  else
-    playlist_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+  if (!a->lib || !playlist || !playlist->is_playlist) return FALSE;
+  if (g_variant_get_boolean(args)) rename_playlist(a, playlist);
+  else delete_playlist(a, playlist);
   return TRUE;
 }
 
@@ -1094,11 +1168,18 @@ static void on_playlists_shown(GtkStack *playlists, GParamSpec *pspec, gpointer 
 static GtkWidget *build_albums(app *a) {
   GtkWidget *empty = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(empty), "folder-music-symbolic");
-  adw_status_page_set_title(ADW_STATUS_PAGE(empty), mc_str(MC_STR_EMPTY_TITLE));
   a->empty = ADW_STATUS_PAGE(empty);
   a->pair = devices_pair_button();
   gtk_widget_set_visible(a->pair, FALSE);
-  adw_status_page_set_child(a->empty, a->pair);
+  a->empty_choose_sync = gtk_button_new_with_label(mc_str(MC_STR_CHOOSE_WHAT_TO_SYNC));
+  gtk_widget_add_css_class(a->empty_choose_sync, "pill");
+  gtk_widget_set_halign(a->empty_choose_sync, GTK_ALIGN_CENTER);
+  gtk_widget_set_visible(a->empty_choose_sync, FALSE);
+  g_signal_connect(a->empty_choose_sync, "clicked", G_CALLBACK(on_choose_sync), a);
+  GtkWidget *empty_buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0); /* one shows at a time */
+  gtk_box_append(GTK_BOX(empty_buttons), a->pair);
+  gtk_box_append(GTK_BOX(empty_buttons), a->empty_choose_sync);
+  adw_status_page_set_child(a->empty, empty_buttons);
   set_empty_description(a);
 
   GtkWidget *no_playlists = adw_status_page_new();
@@ -1129,8 +1210,11 @@ static GtkWidget *build_albums(app *a) {
   gtk_widget_add_controller(a->playlist_grid, keys);
   gtk_stack_add_named(a->playlists, a->playlist_grid, "grid");
   GtkWidget *playlists_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_box_append(GTK_BOX(playlists_box), app_list_header(mc_str(MC_STR_SECTION_PLAYLISTS), mc_str(MC_STR_NEW_PLAYLIST),
-                                                         "<Control>n", G_CALLBACK(on_new_playlist), a));
+  GMenuModel *new_menu = new_playlist_menu();
+  gtk_box_append(GTK_BOX(playlists_box),
+                 app_list_header(mc_str(MC_STR_SECTION_PLAYLISTS), mc_str(MC_STR_NEW_PLAYLIST), "<Control>n",
+                                 G_CALLBACK(on_new_playlist), a, new_menu, mc_str(MC_STR_SMART_NEW_PLAYLIST_TITLE)));
+  g_object_unref(new_menu);
   gtk_box_append(GTK_BOX(playlists_box), playlists);
   /* The whole page glows, header and all, so the glow has no edge under the header; the
    * view background is the backdrop's, beneath its glows. */
@@ -1441,6 +1525,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_overlay_split_view_set_max_sidebar_width(a->album_split, 420);
   const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
                                           on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete,
+                                          on_playlist_edit_rules,
                                           on_track_delete, on_reshuffle, on_track_go_to_album,
                                           on_track_go_to_artist, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
@@ -1483,6 +1568,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
 
   GtkWidget *win = adw_application_window_new(gapp);
   a->win = GTK_WINDOW(win);
+  add_smart_actions(a);
   gtk_window_set_title(a->win, mc_str(MC_STR_APP_NAME));
   gtk_window_set_default_size(a->win, 1200, 800);
   GtkWidget *toasts = adw_toast_overlay_new();

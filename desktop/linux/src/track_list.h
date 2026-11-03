@@ -21,8 +21,8 @@
  * Library; in a playlist also Move Up, Move Down and Remove from Playlist). A playlist's tracks can be dragged into another order too, or moved with Alt+Up
  * and Alt+Down; Delete removes one. Its header has a menu (the "..." beside close, or F2, or
  * the Menu key with no track selected) to rename or delete it. A smart playlist's tracks
- * can't be moved or removed, and it has no menu; in random order its header has a Reshuffle
- * button instead. Escape or the close button closes the pane. A GtkListView,
+ * can't be moved or removed; its menu has Edit rules… (smart_editor.h) besides, and in random
+ * order a Reshuffle button sits beside it. Escape or the close button closes the pane. A GtkListView,
  * so long albums stay cheap. Only one list exists at a time.
  */
 #ifndef KITHSONG_TRACK_LIST_H
@@ -46,9 +46,11 @@ typedef struct track_list_callbacks {
    * to the start). */
   void (*remove)(void *user, const char *entry_uid);
   void (*move)(void *user, const char *entry_uid, const char *after_entry_uid);
-  /* The header menu's Rename... and Delete Playlist..., for the shown playlist. */
+  /* The header menu's Rename... and Delete Playlist..., for the shown playlist (smart or
+   * not), and a smart one's Edit rules.... */
   void (*rename_playlist)(void *user);
   void (*delete_playlist)(void *user);
+  void (*edit_rules)(void *user);
   /* The track menu's Delete from Library... (see delete_dialog.h). */
   void (*delete_track)(void *user, const char *track_uid, const char *title);
   /* The Reshuffle button, for the shown smart playlist. */

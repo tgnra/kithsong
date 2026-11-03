@@ -28,6 +28,7 @@ enum {
   BTN_ALLOW = 100,
   BTN_NOT_NOW,
   MAX_EXE = 1024,
+  MAX_STALE = 16, /* old rules removed at once */
 };
 
 static struct {
@@ -36,6 +37,7 @@ static struct {
   mc_settings *settings;
   wchar_t exe[MAX_EXE]; /* this exe's full path, which the rule names */
   BOOL busy;            /* a check, the dialog or the helper is under way */
+  BOOL asked;           /* the check is Settings' Ask Again, which says when there's no need */
 } g_fw;
 
 /* Running from an MSIX package. Its manifest declares the rule, which Windows adds at
@@ -212,6 +214,77 @@ static DWORD WINAPI check_main(void *arg) {
 
 /* --- Adding the rule --- */
 
+/* Rule r is one add_rule() added, by its name and group, for an exe that's gone. Only a path
+ * on a fixed drive that's there counts: one on a share, or on a drive that's unplugged or
+ * removable, may come back. */
+static BOOL stale(INetFwRule *r, const wchar_t *name) {
+  NET_FW_RULE_DIRECTION dir = 0;
+  NET_FW_ACTION action = NET_FW_ACTION_BLOCK;
+  BSTR rname = NULL, group = NULL, app = NULL;
+  BOOL gone = FALSE;
+  if (SUCCEEDED(INetFwRule_get_Direction(r, &dir)) && dir == NET_FW_RULE_DIR_IN &&
+      SUCCEEDED(INetFwRule_get_Action(r, &action)) && action == NET_FW_ACTION_ALLOW &&
+      SUCCEEDED(INetFwRule_get_Name(r, &rname)) && rname && !wcscmp(rname, name) &&
+      SUCCEEDED(INetFwRule_get_Grouping(r, &group)) && group && !wcscmp(group, RULE_GROUP) &&
+      SUCCEEDED(INetFwRule_get_ApplicationName(r, &app)) && app && *app && !is_this_exe(app)) {
+    wchar_t path[MAX_EXE];
+    DWORD n = ExpandEnvironmentStringsW(app, path, MAX_EXE);
+    if (n > 3 && n <= MAX_EXE && iswalpha(path[0]) && path[1] == L':' && path[2] == L'\\') {
+      wchar_t root[] = {path[0], L':', L'\\', L'\0'};
+      if (GetDriveTypeW(root) == DRIVE_FIXED && GetFileAttributesW(root) != INVALID_FILE_ATTRIBUTES &&
+          GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+        DWORD err = GetLastError();
+        gone = err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND;
+      }
+    }
+  }
+  SysFreeString(rname);
+  SysFreeString(group);
+  SysFreeString(app);
+  return gone;
+}
+
+/* Removes the stale() rules. INetFwRules_Remove() goes by name, which they share with live
+ * ones (this exe's, another copy's), so each is first renamed to a name of its own. Failing
+ * is left quiet: adding the rule matters more. */
+static void remove_stale(INetFwRules *rules, BSTR name) {
+  INetFwRule *found[MAX_STALE];
+  int n = 0;
+  IUnknown *unk = NULL;
+  IEnumVARIANT *it = NULL;
+  if (SUCCEEDED(INetFwRules_get__NewEnum(rules, &unk)) &&
+      SUCCEEDED(IUnknown_QueryInterface(unk, &IID_IEnumVARIANT, (void **)&it))) {
+    VARIANT var;
+    VariantInit(&var);
+    ULONG got = 0;
+    while (n < MAX_STALE && IEnumVARIANT_Next(it, 1, &var, &got) == S_OK && got == 1) {
+      INetFwRule *r = NULL;
+      if (V_VT(&var) == VT_DISPATCH && V_DISPATCH(&var) &&
+          SUCCEEDED(IDispatch_QueryInterface(V_DISPATCH(&var), &IID_INetFwRule, (void **)&r))) {
+        if (stale(r, name))
+          found[n++] = r;
+        else
+          INetFwRule_Release(r);
+      }
+      VariantClear(&var);
+    }
+    IEnumVARIANT_Release(it);
+  }
+  if (unk) IUnknown_Release(unk);
+  for (int i = 0; i < n; i++) {
+    wchar_t unique[64] = L"Kithsong stale ";
+    size_t len = wcslen(unique);
+    GUID guid;
+    BSTR temp = NULL;
+    if (SUCCEEDED(CoCreateGuid(&guid)) && StringFromGUID2(&guid, unique + len, (int)(64 - len)))
+      temp = SysAllocString(unique);
+    if (temp && SUCCEEDED(INetFwRule_put_Name(found[i], temp)) && FAILED(INetFwRules_Remove(rules, temp)))
+      INetFwRule_put_Name(found[i], name); /* as it was */
+    SysFreeString(temp);
+    INetFwRule_Release(found[i]);
+  }
+}
+
 /* The elevated helper's work. */
 static HRESULT add_rule(void) {
   INetFwRule *rule = NULL;
@@ -237,6 +310,7 @@ static HRESULT add_rule(void) {
     hr = CoCreateInstance(&CLSID_NetFwPolicy2, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwPolicy2,
                           (void **)&policy);
   if (SUCCEEDED(hr)) hr = INetFwPolicy2_get_Rules(policy, &rules);
+  if (SUCCEEDED(hr)) remove_stale(rules, name);
   if (SUCCEEDED(hr)) hr = INetFwRules_Add(rules, rule);
   if (rules) INetFwRules_Release(rules);
   if (policy) INetFwPolicy2_Release(policy);
@@ -389,10 +463,16 @@ static LRESULT CALLBACK fw_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_fw.busy = FALSE;
       return 0;
     }
-    case WM_FW_CHECKED:
+    case WM_FW_CHECKED: {
+      BOOL asked = g_fw.asked;
+      g_fw.asked = FALSE;
       /* Not while the window is away (Move Library), or once sync has stopped. */
       if (!wp || !IsWindowVisible(g_fw.owner) || !sync_bridge_get() || !ask()) g_fw.busy = FALSE;
+      if (!wp && asked)
+        MessageBoxW(g_fw.owner, mc_wstr(MC_STR_WINDOWS_FIREWALL_NOTHING_TO_ALLOW), mc_wstr(MC_STR_APP_NAME),
+                    MB_OK | MB_ICONINFORMATION);
       return 0;
+    }
     case WM_FW_ADDED:
       g_fw.busy = FALSE;
       helper_done((HRESULT)wp);
@@ -402,7 +482,9 @@ static LRESULT CALLBACK fw_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
 }
 
-void firewall_check_later(HWND owner, mc_settings *settings) {
+/* Checks after delay_ms, unless sync is off, the user said not to ask, or a check, the
+ * dialog or the helper is under way already. */
+static void check_after(HWND owner, mc_settings *settings, UINT delay_ms, BOOL asked) {
   if (g_fw.busy || !sync_bridge_get() || mc_settings_bool(settings, SETTING_DONT_ASK, 0) || packaged() ||
       !find_exe())
     return;
@@ -415,5 +497,20 @@ void firewall_check_later(HWND owner, mc_settings *settings) {
   g_fw.owner = owner;
   g_fw.settings = settings;
   g_fw.busy = TRUE;
-  SetTimer(g_fw.wnd, TIMER_CHECK, CHECK_DELAY_MS, NULL);
+  g_fw.asked = asked;
+  SetTimer(g_fw.wnd, TIMER_CHECK, delay_ms, NULL);
+}
+
+void firewall_check_later(HWND owner, mc_settings *settings) {
+  check_after(owner, settings, CHECK_DELAY_MS, FALSE);
+}
+
+BOOL firewall_can_ask_again(const mc_settings *settings) {
+  return settings && mc_settings_bool(settings, SETTING_DONT_ASK, 0) && !packaged();
+}
+
+void firewall_ask_again(HWND owner, mc_settings *settings) {
+  mc_settings_set_bool(settings, SETTING_DONT_ASK, 0);
+  mc_settings_save(settings); /* failing, it's saved with the next setting */
+  check_after(owner, settings, 0, TRUE);
 }

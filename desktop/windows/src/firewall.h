@@ -12,7 +12,10 @@
  *
  * Adding a rule needs admin rights, so Allow relaunches this exe elevated (UAC) with
  * FIREWALL_HELPER_ARG, which adds the rule and exits with its HRESULT; firewall_helper_main()
- * is that process. "Don't ask again" is saved in settings.json as "firewall_dont_ask".
+ * is that process. Before adding it, the helper removes rules it added before for an exe
+ * that's gone (the portable zip moved): with admin rights only then, that's when one's left.
+ * "Don't ask again" is saved in settings.json as "firewall_dont_ask"; Settings offers to ask
+ * again (firewall_ask_again()).
  *
  * The MSIX package (packaging/msix) declares the same rule in its manifest instead, so when
  * running from it none of this happens. */
@@ -36,5 +39,13 @@ BOOL firewall_helper_main(int *exit_code);
  * user said not to ask again, the app runs from its MSIX package, the firewall is off or a
  * rule already lets Kithsong in. settings must last as long as owner. UI thread only. */
 void firewall_check_later(HWND owner, mc_settings *settings);
+
+/* The user said not to ask again, and asking could still help (not running from the MSIX
+ * package): Settings offers firewall_ask_again(). */
+BOOL firewall_can_ask_again(const mc_settings *settings);
+
+/* Settings' button: forgets "Don't ask again" and, while sync runs, checks now, asking as at
+ * startup if sync needs the rule, else saying there's nothing to allow. UI thread only. */
+void firewall_ask_again(HWND owner, mc_settings *settings);
 
 #endif

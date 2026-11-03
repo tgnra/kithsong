@@ -350,11 +350,15 @@ class CoreLibrarySource(
     }
 
     override fun addToPlaylist(playlistUid: String, what: Addition) =
-        edit(EditFailure.PlaylistAdd, "add to playlist $playlistUid") { it.appendToPlaylist(playlistUid, trackUids(it, what)) }
+        edit(EditFailure.PlaylistAdd, "add to playlist $playlistUid") {
+            it.appendToPlaylist(playlistUid, trackUids(it, what))
+            changed(it, ItemKind.Playlist, playlistUid)
+        }
 
     override fun addToNewPlaylist(name: String, what: Addition) = edit(EditFailure.PlaylistCreate, "make playlist $name") {
         val uid = it.createPlaylist(name)
         it.appendToPlaylist(uid, trackUids(it, what))
+        changed(it, ItemKind.Playlist, uid)
     }
 
     override fun renamePlaylist(playlistUid: String, name: String) =
@@ -363,11 +367,17 @@ class CoreLibrarySource(
     override fun deletePlaylist(playlistUid: String) =
         edit(EditFailure.PlaylistDelete, "delete playlist $playlistUid") { it.deletePlaylist(playlistUid) }
 
-    override fun removeEntry(entryUid: String) =
-        edit(EditFailure.PlaylistRemove, "remove playlist entry $entryUid") { it.removePlaylistEntry(entryUid) }
+    override fun removeEntry(playlistUid: String, entryUid: String) =
+        edit(EditFailure.PlaylistRemove, "remove playlist entry $entryUid") {
+            it.removePlaylistEntry(entryUid)
+            changed(it, ItemKind.Playlist, playlistUid)
+        }
 
-    override fun moveEntry(entryUid: String, afterEntryUid: String?) =
-        edit(EditFailure.PlaylistMove, "move playlist entry $entryUid") { it.movePlaylistEntry(entryUid, afterEntryUid) }
+    override fun moveEntry(playlistUid: String, entryUid: String, afterEntryUid: String?) =
+        edit(EditFailure.PlaylistMove, "move playlist entry $entryUid") {
+            it.movePlaylistEntry(entryUid, afterEntryUid)
+            changed(it, ItemKind.Playlist, playlistUid)
+        }
 
     override suspend fun albumGroupChoices(): List<PlaylistChoice>? = withContext(core) {
         try {
@@ -383,10 +393,15 @@ class CoreLibrarySource(
     }
 
     override fun addToAlbumGroup(groupUid: String, albumUid: String) =
-        edit(EditFailure.GroupAdd, "add album $albumUid to album group $groupUid") { it.addToAlbumGroup(groupUid, albumUid) }
+        edit(EditFailure.GroupAdd, "add album $albumUid to album group $groupUid") {
+            it.addToAlbumGroup(groupUid, albumUid)
+            changed(it, ItemKind.AlbumGroup, groupUid)
+        }
 
     override fun addToNewAlbumGroup(name: String, albumUid: String) = edit(EditFailure.GroupCreate, "make album group $name") {
-        it.addToAlbumGroup(it.createAlbumGroup(name), albumUid)
+        val uid = it.createAlbumGroup(name)
+        it.addToAlbumGroup(uid, albumUid)
+        changed(it, ItemKind.AlbumGroup, uid)
     }
 
     override fun renameAlbumGroup(groupUid: String, name: String) =
@@ -396,10 +411,27 @@ class CoreLibrarySource(
         edit(EditFailure.GroupDelete, "delete album group $groupUid") { it.deleteAlbumGroup(groupUid) }
 
     override fun removeFromAlbumGroup(groupUid: String, albumUid: String) =
-        edit(EditFailure.GroupRemove, "remove album $albumUid from album group $groupUid") { it.removeFromAlbumGroup(groupUid, albumUid) }
+        edit(EditFailure.GroupRemove, "remove album $albumUid from album group $groupUid") {
+            it.removeFromAlbumGroup(groupUid, albumUid)
+            changed(it, ItemKind.AlbumGroup, groupUid)
+        }
 
     override fun moveInAlbumGroup(groupUid: String, albumUid: String, afterAlbumUid: String?) =
-        edit(EditFailure.GroupMove, "move album $albumUid in album group $groupUid") { it.moveInAlbumGroup(groupUid, albumUid, afterAlbumUid) }
+        edit(EditFailure.GroupMove, "move album $albumUid in album group $groupUid") {
+            it.moveInAlbumGroup(groupUid, albumUid, afterAlbumUid)
+            changed(it, ItemKind.AlbumGroup, groupUid)
+        }
+
+    // On [core], after a change to playlist or album group [uid] went through: puts it first
+    // in the recents, as the desktops do. A failure here doesn't fail the change; the edit's
+    // refresh reads the recents again.
+    private fun changed(lib: CoreLibrary, kind: ItemKind, uid: String) {
+        try {
+            lib.recordOpened(kind, uid)
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't put $uid first in the recents", e)
+        }
+    }
 
     // On [core]. The tracks [what] adds: an album's that have a file here, as the album lists
     // them, since that's what this phone shows of it.
