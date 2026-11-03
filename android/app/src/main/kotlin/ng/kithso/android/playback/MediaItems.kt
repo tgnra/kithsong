@@ -6,6 +6,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import ng.kithso.android.data.ArtRef
 import ng.kithso.android.data.Track
+import ng.kithso.playback.path
 import java.io.File
 
 // A queue item is a Track in a MediaItem: what the notification shows in the metadata, and
@@ -21,7 +22,8 @@ private const val ARTIST_UID = "artist_uid"
 
 /**
  * The file goes in the request metadata as well as the URI, because a MediaItem crossing from
- * a MediaController to the session may lose its URI but keeps the request metadata.
+ * a MediaController to the session may lose its URI but keeps the request metadata (see
+ * [path]).
  */
 fun Track.toMediaItem(): MediaItem {
     val uri = path?.let { Uri.fromFile(File(it)) }
@@ -50,10 +52,6 @@ fun Track.toMediaItem(): MediaItem {
         )
         .build()
 }
-
-/** The file to play. */
-val MediaItem.path: String?
-    get() = localConfiguration?.uri?.path ?: requestMetadata.mediaUri?.path
 
 fun MediaItem.toTrack(): Track {
     val extras = mediaMetadata.extras ?: requestMetadata.extras ?: Bundle.EMPTY

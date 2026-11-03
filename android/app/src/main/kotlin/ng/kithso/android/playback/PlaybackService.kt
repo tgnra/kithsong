@@ -22,6 +22,8 @@ import ng.kithso.android.AppSettings
 import ng.kithso.android.MainActivity
 import ng.kithso.android.KithsongApp
 import ng.kithso.android.R
+import ng.kithso.playback.CoreMediaPlayer
+import ng.kithso.playback.path
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture

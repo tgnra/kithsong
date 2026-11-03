@@ -1,4 +1,4 @@
-package ng.kithso.android.playback
+package ng.kithso.playback
 
 import androidx.media3.common.C
 import androidx.media3.common.Player

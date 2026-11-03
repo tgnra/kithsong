@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "kithsong"
-include(":native", ":app", ":wear")
+include(":native", ":playback", ":app", ":wear")
