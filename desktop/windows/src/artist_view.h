@@ -59,7 +59,8 @@
 #define ARN_BACK 2
 #define ARN_OPEN_ALBUM 3
 /* Posted after the right-click menu's Remove from This PC... or Sync to This PC (on a row, or
- * anywhere on an artist's page) changed what's here (remove_here.h): reload everything. */
+ * anywhere on an artist's page) changed what's here (remove_here.h), or its Edit... changed the
+ * artist or the album under the pointer (edit_dialog.h): reload everything. */
 #define ARN_LIBRARY_CHANGED 4
 /* A single was clicked (or Enter on it): play the singles from it (artist_view_play_index()
  * says which, artist_view_single_at() has them). */
@@ -77,6 +78,8 @@
  * on an album of the open artist's): open artist_uid's page, as the track list's
  * TLN_GO_TO_ARTIST does. artist_view_last_request() has it. */
 #define ARN_GO_TO_ARTIST 9
+/* A single's menu's Edit...: track_uid's tags (edit_dialog.h), which the parent opens. */
+#define ARN_EDIT_TRACK 10
 
 /* Creates the page, hidden, as a child of parent. Only one exists at a time. */
 HWND artist_view_create(HWND parent, int id);
@@ -108,7 +111,8 @@ int artist_view_single_count(void);
 track_list_item artist_view_single_at(int i);
 /* The single the last ARN_PLAY_SINGLE was for. */
 int artist_view_play_index(void);
-/* The request the last ARN_ADD_TO_PLAYLIST, ARN_DELETE_TRACK or ARN_GO_TO_ARTIST was for. */
+/* The request the last ARN_ADD_TO_PLAYLIST, ARN_DELETE_TRACK, ARN_EDIT_TRACK or ARN_GO_TO_ARTIST
+ * was for. */
 const track_list_request *artist_view_last_request(void);
 
 #endif

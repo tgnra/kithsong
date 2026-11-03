@@ -80,8 +80,8 @@ const char *album_grid_group(void);
  * AGV_GROUP. */
 BOOL album_grid_back(void);
 
-/* Right-clicking an album (on Albums or in a group) offers Add to Album Group, and in a
- * group Remove from Album Group; right-clicking a group (or its header) offers Rename and
+/* Right-clicking an album (on Albums or in a group) offers Add to Album Group, Edit...
+ * (edit_dialog.h), and in a group Remove from Album Group; right-clicking a group (or its header) offers Rename and
  * Delete, and a smart playlist or group Edit Rules..., Rename... and Delete.... F2 renames
  * the open group, or the selected playlist or group, and Delete asks to delete the selected
  * playlist or group (smart ones too). Right-clicking the Playlists or

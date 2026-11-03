@@ -26,6 +26,10 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Windows - an all-singles Albums page says "No music yet"; use Linux's "No albums" text, which points to the artists' Singles and search (move its strings from the linux section to shared)
 - Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results
 - Android - a new album group can only be made from an album's Add to album group…
+- Linux and Android - no edit dialog yet: the tags, flags and MusicBrainz re-search of musiccore/edit.h (Windows has edit_dialog.c)
+- Windows - the edit dialog: no way to unlink an album from MusicBrainz (mc_album_tags_set() with "" does it), no Alt+letter keys for its fields and buttons, and Save can't be cancelled once it's started
+- Windows - search results have no right-click menu, so no Edit... there; nor do the album tiles on an artist's page have an album menu of their own (Edit... there is the album's, the rest the artist's)
+- Windows - after an edit, what's queued and the now-playing strip keep the old title and artist until the track changes
 - All - tracks imported before 81dcc23 keep a timestamp each, a moment apart, so "Recently added" plays those albums last track first (no migration: the column syncs)
 
 ### Smart playlists
@@ -136,6 +140,7 @@ Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <
 ### Windows
 - Firewall: the success path after UAC, Settings' "Ask about Windows Firewall again", and the elevated helper removing rules left for a moved exe (only compiled to objects, never linked or run)
 - Narrator and NVDA with the UI Automation providers
+- The edit dialog against the real core (tested on a local fake of edit.c: rewriting a playing file, a real MusicBrainz search), and with Narrator; on Windows 10
 - The volume drop-down on Windows 10 (no rounded corners) and in high contrast; Play albums in order's screen-reader name
 - The empty Albums page's Choose What to Sync in a group, the empty Playlists page's Choose what to sync, and the empty-page button through UI Automation
 - The pairing dialog's ended page with a real pairing: the archive explainer (the dialog growing to fit it), Create a new library and Pair again

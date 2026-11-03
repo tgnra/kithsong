@@ -1013,17 +1013,23 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
       if (i >= 0 && i < s.nrows && s.rows[i].kind == ROW_RECENT && clickable(i)) {
         HMENU menu = CreatePopupMenu();
+        mc_recent_kind kind = (mc_recent_kind)s.rows[i].flags;
+        if (kind == MC_RECENT_ALBUM || kind == MC_RECENT_ARTIST) {
+          AppendMenuW(menu, MF_STRING, 3, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
+          AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        }
         AppendMenuW(menu, MF_STRING, 1, mc_wstr_mnemonic(MC_STR_RECENT_REMOVE_MENU));
         AppendMenuW(menu, MF_STRING, 2, mc_wstr_mnemonic(MC_STR_RECENTS_CLEAR_MENU));
         int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, wnd, NULL);
         DestroyMenu(menu);
-        if (cmd == 1) {
+        if (cmd == 1 || cmd == 3) {
           memcpy(s.clicked_recent, s.rows[i].uid, sizeof s.clicked_recent);
           s.clicked_kind = (mc_recent_kind)s.rows[i].flags;
         }
         if (cmd)
           SendMessageW(GetParent(wnd), WM_COMMAND,
-                       MAKEWPARAM(GetDlgCtrlID(wnd), cmd == 1 ? SBN_REMOVE_RECENT : SBN_CLEAR_RECENTS), (LPARAM)wnd);
+                       MAKEWPARAM(GetDlgCtrlID(wnd), cmd == 1 ? SBN_REMOVE_RECENT : cmd == 3 ? SBN_EDIT_RECENT : SBN_CLEAR_RECENTS),
+                       (LPARAM)wnd);
         return 0;
       }
       if (i < 0 || i >= s.nrows || s.rows[i].kind != ROW_NAV || !enabled(i) ||
