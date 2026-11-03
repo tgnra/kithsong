@@ -13,7 +13,7 @@
  *   | [Kitchen laptop                ]                 |
  *   | This PC's address                                |
  *   | 192.168.1.20:47823, [fe80::1]:47823              |
- *   | [Leave Group...]                                 |
+ *   | [Leave Group...] [Ask about Windows Firewall...] |
  *   | Leaving the group stops syncing ...              |
  *   |                                                  |
  *   | Scrobbling                                       |
@@ -29,7 +29,9 @@
  *
  * The name applies on Enter or when the box loses the focus: through sync, which shows it
  * to other devices, and into settings.json for next time. Leave Group is enabled while this
- * PC is in a group. The sync shown is sync_bridge_get()'s.
+ * PC is in a group. Beside it, once "Don't ask again" was ticked in the Windows Firewall
+ * dialog, Ask about Windows Firewall again checks the firewall and asks as at startup
+ * (firewall_ask_again()). The sync shown is sync_bridge_get()'s.
  *
  * Scrobbling signs in with playback_scrobbler(): Sign In opens Last.fm's page in the browser
  * and waits, on a thread, for the user to approve it there. The account is the sync group's

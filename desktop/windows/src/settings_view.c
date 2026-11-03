@@ -8,6 +8,7 @@
 #include <wchar.h>
 
 #include "canvas.h"
+#include "firewall.h"
 #include "playback.h"
 #include "scrobble_service.h"
 #include "sync_bridge.h"
@@ -35,6 +36,7 @@ enum {
   ID_SET_LFM_CHECK_LABEL,
   ID_SET_LFM_NOTE,
   ID_SET_LFM_SERVICE,
+  ID_SET_FIREWALL,
 };
 
 enum { MAX_ADDRESSES = 8 };
@@ -49,7 +51,8 @@ enum { WM_AUTH_URL = WM_APP + 1, WM_AUTH_DONE }; /* to the status label, from th
 static struct {
   HWND parent;
   HWND title, heading, path, move, open, note;
-  HWND sync_heading, name_label, name, addr_label, addr, leave, sync_note;
+  HWND sync_heading, name_label, name, addr_label, addr, leave, firewall, sync_note;
+  BOOL firewall_shown; /* Ask about Windows Firewall again is: firewall_can_ask_again() */
   HWND lfm_heading, lfm_status, lfm_button, lfm_service, lfm_check, lfm_check_label, lfm_note;
   HFONT font, title_font, heading_font;
   BOOL shown;
@@ -67,6 +70,7 @@ static struct {
 } g_set;
 
 static void update_scrobble(void);
+static void update_firewall(void);
 static void stop_auth(void);
 static LRESULT CALLBACK lfm_status_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data);
 
@@ -121,6 +125,8 @@ void settings_view_create(HWND parent) {
   g_set.addr = child(WC_STATICW, NULL, label | SS_EDITCONTROL, ID_SET_ADDR);
   g_set.leave = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LEAVE_GROUP_BUTTON),
                       BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, ID_SET_LEAVE);
+  g_set.firewall = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_WINDOWS_FIREWALL_ASK_AGAIN), BS_PUSHBUTTON | WS_TABSTOP,
+                         ID_SET_FIREWALL); /* shown by update_firewall() */
   g_set.sync_note = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_SYNC_SETTINGS_NOTE), label, ID_SET_SYNC_NOTE);
 
   g_set.lfm_heading = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLING), label, ID_SET_LFM_HEADING);
@@ -175,7 +181,8 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   HWND body[] = {g_set.path,       g_set.move,       g_set.open,       g_set.note,
                  g_set.name_label, g_set.name,       g_set.addr_label, g_set.addr,
                  g_set.leave,      g_set.sync_note,  g_set.lfm_status, g_set.lfm_button,
-                 g_set.lfm_service, g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note};
+                 g_set.lfm_service, g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
+                 g_set.firewall};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
 }
 
@@ -186,6 +193,7 @@ void settings_view_show(BOOL show) {
                 g_set.addr,       g_set.leave,        g_set.sync_note, g_set.lfm_heading, g_set.lfm_status,
                 g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
+  update_firewall();
   if (show) {
     settings_view_update_sync();
     update_scrobble();
@@ -253,7 +261,9 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.addr, left, top, text_w, ah, TRUE);
   top += ah + S(12);
 
-  MoveWindow(g_set.leave, left, top, button_width(g_set.leave, S(16)), btn_h, TRUE);
+  int leave_w = button_width(g_set.leave, S(16));
+  MoveWindow(g_set.leave, left, top, leave_w, btn_h, TRUE);
+  MoveWindow(g_set.firewall, left + leave_w + S(8), top, button_width(g_set.firewall, S(16)), btn_h, TRUE);
   top += btn_h + S(12);
 
   nh = canvas_text_height(g_set.sync_note, g_set.font, text_w, 0);
@@ -351,6 +361,23 @@ static BOOL in_group(void) {
   return member;
 }
 
+/* Ask about Windows Firewall again: shown once the user said not to ask, enabled while sync
+ * runs (the check needs it). */
+static void update_firewall(void) {
+  if (!g_set.firewall) return;
+  BOOL show = g_set.shown && firewall_can_ask_again(g_set.settings);
+  EnableWindow(g_set.firewall, sync_bridge_get() != NULL);
+  if (show == g_set.firewall_shown) return;
+  g_set.firewall_shown = show;
+  if (!show && GetFocus() == g_set.firewall) SetFocus(IsWindowEnabled(g_set.leave) ? g_set.leave : g_set.name);
+  ShowWindow(g_set.firewall, show ? SW_SHOW : SW_HIDE);
+}
+
+static void ask_firewall_again(void) {
+  firewall_ask_again(g_set.parent, g_set.settings);
+  update_firewall();
+}
+
 void settings_view_update_sync(void) {
   if (!g_set.name) return;
   if (GetFocus() != g_set.name) {
@@ -367,6 +394,7 @@ void settings_view_update_sync(void) {
     if (g_set.shown) SendMessageW(g_set.parent, WM_SIZE, 0, 0); /* it may wrap differently */
   }
   EnableWindow(g_set.leave, in_group());
+  update_firewall();
 }
 
 /* Trims spaces at either end, in place. */
@@ -662,6 +690,7 @@ static LRESULT CALLBACK lfm_status_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp
     case WM_TIMER:
       if (wp == STATUS_TIMER) {
         update_scrobble();
+        update_firewall(); /* "Don't ask again" may just have been ticked */
         return 0;
       }
       break;
@@ -680,6 +709,7 @@ BOOL settings_view_on_command(int id, int code) {
       if (code == EN_KILLFOCUS) apply_name();
       return TRUE;
     case ID_SET_LEAVE: leave_group(); return TRUE;
+    case ID_SET_FIREWALL: ask_firewall_again(); return TRUE;
     case ID_SET_LFM_BUTTON: on_scrobble_button(); return TRUE;
     case ID_SET_LFM_SERVICE: change_service(); return TRUE;
     case ID_SET_LFM_CHECK:
