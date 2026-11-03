@@ -560,6 +560,40 @@ static void on_scrobble_switch(GObject *row, GParamSpec *pspec, gpointer data) {
   }
 }
 
+/* Saved at once: playing a track reads it from settings.json. If it can't be, the switch goes
+ * back, since the setting hasn't changed. */
+static void on_album_in_order_switch(GObject *row, GParamSpec *pspec, gpointer data) {
+  (void)pspec;
+  settings_view *s = data;
+  gboolean on = adw_switch_row_get_active(ADW_SWITCH_ROW(row));
+  mc_settings *settings = NULL;
+  gboolean saved = mc_settings_load(s->settings_dir, &settings) == MC_OK &&
+                   mc_settings_set_album_in_order(settings, on) == MC_OK && mc_settings_save(settings) == MC_OK;
+  mc_settings_free(settings);
+  if (saved) return;
+  g_signal_handlers_block_by_func(row, on_album_in_order_switch, data);
+  adw_switch_row_set_active(ADW_SWITCH_ROW(row), !on);
+  g_signal_handlers_unblock_by_func(row, on_album_in_order_switch, data);
+  toast(s, mc_str(MC_STR_LINUX_SETTING_SAVE_FAILED));
+}
+
+static GtkWidget *build_playback_group(settings_view *s) {
+  GtkWidget *group = adw_preferences_group_new();
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SETTINGS_PLAYBACK));
+
+  GtkWidget *row = adw_switch_row_new();
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), mc_str(MC_STR_ALBUM_IN_ORDER));
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(row), mc_str(MC_STR_ALBUM_IN_ORDER_TEXT));
+  mc_settings *settings = NULL;
+  gboolean on = TRUE;
+  if (mc_settings_load(s->settings_dir, &settings) == MC_OK) on = mc_settings_album_in_order(settings);
+  mc_settings_free(settings);
+  adw_switch_row_set_active(ADW_SWITCH_ROW(row), on);
+  g_signal_connect(row, "notify::active", G_CALLBACK(on_album_in_order_switch), s);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), row);
+  return group;
+}
+
 /* The Scrobbling service dialog: Last.fm, Libre.fm, or another service with Last.fm's API,
  * entered by hand. Owned by the dialog: freed with it. */
 typedef struct service_dialog {
@@ -787,6 +821,7 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
   adw_preferences_page_set_icon_name(ADW_PREFERENCES_PAGE(page), "emblem-system-symbolic");
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(group));
   if (s->has_sync) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_sync_group(s)));
+  adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_playback_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_scrobble_group(s)));
 
   s->dialog = GTK_WIDGET(adw_preferences_dialog_new());
