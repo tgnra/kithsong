@@ -406,7 +406,7 @@ static void marks_settle(skip_marks *m) {
  *
  * Skipping a seed says nothing of its station, which is built on it. */
 #define SKIP_QUERY                                                                    \
-  "SELECT context_uid, track_uid, started_ms, listened_ms, ended = 'skipped',"         \
+  "SELECT context_uid, track_uid, started_ms, listened_ms, ended = 'skipped',"        \
   " ended = 'finished'"                                                                \
   " FROM play_events WHERE started_ms > ?1 AND started_ms <= ?2 AND context = 'radio'" \
   " AND ended <> 'failed' AND context_uid IS NOT NULL"                                 \
