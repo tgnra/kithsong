@@ -139,7 +139,9 @@ static void refresh(void) {
   const item *it = st.index >= 0 && st.index < s.count ? &s.items[st.index] : NULL;
   int duration_ms = it ? it->duration_ms : 0;
   if (!duration_ms) duration_ms = (int)st.duration_ms;
-  BOOL has_next = it && (st.shuffle || st.radio || st.index + 1 < s.count);
+  /* By the order, not st.shuffle: what a station left behind plays in order. */
+  int next = -1;
+  BOOL has_next = it && (st.radio || (mc_player_order(s.player, 1, 1, &next) == MC_OK && next >= 0));
 
   BOOL new_track = st.index != s.index, new_state = st.state != s.state;
   /* These change whether there's a next track. */
@@ -378,7 +380,12 @@ void playback_play_radio(const char *seed_track_uid) {
   wchar_t *album = t->album ? wstr_dup_from_utf8(t->album) : NULL;
   wchar_t *cover_dir = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
   playback_track track = {t->uid, t->path, title, artist, album, cover_dir, t->duration_ms};
-  if (t->path) play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, t->uid, TRUE);
+  if (t->path) {
+    play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, t->uid, TRUE);
+    /* Now, as opening an album is: the play log's row only comes once the seed has ended. */
+    if (mc_library_record_opened(s.lib, MC_RECENT_STATION, t->uid) == MC_OK && s.recents_changed)
+      s.recents_changed();
+  }
   free(title);
   free(artist);
   free(album);
