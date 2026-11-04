@@ -95,9 +95,12 @@ enum class Section(@StringRes val title: Int) {
     Artists(R.string.section_artists),
 }
 
-/** One item of the main list. Albums come [MainItem.AlbumRow] at a time, a grid row each. */
+/**
+ * One item of the main list. Albums come [MainItem.AlbumRow] at a time, a grid row each; recents
+ * and album groups are one item each, a [TileRow].
+ */
 @Immutable
-private sealed interface MainItem {
+internal sealed interface MainItem {
     val key: Any
     val contentType: Any
     val art: List<ArtRef> get() = emptyList()
@@ -122,10 +125,10 @@ private sealed interface MainItem {
         override val contentType get() = "heading"
     }
 
-    data class RecentItem(val recent: Recent) : MainItem {
-        override val key get() = "recent:${recent.ref.kind}:${recent.ref.uid}"
-        override val contentType get() = "recent"
-        override val art get() = listOf(recent.art)
+    data class RecentsRow(val recents: List<Recent>) : MainItem {
+        override val key get() = RECENTS_ROW_KEY
+        override val contentType get() = TILE_ROW_TYPE
+        override val art get() = recents.take(ROW_ART).map { it.art }
     }
 
     data class PlaylistItem(val playlist: Playlist) : MainItem {
@@ -134,10 +137,10 @@ private sealed interface MainItem {
         override val art get() = listOf(playlist.art)
     }
 
-    data class AlbumGroupItem(val group: AlbumGroup) : MainItem {
-        override val key get() = "group:${group.uid}"
-        override val contentType get() = "playlist"
-        override val art get() = listOf(group.art)
+    data class AlbumGroupsRow(val groups: List<AlbumGroup>) : MainItem {
+        override val key get() = ALBUM_GROUPS_ROW_KEY
+        override val contentType get() = TILE_ROW_TYPE
+        override val art get() = groups.take(ROW_ART).map { it.art }
     }
 
     data class AlbumRow(val albums: List<Album>) : MainItem {
@@ -153,10 +156,17 @@ private sealed interface MainItem {
     }
 }
 
+private const val RECENTS_ROW_KEY = "row:recents"
+private const val ALBUM_GROUPS_ROW_KEY = "row:album-groups"
+private const val TILE_ROW_TYPE = "tiles"
+
+/** How many of a row's tiles count towards art prefetching and the backdrop: about a screen's. */
+private const val ROW_ART = 6
+
 // Null while the library is being read: just the header, rather than a flash of the empty state.
 // With lists to make ([canMake]), Playlists and Album groups show even when empty, for their +
 // buttons; with no music, only for what's already there.
-private fun mainItems(library: Library?, columns: Int, banner: Boolean, canMake: Boolean): List<MainItem> = buildList {
+internal fun mainItems(library: Library?, columns: Int, banner: Boolean, canMake: Boolean): List<MainItem> = buildList {
     add(MainItem.Header)
     if (banner) add(MainItem.Banner)
     if (library == null) return@buildList
@@ -164,7 +174,7 @@ private fun mainItems(library: Library?, columns: Int, banner: Boolean, canMake:
     val headings = canMake && !library.isEmpty
     if (library.recents.isNotEmpty()) {
         add(MainItem.Heading(Section.Recents))
-        library.recents.mapTo(this, MainItem::RecentItem)
+        add(MainItem.RecentsRow(library.recents))
     }
     if (library.playlists.isNotEmpty() || headings) {
         add(MainItem.Heading(Section.Playlists))
@@ -172,7 +182,7 @@ private fun mainItems(library: Library?, columns: Int, banner: Boolean, canMake:
     }
     if (library.albumGroups.isNotEmpty() || headings) {
         add(MainItem.Heading(Section.AlbumGroups))
-        library.albumGroups.mapTo(this, MainItem::AlbumGroupItem)
+        if (library.albumGroups.isNotEmpty()) add(MainItem.AlbumGroupsRow(library.albumGroups))
     }
     if (library.albums.isNotEmpty()) {
         add(MainItem.Heading(Section.Albums))
@@ -192,10 +202,11 @@ private const val ALBUMS_MIN_SHARE = 0.6f
 
 /**
  * The fast scroll strip's entries for [items]: each section's heading, then the letters of an
- * alphabetical section long enough for them (playlists and album groups by name, albums by
- * title, artists by sort name, as the library orders them). Recents aren't alphabetical.
+ * alphabetical section long enough for them (playlists by name, albums by title, artists by sort
+ * name, as the library orders them). Recents and album groups are a single row, with no places
+ * in it for the strip to go.
  */
-private fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, String>, other: String): List<FastScrollEntry> =
+internal fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, String>, other: String): List<FastScrollEntry> =
     buildList {
         var i = 0
         while (i < items.size) {
@@ -215,7 +226,6 @@ private fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, String
             for (j in start until end) {
                 when (val item = items[j]) {
                     is MainItem.PlaylistItem -> { at += j; keys += item.playlist.name }
-                    is MainItem.AlbumGroupItem -> { at += j; keys += item.group.name }
                     is MainItem.ArtistItem -> { at += j; keys += item.artist.sortName }
                     is MainItem.AlbumRow -> item.albums.forEach { at += j; keys += it.title }
                     else -> {}
@@ -236,7 +246,7 @@ private val ListArtSize = 56.dp
 /** The header's height under the status bar. */
 private val HeaderHeight = 64.dp
 
-/** An album tile's title and artist, under its cover and with the space below the row. */
+/** An album tile's or [TileRow] tile's title and artist, under its art and with the space below the row. */
 private val AlbumLabelsHeight = 58.dp
 
 /**
@@ -291,6 +301,8 @@ fun MainScreen(
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
         val listState = rememberLazyListState()
+        val recentsRow = rememberTileRowState(listState, RECENTS_ROW_KEY)
+        val albumGroupsRow = rememberTileRowState(listState, ALBUM_GROUPS_ROW_KEY)
         ScrollFrames(listState, "main")
         val scrollStep = scrollStepPx()
         LaunchedEffect(listState) {
@@ -350,13 +362,18 @@ fun MainScreen(
                             }
                         },
                     )
-                    is MainItem.RecentItem -> LibraryRow(
-                        item.recent.title,
-                        item.recent.subtitle(),
-                        item.recent.art,
-                        RoundedCornerShape(8.dp),
-                        onLongClick = { onRecentMenu(item.recent) },
-                    ) { onOpen(item.recent.ref) }
+                    is MainItem.RecentsRow -> TileRow(
+                        item.recents.map { recent ->
+                            Tile(
+                                "${recent.ref.kind}:${recent.ref.uid}",
+                                recent.title,
+                                recent.subtitle(),
+                                recent.art,
+                                onLongClick = { onRecentMenu(recent) },
+                            ) { onOpen(recent.ref) }
+                        },
+                        state = recentsRow,
+                    )
                     is MainItem.PlaylistItem -> LibraryRow(
                         item.playlist.name,
                         pluralStringResource(R.plurals.tracks, item.playlist.trackCount, item.playlist.trackCount),
@@ -364,13 +381,18 @@ fun MainScreen(
                         RoundedCornerShape(8.dp),
                         onLongClick = { onPlaylistMenu(item.playlist) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.Playlist, item.playlist.uid)) }
-                    is MainItem.AlbumGroupItem -> LibraryRow(
-                        item.group.name,
-                        pluralStringResource(R.plurals.albums, item.group.albumCount, item.group.albumCount),
-                        item.group.art,
-                        RoundedCornerShape(8.dp),
-                        onLongClick = { onAlbumGroupMenu(item.group) },
-                    ) { onOpen(CollectionRef(CollectionRef.Kind.AlbumGroup, item.group.uid)) }
+                    is MainItem.AlbumGroupsRow -> TileRow(
+                        item.groups.map { group ->
+                            Tile(
+                                group.uid,
+                                group.name,
+                                pluralStringResource(R.plurals.albums, group.albumCount, group.albumCount),
+                                group.art,
+                                onLongClick = { onAlbumGroupMenu(group) },
+                            ) { onOpen(CollectionRef(CollectionRef.Kind.AlbumGroup, group.uid)) }
+                        },
+                        state = albumGroupsRow,
+                    )
                     is MainItem.AlbumRow -> AlbumGridRow(item.albums, columns, onOpen, onAlbumMenu)
                     is MainItem.ArtistItem -> LibraryRow(
                         item.artist.name,
@@ -389,8 +411,14 @@ fun MainScreen(
             // The artists' letters would otherwise take most of the strip.
             minShares = mapOf(titles.getValue(Section.Albums) to ALBUMS_MIN_SHARE),
             kindOf = { index -> items.getOrNull(index)?.contentType },
-            // Known before the list reaches the albums, from the width of their tiles.
-            estimate = { kind -> if (kind == "albums") cellPx + with(density) { AlbumLabelsHeight.roundToPx() } else null },
+            // Known before the list reaches them, from the width of their tiles.
+            estimate = { kind ->
+                when (kind) {
+                    "albums" -> cellPx + with(density) { AlbumLabelsHeight.roundToPx() }
+                    TILE_ROW_TYPE -> with(density) { (tileWidth(width) + AlbumLabelsHeight).roundToPx() }
+                    else -> null
+                }
+            },
             // Below the header, whose buttons it would otherwise be in the way of.
             modifier = Modifier
                 .matchParentSize()
@@ -628,7 +656,7 @@ internal fun Artist.subtitle(): String =
     if (albumCount > 0) pluralStringResource(R.plurals.albums, albumCount, albumCount)
     else pluralStringResource(R.plurals.tracks, trackCount, trackCount)
 
-/** A list row with art, for recents, playlists and artists. */
+/** A list row with art, for playlists and artists. */
 @Composable
 private fun LibraryRow(
     title: String,
