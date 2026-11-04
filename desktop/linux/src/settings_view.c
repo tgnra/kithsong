@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "musiccore/musiccore.h"
+#include "musiccore/source_run.h"
 #include "playback.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)
@@ -19,7 +20,7 @@ typedef struct settings_view {
   settings_view_sync sync;
   gboolean has_sync;
   void *user;
-  GtkWidget *dialog, *folder;
+  GtkWidget *dialog, *folder, *reset_group;
   GtkWidget *name, *address, *leave; /* the Sync group's rows */
   GtkWidget *lfm_group, *lfm_status, *lfm_button, *lfm_service, *lfm_switch; /* the Scrobbling group's */
   guint lfm_timer;
@@ -163,6 +164,8 @@ void settings_view_choose_library(GtkWidget *parent, const char *settings_dir,
 }
 
 /* Open Another Library from the dialog: data is the dialog, referenced while choosing. */
+static void update_reset_text(settings_view *s);
+
 static void on_library_chosen(gpointer data, const char *dir, gboolean saved) {
   GtkWidget *dialog = data;
   settings_view *s = g_object_get_data(G_OBJECT(dialog), "settings-view");
@@ -172,6 +175,7 @@ static void on_library_chosen(gpointer data, const char *dir, gboolean saved) {
   /* Shown even if it wasn't saved: it's the library open now. */
   adw_action_row_set_subtitle(ADW_ACTION_ROW(s->folder), dir);
   update_sync(s); /* sync restarted with it */
+  update_reset_text(s);
 }
 
 static void on_open_activated(AdwActionRow *row, gpointer data) {
@@ -785,6 +789,20 @@ static GtkWidget *build_scrobble_group(settings_view *s) {
 
 /* --- Reset --- */
 
+/* Whether Reset takes the library with it: only a checkout's own, which it then says. */
+static gboolean reset_deletes_library(settings_view *s) {
+  char *dir = load_library_dir(s->settings_dir);
+  gboolean deletes = mc_source_reset_deletes_library(mc_source_run(), s->settings_dir, dir);
+  g_free(dir);
+  return deletes;
+}
+
+static void update_reset_text(settings_view *s) {
+  if (s->reset_group)
+    adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(s->reset_group),
+                                          mc_str(reset_deletes_library(s) ? MC_STR_RESET_APP_TEXT_SOURCE : MC_STR_RESET_APP_TEXT));
+}
+
 static void on_reset_response(AdwAlertDialog *alert, const char *response, gpointer data) {
   (void)alert;
   settings_view *s = data;
@@ -798,7 +816,8 @@ static void on_reset_response(AdwAlertDialog *alert, const char *response, gpoin
 static void on_reset_activated(GtkWidget *row, gpointer data) {
   (void)row;
   settings_view *s = data;
-  AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_RESET_APP_TITLE), mc_str(MC_STR_RESET_APP_CONFIRM));
+  AdwDialog *alert = adw_alert_dialog_new(
+    mc_str(MC_STR_RESET_APP_TITLE), mc_str(reset_deletes_library(s) ? MC_STR_RESET_APP_CONFIRM_SOURCE : MC_STR_RESET_APP_CONFIRM));
   adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", mc_str_mnemonic(MC_STR_CANCEL), "reset",
                                  mc_str_mnemonic(MC_STR_RESET_APP_CONFIRM_BUTTON), NULL);
   adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "reset", ADW_RESPONSE_DESTRUCTIVE);
@@ -811,7 +830,8 @@ static void on_reset_activated(GtkWidget *row, gpointer data) {
 static GtkWidget *build_reset_group(settings_view *s) {
   GtkWidget *group = adw_preferences_group_new();
   adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SETTINGS_RESET));
-  adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_RESET_APP_TEXT));
+  s->reset_group = group;
+  update_reset_text(s);
 #if ADW_CHECK_VERSION(1, 6, 0)
   GtkWidget *button = adw_button_row_new();
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(button), mc_str(MC_STR_RESET_APP_BUTTON));

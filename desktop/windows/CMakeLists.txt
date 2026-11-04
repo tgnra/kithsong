@@ -50,6 +50,7 @@ add_executable(kithsong WIN32
   src/testing_view.c
   src/theme.c
   src/track_list.c
+  src/track_menu.c
   src/uia.c
   src/volume_popup.c
   src/waiting_banner.c

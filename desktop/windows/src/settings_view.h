@@ -62,6 +62,9 @@
 
 void settings_view_create(HWND parent);
 void settings_view_destroy(void);
+/* Running from a checkout, the settings folder, which must outlive the view; else NULL. Before
+ * settings_view_set_library_dir(), which works out from it what Reset Kithsong... says. */
+void settings_view_set_source_run(const char *config_dir);
 /* The library folder to show (UTF-8; NULL shows nothing). */
 void settings_view_set_library_dir(const char *dir);
 /* font is the main window's; the headings are made from it. */

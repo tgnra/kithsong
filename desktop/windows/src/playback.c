@@ -480,6 +480,10 @@ BOOL playback_has_current(void) {
   return s.player && s.index >= 0 && s.index < s.count;
 }
 
+const char *playback_current_uid(void) {
+  return playback_has_current() ? s.items[s.index].uid : "";
+}
+
 BOOL playback_has_next(void) {
   return playback_has_current() && (s.shuffle || s.radio || s.index + 1 < s.count);
 }

@@ -27,6 +27,8 @@ import ng.kithso.core.CorePlayer
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 /**
  * The library as Android Auto (or any media browser) sees it, for [PlaybackService]'s library
@@ -37,7 +39,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  * can read, and as an [artRef] for [ArtBitmapLoader].
  *
  * Media ids: `root`; the tabs `tab:home`, `tab:playlists`, `tab:albums` and `tab:groups`;
- * collections `album:<uid>`, `artist:<uid>`, `playlist:<uid>` and `group:<uid>`; a collection's
+ * collections `album:<uid>`, `artist:<uid>`, `playlist:<uid>` and `group:<uid>`; an album listed
+ * under an album group, which plays on into the group's following albums,
+ * `groupalbum:<group uid, URL encoded>:<uid>`; a collection's
  * track `track:<collection id>:<index>`, its index in the collection's [TrackList.tracks]; and a
  * track a search found `found:<track uid>`, known from that search. Uids may hold colons, so a
  * collection id is split at its first and a track id at its last.
@@ -91,7 +95,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
         }
         val ref = parseRef(parentId) ?: return null
         val list = source().trackList(ref) ?: return null
-        if (ref.kind == CollectionRef.Kind.AlbumGroup) return list.albums.map { it.toBrowseItem() }
+        if (ref.kind == CollectionRef.Kind.AlbumGroup) return list.albums.map { it.toBrowseItem(ref.uid) }
         return list.tracks.mapIndexedNotNull { i, track ->
             track.takeIf { it.path != null }?.toBrowseItem(trackId(ref, i))
         }
@@ -109,7 +113,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
         val ref = parseRef(id) ?: return null
         val library = library()
         return when (ref.kind) {
-            CollectionRef.Kind.Album -> library.albums.firstOrNull { it.uid == ref.uid }?.toBrowseItem()
+            CollectionRef.Kind.Album -> library.albums.firstOrNull { it.uid == ref.uid }?.toBrowseItem(ref.group)
             CollectionRef.Kind.Artist -> library.artists.firstOrNull { it.uid == ref.uid }?.toBrowseItem()
             CollectionRef.Kind.Playlist -> library.playlists.firstOrNull { it.uid == ref.uid }?.toBrowseItem()
             CollectionRef.Kind.AlbumGroup -> library.albumGroups.firstOrNull { it.uid == ref.uid }?.toBrowseItem()
@@ -136,7 +140,8 @@ internal class BrowseTree(private val context: Context, private val source: () -
      * a search query; null if there's nothing to play. A collection plays from the start (the
      * first track, or shuffled, one the player picks), a collection's track plays the
      * collection from it, and a query plays its best result, or with none (as for "play
-     * Kithsong"), the first of Recents. A collection played is noted, for Recents.
+     * Kithsong"), the first of Recents. An album listed under an album group, or a track of
+     * one, plays the whole group from there. A collection played is noted, for Recents.
      */
     suspend fun queue(request: MediaItem): MediaItemsWithStartPosition? {
         val id = request.mediaId
@@ -182,8 +187,19 @@ internal class BrowseTree(private val context: Context, private val source: () -
         return queueOf(null, listOf(track.track ?: return null), 0)
     }
 
-    private suspend fun queueOf(ref: CollectionRef, index: Int?): MediaItemsWithStartPosition? =
-        queueOf(ref, source().trackList(ref)?.tracks ?: return null, index)
+    private suspend fun queueOf(ref: CollectionRef, index: Int?): MediaItemsWithStartPosition? {
+        val tracks = source().trackList(ref)?.tracks ?: return null
+        return queueInGroup(ref, tracks, index) ?: queueOf(ref, tracks, index)
+    }
+
+    // The group [ref], an album, was listed under, from tracks[index] or its first track; null
+    // if it wasn't, or is no longer in the group.
+    private suspend fun queueInGroup(ref: CollectionRef, tracks: List<Track>, index: Int?): MediaItemsWithStartPosition? {
+        val group = ref.parentGroup ?: return null
+        val track = tracks.getOrNull(index ?: 0) ?: return null
+        val queue = source().trackList(group)?.tracks ?: return null
+        return queueOf(group, queue, queue.indexOfFirst { it.uid == track.uid }.takeIf { it >= 0 } ?: return null)
+    }
 
     // The tracks of [ref] with a file here, from tracks[index] (or the next with a file) or
     // with no index, from the player's choice of start.
@@ -285,8 +301,8 @@ internal class BrowseTree(private val context: Context, private val source: () -
         return collection(ref, title, artist ?: context.getString(kind), art, artist)
     }
 
-    private fun Album.toBrowseItem() =
-        collection(CollectionRef(CollectionRef.Kind.Album, uid), title, artist, art, artist)
+    private fun Album.toBrowseItem(group: String? = null) =
+        collection(CollectionRef(CollectionRef.Kind.Album, uid, group), title, artist, art, artist)
 
     private fun Artist.toBrowseItem() = collection(
         CollectionRef(CollectionRef.Kind.Artist, uid),
@@ -307,7 +323,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
 
     private fun plural(id: Int, n: Int) = context.resources.getQuantityString(id, n, n)
 
-    private companion object {
+    internal companion object {
         const val ROOT = "root"
         const val HOME = "tab:home"
         const val PLAYLISTS = "tab:playlists"
@@ -315,6 +331,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
         const val GROUPS = "tab:groups"
         const val TRACK = "track:"
         const val FOUND = "found:"
+        const val GROUP_ALBUM = "groupalbum"
         val TABS = listOf(HOME, PLAYLISTS, ALBUMS, GROUPS)
 
         // How long to wait for the library's first read, which takes a moment at most; a
@@ -322,14 +339,20 @@ internal class BrowseTree(private val context: Context, private val source: () -
         const val LIBRARY_WAIT_MS = 3000L
 
         val CollectionRef.id: String
-            get() = when (kind) {
-                CollectionRef.Kind.Album -> "album"
-                CollectionRef.Kind.Artist -> "artist"
-                CollectionRef.Kind.Playlist -> "playlist"
-                CollectionRef.Kind.AlbumGroup -> "group"
+            get() = when {
+                group != null -> "$GROUP_ALBUM:${URLEncoder.encode(group, "UTF-8")}"
+                kind == CollectionRef.Kind.Album -> "album"
+                kind == CollectionRef.Kind.Artist -> "artist"
+                kind == CollectionRef.Kind.Playlist -> "playlist"
+                else -> "group"
             } + ":" + uid
 
         fun parseRef(id: String): CollectionRef? {
+            if (id.startsWith("$GROUP_ALBUM:")) {
+                val rest = id.substringAfter(':')
+                if (':' !in rest) return null
+                return CollectionRef(CollectionRef.Kind.Album, rest.substringAfter(':'), URLDecoder.decode(rest.substringBefore(':'), "UTF-8"))
+            }
             val kind = when (id.substringBefore(':', "")) {
                 "album" -> CollectionRef.Kind.Album
                 "artist" -> CollectionRef.Kind.Artist

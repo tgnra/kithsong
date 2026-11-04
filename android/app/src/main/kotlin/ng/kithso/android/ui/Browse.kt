@@ -1,31 +1,23 @@
 package ng.kithso.android.ui
 
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.data.Album
 import ng.kithso.android.data.CollectionRef
-import ng.kithso.android.ui.art.AlbumArt
 
 // Album tiles for the screens over the main one: an artist's albums in a strip, an album
 // group's in a grid. Laid out as the main screen's album grid is.
@@ -60,32 +52,14 @@ private fun AlbumTile(
     onMenu: (Album) -> Unit,
     modifier: Modifier,
 ) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape(12.dp))
-            .combinedClickable(onLongClick = { onMenu(album) }) { onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid)) },
-    ) {
-        AlbumArt(
-            album.art,
-            contentDescription = null,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
-        )
-        Text(
-            album.title,
-            style = MaterialTheme.typography.titleSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
+    ArtTile(
+        album.title,
+        subtitle,
+        album.art,
+        onLongClick = { onMenu(album) },
+        onClick = { onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid)) },
+        modifier = modifier,
+    )
 }
 
 /** One row of an album grid; a short last row keeps the tiles the same width. */

@@ -523,6 +523,44 @@ char *mc_full_path(const char *path) {
   return out;
 }
 
+char *mc_real_path(const char *path) {
+  wchar_t *w = path && *path ? mc_win_path(path) : NULL;
+  if (!w) return NULL;
+  HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                         FILE_FLAG_BACKUP_SEMANTICS /* for a folder */, NULL);
+  free(w);
+  if (h == INVALID_HANDLE_VALUE) return NULL;
+  const DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+  DWORD n = GetFinalPathNameByHandleW(h, NULL, 0, flags);
+  wchar_t *full = n ? malloc(n * sizeof *full) : NULL;
+  char *out = NULL;
+  if (full && GetFinalPathNameByHandleW(h, full, n, flags) < n) {
+    const wchar_t *p = full; /* it comes with \\?\ or \\?\UNC\ in front */
+    if (!wcsncmp(full, L"\\\\?\\UNC\\", 8)) {
+      full[6] = L'\\';
+      p = full + 6;
+    } else if (!wcsncmp(full, L"\\\\?\\", 4)) {
+      p = full + 4;
+    }
+    out = narrow(p);
+  }
+  free(full);
+  CloseHandle(h);
+  return out;
+}
+
+char *mc_exe_path(void) {
+  for (DWORD cap = 1024; cap <= 65536; cap *= 2) {
+    wchar_t *w = malloc(cap * sizeof *w);
+    if (!w) return NULL;
+    DWORD n = GetModuleFileNameW(NULL, w, cap);
+    char *out = n && n < cap ? narrow(w) : NULL;
+    free(w);
+    if (out || !n) return out;
+  }
+  return NULL;
+}
+
 mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms) {
   wchar_t *w = mc_win_path(path);
   if (!w) return MC_ERR_INVALID_ARG;
@@ -1170,6 +1208,22 @@ char *mc_full_path(const char *path) {
   if (out) snprintf(out, n, "%s%s", strcmp(real, "/") || !*rest ? real : "", rest);
   free(abs);
   return out;
+}
+
+char *mc_real_path(const char *path) {
+  return path && *path ? realpath(path, NULL) : NULL;
+}
+
+char *mc_exe_path(void) {
+#ifdef __linux__
+  char buf[PATH_MAX];
+  ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1);
+  if (n <= 0) return NULL;
+  buf[n] = '\0';
+  return mc_strdup(buf);
+#else
+  return NULL;
+#endif
 }
 
 mc_status mc_free_space(const char *path, int64_t *out) {

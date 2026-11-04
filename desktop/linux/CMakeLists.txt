@@ -12,6 +12,7 @@ add_executable(kithsong
   src/now_playing.c
   src/playback.c
   src/track_list.c
+  src/track_menu.c
   src/import_view.c
   src/settings_view.c
   src/move_library.c

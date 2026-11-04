@@ -10,15 +10,29 @@
  * (art_accent.h). Dragging the bar (or the arrow keys once it has focus) moves the position; a
  * drag seeks when it's let go. With nothing playing the bar is greyed out. Only one strip
  * exists at a time.
+ *
+ * Right-clicking the cover or the track's text opens the playing track's menu (track_menu.h),
+ * as do the Menu key and Shift+F10 with the bar focused. It has no Move Up, Move Down or
+ * Remove from Playlist, which are for a place in a list. What's picked applies to the track
+ * it was opened on, and to nothing if that has left the library by then. A left click is
+ * the header bar's, so the window can still be dragged by the strip.
  */
 #ifndef KITHSONG_NOW_PLAYING_H
 #define KITHSONG_NOW_PLAYING_H
 
 #include <gtk/gtk.h>
 
+#include "musiccore/musiccore.h"
+#include "track_list.h"
+
 /* seek is called with the position the user picked, in ms; shuffle when the user turns
  * shuffle on or off. */
 GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(void *user, gboolean on), void *user);
+
+/* Sets up the track's menu: cb's add_to_playlist, delete_track, edit_track, go_to_album and
+ * go_to_artist do what it asks. library says where the track is, or NULL for no menu (nothing
+ * open, or an import session has the library). */
+void now_playing_set_track_menu(const track_list_callbacks *cb, mc_library *(*library)(void *user));
 
 /* Shows shuffle on or off, without calling shuffle. */
 void now_playing_set_shuffle(gboolean on);

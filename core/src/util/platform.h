@@ -193,5 +193,11 @@ int mc_same_volume(const char *a, const char *b);
 /* path made absolute, without "." or ".." parts or a trailing separator; on Linux, links in
  * the part of it that exists are resolved too. malloc'd, or NULL. */
 char *mc_full_path(const char *path);
+/* path, which must exist, with every link and junction on the way resolved: the folder or file
+ * it really is. Two paths to one thing give the same result, as mc_same_path() sees it. malloc'd,
+ * or NULL. */
+char *mc_real_path(const char *path);
+/* The running executable's full path: malloc'd, or NULL where there's no telling. */
+char *mc_exe_path(void);
 
 #endif

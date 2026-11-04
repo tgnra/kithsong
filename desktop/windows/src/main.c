@@ -42,7 +42,8 @@
  * The album grid is album_grid.c (which also shows the playlists, on the Playlists page, and
  * the album groups, on the Album Groups page, making their changes itself), the
  * sidebar sidebar.c, the track list track_list.c and the seekbar beside the playback buttons
- * now_playing.c. The track list's Add to Playlist menu is add_to_playlist.c, and the New,
+ * now_playing.c. A track's menu is track_menu.c, for the track list and, on its cover and
+ * title, the playing track. Its Add to Playlist submenu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
  * changes (a smart playlist's too: its rule's editor is smart_editor.c) and they're made
  * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]) and the speaker
@@ -64,7 +65,8 @@
  *
  * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
- * so two instances can sync on one PC; the paths are imported. Launching it again with the
+ * so two instances can sync on one PC; the paths are imported. Run from a checkout, the app
+ * has folders of its own (musiccore/source_run.h). Launching it again with the
  * same config folder brings the open window forward and hands it the paths instead, as
  * GApplication does on Linux (claim_instance). --add-firewall-rule or
  * --add-firewall-rule-public alone is firewall.c's elevated helper, which adds the Windows
@@ -101,6 +103,7 @@
 #include "import_view.h"
 #include "move_library.h"
 #include "musiccore/musiccore.h"
+#include "musiccore/source_run.h"
 #include "now_playing.h"
 #include "pair_dialog.h"
 #include "pick_folder.h"
@@ -115,6 +118,7 @@
 #include "sync_bridge.h"
 #include "theme.h"
 #include "track_list.h"
+#include "track_menu.h"
 #include "volume_popup.h"
 #include "scroller.h"
 #include "testing_view.h"
@@ -198,6 +202,7 @@ typedef struct app {
   mc_settings *settings;
   mc_library *lib;
   char *config_dir;        /* UTF-8: settings.json and sync.db */
+  BOOL from_source;        /* running from a checkout (musiccore/source_run.h) */
   char *art_dir;           /* UTF-8: playlists' pictures, in config_dir */
   BOOL refresh_pending;    /* TIMER_REFRESH_DEVICES is set */
   BOOL library_pending;    /* TIMER_REFRESH_LIBRARY is set */
@@ -823,6 +828,7 @@ static void create_controls(void) {
 
   import_view_create(g_app.wnd, g_app.lib);
   settings_view_create(g_app.wnd);
+  settings_view_set_source_run(g_app.from_source ? g_app.config_dir : NULL);
   settings_view_set_library_dir(mc_settings_library_dir(g_app.settings));
   settings_view_init_sync(g_app.settings, schedule_refresh);
   static const testing_host testing = {open_stress, back_to_library, scroll_test_start, current_library};
@@ -863,8 +869,16 @@ static void play_items(int n, track_list_item (*item_at)(int), int start) {
   if (count && g_app.lib && uid[0] && mc_library_record_opened(g_app.lib, kind, uid) == MC_OK) refresh_recents();
 }
 
-/* The shown album, playlist or artist's tracks (see play_items()). */
+static BOOL play_group_from(const char *album, int start);
+
+/* The shown album, playlist or artist's tracks (see play_items()). An album on an album group's
+ * page plays as part of the group, on into its following albums (play_group_from()), but for
+ * playing it shuffled: that's the album's own Shuffle, and the group has Shuffle Tracks. */
 static void play_album(int start) {
+  char album[MC_UID_STRLEN];
+  if (g_app.page == PAGE_ALBUM_GROUPS && album_grid_group() && album_grid_selection(album) &&
+      (start >= 0 || !playback_shuffle()) && play_group_from(album, start))
+    return;
   play_items(track_list_count(), track_list_item_at, start);
 }
 
@@ -969,18 +983,57 @@ static void play_all(BOOL shuffled) {
   play_album(shuffled ? -1 : 0);
 }
 
+/* The shown group's albums' tracks with a file here, one album after another: the albums in
+ * the group's order, or if order isn't NULL, album order[i] in place i. NULL if there's none
+ * to list. Free with mc_track_list_free(). */
+static mc_track_list *group_tracks(const int *order) {
+  int albums = album_grid_count();
+  const char **uids = albums ? malloc((size_t)albums * sizeof *uids) : NULL;
+  if (!uids || !g_app.lib) {
+    free(uids);
+    return NULL;
+  }
+  for (int i = 0; i < albums; i++) uids[i] = album_grid_uid_at(order ? order[i] : i);
+  mc_track_list *list = NULL;
+  if (mc_library_list_albums_tracks(g_app.lib, uids, albums, &list) != MC_OK) list = NULL;
+  free(uids);
+  return list;
+}
+
+/* Plays list, the shown group's (group_tracks()), from item start; or with start -1 from the
+ * first, which shuffled is any. Playing it puts the group first in the recents, as playing an
+ * album does. */
+static void play_group_tracks(const mc_track_list *list, int start) {
+  int n = list->count;
+  playback_track *queue = calloc((size_t)n, sizeof *queue);
+  wchar_t **text = calloc((size_t)n * 4, sizeof *text); /* the queue's strings, freed once it has copied them */
+  if (queue && text) {
+    for (int i = 0; i < n; i++) {
+      const mc_track_info *t = &list->items[i];
+      wchar_t **mine = text + 4 * i;
+      mine[0] = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
+      mine[1] = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
+      mine[2] = t->album ? wstr_dup_from_utf8(t->album) : NULL;
+      mine[3] = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
+      queue[i] = (playback_track){t->uid, t->path, mine[0], mine[1], mine[2], mine[3], t->duration_ms};
+    }
+    playback_play(queue, n, start, MC_PLAY_CONTEXT_ALBUM_GROUP, album_grid_group());
+    for (int i = 0; i < 4 * n; i++) free(text[i]);
+  }
+  free(text);
+  free(queue);
+  const char *group = album_grid_group();
+  if (group && mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) refresh_recents();
+}
+
 /* A group's Play, Shuffle Albums and Shuffle Tracks (album_grid.h): its albums' tracks with a
  * file here, each album's in its own order, the albums in the group's order or a random one,
- * or every track shuffled. Playing it puts it first in the recents, as playing an album
- * does. */
+ * or every track shuffled. */
 static void play_group(void) {
   album_grid_play how = album_grid_play_how();
-  int albums = album_grid_count(), n = 0, cap = 0;
+  int albums = album_grid_count();
   int *order = albums ? malloc((size_t)albums * sizeof *order) : NULL;
-  if (!order || !g_app.lib) {
-    free(order);
-    return;
-  }
+  if (!order) return;
   for (int i = 0; i < albums; i++) order[i] = i;
   for (int i = albums - 1; how == AG_PLAY_SHUFFLE_ALBUMS && i > 0; i--) { /* Fisher-Yates */
     unsigned r = 0;
@@ -989,45 +1042,32 @@ static void play_group(void) {
     order[i] = order[j];
     order[j] = t;
   }
-  playback_track *queue = NULL;
-  wchar_t **text = NULL; /* the queue's strings, freed once it has copied them */
-  mc_track_list **lists = calloc((size_t)albums, sizeof *lists);
-  for (int a = 0; lists && a < albums; a++) {
-    const char *uid = album_grid_uid_at(order[a]);
-    if (!uid || mc_library_list_album_tracks(g_app.lib, uid, &lists[a]) != MC_OK) continue;
-    for (int i = 0; i < lists[a]->count; i++) {
-      const mc_track_info *t = &lists[a]->items[i];
-      if (!t->path) continue;
-      if (n == cap) {
-        int grown = cap ? cap * 2 : 64;
-        playback_track *q = realloc(queue, (size_t)grown * sizeof *q);
-        wchar_t **w = q ? realloc(text, (size_t)grown * 4 * sizeof *w) : NULL;
-        if (q) queue = q;
-        if (!w) break;
-        text = w;
-        cap = grown;
-      }
-      wchar_t **mine = text + 4 * n;
-      mine[0] = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
-      mine[1] = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
-      mine[2] = t->album ? wstr_dup_from_utf8(t->album) : NULL;
-      mine[3] = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
-      queue[n++] = (playback_track){t->uid, t->path, mine[0], mine[1], mine[2], mine[3], t->duration_ms};
-    }
-  }
-  if (n) {
+  mc_track_list *list = group_tracks(order);
+  if (list && list->count) {
     set_shuffle(how == AG_PLAY_SHUFFLE_TRACKS);
-    playback_play(queue, n, how == AG_PLAY_SHUFFLE_TRACKS ? -1 : 0, MC_PLAY_CONTEXT_ALBUM_GROUP, album_grid_group());
+    play_group_tracks(list, how == AG_PLAY_SHUFFLE_TRACKS ? -1 : 0);
   }
-  for (int i = 0; i < 4 * n; i++) free(text[i]);
-  free(text);
-  free(queue);
-  for (int a = 0; lists && a < albums; a++)
-    if (lists[a]) mc_track_list_free(lists[a]);
-  free(lists);
+  mc_track_list_free(list);
   free(order);
-  const char *group = album_grid_group();
-  if (n && group && mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) refresh_recents();
+}
+
+/* An album shown in the track list, on its group's page: the whole group as the queue, from
+ * the album's track start (the list's index), or with start -1 its first, so previous and
+ * next see the albums either side. A track with no file here starts from the one before it,
+ * as play_items() does. FALSE, with nothing played, if none of the album is in the queue. */
+static BOOL play_group_from(const char *album, int start) {
+  const char *track = NULL;
+  for (int i = start; i >= 0 && !track; i--) {
+    track_list_item t = track_list_item_at(i);
+    if (t.path) track = t.uid;
+  }
+  mc_track_list *list = group_tracks(NULL);
+  int first = -1;
+  for (int i = 0; list && i < list->count && first < 0; i++)
+    if (!strcmp(list->items[i].album_uid, album) && (!track || !strcmp(list->items[i].uid, track))) first = i;
+  if (first >= 0) play_group_tracks(list, first);
+  mc_track_list_free(list);
+  return first >= 0;
 }
 
 /* The track list's requests to change a playlist (see track_list.h). */
@@ -1094,6 +1134,85 @@ static void on_track_request(int code) {
   if (changed) {
     refresh_library();
     UpdateWindow(g_app.grid); /* reload the grid now: a deleted playlist's tracks go at once */
+  }
+}
+
+/* The track with uid, or NULL if the library hasn't got it. Free with mc_track_list_free(). */
+static mc_track_list *find_track(const char *uid) {
+  mc_track_list *list = NULL;
+  if (!g_app.lib || mc_library_list_track(g_app.lib, uid, &list) != MC_OK) return NULL;
+  if (list->count) return list;
+  mc_track_list_free(list);
+  return NULL;
+}
+
+/* The playing track, if it can have a menu: not during an import session, which has the
+ * library, or if it left the library while it played. Else NULL, and the title bar keeps
+ * its own menu. Free with mc_track_list_free(). */
+static mc_track_list *now_playing_menu_track(void) {
+  return g_app.locked || !playback_current_uid()[0] ? NULL : find_track(playback_current_uid());
+}
+
+/* Whether a right-click at lp (screen coordinates) is for the playing track's menu. */
+static BOOL now_playing_menu_at(LPARAM lp) {
+  POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+  if (!now_playing_on_track(pt)) return FALSE;
+  mc_track_list *list = now_playing_menu_track();
+  mc_track_list_free(list);
+  return list != NULL;
+}
+
+/* The menu for the playing track, at pt (screen coordinates). It has no Move Up, Move Down or
+ * Remove from Playlist: those are for a place in a list.
+ *
+ * The track may change or go while the menu's open, so what's picked applies to the track
+ * it was opened on, and to nothing if that left the library. */
+static void now_playing_menu(POINT pt) {
+  mc_track_list *list = now_playing_menu_track();
+  if (!list) return;
+  const mc_track_info *t = &list->items[0];
+  track_menu_options options = {.lib = g_app.lib, .track_uid = t->uid,
+                                .go_to_album = track_menu_album_has_page(g_app.lib, t->album_uid),
+                                .go_to_artist = t->artist_uid[0] != '\0'};
+  char playlist[MC_UID_STRLEN];
+  track_menu_pick pick = track_menu_show(g_app.wnd, pt, &options, playlist);
+
+  mc_track_list *still = pick != TRACK_MENU_NOTHING ? find_track(t->uid) : NULL;
+  BOOL changed = FALSE;
+  if (still) {
+    switch (pick) {
+      case TRACK_MENU_ADD_TO_PLAYLIST:
+      case TRACK_MENU_NEW_PLAYLIST:
+        changed = add_to_playlist(g_app.wnd, g_app.lib, t->uid, t->path != NULL,
+                                  pick == TRACK_MENU_ADD_TO_PLAYLIST ? playlist : NULL);
+        break;
+      case TRACK_MENU_START_RADIO:
+        playback_play_radio(t->uid);
+        break;
+      case TRACK_MENU_GO_TO_ALBUM:
+        open_album(t->album_uid, t->uid);
+        break;
+      case TRACK_MENU_GO_TO_ARTIST:
+        open_artist(t->artist_uid);
+        break;
+      case TRACK_MENU_EDIT:
+        changed = edit_dialog_track(g_app.wnd, g_app.lib, t->uid);
+        break;
+      case TRACK_MENU_DELETE: {
+        wchar_t *title = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
+        if (title) changed = delete_dialog(g_app.wnd, g_app.lib, MC_DELETE_TRACKS, t->uid, title);
+        free(title);
+        break;
+      }
+      default: /* the others are for a place in a list, and aren't offered */
+        break;
+    }
+  }
+  mc_track_list_free(still);
+  mc_track_list_free(list);
+  if (changed) {
+    refresh_library();
+    UpdateWindow(g_app.grid);
   }
 }
 
@@ -1811,6 +1930,29 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (!IsZoomed(wnd) && pt.y < frame_thickness()) return HTTOP; /* the top border is in the client area */
       return pt.y < scale(BAR_H) ? HTCAPTION : HTCLIENT;           /* toolbar buttons are child windows */
     }
+    /* The strip lets right-clicks on the cover and title through, so they reach us as title
+     * bar clicks. DefWindowProc would keep the button's release for itself: left out of it,
+     * the release comes here too, and the menu opens on it as a track row's does. */
+    case WM_NCRBUTTONDOWN:
+      if (wp == HTCAPTION && now_playing_menu_at(lp)) return 0;
+      break;
+    case WM_NCRBUTTONUP:
+      if (wp == HTCAPTION && now_playing_menu_at(lp)) {
+        now_playing_menu((POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+        return 0;
+      }
+      break;
+    case WM_CONTEXTMENU: /* from the strip: the edge of the bar overlaps the title, or the keyboard (lp -1) */
+      if ((HWND)wp != g_app.now_playing) break;
+      if (lp == -1) {
+        now_playing_menu(now_playing_menu_point());
+        return 0;
+      }
+      if (now_playing_menu_at(lp)) {
+        now_playing_menu((POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+        return 0;
+      }
+      break;
     case WM_SIZE:
       layout();
       return 0;
@@ -2067,9 +2209,10 @@ static void free_args(app_args *args) {
 }
 
 /* Where settings.json and sync.db live: --config-dir made absolute, or
- * %LOCALAPPDATA%\kithsong. Created if missing. Returns UTF-8, or NULL (*shown says which
- * folder it was, for the error). */
-static char *config_dir(const app_args *args, wchar_t *shown, DWORD cap) {
+ * %LOCALAPPDATA%\kithsong, or %LOCALAPPDATA%\kithsong-debug when running from a checkout.
+ * Created if missing. Returns UTF-8, or NULL (*shown says which folder it was, for the
+ * error). */
+static char *config_dir(const app_args *args, BOOL from_source, wchar_t *shown, DWORD cap) {
   wchar_t dir[MAX_PATH];
   shown[0] = L'\0';
   if (args->config_dir) {
@@ -2079,18 +2222,20 @@ static char *config_dir(const app_args *args, wchar_t *shown, DWORD cap) {
   } else {
     DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH);
     if (n == 0 || n >= MAX_PATH - 16) {
-      lstrcpynW(shown, L"%LOCALAPPDATA%\\kithsong", (int)cap);
+      lstrcpynW(shown, from_source ? L"%LOCALAPPDATA%\\" MC_SOURCE_SETTINGS_DIR : L"%LOCALAPPDATA%\\kithsong", (int)cap);
       return NULL;
     }
     wchar_t old[MAX_PATH];
     wcscpy(old, dir);
     wcscat(old, L"\\musicapp");
-    wcscat(dir, L"\\kithsong");
+    wcscat(dir, from_source ? L"\\" MC_SOURCE_SETTINGS_DIR : L"\\kithsong");
     lstrcpynW(shown, dir, (int)cap);
-    char *old8 = utf8_from_wide(old), *dir8 = utf8_from_wide(dir);
-    mc_settings_move_old_dir(old8, dir8);
-    free(old8);
-    free(dir8);
+    if (!from_source) { /* the old folder is the installed app's to take */
+      char *old8 = utf8_from_wide(old), *dir8 = utf8_from_wide(dir);
+      mc_settings_move_old_dir(old8, dir8);
+      free(old8);
+      free(dir8);
+    }
   }
   int err = SHCreateDirectoryExW(NULL, dir, NULL);
   if (err != ERROR_SUCCESS && err != ERROR_ALREADY_EXISTS && err != ERROR_FILE_EXISTS) return NULL;
@@ -2676,7 +2821,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
 
   /* Settings say where the library folder is; the first run asks, once the window is up. */
   wchar_t shown_dir[MAX_PATH];
-  g_app.config_dir = config_dir(&args, shown_dir, MAX_PATH);
+  g_app.from_source = mc_source_run() != 0;
+  g_app.config_dir = config_dir(&args, g_app.from_source, shown_dir, MAX_PATH);
   if (g_app.config_dir && !claim_instance(g_app.config_dir, &args)) {
     free(g_app.config_dir);
     free_args(&args);
@@ -2684,7 +2830,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   }
   /* Settings' Reset Kithsong… marked the folder and quit: clear it before anything opens it. */
   char *left = NULL;
-  mc_status reset = g_app.config_dir ? mc_settings_reset_if_requested(g_app.config_dir, NULL, &left) : MC_OK;
+  mc_status reset = g_app.config_dir ? mc_source_reset_if_requested(g_app.config_dir, g_app.from_source, NULL, &left)
+                                     : MC_OK;
   if (reset != MC_OK) {
     wchar_t text[MAX_PATH + 512];
     mc_wformat(text, MAX_PATH + 512, mc_str(MC_STR_RESET_APP_FAILED), MC_S(left ? left : g_app.config_dir),
@@ -2706,6 +2853,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   mc_perf_set_enabled(mc_settings_bool(g_app.settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
   mc_perf_mark_at("main_entered", main_us);
   mc_perf_mark("settings_loaded");
+  /* From a checkout there's no asking: a library in the temp folder, unless a test wants the
+   * first run itself. If that fails, the first run asks, with no Music folder to offer. */
+  if (g_app.from_source && !first_run_test_music()) mc_source_library_prepare(g_app.config_dir, g_app.settings);
   BOOL first_run = !mc_settings_library_dir(g_app.settings);
   if (!first_run) g_app.lib = open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
   mc_perf_mark("library_opened");

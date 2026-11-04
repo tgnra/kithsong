@@ -139,9 +139,13 @@ class PlaylistActions(
         sheet = Sheet.AlbumGroupMenu(group)
     }
 
-    /** [groupUid]: the manual album group the album is listed from, which it can be taken out of. */
-    fun albumMenu(album: Album, groupUid: String? = null) {
-        sheet = Sheet.AlbumMenu(album, groupUid)
+    /**
+     * [groupUid]: the manual album group the album is listed from, which it can be taken out of.
+     * [inGroup]: the album group, manual or smart, it's listed from or was opened from, whose
+     * following albums its Play goes on into.
+     */
+    fun albumMenu(album: Album, groupUid: String? = null, inGroup: String? = null) {
+        sheet = Sheet.AlbumMenu(album, groupUid, inGroup)
     }
 
     fun artistMenu(artist: Artist) {
@@ -172,7 +176,7 @@ class PlaylistActions(
         data class RecentMenu(val recent: Recent) : Sheet
         data class PlaylistMenu(val playlist: Playlist) : Sheet
         data class AlbumGroupMenu(val group: AlbumGroup) : Sheet
-        data class AlbumMenu(val album: Album, val groupUid: String?) : Sheet
+        data class AlbumMenu(val album: Album, val groupUid: String?, val inGroup: String? = null) : Sheet
         data class ArtistMenu(val artist: Artist) : Sheet
         data class TrackMenu(val track: Track, val removable: Boolean, val from: CollectionRef?) : Sheet
         data class FoundTrackMenu(val track: FoundTrack, val artists: List<Artist>) : Sheet
@@ -369,7 +373,7 @@ fun PlaylistSheets(
         }
         is PlaylistActions.Sheet.AlbumMenu -> {
             val album = sheet.album
-            val ref = CollectionRef(CollectionRef.Kind.Album, album.uid)
+            val ref = CollectionRef(CollectionRef.Kind.Album, album.uid, sheet.inGroup)
             val groupUid = sheet.groupUid
             val here = hereAction(ProfileItemKind.Album, album.uid, album.title)
             val edit = editAction(actions, TagTarget.Kind.Album, album.uid)

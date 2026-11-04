@@ -9,15 +9,14 @@
 #include <wchar.h>
 #include <windowsx.h>
 
-#include "add_to_playlist.h"
 #include "canvas.h"
 #include "cover.h"
 #include "drag.h"
 #include "playback.h"
-#include "radio_menu.h"
 #include "scroller.h"
 #include "smart_editor.h"
 #include "theme.h"
+#include "track_menu.h"
 #include "uia.h"
 #include "wstr.h"
 
@@ -52,21 +51,9 @@ enum {
 
 /* Context menu items. Play Next and Play Last are stubs until there's a play queue. */
 enum {
-  CMD_NEW_PLAYLIST = 1,
-  CMD_PLAY_NEXT,
-  CMD_PLAY_LAST,
-  CMD_MOVE_UP,
-  CMD_MOVE_DOWN,
-  CMD_REMOVE,
-  CMD_RENAME,
+  CMD_RENAME = 1,
   CMD_DELETE,
-  CMD_DELETE_TRACK,
-  CMD_EDIT_TRACK,
   CMD_EDIT_SMART,
-  CMD_GO_TO_ALBUM,
-  CMD_GO_TO_ARTIST,
-  CMD_START_RADIO,
-  CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
 };
 
 enum { TIMER_DRAG_SCROLL = 103 }; /* the scroller has 101 and 102 */
@@ -691,10 +678,6 @@ static void request_playlist(int code) {
 
 /* --- Menus --- */
 
-static UINT menu_flags(void) {
-  return TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
-}
-
 /* Rename... and Delete Playlist..., under the [...] button; a smart playlist's has Edit
  * Rules... first. */
 static void show_playlist_menu(void) {
@@ -723,16 +706,11 @@ static void show_playlist_menu(void) {
   else if (cmd == CMD_EDIT_SMART) request_playlist(TLN_EDIT_SMART);
 }
 
-/* Whether row i's album has a page to go to: it has one, it isn't the album shown, and it
- * isn't a single (an album of one track), which the album grid leaves out. */
+/* Whether row i's album has a page to go to that isn't the album shown. */
 static BOOL album_to_go_to(int i) {
   const row *r = &s.rows[i];
-  if (!r->album_uid[0] || (!s.playlist && !s.by_artist && !strcmp(r->album_uid, s.album_uid))) return FALSE;
-  mc_track_list *list = NULL;
-  if (!s.lib || mc_library_list_album_tracks(s.lib, r->album_uid, &list) != MC_OK) return FALSE;
-  BOOL more = list->count > 1;
-  mc_track_list_free(list);
-  return more;
+  if (!s.playlist && !s.by_artist && !strcmp(r->album_uid, s.album_uid)) return FALSE;
+  return track_menu_album_has_page(s.lib, r->album_uid);
 }
 
 /* Whether row i's artist has a page to go to that isn't the one shown. */
@@ -745,74 +723,45 @@ static BOOL artist_to_go_to(int i) {
 static void show_menu(POINT pt) {
   int i = s.selected;
   if (i < 0 || i >= s.count) return;
-  HMENU menu = CreatePopupMenu();
-  mc_playlist_list *lists = NULL;
-  HMENU add = add_to_playlist_menu(s.lib, CMD_PLAYLIST_FIRST, CMD_NEW_PLAYLIST, &lists);
-  if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_PLAYLIST));
-  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  /* Greyed out until there's a play queue to add to (see TODO.md, Playback). */
-  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
-  char seed[MC_UID_STRLEN];
-  radio_menu_append_track(menu, CMD_START_RADIO, s.lib, s.rows[i].uid, seed);
-  BOOL album = album_to_go_to(i), artist = artist_to_go_to(i);
-  if (album || artist) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  if (album) AppendMenuW(menu, MF_STRING, CMD_GO_TO_ALBUM, mc_wstr_mnemonic(MC_STR_GO_TO_ALBUM));
-  if (artist) AppendMenuW(menu, MF_STRING, CMD_GO_TO_ARTIST, mc_wstr_mnemonic(MC_STR_GO_TO_ARTIST));
-  if (in_playlist(i)) {
-    wchar_t item[128];
-    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING | (i > 0 ? 0 : MF_GRAYED), CMD_MOVE_UP,
-                wstr_menu_item(item, 128, MC_STR_MOVE_UP, MC_STR_WINDOWS_SHORTCUT_MOVE_UP));
-    AppendMenuW(menu, MF_STRING | (i + 1 < s.count ? 0 : MF_GRAYED), CMD_MOVE_DOWN,
-                wstr_menu_item(item, 128, MC_STR_MOVE_DOWN, MC_STR_WINDOWS_SHORTCUT_MOVE_DOWN));
-    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING, CMD_REMOVE,
-                wstr_menu_item(item, 128, MC_STR_REMOVE_FROM_PLAYLIST, MC_STR_WINDOWS_SHORTCUT_REMOVE));
-  }
-  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_EDIT_TRACK, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
-  AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
-  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, s.wnd, NULL);
-  DestroyMenu(menu); /* and the submenu */
+  char uid[MC_UID_STRLEN]; /* the menu runs messages, and the rows can change */
+  strcpy(uid, s.rows[i].uid);
+  track_menu_options options = {.lib = s.lib, .track_uid = uid, .go_to_album = album_to_go_to(i), .go_to_artist = artist_to_go_to(i),
+                                .in_playlist = in_playlist(i), .can_move_up = i > 0, .can_move_down = i + 1 < s.count};
+  char playlist[MC_UID_STRLEN];
+  track_menu_pick pick = track_menu_show(s.wnd, pt, &options, playlist);
 
   memset(&s.req, 0, sizeof s.req);
-  if (cmd >= CMD_PLAYLIST_FIRST && lists && cmd - CMD_PLAYLIST_FIRST < lists->count) {
-    strcpy(s.req.track_uid, s.rows[i].uid);
-    strcpy(s.req.playlist_uid, lists->items[cmd - CMD_PLAYLIST_FIRST].uid);
-    s.req.here = s.rows[i].path != NULL;
-    notify(TLN_ADD_TO_PLAYLIST);
-  }
-  mc_playlist_list_free(lists);
-  switch (cmd) {
-    case CMD_NEW_PLAYLIST:
+  switch (pick) {
+    case TRACK_MENU_ADD_TO_PLAYLIST:
+      strcpy(s.req.playlist_uid, playlist);
+      /* fall through */
+    case TRACK_MENU_NEW_PLAYLIST:
       strcpy(s.req.track_uid, s.rows[i].uid);
       s.req.here = s.rows[i].path != NULL;
       notify(TLN_ADD_TO_PLAYLIST);
       break;
-    case CMD_START_RADIO: playback_play_radio(seed); break;
-    case CMD_MOVE_UP: request_move(i, i - 1); break;
-    case CMD_MOVE_DOWN: request_move(i, i + 2); break;
-    case CMD_REMOVE: request_remove(i); break;
-    case CMD_DELETE_TRACK:
+    case TRACK_MENU_START_RADIO: playback_play_radio(uid); break;
+    case TRACK_MENU_MOVE_UP: request_move(i, i - 1); break;
+    case TRACK_MENU_MOVE_DOWN: request_move(i, i + 2); break;
+    case TRACK_MENU_REMOVE: request_remove(i); break;
+    case TRACK_MENU_DELETE:
       strcpy(s.req.track_uid, s.rows[i].uid);
       notify(TLN_DELETE_TRACK);
       break;
-    case CMD_EDIT_TRACK:
+    case TRACK_MENU_EDIT:
       strcpy(s.req.track_uid, s.rows[i].uid);
       notify(TLN_EDIT_TRACK);
       break;
-    case CMD_GO_TO_ALBUM:
+    case TRACK_MENU_GO_TO_ALBUM:
       strcpy(s.req.track_uid, s.rows[i].uid);
       strcpy(s.req.album_uid, s.rows[i].album_uid);
       notify(TLN_GO_TO_ALBUM);
       break;
-    case CMD_GO_TO_ARTIST:
+    case TRACK_MENU_GO_TO_ARTIST:
       strcpy(s.req.artist_uid, s.rows[i].artist_uid);
       notify(TLN_GO_TO_ARTIST);
       break;
-    case CMD_PLAY_NEXT: /* greyed out: needs a play queue */
-    case CMD_PLAY_LAST:
+    case TRACK_MENU_NOTHING:
       break;
   }
 }

@@ -78,7 +78,7 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) {
     }
 
     /**
-     * Plays [tracks] (an album's or a playlist's tracks with a file on the watch, in order) from
+     * Plays [tracks] (an album's, a playlist's or a group's tracks with a file on the watch, in order) from
      * [track], which is shown as current at once, before the session says so. [origin] says
      * which, for the play log.
      */

@@ -42,9 +42,11 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
@@ -152,7 +154,7 @@ private fun PlayPause(playback: Playback) {
 }
 
 /**
- * The full player, over a background coloured from the art: large art, then title and byline, seekbar, and play/pause
+ * The full player, over a background coloured from the art: large art, then title and byline, seekbar right under them, and play/pause
  * between previous and next, with Add to playlist ([onAddToPlaylist], disabled if null) and
  * the shuffle toggle at the ends. [onCollapse] slides it away; it is also dismissed by swiping
  * down (see [DismissibleScreen]). Swiping left or right skips a track, moving the art and title
@@ -172,6 +174,8 @@ fun FullPlayer(
         ArtBackdrop(rememberArtColors(track.art), Modifier.fillMaxSize())
         BoxWithConstraints(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
             val wide = maxWidth > maxHeight
+            // Below about this, two lines and the controls don't fit, so a short title gives its space back.
+            val titleSpace = maxHeight >= 256.dp + 56.dp * LocalDensity.current.fontScale
             Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
                 // Nudged so the icons, not their touch targets, line up with the art.
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
@@ -188,14 +192,15 @@ fun FullPlayer(
                         PlayerArt(swipe, onMenu, Modifier.fillMaxHeight())
                         Spacer(Modifier.size(32.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
-                            PlayerTitle(swipe)
-                            PlayerControls(playback, track, onAddToPlaylist)
+                            PlayerTitle(swipe, titleSpace, Alignment.CenterStart)
+                            // Moved, not closed up, so this centred column keeps its height and the title stays put.
+                            PlayerControls(playback, track, onAddToPlaylist, Modifier.offset(y = -ControlsGap))
                         }
                     }
                 } else {
                     TallPlayerLayout(
                         art = { PlayerArt(swipe, onMenu, Modifier) },
-                        title = { PlayerTitle(swipe) },
+                        title = { PlayerTitle(swipe, titleSpace, Alignment.TopStart) },
                         controls = { PlayerControls(playback, track, onAddToPlaylist) },
                         modifier = Modifier.weight(1f),
                     )
@@ -207,12 +212,11 @@ fun FullPlayer(
 
 /**
  * The full player's parts down a window taller than it's wide. The art is as big as it can be
- * in the height the rest leaves. Height left over from that goes above the art and above the
- * seekbar, and past their limits, around the lot, so it's never all at the bottom.
+ * in the height the rest leaves. Height left over from that goes above the art and below the
+ * controls, and past their limits, around the lot.
  *
- * What's left over is worked out as if the title took two lines, and the title sits under the
- * art and the controls at the bottom, so moving between a short title and a long one only
- * changes the gap between them, not where the art or the buttons are.
+ * The title sits under the art and the controls right under the title, which keeps the height
+ * of two lines, so moving between a short title and a long one moves none of it.
  */
 @Composable
 private fun TallPlayerLayout(
@@ -221,13 +225,12 @@ private fun TallPlayerLayout(
     controls: @Composable () -> Unit,
     modifier: Modifier,
 ) {
-    val titleLine = MaterialTheme.typography.headlineSmall.lineHeight
-    val bylineLine = MaterialTheme.typography.titleMedium.lineHeight
     Layout(listOf(art, title, controls), modifier) { (artItem, titleItem, controlsItem), constraints ->
         val width = constraints.maxWidth
         val height = constraints.maxHeight
         val artGap = ArtGap.roundToPx()
         val bottom = BottomGap.roundToPx()
+        // ControlsGap isn't placed, it's part of the room below the controls, which sizes the art.
         val fixed = artGap + ControlsGap.roundToPx() + bottom
         val titlePlaced = titleItem.single().measure(Constraints(width, width, 0, height))
         // The controls come first, as they shrink only when there's no other way.
@@ -237,16 +240,16 @@ private fun TallPlayerLayout(
         val side = minOf(width, MaxArtSize.roundToPx(), room).coerceAtLeast(0)
         val artPlaced = artItem.single().measure(Constraints.fixed(side, side))
 
-        val longTitle = titleLine.roundToPx() * 2 + bylineLine.roundToPx()
-        val spare = (room - side - (longTitle - titlePlaced.height).coerceAtLeast(0)).coerceAtLeast(0)
+        val spare = (room - side).coerceAtLeast(0)
         val aboveArt = minOf(spare * 3 / 5, MaxGapAboveArt.roundToPx())
-        val aboveSeekbar = minOf(spare * 2 / 5, MaxGapAboveSeekbar.roundToPx())
-        val around = (spare - aboveArt - aboveSeekbar) / 2
+        val belowControls = minOf(spare * 2 / 5, MaxGapBelowControls.roundToPx())
+        val around = (spare - aboveArt - belowControls) / 2
         layout(width, height) {
             val artTop = around + aboveArt
+            val titleTop = artTop + side + artGap
             artPlaced.place((width - side) / 2, artTop)
-            titlePlaced.place(0, artTop + side + artGap)
-            controlsPlaced.place(0, height - around - bottom - controlsPlaced.height)
+            titlePlaced.place(0, titleTop)
+            controlsPlaced.place(0, titleTop + titlePlaced.height)
         }
     }
 }
@@ -254,14 +257,17 @@ private fun TallPlayerLayout(
 /** The largest the full player's art gets, and the width of the buttons under it. */
 private val MaxArtSize = 480.dp
 
-/** Under the art, under the controls, and between the title and the controls, at the least. */
+/**
+ * Under the art, under the controls at the least, and between the seekbar and the buttons. The
+ * seekbar's touch target leaves 12dp above its thumb, which is the gap under the title.
+ */
 private val ArtGap = 24.dp
 private val BottomGap = 24.dp
 private val ControlsGap = 16.dp
 
-/** The most of what a tall window leaves over that goes above the art and above the seekbar. */
+/** The most of what a tall window leaves over that goes above the art and below the controls. */
 private val MaxGapAboveArt = 96.dp
-private val MaxGapAboveSeekbar = 64.dp
+private val MaxGapBelowControls = 64.dp
 
 /**
  * [onMenu], if given, is a long press on the art, with the buzz a long press has elsewhere.
@@ -293,30 +299,38 @@ private fun PlayerArt(swipe: TrackSwipeState, onMenu: (() -> Unit)?, modifier: M
     }
 }
 
+/** The title and byline. With [twoLineSpace], always that height, with a shorter one at [alignment]. */
 @Composable
-private fun PlayerTitle(swipe: TrackSwipeState) {
+private fun PlayerTitle(swipe: TrackSwipeState, twoLineSpace: Boolean, alignment: Alignment) {
     TrackSlides(swipe) { shown ->
-        Column(Modifier.fillMaxWidth()) {
-            Text(
-                shown?.title.orEmpty(),
-                style = MaterialTheme.typography.headlineSmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                shown?.byline().orEmpty(),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Box(Modifier.fillMaxWidth(), contentAlignment = alignment) {
+            // Empty text holds the height, as large text doesn't scale its line height evenly.
+            if (twoLineSpace) Column(Modifier.clearAndSetSemantics {}) {
+                Text("", style = MaterialTheme.typography.headlineSmall, minLines = 2)
+                Text("", style = MaterialTheme.typography.titleMedium)
+            }
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    shown?.title.orEmpty(),
+                    style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    shown?.byline().orEmpty(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: (() -> Unit)?) {
-    Column(verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
+private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: (() -> Unit)?, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
         SeekbarWithTimes(
             positionMs = { playback.positionMs },
             durationMs = track.durationMs,

@@ -56,6 +56,7 @@ import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.RecentsEditor
 import ng.kithso.android.data.SmartListEditor
 import ng.kithso.android.data.TagTarget
+import ng.kithso.android.data.Track
 import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.playback.origin
@@ -165,14 +166,43 @@ fun App(
     // Once it's sliding out, back is for what's beneath it.
     var smartLeaving by remember(smartTarget) { mutableStateOf(false) }
     val smartOpen = (smartTarget != null && !smartLeaving) || tagTarget != null
+    // A track list's tracks from tracks[index]: in an album opened from an album group, the
+    // whole group as the queue, from there, so it goes on into the albums after it and previous
+    // goes back into those before. An album no longer in its group plays by itself.
+    val playFrom: (CollectionRef, List<Track>, Int) -> Unit = { ref, tracks, index ->
+        val play = { queue: List<Track>, start: Int, from: CollectionRef ->
+            playback.play(queue, start, from.origin)
+            source.notePlayed(from)
+            onPlay()
+        }
+        val group = ref.parentGroup
+        if (group == null) {
+            play(tracks, index, ref)
+        } else {
+            scope.launch {
+                val queue = source.trackList(group)?.tracks.orEmpty()
+                val start = queue.indexOfFirst { it.uid == tracks[index].uid }
+                if (start >= 0) play(queue, start, group) else play(tracks, index, ref)
+            }
+        }
+    }
+    // A whole track list, in order or shuffled. An album's own Shuffle stays in the album, even
+    // from a group's page: the group has Shuffle tracks.
+    val playList: (CollectionRef, List<Track>, Boolean) -> Unit = { ref, tracks, shuffle ->
+        playback.setShuffle(shuffle)
+        if (ref.group != null && !shuffle) {
+            playFrom(ref, tracks, 0)
+        } else {
+            playback.play(tracks, -1, ref.origin)
+            source.notePlayed(ref)
+            onPlay()
+        }
+    }
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
         scope.launch {
             val tracks = source.trackList(ref)?.tracks ?: return@launch
             if (tracks.none { it.path != null }) return@launch
-            playback.setShuffle(shuffle)
-            playback.play(tracks, -1, ref.origin)
-            source.notePlayed(ref)
-            onPlay()
+            playList(ref, tracks, shuffle)
         }
     }
 
@@ -340,16 +370,9 @@ fun App(
                                 onPlay = { tracks, index ->
                                     // From an album, in order from the track, as the desktops do.
                                     if (page.ref.kind == CollectionRef.Kind.Album && settings.albumInOrder) playback.setShuffle(false)
-                                    playback.play(tracks, index, page.ref.origin)
-                                    source.notePlayed(page.ref)
-                                    onPlay()
+                                    playFrom(page.ref, tracks, index)
                                 },
-                                onPlayAll = { tracks, shuffle ->
-                                    playback.setShuffle(shuffle)
-                                    playback.play(tracks, -1, page.ref.origin)
-                                    source.notePlayed(page.ref)
-                                    onPlay()
-                                },
+                                onPlayAll = { tracks, shuffle -> playList(page.ref, tracks, shuffle) },
                                 onOpen = open,
                                 onBack = dismiss,
                             )

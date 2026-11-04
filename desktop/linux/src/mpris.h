@@ -13,11 +13,13 @@
 
 #include "musiccore/musiccore.h"
 
-/* Takes the bus name. Raise presents win; Quit quits gapp. Setting Shuffle calls
- * set_shuffle, and Volume set_volume (0 to 100), so main.c keeps them in settings.json as it
- * does the app's own changes. */
-void mpris_init(GtkApplication *gapp, GtkWindow *win, void (*set_shuffle)(void *user, gboolean on),
-                void (*set_volume)(void *user, int volume), void *user);
+/* Takes the bus name, with from_source (running from a checkout) a name of its own, so an
+ * installed copy that's running keeps its controls and this gets some too. Raise presents win;
+ * Quit quits gapp. Setting Shuffle calls set_shuffle, and Volume set_volume (0 to 100), so
+ * main.c keeps them in settings.json as it does the app's own changes. */
+void mpris_init(GtkApplication *gapp, GtkWindow *win, gboolean from_source,
+                void (*set_shuffle)(void *user, gboolean on), void (*set_volume)(void *user, int volume),
+                void *user);
 void mpris_free(void);
 
 /* A NULL uid shows nothing playing. cover_dir is the album folder, or NULL. */

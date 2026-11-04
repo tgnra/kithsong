@@ -12,7 +12,8 @@
  * do, showing their tracks in the track list. The header's menu (...) and a group tile's
  * right-click menu rename or delete it. Under the header, Play, Shuffle albums and Shuffle
  * tracks play the group's albums (app_play_album_group()), greyed out when none of them has
- * a file here.
+ * a file here. An album played from the track list here is played as part of the group too,
+ * going on into the albums after it (app_play_album()).
  *
  * An album dragged onto a manual group's tile is added to it, and in a manual group its
  * albums can be dragged into another order (drag.h). Adding, removing and moving albums put

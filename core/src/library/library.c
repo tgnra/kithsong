@@ -910,6 +910,11 @@ static mc_status list_tracks(mc_library *lib, const char *sql, const char *key, 
   return mc_library_read_tracks(lib, stmt, out);
 }
 
+mc_status mc_library_list_track(mc_library *lib, const char *track_uid, mc_track_list **out) {
+  static const char sql[] = TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.uid = ?";
+  return list_tracks(lib, sql, track_uid, out);
+}
+
 mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out) {
   static const char sql[] =
     TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.album_uid = ?"
@@ -926,6 +931,36 @@ mc_status mc_library_get_track(mc_library *lib, const char *track_uid, mc_track_
     st = MC_ERR_NOT_FOUND;
   }
   return st;
+}
+
+mc_status mc_library_list_albums_tracks(mc_library *lib, const char *const *album_uids, int count,
+                                        mc_track_list **out) {
+  if (!lib || !out || count < 0 || (count && !album_uids)) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_track_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  int cap = 0;
+  for (int a = 0; a < count; a++) {
+    mc_track_list *album = NULL;
+    mc_status st = mc_library_list_album_tracks(lib, album_uids[a], &album);
+    for (int i = 0; st == MC_OK && i < album->count; i++) {
+      mc_track_info *t = &album->items[i];
+      if (!t->path) continue;
+      if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      list->items[list->count++] = *t;
+      memset(t, 0, sizeof *t); /* the list owns its strings now */
+    }
+    mc_track_list_free(album);
+    if (st != MC_OK) {
+      mc_track_list_free(list);
+      return st;
+    }
+  }
+  *out = list;
+  return MC_OK;
 }
 
 mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out) {

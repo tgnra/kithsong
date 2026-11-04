@@ -439,6 +439,10 @@ gboolean playback_has_current(void) {
   return s.player && s.index >= 0 && s.index < s.count;
 }
 
+const char *playback_current_uid(void) {
+  return playback_has_current() ? s.items[s.index].uid : "";
+}
+
 gboolean playback_has_next(void) {
   return playback_has_current() && s.has_next;
 }

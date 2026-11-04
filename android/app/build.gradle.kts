@@ -88,4 +88,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     // Unit tests of what runs without a device, such as the smart list editor's rule model.
     testImplementation("junit:junit:4.13.2")
+    // Virtual time, for what waits on a timer.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }

@@ -50,6 +50,7 @@
 #include "move_library.h"
 #include "mpris.h"
 #include "musiccore/musiccore.h"
+#include "musiccore/source_run.h"
 #include "now_playing.h"
 #include "perf_ui.h"
 #include "playback.h"
@@ -881,13 +882,70 @@ static void add_shortcuts(app *a, GtkWidget *win) {
   gtk_widget_add_controller(win, controller);
 }
 
+/* The open group's albums' tracks with a file here, one album after another: the n albums of
+ * grid in the group's order, or if order isn't NULL, album order[i] in place i. NULL if there's
+ * none to list. Free with mc_track_list_free(). */
+static mc_track_list *group_tracks(app *a, GtkWidget *grid, int n, const int *order) {
+  const char **uids = g_new(const char *, n);
+  for (int i = 0; i < n; i++) uids[i] = album_grid_uid_at(grid, order ? order[i] : i);
+  mc_track_list *list = NULL;
+  if (mc_library_list_albums_tracks(a->lib, uids, n, &list) != MC_OK) list = NULL;
+  g_free(uids);
+  return list;
+}
+
+/* Plays list, the open group's (group_tracks()), from item start; or with start -1 from the
+ * first, which shuffled is any. Playing it puts the group first in the recents, as playing an
+ * album does. */
+static void play_group_tracks(app *a, const mc_track_list *list, int start) {
+  const char *group = album_groups_open_group();
+  playback_track *queue = g_new0(playback_track, (gsize)list->count);
+  for (int i = 0; i < list->count; i++) {
+    const mc_track_info *t = &list->items[i];
+    queue[i] = (playback_track){t->uid, t->path, t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED), t->artist,
+                                t->album, t->cover_dir, t->duration_ms};
+  }
+  playback_play(queue, list->count, start, MC_PLAY_CONTEXT_ALBUM_GROUP, group);
+  g_free(queue);
+  if (group && mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) recents_refresh(a);
+}
+
+/* An album shown in the track list, on its group's page: the whole group as the queue, from
+ * the album's track start (the list's index), or with start -1 its first, so previous and
+ * next see the albums either side. A track with no file here starts from the one before it,
+ * as app_play_album() does. FALSE, with nothing played, if none of the album is in the queue. */
+static gboolean play_group_from(app *a, const char *album, int start) {
+  GtkWidget *grid = album_groups_album_grid();
+  const char *track = NULL;
+  for (int i = start; i >= 0 && !track; i--) {
+    track_list_item t = track_list_item_at(i);
+    if (t.path) track = t.uid;
+  }
+  int albums = 0;
+  while (grid && album_grid_uid_at(grid, albums)) albums++;
+  if (!a->lib || !albums) return FALSE;
+  mc_track_list *list = group_tracks(a, grid, albums, NULL);
+  int first = -1;
+  for (int i = 0; list && i < list->count && first < 0; i++)
+    if (!strcmp(list->items[i].album_uid, album) && (!track || !strcmp(list->items[i].uid, track))) first = i;
+  if (first >= 0) play_group_tracks(a, list, first);
+  mc_track_list_free(list);
+  return first >= 0;
+}
+
 /* Plays the shown album or playlist in order, from track start on; or with start -1 from
  * the first track, which shuffled is any. Tracks with no file on this device are left out of
- * the queue. Playing it puts it first in the recents, as on Android and Windows. */
+ * the queue. Playing it puts it first in the recents, as on Android and Windows. An album on
+ * an album group's page plays as part of the group, on into its following albums
+ * (play_group_from()), but for playing it shuffled: that's the album's own Shuffle, and the
+ * group has Shuffle tracks. */
 void app_play_album(app *a, int start) {
   int n = track_list_count(), count = 0, first = start < 0 ? -1 : 0;
   AlbumItem *album = track_list_album();
   if (!album || !n) return;
+  if (a->view == APP_VIEW_ALBUM_GROUPS && album_groups_open_group() && !album->is_playlist && !album->is_group &&
+      (start >= 0 || !playback_shuffle()) && play_group_from(a, album->uid, start))
+    return;
   playback_track *queue = g_new0(playback_track, (gsize)n);
   for (int i = 0; i < n; i++) {
     track_list_item t = track_list_item_at(i);
@@ -907,7 +965,6 @@ void app_play_album(app *a, int start) {
 
 void app_play_album_group(app *a, app_group_play how) {
   GtkWidget *grid = album_groups_album_grid();
-  const char *group = album_groups_open_group();
   int albums = 0;
   while (grid && album_grid_uid_at(grid, albums)) albums++;
   if (!a->lib || !albums) return;
@@ -918,31 +975,13 @@ void app_play_album_group(app *a, app_group_play how) {
     order[i] = order[j];
     order[j] = t;
   }
-  GArray *queue = g_array_new(FALSE, FALSE, sizeof(playback_track));
-  mc_track_list **lists = g_new0(mc_track_list *, albums);
-  for (int k = 0; k < albums; k++) {
-    const char *uid = album_grid_uid_at(grid, order[k]);
-    if (!uid || mc_library_list_album_tracks(a->lib, uid, &lists[k]) != MC_OK) continue;
-    for (int i = 0; i < lists[k]->count; i++) {
-      const mc_track_info *t = &lists[k]->items[i];
-      if (!t->path) continue;
-      playback_track p = {t->uid, t->path, t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED), t->artist,
-                          t->album, t->cover_dir, t->duration_ms};
-      g_array_append_val(queue, p);
-    }
-  }
-  int count = (int)queue->len;
-  if (count) {
+  mc_track_list *list = group_tracks(a, grid, albums, order);
+  if (list && list->count) {
     set_shuffle(a, how == APP_PLAY_SHUFFLE_TRACKS);
-    playback_play((playback_track *)(void *)queue->data, count, how == APP_PLAY_SHUFFLE_TRACKS ? -1 : 0,
-                  MC_PLAY_CONTEXT_ALBUM_GROUP, group);
+    play_group_tracks(a, list, how == APP_PLAY_SHUFFLE_TRACKS ? -1 : 0);
   }
-  g_array_free(queue, TRUE);
-  for (int k = 0; k < albums; k++)
-    if (lists[k]) mc_track_list_free(lists[k]);
-  g_free(lists);
+  mc_track_list_free(list);
   g_free(order);
-  if (count && group && mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) recents_refresh(a);
 }
 
 /* --- Albums, playlists and tracks --- */
@@ -1188,6 +1227,13 @@ static void on_track_go_to_album(void *user, const char *album_uid, const char *
 
 static void on_track_go_to_artist(void *user, const char *artist_uid) {
   app_open_artist(user, artist_uid);
+}
+
+/* Where the now-playing strip's track is. Not during an import session, when the library
+ * mustn't change under it (see on_import_session()). */
+static mc_library *now_playing_library(void *user) {
+  app *a = user;
+  return gtk_widget_get_sensitive(a->sidebar) ? a->lib : NULL;
 }
 
 static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
@@ -1732,6 +1778,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
                                           on_track_delete, on_track_edit, on_reshuffle, on_track_go_to_album,
                                           on_track_go_to_artist, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
+  now_playing_set_track_menu(&tracks_cb, now_playing_library);
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
   adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);
 
@@ -1815,7 +1862,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   }
   mc_settings_free(settings);
 
-  mpris_init(gapp, a->win, on_shuffle, on_mpris_volume, a);
+  mpris_init(gapp, a->win, a->from_source, on_shuffle, on_mpris_volume, a);
   prune_art(a);
   restore_deleted(a);
   mc_perf_mark("window_created");
@@ -1860,32 +1907,42 @@ int main(int argc, char **argv) {
   set_strings_locale(); /* before the player's and import's threads look anything up */
 
   /* Settings in ~/.config/kithsong say where the library folder is. With none yet, the first
-   * run asks, once the window is up. */
-  char *settings_dir = g_build_filename(g_get_user_config_dir(), "kithsong", NULL);
-  char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
-  mc_settings_move_old_dir(old_dir, settings_dir);
-  g_free(old_dir);
+   * run asks, once the window is up. Run from a checkout, settings are in kithsong-debug
+   * beside it, and the library is one in the temp folder (musiccore/source_run.h). */
+  int from_source = mc_source_run();
+  char *settings_dir = g_build_filename(g_get_user_config_dir(), from_source ? MC_SOURCE_SETTINGS_DIR : "kithsong", NULL);
+  if (!from_source) { /* the old folder is the installed app's to take */
+    char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
+    mc_settings_move_old_dir(old_dir, settings_dir);
+    g_free(old_dir);
+  }
   /* Settings' Reset Kithsong… marked the folder and quit: clear it before anything opens it. */
   char *left = NULL;
-  mc_status reset = mc_settings_reset_if_requested(settings_dir, NULL, &left);
+  mc_status reset = mc_source_reset_if_requested(settings_dir, from_source, NULL, &left);
   if (reset != MC_OK)
     a.reset_failed = mc_format_alloc(mc_str(MC_STR_RESET_APP_FAILED), MC_S(left ? left : settings_dir),
                                      MC_S(mc_status_str(reset)));
   mc_free(left);
   mc_settings *settings = NULL;
-  a.first_run = mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings);
+  mc_status loaded = mc_settings_load(settings_dir, &settings);
+  /* If that fails the first run asks, with no Music folder to offer. */
+  if (loaded == MC_OK && from_source) mc_source_library_prepare(settings_dir, settings);
+  a.first_run = loaded == MC_OK && !mc_settings_library_dir(settings);
   /* As early as it can be known; the start itself comes from the system. */
   mc_perf_set_enabled(mc_settings_bool(settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
   mc_perf_mark_at("main_entered", main_us);
   mc_perf_mark("settings_loaded");
   a.settings_dir = settings_dir;
+  a.from_source = from_source;
   a.art_dir = g_build_filename(settings_dir, MC_PLAYLIST_ART_CACHE_DIR, NULL);
   const char *library_dir = mc_settings_library_dir(settings);
   if (!library_dir || mc_library_open(library_dir, &a.lib) != MC_OK) a.lib = NULL;
   mc_settings_free(settings);
   mc_perf_mark("library_opened");
 
-  AdwApplication *gapp = adw_application_new("ng.kithso.Kithsong", G_APPLICATION_DEFAULT_FLAGS);
+  /* Its own id from a checkout, or this would only bring an installed copy forward. */
+  AdwApplication *gapp = adw_application_new(from_source ? "ng.kithso.Kithsong.Debug" : "ng.kithso.Kithsong",
+                                             G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(gapp, "activate", G_CALLBACK(on_activate), &a);
   g_signal_connect(gapp, "shutdown", G_CALLBACK(on_shutdown), &a);
   int status = g_application_run(G_APPLICATION(gapp), argc, argv);

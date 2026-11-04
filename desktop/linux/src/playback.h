@@ -89,6 +89,8 @@ mc_player_state playback_state(void);
  * still adding). */
 gboolean playback_has_current(void);
 gboolean playback_has_next(void);
+/* The current track's uid, or "" with none or for one without. Valid until the queue changes. */
+const char *playback_current_uid(void);
 /* What's queued so far: how many tracks, and track i's uid ("" past the end). */
 int playback_queue_count(void);
 const char *playback_queue_uid(int i);
