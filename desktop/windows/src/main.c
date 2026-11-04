@@ -776,8 +776,8 @@ static void play_items(int n, track_list_item (*item_at)(int), int start) {
   } else if (!album_grid_selection(uid)) {
     uid[0] = '\0';
   }
-  mc_play_context context = !uid[0]                     ? MC_PLAY_CONTEXT_UNKNOWN
-                            : kind == MC_RECENT_ARTIST  ? MC_PLAY_CONTEXT_ARTIST
+  mc_play_context context = !uid[0]                      ? MC_PLAY_CONTEXT_UNKNOWN
+                            : kind == MC_RECENT_ARTIST   ? MC_PLAY_CONTEXT_ARTIST
                             : kind == MC_RECENT_PLAYLIST ? MC_PLAY_CONTEXT_PLAYLIST
                                                          : MC_PLAY_CONTEXT_ALBUM;
   if (count) playback_play(queue, count, first, context, uid);
