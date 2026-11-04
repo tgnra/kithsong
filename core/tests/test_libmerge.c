@@ -491,7 +491,9 @@ static void test_merge_credits(const char *root, int old_copy) {
     for (int i = 0; i < 3; i++)
       sqlite3_create_function(copy, fns[i], 0, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, sql_remote, NULL, NULL);
     /* Triggers first: they name the columns. */
-    CHECK(exec(copy, "DROP TRIGGER mc_log_ins_albums_no_scrobble; DROP TRIGGER mc_log_upd_albums_no_scrobble;"
+    CHECK(exec(copy, "DROP TRIGGER mc_log_ins_albums_art_chosen; DROP TRIGGER mc_log_upd_albums_art_chosen;"
+                     "ALTER TABLE albums DROP COLUMN art_chosen;"
+                     "DROP TRIGGER mc_log_ins_albums_no_scrobble; DROP TRIGGER mc_log_upd_albums_no_scrobble;"
                      "DROP TRIGGER mc_log_ins_albums_mix; DROP TRIGGER mc_log_upd_albums_mix;"
                      "ALTER TABLE albums DROP COLUMN no_scrobble; ALTER TABLE albums DROP COLUMN mix;"
                      "DROP TRIGGER mc_log_ins_tracks_artist_credit; DROP TRIGGER mc_log_upd_tracks_artist_credit;"

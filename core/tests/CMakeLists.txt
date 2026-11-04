@@ -44,7 +44,7 @@ set_tests_properties(test_sync_confirm PROPERTIES TIMEOUT 300)
 kithsong_test(test_sync_budget)
 set_tests_properties(test_sync_budget PROPERTIES TIMEOUT 300)
 kithsong_test(test_sync_files)
-target_link_libraries(test_sync_files PRIVATE mbedcrypto)  # hashes the files it compares
+target_link_libraries(test_sync_files PRIVATE mbedcrypto mc_stb)  # hashes the files it compares, makes covers
 set_tests_properties(test_sync_files PROPERTIES TIMEOUT 300)
 kithsong_test(test_sync_lossy)
 target_link_libraries(test_sync_lossy PRIVATE mbedcrypto)  # hashes the files it compares
@@ -58,6 +58,7 @@ kithsong_test(test_sync_merge)
 set_tests_properties(test_sync_merge PROPERTIES TIMEOUT 300)
 kithsong_test(test_tags)
 kithsong_test(test_edit)
+target_link_libraries(test_edit PRIVATE mc_stb)  # makes covers
 kithsong_test(test_match)
 kithsong_test(test_search_keys)
 kithsong_test(test_credit)
@@ -70,6 +71,7 @@ kithsong_test(test_import_discs)
 kithsong_test(test_import_single)
 kithsong_test(test_import_credit)
 kithsong_test(test_import_cover)
+target_link_libraries(test_import_cover PRIVATE mc_stb)  # makes a cover the user chooses
 kithsong_test(test_artist_refresh)
 kithsong_test(test_import_zip)
 target_link_libraries(test_import_zip PRIVATE mc_miniz)  # builds the zips it imports

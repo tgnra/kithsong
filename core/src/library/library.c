@@ -191,6 +191,9 @@ static const char *const k_migrations[] = {
    * its tracks. Never written to files. */
   "ALTER TABLE albums ADD COLUMN no_scrobble INTEGER NOT NULL DEFAULT 0;"
   "ALTER TABLE albums ADD COLUMN mix INTEGER NOT NULL DEFAULT 0;",
+  /* v16: the cover the user chose for an album (musiccore/edit.h), as its SHA-256. Import and
+   * downloads leave such a cover alone, and sync brings it to devices that have another. */
+  "ALTER TABLE albums ADD COLUMN art_chosen TEXT;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -199,7 +202,7 @@ static const char *const k_artist_cols[] = {"name", "sort_name", "mb_artistid", 
 static const char *const k_album_cols[] = {"title", "artist_uid", "year", "original_year",
                                            "disc_total", "mb_albumid", "mb_releasegroupid",
                                            "art_hash", "artist_credit", "no_scrobble", "mix",
-                                           NULL};
+                                           "art_chosen", NULL};
 /* Only ever set by hand, so a new row's 0 says nothing: logged, it would beat a flag set
  * earlier on a duplicate of the album once the two merge (merge.h). */
 static const char *const k_album_flags[] = {"no_scrobble", "mix", NULL};
@@ -314,6 +317,7 @@ static const struct {
   {13, "entity IN ('track_artists', 'album_artists')"
        " OR (entity IN ('tracks', 'albums') AND field = 'artist_credit')"},
   {15, "entity = 'albums' AND field IN ('no_scrobble', 'mix')"},
+  {16, "entity = 'albums' AND field = 'art_chosen'"},
 };
 
 static mc_status apply_newly_known(mc_library *lib, int from) {

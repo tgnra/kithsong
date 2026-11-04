@@ -12,19 +12,24 @@
  *   - "Discs/CD1": files in a disc folder take the 800 px cover of the album folder above
  *     it over the disc folder's own 200 px one, and nothing is downloaded.
  *
- * The images are PNGs with no pixels: what's measured is the header.
+ * The images are PNGs with no pixels: what's measured is the header. But for the last test: a
+ * cover the user chose (real, as that's decoded) outlasts an import that brings its own, or one
+ * that would otherwise download art because the folder has none.
  */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/library_internal.h"
+#include "musiccore/edit.h"
 #include "musiccore/musiccore.h"
 #include "tagger/coverart.h"
 #include "tagger/musicbrainz.h"
 #include "tagger/tag_io.h"
 #include "util/platform.h"
 #include "test.h"
+#include "test_image.h"
 
 enum { KEEP, UPGRADE, SAME, BARE, DISCS, ALBUMS };
 
@@ -293,6 +298,70 @@ static char *album_cover(mc_library *lib, const char *title) {
   return cover;
 }
 
+/* Takes track Two of the album with file path rel off the library, so an import brings it back. */
+static void forget_two(mc_library *lib, const char *rel, const char *abs) {
+  char sql[1024];
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  snprintf(sql, sizeof sql,
+           "DELETE FROM tracks WHERE uid = (SELECT track_uid FROM files WHERE path = '%s');", rel);
+  CHECK(sqlite3_exec(mc_library_db(lib), sql, NULL, NULL, NULL) == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+  CHECK(mc_remove(abs) == MC_OK);
+}
+
+static void test_chosen(mc_library *lib, const char *root, const char *lib_dir) {
+  char album[MC_UID_STRLEN] = "", src[1200], path[1400], two[1400], want[65], have[65];
+  mc_album_list *list = NULL;
+  CHECK(mc_library_list_albums(lib, &list) == MC_OK);
+  for (int i = 0; list && i < list->count; i++)
+    if (!strcmp(list->items[i].title, "Bare")) snprintf(album, sizeof album, "%s", list->items[i].uid);
+  mc_album_list_free(list);
+  CHECK(album[0]);
+  test_image mine = test_image_make(0, 1, 32);
+  CHECK(mc_album_art_set(lib, album, mine.data, mine.len) == MC_OK);
+  char *cover = album_cover(lib, "Bare");
+  CHECK(cover && mc_coverart_hash(cover, want) == MC_OK);
+  mc_free(cover);
+
+  /* Its second track comes again, from a folder with a big cover of its own. */
+  const char *rel = "Band/Bare (2010)/02 Two.wav";
+  snprintf(two, sizeof two, "%s/%s", lib_dir, rel);
+  snprintf(src, sizeof src, "%s/again", root);
+  CHECK(write_album(src, BARE, NULL));
+  unsigned char big[PNG_LEN];
+  png(big, 800, 6);
+  snprintf(path, sizeof path, "%s/Bare/cover.png", src);
+  CHECK(write_file(path, big, PNG_LEN));
+  mc_import_options opts = {.threshold = 0, .fetch_art = 1};
+  const char *paths[] = {src};
+  for (int gone = 0; gone < 2; gone++) {
+    /* The second time this device has lost the file, as it hasn't got it yet when the choice was
+     * made elsewhere: the folder still gets no other, and nothing's downloaded. */
+    if (gone) {
+      cover = album_cover(lib, "Bare");
+      CHECK(cover && mc_remove(cover) == MC_OK);
+      mc_free(cover);
+    }
+    forget_two(lib, rel, two);
+    mc_mutex_lock(&g_lock);
+    int fetches = g_fetches[BARE];
+    mc_mutex_unlock(&g_lock);
+    mc_import *imp = NULL;
+    CHECK(mc_import_start(lib, paths, 1, &opts, NULL, NULL, &imp) == MC_OK);
+    CHECK(imp && wait_done(imp, 1));
+    mc_import_free(imp);
+    CHECK(mc_file_exists(two));
+    mc_mutex_lock(&g_lock);
+    CHECK(g_fetches[BARE] == fetches);
+    mc_mutex_unlock(&g_lock);
+    cover = album_cover(lib, "Bare");
+    if (gone) CHECK(cover == NULL);
+    else CHECK(cover && mc_coverart_hash(cover, have) == MC_OK && !strcmp(have, want));
+    mc_free(cover);
+  }
+  free(mine.data);
+}
+
 int main(int argc, char **argv) {
   CHECK(mc_init() == MC_OK);
   mc_mutex_init(&g_lock);
@@ -372,6 +441,8 @@ int main(int argc, char **argv) {
   free(pic);
   snprintf(path, sizeof path, "%s/Same/cover.png", src);
   CHECK(file_equals(path, small, PNG_LEN));
+
+  test_chosen(lib, root, lib_dir);
 
   mc_library_close(lib);
   mc_coverart_set_fake(NULL);

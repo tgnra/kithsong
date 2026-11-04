@@ -287,7 +287,8 @@ static mc_status upsert_album(sqlite3 *db, const mc_db_album *al, const char *ar
     stmt = prepare(db, "UPDATE albums SET title = ?2, artist_uid = ?3, year = ?4, original_year = ?5,"
                        " disc_total = ?6, mb_albumid = coalesce(?7, mb_albumid),"
                        " mb_releasegroupid = coalesce(?8, mb_releasegroupid),"
-                       " art_hash = coalesce(?9, art_hash) WHERE uid = ?1");
+                       " art_hash = CASE WHEN art_chosen IS NULL THEN coalesce(?9, art_hash)"
+                       " ELSE art_hash END WHERE uid = ?1");
   } else {
     mc_status st = mc_uid_new(uid);
     if (st != MC_OK) return st;
@@ -505,11 +506,46 @@ int mc_import_db_is_track_at(mc_library *lib, const char *path, const char *mb_r
   return found;
 }
 
+int mc_import_db_chosen_art(mc_library *lib, const mc_db_album *al, char uid[MC_UID_STRLEN],
+                            char hash[65]) {
+  if (al->no_album) return 0;
+  const mc_db_artist *artist = al->credit_count ? &al->credit[0].artist : &al->artist;
+  /* As upsert_album() and upsert_artist() find them. */
+  sqlite3_stmt *stmt =
+    prepare(mc_library_db(lib),
+            "SELECT uid, art_chosen FROM albums WHERE art_chosen IS NOT NULL AND (uid = ?1"
+            " OR (?1 IS NULL AND mb_albumid = ?2)"
+            " OR (?1 IS NULL AND title = ?3 COLLATE NOCASE AND (mb_albumid IS NULL OR ?2 IS NULL)"
+            "     AND artist_uid IN (SELECT uid FROM artists WHERE mb_artistid = ?5"
+            "       OR (name = ?4 COLLATE NOCASE AND (mb_artistid IS NULL OR ?5 IS NULL)))))"
+            " ORDER BY mb_albumid = ?2 DESC LIMIT 1");
+  if (!stmt) return 0;
+  bind_text(stmt, 1, al->existing_uid);
+  bind_text(stmt, 2, al->mb_albumid);
+  bind_text(stmt, 3, al->title && *al->title ? al->title : "Unknown Album");
+  bind_text(stmt, 4, artist->name && *artist->name ? artist->name : "Unknown Artist");
+  bind_text(stmt, 5, artist->mb_artistid);
+  int found = 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *u = (const char *)sqlite3_column_text(stmt, 0);
+    const char *h = (const char *)sqlite3_column_text(stmt, 1);
+    if (u && h && strlen(u) < MC_UID_STRLEN && strlen(h) < 65) {
+      strcpy(uid, u);
+      strcpy(hash, h);
+      found = 1;
+    }
+  }
+  sqlite3_finalize(stmt);
+  return found;
+}
+
 /* Deletes album_uid if a track moving to album into took the last of it. into then takes on
- * its flags (edit.h): the same music, matched anew, is still what the user flagged. */
+ * its flags and chosen cover (edit.h): the same music, matched anew, is still what the user
+ * flagged. */
 static mc_status delete_if_empty(sqlite3 *db, const char *album_uid, const char *into) {
   sqlite3_stmt *stmt = prepare(db, "UPDATE albums SET no_scrobble = max(albums.no_scrobble, o.no_scrobble),"
-                                   " mix = max(albums.mix, o.mix) FROM albums o"
+                                   " mix = max(albums.mix, o.mix),"
+                                   " art_chosen = coalesce(albums.art_chosen, o.art_chosen) FROM albums o"
                                    " WHERE albums.uid = ?2 AND o.uid = ?1"
                                    " AND NOT EXISTS (SELECT 1 FROM tracks WHERE album_uid = ?1)");
   if (!stmt) return MC_ERR_DB;

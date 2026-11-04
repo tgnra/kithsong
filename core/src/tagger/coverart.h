@@ -37,6 +37,21 @@ mc_status mc_coverart_fetch(const char *mb_albumid, const char *mb_releasegroupi
 /* Saves the image as <dir>/cover.<ext>, replacing any older one. */
 mc_status mc_coverart_save(const char *dir, const mc_buffer *img, const char *ext);
 
+/* mc_coverart_save(), and every other cover.* of dir goes (mc_coverart_drop_others()): a new
+ * cover.png wouldn't otherwise show while a cover.jpg was there. */
+mc_status mc_coverart_replace(const char *dir, const mc_buffer *img, const char *ext);
+
+/* Deletes dir's cover images called cover, any case, other than name. Those called folder or
+ * front are the user's, and rank below cover.*, so they stay. */
+void mc_coverart_drop_others(const char *dir, const char *name);
+
+/* "jpg" or "png" by img's first bytes; NULL if it's neither. */
+const char *mc_coverart_ext(const mc_buffer *img);
+
+/* Whether img can be an album's cover (see mc_album_art_check()): it's decoded, in full. *ext
+ * is set as by mc_coverart_ext(). */
+mc_status mc_coverart_check(const mc_buffer *img, const char **ext);
+
 /* The picture embedded in audio_path, in *img (free with mc_buffer_free) with *ext "jpg"
  * or "png". MC_ERR_NOT_FOUND if it has none, MC_ERR_FORMAT if it's not a JPEG or PNG of
  * sensible size. */

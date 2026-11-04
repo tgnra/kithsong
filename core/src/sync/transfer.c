@@ -1045,9 +1045,10 @@ static int read_small(const char *path, unsigned char **out, size_t *len) {
 
 /* An album's cover as this device has it: the image file in a folder holding the album's
  * files (whatever mc_coverart_find() takes: cover, folder or front, any case). Originals'
- * folders are looked at first. Pictures embedded in the files are never used. */
-static int album_cover(mc_library *lib, const char *album, unsigned char **img, size_t *len,
-                       const char **ext) {
+ * folders are looked at first. Pictures embedded in the files are never used. With sha256, only
+ * the image of that hash will do. */
+static int album_cover(mc_library *lib, const char *album, const char *sha256, unsigned char **img,
+                       size_t *len, const char **ext) {
   sqlite3_stmt *stmt;
   *img = NULL;
   if (sqlite3_prepare_v2(mc_library_db(lib),
@@ -1082,7 +1083,13 @@ static int album_cover(mc_library *lib, const char *album, unsigned char **img, 
     last_dir = dir;
     char *cover = mc_coverart_find(dir);
     if (cover && read_small(cover, img, len)) {
-      if ((*ext = image_ext(*img, *len)) != NULL) found = 1;
+      unsigned char digest[32];
+      char sha[SHA_STRLEN] = "";
+      if (sha256) {
+        mbedtls_sha256(*img, *len, digest, 0);
+        hex(digest, sha);
+      }
+      if ((!sha256 || !strcmp(sha, sha256)) && (*ext = image_ext(*img, *len)) != NULL) found = 1;
       else free(*img);
     }
     free(cover);
@@ -1094,20 +1101,22 @@ static int album_cover(mc_library *lib, const char *album, unsigned char **img, 
   return found;
 }
 
-/* COVER_REQ {"album"}: COVER_HDR {"album", "ext", "size", "sha256"} and the bytes as
- * FILE_DATA, or FILE_ERR {"album", "reason"} when this device has no cover for it. */
+/* COVER_REQ {"album", "sha256"?}: COVER_HDR {"album", "ext", "size", "sha256"} and the bytes as
+ * FILE_DATA, or FILE_ERR {"album", "reason"} when this device has no cover for it, or none of
+ * that hash. */
 static mc_status serve_cover(mc_session *s, const unsigned char *payload, size_t len) {
   yyjson_doc *req = parse(payload, len);
   if (!req) return MC_ERR_FORMAT;
-  char album[MC_UID_STRLEN] = "";
-  const char *a = obj_str(req, "album");
+  char album[MC_UID_STRLEN] = "", sha256[SHA_STRLEN] = "";
+  const char *a = obj_str(req, "album"), *w = obj_str(req, "sha256");
   if (is_uid(a)) memcpy(album, a, MC_UID_STRLEN);
+  if (is_sha(w)) memcpy(sha256, w, SHA_STRLEN);
   yyjson_doc_free(req);
 
   unsigned char *img = NULL;
   size_t size = 0;
   const char *ext = NULL;
-  int have = album[0] && album_cover(s->conn->lib, album, &img, &size, &ext);
+  int have = album[0] && album_cover(s->conn->lib, album, sha256[0] ? sha256 : NULL, &img, &size, &ext);
   yyjson_mut_val *root;
   yyjson_mut_doc *doc = new_doc(&root);
   if (!doc) {
@@ -1235,8 +1244,8 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
 
 int (*mc_transfer_test_corrupt)(const char *track) = NULL;
 
-static mc_status ask_cover(mc_session *s, const char *album);
-static mc_status recv_cover(mc_session *s, const char *album, const char *dir);
+static mc_status ask_cover(mc_session *s, const char *album, const char *sha256);
+static mc_status recv_cover(mc_session *s, const char *album, const char *dir, const char *sha256);
 
 /* The folder of a received file (abs) gets the peer's cover as soon as the file is in, when
  * the album has art (albums.art_hash) and the folder no cover yet, so the album shows with
@@ -1642,7 +1651,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     head = (head + 1) % FETCH_AHEAD;
     nq--;
     if (a.i < 0) {
-      st = recv_cover(s, a.album, a.dir);
+      st = recv_cover(s, a.album, a.dir, NULL);
       free(a.dir);
       continue;
     }
@@ -1665,7 +1674,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
         c.dir = NULL;
       }
     }
-    if (c.dir && st == MC_OK) st = ask_cover(s, c.album);
+    if (c.dir && st == MC_OK) st = ask_cover(s, c.album, NULL);
     if (c.dir && st == MC_OK) q[(head + nq++) % FETCH_AHEAD] = c;
     else free(c.dir);
     free(landed);
@@ -1681,18 +1690,20 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
 
 /* --- Covers, asking --- */
 
-/* COVER_REQ for album. */
-static mc_status ask_cover(mc_session *s, const char *album) {
+/* COVER_REQ for album; with sha256, for that image and no other. */
+static mc_status ask_cover(mc_session *s, const char *album, const char *sha256) {
   yyjson_mut_val *root;
   yyjson_mut_doc *doc = new_doc(&root);
   if (!doc) return MC_ERR_NOMEM;
   yyjson_mut_obj_add_strcpy(doc, root, "album", album);
+  if (sha256) yyjson_mut_obj_add_strcpy(doc, root, "sha256", sha256);
   return send_doc(s->ch, MC_MSG_COVER_REQ, doc);
 }
 
-/* The answer to ask_cover(s, album), saving a good one as dir's cover. The return value is
- * only for errors that end the session. */
-static mc_status recv_cover(mc_session *s, const char *album, const char *dir) {
+/* The answer to ask_cover(s, album, sha256), saving a good one as dir's cover, in place of any
+ * cover there. A peer from before sha256 ignores it and sends what it has, which is dropped. The
+ * return value is only for errors that end the session. */
+static mc_status recv_cover(mc_session *s, const char *album, const char *dir, const char *sha256) {
   uint8_t type;
   const unsigned char *payload;
   size_t len;
@@ -1735,7 +1746,7 @@ static mc_status recv_cover(mc_session *s, const char *album, const char *dir) {
     if (strcmp(got, sha) != 0)
       fprintf(stderr, "musiccore: sync: the cover of %s from %s failed its checksum\n", album,
               s->peer_uid);
-    else if (ext && mc_coverart_save(dir, &buf, ext) == MC_OK)
+    else if (ext && (!sha256 || !strcmp(got, sha256)) && mc_coverart_replace(dir, &buf, ext) == MC_OK)
       s->covers_received++;
   }
   free(img);
@@ -1745,14 +1756,17 @@ static mc_status recv_cover(mc_session *s, const char *album, const char *dir) {
 /* Asks the peer for the cover of each folder here that holds files of an album with art
  * (albums.art_hash) but has no cover. A folder usually gets one as its first file arrives
  * (cover_needed()); this catches up folders whose files were already here, or a device that
- * synced before covers were sent. Nothing else is outstanding by now, so each is asked for
- * and answered in turn. */
+ * synced before covers were sent. A folder with a cover keeps it, unless the album has one
+ * the user chose (albums.art_chosen) and this isn't it: then that image is asked for, in every
+ * session until a peer has it. Only those covers are hashed each session, so the rest of a
+ * library costs no reading. Nothing else is outstanding by now, so each is asked for and
+ * answered in turn. */
 static mc_status fetch_covers(mc_session *s) {
   if (!s->peer_covers) return MC_OK; /* an older peer would end the session */
   mc_library *lib = s->conn->lib;
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
-                         "SELECT al.uid, f.path FROM albums al"
+                         "SELECT al.uid, f.path, al.art_chosen FROM albums al"
                          " JOIN tracks t ON t.album_uid = al.uid"
                          " JOIN files f ON f.track_uid = t.uid"
                          " WHERE al.art_hash IS NOT NULL"
@@ -1761,6 +1775,7 @@ static mc_status fetch_covers(mc_session *s) {
     return MC_ERR_DB;
   typedef struct need {
     char album[MC_UID_STRLEN];
+    char chosen[SHA_STRLEN]; /* "" if the user didn't choose it */
     char *dir;
   } need;
   need *ns = NULL;
@@ -1768,6 +1783,7 @@ static mc_status fetch_covers(mc_session *s) {
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     const char *album = (const char *)sqlite3_column_text(stmt, 0);
     const char *rel = (const char *)sqlite3_column_text(stmt, 1);
+    const char *chosen = (const char *)sqlite3_column_text(stmt, 2);
     char *dir = is_uid(album) && rel ? mc_library_abspath(lib, rel) : NULL;
     char *sep = dir ? strrchr(dir, MC_PATH_SEP) : NULL;
     if (sep) *sep = '\0';
@@ -1781,15 +1797,22 @@ static mc_status fetch_covers(mc_session *s) {
     }
     ns = more;
     memcpy(ns[n].album, album, MC_UID_STRLEN);
+    ns[n].chosen[0] = '\0';
+    if (is_sha(chosen)) memcpy(ns[n].chosen, chosen, SHA_STRLEN);
     ns[n++].dir = dir;
   }
   sqlite3_finalize(stmt);
   mc_status st = MC_OK;
   for (int i = 0; i < n; i++) {
     char *cover = st == MC_OK ? mc_coverart_find(ns[i].dir) : NULL;
-    int ask = st == MC_OK && !cover && mc_file_exists(ns[i].dir);
-    if (ask) st = ask_cover(s, ns[i].album);
-    if (ask && st == MC_OK) st = recv_cover(s, ns[i].album, ns[i].dir);
+    char have[SHA_STRLEN];
+    /* With none yet any cover will do; a chosen one takes its place when it comes. */
+    const char *sha256 = cover && ns[i].chosen[0] &&
+                       (mc_coverart_hash(cover, have) != MC_OK || strcmp(have, ns[i].chosen))
+                         ? ns[i].chosen : NULL;
+    int ask = st == MC_OK && (!cover || sha256) && mc_file_exists(ns[i].dir);
+    if (ask) st = ask_cover(s, ns[i].album, sha256);
+    if (ask && st == MC_OK) st = recv_cover(s, ns[i].album, ns[i].dir, sha256);
     free(cover);
     free(ns[i].dir);
   }

@@ -204,6 +204,7 @@ typedef struct merge_ctx {
   sqlite3 *old; /* the set-aside copy, read-only */
   int credits;  /* the copy has artist credits (v13) */
   int flags;    /* the copy has album flags (v15) */
+  int chosen;   /* the copy has chosen covers (v16) */
   const mc_kept_file *kept;
   int nkept;
   uid_map tracks, albums, playlists, groups, smart;
@@ -984,6 +985,34 @@ static mc_status restore_flags(merge_ctx *x) {
   return st;
 }
 
+/* And the cover the user chose, unless the kept library's album has one of its own. */
+static mc_status restore_chosen(merge_ctx *x) {
+  if (!x->chosen) return MC_OK;
+  sqlite3_stmt *old, *set;
+  if (sqlite3_prepare_v2(x->old, "SELECT uid, art_chosen FROM albums WHERE art_chosen IS NOT NULL",
+                         -1, &old, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  if (sqlite3_prepare_v2(x->db,
+                         "UPDATE albums SET art_chosen = ?2, art_hash = ?2"
+                         " WHERE uid = ?1 AND art_chosen IS NULL",
+                         -1, &set, NULL) != SQLITE_OK) {
+    sqlite3_finalize(old);
+    return MC_ERR_DB;
+  }
+  mc_status st = MC_OK;
+  while (st == MC_OK && sqlite3_step(old) == SQLITE_ROW) {
+    const char *to = map_get(&x->albums, (const char *)sqlite3_column_text(old, 0));
+    if (!to) continue;
+    sqlite3_reset(set);
+    sqlite3_bind_text(set, 1, to, -1, SQLITE_STATIC);
+    sqlite3_bind_text(set, 2, (const char *)sqlite3_column_text(old, 1), -1, SQLITE_STATIC);
+    if (sqlite3_step(set) != SQLITE_DONE) st = MC_ERR_DB;
+  }
+  sqlite3_finalize(set);
+  sqlite3_finalize(old);
+  return st;
+}
+
 static mc_status merge_rest(merge_ctx *x, mc_libmerge_progress_fn fn, void *user) {
   emit(fn, user, MC_MERGE_PHASE_LISTS, 0, 1);
   mc_status st = mc_library_begin_write(x->lib);
@@ -995,6 +1024,7 @@ static mc_status merge_rest(merge_ctx *x, mc_libmerge_progress_fn fn, void *user
   if (st == MC_OK) st = merge_recents(x);
   if (st == MC_OK) st = restore_added(x);
   if (st == MC_OK) st = restore_flags(x);
+  if (st == MC_OK) st = restore_chosen(x);
   if (st == MC_OK) st = mc_library_commit(x->lib);
   if (st != MC_OK) {
     fprintf(stderr, "musiccore: merge: lists failed: %s\n", sqlite3_errmsg(x->db));
@@ -1032,6 +1062,9 @@ mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
   /* And one set aside before v15 has no album flags. */
   x.flags = st == MC_OK && count_rows(x.old, "SELECT count(*) FROM pragma_table_info('albums')"
                                              " WHERE name = 'mix'") == 1;
+  /* Nor one before v16 any chosen covers. */
+  x.chosen = st == MC_OK && count_rows(x.old, "SELECT count(*) FROM pragma_table_info('albums')"
+                                              " WHERE name = 'art_chosen'") == 1;
   if (st == MC_OK) st = merge_tracks(&x, progress, user);
   if (st == MC_OK) st = merge_rest(&x, progress, user);
   /* Done, even if some tracks failed: their files stay in the folder, out of the library. */

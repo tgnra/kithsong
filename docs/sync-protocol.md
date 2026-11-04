@@ -462,7 +462,7 @@ Message types:
 | 0x25 | `FILE_ERR`    | `{"track", "reason"}`, sent instead of `FILE_HDR` |
 | 0x26 | `PREPARE_REQ` | `{"device", "tracks": [uid], "kbps"}`: transcode into the cache for a device that is offline, or (`device` the receiver itself) ahead of its `FILE_REQ`s; no reply |
 | 0x27 | `FILES_DONE`  | `{}`: the receiver has asked for everything it wants; the turn passes |
-| 0x28 | `COVER_REQ`   | `{"album"}`; only to a peer whose `HELLO` has `"covers": true` |
+| 0x28 | `COVER_REQ`   | `{"album", "sha256"?}`; only to a peer whose `HELLO` has `"covers": true` |
 | 0x29 | `COVER_HDR`   | `{"album", "ext", "size", "sha256"}`, then the image as `FILE_DATA`; or `FILE_ERR {"album", "reason"}` instead |
 | 0x2A | `FILES_PLAN`  | `{"files", "bytes"}`: how many tracks the receiver's turn will `FILE_REQ`, and their estimated size; only when both `HELLO`s have `"files_plan": true` |
 | 0x40 | `PAIR_HELLO`  | pairing only; see [Pairing](#pairing) |
@@ -1035,7 +1035,23 @@ rows it took.
      `sha256` and saves the image as `cover.jpg` or `cover.png` by its magic bytes. A
      device whose peer's `HELLO` lacks `"covers"` (older versions end the session on an
      unknown message) skips this. A folder that already has a cover keeps it, even when
-     the album's `art_hash` has since changed.
+     the album's `art_hash` has since changed, unless the user chose the album's cover.
+   - Chosen covers. `albums.art_chosen` is a logged field, the SHA-256 of an image the user
+     chose (see "A cover the user chose" in tagging-rules.md), and the cover a device shows
+     must be that image. So fetch_covers hashes the cover of each folder of such an album
+     (only those: a library's other covers aren't read), and where it differs sends
+     `COVER_REQ` with `sha256` set to it. A peer answers with a cover of that hash from any
+     folder of the album, or `FILE_ERR` `missing`. The image replaces the folder's cover, a
+     `cover.*` of another name going too, or it could go on being found first. A folder with
+     no cover asks without `sha256`, as any would, since an older image beats none until the
+     chosen one comes. An image that isn't what `sha256` asked for is dropped, as a peer of an
+     older version ignores the field and sends what it has; such a peer keeps its own cover,
+     and gets the chosen one once upgraded. A device that can't get it yet, as no peer in the
+     session has it, keeps what it has and asks again next session. If two devices choose
+     apart, the later `art_chosen` wins as any field does, on both. A later import elsewhere
+     that writes `art_hash` before hearing of the choice doesn't change this: `art_chosen`
+     says which image is meant, and `art_hash` is then out of step until the next choice,
+     which only playlist pictures' cache keys would notice.
    - On a mismatch it deletes the part file and retries once from another source, then
      counts the track as corrupt. Within a session the only source is the peer, so the
      retry asks it again, behind the requests already outstanding; the track is tried anew

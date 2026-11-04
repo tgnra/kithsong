@@ -11,13 +11,14 @@
 #include <stb_image.h>
 #include <yyjson.h>
 
+#include "musiccore/edit.h"
 #include "tagger/match.h"
 #include "tagger/tag_io.h"
 #include "util/platform.h"
 
 #define CAA_API "https://coverartarchive.org"
 #define ITUNES_API "https://itunes.apple.com/search"
-#define MAX_IMAGE_BYTES (16u * 1024u * 1024u)
+#define MAX_IMAGE_BYTES ((size_t)MC_ALBUM_ART_MAX_BYTES)
 
 /* Apple doesn't publish a limit; about 20 requests a minute is the commonly cited one. */
 static mc_ratelimit g_itunes_rate;
@@ -32,11 +33,28 @@ void mc_coverart_global_init(void) {
   mc_ratelimit_init(&g_itunes_rate, 3000);
 }
 
-static const char *image_ext(const mc_buffer *b) {
+const char *mc_coverart_ext(const mc_buffer *b) {
   const unsigned char *p = (const unsigned char *)b->data;
   if (b->len > 3 && p[0] == 0xFF && p[1] == 0xD8 && p[2] == 0xFF) return "jpg";
   if (b->len > 8 && memcmp(p, "\x89PNG\r\n\x1a\n", 8) == 0) return "png";
   return NULL;
+}
+
+mc_status mc_coverart_check(const mc_buffer *img, const char **ext) {
+  *ext = NULL;
+  const char *found = img->data && img->len <= MAX_IMAGE_BYTES ? mc_coverart_ext(img) : NULL;
+  if (!found) return MC_ERR_FORMAT;
+  int w = 0, h = 0, comp = 0;
+  const stbi_uc *bytes = (const stbi_uc *)img->data;
+  /* The header first, so a small file saying it's enormous isn't given the memory. */
+  if (!stbi_info_from_memory(bytes, (int)img->len, &w, &h, &comp) || w <= 0 || h <= 0 ||
+      w > MC_ALBUM_ART_MAX_SIDE || h > MC_ALBUM_ART_MAX_SIDE)
+    return MC_ERR_FORMAT;
+  stbi_uc *pixels = stbi_load_from_memory(bytes, (int)img->len, &w, &h, &comp, 1);
+  if (!pixels) return MC_ERR_FORMAT;
+  stbi_image_free(pixels);
+  *ext = found;
+  return MC_OK;
 }
 
 /* GETs url and keeps the body only if it is a reasonably sized JPEG or PNG. */
@@ -45,7 +63,7 @@ static mc_status get_image(const char *url, mc_buffer *img, const char **ext,
   long http = 0;
   mc_status st = mc_http_get_cancel(url, img, &http, cancel, NULL, 0);
   if (st != MC_OK) return st;
-  if (http == 200 && img->len <= MAX_IMAGE_BYTES && (*ext = image_ext(img))) return MC_OK;
+  if (http == 200 && img->len <= MAX_IMAGE_BYTES && (*ext = mc_coverart_ext(img))) return MC_OK;
   mc_buffer_free(img);
   return http == 404 || http == 200 ? MC_ERR_NOT_FOUND : MC_ERR_NET;
 }
@@ -199,6 +217,38 @@ mc_status mc_coverart_save(const char *dir, const mc_buffer *img, const char *ex
   return st;
 }
 
+typedef struct cover_drop {
+  const char *dir, *keep;
+} cover_drop;
+
+static void on_drop_entry(void *user, const char *name, int is_dir) {
+  cover_drop *d = user;
+  if (is_dir || !strcmp(name, d->keep)) return;
+  for (int i = 0; i < 3; i++) { /* k_cover_names' cover.* */
+    if (!equals_nocase(name, k_cover_names[i])) continue;
+    size_t len = strlen(d->dir) + strlen(name) + 2;
+    char *path = malloc(len);
+    if (path) {
+      snprintf(path, len, "%s%c%s", d->dir, MC_PATH_SEP, name);
+      mc_clear_read_only(path);
+      mc_remove(path);
+    }
+    free(path);
+    break;
+  }
+}
+
+void mc_coverart_drop_others(const char *dir, const char *name) {
+  cover_drop d = {dir, name};
+  mc_list_dir(dir, on_drop_entry, &d);
+}
+
+mc_status mc_coverart_replace(const char *dir, const mc_buffer *img, const char *ext) {
+  mc_status st = mc_coverart_save(dir, img, ext);
+  if (st == MC_OK) mc_coverart_drop_others(dir, !strcmp(ext, "png") ? "cover.png" : "cover.jpg");
+  return st;
+}
+
 mc_status mc_coverart_read_embedded(const char *audio_path, mc_buffer *img, const char **ext) {
   unsigned char *data;
   size_t len;
@@ -207,7 +257,7 @@ mc_status mc_coverart_read_embedded(const char *audio_path, mc_buffer *img, cons
   mc_status st = mc_tags_read_picture(audio_path, &data, &len);
   if (st != MC_OK) return st;
   mc_buffer pic = {(char *)data, len};
-  if (len > MAX_IMAGE_BYTES || !(*ext = image_ext(&pic))) {
+  if (len > MAX_IMAGE_BYTES || !(*ext = mc_coverart_ext(&pic))) {
     free(data);
     return MC_ERR_FORMAT;
   }

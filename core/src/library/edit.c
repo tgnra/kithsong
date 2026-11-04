@@ -20,6 +20,7 @@
 #include "library/edit_internal.h"
 #include "musiccore/edit.h"
 
+#include <ctype.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -367,6 +368,7 @@ typedef struct job {
   char *dest; /* where it's going: the same, for one only tagged */
   char *tmp;  /* its new copy, beside it */
   char *bak;  /* the name it has during the swap */
+  int fresh;  /* there's nothing at rel yet: a cover for a folder with none */
   int tagged;
   mc_tags tags; /* what to write, if tagged */
   char sha[MC_SHA256_STRLEN];     /* its row's */
@@ -621,19 +623,21 @@ static mc_status prepare_job(mc_library *lib, job *j, int *unusable) {
 
 /* --- The swap --- */
 
-/* The jobs as meta's edit_swap has them: state, then a line of paths for each. */
+/* The jobs as meta's edit_swap has them: state, then a line of paths for each, and "new" after
+ * them for a fresh one. */
 static char *journal_text(const plan *p, const char *state) {
   size_t len = strlen(state) + 2;
   for (int i = 0; i < p->count; i++) {
     const job *j = &p->jobs[i];
-    len += strlen(j->rel) + strlen(j->dest) + strlen(j->tmp) + strlen(j->bak) + 5;
+    len += strlen(j->rel) + strlen(j->dest) + strlen(j->tmp) + strlen(j->bak) + 9;
   }
   char *out = malloc(len);
   if (!out) return NULL;
   size_t n = (size_t)snprintf(out, len, "%s\n", state);
   for (int i = 0; i < p->count; i++) {
     const job *j = &p->jobs[i];
-    n += (size_t)snprintf(out + n, len - n, "%s\t%s\t%s\t%s\n", j->rel, j->dest, j->tmp, j->bak);
+    n += (size_t)snprintf(out + n, len - n, "%s\t%s\t%s\t%s%s\n", j->rel, j->dest, j->tmp, j->bak,
+                          j->fresh ? "\tnew" : "");
   }
   return out;
 }
@@ -654,7 +658,7 @@ static int undo_jobs(mc_library *lib, const plan *p) {
   int all = 1;
   for (int i = p->count - 1; i >= 0; i--) {
     const job *j = &p->jobs[i];
-    if (rel_exists(lib, j->tmp) || !rel_exists(lib, j->bak)) continue;
+    if (rel_exists(lib, j->tmp) || (!j->fresh && !rel_exists(lib, j->bak))) continue;
     char *dest = mc_library_abspath(lib, j->dest), *tmp = mc_library_abspath(lib, j->tmp);
     if (dest && tmp && mc_file_exists(dest)) mc_rename(dest, tmp, 0);
     free(dest);
@@ -704,6 +708,7 @@ static mc_status swap_files(mc_library *lib, plan *p) {
   swap_renames = 0;
   for (int i = 0; i < p->count; i++) {
     job *j = &p->jobs[i];
+    if (j->fresh) continue;
     mc_status st = swap_rename(lib, j->rel, j->bak);
     if (st == MC_ERR_IO && file_open(lib, j->rel)) st = MC_ERR_IN_USE;
     if (st != MC_OK) return st;
@@ -907,13 +912,13 @@ void mc_edit_recover(mc_library *lib) {
     char *start = line + 1;
     line = strchr(start, '\n');
     if (line) *line = '\0';
-    char *field[4];
+    char *field[5];
     int n = 0;
-    for (char *f = start; f && n < 4; n++) {
+    for (char *f = start; f && n < 5; n++) {
       field[n] = f;
       if ((f = strchr(f, '\t'))) *f++ = '\0';
     }
-    job *more = n == 4 ? realloc(p.jobs, (size_t)(p.count + 1) * sizeof *more) : NULL;
+    job *more = n >= 4 ? realloc(p.jobs, (size_t)(p.count + 1) * sizeof *more) : NULL;
     if (!more) {
       ok = 0;
       break;
@@ -925,6 +930,7 @@ void mc_edit_recover(mc_library *lib) {
     j->dest = mc_strdup(field[1]);
     j->tmp = mc_strdup(field[2]);
     j->bak = mc_strdup(field[3]);
+    j->fresh = n == 5;
     if (!j->rel || !j->dest || !j->tmp || !j->bak) ok = 0;
   }
   if (ok && (undo ? undo_jobs(lib, &p) : finish_jobs(lib, &p, 0)))
@@ -1387,6 +1393,250 @@ mc_status mc_album_tags_set(mc_library *lib, const char *album_uid, const mc_alb
   mb_release_clear(&rel);
   album_row_clear(&cur);
   return st;
+}
+
+/* --- Album art --- */
+
+typedef struct strs {
+  char **items;
+  int count;
+} strs;
+
+static void strs_clear(strs *l) {
+  for (int i = 0; i < l->count; i++) free(l->items[i]);
+  free(l->items);
+  memset(l, 0, sizeof *l);
+}
+
+static int strs_has(const strs *l, const char *s) {
+  for (int i = 0; i < l->count; i++)
+    if (!strcmp(l->items[i], s)) return 1;
+  return 0;
+}
+
+static int strs_equal(const strs *a, const strs *b) {
+  if (a->count != b->count) return 0;
+  for (int i = 0; i < a->count; i++)
+    if (strcmp(a->items[i], b->items[i])) return 0;
+  return 1;
+}
+
+/* The folders, relative, that hold a file of the album here, inside the library folder. A row
+ * whose file is gone doesn't count, or the swap's pruning could take a cover's folder with it. */
+static mc_status art_folders(mc_library *lib, const char *album_uid, strs *out) {
+  sqlite3_stmt *stmt = prepare(lib, "SELECT f.path FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                                    " WHERE t.album_uid = ?1 ORDER BY f.source_file_uid IS NOT NULL, f.path");
+  if (!stmt) return MC_ERR_DB;
+  bind_str(stmt, 1, album_uid);
+  mc_status st = MC_OK;
+  while (st == MC_OK && sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *rel = (const char *)sqlite3_column_text(stmt, 0);
+    char *folder = rel ? folder_of(rel) : NULL;
+    if (!folder) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    char *abs = *folder && !strs_has(out, folder) ? mc_transfer_deletable_path(lib, rel) : NULL;
+    if (abs && mc_file_exists(abs)) {
+      char **more = realloc(out->items, (size_t)(out->count + 1) * sizeof *more);
+      if (more) {
+        out->items = more;
+        out->items[out->count++] = folder;
+        folder = NULL;
+      } else {
+        st = MC_ERR_NOMEM;
+      }
+    }
+    free(abs);
+    free(folder);
+  }
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) strs_clear(out);
+  return st;
+}
+
+static int named_cover(const char *name) {
+  for (int i = 0; i < 6; i++)
+    if (tolower((unsigned char)name[i]) != "cover."[i]) return 0;
+  return 1;
+}
+
+/* The job that puts a new cover in folder: dest takes the place of what's there. A cover called
+ * something else (cover.jpg, for a new cover.png) is the one set aside, unless dest is taken as
+ * well, when the other goes after the commit. folder.jpg and front.jpg stay: they rank below. */
+static mc_status art_job(mc_library *lib, const char *folder, const char *ext, job *j) {
+  char name[16];
+  snprintf(name, sizeof name, "cover.%s", ext);
+  if (!(j->dest = join_path(folder, name))) return MC_ERR_NOMEM;
+  if (rel_exists(lib, j->dest)) {
+    j->rel = mc_strdup(j->dest);
+    return j->rel ? MC_OK : MC_ERR_NOMEM;
+  }
+  char *dir = mc_library_abspath(lib, folder);
+  char *found = dir ? mc_coverart_find(dir) : NULL;
+  const char *sep = found ? strrchr(found, MC_PATH_SEP) : NULL;
+  if (sep && named_cover(sep + 1)) {
+    j->rel = join_path(folder, sep + 1);
+  } else {
+    j->rel = mc_strdup(j->dest);
+    j->fresh = 1;
+  }
+  free(found);
+  free(dir);
+  return j->rel ? MC_OK : MC_ERR_NOMEM;
+}
+
+/* Writes the image as j's copy. */
+static mc_status art_copy(mc_library *lib, const job *j, const mc_buffer *img) {
+  if (++tag_writes == mc_edit_test_fail_tags) return MC_ERR_IO;
+  char *tmp = mc_library_abspath(lib, j->tmp);
+  FILE *f = tmp ? mc_fopen(tmp, "wb") : NULL;
+  mc_status st = tmp ? MC_ERR_IO : MC_ERR_NOMEM;
+  if (f) {
+    int ok = fwrite(img->data, 1, img->len, f) == img->len;
+    if (fclose(f) == 0 && ok) st = MC_OK;
+  }
+  free(tmp);
+  return st;
+}
+
+/* One try, by the edit's own steps: the copies with no lock held, then in one transaction the
+ * row and the renames. *again is set if the album's folders changed meanwhile. */
+static mc_status art_attempt(mc_library *lib, const char *album_uid, const mc_buffer *img,
+                             const char *ext, int *again) {
+  *again = 0;
+  strs folders = {0}, now = {0};
+  plan p = {0};
+  char hash[MC_ART_HASH_LEN];
+  mc_status st = art_folders(lib, album_uid, &folders);
+  if (st == MC_OK && !folders.count) st = MC_ERR_NOT_FOUND;
+  if (st == MC_OK && !(p.jobs = calloc((size_t)folders.count, sizeof *p.jobs))) st = MC_ERR_NOMEM;
+  for (int i = 0; st == MC_OK && i < folders.count; i++) {
+    p.count = i + 1;
+    st = art_job(lib, folders.items[i], ext, &p.jobs[i]);
+    if (st == MC_OK && !p.jobs[i].fresh && file_open(lib, p.jobs[i].rel)) st = MC_ERR_IN_USE;
+  }
+  if (st == MC_OK) st = name_jobs(&p);
+  if (st == MC_OK) st = journal_write(lib, &p, "undo");
+  if (st != MC_OK) goto done;
+
+  tag_writes = 0;
+  for (int i = 0; st == MC_OK && i < p.count; i++) st = art_copy(lib, &p.jobs[i], img);
+  if (st == MC_OK) {
+    char *tmp = mc_library_abspath(lib, p.jobs[0].tmp);
+    st = tmp ? mc_coverart_hash(tmp, hash) : MC_ERR_NOMEM;
+    free(tmp);
+  }
+  if (st == MC_OK) st = mc_library_begin_write(lib);
+  if (st != MC_OK) {
+    discard_copies(lib, &p);
+    goto done;
+  }
+  st = art_folders(lib, album_uid, &now);
+  if (st == MC_OK && !strs_equal(&folders, &now)) *again = 1;
+  if (st == MC_OK && !*again) {
+    sqlite3_stmt *stmt = prepare(lib, "UPDATE albums SET art_hash = ?2, art_chosen = ?2 WHERE uid = ?1");
+    if (stmt) {
+      bind_str(stmt, 1, album_uid);
+      bind_str(stmt, 2, hash);
+    }
+    st = step_done(stmt);
+    if (st == MC_OK && !sqlite3_changes(mc_library_db(lib))) st = MC_ERR_NOT_FOUND;
+  }
+  if (st != MC_OK || *again) {
+    mc_library_rollback(lib);
+    discard_copies(lib, &p);
+    goto done;
+  }
+  st = swap_and_commit(lib, &p);
+  for (int i = 0; st == MC_OK && i < folders.count; i++) {
+    char *dir = mc_library_abspath(lib, folders.items[i]);
+    const char *slash = strrchr(p.jobs[i].dest, '/');
+    if (dir && slash) mc_coverart_drop_others(dir, slash + 1);
+    free(dir);
+  }
+done:
+  plan_clear(&p);
+  strs_clear(&folders);
+  strs_clear(&now);
+  return st;
+}
+
+mc_status mc_album_art_get(mc_library *lib, const char *album_uid, char **path) {
+  if (!lib || !album_uid || !path) return MC_ERR_INVALID_ARG;
+  *path = NULL;
+  strs folders = {0};
+  mc_status st = art_folders(lib, album_uid, &folders);
+  if (st == MC_OK && !folders.count) st = MC_ERR_NOT_FOUND;
+  for (int i = 0; st == MC_OK && i < folders.count && !*path; i++) {
+    char *dir = mc_library_abspath(lib, folders.items[i]);
+    if (dir) *path = mc_coverart_find(dir);
+    free(dir);
+  }
+  strs_clear(&folders);
+  return st;
+}
+
+mc_status mc_album_art_check(const void *image, size_t len) {
+  if (!image) return MC_ERR_INVALID_ARG;
+  mc_buffer img = {(char *)image, len};
+  const char *ext;
+  return mc_coverart_check(&img, &ext);
+}
+
+mc_status mc_album_art_check_file(const char *path) {
+  if (!path) return MC_ERR_INVALID_ARG;
+  mc_buffer img;
+  mc_status st = mc_coverart_read_file(path, &img);
+  if (st != MC_OK) return st;
+  st = mc_album_art_check(img.data, img.len);
+  mc_buffer_free(&img);
+  return st;
+}
+
+mc_status mc_album_art_set(mc_library *lib, const char *album_uid, const void *image, size_t len) {
+  if (!lib || !album_uid || !image) return MC_ERR_INVALID_ARG;
+  mc_buffer img = {(char *)image, len};
+  const char *ext;
+  mc_status st = mc_coverart_check(&img, &ext);
+  if (st != MC_OK) return st;
+  mc_library *own = NULL;
+  if ((st = mc_library_open_internal(mc_library_dir(lib), &own)) != MC_OK) return st;
+  if (g_ready) mc_mutex_lock(&g_lock);
+  int again = 1;
+  for (int i = 0; st == MC_OK && again && i < MAX_ATTEMPTS; i++)
+    st = art_attempt(own, album_uid, &img, ext, &again);
+  if (st == MC_OK && again) st = MC_ERR_IN_USE; /* something keeps moving it */
+  if (st == ABANDONED) st = MC_ERR_IO;
+  if (g_ready) mc_mutex_unlock(&g_lock);
+  mc_library_close(own);
+  return st;
+}
+
+mc_status mc_album_art_set_file(mc_library *lib, const char *album_uid, const char *path) {
+  if (!lib || !album_uid || !path) return MC_ERR_INVALID_ARG;
+  mc_buffer img;
+  mc_status st = mc_coverart_read_file(path, &img);
+  if (st != MC_OK) return st;
+  st = mc_album_art_set(lib, album_uid, img.data, img.len);
+  mc_buffer_free(&img);
+  return st;
+}
+
+char *mc_edit_chosen_cover(mc_library *lib, const char *album_uid, const char *hash) {
+  strs folders = {0};
+  char *found = NULL;
+  if (art_folders(lib, album_uid, &folders) != MC_OK) return NULL;
+  for (int i = 0; i < folders.count && !found; i++) {
+    char *dir = mc_library_abspath(lib, folders.items[i]);
+    char *cover = dir ? mc_coverart_find(dir) : NULL;
+    char have[MC_ART_HASH_LEN];
+    if (cover && mc_coverart_hash(cover, have) == MC_OK && !strcmp(have, hash)) found = cover;
+    else free(cover);
+    free(dir);
+  }
+  strs_clear(&folders);
+  return found;
 }
 
 /* --- Artists --- */

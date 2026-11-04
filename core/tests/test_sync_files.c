@@ -34,7 +34,9 @@
 #include "sync/sync_internal.h"
 #include "sync/transfer.h"
 #include "tagger/import_db.h"
+#include "musiccore/edit.h"
 #include "test.h"
+#include "test_image.h"
 #include "util/platform.h"
 
 #define WAIT_MS 60000
@@ -1033,6 +1035,65 @@ int main(int argc, char **argv) {
     CHECK(!lib_file_exists(&b, "Low/Other (1996)/cover.jpg"));
     CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
     CHECK(rb.covers_received == 0 && ra.covers_received == 0);
+
+    /* The user chooses a cover on A, a PNG, where B has that JPEG: B's replaced by it, the JPEG
+     * going so the PNG is what's found, and a later session has nothing to do. */
+    test_image mine = test_image_make(1, 5, 48);
+    CHECK(mc_album_art_set(a.lib, things, mine.data, mine.len) == MC_OK);
+    char png_a[2048], png_b[2048], hpa[65], hpb[65];
+    snprintf(png_a, sizeof png_a, "%s/Low/Things (1994)/cover.png", a.libdir);
+    snprintf(png_b, sizeof png_b, "%s/Low/Things (1994)/cover.png", b.libdir);
+    CHECK(!mc_file_exists(cover_a));
+    file_sha(png_a, hpa);
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.covers_received == 1 && ra.covers_received == 0);
+    CHECK(!mc_file_exists(cover_b));
+    file_sha(png_b, hpb);
+    CHECK(hpa[0] && !strcmp(hpa, hpb));
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(rb.covers_received == 0 && ra.covers_received == 0);
+    free(mine.data);
+
+    /* And back from B, as a JPEG again. */
+    test_image again = test_image_make(0, 6, 48);
+    CHECK(mc_album_art_set(b.lib, things, again.data, again.len) == MC_OK);
+    file_sha(cover_b, hb);
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(ra.covers_received == 1);
+    file_sha(cover_a, ha);
+    CHECK(hb[0] && !strcmp(ha, hb));
+    CHECK(!mc_file_exists(png_a));
+    free(again.data);
+
+    /* A peer whose cover isn't the chosen image isn't taken for having it: A's file is swapped
+     * for another behind the row's back, and B keeps what it has until the real one comes. */
+    test_image third = test_image_make(0, 7, 48);
+    char row[65], before[65];
+    CHECK(mc_album_art_set(a.lib, things, third.data, third.len) == MC_OK);
+    file_sha(cover_a, row);
+    file_sha(cover_b, before);
+    f = mc_fopen(cover_a, "wb"); /* not the image the row says */
+    CHECK(f != NULL);
+    if (f) {
+      fwrite("\xFF\xD8\xFF\xE0 stale", 1, 10, f);
+      fclose(f);
+    }
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.covers_received == 0);
+    file_sha(cover_b, hb);
+    CHECK(!strcmp(hb, before));
+    /* A's cover is back: the next session brings it. */
+    f = mc_fopen(cover_a, "wb");
+    CHECK(f != NULL);
+    if (f) {
+      fwrite(third.data, 1, third.len, f);
+      fclose(f);
+    }
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.covers_received == 1);
+    file_sha(cover_b, hb);
+    CHECK(!strcmp(hb, row));
+    free(third.data);
   }
 
   /* A track with no album arrives in its artist's folder, as import files it, and goes again
