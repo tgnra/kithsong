@@ -2097,7 +2097,8 @@ static BOOL claim_instance(const char *dir, const app_args *args) {
 /* --- Library location --- */
 
 /* Asks where the library should live instead: the folder picker, titled title_id, opening
- * in current; with empty_only it takes only an empty folder. Returns a malloc'd UTF-8 path,
+ * in current. It takes an empty folder or one that holds a library; with empty_only only an
+ * empty one. Returns a malloc'd UTF-8 path,
  * or NULL if the user gave up. (The first run asks with first_run.c.) */
 static char *choose_library_dir(HWND owner, const char *current, enum mc_str_id title_id, BOOL empty_only) {
   for (;;) {
@@ -2105,6 +2106,13 @@ static char *choose_library_dir(HWND owner, const char *current, enum mc_str_id 
     if (!dir) return NULL;
     if (empty_only && !mc_folder_is_empty(dir)) {
       MessageBoxW(owner, mc_wstr(MC_STR_LIBRARY_NOT_EMPTY), mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
+      free(dir);
+      continue;
+    }
+    if (!mc_folder_fits_library(dir)) { /* a library would be made among other things */
+      wchar_t text[MAX_PATH + 256];
+      mc_wformat(text, MAX_PATH + 256, mc_str(MC_STR_FIRST_RUN_NOT_EMPTY), MC_S(dir));
+      MessageBoxW(owner, text, mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
       free(dir);
       continue;
     }

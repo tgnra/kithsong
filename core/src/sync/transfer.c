@@ -64,6 +64,7 @@
 #include "sync/filepipe.h"
 #include "sync/hashahead.h"
 #include "sync/libmerge.h"
+#include "sync/orphans.h"
 #include "sync/plan.h"
 #include "tagger/coverart.h"
 #include "tagger/organize.h"
@@ -87,8 +88,6 @@
 #define MIN_TRANSCODE_FREE ((int64_t)256 << 20)
 /* How much a plan's estimates are trusted, as bytes of files that came out just as estimated. */
 #define SIZES_PRIOR ((int64_t)16 << 20)
-/* Unknown files younger than this are left alone: an import may be about to record them. */
-#define UNKNOWN_GRACE_MS ((int64_t)60 * 60 * 1000)
 #define SHA_STRLEN 65
 /* For a files row f of track t: whether f was made from an older file of the track. */
 #define STALE_SQL \
@@ -2186,73 +2185,24 @@ static void drop_stale_on_archive(mc_session *s) {
   rows_free(rows, n);
 }
 
-typedef struct unknown_scan {
-  mc_library *lib;
-  int64_t before_ms;
-  char **paths;
-  int n, cap;
-} unknown_scan;
-
-static int on_library_file(void *user, const char *path) {
-  unknown_scan *u = user;
-  char *rel = mc_library_relpath(u->lib, path);
-  if (!rel) return 0;
-  char ext[16];
-  extension(rel, ext);
-  int64_t size, mtime;
-  int candidate = (audio_ext(ext) || !strcmp(ext, "part")) && strncmp(rel, "library.db", 10) != 0 &&
-                  mc_file_info(path, &size, &mtime) == MC_OK && mtime < u->before_ms &&
-                  !path_known(u->lib, rel);
-  if (candidate && u->n == u->cap) {
-    int grown = u->cap ? u->cap * 2 : 16;
-    char **more = realloc(u->paths, (size_t)grown * sizeof *more);
-    if (more) {
-      u->paths = more;
-      u->cap = grown;
-    }
-  }
-  if (candidate && u->n < u->cap) {
-    u->paths[u->n++] = rel;
-    return 0;
-  }
-  free(rel);
-  return 0;
+/* The sweep (orphans.h). Only after a session that went all the way: a track that failed its
+ * checksum means this device's picture of its files isn't the whole one yet. */
+static int session_stopping(void *user) {
+  return mc_sync_is_stopping(user);
 }
 
-/* Audio files (and stale .part files) in the library folder that no files row knows:
- * removed, or on an archive only reported. An audio file may be the user's own, put there by
- * hand, so it goes to the trash where they can get it back; where there's no trash it can
- * use (e.g. a file system it can't make a .Trash-$uid on) it's deleted, as are
- * .part files, which are only ever half a copy. Android has no trash, so there every one is
- * deleted without trying mc_trash(): a trash under $HOME there would be one nobody can open,
- * keeping the files out of sight but taking up space. Files younger than UNKNOWN_GRACE_MS
- * are left for an import that may be about to record them. */
-static void reconcile_unknown(mc_session *s, int archive) {
-  mc_library *lib = s->conn->lib;
-  unknown_scan u = {lib, (int64_t)mc_wall_ms() - UNKNOWN_GRACE_MS, NULL, 0, 0};
-  mc_walk(mc_library_dir(lib), on_library_file, &u);
-  for (int i = 0; i < u.n; i++) {
-    s->files_unknown++;
-    if (archive) {
-      fprintf(stderr, "musiccore: sync: unknown file in the library folder: %s\n", u.paths[i]);
-    } else {
-      char ext[16];
-      extension(u.paths[i], ext);
-#ifdef __ANDROID__
-      int trash = 0;
-#else
-      int trash = strcmp(ext, "part") != 0;
-#endif
-      char *abs = deletable_path(lib, u.paths[i]);
-      if (abs && ((trash && mc_transfer_trash(abs) == MC_OK) || mc_remove(abs) == MC_OK)) {
-        s->files_deleted++;
-        prune_dirs(lib, u.paths[i]);
-      }
-      free(abs);
-    }
-    free(u.paths[i]);
+static void sweep_orphans(mc_session *s, int archive) {
+  if (s->files_corrupt) {
+    fprintf(stderr, "musiccore: orphans: not sweeping: %d files failed their checksum\n",
+            s->files_corrupt);
+    return;
   }
-  free(u.paths);
+  mc_orphans_args a = {s->conn->lib, s->sync->config_dir, MC_ORPHANS_ARCHIVE_ONLY_REPORTS && archive, 1,
+                       session_stopping, s->sync};
+  mc_orphans_result r;
+  mc_orphans_sweep(&a, &r);
+  s->files_unknown += r.orphans;
+  s->files_deleted += r.removed;
 }
 
 /* Checks every files row. Failed copies from peers are deleted with their rows so they're
@@ -2434,7 +2384,7 @@ void mc_transfer_end(mc_session *s, int ok) {
     else drop_stale_on_archive(s);
     /* Files the user took back out of the trash would look unknown: their rows first. */
     mc_delete_restore(lib, s->sync->config_dir, NULL, NULL);
-    reconcile_unknown(s, x->plan->archive);
+    sweep_orphans(s, x->plan->archive);
     mc_sync_trace("end: reconcile %llu ms", (unsigned long long)(mc_mono_ms() - t0));
     mc_verify_result v;
     verify_files(lib, 0, &v);

@@ -252,6 +252,76 @@ mc_status mc_walk(const char *path, mc_walk_fn fn, void *user) {
   return st;
 }
 
+static int64_t filetime_ms(FILETIME t) {
+  uint64_t t100ns = ((uint64_t)t.dwHighDateTime << 32) | t.dwLowDateTime;
+  return (int64_t)(t100ns / 10000u - UINT64_C(11644473600000));
+}
+
+static mc_status tree_dir(const wchar_t *dir, mc_tree_fn fn, void *user) {
+  size_t len = wcslen(dir);
+  char *here = narrow(dir);
+  if (!here) return MC_ERR_NOMEM;
+  int fail = mc_tree_test_fail && strstr(here, mc_tree_test_fail);
+  free(here);
+  if (fail) return MC_ERR_IO;
+  wchar_t *pattern = malloc((len + 3) * sizeof *pattern);
+  if (!pattern) return MC_ERR_NOMEM;
+  memcpy(pattern, dir, len * sizeof *pattern);
+  wcscpy(pattern + len, L"\\*");
+  if (!(pattern = extend(pattern))) return MC_ERR_NOMEM;
+  WIN32_FIND_DATAW fd;
+  HANDLE h = FindFirstFileExW(pattern, FindExInfoBasic, &fd, FindExSearchNameMatch, NULL,
+                              FIND_FIRST_EX_LARGE_FETCH);
+  free(pattern);
+  if (h == INVALID_HANDLE_VALUE) return MC_ERR_IO;
+
+  mc_status st = MC_OK;
+  do {
+    if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+    /* Links, junctions, cloud placeholders: none of them is ever gone into or reported. */
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+    size_t name_len = wcslen(fd.cFileName);
+    wchar_t *full = malloc((len + name_len + 2) * sizeof *full);
+    if (!full) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    memcpy(full, dir, len * sizeof *full);
+    full[len] = L'\\';
+    memcpy(full + len + 1, fd.cFileName, (name_len + 1) * sizeof *full);
+    char *utf8 = narrow(full);
+    if (!utf8) {
+      st = MC_ERR_NOMEM;
+    } else {
+      int64_t written = filetime_ms(fd.ftLastWriteTime), made = filetime_ms(fd.ftCreationTime);
+      int is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+      mc_tree_entry e = {utf8, is_dir, (fd.dwFileAttributes & FILE_ATTRIBUTE_SYSTEM) != 0,
+                         written > made ? written : made, written};
+      int r = fn(user, &e);
+      if (r < 0) st = MC_ERR_IN_USE;
+      else if (is_dir && r == 0) st = tree_dir(full, fn, user);
+    }
+    free(utf8);
+    free(full);
+  } while (st == MC_OK && FindNextFileW(h, &fd));
+  if (st == MC_OK && GetLastError() != ERROR_NO_MORE_FILES) st = MC_ERR_IO;
+  FindClose(h);
+  return st;
+}
+
+mc_status mc_tree_walk(const char *root, mc_tree_fn fn, void *user) {
+  wchar_t *ext = mc_win_path(root);
+  DWORD attrs = ext ? GetFileAttributesW(ext) : INVALID_FILE_ATTRIBUTES;
+  free(ext);
+  if (attrs == INVALID_FILE_ATTRIBUTES) return MC_ERR_NOT_FOUND;
+  if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) return MC_ERR_IO;
+  wchar_t *w = widen(root);
+  if (!w) return MC_ERR_INVALID_ARG;
+  mc_status st = tree_dir(w, fn, user);
+  free(w);
+  return st;
+}
+
 FILE *mc_fopen(const char *path, const char *mode) {
   wchar_t *wpath = mc_win_path(path), *wmode = widen(mode);
   FILE *f = wpath && wmode ? _wfopen(wpath, wmode) : NULL;
@@ -668,6 +738,53 @@ mc_status mc_walk(const char *path, mc_walk_fn fn, void *user) {
   walk_dir(dir, fn, user);
   free(dir);
   return MC_OK;
+}
+
+static mc_status tree_dir(const char *dir, mc_tree_fn fn, void *user) {
+  if (mc_tree_test_fail && strstr(dir, mc_tree_test_fail)) return MC_ERR_IO;
+  DIR *d = opendir(dir);
+  if (!d) return MC_ERR_IO;
+  size_t len = strlen(dir);
+  mc_status st = MC_OK;
+  for (;;) {
+    errno = 0;
+    struct dirent *e = readdir(d);
+    if (!e) {
+      if (errno) st = MC_ERR_IO;
+      break;
+    }
+    if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+    size_t name_len = strlen(e->d_name);
+    char *full = malloc(len + name_len + 2);
+    if (!full) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    memcpy(full, dir, len);
+    full[len] = '/';
+    memcpy(full + len + 1, e->d_name, name_len + 1);
+    struct stat sb;
+    if (lstat(full, &sb) != 0) {
+      st = MC_ERR_IO;
+    } else if (S_ISDIR(sb.st_mode) || S_ISREG(sb.st_mode)) { /* links and the rest: never */
+      int64_t written = (int64_t)sb.st_mtime * 1000, changed = (int64_t)sb.st_ctime * 1000;
+      int is_dir = S_ISDIR(sb.st_mode);
+      mc_tree_entry entry = {full, is_dir, 0, written > changed ? written : changed, written};
+      int r = fn(user, &entry);
+      if (r < 0) st = MC_ERR_IN_USE;
+      else if (is_dir && r == 0) st = tree_dir(full, fn, user);
+    }
+    free(full);
+    if (st != MC_OK) break;
+  }
+  closedir(d);
+  return st;
+}
+
+mc_status mc_tree_walk(const char *root, mc_tree_fn fn, void *user) {
+  struct stat sb;
+  if (stat(root, &sb) != 0) return MC_ERR_NOT_FOUND;
+  return S_ISDIR(sb.st_mode) ? tree_dir(root, fn, user) : MC_ERR_IO;
 }
 
 int mc_long_path(const char *path) {
@@ -1112,6 +1229,8 @@ mc_status mc_remove_tree(const char *path) {
   if (mc_rmdir(path) != MC_OK && st == MC_OK) st = MC_ERR_IO;
   return st;
 }
+
+const char *mc_tree_test_fail = NULL;
 
 char *mc_strdup(const char *s) {
   if (!s) return NULL;

@@ -13,6 +13,7 @@
 #include <mbedtls/sha256.h>
 
 #include "library/delete_internal.h"
+#include "library/folder_gate.h"
 #include "library/library_internal.h"
 #include "util/platform.h"
 
@@ -855,24 +856,32 @@ static mc_status delete_run(mc_library *lib, const char *config_dir, const mc_de
   return st;
 }
 
+static mc_status gated_run(mc_library *lib, const char *config_dir, const mc_delete_plan *plan,
+                           int to_bin, mc_delete_result *out) {
+  mc_folder_hold(mc_library_dir(lib));
+  mc_status st = delete_run(lib, config_dir, plan, to_bin, out);
+  mc_folder_release(mc_library_dir(lib));
+  return st;
+}
+
 mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete_plan *plan,
                         mc_delete_result *out) {
   if (out) memset(out, 0, sizeof *out);
   if (!lib || !config_dir || !plan) return MC_ERR_INVALID_ARG;
-  return delete_run(lib, config_dir, plan, 0, out);
+  return gated_run(lib, config_dir, plan, 0, out);
 }
 
 mc_status mc_delete_run_permanently(mc_library *lib, const mc_delete_plan *plan,
                                     mc_delete_result *out) {
   if (out) memset(out, 0, sizeof *out);
   if (!lib || !plan) return MC_ERR_INVALID_ARG;
-  return delete_run(lib, NULL, plan, 0, out);
+  return gated_run(lib, NULL, plan, 0, out);
 }
 
 mc_status mc_delete_run_to_bin(mc_library *lib, const mc_delete_plan *plan, mc_delete_result *out) {
   if (out) memset(out, 0, sizeof *out);
   if (!lib || !plan) return MC_ERR_INVALID_ARG;
-  return delete_run(lib, NULL, plan, 1, out);
+  return gated_run(lib, NULL, plan, 1, out);
 }
 
 /* --- Restoring --- */

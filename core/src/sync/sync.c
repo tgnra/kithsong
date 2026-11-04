@@ -37,6 +37,7 @@
 #include <yyjson.h>
 
 #include "discovery/local_addr.h"
+#include "library/folder_gate.h"
 #include "library/library_internal.h"
 #include "sync/archive.h"
 #include "sync/libmerge.h"
@@ -1060,6 +1061,10 @@ static int stopping(mc_sync *sync) {
   return s;
 }
 
+int mc_sync_is_stopping(mc_sync *sync) {
+  return stopping(sync);
+}
+
 /* A session couldn't connect to uid: for the waiting tracks it can't be reached now. Only a
  * change asks for them again, so a member that stays away costs nothing. */
 static void contact_failed(mc_sync *sync, const char *uid) {
@@ -1906,6 +1911,7 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   seed_auto_after(sync);
   const char *group = mc_sync_db_group_uid(sync->api.sdb);
   if (group) mc_discovery_group_hash(group, sync->group_hash);
+  mc_folder_note_config(sync->lib_dir, sync->config_dir);
   *out = sync;
   return MC_OK;
 }
@@ -1925,6 +1931,7 @@ void mc_sync_free(mc_sync *sync) {
   free(sync->peers);
   free(sync->chans);
   if (mc_sync_tracing()) trace_flush(); /* the app may be about to exit */
+  mc_folder_note_config(sync->lib_dir, NULL);
   free(sync->config_dir);
   free(sync->lib_dir);
   free(sync);

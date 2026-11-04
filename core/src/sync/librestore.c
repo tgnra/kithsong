@@ -8,11 +8,12 @@
 
 #include <sqlite3.h>
 
+#include "library/folder_gate.h"
 #include "sync/libmerge.h"
 #include "util/platform.h"
 
 /* In the library folder while the set-aside copy is brought up to date to be put back. */
-#define RESTORE_TMP ".merge-restore"
+#define RESTORE_TMP MC_LIBMERGE_RESTORE_DIR
 
 /* --- This run --- */
 
@@ -471,9 +472,11 @@ static mc_status restore_library(mc_library *lib) {
 mc_status mc_libmerge_restore(mc_library *lib) {
   if (!lib) return MC_ERR_INVALID_ARG;
   sqlite3_mutex *m = restore_lock();
+  mc_folder_hold(mc_library_dir(lib));
   sqlite3_mutex_enter(m);
   mc_status st = restore_library(lib);
   sqlite3_mutex_leave(m);
+  mc_folder_release(mc_library_dir(lib));
   return st;
 }
 

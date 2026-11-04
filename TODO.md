@@ -152,6 +152,10 @@ Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <
 UI speed: Settings' Testing section has the profiler (musiccore/perf.h) and stress test libraries (musiccore/stress.h). KITHSONG_PERF=1 turns the profiler on, and KITHSONG_PERF_RUN=<file> on the desktops runs the scroll test after startup, saves the report and quits; `--ei stress_preset <0-2>` and `--ez perf_run true` do the like on an Android debug build, the report going to logcat (tag kithsong-perf). core/tests/manual_stress generates a library from the command line.
 
 ### First
+- Orphan sweep: a decision, not a check. An archive only reports orphans (MC_ORPHANS_ARCHIVE_ONLY_REPORTS, orphans.h), and the first archive is usually the main computer, so it gets no sweep; the guard against orphans outnumbering known files is MC_ORPHANS_MAX_PER_KNOWN, also there
+- Orphan sweep: an existing install's first sweep has no notice in the app. On a library in a shared folder such as Music it recycles everything unknown, up to as many files as the library holds; orphans-removed.log and orphans-found.txt in the config folder are the only record. A first sweep that only lists would be the safer start
+- Orphan sweep: with the real mc_trash(), as every run so far used a stand-in: the Recycle Bin and the Linux trash, a path past MAX_PATH (SHFileOperation can't take it, so the file stays), and a drive with no Recycle Bin, which deletes outright
+- First run and Open another library: the refusal after a real folder picker on Windows and Linux; the check itself is tested in core and the suggestion's hiding was seen on both, but neither picker can be driven
 - test_sync_merge on a real build: abandoning a merge (librestore.c) was only syntax-checked where it was written
 
 ### Linux

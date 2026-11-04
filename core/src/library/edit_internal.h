@@ -4,6 +4,9 @@
 
 #include "musiccore/musiccore.h"
 
+/* meta key holding an edit's journal while its files are being swapped. */
+#define MC_EDIT_SWAP_META "edit_swap"
+
 /* Called from mc_init(). */
 void mc_edit_global_init(void);
 

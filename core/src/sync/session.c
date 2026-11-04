@@ -6,6 +6,7 @@
 
 #include <yyjson.h>
 
+#include "library/folder_gate.h"
 #include "library/library_internal.h"
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
@@ -725,7 +726,7 @@ static int removed_here(mc_session *s) {
          strcmp(v, "0") != 0 && v[0];
 }
 
-mc_status mc_session_run(mc_session *s) {
+static mc_status session_run(mc_session *s) {
   if (!s || !s->ch || !s->conn || !is_uid(s->peer_uid)) return MC_ERR_INVALID_ARG;
   s->converged = 1;
   mc_session_refresh_self(s->sync, s->conn); /* best effort: stale capabilities are fine */
@@ -853,5 +854,15 @@ mc_status mc_session_run(mc_session *s) {
                 mc_status_str(st));
   if (st == MC_OK && removed_here(s)) s->we_removed = 1;
   progress(s, MC_SYNC_PHASE_DONE);
+  return st;
+}
+
+mc_status mc_session_run(mc_session *s) {
+  /* The whole session: rows and files change under it, and the sweep at its end allows for
+   * this one hold. */
+  const char *dir = s && s->conn && s->conn->lib ? mc_library_dir(s->conn->lib) : NULL;
+  mc_folder_hold(dir);
+  mc_status st = session_run(s);
+  mc_folder_release(dir);
   return st;
 }

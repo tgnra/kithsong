@@ -17,6 +17,7 @@
  * and new names may be other tracks' old ones. They go when the commit is through. meta's
  * edit_swap lists them meanwhile, so a crash is put right at the next open (mc_edit_recover()):
  * it reads "undo" until the commit, which changes it to "done" in the same transaction. */
+#include "library/folder_gate.h"
 #include "library/edit_internal.h"
 #include "musiccore/edit.h"
 
@@ -38,7 +39,7 @@
 #include "tagger/organize.h"
 #include "util/platform.h"
 
-#define KEY_SWAP "edit_swap"
+#define KEY_SWAP MC_EDIT_SWAP_META
 #define RELEASE_LOOKUPS 5 /* a search looks up this many; each costs a second */
 #define MAX_ATTEMPTS 3    /* plans that may turn out out of date before giving up */
 #define ABANDONED ((mc_status)-1000) /* mc_edit_test_abandon_rename went off */
@@ -878,6 +879,7 @@ static mc_status run_edit(mc_library *lib, const edit_ops *ops, void *user) {
   mc_library *own = NULL;
   mc_status st = mc_library_open_internal(mc_library_dir(lib), &own);
   if (st != MC_OK) return st;
+  mc_folder_hold(mc_library_dir(lib));
   if (g_ready) mc_mutex_lock(&g_lock);
   uids skip = {0};
   int again = 1;
@@ -886,6 +888,7 @@ static mc_status run_edit(mc_library *lib, const edit_ops *ops, void *user) {
   if (st == MC_OK && again) st = MC_ERR_IN_USE; /* something keeps changing them */
   if (st == ABANDONED) st = MC_ERR_IO;
   if (g_ready) mc_mutex_unlock(&g_lock);
+  mc_folder_release(mc_library_dir(lib));
   free(skip.items);
   mc_library_close(own);
   return st;
@@ -1602,6 +1605,7 @@ mc_status mc_album_art_set(mc_library *lib, const char *album_uid, const void *i
   if (st != MC_OK) return st;
   mc_library *own = NULL;
   if ((st = mc_library_open_internal(mc_library_dir(lib), &own)) != MC_OK) return st;
+  mc_folder_hold(mc_library_dir(lib));
   if (g_ready) mc_mutex_lock(&g_lock);
   int again = 1;
   for (int i = 0; st == MC_OK && again && i < MAX_ATTEMPTS; i++)
@@ -1609,6 +1613,7 @@ mc_status mc_album_art_set(mc_library *lib, const char *album_uid, const void *i
   if (st == MC_OK && again) st = MC_ERR_IN_USE; /* something keeps moving it */
   if (st == ABANDONED) st = MC_ERR_IO;
   if (g_ready) mc_mutex_unlock(&g_lock);
+  mc_folder_release(mc_library_dir(lib));
   mc_library_close(own);
   return st;
 }

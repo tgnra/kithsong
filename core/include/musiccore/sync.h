@@ -259,10 +259,11 @@ typedef struct mc_sync_result {
   int files_received;    /* fetched and verified */
   int files_missing;     /* wanted tracks it still has no file for in the right format */
   int files_corrupt;     /* failed their checksum twice in this session */
-  int files_deleted;     /* removed by reconcile or the fast check */
-  int files_unknown;     /* audio files in the library folder no files row knows; moved to
-                          * the trash (deleted where there's none, as on Android), except on
-                          * an archive, which only reports them */
+  int files_deleted;     /* removed by reconcile, the sweep or the fast check */
+  int files_unknown;     /* orphans the sweep found: files of any type in the library folder
+                          * that nothing explains. Moved to the trash, or deleted on Android,
+                          * except on an archive, which only reports them. 0 if the sweep
+                          * didn't get as far as counting (see "Files" in docs/sync-protocol.md) */
   int files_sent;        /* served to the peer */
   int64_t bytes_received;
   int64_t bytes_sent;

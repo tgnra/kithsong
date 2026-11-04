@@ -15,6 +15,7 @@ TODO
 ### Library
 
 - Single library folder holding organised music, album art, and the database
+- Anything else in that folder is removed after a sync or import (recycled on desktop, deleted on Android), so a new library needs an empty folder
 - Import from folder, or from a zip file (downloads from Bandcamp!) and it'll be searched on MusicBrainz and cleaned up
 - Originals are copied into the library folder
 - Matches Kithsong is confident in are imported straight away, others may require user confirmation or editing

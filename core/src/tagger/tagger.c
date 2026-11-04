@@ -22,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/folder_gate.h"
+#include "sync/orphans.h"
 #include "library/edit_internal.h"
 #include "library/library_internal.h"
 #include "tagger/coverart.h"
@@ -160,6 +162,12 @@ struct mc_import {
     char *error;
   } *zip_failures;
   int zip_failure_count;
+
+  /* On the library folder (folder_gate.h) from the start until every item is settled, and again
+   * while a settled item is worked on: nothing sweeps while the user still has a decision to
+   * make. Only touched on the import thread once it's started, and by mc_import_free. */
+  int holding;
+  int swept; /* the sweep after this import has been done, or decided against */
 };
 
 static void emit(mc_import *imp, mc_import_event ev, int arg) {
@@ -2828,6 +2836,36 @@ static void add_zip_items(mc_import *imp, item_list *l) {
   }
 }
 
+static int import_stopping(void *user) {
+  return cancelled(user);
+}
+
+/* Once nothing is left to decide (each item imported, skipped or failed, nothing queued): the
+ * folder is let go, and if the import went all the way, swept. An item in review, waiting for
+ * its other discs or for MusicBrainz isn't settled, and its files may be in the library folder
+ * with no row yet. A failed item's are left for the user to look at. On the import thread. */
+static void settle(mc_import *imp, mc_library *lib) {
+  mc_mutex_lock(&imp->lock);
+  int done = 0, failed = 0, open = imp->cancel || imp->head;
+  for (int i = 0; i < imp->item_count && !open; i++) {
+    mc_import_state state = imp->items[i].state;
+    if (state == MC_IMPORT_DONE) done++;
+    else if (state == MC_IMPORT_FAILED) failed++;
+    else if (state != MC_IMPORT_SKIPPED) open = 1;
+  }
+  mc_mutex_unlock(&imp->lock);
+  if (open) return;
+  if (lib && done && !failed && !imp->swept) {
+    imp->swept = 1;
+    mc_orphans_after_import(lib, (const char *const *)imp->paths, imp->path_count, 1,
+                            import_stopping, imp);
+  }
+  if (imp->holding) {
+    mc_folder_release(imp->lib_dir);
+    imp->holding = 0;
+  }
+}
+
 static void import_thread(void *arg) {
   mc_import *imp = arg;
   mc_library *lib = NULL;
@@ -2872,16 +2910,24 @@ static void import_thread(void *arg) {
   if (!cancelled(imp)) {
     release_held(imp, 1);
     emit(imp, MC_IMPORT_EV_IDLE, 0);
+    settle(imp, lib);
   }
 
   request *r;
   while ((r = next_request(imp, 1))) {
+    if (!imp->holding) { /* a settled item taken up again */
+      mc_folder_hold(imp->lib_dir);
+      imp->holding = 1;
+    }
     handle_request(imp, lib, r);
     request_free(r);
     mc_mutex_lock(&imp->lock);
     int idle = !imp->head && !imp->cancel;
     mc_mutex_unlock(&imp->lock);
-    if (idle) emit(imp, MC_IMPORT_EV_IDLE, 0);
+    if (idle) {
+      emit(imp, MC_IMPORT_EV_IDLE, 0);
+      settle(imp, lib);
+    }
   }
   mc_library_close(lib);
 }
@@ -2912,8 +2958,11 @@ mc_status mc_import_start(mc_library *lib, const char *const *paths, int path_co
     if (!(imp->paths[i] = mc_strdup(paths[i]))) st = MC_ERR_NOMEM;
     imp->path_count = i + 1;
   }
-  if (st == MC_OK && (st = mc_thread_start(&imp->thread, import_thread, imp)) == MC_OK)
-    imp->thread_started = 1;
+  if (st == MC_OK) {
+    mc_folder_hold(imp->lib_dir);
+    imp->holding = 1;
+    if ((st = mc_thread_start(&imp->thread, import_thread, imp)) == MC_OK) imp->thread_started = 1;
+  }
   if (st != MC_OK) {
     mc_import_free(imp);
     return st;
@@ -2929,6 +2978,7 @@ void mc_import_free(mc_import *imp) {
   mc_cond_broadcast(&imp->wake);
   mc_mutex_unlock(&imp->lock);
   if (imp->thread_started) mc_thread_join(&imp->thread);
+  if (imp->holding) mc_folder_release(imp->lib_dir);
 
   for (request *r = imp->head, *next; r; r = next) {
     next = r->next;

@@ -76,4 +76,7 @@ void mc_coverart_set_fake(mc_coverart_fetch_fn fetch);
  * whether they have the same cover. */
 mc_status mc_coverart_hash(const char *path, char hash[MC_ART_HASH_LEN]);
 
+/* Whether a file called name is taken for a cover by mc_coverart_find(). */
+int mc_coverart_is_name(const char *name);
+
 #endif

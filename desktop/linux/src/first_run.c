@@ -43,29 +43,6 @@ static char *music_folder(void) {
   return music ? g_strdup(music) : g_build_filename(g_get_home_dir(), "Music", NULL);
 }
 
-/* Whether dir already has a library's database at the top. */
-static gboolean holds_library(const char *dir) {
-  char *db = g_build_filename(dir, MC_LIBRARY_DB_NAME, NULL);
-  gboolean found = g_file_test(db, G_FILE_TEST_IS_REGULAR);
-  g_free(db);
-  return found;
-}
-
-static gboolean usable(const char *dir) {
-  return mc_folder_is_empty(dir) || holds_library(dir);
-}
-
-/* Where the library goes for a folder the user chose: the folder itself if it's empty (or
- * holds a library already), else Kithsong Library inside it, if that is. NULL if neither;
- * g_free it. */
-static char *library_in(const char *dir) {
-  if (usable(dir)) return g_strdup(dir);
-  char *sub = g_build_filename(dir, mc_str(MC_STR_FIRST_RUN_FOLDER_NAME), NULL);
-  if (usable(sub)) return sub;
-  g_free(sub);
-  return NULL;
-}
-
 static void on_picked(GtkCheckButton *check, GParamSpec *pspec, gpointer data) {
   (void)check;
   (void)pspec;
@@ -81,8 +58,8 @@ static void on_folder_chosen(GObject *source, GAsyncResult *result, gpointer dat
   GFile *file = gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(source), result, NULL);
   char *dir = file ? g_file_get_path(file) : NULL;
   if (file) g_object_unref(file);
-  char *lib = dir ? library_in(dir) : NULL;
-  if (dir && !lib) {
+  char *lib = dir && mc_folder_fits_library(dir) ? g_strdup(dir) : NULL;
+  if (dir && !lib) { /* they can choose again */
     char *text = mc_format_alloc(mc_str(MC_STR_FIRST_RUN_NOT_EMPTY), MC_S(dir));
     AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_LIBRARY_FOLDER), text);
     mc_free(text);
@@ -157,6 +134,8 @@ void first_run_present(GtkWidget *parent, first_run_done_fn done, void *user) {
   gtk_widget_add_css_class(list, "boxed-list");
   f->suggested_row = folder_row(f, MC_STR_FIRST_RUN_SUGGESTED, f->suggested, &f->suggested_check);
   gtk_list_box_append(GTK_LIST_BOX(list), f->suggested_row);
+  /* Never the Music folder itself, nor a folder of that name with other things in it. */
+  gtk_widget_set_visible(f->suggested_row, mc_folder_fits_library(f->suggested));
   f->chosen_row = folder_row(f, MC_STR_FIRST_RUN_CHOSEN, "", &f->chosen_check);
   gtk_check_button_set_group(GTK_CHECK_BUTTON(f->chosen_check), GTK_CHECK_BUTTON(f->suggested_check));
   gtk_widget_set_visible(f->chosen_row, FALSE);

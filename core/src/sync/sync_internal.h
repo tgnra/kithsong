@@ -324,6 +324,8 @@ mc_status mc_profile_fingerprint(sqlite3 *db, const char *uid, char out[MC_PROFI
 /* uid's mc_sync_confirm_state: its fingerprint against its devices.confirmed_profile. -1 on
  * a database error. */
 int mc_profile_confirm_state(sqlite3 *db, const char *uid);
+/* Whether mc_sync_stop() or mc_sync_free() is under way. Any thread. */
+int mc_sync_is_stopping(mc_sync *sync);
 /* Records this device's current fingerprint as confirmed, in a write of its own. *wrote
  * (may be NULL): it changed. MC_ERR_NOT_FOUND if not in a group. */
 mc_status mc_profile_confirm(mc_sync_db *sdb, int *wrote);

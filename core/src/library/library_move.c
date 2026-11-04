@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/folder_gate.h"
 #include "library/library_internal.h"
 #include "library/move_internal.h"
 #include "util/platform.h"
@@ -250,6 +251,14 @@ int mc_folder_is_empty(const char *dir) {
   int n = 0;
   if (mc_list_dir(dir, count_entry, &n) != MC_OK) return 0; /* a file, or unreadable */
   return n == 0;
+}
+
+int mc_folder_fits_library(const char *dir) {
+  if (mc_folder_is_empty(dir)) return 1;
+  char *db = join(dir, MC_LIBRARY_DB_NAME);
+  int n = 0, holds = db && mc_file_exists(db) && mc_list_dir(db, count_entry, &n) != MC_OK;
+  free(db);
+  return holds;
 }
 
 mc_status mc_folder_free_space(const char *dir, int64_t *out) {
@@ -503,8 +512,8 @@ static void remove_made(const char *dst, const char *top) {
   free(p);
 }
 
-mc_status mc_library_move(const char *src, const char *dst, mc_settings *settings,
-                          mc_library_move_fn progress, void *user, mc_library_move_result *result) {
+static mc_status move_library(const char *src, const char *dst, mc_settings *settings,
+                              mc_library_move_fn progress, void *user, mc_library_move_result *result) {
   if (!result) return MC_ERR_INVALID_ARG;
   memset(result, 0, sizeof *result);
   mc_library_move_info info;
@@ -578,6 +587,14 @@ done:
   free(dst_full);
   free(src_full);
   tree_free(&t);
+  return st;
+}
+
+mc_status mc_library_move(const char *src, const char *dst, mc_settings *settings,
+                          mc_library_move_fn progress, void *user, mc_library_move_result *result) {
+  mc_folder_hold(src);
+  mc_status st = move_library(src, dst, settings, progress, user, result);
+  mc_folder_release(src);
   return st;
 }
 

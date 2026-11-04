@@ -53,6 +53,11 @@ typedef struct mc_library_move_info {
 /* Whether dir is an empty folder, or doesn't exist (which mc_library_move() is also happy
  * with, if the folder it would be made in can be written). */
 int mc_folder_is_empty(const char *dir);
+/* Whether a library may be opened in dir: it holds one already, or it's empty or missing, so
+ * one can be made there. Anything else is a folder of other things: a new library in it would
+ * have them all count as orphans (see "Files" in docs/sync-protocol.md). For the routes where
+ * the user picks a folder; an install already in such a folder keeps working. */
+int mc_folder_fits_library(const char *dir);
 
 /* Bytes free for this user on the volume that holds dir, or would hold it: a folder that
  * doesn't exist yet is measured at its nearest existing parent. */

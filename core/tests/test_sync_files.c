@@ -32,6 +32,7 @@
 #include "sync/rows.h"
 #include "sync/sync_db.h"
 #include "sync/sync_internal.h"
+#include "sync/orphans.h"
 #include "sync/transfer.h"
 #include "tagger/import_db.h"
 #include "musiccore/edit.h"
@@ -887,10 +888,16 @@ static void check_pipeline(const char *root) {
   }
   CHECK(g_many_calls == MANY - 2 + 1 + 2 && g_many_last_covered);
 
-  /* The next session asks again for the two that failed and gets them no better. */
+  /* The next session asks again for the two that failed and gets them no better. A session
+   * that didn't get everything doesn't sweep. */
+  char stray[1200];
+  snprintf(stray, sizeof stray, "%s/stray.txt", d.libdir);
+  CHECK(write_bytes(stray, "s"));
+  make_old(stray);
   CHECK(sync_now(&c, &d, &rc, &rd) == MC_OK);
   CHECK(rd.files_received == 0 && rd.files_corrupt == 1 && rd.covers_received == 0);
   CHECK(count_parts(d.libdir) == 0);
+  CHECK(mc_file_exists(stray) && rd.files_unknown == 0);
 
   mc_transfer_test_corrupt = NULL;
   g_many = NULL;
@@ -900,6 +907,7 @@ static void check_pipeline(const char *root) {
 }
 
 int main(int argc, char **argv) {
+  mc_orphans_test_mtime_only = 1; /* make_old() can only reach the modified time */
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
   char root[1024], sql[2048];
@@ -1199,8 +1207,8 @@ int main(int argc, char **argv) {
     CHECK(mc_file_exists(dir));
   }
 
-  /* Unknown files: to the trash on B (a stale .part file is just deleted), only reported on
-   * the archive. New ones are left alone. */
+  /* Orphans, of any type: to the trash on B, only reported on the archive. New ones are left
+   * alone. test_orphans.c has the rest of what a sweep does and doesn't take. */
   {
     char dir[1100], old_b[1200], new_b[1200], old_a[1200], text[1200], part[1200];
     snprintf(dir, sizeof dir, "%s/Junk", b.libdir);
@@ -1221,10 +1229,12 @@ int main(int argc, char **argv) {
     CHECK(write_bytes(old_a, "x"));
     make_old(old_a);
     CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
-    CHECK(!mc_file_exists(old_b) && mc_file_exists(new_b) && mc_file_exists(text));
+    CHECK(!mc_file_exists(old_b) && mc_file_exists(new_b) && !mc_file_exists(text));
     CHECK(!mc_file_exists(part));
-    CHECK(rb.files_unknown == 2);
-    CHECK(g_binned == binned + 1 && in_bin(binned, "old.mp3"));
+    CHECK(rb.files_unknown == 3);
+    CHECK(g_binned == binned + 3);
+    for (const char *const *n = (const char *const[]){"old.mp3", "notes.txt", "half.opus.part", NULL}; *n; n++)
+      CHECK(in_bin(binned, *n) || in_bin(binned + 1, *n) || in_bin(binned + 2, *n));
     CHECK(mc_file_exists(old_a) && ra.files_unknown == 1 && ra.files_deleted == 0);
     mc_remove(old_a);
   }
@@ -1232,7 +1242,7 @@ int main(int argc, char **argv) {
   /* Reconcile deletes only inside the library folder. Rows of Other (unwanted on B) whose
    * paths lead outside it, as a damaged row's might, lose their rows but not the files:
    * "../", an absolute path, and a folder that links outside. An unknown file behind the link
-   * isn't seen. An unknown file's folders go once nothing but a cover is left in them. */
+   * isn't seen. An orphan's folders go once they're empty; an old cover there is an orphan too. */
   {
     char out[1100], up[1200], absf[1200], via[1200], stray[1200], link[1100], p[1300];
     snprintf(out, sizeof out, "%s/b/outside", root);
@@ -1262,6 +1272,7 @@ int main(int argc, char **argv) {
     CHECK(mc_mkdirs(p) == MC_OK);
     snprintf(p, sizeof p, "%s/Stray/Album/cover.jpg", b.libdir);
     CHECK(write_bytes(p, "c"));
+    make_old(p);
     snprintf(p, sizeof p, "%s/Stray/Album/old.flac", b.libdir);
     CHECK(write_bytes(p, "f"));
     make_old(p);
@@ -1270,7 +1281,7 @@ int main(int argc, char **argv) {
     CHECK(lib_int(&b, sql) == 0);
     CHECK(mc_file_exists(up) && mc_file_exists(absf) && mc_file_exists(via) &&
           mc_file_exists(stray));
-    CHECK(rb.files_unknown == 1 && !mc_file_exists(p));
+    CHECK(rb.files_unknown == 2 && !mc_file_exists(p));
     snprintf(p, sizeof p, "%s/Stray", b.libdir);
     CHECK(!mc_file_exists(p));
     CHECK(lib_file_exists(&b, "Low/Things (1994)/01 Song One.opus"));
