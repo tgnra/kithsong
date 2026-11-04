@@ -8,6 +8,7 @@
 
 #include "media_controls.h"
 #include "musiccore/musiccore.h"
+#include "musiccore/radio.h"
 #include "now_playing.h"
 #include "taskbar.h"
 #include "track_list.h"
@@ -44,6 +45,7 @@ static struct {
   item *items;
   int count;
   BOOL shuffle;
+  BOOL radio; /* a station is adding to the queue */
   int volume;
   BOOL muted;
 
@@ -85,11 +87,39 @@ static void set_window_title(const item *it) {
   SetWindowTextW(s.wnd, title);
 }
 
+/* Items for what a station has added to the queue. A track the library doesn't have any more
+ * still gets one, as indexes have to stay in step with the player's; it won't open anyway. */
+static void add_new_items(void) {
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  if (st.count <= s.count) return;
+  item *items = realloc(s.items, (size_t)st.count * sizeof *items);
+  if (!items) return;
+  s.items = items;
+  for (; s.count < st.count; s.count++) {
+    item *it = &s.items[s.count];
+    memset(it, 0, sizeof *it);
+    mc_track_list *list = NULL;
+    if (mc_player_queue_uid(s.player, s.count, it->uid) == MC_OK && s.lib &&
+        mc_library_get_track(s.lib, it->uid, &list) == MC_OK) {
+      const mc_track_info *t = &list->items[0];
+      it->title = t->title ? wstr_dup_from_utf8(t->title) : NULL;
+      it->artist = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
+      it->album = t->album ? wstr_dup_from_utf8(t->album) : NULL;
+      it->cover_dir = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
+      it->duration_ms = t->duration_ms;
+      mc_track_list_free(list);
+    }
+    if (!it->title) it->title = dup(mc_wstr(MC_STR_UNTITLED));
+  }
+}
+
 /* Counts the plays the player says count, and scrobbles them. Writes the ones that ended to
  * the play log, or with no library open leaves them for the one that opens next. */
 static void count_plays(void) {
   int index;
   int64_t started_ms;
+  if (s.player) add_new_items(); /* a play's index may be one of theirs */
   while (s.player && mc_player_take_played(s.player, &index, &started_ms) == MC_OK) {
     if (index < 0 || index >= s.count || !s.items[index].uid[0]) continue;
     if (s.lib) mc_library_record_play(s.lib, s.items[index].uid);
@@ -109,13 +139,15 @@ static void refresh(void) {
   const item *it = st.index >= 0 && st.index < s.count ? &s.items[st.index] : NULL;
   int duration_ms = it ? it->duration_ms : 0;
   if (!duration_ms) duration_ms = (int)st.duration_ms;
-  BOOL has_next = it && (st.shuffle || st.index + 1 < s.count);
+  BOOL has_next = it && (st.shuffle || st.radio || st.index + 1 < s.count);
 
   BOOL new_track = st.index != s.index, new_state = st.state != s.state;
-  BOOL new_shuffle = !st.shuffle != !s.shown_shuffle; /* changes whether there's a next track */
+  /* These change whether there's a next track. */
+  BOOL new_shuffle = !st.shuffle != !s.shown_shuffle || !st.radio != !s.radio;
   s.index = st.index;
   s.state = st.state;
   s.shown_shuffle = st.shuffle;
+  s.radio = st.radio;
   if (st.state != MC_PLAYER_PLAYING) {
     s.announced = -1;
   } else if (it && st.index != s.announced) {
@@ -212,6 +244,7 @@ void playback_free(void) {
 }
 
 void playback_set_library(mc_library *lib, const char *config_dir) {
+  if (s.player && lib != s.lib) mc_player_stop_radio(s.player); /* its tracks are that library's */
   if (!lib && s.player) mc_player_end_play(s.player); /* the library, or the app, is closing */
   count_plays();
   if (s.scrobbler && s.scrobbler_closing) s.scrobbler_closing();
@@ -281,8 +314,9 @@ void playback_clear(void) {
   if (s.changed) s.changed();
 }
 
-void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
-                   const char *context_uid) {
+/* playback_play(), or with radio, the one track as a station's seed. */
+static void play_queue(const playback_track *tracks, int count, int start, mc_play_context context,
+                       const char *context_uid, BOOL radio) {
   if (count <= 0 || start < -1 || start >= count) return;
   if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
     s.player = NULL;
@@ -320,14 +354,36 @@ void playback_play(const playback_track *tracks, int count, int start, mc_play_c
   s.count = count;
   s.index = s.announced = -1; /* show the track afresh even if it's the same item number */
 
-  mc_player_set_queue(s.player, paths, count, start, &(mc_play_origin){uids, context, context_uid});
+  if (radio) mc_player_play_radio(s.player, mc_library_dir(s.lib), paths[0], uids[0]);
+  else mc_player_set_queue(s.player, paths, count, start, &(mc_play_origin){uids, context, context_uid});
   free(paths);
   free(uids);
   refresh();
 }
 
+void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
+                   const char *context_uid) {
+  play_queue(tracks, count, start, context, context_uid, FALSE);
+}
+
 void playback_play_radio(const char *seed_track_uid) {
-  (void)seed_track_uid;
+  if (!s.lib || !seed_track_uid) return;
+  mc_radio_options opts = {.seed_track = seed_track_uid};
+  mc_track_list *list = NULL;
+  if (mc_radio_seed_check(s.lib, &opts) != MC_OK || mc_library_get_track(s.lib, seed_track_uid, &list) != MC_OK)
+    return;
+  const mc_track_info *t = &list->items[0];
+  wchar_t *title = t->title ? wstr_dup_from_utf8(t->title) : NULL;
+  wchar_t *artist = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
+  wchar_t *album = t->album ? wstr_dup_from_utf8(t->album) : NULL;
+  wchar_t *cover_dir = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
+  playback_track track = {t->uid, t->path, title, artist, album, cover_dir, t->duration_ms};
+  if (t->path) play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, t->uid, TRUE);
+  free(title);
+  free(artist);
+  free(album);
+  free(cover_dir);
+  mc_track_list_free(list);
 }
 
 void playback_set_shuffle(BOOL on) {
@@ -418,7 +474,7 @@ BOOL playback_has_current(void) {
 }
 
 BOOL playback_has_next(void) {
-  return playback_has_current() && (s.shuffle || s.index + 1 < s.count);
+  return playback_has_current() && (s.shuffle || s.radio || s.index + 1 < s.count);
 }
 
 mc_scrobbler *playback_scrobbler(void) {
