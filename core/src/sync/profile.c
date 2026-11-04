@@ -193,6 +193,139 @@ static mc_status read_items(sqlite3 *db, mc_library *lib, const char *uid, mc_pr
   return MC_OK;
 }
 
+/* A stored profile_items row of a device, its ref_uid resolved: an item of the selection, or
+ * with exclusion set, an exclude_album or exclude_artist row, whose item says what it takes
+ * out. */
+typedef struct stored_row {
+  mc_profile_item item;
+  int exclusion;
+  char uid[MC_UID_STRLEN];
+} stored_row;
+
+static int row_cmp(const void *x, const void *y) {
+  const stored_row *a = x, *b = y;
+  if (a->exclusion != b->exclusion) return a->exclusion < b->exclusion ? -1 : 1;
+  return item_cmp(&a->item, &b->item);
+}
+
+/* uid's rows of kinds this version can act on, exclusions after the selection, each part
+ * sorted; only the exclusions if exclusions_only. One read, so that an edit of thousands of
+ * items doesn't go through the table once for each. *out is malloc'd (NULL if there are
+ * none). exclude_track rows aren't included: nothing here edits them. */
+static mc_status read_rows(sqlite3 *db, mc_library *lib, const char *uid, int exclusions_only,
+                           stored_row **out, int *count) {
+  *out = NULL;
+  *count = 0;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db, "SELECT uid, kind, ref_uid FROM profile_items WHERE device_uid = ?1",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  mc_status st = MC_OK;
+  stored_row *rows = NULL;
+  int n = 0, cap = 0, rc;
+  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *row = (const char *)sqlite3_column_text(stmt, 0);
+    const char *kind_text = (const char *)sqlite3_column_text(stmt, 1);
+    const char *ref = (const char *)sqlite3_column_text(stmt, 2);
+    int exclusion = 1, kind = -1;
+    if (kind_text && !strcmp(kind_text, MC_PLAN_EXCLUDE_ALBUM)) kind = MC_PROFILE_ALBUM;
+    else if (kind_text && !strcmp(kind_text, MC_PLAN_EXCLUDE_ARTIST)) kind = MC_PROFILE_ARTIST;
+    else if (!exclusions_only) exclusion = 0, kind = kind_parse(kind_text);
+    if (kind < 0 || !is_uid(row) || !is_uid(ref)) continue;
+    if (n == cap) {
+      int grown = cap ? cap * 2 : 16;
+      stored_row *more = realloc(rows, (size_t)grown * sizeof *more);
+      if (!more) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      rows = more;
+      cap = grown;
+    }
+    memset(&rows[n], 0, sizeof rows[n]);
+    rows[n].item.kind = (mc_profile_item_kind)kind;
+    rows[n].exclusion = exclusion;
+    memcpy(rows[n].item.ref_uid, ref, MC_UID_STRLEN);
+    memcpy(rows[n].uid, row, MC_UID_STRLEN);
+    if ((st = resolve_item(lib, &rows[n].item)) != MC_OK) break;
+    n++;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    free(rows);
+    return st;
+  }
+  if (n > 1) qsort(rows, (size_t)n, sizeof *rows, row_cmp);
+  *out = rows;
+  *count = n;
+  return MC_OK;
+}
+
+/* Adds artist's albums (its merged-away copies' too) to *items: an artist removed from a
+ * device takes them along. *cap is *items' size. */
+static mc_status add_artist_albums(mc_library *lib, const char *artist, mc_profile_item **items,
+                                   int *count, int *cap) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT uid FROM albums WHERE artist_uid = ?1 OR artist_uid IN"
+                         " (SELECT uid FROM aliases WHERE canonical = ?1)",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, artist, -1, SQLITE_STATIC);
+  mc_status st = MC_OK;
+  int rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *album = (const char *)sqlite3_column_text(stmt, 0);
+    if (!is_uid(album)) continue;
+    if (*count == *cap) {
+      int grown = *cap ? *cap * 2 : 16;
+      mc_profile_item *more = realloc(*items, (size_t)grown * sizeof *more);
+      if (!more) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      *items = more;
+      *cap = grown;
+    }
+    mc_profile_item *it = &(*items)[*count];
+    it->kind = MC_PROFILE_ALBUM;
+    memcpy(it->ref_uid, album, MC_UID_STRLEN);
+    if ((st = resolve_item(lib, it)) == MC_OK) (*count)++;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE && rc != SQLITE_ROW) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+/* mc_sync_profile.removed for uid: what its exclusions name, and the albums of the artists
+ * among them. *out is malloc'd (NULL if there are none). */
+static mc_status read_removed(sqlite3 *db, mc_library *lib, const char *uid,
+                              mc_profile_item **out, int *count) {
+  *out = NULL;
+  *count = 0;
+  stored_row *rows;
+  int n;
+  mc_status st = read_rows(db, lib, uid, 1, &rows, &n);
+  if (st != MC_OK || !n) return st;
+  mc_profile_item *items = malloc((size_t)n * sizeof *items);
+  int total = 0, cap = n;
+  if (!items) st = MC_ERR_NOMEM;
+  for (int i = 0; st == MC_OK && i < n; i++) items[total++] = rows[i].item;
+  for (int i = 0; st == MC_OK && lib && i < n; i++)
+    if (rows[i].item.kind == MC_PROFILE_ARTIST)
+      st = add_artist_albums(lib, rows[i].item.ref_uid, &items, &total, &cap);
+  free(rows);
+  if (st != MC_OK) {
+    free(items);
+    return st;
+  }
+  *out = items;
+  *count = sort_unique(items, total);
+  return MC_OK;
+}
+
 mc_status mc_sync_get_profile(mc_sync *sync, const char *device_uid, mc_sync_profile **out) {
   if (out) *out = NULL;
   if (!sync || !is_uid(device_uid) || !out) return MC_ERR_INVALID_ARG;
@@ -204,6 +337,7 @@ mc_status mc_sync_get_profile(mc_sync *sync, const char *device_uid, mc_sync_pro
   mc_status st = check_member(sync->api.sdb, device_uid);
   if (st == MC_OK) st = read_fields(db, device_uid, p, &exists);
   if (st == MC_OK) st = read_items(db, sync->api.lib, device_uid, &p->items, &p->count);
+  if (st == MC_OK) st = read_removed(db, sync->api.lib, device_uid, &p->removed, &p->removed_count);
   mc_mutex_unlock(&sync->api_lock);
   if (st != MC_OK) {
     mc_sync_profile_free(p);
@@ -225,6 +359,7 @@ void mc_sync_profile_free(mc_sync_profile *profile) {
   if (!profile) return;
   free(profile->name);
   free(profile->items);
+  free(profile->removed);
   free(profile);
 }
 
@@ -339,51 +474,54 @@ static mc_status delete_rows(sqlite3 *db, mc_library *lib, const char *uid, cons
   return st;
 }
 
-static mc_status delete_item(sqlite3 *db, mc_library *lib, const char *uid,
-                             const mc_profile_item *item) {
-  return delete_rows(db, lib, uid, k_kinds[item->kind], item);
-}
-
-/* Selecting an album or artist drops its exclusion (musiccore/sync_here.h): what the user
- * just chose to sync is synced. */
-static mc_status drop_exclusion(sqlite3 *db, mc_library *lib, const char *uid,
-                                const mc_profile_item *item) {
-  const char *kind = item->kind == MC_PROFILE_ALBUM    ? MC_PLAN_EXCLUDE_ALBUM
-                     : item->kind == MC_PROFILE_ARTIST ? MC_PLAN_EXCLUDE_ARTIST
-                                                       : NULL;
-  return kind ? delete_rows(db, lib, uid, kind, item) : MC_OK;
-}
-
 mc_status mc_profile_delete_rows(sqlite3 *db, mc_library *lib, const char *device_uid,
                                  const char *kind, const mc_profile_item *item) {
   return delete_rows(db, lib, device_uid, kind, item);
+}
+
+/* Deletes rows[i], and the rows after it (up to n) for the same thing, duplicates of one item;
+ * returns the index after them. */
+static int delete_group(sqlite3_stmt *del, const stored_row *rows, int n, int i, mc_status *st) {
+  int end = i;
+  while (end < n && !row_cmp(&rows[i], &rows[end])) end++;
+  for (int k = i; *st == MC_OK && k < end; k++) {
+    sqlite3_bind_text(del, 1, rows[k].uid, -1, SQLITE_STATIC);
+    *st = run(del);
+  }
+  return end;
 }
 
 /* profile_items: inserts the wanted items not stored, and deletes the stored ones not
  * wanted (with any duplicates of them). want is sorted and unique; it is resolved here, so a
  * caller holding a merged-away uid still means its album. Rows of kinds this version
  * doesn't know are left as they are, and so are exclusions, but an album or artist added
- * drops its own. */
+ * drops its own (musiccore/sync_here.h): what the user just chose to sync is synced. The
+ * stored rows are read once and walked beside want, so that Select all and Select none on a
+ * long list cost one pass. */
 static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
                              mc_profile_item *want, int nwant, int *changed) {
   sqlite3 *db = mc_sync_db_handle(sdb);
-  mc_profile_item *have;
-  int nhave;
+  stored_row *rows;
+  int nrows;
   mc_status st = MC_OK;
   for (int i = 0; st == MC_OK && i < nwant; i++) st = resolve_item(lib, &want[i]);
   if (st != MC_OK) return st;
   nwant = sort_unique(want, nwant);
-  st = read_items(db, lib, uid, &have, &nhave);
+  st = read_rows(db, lib, uid, 0, &rows, &nrows);
   if (st != MC_OK) return st;
-  sqlite3_stmt *ins = NULL;
+  int nhave = 0; /* the selection's rows come first */
+  while (nhave < nrows && !rows[nhave].exclusion) nhave++;
+  sqlite3_stmt *ins = NULL, *del = NULL;
   if (sqlite3_prepare_v2(db,
                          "INSERT INTO profile_items (uid, device_uid, kind, ref_uid)"
                          " VALUES (?1, ?2, ?3, ?4)",
-                         -1, &ins, NULL) != SQLITE_OK)
+                         -1, &ins, NULL) != SQLITE_OK ||
+      sqlite3_prepare_v2(db, "DELETE FROM profile_items WHERE uid = ?1", -1, &del, NULL) !=
+        SQLITE_OK)
     st = MC_ERR_DB;
   int i = 0, j = 0;
   while (st == MC_OK && (i < nwant || j < nhave)) {
-    int c = i == nwant ? 1 : j == nhave ? -1 : item_cmp(&want[i], &have[j]);
+    int c = i == nwant ? 1 : j == nhave ? -1 : item_cmp(&want[i], &rows[j].item);
     if (c < 0) {
       char item_uid[MC_UID_STRLEN];
       st = mc_uid_new(item_uid);
@@ -393,20 +531,27 @@ static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
       sqlite3_bind_text(ins, 3, k_kinds[want[i].kind], -1, SQLITE_STATIC);
       sqlite3_bind_text(ins, 4, want[i].ref_uid, -1, SQLITE_STATIC);
       st = run(ins);
-      if (st == MC_OK) st = drop_exclusion(db, lib, uid, &want[i]);
+      stored_row key = {.item = want[i], .exclusion = 1};
+      const stored_row *ex = nrows > nhave ? bsearch(&key, rows + nhave, (size_t)(nrows - nhave),
+                                                     sizeof *rows, row_cmp) : NULL;
+      if (ex) {
+        int first = (int)(ex - rows);
+        while (first > nhave && !row_cmp(&rows[first - 1], ex)) first--;
+        delete_group(del, rows, nrows, first, &st);
+      }
       i++;
     } else if (c > 0) {
-      st = delete_item(db, lib, uid, &have[j]);
-      j++;
+      j = delete_group(del, rows, nhave, j, &st);
     } else {
       i++;
-      j++;
+      for (j++; j < nhave && !row_cmp(&rows[j - 1], &rows[j]); j++) {}
       continue;
     }
     if (st == MC_OK) *changed = 1;
   }
   sqlite3_finalize(ins);
-  free(have);
+  sqlite3_finalize(del);
+  free(rows);
   return st;
 }
 
@@ -473,6 +618,58 @@ mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sy
   free(old.name);
   free(want);
   if (st == MC_OK && changed) mc_sync_notify_changed(sync);
+  return st;
+}
+
+/* p's selection with want (sorted, unique) added, leaving out what's in p->removed, or
+ * taken out. p as mc_sync_get_profile() read it, so its items are sorted. *changed says if
+ * it differs. */
+static mc_status select_in(mc_sync_profile *p, const mc_profile_item *want, int nwant, int on,
+                           int *changed) {
+  int n = 0;
+  if (!on) {
+    for (int i = 0; i < p->count; i++)
+      if (!bsearch(&p->items[i], want, (size_t)nwant, sizeof *want, item_cmp))
+        p->items[n++] = p->items[i];
+  } else {
+    mc_profile_item *items = realloc(p->items, ((size_t)p->count + (size_t)nwant) * sizeof *items);
+    if (!items) return MC_ERR_NOMEM;
+    p->items = items;
+    n = p->count;
+    for (int i = 0; i < nwant; i++) {
+      if (p->count && bsearch(&want[i], items, (size_t)p->count, sizeof *items, item_cmp)) continue;
+      if (p->removed_count && bsearch(&want[i], p->removed, (size_t)p->removed_count,
+                                      sizeof *p->removed, item_cmp))
+        continue;
+      items[n++] = want[i];
+    }
+  }
+  *changed = n != p->count;
+  p->count = n;
+  return MC_OK;
+}
+
+mc_status mc_sync_select_items(mc_sync *sync, const char *device_uid, mc_profile_item_kind kind,
+                               const char (*uids)[MC_UID_STRLEN], int count, int on) {
+  if (!sync || !is_uid(device_uid) || (int)kind < 0 || (int)kind >= KIND_COUNT || count < 0 ||
+      (count && !uids))
+    return MC_ERR_INVALID_ARG;
+  for (int i = 0; i < count; i++)
+    if (!is_uid_field(uids[i])) return MC_ERR_INVALID_ARG;
+  if (!count) return MC_OK;
+  mc_profile_item *want = malloc((size_t)count * sizeof *want);
+  if (!want) return MC_ERR_NOMEM;
+  for (int i = 0; i < count; i++) {
+    want[i].kind = kind;
+    memcpy(want[i].ref_uid, uids[i], MC_UID_STRLEN);
+  }
+  int nwant = sort_unique(want, count), changed = 0;
+  mc_sync_profile *p = NULL;
+  mc_status st = mc_sync_get_profile(sync, device_uid, &p);
+  if (st == MC_OK) st = select_in(p, want, nwant, on, &changed);
+  if (st == MC_OK && changed) st = mc_sync_set_profile(sync, device_uid, p);
+  mc_sync_profile_free(p);
+  free(want);
   return st;
 }
 

@@ -882,10 +882,16 @@ music lives nowhere else.
   selection, the album's or artist's own row is deleted as well. A profile can only include,
   so "Sync everything but this" needs the exclusion; turning `all` into a long selection
   would also miss what's imported later.
-- **Editors** don't see exclusions: `mc_sync_get_profile()` leaves out kinds outside
-  `mc_profile_item_kind`, and `mc_sync_set_profile()` keeps stored rows of such kinds, so any
-  member's editor keeps them through a read-modify-write. Adding an album or artist to a
-  selection deletes its exclusion: what the user just chose to sync is synced.
+- **Editors** don't edit exclusions: `mc_sync_get_profile()` lists them apart from the items,
+  as `removed` (with the albums of a removed artist), and `mc_sync_set_profile()` keeps stored
+  rows of those kinds, so any member's editor keeps them through a read-modify-write. Adding
+  an album or artist to a selection deletes its exclusion: what the user just chose to sync
+  is synced. The editors mark such rows as removed.
+- **Select all and Select none** (`mc_sync_select_items()`) act on one category's shown rows
+  in one write. Select all is not a choice of each item, so it leaves out what's in `removed`
+  and keeps the exclusions; only ticking such a row by hand brings it back. Select none keeps
+  them too. Neither touches the mode: Select all is a selection of what's there today, while
+  Sync everything also takes in later imports.
 - **Bringing it back**: "Sync to this PC" on its menu (`mc_sync_restore_here()`) deletes the
   exclusion and, in a selection, adds the album or artist; the files arrive at the next
   sync. An album removed only through its artist is brought back from the artist's menu.

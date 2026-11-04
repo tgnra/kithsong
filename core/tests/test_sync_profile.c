@@ -988,6 +988,78 @@ int main(int argc, char **argv) {
     CHECK(e.tracks == 1 && e.free_bytes > 0);
   }
 
+  /* Select all and Select none: one kind's rows, the others left alone. */
+  {
+    mc_profile_item items[2] = {item(MC_PROFILE_ALBUM, x), item(MC_PROFILE_PLAYLIST, y)};
+    mc_sync_profile s = selection(items, 2);
+    s.sync_all = 0;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_OK);
+    char rows[3][MC_UID_STRLEN];
+    memcpy(rows[0], y, MC_UID_STRLEN);
+    memcpy(rows[1], z, MC_UID_STRLEN);
+    memcpy(rows[2], w, MC_UID_STRLEN);
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_PLAYLIST, rows, 3, 1) == MC_OK);
+    p = get(&a, b.uid);
+    CHECK(p && !p->sync_all && p->count == 4 && has_item(p, MC_PROFILE_ALBUM, x) == 1);
+    CHECK(p && has_item(p, MC_PROFILE_PLAYLIST, y) == 1 && has_item(p, MC_PROFILE_PLAYLIST, w) == 1);
+    mc_sync_profile_free(p);
+
+    /* Only the rows given, as a filtered list would give. */
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_PLAYLIST, rows, 2, 0) == MC_OK);
+    p = get(&a, b.uid);
+    CHECK(p && p->count == 2 && has_item(p, MC_PROFILE_ALBUM, x) == 1);
+    CHECK(p && has_item(p, MC_PROFILE_PLAYLIST, w) == 1 && !has_item(p, MC_PROFILE_PLAYLIST, y));
+    mc_sync_profile_free(p);
+
+    /* Nothing to change: nothing written. */
+    int before = group_int(&a, "SELECT count(*) FROM changelog");
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_PLAYLIST, rows, 2, 0) == MC_OK);
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_PLAYLIST, rows + 2, 1, 1) == MC_OK);
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_PLAYLIST, NULL, 0, 1) == MC_OK);
+    CHECK(group_int(&a, "SELECT count(*) FROM changelog") == before);
+
+    /* The mode stays: it takes Sync everything to take in later imports. */
+    s.count = 0;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_OK);
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_PLAYLIST, rows, 3, 1) == MC_OK);
+    p = get(&a, b.uid);
+    CHECK(p && !p->sync_all && p->count == 3);
+    mc_sync_profile_free(p);
+    s.sync_all = 1;
+    CHECK(mc_sync_set_profile(a.sync, b.uid, &s) == MC_OK);
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_PLAYLIST, rows, 3, 1) == MC_OK);
+    p = get(&a, b.uid);
+    CHECK(p && p->sync_all && p->count == 3);
+    mc_sync_profile_free(p);
+
+    CHECK(mc_sync_select_items(a.sync, b.uid, (mc_profile_item_kind)99, rows, 3, 1) == MC_ERR_INVALID_ARG);
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_ALBUM, rows, -1, 1) == MC_ERR_INVALID_ARG);
+    CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_ALBUM, NULL, 3, 1) == MC_ERR_INVALID_ARG);
+    CHECK(mc_sync_select_items(a.sync, gone, MC_PROFILE_ALBUM, rows, 3, 1) == MC_ERR_NOT_FOUND);
+    p = get(&a, b.uid);
+    CHECK(p && p->count == 3);
+    mc_sync_profile_free(p);
+  }
+
+  /* A long list is one pass: each of these took minutes while a delete read every row. */
+  {
+    enum { MANY = 20000 };
+    char (*rows)[MC_UID_STRLEN] = malloc((size_t)MANY * sizeof *rows);
+    CHECK(rows != NULL);
+    for (int i = 0; rows && i < MANY; i++) mc_uid_new(rows[i]);
+    if (rows) {
+      CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_ALBUM, rows, MANY, 1) == MC_OK);
+      p = get(&a, b.uid);
+      CHECK(p && p->count == MANY + 3);
+      mc_sync_profile_free(p);
+      CHECK(mc_sync_select_items(a.sync, b.uid, MC_PROFILE_ALBUM, rows, MANY, 0) == MC_OK);
+      p = get(&a, b.uid);
+      CHECK(p && p->count == 3);
+      mc_sync_profile_free(p);
+    }
+    free(rows);
+  }
+
   dev_stop(&a);
   dev_stop(&b);
   remove_tree(root);

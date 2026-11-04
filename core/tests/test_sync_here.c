@@ -589,6 +589,53 @@ int main(int argc, char **argv) {
   CHECK(files_of(&b, "Kid Album") == 1);
   CHECK(state_of(&b, MC_PROFILE_ALBUM, kid) == MC_HERE_REMOVED);
 
+  /* Select all under What to sync isn't a choice of each album: Kid Album stays removed. */
+  char albums[3][MC_UID_STRLEN], artists[2][MC_UID_STRLEN];
+  memcpy(albums[0], things, MC_UID_STRLEN);
+  memcpy(albums[1], other, MC_UID_STRLEN);
+  memcpy(albums[2], kid, MC_UID_STRLEN);
+  memcpy(artists[0], low, MC_UID_STRLEN);
+  query_text(mc_library_db(a.lib), "SELECT uid FROM artists WHERE name = 'Kid'", artists[1],
+             sizeof artists[1]);
+  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, albums, 3, 1) == MC_OK);
+  {
+    mc_sync_profile *p = NULL;
+    CHECK(mc_sync_get_profile(b.sync, b.uid, &p) == MC_OK);
+    CHECK(p && !p->sync_all && p->count == 2 && p->removed_count == 1);
+    CHECK(p && p->removed_count == 1 && p->removed[0].kind == MC_PROFILE_ALBUM &&
+          !strcmp(p->removed[0].ref_uid, kid));
+    for (int i = 0; p && i < p->count; i++) CHECK(strcmp(p->items[i].ref_uid, kid));
+    mc_sync_profile_free(p);
+  }
+  CHECK(items_of(&b, b.uid, "exclude_album") == 1);
+  CHECK(state_of(&b, MC_PROFILE_ALBUM, kid) == MC_HERE_REMOVED);
+  /* An artist removed takes its albums along, and Select none keeps every exclusion. */
+  CHECK(remove_here(&b, MC_PROFILE_ARTIST, low, &files, &kept, &res) == MC_OK);
+  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, albums, 3, 0) == MC_OK);
+  CHECK(items_of(&b, b.uid, "exclude_album") == 1 && items_of(&b, b.uid, "exclude_artist") == 1);
+  {
+    mc_sync_profile *p = NULL;
+    CHECK(mc_sync_get_profile(b.sync, b.uid, &p) == MC_OK);
+    CHECK(p && p->count == 0 && p->removed_count == 4); /* three albums, Low */
+    mc_sync_profile_free(p);
+  }
+  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, albums, 3, 1) == MC_OK);
+  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ARTIST, artists, 2, 1) == MC_OK);
+  CHECK(items_of(&b, b.uid, "exclude_album") == 1 && items_of(&b, b.uid, "exclude_artist") == 1);
+  {
+    mc_sync_profile *p = NULL;
+    CHECK(mc_sync_get_profile(b.sync, b.uid, &p) == MC_OK);
+    CHECK(p && p->count == 1 && p->items[0].kind == MC_PROFILE_ARTIST &&
+          !strcmp(p->items[0].ref_uid, artists[1]));
+    mc_sync_profile_free(p);
+  }
+  /* Ticking it by hand still brings it back. */
+  {
+    const char *sel[] = {kid, NULL};
+    select_albums(&b, b.uid, sel);
+  }
+  CHECK(items_of(&b, b.uid, "exclude_album") == 0 && items_of(&b, b.uid, "exclude_artist") == 1);
+
   dev_stop(&c);
   dev_stop(&b);
   dev_stop(&a);
