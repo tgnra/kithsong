@@ -126,6 +126,7 @@ private fun pairedLines(state: SyncState.Paired): List<Line> {
         },
         emphasis = true,
     )
+    if (!progress?.pace.isNullOrEmpty()) lines += Line(progress.pace)
     if (state.devices.isNotEmpty()) {
         val unnamed = stringResource(R.string.device_unnamed)
         val names = state.devices.joinToString(stringResource(R.string.import_list_separator)) { it.ifEmpty { unnamed } }

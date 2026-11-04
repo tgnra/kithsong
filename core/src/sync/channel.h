@@ -18,6 +18,8 @@
  * (a phone whose network was cut off drops packets rather than resetting) fails the call
  * with MC_ERR_NET instead of hanging it. A frame that keeps moving never times out. */
 #define MC_CHANNEL_TIMEOUT_MS 30000
+/* How often mc_channel_set_idle()'s idle runs. */
+#define MC_CHANNEL_IDLE_MS 500
 
 typedef struct mc_channel mc_channel;
 
@@ -53,6 +55,9 @@ int mc_channel_is_encrypted(const mc_channel *ch);
 const char *mc_channel_peer_addr(const mc_channel *ch);
 /* Bounds every later send and receive; MC_SOCKET_FOREVER for none. */
 void mc_channel_set_timeout(mc_channel *ch, int timeout_ms);
+/* idle, unless NULL, then runs about twice a second on the thread of an mc_channel_recv()
+ * waiting for a message to start. It may not use the channel. */
+void mc_channel_set_idle(mc_channel *ch, void (*idle)(void *user), void *user);
 
 /* Has the last word on a peer's static key, e.g. that it is still a non-removed member of
  * this device's group. Non-zero accepts. */

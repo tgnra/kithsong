@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
     CHECK(mc_encode_pool_queue(p, g_uids[2], g_srcs[2], 64, MC_ENCODE_AHEAD, p) == MC_OK);
     mc_encode_pool_hold(p);
     char *out = NULL;
-    CHECK(mc_encode_pool_encode(p, g_uids[5], g_srcs[5], 64, &out) == MC_OK);
+    CHECK(mc_encode_pool_encode(p, g_uids[5], g_srcs[5], 64, NULL, NULL, &out) == MC_OK);
     cached(cache, 5, path, sizeof path);
     CHECK(out && !strcmp(out, path) && mc_file_exists(out));
     free(out);
@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
       CHECK(mc_file_exists(path));
     }
     /* Asked for once it's in the cache: no new encode. */
-    CHECK(mc_encode_pool_encode(p, g_uids[0], g_srcs[0], 64, &out) == MC_OK);
+    CHECK(mc_encode_pool_encode(p, g_uids[0], g_srcs[0], 64, NULL, NULL, &out) == MC_OK);
     free(out);
     mc_encode_pool_stats(p, &st);
     CHECK(st.encoded == 6 && st.unasked == 1);
@@ -146,10 +146,10 @@ int main(int argc, char **argv) {
     CHECK(mc_file_exists(path));
     /* Stopped: jobs are refused until it resumes. */
     char *out = NULL;
-    CHECK(mc_encode_pool_encode(p, g_uids[3], g_srcs[3], 64, &out) != MC_OK && !out);
+    CHECK(mc_encode_pool_encode(p, g_uids[3], g_srcs[3], 64, NULL, NULL, &out) != MC_OK && !out);
     CHECK(mc_encode_pool_queue(p, g_uids[3], g_srcs[3], 64, MC_ENCODE_BACKGROUND, NULL) != MC_OK);
     mc_encode_pool_resume(p);
-    CHECK(mc_encode_pool_encode(p, g_uids[3], g_srcs[3], 64, &out) == MC_OK && out);
+    CHECK(mc_encode_pool_encode(p, g_uids[3], g_srcs[3], 64, NULL, NULL, &out) == MC_OK && out);
     free(out);
     mc_encode_pool_free(p);
   }
@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
     if (!p) return TEST_RESULT();
     mc_encode_pool_hold(p);
     char *out = NULL;
-    CHECK(mc_encode_pool_encode(p, g_uids[4], g_srcs[4], 64, &out) == MC_OK);
+    CHECK(mc_encode_pool_encode(p, g_uids[4], g_srcs[4], 64, NULL, NULL, &out) == MC_OK);
     mc_sleep_ms(50);
     mc_encode_stats st;
     mc_encode_pool_stats(p, &st);

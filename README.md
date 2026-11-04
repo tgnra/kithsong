@@ -92,6 +92,9 @@ Priorities:
 - **Quiet when there's nothing to show:** checking whether a device is there shows nothing; a
   spinner appears once it answers and syncing starts, or straight away when you press
   **Sync now**, and only syncs you asked for or that got going report failing.
+- **Speed and time left:** while files move, a sync shows its speed in MB/s and about how long
+  is left, worked out in the core so every device shows the same, and calm: no ticking seconds,
+  and nothing at all rather than a guess.
 - **Archives:** the device whose music the group started from is its *archive*: it keeps the
   originals of everything. A device that joins a group says so once, naming the archive.
 - **No server:** any device can sync with any other. Edits are merged field by field using

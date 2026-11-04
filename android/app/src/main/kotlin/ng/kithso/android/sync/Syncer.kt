@@ -158,6 +158,8 @@ data class SyncProgress(
     /** File bytes both ways, for the whole session so far. */
     val bytesReceived: Long = 0,
     val bytesSent: Long = 0,
+    /** Speed and time left, as the core words them; "" for neither. Only in [CoreSync.Phase.Files]. */
+    val pace: String = "",
 ) {
     /** Files both ways, for a bar over the whole files phase: [moved] of [moving]. */
     val moving: Int get() = filesTotal + sendsTotal
@@ -783,6 +785,7 @@ class Syncer(
             sendsTotal = if (files) event.sendsTotal else before?.sendsTotal ?: 0,
             bytesReceived = if (files) event.bytesReceived else before?.bytesReceived ?: 0,
             bytesSent = if (files) event.bytesSent else before?.bytesSent ?: 0,
+            pace = if (files) event.pace else "",
         )
         update { copy(sessions = sessions + (event.uid to progress)) }
         // Show what has arrived so far on a long transfer, rather than only at the end.

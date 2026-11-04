@@ -53,6 +53,9 @@ extern uint32_t mc_socket_test_lookup_delay_ms;
 mc_status mc_socket_send_all(mc_socket *s, const void *buf, size_t len, int timeout_ms);
 /* Receives exactly len bytes. MC_ERR_NET on error, timeout or a closed peer. */
 mc_status mc_socket_recv_exact(mc_socket *s, void *buf, size_t len, int timeout_ms);
+/* Waits up to timeout_ms for something to receive. 1 once there is, or the connection has
+ * failed or closed, for the next receive to report; 0 if the time ran out. */
+int mc_socket_wait_readable(mc_socket *s, int timeout_ms);
 /* The peer's address as text, for logs. */
 const char *mc_socket_peer(const mc_socket *s);
 /* Shuts the connection down both ways, so a send or receive blocked on another thread

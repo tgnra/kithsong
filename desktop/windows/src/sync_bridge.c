@@ -175,6 +175,7 @@ static void on_progress(void *user, const mc_sync_progress *progress) {
   ev->sends_total = progress->sends_total;
   ev->bytes_received = progress->bytes_received;
   ev->bytes_sent = progress->bytes_sent;
+  mc_sync_pace_text(progress, ev->pace, sizeof ev->pace);
   ev->library_changed = changed;
   post(user, ev);
 }

@@ -25,7 +25,7 @@ typedef enum {
   SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status,
                         * joined, archive_name, archives */
   SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_*, files_done, files_total, sends_*,
-                        * bytes_*, library_changed */
+                        * bytes_*, pace, library_changed */
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
                         * files_received, files_sent, bytes_*, cancelled */
   SYNC_EV_REACH,       /* on_reach: uid ("" when much changed at once) */
@@ -53,6 +53,7 @@ typedef struct sync_event {
   int sends_done, sends_total; /* the files the peer is fetching from it, as it announced */
   int files_received, files_sent;
   int64_t bytes_received, bytes_sent;
+  char pace[96]; /* progress: mc_sync_pace_text(), in UTF-8 */
   int library_synced, converged;
   int cancelled; /* mc_sync_cancel() here cut the session short */
   /* Progress: library rows or a file arrived since the last event delivered for the

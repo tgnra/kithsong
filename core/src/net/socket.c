@@ -650,6 +650,17 @@ mc_status mc_socket_recv_exact(mc_socket *s, void *buf, size_t len, int timeout_
   return MC_OK;
 }
 
+int mc_socket_wait_readable(mc_socket *s, int timeout_ms) {
+  uint64_t deadline = deadline_of(timeout_ms);
+  for (;;) {
+    char c; /* asks the socket itself, as wait_ready() can't see a shutdown on Windows */
+    if (recv(s->fd, &c, 1, MSG_PEEK) >= 0 || !WOULD_BLOCK(sock_error())) return 1;
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0) return 0;
+    if (wait_ready(&s->fd, 1, 0, slice(left)) == -2) return 1;
+  }
+}
+
 const char *mc_socket_peer(const mc_socket *s) {
   return s->peer;
 }

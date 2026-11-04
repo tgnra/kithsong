@@ -6,6 +6,7 @@
 #include <mbedtls/platform_util.h>
 
 #include "sync/frame.h"
+#include "util/platform.h"
 
 struct mc_channel {
   mc_socket *sock;
@@ -14,6 +15,8 @@ struct mc_channel {
   int timeout_ms;
   int encrypted;
   int broken; /* a failed handshake or decrypt: refuse everything after */
+  void (*idle)(void *user);
+  void *idle_user;
   unsigned char preamble[MC_PREAMBLE_LEN];
   mc_noise_cipher send, recv;
   unsigned char peer_key[MC_NOISE_KEY_LEN];
@@ -142,6 +145,11 @@ const char *mc_channel_peer_addr(const mc_channel *ch) {
   return mc_socket_peer(ch->sock);
 }
 
+void mc_channel_set_idle(mc_channel *ch, void (*idle)(void *user), void *user) {
+  ch->idle = idle;
+  ch->idle_user = user;
+}
+
 void mc_channel_set_timeout(mc_channel *ch, int timeout_ms) {
   ch->timeout_ms = timeout_ms;
 }
@@ -261,11 +269,22 @@ mc_status mc_channel_send(mc_channel *ch, uint8_t type, const void *payload, siz
   return st;
 }
 
+/* Waits for a message to start coming, within the timeout, running idle meanwhile. */
+static mc_status wait_idling(mc_channel *ch) {
+  uint64_t t0 = mc_mono_ms();
+  while (!mc_socket_wait_readable(ch->sock, MC_CHANNEL_IDLE_MS)) {
+    if (ch->timeout_ms >= 0 && mc_mono_ms() - t0 >= (uint64_t)ch->timeout_ms) return MC_ERR_NET;
+    ch->idle(ch->idle_user);
+  }
+  return MC_OK;
+}
+
 mc_status mc_channel_recv(mc_channel *ch, uint8_t *type, const unsigned char **payload,
                           size_t *len) {
   if (!ch || !type || !payload || !len || !ch->encrypted || ch->broken) return MC_ERR_INVALID_ARG;
-  size_t n;
-  mc_status st = mc_frame_recv(ch->sock, ch->rbuf, sizeof ch->rbuf, &n, ch->timeout_ms);
+  size_t n = 0;
+  mc_status st = ch->idle ? wait_idling(ch) : MC_OK;
+  if (st == MC_OK) st = mc_frame_recv(ch->sock, ch->rbuf, sizeof ch->rbuf, &n, ch->timeout_ms);
   if (st == MC_OK && n < 1 + MC_NOISE_TAG_LEN) st = MC_ERR_FORMAT; /* not even a type byte */
   if (st == MC_OK) st = mc_noise_decrypt(&ch->recv, NULL, 0, ch->rbuf, n, ch->rbuf);
   if (st != MC_OK) {

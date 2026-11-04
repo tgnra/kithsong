@@ -138,7 +138,9 @@ class SyncService : Service() {
                 } else {
                     resources.getQuantityString(R.plurals.sync_notification_files, filesTotal, filesDone, filesTotal)
                 }
-                builder.setContentText(text)
+                // Of several sessions, the speed of none: it would be neither one's nor the sum.
+                val pace = files.singleOrNull()?.pace.orEmpty()
+                builder.setContentText(if (pace.isEmpty()) text else text + getString(R.string.separator_dot) + pace)
                 builder.setProgress(moving, moved, false)
             } else {
                 builder.setProgress(0, 0, true)

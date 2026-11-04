@@ -464,6 +464,7 @@ private fun SessionRow(progress: SyncProgress, title: String?) {
                 sizeText(context, it.bytesSent),
             )
         },
+        progress.pace.takeIf { it.isNotEmpty() },
     )
     ListItem(
         headlineContent = { Text(title ?: phase) },
