@@ -13,6 +13,8 @@
 #include "canvas.h"
 #include "cover.h"
 #include "drag.h"
+#include "playback.h"
+#include "radio_menu.h"
 #include "scroller.h"
 #include "smart_editor.h"
 #include "theme.h"
@@ -63,6 +65,7 @@ enum {
   CMD_EDIT_SMART,
   CMD_GO_TO_ALBUM,
   CMD_GO_TO_ARTIST,
+  CMD_START_RADIO,
   CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
 };
 
@@ -750,6 +753,8 @@ static void show_menu(POINT pt) {
   /* Greyed out until there's a play queue to add to (see TODO.md, Playback). */
   AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
   AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  char seed[MC_UID_STRLEN];
+  radio_menu_append_track(menu, CMD_START_RADIO, s.lib, s.rows[i].uid, seed);
   BOOL album = album_to_go_to(i), artist = artist_to_go_to(i);
   if (album || artist) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   if (album) AppendMenuW(menu, MF_STRING, CMD_GO_TO_ALBUM, mc_wstr_mnemonic(MC_STR_GO_TO_ALBUM));
@@ -785,6 +790,7 @@ static void show_menu(POINT pt) {
       s.req.here = s.rows[i].path != NULL;
       notify(TLN_ADD_TO_PLAYLIST);
       break;
+    case CMD_START_RADIO: playback_play_radio(seed); break;
     case CMD_MOVE_UP: request_move(i, i - 1); break;
     case CMD_MOVE_DOWN: request_move(i, i + 2); break;
     case CMD_REMOVE: request_remove(i); break;

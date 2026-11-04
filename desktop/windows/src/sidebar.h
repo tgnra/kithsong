@@ -6,8 +6,8 @@
  *
  * Under the pages: RECENTS, what was last played on any device (sidebar_set_recents), each
  * a button that opens it (SBN_OPEN_RECENT), with a right-click menu to remove it or clear
- * them all (SBN_REMOVE_RECENT, SBN_CLEAR_RECENTS), or an album's or artist's to edit it
- * (SBN_EDIT_RECENT); the section is left out while there are
+ * them all (SBN_REMOVE_RECENT, SBN_CLEAR_RECENTS), or an album's or artist's to start a radio
+ * from it (radio_menu.h) or edit it (SBN_EDIT_RECENT); the section is left out while there are
  * none. A manual playlist's recent takes tracks dragged onto it, and a manual group's albums
  * (drag.h).
  * Under DEVICES: this PC once it's in a group, the paired devices (each a PAGE_DEVICE row;
@@ -111,6 +111,8 @@ void sidebar_set_locked(BOOL locked);
 /* Shows or hides the row above Settings that says audio analysis is going on in the background. */
 void sidebar_set_analysing(BOOL analysing);
 
+/* How the recents' menus reach the open library, as it comes and goes (NULL when there's none). */
+void sidebar_set_library_source(mc_library *(*library)(void));
 /* Replaces the recents, most recent first. */
 void sidebar_set_recents(const sidebar_recent *recents, int n);
 /* The recent of the last SBN_OPEN_RECENT, SBN_REMOVE_RECENT or SBN_EDIT_RECENT, copying its kind to *kind, or NULL. Valid until
