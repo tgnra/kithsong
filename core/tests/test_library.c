@@ -70,12 +70,16 @@ static int has_column(sqlite3 *db, const char *table, const char *column) {
   "ALTER TABLE albums DROP COLUMN artist_credit;" \
   "DELETE FROM meta WHERE key = 'artist_refresh';"
 
+/* Takes a library back before v17: no chosen covers. */
+#define V16_ART_CHOSEN \
+  "DROP TRIGGER mc_log_ins_albums_art_chosen;" \
+  "DROP TRIGGER mc_log_upd_albums_art_chosen;" \
+  "ALTER TABLE albums DROP COLUMN art_chosen;"
+
 /* Takes a library back before v15: no album flags or chosen covers. Every winding back needs
  * it, since v15 to v17 are run again. */
 #define V14_FLAGS \
-  "DROP TRIGGER mc_log_ins_albums_art_chosen;" \
-  "DROP TRIGGER mc_log_upd_albums_art_chosen;" \
-  "ALTER TABLE albums DROP COLUMN art_chosen;" \
+  V16_ART_CHOSEN \
   "DROP TRIGGER mc_log_ins_albums_no_scrobble;" \
   "DROP TRIGGER mc_log_upd_albums_no_scrobble;" \
   "DROP TRIGGER mc_log_ins_albums_mix;" \
@@ -587,6 +591,42 @@ static void test_migration_v15(const char *scratch) {
   CHECK(changelog_count(db, "row_uid = 'al4' AND field IN ('no_scrobble', 'mix')") == 0);
   CHECK(changelog_count(db, "row_uid = 'al4' AND field = 'title'") == 1);
   CHECK(changelog_count(db, "row_uid = 'al5' AND field IN ('no_scrobble', 'mix')") == 1);
+  mc_library_close(lib);
+}
+
+/* v17's chosen covers, upgrading from exactly v16: from anything older, k_newly_known's entry
+ * for them runs even with too low a version, and nothing would notice. */
+static void test_migration_v17(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v17.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  lib->applying_remote = 1;
+  CHECK(exec(db, V16_ART_CHOSEN
+                 "INSERT INTO albums (uid, title) VALUES ('al1', 'Chosen Elsewhere'), ('al2', 'Changed Mind'),"
+                 " ('al3', 'Untouched');"
+                 "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
+                 " (1000, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al1', 'art_chosen', 'abc'),"
+                 " (1001, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'art_chosen', 'old'),"
+                 " (1002, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'art_chosen', 'new');"
+                 "PRAGMA user_version = 16;") == SQLITE_OK);
+  CHECK(!has_column(db, "albums", "art_chosen"));
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al1' AND art_chosen = 'abc'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al2' AND art_chosen = 'new'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al3' AND art_chosen IS NULL") == 1);
+  CHECK(changelog_count(db, "1") == 3); /* nothing of it logged here */
   mc_library_close(lib);
 }
 
@@ -1713,6 +1753,7 @@ int main(int argc, char **argv) {
   test_migration_v12(argc > 1 ? argv[1] : ".");
   test_migration_v13(argc > 1 ? argv[1] : ".");
   test_migration_v15(argc > 1 ? argv[1] : ".");
+  test_migration_v17(argc > 1 ? argv[1] : ".");
   test_credited_artists(argc > 1 ? argv[1] : ".");
   test_artist_cover(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
