@@ -28,9 +28,7 @@ data class BackStack<T>(val layers: List<BackLayer<T>> = emptyList(), private va
     /** [page] over the others, unless it's on top already: a double tap opens it once. */
     fun push(page: T): BackStack<T> {
         if (top?.page == page) return this
-        // The click: App ends the view switch once the page is drawn.
-        // By toString(), as R8 renames classes but not what a data class says it's called.
-        if (ng.kithso.core.CoreTesting.enabled()) ng.kithso.core.CoreTesting.viewBegin(page.toString().substringBefore('('))
+        onPush(page)
         return BackStack(layers + BackLayer(nextId, page), nextId + 1)
     }
 
@@ -47,6 +45,9 @@ data class BackStack<T>(val layers: List<BackLayer<T>> = emptyList(), private va
     fun keep(count: Int): BackStack<T> = copy(layers = layers.filterNot { it.leaving }.take(count))
 
     companion object {
+        /** Told of each page pushed. The app sets it, so this class and its tests need no core. */
+        var onPush: (Any?) -> Unit = {}
+
         fun <T> of(pages: List<T>): BackStack<T> = pages.fold(BackStack()) { stack, page -> stack.push(page) }
 
         /** Keeps the open pages, each with its id, so what they've saved finds them again. */

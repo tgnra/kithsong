@@ -22,6 +22,7 @@ import ng.kithso.android.playback.PlaybackService
 import ng.kithso.android.playback.Scrobbling
 import ng.kithso.android.playback.SessionPlayback
 import ng.kithso.android.sync.Syncer
+import ng.kithso.android.ui.BackStack
 import ng.kithso.android.ui.art.FileArt
 import ng.kithso.android.ui.art.artImageLoader
 import coil3.ImageLoader
@@ -102,7 +103,12 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         CoreTesting.setEnabled(settings.perfProfile)
         CoreTesting.markAt("main_entered", startedUs)
         CoreTesting.mark("settings_loaded")
-        stressDir = settings.stressLibrary?.takeIf(CoreTesting::isComplete)?.let(::File)
+        // The click: App ends the view switch once the page is drawn.
+        // By toString(), as R8 renames classes but not what a data class says it's called.
+        BackStack.onPush = { page ->
+            if (CoreTesting.enabled()) CoreTesting.viewBegin(page.toString().substringBefore('('))
+        }
+        stressDir =settings.stressLibrary?.takeIf(CoreTesting::isComplete)?.let(::File)
         val core = CoreLibrarySource(
             libraryDir,
             playlistArtDir,
