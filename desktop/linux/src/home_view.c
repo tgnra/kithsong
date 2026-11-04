@@ -1,7 +1,6 @@
 #include "home_view.h"
 
 #include <math.h>
-#include <string.h>
 
 #include "brand_backdrop.h"
 #include "cover.h"
@@ -689,7 +688,7 @@ static GtkWidget *arrow_new(const char *icon, GtkAlign side, GCallback clicked, 
   return b;
 }
 
-/* Row i, hidden until it has tiles. */
+/* A row, hidden until it has tiles. */
 static GtkWidget *row_new(row *r, mc_home_row_id id) {
   r->items = g_ptr_array_new_with_free_func(tile_free);
   r->tiles = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, TILE_GAP);

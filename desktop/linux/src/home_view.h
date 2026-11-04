@@ -29,7 +29,8 @@
  * album and evaluates the smart lists, and what's showing stays until it's done. Reloading
  * updates the tiles where they are, so the scroll positions and the focus stay. Random's
  * selection comes from a seed picked once, when the view is made, so it holds until the app
- * next starts. The rows are capped (MC_HOME_ROW_MAX), so every tile can be a real widget.
+ * next starts. The rows are capped (MC_HOME_ROW_MAX), so every tile can be a real widget, and
+ * its cover is asked for as soon as it's there, the top rows first; cover.h keeps them.
  */
 #ifndef KITHSONG_HOME_VIEW_H
 #define KITHSONG_HOME_VIEW_H
