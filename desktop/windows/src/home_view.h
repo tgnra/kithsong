@@ -27,9 +27,10 @@
  * those a screen along or down, and only ever those. The rows are capped (HOME_ROW_MAX), so
  * what's decoded stays small however big the library is, and it's kept until the page reloads.
  *
- * The page reloads the next time it paints after home_view_refresh(). Random's selection comes
- * from a seed picked once, when the view is created, so it holds until the app next starts.
- * Screen readers don't see the tiles yet.
+ * The page reloads the next time it paints after home_view_refresh(), on that thread too, as
+ * reading the rows lists every album and evaluates the smart lists; what's showing stays until
+ * it's done. Random's selection comes from a seed picked once, when the view is created, so it
+ * holds until the app next starts. Screen readers don't see the tiles yet.
  */
 #ifndef KITHSONG_HOME_VIEW_H
 #define KITHSONG_HOME_VIEW_H

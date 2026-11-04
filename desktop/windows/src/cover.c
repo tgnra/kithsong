@@ -33,17 +33,22 @@ void cover_art_close(cover_art_source *src) {
   src->dir = NULL;
 }
 
-wchar_t *cover_art_file(cover_art_source *src, const char *lib_dir, const char *art_dir, const wchar_t *uid,
-                        BOOL group) {
-  if (!lib_dir || !art_dir || !uid) return NULL;
+mc_library *cover_art_library(cover_art_source *src, const char *lib_dir) {
+  if (!lib_dir) return NULL;
   if (src->lib && strcmp(src->dir, lib_dir)) cover_art_close(src);
   if (!src->lib && mc_library_open(lib_dir, &src->lib) == MC_OK) src->dir = _strdup(lib_dir);
-  if (!src->lib || !src->dir) return NULL;
+  return src->dir ? src->lib : NULL;
+}
+
+wchar_t *cover_art_file(cover_art_source *src, const char *lib_dir, const char *art_dir, const wchar_t *uid,
+                        BOOL group) {
+  mc_library *lib = art_dir && uid ? cover_art_library(src, lib_dir) : NULL;
+  if (!lib) return NULL;
   char *u = wstr_to_utf8(uid), *path = NULL;
   mc_status st = MC_ERR_NOT_FOUND;
-  if (u && group) st = mc_album_group_art(src->lib, u, art_dir, &path);
-  else if (u) st = mc_playlist_art(src->lib, u, art_dir, &path);
-  if (st == MC_ERR_NOT_FOUND && u) mc_smart_art(src->lib, u, art_dir, &path); /* uids never clash */
+  if (u && group) st = mc_album_group_art(lib, u, art_dir, &path);
+  else if (u) st = mc_playlist_art(lib, u, art_dir, &path);
+  if (st == MC_ERR_NOT_FOUND && u) mc_smart_art(lib, u, art_dir, &path); /* uids never clash */
   free(u);
   wchar_t *file = wstr_dup_from_utf8(path);
   mc_free(path);

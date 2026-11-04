@@ -26,6 +26,9 @@ typedef struct cover_art_source {
   char *dir;
 } cover_art_source;
 
+/* The connection to the library in lib_dir, opened if it isn't the one open; NULL if it can't
+ * be. */
+struct mc_library *cover_art_library(cover_art_source *src, const char *lib_dir);
 /* The picture file of playlist uid (see mc_playlist_art()), or for group of album group uid,
  * or of smart list uid (mc_smart_art()), or NULL if it has none. Opens the library in lib_dir
  * first, if it isn't the one open. */

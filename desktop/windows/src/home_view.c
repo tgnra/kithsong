@@ -17,6 +17,7 @@
 #include "wstr.h"
 
 #define WM_APP_THUMB (WM_APP + 20) /* lParam: thumb_result *, from the loader thread */
+#define WM_APP_PICKS (WM_APP + 21) /* lParam: home_picks *, from the loader thread */
 
 /* Metrics at 96 DPI; the tiles are the album grid's and an artist page's. */
 enum {
@@ -83,7 +84,8 @@ typedef struct thumb_result {
 static struct {
   HWND wnd;
   mc_library *lib;
-  BOOL dirty; /* reload when next painted */
+  BOOL dirty;  /* reload when next painted */
+  BOOL loaded; /* the rows have been read at least once */
   unsigned seed;
   home_row rows[HOME_ROW_COUNT];
   BOOL has_music, has_plays;
@@ -127,6 +129,7 @@ static struct {
   int busy_row, busy_index; /* job the loader is working on, or -1 */
   UINT busy_gen;
   UINT loader_gen; /* gen the queued jobs belong to */
+  BOOL picks_wanted; /* the loader reads the rows before it decodes anything else */
   char *lib_dir;   /* the library's folder, for the loader's own connection */
   char *art_dir;   /* where playlists' and groups' pictures are cached */
   BOOL quit;
@@ -149,10 +152,34 @@ static DWORD WINAPI loader_main(void *arg) {
   for (;;) {
     EnterCriticalSection(&g.lock);
     g.busy_row = g.busy_index = -1;
-    while (!g.quit && g.queue_len == 0) SleepConditionVariableCS(&g.wake, &g.lock, INFINITE);
+    while (!g.quit && g.queue_len == 0 && !g.picks_wanted) {
+      if (art.lib) { /* idle: nothing of ours holds the library open, say for a move */
+        LeaveCriticalSection(&g.lock);
+        cover_art_close(&art);
+        EnterCriticalSection(&g.lock);
+        continue;
+      }
+      SleepConditionVariableCS(&g.wake, &g.lock, INFINITE);
+    }
     if (g.quit) {
       LeaveCriticalSection(&g.lock);
       break;
+    }
+    if (g.picks_wanted) {
+      g.picks_wanted = FALSE;
+      char *dir = g.lib_dir ? _strdup(g.lib_dir) : NULL;
+      unsigned seed = g.seed;
+      LeaveCriticalSection(&g.lock);
+      home_picks *picks = malloc(sizeof *picks);
+      if (picks) {
+        home_picks_load(cover_art_library(&art, dir), seed, picks);
+        if (!PostMessageW(g.wnd, WM_APP_PICKS, 0, (LPARAM)picks)) {
+          home_picks_free(picks);
+          free(picks);
+        }
+      }
+      free(dir);
+      continue;
     }
     load_job job = g.queue[0];
     memmove(g.queue, g.queue + 1, (size_t)(--g.queue_len) * sizeof *g.queue);
@@ -284,7 +311,7 @@ static RECT arrow_rect(int row, BOOL right) {
 
 static BOOL arrow_shown(int row, BOOL right) {
   const home_row *r = &g.rows[row];
-  return row == g.hot_row && !g.panning && (right ? r->target < row_max(r) : r->target > 0);
+  return (row == g.hot_row || row == g.pressed.row) && !g.panning && (right ? r->target < row_max(r) : r->target > 0);
 }
 
 static hit hit_test(int x, int y) {
@@ -413,6 +440,8 @@ static void on_thumb(thumb_result *r) {
 
 /* --- Data --- */
 
+static void update_hot(void);
+
 static void free_tile(tile *t) {
   free_thumb(t);
   free(t->pick.title);
@@ -444,18 +473,27 @@ static void carry_thumb(tile *t) {
   }
 }
 
+/* Asks the loader to read the rows: that lists every album and evaluates the smart lists, too
+ * slow for the UI thread in a big library. What's showing stays until they arrive. */
 static void reload(void) {
   g.dirty = FALSE;
-  home_picks picks;
-  home_picks_load(g.lib, g.seed, &picks);
+  EnterCriticalSection(&g.lock);
+  free(g.lib_dir);
+  g.lib_dir = g.lib ? _strdup(mc_library_dir(g.lib)) : NULL;
+  g.picks_wanted = TRUE;
+  WakeConditionVariable(&g.wake);
+  LeaveCriticalSection(&g.lock);
+}
 
+/* The loader has read the rows: they become tiles. */
+static void on_picks(home_picks *picks) {
   tile *tiles[HOME_ROW_COUNT] = {0};
   for (int i = 0; i < HOME_ROW_COUNT; i++) {
-    int n = picks.counts[i];
+    int n = picks->counts[i];
     tiles[i] = n ? calloc((size_t)n, sizeof **tiles) : NULL;
     for (int k = 0; tiles[i] && k < n; k++) {
-      tiles[i][k].pick = picks.rows[i][k];
-      memset(&picks.rows[i][k], 0, sizeof picks.rows[i][k]); /* the tile owns its strings now */
+      tiles[i][k].pick = picks->rows[i][k];
+      memset(&picks->rows[i][k], 0, sizeof picks->rows[i][k]); /* the tile owns its strings now */
       carry_thumb(&tiles[i][k]);
     }
   }
@@ -465,8 +503,6 @@ static void reload(void) {
   g.loader_gen = g.gen;
   for (int i = 0; i < g.queue_len; i++) free(g.queue[i].key);
   g.queue_len = 0;
-  free(g.lib_dir);
-  g.lib_dir = g.lib ? _strdup(mc_library_dir(g.lib)) : NULL;
   LeaveCriticalSection(&g.lock);
 
   for (int i = 0; i < HOME_ROW_COUNT; i++) {
@@ -474,16 +510,20 @@ static void reload(void) {
     for (int k = 0; k < r->count; k++) free_tile(&r->tiles[k]);
     free(r->tiles);
     r->tiles = tiles[i];
-    r->count = tiles[i] ? picks.counts[i] : 0;
+    r->count = tiles[i] ? picks->counts[i] : 0;
   }
-  g.has_music = picks.has_music;
-  g.has_plays = picks.has_plays;
-  home_picks_free(&picks);
+  g.has_music = picks->has_music;
+  g.has_plays = picks->has_plays;
+  g.loaded = TRUE;
+  home_picks_free(picks);
+  free(picks);
 
   g.hot.part = PART_NONE;
   if (g.focus_row >= 0 && g.focus_index >= g.rows[g.focus_row].count) g.focus_row = g.focus_index = -1;
   relayout();
   request_thumbs();
+  InvalidateRect(g.wnd, NULL, FALSE);
+  update_hot();
 }
 
 void home_view_set_library(mc_library *lib) {
@@ -509,8 +549,6 @@ const char *home_view_clicked(mc_recent_kind *kind) {
 }
 
 /* --- Scrolling sideways --- */
-
-static void update_hot(void);
 
 static void invalidate_row(int row) {
   RECT rc = row_rect(row);
@@ -959,7 +997,9 @@ static void paint(HDC dc, const RECT *dirty) {
   HGDIOBJ old_font = SelectObject(c->dc, g.font ? (HGDIOBJ)g.font : GetStockObject(DEFAULT_GUI_FONT));
   SetBkMode(c->dc, TRANSPARENT);
 
-  if (!g.has_music) {
+  if (!g.loaded) {
+    /* a moment's blank: the welcome would flash up over a full library */
+  } else if (!g.has_music) {
     paint_welcome(c);
   } else {
     SetRectEmpty(&g.action_rc);
@@ -1083,6 +1123,9 @@ static LRESULT CALLBACK home_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       break;
     case WM_APP_THUMB:
       on_thumb((thumb_result *)lp);
+      return 0;
+    case WM_APP_PICKS:
+      on_picks((home_picks *)lp);
       return 0;
     case WM_DESTROY:
       EnterCriticalSection(&g.lock);

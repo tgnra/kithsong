@@ -39,7 +39,8 @@ typedef struct home_picks {
 } home_picks;
 
 /* Fills out from lib (NULL leaves every row empty). seed decides Random's selection and order,
- * so one seed keeps the same selection across reloads. */
+ * so one seed keeps the same selection across reloads. This lists every album and evaluates
+ * every smart list, so it's for a background thread, on its own connection. */
 void home_picks_load(mc_library *lib, unsigned seed, home_picks *out);
 void home_picks_free(home_picks *picks);
 
