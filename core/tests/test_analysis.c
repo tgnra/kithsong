@@ -978,8 +978,6 @@ static void test_recycle_bin(const char *scratch) {
   mc_delete_plan_free(plan);
   CHECK(res.tracks_deleted == 1);
   CHECK(query_int(lib, "SELECT count(*) FROM track_analysis") == 0);
-  snprintf(path, sizeof path, "%s/not-there.wav", dir);
-  mc_remove(path); /* left by the last run */
   CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE entity = 'track_analysis'"
                        " AND field = '_deleted'") == 1);
 
