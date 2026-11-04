@@ -83,7 +83,8 @@ import kotlinx.coroutines.launch
  * as the desktops have above a track list), then its tracks. Tapping a track plays the list
  * from there ([onPlay]), shuffled or not as shuffle is; long-pressing one opens its menu
  * ([PlaylistActions.trackMenu]). An artist's albums come before their tracks, and an album
- * group shows its albums; [onOpen] opens an album, and long-pressing one opens its menu
+ * group shows its albums; [onOpen] opens an album (one of a group's knowing its group, to go on
+ * into the albums after it), and long-pressing one opens its menu
  * ([PlaylistActions.albumMenu]), which in a manual album group can take it out. As on the
  * desktops, an album group has Play, Shuffle albums (its albums in a random order, each one's
  * tracks in theirs) and Shuffle tracks. A smart list in random order has a button
@@ -129,7 +130,10 @@ fun DetailScreen(
     val editableGroup by produceState(false, ref, edits) {
         value = ref.kind == CollectionRef.Kind.AlbumGroup && editor?.isEditableGroup(ref.uid) == true
     }
-    val albumMenu: (Album) -> Unit = { actions.albumMenu(it, groupUid = ref.uid.takeIf { editableGroup }) }
+    val albumMenu: (Album) -> Unit = {
+        val inGroup = ref.uid.takeIf { ref.kind == CollectionRef.Kind.AlbumGroup }
+        actions.albumMenu(it, groupUid = ref.uid.takeIf { editableGroup }, inGroup = inGroup)
+    }
     // A smart list's menu, for Edit rules…, Rename… and Delete.
     val smart by produceState(false, ref) {
         value = (ref.kind == CollectionRef.Kind.Playlist || ref.kind == CollectionRef.Kind.AlbumGroup) &&
@@ -253,7 +257,7 @@ fun DetailScreen(
                         onMenu = when {
                             list == null -> null
                             ref.kind == CollectionRef.Kind.Album -> ({
-                                actions.albumMenu(Album(ref.uid, list.title, list.artist, list.year, list.art))
+                                actions.albumMenu(Album(ref.uid, list.title, list.artist, list.year, list.art), inGroup = ref.group)
                             })
                             smart && ref.kind == CollectionRef.Kind.Playlist -> ({
                                 actions.playlistMenu(
@@ -318,7 +322,7 @@ fun DetailScreen(
                         EmptyListNote(smart, group = true)
                     }
                     items(albums.chunked(columns), key = { "albums:${it.first().uid}" }, contentType = { "albums" }) { row ->
-                        AlbumGridRow(row, columns, onOpen, albumMenu)
+                        AlbumGridRow(row, columns, { onOpen(it.copy(group = ref.uid)) }, albumMenu)
                     }
                     return@LazyColumn
                 }
@@ -338,7 +342,7 @@ fun DetailScreen(
                             TrackRow(
                                 track,
                                 showAlbum = true,
-                                onLongClick = { actions.trackMenu(track, removable = false, from = ref) },
+                                onLongClick = { actions.trackMenu(track, removable = false, from = ref.copy(group = null)) },
                                 onClick = { onPlay(singles, i) },
                             )
                         }
@@ -378,7 +382,7 @@ fun DetailScreen(
                         TrackRow(
                             track,
                             showAlbum = ref.kind != CollectionRef.Kind.Album,
-                            onLongClick = { actions.trackMenu(track, removable = editable, from = ref) },
+                            onLongClick = { actions.trackMenu(track, removable = editable, from = ref.copy(group = null)) },
                             onClick = { onPlay(tracks, i) },
                         )
                     }

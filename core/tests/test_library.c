@@ -1806,6 +1806,70 @@ static void test_album_group_edits(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* What a group's Play queues: its albums in the order given, each one's tracks in order,
+ * past any album with nothing here. */
+static void test_albums_tracks(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_albums_tracks.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  /* al1's numbers are out of insertion order; al2 has no file here; al3 only its second track. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'One'), ('al2', 'Away'), ('al3', 'Three');"
+                 "INSERT INTO tracks (uid, album_uid, title, track_no) VALUES ('t12', 'al1', 'B', 2),"
+                 " ('t11', 'al1', 'A', 1), ('t21', 'al2', 'C', 1), ('t31', 'al3', 'D', 1), ('t32', 'al3', 'E', 2);"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES ('f11', 't11', 'One/1.flac', 'flac'),"
+                 " ('f12', 't12', 'One/2.flac', 'flac'), ('f32', 't32', 'Three/2.flac', 'flac');") == SQLITE_OK);
+
+  const char *const order[] = {"al3", "al2", "nope", "al1"};
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_albums_tracks(lib, order, 4, &tracks) == MC_OK && tracks && tracks->count == 3);
+  if (tracks && tracks->count == 3) {
+    CHECK_STR(tracks->items[0].uid, "t32");
+    CHECK_STR(tracks->items[0].album_uid, "al3");
+    CHECK_STR(tracks->items[1].uid, "t11");
+    CHECK_STR(tracks->items[1].album_uid, "al1");
+    CHECK_STR(tracks->items[2].uid, "t12");
+    CHECK(tracks->items[0].path && tracks->items[2].path);
+    CHECK_STR(tracks->items[2].title, "B");
+  }
+  mc_track_list_free(tracks);
+
+  /* A group's own order, as a frontend reads it to play the group. */
+  char group[MC_UID_STRLEN];
+  CHECK(mc_album_group_create(lib, "Both", group) == MC_OK);
+  CHECK(mc_album_group_add(lib, group, "al3") == MC_OK);
+  CHECK(mc_album_group_add(lib, group, "al2") == MC_OK);
+  CHECK(mc_album_group_add(lib, group, "al1") == MC_OK);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_album_group_albums(lib, group, &albums) == MC_OK && albums && albums->count == 3);
+  if (albums && albums->count == 3) {
+    const char *uids[3] = {albums->items[0].uid, albums->items[1].uid, albums->items[2].uid};
+    tracks = NULL;
+    CHECK(mc_library_list_albums_tracks(lib, uids, 3, &tracks) == MC_OK && tracks && tracks->count == 3);
+    if (tracks && tracks->count == 3) {
+      CHECK_STR(tracks->items[0].uid, "t32");
+      CHECK_STR(tracks->items[2].uid, "t12");
+    }
+    mc_track_list_free(tracks);
+  }
+  mc_album_list_free(albums);
+
+  /* Nothing to play is an empty list, not an error. */
+  const char *const away[] = {"al2"};
+  tracks = NULL;
+  CHECK(mc_library_list_albums_tracks(lib, away, 1, &tracks) == MC_OK && tracks && tracks->count == 0);
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_albums_tracks(lib, NULL, 0, &tracks) == MC_OK && tracks && tracks->count == 0);
+  mc_track_list_free(tracks);
+  CHECK(mc_library_list_albums_tracks(lib, NULL, 1, &tracks) == MC_ERR_INVALID_ARG);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   /* The library is a folder; the database is library.db inside it. */
   char path[1024], file[1100];
@@ -1951,5 +2015,6 @@ int main(int argc, char **argv) {
   test_empty_here(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");
   test_album_group_edits(argc > 1 ? argv[1] : ".");
+  test_albums_tracks(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();
 }

@@ -4,6 +4,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import ng.kithso.android.data.CollectionRef
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 /** One page of a [BackStack]; [id] tells two openings of the same page apart. */
 @Immutable
@@ -92,7 +94,8 @@ sealed interface Page {
             is Device -> "device:${page.uid}"
             Search -> "search"
             Stats -> "stats"
-            is Collection -> "list:${page.ref.kind.name}:${page.ref.uid}"
+            is Collection -> page.ref.group?.let { "grouplist:${URLEncoder.encode(it, "UTF-8")}:${page.ref.uid}" }
+                ?: "list:${page.ref.kind.name}:${page.ref.uid}"
             Player -> "player"
         }
 
@@ -109,6 +112,13 @@ sealed interface Page {
                 "stats" -> Stats
                 "list" -> Collection(
                     CollectionRef(CollectionRef.Kind.valueOf(rest.substringBefore(':')), rest.substringAfter(':')),
+                )
+                "grouplist" -> Collection(
+                    CollectionRef(
+                        CollectionRef.Kind.Album,
+                        rest.substringAfter(':'),
+                        URLDecoder.decode(rest.substringBefore(':'), "UTF-8"),
+                    ),
                 )
                 else -> Player
             }

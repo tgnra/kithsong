@@ -860,8 +860,16 @@ static void play_items(int n, track_list_item (*item_at)(int), int start) {
   if (count && g_app.lib && uid[0] && mc_library_record_opened(g_app.lib, kind, uid) == MC_OK) refresh_recents();
 }
 
-/* The shown album, playlist or artist's tracks (see play_items()). */
+static BOOL play_group_from(const char *album, int start);
+
+/* The shown album, playlist or artist's tracks (see play_items()). An album on an album group's
+ * page plays as part of the group, on into its following albums (play_group_from()), but for
+ * playing it shuffled: that's the album's own Shuffle, and the group has Shuffle Tracks. */
 static void play_album(int start) {
+  char album[MC_UID_STRLEN];
+  if (g_app.page == PAGE_ALBUM_GROUPS && album_grid_group() && album_grid_selection(album) &&
+      (start >= 0 || !playback_shuffle()) && play_group_from(album, start))
+    return;
   play_items(track_list_count(), track_list_item_at, start);
 }
 
@@ -966,18 +974,57 @@ static void play_all(BOOL shuffled) {
   play_album(shuffled ? -1 : 0);
 }
 
+/* The shown group's albums' tracks with a file here, one album after another: the albums in
+ * the group's order, or if order isn't NULL, album order[i] in place i. NULL if there's none
+ * to list. Free with mc_track_list_free(). */
+static mc_track_list *group_tracks(const int *order) {
+  int albums = album_grid_count();
+  const char **uids = albums ? malloc((size_t)albums * sizeof *uids) : NULL;
+  if (!uids || !g_app.lib) {
+    free(uids);
+    return NULL;
+  }
+  for (int i = 0; i < albums; i++) uids[i] = album_grid_uid_at(order ? order[i] : i);
+  mc_track_list *list = NULL;
+  if (mc_library_list_albums_tracks(g_app.lib, uids, albums, &list) != MC_OK) list = NULL;
+  free(uids);
+  return list;
+}
+
+/* Plays list, the shown group's (group_tracks()), from item start; or with start -1 from the
+ * first, which shuffled is any. Playing it puts the group first in the recents, as playing an
+ * album does. */
+static void play_group_tracks(const mc_track_list *list, int start) {
+  int n = list->count;
+  playback_track *queue = calloc((size_t)n, sizeof *queue);
+  wchar_t **text = calloc((size_t)n * 4, sizeof *text); /* the queue's strings, freed once it has copied them */
+  if (queue && text) {
+    for (int i = 0; i < n; i++) {
+      const mc_track_info *t = &list->items[i];
+      wchar_t **mine = text + 4 * i;
+      mine[0] = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
+      mine[1] = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
+      mine[2] = t->album ? wstr_dup_from_utf8(t->album) : NULL;
+      mine[3] = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
+      queue[i] = (playback_track){t->uid, t->path, mine[0], mine[1], mine[2], mine[3], t->duration_ms};
+    }
+    playback_play(queue, n, start, MC_PLAY_CONTEXT_ALBUM_GROUP, album_grid_group());
+    for (int i = 0; i < 4 * n; i++) free(text[i]);
+  }
+  free(text);
+  free(queue);
+  const char *group = album_grid_group();
+  if (group && mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) refresh_recents();
+}
+
 /* A group's Play, Shuffle Albums and Shuffle Tracks (album_grid.h): its albums' tracks with a
  * file here, each album's in its own order, the albums in the group's order or a random one,
- * or every track shuffled. Playing it puts it first in the recents, as playing an album
- * does. */
+ * or every track shuffled. */
 static void play_group(void) {
   album_grid_play how = album_grid_play_how();
-  int albums = album_grid_count(), n = 0, cap = 0;
+  int albums = album_grid_count();
   int *order = albums ? malloc((size_t)albums * sizeof *order) : NULL;
-  if (!order || !g_app.lib) {
-    free(order);
-    return;
-  }
+  if (!order) return;
   for (int i = 0; i < albums; i++) order[i] = i;
   for (int i = albums - 1; how == AG_PLAY_SHUFFLE_ALBUMS && i > 0; i--) { /* Fisher-Yates */
     unsigned r = 0;
@@ -986,45 +1033,32 @@ static void play_group(void) {
     order[i] = order[j];
     order[j] = t;
   }
-  playback_track *queue = NULL;
-  wchar_t **text = NULL; /* the queue's strings, freed once it has copied them */
-  mc_track_list **lists = calloc((size_t)albums, sizeof *lists);
-  for (int a = 0; lists && a < albums; a++) {
-    const char *uid = album_grid_uid_at(order[a]);
-    if (!uid || mc_library_list_album_tracks(g_app.lib, uid, &lists[a]) != MC_OK) continue;
-    for (int i = 0; i < lists[a]->count; i++) {
-      const mc_track_info *t = &lists[a]->items[i];
-      if (!t->path) continue;
-      if (n == cap) {
-        int grown = cap ? cap * 2 : 64;
-        playback_track *q = realloc(queue, (size_t)grown * sizeof *q);
-        wchar_t **w = q ? realloc(text, (size_t)grown * 4 * sizeof *w) : NULL;
-        if (q) queue = q;
-        if (!w) break;
-        text = w;
-        cap = grown;
-      }
-      wchar_t **mine = text + 4 * n;
-      mine[0] = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
-      mine[1] = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
-      mine[2] = t->album ? wstr_dup_from_utf8(t->album) : NULL;
-      mine[3] = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
-      queue[n++] = (playback_track){t->uid, t->path, mine[0], mine[1], mine[2], mine[3], t->duration_ms};
-    }
-  }
-  if (n) {
+  mc_track_list *list = group_tracks(order);
+  if (list && list->count) {
     set_shuffle(how == AG_PLAY_SHUFFLE_TRACKS);
-    playback_play(queue, n, how == AG_PLAY_SHUFFLE_TRACKS ? -1 : 0, MC_PLAY_CONTEXT_ALBUM_GROUP, album_grid_group());
+    play_group_tracks(list, how == AG_PLAY_SHUFFLE_TRACKS ? -1 : 0);
   }
-  for (int i = 0; i < 4 * n; i++) free(text[i]);
-  free(text);
-  free(queue);
-  for (int a = 0; lists && a < albums; a++)
-    if (lists[a]) mc_track_list_free(lists[a]);
-  free(lists);
+  mc_track_list_free(list);
   free(order);
-  const char *group = album_grid_group();
-  if (n && group && mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) refresh_recents();
+}
+
+/* An album shown in the track list, on its group's page: the whole group as the queue, from
+ * the album's track start (the list's index), or with start -1 its first, so previous and
+ * next see the albums either side. A track with no file here starts from the one before it,
+ * as play_items() does. FALSE, with nothing played, if none of the album is in the queue. */
+static BOOL play_group_from(const char *album, int start) {
+  const char *track = NULL;
+  for (int i = start; i >= 0 && !track; i--) {
+    track_list_item t = track_list_item_at(i);
+    if (t.path) track = t.uid;
+  }
+  mc_track_list *list = group_tracks(NULL);
+  int first = -1;
+  for (int i = 0; list && i < list->count && first < 0; i++)
+    if (!strcmp(list->items[i].album_uid, album) && (!track || !strcmp(list->items[i].uid, track))) first = i;
+  if (first >= 0) play_group_tracks(list, first);
+  mc_track_list_free(list);
+  return first >= 0;
 }
 
 /* The track list's requests to change a playlist (see track_list.h). */
