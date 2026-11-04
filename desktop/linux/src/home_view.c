@@ -318,16 +318,42 @@ static void on_right(GtkButton *button, gpointer user) {
   row_page(user, 1);
 }
 
-/* Shift and the wheel. Without Shift it isn't ours: a row only scrolls sideways, so the
- * vertical wheel goes on up to the page. */
+/* A sideways scroll, or Shift and the wheel, moves the row, a notch a tile. Anything else goes
+ * on up to the page, whose wheel it is, however much of a trackpad's swipe was sideways too. */
 static gboolean on_row_wheel(GtkEventControllerScroll *scroll, double dx, double dy, gpointer user) {
-  (void)dx;
   row *r = user;
   GdkModifierType state = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(scroll));
-  if (!(state & GDK_SHIFT_MASK) || dy == 0) return FALSE;
-  gboolean wheel = gtk_event_controller_scroll_get_unit(scroll) == GDK_SCROLL_UNIT_WHEEL;
-  row_animate(r, row_goal(r) + dy * (wheel ? PITCH : 1));
+  double delta = dx;
+  if (state & GDK_SHIFT_MASK) delta = dy != 0 ? dy : dx;
+  else if (fabs(dx) <= fabs(dy)) return FALSE;
+  if (gtk_event_controller_scroll_get_unit(scroll) == GDK_SCROLL_UNIT_WHEEL) {
+    row_animate(r, row_goal(r) + delta * PITCH);
+  } else {
+    adw_animation_pause(r->ease);
+    gtk_adjustment_set_value(r->adj, gtk_adjustment_get_value(r->adj) + delta);
+  }
   return TRUE;
+}
+
+/* A trackpad's swipe carries on when let go, as a drag does. In pixels a second. */
+static void on_row_swiped(GtkEventControllerScroll *scroll, double vx, double vy, gpointer user) {
+  (void)scroll;
+  row *r = user;
+  if (fabs(vx) > fabs(vy)) row_animate(r, gtk_adjustment_get_value(r->adj) + vx * FLING_MS / 1000);
+}
+
+/* A scrolled window takes every scroll it's offered, even along an axis it can't move, which
+ * would stop the wheel dead over a row on the way down the page. So a row's doesn't get them:
+ * on_row_wheel() does its work, and lets the page have the rest. */
+static void silence_scrolling(GtkWidget *scroller) {
+  GListModel *controllers = gtk_widget_observe_controllers(scroller);
+  for (guint i = 0, n = g_list_model_get_n_items(controllers); i < n; i++) {
+    GtkEventController *controller = g_list_model_get_item(controllers, i);
+    if (GTK_IS_EVENT_CONTROLLER_SCROLL(controller))
+      gtk_event_controller_set_propagation_phase(controller, GTK_PHASE_NONE);
+    g_object_unref(controller);
+  }
+  g_object_unref(controllers);
 }
 
 /* A touchscreen's drag is the scrolled window's own, with its kinetic scrolling. */
@@ -683,9 +709,11 @@ static GtkWidget *row_new(row *r, mc_home_row_id id) {
                                     adw_callback_animation_target_new(set_row_value, r, NULL));
   adw_timed_animation_set_easing(ADW_TIMED_ANIMATION(r->ease), ADW_EASE_OUT_CUBIC);
 
-  GtkEventController *wheel = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
-  gtk_event_controller_set_propagation_phase(wheel, GTK_PHASE_CAPTURE);
+  silence_scrolling(r->scroller);
+  GtkEventController *wheel =
+    gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES | GTK_EVENT_CONTROLLER_SCROLL_KINETIC);
   g_signal_connect(wheel, "scroll", G_CALLBACK(on_row_wheel), r);
+  g_signal_connect(wheel, "decelerate", G_CALLBACK(on_row_swiped), r);
   gtk_widget_add_controller(r->scroller, wheel);
 
   GtkGesture *drag = gtk_gesture_drag_new();
