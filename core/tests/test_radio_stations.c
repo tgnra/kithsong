@@ -313,6 +313,75 @@ static void test_stable_and_played(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* Two clear sounds in this library's terms, but too near each other to be told apart by anyone
+ * else's: settling can't reach across, so it's the spread limit that has to stop the second. */
+static void test_too_close(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_close.d");
+  if (!lib) return;
+  add_artist(lib, "Near");
+  add_album(lib, "near", "Near", 0);
+  char uid[32];
+  for (int i = 0; i < 100; i++) {
+    snprintf(uid, sizeof uid, "n%d", i);
+    add_track(lib, uid, uid, "Near", "near", TRACK_MS, i % 2 ? 0.8 : 0.0, i / 2 % 3, 1, 1);
+  }
+  mc_radio_station_list *list = stations(lib, noon_ms());
+  CHECK(list && list->count == 1);
+  mc_radio_station_list_free(list);
+  mc_library_close(lib);
+}
+
+/* Spreading out only starts from what's played: the other seeds get there by settling. */
+static void test_settles_on_played(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_settle.d");
+  if (!lib) return;
+  add_clusters(lib, 3, 40);
+  int64_t yesterday = noon_ms() - DAY_MS;
+  played(lib, "c0-7", 8, yesterday);
+  played(lib, "c1-11", 4, yesterday);
+  played(lib, "c2-23", 2, yesterday);
+  mc_radio_station_list *list = stations(lib, noon_ms());
+  CHECK(list && list->count == 3);
+  if (list && list->count == 3) { /* the most played first */
+    CHECK(!strcmp(list->items[0].seed_track, "c0-7"));
+    CHECK(!strcmp(list->items[1].seed_track, "c1-11"));
+    CHECK(!strcmp(list->items[2].seed_track, "c2-23"));
+  }
+  mc_radio_station_list_free(list);
+  mc_library_close(lib);
+}
+
+/* A name of its own beats plays: the second sound is nearly all the first's artist, and a played
+ * track of theirs loses to an unplayed one by someone else. */
+static void test_settles_on_new_artist(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_artist.d");
+  if (!lib) return;
+  add_artist(lib, "Main");
+  add_artist(lib, "Guest");
+  add_album(lib, "main", "Main", 0);
+  add_album(lib, "guest", "Guest", 0);
+  char uid[32];
+  for (int i = 0; i < 60; i++) {
+    snprintf(uid, sizeof uid, "a%d", i);
+    add_track(lib, uid, uid, "Main", "main", TRACK_MS, 0, i, 1, 1);
+    snprintf(uid, sizeof uid, "b%d", i);
+    add_track(lib, uid, uid, i == 30 ? "Guest" : "Main", i == 30 ? "guest" : "main", TRACK_MS, 2, i, 1, 1);
+  }
+  int64_t yesterday = noon_ms() - DAY_MS;
+  played(lib, "a3", 9, yesterday);
+  played(lib, "b5", 5, yesterday);
+  mc_radio_station_list *list = stations(lib, noon_ms());
+  CHECK(list && list->count == 2);
+  if (list && list->count == 2) {
+    CHECK(!strcmp(list->items[0].seed_track, "a3"));
+    CHECK(!strcmp(list->items[1].seed_track, "b30"));
+    CHECK(!strcmp(list->items[1].name, "Guest Radio"));
+    CHECK(!strcmp(list->items[1].sub, "Station"));
+  }
+  mc_radio_station_list_free(list);
+  mc_library_close(lib);
+}
+
 /* A library not played much moves on from day to day. */
 static void test_days_differ(const char *scratch) {
   mc_library *lib = open_library(scratch, "test_stations_days.d");
@@ -434,10 +503,13 @@ int main(int argc, char **argv) {
   test_arguments();
   test_distinct(scratch);
   test_alike(scratch);
+  test_too_close(scratch);
   test_too_few(scratch);
   test_eligibility(scratch);
   test_lonely(scratch);
   test_stable_and_played(scratch);
+  test_settles_on_played(scratch);
+  test_settles_on_new_artist(scratch);
   test_days_differ(scratch);
   test_same_name(scratch);
   test_no_artist(scratch);
