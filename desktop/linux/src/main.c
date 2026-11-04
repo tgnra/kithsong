@@ -791,7 +791,10 @@ void app_play_album(app *a, int start) {
     if (start >= 0 && i <= start) first = count;
     queue[count++] = (playback_track){t.uid, t.path, t.title, t.artist, t.album, t.cover_dir, t.duration_ms};
   }
-  if (count) playback_play(queue, count, first);
+  mc_play_context context = album->is_playlist ? MC_PLAY_CONTEXT_PLAYLIST
+                            : album->is_group  ? MC_PLAY_CONTEXT_ALBUM_GROUP
+                                               : MC_PLAY_CONTEXT_ALBUM;
+  if (count) playback_play(queue, count, first, context, album->uid);
   g_free(queue);
 
   mc_recent_kind kind = album->is_playlist ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
@@ -827,7 +830,8 @@ void app_play_album_group(app *a, app_group_play how) {
   int count = (int)queue->len;
   if (count) {
     set_shuffle(a, how == APP_PLAY_SHUFFLE_TRACKS);
-    playback_play((playback_track *)(void *)queue->data, count, how == APP_PLAY_SHUFFLE_TRACKS ? -1 : 0);
+    playback_play((playback_track *)(void *)queue->data, count, how == APP_PLAY_SHUFFLE_TRACKS ? -1 : 0,
+                  MC_PLAY_CONTEXT_ALBUM_GROUP, group);
   }
   g_array_free(queue, TRUE);
   for (int k = 0; k < albums; k++)

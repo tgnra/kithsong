@@ -4,8 +4,10 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import ng.kithso.core.CorePlayer
 import ng.kithso.core.TrackInfo
 import ng.kithso.playback.path
+import ng.kithso.playback.putPlayOrigin
 import java.io.File
 
 // A queue item is a TrackInfo in a MediaItem: what the watch's media controls show in the
@@ -20,9 +22,9 @@ private const val ARTIST_UID = "artist_uid"
 
 /**
  * The file goes in the request metadata as well as the URI (see [path]). [coverFile] is the
- * album's cover, for the media controls, if it has one.
+ * album's cover, for the media controls, if it has one. [origin] is what its queue is.
  */
-fun TrackInfo.toMediaItem(coverFile: String?): MediaItem {
+fun TrackInfo.toMediaItem(coverFile: String?, origin: CorePlayer.Origin): MediaItem {
     val uri = path?.let { Uri.fromFile(File(it)) }
     val extras = Bundle().apply {
         putInt(TRACK_NO, trackNo)
@@ -31,6 +33,7 @@ fun TrackInfo.toMediaItem(coverFile: String?): MediaItem {
         putString(COVER_DIR, coverDir)
         putString(ALBUM_UID, albumUid)
         putString(ARTIST_UID, artistUid)
+        putPlayOrigin(origin)
     }
     return MediaItem.Builder()
         .setMediaId(uid)

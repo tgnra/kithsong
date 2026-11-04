@@ -14,7 +14,12 @@
  * scrobbling alike. Time listened is what was heard: pausing doesn't add to it, and seeking
  * neither adds to it nor starts a new play. Starting an item again (a skip to it, previous(),
  * a seek to 0, resuming after a stop) does.
-
+ *
+ * It keeps the play log's rows too (musiccore/library.h), one for every item started, heard
+ * or not: a skip after a second gets one as a full play does, and an item that can't be
+ * played gets one that says so. A row is finished when its play ends, and the frontend passes
+ * it on (mc_player_take_ended()), so an app that dies without closing loses the play under
+ * way, and only that one.
  *
  * Unlike most handles, a player may be used from any thread.
  */
@@ -39,7 +44,8 @@ typedef enum mc_player_event {
   MC_PLAYER_EVENT_STATE, /* playing, paused or stopped */
   MC_PLAYER_EVENT_TRACK, /* another queue item started, or the queue was replaced */
   MC_PLAYER_EVENT_ERROR, /* an item couldn't be played and was skipped, or there's no audio device */
-  MC_PLAYER_EVENT_PLAYED /* a play counts: take it with mc_player_take_played() */
+  MC_PLAYER_EVENT_PLAYED, /* a play counts: take it with mc_player_take_played() */
+  MC_PLAYER_EVENT_ENDED   /* a play ended, counted or not: take it with mc_player_take_ended() */
 } mc_player_event;
 
 /* Called on the player's thread, never from inside a player call, so it may call the player
@@ -51,15 +57,27 @@ mc_status mc_player_new(mc_player_cb cb, void *user, mc_player **out);
 /* Stops playback and closes the audio device. */
 void mc_player_free(mc_player *player);
 
+/* What a queue is, for the play log. All of it is copied. */
+typedef struct mc_play_origin {
+  const char *const *track_uids; /* one per path; NULL or "" for an item that isn't logged */
+  /* MC_PLAY_CONTEXT_UNKNOWN if there's no telling. A queue started shuffled with start -1 is
+   * logged as MC_PLAY_CONTEXT_SHUFFLE whatever this says (but for radio), with context_uid
+   * still saying what was shuffled. */
+  mc_play_context context;
+  const char *context_uid;       /* the album, playlist, group or artist; NULL if none */
+} mc_play_origin;
+
 /* Replaces the queue with count files (UTF-8 paths, copied) and plays item start, or with
  * start -1, the first item (shuffled, any item). Plays not yet taken with
  * mc_player_take_played() are dropped, as their indexes were into the old queue: take them
- * first. */
-mc_status mc_player_set_queue(mc_player *player, const char *const *paths, int count, int start);
+ * first. origin says what's being played; with NULL, nothing of the queue is logged. */
+mc_status mc_player_set_queue(mc_player *player, const char *const *paths, int count, int start,
+                              const mc_play_origin *origin);
 /* Like mc_player_set_queue(), but stopped: item start (or with -1, the first item, which
  * shuffled is any) is current, and plays from its start on mc_player_resume(). So a frontend
  * can show what will play before it does, e.g. a shuffled queue's first item. */
-mc_status mc_player_load_queue(mc_player *player, const char *const *paths, int count, int start);
+mc_status mc_player_load_queue(mc_player *player, const char *const *paths, int count, int start,
+                               const mc_play_origin *origin);
 /* Plays queue item index from its start. Shuffled, the rest are shuffled afresh after it. */
 mc_status mc_player_skip_to(mc_player *player, int index);
 /* The next item. After the last one, stops with the first item current, as when the queue
@@ -121,6 +139,17 @@ void mc_player_status_get(mc_player *player, mc_player_status *out);
  * it (mc_scrobbler_scrobble()). Call until MC_ERR_NOT_FOUND on each MC_PLAYER_EVENT_PLAYED;
  * the last few plays are kept, so none are lost to events arriving together. */
 mc_status mc_player_take_played(mc_player *player, int *index, int64_t *started_ms);
+
+/* Takes the oldest play that has ended since the last call, for mc_library_log_play(). Call
+ * until MC_ERR_NOT_FOUND on each MC_PLAYER_EVENT_ENDED. Unlike plays that count these say
+ * which track they were, so they outlive the queue; if nobody takes them, the last 64 are
+ * kept. */
+mc_status mc_player_take_ended(mc_player *player, mc_play_event *out);
+
+/* Ends the play under way there and then, as stopped, so mc_player_take_ended() has it at
+ * once: for before mc_player_free() or closing the library, which leave no time to wait for
+ * an event. Playback isn't touched; should it go on, so does the log, in a row of its own. */
+mc_status mc_player_end_play(mc_player *player);
 
 /* Whether a play counts: once it has been listened to for half the track or four minutes,
  * whichever is less (four minutes when the duration is unknown, 0). The same rule as

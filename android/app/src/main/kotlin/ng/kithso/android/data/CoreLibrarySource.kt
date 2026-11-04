@@ -7,6 +7,7 @@ import ng.kithso.core.AlbumInfo
 import ng.kithso.core.ArtistInfo
 import ng.kithso.core.CoreImport
 import ng.kithso.core.CoreLibrary
+import ng.kithso.core.CorePlayer
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeleteKind
 import ng.kithso.core.DeviceKind
@@ -358,6 +359,17 @@ class CoreLibrarySource(
                 return@launch
             }
             onChanged()
+        }
+    }
+
+    override fun logPlay(event: CorePlayer.PlayEvent) {
+        scope.launch(core) {
+            val lib = open() ?: return@launch
+            try {
+                lib.logPlay(event)
+            } catch (e: MusicCoreException) {
+                Log.w(TAG, "Couldn't log a play of ${event.trackUid}", e)
+            }
         }
     }
 

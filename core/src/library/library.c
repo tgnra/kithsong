@@ -199,6 +199,23 @@ static const char *const k_migrations[] = {
   /* v17: the cover the user chose for an album (musiccore/edit.h), as its SHA-256. Import and
    * downloads leave such a cover alone, and sync brings it to devices that have another. */
   "ALTER TABLE albums ADD COLUMN art_chosen TEXT;",
+  /* v18: the play log (musiccore/library.h): a row for each time a track was started, where
+   * track_plays only keeps a count. Like track_plays each row is one device's, and it is
+   * written once and never changed, so sync can't lose or clash over one. context_uid isn't a
+   * reference: the history stays when the album or playlist goes. (IF NOT EXISTS: tests that
+   * wind user_version back keep their tables.) */
+  "CREATE TABLE IF NOT EXISTS play_events ("
+  "  uid         TEXT PRIMARY KEY,"
+  "  track_uid   TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
+  "  node_uid    TEXT NOT NULL,"
+  "  started_ms  INTEGER NOT NULL,"
+  "  listened_ms INTEGER NOT NULL,"
+  "  ended       TEXT NOT NULL,"
+  "  context     TEXT NOT NULL,"
+  "  context_uid TEXT"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX IF NOT EXISTS play_events_started ON play_events (started_ms, uid);"
+  "CREATE INDEX IF NOT EXISTS play_events_track ON play_events (track_uid);",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -221,6 +238,8 @@ static const char *const k_album_artist_cols[] = {"album_uid", "artist_uid", "po
                                                   "joinphrase", NULL};
 static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", "last_played_ms",
                                           NULL};
+static const char *const k_play_event_cols[] = {"track_uid", "node_uid", "started_ms", "listened_ms",
+                                                "ended", "context", "context_uid", NULL};
 static const char *const k_playlist_cols[] = {"name", NULL};
 static const char *const k_entry_cols[] = {"playlist_uid", "track_uid", "position", NULL};
 static const char *const k_group_cols[] = {"name", NULL};
@@ -235,6 +254,7 @@ static const mc_changelog_table k_tracked[] = {
   {"track_artists", "uid", k_track_artist_cols, NULL},
   {"album_artists", "uid", k_album_artist_cols, NULL},
   {"track_plays", "uid", k_play_cols, NULL},
+  {"play_events", "uid", k_play_event_cols, NULL},
   {"playlists", "uid", k_playlist_cols, NULL},
   {"playlist_entries", "uid", k_entry_cols, NULL},
   {"album_groups", "uid", k_group_cols, NULL},
@@ -323,6 +343,7 @@ static const struct {
        " OR (entity IN ('tracks', 'albums') AND field = 'artist_credit')"},
   {15, "entity = 'albums' AND field IN ('no_scrobble', 'mix')"},
   {17, "entity = 'albums' AND field = 'art_chosen'"},
+  {18, "entity = 'play_events'"},
 };
 
 /* A loose track long enough to be a mix has no album row to be one on (mc_mix_file_tracks()).
@@ -680,7 +701,8 @@ mc_status mc_library_reset_for_merge(mc_library *lib, const char *const *meta, i
   lib->applying_remote = 1;
   static const char *const k_clear[] = {
     "DELETE FROM files", "DELETE FROM playlist_entries", "DELETE FROM album_group_entries",
-    "DELETE FROM track_plays", "DELETE FROM track_artists", "DELETE FROM album_artists",
+    "DELETE FROM track_plays", "DELETE FROM play_events", "DELETE FROM track_artists",
+    "DELETE FROM album_artists",
     "DELETE FROM recents", "DELETE FROM smart_lists",
     "DELETE FROM playlists", "DELETE FROM album_groups", "DELETE FROM tracks",
     "DELETE FROM albums", "DELETE FROM artists", "DELETE FROM aliases",
@@ -1289,6 +1311,100 @@ mc_status mc_library_record_play(mc_library *lib, const char *track_uid) {
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) mc_library_rollback(lib);
   return st;
+}
+
+/* play_events.context and .ended, indexed by mc_play_context and mc_play_end. By name, so a
+ * row can be read as it is, and a value added later is one more name. */
+static const char *const k_play_contexts[] = {"unknown", "manual", "album", "playlist",
+                                              "album_group", "artist", "shuffle", "radio"};
+static const char *const k_play_ends[] = {"unknown", "finished", "skipped", "stopped", "replaced", "failed"};
+#define COUNT_OF(a) ((int)(sizeof (a) / sizeof (a)[0]))
+
+/* name's index in names, or 0 (unknown) for a name from a newer version. */
+static int play_name_index(const char *const *names, int count, const char *name) {
+  for (int i = 0; name && i < count; i++)
+    if (!strcmp(names[i], name)) return i;
+  return 0;
+}
+
+mc_status mc_library_log_play(mc_library *lib, const mc_play_event *e) {
+  if (!lib || !e || !e->track_uid[0] || (int)e->context < 0 || (int)e->context >= COUNT_OF(k_play_contexts) ||
+      (int)e->end < 0 || (int)e->end >= COUNT_OF(k_play_ends))
+    return MC_ERR_INVALID_ARG;
+  char uid[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(uid);
+  if (st != MC_OK || (st = mc_library_begin_write(lib)) != MC_OK) return st;
+  static const char sql[] =
+    "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context, context_uid)"
+    " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    mc_library_rollback(lib);
+    return MC_ERR_DB;
+  }
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, e->track_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, lib->node_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 4, (sqlite3_int64)e->started_ms);
+  sqlite3_bind_int64(stmt, 5, (sqlite3_int64)e->listened_ms);
+  sqlite3_bind_text(stmt, 6, k_play_ends[e->end], -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 7, k_play_contexts[e->context], -1, SQLITE_STATIC);
+  if (e->context_uid[0]) sqlite3_bind_text(stmt, 8, e->context_uid, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  st = rc == SQLITE_DONE ? MC_OK : (rc & 0xff) == SQLITE_CONSTRAINT ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
+mc_status mc_library_list_play_events(mc_library *lib, int64_t from_ms, int64_t to_ms, mc_play_log **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  static const char sql[] =
+    "SELECT uid, node_uid, track_uid, started_ms, listened_ms, ended, context, context_uid"
+    " FROM play_events WHERE started_ms >= ?1 AND started_ms < ?2 ORDER BY started_ms, uid";
+  mc_play_log *log = calloc(1, sizeof *log);
+  if (!log) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  if (st == MC_OK) {
+    sqlite3_bind_int64(stmt, 1, (sqlite3_int64)from_ms);
+    sqlite3_bind_int64(stmt, 2, (sqlite3_int64)to_ms);
+  }
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&log->items, log->count, &cap, sizeof *log->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_play_log_item *it = &log->items[log->count++];
+    memset(it, 0, sizeof *it);
+    copy_uid(it->uid, stmt, 0);
+    copy_uid(it->node_uid, stmt, 1);
+    copy_uid(it->event.track_uid, stmt, 2);
+    it->event.started_ms = sqlite3_column_int64(stmt, 3);
+    it->event.listened_ms = sqlite3_column_int64(stmt, 4);
+    it->event.end = (mc_play_end)play_name_index(k_play_ends, COUNT_OF(k_play_ends),
+                                                 (const char *)sqlite3_column_text(stmt, 5));
+    it->event.context = (mc_play_context)play_name_index(k_play_contexts, COUNT_OF(k_play_contexts),
+                                                         (const char *)sqlite3_column_text(stmt, 6));
+    copy_uid(it->event.context_uid, stmt, 7);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_play_log_free(log);
+    return st;
+  }
+  *out = log;
+  return MC_OK;
+}
+
+void mc_play_log_free(mc_play_log *log) {
+  if (!log) return;
+  free(log->items);
+  free(log);
 }
 
 /* recents.kind, indexed by mc_recent_kind; the same names as sync profile items. */

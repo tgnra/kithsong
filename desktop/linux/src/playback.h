@@ -48,8 +48,9 @@ void playback_clear(void);
  * showing the playing track shows it. */
 void playback_art_changed(mc_library *lib, const char *album_uid);
 /* Replaces the queue and plays tracks[start], or with start -1 the first track (shuffled,
- * any track). */
-void playback_play(const playback_track *tracks, int count, int start);
+ * any track). context and context_uid (or NULL) say what's played, for the play log. */
+void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
+                   const char *context_uid);
 /* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to
  * whatever is queued next. Off to begin with; main.c keeps it in the settings. */
 void playback_set_shuffle(gboolean on);

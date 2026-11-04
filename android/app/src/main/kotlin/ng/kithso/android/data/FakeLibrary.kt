@@ -2,6 +2,7 @@ package ng.kithso.android.data
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import ng.kithso.core.CorePlayer
 
 /**
  * A made-up library, for previews and for trying the UI without music on the device.
@@ -46,6 +47,7 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
     override fun notePlayed(ref: CollectionRef) = Unit
 
     override fun recordPlay(trackUid: String) = Unit
+    override fun logPlay(event: CorePlayer.PlayEvent) = Unit
 
     // Names containing the query, which is enough to try the search screen.
     override suspend fun search(query: String): SearchResults {

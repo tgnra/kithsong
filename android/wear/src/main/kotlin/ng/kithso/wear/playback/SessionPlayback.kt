@@ -21,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ng.kithso.core.CorePlayer
 import ng.kithso.core.NativeCore
 import ng.kithso.core.TrackInfo
 import java.util.concurrent.ExecutionException
@@ -78,9 +79,10 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) {
 
     /**
      * Plays [tracks] (an album's or a playlist's tracks with a file on the watch, in order) from
-     * [track], which is shown as current at once, before the session says so.
+     * [track], which is shown as current at once, before the session says so. [origin] says
+     * which, for the play log.
      */
-    fun play(tracks: List<TrackInfo>, track: TrackInfo) {
+    fun play(tracks: List<TrackInfo>, track: TrackInfo, origin: CorePlayer.Origin) {
         val start = tracks.indexOf(track)
         if (start < 0 || track.path == null) return
         this.track = track
@@ -92,7 +94,7 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) {
             val covers = withContext(Dispatchers.IO) {
                 tracks.mapNotNull { it.coverDir }.distinct().associateWith { NativeCore.coverFile(it) }
             }
-            val items = tracks.map { it.toMediaItem(it.coverDir?.let(covers::get)) }
+            val items = tracks.map { it.toMediaItem(it.coverDir?.let(covers::get), origin) }
             withController {
                 it.setMediaItems(items, start, 0)
                 it.prepare()

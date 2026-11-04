@@ -60,6 +60,7 @@ class PlaybackService : MediaLibraryService() {
             settings.volume,
             onShuffleChanged = { settings.shuffle = it },
             onNowPlaying = { trackUid -> app.scrobbling.nowPlaying(trackUid) },
+            onPlayEnded = { event -> app.library.logPlay(event) },
         ) { trackUid, startedMs ->
             app.library.recordPlay(trackUid)
             app.scrobbling.scrobble(trackUid, startedMs)

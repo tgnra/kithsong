@@ -6,7 +6,8 @@
  * Media keys work while the window has the focus through WM_APPCOMMAND, and otherwise
  * through the media controls, which Windows sends them to.
  *
- * Plays are counted in the library and scrobbled when the player says they count.
+ * Plays are counted in the library and scrobbled when the player says they count, and each
+ * one, counted or not, goes in the library's play log when it ends.
  *
  * The player is created on first play. Everything here runs on the UI thread.
  */
@@ -52,8 +53,9 @@ BOOL playback_window_message(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result);
  * the library's files move. */
 void playback_clear(void);
 /* Replaces the queue and plays tracks[start], or with start -1 the first track (shuffled,
- * any track). */
-void playback_play(const playback_track *tracks, int count, int start);
+ * any track). context and context_uid (or NULL) say what's played, for the play log. */
+void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
+                   const char *context_uid);
 /* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to
  * whatever is queued next. Off to begin with; main.c keeps it in the settings. */
 void playback_set_shuffle(BOOL on);

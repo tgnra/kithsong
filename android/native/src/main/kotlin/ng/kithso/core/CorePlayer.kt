@@ -8,8 +8,28 @@ package ng.kithso.core
 class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
     enum class State { Stopped, Playing, Paused }
 
-    /** Played: a play counts, to take with [takePlayed]. */
-    enum class Event { State, Track, Error, Played }
+    /** Played: a play counts, to take with [takePlayed]. Ended: one ended, to take with [takeEnded]. */
+    enum class Event { State, Track, Error, Played, Ended }
+
+    /** How a queue came to be played (mc_play_context, in the same order). */
+    enum class PlayContext { Unknown, Manual, Album, Playlist, AlbumGroup, Artist, Shuffle, Radio }
+
+    /** How a play ended (mc_play_end, in the same order). */
+    enum class PlayEnd { Unknown, Finished, Skipped, Stopped, Replaced, Failed }
+
+    /** What a queue is, for the play log: [contextUid] is the album, playlist, group or artist. */
+    data class Origin(val context: PlayContext = PlayContext.Unknown, val contextUid: String? = null)
+
+    /** A play that has ended, counted or not, for [CoreLibrary.logPlay]. */
+    data class PlayEvent(
+        val trackUid: String,
+        /** Wall clock. */
+        val startedMs: Long,
+        /** Time heard, which pauses and seeks don't add to. */
+        val listenedMs: Long,
+        val end: PlayEnd,
+        val origin: Origin,
+    )
 
     data class Status(
         val state: State,
@@ -30,16 +50,19 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
 
     private var handle = nativeNew(this)
 
-    /** Replaces the queue with [paths] and plays item [start], or with -1 the first (shuffled, any). */
-    fun setQueue(paths: List<String>, start: Int) =
-        nativeSetQueue(handle, paths.toTypedArray(), start)
+    /**
+     * Replaces the queue with [paths] and plays item [start], or with -1 the first (shuffled,
+     * any). [trackUids] go with the paths, one each, and with [origin] say what's logged.
+     */
+    fun setQueue(paths: List<String>, trackUids: List<String>, origin: Origin, start: Int) =
+        nativeSetQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
 
     /**
      * As [setQueue], but stopped on item [start] (or with -1, the first, which shuffled is any),
      * to play from its start on [resume]. So what will play can be shown before it does.
      */
-    fun loadQueue(paths: List<String>, start: Int) =
-        nativeLoadQueue(handle, paths.toTypedArray(), start)
+    fun loadQueue(paths: List<String>, trackUids: List<String>, origin: Origin, start: Int) =
+        nativeLoadQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
 
     fun skipTo(index: Int) = nativeSkipTo(handle, index)
     fun toggle() = nativeCommand(handle, 0)
@@ -93,6 +116,18 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         return if (nativeTakePlayed(handle, v)) Played(v[0].toInt(), v[1]) else null
     }
 
+    /** The oldest play that has ended since the last call, or null. They outlive the queue. */
+    fun takeEnded(): PlayEvent? {
+        val v = LongArray(4)
+        val strings = arrayOfNulls<String>(2)
+        if (!nativeTakeEnded(handle, v, strings)) return null
+        val origin = Origin(PlayContext.entries[v[3].toInt()], strings[1])
+        return PlayEvent(strings[0].orEmpty(), v[0], v[1], PlayEnd.entries[v[2].toInt()], origin)
+    }
+
+    /** Ends the play under way there and then, so [takeEnded] has it: for before [close]. */
+    fun endPlay() = nativeEndPlay(handle)
+
     /** Stops playback and closes the audio device. */
     override fun close() {
         if (handle != 0L) nativeFree(handle)
@@ -110,8 +145,12 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
 
         @JvmStatic external fun nativeNew(listener: CorePlayer): Long
         @JvmStatic external fun nativeFree(handle: Long)
-        @JvmStatic external fun nativeSetQueue(handle: Long, paths: Array<String>, start: Int)
-        @JvmStatic external fun nativeLoadQueue(handle: Long, paths: Array<String>, start: Int)
+        @JvmStatic external fun nativeSetQueue(
+            handle: Long, paths: Array<String>, uids: Array<String>, context: Int, contextUid: String?, start: Int,
+        )
+        @JvmStatic external fun nativeLoadQueue(
+            handle: Long, paths: Array<String>, uids: Array<String>, context: Int, contextUid: String?, start: Int,
+        )
         @JvmStatic external fun nativeCommand(handle: Long, command: Int)
         @JvmStatic external fun nativeSkipTo(handle: Long, index: Int)
         @JvmStatic external fun nativeSeekMs(handle: Long, ms: Long)
@@ -121,6 +160,7 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         @JvmStatic external fun nativeSetMuted(handle: Long, muted: Boolean)
         @JvmStatic external fun nativeStatus(handle: Long, out: LongArray)
         @JvmStatic external fun nativeTakePlayed(handle: Long, out: LongArray): Boolean
-
+        @JvmStatic external fun nativeTakeEnded(handle: Long, out: LongArray, strings: Array<String?>): Boolean
+        @JvmStatic external fun nativeEndPlay(handle: Long)
     }
 }

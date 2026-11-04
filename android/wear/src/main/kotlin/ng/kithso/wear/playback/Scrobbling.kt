@@ -2,6 +2,7 @@ package ng.kithso.wear.playback
 
 import android.util.Log
 import ng.kithso.core.CoreLibrary
+import ng.kithso.core.CorePlayer
 import ng.kithso.core.CoreScrobbler
 import ng.kithso.core.MusicCoreException
 import java.io.File
@@ -52,6 +53,15 @@ class Scrobbling(private val library: CoreLibrary, private val configDir: File) 
             Log.w(TAG, "Couldn't count a play", e)
         }
         post { it.scrobble(trackUid, startedMs) }
+    }
+
+    /** A play has ended, counted or not, for the library's play log. */
+    fun ended(event: CorePlayer.PlayEvent) {
+        try {
+            library.logPlay(event)
+        } catch (e: MusicCoreException) {
+            Log.w(TAG, "Couldn't log a play", e)
+        }
     }
 
     private companion object {

@@ -11,7 +11,11 @@
  * Each item's first frame in the stream is noted as a segment. The frames the callback has
  * consumed ("played") then say which item is audible and how far into it, which is how the
  * thread knows when to report the next track. The same count, taken a segment at a time,
- * is the time listened that decides when a play counts.
+ * is the time listened that decides when a play counts, and what goes in the play log.
+ *
+ * A play log row opens when an item is started (or, gapless, first heard) and closes when
+ * that play ends, however it ends. Segments carry what the row needs rather than leaving it to
+ * the index, as what's still being heard may be the old queue's.
  *
  * With shuffle on, the queue plays in an order of places (shuffle.c) rather than item by
  * item; segments note both. In order, an item's place is its index. Turning shuffle on or
@@ -42,6 +46,7 @@ enum {
   MAX_SEGMENTS = 16,
   RESTART_MS = 3000, /* previous() restarts the item after this far in */
   MAX_PLAYED = 16,   /* counted plays waiting for mc_player_take_played() */
+  MAX_ENDED = 64,    /* ended plays waiting for mc_player_take_ended() */
   MAX_PLAY_MS = 4 * 60 * 1000,
   FADE_MS = 10, /* a volume change goes all the way from silence to full in this long */
 };
@@ -129,12 +134,14 @@ static void source_seek(source *s, int64_t ms) {
 /* --- Player --- */
 
 typedef struct segment {
-  int index;           /* queue item */
+  int index;           /* queue item; -1 once the queue it was from has been replaced */
   int pos;             /* its place in the play order */
   uint64_t start;      /* its first frame in the stream */
   uint64_t offset;     /* output frames into the item at start: after a seek, not 0 */
   int64_t duration_ms; /* 0 if unknown */
   int new_play;        /* starts a play once heard; not after a seek, which carries one on */
+  int logged;          /* the play log has a row for it already */
+  mc_play_event event; /* that row as it starts: which track, and from what */
 } segment;
 
 typedef struct counted_play {
@@ -157,6 +164,9 @@ struct mc_player {
   /* Under lock. */
   int quit;
   char **queue;
+  char (*track_uids)[MC_UID_STRLEN]; /* per item, or NULL if the queue isn't logged */
+  mc_play_context context;
+  char context_uid[MC_UID_STRLEN];
   int count;
   mc_player_state state;
   int shuffle;
@@ -166,6 +176,7 @@ struct mc_player {
   int64_t cmd_ms;
   mc_player_state cmd_state;
   int cmd_seek;  /* the CMD_START is a seek */
+  mc_play_end cmd_end; /* what the command makes of the play it ends */
   unsigned gen;  /* bumped by every command, so the thread can tell its work went stale */
   int current;   /* the current item while there are no segments; -1 with an empty queue */
   int current_pos;
@@ -185,6 +196,12 @@ struct mc_player {
   int play_counted;
   counted_play plays[MAX_PLAYED]; /* counted, oldest first */
   int nplays;
+  /* The play log's open row, while log_open, and its time heard so far. */
+  int log_open;
+  mc_play_event log;
+  uint64_t log_frames;
+  mc_play_event ended[MAX_ENDED]; /* closed rows, oldest first */
+  int nended;
 
   /* Player thread only. */
   source *src;
@@ -303,6 +320,53 @@ static void snapshot(mc_player *p, mc_player_status *st) {
   }
 }
 
+/* --- Play log --- */
+
+/* The start of a row for queue item index, with no times yet. Under lock. */
+static mc_play_event log_item(const mc_player *p, int index) {
+  mc_play_event e;
+  memset(&e, 0, sizeof e);
+  if (p->track_uids && index >= 0 && index < p->count) memcpy(e.track_uid, p->track_uids[index], MC_UID_STRLEN);
+  e.context = p->context;
+  memcpy(e.context_uid, p->context_uid, MC_UID_STRLEN);
+  return e;
+}
+
+/* Queues a closed row for mc_player_take_ended(). An item with no uid has no row. Under lock. */
+static unsigned log_push(mc_player *p, const mc_play_event *e) {
+  if (!e->track_uid[0]) return 0;
+  if (p->nended == MAX_ENDED) /* nobody's taking them: keep the newest */
+    memmove(p->ended, p->ended + 1, (size_t)--p->nended * sizeof *p->ended);
+  p->ended[p->nended++] = *e;
+  return EV(MC_PLAYER_EVENT_ENDED);
+}
+
+/* Opens a row for seg; any row open is closed first. Under lock. */
+static void log_begin(mc_player *p, segment *seg) {
+  p->log = seg->event;
+  p->log.started_ms = (int64_t)mc_wall_ms();
+  p->log_frames = 0;
+  p->log_open = 1;
+  seg->logged = 1;
+}
+
+/* Closes the open row, if any. Under lock. */
+static unsigned log_end(mc_player *p, mc_play_end end) {
+  if (!p->log_open) return 0;
+  p->log_open = 0;
+  p->log.end = end;
+  p->log.listened_ms = p->rate ? (int64_t)(p->log_frames * 1000 / p->rate) : 0;
+  return log_push(p, &p->log);
+}
+
+/* Queue item index couldn't be opened, which is a row of its own. Under lock. */
+static unsigned log_failed(mc_player *p, int index) {
+  mc_play_event e = log_item(p, index);
+  e.started_ms = (int64_t)mc_wall_ms();
+  e.end = MC_PLAY_END_FAILED;
+  return log_push(p, &e);
+}
+
 /* --- Player thread --- */
 
 /* Opens the device if it isn't yet; it's started separately. Under lock. */
@@ -342,7 +406,7 @@ static unsigned sync_device(mc_player *p) {
   }
   if (want) { /* the device went away, say */
     p->state = MC_PLAYER_STOPPED;
-    return EV(MC_PLAYER_EVENT_ERROR) | EV(MC_PLAYER_EVENT_STATE);
+    return log_end(p, MC_PLAY_END_STOPPED) | EV(MC_PLAYER_EVENT_ERROR) | EV(MC_PLAYER_EVENT_STATE);
   }
   return 0;
 }
@@ -366,7 +430,7 @@ static source *open_from(mc_player *p, int *pos, int *index, int64_t ms, unsigne
       return NULL;
     }
     if (src) return src;
-    *events |= EV(MC_PLAYER_EVENT_ERROR);
+    *events |= EV(MC_PLAYER_EVENT_ERROR) | log_failed(p, *index);
     *index = item_at(p, ++*pos);
     ms = 0;
   }
@@ -389,6 +453,46 @@ static void stop_at_start(mc_player *p) {
   p->current = item_at(p, 0);
 }
 
+/* Counts the frames heard since the last call towards the plays they belong to, and queues
+ * a play for mc_player_take_played() once it counts. A segment heard for the first time ends
+ * the row before it, which has played out. Under lock. */
+static unsigned count_heard(mc_player *p, uint64_t played) {
+  unsigned events = 0;
+  for (int i = 0; i < p->nsegs && p->rate; i++) {
+    segment *seg = &p->segs[i];
+    uint64_t end = i + 1 < p->nsegs ? p->segs[i + 1].start : UINT64_MAX;
+    uint64_t from = p->heard > seg->start ? p->heard : seg->start;
+    uint64_t to = played < end ? played : end;
+    if (to <= from) continue;
+    int64_t began = (int64_t)mc_wall_ms() - (int64_t)((played - from) * 1000 / p->rate);
+    if (!seg->logged) {
+      events |= log_end(p, MC_PLAY_END_FINISHED);
+      log_begin(p, seg);
+    }
+    if (!p->log_frames) p->log.started_ms = began;
+    p->log_frames += to - from;
+    if (seg->index < 0) continue; /* the old queue's last moments: only the log's business */
+    if (seg->new_play || seg->index != p->play_index) {
+      seg->new_play = 0;
+      p->play_index = seg->index;
+      p->play_frames = 0;
+      p->play_counted = 0;
+      p->play_started_ms = began;
+    }
+    p->play_frames += to - from;
+    if (!p->play_counted &&
+        mc_play_counts(seg->duration_ms, (int64_t)(p->play_frames * 1000 / p->rate))) {
+      p->play_counted = 1;
+      if (p->nplays == MAX_PLAYED) /* nobody's taking them: keep the newest */
+        memmove(p->plays, p->plays + 1, (size_t)--p->nplays * sizeof *p->plays);
+      p->plays[p->nplays++] = (counted_play){seg->index, p->play_started_ms};
+      events |= EV(MC_PLAYER_EVENT_PLAYED);
+    }
+  }
+  p->heard = played;
+  return events;
+}
+
 /* Carries out p->cmd. The command stays posted (and is what mc_player_status_get reports)
  * until it's done, as opening the device and the file drop the lock. If another command
  * comes in meanwhile, this one is abandoned for it. */
@@ -397,6 +501,11 @@ static unsigned do_command(mc_player *p) {
   int64_t ms = p->cmd_ms;
   int seek = p->cmd_seek;
   unsigned gen = p->gen, events = EV(MC_PLAYER_EVENT_STATE);
+  /* What's left to count of the old buffer, which goes now. Whether this command gets to
+   * finish or not, the play it ends has ended; only a seek carries it on. */
+  unsigned kept = count_heard(p, played_frames(p));
+  if (!seek) kept |= log_end(p, p->cmd_end);
+  events |= kept;
   close_source(p);
 
   if (p->cmd == CMD_STOP) {
@@ -406,8 +515,9 @@ static unsigned do_command(mc_player *p) {
     return events;
   }
   int ok = ensure_device(p);
-  if (gen != p->gen) return 0;
+  if (gen != p->gen) return kept;
   if (!ok) {
+    events |= log_end(p, p->cmd_end);
     p->cmd = CMD_NONE;
     flush(p);
     p->state = MC_PLAYER_STOPPED;
@@ -416,10 +526,11 @@ static unsigned do_command(mc_player *p) {
     return events | EV(MC_PLAYER_EVENT_ERROR) | EV(MC_PLAYER_EVENT_TRACK);
   }
   source *src = open_from(p, &pos, &index, ms, gen, &events);
-  if (gen != p->gen) return events & EV(MC_PLAYER_EVENT_ERROR);
+  if (gen != p->gen) return kept | (events & (EV(MC_PLAYER_EVENT_ERROR) | EV(MC_PLAYER_EVENT_ENDED)));
   p->cmd = CMD_NONE;
   events |= EV(MC_PLAYER_EVENT_TRACK);
   if (!src) { /* nothing playable from there on */
+    events |= log_end(p, p->cmd_end);
     stop_at_start(p);
     return events;
   }
@@ -429,8 +540,14 @@ static unsigned do_command(mc_player *p) {
   p->decoding = p->current = index;
   p->decoding_pos = p->current_pos = pos;
   p->segs[0] = (segment){index, pos, p->written, (uint64_t)ms * p->rate / 1000, source_duration_ms(src),
-                         !seek || pos != asked};
+                         !seek || pos != asked, 1, log_item(p, index)};
   p->nsegs = 1;
+  /* Logged now, so an item skipped or paused before a frame of it is heard still has its row.
+   * A seek carries on the row that's open; after a stop there's none, and it starts one. */
+  if (!seek || pos != asked || !p->log_open) {
+    events |= log_end(p, p->cmd_end);
+    log_begin(p, &p->segs[0]);
+  }
   p->state = p->cmd_state; /* read now: pause() and resume() change it without a new command */
   return events;
 }
@@ -484,39 +601,8 @@ static unsigned fill(mc_player *p) {
     p->src = next;
     p->decoding = index;
     p->decoding_pos = pos;
-    p->segs[p->nsegs++] = (segment){index, pos, p->written, 0, source_duration_ms(next), 1};
+    p->segs[p->nsegs++] = (segment){index, pos, p->written, 0, source_duration_ms(next), 1, 0, log_item(p, index)};
   }
-  return events;
-}
-
-/* Counts the frames heard since the last call towards the plays they belong to, and queues
- * a play for mc_player_take_played() once it counts. Under lock. */
-static unsigned count_heard(mc_player *p, uint64_t played) {
-  unsigned events = 0;
-  for (int i = 0; i < p->nsegs && p->rate; i++) {
-    segment *seg = &p->segs[i];
-    uint64_t end = i + 1 < p->nsegs ? p->segs[i + 1].start : UINT64_MAX;
-    uint64_t from = p->heard > seg->start ? p->heard : seg->start;
-    uint64_t to = played < end ? played : end;
-    if (to <= from) continue;
-    if (seg->new_play || seg->index != p->play_index) {
-      seg->new_play = 0;
-      p->play_index = seg->index;
-      p->play_frames = 0;
-      p->play_counted = 0;
-      p->play_started_ms = (int64_t)mc_wall_ms() - (int64_t)((played - from) * 1000 / p->rate);
-    }
-    p->play_frames += to - from;
-    if (!p->play_counted &&
-        mc_play_counts(seg->duration_ms, (int64_t)(p->play_frames * 1000 / p->rate))) {
-      p->play_counted = 1;
-      if (p->nplays == MAX_PLAYED) /* nobody's taking them: keep the newest */
-        memmove(p->plays, p->plays + 1, (size_t)--p->nplays * sizeof *p->plays);
-      p->plays[p->nplays++] = (counted_play){seg->index, p->play_started_ms};
-      events |= EV(MC_PLAYER_EVENT_PLAYED);
-    }
-  }
-  p->heard = played;
   return events;
 }
 
@@ -534,6 +620,7 @@ static unsigned advance(mc_player *p) {
     events |= EV(MC_PLAYER_EVENT_TRACK);
   }
   if (p->drained && !p->src && played >= p->written && p->state != MC_PLAYER_STOPPED) {
+    events |= log_end(p, MC_PLAY_END_FINISHED);
     stop_at_start(p);
     events |= EV(MC_PLAYER_EVENT_STATE) | EV(MC_PLAYER_EVENT_TRACK);
   }
@@ -553,7 +640,7 @@ static void run(void *arg) {
     }
     if (events && p->cb) {
       mc_mutex_unlock(&p->lock);
-      for (int e = MC_PLAYER_EVENT_STATE; e <= MC_PLAYER_EVENT_PLAYED; e++)
+      for (int e = MC_PLAYER_EVENT_STATE; e <= MC_PLAYER_EVENT_ENDED; e++)
         if (events & EV(e)) p->cb(p->user, (mc_player_event)e);
       mc_mutex_lock(&p->lock);
     }
@@ -595,7 +682,9 @@ mc_status mc_player_new(mc_player_cb cb, void *user, mc_player **out) {
 static void free_queue(mc_player *p) {
   for (int i = 0; i < p->count; i++) free(p->queue[i]);
   free(p->queue);
+  free(p->track_uids);
   p->queue = NULL;
+  p->track_uids = NULL;
   p->count = 0;
 }
 
@@ -625,6 +714,7 @@ static void post(mc_player *p, command cmd, int pos, int index, int64_t ms, mc_p
   p->cmd_ms = ms > 0 ? ms : 0;
   p->cmd_state = state;
   p->cmd_seek = 0;
+  p->cmd_end = MC_PLAY_END_SKIPPED; /* most commands; the others say so after */
   p->gen++;
   mc_cond_broadcast(&p->wake);
 }
@@ -637,8 +727,24 @@ static int current_pos(mc_player *p) {
   return p->current_pos;
 }
 
+/* The origin's track uids as a queue keeps them: *out is NULL if it has none. 0 if out of
+ * memory. */
+static int copy_track_uids(const mc_play_origin *origin, int count, char (**out)[MC_UID_STRLEN]) {
+  *out = NULL;
+  if (!origin || !origin->track_uids || !count) return 1;
+  char (*uids)[MC_UID_STRLEN] = calloc((size_t)count, sizeof *uids);
+  if (!uids) return 0;
+  for (int i = 0; i < count; i++) {
+    const char *uid = origin->track_uids[i];
+    if (uid && strlen(uid) < MC_UID_STRLEN) strcpy(uids[i], uid);
+  }
+  *out = uids;
+  return 1;
+}
+
 /* mc_player_set_queue(), and with play 0 mc_player_load_queue(). */
-static mc_status set_queue(mc_player *p, const char *const *paths, int count, int start, int play) {
+static mc_status set_queue(mc_player *p, const char *const *paths, int count, int start, int play,
+                           const mc_play_origin *origin) {
   if (!p || count < 0 || (count && (!paths || start < -1 || start >= count))) return MC_ERR_INVALID_ARG;
   char **queue = count ? calloc((size_t)count, sizeof *queue) : NULL;
   if (count && !queue) return MC_ERR_NOMEM;
@@ -649,12 +755,25 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
       return paths[i] ? MC_ERR_NOMEM : MC_ERR_INVALID_ARG;
     }
   }
+  char (*track_uids)[MC_UID_STRLEN];
+  if (!copy_track_uids(origin, count, &track_uids)) {
+    for (int i = 0; i < count; i++) free(queue[i]);
+    free(queue);
+    return MC_ERR_NOMEM;
+  }
   mc_mutex_lock(&p->lock);
   free_queue(p);
   p->queue = queue;
+  p->track_uids = track_uids;
   p->count = count;
+  p->context = origin ? origin->context : MC_PLAY_CONTEXT_UNKNOWN;
+  if (start < 0 && p->shuffle && p->context != MC_PLAY_CONTEXT_RADIO) p->context = MC_PLAY_CONTEXT_SHUFFLE;
+  p->context_uid[0] = '\0';
+  if (origin && origin->context_uid && strlen(origin->context_uid) < MC_UID_STRLEN)
+    strcpy(p->context_uid, origin->context_uid);
   p->nplays = 0;
   p->play_index = -1;
+  for (int i = 0; i < p->nsegs; i++) p->segs[i].index = -1; /* what's still sounding isn't this queue's */
   mc_shuffle_init(&p->order, count, new_seed(), start);
   int pos = start >= 0 && !p->shuffle ? start : 0;
   if (count && play) {
@@ -667,16 +786,19 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
     p->current = p->current_pos = -1;
     post(p, CMD_STOP, -1, -1, 0, MC_PLAYER_STOPPED);
   }
+  p->cmd_end = MC_PLAY_END_REPLACED;
   mc_mutex_unlock(&p->lock);
   return MC_OK;
 }
 
-mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count, int start) {
-  return set_queue(p, paths, count, start, 1);
+mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count, int start,
+                              const mc_play_origin *origin) {
+  return set_queue(p, paths, count, start, 1, origin);
 }
 
-mc_status mc_player_load_queue(mc_player *p, const char *const *paths, int count, int start) {
-  return set_queue(p, paths, count, start, 0);
+mc_status mc_player_load_queue(mc_player *p, const char *const *paths, int count, int start,
+                               const mc_play_origin *origin) {
+  return set_queue(p, paths, count, start, 0, origin);
 }
 
 mc_status mc_player_skip_to(mc_player *p, int index) {
@@ -769,6 +891,7 @@ mc_status mc_player_stop(mc_player *p) {
   p->current = st.index;
   p->current_pos = pos;
   post(p, CMD_STOP, pos, st.index, 0, MC_PLAYER_STOPPED);
+  p->cmd_end = MC_PLAY_END_STOPPED;
   mc_mutex_unlock(&p->lock);
   return MC_OK;
 }
@@ -782,7 +905,7 @@ mc_status mc_player_seek_ms(mc_player *p, int64_t position_ms) {
     post(p, CMD_START, current_pos(p), st.index, position_ms,
          st.state == MC_PLAYER_PAUSED ? MC_PLAYER_PAUSED : MC_PLAYER_PLAYING);
     p->cmd_seek = position_ms > 0; /* back to the start is starting it again */
-
+    if (p->cmd_seek) p->cmd_end = MC_PLAY_END_STOPPED; /* only if the file has gone and it can't go on */
   }
   mc_mutex_unlock(&p->lock);
   return MC_OK;
@@ -863,6 +986,28 @@ mc_status mc_player_take_played(mc_player *p, int *index, int64_t *started_ms) {
   }
   mc_mutex_unlock(&p->lock);
   return st;
+}
+
+mc_status mc_player_take_ended(mc_player *p, mc_play_event *out) {
+  if (!p || !out) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  mc_status st = p->nended ? MC_OK : MC_ERR_NOT_FOUND;
+  if (st == MC_OK) {
+    *out = p->ended[0];
+    memmove(p->ended, p->ended + 1, (size_t)--p->nended * sizeof *p->ended);
+  }
+  mc_mutex_unlock(&p->lock);
+  return st;
+}
+
+mc_status mc_player_end_play(mc_player *p) {
+  if (!p) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  count_heard(p, played_frames(p));
+  log_end(p, MC_PLAY_END_STOPPED);
+  for (int i = 0; i < p->nsegs; i++) p->segs[i].logged = 0; /* if it plays on: a new row, once heard */
+  mc_mutex_unlock(&p->lock);
+  return MC_OK;
 }
 
 int mc_play_counts(int64_t duration_ms, int64_t listened_ms) {

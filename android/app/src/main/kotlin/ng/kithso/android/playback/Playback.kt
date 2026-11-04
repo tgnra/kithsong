@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import ng.kithso.android.data.Track
+import ng.kithso.core.CorePlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -36,9 +37,9 @@ interface Playback {
     /**
      * Plays [queue] from [index], or with -1 from the first track, which shuffled is any (the
      * core picks it, as the desktops' Shuffle buttons have it). Tracks without a file on this
-     * device are left out.
+     * device are left out. [origin] says what's played, for the play log.
      */
-    fun play(queue: List<Track>, index: Int)
+    fun play(queue: List<Track>, index: Int, origin: CorePlayer.Origin)
     fun toggle()
     fun seekTo(positionMs: Long)
     fun next()
@@ -102,7 +103,7 @@ class FakePlayback(private val scope: CoroutineScope) : Playback {
         positionMs = 0
     }
 
-    override fun play(queue: List<Track>, index: Int) {
+    override fun play(queue: List<Track>, index: Int, origin: CorePlayer.Origin) {
         load(queue, index.coerceAtLeast(0))
         playOrPause(track != null)
     }

@@ -6,8 +6,11 @@ import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import ng.kithso.android.data.ArtRef
+import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.Track
+import ng.kithso.core.CorePlayer
 import ng.kithso.playback.path
+import ng.kithso.playback.putPlayOrigin
 import java.io.File
 
 // A queue item is a Track in a MediaItem: what the notification shows in the metadata, and
@@ -21,13 +24,25 @@ private const val ART_VERSION = "art_version"
 private const val ALBUM_UID = "album_uid"
 private const val ARTIST_UID = "artist_uid"
 
+/** What playing this collection is, for the play log. */
+val CollectionRef.origin: CorePlayer.Origin
+    get() = CorePlayer.Origin(
+        when (kind) {
+            CollectionRef.Kind.Album -> CorePlayer.PlayContext.Album
+            CollectionRef.Kind.Artist -> CorePlayer.PlayContext.Artist
+            CollectionRef.Kind.Playlist -> CorePlayer.PlayContext.Playlist
+            CollectionRef.Kind.AlbumGroup -> CorePlayer.PlayContext.AlbumGroup
+        },
+        uid,
+    )
+
 /**
- * [tracks] as queue items. An album's tracks share a cover, and finding its URI touches the disk,
- * so each cover's is found once.
+ * [tracks] as queue items, of a queue that is [origin]. An album's tracks share a cover, and
+ * finding its URI touches the disk, so each cover's is found once.
  */
-fun queueItems(context: Context, tracks: List<Track>): List<MediaItem> {
+fun queueItems(context: Context, tracks: List<Track>, origin: CorePlayer.Origin): List<MediaItem> {
     val artwork = HashMap<ArtRef, Uri>()
-    return tracks.map { it.toMediaItem(artwork.getOrPut(it.art) { ArtProvider.uriFor(context, it.art) }) }
+    return tracks.map { it.toMediaItem(artwork.getOrPut(it.art) { ArtProvider.uriFor(context, it.art) }, origin) }
 }
 
 /**
@@ -37,13 +52,14 @@ fun queueItems(context: Context, tracks: List<Track>): List<MediaItem> {
  * when it compares items, so it's what makes an item with a new cover a changed one: without
  * it the player and the notification would go on showing the old cover.
  */
-private fun Track.toMediaItem(artwork: Uri): MediaItem {
+private fun Track.toMediaItem(artwork: Uri, origin: CorePlayer.Origin): MediaItem {
     val uri = path?.let { Uri.fromFile(File(it)) }
     val extras = Bundle().apply {
         putInt(TRACK_NO, trackNo)
         putArtRef(art)
         putString(ALBUM_UID, albumUid)
         putString(ARTIST_UID, artistUid)
+        putPlayOrigin(origin)
     }
     return MediaItem.Builder()
         .setMediaId(uid)

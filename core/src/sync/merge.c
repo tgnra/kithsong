@@ -47,6 +47,7 @@ static const merge_ref k_refs[] = {
   {"files", "track_uid", "tracks", NULL},
   {"playlist_entries", "track_uid", "tracks", NULL},
   {"track_plays", "track_uid", "tracks", "node_uid"},
+  {"play_events", "track_uid", "tracks", NULL},
 };
 
 #define COUNT(a) (sizeof (a) / sizeof (a)[0])
