@@ -105,8 +105,6 @@
     "no_playable_playlists_text": "This library contains playlists, but none of them have tracks on this device.",
     "no_playable_album_groups_title": { "text": "No album groups", "note": "The Album groups page when the library has album groups but none has an album on this device (the others are hidden)." },
     "no_playable_album_groups_text": "This library contains album groups, but none of them have albums on this device.",
-    "pair_with_device_menu": { "text": "Pair with a device…", "note": "Button on the empty Albums page of a computer that isn't paired yet: lists the devices nearby to pair with." },
-    "add_device_by_address_menu": { "text": "_Add device by address…", "note": "Last item of the Pair with a device… menu; opens the Add device dialog." },
     "library_folder": "Library folder",
     "library_folder_choose": "Choose your music library folder",
     "library_location": "Library location",

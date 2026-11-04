@@ -2,8 +2,7 @@
 
 Every user-visible string of every platform is in `en.json`, with translations in
 `<lang>.json` next to it. The build turns them into each platform's own form; nothing
-generated is checked in. `MERGES.md` records how the platforms' original strings were
-merged.
+generated is checked in.
 
 ## Format
 

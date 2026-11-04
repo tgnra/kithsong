@@ -1,7 +1,7 @@
 # Release builds. Pushing a v<VERSION> tag (or v<VERSION>-<suffix> for a prerelease) builds
 # every platform with the scripts in scripts/ and attaches the results to a draft GitHub
 # release. Running it by hand (Actions > Release > Run workflow) builds the same files as
-# workflow artifacts without making a release. See docs/RELEASING.md.
+# workflow artifacts without making a release.
 name: Release
 
 on:

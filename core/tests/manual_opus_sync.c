@@ -1,4 +1,4 @@
-/* A real Opus sync to time, for opus.md: two devices over loopback, as in test_sync_lossy.c,
+/* A real Opus sync to time: two devices over loopback, as in test_sync_lossy.c,
  * in one process. A is the archive and holds the originals; B wants Opus.
  *
  *   KITHSONG_SYNC_TRACE=1 manual_opus_sync <dir of tNN/track.*> <scratch root> <kbps> <files>
