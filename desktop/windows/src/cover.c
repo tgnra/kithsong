@@ -4,10 +4,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <wchar.h>
 
 #include "canvas.h"
-#include "musiccore/library.h"
+#include "musiccore/musiccore.h"
 #include "wstr.h"
 
 BOOL cover_find(const wchar_t *dir, wchar_t *path, size_t n) {
@@ -23,6 +24,35 @@ HBITMAP cover_decode(IWICImagingFactory *wic, const wchar_t *dir, int size, int 
                      const uint32_t **pixels) {
   wchar_t path[MAX_PATH * 2];
   return cover_find(dir, path, MAX_PATH * 2) ? cover_decode_file(wic, path, size, radius, pixels) : NULL;
+}
+
+void cover_art_close(cover_art_source *src) {
+  if (src->lib) mc_library_close(src->lib);
+  free(src->dir);
+  src->lib = NULL;
+  src->dir = NULL;
+}
+
+mc_library *cover_art_library(cover_art_source *src, const char *lib_dir) {
+  if (!lib_dir) return NULL;
+  if (src->lib && strcmp(src->dir, lib_dir)) cover_art_close(src);
+  if (!src->lib && mc_library_open(lib_dir, &src->lib) == MC_OK) src->dir = _strdup(lib_dir);
+  return src->dir ? src->lib : NULL;
+}
+
+wchar_t *cover_art_file(cover_art_source *src, const char *lib_dir, const char *art_dir, const wchar_t *uid,
+                        BOOL group) {
+  mc_library *lib = art_dir && uid ? cover_art_library(src, lib_dir) : NULL;
+  if (!lib) return NULL;
+  char *u = wstr_to_utf8(uid), *path = NULL;
+  mc_status st = MC_ERR_NOT_FOUND;
+  if (u && group) st = mc_album_group_art(lib, u, art_dir, &path);
+  else if (u) st = mc_playlist_art(lib, u, art_dir, &path);
+  if (st == MC_ERR_NOT_FOUND && u) mc_smart_art(lib, u, art_dir, &path); /* uids never clash */
+  free(u);
+  wchar_t *file = wstr_dup_from_utf8(path);
+  mc_free(path);
+  return file;
 }
 
 /* WIC's JPEG decoder does most of the downscaling while decoding, which is what makes this

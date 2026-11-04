@@ -315,6 +315,28 @@ typedef struct mc_recent_list {
 mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc_recent_list **out);
 void mc_recent_list_free(mc_recent_list *list);
 
+/* How much of an album or playlist has been played, counting every device's plays of its
+ * tracks. A playlist's tracks count however they were played, from an album or anywhere. */
+typedef struct mc_played_info {
+  mc_recent_kind kind;     /* MC_RECENT_ALBUM or MC_RECENT_PLAYLIST */
+  char uid[MC_UID_STRLEN];
+  int tracks_played;       /* its tracks with a play, one that's in a playlist twice once */
+  int tracks_since;        /* those of them last played at since_ms or later */
+  int64_t plays;           /* all their plays, ever */
+  int64_t last_played_ms;  /* the newest of them; 0 if only plays too old to have a time */
+} mc_played_info;
+
+typedef struct mc_played_list {
+  mc_played_info *items;
+  int count;
+} mc_played_list;
+
+/* Every album and playlist with a play, in no particular order. Read only. Play counts aren't
+ * kept by time, so tracks_since says a track's last play was that recent, not how often it's
+ * played lately. Free with mc_played_list_free(). */
+mc_status mc_library_list_played(mc_library *lib, int64_t since_ms, mc_played_list **out);
+void mc_played_list_free(mc_played_list *list);
+
 #ifdef __cplusplus
 }
 #endif

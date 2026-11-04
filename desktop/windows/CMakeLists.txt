@@ -26,6 +26,8 @@ add_executable(kithsong WIN32
   src/firewall.c
   src/firewall_banner.c
   src/first_run.c
+  src/home_picks.c
+  src/home_view.c
   src/import_view.c
   src/media_controls.c
   src/move_library.c

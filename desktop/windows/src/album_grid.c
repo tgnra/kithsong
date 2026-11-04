@@ -201,45 +201,13 @@ static int scale(int px) {
 
 /* --- Cover loading (loader thread) --- */
 
-/* The loader's own connection to the library, for playlists' and groups' pictures: making
- * one decodes four covers, which would hold up the UI thread's connection. */
-typedef struct art_source {
-  mc_library *lib;
-  char *dir;
-} art_source;
-
-/* The picture file of playlist uid (see mc_playlist_art()), or for group of album group uid,
- * or of smart list uid (mc_smart_art()), or NULL if it has none. Opens the library in lib_dir
- * first, if it isn't the one open. */
-static wchar_t *playlist_art(art_source *src, const char *lib_dir, const char *art_dir, const wchar_t *uid,
-                             BOOL group) {
-  if (!lib_dir || !art_dir || !uid) return NULL;
-  if (src->lib && strcmp(src->dir, lib_dir)) {
-    mc_library_close(src->lib);
-    free(src->dir);
-    src->lib = NULL;
-    src->dir = NULL;
-  }
-  if (!src->lib && mc_library_open(lib_dir, &src->lib) == MC_OK) src->dir = _strdup(lib_dir);
-  if (!src->lib || !src->dir) return NULL;
-  char *u = wstr_to_utf8(uid), *path = NULL;
-  mc_status st = MC_ERR_NOT_FOUND;
-  if (u && group) st = mc_album_group_art(src->lib, u, art_dir, &path);
-  else if (u) st = mc_playlist_art(src->lib, u, art_dir, &path);
-  if (st == MC_ERR_NOT_FOUND && u) mc_smart_art(src->lib, u, art_dir, &path); /* uids never clash */
-  free(u);
-  wchar_t *file = wstr_dup_from_utf8(path);
-  mc_free(path);
-  return file;
-}
-
 static DWORD WINAPI loader_main(void *arg) {
   (void)arg;
   CoInitializeEx(NULL, COINIT_MULTITHREADED);
   IWICImagingFactory *wic = NULL;
   CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory,
                    (void **)&wic);
-  art_source art = {0};
+  cover_art_source art = {0};
 
   for (;;) {
     EnterCriticalSection(&g.lock);
@@ -272,7 +240,7 @@ static DWORD WINAPI loader_main(void *arg) {
     r->size = job.size;
     r->gen = gen;
     r->pixels = NULL;
-    r->file = playlist ? playlist_art(&art, lib_dir, art_dir, dir, group) : NULL;
+    r->file = playlist ? cover_art_file(&art, lib_dir, art_dir, dir, group) : NULL;
     if (!wic) r->bmp = NULL;
     else if (playlist) r->bmp = r->file ? cover_decode_file(wic, r->file, job.size, job.radius, &r->pixels) : NULL;
     else r->bmp = dir ? cover_decode(wic, dir, job.size, job.radius, &r->pixels) : NULL;
@@ -285,8 +253,7 @@ static DWORD WINAPI loader_main(void *arg) {
       free(r);
     }
   }
-  if (art.lib) mc_library_close(art.lib);
-  free(art.dir);
+  cover_art_close(&art);
   if (wic) IWICImagingFactory_Release(wic);
   CoUninitialize();
   return 0;

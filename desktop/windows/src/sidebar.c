@@ -38,7 +38,6 @@ typedef struct sb_row {
   char uid[MC_UID_STRLEN]; /* recent, device and nearby rows */
   unsigned flags;    /* device and nearby rows: SB_DEV_*; recent rows: the mc_recent_kind */
   int indent;        /* at 96 DPI */
-  BOOL unavailable;  /* a page that isn't there yet: greyed out, and can't be selected */
   BOOL add;          /* a heading with a + at its end */
   BOOL pinned;       /* at the bottom, out of the scrolling */
   int top, height;   /* pixels: in the content if it scrolls, else in the client area */
@@ -151,7 +150,7 @@ static wchar_t *wcs_dup(const wchar_t *a, const wchar_t *b) {
 }
 
 static const sb_row *row(int i) {
-  static const sb_row none = {ROW_NOTE, NULL, NULL, 0, PAGE_ALBUMS, "", 0, 0, FALSE, FALSE, FALSE, 0, 0, FALSE};
+  static const sb_row none = {ROW_NOTE, NULL, NULL, 0, PAGE_ALBUMS, "", 0, 0, FALSE, FALSE, 0, 0, FALSE};
   return i >= 0 && i < s.nrows ? &s.rows[i] : &none;
 }
 
@@ -162,7 +161,7 @@ static BOOL selectable(const sb_row *r) {
 
 /* A page row that can be selected now. */
 static BOOL enabled(int i) {
-  return selectable(row(i)) && !row(i)->unavailable && (!s.locked || i == s.sel);
+  return selectable(row(i)) && (!s.locked || i == s.sel);
 }
 
 /* A row that acts when clicked, like a button: the accordion, a recent, a nearby device or
@@ -411,7 +410,6 @@ static void push_nav(const wchar_t *text, wchar_t icon, sidebar_page page, BOOL 
   r->icon = icon;
   r->page = page;
   r->pinned = pinned;
-  r->unavailable = page == PAGE_HOME; /* there's no home page yet */
 }
 
 /* A section heading, in capitals. */
@@ -589,7 +587,7 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
       BOOL selected = i == s.sel;
       color = theme_draw_state(c, &fill, scale(RADIUS),
                                selected ? STATE_SELECTED : i == s.hot ? STATE_HOT : STATE_NORMAL);
-      if (!enabled(i)) color = theme.text3; /* locked, or not there yet */
+      if (!enabled(i)) color = theme.text3; /* locked */
       if (selected && !theme.high_contrast) { /* accent marker at the left edge */
         int mark_h = scale(16);
         RECT mark = {fill.left, y + (h - mark_h) / 2, fill.left + scale(3), y + (h + mark_h) / 2};

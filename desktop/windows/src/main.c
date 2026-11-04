@@ -20,8 +20,8 @@
  * The sidebar picks the page beside it. Its RECENTS are the albums and playlists last
  * played and the artists and album groups last opened, here or on another device (they sync
  * with the library); clicking one shows it on its page, and its right-click menu removes it
- * or clears them all. Home is greyed out until there's a
- * home page. Artists lists the artists (artist_view.c); an artist's page is that view's
+ * or clears them all. Home is rows of covers to scroll through (home_view.c, with what's in
+ * them from home_picks.c). Artists lists the artists (artist_view.c); an artist's page is that view's
  * header, with the track list beneath showing the artist's tracks, and Back returns to the
  * list. Search,
  * Import and Settings replace the album grid and track list with the search page
@@ -95,6 +95,7 @@
 #include "edit_dialog.h"
 #include "firewall.h"
 #include "first_run.h"
+#include "home_view.h"
 #include "import_view.h"
 #include "move_library.h"
 #include "musiccore/musiccore.h"
@@ -130,6 +131,7 @@ enum {
   ID_SHUFFLE, /* after the seekbar */
   ID_VOLUME,  /* before the caption buttons: opens volume_popup.c */
   ID_WAITING, /* the waiting banner, above the album grid */
+  ID_HOME,
   NUM_BUTTONS = ID_NEXT - ID_PREV + 1
 };
 
@@ -179,6 +181,7 @@ typedef struct app {
   HWND now_playing;
   HWND search;
   HWND artists;
+  HWND home;
   HFONT font, icon_font;
   HWND hot_button; /* toolbar button under the mouse */
   canvas back;     /* the window's own background, around the children */
@@ -259,6 +262,7 @@ static void update_font(void) {
   now_playing_update(g_app.dpi);
   search_view_update(g_app.dpi, font);
   artist_view_update(g_app.dpi, font);
+  home_view_update(g_app.dpi, font);
   import_view_set_font(font);
   settings_view_set_font(font, g_app.dpi);
   device_view_set_font(font, g_app.dpi);
@@ -384,6 +388,8 @@ static void layout(void) {
                          SWP_NOZORDER | (g_app.show_tracks && library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   dwp = DeferWindowPos(dwp, g_app.search, NULL, side_w, bar, w - side_w, h - bar,
                        SWP_NOZORDER | (g_app.page == PAGE_SEARCH ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  dwp = DeferWindowPos(dwp, g_app.home, NULL, side_w, bar, w - side_w, h - bar,
+                       SWP_NOZORDER | (g_app.page == PAGE_HOME ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   EndDeferWindowPos(dwp);
 
   /* The extended frame: under the toolbar, beside the sidebar, and down far enough for the
@@ -464,6 +470,7 @@ static void show_page(sidebar_page page) {
     album_grid_show(page == PAGE_PLAYLISTS ? AGV_PLAYLISTS : page == PAGE_ALBUM_GROUPS ? AGV_GROUPS : AGV_ALBUMS);
   if (library_page() || page == PAGE_ARTISTS) show_album(); /* the track list is the page's */
   if (page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
+  if (page == PAGE_HOME) home_view_refresh(); /* plays since it last showed */
   import_view_show(page == PAGE_IMPORT);
   settings_view_show(page == PAGE_SETTINGS);
   device_view_show(page == PAGE_DEVICE);
@@ -525,6 +532,7 @@ static void refresh_recents(void) {
   }
   mc_recent_list_free(list);
   sidebar_set_recents(items, n);
+  home_view_refresh();
   for (int i = 0; i < n; i++) {
     free(names[i]);
     free(artists[i]);
@@ -561,13 +569,8 @@ static void open_album(const char *uid, const char *track_uid) {
   }
 }
 
-/* A recent was clicked in the sidebar: its page, with it selected. */
-static void open_recent(void) {
-  mc_recent_kind kind;
-  const char *clicked = sidebar_clicked_recent(&kind);
-  if (!clicked) return;
-  char uid[MC_UID_STRLEN];
-  snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when the recents refresh */
+/* Item uid, of kind: its page, with it selected. */
+static void open_item(mc_recent_kind kind, const char *uid) {
   if (kind == MC_RECENT_ARTIST) {
     open_artist(uid);
     return;
@@ -579,6 +582,27 @@ static void open_recent(void) {
   }
   show_page(kind == MC_RECENT_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUMS);
   album_grid_select(uid);
+}
+
+/* A recent was clicked in the sidebar. */
+static void open_recent(void) {
+  mc_recent_kind kind;
+  const char *clicked = sidebar_clicked_recent(&kind);
+  if (!clicked) return;
+  char uid[MC_UID_STRLEN];
+  snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when the recents refresh */
+  open_item(kind, uid);
+}
+
+/* A tile was clicked on the Home page. */
+static void open_home_tile(void) {
+  mc_recent_kind kind;
+  const char *clicked = home_view_clicked(&kind);
+  if (!clicked) return;
+  char uid[MC_UID_STRLEN];
+  snprintf(uid, sizeof uid, "%s", clicked);
+  if (kind == MC_RECENT_ALBUM) open_album(uid, NULL);
+  else open_item(kind, uid);
 }
 
 /* Remove from Recents or Clear Recents on a recent's menu in the sidebar. */
@@ -594,6 +618,7 @@ static void remove_recents(BOOL all) {
 static void refresh_library(void) {
   album_grid_set_library(g_app.lib);
   artist_view_set_library(g_app.lib); /* if the open artist went, it goes back (ARN_BACK) */
+  home_view_set_library(g_app.lib);
   show_album(); /* if the album went, the grid says so when it reloads */
   refresh_recents();
   if (g_app.lib) mc_library_search_prepare(g_app.lib); /* the index is ready before the user types */
@@ -718,6 +743,7 @@ static void apply_theme(void) {
   now_playing_update(g_app.dpi);
   search_view_update(g_app.dpi, g_app.font);
   artist_view_update(g_app.dpi, g_app.font);
+  home_view_update(g_app.dpi, g_app.font);
   album_grid_theme_changed();
   waiting_banner_theme_changed();
   device_view_theme_changed();
@@ -781,6 +807,8 @@ static void create_controls(void) {
   g_app.now_playing = now_playing_create(g_app.wnd, ID_NOW_PLAYING);
   g_app.search = search_view_create(g_app.wnd, ID_SEARCH);
   g_app.artists = artist_view_create(g_app.wnd, ID_ARTISTS);
+  g_app.home = home_view_create(g_app.wnd, ID_HOME);
+  home_view_set_playlist_art_dir(g_app.art_dir);
   refresh_library();
 
   import_view_create(g_app.wnd, g_app.lib);
@@ -1557,6 +1585,7 @@ static void on_command(int id, int code) {
         else if (library_page()) SetFocus(g_app.grid);
         else if (g_app.page == PAGE_ARTISTS) SetFocus(g_app.artists);
         else if (g_app.page == PAGE_SETTINGS) settings_view_focus();
+        else if (g_app.page == PAGE_HOME) SetFocus(g_app.home);
       } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       else if (code == SBN_PAIR_DEVICE) pair_nearby_uid(sidebar_clicked_nearby());
       else if (code == SBN_OPEN_RECENT) open_recent();
@@ -1567,6 +1596,10 @@ static void on_command(int id, int code) {
         show_page(code == SBN_NEW_SMART_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUM_GROUPS);
         album_grid_new_smart();
       }
+      break;
+    case ID_HOME:
+      if (code == HVN_OPEN) open_home_tile();
+      else if (code == HVN_IMPORT) show_page(PAGE_IMPORT);
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) {

@@ -1,4 +1,4 @@
-/* The navigation list on the left, custom-drawn: Home (greyed out until there's a home page)
+/* The navigation list on the left, custom-drawn: Home
  * and Search, then the library's pages under section headers, with Import and Settings
  * pinned at the bottom. Pages are selected by mouse or keyboard; selecting one
  * sends the parent WM_COMMAND with LBN_SELCHANGE. The DEVICES heading has a + at its end, to
@@ -30,7 +30,7 @@
 #include "musiccore/musiccore.h"
 
 typedef enum {
-  PAGE_HOME,   /* not there yet: its row is greyed out */
+  PAGE_HOME,
   PAGE_SEARCH,
   PAGE_ALBUMS,
   PAGE_ARTISTS,

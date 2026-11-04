@@ -19,4 +19,21 @@ HBITMAP cover_decode(IWICImagingFactory *wic, const wchar_t *dir, int size, int 
 HBITMAP cover_decode_file(IWICImagingFactory *wic, const wchar_t *path, int size, int radius,
                           const uint32_t **pixels);
 
+/* A loader thread's own connection to the library, for playlists' and groups' pictures: making
+ * one decodes four covers, which would hold up the UI thread's connection. Starts zeroed. */
+typedef struct cover_art_source {
+  struct mc_library *lib;
+  char *dir;
+} cover_art_source;
+
+/* The connection to the library in lib_dir, opened if it isn't the one open; NULL if it can't
+ * be. */
+struct mc_library *cover_art_library(cover_art_source *src, const char *lib_dir);
+/* The picture file of playlist uid (see mc_playlist_art()), or for group of album group uid,
+ * or of smart list uid (mc_smart_art()), or NULL if it has none. Opens the library in lib_dir
+ * first, if it isn't the one open. */
+wchar_t *cover_art_file(cover_art_source *src, const char *lib_dir, const char *art_dir, const wchar_t *uid,
+                        BOOL group);
+void cover_art_close(cover_art_source *src);
+
 #endif
