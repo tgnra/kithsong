@@ -229,10 +229,22 @@ static GMenuModel *station_menu(void) {
   return G_MENU_MODEL(menu);
 }
 
+static void set_roving(tile *t, gboolean grab);
+
+/* A closed menu gives the focus back to its tile, as GTK would hand it elsewhere, unless what
+ * it chose opened a dialog. By now the rows may have changed, so it goes by the roving tile. */
+static void on_tile_menu_closed(GtkPopover *menu, gpointer user) {
+  (void)menu;
+  (void)user;
+  if (v.roving && !adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(v.a->win)))
+    gtk_widget_grab_focus(v.roving->button);
+}
+
 /* t's menu, at x, y in widget. */
-static void popup_tile_menu(const tile *t, GtkWidget *widget, double x, double y) {
+static void popup_tile_menu(tile *t, GtkWidget *widget, double x, double y) {
   graphene_point_t at;
   if (!v.a->lib || !gtk_widget_compute_point(widget, v.rows_box, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
+  set_roving(t, FALSE);
   /* A station's own uid is its artist's: as a recent it goes by its seed. */
   g_strlcpy(v.menu_uid, t->station ? t->seed : t->uid, sizeof v.menu_uid);
   g_free(v.menu_title);
@@ -954,6 +966,7 @@ GtkWidget *home_view_new(app *a, const home_view_callbacks *callbacks) {
   gtk_popover_set_has_arrow(GTK_POPOVER(v.menu), FALSE);
   gtk_widget_set_halign(v.menu, GTK_ALIGN_START);
   gtk_widget_set_parent(v.menu, rows);
+  g_signal_connect(v.menu, "closed", G_CALLBACK(on_tile_menu_closed), NULL);
   GSimpleActionGroup *actions = g_simple_action_group_new();
   const GActionEntry entries[] = {{"play", on_play, NULL, NULL, NULL, {0}},
                                   {"remove-recent", on_remove_recent, NULL, NULL, NULL, {0}},
