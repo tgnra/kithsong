@@ -82,6 +82,8 @@ class PlaybackService : MediaLibraryService() {
                 session.setMediaButtonPreferences(shuffleButtons(shuffleModeEnabled))
             }
         })
+        // Stopped is how the app quits with a track paused, which leaves nothing behind.
+        setShowNotificationForIdlePlayer(SHOW_NOTIFICATION_FOR_IDLE_PLAYER_NEVER)
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this).build().apply { setSmallIcon(R.drawable.ic_notification) },
         )
