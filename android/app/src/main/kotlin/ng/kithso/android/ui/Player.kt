@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -173,6 +174,8 @@ fun FullPlayer(
         ArtBackdrop(rememberArtColors(track.art), Modifier.fillMaxSize())
         BoxWithConstraints(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
             val wide = maxWidth > maxHeight
+            // Below about this, two lines and the controls don't fit, so a short title gives its space back.
+            val titleSpace = maxHeight >= 256.dp + 56.dp * LocalDensity.current.fontScale
             Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
                 // Nudged so the icons, not their touch targets, line up with the art.
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
@@ -189,7 +192,7 @@ fun FullPlayer(
                         PlayerArt(swipe, onMenu, Modifier.fillMaxHeight())
                         Spacer(Modifier.size(32.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
-                            PlayerTitle(swipe, Alignment.CenterStart)
+                            PlayerTitle(swipe, titleSpace, Alignment.CenterStart)
                             // Moved, not closed up, so this centred column keeps its height and the title stays put.
                             PlayerControls(playback, track, onAddToPlaylist, Modifier.offset(y = -ControlsGap))
                         }
@@ -197,7 +200,7 @@ fun FullPlayer(
                 } else {
                     TallPlayerLayout(
                         art = { PlayerArt(swipe, onMenu, Modifier) },
-                        title = { PlayerTitle(swipe, Alignment.TopStart) },
+                        title = { PlayerTitle(swipe, titleSpace, Alignment.TopStart) },
                         controls = { PlayerControls(playback, track, onAddToPlaylist) },
                         modifier = Modifier.weight(1f),
                     )
@@ -296,13 +299,13 @@ private fun PlayerArt(swipe: TrackSwipeState, onMenu: (() -> Unit)?, modifier: M
     }
 }
 
-/** Always the height of a two-line title and byline, with a shorter one at [alignment]. */
+/** The title and byline. With [twoLineSpace], always that height, with a shorter one at [alignment]. */
 @Composable
-private fun PlayerTitle(swipe: TrackSwipeState, alignment: Alignment) {
+private fun PlayerTitle(swipe: TrackSwipeState, twoLineSpace: Boolean, alignment: Alignment) {
     TrackSlides(swipe) { shown ->
         Box(Modifier.fillMaxWidth(), contentAlignment = alignment) {
             // Empty text holds the height, as large text doesn't scale its line height evenly.
-            Column(Modifier.clearAndSetSemantics {}) {
+            if (twoLineSpace) Column(Modifier.clearAndSetSemantics {}) {
                 Text("", style = MaterialTheme.typography.headlineSmall, minLines = 2)
                 Text("", style = MaterialTheme.typography.titleMedium)
             }
