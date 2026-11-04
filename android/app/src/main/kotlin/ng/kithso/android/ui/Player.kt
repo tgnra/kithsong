@@ -45,6 +45,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
@@ -188,7 +189,7 @@ fun FullPlayer(
                         PlayerArt(swipe, onMenu, Modifier.fillMaxHeight())
                         Spacer(Modifier.size(32.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
-                            PlayerTitle(swipe)
+                            PlayerTitle(swipe, Alignment.CenterStart)
                             // Moved, not closed up, so this centred column keeps its height and the title stays put.
                             PlayerControls(playback, track, onAddToPlaylist, Modifier.offset(y = -ControlsGap))
                         }
@@ -196,7 +197,7 @@ fun FullPlayer(
                 } else {
                     TallPlayerLayout(
                         art = { PlayerArt(swipe, onMenu, Modifier) },
-                        title = { PlayerTitle(swipe) },
+                        title = { PlayerTitle(swipe, Alignment.TopStart) },
                         controls = { PlayerControls(playback, track, onAddToPlaylist) },
                         modifier = Modifier.weight(1f),
                     )
@@ -211,9 +212,8 @@ fun FullPlayer(
  * in the height the rest leaves. Height left over from that goes above the art and below the
  * controls, and past their limits, around the lot.
  *
- * What's left over is worked out as if the title took two lines, and the title sits under the
- * art and the controls right under the title, so moving between a short title and a long one
- * moves the controls, not the art.
+ * The title sits under the art and the controls right under the title, which keeps the height
+ * of two lines, so moving between a short title and a long one moves none of it.
  */
 @Composable
 private fun TallPlayerLayout(
@@ -222,8 +222,6 @@ private fun TallPlayerLayout(
     controls: @Composable () -> Unit,
     modifier: Modifier,
 ) {
-    val titleLine = MaterialTheme.typography.headlineSmall.lineHeight
-    val bylineLine = MaterialTheme.typography.titleMedium.lineHeight
     Layout(listOf(art, title, controls), modifier) { (artItem, titleItem, controlsItem), constraints ->
         val width = constraints.maxWidth
         val height = constraints.maxHeight
@@ -239,8 +237,7 @@ private fun TallPlayerLayout(
         val side = minOf(width, MaxArtSize.roundToPx(), room).coerceAtLeast(0)
         val artPlaced = artItem.single().measure(Constraints.fixed(side, side))
 
-        val longTitle = titleLine.roundToPx() * 2 + bylineLine.roundToPx()
-        val spare = (room - side - (longTitle - titlePlaced.height).coerceAtLeast(0)).coerceAtLeast(0)
+        val spare = (room - side).coerceAtLeast(0)
         val aboveArt = minOf(spare * 3 / 5, MaxGapAboveArt.roundToPx())
         val belowControls = minOf(spare * 2 / 5, MaxGapBelowControls.roundToPx())
         val around = (spare - aboveArt - belowControls) / 2
@@ -299,23 +296,31 @@ private fun PlayerArt(swipe: TrackSwipeState, onMenu: (() -> Unit)?, modifier: M
     }
 }
 
+/** Always the height of a two-line title and byline, with a shorter one at [alignment]. */
 @Composable
-private fun PlayerTitle(swipe: TrackSwipeState) {
+private fun PlayerTitle(swipe: TrackSwipeState, alignment: Alignment) {
     TrackSlides(swipe) { shown ->
-        Column(Modifier.fillMaxWidth()) {
-            Text(
-                shown?.title.orEmpty(),
-                style = MaterialTheme.typography.headlineSmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                shown?.byline().orEmpty(),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        Box(Modifier.fillMaxWidth(), contentAlignment = alignment) {
+            // Empty text holds the height, as large text doesn't scale its line height evenly.
+            Column(Modifier.clearAndSetSemantics {}) {
+                Text("", style = MaterialTheme.typography.headlineSmall, minLines = 2)
+                Text("", style = MaterialTheme.typography.titleMedium)
+            }
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    shown?.title.orEmpty(),
+                    style = MaterialTheme.typography.headlineSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    shown?.byline().orEmpty(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
