@@ -1,5 +1,8 @@
 package ng.kithso.android.ui
 
+import android.app.Activity
+import android.util.Log
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +52,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -96,6 +100,7 @@ import kotlin.math.roundToInt
 /** The form's text boxes, by what they hold. */
 internal enum class TagField { Title, Name, Artist, SortName, TrackNo, DiscNo, Year, OriginalYear, Genre, Release }
 
+private const val TAG = "kithsong"
 private const val YEAR_DIGITS = 4
 private const val NUMBER_DIGITS = 3
 
@@ -233,6 +238,14 @@ internal fun TagEditorScreen(editor: TagEditor, playback: Playback, target: TagT
     var searching by rememberSaveable(target) { mutableStateOf(false) }
     var asking by rememberSaveable(target) { mutableStateOf(false) }
     val context = LocalContext.current
+    // The form makes room for the keyboard itself. Left to pan as well, the window slides the
+    // whole page out of sight in landscape, where the box is lower than the keyboard's top.
+    val window = (context as? Activity)?.window
+    DisposableEffect(window) {
+        val mode = window?.attributes?.softInputMode
+        window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        onDispose { if (mode != null) window.setSoftInputMode(mode) }
+    }
     LaunchedEffect(form) {
         when (val read = editor.read(target)) {
             is TagResult.Ok -> form.start(read.value)
@@ -357,7 +370,10 @@ private fun TagPage(
             if (result.saved != was) {
                 val queue = playback.queueTracks
                 val fresh = if (queue.isEmpty()) queue else editor.freshTracks(queue)
-                if (fresh != queue) playback.updateQueue(fresh)
+                if (fresh != queue) {
+                    Log.i(TAG, "The edit changed the queue's tracks: giving the player the new ones")
+                    playback.updateQueue(fresh)
+                }
             }
             form.saving = false
             if (result.status == 0) {
@@ -473,12 +489,15 @@ private fun ArtistFields(form: TagForm, onDone: () -> Unit) {
 private fun TrackFields(form: TagForm, onDone: () -> Unit) {
     TagTextField(form, TagField.Title, stringResource(R.string.title))
     TagTextField(form, TagField.Artist, stringResource(R.string.artist), cue = stringResource(R.string.edit_track_artist_cue))
+    // Two to a row: three leave a phone no room for the labels.
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         TagTextField(form, TagField.TrackNo, stringResource(R.string.edit_track_number), Modifier.weight(1f), digits = NUMBER_DIGITS)
         TagTextField(form, TagField.DiscNo, stringResource(R.string.edit_disc_number), Modifier.weight(1f), digits = NUMBER_DIGITS)
-        TagTextField(form, TagField.Year, stringResource(R.string.col_year), Modifier.weight(1f), digits = YEAR_DIGITS)
     }
-    TagTextField(form, TagField.Genre, stringResource(R.string.edit_genre), onDone = onDone)
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        TagTextField(form, TagField.Year, stringResource(R.string.col_year), Modifier.weight(1f), digits = YEAR_DIGITS)
+        TagTextField(form, TagField.Genre, stringResource(R.string.edit_genre), Modifier.weight(1f), onDone = onDone)
+    }
 }
 
 /**
