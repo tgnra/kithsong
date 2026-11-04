@@ -520,6 +520,13 @@ int main(int argc, char **argv) {
   CHECK(mc_library_record_opened(b.lib, MC_RECENT_PLAYLIST, pl) == MC_OK);
   CHECK(mc_library_remove_recent(b.lib, pl) == MC_OK);
   lib_text(&c, "SELECT opened_ms FROM recents WHERE kind = 'album'", opened, sizeof opened);
+  /* A station reaches everyone, and so does a kind nobody here knows, by way of B: that's what
+   * a station is to an older app, which stores it, passes it on and lists without it. */
+  CHECK(mc_library_record_opened(a.lib, MC_RECENT_STATION, t1) == MC_OK);
+  CHECK(mc_library_begin_write(a.lib) == MC_OK);
+  snprintf(sql, sizeof sql, "INSERT INTO recents (uid, kind, opened_ms) VALUES ('%s', 'hologram', 9)", t2);
+  CHECK(exec(mc_library_db(a.lib), sql) == SQLITE_OK);
+  CHECK(mc_library_commit(a.lib) == MC_OK);
   dev *abc[] = {&a, &b, &c};
   for (int round = 0; round < 3 && !digests_equal(abc, 3); round++) {
     CHECK(sync_now(&a, &b) == MC_OK);
@@ -553,6 +560,16 @@ int main(int argc, char **argv) {
       CHECK_TEXT(text, opened);
     }
     mc_recent_list_free(recents);
+    recents = NULL;
+    CHECK(mc_library_list_recents(abc[i]->lib, 0, MC_LIST_STATIONS, &recents) == MC_OK && recents &&
+          recents->count == 3);
+    if (recents && recents->count == 3) {
+      CHECK(recents->items[0].kind == MC_RECENT_STATION && !strcmp(recents->items[0].uid, t1));
+      CHECK(strstr(recents->items[0].name, " Radio") != NULL);
+    }
+    mc_recent_list_free(recents);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM recents WHERE uid = '%s' AND kind = 'hologram'", t2);
+    CHECK(query_int(mc_library_db(abc[i]->lib), sql) == 1);
   }
 
   /* Refusals. D and E form a group of their own: A can't pair with D (in_group). F has a

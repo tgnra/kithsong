@@ -174,6 +174,45 @@ static void test_played(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* A station in Recents is the same tile as one in the Radio row: marked, with the seed to start
+ * from and the seed's cover. A recent's uid is the seed, the tile's its artist. */
+static void test_recent_station(const char *scratch) {
+  mc_library *lib = open_fresh(scratch, "test_home_picks_station.d");
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  seed_albums(db);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_STATION, "t010") == MC_OK);
+  mc_sleep_ms(2);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_STATION, "t020") == MC_OK);
+  mc_sleep_ms(2);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "al03") == MC_OK);
+
+  mc_home_picks p;
+  mc_home_picks_load(lib, 1, &p);
+  CHECK(p.counts[MC_HOME_ROW_RECENTS] == 3);
+  if (p.counts[MC_HOME_ROW_RECENTS] == 3) {
+    const mc_home_pick *album = &p.rows[MC_HOME_ROW_RECENTS][0], *st = &p.rows[MC_HOME_ROW_RECENTS][1];
+    CHECK(!album->station && album->kind == MC_RECENT_ALBUM);
+    CHECK(st->station && st->kind == MC_RECENT_ARTIST && !st->smart);
+    CHECK_STR(st->uid, "A");
+    CHECK_STR(st->seed_uid, "t020");
+    CHECK_STR(st->title, "Anna Radio");
+    CHECK_STR(st->sub, "Like T");
+    CHECK_STR(st->seed_title, "T");
+    CHECK(st->cover_dir && strstr(st->cover_dir, "02"));
+    CHECK_STR(p.rows[MC_HOME_ROW_RECENTS][2].seed_uid, "t010");
+    CHECK_STR(p.rows[MC_HOME_ROW_RECENTS][2].title, "Bo Radio");
+  }
+  mc_home_picks_free(&p);
+
+  /* Gone from the row with its seed, or with the seed's file. */
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't020'; DELETE FROM files WHERE track_uid = 't010'") == SQLITE_OK);
+  mc_home_picks_load(lib, 1, &p);
+  CHECK(p.counts[MC_HOME_ROW_RECENTS] == 1);
+  mc_home_picks_free(&p);
+  mc_library_close(lib);
+}
+
 static void test_titles(void) {
   CHECK_STR(mc_str(mc_home_row_title(MC_HOME_ROW_RADIO)), "Radio");
   CHECK_STR(mc_str(mc_home_row_title(MC_HOME_ROW_RECENTS)), "Recents");
@@ -188,6 +227,7 @@ int main(int argc, char **argv) {
   test_nothing(scratch);
   test_unplayed(scratch);
   test_played(scratch);
+  test_recent_station(scratch);
   test_titles();
   mc_shutdown();
   return TEST_RESULT();
