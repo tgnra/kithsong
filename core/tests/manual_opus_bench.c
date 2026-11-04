@@ -10,6 +10,7 @@
  *
  * Every number comes with thread or process CPU time beside the wall time, since other work
  * on the machine stretches the second and hardly touches the first. */
+#define _POSIX_C_SOURCE 200809L /* clock_gettime() under -std=c11 */
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>

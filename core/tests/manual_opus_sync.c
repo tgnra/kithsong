@@ -7,6 +7,7 @@
  * Originals are copied in from tNN/, with any cover beside them. Run it on a Release build,
  * and pipe stderr: see the sync-profiling notes. cold is a session with an empty transcode
  * cache; warm is the same session over again with B's files gone, from a full cache. */
+#define _POSIX_C_SOURCE 200809L /* clock_gettime() under -std=c11 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
