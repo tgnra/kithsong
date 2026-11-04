@@ -82,9 +82,9 @@ double mc_analysis_distance(const mc_analysis *a, const mc_analysis *b,
  *
  * The scanner analyses the tracks of one library that have a file here and no result yet, one
  * at a time, on a low-priority thread of its own with a connection of its own. It has no state
- * but the results: stopped at any point, it goes on from there next time. It stands aside while
- * a sync session or an import runs. Android doesn't run one, for the battery: results reach it
- * by sync. */
+ * but the results: stopped at any point, it goes on from there next time. It only works on AC
+ * power, and stands aside while a sync session or an import runs. Android doesn't run one, for
+ * the battery: results reach it by sync. */
 typedef struct mc_analysis_scanner mc_analysis_scanner;
 
 /* Starts scanning the library in dir, after a short wait so a starting app isn't held up. */

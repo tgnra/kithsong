@@ -32,5 +32,7 @@ mc_status mc_analysis_scan_one(mc_library *lib, char cursor[MC_UID_STRLEN],
  * it rests as it works, and whether it runs at background priority, where a busy machine can
  * starve it for as long as it likes. (30 s, 5 minutes, yes and yes by default.) */
 void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int rests, int background);
+/* For tests: how often a scanner on battery looks again. (30 s by default.) */
+void mc_analysis_scanner_set_power_poll_ms(uint32_t ms);
 
 #endif

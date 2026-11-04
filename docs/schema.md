@@ -339,6 +339,14 @@ reading, at once, and that track is done from the start next time. Having gone t
 library it looks again every 5 minutes, which is how it finds imports. It rests as long as it
 works, so a long scan doesn't keep one core flat out.
 
+It only works on AC power. Before each track it asks `mc_power_on_ac()` (`util/power.h`), so
+unplugging lets the track in hand finish and plugging in sets it going within 30 seconds, which is
+how often it looks again meanwhile. On Windows that's `GetSystemPowerStatus`: `ACLineStatus` 1 is
+AC, as is a machine with no system battery (`BatteryFlag` 128), and an unknown line (255) is AC only
+where no battery is known of. On Linux it's `/sys/class/power_supply`: any Mains or USB supply
+online is AC, as is having no battery at all (desktops, containers) or a folder that can't be read,
+and supplies with `scope` Device, a wireless mouse's say, don't count. In doubt it's AC.
+
 It stands aside (`mc_analysis_hold()`) for the whole of a sync session and while an import is at
 work, but not while an import waits for review. For sync that's more than good manners: a row
 logged during a session moves this device's version vector, so the session's digests differ, it

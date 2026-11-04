@@ -23,6 +23,7 @@
 #include "analysis/analysis_internal.h"
 #include "library/library_internal.h"
 #include "util/platform.h"
+#include "util/power.h"
 
 #define BUSY_WAIT_MS 5000 /* as long as mc_library_open() waits for a lock */
 #define HOLD_POLL_MS 250
@@ -34,6 +35,7 @@
 static atomic_int g_holds;
 static uint32_t g_start_ms = 30000, g_idle_ms = 5 * 60 * 1000;
 static int g_rests = 1, g_background = 1;
+static uint32_t g_power_poll_ms = 30000;
 
 void mc_analysis_hold(void) {
   atomic_fetch_add(&g_holds, 1);
@@ -52,6 +54,10 @@ void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int res
   g_idle_ms = idle_ms;
   g_rests = rests;
   g_background = background;
+}
+
+void mc_analysis_scanner_set_power_poll_ms(uint32_t ms) {
+  g_power_poll_ms = ms;
 }
 
 /* --- One track --- */
@@ -241,6 +247,13 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
   int worked = 0;
   s->burst_from = mc_mono_ms();
   while (!stopping(s)) {
+    /* Between tracks, so unplugging lets the one in hand finish, and that's the most it costs.
+     * Nothing else is held for this: a stop still ends the wait at once. */
+    if (!mc_power_on_ac()) {
+      if (wait_ms(s, g_power_poll_ms)) break;
+      s->burst_from = mc_mono_ms();
+      continue;
+    }
     mc_scan_step step = MC_SCAN_NONE;
     mc_status st = mc_analysis_scan_one(lib, cursor, pause_point, s, &step);
     if (st != MC_OK) { /* the library's busy or gone for now: there's always the next pass */

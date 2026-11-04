@@ -14,6 +14,7 @@
 #include "sync/rows.h"
 #include "test.h"
 #include "util/platform.h"
+#include "util/power.h"
 #include "util/uid.h"
 
 #define PI 3.14159265358979323846
@@ -1093,9 +1094,187 @@ static void test_scanner(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* --- Power --- */
+
+static void test_power_windows(void) {
+  CHECK(mc_power_windows_on_ac(1, 1) == 1);     /* plugged in, charged well */
+  CHECK(mc_power_windows_on_ac(1, 8) == 1);     /* plugged in, charging */
+  CHECK(mc_power_windows_on_ac(0, 2) == 0);     /* on battery, low */
+  CHECK(mc_power_windows_on_ac(0, 128) == 1);   /* no battery, whatever the line says */
+  CHECK(mc_power_windows_on_ac(255, 128) == 1);
+  CHECK(mc_power_windows_on_ac(255, 255) == 1); /* nothing known of either */
+  CHECK(mc_power_windows_on_ac(255, 1) == 0);   /* a battery, and the line unknown */
+  CHECK(mc_power_windows_on_ac(0, 255) == 0);   /* the line says battery */
+}
+
+static void write_value(const char *root, const char *supply, const char *file, const char *value) {
+  char dir[1200], path[1300];
+  snprintf(dir, sizeof dir, "%s/%s", root, supply);
+  mc_mkdirs(dir);
+  snprintf(path, sizeof path, "%s/%s", dir, file);
+  FILE *f = mc_fopen(path, "wb");
+  if (!f) return;
+  fprintf(f, "%s\n", value); /* as sysfs has it */
+  fclose(f);
+}
+
+/* A folder of supplies like /sys/class/power_supply, new for each case. */
+static const char *sysfs_case(const char *scratch, const char *name) {
+  static char root[1100];
+  snprintf(root, sizeof root, "%s/test_analysis_power.d/%s", scratch, name);
+  mc_mkdirs(root);
+  return root;
+}
+
+static void test_power_sysfs(const char *scratch) {
+  const char *r = sysfs_case(scratch, "laptop-plugged");
+  write_value(r, "BAT0", "type", "Battery");
+  write_value(r, "AC", "type", "Mains");
+  write_value(r, "AC", "online", "1");
+  CHECK(mc_power_sysfs_on_ac(r) == 1);
+
+  r = sysfs_case(scratch, "laptop-unplugged");
+  write_value(r, "BAT0", "type", "Battery");
+  write_value(r, "AC", "type", "Mains");
+  write_value(r, "AC", "online", "0");
+  CHECK(mc_power_sysfs_on_ac(r) == 0);
+
+  r = sysfs_case(scratch, "usb-c");
+  write_value(r, "BAT0", "type", "Battery");
+  write_value(r, "AC", "type", "Mains");
+  write_value(r, "AC", "online", "0");
+  write_value(r, "ucsi", "type", "USB");
+  write_value(r, "ucsi", "online", "1");
+  CHECK(mc_power_sysfs_on_ac(r) == 1);
+
+  r = sysfs_case(scratch, "battery-alone");
+  write_value(r, "BAT1", "type", "Battery");
+  CHECK(mc_power_sysfs_on_ac(r) == 0);
+
+  r = sysfs_case(scratch, "desktop-empty");
+  CHECK(mc_power_sysfs_on_ac(r) == 1);
+
+  r = sysfs_case(scratch, "desktop-mouse");
+  write_value(r, "hid-mouse", "type", "Battery");
+  write_value(r, "hid-mouse", "scope", "Device");
+  CHECK(mc_power_sysfs_on_ac(r) == 1);
+
+  /* A mouse doesn't make a laptop's own battery go away, nor its charging count as AC. */
+  r = sysfs_case(scratch, "laptop-mouse");
+  write_value(r, "hid-mouse", "type", "Battery");
+  write_value(r, "hid-mouse", "scope", "Device");
+  write_value(r, "dock", "type", "USB");
+  write_value(r, "dock", "scope", "Device");
+  write_value(r, "dock", "online", "1");
+  write_value(r, "BAT0", "type", "Battery");
+  write_value(r, "BAT0", "scope", "System");
+  CHECK(mc_power_sysfs_on_ac(r) == 0);
+
+  r = sysfs_case(scratch, "empty-bay");
+  write_value(r, "BAT0", "type", "Battery");
+  write_value(r, "BAT0", "present", "0");
+  CHECK(mc_power_sysfs_on_ac(r) == 1);
+
+  r = sysfs_case(scratch, "only-a-ups");
+  write_value(r, "ups", "type", "UPS");
+  CHECK(mc_power_sysfs_on_ac(r) == 1);
+
+  /* A supply with nothing readable in it isn't anything. */
+  r = sysfs_case(scratch, "unreadable-entry");
+  char junk[1200];
+  snprintf(junk, sizeof junk, "%s/nothing", r);
+  mc_mkdirs(junk);
+  CHECK(mc_power_sysfs_on_ac(r) == 1);
+
+  /* No such folder, as on a kernel without it. */
+  char gone[1200];
+  snprintf(gone, sizeof gone, "%s/test_analysis_power.d/not-there", scratch);
+  CHECK(mc_power_sysfs_on_ac(gone) == 1);
+  printf("this machine: %s\n", mc_power_on_ac() ? "on AC" : "on battery");
+}
+
+/* Unplugged it does nothing; unplugged part-way it finishes the track in hand and stops; plugged
+ * in it goes on; and a stop never waits for the next look. */
+static void test_power_scan(const char *scratch) {
+  enum { TRACKS = 5 };
+  char dir[1024], path[1200], name[32], uid[MC_UID_STRLEN];
+  mc_library *lib = open_library(scratch, "test_analysis_power_scan.d", dir, sizeof dir);
+  if (!lib) return;
+  for (int i = 0; i < TRACKS; i++) {
+    snprintf(name, sizeof name, "p%d.wav", i);
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    CHECK(write_wav(path, 44100, 10.0, 0.5));
+    add_track(lib, name, 0, uid);
+  }
+  mc_analysis_scanner_set_timing(0, 20, 0, 0);
+  mc_analysis_scanner_set_power_poll_ms(20);
+
+  mc_power_set_override(0);
+  mc_analysis_scanner *s = NULL;
+  CHECK(mc_analysis_scanner_start(dir, &s) == MC_OK);
+  mc_sleep_ms(300);
+  CHECK(analysed(lib) == 0);
+
+  mc_power_set_override(1);
+  CHECK(wait_for(lib, 1));
+  mc_power_set_override(0);
+  /* What it had in hand comes in; then nothing does. */
+  int settled = analysed(lib), now;
+  for (int quiet = 0; quiet < 10; settled = now) {
+    mc_sleep_ms(100);
+    now = analysed(lib);
+    quiet = now == settled ? quiet + 1 : 0;
+  }
+  printf("unplugged part-way: %d of %d done, and it stopped there\n", settled, TRACKS);
+  CHECK(settled < TRACKS);
+
+  mc_power_set_override(1);
+  CHECK(wait_for(lib, TRACKS));
+  mc_analysis_scanner_stop(s);
+
+  /* Waiting for power with a long look ahead of it. */
+  mc_power_set_override(0);
+  mc_analysis_scanner_set_power_poll_ms(60000);
+  CHECK(mc_analysis_scanner_start(dir, &s) == MC_OK);
+  mc_sleep_ms(200);
+  uint64_t from = mc_mono_ms();
+  mc_analysis_scanner_stop(s);
+  CHECK(mc_mono_ms() - from < 2000);
+  mc_analysis_scanner_set_power_poll_ms(20);
+
+#ifdef __linux__
+  /* The whole way on Linux: mc_power_on_ac() itself, from a folder like the real one, with the
+   * mains going on-line under a running scanner. */
+  const char *root = sysfs_case(scratch, "live");
+  write_value(root, "BAT0", "type", "Battery");
+  write_value(root, "AC", "type", "Mains");
+  write_value(root, "AC", "online", "0");
+  mc_power_set_sysfs_root(root);
+  mc_power_set_override(-1);
+  CHECK(mc_power_on_ac() == 0);
+  snprintf(path, sizeof path, "%s/live.wav", dir);
+  CHECK(write_wav(path, 44100, 1.0, 0.5));
+  add_track(lib, "live.wav", 0, uid);
+  CHECK(mc_analysis_scanner_start(dir, &s) == MC_OK);
+  mc_sleep_ms(300);
+  CHECK(analysed(lib) == TRACKS);
+  write_value(root, "AC", "online", "1");
+  CHECK(mc_power_on_ac() == 1);
+  CHECK(wait_for(lib, TRACKS + 1));
+  mc_analysis_scanner_stop(s);
+  mc_power_set_sysfs_root(NULL);
+  printf("fake sysfs: paused on battery, resumed when the mains came on-line\n");
+#endif
+  mc_power_set_override(1);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
+  test_power_windows();
+  test_power_sysfs(scratch);
+  mc_power_set_override(1); /* the scanner's tests shouldn't care what this machine runs on */
   test_ebu_3341();
   test_997();
   test_ebu_3342();
@@ -1115,6 +1294,8 @@ int main(int argc, char **argv) {
   test_newly_known(scratch);
   test_recycle_bin(scratch);
   test_scanner(scratch);
+  test_power_scan(scratch);
+  mc_power_set_override(-1);
   mc_shutdown();
   return TEST_RESULT();
 }
