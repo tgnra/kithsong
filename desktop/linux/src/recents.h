@@ -23,9 +23,9 @@
 
 /* The section, for the sidebar. Call once. */
 GtkWidget *recents_new(app *a);
-/* Reloads the section from a->lib: after a play, and whenever the library changes (an
- * import, a playlist edit, another library, or sync bringing opens or removals from other
- * devices). */
+/* Reloads the section from a->lib, and the Home page with it: after a play, and whenever the
+ * library changes (an import, a playlist edit, another library, or sync bringing opens or
+ * removals from other devices). */
 void recents_refresh(app *a);
 
 #endif

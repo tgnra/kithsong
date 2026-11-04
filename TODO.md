@@ -4,7 +4,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## For 1.0
 
-- **Home page** - Home in the desktop sidebars stays greyed out until it exists
+- **Home page** - A mock-up on Windows and Linux, from core's musiccore/home_picks.h, its guesses from track_plays until the play event log can say what was played when; Radio's stations are placeholders that do nothing yet. Android has no Home page
 - **Repeat and a play queue** - Core: repeat (one, all). All: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither) and a view of what's queued. Windows and Linux: Ctrl+R for repeat (kept free for it)
 
 ## Release
