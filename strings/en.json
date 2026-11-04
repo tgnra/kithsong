@@ -530,6 +530,7 @@
     "status_in_use": { "text": "a file is in use", "note": "A music file can't be changed because it's open: being played, say, or sent to another device." },
     "status_exists": { "text": "already in the library", "note": "Matching an album to a MusicBrainz release that's another album in the library." },
 
+    "status_stress_library": { "text": "this is a stress test library", "note": "Why sync and scrobbling are off while a generated library for testing the app's speed is open." },
     "status_unknown": "unknown error",
 
     "nothing_playing": "Nothing playing",

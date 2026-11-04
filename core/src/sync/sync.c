@@ -1852,6 +1852,8 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   if (!lib || !config_dir || !*config_dir || !out ||
       (kind != MC_DEVICE_DESKTOP && kind != MC_DEVICE_PHONE && kind != MC_DEVICE_WATCH))
     return MC_ERR_INVALID_ARG;
+  /* The group is the device's, not the library's: sync.db would offer this one to it. */
+  if (mc_library_is_stress(lib)) return MC_ERR_STRESS_LIBRARY;
   mc_sync *sync = calloc(1, sizeof *sync);
   if (!sync) return MC_ERR_NOMEM;
   sync->config_dir = mc_strdup(config_dir);

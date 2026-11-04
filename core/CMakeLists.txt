@@ -59,6 +59,7 @@ add_library(musiccore STATIC
   src/util/fracindex.c
   src/util/i18n.c
   src/util/text.c
+  src/util/perf.c
   "${_strings_out}/mc_strings_gen.h"
   "${_strings_out}/mc_strings_gen.c"
   src/library/library.c
@@ -66,6 +67,7 @@ add_library(musiccore STATIC
   src/library/delete.c
   src/library/edit.c
   src/library/album_flags.c
+  src/library/stress.c
   "${_schema_c}"
   src/playlist/playlist.c
   src/playlist/playlist_art.c

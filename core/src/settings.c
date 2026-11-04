@@ -196,6 +196,21 @@ mc_status mc_settings_set_bool(mc_settings *s, const char *key, int value) {
   return k && v && yyjson_mut_obj_add(root, k, v) ? MC_OK : MC_ERR_NOMEM;
 }
 
+const char *mc_settings_string(const mc_settings *s, const char *key) {
+  if (!s || !key) return NULL;
+  const char *v = yyjson_mut_get_str(yyjson_mut_obj_get(yyjson_mut_doc_get_root(s->doc), key));
+  return v && *v ? v : NULL;
+}
+
+mc_status mc_settings_set_string(mc_settings *s, const char *key, const char *value) {
+  if (!s || !key || !*key) return MC_ERR_INVALID_ARG;
+  yyjson_mut_val *root = yyjson_mut_doc_get_root(s->doc);
+  yyjson_mut_obj_remove_key(root, key);
+  if (!value || !*value) return MC_OK;
+  yyjson_mut_val *k = yyjson_mut_strcpy(s->doc, key), *v = yyjson_mut_strcpy(s->doc, value);
+  return k && v && yyjson_mut_obj_add(root, k, v) ? MC_OK : MC_ERR_NOMEM;
+}
+
 int mc_settings_shuffle(const mc_settings *s) { return mc_settings_bool(s, "shuffle", 0); }
 
 mc_status mc_settings_set_shuffle(mc_settings *s, int on) { return mc_settings_set_bool(s, "shuffle", on); }

@@ -510,6 +510,8 @@ mc_status mc_scrobble_flush_once(sqlite3 *db, int *sent, int *left) {
 mc_status mc_scrobbler_new(mc_library *lib, const char *config_dir, mc_scrobbler **out) {
   if (!lib || !config_dir || !*config_dir || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
+  /* The account is the device's, in sync.db: made-up plays would go to it. */
+  if (mc_library_is_stress(lib)) return MC_ERR_STRESS_LIBRARY;
   mc_scrobbler *sc = calloc(1, sizeof *sc);
   if (!sc) return MC_ERR_NOMEM;
   sc->lib_dir = mc_strdup(mc_library_dir(lib));
