@@ -172,6 +172,32 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativePreviewSmar
   return album_array(env, st, list);
 }
 
+/* A play log row, as CorePlayer.takeEnded() gave it. context_uid may be null. */
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativeLogPlay(JNIEnv *env, jclass cls, jlong handle,
+                                                                   jstring track_uid, jlong started_ms,
+                                                                   jlong listened_ms, jint end, jint context,
+                                                                   jstring context_uid) {
+  (void)cls;
+  mc_play_event event;
+  memset(&event, 0, sizeof event);
+  event.started_ms = started_ms;
+  event.listened_ms = listened_ms;
+  event.end = (mc_play_end)end;
+  event.context = (mc_play_context)context;
+  const char *ctrack = (*env)->GetStringUTFChars(env, track_uid, NULL);
+  if (!ctrack) return;
+  snprintf(event.track_uid, sizeof event.track_uid, "%s", ctrack);
+  (*env)->ReleaseStringUTFChars(env, track_uid, ctrack);
+  if (context_uid) {
+    const char *cuid = (*env)->GetStringUTFChars(env, context_uid, NULL);
+    if (!cuid) return;
+    snprintf(event.context_uid, sizeof event.context_uid, "%s", cuid);
+    (*env)->ReleaseStringUTFChars(env, context_uid, cuid);
+  }
+  mc_status st = mc_library_log_play((mc_library *)(intptr_t)handle, &event);
+  if (st != MC_OK) throw_status(env, st);
+}
+
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativeRecordPlay(JNIEnv *env, jclass cls,
                                                                       jlong handle, jstring uid) {
   (void)cls;
@@ -834,46 +860,78 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeFree(JNIEnv *env, jc
   free(p);
 }
 
-/* mc_player_set_queue(), or if load, mc_player_load_queue(). */
-static void set_queue(JNIEnv *env, jlong handle, jobjectArray paths, jint start, int load) {
+/* A String[]'s elements as C strings, for as long as it's held; none may be null. */
+typedef struct string_array {
+  const char **strings;
+  jstring *refs;
+  jsize got;
+} string_array;
+
+static mc_status string_array_get(JNIEnv *env, jobjectArray array, jsize count, string_array *out) {
+  out->strings = calloc(count ? (size_t)count : 1, sizeof *out->strings);
+  out->refs = calloc(count ? (size_t)count : 1, sizeof *out->refs);
+  out->got = 0;
+  mc_status st = out->strings && out->refs ? MC_OK : MC_ERR_NOMEM;
+  for (; st == MC_OK && out->got < count; out->got++) {
+    jsize i = out->got;
+    out->refs[i] = (*env)->GetObjectArrayElement(env, array, i);
+    out->strings[i] = out->refs[i] ? (*env)->GetStringUTFChars(env, out->refs[i], NULL) : NULL;
+    if (!out->strings[i]) st = MC_ERR_INVALID_ARG;
+  }
+  return st;
+}
+
+static void string_array_release(JNIEnv *env, string_array *a) {
+  for (jsize i = 0; i < a->got; i++) {
+    if (a->strings[i]) (*env)->ReleaseStringUTFChars(env, a->refs[i], a->strings[i]);
+    if (a->refs[i]) (*env)->DeleteLocalRef(env, a->refs[i]);
+  }
+  free(a->strings);
+  free(a->refs);
+}
+
+/* mc_player_set_queue(), or if load, mc_player_load_queue(). uids go with paths, one each. */
+static void set_queue(JNIEnv *env, jlong handle, jobjectArray paths, jobjectArray uids, jint context,
+                      jstring context_uid, jint start, int load) {
   jsize count = (*env)->GetArrayLength(env, paths);
-  const char **cpaths = calloc(count ? (size_t)count : 1, sizeof *cpaths);
-  jstring *jpaths = calloc(count ? (size_t)count : 1, sizeof *jpaths);
-  mc_status st = cpaths && jpaths ? MC_OK : MC_ERR_NOMEM;
-  jsize got = 0;
-  for (; st == MC_OK && got < count; got++) {
-    jpaths[got] = (*env)->GetObjectArrayElement(env, paths, got);
-    cpaths[got] = jpaths[got] ? (*env)->GetStringUTFChars(env, jpaths[got], NULL) : NULL;
-    if (!cpaths[got]) st = MC_ERR_INVALID_ARG;
+  if ((*env)->GetArrayLength(env, uids) != count) {
+    throw_status(env, MC_ERR_INVALID_ARG);
+    return;
   }
-  /* Both copy the paths. */
+  string_array cpaths, cuids;
+  mc_status st = string_array_get(env, paths, count, &cpaths);
+  mc_status st2 = string_array_get(env, uids, count, &cuids);
+  if (st == MC_OK) st = st2;
+  const char *cctx = context_uid ? (*env)->GetStringUTFChars(env, context_uid, NULL) : NULL;
+  if (context_uid && !cctx) st = MC_ERR_NOMEM;
+  /* Both copy everything. */
   if (st == MC_OK) {
-    st = load ? mc_player_load_queue(player_of(handle), cpaths, count, start)
-              : mc_player_set_queue(player_of(handle), cpaths, count, start);
+    mc_play_origin origin = {cuids.strings, (mc_play_context)context, cctx};
+    st = load ? mc_player_load_queue(player_of(handle), cpaths.strings, count, start, &origin)
+              : mc_player_set_queue(player_of(handle), cpaths.strings, count, start, &origin);
   }
-  for (jsize i = 0; i < got; i++) {
-    if (cpaths[i]) (*env)->ReleaseStringUTFChars(env, jpaths[i], cpaths[i]);
-    if (jpaths[i]) (*env)->DeleteLocalRef(env, jpaths[i]);
-  }
-  free(cpaths);
-  free(jpaths);
+  if (cctx) (*env)->ReleaseStringUTFChars(env, context_uid, cctx);
+  string_array_release(env, &cpaths);
+  string_array_release(env, &cuids);
   if (st != MC_OK && !(*env)->ExceptionCheck(env)) throw_status(env, st);
 }
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetQueue(JNIEnv *env, jclass cls,
                                                                     jlong handle,
                                                                     jobjectArray paths,
-                                                                    jint start) {
+                                                                    jobjectArray uids, jint context,
+                                                                    jstring context_uid, jint start) {
   (void)cls;
-  set_queue(env, handle, paths, start, 0);
+  set_queue(env, handle, paths, uids, context, context_uid, start, 0);
 }
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeLoadQueue(JNIEnv *env, jclass cls,
                                                                      jlong handle,
                                                                      jobjectArray paths,
-                                                                     jint start) {
+                                                                     jobjectArray uids, jint context,
+                                                                     jstring context_uid, jint start) {
   (void)cls;
-  set_queue(env, handle, paths, start, 1);
+  set_queue(env, handle, paths, uids, context, context_uid, start, 1);
 }
 
 /* The player calls that take no arguments: 0 toggle, 1 pause, 2 resume, 3 stop, 4 next,
@@ -973,6 +1031,29 @@ JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CorePlayer_nativeTakePlayed(JNIEn
   jlong values[2] = {index, started_ms};
   (*env)->SetLongArrayRegion(env, out, 0, 2, values);
   return JNI_TRUE;
+}
+
+/* out gets started, listened, end and context; strings the track uid and the context's uid
+ * (null if none). */
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CorePlayer_nativeTakeEnded(JNIEnv *env, jclass cls,
+                                                                        jlong handle, jlongArray out,
+                                                                        jobjectArray strings) {
+  (void)cls;
+  mc_play_event e;
+  if (mc_player_take_ended(player_of(handle), &e) != MC_OK) return JNI_FALSE;
+  jlong values[4] = {e.started_ms, e.listened_ms, e.end, e.context};
+  (*env)->SetLongArrayRegion(env, out, 0, 4, values);
+  jstring track = (*env)->NewStringUTF(env, e.track_uid);
+  jstring context = e.context_uid[0] ? (*env)->NewStringUTF(env, e.context_uid) : NULL;
+  (*env)->SetObjectArrayElement(env, strings, 0, track);
+  (*env)->SetObjectArrayElement(env, strings, 1, context);
+  return JNI_TRUE;
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeEndPlay(JNIEnv *env, jclass cls, jlong handle) {
+  (void)cls;
+  mc_status st = mc_player_end_play(player_of(handle));
+  if (st != MC_OK) throw_status(env, st);
 }
 
 /* --- CoreSync ---------------------------------------------------------------------- */

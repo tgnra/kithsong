@@ -257,6 +257,9 @@ static void test_merge(const char *root) {
            " ('e3000000-0000-7000-8000-000000000001', '%s', 'n1', 3, 5000),"
            " ('e3000000-0000-7000-8000-000000000002', '%s', 'n2', 2, 9000),"
            " ('e3000000-0000-7000-8000-000000000003', '%s', 'n1', 4, 7000);"
+           "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context)"
+           " SELECT 'e4000000-0000-7000-8000-000000000001', uid, 'n1', 1000, 2000, 'finished', 'album'"
+           " FROM tracks LIMIT 1;"
            "INSERT INTO recents (uid, kind, opened_ms) VALUES ('%s', 'album', 100),"
            " ('%s', 'playlist', 200), ('%s', 'playlist', 300);",
            pl_road, pl_solo, pl_road, fresh.uid, pl_road, better.uid, pl_road, same.uid, pl_road,
@@ -420,6 +423,9 @@ static void test_merge(const char *root) {
   CHECK(query_int(db, sql) == 5);
   CHECK(query_int(db, "SELECT last_played_ms FROM track_plays WHERE track_uid ="
                       " 'b1000000-0000-7000-8000-000000000001'") == 9000);
+  /* The play log isn't carried over: the merged library is a snapshot, without its history. */
+  CHECK(query_int(db, "SELECT count(*) FROM play_events") == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'play_events'") == 0);
   /* Recents: the album, the playlist and an example list. */
   CHECK(r.recents == 3);
   snprintf(sql, sizeof sql, "SELECT count(*) FROM recents WHERE uid = '%s' AND opened_ms = 200",

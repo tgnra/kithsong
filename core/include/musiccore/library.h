@@ -74,6 +74,33 @@ mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out);
  * play (say, half the track) is the caller's call. MC_ERR_NOT_FOUND if there's no such track. */
 mc_status mc_library_record_play(mc_library *lib, const char *track_uid);
 
+/* The play log: one row for each time a track was started, counted as a play or not, which
+ * is the raw history a home screen or radio can read back. The player fills a row in (see
+ * mc_player_take_ended()) and the frontend hands it to mc_library_log_play(). Rows are this
+ * device's own, are never changed once written, and are kept for good; see docs/schema.md.
+ * Its types are in musiccore/play_log.h, as the player has them too. */
+
+/* Adds a row, as this device's. MC_ERR_NOT_FOUND if the track has gone meanwhile. */
+mc_status mc_library_log_play(mc_library *lib, const mc_play_event *event);
+
+typedef struct mc_play_log_item {
+  char uid[MC_UID_STRLEN];
+  char node_uid[MC_UID_STRLEN]; /* the device it was played on */
+  mc_play_event event;
+} mc_play_log_item;
+
+typedef struct mc_play_log {
+  mc_play_log_item *items;
+  int count;
+} mc_play_log;
+
+/* The rows of every device with from_ms <= started_ms < to_ms, oldest first (ties by uid, so
+ * every device reads the same order). Wall clocks differ between devices, so rows of two
+ * devices may not interleave quite as they happened. Filtering, say of very short plays or
+ * failed ones, is the reader's. */
+mc_status mc_library_list_play_events(mc_library *lib, int64_t from_ms, int64_t to_ms, mc_play_log **out);
+void mc_play_log_free(mc_play_log *log);
+
 typedef struct mc_album_info {
   char uid[MC_UID_STRLEN];
   char *title;

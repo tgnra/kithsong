@@ -99,13 +99,13 @@ int main(int argc, char **argv) {
   const char *loaded[] = {a, b, longer};
   int order[6];
   CHECK(mc_player_order(player, 0, 1, order) == MC_OK && order[0] == -1);
-  CHECK(mc_player_load_queue(player, loaded, 3, 1) == MC_OK);
+  CHECK(mc_player_load_queue(player, loaded, 3, 1, NULL) == MC_OK);
   mc_player_status_get(player, &st);
   CHECK(st.state == MC_PLAYER_STOPPED && st.index == 1 && st.count == 3);
   CHECK(mc_player_order(player, -2, 5, order) == MC_OK);
   CHECK(order[0] == -1 && order[1] == 0 && order[2] == 1 && order[3] == 2 && order[4] == -1);
   CHECK(mc_player_set_shuffle(player, 1) == MC_OK);
-  CHECK(mc_player_load_queue(player, loaded, 3, -1) == MC_OK);
+  CHECK(mc_player_load_queue(player, loaded, 3, -1, NULL) == MC_OK);
   mc_player_status_get(player, &st);
   CHECK(st.state == MC_PLAYER_STOPPED && st.index >= 0 && st.index < 3);
   CHECK(mc_player_order(player, 0, 6, order) == MC_OK);
@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
   /* Is there a device? The position only moves once it pulls audio; the state alone reads
    * PLAYING as soon as a start is asked for. Short of half the track, so no play counts. */
   const char *one[] = {longer};
-  CHECK(mc_player_set_queue(player, one, 1, 0) == MC_OK);
+  CHECK(mc_player_set_queue(player, one, 1, 0, NULL) == MC_OK);
   int has_device = 0;
   for (uint64_t end = mc_mono_ms() + 3000; !has_device && mc_mono_ms() < end; mc_sleep_ms(10)) {
     mc_player_status_get(player, &st);
@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
 
   /* a, two that can't be played, then b at another rate and channel count. */
   const char *queue[] = {a, bad, missing, b};
-  CHECK(mc_player_set_queue(player, queue, 4, 0) == MC_OK);
+  CHECK(mc_player_set_queue(player, queue, 4, 0, NULL) == MC_OK);
   int seen[8];
   int n = watch(player, seen, 8, 5000);
   mc_player_status_get(player, &st);
@@ -146,7 +146,7 @@ int main(int argc, char **argv) {
   mc_mutex_unlock(&lock);
 
   /* Seeking while paused stays paused, at the new position. */
-  CHECK(mc_player_set_queue(player, one, 1, 0) == MC_OK);
+  CHECK(mc_player_set_queue(player, one, 1, 0, NULL) == MC_OK);
   mc_player_pause(player);
   CHECK(mc_player_seek_ms(player, 2000) == MC_OK);
   mc_sleep_ms(200);
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
    * queue dropped the plays of the first one. */
   const char *twice[] = {a, a};
   int64_t before = (int64_t)mc_wall_ms();
-  CHECK(mc_player_set_queue(player, twice, 2, 0) == MC_OK);
+  CHECK(mc_player_set_queue(player, twice, 2, 0, NULL) == MC_OK);
   n = watch(player, seen, 8, 3000);
   int index = -1;
   int64_t started = 0;
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
   mc_mutex_unlock(&lock);
 
   /* Seeking past half doesn't make a play count: it's what was heard that counts. */
-  CHECK(mc_player_set_queue(player, one, 1, 0) == MC_OK);
+  CHECK(mc_player_set_queue(player, one, 1, 0, NULL) == MC_OK);
   CHECK(mc_player_seek_ms(player, 2800) == MC_OK);
   n = watch(player, seen, 8, 3000);
   CHECK(mc_player_take_played(player, &index, &started) == MC_ERR_NOT_FOUND);
@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
    * doesn't start with the one just played. */
   const char *three[] = {a, b, a};
   CHECK(mc_player_set_shuffle(player, 1) == MC_OK);
-  CHECK(mc_player_set_queue(player, three, 3, -1) == MC_OK);
+  CHECK(mc_player_set_queue(player, three, 3, -1, NULL) == MC_OK);
   n = watch(player, seen, 8, 2500);
   mc_player_status_get(player, &st);
   CHECK(st.shuffle && st.state == MC_PLAYER_PLAYING);

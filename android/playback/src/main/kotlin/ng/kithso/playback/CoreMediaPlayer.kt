@@ -28,7 +28,9 @@ import com.google.common.util.concurrent.ListenableFuture
  * playing.
  * Plays are counted to [onPlayed] with the track uid and when the play began (wall clock ms)
  * when the core says they count (half the track or four minutes listened, whichever is less).
- * [onNowPlaying] gets each track's uid as it starts playing, for scrobbling.
+ * [onNowPlaying] gets each track's uid as it starts playing, for scrobbling. [onPlayEnded] gets
+ * every play as it ends, counted or not, for the play log; a queue's items say what it is
+ * ([playOrigin]).
  *
  * Shuffle is the core's (mc_player_set_shuffle), offered as Media3's shuffle mode and starting
  * as [shuffle]; each change goes to [onShuffleChanged], to be kept for next time. The core's
@@ -47,6 +49,7 @@ class CoreMediaPlayer(
     private val volume: Int,
     private val onShuffleChanged: (Boolean) -> Unit,
     private val onNowPlaying: (String) -> Unit = {},
+    private val onPlayEnded: (CorePlayer.PlayEvent) -> Unit = {},
     private val onPlayed: (String, Long) -> Unit,
 ) : SimpleBasePlayer(Looper.getMainLooper()) {
     private val main = Handler(Looper.getMainLooper())
@@ -170,7 +173,8 @@ class CoreMediaPlayer(
         started = false
         // Unset, shuffled, the core picks the first item.
         val start = if (startIndex == C.INDEX_UNSET && shuffle) -1 else this.startIndex
-        core.loadQueue(items.map { it.path.orEmpty() }, start)
+        val origin = items.firstOrNull()?.playOrigin ?: CorePlayer.Origin()
+        core.loadQueue(items.map { it.path.orEmpty() }, items.map { it.mediaId }, origin, start)
         if (items.isNotEmpty()) this.startIndex = core.status.index.coerceAtLeast(0)
         orderVersion++
         update()
@@ -260,6 +264,7 @@ class CoreMediaPlayer(
         focus.release()
         noisy.setEnabled(false)
         if (wakeLock.isHeld) wakeLock.release()
+        core.endPlay()
         takePlays()
         core.close()
         return Futures.immediateVoidFuture()
@@ -327,7 +332,7 @@ class CoreMediaPlayer(
     private fun onCoreEvent(event: CorePlayer.Event) {
         val status = core.status
         when (event) {
-            CorePlayer.Event.Played -> takePlays()
+            CorePlayer.Event.Played, CorePlayer.Event.Ended -> takePlays()
             CorePlayer.Event.Error -> Log.w(TAG, "The core skipped a track or has no audio device")
             CorePlayer.Event.Track, CorePlayer.Event.State -> Unit
         }
@@ -346,12 +351,14 @@ class CoreMediaPlayer(
         invalidateState()
     }
 
-    // Passes on the plays the core says count. Its indexes are into [items].
+    // Passes on the plays the core says count, whose indexes are into [items], and those that
+    // ended, which say for themselves what they were.
     private fun takePlays() {
         while (true) {
             val played = core.takePlayed() ?: break
             items.getOrNull(played.index)?.let { onPlayed(it.mediaId, played.startedMs) }
         }
+        while (true) onPlayEnded(core.takeEnded() ?: break)
     }
 
     private companion object {

@@ -16,7 +16,9 @@ import androidx.media3.common.util.Util
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import ng.kithso.android.data.Track
+import ng.kithso.core.CorePlayer
 import ng.kithso.playback.path
+import ng.kithso.playback.playOrigin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -73,10 +75,10 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
         }, ContextCompat.getMainExecutor(context))
     }
 
-    override fun play(queue: List<Track>, index: Int) {
+    override fun play(queue: List<Track>, index: Int, origin: CorePlayer.Origin) {
         val playable = queue.filter { it.path != null }
         if (playable.isEmpty() || (index >= 0 && queue.getOrNull(index)?.path == null)) return
-        val items = queueItems(context, playable)
+        val items = queueItems(context, playable, origin)
         if (index < 0) {
             // From the start: the player picks the first track, shuffled, so it's shown once
             // the player says which.
@@ -126,7 +128,7 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
 
     override fun updateQueue(tracks: List<Track>) = withController {
         if (tracks.size == it.mediaItemCount) {
-            val items = queueItems(context, tracks)
+            val items = queueItems(context, tracks, it.currentMediaItem?.playOrigin ?: CorePlayer.Origin())
             // The same files with another cover or title: nothing for the player to start again.
             if (items.indices.all { i -> items[i].path == it.getMediaItemAt(i).path }) it.replaceMediaItems(0, items.size, items)
             else it.setMediaItems(items, it.currentMediaItemIndex, it.currentPosition)

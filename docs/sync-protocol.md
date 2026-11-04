@@ -287,6 +287,9 @@ libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c
     library already has (ignoring case) gets " (2)", " (3)" and so on: both are kept.
   - Play counts: per track, the copy's rows summed (counts) and maxed (last play) into this
     device's own `track_plays` row of the kept track.
+  - The play log isn't carried over: `play_events` is history, and a merged library comes as a
+    snapshot without history. Its rows stay in the set-aside copy. This device's rows begin
+    with the plays after the merge.
   - Recents: albums, artists (by MusicBrainz id, then name), playlists and groups mapped, a
     newer `opened_ms` than the kept library's winning.
   - Then `meta.merge_source` is cleared, `on_merge_done` reports what happened, and members
@@ -546,6 +549,14 @@ Sessions are retried with backoff (10 s, doubling, up to 5 minutes).
   for a mix, and sees no detected ones.
 - `albums.art_chosen` (v17) is one as well: an older peer passes it on, and keeps the cover it
   has until it upgrades.
+- `play_events` (v18) is such a table: an older peer passes the rows on, and they're applied
+  when it upgrades.
+- A `play_events` row travels as one entry, not a field each: field `row`, its value a JSON array
+  of the row's columns (see [Change tracking](schema.md#change-tracking)), applied at once. Such
+  a table can't have a row half arrive, and there's nothing to merge field by field, since nobody
+  edits one. A value that can't be unpacked is logged and passed on like any row, and makes no
+  table row. `_deleted` works as for any row: newer than the entry, it wins; a restore logs the
+  row again, newer still.
 - A row is *live* if one of its field changes is newer, by `(hlc, origin_uid)`, than its
   newest `_deleted`. A dead row that exists is deleted. A live row that exists gets each
   field the batch brought a new winner for. A live row that doesn't exist yet (new, or
@@ -587,7 +598,7 @@ way, without logging anything.
   on the other stays set.
 - **References.** `tracks.album_uid` and `album_group_entries.album_uid`, `albums.artist_uid`,
   `tracks.artist_uid`, `track_artists.artist_uid` and `album_artists.artist_uid`, and
-  `playlist_entries.track_uid`, `track_plays.track_uid` and the device-local
+  `playlist_entries.track_uid`, `track_plays.track_uid`, `play_events.track_uid` and the device-local
   `files.track_uid` are moved to the canonical uid, so each device's files stay attached to
   the surviving track. Two `track_plays` rows that would then share a
   `(track_uid, node_uid)` keep only the smaller uid. If the whole class is deleted, the

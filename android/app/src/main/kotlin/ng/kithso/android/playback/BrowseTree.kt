@@ -23,6 +23,7 @@ import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.Recent
 import ng.kithso.android.data.SearchResults
 import ng.kithso.android.data.Track
+import ng.kithso.core.CorePlayer
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -190,7 +191,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
         val playable = tracks.filter { it.path != null }
         if (playable.isEmpty()) return null
         if (ref != null) source().notePlayed(ref)
-        val items = queueItems(context, playable)
+        val items = queueItems(context, playable, ref?.origin ?: CorePlayer.Origin(CorePlayer.PlayContext.Manual))
         if (index == null) return MediaItemsWithStartPosition(items, C.INDEX_UNSET, C.TIME_UNSET)
         val start = tracks.take(index).count { it.path != null }.coerceAtMost(playable.lastIndex)
         return MediaItemsWithStartPosition(items, start, 0)

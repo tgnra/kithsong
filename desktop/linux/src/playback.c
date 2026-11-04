@@ -90,7 +90,8 @@ void playback_art_changed(mc_library *lib, const char *album_uid) {
 
 static gboolean on_tick(gpointer data);
 
-/* Counts the plays the player says count, and scrobbles them. */
+/* Counts the plays the player says count, and scrobbles them. Writes the ones that ended to
+ * the play log, or with no library open leaves them for the one that opens next. */
 static void count_plays(void) {
   int index;
   int64_t started_ms;
@@ -99,6 +100,8 @@ static void count_plays(void) {
     if (s.lib) mc_library_record_play(s.lib, s.items[index].uid);
     if (s.scrobbler && !s.scrobble_off) mc_scrobbler_scrobble(s.scrobbler, s.items[index].uid, started_ms);
   }
+  mc_play_event ended;
+  while (s.player && s.lib && mc_player_take_ended(s.player, &ended) == MC_OK) mc_library_log_play(s.lib, &ended);
 }
 
 /* Brings everything showing playback up to date with the player. */
@@ -181,6 +184,7 @@ void playback_free(void) {
 }
 
 void playback_set_library(mc_library *lib, const char *config_dir) {
+  if (!lib && s.player) mc_player_end_play(s.player); /* the library, or the app, is closing */
   count_plays();
   if (s.scrobbler && s.scrobbler_closing) s.scrobbler_closing();
   mc_scrobbler_free(s.scrobbler);
@@ -191,6 +195,7 @@ void playback_set_library(mc_library *lib, const char *config_dir) {
 
 void playback_clear(void) {
   if (!s.player) return;
+  mc_player_end_play(s.player);
   count_plays();
   mc_player_free(s.player); /* closes the file */
   s.player = NULL;
@@ -210,7 +215,8 @@ void playback_clear(void) {
   if (s.changed) s.changed(s.user);
 }
 
-void playback_play(const playback_track *tracks, int count, int start) {
+void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
+                   const char *context_uid) {
   if (count <= 0 || start < -1 || start >= count) return;
   if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
     s.player = NULL;
@@ -220,6 +226,7 @@ void playback_play(const playback_track *tracks, int count, int start) {
   mc_player_set_volume(s.player, s.volume);
   mc_player_set_muted(s.player, s.muted);
   const char **paths = g_new0(const char *, (gsize)count);
+  const char **uids = g_new0(const char *, (gsize)count);
   item *items = g_new0(item, (gsize)count);
   for (int i = 0; i < count; i++) {
     const playback_track *t = &tracks[i];
@@ -231,6 +238,7 @@ void playback_play(const playback_track *tracks, int count, int start) {
     it->cover_dir = g_strdup(t->cover_dir);
     it->duration_ms = t->duration_ms;
     paths[i] = t->path;
+    uids[i] = t->uid;
   }
   count_plays(); /* the old queue's: the player drops them with it */
   free_items();
@@ -238,8 +246,9 @@ void playback_play(const playback_track *tracks, int count, int start) {
   s.count = count;
   s.index = s.announced = -1; /* show the track afresh even if it's the same item number */
 
-  mc_player_set_queue(s.player, paths, count, start);
+  mc_player_set_queue(s.player, paths, count, start, &(mc_play_origin){uids, context, context_uid});
   g_free(paths);
+  g_free(uids);
   refresh();
 }
 

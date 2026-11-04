@@ -201,7 +201,7 @@ static void test_migration_v4(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
   CHECK(has_column(db, "files", "sha256"));
   CHECK(has_column(db, "files", "source_sha256"));
@@ -236,7 +236,7 @@ static void test_migration_v5(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   CHECK(has_column(db, "album_groups", "name"));
   CHECK(has_column(db, "album_group_entries", "position"));
 
@@ -282,7 +282,7 @@ static void test_migration_v6(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   CHECK(has_column(db, "smart_lists", "rule"));
   CHECK(has_column(db, "track_plays", "last_played_ms"));
 
@@ -353,7 +353,7 @@ static void test_migration_v10(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   CHECK(query_int(db, "SELECT count(*) FROM smart_lists") == 5);
   CHECK(changelog_count(db, "entity = 'smart_lists'") == 0);
   CHECK(mc_smart_reshuffle(lib, "5e1ec7ed-0000-4000-8000-000000000003") == MC_OK);
@@ -389,7 +389,7 @@ static void test_migration_v12(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('albums_singles',"
                       " 'mc_log_ins_albums_kind', 'mc_log_upd_albums_kind')") == 0);
   CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al1' AND title = 'Low Singles'"
@@ -471,7 +471,7 @@ static void test_migration_v13(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   CHECK(has_column(db, "tracks", "artist_credit") && has_column(db, "albums", "artist_credit"));
   query_text(db, "SELECT value FROM meta WHERE key = 'artist_refresh'", s, sizeof s);
   CHECK_STR(s, "pending");
@@ -555,7 +555,7 @@ static void test_migration_v15(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   mc_album_flags f;
   CHECK(mc_album_flags_get(lib, "al1", &f) == MC_OK && f.mix == 1 && f.no_scrobble == 1);
   CHECK(mc_album_flags_get(lib, "al2", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
@@ -622,11 +622,160 @@ static void test_migration_v17(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al1' AND art_chosen = 'abc'") == 1);
   CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al2' AND art_chosen = 'new'") == 1);
   CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al3' AND art_chosen IS NULL") == 1);
   CHECK(changelog_count(db, "1") == 3); /* nothing of it logged here */
+  mc_library_close(lib);
+}
+
+/* v18: the play log. A peer that upgraded first has sent rows, logged here but not applied, as
+ * this version had no table for them: the migration applies them. */
+static void test_migration_v18(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v18.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  lib->applying_remote = 1;
+  CHECK(exec(db, "DROP TABLE play_events;"
+                 "INSERT INTO tracks (uid, title) VALUES ('t1', 'Heard Elsewhere');"
+                 "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
+                 " (1000, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'row',"
+                 "  '[\"t1\",\"peer\",5000,700,\"skipped\",\"radio\",null]'),"
+                 " (1001, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e2', 'row',"
+                 "  '[\"t1\",\"peer\",6000,800,\"finished\",\"album\",null]'),"
+                 " (1002, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e2', '_deleted', 1);"
+                 "PRAGMA user_version = 17;") == SQLITE_OK);
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == 18);
+  CHECK(query_int(db, "SELECT count(*) FROM play_events WHERE uid = 'e1' AND track_uid = 't1' AND node_uid = 'peer'"
+                      " AND started_ms = 5000 AND listened_ms = 700 AND ended = 'skipped' AND context = 'radio'"
+                      " AND context_uid IS NULL") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM play_events") == 1); /* e2 was deleted */
+  CHECK(changelog_count(db, "1") == 3); /* nothing of it logged here */
+  mc_library_close(lib);
+}
+
+/* The play log's rows: written as this device's, read back by time. */
+static void test_play_log(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_play_log.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  const char *t1 = "a0000000-0000-7000-8000-000000000001", *t2 = "a0000000-0000-7000-8000-000000000002";
+  char sql[256];
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  snprintf(sql, sizeof sql, "INSERT INTO tracks (uid, title) VALUES ('%s', 'One'), ('%s', 'Two')", t1, t2);
+  CHECK(exec(db, sql) == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+
+  /* Empty, and every context and end there is, out of order. */
+  mc_play_log *log = NULL;
+  CHECK(mc_library_list_play_events(lib, 0, INT64_MAX, &log) == MC_OK);
+  CHECK(log && log->count == 0);
+  mc_play_log_free(log);
+  static const struct {
+    int64_t started;
+    mc_play_end end;
+    mc_play_context context;
+    const char *uid;
+  } rows[] = {
+    {3000, MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_ALBUM, "c0000000-0000-7000-8000-000000000001"},
+    {1000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_UNKNOWN, ""},
+    {2000, MC_PLAY_END_STOPPED, MC_PLAY_CONTEXT_MANUAL, ""},
+    {4000, MC_PLAY_END_REPLACED, MC_PLAY_CONTEXT_PLAYLIST, "c0000000-0000-7000-8000-000000000002"},
+    {5000, MC_PLAY_END_FAILED, MC_PLAY_CONTEXT_ALBUM_GROUP, "c0000000-0000-7000-8000-000000000003"},
+    {6000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_ARTIST, "c0000000-0000-7000-8000-000000000004"},
+    {7000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_SHUFFLE, "c0000000-0000-7000-8000-000000000001"},
+    {8000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_RADIO, ""},
+  };
+  int n = (int)(sizeof rows / sizeof rows[0]);
+  for (int i = 0; i < n; i++) {
+    mc_play_event e = {.started_ms = rows[i].started, .listened_ms = 100 + i, .end = rows[i].end,
+                       .context = rows[i].context};
+    snprintf(e.track_uid, sizeof e.track_uid, "%s", i % 2 ? t2 : t1);
+    snprintf(e.context_uid, sizeof e.context_uid, "%s", rows[i].uid);
+    CHECK(mc_library_log_play(lib, &e) == MC_OK);
+  }
+  CHECK(mc_library_list_play_events(lib, 0, INT64_MAX, &log) == MC_OK);
+  CHECK(log && log->count == n);
+  for (int i = 0; log && i + 1 < log->count; i++) {
+    CHECK(log->items[i].event.started_ms < log->items[i + 1].event.started_ms);
+    CHECK(!strcmp(log->items[i].node_uid, mc_library_node_uid(lib)));
+    CHECK(strlen(log->items[i].uid) == MC_UID_STRLEN - 1);
+  }
+  if (log && log->count == n) {
+    CHECK(log->items[0].event.end == MC_PLAY_END_FINISHED && log->items[0].event.context == MC_PLAY_CONTEXT_UNKNOWN);
+    CHECK(!log->items[0].event.context_uid[0] && log->items[0].event.listened_ms == 101);
+    CHECK(!strcmp(log->items[0].event.track_uid, t2));
+    CHECK(log->items[2].event.end == MC_PLAY_END_SKIPPED && log->items[2].event.context == MC_PLAY_CONTEXT_ALBUM);
+    CHECK(!strcmp(log->items[2].event.context_uid, rows[0].uid));
+    CHECK(log->items[4].event.end == MC_PLAY_END_FAILED);
+    CHECK(log->items[7].event.context == MC_PLAY_CONTEXT_RADIO);
+  }
+  mc_play_log_free(log);
+  CHECK(query_int(db, "SELECT count(*) FROM play_events WHERE context_uid IS NULL") == 3);
+
+  /* From is in, to is out. */
+  CHECK(mc_library_list_play_events(lib, 2000, 4000, &log) == MC_OK);
+  CHECK(log && log->count == 2 && log->items[0].event.started_ms == 2000);
+  mc_play_log_free(log);
+  CHECK(mc_library_list_play_events(lib, 9000, 10000, &log) == MC_OK);
+  CHECK(log && log->count == 0);
+  mc_play_log_free(log);
+
+  /* A row is one change, holding every column. */
+  CHECK(changelog_count(db, "entity = 'play_events'") == n);
+  CHECK(changelog_count(db, "entity = 'play_events' AND field = 'row' AND json_array_length(value) = 7") == n);
+
+  /* Values from a newer version read as unknown. */
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  CHECK(exec(db, "UPDATE play_events SET ended = 'beamed', context = 'telepathy' WHERE started_ms = 8000") == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+  CHECK(changelog_count(db, "entity = 'play_events'") == n); /* rows don't change, so that's not logged */
+  CHECK(mc_library_list_play_events(lib, 8000, 8001, &log) == MC_OK);
+  CHECK(log && log->count == 1 && log->items[0].event.end == MC_PLAY_END_UNKNOWN);
+  CHECK(log && log->count == 1 && log->items[0].event.context == MC_PLAY_CONTEXT_UNKNOWN);
+  mc_play_log_free(log);
+
+  /* A track gone meanwhile, and what can't be a row. */
+  mc_play_event e = {.started_ms = 1, .end = MC_PLAY_END_FINISHED};
+  snprintf(e.track_uid, sizeof e.track_uid, "a0000000-0000-7000-8000-00000000ffff");
+  CHECK(mc_library_log_play(lib, &e) == MC_ERR_NOT_FOUND);
+  e.context = (mc_play_context)99;
+  CHECK(mc_library_log_play(lib, &e) == MC_ERR_INVALID_ARG);
+  e.context = MC_PLAY_CONTEXT_UNKNOWN;
+  e.end = (mc_play_end)99;
+  CHECK(mc_library_log_play(lib, &e) == MC_ERR_INVALID_ARG);
+  e.end = MC_PLAY_END_FINISHED;
+  e.track_uid[0] = '\0';
+  CHECK(mc_library_log_play(lib, &e) == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_log_play(NULL, &e) == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_list_play_events(NULL, 0, 1, &log) == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_list_play_events(lib, 0, 1, NULL) == MC_ERR_INVALID_ARG);
+
+  /* Rows go with their track, by cascade too (a peer's delete arrives that way). */
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  snprintf(sql, sizeof sql, "DELETE FROM tracks WHERE uid = '%s'", t2);
+  CHECK(exec(db, sql) == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM play_events WHERE track_uid = '%s'", t2);
+  CHECK(query_int(db, sql) == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM play_events") == 4);
   mc_library_close(lib);
 }
 
@@ -859,7 +1008,7 @@ static void test_recents(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   CHECK(has_column(db, "recents", "opened_ms"));
   CHECK(has_column(db, "tracks", "file_rev")); /* v9 */
   CHECK(has_column(db, "files", "file_rev"));
@@ -1672,7 +1821,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 17);
+  CHECK(mc_library_schema_version(lib) == 18);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -1753,7 +1902,7 @@ int main(int argc, char **argv) {
   if (lib) {
     CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
     CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
-    CHECK(mc_library_schema_version(lib) == 17);
+    CHECK(mc_library_schema_version(lib) == 18);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }
@@ -1793,6 +1942,8 @@ int main(int argc, char **argv) {
   test_migration_v13(argc > 1 ? argv[1] : ".");
   test_migration_v15(argc > 1 ? argv[1] : ".");
   test_migration_v17(argc > 1 ? argv[1] : ".");
+  test_migration_v18(argc > 1 ? argv[1] : ".");
+  test_play_log(argc > 1 ? argv[1] : ".");
   test_credited_artists(argc > 1 ? argv[1] : ".");
   test_artist_cover(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");

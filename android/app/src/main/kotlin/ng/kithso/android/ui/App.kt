@@ -58,9 +58,11 @@ import ng.kithso.android.data.SmartListEditor
 import ng.kithso.android.data.TagTarget
 import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
+import ng.kithso.android.playback.origin
 import ng.kithso.android.sync.Syncer
 import ng.kithso.android.ui.theme.ArtColors
 import ng.kithso.android.ui.theme.ArtTheme
+import ng.kithso.core.CorePlayer
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -168,7 +170,7 @@ fun App(
             val tracks = source.trackList(ref)?.tracks ?: return@launch
             if (tracks.none { it.path != null }) return@launch
             playback.setShuffle(shuffle)
-            playback.play(tracks, -1)
+            playback.play(tracks, -1, ref.origin)
             source.notePlayed(ref)
             onPlay()
         }
@@ -314,11 +316,11 @@ fun App(
                                     if (album != null) scope.launch {
                                         val tracks = source.trackList(album)?.tracks.orEmpty()
                                         if (tracks.isEmpty()) return@launch
-                                        playback.play(tracks, tracks.indexOfFirst { it.uid == found.uid }.coerceAtLeast(0))
+                                        playback.play(tracks, tracks.indexOfFirst { it.uid == found.uid }.coerceAtLeast(0), album.origin)
                                         source.notePlayed(album)
                                         onPlay()
                                     } else if (found.track != null) {
-                                        playback.play(listOf(found.track), 0)
+                                        playback.play(listOf(found.track), 0, CorePlayer.Origin(CorePlayer.PlayContext.Manual))
                                         onPlay()
                                     }
                                 },
@@ -336,13 +338,13 @@ fun App(
                                 onPlay = { tracks, index ->
                                     // From an album, in order from the track, as the desktops do.
                                     if (page.ref.kind == CollectionRef.Kind.Album && settings.albumInOrder) playback.setShuffle(false)
-                                    playback.play(tracks, index)
+                                    playback.play(tracks, index, page.ref.origin)
                                     source.notePlayed(page.ref)
                                     onPlay()
                                 },
                                 onPlayAll = { tracks, shuffle ->
                                     playback.setShuffle(shuffle)
-                                    playback.play(tracks, -1)
+                                    playback.play(tracks, -1, page.ref.origin)
                                     source.notePlayed(page.ref)
                                     onPlay()
                                 },

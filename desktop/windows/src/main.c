@@ -835,9 +835,6 @@ static void play_items(int n, track_list_item (*item_at)(int), int start) {
     if (start >= 0 && i <= start) first = count;
     queue[count++] = (playback_track){t.uid, t.path, t.title, t.artist, t.album, t.cover_dir, t.duration_ms};
   }
-  if (count) playback_play(queue, count, first);
-  free(queue);
-
   char uid[MC_UID_STRLEN] = "";
   mc_recent_kind kind = album_grid_showing_playlists() ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
   if (artist_page()) {
@@ -846,6 +843,13 @@ static void play_items(int n, track_list_item (*item_at)(int), int start) {
   } else if (!album_grid_selection(uid)) {
     uid[0] = '\0';
   }
+  mc_play_context context = !uid[0]                      ? MC_PLAY_CONTEXT_UNKNOWN
+                            : kind == MC_RECENT_ARTIST   ? MC_PLAY_CONTEXT_ARTIST
+                            : kind == MC_RECENT_PLAYLIST ? MC_PLAY_CONTEXT_PLAYLIST
+                                                         : MC_PLAY_CONTEXT_ALBUM;
+  if (count) playback_play(queue, count, first, context, uid);
+  free(queue);
+
   if (count && g_app.lib && uid[0] && mc_library_record_opened(g_app.lib, kind, uid) == MC_OK) refresh_recents();
 }
 
@@ -1003,7 +1007,7 @@ static void play_group(void) {
   }
   if (n) {
     set_shuffle(how == AG_PLAY_SHUFFLE_TRACKS);
-    playback_play(queue, n, how == AG_PLAY_SHUFFLE_TRACKS ? -1 : 0);
+    playback_play(queue, n, how == AG_PLAY_SHUFFLE_TRACKS ? -1 : 0, MC_PLAY_CONTEXT_ALBUM_GROUP, album_grid_group());
   }
   for (int i = 0; i < 4 * n; i++) free(text[i]);
   free(text);
@@ -1903,6 +1907,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       PostMessageW(wnd, WM_CLOSE, 0, 0);
       return 0;
     }
+    case WM_ENDSESSION:
+      if (wp) playback_end_session();
+      return 0;
     case WM_CLOSE:
       if (import_view_confirm_close()) DestroyWindow(wnd);
       return 0;

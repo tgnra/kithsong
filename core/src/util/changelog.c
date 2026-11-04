@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+const char *const mc_changelog_whole_row[] = {NULL};
+
 static mc_status exec(sqlite3 *db, const char *sql) {
   return sqlite3_exec(db, sql, NULL, NULL, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
 }
@@ -89,7 +91,23 @@ mc_status mc_changelog_install_triggers(sqlite3 *db, const mc_changelog_table *t
 
   for (size_t t = 0; t < count; t++) {
     const char *table = tables[t].table, *key = tables[t].key;
-    for (const char *const *c = tables[t].cols; *c; c++) {
+    if (tables[t].flags == mc_changelog_whole_row) {
+      char values[512];
+      size_t n = (size_t)snprintf(values, sizeof values, "json_array(");
+      for (const char *const *c = tables[t].cols; *c; c++)
+        n += (size_t)snprintf(values + n, sizeof values - n, "%snew.%s", c == tables[t].cols ? "" : ", ", *c);
+      snprintf(values + n, sizeof values - n, ")");
+      snprintf(name, sizeof name, "mc_log_ins_%s", table);
+      snprintf(sql, sizeof sql,
+               "CREATE TRIGGER %s AFTER INSERT ON %s"
+               " WHEN mc_applying_remote() = 0 BEGIN"
+               " INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
+               " VALUES (mc_hlc_now(), mc_node_uid(), '%s', new.%s, '" MC_CHANGELOG_ROW_FIELD "', %s);"
+               " END",
+               name, table, table, key, values);
+      if (ensure_trigger(db, name, sql) != MC_OK) goto fail;
+    }
+    for (const char *const *c = tables[t].cols; *c && tables[t].flags != mc_changelog_whole_row; c++) {
       snprintf(name, sizeof name, "mc_log_ins_%s_%s", table, *c);
       snprintf(sql, sizeof sql,
                "CREATE TRIGGER %s AFTER INSERT ON %s"

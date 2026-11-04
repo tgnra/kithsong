@@ -34,6 +34,7 @@ import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import kotlinx.coroutines.launch
 import ng.kithso.core.AlbumInfo
+import ng.kithso.core.CorePlayer
 import ng.kithso.core.TrackInfo
 import ng.kithso.wear.ui.AlbumGroupsScreen
 import ng.kithso.wear.ui.AlbumScreen
@@ -151,7 +152,9 @@ private fun WearApp() {
                     album,
                     tracks,
                     playingUid = playback.track?.uid,
-                    onTrack = { track -> startPlaying { playback.play(tracks, track) } },
+                    onTrack = { track ->
+                        startPlaying { playback.play(tracks, track, CorePlayer.Origin(CorePlayer.PlayContext.Album, album.uid)) }
+                    },
                     onAlbumMenu = { navController.navigate("album/${album.uid}/menu") },
                     onTrackMenu = { track ->
                         menuTrack = track
@@ -244,7 +247,9 @@ private fun WearApp() {
                     tracks,
                     playingUid = playback.track?.uid,
                     // The queue is the playlist's tracks that are here, from the one tapped.
-                    onTrack = { track -> startPlaying { playback.play(tracks, track) } },
+                    onTrack = { track ->
+                        startPlaying { playback.play(tracks, track, CorePlayer.Origin(CorePlayer.PlayContext.Playlist, playlist.uid)) }
+                    },
                     onTrackMenu = { track ->
                         menuTrack = track
                         navController.navigate("track/${track.uid}/menu")

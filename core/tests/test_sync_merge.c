@@ -24,6 +24,7 @@
 #include "sync/libmerge.h"
 #include "sync/sync_db.h"
 #include "sync/sync_internal.h"
+#include "sync/rows.h"
 #include "test.h"
 #include "util/platform.h"
 
@@ -531,6 +532,11 @@ static void add_extras(dev *d) {
   CHECK(exec(db, sql) == SQLITE_OK);
   CHECK(exec(db, "INSERT INTO recents (uid, kind, opened_ms)"
                  " SELECT uid, 'album', 1700000000000 FROM albums LIMIT 1") == SQLITE_OK);
+  snprintf(sql, sizeof sql,
+           "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context)"
+           " SELECT '%s', uid, '%s', 1700000000000, 90000, 'finished', 'album' FROM tracks ORDER BY track_no LIMIT 1",
+           en, mc_library_node_uid(lib));
+  CHECK(exec(db, sql) == SQLITE_OK);
   CHECK(mc_library_commit(lib) == MC_OK);
   mc_library_close(lib);
 }
@@ -633,6 +639,42 @@ int main(int argc, char **argv) {
     CHECK(lib_int(&b, "SELECT count(*) FROM tracks WHERE title = 'Alpha 1'") == 1);
     group_text(&b, "SELECT username FROM scrobble_account", user, sizeof user);
     CHECK(!strcmp(user, "bob"));
+
+    /* The play log over a real session, each way: every row arrives whole, as one changelog
+     * entry on both devices, each device's rows its own. */
+    {
+      enum { PLAYS = 300 };
+      char track[MC_UID_STRLEN];
+      query_text(mc_library_db(a.lib), "SELECT uid FROM tracks ORDER BY uid LIMIT 1", track, sizeof track);
+      CHECK(lib_int(&a, "SELECT count(*) FROM play_events") == 0 && lib_int(&b, "SELECT count(*) FROM play_events") == 0);
+      for (int i = 0; i < PLAYS; i++) {
+        mc_play_event e = {.started_ms = 1000 + i, .listened_ms = 5000, .end = MC_PLAY_END_SKIPPED,
+                           .context = MC_PLAY_CONTEXT_ALBUM};
+        snprintf(e.track_uid, sizeof e.track_uid, "%s", track);
+        snprintf(e.context_uid, sizeof e.context_uid, "%s", track);
+        CHECK(mc_library_log_play(a.lib, &e) == MC_OK);
+      }
+      mc_play_event back = {.started_ms = 500000, .listened_ms = 7, .end = MC_PLAY_END_FINISHED};
+      snprintf(back.track_uid, sizeof back.track_uid, "%s", track);
+      CHECK(mc_library_log_play(b.lib, &back) == MC_OK);
+      CHECK(sync_now(&a, &b) == MC_OK);
+      CHECK(sync_now(&b, &a) == MC_OK);
+      int rows_a = lib_int(&a, "SELECT count(*) FROM play_events"), rows_b = lib_int(&b, "SELECT count(*) FROM play_events");
+      int log_a = lib_int(&a, "SELECT count(*) FROM changelog WHERE entity = 'play_events'");
+      int log_b = lib_int(&b, "SELECT count(*) FROM changelog WHERE entity = 'play_events'");
+      printf("play log over a session: A %d rows, %d entries; B %d rows, %d entries\n", rows_a, log_a, rows_b, log_b);
+      CHECK(rows_a == PLAYS + 1 && rows_b == PLAYS + 1);
+      CHECK(log_a == PLAYS + 1 && log_b == PLAYS + 1);
+      CHECK(lib_int(&b, "SELECT count(DISTINCT node_uid) FROM play_events") == 2);
+      CHECK(lib_int(&b, "SELECT count(*) FROM play_events WHERE started_ms = 1299 AND listened_ms = 5000"
+                        " AND ended = 'skipped' AND context = 'album' AND context_uid IS NOT NULL") == 1);
+      CHECK(lib_int(&a, "SELECT count(*) FROM play_events WHERE started_ms = 500000 AND context = 'unknown'"
+                        " AND context_uid IS NULL") == 1);
+      char digest_a[MC_DIGEST_STRLEN], digest_b[MC_DIGEST_STRLEN];
+      CHECK(mc_rows_vv_digest(mc_library_db(a.lib), digest_a) == MC_OK);
+      CHECK(mc_rows_vv_digest(mc_library_db(b.lib), digest_b) == MC_OK);
+      CHECK(!strcmp(digest_a, digest_b));
+    }
 
     /* 7. Once the merge has run, a restart undoes nothing. */
     dev_stop(&a);
@@ -771,6 +813,7 @@ int main(int argc, char **argv) {
       CHECK(lib_int(&p, "SELECT count(*) FROM tracks") == 1);
       CHECK(lib_int(&p, "SELECT count(*) FROM playlists WHERE name = 'Road'") == 1);
       CHECK(lib_int(&p, "SELECT play_count FROM track_plays") == 3);
+      CHECK(lib_int(&p, "SELECT count(*) FROM play_events") == 1);
       CHECK(group_int(&p, "SELECT count(*) FROM local WHERE group_uid IS NULL") == 1);
       CHECK(group_int(&p, "SELECT count(*) FROM scrobble_queue") == 1);
       mc_sync_get_device_name(p.sync, name, sizeof name);
@@ -787,6 +830,7 @@ int main(int argc, char **argv) {
       CHECK(lib_int(&q, "SELECT count(*) FROM tracks WHERE title LIKE 'Pi %'") == 0);
       CHECK(lib_int(&q, "SELECT count(*) FROM playlists") == 0);
       CHECK(lib_int(&q, "SELECT count(*) FROM track_plays") == 0);
+      CHECK(lib_int(&q, "SELECT count(*) FROM play_events") == 0);
       CHECK(lib_int(&q, "SELECT count(*) FROM recents") == 0);
       char user[64];
       group_text(&q, "SELECT coalesce(username, '') FROM scrobble_account", user, sizeof user);

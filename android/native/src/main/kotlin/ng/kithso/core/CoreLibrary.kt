@@ -140,6 +140,12 @@ class CoreLibrary(dir: String) : AutoCloseable {
     /** Counts a play of [trackUid] on this device and makes now its last play. */
     fun recordPlay(trackUid: String) = nativeRecordPlay(handle, trackUid)
 
+    /** Adds [event] to the play log, as this device's. Throws if its track has gone meanwhile. */
+    fun logPlay(event: CorePlayer.PlayEvent) = nativeLogPlay(
+        handle, event.trackUid, event.startedMs, event.listenedMs, event.end.ordinal,
+        event.origin.context.ordinal, event.origin.contextUid,
+    )
+
     override fun close() {
         if (handle != 0L) nativeClose(handle)
         handle = 0
@@ -177,5 +183,8 @@ class CoreLibrary(dir: String) : AutoCloseable {
         @JvmStatic external fun nativeListSmart(handle: Long, flags: Int): Array<SmartInfo>
         @JvmStatic external fun nativePreviewSmartAlbums(handle: Long, rule: String): Array<AlbumInfo>
         @JvmStatic external fun nativeRecordPlay(handle: Long, trackUid: String)
+        @JvmStatic external fun nativeLogPlay(
+            handle: Long, trackUid: String, startedMs: Long, listenedMs: Long, end: Int, context: Int, contextUid: String?,
+        )
     }
 }

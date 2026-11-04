@@ -625,7 +625,7 @@ static void play_tracks(GListModel *tracks, int start) {
     if (start >= 0 && (int)i <= start) first = count;
     queue[count++] = (playback_track){t->uid, t->path, t->title, t->artist, t->album, t->cover_dir, t->duration_ms};
   }
-  if (count) playback_play(queue, count, first);
+  if (count) playback_play(queue, count, first, MC_PLAY_CONTEXT_ARTIST, v.open);
   g_free(queue);
 }
 

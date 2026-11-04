@@ -478,6 +478,9 @@ int main(int argc, char **argv) {
   CHECK(!mc_sync_bin_offered(a.sync));
   CHECK(mc_sync_bin_offered(b.sync));
   CHECK(mc_library_record_play(b.lib, t1.uid) == MC_OK);
+  mc_play_event logged = {.started_ms = 1000, .listened_ms = 500, .end = MC_PLAY_END_FINISHED};
+  snprintf(logged.track_uid, sizeof logged.track_uid, "%s", t1.uid);
+  CHECK(mc_library_log_play(b.lib, &logged) == MC_OK);
   CHECK(finds_album(&b, "things", "Things", 1));
 
   /* B deletes Things into the bin: its files go at once, the delete is logged as ever. */
@@ -533,6 +536,8 @@ int main(int argc, char **argv) {
   CHECK(track_exists(&b, t1.uid) == 1 && track_exists(&b, t3.uid) == 1);
   CHECK(deletes_of(&b, t1.uid) == 0 && deletes_of(&b, things) == 0);
   snprintf(sql, sizeof sql, "SELECT count(*) FROM track_plays WHERE track_uid = '%s'", t1.uid);
+  CHECK(lib_int(&b, sql) == 1);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM play_events WHERE track_uid = '%s'", t1.uid);
   CHECK(lib_int(&b, sql) == 1);
   snprintf(sql, sizeof sql, "SELECT count(*) FROM albums WHERE uid = '%s'", things);
   CHECK(lib_int(&b, sql) == 1);

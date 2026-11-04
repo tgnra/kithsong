@@ -46,6 +46,7 @@ static const struct {
   {"tracks", "uid = ?1"},
   {"track_artists", "track_uid = ?1"},
   {"track_plays", "track_uid = ?1"},
+  {"play_events", "track_uid = ?1"},
   {"playlist_entries", "track_uid = ?1"},
   {"album_group_entries", "album_uid = (SELECT album_uid FROM tracks WHERE uid = ?1)"},
 };
@@ -739,6 +740,7 @@ static mc_status delete_rows(mc_library *lib, const uid_set *gone, const uid_set
     const char *t = gone->items[i];
     if ((st = run(db, "DELETE FROM playlist_entries WHERE track_uid = ?1", t, NULL)) == MC_OK &&
         (st = run(db, "DELETE FROM track_plays WHERE track_uid = ?1", t, NULL)) == MC_OK &&
+        (st = run(db, "DELETE FROM play_events WHERE track_uid = ?1", t, NULL)) == MC_OK &&
         (st = run(db, "DELETE FROM track_artists WHERE track_uid = ?1", t, NULL)) == MC_OK &&
         (st = run(db, "DELETE FROM files WHERE track_uid = ?1", t, NULL)) == MC_OK)
       st = run(db, "DELETE FROM tracks WHERE uid = ?1", t, NULL);

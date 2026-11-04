@@ -32,6 +32,7 @@ class PlaybackService : MediaSessionService() {
             volume = 100,
             onShuffleChanged = {},
             onNowPlaying = app.scrobbling::nowPlaying,
+            onPlayEnded = app.scrobbling::ended,
             onPlayed = app.scrobbling::played,
         )
         val openApp = PendingIntent.getActivity(
