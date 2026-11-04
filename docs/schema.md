@@ -265,8 +265,8 @@ skip means. Nothing here leaves the user's own devices.
 | `started_ms` | wall clock, when it was first heard, or if it never was, when it was started |
 | `listened_ms` | time actually heard. Pauses add nothing, a seek forward adds nothing for what it jumped, and a seek back adds what's heard again, so it can pass the track's length. A track started and left at once has 0 or nearly |
 | `ended` | `finished`, `skipped` (next, previous, another queue item, or started again), `stopped` (stopped, or the app or library closed), `replaced` (a new queue took over) or `failed` (the file couldn't be played: `listened_ms` is 0) |
-| `context` | how the queue was started: `album`, `playlist` (smart lists too), `album_group`, `artist`, `manual` (one track by itself), `shuffle` (any of those started shuffled with no track picked), `radio` (nothing sets it yet) or `unknown` |
-| `context_uid` | the album, playlist, group or artist, also under `shuffle`; NULL if there's none. Not a reference: the history stays when the album or playlist goes, and a merged-away album's uid can be looked up in `aliases` |
+| `context` | how the queue was started: `album`, `playlist` (smart lists too), `album_group`, `artist`, `manual` (one track by itself), `shuffle` (any of those started shuffled with no track picked), `radio` (a station) or `unknown` |
+| `context_uid` | the album, playlist, group or artist, also under `shuffle`, or a station's seed track; NULL if there's none. Not a reference: the history stays when the album or playlist goes, and a merged-away album's uid can be looked up in `aliases` |
 
 The player keeps the rows, so all frontends log alike. A frontend gives it the queue's track
 uids and context (`mc_play_origin`), takes each row as it ends (`MC_PLAYER_EVENT_ENDED`,
@@ -447,9 +447,25 @@ can't be opened for now, or changed while it was read.
 `core/tests/manual_analysis` analyses a file or folder and prints the features and each file's
 nearest neighbours, for a person to judge.
 
-`core/tests/manual_radio <library folder>` makes a radio mix from these results (`mc_radio_make()`,
-[`radio.h`](../core/include/musiccore/radio.h)) and saves it as an ordinary playlist: 10 tracks unless
-`--count` says, from a search with `--seed <text>` or a track drawn at random, named by `--name`.
+Radio ([`radio.h`](../core/include/musiccore/radio.h)) picks from these results: a fixed mix with
+`mc_radio_make()`, or a station that goes on for as long as it's asked (`mc_radio_station_open()`).
+Candidates have a result of this version and a file on this device, and aren't in a continuous mix.
+They run from a minute up to `max_track_ms`, 8 minutes unless it says, negative for no limit; a
+duration of 0 or none is unknown and counts against a track neither way. A seed has to be a
+candidate too. A station reads them once and then never touches the library, so it doesn't see
+what changes later. It plays every candidate once before anything comes back, and then holds back
+its latest picks (half the pool, 64 at most).
+
+`mc_player_play_radio()` plays a station: the seed starts at once, and a thread of the player's
+loads the station on its own connection and keeps 5 tracks queued ahead of the current one. Rows
+in the play log have the context `radio` and the seed as `context_uid`. The station ends when
+something replaces the queue, when the library closes (`mc_player_stop_radio()`) or after 8 items
+in a row that won't open, and the queue then plays out. A frontend that keeps something per queue
+item looks up new ones on `MC_PLAYER_EVENT_QUEUE`.
+
+`core/tests/manual_radio <library folder>` makes a radio mix from these results and saves it as an
+ordinary playlist: 10 tracks unless `--count` says, from a search with `--seed <text>` or a track
+drawn at random, named by `--name`, with `--max-length <minutes>` for `max_track_ms`.
 `--scan` analyses what has no result first, and `--dry-run` only prints the mix. It makes no network
 calls, and refuses a library of an older schema without `--migrate`, as an older app can't open
 one that's been migrated.

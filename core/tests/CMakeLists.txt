@@ -99,11 +99,12 @@ target_link_libraries(test_scrobbler PRIVATE mbedcrypto mc_yyjson)  # checks the
 target_include_directories(test_scrobbler PRIVATE "${PROJECT_BINARY_DIR}/core/generated")  # config.h
 kithsong_test(test_player)
 kithsong_test(test_play_log)
+kithsong_test(test_radio_player)
 kithsong_test(test_shuffle)
 kithsong_test(test_stress)
 kithsong_test(test_art_colors)
 
-set_tests_properties(test_player test_play_log PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
+set_tests_properties(test_player test_play_log test_radio_player PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
 kithsong_test(test_discovery)
 target_link_libraries(test_discovery PRIVATE mc_mdns)  # sends packets as a fake peer
 set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multicast
