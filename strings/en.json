@@ -862,6 +862,8 @@
     "home_row_random": { "text": "Random", "note": "Heading of the Home page's row of albums and playlists picked at random." },
     "home_station": { "text": "{0} Radio", "note": "A radio station on the Home page, named after an artist. {0} is the artist." },
     "home_station_sub": { "text": "Station", "note": "Under a radio station's name on the Home page." },
+    "home_station_like": { "text": "Like {0}", "note": "Under a radio station's name on the Home page, in place of \"Station\", when two stations have the same name. {0} is the title of the track the station starts from." },
+    "home_station_like_on": { "text": "Like {0}, {1}", "note": "As \"Like {0}\" under a radio station's name, when the two tracks have the same title too. {0} is the track's title, {1} its album's." },
     "home_welcome_title": { "text": "Welcome to {0}", "note": "The Home page of a library with no music. {0} is the app's name." },
     "home_welcome_text": { "text": "Import some music and this page fills up with your albums, your playlists and what you've been playing.", "note": "The Home page of a library with no music, above the Import button." },
     "home_no_history": { "text": "As you play music, this page fills up with what you've been listening to.", "note": "At the foot of the Home page while nothing has been played yet." }

@@ -90,7 +90,8 @@ static void test_nothing(const char *scratch) {
   mc_library_close(lib);
 }
 
-/* A library not played yet: Radio and Random, with Random's choice held by its seed. */
+/* A library not played yet: Random, with its choice held by its seed. With nothing analysed
+ * there are no stations, and no placeholders for them. */
 static void test_unplayed(const char *scratch) {
   mc_library *lib = open_fresh(scratch, "test_home_picks_unplayed.d");
   if (!lib) return;
@@ -104,13 +105,7 @@ static void test_unplayed(const char *scratch) {
   CHECK(a.counts[MC_HOME_ROW_RECENTS] == 0);
   CHECK(a.counts[MC_HOME_ROW_PLAYED_LATELY] == 0 && a.counts[MC_HOME_ROW_NOT_PLAYED_LATELY] == 0);
 
-  CHECK(a.counts[MC_HOME_ROW_RADIO] == 2);
-  for (int i = 0; i < a.counts[MC_HOME_ROW_RADIO]; i++) {
-    const mc_home_pick *p = &a.rows[MC_HOME_ROW_RADIO][i];
-    CHECK(p->station && p->kind == MC_RECENT_ARTIST && p->cover_dir);
-    CHECK(!strcmp(p->title, "Anna Radio") || !strcmp(p->title, "Bo Radio"));
-    CHECK_STR(p->sub, "Station");
-  }
+  CHECK(a.counts[MC_HOME_ROW_RADIO] == 0 && !a.rows[MC_HOME_ROW_RADIO]);
 
   CHECK(a.counts[MC_HOME_ROW_RANDOM] == MC_HOME_ROW_MAX); /* more albums than fit */
   CHECK(b.counts[MC_HOME_ROW_RANDOM] == MC_HOME_ROW_MAX && c.counts[MC_HOME_ROW_RANDOM] == MC_HOME_ROW_MAX);
@@ -132,7 +127,7 @@ static void test_unplayed(const char *scratch) {
   mc_library_close(lib);
 }
 
-/* Each row takes what's played by when, and the artist played most leads Radio. */
+/* Each row takes what's played by when. */
 static void test_played(const char *scratch) {
   mc_library *lib = open_fresh(scratch, "test_home_picks_played.d");
   if (!lib) return;
@@ -151,8 +146,7 @@ static void test_played(const char *scratch) {
   mc_home_picks_load(lib, 7, &p);
   CHECK(p.has_music && p.has_plays);
 
-  CHECK(p.counts[MC_HOME_ROW_RADIO] == 2);
-  if (p.counts[MC_HOME_ROW_RADIO]) CHECK_STR(p.rows[MC_HOME_ROW_RADIO][0].title, "Bo Radio");
+  CHECK(p.counts[MC_HOME_ROW_RADIO] == 0); /* played, but not analysed */
 
   CHECK(p.counts[MC_HOME_ROW_RECENTS] == 3);
   if (p.counts[MC_HOME_ROW_RECENTS] == 3) {

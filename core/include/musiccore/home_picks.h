@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 typedef enum mc_home_row_id {
-  MC_HOME_ROW_RADIO,              /* placeholders: stations named after the artists played most */
+  MC_HOME_ROW_RADIO,              /* mc_radio_stations_list(): none until enough is analysed */
   MC_HOME_ROW_RECENTS,            /* mc_library_list_recents(), as the sidebar's */
   MC_HOME_ROW_PLAYED_LATELY,      /* albums and playlists on repeat lately */
   MC_HOME_ROW_NOT_PLAYED_LATELY,  /* played before, but not lately */
@@ -25,13 +25,16 @@ enum { MC_HOME_ROW_MAX = 24 }; /* tiles in a row */
 
 typedef struct mc_home_pick {
   mc_recent_kind kind;
-  int station; /* a radio station: kind is MC_RECENT_ARTIST, and uid the artist's */
+  int station; /* a radio station: kind is MC_RECENT_ARTIST, and uid its seed's artist's, "" if
+                * that's unknown. Several can share one, so seed_uid is what tells them apart */
   int smart;   /* a smart playlist or group */
   char uid[MC_UID_STRLEN];
+  char seed_uid[MC_UID_STRLEN]; /* a station's seed track, to start its mix from; "" otherwise */
   char *title;
   char *sub;       /* the line beneath it */
   char *cover_dir; /* the folder holding its cover; NULL for none, and for playlists and
                     * groups, whose pictures are found by uid */
+  char *seed_title; /* a station's seed track's title; NULL otherwise */
 } mc_home_pick;
 
 typedef struct mc_home_picks {
@@ -42,8 +45,9 @@ typedef struct mc_home_picks {
 } mc_home_picks;
 
 /* Fills out from lib (NULL leaves every row empty). seed decides Random's selection and order,
- * so one seed keeps the same selection across reloads. This lists every album and evaluates
- * every smart list, so it's for a background thread, on its own connection. */
+ * so one seed keeps the same selection across reloads; Radio's stations don't depend on it, and
+ * hold for the day. This lists every album, evaluates every smart list and reads every analysis
+ * result, so it's for a background thread, on its own connection. */
 void mc_home_picks_load(mc_library *lib, unsigned seed, mc_home_picks *out);
 void mc_home_picks_free(mc_home_picks *picks);
 
