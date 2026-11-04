@@ -23,6 +23,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 15 | album flags: `albums.no_scrobble`, `albums.mix` |
 | 16 | `albums.mix` is the user's choice, 1 or -1, and 0 leaves it to the album's length; long tracks with no album get one, once, on opening |
 | 17 | `albums.art_chosen`: the cover the user chose |
+| 18 | `track_analysis`, `analysis_failed`: local audio analysis |
 
 ## Location
 
@@ -86,8 +87,8 @@ or trash and deletes its rows like any other change, so the delete syncs. What's
 bring it back is kept out of the library, in `deleted.db` in the per-device config dir: one
 row per trashed file with its old path, size, modification time, hash (if known), and the
 rows it takes back (the track, its album and artists, both credits' rows and their artists,
-plays, playlist and album group entries, the file's own row) as JSON objects of column to
-value. Restoring inserts them
+plays, audio analysis, playlist and album group entries, the file's own row) as JSON objects of
+column to value, `features` as hex since JSON has no BLOBs. Restoring inserts them
 again with their old uids, using whichever columns the table still has, so records outlive
 migrations. Records are dropped once their file is back, or after 90 days.
 
@@ -108,7 +109,7 @@ logged, and its rows only make sense against this library's changelog. One row p
 | `title`, `artist` | the first item's title and artist credit as shown, for the bin's list |
 | `tracks` | tracks the delete took out of the library |
 | `seq_first`, `seq_last` | the `changelog` rows the delete logged: every one in between is the delete's, as it ran in one write transaction |
-| `rows` | JSON array, one record per track as `deleted.db` keeps (the track, its album and artists, both credits' rows, plays, playlist and album group places), without the file's row |
+| `rows` | JSON array, one record per track as `deleted.db` keeps (the track, its album and artists, both credits' rows, plays, audio analysis, playlist and album group places), without the file's row |
 
 The delete writes its row in the same transaction as the delete itself. Taking an entry back
 (`mc_delete_bin_take()`, in one transaction) deletes its changelog rows, puts the rows back
@@ -246,6 +247,142 @@ the same plays: half the track or four minutes heard, whichever is less
 A track's last play is `MAX(last_played_ms)` over the same rows, and comes from the same
 per-device rows for the same reason. Rows from before v6 have no `last_played_ms` until
 that device plays the track again.
+
+## Audio analysis
+
+A fingerprint of how each track sounds, for telling which tracks sound alike, and its loudness,
+worked out on the device from the audio alone: nothing goes over the network but sync's own
+rows. The API is in `musiccore/analysis.h`, the code in `core/src/analysis/`. It changes nothing
+about playback: the loudness is kept so that a volume feature won't need a second decode of the
+library.
+
+### What's measured
+
+One decode of a file, all of it:
+
+- **Timbre.** A mono mix, resampled to 22,050 Hz with the same cutoff from every higher rate.
+  1024-sample Hann frames every 512 samples; each gives a spectral centroid and, through 40 mel
+  bands (20 Hz to 11,025 Hz, triangles of equal area) in dB and an orthonormal DCT, MFCCs 0 to
+  12. The mean and variance of each over the track are kept. Frames under -70 dBFS are left out,
+  so silence isn't timbre. A band reads no lower than 100 dB under its own frame's power, so a
+  gain moves MFCC 0 and nothing else.
+- **Loudness.** Integrated loudness in LUFS (BS.1770-4: K-weighting worked out for the file's
+  rate, 400 ms blocks with 75% overlap, gates at -70 LUFS and -10 LU), loudness range in LU (EBU
+  Tech 3342: 3 s blocks, gates at -70 LUFS and -20 LU, 10th to 95th percentile) and true peak in
+  dBTP (4x interpolation under 96 kHz, 2x under 192 kHz). Per channel at the file's own rate, not
+  from the mono mix, with BS.1770's channel weights taken from the usual WAV and FLAC order. Opus
+  always decodes to stereo.
+
+`analysis_version` (`MC_ANALYSIS_VERSION`) names the algorithm. Raising it makes every track due
+again on devices that scan; a result of a newer version than a device's is left alone.
+
+### `track_analysis`
+
+| Column | |
+|--------|---|
+| `uid` | `mc_uid_derive(track_uid, source)` |
+| `track_uid` | the track; deleted with it |
+| `source` | 0: read from an original, 1: from a lossy copy (`files.source_file_uid` set) |
+| `file_rev` | `tracks.file_rev` when it was read, NULL as that is before the first swap |
+| `analysis_version` | |
+| `features` | the BLOB below |
+| `lufs`, `lra`, `true_peak` | REAL; NULL when undefined: a track that's silent or under 400 ms has no `lufs`, one under 3 s no `lra`, a silent one no `true_peak` |
+
+`features` is 116 bytes, the same on every platform. All numbers are little-endian IEEE 754
+binary32:
+
+| Offset | Size | |
+|--------|------|---|
+| 0 | 1 | layout, 1 |
+| 1 | 1 | N, the MFCC count, 13 |
+| 2 | 2 | reserved, 0 |
+| 4 | 4N | mean of MFCC 0 to N-1, dB |
+| 4 + 4N | 4N | variance of the same, dB squared |
+| 4 + 8N | 4 | mean spectral centroid, Hz |
+| 8 + 8N | 4 | variance of the centroid, Hz squared |
+
+A reader skips a BLOB of a layout or N it doesn't know. A new layout needs a new
+`analysis_version`; a new version needn't change the layout.
+
+**Why a row per source.** Sync's fields are last-writer-wins, which can't say that an original
+beats a transcode: a device holding only a copy that scans later would overwrite the better
+result, and on every device. So the two are different rows, and neither can touch the other. The
+uid comes from the track and the source, so two devices analysing one track from originals write
+one row, which merges like any other, and that's harmless: both read the same audio. Field by
+field a row could only end up a mix of two writers if they wrote within the same moment, and then
+of two results of one file. `mc_analysis_get()` picks a track's best row: of the current
+`file_rev`, then the lowest `source`, then the newest version. Once a track has an original's row
+a lossy row stays, unread.
+
+A merged-away track's rows move to the survivor like its plays (see
+[Duplicates](sync-protocol.md#duplicates)). That can leave two rows of one source on a track,
+under different uids, and the reader's order settles it. There's no UNIQUE key on purpose: rows
+arrive field by field and a key would make applying them fail, and it would have nothing to add.
+
+### Scanning
+
+`mc_analysis_scanner_start()`, which Windows and Linux call beside starting sync and Android
+doesn't, for the battery: a phone or watch gets results by sync. The scanner has a thread and a
+connection of its own, at background priority (`mc_thread_background()`), and starts 30 seconds
+after the library opens. One track at a time, it takes the next track, in uid order, with a file
+that:
+
+- is the track's current one (`files.file_rev IS tracks.file_rev`; a stale copy, or an original
+  a peer has since replaced, isn't read);
+- has no result of the current `file_rev`, from the same or a better source, of this version or
+  newer;
+- isn't in `analysis_failed` as it stands.
+
+An original goes before a copy. That is all its state, so it picks up where it stopped after a
+restart, and a result arriving by sync takes a track off its list. A stop gives up the file it's
+reading, at once, and that track is done from the start next time. Having gone through the
+library it looks again every 5 minutes, which is how it finds imports. It rests as long as it
+works, so a long scan doesn't keep one core flat out.
+
+It stands aside (`mc_analysis_hold()`) for the whole of a sync session and while an import is at
+work, but not while an import waits for review. For sync that's more than good manners: a row
+logged during a session moves this device's version vector, so the session's digests differ, it
+sends every row of this device's origin again (`"resend"`) and, not having converged, it lifts the
+rate limit for the next. Local edits can do that too, but they are rare and the scanner writes
+every few seconds for hours. Between sessions each write is a local change as any other, which the
+rate limit holds to one session an hour.
+
+`analysis_failed` (`file_uid`, `size_bytes`, `mtime_ms`, `analysis_version`) lists the files that
+wouldn't decode, so they aren't tried again until they change or the version does. It's this
+device's own, keyed by `files.uid`: whether a file decodes says nothing of another device's. A
+file that's only missing isn't listed, as the drive it's on may be back tomorrow; nor is one that
+changed while it was read.
+
+### Distance
+
+`mc_analysis_distance()` is a weighted Euclidean distance over 29 numbers in four groups:
+
+| Group | Weight | Numbers |
+|-------|--------|---------|
+| shape | 0.45 | the means of MFCCs 1 to 12 |
+| texture | 0.25 | the standard deviations of MFCCs 0 to 12 |
+| brightness | 0.20 | the mean centroid in octaves, and its standard deviation as a fraction of the mean |
+| energy | 0.10 | `lufs`, `lra` |
+
+- MFCC 0's mean is left out: it's the level, and the same recording mastered louder has the same
+  timbre. The loudness it would have said counts for what it is, under energy, at a low weight.
+- Raw coefficients do need scaling: they differ in unit and their spreads by an order of
+  magnitude, so MFCC 1 alone would decide. Each number is divided by its standard deviation over
+  the library (`mc_analysis_stats_load()`, one result per track, worked out once and handed in).
+  Every device has the same rows, so every device gets the same scales.
+- The diagonal only, not a full covariance: MFCCs are close to uncorrelated by construction, and a
+  covariance needs far more tracks than 29 numbers to be stable in a small library.
+- Within a group the squared z-scores are averaged, so its weight doesn't depend on how many
+  numbers it has. Halved, as two random tracks differ by 2 on average, it gives about 1 for two
+  random tracks of the library and 0 for the same features.
+- A small library's spread says little, so the fixed scales in `analysis.c` count for 16 tracks'
+  worth; with no stats they're all there is. They and the weights were set from reasoning and
+  synthetic signals, not tuned on real music.
+- A number that's undefined (`lufs` of a silent track) counts as no difference. Results of
+  different versions aren't compared at all: the distance is -1.
+
+`core/tests/manual_analysis` analyses a file or folder and prints the features and each file's
+nearest neighbours, for a person to judge.
 
 ## Album groups
 
@@ -412,10 +549,12 @@ devices. Wear OS shows only what's present, so it drops the empty ones as well.
 | `album_group_entries` | yes | ordered by `position`, like `playlist_entries` |
 | `smart_lists`      | yes    | `subject` is `'tracks'` or `'albums'`; `rule` is JSON; see [Smart lists](#smart-lists) |
 | `recents`          | yes    | last opened items, one row per item keyed by its uid; see [Recents](#recents) |
+| `track_analysis`   | yes    | what the audio analysis found, a row per track and source; see [Audio analysis](#audio-analysis) |
 | `files`            | no     | this device's files, by path relative to the library folder; `source_file_uid`/`source_peer_uid` mark transcodes received from a peer; `sha256` (hex) of the file's bytes, recorded when sync transfers or verifies it; `file_rev` is the track's `file_rev` the file was made from (a copy whose `file_rev` differs from its track's is stale, see [Files](sync-protocol.md#files)); `source_sha256` (hex) of the bytes an original was imported from, before the import tagged it, which tells a re-import of the same file (see [Duplicates](tagging-rules.md#duplicates)), passed on with an original by sync |
 | `aliases`          | no     | merged-away artist, album and track uids, each with the `canonical` uid it became; derived from the changelog on each device, see [Duplicates](sync-protocol.md#duplicates) |
 | `merge_keys`       | no     | the MusicBrainz ids ever logged per uid, which decide what merges (rows of singles albums' artists from before v12 are left, unused) |
 | `changelog`        | -      | field-level change log that sync is built on |
+| `analysis_failed`  | no     | files that wouldn't decode for the audio analysis; see [Audio analysis](#audio-analysis) |
 | `recycle_bin`      | no     | deletes made here that no other device has heard of yet, which can be taken back; see [Recycle bin](#recycle-bin) |
 | `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `merge_wait` (set with it until this device's profile is confirmed: the merge waits for that, see [Merging libraries](sync-protocol.md#merging-libraries); its value is the run of the app that set it, and a later run finding it undoes the pairing), `merge_with` and `merge_name` (with them: the kept device's name and this device's own before pairing), `merge_restored` (the kept device's name, after a pairing was undone, until a frontend has said so), `merge_restore_sync` and `merge_restored_name` (while an undone pairing's `sync.db` and name are still to be put back; see "Abandoning a merge" there), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), `changelog_epoch` (bumped each time a delete is taken back out of the recycle bin, which takes changelog rows out; see [Recycle bin](#recycle-bin)), `edit_swap` (while a hand edit swaps its files: what to put right after a crash; see [Hand edits](tagging-rules.md#hand-edits)), and other per-library settings |
 

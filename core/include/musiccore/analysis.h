@@ -63,7 +63,6 @@ mc_status mc_analysis_get(mc_library *lib, const char *track_uid, mc_analysis *o
 /* How the features spread over a library: what a difference in each is measured against. */
 typedef struct mc_analysis_stats {
   int count; /* results they were worked out from */
-  float mean[MC_ANALYSIS_DIMS];
   float scale[MC_ANALYSIS_DIMS];
 } mc_analysis_stats;
 

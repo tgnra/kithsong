@@ -546,6 +546,11 @@ Sessions are retried with backoff (10 s, doubling, up to 5 minutes).
   for a mix, and sees no detected ones.
 - `albums.art_chosen` (v17) is one as well: an older peer passes it on, and keeps the cover it
   has until it upgrades.
+- `track_analysis` (v18) is a table of the kind: an older peer passes its rows on, and has them
+  applied when it upgrades. Results are rows like any other, so a device that doesn't scan gets
+  them from one that does. An original's result and a transcode's are separate rows, as
+  last-writer-wins would otherwise let the transcode's win (see
+  [Audio analysis](schema.md#audio-analysis)).
 - A row is *live* if one of its field changes is newer, by `(hlc, origin_uid)`, than its
   newest `_deleted`. A dead row that exists is deleted. A live row that exists gets each
   field the batch brought a new winner for. A live row that doesn't exist yet (new, or
@@ -593,6 +598,9 @@ way, without logging anything.
   `(track_uid, node_uid)` keep only the smaller uid. If the whole class is deleted, the
   references go as ON DELETE takes them. Album groups or playlists that held both copies
   hold the survivor twice.
+- **Analysis.** `track_analysis.track_uid` is moved like those, so results follow the track. Two
+  rows of one source may end up on the survivor; readers take the best (see
+  [Audio analysis](schema.md#audio-analysis)).
 - **Credits.** A merged-away track's or album's credit rows (`track_artists`,
   `album_artists`) are not moved: they go with the loser's row (ON DELETE CASCADE), and the
   survivor keeps its own credit rows. Their uids derive from the owner's uid, so the
@@ -670,6 +678,10 @@ way, without logging anything.
   sync off. A session a member starts is refused with `ERROR {"reason": "busy"}` unless this
   device's user pressed Sync for that member and no session has carried the press yet, so the
   member keeps its schedule. Reach checks go on.
+- **Audio analysis.** The scanner stands aside for the whole of a session, reading and writing
+  nothing: a row logged during one moves the version vector under it and forces the re-send of
+  step 5 (see [Audio analysis](schema.md#audio-analysis)). Between sessions its rows are local
+  changes like any other, held by the rate limit.
 - **Showing it.** Most automatic attempts only find out whether a member is there, so the
   frontends show a session once the member has answered, or at once when the user asked for
   it, and report failures only for those ("Showing sync" in `sync.h`).

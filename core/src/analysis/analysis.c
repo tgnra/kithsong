@@ -260,14 +260,8 @@ static const struct {
   {ENERGY, 2, 0.10},
 };
 
-/* Typical means and spreads, for a library too small to say, or none. Rough, and meant to be:
- * they only need to be the right size. */
-static const float k_prior_mean[MC_ANALYSIS_DIMS] = {
-  60, 0, 5, 0, 2, 0, 1, 0, 0, 0, 0, 0,                   /* shape */
-  30, 12, 7, 5, 4, 4, 3, 3, 3, 3, 3, 3, 3,               /* texture */
-  10.5f, 0.5f,                                           /* brightness */
-  -14, 7,                                                /* energy */
-};
+/* Typical spreads, for a library too small to say, or none. Rough, and meant to be: they only
+ * need to be the right size. */
 static const float k_prior_scale[MC_ANALYSIS_DIMS] = {
   25, 12, 8, 6, 5, 4, 4, 3, 3, 3, 3, 3,                  /* shape */
   8, 4, 2.5f, 2, 1.5f, 1.5f, 1, 1, 1, 1, 1, 1, 1,        /* texture */
@@ -305,10 +299,9 @@ void mc_analysis_stats_from(const mc_analysis *results, int count, mc_analysis_s
     out->count++;
   }
   for (int d = 0; d < MC_ANALYSIS_DIMS; d++) {
-    double mean = n[d] ? sum[d] / n[d] : k_prior_mean[d];
+    double mean = n[d] ? sum[d] / n[d] : 0.0;
     double var = n[d] ? sum_sq[d] / n[d] - mean * mean : 0.0;
     double prior = (double)k_prior_scale[d] * k_prior_scale[d];
-    out->mean[d] = (float)mean;
     out->scale[d] = (float)sqrt(((var > 0.0 ? var : 0.0) * n[d] + prior * PRIOR_WEIGHT) /
                                 (n[d] + PRIOR_WEIGHT));
   }

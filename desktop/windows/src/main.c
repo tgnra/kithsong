@@ -82,6 +82,8 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "musiccore/analysis.h"
+
 #include "add_device.h"
 #include "add_to_playlist.h"
 #include "album_grid.h"
@@ -1266,6 +1268,9 @@ static void before_remove_here(const mc_here_plan *plan) {
     }
 }
 
+/* The audio analysis of the library that's open; it comes and goes with sync. */
+static mc_analysis_scanner *g_analysis;
+
 static void start_sync(void) {
   restore_deleted(); /* the library just opened */
   memset(g_app.syncing, 0, sizeof g_app.syncing);
@@ -1276,10 +1281,13 @@ static void start_sync(void) {
   if (g_app.page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
   refresh_devices();
   if (waiting_banner_update(sync_bridge_get())) layout(); /* nothing yet: it comes with SYNC_EV_WAITING */
+  if (g_app.lib && !g_analysis) mc_analysis_scanner_start(mc_library_dir(g_app.lib), &g_analysis);
 }
 
 /* Before the library closes: sync reads it. Pairing dialogs go first, as they use sync. */
 static void stop_sync(void) {
+  mc_analysis_scanner_stop(g_analysis); /* it reads the files, which may be about to move */
+  g_analysis = NULL;
   pair_dialog_close_all();
   device_view_open(NULL, NULL, NULL);
   sync_bridge_stop();
