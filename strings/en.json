@@ -157,7 +157,7 @@
     "playlist_added": { "text": "Added to {0}", "note": "A passing notice after Add to playlist. {0} is the playlist's name." },
     "album_group_added": { "text": "Added to {0}", "note": "A passing notice after Add to album group. {0} is the album group's name." },
     "album_menu": { "text": "Album menu", "note": "An album's menu: the menu button on its page on the phone, the long press on the watch; for accessibility." },
-    "track_menu": { "text": "Track menu", "note": "A track's menu: the menu button on the phone's player, the long press on the watch; for accessibility." },
+    "track_menu": { "text": "Track menu", "note": "A track's menu: the menu button and the long press on the phone's player, the long press on the watch; for accessibility." },
     "new_playlist_menu": "New playlist…",
     "go_to_album": { "text": "Go to album", "note": "On a track's menu: opens the page of the album it's on." },
     "go_to_artist": { "text": "Go to artist", "note": "On a track's menu: opens the page of the artist it's credited to." },
