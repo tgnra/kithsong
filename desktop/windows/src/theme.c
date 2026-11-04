@@ -127,13 +127,16 @@ BOOL theme_is_change(UINT msg, WPARAM wp, LPARAM lp) {
   return FALSE;
 }
 
+BOOL theme_apply_backdrop(HWND wnd) {
+  int type = theme.high_contrast ? BACKDROP_NONE : BACKDROP_MICA;
+  return SUCCEEDED(DwmSetWindowAttribute(wnd, DWMWA_BACKDROP, &type, sizeof type)) && type == BACKDROP_MICA;
+}
+
 void theme_apply_window(HWND wnd, BOOL mica) {
   BOOL dark = theme.dark;
   if (FAILED(DwmSetWindowAttribute(wnd, DWMWA_DARK_MODE, &dark, sizeof dark)))
     DwmSetWindowAttribute(wnd, DWMWA_DARK_MODE_OLD, &dark, sizeof dark);
-  if (!mica) return;
-  int type = theme.high_contrast ? BACKDROP_NONE : BACKDROP_MICA;
-  theme.mica = SUCCEEDED(DwmSetWindowAttribute(wnd, DWMWA_BACKDROP, &type, sizeof type)) && type == BACKDROP_MICA;
+  if (mica) theme.mica = theme_apply_backdrop(wnd);
 }
 
 /* Dark list view headers keep black text unless it's set while they draw. */

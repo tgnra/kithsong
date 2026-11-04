@@ -46,7 +46,12 @@
  * A new list starts with a choice of ready-made rules, or a blank one. A rule the editor
  * can't show (from a newer version, or a "not" with no negative operator to show it as)
  * opens read-only, as its sentence, and is never written back. Group names are in
- * docs/schema.md (Smart lists). */
+ * docs/schema.md (Smart lists).
+ *
+ * As in the main window, Mica shows on the frame (the title bar, the path, the margins, and
+ * the line at the bottom with Save and Cancel) and the rest is a solid card: the page, the
+ * preview and the problems, whose standard controls need no alpha. What's on the frame is
+ * drawn here with canvas.c. Without Mica the frame is the frame colour. */
 #ifndef KITHSONG_SMART_EDITOR_H
 #define KITHSONG_SMART_EDITOR_H
 

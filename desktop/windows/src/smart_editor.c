@@ -3,6 +3,7 @@
 #include "smart_editor.h"
 
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <oleacc.h>
 #include <uxtheme.h>
 #include <limits.h>
@@ -59,8 +60,8 @@ enum {
   CRUMB_MAX = 120,  /* a group's name in the path, at most */
   LEFT_MIN = 330,   /* the conditions' panel, at its narrowest */
   PREVIEW_MIN = 150, /* the preview beside it, at its narrowest; narrower windows put it below */
-  MIN_W = 340,
-  MIN_H = 300,
+  MIN_W = 354,
+  MIN_H = 314,
 };
 
 /* The formats a condition offers: the importer's file extensions (tagger.c), which is what
@@ -164,7 +165,12 @@ static struct {
   HWND problems_title, problem_lines[PROBLEM_ROWS], problem_show[PROBLEM_ROWS], problems_more;
   UINT problem_ids[PROBLEM_ROWS];
   RECT problems_box; /* the frame around the problems, in the dialog's client coordinates */
+  RECT card;         /* the content area, solid, around the page, preview and problems; likewise */
+  RECT divider;      /* the line between the page and the preview, if it's shown; likewise */
   HWND status;
+  BOOL mica;         /* this window has Mica (theme.mica is the main window's) */
+  MARGINS extended;  /* the frame as last extended */
+  canvas surface;    /* the dialog's own painting */
   HFONT font, bold_font, icon_font;
   HFONT own_font; /* the font for a DPI moved to, which ed.font then is; NULL for the dialog's */
   UINT dpi;
@@ -1624,8 +1630,28 @@ static int problems_h(int n) {
   return lines * dy(ROW) + dy(8);
 }
 
-/* The dialog: the path at the top, the panel and the preview, the problems, the counts and
- * the buttons. */
+static int card_radius(void) {
+  return MulDiv(CONTENT_RADIUS, (int)ed.dpi, USER_DEFAULT_SCREEN_DPI);
+}
+
+/* The extended frame: everything around the card, and on into it far enough for its rounded
+ * corners to show Mica. As in the main window, what's in that strip must be drawn with alpha,
+ * which paint() and draw_item() do; the controls that GDI draws stay further in, as dx(MARGIN)
+ * is more than the radius. */
+static void extend_frame(void) {
+  RECT rc;
+  GetClientRect(ed.dlg, &rc);
+  int r = card_radius();
+  MARGINS m = {0};
+  if (ed.mica && !IsRectEmpty(&ed.card))
+    m = (MARGINS){ed.card.left + r, rc.right - ed.card.right + r, ed.card.top + r, rc.bottom - ed.card.bottom + r};
+  if (!memcmp(&m, &ed.extended, sizeof m)) return;
+  ed.extended = m;
+  DwmExtendFrameIntoClientArea(ed.dlg, &m);
+}
+
+/* The dialog: the path at the top and the counts and the buttons at the bottom, on the frame,
+ * and between them the card, with the panel and the preview, and the problems. */
 static void layout_dialog(void) {
   RECT rc;
   GetClientRect(ed.dlg, &rc);
@@ -1662,11 +1688,15 @@ static void layout_dialog(void) {
   MOVE(ok, rc.right - m - 2 * bw - gap, buttons_y, bw, bh, IsWindowVisible(ok) || !ed.read_only);
   MOVE(ed.status, m, buttons_y, rc.right - 3 * m - 2 * bw - gap, bh, TRUE);
 
+  /* The card, and inside it (by the same margin again) what it holds. */
+  RECT card = {m, m + path_h(), rc.right - m, buttons_y - m};
+  int left = card.left + m, right = card.right - m, inner_bottom = card.bottom - m;
+
   int np = ed.read_only || ed.choosing ? 0 : ed.nbad;
-  int ph = problems_h(np), pt = buttons_y - (ph ? ph + dy(GAP) : 0);
+  int ph = problems_h(np), pt = inner_bottom - ph;
   RECT was_box = ed.problems_box;
-  SetRect(&ed.problems_box, m, pt, rc.right - m, pt + ph);
-  int ly = pt + dy(4), lx = m + dx(6), lr = rc.right - m - dx(6);
+  SetRect(&ed.problems_box, left, pt, right, pt + ph);
+  int ly = pt + dy(4), lx = left + dx(6), lr = right - dx(6);
   MOVE(ed.problems_title, lx, ly, lr - lx, h, np > 0);
   ly += h;
   for (int i = 0; i < PROBLEM_ROWS; i++) {
@@ -1678,31 +1708,41 @@ static void layout_dialog(void) {
   }
   MOVE(ed.problems_more, lx, ly, lr - lx, h, np > PROBLEM_ROWS);
 
-  int top = m + path_h(), bottom = (ph ? pt : buttons_y) - dy(6), avail_w = rc.right - 2 * m;
+  int top = card.top + m, bottom = ph ? pt - dy(6) : inner_bottom, avail_w = right - left;
   BOOL preview = !ed.read_only && !ed.choosing;
   ed.wide = avail_w >= dx(LEFT_MIN + PREVIEW_MIN + MARGIN);
   int label_h = dy(10), note_h = GetWindowTextLengthW(ed.preview_note) ? dy(10) : 0;
+  int line = max(1, MulDiv(1, (int)ed.dpi, USER_DEFAULT_SCREEN_DPI));
+  RECT divider = {0};
   if (!preview) {
-    MOVE(ed.panel, m, top, avail_w, bottom - top, TRUE);
+    MOVE(ed.panel, left, top, avail_w, bottom - top, TRUE);
     MOVE(ed.preview_label, 0, 0, 0, 0, FALSE);
     MOVE(ed.preview_note, 0, 0, 0, 0, FALSE);
     MOVE(ed.list, 0, 0, 0, 0, FALSE);
   } else if (ed.wide) {
     int preview_w = max(dx(PREVIEW_MIN), (avail_w - m) * 3 / 8), left_w = avail_w - m - preview_w;
-    int lx2 = m + left_w + m;
-    MOVE(ed.panel, m, top, left_w, bottom - top, TRUE);
+    int lx2 = left + left_w + m;
+    MOVE(ed.panel, left, top, left_w, bottom - top, TRUE);
     MOVE(ed.preview_label, lx2, top, preview_w, label_h, TRUE);
     MOVE(ed.preview_note, lx2, top + label_h, preview_w, note_h, note_h > 0);
     MOVE(ed.list, lx2, top + label_h + note_h, preview_w, bottom - top - label_h - note_h, TRUE);
+    SetRect(&divider, lx2 - m / 2, top, lx2 - m / 2 + line, bottom);
   } else {
-    int panel_h = (bottom - top) * 3 / 5, ly2 = top + panel_h + dy(4);
-    MOVE(ed.panel, m, top, avail_w, panel_h, TRUE);
-    MOVE(ed.preview_label, m, ly2, avail_w, label_h, TRUE);
-    MOVE(ed.preview_note, m, ly2 + label_h, avail_w, note_h, note_h > 0);
-    MOVE(ed.list, m, ly2 + label_h + note_h, avail_w, bottom - ly2 - label_h - note_h, TRUE);
+    int panel_h = (bottom - top) * 3 / 5, ly2 = top + panel_h + dy(6);
+    MOVE(ed.panel, left, top, avail_w, panel_h, TRUE);
+    MOVE(ed.preview_label, left, ly2, avail_w, label_h, TRUE);
+    MOVE(ed.preview_note, left, ly2 + label_h, avail_w, note_h, note_h > 0);
+    MOVE(ed.list, left, ly2 + label_h + note_h, avail_w, bottom - ly2 - label_h - note_h, TRUE);
+    SetRect(&divider, left, top + panel_h + dy(3), right, top + panel_h + dy(3) + line);
   }
 #undef MOVE
   if (dwp) EndDeferWindowPos(dwp);
+  if (!EqualRect(&card, &ed.card) || !EqualRect(&divider, &ed.divider)) {
+    ed.card = card;
+    ed.divider = divider;
+    extend_frame();
+    InvalidateRect(ed.dlg, NULL, FALSE);
+  }
   RECT lr2;
   GetClientRect(ed.list, &lr2);
   int list_w = lr2.right - (GetWindowLongW(ed.list, GWL_STYLE) & WS_VSCROLL ? 0 : GetSystemMetricsForDpi(SM_CXVSCROLL, ed.dpi));
@@ -1739,9 +1779,8 @@ static void update_path(void) {
       node *g = find(ed.stack[i]);
       if (!g) break;
       if (i) {
-        ed.seps[i - 1] = CreateWindowExW(0, WC_STATICW, mc_wstr(MC_STR_SMART_PATH_SEPARATOR),
-                                         WS_CHILD | SS_NOPREFIX | SS_CENTERIMAGE, 0, 0, 0, 0, ed.dlg, NULL,
-                                         GetModuleHandleW(NULL), NULL);
+        ed.seps[i - 1] = CreateWindowExW(0, WC_STATICW, mc_wstr(MC_STR_SMART_PATH_SEPARATOR), WS_CHILD | SS_OWNERDRAW,
+                                         0, 0, 0, 0, ed.dlg, NULL, GetModuleHandleW(NULL), NULL);
         SendMessageW(ed.seps[i - 1], WM_SETFONT, (WPARAM)ed.font, FALSE);
       }
       wchar_t *title = wstr_dup_from_utf8(group_title(g));
@@ -2307,16 +2346,60 @@ static void on_get_item(NMLVDISPINFOW *info) {
 
 /* --- Drawing --- */
 
-/* A group's or ready-made rule's button: its title, a line beneath (the group's sentence, or
- * that it's empty; the rule's sentence), and at the right a group's count, a warning sign if
- * something in it needs fixing, and an arrow. A crumb in the path: its name, linked but for
- * the last, which is the page shown. */
+/* Save and Cancel on the frame, as Windows 11 draws buttons over Mica: translucent, or in the
+ * accent colour for the one Enter presses. Back is a bare icon with a fill on hover, like the
+ * main window's playback buttons. */
+static void draw_frame_button(canvas *c, const RECT *rc, const DRAWITEMSTRUCT *dis, control_state state, int radius) {
+  HWND w = dis->hwndItem;
+  BOOL disabled = (dis->itemState & ODS_DISABLED) != 0;
+  BOOL primary = !disabled && (int)dis->CtlID == (ed.read_only ? IDCANCEL : IDOK);
+  COLORREF fg;
+  if (w == ed.back) {
+    fg = theme_draw_state(c, rc, radius, state);
+  } else if (theme.high_contrast) {
+    fg = theme_draw_state(c, rc, radius, primary ? STATE_SELECTED : state);
+    canvas_frame(c, rc, radius, 1, disabled ? theme.text3 : theme.text, 255);
+  } else if (primary) {
+    canvas_fill(c, rc, radius, theme.accent, state == STATE_PRESSED ? 204 : state == STATE_HOT ? 230 : 255);
+    fg = theme.on_accent;
+  } else {
+    /* Windows 11's control fills and stroke, as white or black at a low opacity. */
+    static const int fill[2][3] = {{179, 128, 77}, {15, 21, 8}}; /* light, dark: normal, hot, pressed */
+    int i = disabled || state == STATE_NORMAL ? 0 : state == STATE_HOT ? 1 : 2;
+    canvas_fill(c, rc, radius, RGB(255, 255, 255), disabled ? fill[theme.dark][2] : fill[theme.dark][i]);
+    canvas_frame(c, rc, radius, 1, theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), theme.dark ? 24 : 26);
+    fg = state == STATE_PRESSED ? theme.text2 : theme.text;
+  }
+  if (disabled) fg = theme.text3;
+  wchar_t title[64];
+  GetWindowTextW(w, title, 64);
+  UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE | (dis->itemState & ODS_NOACCEL ? DT_HIDEPREFIX : 0);
+  canvas_text(c, title, -1, rc, format, (HFONT)SendMessageW(w, WM_GETFONT, 0, 0), fg);
+}
+
+/* What's drawn here: on the frame, so with alpha, the path's crumbs and separators, the counts
+ * beside the buttons, and Back, Save and Cancel; on the card, a group's or ready-made rule's
+ * button: its title, a line beneath (the group's sentence, or that it's empty; the rule's
+ * sentence), and at the right a group's count, a warning sign if something in it needs fixing,
+ * and an arrow. A crumb in the path: its name, linked but for the last, which is the page
+ * shown. */
 static void draw_item(const DRAWITEMSTRUCT *dis) {
   RECT rc = {0, 0, dis->rcItem.right - dis->rcItem.left, dis->rcItem.bottom - dis->rcItem.top};
   canvas c = {0};
   if (!canvas_reserve(&c, rc.right, rc.bottom)) return;
-  canvas_clear(&c, &rc, theme.bg, 255);
   HWND w = dis->hwndItem;
+  BOOL on_frame = GetParent(w) == ed.dlg;
+  if (on_frame) canvas_clear(&c, &rc, theme.frame, ed.mica ? 0 : 255);
+  else canvas_clear(&c, &rc, theme.bg, 255);
+  wchar_t title[512];
+  GetWindowTextW(w, title, 512);
+  if (dis->CtlType == ODT_STATIC) {
+    canvas_text(&c, title, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+                (HFONT)SendMessageW(w, WM_GETFONT, 0, 0), theme.text2);
+    canvas_blit(&c, dis->hDC, dis->rcItem.left, dis->rcItem.top, &rc);
+    canvas_free(&c);
+    return;
+  }
   int crumb = -1;
   for (int i = 0; i < ed.ncrumbs; i++)
     if (w == ed.crumbs[i]) crumb = i;
@@ -2324,27 +2407,28 @@ static void draw_item(const DRAWITEMSTRUCT *dis) {
   BOOL pressed = (dis->itemState & ODS_SELECTED) != 0;
   control_state state = last ? STATE_NORMAL : pressed ? STATE_PRESSED : ed.hot == w ? STATE_HOT : STATE_NORMAL;
   int radius = MulDiv(4, (int)ed.dpi, USER_DEFAULT_SCREEN_DPI);
-  if (crumb < 0) canvas_fill(&c, &rc, radius, theme.field, 255);
-  theme_draw_state(&c, &rc, radius, state);
-  if (crumb < 0) canvas_frame(&c, &rc, radius, 1, theme.line, 255);
-
-  wchar_t title[512];
-  GetWindowTextW(w, title, 512);
-  SetBkMode(c.dc, TRANSPARENT);
-  HGDIOBJ old = SelectObject(c.dc, ed.font);
-  RECT text = rc;
-  InflateRect(&text, -dx(4), 0);
-  if (crumb >= 0) {
+  if (on_frame && crumb < 0) {
+    draw_frame_button(&c, &rc, dis, state, radius);
+  } else if (crumb >= 0) {
+    theme_draw_state(&c, &rc, radius, state);
+    RECT text = rc;
+    InflateRect(&text, -dx(4), 0);
     node *g = find(ed.stack[crumb]);
     if (g && g->bad) { /* the warning sign first */
       canvas_text(&c, L"\xE7BA", 1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, ed.icon_font,
                   error_color());
       text.left += dx(10);
     }
-    SelectObject(c.dc, last ? ed.bold_font : ed.font);
-    SetTextColor(c.dc, last ? theme.text : theme.high_contrast ? theme.text : theme.accent);
-    DrawTextW(c.dc, title, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+    canvas_text(&c, title, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+                last ? ed.bold_font : ed.font, last || theme.high_contrast ? theme.text : theme.accent);
   } else {
+    canvas_fill(&c, &rc, radius, theme.field, 255);
+    theme_draw_state(&c, &rc, radius, state);
+    canvas_frame(&c, &rc, radius, 1, theme.line, 255);
+    SetBkMode(c.dc, TRANSPARENT);
+    HGDIOBJ old = SelectObject(c.dc, ed.font);
+    RECT text = rc;
+    InflateRect(&text, -dx(4), 0);
     row *r = row_of_window(w);
     node *g = r ? find(r->id) : NULL;
     const char *sub = NULL;
@@ -2392,9 +2476,9 @@ static void draw_item(const DRAWITEMSTRUCT *dis) {
       free(s);
     }
     free(preset_sub);
+    SelectObject(c.dc, old);
+    canvas_opaque(&c, &rc);
   }
-  SelectObject(c.dc, old);
-  canvas_opaque(&c, &rc);
   if ((dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT)) {
     RECT focus = rc;
     InflateRect(&focus, -1, -1);
@@ -2408,11 +2492,8 @@ static void draw_item(const DRAWITEMSTRUCT *dis) {
 static HBRUSH ctlcolor(UINT msg, HDC dc, HWND ctl) {
   HBRUSH brush = theme_ctlcolor(msg, dc);
   if (msg != WM_CTLCOLORSTATIC) return brush;
-  if (ctl == ed.status || ctl == ed.placeholder || ctl == ed.preview_note || ctl == ed.problems_more)
-    SetTextColor(dc, theme.text2);
+  if (ctl == ed.placeholder || ctl == ed.preview_note || ctl == ed.problems_more) SetTextColor(dc, theme.text2);
   if (ctl == ed.problems_title) SetTextColor(dc, error_color());
-  for (int i = 0; i + 1 < ed.ncrumbs; i++)
-    if (ctl == ed.seps[i]) SetTextColor(dc, theme.text2);
   for (int i = 0; i < ed.nrows; i++) {
     row *r = &ed.rows[i];
     if (ctl == r->count) SetTextColor(dc, theme.text2);
@@ -2565,6 +2646,8 @@ static LRESULT CALLBACK filter_proc(int code, WPARAM wp, LPARAM lp) {
 
 static void apply_theme(void) {
   theme_apply_window(ed.dlg, FALSE);
+  ed.mica = theme_apply_backdrop(ed.dlg);
+  extend_frame();
   theme_apply_controls(ed.dlg);
   if (ed.panel) {
     SetWindowTheme(ed.panel, theme.dark ? L"DarkMode_Explorer" : NULL, NULL);
@@ -2608,11 +2691,18 @@ static void create_controls(void) {
                            GetModuleHandleW(NULL), NULL);
   SendMessageW(ed.tip, TTM_SETMAXTIPWIDTH, 0, dx(240));
 
-  ed.back = dlg_child(WC_BUTTONW, L"\xE72B", BS_PUSHBUTTON | WS_TABSTOP, 0); /* Back */
+  ed.back = dlg_child(WC_BUTTONW, L"\xE72B", BS_OWNERDRAW | WS_TABSTOP, 0); /* Back */
   SendMessageW(ed.back, WM_SETFONT, (WPARAM)ed.icon_font, FALSE);
   set_name(ed.back, mc_wstr(MC_STR_BACK));
   add_tip(ed.back);
   ShowWindow(ed.back, SW_HIDE);
+  /* These are owner-drawn, as Mica needs alpha, so they light up under the mouse as the crumbs
+   * do. An owner-drawn button can't be a DEFPUSHBUTTON, so the dialog is told which Enter
+   * presses. */
+  SetWindowSubclass(ed.back, child_proc, 0, 0);
+  SetWindowSubclass(GetDlgItem(ed.dlg, IDOK), child_proc, 0, 0);
+  SetWindowSubclass(GetDlgItem(ed.dlg, IDCANCEL), child_proc, 0, 0);
+  SendMessageW(ed.dlg, DM_SETDEFID, IDOK, 0);
 
   static BOOL registered;
   if (!registered) {
@@ -2626,9 +2716,7 @@ static void create_controls(void) {
   SendMessageW(ed.preview_label, WM_SETFONT, (WPARAM)ed.bold_font, FALSE);
   ed.preview_note = dlg_child(WC_STATICW, NULL, SS_NOPREFIX | SS_ENDELLIPSIS, 0);
   ed.list = dlg_child(WC_LISTVIEWW, NULL,
-                      LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | WS_BORDER |
-                        WS_TABSTOP,
-                      0);
+                      LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | WS_TABSTOP, 0);
   ListView_SetExtendedListViewStyle(ed.list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
   LVCOLUMNW col = {.mask = LVCF_TEXT | LVCF_WIDTH, .cx = 100};
   col.pszText = (wchar_t *)mc_wstr(ed.subject == MC_SMART_TRACKS ? MC_STR_TITLE : MC_STR_ALBUM);
@@ -2644,7 +2732,7 @@ static void create_controls(void) {
     ed.problem_show[i] = dlg_child(WC_BUTTONW, mc_wstr(MC_STR_SMART_PROBLEM_SHOW), BS_PUSHBUTTON | WS_TABSTOP, 0);
   }
   ed.problems_more = dlg_child(WC_STATICW, NULL, SS_NOPREFIX | SS_CENTERIMAGE, 0);
-  ed.status = dlg_child(WC_STATICW, NULL, SS_NOPREFIX | SS_CENTERIMAGE | SS_ENDELLIPSIS, 0);
+  ed.status = dlg_child(WC_STATICW, NULL, SS_OWNERDRAW, 0);
 
   /* Tab order: Back and the path, the page, the preview, the problems, then Save and Cancel. */
   HWND order[3 + 2 * PROBLEM_ROWS + 7];
@@ -2805,18 +2893,25 @@ static void on_dpi_changed(UINT dpi, const RECT *suggested) {
   RedrawWindow(ed.dlg, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
-/* The problems' frame. */
+/* The dialog's own surface, as the main window's is: the frame (transparent over Mica, otherwise
+ * the frame colour) and on it the card, with the line beside the preview and the problems'
+ * frame. */
 static void paint(HWND dlg) {
   PAINTSTRUCT ps;
   HDC dc = BeginPaint(dlg, &ps);
-  if (!IsRectEmpty(&ed.problems_box)) {
-    HPEN pen = CreatePen(PS_SOLID, max(1, MulDiv(1, (int)ed.dpi, USER_DEFAULT_SCREEN_DPI)), error_color());
-    HGDIOBJ old_pen = SelectObject(dc, pen), old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-    int r = MulDiv(8, (int)ed.dpi, USER_DEFAULT_SCREEN_DPI);
-    RoundRect(dc, ed.problems_box.left, ed.problems_box.top, ed.problems_box.right, ed.problems_box.bottom, r, r);
-    SelectObject(dc, old_brush);
-    SelectObject(dc, old_pen);
-    DeleteObject(pen);
+  RECT client;
+  GetClientRect(dlg, &client);
+  canvas *c = &ed.surface;
+  if (canvas_reserve(c, client.right, client.bottom)) {
+    int frame_alpha = ed.mica ? 0 : 255, radius = card_radius();
+    int line = max(1, MulDiv(1, (int)ed.dpi, USER_DEFAULT_SCREEN_DPI));
+    canvas_clear(c, &client, theme.frame, frame_alpha);
+    canvas_clear(c, &ed.card, theme.bg, 255);
+    canvas_frame(c, &ed.card, radius, line, theme.line, 255);
+    canvas_round_corners(c, &ed.card, radius, CORNER_ALL, theme.frame, frame_alpha);
+    canvas_clear(c, &ed.divider, theme.line, 255);
+    if (!IsRectEmpty(&ed.problems_box)) canvas_frame(c, &ed.problems_box, radius, line, error_color(), 255);
+    canvas_blit(c, dc, ps.rcPaint.left, ps.rcPaint.top, &ps.rcPaint);
   }
   EndPaint(dlg, &ps);
 }
@@ -2873,6 +2968,9 @@ static INT_PTR CALLBACK editor_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_REBUILD:
       build_page();
       return TRUE;
+    case WM_ERASEBKGND: /* paint() fills it all, with the alpha a brush wouldn't give */
+      SetWindowLongPtrW(dlg, DWLP_MSGRESULT, 1);
+      return TRUE;
     case WM_PAINT:
       paint(dlg);
       return TRUE;
@@ -2923,6 +3021,7 @@ static INT_PTR CALLBACK editor_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SETTINGCHANGE:
     case WM_SYSCOLORCHANGE:
     case WM_THEMECHANGED:
+    case WM_DWMCOLORIZATIONCOLORCHANGED: /* the accent colour, which Save is filled with */
       if (theme_is_change(msg, wp, lp)) {
         theme_update();
         apply_theme();
@@ -2948,6 +3047,7 @@ static INT_PTR CALLBACK editor_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       if (ed.bold_font && ed.bold_font != ed.font) DeleteObject(ed.bold_font);
       if (ed.own_font) DeleteObject(ed.own_font);
       ed.icon_font = ed.bold_font = ed.own_font = NULL;
+      canvas_free(&ed.surface);
       break;
     }
   }
