@@ -15,6 +15,7 @@ endfunction()
 
 kithsong_test(test_util)
 kithsong_test(test_library)
+kithsong_test(test_home_picks)
 kithsong_test(test_library_move)
 kithsong_test(test_smart)
 kithsong_test(test_search)

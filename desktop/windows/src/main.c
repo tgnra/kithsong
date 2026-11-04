@@ -21,7 +21,7 @@
  * played and the artists and album groups last opened, here or on another device (they sync
  * with the library); clicking one shows it on its page, and its right-click menu removes it
  * or clears them all. Home is rows of covers to scroll through (home_view.c, with what's in
- * them from home_picks.c). Artists lists the artists (artist_view.c); an artist's page is that view's
+ * them from core's home_picks.c). Artists lists the artists (artist_view.c); an artist's page is that view's
  * header, with the track list beneath showing the artist's tracks, and Back returns to the
  * list. Search,
  * Import and Settings replace the album grid and track list with the search page

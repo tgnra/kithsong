@@ -850,7 +850,16 @@
     "edit_col_tracks": { "text": "Tracks", "note": "Column of how many tracks a release has." },
     "edit_col_fit": { "text": "Fit", "note": "Column of how well a release fits the album's tracks, as a percentage." },
     "edit_fit_percent": { "text": "{0:d}%", "note": "How well a release fits the album's tracks." },
-    "edit_result_name": { "text": "{0}, {1}, {2}", "note": "A release's name for accessibility: its title, artist and the rest of its details." }
+    "edit_result_name": { "text": "{0}, {1}, {2}", "note": "A release's name for accessibility: its title, artist and the rest of its details." },
+    "home_row_radio": { "text": "Radio", "note": "Heading of the Home page's row of radio stations." },
+    "home_row_played_lately": { "text": "Played a lot recently", "note": "Heading of the Home page's row of albums and playlists on repeat lately." },
+    "home_row_not_played_lately": { "text": "Not played in a while", "note": "Heading of the Home page's row of albums and playlists played before, but not lately." },
+    "home_row_random": { "text": "Random", "note": "Heading of the Home page's row of albums and playlists picked at random." },
+    "home_station": { "text": "{0} Radio", "note": "A radio station on the Home page, named after an artist. {0} is the artist." },
+    "home_station_sub": { "text": "Station", "note": "Under a radio station's name on the Home page." },
+    "home_welcome_title": { "text": "Welcome to {0}", "note": "The Home page of a library with no music. {0} is the app's name." },
+    "home_welcome_text": { "text": "Import some music and this page fills up with your albums, your playlists and what you've been playing.", "note": "The Home page of a library with no music, above the Import button." },
+    "home_no_history": { "text": "As you play music, this page fills up with what you've been listening to.", "note": "At the foot of the Home page while nothing has been played yet." }
   },
 
   "linux": {
@@ -938,15 +947,6 @@
   },
 
   "windows": {
-    "home_row_radio": { "text": "Radio", "note": "Heading of the Home page's row of radio stations." },
-    "home_row_played_lately": { "text": "Played a lot recently", "note": "Heading of the Home page's row of albums and playlists on repeat lately." },
-    "home_row_not_played_lately": { "text": "Not played in a while", "note": "Heading of the Home page's row of albums and playlists played before, but not lately." },
-    "home_row_random": { "text": "Random", "note": "Heading of the Home page's row of albums and playlists picked at random." },
-    "home_station": { "text": "{0} Radio", "note": "A radio station on the Home page, named after an artist. {0} is the artist." },
-    "home_station_sub": { "text": "Station", "note": "Under a radio station's name on the Home page." },
-    "home_welcome_title": { "text": "Welcome to {0}", "note": "The Home page of a library with no music. {0} is the app's name." },
-    "home_welcome_text": { "text": "Import some music and this page fills up with your albums, your playlists and what you've been playing.", "note": "The Home page of a library with no music, above the Import button." },
-    "home_no_history": { "text": "As you play music, this page fills up with what you've been listening to.", "note": "At the foot of the Home page while nothing has been played yet." },
     "field_label": { "text": "{0}:", "note": "A label in front of a text box, e.g. \"Port:\"." },
     "shortcut_rename": { "text": "F2", "note": "Keyboard shortcut shown in a menu." },
     "shortcut_move_up": { "text": "Alt+Up", "note": "Keyboard shortcut shown in a menu." },
