@@ -364,11 +364,15 @@ open is stamped with, so the newest change by hlc is also the newest `opened_ms`
 no foreign key, since a row may name any of four tables; listing leaves out rows whose item
 is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
 `mc_library_remove_recent()` and `mc_library_clear_recents()`. With `MC_LIST_PLAYABLE`,
-listing also leaves out playlists and smart playlists with nothing to play on this device:
-no entry (or, for a smart one, no track its rule picks) has a `files` row here. A playlist
-with no entries at all is kept, since it's waiting for tracks rather than missing them. The
-playlist and smart list listings take the same flag; `files` being device-local is what
-makes the answer differ between devices.
+listing also leaves out playlists, album groups and smart lists that are empty only on this
+device, as selective sync leaves them: they have entries (or, for a smart one, its rule picks
+something), but none has a `files` row here. What's empty everywhere is kept, since it's
+waiting for tracks rather than missing them: a playlist or album group with no entries at
+all, and a smart list whose rule picks nothing in the whole library, except on a device with
+no `files` rows at all, so the example smart lists don't take the place of the empty pages. A
+rule that can't be evaluated is left out. The playlist, album group and smart list listings
+take the same flag; `files` being device-local is what makes the answer differ between
+devices. Wear OS shows only what's present, so it drops the empty ones as well.
 
 ## Tables
 

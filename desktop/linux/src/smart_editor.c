@@ -2193,7 +2193,7 @@ static gboolean editor_new(mc_library *lib, mc_smart_subject subject) {
     ed->nfields++;
   }
   if (mc_library_list_playlists(lib, 0, &ed->playlists) != MC_OK) ed->playlists = NULL;
-  if (mc_library_list_album_groups(lib, &ed->groups) != MC_OK) ed->groups = NULL;
+  if (mc_library_list_album_groups(lib, 0, &ed->groups) != MC_OK) ed->groups = NULL;
   ed->root = node_new(NULL, TRUE);
   return TRUE;
 }

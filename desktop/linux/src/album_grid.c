@@ -462,6 +462,7 @@ int album_grid_reload(GtkWidget *widget, mc_library *lib) {
   mc_album_list *list = NULL;
   if (lib && mc_library_list_albums(lib, &list) != MC_OK) list = NULL;
   guint n = list ? (guint)list->count : 0;
+  *hidden = list ? list->hidden : 0;
   AlbumItem **items = g_new0(AlbumItem *, n + 1);
   for (guint i = 0; i < n; i++) items[i] = album_item_new(&list->items[i]);
   mc_album_list_free(list);
@@ -606,16 +607,17 @@ int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *
   return (int)n;
 }
 
-int album_grid_reload_groups(GtkWidget *widget, mc_library *lib, const char *art_dir) {
+int album_grid_reload_groups(GtkWidget *widget, mc_library *lib, const char *art_dir, int *hidden) {
   char keep[MC_UID_STRLEN];
   grid_keep(widget, keep);
   grid *g = grid_of(widget);
   g->groups = TRUE;
   mc_album_group_list *list = NULL;
-  if (lib && mc_library_list_album_groups(lib, &list) != MC_OK) list = NULL;
+  if (lib && mc_library_list_album_groups(lib, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
   mc_smart_list *smart = NULL;
   if (lib && mc_library_list_smart(lib, MC_LIST_PLAYABLE, &smart) != MC_OK) smart = NULL;
   guint n = list ? (guint)list->count : 0;
+  *hidden = list ? list->hidden : 0;
   AlbumItem **items = g_new0(AlbumItem *, n + (smart ? (guint)smart->count : 0) + 1);
   for (guint i = 0; i < n; i++) {
     const char *known = g->art ? g_hash_table_lookup(g->art, list->items[i].uid) : NULL;
@@ -646,6 +648,7 @@ int album_grid_reload_group_albums(GtkWidget *widget, mc_library *lib, const cha
   if (st != MC_OK) list = NULL;
   *found = st != MC_ERR_NOT_FOUND;
   guint n = list ? (guint)list->count : 0;
+  *hidden = list ? list->hidden : 0;
   AlbumItem **items = g_new0(AlbumItem *, n + 1);
   for (guint i = 0; i < n; i++) items[i] = album_item_new(&list->items[i]);
   mc_album_list_free(list);

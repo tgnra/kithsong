@@ -127,7 +127,7 @@ static struct {
   wchar_t *group_name;           /* its name, as of the last reload */
   BOOL group_smart, group_random; /* it's a smart group, and in random order */
   wchar_t *group_rule;           /* a smart group's rule as a sentence, under its name; or NULL */
-  int hidden;                    /* playlists left out for having nothing to play here */
+  int hidden;                    /* playlists or album groups left out, empty only here */
   album_grid_sync sync_state;    /* whether the empty pages offer importing or the sync profile */
   BOOL first_run;                /* no library yet, while the first run asks where it goes */
   RECT action_rc;                /* the empty page's button, as last painted; empty if none */
@@ -519,6 +519,7 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
   else if (g.lib && g.view == AGV_GROUP) mc_library_list_album_group_albums(g.lib, g.group_uid, &list);
   else if (g.lib) mc_library_list_albums(g.lib, &list);
   *n = list ? list->count : 0;
+  g.hidden = list ? list->hidden : 0;
   *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
   *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL;
   if (*n && (!*tiles || !*dirs)) *n = 0;
@@ -535,7 +536,7 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
   mc_album_list_free(list);
 }
 
-/* Appends the smart lists of subject with something to play here to tiles and dirs (n of
+/* Appends the smart lists of subject that MC_LIST_PLAYABLE lists to tiles and dirs (n of
  * each), after the others. The loader finds their pictures by uid as the others' (see
  * mc_smart_art()), and "Smart playlist" or "Smart album group" goes beneath the name:
  * counting what they hold would evaluate each rule again. */
@@ -565,7 +566,7 @@ static void add_smart(mc_smart_subject subject, tile **tiles, wchar_t ***dirs, i
 }
 
 /* The playlists' tiles: the loader finds their pictures by uid, and the track count goes
- * beneath the name. Only those MC_LIST_PLAYABLE lists (with a track to play here, or empty);
+ * beneath the name. Only those MC_LIST_PLAYABLE lists (not those empty only here);
  * the rest are counted in g.hidden. Smart playlists follow. */
 static void read_playlists(tile **tiles, wchar_t ***dirs, int *n) {
   mc_playlist_list *list = NULL;
@@ -609,11 +610,12 @@ static void find_smart_group(void) {
 }
 
 /* The album groups' tiles, as the playlists' with the album count beneath the name, and the
- * smart groups after them. For AGV_GROUP, finds the shown group's name instead
- * (g.group_name), or leaves it NULL if the group has gone; *n is then 0. */
+ * smart groups after them; those left out are counted in g.hidden. For AGV_GROUP, finds the
+ * shown group's name instead (g.group_name), or leaves it NULL if the group has gone; *n is
+ * then 0. Every group is looked at for that, so a group that's open stays open. */
 static void read_groups(tile **tiles, wchar_t ***dirs, int *n) {
   mc_album_group_list *list = NULL;
-  if (g.lib) mc_library_list_album_groups(g.lib, &list);
+  if (g.lib) mc_library_list_album_groups(g.lib, g.view == AGV_GROUP ? 0 : MC_LIST_PLAYABLE, &list);
   *n = 0;
   *tiles = NULL;
   *dirs = NULL;
@@ -631,6 +633,7 @@ static void read_groups(tile **tiles, wchar_t ***dirs, int *n) {
     return;
   }
   *n = list ? list->count : 0;
+  g.hidden = list ? list->hidden : 0;
   *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
   *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL;
   if (*n && (!*tiles || !*dirs)) *n = 0;
@@ -1245,7 +1248,8 @@ void album_grid_new_playlist(void) {
 static empty_action action(void) {
   if (!g.lib || g.count) return ACTION_NONE;
   if (g.tiles_view == AGV_ALBUMS) return g.sync_state == AG_SYNC_GROUPED ? ACTION_SYNC : ACTION_IMPORT;
-  if (g.tiles_view == AGV_PLAYLISTS && g.hidden && g.sync_state == AG_SYNC_GROUPED) return ACTION_SYNC;
+  if ((g.tiles_view == AGV_PLAYLISTS || g.tiles_view == AGV_GROUPS) && g.hidden && g.sync_state == AG_SYNC_GROUPED)
+    return ACTION_SYNC;
   return ACTION_NONE;
 }
 
@@ -1792,6 +1796,7 @@ static void empty_text(wchar_t *buf, size_t n, const wchar_t *sep) {
   }
   if (playlists && g.hidden) title = MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE, text = MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT;
   else if (playlists) title = MC_STR_NO_PLAYLISTS_TITLE, text = MC_STR_NO_PLAYLISTS_TEXT;
+  else if (g.tiles_view == AGV_GROUPS && g.hidden) title = MC_STR_NO_PLAYABLE_ALBUM_GROUPS_TITLE, text = MC_STR_NO_PLAYABLE_ALBUM_GROUPS_TEXT;
   else if (g.tiles_view == AGV_GROUPS) title = MC_STR_NO_ALBUM_GROUPS_TITLE, text = MC_STR_NO_ALBUM_GROUPS_TEXT;
   else if (g.tiles_view == AGV_GROUP && g.group_smart) title = MC_STR_SMART_LIST_EMPTY_TITLE, text = MC_STR_SMART_LIST_EMPTY_TEXT;
   else if (g.tiles_view == AGV_GROUP) title = MC_STR_ALBUM_GROUP_EMPTY_TITLE, text = MC_STR_ALBUM_GROUP_EMPTY_TEXT;

@@ -74,17 +74,17 @@ import java.io.File
  * thread-safe, so every core call runs on one background thread ([core]); [library] is read
  * whole when this is created and again on [refresh], which is cheap enough to do after every
  * sync: one query for the albums, one for the tracks on this phone (for the artists), and
- * one per playlist and album group.
+ * one per smart list.
  *
  * Recents are the core's (mc_library_list_recents): what was last started playing, on any
  * device. Recents kept here before were in [prefs]; they're handed to the core once. They can
  * be taken out one by one or all at once ([RecentsEditor]).
  *
  * Sync brings the whole library's data, but only some of its files may be on this phone, so
- * only what has a file here is listed: albums with a folder here, tracks with a file,
- * artists with such an album or track, album groups with such an album, and playlists and
- * smart lists with at least one such track or album (the core's MC_LIST_PLAYABLE), or for a
- * playlist, none at all: an empty one is waiting for tracks.
+ * only what has a file here is listed: albums with a folder here, tracks with a file, and
+ * artists with such an album or track. Playlists, album groups and smart lists are listed
+ * unless they're empty only here (the core's MC_LIST_PLAYABLE): one with nothing in it at all
+ * is waiting for tracks.
  * The sync profile editor's choices ([profileChoices]) still list every playlist.
  * Albums and tracks with no artist get [unknownArtist], looked up on every read so that it
  * follows the app's language.
@@ -373,6 +373,8 @@ class CoreLibrarySource(
             changed(it, ItemKind.Playlist, playlistUid)
         }
 
+    override fun newPlaylist(name: String) = edit(EditFailure.PlaylistCreate, "make playlist $name") { it.createPlaylist(name) }
+
     override fun addToNewPlaylist(name: String, what: Addition) = edit(EditFailure.PlaylistCreate, "make playlist $name") {
         val uid = it.createPlaylist(name)
         it.appendToPlaylist(uid, trackUids(it, what))
@@ -415,6 +417,8 @@ class CoreLibrarySource(
             it.addToAlbumGroup(groupUid, albumUid)
             changed(it, ItemKind.AlbumGroup, groupUid)
         }
+
+    override fun newAlbumGroup(name: String) = edit(EditFailure.GroupCreate, "make album group $name") { it.createAlbumGroup(name) }
 
     override fun addToNewAlbumGroup(name: String, albumUid: String) = edit(EditFailure.GroupCreate, "make album group $name") {
         val uid = it.createAlbumGroup(name)
@@ -761,9 +765,8 @@ class CoreLibrarySource(
         }
 
         // Smart playlists sit among the others, and smart album groups among the manual ones.
-        // Only those with a track or album to play here (or empty playlists), which also keeps
-        // the rest out of Recents. Each shows the picture it last had until [lookUpArt] finds it
-        // again.
+        // Not those empty only here, which also keeps them out of Recents. Each shows the
+        // picture it last had until [lookUpArt] finds it again.
         val here = albums.associateBy { it.uid }
         val smart = lib.smartLists(playableOnly = true)
         val known = savedArt()
@@ -774,9 +777,8 @@ class CoreLibrarySource(
             val tracks = lib.smartTracks(info.uid).here()
             Playlist(info.uid, info.name, tracks.size, knownArt(info.uid, info.name))
         }
-        val albumGroups = lib.albumGroups().mapNotNull { info ->
-            val count = lib.albumGroupAlbums(info.uid).count { it.uid in here }
-            if (count == 0) null else AlbumGroup(info.uid, info.name, count, knownArt(info.uid, info.name))
+        val albumGroups = lib.albumGroups(playableOnly = true).map { info ->
+            AlbumGroup(info.uid, info.name, info.playableCount, knownArt(info.uid, info.name))
         } + smart.filter { it.isAlbums }.map { info ->
             val count = lib.smartAlbums(info.uid).count { it.uid in here }
             AlbumGroup(info.uid, info.name, count, knownArt(info.uid, info.name))

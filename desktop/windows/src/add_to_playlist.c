@@ -62,7 +62,7 @@ HMENU add_to_album_group_menu(mc_library *lib, UINT first_id, UINT new_id, mc_al
   *groups = NULL;
   HMENU menu = CreatePopupMenu();
   if (!menu) return NULL;
-  if (lib && mc_library_list_album_groups(lib, groups) == MC_OK && (*groups)->count) {
+  if (lib && mc_library_list_album_groups(lib, 0, groups) == MC_OK && (*groups)->count) {
     for (int i = 0; i < (*groups)->count; i++) {
       wchar_t *text = menu_text((*groups)->items[i].name);
       if (text) AppendMenuW(menu, MF_STRING, first_id + (UINT)i, text);

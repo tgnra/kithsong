@@ -360,22 +360,22 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListSmart(J
   return out;
 }
 
-/* A NamedInfo[] of n items, item i's uid, name and album count from get(items, i), or NULL
- * with an exception pending. */
+/* A NamedInfo[] of n items, item i's uid, name, album count and how many of those are here
+ * from get(items, i), or NULL with an exception pending. */
 static jobjectArray named_array(JNIEnv *env, const void *items, int n,
-                                void (*get)(const void *, int, const char **, const char **, int *)) {
+                                void (*get)(const void *, int, const char **, const char **, int *, int *)) {
   jclass info = (*env)->FindClass(env, "ng/kithso/core/NamedInfo");
   if (!info) return NULL;
-  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V");
+  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V");
   if (!ctor) return NULL;
   jobjectArray out = (*env)->NewObjectArray(env, n, info, NULL);
   for (int i = 0; out && i < n; i++) {
     const char *cuid, *cname;
-    int count;
-    get(items, i, &cuid, &cname, &count);
+    int count, playable;
+    get(items, i, &cuid, &cname, &count, &playable);
     jstring uid = new_string(env, cuid);
     jstring name = new_string(env, cname ? cname : "");
-    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)count);
+    jobject item = (*env)->NewObject(env, info, ctor, uid, name, (jint)count, (jint)playable);
     if (!item) {
       out = NULL;
       break;
@@ -389,11 +389,12 @@ static jobjectArray named_array(JNIEnv *env, const void *items, int n,
 }
 
 static void album_group_at(const void *items, int i, const char **uid, const char **name,
-                           int *count) {
+                           int *count, int *playable) {
   const mc_album_group_info *g = &((const mc_album_group_info *)items)[i];
   *uid = g->uid;
   *name = g->name;
   *count = g->album_count;
+  *playable = g->playable_count;
 }
 
 /* An ArtistInfo[] of list's artists, or NULL with an exception pending. Frees list, which may
@@ -460,10 +461,11 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListArtists
 
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativeListAlbumGroups(JNIEnv *env,
                                                                                     jclass cls,
-                                                                                    jlong handle) {
+                                                                                    jlong handle,
+                                                                                    jint flags) {
   (void)cls;
   mc_album_group_list *list = NULL;
-  mc_status st = mc_library_list_album_groups((mc_library *)(intptr_t)handle, &list);
+  mc_status st = mc_library_list_album_groups((mc_library *)(intptr_t)handle, (unsigned)flags, &list);
   if (st != MC_OK) {
     throw_status(env, st);
     return NULL;

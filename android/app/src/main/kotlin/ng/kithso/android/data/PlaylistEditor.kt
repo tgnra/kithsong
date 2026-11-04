@@ -35,8 +35,8 @@ enum class EditFailure {
  * Adding to, removing from or reordering a playlist or group puts it first in the recents, as
  * on the desktops; renaming doesn't.
  *
- * A playlist with nothing to play on this phone isn't listed (see [CoreLibrarySource]), so a
- * new one is only made with something added to it.
+ * A playlist that's empty only on this phone isn't listed, but one with nothing in it at all
+ * is (see [CoreLibrarySource]), so a new one can start empty.
  */
 interface PlaylistEditor {
     val edits: StateFlow<Int>
@@ -53,6 +53,9 @@ interface PlaylistEditor {
     /** Adds [what] to the end of playlist [playlistUid]. */
     fun addToPlaylist(playlistUid: String, what: Addition)
 
+    /** Makes an empty playlist called [name]. */
+    fun newPlaylist(name: String)
+
     /** Makes a playlist called [name] and adds [what] to it. */
     fun addToNewPlaylist(name: String, what: Addition)
 
@@ -68,8 +71,7 @@ interface PlaylistEditor {
     fun moveEntry(playlistUid: String, entryUid: String, afterEntryUid: String?)
 
     // Album groups, the playlists of albums, are edited likewise. An album is in a group at
-    // most once. As with playlists, a group with no album on this phone isn't listed, so a new
-    // one is only made with an album in it; smart groups can't be edited or added to.
+    // most once. Smart groups can't be edited or added to.
 
     /** Every manual album group by name, those with nothing here too; null on failure. */
     suspend fun albumGroupChoices(): List<PlaylistChoice>?
@@ -79,6 +81,9 @@ interface PlaylistEditor {
 
     /** Adds album [albumUid] to the end of album group [groupUid], unless it's in it already. */
     fun addToAlbumGroup(groupUid: String, albumUid: String)
+
+    /** Makes an empty album group called [name]. */
+    fun newAlbumGroup(name: String)
 
     /** Makes an album group called [name] and adds album [albumUid] to it. */
     fun addToNewAlbumGroup(name: String, albumUid: String)

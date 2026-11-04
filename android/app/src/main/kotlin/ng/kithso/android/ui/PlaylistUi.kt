@@ -34,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
@@ -88,7 +89,8 @@ import kotlinx.coroutines.launch
  *
  * With [smart], a smart playlist's or smart album group's menu has Edit rules…, Rename… and
  * Delete, as on Linux, and [newSmart] makes one: both open the rule editor
- * ([SmartEditorScreen]), which [smartEditing] says is open.
+ * ([SmartEditorScreen]), which [smartEditing] says is open. The main screen's + buttons
+ * ([newList]) ask whether to make a smart list or one that's filled by hand, which starts empty.
  */
 @Stable
 class PlaylistActions(
@@ -104,6 +106,11 @@ class PlaylistActions(
 
     /** What the smart list editor is open on, or null. */
     var smartEditing by mutableStateOf<SmartEditTarget?>(null)
+
+    /** The + on the Playlists heading, or on Album groups if [isAlbums]: asks which kind to make. */
+    fun newList(isAlbums: Boolean) {
+        if (editor != null) dialog = Dialog.NewList(isAlbums)
+    }
 
     /** New smart playlist…, or New smart album group… if [isAlbums]. */
     fun newSmart(isAlbums: Boolean) {
@@ -169,8 +176,11 @@ class PlaylistActions(
     }
 
     internal sealed interface Dialog {
-        data class NewPlaylist(val what: Addition) : Dialog
-        data class NewGroup(val albumUid: String) : Dialog
+        /** Which kind of playlist, or of album group if [isAlbums], to make. */
+        data class NewList(val isAlbums: Boolean) : Dialog
+        // Asking for the name of one starting with [what], or empty without it.
+        data class NewPlaylist(val what: Addition?) : Dialog
+        data class NewGroup(val albumUid: String?) : Dialog
         // A playlist's, or if [group] an album group's; a smart one's if [smart].
         data class Rename(val uid: String, val name: String, val group: Boolean = false, val smart: Boolean = false) : Dialog
         data class Delete(val uid: String, val name: String, val group: Boolean = false, val smart: Boolean = false) : Dialog
@@ -482,18 +492,33 @@ fun PlaylistSheets(
 
     when (val dialog = actions.dialog) {
         null -> Unit
+        is PlaylistActions.Dialog.NewList -> NewListDialog(
+            isAlbums = dialog.isAlbums,
+            onManual = {
+                actions.dialog = if (dialog.isAlbums) PlaylistActions.Dialog.NewGroup(null) else PlaylistActions.Dialog.NewPlaylist(null)
+            },
+            onSmart = if (actions.smart != null) ({
+                actions.dialog = null
+                actions.newSmart(dialog.isAlbums)
+            }) else null,
+            onDismiss = { actions.dialog = null },
+        )
         is PlaylistActions.Dialog.NewPlaylist -> NameDialog(
             title = stringResource(R.string.new_playlist),
             initial = "",
             confirm = stringResource(R.string.create),
-            onConfirm = { name -> editor?.addToNewPlaylist(name, dialog.what) },
+            onConfirm = { name ->
+                if (dialog.what != null) editor?.addToNewPlaylist(name, dialog.what) else editor?.newPlaylist(name)
+            },
             onDismiss = { actions.dialog = null },
         )
         is PlaylistActions.Dialog.NewGroup -> NameDialog(
             title = stringResource(R.string.new_album_group),
             initial = "",
             confirm = stringResource(R.string.create),
-            onConfirm = { name -> editor?.addToNewAlbumGroup(name, dialog.albumUid) },
+            onConfirm = { name ->
+                if (dialog.albumUid != null) editor?.addToNewAlbumGroup(name, dialog.albumUid) else editor?.newAlbumGroup(name)
+            },
             onDismiss = { actions.dialog = null },
         )
         is PlaylistActions.Dialog.Rename -> NameDialog(
@@ -800,6 +825,42 @@ private fun AddToSheet(
             }
         }
     }
+}
+
+/**
+ * What the + on the Playlists heading, or if [isAlbums] on Album groups, opens: a list you fill
+ * yourself ([onManual], which goes on to ask its name) or a smart one ([onSmart], the rule
+ * editor), if those can be made.
+ */
+@Composable
+private fun NewListDialog(isAlbums: Boolean, onManual: () -> Unit, onSmart: (() -> Unit)?, onDismiss: () -> Unit) {
+    @Composable
+    fun Choice(title: Int, text: Int, icon: ImageVector, onClick: () -> Unit) {
+        ListItem(
+            headlineContent = { Text(stringResource(title)) },
+            supportingContent = { Text(stringResource(text)) },
+            leadingContent = { Icon(icon, contentDescription = null) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.clickable(onClick = onClick),
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(if (isAlbums) R.string.new_album_group else R.string.new_playlist)) },
+        text = {
+            Column {
+                if (isAlbums) {
+                    Choice(R.string.album_group, R.string.new_list_album_group_text, Icons.Album, onManual)
+                    if (onSmart != null) Choice(R.string.smart_album_group, R.string.new_list_smart_group_text, Icons.AutoAwesome, onSmart)
+                } else {
+                    Choice(R.string.playlist, R.string.new_list_playlist_text, Icons.PlaylistAdd, onManual)
+                    if (onSmart != null) Choice(R.string.smart_playlist, R.string.new_list_smart_playlist_text, Icons.AutoAwesome, onSmart)
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 /** Asks for a playlist's or album group's name, starting from [initial] (selected), for [onConfirm]. */

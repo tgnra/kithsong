@@ -105,9 +105,9 @@ void mc_library_rollback(mc_library *lib);
 mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_list **out);
 mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_list **out);
 
-/* Whether saved smart list smart_uid holds something with a file here, into *out (see
- * MC_LIST_PLAYABLE). A rule that can't be evaluated holds nothing. In smartlist.c. */
-mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out);
+/* Whether MC_LIST_PLAYABLE keeps saved smart list smart_uid, into *out. A rule that can't be
+ * evaluated isn't kept. In smartlist.c. */
+mc_status mc_smart_listed_here(mc_library *lib, const char *smart_uid, int *out);
 
 /* Any one file of album alias a, which finds the album's folder; originals first. */
 #define MC_ALBUM_FILE(a)                                                             \

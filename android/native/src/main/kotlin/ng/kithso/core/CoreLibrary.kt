@@ -50,7 +50,7 @@ data class PlaylistInfo(val uid: String, val name: String, val trackCount: Int, 
 data class SmartInfo(val uid: String, val name: String, val isAlbums: Boolean, val rule: String, val isRandom: Boolean)
 
 /** mc_album_group_info: an album group, with its [albumCount] albums. */
-data class NamedInfo(val uid: String, val name: String, val albumCount: Int)
+data class NamedInfo(val uid: String, val name: String, val albumCount: Int, val playableCount: Int = albumCount)
 
 /**
  * mc_artist_info. From mc_library_list_artists_here(), [albumCount] is the artist's albums
@@ -114,11 +114,12 @@ class CoreLibrary(dir: String) : AutoCloseable {
     fun artistsHere(): List<ArtistInfo> = nativeListArtistsHere(handle).asList()
 
     /** Every manual album group, by name. */
-    fun albumGroups(): List<NamedInfo> = nativeListAlbumGroups(handle).asList()
+    fun albumGroups(playableOnly: Boolean = false): List<NamedInfo> =
+        nativeListAlbumGroups(handle, if (playableOnly) LIST_PLAYABLE else 0).asList()
 
     /**
-     * Every smart list of either kind, by name; if [playableOnly], only those holding something
-     * with a file on this device (MC_LIST_PLAYABLE).
+     * Every smart list of either kind, by name; if [playableOnly], without those whose picks
+     * have no file on this device (MC_LIST_PLAYABLE; one that picks nothing at all is kept).
      */
     fun smartLists(playableOnly: Boolean = false): List<SmartInfo> =
         nativeListSmart(handle, if (playableOnly) LIST_PLAYABLE else 0).asList()
@@ -164,7 +165,7 @@ class CoreLibrary(dir: String) : AutoCloseable {
         @JvmStatic external fun nativePlaylistArtPrune(handle: Long, cacheDir: String)
         @JvmStatic external fun nativeListArtists(handle: Long): Array<ArtistInfo>
         @JvmStatic external fun nativeListArtistsHere(handle: Long): Array<ArtistInfo>
-        @JvmStatic external fun nativeListAlbumGroups(handle: Long): Array<NamedInfo>
+        @JvmStatic external fun nativeListAlbumGroups(handle: Long, flags: Int): Array<NamedInfo>
         @JvmStatic external fun nativeListSmart(handle: Long, flags: Int): Array<SmartInfo>
         @JvmStatic external fun nativePreviewSmartAlbums(handle: Long, rule: String): Array<AlbumInfo>
         @JvmStatic external fun nativeRecordPlay(handle: Long, trackUid: String)

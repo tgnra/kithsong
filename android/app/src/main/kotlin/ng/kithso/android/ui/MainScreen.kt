@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.add
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
@@ -150,24 +151,23 @@ private sealed interface MainItem {
 }
 
 // Null while the library is being read: just the header, rather than a flash of the empty state.
-// With [smart] lists to make, Playlists and Album groups show even when empty, for their + buttons.
-private fun mainItems(library: Library?, columns: Int, banner: Boolean, smart: Boolean): List<MainItem> = buildList {
+// With lists to make ([canMake]), Playlists and Album groups show even when empty, for their +
+// buttons; with no music, only for what's already there.
+private fun mainItems(library: Library?, columns: Int, banner: Boolean, canMake: Boolean): List<MainItem> = buildList {
     add(MainItem.Header)
     if (banner) add(MainItem.Banner)
     if (library == null) return@buildList
-    if (library.isEmpty) {
-        add(MainItem.Empty)
-        return@buildList
-    }
+    if (library.isEmpty) add(MainItem.Empty)
+    val headings = canMake && !library.isEmpty
     if (library.recents.isNotEmpty()) {
         add(MainItem.Heading(Section.Recents))
         library.recents.mapTo(this, MainItem::RecentItem)
     }
-    if (library.playlists.isNotEmpty() || smart) {
+    if (library.playlists.isNotEmpty() || headings) {
         add(MainItem.Heading(Section.Playlists))
         library.playlists.mapTo(this, MainItem::PlaylistItem)
     }
-    if (library.albumGroups.isNotEmpty() || smart) {
+    if (library.albumGroups.isNotEmpty() || headings) {
         add(MainItem.Heading(Section.AlbumGroups))
         library.albumGroups.mapTo(this, MainItem::AlbumGroupItem)
     }
@@ -230,14 +230,20 @@ private data class SectionStart(val section: Section, val index: Int)
 private val Gutter = BrowseGutter
 private val ListArtSize = 56.dp
 
+/** The header's height under the status bar. */
+private val HeaderHeight = 64.dp
+
+/** An album tile's title and artist, under its cover and with the space below the row. */
+private val AlbumLabelsHeight = 58.dp
+
 /**
  * The main screen: one lazy list of a header and the library's sections, over a background
  * coloured from the art on screen. [bottomPadding] keeps the last items clear of the mini
  * player and navigation bar. [banner], if any, goes under the header: how an import is going.
  * The header's import button and the empty library's open [importPickers], unless an import
  * is [importRunning]. [onSearch] is the header's search button, and pulling the list down
- * from its top (see [pullToSearch]). With [onNewSmart], the Playlists and Album groups headings
- * have a + for a new smart playlist or (with true) smart album group.
+ * from its top (see [pullToSearch]). With [onNewList], the Playlists and Album groups headings
+ * have a + for a new playlist or (with true) album group.
  */
 @Composable
 fun MainScreen(
@@ -260,7 +266,7 @@ fun MainScreen(
     onAlbumMenu: (Album) -> Unit = {},
     onArtistMenu: (Artist) -> Unit = {},
     onAlbumGroupMenu: (AlbumGroup) -> Unit = {},
-    onNewSmart: ((isAlbums: Boolean) -> Unit)? = null,
+    onNewList: ((isAlbums: Boolean) -> Unit)? = null,
     // A red dot on the sync button: deletes wait in the recycle bin while a member is online.
     syncDot: Boolean = false,
 ) {
@@ -275,8 +281,8 @@ fun MainScreen(
         val statusBarPx = WindowInsets.statusBars.getTop(density)
 
         val hasBanner = banner != null
-        val smart = onNewSmart != null
-        val items = remember(library, columns, hasBanner, smart) { mainItems(library, columns, hasBanner, smart) }
+        val canMake = onNewList != null
+        val items = remember(library, columns, hasBanner, canMake) { mainItems(library, columns, hasBanner, canMake) }
         val sections = remember(items) {
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
@@ -322,7 +328,7 @@ fun MainScreen(
                         sections,
                         { current },
                         jumpTo,
-                        onNew = onNewSmart?.let { new ->
+                        onNew = onNewList?.let { new ->
                             when (item.section) {
                                 Section.Playlists -> ({ new(false) })
                                 Section.AlbumGroups -> ({ new(true) })
@@ -366,13 +372,16 @@ fun MainScreen(
             listState,
             scrollEntries,
             scrollOffset = -statusBarPx,
-            // Albums come a grid row at a time, so few places, and the artists' letters would
-            // otherwise take most of the strip.
+            // The artists' letters would otherwise take most of the strip.
             minShares = mapOf(titles.getValue(Section.Albums) to ALBUMS_MIN_SHARE),
+            kindOf = { index -> items.getOrNull(index)?.contentType },
+            // Known before the list reaches the albums, from the width of their tiles.
+            estimate = { kind -> if (kind == "albums") cellPx + with(density) { AlbumLabelsHeight.roundToPx() } else null },
+            // Below the header, whose buttons it would otherwise be in the way of.
             modifier = Modifier
                 .matchParentSize()
                 .windowInsetsPadding(sides)
-                .padding(top = with(density) { statusBarPx.toDp() } + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
+                .padding(top = with(density) { statusBarPx.toDp() } + HeaderHeight + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
         )
         PullToSearchIndicator(
             pull,
@@ -395,7 +404,8 @@ private fun Header(
         Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(start = Gutter, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            .height(HeaderHeight)
+            .padding(start = Gutter, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // The tile's own margin lines it up with the gutter's content, as the title text did.
@@ -421,7 +431,8 @@ private fun Header(
  * A section's heading, a tap target across the whole row. Tapping it opens a list of every
  * section, and picking one scrolls there; [current] is the section at the top of the screen,
  * marked in the list. TalkBack gets the tap, and a jump to each other section as a custom action.
- * With [onNew], a + at the end makes a new smart playlist or smart album group.
+ * With [onNew], a + at the end, clear of the fast scroll strip, makes a new playlist or album
+ * group.
  */
 @Composable
 private fun SectionHeading(
@@ -456,12 +467,12 @@ private fun SectionHeading(
         if (onNew != null) {
             IconButton(
                 onClick = onNew,
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp),
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = FastScrollInset),
             ) {
                 Icon(
                     Icons.Add,
                     contentDescription = stringResource(
-                        if (section == Section.AlbumGroups) R.string.smart_new_group_menu else R.string.smart_new_playlist_menu,
+                        if (section == Section.AlbumGroups) R.string.new_album_group_menu else R.string.new_playlist_menu,
                     ),
                 )
             }

@@ -67,12 +67,16 @@ internal class BrowseTree(private val context: Context, private val source: () -
             )
             .build()
 
+    // A car has nothing to do with an empty list: it can't be played or added to there.
+    private val Library.filledPlaylists get() = playlists.filter { it.trackCount > 0 }
+    private val Library.filledGroups get() = albumGroups.filter { it.albumCount > 0 }
+
     /** Each tab's id and how many children it has in [library], to say they've changed. */
     fun tabSizes(library: Library): Map<String, Int> = mapOf(
         HOME to library.recents.size,
-        PLAYLISTS to library.playlists.size,
+        PLAYLISTS to library.filledPlaylists.size,
         ALBUMS to library.albums.size,
-        GROUPS to library.albumGroups.size,
+        GROUPS to library.filledGroups.size,
     )
 
     /** The children of [parentId], or null if there's no such item or it isn't browsable. */
@@ -80,9 +84,9 @@ internal class BrowseTree(private val context: Context, private val source: () -
         when (parentId) {
             ROOT -> return TABS.map(::tab)
             HOME -> return library().recents.map { it.toBrowseItem() }
-            PLAYLISTS -> return library().playlists.map { it.toBrowseItem() }
+            PLAYLISTS -> return library().filledPlaylists.map { it.toBrowseItem() }
             ALBUMS -> return library().albums.map { it.toBrowseItem() }
-            GROUPS -> return library().albumGroups.map { it.toBrowseItem() }
+            GROUPS -> return library().filledGroups.map { it.toBrowseItem() }
         }
         val ref = parseRef(parentId) ?: return null
         val list = source().trackList(ref) ?: return null

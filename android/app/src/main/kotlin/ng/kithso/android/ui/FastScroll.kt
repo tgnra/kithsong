@@ -30,11 +30,13 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,12 +55,14 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.Normalizer
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -70,8 +74,8 @@ import kotlin.math.roundToInt
  * A place in the list the strip can jump to: list item [index], shown as [label] (a letter,
  * or a heading's title). [section] is the heading a letter is under, if the list has them,
  * for the bubble; a [heading] is drawn as a mark in the strip, with its title in the bubble.
- * [through] is the last letter of a run the strip groups into this one place (see
- * [groupEntries]).
+ * [through] is the last letter of a run the strip groups into this one place, and a [tick] is
+ * a place [groupEntries] added a screen further on, still under the same letter or heading.
  */
 @Immutable
 data class FastScrollEntry(
@@ -80,31 +84,58 @@ data class FastScrollEntry(
     val section: String? = null,
     val heading: Boolean = false,
     val through: String? = null,
+    val tick: Boolean = false,
 )
 
 /**
- * [entries] grouped so each place in the strip is about a screen of the list, [perScreen]
- * items: a run of letters closer together than that is one place, at the first, through the
- * last. A heading always starts a place, taking the letters just under it; a letter in another
+ * Where each of [count] items starts down the list, in pixels, from their [heights], and after
+ * them where the list ends.
+ */
+internal fun itemOffsets(count: Int, heights: (Int) -> Int): IntArray {
+    val offsets = IntArray(count + 1)
+    for (i in 0 until count) offsets[i + 1] = offsets[i] + heights(i)
+    return offsets
+}
+
+/**
+ * [entries] made into places in the strip about [step] pixels of the list apart, by the items'
+ * [offsets] (see [itemOffsets]). A run of letters closer together than that is one place, at
+ * the first, through the last. Where the next entry is further away, as under a letter with a
+ * lot of albums or a heading with no letters, a [FastScrollEntry.tick] goes in every [step] on
+ * until it's less than half a step away. A heading always starts a place; a letter in another
  * section never joins one before it.
  */
-internal fun groupEntries(entries: List<FastScrollEntry>, perScreen: Int): List<FastScrollEntry> {
+internal fun groupEntries(entries: List<FastScrollEntry>, offsets: IntArray, step: Int): List<FastScrollEntry> {
     val groups = ArrayList<FastScrollEntry>()
     var start: FastScrollEntry? = null
     var last: FastScrollEntry? = null
-    fun close() {
+    fun top(entry: FastScrollEntry) = offsets[entry.index.coerceIn(0, offsets.lastIndex)]
+    // Ends the place being made, and adds the ticks after it, up to [until] down the list.
+    fun close(until: Int) {
         val first = start ?: return
-        groups += if (!first.heading && last !== first) first.copy(through = last!!.label) else first
+        val end = last!!
+        groups += if (!first.heading && end !== first && end.label != first.label) first.copy(through = end.label) else first
+        var index = end.index
+        var at = top(first) + step
+        while (true) {
+            // The first item at or after [at], which is where a jump can land.
+            val found = offsets.binarySearch(at, fromIndex = index + 1)
+            index = if (found >= 0) found else -found - 1
+            if (index >= offsets.lastIndex || until - offsets[index] < step / 2) break
+            groups += end.copy(index = index, through = null, tick = true)
+            at = offsets[index] + step
+        }
     }
     for (entry in entries) {
         val first = start
-        if (first == null || entry.heading || entry.section != first.section || entry.index - first.index >= perScreen) {
-            close()
+        if (first == null || entry.heading || entry.section != first.section || top(entry) - top(first) >= step) {
+            close(top(entry))
             start = entry
         }
         last = entry
     }
-    close()
+    // A jump to the last screen's worth of the list lands in the same place: the end.
+    close(offsets.last() - step / 2)
     return groups
 }
 
@@ -162,21 +193,28 @@ internal enum class Mark { Label, Dot, None }
 
 /**
  * What the strip draws for each entry, given where it [starts] down the strip and the share
- * of it it [spans], as fractions of its height; [minSlot] is [MinSlotHeight] as one. A mark is
- * drawn only [minSlot] or more below the last; where the entries are closer together than that,
- * every other one drawn is a dot, though a heading keeps its mark.
+ * of it it [spans], as fractions of its height; [minSlot] is [MinSlotHeight] as one and
+ * [minTick] [MinTickHeight]. A tick is a dot. So is a letter less than [minSlot] below the last
+ * letter, though a heading keeps its mark. Nothing is drawn less than [minTick] below the last
+ * mark.
  */
-internal fun stripMarks(entries: List<FastScrollEntry>, starts: FloatArray, spans: FloatArray, minSlot: Float): Array<Mark> {
+internal fun stripMarks(
+    entries: List<FastScrollEntry>,
+    starts: FloatArray,
+    spans: FloatArray,
+    minSlot: Float,
+    minTick: Float,
+): Array<Mark> {
     var last = Float.NEGATIVE_INFINITY
-    var dotNext = false
+    var lastLabel = Float.NEGATIVE_INFINITY
     return Array(entries.size) { i ->
+        val entry = entries[i]
         val centre = starts[i] + spans[i] / 2
-        if (centre - last < minSlot) return@Array Mark.None
-        val crowded = spans[i] < minSlot
-        val mark = if (crowded && dotNext && !entries[i].heading) Mark.Dot else Mark.Label
-        dotNext = crowded && mark == Mark.Label
+        if (centre - last < minTick) return@Array Mark.None
         last = centre
-        mark
+        if (entry.tick || !entry.heading && centre - lastLabel < minSlot) return@Array Mark.Dot
+        lastLabel = centre
+        Mark.Label
     }
 }
 
@@ -224,9 +262,18 @@ private const val MIN_SCREENS = 3
 
 private val StripWidth = 28.dp
 private val MinSlotHeight = 14.dp
+
+/** How close together the strip's places can be: fewer than a screen each beyond this. */
+private val MinTickHeight = 8.dp
 private val BubbleHeight = 64.dp
 
-/** A typical list row's height, for how many items make a screen. */
+/** What the strip's parents leave between it and the screen's edge. */
+private val StripMargin = 2.dp
+
+/** How far a button at the end of a row stays from the edge, to be clear of the strip. */
+internal val FastScrollInset = StripWidth + StripMargin + 4.dp
+
+/** A list row's height until one of its kind has been on screen. */
 private val NominalRowHeight = 64.dp
 
 /** How much of the screen's height the strip takes, if there's room. */
@@ -235,14 +282,22 @@ private const val STRIP_SCREEN_FRACTION = 0.8f
 /** How long the strip stays after the list stops scrolling or it's let go. */
 private const val HIDE_AFTER_MS = 1500L
 
+/** The strip's height in an area [maxHeight] tall, on a screen [screenHeight] tall. */
+private fun stripHeight(maxHeight: Dp, screenHeight: Dp): Dp = min(maxHeight.value, (screenHeight * STRIP_SCREEN_FRACTION).value).dp
+
 /**
  * The strip for [state]'s list, over the list's right edge: [modifier] places it (the parent
- * box's size, inside the bars and mini player). Jumping puts the entry's item at the top,
- * [scrollOffset] pixels in (negative to land below a status bar the list scrolls under).
- * [entries] are grouped about a screen to a place (see [groupEntries]), a screen being the
- * list's height in [NominalRowHeight] rows, so the places don't change as it scrolls. There's
- * none while the list is under [MIN_SCREENS] screens long, or has fewer than two places.
- * [minShares] holds sections (by title) to a share of the strip at least (see [placeShares]).
+ * box's size, inside the bars and mini player, and below a header with buttons in it). Jumping
+ * puts the entry's item at the top, [scrollOffset] pixels in (negative to land below a status
+ * bar the list scrolls under).
+ *
+ * There's a place about every screen of the list, or further apart where the strip hasn't room
+ * for that at [MinTickHeight] (see [groupEntries]). Screens are measured in pixels: the list's
+ * height against its rows' real heights. [kindOf] says which of its content types item i is,
+ * and each kind is as tall as the first of it on screen, or until then [estimate]'s pixels if
+ * it knows, so the places stay the same wherever the list is. There's no strip while the list
+ * is under [MIN_SCREENS] screens long, or has fewer than two places. [minShares] holds
+ * sections (by title) to a share of the strip at least (see [placeShares]).
  */
 @Composable
 fun FastScroller(
@@ -251,37 +306,64 @@ fun FastScroller(
     modifier: Modifier = Modifier,
     scrollOffset: Int = 0,
     minShares: Map<String, Float> = emptyMap(),
+    kindOf: (Int) -> Any? = { null },
+    estimate: (Any?) -> Int? = { null },
 ) {
-    // A screen's worth of items, from the list's height and a typical row's rather than the
-    // rows on screen, so the places stay the same wherever the list is.
-    val rowPx = with(LocalDensity.current) { NominalRowHeight.toPx() }
-    val perScreen by remember(state, rowPx) {
-        derivedStateOf { (state.layoutInfo.viewportSize.height / rowPx).toInt().coerceAtLeast(1) }
+    val density = LocalDensity.current
+    val rowPx = with(density) { NominalRowHeight.roundToPx() }
+    val heights = remember(state) { mutableStateMapOf<Any, Int>() }
+    LaunchedEffect(state) {
+        snapshotFlow { state.layoutInfo.visibleItemsInfo }.collect { items ->
+            for (item in items) {
+                val kind = item.contentType ?: NoKind
+                if (kind !in heights) heights[kind] = item.size
+            }
+        }
     }
-    val long by remember(state) {
-        derivedStateOf { state.layoutInfo.totalItemsCount > perScreen * MIN_SCREENS }
+    val count by remember(state) { derivedStateOf { state.layoutInfo.totalItemsCount } }
+    val screen by remember(state) {
+        derivedStateOf {
+            val info = state.layoutInfo
+            info.viewportSize.height - info.beforeContentPadding - info.afterContentPadding
+        }
     }
-    val places = remember(entries, perScreen) { groupEntries(entries, perScreen) }
-    val shares = remember(places, minShares) { placeShares(places, minShares) }
-    if (!long || places.size < 2) return
-    val scope = rememberCoroutineScope()
-    FastScroller(
-        places,
-        current = { state.firstVisibleItemIndex },
-        onJump = { index -> scope.launch { state.scrollToItem(index, scrollOffset) } },
-        scrolling = state.isScrollInProgress,
-        modifier = modifier,
-        shares = shares,
-    )
+    if (screen <= 0 || entries.isEmpty()) return
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    BoxWithConstraints(modifier) {
+        val fits = with(density) { (stripHeight(maxHeight, screenHeight) / MinTickHeight).toInt() }.coerceAtLeast(1)
+        val known = heights.toMap()
+        val offsets = remember(entries, count, known, rowPx) {
+            itemOffsets(count) { i ->
+                val kind = kindOf(i)
+                known[kind ?: NoKind] ?: estimate(kind) ?: rowPx
+            }
+        }
+        val total = offsets.last()
+        val places = remember(entries, offsets, screen, fits) { groupEntries(entries, offsets, max(screen, total / fits)) }
+        val shares = remember(places, minShares) { placeShares(places, minShares) }
+        if (total <= screen * MIN_SCREENS || places.size < 2) return@BoxWithConstraints
+        val scope = rememberCoroutineScope()
+        FastScroller(
+            places,
+            current = { state.firstVisibleItemIndex },
+            onJump = { index -> scope.launch { state.scrollToItem(index, scrollOffset) } },
+            scrolling = state.isScrollInProgress,
+            modifier = Modifier.matchParentSize(),
+            shares = shares,
+        )
+    }
 }
+
+/** A list item's kind in [FastScroller] when it has no content type. */
+private object NoKind
 
 /**
  * The strip for any list: [entries] in list order, [current] the first item on screen, and
  * [onJump] scrolls to an item. The strip is centred down the right edge of [modifier]'s
  * area, [STRIP_SCREEN_FRACTION] of the screen tall or as fits. Each entry takes its [shares] of
  * its height (fractions adding up to 1, see [placeShares]), or all the same; where they're too
- * close together for every label, every other mark is a dot or some go unmarked ([stripMarks]),
- * and dragging still goes through every entry. It fades in while
+ * close together for every label, some marks are dots or go unmarked ([stripMarks]), and
+ * dragging still goes through every entry. It fades in while
  * the list is [scrolling] and out [HIDE_AFTER_MS] after, and while hidden doesn't take
  * touches, which go to the list. Touching it jumps to the entry under the finger and follows
  * it, with a haptic tick at each new one. For accessibility it's an adjustable control, an
@@ -339,9 +421,10 @@ fun FastScroller(
 
     BoxWithConstraints(modifier) {
         val count = entries.size
-        val stripHeight = min(maxHeight.value, (screenHeight * STRIP_SCREEN_FRACTION).value).dp
+        val stripHeight = stripHeight(maxHeight, screenHeight)
         val minSlot = MinSlotHeight / stripHeight
-        val marks = remember(entries, starts, spans, minSlot) { stripMarks(entries, starts, spans, minSlot) }
+        val minTick = MinTickHeight / stripHeight
+        val marks = remember(entries, starts, spans, minSlot, minTick) { stripMarks(entries, starts, spans, minSlot, minTick) }
         val stripTop = (maxHeight - stripHeight) / 2
 
         Column(

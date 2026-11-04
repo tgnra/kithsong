@@ -59,6 +59,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -301,6 +302,9 @@ fun DetailScreen(
                     return@LazyColumn
                 }
                 if (group) {
+                    if (list != null && albums.isEmpty()) item(key = "empty", contentType = "empty") {
+                        EmptyListNote(smart, group = true)
+                    }
                     items(albums.chunked(columns), key = { "albums:${it.first().uid}" }, contentType = { "albums" }) { row ->
                         AlbumGridRow(row, columns, onOpen, albumMenu)
                     }
@@ -330,6 +334,9 @@ fun DetailScreen(
                     if ((albums.isNotEmpty() || singles.isNotEmpty()) && tracks.isNotEmpty()) {
                         item(key = "tracks", contentType = "heading") { BrowseHeading(stringResource(R.string.tracks_title)) }
                     }
+                }
+                if (list != null && tracks.isEmpty() && (ref.kind == CollectionRef.Kind.Playlist)) item(key = "empty", contentType = "empty") {
+                    EmptyListNote(smart, group = false)
                 }
                 // A playlist can hold a track twice, so the uid alone isn't a unique key. Its
                 // entries are, and keep a dragged track's key as it moves.
@@ -369,12 +376,54 @@ fun DetailScreen(
                 listState,
                 scrollEntries,
                 scrollOffset = -statusBarPx,
+                kindOf = { index ->
+                    artistItemKind(
+                        index,
+                        actions = !isEditing && (tracks.isNotEmpty() || list?.canReshuffle == true),
+                        albums = albums.isNotEmpty(),
+                        singles = list?.singles?.size ?: 0,
+                    )
+                },
+                // Below the row with the back button and the menu.
                 modifier = Modifier
                     .matchParentSize()
                     .windowInsetsPadding(sides)
-                    .padding(top = with(density) { statusBarPx.toDp() } + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
+                    .padding(top = with(density) { statusBarPx.toDp() } + DetailBarHeight + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
             )
         }
+    }
+}
+
+/** On the page of a playlist, or an album group if [group], with nothing in it: how to fill it. */
+@Composable
+private fun EmptyListNote(smart: Boolean, group: Boolean) {
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            stringResource(
+                when {
+                    smart -> R.string.smart_list_empty_title
+                    group -> R.string.album_group_empty_title
+                    else -> R.string.playlist_empty_title
+                },
+            ),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            stringResource(
+                when {
+                    smart -> R.string.smart_list_empty_text
+                    group -> R.string.album_group_empty_text_android
+                    else -> R.string.playlist_empty_text
+                },
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp),
+        )
     }
 }
 
@@ -407,6 +456,26 @@ private fun artistScrollEntries(
         letterEntries(this, tracks.map { it.title }, other, tracksTitle.takeIf { headed }) { start + it }
     }
 }
+
+/**
+ * The content type of item [index] of an artist's page, laid out as [artistScrollEntries] says,
+ * for the fast scroll strip to tell how long the page is.
+ */
+private fun artistItemKind(index: Int, actions: Boolean, albums: Boolean, singles: Int): String {
+    var i = index
+    if (i-- == 0) return "header"
+    if (actions && i-- == 0) return "actions"
+    if (albums && i-- == 0) return "albums"
+    if (singles > 0) {
+        if (i-- == 0) return "heading"
+        if (i < singles) return "track"
+        i -= singles
+    }
+    return if (i == 0 && (albums || singles > 0)) "heading" else "track"
+}
+
+/** The height of the row with the page's back button and menu, under the status bar. */
+private val DetailBarHeight = 56.dp
 
 /** How many tracks an artist's page has before the fast scroll strip has their letters. */
 private const val TRACK_LETTERS_FROM = 12

@@ -198,7 +198,7 @@ fun App(
                 onAlbumMenu = { actions.albumMenu(it) },
                 onArtistMenu = actions::artistMenu,
                 onAlbumGroupMenu = actions::albumGroupMenu,
-                onNewSmart = if (actions.smart != null) actions::newSmart else null,
+                onNewList = if (actions.editor != null) actions::newList else null,
                 syncDot = binDot,
                 inGroup = inGroup,
                 // This phone's page, over Sync, as Choose what to sync after pairing opens it.
