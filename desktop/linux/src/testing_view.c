@@ -36,7 +36,7 @@ static void update(testing *t) {
   gtk_widget_set_sensitive(t->del, !stress && !busy && mc_stress_count(t->a->settings_dir) > 0);
   if (!g_work.job) {
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(t->generate), mc_str(MC_STR_STRESS_GENERATE));
-    if (!g_work.deleting) adw_action_row_set_subtitle(ADW_ACTION_ROW(t->generate), "");
+    if (!g_work.deleting) adw_action_row_set_subtitle(ADW_ACTION_ROW(t->generate), mc_str(MC_STR_STRESS_TEXT));
   }
 }
 
@@ -297,7 +297,6 @@ GtkWidget *testing_view_group(app *a) {
   }
   t->preset = adw_combo_row_new();
   adw_preferences_row_set_title(ADW_PREFERENCES_ROW(t->preset), mc_str(MC_STR_STRESS_HEADING));
-  adw_action_row_set_subtitle(ADW_ACTION_ROW(t->preset), mc_str(MC_STR_STRESS_TEXT));
   adw_combo_row_set_model(ADW_COMBO_ROW(t->preset), G_LIST_MODEL(presets));
   adw_combo_row_set_selected(ADW_COMBO_ROW(t->preset), MC_STRESS_10K);
   g_object_unref(presets);

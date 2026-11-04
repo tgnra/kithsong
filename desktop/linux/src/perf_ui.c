@@ -6,7 +6,7 @@
 #include "artist_view.h"
 #include "track_list.h"
 
-enum { MAX_WATCHED = 8, RUN_DELAY_MS = 2000 };
+enum { MAX_WATCHED = 8, RUN_DELAY_MS = 2000, DIALOG_CLOSE_MS = 500 };
 
 typedef struct watched {
   const char *series;
@@ -124,6 +124,12 @@ static void enter_view(void) {
   if (p.adj) gtk_adjustment_set_value(p.adj, 0);
 }
 
+static gboolean show_settings(gpointer data) {
+  (void)data;
+  app_show_testing(p.a);
+  return G_SOURCE_REMOVE;
+}
+
 static void test_ended(void) {
   mc_perf_auto_end();
   p.tick = 0;
@@ -133,7 +139,9 @@ static void test_ended(void) {
     g_application_quit(G_APPLICATION(p.a->gapp));
     return;
   }
-  app_show_testing(p.a);
+  /* A test on an empty library is over at once, and a dialog presented while Settings is still
+   * closing doesn't show. */
+  g_timeout_add(DIALOG_CLOSE_MS, show_settings, NULL);
 }
 
 static gboolean on_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
