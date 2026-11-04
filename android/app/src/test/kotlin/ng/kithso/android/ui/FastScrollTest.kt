@@ -90,6 +90,14 @@ class FastScrollTest {
     }
 
     @Test
+    fun entriesAheadOfTheLaidOutListDontCrash() {
+        // A sync adds items: the entries are the new list's, the count the last layout's.
+        val offsets = itemOffsets(11) { 250 }
+        val places = groupEntries(listOf(letter("A", 0), letter("B", 13)), offsets, screen)
+        assertEquals("A", places[0].label)
+    }
+
+    @Test
     fun ticksAreDotsAndNothingCrowds() {
         val entries = listOf(
             heading("Albums", 0),

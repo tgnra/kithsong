@@ -116,7 +116,8 @@ internal fun groupEntries(entries: List<FastScrollEntry>, offsets: IntArray, ste
         val first = start ?: return
         val end = last!!
         groups += if (!first.heading && end !== first && end.label != first.label) first.copy(through = end.label) else first
-        var index = end.index
+        // The entries can be ahead of the offsets, for a frame after the list grows.
+        var index = end.index.coerceAtMost(offsets.lastIndex)
         var at = top(first) + step
         while (true) {
             // The item [at] is in, which is where a jump can land, so that tall rows don't
