@@ -62,6 +62,10 @@
 static const char css[] =
   ".album-cover { border-radius: 8px; background-color: alpha(currentColor, 0.08); }"
   ".now-playing .album-cover { border-radius: 4px; }"
+  /* The edit dialog's cover, which is a button, and what a file over the dialog shows. */
+  ".edit-cover { padding: 0; border-radius: 8px; }"
+  ".edit-cover-drop { background-color: @accent_bg_color; color: @accent_fg_color; }"
+  ".edit-dropping { outline: 2px solid @accent_bg_color; outline-offset: -6px; border-radius: 12px; }"
   ".album-grid { padding: 12px; }"
   ".album-grid > child { padding: 8px; border-radius: 12px; }"
   ".track-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"

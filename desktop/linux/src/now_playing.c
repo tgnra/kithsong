@@ -172,6 +172,27 @@ static void cover_loaded(GdkTexture *texture, gpointer user) {
   gtk_picture_set_paintable(GTK_PICTURE(s.picture), GDK_PAINTABLE(texture));
 }
 
+/* The cover, for a track playing or with cover_dir NULL nothing, and the accent from it: the
+ * bar's fill and shuffle. */
+static void show_cover(const char *cover_dir) {
+  if (s.cover_loading) g_cancellable_cancel(s.cover_loading);
+  g_clear_object(&s.cover_loading);
+  GdkTexture *texture = NULL;
+  if (cover_dir) {
+    s.cover_loading = g_cancellable_new();
+    texture = cover_get(cover_dir, ART * gtk_widget_get_scale_factor(s.picture), s.cover_loading, cover_loaded, NULL);
+  }
+  gtk_picture_set_paintable(GTK_PICTURE(s.picture), GDK_PAINTABLE(texture));
+  g_clear_object(&texture);
+  char *cover = cover_path(cover_dir);
+  art_accent_set_file(s.box, cover);
+  g_free(cover);
+}
+
+void now_playing_art_changed(const char *cover_dir) {
+  if (s.playing) show_cover(cover_dir);
+}
+
 void now_playing_show(const char *title, const char *artist, int duration_ms, const char *cover_dir) {
   s.playing = title != NULL;
   s.duration_ms = title && duration_ms > 0 ? duration_ms : 0;
@@ -204,20 +225,7 @@ void now_playing_show(const char *title, const char *artist, int duration_ms, co
   s.updating = FALSE;
   gtk_widget_set_sensitive(s.bar, seekable());
   set_bar(0);
-
-  if (s.cover_loading) g_cancellable_cancel(s.cover_loading);
-  g_clear_object(&s.cover_loading);
-  GdkTexture *texture = NULL;
-  if (title && cover_dir) {
-    s.cover_loading = g_cancellable_new();
-    texture = cover_get(cover_dir, ART * gtk_widget_get_scale_factor(s.picture), s.cover_loading, cover_loaded, NULL);
-  }
-  gtk_picture_set_paintable(GTK_PICTURE(s.picture), GDK_PAINTABLE(texture));
-  g_clear_object(&texture);
-  /* The bar's fill and shuffle in the playing track's accent. */
-  char *cover = title && cover_dir ? cover_path(cover_dir) : NULL;
-  art_accent_set_file(s.box, cover);
-  g_free(cover);
+  show_cover(title ? cover_dir : NULL);
 }
 
 void now_playing_set_shuffle(gboolean on) {

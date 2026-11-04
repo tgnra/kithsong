@@ -1,7 +1,6 @@
 #include "art_backdrop.h"
 
 #include <adwaita.h>
-#include <glib/gstdio.h>
 #include <string.h>
 
 #include "cover.h"
@@ -26,11 +25,6 @@ typedef struct found {
 
 static GHashTable *cache; /* path -> found */
 static GQueue lru;
-
-static gint64 file_mtime(const char *path) {
-  GStatBuf st;
-  return g_stat(path, &st) == 0 ? (gint64)st.st_mtime : -1;
-}
 
 static void found_free(gpointer data) {
   found *f = data;
@@ -62,7 +56,7 @@ static void cache_put(const char *path, gint64 mtime, const mc_art_color *colors
 gboolean art_colors_cached(const char *path, mc_art_color out[MC_ART_COLORS_MAX], int *count) {
   *count = 0;
   found *f = cache && path ? g_hash_table_lookup(cache, path) : NULL;
-  if (!f || f->mtime != file_mtime(path)) return FALSE;
+  if (!f || f->mtime != cover_mtime(path)) return FALSE;
   g_queue_unlink(&lru, f->link);
   g_queue_push_head_link(&lru, f->link);
   memcpy(out, f->colors, sizeof(mc_art_color) * (size_t)f->count);
@@ -163,7 +157,7 @@ void art_colors_find(const char *path, GCancellable *cancellable, art_colors_don
   }
   job *j = g_new0(job, 1);
   j->path = g_strdup(path);
-  j->mtime = file_mtime(path);
+  j->mtime = cover_mtime(path);
   j->done = done;
   j->user = user;
   run(j, cancellable);
@@ -201,6 +195,7 @@ struct _ArtBackdrop {
 
   /* The art's colours, one source after another (several for set_files), as found. */
   char **paths;
+  gint64 *mtimes; /* of paths, as a cover replaced keeps its path */
   int npaths;
   mc_art_color (*colors)[MC_ART_COLORS_MAX];
   int *counts;
@@ -280,6 +275,7 @@ static void clear_sources(ArtBackdrop *self) {
   g_clear_object(&self->loading);
   g_strfreev(self->paths);
   self->paths = NULL;
+  g_clear_pointer(&self->mtimes, g_free);
   g_clear_pointer(&self->colors, g_free);
   g_clear_pointer(&self->counts, g_free);
   g_clear_pointer(&self->arrivals, g_free);
@@ -317,12 +313,17 @@ void art_backdrop_set_files(ArtBackdrop *self, const char *const *paths, int cou
   /* The same art again (a reload): nothing changes. */
   if (self->npaths == count && self->paths) {
     gboolean same = TRUE;
-    for (int i = 0; i < count && same; i++) same = !g_strcmp0(self->paths[i], paths[i]);
+    for (int i = 0; i < count && same; i++)
+      same = !g_strcmp0(self->paths[i], paths[i]) && self->mtimes[i] == cover_mtime(paths[i]);
     if (same) return;
   }
   start_sources(self, count);
   self->paths = g_new0(char *, (gsize)count + 1);
-  for (int i = 0; i < count; i++) self->paths[i] = g_strdup(paths[i] ? paths[i] : "");
+  self->mtimes = g_new0(gint64, (gsize)count + 1);
+  for (int i = 0; i < count; i++) {
+    self->paths[i] = g_strdup(paths[i] ? paths[i] : "");
+    self->mtimes[i] = cover_mtime(paths[i]);
+  }
   for (int i = 0; i < count; i++)
     if (paths[i] && *paths[i]) find_source(self, i, paths[i]);
   retarget(self, FALSE);

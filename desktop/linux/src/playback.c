@@ -70,6 +70,24 @@ static int duration_of(const item *it, const mc_player_status *st) {
   return ms ? ms : (int)st->duration_ms;
 }
 
+void playback_art_changed(mc_library *lib, const char *album_uid) {
+  mc_track_list *tracks = NULL;
+  if (!s.player || !s.count || mc_library_list_album_tracks(lib, album_uid, &tracks) != MC_OK) return;
+  for (int i = 0; i < tracks->count; i++)
+    for (int k = 0; k < s.count; k++)
+      if (!strcmp(s.items[k].uid, tracks->items[i].uid)) {
+        g_free(s.items[k].cover_dir);
+        s.items[k].cover_dir = g_strdup(tracks->items[i].cover_dir);
+      }
+  mc_track_list_free(tracks);
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  const item *it = current(&st);
+  if (!it) return;
+  now_playing_art_changed(it->cover_dir);
+  mpris_set_track(it->uid, it->title, it->artist, it->album, it->cover_dir, duration_of(it, &st));
+}
+
 static gboolean on_tick(gpointer data);
 
 /* Counts the plays the player says count, and scrobbles them. */

@@ -32,6 +32,7 @@ struct _AlbumItem {
   char *artist;     /* NULL if unknown, and for playlists and groups */
   char *cover_file; /* the album's cover as found when the item was made (a playlist's picture,
                      * once looked for); NULL if it has none */
+  gint64 cover_mtime; /* an album's cover_file's (cover_mtime()), as a new cover can have its path */
   int year;         /* 0 if unknown */
   gboolean is_playlist;
   gboolean is_group; /* an album group */
