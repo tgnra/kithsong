@@ -791,6 +791,44 @@ static void test_artist_cover(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* What's been played: a track's rows on two devices count once, the newest of them says when
+ * it was last played, and a track that's in a playlist twice counts once. */
+static void test_played(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_played.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Things'), ('al2', 'Unplayed');"
+                 "INSERT INTO tracks (uid, title, album_uid) VALUES ('t1', 'One', 'al1'), ('t2', 'Two', 'al1'),"
+                 " ('t3', 'Three', 'al1'), ('t4', 'Four', 'al2'), ('t5', 'Loose', NULL);"
+                 "INSERT INTO playlists (uid, name) VALUES ('p1', 'Mix'), ('p2', 'Unplayed');"
+                 "INSERT INTO playlist_entries (uid, playlist_uid, track_uid, position) VALUES"
+                 " ('e1', 'p1', 't1', 'a'), ('e2', 'p1', 't1', 'b'), ('e3', 'p1', 't5', 'c'), ('e4', 'p2', 't4', 'a');"
+                 "INSERT INTO track_plays (uid, track_uid, node_uid, play_count, last_played_ms) VALUES"
+                 " ('r1', 't1', 'n1', 2, 100), ('r2', 't1', 'n2', 3, 900), ('r3', 't2', 'n1', 1, 200),"
+                 " ('r4', 't3', 'n1', 4, NULL), ('r5', 't4', 'n1', 0, 950), ('r6', 't5', 'n1', 1, 500);") == SQLITE_OK);
+
+  mc_played_list *list = NULL;
+  CHECK(mc_library_list_played(lib, 500, &list) == MC_OK && list && list->count == 2);
+  for (int i = 0; list && i < list->count; i++) {
+    const mc_played_info *p = &list->items[i];
+    if (p->kind == MC_RECENT_ALBUM) {
+      CHECK(strcmp(p->uid, "al1") == 0);
+      CHECK(p->tracks_played == 3 && p->tracks_since == 1 && p->plays == 10 && p->last_played_ms == 900);
+    } else {
+      CHECK(p->kind == MC_RECENT_PLAYLIST);
+      CHECK(strcmp(p->uid, "p1") == 0);
+      CHECK(p->tracks_played == 2 && p->tracks_since == 2 && p->plays == 6 && p->last_played_ms == 900);
+    }
+  }
+  mc_played_list_free(list);
+  mc_library_close(lib);
+}
+
 static void recent_uids(mc_library *lib, int limit, char *out, size_t n) {
   out[0] = '\0';
   mc_recent_list *list = NULL;
@@ -1749,6 +1787,7 @@ int main(int argc, char **argv) {
   test_migration_v5(argc > 1 ? argv[1] : ".");
   test_migration_v6(argc > 1 ? argv[1] : ".");
   test_recents(argc > 1 ? argv[1] : ".");
+  test_played(argc > 1 ? argv[1] : ".");
   test_migration_v10(argc > 1 ? argv[1] : ".");
   test_migration_v12(argc > 1 ? argv[1] : ".");
   test_migration_v13(argc > 1 ? argv[1] : ".");

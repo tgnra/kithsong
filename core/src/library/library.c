@@ -1425,6 +1425,59 @@ void mc_recent_list_free(mc_recent_list *list) {
   free(list);
 }
 
+mc_status mc_library_list_played(mc_library *lib, int64_t since_ms, mc_played_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* A track's plays first, over its rows (one per device), so a track played on two devices
+   * counts once. */
+  static const char sql[] =
+    "WITH played AS (SELECT track_uid, sum(play_count) AS plays, max(coalesce(last_played_ms, 0)) AS last"
+    "  FROM track_plays WHERE play_count > 0 GROUP BY track_uid)"
+    " SELECT 0, t.album_uid, count(*), sum(p.last >= ?1), sum(p.plays), max(p.last)"
+    "  FROM played p JOIN tracks t ON t.uid = p.track_uid"
+    "  WHERE t.album_uid IS NOT NULL GROUP BY t.album_uid"
+    " UNION ALL"
+    " SELECT 1, e.playlist_uid, count(*), sum(p.last >= ?1), sum(p.plays), max(p.last)"
+    "  FROM played p JOIN (SELECT DISTINCT playlist_uid, track_uid FROM playlist_entries) e"
+    "  ON e.track_uid = p.track_uid GROUP BY e.playlist_uid";
+
+  mc_played_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  if (st == MC_OK) sqlite3_bind_int64(stmt, 1, since_ms);
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_played_info *p = &list->items[list->count++];
+    memset(p, 0, sizeof *p);
+    p->kind = sqlite3_column_int(stmt, 0) ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
+    const unsigned char *uid = sqlite3_column_text(stmt, 1);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(p->uid, (const char *)uid);
+    p->tracks_played = sqlite3_column_int(stmt, 2);
+    p->tracks_since = sqlite3_column_int(stmt, 3);
+    p->plays = sqlite3_column_int64(stmt, 4);
+    p->last_played_ms = sqlite3_column_int64(stmt, 5);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_played_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_played_list_free(mc_played_list *list) {
+  if (!list) return;
+  free(list->items);
+  free(list);
+}
+
 const mc_changelog_table *mc_library_tracked(size_t *count) {
   *count = sizeof k_tracked / sizeof k_tracked[0];
   return k_tracked;
