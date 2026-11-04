@@ -202,6 +202,12 @@ typedef struct mc_track_list {
 /* An album's tracks in order: by disc, then track number (unnumbered tracks last), then
  * title. Free with mc_track_list_free(). */
 mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out);
+/* What playing several albums in turn queues, as an album group does: the tracks with a file
+ * on this device of count albums, the albums in the order given and each one's tracks in its
+ * own. An album with none here, or that's gone, adds nothing and the rest carry on. Each
+ * track's album_uid says which album it's from. Free with mc_track_list_free(). */
+mc_status mc_library_list_albums_tracks(mc_library *lib, const char *const *album_uids, int count,
+                                        mc_track_list **out);
 /* A playlist's tracks in playlist order. A track that's in it twice is listed twice. */
 mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out);
 void mc_track_list_free(mc_track_list *list);
