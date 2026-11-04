@@ -917,6 +917,17 @@ mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, m
   return list_tracks(lib, sql, album_uid, out);
 }
 
+mc_status mc_library_get_track(mc_library *lib, const char *track_uid, mc_track_list **out) {
+  static const char sql[] = TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.uid = ?";
+  mc_status st = list_tracks(lib, sql, track_uid, out);
+  if (st == MC_OK && !(*out)->count) {
+    mc_track_list_free(*out);
+    *out = NULL;
+    st = MC_ERR_NOT_FOUND;
+  }
+  return st;
+}
+
 mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out) {
   static const char sql[] =
     TRACK_COLS ", e.uid FROM playlist_entries e JOIN tracks t ON t.uid = e.track_uid" TRACK_JOINS

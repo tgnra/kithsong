@@ -22,6 +22,12 @@
  * off renumbers the places from the last item in the buffer, so what's buffered still plays
  * and the new order carries on after it.
  *
+ * A radio play is a queue that a third thread, the feed, adds to from a station. Loading the
+ * station and picking take a while on a big library, so neither can be on this thread, whose
+ * buffer would run dry, nor in a call from the UI. The feed holds the station and only takes the
+ * lock to look and to add. It reports through this thread, so callbacks still come from one
+ * place. radio_gen tells it its work went stale, as gen does here.
+ *
  * The callback copies out of the ring buffer, applies the volume and counts. A flush (seek,
  * skip, stop) resets the buffer from the player thread, so the two share a spinlock that the
  * callback holds just for the copy (and the volume). Everything else is under the mutex; the thread drops it while
@@ -33,7 +39,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/library_internal.h"
 #include "miniaudio.h"
+#include "musiccore/radio.h"
 #include "playback/decoder.h"
 #include "playback/shuffle.h"
 #include "util/platform.h"
@@ -49,6 +57,8 @@ enum {
   MAX_ENDED = 64,    /* ended plays waiting for mc_player_take_ended() */
   MAX_PLAY_MS = 4 * 60 * 1000,
   FADE_MS = 10, /* a volume change goes all the way from silence to full in this long */
+  RADIO_AHEAD = 5, /* tracks a station keeps queued after the current one: skips use them up */
+  RADIO_MAX_FAILS = 8, /* items in a row that won't open before a station gives up */
 };
 
 /* --- Sources --- */
@@ -202,6 +212,17 @@ struct mc_player {
   uint64_t log_frames;
   mc_play_event ended[MAX_ENDED]; /* closed rows, oldest first */
   int nended;
+  unsigned pending_events; /* from the feed, for the thread to report */
+  /* The station. Its seed is context_uid. */
+  int radio;          /* the queue is a station's: in order whatever shuffle says, as it grows */
+  int feeding;        /* and it's still being added to */
+  unsigned radio_gen; /* bumped when the station changes or ends, so the feed drops its work */
+  char *radio_dir;    /* the library it's from */
+  int radio_skip;     /* next() ran out of items: play the first one added */
+  int radio_failures; /* items in a row that wouldn't open */
+  int feed_started;
+  mc_thread feed;
+  mc_cond feed_wake;
 
   /* Player thread only. */
   source *src;
@@ -219,7 +240,7 @@ struct mc_player {
 
 /* The queue item at place pos in the play order, or -1 if there's none. Under lock. */
 static int item_at(mc_player *p, int pos) {
-  if (p->shuffle) return mc_shuffle_at(&p->order, pos);
+  if (p->shuffle && !p->radio) return mc_shuffle_at(&p->order, pos);
   return pos >= 0 && pos < p->count ? pos : -1;
 }
 
@@ -297,6 +318,7 @@ static void snapshot(mc_player *p, mc_player_status *st) {
   memset(st, 0, sizeof *st);
   st->count = p->count;
   st->shuffle = p->shuffle;
+  st->radio = p->feeding;
   st->volume = p->volume;
   st->muted = p->muted;
   st->state = p->state;
@@ -411,6 +433,17 @@ static unsigned sync_device(mc_player *p) {
   return 0;
 }
 
+/* The station adds nothing more; what it added plays out. Under lock. */
+static void end_radio(mc_player *p) {
+  if (!p->feeding) return;
+  p->feeding = 0;
+  p->radio_skip = 0;
+  p->radio_gen++;
+  p->pending_events |= EV(MC_PLAYER_EVENT_QUEUE);
+  mc_cond_broadcast(&p->feed_wake);
+  mc_cond_broadcast(&p->wake);
+}
+
 /* Opens the first playable item in the play order from *index (at place *pos) on, seeking
  * the first one to ms. Drops the lock meanwhile. Returns NULL if none could be opened (with
  * *index -1; shuffled, after a try of as many items as the queue has), or if gen moved on
@@ -429,8 +462,14 @@ static source *open_from(mc_player *p, int *pos, int *index, int64_t ms, unsigne
       source_close(src);
       return NULL;
     }
-    if (src) return src;
+    if (src) {
+      p->radio_failures = 0;
+      return src;
+    }
     *events |= EV(MC_PLAYER_EVENT_ERROR) | log_failed(p, *index);
+    /* With the files gone, a station would otherwise fail through them for ever, as fast as
+     * it could pick, and fill the play log. */
+    if (++p->radio_failures >= RADIO_MAX_FAILS) end_radio(p);
     *index = item_at(p, ++*pos);
     ms = 0;
   }
@@ -595,6 +634,10 @@ static unsigned fill(mc_player *p) {
       break;
     }
     if (!next) {
+      if (p->radio) { /* what the feed adds carries on past the failures */
+        p->decoding_pos = pos - 1;
+        mc_cond_broadcast(&p->feed_wake);
+      }
       p->drained = 1;
       break;
     }
@@ -618,8 +661,10 @@ static unsigned advance(mc_player *p) {
     p->current = p->segs[0].index;
     p->current_pos = p->segs[0].pos;
     events |= EV(MC_PLAYER_EVENT_TRACK);
+    mc_cond_broadcast(&p->feed_wake);
   }
-  if (p->drained && !p->src && played >= p->written && p->state != MC_PLAYER_STOPPED) {
+  /* A station that hasn't caught up leaves a silence, which beats going back to its first track. */
+  if (p->drained && !p->src && played >= p->written && p->state != MC_PLAYER_STOPPED && !p->feeding) {
     events |= log_end(p, MC_PLAY_END_FINISHED);
     stop_at_start(p);
     events |= EV(MC_PLAYER_EVENT_STATE) | EV(MC_PLAYER_EVENT_TRACK);
@@ -631,7 +676,8 @@ static void run(void *arg) {
   mc_player *p = arg;
   mc_mutex_lock(&p->lock);
   while (!p->quit) {
-    unsigned events = 0;
+    unsigned events = p->pending_events;
+    p->pending_events = 0;
     if (p->cmd != CMD_NONE) events |= do_command(p);
     if (p->cmd == CMD_NONE) {
       if (p->state != MC_PLAYER_STOPPED) events |= fill(p); /* paused too, so resuming is instant */
@@ -640,7 +686,7 @@ static void run(void *arg) {
     }
     if (events && p->cb) {
       mc_mutex_unlock(&p->lock);
-      for (int e = MC_PLAYER_EVENT_STATE; e <= MC_PLAYER_EVENT_ENDED; e++)
+      for (int e = MC_PLAYER_EVENT_STATE; e <= MC_PLAYER_EVENT_QUEUE; e++)
         if (events & EV(e)) p->cb(p->user, (mc_player_event)e);
       mc_mutex_lock(&p->lock);
     }
@@ -648,7 +694,7 @@ static void run(void *arg) {
     /* While playing, wake to top up the buffer and to see the next track start. Otherwise
      * there's nothing to do until a call. */
     if (p->state == MC_PLAYER_PLAYING) mc_cond_wait_ms(&p->wake, &p->lock, WAKE_MS);
-    else if (!events) mc_cond_wait(&p->wake, &p->lock);
+    else if (!events && !p->pending_events) mc_cond_wait(&p->wake, &p->lock);
   }
   mc_mutex_unlock(&p->lock);
 }
@@ -668,8 +714,10 @@ mc_status mc_player_new(mc_player_cb cb, void *user, mc_player **out) {
   p->gain = p->gain_target = 1.0f;
   mc_mutex_init(&p->lock);
   mc_cond_init(&p->wake);
+  mc_cond_init(&p->feed_wake);
   mc_status st = mc_thread_start(&p->thread, run, p);
   if (st != MC_OK) {
+    mc_cond_destroy(&p->feed_wake);
     mc_cond_destroy(&p->wake);
     mc_mutex_destroy(&p->lock);
     free(p);
@@ -693,14 +741,18 @@ void mc_player_free(mc_player *p) {
   mc_mutex_lock(&p->lock);
   p->quit = 1;
   mc_cond_broadcast(&p->wake);
+  mc_cond_broadcast(&p->feed_wake);
   mc_mutex_unlock(&p->lock);
   mc_thread_join(&p->thread);
+  if (p->feed_started) mc_thread_join(&p->feed);
   if (p->device_open) {
     ma_device_uninit(&p->device);
     ma_pcm_rb_uninit(&p->rb);
   }
   source_close(p->src);
   free_queue(p);
+  free(p->radio_dir);
+  mc_cond_destroy(&p->feed_wake);
   mc_cond_destroy(&p->wake);
   mc_mutex_destroy(&p->lock);
   free(p);
@@ -716,7 +768,9 @@ static void post(mc_player *p, command cmd, int pos, int index, int64_t ms, mc_p
   p->cmd_seek = 0;
   p->cmd_end = MC_PLAY_END_SKIPPED; /* most commands; the others say so after */
   p->gen++;
+  p->radio_skip = 0;
   mc_cond_broadcast(&p->wake);
+  mc_cond_broadcast(&p->feed_wake); /* the place in the queue may have moved */
 }
 
 /* The place in the play order of the item the UI is showing as current (see snapshot()).
@@ -742,9 +796,119 @@ static int copy_track_uids(const mc_play_origin *origin, int count, char (**out)
   return 1;
 }
 
-/* mc_player_set_queue(), and with play 0 mc_player_load_queue(). */
+/* --- The feed --- */
+
+typedef struct feed_job {
+  mc_player *p;
+  unsigned gen;
+} feed_job;
+
+static int feed_cancelled(void *user) {
+  feed_job *job = user;
+  mc_mutex_lock(&job->p->lock);
+  int gone = job->p->quit || job->gen != job->p->radio_gen;
+  mc_mutex_unlock(&job->p->lock);
+  return gone;
+}
+
+/* With a connection of its own, as a library handle stays on its thread. It's let go at once:
+ * a station doesn't need it, and an open database would be in the way of moving the library. */
+static mc_status feed_open(feed_job *job, const char *dir, const char *seed, mc_radio_station **out) {
+  mc_library *lib = NULL;
+  mc_status st = mc_library_open_internal(dir, &lib);
+  if (st != MC_OK) return st;
+  mc_radio_options opts;
+  memset(&opts, 0, sizeof opts);
+  opts.seed_track = seed;
+  opts.random = new_seed();
+  st = mc_radio_station_open(lib, &opts, feed_cancelled, job, out);
+  mc_library_close(lib);
+  if (st == MC_OK) {
+    mc_radio_pick first; /* the seed, which is queued already */
+    mc_radio_station_next(*out, &first, 1);
+  }
+  return st;
+}
+
+/* Adds picks to the end of the queue. Under lock. */
+static mc_status feed_append(mc_player *p, const mc_radio_pick *picks, int n) {
+  int first = p->count;
+  char **queue = realloc(p->queue, (size_t)(first + n) * sizeof *queue);
+  if (!queue) return MC_ERR_NOMEM;
+  p->queue = queue;
+  char (*uids)[MC_UID_STRLEN] = realloc(p->track_uids, (size_t)(first + n) * sizeof *uids);
+  if (!uids) return MC_ERR_NOMEM;
+  p->track_uids = uids;
+  for (int i = 0; i < n; i++) {
+    if (!(p->queue[p->count] = mc_strdup(picks[i].path))) return MC_ERR_NOMEM;
+    memcpy(p->track_uids[p->count++], picks[i].track_uid, MC_UID_STRLEN);
+  }
+  p->drained = 0; /* the last item may have run out already: carry on after it */
+  p->pending_events |= EV(MC_PLAYER_EVENT_QUEUE);
+  if (p->radio_skip) post(p, CMD_START, first, first, 0, MC_PLAYER_PLAYING);
+  mc_cond_broadcast(&p->wake);
+  return MC_OK;
+}
+
+/* Keeps RADIO_AHEAD items queued after the current one for as long as a station plays. */
+static void feed_run(void *arg) {
+  mc_player *p = arg;
+  mc_radio_station *station = NULL;
+  unsigned station_gen = 0;
+  mc_radio_pick picks[RADIO_AHEAD];
+  mc_mutex_lock(&p->lock);
+  while (!p->quit) {
+    if (station && (!p->feeding || station_gen != p->radio_gen)) {
+      mc_radio_station *old = station;
+      station = NULL;
+      mc_mutex_unlock(&p->lock);
+      mc_radio_station_close(old);
+      mc_mutex_lock(&p->lock);
+      continue;
+    }
+    if (!p->feeding) {
+      mc_cond_wait(&p->feed_wake, &p->lock);
+      continue;
+    }
+    unsigned gen = p->radio_gen;
+    if (!station) {
+      char *dir = mc_strdup(p->radio_dir);
+      char seed[MC_UID_STRLEN];
+      memcpy(seed, p->context_uid, sizeof seed);
+      feed_job job = {p, gen};
+      mc_mutex_unlock(&p->lock);
+      mc_status st = dir ? feed_open(&job, dir, seed, &station) : MC_ERR_NOMEM;
+      free(dir);
+      mc_mutex_lock(&p->lock);
+      station_gen = gen;
+      if (st != MC_OK && gen == p->radio_gen) end_radio(p); /* the seed plays by itself */
+      continue;
+    }
+    /* From the furthest the thread has got, not what's audible: items it has failed to open
+     * are behind it, though the last track to play is still sounding or has just ended. */
+    int place = current_pos(p);
+    if (place < p->decoding_pos) place = p->decoding_pos;
+    int want = RADIO_AHEAD - (p->count - 1 - place);
+    if (want <= 0) {
+      mc_cond_wait(&p->feed_wake, &p->lock);
+      continue;
+    }
+    if (want > RADIO_AHEAD) want = RADIO_AHEAD;
+    mc_mutex_unlock(&p->lock);
+    mc_status st = mc_radio_station_next(station, picks, want);
+    mc_mutex_lock(&p->lock);
+    if (gen != p->radio_gen) continue;
+    if (st == MC_OK) st = feed_append(p, picks, want);
+    if (st != MC_OK) end_radio(p);
+  }
+  mc_mutex_unlock(&p->lock);
+  mc_radio_station_close(station);
+}
+
+/* mc_player_set_queue(), with play 0 mc_player_load_queue(), and with radio_dir (the library of
+ * the station that's to feed it) mc_player_play_radio(). */
 static mc_status set_queue(mc_player *p, const char *const *paths, int count, int start, int play,
-                           const mc_play_origin *origin) {
+                           const mc_play_origin *origin, const char *radio_dir) {
   if (!p || count < 0 || (count && (!paths || start < -1 || start >= count))) return MC_ERR_INVALID_ARG;
   char **queue = count ? calloc((size_t)count, sizeof *queue) : NULL;
   if (count && !queue) return MC_ERR_NOMEM;
@@ -756,7 +920,9 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
     }
   }
   char (*track_uids)[MC_UID_STRLEN];
-  if (!copy_track_uids(origin, count, &track_uids)) {
+  char *dir = radio_dir ? mc_strdup(radio_dir) : NULL;
+  if (!copy_track_uids(origin, count, &track_uids) || (radio_dir && !dir)) {
+    free(dir);
     for (int i = 0; i < count; i++) free(queue[i]);
     free(queue);
     return MC_ERR_NOMEM;
@@ -771,6 +937,11 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
   p->context_uid[0] = '\0';
   if (origin && origin->context_uid && strlen(origin->context_uid) < MC_UID_STRLEN)
     strcpy(p->context_uid, origin->context_uid);
+  p->radio = p->feeding = radio_dir != NULL;
+  p->radio_gen++; /* whatever was on is over, as is anything else that replaces the queue */
+  free(p->radio_dir);
+  p->radio_dir = dir;
+  p->radio_failures = 0;
   p->nplays = 0;
   p->play_index = -1;
   for (int i = 0; i < p->nsegs; i++) p->segs[i].index = -1; /* what's still sounding isn't this queue's */
@@ -793,19 +964,51 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
 
 mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count, int start,
                               const mc_play_origin *origin) {
-  return set_queue(p, paths, count, start, 1, origin);
+  return set_queue(p, paths, count, start, 1, origin, NULL);
 }
 
 mc_status mc_player_load_queue(mc_player *p, const char *const *paths, int count, int start,
                                const mc_play_origin *origin) {
-  return set_queue(p, paths, count, start, 0, origin);
+  return set_queue(p, paths, count, start, 0, origin, NULL);
+}
+
+mc_status mc_player_play_radio(mc_player *p, const char *library_dir, const char *seed_path,
+                               const char *seed_uid) {
+  if (!p || !library_dir || !seed_path || !seed_uid || !*seed_uid || strlen(seed_uid) >= MC_UID_STRLEN)
+    return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  mc_status st = p->feed_started ? MC_OK : mc_thread_start(&p->feed, feed_run, p);
+  if (st == MC_OK) p->feed_started = 1;
+  mc_mutex_unlock(&p->lock);
+  if (st != MC_OK) return st;
+  const char *const paths[] = {seed_path}, *const uids[] = {seed_uid};
+  mc_play_origin origin = {uids, MC_PLAY_CONTEXT_RADIO, seed_uid};
+  return set_queue(p, paths, 1, 0, 1, &origin, library_dir);
+}
+
+mc_status mc_player_stop_radio(mc_player *p) {
+  if (!p) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  end_radio(p);
+  mc_mutex_unlock(&p->lock);
+  return MC_OK;
+}
+
+mc_status mc_player_queue_uid(mc_player *p, int index, char *out) {
+  if (!p || !out) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  mc_status st = index >= 0 && index < p->count ? MC_OK : MC_ERR_NOT_FOUND;
+  if (st == MC_OK && p->track_uids) memcpy(out, p->track_uids[index], MC_UID_STRLEN);
+  else if (st == MC_OK) out[0] = '\0';
+  mc_mutex_unlock(&p->lock);
+  return st;
 }
 
 mc_status mc_player_skip_to(mc_player *p, int index) {
   if (!p) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&p->lock);
   mc_status st = index >= 0 && index < p->count ? MC_OK : MC_ERR_INVALID_ARG;
-  if (st == MC_OK && p->shuffle) { /* that one first, then the rest shuffled afresh */
+  if (st == MC_OK && p->shuffle && !p->radio) { /* that one first, then the rest shuffled afresh */
     mc_shuffle_init(&p->order, p->count, new_seed(), index);
     post(p, CMD_START, 0, index, 0, MC_PLAYER_PLAYING);
   } else if (st == MC_OK) {
@@ -821,6 +1024,9 @@ mc_status mc_player_next(mc_player *p) {
   int pos = current_pos(p) + 1, index = item_at(p, pos);
   if (index >= 0) {
     post(p, CMD_START, pos, index, 0, MC_PLAYER_PLAYING);
+  } else if (p->feeding) { /* more is on its way, and at the start of a station it's all there is */
+    p->radio_skip = 1;
+    mc_cond_broadcast(&p->feed_wake);
   } else if (p->count) { /* past the end: stopped at the start, as when the queue plays out */
     p->current_pos = 0;
     p->current = item_at(p, 0);
@@ -943,7 +1149,9 @@ mc_status mc_player_set_shuffle(mc_player *p, int on) {
   if (!p) return MC_ERR_INVALID_ARG;
   on = on != 0;
   mc_mutex_lock(&p->lock);
-  if (on != p->shuffle) {
+  if (p->radio) { /* a station has its own order, so this waits for the next queue */
+    p->shuffle = on;
+  } else if (on != p->shuffle) {
     /* The new order carries on from the last item in the buffer, as what's buffered plays
      * anyway: usually the one playing. Or from the one about to start, or the current one. */
     int last = p->cmd == CMD_START               ? p->cmd_index

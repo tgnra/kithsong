@@ -18,7 +18,7 @@ typedef enum mc_play_context {
   MC_PLAY_CONTEXT_ALBUM_GROUP, /* a group's albums */
   MC_PLAY_CONTEXT_ARTIST,      /* an artist's tracks */
   MC_PLAY_CONTEXT_SHUFFLE,     /* the player's: any of these started shuffled, no track picked */
-  MC_PLAY_CONTEXT_RADIO        /* chosen by the app; nothing sets it yet */
+  MC_PLAY_CONTEXT_RADIO        /* a station's, chosen by the app: mc_player_play_radio() */
 } mc_play_context;
 
 /* How a play ended. Android's CorePlayer.PlayEnd follows this order. */
@@ -37,7 +37,7 @@ typedef struct mc_play_event {
   int64_t listened_ms; /* time heard: pauses don't add to it, and seeks skip what they skip */
   mc_play_end end;
   mc_play_context context;
-  char context_uid[MC_UID_STRLEN]; /* the album, playlist, group or artist; "" if none */
+  char context_uid[MC_UID_STRLEN]; /* the album, playlist, group, artist or a station's seed track; "" if none */
 } mc_play_event;
 
 #ifdef __cplusplus
