@@ -141,19 +141,31 @@ private fun WearApp() {
                     onAlbumMenu = { navController.navigate("album/${it.uid}/menu") },
                 )
             }
-            composable("album/{id}") { entry ->
+            // An album opened from a group plays as part of it, on into the albums after it.
+            for (route in listOf("album/{id}", "group/{group}/album/{id}")) composable(route) { entry ->
                 val uid = entry.arguments?.getString("id")
+                val group = entry.arguments?.getString("group")
                 val album = albums.firstOrNull { it.uid == uid } ?: return@composable
                 // Read again with the library, as the album's files arrive.
                 val tracks by produceState(emptyList<TrackInfo>(), album.uid, contents) {
                     value = app.library.albumTracks(album.uid)
+                }
+                val groupTracks by produceState(emptyList<TrackInfo>(), group, contents) {
+                    value = group?.let { app.library.albumGroupTracks(it) }.orEmpty()
                 }
                 AlbumScreen(
                     album,
                     tracks,
                     playingUid = playback.track?.uid,
                     onTrack = { track ->
-                        startPlaying { playback.play(tracks, track, CorePlayer.Origin(CorePlayer.PlayContext.Album, album.uid)) }
+                        val inGroup = groupTracks.firstOrNull { it.uid == track.uid }
+                        startPlaying {
+                            if (inGroup != null) {
+                                playback.play(groupTracks, inGroup, CorePlayer.Origin(CorePlayer.PlayContext.AlbumGroup, group))
+                            } else {
+                                playback.play(tracks, track, CorePlayer.Origin(CorePlayer.PlayContext.Album, album.uid))
+                            }
+                        }
                     },
                     onAlbumMenu = { navController.navigate("album/${album.uid}/menu") },
                     onTrackMenu = { track ->
@@ -270,7 +282,7 @@ private fun WearApp() {
                     groupAlbums,
                     title = group.name,
                     emptyText = null,
-                    onAlbum = { navController.navigate("album/${it.uid}") },
+                    onAlbum = { navController.navigate("group/${group.uid}/album/${it.uid}") },
                     onAlbumMenu = { navController.navigate("album/${it.uid}/menu") },
                 )
             }

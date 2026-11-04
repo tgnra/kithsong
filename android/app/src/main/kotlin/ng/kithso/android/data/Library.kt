@@ -70,10 +70,16 @@ data class Track(
 /**
  * What a track list screen shows: an album, an artist, a playlist or an album group. A smart
  * playlist is a Playlist and a smart album group an AlbumGroup, as the core's recents have them.
+ * [group] is the album group an album was opened from, if any: played from there it goes on
+ * into the group's following albums, where the same album from anywhere else stays one album.
  */
 @Immutable
-data class CollectionRef(val kind: Kind, val uid: String) {
+data class CollectionRef(val kind: Kind, val uid: String, val group: String? = null) {
     enum class Kind { Album, Artist, Playlist, AlbumGroup }
+
+    /** The album group this album was opened from, if any. */
+    val parentGroup: CollectionRef?
+        get() = group?.let { CollectionRef(Kind.AlbumGroup, it) }
 }
 
 /**

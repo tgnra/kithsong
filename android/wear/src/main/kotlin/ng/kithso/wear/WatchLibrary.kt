@@ -94,6 +94,10 @@ class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
     suspend fun playlistTracks(playlistUid: String): List<TrackInfo> =
         read(emptyList()) { it.playlistTracks(playlistUid).here() }
 
+    /** [groupUid]'s albums' tracks with a file here, one album after another in the group's order. */
+    suspend fun albumGroupTracks(groupUid: String): List<TrackInfo> =
+        read(emptyList()) { lib -> lib.albumGroupAlbums(groupUid).flatMap { lib.albumTracks(it.uid).here() } }
+
     /** [groupUid]'s albums with a file here, in the group's order. */
     suspend fun albumGroupAlbums(groupUid: String): List<AlbumInfo> =
         read(emptyList()) { it.albumGroupAlbums(groupUid).filter { album -> album.folder != null } }

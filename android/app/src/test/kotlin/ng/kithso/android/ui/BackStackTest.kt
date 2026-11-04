@@ -8,6 +8,7 @@ import org.junit.Test
 
 class BackStackTest {
     private val album = Page.Collection(CollectionRef(CollectionRef.Kind.Album, "a:1"))
+    private val albumInGroup = Page.Collection(CollectionRef(CollectionRef.Kind.Album, "a:1", "g:1"))
 
     // Back as a layer takes it: the top goes on sliding out, off the stack.
     private fun <T> BackStack<T>.back() = leave(top!!.id)
@@ -73,6 +74,7 @@ class BackStackTest {
     @Test
     fun everyPageSurvivesSaving() {
         val pages = listOf(
+            albumInGroup,
             Page.Settings, Page.Licenses, Page.License("licenses/a:b.txt"), Page.Sync, Page.RecycleBin,
             Page.Device("uid:1"), Page.Search, album, Page.Player,
         )
