@@ -23,7 +23,8 @@ enum {
   ALBUM_GAP = 20,      /* on a station an album does too, as it has all the time there is */
   DRAW_FROM = 8,       /* how many of the best a pick is drawn from */
   STATION_MEMORY = 64, /* picks a station remembers, for the gaps and for a new round */
-  LOAD_CHECK = 256     /* rows read between asking whether to give up */
+  LOAD_CHECK = 256,    /* rows read between asking whether to give up */
+  SKIPS_USED = 32      /* skipped tracks a station goes by, the strongest: each is a pass over the pool */
 };
 
 /* The rules a pick keeps. A small library has to give them up, in this order. */
@@ -33,6 +34,23 @@ enum { KEEP_NOTHING, KEEP_ARTISTS, KEEP_ARTISTS_AND_ALBUMS };
 #define LATELY_MS (14.0 * 24 * 3600 * 1000)
 #define LATELY_PENALTY 0.15 /* for a track played just now, fading to 0 over LATELY_MS */
 #define DRAW_SOFTNESS 0.05  /* how much worse a score can be and still be drawn often */
+
+/* What a skip says. "What skips teach a station" in docs/schema.md has the reasoning. A skip is
+ * early from the first of these up to the second. Before it, previous() goes back a
+ * track rather than restarting this one (the player's RESTART_MS), and next() pressed a few times
+ * running is on its way past: too little was heard to be a judgement. From the second on it's no
+ * longer early, which is also where stations.c takes a play to have counted. The shortest
+ * candidate is a minute, so that's half way through at worst and a seventh of a usual track. */
+#define SKIP_HEARD_MS 3000
+#define SKIP_EARLY_MS 30000
+#define SKIP_FADE_MS (60.0 * 24 * 3600 * 1000) /* straight down to nothing: half strength at 30 days */
+#define SKIP_NUDGE 0.05 /* a fresh skip: DRAW_SOFTNESS, so about a third as likely against its peers */
+#define SKIP_REPEATS 3.0 /* the fresh skips of a pairing that count: more says nothing new */
+#define SKIP_MOST (SKIP_NUDGE * SKIP_REPEATS) /* however many agree: LATELY_PENALTY, no worse than just played */
+/* How far a skip reaches, seed from seed and track from track, falling straight to nothing. On
+ * the library's scales, where two random tracks are about 1 apart and stations.c finds a track's
+ * nearest few at 0.45: those get a quarter, and anything less alike none at all. */
+#define SKIP_REACH 0.6
 
 typedef struct candidate {
   char uid[MC_UID_STRLEN];
@@ -59,6 +77,7 @@ struct mc_radio_station {
   int64_t picked; /* since the start, which is what indexes the ring */
   int album_gap;
   int endless; /* starts a new round when the pool runs out, rather than ending */
+  double *nudges; /* what skips add to each item's score, before SKIP_MOST. NULL: nothing */
 };
 
 static void pool_free(pool *p) {
@@ -205,6 +224,7 @@ static double score(const mc_radio_station *s, int c, int prev, int64_t now_ms) 
     double age = (double)(now_ms - played);
     if (age < LATELY_MS) value += LATELY_PENALTY * (1.0 - (age > 0 ? age : 0) / LATELY_MS);
   }
+  if (s->nudges) value += s->nudges[c] < SKIP_MOST ? s->nudges[c] : SKIP_MOST;
   return value;
 }
 
@@ -284,6 +304,173 @@ static int take_picks(mc_radio_station *s, mc_radio_pick *out, int count) {
   return n;
 }
 
+/* --- Skips --- */
+
+/* How much of a skip carries across this distance, 1 down to 0. A distance of -1 is two results
+ * that can't be compared, which aren't alike. */
+static double skip_reach(double distance) {
+  return distance >= 0 && distance < SKIP_REACH ? 1.0 - distance / SKIP_REACH : 0.0;
+}
+
+static int early_skip(int skipped, int64_t listened_ms) {
+  return skipped && listened_ms >= SKIP_HEARD_MS && listened_ms < SKIP_EARLY_MS;
+}
+
+/* Pushes down what sounds like a track, that track first, by weight fresh skips. */
+static mc_status nudge_around(mc_radio_station *s, const mc_analysis *skipped, double weight) {
+  pool *p = &s->pool;
+  if (!s->nudges && !(s->nudges = calloc((size_t)p->count, sizeof *s->nudges))) return MC_ERR_NOMEM;
+  for (int c = 0; c < p->count; c++)
+    s->nudges[c] += SKIP_NUDGE * weight * skip_reach(mc_analysis_distance(skipped, &p->results[c], &s->stats));
+  return MC_OK;
+}
+
+static int uid_to_item(const void *key, const void *item) {
+  return strcmp(key, ((const candidate *)item)->uid);
+}
+
+/* uid's item, or -1. A pool read whole is in order of uid. */
+static int pool_find(const pool *p, const char *uid) {
+  const candidate *c = bsearch(uid, p->items, (size_t)p->count, sizeof *p->items, uid_to_item);
+  return c ? (int)(c - p->items) : -1;
+}
+
+/* A track's result. It needn't be a candidate: a seed or a skip on another device still says
+ * what sounds like it, even if the file isn't here. 0 if it has none that compares. */
+static int result_of(const mc_radio_station *s, mc_library *lib, const char *uid, mc_analysis *out) {
+  int c = pool_find(&s->pool, uid);
+  if (c >= 0) {
+    *out = s->pool.results[c];
+    return 1;
+  }
+  return mc_analysis_get(lib, uid, out) == MC_OK && out->version == MC_ANALYSIS_VERSION;
+}
+
+/* What a station takes from the log: a track, and how many fresh skips it comes to here. */
+typedef struct skip_mark {
+  char uid[MC_UID_STRLEN];
+  double weight;
+} skip_mark;
+
+typedef struct skip_marks {
+  skip_mark *items;
+  int count, cap;
+} skip_marks;
+
+static mc_status marks_add(skip_marks *m, const char *uid, double weight) {
+  if (m->count == m->cap) {
+    int cap = m->cap ? m->cap * 2 : 64;
+    skip_mark *items = realloc(m->items, (size_t)cap * sizeof *items);
+    if (!items) return MC_ERR_NOMEM;
+    m->items = items;
+    m->cap = cap;
+  }
+  skip_mark *mark = &m->items[m->count++];
+  memcpy(mark->uid, uid, sizeof mark->uid);
+  mark->weight = weight;
+  return MC_OK;
+}
+
+static int by_uid(const void *a, const void *b) {
+  return strcmp(((const skip_mark *)a)->uid, ((const skip_mark *)b)->uid);
+}
+
+/* The strongest first. Uids settle a tie, as the same library has to give the same station. */
+static int by_weight(const void *a, const void *b) {
+  double x = ((const skip_mark *)a)->weight, y = ((const skip_mark *)b)->weight;
+  return x > y ? -1 : x < y ? 1 : by_uid(a, b);
+}
+
+/* One track skipped on several seeds near this one is one track to compare with, and only
+ * the strongest few are. */
+static void marks_settle(skip_marks *m) {
+  if (!m->count) return;
+  qsort(m->items, (size_t)m->count, sizeof *m->items, by_uid);
+  int kept = 0;
+  for (int i = 1; i < m->count; i++) {
+    if (!strcmp(m->items[i].uid, m->items[kept].uid)) m->items[kept].weight += m->items[i].weight;
+    else m->items[++kept] = m->items[i];
+  }
+  m->count = kept + 1;
+  qsort(m->items, (size_t)m->count, sizeof *m->items, by_weight);
+  if (m->count > SKIPS_USED) m->count = SKIPS_USED;
+}
+
+/* The radio rows that can say anything, each pairing's together and in the order they happened.
+ * The time range is what keeps this quick however long the log, on play_events_started: what's
+ * faded has no bearing, nor has what's yet to happen, a device's clock being wrong.
+ *
+ * Skipping a seed says nothing of its station, which is built on it. */
+#define SKIP_QUERY                                                                    \
+  "SELECT context_uid, track_uid, started_ms, listened_ms, ended = 'skipped'"         \
+  " FROM play_events WHERE started_ms > ?1 AND started_ms <= ?2 AND context = 'radio'" \
+  " AND ended IN ('skipped', 'finished') AND context_uid IS NOT NULL"                 \
+  " AND track_uid <> context_uid ORDER BY context_uid, track_uid, started_ms, uid"
+
+/* Reads the pairings of seeds near this station's, each one's skips faded and summed, into m. */
+static mc_status marks_read(mc_radio_station *s, mc_library *lib, int64_t now_ms,
+                            mc_analysis_cancel_fn cancel, void *user, skip_marks *m) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib), SKIP_QUERY, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  sqlite3_bind_int64(stmt, 1, now_ms - (int64_t)SKIP_FADE_MS);
+  sqlite3_bind_int64(stmt, 2, now_ms);
+  const char *own = s->pool.items[s->seed].uid;
+  const mc_analysis *own_result = &s->pool.results[s->seed];
+  char seed[MC_UID_STRLEN] = "", track[MC_UID_STRLEN] = "";
+  double reach = 0, skips = 0; /* of the seed, and the pairing so far in fresh skips */
+  mc_status st = MC_OK;
+  int rc = SQLITE_DONE;
+  for (unsigned rows = 1; st == MC_OK; rows++) {
+    if (cancel && rows % LOAD_CHECK == 0 && cancel(user)) {
+      st = MC_ERR_IN_USE;
+      break;
+    }
+    rc = sqlite3_step(stmt);
+    const char *row_seed = rc == SQLITE_ROW ? (const char *)sqlite3_column_text(stmt, 0) : "";
+    const char *row_track = rc == SQLITE_ROW ? (const char *)sqlite3_column_text(stmt, 1) : "";
+    if (!row_seed || !row_track || strlen(row_seed) >= sizeof seed || strlen(row_track) >= sizeof track) continue;
+    int new_seed = strcmp(row_seed, seed) != 0;
+    if (new_seed || strcmp(row_track, track)) { /* that's all of the last pairing */
+      if (skips > 0 && strcmp(track, own)) st = marks_add(m, track, skips * reach);
+      skips = 0;
+      strcpy(track, row_track);
+    }
+    if (rc != SQLITE_ROW) break;
+    if (new_seed) {
+      mc_analysis result;
+      strcpy(seed, row_seed);
+      reach = result_of(s, lib, seed, &result) ? skip_reach(mc_analysis_distance(&result, own_result, &s->stats)) : 0;
+    }
+    if (reach <= 0) continue;
+    int64_t listened = sqlite3_column_int64(stmt, 3);
+    int skipped = sqlite3_column_int(stmt, 4);
+    if (early_skip(skipped, listened)) {
+      skips += 1.0 - (double)(now_ms - sqlite3_column_int64(stmt, 2)) / SKIP_FADE_MS;
+      if (skips > SKIP_REPEATS) skips = SKIP_REPEATS;
+    } else if (!skipped && listened >= SKIP_EARLY_MS) { /* less got there by seeking */
+      skips = skips > 1.0 ? skips - 1.0 : 0;            /* heard out: it does fit after all */
+    }
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+/* Reads what the play log says about this station. Nothing that applies leaves s->nudges NULL. */
+static mc_status skips_load(mc_radio_station *s, mc_library *lib, int64_t now_ms,
+                            mc_analysis_cancel_fn cancel, void *user) {
+  skip_marks m = {0};
+  mc_status st = marks_read(s, lib, now_ms, cancel, user, &m);
+  if (st == MC_OK) marks_settle(&m);
+  for (int i = 0; st == MC_OK && i < m.count; i++) {
+    mc_analysis result;
+    if (cancel && cancel(user)) st = MC_ERR_IN_USE;
+    else if (result_of(s, lib, m.items[i].uid, &result)) st = nudge_around(s, &result, m.items[i].weight);
+  }
+  free(m.items);
+  return st;
+}
+
 /* Loads s, which has what's particular to it set and the rest zeroed. */
 static mc_status station_start(mc_radio_station *s, mc_library *lib, const mc_radio_options *opts,
                                mc_analysis_cancel_fn cancel, void *user) {
@@ -304,12 +491,13 @@ static mc_status station_start(mc_radio_station *s, mc_library *lib, const mc_ra
   }
   mc_analysis_stats_from(s->pool.results, s->pool.count, &s->stats);
   s->now_ms = opts->now_ms;
-  return MC_OK;
+  return skips_load(s, lib, opts->now_ms ? opts->now_ms : (int64_t)mc_wall_ms(), cancel, user);
 }
 
 static void station_clear(mc_radio_station *s) {
   pool_free(&s->pool);
   free(s->recent);
+  free(s->nudges);
 }
 
 mc_status mc_radio_make(mc_library *lib, const mc_radio_options *opts, mc_radio_pick *out, int *n) {
@@ -355,6 +543,16 @@ mc_status mc_radio_station_next(mc_radio_station *station, mc_radio_pick *out, i
   if (!station || !out || count < 1) return MC_ERR_INVALID_ARG;
   take_picks(station, out, count);
   return MC_OK;
+}
+
+mc_status mc_radio_station_heard(mc_radio_station *station, const mc_play_event *e) {
+  if (!station || !e) return MC_ERR_INVALID_ARG;
+  const char *seed = station->pool.items[station->seed].uid;
+  if (e->context != MC_PLAY_CONTEXT_RADIO || strcmp(e->context_uid, seed) || !strcmp(e->track_uid, seed) ||
+      !early_skip(e->end == MC_PLAY_END_SKIPPED, e->listened_ms))
+    return MC_OK;
+  int c = pool_find(&station->pool, e->track_uid);
+  return c < 0 ? MC_OK : nudge_around(station, &station->pool.results[c], 1.0);
 }
 
 void mc_radio_station_close(mc_radio_station *station) {
