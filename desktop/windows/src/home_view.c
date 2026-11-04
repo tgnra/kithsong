@@ -748,7 +748,7 @@ static void press_action(void) {
 
 static void on_mouse_up(int x, int y) {
   scroller_mouse_up(&g.scroll);
-  hit was = g.pressed;
+  hit was = g.pressed, now = hit_test(x, y);
   BOOL panned = g.panning;
   hit none = {PART_NONE, -1, -1};
   g.pressed = none;
@@ -761,7 +761,6 @@ static void on_mouse_up(int x, int y) {
     return;
   }
   invalidate_hit(was);
-  hit now = hit_test(x, y);
   if (!same_hit(now, was)) return;
   if (was.part == PART_TILE) open_tile(was.row, was.index);
   else if (was.part == PART_LEFT) row_page(was.row, -1);
