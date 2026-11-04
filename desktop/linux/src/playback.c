@@ -263,6 +263,10 @@ void playback_play(const playback_track *tracks, int count, int start, mc_play_c
   refresh();
 }
 
+void playback_play_radio(const char *seed_track_uid) {
+  (void)seed_track_uid;
+}
+
 void playback_set_shuffle(gboolean on) {
   gboolean changed = !on != !s.shuffle;
   s.shuffle = on;

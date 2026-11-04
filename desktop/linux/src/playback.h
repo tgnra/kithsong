@@ -54,6 +54,8 @@ void playback_art_changed(mc_library *lib, const char *album_uid);
  * any track). context and context_uid (or NULL) say what's played, for the play log. */
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
                    const char *context_uid);
+/* A stub until the Linux frontend's lands. */
+void playback_play_radio(const char *seed_track_uid);
 /* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to
  * whatever is queued next. Off to begin with; main.c keeps it in the settings. */
 void playback_set_shuffle(gboolean on);
