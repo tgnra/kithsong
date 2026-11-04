@@ -1219,6 +1219,13 @@ static void on_track_go_to_artist(void *user, const char *artist_uid) {
   app_open_artist(user, artist_uid);
 }
 
+/* Where the now-playing strip's track is. Not during an import session, when the library
+ * mustn't change under it (see on_import_session()). */
+static mc_library *now_playing_library(void *user) {
+  app *a = user;
+  return gtk_widget_get_sensitive(a->sidebar) ? a->lib : NULL;
+}
+
 static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
   (void)pspec;
   if (gtk_window_is_active(GTK_WINDOW(win)) && restore_deleted(user)) app_reload_library(user);
@@ -1757,6 +1764,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
                                           on_track_delete, on_track_edit, on_reshuffle, on_track_go_to_album,
                                           on_track_go_to_artist, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
+  now_playing_set_track_menu(&tracks_cb, now_playing_library);
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
   adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);
 

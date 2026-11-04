@@ -1957,6 +1957,25 @@ int main(int argc, char **argv) {
   tracks = NULL;
   CHECK(mc_library_list_album_tracks(lib, "nope", &tracks) == MC_OK && tracks && tracks->count == 0);
   mc_track_list_free(tracks);
+  /* One track by uid: once though it has two files, and with its album; none if it's gone. */
+  tracks = NULL;
+  CHECK(mc_library_list_track(lib, "t3", &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) {
+    CHECK_STR(tracks->items[0].uid, "t3");
+    CHECK_STR(tracks->items[0].title, "Starfire");
+    CHECK_STR(tracks->items[0].album_uid, "al1");
+    CHECK(tracks->items[0].path && strstr(tracks->items[0].path, "Starfire.flac"));
+  }
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_track(lib, "t6", &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) CHECK(tracks->items[0].album_uid[0] == '\0' && !tracks->items[0].path);
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_track(lib, "nope", &tracks) == MC_OK && tracks && tracks->count == 0);
+  mc_track_list_free(tracks);
+  CHECK(mc_library_list_track(NULL, "t3", &tracks) == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_list_track(lib, NULL, &tracks) == MC_ERR_INVALID_ARG);
 
   mc_library_close(lib);
 

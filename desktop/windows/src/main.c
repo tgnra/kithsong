@@ -42,7 +42,8 @@
  * The album grid is album_grid.c (which also shows the playlists, on the Playlists page, and
  * the album groups, on the Album Groups page, making their changes itself), the
  * sidebar sidebar.c, the track list track_list.c and the seekbar beside the playback buttons
- * now_playing.c. The track list's Add to Playlist menu is add_to_playlist.c, and the New,
+ * now_playing.c. A track's menu is track_menu.c, for the track list and, on its cover and
+ * title, the playing track. Its Add to Playlist submenu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
  * changes (a smart playlist's too: its rule's editor is smart_editor.c) and they're made
  * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]) and the speaker
@@ -116,6 +117,7 @@
 #include "sync_bridge.h"
 #include "theme.h"
 #include "track_list.h"
+#include "track_menu.h"
 #include "volume_popup.h"
 #include "scroller.h"
 #include "testing_view.h"
@@ -1128,6 +1130,81 @@ static void on_track_request(int code) {
   }
 }
 
+/* The track with uid, or NULL if the library hasn't got it. Free with mc_track_list_free(). */
+static mc_track_list *find_track(const char *uid) {
+  mc_track_list *list = NULL;
+  if (!g_app.lib || mc_library_list_track(g_app.lib, uid, &list) != MC_OK) return NULL;
+  if (list->count) return list;
+  mc_track_list_free(list);
+  return NULL;
+}
+
+/* The playing track, if it can have a menu: not during an import session, which has the
+ * library, or if it left the library while it played. Else NULL, and the title bar keeps
+ * its own menu. Free with mc_track_list_free(). */
+static mc_track_list *now_playing_menu_track(void) {
+  return g_app.locked || !playback_current_uid()[0] ? NULL : find_track(playback_current_uid());
+}
+
+/* Whether a right-click at lp (screen coordinates) is for the playing track's menu. */
+static BOOL now_playing_menu_at(LPARAM lp) {
+  POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+  if (!now_playing_on_track(pt)) return FALSE;
+  mc_track_list *list = now_playing_menu_track();
+  mc_track_list_free(list);
+  return list != NULL;
+}
+
+/* The menu for the playing track, at pt (screen coordinates). It has no Move Up, Move Down or
+ * Remove from Playlist: those are for a place in a list.
+ *
+ * The track may change or go while the menu's open, so what's picked applies to the track
+ * it was opened on, and to nothing if that left the library. */
+static void now_playing_menu(POINT pt) {
+  mc_track_list *list = now_playing_menu_track();
+  if (!list) return;
+  const mc_track_info *t = &list->items[0];
+  track_menu_options options = {.lib = g_app.lib, .go_to_album = track_menu_album_has_page(g_app.lib, t->album_uid),
+                                .go_to_artist = t->artist_uid[0] != '\0'};
+  char playlist[MC_UID_STRLEN];
+  track_menu_pick pick = track_menu_show(g_app.wnd, pt, &options, playlist);
+
+  mc_track_list *still = pick != TRACK_MENU_NOTHING ? find_track(t->uid) : NULL;
+  BOOL changed = FALSE;
+  if (still) {
+    switch (pick) {
+      case TRACK_MENU_ADD_TO_PLAYLIST:
+      case TRACK_MENU_NEW_PLAYLIST:
+        changed = add_to_playlist(g_app.wnd, g_app.lib, t->uid, t->path != NULL,
+                                  pick == TRACK_MENU_ADD_TO_PLAYLIST ? playlist : NULL);
+        break;
+      case TRACK_MENU_GO_TO_ALBUM:
+        open_album(t->album_uid, t->uid);
+        break;
+      case TRACK_MENU_GO_TO_ARTIST:
+        open_artist(t->artist_uid);
+        break;
+      case TRACK_MENU_EDIT:
+        changed = edit_dialog_track(g_app.wnd, g_app.lib, t->uid);
+        break;
+      case TRACK_MENU_DELETE: {
+        wchar_t *title = wstr_dup_from_utf8(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
+        if (title) changed = delete_dialog(g_app.wnd, g_app.lib, MC_DELETE_TRACKS, t->uid, title);
+        free(title);
+        break;
+      }
+      default: /* the others are for a place in a list, and aren't offered */
+        break;
+    }
+  }
+  mc_track_list_free(still);
+  mc_track_list_free(list);
+  if (changed) {
+    refresh_library();
+    UpdateWindow(g_app.grid);
+  }
+}
+
 /* An artist's page's requests for a single (see artist_view.h), as the track list's for a
  * track. */
 static void on_single_request(int code) {
@@ -1785,6 +1862,29 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (!IsZoomed(wnd) && pt.y < frame_thickness()) return HTTOP; /* the top border is in the client area */
       return pt.y < scale(BAR_H) ? HTCAPTION : HTCLIENT;           /* toolbar buttons are child windows */
     }
+    /* The strip lets right-clicks on the cover and title through, so they reach us as title
+     * bar clicks. DefWindowProc would keep the button's release for itself: left out of it,
+     * the release comes here too, and the menu opens on it as a track row's does. */
+    case WM_NCRBUTTONDOWN:
+      if (wp == HTCAPTION && now_playing_menu_at(lp)) return 0;
+      break;
+    case WM_NCRBUTTONUP:
+      if (wp == HTCAPTION && now_playing_menu_at(lp)) {
+        now_playing_menu((POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+        return 0;
+      }
+      break;
+    case WM_CONTEXTMENU: /* from the strip: the edge of the bar overlaps the title, or the keyboard (lp -1) */
+      if ((HWND)wp != g_app.now_playing) break;
+      if (lp == -1) {
+        now_playing_menu(now_playing_menu_point());
+        return 0;
+      }
+      if (now_playing_menu_at(lp)) {
+        now_playing_menu((POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+        return 0;
+      }
+      break;
     case WM_SIZE:
       layout();
       return 0;

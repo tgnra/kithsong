@@ -8,6 +8,7 @@
 #include "art_backdrop.h"
 #include "cover.h"
 #include "drag.h"
+#include "track_menu.h"
 
 enum { HEADER_COVER = 96 };
 /* How much of the backdrop's height, at its bottom, its glows thin out over. */
@@ -132,15 +133,10 @@ static GtkWidget *row_label(float xalign) {
   return l;
 }
 
-/* Whether album_uid has a page to go to: it isn't the album shown, or a single (an album of
- * one track), which the album grid leaves out. */
+/* Whether album_uid has a page to go to that isn't the album shown. */
 static gboolean album_to_go_to(const char *album_uid) {
-  if (!album_uid[0] || !s.lib || (s.album && !s.album->is_playlist && !strcmp(s.album->uid, album_uid))) return FALSE;
-  mc_track_list *list = NULL;
-  if (mc_library_list_album_tracks(s.lib, album_uid, &list) != MC_OK) return FALSE;
-  gboolean more = list->count > 1;
-  mc_track_list_free(list);
-  return more;
+  if (s.album && !s.album->is_playlist && !strcmp(s.album->uid, album_uid)) return FALSE;
+  return track_menu_album_has_page(s.lib, album_uid);
 }
 
 /* Makes the track menu (and the keys) act on the track at pos: in a playlist its items
@@ -395,14 +391,6 @@ static void on_reshuffle(GtkButton *button, gpointer user) {
   if (s.cb.reshuffle && s.album && s.album->is_smart) s.cb.reshuffle(s.cb.user);
 }
 
-/* A menu item that shows its key, as Windows' do. */
-static void append_with_key(GMenu *menu, enum mc_str_id label, const char *action, const char *accel) {
-  GMenuItem *item = g_menu_item_new(mc_str_mnemonic(label), action);
-  g_menu_item_set_attribute(item, "accel", "s", accel);
-  g_menu_append_item(menu, item);
-  g_object_unref(item);
-}
-
 static GtkWidget *build_header(void) {
   GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
   gtk_widget_set_margin_start(header, 18);
@@ -435,12 +423,12 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(header), text);
 
   GMenu *menu = g_menu_new();
-  append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
+  track_menu_append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
   g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_DELETE_MENU), "playlist.delete");
   s.header_menu = G_MENU_MODEL(menu);
   menu = g_menu_new();
   g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_EDIT_MENU), "playlist.edit-rules");
-  append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
+  track_menu_append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
   g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_DELETE_PLAYLIST_MENU), "playlist.delete");
   s.smart_header_menu = G_MENU_MODEL(menu);
   s.playlist_button = gtk_menu_button_new();
@@ -688,23 +676,6 @@ static GSimpleAction *add_action(GSimpleActionGroup *group, const char *name,
   return action;
 }
 
-/* Go to album and Go to artist, hidden while their actions are disabled (see menu_for()). */
-static void append_go_to(GMenu *model) {
-  GMenu *section = g_menu_new();
-  const struct {
-    enum mc_str_id label;
-    const char *action;
-  } items[] = {{MC_STR_GO_TO_ALBUM, "track.go-to-album"}, {MC_STR_GO_TO_ARTIST, "track.go-to-artist"}};
-  for (size_t i = 0; i < G_N_ELEMENTS(items); i++) {
-    GMenuItem *item = g_menu_item_new(mc_str_mnemonic(items[i].label), items[i].action);
-    g_menu_item_set_attribute(item, "hidden-when", "s", "action-disabled");
-    g_menu_append_item(section, item);
-    g_object_unref(item);
-  }
-  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
-  g_object_unref(section);
-}
-
 /* A closed menu gives the focus back to the list, as GTK would hand it elsewhere (the
  * sidebar, under Xvfb), and the keys should go on where they were. */
 static void on_menu_closed(GtkPopover *menu, gpointer list) {
@@ -733,36 +704,8 @@ static void build_menu(GtkWidget *pane) {
   gtk_widget_insert_action_group(pane, "playlist", G_ACTION_GROUP(actions));
   g_object_unref(actions);
 
-  GMenu *model = g_menu_new();
-  GMenu *section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
-  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
-  g_object_unref(section);
-  append_go_to(model);
-  section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_EDIT_MENU), "track.edit");
-  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "track.delete");
-  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
-  g_object_unref(section);
-  s.album_menu = G_MENU_MODEL(model);
-  model = g_menu_new();
-  section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
-  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
-  g_object_unref(section);
-  append_go_to(model);
-  section = g_menu_new();
-  append_with_key(section, MC_STR_MOVE_UP, "track.move-up", "<Alt>Up");
-  append_with_key(section, MC_STR_MOVE_DOWN, "track.move-down", "<Alt>Down");
-  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
-  g_object_unref(section);
-  section = g_menu_new();
-  append_with_key(section, MC_STR_REMOVE_FROM_PLAYLIST, "track.remove", "Delete");
-  g_menu_append(section, mc_str_mnemonic(MC_STR_EDIT_MENU), "track.edit");
-  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "track.delete");
-  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
-  g_object_unref(section);
-  s.playlist_menu = G_MENU_MODEL(model);
+  s.album_menu = track_menu_model(FALSE);
+  s.playlist_menu = track_menu_model(TRUE);
 
   s.menu = gtk_popover_menu_new_from_model(s.album_menu);
   gtk_popover_set_has_arrow(GTK_POPOVER(s.menu), FALSE);

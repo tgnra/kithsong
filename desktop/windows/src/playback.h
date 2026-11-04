@@ -88,6 +88,8 @@ int playback_queue_count(void);
 const char *playback_queue_uid(int i);
 /* Whether there's a current track, and one after it (always, shuffled). */
 BOOL playback_has_current(void);
+/* The current track's uid, or "" with none or for one without. Valid until the queue changes. */
+const char *playback_current_uid(void);
 BOOL playback_has_next(void);
 
 #endif

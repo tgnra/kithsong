@@ -207,11 +207,11 @@ static int measure(HFONT font, const wchar_t *t) {
   return w;
 }
 
-/* "Paranoid Android — Radiohead": the title in bold, the artist dimmed, centred together
- * over the bar. Too long, the title keeps at least half the room and both are cut short. */
-static void paint_title(canvas *c) {
-  UINT one_line = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
-  wchar_t artist[512] = L"";
+/* "Paranoid Android — Radiohead": the text after the title, and where the two go, centred
+ * together over the bar. Too long, the title keeps at least half the room and both are cut
+ * short. */
+static void layout_title(wchar_t artist[512], RECT *title, RECT *rest) {
+  artist[0] = L'\0';
   if (s.artist) {
     char *name = wstr_to_utf8(s.artist);
     artist[0] = L' '; /* the gap after the title */
@@ -224,14 +224,20 @@ static void paint_title(canvas *c) {
     title_w = min(title_w, max(room - artist_w, room / 2));
     artist_w = room - title_w;
   }
-  RECT title = s.title_rect;
-  title.left += (room - title_w - artist_w) / 2;
-  title.right = title.left + title_w;
+  *title = s.title_rect;
+  title->left += (room - title_w - artist_w) / 2;
+  title->right = title->left + title_w;
+  SetRect(rest, title->right, title->top, title->right + artist_w, title->bottom);
+}
+
+/* The title in bold, the artist dimmed. */
+static void paint_title(canvas *c) {
+  UINT one_line = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
+  wchar_t artist[512];
+  RECT title, rest;
+  layout_title(artist, &title, &rest);
   canvas_text(c, s.title, -1, &title, one_line, s.bold_font, theme.text);
-  if (*artist) {
-    RECT rest = {title.right, title.top, title.right + artist_w, title.bottom};
-    canvas_text(c, artist, -1, &rest, one_line, s.font, theme.text2);
-  }
+  if (*artist) canvas_text(c, artist, -1, &rest, one_line, s.font, theme.text2);
 }
 
 static void paint(HDC dc, const RECT *dirty) {
@@ -455,6 +461,23 @@ void now_playing_set_position(int ms) {
 
 int now_playing_position(void) {
   return s.pos_ms;
+}
+
+BOOL now_playing_on_track(POINT pt) {
+  if (!s.wnd || !s.title) return FALSE;
+  ScreenToClient(s.wnd, &pt);
+  if (PtInRect(&s.art_rect, pt)) return TRUE;
+  if (s.flash[0]) return FALSE;
+  wchar_t artist[512];
+  RECT title, rest;
+  layout_title(artist, &title, &rest);
+  return PtInRect(&title, pt) || PtInRect(&rest, pt);
+}
+
+POINT now_playing_menu_point(void) {
+  POINT pt = {s.art_rect.left, s.art_rect.bottom};
+  ClientToScreen(s.wnd, &pt);
+  return pt;
 }
 
 static void flash_for(const wchar_t *text, UINT ms) {
