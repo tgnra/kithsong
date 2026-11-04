@@ -2197,7 +2197,8 @@ static void sweep_orphans(mc_session *s, int archive) {
             s->files_corrupt);
     return;
   }
-  mc_orphans_args a = {s->conn->lib, s->sync->config_dir, archive, 1, session_stopping, s->sync};
+  mc_orphans_args a = {s->conn->lib, s->sync->config_dir, MC_ORPHANS_ARCHIVE_ONLY_REPORTS && archive, 1,
+                       session_stopping, s->sync};
   mc_orphans_result r;
   mc_orphans_sweep(&a, &r);
   s->files_unknown += r.orphans;

@@ -520,7 +520,7 @@ void mc_orphans_after_import(mc_library *lib, const char *const *sources, int so
     if (go && mc_sync_db_group_uid(sdb)) {
       sqlite3 *db = mc_sync_db_handle(sdb);
       const char *me = mc_sync_db_device_uid(sdb);
-      report_only = mc_archive_is(db, me) != 0; /* an error too: nothing goes */
+      report_only = MC_ORPHANS_ARCHIVE_ONLY_REPORTS && mc_archive_is(db, me) != 0; /* an error too */
       go = mc_profile_confirm_state(db, me) == MC_SYNC_CONFIRMED;
     }
     mc_sync_db_close(sdb);

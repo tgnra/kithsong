@@ -43,8 +43,6 @@ void mc_sleep_ms(uint32_t ms) {
   Sleep(ms);
 }
 
-const char *mc_tree_test_fail = NULL;
-
 int mc_cpu_count(void) {
   SYSTEM_INFO si;
   GetSystemInfo(&si);
@@ -1231,6 +1229,8 @@ mc_status mc_remove_tree(const char *path) {
   if (mc_rmdir(path) != MC_OK && st == MC_OK) st = MC_ERR_IO;
   return st;
 }
+
+const char *mc_tree_test_fail = NULL;
 
 char *mc_strdup(const char *s) {
   if (!s) return NULL;

@@ -14,6 +14,12 @@
  * this is the one place to change it. */
 #define MC_ORPHANS_MAX_PER_KNOWN 1
 
+/* Whether a sweep on an archive only reports. The first archive is the device that held the
+ * library when the group began, so usually the main computer: with this at 1 that computer
+ * never loses a file to a sweep. It's what sync did for unknown files before there was a
+ * sweep, kept as the safe choice until someone decides otherwise. 0 sweeps archives too. */
+#define MC_ORPHANS_ARCHIVE_ONLY_REPORTS 1
+
 /* Younger files are left for a later sweep. Age is the newest of modified and created, so a
  * file copied in with an old modified time still counts as new. */
 #define MC_ORPHANS_GRACE_MS ((int64_t)60 * 60 * 1000)

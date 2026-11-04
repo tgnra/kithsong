@@ -2,6 +2,7 @@
  * of file the app keeps in the library folder, path matching, each refusal, the bounds, the
  * gate, and the sweep after an import. Sessions' sweeps are in test_sync_files.c. Nothing here
  * reaches a real trash: mc_transfer_trash is a folder of the test's. */
+#define _POSIX_C_SOURCE 200809L /* symlink() under -std=c11 */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
