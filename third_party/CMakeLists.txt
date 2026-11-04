@@ -249,8 +249,11 @@ add_library(mc_opusenc STATIC
   "${opusenc_SOURCE_DIR}/src/resample.c"
   "${opusenc_SOURCE_DIR}/src/unicode_support.c")
 target_include_directories(mc_opusenc SYSTEM PUBLIC "${opusenc_SOURCE_DIR}/include")
+# RESAMPLE_FULL_SINC_TABLE: by default Speex keeps the smallest table it can, and for 44.1 to
+# 48 kHz that means working out every tap by cubic interpolation, which took as long as Opus
+# itself (see opus.md). The full table is 50 KB per encode at that rate.
 target_compile_definitions(mc_opusenc PRIVATE
-  OPE_BUILD OUTSIDE_SPEEX RANDOM_PREFIX=libopusenc
+  OPE_BUILD OUTSIDE_SPEEX RANDOM_PREFIX=libopusenc RESAMPLE_FULL_SINC_TABLE
   PACKAGE_NAME="libopusenc" PACKAGE_VERSION="0.2.1")
 target_link_libraries(mc_opusenc PUBLIC opus)
 if(UNIX)

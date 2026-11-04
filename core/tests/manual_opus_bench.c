@@ -2,6 +2,7 @@
  * FETCHCONTENT_BASE_DIR of its own (a shared one lets a debug build's libopus objects in).
  *
  *   manual_opus_bench info
+ *   manual_opus_bench resq
  *   manual_opus_bench stages <audio|synth:silence|synth:noise|synth:tones> <kbps> <complexity> <reps>
  *   manual_opus_bench sweep  <audio> <reps>
  *   manual_opus_bench pool   <dir of tNN/track.*> <threads> <kbps> <scratch cache> <passes>
@@ -396,6 +397,48 @@ static int cmd_sweep(const char *arg, int reps) {
   return 0;
 }
 
+/* --- resq --- */
+
+/* How clean the resampler's output is: a sine at each frequency through it, then what is left
+ * once the best fit of that sine (any gain and phase) is taken away, as dB below the signal.
+ * The first and last 4096 frames are left out, for the filter's edges. */
+static double residual_db(const pcm *p, double hz) {
+  double w = 2 * 3.14159265358979323846 * hz / p->rate, ss = 0, cc = 0, sc = 0, xs = 0, xc = 0;
+  uint64_t from = 4096, to = p->frames - 4096;
+  for (uint64_t i = from; i < to; i++) {
+    double s = sin(w * (double)i), c = cos(w * (double)i), x = p->f[i * 2];
+    ss += s * s, cc += c * c, sc += s * c, xs += x * s, xc += x * c;
+  }
+  double det = ss * cc - sc * sc, a = (xs * cc - xc * sc) / det, b = (xc * ss - xs * sc) / det;
+  double sig = 0, err = 0;
+  for (uint64_t i = from; i < to; i++) {
+    double fit = a * sin(w * (double)i) + b * cos(w * (double)i), e = p->f[i * 2] - fit;
+    sig += fit * fit;
+    err += e * e;
+  }
+  return 10 * log10(err / sig);
+}
+
+static int cmd_resq(void) {
+  static const double hz[] = {100, 1000, 5000, 10000, 15000, 18000};
+  printf("hz     residual_dB  gain_dB\n");
+  for (size_t k = 0; k < sizeof hz / sizeof *hz; k++) {
+    pcm in = {calloc(44100 * 10 * 2, sizeof(float)), 44100 * 10, 44100, 2}, out;
+    for (uint64_t i = 0; i < in.frames; i++)
+      in.f[i * 2] = in.f[i * 2 + 1] =
+        (float)(0.5 * sin(2 * 3.14159265358979323846 * hz[k] * (double)i / 44100.0));
+    resample(&in, &out);
+    double rms = 0;
+    for (uint64_t i = 4096; i < out.frames - 4096; i++) rms += (double)out.f[i * 2] * out.f[i * 2];
+    rms = sqrt(rms / (double)(out.frames - 8192));
+    printf("%6.0f %10.2f %8.4f\n", hz[k], residual_db(&out, hz[k]),
+           20 * log10(rms / (0.5 / sqrt(2.0))));
+    free(in.f);
+    free(out.f);
+  }
+  return 0;
+}
+
 /* --- pool --- */
 
 typedef struct file {
@@ -540,6 +583,7 @@ static int cmd_prof(const char *arg, int kbps, int complexity, const char *out_p
 int main(int argc, char **argv) {
   const char *cmd = argc > 1 ? argv[1] : "";
   if (!strcmp(cmd, "info")) return cmd_info();
+  if (!strcmp(cmd, "resq")) return cmd_resq();
   if (!strcmp(cmd, "stages") && argc == 6)
     return cmd_stages(argv[2], atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
   if (!strcmp(cmd, "sweep") && argc == 4) return cmd_sweep(argv[2], atoi(argv[3]));
