@@ -967,6 +967,7 @@
     "edit_mix": { "text": "Continuous mix", "note": "Checkbox in the album's Edit dialog: one piece of music split into tracks, like a DJ mix." },
     "edit_mix_text": "Its tracks stay out of search and smart playlists, and the album shows instead.",
     "edit_saving": "Saving…",
+    "edit_stop_retry": { "text": "Stop playing and retry", "note": "Button in the Edit dialog after Save found a file in use: stops playback, which empties the queue, and saves again." },
     "edit_gone": "This is no longer in the library.",
     "edit_load_failed": { "text": "Couldn't read the tags ({0}).", "note": "{0} is the reason, e.g. \"not found\"." },
     "edit_save_failed": { "text": "Couldn't save the changes ({0}).", "note": "{0} is the reason, e.g. \"I/O error\"." },

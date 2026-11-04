@@ -27,7 +27,9 @@
  *
  * Save calls only the _set() functions whose values changed, on a thread of its own as they
  * can rewrite files and wait on MusicBrainz, and the dialog stays open and says why if one
- * fails. It can't be cancelled once it's started, so Cancel is greyed out meanwhile.
+ * fails. It can't be cancelled once it's started, so Cancel is greyed out meanwhile. A file in
+ * use changes nothing and is most likely the track playing, so while something plays a Stop
+ * Playing and Retry button joins Save, which empties the queue and saves again.
  *
  * Text boxes are EDIT controls, which draw with GDI and leave every pixel's alpha at 0: over
  * Mica their background would show the backdrop and their text would vanish. So each is a

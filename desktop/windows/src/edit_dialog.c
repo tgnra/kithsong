@@ -13,6 +13,7 @@
 #include <windowsx.h>
 
 #include "canvas.h"
+#include "playback.h"
 #include "scroller.h"
 #include "theme.h"
 #include "uia.h"
@@ -75,7 +76,7 @@ enum field {
 };
 
 /* Its other parts, and the search window's, numbered on from those. */
-enum { ID_SEARCH_MB = NUM_FIELDS, ID_NO_SCROBBLE, ID_MIX, ID_SAVE, ID_CANCEL, ID_CLOSE, ID_SEARCH, ID_LIST, ID_USE };
+enum { ID_SEARCH_MB = NUM_FIELDS, ID_NO_SCROBBLE, ID_MIX, ID_STOP_RETRY, ID_SAVE, ID_CANCEL, ID_CLOSE, ID_SEARCH, ID_LIST, ID_USE };
 
 typedef enum { KIND_ALBUM, KIND_ARTIST, KIND_TRACK } edit_kind;
 
@@ -571,6 +572,7 @@ static void paint(sheet *s, HDC dc) {
               theme.text);
   if (s->ops->paint) s->ops->paint(c);
   for (int i = 0; i < s->nparts; i++) {
+    if (IsRectEmpty(&s->parts[i].rc)) continue;
     switch (s->parts[i].kind) {
       case PART_FIELD: paint_field(s, c, i); break;
       case PART_BUTTON:
@@ -962,6 +964,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       SetBkColor((HDC)wp, theme.field);
       return (LRESULT)theme.field_brush;
     case WM_COMMAND:
+      if (HIWORD(wp) == EN_CHANGE && list) search_update(); /* no title, no Search */
       if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) {
         if (HIWORD(wp) == EN_SETFOCUS)
           for (int i = 0; i < s->nparts; i++)
@@ -1185,7 +1188,8 @@ static void sheet_free(sheet *s) {
 static void search_update(void) {
   sheet *s = &g_search.s;
   BOOL busy = s->job != NULL;
-  part_of(s, ID_SEARCH)->disabled = busy;
+  /* The core needs a title to search for. */
+  part_of(s, ID_SEARCH)->disabled = busy || !GetWindowTextLengthW(part_of(s, F_TITLE)->edit);
   part_of(s, ID_LIST)->disabled = !result_count();
   part_of(s, ID_USE)->disabled = busy || g_search.selected < 0;
   set_fields_locked(s, busy);
@@ -1245,7 +1249,7 @@ static void search_done(job *j) {
 
 static void search_start(void) {
   sheet *s = &g_search.s;
-  if (s->job) return;
+  if (s->job || part_of(s, ID_SEARCH)->disabled) return;
   job *j = calloc(1, sizeof *j);
   if (!j) return;
   j->notify = s->wnd;
@@ -1446,10 +1450,11 @@ static BOOL search_dialog(HWND owner, mc_library *lib, const char *uid, const ch
   set_field_text(part_of(s, F_ARTIST), artist);
   set_field_text(part_of(s, F_TITLE), title);
   s->focus = 0;
-  /* What the button says is what the user came for, so it's under way as the window opens. */
+  /* What the button says is what the user came for, so it's under way as the window opens,
+   * if there's a title to search for. */
   search_layout();
-  search_start();
   search_update();
+  search_start();
   sheet_run(s);
 
   BOOL picked = g_search.picked;
@@ -1471,6 +1476,7 @@ static struct {
   char *saved[NUM_FIELDS]; /* what's in the library, as text; NULL for a field not on the form */
   mc_album_flags saved_flags;
   RECT checks_card;
+  BOOL in_use; /* Save found a file open while something plays: Stop Playing and Retry shows */
   BOOL loaded; /* the tags were read, so there's something to save */
   BOOL changed;
 } g_form;
@@ -1558,10 +1564,13 @@ static void run_save(job *j) {
   j->st = st;
 }
 
+static void form_layout(void);
+
 static void form_update(void) {
   sheet *s = &g_form.s;
   BOOL busy = s->job != NULL, off = busy || !g_form.loaded;
   part_of(s, ID_SAVE)->disabled = off;
+  part_of(s, ID_STOP_RETRY)->disabled = off || !g_form.in_use;
   part_of(s, ID_CANCEL)->disabled = busy;
   part_of(s, ID_CLOSE)->disabled = busy;
   part *p = part_of(s, ID_SEARCH_MB);
@@ -1591,6 +1600,9 @@ static void save_done(job *j) {
   if (j->st == MC_ERR_NOT_FOUND) wcscpy(text, mc_wstr(MC_STR_WINDOWS_EDIT_GONE));
   else mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st)));
   set_message(s, text, TRUE, FALSE);
+  /* Nothing changed, and it's most likely the track playing. */
+  g_form.in_use = j->st == MC_ERR_IN_USE && playback_queue_count() > 0;
+  form_layout();
   form_update();
 }
 
@@ -1637,6 +1649,8 @@ static void save(void) {
   }
   s->job = j;
   set_message(s, mc_wstr(MC_STR_WINDOWS_EDIT_SAVING), FALSE, TRUE);
+  g_form.in_use = FALSE;
+  form_layout();
   form_update();
 }
 
@@ -1675,6 +1689,11 @@ static void form_activate(part *p) {
   sheet *s = &g_form.s;
   switch (p->id) {
     case ID_SAVE: save(); break;
+    case ID_STOP_RETRY: /* lets go of the file now, so the save can have it */
+      focus_part(s, (int)(part_of(s, ID_SAVE) - s->parts));
+      playback_clear();
+      save();
+      break;
     case ID_CANCEL:
     case ID_CLOSE: form_cancel(); break;
     case ID_SEARCH_MB: search_mb(); break;
@@ -1739,8 +1758,9 @@ static void form_layout(void) {
   y += row;
   SetRect(&s->message_rc, x, y, x + col, y + MESSAGE_LINES * s->line_h);
   y = s->message_rc.bottom + row;
-  static const int ids[] = {ID_SAVE, ID_CANCEL};
-  layout_buttons(s, y, ids, 2);
+  static const int ids[] = {ID_STOP_RETRY, ID_SAVE, ID_CANCEL};
+  SetRectEmpty(&part_of(s, ID_STOP_RETRY)->rc);
+  layout_buttons(s, y, g_form.in_use ? ids : ids + 1, g_form.in_use ? 3 : 2);
   s->h = y + scale(s, BUTTON_H) + scale(s, BOTTOM);
 }
 
@@ -1821,6 +1841,7 @@ static void build_form(void) {
     add_field(F_YEAR, MC_STR_WINDOWS_COL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
     add_field(F_GENRE, MC_STR_WINDOWS_EDIT_GENRE, 0, 0, 0);
   }
+  add_part(s, PART_BUTTON, ID_STOP_RETRY, MC_STR_WINDOWS_EDIT_STOP_RETRY, L"StopAndRetry");
   add_part(s, PART_ACCENT, ID_SAVE, MC_STR_SAVE, L"Save");
   add_part(s, PART_BUTTON, ID_CANCEL, MC_STR_CANCEL, L"Cancel");
   add_part(s, PART_CLOSE, ID_CLOSE, MC_STR_CLOSE, L"Close");
