@@ -34,6 +34,8 @@ void scroller_animate(scroller *s, int pos);
  * a line. */
 void scroller_command(scroller *s, int code, int line);
 void scroller_wheel(scroller *s, int delta);
+/* Shows the bar for a moment, if there's anything to scroll. */
+void scroller_show(scroller *s);
 /* Scrolls as little as needed to bring content [top, bottom) into view. */
 void scroller_reveal(scroller *s, int top, int bottom);
 

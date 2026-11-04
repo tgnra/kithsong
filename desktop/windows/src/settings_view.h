@@ -42,6 +42,12 @@
  * Scrobbling signs in with playback_scrobbler(): Sign In opens Last.fm's page in the browser
  * and waits, on a thread, for the user to approve it there. The account is the sync group's
  * (see scrobbler.h); the checkbox is this PC's own, kept in settings.json.
+ *
+ * What doesn't fit scrolls, with the views' overlay scrollbar (scroller.h), which only shows
+ * if there's something to scroll to. The controls are children of a window as tall as they
+ * reach, measured at each layout, so a change in their height needs only a new layout. The
+ * main window has no dialog manager: settings_view_translate() gives the page Tab, which
+ * brings the control it reaches into view, the wheel and the scrolling keys.
  */
 #ifndef KITHSONG_SETTINGS_VIEW_H
 #define KITHSONG_SETTINGS_VIEW_H
@@ -62,6 +68,10 @@ void settings_view_set_library_dir(const char *dir);
 void settings_view_set_font(HFONT font, UINT dpi);
 void settings_view_show(BOOL show);
 void settings_view_layout(int x, int y, int w, int h, UINT dpi);
+/* Moves the focus to the first control. */
+void settings_view_focus(void);
+/* For the message loop, before dispatching: TRUE if msg was the page's. */
+BOOL settings_view_translate(const MSG *msg);
 
 /* Where the Sync section saves this PC's name, and what it calls after renaming it or
  * leaving the group (to refresh the devices). Call once, after creating it. */

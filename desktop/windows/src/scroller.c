@@ -102,6 +102,10 @@ void scroller_wheel(scroller *s, int delta) {
   scroller_animate(s, s->target - MulDiv(delta, px, WHEEL_DELTA));
 }
 
+void scroller_show(scroller *s) {
+  show(s);
+}
+
 void scroller_reveal(scroller *s, int top, int bottom) {
   if (top < s->target) scroller_animate(s, top);
   else if (bottom > s->target + view_h(s)) scroller_animate(s, bottom - view_h(s));
