@@ -302,12 +302,12 @@ void mpris_set_track(const char *uid, const char *title, const char *artist, con
   clear_track();
   if (uid) {
     /* Object path elements allow [A-Za-z0-9_] only; uids are hex and '-'. */
-    s.trackid = g_strdup_printf("/app/kithsong/track/%s", *uid ? uid : "none");
+    s.trackid = g_strdup_printf("/ng/kithso/track/%s", *uid ? uid : "none");
     for (char *p = s.trackid; *p; p++)
       if (*p == '-') *p = '_';
     if (!g_variant_is_object_path(s.trackid)) {
       g_free(s.trackid);
-      s.trackid = g_strdup("/app/kithsong/track/current");
+      s.trackid = g_strdup("/ng/kithso/track/current");
     }
     s.title = g_strdup(title);
     s.artist = g_strdup(artist);

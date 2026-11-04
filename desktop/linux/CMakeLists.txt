@@ -59,7 +59,7 @@ target_compile_options(kithsong PRIVATE -Wno-pedantic)
 # component leaves out the fetched libraries' own install rules.
 include(GNUInstallDirs)
 include(Licenses)
-set(_app_id app.kithsong.Kithsong)
+set(_app_id ng.kithso.Kithsong)
 string(TIMESTAMP KITHSONG_RELEASE_DATE "%Y-%m-%d" UTC)  # honours SOURCE_DATE_EPOCH
 
 # The .desktop file's and the metainfo's text is strings/en.json's (shared.app_summary,

@@ -20,11 +20,13 @@ Alternatively, there are portable zips with a .exe built for each release, avail
 
 The recommended way to install Kithsong is using a Flatpak. See installation instructions for Flatpak for your distro [at Flathub's website](https://flathub.org/en/setup)
 
-Open the [Flathub store page]() and click download or run this command:
+Then run this command:
 
 ```bash
-flatpak install ng.kithso.app
+flatpak install --user https://kithso.ng/kithsong.flatpakref
 ```
+
+Kithsong then updates with `flatpak update` or your software centre.
 
 Alternatively, there is a tarball built for each release, available [here on Github]()
 

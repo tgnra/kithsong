@@ -1,8 +1,8 @@
 # Flatpak build of the GTK app, bundled into one .flatpak by scripts/release-linux.sh.
 #
-# Not Flathub-ready: CMake fetches the third-party sources at configure time, so the build
-# needs the network (build-args below), which Flathub forbids.
-id: app.kithsong.Kithsong
+# Not one for Flathub: CMake fetches the third-party sources at configure time, so the build
+# needs the network (build-args below). Fine here, as we host our own repo.
+id: ng.kithso.Kithsong
 runtime: org.gnome.Platform
 runtime-version: '51'  # also the container tag in .github/workflows/release.yml
 sdk: org.gnome.Sdk

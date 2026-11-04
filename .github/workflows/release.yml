@@ -104,18 +104,50 @@ jobs:
   linux:
     needs: version
     runs-on: ubuntu-latest
-    # The tag tracks runtime-version in packaging/flatpak/app.kithsong.Kithsong.yml.
+    # The tag tracks runtime-version in packaging/flatpak/ng.kithso.Kithsong.yml.
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
     steps:
       - uses: actions/checkout@v7
+      - name: Import the Flatpak repo's signing key
+        shell: bash
+        env:
+          KITHSONG_FLATPAK_GPG_KEY: ${{ secrets.KITHSONG_FLATPAK_GPG_KEY }}
+        run: |
+          if [[ -z "$KITHSONG_FLATPAK_GPG_KEY" ]]; then
+            if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+              echo "::error::KITHSONG_FLATPAK_GPG_KEY isn't set; a release needs the signed Flatpak repo."
+              exit 1
+            fi
+            echo "::warning::KITHSONG_FLATPAK_GPG_KEY isn't set; building without the signed repo."
+            exit 0
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --quiet --import <<<"$KITHSONG_FLATPAK_GPG_KEY"
+          key_id="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
+          echo "GNUPGHOME=$GNUPGHOME" >>"$GITHUB_ENV"
+          echo "KITHSONG_FLATPAK_GPG_KEY_ID=$key_id" >>"$GITHUB_ENV"
       - name: Build
         run: bash scripts/release-linux.sh
+      - name: Remove the signing key
+        if: always()
+        shell: bash
+        run: |
+          gpgconf --kill all || true
+          rm -rf "$RUNNER_TEMP/gnupg"
       - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: dist/*.flatpak
+          if-no-files-found: error
+      # Its own artifact, for the same reason as the MSIX's.
+      - uses: actions/upload-artifact@v7
+        if: env.KITHSONG_FLATPAK_GPG_KEY_ID != ''
+        with:
+          name: linux-flatpak-repo
+          path: dist/*.tar.gz
           if-no-files-found: error
 
   android:

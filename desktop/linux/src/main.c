@@ -1459,7 +1459,7 @@ static void show_about(app *a) {
   AdwDialog *about = adw_about_dialog_new();
   AdwAboutDialog *d = ADW_ABOUT_DIALOG(about);
   adw_about_dialog_set_application_name(d, mc_str(MC_STR_APP_NAME));
-  adw_about_dialog_set_application_icon(d, "app.kithsong.Kithsong");
+  adw_about_dialog_set_application_icon(d, "ng.kithso.Kithsong");
   adw_about_dialog_set_version(d, mc_version());
   adw_about_dialog_set_comments(d, mc_str(MC_STR_APP_SUMMARY));
   adw_about_dialog_set_website(d, WEBSITE);
@@ -1829,7 +1829,7 @@ int main(int argc, char **argv) {
   mc_settings_free(settings);
   mc_perf_mark("library_opened");
 
-  AdwApplication *gapp = adw_application_new("app.kithsong.Kithsong", G_APPLICATION_DEFAULT_FLAGS);
+  AdwApplication *gapp = adw_application_new("ng.kithso.Kithsong", G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(gapp, "activate", G_CALLBACK(on_activate), &a);
   g_signal_connect(gapp, "shutdown", G_CALLBACK(on_shutdown), &a);
   int status = g_application_run(G_APPLICATION(gapp), argc, argv);

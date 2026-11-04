@@ -2,7 +2,7 @@
 <!-- Configured by CMake with the release's version and build date, and the text in
      strings/<lang>.json (shared.app_summary, linux.app_description). -->
 <component type="desktop-application">
-  <id>app.kithsong.Kithsong</id>
+  <id>ng.kithso.Kithsong</id>
   <metadata_license>CC0-1.0</metadata_license>
   <name>@KITHSONG_APP_NAME@</name>
   <summary>@KITHSONG_SUMMARY@</summary>
@@ -10,8 +10,8 @@
     <p>@KITHSONG_DESCRIPTION@</p>
 @KITHSONG_DESCRIPTION_L10N@  </description>
   <url type="homepage">https://kithso.ng</url>
-  <launchable type="desktop-id">app.kithsong.Kithsong.desktop</launchable>
-  <developer id="app.kithsong">
+  <launchable type="desktop-id">ng.kithso.Kithsong.desktop</launchable>
+  <developer id="ng.kithso">
     <name>Kithsong</name>
   </developer>
   <content_rating type="oars-1.1"/>

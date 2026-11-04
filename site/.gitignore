@@ -2,3 +2,5 @@
 dist/
 .cache/
 __pycache__/
+static/repo/
+static/kithsong.flatpakref

@@ -4,6 +4,10 @@ on:
   push:
     branches: [master]
     paths: ["site/**", ".github/workflows/site.yml"]
+  # Publishing a release brings its Flatpak repo to the site. Not prereleases: "released"
+  # skips them, so a release candidate never reaches flatpak update.
+  release:
+    types: [released]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +24,20 @@ defaults:
     working-directory: site
 
 jobs:
+  # The github-pages environment only takes master, and a release event runs on its tag, so
+  # hand over to a run on master.
+  redeploy:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run site.yml --repo "$GITHUB_REPOSITORY" --ref master
+
   build:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +69,31 @@ jobs:
         run: |
           echo "::error::The site uses root-relative URLs (/img/, /docs/) and must be served from the domain root, but Pages will serve it under '${{ steps.pages.outputs.base_path }}'. Set the custom domain (kithso.ng) in Settings → Pages first."
           exit 1
+
+      # Every deploy replaces the whole site, so each one brings the repo back from the latest
+      # release. static/ goes into dist/ as it is. A failed download stops the deploy rather
+      # than take the repo offline; only a release from before the repo existed has none.
+      - name: Fetch the Flatpak repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset=kithsong-flatpak-repo.tar.gz
+          if ! latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest"               --jq '[.tag_name, (.assets[].name)] | join(" ")' 2>&1)"; then
+            if [[ "$latest" == *"HTTP 404"* ]]; then
+              echo "::notice::No published release yet, so no Flatpak repo."
+              exit 0
+            fi
+            echo "$latest" >&2
+            exit 1
+          fi
+          read -r tag assets <<<"$latest"
+          if [[ " $assets " != *" $asset "* ]]; then
+            echo "::notice::$tag has no $asset, so no Flatpak repo."
+            exit 0
+          fi
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --output "$RUNNER_TEMP/$asset"
+          tar -xzf "$RUNNER_TEMP/$asset" -C static
+          test -f static/repo/summary -a -f static/repo/summary.sig -a -f static/kithsong.flatpakref
 
       - name: Build
         run: python -m ssg build --base-url "${{ steps.pages.outputs.base_url }}"

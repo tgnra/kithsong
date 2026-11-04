@@ -20,8 +20,8 @@ href = "#"
 [[downloads]]
 platform = "linux"
 name = "Linux"
-store = "Flathub"
-href = "#"
+store = "Flatpak"
+href = "/docs/install/"
 
 [[downloads]]
 platform = "android"

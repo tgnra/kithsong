@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Builds the GTK app as a Flatpak and bundles it into one file,
-# dist/kithsong-<version>-linux-<arch>.flatpak. The release workflow runs this too.
+# dist/kithsong-<version>-linux-<arch>.flatpak. The release workflow runs this too. With
+# $KITHSONG_FLATPAK_GPG_KEY_ID (a key in gpg's keyring) it also signs the repo and writes
+# dist/kithsong-flatpak-repo.tar.gz, which the website serves.
 #
 #   scripts/release-linux.sh
 #
@@ -22,13 +24,14 @@ done
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
-app_id=app.kithsong.Kithsong
+app_id=ng.kithso.Kithsong
 manifest=packaging/flatpak/$app_id.yml
 version="$(head -n1 VERSION | tr -d '[:space:]')"
 arch="$(flatpak --default-arch)"
 runtime_version="$(sed -n "s/^runtime-version: '\([^']*\)'.*/\1/p" "$manifest")"
 flathub=https://dl.flathub.org/repo/flathub.flatpakrepo
 bundle="dist/kithsong-$version-linux-$arch.flatpak"
+branch=stable
 
 # The manifest's build reads these from an initial-cache file, which is gitignored and
 # removed again afterwards.
@@ -75,8 +78,42 @@ if command -v appstreamcli >/dev/null; then
 else
     echo "warning: appstreamcli isn't installed; the bundle has no software catalog." >&2
 fi
-flatpak build-export build/flatpak-repo build/flatpak-app
+# With a key, the repo is signed for kithso.ng/repo. Only this build goes in: a client just
+# follows the branch to its newest commit, so old ones needn't stay.
+sign=()
+if [[ -n "${KITHSONG_FLATPAK_GPG_KEY_ID:-}" ]]; then
+    sign=(--gpg-sign="$KITHSONG_FLATPAK_GPG_KEY_ID")
+fi
+rm -rf build/flatpak-repo
+flatpak build-export "${sign[@]}" build/flatpak-repo build/flatpak-app "$branch"
+flatpak build-update-repo "${sign[@]}" --title=Kithsong --default-branch="$branch" build/flatpak-repo
 
 mkdir -p dist
-flatpak build-bundle --runtime-repo="$flathub" build/flatpak-repo "$bundle" "$app_id"
+flatpak build-bundle --runtime-repo="$flathub" build/flatpak-repo "$bundle" "$app_id" "$branch"
 echo "Wrote $root/$bundle"
+
+# What the website serves, unpacked into site/static by .github/workflows/site.yml. The name
+# has no version, so the site can find it in whichever release is the latest.
+if [[ -n "${KITHSONG_FLATPAK_GPG_KEY_ID:-}" ]]; then
+    site=build/flatpak-site
+    rm -rf "$site"
+    mkdir -p "$site"
+    cp -r build/flatpak-repo "$site/repo"
+    rm -rf "$site/repo/tmp" "$site/repo/.lock"
+    cat >"$site/kithsong.flatpakref" <<REF
+[Flatpak Ref]
+Title=Kithsong
+Name=$app_id
+Branch=$branch
+Url=https://kithso.ng/repo/
+SuggestRemoteName=kithsong
+Homepage=https://kithso.ng
+RuntimeRepo=$flathub
+IsRuntime=false
+GPGKey=$(gpg --export "$KITHSONG_FLATPAK_GPG_KEY_ID" | base64 -w0)
+REF
+    tar -czf dist/kithsong-flatpak-repo.tar.gz -C "$site" repo kithsong.flatpakref
+    echo "Wrote $root/dist/kithsong-flatpak-repo.tar.gz"
+else
+    echo "warning: KITHSONG_FLATPAK_GPG_KEY_ID is not set; no signed repo for the website." >&2
+fi
