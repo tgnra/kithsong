@@ -52,6 +52,7 @@ typedef struct edit_form {
   char *mb;                /* the release the form has now, "" for none */
   char *saved[NUM_FIELDS]; /* what's in the library, as text; NULL for a field not on the form */
   mc_album_flags saved_flags;
+  gboolean track_mix; /* a track alone on its album, or on none: the form has Continuous mix */
   gboolean art_ok;    /* the album has a folder here to put a cover in */
   GBytes *new_art;    /* the image that Save would use */
   GCancellable *art_closing; /* what's going on for the cover that closing stops */
@@ -529,6 +530,10 @@ static mc_status load(edit_form *f) {
     t[F_YEAR] = number_text(tags.year);
     t[F_GENRE] = dup_text(tags.genre);
     mc_track_tags_clear(&tags);
+    mc_track_mix m;
+    st = mc_track_mix_get(f->lib, f->uid, &m);
+    f->track_mix = st == MC_OK && m.can_set;
+    f->saved_flags.mix = st == MC_OK && m.mix;
   }
   return st;
 }
@@ -552,7 +557,8 @@ static void run_save(job *j) {
     j->tags_saved = st == MC_OK;
   }
   if (st == MC_OK && j->set_flags) {
-    st = mc_album_flags_set(j->lib, j->uid, &j->flags);
+    st = j->kind == EDIT_TRACK ? mc_track_mix_set(j->lib, j->uid, j->flags.mix)
+                               : mc_album_flags_set(j->lib, j->uid, &j->flags);
     j->flags_saved = st == MC_OK;
   }
   if (st == MC_OK && j->set_art) {
@@ -647,6 +653,9 @@ static void save(edit_form *f) {
     j->flags.no_scrobble = adw_switch_row_get_active(ADW_SWITCH_ROW(f->no_scrobble));
     j->flags.mix = adw_switch_row_get_active(ADW_SWITCH_ROW(f->mix));
     j->set_flags = !j->flags.no_scrobble != !f->saved_flags.no_scrobble || !j->flags.mix != !f->saved_flags.mix;
+  } else if (f->track_mix) {
+    j->flags.mix = adw_switch_row_get_active(ADW_SWITCH_ROW(f->mix));
+    j->set_flags = !j->flags.mix != !f->saved_flags.mix;
   }
   if (f->new_art) {
     j->art = g_bytes_ref(f->new_art);
@@ -1040,6 +1049,10 @@ static void build_track(edit_form *f) {
   add_number(f, group, F_DISC_NO, MC_STR_EDIT_DISC_NUMBER, NUMBER_DIGITS);
   add_number(f, group, F_YEAR, MC_STR_COL_YEAR, YEAR_DIGITS);
   add_field(f, group, F_GENRE, MC_STR_EDIT_GENRE);
+  if (f->track_mix) {
+    group = add_group(f);
+    f->mix = add_switch(group, MC_STR_EDIT_MIX, MC_STR_EDIT_MIX_TRACK_TEXT, f->saved_flags.mix);
+  }
 }
 
 void edit_dialog_present(app *a, edit_kind kind, const char *uid) {
