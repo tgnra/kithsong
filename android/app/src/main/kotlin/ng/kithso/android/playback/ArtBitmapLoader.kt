@@ -19,9 +19,9 @@ import java.io.IOException
 
 /**
  * Art for the notification and lock screen, from a queue item's [artRef] through the app's
- * image loader, so covers come out as they do in the app, and from its caches. Queue items
- * carry no artwork URI; browse items carry an [ArtProvider] one for Android Auto, and an item
- * with only that has its art loaded from what the URI says, the same way.
+ * image loader, so covers come out as they do in the app, and from its caches. Browse items
+ * carry only an [ArtProvider] artwork URI, for Android Auto, and have their art loaded from what
+ * the URI says, the same way.
  */
 @OptIn(UnstableApi::class)
 class ArtBitmapLoader(private val context: Context, private val scope: CoroutineScope) : BitmapLoader {

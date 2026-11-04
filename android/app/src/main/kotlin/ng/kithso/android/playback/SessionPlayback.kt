@@ -30,7 +30,7 @@ import java.util.concurrent.ExecutionException
  * Use it on the main thread; [scope] must be on it too.
  */
 @OptIn(UnstableApi::class)
-class SessionPlayback(context: Context, private val scope: CoroutineScope) : Playback {
+class SessionPlayback(private val context: Context, private val scope: CoroutineScope) : Playback {
     override var track by mutableStateOf<Track?>(null)
         private set
     override var isPlaying by mutableStateOf(false)
@@ -76,7 +76,7 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
     override fun play(queue: List<Track>, index: Int) {
         val playable = queue.filter { it.path != null }
         if (playable.isEmpty() || (index >= 0 && queue.getOrNull(index)?.path == null)) return
-        val items = playable.map(Track::toMediaItem)
+        val items = queueItems(context, playable)
         if (index < 0) {
             // From the start: the player picks the first track, shuffled, so it's shown once
             // the player says which.
@@ -126,7 +126,7 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
 
     override fun updateQueue(tracks: List<Track>) = withController {
         if (tracks.size == it.mediaItemCount) {
-            val items = tracks.map(Track::toMediaItem)
+            val items = queueItems(context, tracks)
             // The same files with another cover or title: nothing for the player to start again.
             if (items.indices.all { i -> items[i].path == it.getMediaItemAt(i).path }) it.replaceMediaItems(0, items.size, items)
             else it.setMediaItems(items, it.currentMediaItemIndex, it.currentPosition)

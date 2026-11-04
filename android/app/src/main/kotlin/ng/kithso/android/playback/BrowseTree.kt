@@ -190,7 +190,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
         val playable = tracks.filter { it.path != null }
         if (playable.isEmpty()) return null
         if (ref != null) source().notePlayed(ref)
-        val items = playable.map(Track::toMediaItem)
+        val items = queueItems(context, playable)
         if (index == null) return MediaItemsWithStartPosition(items, C.INDEX_UNSET, C.TIME_UNSET)
         val start = tracks.take(index).count { it.path != null }.coerceAtMost(playable.lastIndex)
         return MediaItemsWithStartPosition(items, start, 0)
