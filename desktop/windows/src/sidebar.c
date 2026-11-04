@@ -22,6 +22,7 @@ typedef enum {
   ROW_NEARBY,    /* a nearby device: a button that asks to pair */
   ROW_NOTE,
   ROW_ABOUT,   /* a button that opens the About box */
+  ROW_ANALYSIS, /* a button that opens the audio analysis dialog, while it runs in the background */
   ROW_DIVIDER, /* a line between Home and Search and the library's pages */
 } row_kind;
 
@@ -104,6 +105,7 @@ static struct {
   canvas buf;
   scroller scroll; /* the rows above Import */
   int pinned_top;  /* where the pinned rows start, in the client area */
+  BOOL analysing;  /* the row above Settings is shown */
   int sel;     /* the selected page's row, or -1 */
   int focus;   /* the row with the keyboard focus (a page or a button), or -1 */
   int hot;     /* selectable or clickable row under the mouse, or -1 */
@@ -168,7 +170,7 @@ static BOOL enabled(int i) {
  * About. */
 static BOOL clickable(int i) {
   row_kind kind = row(i)->kind;
-  return kind == ROW_ACCORDION || kind == ROW_ABOUT || ((kind == ROW_NEARBY || kind == ROW_RECENT) && !s.locked);
+  return kind == ROW_ACCORDION || kind == ROW_ABOUT || kind == ROW_ANALYSIS || ((kind == ROW_NEARBY || kind == ROW_RECENT) && !s.locked);
 }
 
 /* The next row after from in direction dir (+1 or -1) that the keyboard can land on, or -1
@@ -182,7 +184,8 @@ static int next_focus(int from, int dir) {
 static int row_height(const sb_row *r) {
   static const int heights[] = {[ROW_NAV] = NAV_H,       [ROW_HEADER] = HEADER_H, [ROW_RECENT] = NAV_H,
                                 [ROW_DEVICE] = NAV_H,    [ROW_ACCORDION] = NAV_H, [ROW_NEARBY] = NAV_H,
-                                [ROW_NOTE] = NOTE_H,     [ROW_ABOUT] = NAV_H,     [ROW_DIVIDER] = DIVIDER_H};
+                                [ROW_NOTE] = NOTE_H,     [ROW_ABOUT] = NAV_H,     [ROW_ANALYSIS] = NAV_H,
+                                [ROW_DIVIDER] = DIVIDER_H};
   return scale(heights[r->kind]);
 }
 
@@ -510,8 +513,16 @@ static void rebuild(void) {
       for (int i = 0; i < s.nnearby; i++) push_device(ROW_NEARBY, &s.nearby[i]);
   }
   if (s.npaired == 0 && s.nnearby == 0) push_row(ROW_NOTE, mc_wstr(MC_STR_DEVICES_NONE), NULL);
-  for (size_t i = 0; i < sizeof nav_bottom / sizeof nav_bottom[0]; i++)
+  for (size_t i = 0; i < sizeof nav_bottom / sizeof nav_bottom[0]; i++) {
+    if (nav_bottom[i].page == PAGE_SETTINGS && s.analysing) {
+      sb_row *analysis = push_row(ROW_ANALYSIS, mc_wstr(MC_STR_ANALYSIS_RUNNING), NULL);
+      if (analysis) {
+        analysis->icon = 0xE9F5; /* Processing */
+        analysis->pinned = TRUE;
+      }
+    }
     push_nav(mc_wstr(nav_bottom[i].text), nav_bottom[i].icon, nav_bottom[i].page, TRUE);
+  }
   sb_row *about = push_row(ROW_ABOUT, mc_wstr(MC_STR_WINDOWS_ABOUT), NULL);
   if (about) {
     about->icon = 0xE946; /* Info */
@@ -560,6 +571,8 @@ static void activate(int i) {
     SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_OPEN_RECENT), (LPARAM)s.wnd);
   } else if (r->kind == ROW_ABOUT) {
     SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_ABOUT), (LPARAM)s.wnd);
+  } else if (r->kind == ROW_ANALYSIS) {
+    SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_ANALYSIS), (LPARAM)s.wnd);
   }
 }
 
@@ -611,7 +624,8 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
     }
     case ROW_RECENT:
     case ROW_NEARBY:
-    case ROW_ABOUT: { /* buttons: hot and pressed, never selected */
+    case ROW_ABOUT:
+    case ROW_ANALYSIS: { /* buttons: hot and pressed, never selected */
       color = theme_draw_state(c, &fill, scale(RADIUS), i == s.drop ? STATE_HOT : button_state(i));
       if (i == s.drop) canvas_frame(c, &fill, scale(RADIUS), scale(2), theme.accent, 255); /* where a drop lands */
       if (!clickable(i)) color = theme.text3;
@@ -767,9 +781,11 @@ static BOOL ui_node(int i, uia_node *n) {
     case ROW_RECENT:
     case ROW_NEARBY:
     case ROW_ABOUT:
+    case ROW_ANALYSIS:
       n->type = UIA_ListItemControlTypeId;
       n->flags = UIA_FOCUSABLE | UIA_INVOKABLE | (clickable(r) ? 0 : UIA_DISABLED);
       if (row->kind == ROW_ABOUT) n->automation_id = L"About";
+      if (row->kind == ROW_ANALYSIS) n->automation_id = L"Analysis";
       break;
     case ROW_ACCORDION:
       n->type = UIA_ButtonControlTypeId;
@@ -1137,6 +1153,12 @@ sidebar_page sidebar_selection(void) {
 void sidebar_select(sidebar_page page) {
   for (int i = 0; i < s.nrows; i++)
     if (s.rows[i].kind == ROW_NAV && s.rows[i].page == page) select_quietly(i);
+}
+
+void sidebar_set_analysing(BOOL analysing) {
+  if (s.analysing == !!analysing) return;
+  s.analysing = !!analysing;
+  rebuild();
 }
 
 void sidebar_set_locked(BOOL locked) {

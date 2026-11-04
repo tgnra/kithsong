@@ -79,6 +79,8 @@ void mc_thread_detach(mc_thread *thread);
 /* Makes the calling thread run only when nothing else wants the CPU or the disk, as far as the
  * platform goes, for the rest of its life. */
 void mc_thread_background(void);
+/* Undoes it as far as it can: on Linux only a privileged thread can lower its nice value. */
+void mc_thread_foreground(void);
 
 /* Native path separator, for building paths to show the user. */
 #ifdef _WIN32

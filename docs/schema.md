@@ -357,11 +357,19 @@ arrive field by field and a key would make applying them fail, and it would have
 
 ### Scanning
 
-`mc_analysis_scanner_start()`, which Windows and Linux call beside starting sync and Android
-doesn't, for the battery: a phone or watch gets results by sync. The scanner has a thread and a
-connection of its own, at background priority (`mc_thread_background()`), and starts 30 seconds
-after the library opens. One track at a time, it takes the next track, in uid order, with a file
-that:
+`mc_analysis_scanner_start_sized()`, which Windows and Linux call beside starting sync and
+Android doesn't, for the battery: a phone or watch gets results by sync. The scanner has a thread
+and a connection of its own, and starts 30 seconds after the library opens, and a pass soon after
+an import or sync ends. Each pass counts what's waiting (`mc_analysis_pending()`). Under five hours
+of audio it runs flat out with nothing shown: about 45 seconds' work in a release build. From five
+hours its status says it's large, and the frontend opens a dialog with a progress bar, Background
+and Cancel. It stays flat out behind the dialog. Background calls
+`mc_analysis_scanner_set_paced()`, which brings the rests and background priority
+(`mc_thread_background()`), and only then the wait for AC power, and shows a row above Settings on
+Windows or a button next to Settings on Linux that opens the dialog again. `analysis_background` in
+settings.json keeps that choice across restarts until a pass finds nothing to do. Cancel stops the
+scanner until the next start, which asks again. One track at a time, it takes the next track, in
+uid order, with a file that:
 
 - is the track's current one (`files.file_rev IS tracks.file_rev`; a stale copy, or an original
   a peer has since replaced, isn't read);

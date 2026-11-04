@@ -82,14 +82,33 @@ double mc_analysis_distance(const mc_analysis *a, const mc_analysis *b,
  *
  * The scanner analyses the tracks of one library that have a file here and no result yet, one
  * at a time, on a low-priority thread of its own with a connection of its own. It has no state
- * but the results: stopped at any point, it goes on from there next time. It only works on AC
- * power, and stands aside while a sync session or an import runs. Android keeps no scanner
- * running, for the battery: results reach it by sync, and after an import it asks for one run
- * while charging. */
+ * but the results: stopped at any point, it goes on from there next time. While paced it only
+ * works on AC power, and it always stands aside while a sync session or an import runs. Android
+ * keeps no scanner running, for the battery: results reach it by sync, and after an import it
+ * asks for one run while charging, paced, with nothing shown. */
 typedef struct mc_analysis_scanner mc_analysis_scanner;
+
+/* How a scanner is doing, for a frontend to poll. */
+typedef struct mc_analysis_status {
+  int active;      /* a pass with tracks to do is under way */
+  int large;       /* too long to run unasked: see mc_analysis_scanner_start_sized() */
+  int paced;       /* resting, at low priority */
+  int done, total; /* tracks of this pass */
+} mc_analysis_status;
 
 /* Starts scanning the library in dir, after a short wait so a starting app isn't held up. */
 mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out);
+/* For a desktop: as above, but flat out unless paced is set. Each pass's size is in its status:
+ * a large one goes on flat out until the frontend calls mc_analysis_scanner_set_paced() or stops
+ * it. A pass starts soon after an import or sync ends, rather than at the next idle look. */
+mc_status mc_analysis_scanner_start_sized(const char *dir, int paced, mc_analysis_scanner **out);
+/* Takes effect within a moment, in the middle of a track, and lasts until a pass finds nothing
+ * to do; status.paced says when it has. Other scanners are always paced. */
+void mc_analysis_scanner_set_paced(mc_analysis_scanner *s, int paced);
+/* All zero for no scanner. */
+void mc_analysis_scanner_status(mc_analysis_scanner *s, mc_analysis_status *out);
+/* What a pass from the start would do now: its tracks and their length. */
+mc_status mc_analysis_pending(mc_library *lib, int *tracks, int64_t *ms);
 /* One run for a caller that decides when it may run, as a job that needs a charger does: at
  * once, whatever the power, until it has been through the library, and then it's over. Holds are
  * stood aside for all the same. Stop it like any other. */

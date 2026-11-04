@@ -36,6 +36,7 @@ typedef struct app {
   GtkListBox *top_nav;  /* the sidebar's Home and Search, above nav */
   GtkListBox *nav;      /* the sidebar's Albums, Artists, Playlists and Album groups */
   GtkWidget *settings;  /* the header bar's Settings button */
+  GtkWidget *analysing; /* next to it, while audio analysis runs in the background (analysis_ui.h) */
   GtkStack *albums;     /* "empty" status page | "grid" | "playlists" (a header over playlists)
                          * | "groups" (album_groups.c) */
   AdwStatusPage *empty;        /* "No music yet", or "No albums" when the music is all singles */

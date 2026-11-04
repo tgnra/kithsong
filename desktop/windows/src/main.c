@@ -109,6 +109,7 @@
 #include "resource.h"
 #include "search_view.h"
 #include "settings_view.h"
+#include "analysis_dialog.h"
 #include "sidebar.h"
 #include "smart_editor.h"
 #include "sync_bridge.h"
@@ -160,6 +161,7 @@ enum {
   TIMER_REFRESH_LIBRARY,          /* one-shot: sync brought library rows or files */
   TIMER_SAVE_VOLUME,              /* one-shot: the volume changed, so a held key saves once */
   TIMER_DEBUG_PAIR,               /* debug builds: KITHSONG_DEBUG_PAIR, below */
+  TIMER_ANALYSIS,                 /* repeating: what the audio analysis is up to */
   REFRESH_DEVICES_MS = 200,
   SAVE_VOLUME_MS = 1000,
   VOLUME_STEP = 5, /* per press of a volume shortcut */
@@ -1361,8 +1363,56 @@ static void library_opened(void) {
   }
   mc_perf_note("library_stress", stress ? "yes" : "no");
 }
-/* The audio analysis of the library that's open; it comes and goes with sync. */
+/* The audio analysis of the library that's open; it comes and goes with sync. A small batch
+ * runs flat out with nothing shown. A large one opens analysis_dialog.h: Background carries on
+ * paced, with a row in the sidebar, and is remembered until the work is done, so a restart
+ * doesn't ask again. Cancel stops it until the next start. */
+#define SETTING_ANALYSIS_BACKGROUND "analysis_background"
+enum { ANALYSIS_POLL_MS = 500 };
+
 static mc_analysis_scanner *g_analysis;
+static BOOL g_analysis_remembered; /* SETTING_ANALYSIS_BACKGROUND is set */
+
+static void analysis_remember(BOOL background) {
+  g_analysis_remembered = background;
+  mc_settings_set_bool(g_app.settings, SETTING_ANALYSIS_BACKGROUND, background);
+  mc_settings_save(g_app.settings); /* failing, it asks again at the next start */
+}
+
+static void on_analysis_background(void) {
+  mc_analysis_scanner_set_paced(g_analysis, 1);
+  analysis_remember(TRUE);
+  sidebar_set_analysing(TRUE);
+}
+
+static void on_analysis_cancel(void) {
+  mc_analysis_scanner_stop(g_analysis);
+  g_analysis = NULL;
+  analysis_remember(FALSE);
+  sidebar_set_analysing(FALSE);
+}
+
+static const analysis_dialog_host analysis_host = {on_analysis_background, on_analysis_cancel};
+
+static void analysis_tick(void) {
+  mc_analysis_status st;
+  mc_analysis_scanner_status(g_analysis, &st);
+  if (g_analysis_remembered && g_analysis && !st.paced) analysis_remember(FALSE); /* it finished */
+  /* After a track is done: a pass of files that are all missing is over in a moment. */
+  if (st.active && st.large && !st.paced && st.done > 0) analysis_dialog_show(g_app.wnd, &analysis_host);
+  if (st.active) analysis_dialog_update(st.done, st.total);
+  else analysis_dialog_close();
+  sidebar_set_analysing(st.active && st.paced);
+}
+
+/* The sidebar row: the dialog again, for its progress or its Cancel. */
+static void analysis_present(void) {
+  mc_analysis_status st;
+  mc_analysis_scanner_status(g_analysis, &st);
+  if (!st.active) return;
+  analysis_dialog_show(g_app.wnd, &analysis_host);
+  analysis_dialog_update(st.done, st.total);
+}
 
 static void start_sync(void) {
   restore_deleted(); /* the library just opened */
@@ -1375,11 +1425,18 @@ static void start_sync(void) {
   if (g_app.page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
   refresh_devices();
   if (waiting_banner_update(sync_bridge_get())) layout(); /* nothing yet: it comes with SYNC_EV_WAITING */
-  if (g_app.lib && !g_analysis) mc_analysis_scanner_start(mc_library_dir(g_app.lib), &g_analysis);
+  if (g_app.lib && !g_analysis) {
+    g_analysis_remembered = mc_settings_bool(g_app.settings, SETTING_ANALYSIS_BACKGROUND, 0);
+    mc_analysis_scanner_start_sized(mc_library_dir(g_app.lib), g_analysis_remembered, &g_analysis);
+  }
+  SetTimer(g_app.wnd, TIMER_ANALYSIS, ANALYSIS_POLL_MS, NULL);
 }
 
 /* Before the library closes: sync reads it. Pairing dialogs go first, as they use sync. */
 static void stop_sync(void) {
+  KillTimer(g_app.wnd, TIMER_ANALYSIS);
+  analysis_dialog_close();
+  sidebar_set_analysing(FALSE);
   mc_analysis_scanner_stop(g_analysis); /* it reads the files, which may be about to move */
   g_analysis = NULL;
   pair_dialog_close_all();
@@ -1602,6 +1659,7 @@ static void on_command(int id, int code) {
       else if (code == SBN_PAIR_DEVICE) pair_nearby_uid(sidebar_clicked_nearby());
       else if (code == SBN_OPEN_RECENT) open_recent();
       else if (code == SBN_ABOUT) show_about();
+      else if (code == SBN_ANALYSIS) analysis_present();
       else if (code == SBN_REMOVE_RECENT || code == SBN_CLEAR_RECENTS) remove_recents(code == SBN_CLEAR_RECENTS);
       else if (code == SBN_EDIT_RECENT) edit_recent();
       else if (code == SBN_NEW_SMART_PLAYLIST || code == SBN_NEW_SMART_GROUP) {
@@ -1830,6 +1888,10 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
       if (wp == TIMER_REFRESH_DEVICES || wp == TIMER_POLL_DEVICES) {
         refresh_devices();
+        return 0;
+      }
+      if (wp == TIMER_ANALYSIS) {
+        analysis_tick();
         return 0;
       }
       if (wp == TIMER_REFRESH_LIBRARY) {
@@ -2699,7 +2761,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
 
   MSG msg;
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {
-    if (pair_dialog_translate(&msg) || settings_view_translate(&msg)) continue;
+    if (pair_dialog_translate(&msg) || settings_view_translate(&msg) || analysis_dialog_translate(&msg)) continue;
     if (space_play_pause(&msg) || shortcut(&msg)) continue;
     TranslateMessage(&msg);
     DispatchMessageW(&msg);

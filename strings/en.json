@@ -3,6 +3,11 @@
     "app_name": { "text": "Kithsong", "translatable": false },
     "app_summary": { "text": "Music library, player and LAN sync", "note": "The app's one-line description: in the About box, and on Linux in the applications menu and software centres." },
 
+    "analysis_title": { "text": "Analysing your music", "note": "Title of the dialog shown while a large batch of tracks is analysed for how they sound." },
+    "analysis_text": { "text": "Kithsong is listening to your music, to find the tracks that sound alike.", "note": "In the audio analysis dialog, above its progress bar." },
+    "analysis_progress": { "text": "{0:d} of {1:d} tracks", "note": "Under the audio analysis dialog's progress bar. {0} is how many are done, {1} how many there are." },
+    "analysis_background": { "text": "_Background", "note": "Button of the audio analysis dialog: carry on more slowly behind the scenes, and close the dialog." },
+    "analysis_running": { "text": "Analysing music", "note": "The sidebar row or header bar button shown while audio analysis carries on in the background. Opens its dialog." },
     "cancel": "Cancel",
     "ok": "OK",
     "close": "_Close",

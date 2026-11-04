@@ -132,6 +132,10 @@ void mc_thread_background(void) {
   SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
 }
 
+void mc_thread_foreground(void) {
+  SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
+}
+
 /* UTF-8 -> UTF-16, malloc'd. */
 static wchar_t *widen(const char *s) {
   int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0);
@@ -709,6 +713,12 @@ void mc_thread_background(void) {
   /* On Linux a nice value is the calling thread's, not the process's as POSIX has it, and the
    * I/O scheduler follows it. */
   setpriority(PRIO_PROCESS, 0, 19);
+#endif
+}
+
+void mc_thread_foreground(void) {
+#ifdef __linux__
+  setpriority(PRIO_PROCESS, 0, 0);
 #endif
 }
 

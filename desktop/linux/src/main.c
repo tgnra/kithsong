@@ -57,6 +57,7 @@
 #include "playlist_dialogs.h"
 #include "recents.h"
 #include "search_view.h"
+#include "analysis_ui.h"
 #include "settings_view.h"
 #include "smart_editor.h"
 #include "track_list.h"
@@ -108,6 +109,11 @@ static void show_page(app *a, const char *name) {
 static void on_import(GtkButton *button, gpointer user) {
   (void)button;
   show_page(user, "import");
+}
+
+static void on_analysing(GtkButton *button, gpointer user) {
+  (void)button;
+  analysis_ui_present(user);
 }
 
 static void on_import_present(void *user) {
@@ -1691,6 +1697,10 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   a->settings = icon_button("emblem-system-symbolic", mc_str(MC_STR_SETTINGS), "<Control>comma");
   g_signal_connect(a->settings, "clicked", G_CALLBACK(on_settings), a);
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), a->settings);
+  a->analysing = icon_button("content-loading-symbolic", mc_str(MC_STR_ANALYSIS_RUNNING), NULL);
+  g_signal_connect(a->analysing, "clicked", G_CALLBACK(on_analysing), a);
+  gtk_widget_set_visible(a->analysing, FALSE);
+  adw_header_bar_pack_end(ADW_HEADER_BAR(header), a->analysing);
   GtkWidget *import = icon_button("list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC), "<Control>o");
   g_signal_connect(import, "clicked", G_CALLBACK(on_import), a);
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), import);
