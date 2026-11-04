@@ -371,7 +371,12 @@ A single is filed as what it is on MusicBrainz: a track of a release, like any a
   no album (`mc_library_list_artist_singles`). Importing more of its release makes it an
   album again.
 - a loose track imported as-is with no album tag gets no album: `album_uid` is NULL and the
-  file goes in `<artist>/<title>.<ext>`.
+  file goes in `<artist>/<title>.<ext>`. Unless it's long enough to be a continuous mix (30
+  minutes, see [Album flags](schema.md#album-flags)), when it gets an album of its title,
+  under `<artist>/<title>/`, for the flag to be on: a mix with no match on MusicBrainz is
+  usually such a file. That's the as-is path only; a recording on no release keeps no album.
+- a single of that length, with an album of its own or the one just made, is a mix unless the
+  user says otherwise: an album to the listings and search, and not a single.
 - there's no "&lt;artist&gt; Singles" album any more. Albums and files made as one before
   stay as they are, as an album of that title, until the music is imported again.
 

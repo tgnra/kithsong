@@ -509,7 +509,7 @@ int mc_import_db_is_track_at(mc_library *lib, const char *path, const char *mb_r
  * its flags (edit.h): the same music, matched anew, is still what the user flagged. */
 static mc_status delete_if_empty(sqlite3 *db, const char *album_uid, const char *into) {
   sqlite3_stmt *stmt = prepare(db, "UPDATE albums SET no_scrobble = max(albums.no_scrobble, o.no_scrobble),"
-                                   " mix = max(albums.mix, o.mix) FROM albums o"
+                                   " mix = " MC_MIX_EITHER("albums.mix", "o.mix") " FROM albums o"
                                    " WHERE albums.uid = ?2 AND o.uid = ?1"
                                    " AND NOT EXISTS (SELECT 1 FROM tracks WHERE album_uid = ?1)");
   if (!stmt) return MC_ERR_DB;

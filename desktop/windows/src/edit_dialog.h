@@ -18,7 +18,7 @@
  *                             [ Save ] [ Cancel ]
  *
  * An artist has a name and sort name; a track a title, artist, track number, disc number, year
- * and genre. Enter saves, Escape cancels, Tab and Shift+Tab go round, Space presses what has
+ * and genre, and if it's a single, Continuous mix too (mc_track_mix_set()). Enter saves, Escape cancels, Tab and Shift+Tab go round, Space presses what has
  * the focus.
  *
  * Search MusicBrainz… opens another such window over this one: artist and title boxes, filled

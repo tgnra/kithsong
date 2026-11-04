@@ -21,6 +21,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 13 | artist credits: `tracks.artist_credit`, `albums.artist_credit`, `track_artists`, `album_artists`, `meta.artist_refresh` |
 | 14 | `recycle_bin` (deletes made here that no other device has heard of yet), `meta.changelog_epoch` |
 | 15 | album flags: `albums.no_scrobble`, `albums.mix` |
+| 16 | `albums.mix` is the user's choice, 1 or -1, and 0 leaves it to the album's length; long tracks with no album get one, once, on opening |
 
 ## Location
 
@@ -133,8 +134,8 @@ kind, so importing more of the release makes it an album. A track can also have 
 listings, search and the artist's albums leave singles out;
 `mc_library_list_artist_singles()` lists them, and the tracks with no album, for the
 artist's page. See [tagging-rules.md](tagging-rules.md#singles). The exception is a mix of
-one track, which search finds as an album (see [Album flags](#album-flags)); the listings
-still leave it out.
+one track, which is an album to all of them and not a single (see
+[Album flags](#album-flags)).
 
 Before v12 a loose track went into one album per artist, titled "&lt;artist&gt; Singles" with
 `kind = 'singles'` (v2). v12 doesn't move or rewrite anything: such albums stay, as ordinary
@@ -146,24 +147,44 @@ are dropped), so new albums keep the column's default, `'album'`. `tracks.year` 
 ## Album flags
 
 What an album's tags can't say, set by hand (`mc_album_flags_set()`, `musiccore/edit.h`) and
-never written to its files. Both are 0 or 1, and sync as logged fields of the album.
+never written to its files. They sync as logged fields of the album.
 
-- `albums.no_scrobble`: its tracks are never scrobbled nor sent as now playing, whichever
+- `albums.no_scrobble`, 0 or 1: its tracks are never scrobbled nor sent as now playing, whichever
   frontend plays them; the scrobbler decides when it looks the track up, so a play queued
   before the flag was set still goes. Plays are still counted.
-- `albums.mix`: a continuous mix, one piece of music split into tracks (a DJ mix). Its tracks
-  aren't search results: a query matching one finds the album instead, once, scored as the
-  best of the album and its tracks, and a mix of one track is an album to search, not a
-  single. Smart playlists never pick its tracks, whatever the rule; smart album groups can
-  pick the album. Everything else lists its tracks as any album's.
+- `albums.mix`: a continuous mix, one piece of music split into tracks, or in one long track
+  (a DJ mix). Its tracks aren't search results: a query matching one finds the album
+  instead, once, scored as the best of the album and its tracks. Smart playlists never pick
+  its tracks, whatever the rule; smart album groups can pick the album. A mix of one track
+  is an album, not a single: album listings and counts have it, as the artist's albums, and
+  the artist's singles don't. Everything else lists its tracks as any album's.
+
+  1 is the user saying it's a mix, -1 saying it isn't, and 0 no one having said. With 0, an
+  album whose only track is at least `MC_MIX_MIN_MS` long (30 minutes; the reasons are at its
+  definition) is a mix. That's a default, worked out each time it's asked (`MC_ALBUM_IS_MIX`)
+  from the track count and `duration_ms`, which sync: it's never stored, so there's nothing
+  for two devices to disagree on, no migration to run for albums already there, and nothing
+  to undo when more of the release is imported and the album stops being a single.
+  `mc_album_flags_set()` only makes a choice of a value that differs from what the album is,
+  so saving the dialog for the other flag leaves a detected mix detected. Once chosen, either
+  way, length no longer counts, and there's no going back to 0.
+
+A mix needs an album row. A track with no album (see [Singles](#singles)) gets one, of one
+track, with the track's title, credit and year: at import if it's long enough; by hand when
+it's made a mix (`mc_track_mix_set()`, which files it there like an edit); and for those
+already in a library, once, on the first open after upgrading to v16. That last writes rows
+only, leaving the file where it is, and is logged, as a migration's rows aren't: a device
+paired later has no migration to run. Its uid is derived from the track's (`mc_uid_derive()`),
+so devices upgrading apart make the same row and write the same values; the only row they
+can't agree on is one the user edited before the other device had upgraded and heard of it.
 
 Flags are logged when set, not when a row is made: an album inserted with a flag at 0 logs
 nothing for it (`mc_changelog_table.flags`). So the only values in the changelog are
-someone's choice, and when duplicates merge a flag set on either comes through, however
+someone's choice, the last of which wins like any field's, and when duplicates merge a flag set on either comes through, however
 much later the other was imported (see [Duplicates](sync-protocol.md#duplicates)). Importing
 never touches them: an album imported again keeps its flags, and one whose last track an
 import moves to another album passes them on as it goes. Merging libraries keeps a flag
-either library's album had.
+either library's album had. In both, of two choices of `mix`, a 1 beats a -1.
 
 ## Artist credits
 

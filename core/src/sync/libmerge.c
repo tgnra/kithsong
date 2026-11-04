@@ -963,8 +963,8 @@ static mc_status restore_flags(merge_ctx *x) {
                          -1, &old, NULL) != SQLITE_OK)
     return MC_ERR_DB;
   if (sqlite3_prepare_v2(x->db,
-                         "UPDATE albums SET no_scrobble = max(no_scrobble, ?2), mix = max(mix, ?3)"
-                         " WHERE uid = ?1",
+                         "UPDATE albums SET no_scrobble = max(no_scrobble, ?2),"
+                         " mix = " MC_MIX_EITHER("mix", "?3") " WHERE uid = ?1",
                          -1, &set, NULL) != SQLITE_OK) {
     sqlite3_finalize(old);
     return MC_ERR_DB;

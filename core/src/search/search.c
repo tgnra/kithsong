@@ -454,9 +454,9 @@ static mc_status build(sqlite3 *db, mc_search_index **out) {
   if ((st = load(db, ix, MC_SEARCH_ARTIST, "SELECT uid, name, sort_name FROM artists")) != MC_OK ||
       (st = load(db, ix, MC_SEARCH_ALBUM,
                  "SELECT a.uid, a.title, coalesce(a.artist_credit, ar.name) FROM albums a" ALBUM_JOINS
-                 " WHERE a.mix OR NOT " ALBUM_IS_SINGLE " ORDER BY a.uid")) != MC_OK ||
+                 " WHERE NOT " ALBUM_IS_SINGLE " ORDER BY a.uid")) != MC_OK ||
       (st = load(db, ix, MC_SEARCH_TRACK,
-                 "SELECT t.uid, t.title, " TRACK_ARTIST_NAME ", al.title, al.uid, al.mix FROM tracks t"
+                 "SELECT t.uid, t.title, " TRACK_ARTIST_NAME ", al.title, al.uid, " TRACK_IN_MIX " FROM tracks t"
                  TRACK_JOINS)) != MC_OK ||
       (st = load(db, ix, MC_SEARCH_PLAYLIST, "SELECT uid, name FROM playlists")) != MC_OK ||
       (st = load(db, ix, MC_SEARCH_ALBUM_GROUP, "SELECT uid, name FROM album_groups")) != MC_OK ||

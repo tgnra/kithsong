@@ -85,9 +85,36 @@ void mc_library_rollback(mc_library *lib);
   " LEFT JOIN albums al ON al.uid = t.album_uid" \
   " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
 
-/* Whether album a has exactly one track in the library: a single. Album listings leave those
- * out, and mc_library_list_artist_singles() lists their tracks instead. */
-#define ALBUM_IS_SINGLE "((SELECT count(*) FROM tracks st WHERE st.album_uid = a.uid) = 1)"
+/* A track alone on its album from this long up is taken for a continuous mix. 30 minutes, so
+ * it clears what's long but is still one piece: the prog epics (Supper's Ready 23, Echoes 23,
+ * most of the rest under 27) and the single movements of a symphony (Mahler's longest about
+ * 30), while a DJ set or radio mix is rarely under it. The two mistakes aren't equal: a track
+ * taken for a mix leaves smart playlists without a word, one missed just stays a single until
+ * it's ticked. A podcast episode does pass, and is better found as an album anyway. Worked
+ * out from synced rows on each device, so a new value here needs no migration. */
+#define MC_MIX_MIN_MS 1800000
+#define MC_SQL_NUM_(n) #n
+#define MC_SQL_NUM(n) MC_SQL_NUM_(n)
+
+/* Whether album alias a is a continuous mix: albums.mix is the user's choice, 1 or -1, and 0
+ * leaves it to the album's one track being long. See "Album flags" in docs/schema.md. */
+#define MC_ALBUM_IS_MIX(a)                                                                      \
+  "(" a ".mix = 1 OR (" a ".mix = 0 AND coalesce((SELECT count(*) = 1 AND max(st.duration_ms) >= " \
+  MC_SQL_NUM(MC_MIX_MIN_MS) " FROM tracks st WHERE st.album_uid = " a ".uid), 0)))"
+
+/* The same for track t on album al, as in TRACK_JOINS: never NULL, also with no album. Only a
+ * long track costs a count, as every track of a smart list asks. */
+#define TRACK_IN_MIX                                                                  \
+  "coalesce(al.mix = 1 OR (al.mix = 0 AND t.duration_ms >= " MC_SQL_NUM(MC_MIX_MIN_MS) \
+  " AND (SELECT count(*) FROM tracks st WHERE st.album_uid = al.uid) = 1), 0)"
+
+/* The flag two albums being made one end up with: either's yes, else either's no. */
+#define MC_MIX_EITHER(a, b) "CASE WHEN " a " = 1 OR " b " = 1 THEN 1 ELSE min(" a ", " b ") END"
+
+/* Whether album a has exactly one track in the library and isn't a mix: a single. Album
+ * listings leave those out, and mc_library_list_artist_singles() lists their tracks instead. */
+#define ALBUM_IS_SINGLE \
+  "((SELECT count(*) FROM tracks st WHERE st.album_uid = a.uid) = 1 AND NOT " MC_ALBUM_IS_MIX("a") ")"
 
 /* The columns mc_library_read_albums() reads, the join they need and the album display order;
  * a is the album and ar its artist. The folder is wherever the album's files are: any one
@@ -100,6 +127,12 @@ void mc_library_rollback(mc_library *lib);
 #define ALBUM_JOINS " LEFT JOIN artists ar ON ar.uid = a.artist_uid"
 #define ALBUM_ORDER \
   "coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.year, a.title COLLATE NOCASE"
+
+/* Files the tracks with no album that where says (an SQL condition on t, with ?1 for arg if
+ * it's not NULL) as albums of one track, of the track's title, artists and year, for them to
+ * be mixes on: a mix is an album's flag. Rows only: moving the files is the caller's. Inside a
+ * write transaction; logged, like any edit. In album_flags.c. */
+mc_status mc_mix_file_tracks(mc_library *lib, const char *where, const char *arg);
 
 /* Step a prepared, bound TRACK_COLS or ALBUM_COLS query into a list. Both finalize stmt. */
 mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_list **out);

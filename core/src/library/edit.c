@@ -1607,6 +1607,60 @@ typedef struct track_edit {
   const mc_track_tags *tags;
 } track_edit;
 
+mc_status mc_track_mix_get(mc_library *lib, const char *track_uid, mc_track_mix *out) {
+  if (!lib || !track_uid || !out) return MC_ERR_INVALID_ARG;
+  memset(out, 0, sizeof *out);
+  sqlite3_stmt *stmt = prepare(lib, "SELECT t.album_uid IS NULL OR (SELECT count(*) FROM tracks st"
+                                    "  WHERE st.album_uid = t.album_uid) = 1,"
+                                    " " TRACK_IN_MIX ", coalesce(al.mix <> 0, 0)"
+                                    " FROM tracks t LEFT JOIN albums al ON al.uid = t.album_uid"
+                                    " WHERE t.uid = ?1");
+  if (!stmt) return MC_ERR_DB;
+  bind_str(stmt, 1, track_uid);
+  int rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    out->can_set = sqlite3_column_int(stmt, 0);
+    out->mix = sqlite3_column_int(stmt, 1);
+    out->mix_by_hand = sqlite3_column_int(stmt, 2);
+  }
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_ROW ? MC_OK : rc == SQLITE_DONE ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+}
+
+static mc_status mix_scope(mc_library *lib, void *user, uids *tracks) {
+  return uids_query(lib, tracks, "SELECT uid FROM tracks WHERE uid = ?1", user);
+}
+
+/* Filed under an album of its own, which its file's tags and place then follow. */
+static mc_status mix_apply(mc_library *lib, void *user) {
+  mc_status st = mc_mix_file_tracks(lib, "t.uid = ?1", user);
+  if (st != MC_OK) return st;
+  sqlite3_stmt *stmt = prepare(lib, "UPDATE albums SET mix = 1 WHERE uid ="
+                                    " (SELECT album_uid FROM tracks WHERE uid = ?1)");
+  if (stmt) bind_str(stmt, 1, user);
+  return step_done(stmt);
+}
+
+mc_status mc_track_mix_set(mc_library *lib, const char *track_uid, int mix) {
+  mc_track_mix cur;
+  mc_status st = mc_track_mix_get(lib, track_uid, &cur);
+  if (st != MC_OK) return st;
+  if (!cur.can_set) return MC_ERR_INVALID_ARG;
+  track_row t;
+  if ((st = track_row_read(lib, track_uid, &t)) != MC_OK) return st;
+  char album[MC_UID_STRLEN];
+  snprintf(album, sizeof album, "%s", t.album_uid);
+  track_row_clear(&t);
+  if (!*album) {
+    static const edit_ops ops = {mix_scope, mix_apply};
+    return mix ? run_edit(lib, &ops, (void *)track_uid) : MC_OK;
+  }
+  mc_album_flags flags;
+  if ((st = mc_album_flags_get(lib, album, &flags)) != MC_OK) return st;
+  flags.mix = mix;
+  return mc_album_flags_set(lib, album, &flags);
+}
+
 /* The whole album: a number changes the track totals in its other files, and a disc may make
  * the album one of several, which all its file names show. */
 static mc_status track_scope(mc_library *lib, void *user, uids *tracks) {
