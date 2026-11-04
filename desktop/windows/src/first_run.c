@@ -124,7 +124,7 @@ static BOOL usable(const char *dir) {
  * holds a library already), else Kithsong Library inside it, if that is. NULL if neither. */
 static char *library_in(const char *dir) {
   if (usable(dir)) return dup(dir);
-  char *sub = join(dir, mc_str(MC_STR_WINDOWS_FIRST_RUN_FOLDER_NAME));
+  char *sub = join(dir, mc_str(MC_STR_FIRST_RUN_FOLDER_NAME));
   if (sub && usable(sub)) return sub;
   free(sub);
   return NULL;
@@ -246,8 +246,8 @@ static void layout(void) {
   int col = scale(COL_W);
   g_fr.w = scale(WIN_W);
   int x = (g_fr.w - col) / 2;
-  int heading_h = text_height(g_fr.heading_font, mc_wstr(MC_STR_WINDOWS_FIRST_RUN_HEADING), col);
-  int text_h = text_height(g_fr.font, mc_wstr(MC_STR_WINDOWS_FIRST_RUN_TEXT), col);
+  int heading_h = text_height(g_fr.heading_font, mc_wstr(MC_STR_FIRST_RUN_HEADING), col);
+  int text_h = text_height(g_fr.font, mc_wstr(MC_STR_FIRST_RUN_TEXT), col);
   g_fr.line_h = text_height(g_fr.font, L"Ag", col);
   int logo_h = scale(LOGO_H), logo_w = MulDiv(logo_h, 352, 100);
   int cards = (g_fr.suggested ? 1 : 0) + 1; /* room for the chosen card is always kept */
@@ -279,7 +279,7 @@ static void layout(void) {
   }
   SetRect(&g_fr.rc[PART_CHOOSE], x, y, x + col, y + scale(CHOOSE_H));
   y += scale(CHOOSE_H) + scale(GAP_START);
-  int start_w = max(scale(START_W), text_width(g_fr.font, mc_wstr(MC_STR_WINDOWS_FIRST_RUN_START)) + scale(48));
+  int start_w = max(scale(START_W), text_width(g_fr.font, mc_wstr(MC_STR_FIRST_RUN_START)) + scale(48));
   SetRect(&g_fr.rc[PART_START], (g_fr.w - start_w) / 2, y, (g_fr.w - start_w) / 2 + start_w, y + scale(START_H));
   SetRect(&g_fr.rc[PART_CLOSE], g_fr.w - scale(CLOSE_W), 0, g_fr.w, scale(CLOSE_H));
 }
@@ -329,7 +329,7 @@ static void choose(void) {
   char *lib = library_in(dir);
   if (!lib) {
     wchar_t text[MAX_PATH + 256];
-    mc_wformat(text, MAX_PATH + 256, mc_str(MC_STR_WINDOWS_FIRST_RUN_NOT_EMPTY), MC_S(dir));
+    mc_wformat(text, MAX_PATH + 256, mc_str(MC_STR_FIRST_RUN_NOT_EMPTY), MC_S(dir));
     MessageBoxW(g_fr.wnd, text, mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
     free(dir);
     return;
@@ -451,7 +451,7 @@ static void paint_choose(canvas *c) {
   if (!theme.high_contrast) canvas_fill(c, &r, radius, ink(), theme.dark ? 15 : 6);
   COLORREF fg = theme_draw_state(c, &r, radius, state_of(PART_CHOOSE));
   canvas_frame(c, &r, radius, 1, theme.high_contrast ? theme.text : theme.line, 255);
-  paint_label(c, &r, L"\xE838" /* FolderOpen */, mc_wstr(MC_STR_WINDOWS_FIRST_RUN_CHOOSE), fg);
+  paint_label(c, &r, L"\xE838" /* FolderOpen */, mc_wstr(MC_STR_FIRST_RUN_CHOOSE), fg);
 }
 
 /* Start: an accent button, greyed out until a card is selected. */
@@ -473,7 +473,7 @@ static void paint_start(canvas *c) {
     if (st != STATE_NORMAL) canvas_fill(c, &r, radius, theme.bg, st == STATE_PRESSED ? 56 : 28);
     fg = theme.on_accent;
   }
-  paint_label(c, &r, NULL, mc_wstr(MC_STR_WINDOWS_FIRST_RUN_START), fg);
+  paint_label(c, &r, NULL, mc_wstr(MC_STR_FIRST_RUN_START), fg);
 }
 
 /* The close button, as Windows draws its own: red while the mouse is on it. */
@@ -500,10 +500,10 @@ static void paint(HDC dc) {
   if (g_fr.logo)
     canvas_draw_image(c, &g_fr.logo_rc, g_fr.logo, g_fr.logo_rc.right - g_fr.logo_rc.left,
                       g_fr.logo_rc.bottom - g_fr.logo_rc.top);
-  canvas_text(c, mc_wstr(MC_STR_WINDOWS_FIRST_RUN_HEADING), -1, &g_fr.heading_rc, k_para, g_fr.heading_font, theme.text);
-  canvas_text(c, mc_wstr(MC_STR_WINDOWS_FIRST_RUN_TEXT), -1, &g_fr.text_rc, k_para, g_fr.font, theme.text2);
-  paint_card(c, PART_SUGGESTED, MC_STR_WINDOWS_FIRST_RUN_SUGGESTED, g_fr.suggested_w);
-  paint_card(c, PART_CHOSEN, MC_STR_WINDOWS_FIRST_RUN_CHOSEN, g_fr.chosen_w);
+  canvas_text(c, mc_wstr(MC_STR_FIRST_RUN_HEADING), -1, &g_fr.heading_rc, k_para, g_fr.heading_font, theme.text);
+  canvas_text(c, mc_wstr(MC_STR_FIRST_RUN_TEXT), -1, &g_fr.text_rc, k_para, g_fr.font, theme.text2);
+  paint_card(c, PART_SUGGESTED, MC_STR_FIRST_RUN_SUGGESTED, g_fr.suggested_w);
+  paint_card(c, PART_CHOSEN, MC_STR_FIRST_RUN_CHOSEN, g_fr.chosen_w);
   paint_choose(c);
   paint_start(c);
   paint_close(c);
@@ -553,14 +553,14 @@ static BOOL ui_node(int i, uia_node *n) {
   if (i == UIA_ROOT) {
     n->type = UIA_PaneControlTypeId;
     n->flags = UIA_SELECTION;
-    lstrcpynW(n->name, mc_wstr(MC_STR_WINDOWS_WELCOME_TITLE), 512);
+    lstrcpynW(n->name, mc_wstr(MC_STR_WELCOME_TITLE), 512);
     n->count = 1 + count;
     return TRUE;
   }
   if (i == 0) {
     n->type = UIA_TextControlTypeId;
     UnionRect(&n->rect, &g_fr.heading_rc, &g_fr.text_rc);
-    uia_name(n, mc_wstr(MC_STR_WINDOWS_FIRST_RUN_HEADING), mc_wstr(MC_STR_WINDOWS_FIRST_RUN_TEXT), NULL);
+    uia_name(n, mc_wstr(MC_STR_FIRST_RUN_HEADING), mc_wstr(MC_STR_FIRST_RUN_TEXT), NULL);
     return TRUE;
   }
   int p = ui_part_of(i);
@@ -570,15 +570,15 @@ static BOOL ui_node(int i, uia_node *n) {
     n->type = UIA_RadioButtonControlTypeId;
     n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | (g_fr.selected == p ? UIA_SELECTED : 0);
     n->automation_id = p == PART_SUGGESTED ? L"Suggested" : L"Chosen";
-    uia_name(n, mc_wstr(p == PART_SUGGESTED ? MC_STR_WINDOWS_FIRST_RUN_SUGGESTED : MC_STR_WINDOWS_FIRST_RUN_CHOSEN),
+    uia_name(n, mc_wstr(p == PART_SUGGESTED ? MC_STR_FIRST_RUN_SUGGESTED : MC_STR_FIRST_RUN_CHOSEN),
              p == PART_SUGGESTED ? g_fr.suggested_w : g_fr.chosen_w, NULL);
     return TRUE;
   }
   n->type = UIA_ButtonControlTypeId;
   n->flags = UIA_INVOKABLE | (p == PART_CLOSE ? 0 : UIA_FOCUSABLE) | (p == PART_START && !start_enabled() ? UIA_DISABLED : 0);
   n->automation_id = p == PART_CHOOSE ? L"Choose" : p == PART_START ? L"Start" : L"Close";
-  lstrcpynW(n->name, mc_wstr(p == PART_CHOOSE  ? MC_STR_WINDOWS_FIRST_RUN_CHOOSE
-                             : p == PART_START ? MC_STR_WINDOWS_FIRST_RUN_START
+  lstrcpynW(n->name, mc_wstr(p == PART_CHOOSE  ? MC_STR_FIRST_RUN_CHOOSE
+                             : p == PART_START ? MC_STR_FIRST_RUN_START
                                                : MC_STR_CLOSE), 512);
   return TRUE;
 }
@@ -757,7 +757,7 @@ char *first_run_choose(HWND owner) {
   g_fr.selected = g_fr.hot = g_fr.pressed = PART_NONE;
   g_fr.music = music_folder();
   if (g_fr.music) {
-    g_fr.suggested = join(g_fr.music, mc_str(MC_STR_WINDOWS_FIRST_RUN_FOLDER_NAME));
+    g_fr.suggested = join(g_fr.music, mc_str(MC_STR_FIRST_RUN_FOLDER_NAME));
     g_fr.suggested_w = wstr_dup_from_utf8(g_fr.suggested);
   }
   g_fr.focus = g_fr.suggested ? PART_SUGGESTED : PART_CHOOSE;
@@ -772,7 +772,7 @@ char *first_run_choose(HWND owner) {
   RegisterClassExW(&wc);
   /* A caption, for Windows 11's shadow and rounded corners, but no system menu, so Windows
    * draws no caption buttons in the extended frame. */
-  g_fr.wnd = CreateWindowExW(0, wc.lpszClassName, mc_wstr(MC_STR_WINDOWS_WELCOME_TITLE), WS_POPUP | WS_CAPTION, 0, 0,
+  g_fr.wnd = CreateWindowExW(0, wc.lpszClassName, mc_wstr(MC_STR_WELCOME_TITLE), WS_POPUP | WS_CAPTION, 0, 0,
                              0, 0, owner, NULL, wc.hInstance, NULL);
   if (!g_fr.wnd) {
     free_state();

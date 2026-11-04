@@ -547,6 +547,14 @@ static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer use
   if (s.cb.delete_track && t && !strcmp(t->uid, s.menu_uid)) s.cb.delete_track(s.cb.user, t->uid, t->title);
 }
 
+/* The track menu's Edit... */
+static void on_edit_track(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (s.cb.edit_track && s.menu_uid[0]) s.cb.edit_track(s.cb.user, s.menu_uid);
+}
+
 /* --- Keys: Delete, Alt+Up/Down, F2 and the Menu key, as on Windows (Enter is the view's) --- */
 
 static guint selected(void) {
@@ -713,6 +721,7 @@ static void build_menu(GtkWidget *pane) {
   s.move_down = add_action(actions, "move-down", on_move);
   add_action(actions, "remove", on_remove);
   add_action(actions, "delete", on_delete_track);
+  add_action(actions, "edit", on_edit_track);
   s.go_to_album = add_action(actions, "go-to-album", on_go_to);
   s.go_to_artist = add_action(actions, "go-to-artist", on_go_to);
   gtk_widget_insert_action_group(pane, "track", G_ACTION_GROUP(actions));
@@ -731,6 +740,7 @@ static void build_menu(GtkWidget *pane) {
   g_object_unref(section);
   append_go_to(model);
   section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_EDIT_MENU), "track.edit");
   g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "track.delete");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
@@ -748,6 +758,7 @@ static void build_menu(GtkWidget *pane) {
   g_object_unref(section);
   section = g_menu_new();
   append_with_key(section, MC_STR_REMOVE_FROM_PLAYLIST, "track.remove", "Delete");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_EDIT_MENU), "track.edit");
   g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "track.delete");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);

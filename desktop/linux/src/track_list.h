@@ -53,6 +53,8 @@ typedef struct track_list_callbacks {
   void (*edit_rules)(void *user);
   /* The track menu's Delete from Library... (see delete_dialog.h). */
   void (*delete_track)(void *user, const char *track_uid, const char *title);
+  /* The track menu's Edit... (see edit_dialog.h). */
+  void (*edit_track)(void *user, const char *track_uid);
   /* The Reshuffle button, for the shown smart playlist. */
   void (*reshuffle)(void *user);
   /* The track menu's Go to album, with the track to select there, and Go to artist. Go to

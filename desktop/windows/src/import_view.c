@@ -967,7 +967,7 @@ static void init_review_columns(HWND dlg) {
   int w = rc.right - GetSystemMetrics(SM_CXVSCROLL);
   static const struct { enum mc_str_id title; int pct; int fmt; } matches[] = {
     {MC_STR_COL_CONFIDENCE, 10, LVCFMT_RIGHT}, {MC_STR_ARTIST, 17, 0}, {MC_STR_WINDOWS_COL_RELEASE, 24, 0},
-    {MC_STR_WINDOWS_COL_YEAR, 6, LVCFMT_RIGHT}, {MC_STR_TRACKS_TITLE, 7, LVCFMT_RIGHT},
+    {MC_STR_COL_YEAR, 6, LVCFMT_RIGHT}, {MC_STR_TRACKS_TITLE, 7, LVCFMT_RIGHT},
     {MC_STR_WINDOWS_COL_TYPE, 8, 0}, {MC_STR_WINDOWS_COL_FORMAT, 10, 0}, {MC_STR_WINDOWS_COL_COUNTRY, 7, 0},
     {MC_STR_WINDOWS_COL_LABEL, 11, 0}};
   for (int i = 0; i < 9; i++)

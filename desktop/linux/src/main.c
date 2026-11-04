@@ -15,7 +15,8 @@
  * The album and playlist grids are album_grid.c, the track list track_list.c, the
  * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
  * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, Settings' Move
- * Library move_library.c, the Add to Playlist dialog add_to_playlist.c and the Rename and
+ * Library move_library.c, the first run's dialog first_run.c, the Edit dialog edit_dialog.c,
+ * the Add to Playlist dialog add_to_playlist.c and the Rename and
  * Delete Playlist dialogs playlist_dialogs.c, the Album groups page album_groups.c (its
  * dialogs album_group_dialogs.c), the Artists page artist_view.c and the Search page
  * search_view.c. The sidebar's
@@ -42,6 +43,8 @@
 #include "cover.h"
 #include "delete_dialog.h"
 #include "devices.h"
+#include "edit_dialog.h"
+#include "first_run.h"
 #include "import_view.h"
 #include "move_library.h"
 #include "mpris.h"
@@ -122,6 +125,11 @@ static void on_import_done(void *user) {
  * they are instead. */
 static void set_empty_description(app *a) {
   if (!a->empty) return; /* not built yet */
+  if (a->first_run) { /* there's no library yet, and the dialog over this page says why */
+    adw_status_page_set_title(a->empty, "");
+    adw_status_page_set_description(a->empty, "");
+    return;
+  }
   devices_state state = devices_sync_state();
   gboolean singles = a->lib && a->all_singles;
   gboolean alone = a->lib && !singles && state == DEVICES_ALONE;
@@ -226,6 +234,7 @@ static gboolean open_library(void *user, const char *dir) {
     adw_dialog_present(alert, GTK_WIDGET(a->win));
     return FALSE;
   }
+  edit_dialog_close();
   devices_stop(a); /* sync reads the old library */
   import_view_set_library(a->import, lib);
   playback_set_library(lib, a->settings_dir);
@@ -254,6 +263,7 @@ static void on_settings_group_changed(void *user) {
  * lets go, and it closes. */
 static void move_close_library(void *user) {
   app *a = user;
+  edit_dialog_close();
   devices_stop(a); /* sync reads the library */
   playback_clear();
   import_view_set_library(a->import, NULL);
@@ -265,7 +275,7 @@ static void move_close_library(void *user) {
   app_reload_library(a);
 }
 
-/* After the move: the library opens where it is now (settings.json already says so). */
+/* After the move, or the first run: the library opens where it is now. */
 static void move_reopen_library(void *user, const char *dir) {
   app *a = user;
   if (mc_library_open(dir, &a->lib) != MC_OK) a->lib = NULL; /* the empty page says so */
@@ -276,6 +286,30 @@ static void move_reopen_library(void *user, const char *dir) {
   app_reload_library(a);
   devices_start(a);
   gtk_window_present(a->win);
+}
+
+/* The first run's answer: dir becomes the library (on failure the empty page says so), or
+ * with NULL the user closed the dialog, which quits. */
+static void on_first_run_done(void *user, const char *dir) {
+  app *a = user;
+  if (!dir) {
+    gtk_window_close(a->win);
+    return;
+  }
+  a->first_run = FALSE;
+  mc_settings *settings = NULL;
+  mc_status st = mc_settings_load(a->settings_dir, &settings);
+  if (st == MC_OK) {
+    mc_settings_set_library_dir(settings, dir);
+    st = mc_settings_save(settings);
+  }
+  mc_settings_free(settings);
+  move_reopen_library(a, dir);
+  if (st != MC_OK) {
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_APP_NAME), mc_str(MC_STR_SETTINGS_FIRST_SAVE_FAILED));
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    adw_dialog_present(alert, GTK_WIDGET(a->win));
+  }
 }
 
 static void move_library(void *user) {
@@ -320,6 +354,7 @@ static void close_confirmed(void *user, gboolean closed) {
 static gboolean on_close_request(GtkWindow *win, gpointer user) {
   (void)win;
   app *a = user;
+  if (edit_dialog_saving()) return TRUE; /* the dialog says so, and it can't be stopped */
   if (import_view_is_running(a->import)) {
     import_view_confirm_close(a->import, close_confirmed, a);
     return TRUE;
@@ -635,8 +670,7 @@ static gboolean text_focused(GtkWidget *win) {
 static gboolean on_shortcut(GtkWidget *win, GVariant *args, gpointer user) {
   app *a = user;
   shortcut sc = (shortcut)g_variant_get_int32(args);
-  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
-  if (focus && gtk_widget_get_ancestor(focus, ADW_TYPE_DIALOG)) return FALSE;
+  if (adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(win))) return FALSE;
   gboolean text = text_focused(win);
   switch (sc) {
     case SC_NEXT:
@@ -1022,6 +1056,10 @@ static void on_track_delete(void *user, const char *track_uid, const char *title
 }
 
 /* The track menu's Go to album and Go to artist. */
+static void on_track_edit(void *user, const char *track_uid) {
+  edit_dialog_present(user, EDIT_TRACK, track_uid);
+}
+
 static void on_track_go_to_album(void *user, const char *album_uid, const char *track_uid) {
   app_open_track(user, album_uid, track_uid);
 }
@@ -1454,8 +1492,7 @@ static gboolean on_type_to_search(GtkEventControllerKey *keys, guint keyval, gui
   gunichar c = gdk_keyval_to_unicode(keyval);
   if (!c || !g_unichar_isgraph(c) || (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SUPER_MASK | GDK_META_MASK)))
     return FALSE;
-  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
-  if (text_focused(win) || (focus && gtk_widget_get_ancestor(focus, ADW_TYPE_DIALOG))) return FALSE;
+  if (text_focused(win) || adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(win))) return FALSE;
   if (!gtk_widget_is_sensitive(a->sidebar)) return FALSE;
   char text[8] = "";
   g_unichar_to_utf8(c, text);
@@ -1544,7 +1581,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
                                           on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete,
                                           on_playlist_edit_rules,
-                                          on_track_delete, on_reshuffle, on_track_go_to_album,
+                                          on_track_delete, on_track_edit, on_reshuffle, on_track_go_to_album,
                                           on_track_go_to_artist, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
@@ -1629,10 +1666,11 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   prune_art(a);
   restore_deleted(a);
   app_reload_library(a);
-  devices_start(a);
+  if (!a->first_run) devices_start(a); /* else once there's a library, on_first_run_done() */
   g_signal_connect(win, "notify::is-active", G_CALLBACK(on_active_changed), a);
   g_signal_connect(win, "destroy", G_CALLBACK(on_window_destroy), a);
   gtk_window_present(a->win);
+  if (a->first_run) first_run_present(win, on_first_run_done, a);
   if (a->reset_failed) {
     AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS_RESET), a->reset_failed);
     adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
@@ -1656,8 +1694,8 @@ int main(int argc, char **argv) {
   mc_init();
   set_strings_locale(); /* before the player's and import's threads look anything up */
 
-  /* Settings in ~/.config/kithsong say where the library folder is. Until there's a
-   * first-run dialog here, the Music folder is used and remembered. */
+  /* Settings in ~/.config/kithsong say where the library folder is. With none yet, the first
+   * run asks, once the window is up. */
   char *settings_dir = g_build_filename(g_get_user_config_dir(), "kithsong", NULL);
   char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
   mc_settings_move_old_dir(old_dir, settings_dir);
@@ -1670,13 +1708,7 @@ int main(int argc, char **argv) {
                                      MC_S(mc_status_str(reset)));
   mc_free(left);
   mc_settings *settings = NULL;
-  if (mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings)) {
-    const char *music = g_get_user_special_dir(G_USER_DIRECTORY_MUSIC);
-    char *fallback = music ? NULL : g_build_filename(g_get_home_dir(), "Music", NULL);
-    mc_settings_set_library_dir(settings, music ? music : fallback);
-    mc_settings_save(settings);
-    g_free(fallback);
-  }
+  a.first_run = mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings);
   a.settings_dir = settings_dir;
   a.art_dir = g_build_filename(settings_dir, MC_PLAYLIST_ART_CACHE_DIR, NULL);
   const char *library_dir = mc_settings_library_dir(settings);
@@ -1689,7 +1721,9 @@ int main(int argc, char **argv) {
   int status = g_application_run(G_APPLICATION(gapp), argc, argv);
   g_object_unref(gapp);
 
-  /* The window, and the import view with it, is gone by now, so the library can close. */
+  /* The window, and the import view with it, is gone by now, so the library can close once a
+   * search of the Edit dialog's is done with it. */
+  edit_dialog_wait();
   mc_library_close(a.lib);
   g_free(a.settings_dir);
   g_free(a.art_dir);
