@@ -144,9 +144,8 @@ static void test_played(const char *scratch) {
   CHECK(exec(db, "INSERT INTO playlists (uid, name) VALUES ('pl', 'Mix');"
                  "INSERT INTO playlist_entries (uid, playlist_uid, track_uid, position) VALUES"
                  " ('e1', 'pl', 't060', 'a');") == SQLITE_OK);
-  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "al06") == MC_OK);
-  CHECK(mc_library_record_opened(lib, MC_RECENT_ARTIST, "A") == MC_OK);
-  CHECK(mc_library_record_opened(lib, MC_RECENT_PLAYLIST, "pl") == MC_OK);
+  CHECK(exec(db, "INSERT INTO recents (uid, kind, opened_ms) VALUES ('al06', 'album', 1), ('A', 'artist', 2),"
+                 " ('pl', 'playlist', 3);") == SQLITE_OK);
 
   mc_home_picks p;
   mc_home_picks_load(lib, 7, &p);

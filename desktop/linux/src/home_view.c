@@ -166,7 +166,7 @@ static tile *tile_new(row *r, int index) {
   gtk_button_set_child(GTK_BUTTON(t->button), box);
   gtk_widget_add_css_class(t->button, "flat");
   gtk_widget_add_css_class(t->button, "home-tile");
-  gtk_widget_set_focusable(t->button, FALSE); /* until it's the roving one */
+  gtk_widget_set_can_focus(t->button, FALSE); /* until it's the roving one */
   g_object_set_data(G_OBJECT(t->button), "home-tile", t);
   g_signal_connect(t->button, "clicked", G_CALLBACK(on_tile_clicked), t);
   gtk_box_append(GTK_BOX(r->tiles), t->button);
@@ -224,9 +224,9 @@ static void tile_set(tile *t, const mc_home_pick *p) {
 static void set_roving(tile *t, gboolean grab) {
   tile *was = v.roving;
   v.roving = t;
-  if (t) gtk_widget_set_focusable(t->button, TRUE);
+  if (t) gtk_widget_set_can_focus(t->button, TRUE);
   if (t && grab) gtk_widget_grab_focus(t->button);
-  if (was && was != t) gtk_widget_set_focusable(was->button, FALSE);
+  if (was && was != t) gtk_widget_set_can_focus(was->button, FALSE);
 }
 
 static tile *first_tile(void) {
@@ -702,6 +702,7 @@ static GtkWidget *row_new(row *r, mc_home_row_id id) {
   r->scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(r->scroller), GTK_POLICY_EXTERNAL, GTK_POLICY_NEVER);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(r->scroller), r->tiles);
+  gtk_widget_set_focusable(r->scroller, FALSE); /* or it's a Tab stop of its own, with nothing to see */
   r->adj = gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(r->scroller));
   g_signal_connect(r->adj, "value-changed", G_CALLBACK(on_row_moved), r);
   g_signal_connect(r->adj, "changed", G_CALLBACK(on_row_moved), r);
@@ -773,6 +774,7 @@ GtkWidget *home_view_new(app *a, const home_view_callbacks *callbacks) {
   v.scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(v.scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(v.scroller), rows);
+  gtk_widget_set_focusable(v.scroller, FALSE);
   gtk_widget_add_css_class(v.scroller, "view");
   v.ease = adw_timed_animation_new(v.scroller, 0, 0, EASE_MS, adw_callback_animation_target_new(set_page_value, NULL, NULL));
   adw_timed_animation_set_easing(ADW_TIMED_ANIMATION(v.ease), ADW_EASE_OUT_CUBIC);
