@@ -82,6 +82,7 @@ kithsong_test(test_import_zip)
 target_link_libraries(test_import_zip PRIVATE mc_miniz)  # builds the zips it imports
 kithsong_test(test_long_paths)
 kithsong_test(test_radio)
+kithsong_test(test_radio_stations)
 kithsong_test(test_analysis)
 set_tests_properties(test_analysis PROPERTIES TIMEOUT 300)
 kithsong_test(test_dupes)
@@ -134,6 +135,9 @@ target_include_directories(manual_analysis PRIVATE "${PROJECT_SOURCE_DIR}/core/s
 add_executable(manual_radio manual_radio.c)
 target_link_libraries(manual_radio PRIVATE musiccore mc_sqlite3)
 target_include_directories(manual_radio PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+add_executable(manual_stations manual_stations.c)
+target_link_libraries(manual_stations PRIVATE musiccore mc_sqlite3)
+target_include_directories(manual_stations PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_import manual_import.c)
 
 target_link_libraries(manual_import PRIVATE musiccore)

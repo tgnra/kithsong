@@ -86,6 +86,7 @@ add_library(musiccore STATIC
   src/analysis/scanner.c
   src/analysis/timbre.c
   src/radio/radio.c
+  src/radio/stations.c
   src/art/art_colors.c
   src/tagger/tag_io.cpp
   src/tagger/musicbrainz.c
