@@ -86,7 +86,7 @@ static struct {
   GtkWidget *sync_now, *remove;
   GtkWidget *info_group, *files_row, *address_row, *reach_row, *reach_check;
   GtkWidget *profile_group, *name_row, *archive_row, *format_row, *budget_row, *budget_switch, *budget_spin;
-  GtkWidget *what_group, *sync_all_row, *picker, *tabs[NUM_TABS], *list_stack, *empty, *count;
+  GtkWidget *what_group, *sync_all_row, *picker, *tabs[NUM_TABS], *select_all, *select_none, *list_stack, *empty, *count;
   GListStore *store;
   gboolean filling; /* ignore the controls' signals while we set them */
 
@@ -111,6 +111,7 @@ static struct {
   mc_sync_profile *profile;
   mc_status profile_status;
   GHashTable *sel[NUM_TABS]; /* the selected uids of each kind */
+  GHashTable *removed_items[NUM_TABS]; /* removed from the device: Select all leaves them out */
 
   int tab, rows_tab; /* rows_tab: the tab the list holds, -1 for none */
   mc_status rows_status;
@@ -230,11 +231,18 @@ static int tab_of_kind(mc_profile_item_kind kind) {
 }
 
 static void build_sel(void) {
-  for (int i = 0; i < NUM_TABS; i++) g_hash_table_remove_all(g_dv.sel[i]);
+  for (int i = 0; i < NUM_TABS; i++) {
+    g_hash_table_remove_all(g_dv.sel[i]);
+    g_hash_table_remove_all(g_dv.removed_items[i]);
+  }
   if (!g_dv.profile) return;
   for (int i = 0; i < g_dv.profile->count; i++) {
     int t = tab_of_kind(g_dv.profile->items[i].kind);
     if (t >= 0) g_hash_table_add(g_dv.sel[t], g_strdup(g_dv.profile->items[i].ref_uid));
+  }
+  for (int i = 0; i < g_dv.profile->removed_count; i++) {
+    int t = tab_of_kind(g_dv.profile->removed[i].kind);
+    if (t >= 0) g_hash_table_add(g_dv.removed_items[t], g_strdup(g_dv.profile->removed[i].ref_uid));
   }
 }
 
@@ -695,6 +703,25 @@ static void update_controls(gboolean force) {
 
 /* --- The selection list --- */
 
+/* Select all and Select none, each greyed out while pressing it would change nothing. */
+static void update_select_buttons(void) {
+  gboolean can_all = FALSE, can_none = FALSE;
+  guint n = g_dv.rows_tab >= 0 && editable() ? g_list_model_get_n_items(G_LIST_MODEL(g_dv.store)) : 0;
+  for (guint i = 0; i < n && !(can_all && can_none); i++) {
+    DvItem *item = g_list_model_get_item(G_LIST_MODEL(g_dv.store), i);
+    if (sel_has(g_dv.rows_tab, item->uid)) can_none = TRUE;
+    else if (!g_hash_table_contains(g_dv.removed_items[g_dv.rows_tab], item->uid)) can_all = TRUE;
+    g_object_unref(item);
+  }
+  gtk_widget_set_sensitive(g_dv.select_all, can_all);
+  gtk_widget_set_sensitive(g_dv.select_none, can_none);
+}
+
+/* A row's detail: that uid was removed from the device, or what's given. */
+static const char *row_detail(const char *uid, const char *detail) {
+  return g_hash_table_contains(g_dv.removed_items[g_dv.tab], uid) ? mc_str(MC_STR_PROFILE_ITEM_REMOVED) : detail;
+}
+
 /* The list's rows: the current tab's items, "Artist – Title (year)" or a name, and a count.
  * A list view keeps its scroll position when the rows are replaced by as many. */
 static void fill_list(void) {
@@ -712,7 +739,7 @@ static void fill_list(void) {
                                   : g_strlcpy(text, al->title ? al->title : "", sizeof text);
           if (al->year > 0 && len < sizeof text)
             mc_format(text + len, sizeof text - len, mc_str(MC_STR_ALBUM_YEAR_SUFFIX), MC_D(al->year));
-          g_ptr_array_add(items, dv_item_new(al->uid, text, NULL));
+          g_ptr_array_add(items, dv_item_new(al->uid, text, row_detail(al->uid, NULL)));
         }
         mc_album_list_free(list);
         break;
@@ -723,7 +750,8 @@ static void fill_list(void) {
         for (int i = 0; st == MC_OK && list && i < list->count; i++) {
           int n = list->items[i].album_count;
           if (n > 0) mc_format(detail, sizeof detail, mc_str_plural(MC_STR_COUNT_ALBUMS, n), MC_D(n));
-          g_ptr_array_add(items, dv_item_new(list->items[i].uid, list->items[i].name, n > 0 ? detail : NULL));
+          g_ptr_array_add(items, dv_item_new(list->items[i].uid, list->items[i].name,
+                                             row_detail(list->items[i].uid, n > 0 ? detail : NULL)));
         }
         mc_artist_list_free(list);
         break;
@@ -762,6 +790,7 @@ static void fill_list(void) {
   }
   gtk_stack_set_visible_child_name(GTK_STACK(g_dv.list_stack), items->len ? "list" : "empty");
   g_ptr_array_unref(items);
+  update_select_buttons();
 }
 
 static void on_item_toggled(GtkCheckButton *check, gpointer data) {
@@ -774,6 +803,7 @@ static void on_item_toggled(GtkCheckButton *check, gpointer data) {
   else g_hash_table_remove(g_dv.sel[g_dv.rows_tab], item->uid);
   pending_toggle(k_tab_kind[g_dv.rows_tab], item->uid, on);
   update_count();
+  update_select_buttons();
   schedule();
 }
 
@@ -929,6 +959,8 @@ static estimate_job *estimate_job_new(const mc_sync_profile *p) {
   g_strlcpy(job->uid, g_dv.uid, sizeof job->uid);
   job->profile = *p;
   job->profile.name = NULL;
+  job->profile.removed = NULL;
+  job->profile.removed_count = 0;
   job->profile.items = p->count > 0 ? g_memdup2(p->items, (gsize)p->count * sizeof *p->items) : NULL;
   return job;
 }
@@ -979,6 +1011,19 @@ static void estimate_cancel(void) {
 
 /* --- Applying edits --- */
 
+/* Says how storing edits went, and shows what's stored now, which may include others' edits
+ * made meanwhile. */
+static void show_stored(mc_status st) {
+  if (st == MC_ERR_LOCKED) toast(mc_str(MC_STR_PROFILE_LOCKED));
+  else if (st != MC_OK) toast_status(MC_STR_PROFILE_SAVE_FAILED, st);
+  else mc_sync_notify_changed(g_dv.sync);
+  load_profile();
+  if (g_dv.root) {
+    update_controls(FALSE);
+    if (g_dv.profile && !g_dv.profile->sync_all) fill_list();
+  }
+}
+
 /* Applies the pending edits now: get, change, set. */
 static void flush(void) {
   g_clear_handle_id(&g_dv.apply_source, g_source_remove);
@@ -992,15 +1037,7 @@ static void flush(void) {
   if (st == MC_OK) st = mc_sync_set_profile(g_dv.sync, g_dv.uid, p);
   mc_sync_profile_free(p);
   pending_clear();
-  if (st == MC_ERR_LOCKED) toast(mc_str(MC_STR_PROFILE_LOCKED));
-  else if (st != MC_OK) toast_status(MC_STR_PROFILE_SAVE_FAILED, st);
-  else mc_sync_notify_changed(g_dv.sync);
-  /* What's stored now, which may include others' edits made meanwhile. */
-  load_profile();
-  if (g_dv.root) {
-    update_controls(FALSE);
-    if (g_dv.profile && !g_dv.profile->sync_all) fill_list();
-  }
+  show_stored(st);
 }
 
 static gboolean on_apply_timeout(gpointer data) {
@@ -1309,6 +1346,26 @@ static void on_sync_all_active(GObject *row, GParamSpec *pspec, gpointer data) {
   schedule();
 }
 
+/* Select all and Select none: the rows shown, stored at once as one write rather than waiting
+ * as a toggle each, which a long list couldn't afford. Edits made before them go first. */
+static void on_select_clicked(GtkButton *button, gpointer data) {
+  (void)button;
+  if (g_dv.rows_tab < 0 || !g_dv.sync || !editable()) return;
+  flush(); /* may fill the list again */
+  guint n = g_list_model_get_n_items(G_LIST_MODEL(g_dv.store));
+  if (!n) return;
+  char (*uids)[MC_UID_STRLEN] = g_malloc_n(n, MC_UID_STRLEN);
+  for (guint i = 0; i < n; i++) {
+    DvItem *item = g_list_model_get_item(G_LIST_MODEL(g_dv.store), i);
+    memcpy(uids[i], item->uid, MC_UID_STRLEN);
+    g_object_unref(item);
+  }
+  mc_status st = mc_sync_select_items(g_dv.sync, g_dv.uid, k_tab_kind[g_dv.rows_tab],
+                                      (const char(*)[MC_UID_STRLEN])uids, (int)n, GPOINTER_TO_INT(data));
+  g_free(uids);
+  show_stored(st);
+}
+
 static void on_tab_toggled(GtkToggleButton *button, gpointer data) {
   int tab = GPOINTER_TO_INT(data);
   if (!gtk_toggle_button_get_active(button) || tab == g_dv.tab) return;
@@ -1492,6 +1549,16 @@ static GtkWidget *build_what_group(void) {
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g_dv.tabs[0]), TRUE);
   gtk_box_append(GTK_BOX(g_dv.picker), tabs);
 
+  /* Select all and Select none, for the tab open. */
+  GtkWidget *select = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  g_dv.select_all = gtk_button_new_with_label(mc_str(MC_STR_SELECT_ALL));
+  g_signal_connect(g_dv.select_all, "clicked", G_CALLBACK(on_select_clicked), GINT_TO_POINTER(TRUE));
+  g_dv.select_none = gtk_button_new_with_label(mc_str(MC_STR_SELECT_NONE));
+  g_signal_connect(g_dv.select_none, "clicked", G_CALLBACK(on_select_clicked), GINT_TO_POINTER(FALSE));
+  gtk_box_append(GTK_BOX(select), g_dv.select_all);
+  gtk_box_append(GTK_BOX(select), g_dv.select_none);
+  gtk_box_append(GTK_BOX(g_dv.picker), select);
+
   g_dv.store = g_list_store_new(DV_TYPE_ITEM);
   GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
   g_signal_connect(factory, "setup", G_CALLBACK(on_item_setup), NULL);
@@ -1528,8 +1595,10 @@ static GtkWidget *build_what_group(void) {
 
 GtkWidget *device_view_new(const device_view_callbacks *callbacks) {
   if (callbacks) g_dv.cb = *callbacks;
-  for (int i = 0; i < NUM_TABS; i++)
+  for (int i = 0; i < NUM_TABS; i++) {
     if (!g_dv.sel[i]) g_dv.sel[i] = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    if (!g_dv.removed_items[i]) g_dv.removed_items[i] = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+  }
   if (!g_dv.pending.toggles) g_dv.pending.toggles = g_array_new(FALSE, FALSE, sizeof(toggle));
   g_dv.rows_tab = -1;
 

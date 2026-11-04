@@ -48,4 +48,14 @@ mc_status mc_merge_map_row(sqlite3 *db, const char *table, const char *uid);
  * uid. A NULL lib leaves it as it is. */
 mc_status mc_merge_resolve(mc_library *lib, const char *uid, char out[MC_UID_STRLEN]);
 
+/* mc_merge_resolve() for a long list of uids, which prepares its query once. lib may be NULL
+ * as there. Between _open and _close, used on one thread. */
+typedef struct mc_merge_resolver {
+  sqlite3_stmt *stmt;
+} mc_merge_resolver;
+
+mc_status mc_merge_resolver_open(mc_library *lib, mc_merge_resolver *r);
+mc_status mc_merge_resolver_get(mc_merge_resolver *r, const char *uid, char out[MC_UID_STRLEN]);
+void mc_merge_resolver_close(mc_merge_resolver *r);
+
 #endif

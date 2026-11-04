@@ -98,8 +98,13 @@ data class SyncProfile(
     val budgetBytes: Long,
     /** The selection; kept while [syncAll] so it comes back. */
     val items: List<ProfileItem>,
+    /**
+     * The albums and artists removed from the device (an artist's albums among them), read-only:
+     * Select all leaves them out. Ticking one syncs it there again.
+     */
+    val removed: List<ProfileItem> = emptyList(),
 ) {
-    // For jni_bridge.c, which passes the items as parallel kinds and uids.
+    // For jni_bridge.c, which passes the items and removed as parallel kinds and uids.
     @Suppress("unused")
     private constructor(
         name: String?,
@@ -110,6 +115,8 @@ data class SyncProfile(
         budgetBytes: Long,
         kinds: IntArray,
         uids: Array<String>,
+        removedKinds: IntArray,
+        removedUids: Array<String>,
     ) : this(
         name,
         archive,
@@ -119,6 +126,7 @@ data class SyncProfile(
         budgetBytes,
         // Kinds this version doesn't know are left out by the core already.
         kinds.indices.map { ProfileItem(ProfileItemKind.entries[kinds[it]], uids[it]) },
+        removedKinds.indices.map { ProfileItem(ProfileItemKind.entries[removedKinds[it]], removedUids[it]) },
     )
 }
 

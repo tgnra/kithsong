@@ -8,10 +8,11 @@
  * 'exclude_artist', which take the item's tracks out of the wanted set whatever else selects
  * them, "Sync everything" included (see "Profiles and what a device holds" in
  * docs/sync-protocol.md). In a selection, the item's own album or artist row goes too. Like
- * any profile edit it syncs to the group, and any member's editor keeps it (editors don't
- * see exclusions; mc_sync_get_profile() leaves them out and mc_sync_set_profile() keeps them).
- * It comes back with mc_sync_restore_here(), or by selecting the same album or artist under
- * What to sync, which drops its exclusion.
+ * any profile edit it syncs to the group, and any member's editor keeps it (exclusions aren't
+ * edited as items: mc_sync_get_profile() lists them apart, as mc_sync_profile.removed, and
+ * mc_sync_set_profile() keeps them). It comes back with mc_sync_restore_here(), or by ticking
+ * the same album or artist under What to sync, which drops its exclusion; Select all
+ * (mc_sync_select_items()) leaves it out.
  *
  * Only for a device that keeps a part of the library: one in a group (where an archive holds
  * everything) and not an archive itself. With no group the music lives nowhere else, so

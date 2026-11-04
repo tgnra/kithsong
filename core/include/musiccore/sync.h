@@ -678,6 +678,12 @@ typedef struct mc_sync_profile {
                              * !budget_enabled so it comes back. */
   mc_profile_item *items;   /* the selection; kept while sync_all so it comes back */
   int count;
+  /* The albums and artists removed from this device (musiccore/sync_here.h), an artist's
+   * albums among them, sorted: what Select all leaves out (mc_sync_select_items()). Filled
+   * in by mc_sync_get_profile(); not part of what's edited, so mc_sync_set_profile() and
+   * mc_sync_estimate_profile() ignore it. */
+  mc_profile_item *removed;
+  int removed_count;
 } mc_sync_profile;
 
 /* device_uid's profile (any member's, this device's included). An archive's reads as
@@ -686,8 +692,8 @@ typedef struct mc_sync_profile {
  * getter returns what an editor should start from: everything, originals, no budget, no
  * name. A stored budget reads as MC_FORMAT_AUTO whatever format it was stored with (older
  * versions kept both, the budget walking down from the format). Items of kinds this version
- * doesn't know are left out. MC_ERR_NOT_FOUND if not in a group or it isn't a current
- * member. Free with mc_sync_profile_free(). */
+ * doesn't know are left out, and exclusions show only in removed. MC_ERR_NOT_FOUND if not in
+ * a group or it isn't a current member. Free with mc_sync_profile_free(). */
 mc_status mc_sync_get_profile(mc_sync *sync, const char *device_uid, mc_sync_profile **out);
 /* Frees a profile from mc_sync_get_profile(). NULL is a no-op. */
 void mc_sync_profile_free(mc_sync_profile *profile);
@@ -703,6 +709,15 @@ void mc_sync_profile_free(mc_sync_profile *profile);
  * MC_ERR_NOT_FOUND as for the getter. Members hear of the change in a few
  * seconds. */
 mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sync_profile *profile);
+/* Select all (on) or Select none (!on) under What to sync: selects or unselects the items of
+ * kind in uids, the rows the editor shows, leaving other kinds and rows alone, in one write
+ * however many there are. Selecting leaves out what's in mc_sync_profile.removed: only ticking
+ * such an item by hand drops its exclusion, as mc_sync_set_profile() does. Unselecting keeps
+ * exclusions. Neither changes sync_all: a selection of everything stays a selection, which
+ * doesn't take in later imports. Store pending edits first. MC_OK with nothing written if
+ * nothing changes. MC_ERR_INVALID_ARG and MC_ERR_NOT_FOUND as for mc_sync_set_profile(). */
+mc_status mc_sync_select_items(mc_sync *sync, const char *device_uid, mc_profile_item_kind kind,
+                               const char (*uids)[MC_UID_STRLEN], int count, int on);
 
 /* --- Archives ---
  * An archive keeps the whole library as originals, and the group always has one. */

@@ -12,6 +12,7 @@
  *   | What to sync                                                     |
  *   | [x] Sync everything                                              |
  *   | ( Albums | Artists | Playlists | Album groups )                  |
+ *   |                                [Select all] [Select none]        |
  *   | [list with checkboxes, hidden while Sync everything]             |
  *   | 12 albums, 2 artists, 1 playlist selected                        |
  *   +------------------------------------------------------------------+
