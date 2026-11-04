@@ -1440,14 +1440,13 @@ static GtkWidget *build_header(void) {
   gtk_label_set_xalign(GTK_LABEL(g_dv.status), 0);
   gtk_label_set_ellipsize(GTK_LABEL(g_dv.status), PANGO_ELLIPSIZE_END);
   gtk_widget_add_css_class(g_dv.status, "dim-label");
-  g_dv.progress_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  /* The text under the bar, with the whole width, and a second line if it needs one: with speed
+   * and time left it's long, and what would be cut off is the time left. */
+  g_dv.progress_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
   g_dv.progress = gtk_progress_bar_new();
-  gtk_widget_set_size_request(g_dv.progress, 160, -1);
-  gtk_widget_set_valign(g_dv.progress, GTK_ALIGN_CENTER);
   g_dv.progress_text = gtk_label_new(NULL);
   gtk_label_set_xalign(GTK_LABEL(g_dv.progress_text), 0);
-  gtk_label_set_ellipsize(GTK_LABEL(g_dv.progress_text), PANGO_ELLIPSIZE_END);
-  gtk_widget_set_hexpand(g_dv.progress_text, TRUE);
+  gtk_label_set_wrap(GTK_LABEL(g_dv.progress_text), TRUE);
   gtk_widget_add_css_class(g_dv.progress_text, "dim-label");
   gtk_widget_add_css_class(g_dv.progress_text, "numeric");
   gtk_box_append(GTK_BOX(g_dv.progress_box), g_dv.progress);
