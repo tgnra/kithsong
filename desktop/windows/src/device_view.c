@@ -150,6 +150,7 @@ static struct {
   int files_done, files_total; /* the files this PC is fetching */
   int sends_done, sends_total; /* the files the other device is fetching from it */
   int64_t bytes_received, bytes_sent;
+  char pace[96]; /* speed and time left, UTF-8: mc_sync_pace_text() */
   /* The last session ended and none is running: the bar shows full, with finished_text,
    * for FINISHED_MS. */
   BOOL finished;
@@ -552,6 +553,13 @@ static void update_status(void) {
       wchar_t sent[32], received[32];
       mc_wformat(text, 256, mc_str(MC_STR_PROGRESS_ROWS), MC_S(u8(phase)),
                  MC_S(u8(fmt_count(g_dv.sent, sent, 32))), MC_S(u8(fmt_count(g_dv.received, received, 32))));
+    }
+    /* Of several sessions, whichever spoke last would have its speed shown: none is better. */
+    if (g_dv.phase == MC_SYNC_PHASE_FILES && g_dv.nbusy == 1 && g_dv.pace[0]) {
+      wchar_t pace[96];
+      size_t used = wcslen(text);
+      swprintf(text + used, 256 - used, L"%ls%ls", mc_wstr(MC_STR_SEPARATOR_DOT),
+               wstr_from_utf8(pace, 96, g_dv.pace));
     }
     SendMessageW(g_dv.progress, PBM_SETPOS, (WPARAM)progress_pos(), 0);
   } else if (g_dv.finished) {
@@ -1838,6 +1846,7 @@ void device_view_on_sync_event(const sync_event *ev) {
       g_dv.sends_total = ev->sends_total;
       g_dv.bytes_received = ev->bytes_received;
       g_dv.bytes_sent = ev->bytes_sent;
+      snprintf(g_dv.pace, sizeof g_dv.pace, "%s", ev->pace);
       if (i < 0) set_message(NULL);
       update_status();
       break;

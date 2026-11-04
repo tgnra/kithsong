@@ -74,7 +74,7 @@ enum class SyncError { Open, Listen }
 
 /** Files fetched so far of those a session brings: [done] of [total]. */
 @Immutable
-data class FileProgress(val done: Int, val total: Int)
+data class FileProgress(val done: Int, val total: Int, val pace: String = "")
 
 /** A session with [deviceName] that failed with [status], a negative mc_status. */
 @Immutable
@@ -121,7 +121,11 @@ data class SyncStatus(
     val filesProgress: FileProgress? get() {
         val files = sessions.values.filter { it.total > 0 }
         if (files.isEmpty()) return null
-        return FileProgress(files.sumOf { it.done.coerceAtMost(it.total) }, files.sumOf { it.total })
+        return FileProgress(
+            files.sumOf { it.done.coerceAtMost(it.total) },
+            files.sumOf { it.total },
+            files.singleOrNull()?.pace.orEmpty(),
+        )
     }
 
     val screen: SyncState get() = when {
@@ -402,7 +406,7 @@ class WatchSyncer(
         // there) shows nothing until the member answers; one the user asked for shows at once.
         if (!event.user && !event.connected) return false
         val files = event.phase == CoreSync.Phase.Files
-        val progress = if (files) FileProgress(event.filesDone, event.filesTotal) else before ?: FileProgress(0, 0)
+        val progress = if (files) FileProgress(event.filesDone, event.filesTotal, event.pace) else before ?: FileProgress(0, 0)
         update { copy(sessions = sessions + (event.uid to progress)) }
         // Show what has arrived so far on a long transfer, rather than only at the end.
         val now = SystemClock.elapsedRealtime()

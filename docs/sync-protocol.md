@@ -1071,6 +1071,31 @@ encodes in the background (on the pool, after any encode-ahead; see
 [Lossy copies](#lossy-copies)), so the session goes on, and keeps at it after the session
 ends; one that may not transcode ignores it.
 
+### Showing speed and time left
+
+Nothing on the wire: each device works these out for itself from the bytes it has moved
+(`speed` and `eta_seconds` in `mc_sync_progress`, worded by `mc_sync_pace_text()`, in
+`core/src/sync/pace.c`), so every frontend shows the same. A session reports them while a
+file's bytes move and about twice a second while it waits for the peer or for an encode, so
+a stall shows too.
+
+Time is cut into one-second bins, starting with the first bytes.
+
+- Speed is the mean of the last 10 bins, shown after 3, rounded to 0.1 MB/s (a whole MB/s
+  from 100 up; a MB is 1024 × 1024 bytes, as in every size the app shows). It changes at most
+  every 2 s, and only by 1/16 of itself or 0.15 MB/s. Below 0.05 MB/s nothing is shown.
+- Time left is the bytes left over a longer mean: each bin counts for less as it ages, with a
+  horizon of 45 s. Stalls stay in that mean, since ones that keep coming do take time. It is
+  shown after 8 bins, on a grid that coarsens: a minute up to 20 min, then 5, 10, 30 and 60 min
+  from 1, 3 and 10 h; under 50 s it is "less than a minute".
+- It goes down a quarter step past where rounding would take it, at most every 5 s, and up
+  only if the estimate stands 30% and a step above the value shown for 15 s.
+- Nothing is shown when the size isn't known (a peer without `FILES_PLAN`), when nothing has
+  moved for the 10 bins of the speed, or past 7 days. After a stall the value held goes on.
+  The bytes left are the turns known so far, so more work arriving (the second turn's
+  `FILES_PLAN`) starts the time left over, with its warm-up. A session with another peer
+  starts from nothing: another link says nothing of this one.
+
 ## Lossy copies
 
 - A transcode is only ever made from the track's original, whatever its format: a lossy

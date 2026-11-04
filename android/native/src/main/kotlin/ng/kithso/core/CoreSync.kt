@@ -373,6 +373,8 @@ class CoreSync(
             val bytesSent: Long,
             val sendsDone: Int,
             val sendsTotal: Int,
+            /** How fast files are moving and the time left, as the core words them; "" for neither. */
+            val pace: String = "",
             val user: Boolean = false,
             val connected: Boolean = true,
         ) : Event
@@ -685,12 +687,13 @@ class CoreSync(
         bytesSent: Long,
         sendsDone: Int,
         sendsTotal: Int,
+        pace: String,
         user: Boolean,
         connected: Boolean,
     ) = listener(
         Event.Progress(
             uid, Phase.entries[phase], rowsSent, rowsReceived, filesDone, filesTotal, bytesReceived, bytesSent,
-            sendsDone, sendsTotal, user, connected,
+            sendsDone, sendsTotal, pace, user, connected,
         ),
     )
 

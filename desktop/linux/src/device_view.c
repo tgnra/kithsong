@@ -134,6 +134,7 @@ static struct {
   int files_done, files_total; /* the files this computer is fetching */
   int sends_done, sends_total; /* the files the other device is fetching from it */
   int64_t bytes_received, bytes_sent;
+  char pace[96]; /* speed and time left, UTF-8: mc_sync_pace_text() */
   /* The last session ended and none is running: the bar shows full, with finished_text, for
    * FINISHED_MS. */
   gboolean finished;
@@ -522,6 +523,11 @@ static void update_status(void) {
       char sent[32], received[32];
       mc_format(text, sizeof text, mc_str(MC_STR_PROGRESS_ROWS), MC_S(phase), MC_S(fmt_count(g_dv.sent, sent, sizeof sent)),
                 MC_S(fmt_count(g_dv.received, received, sizeof received)));
+    }
+    /* Of several sessions, whichever spoke last would have its speed shown: none is better. */
+    if (g_dv.phase == MC_SYNC_PHASE_FILES && g_dv.nbusy == 1 && g_dv.pace[0]) {
+      size_t used = strlen(text);
+      g_snprintf(text + used, sizeof text - used, "%s%s", mc_str(MC_STR_SEPARATOR_DOT), g_dv.pace);
     }
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(g_dv.progress), progress_fraction());
   } else if (g_dv.finished) {
@@ -1658,6 +1664,7 @@ void device_view_on_sync_event(const sync_event *ev) {
       g_dv.sends_total = ev->sends_total;
       g_dv.bytes_received = ev->bytes_received;
       g_dv.bytes_sent = ev->bytes_sent;
+      g_strlcpy(g_dv.pace, ev->pace, sizeof g_dv.pace);
       if (i < 0) set_message(NULL);
       update_status();
       break;
