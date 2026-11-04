@@ -218,15 +218,15 @@ static int exec(sqlite3 *db, const char *sql) {
   return rc;
 }
 
-/* Track no of its own album, its files row and its folder, by copying tNN/. Returns its
+/* Track no of its own album, its files row and its folder, by copying fixture tNN/. Returns its
  * size, and adds to *audio_s. */
-static int64_t add_one(dev *a, const char *fixtures, int no, double *audio_s) {
+static int64_t add_one(dev *a, const char *fixtures, int fixture, int no, double *audio_s) {
   char src[1200], rel[128], dst[2048], sql[2048];
   const char *ext = "flac";
-  snprintf(src, sizeof src, "%s/t%02d/track.flac", fixtures, no);
+  snprintf(src, sizeof src, "%s/t%02d/track.flac", fixtures, fixture);
   if (!mc_file_exists(src)) {
     ext = "mp3";
-    snprintf(src, sizeof src, "%s/t%02d/track.mp3", fixtures, no);
+    snprintf(src, sizeof src, "%s/t%02d/track.mp3", fixtures, fixture);
   }
   mc_decoder *d;
   if (mc_decoder_open(src, &d) != MC_OK) return -1;
@@ -238,7 +238,7 @@ static int64_t add_one(dev *a, const char *fixtures, int no, double *audio_s) {
   snprintf(dst, sizeof dst, "%s/Bench/Album %02d (2000)", a->libdir, no);
   CHECK(mc_mkdirs(dst) == MC_OK);
   char cover_src[1200], cover_dst[2200];
-  snprintf(cover_src, sizeof cover_src, "%s/t%02d/cover.jpg", fixtures, no);
+  snprintf(cover_src, sizeof cover_src, "%s/t%02d/cover.jpg", fixtures, fixture);
   snprintf(cover_dst, sizeof cover_dst, "%s/cover.jpg", dst);
   if (mc_file_exists(cover_src)) mc_copy_file(cover_src, cover_dst, 0);
   snprintf(dst, sizeof dst, "%s/%s", a->libdir, rel);
@@ -297,7 +297,7 @@ int main(int argc, char **argv) {
 
   double audio = 0, in = 0;
   for (int i = 0; i < files; i++) {
-    int64_t size = add_one(&a, fixtures, i % 24, &audio);
+    int64_t size = add_one(&a, fixtures, i % 24, i, &audio);
     if (size < 0) return 1;
     in += (double)size;
   }
@@ -310,6 +310,7 @@ int main(int argc, char **argv) {
   CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
   mc_sync_trace("BENCH end");
   report("cold", (double)(mc_mono_ms() - t0) / 1000.0, process_cpu_s() - c0, in, audio, &ra, &rb);
+  CHECK(rb.files_received == files); /* else the MB/s above counts files that never went */
 
   if (!strcmp(mode, "both") || !strcmp(mode, "warm")) {
     /* B gets another bitrate's worth of nothing: the same files, from A's full cache. */
