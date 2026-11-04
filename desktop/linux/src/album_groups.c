@@ -4,6 +4,7 @@
 
 #include "album_group_dialogs.h"
 #include "delete_dialog.h"
+#include "edit_dialog.h"
 #include "playlist_dialogs.h"
 #include "recents.h"
 #include "remove_here.h"
@@ -168,6 +169,12 @@ static void on_new_smart(GSimpleAction *action, GVariant *param, gpointer user) 
   if (a->lib) smart_editor_new(GTK_WIDGET(a->win), a->lib, MC_SMART_ALBUMS, on_group_created, a);
 }
 
+static void on_edit_album(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  if (v.menu_album[0]) edit_dialog_present(user, EDIT_ALBUM, v.menu_album);
+}
+
 static void on_delete_album(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -206,6 +213,7 @@ static void ensure_actions(void) {
     {"edit-rules", on_edit_rules, "s", NULL, NULL, {0}},
     {"new-smart", on_new_smart, NULL, NULL, NULL, {0}},
     {"delete-album", on_delete_album, NULL, NULL, NULL, {0}},
+    {"edit-album", on_edit_album, NULL, NULL, NULL, {0}},
     {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
     {"sync-here", on_sync_here, NULL, NULL, NULL, {0}},
   };
@@ -276,6 +284,7 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
     g_object_unref(section);
   }
   section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_EDIT_MENU), "albumgroup.edit-album");
   remove_here_append(section, MC_PROFILE_ALBUM, v.menu_album, "albumgroup.remove-here", "albumgroup.sync-here");
   g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "albumgroup.delete-album");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(section));

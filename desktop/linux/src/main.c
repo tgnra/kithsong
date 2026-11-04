@@ -15,7 +15,8 @@
  * The album and playlist grids are album_grid.c, the track list track_list.c, the
  * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
  * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, Settings' Move
- * Library move_library.c, the first run's dialog first_run.c, the Add to Playlist dialog add_to_playlist.c and the Rename and
+ * Library move_library.c, the first run's dialog first_run.c, the Edit dialog edit_dialog.c,
+ * the Add to Playlist dialog add_to_playlist.c and the Rename and
  * Delete Playlist dialogs playlist_dialogs.c, the Album groups page album_groups.c (its
  * dialogs album_group_dialogs.c), the Artists page artist_view.c and the Search page
  * search_view.c. The sidebar's
@@ -42,6 +43,7 @@
 #include "cover.h"
 #include "delete_dialog.h"
 #include "devices.h"
+#include "edit_dialog.h"
 #include "first_run.h"
 #include "import_view.h"
 #include "move_library.h"
@@ -232,6 +234,7 @@ static gboolean open_library(void *user, const char *dir) {
     adw_dialog_present(alert, GTK_WIDGET(a->win));
     return FALSE;
   }
+  edit_dialog_close();
   devices_stop(a); /* sync reads the old library */
   import_view_set_library(a->import, lib);
   playback_set_library(lib, a->settings_dir);
@@ -260,6 +263,7 @@ static void on_settings_group_changed(void *user) {
  * lets go, and it closes. */
 static void move_close_library(void *user) {
   app *a = user;
+  edit_dialog_close();
   devices_stop(a); /* sync reads the library */
   playback_clear();
   import_view_set_library(a->import, NULL);
@@ -350,6 +354,7 @@ static void close_confirmed(void *user, gboolean closed) {
 static gboolean on_close_request(GtkWindow *win, gpointer user) {
   (void)win;
   app *a = user;
+  if (edit_dialog_saving()) return TRUE; /* the dialog says so, and it can't be stopped */
   if (import_view_is_running(a->import)) {
     import_view_confirm_close(a->import, close_confirmed, a);
     return TRUE;
@@ -1052,6 +1057,10 @@ static void on_track_delete(void *user, const char *track_uid, const char *title
 }
 
 /* The track menu's Go to album and Go to artist. */
+static void on_track_edit(void *user, const char *track_uid) {
+  edit_dialog_present(user, EDIT_TRACK, track_uid);
+}
+
 static void on_track_go_to_album(void *user, const char *album_uid, const char *track_uid) {
   app_open_track(user, album_uid, track_uid);
 }
@@ -1574,7 +1583,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
                                           on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete,
                                           on_playlist_edit_rules,
-                                          on_track_delete, on_reshuffle, on_track_go_to_album,
+                                          on_track_delete, on_track_edit, on_reshuffle, on_track_go_to_album,
                                           on_track_go_to_artist, a};
   adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
   adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
@@ -1714,7 +1723,9 @@ int main(int argc, char **argv) {
   int status = g_application_run(G_APPLICATION(gapp), argc, argv);
   g_object_unref(gapp);
 
-  /* The window, and the import view with it, is gone by now, so the library can close. */
+  /* The window, and the import view with it, is gone by now, so the library can close once a
+   * search of the Edit dialog's is done with it. */
+  edit_dialog_wait();
   mc_library_close(a.lib);
   g_free(a.settings_dir);
   g_free(a.art_dir);

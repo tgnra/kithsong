@@ -5,13 +5,16 @@
 #include "album_grid.h"
 #include "artist_view.h"
 #include "drag.h"
+#include "edit_dialog.h"
 
 enum { MAX_RECENTS = 3 };
 
 static struct {
   app *a;
-  GtkWidget *heading, *list, *menu; /* menu: a row's, Remove from Recents and Clear Recents */
+  GtkWidget *heading, *list, *menu; /* menu: a row's, Edit..., Remove from Recents and Clear Recents */
   char menu_uid[MC_UID_STRLEN];     /* the recent the menu is for */
+  mc_recent_kind menu_kind;         /* and what it is */
+  GSimpleAction *edit;              /* enabled for an album or artist, and hidden otherwise */
 } r;
 
 /* The icon of the sidebar page it opens on. */
@@ -162,6 +165,13 @@ static void on_remove(GSimpleAction *action, GVariant *param, gpointer user) {
   if (st == MC_OK || st == MC_ERR_NOT_FOUND) recents_refresh(r.a); /* gone already: sync took it */
 }
 
+static void on_edit(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (r.menu_uid[0]) edit_dialog_present(r.a, r.menu_kind == MC_RECENT_ARTIST ? EDIT_ARTIST : EDIT_ALBUM, r.menu_uid);
+}
+
 static void on_clear(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -177,6 +187,8 @@ static void popup_menu(GtkListBoxRow *row, GtkWidget *widget, double x, double y
                                         &GRAPHENE_POINT_INIT((float)x, (float)y), &at))
     return;
   g_strlcpy(r.menu_uid, uid, sizeof r.menu_uid);
+  r.menu_kind = (mc_recent_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"));
+  g_simple_action_set_enabled(r.edit, r.menu_kind == MC_RECENT_ALBUM || r.menu_kind == MC_RECENT_ARTIST);
   gtk_popover_set_pointing_to(GTK_POPOVER(r.menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
   gtk_popover_popup(GTK_POPOVER(r.menu));
 }
@@ -249,9 +261,18 @@ GtkWidget *recents_new(app *a) {
                      gtk_callback_action_new(on_menu_key, NULL, NULL)));
   gtk_widget_add_controller(r.list, keys);
 
-  GMenu *model = g_menu_new();
-  g_menu_append(model, mc_str_mnemonic(MC_STR_RECENT_REMOVE_MENU), "recents.remove");
-  g_menu_append(model, mc_str_mnemonic(MC_STR_RECENTS_CLEAR_MENU), "recents.clear");
+  GMenu *model = g_menu_new(), *section = g_menu_new();
+  GMenuItem *edit = g_menu_item_new(mc_str_mnemonic(MC_STR_EDIT_MENU), "recents.edit");
+  g_menu_item_set_attribute(edit, "hidden-when", "s", "action-disabled");
+  g_menu_append_item(section, edit);
+  g_object_unref(edit);
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_RECENT_REMOVE_MENU), "recents.remove");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_RECENTS_CLEAR_MENU), "recents.clear");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
   r.menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));
   g_object_unref(model);
   gtk_popover_set_has_arrow(GTK_POPOVER(r.menu), FALSE);
@@ -261,6 +282,10 @@ GtkWidget *recents_new(app *a) {
   const GActionEntry entries[] = {{"remove", on_remove, NULL, NULL, NULL, {0}},
                                   {"clear", on_clear, NULL, NULL, NULL, {0}}};
   g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
+  r.edit = g_simple_action_new("edit", NULL);
+  g_signal_connect(r.edit, "activate", G_CALLBACK(on_edit), NULL);
+  g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(r.edit));
+  g_object_unref(r.edit); /* the group keeps it */
   gtk_widget_insert_action_group(box, "recents", G_ACTION_GROUP(actions));
   g_object_unref(actions);
   gtk_widget_set_visible(box, FALSE); /* until there are some */
