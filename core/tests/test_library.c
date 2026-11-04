@@ -658,7 +658,7 @@ static void test_migration_v18(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 18);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
   CHECK(query_int(db, "SELECT count(*) FROM play_events WHERE uid = 'e1' AND track_uid = 't1' AND node_uid = 'peer'"
                       " AND started_ms = 5000 AND listened_ms = 700 AND ended = 'skipped' AND context = 'radio'"
                       " AND context_uid IS NULL") == 1);
