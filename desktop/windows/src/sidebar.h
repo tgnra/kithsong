@@ -5,7 +5,8 @@
  * add a device by address (SBN_ADD_DEVICE).
  *
  * Under the pages: RECENTS, what was last played on any device (sidebar_set_recents), each
- * a button that opens it (SBN_OPEN_RECENT), with a right-click menu to remove it or clear
+ * a button that opens it, or plays it if it's a station (SBN_OPEN_RECENT), with a right-click
+ * menu to remove it or clear
  * them all (SBN_REMOVE_RECENT, SBN_CLEAR_RECENTS), or an album's or artist's to edit it
  * (SBN_EDIT_RECENT); the section is left out while there are
  * none. A manual playlist's recent takes tracks dragged onto it, and a manual group's albums

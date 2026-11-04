@@ -31,6 +31,8 @@ static struct {
   HWND wnd;  /* the main window */
   HWND msgs; /* ours */
   void (*changed)(void);
+  void (*recents_changed)(void);
+  BOOL station_logged; /* for the end of the next refresh() */
   mc_player *player;
   BOOL media_controls; /* set up on first play, as it loads WinRT */
   mc_library *lib;     /* where plays are counted, or NULL */
@@ -94,7 +96,8 @@ static void count_plays(void) {
     if (s.scrobbler && !s.scrobble_off) mc_scrobbler_scrobble(s.scrobbler, s.items[index].uid, started_ms);
   }
   mc_play_event ended;
-  while (s.player && s.lib && mc_player_take_ended(s.player, &ended) == MC_OK) mc_library_log_play(s.lib, &ended);
+  while (s.player && s.lib && mc_player_take_ended(s.player, &ended) == MC_OK)
+    if (mc_library_log_play(s.lib, &ended) == MC_OK && mc_play_event_starts_station(&ended)) s.station_logged = TRUE;
 }
 
 /* Brings everything showing playback up to date with the player. */
@@ -136,6 +139,10 @@ static void refresh(void) {
     if (st.state == MC_PLAYER_PLAYING) SetTimer(s.msgs, TICK_TIMER, TICK_MS, NULL);
     else KillTimer(s.msgs, TICK_TIMER);
     if (s.changed) s.changed();
+  }
+  if (s.station_logged) {
+    s.station_logged = FALSE;
+    if (s.recents_changed) s.recents_changed();
   }
 }
 
@@ -188,6 +195,10 @@ void playback_init(HWND wnd, void (*changed)(void)) {
   s.msgs = CreateWindowExW(0, L"kithsong_playback", NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL,
                            GetModuleHandleW(NULL), NULL);
   taskbar_init(wnd);
+}
+
+void playback_on_recents_changed(void (*changed)(void)) {
+  s.recents_changed = changed;
 }
 
 void playback_free(void) {

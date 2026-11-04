@@ -290,8 +290,9 @@ libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c
   - The play log isn't carried over: `play_events` is history, and a merged library comes as a
     snapshot without history. Its rows stay in the set-aside copy. This device's rows begin
     with the plays after the merge.
-  - Recents: albums, artists (by MusicBrainz id, then name), playlists and groups mapped, a
-    newer `opened_ms` than the kept library's winning.
+  - Recents: albums, artists (by MusicBrainz id, then name), playlists, groups and stations
+    (by their seed tracks) mapped, a newer `opened_ms` than the kept library's winning. An app
+    from before stations leaves them out here, as it does any kind it doesn't know.
   - Then `meta.merge_source` is cleared, `on_merge_done` reports what happened, and members
     are told of the change. Until then the merged device's file phase fetches and deletes
     nothing (its files have no `files` rows yet, so reconcile would take them for unknown
@@ -436,7 +437,11 @@ with its own key (`mc_scrobbler_set_service()`) syncs that key and secret with t
   collide. Moving an entry is a `position` change on that entry. Two devices inserting at
   the same spot both keep their entry, ordered by `(position, uid)`.
 - **Recents** are keyed by the opened item's uid, so the same item opened on two devices is
-  one row, and its newest open wins like any field.
+  one row, and its newest open wins like any field. A station is keyed by its seed track's uid.
+  `kind` is an ordinary field holding a name, so a kind an older app doesn't know, as `'station'`
+  is to one from before stations, needs no new protocol or schema version: it applies, logs and passes
+  the row on as it would any other, and only its listing leaves the row out. It can still take
+  the row out, by Clear Recents. See [Recents](schema.md#recents).
 - **Artist credits** (`track_artists`, `album_artists`) are one row per position, keyed by a
   uid derived from the owner and the position (see
   [Artist credits](schema.md#artist-credits)), so two devices crediting one track write the
@@ -597,7 +602,7 @@ way, without logging anything.
   fields and whether it is live are worked out from the changelog rows of every uid in the
   class together, as if they were one row's: field by field the highest `(hlc, origin_uid)`
   wins, and a delete of any of them is the class's delete. Recents rows, keyed by the
-  item's uid, merge the same way. An album's flags are only logged when set (see
+  item's uid, merge the same way, which takes a station to its seed's canonical track. An album's flags are only logged when set (see
   [Album flags](schema.md#album-flags)), so a new row's 0 never beats a flag set on its
   duplicate: the newest thing anyone chose wins, and a flag set on one copy and never touched
   on the other stays set.

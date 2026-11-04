@@ -514,24 +514,27 @@ static void show_album(void) {
   }
 }
 
-/* The sidebar's recents: the albums and playlists last played and the artists and album
- * groups last opened, on any device, smart playlists and groups included. */
+/* The sidebar's recents: the albums, playlists and stations last played and the artists and
+ * album groups last opened, on any device, smart playlists and groups included. */
 static void refresh_recents(void) {
   mc_recent_list *list = NULL;
-  if (!g_app.lib || mc_library_list_recents(g_app.lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
+  if (!g_app.lib || mc_library_list_recents(g_app.lib, 0, MC_LIST_PLAYABLE | MC_LIST_STATIONS, &list) != MC_OK)
+    list = NULL;
   sidebar_recent items[MAX_RECENTS];
-  wchar_t *names[MAX_RECENTS], *artists[MAX_RECENTS];
+  wchar_t *names[MAX_RECENTS], *details[MAX_RECENTS]; /* an album's artist, what a station's like */
   int n = 0;
   for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
     const mc_recent_info *r = &list->items[i];
-    BOOL album = r->kind == MC_RECENT_ALBUM;
+    BOOL album = r->kind == MC_RECENT_ALBUM, station = r->kind == MC_RECENT_STATION;
     names[n] = wstr_dup_from_utf8(r->name ? r->name : "");
-    artists[n] = album ? wstr_dup_from_utf8(r->artist ? r->artist : mc_str(MC_STR_UNKNOWN_ARTIST)) : NULL;
+    details[n] = album     ? wstr_dup_from_utf8(r->artist ? r->artist : mc_str(MC_STR_UNKNOWN_ARTIST))
+                 : station ? wstr_dup_from_utf8(r->sub ? r->sub : mc_str(MC_STR_HOME_STATION_SUB))
+                           : NULL;
     const wchar_t *kind = mc_wstr(r->kind == MC_RECENT_ARTIST     ? MC_STR_ARTIST
                                   : r->kind == MC_RECENT_PLAYLIST ? (r->is_smart ? MC_STR_SMART_PLAYLIST : MC_STR_PLAYLIST)
                                   : r->is_smart                   ? MC_STR_SMART_ALBUM_GROUP
                                                                   : MC_STR_ALBUM_GROUP);
-    items[n] = (sidebar_recent){.kind = r->kind, .smart = r->is_smart, .name = names[n], .detail = album ? artists[n] : kind};
+    items[n] = (sidebar_recent){.kind = r->kind, .smart = r->is_smart, .name = names[n], .detail = details[n] ? details[n] : kind};
     snprintf(items[n].uid, sizeof items[n].uid, "%s", r->uid);
     n++;
   }
@@ -540,7 +543,7 @@ static void refresh_recents(void) {
   home_view_refresh();
   for (int i = 0; i < n; i++) {
     free(names[i]);
-    free(artists[i]);
+    free(details[i]);
   }
 }
 
@@ -589,14 +592,15 @@ static void open_item(mc_recent_kind kind, const char *uid) {
   album_grid_select(uid);
 }
 
-/* A recent was clicked in the sidebar. */
+/* A recent was clicked in the sidebar. A station has no page, so it plays. */
 static void open_recent(void) {
   mc_recent_kind kind;
   const char *clicked = sidebar_clicked_recent(&kind);
   if (!clicked) return;
   char uid[MC_UID_STRLEN];
   snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when the recents refresh */
-  open_item(kind, uid);
+  if (kind == MC_RECENT_STATION) playback_play_radio(uid);
+  else open_item(kind, uid);
 }
 
 /* A tile was clicked on the Home page. */
@@ -1772,6 +1776,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       g_app.dpi = GetDpiForWindow(wnd);
       g_app.page = PAGE_ALBUMS; /* the sidebar starts there */
       playback_init(wnd, playback_changed);
+      playback_on_recents_changed(refresh_recents);
       playback_on_shuffle_requested(set_shuffle_flash);
       theme_apply_window(wnd, TRUE);
       create_controls();

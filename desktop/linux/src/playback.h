@@ -39,6 +39,9 @@ mc_scrobbler *playback_scrobbler(void);
 void playback_on_scrobbler_closing(void (*closing)(void));
 /* Whether this device scrobbles (mc_settings_scrobble(); on to begin with). */
 void playback_set_scrobble(gboolean on);
+/* changed is called, with playback_init()'s user, when a play just logged has changed the
+ * recents: a station goes in them once its first track ends (mc_play_event_starts_station()). */
+void playback_on_recents_changed(void (*changed)(void *user));
 
 
 /* Stops playing and empties the queue, letting go of the file that was playing; for before

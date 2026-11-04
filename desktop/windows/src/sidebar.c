@@ -427,7 +427,8 @@ static void push_recent(const recent *rc) {
   static const wchar_t icons[] = {[MC_RECENT_ALBUM] = 0xE93C,        /* as Albums */
                                   [MC_RECENT_ARTIST] = 0xE77B,       /* as Artists */
                                   [MC_RECENT_PLAYLIST] = 0xE90B,     /* as Playlists */
-                                  [MC_RECENT_ALBUM_GROUP] = 0xE8F1}; /* Library */
+                                  [MC_RECENT_ALBUM_GROUP] = 0xE8F1,  /* Library */
+                                  [MC_RECENT_STATION] = 0xEC05};     /* as a station's mark on Home */
   const wchar_t *name = rc->name && *rc->name ? rc->name : mc_wstr(MC_STR_UNTITLED);
   sb_row *r = push_row(ROW_RECENT, name, NULL);
   if (!r) return;

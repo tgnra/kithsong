@@ -629,6 +629,10 @@ static void playback_changed(void *user) {
   update_buttons(user);
 }
 
+static void playback_recents_changed(void *user) {
+  recents_refresh(user);
+}
+
 static void on_previous(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -1800,6 +1804,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   gtk_widget_add_controller(win, typing);
 
   playback_init(a->win, playback_changed, a);
+  playback_on_recents_changed(playback_recents_changed);
   playback_set_library(a->lib, a->settings_dir);
   delete_dialog_init(before_delete);
   mc_settings *settings = NULL;

@@ -22,8 +22,7 @@
  * row, Up and Down between rows, and Page Up, Page Down, Home and End scroll the page; the
  * viewports keep the focused tile in view. Space plays or pauses, as in the album grids.
  *
- * Clicking a tile (or Enter on it) opens it. Radio's stations are placeholders, so nothing
- * happens yet.
+ * Clicking a tile (or Enter on it) opens it, or if it's a station plays it.
  *
  * The rows are read on a worker thread with its own library connection, as doing so lists every
  * album and evaluates the smart lists, and what's showing stays until it's done. Reloading
