@@ -348,3 +348,29 @@ mc_status mc_merge_resolve(mc_library *lib, const char *uid, char out[MC_UID_STR
   }
   return canonical_of(lib->db, uid, out);
 }
+
+mc_status mc_merge_resolver_open(mc_library *lib, mc_merge_resolver *r) {
+  r->stmt = NULL;
+  if (!lib) return MC_OK;
+  return sqlite3_prepare_v2(lib->db, "SELECT canonical FROM aliases WHERE uid = ?1", -1, &r->stmt,
+                            NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+}
+
+mc_status mc_merge_resolver_get(mc_merge_resolver *r, const char *uid, char out[MC_UID_STRLEN]) {
+  if (!r->stmt) {
+    memmove(out, uid, MC_UID_STRLEN);
+    return MC_OK;
+  }
+  sqlite3_bind_text(r->stmt, 1, uid, -1, SQLITE_TRANSIENT);
+  int rc = sqlite3_step(r->stmt);
+  mc_status st = rc == SQLITE_ROW || rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+  const char *c = rc == SQLITE_ROW ? (const char *)sqlite3_column_text(r->stmt, 0) : NULL;
+  memmove(out, c && strlen(c) == MC_UID_STRLEN - 1 ? c : uid, MC_UID_STRLEN);
+  sqlite3_reset(r->stmt);
+  return st;
+}
+
+void mc_merge_resolver_close(mc_merge_resolver *r) {
+  sqlite3_finalize(r->stmt);
+  r->stmt = NULL;
+}

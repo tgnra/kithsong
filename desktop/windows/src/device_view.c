@@ -40,6 +40,8 @@ enum {
   ID_DEV_ARCHIVE_LABEL,
   ID_DEV_ARCHIVE,
   ID_DEV_ARCHIVE_TEXT,
+  ID_DEV_SELECT_ALL,
+  ID_DEV_SELECT_NONE,
   /* Timers on the parent, run by their TIMERPROCs rather than WM_TIMER. */
   ID_DEV_APPLY_TIMER = 440,
   ID_DEV_TICK_TIMER,
@@ -96,7 +98,8 @@ static struct {
   HWND icon, title, sync_now, remove, status, files, progress, progress_text, message, notice;
   HWND name_label, name_edit, archive_label, archive_box, archive_text, format_label, format, budget, budget_label;
   HWND budget_size, budget_unit;
-  HWND heading, note, sync_all, sync_all_label, tabs[NUM_TABS], list, count, combo_list, estimate;
+  HWND heading, note, sync_all, sync_all_label, tabs[NUM_TABS], select_all, select_none, list, count, combo_list,
+    estimate;
   HFONT font, title_font, heading_font, icon_font;
   HIMAGELIST checks; /* the list's checkboxes; the list owns them once set */
   UINT dpi;
@@ -123,6 +126,7 @@ static struct {
   mc_sync_profile *profile;
   mc_status profile_status;
   uid_set sel[NUM_TABS];
+  uid_set removed_items[NUM_TABS]; /* removed from the device: Select All leaves them out */
 
   /* The list's rows: the current tab's items, in the library's order. */
   int tab, rows_tab;
@@ -293,11 +297,15 @@ static int tab_of_kind(mc_profile_item_kind kind) {
 }
 
 static void build_sel(void) {
-  for (int i = 0; i < NUM_TABS; i++) g_dv.sel[i].count = 0;
+  for (int i = 0; i < NUM_TABS; i++) g_dv.sel[i].count = g_dv.removed_items[i].count = 0;
   if (!g_dv.profile) return;
   for (int i = 0; i < g_dv.profile->count; i++) {
     int t = tab_of_kind(g_dv.profile->items[i].kind);
     if (t >= 0) set_put(&g_dv.sel[t], g_dv.profile->items[i].ref_uid, TRUE);
+  }
+  for (int i = 0; i < g_dv.profile->removed_count; i++) {
+    int t = tab_of_kind(g_dv.profile->removed[i].kind);
+    if (t >= 0) set_put(&g_dv.removed_items[t], g_dv.profile->removed[i].ref_uid, TRUE);
   }
 }
 
@@ -586,12 +594,34 @@ static void set_check(int row, BOOL on) {
   ListView_SetItemState(g_dv.list, row, INDEXTOSTATEIMAGEMASK(on ? 2 : 1), LVIS_STATEIMAGEMASK);
 }
 
+/* Select All and Select None, each greyed out while pressing it would change nothing. Keeps
+ * the keyboard's place when the one with the focus goes grey. */
+static void update_select_buttons(void) {
+  BOOL can_all = FALSE, can_none = FALSE;
+  if (editable() && g_dv.rows_tab >= 0) {
+    const uid_set *sel = &g_dv.sel[g_dv.rows_tab], *removed = &g_dv.removed_items[g_dv.rows_tab];
+    for (int i = 0; i < g_dv.nrows && !(can_all && can_none); i++) {
+      if (set_has(sel, g_dv.rows[i])) can_none = TRUE;
+      else if (!set_has(removed, g_dv.rows[i])) can_all = TRUE;
+    }
+  }
+  HWND focus = GetFocus();
+  EnableWindow(g_dv.select_all, can_all);
+  EnableWindow(g_dv.select_none, can_none);
+  if ((focus == g_dv.select_all && !can_all) || (focus == g_dv.select_none && !can_none))
+    SetFocus(can_all ? g_dv.select_all : can_none ? g_dv.select_none : g_dv.list);
+}
+
 /* The list's checkboxes from the selection. */
 static void update_checks(void) {
   if (g_dv.rows_tab < 0) return;
   g_dv.filling = TRUE;
+  SendMessageW(g_dv.list, WM_SETREDRAW, FALSE, 0);
   for (int i = 0; i < g_dv.nrows; i++) set_check(i, set_has(&g_dv.sel[g_dv.rows_tab], g_dv.rows[i]));
+  SendMessageW(g_dv.list, WM_SETREDRAW, TRUE, 0);
+  InvalidateRect(g_dv.list, NULL, TRUE);
   g_dv.filling = FALSE;
+  update_select_buttons();
 }
 
 static void update_count(void) {
@@ -664,6 +694,7 @@ static void update_controls(BOOL force) {
   EnableWindow(g_dv.sync_all, edit);
   for (int i = 0; i < NUM_TABS; i++) EnableWindow(g_dv.tabs[i], edit);
   EnableWindow(g_dv.list, edit);
+  update_select_buttons();
 
   wchar_t note[256] = L"";
   if (p && p->archive) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_DEVICE_ARCHIVE_NOTE));
@@ -722,7 +753,8 @@ static void free_items(tab_items *items) {
   *items = (tab_items){0};
 }
 
-/* Item i's uid, and its row's text: "Artist - Title (year)" or a name, and a count. */
+/* Item i's uid, and its row's text: "Artist - Title (year)" or a name, and a count, or that
+ * it was removed from the device. */
 static const char *item_row(const tab_items *items, int i, wchar_t *text, int cap, wchar_t *detail,
                             int detail_cap) {
   int count = 0;
@@ -749,7 +781,10 @@ static const char *item_row(const tab_items *items, int i, wchar_t *text, int ca
     count = items->groups->items[i].album_count;
   }
   detail[0] = L'\0';
-  if (count > 0) mc_wformat(detail, (size_t)detail_cap, mc_str_plural(MC_STR_COUNT_ALBUMS, count), MC_D(count));
+  if (set_has(&g_dv.removed_items[g_dv.tab], uid))
+    swprintf(detail, (size_t)detail_cap, L"%ls", mc_wstr(MC_STR_PROFILE_ITEM_REMOVED));
+  else if (count > 0)
+    mc_wformat(detail, (size_t)detail_cap, mc_str_plural(MC_STR_COUNT_ALBUMS, count), MC_D(count));
   return uid;
 }
 
@@ -808,6 +843,7 @@ static void fill_list(BOOL keep) {
   SendMessageW(g_dv.list, WM_SETREDRAW, TRUE, 0);
   InvalidateRect(g_dv.list, NULL, TRUE);
   g_dv.filling = FALSE;
+  update_select_buttons();
 }
 
 /* Reloads everything, keeping the pending edits. keep: it's the same device, so the list keeps
@@ -891,6 +927,8 @@ static estimate_job *estimate_job_new(const mc_sync_profile *p) {
   job->profile = *p;
   job->profile.name = NULL;
   job->profile.items = NULL;
+  job->profile.removed = NULL;
+  job->profile.removed_count = 0;
   if (p->count > 0) {
     job->profile.items = malloc((size_t)p->count * sizeof *p->items);
     if (!job->profile.items) {
@@ -985,6 +1023,27 @@ static LRESULT CALLBACK estimate_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, 
 
 /* --- Applying edits --- */
 
+/* Says how storing edits went, and shows what's stored now, which may include others' edits
+ * made meanwhile. */
+static void show_stored(mc_status st) {
+  if (st == MC_ERR_LOCKED) {
+    set_message(mc_wstr(MC_STR_PROFILE_LOCKED));
+  } else if (st != MC_OK) {
+    wchar_t text[256];
+    mc_wformat(text, 256, mc_str(MC_STR_PROFILE_SAVE_FAILED), MC_S(mc_status_str(st)));
+    set_message(text);
+  } else {
+    mc_sync_notify_changed(g_dv.sync);
+  }
+  int removed = g_dv.rows_tab >= 0 ? g_dv.removed_items[g_dv.rows_tab].count : 0;
+  load_profile();
+  update_controls(FALSE);
+  /* A row ticked by hand isn't removed any more, which its text says. */
+  if (g_dv.rows_tab >= 0 && g_dv.removed_items[g_dv.rows_tab].count != removed) fill_list(TRUE);
+  else update_checks();
+  layout_again();
+}
+
 /* Applies the pending edits now: get, change, set. */
 static void flush(void) {
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
@@ -998,20 +1057,7 @@ static void flush(void) {
   if (st == MC_OK) st = mc_sync_set_profile(g_dv.sync, g_dv.uid, p);
   mc_sync_profile_free(p);
   pending_clear();
-  if (st == MC_ERR_LOCKED) {
-    set_message(mc_wstr(MC_STR_PROFILE_LOCKED));
-  } else if (st != MC_OK) {
-    wchar_t text[256];
-    mc_wformat(text, 256, mc_str(MC_STR_PROFILE_SAVE_FAILED), MC_S(mc_status_str(st)));
-    set_message(text);
-  } else {
-    mc_sync_notify_changed(g_dv.sync);
-  }
-  /* What's stored now, which may include others' edits made meanwhile. */
-  load_profile();
-  update_controls(FALSE);
-  update_checks();
-  layout_again();
+  show_stored(st);
 }
 
 static void CALLBACK apply_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
@@ -1293,7 +1339,17 @@ static void on_check(int row, BOOL on) {
   set_put(&g_dv.sel[g_dv.rows_tab], g_dv.rows[row], on);
   pending_toggle(k_tab_kind[g_dv.rows_tab], g_dv.rows[row], on);
   update_count();
+  update_select_buttons();
   schedule();
+}
+
+/* Select All and Select None: the rows shown, stored at once as one write rather than waiting
+ * as a toggle each, which a long list couldn't afford. Edits made before them go first. */
+static void select_shown(BOOL on) {
+  if (g_dv.rows_tab < 0 || !g_dv.nrows || !editable()) return;
+  flush();
+  show_stored(mc_sync_select_items(g_dv.sync, g_dv.uid, k_tab_kind[g_dv.rows_tab],
+                                   (const char(*)[MC_UID_STRLEN])g_dv.rows, g_dv.nrows, on));
 }
 
 static void select_tab(int tab) {
@@ -1462,6 +1518,8 @@ void device_view_create(HWND parent, const device_view_host *host) {
     g_dv.tabs[t] = child(WC_BUTTONW, mc_wstr(k_tab_name[t]), BS_OWNERDRAW | WS_TABSTOP, ID_DEV_TAB + t);
     SetWindowSubclass(g_dv.tabs[t], tab_proc, 0, (DWORD_PTR)t);
   }
+  g_dv.select_all = child(WC_BUTTONW, mc_wstr(MC_STR_SELECT_ALL), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SELECT_ALL);
+  g_dv.select_none = child(WC_BUTTONW, mc_wstr(MC_STR_SELECT_NONE), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SELECT_NONE);
 
   g_dv.list = child(WC_LISTVIEWW, NULL, LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | WS_BORDER | WS_TABSTOP,
                     ID_DEV_LIST);
@@ -1494,6 +1552,8 @@ void device_view_destroy(void) {
   for (int i = 0; i < NUM_TABS; i++) {
     free(g_dv.sel[i].uids);
     g_dv.sel[i] = (uid_set){0};
+    free(g_dv.removed_items[i].uids);
+    g_dv.removed_items[i] = (uid_set){0};
   }
   free(g_dv.rows);
   g_dv.rows = NULL;
@@ -1534,8 +1594,8 @@ void device_view_set_font(HFONT font, UINT dpi) {
   HWND body[] = {g_dv.sync_now, g_dv.remove, g_dv.status, g_dv.files, g_dv.progress_text, g_dv.message,
                  g_dv.notice, g_dv.name_label, g_dv.name_edit, g_dv.archive_label, g_dv.archive_text,
                  g_dv.format_label, g_dv.format, g_dv.budget_label,
-                 g_dv.budget_size, g_dv.budget_unit, g_dv.estimate, g_dv.note, g_dv.sync_all_label, g_dv.list,
-                 g_dv.count};
+                 g_dv.budget_size, g_dv.budget_unit, g_dv.estimate, g_dv.note, g_dv.sync_all_label,
+                 g_dv.select_all, g_dv.select_none, g_dv.list, g_dv.count};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
   for (int i = 0; i < NUM_TABS; i++) InvalidateRect(g_dv.tabs[i], NULL, FALSE);
   set_check_images();
@@ -1549,7 +1609,7 @@ static HWND *all_controls(size_t *n) {
                  g_dv.format, g_dv.budget, g_dv.budget_label, g_dv.budget_size, g_dv.budget_unit, g_dv.estimate,
                  g_dv.heading,
                  g_dv.note, g_dv.sync_all, g_dv.sync_all_label, g_dv.tabs[0], g_dv.tabs[1], g_dv.tabs[2],
-                 g_dv.tabs[3], g_dv.list, g_dv.count};
+                 g_dv.tabs[3], g_dv.select_all, g_dv.select_none, g_dv.list, g_dv.count};
   memcpy(all, list, sizeof list);
   *n = sizeof list / sizeof list[0];
   return all;
@@ -1723,6 +1783,12 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   for (int i = 0; i < NUM_TABS; i++) tab_w = max(tab_w, text_width(g_dv.tabs[i], g_dv.font) + S(32));
   tab_w = min(tab_w, text_w / NUM_TABS);
   for (int i = 0; i < NUM_TABS; i++) place(g_dv.tabs[i], pick, left + i * tab_w, top, tab_w, btn_h);
+
+  /* Select All and Select None at the tabs' right, or on a line of their own if there's no room. */
+  int all_w = text_width(g_dv.select_all, g_dv.font) + S(24), none_w = text_width(g_dv.select_none, g_dv.font) + S(24);
+  if (pick && NUM_TABS * tab_w + S(16) + all_w + S(8) + none_w > text_w) top += btn_h + S(8);
+  place(g_dv.select_none, pick, right - none_w, top, none_w, btn_h);
+  place(g_dv.select_all, pick, right - none_w - S(8) - all_w, top, all_w, btn_h);
   if (pick) top += btn_h + S(8);
 
   int count_y = y + h - S(24) - line_h;
@@ -1919,6 +1985,10 @@ BOOL device_view_on_command(int id, int code) {
     case ID_DEV_SYNC_ALL:
       if (code == BN_CLICKED && !g_dv.filling) on_sync_all();
       return TRUE;
+    case ID_DEV_SELECT_ALL:
+    case ID_DEV_SELECT_NONE:
+      if (code == BN_CLICKED) select_shown(id == ID_DEV_SELECT_ALL);
+      return TRUE;
     default:
       if (id >= ID_DEV_TAB && id < ID_DEV_TAB + NUM_TABS) {
         if (code == BN_CLICKED) select_tab(id - ID_DEV_TAB);
@@ -1998,7 +2068,7 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
       return theme_ctlcolor(msg, dc);
     case WM_CTLCOLORBTN:
       if (wnd != g_dv.sync_now && wnd != g_dv.remove && wnd != g_dv.budget && wnd != g_dv.sync_all &&
-          wnd != g_dv.archive_box)
+          wnd != g_dv.archive_box && wnd != g_dv.select_all && wnd != g_dv.select_none)
         return NULL;
       SetBkColor(dc, theme.bg);
       return theme.bg_brush;

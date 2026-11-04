@@ -1567,13 +1567,30 @@ JNIEXPORT jobject JNICALL Java_ng_kithso_core_CoreSync_nativeWaiting(JNIEnv *env
   return out;
 }
 
+/* items as parallel kinds and uids; 0 with an exception pending on failure. */
+static int item_arrays(JNIEnv *env, jclass string_cls, const mc_profile_item *items, int count,
+                       jintArray *kinds, jobjectArray *uids) {
+  *kinds = (*env)->NewIntArray(env, count);
+  *uids = *kinds ? (*env)->NewObjectArray(env, count, string_cls, NULL) : NULL;
+  if (!*uids) return 0;
+  for (int i = 0; i < count; i++) {
+    jint kind = (jint)items[i].kind;
+    (*env)->SetIntArrayRegion(env, *kinds, i, 1, &kind);
+    jstring ref = new_string(env, items[i].ref_uid);
+    if (!ref) return 0;
+    (*env)->SetObjectArrayElement(env, *uids, i, ref);
+    (*env)->DeleteLocalRef(env, ref);
+  }
+  return 1;
+}
+
 JNIEXPORT jobject JNICALL Java_ng_kithso_core_CoreSync_nativeGetProfile(JNIEnv *env, jclass cls,
                                                                        jlong handle, jstring uid) {
   (void)cls;
   jclass info = (*env)->FindClass(env, "ng/kithso/core/SyncProfile");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
-                                       "(Ljava/lang/String;ZZIZJ[I[Ljava/lang/String;)V");
+                                       "(Ljava/lang/String;ZZIZJ[I[Ljava/lang/String;[I[Ljava/lang/String;)V");
   jclass string_cls = ctor ? (*env)->FindClass(env, "java/lang/String") : NULL;
   if (!string_cls) return NULL;
   const char *cuid = (*env)->GetStringUTFChars(env, uid, NULL);
@@ -1587,24 +1604,15 @@ JNIEXPORT jobject JNICALL Java_ng_kithso_core_CoreSync_nativeGetProfile(JNIEnv *
   }
   jobject out = NULL;
   jstring name = new_string(env, p->name);
-  jintArray kinds = (*env)->NewIntArray(env, p->count);
-  jobjectArray uids = kinds ? (*env)->NewObjectArray(env, p->count, string_cls, NULL) : NULL;
-  int ok = uids != NULL && (!p->name || name);
-  for (int i = 0; ok && i < p->count; i++) {
-    jint kind = (jint)p->items[i].kind;
-    (*env)->SetIntArrayRegion(env, kinds, i, 1, &kind);
-    jstring ref = new_string(env, p->items[i].ref_uid);
-    ok = ref != NULL;
-    if (ref) {
-      (*env)->SetObjectArrayElement(env, uids, i, ref);
-      (*env)->DeleteLocalRef(env, ref);
-    }
-  }
+  jintArray kinds, removed_kinds;
+  jobjectArray uids, removed_uids;
+  int ok = (!p->name || name) && item_arrays(env, string_cls, p->items, p->count, &kinds, &uids) &&
+           item_arrays(env, string_cls, p->removed, p->removed_count, &removed_kinds, &removed_uids);
   if (ok) {
     jint kbps = p->format.format == MC_FORMAT_OPUS ? p->format.bitrate_kbps : 0;
     out = (*env)->NewObject(env, info, ctor, name, (jboolean)(p->archive != 0),
                             (jboolean)(p->sync_all != 0), kbps, (jboolean)(p->budget_enabled != 0),
-                            (jlong)p->budget_bytes, kinds, uids);
+                            (jlong)p->budget_bytes, kinds, uids, removed_kinds, removed_uids);
   }
   mc_sync_profile_free(p);
   return out;

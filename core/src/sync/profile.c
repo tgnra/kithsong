@@ -148,6 +148,12 @@ static mc_status resolve_item(mc_library *lib, mc_profile_item *item) {
   return mc_merge_resolve(lib, item->ref_uid, item->ref_uid);
 }
 
+/* resolve_item() for one of a long list. */
+static mc_status resolve_next(mc_merge_resolver *r, mc_profile_item *item) {
+  if (item->kind != MC_PROFILE_ALBUM && item->kind != MC_PROFILE_ARTIST) return MC_OK;
+  return mc_merge_resolver_get(r, item->ref_uid, item->ref_uid);
+}
+
 /* uid's items of known kinds, resolved, sorted, each (kind, ref_uid) once. *out is malloc'd
  * (NULL if there are none). */
 static mc_status read_items(sqlite3 *db, mc_library *lib, const char *uid, mc_profile_item **out,
@@ -160,10 +166,11 @@ static mc_status read_items(sqlite3 *db, mc_library *lib, const char *uid, mc_pr
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
   sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
-  mc_status st = MC_OK;
+  mc_merge_resolver resolver;
+  mc_status st = mc_merge_resolver_open(lib, &resolver);
   mc_profile_item *items = NULL;
-  int n = 0, cap = 0, rc;
-  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+  int n = 0, cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     int kind = kind_parse((const char *)sqlite3_column_text(stmt, 0));
     const char *ref = (const char *)sqlite3_column_text(stmt, 1);
     if (kind < 0 || !is_uid(ref)) continue; /* a kind this version doesn't know */
@@ -179,10 +186,11 @@ static mc_status read_items(sqlite3 *db, mc_library *lib, const char *uid, mc_pr
     }
     items[n].kind = (mc_profile_item_kind)kind;
     memcpy(items[n].ref_uid, ref, MC_UID_STRLEN);
-    if ((st = resolve_item(lib, &items[n])) != MC_OK) break;
+    if ((st = resolve_next(&resolver, &items[n])) != MC_OK) break;
     n++;
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  mc_merge_resolver_close(&resolver);
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
     free(items);
@@ -221,10 +229,11 @@ static mc_status read_rows(sqlite3 *db, mc_library *lib, const char *uid, int ex
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
   sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
-  mc_status st = MC_OK;
+  mc_merge_resolver resolver;
+  mc_status st = mc_merge_resolver_open(lib, &resolver);
   stored_row *rows = NULL;
-  int n = 0, cap = 0, rc;
-  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+  int n = 0, cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     const char *row = (const char *)sqlite3_column_text(stmt, 0);
     const char *kind_text = (const char *)sqlite3_column_text(stmt, 1);
     const char *ref = (const char *)sqlite3_column_text(stmt, 2);
@@ -248,10 +257,11 @@ static mc_status read_rows(sqlite3 *db, mc_library *lib, const char *uid, int ex
     rows[n].exclusion = exclusion;
     memcpy(rows[n].item.ref_uid, ref, MC_UID_STRLEN);
     memcpy(rows[n].uid, row, MC_UID_STRLEN);
-    if ((st = resolve_item(lib, &rows[n].item)) != MC_OK) break;
+    if ((st = resolve_next(&resolver, &rows[n].item)) != MC_OK) break;
     n++;
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  mc_merge_resolver_close(&resolver);
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
     free(rows);
@@ -503,8 +513,10 @@ static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
   sqlite3 *db = mc_sync_db_handle(sdb);
   stored_row *rows;
   int nrows;
-  mc_status st = MC_OK;
-  for (int i = 0; st == MC_OK && i < nwant; i++) st = resolve_item(lib, &want[i]);
+  mc_merge_resolver resolver;
+  mc_status st = mc_merge_resolver_open(lib, &resolver);
+  for (int i = 0; st == MC_OK && i < nwant; i++) st = resolve_next(&resolver, &want[i]);
+  mc_merge_resolver_close(&resolver);
   if (st != MC_OK) return st;
   nwant = sort_unique(want, nwant);
   st = read_rows(db, lib, uid, 0, &rows, &nrows);

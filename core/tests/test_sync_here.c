@@ -389,6 +389,9 @@ static int confirmed(dev *d) {
   return state == MC_SYNC_CONFIRMED;
 }
 
+/* uids as mc_sync_select_items() takes them. */
+#define UIDS(a) ((const char(*)[MC_UID_STRLEN])(a))
+
 /* editor sets device's profile to a selection of these albums (NULL-terminated), or with
  * none, to everything. */
 static void select_albums(dev *editor, const char *device, const char *const *albums) {
@@ -597,7 +600,7 @@ int main(int argc, char **argv) {
   memcpy(artists[0], low, MC_UID_STRLEN);
   query_text(mc_library_db(a.lib), "SELECT uid FROM artists WHERE name = 'Kid'", artists[1],
              sizeof artists[1]);
-  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, albums, 3, 1) == MC_OK);
+  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, UIDS(albums), 3, 1) == MC_OK);
   {
     mc_sync_profile *p = NULL;
     CHECK(mc_sync_get_profile(b.sync, b.uid, &p) == MC_OK);
@@ -611,7 +614,7 @@ int main(int argc, char **argv) {
   CHECK(state_of(&b, MC_PROFILE_ALBUM, kid) == MC_HERE_REMOVED);
   /* An artist removed takes its albums along, and Select none keeps every exclusion. */
   CHECK(remove_here(&b, MC_PROFILE_ARTIST, low, &files, &kept, &res) == MC_OK);
-  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, albums, 3, 0) == MC_OK);
+  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, UIDS(albums), 3, 0) == MC_OK);
   CHECK(items_of(&b, b.uid, "exclude_album") == 1 && items_of(&b, b.uid, "exclude_artist") == 1);
   {
     mc_sync_profile *p = NULL;
@@ -619,8 +622,8 @@ int main(int argc, char **argv) {
     CHECK(p && p->count == 0 && p->removed_count == 4); /* three albums, Low */
     mc_sync_profile_free(p);
   }
-  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, albums, 3, 1) == MC_OK);
-  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ARTIST, artists, 2, 1) == MC_OK);
+  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ALBUM, UIDS(albums), 3, 1) == MC_OK);
+  CHECK(mc_sync_select_items(b.sync, b.uid, MC_PROFILE_ARTIST, UIDS(artists), 2, 1) == MC_OK);
   CHECK(items_of(&b, b.uid, "exclude_album") == 1 && items_of(&b, b.uid, "exclude_artist") == 1);
   {
     mc_sync_profile *p = NULL;

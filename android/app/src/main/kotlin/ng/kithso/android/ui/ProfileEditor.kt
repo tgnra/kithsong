@@ -109,14 +109,18 @@ private data class ProfileEdits(
 ) {
     val isEmpty: Boolean get() = this == None
 
-    fun applyTo(profile: SyncProfile): SyncProfile = profile.copy(
-        opusKbps = opusKbps ?: profile.opusKbps,
-        budgetEnabled = budgetEnabled ?: profile.budgetEnabled,
-        budgetBytes = budgetBytes ?: profile.budgetBytes,
-        syncAll = syncAll ?: profile.syncAll,
-        items = profile.items.filter { items[it] != false } +
-            items.filter { (item, on) -> on && item !in profile.items }.keys,
-    )
+    fun applyTo(profile: SyncProfile): SyncProfile {
+        // A set: Select all can leave thousands of edits here.
+        val stored = profile.items.toHashSet()
+        return profile.copy(
+            opusKbps = opusKbps ?: profile.opusKbps,
+            budgetEnabled = budgetEnabled ?: profile.budgetEnabled,
+            budgetBytes = budgetBytes ?: profile.budgetBytes,
+            syncAll = syncAll ?: profile.syncAll,
+            items = profile.items.filter { items[it] != false } +
+                items.filter { (item, on) -> on && item !in stored }.keys,
+        )
+    }
 
     companion object {
         val None = ProfileEdits()
@@ -181,8 +185,12 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
     var estimate by remember(uid) { mutableStateOf<SyncEstimate?>(null) }
     var estimateError by remember(uid) { mutableStateOf<Int?>(null) }
     var estimating by remember(uid) { mutableStateOf(false) }
-    LaunchedEffect(profile) {
-        val candidate = profile ?: return@LaunchedEffect
+    // The items in one order, so that storing edits doesn't count as another change to work out.
+    val estimated = remember(profile) {
+        profile?.copy(items = profile.items.sortedWith(compareBy({ it.kind }, { it.uid })))
+    }
+    LaunchedEffect(estimated) {
+        val candidate = estimated ?: return@LaunchedEffect
         estimating = true
         delay(ESTIMATE_DELAY_MS)
         try {
@@ -299,8 +307,10 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
 
     if (picking) {
         ProfileItemsDialog(
-            selected = profile.items.toSet(),
+            selected = remember(profile.items) { profile.items.toHashSet() },
+            removed = remember(profile.removed) { profile.removed.toHashSet() },
             onToggle = { item, on -> edit { copy(items = items + (item to on)) } },
+            onSelect = { shown, on -> edit { copy(items = items + shown.associateWith { on }) } },
             onDismiss = { picking = false },
             syncer = syncer,
         )
@@ -442,12 +452,17 @@ private fun MakeArchiveDialog(
 
 /**
  * Choosing what a profile selects, full screen: the library's albums, artists, playlists and
- * album groups under tabs, ticked if [selected]. Each tick calls [onToggle] at once.
+ * album groups under tabs, ticked if [selected]. Each tick calls [onToggle] at once. Select
+ * all and Select none call [onSelect] once with the rows of the tab shown; Select all leaves
+ * out what's [removed] from the device, which only a tick brings back, and neither touches
+ * Sync everything.
  */
 @Composable
 private fun ProfileItemsDialog(
     selected: Set<ProfileItem>,
+    removed: Set<ProfileItem>,
     onToggle: (ProfileItem, Boolean) -> Unit,
+    onSelect: (List<ProfileItem>, Boolean) -> Unit,
     onDismiss: () -> Unit,
     syncer: Syncer,
 ) {
@@ -494,6 +509,23 @@ private fun ProfileItemsDialog(
                     }
                 }
                 val list = choices?.let { kind.choicesIn(it) }
+                if (!list.isNullOrEmpty()) {
+                    val shown = remember(list, kind) { list.map { ProfileItem(kind, it.uid) } }
+                    val addable = remember(shown, selected, removed) {
+                        shown.filter { it !in selected && it !in removed }
+                    }
+                    Row(
+                        horizontalArrangement = Arrangement.End,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    ) {
+                        TextButton(onClick = { onSelect(addable, true) }, enabled = addable.isNotEmpty()) {
+                            Text(stringResource(R.string.select_all))
+                        }
+                        TextButton(onClick = { onSelect(shown, false) }, enabled = shown.any { it in selected }) {
+                            Text(stringResource(R.string.select_none))
+                        }
+                    }
+                }
                 Box(Modifier.fillMaxSize()) {
                     when {
                         error != null -> Note(stringResource(R.string.list_failed, statusText(context, error!!)))
@@ -518,6 +550,11 @@ private fun ProfileItemsDialog(
                                         leadingContent = { Checkbox(checked = checked, onCheckedChange = null) },
                                         headlineContent = { Text(choice.name) },
                                         supportingContent = choiceDetail(choice)?.let { detail -> { Text(detail) } },
+                                        trailingContent = if (item in removed) {
+                                            { Text(stringResource(R.string.profile_item_removed)) }
+                                        } else {
+                                            null
+                                        },
                                         modifier = Modifier.toggleable(checked, role = Role.Checkbox) { onToggle(item, it) },
                                     )
                                 }
