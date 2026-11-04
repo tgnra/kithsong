@@ -29,10 +29,11 @@
 /* Work this long, then rest as long, so a scan of a big library doesn't keep a core flat out
  * and a laptop's fan going for hours. Low priority keeps it out of the way, but not cool. */
 #define BURST_MS 200
+#define MAX_REST_MS 1000 /* a burst stretched by a slow disk needs no rest to match */
 
 static atomic_int g_holds;
 static uint32_t g_start_ms = 30000, g_idle_ms = 5 * 60 * 1000;
-static int g_rests = 1;
+static int g_rests = 1, g_background = 1;
 
 void mc_analysis_hold(void) {
   atomic_fetch_add(&g_holds, 1);
@@ -46,10 +47,11 @@ static int held(void) {
   return atomic_load(&g_holds) > 0;
 }
 
-void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int rests) {
+void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int rests, int background) {
   g_start_ms = start_ms;
   g_idle_ms = idle_ms;
   g_rests = rests;
+  g_background = background;
 }
 
 /* --- One track --- */
@@ -150,6 +152,13 @@ mc_status mc_analysis_scan_one(mc_library *lib, char cursor[MC_UID_STRLEN],
   mc_status got = mc_analysis_file(c.path, cancel, user, &a);
   int same = mc_file_info(c.path, &size_after, &mtime_after) == MC_OK && size == size_after &&
              mtime == mtime_after;
+  /* A file that can't be read at all now, locked by another program, say, hasn't failed to
+   * decode: that's only one that opens and still gives no audio. */
+  if (got == MC_ERR_IO) {
+    FILE *f = mc_fopen(c.path, "rb");
+    if (f) fclose(f);
+    else same = 0;
+  }
   if (got == MC_ERR_IN_USE) {
     *step = MC_SCAN_CANCELLED;
   } else if (got == MC_ERR_NOMEM || !same) {
@@ -206,13 +215,17 @@ static int wait_ms(mc_analysis_scanner *s, uint32_t ms) {
 static int pause_point(void *user) {
   mc_analysis_scanner *s = user;
   if (stopping(s)) return 1;
-  uint64_t now = mc_mono_ms();
-  if (g_rests && now - s->burst_from >= BURST_MS) {
-    if (wait_ms(s, (uint32_t)(now - s->burst_from))) return 1;
+  uint64_t burst = mc_mono_ms() - s->burst_from;
+  if (g_rests && burst >= BURST_MS) {
+    if (wait_ms(s, burst < MAX_REST_MS ? (uint32_t)burst : MAX_REST_MS)) return 1;
     s->burst_from = mc_mono_ms();
   }
-  while (held())
-    if (wait_ms(s, HOLD_POLL_MS)) return 1;
+  if (held()) {
+    do {
+      if (wait_ms(s, HOLD_POLL_MS)) return 1;
+    } while (held());
+    s->burst_from = mc_mono_ms();
+  }
   return 0;
 }
 
@@ -226,8 +239,8 @@ static int busy(void *user, int tries) {
 static void scan(mc_analysis_scanner *s, mc_library *lib) {
   char cursor[MC_UID_STRLEN] = "";
   int worked = 0;
+  s->burst_from = mc_mono_ms();
   while (!stopping(s)) {
-    s->burst_from = mc_mono_ms();
     mc_scan_step step = MC_SCAN_NONE;
     mc_status st = mc_analysis_scan_one(lib, cursor, pause_point, s, &step);
     if (st != MC_OK) { /* the library's busy or gone for now: there's always the next pass */
@@ -241,12 +254,13 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
     cursor[0] = '\0';
     if (!worked && wait_ms(s, g_idle_ms)) break;
     worked = 0;
+    s->burst_from = mc_mono_ms();
   }
 }
 
 static void scanner_thread(void *arg) {
   mc_analysis_scanner *s = arg;
-  mc_thread_background();
+  if (g_background) mc_thread_background();
   if (wait_ms(s, g_start_ms)) return;
   mc_library *lib = NULL;
   if (mc_library_open_internal(s->dir, &lib) != MC_OK) return;

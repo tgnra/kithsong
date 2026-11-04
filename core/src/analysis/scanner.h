@@ -28,8 +28,9 @@ typedef enum mc_scan_step {
 mc_status mc_analysis_scan_one(mc_library *lib, char cursor[MC_UID_STRLEN],
                                mc_analysis_cancel_fn cancel, void *user, mc_scan_step *step);
 
-/* For tests: how long a scanner waits after starting, between passes over the library, and
- * whether it rests as it works. (30 s, 5 minutes and yes by default.) */
-void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int rests);
+/* For tests: how long a scanner waits after starting, between passes over the library, whether
+ * it rests as it works, and whether it runs at background priority, where a busy machine can
+ * starve it for as long as it likes. (30 s, 5 minutes, yes and yes by default.) */
+void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int rests, int background);
 
 #endif

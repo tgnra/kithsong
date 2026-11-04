@@ -351,7 +351,7 @@ rate limit holds to one session an hour.
 wouldn't decode, so they aren't tried again until they change or the version does. It's this
 device's own, keyed by `files.uid`: whether a file decodes says nothing of another device's. A
 file that's only missing isn't listed, as the drive it's on may be back tomorrow; nor is one that
-changed while it was read.
+can't be opened for now, or changed while it was read.
 
 ### Distance
 

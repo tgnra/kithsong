@@ -1026,7 +1026,7 @@ static void test_scanner(const char *scratch) {
     char uid[MC_UID_STRLEN];
     add_track(lib, name, 0, uid);
   }
-  mc_analysis_scanner_set_timing(0, 20, 0);
+  mc_analysis_scanner_set_timing(0, 20, 0, 0);
 
   /* Held off, it reads and writes nothing, and a stop still stops it. */
   mc_analysis_hold();
@@ -1076,6 +1076,20 @@ static void test_scanner(const char *scratch) {
   CHECK(wait_for(lib, TRACKS + 2));
   mc_analysis_scanner_stop(s);
   mc_analysis_scanner_stop(NULL);
+
+  /* Resting as it does for real, a hold isn't taken for work to rest from. */
+  mc_analysis_scanner_set_timing(0, 20, 1, 0);
+  snprintf(path, sizeof path, "%s/rested.wav", dir);
+  CHECK(write_wav(path, 44100, 3.0, 0.5));
+  add_track(lib, "rested.wav", 0, other);
+  mc_analysis_hold();
+  CHECK(mc_analysis_scanner_start(dir, &s) == MC_OK);
+  mc_sleep_ms(2500);
+  mc_analysis_release();
+  from = mc_mono_ms();
+  CHECK(wait_for(lib, TRACKS + 3));
+  printf("after a 2.5 s hold, a 3 s file took %d ms, resting\n", (int)(mc_mono_ms() - from));
+  mc_analysis_scanner_stop(s);
   mc_library_close(lib);
 }
 
