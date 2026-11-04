@@ -204,6 +204,9 @@ static void test_album(void) {
   CHECK(mc_album_group_add(lib, group, album) == MC_OK);
   CHECK(mc_library_record_play(lib, low[0]) == MC_OK);
   CHECK(mc_library_record_play(lib, low[0]) == MC_OK);
+  mc_play_event logged = {.started_ms = 1000, .listened_ms = 500, .end = MC_PLAY_END_SKIPPED};
+  snprintf(logged.track_uid, sizeof logged.track_uid, "%s", low[0]);
+  CHECK(mc_library_log_play(lib, &logged) == MC_OK);
   CHECK(mc_library_begin_write(lib) == MC_OK);
   snprintf(sql, sizeof sql, "UPDATE tracks SET added_ms = 1234567 WHERE uid = '%s'", low[0]);
   CHECK(sqlite3_exec(mc_library_db(lib), sql, NULL, NULL, NULL) == SQLITE_OK);
@@ -228,6 +231,8 @@ static void test_album(void) {
   CHECK(query_int(lib, "SELECT count(*) FROM playlist_entries") == 1);
   CHECK(query_int(lib, "SELECT count(*) FROM album_group_entries") == 0);
   CHECK(query_int(lib, "SELECT count(*) FROM track_plays") == 0);
+  CHECK(query_int(lib, "SELECT count(*) FROM play_events") == 0);
+  CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE entity = 'play_events' AND field = '_deleted'") == 1);
   char low_dir[1400];
   snprintf(low_dir, sizeof low_dir, "%s%cLow", mc_library_dir(lib), MC_PATH_SEP);
   CHECK(!mc_file_exists(cover) && !mc_file_exists(low_dir)); /* folders tidied away */
@@ -254,6 +259,8 @@ static void test_album(void) {
   CHECK(query_int(lib, sql) == 1); /* the same album */
   snprintf(sql, sizeof sql, "SELECT count(*) FROM tracks WHERE uid IN ('%s', '%s')", low[0], low[1]);
   CHECK(query_int(lib, sql) == 2);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM play_events WHERE track_uid = '%s' AND listened_ms = 500", low[0]);
+  CHECK(query_int(lib, sql) == 1);
   snprintf(sql, sizeof sql, "SELECT sum(play_count) FROM track_plays WHERE track_uid = '%s'", low[0]);
   CHECK(query_int(lib, sql) == 2);
   snprintf(sql, sizeof sql, "SELECT added_ms FROM tracks WHERE uid = '%s'", low[0]);

@@ -3,6 +3,7 @@
  * between libraries the way a session moves them (reader, then applier), without the
  * network. An older peer's singles albums (kind = 'singles') don't merge, nor break
  * anything. */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +50,7 @@ static void query_text(sqlite3 *db, const char *sql, char *out, size_t cap) {
 
 /* Every row of the synced tables, in uid order, as text: equal dumps are equal libraries. */
 static char *dump(mc_library *lib) {
-  static const char *const tables[] = {"artists", "albums", "tracks", "track_plays",
+  static const char *const tables[] = {"artists", "albums", "tracks", "track_plays", "play_events",
                                        "playlists", "playlist_entries", "album_groups",
                                        "album_group_entries", "recents"};
   size_t cap = 1 << 16, len = 0;
@@ -222,6 +223,33 @@ static void check_merged(mc_library *lib, const import *a, const import *b) {
   CHECK_TEXT(text, album);
   CHECK(query_int(db, "SELECT count(*) FROM aliases") == 6);
   CHECK(query_int(db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
+
+  /* The play log: both devices' rows, each still its own, on the tracks that stay, in the
+   * order they were played. The same track played on each is two rows. */
+  mc_play_log *log = NULL;
+  CHECK(mc_library_list_play_events(lib, 0, INT64_MAX, &log) == MC_OK);
+  if (log) {
+    CHECK(log->count == 3);
+    if (log->count == 3) {
+      CHECK(log->items[0].event.started_ms == 1000 && log->items[1].event.started_ms == 2000);
+      CHECK(log->items[2].event.started_ms == 3000);
+      CHECK_TEXT(log->items[0].event.track_uid, smaller(a->tracks[0], b->tracks[0]));
+      CHECK_TEXT(log->items[1].event.track_uid, smaller(a->tracks[1], b->tracks[1]));
+      CHECK_TEXT(log->items[2].event.track_uid, smaller(a->tracks[0], b->tracks[0]));
+      CHECK(log->items[0].event.end == MC_PLAY_END_SKIPPED && log->items[1].event.end == MC_PLAY_END_FINISHED);
+      CHECK(strcmp(log->items[0].node_uid, log->items[1].node_uid) != 0);
+      CHECK_TEXT(log->items[0].node_uid, log->items[2].node_uid);
+    }
+    mc_play_log_free(log);
+  }
+}
+
+/* A play that ended, in the play log: hence a row of this device's. */
+static void log_play(mc_library *lib, const char *track, int64_t started_ms, mc_play_end end, const char *album) {
+  mc_play_event e = {.started_ms = started_ms, .listened_ms = 1500, .end = end, .context = MC_PLAY_CONTEXT_ALBUM};
+  snprintf(e.track_uid, sizeof e.track_uid, "%s", track);
+  snprintf(e.context_uid, sizeof e.context_uid, "%s", album);
+  CHECK(mc_library_log_play(lib, &e) == MC_OK);
 }
 
 /* The credit tables as text, owners and artists by name (uids differ between runs). */
@@ -521,6 +549,8 @@ int main(int argc, char **argv) {
   exec_ok(a, sql);
   CHECK(mc_library_commit(a) == MC_OK);
   CHECK(mc_library_record_play(a, ia.tracks[0]) == MC_OK);
+  log_play(a, ia.tracks[0], 1000, MC_PLAY_END_SKIPPED, ia.album);
+  log_play(a, ia.tracks[0], 3000, MC_PLAY_END_STOPPED, ia.album);
   CHECK(mc_library_begin_write(b) == MC_OK);
   snprintf(sql, sizeof sql,
            "INSERT INTO album_groups (uid, name) VALUES ('%s', 'Winter');"
@@ -530,6 +560,7 @@ int main(int argc, char **argv) {
   exec_ok(b, sql);
   CHECK(mc_library_commit(b) == MC_OK);
   CHECK(mc_library_record_play(b, ib.tracks[1]) == MC_OK);
+  log_play(b, ib.tracks[1], 2000, MC_PLAY_END_FINISHED, ib.album);
   CHECK(mc_library_record_opened(b, MC_RECENT_ALBUM, ib.album) == MC_OK);
   CHECK(mc_library_record_opened(a, MC_RECENT_ALBUM, ia.album) == MC_OK);
 

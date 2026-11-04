@@ -531,6 +531,11 @@ static void add_extras(dev *d) {
   CHECK(exec(db, sql) == SQLITE_OK);
   CHECK(exec(db, "INSERT INTO recents (uid, kind, opened_ms)"
                  " SELECT uid, 'album', 1700000000000 FROM albums LIMIT 1") == SQLITE_OK);
+  snprintf(sql, sizeof sql,
+           "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context)"
+           " SELECT '%s', uid, '%s', 1700000000000, 90000, 'finished', 'album' FROM tracks ORDER BY track_no LIMIT 1",
+           en, mc_library_node_uid(lib));
+  CHECK(exec(db, sql) == SQLITE_OK);
   CHECK(mc_library_commit(lib) == MC_OK);
   mc_library_close(lib);
 }
@@ -771,6 +776,7 @@ int main(int argc, char **argv) {
       CHECK(lib_int(&p, "SELECT count(*) FROM tracks") == 1);
       CHECK(lib_int(&p, "SELECT count(*) FROM playlists WHERE name = 'Road'") == 1);
       CHECK(lib_int(&p, "SELECT play_count FROM track_plays") == 3);
+      CHECK(lib_int(&p, "SELECT count(*) FROM play_events") == 1);
       CHECK(group_int(&p, "SELECT count(*) FROM local WHERE group_uid IS NULL") == 1);
       CHECK(group_int(&p, "SELECT count(*) FROM scrobble_queue") == 1);
       mc_sync_get_device_name(p.sync, name, sizeof name);
@@ -787,6 +793,7 @@ int main(int argc, char **argv) {
       CHECK(lib_int(&q, "SELECT count(*) FROM tracks WHERE title LIKE 'Pi %'") == 0);
       CHECK(lib_int(&q, "SELECT count(*) FROM playlists") == 0);
       CHECK(lib_int(&q, "SELECT count(*) FROM track_plays") == 0);
+      CHECK(lib_int(&q, "SELECT count(*) FROM play_events") == 0);
       CHECK(lib_int(&q, "SELECT count(*) FROM recents") == 0);
       char user[64];
       group_text(&q, "SELECT coalesce(username, '') FROM scrobble_account", user, sizeof user);
