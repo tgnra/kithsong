@@ -307,7 +307,7 @@ static void test_stable_and_played(const char *scratch) {
   /* Tomorrow those plays are history. */
   mc_radio_station_list *tomorrow = stations(lib, noon + DAY_MS);
   CHECK(tomorrow && tomorrow->count == 4);
-  if (tomorrow && tomorrow->count) CHECK_STR(tomorrow->items[0].seed_track, pick); /* the most played leads */
+  if (tomorrow && tomorrow->count) CHECK(!strcmp(tomorrow->items[0].seed_track, pick)); /* the most played leads */
   mc_radio_station_list_free(tomorrow);
   mc_radio_station_list_free(first);
   mc_library_close(lib);

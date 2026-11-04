@@ -954,6 +954,8 @@
   },
 
   "windows": {
+    "home_station_name": { "text": "Radio station", "note": "Said by screen readers before a radio station's name on the Home page." },
+    "home_station_tip": { "text": "Radio station: plays music that sounds like {0}", "note": "Tooltip of a radio station on the Home page, also read by screen readers. {0} is the title of the track it starts from." },
     "too_old": { "text": "Kithsong needs Windows 10 version 1903 or later. Update Windows, then open Kithsong again.", "note": "Shown instead of starting, on an older Windows." },
     "field_label": { "text": "{0}:", "note": "A label in front of a text box, e.g. \"Port:\"." },
     "shortcut_rename": { "text": "F2", "note": "Keyboard shortcut shown in a menu." },

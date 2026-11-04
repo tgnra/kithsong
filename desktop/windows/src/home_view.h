@@ -20,8 +20,9 @@
  * and Right move the focus along a row, Up and Down between rows, and Page Up, Page Down, Home
  * and End scroll the page.
  *
- * Clicking a tile (or Enter on it) opens it, HVN_OPEN. Radio's stations are placeholders, so
- * nothing happens yet.
+ * Clicking a tile (or Enter on it) opens it, HVN_OPEN. A Radio station plays instead, from its
+ * seed track (playback_play_radio()), and its tooltip says what it's like. Radio's row is left
+ * out until the library has stations.
  *
  * Covers are decoded on a background thread, as the album grid's, those in view first, then
  * those a screen along or down, and only ever those. The rows are capped (MC_HOME_ROW_MAX), so
@@ -30,7 +31,7 @@
  * The page reloads the next time it paints after home_view_refresh(), on that thread too, as
  * reading the rows lists every album and evaluates the smart lists; what's showing stays until
  * it's done. Random's selection comes from a seed picked once, when the view is created, so it
- * holds until the app next starts. Screen readers don't see the tiles yet.
+ * holds until the app next starts. Screen readers see each row as a group of buttons (uia.h).
  */
 #ifndef KITHSONG_HOME_VIEW_H
 #define KITHSONG_HOME_VIEW_H

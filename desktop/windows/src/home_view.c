@@ -8,12 +8,16 @@
 #include <wchar.h>
 #include <wincodec.h>
 #include <windowsx.h>
+#include <commctrl.h>
+#include <uiautomation.h>
 
 #include "canvas.h"
 #include "cover.h"
 #include "musiccore/home_picks.h"
+#include "playback.h"
 #include "scroller.h"
 #include "theme.h"
+#include "uia.h"
 #include "wstr.h"
 
 #define WM_APP_THUMB (WM_APP + 20) /* lParam: thumb_result *, from the loader thread */
@@ -55,7 +59,9 @@ typedef struct home_pick {
   mc_recent_kind kind;
   BOOL station, smart;
   char uid[MC_UID_STRLEN];
+  char seed_uid[MC_UID_STRLEN]; /* a station's */
   wchar_t *title, *sub, *cover_dir;
+  char *seed_title; /* UTF-8, as mc_wformat() takes it */
 } home_pick;
 
 typedef struct tile {
@@ -89,8 +95,10 @@ typedef struct thumb_result {
   const uint32_t *pixels;
 } thumb_result;
 
+static uia_host ui;
+
 static struct {
-  HWND wnd;
+  HWND wnd, tooltip; /* one tool, moved to the station under the mouse */
   mc_library *lib;
   BOOL dirty;  /* reload when next painted */
   BOOL loaded; /* the rows have been read at least once */
@@ -449,12 +457,14 @@ static void on_thumb(thumb_result *r) {
 /* --- Data --- */
 
 static void update_hot(void);
+static void ui_changed(void);
 
 static void free_tile(tile *t) {
   free_thumb(t);
   free(t->pick.title);
   free(t->pick.sub);
   free(t->pick.cover_dir);
+  free(t->pick.seed_title);
 }
 
 /* The thumbnail of the old tile in any row that shows the same thing, so a reload doesn't blank
@@ -465,7 +475,7 @@ static void carry_thumb(tile *t) {
     for (int k = 0; k < g.rows[i].count; k++) {
       tile *old = &g.rows[i].tiles[k];
       if (!old->thumb || old->pick.kind != t->pick.kind || old->pick.station != t->pick.station ||
-          strcmp(old->pick.uid, t->pick.uid))
+          strcmp(old->pick.uid, t->pick.uid) || strcmp(old->pick.seed_uid, t->pick.seed_uid))
         continue;
       if (!old->pick.cover_dir != !t->pick.cover_dir ||
           (t->pick.cover_dir && wcscmp(old->pick.cover_dir, t->pick.cover_dir)))
@@ -496,6 +506,8 @@ static void reload(void) {
 static home_pick wide_pick(const mc_home_pick *p) {
   home_pick w = {.kind = p->kind, .station = p->station != 0, .smart = p->smart != 0};
   memcpy(w.uid, p->uid, sizeof w.uid);
+  memcpy(w.seed_uid, p->seed_uid, sizeof w.seed_uid);
+  w.seed_title = p->seed_title ? _strdup(p->seed_title) : NULL;
   w.title = wstr_dup_from_utf8(p->title);
   w.sub = wstr_dup_from_utf8(p->sub);
   w.cover_dir = wstr_dup_from_utf8(p->cover_dir);
@@ -540,6 +552,7 @@ static void on_picks(mc_home_picks *picks) {
   request_thumbs();
   InvalidateRect(g.wnd, NULL, FALSE);
   update_hot();
+  ui_changed();
 }
 
 void home_view_set_library(mc_library *lib) {
@@ -624,6 +637,11 @@ static void reveal(int row, int index) {
   scroller_reveal(&g.scroll, band.top + g.scroll.pos - g.pad, band.bottom + g.scroll.pos + g.pad);
 }
 
+/* What a station plays, for its tooltip and a screen reader. */
+static void station_tip(const tile *t, wchar_t *buf, int n) {
+  mc_wformat(buf, n, mc_str(MC_STR_WINDOWS_HOME_STATION_TIP), MC_S(t->pick.seed_title ? t->pick.seed_title : ""));
+}
+
 /* --- The mouse --- */
 
 /* The row the wheel means: the one under the message's screen position. */
@@ -668,6 +686,21 @@ static BOOL same_hit(hit a, hit b) {
   return a.part == b.part && (a.part == PART_NONE || a.part == PART_ACTION || (a.row == b.row && a.index == b.index));
 }
 
+/* The tooltip says what a station is, which a tile can't in two short lines; it covers the
+ * station under the mouse, or nothing. */
+static void update_tip(void) {
+  if (!g.tooltip) return;
+  const tile *t = g.hot.part == PART_TILE ? &g.rows[g.hot.row].tiles[g.hot.index] : NULL;
+  wchar_t tip[256] = L"";
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g.wnd, .uId = 1, .lpszText = tip};
+  if (t && t->pick.station) {
+    ti.rect = tile_outer(g.hot.row, g.hot.index);
+    station_tip(t, tip, 256);
+  }
+  SendMessageW(g.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
+  SendMessageW(g.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+}
+
 static void set_hot(hit h) {
   if (h.row != g.hot_row) {
     int was = g.hot_row;
@@ -679,6 +712,7 @@ static void set_hot(hit h) {
   invalidate_hit(g.hot);
   invalidate_hit(h);
   g.hot = h;
+  update_tip();
 }
 
 /* Re-checks what's under the mouse, after things moved under it. */
@@ -752,7 +786,12 @@ static void on_mouse_down(int x, int y) {
 
 static void open_tile(int row, int index) {
   const tile *t = &g.rows[row].tiles[index];
-  if (t->pick.station) return; /* there's no radio yet */
+  if (t->pick.station) {
+    char seed[MC_UID_STRLEN]; /* playing can bring a reload, which frees the tile */
+    memcpy(seed, t->pick.seed_uid, sizeof seed);
+    playback_play_radio(seed);
+    return;
+  }
   memcpy(g.clicked_uid, t->pick.uid, sizeof g.clicked_uid);
   g.clicked_kind = t->pick.kind;
   PostMessageW(GetParent(g.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(g.wnd), HVN_OPEN), (LPARAM)g.wnd);
@@ -805,6 +844,7 @@ static void move_focus(int row, int index) {
   g.focus_shown = TRUE;
   reveal(row, index);
   invalidate_focus();
+  uia_focus(&ui);
 }
 
 /* The first tile showing in row, for coming to it from another. */
@@ -1065,13 +1105,147 @@ static void make_fonts(HFONT font) {
 void home_view_update(UINT dpi, HFONT font) {
   (void)dpi; /* scale() asks the window */
   make_fonts(font);
+  if (g.tooltip) theme_apply_control(g.tooltip);
   relayout();
   request_thumbs();
   InvalidateRect(g.wnd, NULL, FALSE);
 }
 
+/* --- Screen readers ---
+ *
+ * The rows that have tiles are nodes 0 on, in order, and each one's tiles follow all the rows,
+ * row after row. */
+
+static int ui_rows(void) {
+  int n = 0;
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) n += g.rows[i].count > 0;
+  return n;
+}
+
+/* The row of g.rows that's the nth with tiles, or -1. */
+static int ui_row_at(int n) {
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++)
+    if (g.rows[i].count && n-- == 0) return i;
+  return -1;
+}
+
+/* Tile index of row, as a node. */
+static int ui_tile(int row, int index) {
+  int node = ui_rows();
+  for (int i = 0; i < row; i++) node += g.rows[i].count;
+  return node + index;
+}
+
+/* The row and tile of a node, FALSE if it's no tile. */
+static BOOL ui_find_tile(int node, int *row, int *index) {
+  int t = node - ui_rows();
+  if (node < 0 || t < 0) return FALSE;
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
+    if (t < g.rows[i].count) {
+      *row = i;
+      *index = t;
+      return TRUE;
+    }
+    t -= g.rows[i].count;
+  }
+  return FALSE;
+}
+
+static BOOL ui_node(int i, uia_node *n) {
+  n->parent = UIA_ROOT;
+  if (i == UIA_ROOT) {
+    n->type = UIA_PaneControlTypeId;
+    lstrcpynW(n->name, mc_wstr(MC_STR_SECTION_HOME), 512);
+    n->count = ui_rows();
+    return TRUE;
+  }
+  int row = i >= 0 && i < ui_rows() ? ui_row_at(i) : -1;
+  if (row >= 0) {
+    n->type = UIA_GroupControlTypeId;
+    n->rect = row_rect(row);
+    n->first = ui_tile(row, 0);
+    n->count = g.rows[row].count;
+    lstrcpynW(n->name, mc_wstr(mc_home_row_title((mc_home_row_id)row)), 512);
+    return TRUE;
+  }
+  int index;
+  if (!ui_find_tile(i, &row, &index)) return FALSE;
+  const tile *t = &g.rows[row].tiles[index];
+  n->parent = 0;
+  for (int k = 0; k < row; k++) n->parent += g.rows[k].count > 0;
+  n->type = UIA_ButtonControlTypeId;
+  n->flags = UIA_FOCUSABLE | UIA_INVOKABLE;
+  RECT client = {0, 0, g.client_w, g.client_h}, outer = tile_outer(row, index);
+  InflateRect(&outer, -scale(HOVER_PAD), -scale(HOVER_PAD));
+  if (IntersectRect(&n->rect, &outer, &client)) n->rect = outer;
+  if (t->pick.station) {
+    uia_name(n, mc_wstr(MC_STR_WINDOWS_HOME_STATION_NAME), t->pick.title ? t->pick.title : L"",
+             t->pick.sub ? t->pick.sub : L"", NULL);
+    station_tip(t, n->help, 256);
+  } else {
+    uia_name(n, t->pick.title ? t->pick.title : L"", t->pick.sub ? t->pick.sub : L"", NULL);
+  }
+  return TRUE;
+}
+
+static int ui_focus(void) {
+  return g.focus_row >= 0 && g.focus_index >= 0 && g.focus_index < g.rows[g.focus_row].count
+           ? ui_tile(g.focus_row, g.focus_index)
+           : UIA_ROOT;
+}
+
+static int ui_at(POINT pt) {
+  hit h = hit_test(pt.x, pt.y);
+  if (h.part == PART_TILE) return ui_tile(h.row, h.index);
+  for (int i = 0, n = 0; h.row >= 0 && i < MC_HOME_ROW_COUNT; i++) {
+    if (i == h.row) return n;
+    n += g.rows[i].count > 0;
+  }
+  return UIA_ROOT;
+}
+
+static void ui_invoke(int i) {
+  int row, index;
+  if (ui_find_tile(i, &row, &index)) open_tile(row, index);
+}
+
+static void ui_reveal(int i) {
+  int row, index;
+  if (ui_find_tile(i, &row, &index)) reveal(row, index);
+}
+
+static void ui_set_focus(int i) {
+  int row, index;
+  if (ui_find_tile(i, &row, &index)) move_focus(row, index);
+}
+
+static const uia_ops ui_ops = {
+  .node = ui_node,
+  .focus = ui_focus,
+  .at = ui_at,
+  .invoke = ui_invoke,
+  .reveal = ui_reveal,
+  .set_focus = ui_set_focus,
+};
+
+/* After a reload: what the nodes are, so clients only start over when they changed. */
+static void ui_changed(void) {
+  unsigned long sig = 0;
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
+    sig = uia_hash(sig, &g.rows[i].count, sizeof g.rows[i].count);
+    for (int k = 0; k < g.rows[i].count; k++) {
+      const home_pick *p = &g.rows[i].tiles[k].pick;
+      sig = uia_hash(sig, p->uid, strlen(p->uid));
+      sig = uia_hash(sig, p->seed_uid, strlen(p->seed_uid));
+    }
+  }
+  uia_changed(&ui, sig);
+}
+
 static LRESULT CALLBACK home_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!g.wnd) g.wnd = g.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
+  LRESULT result;
+  if (ui.wnd && uia_message(&ui, msg, wp, lp, &result)) return result;
   switch (msg) {
     case WM_SIZE:
       relayout();
@@ -1133,6 +1307,8 @@ static LRESULT CALLBACK home_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       on_picks((mc_home_picks *)lp);
       return 0;
     case WM_DESTROY:
+      uia_destroy(&ui);
+      if (g.tooltip) DestroyWindow(g.tooltip);
       EnterCriticalSection(&g.lock);
       g.quit = TRUE;
       WakeConditionVariable(&g.wake);
@@ -1173,6 +1349,16 @@ HWND home_view_create(HWND parent, int id) {
   g.wnd = CreateWindowExW(0, L"kithsong_home", NULL, WS_CHILD, 0, 0, 0, 0, parent, (HMENU)(INT_PTR)id,
                           GetModuleHandleW(NULL), NULL);
   if (!g.wnd) return NULL;
+  uia_init(&ui, g.wnd, &ui_ops);
+  g.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                              CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, g.wnd, NULL,
+                              GetModuleHandleW(NULL), NULL);
+  if (g.tooltip) {
+    TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = g.wnd, .uId = 1, .lpszText = L""};
+    SendMessageW(g.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    SendMessageW(g.tooltip, TTM_SETMAXTIPWIDTH, 0, scale(320));
+    theme_apply_control(g.tooltip);
+  }
   g.thread = CreateThread(NULL, 0, loader_main, NULL, 0, NULL);
   return g.wnd;
 }
