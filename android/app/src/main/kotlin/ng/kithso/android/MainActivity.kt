@@ -71,8 +71,24 @@ class MainActivity : ComponentActivity() {
                     app.libraryDir,
                     onPlay = ::askForNotificationsOnce,
                     onImportStarted = ::askForNotificationsOnce,
+                    onLeave = ::leave,
                 )
             }
+        }
+    }
+
+    // Back from the main list. While music plays the app only goes out of sight, and playback
+    // carries on; with nothing playing it quits, leaving no player behind: the notification of
+    // a paused track goes too, though its place is kept for as long as the process lives. Opened
+    // from another app (a share, say) the activity isn't its task's root, and goes back there.
+    private fun leave() {
+        val playback = (application as KithsongApp).playback
+        val playing = playback.isPlaying
+        if (!playing) playback.stop()
+        when {
+            !isTaskRoot -> finish()
+            playing -> moveTaskToBack(false)
+            else -> finishAndRemoveTask()
         }
     }
 

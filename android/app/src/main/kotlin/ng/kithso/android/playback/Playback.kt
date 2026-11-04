@@ -24,6 +24,12 @@ interface Playback {
     val positionMs: Long
     /** Whether the queue goes on after [track]: always, shuffled. */
     val hasNext: Boolean
+    /** Whether there's a track before [track]: shuffled, one that played before it. */
+    val hasPrevious: Boolean
+    /** The track after [track]; null if there's none or, past a shuffled round, none picked yet. */
+    val nextTrack: Track?
+    /** The track before [track], or null if there's none. */
+    val previousTrack: Track?
     /** Whether the queue plays in a shuffled order (the core's, see CoreMediaPlayer). */
     val shuffle: Boolean
 
@@ -38,11 +44,19 @@ interface Playback {
     fun next()
     /** Back to the start of the track, or to the one before within its first 3 seconds. */
     fun previous()
+    /** Straight to the track before, however far into this one it is, as a swipe shows it. */
+    fun skipToPrevious()
     /** Turns shuffle on or off, carrying on from the current track; set it before [play] to start shuffled. */
     fun setShuffle(on: Boolean)
 
     /** The uids of the queue's tracks, in queue order. */
     val queueUids: List<String>
+
+    /**
+     * Stops, keeping the queue and the place in it to play on from, so nothing is left running:
+     * no notification, and no foreground service.
+     */
+    fun stop()
 
     /** Stops and empties the queue, so nothing is playing: before its tracks are deleted, say. */
     fun clear()
@@ -62,6 +76,10 @@ class FakePlayback(private val scope: CoroutineScope) : Playback {
         private set
     override val hasNext: Boolean
         get() = track != null && index < queue.lastIndex
+    override val hasPrevious: Boolean
+        get() = track != null && index > 0
+    override val nextTrack: Track? get() = if (hasNext) queue[index + 1] else null
+    override val previousTrack: Track? get() = if (hasPrevious) queue[index - 1] else null
     // Only the flag: the pretend queue doesn't shuffle.
     private var shuffleOn by mutableStateOf(false)
     override val shuffle get() = shuffleOn
@@ -93,11 +111,17 @@ class FakePlayback(private val scope: CoroutineScope) : Playback {
         if (positionMs < 3000 && index > 0) load(queue, index - 1) else positionMs = 0
     }
 
+    override fun skipToPrevious() {
+        if (hasPrevious) load(queue, index - 1)
+    }
+
     override fun setShuffle(on: Boolean) {
         shuffleOn = on
     }
 
     override val queueUids: List<String> get() = queue.map { it.uid }
+
+    override fun stop() = playOrPause(false)
 
     override fun clear() {
         playOrPause(false)

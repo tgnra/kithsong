@@ -58,7 +58,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -137,7 +136,8 @@ internal class SmartEditorState(val editor: SmartListEditor, val target: SmartEd
     var playlists: List<PlaylistChoice> = emptyList()
     var groups: List<PlaylistChoice> = emptyList()
 
-    val pages = mutableStateListOf<Int>()
+    var stack by mutableStateOf(BackStack<Int>())
+    val pages: List<Int> get() = stack.pages
     val sentences = mutableStateMapOf<Int, String>()
     val counts = mutableStateMapOf<Int, Pair<String, Int>>()
     var preview by mutableStateOf<Pair<Int, SmartPreview?>?>(null)
@@ -224,13 +224,15 @@ private fun rememberSmartWords(rule: SmartRule): SmartWords {
  *
  * A rule the editor can't show (from a newer version, say) opens read-only, as its sentence,
  * and is never written back. [onSaved] gets a new list's uid once it's made, and an edited
- * one's after it's saved; [onClose] closes the editor.
+ * one's after it's saved; [onClose] closes the editor, and [onLeaving] says it's on its way,
+ * sliding out, so back is for what's beneath it.
  */
 @Composable
 internal fun SmartEditorScreen(
     editor: SmartListEditor,
     target: SmartEditTarget,
     onSaved: (uid: String, created: Boolean) -> Unit,
+    onLeaving: () -> Unit,
     onClose: () -> Unit,
 ) {
     val state = remember(editor, target) { SmartEditorState(editor, target) }
@@ -258,8 +260,9 @@ internal fun SmartEditorScreen(
     Box(Modifier.fillMaxSize()) {
         DismissibleScreen(
             DismissDirection.Right,
+            onLeaving = onLeaving,
             onDismissed = onClose,
-            backEnabled = state.pages.isEmpty(),
+            backEnabled = state.stack.top == null,
             // Swiping the list's page away would lose the edit: only back or Cancel close it.
             draggable = false,
         ) { dismiss ->
@@ -270,13 +273,14 @@ internal fun SmartEditorScreen(
             }
         }
         if (rule != null) {
-            for ((i, id) in state.pages.withIndex()) {
-                val group = rule.find(id) as? SmartGroup ?: continue
-                key(id) {
+            for (layer in state.stack.layers) {
+                val group = rule.find(layer.page) as? SmartGroup ?: continue
+                key(layer.id) {
                     DismissibleScreen(
                         DismissDirection.Right,
-                        onDismissed = { if (state.pages.lastOrNull() == id) state.pages.removeAt(state.pages.lastIndex) },
-                        backEnabled = i == state.pages.lastIndex,
+                        onLeaving = { state.stack = state.stack.leave(layer.id) },
+                        onDismissed = { state.stack = state.stack.remove(layer.id) },
+                        backEnabled = layer.id == state.stack.top?.id,
                     ) { dismiss ->
                         SmartPage(state, rule, group, onBack = dismiss, onSaved = onSaved, onClose = onClose)
                     }
@@ -450,7 +454,7 @@ private fun SmartPath(state: SmartEditorState, rule: SmartRule) {
                 Text(groupTitle(state, g), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 200.dp))
             }
             if (i < groups.lastIndex) {
-                TextButton(onClick = { while (state.pages.size > i) state.pages.removeAt(state.pages.lastIndex) }) {
+                TextButton(onClick = { state.stack = state.stack.keep(i) }) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CompositionLocalProvider(LocalContentColor provides if (bad) color else MaterialTheme.colorScheme.primary) {
                             label()
@@ -542,7 +546,7 @@ private fun SmartPage(
                 Icon(Icons.Add, contentDescription = null, modifier = Modifier.size(18.dp).padding(end = 4.dp))
                 Text(stringResource(R.string.smart_add_condition_button))
             }
-            OutlinedButton(onClick = { state.pages += rule.addGroup(group).id }) {
+            OutlinedButton(onClick = { state.stack = state.stack.push(rule.addGroup(group).id) }) {
                 Icon(Icons.Add, contentDescription = null, modifier = Modifier.size(18.dp).padding(end = 4.dp))
                 Text(stringResource(R.string.smart_add_group_button))
             }
@@ -921,7 +925,7 @@ private fun GroupRow(state: SmartEditorState, rule: SmartRule, g: SmartGroup) {
                 }
             },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.clickable(onClickLabel = open) { state.pages += g.id },
+            modifier = Modifier.clickable(onClickLabel = open) { state.stack = state.stack.push(g.id) },
         )
     }
 }
@@ -1133,8 +1137,7 @@ private fun problemLine(state: SmartEditorState, rule: SmartRule, c: SmartCondit
 /** Show on a problem: its group's page, over those above it, with the condition brought into view. */
 private fun showProblem(state: SmartEditorState, c: SmartCondition) {
     val groups = generateSequence(c.parent) { it.parent }.filter { it.parent != null }.map { it.id }.toList().reversed()
-    state.pages.clear()
-    state.pages.addAll(groups)
+    state.stack = BackStack.of(groups)
     state.focus = c.id
 }
 
