@@ -30,7 +30,9 @@ typedef enum mc_status {
   MC_ERR_LOCKED = -9,           /* e.g. an archive device's sync profile */
   MC_ERR_IN_GROUP = -10,        /* the device must leave its sync group first */
   MC_ERR_LIBRARY_MISMATCH = -11, /* a different library than the sync group's */
-  MC_ERR_AUTH = -12             /* a service refused the sign-in, session or API key */
+  MC_ERR_AUTH = -12,            /* a service refused the sign-in, session or API key */
+  MC_ERR_IN_USE = -13,          /* a file is open (being played, sent...): try again once it isn't */
+  MC_ERR_EXISTS = -14           /* it's in the library already, as something else */
 
 } mc_status;
 
@@ -64,6 +66,7 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "musiccore/playlist.h"
 #include "musiccore/smartlist.h"
 #include "musiccore/search.h"
+#include "musiccore/edit.h"
 #include "musiccore/playback.h"
 #include "musiccore/tagger.h"
 #include "musiccore/transcode.h"

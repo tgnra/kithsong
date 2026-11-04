@@ -14,6 +14,7 @@
 #include "canvas.h"
 #include "cover.h"
 #include "drag.h"
+#include "edit_dialog.h"
 #include "remove_here.h"
 #include "scroller.h"
 #include "theme.h"
@@ -1057,6 +1058,7 @@ enum {
   CMD_PLAY_LAST,
   CMD_DELETE_TRACK,
   CMD_GO_TO_ARTIST,
+  CMD_EDIT,
   CMD_PLAYLIST_FIRST = 100, /* Add to Playlist's playlists */
 };
 
@@ -1073,7 +1075,7 @@ static void request_add(const char *track_uid, BOOL here, const char *playlist_u
   notify(ARN_ADD_TO_PLAYLIST, FALSE);
 }
 
-/* Single i's menu, at pt (screen coordinates): Add to Playlist and Delete from Library, as a
+/* Single i's menu, at pt (screen coordinates): Add to Playlist, Edit... and Delete from Library, as a
  * track's in the track list, and Go to Artist when it's credited to someone else. A single has
  * no album page to go to. */
 static void single_menu(int i, POINT pt) {
@@ -1095,6 +1097,7 @@ static void single_menu(int i, POINT pt) {
     AppendMenuW(menu, MF_STRING, CMD_GO_TO_ARTIST, mc_wstr_mnemonic(MC_STR_GO_TO_ARTIST));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_EDIT, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
@@ -1108,6 +1111,10 @@ static void single_menu(int i, POINT pt) {
     memset(&v.req, 0, sizeof v.req);
     memcpy(v.req.track_uid, uid, sizeof uid);
     notify(ARN_DELETE_TRACK, FALSE);
+  } else if (cmd == CMD_EDIT) {
+    memset(&v.req, 0, sizeof v.req);
+    memcpy(v.req.track_uid, uid, sizeof uid);
+    notify(ARN_EDIT_TRACK, FALSE);
   } else if (cmd == CMD_GO_TO_ARTIST) {
     memset(&v.req, 0, sizeof v.req);
     memcpy(v.req.artist_uid, artist, sizeof artist);
@@ -1115,10 +1122,10 @@ static void single_menu(int i, POINT pt) {
   }
 }
 
-/* WM_CONTEXTMENU: Remove from This PC... or Sync to This PC where they apply (none if neither
- * does; an artist can't be deleted from the library), for the row under the pointer (from the
- * keyboard, lp -1, the focused row), or anywhere on an artist's page for that artist; but on a
- * single, the single's menu. */
+/* WM_CONTEXTMENU: Edit..., then Remove from This PC... or Sync to This PC where they apply (an
+ * artist can't be deleted from the library), for the row under the pointer (from the keyboard,
+ * lp -1, the focused row), or anywhere on an artist's page for that artist, though on an album
+ * Edit... is the album's; but on a single, the single's menu. */
 static BOOL on_context_menu(LPARAM lp) {
   if (!v.lib) return FALSE;
   POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -1151,10 +1158,18 @@ static BOOL on_context_menu(LPARAM lp) {
   char uid[MC_UID_STRLEN];
   snprintf(uid, sizeof uid, "%s", is_open() ? v.open_uid : v.artists[i].uid);
   wchar_t *name = _wcsdup(is_open() ? (v.open_name ? v.open_name : L"") : v.artists[i].name);
+  char album[MC_UID_STRLEN] = "";
+  if (is_open() && i >= 0 && i < v.strips[STRIP_ALBUMS].n) memcpy(album, tile_at(i)->uid, sizeof album);
   HMENU menu = CreatePopupMenu();
+  AppendMenuW(menu, MF_STRING, CMD_EDIT, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
   remove_here_append_menu(menu, MC_PROFILE_ARTIST, uid, CMD_REMOVE_HERE, CMD_SYNC_HERE);
-  int cmd = GetMenuItemCount(menu) > 0 ? TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL) : 0;
+  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL);
   DestroyMenu(menu);
+  if (cmd == CMD_EDIT) {
+    HWND owner = GetAncestor(v.wnd, GA_ROOT);
+    if (album[0] ? edit_dialog_album(owner, v.lib, album) : edit_dialog_artist(owner, v.lib, uid))
+      notify(ARN_LIBRARY_CHANGED, TRUE);
+  }
   if ((cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE) && name &&
       remove_here_command(GetAncestor(v.wnd, GA_ROOT), (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ARTIST,
                           uid, name))

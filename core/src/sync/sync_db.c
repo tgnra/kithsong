@@ -79,13 +79,13 @@ static const char *const k_scrobble_cols[] = {"api_url", "auth_url", "api_key", 
                                               "session_key", "username", NULL};
 
 static const mc_changelog_table k_tracked[] = {
-  {"sync_group", "uid", k_group_cols},
-  {"devices", "uid", k_device_cols},
-  {"profiles", "device_uid", k_profile_cols},
-  {"profile_items", "uid", k_item_cols},
-  {"capabilities", "device_uid", k_capability_cols},
-  {"sync_status", "device_uid", k_status_cols},
-  {"scrobble_account", "uid", k_scrobble_cols},
+  {"sync_group", "uid", k_group_cols, NULL},
+  {"devices", "uid", k_device_cols, NULL},
+  {"profiles", "device_uid", k_profile_cols, NULL},
+  {"profile_items", "uid", k_item_cols, NULL},
+  {"capabilities", "device_uid", k_capability_cols, NULL},
+  {"sync_status", "device_uid", k_status_cols, NULL},
+  {"scrobble_account", "uid", k_scrobble_cols, NULL},
 };
 
 /* --- Schema --- */

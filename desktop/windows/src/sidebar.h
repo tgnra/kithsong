@@ -6,7 +6,8 @@
  *
  * Under the pages: RECENTS, what was last played on any device (sidebar_set_recents), each
  * a button that opens it (SBN_OPEN_RECENT), with a right-click menu to remove it or clear
- * them all (SBN_REMOVE_RECENT, SBN_CLEAR_RECENTS); the section is left out while there are
+ * them all (SBN_REMOVE_RECENT, SBN_CLEAR_RECENTS), or an album's or artist's to edit it
+ * (SBN_EDIT_RECENT); the section is left out while there are
  * none. A manual playlist's recent takes tracks dragged onto it, and a manual group's albums
  * (drag.h).
  * Under DEVICES: this PC once it's in a group, the paired devices (each a PAGE_DEVICE row;
@@ -61,6 +62,9 @@ typedef enum {
 #define SBN_CLEAR_RECENTS 0x107
 /* Sent the same way when About is clicked. */
 #define SBN_ABOUT 0x108
+/* Sent the same way from an album's or artist's recent's right-click menu: Edit...
+ * (sidebar_clicked_recent() says which). */
+#define SBN_EDIT_RECENT 0x109
 
 /* sidebar_device.flags */
 enum {
@@ -105,7 +109,7 @@ void sidebar_set_locked(BOOL locked);
 
 /* Replaces the recents, most recent first. */
 void sidebar_set_recents(const sidebar_recent *recents, int n);
-/* The recent of the last SBN_OPEN_RECENT or SBN_REMOVE_RECENT, copying its kind to *kind, or NULL. Valid until
+/* The recent of the last SBN_OPEN_RECENT, SBN_REMOVE_RECENT or SBN_EDIT_RECENT, copying its kind to *kind, or NULL. Valid until
  * the recents change. */
 const char *sidebar_clicked_recent(mc_recent_kind *kind);
 

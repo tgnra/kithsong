@@ -118,6 +118,7 @@ void set_list(TagLib::PropertyMap &props, const char *key, const char *value) {
 }
 
 void set_pair(TagLib::PropertyMap &props, const char *key, int num, int total) {
+  if (num < 0) props.erase(key);
   if (num <= 0) return;
   std::string v = std::to_string(num);
   if (total > 0) v += "/" + std::to_string(total);
@@ -202,8 +203,11 @@ extern "C" mc_status mc_tags_write(const char *path, const mc_tags *tags) {
     set_list(props, "ALBUMARTISTS", tags->album_artists);
     set_str(props, "MUSICBRAINZ_RELEASEGROUPID", tags->mb_releasegroupid);
     if (tags->year > 0) set_str(props, "DATE", std::to_string(tags->year).c_str());
+    else if (tags->year < 0) props.erase("DATE");
     if (tags->original_year > 0)
       set_str(props, "ORIGINALDATE", std::to_string(tags->original_year).c_str());
+    else if (tags->original_year < 0)
+      props.erase("ORIGINALDATE");
     set_pair(props, "TRACKNUMBER", tags->track, tags->track_total);
     set_pair(props, "DISCNUMBER", tags->disc, tags->disc_total);
 

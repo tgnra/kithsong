@@ -51,7 +51,8 @@ typedef struct mc_tags {
 mc_status mc_tags_read(const char *path, mc_tags *out);
 
 /* Writes every non-NULL / non-zero field of tags to the file, leaving other tags untouched.
- * An empty string removes that tag. */
+ * An empty string removes that tag, and so does a negative year, original year, track or
+ * disc. */
 mc_status mc_tags_write(const char *path, const mc_tags *tags);
 
 void mc_tags_clear(mc_tags *tags);

@@ -21,6 +21,7 @@
 #define T_NO_ARTIST "0192f1e4-7c3a-7b21-9d4e-000000000003"
 #define T_SINGLE "0192f1e4-7c3a-7b21-9d4e-000000000004"
 #define T_BAD "0192f1e4-7c3a-7b21-9d4e-000000000005"
+#define T_QUIET "0192f1e4-7c3a-7b21-9d4e-000000000006"
 
 /* --- The fake service --- */
 
@@ -276,13 +277,14 @@ int main(int argc, char **argv) {
   CHECK(sqlite3_exec(mc_library_db(lib),
                      "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
                      "INSERT INTO albums (uid, title, artist_uid) VALUES"
-                     " ('al1', 'Things We Lost in the Fire', 'ar1');"
+                     " ('al1', 'Things We Lost in the Fire', 'ar1'), ('al2', 'Guilty Pleasures', 'ar1');"
                      "INSERT INTO tracks (uid, title, album_uid, artist_uid, track_no, duration_ms)"
                      " VALUES ('" T_OK "', 'Sunflower', 'al1', 'ar1', 1, 280000),"
                      " ('" T_SHORT "', 'Interlude', 'al1', 'ar1', 2, 20000),"
                      " ('" T_NO_ARTIST "', 'Untitled', NULL, NULL, NULL, 200000),"
                      " ('" T_SINGLE "', 'Just Like Christmas', NULL, 'ar1', 7, 180000),"
-                     " ('" T_BAD "', 'Bad', 'al1', 'ar1', 3, 200000);",
+                     " ('" T_BAD "', 'Bad', 'al1', 'ar1', 3, 200000),"
+                     " ('" T_QUIET "', 'Hidden', 'al2', 'ar1', 1, 200000);",
                      NULL, NULL, NULL) == SQLITE_OK);
 
   mc_scrobbler *sc = NULL;
@@ -377,6 +379,32 @@ int main(int argc, char **argv) {
   CHECK(!strstr(last_form, "trackNumber%5B"));
   CHECK(wait_status(sc, 0, MC_OK, 2000));
   CHECK(get(&scrobbled) == 2);
+
+  /* An album flagged no_scrobble: neither now playing nor a scrobble, in any order of calls;
+   * its plays are still counted. Each request gets its own wake of the worker. */
+  mc_album_flags quiet = {.no_scrobble = 1};
+  CHECK(mc_album_flags_set(lib, "al2", &quiet) == MC_OK);
+  int announced = get(&now_playing_calls);
+  CHECK(mc_scrobbler_now_playing(sc, T_QUIET) == MC_OK);
+  mc_sleep_ms(200);
+  CHECK(mc_scrobbler_scrobble(sc, T_QUIET, now - 30000) == MC_OK);
+  mc_sleep_ms(200);
+  CHECK(wait_status(sc, 0, MC_OK, 2000));
+  CHECK(get(&now_playing_calls) == announced);
+  CHECK(get(&scrobbled) == 2);
+  CHECK(queue_rows(config) == 0);
+  CHECK(mc_library_record_play(lib, T_QUIET) == MC_OK);
+  sqlite3_stmt *plays = NULL;
+  CHECK(sqlite3_prepare_v2(mc_library_db(lib), "SELECT sum(play_count) FROM track_plays WHERE track_uid = '" T_QUIET "'",
+                           -1, &plays, NULL) == SQLITE_OK);
+  CHECK(sqlite3_step(plays) == SQLITE_ROW && sqlite3_column_int(plays, 0) == 1);
+  sqlite3_finalize(plays);
+  /* Flag off again, and it's a track like any other. */
+  quiet.no_scrobble = 0;
+  CHECK(mc_album_flags_set(lib, "al2", &quiet) == MC_OK);
+  CHECK(mc_scrobbler_now_playing(sc, T_QUIET) == MC_OK);
+  CHECK(wait_count(&now_playing_calls, announced + 1, 2000));
+  CHECK(strstr(last_form, "track=Hidden&") != NULL);
 
   /* The service down: the play waits in the queue, across a restart. */
   set(&answer, ANSWER_RATE_LIMIT);

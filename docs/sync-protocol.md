@@ -538,6 +538,8 @@ Sessions are retried with backoff (10 s, doubling, up to 5 minutes).
   credit rows as they were. Readers take a credit's first artist from `artist_uid`, not
   from its row 0, so its edit is followed; the featured artists past row 0 stay until a
   newer device writes the credit again.
+- `albums.no_scrobble` and `albums.mix` (v15) are such fields too: until it upgrades, an older
+  peer passes them on, still scrobbles the album and still lists a mix's tracks.
 - A row is *live* if one of its field changes is newer, by `(hlc, origin_uid)`, than its
   newest `_deleted`. A dead row that exists is deleted. A live row that exists gets each
   field the batch brought a new winner for. A live row that doesn't exist yet (new, or
@@ -573,7 +575,10 @@ way, without logging anything.
   fields and whether it is live are worked out from the changelog rows of every uid in the
   class together, as if they were one row's: field by field the highest `(hlc, origin_uid)`
   wins, and a delete of any of them is the class's delete. Recents rows, keyed by the
-  item's uid, merge the same way.
+  item's uid, merge the same way. An album's flags are only logged when set (see
+  [Album flags](schema.md#album-flags)), so a new row's 0 never beats a flag set on its
+  duplicate: the newest thing anyone chose wins, and a flag set on one copy and never touched
+  on the other stays set.
 - **References.** `tracks.album_uid` and `album_group_entries.album_uid`, `albums.artist_uid`,
   `tracks.artist_uid`, `track_artists.artist_uid` and `album_artists.artist_uid`, and
   `playlist_entries.track_uid`, `track_plays.track_uid` and the device-local
@@ -788,6 +793,9 @@ the plaintext limit.
     originals and transcodes whose `file_rev` is current, and the swapped file gets a new
     file uid, so no transcode cached for the old one is sent. An original imported on a
     device is never stale there: another device's better file doesn't replace it.
+  - A hand edit isn't a new file: it rewrites this device's originals' tags and updates their
+    `files` rows, `sha256` too, with no new `file_rev`, so nothing is fetched and peers keep
+    their copies and old tags (see "Hand edits" in tagging-rules.md).
   - Exceptions: originals imported on that device are kept until an archive holds verified
     copies. The device learns that in a session with an archive: its `HAVE_REQ` there also
     lists the tracks of such originals it no longer wants as they are, and the archive's

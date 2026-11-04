@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/edit_internal.h"
 #include "search/search_internal.h"
 #include "sync/libmerge.h"
 #include "sync/rows.h"
@@ -185,6 +186,11 @@ static const char *const k_migrations[] = {
   "  seq_last   INTEGER NOT NULL,"
   "  rows       TEXT NOT NULL"
   ");",
+  /* v15: an album's flags (musiccore/edit.h), what its tags can't say: no_scrobble keeps its
+   * tracks from being scrobbled, mix makes it a continuous mix, found as an album and not by
+   * its tracks. Never written to files. */
+  "ALTER TABLE albums ADD COLUMN no_scrobble INTEGER NOT NULL DEFAULT 0;"
+  "ALTER TABLE albums ADD COLUMN mix INTEGER NOT NULL DEFAULT 0;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -192,7 +198,11 @@ static const char *const k_migrations[] = {
 static const char *const k_artist_cols[] = {"name", "sort_name", "mb_artistid", NULL};
 static const char *const k_album_cols[] = {"title", "artist_uid", "year", "original_year",
                                            "disc_total", "mb_albumid", "mb_releasegroupid",
-                                           "art_hash", "artist_credit", NULL};
+                                           "art_hash", "artist_credit", "no_scrobble", "mix",
+                                           NULL};
+/* Only ever set by hand, so a new row's 0 says nothing: logged, it would beat a flag set
+ * earlier on a duplicate of the album once the two merge (merge.h). */
+static const char *const k_album_flags[] = {"no_scrobble", "mix", NULL};
 static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "track_no",
                                            "disc_no", "duration_ms", "genre", "mb_trackid",
                                            "mb_releasetrackid", "year", "mb_albumid", "added_ms",
@@ -211,18 +221,18 @@ static const char *const k_smart_cols[] = {"name", "subject", "rule", NULL};
 static const char *const k_recent_cols[] = {"kind", "opened_ms", NULL};
 
 static const mc_changelog_table k_tracked[] = {
-  {"artists", "uid", k_artist_cols},
-  {"albums", "uid", k_album_cols},
-  {"tracks", "uid", k_track_cols},
-  {"track_artists", "uid", k_track_artist_cols},
-  {"album_artists", "uid", k_album_artist_cols},
-  {"track_plays", "uid", k_play_cols},
-  {"playlists", "uid", k_playlist_cols},
-  {"playlist_entries", "uid", k_entry_cols},
-  {"album_groups", "uid", k_group_cols},
-  {"album_group_entries", "uid", k_group_entry_cols},
-  {"smart_lists", "uid", k_smart_cols},
-  {"recents", "uid", k_recent_cols},
+  {"artists", "uid", k_artist_cols, NULL},
+  {"albums", "uid", k_album_cols, k_album_flags},
+  {"tracks", "uid", k_track_cols, NULL},
+  {"track_artists", "uid", k_track_artist_cols, NULL},
+  {"album_artists", "uid", k_album_artist_cols, NULL},
+  {"track_plays", "uid", k_play_cols, NULL},
+  {"playlists", "uid", k_playlist_cols, NULL},
+  {"playlist_entries", "uid", k_entry_cols, NULL},
+  {"album_groups", "uid", k_group_cols, NULL},
+  {"album_group_entries", "uid", k_group_entry_cols, NULL},
+  {"smart_lists", "uid", k_smart_cols, NULL},
+  {"recents", "uid", k_recent_cols, NULL},
 };
 
 /* --- Schema --- */
@@ -303,6 +313,7 @@ static const struct {
 } k_newly_known[] = {
   {13, "entity IN ('track_artists', 'album_artists')"
        " OR (entity IN ('tracks', 'albums') AND field = 'artist_credit')"},
+  {15, "entity = 'albums' AND field IN ('no_scrobble', 'mix')"},
 };
 
 static mc_status apply_newly_known(mc_library *lib, int from) {
@@ -445,7 +456,10 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
             sqlite3_errmsg(lib->db));
   /* Splits the credits from before v13 (docs/tagging-rules.md, "Refresh after upgrading"),
    * on a thread and connection of its own. */
-  if (background) lib->refresh = mc_refresh_start(lib);
+  if (background) {
+    mc_edit_recover(lib);
+    lib->refresh = mc_refresh_start(lib);
+  }
 
   *out = lib;
   return MC_OK;

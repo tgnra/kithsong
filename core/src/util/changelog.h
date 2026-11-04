@@ -15,11 +15,14 @@
 #include "musiccore/musiccore.h"
 #include "util/hlc.h"
 
-/* A tracked table: changes to cols (NULL-terminated) are logged under row_uid = key. */
+/* A tracked table: changes to cols (NULL-terminated) are logged under row_uid = key. Of
+ * those, flags (NULL-terminated, or NULL for none) are 0 until set: a row inserted with 0
+ * logs nothing for them, as a NULL logs nothing elsewhere, so only setting one is logged. */
 typedef struct mc_changelog_table {
   const char *table;
   const char *key;
   const char *const *cols;
+  const char *const *flags;
 } mc_changelog_table;
 
 /* What the trigger functions read. The owner keeps it alive as long as the connection and

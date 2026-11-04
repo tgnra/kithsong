@@ -15,6 +15,7 @@
 #include "cover.h"
 #include "delete_dialog.h"
 #include "drag.h"
+#include "edit_dialog.h"
 #include "playlist_dialogs.h"
 #include "remove_here.h"
 #include "scroller.h"
@@ -54,6 +55,7 @@ enum {
   CMD_RENAME_GROUP,
   CMD_DELETE_GROUP,
   CMD_DELETE_ALBUM,
+  CMD_EDIT_ALBUM,
   CMD_REMOVE_HERE, /* Remove from this PC... */
   CMD_SYNC_HERE,   /* Sync to this PC */
   CMD_EDIT_SMART,
@@ -1304,7 +1306,7 @@ void album_grid_set_sync_state(album_grid_sync state) {
 }
 
 /* Add to Album Group, inside a (manual) group Move Up, Move Down and Remove from Album Group,
- * then Remove from This PC... or Sync to This PC where they apply, and Delete from Library...,
+ * then Edit..., Remove from This PC... or Sync to This PC where they apply, and Delete from Library...,
  * for album tile i. */
 static void show_album_menu(int i, POINT pt) {
   char album[MC_UID_STRLEN], group[MC_UID_STRLEN];
@@ -1329,6 +1331,7 @@ static void show_album_menu(int i, POINT pt) {
     AppendMenuW(menu, MF_STRING, CMD_REMOVE_FROM_GROUP, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_EDIT_ALBUM, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
   remove_here_append_menu(menu, MC_PROFILE_ALBUM, album, CMD_REMOVE_HERE, CMD_SYNC_HERE);
   AppendMenuW(menu, MF_STRING, CMD_DELETE_ALBUM, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
@@ -1336,6 +1339,7 @@ static void show_album_menu(int i, POINT pt) {
 
   HWND owner = GetAncestor(g.wnd, GA_ROOT);
   BOOL changed = FALSE;
+  if (cmd == CMD_EDIT_ALBUM) changed = edit_dialog_album(owner, g.lib, album);
   if (cmd == CMD_DELETE_ALBUM) changed = delete_dialog(owner, g.lib, MC_DELETE_ALBUMS, album, title);
   if (cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE)
     changed = remove_here_command(owner, (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ALBUM, album, title);

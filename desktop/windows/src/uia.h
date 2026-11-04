@@ -31,6 +31,8 @@ enum {
   UIA_DISABLED = 32,    /* greyed out */
   UIA_COLLAPSED = 64,   /* ExpandCollapse pattern (ops.expand), collapsed or expanded */
   UIA_EXPANDED = 128,
+  UIA_TOGGLE_OFF = 256, /* Toggle pattern (a click, so ops.invoke), off or on */
+  UIA_TOGGLE_ON = 512,
 };
 
 /* What a node is, as ops.node fills it in. Everything starts zeroed. */
@@ -98,6 +100,8 @@ unsigned long uia_hash(unsigned long sig, const void *data, size_t n);
 void uia_focus(uia_host *h);
 /* Node i became the selected one. */
 void uia_selected(uia_host *h, int i);
+/* Node i's toggle state changed to on. */
+void uia_toggled(uia_host *h, int i, BOOL on);
 /* Live region i (or UIA_ROOT) has something new to say, its name: screen readers read it out. */
 void uia_announce(uia_host *h, int i);
 

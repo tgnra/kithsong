@@ -22,6 +22,7 @@ add_executable(kithsong WIN32
   src/device_view.c
   src/dlg_template.c
   src/drag.c
+  src/edit_dialog.c
   src/firewall.c
   src/first_run.c
   src/import_view.c

@@ -41,6 +41,7 @@ typedef struct prov {
   IInvokeProvider invoke;
   IScrollItemProvider scroll;
   IExpandCollapseProvider expand;
+  IToggleProvider toggle;
   LONG refs;
   uia_host *host; /* static in the control, so it outlives every element */
   int index;
@@ -124,6 +125,7 @@ static HRESULT prov_qi(prov *p, REFIID riid, void **out) {
   else if (IsEqualIID(riid, &IID_IInvokeProvider)) *out = &p->invoke;
   else if (IsEqualIID(riid, &IID_IScrollItemProvider)) *out = &p->scroll;
   else if (IsEqualIID(riid, &IID_IExpandCollapseProvider)) *out = &p->expand;
+  else if (IsEqualIID(riid, &IID_IToggleProvider)) *out = &p->toggle;
   else return E_NOINTERFACE;
   InterlockedIncrement(&p->refs);
   return S_OK;
@@ -165,6 +167,7 @@ UNKNOWN_METHODS(ISelectionItemProvider, item)
 UNKNOWN_METHODS(IInvokeProvider, invoke)
 UNKNOWN_METHODS(IScrollItemProvider, scroll)
 UNKNOWN_METHODS(IExpandCollapseProvider, expand)
+UNKNOWN_METHODS(IToggleProvider, toggle)
 
 /* --- IRawElementProviderSimple --- */
 
@@ -197,6 +200,9 @@ static HRESULT STDMETHODCALLTYPE simple_pattern(IRawElementProviderSimple *This,
       break;
     case UIA_ExpandCollapsePatternId:
       if (n.flags & (UIA_COLLAPSED | UIA_EXPANDED)) iface = &p->expand;
+      break;
+    case UIA_TogglePatternId:
+      if (n.flags & (UIA_TOGGLE_OFF | UIA_TOGGLE_ON)) iface = &p->toggle;
       break;
   }
   if (iface) {
@@ -557,6 +563,26 @@ static HRESULT STDMETHODCALLTYPE expand_state(IExpandCollapseProvider *This, enu
   return S_OK;
 }
 
+/* Toggling is what a click does, so it's ops.invoke, posted likewise. */
+static HRESULT STDMETHODCALLTYPE toggle_toggle(IToggleProvider *This) {
+  return post_action(PROV(This, toggle), ACT_INVOKE);
+}
+
+static HRESULT STDMETHODCALLTYPE toggle_state(IToggleProvider *This, enum ToggleState *ret) {
+  uia_node n;
+  if (!get(PROV(This, toggle), &n)) return UIA_E_ELEMENTNOTAVAILABLE;
+  *ret = n.flags & UIA_TOGGLE_ON ? ToggleState_On : ToggleState_Off;
+  return S_OK;
+}
+
+static const IToggleProviderVtbl toggle_vtbl = {
+  .QueryInterface = toggle_qi,
+  .AddRef = toggle_addref,
+  .Release = toggle_release,
+  .Toggle = toggle_toggle,
+  .get_ToggleState = toggle_state,
+};
+
 static const IExpandCollapseProviderVtbl expand_vtbl = {
   .QueryInterface = expand_qi,
   .AddRef = expand_addref,
@@ -577,6 +603,7 @@ static prov *prov_new(uia_host *h, int index) {
   p->invoke.lpVtbl = (IInvokeProviderVtbl *)&invoke_vtbl;
   p->scroll.lpVtbl = (IScrollItemProviderVtbl *)&scroll_vtbl;
   p->expand.lpVtbl = (IExpandCollapseProviderVtbl *)&expand_vtbl;
+  p->toggle.lpVtbl = (IToggleProviderVtbl *)&toggle_vtbl;
   p->refs = 1;
   p->host = h;
   p->index = index;
@@ -663,6 +690,20 @@ static void raise_event(uia_host *h, int i, EVENTID event) {
   prov *p = prov_at(h, i);
   if (!p) return;
   UiaRaiseAutomationEvent(&p->simple, event);
+  prov_release(p);
+}
+
+void uia_toggled(uia_host *h, int i, BOOL on) {
+  if (!h->wnd || !h->root || !UiaClientsAreListening()) return;
+  prov *p = prov_at(h, i);
+  if (!p) return;
+  VARIANT old, now;
+  VariantInit(&old);
+  VariantInit(&now);
+  old.vt = now.vt = VT_I4;
+  old.lVal = on ? ToggleState_Off : ToggleState_On;
+  now.lVal = on ? ToggleState_On : ToggleState_Off;
+  UiaRaiseAutomationPropertyChangedEvent(&p->simple, UIA_ToggleToggleStatePropertyId, old, now);
   prov_release(p);
 }
 

@@ -59,6 +59,7 @@ enum {
   CMD_RENAME,
   CMD_DELETE,
   CMD_DELETE_TRACK,
+  CMD_EDIT_TRACK,
   CMD_EDIT_SMART,
   CMD_GO_TO_ALBUM,
   CMD_GO_TO_ARTIST,
@@ -755,6 +756,7 @@ static void show_menu(POINT pt) {
                 wstr_menu_item(item, 128, MC_STR_REMOVE_FROM_PLAYLIST, MC_STR_WINDOWS_SHORTCUT_REMOVE));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+  AppendMenuW(menu, MF_STRING, CMD_EDIT_TRACK, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, s.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
@@ -779,6 +781,10 @@ static void show_menu(POINT pt) {
     case CMD_DELETE_TRACK:
       strcpy(s.req.track_uid, s.rows[i].uid);
       notify(TLN_DELETE_TRACK);
+      break;
+    case CMD_EDIT_TRACK:
+      strcpy(s.req.track_uid, s.rows[i].uid);
+      notify(TLN_EDIT_TRACK);
       break;
     case CMD_GO_TO_ALBUM:
       strcpy(s.req.track_uid, s.rows[i].uid);

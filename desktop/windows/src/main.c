@@ -91,6 +91,7 @@
 #include "delete_dialog.h"
 #include "remove_here.h"
 #include "device_view.h"
+#include "edit_dialog.h"
 #include "firewall.h"
 #include "first_run.h"
 #include "import_view.h"
@@ -571,6 +572,18 @@ static void refresh_library(void) {
   search_view_set_library(g_app.lib);
 }
 
+/* Edit... on an album's or artist's recent in the sidebar. */
+static void edit_recent(void) {
+  mc_recent_kind kind = MC_RECENT_ALBUM;
+  const char *clicked = sidebar_clicked_recent(&kind);
+  if (!g_app.lib || !clicked) return;
+  char uid[MC_UID_STRLEN];
+  snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when the recents refresh */
+  BOOL changed = kind == MC_RECENT_ARTIST ? edit_dialog_artist(g_app.wnd, g_app.lib, uid)
+                                          : edit_dialog_album(g_app.wnd, g_app.lib, uid);
+  if (changed) refresh_library();
+}
+
 /* A search result was opened: an artist, album, playlist or album group on its page, a track
  * on its album with the track selected. */
 static void open_search_result(void) {
@@ -979,6 +992,13 @@ static void on_track_request(int code) {
         break;
       }
       break;
+    case TLN_EDIT_TRACK: {
+      /* Copied: the dialog's message loop runs while the list may ask for other things. */
+      char track[MC_UID_STRLEN];
+      snprintf(track, sizeof track, "%s", req->track_uid);
+      changed = edit_dialog_track(g_app.wnd, g_app.lib, track);
+      break;
+    }
     case TLN_RESHUFFLE: /* a smart playlist's new order */
       if (!name || strcmp(uid, req->playlist_uid)) break;
       changed = mc_smart_reshuffle(g_app.lib, uid) == MC_OK;
@@ -1016,6 +1036,10 @@ static void on_single_request(int code) {
       free(title);
       break;
     }
+  } else if (code == ARN_EDIT_TRACK) {
+    char uid[MC_UID_STRLEN]; /* copied, as above */
+    snprintf(uid, sizeof uid, "%s", req->track_uid);
+    changed = edit_dialog_track(g_app.wnd, g_app.lib, uid);
   }
   if (changed) refresh_library();
 }
@@ -1475,6 +1499,7 @@ static void on_command(int id, int code) {
       else if (code == SBN_OPEN_RECENT) open_recent();
       else if (code == SBN_ABOUT) show_about();
       else if (code == SBN_REMOVE_RECENT || code == SBN_CLEAR_RECENTS) remove_recents(code == SBN_CLEAR_RECENTS);
+      else if (code == SBN_EDIT_RECENT) edit_recent();
       else if (code == SBN_NEW_SMART_PLAYLIST || code == SBN_NEW_SMART_GROUP) {
         show_page(code == SBN_NEW_SMART_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUM_GROUPS);
         album_grid_new_smart();
@@ -1502,7 +1527,7 @@ static void on_command(int id, int code) {
         layout(); /* the track list goes beneath the header */
       } else if (code == ARN_PLAY_SINGLE) {
         play_items(artist_view_single_count(), artist_view_single_at, artist_view_play_index());
-      } else if (code == ARN_ADD_TO_PLAYLIST || code == ARN_DELETE_TRACK) {
+      } else if (code == ARN_ADD_TO_PLAYLIST || code == ARN_DELETE_TRACK || code == ARN_EDIT_TRACK) {
         on_single_request(code);
       } else if (code == ARN_OPEN_ALBUM) {
         char uid[MC_UID_STRLEN];
@@ -2087,6 +2112,7 @@ static BOOL change_library(BOOL new_empty) {
   mc_library *lib = dir ? open_library(dir) : NULL;
   if (lib) {
     stop_sync();
+    edit_dialog_wait();
     mc_library_close(g_app.lib);
     g_app.lib = lib;
     mc_settings_set_library_dir(g_app.settings, dir);
@@ -2270,6 +2296,7 @@ static void move_close_library(void) {
   stop_sync();
   import_view_set_library(NULL);
   album_grid_unselect();
+  edit_dialog_wait();
   mc_library_close(g_app.lib);
   g_app.lib = NULL;
   refresh_library();
@@ -2399,6 +2426,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     DispatchMessageW(&msg);
   }
 
+  edit_dialog_wait();
   mc_library_close(g_app.lib); /* sync stopped in WM_DESTROY */
   mc_settings_free(g_app.settings);
   free(g_app.config_dir);
