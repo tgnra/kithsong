@@ -21,6 +21,7 @@ add_executable(kithsong
   src/recents.c
   src/search_view.c
   src/device_view.c
+  src/analysis_ui.c
   src/pair_dialog.c
   src/sync_bridge.c
   src/add_to_playlist.c

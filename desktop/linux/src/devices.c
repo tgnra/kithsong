@@ -2,9 +2,8 @@
 
 #include <string.h>
 
-#include "musiccore/analysis.h"
-
 #include "add_device.h"
+#include "analysis_ui.h"
 #include "device_view.h"
 #include "pair_dialog.h"
 #include "settings_view.h"
@@ -24,7 +23,6 @@ static struct {
   char syncing[MAX_SYNCING][MC_UID_STRLEN]; /* devices with a session in progress */
   guint refresh_source, library_source, poll_source;
   devices_state state; /* as of the last refresh */
-  mc_analysis_scanner *analysis;
 } d;
 
 /* --- Helpers --- */
@@ -629,8 +627,7 @@ GtkWidget *devices_new(app *a) {
 }
 
 void devices_start(app *a) {
-  /* The audio analysis of the library that's open comes and goes with sync. */
-  if (a->lib && !d.analysis) mc_analysis_scanner_start(mc_library_dir(a->lib), &d.analysis);
+  analysis_ui_start(a); /* the audio analysis of the library that's open comes and goes with sync */
   memset(d.syncing, 0, sizeof d.syncing);
   char *name = saved_name();
   sync_bridge_start(a->lib, a->settings_dir, name, on_sync_event, a);
@@ -645,8 +642,7 @@ void devices_start(app *a) {
 
 void devices_stop(app *a) {
   (void)a;
-  mc_analysis_scanner_stop(d.analysis); /* it reads the files, which may be about to move */
-  d.analysis = NULL;
+  analysis_ui_stop();
   pair_dialog_close_all();
   device_view_open(NULL, NULL, NULL);
   sync_bridge_stop();

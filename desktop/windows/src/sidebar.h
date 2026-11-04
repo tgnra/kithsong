@@ -65,6 +65,8 @@ typedef enum {
 /* Sent the same way from an album's or artist's recent's right-click menu: Edit...
  * (sidebar_clicked_recent() says which). */
 #define SBN_EDIT_RECENT 0x109
+/* Sent the same way when the row of audio analysis in the background is clicked. */
+#define SBN_ANALYSIS 0x10A
 
 /* sidebar_device.flags */
 enum {
@@ -106,6 +108,8 @@ void sidebar_select(sidebar_page page);
 /* While locked, every page but the selected one is greyed out and can't be selected, and
  * the recents, the nearby devices and the + are greyed out too. */
 void sidebar_set_locked(BOOL locked);
+/* Shows or hides the row above Settings that says audio analysis is going on in the background. */
+void sidebar_set_analysing(BOOL analysing);
 
 /* Replaces the recents, most recent first. */
 void sidebar_set_recents(const sidebar_recent *recents, int n);

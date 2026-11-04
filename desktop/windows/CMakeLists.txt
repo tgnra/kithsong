@@ -31,6 +31,7 @@ add_executable(kithsong WIN32
   src/media_controls.c
   src/move_library.c
   src/now_playing.c
+  src/analysis_dialog.c
   src/pair_dialog.c
   src/pick_folder.c
   src/playback.c

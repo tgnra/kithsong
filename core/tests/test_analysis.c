@@ -1091,6 +1091,54 @@ static void test_scanner(const char *scratch) {
   CHECK(wait_for(lib, TRACKS + 3));
   printf("after a 2.5 s hold, a 3 s file took %d ms, resting\n", (int)(mc_mono_ms() - from));
   mc_analysis_scanner_stop(s);
+
+  /* A sized scanner says a long batch is large, is paced when told, and that ends with the work. */
+  int pending = -1;
+  int64_t pending_ms = -1;
+  CHECK(mc_analysis_pending(lib, &pending, &pending_ms) == MC_OK);
+  CHECK(pending == 0 && pending_ms == 0);
+  snprintf(path, sizeof path, "%s/long.wav", dir);
+  CHECK(write_wav(path, 44100, 1.0, 0.5));
+  add_track(lib, "long.wav", 0, other);
+  char sql[160];
+  snprintf(sql, sizeof sql, "UPDATE tracks SET duration_ms = 18000000 WHERE uid = '%s'", other);
+  CHECK(sqlite3_exec(mc_library_db(lib), sql, NULL, NULL, NULL) == SQLITE_OK);
+  CHECK(mc_analysis_pending(lib, &pending, &pending_ms) == MC_OK);
+  CHECK(pending == 1 && pending_ms == 18000000);
+  mc_analysis_hold();
+  CHECK(mc_analysis_scanner_start_sized(dir, 0, &s) == MC_OK);
+  mc_analysis_status status = {0};
+  for (int i = 0; i < 200 && !status.active; i++) {
+    mc_sleep_ms(10);
+    mc_analysis_scanner_status(s, &status);
+  }
+  CHECK(status.active && status.large && !status.paced && status.total == 1 && status.done == 0);
+  mc_analysis_scanner_set_paced(s, 1);
+  mc_analysis_scanner_status(s, &status);
+  CHECK(status.paced);
+  mc_analysis_release();
+  CHECK(wait_for(lib, TRACKS + 4));
+  for (int i = 0; i < 500 && status.paced; i++) {
+    mc_sleep_ms(10);
+    mc_analysis_scanner_status(s, &status);
+  }
+  CHECK(!status.paced && !status.active);
+  mc_analysis_scanner_stop(s);
+
+  /* A short batch isn't large, and an idle sized scanner sees the end of a hold at once. */
+  mc_analysis_scanner_set_timing(0, 600000, 1, 0);
+  CHECK(mc_analysis_scanner_start_sized(dir, 0, &s) == MC_OK);
+  mc_sleep_ms(200);
+  snprintf(path, sizeof path, "%s/woken.wav", dir);
+  CHECK(write_wav(path, 44100, 1.0, 0.5));
+  add_track(lib, "woken.wav", 0, other);
+  mc_analysis_hold();
+  mc_analysis_release();
+  CHECK(wait_for(lib, TRACKS + 5));
+  mc_analysis_scanner_stop(s);
+  mc_analysis_scanner_set_timing(0, 20, 0, 0);
+  mc_analysis_scanner_status(NULL, &status);
+  CHECK(!status.active);
   mc_library_close(lib);
 }
 
