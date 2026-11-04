@@ -83,6 +83,7 @@ target_link_libraries(test_import_zip PRIVATE mc_miniz)  # builds the zips it im
 kithsong_test(test_long_paths)
 kithsong_test(test_radio)
 kithsong_test(test_radio_stations)
+kithsong_test(test_radio_seeds)
 kithsong_test(test_analysis)
 set_tests_properties(test_analysis PROPERTIES TIMEOUT 300)
 kithsong_test(test_dupes)
