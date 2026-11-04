@@ -372,8 +372,10 @@ void playback_play_radio(const char *seed_track_uid) {
   if (!s.lib || !seed_track_uid) return;
   mc_radio_options opts = {.seed_track = seed_track_uid};
   mc_track_list *list = NULL;
-  if (mc_radio_seed_check(s.lib, &opts) != MC_OK || mc_library_get_track(s.lib, seed_track_uid, &list) != MC_OK)
+  if (mc_radio_seed_check(s.lib, &opts) != MC_OK || mc_library_get_track(s.lib, seed_track_uid, &list) != MC_OK) {
+    now_playing_notice(mc_wstr(MC_STR_STATION_CANT_PLAY));
     return;
+  }
   const mc_track_info *t = &list->items[0];
   wchar_t *title = t->title ? wstr_dup_from_utf8(t->title) : NULL;
   wchar_t *artist = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
@@ -385,6 +387,8 @@ void playback_play_radio(const char *seed_track_uid) {
     /* Now, as opening an album is: the play log's row only comes once the seed has ended. */
     if (mc_library_record_opened(s.lib, MC_RECENT_STATION, t->uid) == MC_OK && s.recents_changed)
       s.recents_changed();
+  } else {
+    now_playing_notice(mc_wstr(MC_STR_STATION_CANT_PLAY));
   }
   free(title);
   free(artist);

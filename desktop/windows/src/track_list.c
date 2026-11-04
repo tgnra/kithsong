@@ -12,6 +12,7 @@
 #include "canvas.h"
 #include "cover.h"
 #include "drag.h"
+#include "item_menu.h"
 #include "playback.h"
 #include "scroller.h"
 #include "smart_editor.h"
@@ -685,13 +686,7 @@ static void show_playlist_menu(void) {
   RECT r = more_rect();
   MapWindowPoints(s.wnd, NULL, (POINT *)&r, 2);
   HMENU menu = CreatePopupMenu();
-  wchar_t item[128];
-  if (s.smart) AppendMenuW(menu, MF_STRING, CMD_EDIT_SMART, mc_wstr_mnemonic(MC_STR_SMART_EDIT_MENU));
-  AppendMenuW(menu, MF_STRING, CMD_RENAME,
-              wstr_menu_item(item, 128, MC_STR_PLAYLIST_RENAME_MENU, MC_STR_WINDOWS_SHORTCUT_RENAME));
-  if (s.smart) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_DELETE,
-              mc_wstr_mnemonic(s.smart ? MC_STR_SMART_DELETE_PLAYLIST_MENU : MC_STR_PLAYLIST_DELETE_MENU));
+  item_menu_append_playlist(menu, s.smart, TRUE, CMD_EDIT_SMART, CMD_RENAME, CMD_DELETE);
   s.more_open = TRUE;
   invalidate_more();
   /* Hangs from the button's right edge, as the button sits at the window's. */

@@ -63,8 +63,8 @@ void playback_clear(void);
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
                    const char *context_uid);
 /* Replaces the queue with a station from that track (mc_player_play_radio()), which plays at
- * once. If the track can't seed one, or no library is open, nothing happens and what's playing
- * plays on. */
+ * once. If the track can't seed one, the now-playing strip says so, and what's playing plays on,
+ * as it does if no library is open. */
 void playback_play_radio(const char *seed_track_uid);
 /* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to
  * whatever is queued next. Off to begin with; main.c keeps it in the settings. */

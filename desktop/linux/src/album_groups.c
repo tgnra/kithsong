@@ -254,14 +254,19 @@ static GMenuModel *group_menu(const char *uid, gboolean smart) {
   return G_MENU_MODEL(menu);
 }
 
-void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const char *in_group, double x, double y) {
+GMenuModel *album_groups_group_model(const char *uid, gboolean smart) {
   ensure_actions();
-  if (!a->lib || !album || album->is_playlist || album->is_group) return;
-  g_strlcpy(v.menu_album, album->uid, sizeof v.menu_album);
+  return group_menu(uid, smart);
+}
+
+/* The album's menu; grid is what it's shown in if in_group isn't NULL, for where it can move. */
+static GMenuModel *album_menu(app *a, GtkWidget *grid, const char *uid, const char *title, const char *in_group) {
+  ensure_actions();
+  g_strlcpy(v.menu_album, uid, sizeof v.menu_album);
   g_strlcpy(v.menu_group, in_group ? in_group : "", sizeof v.menu_group);
   g_free(v.menu_title);
-  v.menu_title = g_strdup(album->title);
-  g_simple_action_set_enabled(v.start_radio, mc_radio_seed_for_album(a->lib, album->uid, v.menu_seed) == MC_OK);
+  v.menu_title = g_strdup(title);
+  g_simple_action_set_enabled(v.start_radio, mc_radio_seed_for_album(a->lib, uid, v.menu_seed) == MC_OK);
 
   GMenu *menu = g_menu_new(), *add = g_menu_new();
   g_menu_append(menu, mc_str_mnemonic(MC_STR_START_RADIO), "albumgroup.start-radio");
@@ -288,7 +293,7 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
   g_object_unref(add);
   if (in_group) {
     /* Move up and Move down where it can go: before the one before it, or after the next. */
-    int i = album_grid_index(grid, album->uid);
+    int i = album_grid_index(grid, uid);
     const char *up = album_grid_uid_at(grid, i - 2), *down = i >= 0 ? album_grid_uid_at(grid, i + 1) : NULL;
     g_strlcpy(v.up_after, up ? up : "", sizeof v.up_after);
     g_strlcpy(v.down_after, down ? down : "", sizeof v.down_after);
@@ -305,7 +310,18 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
   g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "albumgroup.delete-album");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
-  album_grid_popup(grid, G_MENU_MODEL(menu), x, y);
+  return G_MENU_MODEL(menu);
+}
+
+GMenuModel *album_groups_album_model(app *a, const char *uid, const char *title) {
+  return a->lib ? album_menu(a, NULL, uid, title, NULL) : NULL;
+}
+
+void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const char *in_group, double x, double y) {
+  ensure_actions();
+  if (!a->lib || !album || album->is_playlist || album->is_group) return;
+  GMenuModel *menu = album_menu(a, grid, album->uid, album->title, in_group);
+  album_grid_popup(grid, menu, x, y);
   g_object_unref(menu); /* the popover keeps it */
 }
 

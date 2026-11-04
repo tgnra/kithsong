@@ -154,13 +154,21 @@ static void on_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
 
 /* --- The rows' menu --- */
 
+void recents_remove(app *a, const char *uid) {
+  if (!a->lib) return;
+  mc_status st = mc_library_remove_recent(a->lib, uid);
+  if (st == MC_OK || st == MC_ERR_NOT_FOUND) recents_refresh(a); /* gone already: sync took it */
+}
+
+void recents_clear(app *a) {
+  if (a->lib && mc_library_clear_recents(a->lib) == MC_OK) recents_refresh(a);
+}
+
 static void on_remove(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
   (void)user;
-  if (!r.a->lib || !r.menu_uid[0]) return;
-  mc_status st = mc_library_remove_recent(r.a->lib, r.menu_uid);
-  if (st == MC_OK || st == MC_ERR_NOT_FOUND) recents_refresh(r.a); /* gone already: sync took it */
+  if (r.menu_uid[0]) recents_remove(r.a, r.menu_uid);
 }
 
 static void on_edit(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -194,7 +202,7 @@ static void on_clear(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
   (void)user;
-  if (r.a->lib && mc_library_clear_recents(r.a->lib) == MC_OK) recents_refresh(r.a);
+  recents_clear(r.a);
 }
 
 /* row's menu, at x, y in widget. */

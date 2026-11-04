@@ -57,4 +57,11 @@ GtkWidget *album_groups_album_grid(void);
  * For album_grid_set_menu() callers. */
 void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const char *in_group, double x, double y);
 
+/* The same menu for showing elsewhere in the window, the Home page's tiles, outside any group:
+ * the album uid, called title, or NULL with no library. g_object_unref() it. What it's for is
+ * copied, so it can go while the menu is open. */
+GMenuModel *album_groups_album_model(app *a, const char *uid, const char *title);
+/* The same for group uid: a group tile's right-click menu. */
+GMenuModel *album_groups_group_model(const char *uid, gboolean smart);
+
 #endif

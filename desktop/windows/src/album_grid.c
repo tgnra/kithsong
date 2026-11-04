@@ -13,13 +13,10 @@
 #include "add_to_playlist.h"
 #include "canvas.h"
 #include "cover.h"
-#include "delete_dialog.h"
 #include "drag.h"
-#include "edit_dialog.h"
+#include "item_menu.h"
 #include "playback.h"
 #include "playlist_dialogs.h"
-#include "radio_menu.h"
-#include "remove_here.h"
 #include "scroller.h"
 #include "smart_editor.h"
 #include "theme.h"
@@ -48,25 +45,7 @@ enum {
 
 enum { TIMER_DRAG_SCROLL = 103 }; /* the scroller has 101 and 102 */
 
-/* The right-click menus' commands. */
-enum {
-  CMD_NEW_GROUP = 1,
-  CMD_REMOVE_FROM_GROUP,
-  CMD_MOVE_UP, /* within a group */
-  CMD_MOVE_DOWN,
-  CMD_RENAME_GROUP,
-  CMD_DELETE_GROUP,
-  CMD_DELETE_ALBUM,
-  CMD_EDIT_ALBUM,
-  CMD_REMOVE_HERE, /* Remove from this PC... */
-  CMD_SYNC_HERE,   /* Sync to this PC */
-  CMD_EDIT_SMART,
-  CMD_RENAME_SMART,
-  CMD_DELETE_SMART,
-  CMD_NEW_SMART,
-  CMD_START_RADIO,
-  CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
-};
+enum { CMD_NEW_SMART = 1 }; /* the Playlists and Album Groups pages' menu; the tiles' are item_menu.h's */
 
 /* The parts of a page's header that act on a click (also their tooltips' ids), and the
  * empty page's button. On Playlists and Album Groups, PART_MORE is New Playlist or New
@@ -1102,50 +1081,10 @@ static UINT menu_flags(void) {
   return TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
 }
 
-/* Rename... and Delete Album Group... for group uid, named name, at pt (screen
- * coordinates). */
-static void show_group_menu(const char *uid, const wchar_t *name, POINT pt) {
-  /* Copies: the dialogs' message loops repaint the grid, which may reload it. */
-  char group[MC_UID_STRLEN];
-  snprintf(group, sizeof group, "%s", uid);
-  wchar_t *title = _wcsdup(name ? name : L"");
-  HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, CMD_RENAME_GROUP, mc_wstr_mnemonic(MC_STR_PLAYLIST_RENAME_MENU));
-  AppendMenuW(menu, MF_STRING, CMD_DELETE_GROUP, mc_wstr_mnemonic(MC_STR_ALBUM_GROUP_DELETE_MENU));
-  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
-  DestroyMenu(menu);
-  HWND owner = GetAncestor(g.wnd, GA_ROOT);
-  BOOL changed = FALSE;
-  if (cmd == CMD_RENAME_GROUP) changed = album_group_rename_dialog(owner, g.lib, group, title);
-  else if (cmd == CMD_DELETE_GROUP) changed = album_group_delete_dialog(owner, g.lib, group, title);
-  free(title);
-  if (changed) notify_changed();
-}
-
-/* Edit Rules..., Rename... and Delete... for smart playlist or group uid, named name, at pt
- * (screen coordinates). */
-static void show_smart_menu(const char *uid, const wchar_t *name, mc_smart_subject subject, POINT pt) {
-  char smart[MC_UID_STRLEN]; /* copies, as show_group_menu's */
-  snprintf(smart, sizeof smart, "%s", uid);
-  wchar_t *title = _wcsdup(name ? name : L"");
-  HMENU menu = CreatePopupMenu();
-  wchar_t item[128];
-  AppendMenuW(menu, MF_STRING, CMD_EDIT_SMART, mc_wstr_mnemonic(MC_STR_SMART_EDIT_MENU));
-  AppendMenuW(menu, MF_STRING, CMD_RENAME_SMART,
-              wstr_menu_item(item, 128, MC_STR_PLAYLIST_RENAME_MENU, MC_STR_WINDOWS_SHORTCUT_RENAME));
-  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_DELETE_SMART,
-              mc_wstr_mnemonic(subject == MC_SMART_TRACKS ? MC_STR_SMART_DELETE_PLAYLIST_MENU
-                                                          : MC_STR_SMART_DELETE_GROUP_MENU));
-  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
-  DestroyMenu(menu);
-  HWND owner = GetAncestor(g.wnd, GA_ROOT);
-  BOOL changed = FALSE;
-  if (cmd == CMD_EDIT_SMART) changed = smart_edit_dialog(owner, g.lib, smart);
-  else if (cmd == CMD_RENAME_SMART) changed = smart_rename_dialog(owner, g.lib, smart, title, subject);
-  else if (cmd == CMD_DELETE_SMART) changed = smart_delete_dialog(owner, g.lib, smart, title, subject);
-  free(title);
-  if (changed) notify_changed();
+/* The menu of a smart playlist, or of a group, smart or not, at pt (screen coordinates). */
+static void show_list_menu(const char *uid, const wchar_t *name, BOOL playlist, BOOL smart, POINT pt) {
+  item_menu_options o = {.wnd = g.wnd, .lib = g.lib, .uid = uid, .name = name, .pt = pt, .rename_key = TRUE};
+  if ((playlist ? item_menu_playlist(&o, smart) : item_menu_group(&o, smart)) == ITEM_MENU_CHANGED) notify_changed();
 }
 
 /* The More button's menu: the shown group's, hanging from the button's right edge. */
@@ -1154,8 +1093,7 @@ static void show_more_menu(void) {
   RECT r = header_button(PART_MORE);
   POINT pt = {r.right, r.bottom};
   ClientToScreen(g.wnd, &pt);
-  if (g.group_smart) show_smart_menu(g.group_uid, g.group_name, MC_SMART_ALBUMS, pt);
-  else show_group_menu(g.group_uid, g.group_name, pt);
+  show_list_menu(g.group_uid, g.group_name, FALSE, g.group_smart, pt);
 }
 
 void album_grid_new_smart(void) {
@@ -1278,64 +1216,17 @@ void album_grid_set_sync_state(album_grid_sync state) {
   }
 }
 
-/* Start radio, Add to Album Group, inside a (manual) group Move Up, Move Down and Remove from Album Group,
- * then Edit..., Remove from This PC... or Sync to This PC where they apply, and Delete from Library...,
- * for album tile i. */
+/* The menu of album tile i, at pt (screen coordinates). */
 static void show_album_menu(int i, POINT pt) {
-  char album[MC_UID_STRLEN], group[MC_UID_STRLEN];
-  memcpy(album, g.tiles[i].uid, sizeof album);
-  memcpy(group, g.group_uid, sizeof group);
-  wchar_t *title = _wcsdup(g.tiles[i].title ? g.tiles[i].title : L"");
-  BOOL in_group = g.tiles_view == AGV_GROUP && !g.group_smart;
   /* Where Move Up and Move Down put it: after the album two before it (or first), or after
    * the next. */
-  char up_after[MC_UID_STRLEN] = "", down_after[MC_UID_STRLEN] = "";
-  if (i >= 2) memcpy(up_after, g.tiles[i - 2].uid, sizeof up_after);
-  if (i + 1 < g.count) memcpy(down_after, g.tiles[i + 1].uid, sizeof down_after);
-  BOOL first = i == 0, last = i + 1 >= g.count;
-  HMENU menu = CreatePopupMenu();
-  char seed[MC_UID_STRLEN];
-  radio_menu_append_album(menu, CMD_START_RADIO, g.lib, album, seed);
-  mc_album_group_list *groups = NULL;
-  HMENU add = add_to_album_group_menu(g.lib, CMD_GROUP_FIRST, CMD_NEW_GROUP, &groups);
-  if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_ALBUM_GROUP));
-  if (in_group) {
-    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING | (first ? MF_GRAYED : 0), CMD_MOVE_UP, mc_wstr_mnemonic(MC_STR_MOVE_UP));
-    AppendMenuW(menu, MF_STRING | (last ? MF_GRAYED : 0), CMD_MOVE_DOWN, mc_wstr_mnemonic(MC_STR_MOVE_DOWN));
-    AppendMenuW(menu, MF_STRING, CMD_REMOVE_FROM_GROUP, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP));
-  }
-  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_EDIT_ALBUM, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
-  remove_here_append_menu(menu, MC_PROFILE_ALBUM, album, CMD_REMOVE_HERE, CMD_SYNC_HERE);
-  AppendMenuW(menu, MF_STRING, CMD_DELETE_ALBUM, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
-  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);
-  DestroyMenu(menu); /* and the submenu */
-
-  HWND owner = GetAncestor(g.wnd, GA_ROOT);
-  BOOL changed = FALSE;
-  if (cmd == CMD_START_RADIO) playback_play_radio(seed);
-  if (cmd == CMD_EDIT_ALBUM) changed = edit_dialog_album(owner, g.lib, album);
-  if (cmd == CMD_DELETE_ALBUM) changed = delete_dialog(owner, g.lib, MC_DELETE_ALBUMS, album, title);
-  if (cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE)
-    changed = remove_here_command(owner, (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ALBUM, album, title);
-  free(title);
-  if (cmd >= CMD_GROUP_FIRST && groups && cmd - CMD_GROUP_FIRST < groups->count)
-    changed = add_to_album_group(owner, g.lib, album, groups->items[cmd - CMD_GROUP_FIRST].uid);
-  mc_album_group_list_free(groups);
-  if (cmd == CMD_NEW_GROUP) changed = add_to_album_group(owner, g.lib, album, NULL);
-  if (cmd == CMD_REMOVE_FROM_GROUP) {
-    changed = g.lib && mc_album_group_remove(g.lib, group, album) == MC_OK;
-    if (!changed)
-      MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_REMOVE_FAILED), mc_wstr(MC_STR_ALBUM_GROUP), MB_OK | MB_ICONERROR);
-  }
-  if (cmd == CMD_MOVE_UP || cmd == CMD_MOVE_DOWN) {
-    const char *after = cmd == CMD_MOVE_UP ? up_after : down_after;
-    changed = g.lib && mc_album_group_move(g.lib, group, album, after[0] ? after : NULL) == MC_OK;
-    if (!changed)
-      MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_MOVE_FAILED), mc_wstr(MC_STR_ALBUM_GROUP), MB_OK | MB_ICONERROR);
-  }
-  if (changed) notify_changed();
+  BOOL in_group = g.tiles_view == AGV_GROUP && !g.group_smart;
+  item_menu_options o = {.wnd = g.wnd, .lib = g.lib, .uid = g.tiles[i].uid, .name = g.tiles[i].title, .pt = pt,
+                         .group = in_group ? g.group_uid : NULL,
+                         .up_after = i >= 2 ? g.tiles[i - 2].uid : NULL,
+                         .down_after = i + 1 < g.count ? g.tiles[i + 1].uid : NULL,
+                         .first = i == 0, .last = i + 1 >= g.count};
+  if (item_menu_album(&o) == ITEM_MENU_CHANGED) notify_changed();
 }
 
 /* WM_CONTEXTMENU: a tile's menu, or the group's on its header. From the keyboard (lp -1),
@@ -1370,8 +1261,7 @@ static BOOL on_context_menu(LPARAM lp) {
     ScreenToClient(g.wnd, &client);
     i = tile_at(client.x, client.y);
     if (i < 0 && g.tiles_view == AGV_GROUP && client.y < g.top - g.scroll.pos) {
-      if (g.group_smart) show_smart_menu(g.group_uid, g.group_name, MC_SMART_ALBUMS, pt);
-      else show_group_menu(g.group_uid, g.group_name, pt);
+      show_list_menu(g.group_uid, g.group_name, FALSE, g.group_smart, pt);
       return TRUE;
     }
     if (i < 0 && lists) {
@@ -1381,9 +1271,8 @@ static BOOL on_context_menu(LPARAM lp) {
     if (i < 0) return FALSE;
   }
   if (lists && g.tiles[i].smart)
-    show_smart_menu(g.tiles[i].uid, g.tiles[i].title, g.tiles_view == AGV_PLAYLISTS ? MC_SMART_TRACKS : MC_SMART_ALBUMS,
-                    pt);
-  else if (g.tiles_view == AGV_GROUPS) show_group_menu(g.tiles[i].uid, g.tiles[i].title, pt);
+    show_list_menu(g.tiles[i].uid, g.tiles[i].title, g.tiles_view == AGV_PLAYLISTS, TRUE, pt);
+  else if (g.tiles_view == AGV_GROUPS) show_list_menu(g.tiles[i].uid, g.tiles[i].title, FALSE, FALSE, pt);
   else if (g.tiles_view != AGV_PLAYLISTS) show_album_menu(i, pt);
   else return FALSE;
   return TRUE;

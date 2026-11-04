@@ -634,6 +634,15 @@ static void playback_recents_changed(void *user) {
   recents_refresh(user);
 }
 
+/* A station that can't play, on its own: nothing else changes to show it. */
+static void playback_radio_failed(void *user) {
+  app *a = user;
+  AdwToast *toast = adw_toast_new("");
+  adw_toast_set_use_markup(toast, FALSE);
+  adw_toast_set_title(toast, mc_str(MC_STR_STATION_CANT_PLAY));
+  adw_toast_overlay_add_toast(a->toasts, toast);
+}
+
 static void on_previous(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -1852,6 +1861,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
 
   playback_init(a->win, playback_changed, a);
   playback_on_recents_changed(playback_recents_changed);
+  playback_on_radio_failed(playback_radio_failed);
   playback_set_library(a->lib, a->settings_dir);
   delete_dialog_init(before_delete);
   mc_settings *settings = NULL;
