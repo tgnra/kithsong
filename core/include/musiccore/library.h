@@ -120,6 +120,11 @@ mc_status mc_library_record_play(mc_library *lib, const char *track_uid);
 
 /* Adds a row, as this device's. MC_ERR_NOT_FOUND if the track has gone meanwhile. */
 mc_status mc_library_log_play(mc_library *lib, const mc_play_event *event);
+/* Whether logging event starts a station: it's a station's seed that really played, and
+ * mc_library_log_play() puts the station in the recents, so a frontend showing them reads them
+ * again. It's the row of a station's first track, so it comes when that ends rather than when
+ * it starts. */
+int mc_play_event_starts_station(const mc_play_event *event);
 
 typedef struct mc_play_log_item {
   char uid[MC_UID_STRLEN];
@@ -225,6 +230,11 @@ void mc_track_list_free(mc_track_list *list);
  * has nothing here yet can still be added to or synced. A frontend lists again whenever files come or go (an import,
  * sync bringing or removing files, a delete), as it does for any library change. */
 #define MC_LIST_PLAYABLE 1u
+/* MC_LIST_STATIONS is for recents only: it lists stations too (MC_RECENT_STATION). They're asked
+ * for because the kinds a frontend can open are a closed set to it: one that can't play a
+ * station just doesn't pass this, and they're left out before limit counts. With
+ * MC_LIST_PLAYABLE, a station whose seed has no file here is left out, as nothing can start it. */
+#define MC_LIST_STATIONS 2u
 
 typedef struct mc_playlist_info {
   char uid[MC_UID_STRLEN];
@@ -341,18 +351,21 @@ void mc_album_group_list_free(mc_album_group_list *list);
 mc_status mc_library_list_album_group_albums(mc_library *lib, const char *group_uid, mc_album_list **out);
 
 /* Recents: what was last opened, on any device. They're library data and sync with it; an
- * item has one entry everywhere, which the newest open wins. */
+ * item has one entry everywhere, which the newest open wins. A kind added here is a value older
+ * apps will meet in their recents, and leave out: see Recents in docs/schema.md. */
 
 typedef enum mc_recent_kind {
   MC_RECENT_ALBUM,
   MC_RECENT_ARTIST,
   MC_RECENT_PLAYLIST,   /* a playlist or a smart playlist */
-  MC_RECENT_ALBUM_GROUP /* an album group or a smart album group */
+  MC_RECENT_ALBUM_GROUP, /* an album group or a smart album group */
+  MC_RECENT_STATION      /* a radio station, by its seed track's uid: see MC_LIST_STATIONS */
 } mc_recent_kind;
 
 /* Notes that item uid, of kind, was opened now, putting it first in the recents (on every
  * device, once it syncs). What counts as opening (say, starting it playing) is the caller's
- * call. MC_ERR_NOT_FOUND if there's no such item of that kind. */
+ * call. MC_ERR_NOT_FOUND if there's no such item of that kind. mc_library_log_play() does this
+ * for stations. */
 mc_status mc_library_record_opened(mc_library *lib, mc_recent_kind kind, const char *uid);
 /* Takes item uid out of the recents until it's next opened. MC_ERR_NOT_FOUND if it isn't in
  * them. */
@@ -362,11 +375,14 @@ mc_status mc_library_clear_recents(mc_library *lib);
 
 typedef struct mc_recent_info {
   mc_recent_kind kind;
-  char uid[MC_UID_STRLEN]; /* the album, artist, playlist or album group */
+  char uid[MC_UID_STRLEN]; /* the album, artist, playlist, album group or a station's seed track */
   int64_t opened_ms;       /* when it was last opened (Unix ms) */
-  char *name;              /* its title or name */
+  char *name;              /* its title or name; a station's is after its seed's artist */
   char *artist;            /* an album's artist; NULL for other kinds, or if unknown */
   int is_smart;            /* a smart playlist or smart album group */
+  char *seed_title;        /* a station's seed track's title; NULL for other kinds */
+  char *sub;               /* the line that tells a station from others of its name, as they
+                            * can share an artist; NULL for other kinds */
 } mc_recent_info;
 
 typedef struct mc_recent_list {
@@ -378,7 +394,8 @@ typedef struct mc_recent_list {
  * that no longer exist are left out, and with MC_LIST_PLAYABLE in flags so are playlists,
  * album groups and smart lists that are empty only here (as mc_library_list_playlists(),
  * mc_library_list_album_groups() and mc_library_list_smart() leave out; albums and artists
- * are kept). Free with mc_recent_list_free(). */
+ * are kept). Stations are left out unless flags has MC_LIST_STATIONS. Free with
+ * mc_recent_list_free(). */
 mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc_recent_list **out);
 void mc_recent_list_free(mc_recent_list *list);
 

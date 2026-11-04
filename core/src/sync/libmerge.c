@@ -924,6 +924,8 @@ static mc_status merge_recents(merge_ctx *x) {
       to = map_get(!strcmp(kind, "playlist") ? &x->playlists : &x->groups, uid);
       if (!to) to = map_get(&x->smart, uid);
       if (!to && !strncmp(uid, EXAMPLE_PREFIX, strlen(EXAMPLE_PREFIX))) to = uid;
+    } else if (!strcmp(kind, "station")) {
+      to = map_get(&x->tracks, uid); /* a station's uid is its seed track's */
     }
     if (!to) continue;
     sqlite3_reset(ins);

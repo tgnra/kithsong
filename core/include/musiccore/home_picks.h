@@ -14,7 +14,7 @@ extern "C" {
 
 typedef enum mc_home_row_id {
   MC_HOME_ROW_RADIO,              /* mc_radio_stations_list(): none until enough is analysed */
-  MC_HOME_ROW_RECENTS,            /* mc_library_list_recents(), as the sidebar's */
+  MC_HOME_ROW_RECENTS,            /* mc_library_list_recents(), as the sidebar's, stations too */
   MC_HOME_ROW_PLAYED_LATELY,      /* albums and playlists on repeat lately */
   MC_HOME_ROW_NOT_PLAYED_LATELY,  /* played before, but not lately */
   MC_HOME_ROW_RANDOM,             /* neither of those two, new each time the app starts */
