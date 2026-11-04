@@ -17,6 +17,9 @@
  *   | 12 albums, 2 artists, 1 playlist selected                        |
  *   +------------------------------------------------------------------+
  *
+ * Above it all, on every device's page, a banner says so while the firewall is blocking
+ * other devices (firewall_banner.h).
+ *
  * While a session with the device runs, Sync now reads Cancel sync, and ends it (see
  * mc_sync_cancel()). This PC's own page has Sync now (with every member) and Leave group...
  * instead. An
@@ -31,7 +34,8 @@
  * Enter or when it loses the focus.
  *
  * Like the settings page, its controls are loose children of the main window, which routes
- * messages to it. Control ids are 400-449. */
+ * messages to it. Control ids are 400-449. device_view_theme_changed() is for what the
+ * main window's theme_apply_controls() can't reach. */
 #ifndef KITHSONG_DEVICE_VIEW_H
 #define KITHSONG_DEVICE_VIEW_H
 
@@ -63,6 +67,8 @@ void device_view_refresh(void);
 /* Updates the status and progress lines from a sync event about this device; others are
  * ignored. */
 void device_view_on_sync_event(const sync_event *ev);
+
+void device_view_theme_changed(void);
 
 /* Each returns TRUE if the message belonged to the device view. */
 BOOL device_view_on_command(int id, int code);
