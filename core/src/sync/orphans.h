@@ -24,6 +24,10 @@
  * file copied in with an old modified time still counts as new. */
 #define MC_ORPHANS_GRACE_MS ((int64_t)60 * 60 * 1000)
 
+/* In the config folder: every file removed, and what the latest sweep found (see orphans.c). */
+#define MC_ORPHANS_LOG "orphans-removed.log"
+#define MC_ORPHANS_FOUND "orphans-found.txt"
+
 typedef struct mc_orphans_args {
   mc_library *lib;
   const char *config_dir; /* this device's: never swept should it be inside the library */

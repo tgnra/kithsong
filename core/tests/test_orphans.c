@@ -332,6 +332,86 @@ static void test_snapshot(void) {
   fx_close(&f);
 }
 
+/* A library whose rows mostly have no file, as a stress library's or a half-synced one's: a row
+ * needn't have a file, and only files found count towards the guard. */
+static void test_rows_without_files(void) {
+  fx f;
+  mc_orphans_result r;
+  fx_open(&f);
+  for (int i = 0; i < 500; i++) {
+    char rel[64];
+    snprintf(rel, sizeof rel, "Nowhere/Album %d/01 Song.flac", i);
+    row_of(&f, rel);
+  }
+  put(&f, "stray.txt");
+  CHECK(sweep(&f, &r) == MC_OK && r.known == 10 && r.removed == 1);
+  /* Many rows don't buy a sweep the right to more than the files it can see. */
+  for (int i = 0; i < 11; i++) {
+    char rel[32];
+    snprintf(rel, sizeof rel, "stray %d.txt", i);
+    put(&f, rel);
+  }
+  CHECK(sweep(&f, &r) == MC_ERR_INVALID_ARG && there(&f, "stray 0.txt"));
+  /* One marked as a stress library is never swept. */
+  meta(&f, "stress_library", "large");
+  char *one = mc_library_abspath(f.lib, "stray 0.txt");
+  CHECK(mc_remove(one) == MC_OK);
+  free(one);
+  CHECK(sweep(&f, &r) == MC_ERR_LOCKED && there(&f, "stray 1.txt"));
+  /* After an import there too, and it has no sync to give it a config folder anyway. */
+  const char *away[] = {"somewhere/else"};
+  mc_folder_note_config(f.dir, f.config);
+  mc_orphans_after_import(f.lib, away, 1, 0, NULL, NULL);
+  CHECK(there(&f, "stray 1.txt"));
+  mc_folder_note_config(f.dir, NULL);
+  mc_orphans_after_import(f.lib, away, 1, 0, NULL, NULL);
+  CHECK(there(&f, "stray 1.txt"));
+  fx_close(&f);
+}
+
+static int file_has(const char *dir, const char *name, const char *text) {
+  char path[1400], buf[8192] = "";
+  snprintf(path, sizeof path, "%s/%s", dir, name);
+  FILE *f = mc_fopen(path, "rb");
+  if (!f) return 0;
+  buf[fread(buf, 1, sizeof buf - 1, f)] = '\0';
+  fclose(f);
+  return strstr(buf, text) != NULL;
+}
+
+/* What's kept of a sweep, past the end of the app. */
+static void test_records(void) {
+  fx f;
+  mc_orphans_result r;
+  fx_open(&f);
+  put(&f, "stray.txt");
+  put(&f, "Stray/other.mp3");
+  /* An archive's sweep removes nothing, but says what it would have. */
+  mc_orphans_args a = {f.lib, f.config, 1, 0, NULL, NULL};
+  CHECK(mc_orphans_sweep(&a, &r) == MC_OK && r.orphans == 2);
+  CHECK(file_has(f.config, MC_ORPHANS_FOUND, "reported only, nothing removed"));
+  CHECK(file_has(f.config, MC_ORPHANS_FOUND, "stray.txt") && file_has(f.config, MC_ORPHANS_FOUND, "Stray/other.mp3"));
+  CHECK(!file_has(f.config, MC_ORPHANS_LOG, "stray.txt"));
+  /* A real one logs each with where it was, and the list says so. */
+  CHECK(sweep(&f, &r) == MC_OK && r.removed == 2);
+  CHECK(file_has(f.config, MC_ORPHANS_FOUND, "being removed"));
+  CHECK(file_has(f.config, MC_ORPHANS_LOG, "moved to the trash"));
+  CHECK(file_has(f.config, MC_ORPHANS_LOG, "stray.txt") && file_has(f.config, MC_ORPHANS_LOG, "other.mp3"));
+  /* The next starts the list afresh and adds to the log. */
+  CHECK(sweep(&f, &r) == MC_OK);
+  CHECK(!file_has(f.config, MC_ORPHANS_FOUND, "stray.txt") && file_has(f.config, MC_ORPHANS_LOG, "stray.txt"));
+  /* A refusal lists them too, for reading before anything goes. */
+  for (int i = 0; i < 11; i++) {
+    char rel[32];
+    snprintf(rel, sizeof rel, "unimported %d.mp3", i);
+    put(&f, rel);
+  }
+  CHECK(sweep(&f, &r) == MC_ERR_INVALID_ARG);
+  CHECK(file_has(f.config, MC_ORPHANS_FOUND, "refused, nothing removed"));
+  CHECK(file_has(f.config, MC_ORPHANS_FOUND, "unimported 10.mp3"));
+  fx_close(&f);
+}
+
 /* --- Path matching --- */
 
 static void test_paths(void) {
@@ -831,6 +911,8 @@ int main(int argc, char **argv) {
   test_keys();
   test_categories();
   test_snapshot();
+  test_rows_without_files();
+  test_records();
   test_paths();
   test_refusals();
   test_bounds();

@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -263,13 +264,19 @@ static mc_status read_paths(sqlite3 *db, known *k, strs *list) {
   return st;
 }
 
-/* Whether an edit's swap (it may need its files put back) or a merge is unfinished, under the
- * caller's read transaction: the rows don't say where things are, or mean to. -1 on an error. */
+/* A made-up library for profiling, most of whose rows have no file: it says nothing of what a
+ * folder should hold. */
+#define STRESS_META "stress_library"
+
+/* Whether an edit's swap (it may need its files put back) or a merge is unfinished, or this is a
+ * stress library, under the caller's read transaction: the rows don't say where things are, or
+ * mean to. -1 on an error. */
 static int unsettled(sqlite3 *db) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(db,
                          "SELECT 1 FROM meta WHERE key IN ('" MC_EDIT_SWAP_META "', '" MC_LIBMERGE_META
-                         "', '" MC_LIBMERGE_WAIT_META "') AND coalesce(value, '') <> ''",
+                         "', '" MC_LIBMERGE_WAIT_META "', '" STRESS_META "')"
+                         " AND coalesce(value, '') <> ''",
                          -1, &stmt, NULL) != SQLITE_OK)
     return -1;
   int rc = sqlite3_step(stmt);
@@ -290,6 +297,62 @@ static mc_status known_snapshot(mc_library *lib, const char *name, known *k) {
   sqlite3_close_v2(db);
   free(abs);
   return st;
+}
+
+/* --- What's kept of it ---
+ * stderr is gone with a desktop app's window and never reaches the user, and a sweep's first run
+ * on an old install can take a lot. So two files in the config folder: orphans-removed.log, a
+ * line for each file removed, for finding them in the Recycle Bin (on Android, for knowing what
+ * was lost); and orphans-found.txt, written afresh by each sweep that got as far as judging,
+ * whether it then removed them, only reported them or refused, so what a sweep would take can
+ * be read before it does. */
+
+/* Past this the log becomes orphans-removed.log.old, replacing the one before. */
+#define RECORD_MAX_BYTES ((int64_t)1 << 20)
+
+static char *record_path(const char *config_dir, const char *name) {
+  size_t n = strlen(config_dir) + strlen(name) + 2;
+  char *path = malloc(n);
+  if (path) snprintf(path, n, "%s%c%s", config_dir, MC_PATH_SEP, name);
+  return path;
+}
+
+static void stamp(char out[24]) {
+  time_t now = (time_t)(mc_wall_ms() / 1000);
+  struct tm *t = gmtime(&now);
+  if (!t || !strftime(out, 24, "%Y-%m-%dT%H:%M:%SZ", t)) snprintf(out, 24, "?");
+}
+
+static void record_removal(const char *config_dir, const char *how, const char *abs) {
+  char *path = record_path(config_dir, MC_ORPHANS_LOG), *old = record_path(config_dir, MC_ORPHANS_LOG ".old");
+  int64_t size = 0, mtime = 0;
+  if (path && old && mc_file_info(path, &size, &mtime) == MC_OK && size > RECORD_MAX_BYTES)
+    mc_rename(path, old, 1);
+  FILE *f = path ? mc_fopen(path, "ab") : NULL;
+  if (f) {
+    char when[24];
+    stamp(when);
+    fprintf(f, "%s\t%s\t%s\n", when, how, abs);
+    fclose(f);
+  }
+  free(path);
+  free(old);
+}
+
+static void record_found(const char *config_dir, const char *dir, const char *verdict, const scan *s,
+                         const int *orphan, const mc_orphans_result *r) {
+  char *path = record_path(config_dir, MC_ORPHANS_FOUND);
+  FILE *f = path ? mc_fopen(path, "wb") : NULL;
+  if (f) {
+    char when[24];
+    stamp(when);
+    fprintf(f, "%s\t%s\n%s: %d known, %d orphans, %d too new\n", when, dir, verdict, r->known,
+            r->orphans, r->young);
+    for (int i = 0; i < s->count; i++)
+      if (orphan[i]) fprintf(f, "%s\n", s->files[i].rel);
+    fclose(f);
+  }
+  free(path);
 }
 
 /* --- Removing --- */
@@ -336,7 +399,7 @@ static mc_status to_trash(const char *abs) {
 }
 
 /* 1 if f went, 0 if it's still there and that's fine, -1 if it couldn't be removed. */
-static int remove_one(mc_library *lib, const found *f) {
+static int remove_one(mc_library *lib, const char *config_dir, const found *f) {
   char *abs = mc_transfer_deletable_path(lib, f->rel);
   if (!abs) return -1;
   int64_t size = 0, mtime = 0;
@@ -344,7 +407,9 @@ static int remove_one(mc_library *lib, const found *f) {
   if (row_names(lib, f->rel) || mc_file_info(abs, &size, &mtime) != MC_OK || mtime != f->mtime_ms) {
     say("left %s: it changed during the sweep", f->rel);
   } else if ((mc_orphans_permanent ? mc_remove(abs) : to_trash(abs)) == MC_OK) {
-    say("%s %s", mc_orphans_permanent ? "deleted" : "moved to the trash:", f->rel);
+    const char *how = mc_orphans_permanent ? "deleted" : "moved to the trash";
+    say("%s: %s", how, f->rel);
+    record_removal(config_dir, how, abs);
     prune_up(lib, abs);
     went = 1;
   } else {
@@ -412,7 +477,7 @@ static mc_status sweep_watched(const mc_orphans_args *a, mc_folder_watch *w, mc_
   }
   st = read_known(lib, &s, &k);
   if (st != MC_OK) {
-    refuse(st, st == MC_ERR_LOCKED ? "an edit or a merge is unfinished" : "the library couldn't be read", dir);
+    refuse(st, st == MC_ERR_LOCKED ? "an edit or a merge is unfinished, or it's a stress library" : "the library couldn't be read", dir);
     goto done;
   }
   if (!k.rows.count) {
@@ -433,9 +498,15 @@ static mc_status sweep_watched(const mc_orphans_args *a, mc_folder_watch *w, mc_
     if (age >= cutoff) r->young++;
     else orphan[i] = 1, r->orphans++;
   }
+  int too_many = (int64_t)r->orphans > (int64_t)r->known * MC_ORPHANS_MAX_PER_KNOWN;
+  record_found(a->config_dir, dir,
+               !r->known || too_many ? "refused, nothing removed"
+               : a->report_only      ? "reported only, nothing removed"
+                                     : "being removed",
+               &s, orphan, r);
   if (!r->known) {
     st = refuse(MC_ERR_INVALID_ARG, "none of the library's files are in the folder", dir);
-  } else if ((int64_t)r->orphans > (int64_t)r->known * MC_ORPHANS_MAX_PER_KNOWN) {
+  } else if (too_many) {
     say("%d orphans to %d known files", r->orphans, r->known);
     st = refuse(MC_ERR_INVALID_ARG, "orphans outnumber known files", dir);
   } else {
@@ -448,7 +519,7 @@ static mc_status sweep_watched(const mc_orphans_args *a, mc_folder_watch *w, mc_
       } else if (!mc_folder_watch_clear(w)) {
         st = refuse(MC_ERR_LOCKED, "something started working in the folder; stopped", dir);
       } else {
-        int went = remove_one(lib, &s.files[i]);
+        int went = remove_one(lib, a->config_dir, &s.files[i]);
         if (went > 0) r->removed++;
         else if (went < 0) r->failed++;
       }

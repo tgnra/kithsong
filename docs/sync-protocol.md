@@ -787,7 +787,9 @@ the plaintext limit.
     on every platform, so a false match keeps a file where a false mismatch would lose one.
     Orphans go to the Recycle Bin or trash and stay where they are if it won't take them;
     on Android, whose library is the app's private folder and has no trash, they're
-    deleted. Folders left empty go too, never the library folder.
+    deleted. Folders left empty go too, never the library folder. The config folder keeps
+    `orphans-removed.log`, a line for each file removed, and `orphans-found.txt`, what the
+    latest sweep found, written whether it removed them, only reported them or refused.
   - A sweep also runs after an import that went all the way: every item settled, at least
     one imported, none failed, not cancelled. It doesn't run while an item waits in review,
     for its other discs or for MusicBrainz, nor if a source overlaps the library folder, nor
