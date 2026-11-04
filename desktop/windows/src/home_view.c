@@ -11,13 +11,13 @@
 
 #include "canvas.h"
 #include "cover.h"
-#include "home_picks.h"
+#include "musiccore/home_picks.h"
 #include "scroller.h"
 #include "theme.h"
 #include "wstr.h"
 
 #define WM_APP_THUMB (WM_APP + 20) /* lParam: thumb_result *, from the loader thread */
-#define WM_APP_PICKS (WM_APP + 21) /* lParam: home_picks *, from the loader thread */
+#define WM_APP_PICKS (WM_APP + 21) /* lParam: mc_home_picks *, from the loader thread */
 
 /* Metrics at 96 DPI; the tiles are the album grid's and an artist page's. */
 enum {
@@ -49,6 +49,14 @@ typedef struct hit {
   part_id part;
   int row, index; /* row: any but PART_ACTION and PART_NONE outside a row, -1 there */
 } hit;
+
+/* An mc_home_pick in wide strings, for drawing. */
+typedef struct home_pick {
+  mc_recent_kind kind;
+  BOOL station, smart;
+  char uid[MC_UID_STRLEN];
+  wchar_t *title, *sub, *cover_dir;
+} home_pick;
 
 typedef struct tile {
   home_pick pick;
@@ -87,7 +95,7 @@ static struct {
   BOOL dirty;  /* reload when next painted */
   BOOL loaded; /* the rows have been read at least once */
   unsigned seed;
-  home_row rows[HOME_ROW_COUNT];
+  home_row rows[MC_HOME_ROW_COUNT];
   BOOL has_music, has_plays;
   UINT gen; /* bumped on every reload, so late thumbnails for old tiles are dropped */
   HFONT font, title_font, welcome_font, glyph_font, icon_font, badge_font;
@@ -170,11 +178,11 @@ static DWORD WINAPI loader_main(void *arg) {
       char *dir = g.lib_dir ? _strdup(g.lib_dir) : NULL;
       unsigned seed = g.seed;
       LeaveCriticalSection(&g.lock);
-      home_picks *picks = malloc(sizeof *picks);
+      mc_home_picks *picks = malloc(sizeof *picks);
       if (picks) {
-        home_picks_load(cover_art_library(&art, dir), seed, picks);
+        mc_home_picks_load(cover_art_library(&art, dir), seed, picks);
         if (!PostMessageW(g.wnd, WM_APP_PICKS, 0, (LPARAM)picks)) {
-          home_picks_free(picks);
+          mc_home_picks_free(picks);
           free(picks);
         }
       }
@@ -262,7 +270,7 @@ static void relayout(void) {
   g.title_h = font_height(g.title_font);
 
   int y = g.pad;
-  for (int i = 0; i < HOME_ROW_COUNT; i++) {
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
     home_row *r = &g.rows[i];
     r->pos = clamp_pos(r, r->pos);
     r->target = clamp_pos(r, r->target);
@@ -321,7 +329,7 @@ static hit hit_test(int x, int y) {
     h.part = PART_ACTION;
     return h;
   }
-  for (int i = 0; i < HOME_ROW_COUNT; i++) {
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
     const home_row *r = &g.rows[i];
     RECT band = row_rect(i);
     if (!r->count || !PtInRect(&band, pt)) continue;
@@ -390,7 +398,7 @@ static void request_thumbs(void) {
   for (int i = 0; i < g.queue_len; i++) free(g.queue[i].key);
   g.queue_len = 0;
   for (int pass = 0; pass < 2; pass++) {
-    for (int i = 0; i < HOME_ROW_COUNT; i++) {
+    for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
       const home_row *r = &g.rows[i];
       if (!r->count) continue;
       RECT band = row_rect(i);
@@ -416,7 +424,7 @@ static void free_thumb(tile *t) {
 }
 
 static void on_thumb(thumb_result *r) {
-  if (r->gen != g.gen || r->row < 0 || r->row >= HOME_ROW_COUNT || r->index < 0 || r->index >= g.rows[r->row].count) {
+  if (r->gen != g.gen || r->row < 0 || r->row >= MC_HOME_ROW_COUNT || r->index < 0 || r->index >= g.rows[r->row].count) {
     if (r->bmp) DeleteObject(r->bmp);
     free(r);
     return;
@@ -453,7 +461,7 @@ static void free_tile(tile *t) {
  * the covers. It's marked stale and decoded again, since the cover may have changed: a
  * playlist's picture does whenever a track that changes it comes or goes. */
 static void carry_thumb(tile *t) {
-  for (int i = 0; i < HOME_ROW_COUNT; i++) {
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
     for (int k = 0; k < g.rows[i].count; k++) {
       tile *old = &g.rows[i].tiles[k];
       if (!old->thumb || old->pick.kind != t->pick.kind || old->pick.station != t->pick.station ||
@@ -485,15 +493,23 @@ static void reload(void) {
   LeaveCriticalSection(&g.lock);
 }
 
+static home_pick wide_pick(const mc_home_pick *p) {
+  home_pick w = {.kind = p->kind, .station = p->station != 0, .smart = p->smart != 0};
+  memcpy(w.uid, p->uid, sizeof w.uid);
+  w.title = wstr_dup_from_utf8(p->title);
+  w.sub = wstr_dup_from_utf8(p->sub);
+  w.cover_dir = wstr_dup_from_utf8(p->cover_dir);
+  return w;
+}
+
 /* The loader has read the rows: they become tiles. */
-static void on_picks(home_picks *picks) {
-  tile *tiles[HOME_ROW_COUNT] = {0};
-  for (int i = 0; i < HOME_ROW_COUNT; i++) {
+static void on_picks(mc_home_picks *picks) {
+  tile *tiles[MC_HOME_ROW_COUNT] = {0};
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
     int n = picks->counts[i];
     tiles[i] = n ? calloc((size_t)n, sizeof **tiles) : NULL;
     for (int k = 0; tiles[i] && k < n; k++) {
-      tiles[i][k].pick = picks->rows[i][k];
-      memset(&picks->rows[i][k], 0, sizeof picks->rows[i][k]); /* the tile owns its strings now */
+      tiles[i][k].pick = wide_pick(&picks->rows[i][k]);
       carry_thumb(&tiles[i][k]);
     }
   }
@@ -505,17 +521,17 @@ static void on_picks(home_picks *picks) {
   g.queue_len = 0;
   LeaveCriticalSection(&g.lock);
 
-  for (int i = 0; i < HOME_ROW_COUNT; i++) {
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
     home_row *r = &g.rows[i];
     for (int k = 0; k < r->count; k++) free_tile(&r->tiles[k]);
     free(r->tiles);
     r->tiles = tiles[i];
     r->count = tiles[i] ? picks->counts[i] : 0;
   }
-  g.has_music = picks->has_music;
-  g.has_plays = picks->has_plays;
+  g.has_music = picks->has_music != 0;
+  g.has_plays = picks->has_plays != 0;
   g.loaded = TRUE;
-  home_picks_free(picks);
+  mc_home_picks_free(picks);
   free(picks);
 
   g.hot.part = PART_NONE;
@@ -576,7 +592,7 @@ static void row_animate(int row, int pos) {
 /* One frame of every row that's on its way, eased as the scroller eases the page. */
 static void rows_tick(void) {
   BOOL moving = FALSE;
-  for (int i = 0; i < HOME_ROW_COUNT; i++) {
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
     home_row *r = &g.rows[i];
     if (r->pos == r->target) continue;
     int diff = r->target - r->pos, step = diff / 4;
@@ -771,7 +787,7 @@ static void on_mouse_up(int x, int y) {
 /* --- The keyboard --- */
 
 static int first_row(void) {
-  for (int i = 0; i < HOME_ROW_COUNT; i++)
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++)
     if (g.rows[i].count) return i;
   return -1;
 }
@@ -822,7 +838,7 @@ static BOOL on_key(WPARAM key) {
     if (index >= 0 && index < g.rows[row].count) move_focus(row, index);
   } else {
     int step = key == VK_UP ? -1 : 1;
-    for (int i = row + step; i >= 0 && i < HOME_ROW_COUNT; i += step) {
+    for (int i = row + step; i >= 0 && i < MC_HOME_ROW_COUNT; i += step) {
       if (!g.rows[i].count) continue;
       move_focus(i, first_shown(i));
       break;
@@ -887,16 +903,6 @@ static void paint_tile(canvas *c, int row, int index) {
   DrawTextW(c->dc, t->pick.sub ? t->pick.sub : L"", -1, &line, one_line);
 }
 
-static const wchar_t *row_title(int row) {
-  switch (row) {
-    case HOME_ROW_RADIO: return mc_wstr(MC_STR_WINDOWS_HOME_ROW_RADIO);
-    case HOME_ROW_RECENTS: return mc_wstr(MC_STR_SECTION_RECENTS);
-    case HOME_ROW_PLAYED_LATELY: return mc_wstr(MC_STR_WINDOWS_HOME_ROW_PLAYED_LATELY);
-    case HOME_ROW_NOT_PLAYED_LATELY: return mc_wstr(MC_STR_WINDOWS_HOME_ROW_NOT_PLAYED_LATELY);
-    default: return mc_wstr(MC_STR_WINDOWS_HOME_ROW_RANDOM);
-  }
-}
-
 static void paint_row(canvas *c, int row, const RECT *dirty) {
   const home_row *r = &g.rows[row];
   RECT band = row_rect(row), isect;
@@ -905,7 +911,7 @@ static void paint_row(canvas *c, int row, const RECT *dirty) {
   RECT title = {g.pad, band.top, g.client_w - g.pad, band.top + g.title_h};
   HGDIOBJ f = SelectObject(c->dc, g.title_font ? g.title_font : g.font);
   SetTextColor(c->dc, theme.text);
-  DrawTextW(c->dc, row_title(row), -1, &title, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+  DrawTextW(c->dc, mc_wstr(mc_home_row_title((mc_home_row_id)row)), -1, &title, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
   SelectObject(c->dc, f);
 
   int first = (r->pos - g.pad - scale(HOVER_PAD)) / pitch(), last = (r->pos + g.client_w) / pitch();
@@ -936,8 +942,8 @@ static void paint_welcome(canvas *c) {
   wchar_t title[128] = L"";
   const wchar_t *text = NULL;
   if (g.lib) {
-    mc_wformat(title, 128, mc_str(MC_STR_WINDOWS_HOME_WELCOME_TITLE), MC_S(mc_str(MC_STR_APP_NAME)));
-    text = mc_wstr(MC_STR_WINDOWS_HOME_WELCOME_TEXT);
+    mc_wformat(title, 128, mc_str(MC_STR_HOME_WELCOME_TITLE), MC_S(mc_str(MC_STR_APP_NAME)));
+    text = mc_wstr(MC_STR_HOME_WELCOME_TEXT);
   } else {
     wcscpy(title, mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
   }
@@ -1002,11 +1008,11 @@ static void paint(HDC dc, const RECT *dirty) {
     paint_welcome(c);
   } else {
     SetRectEmpty(&g.action_rc);
-    for (int i = 0; i < HOME_ROW_COUNT; i++) paint_row(c, i, dirty);
+    for (int i = 0; i < MC_HOME_ROW_COUNT; i++) paint_row(c, i, dirty);
     if (g.hint_top) {
       RECT hint = {g.pad, g.hint_top - g.scroll.pos, g.client_w - g.pad, g.hint_top - g.scroll.pos + g.text_h};
       SetTextColor(c->dc, theme.text3);
-      DrawTextW(c->dc, mc_wstr(MC_STR_WINDOWS_HOME_NO_HISTORY), -1, &hint, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+      DrawTextW(c->dc, mc_wstr(MC_STR_HOME_NO_HISTORY), -1, &hint, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
   }
   SelectObject(c->dc, old_font);
@@ -1124,7 +1130,7 @@ static LRESULT CALLBACK home_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       on_thumb((thumb_result *)lp);
       return 0;
     case WM_APP_PICKS:
-      on_picks((home_picks *)lp);
+      on_picks((mc_home_picks *)lp);
       return 0;
     case WM_DESTROY:
       EnterCriticalSection(&g.lock);
@@ -1135,7 +1141,7 @@ static LRESULT CALLBACK home_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       CloseHandle(g.thread);
       for (int i = 0; i < g.queue_len; i++) free(g.queue[i].key);
       free(g.queue);
-      for (int i = 0; i < HOME_ROW_COUNT; i++) {
+      for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
         for (int k = 0; k < g.rows[i].count; k++) free_tile(&g.rows[i].tiles[k]);
         free(g.rows[i].tiles);
       }

@@ -446,6 +446,17 @@ nearest neighbours, for a person to judge.
 calls, and refuses a library of an older schema without `--migrate`, as an older app can't open
 one that's been migrated.
 
+## Stats
+
+`mc_library_read_stats()` (`musiccore/library.h`) adds up what's above with one read query:
+nothing is stored for it, so there's nothing to keep up to date or to sync. Tracks, albums,
+singles, artists, genres and playing time come twice, for the whole library and for what has a
+file on this device, as a device needn't hold all of it. Albums, singles and artists are counted
+as the listings have them, so the numbers match what a frontend shows. Size on disk is the sum of
+`files.size_bytes`, a track's transcodes included; plays come from `track_plays`, and time
+listened from `play_events`, so it starts at v18 and is an undercount for a library older than
+that.
+
 ## Album groups
 
 An album group is a named, ordered list of albums: a playlist whose entries are albums

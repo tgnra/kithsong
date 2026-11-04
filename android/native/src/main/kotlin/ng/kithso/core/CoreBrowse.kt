@@ -123,11 +123,49 @@ fun CoreLibrary.search(query: String, limitPerKind: Int): List<SearchHit> =
 /** Starts building the search index in the background if it's out of date. */
 fun CoreLibrary.searchPrepare() = CoreBrowse.nativeSearchPrepare(handle)
 
+/** mc_library_tally: numbers about some of the library's music. */
+data class LibraryTally(
+    val tracks: Long = 0,
+    val albums: Long = 0,
+    val singles: Long = 0,
+    val artists: Long = 0,
+    val genres: Long = 0,
+    val durationMs: Long = 0,
+)
+
+/**
+ * mc_library_stats. [all] is the whole library and [here] what has a file on this device;
+ * [files] and [sizeBytes] are this device's. The lists are as saved, smart ones apart; plays and
+ * time listened are every device's.
+ */
+data class LibraryStats(
+    val all: LibraryTally = LibraryTally(),
+    val here: LibraryTally = LibraryTally(),
+    val files: Long = 0,
+    val sizeBytes: Long = 0,
+    val playlists: Long = 0,
+    val smartPlaylists: Long = 0,
+    val albumGroups: Long = 0,
+    val smartAlbumGroups: Long = 0,
+    val plays: Long = 0,
+    val tracksPlayed: Long = 0,
+    val listenedMs: Long = 0,
+)
+
+/** Numbers about the library (mc_library_read_stats). Call it off the main thread. */
+fun CoreLibrary.stats(): LibraryStats {
+    val n = CoreBrowse.nativeStats(handle)
+    fun tally(at: Int) = LibraryTally(n[at], n[at + 1], n[at + 2], n[at + 3], n[at + 4], n[at + 5])
+    return LibraryStats(tally(0), tally(6), n[12], n[13], n[14], n[15], n[16], n[17], n[18], n[19], n[20])
+}
+
 /** Bindings in android/native/src/main/cpp/jni_browse.c. */
 internal object CoreBrowse {
     init {
         System.loadLibrary("kithsong_jni")
     }
+
+    @JvmStatic external fun nativeStats(handle: Long): LongArray
 
     // MC_LIST_PLAYABLE
     const val LIST_PLAYABLE = 1

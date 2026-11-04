@@ -28,6 +28,7 @@ add_executable(kithsong
   src/album_groups.c
   src/album_group_dialogs.c
   src/artist_view.c
+  src/home_view.c
   src/delete_dialog.c
   src/remove_here.c
   src/volume_button.c

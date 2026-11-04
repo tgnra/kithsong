@@ -6,6 +6,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
@@ -255,6 +256,22 @@ internal fun Modifier.trackSwipe(swipe: TrackSwipeState): Modifier = this
             swipe.release(velocity.calculateVelocity().x)
         }
     }
+
+/**
+ * A drag that's more up and down than across ends any press under this element, as it would if
+ * something took it. For an element with a [trackSwipe] and nothing after up and down drags;
+ * without this a slow one would still be a press, and held long enough a long press. Goes before
+ * [trackSwipe] in the chain, so it only sees what the swipe has left.
+ */
+internal fun Modifier.verticalDragEndsPress(): Modifier = pointerInput(Unit) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        awaitVerticalTouchSlopOrCancellation(down.id) { change, _ ->
+            val moved = change.position - down.position
+            if (abs(moved.y) > abs(moved.x)) change.consume()
+        }
+    }
+}
 
 /**
  * Shows [content] for the current track, moved by [swipe], and the track coming in beside it,

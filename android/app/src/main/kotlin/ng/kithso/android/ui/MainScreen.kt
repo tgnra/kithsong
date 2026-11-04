@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -61,6 +62,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -241,8 +243,8 @@ private val AlbumLabelsHeight = 58.dp
  * The main screen: one lazy list of a header and the library's sections, over a background
  * coloured from the art on screen. [bottomPadding] keeps the last items clear of the mini
  * player and navigation bar. [banner], if any, goes under the header: how an import is going.
- * The header's import button and the empty library's open [importPickers], unless an import
- * is [importRunning]. [onSearch] is the header's search button, and pulling the list down
+ * The header's menu and the empty library's button open [importPickers], unless an import
+ * is [importRunning]. [onSearch] is the header's menu's Search, and pulling the list down
  * from its top (see [pullToSearch]). With [onNewList], the Playlists and Album groups headings
  * have a + for a new playlist or (with true) album group.
  */
@@ -254,6 +256,7 @@ fun MainScreen(
     onSearch: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
+    onStats: () -> Unit,
     importPickers: ImportPickers,
     importRunning: Boolean,
     banner: (@Composable (Modifier) -> Unit)?,
@@ -268,7 +271,7 @@ fun MainScreen(
     onArtistMenu: (Artist) -> Unit = {},
     onAlbumGroupMenu: (AlbumGroup) -> Unit = {},
     onNewList: ((isAlbums: Boolean) -> Unit)? = null,
-    // A red dot on the sync button: deletes wait in the recycle bin while a member is online.
+    // A red dot on the header's menu and its Sync: deletes wait in the recycle bin while a member is online.
     syncDot: Boolean = false,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -312,7 +315,7 @@ fun MainScreen(
         val other = stringResource(R.string.fast_scroll_other)
         val titles = Section.entries.associateWith { stringResource(it.title) }
         val scrollEntries = remember(items, titles, other) { fastScrollEntries(items, titles, other) }
-        // Pulling down from the top opens search, as the header's button does.
+        // Pulling down from the top opens search, as the header's menu does.
         val pull = rememberPullToSearch(onSearch)
 
         PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
@@ -331,7 +334,7 @@ fun MainScreen(
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {
-                    MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning, syncDot)
+                    MainItem.Header -> Header(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
                     MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onSync, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(
@@ -401,12 +404,13 @@ fun MainScreen(
     }
 }
 
-/** The wordmark, with import, search, sync and settings. It scrolls away with the list. */
+/** The wordmark and the menu. It scrolls away with the list. */
 @Composable
 private fun Header(
     onSearch: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
+    onStats: () -> Unit,
     importPickers: ImportPickers,
     importRunning: Boolean,
     syncDot: Boolean,
@@ -427,15 +431,114 @@ private fun Header(
                 modifier = Modifier.offset(x = (-4).dp).semantics { heading() },
             )
         }
-        ImportButton(importRunning, importPickers)
-        IconButton(onClick = onSearch) { Icon(Icons.Search, contentDescription = stringResource(R.string.search)) }
-        IconButton(onClick = onSync) {
+        HeaderMenu(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
+    }
+}
+
+/**
+ * The header's menu. [syncDot] shows on the button, to be seen with the menu closed, and on Sync
+ * inside it. Import's choices take the menu's place, with a way back. While an import runs,
+ * Import has a spinner and says so instead of offering choices it couldn't take, as the card
+ * under the header shows how it's going.
+ */
+@Composable
+private fun HeaderMenu(
+    onSearch: () -> Unit,
+    onSync: () -> Unit,
+    onSettings: () -> Unit,
+    onStats: () -> Unit,
+    importPickers: ImportPickers,
+    importRunning: Boolean,
+    syncDot: Boolean,
+) {
+    var open by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    val pick: (() -> Unit) -> () -> Unit = { action ->
+        {
+            open = false
+            action()
+        }
+    }
+    Box {
+        IconButton(
+            onClick = {
+                // Here rather than on closing, or the rows would change as the menu fades out.
+                importing = false
+                open = true
+            },
+        ) {
             BadgedBox(badge = { if (syncDot) Badge() }) {
-                Icon(Icons.Sync, contentDescription = stringResource(if (syncDot) R.string.sync_bin_waiting else R.string.sync))
+                Icon(
+                    Icons.MoreHoriz,
+                    contentDescription = stringResource(if (syncDot) R.string.main_menu_sync_waiting else R.string.main_menu),
+                )
             }
         }
-        IconButton(onClick = onSettings) { Icon(Icons.Settings, contentDescription = stringResource(R.string.settings)) }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            if (importing) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.back)) },
+                    leadingIcon = { Icon(Icons.ArrowBack, contentDescription = null) },
+                    onClick = { importing = false },
+                )
+                ImportChoices(importRunning, importPickers, onBusy = { busy = true }, onDismiss = { open = false })
+            } else {
+                val runningText = stringResource(R.string.import_running_title)
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            stringResource(R.string.import_music),
+                            Modifier.semantics { if (importRunning) contentDescription = runningText },
+                        )
+                    },
+                    leadingIcon = { Icon(Icons.Import, contentDescription = null) },
+                    trailingIcon = if (importRunning) {
+                        { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        if (importRunning) {
+                            open = false
+                            busy = true
+                        } else {
+                            importing = true
+                        }
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.search)) },
+                    leadingIcon = { Icon(Icons.Search, contentDescription = null) },
+                    onClick = pick(onSearch),
+                )
+                val waitingText = stringResource(R.string.sync_bin_waiting)
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            stringResource(R.string.sync),
+                            Modifier.semantics { if (syncDot) contentDescription = waitingText },
+                        )
+                    },
+                    leadingIcon = {
+                        BadgedBox(badge = { if (syncDot) Badge() }) { Icon(Icons.Sync, contentDescription = null) }
+                    },
+                    onClick = pick(onSync),
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.stats_title)) },
+                    leadingIcon = { Icon(Icons.BarChart, contentDescription = null) },
+                    onClick = pick(onStats),
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.settings)) },
+                    leadingIcon = { Icon(Icons.Settings, contentDescription = null) },
+                    onClick = pick(onSettings),
+                )
+            }
+        }
     }
+    if (busy) ImportRunningDialog(onDismiss = { busy = false })
 }
 
 /**

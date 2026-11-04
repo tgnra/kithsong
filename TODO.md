@@ -4,7 +4,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## For 1.0
 
-- **Home page** - Home in the desktop sidebars stays greyed out until it exists
+- **Home page** - A mock-up on Windows and Linux, from core's musiccore/home_picks.h, its guesses from track_plays until the play event log can say what was played when; Radio's stations are placeholders that do nothing yet. The phone app has no page like it
 - **Repeat and a play queue** - Core: repeat (one, all). All: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither) and a view of what's queued. Windows and Linux: Ctrl+R for repeat (kept free for it)
 
 ## Release
@@ -195,7 +195,7 @@ UI speed: Settings' Testing section has the profiler (musiccore/perf.h) and stre
 - Wear OS: headphones connecting or unplugging mid-play, a real crown's seeking, album art in the media controls, a real scrobble
 - Wear OS: playlists' and groups' long-press haptic, failure notice and TalkBack labels, and the watch's additions reaching a peer
 - Wear OS: a licence's long text scrolling with the crown and showing its name
-- Android: the smart list editor and the recycle bin on a device (Restore, Empty, the sync button's dot)
+- Android: the smart list editor and the recycle bin on a device (Restore, Empty, the sync dot on the main menu)
 - Android: the smart list editor in landscape with the keyboard up (the tag editor needed adjustResize there; the manifest could set it app-wide)
 - Android: swipes on a physical phone and with 3-button navigation; back on API levels below 33; the scrubber in landscape and at large font scales; a failed Save of a cover, a JPEG cover, and emoji in tags through the byte-array path
 - Android: a first launch on a fresh install once logged "Couldn't open the library" (status -5) and then opened fine; cause unknown

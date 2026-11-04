@@ -9,9 +9,9 @@
  *   +------+ (  o   ) +------+ +------+ +---
  *   ...
  *
- * What's in each row is home_picks.c's business; a row with nothing in it isn't shown. A
- * library with no music shows a welcome and the Import button (HVN_IMPORT), and one that
- * hasn't been played yet says that the page fills up as it is.
+ * What's in each row is core's business (musiccore/home_picks.h); a row with nothing in it
+ * isn't shown. A library with no music shows a welcome and the Import button (HVN_IMPORT), and
+ * one that hasn't been played yet says that the page fills up as it is.
  *
  * The wheel scrolls the page, wherever the mouse is, so it never gets stuck on a row on the way
  * down. Shift and the wheel, or a trackpad's or tilting wheel's sideways scroll
@@ -24,7 +24,7 @@
  * nothing happens yet.
  *
  * Covers are decoded on a background thread, as the album grid's, those in view first, then
- * those a screen along or down, and only ever those. The rows are capped (HOME_ROW_MAX), so
+ * those a screen along or down, and only ever those. The rows are capped (MC_HOME_ROW_MAX), so
  * what's decoded stays small however big the library is, and it's kept until the page reloads.
  *
  * The page reloads the next time it paints after home_view_refresh(), on that thread too, as

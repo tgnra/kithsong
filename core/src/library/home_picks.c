@@ -1,12 +1,11 @@
-#include "home_picks.h"
+#include "musiccore/home_picks.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <wchar.h>
 
-#include "wstr.h"
+#include "util/platform.h"
 
 /* The guesses, until the play event log can say what was really played when. track_plays keeps
  * one count per track for all time and the time of its last play, so "played a lot recently"
@@ -19,7 +18,7 @@ enum {
   A_WHILE_DAYS = 90,   /* nothing played this recently, for Not Played in a While */
   A_WHILE_TRACKS = 2,  /* tracks ever played: fewer is more likely a stray track from shuffle */
   ROW_ENOUGH = 8,      /* fewer than this in a row and its rules relax */
-  RANDOM_PLAYLISTS = HOME_ROW_MAX / 4, /* albums would crowd them out, there being many more */
+  RANDOM_PLAYLISTS = MC_HOME_ROW_MAX / 4, /* albums would crowd them out, there being many more */
 };
 
 #define DAY_MS (24 * 60 * 60 * 1000LL)
@@ -111,22 +110,22 @@ static void free_sources(sources *s) {
 /* Building a row. */
 
 typedef struct row {
-  home_pick *items;
+  mc_home_pick *items;
   int count;
 } row;
 
-static BOOL in_row(const row *r, const char *uid) {
+static int in_row(const row *r, const char *uid) {
   for (int i = 0; i < r->count; i++)
-    if (!strcmp(r->items[i].uid, uid)) return TRUE;
-  return FALSE;
+    if (!strcmp(r->items[i].uid, uid)) return 1;
+  return 0;
 }
 
 /* A new tile, or NULL if the row is full. */
-static home_pick *add(row *r, mc_recent_kind kind, const char *uid) {
-  if (r->count >= HOME_ROW_MAX) return NULL;
-  if (!r->items) r->items = calloc(HOME_ROW_MAX, sizeof *r->items);
+static mc_home_pick *add(row *r, mc_recent_kind kind, const char *uid) {
+  if (r->count >= MC_HOME_ROW_MAX) return NULL;
+  if (!r->items) r->items = calloc(MC_HOME_ROW_MAX, sizeof *r->items);
   if (!r->items) return NULL;
-  home_pick *p = &r->items[r->count++];
+  mc_home_pick *p = &r->items[r->count++];
   p->kind = kind;
   snprintf(p->uid, sizeof p->uid, "%s", uid);
   return p;
@@ -137,28 +136,26 @@ static const char *or_untitled(const char *name) {
 }
 
 static void add_album(row *r, const mc_album_info *a) {
-  home_pick *p = add(r, MC_RECENT_ALBUM, a->uid);
+  mc_home_pick *p = add(r, MC_RECENT_ALBUM, a->uid);
   if (!p) return;
-  p->title = wstr_dup_from_utf8(or_untitled(a->title));
-  p->sub = wstr_dup_from_utf8(a->artist && *a->artist ? a->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
-  p->cover_dir = a->has_art ? wstr_dup_from_utf8(a->folder) : NULL;
+  p->title = mc_strdup(or_untitled(a->title));
+  p->sub = mc_strdup(a->artist && *a->artist ? a->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
+  p->cover_dir = a->has_art ? mc_strdup(a->folder) : NULL;
 }
 
 static void add_playlist(row *r, const mc_playlist_info *pl) {
-  home_pick *p = add(r, MC_RECENT_PLAYLIST, pl->uid);
+  mc_home_pick *p = add(r, MC_RECENT_PLAYLIST, pl->uid);
   if (!p) return;
-  wchar_t sub[64];
-  mc_wformat(sub, 64, mc_str_plural(MC_STR_TRACKS, pl->track_count), MC_D(pl->track_count));
-  p->title = wstr_dup_from_utf8(or_untitled(pl->name));
-  p->sub = _wcsdup(sub);
+  p->title = mc_strdup(or_untitled(pl->name));
+  p->sub = mc_format_alloc(mc_str_plural(MC_STR_TRACKS, pl->track_count), MC_D(pl->track_count));
 }
 
 static void add_smart(row *r, mc_recent_kind kind, const char *uid, const char *name) {
-  home_pick *p = add(r, kind, uid);
+  mc_home_pick *p = add(r, kind, uid);
   if (!p) return;
-  p->smart = TRUE;
-  p->title = wstr_dup_from_utf8(or_untitled(name));
-  p->sub = _wcsdup(mc_wstr(kind == MC_RECENT_PLAYLIST ? MC_STR_SMART_PLAYLIST : MC_STR_SMART_ALBUM_GROUP));
+  p->smart = 1;
+  p->title = mc_strdup(or_untitled(name));
+  p->sub = mc_strdup(mc_str(kind == MC_RECENT_PLAYLIST ? MC_STR_SMART_PLAYLIST : MC_STR_SMART_ALBUM_GROUP));
 }
 
 /* played's album or playlist, if there's something of it to play here. */
@@ -245,14 +242,12 @@ static void pick_radio(const sources *s, row *r) {
   for (int i = 0; i < n; i++) {
     const mc_artist_info *a = ranked[i].artist;
     if (!a->cover_dir) continue; /* a station needs a cover */
-    home_pick *p = add(r, MC_RECENT_ARTIST, a->uid);
+    mc_home_pick *p = add(r, MC_RECENT_ARTIST, a->uid);
     if (!p) break;
-    wchar_t title[256];
-    mc_wformat(title, 256, mc_str(MC_STR_WINDOWS_HOME_STATION), MC_S(or_untitled(a->name)));
-    p->station = TRUE;
-    p->title = _wcsdup(title);
-    p->sub = _wcsdup(mc_wstr(MC_STR_WINDOWS_HOME_STATION_SUB));
-    p->cover_dir = wstr_dup_from_utf8(a->cover_dir);
+    p->station = 1;
+    p->title = mc_format_alloc(mc_str(MC_STR_HOME_STATION), MC_S(or_untitled(a->name)));
+    p->sub = mc_strdup(mc_str(MC_STR_HOME_STATION_SUB));
+    p->cover_dir = mc_strdup(a->cover_dir);
   }
   free(ranked);
 }
@@ -261,7 +256,7 @@ static void pick_radio(const sources *s, row *r) {
  * groups, each with its usual picture. */
 static void pick_recents(const sources *s, row *r) {
   mc_recent_list *list = NULL;
-  if (mc_library_list_recents(s->lib, HOME_ROW_MAX, MC_LIST_PLAYABLE, &list) != MC_OK) return;
+  if (mc_library_list_recents(s->lib, MC_HOME_ROW_MAX, MC_LIST_PLAYABLE, &list) != MC_OK) return;
   for (int i = 0; i < list->count; i++) {
     const mc_recent_info *it = &list->items[i];
     if (it->is_smart) {
@@ -275,21 +270,19 @@ static void pick_recents(const sources *s, row *r) {
     } else if (playlist) {
       add_playlist(r, playlist);
     } else { /* an artist, a group, or a single, which the album list leaves out */
-      home_pick *p = add(r, it->kind, it->uid);
+      mc_home_pick *p = add(r, it->kind, it->uid);
       if (!p) break;
-      p->title = wstr_dup_from_utf8(or_untitled(it->name));
-      wchar_t sub[64] = L"";
+      p->title = mc_strdup(or_untitled(it->name));
       const mc_artist_info *artist = it->kind == MC_RECENT_ARTIST ? find_artist(s, it->uid) : NULL;
       const mc_album_group_info *group = it->kind == MC_RECENT_ALBUM_GROUP ? find_group(s, it->uid) : NULL;
       if (artist) {
-        mc_wformat(sub, 64, mc_str_plural(MC_STR_COUNT_ALBUMS, artist->album_count), MC_D(artist->album_count));
-        p->cover_dir = wstr_dup_from_utf8(artist->cover_dir);
+        p->sub = mc_format_alloc(mc_str_plural(MC_STR_COUNT_ALBUMS, artist->album_count), MC_D(artist->album_count));
+        p->cover_dir = mc_strdup(artist->cover_dir);
       } else if (group) {
-        mc_wformat(sub, 64, mc_str_plural(MC_STR_COUNT_ALBUMS, group->album_count), MC_D(group->album_count));
-      } else if (it->artist) {
-        wstr_from_utf8(sub, 64, it->artist);
+        p->sub = mc_format_alloc(mc_str_plural(MC_STR_COUNT_ALBUMS, group->album_count), MC_D(group->album_count));
+      } else {
+        p->sub = mc_strdup(it->artist ? it->artist : "");
       }
-      p->sub = _wcsdup(sub);
     }
   }
   mc_recent_list_free(list);
@@ -364,7 +357,7 @@ static void pick_random(const sources *s, const row *lately, const row *a_while,
     all[chosen++] = c;
     lists++;
   }
-  chosen = n < HOME_ROW_MAX ? n : HOME_ROW_MAX;
+  chosen = n < MC_HOME_ROW_MAX ? n : MC_HOME_ROW_MAX;
   qsort(all, (size_t)chosen, sizeof *all, candidate_cmp);
   for (int i = 0; i < chosen; i++) {
     if (all[i].album) add_album(r, all[i].album);
@@ -374,33 +367,43 @@ static void pick_random(const sources *s, const row *lately, const row *a_while,
   free(all);
 }
 
-void home_picks_load(mc_library *lib, unsigned seed, home_picks *out) {
+enum mc_str_id mc_home_row_title(mc_home_row_id id) {
+  switch (id) {
+    case MC_HOME_ROW_RADIO: return MC_STR_HOME_ROW_RADIO;
+    case MC_HOME_ROW_RECENTS: return MC_STR_SECTION_RECENTS;
+    case MC_HOME_ROW_PLAYED_LATELY: return MC_STR_HOME_ROW_PLAYED_LATELY;
+    case MC_HOME_ROW_NOT_PLAYED_LATELY: return MC_STR_HOME_ROW_NOT_PLAYED_LATELY;
+    default: return MC_STR_HOME_ROW_RANDOM;
+  }
+}
+
+void mc_home_picks_load(mc_library *lib, unsigned seed, mc_home_picks *out) {
   memset(out, 0, sizeof *out);
   if (!lib) return;
   sources s;
   load_sources(lib, seed, &s);
 
-  row rows[HOME_ROW_COUNT] = {0};
-  pick_radio(&s, &rows[HOME_ROW_RADIO]);
-  pick_recents(&s, &rows[HOME_ROW_RECENTS]);
-  pick_played_lately(&s, &rows[HOME_ROW_PLAYED_LATELY]);
-  pick_not_played_lately(&s, &rows[HOME_ROW_PLAYED_LATELY], &rows[HOME_ROW_NOT_PLAYED_LATELY]);
-  pick_random(&s, &rows[HOME_ROW_PLAYED_LATELY], &rows[HOME_ROW_NOT_PLAYED_LATELY], &rows[HOME_ROW_RANDOM]);
-  for (int i = 0; i < HOME_ROW_COUNT; i++) {
+  row rows[MC_HOME_ROW_COUNT] = {0};
+  pick_radio(&s, &rows[MC_HOME_ROW_RADIO]);
+  pick_recents(&s, &rows[MC_HOME_ROW_RECENTS]);
+  pick_played_lately(&s, &rows[MC_HOME_ROW_PLAYED_LATELY]);
+  pick_not_played_lately(&s, &rows[MC_HOME_ROW_PLAYED_LATELY], &rows[MC_HOME_ROW_NOT_PLAYED_LATELY]);
+  pick_random(&s, &rows[MC_HOME_ROW_PLAYED_LATELY], &rows[MC_HOME_ROW_NOT_PLAYED_LATELY], &rows[MC_HOME_ROW_RANDOM]);
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
     out->rows[i] = rows[i].items;
     out->counts[i] = rows[i].count;
-    out->has_music |= i != HOME_ROW_RADIO && rows[i].count > 0;
+    out->has_music |= i != MC_HOME_ROW_RADIO && rows[i].count > 0;
   }
   out->has_plays = s.played && s.played->count > 0;
   free_sources(&s);
 }
 
-void home_picks_free(home_picks *picks) {
-  for (int i = 0; i < HOME_ROW_COUNT; i++) {
+void mc_home_picks_free(mc_home_picks *picks) {
+  for (int i = 0; i < MC_HOME_ROW_COUNT; i++) {
     for (int k = 0; k < picks->counts[i]; k++) {
-      free(picks->rows[i][k].title);
-      free(picks->rows[i][k].sub);
-      free(picks->rows[i][k].cover_dir);
+      mc_free(picks->rows[i][k].title);
+      mc_free(picks->rows[i][k].sub);
+      mc_free(picks->rows[i][k].cover_dir);
     }
     free(picks->rows[i]);
   }

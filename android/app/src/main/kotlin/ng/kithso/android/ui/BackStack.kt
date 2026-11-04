@@ -76,6 +76,7 @@ sealed interface Page {
     /** A device's page, over Sync: a member's uid, or THIS_DEVICE. */
     data class Device(val uid: String) : Page
     data object Search : Page
+    data object Stats : Page
 
     /** A track list, over the main list or the search it was found in. */
     data class Collection(val ref: CollectionRef) : Page
@@ -90,6 +91,7 @@ sealed interface Page {
             RecycleBin -> "bin"
             is Device -> "device:${page.uid}"
             Search -> "search"
+            Stats -> "stats"
             is Collection -> "list:${page.ref.kind.name}:${page.ref.uid}"
             Player -> "player"
         }
@@ -104,6 +106,7 @@ sealed interface Page {
                 "bin" -> RecycleBin
                 "device" -> Device(rest)
                 "search" -> Search
+                "stats" -> Stats
                 "list" -> Collection(
                     CollectionRef(CollectionRef.Kind.valueOf(rest.substringBefore(':')), rest.substringAfter(':')),
                 )

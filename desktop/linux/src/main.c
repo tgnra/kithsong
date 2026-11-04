@@ -5,8 +5,8 @@
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
  *      |                    / Recents / Devices)
  *      +- AdwBanner: tracks waiting for a device (app_update_waiting()), on the library's pages
- *      +- GtkStack of pages: "library" | "artists" (artist_view.c) | "search" (search_view.c)
- *         | "import" (import_view.c) | "device" (device_view.c)
+ *      +- GtkStack of pages: "library" | "home" (home_view.c) | "artists" (artist_view.c)
+ *         | "search" (search_view.c) | "import" (import_view.c) | "device" (device_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
  *            +- GtkStack: empty-state page (over the logo's glows, brand_backdrop.c) | GtkGridView of albums
  *                         | empty-state page (glowing too) | GtkGridView of playlists
@@ -18,8 +18,8 @@
  * Library move_library.c, the first run's dialog first_run.c, the Edit dialog edit_dialog.c,
  * the Add to Playlist dialog add_to_playlist.c and the Rename and
  * Delete Playlist dialogs playlist_dialogs.c, the Album groups page album_groups.c (its
- * dialogs album_group_dialogs.c), the Artists page artist_view.c and the Search page
- * search_view.c. The sidebar's
+ * dialogs album_group_dialogs.c), the Home page home_view.c, the Artists page artist_view.c
+ * and the Search page search_view.c. The sidebar's
  * Recents section is recents.c, and
  * its Devices section and sync are devices.c, which adds a device's page (device_view.c) to
  * the stack of pages as "device". The playback buttons
@@ -45,6 +45,7 @@
 #include "devices.h"
 #include "edit_dialog.h"
 #include "first_run.h"
+#include "home_view.h"
 #include "import_view.h"
 #include "move_library.h"
 #include "mpris.h"
@@ -82,7 +83,10 @@ static const char css[] =
   ".pair-code-shown { font-size: 32pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
   ".sync-picker { background: none; }"
   ".search-large { font-size: 14pt; min-height: 44px; }"
-  ".search-albums > flowboxchild { padding: 8px; border-radius: 12px; }";
+  ".search-albums > flowboxchild { padding: 8px; border-radius: 12px; }"
+  ".home-tile { padding: 8px; border-radius: 12px; font-weight: normal; }"
+  ".album-cover.home-round { border-radius: 50%; }"
+  ".home-badge { padding: 6px; border-radius: 50%; background-color: @accent_bg_color; color: @accent_fg_color; }";
 
 static GtkWidget *play_button;
 static guint save_volume_source; /* a timeout, so a held key saves the volume once */
@@ -122,8 +126,13 @@ static void on_import_session(void *user, gboolean active) {
   gtk_widget_set_sensitive(a->settings, !active);
 }
 
+static void open_view(app *a, app_view view);
+
+/* Back to the library page last picked, in the sidebar too: the import may have come from Home
+ * or Search. */
 static void on_import_done(void *user) {
-  show_page(user, "library");
+  app *a = user;
+  open_view(a, a->view);
 }
 
 /* The empty Albums page suggests importing while this computer isn't in a group, with an
@@ -445,6 +454,8 @@ static gboolean on_close_request(GtkWindow *win, gpointer user) {
 
 /* --- Sidebar --- */
 
+enum { TOP_NAV_HOME, TOP_NAV_SEARCH }; /* top_nav's rows */
+
 static void show_album(app *a);
 static GtkWidget *shown_grid(app *a);
 static void update_buttons(app *a);
@@ -479,26 +490,34 @@ static GtkWidget *nav_row(const char *icon, const char *label) {
   return box;
 }
 
-/* Search is the only row of top_nav that can be picked; Home isn't there yet. */
+/* Home, or Search. Home reads what's been played since it last showed. */
 static void on_top_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
   (void)list;
-  (void)row;
   app *a = user;
   devices_unselect();
   gtk_list_box_unselect_all(a->nav);
+  if (gtk_list_box_row_get_index(row) == TOP_NAV_HOME) {
+    home_view_refresh();
+    show_page(a, "home");
+    update_buttons(a);
+    return;
+  }
   show_page(a, "search");
+  update_buttons(a);
   search_view_focus();
+}
+
+/* Picks Search in the sidebar, as clicking it does. */
+static void open_search(app *a) {
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->top_nav, TOP_NAV_SEARCH);
+  gtk_list_box_select_row(a->top_nav, row);
+  on_top_nav_activated(a->top_nav, row, a);
 }
 
 static GtkWidget *build_top_nav(app *a) {
   GtkWidget *list = gtk_list_box_new();
   gtk_widget_add_css_class(list, "navigation-sidebar");
-  GtkWidget *home = gtk_list_box_row_new();
-  gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(home), nav_row("go-home-symbolic", mc_str(MC_STR_SECTION_HOME)));
-  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(home), FALSE);
-  gtk_list_box_row_set_selectable(GTK_LIST_BOX_ROW(home), FALSE);
-  gtk_widget_set_sensitive(home, FALSE);
-  gtk_list_box_append(GTK_LIST_BOX(list), home);
+  gtk_list_box_append(GTK_LIST_BOX(list), nav_row("go-home-symbolic", mc_str(MC_STR_SECTION_HOME)));
   gtk_list_box_append(GTK_LIST_BOX(list), nav_row("system-search-symbolic", mc_str(MC_STR_SEARCH)));
   g_signal_connect(list, "row-activated", G_CALLBACK(on_top_nav_activated), a);
   a->top_nav = GTK_LIST_BOX(list);
@@ -627,13 +646,14 @@ static void on_next(GSimpleAction *action, GVariant *param, gpointer user) {
 }
 
 /* Space in an album grid or the track list. Those would take it to select the item with the
- * focus, but clicking or the arrow keys has selected it already, so Space plays there. */
+ * focus, but clicking or the arrow keys has selected it already, so Space plays there. Home's
+ * tiles would take it as a click. */
 static gboolean on_list_space(GtkWidget *win, GVariant *args, gpointer user) {
   (void)args;
   (void)user;
   GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
   gboolean in_list = focus && (gtk_widget_get_ancestor(focus, GTK_TYPE_GRID_VIEW) ||
-                                gtk_widget_get_ancestor(focus, GTK_TYPE_LIST_VIEW));
+                                gtk_widget_get_ancestor(focus, GTK_TYPE_LIST_VIEW) || home_view_is_tile(focus));
   if (!in_list) return FALSE;
   gtk_widget_activate_action(win, "app.play-pause", NULL);
   return TRUE;
@@ -779,9 +799,7 @@ static gboolean on_shortcut(GtkWidget *win, GVariant *args, gpointer user) {
       now_playing_flash(mc_str(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
       return TRUE;
     case SC_SEARCH:
-      if (!gtk_widget_is_sensitive(a->sidebar)) return TRUE;
-      gtk_list_box_select_row(a->top_nav, gtk_list_box_get_row_at_index(a->top_nav, 1));
-      on_top_nav_activated(a->top_nav, NULL, a);
+      if (gtk_widget_is_sensitive(a->sidebar)) open_search(a);
       return TRUE;
     case SC_SETTINGS:
       if (gtk_widget_is_sensitive(a->settings)) on_settings(NULL, a);
@@ -970,6 +988,16 @@ static void on_tracks_close(void *user) {
   GtkWidget *grid = shown_grid(user);
   if (grid) album_grid_unselect(grid);
   show_album(user);
+}
+
+/* A tile opened on the Home page. */
+static void on_home_open(void *user, mc_recent_kind kind, const char *uid, const char *artist) {
+  switch (kind) {
+    case MC_RECENT_ARTIST: app_open_artist(user, uid); break;
+    case MC_RECENT_ALBUM_GROUP: app_open_album_group(user, uid); break;
+    case MC_RECENT_PLAYLIST: app_open(user, TRUE, uid); break;
+    default: app_open_album_or_single(user, uid, artist); break;
+  }
 }
 
 /* An album clicked on an artist's page: it opens on the Albums page. */
@@ -1190,6 +1218,16 @@ static void open_view(app *a, app_view view) {
 void app_open(app *a, gboolean playlist, const char *uid) {
   open_view(a, playlist ? APP_VIEW_PLAYLISTS : APP_VIEW_ALBUMS);
   if (album_grid_select(shown_grid(a), uid)) show_album(a);
+}
+
+void app_open_album_or_single(app *a, const char *uid, const char *artist) {
+  AlbumItem *album = album_grid_find(a->album_grid, uid);
+  const char *found = album ? NULL : artist_view_find(artist);
+  char artist_uid[MC_UID_STRLEN];
+  g_strlcpy(artist_uid, found ? found : "", sizeof artist_uid); /* opening reloads the list it's from */
+  if (album) g_object_unref(album);
+  if (artist_uid[0]) app_open_artist(a, artist_uid);
+  else app_open(a, FALSE, uid);
 }
 
 void app_open_artist(app *a, const char *uid) {
@@ -1580,8 +1618,7 @@ static gboolean on_type_to_search(GtkEventControllerKey *keys, guint keyval, gui
   if (!gtk_widget_is_sensitive(a->sidebar)) return FALSE;
   char text[8] = "";
   g_unichar_to_utf8(c, text);
-  gtk_list_box_select_row(a->top_nav, gtk_list_box_get_row_at_index(a->top_nav, 1));
-  on_top_nav_activated(a->top_nav, NULL, a);
+  open_search(a);
   search_view_start(text);
   return TRUE;
 }
@@ -1687,6 +1724,9 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   GtkWidget *pages = gtk_stack_new();
   a->pages = GTK_STACK(pages);
   gtk_stack_add_named(a->pages, album_split, "library");
+  const home_view_callbacks home_cb = {on_home_open, on_import_present, a};
+  a->home = home_view_new(a, &home_cb);
+  gtk_stack_add_named(a->pages, a->home, "home");
   const artist_view_callbacks artists_cb = {on_shuffle, on_track_add_to_playlist, on_artist_album, playback_changed, a};
   a->artists = artist_view_new(a, &artists_cb);
   gtk_stack_add_named(a->pages, a->artists, "artists");
@@ -1768,6 +1808,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   perf_ui_watch(album_grid_scrolled(a->album_grid), "albums");
   perf_ui_watch(album_grid_scrolled(a->playlist_grid), "playlists");
   perf_ui_watch(artist_view_scrolled(), "artists");
+  perf_ui_watch(home_view_scrolled(), "home");
   perf_ui_watch(track_list_scrolled(), "tracks");
   app_reload_library(a);
   perf_ui_content_ready();
