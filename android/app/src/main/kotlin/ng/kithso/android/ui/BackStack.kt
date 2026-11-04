@@ -29,7 +29,8 @@ data class BackStack<T>(val layers: List<BackLayer<T>> = emptyList(), private va
     fun push(page: T): BackStack<T> {
         if (top?.page == page) return this
         // The click: App ends the view switch once the page is drawn.
-        ng.kithso.core.CoreTesting.viewBegin(page?.let { it::class.simpleName } ?: "page")
+        // By toString(), as R8 renames classes but not what a data class says it's called.
+        if (ng.kithso.core.CoreTesting.enabled()) ng.kithso.core.CoreTesting.viewBegin(page.toString().substringBefore('('))
         return BackStack(layers + BackLayer(nextId, page), nextId + 1)
     }
 

@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
         }
         // Debug builds, for test scripts: `--ei stress_preset 1` turns the profiler on and generates
         // and opens that stress library, and `--ez perf_run true` runs the scroll test after
-        // startup, writing the report to the log (tag kithsong-perf).
+        // startup. Every test writes its report to the log (tag kithsong-perf).
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0 && savedInstanceState == null) {
             if (intent.hasExtra("stress_preset")) {
                 app.testing.setProfiling(true)

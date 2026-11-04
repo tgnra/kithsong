@@ -204,7 +204,6 @@ fun App(
         if (tracks != null) CoreTesting.note("library_tracks", tracks.toString())
         if (PerfRun.requested) {
             PerfRun.requested = false
-            PerfRun.logging = true
             delay(2000)
             ScrollTest.start()
         }
@@ -228,10 +227,7 @@ fun App(
                     ScrollTest.step.value = ScrollTest.Step.Idle
                     TestingOpen.next = true
                     nav = nav.removeAll { it is Page.Collection }.push(Page.Settings)
-                    if (PerfRun.logging) {
-                        PerfRun.logging = false
-                        CoreTesting.report().lines().forEach { Log.i("kithsong-perf", it) }
-                    }
+                    CoreTesting.report().lines().forEach { Log.i("kithsong-perf", it) }
                 }
                 else -> {}
             }
@@ -467,8 +463,7 @@ private val TagTargetSaver = Saver<TagTarget?, String>(
     restore = { saved -> TagTarget(TagTarget.Kind.valueOf(saved.substringBefore(':')), saved.substringAfter(':')) },
 )
 
-/** A test script's request to run the scroll test after startup and log its report. */
+/** A test script's request to run the scroll test after startup. */
 object PerfRun {
     var requested = false
-    var logging = false
 }
