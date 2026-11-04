@@ -543,11 +543,13 @@ private fun AlbumFields(editor: TagEditor, form: TagForm, onDone: () -> Unit, on
 private fun AlbumCover(editor: TagEditor, form: TagForm) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val reading = stringResource(R.string.edit_art_reading)
+    val bad = stringResource(R.string.edit_art_bad)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         form.reading = true
         form.failed = false
-        form.message = context.getString(R.string.edit_art_reading)
+        form.message = reading
         scope.launch {
             val art = editor.takeCover(form.target.uid) { context.contentResolver.openInputStream(uri) }
             form.reading = false
@@ -556,7 +558,7 @@ private fun AlbumCover(editor: TagEditor, form: TagForm) {
                 form.message = null
             } else {
                 form.failed = true
-                form.message = context.getString(R.string.edit_art_bad)
+                form.message = bad
             }
         }
     }
