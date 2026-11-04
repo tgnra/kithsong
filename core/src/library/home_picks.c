@@ -1,26 +1,53 @@
 #include "musiccore/home_picks.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#include "library/library_internal.h"
 #include "musiccore/radio_stations.h"
 #include "util/platform.h"
 
-/* The guesses, until the play event log can say what was really played when. track_plays keeps
- * one count per track for all time and the time of its last play, so "played a lot recently"
- * can only mean "many of its tracks had their last play lately": a track played once this week
- * after a hundred plays years ago looks the same as one on repeat. mc_played_info.plays isn't
- * windowed either. */
+/* Played a Lot Recently and Not Played in a While go by the play log, read back as far as
+ * A_WHILE_DAYS, and fall back on a guess from track_plays for what the log can't see.
+ *
+ * The log has every start, so a play only counts as real if it didn't fail and enough of it was
+ * heard: played_for_real(). Of those, a station's aren't a choice: the app picked the track, which
+ * says little about wanting its album. So radio plays put nothing in Played a Lot Recently. They
+ * were still heard, though, so they do keep an album out of Not Played in a While, and count as
+ * having been played before for it.
+ *
+ * track_plays keeps one count per track for all time and the time of its last play, so all it can
+ * say of "played a lot recently" is "many of its tracks had their last play lately": a track
+ * played once this week after a hundred plays years ago looks the same as one on repeat. It's the
+ * only record of plays from before the log began, so that guess stands for an album or playlist
+ * last played before then, and for no other: after that the log knows better, and track_plays
+ * can't tell a station's play from a chosen one. With an empty log that's all of them, and with
+ * one older than the windows it's none. Plays from the log rank ahead of guesses of their kind. */
 enum {
-  LATELY_DAYS = 14,    /* a track last played this recently counts towards Played a Lot Recently */
-  LATELY_TRACKS = 3,   /* how many of them make an album or playlist belong there */
+  LATELY_DAYS = 14,    /* the window of Played a Lot Recently */
+  LATELY_PLAYS = 3,    /* real plays in it that make an album or playlist belong there */
+  LATELY_TRACKS = 3,   /* the guess at that: how many tracks had their last play in it */
   A_WHILE_DAYS = 90,   /* nothing played this recently, for Not Played in a While */
   A_WHILE_TRACKS = 2,  /* tracks ever played: fewer is more likely a stray track from shuffle */
+  REAL_PLAY_MS = 30000, /* heard for this long, or half the track if that's less, is a real play */
   ROW_ENOUGH = 8,      /* fewer than this in a row and its rules relax */
   RANDOM_PLAYLISTS = MC_HOME_ROW_MAX / 4, /* albums would crowd them out, there being many more */
 };
+
+/* Why something could be in Played a Lot Recently, best first. The first two always get in, the
+ * rest only while the row is short of ROW_ENOUGH, so a quiet fortnight doesn't empty it. */
+typedef enum lately_tier {
+  LATELY_REPEATED,    /* LATELY_PLAYS real plays in the window */
+  LATELY_GUESS_MANY,  /* from before the log: LATELY_TRACKS tracks last played in the window */
+  LATELY_ANY,         /* a real play in the window */
+  LATELY_GUESS_ANY,   /* from before the log: a track last played in the window */
+  A_WHILE_ANY,        /* a real play since A_WHILE_DAYS ago */
+  A_WHILE_GUESS_ANY,  /* from before the log: a track last played since then */
+  LATELY_NONE
+} lately_tier;
 
 #define DAY_MS (24 * 60 * 60 * 1000LL)
 
@@ -29,6 +56,23 @@ typedef struct uid_entry {
   const char *uid;
   int index;
 } uid_entry;
+
+/* What the log and track_plays say of an album or playlist. */
+typedef struct heard {
+  mc_recent_kind kind; /* MC_RECENT_ALBUM or MC_RECENT_PLAYLIST */
+  char uid[MC_UID_STRLEN];
+  /* From the log: real plays of its tracks, other than a station's. */
+  int plays_lately;   /* in the last LATELY_DAYS */
+  int plays_a_while;  /* in the last A_WHILE_DAYS, those included */
+  int64_t chosen_ms;  /* the newest of them; 0 if none */
+  /* The guess, all 0 if the log began before its last play. */
+  int guess_tracks;   /* its tracks last played in the last LATELY_DAYS */
+  int64_t guess_ms;   /* its last play */
+  /* From both. */
+  int tracks_played;  /* its tracks with a play in track_plays */
+  int64_t heard_ms;   /* the newest play of any kind, a station's too; 0 if too old to have a time */
+  lately_tier tier;
+} heard;
 
 typedef struct sources {
   mc_library *lib;
@@ -41,7 +85,8 @@ typedef struct sources {
   mc_playlist_list *playlists;
   mc_album_group_list *groups;
   mc_smart_list *smart;
-  mc_played_list *played;
+  heard *heard; /* each album and playlist with a play, by uid */
+  int heard_count;
 } sources;
 
 static int entry_cmp(const void *a, const void *b) {
@@ -76,6 +121,196 @@ static const mc_album_group_info *find_group(const sources *s, const char *uid) 
   return NULL;
 }
 
+/* Whether a log row was really listened to. Half of a short track will do, so an interlude can
+ * count but seeking to the end of a long track can't. A row's end only rules out failures: a good
+ * listen that was then skipped is still a play, and the time heard tells it from a skip. */
+static int played_for_real(const mc_play_event *e, int64_t duration_ms) {
+  if (e->end == MC_PLAY_END_FAILED) return 0;
+  int64_t needed = duration_ms > 0 && duration_ms / 2 < REAL_PLAY_MS ? duration_ms / 2 : REAL_PLAY_MS;
+  return e->listened_ms >= needed;
+}
+
+/* One track's real plays in the log. */
+typedef struct track_tally {
+  char uid[MC_UID_STRLEN];
+  int plays_lately, plays_a_while;
+  int64_t chosen_ms, heard_ms;
+} track_tally;
+
+static int tally_cmp(const void *a, const void *b) {
+  return strcmp(((const track_tally *)a)->uid, ((const track_tally *)b)->uid);
+}
+
+static int event_track_cmp(const void *a, const void *b) {
+  return strcmp(((const mc_play_log_item *)a)->event.track_uid, ((const mc_play_log_item *)b)->event.track_uid);
+}
+
+static int64_t newest(int64_t a, int64_t b) {
+  return a > b ? a : b;
+}
+
+/* A new entry for uid, for fold_heard() to add to any others of it. NULL if out of memory. */
+static heard *new_heard(sources *s, int *cap, mc_recent_kind kind, const char *uid) {
+  if (s->heard_count == *cap) {
+    int more = *cap ? *cap * 2 : 64;
+    heard *items = realloc(s->heard, (size_t)more * sizeof *items);
+    if (!items) return NULL;
+    s->heard = items;
+    *cap = more;
+  }
+  heard *h = &s->heard[s->heard_count++];
+  memset(h, 0, sizeof *h);
+  h->kind = kind;
+  snprintf(h->uid, sizeof h->uid, "%s", uid);
+  return h;
+}
+
+static void credit(sources *s, int *cap, mc_recent_kind kind, const char *uid, const track_tally *t) {
+  heard *h = new_heard(s, cap, kind, uid);
+  if (!h) return;
+  h->plays_lately = t->plays_lately;
+  h->plays_a_while = t->plays_a_while;
+  h->chosen_ms = t->chosen_ms;
+  h->heard_ms = t->heard_ms;
+}
+
+/* Tallies items[0..n), the rows of one track, and credits its album. Returns whether it has a
+ * real play. */
+static int tally_track(sources *s, int *cap, sqlite3_stmt *track, const mc_play_log_item *items, int n,
+                       int64_t lately_ms, track_tally *t) {
+  sqlite3_bind_text(track, 1, items[0].event.track_uid, -1, SQLITE_STATIC);
+  int found = sqlite3_step(track) == SQLITE_ROW;
+  int64_t duration_ms = found ? sqlite3_column_int64(track, 1) : 0;
+  memset(t, 0, sizeof *t);
+  snprintf(t->uid, sizeof t->uid, "%s", items[0].event.track_uid);
+  for (int i = 0; i < n; i++) {
+    const mc_play_event *e = &items[i].event;
+    if (!played_for_real(e, duration_ms)) continue;
+    t->heard_ms = newest(t->heard_ms, e->started_ms);
+    if (e->context == MC_PLAY_CONTEXT_RADIO) continue;
+    t->plays_a_while++;
+    t->plays_lately += e->started_ms >= lately_ms;
+    t->chosen_ms = newest(t->chosen_ms, e->started_ms);
+  }
+  const char *album = found ? (const char *)sqlite3_column_text(track, 0) : NULL;
+  if (album && t->heard_ms) credit(s, cap, MC_RECENT_ALBUM, album, t);
+  sqlite3_reset(track);
+  return t->heard_ms != 0;
+}
+
+/* Credits the playlists holding tally's tracks, tally being sorted. One pass over the entries, as
+ * they aren't indexed by track; a track that's in a playlist twice is credited once. */
+static void credit_playlists(sources *s, int *cap, const track_tally *tally, int n) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(s->lib), "SELECT DISTINCT playlist_uid, track_uid FROM playlist_entries", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    return;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    track_tally key;
+    snprintf(key.uid, sizeof key.uid, "%s", (const char *)sqlite3_column_text(stmt, 1));
+    const track_tally *t = bsearch(&key, tally, (size_t)n, sizeof *tally, tally_cmp);
+    if (t) credit(s, cap, MC_RECENT_PLAYLIST, (const char *)sqlite3_column_text(stmt, 0), t);
+  }
+  sqlite3_finalize(stmt);
+}
+
+/* The real plays since A_WHILE_DAYS ago, into s->heard: a bounded read however long the log gets.
+ * A track is credited to its album and playlists as they are now, not by the row's context_uid,
+ * so it doesn't matter how it was played or if that album has been merged away since. No upper
+ * limit, as another device's clock may be ahead. */
+static void read_log(sources *s, int *cap) {
+  mc_play_log *log = NULL;
+  if (mc_library_list_play_events(s->lib, s->now_ms - A_WHILE_DAYS * DAY_MS, INT64_MAX, &log) != MC_OK) return;
+  sqlite3_stmt *track = NULL;
+  track_tally *tally = log->count ? malloc((size_t)log->count * sizeof *tally) : NULL;
+  if (tally && sqlite3_prepare_v2(mc_library_db(s->lib), "SELECT album_uid, duration_ms FROM tracks WHERE uid = ?1", -1,
+                                  &track, NULL) == SQLITE_OK) {
+    qsort(log->items, (size_t)log->count, sizeof *log->items, event_track_cmp);
+    int tracks = 0, run;
+    int64_t lately_ms = s->now_ms - LATELY_DAYS * DAY_MS;
+    for (int i = 0; i < log->count; i += run) {
+      for (run = 1; i + run < log->count && !event_track_cmp(&log->items[i], &log->items[i + run]); run++) {}
+      tracks += tally_track(s, cap, track, &log->items[i], run, lately_ms, &tally[tracks]);
+    }
+    credit_playlists(s, cap, tally, tracks);
+  }
+  sqlite3_finalize(track);
+  free(tally);
+  mc_play_log_free(log);
+}
+
+/* When the log began: its oldest row of any kind, as a skip shows it was running as well as a
+ * play does. INT64_MAX with no log, so every last play is from before it. */
+static int64_t log_began_ms(mc_library *lib) {
+  sqlite3_stmt *stmt;
+  int64_t began = INT64_MAX;
+  if (sqlite3_prepare_v2(mc_library_db(lib), "SELECT min(started_ms) FROM play_events", -1, &stmt, NULL) != SQLITE_OK)
+    return began;
+  if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL)
+    began = sqlite3_column_int64(stmt, 0);
+  sqlite3_finalize(stmt);
+  return began;
+}
+
+/* What track_plays says of everything played, the guess only where the log can't see. */
+static void read_track_plays(sources *s, int *cap) {
+  mc_played_list *played = NULL;
+  if (mc_library_list_played(s->lib, s->now_ms - LATELY_DAYS * DAY_MS, &played) != MC_OK) return;
+  int64_t began = log_began_ms(s->lib);
+  for (int i = 0; i < played->count; i++) {
+    const mc_played_info *p = &played->items[i];
+    heard *h = new_heard(s, cap, p->kind, p->uid);
+    if (!h) break;
+    h->tracks_played = p->tracks_played;
+    h->heard_ms = p->last_played_ms;
+    if (p->last_played_ms >= began) continue;
+    h->guess_tracks = p->tracks_since;
+    h->guess_ms = p->last_played_ms;
+  }
+  mc_played_list_free(played);
+}
+
+static int heard_uid_cmp(const void *a, const void *b) {
+  const heard *x = a, *y = b;
+  int c = strcmp(x->uid, y->uid);
+  return c ? c : (int)x->kind - (int)y->kind;
+}
+
+static lately_tier tier_of(const heard *h, int64_t a_while_ms) {
+  if (h->plays_lately >= LATELY_PLAYS) return LATELY_REPEATED;
+  if (h->guess_tracks >= LATELY_TRACKS) return LATELY_GUESS_MANY;
+  if (h->plays_lately > 0) return LATELY_ANY;
+  if (h->guess_tracks > 0) return LATELY_GUESS_ANY;
+  if (h->plays_a_while > 0) return A_WHILE_ANY;
+  if (h->guess_ms >= a_while_ms) return A_WHILE_GUESS_ANY;
+  return LATELY_NONE;
+}
+
+/* Adds up each album's and playlist's entries, one for each of its tracks in the log and one from
+ * track_plays, into one. */
+static void fold_heard(sources *s) {
+  if (!s->heard_count) return;
+  qsort(s->heard, (size_t)s->heard_count, sizeof *s->heard, heard_uid_cmp);
+  int n = 1;
+  for (int i = 1; i < s->heard_count; i++) {
+    const heard *h = &s->heard[i];
+    heard *to = &s->heard[n - 1];
+    if (heard_uid_cmp(to, h)) {
+      s->heard[n++] = *h;
+      continue;
+    }
+    to->plays_lately += h->plays_lately;
+    to->plays_a_while += h->plays_a_while;
+    to->chosen_ms = newest(to->chosen_ms, h->chosen_ms);
+    to->guess_tracks += h->guess_tracks;
+    to->guess_ms = newest(to->guess_ms, h->guess_ms);
+    to->tracks_played += h->tracks_played;
+    to->heard_ms = newest(to->heard_ms, h->heard_ms);
+  }
+  s->heard_count = n;
+  for (int i = 0; i < n; i++) s->heard[i].tier = tier_of(&s->heard[i], s->now_ms - A_WHILE_DAYS * DAY_MS);
+}
+
 static void load_sources(mc_library *lib, unsigned seed, sources *s) {
   memset(s, 0, sizeof *s);
   s->lib = lib;
@@ -86,7 +321,10 @@ static void load_sources(mc_library *lib, unsigned seed, sources *s) {
   mc_library_list_playlists(lib, MC_LIST_PLAYABLE, &s->playlists);
   mc_library_list_album_groups(lib, MC_LIST_PLAYABLE, &s->groups);
   mc_library_list_smart(lib, MC_LIST_PLAYABLE, &s->smart);
-  mc_library_list_played(lib, s->now_ms - LATELY_DAYS * DAY_MS, &s->played);
+  int cap = 0;
+  read_log(s, &cap);
+  read_track_plays(s, &cap);
+  fold_heard(s);
 
   int albums = s->albums ? s->albums->count : 0, artists = s->artists ? s->artists->count : 0;
   s->album_index = albums ? malloc((size_t)albums * sizeof *s->album_index) : NULL;
@@ -103,7 +341,7 @@ static void free_sources(sources *s) {
   mc_playlist_list_free(s->playlists);
   mc_album_group_list_free(s->groups);
   mc_smart_list_free(s->smart);
-  mc_played_list_free(s->played);
+  free(s->heard);
   free(s->album_index);
   free(s->artist_index);
 }
@@ -159,14 +397,14 @@ static void add_smart(row *r, mc_recent_kind kind, const char *uid, const char *
   p->sub = mc_strdup(mc_str(kind == MC_RECENT_PLAYLIST ? MC_STR_SMART_PLAYLIST : MC_STR_SMART_ALBUM_GROUP));
 }
 
-/* played's album or playlist, if there's something of it to play here. */
-static void add_played(row *r, const sources *s, const mc_played_info *p) {
-  if (in_row(r, p->uid)) return;
-  if (p->kind == MC_RECENT_ALBUM) {
-    const mc_album_info *a = find_album(s, p->uid);
+/* h's album or playlist, if there's something of it to play here. */
+static void add_played(row *r, const sources *s, const heard *h) {
+  if (in_row(r, h->uid)) return;
+  if (h->kind == MC_RECENT_ALBUM) {
+    const mc_album_info *a = find_album(s, h->uid);
     if (a && a->folder) add_album(r, a);
   } else {
-    const mc_playlist_info *pl = find_playlist(s, p->uid);
+    const mc_playlist_info *pl = find_playlist(s, h->uid);
     if (pl) add_playlist(r, pl);
   }
 }
@@ -180,12 +418,12 @@ static unsigned uid_hash(const char *uid, unsigned seed) {
 }
 
 /* Sorted copies of what's been played. */
-typedef int (*played_cmp)(const void *, const void *);
+typedef int (*heard_cmp)(const void *, const void *);
 
-static const mc_played_info **sorted_played(const sources *s, played_cmp cmp) {
-  int n = s->played ? s->played->count : 0;
-  const mc_played_info **order = n ? malloc((size_t)n * sizeof *order) : NULL;
-  for (int i = 0; order && i < n; i++) order[i] = &s->played->items[i];
+static const heard **sorted_heard(const sources *s, heard_cmp cmp) {
+  int n = s->heard_count;
+  const heard **order = n ? malloc((size_t)n * sizeof *order) : NULL;
+  for (int i = 0; order && i < n; i++) order[i] = &s->heard[i];
   if (order) qsort(order, (size_t)n, sizeof *order, cmp);
   return order;
 }
@@ -194,17 +432,22 @@ static int newest_cmp(int64_t a, int64_t b) {
   return a < b ? 1 : a > b ? -1 : 0;
 }
 
-/* Most tracks played lately first, then the last played. */
+/* By tier, then the most plays or tracks, then the last played. */
 static int lately_cmp(const void *a, const void *b) {
-  const mc_played_info *x = *(const mc_played_info *const *)a, *y = *(const mc_played_info *const *)b;
-  if (x->tracks_since != y->tracks_since) return y->tracks_since - x->tracks_since;
-  return newest_cmp(x->last_played_ms, y->last_played_ms);
+  const heard *x = *(const heard *const *)a, *y = *(const heard *const *)b;
+  if (x->tier != y->tier) return (int)x->tier - (int)y->tier;
+  if (x->plays_lately != y->plays_lately) return y->plays_lately - x->plays_lately;
+  if (x->plays_a_while != y->plays_a_while) return y->plays_a_while - x->plays_a_while;
+  if (x->guess_tracks != y->guess_tracks) return y->guess_tracks - x->guess_tracks;
+  int c = newest_cmp(newest(x->chosen_ms, x->guess_ms), newest(y->chosen_ms, y->guess_ms));
+  return c ? c : heard_uid_cmp(x, y);
 }
 
-/* Last played longest ago first, those with no time being the oldest of all. */
+/* Last heard longest ago first, those with no time being the oldest of all. */
 static int oldest_cmp(const void *a, const void *b) {
-  const mc_played_info *x = *(const mc_played_info *const *)a, *y = *(const mc_played_info *const *)b;
-  return -newest_cmp(x->last_played_ms, y->last_played_ms);
+  const heard *x = *(const heard *const *)a, *y = *(const heard *const *)b;
+  int c = -newest_cmp(x->heard_ms, y->heard_ms);
+  return c ? c : heard_uid_cmp(x, y);
 }
 
 /* --- The rows --- */
@@ -290,31 +533,30 @@ static void pick_recents(const sources *s, row *r) {
   mc_recent_list_free(list);
 }
 
-/* Albums and playlists with several tracks played in the last LATELY_DAYS, most tracks first.
- * With too few of them, those with any, then any played since A_WHILE_DAYS ago, so a quiet
- * fortnight doesn't empty the row. See the note on the guesses at the top. */
+/* Albums and playlists on repeat in the last LATELY_DAYS, the most plays first, then with too
+ * few of them whatever else lately_tier has, in its order. See the note at the top. */
 static void pick_played_lately(const sources *s, row *r) {
-  const mc_played_info **order = sorted_played(s, lately_cmp);
-  int n = order ? s->played->count : 0;
-  for (int i = 0; i < n && order[i]->tracks_since >= LATELY_TRACKS; i++) add_played(r, s, order[i]);
-  for (int i = 0; r->count < ROW_ENOUGH && i < n && order[i]->tracks_since > 0; i++) add_played(r, s, order[i]);
-  int64_t since = s->now_ms - A_WHILE_DAYS * DAY_MS;
-  for (int i = 0; r->count < ROW_ENOUGH && i < n; i++)
-    if (order[i]->last_played_ms >= since) add_played(r, s, order[i]);
+  const heard **order = sorted_heard(s, lately_cmp);
+  int n = order ? s->heard_count : 0;
+  for (int i = 0; i < n && order[i]->tier != LATELY_NONE; i++) {
+    if (order[i]->tier > LATELY_GUESS_MANY && r->count >= ROW_ENOUGH) break;
+    add_played(r, s, order[i]);
+  }
   free(order);
 }
 
 /* Albums and playlists with plays but none in the last A_WHILE_DAYS, the longest ago first,
  * those with a few tracks played before those with one. With too few of them, those played
- * longest ago that aren't in Played a Lot Recently, down to LATELY_DAYS ago. */
+ * longest ago that aren't in Played a Lot Recently, down to LATELY_DAYS ago. A skip or a failure
+ * is no play here either, but a station's is: see the note at the top. */
 static void pick_not_played_lately(const sources *s, const row *lately, row *r) {
-  const mc_played_info **order = sorted_played(s, oldest_cmp);
-  int n = order ? s->played->count : 0;
+  const heard **order = sorted_heard(s, oldest_cmp);
+  int n = order ? s->heard_count : 0;
   int64_t a_while = s->now_ms - A_WHILE_DAYS * DAY_MS, lately_ms = s->now_ms - LATELY_DAYS * DAY_MS;
-  for (int i = 0; i < n && order[i]->last_played_ms < a_while; i++)
+  for (int i = 0; i < n && order[i]->heard_ms < a_while; i++)
     if (order[i]->tracks_played >= A_WHILE_TRACKS) add_played(r, s, order[i]);
-  for (int i = 0; i < n && order[i]->last_played_ms < a_while; i++) add_played(r, s, order[i]);
-  for (int i = 0; r->count < ROW_ENOUGH && i < n && order[i]->last_played_ms < lately_ms; i++)
+  for (int i = 0; i < n && order[i]->heard_ms < a_while; i++) add_played(r, s, order[i]);
+  for (int i = 0; r->count < ROW_ENOUGH && i < n && order[i]->heard_ms < lately_ms; i++)
     if (!in_row(lately, order[i]->uid)) add_played(r, s, order[i]);
   free(order);
 }
@@ -396,7 +638,7 @@ void mc_home_picks_load(mc_library *lib, unsigned seed, mc_home_picks *out) {
     out->counts[i] = rows[i].count;
     out->has_music |= i != MC_HOME_ROW_RADIO && rows[i].count > 0;
   }
-  out->has_plays = s.played && s.played->count > 0;
+  out->has_plays = s.heard_count > 0;
   free_sources(&s);
 }
 
