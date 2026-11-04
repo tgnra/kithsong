@@ -110,7 +110,7 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
     override val queueUids: List<String>
         get() = controller?.let { c -> List(c.mediaItemCount) { c.getMediaItemAt(it).mediaId } }.orEmpty()
 
-    override val queue: List<Track>
+    override val queueTracks: List<Track>
         get() = controller?.let { c -> List(c.mediaItemCount) { c.getMediaItemAt(it).toTrack() } }.orEmpty()
 
     override fun updateQueue(tracks: List<Track>) = withController {

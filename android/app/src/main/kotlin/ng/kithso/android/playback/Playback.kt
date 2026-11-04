@@ -45,7 +45,7 @@ interface Playback {
     val queueUids: List<String>
 
     /** The queue's tracks, in queue order. */
-    val queue: List<Track> get() = emptyList()
+    val queueTracks: List<Track> get() = emptyList()
 
     /**
      * Swaps the queue for [tracks], the same ones in the same order as the library now has them

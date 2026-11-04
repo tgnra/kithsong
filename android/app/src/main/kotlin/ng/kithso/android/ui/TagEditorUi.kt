@@ -355,7 +355,7 @@ private fun TagPage(
             val result = editor.save(form.target, was, now)
             form.saved = result.saved // what did get saved is saved: a second try leaves it out
             if (result.saved != was) {
-                val queue = playback.queue
+                val queue = playback.queueTracks
                 val fresh = if (queue.isEmpty()) queue else editor.freshTracks(queue)
                 if (fresh != queue) playback.updateQueue(fresh)
             }
