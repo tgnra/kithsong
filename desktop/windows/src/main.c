@@ -1101,21 +1101,30 @@ static mc_track_list *find_track(const char *uid) {
   return NULL;
 }
 
-/* WM_CONTEXTMENU, which DefWindowProc sends for a right-click on the title bar, the strip
- * letting those through: the menu for the playing track, on its cover or title, or from the
- * keyboard (lp -1) with the strip's bar focused. FALSE if this isn't for us, which leaves the
- * title bar its own menu: nothing's playing, or an import session has the library. The menu
- * has no Move Up, Move Down or Remove from Playlist: those are for a place in a list.
+/* The playing track, if it can have a menu: not during an import session, which has the
+ * library, or if it left the library while it played. Else NULL, and the title bar keeps
+ * its own menu. Free with mc_track_list_free(). */
+static mc_track_list *now_playing_menu_track(void) {
+  return g_app.locked || !playback_current_uid()[0] ? NULL : find_track(playback_current_uid());
+}
+
+/* Whether a right-click at lp (screen coordinates) is for the playing track's menu. */
+static BOOL now_playing_menu_at(LPARAM lp) {
+  POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+  if (!now_playing_on_track(pt)) return FALSE;
+  mc_track_list *list = now_playing_menu_track();
+  mc_track_list_free(list);
+  return list != NULL;
+}
+
+/* The menu for the playing track, at pt (screen coordinates). It has no Move Up, Move Down or
+ * Remove from Playlist: those are for a place in a list.
  *
  * The track may change or go while the menu's open, so what's picked applies to the track
  * it was opened on, and to nothing if that left the library. */
-static BOOL now_playing_menu(LPARAM lp) {
-  POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-  if (lp == -1 ? GetFocus() != g_app.now_playing : !now_playing_on_track(pt)) return FALSE;
-  if (lp == -1) pt = now_playing_menu_point();
-  if (g_app.locked || !playback_current_uid()[0]) return FALSE;
-  mc_track_list *list = find_track(playback_current_uid());
-  if (!list) return FALSE;
+static void now_playing_menu(POINT pt) {
+  mc_track_list *list = now_playing_menu_track();
+  if (!list) return;
   const mc_track_info *t = &list->items[0];
   track_menu_options options = {.lib = g_app.lib, .go_to_album = track_menu_album_has_page(g_app.lib, t->album_uid),
                                 .go_to_artist = t->artist_uid[0] != '\0'};
@@ -1156,7 +1165,6 @@ static BOOL now_playing_menu(LPARAM lp) {
     refresh_library();
     UpdateWindow(g_app.grid);
   }
-  return TRUE;
 }
 
 /* An artist's page's requests for a single (see artist_view.h), as the track list's for a
@@ -1816,8 +1824,28 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (!IsZoomed(wnd) && pt.y < frame_thickness()) return HTTOP; /* the top border is in the client area */
       return pt.y < scale(BAR_H) ? HTCAPTION : HTCLIENT;           /* toolbar buttons are child windows */
     }
-    case WM_CONTEXTMENU:
-      if (now_playing_menu(lp)) return 0;
+    /* The strip lets right-clicks on the cover and title through, so they reach us as title
+     * bar clicks. DefWindowProc would keep the button's release for itself: left out of it,
+     * the release comes here too, and the menu opens on it as a track row's does. */
+    case WM_NCRBUTTONDOWN:
+      if (wp == HTCAPTION && now_playing_menu_at(lp)) return 0;
+      break;
+    case WM_NCRBUTTONUP:
+      if (wp == HTCAPTION && now_playing_menu_at(lp)) {
+        now_playing_menu((POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+        return 0;
+      }
+      break;
+    case WM_CONTEXTMENU: /* from the strip: the edge of the bar overlaps the title, or the keyboard (lp -1) */
+      if ((HWND)wp != g_app.now_playing) break;
+      if (lp == -1) {
+        now_playing_menu(now_playing_menu_point());
+        return 0;
+      }
+      if (now_playing_menu_at(lp)) {
+        now_playing_menu((POINT){GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
+        return 0;
+      }
       break;
     case WM_SIZE:
       layout();

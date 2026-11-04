@@ -12,8 +12,8 @@
  * Drawn with alpha, as it sits over Mica. Everywhere but the bar lets clicks through to the
  * title bar, so the window can still be dragged by it. That goes for right-clicks too, so
  * main.c opens the track's menu (track_menu.h), on the cover or the title, from the title
- * bar's WM_CONTEXTMENU, using now_playing_on_track(). From the keyboard it opens while the
- * bar has the focus.
+ * bar's right-clicks, using now_playing_on_track(). From the keyboard it opens while the bar
+ * has the focus.
  */
 #ifndef KITHSONG_NOW_PLAYING_H
 #define KITHSONG_NOW_PLAYING_H
