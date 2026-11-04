@@ -59,6 +59,7 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 }
 #endif
 
+#include "musiccore/play_log.h"
 #include "musiccore/library.h"
 #include "musiccore/settings.h"
 #include "musiccore/library_move.h"
