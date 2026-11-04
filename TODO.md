@@ -201,7 +201,7 @@ UI speed: Settings' Testing section has the profiler (musiccore/perf.h) and stre
 
 ### Cross-platform
 - Sync speed and time left over a real network, between real devices, and against a peer without FILE_REQ's est; a chosen cover reaching a real older peer
-- Opus: run `manual_opus_bench pool <dir> 11 128 <cache> 1` on an idle PC to replace opus.md's estimate, and a sync to a real phone
+- Opus: run `manual_opus_bench pool <dir> 11 128 <cache> 1` on an idle PC for a measured figure rather than an estimate, and a sync to a real phone
 - merge_restored's notice (never seen anywhere); on Windows, that it fits the now-playing strip
 - The library_mismatch update hint (needs a peer running an older version)
 - The waiting-for-a-device banner and card running

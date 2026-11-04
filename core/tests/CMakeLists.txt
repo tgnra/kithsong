@@ -117,7 +117,7 @@ target_link_libraries(manual_mb_ping PRIVATE musiccore)
 add_executable(manual_scrobble manual_scrobble.c)
 target_link_libraries(manual_scrobble PRIVATE musiccore)
 target_include_directories(manual_scrobble PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
-# Timing Opus encoding and an Opus sync; see opus.md.
+# Timing Opus encoding and an Opus sync.
 add_executable(manual_opus_sync manual_opus_sync.c)
 target_link_libraries(manual_opus_sync PRIVATE musiccore mc_sqlite3)
 target_include_directories(manual_opus_sync PRIVATE "${PROJECT_SOURCE_DIR}/core/src")

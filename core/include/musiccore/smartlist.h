@@ -2,8 +2,7 @@
  * of by hand, e.g. "the 10 least played tracks" or "albums added in the last 30 days". The
  * rule is JSON, stored as one value so an edit syncs whole, and is evaluated each time the
  * list is listed, so it always reflects current play counts and this device's files. The
- * format, fields and operators are in docs/schema.md (Smart lists); mc_smart_fields() lists
- * them for building an editor.
+ * format, fields and operators are in docs/schema.md (Smart lists).
  *
  * MC_ERR_FORMAT means a rule isn't valid: bad JSON, an unknown field or operator, a value of
  * the wrong type, or a newer rule version than this build understands. MC_ERR_NOT_FOUND means

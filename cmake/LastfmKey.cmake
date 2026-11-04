@@ -10,7 +10,7 @@
 #   3. the file KITHSONG_LASTFM_FILE, by default last.fm.api at the top of the source tree
 #      (gitignored): the text of Last.fm's API account page, with an "API key <hex>" and a
 #      "Shared secret <hex>" line.
-# Set both or neither: one alone turns Last.fm off with a warning. See docs/api-keys.md.
+# Set both or neither: one alone turns Last.fm off with a warning.
 
 # Hex bytes of s XORed with the mask, as two C initialisers: the even bytes into even_var and
 # the odd ones into odd_var ("0" for none, as C has no empty initialisers).

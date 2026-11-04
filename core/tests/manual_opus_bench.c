@@ -1,4 +1,4 @@
-/* How fast Opus transcoding runs here, for opus.md. Not a test: build Release, with a
+/* How fast Opus transcoding runs here. Not a test: build Release, with a
  * FETCHCONTENT_BASE_DIR of its own (a shared one lets a debug build's libopus objects in).
  *
  *   manual_opus_bench info
