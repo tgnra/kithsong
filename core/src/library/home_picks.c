@@ -230,13 +230,37 @@ static void pick_radio(const sources *s, row *r) {
   mc_radio_station_list_free(list);
 }
 
-/* As the sidebar's recents, but as many as fit: albums and playlists, and artists and album
- * groups, each with its usual picture. */
+/* A station from the recents, as pick_radio() has one: its seed's album cover, or failing that
+ * its artist's usual picture. */
+static void add_station(const sources *s, row *r, const mc_recent_info *it) {
+  mc_track_list *seed = NULL;
+  mc_library_get_track(s->lib, it->uid, &seed);
+  const mc_track_info *t = seed && seed->count ? &seed->items[0] : NULL;
+  mc_home_pick *p = add(r, MC_RECENT_ARTIST, t ? t->artist_uid : "");
+  if (p) {
+    const mc_artist_info *artist = t ? find_artist(s, t->artist_uid) : NULL;
+    p->station = 1;
+    snprintf(p->seed_uid, sizeof p->seed_uid, "%s", it->uid);
+    p->title = mc_strdup(or_untitled(it->name));
+    p->sub = mc_strdup(it->sub ? it->sub : mc_str(MC_STR_HOME_STATION_SUB));
+    p->seed_title = mc_strdup(it->seed_title ? it->seed_title : "");
+    const char *cover = t && t->cover_dir ? t->cover_dir : artist ? artist->cover_dir : NULL;
+    p->cover_dir = cover ? mc_strdup(cover) : NULL;
+  }
+  mc_track_list_free(seed);
+}
+
+/* As the sidebar's recents, but as many as fit: albums and playlists, stations, and artists and
+ * album groups, each with its usual picture. */
 static void pick_recents(const sources *s, row *r) {
   mc_recent_list *list = NULL;
-  if (mc_library_list_recents(s->lib, MC_HOME_ROW_MAX, MC_LIST_PLAYABLE, &list) != MC_OK) return;
+  if (mc_library_list_recents(s->lib, MC_HOME_ROW_MAX, MC_LIST_PLAYABLE | MC_LIST_STATIONS, &list) != MC_OK) return;
   for (int i = 0; i < list->count; i++) {
     const mc_recent_info *it = &list->items[i];
+    if (it->kind == MC_RECENT_STATION) {
+      add_station(s, r, it);
+      continue;
+    }
     if (it->is_smart) {
       add_smart(r, it->kind, it->uid, it->name);
       continue;

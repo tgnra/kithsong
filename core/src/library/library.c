@@ -1374,6 +1374,45 @@ static int play_name_index(const char *const *names, int count, const char *name
   return 0;
 }
 
+int mc_play_event_starts_station(const mc_play_event *e) {
+  return e && e->context == MC_PLAY_CONTEXT_RADIO && e->end != MC_PLAY_END_FAILED && e->context_uid[0] &&
+         !strcmp(e->track_uid, e->context_uid);
+}
+
+/* Puts the station e's seed started first in the recents, inside the caller's transaction, row
+ * uid being e's. Only the start of a station does, as a click does an album's, so one that plays
+ * on for hours isn't written again with each track, and doesn't undo a Remove from Recents made
+ * while it plays. That's the seed's row, unless this device's row before it shows the same
+ * station carrying on: an endless station comes back round to its seed, as soon as the library
+ * runs out of others. A new start of it follows a row that was replaced or stopped.
+ *
+ * A row is only written once its play ends, and one replaced by another queue arrives after
+ * whatever replaced it has been recorded. Stamped now, a station would go above the album that
+ * just ended it, so that row keeps the time it started, and only ever moves the recent forward.
+ * A seed that has gone since is no recent, and no reason to lose the play. */
+static mc_status station_played(mc_library *lib, const mc_play_event *e, const char *uid) {
+  static const char sql[] =
+    "INSERT INTO recents (uid, kind, opened_ms) SELECT ?1, ?2, ?3"
+    " WHERE EXISTS (SELECT 1 FROM tracks WHERE uid = ?1)"
+    " AND NOT EXISTS (SELECT 1 FROM (SELECT context, context_uid, ended FROM play_events"
+    "  WHERE node_uid = ?4 AND started_ms <= ?5 AND uid <> ?6 ORDER BY started_ms DESC, uid DESC LIMIT 1)"
+    "  WHERE context = 'radio' AND context_uid = ?1 AND ended IN ('finished', 'skipped'))"
+    " ON CONFLICT (uid) DO UPDATE SET kind = excluded.kind, opened_ms = excluded.opened_ms"
+    " WHERE excluded.opened_ms > recents.opened_ms";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  int64_t now = (int64_t)mc_hlc_physical_ms(mc_hlc_now(&lib->hlc)); /* as write_recents() */
+  sqlite3_bind_text(stmt, 1, e->context_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, "station", -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 3, (sqlite3_int64)(e->end == MC_PLAY_END_REPLACED ? e->started_ms : now));
+  sqlite3_bind_text(stmt, 4, lib->node_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 5, (sqlite3_int64)e->started_ms);
+  sqlite3_bind_text(stmt, 6, uid, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+}
+
 mc_status mc_library_log_play(mc_library *lib, const mc_play_event *e) {
   if (!lib || !e || !e->track_uid[0] || (int)e->context < 0 || (int)e->context >= COUNT_OF(k_play_contexts) ||
       (int)e->end < 0 || (int)e->end >= COUNT_OF(k_play_ends))
@@ -1400,6 +1439,7 @@ mc_status mc_library_log_play(mc_library *lib, const mc_play_event *e) {
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   st = rc == SQLITE_DONE ? MC_OK : (rc & 0xff) == SQLITE_CONSTRAINT ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+  if (st == MC_OK && mc_play_event_starts_station(e)) st = station_played(lib, e, uid);
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) mc_library_rollback(lib);
   return st;
@@ -1454,8 +1494,10 @@ void mc_play_log_free(mc_play_log *log) {
   free(log);
 }
 
-/* recents.kind, indexed by mc_recent_kind; the same names as sync profile items. */
-static const char *const k_recent_kinds[] = {"album", "artist", "playlist", "album_group"};
+/* recents.kind, indexed by mc_recent_kind; the same names as sync profile items, for the kinds
+ * that are one. By name, and with nothing checking them, so an older app takes a new one in and
+ * lists without it. */
+static const char *const k_recent_kinds[] = {"album", "artist", "playlist", "album_group", "station"};
 #define RECENT_KIND_COUNT ((int)(sizeof k_recent_kinds / sizeof k_recent_kinds[0]))
 
 /* Runs a write to recents in a transaction of its own, binding text parameters p1 and p2
@@ -1494,6 +1536,7 @@ mc_status mc_library_record_opened(mc_library *lib, mc_recent_kind kind, const c
     "   OR EXISTS (SELECT 1 FROM smart_lists WHERE uid = ?1 AND subject = 'tracks')"
     "  WHEN 'album_group' THEN EXISTS (SELECT 1 FROM album_groups WHERE uid = ?1)"
     "   OR EXISTS (SELECT 1 FROM smart_lists WHERE uid = ?1 AND subject = 'albums')"
+    "  WHEN 'station' THEN EXISTS (SELECT 1 FROM tracks WHERE uid = ?1)"
     " END"
     " ON CONFLICT (uid) DO UPDATE SET kind = excluded.kind, opened_ms = excluded.opened_ms";
   return write_recents(lib, sql, uid, k_recent_kinds[kind]);
@@ -1510,20 +1553,34 @@ mc_status mc_library_clear_recents(mc_library *lib) {
   return st == MC_ERR_NOT_FOUND ? MC_OK : st;
 }
 
+/* Fills in a station's recent, whose name so far is its seed's title (which may be empty), as
+ * mc_radio_stations_list() names a station. Two recents of one name are likely, as an artist's
+ * stations are, and there's no list here to look for them in, so it always says what it's like. */
+static mc_status station_recent(mc_recent_info *r, const char *artist) {
+  const char *title = r->name && *r->name ? r->name : mc_str(MC_STR_UNTITLED);
+  r->seed_title = mc_strdup(title);
+  r->sub = mc_format_alloc(mc_str(MC_STR_HOME_STATION_LIKE), MC_S(title));
+  char *name = mc_format_alloc(mc_str(MC_STR_HOME_STATION), MC_S(artist && *artist ? artist : title));
+  free(r->name);
+  r->name = name;
+  return r->seed_title && r->sub && name ? MC_OK : MC_ERR_NOMEM;
+}
+
 mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc_recent_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   /* Each kind joins only its own table, so an entry whose item is gone, or of a kind this
    * version doesn't know, matches nothing and is left out. */
   static const char sql[] =
-    "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, s.name),"
+    "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, s.name, st.title),"
     " coalesce(al.artist_credit, aar.name), s.uid IS NOT NULL,"
     " (p.uid IS NULL OR NOT EXISTS (SELECT 1 FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
     "  OR EXISTS (SELECT 1 FROM playlist_entries e JOIN files f ON f.track_uid = e.track_uid"
     "  WHERE e.playlist_uid = p.uid))"
     " AND (g.uid IS NULL OR NOT EXISTS (SELECT 1 FROM album_group_entries e WHERE e.group_uid = g.uid)"
     "  OR EXISTS (SELECT 1 FROM album_group_entries e JOIN tracks t ON t.album_uid = e.album_uid"
-    "  JOIN files f ON f.track_uid = t.uid WHERE e.group_uid = g.uid))"
+    "  JOIN files f ON f.track_uid = t.uid WHERE e.group_uid = g.uid)),"
+    " star.name, EXISTS (SELECT 1 FROM files f WHERE f.track_uid = st.uid)"
     " FROM recents r"
     " LEFT JOIN albums al ON r.kind = 'album' AND al.uid = r.uid"
     " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
@@ -1532,7 +1589,10 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
     " LEFT JOIN album_groups g ON r.kind = 'album_group' AND g.uid = r.uid"
     " LEFT JOIN smart_lists s ON s.uid = r.uid AND s.subject ="
     "  CASE r.kind WHEN 'playlist' THEN 'tracks' WHEN 'album_group' THEN 'albums' END"
-    " WHERE coalesce(al.uid, ar.uid, p.uid, g.uid, s.uid) IS NOT NULL"
+    " LEFT JOIN tracks st ON r.kind = 'station' AND ?2 AND st.uid = r.uid"
+    " LEFT JOIN albums stal ON stal.uid = st.album_uid"
+    " LEFT JOIN artists star ON star.uid = coalesce(st.artist_uid, stal.artist_uid)"
+    " WHERE coalesce(al.uid, ar.uid, p.uid, g.uid, s.uid, st.uid) IS NOT NULL"
     " ORDER BY r.opened_ms DESC, r.uid DESC LIMIT ?1";
 
   mc_recent_list *list = calloc(1, sizeof *list);
@@ -1541,7 +1601,10 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
   mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
   /* Leaving items out means the limit is counted here rather than in SQL. */
   int playable_only = (flags & MC_LIST_PLAYABLE) != 0;
-  if (st == MC_OK) sqlite3_bind_int(stmt, 1, limit > 0 && !playable_only ? limit : -1);
+  if (st == MC_OK) {
+    sqlite3_bind_int(stmt, 1, limit > 0 && !playable_only ? limit : -1);
+    sqlite3_bind_int(stmt, 2, (flags & MC_LIST_STATIONS) != 0);
+  }
   int cap = 0, rc = SQLITE_DONE;
   while (st == MC_OK && (limit <= 0 || list->count < limit) && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
     const char *kind = (const char *)sqlite3_column_text(stmt, 0);
@@ -1554,6 +1617,7 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
       if (st != MC_OK) break;
       if (!listed) continue;
     }
+    if (playable_only && k == MC_RECENT_STATION && !sqlite3_column_int(stmt, 8)) continue;
     if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
       st = MC_ERR_NOMEM;
       break;
@@ -1567,6 +1631,7 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
     r->name = column_dup(stmt, 3);
     r->artist = column_dup(stmt, 4);
     r->is_smart = sqlite3_column_int(stmt, 5);
+    if (k == MC_RECENT_STATION) st = station_recent(r, (const char *)sqlite3_column_text(stmt, 7));
   }
   if (st == MC_OK && rc != SQLITE_DONE && rc != SQLITE_ROW) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -1583,6 +1648,8 @@ void mc_recent_list_free(mc_recent_list *list) {
   for (int i = 0; i < list->count; i++) {
     free(list->items[i].name);
     free(list->items[i].artist);
+    free(list->items[i].seed_title);
+    free(list->items[i].sub);
   }
   free(list->items);
   free(list);

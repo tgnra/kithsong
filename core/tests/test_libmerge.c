@@ -261,11 +261,12 @@ static void test_merge(const char *root) {
            " SELECT 'e4000000-0000-7000-8000-000000000001', uid, 'n1', 1000, 2000, 'finished', 'album'"
            " FROM tracks LIMIT 1;"
            "INSERT INTO recents (uid, kind, opened_ms) VALUES ('%s', 'album', 100),"
-           " ('%s', 'playlist', 200), ('%s', 'playlist', 300);",
+           " ('%s', 'playlist', 200), ('%s', 'playlist', 300),"
+           " ('%s', 'station', 400), ('%s', 'hologram', 500);",
            pl_road, pl_solo, pl_road, fresh.uid, pl_road, better.uid, pl_road, same.uid, pl_road,
            lost.uid, pl_solo, mapped.uid, grp, grp, fresh.album_uid, grp, better.album_uid, smart,
            pl_solo, better.uid, better.uid, fresh.uid, fresh.album_uid, pl_solo,
-           "5e1ec7ed-0000-4000-8000-000000000002");
+           "5e1ec7ed-0000-4000-8000-000000000002", better.uid, same.uid);
   edit(lib, sql);
   /* The examples are renamed here; the kept library's own state of them wins. */
   edit(lib, "UPDATE smart_lists SET name = 'Mine' WHERE uid = '5e1ec7ed-0000-4000-8000-000000000001'");
@@ -426,8 +427,12 @@ static void test_merge(const char *root) {
   /* The play log isn't carried over: the merged library is a snapshot, without its history. */
   CHECK(query_int(db, "SELECT count(*) FROM play_events") == 0);
   CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'play_events'") == 0);
-  /* Recents: the album, the playlist and an example list. */
-  CHECK(r.recents == 3);
+  /* Recents: the album, the playlist, an example list and a station on its seed's kept track,
+   * but not a kind this version doesn't know. */
+  CHECK(r.recents == 4);
+  CHECK(query_int(db, "SELECT count(*) FROM recents WHERE kind = 'station' AND opened_ms = 400 AND uid ="
+                      " 'b1000000-0000-7000-8000-000000000001'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM recents WHERE kind = 'hologram'") == 0);
   snprintf(sql, sizeof sql, "SELECT count(*) FROM recents WHERE uid = '%s' AND opened_ms = 200",
            solo);
   CHECK(query_int(db, sql) == 1);

@@ -218,9 +218,12 @@ static void check_merged(mc_library *lib, const import *a, const import *b) {
   snprintf(sql, sizeof sql, "SELECT count(*) FROM track_plays WHERE track_uid IN ('%s', '%s')",
            smaller(a->tracks[0], b->tracks[0]), smaller(a->tracks[1], b->tracks[1]));
   CHECK(query_int(db, sql) == 2);
-  CHECK(query_int(db, "SELECT count(*) FROM recents") == 1);
-  query_text(db, "SELECT uid FROM recents", text, sizeof text);
+  CHECK(query_int(db, "SELECT count(*) FROM recents") == 2);
+  query_text(db, "SELECT uid FROM recents WHERE kind = 'album'", text, sizeof text);
   CHECK_TEXT(text, album);
+  /* A station goes with its seed, as an album's recent goes with the album. */
+  query_text(db, "SELECT uid FROM recents WHERE kind = 'station'", text, sizeof text);
+  CHECK_TEXT(text, smaller(a->tracks[0], b->tracks[0]));
   CHECK(query_int(db, "SELECT count(*) FROM aliases") == 6);
   CHECK(query_int(db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
 
@@ -565,6 +568,8 @@ int main(int argc, char **argv) {
   log_play(b, ib.tracks[1], 2000, MC_PLAY_END_FINISHED, ib.album);
   CHECK(mc_library_record_opened(b, MC_RECENT_ALBUM, ib.album) == MC_OK);
   CHECK(mc_library_record_opened(a, MC_RECENT_ALBUM, ia.album) == MC_OK);
+  CHECK(mc_library_record_opened(a, MC_RECENT_STATION, ia.tracks[0]) == MC_OK);
+  CHECK(mc_library_record_opened(b, MC_RECENT_STATION, ib.tracks[0]) == MC_OK);
 
   /* A session: A's rows to B, then B's to A, in small batches. */
   send(a, b, 7);

@@ -686,12 +686,13 @@ are English, as user data rather than UI strings.
 ## Recents
 
 `recents` holds what was last opened: albums, artists, playlists and album groups (smart
-ones included), with `kind` naming which (`'album'`, `'artist'`, `'playlist'`,
-`'album_group'`, as sync profile items do). A row's `uid` is the item's own uid, so an item
+ones included), and radio stations, with `kind` naming which (`'album'`, `'artist'`,
+`'playlist'`, `'album_group'`, as sync profile items do, and `'station'`). A row's `uid` is the
+item's own uid, a station's being its seed track's, so an item
 has one row and opening it on two devices writes the same fields: sync keeps the newer open,
 and a removal wins over an earlier open. `opened_ms` is the wall-clock part of the hlc the
 open is stamped with, so the newest change by hlc is also the newest `opened_ms`. There is
-no foreign key, since a row may name any of four tables; listing leaves out rows whose item
+no foreign key, since a row may name any of five tables; listing leaves out rows whose item
 is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
 `mc_library_remove_recent()` and `mc_library_clear_recents()`. With `MC_LIST_PLAYABLE`,
 listing also leaves out playlists, album groups and smart lists that are empty only on this
@@ -703,6 +704,28 @@ no `files` rows at all, so the example smart lists don't take the place of the e
 rule that can't be evaluated is left out. The playlist, album group and smart list listings
 take the same flag; `files` being device-local is what makes the answer differ between
 devices. Wear OS shows only what's present, so it drops the empty ones as well.
+
+A station has no moment of being opened that the core sees, as a page has: `mc_library_log_play()`
+writes its row, in the same transaction as the [play log](#play-log) row of the station's seed
+(context `radio`, `track_uid` equal to `context_uid`, and not `failed`), unless this device's row
+before it is the same station's and ended `finished` or `skipped`: a station comes back round to
+its seed, and that isn't a new start. So a station goes in when its first track ends, and the
+rest of its tracks write nothing here: it plays on without filling the changelog, and Remove from
+Recents holds while it does. That row is stamped like an open,
+except one ended by `replaced`. It arrives after whatever replaced it was recorded, so it keeps
+its `started_ms` and only moves the row forward, or the station would go above what ended it,
+and then `opened_ms` isn't the wall-clock part of its hlc. A
+station's name isn't stored: it's made from its seed when listed, as the Home page's stations are.
+
+Stations are only listed with `MC_LIST_STATIONS`, and with `MC_LIST_PLAYABLE` only if the seed
+has a `files` row here, as there's nothing to start one from otherwise. Android doesn't pass the
+flag, as it can't play a station: it has `mc_recent_kind` as a closed enum, so it mustn't be
+handed a kind it doesn't have. The row still syncs through it, and Clear Recents there clears
+stations too.
+
+`kind` is free text that nothing checks, so a new kind needs no schema version. An older app
+stores and passes on the row like any other, and its listing leaves the row out, since each kind
+joins only its own table. That's why a kind is only ever added.
 
 ## Tables
 

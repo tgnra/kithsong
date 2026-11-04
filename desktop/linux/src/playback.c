@@ -19,6 +19,8 @@ typedef struct item {
 static struct {
   GtkWindow *win;
   void (*changed)(void *user);
+  void (*recents_changed)(void *user);
+  gboolean station_logged; /* for the end of the next refresh() */
   void *user;
   mc_player *player;
   mc_library *lib; /* where plays are counted, or NULL */
@@ -101,7 +103,8 @@ static void count_plays(void) {
     if (s.scrobbler && !s.scrobble_off) mc_scrobbler_scrobble(s.scrobbler, s.items[index].uid, started_ms);
   }
   mc_play_event ended;
-  while (s.player && s.lib && mc_player_take_ended(s.player, &ended) == MC_OK) mc_library_log_play(s.lib, &ended);
+  while (s.player && s.lib && mc_player_take_ended(s.player, &ended) == MC_OK)
+    if (mc_library_log_play(s.lib, &ended) == MC_OK && mc_play_event_starts_station(&ended)) s.station_logged = TRUE;
 }
 
 /* Brings everything showing playback up to date with the player. */
@@ -142,6 +145,10 @@ static void refresh(void) {
     else if (st.state != MC_PLAYER_PLAYING && s.tick) g_clear_handle_id(&s.tick, g_source_remove);
     if (s.changed) s.changed(s.user);
   }
+  if (s.station_logged) {
+    s.station_logged = FALSE;
+    if (s.recents_changed) s.recents_changed(s.user);
+  }
 }
 
 static gboolean on_tick(gpointer data) {
@@ -171,6 +178,10 @@ void playback_init(GtkWindow *win, void (*changed)(void *user), void *user) {
   s.user = user;
   s.index = s.announced = -1;
   s.volume = 100;
+}
+
+void playback_on_recents_changed(void (*changed)(void *user)) {
+  s.recents_changed = changed;
 }
 
 void playback_free(void) {
@@ -250,6 +261,10 @@ void playback_play(const playback_track *tracks, int count, int start, mc_play_c
   g_free(paths);
   g_free(uids);
   refresh();
+}
+
+void playback_play_radio(const char *seed_track_uid) {
+  (void)seed_track_uid;
 }
 
 void playback_set_shuffle(gboolean on) {

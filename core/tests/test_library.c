@@ -1094,6 +1094,179 @@ static void test_recents(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* Logs a play of track in a station from seed. */
+static void log_radio(mc_library *lib, const char *track, const char *seed, int64_t started_ms, mc_play_end end) {
+  mc_play_event e = {.started_ms = started_ms, .listened_ms = 100, .end = end, .context = MC_PLAY_CONTEXT_RADIO};
+  snprintf(e.track_uid, sizeof e.track_uid, "%s", track);
+  snprintf(e.context_uid, sizeof e.context_uid, "%s", seed);
+  CHECK(mc_library_log_play(lib, &e) == MC_OK);
+}
+
+/* Uids of the recents with flags in order, joined with spaces, into out. */
+static void recent_uids_with(mc_library *lib, unsigned flags, char *out, size_t n) {
+  out[0] = '\0';
+  mc_recent_list *list = NULL;
+  CHECK(mc_library_list_recents(lib, 0, flags, &list) == MC_OK);
+  for (int i = 0; list && i < list->count; i++) {
+    if (i) strncat(out, " ", n - strlen(out) - 1);
+    strncat(out, list->items[i].uid, n - strlen(out) - 1);
+  }
+  mc_recent_list_free(list);
+}
+
+/* A station in the recents: put there by its seed's play log row and nothing else, named from
+ * the seed when listed, left out for a reader that didn't ask, and gone with its seed. */
+static void test_station_recents(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_station_recents.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  const unsigned all = MC_LIST_STATIONS, playable = MC_LIST_STATIONS | MC_LIST_PLAYABLE;
+  char uids[256];
+
+  /* t1 and t2 are Low's, t3 has no artist and t4 no file here. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid) VALUES ('al1', 'Things', 'ar1'), ('al2', 'Loose', NULL);"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES ('t1', 'al1', 'ar1', 'Sunflower'),"
+                 " ('t2', 'al1', NULL, 'Dinosaur'), ('t3', 'al2', NULL, 'Hum'), ('t4', 'al1', 'ar1', 'Far'),"
+                 " ('t5', 'al1', 'ar1', '');"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES ('f1', 't1', 'a/1.flac', 'flac'),"
+                 " ('f2', 't2', 'a/2.flac', 'flac'), ('f3', 't3', 'a/3.flac', 'flac'),"
+                 " ('f5', 't5', 'a/5.flac', 'flac');") == SQLITE_OK);
+
+  /* The seed's row puts it in, whichever way that track ended, and the kind is logged for sync. */
+  CHECK(mc_library_record_opened(lib, MC_RECENT_STATION, "nope") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_STATION, "al1") == MC_ERR_NOT_FOUND);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FAILED);
+  CHECK(query_int(db, "SELECT count(*) FROM recents") == 0);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_SKIPPED);
+  CHECK(query_int(db, "SELECT count(*) FROM recents WHERE uid = 't1' AND kind = 'station'") == 1);
+  CHECK(changelog_count(db, "entity = 'recents' AND row_uid = 't1' AND field = 'kind'") == 1);
+  CHECK(changelog_count(db, "entity = 'recents' AND row_uid = 't1' AND field = 'opened_ms'") == 1);
+
+  /* Named from the seed, and only for a reader that asks. A reader that doesn't, like the phone,
+   * gets its whole limit of what it can show. */
+  mc_recent_list *list = NULL;
+  CHECK(mc_library_list_recents(lib, 0, all, &list) == MC_OK && list && list->count == 1);
+  if (list && list->count == 1) {
+    CHECK(list->items[0].kind == MC_RECENT_STATION);
+    CHECK_STR(list->items[0].uid, "t1");
+    CHECK_STR(list->items[0].name, "Low Radio");
+    CHECK_STR(list->items[0].seed_title, "Sunflower");
+    CHECK_STR(list->items[0].sub, "Like Sunflower");
+    CHECK(list->items[0].artist == NULL && !list->items[0].is_smart);
+  }
+  mc_recent_list_free(list);
+  recent_uids_with(lib, 0, uids, sizeof uids);
+  CHECK(!strcmp(uids, ""));
+  mc_sleep_ms(2);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "al1") == MC_OK);
+  mc_sleep_ms(2);
+  log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_STOPPED);
+  mc_sleep_ms(2);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED); /* started again */
+  list = NULL;
+  CHECK(mc_library_list_recents(lib, 1, 0, &list) == MC_OK && list && list->count == 1);
+  if (list && list->count == 1) CHECK_STR(list->items[0].uid, "al1");
+  mc_recent_list_free(list);
+  recent_uids_with(lib, all, uids, sizeof uids);
+  CHECK(!strcmp(uids, "t1 al1"));
+
+  /* The rest of a station's tracks write nothing, the seed coming back round included, so a
+   * removal holds while it plays on. Another device's plays in between change nothing. */
+  int logged = changelog_count(db, "entity = 'recents'");
+  mc_sleep_ms(2);
+  log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED);
+  mc_sleep_ms(2);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED);
+  CHECK(changelog_count(db, "entity = 'recents'") == logged);
+  CHECK(mc_library_remove_recent(lib, "t1") == MC_OK);
+  mc_sleep_ms(2);
+  log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_SKIPPED);
+  CHECK(exec(db, "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context)"
+                 " VALUES ('other', 't2', 'peer', 9000000000000, 1, 'stopped', 'album')") == SQLITE_OK);
+  mc_sleep_ms(2);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_SKIPPED);
+  recent_uids_with(lib, all, uids, sizeof uids);
+  CHECK(!strcmp(uids, "al1"));
+  /* Played again after the queue was replaced, it's back. */
+  mc_sleep_ms(2);
+  log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_REPLACED);
+  mc_sleep_ms(2);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_STOPPED);
+  recent_uids_with(lib, all, uids, sizeof uids);
+  CHECK(!strcmp(uids, "t1 al1"));
+  CHECK(mc_library_remove_recent(lib, "t1") == MC_OK);
+
+  /* Other contexts naming the track are no station. */
+  mc_play_event album = {.started_ms = 1, .end = MC_PLAY_END_FINISHED, .context = MC_PLAY_CONTEXT_ALBUM};
+  snprintf(album.track_uid, sizeof album.track_uid, "t1");
+  snprintf(album.context_uid, sizeof album.context_uid, "t1");
+  CHECK(!mc_play_event_starts_station(&album));
+  CHECK(mc_library_log_play(lib, &album) == MC_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM recents WHERE uid = 't1'") == 0);
+
+  /* An album ending a station is recorded before the seed's row arrives, and stays first; the
+   * station still goes in, under it. */
+  int64_t started = (int64_t)mc_wall_ms();
+  mc_sleep_ms(2);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "al2") == MC_OK);
+  mc_sleep_ms(2);
+  log_radio(lib, "t3", "t3", started, MC_PLAY_END_REPLACED);
+  recent_uids_with(lib, all, uids, sizeof uids);
+  CHECK(!strcmp(uids, "al2 t3 al1"));
+  /* And doesn't take a station back to an older start. */
+  log_radio(lib, "t3", "t3", started - 1000, MC_PLAY_END_REPLACED);
+  CHECK(query_int(db, "SELECT count(*) FROM recents WHERE uid = 't3' AND opened_ms = 0") == 0);
+  char sql[128];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM recents WHERE uid = 't3' AND opened_ms = %lld", (long long)started);
+  CHECK(query_int(db, sql) == 1);
+
+  /* With no artist it's after its seed's title, and with no title it's still something. */
+  list = NULL;
+  log_radio(lib, "t5", "t5", (int64_t)mc_wall_ms(), MC_PLAY_END_STOPPED);
+  CHECK(mc_library_list_recents(lib, 0, all, &list) == MC_OK && list && list->count == 4);
+  if (list && list->count == 4) {
+    CHECK_STR(list->items[0].name, "Low Radio");
+    CHECK_STR(list->items[0].seed_title, "Untitled");
+    CHECK_STR(list->items[2].name, "Hum Radio");
+  }
+  mc_recent_list_free(list);
+
+  /* A seed with no file here can't start one, though it's kept for the devices that can. */
+  CHECK(mc_library_record_opened(lib, MC_RECENT_STATION, "t4") == MC_OK);
+  recent_uids_with(lib, all, uids, sizeof uids);
+  CHECK(!strncmp(uids, "t4 ", 3));
+  recent_uids_with(lib, playable, uids, sizeof uids);
+  CHECK(!strstr(uids, "t4"));
+
+  /* What 0.7.2 runs to list recents, word for word: an older app leaves a station out. */
+  CHECK(query_int(db, "SELECT count(*) FROM recents r"
+                      " LEFT JOIN albums al ON r.kind = 'album' AND al.uid = r.uid"
+                      " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
+                      " LEFT JOIN artists ar ON r.kind = 'artist' AND ar.uid = r.uid"
+                      " LEFT JOIN playlists p ON r.kind = 'playlist' AND p.uid = r.uid"
+                      " LEFT JOIN album_groups g ON r.kind = 'album_group' AND g.uid = r.uid"
+                      " LEFT JOIN smart_lists s ON s.uid = r.uid AND s.subject ="
+                      "  CASE r.kind WHEN 'playlist' THEN 'tracks' WHEN 'album_group' THEN 'albums' END"
+                      " WHERE coalesce(al.uid, ar.uid, p.uid, g.uid, s.uid) IS NOT NULL") == 2);
+
+  /* A seed that's gone goes from the list, as any item does, and a station playing on from it
+   * writes nothing but its plays. */
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't3'") == SQLITE_OK);
+  recent_uids_with(lib, all, uids, sizeof uids);
+  CHECK(!strstr(uids, "t3"));
+  CHECK(exec(db, "DELETE FROM recents WHERE uid = 't4';") == SQLITE_OK);
+  log_radio(lib, "t2", "t3", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED);
+
+  CHECK(mc_library_clear_recents(lib) == MC_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM recents") == 0);
+  mc_library_close(lib);
+}
+
 /* Titles of a playlist's tracks in order, joined with spaces, into out. */
 static void playlist_titles(mc_library *lib, const char *playlist, char *out, size_t n) {
   out[0] = '\0';
@@ -1936,6 +2109,7 @@ int main(int argc, char **argv) {
   test_migration_v5(argc > 1 ? argv[1] : ".");
   test_migration_v6(argc > 1 ? argv[1] : ".");
   test_recents(argc > 1 ? argv[1] : ".");
+  test_station_recents(argc > 1 ? argv[1] : ".");
   test_played(argc > 1 ? argv[1] : ".");
   test_migration_v10(argc > 1 ? argv[1] : ".");
   test_migration_v12(argc > 1 ? argv[1] : ".");

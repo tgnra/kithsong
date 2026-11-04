@@ -18,6 +18,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Windows - search doesn't filter album groups, so a group hidden as empty here can appear in results and open with its albums greyed
 - Linux - the empty Album groups page has no Choose what to sync button, as Windows has
 - Android - Android Auto's Home can list an empty playlist from Recents; its queue items now expose art through ArtProvider, untested there
+- Android - stations played on a desktop aren't shown in Recents, as the phone can't play one; pass MC_LIST_STATIONS and add ItemKind.Station when it can
 - Android - the main page has no predictive back preview, as the handler has to stay registered so back can quit
 - Windows - the edit dialog: no way to unlink an album from MusicBrainz (mc_album_tags_set() with "" does it), no Alt+letter keys for its fields and buttons, and Save can't be cancelled once it's started; the search opens with focus on Artist, so the results are three Tabs away
 - Linux - the edit dialog: no way to unlink an album from MusicBrainz; search results have no menu, so no Edit… there; the Menu key on an artist page's album tile opens the artist's menu

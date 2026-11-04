@@ -1,6 +1,10 @@
 package ng.kithso.core
 
-/** mc_recent_kind: what a recent or a search hit names. */
+/**
+ * mc_recent_kind: what a recent or a search hit names. MC_RECENT_STATION isn't here: the phone
+ * can't play one, and doesn't pass MC_LIST_STATIONS, so stations that sync in stay out of
+ * [recents] and never reach [RecentInfo]'s index into this. Adding it means passing the flag.
+ */
 enum class ItemKind { Album, Artist, Playlist, AlbumGroup }
 
 /**

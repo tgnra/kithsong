@@ -7,6 +7,7 @@
 #include "drag.h"
 #include "edit_dialog.h"
 #include "home_view.h"
+#include "playback.h"
 
 enum { MAX_RECENTS = 3 };
 
@@ -18,12 +19,13 @@ static struct {
   GSimpleAction *edit;              /* enabled for an album or artist, and hidden otherwise */
 } r;
 
-/* The icon of the sidebar page it opens on. */
+/* The icon of the sidebar page it opens on, or a station's mark on the Home page. */
 static const char *kind_icon(mc_recent_kind kind) {
   switch (kind) {
     case MC_RECENT_PLAYLIST: return "view-list-symbolic";
     case MC_RECENT_ARTIST: return "avatar-default-symbolic";
     case MC_RECENT_ALBUM_GROUP: return "folder-symbolic";
+    case MC_RECENT_STATION: return "network-wireless-signal-excellent-symbolic";
     default: return "media-optical-symbolic";
   }
 }
@@ -86,7 +88,7 @@ static gboolean on_drop(GtkDropTarget *target, const GValue *value, double x, do
 
 /* A row like the pages above it: the icon and the name, cut off if it's long, with the
  * whole name and the album's artist (or what it is: "Playlist", "Artist", "Album group",
- * "Smart playlist", "Smart album group") in the tooltip. */
+ * "Smart playlist", "Smart album group", or what a station's like) in the tooltip. */
 static GtkWidget *recent_row(const mc_recent_info *info) {
   const char *name = info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED);
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
@@ -106,6 +108,7 @@ static GtkWidget *recent_row(const mc_recent_info *info) {
                        : info->kind == MC_RECENT_ARTIST                        ? mc_str(MC_STR_ARTIST)
                        : info->kind == MC_RECENT_ALBUM_GROUP && info->is_smart ? mc_str(MC_STR_SMART_ALBUM_GROUP)
                        : info->kind == MC_RECENT_ALBUM_GROUP                   ? mc_str(MC_STR_ALBUM_GROUP)
+                       : info->kind == MC_RECENT_STATION                       ? (info->sub ? info->sub : mc_str(MC_STR_HOME_STATION_SUB))
                        : info->artist                        ? info->artist
                                                              : mc_str(MC_STR_UNKNOWN_ARTIST);
   char *tip = g_strdup_printf("%s\n%s", name, detail);
@@ -139,6 +142,7 @@ static void on_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
     case MC_RECENT_ARTIST: app_open_artist(user, copy); break;
     case MC_RECENT_ALBUM_GROUP: app_open_album_group(user, copy); break;
     case MC_RECENT_PLAYLIST: app_open(user, TRUE, copy); break;
+    case MC_RECENT_STATION: playback_play_radio(copy); break; /* it has no page */
     default: app_open_album_or_single(user, copy, g_object_get_data(G_OBJECT(row), "artist")); break;
   }
 }
@@ -288,7 +292,7 @@ void recents_refresh(app *a) {
   while ((child = gtk_widget_get_first_child(r.list))) gtk_list_box_remove(GTK_LIST_BOX(r.list), child);
 
   mc_recent_list *list = NULL;
-  if (!a->lib || mc_library_list_recents(a->lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
+  if (!a->lib || mc_library_list_recents(a->lib, 0, MC_LIST_PLAYABLE | MC_LIST_STATIONS, &list) != MC_OK) list = NULL;
   int n = 0;
   for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
     const mc_recent_info *info = &list->items[i];

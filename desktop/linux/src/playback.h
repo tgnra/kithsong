@@ -39,6 +39,9 @@ mc_scrobbler *playback_scrobbler(void);
 void playback_on_scrobbler_closing(void (*closing)(void));
 /* Whether this device scrobbles (mc_settings_scrobble(); on to begin with). */
 void playback_set_scrobble(gboolean on);
+/* changed is called, with playback_init()'s user, when a play just logged has changed the
+ * recents: a station goes in them once its first track ends (mc_play_event_starts_station()). */
+void playback_on_recents_changed(void (*changed)(void *user));
 
 
 /* Stops playing and empties the queue, letting go of the file that was playing; for before
@@ -51,6 +54,8 @@ void playback_art_changed(mc_library *lib, const char *album_uid);
  * any track). context and context_uid (or NULL) say what's played, for the play log. */
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
                    const char *context_uid);
+/* A stub until the Linux frontend's lands. */
+void playback_play_radio(const char *seed_track_uid);
 /* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to
  * whatever is queued next. Off to begin with; main.c keeps it in the settings. */
 void playback_set_shuffle(gboolean on);
