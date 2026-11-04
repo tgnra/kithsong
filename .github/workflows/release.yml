@@ -79,10 +79,26 @@ jobs:
         env:
           KITHSONG_BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/release-windows.ps1
+      # Packs what Build installed, so the stage folder is named from the version job's output.
+      # The script takes the package version from VERSION; a stage folder that doesn't match
+      # fails here. Windows PowerShell, as the script is run and tested locally. The runner's
+      # Windows SDK has makeappx and makepri.
+      - name: Pack the MSIX
+        shell: powershell
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: scripts/package-msix.ps1 -StageDir "build/stage-windows/kithsong-$env:VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: dist/*.zip
+          if-no-files-found: error
+      # Its own artifact, as if-no-files-found only fires when every path comes up empty. The
+      # release job's merge-multiple download puts it in dist/ with the rest.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-msix
+          path: dist/*.msix
           if-no-files-found: error
 
   linux:

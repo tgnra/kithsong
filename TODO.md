@@ -9,7 +9,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## Release
 
-- Windows - Store submission (scripts/package-msix.ps1 packs an unsigned MSIX; the Store signs it), a winget manifest for the website to show, and the portable zip under the website's Other downloads. Decided: no traditional installer
+- Windows - Store submission (the release workflow attaches an unsigned MSIX from scripts/package-msix.ps1 to the draft release; the Store signs it), a winget manifest for the website to show, and the portable zip under the website's Other downloads. Decided: no traditional installer
 - Windows - the MSIX declares the firewall rule (the desktop2 windows.firewallRules extension, Private/Domain, as firewall.c adds it), so a Store install never shows the prompt; the zip keeps the prompt
 - Linux - Flathub. Decided: yes. Every dependency in third_party/CMakeLists.txt becomes a Flatpak source in packaging/flatpak/app.kithsong.Kithsong.yml (it fetches them at build time today, which Flathub forbids); then architectures other than x86_64
 

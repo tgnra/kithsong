@@ -6,6 +6,7 @@ the release workflow all read it.
 | Platform | Package | Script |
 |----------|---------|--------|
 | Windows | `kithsong-<ver>-windows-x64.zip`, a portable folder with `kithsong.exe` and `LICENSES\` | `scripts/release-windows.ps1` (Windows) |
+| Windows (Store) | `kithsong-<ver>-windows-x64.msix`, unsigned, for Partner Center | `scripts/package-msix.ps1` (Windows) |
 | Linux | `kithsong-<ver>-linux-x86_64.flatpak`, a single-file Flatpak bundle | `scripts/release-linux.sh` (Linux) |
 | Android | `kithsong-<ver>-android.apk` / `.aab`, and `-android-mapping.txt` | `scripts/release-android.sh` or `.ps1` |
 | Wear OS | `kithsong-<ver>-wearos.apk` / `.aab`, and `-wearos-mapping.txt` | the same script |
@@ -128,7 +129,7 @@ decode, the base64 was probably wrapped: re-encode with `-w0`.
 1. Set `VERSION` to the new version, e.g. `0.2.0`, and commit.
 2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`. Use a tag such as `v0.2.0-rc1`
    for a prerelease. The suffix is ignored when checking the tag against `VERSION`.
-3. The workflow builds all four platforms and creates a **draft** release with the eight files
+3. The workflow builds all four platforms and creates a **draft** release with the nine files
    attached. Review it on GitHub and publish it.
 
 To test the builds without a release, run the workflow by hand (Actions → Release → Run
@@ -148,8 +149,9 @@ unique.
 
 `scripts/package-msix.ps1` packs the Windows build as an unsigned
 `dist/kithsong-<ver>-windows-x64.msix` for uploading to Partner Center, which signs it on
-ingestion. It isn't part of the release workflow. Run it on Windows with the Windows SDK
-installed (it finds `makeappx.exe` and `makepri.exe` on `PATH` or under
+ingestion. The release workflow runs it after the Windows build, uploads the package as the
+`windows-msix` artifact and attaches it to the draft release. To run it yourself, use Windows
+with the Windows SDK installed (it finds `makeappx.exe` and `makepri.exe` on `PATH` or under
 `Windows Kits\10\bin`), plus what `release-windows.ps1` needs:
 
 ```powershell
@@ -161,8 +163,8 @@ The three values are on Partner Center's Product management → Product identity
 (`Package/Identity/Name`, `Package/Identity/Publisher` and
 `Package/Properties/PublisherDisplayName`), and must match exactly, or the upload is refused.
 They can also come from `$env:KITHSONG_MSIX_IDENTITY_NAME`, `$env:KITHSONG_MSIX_PUBLISHER` and
-`$env:KITHSONG_MSIX_PUBLISHER_NAME`. Left out, they're placeholders: the package still builds,
-with a warning, but the Store refuses it.
+`$env:KITHSONG_MSIX_PUBLISHER_NAME`. Left out, they default to Kithsong's own, which aren't
+secret, so the workflow needs nothing set.
 
 The script runs `release-windows.ps1` (the same build, tests and zip), or packs an existing
 install with `-StageDir build\stage-windows\kithsong-<ver>`. It copies that into
@@ -209,8 +211,8 @@ the `-Publisher` value (`New-SelfSignedCertificate -Type CodeSigningCert -Subjec
 
 ## Not done yet
 
-- Windows: no installer or code signing. The MSIX package is built by hand, not by the
-  workflow, and is unsigned until the Store signs it.
+- Windows: no installer or code signing. The MSIX package is unsigned until the Store signs
+  it, and uploading it to Partner Center is still done by hand.
 - Linux: not on Flathub. Flathub builds offline, so every fetched dependency in
   `third_party/CMakeLists.txt` would need to be a Flatpak source. x86_64 only.
 - The icons in `packaging/icons/` are generated from `kithsong.svg` by `render.py`. Rerun it
