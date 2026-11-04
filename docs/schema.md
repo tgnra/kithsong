@@ -515,9 +515,9 @@ during the day, as the scanner does for hours on a new library.
 
 `core/tests/manual_stations <library folder>` prints a library's stations and how long they took,
 `--days <n>` the next days' too. `--make <tracks>` fills an empty folder with a made-up library to
-time. In a release build a made-up library of 50,000 tracks takes about half a second, on Home's
-own background thread: 300 ms for the query, 140 ms for the sample, whatever the library's size,
-and 40 ms for settling.
+time. In a release build a made-up library of 50,000 tracks took about 0.7 seconds on Home's own
+background thread, and several times that with the machine busy. Of that about 300 ms is the query,
+140 ms the sample, whatever the library's size, and 40 ms settling.
 
 ## Stats
 
