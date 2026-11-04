@@ -6,6 +6,8 @@
 #include "art_accent.h"
 #include "cover.h"
 #include "musiccore/musiccore.h"
+#include "playback.h"
+#include "track_menu.h"
 
 enum {
   ART = 36, /* the cover's square, as tall as the playback buttons */
@@ -27,6 +29,16 @@ static struct {
   gboolean updating;     /* we're moving the bar, not the user */
   char *markup;          /* the track's line, while a flash covers it */
   guint flash;           /* the flash's timeout */
+
+  track_list_callbacks cb; /* what the track's menu asks for */
+  mc_library *(*library)(void *user);
+  GtkWidget *menu;
+  GSimpleAction *go_to_album, *go_to_artist;
+  char menu_uid[MC_UID_STRLEN]; /* the track it was opened on */
+  char menu_album[MC_UID_STRLEN];
+  char menu_artist[MC_UID_STRLEN];
+  gboolean menu_here;   /* it has a file here */
+  gboolean menu_by_key; /* opened from the bar, so the focus goes back there */
 } s;
 
 static void format_time(int ms, char *out, size_t n) {
@@ -100,6 +112,135 @@ static void on_shuffle_toggled(GtkToggleButton *button, gpointer user) {
   if (!s.updating && s.shuffle) s.shuffle(s.user, on);
 }
 
+/* --- The track's menu --- */
+
+/* The track with uid, as a list of one, or NULL if there's no menu or the library hasn't it. */
+static mc_track_list *find_track(const char *uid) {
+  mc_library *lib = s.library ? s.library(s.cb.user) : NULL;
+  mc_track_list *list = NULL;
+  if (!lib || !uid[0] || mc_library_list_track(lib, uid, &list) != MC_OK) return NULL;
+  if (list->count) return list;
+  mc_track_list_free(list);
+  return NULL;
+}
+
+/* Makes the menu act on the playing track. FALSE if there's no menu to open. */
+static gboolean menu_for_playing(void) {
+  mc_track_list *list = s.playing && s.menu ? find_track(playback_current_uid()) : NULL;
+  if (!list) return FALSE;
+  const mc_track_info *t = &list->items[0];
+  memcpy(s.menu_uid, t->uid, sizeof s.menu_uid);
+  memcpy(s.menu_album, t->album_uid, sizeof s.menu_album);
+  memcpy(s.menu_artist, t->artist_uid, sizeof s.menu_artist);
+  s.menu_here = t->path != NULL;
+  g_simple_action_set_enabled(s.go_to_album, track_menu_album_has_page(s.library(s.cb.user), s.menu_album));
+  g_simple_action_set_enabled(s.go_to_artist, s.menu_artist[0] != '\0');
+  mc_track_list_free(list);
+  return TRUE;
+}
+
+/* Opens the menu at x, y in the strip. */
+static void popup_menu_at(float x, float y) {
+  gtk_popover_set_pointing_to(GTK_POPOVER(s.menu), &(GdkRectangle){(int)x, (int)y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(s.menu));
+}
+
+/* Right-click on the cover or the title. With no menu to open, the header bar gets the click
+ * and offers its own. */
+static void on_track_click(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  (void)user;
+  GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
+  graphene_point_t at;
+  if ((widget == s.title && s.flash) || !menu_for_playing() ||
+      !gtk_widget_compute_point(widget, s.box, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) {
+    gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_DENIED);
+    return;
+  }
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  s.menu_by_key = FALSE;
+  popup_menu_at(at.x, at.y);
+}
+
+/* The Menu key or Shift+F10 on the bar: the menu, under the cover. */
+static gboolean on_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  graphene_rect_t at;
+  if (!menu_for_playing() || !gtk_widget_compute_bounds(s.picture, s.box, &at)) return FALSE;
+  s.menu_by_key = TRUE;
+  popup_menu_at(at.origin.x, at.origin.y + at.size.height);
+  return TRUE;
+}
+
+/* A closed menu gives the focus back to the bar, which GTK would hand elsewhere. */
+static void on_menu_closed(GtkPopover *menu, gpointer user) {
+  (void)menu;
+  (void)user;
+  if (s.menu_by_key) gtk_widget_grab_focus(s.bar);
+}
+
+/* What the menu's items do, to the track it was opened on, if that's still in the library:
+ * the playing track may have changed since, or gone. */
+static void on_menu_action(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)param;
+  (void)user;
+  const char *name = g_action_get_name(G_ACTION(action));
+  mc_track_list *list = find_track(s.menu_uid);
+  if (!list) return;
+  if (!strcmp(name, "add-to-playlist")) {
+    if (s.cb.add_to_playlist) s.cb.add_to_playlist(s.cb.user, s.menu_uid, s.menu_here);
+  } else if (!strcmp(name, "edit")) {
+    if (s.cb.edit_track) s.cb.edit_track(s.cb.user, s.menu_uid);
+  } else if (!strcmp(name, "delete")) {
+    const char *title = list->items[0].title;
+    if (s.cb.delete_track) s.cb.delete_track(s.cb.user, s.menu_uid, title && *title ? title : mc_str(MC_STR_UNTITLED));
+  } else if (action == s.go_to_album) {
+    if (s.cb.go_to_album) s.cb.go_to_album(s.cb.user, s.menu_album, s.menu_uid);
+  } else if (action == s.go_to_artist) {
+    if (s.cb.go_to_artist) s.cb.go_to_artist(s.cb.user, s.menu_artist);
+  }
+  mc_track_list_free(list);
+}
+
+static GSimpleAction *add_action(GSimpleActionGroup *group, const char *name) {
+  GSimpleAction *action = g_simple_action_new(name, NULL);
+  g_signal_connect(action, "activate", G_CALLBACK(on_menu_action), NULL);
+  g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(action));
+  g_object_unref(action); /* the group keeps it */
+  return action;
+}
+
+void now_playing_set_track_menu(const track_list_callbacks *cb, mc_library *(*library)(void *user)) {
+  s.cb = *cb;
+  s.library = library;
+  GSimpleActionGroup *actions = g_simple_action_group_new();
+  add_action(actions, "add-to-playlist");
+  add_action(actions, "edit");
+  add_action(actions, "delete");
+  s.go_to_album = add_action(actions, "go-to-album");
+  s.go_to_artist = add_action(actions, "go-to-artist");
+  gtk_widget_insert_action_group(s.box, "track", G_ACTION_GROUP(actions));
+  g_object_unref(actions);
+
+  GMenuModel *model = track_menu_model(FALSE);
+  s.menu = gtk_popover_menu_new_from_model(model);
+  g_object_unref(model);
+  gtk_popover_set_has_arrow(GTK_POPOVER(s.menu), FALSE);
+  gtk_widget_set_halign(s.menu, GTK_ALIGN_START);
+  gtk_widget_set_parent(s.menu, s.box);
+  g_signal_connect(s.menu, "closed", G_CALLBACK(on_menu_closed), NULL);
+}
+
+/* Right-clicks on widget open the track's menu. */
+static void add_track_click(GtkWidget *widget) {
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "pressed", G_CALLBACK(on_track_click), NULL);
+  gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(click));
+}
+
 static GtkWidget *time_label(void) {
   GtkWidget *l = gtk_label_new("0:00");
   gtk_widget_add_css_class(l, "numeric");
@@ -117,7 +258,9 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(voi
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
   gtk_widget_add_css_class(box, "now-playing");
   s.box = box;
-  gtk_box_append(GTK_BOX(box), cover_frame_new(ART, 16, &s.picture));
+  GtkWidget *cover = cover_frame_new(ART, 16, &s.picture);
+  add_track_click(cover);
+  gtk_box_append(GTK_BOX(box), cover);
 
   GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_set_hexpand(right, TRUE);
@@ -125,6 +268,8 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(voi
   s.title = gtk_label_new(NULL);
   gtk_label_set_ellipsize(GTK_LABEL(s.title), PANGO_ELLIPSIZE_END);
   gtk_widget_add_css_class(s.title, "caption");
+  gtk_widget_set_halign(s.title, GTK_ALIGN_CENTER); /* as wide as the text, which right-clicks open the menu on */
+  add_track_click(s.title);
   gtk_box_append(GTK_BOX(right), s.title);
 
   GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -142,6 +287,13 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(voi
   gtk_event_controller_set_propagation_phase(legacy, GTK_PHASE_CAPTURE);
   g_signal_connect(legacy, "event", G_CALLBACK(on_bar_event), NULL);
   gtk_widget_add_controller(s.bar, legacy);
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  const guint menu_keys[][2] = {{GDK_KEY_Menu, 0}, {GDK_KEY_F10, GDK_SHIFT_MASK}};
+  for (size_t i = 0; i < G_N_ELEMENTS(menu_keys); i++)
+    gtk_shortcut_controller_add_shortcut(GTK_SHORTCUT_CONTROLLER(keys),
+                                         gtk_shortcut_new(gtk_keyval_trigger_new(menu_keys[i][0], menu_keys[i][1]),
+                                                          gtk_callback_action_new(on_menu_key, NULL, NULL)));
+  gtk_widget_add_controller(s.bar, keys);
   gtk_box_append(GTK_BOX(row), s.bar);
   s.left = time_label();
   gtk_label_set_xalign(GTK_LABEL(s.left), 0);

@@ -910,6 +910,11 @@ static mc_status list_tracks(mc_library *lib, const char *sql, const char *key, 
   return mc_library_read_tracks(lib, stmt, out);
 }
 
+mc_status mc_library_list_track(mc_library *lib, const char *track_uid, mc_track_list **out) {
+  static const char sql[] = TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.uid = ?";
+  return list_tracks(lib, sql, track_uid, out);
+}
+
 mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out) {
   static const char sql[] =
     TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.album_uid = ?"

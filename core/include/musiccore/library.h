@@ -199,6 +199,9 @@ typedef struct mc_track_list {
   int count;
 } mc_track_list;
 
+/* The one track with track_uid, or an empty list if the library has no such track (it was
+ * deleted, say, while it played on). Free with mc_track_list_free(). */
+mc_status mc_library_list_track(mc_library *lib, const char *track_uid, mc_track_list **out);
 /* An album's tracks in order: by disc, then track number (unnumbered tracks last), then
  * title. Free with mc_track_list_free(). */
 mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out);

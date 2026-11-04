@@ -10,7 +10,10 @@
  * bar is greyed out and has no thumb.
  *
  * Drawn with alpha, as it sits over Mica. Everywhere but the bar lets clicks through to the
- * title bar, so the window can still be dragged by it.
+ * title bar, so the window can still be dragged by it. That goes for right-clicks too, so
+ * main.c opens the track's menu (track_menu.h), on the cover or the title, from the title
+ * bar's WM_CONTEXTMENU, using now_playing_on_track(). From the keyboard it opens while the
+ * bar has the focus.
  */
 #ifndef KITHSONG_NOW_PLAYING_H
 #define KITHSONG_NOW_PLAYING_H
@@ -38,6 +41,12 @@ void now_playing_art_changed(void);
 /* Where playback is, in ms. Ignored while the user drags the thumb. */
 void now_playing_set_position(int ms);
 int now_playing_position(void);
+
+/* Whether pt (screen coordinates) is on the track's cover or its line of text. Never with
+ * nothing playing, nor on text that a flash has taken the place of. */
+BOOL now_playing_on_track(POINT pt);
+/* Where the track's menu opens from the keyboard (screen coordinates): under the cover. */
+POINT now_playing_menu_point(void);
 
 /* Shows text in the track's place for a moment, e.g. "Volume 40%" after a shortcut. */
 void now_playing_flash(const wchar_t *text);
