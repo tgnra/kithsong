@@ -76,7 +76,9 @@ GtkWidget *app_list_header(const char *title, const char *tooltip, const char *a
                            gpointer user, GMenuModel *menu, const char *menu_tooltip);
 
 /* Plays the album or playlist shown in the track list, from track start on (or with start
- * -1 from the first track, which shuffled is any), and puts it first in the recents. */
+ * -1 from the first track, which shuffled is any), and puts it first in the recents. An
+ * album on an album group's page plays as part of the group, going on into the albums after
+ * it, and puts the group first instead. */
 void app_play_album(app *a, int start);
 
 /* How the open album group plays (album_groups.h): its albums in its order, or in a random

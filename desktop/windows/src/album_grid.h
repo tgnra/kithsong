@@ -45,7 +45,8 @@ void album_grid_set_first_run(BOOL first_run);
  * AGV_GROUP, its albums under a header with Back (also Backspace, Alt+Left and the mouse's
  * back button), its name, and a More button with Rename and Delete. Under that, across the
  * grid, Play, Shuffle Albums and Shuffle Tracks play its albums (AGN_PLAY_GROUP), greyed out
- * when none of them has a file here.
+ * when none of them has a file here. An album played from the track list here is played as
+ * part of the group too, going on into the albums after it.
  *
  * Smart playlists and smart album groups (smartlist.h) follow the others, those with
  * something to play here, with a placeholder and "Smart playlist" or "Smart album group"
