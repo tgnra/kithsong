@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cover.h"
 #include "playback.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)
@@ -15,6 +16,7 @@ enum {
   SEARCH_WIDTH = 640,
   SEARCH_HEIGHT = 620,
   BANNER_ROOM = 104, /* what the dialog grows by for the banner, its button under its text */
+  ART_SIZE = 128,
   YEAR_DIGITS = 4,
   NUMBER_DIGITS = 3,
 };
@@ -46,14 +48,20 @@ typedef struct edit_form {
   GtkWidget *save_focus; /* what had the focus as Save started, which greying out takes away */
   GtkWidget *fields[NUM_FIELDS]; /* AdwEntryRows; NULL for those not on the form */
   GtkWidget *mb_row, *mb_search, *no_scrobble, *mix;
+  GtkWidget *art, *art_picture, *art_none, *art_drop, *art_change, *art_note;
   char *mb;                /* the release the form has now, "" for none */
   char *saved[NUM_FIELDS]; /* what's in the library, as text; NULL for a field not on the form */
   mc_album_flags saved_flags;
+  gboolean art_ok;    /* the album has a folder here to put a cover in */
+  GBytes *new_art;    /* the image that Save would use */
+  GCancellable *art_closing; /* what's going on for the cover that closing stops */
   GtkWidget *search;  /* the search dialog while it's open */
   gboolean loaded;    /* the tags were read, so there's something to save */
   gboolean saving;
+  gboolean reading;   /* an image is being read, for the cover */
   gboolean in_use;    /* Save found a file open while something plays: the banner offers to stop */
   gboolean changed;   /* something was saved */
+  gboolean art_saved; /* a new cover was, of what changed */
   gboolean closed;
 } edit_form;
 
@@ -84,6 +92,12 @@ typedef struct job {
   char *text[NUM_FIELDS];
   mc_album_flags flags;
   gboolean set_tags, set_flags, tags_saved, flags_saved;
+  /* A new cover: the image, to save or, read from art_file, to check and show at art_size. */
+  GFile *art_file;
+  GBytes *art;
+  GdkTexture *art_texture;
+  int art_size;
+  gboolean set_art, art_tried, art_saved;
   /* Search. */
   char *artist, *title;
   mc_release_list *list;
@@ -104,6 +118,9 @@ static void job_free(gpointer data) {
   g_free(j->title);
   mc_release_list_free(j->list);
   if (j->has_tags) mc_album_tags_clear(&j->tags);
+  g_clear_object(&j->art_file);
+  g_clear_pointer(&j->art, g_bytes_unref);
+  g_clear_object(&j->art_texture);
   g_free(j);
 }
 
@@ -516,7 +533,8 @@ static mc_status load(edit_form *f) {
   return st;
 }
 
-/* On the save's thread: the tags, then the flags, each if it changed. */
+/* On the save's thread: the tags, then the flags, each if it changed, then a new cover, which
+ * goes last as tags can move the album's folder. */
 static void run_save(job *j) {
   char **f = j->text;
   mc_status st = MC_OK;
@@ -537,6 +555,13 @@ static void run_save(job *j) {
     st = mc_album_flags_set(j->lib, j->uid, &j->flags);
     j->flags_saved = st == MC_OK;
   }
+  if (st == MC_OK && j->set_art) {
+    gsize len = 0;
+    const void *image = g_bytes_get_data(j->art, &len);
+    j->art_tried = TRUE;
+    st = mc_album_art_set(j->lib, j->uid, image, len);
+    j->art_saved = st == MC_OK;
+  }
   j->st = st;
 }
 
@@ -553,12 +578,19 @@ static void form_say(edit_form *f, const char *text) {
 
 static void form_update(edit_form *f) {
   gboolean off = f->saving || !f->loaded;
-  gtk_widget_set_sensitive(f->save, !off);
+  gtk_widget_set_sensitive(f->save, !off && !f->reading);
   gtk_widget_set_sensitive(f->cancel, !f->saving);
   gtk_widget_set_sensitive(f->groups, !off);
-  gtk_widget_set_visible(f->spinner, f->saving);
-  gtk_spinner_set_spinning(GTK_SPINNER(f->spinner), f->saving);
+  gtk_widget_set_visible(f->spinner, f->saving || f->reading);
+  gtk_spinner_set_spinning(GTK_SPINNER(f->spinner), f->saving || f->reading);
   adw_dialog_set_can_close(ADW_DIALOG(f->dialog), !f->saving); /* a save can't be taken back halfway */
+}
+
+/* What the library and what shows it need once the form is done: the views key what they've
+ * decoded on the file, which is the same one, so the playing track's cover is shown again. */
+static void form_finished(edit_form *f) {
+  if (f->changed) app_reload_library(f->a);
+  if (f->art_saved && f->a->lib == f->lib) playback_art_changed(f->lib, f->uid);
 }
 
 static void save_done(gpointer owner, job *j) {
@@ -572,9 +604,13 @@ static void save_done(gpointer owner, job *j) {
       j->text[i] = NULL;
     }
   if (j->flags_saved) f->saved_flags = j->flags;
-  f->changed |= j->tags_saved || j->flags_saved;
+  if (j->art_saved) {
+    g_clear_pointer(&f->new_art, g_bytes_unref);
+    f->art_saved = TRUE;
+  }
+  f->changed |= j->tags_saved || j->flags_saved || j->art_saved;
   if (f->closed) { /* closed from outside, with the library going: edit_dialog_close() */
-    if (f->changed) app_reload_library(f->a);
+    form_finished(f);
     return;
   }
   form_update(f);
@@ -582,8 +618,8 @@ static void save_done(gpointer owner, job *j) {
     adw_dialog_force_close(ADW_DIALOG(f->dialog));
     return;
   }
-  /* Nothing changed, and it's most likely the track playing. */
-  f->in_use = j->st == MC_ERR_IN_USE && playback_queue_count() > 0;
+  /* Nothing changed, and it's most likely the track playing; a cover isn't played. */
+  f->in_use = j->st == MC_ERR_IN_USE && !j->art_tried && playback_queue_count() > 0;
   char *failed = j->st == MC_ERR_NOT_FOUND ? NULL
                                            : mc_format_alloc(mc_str(MC_STR_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st)));
   form_say(f, failed ? failed : mc_str(MC_STR_EDIT_GONE));
@@ -593,7 +629,7 @@ static void save_done(gpointer owner, job *j) {
 
 /* Save: nothing to do closes the dialog, as there's nothing to lose. */
 static void save(edit_form *f) {
-  if (f->saving || !f->loaded) return;
+  if (f->saving || f->reading || !f->loaded) return;
   job *j = g_new0(job, 1);
   j->run = run_save;
   j->done = save_done;
@@ -612,7 +648,11 @@ static void save(edit_form *f) {
     j->flags.mix = adw_switch_row_get_active(ADW_SWITCH_ROW(f->mix));
     j->set_flags = !j->flags.no_scrobble != !f->saved_flags.no_scrobble || !j->flags.mix != !f->saved_flags.mix;
   }
-  if (!j->set_tags && !j->set_flags) {
+  if (f->new_art) {
+    j->art = g_bytes_ref(f->new_art);
+    j->set_art = TRUE;
+  }
+  if (!j->set_tags && !j->set_flags && !j->set_art) {
     job_free(j);
     adw_dialog_force_close(ADW_DIALOG(f->dialog));
     return;
@@ -623,6 +663,164 @@ static void save(edit_form *f) {
   form_say(f, mc_str(MC_STR_EDIT_SAVING));
   form_update(f);
   job_start(f->dialog, j);
+}
+
+/* --- The cover --- */
+
+/* What the form says beside the cover. */
+static void art_say(edit_form *f, const char *text, gboolean error) {
+  gtk_label_set_text(GTK_LABEL(f->art_note), text);
+  if (error) {
+    gtk_widget_remove_css_class(f->art_note, "dim-label");
+    gtk_widget_add_css_class(f->art_note, "error");
+  } else {
+    gtk_widget_remove_css_class(f->art_note, "error");
+    gtk_widget_add_css_class(f->art_note, "dim-label");
+  }
+}
+
+/* The cover shown, or for NULL the place for one, and what a screen reader calls it. */
+static void art_show(edit_form *f, GdkTexture *texture, enum mc_str_id name) {
+  gtk_picture_set_paintable(GTK_PICTURE(f->art_picture), GDK_PAINTABLE(texture));
+  gtk_widget_set_visible(f->art_none, !texture);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(f->art), GTK_ACCESSIBLE_PROPERTY_LABEL, mc_str(name), -1);
+}
+
+/* On a thread of its own: the file's bytes, if they make a cover, and what they look like. */
+static void run_read_art(job *j) {
+  j->st = MC_ERR_IO;
+  GFileInfo *info = g_file_query_info(j->art_file, G_FILE_ATTRIBUTE_STANDARD_SIZE, G_FILE_QUERY_INFO_NONE, NULL, NULL);
+  if (!info) return;
+  goffset size = g_file_info_get_size(info);
+  g_object_unref(info);
+  char *data = NULL;
+  gsize len = 0;
+  if (size > MC_ALBUM_ART_MAX_BYTES) {
+    j->st = MC_ERR_FORMAT;
+  } else if (g_file_load_contents(j->art_file, NULL, &data, &len, NULL, NULL)) {
+    j->art = g_bytes_new_take(data, len);
+    j->st = mc_album_art_check(data, len);
+    if (j->st == MC_OK) j->art_texture = cover_decode_bytes(j->art, j->art_size);
+  }
+}
+
+static void read_art_done(gpointer owner, job *j) {
+  edit_form *f = owner;
+  if (f->closed) return;
+  f->reading = FALSE;
+  if (j->st == MC_OK && j->art_texture) {
+    g_clear_pointer(&f->new_art, g_bytes_unref);
+    f->new_art = g_steal_pointer(&j->art);
+    art_show(f, j->art_texture, MC_STR_EDIT_ART_NEW_NAME);
+    art_say(f, mc_str(MC_STR_EDIT_ART_NEW), FALSE);
+  } else {
+    art_say(f, mc_str(MC_STR_EDIT_ART_BAD), TRUE);
+  }
+  form_update(f);
+}
+
+/* Whether a file can be taken as the cover now: not with Save or a read under way, nor while
+ * the search dialog is over this one, nor for an album with no folder here. */
+static gboolean can_take_art(edit_form *f) {
+  return f->kind == EDIT_ALBUM && f->loaded && f->art_ok && !f->closed && !f->saving && !f->reading && !f->search;
+}
+
+/* A file picked or dropped: it's read, and if it makes a cover it's shown, for Save to keep. */
+static void take_art(edit_form *f, GFile *file) {
+  if (!can_take_art(f)) return;
+  job *j = g_new0(job, 1);
+  j->run = run_read_art;
+  j->done = read_art_done;
+  j->art_file = g_object_ref(file);
+  j->art_size = ART_SIZE * gtk_widget_get_scale_factor(f->art);
+  f->reading = TRUE;
+  art_say(f, mc_str(MC_STR_EDIT_ART_READING), FALSE);
+  form_update(f);
+  job_start(f->dialog, j);
+}
+
+static void on_art_loaded(GdkTexture *texture, gpointer data) {
+  edit_form *f = data;
+  if (texture && !f->new_art) art_show(f, texture, MC_STR_EDIT_ART_COVER);
+}
+
+/* The cover the album has now, and whether it could have another. */
+static void load_art(edit_form *f) {
+  char *path = NULL;
+  f->art_ok = mc_album_art_get(f->lib, f->uid, &path) == MC_OK;
+  GdkTexture *texture = NULL;
+  if (path) texture = cover_get_file(path, ART_SIZE * gtk_widget_get_scale_factor(f->art), f->art_closing, on_art_loaded, f);
+  mc_free(path);
+  if (texture) art_show(f, texture, MC_STR_EDIT_ART_COVER);
+  g_clear_object(&texture);
+}
+
+static void on_art_picked(GObject *source, GAsyncResult *result, gpointer data) {
+  edit_form *f = data;
+  GFile *file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
+  if (file) take_art(f, file);
+  g_clear_object(&file);
+  g_object_unref(f->dialog);
+}
+
+static void on_art_change(GtkButton *button, gpointer data) {
+  (void)button;
+  edit_form *f = data;
+  if (!can_take_art(f)) return;
+  GtkFileFilter *filter = gtk_file_filter_new();
+  gtk_file_filter_set_name(filter, mc_str(MC_STR_EDIT_ART_FILE_TYPES));
+  gtk_file_filter_add_suffix(filter, "jpg");
+  gtk_file_filter_add_suffix(filter, "jpeg");
+  gtk_file_filter_add_suffix(filter, "png");
+  GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+  g_list_store_append(filters, filter);
+  GtkFileDialog *chooser = gtk_file_dialog_new();
+  gtk_file_dialog_set_title(chooser, mc_str(MC_STR_EDIT_ART_PICK_TITLE));
+  gtk_file_dialog_set_filters(chooser, G_LIST_MODEL(filters));
+  gtk_file_dialog_set_default_filter(chooser, filter);
+  GtkRoot *root = gtk_widget_get_root(f->dialog);
+  g_object_ref(f->dialog);
+  gtk_file_dialog_open(chooser, GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL, f->art_closing, on_art_picked, f);
+  g_object_unref(chooser);
+  g_object_unref(filters);
+  g_object_unref(filter);
+}
+
+/* A file over the dialog: the whole of it takes the file, so a ring runs inside its edge, and
+ * the cover's place says what a drop would do. */
+static void art_dragging(edit_form *f, gboolean on) {
+  gtk_widget_set_visible(f->art_drop, on);
+  if (on) gtk_widget_add_css_class(f->toolbar, "edit-dropping");
+  else gtk_widget_remove_css_class(f->toolbar, "edit-dropping");
+}
+
+static GdkDragAction on_drag_enter(GtkDropTarget *target, double x, double y, gpointer data) {
+  (void)target;
+  (void)x;
+  (void)y;
+  edit_form *f = data;
+  if (!can_take_art(f)) return 0;
+  art_dragging(f, TRUE);
+  return GDK_ACTION_COPY;
+}
+
+static void on_drag_leave(GtkDropTarget *target, gpointer data) {
+  (void)target;
+  art_dragging(data, FALSE);
+}
+
+static gboolean on_art_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer data) {
+  (void)target;
+  (void)x;
+  (void)y;
+  edit_form *f = data;
+  art_dragging(f, FALSE);
+  if (!G_VALUE_HOLDS(value, GDK_TYPE_FILE_LIST)) return FALSE;
+  GSList *files = gdk_file_list_get_files(g_value_get_boxed(value));
+  gboolean any = files != NULL;
+  if (any) take_art(f, files->data); /* the first of several, as a cover is one image */
+  g_slist_free(files);
+  return any;
 }
 
 static void set_mb(edit_form *f, const char *mb) {
@@ -677,8 +875,9 @@ static void on_closed(AdwDialog *dialog, gpointer data) {
   (void)dialog;
   edit_form *f = data;
   f->closed = TRUE;
+  if (f->art_closing) g_cancellable_cancel(f->art_closing);
   if (current == f) current = NULL;
-  if (f->changed) app_reload_library(f->a);
+  form_finished(f);
 }
 
 static void form_free(gpointer data) {
@@ -686,6 +885,8 @@ static void form_free(gpointer data) {
   if (current == f) current = NULL;
   for (int i = 0; i < NUM_FIELDS; i++) g_free(f->saved[i]);
   g_free(f->mb);
+  g_clear_pointer(&f->new_art, g_bytes_unref);
+  g_clear_object(&f->art_closing);
   g_free(f);
 }
 
@@ -742,8 +943,61 @@ static void on_artist_changed(GtkEditable *editable, gpointer cue) {
   gtk_widget_set_visible(cue, !*gtk_editable_get_text(editable));
 }
 
+/* The cover, which is a button for the same as Change…, with the place for one under it, and
+ * over it what a file dragged over the dialog shows. */
+static GtkWidget *build_cover(edit_form *f) {
+  GtkWidget *frame = cover_frame_new(ART_SIZE, ART_SIZE / 3, &f->art_picture);
+  f->art_none = gtk_label_new(mc_str(MC_STR_EDIT_ART_NONE));
+  gtk_widget_add_css_class(f->art_none, "dim-label");
+  gtk_widget_set_valign(f->art_none, GTK_ALIGN_END);
+  gtk_widget_set_margin_bottom(f->art_none, 12);
+  gtk_overlay_add_overlay(GTK_OVERLAY(frame), f->art_none);
+  f->art_drop = gtk_label_new(mc_str(MC_STR_EDIT_ART_DROP));
+  gtk_label_set_wrap(GTK_LABEL(f->art_drop), TRUE);
+  gtk_label_set_max_width_chars(GTK_LABEL(f->art_drop), 12);
+  gtk_label_set_justify(GTK_LABEL(f->art_drop), GTK_JUSTIFY_CENTER);
+  gtk_widget_add_css_class(f->art_drop, "edit-cover-drop");
+  gtk_widget_set_visible(f->art_drop, FALSE);
+  gtk_overlay_add_overlay(GTK_OVERLAY(frame), f->art_drop);
+  f->art = gtk_button_new();
+  gtk_button_set_child(GTK_BUTTON(f->art), frame);
+  gtk_widget_add_css_class(f->art, "flat");
+  gtk_widget_add_css_class(f->art, "edit-cover");
+  gtk_widget_set_valign(f->art, GTK_ALIGN_START);
+  g_signal_connect(f->art, "clicked", G_CALLBACK(on_art_change), f);
+  return f->art;
+}
+
+/* The album's cover, in a group of its own above the tags, and the note beside it: how to change
+ * it, how that's going, or why it can't be. */
+static void build_art(edit_form *f) {
+  GtkWidget *cover = build_cover(f);
+  f->art_note = gtk_label_new(NULL);
+  gtk_label_set_wrap(GTK_LABEL(f->art_note), TRUE);
+  gtk_label_set_xalign(GTK_LABEL(f->art_note), 0);
+  f->art_change = gtk_button_new_with_label(mc_str(MC_STR_EDIT_ART_CHANGE));
+  gtk_widget_set_halign(f->art_change, GTK_ALIGN_START);
+  g_signal_connect(f->art_change, "clicked", G_CALLBACK(on_art_change), f);
+  GtkWidget *side = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+  gtk_widget_set_valign(side, GTK_ALIGN_CENTER);
+  gtk_widget_set_hexpand(side, TRUE);
+  gtk_box_append(GTK_BOX(side), f->art_note);
+  gtk_box_append(GTK_BOX(side), f->art_change);
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 18);
+  gtk_box_append(GTK_BOX(box), cover);
+  gtk_box_append(GTK_BOX(box), side);
+  gtk_box_append(GTK_BOX(f->groups), box);
+
+  f->art_closing = g_cancellable_new();
+  art_show(f, NULL, MC_STR_EDIT_ART_NONE_NAME);
+  if (f->loaded) load_art(f);
+  gtk_widget_set_sensitive(f->art, f->art_ok);
+  gtk_widget_set_sensitive(f->art_change, f->art_ok);
+  art_say(f, mc_str(f->art_ok || !f->loaded ? MC_STR_EDIT_ART_HELP : MC_STR_EDIT_ART_NO_FILES), FALSE);
+}
+
 static void build_album(edit_form *f) {
-  /* Choosing the album's art goes here, as a group of its own above the tags. */
+  build_art(f);
   GtkWidget *group = add_group(f);
   add_field(f, group, F_TITLE, MC_STR_TITLE);
   add_field(f, group, F_ARTIST, MC_STR_EDIT_ALBUM_ARTIST);
@@ -847,6 +1101,13 @@ void edit_dialog_present(app *a, edit_kind kind, const char *uid) {
   adw_dialog_set_content_width(ADW_DIALOG(f->dialog), FORM_WIDTH);
   adw_dialog_set_child(ADW_DIALOG(f->dialog), f->toolbar);
   g_signal_connect(f->dialog, "closed", G_CALLBACK(on_closed), f);
+  if (kind == EDIT_ALBUM) {
+    GtkDropTarget *drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+    g_signal_connect(drop, "enter", G_CALLBACK(on_drag_enter), f);
+    g_signal_connect(drop, "leave", G_CALLBACK(on_drag_leave), f);
+    g_signal_connect(drop, "drop", G_CALLBACK(on_art_drop), f);
+    gtk_widget_add_controller(f->toolbar, GTK_EVENT_CONTROLLER(drop));
+  }
   form_update(f);
   current = f;
   adw_dialog_present(ADW_DIALOG(f->dialog), GTK_WIDGET(a->win));

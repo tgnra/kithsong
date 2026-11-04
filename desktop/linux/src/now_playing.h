@@ -28,6 +28,9 @@ void now_playing_set_shuffle(gboolean on);
  * The position goes back to 0. */
 void now_playing_show(const char *title, const char *artist, int duration_ms, const char *cover_dir);
 
+/* Shows the track's cover again, now in cover_dir, leaving the rest as it is: it was changed. */
+void now_playing_art_changed(const char *cover_dir);
+
 /* Where playback is, in ms. Ignored while the user drags the bar. */
 void now_playing_set_position(int ms);
 

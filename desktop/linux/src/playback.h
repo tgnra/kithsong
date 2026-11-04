@@ -44,6 +44,9 @@ void playback_set_scrobble(gboolean on);
 /* Stops playing and empties the queue, letting go of the file that was playing; for before
  * the library's files move. */
 void playback_clear(void);
+/* album_uid's cover was changed: what's queued from it takes the cover from lib, and what's
+ * showing the playing track shows it. */
+void playback_art_changed(mc_library *lib, const char *album_uid);
 /* Replaces the queue and plays tracks[start], or with start -1 the first track (shuffled,
  * any track). */
 void playback_play(const playback_track *tracks, int count, int start);

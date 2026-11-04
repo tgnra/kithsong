@@ -50,9 +50,9 @@ char *cover_path(const char *dir) {
   return copy;
 }
 
-static gint64 file_mtime(const char *path) {
+gint64 cover_mtime(const char *path) {
   GStatBuf st;
-  return g_stat(path, &st) == 0 ? (gint64)st.st_mtime : -1;
+  return path && g_stat(path, &st) == 0 ? (gint64)st.st_mtime : -1;
 }
 
 static void entry_free(gpointer data) {
@@ -108,7 +108,7 @@ gboolean cover_lookup_file(const char *path, int size, GdkTexture **texture) {
   if (!s.cache || !path) return FALSE;
   char *key = cache_key(path, size);
   entry *e = g_hash_table_lookup(s.cache, key);
-  gboolean found = e && e->mtime == file_mtime(path);
+  gboolean found = e && e->mtime == cover_mtime(path);
   if (found) {
     g_queue_unlink(&s.lru, e->link);
     g_queue_push_head_link(&s.lru, e->link);
@@ -120,18 +120,17 @@ gboolean cover_lookup_file(const char *path, int size, GdkTexture **texture) {
 
 /* --- Decoding (worker thread) --- */
 
-/* gdk-pixbuf's JPEG loader does most of the downscaling while decoding, which is what makes
- * this fast. */
-static GdkTexture *decode(const char *path, int size) {
-  int w = 0, h = 0;
-  if (!gdk_pixbuf_get_file_info(path, &w, &h) || w <= 0 || h <= 0 || size <= 0) return NULL;
+/* w x h scaled so the short side is size. */
+static void scaled_size(int w, int h, int size, int *sw, int *sh) {
   double scale = (double)size / (double)MIN(w, h);
-  int sw = MAX(size, (int)floor(w * scale + 0.5)), sh = MAX(size, (int)floor(h * scale + 0.5));
-  GdkPixbuf *scaled = gdk_pixbuf_new_from_file_at_scale(path, sw, sh, FALSE, NULL);
-  if (!scaled) return NULL;
+  *sw = MAX(size, (int)floor(w * scale + 0.5));
+  *sh = MAX(size, (int)floor(h * scale + 0.5));
+}
+
+/* The middle of scaled, size x size. Takes scaled. */
+static GdkTexture *crop(GdkPixbuf *scaled, int size) {
   /* The loader may round differently; crop whatever came out. */
-  sw = gdk_pixbuf_get_width(scaled);
-  sh = gdk_pixbuf_get_height(scaled);
+  int sw = gdk_pixbuf_get_width(scaled), sh = gdk_pixbuf_get_height(scaled);
   int side = MIN(MIN(sw, sh), size);
   GdkPixbuf *square = gdk_pixbuf_new(GDK_COLORSPACE_RGB, gdk_pixbuf_get_has_alpha(scaled), 8, side, side);
   GdkTexture *texture = NULL;
@@ -145,6 +144,37 @@ static GdkTexture *decode(const char *path, int size) {
     g_object_unref(square);
   }
   g_object_unref(scaled);
+  return texture;
+}
+
+/* gdk-pixbuf's JPEG loader does most of the downscaling while decoding, which is what makes
+ * this fast. */
+static GdkTexture *decode(const char *path, int size) {
+  int w = 0, h = 0, sw, sh;
+  if (!gdk_pixbuf_get_file_info(path, &w, &h) || w <= 0 || h <= 0 || size <= 0) return NULL;
+  scaled_size(w, h, size, &sw, &sh);
+  GdkPixbuf *scaled = gdk_pixbuf_new_from_file_at_scale(path, sw, sh, FALSE, NULL);
+  return scaled ? crop(scaled, size) : NULL;
+}
+
+static void on_size_prepared(GdkPixbufLoader *loader, int w, int h, gpointer data) {
+  int sw, sh;
+  if (w <= 0 || h <= 0) return;
+  scaled_size(w, h, GPOINTER_TO_INT(data), &sw, &sh);
+  gdk_pixbuf_loader_set_size(loader, sw, sh);
+}
+
+GdkTexture *cover_decode_bytes(GBytes *image, int size) {
+  if (!image || size <= 0) return NULL;
+  GdkPixbufLoader *loader = gdk_pixbuf_loader_new();
+  g_signal_connect(loader, "size-prepared", G_CALLBACK(on_size_prepared), GINT_TO_POINTER(size));
+  gsize len = 0;
+  const guchar *data = g_bytes_get_data(image, &len);
+  gboolean ok = gdk_pixbuf_loader_write(loader, data, len, NULL);
+  ok = gdk_pixbuf_loader_close(loader, NULL) && ok; /* closed either way */
+  GdkPixbuf *scaled = ok ? gdk_pixbuf_loader_get_pixbuf(loader) : NULL;
+  GdkTexture *texture = scaled ? crop(g_object_ref(scaled), size) : NULL;
+  g_object_unref(loader);
   return texture;
 }
 
@@ -196,7 +226,7 @@ void cover_load_file(const char *path, int size, GCancellable *cancellable, cove
   j->path = g_strdup(path);
   j->key = cache_key(path, size);
   j->size = size;
-  j->mtime = file_mtime(path);
+  j->mtime = cover_mtime(path);
   j->done = done;
   j->user = user;
   GTask *task = g_task_new(NULL, cancellable, decode_done, NULL);

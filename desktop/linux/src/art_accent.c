@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "art_backdrop.h"
+#include "cover.h"
 
 /* A widget's accent: its own class, and a stylesheet for the display that colours only
  * what's under that class, rewritten as the art or the theme changes. */
@@ -12,6 +13,7 @@ typedef struct accent {
   GtkCssProvider *provider;
   char css_class[32];
   char *path;
+  gint64 mtime; /* of path, as a cover replaced keeps its path */
   GCancellable *finding;
   mc_art_color colors[MC_ART_COLORS_MAX];
   int count;
@@ -98,9 +100,11 @@ static accent *accent_of(GtkWidget *widget) {
 
 void art_accent_set_file(GtkWidget *widget, const char *path) {
   accent *a = accent_of(widget);
-  if (!g_strcmp0(path, a->path)) return;
+  gint64 mtime = cover_mtime(path);
+  if (!g_strcmp0(path, a->path) && mtime == a->mtime) return;
   g_free(a->path);
   a->path = g_strdup(path);
+  a->mtime = mtime;
   if (a->finding) g_cancellable_cancel(a->finding);
   g_clear_object(&a->finding);
   if (path && art_colors_cached(path, a->colors, &a->count)) {

@@ -13,6 +13,10 @@
  * stat each, not a directory listing. */
 char *cover_path(const char *dir);
 
+/* When path's file was last written, or -1 if there's none (or path is NULL). A cover replaced
+ * keeps its path, so what shows one compares this as well to see that it's new. */
+gint64 cover_mtime(const char *path);
+
 /* Looks for dir's cover at size x size in the cache. Returns TRUE if it's there, with
  * *texture set to a new reference, or to NULL if the cover couldn't be decoded. */
 gboolean cover_lookup(const char *dir, int size, GdkTexture **texture);
@@ -34,6 +38,10 @@ GdkTexture *cover_get(const char *dir, int size, GCancellable *cancellable, cove
                       gpointer user);
 GdkTexture *cover_get_file(const char *path, int size, GCancellable *cancellable, cover_done done,
                            gpointer user);
+
+/* An image in memory as a texture, as cover_load() would make it, or NULL if it won't decode.
+ * Not cached, and it can be called on any thread. */
+GdkTexture *cover_decode_bytes(GBytes *image, int size);
 
 void cover_cache_free(void);
 

@@ -854,7 +854,8 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   gboolean entries = album && album->is_playlist && !album->is_smart; /* else by track */
   if (same && sel) memcpy(keep, entries ? sel->entry_uid : sel->uid, sizeof keep);
   /* A playlist's picture changes with its tracks, and an album's cover may have arrived. */
-  gboolean new_cover = !same || g_strcmp0(album->cover_file, s.album->cover_file);
+  gboolean new_cover = !same || g_strcmp0(album->cover_file, s.album->cover_file) ||
+                       album->cover_mtime != s.album->cover_mtime;
   if (album) g_object_ref(album);
   g_clear_object(&s.album);
   s.album = album;

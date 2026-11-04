@@ -30,6 +30,7 @@ struct _ArtistItem {
   char *name; /* "Unknown artist" if it has none */
   char *sub;  /* "12 albums", or NULL if it's only credited on tracks */
   char *cover_dir; /* the folder of its picture's cover (mc_artist_info), or NULL for none */
+  gint64 cover_mtime; /* of that cover (cover_mtime()), as a new one can have its path */
 };
 
 G_DEFINE_FINAL_TYPE(ArtistItem, artist_item, G_TYPE_OBJECT)
@@ -60,12 +61,15 @@ static ArtistItem *artist_item_new(const mc_artist_info *info) {
     self->sub = g_strdup(sub);
   }
   self->cover_dir = g_strdup(info->cover_dir);
+  char *cover = cover_path(info->cover_dir);
+  self->cover_mtime = cover_mtime(cover);
+  g_free(cover);
   return self;
 }
 
 static gboolean artist_item_equal(const ArtistItem *a, const ArtistItem *b) {
   return !strcmp(a->uid, b->uid) && !strcmp(a->name, b->name) && !g_strcmp0(a->sub, b->sub) &&
-         !g_strcmp0(a->cover_dir, b->cover_dir);
+         !g_strcmp0(a->cover_dir, b->cover_dir) && a->cover_mtime == b->cover_mtime;
 }
 
 /* --- ArtistTrack: one row of an artist's tracks --- */
