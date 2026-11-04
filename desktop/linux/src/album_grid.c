@@ -462,7 +462,6 @@ int album_grid_reload(GtkWidget *widget, mc_library *lib) {
   mc_album_list *list = NULL;
   if (lib && mc_library_list_albums(lib, &list) != MC_OK) list = NULL;
   guint n = list ? (guint)list->count : 0;
-  *hidden = list ? list->hidden : 0;
   AlbumItem **items = g_new0(AlbumItem *, n + 1);
   for (guint i = 0; i < n; i++) items[i] = album_item_new(&list->items[i]);
   mc_album_list_free(list);
@@ -648,7 +647,6 @@ int album_grid_reload_group_albums(GtkWidget *widget, mc_library *lib, const cha
   if (st != MC_OK) list = NULL;
   *found = st != MC_ERR_NOT_FOUND;
   guint n = list ? (guint)list->count : 0;
-  *hidden = list ? list->hidden : 0;
   AlbumItem **items = g_new0(AlbumItem *, n + 1);
   for (guint i = 0; i < n; i++) items[i] = album_item_new(&list->items[i]);
   mc_album_list_free(list);
