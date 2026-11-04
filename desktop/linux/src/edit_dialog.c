@@ -729,14 +729,18 @@ static void read_art_done(gpointer owner, job *j) {
 }
 
 /* Whether a file can be taken as the cover now: not with Save or a read under way, nor while
- * the search dialog is over this one, nor for an album with no folder here. */
+ * the search dialog is over this one. */
 static gboolean can_take_art(edit_form *f) {
-  return f->kind == EDIT_ALBUM && f->loaded && f->art_ok && !f->closed && !f->saving && !f->reading && !f->search;
+  return f->kind == EDIT_ALBUM && f->loaded && !f->closed && !f->saving && !f->reading && !f->search;
 }
 
 /* A file picked or dropped: it's read, and if it makes a cover it's shown, for Save to keep. */
 static void take_art(edit_form *f, GFile *file) {
   if (!can_take_art(f)) return;
+  if (!f->art_ok) {
+    art_say(f, mc_str(MC_STR_EDIT_ART_NO_FILES), TRUE);
+    return;
+  }
   job *j = g_new0(job, 1);
   j->run = run_read_art;
   j->done = read_art_done;
