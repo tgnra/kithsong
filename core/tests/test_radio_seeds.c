@@ -227,7 +227,7 @@ static void test_long_list(const char *scratch) {
   CHECK(mc_library_commit(lib) == MC_OK);
   char seed[MC_UID_STRLEN];
   CHECK(mc_radio_seed_for_artist(lib, "Prolific", seed) == MC_ERR_NOT_FOUND);
-  /* Last by title: 700 of 701, with a stride of 3. */
+  /* Last by title: 700 of 701, with a stride of 11. */
   add_track(lib, "z-only", "Prolific", "box", 0.0);
   CHECK(artist_seed_is(lib, "Prolific", "z-only"));
   CHECK(album_seed_is(lib, "box", "z-only"));

@@ -9,9 +9,10 @@
 #include "musiccore/analysis.h"
 #include "musiccore/radio.h"
 
-/* An artist can have thousands of tracks, and this runs as a menu opens. The middle of this many
- * is as good as the middle of them all, and each compared with each stays within a few ms. */
-enum { MAX_COMPARED = 256 };
+/* An artist can have thousands of tracks, and this runs as a menu opens. Each is compared with
+ * each, so the cost goes with the square of this: 256 held a menu up for a quarter of a second
+ * in a debug build. The middle of this many, spread over the list, is near enough. */
+enum { MAX_COMPARED = 64 };
 
 /* Totals closer than this are level: only rounding tells them apart. */
 #define LEVEL 1e-9

@@ -474,7 +474,7 @@ The menus of a track, album or artist start a station from one track. For an alb
 `mc_radio_seed_for_album()` or `mc_radio_seed_for_artist()`
 ([`radio_seeds.h`](../core/include/musiccore/radio_seeds.h)): of the tracks that pass
 `mc_radio_seed_check()`, the one with the least total distance to the others, on the fixed scales, so
-a menu needn't read the whole library to open. Of more than 256 such tracks, 256 are compared. Plays
+a menu needn't read the whole library to open. Of more than 64 such tracks, 64 are compared. Plays
 only decide between tracks that are level, as the two of a two-track album always are: anything more
 would let the most played track stand for an album it may not sound like. Nothing is stored, and
 `MC_ERR_NOT_FOUND` greys the item out.
