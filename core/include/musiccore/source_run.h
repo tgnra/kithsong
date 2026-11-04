@@ -22,8 +22,9 @@ extern "C" {
 #define MC_SOURCE_SETTINGS_DIR "kithsong-debug"
 /* The library's folder in the temp folder: this and a hash of the settings folder. */
 #define MC_SOURCE_LIBRARY_PREFIX "kithsong-debug-library-"
-/* In a library this made. Without it, Reset leaves the folder alone. */
-#define MC_SOURCE_LIBRARY_MARKER "kithsong-debug-library.txt"
+/* In a library this made. Without it, Reset leaves the folder alone. Named as the orphan sweep
+ * leaves things be (orphans.c), or the sweep would bin it. */
+#define MC_SOURCE_LIBRARY_MARKER ".kithsong-debug-library"
 
 /* Whether this process's executable is inside a checkout (mc_source_root()). A few file checks,
  * so call it once at startup rather than often. */

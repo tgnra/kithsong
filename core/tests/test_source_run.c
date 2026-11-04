@@ -207,6 +207,7 @@ static void test_prepare(void) {
   CHECK(mc_source_library_prepare(dir, s) == MC_OK);
   mc_settings_free(s);
   CHECK(has_file(library, MC_SOURCE_LIBRARY_MARKER));
+  CHECK(!strncmp(MC_SOURCE_LIBRARY_MARKER, ".kithsong-", 10)); /* so the orphan sweep leaves it */
   CHECK(mc_settings_load(dir, &s) == MC_OK); /* from the file this time */
   CHECK(!strcmp(mc_settings_library_dir(s), library));
 
