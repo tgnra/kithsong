@@ -80,8 +80,8 @@ typedef struct mc_album_info {
   char *artist;                   /* its artist credit as shown ("A & B") */
   char artist_uid[MC_UID_STRLEN]; /* its first artist; "" if it has no artist */
   int year;
-  /* The album has exactly one track in the library: a single (see
-   * mc_library_list_artist_singles()). Always 0 from mc_library_list_albums() and
+  /* The album has exactly one track in the library and isn't a continuous mix (edit.h): a
+   * single (see mc_library_list_artist_singles()). Always 0 from mc_library_list_albums() and
    * mc_library_list_artist_albums(), which leave singles out. */
   int is_singles;
   int has_art;    /* folder holds a cover (see mc_coverart_find()) */
@@ -98,8 +98,8 @@ typedef struct mc_album_list {
 } mc_album_list;
 
 /* Every album but the singles (albums with one track in the library, which the Artist view
- * shows instead: see mc_library_list_artist_singles()), in display order: by artist (sort
- * name), then by year and title. One query; cheap enough to call again after an import.
+ * shows instead: see mc_library_list_artist_singles(); a continuous mix of one track isn't
+ * one, see edit.h), in display order: by artist (sort name), then by year and title. One query; cheap enough to call again after an import.
  * Free with mc_album_list_free(). */
 mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out);
 void mc_album_list_free(mc_album_list *list);
@@ -225,8 +225,9 @@ mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid,
  * mc_track_list_free(). */
 mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid, mc_track_list **out);
 /* artist_uid's singles: the tracks credited to them, or on an album of theirs, that are the
- * only track of their album in the library, or have no album at all. Albums of one track are
- * left out of the album listings, so this is where they show. By year (the track's, else its
+ * only track of their album in the library, or have no album at all, but for a continuous mix
+ * of one track, which is an album. Other albums of one track are left out of the album
+ * listings, so this is where they show. By year (the track's, else its
  * album's), then title. album_uid and album are the album's ("" and NULL for a track with
  * none); cover_dir is set when that album has art and the file is here, the same test as
  * mc_album_info.has_art. Free with mc_track_list_free(). */

@@ -89,14 +89,32 @@ void mc_track_tags_clear(mc_track_tags *tags);
 typedef struct mc_album_flags {
   /* Its tracks are never scrobbled. Plays are still counted. */
   int no_scrobble;
-  /* A continuous mix: one piece of music split into tracks, so the album is the thing to
-   * find. Its tracks aren't search results (a match on one finds the album, see search.h)
-   * and smart lists of tracks don't pick them. */
+  /* A continuous mix: one piece of music split into tracks, or in one long track, so the
+   * album is the thing to find. Its tracks aren't search results (a match on one finds the
+   * album, see search.h) and smart lists of tracks don't pick them. One of one track is listed
+   * as an album, not a single (library.h). An album nobody has chosen for is a mix if its one
+   * track is long; a hand choice, either way, stays whatever the album's length. */
   int mix;
+  /* mix is the user's choice, not the album's length. Ignored by _set(): changing mix from
+   * what _get() said is what makes a choice, and leaving it leaves it to the length. */
+  int mix_by_hand;
 } mc_album_flags;
 
 mc_status mc_album_flags_get(mc_library *lib, const char *album_uid, mc_album_flags *out);
 mc_status mc_album_flags_set(mc_library *lib, const char *album_uid, const mc_album_flags *flags);
+
+/* The same for a single, from its track, which may have no album to hold the flag. */
+typedef struct mc_track_mix {
+  int can_set; /* it's alone on its album or has none; a longer album's flag is the album's */
+  int mix;
+  int mix_by_hand;
+} mc_track_mix;
+
+mc_status mc_track_mix_get(mc_library *lib, const char *track_uid, mc_track_mix *out);
+/* Makes a track that can_set a mix or not, by hand; MC_ERR_INVALID_ARG for one that can't. A
+ * mix needs an album, so a track with none gets one of its title and is filed there, with the
+ * statuses and file changes of any _set() above. */
+mc_status mc_track_mix_set(mc_library *lib, const char *track_uid, int mix);
 
 typedef struct mc_release_info {
   char mb_albumid[MC_UID_STRLEN];

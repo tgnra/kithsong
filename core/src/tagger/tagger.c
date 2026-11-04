@@ -1814,6 +1814,12 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
     const mc_tags *first = item_tags(imp, it, 0);
     album.no_album = !first->album;
     album.title = first->album;
+    /* A mix is an album's flag, so one long track with no album tag gets an album of its
+     * title to be a mix on (see "Singles" in docs/tagging-rules.md). */
+    if (album.no_album && it->file_count == 1 && first->duration_ms >= MC_MIX_MIN_MS) {
+      album.title = first->title ? first->title : it->album;
+      album.no_album = !album.title;
+    }
     album.artist.name = first->album_artist ? first->album_artist : first->artist ? first->artist : it->artist;
     album.artist.mb_artistid = first->mb_albumartistid;
     album.credit_count = first->album_artist

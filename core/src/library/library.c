@@ -191,6 +191,11 @@ static const char *const k_migrations[] = {
    * its tracks. Never written to files. */
   "ALTER TABLE albums ADD COLUMN no_scrobble INTEGER NOT NULL DEFAULT 0;"
   "ALTER TABLE albums ADD COLUMN mix INTEGER NOT NULL DEFAULT 0;",
+  /* v16: albums.mix is now the user's choice, 1 or -1, and 0 leaves it to the album's length
+   * (MC_ALBUM_IS_MIX). The 1s already there were chosen, so no row changes, and nothing here
+   * flags anything: each device works detected mixes out from synced rows. The version is for
+   * older apps, which would take -1 for a mix, and for mix_file_loose(). */
+  "SELECT 1;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -200,8 +205,8 @@ static const char *const k_album_cols[] = {"title", "artist_uid", "year", "origi
                                            "disc_total", "mb_albumid", "mb_releasegroupid",
                                            "art_hash", "artist_credit", "no_scrobble", "mix",
                                            NULL};
-/* Only ever set by hand, so a new row's 0 says nothing: logged, it would beat a flag set
- * earlier on a duplicate of the album once the two merge (merge.h). */
+/* Only ever set by hand (a detected mix is worked out, never stored), so a new row's 0 says
+ * nothing: logged, it would beat a flag set earlier on a duplicate of the album once the two merge (merge.h). */
 static const char *const k_album_flags[] = {"no_scrobble", "mix", NULL};
 static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "track_no",
                                            "disc_no", "duration_ms", "genre", "mb_trackid",
@@ -315,6 +320,20 @@ static const struct {
        " OR (entity IN ('tracks', 'albums') AND field = 'artist_credit')"},
   {15, "entity = 'albums' AND field IN ('no_scrobble', 'mix')"},
 };
+
+/* A loose track long enough to be a mix has no album row to be one on (mc_mix_file_tracks()).
+ * Past the migrations, since these rows are logged: a device paired later has no migration to
+ * run, and gets them from the changelog. Once, on upgrading to v16: from then on an import
+ * files such a track under an album itself, and a track with no album may be the user's. */
+static mc_status mix_file_loose(mc_library *lib, int from) {
+  if (from >= 16 || from == 0) return MC_OK; /* a new library has no tracks */
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  if ((st = mc_mix_file_tracks(lib, "t.duration_ms >= " MC_SQL_NUM(MC_MIX_MIN_MS), NULL)) == MC_OK)
+    st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
 
 static mc_status apply_newly_known(mc_library *lib, int from) {
   mc_status st = MC_OK;
@@ -453,6 +472,10 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
   /* Not fatal: the library opens as it is, the rows wait for their next change. */
   if (apply_newly_known(lib, from) != MC_OK)
     fprintf(stderr, "musiccore: library open: couldn't apply rows newer peers logged: %s\n",
+            sqlite3_errmsg(lib->db));
+  /* Not fatal either: they stay singles, and can still be made mixes by hand. */
+  if (mix_file_loose(lib, from) != MC_OK)
+    fprintf(stderr, "musiccore: library open: couldn't file long loose tracks: %s\n",
             sqlite3_errmsg(lib->db));
   /* Splits the credits from before v13 (docs/tagging-rules.md, "Refresh after upgrading"),
    * on a thread and connection of its own. */
@@ -1025,7 +1048,7 @@ mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid,
     "  WHERE t.album_uid IN (SELECT album_uid FROM tracks WHERE uid IN (SELECT uid FROM cr)"
     "   UNION SELECT uid FROM mine)"
     "  GROUP BY t.album_uid) c ON c.album_uid = a.uid"
-    " WHERE (c.credited > 0 OR a.uid IN (SELECT uid FROM mine)) AND coalesce(c.n, 0) <> 1"
+    " WHERE (c.credited > 0 OR a.uid IN (SELECT uid FROM mine)) AND NOT " ALBUM_IS_SINGLE
     " ORDER BY max(a.uid IN (SELECT uid FROM mine), coalesce(c.credited * 1.0 / c.n, 0)) DESC,"
     "  a.year, a.title COLLATE NOCASE, a.uid";
   sqlite3_stmt *stmt;
@@ -1055,6 +1078,7 @@ mc_status mc_library_list_artist_singles(mc_library *lib, const char *artist_uid
     " WHERE t.uid IN (" CREDITED_TRACKS("?1")
     "  UNION SELECT t2.uid FROM tracks t2 WHERE t2.album_uid IN (" CREDITED_ALBUMS("?1") "))"
     " AND (t.album_uid IS NULL OR (SELECT count(*) FROM tracks st WHERE st.album_uid = t.album_uid) = 1)"
+    " AND NOT " TRACK_IN_MIX
     " ORDER BY coalesce(t.year, al.year), t.title COLLATE NOCASE, t.uid";
   return list_tracks(lib, sql, artist_uid, out);
 }

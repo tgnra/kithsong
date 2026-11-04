@@ -364,9 +364,12 @@ static void test_mix(mc_library *lib) {
   set_mix(lib, "alo", 1);
   CHECK(has(lib, "long night", "A:Long Night Out"));
   CHECK_STR(search(lib, "whole night", 0), "A:Long Night Out");
+  /* And it opens: the album listings have it too. */
   mc_album_list *albums = NULL;
+  int listed = 0;
   CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums);
-  for (int i = 0; albums && i < albums->count; i++) CHECK(strcmp(albums->items[i].title, "Long Night Out") != 0);
+  for (int i = 0; albums && i < albums->count; i++) listed += !strcmp(albums->items[i].title, "Long Night Out");
+  CHECK(listed == 1);
   mc_album_list_free(albums);
 
   /* Taken off, all is as it was. */

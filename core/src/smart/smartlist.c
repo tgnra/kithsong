@@ -522,7 +522,7 @@ static void put_order(query *q, yyjson_val *order) {
 
 /* A continuous mix's tracks are never picked, whatever the rule (edit.h); a smart album group
  * can pick the album. al as in TRACK_JOINS. */
-#define TRACK_NOT_IN_MIX "coalesce(al.mix, 0) = 0"
+#define TRACK_NOT_IN_MIX "NOT " TRACK_IN_MIX
 
 /* What a compiled query selects: the list itself, one row of how many it picks, the albums
  * for its cover art (see mc_smart_prepare_art()), or one row if anything it picks has a file

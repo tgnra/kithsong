@@ -298,6 +298,18 @@ static void test_flags(const char *scratch) {
   CHECK(mc_import_db_write(lib, &other, &more, 1) == MC_OK);
   CHECK(query_int(lib, "SELECT count(*) FROM albums") == 1);
   CHECK(mc_album_flags_get(lib, to, &f) == MC_OK && f.no_scrobble && f.mix);
+
+  /* "Not a mix" is a choice too, and goes along the same way. */
+  f.mix = 0;
+  CHECK(mc_album_flags_set(lib, to, &f) == MC_OK);
+  mc_db_album last = other;
+  last.title = "Invisible Trigger Again";
+  last.mb_albumid = "a1b2c3d4-0000-4000-8000-0000000000ff";
+  mc_db_track all[] = {tracks[0], tracks[1], more};
+  CHECK(mc_import_db_write(lib, &last, all, 3) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums") == 1);
+  query_text(lib, "SELECT uid FROM albums", to, sizeof to);
+  CHECK(mc_album_flags_get(lib, to, &f) == MC_OK && !f.mix && f.mix_by_hand);
   mc_library_close(lib);
 }
 

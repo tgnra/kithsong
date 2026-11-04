@@ -1478,6 +1478,7 @@ static struct {
   RECT checks_card;
   BOOL in_use; /* Save found a file open while something plays: Stop Playing and Retry shows */
   BOOL loaded; /* the tags were read, so there's something to save */
+  BOOL track_mix; /* a track alone on its album, or on none: the form has Continuous mix */
   BOOL changed;
 } g_form;
 
@@ -1536,6 +1537,10 @@ static mc_status load(void) {
     f[F_YEAR] = number_text(t.year);
     f[F_GENRE] = dup_text(t.genre);
     mc_track_tags_clear(&t);
+    mc_track_mix m;
+    st = mc_track_mix_get(g_form.lib, g_form.uid, &m);
+    g_form.track_mix = st == MC_OK && m.can_set;
+    g_form.saved_flags.mix = m.mix;
   }
   return st;
 }
@@ -1558,7 +1563,8 @@ static void run_save(job *j) {
     j->tags_saved = st == MC_OK;
   }
   if (st == MC_OK && j->set_flags) {
-    st = mc_album_flags_set(j->lib, j->uid, &j->flags);
+    st = j->kind == KIND_TRACK ? mc_track_mix_set(j->lib, j->uid, j->flags.mix)
+                               : mc_album_flags_set(j->lib, j->uid, &j->flags);
     j->flags_saved = st == MC_OK;
   }
   j->st = st;
@@ -1637,6 +1643,9 @@ static void save(void) {
     j->flags.no_scrobble = part_of(s, ID_NO_SCROBBLE)->checked;
     j->flags.mix = part_of(s, ID_MIX)->checked;
     j->set_flags = !j->flags.no_scrobble != !g_form.saved_flags.no_scrobble || !j->flags.mix != !g_form.saved_flags.mix;
+  } else if (g_form.track_mix) {
+    j->flags.mix = part_of(s, ID_MIX)->checked;
+    j->set_flags = !j->flags.mix != !g_form.saved_flags.mix;
   }
   if (!j->set_tags && !j->set_flags) {
     job_free(j);
@@ -1706,13 +1715,13 @@ static void form_activate(part *p) {
   }
 }
 
-/* Two checks in a card. Returns the y under it. */
+/* The checks in a card: two for an album, a track's one. Returns the y under it. */
 static int layout_checks(sheet *s, int x, int y, int w) {
   int pad = scale(s, CARD_PAD), size = scale(s, CHECK_SIZE), gap = scale(s, CHECK_GAP);
   int row_gap = scale(s, CHECK_ROW_GAP);
   int ids[] = {ID_NO_SCROBBLE, ID_MIX};
   y += pad / 2;
-  for (int i = 0; i < 2; i++) {
+  for (int i = g_form.kind == KIND_TRACK; i < 2; i++) {
     part *p = part_of(s, ids[i]);
     int text_x = x + pad + size + gap, text_w = x + w - pad - text_x;
     int note_h = text_height(s->font, mc_wstr(p->note), text_w), h = scale(s, 6) * 2 + size + note_h;
@@ -1754,6 +1763,11 @@ static void form_layout(void) {
     layout_field(s, part_of(s, F_DISC_NO), x + third + gap, y, third);
     y = layout_field(s, part_of(s, F_YEAR), x + 2 * (third + gap), y, col - 2 * (third + gap)) + row;
     y = layout_field(s, part_of(s, F_GENRE), x, y, col);
+    if (g_form.track_mix) {
+      int top = y += row + scale(s, 6);
+      y = layout_checks(s, x, y, col);
+      SetRect(&g_form.checks_card, x, top, x + col, y);
+    }
   }
   y += row;
   SetRect(&s->message_rc, x, y, x + col, y + MESSAGE_LINES * s->line_h);
@@ -1766,7 +1780,7 @@ static void form_layout(void) {
 
 static void form_paint(canvas *c) {
   sheet *s = &g_form.s;
-  if (g_form.kind == KIND_ALBUM) paint_card(c, &g_form.checks_card, scale(s, CARD_RADIUS));
+  if (!IsRectEmpty(&g_form.checks_card)) paint_card(c, &g_form.checks_card, scale(s, CARD_RADIUS));
   paint_message(s, c, &s->message_rc, FALSE);
 }
 
@@ -1840,6 +1854,9 @@ static void build_form(void) {
     add_field(F_DISC_NO, MC_STR_EDIT_DISC_NUMBER, ES_NUMBER, NUMBER_DIGITS, 0);
     add_field(F_YEAR, MC_STR_COL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
     add_field(F_GENRE, MC_STR_EDIT_GENRE, 0, 0, 0);
+    if (g_form.track_mix)
+      add_check(ID_MIX, MC_STR_EDIT_MIX, MC_STR_EDIT_MIX_TRACK_TEXT, L"ContinuousMix",
+                g_form.saved_flags.mix);
   }
   add_part(s, PART_BUTTON, ID_STOP_RETRY, MC_STR_EDIT_STOP_RETRY, L"StopAndRetry");
   add_part(s, PART_ACCENT, ID_SAVE, MC_STR_SAVE, L"Save");
