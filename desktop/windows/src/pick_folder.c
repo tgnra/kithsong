@@ -49,6 +49,33 @@ char *pick_folder(HWND owner, const wchar_t *title, const char *initial) {
   return result;
 }
 
+wchar_t *pick_file(HWND owner, const wchar_t *title, const wchar_t *types, const wchar_t *pattern) {
+  IFileOpenDialog *dlg = NULL;
+  wchar_t *result = NULL;
+  if (FAILED(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                              &IID_IFileOpenDialog, (void **)&dlg)))
+    return NULL;
+  DWORD opts = 0;
+  IFileOpenDialog_GetOptions(dlg, &opts);
+  IFileOpenDialog_SetOptions(dlg, opts | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
+  IFileOpenDialog_SetTitle(dlg, title);
+  COMDLG_FILTERSPEC spec = {types, pattern};
+  IFileOpenDialog_SetFileTypes(dlg, 1, &spec);
+  if (SUCCEEDED(IFileOpenDialog_Show(dlg, owner))) {
+    IShellItem *item = NULL;
+    if (SUCCEEDED(IFileOpenDialog_GetResult(dlg, &item))) {
+      wchar_t *path = NULL;
+      if (SUCCEEDED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path))) {
+        result = _wcsdup(path);
+        CoTaskMemFree(path);
+      }
+      IShellItem_Release(item);
+    }
+  }
+  IFileOpenDialog_Release(dlg);
+  return result;
+}
+
 char **pick_folders(HWND owner, const wchar_t *title, int *count) {
   IFileOpenDialog *dlg = NULL;
   char **result = NULL;

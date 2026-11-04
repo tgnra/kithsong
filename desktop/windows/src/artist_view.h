@@ -92,6 +92,9 @@ void artist_view_update(UINT dpi, HFONT font);
  * library changes; the list and the open artist's albums reload when next painted. */
 void artist_view_set_library(mc_library *lib);
 
+/* A cover file was replaced: covers and pictures are decoded again. */
+void artist_view_art_changed(void);
+
 /* Opens the page of the artist with uid, without notifying the parent. FALSE if the library
  * hasn't got it. */
 BOOL artist_view_open(const char *uid);

@@ -32,6 +32,9 @@ void now_playing_update(UINT dpi);
  * position goes back to 0. */
 void now_playing_show(const wchar_t *title, const wchar_t *artist, int duration_ms, const wchar_t *cover_dir);
 
+/* The cover file in the folder shown was replaced. */
+void now_playing_art_changed(void);
+
 /* Where playback is, in ms. Ignored while the user drags the thumb. */
 void now_playing_set_position(int ms);
 int now_playing_position(void);

@@ -540,6 +540,8 @@ Sessions are retried with backoff (10 s, doubling, up to 5 minutes).
   newer device writes the credit again.
 - `albums.no_scrobble` and `albums.mix` (v15) are such fields too: until it upgrades, an older
   peer passes them on, still scrobbles the album and still lists a mix's tracks.
+- `albums.art_chosen` (v16) is one as well: an older peer passes it on, and keeps the cover it
+  has until it upgrades.
 - A row is *live* if one of its field changes is newer, by `(hlc, origin_uid)`, than its
   newest `_deleted`. A dead row that exists is deleted. A live row that exists gets each
   field the batch brought a new winner for. A live row that doesn't exist yet (new, or

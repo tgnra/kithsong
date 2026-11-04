@@ -2,12 +2,13 @@
  * right-click menus. A Mica window over the main window, modal, as first_run.c's is:
  *
  *   Edit album                                 [x]
- *   Title
- *   [ OK Computer                               ]
- *   Album artist
- *   [ Radiohead                                 ]
- *   Year                   Original year
- *   [ 1997              ]  [                    ]
+ *   +---------+  Title
+ *   |         |  [ OK Computer                  ]
+ *   |  cover  |  Album artist
+ *   |         |  [ Radiohead                    ]
+ *   |         |  Year           Original year
+ *   +---------+  [ 1997      ]  [               ]
+ *   [Change…  ]
  *   MusicBrainz release
  *   [ 3f0a...            ] [ Search MusicBrainz… ]
  *   +- [ ] Don't scrobble -----------------------+
@@ -24,6 +25,14 @@
  * Search MusicBrainz… opens another such window over this one: artist and title boxes, filled
  * in from the form, and the releases found. Using one fills in the form, MusicBrainz release
  * included; nothing changes until Save.
+ *
+ * Change… (or a click on the cover) picks a new cover, and a file dropped anywhere on the window
+ * is one too. While a file is over the window a ring runs round it and the cover says what a drop
+ * does: that takes IDropTarget, as WM_DROPFILES says nothing until the drop. The image is read
+ * and checked as it comes, off the UI thread, and shown at once; what's held is its bytes, as a
+ * dropped file can be a temporary one. Save makes it the cover, last, as tags can move the
+ * folder; Cancel forgets it. A file that won't do says so where Save's failures do. An album with
+ * no file here has nowhere to put one, so Change… is greyed out.
  *
  * Save calls only the _set() functions whose values changed, on a thread of its own as they
  * can rewrite files and wait on MusicBrainz, and the dialog stays open and says why if one
