@@ -83,12 +83,20 @@ double mc_analysis_distance(const mc_analysis *a, const mc_analysis *b,
  * The scanner analyses the tracks of one library that have a file here and no result yet, one
  * at a time, on a low-priority thread of its own with a connection of its own. It has no state
  * but the results: stopped at any point, it goes on from there next time. It only works on AC
- * power, and stands aside while a sync session or an import runs. Android doesn't run one, for
- * the battery: results reach it by sync. */
+ * power, and stands aside while a sync session or an import runs. Android keeps no scanner
+ * running, for the battery: results reach it by sync, and after an import it asks for one run
+ * while charging. */
 typedef struct mc_analysis_scanner mc_analysis_scanner;
 
 /* Starts scanning the library in dir, after a short wait so a starting app isn't held up. */
 mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out);
+/* One run for a caller that decides when it may run, as a job that needs a charger does: at
+ * once, whatever the power, until it has been through the library, and then it's over. Holds are
+ * stood aside for all the same. Stop it like any other. */
+mc_status mc_analysis_scanner_start_once(const char *dir, mc_analysis_scanner **out);
+/* How a run from mc_analysis_scanner_start_once() is doing: 0 still going, 1 finished, nothing
+ * left that it could do, -1 given up: the library couldn't be opened or written. */
+int mc_analysis_scanner_state(mc_analysis_scanner *s);
 /* Stops it and waits for its thread, which stops within a moment, whatever the file: a track
  * half done is done again next time. NULL is fine. Before the library's files move. */
 void mc_analysis_scanner_stop(mc_analysis_scanner *s);

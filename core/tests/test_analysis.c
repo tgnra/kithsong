@@ -1269,6 +1269,53 @@ static void test_power_scan(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* One run, as the phone's charging job has: the caller decides when, so the power doesn't count
+ * and a hold still does; stopped, it keeps what it did; it ends, and says so. */
+static void test_once(const char *scratch) {
+  enum { TRACKS = 4 };
+  char dir[1024], path[1200], name[32], uid[MC_UID_STRLEN];
+  mc_library *lib = open_library(scratch, "test_analysis_once.d", dir, sizeof dir);
+  if (!lib) return;
+  for (int i = 0; i < TRACKS; i++) {
+    snprintf(name, sizeof name, "o%d.wav", i);
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    CHECK(write_wav(path, 44100, 10.0, 0.5));
+    add_track(lib, name, 0, uid);
+  }
+  add_track(lib, "gone.wav", 0, uid); /* can't be done, and mustn't keep it running */
+  mc_analysis_scanner_set_timing(30000, 600000, 0, 0); /* neither wait applies to it */
+  mc_power_set_override(0);
+
+  mc_analysis_hold();
+  mc_analysis_scanner *s = NULL;
+  CHECK(mc_analysis_scanner_start_once(dir, &s) == MC_OK);
+  mc_sleep_ms(300);
+  CHECK(analysed(lib) == 0);
+  CHECK(mc_analysis_scanner_state(s) == 0);
+  mc_analysis_release();
+  CHECK(wait_for(lib, 1));
+  mc_analysis_scanner_stop(s);
+  int part = analysed(lib);
+  CHECK(part >= 1);
+
+  CHECK(mc_analysis_scanner_start_once(dir, &s) == MC_OK);
+  uint64_t until = mc_mono_ms() + WAIT_MS;
+  while (mc_analysis_scanner_state(s) == 0 && mc_mono_ms() < until) mc_sleep_ms(10);
+  CHECK(mc_analysis_scanner_state(s) == 1);
+  CHECK(analysed(lib) == TRACKS);
+  CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE entity = 'track_analysis'"
+                       " AND field = 'features'") == TRACKS); /* nothing done twice */
+  mc_analysis_scanner_stop(s);
+  /* Nothing left: a run ends at once. */
+  CHECK(mc_analysis_scanner_start_once(dir, &s) == MC_OK);
+  until = mc_mono_ms() + WAIT_MS;
+  while (mc_analysis_scanner_state(s) == 0 && mc_mono_ms() < until) mc_sleep_ms(10);
+  CHECK(mc_analysis_scanner_state(s) == 1);
+  mc_analysis_scanner_stop(s);
+  mc_power_set_override(1);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
@@ -1295,6 +1342,7 @@ int main(int argc, char **argv) {
   test_recycle_bin(scratch);
   test_scanner(scratch);
   test_power_scan(scratch);
+  test_once(scratch);
   mc_power_set_override(-1);
   mc_shutdown();
   return TEST_RESULT();

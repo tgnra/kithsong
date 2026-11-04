@@ -189,12 +189,20 @@ mc_status mc_analysis_scan_one(mc_library *lib, char cursor[MC_UID_STRLEN],
 
 struct mc_analysis_scanner {
   char *dir;
-  mc_mutex lock; /* guards stop */
+  mc_mutex lock; /* guards stop and state */
   mc_cond wake;  /* broadcast on stop */
   mc_thread thread;
   int stop;
+  int once;  /* one run, its time chosen by the caller: see mc_analysis_scanner_start_once() */
+  int state; /* as mc_analysis_scanner_state() says */
   uint64_t burst_from;
 };
+
+static void set_state(mc_analysis_scanner *s, int state) {
+  mc_mutex_lock(&s->lock);
+  s->state = state;
+  mc_mutex_unlock(&s->lock);
+}
 
 static int stopping(mc_analysis_scanner *s) {
   mc_mutex_lock(&s->lock);
@@ -249,7 +257,7 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
   while (!stopping(s)) {
     /* Between tracks, so unplugging lets the one in hand finish, and that's the most it costs.
      * Nothing else is held for this: a stop still ends the wait at once. */
-    if (!mc_power_on_ac()) {
+    if (!s->once && !mc_power_on_ac()) {
       if (wait_ms(s, g_power_poll_ms)) break;
       s->burst_from = mc_mono_ms();
       continue;
@@ -259,12 +267,20 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
     if (st != MC_OK) { /* the library's busy or gone for now: there's always the next pass */
       fprintf(stderr, "musiccore: analysis: %s\n", mc_status_str(st));
       step = MC_SCAN_NONE;
+      if (s->once) {
+        set_state(s, -1);
+        return;
+      }
     }
     if (step == MC_SCAN_DONE || step == MC_SCAN_FAILED) worked = 1;
     if (step != MC_SCAN_NONE) continue;
     /* The end of a pass. One that did something goes round once more for what came meanwhile,
      * and what's passed over waits for the next idle look. */
     cursor[0] = '\0';
+    if (!worked && s->once) {
+      set_state(s, 1);
+      return;
+    }
     if (!worked && wait_ms(s, g_idle_ms)) break;
     worked = 0;
     s->burst_from = mc_mono_ms();
@@ -274,15 +290,18 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
 static void scanner_thread(void *arg) {
   mc_analysis_scanner *s = arg;
   if (g_background) mc_thread_background();
-  if (wait_ms(s, g_start_ms)) return;
+  if (!s->once && wait_ms(s, g_start_ms)) return;
   mc_library *lib = NULL;
-  if (mc_library_open_internal(s->dir, &lib) != MC_OK) return;
+  if (mc_library_open_internal(s->dir, &lib) != MC_OK) {
+    set_state(s, -1);
+    return;
+  }
   sqlite3_busy_handler(mc_library_db(lib), busy, s);
   scan(s, lib);
   mc_library_close(lib);
 }
 
-mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out) {
+static mc_status start(const char *dir, int once, mc_analysis_scanner **out) {
   if (!dir || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   mc_analysis_scanner *s = calloc(1, sizeof *s);
@@ -291,6 +310,7 @@ mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out) 
     free(s);
     return MC_ERR_NOMEM;
   }
+  s->once = once;
   mc_mutex_init(&s->lock);
   mc_cond_init(&s->wake);
   mc_status st = mc_thread_start(&s->thread, scanner_thread, s);
@@ -303,6 +323,21 @@ mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out) 
   }
   *out = s;
   return MC_OK;
+}
+
+mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out) {
+  return start(dir, 0, out);
+}
+
+mc_status mc_analysis_scanner_start_once(const char *dir, mc_analysis_scanner **out) {
+  return start(dir, 1, out);
+}
+
+int mc_analysis_scanner_state(mc_analysis_scanner *s) {
+  mc_mutex_lock(&s->lock);
+  int state = s->state;
+  mc_mutex_unlock(&s->lock);
+  return state;
 }
 
 void mc_analysis_scanner_stop(mc_analysis_scanner *s) {

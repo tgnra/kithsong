@@ -347,6 +347,17 @@ where no battery is known of. On Linux it's `/sys/class/power_supply`: any Mains
 online is AC, as is having no battery at all (desktops, containers) or a folder that can't be read,
 and supplies with `scope` Device, a wireless mouse's say, don't count. In doubt it's AC.
 
+A phone runs the scanner in one case only: an import that added tracks there asks for one run,
+as they may be on no desktop to analyse them. `AnalysisWorker` is one-off WorkManager work that
+needs a charger, unique with `REPLACE`: it has no list, so replacing loses nothing, while a run
+under way may be past where the new tracks are. It calls `mc_analysis_scanner_start_once()`, the
+same scanner on its own thread and connection, holds included, but going at once and leaving
+power to WorkManager, and ending when it's been through the library. So anything sync brought
+first is skipped, and so is everything that has a result; a transcode with none is read too. If
+the system stops it the results stay and WorkManager runs it again on the next charge; it ends a
+run itself as a retry after 9 minutes, under WorkManager's 10. There's no periodic work, no scan at
+start and no worker on the watch.
+
 It stands aside (`mc_analysis_hold()`) for the whole of a sync session and while an import is at
 work, but not while an import waits for review. For sync that's more than good manners: a row
 logged during a session moves this device's version vector, so the session's digests differ, it
