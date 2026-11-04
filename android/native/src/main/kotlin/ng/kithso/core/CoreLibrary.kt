@@ -140,8 +140,12 @@ class CoreLibrary(dir: String) : AutoCloseable {
     /** Counts a play of [trackUid] on this device and makes now its last play. */
     fun recordPlay(trackUid: String) = nativeRecordPlay(handle, trackUid)
 
-    /** Adds [event] to the play log, as this device's. Throws if its track has gone meanwhile. */
-    fun logPlay(event: CorePlayer.PlayEvent) = nativeLogPlay(
+    /**
+     * Adds [event] to the play log, as this device's. Throws if its track has gone meanwhile.
+     * Says whether the recents may have changed: it's what a station started with
+     * (mc_play_event_starts_station), which goes in them when it ends.
+     */
+    fun logPlay(event: CorePlayer.PlayEvent): Boolean = nativeLogPlay(
         handle, event.trackUid, event.startedMs, event.listenedMs, event.end.ordinal,
         event.origin.context.ordinal, event.origin.contextUid,
     )
@@ -185,6 +189,6 @@ class CoreLibrary(dir: String) : AutoCloseable {
         @JvmStatic external fun nativeRecordPlay(handle: Long, trackUid: String)
         @JvmStatic external fun nativeLogPlay(
             handle: Long, trackUid: String, startedMs: Long, listenedMs: Long, end: Int, context: Int, contextUid: String?,
-        )
+        ): Boolean
     }
 }

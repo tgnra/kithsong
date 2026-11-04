@@ -1,15 +1,13 @@
 package ng.kithso.core
 
-/**
- * mc_recent_kind: what a recent or a search hit names. MC_RECENT_STATION isn't here: the phone
- * can't play one, and doesn't pass MC_LIST_STATIONS, so stations that sync in stay out of
- * [recents] and never reach [RecentInfo]'s index into this. Adding it means passing the flag.
- */
-enum class ItemKind { Album, Artist, Playlist, AlbumGroup }
+/** mc_recent_kind, in its order, as [RecentInfo] indexes into it: what a recent names. */
+enum class ItemKind { Album, Artist, Playlist, AlbumGroup, Station }
 
 /**
- * mc_recent_info. [kind] is an album, artist, playlist (manual or smart, [isSmart]) or album
- * group (likewise); [artist] is an album's artist, if known. [openedMs] is Unix ms.
+ * mc_recent_info. [kind] is an album, artist, playlist (manual or smart, [isSmart]), album group
+ * (likewise) or a station, whose [uid] is its seed track's; [artist] is an album's artist, if
+ * known. [openedMs] is Unix ms. A station has [seedTitle], its seed's title, and [sub], the line
+ * that tells it from others of its name.
  */
 data class RecentInfo(
     val kind: ItemKind,
@@ -18,9 +16,12 @@ data class RecentInfo(
     val name: String,
     val artist: String?,
     val isSmart: Boolean,
+    val seedTitle: String? = null,
+    val sub: String? = null,
 ) {
-    internal constructor(kind: Int, uid: String, openedMs: Long, name: String, artist: String?, isSmart: Boolean) :
-        this(ItemKind.entries[kind], uid, openedMs, name, artist, isSmart)
+    internal constructor(
+        kind: Int, uid: String, openedMs: Long, name: String, artist: String?, isSmart: Boolean, seedTitle: String?, sub: String?,
+    ) : this(ItemKind.entries[kind], uid, openedMs, name, artist, isSmart, seedTitle, sub)
 }
 
 /**
@@ -114,11 +115,14 @@ fun CoreLibrary.removeRecent(uid: String) = CoreBrowse.nativeRemoveRecent(handle
 fun CoreLibrary.clearRecents() = CoreBrowse.nativeClearRecents(handle)
 
 /**
- * The recents, newest first, at most [limit]; if [playableOnly], without playlists and smart
- * lists that have nothing to play here (MC_LIST_PLAYABLE).
+ * The recents, stations among them, newest first, at most [limit]; if [playableOnly], without
+ * playlists and smart lists that have nothing to play here, nor stations whose seed has no file
+ * here (MC_LIST_PLAYABLE).
  */
 fun CoreLibrary.recents(limit: Int, playableOnly: Boolean = false): List<RecentInfo> =
-    CoreBrowse.nativeListRecents(handle, limit, if (playableOnly) CoreBrowse.LIST_PLAYABLE else 0).asList()
+    CoreBrowse.nativeListRecents(
+        handle, limit, CoreBrowse.LIST_STATIONS or (if (playableOnly) CoreBrowse.LIST_PLAYABLE else 0),
+    ).asList()
 
 /** What matches [query], best first, at most [limitPerKind] of each kind (mc_library_search). */
 fun CoreLibrary.search(query: String, limitPerKind: Int): List<SearchHit> =
@@ -173,6 +177,9 @@ internal object CoreBrowse {
 
     // MC_LIST_PLAYABLE
     const val LIST_PLAYABLE = 1
+
+    // MC_LIST_STATIONS
+    const val LIST_STATIONS = 2
 
     // nativeListAlbums' kinds
     const val ALBUMS_ARTIST = 0

@@ -33,6 +33,9 @@ target_sources(kithsong_jni PRIVATE jni_testing.c)
 # One run of the audio scanner, for the charging job (AnalysisNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_analysis.c)
 
+# The Home page's radio stations (RadioNatives), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_radio.c)
+
 # The native libraries' license texts, for the apps' licence screens (build.gradle.kts).
 if(KITHSONG_LICENSES_DIR)
   include("${KITHSONG_ROOT}/cmake/Licenses.cmake")
