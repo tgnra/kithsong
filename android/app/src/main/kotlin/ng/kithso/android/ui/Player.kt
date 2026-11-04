@@ -152,7 +152,7 @@ private fun PlayPause(playback: Playback) {
 }
 
 /**
- * The full player, over a background coloured from the art: large art, then title and byline, seekbar, and play/pause
+ * The full player, over a background coloured from the art: large art, then title and byline, seekbar right under them, and play/pause
  * between previous and next, with Add to playlist ([onAddToPlaylist], disabled if null) and
  * the shuffle toggle at the ends. [onCollapse] slides it away; it is also dismissed by swiping
  * down (see [DismissibleScreen]). Swiping left or right skips a track, moving the art and title
@@ -189,14 +189,17 @@ fun FullPlayer(
                         Spacer(Modifier.size(32.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
                             PlayerTitle(swipe)
-                            PlayerControls(playback, track, onAddToPlaylist)
+                            // Moved, not shrunk, so this centred column keeps its height and the title stays put.
+                            PlayerSeekbar(playback, track, Modifier.offset(y = -(ControlsGap + SeekbarInset)))
+                            PlayerButtons(playback, onAddToPlaylist)
                         }
                     }
                 } else {
                     TallPlayerLayout(
                         art = { PlayerArt(swipe, onMenu, Modifier) },
                         title = { PlayerTitle(swipe) },
-                        controls = { PlayerControls(playback, track, onAddToPlaylist) },
+                        seekbar = { PlayerSeekbar(playback, track) },
+                        buttons = { PlayerButtons(playback, onAddToPlaylist) },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -208,45 +211,50 @@ fun FullPlayer(
 /**
  * The full player's parts down a window taller than it's wide. The art is as big as it can be
  * in the height the rest leaves. Height left over from that goes above the art and above the
- * seekbar, and past their limits, around the lot, so it's never all at the bottom.
+ * buttons, and past their limits, around the lot, so it's never all at the bottom.
  *
  * What's left over is worked out as if the title took two lines, and the title sits under the
- * art and the controls at the bottom, so moving between a short title and a long one only
- * changes the gap between them, not where the art or the buttons are.
+ * art, the seekbar under the title and the buttons at the bottom, so moving between a short
+ * title and a long one only changes the gap above the buttons, not where the art or they are.
  */
 @Composable
 private fun TallPlayerLayout(
     art: @Composable () -> Unit,
     title: @Composable () -> Unit,
-    controls: @Composable () -> Unit,
+    seekbar: @Composable () -> Unit,
+    buttons: @Composable () -> Unit,
     modifier: Modifier,
 ) {
     val titleLine = MaterialTheme.typography.headlineSmall.lineHeight
     val bylineLine = MaterialTheme.typography.titleMedium.lineHeight
-    Layout(listOf(art, title, controls), modifier) { (artItem, titleItem, controlsItem), constraints ->
+    Layout(listOf(art, title, seekbar, buttons), modifier) { (artItem, titleItem, seekbarItem, buttonsItem), constraints ->
         val width = constraints.maxWidth
         val height = constraints.maxHeight
         val artGap = ArtGap.roundToPx()
         val bottom = BottomGap.roundToPx()
-        val fixed = artGap + ControlsGap.roundToPx() + bottom
+        val fixed = artGap + ControlsGap.roundToPx() * 2 + bottom
         val titlePlaced = titleItem.single().measure(Constraints(width, width, 0, height))
         // The controls come first, as they shrink only when there's no other way.
-        val controlsPlaced = controlsItem.single()
+        val seekbarPlaced = seekbarItem.single()
             .measure(Constraints(width, width, 0, (height - titlePlaced.height - fixed).coerceAtLeast(0)))
-        val room = height - titlePlaced.height - controlsPlaced.height - fixed
+        val buttonsPlaced = buttonsItem.single()
+            .measure(Constraints(width, width, 0, (height - titlePlaced.height - seekbarPlaced.height - fixed).coerceAtLeast(0)))
+        val room = height - titlePlaced.height - seekbarPlaced.height - buttonsPlaced.height - fixed
         val side = minOf(width, MaxArtSize.roundToPx(), room).coerceAtLeast(0)
         val artPlaced = artItem.single().measure(Constraints.fixed(side, side))
 
         val longTitle = titleLine.roundToPx() * 2 + bylineLine.roundToPx()
         val spare = (room - side - (longTitle - titlePlaced.height).coerceAtLeast(0)).coerceAtLeast(0)
         val aboveArt = minOf(spare * 3 / 5, MaxGapAboveArt.roundToPx())
-        val aboveSeekbar = minOf(spare * 2 / 5, MaxGapAboveSeekbar.roundToPx())
-        val around = (spare - aboveArt - aboveSeekbar) / 2
+        val aboveButtons = minOf(spare * 2 / 5, MaxGapAboveButtons.roundToPx())
+        val around = (spare - aboveArt - aboveButtons) / 2
         layout(width, height) {
             val artTop = around + aboveArt
+            val titleTop = artTop + side + artGap
             artPlaced.place((width - side) / 2, artTop)
-            titlePlaced.place(0, artTop + side + artGap)
-            controlsPlaced.place(0, height - around - bottom - controlsPlaced.height)
+            titlePlaced.place(0, titleTop)
+            seekbarPlaced.place(0, titleTop + titlePlaced.height - SeekbarInset.roundToPx())
+            buttonsPlaced.place(0, height - around - bottom - buttonsPlaced.height)
         }
     }
 }
@@ -254,14 +262,20 @@ private fun TallPlayerLayout(
 /** The largest the full player's art gets, and the width of the buttons under it. */
 private val MaxArtSize = 480.dp
 
-/** Under the art, under the controls, and between the title and the controls, at the least. */
+/** Under the art, under the buttons, and the height kept above and below the seekbar. */
 private val ArtGap = 24.dp
 private val BottomGap = 24.dp
 private val ControlsGap = 16.dp
 
-/** The most of what a tall window leaves over that goes above the art and above the seekbar. */
+/**
+ * The empty part of the seekbar's 48dp touch target above its 24dp thumb. The seekbar moves up
+ * by this, so the thumb meets the text while the touch target stays whole, over the text.
+ */
+private val SeekbarInset = 12.dp
+
+/** The most of what a tall window leaves over that goes above the art and above the buttons. */
 private val MaxGapAboveArt = 96.dp
-private val MaxGapAboveSeekbar = 64.dp
+private val MaxGapAboveButtons = 64.dp
 
 /**
  * [onMenu], if given, is a long press on the art, with the buzz a long press has elsewhere.
@@ -315,47 +329,50 @@ private fun PlayerTitle(swipe: TrackSwipeState) {
 }
 
 @Composable
-private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: (() -> Unit)?) {
-    Column(verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
-        SeekbarWithTimes(
-            positionMs = { playback.positionMs },
-            durationMs = track.durationMs,
-            onSeek = playback::seekTo,
-        )
-        // Add to playlist and shuffle at the ends, the playing controls between, centred.
-        Row(
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().widthIn(max = MaxArtSize).align(Alignment.CenterHorizontally),
+private fun PlayerSeekbar(playback: Playback, track: Track, modifier: Modifier = Modifier) {
+    SeekbarWithTimes(
+        positionMs = { playback.positionMs },
+        durationMs = track.durationMs,
+        onSeek = playback::seekTo,
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun PlayerButtons(playback: Playback, onAddToPlaylist: (() -> Unit)?) {
+    // Add to playlist and shuffle at the ends, the playing controls between, centred.
+    Row(
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().widthIn(max = MaxArtSize),
+    ) {
+        IconButton(onClick = { onAddToPlaylist?.invoke() }, enabled = onAddToPlaylist != null, modifier = Modifier.offset(x = (-4).dp)) {
+            Icon(Icons.PlaylistAdd, contentDescription = stringResource(R.string.add_to_playlist))
+        }
+        IconButton(onClick = playback::previous, modifier = Modifier.size(56.dp)) {
+            Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track), modifier = Modifier.size(32.dp))
+        }
+        // Smaller, but still round, when the height is short (landscape with large text).
+        FilledIconButton(
+            onClick = playback::toggle,
+            modifier = Modifier.sizeIn(maxWidth = 80.dp, maxHeight = 80.dp).aspectRatio(1f, matchHeightConstraintsFirst = true),
         ) {
-            IconButton(onClick = { onAddToPlaylist?.invoke() }, enabled = onAddToPlaylist != null, modifier = Modifier.offset(x = (-4).dp)) {
-                Icon(Icons.PlaylistAdd, contentDescription = stringResource(R.string.add_to_playlist))
-            }
-            IconButton(onClick = playback::previous, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track), modifier = Modifier.size(32.dp))
-            }
-            // Smaller, but still round, when the height is short (landscape with large text).
-            FilledIconButton(
-                onClick = playback::toggle,
-                modifier = Modifier.sizeIn(maxWidth = 80.dp, maxHeight = 80.dp).aspectRatio(1f, matchHeightConstraintsFirst = true),
-            ) {
-                if (playback.isPlaying) Icon(Icons.Pause, contentDescription = stringResource(R.string.pause), modifier = Modifier.size(40.dp))
-                else Icon(Icons.Play, contentDescription = stringResource(R.string.play), modifier = Modifier.size(40.dp))
-            }
-            IconButton(onClick = playback::next, enabled = playback.hasNext, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.SkipNext, contentDescription = stringResource(R.string.next_track), modifier = Modifier.size(32.dp))
-            }
-            IconToggleButton(
-                checked = playback.shuffle,
-                onCheckedChange = playback::setShuffle,
-                colors = IconButtonDefaults.iconToggleButtonColors(
-                    checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                ),
-                modifier = Modifier.offset(x = 4.dp),
-            ) {
-                Icon(Icons.Shuffle, contentDescription = stringResource(R.string.shuffle))
-            }
+            if (playback.isPlaying) Icon(Icons.Pause, contentDescription = stringResource(R.string.pause), modifier = Modifier.size(40.dp))
+            else Icon(Icons.Play, contentDescription = stringResource(R.string.play), modifier = Modifier.size(40.dp))
+        }
+        IconButton(onClick = playback::next, enabled = playback.hasNext, modifier = Modifier.size(56.dp)) {
+            Icon(Icons.SkipNext, contentDescription = stringResource(R.string.next_track), modifier = Modifier.size(32.dp))
+        }
+        IconToggleButton(
+            checked = playback.shuffle,
+            onCheckedChange = playback::setShuffle,
+            colors = IconButtonDefaults.iconToggleButtonColors(
+                checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            ),
+            modifier = Modifier.offset(x = 4.dp),
+        ) {
+            Icon(Icons.Shuffle, contentDescription = stringResource(R.string.shuffle))
         }
     }
 }
