@@ -26,6 +26,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.Layout
@@ -85,7 +86,7 @@ private const val SkipThreshold = 1f / 3f
 private const val RubberBandLimit = 0.12f
 
 /** How long a landed swipe waits for the player to say the track changed. */
-private const val TrackChangeTimeoutMs = 1000L
+private const val TrackChangeTimeoutMs = 2000L
 
 /** How fast a release must be moving to count as a fling, whatever the position. */
 private val SkipFlingVelocity = 400.dp
@@ -241,10 +242,15 @@ internal fun Modifier.trackSwipe(swipe: TrackSwipeState): Modifier = this
                     swipe.dragBy(overSlop)
                 }
             } ?: return@awaitEachGesture
-            horizontalDrag(start.id) { change ->
+            val lifted = horizontalDrag(start.id) { change ->
                 velocity.addPointerInputChange(change)
                 swipe.dragBy(change.positionChange().x)
                 change.consume()
+            }
+            // The last step comes with the lift, which the drag above doesn't pass on; in a quick
+            // swipe on a busy phone that can be much of the way.
+            if (lifted) currentEvent.changes.firstOrNull { it.id == start.id }?.let { up ->
+                swipe.dragBy(up.positionChangeIgnoreConsumed().x)
             }
             swipe.release(velocity.calculateVelocity().x)
         }

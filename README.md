@@ -179,8 +179,11 @@ the track's name.
   holding a section's heading jumps to another section, and tapping an item opens its track
   list over the main screen; screens slide away with a swipe or the back gesture. Pulling the
   list down from its top opens search too.
-- A mini player above the navigation bar opens the full player. Playback runs in the
-  background, with Android's media controls and notification.
+- A mini player above the navigation bar opens the full player; swiping either one left or
+  right skips a track. Playback runs in the background, with Android's media controls and
+  notification.
+- Back goes up a page at a time, the full player first. On the main screen it goes to the
+  home screen while music plays, and otherwise quits.
 - Holding an album, artist, playlist or album group opens its menu (Play, Shuffle, Add to
   playlist, Remove from this phone, Delete from library and so on), as do the menu buttons on
   an album's page and the player; holding a track in search results offers its album and
