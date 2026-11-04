@@ -1212,9 +1212,9 @@ static void test_station_recents(const char *scratch) {
   /* An album ending a station is recorded before the seed's row arrives, and stays first; the
    * station still goes in, under it. */
   int64_t started = (int64_t)mc_wall_ms();
-  mc_sleep_ms(2);
+  mc_sleep_ms(20);
   CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "al2") == MC_OK);
-  mc_sleep_ms(2);
+  mc_sleep_ms(20);
   log_radio(lib, "t3", "t3", started, MC_PLAY_END_REPLACED);
   recent_uids_with(lib, all, uids, sizeof uids);
   CHECK(!strcmp(uids, "al2 t3 al1"));
@@ -1237,6 +1237,7 @@ static void test_station_recents(const char *scratch) {
   mc_recent_list_free(list);
 
   /* A seed with no file here can't start one, though it's kept for the devices that can. */
+  mc_sleep_ms(20); /* recents of one clock tick sort by uid, and t5 would come first */
   CHECK(mc_library_record_opened(lib, MC_RECENT_STATION, "t4") == MC_OK);
   recent_uids_with(lib, all, uids, sizeof uids);
   CHECK(!strncmp(uids, "t4 ", 3));
