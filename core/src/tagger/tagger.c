@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/edit_internal.h"
 #include "library/library_internal.h"
 #include "tagger/coverart.h"
 #include "tagger/credit.h"
@@ -1500,6 +1501,27 @@ static char *copy_cover(const char *source, const char *dir) {
   return NULL;
 }
 
+/* A cover the user chose stays the album's, whatever the import brings: the album's folder here
+ * gets it, from another folder of the album's if need be, and nothing is downloaded. If this
+ * device hasn't got it yet the folder stays as it is, for sync to bring it. Returns its hash. */
+static const char *chosen_cover(mc_library *lib, const char *dir, const char *uid, const char *chosen,
+                                char hash[MC_ART_HASH_LEN]) {
+  char *there = mc_coverart_find(dir);
+  char have[MC_ART_HASH_LEN];
+  if (!there || mc_coverart_hash(there, have) != MC_OK || strcmp(have, chosen)) {
+    char *file = mc_edit_chosen_cover(lib, uid, chosen);
+    mc_buffer image = {NULL, 0};
+    const char *ext = NULL;
+    if (file && mc_coverart_read_file(file, &image) == MC_OK && (ext = mc_coverart_ext(&image)))
+      mc_coverart_replace(dir, &image, ext);
+    mc_buffer_free(&image);
+    free(file);
+  }
+  free(there);
+  strcpy(hash, chosen);
+  return hash;
+}
+
 /* Makes sure the album folder has a cover (see "Cover art" in docs/tagging-rules.md). One
  * that's there already is kept, and so is one brought from inside the library (the old
  * folder of a whole release that moves, files moved within the library). Otherwise the
@@ -1509,11 +1531,17 @@ static char *copy_cover(const char *source, const char *dir) {
  * is downloaded for local art that's big enough, or whose size its header doesn't give.
  * Returns the cover's hash in hash, or NULL if the album has none. Failures here never fail
  * the import. */
-static const char *ensure_cover(mc_import *imp, mc_library *lib, const char *album_rel,
-                                const char *source_dir, const placement *p, int n,
-                                const mb_release *rel, char hash[MC_ART_HASH_LEN]) {
+static const char *ensure_cover(mc_import *imp, mc_library *lib, const mc_db_album *album,
+                                const char *album_rel, const char *source_dir, const placement *p,
+                                int n, const mb_release *rel, char hash[MC_ART_HASH_LEN]) {
   char *dir = mc_library_abspath(lib, album_rel);
   if (!dir) return NULL;
+  char chosen_uid[MC_UID_STRLEN], chosen[MC_ART_HASH_LEN];
+  if (mc_import_db_chosen_art(lib, album, chosen_uid, chosen)) {
+    const char *kept = chosen_cover(lib, dir, chosen_uid, chosen, hash);
+    free(dir);
+    return kept;
+  }
   char *cover = mc_coverart_find(dir);
 
   char *source = !cover ? source_cover(source_dir) : NULL;
@@ -1888,7 +1916,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   }
 
   if (!error && !all_dupes) {
-    if (!album.no_album) album.art_hash = ensure_cover(imp, lib, cover_dir, source_dir, places, count, rel, hash);
+    if (!album.no_album) album.art_hash = ensure_cover(imp, lib, &album, cover_dir, source_dir, places, count, rel, hash);
     for (int i = 0; i < count; i++) {
       mc_db_track *t = &rows[i];
       t->path = places[i].dest_rel;

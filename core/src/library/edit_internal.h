@@ -12,6 +12,10 @@ void mc_edit_global_init(void);
  * Called when a frontend opens the library. */
 void mc_edit_recover(mc_library *lib);
 
+/* The file holding album_uid's chosen cover, of SHA-256 hash, in a folder of its files here;
+ * NULL if none does. Free it. */
+char *mc_edit_chosen_cover(mc_library *lib, const char *album_uid, const char *hash);
+
 /* > 0: writing the nth file's tags fails, as a full disk would. */
 extern int mc_edit_test_fail_tags;
 /* > 0: the nth rename of an edit's swap fails, as a file opened at that moment would. */

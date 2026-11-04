@@ -1,5 +1,5 @@
-/* Editing the library by hand: an album's, artist's or track's tags, an album's flags, and
- * matching an album in the library to another MusicBrainz release.
+/* Editing the library by hand: an album's, artist's or track's tags, an album's flags and
+ * cover, and matching an album in the library to another MusicBrainz release.
  *
  * The rows are what's edited, so an edit syncs like any other change. Get a struct, change
  * what the user changed and set it whole. Strings are UTF-8, "" or NULL for none; 0 is an
@@ -115,6 +115,39 @@ mc_status mc_track_mix_get(mc_library *lib, const char *track_uid, mc_track_mix 
  * mix needs an album, so a track with none gets one of its title and is filed there, with the
  * statuses and file changes of any _set() above. */
 mc_status mc_track_mix_set(mc_library *lib, const char *track_uid, int mix);
+
+/* An album's cover, chosen by the user. It's kept as given, as cover.jpg or cover.png in every
+ * folder of this device holding the album's files, with albums.art_hash following, and reaches
+ * other devices as a change of art (see "Covers" in docs/sync-protocol.md). Files' tags aren't
+ * touched: no art is embedded, on this device or any. The cover replaced is deleted.
+ *
+ * The album remembers the choice: import and cover downloads leave it alone, a later choice
+ * being the only thing that replaces it. See "Cover art" in docs/tagging-rules.md.
+ *
+ * An image is JPEG or PNG, of up to MC_ALBUM_ART_MAX_BYTES and MC_ALBUM_ART_MAX_SIDE pixels each
+ * way, and decodes. */
+#define MC_ALBUM_ART_MAX_BYTES (16 * 1024 * 1024)
+#define MC_ALBUM_ART_MAX_SIDE 8192
+
+/* The cover this device shows for album_uid, for a form: *path is its file (mc_free()), or NULL
+ * if the album's folders here have none. MC_ERR_NOT_FOUND if the album has no file on this device
+ * or is gone: a new cover has nowhere to go, so don't offer one. */
+mc_status mc_album_art_get(mc_library *lib, const char *album_uid, char **path);
+
+/* Whether an image would do, for a form to say so at once: MC_OK, or MC_ERR_FORMAT if it can't
+ * be a cover. It's decoded, so a big one takes a moment. check_file() returns MC_ERR_IO, or
+ * MC_ERR_NOT_FOUND, for a file it can't read. */
+mc_status mc_album_art_check(const void *image, size_t len);
+mc_status mc_album_art_check_file(const char *path);
+
+/* Makes the image album_uid's cover, from bytes (a content URI, say) or a file. It's copied, so
+ * the caller's can go afterwards. As for the other _set()s, it's all or nothing, on a connection
+ * of its own, and MC_ERR_IN_USE and MC_ERR_IO mean the same: what's open is a cover being sent to
+ * a peer, so not for long. Also MC_ERR_FORMAT, as mc_album_art_check(), and MC_ERR_NOT_FOUND for
+ * an album with no file on this device, as a cover has nowhere to go without one. Call it after
+ * mc_album_tags_set() if both are being saved, as that can move the album's folder. */
+mc_status mc_album_art_set(mc_library *lib, const char *album_uid, const void *image, size_t len);
+mc_status mc_album_art_set_file(mc_library *lib, const char *album_uid, const char *path);
 
 typedef struct mc_release_info {
   char mb_albumid[MC_UID_STRLEN];

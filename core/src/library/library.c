@@ -196,6 +196,9 @@ static const char *const k_migrations[] = {
    * flags anything: each device works detected mixes out from synced rows. The version is for
    * older apps, which would take -1 for a mix, and for mix_file_loose(). */
   "SELECT 1;",
+  /* v17: the cover the user chose for an album (musiccore/edit.h), as its SHA-256. Import and
+   * downloads leave such a cover alone, and sync brings it to devices that have another. */
+  "ALTER TABLE albums ADD COLUMN art_chosen TEXT;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -204,7 +207,7 @@ static const char *const k_artist_cols[] = {"name", "sort_name", "mb_artistid", 
 static const char *const k_album_cols[] = {"title", "artist_uid", "year", "original_year",
                                            "disc_total", "mb_albumid", "mb_releasegroupid",
                                            "art_hash", "artist_credit", "no_scrobble", "mix",
-                                           NULL};
+                                           "art_chosen", NULL};
 /* Only ever set by hand (a detected mix is worked out, never stored), so a new row's 0 says
  * nothing: logged, it would beat a flag set earlier on a duplicate of the album once the two merge (merge.h). */
 static const char *const k_album_flags[] = {"no_scrobble", "mix", NULL};
@@ -319,6 +322,7 @@ static const struct {
   {13, "entity IN ('track_artists', 'album_artists')"
        " OR (entity IN ('tracks', 'albums') AND field = 'artist_credit')"},
   {15, "entity = 'albums' AND field IN ('no_scrobble', 'mix')"},
+  {17, "entity = 'albums' AND field = 'art_chosen'"},
 };
 
 /* A loose track long enough to be a mix has no album row to be one on (mc_mix_file_tracks()).

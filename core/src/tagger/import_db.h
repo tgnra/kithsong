@@ -35,7 +35,7 @@ typedef struct mc_db_album {
   int disc_total;
   const char *mb_albumid;
   const char *mb_releasegroupid;
-  const char *art_hash; /* NULL keeps the current cover */
+  const char *art_hash; /* NULL keeps the current cover, as does a cover the user chose */
   /* An album already in the library to write into (a duplicate, see dupes.h): its row is
    * left as it is, apart from art_hash filling a missing cover. */
   const char *existing_uid;
@@ -107,5 +107,10 @@ mc_status mc_import_db_move_file(mc_library *lib, const char *old_path, const ch
 /* Whether the file at path (relative) is in the library as the given release track, i.e.
  * importing that track again to the same place would replace a copy of itself. */
 int mc_import_db_is_track_at(mc_library *lib, const char *path, const char *mb_releasetrackid);
+
+/* Whether the album mc_import_db_write() would write album into has a cover the user chose
+ * (albums.art_chosen, musiccore/edit.h): 1, with its uid and the image's hash, if so. */
+int mc_import_db_chosen_art(mc_library *lib, const mc_db_album *album, char uid[MC_UID_STRLEN],
+                            char hash[65]);
 
 #endif

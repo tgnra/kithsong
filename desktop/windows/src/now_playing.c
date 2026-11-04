@@ -444,6 +444,11 @@ void now_playing_show(const wchar_t *title, const wchar_t *artist, int duration_
   InvalidateRect(s.wnd, NULL, FALSE);
 }
 
+void now_playing_art_changed(void) {
+  load_art();
+  InvalidateRect(s.wnd, NULL, FALSE);
+}
+
 void now_playing_set_position(int ms) {
   if (!s.dragging) set_position(ms, FALSE);
 }

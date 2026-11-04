@@ -70,9 +70,12 @@ static int has_column(sqlite3 *db, const char *table, const char *column) {
   "ALTER TABLE albums DROP COLUMN artist_credit;" \
   "DELETE FROM meta WHERE key = 'artist_refresh';"
 
-/* Takes a library back before v15: no album flags. Every winding back needs it, since v15
- * is run again. */
+/* Takes a library back before v15: no album flags or chosen covers. Every winding back needs
+ * it, since v15 to v17 are run again. */
 #define V14_FLAGS \
+  "DROP TRIGGER mc_log_ins_albums_art_chosen;" \
+  "DROP TRIGGER mc_log_upd_albums_art_chosen;" \
+  "ALTER TABLE albums DROP COLUMN art_chosen;" \
   "DROP TRIGGER mc_log_ins_albums_no_scrobble;" \
   "DROP TRIGGER mc_log_upd_albums_no_scrobble;" \
   "DROP TRIGGER mc_log_ins_albums_mix;" \
@@ -194,7 +197,7 @@ static void test_migration_v4(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
   CHECK(has_column(db, "files", "sha256"));
   CHECK(has_column(db, "files", "source_sha256"));
@@ -229,7 +232,7 @@ static void test_migration_v5(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   CHECK(has_column(db, "album_groups", "name"));
   CHECK(has_column(db, "album_group_entries", "position"));
 
@@ -275,7 +278,7 @@ static void test_migration_v6(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   CHECK(has_column(db, "smart_lists", "rule"));
   CHECK(has_column(db, "track_plays", "last_played_ms"));
 
@@ -346,7 +349,7 @@ static void test_migration_v10(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   CHECK(query_int(db, "SELECT count(*) FROM smart_lists") == 5);
   CHECK(changelog_count(db, "entity = 'smart_lists'") == 0);
   CHECK(mc_smart_reshuffle(lib, "5e1ec7ed-0000-4000-8000-000000000003") == MC_OK);
@@ -382,7 +385,7 @@ static void test_migration_v12(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('albums_singles',"
                       " 'mc_log_ins_albums_kind', 'mc_log_upd_albums_kind')") == 0);
   CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al1' AND title = 'Low Singles'"
@@ -464,7 +467,7 @@ static void test_migration_v13(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   CHECK(has_column(db, "tracks", "artist_credit") && has_column(db, "albums", "artist_credit"));
   query_text(db, "SELECT value FROM meta WHERE key = 'artist_refresh'", s, sizeof s);
   CHECK_STR(s, "pending");
@@ -537,7 +540,8 @@ static void test_migration_v15(const char *scratch) {
                  " (1000, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al1', 'mix', 1),"
                  " (1001, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al1', 'no_scrobble', 1),"
                  " (1002, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'no_scrobble', 1),"
-                 " (1003, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'no_scrobble', 0);"
+                 " (1003, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'no_scrobble', 0),"
+                 " (1004, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al3', 'art_chosen', 'abc');"
                  "PRAGMA user_version = 14;") == SQLITE_OK);
   CHECK(!has_column(db, "albums", "mix"));
   lib->applying_remote = 0;
@@ -547,27 +551,28 @@ static void test_migration_v15(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   mc_album_flags f;
   CHECK(mc_album_flags_get(lib, "al1", &f) == MC_OK && f.mix == 1 && f.no_scrobble == 1);
   CHECK(mc_album_flags_get(lib, "al2", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
   CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
-  CHECK(changelog_count(db, "1") == 4); /* nothing of it logged here */
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al3' AND art_chosen = 'abc'") == 1);
+  CHECK(changelog_count(db, "1") == 5); /* nothing of it logged here */
 
   /* Set: only what changed is logged. */
   f = (mc_album_flags){.no_scrobble = 1};
   CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
-  CHECK(changelog_count(db, "1") == 5);
+  CHECK(changelog_count(db, "1") == 6);
   CHECK(changelog_count(db, "entity = 'albums' AND row_uid = 'al3' AND field = 'no_scrobble'") == 1);
   CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
-  CHECK(changelog_count(db, "1") == 5);
+  CHECK(changelog_count(db, "1") == 6);
   f = (mc_album_flags){.no_scrobble = 7, .mix = 7}; /* any true value */
   CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
-  CHECK(changelog_count(db, "1") == 6);
+  CHECK(changelog_count(db, "1") == 7);
   CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 1 && f.no_scrobble == 1);
   f = (mc_album_flags){0};
   CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
-  CHECK(changelog_count(db, "1") == 8);
+  CHECK(changelog_count(db, "1") == 9);
   CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
 
   CHECK(mc_album_flags_get(lib, "nope", &f) == MC_ERR_NOT_FOUND);
@@ -776,7 +781,7 @@ static void test_recents(const char *scratch) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
   db = mc_library_db(lib);
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   CHECK(has_column(db, "recents", "opened_ms"));
   CHECK(has_column(db, "tracks", "file_rev")); /* v9 */
   CHECK(has_column(db, "files", "file_rev"));
@@ -1589,7 +1594,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return TEST_RESULT();
 
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];
@@ -1670,7 +1675,7 @@ int main(int argc, char **argv) {
   if (lib) {
     CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
     CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
-    CHECK(mc_library_schema_version(lib) == 16);
+    CHECK(mc_library_schema_version(lib) == 17);
     CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
     mc_library_close(lib);
   }

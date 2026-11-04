@@ -3,8 +3,10 @@
 
 #include <dwmapi.h>
 #include <math.h>
+#include <ole2.h>
 #include <oleacc.h>
 #include <process.h>
+#include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,10 +14,17 @@
 #include <wchar.h>
 #include <windowsx.h>
 
+#include "album_grid.h"
+#include "artist_view.h"
 #include "canvas.h"
+#include "cover.h"
+#include "musiccore/edit.h"
+#include "now_playing.h"
+#include "pick_folder.h"
 #include "playback.h"
 #include "scroller.h"
 #include "theme.h"
+#include "track_list.h"
 #include "uia.h"
 #include "wstr.h"
 
@@ -52,6 +61,9 @@ enum {
   LIST_ROW_H = 32,
   LIST_INSET = 12,
   EDGE = 32, /* kept clear above and below a window on a short screen */
+  ART_SIZE = 140, /* with the gap and Change…, as tall as the three rows of fields beside it */
+  ART_GAP = 16,
+  DROP_INSET = 4, /* the ring round the window while a file is over it */
 };
 
 enum { TIMER_SPIN = 1 }; /* the list's scroller has 101 and 102 */
@@ -76,7 +88,7 @@ enum field {
 };
 
 /* Its other parts, and the search window's, numbered on from those. */
-enum { ID_SEARCH_MB = NUM_FIELDS, ID_NO_SCROBBLE, ID_MIX, ID_STOP_RETRY, ID_SAVE, ID_CANCEL, ID_CLOSE, ID_SEARCH, ID_LIST, ID_USE };
+enum { ID_ART_COVER = NUM_FIELDS, ID_ART_CHANGE, ID_SEARCH_MB, ID_NO_SCROBBLE, ID_MIX, ID_STOP_RETRY, ID_SAVE, ID_CANCEL, ID_CLOSE, ID_SEARCH, ID_LIST, ID_USE };
 
 typedef enum { KIND_ALBUM, KIND_ARTIST, KIND_TRACK } edit_kind;
 
@@ -100,6 +112,11 @@ typedef struct job {
   char *text[NUM_FIELDS];
   mc_album_flags flags;
   BOOL set_tags, set_flags, tags_saved, flags_saved;
+  /* A new cover: the image, to save or, read from art_path, to check. */
+  wchar_t *art_path;
+  unsigned char *art;
+  size_t art_len;
+  BOOL set_art, art_tried, art_saved;
   /* Search. */
   char *artist, *title;
   mc_release_list *list;
@@ -114,6 +131,8 @@ static HANDLE g_jobs_idle;   /* set while none is */
 
 static void job_free(job *j) {
   for (int i = 0; i < NUM_FIELDS; i++) free(j->text[i]);
+  free(j->art_path);
+  free(j->art);
   free(j->artist);
   free(j->title);
   mc_release_list_free(j->list);
@@ -154,9 +173,10 @@ void edit_dialog_wait(void) {
 
 /* --- Sheets: the two windows' common ground --- */
 
-typedef enum { PART_FIELD, PART_BUTTON, PART_ACCENT, PART_CHECK, PART_LIST, PART_CLOSE } part_kind;
+typedef enum { PART_FIELD, PART_BUTTON, PART_ACCENT, PART_CHECK, PART_LIST, PART_COVER, PART_CLOSE } part_kind;
 
-/* What the mouse and keyboard act on, in tab order (the close button isn't in it). */
+/* What the mouse and keyboard act on, in tab order (the close button and the cover, which has a
+ * button of its own, aren't in it). */
 typedef struct part {
   part_kind kind;
   int id;
@@ -180,6 +200,7 @@ typedef struct sheet_ops {
   void (*enter)(void);        /* Enter in a text box */
   void (*cancel)(void);       /* Escape, the close button, Alt+F4 */
   void (*paint)(canvas *c);   /* what only this window has; may be NULL */
+  void (*drop)(const wchar_t *path); /* a file dropped on it; may be NULL */
 } sheet_ops;
 
 struct sheet {
@@ -354,7 +375,7 @@ static void place(sheet *s, int cx, int cy) {
 /* --- State --- */
 
 static BOOL can_focus(const part *p) {
-  return p->kind != PART_CLOSE && !p->disabled;
+  return p->kind != PART_CLOSE && p->kind != PART_COVER && !p->disabled;
 }
 
 static int part_at(const sheet *s, POINT pt) {
@@ -579,7 +600,8 @@ static void paint(sheet *s, HDC dc) {
       case PART_ACCENT: paint_button(s, c, i); break;
       case PART_CHECK: paint_check(s, c, i); break;
       case PART_CLOSE: paint_close(s, c, i); break;
-      case PART_LIST: break; /* in ops.paint */
+      case PART_LIST:
+      case PART_COVER: break; /* in ops.paint */
     }
   }
   const part *p = s->focus >= 0 ? &s->parts[s->focus] : NULL;
@@ -645,9 +667,12 @@ static BOOL ui_node(sheet *s, int i, uia_node *n) {
   if (!p) return FALSE;
   n->rect = p->rc;
   n->automation_id = p->automation_id;
-  n->flags = (p->disabled ? UIA_DISABLED : 0) | (p->kind != PART_CLOSE ? UIA_FOCUSABLE : 0);
+  n->flags = (p->disabled ? UIA_DISABLED : 0) | (p->kind != PART_CLOSE && p->kind != PART_COVER ? UIA_FOCUSABLE : 0);
   lstrcpynW(n->name, mc_wstr(p->label), 512);
-  if (p->kind == PART_CHECK) {
+  if (p->kind == PART_COVER) {
+    n->type = UIA_ImageControlTypeId;
+    lstrcpynW(n->help, mc_wstr(p->note), 256);
+  } else if (p->kind == PART_CHECK) {
     n->type = UIA_CheckBoxControlTypeId;
     n->flags |= p->checked ? UIA_TOGGLE_ON : UIA_TOGGLE_OFF;
     lstrcpynW(n->help, mc_wstr(p->note), 256);
@@ -931,6 +956,14 @@ static BOOL sheet_key(sheet *s, const MSG *m) {
   return FALSE;
 }
 
+/* The first file of a drop, malloc'd. */
+static wchar_t *dropped_file(HDROP drop) {
+  UINT len = DragQueryFileW(drop, 0, NULL, 0);
+  wchar_t *path = len ? malloc((len + 1) * sizeof *path) : NULL;
+  if (path) DragQueryFileW(drop, 0, path, len + 1);
+  return path;
+}
+
 static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (msg == WM_NCCREATE) {
     SetWindowLongPtrW(wnd, GWLP_USERDATA, (LONG_PTR)((CREATESTRUCTW *)lp)->lpCreateParams);
@@ -1016,7 +1049,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
       }
       s->pressed = i;
-      if (p->kind != PART_CLOSE) focus_part(s, i);
+      if (can_focus(p)) focus_part(s, i);
       SetCapture(wnd);
       InvalidateRect(wnd, NULL, FALSE);
       return 0;
@@ -1055,6 +1088,13 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CLOSE:
       s->ops->cancel();
       return 0;
+    case WM_DROPFILES: { /* from what doesn't drag by OLE; those go to IDropTarget */
+      wchar_t *path = dropped_file((HDROP)wp);
+      DragFinish((HDROP)wp);
+      if (path && s->ops->drop) s->ops->drop(path);
+      free(path);
+      return 0;
+    }
     case WM_JOB_DONE: {
       job *j = (job *)lp;
       if (j == s->job) {
@@ -1091,6 +1131,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (s->job) job_abandon(s->job);
       s->job = NULL;
       s->done = TRUE;
+      RevokeDragDrop(wnd);
       KillTimer(wnd, TIMER_SPIN);
       uia_destroy(&s->ui);
       s->wnd = NULL;
@@ -1476,6 +1517,16 @@ static struct {
   char *saved[NUM_FIELDS]; /* what's in the library, as text; NULL for a field not on the form */
   mc_album_flags saved_flags;
   RECT checks_card;
+  /* The cover. */
+  IWICImagingFactory *wic;
+  HBITMAP art;            /* what's shown: premultiplied, rounded; NULL shows the placeholder */
+  const uint32_t *art_px;
+  int art_px_size;
+  BOOL art_ok;            /* the album has a folder here to put a cover in */
+  unsigned char *new_art; /* the image that Save would use */
+  size_t new_art_len;
+  BOOL art_saved;
+  BOOL dragging;          /* a file is over the window */
   BOOL in_use; /* Save found a file open while something plays: Stop Playing and Retry shows */
   BOOL loaded; /* the tags were read, so there's something to save */
   BOOL track_mix; /* a track alone on its album, or on none: the form has Continuous mix */
@@ -1545,7 +1596,172 @@ static mc_status load(void) {
   return st;
 }
 
-/* On the save's thread: the tags, then the flags, each if it changed. */
+/* Shows the image at path; FALSE if it can't be shown. Decoded here, as one small image is. */
+static BOOL show_art(const wchar_t *path) {
+  sheet *s = &g_form.s;
+  if (!g_form.wic)
+    CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory,
+                     (void **)&g_form.wic);
+  const uint32_t *px = NULL;
+  int size = scale(s, ART_SIZE);
+  HBITMAP bmp = g_form.wic ? cover_decode_file(g_form.wic, path, size, scale(s, RADIUS), &px) : NULL;
+  if (!bmp) return FALSE;
+  if (g_form.art) DeleteObject(g_form.art);
+  g_form.art = bmp;
+  g_form.art_px = px;
+  g_form.art_px_size = size;
+  return TRUE;
+}
+
+/* What the album has, and whether it could have another. */
+static void load_art(void) {
+  char *path = NULL;
+  g_form.art_ok = mc_album_art_get(g_form.lib, g_form.uid, &path) == MC_OK;
+  wchar_t *w = path ? wstr_dup_from_utf8(path) : NULL;
+  if (w) show_art(w);
+  free(w);
+  mc_free(path);
+}
+
+/* On a thread of its own: the file's bytes, if they make a cover. */
+static void run_read_art(job *j) {
+  j->st = MC_ERR_IO;
+  FILE *f = _wfopen(j->art_path, L"rb");
+  if (!f) return;
+  long long size = _fseeki64(f, 0, SEEK_END) == 0 ? _ftelli64(f) : -1;
+  rewind(f);
+  if (size > MC_ALBUM_ART_MAX_BYTES) j->st = MC_ERR_FORMAT;
+  else if (size > 0 && (j->art = malloc((size_t)size)) && fread(j->art, 1, (size_t)size, f) == (size_t)size)
+    j->st = mc_album_art_check(j->art, j->art_len = (size_t)size);
+  fclose(f);
+}
+
+static void form_update(void);
+
+static void read_art_done(job *j) {
+  sheet *s = &g_form.s;
+  if (j->st == MC_OK && show_art(j->art_path)) {
+    free(g_form.new_art);
+    g_form.new_art = j->art;
+    g_form.new_art_len = j->art_len;
+    j->art = NULL;
+    part_of(s, ID_ART_COVER)->label = MC_STR_EDIT_ART_NEW_NAME;
+    set_message(s, mc_wstr(MC_STR_EDIT_ART_NEW), FALSE, FALSE);
+  } else {
+    set_message(s, mc_wstr(MC_STR_EDIT_ART_BAD), TRUE, FALSE);
+  }
+  form_update();
+}
+
+/* Whether a file can be taken as the cover now: not with Save or a read under way, nor while
+ * the search window is over this one. */
+static BOOL can_take_art(void) {
+  sheet *s = &g_form.s;
+  return g_form.kind == KIND_ALBUM && g_form.loaded && !s->job && IsWindowEnabled(s->wnd);
+}
+
+/* A file picked or dropped: it's read, and if it makes a cover it's shown, for Save to keep. */
+static void take_art(const wchar_t *path) {
+  sheet *s = &g_form.s;
+  if (!can_take_art()) return;
+  if (!g_form.art_ok) {
+    set_message(s, mc_wstr(MC_STR_EDIT_ART_NO_FILES), TRUE, FALSE);
+    return;
+  }
+  job *j = calloc(1, sizeof *j);
+  if (!j) return;
+  j->notify = s->wnd;
+  j->run = run_read_art;
+  j->done = read_art_done;
+  j->art_path = _wcsdup(path);
+  if (!j->art_path || !job_start(j)) {
+    job_free(j);
+    return;
+  }
+  s->job = j;
+  set_message(s, mc_wstr(MC_STR_EDIT_ART_READING), FALSE, TRUE);
+  form_update();
+}
+
+static void pick_art(void) {
+  sheet *s = &g_form.s;
+  wchar_t *path = pick_file(s->wnd, mc_wstr(MC_STR_EDIT_ART_PICK_TITLE),
+                            mc_wstr(MC_STR_EDIT_ART_FILE_TYPES), L"*.jpg;*.jpeg;*.png");
+  if (path && s->wnd) take_art(path); /* it may be gone with the main window meanwhile */
+  free(path);
+}
+
+/* Dragging a file over the window. The form is one at a time, so the target is too. */
+static void set_dragging(BOOL on) {
+  if (g_form.dragging == on) return;
+  g_form.dragging = on;
+  InvalidateRect(g_form.s.wnd, NULL, FALSE);
+}
+
+static HRESULT STDMETHODCALLTYPE drop_query(IDropTarget *t, REFIID iid, void **out) {
+  if (!IsEqualIID(iid, &IID_IUnknown) && !IsEqualIID(iid, &IID_IDropTarget)) {
+    *out = NULL;
+    return E_NOINTERFACE;
+  }
+  *out = t;
+  return S_OK;
+}
+
+static ULONG STDMETHODCALLTYPE drop_ref(IDropTarget *t) {
+  (void)t;
+  return 1; /* static */
+}
+
+static FORMATETC drop_format(void) {
+  return (FORMATETC){CF_HDROP, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+}
+
+static HRESULT STDMETHODCALLTYPE drop_enter(IDropTarget *t, IDataObject *data, DWORD keys, POINTL pt, DWORD *effect) {
+  (void)t;
+  (void)keys;
+  (void)pt;
+  FORMATETC format = drop_format();
+  BOOL files = can_take_art() && IDataObject_QueryGetData(data, &format) == S_OK;
+  *effect = files ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+  set_dragging(files);
+  return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE drop_over(IDropTarget *t, DWORD keys, POINTL pt, DWORD *effect) {
+  (void)t;
+  (void)keys;
+  (void)pt;
+  *effect = g_form.dragging ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+  return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE drop_leave(IDropTarget *t) {
+  (void)t;
+  set_dragging(FALSE);
+  return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE drop_drop(IDropTarget *t, IDataObject *data, DWORD keys, POINTL pt, DWORD *effect) {
+  (void)t;
+  (void)keys;
+  (void)pt;
+  *effect = g_form.dragging ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+  set_dragging(FALSE);
+  FORMATETC format = drop_format();
+  STGMEDIUM medium;
+  if (*effect == DROPEFFECT_NONE || FAILED(IDataObject_GetData(data, &format, &medium))) return S_OK;
+  wchar_t *path = dropped_file((HDROP)medium.hGlobal);
+  ReleaseStgMedium(&medium);
+  if (path) take_art(path);
+  free(path);
+  return S_OK;
+}
+
+static IDropTargetVtbl k_drop_vtbl = {drop_query, drop_ref, drop_ref, drop_enter, drop_over, drop_leave, drop_drop};
+static IDropTarget k_drop_target = {&k_drop_vtbl};
+
+/* On the save's thread: the tags, then the flags, each if it changed, then a new cover, which
+ * goes last as tags can move the album's folder. */
 static void run_save(job *j) {
   char **f = j->text;
   mc_status st = MC_OK;
@@ -1567,6 +1783,11 @@ static void run_save(job *j) {
                                : mc_album_flags_set(j->lib, j->uid, &j->flags);
     j->flags_saved = st == MC_OK;
   }
+  if (st == MC_OK && j->set_art) {
+    j->art_tried = TRUE;
+    st = mc_album_art_set(j->lib, j->uid, j->art, j->art_len);
+    j->art_saved = st == MC_OK;
+  }
   j->st = st;
 }
 
@@ -1583,6 +1804,8 @@ static void form_update(void) {
   if (p) p->disabled = off;
   if ((p = part_of(s, ID_NO_SCROBBLE))) p->disabled = off;
   if ((p = part_of(s, ID_MIX))) p->disabled = off;
+  if ((p = part_of(s, ID_ART_CHANGE))) p->disabled = off || !g_form.art_ok;
+  if ((p = part_of(s, ID_ART_COVER))) p->disabled = off || !g_form.art_ok;
   set_fields_locked(s, off);
   InvalidateRect(s->wnd, NULL, FALSE);
 }
@@ -1597,7 +1820,12 @@ static void save_done(job *j) {
       j->text[i] = NULL;
     }
   if (j->flags_saved) g_form.saved_flags = j->flags;
-  g_form.changed |= j->tags_saved || j->flags_saved;
+  if (j->art_saved) {
+    free(g_form.new_art);
+    g_form.new_art = NULL;
+    g_form.art_saved = TRUE;
+  }
+  g_form.changed |= j->tags_saved || j->flags_saved || j->art_saved;
   if (j->st == MC_OK) {
     s->done = TRUE;
     return;
@@ -1606,8 +1834,8 @@ static void save_done(job *j) {
   if (j->st == MC_ERR_NOT_FOUND) wcscpy(text, mc_wstr(MC_STR_EDIT_GONE));
   else mc_wformat(text, 512, mc_str(MC_STR_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st)));
   set_message(s, text, TRUE, FALSE);
-  /* Nothing changed, and it's most likely the track playing. */
-  g_form.in_use = j->st == MC_ERR_IN_USE && playback_queue_count() > 0;
+  /* Nothing changed, and it's most likely the track playing; a cover isn't played. */
+  g_form.in_use = j->st == MC_ERR_IN_USE && !j->art_tried && playback_queue_count() > 0;
   form_layout();
   form_update();
 }
@@ -1647,7 +1875,16 @@ static void save(void) {
     j->flags.mix = part_of(s, ID_MIX)->checked;
     j->set_flags = !j->flags.mix != !g_form.saved_flags.mix;
   }
-  if (!j->set_tags && !j->set_flags) {
+  if (g_form.new_art) {
+    if (!(j->art = malloc(g_form.new_art_len))) {
+      job_free(j);
+      return;
+    }
+    memcpy(j->art, g_form.new_art, g_form.new_art_len);
+    j->art_len = g_form.new_art_len;
+    j->set_art = TRUE;
+  }
+  if (!j->set_tags && !j->set_flags && !j->set_art) {
     job_free(j);
     s->done = TRUE;
     return;
@@ -1706,6 +1943,8 @@ static void form_activate(part *p) {
     case ID_CANCEL:
     case ID_CLOSE: form_cancel(); break;
     case ID_SEARCH_MB: search_mb(); break;
+    case ID_ART_COVER:
+    case ID_ART_CHANGE: pick_art(); break;
     case ID_NO_SCROBBLE:
     case ID_MIX:
       p->checked = !p->checked;
@@ -1739,11 +1978,16 @@ static void form_layout(void) {
   int x = scale(s, PAD), col = s->w - 2 * x, gap = scale(s, COL_GAP), row = scale(s, ROW_GAP);
   int y = layout_heading(s);
   if (g_form.kind == KIND_ALBUM) {
-    int half = (col - gap) / 2;
-    y = layout_field(s, part_of(s, F_TITLE), x, y, col) + row;
-    y = layout_field(s, part_of(s, F_ARTIST), x, y, col) + row;
-    layout_field(s, part_of(s, F_YEAR), x, y, half);
-    y = layout_field(s, part_of(s, F_ORIGINAL_YEAR), x + half + gap, y, col - half - gap) + row;
+    /* The cover and its button, and beside them the rows they're as tall as. */
+    int art = scale(s, ART_SIZE), side = x + art + scale(s, ART_GAP), rest = x + col - side;
+    int half = (rest - gap) / 2, art_top = y;
+    y = layout_field(s, part_of(s, F_TITLE), side, y, rest) + row;
+    y = layout_field(s, part_of(s, F_ARTIST), side, y, rest) + row;
+    layout_field(s, part_of(s, F_YEAR), side, y, half);
+    y = layout_field(s, part_of(s, F_ORIGINAL_YEAR), side + half + gap, y, rest - half - gap);
+    SetRect(&part_of(s, ID_ART_COVER)->rc, x, art_top, x + art, art_top + art);
+    SetRect(&part_of(s, ID_ART_CHANGE)->rc, x, y - scale(s, BUTTON_H), x + art, y);
+    y += row;
     part *search = part_of(s, ID_SEARCH_MB);
     int button = button_width(s, search);
     int under = layout_field(s, part_of(s, F_MB), x, y, col - button - scale(s, BUTTON_GAP));
@@ -1778,9 +2022,43 @@ static void form_layout(void) {
   s->h = y + scale(s, BUTTON_H) + scale(s, BOTTOM);
 }
 
+/* The cover, or a place for one. A file over the window fills it with what a drop would do, and
+ * a ring runs inside the window's edge, as the whole window takes it: that's solid, with the
+ * text boxes on surfaces of their own, so it reads the same over Mica in dark and light. */
+static void paint_cover(canvas *c) {
+  sheet *s = &g_form.s;
+  const part *p = part_of(s, ID_ART_COVER);
+  int radius = scale(s, RADIUS);
+  UINT centred = k_para | DT_CENTER;
+  if (g_form.dragging) {
+    RECT all = {0, 0, s->w, s->h};
+    InflateRect(&all, -scale(s, DROP_INSET), -scale(s, DROP_INSET));
+    canvas_frame(c, &all, scale(s, CARD_RADIUS), scale(s, 2), theme.accent, 255);
+    canvas_fill(c, &p->rc, radius, theme.accent, 255);
+    RECT text = p->rc;
+    InflateRect(&text, -scale(s, 8), 0);
+    text.top += (p->rc.bottom - p->rc.top - text_height(s->font, mc_wstr(MC_STR_EDIT_ART_DROP), text.right - text.left)) / 2;
+    canvas_text(c, mc_wstr(MC_STR_EDIT_ART_DROP), -1, &text, centred, s->font, theme.on_accent);
+    return;
+  }
+  if (g_form.art_px) {
+    canvas_draw_image(c, &p->rc, g_form.art_px, g_form.art_px_size, g_form.art_px_size);
+  } else {
+    if (theme.high_contrast) canvas_fill(c, &p->rc, radius, theme.bg, 255);
+    else canvas_fill(c, &p->rc, radius, ink(), theme.dark ? 15 : 6);
+    RECT text = p->rc;
+    text.top += (p->rc.bottom - p->rc.top - s->line_h) / 2;
+    canvas_text(c, mc_wstr(MC_STR_EDIT_ART_NONE), -1, &text, centred, s->font, theme.text2);
+  }
+  int i = (int)(p - s->parts);
+  COLORREF edge = state_of(s, i) != STATE_NORMAL ? theme.accent : theme.high_contrast ? theme.text : theme.line;
+  canvas_frame(c, &p->rc, radius, 1, edge, 255);
+}
+
 static void form_paint(canvas *c) {
   sheet *s = &g_form.s;
   if (!IsRectEmpty(&g_form.checks_card)) paint_card(c, &g_form.checks_card, scale(s, CARD_RADIUS));
+  if (g_form.kind == KIND_ALBUM) paint_cover(c);
   paint_message(s, c, &s->message_rc, FALSE);
 }
 
@@ -1790,6 +2068,7 @@ static const sheet_ops k_form_ops = {
   .enter = save,
   .cancel = form_cancel,
   .paint = form_paint,
+  .drop = take_art,
 };
 
 static BOOL form_ui_node(int i, uia_node *n) {
@@ -1839,6 +2118,9 @@ static void build_form(void) {
     add_field(F_ARTIST, MC_STR_EDIT_ALBUM_ARTIST, 0, 0, 0);
     add_field(F_YEAR, MC_STR_COL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
     add_field(F_ORIGINAL_YEAR, MC_STR_EDIT_ORIGINAL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
+    add_part(s, PART_COVER, ID_ART_COVER, g_form.art ? MC_STR_EDIT_ART_COVER : MC_STR_EDIT_ART_NONE_NAME,
+             L"AlbumCover")->note = MC_STR_EDIT_ART_HELP;
+    add_part(s, PART_BUTTON, ID_ART_CHANGE, MC_STR_EDIT_ART_CHANGE, L"ChangeCover");
     add_field(F_MB, MC_STR_EDIT_MB_RELEASE, ES_READONLY, 0, MC_STR_EDIT_MB_NONE);
     add_part(s, PART_BUTTON, ID_SEARCH_MB, MC_STR_EDIT_MB_SEARCH, L"SearchMusicBrainz");
     add_check(ID_NO_SCROBBLE, MC_STR_EDIT_NO_SCROBBLE, MC_STR_EDIT_NO_SCROBBLE_TEXT, L"NoScrobble",
@@ -1881,6 +2163,14 @@ static BOOL edit_dialog(HWND owner, mc_library *lib, edit_kind kind, const char 
 
   mc_status st = load();
   g_form.loaded = st == MC_OK;
+  /* OLE's drag and drop, for the state while a file's over the window; WM_DROPFILES without. */
+  BOOL ole = FALSE;
+  if (kind == KIND_ALBUM && g_form.loaded) {
+    load_art();
+    DragAcceptFiles(s->wnd, TRUE);
+    ole = SUCCEEDED(OleInitialize(NULL));
+    if (ole) RegisterDragDrop(s->wnd, &k_drop_target);
+  }
   build_form();
   for (int i = 0; i < NUM_FIELDS; i++) {
     part *p = part_of(s, i);
@@ -1900,8 +2190,18 @@ static BOOL edit_dialog(HWND owner, mc_library *lib, edit_kind kind, const char 
   }
   sheet_run(s);
 
+  if (ole) OleUninitialize();
+  /* The views key what they've decoded on the folder, and that's the same. */
+  if (g_form.art_saved) {
+    now_playing_art_changed();
+    track_list_art_changed();
+    artist_view_art_changed();
+  }
   BOOL changed = g_form.changed;
   free_saved();
+  free(g_form.new_art);
+  if (g_form.art) DeleteObject(g_form.art);
+  if (g_form.wic) IWICImagingFactory_Release(g_form.wic);
   sheet_free(s);
   memset(&g_form, 0, sizeof g_form);
   return changed;

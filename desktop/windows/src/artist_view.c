@@ -546,6 +546,18 @@ static void decode_next_cover(void) {
   request_covers();
 }
 
+void artist_view_art_changed(void) {
+  for (int sk = 0; sk < NUM_STRIPS; sk++)
+    for (int i = 0; i < v.strips[sk].n; i++) {
+      free_thumb(&v.strips[sk].tiles[i]);
+      v.strips[sk].tiles[i].failed = FALSE;
+    }
+  for (int i = 0; i < v.nartists; i++) free_picture(&v.artists[i].pic);
+  free_picture(&v.open_pic);
+  request_covers();
+  if (v.wnd) InvalidateRect(v.wnd, NULL, FALSE);
+}
+
 /* --- Data --- */
 
 static void free_rows(artist_row *rows, int n) {

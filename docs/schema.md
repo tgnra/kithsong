@@ -22,6 +22,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 14 | `recycle_bin` (deletes made here that no other device has heard of yet), `meta.changelog_epoch` |
 | 15 | album flags: `albums.no_scrobble`, `albums.mix` |
 | 16 | `albums.mix` is the user's choice, 1 or -1, and 0 leaves it to the album's length; long tracks with no album get one, once, on opening |
+| 17 | `albums.art_chosen`: the cover the user chose |
 
 ## Location
 
@@ -400,7 +401,7 @@ devices. Wear OS shows only what's present, so it drops the empty ones as well.
 | Table              | Synced | Notes |
 |--------------------|--------|-------|
 | `artists`          | yes    | one artist each, never a credit of several |
-| `albums`           | yes    | `art_hash` is the SHA-256 of the album folder's `cover.jpg`. `artist_uid` is the first credited artist, `artist_credit` the credit as shown (NULL: that artist's name). `no_scrobble`, `mix`: see [Album flags](#album-flags) |
+| `albums`           | yes    | `art_hash` is the SHA-256 of the album folder's `cover.jpg`. `artist_uid` is the first credited artist, `artist_credit` the credit as shown (NULL: that artist's name). `no_scrobble`, `mix`: see [Album flags](#album-flags). `art_chosen` is the SHA-256 of a cover the user chose, NULL if they didn't: import and downloads leave such a cover alone, and sync brings it to devices showing another (see "A cover the user chose" in [tagging-rules.md](tagging-rules.md)) |
 | `tracks`           | yes    | `added_ms`: when the track was first imported (Unix ms); NULL for tracks imported before v3. `file_rev`: a new uid each time an import replaces the track's original with a higher-quality file, NULL before the first time. `artist_uid` and `artist_credit` as for albums |
 | `track_artists`    | yes    | a track's credited artists in order, uid derived from the track and position; see [Artist credits](#artist-credits) |
 | `album_artists`    | yes    | an album's, the same way |

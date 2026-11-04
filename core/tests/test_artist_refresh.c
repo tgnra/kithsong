@@ -40,6 +40,9 @@
 
 /* Takes a library back before v13: no artist credits or album flags (as test_library.c does). */
 #define V12_CREDITS                                 \
+  "DROP TRIGGER mc_log_ins_albums_art_chosen;"      \
+  "DROP TRIGGER mc_log_upd_albums_art_chosen;"      \
+  "ALTER TABLE albums DROP COLUMN art_chosen;"      \
   "DROP TRIGGER mc_log_ins_albums_no_scrobble;"     \
   "DROP TRIGGER mc_log_upd_albums_no_scrobble;"     \
   "DROP TRIGGER mc_log_ins_albums_mix;"             \
@@ -402,7 +405,7 @@ static void test_online(const char *root) {
   mc_library *lib = NULL;
   CHECK(mc_library_open(dir, &lib) == MC_OK);
   if (!lib) return;
-  CHECK(mc_library_schema_version(lib) == 16);
+  CHECK(mc_library_schema_version(lib) == 17);
   mc_refresh_wait(lib);
   CHECK(mc_library_refresh_progress(lib, NULL, NULL) == 0);
   sqlite3 *db = mc_library_db(lib);

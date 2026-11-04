@@ -102,6 +102,8 @@ void track_list_show_smart(mc_library *lib, const char *uid, const wchar_t *titl
  * track_list_show. A playlist's header shows "Playlist" for the artist, and cover is its
  * picture file (see mc_playlist_art()) rather than a folder. */
 void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover);
+/* The cover file in the folder set was replaced. */
+void track_list_art_changed(void);
 
 /* The shown tracks, in order, for the play queue. Valid until the list next changes. */
 typedef struct track_list_item {

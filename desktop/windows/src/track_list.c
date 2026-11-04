@@ -499,6 +499,12 @@ void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cove
   if (s.wnd) InvalidateRect(s.wnd, NULL, FALSE);
 }
 
+void track_list_art_changed(void) {
+  if (!s.cover_dir || s.playlist) return;
+  load_art();
+  if (s.wnd) InvalidateRect(s.wnd, NULL, FALSE);
+}
+
 static void ui_changed(void);
 
 static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL playlist, BOOL artist, BOOL smart,

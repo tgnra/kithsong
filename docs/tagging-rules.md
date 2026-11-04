@@ -553,6 +553,8 @@ follow on this device only.
   and a track isn't paired with a release track another track has ever had: it keeps its tags.
   The same rule means an album stays tied to every release it was linked to: one imported later
   with a release this album once held merges into it.
+- **A chosen cover.** `mc_album_art_set()` makes an image the album's cover: see
+  [A cover the user chose](#a-cover-the-user-chose).
 
 ## Field mapping
 
@@ -622,6 +624,38 @@ to about 320) and the phone's full player (the screen's width less 48 dp, at mos
 At 2-3x that's 600-1100 device pixels, so below 500 a cover is stretched more than twice
 there and looks soft. Covers of 500 and 600 px, what most stores embedded for years, pass,
 so most local art is kept without a request; downloads are at most 1200 px anyway.
+
+### A cover the user chose
+
+`mc_album_art_set()` and `mc_album_art_set_file()` (`musiccore/edit.h`) take the image as bytes or
+a path. It must be a JPEG or PNG of up to 16 MB and 8192 px a side that decodes in full
+(`mc_album_art_check()` says so without changing anything), and it's kept byte for byte.
+
+- **Where it goes.** As `cover.jpg` or `cover.png`, by its bytes, in every folder here holding a
+  file of the album, inside the library folder. An album with no file on this device can't take
+  one (`MC_ERR_NOT_FOUND`), and `mc_album_art_get()` says so before a form offers it. Any other
+  `cover.*` of those folders goes, deleted rather than trashed, or it could go on being found
+  first; `folder.*` and `front.*` stay, ranking below. `albums.art_hash` and `albums.art_chosen`
+  take its SHA-256, logged like any change.
+- **Files' tags.** Nothing is embedded, as for all art here, so no audio file is touched and
+  nothing else about the tracks changes.
+- **All or nothing.** It goes by the steps of any hand edit: the copies are written beside the
+  old covers with no lock held, then in one transaction the old ones go to backups, the copies
+  into place and the row changes, with `meta.edit_swap` to put a crash right. `MC_ERR_IN_USE`
+  means an old cover was open, which on Windows is sync sending it. An album's folders changing
+  meanwhile starts it again.
+- **Other devices.** They get it as a change of art: see "Covers" in
+  [sync-protocol.md](sync-protocol.md).
+- **What leaves it alone.** `albums.art_chosen` is the reason it's kept apart from `art_hash`,
+  and nothing but another choice changes it. An import never replaces it or downloads for the
+  album: `upsert_album()` keeps `art_hash`, and `ensure_cover()` gives the folder the import
+  writes to the chosen image, from another of the album's folders if need be, instead of one
+  from the source folder, a picture embedded in a file, or a download. That covers a whole
+  release swapped for a better one, which otherwise brings its own cover. If this device hasn't
+  got the image yet the folder stays as it is, for sync to bring it. Matching the album to
+  another release fetches a cover only for an album with none. An import that moves an album's
+  last track to another album passes the choice on, as it does the album's flags, and merging
+  libraries keeps the one the kept library's album has, else the other's.
 
 Only JPEG and PNG up to 16 MB are downloaded. A single gets its release's cover like any
 album; a track with no album gets none. Art isn't embedded in the files yet. Frontends read

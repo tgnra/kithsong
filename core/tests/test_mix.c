@@ -341,7 +341,13 @@ static void seed_loose(mc_library *lib) {
 
 /* Winds lib back to before v16 and opens it again, as upgrading does. */
 static mc_library *upgrade(mc_library *lib, const char *path) {
-  CHECK(sqlite3_exec(mc_library_db(lib), "PRAGMA user_version = 15", NULL, NULL, NULL) == SQLITE_OK);
+  /* v17 runs again too, so its column has to go. */
+  CHECK(sqlite3_exec(mc_library_db(lib),
+                     "DROP TRIGGER mc_log_ins_albums_art_chosen;"
+                     "DROP TRIGGER mc_log_upd_albums_art_chosen;"
+                     "ALTER TABLE albums DROP COLUMN art_chosen;"
+                     "PRAGMA user_version = 15;",
+                     NULL, NULL, NULL) == SQLITE_OK);
   mc_library_close(lib);
   mc_library *now = NULL;
   CHECK(mc_library_open(path, &now) == MC_OK);
