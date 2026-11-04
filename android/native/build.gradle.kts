@@ -8,6 +8,29 @@ plugins {
 // cmake/Licenses.cmake's kithsong_copy_licenses). They're the same for every ABI.
 val licensesDir = layout.buildDirectory.dir("intermediates/kithsong-licenses")
 
+// What this run was asked to build, as ABIs and ccache depend on it.
+val requestedTasks = gradle.startParameter.taskNames
+val releaseRun = requestedTasks.any { it.contains("release", ignoreCase = true) }
+
+// The ABIs to compile, each a full build of the core and its libraries. This module is shared,
+// so it can't take the apps' abiFilters: without this a phone build compiles armeabi-v7a too,
+// which only the watch ships. Anything not named as :app's alone, such as a bare assembleDebug
+// or an IDE sync, gets them all. -PkithsongAbis=x86_64 narrows it, for the emulator.
+val abiOverride = (findProperty("kithsongAbis") as String?)?.split(",")?.map(String::trim)?.filter(String::isNotEmpty)
+if (abiOverride != null && releaseRun) {
+    throw GradleException("-PkithsongAbis is for development: a release has to carry every ABI")
+}
+val phoneOnly = requestedTasks.isNotEmpty() && requestedTasks.all { it.removePrefix(":").startsWith("app:") }
+val nativeAbis = abiOverride ?: listOf("arm64-v8a", "x86_64") + if (phoneOnly) emptyList() else listOf("armeabi-v7a")
+
+// ccache, if it's on the PATH, for everything but a release; -PkithsongCcache=off goes without.
+// base_dir and hash_dir let worktrees share results, whose paths differ only above the repo, at
+// the price of debug info naming the worktree that compiled first.
+val ccache = System.getenv("PATH").orEmpty().split(File.pathSeparator)
+    .flatMap { listOf(File(it, "ccache.exe"), File(it, "ccache")) }
+    .firstOrNull { it.isFile }
+    ?.takeUnless { releaseRun || findProperty("kithsongCcache") == "off" }
+
 android {
     namespace = "ng.kithso.core"
     compileSdk = 36
@@ -38,11 +61,17 @@ android {
 
                 // 16 KB page alignment, required by Android 15+ devices; NDK r28 does it by default.
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
+
+                ccache?.let {
+                    val repo = rootDir.parentFile.absolutePath.replace('\\', '/')
+                    val launcher = it.absolutePath.replace('\\', '/') + ";base_dir=$repo;hash_dir=false"
+                    arguments += listOf("-DCMAKE_C_COMPILER_LAUNCHER=$launcher", "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher")
+                }
             }
         }
         ndk {
             // armeabi-v7a is for watches: many Wear OS devices run a 32-bit userspace.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += nativeAbis
         }
     }
 
