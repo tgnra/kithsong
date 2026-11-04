@@ -58,6 +58,16 @@ interface Playback {
      */
     fun stop()
 
+    /** The queue's tracks, in queue order. */
+    val queueTracks: List<Track> get() = emptyList()
+
+    /**
+     * Swaps the queue for [tracks], the same ones in the same order as the library now has them
+     * (a tag edit can move their files), going on from the same place. A player goes by its
+     * queue's paths, so the track starts again there, and shuffled what follows is shuffled afresh.
+     */
+    fun updateQueue(tracks: List<Track>) {}
+
     /** Stops and empties the queue, so nothing is playing: before its tracks are deleted, say. */
     fun clear()
 }

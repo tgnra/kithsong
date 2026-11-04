@@ -1331,7 +1331,7 @@ static void show_album_menu(int i, POINT pt) {
     AppendMenuW(menu, MF_STRING, CMD_REMOVE_FROM_GROUP, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_EDIT_ALBUM, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_EDIT_ALBUM, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
   remove_here_append_menu(menu, MC_PROFILE_ALBUM, album, CMD_REMOVE_HERE, CMD_SYNC_HERE);
   AppendMenuW(menu, MF_STRING, CMD_DELETE_ALBUM, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, g.wnd, NULL);

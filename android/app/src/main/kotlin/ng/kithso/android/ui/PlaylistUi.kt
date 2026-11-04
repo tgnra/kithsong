@@ -66,6 +66,7 @@ import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.Recent
 import ng.kithso.android.data.RecentsEditor
 import ng.kithso.android.data.SmartListEditor
+import ng.kithso.android.data.TagTarget
 import ng.kithso.android.data.Track
 import ng.kithso.android.playback.Playback
 import ng.kithso.core.HerePreview
@@ -89,6 +90,9 @@ import kotlinx.coroutines.launch
  * With [smart], a smart playlist's or smart album group's menu has Edit rules…, Rename… and
  * Delete, as on Linux, and [newSmart] makes one: both open the rule editor
  * ([SmartEditorScreen]), which [smartEditing] says is open.
+ *
+ * With [onEdit], albums, artists and tracks have Edit…, which opens the tag editor on them
+ * ([TagEditorScreen]).
  */
 @Stable
 class PlaylistActions(
@@ -98,6 +102,7 @@ class PlaylistActions(
     val recents: RecentsEditor? = null,
     val playback: Playback? = null,
     val smart: SmartListEditor? = null,
+    val onEdit: ((TagTarget) -> Unit)? = null,
 ) {
     internal var sheet by mutableStateOf<Sheet?>(null)
     internal var dialog by mutableStateOf<Dialog?>(null)
@@ -205,6 +210,12 @@ private val EditFailure.message: Int
 /** One row of a menu sheet. */
 private class SheetAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
+/** Edit… on an album, artist or track, if the library can be edited. */
+@Composable
+private fun editAction(actions: PlaylistActions, kind: TagTarget.Kind, uid: String): SheetAction? = actions.onEdit?.let { edit ->
+    SheetAction(stringResource(R.string.edit_menu), Icons.Edit) { edit(TagTarget(kind, uid)) }
+}
+
 /** A smart playlist's (or if [group] smart album group's) Edit rules…, Rename… and Delete, as on Linux. */
 @Composable
 private fun smartActions(actions: PlaylistActions, uid: String, name: String, group: Boolean): List<SheetAction> = listOf(
@@ -272,6 +283,11 @@ fun PlaylistSheets(
         is PlaylistActions.Sheet.RecentMenu -> {
             val recent = sheet.recent
             val recents = actions.recents
+            val edit = when (recent.ref.kind) {
+                CollectionRef.Kind.Album -> editAction(actions, TagTarget.Kind.Album, recent.ref.uid)
+                CollectionRef.Kind.Artist -> editAction(actions, TagTarget.Kind.Artist, recent.ref.uid)
+                else -> null
+            }
             MenuSheet(
                 actions,
                 recent.title,
@@ -279,6 +295,7 @@ fun PlaylistSheets(
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(recent.ref, false) })
                     add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(recent.ref, true) })
+                    if (edit != null) add(edit)
                     if (recents != null) {
                         add(SheetAction(stringResource(R.string.recent_remove_menu), Icons.Remove) {
                             recents.removeRecent(recent.ref)
@@ -345,6 +362,7 @@ fun PlaylistSheets(
             val ref = CollectionRef(CollectionRef.Kind.Album, album.uid)
             val groupUid = sheet.groupUid
             val here = hereAction(ProfileItemKind.Album, album.uid, album.title)
+            val edit = editAction(actions, TagTarget.Kind.Album, album.uid)
             MenuSheet(
                 actions,
                 album.title,
@@ -365,6 +383,7 @@ fun PlaylistSheets(
                             })
                         }
                     }
+                    if (edit != null) add(edit)
                     if (here != null) add(here)
                     if (deleter != null) {
                         add(SheetAction(stringResource(R.string.delete_from_library_menu), Icons.Delete) {
@@ -380,6 +399,7 @@ fun PlaylistSheets(
             val artist = sheet.artist
             val ref = CollectionRef(CollectionRef.Kind.Artist, artist.uid)
             val here = hereAction(ProfileItemKind.Artist, artist.uid, artist.name)
+            val edit = editAction(actions, TagTarget.Kind.Artist, artist.uid)
             MenuSheet(
                 actions,
                 artist.name,
@@ -387,6 +407,7 @@ fun PlaylistSheets(
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
                     add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    if (edit != null) add(edit)
                     if (here != null) add(here)
                 },
             )
@@ -398,6 +419,7 @@ fun PlaylistSheets(
                 ?.takeIf { it != sheet.from && library?.artOf(it) != null }
             val artist = track.artistUid?.let { CollectionRef(CollectionRef.Kind.Artist, it) }
                 ?.takeIf { it != sheet.from && library?.artOf(it) != null }
+            val edit = editAction(actions, TagTarget.Kind.Track, track.uid)
             MenuSheet(
                 actions,
                 track.title,
@@ -410,6 +432,7 @@ fun PlaylistSheets(
                     }
                     if (album != null) add(SheetAction(stringResource(R.string.go_to_album), Icons.Album) { onOpen(album) })
                     if (artist != null) add(SheetAction(stringResource(R.string.go_to_artist), Icons.Person) { onOpen(artist) })
+                    if (edit != null) add(edit)
                     val entry = track.entryUid
                     val playlist = sheet.from?.takeIf { it.kind == CollectionRef.Kind.Playlist }?.uid
                     if (editor != null && sheet.removable && entry != null && playlist != null) {
@@ -432,6 +455,7 @@ fun PlaylistSheets(
             val album = track.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
                 ?.takeIf { library?.artOf(it) != null }
             val artists = sheet.artists
+            val edit = editAction(actions, TagTarget.Kind.Track, track.uid)
             MenuSheet(
                 actions,
                 track.title,
@@ -451,6 +475,7 @@ fun PlaylistSheets(
                         else stringResource(R.string.go_to_named_artist, artist.name)
                         add(SheetAction(label, Icons.Person) { onOpen(ref) })
                     }
+                    if (edit != null) add(edit)
                 },
             )
         }

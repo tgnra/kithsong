@@ -21,6 +21,10 @@ target_sources(kithsong_jni PRIVATE jni_settings.c)
 # Deleting albums, artists and tracks (DeleteNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_delete.c)
 
+# Editing tags and album flags, and searching for another release (EditNatives), apart from
+# jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_edit.c)
+
 # Removing an album or artist from this phone only (SyncHereNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_sync_here.c)
 
