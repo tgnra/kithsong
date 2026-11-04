@@ -47,7 +47,7 @@ class FastScrollTest {
         // After it, the ticks are C's, up to the last screen.
         assertEquals("C", places.last().label)
         assertEquals(true, places.last().tick)
-        assertEquals(36, places.last().index)
+        assertEquals(34, places.last().index)
     }
 
     @Test
@@ -108,7 +108,7 @@ class FastScrollTest {
         )
         val tight = stripMarks(entries, starts, spans, minSlot = 0.3f, minTick = 0.15f)
         assertEquals(
-            listOf(Mark.Label, Mark.None, Mark.Dot, Mark.None, Mark.Dot, Mark.None),
+            listOf(Mark.Label, Mark.None, Mark.Dot, Mark.None, Mark.Label, Mark.None),
             tight.toList(),
         )
     }

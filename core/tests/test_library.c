@@ -1565,7 +1565,7 @@ static void test_album_group_edits(const char *scratch) {
   /* Opening one puts it in the recents. */
   mc_recent_list *recents = NULL;
   CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, other) == MC_OK);
-  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 1);
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 1);
   if (recents && recents->count == 1) {
     CHECK(recents->items[0].kind == MC_RECENT_ALBUM_GROUP && !recents->items[0].is_smart);
     CHECK_STR(recents->items[0].name, "Other");

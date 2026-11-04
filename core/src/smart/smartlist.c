@@ -526,7 +526,7 @@ static void put_order(query *q, yyjson_val *order) {
 
 /* What a compiled query selects: the list itself, one row of how many it picks, the albums
  * for its cover art (see mc_smart_prepare_art()), or one row if anything it picks has a file
- * here (rule_has_playable()). */
+ * here (mc_smart_has_playable()). */
 typedef enum mode { M_LIST, M_COUNT, M_ART, M_PLAYABLE } mode;
 
 /* Whether a track, or any track of an album, has a file here. */
@@ -1161,14 +1161,28 @@ static mc_status rule_listed_here(mc_library *lib, mc_smart_subject subject, con
   return picks ? MC_OK : any_file_here(lib, out);
 }
 
-mc_status mc_smart_listed_here(mc_library *lib, const char *smart_uid, int *out) {
+/* Runs test on saved smart list smart_uid's rule. One that can't be evaluated is a no. */
+static mc_status test_saved(mc_library *lib, const char *smart_uid, int *out,
+                            mc_status (*test)(mc_library *, mc_smart_subject, const char *, int *)) {
   *out = 0;
   mc_smart_subject subject;
   char *rule;
   mc_status st = load(lib, smart_uid, &subject, &rule);
-  if (st == MC_OK) st = rule_listed_here(lib, subject, rule, out);
+  if (st == MC_OK) st = test(lib, subject, rule, out);
   free(rule);
-  return st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG ? MC_OK : st;
+  if (st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG) {
+    *out = 0;
+    return MC_OK;
+  }
+  return st;
+}
+
+mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out) {
+  return test_saved(lib, smart_uid, out, rule_has_playable);
+}
+
+mc_status mc_smart_listed_here(mc_library *lib, const char *smart_uid, int *out) {
+  return test_saved(lib, smart_uid, out, rule_listed_here);
 }
 
 mc_status mc_smart_prepare_art(mc_library *lib, const char *smart_uid, mc_smart_subject *subject,

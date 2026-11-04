@@ -519,7 +519,6 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
   else if (g.lib && g.view == AGV_GROUP) mc_library_list_album_group_albums(g.lib, g.group_uid, &list);
   else if (g.lib) mc_library_list_albums(g.lib, &list);
   *n = list ? list->count : 0;
-  g.hidden = list ? list->hidden : 0;
   *tiles = *n ? calloc((size_t)*n, sizeof **tiles) : NULL;
   *dirs = *n ? calloc((size_t)*n, sizeof **dirs) : NULL;
   if (*n && (!*tiles || !*dirs)) *n = 0;
