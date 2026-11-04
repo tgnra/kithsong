@@ -711,12 +711,12 @@ static const struct {
 } k_cols[NUM_COLS] = {
   [COL_TITLE] = {MC_STR_TITLE, 0, FALSE},
   [COL_ARTIST] = {MC_STR_ARTIST, 128, FALSE},
-  [COL_YEAR] = {MC_STR_WINDOWS_COL_YEAR, 48, FALSE},
+  [COL_YEAR] = {MC_STR_COL_YEAR, 48, FALSE},
   [COL_COUNTRY] = {MC_STR_WINDOWS_COL_COUNTRY, 56, FALSE},
   [COL_LABEL] = {MC_STR_WINDOWS_COL_LABEL, 112, FALSE},
   [COL_FORMAT] = {MC_STR_WINDOWS_COL_FORMAT, 88, FALSE},
-  [COL_TRACKS] = {MC_STR_WINDOWS_EDIT_COL_TRACKS, 48, TRUE},
-  [COL_FIT] = {MC_STR_WINDOWS_EDIT_COL_FIT, 44, TRUE},
+  [COL_TRACKS] = {MC_STR_EDIT_COL_TRACKS, 48, TRUE},
+  [COL_FIT] = {MC_STR_EDIT_COL_FIT, 44, TRUE},
 };
 
 static int result_count(void) {
@@ -752,7 +752,7 @@ static const wchar_t *cell_text(const mc_release_info *r, int c, wchar_t *buf, s
       if (r->track_count) swprintf(buf, n, L"%d", r->track_count);
       break;
     case COL_FIT:
-      return mc_wformat(buf, n, mc_str(MC_STR_WINDOWS_EDIT_FIT_PERCENT), MC_D((int)lround(r->score * 100)));
+      return mc_wformat(buf, n, mc_str(MC_STR_EDIT_FIT_PERCENT), MC_D((int)lround(r->score * 100)));
   }
   return buf;
 }
@@ -1238,8 +1238,8 @@ static void search_done(job *j) {
     g_search.searched = TRUE;
   }
   if (j->st == MC_ERR_NET) wcscpy(text, mc_wstr(MC_STR_IMPORT_ERROR_UNREACHABLE));
-  else if (j->st != MC_OK) mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_EDIT_SEARCH_FAILED), MC_S(mc_status_str(j->st)));
-  else if (!result_count()) wcscpy(text, mc_wstr(MC_STR_WINDOWS_EDIT_SEARCH_NOTHING));
+  else if (j->st != MC_OK) mc_wformat(text, 512, mc_str(MC_STR_EDIT_SEARCH_FAILED), MC_S(mc_status_str(j->st)));
+  else if (!result_count()) wcscpy(text, mc_wstr(MC_STR_EDIT_SEARCH_NOTHING));
   set_message(s, text[0] ? text : NULL, j->st != MC_OK, FALSE);
   search_update();
   /* The Search button was pressed and is back: from it, on to what it found. */
@@ -1287,7 +1287,7 @@ static void use_done(job *j) {
   }
   wchar_t text[512];
   if (j->st == MC_ERR_NET) wcscpy(text, mc_wstr(MC_STR_IMPORT_ERROR_UNREACHABLE));
-  else mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_EDIT_SEARCH_LOAD_FAILED), MC_S(mc_status_str(j->st)));
+  else mc_wformat(text, 512, mc_str(MC_STR_EDIT_SEARCH_LOAD_FAILED), MC_S(mc_status_str(j->st)));
   set_message(s, text, TRUE, FALSE);
   search_update();
 }
@@ -1308,7 +1308,7 @@ static void use_release(void) {
     return;
   }
   s->job = j;
-  set_message(s, mc_wstr(MC_STR_WINDOWS_EDIT_SEARCH_LOADING), FALSE, TRUE);
+  set_message(s, mc_wstr(MC_STR_EDIT_SEARCH_LOADING), FALSE, TRUE);
   search_update();
 }
 
@@ -1369,7 +1369,7 @@ static BOOL search_ui_node(int i, uia_node *n) {
       wcscat(rest, cell);
     }
     char *t = wstr_to_utf8(title), *a = wstr_to_utf8(artist), *d = wstr_to_utf8(rest);
-    mc_wformat(n->name, 512, mc_str(MC_STR_WINDOWS_EDIT_RESULT_NAME), MC_S(t ? t : ""), MC_S(a ? a : ""), MC_S(d ? d : ""));
+    mc_wformat(n->name, 512, mc_str(MC_STR_EDIT_RESULT_NAME), MC_S(t ? t : ""), MC_S(a ? a : ""), MC_S(d ? d : ""));
     free(t);
     free(a);
     free(d);
@@ -1382,7 +1382,7 @@ static BOOL search_ui_node(int i, uia_node *n) {
     n->first = first;
     n->count = result_count();
     n->automation_id = L"Releases";
-    lstrcpynW(n->name, mc_wstr(MC_STR_WINDOWS_EDIT_SEARCH_RESULTS), 512);
+    lstrcpynW(n->name, mc_wstr(MC_STR_EDIT_SEARCH_RESULTS), 512);
   }
   return TRUE;
 }
@@ -1436,15 +1436,15 @@ static BOOL search_dialog(HWND owner, mc_library *lib, const char *uid, const ch
   g_search.lib = lib;
   snprintf(g_search.uid, sizeof g_search.uid, "%s", uid);
   g_search.selected = g_search.hot = -1;
-  if (!sheet_create(s, owner, MC_STR_WINDOWS_EDIT_SEARCH_TITLE, &k_search_ops, &k_search_ui)) return FALSE;
+  if (!sheet_create(s, owner, MC_STR_EDIT_SEARCH_TITLE, &k_search_ops, &k_search_ui)) return FALSE;
   g_search.scroll.wnd = s->wnd;
   g_search.scroll.moved = list_moved;
 
   sheet_add_edit(s, add_part(s, PART_FIELD, F_ARTIST, MC_STR_ARTIST, NULL), 0, 0, 0);
   sheet_add_edit(s, add_part(s, PART_FIELD, F_TITLE, MC_STR_TITLE, NULL), 0, 0, 0);
   add_part(s, PART_BUTTON, ID_SEARCH, MC_STR_SEARCH, L"Search");
-  add_part(s, PART_LIST, ID_LIST, MC_STR_WINDOWS_EDIT_SEARCH_RESULTS, L"Releases");
-  add_part(s, PART_ACCENT, ID_USE, MC_STR_WINDOWS_EDIT_SEARCH_USE, L"Use");
+  add_part(s, PART_LIST, ID_LIST, MC_STR_EDIT_SEARCH_RESULTS, L"Releases");
+  add_part(s, PART_ACCENT, ID_USE, MC_STR_EDIT_SEARCH_USE, L"Use");
   add_part(s, PART_BUTTON, ID_CANCEL, MC_STR_CANCEL, L"Cancel");
   add_part(s, PART_CLOSE, ID_CLOSE, MC_STR_CLOSE, L"Close");
   set_field_text(part_of(s, F_ARTIST), artist);
@@ -1597,8 +1597,8 @@ static void save_done(job *j) {
     return;
   }
   wchar_t text[512];
-  if (j->st == MC_ERR_NOT_FOUND) wcscpy(text, mc_wstr(MC_STR_WINDOWS_EDIT_GONE));
-  else mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st)));
+  if (j->st == MC_ERR_NOT_FOUND) wcscpy(text, mc_wstr(MC_STR_EDIT_GONE));
+  else mc_wformat(text, 512, mc_str(MC_STR_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st)));
   set_message(s, text, TRUE, FALSE);
   /* Nothing changed, and it's most likely the track playing. */
   g_form.in_use = j->st == MC_ERR_IN_USE && playback_queue_count() > 0;
@@ -1648,7 +1648,7 @@ static void save(void) {
     return;
   }
   s->job = j;
-  set_message(s, mc_wstr(MC_STR_WINDOWS_EDIT_SAVING), FALSE, TRUE);
+  set_message(s, mc_wstr(MC_STR_EDIT_SAVING), FALSE, TRUE);
   g_form.in_use = FALSE;
   form_layout();
   form_update();
@@ -1822,35 +1822,35 @@ static void build_form(void) {
   sheet *s = &g_form.s;
   if (g_form.kind == KIND_ALBUM) {
     add_field(F_TITLE, MC_STR_TITLE, 0, 0, 0);
-    add_field(F_ARTIST, MC_STR_WINDOWS_EDIT_ALBUM_ARTIST, 0, 0, 0);
-    add_field(F_YEAR, MC_STR_WINDOWS_COL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
-    add_field(F_ORIGINAL_YEAR, MC_STR_WINDOWS_EDIT_ORIGINAL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
-    add_field(F_MB, MC_STR_WINDOWS_EDIT_MB_RELEASE, ES_READONLY, 0, MC_STR_WINDOWS_EDIT_MB_NONE);
-    add_part(s, PART_BUTTON, ID_SEARCH_MB, MC_STR_WINDOWS_EDIT_MB_SEARCH, L"SearchMusicBrainz");
-    add_check(ID_NO_SCROBBLE, MC_STR_WINDOWS_EDIT_NO_SCROBBLE, MC_STR_WINDOWS_EDIT_NO_SCROBBLE_TEXT, L"NoScrobble",
+    add_field(F_ARTIST, MC_STR_EDIT_ALBUM_ARTIST, 0, 0, 0);
+    add_field(F_YEAR, MC_STR_COL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
+    add_field(F_ORIGINAL_YEAR, MC_STR_EDIT_ORIGINAL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
+    add_field(F_MB, MC_STR_EDIT_MB_RELEASE, ES_READONLY, 0, MC_STR_EDIT_MB_NONE);
+    add_part(s, PART_BUTTON, ID_SEARCH_MB, MC_STR_EDIT_MB_SEARCH, L"SearchMusicBrainz");
+    add_check(ID_NO_SCROBBLE, MC_STR_EDIT_NO_SCROBBLE, MC_STR_EDIT_NO_SCROBBLE_TEXT, L"NoScrobble",
               g_form.saved_flags.no_scrobble);
-    add_check(ID_MIX, MC_STR_WINDOWS_EDIT_MIX, MC_STR_WINDOWS_EDIT_MIX_TEXT, L"ContinuousMix", g_form.saved_flags.mix);
+    add_check(ID_MIX, MC_STR_EDIT_MIX, MC_STR_EDIT_MIX_TEXT, L"ContinuousMix", g_form.saved_flags.mix);
   } else if (g_form.kind == KIND_ARTIST) {
     add_field(F_NAME, MC_STR_NAME, 0, 0, 0);
-    add_field(F_SORT_NAME, MC_STR_WINDOWS_EDIT_SORT_NAME, 0, 0, 0);
+    add_field(F_SORT_NAME, MC_STR_EDIT_SORT_NAME, 0, 0, 0);
   } else {
     add_field(F_TITLE, MC_STR_TITLE, 0, 0, 0);
-    add_field(F_ARTIST, MC_STR_ARTIST, 0, 0, MC_STR_WINDOWS_EDIT_TRACK_ARTIST_CUE);
-    add_field(F_TRACK_NO, MC_STR_WINDOWS_EDIT_TRACK_NUMBER, ES_NUMBER, NUMBER_DIGITS, 0);
-    add_field(F_DISC_NO, MC_STR_WINDOWS_EDIT_DISC_NUMBER, ES_NUMBER, NUMBER_DIGITS, 0);
-    add_field(F_YEAR, MC_STR_WINDOWS_COL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
-    add_field(F_GENRE, MC_STR_WINDOWS_EDIT_GENRE, 0, 0, 0);
+    add_field(F_ARTIST, MC_STR_ARTIST, 0, 0, MC_STR_EDIT_TRACK_ARTIST_CUE);
+    add_field(F_TRACK_NO, MC_STR_EDIT_TRACK_NUMBER, ES_NUMBER, NUMBER_DIGITS, 0);
+    add_field(F_DISC_NO, MC_STR_EDIT_DISC_NUMBER, ES_NUMBER, NUMBER_DIGITS, 0);
+    add_field(F_YEAR, MC_STR_COL_YEAR, ES_NUMBER, YEAR_DIGITS, 0);
+    add_field(F_GENRE, MC_STR_EDIT_GENRE, 0, 0, 0);
   }
-  add_part(s, PART_BUTTON, ID_STOP_RETRY, MC_STR_WINDOWS_EDIT_STOP_RETRY, L"StopAndRetry");
+  add_part(s, PART_BUTTON, ID_STOP_RETRY, MC_STR_EDIT_STOP_RETRY, L"StopAndRetry");
   add_part(s, PART_ACCENT, ID_SAVE, MC_STR_SAVE, L"Save");
   add_part(s, PART_BUTTON, ID_CANCEL, MC_STR_CANCEL, L"Cancel");
   add_part(s, PART_CLOSE, ID_CLOSE, MC_STR_CLOSE, L"Close");
 }
 
 static const enum mc_str_id k_titles[] = {
-  [KIND_ALBUM] = MC_STR_WINDOWS_EDIT_ALBUM_TITLE,
-  [KIND_ARTIST] = MC_STR_WINDOWS_EDIT_ARTIST_TITLE,
-  [KIND_TRACK] = MC_STR_WINDOWS_EDIT_TRACK_TITLE,
+  [KIND_ALBUM] = MC_STR_EDIT_ALBUM_TITLE,
+  [KIND_ARTIST] = MC_STR_EDIT_ARTIST_TITLE,
+  [KIND_TRACK] = MC_STR_EDIT_TRACK_TITLE,
 };
 
 static BOOL edit_dialog(HWND owner, mc_library *lib, edit_kind kind, const char *uid) {
@@ -1876,8 +1876,8 @@ static BOOL edit_dialog(HWND owner, mc_library *lib, edit_kind kind, const char 
     s->focus = 0;
   } else {
     wchar_t text[512];
-    if (st == MC_ERR_NOT_FOUND) wcscpy(text, mc_wstr(MC_STR_WINDOWS_EDIT_GONE));
-    else mc_wformat(text, 512, mc_str(MC_STR_WINDOWS_EDIT_LOAD_FAILED), MC_S(mc_status_str(st)));
+    if (st == MC_ERR_NOT_FOUND) wcscpy(text, mc_wstr(MC_STR_EDIT_GONE));
+    else mc_wformat(text, 512, mc_str(MC_STR_EDIT_LOAD_FAILED), MC_S(mc_status_str(st)));
     set_message(s, text, TRUE, FALSE);
     s->focus = (int)(part_of(s, ID_CANCEL) - s->parts);
   }

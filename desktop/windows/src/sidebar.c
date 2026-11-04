@@ -1015,7 +1015,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         HMENU menu = CreatePopupMenu();
         mc_recent_kind kind = (mc_recent_kind)s.rows[i].flags;
         if (kind == MC_RECENT_ALBUM || kind == MC_RECENT_ARTIST) {
-          AppendMenuW(menu, MF_STRING, 3, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
+          AppendMenuW(menu, MF_STRING, 3, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
           AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
         }
         AppendMenuW(menu, MF_STRING, 1, mc_wstr_mnemonic(MC_STR_RECENT_REMOVE_MENU));

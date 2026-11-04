@@ -1097,7 +1097,7 @@ static void single_menu(int i, POINT pt) {
     AppendMenuW(menu, MF_STRING, CMD_GO_TO_ARTIST, mc_wstr_mnemonic(MC_STR_GO_TO_ARTIST));
   }
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_EDIT, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_EDIT, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, CMD_DELETE_TRACK, mc_wstr_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU));
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL);
   DestroyMenu(menu); /* and the submenu */
@@ -1161,7 +1161,7 @@ static BOOL on_context_menu(LPARAM lp) {
   char album[MC_UID_STRLEN] = "";
   if (is_open() && i >= 0 && i < v.strips[STRIP_ALBUMS].n) memcpy(album, tile_at(i)->uid, sizeof album);
   HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, CMD_EDIT, mc_wstr_mnemonic(MC_STR_WINDOWS_EDIT_MENU));
+  AppendMenuW(menu, MF_STRING, CMD_EDIT, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
   remove_here_append_menu(menu, MC_PROFILE_ARTIST, uid, CMD_REMOVE_HERE, CMD_SYNC_HERE);
   int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL);
   DestroyMenu(menu);
