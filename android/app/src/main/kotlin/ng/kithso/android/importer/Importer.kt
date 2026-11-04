@@ -647,6 +647,8 @@ class Importer(
         state.value = p?.copy(phase = phase, reviewItems = emptyList(), offline = false)
         failedNames.clear()
         Log.i(TAG, "Import ${phase.name.lowercase()}: ${p?.imported} imported, ${p?.skipped} skipped, ${p?.failed} failed")
+        // Even if cancelled: what was imported stays.
+        if ((p?.imported ?: 0) > 0) AnalysisWorker.schedule(context)
     }
 
     // The copies, and the grant: none is left once an import is over.

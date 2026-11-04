@@ -24,6 +24,7 @@
 
 #include "library/folder_gate.h"
 #include "sync/orphans.h"
+#include "analysis/scanner.h"
 #include "library/edit_internal.h"
 #include "library/library_internal.h"
 #include "tagger/coverart.h"
@@ -2870,6 +2871,9 @@ static void import_thread(void *arg) {
   mc_import *imp = arg;
   mc_library *lib = NULL;
   if (mc_library_open_internal(imp->lib_dir, &lib) != MC_OK) lib = NULL;
+  /* The audio scanner stands aside while an import is at work, but not while it waits for the
+   * user's review, which could be days. */
+  mc_analysis_hold();
 
   for (int i = 0; i < imp->path_count && !cancelled(imp); i++) scan_path(imp, imp->paths[i]);
   if (imp->file_count > 1) qsort(imp->files, (size_t)imp->file_count, sizeof *imp->files, compare_paths);
@@ -2912,6 +2916,7 @@ static void import_thread(void *arg) {
     emit(imp, MC_IMPORT_EV_IDLE, 0);
     settle(imp, lib);
   }
+  mc_analysis_release();
 
   request *r;
   while ((r = next_request(imp, 1))) {
@@ -2919,7 +2924,9 @@ static void import_thread(void *arg) {
       mc_folder_hold(imp->lib_dir);
       imp->holding = 1;
     }
+    mc_analysis_hold();
     handle_request(imp, lib, r);
+    mc_analysis_release();
     request_free(r);
     mc_mutex_lock(&imp->lock);
     int idle = !imp->head && !imp->cancel;

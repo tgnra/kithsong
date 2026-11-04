@@ -30,6 +30,8 @@ target_sources(kithsong_jni PRIVATE jni_sync_here.c)
 
 # The profiler and stress test libraries (CoreTesting), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_testing.c)
+# One run of the audio scanner, for the charging job (AnalysisNatives), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_analysis.c)
 
 # The native libraries' license texts, for the apps' licence screens (build.gradle.kts).
 if(KITHSONG_LICENSES_DIR)

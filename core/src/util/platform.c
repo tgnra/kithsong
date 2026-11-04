@@ -19,6 +19,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <time.h>
@@ -124,6 +125,11 @@ void mc_thread_join(mc_thread *thread) {
 
 void mc_thread_detach(mc_thread *thread) {
   CloseHandle(thread->handle);
+}
+
+void mc_thread_background(void) {
+  /* Background mode lowers the thread's disk and memory priority along with its CPU's. */
+  SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
 }
 
 /* UTF-8 -> UTF-16, malloc'd. */
@@ -696,6 +702,14 @@ void mc_thread_join(mc_thread *thread) {
 
 void mc_thread_detach(mc_thread *thread) {
   pthread_detach(thread->t);
+}
+
+void mc_thread_background(void) {
+#ifdef __linux__
+  /* On Linux a nice value is the calling thread's, not the process's as POSIX has it, and the
+   * I/O scheduler follows it. */
+  setpriority(PRIO_PROCESS, 0, 19);
+#endif
 }
 
 static int walk_dir(const char *dir, mc_walk_fn fn, void *user) {

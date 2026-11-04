@@ -53,6 +53,7 @@ add_library(musiccore STATIC
   src/core.c
   src/settings.c
   src/util/platform.c
+  src/util/power.c
   src/util/uid.c
   src/util/hlc.c
   src/util/changelog.c
@@ -78,6 +79,11 @@ add_library(musiccore STATIC
   src/playback/decoder.c
   src/playback/player.c
   src/playback/shuffle.c
+  src/analysis/analysis.c
+  src/analysis/loudness.c
+  src/analysis/scanner.c
+  src/analysis/timbre.c
+  src/radio/radio.c
   src/art/art_colors.c
   src/tagger/tag_io.cpp
   src/tagger/musicbrainz.c

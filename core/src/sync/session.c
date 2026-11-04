@@ -7,6 +7,7 @@
 #include <yyjson.h>
 
 #include "library/folder_gate.h"
+#include "analysis/scanner.h"
 #include "library/library_internal.h"
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
@@ -859,10 +860,13 @@ static mc_status session_run(mc_session *s) {
 
 mc_status mc_session_run(mc_session *s) {
   /* The whole session: rows and files change under it, and the sweep at its end allows for
-   * this one hold. */
+   * this one hold. The scanner stands aside too: see mc_analysis_hold(). From here, as the
+   * library's VV is a group exchange away, a row it's writing now is in before that. */
   const char *dir = s && s->conn && s->conn->lib ? mc_library_dir(s->conn->lib) : NULL;
   mc_folder_hold(dir);
+  mc_analysis_hold();
   mc_status st = session_run(s);
+  mc_analysis_release();
   mc_folder_release(dir);
   return st;
 }
