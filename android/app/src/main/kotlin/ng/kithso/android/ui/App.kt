@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -42,11 +43,13 @@ import androidx.compose.ui.unit.dp
 import ng.kithso.android.AppSettings
 import ng.kithso.android.data.Addition
 import ng.kithso.android.data.CollectionRef
+import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.RecentsEditor
 import ng.kithso.android.data.SmartListEditor
+import ng.kithso.android.data.TagTarget
 import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.sync.Syncer
@@ -66,7 +69,8 @@ import java.io.File
  * [onPlay] is called when a track list starts playing, and [onImportStarted] when an import
  * starts; how it's going shows as a card under the main list's header. Pairing with another
  * device shows over everything, as it can start from the other device at any time, and so
- * does the smart list editor ([SmartEditorScreen]) while it's open. [libraryDir] is the library
+ * do the smart list editor ([SmartEditorScreen]) and the tag editor ([TagEditorScreen]) while
+ * they're open. [libraryDir] is the library
  * folder, for settings to show its size.
  */
 @Composable
@@ -113,6 +117,8 @@ fun App(
     // would never open again.
     var playerOpenings by rememberSaveable { mutableIntStateOf(0) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
+    // What the tag editor is open on, which outlives a rotation as what's typed there does.
+    var tagTarget by rememberSaveable(stateSaver = TagTargetSaver) { mutableStateOf<TagTarget?>(null) }
     val track = playback.track
     // The player goes with the track, when a delete empties the queue, say; it doesn't come
     // back open with the next one.
@@ -151,11 +157,12 @@ fun App(
             source as? RecentsEditor,
             playback,
             source as? SmartListEditor,
+            onEdit = (source as? CoreLibrarySource)?.let { { target -> tagTarget = target } },
         )
     }
-    // The smart list editor covers everything, the players too, until it's closed.
+    // The smart list and tag editors cover everything, the players too, until they're closed.
     val smartTarget = actions.smartEditing
-    val smartOpen = smartTarget != null
+    val smartOpen = smartTarget != null || tagTarget != null
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
         scope.launch {
             val tracks = source.trackList(ref)?.tracks ?: return@launch
@@ -403,6 +410,12 @@ fun App(
                     onClose = { if (actions.smartEditing == smartTarget) actions.smartEditing = null },
                 )
             }
+            val tagEditor = (source as? CoreLibrarySource)?.tagEditor
+            tagTarget?.let { target ->
+                if (tagEditor != null) key(target) {
+                    TagEditorScreen(tagEditor, playback, target, onClose = { if (tagTarget == target) tagTarget = null })
+                }
+            }
             PlaylistSheets(
                 actions,
                 library,
@@ -439,6 +452,11 @@ private val ShortWindowHeight = 480.dp
 
 /** Hides a layer from accessibility services while another covers it. */
 private fun Modifier.coveredIf(covered: Boolean) = if (covered) clearAndSetSemantics {} else this
+
+private val TagTargetSaver = Saver<TagTarget?, String>(
+    save = { target -> target?.let { "${it.kind.name}:${it.uid}" } },
+    restore = { saved -> TagTarget(TagTarget.Kind.valueOf(saved.substringBefore(':')), saved.substringAfter(':')) },
+)
 
 private val StackSaver = listSaver<SnapshotStateList<CollectionRef>, String>(
     save = { stack -> stack.map { "${it.kind.name}:${it.uid}" } },

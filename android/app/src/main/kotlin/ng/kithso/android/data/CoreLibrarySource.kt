@@ -128,6 +128,18 @@ class CoreLibrarySource(
     private val counting = Dispatchers.IO.limitedParallelism(1)
     private var countLib: CoreLibrary? = null // only touched on [counting]
 
+    /** Editing tags, on threads of its own. */
+    val tagEditor: TagEditor = CoreTagEditor(
+        dir,
+        scope,
+        changed = {
+            refresh().join()
+            editCount.value++
+            onChanged()
+        },
+        fresh = ::freshTracks,
+    )
+
     // Covers found before, by folder, only touched on [core]: every read asks for every
     // album's, and a stat is far cheaper than listing the folder. A folder without one is
     // listed again each time, as a cover may yet arrive.
@@ -634,6 +646,23 @@ class CoreLibrarySource(
         onChanged()
         outcome
     }.await()
+
+    // [queue] as the library has its tracks now, those it can't find as they were: by album, the
+    // one thing a queue's tracks can be found by, or for one on no album its artist's singles.
+    private suspend fun freshTracks(queue: List<Track>): List<Track> = withContext(core) {
+        val lib = open() ?: return@withContext queue
+        val covers = Covers()
+        try {
+            val albums = queue.mapNotNull { it.albumUid }.distinct().flatMap { lib.albumTracks(it) }
+            val singles = queue.filter { it.albumUid == null }.mapNotNull { it.artistUid }.distinct()
+                .flatMap { lib.artistSingles(it) }
+            val fresh = (albums + singles).here().associate { it.uid to covers.track(it) }
+            queue.map { fresh[it.uid] ?: it }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't read the queue's tracks again", e)
+            queue
+        }
+    }
 
     /** The recycle bin's entries, newest first ([RecycleBin]); empty if they couldn't be read. */
     suspend fun binEntries(): List<BinEntry> = withContext(core) {
