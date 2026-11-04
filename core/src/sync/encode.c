@@ -113,7 +113,7 @@ static void worker(void *arg) {
     j->next = p->running;
     p->running = j;
     if (++p->nrunning > p->stats.peak) p->stats.peak = p->nrunning;
-    mc_sync_trace("encode %.8s: start, %d running, %d queued", j->file_uid, p->nrunning,
+    mc_sync_trace("encode %s: start, %d running, %d queued", j->file_uid, p->nrunning,
                   p->nqueued);
     mc_mutex_unlock(&p->lock);
     uint64_t t0 = mc_mono_ms();
@@ -126,7 +126,7 @@ static void worker(void *arg) {
       fprintf(stderr, "musiccore: sync: transcoding %s failed: %s\n", j->src, mc_status_str(st));
     free(out);
     free(path);
-    mc_sync_trace("encode %.8s: done, %llu ms", j->file_uid,
+    mc_sync_trace("encode %s: done, %llu ms", j->file_uid,
                   (unsigned long long)(mc_mono_ms() - t0));
 
     mc_mutex_lock(&p->lock);
