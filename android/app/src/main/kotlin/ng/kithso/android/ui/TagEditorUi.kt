@@ -1,6 +1,8 @@
 package ng.kithso.android.ui
 
+import android.app.Activity
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +52,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -235,6 +238,14 @@ internal fun TagEditorScreen(editor: TagEditor, playback: Playback, target: TagT
     var searching by rememberSaveable(target) { mutableStateOf(false) }
     var asking by rememberSaveable(target) { mutableStateOf(false) }
     val context = LocalContext.current
+    // The form makes room for the keyboard itself. Left to pan as well, the window slides the
+    // whole page out of sight in landscape, where the box is lower than the keyboard's top.
+    val window = (context as? Activity)?.window
+    DisposableEffect(window) {
+        val mode = window?.attributes?.softInputMode
+        window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        onDispose { if (mode != null) window.setSoftInputMode(mode) }
+    }
     LaunchedEffect(form) {
         when (val read = editor.read(target)) {
             is TagResult.Ok -> form.start(read.value)
