@@ -670,8 +670,7 @@ static gboolean text_focused(GtkWidget *win) {
 static gboolean on_shortcut(GtkWidget *win, GVariant *args, gpointer user) {
   app *a = user;
   shortcut sc = (shortcut)g_variant_get_int32(args);
-  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
-  if (focus && gtk_widget_get_ancestor(focus, ADW_TYPE_DIALOG)) return FALSE;
+  if (adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(win))) return FALSE;
   gboolean text = text_focused(win);
   switch (sc) {
     case SC_NEXT:
@@ -1493,8 +1492,7 @@ static gboolean on_type_to_search(GtkEventControllerKey *keys, guint keyval, gui
   gunichar c = gdk_keyval_to_unicode(keyval);
   if (!c || !g_unichar_isgraph(c) || (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SUPER_MASK | GDK_META_MASK)))
     return FALSE;
-  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
-  if (text_focused(win) || (focus && gtk_widget_get_ancestor(focus, ADW_TYPE_DIALOG))) return FALSE;
+  if (text_focused(win) || adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(win))) return FALSE;
   if (!gtk_widget_is_sensitive(a->sidebar)) return FALSE;
   char text[8] = "";
   g_unichar_to_utf8(c, text);

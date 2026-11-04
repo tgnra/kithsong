@@ -14,6 +14,7 @@ enum {
   FORM_WIDTH = 520,
   SEARCH_WIDTH = 640,
   SEARCH_HEIGHT = 620,
+  BANNER_ROOM = 56, /* what the dialog grows by for the banner, which it wouldn't by itself */
   YEAR_DIGITS = 4,
   NUMBER_DIGITS = 3,
 };
@@ -39,8 +40,10 @@ typedef struct edit_form {
   edit_kind kind;
   mc_library *lib;
   char uid[MC_UID_STRLEN];
-  GtkWidget *dialog, *cancel, *save, *spinner, *groups;
+  GtkWidget *dialog, *toolbar, *cancel, *save, *spinner, *groups;
   AdwBanner *banner;
+  gboolean banner_room;  /* the dialog has grown for it */
+  GtkWidget *save_focus; /* what had the focus as Save started, which greying out takes away */
   GtkWidget *fields[NUM_FIELDS]; /* AdwEntryRows; NULL for those not on the form */
   GtkWidget *mb_row, *mb_search, *no_scrobble, *mix;
   char *mb;                /* the release the form has now, "" for none */
@@ -529,6 +532,10 @@ static void run_save(job *j) {
 
 /* What the banner says, or for NULL nothing; it offers to stop playing while f->in_use. */
 static void form_say(edit_form *f, const char *text) {
+  if (text && !f->banner_room) {
+    f->banner_room = TRUE;
+    adw_dialog_set_content_height(ADW_DIALOG(f->dialog), gtk_widget_get_height(f->toolbar) + BANNER_ROOM);
+  }
   if (text) adw_banner_set_title(f->banner, text);
   adw_banner_set_button_label(f->banner, f->in_use ? mc_str(MC_STR_EDIT_STOP_RETRY) : NULL);
   adw_banner_set_revealed(f->banner, text != NULL);
@@ -571,6 +578,7 @@ static void save_done(gpointer owner, job *j) {
                                            : mc_format_alloc(mc_str(MC_STR_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st)));
   form_say(f, failed ? failed : mc_str(MC_STR_EDIT_GONE));
   mc_free(failed);
+  if (f->save_focus) gtk_widget_grab_focus(f->save_focus);
 }
 
 /* Save: nothing to do closes the dialog, as there's nothing to lose. */
@@ -599,6 +607,7 @@ static void save(edit_form *f) {
     adw_dialog_force_close(ADW_DIALOG(f->dialog));
     return;
   }
+  f->save_focus = adw_dialog_get_focus(ADW_DIALOG(f->dialog));
   f->saving = TRUE;
   f->in_use = FALSE;
   form_say(f, mc_str(MC_STR_EDIT_SAVING));
@@ -818,15 +827,15 @@ void edit_dialog_present(app *a, edit_kind kind, const char *uid) {
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), f->save);
   f->spinner = gtk_spinner_new();
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), f->spinner);
-  GtkWidget *toolbar = adw_toolbar_view_new();
-  adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
-  adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), content);
+  f->toolbar = adw_toolbar_view_new();
+  adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(f->toolbar), header);
+  adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(f->toolbar), content);
 
   f->dialog = GTK_WIDGET(adw_dialog_new());
   g_object_set_data_full(G_OBJECT(f->dialog), "edit-data", f, form_free);
   adw_dialog_set_title(ADW_DIALOG(f->dialog), mc_str(titles[kind]));
   adw_dialog_set_content_width(ADW_DIALOG(f->dialog), FORM_WIDTH);
-  adw_dialog_set_child(ADW_DIALOG(f->dialog), toolbar);
+  adw_dialog_set_child(ADW_DIALOG(f->dialog), f->toolbar);
   g_signal_connect(f->dialog, "closed", G_CALLBACK(on_closed), f);
   form_update(f);
   current = f;
