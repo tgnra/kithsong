@@ -15,14 +15,6 @@
 
 theme_colors theme;
 
-static DWORD windows_build(void) {
-  typedef LONG(WINAPI * rtl_get_version)(OSVERSIONINFOW *);
-  rtl_get_version get =
-    (rtl_get_version)(void (*)(void))GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
-  OSVERSIONINFOW v = {.dwOSVersionInfoSize = sizeof v};
-  return get && get(&v) == 0 ? v.dwBuildNumber : 0;
-}
-
 /* Menus (the window menu, edit boxes' context menus) only go dark through uxtheme's
  * undocumented SetPreferredAppMode, ordinal 135 since Windows 10 1903. */
 static void set_menu_mode(BOOL dark) {
@@ -31,7 +23,7 @@ static void set_menu_mode(BOOL dark) {
   static void(WINAPI * flush_menu_themes)(void);
   if (!loaded) {
     loaded = TRUE;
-    HMODULE ux = windows_build() >= 18362 ? LoadLibraryExW(L"uxtheme.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32) : NULL;
+    HMODULE ux = LoadLibraryExW(L"uxtheme.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (ux) {
       set_preferred_app_mode = (int(WINAPI *)(int))(void (*)(void))GetProcAddress(ux, MAKEINTRESOURCEA(135));
       flush_menu_themes = (void(WINAPI *)(void))(void (*)(void))GetProcAddress(ux, MAKEINTRESOURCEA(136));
