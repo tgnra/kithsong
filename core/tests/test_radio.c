@@ -1,4 +1,5 @@
-/* Radio mixes (musiccore/radio.h), from made-up analysis results, so no audio is decoded. */
+/* Radio mixes and stations (musiccore/radio.h), from made-up analysis results, so no audio is
+ * decoded. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -261,6 +262,241 @@ static void test_plays_down_what_played_lately(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* Too long isn't a candidate, whoever asks; not knowing is no reason to leave a track out. */
+static void test_max_length(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_radio_length.d");
+  if (!lib) return;
+  const struct { const char *uid; int ms; } tracks[] = {
+    {"seed", 200000}, {"eight", 480000}, {"over", 480001}, {"nine", 540000},
+    {"zero", 0},      {"none", 200000},
+  };
+  int total = (int)(sizeof tracks / sizeof tracks[0]);
+  for (int i = 0; i < total; i++) {
+    char artist[32];
+    snprintf(artist, sizeof artist, "artist-%s", tracks[i].uid);
+    add_artist(lib, artist);
+    add_track(lib, tracks[i].uid, tracks[i].uid, artist, NULL, tracks[i].ms, i * 0.1, 1, 1);
+  }
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  exec_ok(lib, "UPDATE tracks SET duration_ms = NULL WHERE uid = 'none'");
+  CHECK(mc_library_commit(lib) == MC_OK);
+
+  /* 8 minutes unless it says, that long being fine. */
+  mc_radio_pick picks[10];
+  int n = 0;
+  mc_radio_options opts = {"seed", 10, 1, NOW_MS, 0};
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  CHECK(n == 4);
+  CHECK(has(picks, n, "seed") && has(picks, n, "eight") && has(picks, n, "zero") && has(picks, n, "none"));
+
+  opts.max_track_ms = 300000;
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  CHECK(n == 3);
+  CHECK(!has(picks, n, "eight"));
+  CHECK(has(picks, n, "zero") && has(picks, n, "none"));
+
+  opts.max_track_ms = -1;
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  CHECK(n == total);
+
+  /* A seed is held to it like any other track, a station's too. */
+  opts.seed_track = "nine";
+  opts.max_track_ms = 0;
+  mc_radio_station *station = NULL;
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_ERR_NOT_FOUND);
+  CHECK(mc_radio_seed_check(lib, &opts) == MC_ERR_NOT_FOUND);
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_ERR_NOT_FOUND);
+  CHECK(!station);
+  opts.max_track_ms = -1;
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  CHECK(mc_radio_seed_check(lib, &opts) == MC_OK);
+  opts.seed_track = "none";
+  opts.max_track_ms = 0;
+  CHECK(mc_radio_seed_check(lib, &opts) == MC_OK);
+  opts.seed_track = "unheard-of";
+  CHECK(mc_radio_seed_check(lib, &opts) == MC_ERR_NOT_FOUND);
+  opts.seed_track = NULL;
+  CHECK(mc_radio_seed_check(lib, &opts) == MC_ERR_INVALID_ARG);
+  mc_library_close(lib);
+}
+
+/* Two clusters again. A station plays all of the seed's, then all of the other's, with no
+ * repeats, and then goes on with tracks coming back. It reads the library once, so the library
+ * can be closed by then. */
+static void test_station_goes_on(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_radio_station.d");
+  if (!lib) return;
+  char id[32], artist[32], album[32];
+  enum { POOL = 40, RUN = 200 };
+  for (int i = 0; i < POOL; i++) {
+    snprintf(id, sizeof id, "%c%02d", i < POOL / 2 ? 'a' : 'b', i);
+    snprintf(artist, sizeof artist, "artist%d", i);
+    snprintf(album, sizeof album, "album%d", i);
+    add_artist(lib, artist);
+    add_album(lib, album, artist, 0);
+    add_track(lib, id, id, artist, album, 200000, (i < POOL / 2 ? 0.0 : 50.0) + (i % 20) * 0.1, 1, 1);
+  }
+  mc_radio_options opts = {"a03", 0, 7, NOW_MS, 0};
+  mc_radio_station *station = NULL, *again = NULL;
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_OK);
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &again) == MC_OK);
+  char dir[1024];
+  snprintf(dir, sizeof dir, "%s", mc_library_dir(lib));
+  mc_library_close(lib);
+  if (!station || !again) return;
+
+  /* In batches of any size, as a player would ask. */
+  static mc_radio_pick picks[RUN];
+  for (int at = 0, size = 1; at < RUN; at += size, size = size % 7 + 1) {
+    if (at + size > RUN) size = RUN - at;
+    CHECK(mc_radio_station_next(station, picks + at, size) == MC_OK);
+  }
+  CHECK_STR(picks[0].track_uid, "a03");
+  CHECK(picks[0].distance == 0.0);
+  for (int i = 0; i < POOL / 2; i++) CHECK(picks[i].track_uid[0] == 'a');
+  for (int i = POOL / 2; i < POOL; i++) CHECK(picks[i].track_uid[0] == 'b');
+  for (int i = 0; i < POOL; i++)
+    for (int j = i + 1; j < POOL; j++) CHECK(strcmp(picks[i].track_uid, picks[j].track_uid));
+  /* What comes back keeps away from when it last played: half a pool at the very least, as
+   * the last round's latest stay out. */
+  for (int i = 0; i < RUN; i++)
+    for (int j = i + 1; j < RUN && j < i + POOL / 2; j++) CHECK(strcmp(picks[i].track_uid, picks[j].track_uid));
+  for (int i = 0; i < RUN; i++) {
+    char end[64];
+    snprintf(end, sizeof end, "%s.wav", picks[i].track_uid);
+    CHECK(picks[i].path && !strncmp(picks[i].path, dir, strlen(dir)));
+    CHECK(picks[i].path && strstr(picks[i].path, end));
+  }
+
+  /* The same inputs give the same station, whatever the batches. */
+  mc_radio_pick same_run[60];
+  CHECK(mc_radio_station_next(again, same_run, 60) == MC_OK);
+  for (int i = 0; i < 60; i++) CHECK_STR(same_run[i].track_uid, picks[i].track_uid);
+  mc_radio_station_close(again);
+
+  CHECK(mc_radio_station_next(station, picks, 0) == MC_ERR_INVALID_ARG);
+  CHECK(mc_radio_station_next(NULL, picks, 1) == MC_ERR_INVALID_ARG);
+  mc_radio_station_close(station);
+  mc_radio_station_close(NULL);
+}
+
+/* The gaps hold on a station as in a mix, but an album only stays out for so long, or a small
+ * library would soon lose the artist gap with it. */
+static void test_station_keeps_apart(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_radio_station_apart.d");
+  if (!lib) return;
+  char id[32], artist[32], album[32];
+  for (int a = 0; a < 6; a++) {
+    snprintf(artist, sizeof artist, "artist%d", a);
+    add_artist(lib, artist);
+    snprintf(album, sizeof album, "album%d", a);
+    add_album(lib, album, artist, 0);
+    for (int t = 0; t < 8; t++) {
+      snprintf(id, sizeof id, "t%d-%d", a, t);
+      add_track(lib, id, id, artist, album, 200000, a * 0.01 + t * 0.0001, 1, 1);
+    }
+  }
+  mc_radio_options opts = {"t0-0", 0, 3, NOW_MS, 0};
+  mc_radio_station *station = NULL;
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_OK);
+  mc_library_close(lib);
+  if (!station) return;
+  mc_radio_pick picks[30];
+  CHECK(mc_radio_station_next(station, picks, 30) == MC_OK);
+  /* uids are t<artist>-<track>. Six albums, so they had to give way, and artists didn't. */
+  for (int i = 0; i < 30; i++)
+    for (int j = i + 1; j < 30 && j <= i + 3; j++) CHECK(picks[i].track_uid[1] != picks[j].track_uid[1]);
+  mc_radio_station_close(station);
+}
+
+/* However little there is, it doesn't end: one track, and two copies of one recording. */
+static void test_station_small(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_radio_station_small.d");
+  if (!lib) return;
+  add_artist(lib, "a1");
+  add_album(lib, "album1", "a1", 0);
+  add_album(lib, "album2", "a1", 0);
+  add_track(lib, "only", "Only", "a1", "album1", 200000, 0.0, 1, 1);
+  mc_radio_options opts = {"only", 0, 1, NOW_MS, 0};
+  mc_radio_station *station = NULL;
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_OK);
+  mc_radio_pick picks[8];
+  if (station) {
+    CHECK(mc_radio_station_next(station, picks, 8) == MC_OK);
+    for (int i = 0; i < 8; i++) CHECK_STR(picks[i].track_uid, "only");
+    mc_radio_station_close(station);
+  }
+  add_track(lib, "copy", "ONLY", "a1", "album2", 200000, 0.0, 1, 1);
+  station = NULL;
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_OK);
+  if (station) {
+    CHECK(mc_radio_station_next(station, picks, 8) == MC_OK);
+    for (int i = 0; i < 8; i++) CHECK(!strcmp(picks[i].track_uid, "only") || !strcmp(picks[i].track_uid, "copy"));
+    mc_radio_station_close(station);
+  }
+  mc_library_close(lib);
+}
+
+/* The penalty counts on a station, and for its own picks once they come round again. */
+static void test_station_lately(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_radio_station_lately.d");
+  if (!lib) return;
+  char id[32], artist[32];
+  add_artist(lib, "seedartist");
+  add_track(lib, "seed", "Seed", "seedartist", NULL, 200000, 0.0, 1, 1);
+  for (int i = 0; i < 12; i++) {
+    snprintf(id, sizeof id, "t%02d", i);
+    snprintf(artist, sizeof artist, "artist%d", i);
+    add_artist(lib, artist);
+    add_track(lib, id, id, artist, NULL, 200000, 0.5 + i * 2.0, 1, 1);
+  }
+  int before = 0, after = 0, runs = 40;
+  mc_radio_options opts = {"seed", 0, 0, NOW_MS, 0};
+  mc_radio_pick picks[2];
+  for (int pass = 0; pass < 2; pass++) {
+    for (uint32_t r = 1; r <= (uint32_t)runs; r++) {
+      opts.random = r;
+      mc_radio_station *station = NULL;
+      CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_OK);
+      if (!station) continue;
+      CHECK(mc_radio_station_next(station, picks, 2) == MC_OK);
+      *(pass ? &after : &before) += !strcmp(picks[1].track_uid, "t00");
+      mc_radio_station_close(station);
+    }
+    if (!pass) played(lib, "t00", NOW_MS - 1000);
+  }
+  CHECK(before > runs / 2);
+  CHECK(after < before);
+  mc_library_close(lib);
+}
+
+static int asked;
+
+static int give_up(void *user) {
+  (void)user;
+  asked++;
+  return 1;
+}
+
+/* Reading the candidates can be stopped part way, which is how a player lets go of one. */
+static void test_station_cancelled(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_radio_station_cancel.d");
+  if (!lib) return;
+  char id[32];
+  add_artist(lib, "a1");
+  for (int i = 0; i < 300; i++) {
+    snprintf(id, sizeof id, "t%03d", i);
+    add_track(lib, id, id, "a1", NULL, 200000, i * 0.1, 1, 1);
+  }
+  mc_radio_options opts = {NULL, 0, 1, NOW_MS, 0};
+  mc_radio_station *station = NULL;
+  CHECK(mc_radio_station_open(lib, &opts, give_up, NULL, &station) == MC_ERR_IN_USE);
+  CHECK(!station);
+  CHECK(asked == 1);
+  CHECK(mc_radio_station_open(NULL, &opts, NULL, NULL, &station) == MC_ERR_INVALID_ARG);
+  mc_library_close(lib);
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
@@ -268,5 +504,11 @@ int main(int argc, char **argv) {
   test_keeps_apart(scratch);
   test_leaves_out(scratch);
   test_plays_down_what_played_lately(scratch);
+  test_max_length(scratch);
+  test_station_goes_on(scratch);
+  test_station_keeps_apart(scratch);
+  test_station_small(scratch);
+  test_station_lately(scratch);
+  test_station_cancelled(scratch);
   return TEST_RESULT();
 }
