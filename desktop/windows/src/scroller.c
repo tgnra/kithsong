@@ -1,5 +1,6 @@
 #include "scroller.h"
 
+#include "musiccore/perf.h"
 #include "theme.h"
 
 /* Scrollbar metrics at 96 DPI. */
@@ -165,6 +166,7 @@ BOOL scroller_timer(scroller *s, UINT_PTR id) {
     if (s->pos == s->target || step == 0) {
       KillTimer(s->wnd, SCROLLER_TIMER_ANIMATE);
       s->animating = FALSE;
+      if (s->perf_name) mc_perf_frame_break(s->perf_name);
     }
     return TRUE;
   }
@@ -179,7 +181,17 @@ BOOL scroller_timer(scroller *s, UINT_PTR id) {
   return FALSE;
 }
 
+void scroller_paint_start(scroller *s) {
+  s->perf_start_us = mc_perf_enabled() ? mc_perf_now_us() : 0;
+}
+
 void scroller_paint(scroller *s, canvas *c) {
+  /* A paint that shows a new position is a frame of scrolling; others (a cover arriving, say)
+   * aren't. */
+  if (s->perf_name && s->perf_pos != s->pos && mc_perf_enabled()) {
+    s->perf_pos = s->pos;
+    mc_perf_frame(s->perf_name, s->perf_start_us ? mc_perf_now_us() - s->perf_start_us : 0);
+  }
   RECT thumb;
   if (s->shown && thumb_rect(s, &thumb))
     canvas_fill(c, &thumb, thumb.right - thumb.left, theme.text, s->hot || s->dragging ? 140 : 110);

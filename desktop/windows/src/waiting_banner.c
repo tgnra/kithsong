@@ -24,6 +24,7 @@ static struct {
   UINT dpi;
   int text_h; /* a line of font */
   wchar_t text[512]; /* "" while nothing waits */
+  BOOL stress;       /* a stress test library is open: text says so, and a click goes back */
   canvas c;
   uia_host ui;
 } b;
@@ -100,6 +101,16 @@ static LRESULT CALLBACK banner_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       EndPaint(wnd, &ps);
       return 0;
     }
+    case WM_LBUTTONUP:
+      if (b.stress)
+        SendMessageW(GetParent(wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(wnd), BN_CLICKED), (LPARAM)wnd);
+      return 0;
+    case WM_SETCURSOR:
+      if (b.stress) {
+        SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_HAND));
+        return TRUE;
+      }
+      break;
     case WM_DESTROY:
       uia_destroy(&b.ui);
       canvas_free(&b.c);
@@ -120,13 +131,7 @@ HWND waiting_banner_create(HWND parent, int id) {
                          (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
 }
 
-BOOL waiting_banner_update(mc_sync *sync) {
-  char text[512] = "";
-  mc_sync_waiting *w = NULL;
-  if (sync && mc_sync_get_waiting(sync, &w) == MC_OK) mc_sync_waiting_text(w, text, sizeof text);
-  mc_sync_waiting_free(w);
-  wchar_t wide[512];
-  wstr_from_utf8(wide, sizeof wide / sizeof *wide, text);
+static BOOL set_text(const wchar_t *wide) {
   if (!wcscmp(wide, b.text)) return FALSE;
   BOOL was = b.text[0] != L'\0';
   wcscpy(b.text, wide);
@@ -136,6 +141,22 @@ BOOL waiting_banner_update(mc_sync *sync) {
     if (b.text[0]) uia_announce(&b.ui, UIA_ROOT);
   }
   return was != (b.text[0] != L'\0');
+}
+
+BOOL waiting_banner_set_stress(BOOL stress) {
+  b.stress = stress;
+  return set_text(stress ? mc_wstr(MC_STR_STRESS_BANNER) : L"");
+}
+
+BOOL waiting_banner_update(mc_sync *sync) {
+  if (b.stress) return FALSE;
+  char text[512] = "";
+  mc_sync_waiting *w = NULL;
+  if (sync && mc_sync_get_waiting(sync, &w) == MC_OK) mc_sync_waiting_text(w, text, sizeof text);
+  mc_sync_waiting_free(w);
+  wchar_t wide[512];
+  wstr_from_utf8(wide, sizeof wide / sizeof *wide, text);
+  return set_text(wide);
 }
 
 BOOL waiting_banner_shown(void) {

@@ -111,6 +111,8 @@
 #include "theme.h"
 #include "track_list.h"
 #include "volume_popup.h"
+#include "scroller.h"
+#include "testing_view.h"
 #include "waiting_banner.h"
 #include "wstr.h"
 
@@ -147,6 +149,7 @@ enum {
 /* The main window's timers. */
 enum {
   TIMER_REFRESH_DEVICES = 0x5D01, /* one-shot: a sync event asked for a refresh */
+  TIMER_PERF_RUN = 0x5D0F,        /* one-shot: KITHSONG_PERF_RUN's scroll test starts */
   TIMER_POLL_DEVICES,             /* repeating: renames elsewhere fire no event */
   TIMER_REFRESH_LIBRARY,          /* one-shot: sync brought library rows or files */
   TIMER_SAVE_VOLUME,              /* one-shot: the volume changed, so a held key saves once */
@@ -206,6 +209,7 @@ static void import_forwarded(wchar_t *list);
 #define INSTANCE_PROP L"Kithsong.Instance"
 #define INSTANCE_PATHS 0x4B535041     /* WM_COPYDATA's dwData: paths, NUL-separated */
 #define WM_APP_FORWARDED (WM_APP + 9) /* lParam: those paths, malloc'd and ending in "\0\0" */
+#define WM_APP_SCROLL_TEST (WM_APP + 10) /* a scroll test's next frame */
 
 static ULONG_PTR g_instance_key;
 
@@ -429,8 +433,30 @@ static void paint_background(HDC dc, const RECT *area) {
 static void show_album(void);
 static void show_about(void);
 
+/* What the profiler calls a page. */
+static const char *page_name(sidebar_page page) {
+  switch (page) {
+    case PAGE_ALBUMS: return "albums";
+    case PAGE_ARTISTS: return "artists";
+    case PAGE_PLAYLISTS: return "playlists";
+    case PAGE_ALBUM_GROUPS: return "album_groups";
+    case PAGE_SEARCH: return "search";
+    case PAGE_SETTINGS: return "settings";
+    default: return "other";
+  }
+}
+
+/* A view switch under way ends once what it changed is painted, which is made to happen now:
+ * only while profiling. */
+static void perf_view_shown(void) {
+  if (!mc_perf_view_pending()) return;
+  RedrawWindow(g_app.wnd, NULL, NULL, RDW_UPDATENOW | RDW_ALLCHILDREN);
+  mc_perf_view_end();
+}
+
 /* For PAGE_DEVICE, the device selected in the sidebar (sidebar_select_device()) is shown. */
 static void show_page(sidebar_page page) {
+  mc_perf_view_begin(page_name(page));
   g_app.page = page;
   if (page != PAGE_DEVICE) sidebar_select(page);
   if (library_page())
@@ -441,6 +467,7 @@ static void show_page(sidebar_page page) {
   settings_view_show(page == PAGE_SETTINGS);
   device_view_show(page == PAGE_DEVICE);
   layout();
+  perf_view_shown();
 }
 
 /* Previous and Next need a track to go from; Play needs one, or a shown album with something
@@ -698,6 +725,14 @@ static void apply_theme(void) {
 }
 
 static void set_button_label(HWND button, enum mc_str_id label, enum mc_str_id shortcut);
+static void open_stress(const char *dir);
+static void back_to_library(void);
+static void scroll_test_start(void);
+static void scroll_test_frame(void);
+
+static mc_library *current_library(void) {
+  return g_app.lib;
+}
 
 static void create_controls(void) {
   /* The labels aren't shown; they name the buttons for screen readers, and with their
@@ -750,6 +785,8 @@ static void create_controls(void) {
   settings_view_create(g_app.wnd);
   settings_view_set_library_dir(mc_settings_library_dir(g_app.settings));
   settings_view_init_sync(g_app.settings, schedule_refresh);
+  static const testing_host testing = {open_stress, back_to_library, scroll_test_start, current_library};
+  testing_view_init(g_app.settings, g_app.config_dir, &testing);
   static const device_view_host host = {rename_self, schedule_refresh};
   device_view_create(g_app.wnd, &host);
 }
@@ -1266,8 +1303,31 @@ static void before_remove_here(const mc_here_plan *plan) {
     }
 }
 
+/* The library just opened, for the report and the way back from a stress test library. */
+static void library_opened(void) {
+  BOOL stress = mc_library_is_stress(g_app.lib);
+  /* A way back left from before is no use in a real library. */
+  if (!stress && mc_settings_string(g_app.settings, MC_STRESS_RETURN_SETTING)) {
+    mc_settings_set_string(g_app.settings, MC_STRESS_RETURN_SETTING, NULL);
+    mc_settings_save(g_app.settings);
+  }
+  if (waiting_banner_set_stress(stress)) layout();
+  if (stress) settings_view_open_testing(TRUE); /* the way back's in it */
+  testing_view_update();
+  if (!mc_perf_enabled() || !g_app.lib) return;
+  static const struct { const char *key; mc_entity entity; } counts[] = {
+    {"library_tracks", MC_ENTITY_TRACKS}, {"library_albums", MC_ENTITY_ALBUMS},
+    {"library_artists", MC_ENTITY_ARTISTS}, {"library_playlists", MC_ENTITY_PLAYLISTS}};
+  for (size_t i = 0; i < sizeof counts / sizeof *counts; i++) {
+    int64_t n = 0;
+    if (mc_library_count(g_app.lib, counts[i].entity, &n) == MC_OK) mc_perf_note_int(counts[i].key, n);
+  }
+  mc_perf_note("library_stress", stress ? "yes" : "no");
+}
+
 static void start_sync(void) {
   restore_deleted(); /* the library just opened */
+  library_opened();
   memset(g_app.syncing, 0, sizeof g_app.syncing);
   sync_bridge_start(g_app.wnd, g_app.lib, g_app.config_dir, mc_settings_device_name(g_app.settings));
   playback_set_library(g_app.lib, g_app.config_dir);
@@ -1507,7 +1567,11 @@ static void on_command(int id, int code) {
       }
       break;
     case ID_GRID:
-      if (code == AGN_SELCHANGE) show_album();
+      if (code == AGN_SELCHANGE) {
+        mc_perf_view_begin("album_tracks");
+        show_album();
+        perf_view_shown();
+      }
       else if (code == AGN_LIBRARY_CHANGED) refresh_library();
       else if (code == AGN_IMPORT) show_page(PAGE_IMPORT);
       else if (code == AGN_SYNC_SETTINGS) show_own_page();
@@ -1515,6 +1579,9 @@ static void on_command(int id, int code) {
       else if (code == AGN_OPEN_GROUP && g_app.lib && album_grid_group() &&
                mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, album_grid_group()) == MC_OK)
         refresh_recents();
+      break;
+    case ID_WAITING: /* the banner says a stress test library is open */
+      back_to_library();
       break;
     case ID_ARTISTS:
       if (code == ARN_OPEN) {
@@ -1721,6 +1788,11 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         refresh_library();
         return 0;
       }
+      if (wp == TIMER_PERF_RUN) {
+        KillTimer(wnd, TIMER_PERF_RUN);
+        scroll_test_start();
+        return 0;
+      }
       if (wp == TIMER_SAVE_VOLUME) {
         save_volume();
         return 0;
@@ -1771,6 +1843,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       g_app.locked = (BOOL)wp;
       sidebar_set_locked((BOOL)wp);
       layout(); /* the import view switches between the drop zone and the list */
+      return 0;
+    case WM_APP_SCROLL_TEST:
+      scroll_test_frame();
       return 0;
     case WM_APP_OPEN_LIBRARY:
       change_library(FALSE);
@@ -2100,32 +2175,140 @@ static BOOL open_first_library(void) {
   return TRUE;
 }
 
-/* Settings' Open Another Library: switch to the library in another folder. The new one opens
- * first, so if it can't, nothing changes; sync then moves from the old one to it. With
- * new_empty (the pairing dialog's Create a New Library) the folder must be empty, so the
- * library made there is too. TRUE if it switched. */
+/* Switches to the library in dir. It opens first, so if it can't, nothing changes; sync then
+ * moves from the old one to it. TRUE if it switched. */
+static BOOL switch_library(const char *dir) {
+  mc_library *lib = open_library(dir);
+  if (!lib) return FALSE;
+  stop_sync();
+  edit_dialog_wait();
+  mc_library_close(g_app.lib);
+  g_app.lib = lib;
+  mc_settings_set_library_dir(g_app.settings, dir);
+  if (mc_settings_save(g_app.settings) != MC_OK)
+    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_SETTINGS_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
+  import_view_set_library(g_app.lib);
+  settings_view_set_library_dir(dir);
+  refresh_library();
+  start_sync();
+  return TRUE;
+}
+
+/* Settings' Open Another Library: switch to the library in another folder. With new_empty (the
+ * pairing dialog's Create a New Library) the folder must be empty, so the library made there
+ * is too. TRUE if it switched. */
 static BOOL change_library(BOOL new_empty) {
   const char *current = mc_settings_library_dir(g_app.settings);
   if (!import_view_confirm_close()) return FALSE;
 
   char *dir = choose_library_dir(g_app.wnd, current, new_empty ? MC_STR_LIBRARY_FOLDER_NEW : MC_STR_LIBRARY_FOLDER_CHOOSE,
                                  new_empty);
-  mc_library *lib = dir ? open_library(dir) : NULL;
-  if (lib) {
-    stop_sync();
-    edit_dialog_wait();
-    mc_library_close(g_app.lib);
-    g_app.lib = lib;
-    mc_settings_set_library_dir(g_app.settings, dir);
-    if (mc_settings_save(g_app.settings) != MC_OK)
-      MessageBoxW(g_app.wnd, mc_wstr(MC_STR_SETTINGS_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
-    import_view_set_library(g_app.lib);
-    settings_view_set_library_dir(dir);
-    refresh_library();
-    start_sync();
-  }
+  BOOL changed = dir && switch_library(dir);
   free(dir);
-  return lib != NULL;
+  return changed;
+}
+
+/* Opens the stress test library in dir, remembering the library to go back to: the one open
+ * now, unless that's a stress library too. It stays open at the next start, to measure it. */
+static void open_stress(const char *dir) {
+  if (!import_view_confirm_close()) return;
+  if (!mc_library_is_stress(g_app.lib))
+    mc_settings_set_string(g_app.settings, MC_STRESS_RETURN_SETTING, mc_settings_library_dir(g_app.settings));
+  switch_library(dir);
+}
+
+/* Back to My Library, and the banner. With no way back saved, the user picks the folder. */
+static void back_to_library(void) {
+  const char *saved = mc_settings_string(g_app.settings, MC_STRESS_RETURN_SETTING);
+  if (!saved) {
+    change_library(FALSE);
+    return;
+  }
+  char *dir = _strdup(saved); /* it's cleared on the way */
+  if (dir && import_view_confirm_close()) switch_library(dir);
+  free(dir);
+}
+
+/* --- The scroll test (musiccore/perf.h) --- */
+
+/* Each view in turn scrolls by the fixed script, one frame per display refresh. A frame paints
+ * before the next is asked for, so the frame times include all of its work. */
+enum { SCROLL_ALBUMS, SCROLL_ARTISTS, SCROLL_TRACKS, SCROLL_VIEWS };
+
+static struct {
+  int view, frame;
+  BOOL running;
+} g_scroll_test;
+
+static scroller *scroll_test_view(void) {
+  switch (g_scroll_test.view) {
+    case SCROLL_ALBUMS: return album_grid_scroller();
+    case SCROLL_ARTISTS: return artist_view_scroller();
+    default: return track_list_scroller();
+  }
+}
+
+/* Opens the view the test has got to, at its top. */
+static void scroll_test_enter(void) {
+  g_scroll_test.frame = 0;
+  if (g_scroll_test.view == SCROLL_ALBUMS) {
+    show_page(PAGE_ALBUMS);
+    album_grid_unselect();
+    show_album();
+  } else if (g_scroll_test.view == SCROLL_ARTISTS) {
+    show_page(PAGE_ARTISTS);
+  } else {
+    char uid[MC_UID_STRLEN];
+    if (mc_library_biggest_album(g_app.lib, uid) == MC_OK) open_album(uid, NULL);
+  }
+  RedrawWindow(g_app.wnd, NULL, NULL, RDW_UPDATENOW | RDW_ALLCHILDREN);
+  scroller_jump(scroll_test_view(), 0);
+}
+
+static void scroll_test_start(void) {
+  if (!mc_perf_enabled() || !g_app.lib || g_scroll_test.running) return;
+  mc_perf_auto_begin();
+  g_scroll_test.running = TRUE;
+  g_scroll_test.view = SCROLL_ALBUMS;
+  scroll_test_enter();
+  PostMessageW(g_app.wnd, WM_APP_SCROLL_TEST, 0, 0);
+}
+
+static void scroll_test_end(void) {
+  mc_perf_auto_end();
+  g_scroll_test.running = FALSE;
+  show_page(PAGE_SETTINGS);
+  testing_view_update(); /* the report, before scrolling to it */
+  settings_view_reveal_testing();
+  /* Scripted: the report goes to the file named, and the app closes. */
+  const wchar_t *out = _wgetenv(L"KITHSONG_PERF_RUN");
+  if (out && *out) {
+    char *path = wstr_to_utf8(out);
+    if (path) mc_perf_save(path);
+    free(path);
+    PostMessageW(g_app.wnd, WM_CLOSE, 0, 0);
+  }
+}
+
+static void scroll_test_frame(void) {
+  if (!g_scroll_test.running) return;
+  scroller *s = scroll_test_view();
+  if (g_scroll_test.frame >= MC_PERF_SCROLL_FRAMES || s->pos >= scroller_max(s)) {
+    /* It may paint again, moved, as the next view opens: that's no frame of this run. */
+    s->perf_pos = -1;
+    mc_perf_frame_break(s->perf_name);
+    if (++g_scroll_test.view == SCROLL_VIEWS) {
+      scroll_test_end();
+      return;
+    }
+    scroll_test_enter();
+  } else {
+    scroller_jump(s, s->pos + scale(MC_PERF_SCROLL_DP_PER_FRAME));
+    UpdateWindow(s->wnd);
+    DwmFlush(); /* waits for the next refresh */
+    g_scroll_test.frame++;
+  }
+  PostMessageW(g_app.wnd, WM_APP_SCROLL_TEST, 0, 0);
 }
 
 /* For the message loop: Space in the main window plays or pauses, as the Play button does.
@@ -2324,6 +2507,7 @@ static void move_library(void) {
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   (void)prev;
   (void)cmd;
+  uint64_t main_us = mc_perf_now_us();
 
   INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES |
                                             ICC_PROGRESS_CLASS | ICC_BAR_CLASSES /* tooltips */};
@@ -2371,8 +2555,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     free_args(&args);
     return 1;
   }
+  /* As early as it can be known; the start itself comes from the system. */
+  mc_perf_set_enabled(mc_settings_bool(g_app.settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
+  mc_perf_mark_at("main_entered", main_us);
+  mc_perf_mark("settings_loaded");
   BOOL first_run = !mc_settings_library_dir(g_app.settings);
   if (!first_run) g_app.lib = open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
+  mc_perf_mark("library_opened");
   size_t art_len = strlen(g_app.config_dir) + sizeof "\\" MC_PLAYLIST_ART_CACHE_DIR;
   if ((g_app.art_dir = malloc(art_len)))
     snprintf(g_app.art_dir, art_len, "%s\\%s", g_app.config_dir, MC_PLAYLIST_ART_CACHE_DIR);
@@ -2404,7 +2593,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   if (!wnd) return 1;
   if (g_instance_key) SetPropW(wnd, INSTANCE_PROP, (HANDLE)g_instance_key);
   DragAcceptFiles(wnd, TRUE);
+  mc_perf_mark("window_created");
+  if (mc_perf_enabled()) {
+    HDC screen = GetDC(wnd);
+    mc_perf_set_refresh_hz(GetDeviceCaps(screen, VREFRESH));
+    ReleaseDC(wnd, screen);
+  }
   ShowWindow(wnd, show);
+  mc_perf_mark("window_shown");
   if (first_run && !open_first_library()) {
     DestroyWindow(wnd); /* the first run was closed: quit */
   } else {
@@ -2416,6 +2612,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
 #endif
     firewall_check_later(wnd, g_app.settings);
     import_args(&args);
+    mc_perf_mark("sync_started");
+    const wchar_t *perf_run = _wgetenv(L"KITHSONG_PERF_RUN");
+    if (perf_run && *perf_run) SetTimer(wnd, TIMER_PERF_RUN, 2000, NULL); /* once it has settled */
   }
   free_args(&args);
 

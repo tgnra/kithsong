@@ -475,7 +475,7 @@ static void add_albums(gen *g) {
 }
 
 /* An entry of each list goes after the last, as appending does. */
-static void add_entries(gen *g, int which, const char *list, int n, const uid_t_ *items, int nitems) {
+static void add_entries(gen *g, int which, const char *list, int n, uid_t_ *items, int nitems) {
   char *key = NULL;
   for (int i = 0; i < n && g->st == MC_OK; i++) {
     char *after = mc_frac_key_between(key, NULL), uid[MC_UID_STRLEN];
@@ -621,6 +621,22 @@ int mc_stress_is_complete(const char *dir) {
 int mc_library_is_stress(mc_library *lib) {
   char value[32];
   return lib && mc_library_meta_get(lib, STRESS_META, value, sizeof value) == MC_OK;
+}
+
+mc_status mc_library_biggest_album(mc_library *lib, char uid[MC_UID_STRLEN]) {
+  if (!lib || !uid) return MC_ERR_INVALID_ARG;
+  sqlite3_stmt *s = NULL;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT album_uid FROM tracks WHERE album_uid IS NOT NULL"
+                         " GROUP BY album_uid ORDER BY count(*) DESC LIMIT 1", -1, &s, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  mc_status st = MC_ERR_NOT_FOUND;
+  if (sqlite3_step(s) == SQLITE_ROW) {
+    snprintf(uid, MC_UID_STRLEN, "%s", (const char *)sqlite3_column_text(s, 0));
+    st = MC_OK;
+  }
+  sqlite3_finalize(s);
+  return st;
 }
 
 mc_status mc_stress_start(const char *dir, mc_stress_preset preset, mc_stress_job **out) {

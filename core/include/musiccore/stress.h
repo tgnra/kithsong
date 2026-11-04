@@ -61,6 +61,10 @@ int mc_stress_is_generated(const char *dir);
 /* Whether the library is a stress library, wherever it has been moved to. */
 int mc_library_is_stress(mc_library *lib);
 
+/* The album with the most tracks, for a scroll test's track list. MC_ERR_NOT_FOUND if there's
+ * none. Works on any library. */
+mc_status mc_library_biggest_album(mc_library *lib, char uid[MC_UID_STRLEN]);
+
 /* Generating, on a thread of its own, into folder dir: new or empty, or left unfinished by an
  * earlier run. MC_ERR_EXISTS if it holds anything else, a finished stress library included.
  * *out is freed with mc_stress_job_free(). */

@@ -174,5 +174,7 @@ int album_grid_set_full_width(int full_w, int min_w);
 void album_grid_set_below_banner(BOOL below);
 /* Call after theme_update. */
 void album_grid_theme_changed(void);
+/* For a scroll test. */
+struct scroller *album_grid_scroller(void);
 
 #endif
