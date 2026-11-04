@@ -69,6 +69,7 @@ add_library(musiccore STATIC
   src/library/delete.c
   src/library/edit.c
   src/library/album_flags.c
+  src/library/stats.c
   src/library/stress.c
   "${_schema_c}"
   src/playlist/playlist.c
