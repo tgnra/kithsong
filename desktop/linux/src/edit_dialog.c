@@ -60,9 +60,10 @@ typedef struct edit_form {
 /* The search dialog. Owned by its dialog: freed with it. */
 typedef struct edit_search {
   edit_form *form; /* its dialog referenced while this lives */
-  GtkWidget *dialog, *artist, *title, *go, *use, *spinner, *message, *list, *scroller;
+  GtkWidget *dialog, *cancel, *artist, *title, *go, *use, *spinner, *message, *list, *scroller;
   mc_release_list *results;
   struct job *job; /* the search or the release being fetched; NULL if neither */
+  gboolean used;   /* a release went into the form */
   gboolean closed;
 } edit_search;
 
@@ -215,6 +216,16 @@ static GtkWidget *release_row(const mc_release_info *r) {
   return row;
 }
 
+/* A job is under way, which greys out what may have the focus: it stays in the dialog, on
+ * Cancel, so Escape still closes it. */
+static void search_busy(edit_search *s, job *j, const char *text) {
+  s->job = j;
+  search_say(s, text, FALSE, TRUE);
+  search_update(s);
+  focus_later(s->cancel);
+  job_start(s->dialog, j);
+}
+
 static void run_search(job *j) {
   j->st = mc_release_search(j->lib, j->uid, j->artist, j->title, &j->list);
 }
@@ -263,10 +274,7 @@ static void search_start(edit_search *s) {
   mc_release_list_free(s->results);
   s->results = NULL;
   gtk_list_box_remove_all(GTK_LIST_BOX(s->list));
-  s->job = j;
-  search_say(s, mc_str(MC_STR_IMPORT_SEARCHING), FALSE, TRUE);
-  search_update(s);
-  job_start(s->dialog, j);
+  search_busy(s, j, mc_str(MC_STR_IMPORT_SEARCHING));
 }
 
 static void run_release_tags(job *j) {
@@ -280,6 +288,7 @@ static void use_done(gpointer owner, job *j) {
   s->job = NULL;
   if (j->st == MC_OK) {
     form_use_release(s->form, &j->tags);
+    s->used = TRUE;
     adw_dialog_force_close(ADW_DIALOG(s->dialog));
     return;
   }
@@ -288,6 +297,8 @@ static void use_done(gpointer owner, job *j) {
   search_say(s, failed ? failed : mc_str(MC_STR_IMPORT_ERROR_UNREACHABLE), TRUE, FALSE);
   mc_free(failed);
   search_update(s);
+  GtkListBoxRow *row = gtk_list_box_get_selected_row(GTK_LIST_BOX(s->list));
+  if (row) gtk_widget_grab_focus(GTK_WIDGET(row));
 }
 
 static void use_release(edit_search *s) {
@@ -300,10 +311,7 @@ static void use_release(edit_search *s) {
   j->lib = s->form->lib;
   memcpy(j->uid, s->form->uid, sizeof j->uid);
   memcpy(j->mb_albumid, s->results->items[i].mb_albumid, sizeof j->mb_albumid);
-  s->job = j;
-  search_say(s, mc_str(MC_STR_EDIT_SEARCH_LOADING), FALSE, TRUE);
-  search_update(s);
-  job_start(s->dialog, j);
+  search_busy(s, j, mc_str(MC_STR_EDIT_SEARCH_LOADING));
 }
 
 static void on_search_clicked(GtkButton *button, gpointer data) {
@@ -351,7 +359,7 @@ static void on_search_closed(AdwDialog *dialog, gpointer data) {
   edit_search *s = data;
   s->closed = TRUE;
   s->form->search = NULL;
-  if (!s->form->closed) adw_dialog_set_focus(ADW_DIALOG(s->form->dialog), s->form->mb_search);
+  if (!s->form->closed) gtk_widget_grab_focus(s->used ? s->form->save : s->form->mb_search);
 }
 
 static void search_free(gpointer data) {
@@ -428,9 +436,9 @@ static void search_present(edit_form *f) {
   GtkWidget *header = adw_header_bar_new();
   adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(header), FALSE);
   adw_header_bar_set_show_end_title_buttons(ADW_HEADER_BAR(header), FALSE);
-  GtkWidget *cancel = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_CANCEL));
-  g_signal_connect(cancel, "clicked", G_CALLBACK(on_search_cancel), s);
-  adw_header_bar_pack_start(ADW_HEADER_BAR(header), cancel);
+  s->cancel = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_CANCEL));
+  g_signal_connect(s->cancel, "clicked", G_CALLBACK(on_search_cancel), s);
+  adw_header_bar_pack_start(ADW_HEADER_BAR(header), s->cancel);
   s->use = gtk_button_new_with_label(mc_str(MC_STR_EDIT_SEARCH_USE));
   gtk_widget_add_css_class(s->use, "suggested-action");
   g_signal_connect(s->use, "clicked", G_CALLBACK(on_use_clicked), s);
@@ -681,7 +689,7 @@ static void form_free(gpointer data) {
   g_free(f);
 }
 
-/* Fields of numbers take digits only, as many as max. */
+/* Fields of numbers take digits only. */
 static void on_digits_insert(GtkEditable *editable, const char *text, int length, int *position, gpointer data) {
   (void)position;
   (void)data;
@@ -860,6 +868,7 @@ gboolean edit_dialog_saving(void) {
 void edit_dialog_close(void) {
   if (current) {
     edit_form *f = current;
+    f->loaded = FALSE; /* no Save now, with the library going, as it animates away */
     if (f->search) adw_dialog_force_close(ADW_DIALOG(f->search));
     adw_dialog_force_close(ADW_DIALOG(f->dialog));
   }
