@@ -96,8 +96,11 @@ mc_status mc_player_load_queue(mc_player *player, const char *const *paths, int 
  *
  * The queue grows by itself, so a frontend that keeps something per item looks up the new ones
  * on each MC_PLAYER_EVENT_QUEUE, from its count to mc_player_status.count, with
- * mc_player_queue_uid(). Items are only ever added at the end, and indexes stay good. Next from
- * the last item, as the station has yet to catch up, plays what it adds. A station's queue plays
+ * mc_player_queue_uid(). It comes from the player's thread like every event, so it can lag the
+ * items by as long as that thread is busy: seconds, if it's opening the audio device for the
+ * first play. It does come, and mc_player_status.count is right meanwhile. Items are only ever
+ * added at the end, and indexes stay good. Next from the last item, as the station has yet to
+ * catch up, plays what it adds. A station's queue plays
  * in the station's order whatever shuffle says; shuffle applies again to the next queue. */
 mc_status mc_player_play_radio(mc_player *player, const char *library_dir, const char *seed_path,
                                const char *seed_uid);

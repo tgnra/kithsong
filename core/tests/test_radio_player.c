@@ -153,6 +153,26 @@ static int wait_for_no_radio(mc_player *player, unsigned ms) {
   return 0;
 }
 
+static int queue_events_so_far(void) {
+  mc_mutex_lock(&lock);
+  int seen = queue_events;
+  mc_mutex_unlock(&lock);
+  return seen;
+}
+
+/* Waits for a queue event past the first after. It can't be expected to come with the items:
+ * the feed gets them in while the player's thread is still opening the audio device, which took
+ * from 60 ms to over 2 s here, and the event waits for that thread. So this is a limit for an
+ * event that's never coming, not for how long one should take. */
+static int wait_for_queue_event(int after) {
+  uint64_t end = mc_mono_ms() + 30000;
+  do {
+    if (queue_events_so_far() > after) return 1;
+    mc_sleep_ms(5);
+  } while (mc_mono_ms() < end);
+  return 0;
+}
+
 static int queue_count(mc_player *player) {
   mc_player_status st;
   mc_player_status_get(player, &st);
@@ -168,6 +188,7 @@ static void take_all_ended(mc_player *player) {
 static void test_tops_up(mc_player *player, const char *dir) {
   char path[1200], uid[MC_UID_STRLEN], first[AHEAD + 1][MC_UID_STRLEN];
   seed_path(path, sizeof path, dir, "t00");
+  int before = queue_events_so_far(); /* another player's may have come in already */
   /* Paused at once, so with a device too the position stays put and the count settles. */
   CHECK(mc_player_play_radio(player, dir, path, "t00") == MC_OK);
   CHECK(mc_player_pause(player) == MC_OK);
@@ -185,10 +206,20 @@ static void test_tops_up(mc_player *player, const char *dir) {
     for (int j = 0; j < i; j++) CHECK(strcmp(first[i], first[j]));
   }
   CHECK(mc_player_queue_uid(player, AHEAD + 1, uid) == MC_ERR_NOT_FOUND);
-  mc_mutex_lock(&lock);
-  int seen = queue_events;
-  mc_mutex_unlock(&lock);
-  CHECK(seen > 0);
+  CHECK(wait_for_queue_event(before));
+
+  /* The thread is idle now, with the device open or given up on: the station ending wakes it,
+   * and so does a new one's items, which is what a frontend waits for in the middle of a play. */
+  before = queue_events_so_far();
+  CHECK(mc_player_stop_radio(player) == MC_OK);
+  CHECK(wait_for_queue_event(before));
+  mc_player_status_get(player, &st);
+  CHECK(!st.radio);
+  before = queue_events_so_far();
+  CHECK(mc_player_play_radio(player, dir, path, "t00") == MC_OK);
+  CHECK(mc_player_pause(player) == MC_OK);
+  CHECK(wait_for_count(player, AHEAD + 1, 10000));
+  CHECK(wait_for_queue_event(before));
 
   /* Another queue ends it, and nothing's added to that one. */
   const char *const one[] = {path};
@@ -320,6 +351,7 @@ int main(int argc, char **argv) {
   CHECK(mc_player_set_queue(player, one, 1, 0, NULL) == MC_OK);
   mc_sleep_ms(100);
   CHECK(wait_for_stopped(player, 5000));
+  mc_sleep_ms(100); /* the error is reported just after the state it causes */
   mc_mutex_lock(&lock);
   int no_device = errors > 0;
   mc_mutex_unlock(&lock);
