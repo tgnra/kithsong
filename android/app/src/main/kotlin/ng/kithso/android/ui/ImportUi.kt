@@ -25,8 +25,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -104,48 +102,46 @@ private inline fun launch(open: () -> Unit) {
 }
 
 /**
- * The import button's menu: a folder, or files and zips. While an import runs it says so
- * instead, as the core takes one import at a time.
+ * A menu's ways to import: a folder, or files and zips. While an import runs, [onBusy] is called
+ * instead, as the core takes one import at a time. Either way [onDismiss] closes the menu.
  */
+@Composable
+fun ImportChoices(running: Boolean, pickers: ImportPickers, onBusy: () -> Unit, onDismiss: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(stringResource(R.string.import_folder)) },
+        onClick = {
+            onDismiss()
+            if (running) onBusy() else pickers.pickFolder()
+        },
+    )
+    DropdownMenuItem(
+        text = { Text(stringResource(R.string.import_files)) },
+        onClick = {
+            onDismiss()
+            if (running) onBusy() else pickers.pickFiles()
+        },
+    )
+}
+
+/** Says an import is under way, so another can't start yet. */
+@Composable
+fun ImportRunningDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.import_running_title)) },
+        text = { Text(stringResource(R.string.import_running_text)) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) } },
+    )
+}
+
+/** The empty library's Import button's menu: [ImportChoices] alone. */
 @Composable
 fun ImportMenu(expanded: Boolean, running: Boolean, pickers: ImportPickers, onDismiss: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.import_folder)) },
-            onClick = {
-                onDismiss()
-                if (running) busy = true else pickers.pickFolder()
-            },
-        )
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.import_files)) },
-            onClick = {
-                onDismiss()
-                if (running) busy = true else pickers.pickFiles()
-            },
-        )
+        ImportChoices(running, pickers, onBusy = { busy = true }, onDismiss)
     }
-    if (busy) {
-        AlertDialog(
-            onDismissRequest = { busy = false },
-            title = { Text(stringResource(R.string.import_running_title)) },
-            text = { Text(stringResource(R.string.import_running_text)) },
-            confirmButton = { TextButton(onClick = { busy = false }) { Text(stringResource(R.string.ok)) } },
-        )
-    }
-}
-
-/** The header's import button, with its [ImportMenu]. */
-@Composable
-fun ImportButton(running: Boolean, pickers: ImportPickers) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { open = true }) {
-            Icon(Icons.Import, contentDescription = stringResource(R.string.import_music))
-        }
-        ImportMenu(open, running, pickers, onDismiss = { open = false })
-    }
+    if (busy) ImportRunningDialog(onDismiss = { busy = false })
 }
 
 /**

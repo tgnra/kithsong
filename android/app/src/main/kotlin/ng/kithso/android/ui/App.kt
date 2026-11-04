@@ -105,7 +105,7 @@ fun App(
     val waiting by remember(syncer) { syncer.status.map { it.waiting }.distinctUntilChanged() }
         .collectAsState(syncer.status.value.waiting)
     // The recycle bin: how many deletes wait for a sync (null outside a group, where deletes
-    // don't go there), and the sync button's red dot while one could sync.
+    // don't go there), and the red dot on the main menu and its Sync while one could sync.
     val binCount by remember(syncer) {
         syncer.status.map { s -> s.binCount.takeIf { s.binOffered || it > 0 } }.distinctUntilChanged()
     }.collectAsState(null)
@@ -248,6 +248,7 @@ fun App(
                 onSearch = { nav = nav.push(Page.Search) },
                 onSync = { nav = nav.push(Page.Sync) },
                 onSettings = { nav = nav.push(Page.Settings) },
+                onStats = { nav = nav.push(Page.Stats) },
                 importPickers = importPickers,
                 importRunning = importProgress?.phase?.isOver == false,
                 // How an import is going, the merge after pairing by merging libraries, and
@@ -298,6 +299,7 @@ fun App(
                                     ScrollTest.start()
                                 },
                             )
+                            Page.Stats -> StatsScreen(source, bottomPadding, onBack = dismiss)
                             Page.Licenses -> LicensesScreen(bottomPadding, onOpen = { nav = nav.push(Page.License(it)) }, onBack = dismiss)
                             is Page.License -> LicenseTextScreen(page.asset, bottomPadding, onBack = dismiss)
                             Page.Sync -> SyncScreen(

@@ -70,6 +70,44 @@ const char *mc_library_errmsg(const mc_library *lib);
 
 mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out);
 
+/* Numbers about some of the library's music. */
+typedef struct mc_library_tally {
+  int64_t tracks;
+  int64_t albums;      /* as mc_library_list_albums() has them: singles left out, mixes in */
+  int64_t singles;     /* albums of one track that aren't mixes, and tracks with no album */
+  int64_t artists;     /* as mc_library_list_artists() and mc_library_list_artists_here() */
+  int64_t genres;      /* the tracks' different genres, whatever their case */
+  int64_t duration_ms; /* the tracks' lengths; one not known adds nothing */
+} mc_library_tally;
+
+typedef struct mc_library_stats {
+  mc_library_tally all;  /* everything in the library, here or on other devices */
+  /* What has a file on this device: the test that gives mc_track_info a path and mc_album_info
+   * a folder. An album or a single stays what the whole library makes it, so an album with
+   * one of its tracks here is an album. */
+  mc_library_tally here;
+  /* The files on this device, a track's transcodes as well as its original. size_bytes is what
+   * the library recorded for them; library.db and the covers aren't in it. */
+  int64_t files;
+  int64_t size_bytes;
+  /* Each as saved, here or not, so with the example smart lists until they're deleted, and
+   * whether or not MC_LIST_PLAYABLE would list them. */
+  int64_t playlists; /* by hand; smart ones are next */
+  int64_t smart_playlists;
+  int64_t album_groups;
+  int64_t smart_album_groups;
+  /* On every device, of the tracks still in the library. plays is what plays counted
+   * (mc_library_record_play()), tracks_played how many tracks they were of, and listened_ms
+   * the time heard, from the play log, which only goes back to schema v18. */
+  int64_t plays;
+  int64_t tracks_played;
+  int64_t listened_ms;
+} mc_library_stats;
+
+/* Fills in out, all of it as of one moment. A few aggregate queries, cheap enough to read
+ * whenever a page opens, though keep it off a thread that mustn't wait on the disk. */
+mc_status mc_library_read_stats(mc_library *lib, mc_library_stats *out);
+
 /* Counts a play of track_uid on this device and makes now its last play. What counts as a
  * play (say, half the track) is the caller's call. MC_ERR_NOT_FOUND if there's no such track. */
 mc_status mc_library_record_play(mc_library *lib, const char *track_uid);
