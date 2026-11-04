@@ -1379,19 +1379,24 @@ int mc_play_event_starts_station(const mc_play_event *e) {
          !strcmp(e->track_uid, e->context_uid);
 }
 
-/* Puts the station e's seed started first in the recents, inside the caller's transaction. Only
- * the seed's own row does: it's the start of the station, as a click is an album's, so a station
- * that plays on for hours isn't written again with each track, and doesn't undo a Remove from
- * Recents made while it plays.
+/* Puts the station e's seed started first in the recents, inside the caller's transaction, row
+ * uid being e's. Only the start of a station does, as a click does an album's, so one that plays
+ * on for hours isn't written again with each track, and doesn't undo a Remove from Recents made
+ * while it plays. That's the seed's row, unless this device's row before it shows the same
+ * station carrying on: an endless station comes back round to its seed, as soon as the library
+ * runs out of others. A new start of it follows a row that was replaced or stopped.
  *
  * A row is only written once its play ends, and one replaced by another queue arrives after
  * whatever replaced it has been recorded. Stamped now, a station would go above the album that
  * just ended it, so that row keeps the time it started, and only ever moves the recent forward.
  * A seed that has gone since is no recent, and no reason to lose the play. */
-static mc_status station_played(mc_library *lib, const mc_play_event *e) {
+static mc_status station_played(mc_library *lib, const mc_play_event *e, const char *uid) {
   static const char sql[] =
     "INSERT INTO recents (uid, kind, opened_ms) SELECT ?1, ?2, ?3"
     " WHERE EXISTS (SELECT 1 FROM tracks WHERE uid = ?1)"
+    " AND NOT EXISTS (SELECT 1 FROM (SELECT context, context_uid, ended FROM play_events"
+    "  WHERE node_uid = ?4 AND started_ms <= ?5 AND uid <> ?6 ORDER BY started_ms DESC, uid DESC LIMIT 1)"
+    "  WHERE context = 'radio' AND context_uid = ?1 AND ended IN ('finished', 'skipped'))"
     " ON CONFLICT (uid) DO UPDATE SET kind = excluded.kind, opened_ms = excluded.opened_ms"
     " WHERE excluded.opened_ms > recents.opened_ms";
   sqlite3_stmt *stmt;
@@ -1400,6 +1405,9 @@ static mc_status station_played(mc_library *lib, const mc_play_event *e) {
   sqlite3_bind_text(stmt, 1, e->context_uid, -1, SQLITE_STATIC);
   sqlite3_bind_text(stmt, 2, "station", -1, SQLITE_STATIC);
   sqlite3_bind_int64(stmt, 3, (sqlite3_int64)(e->end == MC_PLAY_END_REPLACED ? e->started_ms : now));
+  sqlite3_bind_text(stmt, 4, lib->node_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 5, (sqlite3_int64)e->started_ms);
+  sqlite3_bind_text(stmt, 6, uid, -1, SQLITE_STATIC);
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   return rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
@@ -1431,7 +1439,7 @@ mc_status mc_library_log_play(mc_library *lib, const mc_play_event *e) {
   int rc = sqlite3_step(stmt);
   sqlite3_finalize(stmt);
   st = rc == SQLITE_DONE ? MC_OK : (rc & 0xff) == SQLITE_CONSTRAINT ? MC_ERR_NOT_FOUND : MC_ERR_DB;
-  if (st == MC_OK && mc_play_event_starts_station(e)) st = station_played(lib, e);
+  if (st == MC_OK && mc_play_event_starts_station(e)) st = station_played(lib, e, uid);
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) mc_library_rollback(lib);
   return st;

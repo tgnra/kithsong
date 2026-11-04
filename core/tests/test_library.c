@@ -1161,26 +1161,45 @@ static void test_station_recents(const char *scratch) {
   }
   mc_recent_list_free(list);
   recent_uids_with(lib, 0, uids, sizeof uids);
-  CHECK_STR(uids, "");
+  CHECK(!strcmp(uids, ""));
   mc_sleep_ms(2);
   CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "al1") == MC_OK);
   mc_sleep_ms(2);
-  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED);
+  log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_STOPPED);
+  mc_sleep_ms(2);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED); /* started again */
   list = NULL;
   CHECK(mc_library_list_recents(lib, 1, 0, &list) == MC_OK && list && list->count == 1);
   if (list && list->count == 1) CHECK_STR(list->items[0].uid, "al1");
   mc_recent_list_free(list);
   recent_uids_with(lib, all, uids, sizeof uids);
-  CHECK_STR(uids, "t1 al1");
+  CHECK(!strcmp(uids, "t1 al1"));
 
-  /* The rest of a station's tracks write nothing, so a removal holds while it plays on. */
+  /* The rest of a station's tracks write nothing, the seed coming back round included, so a
+   * removal holds while it plays on. Another device's plays in between change nothing. */
   int logged = changelog_count(db, "entity = 'recents'");
+  mc_sleep_ms(2);
   log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED);
+  mc_sleep_ms(2);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED);
   CHECK(changelog_count(db, "entity = 'recents'") == logged);
   CHECK(mc_library_remove_recent(lib, "t1") == MC_OK);
-  log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_FINISHED);
+  mc_sleep_ms(2);
+  log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_SKIPPED);
+  CHECK(exec(db, "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context)"
+                 " VALUES ('other', 't2', 'peer', 9000000000000, 1, 'stopped', 'album')") == SQLITE_OK);
+  mc_sleep_ms(2);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_SKIPPED);
   recent_uids_with(lib, all, uids, sizeof uids);
-  CHECK_STR(uids, "al1");
+  CHECK(!strcmp(uids, "al1"));
+  /* Played again after the queue was replaced, it's back. */
+  mc_sleep_ms(2);
+  log_radio(lib, "t2", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_REPLACED);
+  mc_sleep_ms(2);
+  log_radio(lib, "t1", "t1", (int64_t)mc_wall_ms(), MC_PLAY_END_STOPPED);
+  recent_uids_with(lib, all, uids, sizeof uids);
+  CHECK(!strcmp(uids, "t1 al1"));
+  CHECK(mc_library_remove_recent(lib, "t1") == MC_OK);
 
   /* Other contexts naming the track are no station. */
   mc_play_event album = {.started_ms = 1, .end = MC_PLAY_END_FINISHED, .context = MC_PLAY_CONTEXT_ALBUM};
@@ -1198,7 +1217,7 @@ static void test_station_recents(const char *scratch) {
   mc_sleep_ms(2);
   log_radio(lib, "t3", "t3", started, MC_PLAY_END_REPLACED);
   recent_uids_with(lib, all, uids, sizeof uids);
-  CHECK_STR(uids, "al2 t3 al1");
+  CHECK(!strcmp(uids, "al2 t3 al1"));
   /* And doesn't take a station back to an older start. */
   log_radio(lib, "t3", "t3", started - 1000, MC_PLAY_END_REPLACED);
   CHECK(query_int(db, "SELECT count(*) FROM recents WHERE uid = 't3' AND opened_ms = 0") == 0);

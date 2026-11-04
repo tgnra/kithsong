@@ -6,6 +6,7 @@
 #include "library/library_internal.h"
 #include "musiccore/home_picks.h"
 #include "musiccore/musiccore.h"
+#include "util/platform.h"
 #include "test.h"
 
 #define DAY_MS (24 * 60 * 60 * 1000LL)

@@ -120,10 +120,10 @@ mc_status mc_library_record_play(mc_library *lib, const char *track_uid);
 
 /* Adds a row, as this device's. MC_ERR_NOT_FOUND if the track has gone meanwhile. */
 mc_status mc_library_log_play(mc_library *lib, const mc_play_event *event);
-/* Whether logging event starts a station: it's a station's seed that really played, and
- * mc_library_log_play() puts the station in the recents, so a frontend showing them reads them
- * again. It's the row of a station's first track, so it comes when that ends rather than when
- * it starts. */
+/* Whether logging event may have changed the recents: it's a station's seed that really played,
+ * and mc_library_log_play() puts the station there if that was its start, so a frontend showing
+ * them reads them again. The row of a station's first track comes when that ends, so that's when
+ * a station goes in, rather than when it starts. */
 int mc_play_event_starts_station(const mc_play_event *event);
 
 typedef struct mc_play_log_item {

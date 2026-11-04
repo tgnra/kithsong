@@ -633,9 +633,11 @@ devices. Wear OS shows only what's present, so it drops the empty ones as well.
 
 A station has no moment of being opened that the core sees, as a page has: `mc_library_log_play()`
 writes its row, in the same transaction as the [play log](#play-log) row of the station's seed
-(context `radio`, `track_uid` equal to `context_uid`, and not `failed`). So a station goes in when
-its first track ends, and the rest of its tracks write nothing here: it plays on without filling
-the changelog, and Remove from Recents holds while it does. That row is stamped like an open,
+(context `radio`, `track_uid` equal to `context_uid`, and not `failed`), unless this device's row
+before it is the same station's and ended `finished` or `skipped`: a station comes back round to
+its seed, and that isn't a new start. So a station goes in when its first track ends, and the
+rest of its tracks write nothing here: it plays on without filling the changelog, and Remove from
+Recents holds while it does. That row is stamped like an open,
 except one ended by `replaced`. It arrives after whatever replaced it was recorded, so it keeps
 its `started_ms` and only moves the row forward, or the station would go above what ended it,
 and then `opened_ms` isn't the wall-clock part of its hlc. A

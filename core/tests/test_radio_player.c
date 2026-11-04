@@ -257,7 +257,8 @@ static void test_plays_on(mc_player *player, const char *dir) {
   CHECK(queue_count(player) == count);
   CHECK(mc_player_set_shuffle(player, 0) == MC_OK);
 
-  /* What the player logs, handed on as a frontend does, puts the station in the recents once. */
+  /* What the player logs, handed on as a frontend does, puts the station in the recents once,
+   * though this little library brings the seed round again. */
   mc_library *lib = NULL;
   CHECK(mc_library_open(dir, &lib) == MC_OK);
   mc_play_event e;
@@ -272,7 +273,7 @@ static void test_plays_on(mc_player *player, const char *dir) {
   }
   CHECK(rows > TRACKS);
   CHECK(finished > 0);
-  CHECK(starts == 1);
+  CHECK(starts > 1);
   mc_recent_list *recents = NULL;
   if (lib) CHECK(mc_library_list_recents(lib, 0, MC_LIST_STATIONS, &recents) == MC_OK && recents && recents->count == 1);
   if (recents && recents->count == 1) {
@@ -280,6 +281,11 @@ static void test_plays_on(mc_player *player, const char *dir) {
     CHECK_STR(recents->items[0].uid, "t00");
   }
   mc_recent_list_free(recents);
+  sqlite3_stmt *writes = NULL;
+  if (lib) CHECK(sqlite3_prepare_v2(mc_library_db(lib), "SELECT count(*) FROM changelog WHERE entity = 'recents'"
+                                    " AND field = 'opened_ms'", -1, &writes, NULL) == SQLITE_OK);
+  if (writes) CHECK(sqlite3_step(writes) == SQLITE_ROW && sqlite3_column_int(writes, 0) == 1);
+  sqlite3_finalize(writes);
   mc_library_close(lib);
 }
 
