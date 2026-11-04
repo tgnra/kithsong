@@ -6,6 +6,7 @@
 #include "artist_view.h"
 #include "drag.h"
 #include "edit_dialog.h"
+#include "home_view.h"
 
 enum { MAX_RECENTS = 3 };
 
@@ -138,19 +139,7 @@ static void on_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
     case MC_RECENT_ARTIST: app_open_artist(user, copy); break;
     case MC_RECENT_ALBUM_GROUP: app_open_album_group(user, copy); break;
     case MC_RECENT_PLAYLIST: app_open(user, TRUE, copy); break;
-    default: {
-      /* An album that has come down to one track is a single now, which the Albums page leaves
-       * out: its artist's page has it. */
-      app *a = user;
-      AlbumItem *album = album_grid_find(a->album_grid, copy);
-      const char *found = album ? NULL : artist_view_find(g_object_get_data(G_OBJECT(row), "artist"));
-      char artist[MC_UID_STRLEN];
-      g_strlcpy(artist, found ? found : "", sizeof artist); /* opening reloads the list it's from */
-      if (album) g_object_unref(album);
-      if (artist[0]) app_open_artist(a, artist);
-      else app_open(a, FALSE, copy);
-      break;
-    }
+    default: app_open_album_or_single(user, copy, g_object_get_data(G_OBJECT(row), "artist")); break;
   }
 }
 
@@ -293,6 +282,7 @@ GtkWidget *recents_new(app *a) {
 }
 
 void recents_refresh(app *a) {
+  home_view_refresh();
   if (!r.list) return;
   GtkWidget *child;
   while ((child = gtk_widget_get_first_child(r.list))) gtk_list_box_remove(GTK_LIST_BOX(r.list), child);

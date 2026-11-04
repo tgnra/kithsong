@@ -26,13 +26,14 @@ typedef struct app {
                         * start began, to say once the window is up; else NULL */
   char *art_dir;        /* settings_dir/playlist-art: playlists' and album groups' pictures, see
                          * mc_playlist_art() */
-  GtkStack *pages;      /* "library": the album grids and track list | "artists" | "search"
-                         * | "import" | "device" */
+  GtkStack *pages;      /* "library": the album grids and track list | "home" | "artists"
+                         * | "search" | "import" | "device" */
   GtkWidget *import;    /* the import page, import_view.c */
   GtkWidget *search;    /* the search page, search_view.c */
   GtkWidget *artists;   /* the Artists page, artist_view.c */
+  GtkWidget *home;      /* the Home page, home_view.c */
   GtkWidget *sidebar;
-  GtkListBox *top_nav;  /* the sidebar's Home (not available yet) and Search, above nav */
+  GtkListBox *top_nav;  /* the sidebar's Home and Search, above nav */
   GtkListBox *nav;      /* the sidebar's Albums, Artists, Playlists and Album groups */
   GtkWidget *settings;  /* the header bar's Settings button */
   GtkStack *albums;     /* "empty" status page | "grid" | "playlists" (a header over playlists)
@@ -92,6 +93,10 @@ void app_play_album_group(app *a, app_group_play how);
 /* Shows the album (or the playlist, if playlist) with uid selected on the Albums (or
  * Playlists) page, as picking it in Recents does. */
 void app_open(app *a, gboolean playlist, const char *uid);
+
+/* Shows the album with uid. One that has come down to one track is a single now, which the
+ * Albums page leaves out, so its artist's page (artist, by name, which may be NULL) opens. */
+void app_open_album_or_single(app *a, const char *uid, const char *artist);
 
 /* Shows the album with album_uid, as app_open() does, with its track track_uid selected. */
 void app_open_track(app *a, const char *album_uid, const char *track_uid);
