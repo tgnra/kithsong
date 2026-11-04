@@ -254,14 +254,15 @@ BOOL settings_view_translate(const MSG *msg) {
     case WM_MOUSEWHEEL: { /* whichever control is under the mouse, or has the focus */
       RECT r;
       GetWindowRect(g_set.page, &r);
-      if (!PtInRect(&r, msg->pt)) return FALSE;
+      POINT pt = {GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
+      if (!PtInRect(&r, pt)) return FALSE;
       scroller_wheel(&g_set.scroll, GET_WHEEL_DELTA_WPARAM(msg->wParam));
       return TRUE;
     }
     case WM_MOUSEMOVE: /* over the controls, which page doesn't hear of: the bar shows */
       if (IsChild(g_set.page, msg->hwnd)) {
-        POINT pt = msg->pt;
-        ScreenToClient(g_set.page, &pt);
+        POINT pt = {GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
+        MapWindowPoints(msg->hwnd, g_set.page, &pt, 1);
         scroller_mouse_move(&g_set.scroll, pt.x, pt.y);
       }
       return FALSE;
