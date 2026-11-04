@@ -981,7 +981,7 @@ rows it took.
   the wire for the bin.
 - **Frontends** show the bin's entries (`mc_delete_bin_list()`) with Restore, say on the sync
   screen that the user must press Sync, which makes the deletes permanent, and on Android put a
-  red dot on the sync button while the bin holds anything and a member is online.
+  red dot on the main menu and its Sync while the bin holds anything and a member is online.
 
 ## Files
 

@@ -211,7 +211,7 @@ data class SyncStatus(
     val inGroup: Boolean get() = libraryState != CoreSync.LibraryState.NoGroup
 
     /**
-     * The sync button's red dot: deletes wait in the recycle bin while a member is online, so
+     * The red dot on the main menu and its Sync: deletes wait in the recycle bin while a member is online, so
      * a sync could run but won't until the user presses Sync.
      */
     val binDot: Boolean get() = binCount > 0 && members.any { it.online }

@@ -105,7 +105,7 @@ fun App(
     val waiting by remember(syncer) { syncer.status.map { it.waiting }.distinctUntilChanged() }
         .collectAsState(syncer.status.value.waiting)
     // The recycle bin: how many deletes wait for a sync (null outside a group, where deletes
-    // don't go there), and the sync button's red dot while one could sync.
+    // don't go there), and the red dot on the main menu and its Sync while one could sync.
     val binCount by remember(syncer) {
         syncer.status.map { s -> s.binCount.takeIf { s.binOffered || it > 0 } }.distinctUntilChanged()
     }.collectAsState(null)
