@@ -9,9 +9,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## Release
 
-- Windows - Store submission (the release workflow attaches an unsigned MSIX from scripts/package-msix.ps1 to the draft release; the Store signs it), a winget manifest for the website to show, and the portable zip under the website's Other downloads. Decided: no traditional installer
-- Windows - the MSIX declares the firewall rule (the desktop2 windows.firewallRules extension, Private/Domain, as firewall.c adds it), so a Store install never shows the prompt; the zip keeps the prompt
-- Linux - architectures other than x86_64. Decided: no Flathub (its AI policy bars the manifest and likely the app) and no AppImage; the Flatpak comes from our own signed repo at kithso.ng/repo, which release.yml builds and site.yml publishes. For people who don't want Flatpak, release.yml also attaches a tarball built on Ubuntu 24.04
+- Architectures other than x64
 
 ## Library and browsing
 

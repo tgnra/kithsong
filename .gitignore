@@ -39,8 +39,5 @@ CMakeUserPresets.json
 
 .claude/
 
-# Local-only helpers
-/scripts/rewrite-email.sh
-
 # The Last.fm API account page, pasted (cmake/LastfmKey.cmake reads it)
 /last.fm.api

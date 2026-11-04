@@ -64,19 +64,19 @@ The recommended way to install Kithsong on Windows is using the [Microsoft Store
 winget install TODO --source msstore
 ```
 
-Alternatively, there are portable zips with a .exe built for each release, available [here on Github]()
+Alternatively, there are portable zips with a .exe built for each release, available [here on Github](https://github.com/tgnra/kithsong/releases)
 
 ### Linux
 
 The recommended way to install Kithsong is using a Flatpak. See installation instructions for Flatpak for your distro [at Flathub's website](https://flathub.org/en/setup)
 
-Open the [Flathub store page]() and click download or run this command:
+Run this command to install:
 
 ```bash
-flatpak install ng.kithso.app
+flatpak install --user https://kithso.ng/kithsong.flatpakref
 ```
 
-Alternatively, there is a tarball built for each release, available [here on Github]()
+Alternatively, there is a tarball and flatpak bundle built for each release, available [here on Github](https://github.com/tgnra/kithsong/releases)
 
 ### Android
 

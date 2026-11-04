@@ -22,9 +22,3 @@ Discover devices automatically over the local network and pair them with a 6 dig
 ![The Android version of the app showing an album](images/android-light.jpg)
 
 Take your music with you. Windows laptop, Linux workstation, Android phone, WearOS smartwatch. Have your original library on your workstation and sync a subset to your phone, or transcoded files to your laptop. Sync just a playlist or two to your smartwatch.
-
-## Scrobble
-
-![A screenshot of last.fm sync](images/sync.png)
-
-Scrobble your plays to Last.fm, Libre.fm, or another service. Your login is synced between your devices, and plays are cached while you're offline and sent when you're back online.

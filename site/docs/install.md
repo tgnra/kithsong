@@ -14,7 +14,7 @@ The recommended way to install Kithsong on Windows is using the [Microsoft Store
 winget install TODO --source msstore
 ```
 
-Alternatively, there are portable zips with a .exe built for each release, available [here on Github]()
+Alternatively, there are portable zips with a .exe built for each release, available [here on Github](https://github.com/tgnra/kithsong/releases)
 
 ## Linux
 
@@ -28,7 +28,7 @@ flatpak install --user https://kithso.ng/kithsong.flatpakref
 
 Kithsong then updates with `flatpak update` or your software centre.
 
-Alternatively, there is a `.flatpak` bundle built for each release, available [here on GitHub](https://github.com/tgnra/kithsong/releases). It doesn't update by itself.
+Alternatively, there is a `.flatpak` bundle, and a tarball built for each release, available [here on GitHub](https://github.com/tgnra/kithsong/releases). It doesn't update by itself.
 
 ## Android
 
