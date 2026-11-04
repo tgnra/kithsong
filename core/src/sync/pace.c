@@ -2,8 +2,7 @@
 
 #include <stdio.h>
 
-#include "musiccore/i18n.h"
-#include "musiccore/sync.h"
+#include "musiccore/musiccore.h"
 
 /* A MB as everywhere else in the app: sizes count in 1024s. */
 #define MB ((int64_t)1024 * 1024)
@@ -19,6 +18,8 @@
 #define ETA_CLIMB_MARGIN 1.3    /* how high that is, over the value shown, plus a step */
 #define ETA_MAX (7 * 24 * 3600) /* an answer past this is no answer */
 #define SLOW_KEEP 0.97802       /* exp(-1/45): a horizon of 45 s */
+#define SHIFT_RATIO 1.3         /* the speed this far from the longer mean, ... */
+#define SHIFT_HOLD 20           /* ... for this many bins, is a new speed */
 #define NEW_WORK MB             /* left growing by less is noise in the estimates */
 #define MAX_GAP 600             /* bins counted for one gap between updates: all gone by then */
 
@@ -61,7 +62,7 @@ static void update_speed(mc_sync_pace *p) {
   }
   double shown = (double)p->speed;
   double apart = raw > shown ? raw - shown : shown - raw;
-  double margin = shown / 16.0;
+  double margin = shown / 10.0;
   if (margin < 0.15 * (double)MB) margin = 0.15 * (double)MB;
   if (!p->speed || (apart >= margin && p->bins - p->speed_bin >= SPEED_HOLD)) {
     p->speed = speed_round(raw);
@@ -75,6 +76,20 @@ static void set_held(mc_sync_pace *p, int raw) {
   p->climbing = 0;
 }
 
+/* A speed that has really changed: the longer mean would take minutes to believe it, so it
+ * starts again from the speed. A window that swings either way around it does not count. */
+static void follow_shift(mc_sync_pace *p) {
+  double fast = (double)p->window_sum / MC_SYNC_PACE_WINDOW, slow = p->slow_bytes / p->slow_bins;
+  int way = fast > slow * SHIFT_RATIO ? 1 : fast * SHIFT_RATIO < slow ? -1 : 0;
+  p->shifted = way && way == p->shift_way ? p->shifted + 1 : 0;
+  p->shift_way = way;
+  if (p->shifted >= SHIFT_HOLD) {
+    p->slow_bytes = (double)p->window_sum;
+    p->slow_bins = MC_SYNC_PACE_WINDOW;
+    p->shifted = 0;
+  }
+}
+
 static void update_eta(mc_sync_pace *p, int64_t left) {
   p->eta = 0;
   /* A stall: nothing to go on until it ends, when the value held goes on from where it was.
@@ -84,6 +99,7 @@ static void update_eta(mc_sync_pace *p, int64_t left) {
     return;
   }
   if (p->bins - p->eta_since < ETA_WARMUP) return;
+  follow_shift(p);
   double rate = p->slow_bytes / p->slow_bins;
   if (rate < (double)SPEED_MIN) return;
   double seconds = (double)left / rate;

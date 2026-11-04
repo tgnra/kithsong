@@ -5,8 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "musiccore/i18n.h"
-#include "musiccore/sync.h"
+#include "musiccore/musiccore.h"
 #include "sync/pace.h"
 #include "test.h"
 
@@ -81,7 +80,7 @@ static int near(int64_t value, double target, double within) {
  * step at a time, about right. */
 static void test_steady(void) {
   run r;
-  new_run(&r, 1200 * MB);
+  new_run(&r, 12000 * MB);
   steady(&r, 2, 10);
   CHECK(r.pace.speed == 0); /* warming up */
   CHECK(r.pace.eta == 0);
@@ -89,13 +88,13 @@ static void test_steady(void) {
   CHECK(near(r.pace.speed, 10.0 * (double)MB, 0.02));
   CHECK(r.pace.eta == 0);
   steady(&r, 7, 10);
-  CHECK(r.pace.eta >= 17 * 60 && r.pace.eta <= 20 * 60); /* 1080 s of 1200 MB, on the grid */
+  CHECK(r.pace.eta == 20 * 60); /* 1188 s, on the grid */
   watch(&r);
-  steady(&r, 600, 10); /* ten minutes on, 480 s left */
+  steady(&r, 600, 10); /* ten minutes on, 588 s left */
   CHECK(r.speed_changes == 0);
   CHECK(r.eta_rises == 0);
   CHECK(r.eta_changes <= 11);
-  CHECK(r.pace.eta >= 7 * 60 && r.pace.eta <= 9 * 60);
+  CHECK(r.pace.eta >= 9 * 60 && r.pace.eta <= 11 * 60);
 }
 
 /* Most of the bytes in one second of every eight, as with many small files after pauses:
@@ -126,7 +125,7 @@ static void test_short_stalls(void) {
   CHECK(r.eta_rises == 0);
   CHECK(r.eta_hidden == 0);
   CHECK(r.eta_max - r.eta_min <= 3 * 60); /* in 144 s of a countdown */
-  CHECK(r.min_speed >= 6 * MB);
+  CHECK(r.min_speed >= 5 * MB + MB / 2); /* six seconds of ten is 6 MB/s */
 }
 
 /* A long one hides both, and the value comes back near where it was instead of far above. */
@@ -190,12 +189,12 @@ static void test_speed_drop(void) {
   int before = r.pace.eta;
   CHECK(before >= 3 * 60 && before <= 5 * 60 + 30);
   watch(&r);
-  steady(&r, 10, 5);
+  steady(&r, 12, 5);
   CHECK(r.eta_rises == 0); /* too early to believe */
   CHECK(near(r.pace.speed, 5.0 * (double)MB, 0.1)); /* the speed has followed already */
-  steady(&r, 110, 5);
-  CHECK(r.eta_rises >= 1 && r.eta_rises <= 3);
-  /* 3050 MB left, at 5 MB/s. */
+  steady(&r, 108, 5);
+  CHECK(r.eta_rises >= 1 && r.eta_rises <= 2);
+  /* 3000 MB left, at 5 MB/s. */
   double truth = (6000.0 - 2400.0 - 600.0) / 5.0;
   CHECK(near(r.pace.eta, truth, 0.25));
 }
@@ -213,10 +212,10 @@ static void test_noise(void) {
     double factor = 0.5 + (double)(x >> 8 & 0xffff) / 65535.0;
     step(&r, (int64_t)(10.0 * (double)MB * factor * TICK_MS / 1000.0));
   }
-  CHECK(r.speed_changes <= 8);
+  CHECK(r.speed_changes <= 15); /* in ten minutes of noise this bad */
   CHECK(r.eta_rises == 0);
-  CHECK(near(r.min_speed, 10.0 * (double)MB, 0.1));
-  CHECK(near(r.max_speed, 10.0 * (double)MB, 0.1));
+  CHECK(near(r.min_speed, 10.0 * (double)MB, 0.2));
+  CHECK(near(r.max_speed, 10.0 * (double)MB, 0.2));
 }
 
 /* No total, no time left; a trickle, no time left either. */

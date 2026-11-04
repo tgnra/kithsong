@@ -263,8 +263,14 @@ static int64_t bytes_left(const mc_session *s) {
 }
 
 static void progress(mc_session *s) {
+  int64_t speed = s->pace.speed;
+  int eta = s->pace.eta;
   s->progress_ms = mc_mono_ms();
-  mc_sync_pace_update(&s->pace, s->progress_ms, s->bytes_received + s->bytes_sent, bytes_left(s));
+  int64_t moved = s->bytes_received + s->bytes_sent, left = bytes_left(s);
+  mc_sync_pace_update(&s->pace, s->progress_ms, moved, left);
+  if (s->pace.speed != speed || s->pace.eta != eta)
+    mc_sync_trace("pace %.8s: %lld B/s, eta %d s, %lld moved, %lld left", s->peer_uid,
+                  (long long)s->pace.speed, s->pace.eta, (long long)moved, (long long)left);
   mc_sync_progress p = {.device_uid = s->peer_uid, .phase = MC_SYNC_PHASE_FILES,
                         .rows_sent = s->rows_sent, .rows_received = s->rows_received,
                         .files_done = s->files_done, .files_total = s->files_total,

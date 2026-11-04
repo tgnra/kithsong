@@ -1083,9 +1083,10 @@ Time is cut into one-second bins, starting with the first bytes.
 
 - Speed is the mean of the last 10 bins, shown after 3, rounded to 0.1 MB/s (a whole MB/s
   from 100 up; a MB is 1024 × 1024 bytes, as in every size the app shows). It changes at most
-  every 2 s, and only by 1/16 of itself or 0.15 MB/s. Below 0.05 MB/s nothing is shown.
+  every 2 s, and only by a tenth of itself or 0.15 MB/s. Below 0.05 MB/s nothing is shown.
 - Time left is the bytes left over a longer mean: each bin counts for less as it ages, with a
-  horizon of 45 s. Stalls stay in that mean, since ones that keep coming do take time. It is
+  horizon of 45 s. Stalls stay in that mean, since ones that keep coming do take time. If the
+  speed stands 30% away from the mean, the same way, for 20 s, the mean starts again from it. It is
   shown after 8 bins, on a grid that coarsens: a minute up to 20 min, then 5, 10, 30 and 60 min
   from 1, 3 and 10 h; under 50 s it is "less than a minute".
 - It goes down a quarter step past where rounding would take it, at most every 5 s, and up

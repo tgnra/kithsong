@@ -33,6 +33,7 @@ typedef struct mc_sync_pace {
   /* The longer mean behind the time left: bytes and bins, each bin counting a little less
    * than the one after it. */
   double slow_bytes, slow_bins;
+  int shift_way, shifted; /* which way the speed stands from that mean, for how many bins */
   uint64_t eta_since; /* bins when the work last grew */
   int held;           /* the eta to show, kept while a stall hides it */
   uint64_t held_bin;  /* the bin it last changed in */
