@@ -100,6 +100,10 @@ target_link_libraries(test_discovery PRIVATE mc_mdns)  # sends packets as a fake
 set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multicast
 
 # Hit musicbrainz.org; run by hand, not part of ctest.
+add_executable(manual_stress manual_stress.c)
+target_link_libraries(manual_stress PRIVATE musiccore)
+target_include_directories(manual_stress PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+
 add_executable(manual_mb_ping manual_mb_ping.c)
 target_link_libraries(manual_mb_ping PRIVATE musiccore)
 # Signs in and scrobbles for real; see the comment at its top.

@@ -1,5 +1,8 @@
 /* The profiler (musiccore/perf.h). Frontends feed it from their UI threads, at most once a
  * frame, so one lock is plenty; while it's off every feed stops at the first line. */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L /* clock_gettime under -std=c11 */
+#endif
 #include "musiccore/perf.h"
 
 #include <stdarg.h>

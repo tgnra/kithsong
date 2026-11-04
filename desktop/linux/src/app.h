@@ -106,6 +106,15 @@ void app_open_album_group(app *a, const char *uid);
  * settings_view_choose_library() does. */
 gboolean app_open_library(app *a, const char *dir);
 
+/* Stress test libraries (musiccore/stress.h). Opens the one in dir and saves that, remembering
+ * the library to go back to; and goes back to it. With no way back saved, Settings opens. */
+void app_open_stress(app *a, const char *dir);
+void app_back_to_library(app *a);
+/* Shows a library page, as its sidebar row does. */
+void app_show_view(app *a, app_view view);
+/* Opens Settings with the Testing group open. */
+void app_show_testing(app *a);
+
 /* Sets widget's tooltip to label with its keyboard shortcut, "Next track (Ctrl+→)": accel
  * as gtk_accelerator_parse() reads it, e.g. "<Control>Right", shown as GTK labels it. */
 void app_set_tooltip(GtkWidget *widget, const char *label, const char *accel);

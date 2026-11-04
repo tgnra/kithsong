@@ -92,4 +92,7 @@ void artist_view_play(int start);
 /* Marks the playing track, by uid, or none for NULL, as track_list_set_playing() does. */
 void artist_view_set_playing(const char *uid);
 
+/* The scrolled window around the list of artists. */
+GtkWidget *artist_view_scrolled(void);
+
 #endif
