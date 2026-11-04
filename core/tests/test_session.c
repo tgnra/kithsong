@@ -520,6 +520,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_record_opened(b.lib, MC_RECENT_PLAYLIST, pl) == MC_OK);
   CHECK(mc_library_remove_recent(b.lib, pl) == MC_OK);
   lib_text(&c, "SELECT opened_ms FROM recents WHERE kind = 'album'", opened, sizeof opened);
+  mc_sleep_ms(5); /* recents with the same time sort by uid, and the station is to come first */
   /* A station reaches everyone, and so does a kind nobody here knows, by way of B: that's what
    * a station is to an older app, which stores it, passes it on and lists without it. */
   CHECK(mc_library_record_opened(a.lib, MC_RECENT_STATION, t1) == MC_OK);
