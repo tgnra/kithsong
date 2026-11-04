@@ -23,6 +23,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 15 | album flags: `albums.no_scrobble`, `albums.mix` |
 | 16 | `albums.mix` is the user's choice, 1 or -1, and 0 leaves it to the album's length; long tracks with no album get one, once, on opening |
 | 17 | `albums.art_chosen`: the cover the user chose |
+| 18 | `play_events`: the play log |
 
 ## Location
 
@@ -247,6 +248,40 @@ A track's last play is `MAX(last_played_ms)` over the same rows, and comes from 
 per-device rows for the same reason. Rows from before v6 have no `last_played_ms` until
 that device plays the track again.
 
+## Play log
+
+`play_events` is the raw history that `track_plays` sums up: one row for each time a track was
+started, whether or not it counted as a play. It's there for readers to come (a local radio, a
+home screen), which go through `mc_library_list_play_events()`: every device's rows in a time
+range, oldest first. Nothing here filters or interprets; a reader decides what a two-second
+skip means. Nothing here leaves the user's own devices.
+
+| Column | |
+|--------|-|
+| `uid` | the row's own |
+| `track_uid` | the track; the row goes with it |
+| `node_uid` | the device it was played on |
+| `started_ms` | wall clock, when it was first heard, or if it never was, when it was started |
+| `listened_ms` | time actually heard. Pauses add nothing, a seek forward adds nothing for what it jumped, and a seek back adds what's heard again, so it can pass the track's length. A track started and left at once has 0 or nearly |
+| `ended` | `finished`, `skipped` (next, previous, another queue item, or started again), `stopped` (stopped, or the app or library closed), `replaced` (a new queue took over) or `failed` (the file couldn't be played: `listened_ms` is 0) |
+| `context` | how the queue was started: `album`, `playlist` (smart lists too), `album_group`, `artist`, `manual` (one track by itself), `shuffle` (any of those started shuffled with no track picked), `radio` (nothing sets it yet) or `unknown` |
+| `context_uid` | the album, playlist, group or artist, also under `shuffle`; NULL if there's none. Not a reference: the history stays when the album or playlist goes, and a merged-away album's uid can be looked up in `aliases` |
+
+The player keeps the rows, so all frontends log alike. A frontend gives it the queue's track
+uids and context (`mc_play_origin`), takes each row as it ends (`MC_PLAYER_EVENT_ENDED`,
+`mc_player_take_ended()`) and writes it (`mc_library_log_play()`); before closing it calls
+`mc_player_end_play()` so the play under way is written as `stopped`. An app killed outright
+loses that one play.
+
+Rows sync like `track_plays`, and more simply: each is one device's and is written once, never
+updated, so no two devices ever write the same field. They go with their track, and come back
+with it from the Recycle Bin. A duplicate's rows move to the track that stays. A merged
+library's history is not carried over (see [Merging libraries](sync-protocol.md#merging-libraries)).
+
+Rows are kept for good. A row costs about 2 KB of `library.db`: 350 bytes for the row and its
+indexes, the rest for its seven changelog rows. So 10,000 starts a year, about 30 a day, come
+to some 20 MB, on every device of the group, whichever of them played what.
+
 ## Album groups
 
 An album group is a named, ordered list of albums: a playlist whose entries are albums
@@ -406,6 +441,7 @@ devices. Wear OS shows only what's present, so it drops the empty ones as well.
 | `track_artists`    | yes    | a track's credited artists in order, uid derived from the track and position; see [Artist credits](#artist-credits) |
 | `album_artists`    | yes    | an album's, the same way |
 | `track_plays`      | yes    | play counts and last plays, one row per track per device; see [Play counts](#play-counts) |
+| `play_events`      | yes    | one row each time a track was started, each device's its own; see [Play log](#play-log) |
 | `playlists`        | yes    | |
 | `playlist_entries` | yes    | ordered by the fractional-index string `position` |
 | `album_groups`     | yes    | playlists of albums; see [Album groups](#album-groups) |
