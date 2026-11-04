@@ -78,6 +78,8 @@ kithsong_test(test_artist_refresh)
 kithsong_test(test_import_zip)
 target_link_libraries(test_import_zip PRIVATE mc_miniz)  # builds the zips it imports
 kithsong_test(test_long_paths)
+kithsong_test(test_analysis)
+set_tests_properties(test_analysis PROPERTIES TIMEOUT 300)
 kithsong_test(test_dupes)
 kithsong_test(test_import_dupes)
 kithsong_test(test_delete)
@@ -112,6 +114,9 @@ target_include_directories(manual_opus_sync PRIVATE "${PROJECT_SOURCE_DIR}/core/
 add_executable(manual_opus_bench manual_opus_bench.c)
 target_link_libraries(manual_opus_bench PRIVATE musiccore mc_opusenc mbedcrypto)
 target_include_directories(manual_opus_bench PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+add_executable(manual_analysis manual_analysis.c)
+target_link_libraries(manual_analysis PRIVATE musiccore)
+target_include_directories(manual_analysis PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_import manual_import.c)
 
 target_link_libraries(manual_import PRIVATE musiccore)

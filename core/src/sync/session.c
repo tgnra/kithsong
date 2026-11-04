@@ -6,6 +6,7 @@
 
 #include <yyjson.h>
 
+#include "analysis/scanner.h"
 #include "library/library_internal.h"
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
@@ -725,8 +726,7 @@ static int removed_here(mc_session *s) {
          strcmp(v, "0") != 0 && v[0];
 }
 
-mc_status mc_session_run(mc_session *s) {
-  if (!s || !s->ch || !s->conn || !is_uid(s->peer_uid)) return MC_ERR_INVALID_ARG;
+static mc_status run_session(mc_session *s) {
   s->converged = 1;
   mc_session_refresh_self(s->sync, s->conn); /* best effort: stale capabilities are fine */
   mc_transfer_write_status(s->sync, s->conn);
@@ -853,5 +853,15 @@ mc_status mc_session_run(mc_session *s) {
                 mc_status_str(st));
   if (st == MC_OK && removed_here(s)) s->we_removed = 1;
   progress(s, MC_SYNC_PHASE_DONE);
+  return st;
+}
+
+mc_status mc_session_run(mc_session *s) {
+  if (!s || !s->ch || !s->conn || !is_uid(s->peer_uid)) return MC_ERR_INVALID_ARG;
+  /* The scanner stands aside: see mc_analysis_hold(). From here, as the library's VV is a
+   * group exchange away, a row it's writing now is in before that. */
+  mc_analysis_hold();
+  mc_status st = run_session(s);
+  mc_analysis_release();
   return st;
 }

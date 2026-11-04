@@ -199,6 +199,30 @@ static const char *const k_migrations[] = {
   /* v17: the cover the user chose for an album (musiccore/edit.h), as its SHA-256. Import and
    * downloads leave such a cover alone, and sync brings it to devices that have another. */
   "ALTER TABLE albums ADD COLUMN art_chosen TEXT;",
+  /* v18: local audio analysis (musiccore/analysis.h). track_analysis holds a track's results,
+   * one row for what an original gave and one for a transcode, under a uid derived from the
+   * track and the source: two devices analysing one track write one row, and a transcode's
+   * result can't overwrite an original's, as last-writer-wins would have it. analysis_failed
+   * is this device's own: files that won't decode here, so they aren't tried for ever. (IF NOT
+   * EXISTS: tests that wind user_version back keep their tables.) */
+  "CREATE TABLE IF NOT EXISTS track_analysis ("
+  "  uid              TEXT PRIMARY KEY,"
+  "  track_uid        TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
+  "  source           INTEGER NOT NULL,"
+  "  file_rev         TEXT,"
+  "  analysis_version INTEGER NOT NULL,"
+  "  features         BLOB NOT NULL,"
+  "  lufs             REAL,"
+  "  lra              REAL,"
+  "  true_peak        REAL"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX IF NOT EXISTS track_analysis_track ON track_analysis (track_uid);"
+  "CREATE TABLE IF NOT EXISTS analysis_failed ("
+  "  file_uid         TEXT PRIMARY KEY REFERENCES files (uid) ON DELETE CASCADE,"
+  "  size_bytes       INTEGER,"
+  "  mtime_ms         INTEGER,"
+  "  analysis_version INTEGER NOT NULL"
+  ") WITHOUT ROWID;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -227,6 +251,9 @@ static const char *const k_group_cols[] = {"name", NULL};
 static const char *const k_group_entry_cols[] = {"group_uid", "album_uid", "position", NULL};
 static const char *const k_smart_cols[] = {"name", "subject", "rule", NULL};
 static const char *const k_recent_cols[] = {"kind", "opened_ms", NULL};
+static const char *const k_analysis_cols[] = {"track_uid", "source", "file_rev",
+                                              "analysis_version", "features", "lufs", "lra",
+                                              "true_peak", NULL};
 
 static const mc_changelog_table k_tracked[] = {
   {"artists", "uid", k_artist_cols, NULL},
@@ -241,6 +268,7 @@ static const mc_changelog_table k_tracked[] = {
   {"album_group_entries", "uid", k_group_entry_cols, NULL},
   {"smart_lists", "uid", k_smart_cols, NULL},
   {"recents", "uid", k_recent_cols, NULL},
+  {"track_analysis", "uid", k_analysis_cols, NULL},
 };
 
 /* --- Schema --- */
@@ -323,6 +351,7 @@ static const struct {
        " OR (entity IN ('tracks', 'albums') AND field = 'artist_credit')"},
   {15, "entity = 'albums' AND field IN ('no_scrobble', 'mix')"},
   {17, "entity = 'albums' AND field = 'art_chosen'"},
+  {18, "entity = 'track_analysis'"},
 };
 
 /* A loose track long enough to be a mix has no album row to be one on (mc_mix_file_tracks()).
@@ -570,6 +599,10 @@ void mc_library_rollback(mc_library *lib) {
   exec(lib, "ROLLBACK");
 }
 
+int mc_library_schema_latest(void) {
+  return MC_SCHEMA_VERSION;
+}
+
 int mc_library_refresh_progress(mc_library *lib, int *done, int *total) {
   return mc_refresh_progress(lib ? lib->refresh : NULL, done, total);
 }
@@ -681,6 +714,7 @@ mc_status mc_library_reset_for_merge(mc_library *lib, const char *const *meta, i
   static const char *const k_clear[] = {
     "DELETE FROM files", "DELETE FROM playlist_entries", "DELETE FROM album_group_entries",
     "DELETE FROM track_plays", "DELETE FROM track_artists", "DELETE FROM album_artists",
+    "DELETE FROM track_analysis",
     "DELETE FROM recents", "DELETE FROM smart_lists",
     "DELETE FROM playlists", "DELETE FROM album_groups", "DELETE FROM tracks",
     "DELETE FROM albums", "DELETE FROM artists", "DELETE FROM aliases",

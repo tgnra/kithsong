@@ -45,9 +45,13 @@ static const struct {
   {"tracks", "uid = ?1"},
   {"track_artists", "track_uid = ?1"},
   {"track_plays", "track_uid = ?1"},
+  {"track_analysis", "track_uid = ?1"},
   {"playlist_entries", "track_uid = ?1"},
   {"album_group_entries", "album_uid = (SELECT album_uid FROM tracks WHERE uid = ?1)"},
 };
+
+/* The one BLOB a record holds, which JSON can't: it goes as hex. */
+#define BLOB_COLUMN "features"
 
 static const char k_store_schema[] =
   "CREATE TABLE IF NOT EXISTS deleted ("
@@ -240,14 +244,15 @@ static mc_status rows_json(sqlite3 *db, const char *table, const char *where, co
   str_list cols = {0};
   mc_status st = table_columns(db, table, &cols);
   size_t cap = 256 + strlen(where);
-  for (int i = 0; st == MC_OK && i < cols.count; i++) cap += 2 * strlen(cols.items[i]) + 8;
+  for (int i = 0; st == MC_OK && i < cols.count; i++) cap += 2 * strlen(cols.items[i]) + 16;
   char *sql = st == MC_OK ? malloc(cap) : NULL;
   if (st == MC_OK && !sql) st = MC_ERR_NOMEM;
   if (st == MC_OK) {
     size_t n = (size_t)snprintf(sql, cap, "SELECT json_group_array(json_object(");
     for (int i = 0; i < cols.count; i++)
-      n += (size_t)snprintf(sql + n, cap - n, "%s'%s', \"%s\"", i ? ", " : "", cols.items[i],
-                            cols.items[i]);
+      n += (size_t)snprintf(sql + n, cap - n, "%s'%s', %s\"%s\"%s", i ? ", " : "", cols.items[i],
+                            strcmp(cols.items[i], BLOB_COLUMN) ? "" : "hex(", cols.items[i],
+                            strcmp(cols.items[i], BLOB_COLUMN) ? "" : ")");
     snprintf(sql + n, cap - n, ")) FROM \"%s\" WHERE %s", table, where);
     sqlite3_stmt *stmt = prepare(db, sql);
     if (!stmt) st = MC_ERR_DB;
@@ -322,7 +327,7 @@ static mc_status insert_json(sqlite3 *db, const char *table, const char *obj, in
     sqlite3_finalize(stmt);
   }
   size_t cap = 128 + strlen(table);
-  for (int i = 0; i < keys.count; i++) cap += 3 * strlen(keys.items[i]) + 32;
+  for (int i = 0; i < keys.count; i++) cap += 3 * strlen(keys.items[i]) + 48;
   char *sql = st == MC_OK && keys.count ? malloc(cap) : NULL;
   if (sql) {
     size_t n = (size_t)snprintf(sql, cap, "INSERT OR IGNORE INTO \"%s\" (", table);
@@ -330,8 +335,9 @@ static mc_status insert_json(sqlite3 *db, const char *table, const char *obj, in
       n += (size_t)snprintf(sql + n, cap - n, "%s\"%s\"", i ? ", " : "", keys.items[i]);
     n += (size_t)snprintf(sql + n, cap - n, ") VALUES (");
     for (int i = 0; i < keys.count; i++)
-      n += (size_t)snprintf(sql + n, cap - n, "%sjson_extract(?1, '$.\"%s\"')", i ? ", " : "",
-                            keys.items[i]);
+      n += (size_t)snprintf(sql + n, cap - n, "%s%sjson_extract(?1, '$.\"%s\"')%s", i ? ", " : "",
+                            strcmp(keys.items[i], BLOB_COLUMN) ? "" : "unhex(", keys.items[i],
+                            strcmp(keys.items[i], BLOB_COLUMN) ? "" : ")");
     snprintf(sql + n, cap - n, ")");
     if ((stmt = prepare(db, sql))) {
       sqlite3_bind_text(stmt, 1, obj, -1, SQLITE_STATIC);
@@ -739,6 +745,7 @@ static mc_status delete_rows(mc_library *lib, const uid_set *gone, const uid_set
     if ((st = run(db, "DELETE FROM playlist_entries WHERE track_uid = ?1", t, NULL)) == MC_OK &&
         (st = run(db, "DELETE FROM track_plays WHERE track_uid = ?1", t, NULL)) == MC_OK &&
         (st = run(db, "DELETE FROM track_artists WHERE track_uid = ?1", t, NULL)) == MC_OK &&
+        (st = run(db, "DELETE FROM track_analysis WHERE track_uid = ?1", t, NULL)) == MC_OK &&
         (st = run(db, "DELETE FROM files WHERE track_uid = ?1", t, NULL)) == MC_OK)
       st = run(db, "DELETE FROM tracks WHERE uid = ?1", t, NULL);
   }

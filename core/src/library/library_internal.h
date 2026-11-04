@@ -30,6 +30,9 @@ mc_status mc_library_open_internal(const char *dir, mc_library **out);
  * the copy of the library from before it, which undoing it opens to bring up to date. */
 mc_status mc_library_open_plain(const char *dir, mc_library **out);
 
+/* The schema version this build migrates to. */
+int mc_library_schema_latest(void);
+
 /* Rereads node_uid and library_uid from meta into this handle, after the library's contents
  * were replaced (sync/libmerge.h). */
 mc_status mc_library_reload_ids(mc_library *lib);

@@ -76,6 +76,10 @@ void mc_thread_join(mc_thread *thread);
  * mc_thread_join(), never as well. */
 void mc_thread_detach(mc_thread *thread);
 
+/* Makes the calling thread run only when nothing else wants the CPU or the disk, as far as the
+ * platform goes, for the rest of its life. */
+void mc_thread_background(void);
+
 /* Native path separator, for building paths to show the user. */
 #ifdef _WIN32
 #define MC_PATH_SEP '\\'
