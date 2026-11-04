@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
@@ -37,6 +38,11 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
         private set
     override var hasNext by mutableStateOf(false)
         private set
+    override var nextTrack by mutableStateOf<Track?>(null)
+        private set
+    override var previousTrack by mutableStateOf<Track?>(null)
+        private set
+    override val hasPrevious get() = previousTrack != null
     private var shuffleOn by mutableStateOf(false)
     override val shuffle get() = shuffleOn
 
@@ -101,6 +107,8 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
 
     override fun previous() = withController { it.seekToPrevious() }
 
+    override fun skipToPrevious() = withController { it.seekToPreviousMediaItem() }
+
     override fun setShuffle(on: Boolean) {
         shuffleOn = on
         withController { it.shuffleModeEnabled = on }
@@ -109,6 +117,8 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
     // Empty until the controller has connected; nothing has played before then.
     override val queueUids: List<String>
         get() = controller?.let { c -> List(c.mediaItemCount) { c.getMediaItemAt(it).mediaId } }.orEmpty()
+
+    override fun stop() = withController { it.stop() }
 
     override fun clear() {
         track = null
@@ -133,6 +143,8 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
         // Shuffled, the core's queue never ends, though the timeline's shuffle order, which
         // holds each track once, does.
         hasNext = player.hasNextMediaItem() || (shuffle && player.mediaItemCount > 0)
+        nextTrack = player.trackAt(player.nextMediaItemIndex)
+        previousTrack = player.trackAt(player.previousMediaItemIndex)
         positionMs = player.currentPosition
         ticker?.cancel()
         ticker = if (!player.isPlaying) null else scope.launch {
@@ -142,6 +154,8 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
             }
         }
     }
+
+    private fun Player.trackAt(index: Int) = if (index == C.INDEX_UNSET) null else getMediaItemAt(index).toTrack()
 
     private companion object {
         const val TAG = "kithsong"

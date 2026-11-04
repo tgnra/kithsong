@@ -192,6 +192,13 @@ class CoreMediaPlayer(
 
     override fun handleStop(): ListenableFuture<*> {
         idle = true
+        // Played again, it carries on from here, as with a new queue's starting point.
+        if (started) {
+            val status = core.status
+            startIndex = status.index.coerceAtLeast(0)
+            startPositionMs = status.positionMs
+            started = false
+        }
         core.stop()
         update()
         return Futures.immediateVoidFuture()
@@ -205,6 +212,9 @@ class CoreMediaPlayer(
         } else if (shuffle && seekCommand in SHUFFLED_SEEKS) {
             // The core's shuffled order, not Media3's idea of the next or previous item.
             val paused = core.status.state != CorePlayer.State.Playing
+            // The core's previous restarts a track that's past its first seconds, which is for
+            // the previous button; this asks for the item before, whatever the position.
+            if (seekCommand == COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) core.seekMs(0)
             if (seekCommand == COMMAND_SEEK_TO_NEXT || seekCommand == COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) core.next() else core.previous()
             if (paused) core.pause()
         } else {

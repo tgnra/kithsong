@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /** Which way a [DismissibleScreen] slides out. */
@@ -43,8 +44,15 @@ private enum class Layer { Shown, Hidden }
  * A full-screen layer that slides in from [direction] when first shown, and slides back out
  * to dismiss: dragged that way past halfway, or flung that way, or on back. Released anywhere
  * else, or if the system takes the touch, it springs back. Predictive back moves it part of
- * the way with the gesture, so the screen beneath shows. [onDismissed] is called once it is
- * off screen; remove the layer then. Only the top layer should have [backEnabled].
+ * the way with the gesture, so the screen beneath shows. Only the top layer should have
+ * [backEnabled].
+ *
+ * Leaving is one way. Once back or the close button has decided it, nothing brings the layer
+ * back: [onLeaving] is called there and then, so that the next press of back, however soon,
+ * goes to the layer beneath (see [BackStack]), and the slide out carries on by itself, outside
+ * the back handler, which a later press would otherwise cancel. [onDismissed] is called once
+ * it is off screen; remove the layer then.
+ *
  * [content] gets a function that slides the layer out, for its own close button. A layer that
  * isn't [draggable] only goes on back or that function, where a stray swipe would lose work.
  *
@@ -57,6 +65,7 @@ fun DismissibleScreen(
     direction: DismissDirection,
     onDismissed: () -> Unit,
     modifier: Modifier = Modifier,
+    onLeaving: () -> Unit = {},
     backEnabled: Boolean = true,
     draggable: Boolean = true,
     content: @Composable (dismiss: () -> Unit) -> Unit,
@@ -70,28 +79,48 @@ fun DismissibleScreen(
         // A new size (rotation, a resized window) moves the ends, keeping the layer at its end.
         SideEffect { if (state.anchors != anchors) state.updateAnchors(anchors, state.targetValue) }
         val scope = rememberCoroutineScope()
+        val onLeavingNow by rememberUpdatedState(onLeaving)
         val onDismissedNow by rememberUpdatedState(onDismissed)
-        // Once only: a fling and the close button can both finish out, and a second call
-        // would remove another layer (pop takes the top of the stack).
+        // Each once only: a fling and the close button can both finish out.
+        var leaving by remember { mutableStateOf(false) }
         var gone by remember { mutableStateOf(false) }
+        fun markLeaving() {
+            if (!leaving) { leaving = true; onLeavingNow() }
+        }
         fun dismissed() {
+            markLeaving()
             if (!gone) { gone = true; onDismissedNow() }
         }
         val motion = spring<Float>(stiffness = Spring.StiffnessMediumLow)
 
         LaunchedEffect(Unit) { state.animateTo(Layer.Shown, motion) }
 
-        suspend fun dismiss() {
-            state.animateTo(Layer.Hidden, motion)
-            dismissed()
+        fun leave() {
+            if (leaving) return
+            markLeaving()
+            scope.launch {
+                // A drag let go just now can still take the state over; the slide starts again
+                // from where that left it.
+                while (true) {
+                    try {
+                        state.animateTo(Layer.Hidden, motion)
+                        break
+                    } catch (e: CancellationException) {
+                        ensureActive()
+                    }
+                }
+                dismissed()
+            }
         }
 
-        PredictiveBackHandler(enabled = backEnabled) { progress ->
+        PredictiveBackHandler(enabled = backEnabled && !leaving) { progress ->
             try {
-                state.anchoredDrag { progress.collect { dragTo(distance * 0.2f * it.progress) } }
-                dismiss()
+                // From where the layer is, as it may still be sliding in.
+                val from = state.requireOffset()
+                state.anchoredDrag { progress.collect { dragTo(maxOf(from, distance * 0.2f * it.progress)) } }
+                leave()
             } catch (e: CancellationException) {
-                scope.launch { state.animateTo(Layer.Shown, motion) }
+                if (!leaving) scope.launch { state.animateTo(Layer.Shown, motion) }
                 throw e
             }
         }
@@ -129,11 +158,11 @@ fun DismissibleScreen(
                 .anchoredDraggable(
                     state,
                     orientation = if (direction == DismissDirection.Down) Orientation.Vertical else Orientation.Horizontal,
-                    enabled = draggable,
+                    enabled = draggable && !leaving,
                     flingBehavior = flingBehavior,
                 ),
         ) {
-            content(remember { { scope.launch { dismiss() } } })
+            content(remember { { leave() } })
         }
     }
 }
