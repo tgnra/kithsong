@@ -76,6 +76,12 @@ class CoreLibrary(dir: String) : AutoCloseable {
 
     val trackCount: Long get() = nativeCount(handle, ENTITY_TRACKS)
 
+    /** The album with the most tracks, for a scroll test; null if there's none. */
+    fun biggestAlbum(): String? = nativeBiggestAlbum(handle)
+
+    /** Whether this is a stress test library (mc_library_is_stress), which neither syncs nor scrobbles. */
+    val isStress: Boolean get() = nativeIsStress(handle)
+
     /** Every album, in display order. */
     fun albums(): List<AlbumInfo> = nativeListAlbums(handle).asList()
 
@@ -157,6 +163,8 @@ class CoreLibrary(dir: String) : AutoCloseable {
 
         @JvmStatic external fun nativeOpen(dir: String): Long
         @JvmStatic external fun nativeClose(handle: Long)
+        @JvmStatic external fun nativeBiggestAlbum(handle: Long): String?
+        @JvmStatic external fun nativeIsStress(handle: Long): Boolean
         @JvmStatic external fun nativeCount(handle: Long, entity: Int): Long
         @JvmStatic external fun nativeListAlbums(handle: Long): Array<AlbumInfo>
         @JvmStatic external fun nativeListTracks(handle: Long, kind: Int, uid: String): Array<TrackInfo>

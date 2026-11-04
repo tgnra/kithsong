@@ -33,12 +33,24 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val app = application as KithsongApp
+        CoreTesting.mark("activity_created")
+        window.decorView.display?.refreshRate?.let { CoreTesting.setRefreshHz(it.toDouble()) }
         // `adb shell am start -n ng.kithso.android/.MainActivity --ez fake true` shows made-up
         // music instead of the library, and `--ez fake_empty true` the empty state. Only on a
         // fresh start, so turning the phone doesn't start the fake over.
         val empty = intent.getBooleanExtra("fake_empty", false)
         if (savedInstanceState == null && (empty || intent.getBooleanExtra("fake", false))) {
             app.useFakeLibrary(empty)
+        }
+        // Debug builds, for test scripts: `--ei stress_preset 1` turns the profiler on and generates
+        // and opens that stress library, and `--ez perf_run true` runs the scroll test after
+        // startup, writing the report to the log (tag kithsong-perf).
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0 && savedInstanceState == null) {
+            if (intent.hasExtra("stress_preset")) {
+                app.testing.setProfiling(true)
+                app.testing.generate(intent.getIntExtra("stress_preset", CoreTesting.PRESET_10K))
+            }
+            if (intent.getBooleanExtra("perf_run", false)) ng.kithso.android.ui.PerfRun.requested = true
         }
         // Debug builds: `--es fake_merge <scenario>` shows one of the merge's screens with
         // made-up data (see Syncer.debugShowMerge).

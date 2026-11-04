@@ -1,5 +1,6 @@
 package ng.kithso.android.ui
 
+import androidx.compose.runtime.LaunchedEffect
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -287,6 +288,16 @@ fun MainScreen(
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
         val listState = rememberLazyListState()
+        ScrollFrames(listState, "main")
+        val scrollStep = scrollStepPx()
+        LaunchedEffect(listState) {
+            ScrollTest.step.collect { step ->
+                if (step == ScrollTest.Step.Main) {
+                    runScrollScript(listState, scrollStep, "main")
+                    ScrollTest.step.value = ScrollTest.Step.OpenTracks
+                }
+            }
+        }
         // The section at the top of the screen; the header counts as part of the first.
         val current by remember(sections) {
             derivedStateOf {

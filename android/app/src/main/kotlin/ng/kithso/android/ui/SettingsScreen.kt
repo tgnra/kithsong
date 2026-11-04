@@ -87,6 +87,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     binCount: Int? = null,
     onRecycleBin: () -> Unit = {},
+    onRunScrollTest: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
@@ -180,6 +181,8 @@ fun SettingsScreen(
                     },
                 )
             }
+
+            item(key = "testing") { TestingSettings(onRunScrollTest) }
 
             item(key = "about") {
                 SettingsHeading(stringResource(R.string.settings_about))

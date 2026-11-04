@@ -1,5 +1,6 @@
 package ng.kithso.android.ui
 
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -147,6 +148,17 @@ fun DetailScreen(
     val isEditing = editing && (editable || editableGroup)
 
     val listState = rememberLazyListState()
+    ScrollFrames(listState, "tracks")
+    val scrollStep = scrollStepPx()
+    val listLoaded = loaded != null
+    LaunchedEffect(listState, listLoaded) {
+        if (listLoaded) ScrollTest.step.collect { step ->
+            if (step == ScrollTest.Step.Tracks) {
+                runScrollScript(listState, scrollStep, "tracks")
+                ScrollTest.step.value = ScrollTest.Step.Done
+            }
+        }
+    }
     val reorder = remember(listState) { ReorderState(listState) }
     // Where the dragged track or album was before this drag.
     var dragFrom by remember { mutableIntStateOf(-1) }

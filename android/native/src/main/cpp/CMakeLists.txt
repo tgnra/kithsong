@@ -28,6 +28,9 @@ target_sources(kithsong_jni PRIVATE jni_edit.c)
 # Removing an album or artist from this phone only (SyncHereNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_sync_here.c)
 
+# The profiler and stress test libraries (CoreTesting), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_testing.c)
+
 # The native libraries' license texts, for the apps' licence screens (build.gradle.kts).
 if(KITHSONG_LICENSES_DIR)
   include("${KITHSONG_ROOT}/cmake/Licenses.cmake")

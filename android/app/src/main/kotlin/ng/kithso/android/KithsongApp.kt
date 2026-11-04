@@ -43,7 +43,19 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
      * Backup, and a library.db restored onto a new phone would carry this phone's sync node id
      * with it.
      */
-    val libraryDir: File get() = File(noBackupFilesDir, "library")
+    val realLibraryDir: File get() = File(noBackupFilesDir, "library")
+
+    /**
+     * The library this process runs on: [realLibraryDir], or a stress test library if one was
+     * opened ([Testing]). Only ever a folder the generator finished, so a stray setting can't
+     * point the app anywhere else. It stays for the life of the process.
+     */
+    val libraryDir: File get() = stressDir ?: realLibraryDir
+    private var stressDir: File? = null
+
+    /** Settings' Testing section. */
+    lateinit var testing: Testing
+        private set
 
     /** Playlists' and album groups' pictures, which the core makes again if the system clears them away. */
     val playlistArtDir: File get() = File(cacheDir, PLAYLIST_ART_DIR)
@@ -80,20 +92,27 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        val startedUs = CoreTesting.nowUs()
         val status = NativeCore.init()
         if (status != 0) Log.e(TAG, "musiccore init failed: $status")
         NativeCore.followLocale(resources.configuration)
+        // settings.json, as the desktops have, with the app's own preferences in it as well.
+        settings = AppSettings(CoreSettings(filesDir.path), getSharedPreferences("app", MODE_PRIVATE))
+        // First thing, for startup to be measured; the start itself comes from the system.
+        CoreTesting.setEnabled(settings.perfProfile)
+        CoreTesting.markAt("main_entered", startedUs)
+        CoreTesting.mark("settings_loaded")
+        stressDir = settings.stressLibrary?.takeIf(CoreTesting::isComplete)?.let(::File)
         val core = CoreLibrarySource(
             libraryDir,
             playlistArtDir,
             File(cacheDir, COVER_DRAFT_DIR),
-            getSharedPreferences("library", MODE_PRIVATE),
+            // A stress library's pictures and such aren't the real one's to remember.
+            getSharedPreferences(if (stressDir == null) "library" else "library-stress", MODE_PRIVATE),
             MainScope(),
         ) { getString(R.string.unknown_artist) }
         library = core
         playback = SessionPlayback(this, MainScope())
-        // settings.json, as the desktops have, with the app's own preferences in it as well.
-        settings = AppSettings(CoreSettings(filesDir.path), getSharedPreferences("app", MODE_PRIVATE))
         // sync.db holds this phone's keys, so it's in no-backup storage like the library: a
         // restored copy on another phone would pose as this one. A name the system's isn't
         // saved, so the phone follows the system's while it hasn't been renamed.
@@ -105,6 +124,8 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         core.binOffered = syncer::binOffered
         importer = Importer(this, core, MainScope())
         scrobbling = Scrobbling(libraryDir, File(noBackupFilesDir, "sync"), settings, MainScope())
+        testing = Testing(this, noBackupFilesDir, settings, MainScope())
+        CoreTesting.mark("app_created")
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 isVisible = true

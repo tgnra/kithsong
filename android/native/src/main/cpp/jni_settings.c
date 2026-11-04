@@ -57,6 +57,28 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSettings_nativeSetDeviceName(JNIE
   if (st != MC_OK) throw_status(env, st);
 }
 
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CoreSettings_nativeString(JNIEnv *env, jclass cls, jlong handle,
+                                                                       jstring key) {
+  (void)cls;
+  int ok = 1;
+  const char *ckey = jni_chars(env, key, &ok);
+  if (!ok) return NULL;
+  jstring out = new_string(env, mc_settings_string(settings_of(handle), ckey));
+  jni_release(env, key, ckey);
+  return out;
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSettings_nativeSetString(JNIEnv *env, jclass cls, jlong handle,
+                                                                       jstring key, jstring value) {
+  (void)cls;
+  int ok = 1;
+  const char *ckey = jni_chars(env, key, &ok), *cvalue = ok ? jni_chars(env, value, &ok) : NULL;
+  mc_status st = ok ? mc_settings_set_string(settings_of(handle), ckey, cvalue) : MC_ERR_NOMEM;
+  jni_release(env, key, ckey);
+  jni_release(env, value, cvalue);
+  if (st != MC_OK) throw_status(env, st);
+}
+
 JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreSettings_nativeBool(JNIEnv *env, jclass cls, jlong handle,
                                                                       jstring key, jboolean def) {
   (void)cls;
