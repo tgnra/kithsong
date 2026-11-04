@@ -640,7 +640,7 @@ static void run(void *arg) {
     }
     if (events && p->cb) {
       mc_mutex_unlock(&p->lock);
-      for (int e = MC_PLAYER_EVENT_STATE; e <= MC_PLAYER_EVENT_ENDED; e++)
+      for (int e = MC_PLAYER_EVENT_STATE; e <= MC_PLAYER_EVENT_QUEUE; e++)
         if (events & EV(e)) p->cb(p->user, (mc_player_event)e);
       mc_mutex_lock(&p->lock);
     }
@@ -799,6 +799,29 @@ mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count,
 mc_status mc_player_load_queue(mc_player *p, const char *const *paths, int count, int start,
                                const mc_play_origin *origin) {
   return set_queue(p, paths, count, start, 0, origin);
+}
+
+mc_status mc_player_play_radio(mc_player *p, const char *library_dir, const char *seed_path,
+                               const char *seed_uid) {
+  (void)p;
+  (void)library_dir;
+  (void)seed_path;
+  (void)seed_uid;
+  return MC_ERR_UNIMPLEMENTED;
+}
+
+mc_status mc_player_stop_radio(mc_player *p) {
+  return p ? MC_OK : MC_ERR_INVALID_ARG;
+}
+
+mc_status mc_player_queue_uid(mc_player *p, int index, char *out) {
+  if (!p || !out) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  mc_status st = index >= 0 && index < p->count ? MC_OK : MC_ERR_NOT_FOUND;
+  if (st == MC_OK && p->track_uids) memcpy(out, p->track_uids[index], MC_UID_STRLEN);
+  else if (st == MC_OK) out[0] = '\0';
+  mc_mutex_unlock(&p->lock);
+  return st;
 }
 
 mc_status mc_player_skip_to(mc_player *p, int index) {

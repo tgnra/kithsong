@@ -119,7 +119,7 @@ static void test_stays_near_the_seed(const char *scratch) {
   }
   mc_radio_pick picks[10];
   int n = 0;
-  mc_radio_options opts = {"a03", 10, 7, NOW_MS};
+  mc_radio_options opts = {"a03", 10, 7, NOW_MS, 0};
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
   CHECK(n == 10);
   CHECK_STR(picks[0].track_uid, "a03");
@@ -166,7 +166,7 @@ static void test_keeps_apart(const char *scratch) {
   }
   mc_radio_pick picks[10];
   int n = 0;
-  mc_radio_options opts = {"t0-0-0", 10, 3, NOW_MS};
+  mc_radio_options opts = {"t0-0-0", 10, 3, NOW_MS, 0};
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
   CHECK(n == 10);
   for (int i = 0; i < n; i++) {
@@ -179,7 +179,7 @@ static void test_keeps_apart(const char *scratch) {
 
   /* Ask for more than the rules can give: they give way, and tracks never repeat. */
   mc_radio_pick all[40];
-  mc_radio_options everything = {"t0-0-0", 40, 3, NOW_MS};
+  mc_radio_options everything = {"t0-0-0", 40, 3, NOW_MS, 0};
   CHECK(mc_radio_make(lib, &everything, all, &n) == MC_OK);
   CHECK(n == 30);
   for (int i = 0; i < n; i++)
@@ -206,7 +206,7 @@ static void test_leaves_out(const char *scratch) {
 
   mc_radio_pick picks[10];
   int n = 0;
-  mc_radio_options opts = {"seed", 10, 1, NOW_MS};
+  mc_radio_options opts = {"seed", 10, 1, NOW_MS, 0};
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
   CHECK(n == 2);
   CHECK(has(picks, n, "seed"));
@@ -220,7 +220,7 @@ static void test_leaves_out(const char *scratch) {
 
   mc_library *empty = open_library(scratch, "test_radio_empty.d");
   if (!empty) return;
-  mc_radio_options none = {NULL, 10, 1, NOW_MS};
+  mc_radio_options none = {NULL, 10, 1, NOW_MS, 0};
   CHECK(mc_radio_make(empty, &none, picks, &n) == MC_ERR_NOT_FOUND);
   none.count = 0;
   CHECK(mc_radio_make(empty, &none, picks, &n) == MC_ERR_INVALID_ARG);
@@ -242,7 +242,7 @@ static void test_plays_down_what_played_lately(const char *scratch) {
   }
   mc_radio_pick picks[2];
   int n = 0, nearest = 0, runs = 40;
-  mc_radio_options opts = {"seed", 2, 0, NOW_MS};
+  mc_radio_options opts = {"seed", 2, 0, NOW_MS, 0};
   for (uint32_t r = 1; r <= (uint32_t)runs; r++) {
     opts.random = r;
     CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);

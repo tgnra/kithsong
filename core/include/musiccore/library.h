@@ -204,6 +204,8 @@ typedef struct mc_track_list {
 mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out);
 /* A playlist's tracks in playlist order. A track that's in it twice is listed twice. */
 mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out);
+/* One track, as a list of one. MC_ERR_NOT_FOUND if there's no such track. */
+mc_status mc_library_get_track(mc_library *lib, const char *track_uid, mc_track_list **out);
 void mc_track_list_free(mc_track_list *list);
 
 /* Flags for listing playlists, album groups, smart lists and recents.

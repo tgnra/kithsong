@@ -2,11 +2,12 @@
  * for judging mixes by ear before there's a radio to play them.
  *
  *   manual_radio <library folder> [--seed <text>] [--count <n>] [--name <playlist name>]
- *                [--random <n>] [--scan] [--dry-run] [--migrate]
+ *                [--random <n>] [--max-length <minutes>] [--scan] [--dry-run] [--migrate]
  *
  * --seed searches the library and starts from the best track found; without it the seed is
- * drawn at random. --scan analyses what has no result yet first, whatever the power, which
- * takes a while on a big library. --dry-run prints the mix and saves nothing.
+ * drawn at random. --max-length leaves out longer tracks, a seed too: 8 minutes unless it says,
+ * and a negative number for no limit. --scan analyses what has no result yet first, whatever
+ * the power, which takes a while on a big library. --dry-run prints the mix and saves nothing.
  *
  * A library of an older schema is refused without --migrate: migrating it is one way, and an
  * installed app older than this build then won't open it. Use a copy unless you mean to.
@@ -107,7 +108,7 @@ static mc_status save(mc_library *lib, const char *name, const mc_radio_pick *pi
 static int usage(const char *self) {
   fprintf(stderr,
           "usage: %s <library folder> [--seed <text>] [--count <n>] [--name <playlist name>]\n"
-          "       [--random <n>] [--scan] [--dry-run] [--migrate]\n",
+          "       [--random <n>] [--max-length <minutes>] [--scan] [--dry-run] [--migrate]\n",
           self);
   return 2;
 }
@@ -117,13 +118,19 @@ int main(int argc, char **argv) {
   const char *dir = argv[1], *seed = NULL, *name = "Radio mix";
   int count = DEFAULT_COUNT, do_scan = 0, dry_run = 0, migrate = 0;
   uint32_t random = (uint32_t)mc_wall_ms();
+  int64_t max_track_ms = 0;
   for (int i = 2; i < argc; i++) {
     int more = i + 1 < argc;
     if (!strcmp(argv[i], "--seed") && more) seed = argv[++i];
     else if (!strcmp(argv[i], "--count") && more) count = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--name") && more) name = argv[++i];
     else if (!strcmp(argv[i], "--random") && more) random = (uint32_t)strtoul(argv[++i], NULL, 10);
-    else if (!strcmp(argv[i], "--scan")) do_scan = 1;
+    else if (!strcmp(argv[i], "--max-length") && more) {
+      char *end;
+      double minutes = strtod(argv[++i], &end);
+      if (end == argv[i] || *end) return usage(argv[0]);
+      max_track_ms = (int64_t)(minutes * 60000.0);
+    } else if (!strcmp(argv[i], "--scan")) do_scan = 1;
     else if (!strcmp(argv[i], "--dry-run")) dry_run = 1;
     else if (!strcmp(argv[i], "--migrate")) migrate = 1;
     else return usage(argv[0]);
@@ -161,7 +168,7 @@ int main(int argc, char **argv) {
   }
 
   mc_radio_pick *picks = malloc((size_t)count * sizeof *picks);
-  mc_radio_options opts = {NULL, count, random, 0};
+  mc_radio_options opts = {NULL, count, random, 0, max_track_ms};
   int n = 0;
   if (!picks)
     st = MC_ERR_NOMEM;

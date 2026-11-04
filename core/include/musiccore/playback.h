@@ -21,6 +21,10 @@
  * it on (mc_player_take_ended()), so an app that dies without closing loses the play under
  * way, and only that one.
  *
+ * A radio play (mc_player_play_radio()) is a queue that grows: a thread of the player's keeps a
+ * few tracks queued ahead from a station (musiccore/radio.h), so neither the audio nor a
+ * frontend ever waits on it.
+ *
  * Unlike most handles, a player may be used from any thread.
  */
 #ifndef MUSICCORE_PLAYBACK_H
@@ -45,7 +49,8 @@ typedef enum mc_player_event {
   MC_PLAYER_EVENT_TRACK, /* another queue item started, or the queue was replaced */
   MC_PLAYER_EVENT_ERROR, /* an item couldn't be played and was skipped, or there's no audio device */
   MC_PLAYER_EVENT_PLAYED, /* a play counts: take it with mc_player_take_played() */
-  MC_PLAYER_EVENT_ENDED   /* a play ended, counted or not: take it with mc_player_take_ended() */
+  MC_PLAYER_EVENT_ENDED,  /* a play ended, counted or not: take it with mc_player_take_ended() */
+  MC_PLAYER_EVENT_QUEUE   /* a station added to the queue, or stopped: see mc_player_play_radio() */
 } mc_player_event;
 
 /* Called on the player's thread, never from inside a player call, so it may call the player
@@ -78,6 +83,31 @@ mc_status mc_player_set_queue(mc_player *player, const char *const *paths, int c
  * can show what will play before it does, e.g. a shuffled queue's first item. */
 mc_status mc_player_load_queue(mc_player *player, const char *const *paths, int count, int start,
                                const mc_play_origin *origin);
+/* Plays a station from a track: the queue becomes that track alone, which starts at once, and
+ * a station from it then keeps a few tracks queued ahead for as long as this queue stays, paused
+ * or stopped too. Anything that replaces the queue ends it, as does mc_player_stop_radio(), or a
+ * run of items that won't open: a folder that's gone, say. Plays are logged as
+ * MC_PLAY_CONTEXT_RADIO with the seed as context_uid.
+ *
+ * library_dir is mc_library_dir(). The player reads it on its own thread with a connection of
+ * its own, once, so this returns at once and needs no handle kept open. Check the seed first
+ * with mc_radio_seed_check(): one that can't be used here plays by itself with nothing after
+ * it. seed_path is its file (mc_track_info.path).
+ *
+ * The queue grows by itself, so a frontend that keeps something per item looks up the new ones
+ * on each MC_PLAYER_EVENT_QUEUE, from its count to mc_player_status.count, with
+ * mc_player_queue_uid(). Items are only ever added at the end, and indexes stay good. Next from
+ * the last item, as the station has yet to catch up, plays what it adds. A station's queue plays
+ * in the station's order whatever shuffle says; shuffle applies again to the next queue. */
+mc_status mc_player_play_radio(mc_player *player, const char *library_dir, const char *seed_path,
+                               const char *seed_uid);
+/* Stops adding to the queue, which plays out what it has. For when the library closes, as the
+ * station's tracks are that library's. */
+mc_status mc_player_stop_radio(mc_player *player);
+/* Queue item index's track uid, into out, room for MC_UID_STRLEN; "" for one that isn't logged.
+ * MC_ERR_NOT_FOUND if there's no such item. */
+mc_status mc_player_queue_uid(mc_player *player, int index, char *out);
+
 /* Plays queue item index from its start. Shuffled, the rest are shuffled afresh after it. */
 mc_status mc_player_skip_to(mc_player *player, int index);
 /* The next item. After the last one, stops with the first item current, as when the queue
@@ -125,6 +155,7 @@ typedef struct mc_player_status {
   int index;           /* current queue item, -1 if the queue is empty */
   int count;           /* items in the queue */
   int shuffle;         /* see mc_player_set_shuffle(); there's always a next item then */
+  int radio;           /* a station is adding to the queue; there's always a next item then too */
   int64_t position_ms; /* in the current item, as heard */
   int64_t duration_ms; /* of the current item, 0 if unknown (or not open yet) */
   int volume;          /* see mc_player_set_volume() */
