@@ -4,22 +4,30 @@ order: 1
 description: Where to get Kithsong for Windows, Linux and Android.
 ---
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt
-ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation
-ullamco laboris nisi ut aliquip ex ea commodo consequat.
+## Windows
 
-## Lorem ipsum
+Windows 10 version **1903** or newer is required to run this application.
 
-Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat
-nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia
-deserunt mollit anim id est laborum.
+The recommended way to install Kithsong on Windows is using the [Microsoft Store](https://isitchristmas.com). This will give you automatic updates and the firewall is configured automatically. If you don't want to use the Microsoft Store app, you can install with Winget using the following command:
 
-- **Lorem ipsum.** Dolor sit amet, consectetur adipiscing elit.
-- **Sed do eiusmod.** Tempor incididunt ut labore et dolore magna aliqua.
-- **Ut enim.** Ad minim veniam, quis nostrud exercitation ullamco.
+```powershell
+winget install TODO --source msstore
+```
 
-## Dolor sit amet
+Alternatively, there are portable zips with a .exe built for each release, available [here on Github]()
 
-Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque
-laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi
-architecto beatae vitae dicta sunt explicabo.
+## Linux
+
+The recommended way to install Kithsong is using a Flatpak. See installation instructions for Flatpak for your distro [at Flathub's website](https://flathub.org/en/setup)
+
+Open the [Flathub store page]() and click download or run this command:
+
+```bash
+flatpak install ng.kithso.app
+```
+
+Alternatively, there is a tarball built for each release, available [here on Github]()
+
+## Android
+
+TODO

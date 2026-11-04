@@ -3,332 +3,84 @@
 > **kith** (n.): your own people and home ground; friends, neighbours, the familiar
 > place you belong. From Old English *cȳþþ*, "native land, kinsfolk", the *kith* of
 > "kith and kin".
->
-> **Kithsong**: the songs of your own people and place. Your music, kept at home
-> among your own devices.
 
-A music library manager and player for Windows, Linux and Android. It autotags your
-collection against MusicBrainz and keeps every device in sync over the local network,
-with no server and no cloud.
+Kithsong is a local-only music library that syncs content over the local network. It can auto-tag imported music from MusicBrainz and scrobble to Last.fm. The Windows version is Win32 with `w64devkit`. The Linux version is a Flatpak that uses GTK4 and `libadwaita`. The Android and WearOS versions use Jetpack Compose. There are no versions for Apple platforms. If you'd like this, open an issue or contact me!
 
-Priorities:
+## Screenshots
 
-- **Fast.** Quick launch, quick sync, and a UI that stays responsive with a large library.
-- **Self-contained.** Codecs, TLS and the tag library are built into the app, so it relies
-  on the OS as little as possible.
-- **One brain.** A shared C core holds all the logic, so every platform behaves the same.
-
-> **Status:** in development. Windows, Linux and Android import, autotag, browse, play and
-> sync a library, including playlists, album groups, smart lists, search, scrobbling and
-> merging two libraries when pairing. Windows is the most complete and tested; the Linux
-> frontend has had the least testing, and Wear OS is deliberately small: albums, playlists
-> and album groups, a player, and sync with its profile chosen on the other devices. What's
-> left, and which platform has what, is in
-> [TODO.md](TODO.md); the core's modules are in [docs/architecture.md](docs/architecture.md).
-
-## Platforms
-
-| Platform | UI | Toolchain |
-|----------|----|-----------|
-| Windows  | Win32 | [w64devkit](https://github.com/skeeto/w64devkit) (gcc), CMake, Ninja |
-| Linux    | GTK4 + libadwaita | gcc/clang, CMake, Ninja |
-| Android  | Jetpack Compose | Android Studio / Gradle, NDK |
-| Wear OS  | Compose for Wear OS | Android Studio / Gradle, NDK |
+TODO
 
 ## Features
 
-### Library and autotagging
+### Library
 
-- **One library folder.** You choose it on first run: the suggestion on Windows and
-  Linux is `Kithsong Library` in your Music folder, and a folder you pick that already has
-  other things in it gets a `Kithsong Library` folder inside it. It
-  holds everything: the music, organised as `Artist/Album (Year)/01 Title.flac`, a
-  `cover.jpg` per album, and the database as `library.db`. The app's own settings, i.e. where
-  that folder is, live in `%LOCALAPPDATA%\kithsong` (`~/.config/kithsong` on Linux), with this
-  device's pairing (`sync.db`) and what Restore can bring back. On Windows and Linux, Settings'
-  **Reset Kithsong…** clears that folder after asking: the app closes, and starts next time as
-  on a first run. The library folder isn't touched.
-- **Import**: drop folders or `.zip` files (a Bandcamp download, say) on the window; on
-  Android, pick a folder or files with the system picker, or share or open a zip with the app.
-  Files are copied into the library; your originals are never modified. Everything is scanned and matched against MusicBrainz in one go.
-  Confident matches are imported straight away, with their own cover art (a `cover.jpg`
-  next to the files, or a picture embedded in them), or one from the Cover Art Archive or
-  iTunes where theirs is missing or under 500 px. Anything below the confidence threshold is listed for you to review: pick a
-  match, search again, keep the existing tags or skip.
-- **Singles** are tagged and filed as the release they're from, like any album track, but an
-  album with one track in the library isn't shown with the albums: it's listed under the
-  artist, with their tracks that have no album.
-- The tagger is our own C code, not beets. That means no bundled Python, the same importer
-  on every platform including Android, and tagging rules we control. See
-  [docs/tagging-rules.md](docs/tagging-rules.md).
-- The library is a single SQLite database with our own schema. Every artist, album, track
-  and playlist has a stable id that is the same on all devices. See
-  [docs/schema.md](docs/schema.md).
+- Single library folder holding organised music, album art, and the database
+- Import from folder, or from a zip file (downloads from Bandcamp!) and it'll be searched on MusicBrainz and cleaned up
+- Originals are copied into the library folder
+- Matches Kithsong is confident in are imported straight away, others may require user confirmation or editing
+- Automatically searches for cover art if missing or low-quality (under 500px)
+- Hides single track releases from the library and instead shows them under the artist, for a clean albums view
 
-### Playlists
+### Organisation
 
-- One shared playlist structure, keyed by the stable track ids, so playlists survive sync
-  and re-imports.
-- **Smart playlists and smart album groups** pick their tracks or albums by a rule, e.g. "jazz
-  I haven't played in six months, least played first, 10 tracks", worked out afresh each time
-  from play counts and this device's files. The rule syncs whole. On every platform but Wear OS
-  they're made and edited with a rule editor, where each group of conditions opens as a page of
-  its own, with a live preview (on Windows right-click the Playlists or Album groups page; on
-  Linux the arrow beside the page's +; on Android the + on the Playlists and Album groups
-  headings, and Edit rules… on a smart list's menu).
+- Playlists - stored in the database
+- Album Groups - these are playlists of albums
+- Smart Playlists and Smart Album Groups - the above, but generated from rules - these can be nested and quite complex, or very simple.
+  - Live preview for smart playlists as you edit
+- Search - fuzzy and instant
+- Recents, play counts. Synced across devices
 
-### LAN sync
+### Sync
 
-- **Discovery:** each instance announces itself over mDNS. A background thread scans
-  periodically and shows new devices for pairing.
-- **Pairing:** a short code links two devices once. If both already have music, the smaller
-  library is merged into the larger one, once you agree on the device whose library is merged
-  (it keeps a backup copy of its old library). No music moves until you've chosen what the
-  joining device holds and pressed **Sync now**; closing the app or leaving the group before
-  then undoes the pairing, and the joining device is back as it was. After that they reconnect
-  and sync automatically whenever both are online (on Android, while the app is on screen: a
-  phone doesn't sync in the background, though a sync it was in the middle of finishes).
-- **Quiet when there's nothing to show:** checking whether a device is there shows nothing; a
-  spinner appears once it answers and syncing starts, or straight away when you press
-  **Sync now**, and only syncs you asked for or that got going report failing.
-- **Speed and time left:** while files move, a sync shows its speed in MB/s and about how long
-  is left, worked out in the core so every device shows the same, and calm: no ticking seconds,
-  and nothing at all rather than a guess.
-- **Archives:** the device whose music the group started from is its *archive*: it keeps the
-  originals of everything. A device that joins a group says so once, naming the archive.
-- **No server:** any device can sync with any other. Edits are merged field by field using
-  hybrid logical clocks, and playlist order merges cleanly even when it was changed on two
-  devices.
-- **Remove from one device:** an album's or artist's menu has "Remove from this PC" (this
-  computer, this phone). Unlike "Delete from library" (on albums and tracks; an artist can't
-  be deleted), it takes the music off that device only, at once, and it stays in the library and on your other devices; "Sync to this PC"
-  on the same menu brings it back. It's offered on devices that sync part of the library,
-  not on an archive or outside a group.
-- **Lossy copies:** a device can ask for a lossy format instead of the originals, e.g. a
-  phone requesting Opus rather than FLAC. The sender transcodes and caches the
-  copies, and the copies are never mistaken for originals. A copy is only ever made from
-  the original, never from another copy: a track only a copy at another bitrate can be had
-  of waits until a device holding the original is reachable.
-- **Room on small devices:** a device that joins with less free space than the music it would
-  hold as originals gives itself a storage budget before anyone confirms its profile, so a
-  watch fills with what fits (Opus at the highest bitrate that does) instead of running out
-  of space. Once a profile has been confirmed, the budget is whatever its user chose.
-- **Waiting for a device:** when some of the music a device should hold can only come from
-  devices it can't reach, the top of the library says so, calmly: "12 tracks are waiting for
-  Tania's desktop to come online." It goes by itself once they arrive.
+- mDNS device discovery. Pair with a 6 digit code
+- No server required - libraries are merged field-by-field
+- One device in your group is an "Archive" - it keeps the originals of your entire library so it's all in one place
+- Sync lossy copies to save storage - Opus
+  - Set a storage budget and Kithsong works out the best option automatically
+  - Set automatically if there is low free space
 
-Details: [docs/sync-protocol.md](docs/sync-protocol.md).
+### Scrobbling
 
-## UI
+- Scrobble to Last.fm
+  - Or libre.fm or a custom API destination
+- Records play counts in the database too for use in Smart Playlists
 
-**Desktop**
+### Devices
 
-- A header bar with playback controls on the left, and **Import** and **Settings** on the
-  right.
-- A left sidebar with **Albums**, **Artists**, **Playlists** and **Album groups**, a **Recents**
-  section of the ten albums and playlists last played and artists and album groups last
-  opened on any device, and a **Devices** section listing sync
-  devices: online ones, and paired ones that are currently unreachable. It scrolls when it's
-  taller than the window.
-- The rest of the window is an album grid. Clicking an album opens its track list in a pane
-  on the right. The Playlists and Album groups pages have a **+** in their header to make a
-  new, empty one.
-- An empty library suggests importing or, while the computer isn't paired yet, pairing it
-  with another device to sync that device's music.
+- On desktop - Windows and Linux, each with native UI (GTK on Linux, sorry KDE fans, I like GNOME! Open an issue if the app needs a change on KDE)
+- Android - modern Compose app, keeps the library in app storage for simplicity
+- WearOS - simple smartwatch client - sync playlists to it for when you go running
 
-**Keyboard shortcuts** (Windows and Linux)
-
-| Keys | Does |
-| --- | --- |
-| Space | Play or pause |
-| Ctrl+Right / Ctrl+Left | Next / previous track |
-| Shift+Right / Shift+Left | Forward / back 5 seconds |
-| Ctrl+Up / Ctrl+Down, or + / - | Volume up / down |
-| Ctrl+M | Mute or unmute |
-| Ctrl+S | Shuffle on or off |
-| Ctrl+F (on Windows also Ctrl+E or F3) | Search; on Linux, typing anywhere but a text box searches for it too |
-| Ctrl+1, 2, 3, 4 | Albums, Artists, Playlists, Album groups |
-| Ctrl+, | Settings |
-| Ctrl+O | Import: choose folders to import |
-| Ctrl+N | New playlist |
-| Alt+Left or Backspace | Back, from an artist's page or an album group |
-| F1 | About Kithsong |
-| Esc | Close the track list |
-| Enter | Play the selected track |
-| Delete | Remove the selected track from the playlist; on the Playlists page, delete the selected playlist |
-| Alt+Up / Alt+Down | Move the selected track up / down the playlist |
-| F2 | Rename the playlist (in the track list, or the one selected on the Playlists page) |
-| Menu key or Shift+F10 | The selected track's menu (with none selected, the playlist's) |
-
-On Linux, Ctrl+? lists the shortcuts, and Ctrl+W or Ctrl+Q closes the window, which quits:
-playback stops with it, as nothing keeps playing in the background; on the Playlists page
-Delete and F2 work on smart playlists too. On Windows Alt+F4 quits
-(there's no Ctrl+Q or Ctrl+W, as is usual there), and on the Playlists and Album groups
-pages Delete and F2 work on smart playlists and album groups too. The playback buttons' and
-other buttons' tooltips show their shortcuts.
-
-In a text box (e.g. search) the arrow keys, + and - keep their usual meaning. The volume is
-the app's own and is remembered. The speaker at the right of the header bar drops down a
-slider for it, beside a mute button; from the keyboard, the level shows briefly in place of
-the track's name.
-
-**Android**
-
-- A Compose app that follows the system light/dark theme, with colours taken from the album
-  art on screen.
-- One scrolling main screen: a header with **Import**, **Search**, **Sync** and **Settings**, then
-  **Recents**, **Playlists**, **Album groups**, an album grid and **Artists**. Tapping or
-  holding a section's heading jumps to another section, and tapping an item opens its track
-  list over the main screen; screens slide away with a swipe or the back gesture. Pulling the
-  list down from its top opens search too.
-- A mini player above the navigation bar opens the full player; swiping either one left or
-  right skips a track. Playback runs in the background, with Android's media controls and
-  notification.
-- Back goes up a page at a time, the full player first. On the main screen it goes to the
-  home screen while music plays, and otherwise quits.
-- Holding an album, artist, playlist or album group opens its menu (Play, Shuffle, Add to
-  playlist, Remove from this phone, Delete from library and so on), as do the menu buttons on
-  an album's page and the player; holding a track in search results offers its album and
-  each of its artists; a playlist's tracks and an album group's albums reorder by
-  dragging their handles.
-- **Sync** lists this phone and the other devices, pairs new ones, and opens each device's
-  page to choose what it syncs. The phone syncs only while the app is on screen; a sync or
-  pairing under way when it leaves the screen finishes, under a notification, but nothing new
-  starts in the background. **Settings** has scrobbling, storage, and the open source
-  licences.
-- An empty library suggests importing or, until the phone is paired, pairing it with a
-  computer; once it's in a group, choosing what to sync to it.
-
-**Wear OS**
-
-- A small app on purpose: a menu of **Now playing** (while something is queued), **Albums**,
-  **Playlists**, **Album groups**, **Sync** and **Settings** (the open source licences). Every
-  list shows only what has files on the watch. A long press on a track adds it to an existing
-  playlist, and on an album to an existing album group; the watch creates neither. The player
-  plays in the background through a media session the watch's media controls drive, shows
-  progress and seeks with the crown, counts plays and scrobbles them, and asks for Bluetooth
-  headphones before playing (or plays on the watch's speaker).
-- **Sync** shows the pairing code when a computer or phone adds the watch, then the group,
-  what's on the watch of what its sync settings want, and whether it's paused until Sync is
-  pressed for it on another device: the watch has no profile editor and no Sync button of its
-  own. It syncs while the app is on screen (a transfer finishes in the background), and about
-  once an hour while charging on Wi-Fi.
-
-## Architecture
-
-All behaviour lives in `libmusiccore`, a C11 library. The frontends stay thin and only
-render state and forward user actions.
-
-```
-core/            libmusiccore: library, tagger, playback, sync, discovery, transcode
-  include/       public API (musiccore/*.h)
-  src/           implementation, one directory per module
-  tests/         CTest unit tests
-desktop/windows  Win32 frontend
-desktop/linux    GTK4 + libadwaita frontend
-android/         Gradle project
-  native/        core built with the NDK + JNI bridge, shared by both apps
-  playback/      the core's player as a Media3 Player, shared by both apps
-  app/           phone app (Compose)
-  wear/          Wear OS app (Compose for Wear OS)
-third_party/     CMake glue for dependencies; all are fetched at configure time, none committed
-docs/            design notes
-```
-
-Dependencies and their licenses: [LICENSES.md](LICENSES.md).
-
-## Building
-
-The first configure downloads TagLib, curl and Mbed TLS (pinned by SHA-256) into `build/_deps`.
-
-Optional CMake settings:
-
-- `-DKITHSONG_CONTACT=<url or email>`: sent in the MusicBrainz User-Agent. MusicBrainz
-  asks every client to include one.
-- `-DKITHSONG_LASTFM_KEY=<key>` and `-DKITHSONG_LASTFM_SECRET=<secret>`: a Last.fm API
-  account (from https://www.last.fm/api/account/create), for scrobbling to Last.fm. Keep
-  them out of git too. Or set the environment variables of the same names, or paste the
-  account page into `last.fm.api` at the top of the repo (gitignored). Without them the
-  app builds fine and Settings says it can't scrobble.
-
-How to get each of these, where to put them on every platform and how to test them:
-[docs/api-keys.md](docs/api-keys.md).
-
+## Quick start
 
 ### Windows
 
-Install CMake, Ninja and w64devkit, and put w64devkit's `bin` on `PATH`, or set the
-`W64DEVKIT` environment variable to its root folder.
+Windows 10 version **1903** or newer is required to run this application.
 
-From VS Code:
+The recommended way to install Kithsong on Windows is using the [Microsoft Store](https://isitchristmas.com). This will give you automatic updates and the firewall is configured automatically. If you don't want to use the Microsoft Store app, you can install with Winget using the following command:
 
-| | |
-|---|---|
-| `Ctrl+Shift+B` | build (`windows: build`) |
-| `Tasks: Run Task` → `windows: run` | build and launch |
-| `Tasks: Run Task` → `windows: test` | run unit tests |
-| `F5` | build and debug with gdb |
-
-From a terminal:
-
-```sh
-cmake --preset windows-w64devkit
-cmake --build --preset windows-w64devkit
-ctest --preset windows-w64devkit
-build/windows-w64devkit/desktop/windows/kithsong.exe
+```powershell
+winget install TODO --source msstore
 ```
+
+Alternatively, there are portable zips with a .exe built for each release, available [here on Github]()
 
 ### Linux
 
-Needs GTK ≥ 4.12 and libadwaita ≥ 1.4 development packages, e.g.
-`sudo apt install libgtk-4-dev libadwaita-1-dev ninja-build cmake`.
+The recommended way to install Kithsong is using a Flatpak. See installation instructions for Flatpak for your distro [at Flathub's website](https://flathub.org/en/setup)
 
-```sh
-cmake --preset linux-gtk
-cmake --build --preset linux-gtk
-ctest --preset linux-gtk
-build/linux-gtk/desktop/linux/kithsong
+Open the [Flathub store page]() and click download or run this command:
+
+```bash
+flatpak install ng.kithso.app
 ```
 
-With Nix (flakes enabled), `flake.nix` provides a dev shell with CMake, Ninja, GTK4,
-libadwaita and gdb. It also sets up what an installed app would get from its wrapper: the
-audio libraries miniaudio loads at runtime (ALSA, PulseAudio, PipeWire), GSettings schemas
-and icons. Run the commands above through it, or enter it with `nix develop`:
-
-```sh
-nix develop -c cmake --preset linux-gtk
-nix develop -c cmake --build --preset linux-gtk
-nix develop -c ctest --preset linux-gtk
-nix develop -c build/linux-gtk/desktop/linux/kithsong
-```
-
-The VS Code tasks (`linux: build`, `linux: run`, `linux: test`) and the
-`Kithsong (Linux, gdb)` debug configuration run inside the dev shell. `Ctrl+Shift+B` runs
-the Windows build, so on Linux start `linux: build` from `Tasks: Run Task`.
+Alternatively, there is a tarball built for each release, available [here on Github]()
 
 ### Android
 
-Open `android/` in Android Studio, or build with the Gradle wrapper through
-`android/scripts/android.sh`, which takes `JAVA_HOME` (and, on NixOS, the emulator's
-libraries) from Android Studio when it is not already set:
+TODO
 
-```sh
-android/scripts/android.sh gradle :app:assembleDebug    # phone
-android/scripts/android.sh gradle :wear:assembleDebug   # watch
-```
+## Contributing
 
-The NDK build compiles the core from the repo root. It needs CMake ≥ 3.28 from the SDK
-manager (`sdkmanager "cmake;3.30.5"`), or unzip
-https://dl.google.com/android/repository/cmake-3.30.5-linux.zip into
-`$ANDROID_HOME/cmake/3.30.5`. The watch app also ships `armeabi-v7a`, because many Wear OS
-watches run a 32-bit userspace.
-
-To run the watch app, create a Wear OS emulator named `Wear_OS_Small_Round` in Android
-Studio's Device Manager and run the `wear: run` task in VS Code. It boots the emulator unless
-it is already running, then installs and starts the debug build.
-
-### Release builds
-
-`scripts/release-*` build the packages: a portable zip on Windows, a Flatpak bundle on
-Linux, and signed APKs and AABs for Android and Wear OS. Pushing a `v<version>` tag runs them
-on GitHub Actions and creates a draft release. See [docs/RELEASING.md](docs/RELEASING.md).
+TODO

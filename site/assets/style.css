@@ -128,14 +128,15 @@ th, td { border-bottom: 1px solid var(--rule); padding: 0.5rem; text-align: left
   letter-spacing: -0.025em; line-height: 1; margin: 0;
 }
 .logo-img { display: block; width: min(100%, 32rem); height: auto; margin-inline: auto; }
-/* A logo with a dark version: the one that matches the theme, as the colours above choose. */
-.logo-dark { display: none; }
+/* A logo or image with light and dark versions: the one that matches the theme, as the
+   colours above choose. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .logo-light { display: none; }
-  :root:not([data-theme="light"]) .logo-dark { display: block; }
+  :root:not([data-theme="light"]) .theme-light { display: none; }
 }
-:root[data-theme="dark"] .logo-light { display: none; }
-:root[data-theme="dark"] .logo-dark { display: block; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .theme-dark { display: none; }
+}
+:root[data-theme="dark"] .theme-light, :root[data-theme="light"] .theme-dark { display: none; }
 .tagline {
   max-width: 34rem; margin: 1.25rem auto 2.25rem; color: var(--muted);
   font-size: clamp(1.125rem, 1rem + 0.6vw, 1.375rem); text-wrap: balance;

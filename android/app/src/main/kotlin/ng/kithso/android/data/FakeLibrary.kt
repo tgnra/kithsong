@@ -132,7 +132,7 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
                     ALBUM_WORDS[(i * 7 + i / ALBUM_WORDS.size + 3) % ALBUM_WORDS.size].lowercase()
                 val uid = "album-$i"
                 Album(uid, title, ARTISTS[i % ARTISTS.size], 1994 + (i * 7) % 31, ArtRef(uid, title))
-            }.sortedWith(compareBy<Album>({ it.artist }, { it.year }, { it.title })) // as the core has them
+            }.sortedBy { it.title } // as the real library has them
             val artists = ARTISTS.mapIndexed { i, name ->
                 val uid = "artist-$i"
                 Artist(uid, name, albums.count { it.artist == name }, ArtRef(uid, name))

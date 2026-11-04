@@ -145,6 +145,34 @@ class SiteTest(unittest.TestCase):
         with self.assertRaisesRegex(BuildError, "alt text"):
             self.build()
 
+    def themed_pair(self):
+        Image.new("RGB", (300, 200), (240, 240, 240)).save(self.root / "content/images/shot-light.png")
+        Image.new("RGB", (300, 200), (20, 20, 20)).save(self.root / "content/images/shot-dark.png")
+
+    def test_light_and_dark_pair_follows_the_theme(self):
+        self.themed_pair()
+        for name in ("shot-light", "shot-dark"):  # naming either half finds the other
+            self.write("content/home.md", f'## Section\n\n![A shot](images/{name}.png "Caption")\n')
+            self.build()
+            html = self.read("index.html")
+            self.assertEqual(html.count('class="img-themed"'), 1)
+            light = html.index('<span class="theme-light">')
+            dark = html.index('<span class="theme-dark">')
+            self.assertLess(light, dark)
+            self.assertEqual(html.count('class="zoom"'), 2)
+            self.assertEqual(html.count("<figcaption>Caption</figcaption>"), 1)
+            # Each half is its own image.
+            urls = re.findall(r'data-webp="([^"]+)"', html)
+            self.assertEqual(len(set(urls)), 2)
+
+    def test_half_of_a_pair_is_a_plain_image_with_a_warning(self):
+        Image.new("RGB", (300, 200)).save(self.root / "content/images/sky-dark.png")
+        self.write("content/home.md", "## Section\n\n![Sky](images/sky-dark.png)\n")
+        warnings = build(self.root, log=lambda msg: None)
+        self.assertNotIn("img-themed", self.read("index.html"))
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("sky-light.png", warnings[0])
+
     def test_docs_need_an_index(self):
         (self.root / "docs/index.md").unlink()
         with self.assertRaisesRegex(ValueError, "index.md"):

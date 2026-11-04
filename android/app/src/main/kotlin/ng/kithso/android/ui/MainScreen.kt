@@ -190,7 +190,7 @@ private const val ALBUMS_MIN_SHARE = 0.6f
 /**
  * The fast scroll strip's entries for [items]: each section's heading, then the letters of an
  * alphabetical section long enough for them (playlists and album groups by name, albums by
- * artist, artists by sort name, as the library orders them). Recents aren't alphabetical.
+ * title, artists by sort name, as the library orders them). Recents aren't alphabetical.
  */
 private fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, String>, other: String): List<FastScrollEntry> =
     buildList {
@@ -214,7 +214,7 @@ private fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, String
                     is MainItem.PlaylistItem -> { at += j; keys += item.playlist.name }
                     is MainItem.AlbumGroupItem -> { at += j; keys += item.group.name }
                     is MainItem.ArtistItem -> { at += j; keys += item.artist.sortName }
-                    is MainItem.AlbumRow -> item.albums.forEach { at += j; keys += it.sortKey }
+                    is MainItem.AlbumRow -> item.albums.forEach { at += j; keys += it.title }
                     else -> {}
                 }
             }

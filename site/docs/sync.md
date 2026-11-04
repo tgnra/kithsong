@@ -4,22 +4,14 @@ order: 3
 description: How Kithsong devices find each other, pair and sync over your local network.
 ---
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt
-ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation
-ullamco laboris nisi ut aliquip ex ea commodo consequat.
+## How to sync
 
-## Lorem ipsum
+Other Kithsong instances on the local network will appear in the left panel on desktop and in the Sync menu on Android. They're discovered through mDNS discovery so a firewall may block this. If so, you can add a device manually with the `+` button.
 
-Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat
-nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia
-deserunt mollit anim id est laborum.
+Adding a device initiates a pairing request and the other device will display a six digit code that needs to be entered on the pairing device. Once paired, choose what you want to sync and press Sync.
 
-- **Lorem ipsum.** Dolor sit amet, consectetur adipiscing elit.
-- **Sed do eiusmod.** Tempor incididunt ut labore et dolore magna aliqua.
-- **Ut enim.** Ad minim veniam, quis nostrud exercitation ullamco.
+You can selectively sync Albums, Playlists, Artists, and Album Groups. You can also select an Opus preset to sync lossy files at a lower quality to your device to save space, or choose a storage budget and the Opus preset will be set automatically (or original files if they'll fit).
 
-## Dolor sit amet
+## How sync works
 
-Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque
-laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi
-architecto beatae vitae dicta sunt explicabo.
+Kithsong apps will periodically ping each other and sync once an hour if they're left open. Android will only do this in the foreground, but sync jobs will continue in the background if started. Sync jobs can be started manually using the button in the Sync window.

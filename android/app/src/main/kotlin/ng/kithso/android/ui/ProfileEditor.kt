@@ -533,7 +533,7 @@ private fun ProfileItemsDialog(
                         list.isEmpty() -> Note(stringResource(kind.emptyText))
                         else -> {
                             val listState = rememberLazyListState()
-                            // Each list is in the core's order: albums by artist, the rest by name.
+                            // Each list is in the library's order: albums by title, the rest by name.
                             val other = stringResource(R.string.fast_scroll_other)
                             val scrollEntries = remember(list, other) {
                                 buildList<FastScrollEntry> { letterEntries(this, list.map { it.sortKey }, other) { it } }

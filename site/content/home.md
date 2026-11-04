@@ -5,26 +5,26 @@ tagline: A local-only music player that keeps your library perfectly organised a
 description: Kithsong is a music library manager and player for Windows, Linux and Android. It tags your music against MusicBrainz and syncs your devices over your local network.
 ---
 
-## Your whole library in one place
+## Organised Library
 
-![Kithsong's playlists on Linux, with cover art made from each playlist's albums](images/library.png)
+![The Linux version of the application showing an example library](images/kithsong-linux-light.png)
 
-Your library is organised into one library folder, with cover art and a database that's all kept together. 
+The library folder holds all of your music, organised against the database. Import from a folder or zip file and it'll be searched against MusicBrainz and its tags cleaned up. Kithsong automatically searches for cover art if it's missing or low quality.
 
-## Tagged and organised
+## Local Sync
 
-![The import screen on Windows, listing tracks that need a decision](images/import.png)
+![The Windows version of the app showing the sync page](images/kithsong-sync-dark.png)
 
-Importing matches your new music against MusicBrainz - small issues are fixed automatically and are added to your library straight away. Matches Kithsong is unsure about will be shown and you decide what to do.
+Discover devices automatically over the local network and pair them with a 6 digit code. No server or cloud required, libraries are merged field by field when synced so everything is kept up to date. Your main library is considered an "Archive" - it keeps the originals of your entire library in one place. Sync lossy Opus files to low-storage devices to save space, or selectively sync only a few albums. 
 
-## Local sync
+## Devices
 
-![Two computers paired for sync, on Linux](images/sync.png)
+![The Android version of the app showing an album](images/android-light.png)
 
-Sync works over the local network. Devices find each other and pair using a six-digit code. They sync when they're both online, 2-way, so playlist edits and new imports are propagated across all of your devices. Automatically transcode files to meet a storage budget.
+Take your music with you. Windows laptop, Linux workstation, Android phone, WearOS smartwatch. Have your original library on your workstation and sync a subset to your phone, or transcoded files to your laptop. Sync just a playlist or two to your smartwatch.
 
-## Always with you
+## Scrobble
 
-![Playlists with cover art on an Android phone](images/android.png)
+![](images/sync.png)
 
-Selectively sync a few albums to your phone, or just one playlist to your smartwatch. As long as one of your devices holds the full library, others can take any selection they like.
+Scrobble your plays to Last.fm, Libre.fm, or another service. Your login is synced between your devices, and plays are cached while you're offline and sent when you're back online.

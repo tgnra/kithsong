@@ -78,7 +78,9 @@
     });
   }, { rootMargin: "200px 0px" });
   imgs.forEach(function (img) {
-    if (!io || img.hasAttribute("data-eager")) {
+    // offsetWidth is 0 for the other theme's half of a light and dark pair: it's display:
+    // none, so the observer leaves it until a theme change shows it.
+    if (!io || (img.hasAttribute("data-eager") && img.offsetWidth)) {
       img.fetchPriority = "high";
       load(img, tier());
     } else {

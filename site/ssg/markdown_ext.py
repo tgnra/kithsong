@@ -19,10 +19,10 @@ class BuildError(Exception):
     pass
 
 
-def figure(info, alt, sizes, caption="", eager=False):
+def figure(media, caption=""):
     """Element for a standalone image: <figure> with optional caption."""
     fig = etree.Element("figure", {"class": "img"})
-    fig.append(image(info, alt, sizes, eager))
+    fig.append(media)
     if caption:
         etree.SubElement(fig, "figcaption").text = caption
     return fig
@@ -81,6 +81,17 @@ def image(info, alt, sizes, eager=False):
     wrap.append(noscript)
     if alt:
         etree.SubElement(wrap, "span", {"class": "vh"}).text = " (open full size)"
+    return wrap
+
+
+def themed_image(light, dark, alt, sizes, eager=False):
+    """Element for a light and dark pair: both images, with style.css hiding the one that
+    doesn't match the theme. img.js only loads an image once it's displayed, so a visitor
+    who never changes theme downloads one of the two."""
+    wrap = etree.Element("span", {"class": "img-themed"})
+    for theme, info in (("light", light), ("dark", dark)):
+        etree.SubElement(wrap, "span", {"class": f"theme-{theme}"}).append(
+            image(info, alt, sizes, eager))
     return wrap
 
 
@@ -180,19 +191,31 @@ class SiteTreeprocessor(Treeprocessor):
                 img.set("decoding", "async")
                 continue
 
-            info = ext.images.process(ext.resolve(src))
             eager, ext.eager_first = ext.eager_first, False
+            media = self.media(ext.resolve(src), alt, eager)
             parent = parents[img]
             standalone = (parent.tag == "p" and len(parent) == 1
                           and not (parent.text or "").strip() and not (img.tail or "").strip())
             if standalone:
-                new = figure(info, alt, ext.sizes, img.get("title", ""), eager)
+                new = figure(media, img.get("title", ""))
                 new.tail = parent.tail
                 _replace(parents[parent], parent, new)
             else:
-                new = image(info, alt, ext.sizes, eager)
-                new.tail = img.tail
-                _replace(parent, img, new)
+                media.tail = img.tail
+                _replace(parent, img, media)
+
+    def media(self, path, alt, eager):
+        """x-light.png and x-dark.png are one image that follows the theme, whichever of
+        the two the Markdown names."""
+        ext = self.ext
+        m = re.fullmatch(r"(.+)-(light|dark)", path.stem)
+        partner = m and path.with_stem(f"{m[1]}-{'dark' if m[2] == 'light' else 'light'}")
+        if not m or not partner.is_file():
+            if m:
+                ext.warn(f"{ext.source}: {path.name} has no {partner.name}, so it shows in both themes")
+            return image(ext.images.process(path), alt, ext.sizes, eager)
+        light, dark = (path, partner) if m[2] == "light" else (partner, path)
+        return themed_image(ext.images.process(light), ext.images.process(dark), alt, ext.sizes, eager)
 
     def blocks(self, root, parents):
         for pre in root.iter("pre"):

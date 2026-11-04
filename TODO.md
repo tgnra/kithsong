@@ -15,7 +15,6 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## Library and browsing
 
-- Windows and Linux - Recents show cover art rather than the page's icon (no sidebar row has art yet)
 - Windows - an all-singles Albums page says "No music yet"; use Linux's "No albums" text, which points to the artists' Singles and search (move its strings from the linux section to shared)
 - Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results
 - Windows - search doesn't filter album groups, so a group hidden as empty here can appear in results and open with its albums greyed
