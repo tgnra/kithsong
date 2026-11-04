@@ -551,6 +551,12 @@ Sessions are retried with backoff (10 s, doubling, up to 5 minutes).
   has until it upgrades.
 - `play_events` (v18) is such a table: an older peer passes the rows on, and they're applied
   when it upgrades.
+- A `play_events` row travels as one entry, not a field each: field `row`, its value a JSON array
+  of the row's columns (see [Change tracking](schema.md#change-tracking)), applied at once. Such
+  a table can't have a row half arrive, and there's nothing to merge field by field, since nobody
+  edits one. A value that can't be unpacked is logged and passed on like any row, and makes no
+  table row. `_deleted` works as for any row: newer than the entry, it wins; a restore logs the
+  row again, newer still.
 - A row is *live* if one of its field changes is newer, by `(hlc, origin_uid)`, than its
   newest `_deleted`. A dead row that exists is deleted. A live row that exists gets each
   field the batch brought a new winner for. A live row that doesn't exist yet (new, or

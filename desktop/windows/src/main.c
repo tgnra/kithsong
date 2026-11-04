@@ -1793,6 +1793,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       PostMessageW(wnd, WM_CLOSE, 0, 0);
       return 0;
     }
+    case WM_ENDSESSION:
+      if (wp) playback_end_session();
+      return 0;
     case WM_CLOSE:
       if (import_view_confirm_close()) DestroyWindow(wnd);
       return 0;

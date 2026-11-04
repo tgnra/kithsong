@@ -49,6 +49,9 @@ void playback_set_scrobble(BOOL on);
  * playback's: media keys, the taskbar's buttons. */
 BOOL playback_window_message(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result);
 
+/* Windows is shutting down or logging off, and may end the process without another message:
+ * logs the play under way now. */
+void playback_end_session(void);
 /* Stops playing and empties the queue, letting go of the file that was playing; for before
  * the library's files move. */
 void playback_clear(void);

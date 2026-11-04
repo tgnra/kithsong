@@ -244,6 +244,12 @@ BOOL playback_window_message(UINT msg, WPARAM wp, LPARAM lp, LRESULT *result) {
   return FALSE;
 }
 
+void playback_end_session(void) {
+  if (!s.player) return;
+  mc_player_end_play(s.player);
+  count_plays();
+}
+
 void playback_clear(void) {
   if (!s.player) return;
   mc_player_end_play(s.player);

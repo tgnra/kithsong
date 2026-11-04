@@ -161,6 +161,14 @@ static int apply(fixture *f, const mc_row *rows, int n) {
   return st == MC_OK ? logged : -1;
 }
 
+/* Whether a row's numbers came out of its JSON as numbers. */
+static int typeof_is_int(sqlite3 *db, const char *uid) {
+  char sql[160];
+  snprintf(sql, sizeof sql, "SELECT typeof(started_ms) = 'integer' AND typeof(listened_ms) = 'integer'"
+                            " FROM play_events WHERE uid = '%s'", uid);
+  return query_int(db, sql) == 1;
+}
+
 static const char *track_field(fixture *f, const char *uid, const char *col) {
   char sql[256];
   snprintf(sql, sizeof sql, "SELECT %s FROM tracks WHERE uid = '%s'", col, uid);
@@ -395,6 +403,78 @@ static void test_album_flags(fixture *f) {
   CHECK(mc_album_flags_get(f->lib, al, &flags) == MC_OK && !flags.mix && flags.no_scrobble);
 }
 
+/* A whole-row table: one change is a whole play log row, applied at once or not at all. */
+static void test_whole_rows(fixture *f) {
+  char t[MC_UID_STRLEN], e1[MC_UID_STRLEN], e2[MC_UID_STRLEN], e3[MC_UID_STRLEN], e4[MC_UID_STRLEN], e5[MC_UID_STRLEN];
+  mc_uid_new(t);
+  mc_uid_new(e1);
+  mc_uid_new(e2);
+  mc_uid_new(e3);
+  mc_uid_new(e4);
+  mc_uid_new(e5);
+  const char *o = f->lo;
+  char sql[512], value[256], missing[256];
+  mc_row track = text_row(3000, o, "tracks", t, "title", "Played");
+  CHECK(apply(f, &track, 1) == 1);
+
+  /* The row, with its NULL; sent again it's nothing new. */
+  snprintf(value, sizeof value, "[\"%s\",\"node\",5000,700,\"skipped\",\"album\",null]", t);
+  mc_row b1 = text_row(3001, o, "play_events", e1, "row", value);
+  CHECK(apply(f, &b1, 1) == 1);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM play_events WHERE uid = '%s' AND track_uid = '%s' AND node_uid = 'node'"
+                            " AND started_ms = 5000 AND listened_ms = 700 AND ended = 'skipped' AND context = 'album'"
+                            " AND context_uid IS NULL", e1, t);
+  CHECK(query_int(f->db, sql) == 1);
+  CHECK(typeof_is_int(f->db, e1));
+  CHECK(apply(f, &b1, 1) == 0);
+
+  /* Values that aren't such a row are logged, to pass on, but make no row and stop nothing:
+   * not JSON, too short, the wrong shape, not even text. */
+  snprintf(missing, sizeof missing, "[\"%s\"]", t);
+  mc_row bad[] = {text_row(3002, o, "play_events", e2, "row", "not json"),
+                  text_row(3003, o, "play_events", e3, "row", missing),
+                  text_row(3004, o, "play_events", e4, "row", "{\"a\":1}"),
+                  int_row(3005, o, "play_events", e5, "row", 7)};
+  CHECK(apply(f, bad, 4) == 4);
+  CHECK(query_int(f->db, "SELECT count(*) FROM play_events") == 1);
+
+  /* A newer version's longer row, in the same order: the columns known here. */
+  char e6[MC_UID_STRLEN], longer[256];
+  mc_uid_new(e6);
+  snprintf(longer, sizeof longer, "[\"%s\",\"node\",6000,1,\"finished\",\"radio\",null,\"extra\"]", t);
+  mc_row b2 = text_row(3006, o, "play_events", e6, "row", longer);
+  CHECK(apply(f, &b2, 1) == 1);
+  CHECK(query_int(f->db, "SELECT count(*) FROM play_events") == 2);
+
+  /* A delete newer than the row takes it, and one older doesn't; a row logged again after its
+   * delete (a restore) is back. */
+  mc_row del = int_row(3007, o, "play_events", e6, "_deleted", 1);
+  CHECK(apply(f, &del, 1) == 1);
+  CHECK(query_int(f->db, "SELECT count(*) FROM play_events") == 1);
+  mc_row again = text_row(3008, o, "play_events", e6, "row", longer);
+  CHECK(apply(f, &again, 1) == 1);
+  CHECK(query_int(f->db, "SELECT count(*) FROM play_events") == 2);
+  char e7[MC_UID_STRLEN];
+  mc_uid_new(e7);
+  mc_row out_of_order[] = {text_row(3010, o, "play_events", e7, "row", value), int_row(3009, o, "play_events", e7, "_deleted", 1)};
+  CHECK(apply(f, out_of_order, 2) == 2);
+  CHECK(query_int(f->db, "SELECT count(*) FROM play_events") == 3);
+
+  /* A track nobody has: the row goes as ON DELETE would take it. Its track's delete takes
+   * the rest, by cascade. */
+  char gone[MC_UID_STRLEN], e8[MC_UID_STRLEN], orphan[256];
+  mc_uid_new(gone);
+  mc_uid_new(e8);
+  snprintf(orphan, sizeof orphan, "[\"%s\",\"node\",7000,1,\"finished\",\"album\",null]", gone);
+  mc_row b3 = text_row(3011, o, "play_events", e8, "row", orphan);
+  CHECK(apply(f, &b3, 1) == 1);
+  CHECK(query_int(f->db, "SELECT count(*) FROM play_events") == 3);
+  CHECK(query_int(f->db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
+  mc_row b4 = int_row(3012, o, "tracks", t, "_deleted", 1);
+  CHECK(apply(f, &b4, 1) == 1);
+  CHECK(query_int(f->db, "SELECT count(*) FROM play_events") == 0);
+}
+
 static void test_reader(fixture *f) {
   mc_origin_hlc *mine;
   int n;
@@ -482,6 +562,7 @@ int main(int argc, char **argv) {
     test_new_rows(&f);
     test_album_groups(&f);
     test_album_flags(&f);
+    test_whole_rows(&f);
     test_reader(&f);
   }
   mc_rows_applier_free(f.a);

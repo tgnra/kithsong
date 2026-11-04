@@ -645,13 +645,11 @@ static void test_migration_v18(const char *scratch) {
   CHECK(exec(db, "DROP TABLE play_events;"
                  "INSERT INTO tracks (uid, title) VALUES ('t1', 'Heard Elsewhere');"
                  "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
-                 " (1000, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'track_uid', 't1'),"
-                 " (1001, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'node_uid', 'peer'),"
-                 " (1002, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'started_ms', 5000),"
-                 " (1003, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'listened_ms', 700),"
-                 " (1004, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'ended', 'skipped'),"
-                 " (1005, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'context', 'radio'),"
-                 " (1006, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'context_uid', NULL);"
+                 " (1000, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'row',"
+                 "  '[\"t1\",\"peer\",5000,700,\"skipped\",\"radio\",null]'),"
+                 " (1001, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e2', 'row',"
+                 "  '[\"t1\",\"peer\",6000,800,\"finished\",\"album\",null]'),"
+                 " (1002, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e2', '_deleted', 1);"
                  "PRAGMA user_version = 17;") == SQLITE_OK);
   lib->applying_remote = 0;
   mc_library_close(lib);
@@ -664,7 +662,8 @@ static void test_migration_v18(const char *scratch) {
   CHECK(query_int(db, "SELECT count(*) FROM play_events WHERE uid = 'e1' AND track_uid = 't1' AND node_uid = 'peer'"
                       " AND started_ms = 5000 AND listened_ms = 700 AND ended = 'skipped' AND context = 'radio'"
                       " AND context_uid IS NULL") == 1);
-  CHECK(changelog_count(db, "1") == 7); /* nothing of it logged here */
+  CHECK(query_int(db, "SELECT count(*) FROM play_events") == 1); /* e2 was deleted */
+  CHECK(changelog_count(db, "1") == 3); /* nothing of it logged here */
   mc_library_close(lib);
 }
 
@@ -739,13 +738,15 @@ static void test_play_log(const char *scratch) {
   CHECK(log && log->count == 0);
   mc_play_log_free(log);
 
-  /* Every field logged, for sync; a row is written once and that's all. */
-  CHECK(query_int(db, "SELECT count(DISTINCT field) FROM changelog WHERE entity = 'play_events'") >= 6);
+  /* A row is one change, holding every column. */
+  CHECK(changelog_count(db, "entity = 'play_events'") == n);
+  CHECK(changelog_count(db, "entity = 'play_events' AND field = 'row' AND json_array_length(value) = 7") == n);
 
   /* Values from a newer version read as unknown. */
   CHECK(mc_library_begin_write(lib) == MC_OK);
   CHECK(exec(db, "UPDATE play_events SET ended = 'beamed', context = 'telepathy' WHERE started_ms = 8000") == SQLITE_OK);
   CHECK(mc_library_commit(lib) == MC_OK);
+  CHECK(changelog_count(db, "entity = 'play_events'") == n); /* rows don't change, so that's not logged */
   CHECK(mc_library_list_play_events(lib, 8000, 8001, &log) == MC_OK);
   CHECK(log && log->count == 1 && log->items[0].event.end == MC_PLAY_END_UNKNOWN);
   CHECK(log && log->count == 1 && log->items[0].event.context == MC_PLAY_CONTEXT_UNKNOWN);

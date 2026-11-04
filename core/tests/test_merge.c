@@ -225,7 +225,9 @@ static void check_merged(mc_library *lib, const import *a, const import *b) {
   CHECK(query_int(db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
 
   /* The play log: both devices' rows, each still its own, on the tracks that stay, in the
-   * order they were played. The same track played on each is two rows. */
+   * order they were played. The same track played on each is two rows. Moving them logged
+   * nothing: each is still the one change that wrote it. */
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'play_events'") == 3);
   mc_play_log *log = NULL;
   CHECK(mc_library_list_play_events(lib, 0, INT64_MAX, &log) == MC_OK);
   if (log) {
@@ -697,6 +699,34 @@ int main(int argc, char **argv) {
     CHECK(query_int(cdb, "SELECT count(*) FROM changelog WHERE field = 'kind' AND value = 'singles'") == 2);
     CHECK(query_int(cdb, "SELECT count(*) FROM aliases") == 6);
     CHECK(query_int(cdb, "SELECT count(*) FROM merge_keys WHERE field = 'kind'") == 0);
+  }
+
+  /* A late play log row naming the merged-away track goes to the survivor, as one change. */
+  {
+    char ev[MC_UID_STRLEN], value[256];
+    mc_uid_new(ev);
+    snprintf(value, sizeof value, "[\"%s\",\"%s\",4000,1000,\"finished\",\"album\",null]", lose_track, late);
+    mc_row r;
+    memset(&r, 0, sizeof r);
+    r.hlc = a->hlc.last + 2000;
+    memcpy(r.origin, late, MC_UID_STRLEN);
+    snprintf(r.entity, sizeof r.entity, "play_events");
+    memcpy(r.row_uid, ev, MC_UID_STRLEN);
+    snprintf(r.field, sizeof r.field, MC_CHANGELOG_ROW_FIELD);
+    r.tag = MC_VAL_TEXT;
+    r.data = (const unsigned char *)value;
+    r.len = (uint32_t)strlen(value);
+    mc_rows_target tg;
+    mc_rows_target_library(a, &tg);
+    mc_rows_applier *ap = NULL;
+    CHECK(mc_rows_applier_new(&tg, &ap) == MC_OK);
+    if (ap) CHECK(mc_rows_apply(ap, &r, 1, NULL) == MC_OK);
+    mc_rows_applier_free(ap);
+    char q[256], text[64];
+    snprintf(q, sizeof q, "SELECT track_uid FROM play_events WHERE uid = '%s'", ev);
+    query_text(mc_library_db(a), q, text, sizeof text);
+    CHECK_TEXT(text, smaller(ia.tracks[1], ib.tracks[1]));
+    CHECK(query_int(mc_library_db(a), "SELECT count(*) FROM pragma_foreign_key_check") == 0);
   }
 
   mc_library_close(a);

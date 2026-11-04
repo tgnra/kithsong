@@ -201,9 +201,10 @@ static const char *const k_migrations[] = {
   "ALTER TABLE albums ADD COLUMN art_chosen TEXT;",
   /* v18: the play log (musiccore/library.h): a row for each time a track was started, where
    * track_plays only keeps a count. Like track_plays each row is one device's, and it is
-   * written once and never changed, so sync can't lose or clash over one. context_uid isn't a
-   * reference: the history stays when the album or playlist goes. (IF NOT EXISTS: tests that
-   * wind user_version back keep their tables.) */
+   * written once and never changed, so sync can't lose or clash over one, and it's logged
+   * whole, as one change (mc_changelog_whole_row). context_uid isn't a reference: the history
+   * stays when the album or playlist goes. (IF NOT EXISTS: tests that wind user_version back
+   * keep their tables.) */
   "CREATE TABLE IF NOT EXISTS play_events ("
   "  uid         TEXT PRIMARY KEY,"
   "  track_uid   TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
@@ -238,6 +239,7 @@ static const char *const k_album_artist_cols[] = {"album_uid", "artist_uid", "po
                                                   "joinphrase", NULL};
 static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", "last_played_ms",
                                           NULL};
+/* Logged as one change, in this order, which can only be added to (mc_changelog_whole_row). */
 static const char *const k_play_event_cols[] = {"track_uid", "node_uid", "started_ms", "listened_ms",
                                                 "ended", "context", "context_uid", NULL};
 static const char *const k_playlist_cols[] = {"name", NULL};
@@ -254,7 +256,7 @@ static const mc_changelog_table k_tracked[] = {
   {"track_artists", "uid", k_track_artist_cols, NULL},
   {"album_artists", "uid", k_album_artist_cols, NULL},
   {"track_plays", "uid", k_play_cols, NULL},
-  {"play_events", "uid", k_play_event_cols, NULL},
+  {"play_events", "uid", k_play_event_cols, mc_changelog_whole_row},
   {"playlists", "uid", k_playlist_cols, NULL},
   {"playlist_entries", "uid", k_entry_cols, NULL},
   {"album_groups", "uid", k_group_cols, NULL},

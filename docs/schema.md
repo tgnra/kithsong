@@ -274,13 +274,14 @@ uids and context (`mc_play_origin`), takes each row as it ends (`MC_PLAYER_EVENT
 loses that one play.
 
 Rows sync like `track_plays`, and more simply: each is one device's and is written once, never
-updated, so no two devices ever write the same field. They go with their track, and come back
-with it from the Recycle Bin. A duplicate's rows move to the track that stays. A merged
+updated, so no two devices ever write the same field. So a row is logged whole: see
+[Change tracking](#change-tracking). They go with their track, and come back with it from the
+Recycle Bin. A duplicate's rows move to the track that stays, which isn't logged. A merged
 library's history is not carried over (see [Merging libraries](sync-protocol.md#merging-libraries)).
 
-Rows are kept for good. A row costs about 2 KB of `library.db`: 350 bytes for the row and its
-indexes, the rest for its seven changelog rows. So 10,000 starts a year, about 30 a day, come
-to some 20 MB, on every device of the group, whichever of them played what.
+Rows are kept for good. A row costs about SIZE_ROW bytes of `library.db`: SIZE_TABLE for the row and its
+indexes, the rest for its changelog row. So 10,000 starts a year, about 30 a day, come to some
+SIZE_YEAR MB, on every device of the group, whichever of them played what.
 
 ## Album groups
 
@@ -461,6 +462,14 @@ devices. Wear OS shows only what's present, so it drops the empty ones as well.
 every time the library is opened. Each change to a tracked column writes one `changelog`
 row (`hlc`, `origin_uid`, `entity`, `row_uid`, `field`, `value`). The generator lives in
 `core/src/util/changelog.c` and is shared with `sync.db`, whose changelog has the same shape.
+
+A table whose rows are written once and never edited can be logged whole instead
+(`mc_changelog_whole_row`; today only `play_events`). Inserting a row writes one `changelog` row
+with `field` = `row` and `value` = a JSON array of the tracked columns in their listed order,
+which can only be appended to: an element missing from the end reads as NULL, and extra ones
+are ignored. Updates aren't logged, so the table must have none but the unlogged kind (a merge
+moving a reference). Deletes are logged as for any table. The applier treats that one row as a
+change to every column.
 
 The version vector sync exchanges (the newest hlc per origin) is computed from the changelog
 each time, never stored, so it can't disagree with the data after a crash.

@@ -268,7 +268,13 @@ void mc_rows_target_group(mc_sync_db *sdb, mc_rows_target *out) {
  * one row's. Then references to the uids this batch merged away move to the canonical row
  * and the losers' rows go, and any touched row that names an older loser is pointed at its
  * canonical uid. Like the reference check, this is derived from the changelog and never
- * logged. */
+ * logged.
+ *
+ * Whole rows (mc_changelog_whole_row). One changelog row holds all of a table row's columns,
+ * as a JSON array, and everything above treats it as a change to every column at once: it's
+ * unpacked in read_state(), and field_cols() says which columns it wins. The rest is the same
+ * path. A value that can't be unpacked gives a row without its NOT NULL columns, which waits
+ * for good, like any incomplete row: it stays logged and passed on, and doesn't stall sync. */
 
 typedef struct fk_info {
   int col; /* index into the table's cols */
@@ -284,6 +290,7 @@ typedef struct table_meta {
   uint32_t required; /* bit i: cols[i] is NOT NULL without a default */
   fk_info fks[MAX_FKS];
   int nfks;
+  sqlite3_stmt *unpack; /* a whole-row table: a row's value (?1) to its columns */
 } table_meta;
 
 typedef struct touched {
@@ -306,6 +313,27 @@ static int col_index(const table_meta *m, const char *name) {
   for (int i = 0; i < m->ncols; i++)
     if (!strcmp(m->t->cols[i], name)) return i;
   return -1;
+}
+
+static uint32_t all_cols(const table_meta *m) {
+  return m->ncols < 32 ? (1u << m->ncols) - 1 : ~0u;
+}
+
+/* The columns a change to field is a change to; 0 if it's no column this version knows. */
+static uint32_t field_cols(const table_meta *m, const char *field) {
+  if (m->unpack && !strcmp(field, MC_CHANGELOG_ROW_FIELD)) return all_cols(m);
+  int i = col_index(m, field);
+  return i < 0 ? 0 : 1u << i;
+}
+
+/* Prepares m->unpack, if it's a whole-row table. */
+static mc_status prepare_unpack(sqlite3 *db, table_meta *m) {
+  if (m->t->flags != mc_changelog_whole_row) return MC_OK;
+  char sql[1024];
+  size_t n = (size_t)snprintf(sql, sizeof sql, "SELECT ");
+  for (int i = 0; i < m->ncols; i++)
+    n += (size_t)snprintf(sql + n, sizeof sql - n, "%sjson_extract(?1, '$[%d]')", i ? ", " : "", i);
+  return sqlite3_prepare_v2(db, sql, -1, &m->unpack, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
 }
 
 static mc_status read_meta(sqlite3 *db, const mc_changelog_table *tables, size_t ntables,
@@ -399,6 +427,7 @@ mc_status mc_rows_applier_new(const mc_rows_target *target, mc_rows_applier **ou
   for (size_t i = 0; st == MC_OK && i < target->ntables; i++) {
     a->tables[i].t = &target->tables[i];
     st = read_meta(target->db, target->tables, target->ntables, &a->tables[i]);
+    if (st == MC_OK) st = prepare_unpack(target->db, &a->tables[i]);
   }
   if (st == MC_OK) st = order_tables(a);
   sqlite3 *db = target->db;
@@ -446,6 +475,7 @@ void mc_rows_applier_free(mc_rows_applier *a) {
   sqlite3_finalize(a->log);
   sqlite3_finalize(a->state);
   sqlite3_finalize(a->class_state);
+  for (size_t i = 0; a->tables && i < a->tg.ntables; i++) sqlite3_finalize(a->tables[i].unpack);
   free(a->tables);
   free(a->order);
   free(a->touched);
@@ -556,6 +586,24 @@ static void state_free(row_state *rs) {
   for (int i = 0; i < MAX_COLS; i++) sqlite3_value_free(rs->val[i]);
 }
 
+/* Sets rs's columns from a whole row's value. A NULL stays unset, as a column no change was
+ * logged for: an absent context_uid reads NULL anyway, and a missing NOT NULL column holds the
+ * row back. So does a value that isn't JSON, which fails here. */
+static mc_status unpack_row(const table_meta *m, sqlite3_value *value, row_state *rs) {
+  sqlite3_stmt *u = m->unpack;
+  mc_status st = MC_OK;
+  sqlite3_bind_value(u, 1, value);
+  if (sqlite3_step(u) == SQLITE_ROW)
+    for (int i = 0; st == MC_OK && i < m->ncols; i++) {
+      if (sqlite3_column_type(u, i) == SQLITE_NULL) continue;
+      if ((rs->val[i] = sqlite3_value_dup(sqlite3_column_value(u, i)))) rs->has |= 1u << i;
+      else st = MC_ERR_NOMEM;
+    }
+  sqlite3_reset(u);
+  sqlite3_clear_bindings(u);
+  return st;
+}
+
 static mc_status read_state(mc_rows_applier *a, const table_meta *m, const char *row_uid,
                             row_state *rs) {
   memset(rs, 0, sizeof *rs);
@@ -581,15 +629,21 @@ static mc_status read_state(mc_rows_applier *a, const table_meta *m, const char 
       snprintf(del_origin, sizeof del_origin, "%s", origin);
       continue;
     }
-    int i = col_index(m, field);
-    if (i < 0) continue; /* a column this version doesn't know */
-    rs->val[i] = sqlite3_value_dup(sqlite3_column_value(s, 1));
-    if (!rs->val[i]) {
+    uint32_t cols = field_cols(m, field);
+    if (!cols) continue; /* a column this version doesn't know */
+    int ok = 1;
+    if (m->unpack && cols == all_cols(m)) {
+      ok = unpack_row(m, sqlite3_column_value(s, 1), rs) == MC_OK;
+    } else {
+      int i = col_index(m, field);
+      ok = (rs->val[i] = sqlite3_value_dup(sqlite3_column_value(s, 1))) != NULL;
+      if (ok) rs->has |= 1u << i;
+    }
+    if (!ok) {
       sqlite3_reset(s);
       state_free(rs);
       return MC_ERR_NOMEM;
     }
-    rs->has |= 1u << i;
     if (!has_change || cmp_stamp(hlc, origin, last_hlc, last_origin) > 0) {
       has_change = 1;
       last_hlc = hlc;
@@ -735,7 +789,7 @@ static mc_status merge_classes(mc_rows_applier *a, mc_merge_pair **pairs, int *n
     if ((st = mc_merge_canonical(a->tg.db, tc->row_uid, c, &merged)) != MC_OK || !merged)
       continue;
     memcpy(tc->row_uid, c, MC_UID_STRLEN);
-    tc->won = m->ncols < 32 ? (1u << m->ncols) - 1 : ~0u;
+    tc->won = all_cols(m);
   }
   return st;
 }
@@ -762,14 +816,14 @@ mc_status mc_rows_apply(mc_rows_applier *a, const mc_row *rows, int count, int *
     n_new++;
     int t = find_table(a, r->entity);
     if (t < 0) continue; /* kept for peers that know it */
-    int col = -1;
-    if (strcmp(r->field, "_deleted") && (col = col_index(&a->tables[t], r->field)) < 0) continue;
+    uint32_t cols = 0;
+    if (strcmp(r->field, "_deleted") && !(cols = field_cols(&a->tables[t], r->field))) continue;
     touched *tc = touch(a, t, r->row_uid);
     if (!tc) {
       st = MC_ERR_NOMEM;
       break;
     }
-    if (won && col >= 0) tc->won |= 1u << col;
+    if (won) tc->won |= cols;
   }
 
   st = settle(a, st);
@@ -797,13 +851,13 @@ mc_status mc_rows_reapply(mc_rows_applier *a, const char *where) {
     const char *field = (const char *)sqlite3_column_text(s, 2);
     int t = entity ? find_table(a, entity) : -1;
     if (t < 0 || !row_uid || strlen(row_uid) >= MC_UID_STRLEN || !field) continue;
-    int col = strcmp(field, "_deleted") ? col_index(&a->tables[t], field) : -1;
-    if (col < 0 && strcmp(field, "_deleted")) continue;
+    uint32_t cols = strcmp(field, "_deleted") ? field_cols(&a->tables[t], field) : 0;
+    if (!cols && strcmp(field, "_deleted")) continue;
     char uid[MC_UID_STRLEN];
     snprintf(uid, sizeof uid, "%s", row_uid);
     touched *tc = touch(a, t, uid);
     if (!tc) st = MC_ERR_NOMEM;
-    else if (col >= 0) tc->won |= 1u << col; /* every field is set to its winner */
+    else tc->won |= cols; /* every field is set to its winner */
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(s);

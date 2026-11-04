@@ -17,13 +17,23 @@
 
 /* A tracked table: changes to cols (NULL-terminated) are logged under row_uid = key. Of
  * those, flags (NULL-terminated, or NULL for none) are 0 until set: a row inserted with 0
- * logs nothing for them, as a NULL logs nothing elsewhere, so only setting one is logged. */
+ * logs nothing for them, as a NULL logs nothing elsewhere, so only setting one is logged.
+ *
+ * flags may instead be mc_changelog_whole_row, for a table of rows written once and never
+ * edited, where field-by-field logging would cost a changelog row per column for nothing to
+ * merge. Inserting a row logs one change, of the field MC_CHANGELOG_ROW_FIELD, whose value is
+ * a JSON array of the row's cols in order. Updates aren't logged at all; deletes are, as for
+ * any table. An element missing from the end reads as NULL and extra ones are ignored, so cols
+ * may only be appended to. */
 typedef struct mc_changelog_table {
   const char *table;
   const char *key;
   const char *const *cols;
   const char *const *flags;
 } mc_changelog_table;
+
+extern const char *const mc_changelog_whole_row[];
+#define MC_CHANGELOG_ROW_FIELD "row"
 
 /* What the trigger functions read. The owner keeps it alive as long as the connection and
  * may change what it points at (e.g. a rotated node uid) at any time. */
@@ -39,8 +49,8 @@ typedef struct mc_changelog_ctx {
 mc_status mc_changelog_register(sqlite3 *db, const mc_changelog_ctx *ctx);
 
 /* One INSERT and one UPDATE trigger per tracked column, plus a DELETE trigger per table, in
- * one transaction. Recreated on every open so changes to the column lists take effect
- * immediately. */
+ * one transaction; for a whole-row table, one INSERT trigger and the DELETE trigger. Recreated
+ * on every open so changes to the column lists take effect immediately. */
 mc_status mc_changelog_install_triggers(sqlite3 *db, const mc_changelog_table *tables,
                                         size_t count);
 
