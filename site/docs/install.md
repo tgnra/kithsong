@@ -28,7 +28,7 @@ flatpak install --user https://kithso.ng/kithsong.flatpakref
 
 Kithsong then updates with `flatpak update` or your software centre.
 
-Alternatively, there is a tarball built for each release, available [here on Github]()
+Alternatively, there is a `.flatpak` bundle built for each release, available [here on GitHub](https://github.com/tgnra/kithsong/releases). It doesn't update by itself.
 
 ## Android
 
