@@ -102,6 +102,7 @@ import java.io.File
 class CoreLibrarySource(
     private val dir: File,
     private val artDir: File,
+    coverDraftDir: File,
     private val prefs: SharedPreferences,
     private val scope: CoroutineScope,
     private val unknownArtist: () -> String,
@@ -131,6 +132,7 @@ class CoreLibrarySource(
     /** Editing tags, on threads of its own. */
     val tagEditor: TagEditor = CoreTagEditor(
         dir,
+        coverDraftDir,
         scope,
         changed = {
             refresh().join()
@@ -658,8 +660,9 @@ class CoreLibrarySource(
         val covers = Covers()
         try {
             val albums = queue.mapNotNull { it.albumUid }.distinct().flatMap { lib.albumTracks(it) }
+            // All the artist's, as a single made a mix isn't one any more: it has an album now.
             val singles = queue.filter { it.albumUid == null }.mapNotNull { it.artistUid }.distinct()
-                .flatMap { lib.artistSingles(it) }
+                .flatMap { lib.artistTracks(it) }
             val fresh = (albums + singles).here().associate { it.uid to covers.track(it) }
             queue.map { fresh[it.uid] ?: it }
         } catch (e: MusicCoreException) {

@@ -1,5 +1,6 @@
-/* JNI bindings for ng.kithso.core.EditNatives: editing tags and an album's flags, and searching
- * for another release (musiccore/edit.h), on an open CoreLibrary's handle. Kept apart from
+/* JNI bindings for ng.kithso.core.EditNatives: editing tags, an album's flags and cover and a
+ * single's mix, and searching for another release (musiccore/edit.h), on an open CoreLibrary's
+ * handle. Kept apart from
  * jni_bridge.c; as thin as it is: marshal arguments, call musiccore, convert results. Failures
  * throw ng.kithso.core.MusicCoreException, with the status to tell them apart by.
  *
@@ -194,6 +195,93 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeSetAlbumFlags(JNIEn
   mc_status st = mc_album_flags_set(jni_lib_of(handle), cuid, &flags);
   jni_release(env, uid, cuid);
   if (st != MC_OK) throw_status(env, st);
+}
+
+/* A single's mix as {can_set, mix}. */
+JNIEXPORT jintArray JNICALL Java_ng_kithso_core_EditNatives_nativeTrackMix(JNIEnv *env, jclass cls, jlong handle,
+                                                                          jstring uid) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = jni_chars(env, uid, &ok);
+  if (!ok) return NULL;
+  mc_track_mix mix = {0};
+  mc_status st = mc_track_mix_get(jni_lib_of(handle), cuid, &mix);
+  jni_release(env, uid, cuid);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jint values[] = {mix.can_set, mix.mix};
+  return jni_ints(env, values, 2);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeSetTrackMix(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jstring uid, jboolean mix) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = jni_chars(env, uid, &ok);
+  if (!ok) return;
+  mc_status st = mc_track_mix_set(jni_lib_of(handle), cuid, mix ? 1 : 0);
+  jni_release(env, uid, cuid);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* The album's cover here, null if it has none; throws MC_ERR_NOT_FOUND if it has no file here. */
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_EditNatives_nativeAlbumArt(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jstring uid) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = jni_chars(env, uid, &ok);
+  if (!ok) return NULL;
+  char *path = NULL;
+  mc_status st = mc_album_art_get(jni_lib_of(handle), cuid, &path);
+  jni_release(env, uid, cuid);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jstring out = new_string(env, path);
+  mc_free(path);
+  return out;
+}
+
+/* image's bytes, malloc'd, or NULL with an exception pending. An empty one is still a pointer. */
+static void *image_of(JNIEnv *env, jbyteArray image, size_t *len) {
+  jsize n = (*env)->GetArrayLength(env, image);
+  void *out = malloc(n ? (size_t)n : 1);
+  if (!out) {
+    throw_status(env, MC_ERR_NOMEM);
+    return NULL;
+  }
+  (*env)->GetByteArrayRegion(env, image, 0, n, (jbyte *)out);
+  *len = (size_t)n;
+  return out;
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeCheckAlbumArt(JNIEnv *env, jclass cls, jbyteArray image) {
+  (void)cls;
+  size_t len = 0;
+  void *bytes = image_of(env, image, &len);
+  if (!bytes) return;
+  mc_status st = mc_album_art_check(bytes, len);
+  free(bytes);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeSetAlbumArt(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jstring uid, jbyteArray image) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = jni_chars(env, uid, &ok);
+  if (!ok) return;
+  size_t len = 0;
+  void *bytes = image_of(env, image, &len);
+  if (bytes) {
+    mc_status st = mc_album_art_set(jni_lib_of(handle), cuid, bytes, len);
+    if (st != MC_OK) throw_status(env, st);
+  }
+  free(bytes);
+  jni_release(env, uid, cuid);
 }
 
 /* The releases found, best fit first, as a ReleaseInfo[]. Waits for MusicBrainz. */

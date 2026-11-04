@@ -245,8 +245,16 @@ class CoreMediaPlayer(
     override fun handleAddMediaItems(index: Int, mediaItems: List<MediaItem>): ListenableFuture<*> = Futures.immediateVoidFuture()
     override fun handleRemoveMediaItems(fromIndex: Int, toIndex: Int): ListenableFuture<*> = Futures.immediateVoidFuture()
     override fun handleMoveMediaItems(fromIndex: Int, toIndex: Int, newIndex: Int): ListenableFuture<*> = Futures.immediateVoidFuture()
-    override fun handleReplaceMediaItems(fromIndex: Int, toIndex: Int, mediaItems: List<MediaItem>): ListenableFuture<*> =
-        Futures.immediateVoidFuture()
+
+    // What's shown of tracks whose files are the same, so the core, which knows only the files,
+    // plays on. A queue's other changes go through handleSetMediaItems().
+    override fun handleReplaceMediaItems(fromIndex: Int, toIndex: Int, mediaItems: List<MediaItem>): ListenableFuture<*> {
+        if (toIndex - fromIndex == mediaItems.size) {
+            items = items.take(fromIndex) + mediaItems + items.drop(toIndex)
+            update()
+        }
+        return Futures.immediateVoidFuture()
+    }
 
     override fun handleRelease(): ListenableFuture<*> {
         focus.release()

@@ -537,7 +537,8 @@ follow on this device only.
   says so, and it can be tried again once playback has moved on. Only the files the edit touches
   count, so tagging one track of an album while another plays is fine. Elsewhere an open file
   can be renamed and goes on playing the old bytes, but the player's queue still has its old
-  path, so after an edit Android gives the player the queue's new paths and titles.
+  path, so after an edit Android gives the player the queue's new paths and titles. An edit that
+  moves no file, a new cover or title say, reaches the player without restarting the track.
 - **Another release.** `mc_release_search()` searches as an import does, sharing MusicBrainz's
   rate limit, looks up the best 5 and scores them against the album's tracks with `match.c`.
   `mc_album_tags_set()` with a new `mb_albumid` looks it up and pairs the tracks the same way,

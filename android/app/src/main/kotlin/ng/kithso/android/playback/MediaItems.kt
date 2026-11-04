@@ -1,5 +1,6 @@
 package ng.kithso.android.playback
 
+import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import androidx.media3.common.MediaItem
@@ -21,11 +22,22 @@ private const val ALBUM_UID = "album_uid"
 private const val ARTIST_UID = "artist_uid"
 
 /**
+ * [tracks] as queue items. An album's tracks share a cover, and finding its URI touches the disk,
+ * so each cover's is found once.
+ */
+fun queueItems(context: Context, tracks: List<Track>): List<MediaItem> {
+    val artwork = HashMap<ArtRef, Uri>()
+    return tracks.map { it.toMediaItem(artwork.getOrPut(it.art) { ArtProvider.uriFor(context, it.art) }) }
+}
+
+/**
  * The file goes in the request metadata as well as the URI, because a MediaItem crossing from
  * a MediaController to the session may lose its URI but keeps the request metadata (see
- * [path]).
+ * [path]). [artwork] isn't what art is loaded from ([artRef] is), but Media3 leaves extras out
+ * when it compares items, so it's what makes an item with a new cover a changed one: without
+ * it the player and the notification would go on showing the old cover.
  */
-fun Track.toMediaItem(): MediaItem {
+private fun Track.toMediaItem(artwork: Uri): MediaItem {
     val uri = path?.let { Uri.fromFile(File(it)) }
     val extras = Bundle().apply {
         putInt(TRACK_NO, trackNo)
@@ -44,6 +56,7 @@ fun Track.toMediaItem(): MediaItem {
                 .setAlbumTitle(album)
                 .setTrackNumber(trackNo.takeIf { it > 0 })
                 .setDurationMs(durationMs)
+                .setArtworkUri(artwork)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
                 .setIsPlayable(true)
                 .setIsBrowsable(false)

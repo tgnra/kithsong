@@ -86,6 +86,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         val core = CoreLibrarySource(
             libraryDir,
             playlistArtDir,
+            File(cacheDir, COVER_DRAFT_DIR),
             getSharedPreferences("library", MODE_PRIVATE),
             MainScope(),
         ) { getString(R.string.unknown_artist) }
@@ -159,6 +160,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
     private companion object {
         const val TAG = "kithsong"
         const val PLAYLIST_ART_DIR = "playlist-art" // MC_PLAYLIST_ART_CACHE_DIR
+        const val COVER_DRAFT_DIR = "cover-draft" // a cover chosen in the tag editor, not saved yet
         const val OLD_SYNC_WORK = "sync" // the unique work name SyncWorker was scheduled under
     }
 }
