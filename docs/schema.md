@@ -470,6 +470,71 @@ drawn at random, named by `--name`, with `--max-length <minutes>` for `max_track
 calls, and refuses a library of an older schema without `--migrate`, as an older app can't open
 one that's been migrated.
 
+### Radio stations
+
+`mc_radio_stations_list()` ([`radio_stations.h`](../core/include/musiccore/radio_stations.h), the
+code in `core/src/radio/stations.c`) picks the seed tracks of the Home page's Radio row. Nothing
+is stored, so there's no schema to it: it's worked out again each time the page loads, from
+`track_analysis`, `track_plays` and `play_events`.
+
+A track can be a seed if it can be in a mix: it has a result of this version and a file here, it
+isn't part of a continuous mix, and it's from 60 seconds to 8 minutes long.
+
+How many stations there are:
+
+| Eligible tracks | At most |
+|-----------------|---------|
+| under 25 | none, and the row is left out |
+| 25 | 1 |
+| 50 | 2 |
+| 100 | 3 |
+| 200 | 4 |
+| 400 | 5 |
+| 800 | 6 |
+| 1,600 | 7 |
+| 3,200 and up | 8 |
+
+That's an upper limit. The other is how spread out the library is: two seeds must be at least 0.6
+apart on the fixed scales (`mc_analysis_distance()` with no stats), and when nothing left is that
+far from all the seeds so far, there are no more stations. It has to be the fixed scales, as the
+library's own put any library's tracks about 1 apart, however alike they all sound. The 0.6 comes
+from a real library of 700 tracks, where two tracks of one album were 0.51 apart at the median and
+any two tracks 0.62. Like the distance's weights it hasn't been tuned by ear.
+
+Choosing takes three steps:
+
+1. **Who has company.** Up to 1,024 tracks are drawn by a hash of the uid and the day, and compared
+   with each other on the library's scales. A track further from its neighbours (the eighth
+   nearest in the library, in proportion in a sample) than 1.5 times the median track is, and than
+   0.7, can't be a seed. Farthest-point selection goes straight for such tracks otherwise: in that
+   real library it chose an intro and a noise track, and a mix from one is nothing like it from the
+   second track on. The 0.7 keeps a loose genre beside a tight one from being left out whole.
+2. **Spreading out.** Farthest-point selection over the rest of the sample, starting from the most
+   played track there, the hash deciding among equals.
+3. **Settling.** Each seed may then move to any track of the library within 0.45 of it, on the
+   library's scales, that stays 0.6 from the other seeds. It moves to an artist no other station
+   has, then to a track with a cover, then to what's been played most, counted in doublings. So
+   being distinct comes first, and plays only choose among tracks that sound about the same.
+
+The stations are shown most played first. A station is named after its seed's first artist with
+`home_station`, or after the seed's title if it has no artist. Its sub line is `home_station_sub`;
+stations of one name say instead what they're like, by the seed's title, and its album if the
+titles match too. A station that would still read the same as another is dropped. The cover is
+that of the seed's album, or else the artist's usual picture.
+
+**Staying put.** The sample, the tie-breaks and the plays all go by the start of the local day.
+Plays are `track_plays` less the `play_events` of 30 seconds or more since then, as `track_plays`
+has no history of its own. So reloading Home, and playing music, changes nothing until the next
+day, when the seeds may move, which keeps a library that's rarely played from showing the same
+stations for ever. Results arriving, or tracks being imported or deleted, can change the stations
+during the day, as the scanner does for hours on a new library.
+
+`core/tests/manual_stations <library folder>` prints a library's stations and how long they took,
+`--days <n>` the next days' too. `--make <tracks>` fills an empty folder with a made-up library to
+time. In a release build a made-up library of 50,000 tracks took about 0.7 seconds on Home's own
+background thread, and several times that with the machine busy. Of that about 300 ms is the query,
+140 ms the sample, whatever the library's size, and 40 ms settling.
+
 ## Stats
 
 `mc_library_read_stats()` (`musiccore/library.h`) adds up what's above with one read query:

@@ -5,13 +5,14 @@
 #include <string.h>
 #include <time.h>
 
+#include "musiccore/radio_stations.h"
 #include "util/platform.h"
 
 /* The guesses, until the play event log can say what was really played when. track_plays keeps
  * one count per track for all time and the time of its last play, so "played a lot recently"
  * can only mean "many of its tracks had their last play lately": a track played once this week
  * after a hundred plays years ago looks the same as one on repeat. mc_played_info.plays isn't
- * windowed either, so it only ranks the artists for Radio, which is about all time anyway. */
+ * windowed either. */
 enum {
   LATELY_DAYS = 14,    /* a track last played this recently counts towards Played a Lot Recently */
   LATELY_TRACKS = 3,   /* how many of them make an album or playlist belong there */
@@ -208,48 +209,25 @@ static int oldest_cmp(const void *a, const void *b) {
 
 /* --- The rows --- */
 
-/* Placeholders until there's radio. Stations are named after the artists played most, each with
- * their usual picture; the artists with most albums make up the numbers, which is all of them
- * in a library that hasn't been played yet. */
-typedef struct ranked_artist {
-  const mc_artist_info *artist;
-  int64_t plays;
-  unsigned tie;
-} ranked_artist;
-
-static int ranked_cmp(const void *a, const void *b) {
-  const ranked_artist *x = a, *y = b;
-  if (x->plays != y->plays) return x->plays < y->plays ? 1 : -1;
-  if (x->artist->album_count != y->artist->album_count) return y->artist->album_count - x->artist->album_count;
-  return x->tie < y->tie ? -1 : x->tie > y->tie;
-}
-
+/* The library's stations (musiccore/radio_stations.h), each with its seed's album cover, or
+ * failing that its artist's usual picture. The row stays out for a library with none. */
 static void pick_radio(const sources *s, row *r) {
-  int n = s->artists ? s->artists->count : 0;
-  ranked_artist *ranked = n ? calloc((size_t)n, sizeof *ranked) : NULL;
-  if (!ranked) return;
-  for (int i = 0; i < n; i++) {
-    ranked[i].artist = &s->artists->items[i];
-    ranked[i].tie = uid_hash(s->artists->items[i].uid, s->seed);
-  }
-  for (int i = 0; s->played && i < s->played->count; i++) {
-    const mc_played_info *p = &s->played->items[i];
-    const mc_album_info *a = p->kind == MC_RECENT_ALBUM ? find_album(s, p->uid) : NULL;
-    int at = a && a->artist_uid[0] ? find_entry(s->artist_index, n, a->artist_uid) : -1;
-    if (at >= 0) ranked[at].plays += p->plays; /* found by index: ranked is still in list order */
-  }
-  qsort(ranked, (size_t)n, sizeof *ranked, ranked_cmp);
-  for (int i = 0; i < n; i++) {
-    const mc_artist_info *a = ranked[i].artist;
-    if (!a->cover_dir) continue; /* a station needs a cover */
-    mc_home_pick *p = add(r, MC_RECENT_ARTIST, a->uid);
+  mc_radio_station_list *list = NULL;
+  if (mc_radio_stations_list(s->lib, s->now_ms, &list) != MC_OK) return;
+  for (int i = 0; i < list->count; i++) {
+    const mc_radio_station_info *st = &list->items[i];
+    mc_home_pick *p = add(r, MC_RECENT_ARTIST, st->artist_uid);
     if (!p) break;
+    const mc_artist_info *artist = find_artist(s, st->artist_uid);
     p->station = 1;
-    p->title = mc_format_alloc(mc_str(MC_STR_HOME_STATION), MC_S(or_untitled(a->name)));
-    p->sub = mc_strdup(mc_str(MC_STR_HOME_STATION_SUB));
-    p->cover_dir = mc_strdup(a->cover_dir);
+    memcpy(p->seed_uid, st->seed_track, sizeof p->seed_uid);
+    p->title = mc_strdup(st->name);
+    p->sub = mc_strdup(st->sub);
+    p->seed_title = mc_strdup(st->seed_title);
+    const char *cover = st->cover_dir ? st->cover_dir : artist ? artist->cover_dir : NULL;
+    p->cover_dir = cover ? mc_strdup(cover) : NULL;
   }
-  free(ranked);
+  mc_radio_station_list_free(list);
 }
 
 /* As the sidebar's recents, but as many as fit: albums and playlists, and artists and album
@@ -403,6 +381,7 @@ void mc_home_picks_free(mc_home_picks *picks) {
     for (int k = 0; k < picks->counts[i]; k++) {
       mc_free(picks->rows[i][k].title);
       mc_free(picks->rows[i][k].sub);
+      mc_free(picks->rows[i][k].seed_title);
       mc_free(picks->rows[i][k].cover_dir);
     }
     free(picks->rows[i]);
