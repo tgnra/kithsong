@@ -46,8 +46,8 @@
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
  * changes (a smart playlist's too: its rule's editor is smart_editor.c) and they're made
  * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]) and the speaker
- * before the caption buttons ([V]) are owner-drawn here; shuffle is kept in the settings, as
- * is the volume, which the speaker's drop-down (volume_popup.c) and the keyboard change.
+ * next to it ([V]) are owner-drawn here; shuffle is kept in the settings, as is the volume,
+ * which the speaker's drop-down (volume_popup.c) and the keyboard change.
  *
  * Sync (sync_bridge.c) runs while a library is open, and stops before it closes, so switching
  * library restarts it. Its events arrive as WM_APP_SYNC. While tracks wait for a device this PC
@@ -129,7 +129,7 @@ enum {
   ID_SEARCH,
   ID_ARTISTS,
   ID_SHUFFLE, /* after the seekbar */
-  ID_VOLUME,  /* before the caption buttons: opens volume_popup.c */
+  ID_VOLUME,  /* after shuffle: opens volume_popup.c */
   ID_WAITING, /* the waiting banner, above the album grid */
   ID_HOME,
   NUM_BUTTONS = ID_NEXT - ID_PREV + 1
@@ -144,9 +144,10 @@ enum {
   PAD = 8,
   ICON_BTN = 36,
   LOGO = ICON_BTN, /* the logo's square, as tall as the playback buttons */
-  NOW_PLAYING_GAP = 16, /* either side of the seekbar strip and the shuffle button */
+  ICON_GAP = 2,         /* between neighbouring icon buttons */
+  NOW_PLAYING_GAP = 16, /* between the playback buttons and the seekbar strip */
   SHUFFLE_GAP = 6,      /* between the seekbar strip and the shuffle button */
-  NOW_PLAYING_MAX = 640,
+  NOW_PLAYING_MAX = 640 + ICON_GAP + ICON_BTN, /* the strip, shuffle and the speaker */
 };
 
 /* The main window's timers. */
@@ -350,24 +351,24 @@ static void layout(void) {
 
   HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 8);
   int x = logo_rect().right + pad;
-  for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(2))
+  for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(ICON_GAP))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  int volume_x = w - caption_buttons_width() - pad - icon;
-  dwp = DeferWindowPos(dwp, g_app.volume, NULL, volume_x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  /* The seekbar and the shuffle button after it take the space between the playback buttons
-   * and the speaker, up to a point, centred in the window where that leaves them clear of
-   * both. */
-  int min_left = x - scale(2) + scale(NOW_PLAYING_GAP);
-  int max_right = volume_x - scale(NOW_PLAYING_GAP);
+  /* The seekbar, with the shuffle and speaker buttons after it, takes the space between the
+   * playback buttons and the caption buttons, up to a point, centred in the window where
+   * that leaves it clear of both. */
+  int min_left = x - scale(ICON_GAP) + scale(NOW_PLAYING_GAP);
+  int max_right = w - caption_buttons_width() - pad;
   int np_w = max_right - min_left;
   if (np_w > scale(NOW_PLAYING_MAX)) np_w = scale(NOW_PLAYING_MAX);
   int np_left = (w - np_w) / 2;
   if (np_left + np_w > max_right) np_left = max_right - np_w;
   if (np_left < min_left) np_left = min_left;
-  int strip_w = np_w - icon - scale(SHUFFLE_GAP);
-  dwp = DeferWindowPos(dwp, g_app.now_playing, NULL, np_left, 0, strip_w > 0 ? strip_w : 0, bar, SWP_NOZORDER);
-  dwp = DeferWindowPos(dwp, g_app.shuffle, NULL, np_left + (strip_w > 0 ? strip_w : 0) + scale(SHUFFLE_GAP),
-                       (bar - icon) / 2, icon, icon, SWP_NOZORDER);
+  int strip_w = max(0, np_w - 2 * icon - scale(SHUFFLE_GAP) - scale(ICON_GAP));
+  int shuffle_x = np_left + strip_w + scale(SHUFFLE_GAP);
+  dwp = DeferWindowPos(dwp, g_app.now_playing, NULL, np_left, 0, strip_w, bar, SWP_NOZORDER);
+  dwp = DeferWindowPos(dwp, g_app.shuffle, NULL, shuffle_x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
+  dwp = DeferWindowPos(dwp, g_app.volume, NULL, shuffle_x + icon + scale(ICON_GAP), (bar - icon) / 2, icon, icon,
+                       SWP_NOZORDER);
   dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
   UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
   /* Tracks waiting for a device: a strip over the grid, beside the track list. */
