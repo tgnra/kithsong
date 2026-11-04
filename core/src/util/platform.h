@@ -97,7 +97,7 @@ mc_status mc_list_dir(const char *dir, mc_list_fn fn, void *user);
  * junctions and other reparse points, and anything else that's neither a file nor a folder,
  * aren't followed or reported. It stops at the first folder it can't read all of and says so:
  * MC_ERR_NOT_FOUND for no root, MC_ERR_IO otherwise (a root that's a file too). fn returns 0
- * to go on, 1 not to go into this folder, -1 to stop (MC_ERR_CANCELLED). */
+ * to go on, 1 not to go into this folder, -1 to stop (MC_ERR_IN_USE). */
 typedef struct mc_tree_entry {
   const char *path;  /* UTF-8, root then native separators */
   int is_dir;

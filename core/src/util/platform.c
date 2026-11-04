@@ -300,7 +300,7 @@ static mc_status tree_dir(const wchar_t *dir, mc_tree_fn fn, void *user) {
       mc_tree_entry e = {utf8, is_dir, (fd.dwFileAttributes & FILE_ATTRIBUTE_SYSTEM) != 0,
                          written > made ? written : made, written};
       int r = fn(user, &e);
-      if (r < 0) st = MC_ERR_CANCELLED;
+      if (r < 0) st = MC_ERR_IN_USE;
       else if (is_dir && r == 0) st = tree_dir(full, fn, user);
     }
     free(utf8);
@@ -773,7 +773,7 @@ static mc_status tree_dir(const char *dir, mc_tree_fn fn, void *user) {
       int is_dir = S_ISDIR(sb.st_mode);
       mc_tree_entry entry = {full, is_dir, 0, written > changed ? written : changed, written};
       int r = fn(user, &entry);
-      if (r < 0) st = MC_ERR_CANCELLED;
+      if (r < 0) st = MC_ERR_IN_USE;
       else if (is_dir && r == 0) st = tree_dir(full, fn, user);
     }
     free(full);

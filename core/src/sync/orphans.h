@@ -38,7 +38,7 @@ typedef struct mc_orphans_result {
 /* Runs a sweep on this thread, which mustn't be a UI thread: it walks the whole folder. MC_OK
  * if it ran to the end, whatever failed on single files. Any other status means it removed
  * nothing, or stopped part-way as someone came, and the reason is logged: MC_ERR_LOCKED while
- * anyone else is working in the folder, MC_ERR_CANCELLED if stopping said so, MC_ERR_NOT_FOUND
+ * anyone else is working in the folder, MC_ERR_IN_USE if stopping said so, MC_ERR_NOT_FOUND
  * or MC_ERR_IO for a folder it couldn't walk whole, MC_ERR_DB for a library it couldn't read,
  * and MC_ERR_INVALID_ARG for the guards. */
 mc_status mc_orphans_sweep(const mc_orphans_args *args, mc_orphans_result *out);

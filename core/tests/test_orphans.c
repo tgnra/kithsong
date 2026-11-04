@@ -38,6 +38,8 @@ static char g_bin[1200];
 static int g_binned, g_fail_trash;
 static const char *g_refuse; /* a file name the trash won't take */
 static const char *g_arrive; /* a folder someone starts work in on the first trashing */
+static struct fx *g_late;    /* a library that gets rows on the first trashing */
+static void row_of(struct fx *f, const char *rel);
 
 static mc_status fake_trash(const char *path) {
   if (g_refuse && strstr(path, g_refuse)) {
@@ -47,6 +49,11 @@ static mc_status fake_trash(const char *path) {
   if (g_arrive) {
     mc_folder_hold(g_arrive);
     g_arrive = NULL;
+  }
+  if (g_late) {
+    struct fx *f = g_late;
+    g_late = NULL;
+    row_of(f, strstr(path, "race a") ? "race b.txt" : "race a.txt");
   }
   char to[1300];
   snprintf(to, sizeof to, "%s%c%d", g_bin, MC_PATH_SEP, g_binned);
@@ -103,7 +110,7 @@ static int there(fx *f, const char *rel) {
   return yes;
 }
 
-static void row_of(fx *f, const char *rel) {
+static void row_of(struct fx *f, const char *rel) {
   static int n;
   char uid[40];
   snprintf(uid, sizeof uid, "file-%d", ++n);
@@ -238,7 +245,7 @@ static void test_categories(void) {
   put(&f, ".Trash/1000/files/old.mp3");
   /* In flight: too young, whatever it's called. */
   put_as(&f, "Artist/Album/02 Song.flac.part", 1);
-  put_as(&f, "Artist/Album/cover.jpg.tmp", 1);
+  put_as(&f, "Box/Set/cover.png.tmp", 1);
 
   /* And what isn't: left by a crash, a cover of nothing, the same names not at the top. */
   put(&f, "Artist/Album/03 Song.flac.part");
@@ -260,8 +267,8 @@ static void test_categories(void) {
     ".kithsong-probe-001122334455", ".merge-restore/library.db", "desktop.ini", "Artist/Desktop.ini",
     "$RECYCLE.BIN/S-1-5-21/$R1.mp3", "System Volume Information/tracking.log", "lost+found/#123",
     ".Trash-1000/files/old.mp3", ".Trash/1000/files/old.mp3", "Artist/Album/02 Song.flac.part",
-    "Artist/Album/cover.jpg.tmp.gone-not"};
-  for (int i = 0; i < 19; i++) {
+    "Box/Set/cover.png.tmp"};
+  for (int i = 0; i < (int)(sizeof kept / sizeof kept[0]); i++) {
     if (!there(&f, kept[i])) fprintf(stderr, "gone: %s\n", kept[i]);
     CHECK(there(&f, kept[i]));
   }
@@ -533,7 +540,7 @@ static void test_timing(void) {
   /* Stopping the app stops it, walking or removing. */
   put(&f, "stray.txt");
   mc_orphans_args stop = {f.lib, f.config, 0, 0, say_stop, NULL};
-  CHECK(mc_orphans_sweep(&stop, &r) == MC_ERR_CANCELLED && there(&f, "stray.txt"));
+  CHECK(mc_orphans_sweep(&stop, &r) == MC_ERR_IN_USE && there(&f, "stray.txt"));
 
   /* Age: young by its modified time, and old by that but freshly copied in. */
   put_as(&f, "new.txt", 1);
@@ -563,10 +570,13 @@ static void test_timing(void) {
   CHECK(!there(&f, "stuck.txt") && g_binned == bin);
   CHECK(there(&f, "Artist/Album/00 Song.flac"));
 
-  /* A row added after the walk's judged, as by a second app: mc_transfer_trash sees it through
-   * remove_one's check, covered by the row being there at all. */
-  track(&f, "late.flac");
-  CHECK(sweep(&f, &r) == MC_OK && r.orphans == 0 && there(&f, "late.flac"));
+  /* A row that turns up after the rows were read, as a second app on the library could write:
+   * the first file's removal makes it, and whichever of the two is left then has one. */
+  put(&f, "race a.txt");
+  put(&f, "race b.txt");
+  g_late = &f;
+  CHECK(sweep(&f, &r) == MC_OK && r.orphans == 2 && r.removed == 1 && r.failed == 0);
+  CHECK(there(&f, "race a.txt") != there(&f, "race b.txt"));
   fx_close(&f);
 }
 

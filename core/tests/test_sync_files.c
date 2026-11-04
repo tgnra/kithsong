@@ -1242,7 +1242,7 @@ int main(int argc, char **argv) {
   /* Reconcile deletes only inside the library folder. Rows of Other (unwanted on B) whose
    * paths lead outside it, as a damaged row's might, lose their rows but not the files:
    * "../", an absolute path, and a folder that links outside. An unknown file behind the link
-   * isn't seen. An unknown file's folders go once nothing but a cover is left in them. */
+   * isn't seen. An orphan's folders go once they're empty; an old cover there is an orphan too. */
   {
     char out[1100], up[1200], absf[1200], via[1200], stray[1200], link[1100], p[1300];
     snprintf(out, sizeof out, "%s/b/outside", root);
@@ -1272,6 +1272,7 @@ int main(int argc, char **argv) {
     CHECK(mc_mkdirs(p) == MC_OK);
     snprintf(p, sizeof p, "%s/Stray/Album/cover.jpg", b.libdir);
     CHECK(write_bytes(p, "c"));
+    make_old(p);
     snprintf(p, sizeof p, "%s/Stray/Album/old.flac", b.libdir);
     CHECK(write_bytes(p, "f"));
     make_old(p);
@@ -1280,7 +1281,7 @@ int main(int argc, char **argv) {
     CHECK(lib_int(&b, sql) == 0);
     CHECK(mc_file_exists(up) && mc_file_exists(absf) && mc_file_exists(via) &&
           mc_file_exists(stray));
-    CHECK(rb.files_unknown == 1 && !mc_file_exists(p));
+    CHECK(rb.files_unknown == 2 && !mc_file_exists(p));
     snprintf(p, sizeof p, "%s/Stray", b.libdir);
     CHECK(!mc_file_exists(p));
     CHECK(lib_file_exists(&b, "Low/Things (1994)/01 Song One.opus"));

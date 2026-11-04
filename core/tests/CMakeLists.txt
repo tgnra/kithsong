@@ -113,6 +113,10 @@ target_include_directories(manual_opus_sync PRIVATE "${PROJECT_SOURCE_DIR}/core/
 add_executable(manual_opus_bench manual_opus_bench.c)
 target_link_libraries(manual_opus_bench PRIVATE musiccore mc_opusenc mbedcrypto)
 target_include_directories(manual_opus_bench PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+# Two paired scratch instances to try the orphan sweep in the real app; see the comment at its top.
+add_executable(manual_orphan_seed manual_orphan_seed.c)
+target_link_libraries(manual_orphan_seed PRIVATE musiccore mc_sqlite3)
+target_include_directories(manual_orphan_seed PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_import manual_import.c)
 
 target_link_libraries(manual_import PRIVATE musiccore)

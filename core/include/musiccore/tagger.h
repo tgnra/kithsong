@@ -260,6 +260,9 @@ typedef enum mc_import_outcome {
                                 * another item ("Disc folders" above); it has none left */
 } mc_import_outcome;
 
+/* Sweep. Once every item is settled and the import went all the way, its thread sweeps the
+ * library folder for orphans (see "Files" in docs/sync-protocol.md): an import that left
+ * files unknown in the library folder, as a skipped file of a source inside it, doesn't. */
 typedef struct mc_import_options {
   double threshold; /* auto-accept at or above this confidence (0..1); 0 = default 0.9 */
   int fetch_art;    /* download a front cover (Cover Art Archive, then iTunes) for albums

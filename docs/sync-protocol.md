@@ -777,16 +777,35 @@ the plaintext limit.
     been deleted. It removes their `files` rows and any album folders left empty (holding
     nothing but a `cover.jpg` or `cover.png`, which go too). A wrong-format copy of a wanted
     track stays until a copy in the right format has arrived, so the track stays playable.
-  - It removes files in the library folder that no `files` row knows about. Only audio
-    files (the extensions import takes) and stale `.part` files count, and only once they
-    are an hour old, so an import that is copying files in isn't raced. Audio files go to
-    the Recycle Bin or trash, since one may be the user's own (deleted if there's none, and
-    always on Android, which has no trash); `.part` files are deleted.
+  - It sweeps the library folder for orphans (`core/src/sync/orphans.c`, which lists what
+    the app keeps there): every file of any type, hidden ones too, that nothing explains,
+    once it's an hour old by the newest of its modified and created times. A file is
+    explained by a `files` row, by the rows of a `library-before-merge-*.db` (a merge leaves
+    tracks it couldn't bring in where they are), by being a cover in a folder with such a
+    file in or under it, or by a name the app or the system keeps there. Names are compared
+    by `mc_path_key()`, loose on purpose: NFC and NFD, letter case and separators all match
+    on every platform, so a false match keeps a file where a false mismatch would lose one.
+    Orphans go to the Recycle Bin or trash and stay where they are if it won't take them;
+    on Android, whose library is the app's private folder and has no trash, they're
+    deleted. Folders left empty go too, never the library folder.
+  - A sweep also runs after an import that went all the way: every item settled, at least
+    one imported, none failed, not cancelled. It doesn't run while an item waits in review,
+    for its other discs or for MusicBrainz, nor if a source overlaps the library folder, nor
+    while sync isn't running on the library, nor on a device whose profile isn't confirmed.
+  - It runs only after a session that ended with BYE, ran this device's receive turn and
+    had no checksum failures, and it refuses, logged, while anyone else works in the folder
+    (imports, edits, deletes, merges, library moves and other sessions hold it, see
+    `library/folder_gate.h`; one that starts meanwhile stops it before the next removal), if
+    an edit's swap or a merge is unfinished, if the folder can't be walked whole, if the
+    library knows no files or none of them are there, and if orphans outnumber known files
+    (`MC_ORPHANS_MAX_PER_KNOWN`), since an older install may point at a folder of music
+    never imported. A peer's next session is safe beside it: a fetch needs `files_busy`,
+    which the sweep's session still holds, and serves only files that have rows.
   - Deleted tracks: `files` rows go with their track (`ON DELETE CASCADE`) when the library
     exchange applies the delete, so the session notes the rows it deletes and removes their
     files: originals imported on this device go to its Recycle Bin or trash (removed if
     there's none), received files are removed. A file whose row went otherwise (a crash, an
-    edit outside a session) is an unknown file. Before looking for unknown files, the
+    edit outside a session) is an orphan. Before looking for orphans, the
     session restores deleted tracks whose files the user took back out of the trash
     (`mc_delete_restore()`, `core/include/musiccore/delete.h`), so those aren't swept away.
   - Stale copies: when an import on some device replaces a track's original with a
@@ -812,11 +831,11 @@ the plaintext limit.
     transcode, rather than split across transcoders as in [Files](#files): the others may
     not hold the original yet. With the archive receiving first (step 6 of
     [Session](#session)), the original's swap then takes one session. On an archive, only deleted
-    tracks' files are removed, and unknown files are reported, not deleted.
+    tracks' files are removed, and orphans are reported, not deleted.
   - Other deletes are permanent, and all are only of files inside the library folder: a
     path that is absolute, has a `.` or `..` part or a colon, or passes through a symlink or
-    junction is left alone (its `files` row still goes), and the scan for unknown files
-    doesn't follow links. Library rows (tracks, albums, their art) are group data and stay: a device drops
+    junction is left alone (its `files` row still goes), and the sweep neither follows links
+    nor touches them. Library rows (tracks, albums, their art) are group data and stay: a device drops
     only its own `files` rows, and frontends hide tracks without a file.
 - Every device receives the whole library database. Frontends list only tracks with a local
   file (`available_only`), except the profile picker, which lists everything.

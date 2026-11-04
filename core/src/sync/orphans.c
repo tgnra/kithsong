@@ -163,7 +163,7 @@ static int volume_folder(const char *name) {
 static int on_entry(void *user, const mc_tree_entry *e) {
   scan *s = user;
   if (s->args->stopping && s->args->stopping(s->args->user)) {
-    s->st = MC_ERR_CANCELLED;
+    s->st = MC_ERR_IN_USE;
     return -1;
   }
   if (e->system) return 1; /* the OS's; for a file, 1 is the same as 0 */
@@ -318,6 +318,23 @@ static void prune_up(mc_library *lib, char *abs) {
   }
 }
 
+/* mc_transfer_trash(), but in a debug build KITHSONG_TEST_TRASH_DIR takes the place of the real
+ * trash, so a run of the app on a scratch library leaves the Recycle Bin alone. */
+static mc_status to_trash(const char *abs) {
+#ifndef NDEBUG
+  const char *dir = getenv("KITHSONG_TEST_TRASH_DIR");
+  if (dir && *dir) {
+    static int n;
+    const char *name = strrchr(abs, MC_PATH_SEP);
+    char to[2300];
+    snprintf(to, sizeof to, "%s%c%d-%s", dir, MC_PATH_SEP, __atomic_add_fetch(&n, 1, __ATOMIC_RELAXED),
+             name ? name + 1 : abs);
+    return mc_mkdirs(dir) == MC_OK ? mc_rename(abs, to, 0) : MC_ERR_IO;
+  }
+#endif
+  return mc_transfer_trash(abs);
+}
+
 /* 1 if f went, 0 if it's still there and that's fine, -1 if it couldn't be removed. */
 static int remove_one(mc_library *lib, const found *f) {
   char *abs = mc_transfer_deletable_path(lib, f->rel);
@@ -326,7 +343,7 @@ static int remove_one(mc_library *lib, const found *f) {
   int went = 0;
   if (row_names(lib, f->rel) || mc_file_info(abs, &size, &mtime) != MC_OK || mtime != f->mtime_ms) {
     say("left %s: it changed during the sweep", f->rel);
-  } else if ((mc_orphans_permanent ? mc_remove(abs) : mc_transfer_trash(abs)) == MC_OK) {
+  } else if ((mc_orphans_permanent ? mc_remove(abs) : to_trash(abs)) == MC_OK) {
     say("%s %s", mc_orphans_permanent ? "deleted" : "moved to the trash:", f->rel);
     prune_up(lib, abs);
     went = 1;
@@ -390,7 +407,7 @@ static mc_status sweep_watched(const mc_orphans_args *a, mc_folder_watch *w, mc_
   mc_status st = mc_tree_walk(dir, on_entry, &s);
   if (st != MC_OK || s.st != MC_OK) {
     if (s.st != MC_OK) st = s.st;
-    if (st != MC_ERR_CANCELLED) refuse(st, "the folder couldn't be walked whole", dir);
+    if (st != MC_ERR_IN_USE) refuse(st, "the folder couldn't be walked whole", dir);
     goto done;
   }
   st = read_known(lib, &s, &k);
@@ -427,7 +444,7 @@ static mc_status sweep_watched(const mc_orphans_args *a, mc_folder_watch *w, mc_
       if (a->report_only) {
         say("unknown file in the library folder: %s", s.files[i].rel);
       } else if (a->stopping && a->stopping(a->user)) {
-        st = MC_ERR_CANCELLED;
+        st = MC_ERR_IN_USE;
       } else if (!mc_folder_watch_clear(w)) {
         st = refuse(MC_ERR_LOCKED, "something started working in the folder; stopped", dir);
       } else {
