@@ -14,7 +14,7 @@ enum {
   FORM_WIDTH = 520,
   SEARCH_WIDTH = 640,
   SEARCH_HEIGHT = 620,
-  BANNER_ROOM = 56, /* what the dialog grows by for the banner, which it wouldn't by itself */
+  BANNER_ROOM = 104, /* what the dialog grows by for the banner, its button under its text */
   YEAR_DIGITS = 4,
   NUMBER_DIGITS = 3,
 };
@@ -241,11 +241,13 @@ static void search_done(gpointer owner, job *j) {
              j->st != MC_OK, FALSE);
   mc_free(failed);
   search_update(s);
-  /* From the button, on to what it found. */
+  /* From the search, on to what it found, or back to try other words. */
   if (found) {
     GtkListBoxRow *first = gtk_list_box_get_row_at_index(GTK_LIST_BOX(s->list), 0);
     gtk_list_box_select_row(GTK_LIST_BOX(s->list), first);
-    adw_dialog_set_focus(ADW_DIALOG(s->dialog), GTK_WIDGET(first));
+    gtk_widget_grab_focus(GTK_WIDGET(first));
+  } else {
+    gtk_widget_grab_focus(GTK_WIDGET(gtk_editable_get_delegate(GTK_EDITABLE(s->title))));
   }
 }
 
