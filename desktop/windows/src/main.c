@@ -66,8 +66,9 @@
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
  * so two instances can sync on one PC; the paths are imported. Launching it again with the
  * same config folder brings the open window forward and hands it the paths instead, as
- * GApplication does on Linux (claim_instance). --add-firewall-rule alone is firewall.c's
- * elevated helper, which adds the Windows Firewall rule sync needs and exits.
+ * GApplication does on Linux (claim_instance). --add-firewall-rule or
+ * --add-firewall-rule-public alone is firewall.c's elevated helper, which adds the Windows
+ * Firewall rule sync needs and exits.
  */
 #define _CRT_RAND_S /* rand_s(), for Shuffle Albums */
 #include <windows.h>
@@ -719,6 +720,7 @@ static void apply_theme(void) {
   artist_view_update(g_app.dpi, g_app.font);
   album_grid_theme_changed();
   waiting_banner_theme_changed();
+  device_view_theme_changed();
   volume_popup_close(); /* it opens again in the new colours */
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
@@ -1765,7 +1767,10 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       on_command(LOWORD(wp), HIWORD(wp));
       return 0;
     case WM_ACTIVATEAPP: /* back from Explorer, maybe from restoring files from the Recycle Bin */
-      if (wp) restore_deleted();
+      if (wp) {
+        restore_deleted();
+        firewall_recheck(); /* maybe from Windows' firewall or network settings */
+      }
       break;
     case WM_APPCOMMAND: /* the mouse's back button, over the track list on an artist's page */
       if (GET_APPCOMMAND_LPARAM(lp) == APPCOMMAND_BROWSER_BACKWARD && artist_page()) {

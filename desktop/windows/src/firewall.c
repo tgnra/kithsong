@@ -1,12 +1,20 @@
 #define COBJMACROS
+#include <winsock2.h> /* before windows.h, and ws2ipdef.h for netioapi.h's MIB_IF_ROW2 */
+#include <ws2ipdef.h>
+#include <iphlpapi.h>
+#include <netioapi.h>
+
 #include "firewall.h"
 
 #include <initguid.h> /* defines netfw.h's CLSIDs and IIDs here: libuuid has none of them */
 #include <netfw.h>
+#include <netlistmgr.h>
 #include <oleauto.h>
 #include <shellapi.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <wchar.h>
 
 #include "musiccore/sync.h"
@@ -18,24 +26,48 @@
 #define RULE_GROUP L"Kithsong" /* the rule's Grouping, which Windows' firewall settings show */
 #define RULE_PROFILES (NET_FW_PROFILE2_PRIVATE | NET_FW_PROFILE2_DOMAIN)
 #define PROTOCOL_ANY 256 /* NET_FW_IP_PROTOCOL_ANY, which mingw's icftypes.h leaves out */
+#define RULE_CATEGORY_FIREWALL 2 /* NET_FW_RULE_CATEGORY_FIREWALL, which it leaves out too */
 
 enum {
-  WM_FW_CHECKED = WM_APP + 1, /* wParam: TRUE if the rule is missing */
+  WM_FW_CHECKED = WM_APP + 1, /* lParam: a check *, which the receiver frees */
   WM_FW_ADDED,                /* wParam: the helper's exit code, an HRESULT */
   TIMER_CHECK = 1,
+  TIMER_WATCH,
   /* After startup: the window has drawn and the library loaded first. */
   CHECK_DELAY_MS = 2000,
+  /* While the page shows, for what no message tells us: a network changing, or a rule added
+   * in Windows' own settings while Kithsong stays in front. A check takes about 400 ms, all
+   * of it on a thread. Coming back to the app checks at once (firewall_recheck()). */
+  WATCH_MS = 20000,
   MAX_EXE = 1024,
   MAX_STALE = 16, /* old rules removed at once */
 };
+
+/* One check, on its thread: what it was asked, then what it found. */
+typedef struct check {
+  unsigned port, seq;
+  BOOL ask;     /* for the startup prompt, which acts on missing */
+  BOOL missing; /* the prompt should offer the rule */
+  firewall_status status;
+} check;
 
 static struct {
   HWND wnd; /* message-only: the threads report to it */
   HWND owner;
   mc_settings *settings;
-  wchar_t exe[MAX_EXE]; /* this exe's full path, which the rule names */
-  BOOL busy;            /* a check, the dialog or the helper is under way */
-  BOOL asked;           /* the check is Settings' Ask Again, which says when there's no need */
+  wchar_t exe[MAX_EXE];    /* this exe's full path, which the rule names */
+  const wchar_t *rule_name; /* the name add_rule() gives it: mc_wstr() is for the UI thread */
+  BOOL busy;               /* the prompt's check, the dialog or the helper is under way */
+  BOOL asked;              /* the check is Settings' Ask Again, which says when there's no need */
+  BOOL adding_public;      /* the helper running adds the rule for public networks */
+  BOOL watching;           /* firewall_watch() is on */
+  int running;             /* checks on their threads */
+  unsigned seq;            /* of the last check started: only its status counts */
+  firewall_status status;
+  void (*listener)(void);
+#ifndef NDEBUG
+  BOOL forced_allowed; /* the debug override's Allow "worked" */
+#endif
 } g_fw;
 
 /* Running from an MSIX package. Its manifest declares the rule, which Windows adds at
@@ -83,13 +115,17 @@ static BOOL port_listed(const wchar_t *ports, unsigned port) {
 typedef struct verdict {
   long allow, block; /* enabled rules allowing or blocking them */
   BOOL mentioned;    /* some rule names this exe, enabled or not */
+  BOOL moved;        /* a rule of ours names an exe that's gone */
 } verdict;
+
+static BOOL stale(INetFwRule *r, const wchar_t *name);
 
 /* Adds rule r to v if it's about us: an inbound rule naming this exe, for TCP or any
  * protocol, or naming no program but TCP on sync's port. Rules for a service, or for a
  * program-less protocol other than TCP, are left out: those are Windows' own, and often
  * narrower than they look (an interface type, a remote address). */
 static void weigh(INetFwRule *r, unsigned port, verdict *v) {
+  if (stale(r, g_fw.rule_name)) v->moved = TRUE;
   NET_FW_RULE_DIRECTION dir = 0;
   if (FAILED(INetFwRule_get_Direction(r, &dir)) || dir != NET_FW_RULE_DIR_IN) return;
   BSTR app = NULL, service = NULL, ports = NULL;
@@ -161,21 +197,18 @@ static BOOL profile_open(INetFwPolicy2 *policy, NET_FW_PROFILE_TYPE2 p, BOOL *sh
   return !on || (!block_all && in == NET_FW_ACTION_ALLOW);
 }
 
-/* TRUE if sync needs the rule: the firewall stops other devices connecting on the networks
- * this PC is on now, and on private ones, and adding it would change that. Quiet (FALSE)
- * whenever in doubt, including when the firewall can't be read. */
-static BOOL rule_missing(unsigned port) {
-  INetFwPolicy2 *policy = NULL;
-  if (FAILED(CoCreateInstance(&CLSID_NetFwPolicy2, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwPolicy2,
-                              (void **)&policy)))
-    return FALSE;
-  long current = 0;
-  INetFwPolicy2_get_CurrentProfileTypes(policy, &current);
-  static const NET_FW_PROFILE_TYPE2 kinds[] = {NET_FW_PROFILE2_DOMAIN, NET_FW_PROFILE2_PRIVATE,
-                                               NET_FW_PROFILE2_PUBLIC};
+static const NET_FW_PROFILE_TYPE2 kinds[] = {NET_FW_PROFILE2_DOMAIN, NET_FW_PROFILE2_PRIVATE,
+                                             NET_FW_PROFILE2_PUBLIC};
+#define NUM_KINDS (sizeof kinds / sizeof kinds[0])
+
+/* TRUE if the startup prompt should offer the rule: the firewall stops other devices
+ * connecting on the networks this PC is on now (current), and on private ones, and adding
+ * it would change that. Quiet (FALSE) whenever in doubt. Stricter than the banner, which
+ * interrupts nobody: see judge(). */
+static BOOL rule_missing(INetFwPolicy2 *policy, long current, const verdict *v) {
   long guarded = 0;  /* current profiles whose firewall could stop sync */
   long notifies = 0; /* ... and that show Windows' own alert */
-  for (size_t i = 0; i < sizeof kinds / sizeof kinds[0]; i++) {
+  for (size_t i = 0; i < NUM_KINDS; i++) {
     BOOL shut;
     if (!(current & kinds[i]) || profile_open(policy, kinds[i], &shut)) continue;
     guarded |= kinds[i];
@@ -184,30 +217,330 @@ static BOOL rule_missing(unsigned port) {
       notifies |= kinds[i];
   }
   BOOL shut_private;
-  BOOL missing = guarded && !profile_open(policy, NET_FW_PROFILE2_PRIVATE, &shut_private) && !shut_private;
-  verdict v = {0};
-  if (missing && FAILED(weigh_rules(policy, port, &v))) missing = FALSE;
+  if (!guarded || profile_open(policy, NET_FW_PROFILE2_PRIVATE, &shut_private) || shut_private) return FALSE;
   /* Sync gets in on a network this PC is on now, or the rule is there for private ones;
    * or the user blocked Kithsong on private networks, which a rule of ours wouldn't undo. */
-  if (missing && ((v.allow & ~v.block & guarded) || (v.allow & NET_FW_PROFILE2_PRIVATE) ||
-                  (v.block & NET_FW_PROFILE2_PRIVATE)))
-    missing = FALSE;
+  if ((v->allow & ~v->block & guarded) || (v->allow & NET_FW_PROFILE2_PRIVATE) || (v->block & NET_FW_PROFILE2_PRIVATE))
+    return FALSE;
   /* Windows asks for itself the first time a program it has no rule for listens, and adds
    * the rule the user picks, so we'd only ask twice. */
-  if (missing && !v.mentioned && notifies) missing = FALSE;
-  INetFwPolicy2_Release(policy);
-  return missing;
+  return v->mentioned || !notifies;
+}
+
+/* Network n isn't only a virtual adapter's. A VPN or a virtual machine's switch often comes
+ * up as public beside a home network that's fine, and devices don't sync across those, so
+ * saying it's blocked would be a false alarm. In doubt it counts. */
+static BOOL on_real_adapter(INetwork *n) {
+  IEnumNetworkConnections *conns = NULL;
+  if (FAILED(INetwork_GetNetworkConnections(n, &conns))) return TRUE;
+  BOOL real = FALSE, any = FALSE;
+  INetworkConnection *c = NULL;
+  ULONG got = 0;
+  while (!real && IEnumNetworkConnections_Next(conns, 1, &c, &got) == S_OK && got == 1) {
+    GUID adapter;
+    MIB_IF_ROW2 row = {0};
+    any = TRUE;
+    real = FAILED(INetworkConnection_GetAdapterId(c, &adapter)) ||
+           ConvertInterfaceGuidToLuid(&adapter, &row.InterfaceLuid) != NO_ERROR || GetIfEntry2(&row) != NO_ERROR ||
+           row.InterfaceAndOperStatusFlags.HardwareInterface;
+    INetworkConnection_Release(c);
+  }
+  IEnumNetworkConnections_Release(conns);
+  return real || !any;
+}
+
+/* The networks this PC is connected to, by name and firewall profile, into nets (room for
+ * FIREWALL_MAX_NETS). Returns how many, or -1 if Windows wouldn't say. */
+static int read_networks(firewall_net *nets) {
+  INetworkListManager *list = NULL;
+  IEnumNetworks *it = NULL;
+  int count = -1;
+  if (SUCCEEDED(CoCreateInstance(&CLSID_NetworkListManager, NULL, CLSCTX_ALL, &IID_INetworkListManager,
+                                 (void **)&list)) &&
+      SUCCEEDED(INetworkListManager_GetNetworks(list, NLM_ENUM_NETWORK_CONNECTED, &it))) {
+    count = 0;
+    INetwork *n = NULL;
+    ULONG got = 0;
+    while (count < FIREWALL_MAX_NETS && IEnumNetworks_Next(it, 1, &n, &got) == S_OK && got == 1) {
+      NLM_NETWORK_CATEGORY category = NLM_NETWORK_CATEGORY_PUBLIC;
+      BSTR name = NULL;
+      if (SUCCEEDED(INetwork_GetCategory(n, &category)) && on_real_adapter(n)) {
+        firewall_net *net = &nets[count++];
+        net->profile = category == NLM_NETWORK_CATEGORY_PRIVATE                ? FIREWALL_PRIVATE
+                       : category == NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED ? FIREWALL_DOMAIN
+                                                                               : FIREWALL_PUBLIC;
+        if (SUCCEEDED(INetwork_GetName(n, &name)) && name) lstrcpynW(net->name, name, FIREWALL_NAME_MAX);
+        SysFreeString(name);
+      }
+      INetwork_Release(n);
+    }
+    IEnumNetworks_Release(it);
+  }
+  if (list) INetworkListManager_Release(list);
+  return count;
+}
+
+/* Product p says it's in charge of firewall rules, rather than of boot-time or stealth
+ * filtering alone. An answer in a shape we don't know counts as yes: it registered with
+ * the firewall, so "can't check" is the honest thing to say. */
+static BOOL filters_inbound(INetFwProduct *p) {
+  VARIANT categories;
+  VariantInit(&categories);
+  if (FAILED(INetFwProduct_get_RuleCategories(p, &categories))) return TRUE;
+  BOOL yes = TRUE;
+  VARTYPE vt = V_VT(&categories) & VT_TYPEMASK;
+  if ((V_VT(&categories) & VT_ARRAY) && V_ARRAY(&categories) && (vt == VT_VARIANT || vt == VT_I4)) {
+    LONG lo = 0, hi = -1;
+    if (SUCCEEDED(SafeArrayGetLBound(V_ARRAY(&categories), 1, &lo)) &&
+        SUCCEEDED(SafeArrayGetUBound(V_ARRAY(&categories), 1, &hi))) {
+      yes = FALSE;
+      for (LONG i = lo; i <= hi && !yes; i++) {
+        VARIANT item;
+        VariantInit(&item);
+        LONG category = -1;
+        if (vt == VT_I4) {
+          SafeArrayGetElement(V_ARRAY(&categories), &i, &category);
+        } else if (SUCCEEDED(SafeArrayGetElement(V_ARRAY(&categories), &i, &item)) &&
+                   SUCCEEDED(VariantChangeType(&item, &item, 0, VT_I4))) {
+          category = V_I4(&item);
+        }
+        VariantClear(&item);
+        yes = category == RULE_CATEGORY_FIREWALL;
+      }
+    }
+  }
+  VariantClear(&categories);
+  return yes;
+}
+
+/* Another firewall has taken over from Windows Firewall: its name goes in name (room for
+ * FIREWALL_NAME_MAX) and it returns TRUE. Windows Firewall isn't one of the products. */
+static BOOL read_product(wchar_t *name) {
+  INetFwProducts *products = NULL;
+  if (FAILED(CoCreateInstance(&CLSID_NetFwProducts, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwProducts,
+                              (void **)&products)))
+    return FALSE;
+  LONG count = 0;
+  BOOL found = FALSE;
+  if (SUCCEEDED(INetFwProducts_get_Count(products, &count))) {
+    for (LONG i = 0; i < count && !found; i++) {
+      INetFwProduct *p = NULL;
+      BSTR display = NULL;
+      if (FAILED(INetFwProducts_Item(products, i, &p))) continue;
+      found = filters_inbound(p);
+      if (found && SUCCEEDED(INetFwProduct_get_DisplayName(p, &display)) && display)
+        lstrcpynW(name, display, FIREWALL_NAME_MAX);
+      SysFreeString(display);
+      INetFwProduct_Release(p);
+    }
+  }
+  INetFwProducts_Release(products);
+  return found;
+}
+
+/* Sets st to the networks of the profiles in mask. nnets < 0: the networks aren't known, so
+ * it's the profiles alone. */
+static void list_networks(firewall_status *st, long mask, const firewall_net *nets, int nnets) {
+  st->nnets = 0;
+  if (nnets < 0) {
+    for (size_t i = 0; i < NUM_KINDS; i++)
+      if (mask & kinds[i]) st->nets[st->nnets++].profile = (long)kinds[i];
+    return;
+  }
+  for (int i = 0; i < nnets; i++)
+    if (mask & nets[i].profile) st->nets[st->nnets++] = nets[i];
+}
+
+/* What the banner says: for each network this PC is on, does the firewall let other devices
+ * in, and if not, could a rule of ours change that? Where it could, that's what's shown
+ * first; then what only the user can change. Unlike rule_missing(), a covered network doesn't
+ * excuse an uncovered one, and public networks count. */
+static void judge(INetFwPolicy2 *policy, long current, const verdict *v, firewall_status *st) {
+  firewall_net nets[FIREWALL_MAX_NETS] = {0};
+  int nnets = read_networks(nets);
+  long active = current;
+  if (nnets >= 0) {
+    active = 0;
+    for (int i = 0; i < nnets; i++) active |= nets[i].profile;
+  }
+  long fixable = 0, ruled = 0, shut = 0;
+  for (size_t i = 0; i < NUM_KINDS; i++) {
+    BOOL all_shut;
+    if (!(active & kinds[i]) || profile_open(policy, kinds[i], &all_shut)) continue;
+    if (all_shut)
+      shut |= kinds[i];
+    else if (v->block & kinds[i]) /* a block rule beats any allow rule */
+      ruled |= kinds[i];
+    else if (!(v->allow & kinds[i]))
+      fixable |= kinds[i];
+  }
+  long blocked = fixable | ruled | shut;
+  NET_FW_MODIFY_STATE modify = NET_FW_MODIFY_STATE_OK;
+  INetFwPolicy2_get_LocalPolicyModifyState(policy, &modify);
+  if (!blocked) {
+    st->state = FIREWALL_CLEAR;
+  } else if (modify == NET_FW_MODIFY_STATE_GP_OVERRIDE) { /* our rule would be ignored */
+    st->state = FIREWALL_MANAGED;
+    list_networks(st, blocked, nets, nnets);
+  } else if (fixable) {
+    st->state = FIREWALL_BLOCKED;
+    st->public_only = !(fixable & RULE_PROFILES);
+    st->moved = v->moved;
+    list_networks(st, fixable, nets, nnets);
+  } else {
+    st->state = ruled ? FIREWALL_RULE : FIREWALL_SHUT;
+    list_networks(st, ruled ? ruled : shut, nets, nnets);
+  }
+}
+
+#ifndef NDEBUG
+/* KITHSONG_DEBUG_FIREWALL sets what detection reports, to see each banner without touching
+ * this PC's firewall: a state (clear, blocked, rule, shut, managed, thirdparty, unreadable),
+ * then any of private, public, domain, moved, fail (Allow "fails") and noreach (show thirdparty
+ * and unreadable even though devices have connected), comma-separated.
+ * "@path" reads that from a file at every check, to see the banner change while running.
+ * While it's set nothing is changed or opened: Allow only pretends (start_helper()), and
+ * the buttons that open Windows' settings say what they'd open. */
+static BOOL forced_spec(char *spec, size_t n) {
+  const char *value = getenv("KITHSONG_DEBUG_FIREWALL");
+  if (!value || !*value) return FALSE;
+  if (*value != '@') {
+    snprintf(spec, n, "%s", value);
+    return TRUE;
+  }
+  spec[0] = '\0';
+  FILE *f = fopen(value + 1, "r");
+  if (f) {
+    if (!fgets(spec, (int)n, f)) spec[0] = '\0';
+    fclose(f);
+  }
+  spec[strcspn(spec, "\r\n")] = '\0';
+  return TRUE;
+}
+
+static BOOL forced_has(const char *spec, const char *word) {
+  size_t n = strlen(word);
+  for (const char *p = spec; (p = strstr(p, word)) != NULL; p += n)
+    if ((p == spec || p[-1] == ',') && (p[n] == ',' || p[n] == '\0')) return TRUE;
+  return FALSE;
+}
+
+static BOOL forced_status(firewall_status *st) {
+  char spec[128];
+  if (!forced_spec(spec, sizeof spec)) return FALSE;
+  static const struct {
+    const char *word;
+    firewall_state state;
+  } states[] = {{"blocked", FIREWALL_BLOCKED}, {"rule", FIREWALL_RULE},
+                {"shut", FIREWALL_SHUT},       {"managed", FIREWALL_MANAGED},
+                {"thirdparty", FIREWALL_THIRD_PARTY}, {"unreadable", FIREWALL_UNREADABLE}};
+  static const struct {
+    const char *word;
+    const wchar_t *name;
+    long profile;
+  } networks[] = {{"domain", L"corp.example.com", FIREWALL_DOMAIN},
+                  {"private", L"Home Wi-Fi", FIREWALL_PRIVATE},
+                  {"public", L"Airport Free Wi-Fi", FIREWALL_PUBLIC}};
+  st->state = FIREWALL_CLEAR;
+  for (size_t i = 0; i < sizeof states / sizeof states[0]; i++)
+    if (forced_has(spec, states[i].word)) st->state = states[i].state;
+  if (g_fw.forced_allowed) st->state = FIREWALL_CLEAR;
+  if (st->state == FIREWALL_CLEAR) return TRUE;
+  long covered = 0;
+  for (size_t i = 0; i < sizeof networks / sizeof networks[0]; i++) {
+    if (!forced_has(spec, networks[i].word)) continue;
+    st->nets[st->nnets].profile = networks[i].profile;
+    lstrcpynW(st->nets[st->nnets++].name, networks[i].name, FIREWALL_NAME_MAX);
+    covered |= networks[i].profile;
+  }
+  st->public_only = covered == FIREWALL_PUBLIC;
+  st->moved = forced_has(spec, "moved");
+  if (st->state == FIREWALL_THIRD_PARTY) lstrcpynW(st->product, L"Example Firewall", FIREWALL_NAME_MAX);
+  return TRUE;
+}
+#endif
+
+/* The one reading of the firewall, for the prompt (*missing) and the banner (*st). */
+static void read_firewall(unsigned port, BOOL *missing, firewall_status *st) {
+#ifndef NDEBUG
+  if (forced_status(st)) return; /* *missing stays FALSE: no prompt over the banner */
+#endif
+  st->state = FIREWALL_UNREADABLE;
+  BOOL third_party = read_product(st->product);
+  INetFwPolicy2 *policy = NULL;
+  HRESULT hr = CoCreateInstance(&CLSID_NetFwPolicy2, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwPolicy2, (void **)&policy);
+  long current = 0;
+  verdict v = {0};
+  if (SUCCEEDED(hr)) hr = INetFwPolicy2_get_CurrentProfileTypes(policy, &current);
+  if (SUCCEEDED(hr)) hr = weigh_rules(policy, port, &v);
+  if (SUCCEEDED(hr)) {
+    *missing = rule_missing(policy, current, &v);
+    if (!third_party) judge(policy, current, &v, st);
+  }
+  if (policy) INetFwPolicy2_Release(policy);
+  if (third_party) st->state = FIREWALL_THIRD_PARTY; /* Windows' rules don't decide */
 }
 
 static DWORD WINAPI check_main(void *arg) {
-  unsigned port = (unsigned)(uintptr_t)arg;
-  BOOL missing = FALSE;
+  check *c = arg;
+  c->status.state = FIREWALL_UNREADABLE;
   if (SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED))) {
-    missing = rule_missing(port);
+    read_firewall(c->port, &c->missing, &c->status);
     CoUninitialize();
   }
-  if (!PostMessageW(g_fw.wnd, WM_FW_CHECKED, missing, 0)) g_fw.busy = FALSE;
+  if (!PostMessageW(g_fw.wnd, WM_FW_CHECKED, 0, (LPARAM)c)) {
+    if (c->ask) g_fw.busy = FALSE;
+    free(c);
+  }
   return 0;
+}
+
+/* Starts a check on a thread; a later one replaces its status. Returns FALSE if it didn't. */
+static BOOL start_check(BOOL ask) {
+  mc_sync *sync = sync_bridge_get();
+  check *c = sync ? calloc(1, sizeof *c) : NULL;
+  if (!c) return FALSE;
+  c->port = mc_sync_port(sync);
+  c->seq = ++g_fw.seq;
+  c->ask = ask;
+  HANDLE thread = CreateThread(NULL, 0, check_main, c, 0, NULL);
+  if (!thread) {
+    free(c);
+    return FALSE;
+  }
+  CloseHandle(thread);
+  g_fw.running++;
+  return TRUE;
+}
+
+/* A new status from a check, or from the helper starting or ending. What can't be read says
+ * nothing about sync, so once devices have been seen to connect it's left unsaid: the banner
+ * then isn't there for good on every PC with another firewall. */
+static void set_status(const firewall_status *st) {
+  firewall_status next = *st;
+  next.adding = g_fw.status.adding;
+  if (next.state == FIREWALL_THIRD_PARTY || next.state == FIREWALL_UNREADABLE) {
+    mc_sync *sync = sync_bridge_get();
+    mc_sync_self_reach reach;
+#ifndef NDEBUG
+    char spec[128];
+    if (forced_spec(spec, sizeof spec) && forced_has(spec, "noreach")) sync = NULL;
+#endif
+    if (sync && mc_sync_reach_self(sync, &reach) == MC_OK && reach.state == MC_REACH_OK) {
+      BOOL adding = next.adding;
+      memset(&next, 0, sizeof next);
+      next.adding = adding;
+    }
+  }
+  if (!memcmp(&next, &g_fw.status, sizeof next)) return;
+  g_fw.status = next;
+  if (g_fw.listener) g_fw.listener();
+}
+
+static void set_adding(BOOL adding) {
+  if (g_fw.status.adding == adding) return;
+  g_fw.status.adding = adding;
+  if (g_fw.listener) g_fw.listener();
 }
 
 /* --- Adding the rule --- */
@@ -283,8 +616,8 @@ static void remove_stale(INetFwRules *rules, BSTR name) {
   }
 }
 
-/* The elevated helper's work. */
-static HRESULT add_rule(void) {
+/* The elevated helper's work: a rule for the networks of profiles. */
+static HRESULT add_rule(long profiles) {
   INetFwRule *rule = NULL;
   INetFwPolicy2 *policy = NULL;
   INetFwRules *rules = NULL;
@@ -302,7 +635,7 @@ static HRESULT add_rule(void) {
   if (SUCCEEDED(hr)) hr = INetFwRule_put_Protocol(rule, PROTOCOL_ANY); /* TCP sync, UDP mDNS */
   if (SUCCEEDED(hr)) hr = INetFwRule_put_Direction(rule, NET_FW_RULE_DIR_IN);
   if (SUCCEEDED(hr)) hr = INetFwRule_put_Action(rule, NET_FW_ACTION_ALLOW);
-  if (SUCCEEDED(hr)) hr = INetFwRule_put_Profiles(rule, RULE_PROFILES);
+  if (SUCCEEDED(hr)) hr = INetFwRule_put_Profiles(rule, profiles);
   if (SUCCEEDED(hr)) hr = INetFwRule_put_Enabled(rule, VARIANT_TRUE);
   if (SUCCEEDED(hr))
     hr = CoCreateInstance(&CLSID_NetFwPolicy2, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwPolicy2,
@@ -323,12 +656,13 @@ static HRESULT add_rule(void) {
 BOOL firewall_helper_main(int *exit_code) {
   int argc = 0;
   wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  BOOL helper = argv && argc == 2 && !wcscmp(argv[1], FIREWALL_HELPER_ARG);
+  BOOL public_nets = argv && argc == 2 && !wcscmp(argv[1], FIREWALL_HELPER_PUBLIC_ARG);
+  BOOL helper = public_nets || (argv && argc == 2 && !wcscmp(argv[1], FIREWALL_HELPER_ARG));
   if (argv) LocalFree(argv);
   if (!helper) return FALSE;
   HRESULT hr = find_exe() ? CoInitializeEx(NULL, COINIT_APARTMENTTHREADED) : E_FAIL;
   if (SUCCEEDED(hr)) {
-    hr = add_rule();
+    hr = add_rule(public_nets ? NET_FW_PROFILE2_PUBLIC : RULE_PROFILES);
     CoUninitialize();
   }
   *exit_code = (int)hr;
@@ -354,15 +688,25 @@ static void show_failure(HRESULT hr) {
   message_dialog(g_fw.owner, mc_wstr(MC_STR_APP_NAME), text, MB_ICONERROR);
 }
 
-/* Relaunches this exe elevated to add the rule. The user saying no to UAC isn't an error. */
-static BOOL start_helper(void) {
+/* Relaunches this exe elevated to add the rule, for public networks or for the private and
+ * domain ones. The user saying no to UAC isn't an error. */
+static BOOL start_helper(BOOL public_nets) {
+  g_fw.adding_public = public_nets;
+#ifndef NDEBUG
+  char spec[128];
+  if (forced_spec(spec, sizeof spec)) { /* no UAC, no rule: straight to the helper's answer */
+    BOOL fail = forced_has(spec, "fail");
+    g_fw.forced_allowed = !fail && getenv("KITHSONG_DEBUG_FIREWALL")[0] != '@'; /* a file says for itself */
+    return PostMessageW(g_fw.wnd, WM_FW_ADDED, fail ? (WPARAM)E_ACCESSDENIED : S_OK, 0);
+  }
+#endif
   SHELLEXECUTEINFOW sei = {
     .cbSize = sizeof sei,
     .fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC,
     .hwnd = g_fw.owner,
     .lpVerb = L"runas",
     .lpFile = g_fw.exe,
-    .lpParameters = FIREWALL_HELPER_ARG,
+    .lpParameters = public_nets ? FIREWALL_HELPER_PUBLIC_ARG : FIREWALL_HELPER_ARG,
     .nShow = SW_HIDE,
   };
   if (!ShellExecuteExW(&sei)) {
@@ -384,26 +728,19 @@ static BOOL start_helper(void) {
   return TRUE;
 }
 
-/* The networks this PC is on now are all public, which the rule doesn't cover. */
-static BOOL on_public_only(void) {
-  INetFwPolicy2 *policy = NULL;
-  long current = 0;
-  if (SUCCEEDED(CoCreateInstance(&CLSID_NetFwPolicy2, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwPolicy2,
-                                 (void **)&policy))) {
-    INetFwPolicy2_get_CurrentProfileTypes(policy, &current);
-    INetFwPolicy2_Release(policy);
-  }
-  return (current & NET_FW_PROFILE2_PUBLIC) && !(current & RULE_PROFILES);
-}
-
 static void helper_done(HRESULT hr) {
+  /* The status from before the rule, which the check below replaces under the dialog. */
+  BOOL still_public = g_fw.status.state == FIREWALL_BLOCKED && g_fw.status.public_only;
+  set_adding(FALSE);
+  if (g_fw.watching || SUCCEEDED(hr)) start_check(FALSE);
   if (FAILED(hr)) {
     show_failure(hr);
     return;
   }
-  message_dialog(g_fw.owner, mc_wstr(MC_STR_APP_NAME),
-                 mc_wstr(on_public_only() ? MC_STR_WINDOWS_FIREWALL_ADDED_PUBLIC : MC_STR_WINDOWS_FIREWALL_ADDED),
-                 MB_ICONINFORMATION);
+  enum mc_str_id text = g_fw.adding_public ? MC_STR_WINDOWS_FIREWALL_ADDED_ON_PUBLIC
+                        : still_public     ? MC_STR_WINDOWS_FIREWALL_ADDED_PUBLIC
+                                           : MC_STR_WINDOWS_FIREWALL_ADDED;
+  message_dialog(g_fw.owner, mc_wstr(MC_STR_APP_NAME), mc_wstr(text), MB_ICONINFORMATION);
   /* Devices that found this PC blocked find out sooner. */
   mc_sync *sync = sync_bridge_get();
   if (sync) mc_sync_check_reach(sync, NULL);
@@ -429,27 +766,44 @@ static BOOL ask(void) {
     mc_settings_set_bool(g_fw.settings, SETTING_DONT_ASK, 1);
     mc_settings_save(g_fw.settings); /* failing, it's asked again next time */
   }
-  return button == IDOK && start_helper();
+  if (button != IDOK) return FALSE;
+  set_adding(TRUE);
+  if (start_helper(FALSE)) return TRUE;
+  set_adding(FALSE);
+  return FALSE;
+}
+
+/* Nothing to say: sync is off, so nothing is listening. */
+static void clear_status(void) {
+  firewall_status none = {0};
+  set_status(&none);
 }
 
 static LRESULT CALLBACK fw_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
-    case WM_TIMER: {
+    case WM_TIMER:
+      if (wp == TIMER_WATCH) {
+        if (!sync_bridge_get())
+          clear_status();
+        else if (!g_fw.running)
+          start_check(FALSE);
+        return 0;
+      }
       KillTimer(wnd, TIMER_CHECK);
-      mc_sync *sync = sync_bridge_get();
-      HANDLE thread = sync ? CreateThread(NULL, 0, check_main, (void *)(uintptr_t)mc_sync_port(sync), 0, NULL) : NULL;
-      if (thread)
-        CloseHandle(thread);
-      else
-        g_fw.busy = FALSE;
+      if (!start_check(TRUE)) g_fw.busy = FALSE;
       return 0;
-    }
     case WM_FW_CHECKED: {
+      check *c = (check *)lp;
+      BOOL for_prompt = c->ask, missing = c->missing;
+      g_fw.running--;
+      if (c->seq == g_fw.seq) set_status(&c->status);
+      free(c);
+      if (!for_prompt) return 0;
       BOOL asked = g_fw.asked;
       g_fw.asked = FALSE;
       /* Not while the window is away (Move Library), or once sync has stopped. */
-      if (!wp || !IsWindowVisible(g_fw.owner) || !sync_bridge_get() || !ask()) g_fw.busy = FALSE;
-      if (!wp && asked)
+      if (!missing || !IsWindowVisible(g_fw.owner) || !sync_bridge_get() || !ask()) g_fw.busy = FALSE;
+      if (!missing && asked)
         message_dialog(g_fw.owner, mc_wstr(MC_STR_APP_NAME), mc_wstr(MC_STR_WINDOWS_FIREWALL_NOTHING_TO_ALLOW),
                        MB_ICONINFORMATION);
       return 0;
@@ -463,18 +817,22 @@ static LRESULT CALLBACK fw_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
 }
 
-/* Checks after delay_ms, unless sync is off, the user said not to ask, or a check, the
- * dialog or the helper is under way already. */
-static void check_after(HWND owner, mc_settings *settings, UINT delay_ms, BOOL asked) {
-  if (g_fw.busy || !sync_bridge_get() || mc_settings_bool(settings, SETTING_DONT_ASK, 0) || packaged() ||
-      !find_exe())
-    return;
+/* The window the threads report to, made the first time; and what they need. */
+static BOOL ready(void) {
+  if (packaged() || !find_exe()) return FALSE;
   if (!g_fw.wnd) {
     WNDCLASSW wc = {.lpfnWndProc = fw_proc, .hInstance = GetModuleHandleW(NULL), .lpszClassName = L"kithsong_firewall"};
     RegisterClassW(&wc);
     g_fw.wnd = CreateWindowExW(0, wc.lpszClassName, NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
-    if (!g_fw.wnd) return;
+    g_fw.rule_name = mc_wstr(MC_STR_APP_NAME);
   }
+  return g_fw.wnd != NULL;
+}
+
+/* Checks after delay_ms, unless sync is off, the user said not to ask, or a check, the
+ * dialog or the helper is under way already. */
+static void check_after(HWND owner, mc_settings *settings, UINT delay_ms, BOOL asked) {
+  if (g_fw.busy || !sync_bridge_get() || mc_settings_bool(settings, SETTING_DONT_ASK, 0) || !ready()) return;
   g_fw.owner = owner;
   g_fw.settings = settings;
   g_fw.busy = TRUE;
@@ -494,4 +852,60 @@ void firewall_ask_again(HWND owner, mc_settings *settings) {
   mc_settings_set_bool(settings, SETTING_DONT_ASK, 0);
   mc_settings_save(settings); /* failing, it's saved with the next setting */
   check_after(owner, settings, 0, TRUE);
+}
+
+/* --- The banner's side --- */
+
+void firewall_set_listener(void (*changed)(void)) {
+  g_fw.listener = changed;
+}
+
+const firewall_status *firewall_get_status(void) {
+  return &g_fw.status;
+}
+
+void firewall_watch(HWND owner, BOOL on) {
+  if (on == g_fw.watching) return;
+  if (!on) {
+    g_fw.watching = FALSE;
+    if (g_fw.wnd) KillTimer(g_fw.wnd, TIMER_WATCH);
+    return;
+  }
+  if (!ready()) return;
+  if (!g_fw.owner) g_fw.owner = owner;
+  g_fw.watching = TRUE;
+  SetTimer(g_fw.wnd, TIMER_WATCH, WATCH_MS, NULL);
+  firewall_recheck();
+}
+
+void firewall_recheck(void) {
+  if (!g_fw.watching) return;
+  if (!start_check(FALSE) && !sync_bridge_get()) clear_status();
+}
+
+void firewall_allow(void) {
+  if (g_fw.busy || g_fw.status.state != FIREWALL_BLOCKED) return;
+  g_fw.busy = TRUE;
+  set_adding(TRUE);
+  if (start_helper(g_fw.status.public_only)) return;
+  g_fw.busy = FALSE;
+  set_adding(FALSE);
+}
+
+void firewall_open(firewall_page page) {
+  static const struct {
+    const wchar_t *file, *args;
+  } pages[] = {
+    [FIREWALL_PAGE_NETWORK] = {L"ms-settings:network", NULL},
+    [FIREWALL_PAGE_SECURITY] = {L"windowsdefender://network/", NULL},
+    [FIREWALL_PAGE_ALLOWED_APPS] = {L"control.exe", L"/name Microsoft.WindowsFirewall /page pageConfigureApps"},
+  };
+#ifndef NDEBUG
+  char spec[128];
+  if (forced_spec(spec, sizeof spec)) {
+    message_dialog(g_fw.owner, L"KITHSONG_DEBUG_FIREWALL", pages[page].file, MB_ICONINFORMATION);
+    return;
+  }
+#endif
+  ShellExecuteW(g_fw.owner, L"open", pages[page].file, pages[page].args, NULL, SW_SHOWNORMAL);
 }

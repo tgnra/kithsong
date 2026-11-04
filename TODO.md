@@ -134,7 +134,6 @@ See "Merging libraries" in docs/sync-protocol.md.
 - Android - the sync notification updates up to twice a second during a file; only when its text changes would do
 - All - the waiting-for-a-device banner has no Show that filters the library to those tracks (the core only gives counts)
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
-- Windows - offer the firewall rule when the network is public too (today it stays quiet unless Private is uncovered)
 
 ## Move library
 
@@ -167,7 +166,7 @@ UI speed: Settings' Testing section has the profiler (musiccore/perf.h) and stre
   - an album tile stays highlighted after its right-click menu closes
 
 ### Windows
-- Firewall: the success path after UAC (the themed prompt's Allow was only run up to start_helper), Settings' "Ask about Windows Firewall again", and the elevated helper removing rules left for a moved exe (only compiled to objects, never linked or run)
+- Firewall: the success path after UAC (the themed prompt's Allow was only run up to start_helper, and the device page banner's Allow and its rule for public networks only through KITHSONG_DEBUG_FIREWALL), Settings' "Ask about Windows Firewall again", the elevated helper removing rules left for a moved exe (only compiled to objects, never linked or run), the banner's real third-party, group policy and block-rule detection, and the Windows pages its buttons open
 - Narrator and NVDA with the UI Automation providers
 - The edit dialog with Narrator; on Windows 10, in high contrast and across a DPI change. A cover from a real drag from Explorer and from the file picker (drops were only driven through IDropTarget). The same display checks for the Mica smart editor, and UI Automation on its now owner-drawn Back, Save and Cancel
 - The volume drop-down on Windows 10 (no rounded corners) and in high contrast; Play albums in order's screen-reader name

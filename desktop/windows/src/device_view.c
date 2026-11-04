@@ -7,6 +7,8 @@
 #include <wchar.h>
 
 #include "canvas.h"
+#include "firewall.h"
+#include "firewall_banner.h"
 #include "theme.h"
 #include "wstr.h"
 
@@ -42,6 +44,8 @@ enum {
   ID_DEV_ARCHIVE_TEXT,
   ID_DEV_SELECT_ALL,
   ID_DEV_SELECT_NONE,
+  ID_DEV_FIREWALL, /* and its two buttons */
+  ID_DEV_FIREWALL_LAST = ID_DEV_FIREWALL + 2,
   /* Timers on the parent, run by their TIMERPROCs rather than WM_TIMER. */
   ID_DEV_APPLY_TIMER = 440,
   ID_DEV_TICK_TIMER,
@@ -1459,6 +1463,10 @@ static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) 
                          GetModuleHandleW(NULL), NULL);
 }
 
+static void firewall_changed(void) {
+  if (firewall_banner_update()) layout_again();
+}
+
 void device_view_create(HWND parent, const device_view_host *host) {
   g_dv.parent = parent;
   if (host) g_dv.host = *host;
@@ -1542,11 +1550,15 @@ void device_view_create(HWND parent, const device_view_host *host) {
                                       LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
   set_check_images();
   g_dv.count = child(WC_STATICW, NULL, line, ID_DEV_COUNT);
+  firewall_banner_create(parent, ID_DEV_FIREWALL);
+  firewall_set_listener(firewall_changed);
 
   SetTimer(parent, ID_DEV_TICK_TIMER, TICK_MS, tick_timer);
 }
 
 void device_view_destroy(void) {
+  firewall_set_listener(NULL);
+  firewall_watch(g_dv.parent, FALSE);
   estimate_cancel();
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
   KillTimer(g_dv.parent, ID_DEV_TICK_TIMER);
@@ -1606,7 +1618,12 @@ void device_view_set_font(HFONT font, UINT dpi) {
                  g_dv.select_all, g_dv.select_none, g_dv.list, g_dv.count};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
   for (int i = 0; i < NUM_TABS; i++) InvalidateRect(g_dv.tabs[i], NULL, FALSE);
+  firewall_banner_set_font(font, dpi);
   set_check_images();
+}
+
+void device_view_theme_changed(void) {
+  firewall_banner_theme_changed();
 }
 
 static HWND *all_controls(size_t *n) {
@@ -1625,10 +1642,12 @@ static HWND *all_controls(size_t *n) {
 
 void device_view_show(BOOL show) {
   g_dv.shown = show;
+  firewall_watch(g_dv.parent, show);
   if (!show) {
     size_t n;
     HWND *all = all_controls(&n);
     for (size_t i = 0; i < n; i++) ShowWindow(all[i], SW_HIDE);
+    firewall_banner_place(FALSE, 0, 0, 0);
   } else {
     if (g_dv.found) update_status(); /* the times have moved on */
     layout_again();
@@ -1689,6 +1708,10 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
   int pad = S(32), text_w = min(w - 2 * pad, S(720));
   int left = x + pad, top = y + S(24), line_h = canvas_text_height(g_dv.status, g_dv.font, S(1000), 0);
   BOOL on = g_dv.sync != NULL, dev = on && g_dv.found;
+
+  /* The firewall banner, above everything: it's about every device. */
+  int firewall_h = firewall_banner_place(on, left, top, text_w);
+  if (firewall_h) top += firewall_h + S(16);
 
   /* Header: icon, name, buttons. */
   int title_h = canvas_text_height(g_dv.title, g_dv.title_font, S(1000), 0), icon_w = S(40);
@@ -1954,6 +1977,7 @@ void device_view_on_sync_event(const sync_event *ev) {
 }
 
 BOOL device_view_on_command(int id, int code) {
+  if (firewall_banner_on_command(id, code)) return TRUE;
   switch (id) {
     case ID_DEV_SYNC_NOW:
       if (code == BN_CLICKED && syncing()) cancel_sync();
@@ -2075,12 +2099,15 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
     case WM_CTLCOLOREDIT:
       if (wnd != g_dv.name_edit && wnd != g_dv.budget_size && wnd != g_dv.format) return NULL;
       return theme_ctlcolor(msg, dc);
-    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORBTN: {
+      HBRUSH firewall = firewall_banner_ctlcolor(wnd, dc);
+      if (firewall) return firewall;
       if (wnd != g_dv.sync_now && wnd != g_dv.remove && wnd != g_dv.budget && wnd != g_dv.sync_all &&
           wnd != g_dv.archive_box && wnd != g_dv.select_all && wnd != g_dv.select_none)
         return NULL;
       SetBkColor(dc, theme.bg);
       return theme.bg_brush;
+    }
     case WM_CTLCOLORSTATIC:
       break;
     default:

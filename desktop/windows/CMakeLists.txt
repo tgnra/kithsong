@@ -24,6 +24,7 @@ add_executable(kithsong WIN32
   src/drag.c
   src/edit_dialog.c
   src/firewall.c
+  src/firewall_banner.c
   src/first_run.c
   src/import_view.c
   src/media_controls.c
@@ -57,7 +58,7 @@ target_include_directories(kithsong PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/gen
 set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/version.rc" APPEND PROPERTY
   OBJECT_DEPENDS "${KITHSONG_MANIFEST}" "${KITHSONG_ICON}" "${KITHSONG_WORDMARK}" "${KITHSONG_WORDMARK_DARK}")
 # yyjson for the smart list editor, which reads and writes rules (smart_editor.c).
-target_link_libraries(kithsong PRIVATE musiccore mc_yyjson comctl32 comdlg32 ole32 oleaut32 uuid shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi uiautomationcore oleacc)
+target_link_libraries(kithsong PRIVATE musiccore mc_yyjson comctl32 comdlg32 ole32 oleaut32 uuid iphlpapi shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi uiautomationcore oleacc)
 target_compile_definitions(kithsong PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 kithsong_warnings(kithsong)
