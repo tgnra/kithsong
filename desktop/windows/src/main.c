@@ -64,7 +64,8 @@
  *
  * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
- * so two instances can sync on one PC; the paths are imported. Launching it again with the
+ * so two instances can sync on one PC; the paths are imported. Run from a checkout, the app
+ * has folders of its own (musiccore/source_run.h). Launching it again with the
  * same config folder brings the open window forward and hands it the paths instead, as
  * GApplication does on Linux (claim_instance). --add-firewall-rule or
  * --add-firewall-rule-public alone is firewall.c's elevated helper, which adds the Windows
@@ -101,6 +102,7 @@
 #include "import_view.h"
 #include "move_library.h"
 #include "musiccore/musiccore.h"
+#include "musiccore/source_run.h"
 #include "now_playing.h"
 #include "pair_dialog.h"
 #include "pick_folder.h"
@@ -196,6 +198,7 @@ typedef struct app {
   mc_settings *settings;
   mc_library *lib;
   char *config_dir;        /* UTF-8: settings.json and sync.db */
+  BOOL from_source;        /* running from a checkout (musiccore/source_run.h) */
   char *art_dir;           /* UTF-8: playlists' pictures, in config_dir */
   BOOL refresh_pending;    /* TIMER_REFRESH_DEVICES is set */
   BOOL library_pending;    /* TIMER_REFRESH_LIBRARY is set */
@@ -816,6 +819,7 @@ static void create_controls(void) {
 
   import_view_create(g_app.wnd, g_app.lib);
   settings_view_create(g_app.wnd);
+  settings_view_set_source_run(g_app.from_source ? g_app.config_dir : NULL);
   settings_view_set_library_dir(mc_settings_library_dir(g_app.settings));
   settings_view_init_sync(g_app.settings, schedule_refresh);
   static const testing_host testing = {open_stress, back_to_library, scroll_test_start, current_library};
@@ -1999,9 +2003,10 @@ static void free_args(app_args *args) {
 }
 
 /* Where settings.json and sync.db live: --config-dir made absolute, or
- * %LOCALAPPDATA%\kithsong. Created if missing. Returns UTF-8, or NULL (*shown says which
- * folder it was, for the error). */
-static char *config_dir(const app_args *args, wchar_t *shown, DWORD cap) {
+ * %LOCALAPPDATA%\kithsong, or %LOCALAPPDATA%\kithsong-debug when running from a checkout.
+ * Created if missing. Returns UTF-8, or NULL (*shown says which folder it was, for the
+ * error). */
+static char *config_dir(const app_args *args, BOOL from_source, wchar_t *shown, DWORD cap) {
   wchar_t dir[MAX_PATH];
   shown[0] = L'\0';
   if (args->config_dir) {
@@ -2011,18 +2016,20 @@ static char *config_dir(const app_args *args, wchar_t *shown, DWORD cap) {
   } else {
     DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH);
     if (n == 0 || n >= MAX_PATH - 16) {
-      lstrcpynW(shown, L"%LOCALAPPDATA%\\kithsong", (int)cap);
+      lstrcpynW(shown, from_source ? L"%LOCALAPPDATA%\\" MC_SOURCE_SETTINGS_DIR : L"%LOCALAPPDATA%\\kithsong", (int)cap);
       return NULL;
     }
     wchar_t old[MAX_PATH];
     wcscpy(old, dir);
     wcscat(old, L"\\musicapp");
-    wcscat(dir, L"\\kithsong");
+    wcscat(dir, from_source ? L"\\" MC_SOURCE_SETTINGS_DIR : L"\\kithsong");
     lstrcpynW(shown, dir, (int)cap);
-    char *old8 = utf8_from_wide(old), *dir8 = utf8_from_wide(dir);
-    mc_settings_move_old_dir(old8, dir8);
-    free(old8);
-    free(dir8);
+    if (!from_source) { /* the old folder is the installed app's to take */
+      char *old8 = utf8_from_wide(old), *dir8 = utf8_from_wide(dir);
+      mc_settings_move_old_dir(old8, dir8);
+      free(old8);
+      free(dir8);
+    }
   }
   int err = SHCreateDirectoryExW(NULL, dir, NULL);
   if (err != ERROR_SUCCESS && err != ERROR_ALREADY_EXISTS && err != ERROR_FILE_EXISTS) return NULL;
@@ -2608,7 +2615,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
 
   /* Settings say where the library folder is; the first run asks, once the window is up. */
   wchar_t shown_dir[MAX_PATH];
-  g_app.config_dir = config_dir(&args, shown_dir, MAX_PATH);
+  g_app.from_source = mc_source_run() != 0;
+  g_app.config_dir = config_dir(&args, g_app.from_source, shown_dir, MAX_PATH);
   if (g_app.config_dir && !claim_instance(g_app.config_dir, &args)) {
     free(g_app.config_dir);
     free_args(&args);
@@ -2616,7 +2624,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   }
   /* Settings' Reset Kithsong… marked the folder and quit: clear it before anything opens it. */
   char *left = NULL;
-  mc_status reset = g_app.config_dir ? mc_settings_reset_if_requested(g_app.config_dir, NULL, &left) : MC_OK;
+  mc_status reset = g_app.config_dir ? mc_source_reset_if_requested(g_app.config_dir, g_app.from_source, NULL, &left)
+                                     : MC_OK;
   if (reset != MC_OK) {
     wchar_t text[MAX_PATH + 512];
     mc_wformat(text, MAX_PATH + 512, mc_str(MC_STR_RESET_APP_FAILED), MC_S(left ? left : g_app.config_dir),
@@ -2638,6 +2647,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   mc_perf_set_enabled(mc_settings_bool(g_app.settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
   mc_perf_mark_at("main_entered", main_us);
   mc_perf_mark("settings_loaded");
+  /* From a checkout there's no asking: a library in the temp folder, unless a test wants the
+   * first run itself. If that fails, the first run asks, with no Music folder to offer. */
+  if (g_app.from_source && !first_run_test_music()) mc_source_library_prepare(g_app.config_dir, g_app.settings);
   BOOL first_run = !mc_settings_library_dir(g_app.settings);
   if (!first_run) g_app.lib = open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
   mc_perf_mark("library_opened");

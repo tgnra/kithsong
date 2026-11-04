@@ -14,6 +14,7 @@
 #include "canvas.h"
 #include "musiccore/library.h"
 #include "musiccore/library_move.h"
+#include "musiccore/source_run.h"
 #include "pick_folder.h"
 #include "resource.h"
 #include "theme.h"
@@ -92,13 +93,21 @@ static char *join(const char *dir, const char *name) {
   return out;
 }
 
-/* The user's Music folder; in debug builds KITHSONG_TEST_MUSIC_DIR stands in for it, so a
- * test's Start doesn't make a library in the real one. */
-static char *music_folder(void) {
+BOOL first_run_test_music(void) {
 #ifndef NDEBUG
   const wchar_t *test = _wgetenv(L"KITHSONG_TEST_MUSIC_DIR");
-  if (test && *test) return wstr_to_utf8(test);
+  return test && *test;
+#else
+  return FALSE;
 #endif
+}
+
+/* The user's Music folder; in debug builds KITHSONG_TEST_MUSIC_DIR stands in for it, so a
+ * test's Start doesn't make a library in the real one. Running from a checkout there's none
+ * to suggest: the real one is never offered there. */
+static char *music_folder(void) {
+  if (first_run_test_music()) return wstr_to_utf8(_wgetenv(L"KITHSONG_TEST_MUSIC_DIR"));
+  if (mc_source_run()) return NULL;
   wchar_t *path = NULL;
   char *out = NULL;
   if (SUCCEEDED(SHGetKnownFolderPath(&FOLDERID_Music, 0, NULL, &path))) out = wstr_to_utf8(path);

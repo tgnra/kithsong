@@ -12,6 +12,7 @@
 
 #include "canvas.h"
 #include "firewall.h"
+#include "musiccore/source_run.h"
 #include "playback.h"
 #include "scrobble_service.h"
 #include "scroller.h"
@@ -81,6 +82,8 @@ static struct {
   HWND test_heading, test_toggle; /* the Testing section's accordion: the rest is testing_view.c's */
   BOOL test_open;
   HWND reset_heading, reset, reset_note;
+  const char *source_config_dir; /* running from a checkout: the settings folder; else NULL */
+  BOOL reset_deletes_library;    /* so Reset takes the library with it, and says so */
   HFONT font, title_font, heading_font;
   IAccPropServices *acc; /* names order_check for screen readers */
   BOOL shown;
@@ -369,11 +372,19 @@ void settings_view_destroy(void) {
   canvas_free(&g_set.canvas);
 }
 
+void settings_view_set_source_run(const char *config_dir) {
+  g_set.source_config_dir = config_dir;
+}
+
 void settings_view_set_library_dir(const char *dir) {
   wchar_t buf[1024];
   if (!dir || !MultiByteToWideChar(CP_UTF8, 0, dir, -1, buf, 1024)) buf[0] = L'\0';
   buf[1023] = L'\0';
   SetWindowTextW(g_set.path, buf);
+  if (g_set.source_config_dir) {
+    g_set.reset_deletes_library = mc_source_reset_deletes_library(1, g_set.source_config_dir, dir);
+    SetWindowTextW(g_set.reset_note, mc_wstr(g_set.reset_deletes_library ? MC_STR_RESET_APP_TEXT_SOURCE : MC_STR_RESET_APP_TEXT));
+  }
   SendMessageW(g_set.parent, WM_SIZE, 0, 0); /* the path may be cut differently */
 }
 
@@ -767,8 +778,8 @@ static void leave_group(void) {
 /* Reset Kithsong…: once confirmed, the main window marks the settings folder and closes
  * (WM_APP_RESET); the next start clears the folder. */
 static void reset_app(void) {
-  if (MessageBoxW(g_set.parent, mc_wstr(MC_STR_RESET_APP_CONFIRM), mc_wstr(MC_STR_RESET_APP_TITLE),
-                  MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+  if (MessageBoxW(g_set.parent, mc_wstr(g_set.reset_deletes_library ? MC_STR_RESET_APP_CONFIRM_SOURCE : MC_STR_RESET_APP_CONFIRM),
+                  mc_wstr(MC_STR_RESET_APP_TITLE), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
     return;
   PostMessageW(g_set.parent, WM_APP_RESET, 0, 0);
 }

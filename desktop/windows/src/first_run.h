@@ -17,4 +17,8 @@
  * doesn't exist yet, or already holds a library. */
 char *first_run_choose(HWND owner);
 
+/* Whether KITHSONG_TEST_MUSIC_DIR is set in a debug build: a test of the first run, which
+ * should come up even from a checkout, where it otherwise doesn't. */
+BOOL first_run_test_music(void);
+
 #endif

@@ -50,6 +50,7 @@
 #include "move_library.h"
 #include "mpris.h"
 #include "musiccore/musiccore.h"
+#include "musiccore/source_run.h"
 #include "now_playing.h"
 #include "perf_ui.h"
 #include "playback.h"
@@ -1800,7 +1801,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   }
   mc_settings_free(settings);
 
-  mpris_init(gapp, a->win, on_shuffle, on_mpris_volume, a);
+  mpris_init(gapp, a->win, a->from_source, on_shuffle, on_mpris_volume, a);
   prune_art(a);
   restore_deleted(a);
   mc_perf_mark("window_created");
@@ -1845,32 +1846,42 @@ int main(int argc, char **argv) {
   set_strings_locale(); /* before the player's and import's threads look anything up */
 
   /* Settings in ~/.config/kithsong say where the library folder is. With none yet, the first
-   * run asks, once the window is up. */
-  char *settings_dir = g_build_filename(g_get_user_config_dir(), "kithsong", NULL);
-  char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
-  mc_settings_move_old_dir(old_dir, settings_dir);
-  g_free(old_dir);
+   * run asks, once the window is up. Run from a checkout, settings are in kithsong-debug
+   * beside it, and the library is one in the temp folder (musiccore/source_run.h). */
+  int from_source = mc_source_run();
+  char *settings_dir = g_build_filename(g_get_user_config_dir(), from_source ? MC_SOURCE_SETTINGS_DIR : "kithsong", NULL);
+  if (!from_source) { /* the old folder is the installed app's to take */
+    char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
+    mc_settings_move_old_dir(old_dir, settings_dir);
+    g_free(old_dir);
+  }
   /* Settings' Reset Kithsong… marked the folder and quit: clear it before anything opens it. */
   char *left = NULL;
-  mc_status reset = mc_settings_reset_if_requested(settings_dir, NULL, &left);
+  mc_status reset = mc_source_reset_if_requested(settings_dir, from_source, NULL, &left);
   if (reset != MC_OK)
     a.reset_failed = mc_format_alloc(mc_str(MC_STR_RESET_APP_FAILED), MC_S(left ? left : settings_dir),
                                      MC_S(mc_status_str(reset)));
   mc_free(left);
   mc_settings *settings = NULL;
-  a.first_run = mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings);
+  mc_status loaded = mc_settings_load(settings_dir, &settings);
+  /* If that fails the first run asks, with no Music folder to offer. */
+  if (loaded == MC_OK && from_source) mc_source_library_prepare(settings_dir, settings);
+  a.first_run = loaded == MC_OK && !mc_settings_library_dir(settings);
   /* As early as it can be known; the start itself comes from the system. */
   mc_perf_set_enabled(mc_settings_bool(settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
   mc_perf_mark_at("main_entered", main_us);
   mc_perf_mark("settings_loaded");
   a.settings_dir = settings_dir;
+  a.from_source = from_source;
   a.art_dir = g_build_filename(settings_dir, MC_PLAYLIST_ART_CACHE_DIR, NULL);
   const char *library_dir = mc_settings_library_dir(settings);
   if (!library_dir || mc_library_open(library_dir, &a.lib) != MC_OK) a.lib = NULL;
   mc_settings_free(settings);
   mc_perf_mark("library_opened");
 
-  AdwApplication *gapp = adw_application_new("ng.kithso.Kithsong", G_APPLICATION_DEFAULT_FLAGS);
+  /* Its own id from a checkout, or this would only bring an installed copy forward. */
+  AdwApplication *gapp = adw_application_new(from_source ? "ng.kithso.Kithsong.Debug" : "ng.kithso.Kithsong",
+                                             G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(gapp, "activate", G_CALLBACK(on_activate), &a);
   g_signal_connect(gapp, "shutdown", G_CALLBACK(on_shutdown), &a);
   int status = g_application_run(G_APPLICATION(gapp), argc, argv);

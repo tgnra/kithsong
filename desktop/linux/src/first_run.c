@@ -4,6 +4,7 @@
 
 #include "brand_backdrop.h"
 #include "musiccore/musiccore.h"
+#include "musiccore/source_run.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)
 #error "first_run.c needs libadwaita 1.5 or later (AdwDialog)"
@@ -134,8 +135,9 @@ void first_run_present(GtkWidget *parent, first_run_done_fn done, void *user) {
   gtk_widget_add_css_class(list, "boxed-list");
   f->suggested_row = folder_row(f, MC_STR_FIRST_RUN_SUGGESTED, f->suggested, &f->suggested_check);
   gtk_list_box_append(GTK_LIST_BOX(list), f->suggested_row);
-  /* Never the Music folder itself, nor a folder of that name with other things in it. */
-  gtk_widget_set_visible(f->suggested_row, mc_folder_fits_library(f->suggested));
+  /* Never the Music folder itself, nor a folder of that name with other things in it, and
+   * nothing in there from a checkout, which only asks if its own library couldn't be made. */
+  gtk_widget_set_visible(f->suggested_row, !mc_source_run() && mc_folder_fits_library(f->suggested));
   f->chosen_row = folder_row(f, MC_STR_FIRST_RUN_CHOSEN, "", &f->chosen_check);
   gtk_check_button_set_group(GTK_CHECK_BUTTON(f->chosen_check), GTK_CHECK_BUTTON(f->suggested_check));
   gtk_widget_set_visible(f->chosen_row, FALSE);

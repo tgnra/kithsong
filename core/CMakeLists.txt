@@ -52,6 +52,7 @@ add_custom_command(
 add_library(musiccore STATIC
   src/core.c
   src/settings.c
+  src/source_run.c
   src/util/platform.c
   src/util/power.c
   src/util/uid.c

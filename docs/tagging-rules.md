@@ -302,7 +302,8 @@ library.db
   or mounted under another drive letter.
 - the library folder lives in per-device settings (`settings.json`, see
   `core/include/musiccore/settings.h`), in `%LOCALAPPDATA%\kithsong` on Windows and
-  `~/.config/kithsong` on Linux.
+  `~/.config/kithsong` on Linux. A build run from inside a checkout uses `kithsong-debug` there
+  instead, and a library of its own in the temp folder (`core/include/musiccore/source_run.h`).
 - a database inside a OneDrive/Dropbox-style synced folder can be corrupted by the sync
   client; the Windows frontend warns when the chosen folder is under OneDrive.
 

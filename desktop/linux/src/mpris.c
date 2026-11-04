@@ -7,6 +7,7 @@
 #include "playback.h"
 
 #define BUS_NAME "org.mpris.MediaPlayer2.kithsong"
+#define BUS_NAME_SOURCE BUS_NAME ".debug" /* run from a checkout, beside an installed copy */
 #define OBJECT_PATH "/org/mpris/MediaPlayer2"
 #define ROOT_IFACE "org.mpris.MediaPlayer2"
 #define PLAYER_IFACE "org.mpris.MediaPlayer2.Player"
@@ -243,8 +244,9 @@ static void on_name_lost(GDBusConnection *conn, const char *name, gpointer user)
   g_warning("Couldn't take the D-Bus name %s; media controls won't show Kithsong", name);
 }
 
-void mpris_init(GtkApplication *gapp, GtkWindow *win, void (*set_shuffle)(void *user, gboolean on),
-                void (*set_volume)(void *user, int volume), void *user) {
+void mpris_init(GtkApplication *gapp, GtkWindow *win, gboolean from_source,
+                void (*set_shuffle)(void *user, gboolean on), void (*set_volume)(void *user, int volume),
+                void *user) {
   s.gapp = gapp;
   s.win = win;
   s.set_shuffle = set_shuffle;
@@ -258,8 +260,8 @@ void mpris_init(GtkApplication *gapp, GtkWindow *win, void (*set_shuffle)(void *
                                                 NULL, NULL, NULL);
   s.player_id = g_dbus_connection_register_object(s.conn, OBJECT_PATH, s.node->interfaces[1], &player_vtable,
                                                   NULL, NULL, NULL);
-  s.owner = g_bus_own_name_on_connection(s.conn, BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE, NULL, on_name_lost,
-                                         NULL, NULL);
+  s.owner = g_bus_own_name_on_connection(s.conn, from_source ? BUS_NAME_SOURCE : BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE,
+                                         NULL, on_name_lost, NULL, NULL);
 }
 
 static void clear_track(void) {

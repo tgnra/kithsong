@@ -17,6 +17,7 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "musiccore/source_run.h"
 #include "musiccore/sync.h"
 #include "prompt_dialog.h"
 #include "sync_bridge.h"
@@ -545,6 +546,12 @@ static void set_adding(BOOL adding) {
 
 /* --- Adding the rule --- */
 
+/* The name add_rule() gives a rule. Run from a checkout it's another name: builds come and go
+ * with their folders, and an installed copy would take their rules for its own, moved. */
+static const wchar_t *rule_name(void) {
+  return mc_source_run() ? L"Kithsong (source)" : mc_wstr(MC_STR_APP_NAME);
+}
+
 /* Rule r is one add_rule() added, by its name and group, for an exe that's gone. Only a path
  * on a fixed drive that's there counts: one on a share, or on a drive that's unplugged or
  * removable, may come back. */
@@ -621,7 +628,7 @@ static HRESULT add_rule(long profiles) {
   INetFwRule *rule = NULL;
   INetFwPolicy2 *policy = NULL;
   INetFwRules *rules = NULL;
-  BSTR name = SysAllocString(mc_wstr(MC_STR_APP_NAME));
+  BSTR name = SysAllocString(rule_name());
   BSTR description = SysAllocString(mc_wstr(MC_STR_WINDOWS_FIREWALL_RULE_DESCRIPTION));
   BSTR app = SysAllocString(g_fw.exe);
   BSTR group = SysAllocString(RULE_GROUP);
@@ -824,7 +831,7 @@ static BOOL ready(void) {
     WNDCLASSW wc = {.lpfnWndProc = fw_proc, .hInstance = GetModuleHandleW(NULL), .lpszClassName = L"kithsong_firewall"};
     RegisterClassW(&wc);
     g_fw.wnd = CreateWindowExW(0, wc.lpszClassName, NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
-    g_fw.rule_name = mc_wstr(MC_STR_APP_NAME);
+    g_fw.rule_name = rule_name();
   }
   return g_fw.wnd != NULL;
 }
