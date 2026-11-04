@@ -17,6 +17,7 @@ typedef enum app_view {
 
 typedef struct app {
   mc_library *lib;
+  gboolean first_run;  /* no library yet, while the first run asks where it goes (first_run.h) */
   GtkApplication *gapp;
   GtkWindow *win;
   AdwToastOverlay *toasts; /* over the whole window, e.g. "Restored 3 tracks" */
@@ -62,7 +63,7 @@ void app_reload_library(app *a);
  * they changed (SYNC_EV_WAITING) and when sync starts. */
 void app_update_waiting(app *a);
 /* Updates what the empty Albums and Playlists pages suggest from this computer's place in
- * sync (devices_sync_state()): pairing while it isn't in a group, Choose what to sync once
+ * sync (devices_sync_state()): Import while it isn't in a group, Choose what to sync once
  * it is. */
 void app_update_empty_pages(app *a);
 

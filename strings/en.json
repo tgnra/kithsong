@@ -754,7 +754,18 @@
     "pairing": { "text": "Pairing", "note": "A pairing is under way: a button's label while the code is checked, and the title of the watch's notification." },
     "syncing": { "text": "Syncing", "note": "A sync is under way: a button's label, and the title of the watch's notification." },
     "sync_notification_files": { "one": "{0:d} of {1:d} file", "other": "{0:d} of {1:d} files", "note": "Audio files received so far of those to fetch, under \"Syncing with …\" (on the watch, under \"Syncing\"). The plural follows {1}." },
-    "sync_error_listen": "Couldn't listen on the network"
+    "sync_error_listen": "Couldn't listen on the network",
+
+    "welcome_title": "Welcome to Kithsong",
+    "first_run_heading": { "text": "Choose a home for your library", "note": "First run: under the Kithsong logo, above where the library folder will be." },
+    "first_run_text": { "text": "Kithsong copies the music you import into its library folder, sorted by artist and album, and keeps the library's database there too. It works best in an empty folder that nothing else uses. You can move it later in Settings.", "note": "First run: under first_run_heading, above the folder choices." },
+    "first_run_suggested": { "text": "Suggested", "note": "First run: the card for the suggested library folder, above its path." },
+    "first_run_chosen": { "text": "Your folder", "note": "First run: the card for the folder the user chose, above its path." },
+    "first_run_choose": { "text": "Choose a folder…", "note": "First run: button that opens the folder picker." },
+    "first_run_start": { "text": "Start", "note": "First run: closes it and opens the library in the folder selected. Disabled until one is." },
+    "first_run_folder_name": { "text": "Kithsong Library", "note": "Name of the folder the library goes in: inside the user's Music folder, or inside a folder they chose that already has other things in it." },
+    "first_run_not_empty": { "text": "{0} isn't empty. Choose an empty folder, or one that already holds a Kithsong library.", "note": "First run, after choosing a folder. {0} is a folder." },
+    "settings_first_save_failed": "Couldn't save your settings; you'll be asked again next time."
   },
 
   "linux": {
@@ -855,18 +866,8 @@
     "shortcut_new": { "text": "Ctrl+N", "note": "Keyboard shortcut shown in a tooltip." },
     "shortcut_back": { "text": "Alt+Left", "note": "Keyboard shortcut shown in a tooltip: Alt and the left arrow key." },
     "shortcut_close": { "text": "Esc", "note": "Keyboard shortcut shown in a tooltip: the Escape key." },
-    "welcome_title": "Welcome to Kithsong",
-    "first_run_heading": { "text": "Choose a home for your library", "note": "First run: under the Kithsong logo, above where the library folder will be." },
-    "first_run_text": { "text": "Kithsong copies the music you import into its library folder, sorted by artist and album, and keeps the library's database there too. It works best in an empty folder that nothing else uses. You can move it later in Settings.", "note": "First run: under first_run_heading, above the folder choices." },
-    "first_run_suggested": { "text": "Suggested", "note": "First run: the card for the suggested library folder, above its path." },
-    "first_run_chosen": { "text": "Your folder", "note": "First run: the card for the folder the user chose, above its path." },
-    "first_run_choose": { "text": "Choose a folder…", "note": "First run: button that opens the folder picker." },
-    "first_run_start": { "text": "Start", "note": "First run: closes it and opens the library in the folder selected. Disabled until one is." },
-    "first_run_folder_name": { "text": "Kithsong Library", "note": "Name of the folder the library goes in: inside the user's Music folder, or inside a folder they chose that already has other things in it." },
-    "first_run_not_empty": { "text": "{0} isn't empty. Choose an empty folder, or one that already holds a Kithsong library.", "note": "First run, after choosing a folder. {0} is a folder." },
     "onedrive_warning": "This folder is synced by OneDrive. Sync can damage the library database while Kithsong is writing to it.\n\nUse it anyway?",
     "library_open_failed_in": { "text": "Couldn't open the library in {0} ({1}).", "note": "{0} is a folder, {1} the reason, e.g. \"not found\"." },
-    "settings_first_save_failed": "Couldn't save your settings; you'll be asked again next time.",
     "play_next": "Play next",
     "play_last": "Play last",
     "playlist_delete_caption": "Delete playlist",

@@ -2064,7 +2064,7 @@ static BOOL open_first_library(void) {
   if (!dir) return FALSE;
   mc_settings_set_library_dir(g_app.settings, dir);
   if (mc_settings_save(g_app.settings) != MC_OK)
-    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_WINDOWS_SETTINGS_FIRST_SAVE_FAILED), mc_wstr(MC_STR_APP_NAME),
+    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_SETTINGS_FIRST_SAVE_FAILED), mc_wstr(MC_STR_APP_NAME),
                 MB_OK | MB_ICONWARNING);
   g_app.lib = open_library(dir); /* on failure the window says so */
   free(dir);

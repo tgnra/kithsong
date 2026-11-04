@@ -19,7 +19,7 @@ finish-args:
   - --socket=pulseaudio
   # LAN sync and mDNS discovery, MusicBrainz and cover art.
   - --share=network
-  # The library defaults to the Music folder, and the tagger writes into it. Folders
+  # The first run suggests a library in the Music folder, and the tagger writes into it. Folders
   # elsewhere come in through the file chooser portal.
   - --filesystem=xdg-music
   # desktop/linux/src/mpris.c
