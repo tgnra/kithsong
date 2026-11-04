@@ -43,6 +43,9 @@ BOOL theme_is_change(UINT msg, WPARAM wp, LPARAM lp);
 /* A dark or light title bar to match. With mica, also asks for a Mica backdrop and sets
  * theme.mica to whether there is one. */
 void theme_apply_window(HWND wnd, BOOL mica);
+/* Asks for a Mica backdrop for a window other than the main one, leaving theme.mica alone:
+ * TRUE if there is one. Call theme_apply_window(wnd, FALSE) for its title bar. */
+BOOL theme_apply_backdrop(HWND wnd);
 /* Themes the standard controls among wnd's children: buttons, list views, edits, combo
  * boxes, progress bars and scrollbars. Call again after a theme change. */
 void theme_apply_controls(HWND wnd);
