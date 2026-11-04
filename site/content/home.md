@@ -25,6 +25,6 @@ Take your music with you. Windows laptop, Linux workstation, Android phone, Wear
 
 ## Scrobble
 
-![](images/sync.png)
+![A screenshot of last.fm sync](images/sync.png)
 
 Scrobble your plays to Last.fm, Libre.fm, or another service. Your login is synced between your devices, and plays are cached while you're offline and sent when you're back online.
