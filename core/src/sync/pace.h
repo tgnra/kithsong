@@ -25,7 +25,6 @@ typedef struct mc_sync_pace {
   uint64_t bin_start; /* when the bin being filled began */
   int64_t bin_bytes;  /* what it holds so far */
   int64_t moved;      /* the last update's */
-  int64_t left;       /* likewise, 0 if it wasn't known */
   uint64_t bins;      /* closed so far */
   int64_t window[MC_SYNC_PACE_WINDOW];
   int64_t window_sum;
@@ -42,8 +41,11 @@ typedef struct mc_sync_pace {
 
 /* At now_ms, moved bytes have gone in all (either way, for the whole session), and left are
  * still to go: 0 or less if that isn't known or there's nothing left. Call it now and then
- * also while nothing moves, or a stall isn't seen. More left than before means more work
- * was announced, and the time left starts over. */
+ * also while nothing moves, or a stall is not seen. left may move either way, as estimates
+ * improve. */
 void mc_sync_pace_update(mc_sync_pace *p, uint64_t now_ms, int64_t moved, int64_t left);
+/* More work was announced, such as the second turn's: what the last one ran at says little of
+ * it, so the time left starts over. The speed goes on. */
+void mc_sync_pace_restart(mc_sync_pace *p);
 
 #endif

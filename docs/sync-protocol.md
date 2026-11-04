@@ -456,7 +456,7 @@ Message types:
 | 0x12 | `ROWS_END`    | `{"db", "digest"}` |
 | 0x20 | `HAVE_REQ`    | `{"tracks": [uid], "format", "kbps"}` |
 | 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool, "verified": bool}]}` |
-| 0x22 | `FILE_REQ`    | `{"track", "format", "kbps", "retry": true}`; `format` `"original"` or `"opus"`; `retry` only on the second ask for a track after a checksum mismatch |
+| 0x22 | `FILE_REQ`    | `{"track", "format", "kbps", "est", "retry": true}`; `format` `"original"` or `"opus"`; `est` the size the plan has for it, for progress only; `retry` only on the second ask for a track after a checksum mismatch |
 | 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256", "source_sha256"?}` |
 | 0x24 | `FILE_DATA`   | raw bytes, in order, until `size` bytes have been sent |
 | 0x25 | `FILE_ERR`    | `{"track", "reason"}`, sent instead of `FILE_HDR` |
@@ -1093,9 +1093,12 @@ Time is cut into one-second bins, starting with the first bytes.
   only if the estimate stands 30% and a step above the value shown for 15 s.
 - Nothing is shown when the size isn't known (a peer without `FILES_PLAN`), when nothing has
   moved for the 10 bins of the speed, or past 7 days. After a stall the value held goes on.
-  The bytes left are the turns known so far, so more work arriving (the second turn's
-  `FILES_PLAN`) starts the time left over, with its warm-up. A session with another peer
-  starts from nothing: another link says nothing of this one.
+  A session with another peer starts from nothing: another link says nothing of this one.
+- The bytes left are the turns known so far. A plan often knows only a track's length, and its
+  estimates can be a third off, so what is left of a turn is scaled by how the files so far came
+  out against their estimates (`est` in `FILE_REQ`, which the sender needs for this; from an older
+  peer it has none and goes by the plan alone). More work arriving (the second turn's
+  `FILES_PLAN`) starts the time left over, with its warm-up.
 
 ## Lossy copies
 

@@ -20,7 +20,6 @@
 #define SLOW_KEEP 0.97802       /* exp(-1/45): a horizon of 45 s */
 #define SHIFT_RATIO 1.3         /* the speed this far from the longer mean, ... */
 #define SHIFT_HOLD 20           /* ... for this many bins, is a new speed */
-#define NEW_WORK MB             /* left growing by less is noise in the estimates */
 #define MAX_GAP 600             /* bins counted for one gap between updates: all gone by then */
 
 /* The step of the grid at x seconds: coarser as the wait gets longer. */
@@ -126,15 +125,14 @@ static void update_eta(mc_sync_pace *p, int64_t left) {
   p->eta = p->held;
 }
 
+void mc_sync_pace_restart(mc_sync_pace *p) {
+  p->slow_bytes = p->slow_bins = 0.0;
+  p->eta_since = p->bins;
+  p->held = p->eta = p->climbing = p->shifted = 0;
+}
+
 void mc_sync_pace_update(mc_sync_pace *p, uint64_t now_ms, int64_t moved, int64_t left) {
   if (left < 0) left = 0;
-  /* New work, such as the second turn's: what the last one ran at says little of it. */
-  if (left > p->left + NEW_WORK) {
-    p->slow_bytes = p->slow_bins = 0.0;
-    p->eta_since = p->bins;
-    p->held = p->eta = p->climbing = 0;
-  }
-  p->left = left;
   if (!left) p->held = p->eta = p->climbing = 0;
 
   /* The clock starts with the first bytes: waiting for the first encode says nothing of the

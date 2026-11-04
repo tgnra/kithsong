@@ -85,6 +85,8 @@
 #define MAX_COVER_BYTES ((int64_t)32 << 20)
 /* A device needs this much free space to transcode for others. */
 #define MIN_TRANSCODE_FREE ((int64_t)256 << 20)
+/* How much a plan's estimates are trusted, as bytes of files that came out just as estimated. */
+#define SIZES_PRIOR ((int64_t)16 << 20)
 /* Unknown files younger than this are left alone: an import may be about to record them. */
 #define UNKNOWN_GRACE_MS ((int64_t)60 * 60 * 1000)
 #define SHA_STRLEN 65
@@ -251,15 +253,32 @@ static mc_status send_file_err(mc_channel *ch, const char *track, const char *re
   return send_doc(ch, MC_MSG_FILE_ERR, doc);
 }
 
-/* Bytes still to move in the turns known so far, by their estimates; 0 if that isn't known,
- * as for a peer too old to say what it will fetch. */
+/* A file of a turn has been answered: est is what the plan took it for, and moved what it
+ * really took, 0 if it never came. A peer too old to say gives no est, and is left out. */
+static void sizes_note(mc_turn_sizes *z, int64_t est, int64_t moved) {
+  if (est <= 0) return;
+  z->est_answered += est;
+  if (moved > 0) {
+    z->est_moved += est;
+    z->moved += moved;
+  }
+}
+
+/* What a turn of est bytes by its plan has left, moved so far. A plan often knows only the
+ * length of a track, and its estimates are off by much the same for most of a library, so
+ * what's left is scaled by how the files so far came out, with a start at no error so that
+ * the first small file doesn't swing it. */
+static int64_t turn_left(const mc_turn_sizes *z, int64_t est, int64_t moved) {
+  double scale = (double)(z->moved + SIZES_PRIOR) / (double)(z->est_moved + SIZES_PRIOR);
+  int64_t left = (int64_t)((double)(est - z->est_answered) * scale) - (moved - z->moved);
+  return left > 0 ? left : 0;
+}
+
+/* Bytes still to move in the turns known so far; 0 if that isn't known, as for a peer too
+ * old to say what it will fetch. */
 static int64_t bytes_left(const mc_session *s) {
-  int64_t left = 0;
-  if (s->files_done < s->files_total && s->files_bytes > s->bytes_received)
-    left += s->files_bytes - s->bytes_received;
-  if (s->sends_done < s->sends_total && s->sends_bytes > s->bytes_sent)
-    left += s->sends_bytes - s->bytes_sent;
-  return left;
+  return turn_left(&s->fetched_sizes, s->files_bytes, s->bytes_received) +
+         turn_left(&s->sent_sizes, s->sends_bytes, s->bytes_sent);
 }
 
 static void progress(mc_session *s) {
@@ -949,6 +968,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   if (is_uid(t)) memcpy(track, t, MC_UID_STRLEN);
   int ok = is_uid(t) && format && (opus ? valid_bitrate(kbps) : !strcmp(format, "original"));
   int retry = yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(req), "retry"));
+  int64_t est = obj_int(req, "est"), before = s->bytes_sent;
   yyjson_doc_free(req);
   /* Counted now: progress goes out once it's answered. A retry is the same track. */
   if (!retry) s->sends_done++;
@@ -994,6 +1014,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
     mc_encode_pool_release(pool);
   }
   if (original) held_free(&h);
+  sizes_note(&s->sent_sizes, retry ? 0 : est, s->bytes_sent - before);
   return st;
 }
 
@@ -1005,6 +1026,7 @@ static mc_status serve_plan(mc_session *s, const unsigned char *payload, size_t 
   yyjson_doc_free(req);
   s->sends_total = files > 0 && files <= INT_MAX ? (int)files : 0;
   s->sends_bytes = bytes > 0 ? bytes : 0;
+  mc_sync_pace_restart(&s->pace);
   return MC_OK;
 }
 
@@ -1214,6 +1236,7 @@ static mc_status serve_turn(mc_session *s) {
     if (st != MC_OK) break;
     progress(s);
   }
+  s->sent_sizes.est_answered = s->sends_bytes; /* the turn is over, whatever was estimated */
   /* Encode-ahead it didn't ask for after all. The pool trims the cache once it's idle. */
   mc_encode_pool_drop(s->sync->enc, s);
   mc_hash_ahead *ha = s->xfer ? s->xfer->hashes : NULL;
@@ -1319,6 +1342,7 @@ static mc_status ask_file(mc_session *s, const mc_plan_track *t, int opus, int r
   yyjson_mut_obj_add_strcpy(doc, root, "track", t->track_uid);
   yyjson_mut_obj_add_str(doc, root, "format", opus ? "opus" : "original");
   yyjson_mut_obj_add_int(doc, root, "kbps", opus ? t->format.bitrate_kbps : 0);
+  yyjson_mut_obj_add_int(doc, root, "est", t->est_bytes);
   if (retry) yyjson_mut_obj_add_bool(doc, root, "retry", true);
   return send_doc(s->ch, MC_MSG_FILE_REQ, doc);
 }
@@ -1660,6 +1684,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   if (x->narchived) qsort(x->archived, (size_t)x->narchived, sizeof *x->archived, uid_cmp);
   free(tc);
   if (st == MC_OK && s->files_plan) st = send_plan(s);
+  mc_sync_pace_restart(&s->pace);
   progress(s);
   if (st == MC_OK) st = send_ahead(s, w, how, n);
 
@@ -1685,6 +1710,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     }
     int got = GOT_FAILED;
     char *landed = NULL;
+    int64_t before = s->bytes_received;
     st = recv_file(s, w[a.i].t, how[a.i] == 2, &got, &landed);
     if (st == MC_OK && got == GOT_MISMATCH && !a.retry) {
       /* Once more, behind what is already asked; this session has only this peer to ask. */
@@ -1693,6 +1719,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
       continue;
     }
     if (st == MC_OK && got == GOT_MISMATCH) s->files_corrupt++;
+    sizes_note(&s->fetched_sizes, w[a.i].t->est_bytes, got == GOT_OK ? s->bytes_received - before : 0);
     asked c = {-1, 0, "", NULL};
     c.dir = landed ? cover_needed(s, w[a.i].t->track_uid, landed, c.album) : NULL;
     for (int k = 0; c.dir && k < nq; k++) {

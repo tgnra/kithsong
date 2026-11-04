@@ -257,11 +257,28 @@ static void test_next_turn(void) {
   steady(&r, 12, 0); /* between turns */
   CHECK(r.pace.speed == 0);
   r.total = r.moved + 900 * MB;
+  mc_sync_pace_restart(&r.pace);
   steady(&r, 7, 2);
   CHECK(r.pace.eta == 0);
   steady(&r, 4, 2);
   CHECK(near(r.pace.eta, 900.0 / 2.0, 0.2));
   CHECK(near(r.pace.speed, 2.0 * (double)MB, 0.1));
+}
+
+/* The estimate of the bytes left improves as files come out bigger than planned: the time
+ * left follows in one step, and doesn't go away or start over. */
+static void test_better_estimate(void) {
+  run r;
+  new_run(&r, 3000 * MB);
+  steady(&r, 60, 10);
+  int before = r.pace.eta;
+  CHECK(before >= 3 * 60 && before <= 5 * 60 + 30);
+  watch(&r);
+  r.total += 2400 * MB;
+  steady(&r, 30, 10);
+  CHECK(r.eta_hidden == 0);
+  CHECK(r.eta_rises == 1);
+  CHECK(near(r.pace.eta, (5400.0 - 900.0) / 10.0, 0.15));
 }
 
 /* A session with another peer is a new session, and starts over: what the link to the last
@@ -331,6 +348,7 @@ int main(void) {
   test_noise();
   test_nothing_to_say();
   test_next_turn();
+  test_better_estimate();
   test_next_peer();
   test_units_and_grid();
   test_text();

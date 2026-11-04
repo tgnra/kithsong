@@ -8,6 +8,12 @@
 #include "sync/pace.h"
 #include "sync/sync_internal.h"
 
+/* A turn's files so far: the estimates of those answered, and of those that came, with what
+ * those really took. */
+typedef struct mc_turn_sizes {
+  int64_t est_answered, est_moved, moved;
+} mc_turn_sizes;
+
 typedef struct mc_session {
   mc_sync *sync;
   mc_sync_conn *conn;
@@ -49,7 +55,10 @@ typedef struct mc_session {
   int64_t sends_bytes;
   int covers_received;
   int64_t bytes_received, bytes_sent;
-  mc_sync_pace pace;    /* the file phase's speed and time left */
+  /* The file phase's speed and time left, and how each turn's files came out against their
+   * estimates, which are often well off. */
+  mc_sync_pace pace;
+  mc_turn_sizes fetched_sizes, sent_sizes;
   uint64_t progress_ms; /* when the file phase last reported progress */
   struct mc_transfer *xfer; /* between mc_transfer_begin() and mc_transfer_end() */
 } mc_session;
