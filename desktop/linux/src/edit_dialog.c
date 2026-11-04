@@ -1116,6 +1116,8 @@ void edit_dialog_present(app *a, edit_kind kind, const char *uid) {
   g_signal_connect(f->dialog, "closed", G_CALLBACK(on_closed), f);
   if (kind == EDIT_ALBUM) {
     GtkDropTarget *drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+    /* Ahead of the fields, which would take a file as its path, in the text. */
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(drop), GTK_PHASE_CAPTURE);
     g_signal_connect(drop, "enter", G_CALLBACK(on_drag_enter), f);
     g_signal_connect(drop, "leave", G_CALLBACK(on_drag_leave), f);
     g_signal_connect(drop, "drop", G_CALLBACK(on_art_drop), f);
