@@ -23,21 +23,24 @@ interface Playback {
     val track: Track?
     val isPlaying: Boolean
     val positionMs: Long
-    /** Whether the queue goes on after [track]: always, shuffled. */
+    /** Whether the queue goes on after [track]: always, shuffled or while a station adds to it. */
     val hasNext: Boolean
     /** Whether there's a track before [track]: shuffled, one that played before it. */
     val hasPrevious: Boolean
-    /** The track after [track]; null if there's none or, past a shuffled round, none picked yet. */
+    /** The track after [track]; null if there's none or, past a shuffled round or on a station, none picked yet. */
     val nextTrack: Track?
     /** The track before [track], or null if there's none. */
     val previousTrack: Track?
     /** Whether the queue plays in a shuffled order (the core's, see CoreMediaPlayer). */
     val shuffle: Boolean
+    /** Whether the queue is a radio station's, whose own order shuffle doesn't change. */
+    val station: Boolean get() = false
 
     /**
      * Plays [queue] from [index], or with -1 from the first track, which shuffled is any (the
      * core picks it, as the desktops' Shuffle buttons have it). Tracks without a file on this
-     * device are left out. [origin] says what's played, for the play log.
+     * device are left out. [origin] says what's played, for the play log. One track with the
+     * radio as its [origin] is a station from that track, whose queue grows as it plays.
      */
     fun play(queue: List<Track>, index: Int, origin: CorePlayer.Origin)
     fun toggle()

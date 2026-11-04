@@ -48,6 +48,8 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
     override val hasPrevious get() = previousTrack != null
     private var shuffleOn by mutableStateOf(false)
     override val shuffle get() = shuffleOn
+    override var station by mutableStateOf(false)
+        private set
 
     private var controller: MediaController? = null
     private val pending = ArrayList<(MediaController) -> Unit>()
@@ -128,10 +130,20 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
 
     override fun updateQueue(tracks: List<Track>) = withController {
         if (tracks.size == it.mediaItemCount) {
-            val items = queueItems(context, tracks, it.currentMediaItem?.playOrigin ?: CorePlayer.Origin())
+            val origin = it.currentMediaItem?.playOrigin ?: CorePlayer.Origin()
+            val items = queueItems(context, tracks, origin)
             // The same files with another cover or title: nothing for the player to start again.
-            if (items.indices.all { i -> items[i].path == it.getMediaItemAt(i).path }) it.replaceMediaItems(0, items.size, items)
-            else it.setMediaItems(items, it.currentMediaItemIndex, it.currentPosition)
+            if (items.indices.all { i -> items[i].path == it.getMediaItemAt(i).path }) {
+                it.replaceMediaItems(0, items.size, items)
+            } else {
+                // A new queue ends a station, which leaves its tracks as a queue like any other.
+                val queue = if (origin.context == CorePlayer.PlayContext.Radio) {
+                    queueItems(context, tracks, CorePlayer.Origin(CorePlayer.PlayContext.Manual))
+                } else {
+                    items
+                }
+                it.setMediaItems(queue, it.currentMediaItemIndex, it.currentPosition)
+            }
         }
     }
 
@@ -155,9 +167,10 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
         // As the play/pause button should show it, so it doesn't flicker while starting.
         isPlaying = !Util.shouldShowPlayButton(player)
         shuffleOn = player.shuffleModeEnabled
-        // Shuffled, the core's queue never ends, though the timeline's shuffle order, which
-        // holds each track once, does.
-        hasNext = player.hasNextMediaItem() || (shuffle && player.mediaItemCount > 0)
+        station = player.currentMediaItem?.playOrigin?.context == CorePlayer.PlayContext.Radio
+        // The player says: shuffled the core's queue never ends, though the timeline's shuffle
+        // order, which holds each track once, does, and a station's goes on past what's known.
+        hasNext = player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT)
         nextTrack = player.trackAt(player.nextMediaItemIndex)
         previousTrack = player.trackAt(player.previousMediaItemIndex)
         positionMs = player.currentPosition

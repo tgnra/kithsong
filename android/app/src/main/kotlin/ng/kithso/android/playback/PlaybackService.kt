@@ -22,24 +22,29 @@ import ng.kithso.android.AppSettings
 import ng.kithso.android.MainActivity
 import ng.kithso.android.KithsongApp
 import ng.kithso.android.R
+import ng.kithso.core.CorePlayer
 import ng.kithso.playback.CoreMediaPlayer
 import ng.kithso.playback.path
+import ng.kithso.playback.playOrigin
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Plays in the background: the media session around [CoreMediaPlayer], which gives the
  * notification, lock screen and headset controls, and which the app's UI connects to with a
  * MediaController ([SessionPlayback]). Media3 makes it a foreground service while playing.
- * The notification and the system's media controls have a shuffle button beside next.
+ * The notification and the system's media controls have a shuffle button beside next, but for
+ * a station, which plays in its own order.
  *
  * It's a library session, so Android Auto and other media browsers can browse the library
  * ([BrowseTree]) and play from it, by id or by voice search; the app's own queues come with
@@ -61,6 +66,14 @@ class PlaybackService : MediaLibraryService() {
             onShuffleChanged = { settings.shuffle = it },
             onNowPlaying = { trackUid -> app.scrobbling.nowPlaying(trackUid) },
             onPlayEnded = { event -> app.library.logPlay(event) },
+            libraryDir = app.libraryDir.path,
+            stationItems = { uids, origin, done ->
+                scope.launch {
+                    val tracks = app.library.tracks(uids)
+                    // Finding a cover's URI touches the disk.
+                    done(withContext(Dispatchers.IO) { stationItems(this@PlaybackService, uids, tracks, origin) })
+                }
+            },
         ) { trackUid, startedMs ->
             app.library.recordPlay(trackUid)
             app.scrobbling.scrobble(trackUid, startedMs)
@@ -79,8 +92,15 @@ class PlaybackService : MediaLibraryService() {
             .build()
         this.session = session
         player.addListener(object : Player.Listener {
-            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
-                session.setMediaButtonPreferences(shuffleButtons(shuffleModeEnabled))
+            private var buttons: Boolean? = settings.shuffle
+
+            // What the button says: on or off, or with null, no button as a station plays.
+            override fun onEvents(player: Player, events: Player.Events) {
+                val station = player.currentMediaItem?.playOrigin?.context == CorePlayer.PlayContext.Radio
+                val wanted = player.shuffleModeEnabled.takeIf { !station }
+                if (wanted == buttons) return
+                buttons = wanted
+                session.setMediaButtonPreferences(wanted?.let { shuffleButtons(it) }.orEmpty())
             }
         })
         // Stopped is how the app quits with a track paused, which leaves nothing behind.
