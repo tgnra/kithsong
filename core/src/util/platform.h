@@ -92,6 +92,25 @@ mc_status mc_walk(const char *path, mc_walk_fn fn, void *user);
 typedef void (*mc_list_fn)(void *user, const char *name, int is_dir);
 mc_status mc_list_dir(const char *dir, mc_list_fn fn, void *user);
 
+/* A strict mc_walk(), for deciding what isn't there as well as what is. Depth first, every
+ * file and folder under root, hidden ones too, each folder before what's in it. Links,
+ * junctions and other reparse points, and anything else that's neither a file nor a folder,
+ * aren't followed or reported. It stops at the first folder it can't read all of and says so:
+ * MC_ERR_NOT_FOUND for no root, MC_ERR_IO otherwise (a root that's a file too). fn returns 0
+ * to go on, 1 not to go into this folder, -1 to stop (MC_ERR_CANCELLED). */
+typedef struct mc_tree_entry {
+  const char *path;  /* UTF-8, root then native separators */
+  int is_dir;
+  int system;        /* Windows' system attribute: the OS's, not the user's */
+  int64_t newest_ms; /* the latest of modified and created (POSIX: inode changed), since a
+                      * copy keeps the original's modified time and only this shows it's new */
+  int64_t mtime_ms;  /* modified */
+} mc_tree_entry;
+typedef int (*mc_tree_fn)(void *user, const mc_tree_entry *entry);
+mc_status mc_tree_walk(const char *root, mc_tree_fn fn, void *user);
+/* Tests only: mc_tree_walk() fails on reaching a folder whose path contains this. */
+extern const char *mc_tree_test_fail;
+
 /* The file calls here take paths of any length on Windows, not just under MAX_PATH (260),
  * with or without Windows' long-path setting. Whether path, made absolute, is 260 characters
  * or more: too long for Windows code that has no way round the limit. Always 0 elsewhere. */

@@ -106,30 +106,6 @@ static char *music_folder(void) {
   return out;
 }
 
-/* Whether dir already has a library's database at the top. */
-static BOOL holds_library(const char *dir) {
-  char *db = join(dir, MC_LIBRARY_DB_NAME);
-  wchar_t *w = wstr_dup_from_utf8(db);
-  DWORD attr = w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES;
-  free(w);
-  free(db);
-  return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
-}
-
-static BOOL usable(const char *dir) {
-  return mc_folder_is_empty(dir) || holds_library(dir);
-}
-
-/* Where the library goes for a folder the user chose: the folder itself if it's empty (or
- * holds a library already), else Kithsong Library inside it, if that is. NULL if neither. */
-static char *library_in(const char *dir) {
-  if (usable(dir)) return dup(dir);
-  char *sub = join(dir, mc_str(MC_STR_FIRST_RUN_FOLDER_NAME));
-  if (sub && usable(sub)) return sub;
-  free(sub);
-  return NULL;
-}
-
 /* --- The logo --- */
 
 /* The wordmark PNG (IDR_WORDMARK, or IDR_WORDMARK_DARK for a dark background) decoded at
@@ -326,15 +302,14 @@ static void select_card(int part) {
 static void choose(void) {
   char *dir = pick_folder(g_fr.wnd, mc_wstr(MC_STR_LIBRARY_FOLDER_CHOOSE), g_fr.chosen ? g_fr.chosen : g_fr.music);
   if (!dir) return;
-  char *lib = library_in(dir);
-  if (!lib) {
+  if (!mc_folder_fits_library(dir)) { /* they can choose again */
     wchar_t text[MAX_PATH + 256];
     mc_wformat(text, MAX_PATH + 256, mc_str(MC_STR_FIRST_RUN_NOT_EMPTY), MC_S(dir));
     MessageBoxW(g_fr.wnd, text, mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
     free(dir);
     return;
   }
-  free(dir);
+  char *lib = dir;
   wchar_t *lib_w = wstr_dup_from_utf8(lib);
   if (g_fr.suggested_w && lib_w && !lstrcmpiW(lib_w, g_fr.suggested_w)) { /* the suggestion after all */
     free(lib);
@@ -758,7 +733,12 @@ char *first_run_choose(HWND owner) {
   g_fr.music = music_folder();
   if (g_fr.music) {
     g_fr.suggested = join(g_fr.music, mc_str(MC_STR_FIRST_RUN_FOLDER_NAME));
-    g_fr.suggested_w = wstr_dup_from_utf8(g_fr.suggested);
+    /* Never the Music folder itself, nor a folder of that name with other things in it. */
+    if (g_fr.suggested && !mc_folder_fits_library(g_fr.suggested)) {
+      free(g_fr.suggested);
+      g_fr.suggested = NULL;
+    }
+    g_fr.suggested_w = g_fr.suggested ? wstr_dup_from_utf8(g_fr.suggested) : NULL;
   }
   g_fr.focus = g_fr.suggested ? PART_SUGGESTED : PART_CHOOSE;
 

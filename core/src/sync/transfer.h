@@ -34,7 +34,7 @@ void mc_transfer_end(mc_session *s, int ok);
  * last file phase left pending, so the group exchange carries it. */
 void mc_transfer_write_status(mc_sync *sync, mc_sync_conn *c);
 
-/* How sync moves a file to the trash: deleted tracks' originals, unknown audio files, and
+/* How sync moves a file to the trash: deleted tracks' originals, orphans, and
  * originals that mc_sync_remove_here() takes off this device. mc_trash(), unless a test
  * swaps it first. */
 extern mc_status (*mc_transfer_trash)(const char *path);

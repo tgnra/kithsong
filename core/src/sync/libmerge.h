@@ -31,6 +31,8 @@
 /* The copy's name: MC_LIBMERGE_PREFIX "YYYY-MM-DD" (UTC) ".db", with "-2" and so on before
  * ".db" if that's taken. */
 #define MC_LIBMERGE_PREFIX "library-before-merge-"
+/* The folder, at the top of the library folder, that undoing a merge works in. */
+#define MC_LIBMERGE_RESTORE_DIR ".merge-restore"
 
 /* Which library is kept: 1 if the first one (a), 0 if b. The larger by track count, then by
  * bytes of files held, then the smaller (older) library uid. Symmetric: swapping a and b

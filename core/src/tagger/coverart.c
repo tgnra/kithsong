@@ -165,6 +165,12 @@ static int equals_nocase(const char *a, const char *b) {
   return !*a && !*b;
 }
 
+int mc_coverart_is_name(const char *name) {
+  for (size_t i = 0; i < sizeof k_cover_names / sizeof k_cover_names[0]; i++)
+    if (equals_nocase(name, k_cover_names[i])) return 1;
+  return 0;
+}
+
 static void on_cover_entry(void *user, const char *name, int is_dir) {
   cover_search *s = user;
   if (is_dir) return;

@@ -151,6 +151,16 @@ static void test_checks(void) {
   write_file("full/keep.txt", "keep");
   path(dst, sizeof dst, "full");
   CHECK(!mc_folder_is_empty(dst));
+  CHECK(!mc_folder_fits_library(dst)); /* other things, and no library */
+  CHECK(mc_folder_fits_library(src));  /* a library, whatever else is there */
+  {
+    char fresh[1100];
+    path(fresh, sizeof fresh, "not-made-yet");
+    CHECK(mc_folder_fits_library(fresh));
+    write_file("db-is-a-folder/library.db/x", "x");
+    path(fresh, sizeof fresh, "db-is-a-folder");
+    CHECK(!mc_folder_fits_library(fresh));
+  }
   CHECK(mc_library_move_check(src, dst, &info) == MC_OK && info.problem == MC_MOVE_NOT_EMPTY);
   mc_library_move_result result;
   CHECK(mc_library_move(src, dst, NULL, NULL, NULL, &result) == MC_ERR_INVALID_ARG);

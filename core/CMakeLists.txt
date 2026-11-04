@@ -58,11 +58,13 @@ add_library(musiccore STATIC
   src/util/changelog.c
   src/util/fracindex.c
   src/util/i18n.c
+  src/util/pathkey.c
   src/util/text.c
   "${_strings_out}/mc_strings_gen.h"
   "${_strings_out}/mc_strings_gen.c"
   src/library/library.c
   src/library/library_move.c
+  src/library/folder_gate.c
   src/library/delete.c
   src/library/edit.c
   src/library/album_flags.c
@@ -112,6 +114,7 @@ add_library(musiccore STATIC
   src/sync/rows.c
   src/sync/session.c
   src/sync/plan.c
+  src/sync/orphans.c
   src/sync/transfer.c
   src/sync/encode.c
   src/sync/hashahead.c

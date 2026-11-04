@@ -1,5 +1,6 @@
 /* Merging libraries, the library side: setting the library aside, and merging the set-aside
  * copy into the kept library once that has arrived. See libmerge.h. */
+#include "library/folder_gate.h"
 #include "sync/libmerge.h"
 
 #include <stdio.h>
@@ -1034,7 +1035,7 @@ static mc_status merge_rest(merge_ctx *x, mc_libmerge_progress_fn fn, void *user
   return st;
 }
 
-mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
+static mc_status merge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
                           mc_libmerge_progress_fn progress, void *user, mc_merge_result *out) {
   mc_merge_result scratch;
   mc_merge_result *r = out ? out : &scratch;
@@ -1084,4 +1085,13 @@ mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
   free(x.added.v);
   free(backup);
   return r->status = st;
+}
+
+mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
+                          mc_libmerge_progress_fn progress, void *user, mc_merge_result *out) {
+  const char *dir = lib ? mc_library_dir(lib) : NULL;
+  mc_folder_hold(dir);
+  mc_status st = merge_run(lib, kept, nkept, progress, user, out);
+  mc_folder_release(dir);
+  return st;
 }
