@@ -145,7 +145,6 @@ See "Merging libraries" in docs/sync-protocol.md.
 ## Windows
 
 - Dialogs still light in dark mode: about 60 MessageBoxW calls, and the About and archive TaskDialogs. message_dialog() in prompt_dialog.c can replace them
-- The Settings page needs a scrollbar: on a short window or at a large text size, Scrobbling and Reset are cut off
 - Screen readers: the artist page (kithsong_artists) has no UI Automation provider; the now-playing strip exposes no seek bar or times; the volume slider has no RangeValue pattern
 
 ## Testing
