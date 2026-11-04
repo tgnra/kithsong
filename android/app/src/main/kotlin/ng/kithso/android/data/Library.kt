@@ -75,7 +75,8 @@ data class Track(
  */
 @Immutable
 data class CollectionRef(val kind: Kind, val uid: String, val group: String? = null) {
-    enum class Kind { Album, Artist, Playlist, AlbumGroup }
+    /** A Station is named by its seed track, and has no track list: opening one plays it. */
+    enum class Kind { Album, Artist, Playlist, AlbumGroup, Station }
 
     /** The album group this album was opened from, if any. */
     val parentGroup: CollectionRef?
@@ -84,10 +85,35 @@ data class CollectionRef(val kind: Kind, val uid: String, val group: String? = n
 
 /**
  * Something played recently, shown under Recents. [artist] is an album's artist; artists,
- * playlists and album groups have none, and are labelled by their kind instead.
+ * playlists and album groups have none, and are labelled by their kind instead. A station has
+ * [sub], which tells it from others of its name, its seed's [seedTitle], and [artistUid], the
+ * seed's artist.
  */
 @Immutable
-data class Recent(val ref: CollectionRef, val title: String, val artist: String?, val art: ArtRef)
+data class Recent(
+    val ref: CollectionRef,
+    val title: String,
+    val artist: String?,
+    val art: ArtRef,
+    val sub: String? = null,
+    val seedTitle: String? = null,
+    val artistUid: String? = null,
+)
+
+/**
+ * A radio station of the Radio row, named by its seed track, [seedUid]. [sub] tells it from any
+ * station of the same [name]; [art] is the seed's album's cover, or failing that its artist's
+ * picture, and [artistUid] the seed's artist.
+ */
+@Immutable
+data class Station(
+    val seedUid: String,
+    val name: String,
+    val sub: String?,
+    val seedTitle: String,
+    val art: ArtRef,
+    val artistUid: String? = null,
+)
 
 /** The library as the main screen shows it. */
 @Immutable
@@ -97,6 +123,8 @@ data class Library(
     val albums: List<Album>,
     val artists: List<Artist>,
     val albumGroups: List<AlbumGroup> = emptyList(),
+    /** None until enough is analysed. They're found after the rest, so they can come later. */
+    val stations: List<Station> = emptyList(),
 ) {
     /** No music here: an empty playlist or album group doesn't change that. */
     val isEmpty: Boolean
@@ -112,6 +140,7 @@ data class Library(
         CollectionRef.Kind.Artist -> artists.firstOrNull { it.uid == ref.uid }?.art
         CollectionRef.Kind.Playlist -> playlists.firstOrNull { it.uid == ref.uid }?.art
         CollectionRef.Kind.AlbumGroup -> albumGroups.firstOrNull { it.uid == ref.uid }?.art
+        CollectionRef.Kind.Station -> stations.firstOrNull { it.seedUid == ref.uid }?.art
     }
 
     companion object {
@@ -210,6 +239,15 @@ interface LibrarySource {
 
     /** The tracks of [ref], or null if it no longer exists. */
     suspend fun trackList(ref: CollectionRef): TrackList?
+
+    /**
+     * The track to start station [seedUid] from, or null if it can't be: it has no file on this
+     * phone, say, as a station that synced into Recents may not.
+     */
+    suspend fun stationSeed(seedUid: String): Track?
+
+    /** The tracks [uids], in order, with null for one the library doesn't have. */
+    suspend fun tracks(uids: List<String>): List<Track?>
 
     /** Notes that [ref] was played, putting it first under Recents. */
     fun notePlayed(ref: CollectionRef)

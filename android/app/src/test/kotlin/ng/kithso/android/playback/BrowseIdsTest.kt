@@ -22,6 +22,13 @@ class BrowseIdsTest {
     }
 
     @Test
+    fun aStationGoesByItsSeed() {
+        val station = CollectionRef(CollectionRef.Kind.Station, "t:1")
+        assertEquals("station:t:1", station.id)
+        assertEquals(station, parseRef(station.id))
+    }
+
+    @Test
     fun aGroupAlbumIdWithoutAnAlbumIsNothing() {
         assertNull(parseRef("groupalbum:g"))
     }

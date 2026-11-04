@@ -627,6 +627,7 @@ private fun DetailTitle(kind: CollectionRef.Kind, list: TrackList, artSize: Dp, 
                         else pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size)
                     CollectionRef.Kind.Playlist -> pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size)
                     CollectionRef.Kind.AlbumGroup -> pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount)
+                    CollectionRef.Kind.Station -> "" // it has no track list
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

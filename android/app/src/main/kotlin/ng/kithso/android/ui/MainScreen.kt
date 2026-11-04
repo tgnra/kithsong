@@ -81,6 +81,7 @@ import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.Library
 import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.Recent
+import ng.kithso.android.data.Station
 import ng.kithso.android.ui.art.AlbumArt
 import ng.kithso.android.ui.art.PrefetchArt
 import ng.kithso.android.ui.theme.ArtBackdrop
@@ -88,6 +89,7 @@ import ng.kithso.android.ui.theme.rememberOnScreenArtColors
 import kotlinx.coroutines.launch
 
 enum class Section(@StringRes val title: Int) {
+    Radio(R.string.home_row_radio),
     Recents(R.string.section_recents),
     Playlists(R.string.section_playlists),
     AlbumGroups(R.string.section_album_groups),
@@ -96,8 +98,8 @@ enum class Section(@StringRes val title: Int) {
 }
 
 /**
- * One item of the main list. Albums come [MainItem.AlbumRow] at a time, a grid row each; recents
- * and album groups are one item each, a [TileRow].
+ * One item of the main list. Albums come [MainItem.AlbumRow] at a time, a grid row each; radio
+ * stations, recents and album groups are one item each, a [TileRow].
  */
 @Immutable
 internal sealed interface MainItem {
@@ -123,6 +125,12 @@ internal sealed interface MainItem {
     data class Heading(val section: Section) : MainItem {
         override val key get() = "heading:$section"
         override val contentType get() = "heading"
+    }
+
+    data class RadioRow(val stations: List<Station>) : MainItem {
+        override val key get() = RADIO_ROW_KEY
+        override val contentType get() = TILE_ROW_TYPE
+        override val art get() = stations.take(ROW_ART).map { it.art }
     }
 
     data class RecentsRow(val recents: List<Recent>) : MainItem {
@@ -156,6 +164,7 @@ internal sealed interface MainItem {
     }
 }
 
+private const val RADIO_ROW_KEY = "row:radio"
 private const val RECENTS_ROW_KEY = "row:recents"
 private const val ALBUM_GROUPS_ROW_KEY = "row:album-groups"
 private const val TILE_ROW_TYPE = "tiles"
@@ -172,6 +181,10 @@ internal fun mainItems(library: Library?, columns: Int, banner: Boolean, canMake
     if (library == null) return@buildList
     if (library.isEmpty) add(MainItem.Empty)
     val headings = canMake && !library.isEmpty
+    if (library.stations.isNotEmpty()) {
+        add(MainItem.Heading(Section.Radio))
+        add(MainItem.RadioRow(library.stations))
+    }
     if (library.recents.isNotEmpty()) {
         add(MainItem.Heading(Section.Recents))
         add(MainItem.RecentsRow(library.recents))
@@ -203,8 +216,8 @@ private const val ALBUMS_MIN_SHARE = 0.6f
 /**
  * The fast scroll strip's entries for [items]: each section's heading, then the letters of an
  * alphabetical section long enough for them (playlists by name, albums by title, artists by sort
- * name, as the library orders them). Recents and album groups are a single row, with no places
- * in it for the strip to go.
+ * name, as the library orders them). Radio, Recents and album groups are a single row, with no
+ * places in it for the strip to go.
  */
 internal fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, String>, other: String): List<FastScrollEntry> =
     buildList {
@@ -274,7 +287,8 @@ fun MainScreen(
     // In a group, the empty library offers this phone's sync settings rather than pairing.
     inGroup: Boolean = false,
     onChooseWhatToSync: () -> Unit = {},
-    // Long-pressing a recent, a playlist, an album group, an album or an artist opens its menu.
+    // Long-pressing a station, a recent, a playlist, an album group, an album or an artist opens its menu.
+    onStationMenu: (Station) -> Unit = {},
     onRecentMenu: (Recent) -> Unit = {},
     onPlaylistMenu: (Playlist) -> Unit = {},
     onAlbumMenu: (Album) -> Unit = {},
@@ -301,6 +315,7 @@ fun MainScreen(
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
         val listState = rememberLazyListState()
+        val radioRow = rememberTileRowState(listState, RADIO_ROW_KEY)
         val recentsRow = rememberTileRowState(listState, RECENTS_ROW_KEY)
         val albumGroupsRow = rememberTileRowState(listState, ALBUM_GROUPS_ROW_KEY)
         ScrollFrames(listState, "main")
@@ -362,14 +377,37 @@ fun MainScreen(
                             }
                         },
                     )
+                    is MainItem.RadioRow -> TileRow(
+                        item.stations.map { station ->
+                            val subtitle = station.subtitle()
+                            Tile(
+                                station.seedUid,
+                                station.name,
+                                subtitle,
+                                station.art,
+                                onLongClick = { onStationMenu(station) },
+                                badge = { StationBadge() },
+                                description = stringResource(R.string.station_label, station.name, subtitle, station.seedTitle),
+                            ) { onOpen(CollectionRef(CollectionRef.Kind.Station, station.seedUid)) }
+                        },
+                        state = radioRow,
+                    )
                     is MainItem.RecentsRow -> TileRow(
                         item.recents.map { recent ->
+                            val subtitle = recent.subtitle()
+                            val station = recent.ref.kind == CollectionRef.Kind.Station
                             Tile(
                                 "${recent.ref.kind}:${recent.ref.uid}",
                                 recent.title,
-                                recent.subtitle(),
+                                subtitle,
                                 recent.art,
                                 onLongClick = { onRecentMenu(recent) },
+                                badge = if (station) ({ StationBadge() }) else null,
+                                description = if (station) {
+                                    stringResource(R.string.station_label, recent.title, subtitle, recent.seedTitle.orEmpty())
+                                } else {
+                                    null
+                                },
                             ) { onOpen(recent.ref) }
                         },
                         state = recentsRow,
@@ -640,15 +678,20 @@ private fun SectionHeading(
     }
 }
 
-/** What a recent shows under its title: an album's artist, or what kind of thing it is. */
+/** What a recent shows under its title: an album's artist, a station's line, or what kind of thing it is. */
 @Composable
-internal fun Recent.subtitle(): String = artist ?: stringResource(
+internal fun Recent.subtitle(): String = artist ?: sub ?: stringResource(
     when (ref.kind) {
         CollectionRef.Kind.Artist -> R.string.artist
         CollectionRef.Kind.AlbumGroup -> R.string.album_group
+        CollectionRef.Kind.Station -> R.string.home_station_sub
         else -> R.string.playlist
     },
 )
+
+/** What a station shows under its name. */
+@Composable
+internal fun Station.subtitle(): String = sub ?: stringResource(R.string.home_station_sub)
 
 /** An artist's albums here, or for one only credited on tracks, their tracks. */
 @Composable

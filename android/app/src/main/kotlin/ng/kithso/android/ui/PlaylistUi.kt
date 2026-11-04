@@ -65,6 +65,7 @@ import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.PlaylistChoice
 import ng.kithso.android.data.PlaylistEditor
 import ng.kithso.android.data.Recent
+import ng.kithso.android.data.Station
 import ng.kithso.android.data.RecentsEditor
 import ng.kithso.android.data.SmartListEditor
 import ng.kithso.android.data.TagTarget
@@ -131,6 +132,10 @@ class PlaylistActions(
         sheet = Sheet.RecentMenu(recent)
     }
 
+    fun stationMenu(station: Station) {
+        sheet = Sheet.StationMenu(station)
+    }
+
     fun playlistMenu(playlist: Playlist) {
         sheet = Sheet.PlaylistMenu(playlist)
     }
@@ -174,6 +179,7 @@ class PlaylistActions(
 
     internal sealed interface Sheet {
         data class RecentMenu(val recent: Recent) : Sheet
+        data class StationMenu(val station: Station) : Sheet
         data class PlaylistMenu(val playlist: Playlist) : Sheet
         data class AlbumGroupMenu(val group: AlbumGroup) : Sheet
         data class AlbumMenu(val album: Album, val groupUid: String?, val inGroup: String? = null) : Sheet
@@ -302,13 +308,18 @@ fun PlaylistSheets(
                 CollectionRef.Kind.Artist -> editAction(actions, TagTarget.Kind.Artist, recent.ref.uid)
                 else -> null
             }
+            // A station has an order of its own, and its seed's artist to go to.
+            val station = recent.ref.kind == CollectionRef.Kind.Station
+            val artist = recent.artistUid?.let { CollectionRef(CollectionRef.Kind.Artist, it) }
+                ?.takeIf { library?.artOf(it) != null }
             MenuSheet(
                 actions,
                 recent.title,
                 recent.subtitle(),
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(recent.ref, false) })
-                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(recent.ref, true) })
+                    if (!station) add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(recent.ref, true) })
+                    if (artist != null) add(SheetAction(stringResource(R.string.go_to_artist), Icons.Person) { onOpen(artist) })
                     if (edit != null) add(edit)
                     if (recents != null) {
                         add(SheetAction(stringResource(R.string.recent_remove_menu), Icons.Remove) {
@@ -318,6 +329,21 @@ fun PlaylistSheets(
                             recents.clearRecents()
                         })
                     }
+                },
+            )
+        }
+        is PlaylistActions.Sheet.StationMenu -> {
+            val station = sheet.station
+            val ref = CollectionRef(CollectionRef.Kind.Station, station.seedUid)
+            val artist = station.artistUid?.let { CollectionRef(CollectionRef.Kind.Artist, it) }
+                ?.takeIf { library?.artOf(it) != null }
+            MenuSheet(
+                actions,
+                station.name,
+                station.subtitle(),
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
+                    if (artist != null) add(SheetAction(stringResource(R.string.go_to_artist), Icons.Person) { onOpen(artist) })
                 },
             )
         }

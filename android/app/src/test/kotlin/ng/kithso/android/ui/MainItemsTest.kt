@@ -8,6 +8,7 @@ import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.Library
 import ng.kithso.android.data.Playlist
 import ng.kithso.android.data.Recent
+import ng.kithso.android.data.Station
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,6 +42,31 @@ class MainItemsTest {
             ),
             items.take(6),
         )
+    }
+
+    @Test
+    fun radioIsARowDirectlyAboveRecents() {
+        val stations = List(3) { Station("s$it", "Station $it", "Station", "Seed", art) }
+        val library = library(recents = 2, albums = 1).copy(stations = stations)
+        val items = mainItems(library, columns = 2, banner = false, canMake = false)
+        assertEquals(
+            listOf(
+                MainItem.Header,
+                MainItem.Heading(Section.Radio),
+                MainItem.RadioRow(stations),
+                MainItem.Heading(Section.Recents),
+                MainItem.RecentsRow(recents(2)),
+            ),
+            items.take(5),
+        )
+        assertEquals(listOf("Radio", "Recents", "Albums"), entries(items).map { it.label })
+    }
+
+    @Test
+    fun aLibraryWithNoStationsHasNoRadioRow() {
+        val items = mainItems(library(recents = 2, albums = 1), columns = 2, banner = false, canMake = false)
+        assertTrue(MainItem.Heading(Section.Radio) !in items)
+        assertTrue(items.none { it is MainItem.RadioRow })
     }
 
     @Test

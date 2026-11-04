@@ -42,8 +42,14 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
                     .take(playlist.trackCount)
                 TrackList(playlist.name, playlist.art, tracks)
             }
+            CollectionRef.Kind.Station -> null
         }
     }
+
+    override suspend fun stationSeed(seedUid: String): Track? =
+        state.value.albums.flatMap(::tracksOf).firstOrNull { it.uid == seedUid }
+
+    override suspend fun tracks(uids: List<String>): List<Track?> = uids.map { null }
 
     // The fake's recents stay as they are.
     override fun notePlayed(ref: CollectionRef) = Unit
@@ -165,7 +171,10 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
                 val uid = "group-$i"
                 AlbumGroup(uid, name, 4 + i * 2, ArtRef(uid, name))
             }
-            return Library(recents, playlists, albums, artists, groups)
+            val stations = albums.take(4).map {
+                Station("${it.uid}-1", "${it.artist} Radio", "Station", it.title, it.art)
+            }
+            return Library(recents, playlists, albums, artists, groups, stations)
         }
     }
 }

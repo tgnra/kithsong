@@ -1,11 +1,13 @@
 package ng.kithso.android.ui
 
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import ng.kithso.android.KithsongApp
+import ng.kithso.android.R
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CoreTesting
 import androidx.activity.compose.BackHandler
@@ -131,10 +133,31 @@ fun App(
     // the main list, so they're there as its screen slides in rather than fading in after.
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // A station starts from its seed, which a station from Recents, synced from another device,
+    // may not have here: that's asked at each tap, and said if it can't.
+    val playStation: (CollectionRef) -> Unit = remember(source, playback) {
+        { ref ->
+            scope.launch {
+                val seed = source.stationSeed(ref.uid)
+                if (seed == null) {
+                    Toast.makeText(context, context.getString(R.string.station_unavailable), Toast.LENGTH_LONG).show()
+                } else {
+                    playback.play(listOf(seed), 0, ref.origin)
+                    source.notePlayed(ref)
+                    onPlay()
+                }
+            }
+        }
+    }
+    // A station has no page, so it never reaches the back stack: opening it plays it.
     val open: (CollectionRef) -> Unit = remember {
         { ref ->
-            library?.artOf(ref)?.let { art -> scope.launch { ArtColors.find(context, art) } }
-            nav = nav.push(Page.Collection(ref))
+            if (ref.kind == CollectionRef.Kind.Station) {
+                playStation(ref)
+            } else {
+                library?.artOf(ref)?.let { art -> scope.launch { ArtColors.find(context, art) } }
+                nav = nav.push(Page.Collection(ref))
+            }
         }
     }
     // A device's page, over Sync, from wherever it's asked for; the player makes way for it.
@@ -199,10 +222,14 @@ fun App(
         }
     }
     val playAll: (CollectionRef, Boolean) -> Unit = { ref, shuffle ->
-        scope.launch {
-            val tracks = source.trackList(ref)?.tracks ?: return@launch
-            if (tracks.none { it.path != null }) return@launch
-            playList(ref, tracks, shuffle)
+        if (ref.kind == CollectionRef.Kind.Station) {
+            playStation(ref)
+        } else {
+            scope.launch {
+                val tracks = source.trackList(ref)?.tracks ?: return@launch
+                if (tracks.none { it.path != null }) return@launch
+                playList(ref, tracks, shuffle)
+            }
         }
     }
 
@@ -296,6 +323,7 @@ fun App(
                     }
                 },
                 modifier = Modifier.coveredIf(top != null || smartOpen),
+                onStationMenu = actions::stationMenu,
                 onRecentMenu = actions::recentMenu,
                 onPlaylistMenu = actions::playlistMenu,
                 onAlbumMenu = { actions.albumMenu(it) },

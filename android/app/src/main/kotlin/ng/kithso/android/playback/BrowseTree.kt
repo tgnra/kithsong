@@ -35,11 +35,12 @@ import java.net.URLEncoder
  * session: four tabs under the root, Home (the phone's Recents), Playlists, Albums and Album
  * groups. Albums, artists, playlists and album groups are browsable and playable too, playing
  * from the start; an album group's children are its albums, the others' their tracks, leaving
- * out those with no file here. Browse items carry their art as an [ArtProvider] URI, which Auto
+ * out those with no file here. A station in Home only plays. Browse items carry their art as an [ArtProvider] URI, which Auto
  * can read, and as an [artRef] for [ArtBitmapLoader].
  *
  * Media ids: `root`; the tabs `tab:home`, `tab:playlists`, `tab:albums` and `tab:groups`;
- * collections `album:<uid>`, `artist:<uid>`, `playlist:<uid>` and `group:<uid>`; an album listed
+ * collections `album:<uid>`, `artist:<uid>`, `playlist:<uid>` and `group:<uid>`; a station
+ * `station:<seed track uid>`; an album listed
  * under an album group, which plays on into the group's following albums,
  * `groupalbum:<group uid, URL encoded>:<uid>`; a collection's
  * track `track:<collection id>:<index>`, its index in the collection's [TrackList.tracks]; and a
@@ -117,6 +118,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
             CollectionRef.Kind.Artist -> library.artists.firstOrNull { it.uid == ref.uid }?.toBrowseItem()
             CollectionRef.Kind.Playlist -> library.playlists.firstOrNull { it.uid == ref.uid }?.toBrowseItem()
             CollectionRef.Kind.AlbumGroup -> library.albumGroups.firstOrNull { it.uid == ref.uid }?.toBrowseItem()
+            CollectionRef.Kind.Station -> null
         } ?: library.recents.firstOrNull { it.ref == ref }?.toBrowseItem()
     }
 
@@ -141,7 +143,8 @@ internal class BrowseTree(private val context: Context, private val source: () -
      * first track, or shuffled, one the player picks), a collection's track plays the
      * collection from it, and a query plays its best result, or with none (as for "play
      * Kithsong"), the first of Recents. An album listed under an album group, or a track of
-     * one, plays the whole group from there. A collection played is noted, for Recents.
+     * one, plays the whole group from there. A station plays from its seed, if it can here. A
+     * collection played is noted, for Recents.
      */
     suspend fun queue(request: MediaItem): MediaItemsWithStartPosition? {
         val id = request.mediaId
@@ -188,6 +191,11 @@ internal class BrowseTree(private val context: Context, private val source: () -
     }
 
     private suspend fun queueOf(ref: CollectionRef, index: Int?): MediaItemsWithStartPosition? {
+        if (ref.kind == CollectionRef.Kind.Station) {
+            val seed = source().stationSeed(ref.uid) ?: return null
+            source().notePlayed(ref)
+            return MediaItemsWithStartPosition(queueItems(context, listOf(seed), ref.origin), 0, 0)
+        }
         val tracks = source().trackList(ref)?.tracks ?: return null
         return queueInGroup(ref, tracks, index) ?: queueOf(ref, tracks, index)
     }
@@ -253,6 +261,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
             CollectionRef.Kind.Artist -> MediaMetadata.MEDIA_TYPE_ARTIST
             CollectionRef.Kind.Playlist -> MediaMetadata.MEDIA_TYPE_PLAYLIST
             CollectionRef.Kind.AlbumGroup -> MediaMetadata.MEDIA_TYPE_FOLDER_ALBUMS
+            CollectionRef.Kind.Station -> MediaMetadata.MEDIA_TYPE_RADIO_STATION
         }
         return MediaItem.Builder()
             .setMediaId(ref.id)
@@ -263,7 +272,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
                     .setArtist(artist)
                     .setAlbumTitle(title.takeIf { ref.kind == CollectionRef.Kind.Album })
                     .setArtworkUri(ArtProvider.uriFor(context, art))
-                    .setIsBrowsable(true)
+                    .setIsBrowsable(ref.kind != CollectionRef.Kind.Station)
                     .setIsPlayable(true)
                     .setMediaType(mediaType)
                     .setExtras(Bundle().apply { putArtRef(art) })
@@ -296,9 +305,10 @@ internal class BrowseTree(private val context: Context, private val source: () -
         val kind = when (ref.kind) {
             CollectionRef.Kind.Artist -> R.string.artist
             CollectionRef.Kind.AlbumGroup -> R.string.album_group
+            CollectionRef.Kind.Station -> R.string.home_station_sub
             else -> R.string.playlist
         }
-        return collection(ref, title, artist ?: context.getString(kind), art, artist)
+        return collection(ref, title, artist ?: sub ?: context.getString(kind), art, artist)
     }
 
     private fun Album.toBrowseItem(group: String? = null) =
@@ -344,6 +354,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
                 kind == CollectionRef.Kind.Album -> "album"
                 kind == CollectionRef.Kind.Artist -> "artist"
                 kind == CollectionRef.Kind.Playlist -> "playlist"
+                kind == CollectionRef.Kind.Station -> "station"
                 else -> "group"
             } + ":" + uid
 
@@ -358,6 +369,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
                 "artist" -> CollectionRef.Kind.Artist
                 "playlist" -> CollectionRef.Kind.Playlist
                 "group" -> CollectionRef.Kind.AlbumGroup
+                "station" -> CollectionRef.Kind.Station
                 else -> return null
             }
             return CollectionRef(kind, id.substringAfter(':'))

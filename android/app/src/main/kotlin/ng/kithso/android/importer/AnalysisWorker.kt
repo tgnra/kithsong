@@ -16,6 +16,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import ng.kithso.android.KithsongApp
+import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.core.CoreAnalysis
 import ng.kithso.core.MusicCoreException
 
@@ -29,7 +30,8 @@ import ng.kithso.core.MusicCoreException
  * so whatever sync delivered in the meantime is skipped, and it stands aside by itself during
  * sync sessions and imports. If the system stops it (the charger went, or its time was up) the
  * results so far stay, and WorkManager runs it again on the next charge, when it goes on from
- * there. Having been through the tracks it's over, and nothing is scheduled.
+ * there. Having been through the tracks it's over, and nothing is scheduled. However it ends,
+ * the Radio row looks again at what there is to go on.
  */
 class AnalysisWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -64,6 +66,7 @@ class AnalysisWorker(context: Context, params: WorkerParameters) : CoroutineWork
             throw e
         } finally {
             withContext(NonCancellable + Dispatchers.IO) { analysis.stop() }
+            (app.library as? CoreLibrarySource)?.refreshStations()
         }
     }
 

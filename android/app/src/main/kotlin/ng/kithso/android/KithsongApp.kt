@@ -135,6 +135,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 isVisible = true
+                (library as? CoreLibrarySource)?.onShown()
             }
 
             override fun onStop(owner: LifecycleOwner) {
