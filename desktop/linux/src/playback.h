@@ -4,8 +4,9 @@
  *
  * The player's callbacks come on its own thread and are passed to the UI thread with
  * g_idle_add(); while playing, a timer moves the seekbar on. The player is created on first
- * play. Plays are counted in the library and scrobbled when the player says they count. Call
- * everything here on the UI thread.
+ * play. Plays are counted in the library and scrobbled when the player says they count. A
+ * station's queue grows as it plays, and what's added is looked up in the library as it comes.
+ * Call everything here on the UI thread.
  */
 #ifndef KITHSONG_PLAYBACK_H
 #define KITHSONG_PLAYBACK_H
@@ -54,8 +55,11 @@ void playback_art_changed(mc_library *lib, const char *album_uid);
  * any track). context and context_uid (or NULL) say what's played, for the play log. */
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
                    const char *context_uid);
-/* A stub until the Linux frontend's lands. */
+/* Replaces the queue with a station from a track (see mc_player_play_radio()), in the library
+ * set with playback_set_library(). A seed that can't be used does nothing. */
 void playback_play_radio(const char *seed_track_uid);
+/* Whether a track can start a station, for a menu to say so. It reads that one track. */
+gboolean playback_can_radio(const char *seed_track_uid);
 /* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to
  * whatever is queued next. Off to begin with; main.c keeps it in the settings. */
 void playback_set_shuffle(gboolean on);
@@ -81,10 +85,11 @@ gboolean playback_muted(void);
 
 gboolean playback_is_playing(void);
 mc_player_state playback_state(void);
-/* Whether there's a current track, and one after it (always, shuffled). */
+/* Whether there's a current track, and one after it (always, shuffled or from a station that's
+ * still adding). */
 gboolean playback_has_current(void);
 gboolean playback_has_next(void);
-/* What's queued: how many tracks, and track i's uid ("" past the end). */
+/* What's queued so far: how many tracks, and track i's uid ("" past the end). */
 int playback_queue_count(void);
 const char *playback_queue_uid(int i);
 int64_t playback_position_ms(void);

@@ -49,8 +49,8 @@ const char *album_groups_open_group(void);
 /* The open group's album grid (album_grid.c), or NULL while the groups show. */
 GtkWidget *album_groups_album_grid(void);
 
-/* The menu for album in grid (an album grid), at x, y: Add to album group, and if in_group
- * isn't NULL, Remove from album group (of in_group), then Edit... (edit_dialog.h), Remove from
+/* The menu for album in grid (an album grid), at x, y: Start radio, greyed out if none of its
+ * tracks can seed a station, Add to album group, and if in_group isn't NULL, Remove from album group (of in_group), then Edit... (edit_dialog.h), Remove from
  * this computer... or Sync to this computer where they apply (remove_here.h), and Delete from
  * library... (delete_dialog.h).
  * For album_grid_set_menu() callers. */

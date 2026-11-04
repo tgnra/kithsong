@@ -33,7 +33,7 @@ typedef struct tile {
   mc_recent_kind kind;
   gboolean station;
   char uid[MC_UID_STRLEN];
-  char seed_uid[MC_UID_STRLEN]; /* a station's */
+  char seed[MC_UID_STRLEN]; /* a station's seed track, which is what tells them apart */
   char *artist;  /* the line under its title */
   char *cover;   /* the file showing, or on its way; NULL for none */
   gint64 cover_mtime;
@@ -127,8 +127,8 @@ static void on_tile_clicked(GtkButton *button, gpointer user) {
   (void)button;
   tile *t = user;
   if (t->station) {
-    char seed[MC_UID_STRLEN]; /* playing can reload the rows */
-    g_strlcpy(seed, t->seed_uid, sizeof seed);
+    char seed[MC_UID_STRLEN]; /* playing can reload the rows too */
+    g_strlcpy(seed, t->seed, sizeof seed);
     playback_play_radio(seed);
     return;
   }
@@ -206,14 +206,22 @@ static void tile_set(tile *t, const mc_home_pick *p) {
   t->kind = p->kind;
   t->station = p->station;
   g_strlcpy(t->uid, p->uid, sizeof t->uid);
-  g_strlcpy(t->seed_uid, p->seed_uid, sizeof t->seed_uid);
+  g_strlcpy(t->seed, p->seed_uid, sizeof t->seed);
   g_free(t->artist);
   t->artist = g_strdup(sub);
   gtk_label_set_text(GTK_LABEL(t->title), title);
   gtk_label_set_text(GTK_LABEL(t->sub), sub);
-  char *name = mc_format_alloc(mc_str(MC_STR_LINUX_ALBUM_TILE_NAME), MC_S(title), MC_S(sub));
+  char *name = mc_format_alloc(mc_str(p->station ? MC_STR_LINUX_STATION_TILE_NAME : MC_STR_LINUX_ALBUM_TILE_NAME),
+                               MC_S(title), MC_S(sub));
   gtk_accessible_update_property(GTK_ACCESSIBLE(t->button), GTK_ACCESSIBLE_PROPERTY_LABEL, name ? name : title, -1);
   mc_free(name);
+  /* What a station is, which a tile can't say in two short lines. */
+  char *tip = p->station ? mc_format_alloc(mc_str(MC_STR_LINUX_STATION_TILE_TIP), MC_S(p->seed_title ? p->seed_title : ""))
+                         : NULL;
+  gtk_widget_set_tooltip_text(t->button, tip);
+  if (tip) gtk_accessible_update_property(GTK_ACCESSIBLE(t->button), GTK_ACCESSIBLE_PROPERTY_DESCRIPTION, tip, -1);
+  else gtk_accessible_reset_property(GTK_ACCESSIBLE(t->button), GTK_ACCESSIBLE_PROPERTY_DESCRIPTION);
+  mc_free(tip);
 
   gtk_image_set_from_icon_name(GTK_IMAGE(gtk_overlay_get_child(GTK_OVERLAY(t->frame))), pick_icon(p));
   if (p->kind == MC_RECENT_ARTIST && !p->station) gtk_widget_add_css_class(t->frame, "home-round");

@@ -7,16 +7,21 @@
 #include "drag.h"
 #include "edit_dialog.h"
 #include "home_view.h"
+#include "musiccore/radio_seeds.h"
 #include "playback.h"
 
 enum { MAX_RECENTS = 3 };
 
 static struct {
   app *a;
-  GtkWidget *heading, *list, *menu; /* menu: a row's, Edit..., Remove from Recents and Clear Recents */
+  GtkWidget *heading, *list, *menu; /* menu: a row's, Start radio, Edit..., Remove from Recents and
+                                     * Clear Recents */
   char menu_uid[MC_UID_STRLEN];     /* the recent the menu is for */
   mc_recent_kind menu_kind;         /* and what it is */
   GSimpleAction *edit;              /* enabled for an album or artist, and hidden otherwise */
+  GSimpleAction *start_radio;       /* enabled if it has a seed */
+  GMenu *top;                       /* Edit..., with Start radio above it for an album or artist */
+  char menu_seed[MC_UID_STRLEN];    /* the track its Start radio starts from */
 } r;
 
 /* The icon of the sidebar page it opens on, or a station's mark on the Home page. */
@@ -165,6 +170,26 @@ static void on_edit(GSimpleAction *action, GVariant *param, gpointer user) {
   if (r.menu_uid[0]) edit_dialog_present(r.a, r.menu_kind == MC_RECENT_ARTIST ? EDIT_ARTIST : EDIT_ALBUM, r.menu_uid);
 }
 
+static void on_start_radio(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  playback_play_radio(r.menu_seed);
+}
+
+/* Start radio is for what has tracks of its own to pick from. It's put in rather than hidden with
+ * its action, as there it's greyed out with no seed, not gone. */
+static void update_radio(void) {
+  gboolean album = r.menu_kind == MC_RECENT_ALBUM, artist = r.menu_kind == MC_RECENT_ARTIST;
+  if (g_menu_model_get_n_items(G_MENU_MODEL(r.top)) > 1) g_menu_remove(r.top, 0);
+  if (!album && !artist) return;
+  g_menu_prepend(r.top, mc_str_mnemonic(MC_STR_START_RADIO), "recents.start-radio");
+  mc_status st = !r.a->lib ? MC_ERR_NOT_FOUND
+                 : album   ? mc_radio_seed_for_album(r.a->lib, r.menu_uid, r.menu_seed)
+                           : mc_radio_seed_for_artist(r.a->lib, r.menu_uid, r.menu_seed);
+  g_simple_action_set_enabled(r.start_radio, st == MC_OK);
+}
+
 static void on_clear(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -182,6 +207,7 @@ static void popup_menu(GtkListBoxRow *row, GtkWidget *widget, double x, double y
   g_strlcpy(r.menu_uid, uid, sizeof r.menu_uid);
   r.menu_kind = (mc_recent_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"));
   g_simple_action_set_enabled(r.edit, r.menu_kind == MC_RECENT_ALBUM || r.menu_kind == MC_RECENT_ARTIST);
+  update_radio();
   gtk_popover_set_pointing_to(GTK_POPOVER(r.menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
   gtk_popover_popup(GTK_POPOVER(r.menu));
 }
@@ -260,6 +286,7 @@ GtkWidget *recents_new(app *a) {
   g_menu_append_item(section, edit);
   g_object_unref(edit);
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  r.top = section; /* the menu keeps it */
   g_object_unref(section);
   section = g_menu_new();
   g_menu_append(section, mc_str_mnemonic(MC_STR_RECENT_REMOVE_MENU), "recents.remove");
@@ -279,6 +306,10 @@ GtkWidget *recents_new(app *a) {
   g_signal_connect(r.edit, "activate", G_CALLBACK(on_edit), NULL);
   g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(r.edit));
   g_object_unref(r.edit); /* the group keeps it */
+  r.start_radio = g_simple_action_new("start-radio", NULL);
+  g_signal_connect(r.start_radio, "activate", G_CALLBACK(on_start_radio), NULL);
+  g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(r.start_radio));
+  g_object_unref(r.start_radio);
   gtk_widget_insert_action_group(box, "recents", G_ACTION_GROUP(actions));
   g_object_unref(actions);
   gtk_widget_set_visible(box, FALSE); /* until there are some */
