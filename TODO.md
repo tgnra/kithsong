@@ -6,13 +6,6 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 - **Home page** - Home in the desktop sidebars stays greyed out until it exists
 - **Repeat and a play queue** - Core: repeat (one, all). All: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither) and a view of what's queued. Windows and Linux: Ctrl+R for repeat (kept free for it)
-- **Wear OS** - small on purpose: albums, playlists and album groups (what has files on the watch; a long press adds to an existing playlist or group), background playback through a media session, and sync through the core (pairs as device B; its profile is chosen on the other devices). Left:
-  - Playback: a drag to seek on the player (the crown seeks; a horizontal drag would fight swipe-to-dismiss)
-  - Sync: a watch removed from its group keeps its library, so it can only re-pair with an empty one (library_mismatch): a way to forget its library in Settings, or let a watch join over a mismatch
-  - Sync: check on a real watch that the Wi-Fi request (TRANSPORT_WIFI while sync runs) and the charger job's unmetered constraint bring Wi-Fi up, and the listener and discovery follow it (only seen on an emulator with a cellular network)
-  - Core: a member editing a never-confirmed device's profile doesn't see the budget it set itself from free space until the next session; the editor could estimate it from capabilities.free_bytes
-  - Playlists and album groups: the watch only adds (no removing, reordering or renaming)
-  - Decided: no artists, search, recents or smart lists for now; Settings has only the licences
 
 ## Release
 
@@ -25,18 +18,25 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Windows and Linux - Recents show cover art rather than the page's icon (no sidebar row has art yet)
 - Windows - an all-singles Albums page says "No music yet"; use Linux's "No albums" text, which points to the artists' Singles and search (move its strings from the linux section to shared)
 - Windows - albums can't be dragged from the Artists page or search results, nor tracks from search results
-- Android - a new album group can only be made from an album's Add to album group…
-- Linux and Android - no edit dialog yet: the tags, flags and MusicBrainz re-search of musiccore/edit.h (Windows has edit_dialog.c)
-- Windows - the edit dialog: no way to unlink an album from MusicBrainz (mc_album_tags_set() with "" does it), no Alt+letter keys for its fields and buttons, and Save can't be cancelled once it's started
+- Windows - search doesn't filter album groups, so a group hidden as empty here can appear in results and open with its albums greyed
+- Linux - the empty Album groups page has no Choose what to sync button, as Windows has
+- Android - Android Auto's Home can list an empty playlist from Recents; its queue items now expose art through ArtProvider, untested there
+- Android - the main page has no predictive back preview, as the handler has to stay registered so back can quit
+- Windows - the edit dialog: no way to unlink an album from MusicBrainz (mc_album_tags_set() with "" does it), no Alt+letter keys for its fields and buttons, and Save can't be cancelled once it's started; the search opens with focus on Artist, so the results are three Tabs away
+- Linux - the edit dialog: no way to unlink an album from MusicBrainz; search results have no menu, so no Edit… there; the Menu key on an artist page's album tile opens the artist's menu
+- Android - artist pages have no menu button, so Edit… is only reached by long-pressing the artist in a list
+- All - no way back to the automatic cover once one is chosen (it would clear art_chosen), and a replaced cover is deleted rather than sent to the Recycle Bin
+- Windows - the media controls (SMTC) keep the old thumbnail until the next track after a new cover
+- Linux - the now-playing strip doesn't take a cover that arrives by sync; playlist and album group composite pictures weren't checked after a cover change
 - Windows - search results have no right-click menu, so no Edit... there; nor do the album tiles on an artist's page have an album menu of their own (Edit... there is the album's, the rest the artist's)
-- Windows - after an edit, what's queued and the now-playing strip keep the old title and artist until the track changes
+- Windows and Linux - after an edit, what's queued and the now-playing strip keep the old title and artist until the track changes, and a moved file further down the queue is stale (Android reloads the queue; a core call swapping paths without stopping would suit all three, and spare Android's possible half-second jump back)
 - All - tracks imported before 81dcc23 keep a timestamp each, a moment apart, so "Recently added" plays those albums last track first (no migration: the column syncs)
 
-- All - a continuous mix's tracks still show as tracks outside search and smart playlists: the artist's page track list (mc_library_list_artist_tracks()), and a mix of one track among the artist's singles
-- Android and Linux - no way to set an album's flags ("Continuous mix", no scrobbling) yet; they sync and work there once set on Windows. The core's API is mc_album_flags_get/set
+- All - a continuous mix's tracks still show on the artist's page track list (mc_library_list_artist_tracks())
 - All - nothing shows that an album is a continuous mix: mc_album_info doesn't carry the flags, so a frontend would have to ask mc_album_flags_get() per album
 - Core - a play queued for scrobbling before its album was flagged no_scrobble still goes (scrobble_queue keeps what to send, not the track)
-- Core - a one-track mix is found by search but left out of album listings, like any single; decide whether the album grid should show it too
+- Core - a mix made from a loose track and unmade again stays a single on its one-track album; a track filed at the upgrade to v16 keeps its file in <artist>/ until it's next imported; a long recording matched on MusicBrainz but on no release stays loose at import
+- All - a chosen selection (not Sync everything) drops a phone's own imports outside it once the archive has them: intended, but it may surprise people, so say so somewhere
 
 ### Hand edits
 - Core - no way to cancel an edit or a release search under way, nor to see how far it is: an artist with many albums copies every file first, and mc_release_search() can wait minutes while MusicBrainz is busy (mb_call has the cancel; edit.h has no way to pass one)
@@ -50,7 +50,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ### Smart playlists
 - All - localise the v10 example lists' names (decided; they're stored as data, so always English today)
-- Windows and Linux - a smart list with nothing playable here is hidden, so its Recents entry or search result can't open it; on Linux a new one that picks nothing playable doesn't open after it's made
+- Windows and Linux - a smart list whose picks are all away from this device is hidden, so a search result can't open it; on Linux a new one like that doesn't open after it's made. Decided: one that picks nothing in the whole library shows, as empty playlists do
 - Linux - move a condition or group to another group, or up and down within one (today it's deleted and made again)
 - Linux - text conditions could offer the library's genres and artists as you type
 - Linux - the editor only edits a "not" that means a negative operator, or "none of"; any other rule opens read-only, as its sentence
@@ -62,7 +62,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ### Remove from this device
 See "Removing from one device" in docs/sync-protocol.md.
-- All - What to sync shows Sync everything as everything ticked except what was removed (decided). Store it as mode `all` plus exclusions, so later imports still sync; unticking an album there adds an exclusion. Today the editors don't show exclusions at all, so nothing lists what was removed and only that device's Sync to this device can undo it
+- All - What to sync shows Sync everything as everything ticked except what was removed (decided). Store it as mode `all` plus exclusions, so later imports still sync; unticking an album there adds an exclusion. Today the editors mark such rows Removed and ticking one brings it back, but Sync everything doesn't list them
 - Core - a ticked playlist keeps its tracks on the device even when their album or artist was removed, until the playlist is unticked (decided; today an exclusion wins over a playlist). Update the wanted set in docs/sync-protocol.md. The removal says when some tracks stay because of a playlist
 - All - an album removed only through its artist shows neither item; Sync to this device on the artist brings it back
 - All - an "Add to this device" for an album or artist a selection doesn't include (the menus only offer Sync to this device for what was removed)
@@ -73,6 +73,7 @@ See "Removing from one device" in docs/sync-protocol.md.
 
 - Core - turning shuffle on or off in a track's last second, once the next track is buffered, changes the order after that track rather than after the current one
 - Android - resume after the process dies (e.g. Bluetooth play with the app not running), and save the queue across restarts
+- Android - a paused track's place is kept when back quits, but only while the process lives (the item above would cover it)
 - All - revoking access on Last.fm shows "turned down this sign-in" but doesn't sign out by itself
 
 ## Import and tagging
@@ -89,6 +90,10 @@ See "Removing from one device" in docs/sync-protocol.md.
 ## Sync
 
 ### Core
+- Opus: decide on complexity 7 at 128 and 160 kbps after a listening test (75x to 101x realtime); libopus runs constrained VBR while the docs say VBR; cpu_score is wall-clock based and cached, so one taken under load is skewed
+- Trace: send and recv lines use 8 uid characters, only the timestamp, so they can't name a file
+- The plan's size estimate for originals could use the size in the peer's file row, making early ETAs better; the scaling covers for it for now
+- A disc number on one track renames the album's other files only at a later save (seen on Android: they gained a `1-` prefix then). Check against "A disc number past the album's last" in docs/tagging-rules.md
 - Albums and artists without MusicBrainz ids never merge, and a playlist or album group that held both copies lists the survivor twice. Decided: match them fuzzily (by name and artist), in sync's duplicates and when merging libraries
 - Sync profile "artist" selections pick tracks by `tracks.artist_uid` and the album's artist only, not featured credits (`track_artists` / `album_artists` past the first): selecting Rihanna doesn't sync "Jay-Z feat. Rihanna". A selection of an old whole-credit artist selects nothing once the refresh after upgrading has split and deleted it
 - The version vector (mc_changelog_version_vector) scans the whole changelog every time: about 0.3 s at 400k rows (a ~23k-track library) on a desktop, more on a phone or watch. An index on (origin_uid, hlc), with a max(hlc) per origin, makes it instant
@@ -124,6 +129,10 @@ See "Merging libraries" in docs/sync-protocol.md.
 - All - a member running an older version doesn't send the archive's name, so the archive explainer isn't shown, and stays unshown for a later pairing
 
 ### Frontends
+- Windows and Linux - Select all writes on the UI thread: 3-4 s on a 10,000-album list on a debug build under load, unmeasured in release
+- All - What to sync's Albums tab leaves out one-track albums (ALBUM_IS_SINGLE), so singles can't be picked by album and Select all doesn't cover them
+- Android - Select all's skip rule is Kotlin, as edits are an overlay on the stored profile; the core has it in mc_sync_select_items()
+- Android - the sync notification updates up to twice a second during a file; only when its text changes would do
 - All - the waiting-for-a-device banner has no Show that filters the library to those tracks (the core only gives counts)
 - Windows and Linux - the empty Playlists page's Choose what to sync opens this computer's page but doesn't scroll to or focus its What to sync section
 - Windows - offer the firewall rule when the network is public too (today it stays quiet unless Private is uncovered)
@@ -135,6 +144,7 @@ See "Merging libraries" in docs/sync-protocol.md.
 
 ## Windows
 
+- Dialogs still light in dark mode: about 60 MessageBoxW calls, and the About and archive TaskDialogs. message_dialog() in prompt_dialog.c can replace them
 - The Settings page needs a scrollbar: on a short window or at a large text size, Scrobbling and Reset are cut off
 - Screen readers: the artist page (kithsong_artists) has no UI Automation provider; the now-playing strip exposes no seek bar or times; the volume slider has no RangeValue pattern
 
@@ -146,6 +156,9 @@ Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <
 - test_sync_merge on a real build: abandoning a merge (librestore.c) was only syntax-checked where it was written
 
 ### Linux
+- First run and the edit dialog on Wayland, in the Flatpak (portal paths) and with a screen reader; only seen on X11 under Xvfb
+- Other dialogs opened from a menu use adw_dialog_set_focus() before present (playlist_dialogs.c, album_group_dialogs.c), so may lose focus as the edit dialog did
+- GTK logs a gtk_drop_target_async_handle_crossing check from the second cover drag on; no visible effect, cause not found
 - Known bugs to fix:
   - after Use as Track, focus returns to the first row rather than the next missing track
   - the Choose file menu's items have no accessible names
@@ -154,9 +167,9 @@ Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <
   - an album tile stays highlighted after its right-click menu closes
 
 ### Windows
-- Firewall: the success path after UAC, Settings' "Ask about Windows Firewall again", and the elevated helper removing rules left for a moved exe (only compiled to objects, never linked or run)
+- Firewall: the success path after UAC (the themed prompt's Allow was only run up to start_helper), Settings' "Ask about Windows Firewall again", and the elevated helper removing rules left for a moved exe (only compiled to objects, never linked or run)
 - Narrator and NVDA with the UI Automation providers
-- The edit dialog against the real core (tested on a local fake of edit.c: rewriting a playing file, a real MusicBrainz search), and with Narrator; on Windows 10
+- The edit dialog with Narrator; on Windows 10, in high contrast and across a DPI change. A cover from a real drag from Explorer and from the file picker (drops were only driven through IDropTarget). The same display checks for the Mica smart editor, and UI Automation on its now owner-drawn Back, Save and Cancel
 - The volume drop-down on Windows 10 (no rounded corners) and in high contrast; Play albums in order's screen-reader name
 - The empty Albums page's Choose What to Sync in a group, the empty Playlists page's Choose what to sync, and the empty-page button through UI Automation
 - The pairing dialog's ended page with a real pairing: the archive explainer (the dialog growing to fit it), Create a new library and Pair again
@@ -180,8 +193,14 @@ Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <
 - Wear OS: playlists' and groups' long-press haptic, failure notice and TalkBack labels, and the watch's additions reaching a peer
 - Wear OS: a licence's long text scrolling with the crown and showing its name
 - Android: the smart list editor and the recycle bin on a device (Restore, Empty, the sync button's dot)
+- Android: the smart list editor in landscape with the keyboard up (the tag editor needed adjustResize there; the manifest could set it app-wide)
+- Android: swipes on a physical phone and with 3-button navigation; back on API levels below 33; the scrubber in landscape and at large font scales; a failed Save of a cover, a JPEG cover, and emoji in tags through the byte-array path
+- Android: a first launch on a fresh install once logged "Couldn't open the library" (status -5) and then opened fine; cause unknown
+- Android: :app:lintDebug fails on 20 errors from before this round (LocalContextGetResourceValueCall, StateFlowValueCalledInComposition)
 
 ### Cross-platform
+- Sync speed and time left over a real network, between real devices, and against a peer without FILE_REQ's est; a chosen cover reaching a real older peer
+- Opus: run `manual_opus_bench pool <dir> 11 128 <cache> 1` on an idle PC to replace opus.md's estimate, and a sync to a real phone
 - merge_restored's notice (never seen anywhere); on Windows, that it fits the now-playing strip
 - The library_mismatch update hint (needs a peer running an older version)
 - The waiting-for-a-device banner and card running
