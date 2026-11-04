@@ -1557,6 +1557,8 @@ void device_view_create(HWND parent, const device_view_host *host) {
 }
 
 void device_view_destroy(void) {
+  firewall_set_listener(NULL);
+  firewall_watch(g_dv.parent, FALSE);
   estimate_cancel();
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
   KillTimer(g_dv.parent, ID_DEV_TICK_TIMER);

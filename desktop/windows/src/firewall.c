@@ -396,7 +396,8 @@ static void judge(INetFwPolicy2 *policy, long current, const verdict *v, firewal
 #ifndef NDEBUG
 /* KITHSONG_DEBUG_FIREWALL sets what detection reports, to see each banner without touching
  * this PC's firewall: a state (clear, blocked, rule, shut, managed, thirdparty, unreadable),
- * then any of private, public, domain, moved, and fail (Allow "fails"), comma-separated.
+ * then any of private, public, domain, moved, fail (Allow "fails") and noreach (show thirdparty
+ * and unreadable even though devices have connected), comma-separated.
  * "@path" reads that from a file at every check, to see the banner change while running.
  * While it's set nothing is changed or opened: Allow only pretends (start_helper()), and
  * the buttons that open Windows' settings say what they'd open. */
@@ -521,6 +522,10 @@ static void set_status(const firewall_status *st) {
   if (next.state == FIREWALL_THIRD_PARTY || next.state == FIREWALL_UNREADABLE) {
     mc_sync *sync = sync_bridge_get();
     mc_sync_self_reach reach;
+#ifndef NDEBUG
+    char spec[128];
+    if (forced_spec(spec, sizeof spec) && forced_has(spec, "noreach")) sync = NULL;
+#endif
     if (sync && mc_sync_reach_self(sync, &reach) == MC_OK && reach.state == MC_REACH_OK) {
       BOOL adding = next.adding;
       memset(&next, 0, sizeof next);

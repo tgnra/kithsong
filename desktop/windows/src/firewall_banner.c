@@ -248,6 +248,11 @@ static void set_button(int i, action act, const wchar_t *label, BOOL shield) {
   Button_SetElevationRequiredState(b.button[i], shield);
 }
 
+/* Button wnd is about to go away or grey out: the keyboard's focus mustn't go with it. */
+static void drop_focus(HWND wnd) {
+  if (GetFocus() == wnd) SetFocus(b.parent);
+}
+
 /* Heading, text, icon and buttons for st. */
 static void compose(const firewall_status *st, wchar_t *heading, wchar_t *text) {
   wchar_t nets[512];
@@ -308,7 +313,11 @@ BOOL firewall_banner_update(void) {
   action before[NUM_BUTTONS] = {b.act[0], b.act[1]};
   BOOL warn = b.warn;
   compose(st, heading, text);
-  for (int i = 0; i < NUM_BUTTONS; i++) EnableWindow(b.button[i], !(st->adding && b.act[i] == ACT_ALLOW));
+  for (int i = 0; i < NUM_BUTTONS; i++) {
+    BOOL enable = !(st->adding && b.act[i] == ACT_ALLOW);
+    if (!enable) drop_focus(b.button[i]);
+    EnableWindow(b.button[i], enable);
+  }
   BOOL same_text = !wcscmp(heading, b.heading) && !wcscmp(text, b.text);
   if (same_text && warn == b.warn && before[0] == b.act[0] && before[1] == b.act[1]) return FALSE;
   wcscpy(b.heading, heading);
@@ -349,7 +358,10 @@ static void move(HWND wnd, int x, int y, int w, int h) {
 int firewall_banner_place(BOOL visible, int x, int y, int w) {
   if (!visible || !firewall_banner_shown()) {
     ShowWindow(b.wnd, SW_HIDE);
-    for (int i = 0; i < NUM_BUTTONS; i++) ShowWindow(b.button[i], SW_HIDE);
+    for (int i = 0; i < NUM_BUTTONS; i++) {
+      drop_focus(b.button[i]);
+      ShowWindow(b.button[i], SW_HIDE);
+    }
     return 0;
   }
   int pad = scale(PAD), left = text_left(), text_w = w - left - pad;
@@ -368,6 +380,7 @@ int firewall_banner_place(BOOL visible, int x, int y, int w) {
       button_x += bw + scale(BUTTON_SPACE);
       any = TRUE;
     }
+    if (!on) drop_focus(b.button[i]);
     ShowWindow(b.button[i], on ? SW_SHOWNA : SW_HIDE);
   }
   if (any) h += scale(BUTTON_GAP) + scale(BUTTON_H);

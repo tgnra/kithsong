@@ -66,8 +66,9 @@
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
  * so two instances can sync on one PC; the paths are imported. Launching it again with the
  * same config folder brings the open window forward and hands it the paths instead, as
- * GApplication does on Linux (claim_instance). --add-firewall-rule alone is firewall.c's
- * elevated helper, which adds the Windows Firewall rule sync needs and exits.
+ * GApplication does on Linux (claim_instance). --add-firewall-rule or
+ * --add-firewall-rule-public alone is firewall.c's elevated helper, which adds the Windows
+ * Firewall rule sync needs and exits.
  */
 #define _CRT_RAND_S /* rand_s(), for Shuffle Albums */
 #include <windows.h>
