@@ -88,6 +88,12 @@ def build(root=".", drafts=False, base_url=None, log=print):
         nxt = docs[i + 1] if i + 1 < len(docs) else None
         write(dist, doc.url, t.doc(doc, prev, nxt))
 
+    for page in content.load_pages(root / "content" / "pages"):
+        doc_ext.begin(page.source)
+        page.html = doc_md.reset().convert(page.body)
+        page.description = page.description or doc_ext.first_paragraph
+        write(dist, f"/{page.slug}/", t.page(page))
+
     (dist / "404.html").write_text(t.not_found(), encoding="utf-8")
     (dist / "sitemap.xml").write_text(sitemap(site, ["/"] + [d.url for d in docs]),
                                       encoding="utf-8")

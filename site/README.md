@@ -23,6 +23,7 @@ no venv: `nix develop -c python -m ssg build`, run from `site/`. That's what the
 |---|---|
 | `site.toml` | Title, description, GitHub link, logo, and the download links |
 | `content/home.md` | The home page's tagline and sections |
+| `content/pages/*.md` | One standalone page each, at `/<name>/`, with the docs' front matter. Not linked from anywhere or in the sitemap |
 | `docs/*.md` | One docs page each, at `/docs/<name>/`. `index.md` is `/docs/` |
 | `static/` | Copied to the site root as-is (favicon, …) |
 | `assets/` | CSS and JS, inlined into every page |

@@ -106,6 +106,11 @@ def load_doc(path):
     )
 
 
+def load_pages(pages_dir):
+    """Standalone pages, each at /<slug>/. Nothing links to them or lists them."""
+    return [load_doc(p) for p in sorted(Path(pages_dir).glob("*.md"))]
+
+
 def load_docs(docs_dir, drafts=False):
     """Docs in sidebar order: index.md first, then by `order`, then by title."""
     docs = [load_doc(p) for p in sorted(Path(docs_dir).glob("*.md"))]

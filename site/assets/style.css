@@ -218,6 +218,7 @@ th, td { border-bottom: 1px solid var(--rule); padding: 0.5rem; text-align: left
 .sidebar-foot { order: 2; }
 .doc { width: 100%; max-width: 48rem; padding: 2rem clamp(1rem, 4vw, 3rem) 4rem; }
 .doc li { margin-bottom: 0.4rem; }
+.page { margin-inline: auto; }
 @media (min-width: 56rem) {
   .docs { grid-template-columns: 17rem minmax(0, 1fr); }
   .sidebar {

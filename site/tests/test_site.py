@@ -118,6 +118,18 @@ class SiteTest(unittest.TestCase):
         for url in ("/", "/docs/", "/docs/zebra/", "/docs/apple/"):
             self.assertIn(f"<loc>https://example.org{url}</loc>", sitemap)
 
+    def test_standalone_page_is_built_but_not_listed(self):
+        self.write("content/pages/terms.md", "---\ntitle: Terms\n---\nThe small print.\n")
+        self.build()
+        html = self.read("terms/index.html")
+        self.assertIn("<h1>Terms</h1>", html)
+        self.assertIn("<title>Terms – Test</title>", html)
+        self.assertIn('<meta name="description" content="The small print.">', html)
+        self.assertIn('<link rel="canonical" href="https://example.org/terms/">', html)
+        self.assertNotIn("/terms/", self.read("sitemap.xml"))
+        for rel in ("index.html", "docs/index.html", "docs/zebra/index.html", "404.html"):
+            self.assertNotIn("/terms/", self.read(rel))
+
     def test_section_without_a_picture_fails(self):
         self.write("content/home.md", "## Lonely\n\nNo picture here.\n")
         with self.assertRaisesRegex(ValueError, "Lonely"):

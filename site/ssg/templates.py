@@ -205,6 +205,19 @@ class Templates:
 
     # -- other ----------------------------------------------------------------
 
+    def page(self, page):
+        body = f"""{self.top()}
+<main id="main" class="doc page" tabindex="-1">
+<article>
+<h1>{esc(page.title)}</h1>
+{page.html}
+</article>
+</main>
+{self.footer()}"""
+        return self.layout(title=f"{page.title} – {self.site['title']}", body=body,
+                           path=f"/{page.slug}/", description=page.description,
+                           has_images=_has_images(body))
+
     def not_found(self):
         body = f"""{self.top()}
 <main id="main" class="lost" tabindex="-1">
