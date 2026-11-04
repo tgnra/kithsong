@@ -7,6 +7,7 @@
 #include "cover.h"
 #include "delete_dialog.h"
 #include "edit_dialog.h"
+#include "musiccore/radio_seeds.h"
 #include "playback.h"
 #include "recents.h"
 #include "remove_here.h"
@@ -158,13 +159,16 @@ static struct {
   GListStore *tracks;
   GtkSingleSelection *track_selection;
   GtkWidget *track_view, *track_scroller, *menu;
-  GtkWidget *album_menu;        /* an album tile's: Edit... */
+  GtkWidget *album_menu;        /* an album tile's: Start radio and Edit... */
   char menu_album[MC_UID_STRLEN]; /* the album it was opened on */
+  char album_seed[MC_UID_STRLEN];  /* the track its Start radio starts from */
+  char artist_seed[MC_UID_STRLEN]; /* and the artist menu's */
   char menu_uid[MC_UID_STRLEN]; /* the track the menu was opened on */
   gboolean menu_here;           /* and whether it has a file here */
   char menu_track_album[MC_UID_STRLEN];  /* and its album, or "" */
   char menu_track_artist[MC_UID_STRLEN]; /* and its artist, or "" */
   GSimpleAction *go_to_album, *go_to_artist;
+  GSimpleAction *radio_artist, *radio_album, *radio_track; /* enabled if there's a seed */
   GPtrArray *rows;              /* bound track rows, to mark the playing one */
   char playing_uid[MC_UID_STRLEN];
 } v;
@@ -233,12 +237,29 @@ static void on_edit_artist(GSimpleAction *action, GVariant *param, gpointer user
   if (v.menu_artist[0]) edit_dialog_present(v.a, EDIT_ARTIST, v.menu_artist);
 }
 
-/* The menu for the artist with uid, made each time it opens: Edit..., then Remove from this
- * computer... or Sync to this computer where they apply. An artist can't be deleted from the
- * library, only their albums and tracks. */
+/* Start radio on any of the page's menus. */
+static void on_start_radio(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)param;
+  (void)user;
+  playback_play_radio(action == v.radio_artist ? v.artist_seed : action == v.radio_album ? v.album_seed : v.menu_uid);
+}
+
+static GSimpleAction *radio_action(GSimpleActionGroup *group, const char *name) {
+  GSimpleAction *action = g_simple_action_new(name, NULL);
+  g_signal_connect(action, "activate", G_CALLBACK(on_start_radio), NULL);
+  g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(action));
+  g_object_unref(action); /* the group keeps it */
+  return action;
+}
+
+/* The menu for the artist with uid, made each time it opens: Start radio, Edit..., then Remove
+ * from this computer... or Sync to this computer where they apply. An artist can't be deleted
+ * from the library, only their albums and tracks. */
 static GMenuModel *artist_menu(const char *uid) {
   g_strlcpy(v.menu_artist, uid, sizeof v.menu_artist);
+  g_simple_action_set_enabled(v.radio_artist, v.a->lib && mc_radio_seed_for_artist(v.a->lib, uid, v.artist_seed) == MC_OK);
   GMenu *menu = g_menu_new();
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_START_RADIO), "artist.start-radio");
   g_menu_append(menu, mc_str_mnemonic(MC_STR_EDIT_MENU), "artist.edit");
   remove_here_append(menu, MC_PROFILE_ARTIST, uid, "artist.remove-here", "artist.sync-here");
   return G_MENU_MODEL(menu);
@@ -470,6 +491,7 @@ static void menu_for(const ArtistTrack *t) {
   g_simple_action_set_enabled(v.go_to_album, album != NULL);
   if (album) g_object_unref(album);
   g_simple_action_set_enabled(v.go_to_artist, t->artist_uid[0] && strcmp(t->artist_uid, v.open));
+  g_simple_action_set_enabled(v.radio_track, playback_can_radio(t->uid));
 }
 
 /* Right-click: selects the row and opens its menu where the pointer is. */
@@ -648,7 +670,7 @@ static void on_single_menu(GtkGestureClick *click, int n_press, double x, double
   popup_track_menu(t, (int)at.x, (int)at.y);
 }
 
-/* Right-click on an album's tile: its Edit..., where the pointer is. */
+/* Right-click on an album's tile: its menu, where the pointer is. */
 static void on_album_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
   (void)n_press;
   const char *uid = g_object_get_data(G_OBJECT(user), "uid");
@@ -657,6 +679,7 @@ static void on_album_menu(GtkGestureClick *click, int n_press, double x, double 
   if (!uid || !gtk_widget_compute_point(tile, v.page, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
   gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
   g_strlcpy(v.menu_album, uid, sizeof v.menu_album);
+  g_simple_action_set_enabled(v.radio_album, v.a->lib && mc_radio_seed_for_album(v.a->lib, uid, v.album_seed) == MC_OK);
   gtk_popover_set_pointing_to(GTK_POPOVER(v.album_menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
   gtk_popover_popup(GTK_POPOVER(v.album_menu));
 }
@@ -1044,6 +1067,7 @@ static GtkWidget *build_page(void) {
    * stack, artist_view_new()) resolve. */
   GMenu *model = g_menu_new();
   GMenu *section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_START_RADIO), "artist.start-radio-track");
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "artist.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
@@ -1072,6 +1096,7 @@ static GtkWidget *build_page(void) {
   gtk_widget_set_parent(v.menu, v.page);
   g_signal_connect(v.menu, "closed", G_CALLBACK(on_menu_closed), v.track_view);
   model = g_menu_new();
+  g_menu_append(model, mc_str_mnemonic(MC_STR_START_RADIO), "artist.start-radio-album");
   g_menu_append(model, mc_str_mnemonic(MC_STR_EDIT_MENU), "artist.edit-album");
   v.album_menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));
   g_object_unref(model);
@@ -1185,6 +1210,9 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
   g_signal_connect(v.go_to_artist, "activate", G_CALLBACK(on_go_to_artist), NULL);
   g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(v.go_to_artist));
   g_object_unref(v.go_to_artist);
+  v.radio_artist = radio_action(actions, "start-radio");
+  v.radio_album = radio_action(actions, "start-radio-album");
+  v.radio_track = radio_action(actions, "start-radio-track");
   gtk_widget_insert_action_group(v.stack, "artist", G_ACTION_GROUP(actions));
   g_object_unref(actions);
   g_signal_connect(v.stack, "destroy", G_CALLBACK(on_destroy), NULL);

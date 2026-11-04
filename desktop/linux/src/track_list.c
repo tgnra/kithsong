@@ -8,6 +8,7 @@
 #include "art_backdrop.h"
 #include "cover.h"
 #include "drag.h"
+#include "playback.h"
 
 enum { HEADER_COVER = 96 };
 /* How much of the backdrop's height, at its bottom, its glows thin out over. */
@@ -80,7 +81,7 @@ static struct {
   GPtrArray *rows; /* bound rows, to mark the playing one */
   GtkWidget *pane, *menu;         /* menu: the tracks' right-click menu */
   GMenuModel *album_menu, *playlist_menu; /* what it shows */
-  GSimpleAction *move_up, *move_down, *go_to_album, *go_to_artist;
+  GSimpleAction *move_up, *move_down, *go_to_album, *go_to_artist, *start_radio;
   char menu_uid[MC_UID_STRLEN];   /* the track it was opened on */
   char menu_entry[MC_UID_STRLEN]; /* and its playlist entry, or "" */
   char menu_album[MC_UID_STRLEN]; /* and its album and artist, or "" */
@@ -155,6 +156,7 @@ static gboolean menu_for(guint pos) {
   memcpy(s.menu_artist, t->artist_uid, sizeof s.menu_artist);
   g_simple_action_set_enabled(s.go_to_album, album_to_go_to(s.menu_album));
   g_simple_action_set_enabled(s.go_to_artist, s.menu_artist[0] != '\0');
+  g_simple_action_set_enabled(s.start_radio, playback_can_radio(s.menu_uid));
   s.menu_here = t->path != NULL;
   s.menu_pos = pos;
   gboolean playlist = showing_playlist() && s.menu_entry[0];
@@ -479,6 +481,13 @@ static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer 
   if (s.cb.add_to_playlist && s.menu_uid[0]) s.cb.add_to_playlist(s.cb.user, s.menu_uid, s.menu_here);
 }
 
+static void on_start_radio(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  playback_play_radio(s.menu_uid);
+}
+
 /* Move Up goes after the entry two above (or to the start); Move Down after the one below. */
 static void on_move(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)param;
@@ -716,6 +725,7 @@ static void on_menu_closed(GtkPopover *menu, gpointer list) {
  * header menu's "playlist." actions. */
 static void build_menu(GtkWidget *pane) {
   GSimpleActionGroup *actions = g_simple_action_group_new();
+  s.start_radio = add_action(actions, "start-radio", on_start_radio);
   add_action(actions, "add-to-playlist", on_add_to_playlist);
   s.move_up = add_action(actions, "move-up", on_move);
   s.move_down = add_action(actions, "move-down", on_move);
@@ -735,6 +745,7 @@ static void build_menu(GtkWidget *pane) {
 
   GMenu *model = g_menu_new();
   GMenu *section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_START_RADIO), "track.start-radio");
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
@@ -747,6 +758,7 @@ static void build_menu(GtkWidget *pane) {
   s.album_menu = G_MENU_MODEL(model);
   model = g_menu_new();
   section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_START_RADIO), "track.start-radio");
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "track.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);

@@ -5,6 +5,8 @@
 #include "album_group_dialogs.h"
 #include "delete_dialog.h"
 #include "edit_dialog.h"
+#include "musiccore/radio_seeds.h"
+#include "playback.h"
 #include "playlist_dialogs.h"
 #include "recents.h"
 #include "remove_here.h"
@@ -26,11 +28,13 @@ static struct {
   char open[MC_UID_STRLEN];       /* the open group, or "" */
   gboolean smart;                 /* it's a smart group: nothing to rename, delete or remove */
   char menu_album[MC_UID_STRLEN]; /* the album a menu was opened on */
+  char menu_seed[MC_UID_STRLEN];  /* the track its Start radio starts from */
   char menu_group[MC_UID_STRLEN]; /* and the group it's in there, or "" */
   char up_after[MC_UID_STRLEN];   /* where Move up puts it: after this album, or first if "" */
   char down_after[MC_UID_STRLEN]; /* and Move down */
   char *menu_title;               /* and the album's title */
   gboolean actions;               /* the "albumgroup." actions are on the window */
+  GSimpleAction *start_radio;     /* one of them, enabled if the album has a seed */
 } v;
 
 static void on_library_changed(void *user) {
@@ -200,6 +204,13 @@ static void on_sync_here(GSimpleAction *action, GVariant *param, gpointer user) 
   if (v.menu_album[0]) remove_here_restore(GTK_WIDGET(a->win), MC_PROFILE_ALBUM, v.menu_album, on_library_changed, a);
 }
 
+static void on_start_radio(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  playback_play_radio(v.menu_seed);
+}
+
 /* On the window, so the album grids' menus and the header's find them. */
 static void ensure_actions(void) {
   if (v.actions || !v.a->win) return;
@@ -217,9 +228,11 @@ static void ensure_actions(void) {
     {"edit-album", on_edit_album, NULL, NULL, NULL, {0}},
     {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
     {"sync-here", on_sync_here, NULL, NULL, NULL, {0}},
+    {"start-radio", on_start_radio, NULL, NULL, NULL, {0}},
   };
   GSimpleActionGroup *group = g_simple_action_group_new();
   g_action_map_add_action_entries(G_ACTION_MAP(group), entries, G_N_ELEMENTS(entries), v.a);
+  v.start_radio = G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(group), "start-radio"));
   gtk_widget_insert_action_group(GTK_WIDGET(v.a->win), "albumgroup", G_ACTION_GROUP(group));
   g_object_unref(group);
   v.actions = TRUE;
@@ -248,8 +261,10 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
   g_strlcpy(v.menu_group, in_group ? in_group : "", sizeof v.menu_group);
   g_free(v.menu_title);
   v.menu_title = g_strdup(album->title);
+  g_simple_action_set_enabled(v.start_radio, mc_radio_seed_for_album(a->lib, album->uid, v.menu_seed) == MC_OK);
 
   GMenu *menu = g_menu_new(), *add = g_menu_new();
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_START_RADIO), "albumgroup.start-radio");
   mc_album_group_list *groups = NULL;
   if (mc_library_list_album_groups(a->lib, 0, &groups) == MC_OK && groups->count) {
     GMenu *section = g_menu_new();
