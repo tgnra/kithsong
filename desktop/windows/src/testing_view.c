@@ -45,6 +45,10 @@ static struct {
   testing_host host;
   mc_stress_job *job;
   char *job_dir;
+  HANDLE deleting; /* the thread deleting stress libraries, which takes a while for a big one */
+  char *delete_open_dir;
+  mc_status delete_status;
+  int deleted;
   wchar_t *report_shown;
 } t;
 
@@ -98,7 +102,7 @@ static BOOL in_stress(void) {
 
 static void update_buttons(void) {
   if (!t.check) return;
-  BOOL on = mc_perf_enabled(), busy = t.job != NULL, stress = in_stress();
+  BOOL on = mc_perf_enabled(), busy = t.job != NULL || t.deleting != NULL, stress = in_stress();
   SendMessageW(t.check, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
   EnableWindow(t.run, on && !mc_perf_auto_running());
   EnableWindow(t.copy, on);
@@ -106,7 +110,7 @@ static void update_buttons(void) {
   EnableWindow(t.clear, on);
   EnableWindow(t.preset, !busy);
   EnableWindow(t.generate, !busy);
-  EnableWindow(t.cancel, busy);
+  EnableWindow(t.cancel, t.job != NULL);
   EnableWindow(t.back, stress && !busy);
   EnableWindow(t.del, !stress && !busy && t.config_dir && mc_stress_count(t.config_dir) > 0);
 }
@@ -117,6 +121,21 @@ void testing_view_update(void) {
 }
 
 static void CALLBACK on_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time);
+
+/* The thread deleting stress libraries ended. */
+static void delete_finished(void) {
+  WaitForSingleObject(t.deleting, INFINITE);
+  CloseHandle(t.deleting);
+  t.deleting = NULL;
+  free(t.delete_open_dir);
+  t.delete_open_dir = NULL;
+  KillTimer(t.parent, TIMER_JOB);
+  wchar_t text[256];
+  if (t.delete_status == MC_OK) mc_wformat(text, 256, mc_str_plural(MC_STR_STRESS_DELETED, t.deleted), MC_D(t.deleted));
+  else mc_wformat(text, 256, mc_str(MC_STR_STRESS_FAILED), MC_S(mc_status_str(t.delete_status)));
+  set_status(text);
+  update_buttons();
+}
 
 /* The job ended: the library it made opens. */
 static void job_finished(void) {
@@ -147,6 +166,10 @@ static void CALLBACK on_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
   (void)time;
   if (id == TIMER_REPORT) {
     if (t.shown && mc_perf_enabled() && !mc_perf_auto_running()) update_report();
+    return;
+  }
+  if (t.deleting) {
+    if (WaitForSingleObject(t.deleting, 0) == WAIT_OBJECT_0) delete_finished();
     return;
   }
   if (!t.job) return;
@@ -184,17 +207,27 @@ static void generate(void) {
   update_buttons();
 }
 
+static DWORD WINAPI delete_main(void *arg) {
+  (void)arg;
+  t.delete_status = mc_stress_delete_all(t.config_dir, t.delete_open_dir, &t.deleted);
+  return 0;
+}
+
 static void delete_all(void) {
+  if (t.deleting) return;
   if (MessageBoxW(GetAncestor(t.parent, GA_ROOT), mc_wstr(MC_STR_STRESS_DELETE_CONFIRM), mc_wstr(MC_STR_STRESS_HEADING),
                   MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
     return;
   mc_library *lib = t.host.library ? t.host.library() : NULL;
-  int deleted = 0;
-  mc_status st = mc_stress_delete_all(t.config_dir, lib ? mc_library_dir(lib) : NULL, &deleted);
-  wchar_t text[256];
-  if (st == MC_OK) mc_wformat(text, 256, mc_str_plural(MC_STR_STRESS_DELETED, deleted), MC_D(deleted));
-  else mc_wformat(text, 256, mc_str(MC_STR_STRESS_FAILED), MC_S(mc_status_str(st)));
-  set_status(text);
+  t.delete_open_dir = lib ? _strdup(mc_library_dir(lib)) : NULL;
+  t.deleting = CreateThread(NULL, 0, delete_main, NULL, 0, NULL);
+  if (!t.deleting) {
+    free(t.delete_open_dir);
+    t.delete_open_dir = NULL;
+    return;
+  }
+  set_status(mc_wstr(MC_STR_STRESS_DELETING));
+  SetTimer(t.parent, TIMER_JOB, JOB_POLL_MS, on_timer);
   update_buttons();
 }
 
@@ -271,6 +304,13 @@ void testing_view_create(HWND parent, void (*relayout)(void)) {
 }
 
 void testing_view_destroy(void) {
+  if (t.deleting) {
+    WaitForSingleObject(t.deleting, INFINITE);
+    CloseHandle(t.deleting);
+    t.deleting = NULL;
+  }
+  free(t.delete_open_dir);
+  t.delete_open_dir = NULL;
   if (t.job) {
     mc_stress_job_cancel(t.job);
     mc_stress_job_free(t.job); /* waits, which is short: it checks after each album */
