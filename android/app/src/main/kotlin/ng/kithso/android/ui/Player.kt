@@ -36,11 +36,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import ng.kithso.android.data.Track
@@ -137,7 +139,7 @@ private fun PlayPause(playback: Playback) {
 }
 
 /**
- * The full player, over a background coloured from the art: large art at the top, then title and byline, seekbar, and play/pause
+ * The full player, over a background coloured from the art: large art, then title and byline, seekbar, and play/pause
  * between previous and next, with Add to playlist ([onAddToPlaylist], disabled if null) and
  * the shuffle toggle at the ends. [onCollapse] slides it away; it is also dismissed by swiping
  * down (see [DismissibleScreen]). Swiping left or right skips a track, moving the art and title
@@ -172,22 +174,85 @@ fun FullPlayer(
                     Row(Modifier.fillMaxSize().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         PlayerArt(swipe, Modifier.fillMaxHeight())
                         Spacer(Modifier.size(32.dp))
-                        PlayerControls(playback, swipe, track, onAddToPlaylist, Modifier.weight(1f))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
+                            PlayerTitle(swipe)
+                            PlayerControls(playback, track, onAddToPlaylist)
+                        }
                     }
                 } else {
-                    // The art at the top, as wide as it can be in the height the controls
-                    // leave, and the controls just below it; what's left over is at the bottom.
-                    PlayerArt(swipe, Modifier.weight(1f, fill = false).align(Alignment.CenterHorizontally))
-                    PlayerControls(playback, swipe, track, onAddToPlaylist, Modifier.padding(top = 24.dp, bottom = 24.dp))
+                    TallPlayerLayout(
+                        art = { PlayerArt(swipe, Modifier) },
+                        title = { PlayerTitle(swipe) },
+                        controls = { PlayerControls(playback, track, onAddToPlaylist) },
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
         }
     }
 }
 
+/**
+ * The full player's parts down a window taller than it's wide. The art is as big as it can be
+ * in the height the rest leaves. Height left over from that goes above the art and above the
+ * seekbar, and past their limits, around the lot, so it's never all at the bottom.
+ *
+ * What's left over is worked out as if the title took two lines, and the title sits under the
+ * art and the controls at the bottom, so moving between a short title and a long one only
+ * changes the gap between them, not where the art or the buttons are.
+ */
+@Composable
+private fun TallPlayerLayout(
+    art: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    controls: @Composable () -> Unit,
+    modifier: Modifier,
+) {
+    val titleLine = MaterialTheme.typography.headlineSmall.lineHeight
+    val bylineLine = MaterialTheme.typography.titleMedium.lineHeight
+    Layout(listOf(art, title, controls), modifier) { (artItem, titleItem, controlsItem), constraints ->
+        val width = constraints.maxWidth
+        val height = constraints.maxHeight
+        val artGap = ArtGap.roundToPx()
+        val bottom = BottomGap.roundToPx()
+        val fixed = artGap + ControlsGap.roundToPx() + bottom
+        val titlePlaced = titleItem.single().measure(Constraints(width, width, 0, height))
+        // The controls come first, as they shrink only when there's no other way.
+        val controlsPlaced = controlsItem.single()
+            .measure(Constraints(width, width, 0, (height - titlePlaced.height - fixed).coerceAtLeast(0)))
+        val room = height - titlePlaced.height - controlsPlaced.height - fixed
+        val side = minOf(width, MaxArtSize.roundToPx(), room).coerceAtLeast(0)
+        val artPlaced = artItem.single().measure(Constraints.fixed(side, side))
+
+        val longTitle = titleLine.roundToPx() * 2 + bylineLine.roundToPx()
+        val spare = (room - side - (longTitle - titlePlaced.height).coerceAtLeast(0)).coerceAtLeast(0)
+        val aboveArt = minOf(spare * 3 / 5, MaxGapAboveArt.roundToPx())
+        val aboveSeekbar = minOf(spare * 2 / 5, MaxGapAboveSeekbar.roundToPx())
+        val around = (spare - aboveArt - aboveSeekbar) / 2
+        layout(width, height) {
+            val artTop = around + aboveArt
+            artPlaced.place((width - side) / 2, artTop)
+            titlePlaced.place(0, artTop + side + artGap)
+            controlsPlaced.place(0, height - around - bottom - controlsPlaced.height)
+        }
+    }
+}
+
+/** The largest the full player's art gets, and the width of the buttons under it. */
+private val MaxArtSize = 480.dp
+
+/** Under the art, under the controls, and between the title and the controls, at the least. */
+private val ArtGap = 24.dp
+private val BottomGap = 24.dp
+private val ControlsGap = 16.dp
+
+/** The most of what a tall window leaves over that goes above the art and above the seekbar. */
+private val MaxGapAboveArt = 96.dp
+private val MaxGapAboveSeekbar = 64.dp
+
 @Composable
 private fun PlayerArt(swipe: TrackSwipeState, modifier: Modifier) {
-    TrackSlides(swipe, modifier.widthIn(max = 480.dp).aspectRatio(1f)) { shown ->
+    TrackSlides(swipe, modifier.widthIn(max = MaxArtSize).aspectRatio(1f)) { shown ->
         TrackArt(
             shown,
             contentDescription = shown?.let { stringResource(R.string.cover_of, it.album.ifEmpty { it.title }) },
@@ -198,31 +263,29 @@ private fun PlayerArt(swipe: TrackSwipeState, modifier: Modifier) {
 }
 
 @Composable
-private fun PlayerControls(
-    playback: Playback,
-    swipe: TrackSwipeState,
-    track: Track,
-    onAddToPlaylist: (() -> Unit)?,
-    modifier: Modifier,
-) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        TrackSlides(swipe) { shown ->
-            Column(Modifier.fillMaxWidth()) {
-                Text(
-                    shown?.title.orEmpty(),
-                    style = MaterialTheme.typography.headlineSmall,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    shown?.byline().orEmpty(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+private fun PlayerTitle(swipe: TrackSwipeState) {
+    TrackSlides(swipe) { shown ->
+        Column(Modifier.fillMaxWidth()) {
+            Text(
+                shown?.title.orEmpty(),
+                style = MaterialTheme.typography.headlineSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                shown?.byline().orEmpty(),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
+    }
+}
+
+@Composable
+private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: (() -> Unit)?) {
+    Column(verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
         SeekbarWithTimes(
             positionMs = { playback.positionMs },
             durationMs = track.durationMs,
@@ -232,7 +295,7 @@ private fun PlayerControls(
         Row(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().widthIn(max = 480.dp).align(Alignment.CenterHorizontally),
+            modifier = Modifier.fillMaxWidth().widthIn(max = MaxArtSize).align(Alignment.CenterHorizontally),
         ) {
             IconButton(onClick = { onAddToPlaylist?.invoke() }, enabled = onAddToPlaylist != null, modifier = Modifier.offset(x = (-4).dp)) {
                 Icon(Icons.PlaylistAdd, contentDescription = stringResource(R.string.add_to_playlist))
