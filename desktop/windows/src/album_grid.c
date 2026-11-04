@@ -16,7 +16,9 @@
 #include "delete_dialog.h"
 #include "drag.h"
 #include "edit_dialog.h"
+#include "playback.h"
 #include "playlist_dialogs.h"
+#include "radio_menu.h"
 #include "remove_here.h"
 #include "scroller.h"
 #include "smart_editor.h"
@@ -62,6 +64,7 @@ enum {
   CMD_RENAME_SMART,
   CMD_DELETE_SMART,
   CMD_NEW_SMART,
+  CMD_START_RADIO,
   CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
 };
 
@@ -1275,7 +1278,7 @@ void album_grid_set_sync_state(album_grid_sync state) {
   }
 }
 
-/* Add to Album Group, inside a (manual) group Move Up, Move Down and Remove from Album Group,
+/* Start radio, Add to Album Group, inside a (manual) group Move Up, Move Down and Remove from Album Group,
  * then Edit..., Remove from This PC... or Sync to This PC where they apply, and Delete from Library...,
  * for album tile i. */
 static void show_album_menu(int i, POINT pt) {
@@ -1291,6 +1294,8 @@ static void show_album_menu(int i, POINT pt) {
   if (i + 1 < g.count) memcpy(down_after, g.tiles[i + 1].uid, sizeof down_after);
   BOOL first = i == 0, last = i + 1 >= g.count;
   HMENU menu = CreatePopupMenu();
+  char seed[MC_UID_STRLEN];
+  radio_menu_append_album(menu, CMD_START_RADIO, g.lib, album, seed);
   mc_album_group_list *groups = NULL;
   HMENU add = add_to_album_group_menu(g.lib, CMD_GROUP_FIRST, CMD_NEW_GROUP, &groups);
   if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_ALBUM_GROUP));
@@ -1309,6 +1314,7 @@ static void show_album_menu(int i, POINT pt) {
 
   HWND owner = GetAncestor(g.wnd, GA_ROOT);
   BOOL changed = FALSE;
+  if (cmd == CMD_START_RADIO) playback_play_radio(seed);
   if (cmd == CMD_EDIT_ALBUM) changed = edit_dialog_album(owner, g.lib, album);
   if (cmd == CMD_DELETE_ALBUM) changed = delete_dialog(owner, g.lib, MC_DELETE_ALBUMS, album, title);
   if (cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE)

@@ -804,6 +804,7 @@ static void create_controls(void) {
   SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
 
   g_app.sidebar = sidebar_create(g_app.wnd, ID_SIDEBAR);
+  sidebar_set_library_source(current_library);
 
   g_app.grid = album_grid_create(g_app.wnd, ID_GRID);
   album_grid_set_playlist_art_dir(g_app.art_dir);

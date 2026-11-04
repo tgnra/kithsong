@@ -57,6 +57,7 @@
     "shuffle_tracks": { "text": "Shuffle tracks", "note": "Button on an album group: plays all its albums' tracks in a random order." },
     "shuffle_on": { "text": "Shuffle on", "note": "Tooltip of the shuffle toggle in the now-playing bar while it's on." },
     "shuffle_off": { "text": "Shuffle off", "note": "Tooltip of the shuffle toggle in the now-playing bar while it's off." },
+    "start_radio": { "text": "Start _radio", "note": "On the menu of a track, album or artist: plays a radio station of tracks in the library that sound like it, which goes on until stopped. Greyed out if nothing of it has been analysed." },
     "settings_playback": { "text": "Playback", "note": "Settings heading: how music plays." },
     "album_in_order": { "text": "Play albums in order", "note": "A switch in Settings, on to begin with; also its name for accessibility. While it's on, playing a track from an album's track list turns shuffle off. Not a playlist's tracks, an artist's or search results: those keep shuffling." },
     "album_in_order_text": { "text": "Playing a track from an album turns shuffle off, so the album plays in order from that track.", "note": "Under the Play albums in order switch." },

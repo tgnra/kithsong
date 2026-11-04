@@ -535,6 +535,15 @@ time. In a release build a made-up library of 50,000 tracks took about 0.7 secon
 background thread, and several times that with the machine busy. Of that about 300 ms is the query,
 140 ms the sample, whatever the library's size, and 40 ms settling.
 
+The menus of a track, album or artist start a station from one track. For an album or artist that's
+`mc_radio_seed_for_album()` or `mc_radio_seed_for_artist()`
+([`radio_seeds.h`](../core/include/musiccore/radio_seeds.h)): of the tracks that pass
+`mc_radio_seed_check()`, the one with the least total distance to the others, on the fixed scales, so
+a menu needn't read the whole library to open. Of more than 64 such tracks, 64 are compared. Plays
+only decide between tracks that are level, as the two of a two-track album always are: anything more
+would let the most played track stand for an album it may not sound like. Nothing is stored, and
+`MC_ERR_NOT_FOUND` greys the item out.
+
 ## Stats
 
 `mc_library_read_stats()` (`musiccore/library.h`) adds up what's above with one read query:

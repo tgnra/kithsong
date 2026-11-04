@@ -8,6 +8,8 @@
 
 #include "canvas.h"
 #include "drag.h"
+#include "playback.h"
+#include "radio_menu.h"
 #include "scroller.h"
 #include "theme.h"
 #include "uia.h"
@@ -126,6 +128,7 @@ static struct {
   char clicked[37]; /* the nearby device of the last SBN_PAIR_DEVICE, or "" */
   char clicked_recent[MC_UID_STRLEN]; /* the recent of the last SBN_OPEN_RECENT, or "" */
   mc_recent_kind clicked_kind;
+  mc_library *(*library)(void); /* the open one, for a recent's Start radio */
 } s;
 
 /* Outside s, which is cleared when the window goes: elements clients still hold use it. */
@@ -1028,7 +1031,11 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (i >= 0 && i < s.nrows && s.rows[i].kind == ROW_RECENT && clickable(i)) {
         HMENU menu = CreatePopupMenu();
         mc_recent_kind kind = (mc_recent_kind)s.rows[i].flags;
+        char seed[MC_UID_STRLEN] = "";
         if (kind == MC_RECENT_ALBUM || kind == MC_RECENT_ARTIST) {
+          mc_library *lib = s.library ? s.library() : NULL;
+          if (kind == MC_RECENT_ALBUM) radio_menu_append_album(menu, 4, lib, s.rows[i].uid, seed);
+          else radio_menu_append_artist(menu, 4, lib, s.rows[i].uid, seed);
           AppendMenuW(menu, MF_STRING, 3, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
           AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
         }
@@ -1040,7 +1047,8 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
           memcpy(s.clicked_recent, s.rows[i].uid, sizeof s.clicked_recent);
           s.clicked_kind = (mc_recent_kind)s.rows[i].flags;
         }
-        if (cmd)
+        if (cmd == 4) playback_play_radio(seed);
+        else if (cmd)
           SendMessageW(GetParent(wnd), WM_COMMAND,
                        MAKEWPARAM(GetDlgCtrlID(wnd), cmd == 1 ? SBN_REMOVE_RECENT : cmd == 3 ? SBN_EDIT_RECENT : SBN_CLEAR_RECENTS),
                        (LPARAM)wnd);
@@ -1195,6 +1203,10 @@ void sidebar_set_recents(const sidebar_recent *recents, int n) {
   }
   s.clicked_recent[0] = 0;
   if (s.wnd) rebuild();
+}
+
+void sidebar_set_library_source(mc_library *(*library)(void)) {
+  s.library = library;
 }
 
 const char *sidebar_clicked_recent(mc_recent_kind *kind) {
