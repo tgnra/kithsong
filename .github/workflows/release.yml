@@ -150,6 +150,29 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  # For people who don't want the Flatpak. Its own job, as the binary only runs on systems at
+  # least as new as the one it's built on: the runner's the oldest with the libadwaita we need
+  # (1.5), where the Flatpak job's GNOME SDK would rule out most distros. Keep the version
+  # pinned; ubuntu-latest would raise that floor unannounced.
+  linux-tarball:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libadwaita-1-dev libgtk-4-dev ninja-build
+      - name: Build
+        env:
+          KITHSONG_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash scripts/release-linux-tarball.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-tarball
+          path: dist/kithsong-*-linux-*.tar.gz
+          if-no-files-found: error
+
   android:
     needs: version
     runs-on: ubuntu-latest
@@ -198,7 +221,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [version, windows, linux, android]
+    needs: [version, windows, linux, linux-tarball, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
