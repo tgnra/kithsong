@@ -1,6 +1,7 @@
 # Packs the Windows release as an unsigned dist\kithsong-<version>-windows-x64.msix for the
 # Microsoft Store, which signs it on ingestion. Builds with release-windows.ps1 first, unless
-# -StageDir names a folder it already installed (build\stage-windows\kithsong-<version>).
+# -StageDir names a folder it already installed (build\stage-windows\kithsong-<version>). The
+# release workflow runs it that way, after its own build.
 #
 # The three Identity values must match Partner Center's Product management → Product
 # identity page (Package/Identity/Name, Package/Identity/Publisher and
