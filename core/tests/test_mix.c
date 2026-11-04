@@ -321,20 +321,20 @@ static int same_digest(mc_library *x, mc_library *y) {
 }
 
 #define LOOSE_SEED                                                                        \
-  "INSERT INTO artists (uid, name) VALUES ('ar1', 'Sasha Vale'), ('ar2', 'Guest');"       \
-  "INSERT INTO albums (uid, title, artist_uid) VALUES ('all', 'Warehouse Set', 'ar1');"
+  "INSERT INTO artists (uid, name) VALUES ('00000000-0000-7000-8000-0000000000a1', 'Sasha Vale'), ('00000000-0000-7000-8000-0000000000a2', 'Guest');"       \
+  "INSERT INTO albums (uid, title, artist_uid) VALUES ('00000000-0000-7000-8000-0000000000b1', 'Warehouse Set', '00000000-0000-7000-8000-0000000000a1');"
 
 /* A library of tracks an older version left: one long track on its album, one with none and
  * credited to two, one short with none, and a mix chosen by hand. */
 static void seed_loose(mc_library *lib) {
-  char sql[1400];
+  char sql[2000];
   snprintf(sql, sizeof sql,
            LOOSE_SEED "INSERT INTO tracks (uid, album_uid, artist_uid, artist_credit, title, year,"
-                      " duration_ms) VALUES ('tl', 'all', NULL, NULL, 'Warehouse Set', NULL, %d),"
-                      " ('tb', NULL, 'ar1', 'Sasha Vale & Guest', 'Boiler Room', 2019, %d),"
-                      " ('ts', NULL, 'ar1', NULL, 'Short Demo', NULL, 200000);"
+                      " duration_ms) VALUES ('00000000-0000-7000-8000-0000000000c1', '00000000-0000-7000-8000-0000000000b1', NULL, NULL, 'Warehouse Set', NULL, %d),"
+                      " ('00000000-0000-7000-8000-0000000000c2', NULL, '00000000-0000-7000-8000-0000000000a1', 'Sasha Vale & Guest', 'Boiler Room', 2019, %d),"
+                      " ('00000000-0000-7000-8000-0000000000c3', NULL, '00000000-0000-7000-8000-0000000000a1', NULL, 'Short Demo', NULL, 200000);"
                       "INSERT INTO track_artists (uid, track_uid, artist_uid, position, joinphrase)"
-                      " VALUES ('c0', 'tb', 'ar1', 0, ' & '), ('c1', 'tb', 'ar2', 1, '');",
+                      " VALUES ('00000000-0000-7000-8000-0000000000d0', '00000000-0000-7000-8000-0000000000c2', '00000000-0000-7000-8000-0000000000a1', 0, ' & '), ('00000000-0000-7000-8000-0000000000d1', '00000000-0000-7000-8000-0000000000c2', '00000000-0000-7000-8000-0000000000a2', 1, '');",
            LONG_MS, LONG_MS);
   logged(lib, sql);
 }
@@ -349,7 +349,7 @@ static mc_library *upgrade(mc_library *lib, const char *path) {
   return now;
 }
 
-#define BOILER_ALBUM "(SELECT album_uid FROM tracks WHERE uid = 'tb')"
+#define BOILER_ALBUM "(SELECT album_uid FROM tracks WHERE uid = '00000000-0000-7000-8000-0000000000c2')"
 
 /* A long loose track has an album after upgrading, its own and logged; nothing else changes. */
 static void test_migration(const char *scratch) {
@@ -357,37 +357,37 @@ static void test_migration(const char *scratch) {
   mc_library *lib = open_new(scratch, "migrate", path, sizeof path);
   if (!lib) return;
   seed_loose(lib);
-  logged(lib, "UPDATE albums SET mix = 1 WHERE uid = 'all'");
+  logged(lib, "UPDATE albums SET mix = 1 WHERE uid = '00000000-0000-7000-8000-0000000000b1'");
   int before = query_int(lib, "SELECT count(*) FROM changelog");
   lib = upgrade(lib, path);
   if (!lib) return;
 
-  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE uid = 'tb' AND album_uid IS NOT NULL") == 1);
-  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE uid = 'ts' AND album_uid IS NULL") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE uid = '00000000-0000-7000-8000-0000000000c2' AND album_uid IS NOT NULL") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE uid = '00000000-0000-7000-8000-0000000000c3' AND album_uid IS NULL") == 1);
   CHECK(in_albums(lib, "Boiler Room") == 1);
-  CHECK(in_singles(lib, "ar1", "Boiler Room") == 0);
-  CHECK(in_singles(lib, "ar1", "Short Demo") == 1);
+  CHECK(in_singles(lib, "00000000-0000-7000-8000-0000000000a1", "Boiler Room") == 0);
+  CHECK(in_singles(lib, "00000000-0000-7000-8000-0000000000a1", "Short Demo") == 1);
   CHECK(found(lib, "boiler", MC_SEARCH_ALBUM, "Boiler Room") == 1);
   CHECK(found(lib, "boiler", MC_SEARCH_TRACK, "Boiler Room") == 0);
   /* The album says what the track did, credit and all. */
-  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE uid = " BOILER_ALBUM " AND artist_uid = 'ar1'"
+  CHECK(query_int(lib, "SELECT count(*) FROM albums WHERE uid = " BOILER_ALBUM " AND artist_uid = '00000000-0000-7000-8000-0000000000a1'"
                        " AND artist_credit = 'Sasha Vale & Guest' AND year = 2019 AND mix = 0") == 1);
   CHECK(query_int(lib, "SELECT count(*) FROM album_artists WHERE album_uid = " BOILER_ALBUM) == 2);
   /* What was chosen stays chosen. */
-  flags_are(lib, "all", 1, 1);
+  flags_are(lib, "00000000-0000-7000-8000-0000000000b1", 1, 1);
 
   /* Its rows are logged, so a device paired later gets them; a detected flag isn't a row. */
   int after = query_int(lib, "SELECT count(*) FROM changelog");
   CHECK(after > before);
-  CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE field = 'mix' AND row_uid <> 'all'") == 0);
+  CHECK(query_int(lib, "SELECT count(*) FROM changelog WHERE field = 'mix' AND row_uid <> '00000000-0000-7000-8000-0000000000b1'") == 0);
 
   /* Once: a track since taken off its album stays off it. */
-  logged(lib, "UPDATE tracks SET album_uid = NULL WHERE uid = 'tb'");
+  logged(lib, "UPDATE tracks SET album_uid = NULL WHERE uid = '00000000-0000-7000-8000-0000000000c2'");
   mc_library_close(lib);
   lib = NULL;
   CHECK(mc_library_open(path, &lib) == MC_OK);
   if (!lib) return;
-  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE uid = 'tb' AND album_uid IS NULL") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE uid = '00000000-0000-7000-8000-0000000000c2' AND album_uid IS NULL") == 1);
   mc_library_close(lib);
 }
 
@@ -427,37 +427,37 @@ static void test_two_devices(const char *scratch) {
     send(a, c);
     CHECK(in_albums(c, "Boiler Room") == 1);
     CHECK(in_albums(c, "Warehouse Set") == 1);
-    CHECK(in_singles(c, "ar1", "Warehouse Set") == 0);
+    CHECK(in_singles(c, "00000000-0000-7000-8000-0000000000a1", "Warehouse Set") == 0);
   }
 
   /* Un-set on one: it's a single on the other too, and stays one as that device opens,
    * detects and writes on. */
-  set_mix(a, "all", 0);
+  set_mix(a, "00000000-0000-7000-8000-0000000000b1", 0);
   send(a, b);
-  flags_are(b, "all", 0, 1);
+  flags_are(b, "00000000-0000-7000-8000-0000000000b1", 0, 1);
   CHECK(in_albums(b, "Warehouse Set") == 0);
-  CHECK(in_singles(b, "ar1", "Warehouse Set") == 1);
+  CHECK(in_singles(b, "00000000-0000-7000-8000-0000000000a1", "Warehouse Set") == 1);
   mc_library_close(b);
   b = NULL;
   CHECK(mc_library_open(pb, &b) == MC_OK);
   if (b) {
-    logged(b, "UPDATE tracks SET title = 'Warehouse Set' WHERE uid = 'tl'");
-    flags_are(b, "all", 0, 1);
+    logged(b, "UPDATE tracks SET title = 'Warehouse Set' WHERE uid = '00000000-0000-7000-8000-0000000000c1'");
+    flags_are(b, "00000000-0000-7000-8000-0000000000b1", 0, 1);
     send(b, a);
-    flags_are(a, "all", 0, 1);
+    flags_are(a, "00000000-0000-7000-8000-0000000000b1", 0, 1);
   }
 
   /* Chosen on both: the last choice wins on both. */
   if (b) {
-    set_mix(b, "all", 1);
+    set_mix(b, "00000000-0000-7000-8000-0000000000b1", 1);
     mc_sleep_ms(5);
-    set_mix(a, "all", 1);
+    set_mix(a, "00000000-0000-7000-8000-0000000000b1", 1);
     mc_sleep_ms(5);
-    set_mix(a, "all", 0);
+    set_mix(a, "00000000-0000-7000-8000-0000000000b1", 0);
     send(b, a);
     send(a, b);
-    flags_are(a, "all", 0, 1);
-    flags_are(b, "all", 0, 1);
+    flags_are(a, "00000000-0000-7000-8000-0000000000b1", 0, 1);
+    flags_are(b, "00000000-0000-7000-8000-0000000000b1", 0, 1);
     CHECK(same_digest(a, b));
   }
   mc_library_close(a);
@@ -468,7 +468,7 @@ static void test_two_devices(const char *scratch) {
 /* Two devices import one long single apart, one un-setting it first: the albums merge, and
  * the later import's rows don't bring detection back. */
 static void test_duplicates(const char *scratch) {
-  char pa[1024], pb[1024], sql[900];
+  char pa[1024], pb[1024], sql[1200];
   mc_library *a = open_new(scratch, "dup_a", pa, sizeof pa);
   mc_library *b = open_new(scratch, "dup_b", pb, sizeof pb);
   if (!a || !b) {
@@ -477,25 +477,25 @@ static void test_duplicates(const char *scratch) {
     return;
   }
   snprintf(sql, sizeof sql,
-           "INSERT INTO artists (uid, name) VALUES ('ar-a', 'Sasha Vale');"
-           "INSERT INTO albums (uid, title, artist_uid, mb_albumid) VALUES ('al-a', 'Warehouse Set', 'ar-a', 'REL');"
+           "INSERT INTO artists (uid, name) VALUES ('00000000-0000-7000-8000-0000000000a3', 'Sasha Vale');"
+           "INSERT INTO albums (uid, title, artist_uid, mb_albumid) VALUES ('00000000-0000-7000-8000-0000000000b2', 'Warehouse Set', '00000000-0000-7000-8000-0000000000a3', 'REL');"
            "INSERT INTO tracks (uid, album_uid, title, mb_releasetrackid, duration_ms)"
-           " VALUES ('t-a', 'al-a', 'Warehouse Set', 'RT', %d);", LONG_MS);
+           " VALUES ('00000000-0000-7000-8000-0000000000c4', '00000000-0000-7000-8000-0000000000b2', 'Warehouse Set', 'RT', %d);", LONG_MS);
   logged(a, sql);
-  set_mix(a, "al-a", 0);
+  set_mix(a, "00000000-0000-7000-8000-0000000000b2", 0);
   mc_sleep_ms(5); /* B's rows are all newer than A's choice */
   snprintf(sql, sizeof sql,
-           "INSERT INTO artists (uid, name) VALUES ('ar-b', 'Sasha Vale');"
-           "INSERT INTO albums (uid, title, artist_uid, mb_albumid) VALUES ('al-b', 'Warehouse Set', 'ar-b', 'REL');"
+           "INSERT INTO artists (uid, name) VALUES ('00000000-0000-7000-8000-0000000000a4', 'Sasha Vale');"
+           "INSERT INTO albums (uid, title, artist_uid, mb_albumid) VALUES ('00000000-0000-7000-8000-0000000000b3', 'Warehouse Set', '00000000-0000-7000-8000-0000000000a4', 'REL');"
            "INSERT INTO tracks (uid, album_uid, title, mb_releasetrackid, duration_ms)"
-           " VALUES ('t-b', 'al-b', 'Warehouse Set', 'RT', %d);", LONG_MS);
+           " VALUES ('00000000-0000-7000-8000-0000000000c5', '00000000-0000-7000-8000-0000000000b3', 'Warehouse Set', 'RT', %d);", LONG_MS);
   logged(b, sql);
-  flags_are(b, "al-b", 1, 0);
+  flags_are(b, "00000000-0000-7000-8000-0000000000b3", 1, 0);
   send(a, b);
   send(b, a);
   CHECK(same_digest(a, b));
-  flags_are(a, "al-a", 0, 1);
-  flags_are(b, "al-a", 0, 1);
+  flags_are(a, "00000000-0000-7000-8000-0000000000b2", 0, 1);
+  flags_are(b, "00000000-0000-7000-8000-0000000000b2", 0, 1);
   CHECK(in_albums(b, "Warehouse Set") == 0);
   mc_library_close(a);
   mc_library_close(b);
