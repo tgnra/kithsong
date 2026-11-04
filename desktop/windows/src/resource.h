@@ -39,4 +39,11 @@
  * made at run time. */
 #define IDD_SMART_EDITOR 105
 
+/* The themed question and message, prompt_dialog.c. */
+#define IDD_PROMPT 106
+#define IDC_PROMPT_ICON 1201
+#define IDC_PROMPT_HEADING 1202
+#define IDC_PROMPT_TEXT 1203
+#define IDC_PROMPT_CHECK 1204
+
 #endif

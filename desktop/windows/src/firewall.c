@@ -1,7 +1,6 @@
 #define COBJMACROS
 #include "firewall.h"
 
-#include <commctrl.h>
 #include <initguid.h> /* defines netfw.h's CLSIDs and IIDs here: libuuid has none of them */
 #include <netfw.h>
 #include <oleauto.h>
@@ -11,6 +10,7 @@
 #include <wchar.h>
 
 #include "musiccore/sync.h"
+#include "prompt_dialog.h"
 #include "sync_bridge.h"
 #include "wstr.h"
 
@@ -25,8 +25,6 @@ enum {
   TIMER_CHECK = 1,
   /* After startup: the window has drawn and the library loaded first. */
   CHECK_DELAY_MS = 2000,
-  BTN_ALLOW = 100,
-  BTN_NOT_NOW,
   MAX_EXE = 1024,
   MAX_STALE = 16, /* old rules removed at once */
 };
@@ -353,7 +351,7 @@ static void show_failure(HRESULT hr) {
   snprintf(code, sizeof code, "0x%08lX", (unsigned long)hr);
   wchar_t text[256];
   mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_FIREWALL_ADD_FAILED), MC_S(code));
-  MessageBoxW(g_fw.owner, text, mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONERROR);
+  message_dialog(g_fw.owner, mc_wstr(MC_STR_APP_NAME), text, MB_ICONERROR);
 }
 
 /* Relaunches this exe elevated to add the rule. The user saying no to UAC isn't an error. */
@@ -403,9 +401,9 @@ static void helper_done(HRESULT hr) {
     show_failure(hr);
     return;
   }
-  MessageBoxW(g_fw.owner,
-              mc_wstr(on_public_only() ? MC_STR_WINDOWS_FIREWALL_ADDED_PUBLIC : MC_STR_WINDOWS_FIREWALL_ADDED),
-              mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONINFORMATION);
+  message_dialog(g_fw.owner, mc_wstr(MC_STR_APP_NAME),
+                 mc_wstr(on_public_only() ? MC_STR_WINDOWS_FIREWALL_ADDED_PUBLIC : MC_STR_WINDOWS_FIREWALL_ADDED),
+                 MB_ICONINFORMATION);
   /* Devices that found this PC blocked find out sooner. */
   mc_sync *sync = sync_bridge_get();
   if (sync) mc_sync_check_reach(sync, NULL);
@@ -413,42 +411,25 @@ static void helper_done(HRESULT hr) {
 
 /* --- Asking --- */
 
-static HRESULT CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp, LONG_PTR data) {
-  (void)wp;
-  (void)lp;
-  (void)data;
-  if (msg == TDN_CREATED) SendMessageW(dlg, TDM_SET_BUTTON_ELEVATION_REQUIRED_STATE, BTN_ALLOW, TRUE);
-  return S_OK;
-}
-
 /* Returns TRUE if the helper started, and reports later. */
 static BOOL ask(void) {
-  const TASKDIALOG_BUTTON buttons[] = {
-    {BTN_ALLOW, mc_wstr_mnemonic(MC_STR_WINDOWS_FIREWALL_ALLOW)},
-    {BTN_NOT_NOW, mc_wstr_mnemonic(MC_STR_WINDOWS_FIREWALL_NOT_NOW)},
+  prompt_dialog prompt = {
+    .caption = mc_wstr(MC_STR_APP_NAME),
+    .icon = MB_ICONINFORMATION,
+    .heading = mc_wstr(MC_STR_WINDOWS_FIREWALL_TITLE),
+    .text = mc_wstr(MC_STR_WINDOWS_FIREWALL_TEXT),
+    .ok = mc_wstr_mnemonic(MC_STR_WINDOWS_FIREWALL_ALLOW),
+    .cancel = mc_wstr_mnemonic(MC_STR_WINDOWS_FIREWALL_NOT_NOW),
+    .shield = TRUE,
+    .check = mc_wstr_mnemonic(MC_STR_WINDOWS_FIREWALL_DONT_ASK),
   };
-  TASKDIALOGCONFIG config = {
-    .cbSize = sizeof config,
-    .hwndParent = g_fw.owner,
-    .dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW,
-    .pszWindowTitle = mc_wstr(MC_STR_APP_NAME),
-    .pszMainIcon = TD_INFORMATION_ICON,
-    .pszMainInstruction = mc_wstr(MC_STR_WINDOWS_FIREWALL_TITLE),
-    .pszContent = mc_wstr(MC_STR_WINDOWS_FIREWALL_TEXT),
-    .cButtons = sizeof buttons / sizeof buttons[0],
-    .pButtons = buttons,
-    .nDefaultButton = BTN_ALLOW,
-    .pszVerificationText = mc_wstr_mnemonic(MC_STR_WINDOWS_FIREWALL_DONT_ASK),
-    .pfCallback = dialog_proc,
-  };
-  int button = 0;
-  BOOL dont_ask = FALSE;
-  if (FAILED(TaskDialogIndirect(&config, &button, NULL, &dont_ask))) return FALSE;
-  if (dont_ask) {
+  INT_PTR button = prompt_dialog_show(g_fw.owner, &prompt);
+  if (button <= 0) return FALSE;
+  if (prompt.checked) {
     mc_settings_set_bool(g_fw.settings, SETTING_DONT_ASK, 1);
     mc_settings_save(g_fw.settings); /* failing, it's asked again next time */
   }
-  return button == BTN_ALLOW && start_helper();
+  return button == IDOK && start_helper();
 }
 
 static LRESULT CALLBACK fw_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -469,8 +450,8 @@ static LRESULT CALLBACK fw_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       /* Not while the window is away (Move Library), or once sync has stopped. */
       if (!wp || !IsWindowVisible(g_fw.owner) || !sync_bridge_get() || !ask()) g_fw.busy = FALSE;
       if (!wp && asked)
-        MessageBoxW(g_fw.owner, mc_wstr(MC_STR_WINDOWS_FIREWALL_NOTHING_TO_ALLOW), mc_wstr(MC_STR_APP_NAME),
-                    MB_OK | MB_ICONINFORMATION);
+        message_dialog(g_fw.owner, mc_wstr(MC_STR_APP_NAME), mc_wstr(MC_STR_WINDOWS_FIREWALL_NOTHING_TO_ALLOW),
+                       MB_ICONINFORMATION);
       return 0;
     }
     case WM_FW_ADDED:
