@@ -141,13 +141,17 @@ mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, m
 mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out);
 void mc_track_list_free(mc_track_list *list);
 
-/* Flags for listing playlists, smart lists and recents.
+/* Flags for listing playlists, album groups, smart lists and recents.
  *
- * MC_LIST_PLAYABLE leaves out what has nothing to play on this device: a playlist with tracks
- * none of which has a file here (an original, or a copy or transcode sync brought); a smart
- * playlist whose rule picks no such track; a smart album group with no album that has a file
- * here. An empty playlist is kept, as it's waiting for tracks rather than missing them (a
- * smart list is left out however its rule came to pick nothing). "Has a file here" is the
+ * MC_LIST_PLAYABLE leaves out what's empty only here, as selective sync leaves it: a playlist
+ * with tracks none of which has a file here (an original, or a copy or transcode sync
+ * brought); an album group with albums none of which has one; a smart playlist that picks
+ * tracks, or a smart album group that picks albums, none of them with a file here. What's
+ * empty everywhere is kept, as it's waiting for tracks rather than missing them: a playlist
+ * or album group with nothing in it, and a smart list whose rule picks nothing in the whole
+ * library. But not a smart list on a device with no files at all, whose empty pages say what
+ * to do next (the example smart lists would fill them), nor one whose rule can't be evaluated
+ * (MC_ERR_FORMAT, e.g. from a newer app). "Has a file here" is the
  * same test that gives a mc_track_info a path, which is what the track lists grey out or
  * hide by. Views that are about playing (the Playlists page, recents) pass it; pickers that
  * are about choosing (Add to playlist, a sync profile's playlists) don't, so a playlist that
@@ -249,17 +253,20 @@ void mc_credit_list_free(mc_credit_list *list);
 typedef struct mc_album_group_info {
   char uid[MC_UID_STRLEN];
   char *name;
-  int album_count;
+  int album_count;    /* its albums, here or not */
+  int playable_count; /* those with a file on this device */
 } mc_album_group_info;
 
 typedef struct mc_album_group_list {
   mc_album_group_info *items;
   int count;
+  int hidden; /* groups MC_LIST_PLAYABLE left out, e.g. to say why the list is empty */
 } mc_album_group_list;
 
-/* Every manual album group (smart ones are left out), by name. Free with
+/* Every manual album group (smart ones are left out), by name; with MC_LIST_PLAYABLE in
+ * flags, only those with an album to play here or no albums at all. Free with
  * mc_album_group_list_free(). */
-mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **out);
+mc_status mc_library_list_album_groups(mc_library *lib, unsigned flags, mc_album_group_list **out);
 void mc_album_group_list_free(mc_album_group_list *list);
 /* A manual album group's albums in the group's order, each once. MC_ERR_NOT_FOUND if
  * there's no such group. Free with mc_album_list_free(). */
@@ -300,9 +307,10 @@ typedef struct mc_recent_list {
 } mc_recent_list;
 
 /* The recents, most recently opened first, at most limit of them (all if limit <= 0). Items
- * that no longer exist are left out, and with MC_LIST_PLAYABLE in flags so are playlists and
- * smart playlists with nothing to play here (as mc_library_list_playlists() and
- * mc_library_list_smart() leave out; other kinds are kept). Free with mc_recent_list_free(). */
+ * that no longer exist are left out, and with MC_LIST_PLAYABLE in flags so are playlists,
+ * album groups and smart lists that are empty only here (as mc_library_list_playlists(),
+ * mc_library_list_album_groups() and mc_library_list_smart() leave out; albums and artists
+ * are kept). Free with mc_recent_list_free(). */
 mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc_recent_list **out);
 void mc_recent_list_free(mc_recent_list *list);
 

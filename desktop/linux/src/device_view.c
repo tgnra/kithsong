@@ -766,7 +766,7 @@ static void fill_list(void) {
       }
       default: {
         mc_album_group_list *list = NULL;
-        st = mc_library_list_album_groups(g_dv.lib, &list);
+        st = mc_library_list_album_groups(g_dv.lib, 0, &list);
         for (int i = 0; st == MC_OK && list && i < list->count; i++) {
           int n = list->items[i].album_count;
           if (n > 0) mc_format(detail, sizeof detail, mc_str_plural(MC_STR_COUNT_ALBUMS, n), MC_D(n));

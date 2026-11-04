@@ -746,7 +746,7 @@ static mc_status list_items(int tab, tab_items *out, int *n) {
       if (st == MC_OK && out->playlists) *n = out->playlists->count;
       break;
     default:
-      st = mc_library_list_album_groups(g_dv.lib, &out->groups);
+      st = mc_library_list_album_groups(g_dv.lib, 0, &out->groups);
       if (st == MC_OK && out->groups) *n = out->groups->count;
       break;
   }

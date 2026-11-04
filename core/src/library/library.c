@@ -1140,13 +1140,16 @@ void mc_credit_list_free(mc_credit_list *list) {
   free(list);
 }
 
-mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **out) {
+mc_status mc_library_list_album_groups(mc_library *lib, unsigned flags, mc_album_group_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
-  /* Smart album groups live in smart_lists, so this table holds only the manual ones. */
+  /* Smart album groups live in smart_lists, so this table holds only the manual ones. An
+   * album is here if any of its tracks has a file here. */
   static const char sql[] =
     "SELECT g.uid, g.name,"
-    " (SELECT count(DISTINCT e.album_uid) FROM album_group_entries e WHERE e.group_uid = g.uid)"
+    " (SELECT count(DISTINCT e.album_uid) FROM album_group_entries e WHERE e.group_uid = g.uid),"
+    " (SELECT count(DISTINCT e.album_uid) FROM album_group_entries e WHERE e.group_uid = g.uid"
+    "   AND EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = e.album_uid))"
     " FROM album_groups g ORDER BY g.name COLLATE NOCASE, g.uid";
 
   mc_album_group_list *list = calloc(1, sizeof *list);
@@ -1155,6 +1158,12 @@ mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **ou
   mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
   int cap = 0, rc = SQLITE_DONE;
   while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    int albums = sqlite3_column_int(stmt, 2), playable = sqlite3_column_int(stmt, 3);
+    /* An empty one is kept, as an empty playlist is. */
+    if ((flags & MC_LIST_PLAYABLE) && albums > 0 && playable == 0) {
+      list->hidden++;
+      continue;
+    }
     if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
       st = MC_ERR_NOMEM;
       break;
@@ -1164,7 +1173,8 @@ mc_status mc_library_list_album_groups(mc_library *lib, mc_album_group_list **ou
     const unsigned char *uid = sqlite3_column_text(stmt, 0);
     if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(g->uid, (const char *)uid);
     g->name = column_dup(stmt, 1);
-    g->album_count = sqlite3_column_int(stmt, 2);
+    g->album_count = albums;
+    g->playable_count = playable;
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -1317,9 +1327,12 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
   static const char sql[] =
     "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, s.name),"
     " coalesce(al.artist_credit, aar.name), s.uid IS NOT NULL,"
-    " p.uid IS NULL OR NOT EXISTS (SELECT 1 FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
+    " (p.uid IS NULL OR NOT EXISTS (SELECT 1 FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
     "  OR EXISTS (SELECT 1 FROM playlist_entries e JOIN files f ON f.track_uid = e.track_uid"
-    "  WHERE e.playlist_uid = p.uid)"
+    "  WHERE e.playlist_uid = p.uid))"
+    " AND (g.uid IS NULL OR NOT EXISTS (SELECT 1 FROM album_group_entries e WHERE e.group_uid = g.uid)"
+    "  OR EXISTS (SELECT 1 FROM album_group_entries e JOIN tracks t ON t.album_uid = e.album_uid"
+    "  JOIN files f ON f.track_uid = t.uid WHERE e.group_uid = g.uid))"
     " FROM recents r"
     " LEFT JOIN albums al ON r.kind = 'album' AND al.uid = r.uid"
     " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
@@ -1343,12 +1356,12 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
     const char *kind = (const char *)sqlite3_column_text(stmt, 0);
     int k = 0;
     while (k < RECENT_KIND_COUNT && strcmp(kind, k_recent_kinds[k])) k++;
-    if (playable_only && k == MC_RECENT_PLAYLIST) {
-      int playable = sqlite3_column_int(stmt, 6);
+    if (playable_only && (k == MC_RECENT_PLAYLIST || k == MC_RECENT_ALBUM_GROUP)) {
+      int listed = sqlite3_column_int(stmt, 6);
       if (sqlite3_column_int(stmt, 5))
-        st = mc_smart_has_playable(lib, (const char *)sqlite3_column_text(stmt, 1), &playable);
+        st = mc_smart_listed_here(lib, (const char *)sqlite3_column_text(stmt, 1), &listed);
       if (st != MC_OK) break;
-      if (!playable) continue;
+      if (!listed) continue;
     }
     if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
       st = MC_ERR_NOMEM;

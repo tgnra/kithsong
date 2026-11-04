@@ -3059,7 +3059,7 @@ static BOOL run_editor(HWND owner, const wchar_t *caption, const char *name, con
   INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_DATE_CLASSES | ICC_LISTVIEW_CLASSES};
   InitCommonControlsEx(&icc);
   if (mc_library_list_playlists(ed.lib, 0, &ed.playlists) != MC_OK) ed.playlists = NULL;
-  if (mc_library_list_album_groups(ed.lib, &ed.groups) != MC_OK) ed.groups = NULL;
+  if (mc_library_list_album_groups(ed.lib, 0, &ed.groups) != MC_OK) ed.groups = NULL;
   ed.presets_of = ed.subject == MC_SMART_TRACKS ? k_track_presets : k_album_presets;
   ed.limit = ed.subject == MC_SMART_TRACKS ? 25 : 10;
   ed.total = -1;

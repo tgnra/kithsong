@@ -1141,14 +1141,48 @@ static mc_status rule_has_playable(mc_library *lib, mc_smart_subject subject, co
   return st;
 }
 
-mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out) {
+/* Whether this device has any file at all, into *out. */
+static mc_status any_file_here(mc_library *lib, int *out) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "SELECT 1 FROM files LIMIT 1", -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  int rc = sqlite3_step(stmt);
+  *out = rc == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_ROW || rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+}
+
+/* Whether MC_LIST_PLAYABLE keeps a list with this rule: it has something here, or it's empty
+ * everywhere rather than only here, on a device that has some music to show it beside. */
+static mc_status rule_listed_here(mc_library *lib, mc_smart_subject subject, const char *rule, int *out) {
+  mc_status st = rule_has_playable(lib, subject, rule, out);
+  if (st != MC_OK || *out) return st;
+  int picks = 0;
+  if ((st = mc_smart_count(lib, subject, rule, &picks)) != MC_OK) return st;
+  return picks ? MC_OK : any_file_here(lib, out);
+}
+
+/* Runs test on saved smart list smart_uid's rule. One that can't be evaluated is a no. */
+static mc_status test_saved(mc_library *lib, const char *smart_uid, int *out,
+                            mc_status (*test)(mc_library *, mc_smart_subject, const char *, int *)) {
   *out = 0;
   mc_smart_subject subject;
   char *rule;
   mc_status st = load(lib, smart_uid, &subject, &rule);
-  if (st == MC_OK) st = rule_has_playable(lib, subject, rule, out);
+  if (st == MC_OK) st = test(lib, subject, rule, out);
   free(rule);
-  return st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG ? MC_OK : st;
+  if (st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG) {
+    *out = 0;
+    return MC_OK;
+  }
+  return st;
+}
+
+mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out) {
+  return test_saved(lib, smart_uid, out, rule_has_playable);
+}
+
+mc_status mc_smart_listed_here(mc_library *lib, const char *smart_uid, int *out) {
+  return test_saved(lib, smart_uid, out, rule_listed_here);
 }
 
 mc_status mc_smart_prepare_art(mc_library *lib, const char *smart_uid, mc_smart_subject *subject,
@@ -1286,11 +1320,11 @@ mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list *
     /* Skip kinds of list from a newer app this build can't show. */
     if (!parse_subject(sqlite3_column_text(stmt, 2), &subject)) continue;
     if (flags & MC_LIST_PLAYABLE) {
-      int playable = 0;
-      st = rule_has_playable(lib, subject, (const char *)sqlite3_column_text(stmt, 3), &playable);
-      if (st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG) st = MC_OK; /* holds nothing */
+      int listed = 0;
+      st = rule_listed_here(lib, subject, (const char *)sqlite3_column_text(stmt, 3), &listed);
+      if (st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG) st = MC_OK; /* can't be shown */
       if (st != MC_OK) break;
-      if (!playable) {
+      if (!listed) {
         list->hidden++;
         continue;
       }

@@ -997,9 +997,23 @@ static void smart_names(mc_library *lib, unsigned flags, char *out, size_t n, in
   mc_smart_list_free(list);
 }
 
+static void group_names(mc_library *lib, unsigned flags, char *out, size_t n, int *hidden) {
+  out[0] = '\0';
+  *hidden = -1;
+  mc_album_group_list *list = NULL;
+  if (mc_library_list_album_groups(lib, flags, &list) != MC_OK || !list) return;
+  for (int i = 0; i < list->count; i++) {
+    if (i) strncat(out, "|", n - strlen(out) - 1);
+    strncat(out, list->items[i].name, n - strlen(out) - 1);
+  }
+  *hidden = list->hidden;
+  mc_album_group_list_free(list);
+}
+
 /* MC_LIST_PLAYABLE: playlists, smart lists and recents with nothing that has a file on this
  * device are left out, by the same test that gives a track its path; and they come back as
- * soon as a file does. An empty playlist is kept, as it's waiting for tracks. */
+ * soon as a file does. An empty playlist is kept, as it's waiting for tracks, and so is a
+ * smart list that picks nothing at all. */
 static void test_playable(const char *scratch) {
   char path[1024];
   snprintf(path, sizeof path, "%s/test_library_playable.d", scratch);
@@ -1057,7 +1071,8 @@ static void test_playable(const char *scratch) {
   mc_track_list_free(tracks);
 
   /* Smart lists: a smart playlist by whether its tracks have files here, a smart album group
-   * by whether its albums do, and one whose rule can't be evaluated is left out too. */
+   * by whether its albums do, and one whose rule can't be evaluated is left out too. One that
+   * picks nothing anywhere is empty, not empty here, so it's kept. */
   CHECK(exec(db, "DELETE FROM smart_lists") == SQLITE_OK); /* v10's examples */
   char s_uid[MC_UID_STRLEN];
   CHECK(mc_smart_create(lib, "Ones", MC_SMART_TRACKS,
@@ -1077,8 +1092,8 @@ static void test_playable(const char *scratch) {
   CHECK(strcmp(names, "Away albums|Fours|Future|Here albums|Nothing|Ones") == 0);
   CHECK(hidden == 0);
   smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
-  CHECK(strcmp(names, "Here albums|Ones") == 0);
-  CHECK(hidden == 4);
+  CHECK(strcmp(names, "Here albums|Nothing|Ones") == 0);
+  CHECK(hidden == 3);
 
   /* Recents leave the same ones out with the flag (keeping the empty playlist), and still
    * fill the limit. */
@@ -1117,7 +1132,7 @@ static void test_playable(const char *scratch) {
   CHECK(strcmp(names, "Away|Empty|Partly") == 0);
   CHECK(hidden == 1);
   smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
-  CHECK(strcmp(names, "Away albums|Fours|Here albums") == 0);
+  CHECK(strcmp(names, "Away albums|Fours|Here albums|Nothing") == 0);
   /* A track that's gone takes its entries with it. */
   CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't3'") == SQLITE_OK);
   playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
@@ -1143,6 +1158,124 @@ static void test_playable(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* Album groups by the same rule as playlists: one with albums, none of them here, is empty
+ * only here (selective sync left it so), and hidden; one with no albums is kept. Recents go by
+ * it too, and smart lists kept for picking nothing go once this device has no files at all,
+ * so that a library with no music keeps its empty pages. */
+static void test_empty_here(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_empty_here.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "DELETE FROM smart_lists") == SQLITE_OK); /* v10's examples */
+  /* al1 has one track of two here, al2 none. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Here'), ('al2', 'Away');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'One'), ('t2', 'al1', 'Two'),"
+                 " ('t3', 'al2', 'Three');"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES ('f1', 't1', 'Here/01 One.flac', 'flac');") ==
+        SQLITE_OK);
+
+  char here[MC_UID_STRLEN], partly[MC_UID_STRLEN], away[MC_UID_STRLEN], empty[MC_UID_STRLEN];
+  CHECK(mc_album_group_create(lib, "Here", here) == MC_OK);
+  CHECK(mc_album_group_create(lib, "Partly", partly) == MC_OK);
+  CHECK(mc_album_group_create(lib, "Away", away) == MC_OK);
+  CHECK(mc_album_group_create(lib, "Empty", empty) == MC_OK);
+  CHECK(mc_album_group_add(lib, here, "al1") == MC_OK);
+  CHECK(mc_album_group_add(lib, partly, "al1") == MC_OK);
+  CHECK(mc_album_group_add(lib, partly, "al2") == MC_OK);
+  CHECK(mc_album_group_add(lib, away, "al2") == MC_OK);
+
+  /* Without the flag, every group, with how many of its albums have a file here. */
+  mc_album_group_list *groups = NULL;
+  CHECK(mc_library_list_album_groups(lib, 0, &groups) == MC_OK && groups && groups->count == 4 && groups->hidden == 0);
+  if (groups && groups->count == 4) {
+    CHECK_STR(groups->items[0].name, "Away");
+    CHECK(groups->items[0].album_count == 1 && groups->items[0].playable_count == 0);
+    CHECK_STR(groups->items[1].name, "Empty");
+    CHECK(groups->items[1].album_count == 0 && groups->items[1].playable_count == 0);
+    CHECK_STR(groups->items[2].name, "Here");
+    CHECK(groups->items[2].album_count == 1 && groups->items[2].playable_count == 1);
+    CHECK_STR(groups->items[3].name, "Partly");
+    CHECK(groups->items[3].album_count == 2 && groups->items[3].playable_count == 1);
+  }
+  mc_album_group_list_free(groups);
+
+  char names[256];
+  int hidden;
+  group_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Empty|Here|Partly") == 0);
+  CHECK(hidden == 1);
+
+  /* A limit can leave a rule's picks all away: empty here, though other tracks are here. */
+  char s_uid[MC_UID_STRLEN], s_none[MC_UID_STRLEN], s_group[MC_UID_STRLEN], s_away[MC_UID_STRLEN];
+  CHECK(mc_smart_create(lib, "Nothing", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Zero\"}}", s_none) == MC_OK);
+  CHECK(mc_smart_create(lib, "No albums", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Zero\"}}", s_group) == MC_OK);
+  CHECK(mc_smart_create(lib, "Last", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"not_empty\"},"
+                        "\"order\":[{\"field\":\"title\",\"dir\":\"asc\"}],\"limit\":1}", s_uid) == MC_OK);
+  CHECK(mc_smart_create(lib, "Away albums", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Away\"}}", s_away) == MC_OK);
+  smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Last|No albums|Nothing") == 0);
+  CHECK(hidden == 1);
+
+  /* Recents: the group away and the smart group away go, the empty ones stay. */
+  const struct {
+    mc_recent_kind kind;
+    const char *uid;
+  } opens[] = {{MC_RECENT_ALBUM_GROUP, away}, {MC_RECENT_ALBUM_GROUP, s_away}, {MC_RECENT_ALBUM_GROUP, empty},
+               {MC_RECENT_ALBUM_GROUP, s_group}, {MC_RECENT_PLAYLIST, s_none}, {MC_RECENT_ALBUM_GROUP, partly}};
+  for (size_t i = 0; i < sizeof opens / sizeof opens[0]; i++) {
+    mc_sleep_ms(2);
+    CHECK(mc_library_record_opened(lib, opens[i].kind, opens[i].uid) == MC_OK);
+  }
+  mc_recent_list *recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 6);
+  mc_recent_list_free(recents);
+  recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 4);
+  if (recents && recents->count == 4) {
+    CHECK(strcmp(recents->items[0].uid, partly) == 0);
+    CHECK(strcmp(recents->items[1].uid, s_none) == 0);
+    CHECK(strcmp(recents->items[2].uid, s_group) == 0);
+    CHECK(strcmp(recents->items[3].uid, empty) == 0);
+  }
+  mc_recent_list_free(recents);
+
+  /* A file arriving brings the group back. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f3', 't3', 'Away/01 Three.flac', 'flac')") ==
+        SQLITE_OK);
+  group_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Empty|Here|Partly") == 0);
+  CHECK(hidden == 0);
+
+  /* An album that's gone takes its entries with it, so a group of nothing else is empty. */
+  CHECK(exec(db, "DELETE FROM files WHERE uid = 'f3'") == SQLITE_OK);
+  CHECK(exec(db, "DELETE FROM tracks WHERE album_uid = 'al2'; DELETE FROM albums WHERE uid = 'al2'") == SQLITE_OK);
+  group_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Empty|Here|Partly") == 0);
+  CHECK(hidden == 0);
+
+  /* With no files here at all, a group with albums is hidden, an empty one stays, and a smart
+   * list that picks nothing goes: it would be all a library with no music showed. */
+  CHECK(exec(db, "DELETE FROM files") == SQLITE_OK);
+  group_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Empty") == 0);
+  CHECK(hidden == 2);
+  smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "") == 0);
+  CHECK(hidden == 4);
+
+  CHECK(mc_library_list_album_groups(NULL, MC_LIST_PLAYABLE, &groups) == MC_ERR_INVALID_ARG);
+  mc_library_close(lib);
+}
+
 /* Artists and album groups for the library's browse views. */
 static void test_artists_and_groups(const char *scratch) {
   char path[1024];
@@ -1159,7 +1292,7 @@ static void test_artists_and_groups(const char *scratch) {
   CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 0);
   mc_artist_list_free(artists);
   mc_album_group_list *groups = NULL;
-  CHECK(mc_library_list_album_groups(lib, &groups) == MC_OK && groups && groups->count == 0);
+  CHECK(mc_library_list_album_groups(lib, 0, &groups) == MC_OK && groups && groups->count == 0);
   mc_album_group_list_free(groups);
   mc_artist_list_free(NULL);
   mc_album_group_list_free(NULL);
@@ -1319,7 +1452,7 @@ static void test_artists_and_groups(const char *scratch) {
                  "INSERT INTO smart_lists (uid, name, subject, rule) VALUES"
                  " ('s1', 'Recent', 'albums', '{}');") == SQLITE_OK);
   groups = NULL;
-  CHECK(mc_library_list_album_groups(lib, &groups) == MC_OK && groups && groups->count == 3);
+  CHECK(mc_library_list_album_groups(lib, 0, &groups) == MC_OK && groups && groups->count == 3);
   if (groups && groups->count == 3) {
     CHECK_STR(groups->items[0].name, "Beatles");
     CHECK(groups->items[0].album_count == 2);
@@ -1379,7 +1512,7 @@ static void test_album_group_edits(const char *scratch) {
                  " WHERE album_uid = 'al2' AND group_uid = (SELECT uid FROM album_groups WHERE name = 'Road trip')")
         == SQLITE_OK);
   mc_album_group_list *groups = NULL;
-  CHECK(mc_library_list_album_groups(lib, &groups) == MC_OK && groups && groups->count == 2);
+  CHECK(mc_library_list_album_groups(lib, 0, &groups) == MC_OK && groups && groups->count == 2);
   if (groups && groups->count == 2) {
     CHECK_STR(groups->items[1].name, "Road trip");
     CHECK(groups->items[1].album_count == 3);
@@ -1432,7 +1565,7 @@ static void test_album_group_edits(const char *scratch) {
   /* Opening one puts it in the recents. */
   mc_recent_list *recents = NULL;
   CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, other) == MC_OK);
-  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 1);
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 1);
   if (recents && recents->count == 1) {
     CHECK(recents->items[0].kind == MC_RECENT_ALBUM_GROUP && !recents->items[0].is_smart);
     CHECK_STR(recents->items[0].name, "Other");
@@ -1579,6 +1712,7 @@ int main(int argc, char **argv) {
   test_artist_cover(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
   test_playable(argc > 1 ? argv[1] : ".");
+  test_empty_here(argc > 1 ? argv[1] : ".");
   test_artists_and_groups(argc > 1 ? argv[1] : ".");
   test_album_group_edits(argc > 1 ? argv[1] : ".");
   return TEST_RESULT();

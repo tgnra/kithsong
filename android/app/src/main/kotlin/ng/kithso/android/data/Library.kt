@@ -94,8 +94,10 @@ data class Library(
     val artists: List<Artist>,
     val albumGroups: List<AlbumGroup> = emptyList(),
 ) {
+    /** No music here: an empty playlist or album group doesn't change that. */
     val isEmpty: Boolean
-        get() = recents.isEmpty() && playlists.isEmpty() && albums.isEmpty() && artists.isEmpty() && albumGroups.isEmpty()
+        get() = recents.isEmpty() && albums.isEmpty() && artists.isEmpty() &&
+            playlists.all { it.trackCount == 0 } && albumGroups.all { it.albumCount == 0 }
 
     /**
      * The art of [ref], as its row shows it and its track list has it, or null if it isn't

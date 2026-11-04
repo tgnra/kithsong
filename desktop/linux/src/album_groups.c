@@ -16,6 +16,7 @@ static struct {
   void (*navigated)(void *user);
   GtkWidget *stack;        /* "list" (the header and list_stack) | "group" page */
   GtkWidget *list_stack;   /* "none" status page | "groups" grid */
+  GtkWidget *none; /* its page while no groups are listed */
   GtkWidget *groups;       /* the groups' grid */
   GtkWidget *albums;       /* the open group's albums' grid */
   GtkWidget *albums_stack; /* "empty" status page | "albums" */
@@ -250,7 +251,7 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
 
   GMenu *menu = g_menu_new(), *add = g_menu_new();
   mc_album_group_list *groups = NULL;
-  if (mc_library_list_album_groups(a->lib, &groups) == MC_OK && groups->count) {
+  if (mc_library_list_album_groups(a->lib, 0, &groups) == MC_OK && groups->count) {
     GMenu *section = g_menu_new();
     for (int i = 0; i < groups->count; i++) {
       char *label = menu_label(groups->items[i].name);
@@ -599,8 +600,8 @@ GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*na
   /* The groups under a header with the page's name and New album group (+). */
   v.list_stack = gtk_stack_new();
   gtk_widget_set_vexpand(v.list_stack, TRUE);
-  gtk_stack_add_named(GTK_STACK(v.list_stack),
-                      status_page("folder-symbolic", MC_STR_NO_ALBUM_GROUPS_TITLE, MC_STR_NO_ALBUM_GROUPS_TEXT), "none");
+  v.none = status_page("folder-symbolic", MC_STR_NO_ALBUM_GROUPS_TITLE, MC_STR_NO_ALBUM_GROUPS_TEXT);
+  gtk_stack_add_named(GTK_STACK(v.list_stack), v.none, "none");
   gtk_stack_add_named(GTK_STACK(v.list_stack), v.groups, "groups");
   GtkWidget *list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_widget_add_css_class(list, "view");
@@ -620,7 +621,13 @@ GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*na
 
 int album_groups_reload(app *a) {
   ensure_actions();
-  int n = album_grid_reload_groups(v.groups, a->lib, a->art_dir);
+  int hidden = 0;
+  int n = album_grid_reload_groups(v.groups, a->lib, a->art_dir, &hidden);
+  /* Groups with nothing to play here are hidden; say so rather than "No album groups yet". */
+  adw_status_page_set_title(ADW_STATUS_PAGE(v.none), mc_str(hidden ? MC_STR_NO_PLAYABLE_ALBUM_GROUPS_TITLE
+                                                                   : MC_STR_NO_ALBUM_GROUPS_TITLE));
+  adw_status_page_set_description(ADW_STATUS_PAGE(v.none), mc_str(hidden ? MC_STR_NO_PLAYABLE_ALBUM_GROUPS_TEXT
+                                                                         : MC_STR_NO_ALBUM_GROUPS_TEXT));
   if (v.open[0] && !reload_open(a)) { /* deleted, maybe on another device: back to the groups */
     v.open[0] = '\0';
     clear_albums();
