@@ -262,8 +262,8 @@ typedef struct mc_sync_result {
   int files_deleted;     /* removed by reconcile, the sweep or the fast check */
   int files_unknown;     /* orphans the sweep found: files of any type in the library folder
                           * that nothing explains. Moved to the trash, or deleted on Android,
-                          * except on an archive, which only reports them. 0 for a session
-                          * that didn't sweep (see "Files" in docs/sync-protocol.md) */
+                          * except on an archive, which only reports them. 0 if the sweep
+                          * didn't get as far as counting (see "Files" in docs/sync-protocol.md) */
   int files_sent;        /* served to the peer */
   int64_t bytes_received;
   int64_t bytes_sent;
