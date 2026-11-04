@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the GTK app for people who don't want the Flatpak and packs it as
 # dist/kithsong-<version>-linux-<arch>.tar.gz: one kithsong-<version>/ folder laid out as an
-# install prefix (bin/, share/). The release workflow runs this too.
+# install prefix (bin/, share/) with packaging/linux/README.txt on top. The release workflow
+# runs this too.
 #
 #   scripts/release-linux-tarball.sh
 #
@@ -13,16 +14,14 @@
 # newer ones only. That's why the workflow builds on the oldest system with the libadwaita we
 # need, and not in the Flatpak job's GNOME SDK. Everything else is linked in statically.
 #
-# Run it from where it's unpacked with bin/kithsong. To add it to the app menu:
-#
-#   tar -xzf kithsong-<version>-linux-<arch>.tar.gz --strip-components=1 -C ~/.local
+# How to run and install it is in the README.
 set -euo pipefail
 
 if [[ "$(uname -s)" != Linux ]]; then
     echo "The tarball builds on Linux only." >&2
     exit 1
 fi
-for tool in cmake ninja pkg-config; do
+for tool in cmake ninja pkg-config readelf; do
     command -v "$tool" >/dev/null || { echo "$tool isn't installed." >&2; exit 1; }
 done
 
@@ -53,6 +52,17 @@ cmake "${configure[@]}"
 cmake --build "$build"
 rm -rf "$stage"
 cmake --install "$build" --prefix "$stage" --component kithsong --strip
+cp packaging/linux/README.txt "$stage/"
+
+# The README lists what the binary links, so a new library has to go in there too.
+missing=0
+while read -r lib; do
+    if ! grep -qF "$lib" packaging/linux/README.txt; then
+        echo "error: the binary links $lib, which packaging/linux/README.txt doesn't list." >&2
+        missing=1
+    fi
+done < <(readelf -d "$stage/bin/kithsong" | awk -F'[][]' '/NEEDED/ && $2 !~ /^ld-/ { print $2 }')
+[[ "$missing" == 0 ]]
 
 mkdir -p dist
 tar -czf "$tarball" --owner=0 --group=0 --numeric-owner -C "$(dirname "$stage")" "kithsong-$version"
