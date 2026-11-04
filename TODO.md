@@ -150,6 +150,8 @@ See "Merging libraries" in docs/sync-protocol.md.
 
 Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <host>:<port>` on Android pair two scratch instances without clicks; `--es fake_merge <scenario>` on Android shows one of the merge's screens with made-up data.
 
+UI speed: Settings' Testing section has the profiler (musiccore/perf.h) and stress test libraries (musiccore/stress.h). KITHSONG_PERF=1 turns the profiler on, and KITHSONG_PERF_RUN=<file> on the desktops runs the scroll test after startup, saves the report and quits; `--ei stress_preset <0-2>` and `--ez perf_run true` do the like on an Android debug build, the report going to logcat (tag kithsong-perf). core/tests/manual_stress generates a library from the command line.
+
 ### First
 - test_sync_merge on a real build: abandoning a merge (librestore.c) was only syntax-checked where it was written
 

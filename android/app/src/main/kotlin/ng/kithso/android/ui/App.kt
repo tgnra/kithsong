@@ -1,5 +1,13 @@
 package ng.kithso.android.ui
 
+import android.util.Log
+import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import ng.kithso.android.KithsongApp
+import ng.kithso.core.CoreLibrary
+import ng.kithso.core.CoreTesting
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -167,6 +175,64 @@ fun App(
     }
 
     val top = nav.top
+    val app = context.applicationContext as KithsongApp
+    val stress = app.testing.inStress
+    // A view switch is over once a frame has been drawn with the new page, and the frame after
+    // has begun.
+    LaunchedEffect(top?.id) {
+        withFrameNanos {}
+        withFrameNanos {}
+        CoreTesting.viewEnd()
+    }
+    // Startup's last marks, and what's being measured.
+    LaunchedEffect(Unit) {
+        withFrameNanos {}
+        CoreTesting.mark("window_shown")
+    }
+    val libraryRead = library != null
+    LaunchedEffect(libraryRead) {
+        if (!libraryRead) return@LaunchedEffect
+        CoreTesting.mark("library_loaded")
+        withFrameNanos {}
+        withFrameNanos {}
+        CoreTesting.mark("first_content_painted")
+        CoreTesting.note("library_albums", library?.albums?.size.toString())
+        CoreTesting.note("library_stress", if (stress) "yes" else "no")
+        val tracks = withContext(Dispatchers.IO) {
+            runCatching { CoreLibrary(libraryDir.path).use { it.trackCount } }.getOrNull()
+        }
+        if (tracks != null) CoreTesting.note("library_tracks", tracks.toString())
+        if (PerfRun.requested) {
+            PerfRun.requested = false
+            delay(2000)
+            ScrollTest.start()
+        }
+    }
+    LaunchedEffect(Unit) {
+        ScrollTest.step.collect { step ->
+            when (step) {
+                ScrollTest.Step.OpenTracks -> {
+                    val uid = withContext(Dispatchers.IO) {
+                        runCatching { CoreLibrary(libraryDir.path).use { it.biggestAlbum() } }.getOrNull()
+                    }
+                    if (uid == null) {
+                        ScrollTest.step.value = ScrollTest.Step.Done
+                    } else {
+                        ScrollTest.step.value = ScrollTest.Step.Tracks
+                        open(CollectionRef(CollectionRef.Kind.Album, uid))
+                    }
+                }
+                ScrollTest.Step.Done -> {
+                    CoreTesting.autoEnd()
+                    ScrollTest.step.value = ScrollTest.Step.Idle
+                    TestingOpen.next = true
+                    nav = nav.removeAll { it is Page.Collection }.push(Page.Settings)
+                    CoreTesting.report().lines().forEach { Log.i("kithsong-perf", it) }
+                }
+                else -> {}
+            }
+        }
+    }
     // Nothing open over the main list: back leaves the app, as the activity sees fit.
     BackHandler(enabled = top == null && !smartOpen, onBack = onLeave)
 
@@ -184,11 +250,12 @@ fun App(
                 importRunning = importProgress?.phase?.isOver == false,
                 // How an import is going, the merge after pairing by merging libraries, and
                 // tracks waiting for a device.
-                banner = if (importProgress == null && merge == null && waiting.tracks == 0) {
+                banner = if (importProgress == null && merge == null && waiting.tracks == 0 && !stress) {
                     null
                 } else {
                     { modifier ->
                         Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (stress) StressCard()
                             importProgress?.let { ImportCard(it, importer) }
                             merge?.let { MergeCard(it, onDismiss = syncer::dismissMerge) }
                             if (waiting.tracks > 0) WaitingCard(waiting)
@@ -224,6 +291,10 @@ fun App(
                                 onBack = dismiss,
                                 binCount = binCount,
                                 onRecycleBin = { nav = nav.push(Page.RecycleBin) },
+                                onRunScrollTest = {
+                                    nav = nav.removeAll { it == Page.Settings }
+                                    ScrollTest.start()
+                                },
                             )
                             Page.Licenses -> LicensesScreen(bottomPadding, onOpen = { nav = nav.push(Page.License(it)) }, onBack = dismiss)
                             is Page.License -> LicenseTextScreen(page.asset, bottomPadding, onBack = dismiss)
@@ -391,3 +462,8 @@ private val TagTargetSaver = Saver<TagTarget?, String>(
     save = { target -> target?.let { "${it.kind.name}:${it.uid}" } },
     restore = { saved -> TagTarget(TagTarget.Kind.valueOf(saved.substringBefore(':')), saved.substringAfter(':')) },
 )
+
+/** A test script's request to run the scroll test after startup. */
+object PerfRun {
+    var requested = false
+}

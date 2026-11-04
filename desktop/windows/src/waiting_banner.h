@@ -21,6 +21,9 @@ HWND waiting_banner_create(HWND parent, int id);
 /* Reads the waiting tracks from sync again (NULL: sync is off, so none). TRUE if the strip
  * came or went, for the parent to lay out again; it repaints itself otherwise. */
 BOOL waiting_banner_update(mc_sync *sync);
+/* While a stress test library is open it says so instead, and a click on it sends the parent
+ * WM_COMMAND with BN_CLICKED and its id. TRUE if the strip came or went. */
+BOOL waiting_banner_set_stress(BOOL stress);
 /* Whether it has something to say, and so takes waiting_banner_height() on library pages. */
 BOOL waiting_banner_shown(void);
 /* Its height at the DPI it was last given: a line of text with its padding. */

@@ -4,6 +4,8 @@ pkg_check_modules(ADW REQUIRED IMPORTED_TARGET libadwaita-1>=1.5 gtk4>=4.12)
 
 add_executable(kithsong
   src/main.c
+  src/perf_ui.c
+  src/testing_view.c
   src/album_grid.c
   src/cover.c
   src/mpris.c

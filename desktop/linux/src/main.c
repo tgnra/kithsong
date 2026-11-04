@@ -50,7 +50,9 @@
 #include "mpris.h"
 #include "musiccore/musiccore.h"
 #include "now_playing.h"
+#include "perf_ui.h"
 #include "playback.h"
+#include "testing_view.h"
 #include "playlist_dialogs.h"
 #include "recents.h"
 #include "search_view.h"
@@ -95,6 +97,7 @@ enum {
 /* --- Import and Settings --- */
 
 static void show_page(app *a, const char *name) {
+  perf_ui_view(name);
   gtk_stack_set_visible_child_name(a->pages, name);
 }
 
@@ -228,7 +231,32 @@ static gboolean restore_deleted(app *a) {
   return TRUE;
 }
 
+/* The library just opened: a way back left from before is no use in a real library, and the
+ * banner says if this is a stress test library. */
+static void library_opened(app *a) {
+  gboolean stress = mc_library_is_stress(a->lib);
+  mc_settings *settings = NULL;
+  if (!stress && mc_settings_load(a->settings_dir, &settings) == MC_OK &&
+      mc_settings_string(settings, MC_STRESS_RETURN_SETTING)) {
+    mc_settings_set_string(settings, MC_STRESS_RETURN_SETTING, NULL);
+    mc_settings_save(settings);
+  }
+  mc_settings_free(settings);
+  app_update_waiting(a);
+  if (!mc_perf_enabled() || !a->lib) return;
+  static const struct { const char *key; mc_entity entity; } counts[] = {
+    {"library_tracks", MC_ENTITY_TRACKS}, {"library_albums", MC_ENTITY_ALBUMS},
+    {"library_artists", MC_ENTITY_ARTISTS}, {"library_playlists", MC_ENTITY_PLAYLISTS}};
+  for (size_t i = 0; i < G_N_ELEMENTS(counts); i++) {
+    int64_t n = 0;
+    if (mc_library_count(a->lib, counts[i].entity, &n) == MC_OK) mc_perf_note_int(counts[i].key, n);
+  }
+  mc_perf_note("library_stress", stress ? "yes" : "no");
+}
+
 /* Settings' Open Another Library. The import view lets go of the old library first. */
+static void activate_nav_row(app *a, int n);
+
 static gboolean open_library(void *user, const char *dir) {
   app *a = user;
   mc_library *lib = NULL;
@@ -248,11 +276,52 @@ static gboolean open_library(void *user, const char *dir) {
   restore_deleted(a);
   app_reload_library(a);
   devices_start(a);
+  library_opened(a);
   return TRUE;
 }
 
 gboolean app_open_library(app *a, const char *dir) {
   return open_library(a, dir);
+}
+
+/* Switches to dir and saves it as the library. return_dir, if not NULL, is saved as the way
+ * back, before the switch, which clears it for a real library. */
+static void switch_and_save(app *a, const char *dir, const char *return_dir) {
+  mc_settings *settings = NULL;
+  if (return_dir && mc_settings_load(a->settings_dir, &settings) == MC_OK) {
+    mc_settings_set_string(settings, MC_STRESS_RETURN_SETTING, return_dir);
+    mc_settings_save(settings);
+  }
+  mc_settings_free(settings);
+  settings = NULL;
+  if (!open_library(a, dir)) return;
+  if (mc_settings_load(a->settings_dir, &settings) == MC_OK) {
+    mc_settings_set_library_dir(settings, dir);
+    mc_settings_save(settings);
+  }
+  mc_settings_free(settings);
+}
+
+void app_open_stress(app *a, const char *dir) {
+  char *real = NULL;
+  if (!mc_library_is_stress(a->lib) && a->lib) real = g_strdup(mc_library_dir(a->lib));
+  switch_and_save(a, dir, real);
+  g_free(real);
+}
+
+void app_back_to_library(app *a) {
+  mc_settings *settings = NULL;
+  char *dir = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) == MC_OK)
+    dir = g_strdup(mc_settings_string(settings, MC_STRESS_RETURN_SETTING));
+  mc_settings_free(settings);
+  if (dir) switch_and_save(a, dir, NULL);
+  else app_show_testing(a); /* nothing saved: Open Another Library is in Settings */
+  g_free(dir);
+}
+
+void app_show_view(app *a, app_view view) {
+  activate_nav_row(a, (int)view);
 }
 
 static void on_settings_renamed(void *user, const char *name) {
@@ -337,6 +406,13 @@ static void reset_app(void *user) {
     return;
   }
   gtk_window_close(a->win);
+}
+
+static void on_settings(GtkButton *button, gpointer user);
+
+void app_show_testing(app *a) {
+  testing_view_open_next();
+  on_settings(NULL, a);
 }
 
 static void on_settings(GtkButton *button, gpointer user) {
@@ -1508,10 +1584,23 @@ static gboolean on_type_to_search(GtkEventControllerKey *keys, guint keyval, gui
 
 /* --- Waiting for a device --- */
 
+static void on_banner_clicked(AdwBanner *banner, gpointer user) {
+  (void)banner;
+  app_back_to_library(user);
+}
+
 void app_update_waiting(app *a) {
   if (!a->waiting) return;
   const char *page = gtk_stack_get_visible_child_name(a->pages);
   gboolean library = page && !strcmp(page, "library");
+  /* A stress test library has no sync to wait for: the banner's the way back. */
+  if (mc_library_is_stress(a->lib)) {
+    adw_banner_set_title(a->waiting, mc_str(MC_STR_STRESS_BANNER_TITLE));
+    adw_banner_set_button_label(a->waiting, mc_str(MC_STR_STRESS_BACK));
+    adw_banner_set_revealed(a->waiting, library);
+    return;
+  }
+  adw_banner_set_button_label(a->waiting, NULL);
   char text[512] = "";
   mc_sync *sync = devices_sync();
   mc_sync_waiting *w = NULL;
@@ -1608,6 +1697,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   GtkWidget *waiting = adw_banner_new("");
   a->waiting = ADW_BANNER(waiting);
+  g_signal_connect(waiting, "button-clicked", G_CALLBACK(on_banner_clicked), a);
   adw_banner_set_use_markup(a->waiting, FALSE);
   gtk_box_append(GTK_BOX(content), waiting);
   gtk_widget_set_vexpand(pages, TRUE);
@@ -1669,11 +1759,21 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   mpris_init(gapp, a->win, on_shuffle, on_mpris_volume, a);
   prune_art(a);
   restore_deleted(a);
+  mc_perf_mark("window_created");
+  perf_ui_init(a);
+  perf_ui_watch(album_grid_scrolled(a->album_grid), "albums");
+  perf_ui_watch(album_grid_scrolled(a->playlist_grid), "playlists");
+  perf_ui_watch(artist_view_scrolled(), "artists");
+  perf_ui_watch(track_list_scrolled(), "tracks");
   app_reload_library(a);
+  perf_ui_content_ready();
   if (!a->first_run) devices_start(a); /* else once there's a library, on_first_run_done() */
+  mc_perf_mark("sync_started");
+  library_opened(a);
   g_signal_connect(win, "notify::is-active", G_CALLBACK(on_active_changed), a);
   g_signal_connect(win, "destroy", G_CALLBACK(on_window_destroy), a);
   gtk_window_present(a->win);
+  mc_perf_mark("window_shown");
   if (a->first_run) first_run_present(win, on_first_run_done, a);
   if (a->reset_failed) {
     AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS_RESET), a->reset_failed);
@@ -1694,6 +1794,7 @@ static void set_strings_locale(void) {
 /* Settings from before the app was called Kithsong move over once. If the move fails, the
  * new folder starts out empty as on a first run. */
 int main(int argc, char **argv) {
+  uint64_t main_us = mc_perf_now_us();
   app a = {0};
   mc_init();
   set_strings_locale(); /* before the player's and import's threads look anything up */
@@ -1713,11 +1814,16 @@ int main(int argc, char **argv) {
   mc_free(left);
   mc_settings *settings = NULL;
   a.first_run = mc_settings_load(settings_dir, &settings) == MC_OK && !mc_settings_library_dir(settings);
+  /* As early as it can be known; the start itself comes from the system. */
+  mc_perf_set_enabled(mc_settings_bool(settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
+  mc_perf_mark_at("main_entered", main_us);
+  mc_perf_mark("settings_loaded");
   a.settings_dir = settings_dir;
   a.art_dir = g_build_filename(settings_dir, MC_PLAYLIST_ART_CACHE_DIR, NULL);
   const char *library_dir = mc_settings_library_dir(settings);
   if (!library_dir || mc_library_open(library_dir, &a.lib) != MC_OK) a.lib = NULL;
   mc_settings_free(settings);
+  mc_perf_mark("library_opened");
 
   AdwApplication *gapp = adw_application_new("app.kithsong.Kithsong", G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(gapp, "activate", G_CALLBACK(on_activate), &a);

@@ -93,4 +93,7 @@ void track_list_select(const char *uid);
  * shown, and when its album is shown again. */
 void track_list_set_playing(const char *uid);
 
+/* The scrolled window around the list. */
+GtkWidget *track_list_scrolled(void);
+
 #endif

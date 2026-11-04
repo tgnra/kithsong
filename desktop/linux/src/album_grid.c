@@ -402,7 +402,12 @@ GtkWidget *album_grid_new(const char *label, void (*changed)(void *user), void *
   gtk_box_append(GTK_BOX(box), scroller);
   g->widget = box;
   g_object_set_data_full(G_OBJECT(box), "album-grid", g, grid_free);
+  g_object_set_data(G_OBJECT(box), "scrolled", scroller);
   return box;
+}
+
+GtkWidget *album_grid_scrolled(GtkWidget *widget) {
+  return g_object_get_data(G_OBJECT(widget), "scrolled");
 }
 
 void album_grid_popup(GtkWidget *widget, GMenuModel *menu, double x, double y) {

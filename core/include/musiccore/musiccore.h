@@ -32,7 +32,8 @@ typedef enum mc_status {
   MC_ERR_LIBRARY_MISMATCH = -11, /* a different library than the sync group's */
   MC_ERR_AUTH = -12,            /* a service refused the sign-in, session or API key */
   MC_ERR_IN_USE = -13,          /* a file is open (being played, sent...): try again once it isn't */
-  MC_ERR_EXISTS = -14           /* it's in the library already, as something else */
+  MC_ERR_EXISTS = -14,          /* it's in the library already, as something else */
+  MC_ERR_STRESS_LIBRARY = -15   /* a stress test library neither syncs nor scrobbles (stress.h) */
 
 } mc_status;
 
@@ -75,6 +76,8 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "musiccore/sync_here.h"
 #include "musiccore/scrobbler.h"
 #include "musiccore/artcolors.h"
+#include "musiccore/perf.h"
+#include "musiccore/stress.h"
 
 #include "musiccore/i18n.h"
 

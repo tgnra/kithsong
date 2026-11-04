@@ -708,6 +708,7 @@ static void paint_no_results(canvas *c) {
  * leaves alpha at 0, so it's made opaque before the content area's rounded corner, which
  * shows the sidebar's Mica. */
 static void paint(HDC dc, const RECT *dirty) {
+  scroller_paint_start(&v.scroll);
   RECT client;
   GetClientRect(v.wnd, &client);
   if (!canvas_reserve(&v.buf, client.right, client.bottom)) return;
@@ -1002,6 +1003,7 @@ HWND search_view_create(HWND parent, int id) {
   v.hot = v.pressed = v.focus = -1;
   v.dpi = USER_DEFAULT_SCREEN_DPI;
   v.scroll.moved = on_scrolled;
+  v.scroll.perf_name = "search";
   if (!CreateWindowExW(0, L"kithsong_search", NULL, WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0, 0, parent,
                        (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL))
     return NULL;

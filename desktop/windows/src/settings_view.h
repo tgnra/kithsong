@@ -68,6 +68,10 @@ void settings_view_set_library_dir(const char *dir);
 void settings_view_set_font(HFONT font, UINT dpi);
 void settings_view_show(BOOL show);
 void settings_view_layout(int x, int y, int w, int h, UINT dpi);
+/* Opens or closes the Testing section. */
+void settings_view_open_testing(BOOL open);
+/* Opens it and scrolls to it. The page must be showing. */
+void settings_view_reveal_testing(void);
 /* Moves the focus to the first control. */
 void settings_view_focus(void);
 /* For the message loop, before dispatching: TRUE if msg was the page's. */

@@ -961,6 +961,10 @@ void track_list_select(const char *uid) {
   }
 }
 
+GtkWidget *track_list_scrolled(void) {
+  return s.scroller;
+}
+
 void track_list_set_playing(const char *uid) {
   const char *now = uid ? uid : "";
   if (!strcmp(now, s.playing_uid) || strlen(now) >= MC_UID_STRLEN) return;

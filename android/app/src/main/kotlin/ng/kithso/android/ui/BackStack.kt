@@ -26,8 +26,13 @@ data class BackStack<T>(val layers: List<BackLayer<T>> = emptyList(), private va
     val pages: List<T> get() = layers.filterNot { it.leaving }.map { it.page }
 
     /** [page] over the others, unless it's on top already: a double tap opens it once. */
-    fun push(page: T): BackStack<T> =
-        if (top?.page == page) this else BackStack(layers + BackLayer(nextId, page), nextId + 1)
+    fun push(page: T): BackStack<T> {
+        if (top?.page == page) return this
+        // The click: App ends the view switch once the page is drawn.
+        // By toString(), as R8 renames classes but not what a data class says it's called.
+        if (ng.kithso.core.CoreTesting.enabled()) ng.kithso.core.CoreTesting.viewBegin(page.toString().substringBefore('('))
+        return BackStack(layers + BackLayer(nextId, page), nextId + 1)
+    }
 
     /** Off the stack for back, and still drawn until [remove]. */
     fun leave(id: Int): BackStack<T> = copy(layers = layers.map { if (it.id == id) it.copy(leaving = true) else it })

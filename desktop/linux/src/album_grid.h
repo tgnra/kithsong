@@ -110,4 +110,7 @@ const char *album_grid_uid_at(GtkWidget *grid, int i);
  * places that aren't a grid view, e.g. search results. Its cover loads as the grid's do. */
 GtkWidget *album_tile_new(AlbumItem *album);
 
+/* The scrolled window around the grid made by album_grid_new(). */
+GtkWidget *album_grid_scrolled(GtkWidget *widget);
+
 #endif

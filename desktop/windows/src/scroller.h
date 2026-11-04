@@ -22,6 +22,11 @@ typedef struct scroller {
   int pos, target;     /* pixels scrolled, and where an animation is heading */
   BOOL animating, shown, hot, dragging;
   int drag_dy; /* where on the thumb it was grabbed */
+  /* For the profiler (musiccore/perf.h): the series its frames go in, NULL for none, the
+   * position last painted and when the paint under way began. */
+  const char *perf_name;
+  int perf_pos;
+  uint64_t perf_start_us;
 } scroller;
 
 /* Call when the view or the content changes size. Keeps pos in range, without calling moved. */
@@ -49,6 +54,8 @@ void scroller_capture_changed(scroller *s);
 /* WM_TIMER: TRUE if it was one of the scroller's. */
 BOOL scroller_timer(scroller *s, UINT_PTR id);
 
+/* Call as a paint begins, for the profiler. */
+void scroller_paint_start(scroller *s);
 void scroller_paint(scroller *s, canvas *c);
 
 #endif

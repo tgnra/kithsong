@@ -91,6 +91,7 @@ target_link_libraries(test_scrobbler PRIVATE mbedcrypto mc_yyjson)  # checks the
 target_include_directories(test_scrobbler PRIVATE "${PROJECT_BINARY_DIR}/core/generated")  # config.h
 kithsong_test(test_player)
 kithsong_test(test_shuffle)
+kithsong_test(test_stress)
 kithsong_test(test_art_colors)
 
 set_tests_properties(test_player PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
@@ -99,6 +100,10 @@ target_link_libraries(test_discovery PRIVATE mc_mdns)  # sends packets as a fake
 set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multicast
 
 # Hit musicbrainz.org; run by hand, not part of ctest.
+add_executable(manual_stress manual_stress.c)
+target_link_libraries(manual_stress PRIVATE musiccore)
+target_include_directories(manual_stress PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+
 add_executable(manual_mb_ping manual_mb_ping.c)
 target_link_libraries(manual_mb_ping PRIVATE musiccore)
 # Signs in and scrobbles for real; see the comment at its top.

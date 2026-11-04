@@ -1834,6 +1834,7 @@ static void paint_action(canvas *c, const wchar_t *label, int label_w, int top, 
  * it's made opaque at the end, except outside the rounded top-left corner, which shows
  * the sidebar's Mica. */
 static void paint(HDC dc, const RECT *dirty) {
+  scroller_paint_start(&g.scroll);
   if (!canvas_reserve(&g.buf, g.client_w, g.client_h)) return;
   canvas *c = &g.buf;
   canvas_clear(c, dirty, theme.bg, 255);
@@ -1901,6 +1902,10 @@ int album_grid_set_full_width(int full_w, int min_w) {
   pitch = tile_w + scale(20);
   int n = (min_w + pitch - 1) / pitch;
   return n < cols ? n * pitch : 0;
+}
+
+scroller *album_grid_scroller(void) {
+  return &g.scroll;
 }
 
 void album_grid_set_below_banner(BOOL below) {
@@ -2117,10 +2122,12 @@ static LRESULT CALLBACK grid_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       break;
     case WM_PAINT: {
       if (g.dirty) reload(); /* deferred while hidden; painting means we're visible */
+      if (g.count) mc_perf_mark("albums_listed");
       PAINTSTRUCT ps;
       HDC dc = BeginPaint(wnd, &ps);
       paint(dc, &ps.rcPaint);
       EndPaint(wnd, &ps);
+      if (g.count) mc_perf_mark("first_content_painted");
       return 0;
     }
     case WM_MOUSEWHEEL:
@@ -2214,6 +2221,7 @@ HWND album_grid_create(HWND parent, int id) {
   g.busy_index = -1;
   g.hot = g.selected = g.drag_tile = g.drop_slot = g.drop_tile = -1;
   g.scroll.moved = on_scrolled;
+  g.scroll.perf_name = "albums";
   g.dirty = TRUE;
   InitializeCriticalSection(&g.lock);
   InitializeConditionVariable(&g.wake);

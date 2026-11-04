@@ -40,6 +40,22 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
             save()
         }
 
+    /** Whether the profiler's on, from the start of the next launch ([ng.kithso.core.CoreTesting]). */
+    var perfProfile: Boolean
+        get() = core.bool(ng.kithso.core.CoreTesting.SETTING, false)
+        set(value) {
+            core.setBool(ng.kithso.core.CoreTesting.SETTING, value)
+            save()
+        }
+
+    /** The stress test library to open instead of the real one, or null for the real one. */
+    var stressLibrary: String?
+        get() = core.string(KEY_STRESS_LIBRARY)
+        set(value) {
+            core.setString(KEY_STRESS_LIBRARY, value)
+            save()
+        }
+
     /** Whether this phone scrobbles its plays; the account itself is the sync group's. */
     var scrobble: Boolean
         get() = core.scrobble
@@ -94,6 +110,7 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
     private companion object {
         const val TAG = "kithsong"
         // A frontend's own bool in settings.json (the rest have the core's own keys).
+        const val KEY_STRESS_LIBRARY = "stress_library"
         const val KEY_ASKED_FOR_NOTIFICATIONS = "android_asked_for_notifications"
         const val KEY_ARCHIVE_EXPLAINED = "archive_explained"
         // What they were in [old].

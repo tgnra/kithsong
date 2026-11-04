@@ -1,4 +1,5 @@
 #include "settings_view.h"
+#include "testing_view.h"
 
 #include <string.h>
 
@@ -867,6 +868,7 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
   if (s->has_sync) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_sync_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_playback_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_scrobble_group(s)));
+  adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(testing_view_group(s->user)));
   if (s->reset) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_reset_group(s)));
 
   s->dialog = GTK_WIDGET(adw_preferences_dialog_new());

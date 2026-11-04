@@ -1017,6 +1017,7 @@ static void paint_empty(canvas *c, const RECT *client) {
 /* Into a canvas, then made opaque, then the focus ring, scrollbar and the content area's
  * border and rounded corner, which shows the sidebar's Mica, as the album grid draws them. */
 static void paint(HDC dc, const RECT *dirty) {
+  scroller_paint_start(&v.scroll);
   RECT client;
   GetClientRect(v.wnd, &client);
   if (!canvas_reserve(&v.buf, client.right, client.bottom)) return;
@@ -1427,6 +1428,7 @@ HWND artist_view_create(HWND parent, int id) {
   v.dpi = USER_DEFAULT_SCREEN_DPI;
   v.stale = TRUE;
   v.scroll.moved = on_scrolled;
+  v.scroll.perf_name = "artists";
   return CreateWindowExW(0, L"kithsong_artists", NULL, WS_CHILD, 0, 0, 0, 0, parent, (HMENU)(INT_PTR)id,
                          GetModuleHandleW(NULL), NULL);
 }
@@ -1520,6 +1522,10 @@ track_list_item artist_view_single_at(int i) {
 
 int artist_view_play_index(void) {
   return v.play_index;
+}
+
+scroller *artist_view_scroller(void) {
+  return &v.scroll;
 }
 
 const track_list_request *artist_view_last_request(void) {

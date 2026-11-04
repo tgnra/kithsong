@@ -631,6 +631,10 @@ void track_list_select(const char *uid) {
     }
 }
 
+scroller *track_list_scroller(void) {
+  return &s.scroll;
+}
+
 void track_list_set_playing(const char *uid) {
   const char *now = uid ? uid : "";
   if (!strcmp(now, s.playing_uid) || strlen(now) >= MC_UID_STRLEN) return;
@@ -1109,6 +1113,7 @@ static void paint_header(canvas *c, int w, BOOL focused) {
 
 /* Like the album grid, everything goes into a canvas; GDI text needs its alpha set after. */
 static void paint(HDC dc, const RECT *dirty) {
+  scroller_paint_start(&s.scroll);
   RECT client;
   GetClientRect(s.wnd, &client);
   if (!canvas_reserve(&s.buf, client.right, client.bottom)) return;
@@ -1703,6 +1708,7 @@ HWND track_list_create(HWND parent, int id) {
   s.dpi = USER_DEFAULT_SCREEN_DPI;
   s.hot = s.selected = s.drag_row = s.drop_at = s.action_hot = s.action_pressed = -1;
   s.scroll.moved = on_scrolled;
+  s.scroll.perf_name = "tracks";
   return CreateWindowExW(0, L"kithsong_tracklist", NULL, WS_CHILD, 0, 0, 0, 0, parent,
                          (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
 }

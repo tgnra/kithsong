@@ -16,6 +16,7 @@
 #include "scrobble_service.h"
 #include "scroller.h"
 #include "sync_bridge.h"
+#include "testing_view.h"
 #include "theme.h"
 #include "wstr.h"
 
@@ -45,6 +46,8 @@ enum {
   ID_SET_ORDER_CHECK,
   ID_SET_ORDER_CHECK_LABEL,
   ID_SET_ORDER_NOTE,
+  ID_SET_TEST_HEADING,
+  ID_SET_TEST_TOGGLE,
   ID_SET_RESET_HEADING,
   ID_SET_RESET,
   ID_SET_RESET_NOTE,
@@ -75,6 +78,8 @@ static struct {
   BOOL firewall_shown; /* Ask about Windows Firewall again is: firewall_can_ask_again() */
   HWND play_heading, order_check, order_check_label, order_note;
   HWND lfm_heading, lfm_status, lfm_button, lfm_service, lfm_check, lfm_check_label, lfm_note;
+  HWND test_heading, test_toggle; /* the Testing section's accordion: the rest is testing_view.c's */
+  BOOL test_open;
   HWND reset_heading, reset, reset_note;
   HFONT font, title_font, heading_font;
   IAccPropServices *acc; /* names order_check for screen readers */
@@ -92,6 +97,7 @@ static struct {
   wchar_t lfm_note_shown[512];     /* and the note's, which names the service */
 } g_set;
 
+static void relayout(void);
 static void update_scrobble(void);
 static void update_firewall(void);
 static void stop_auth(void);
@@ -337,6 +343,10 @@ void settings_view_create(HWND parent) {
   g_set.lfm_check_label = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLE_SWITCH), label | SS_NOTIFY, ID_SET_LFM_CHECK_LABEL);
   g_set.lfm_note = child(WC_STATICW, NULL, label, ID_SET_LFM_NOTE); /* names the service: update_scrobble() */
 
+  g_set.test_heading = child(WC_STATICW, mc_wstr(MC_STR_TESTING_HEADING), label, ID_SET_TEST_HEADING);
+  g_set.test_toggle = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_TESTING_SHOW), BS_PUSHBUTTON | WS_TABSTOP, ID_SET_TEST_TOGGLE);
+  testing_view_create(g_set.content, relayout); /* here, for the tab order */
+
   g_set.reset_heading = child(WC_STATICW, mc_wstr(MC_STR_SETTINGS_RESET), label, ID_SET_RESET_HEADING);
   g_set.reset = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_RESET_APP_BUTTON), BS_PUSHBUTTON | WS_TABSTOP, ID_SET_RESET);
   g_set.reset_note = child(WC_STATICW, mc_wstr(MC_STR_RESET_APP_TEXT), label, ID_SET_RESET_NOTE);
@@ -344,6 +354,7 @@ void settings_view_create(HWND parent) {
 }
 
 void settings_view_destroy(void) {
+  testing_view_destroy();
   stop_auth();
   playback_on_scrobbler_closing(NULL);
   if (g_set.acc) {
@@ -386,7 +397,10 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   SendMessageW(g_set.sync_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.play_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.lfm_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  SendMessageW(g_set.test_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.reset_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  SendMessageW(g_set.test_toggle, WM_SETFONT, (WPARAM)font, TRUE);
+  testing_view_set_font(font, dpi);
   HWND body[] = {g_set.path,       g_set.move,       g_set.open,       g_set.note,
                  g_set.name_label, g_set.name,       g_set.addr_label, g_set.addr,
                  g_set.leave,      g_set.sync_note,  g_set.order_check, g_set.order_check_label,
@@ -396,6 +410,27 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
 }
 
+/* After opening or closing it the page is as tall as it now needs (WM_SIZE lays it out again). */
+static void relayout(void) {
+  if (g_set.shown) SendMessageW(g_set.parent, WM_SIZE, 0, 0);
+}
+
+void settings_view_open_testing(BOOL open) {
+  g_set.test_open = open;
+  SetWindowTextW(g_set.test_toggle, mc_wstr_mnemonic(open ? MC_STR_TESTING_HIDE : MC_STR_TESTING_SHOW));
+  testing_view_show(g_set.shown, open);
+  relayout();
+}
+
+void settings_view_reveal_testing(void) {
+  settings_view_open_testing(TRUE);
+  /* It may be taller than the page, so its heading goes to the top, not just into view. */
+  RECT r;
+  GetWindowRect(g_set.test_heading, &r);
+  MapWindowPoints(NULL, g_set.content, (POINT *)&r, 2);
+  scroller_jump(&g_set.scroll, r.top);
+}
+
 void settings_view_show(BOOL show) {
   g_set.shown = show;
   HWND all[] = {g_set.title,      g_set.heading,      g_set.path,  g_set.move,       g_set.open,
@@ -403,8 +438,9 @@ void settings_view_show(BOOL show) {
                 g_set.addr,       g_set.leave,        g_set.sync_note, g_set.play_heading, g_set.order_check,
                 g_set.order_check_label, g_set.order_note, g_set.lfm_heading, g_set.lfm_status,
                 g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
-                g_set.reset_heading, g_set.reset, g_set.reset_note};
+                g_set.test_heading, g_set.test_toggle, g_set.reset_heading, g_set.reset, g_set.reset_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
+  testing_view_show(show, g_set.test_open); /* its controls show only while it's open */
   ShowWindow(g_set.page, show ? SW_SHOW : SW_HIDE);
   update_firewall();
   if (show) {
@@ -524,6 +560,15 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   nh = canvas_text_height(g_set.lfm_note, g_set.font, text_w, 0);
   MoveWindow(g_set.lfm_note, left, top, text_w, nh, TRUE);
   top += nh + S(32);
+
+  /* Testing */
+  hh = canvas_text_height(g_set.test_heading, g_set.heading_font, text_w, 0);
+  MoveWindow(g_set.test_heading, left, top, text_w, hh, TRUE);
+  top += hh + S(8);
+  MoveWindow(g_set.test_toggle, left, top, button_width(g_set.test_toggle, S(16)), btn_h, TRUE);
+  top += btn_h + S(12);
+  if (g_set.test_open) top = testing_view_layout(left, top, text_w, dpi) + S(20);
+  top += S(20);
 
   /* Reset */
   hh = canvas_text_height(g_set.reset_heading, g_set.heading_font, text_w, 0);
@@ -983,6 +1028,7 @@ BOOL settings_view_on_command(int id, int code) {
       return TRUE;
     case ID_SET_LEAVE: leave_group(); return TRUE;
     case ID_SET_RESET: reset_app(); return TRUE;
+    case ID_SET_TEST_TOGGLE: settings_view_open_testing(!g_set.test_open); return TRUE;
     case ID_SET_FIREWALL: ask_firewall_again(); return TRUE;
     case ID_SET_LFM_BUTTON: on_scrobble_button(); return TRUE;
     case ID_SET_LFM_SERVICE: change_service(); return TRUE;
@@ -1006,7 +1052,7 @@ BOOL settings_view_on_command(int id, int code) {
         on_album_in_order_check();
       }
       return TRUE;
-    default: return FALSE;
+    default: return testing_view_on_command(id, code);
   }
 }
 
@@ -1015,11 +1061,13 @@ HBRUSH settings_view_ctlcolor(HWND wnd, HDC dc) {
     SetBkColor(dc, theme.bg);
     return theme.bg_brush;
   }
+  HBRUSH testing = testing_view_ctlcolor(wnd, dc);
+  if (testing) return testing;
   BOOL note = wnd == g_set.note || wnd == g_set.sync_note || wnd == g_set.order_note || wnd == g_set.lfm_note;
   if (!note && wnd != g_set.title && wnd != g_set.heading && wnd != g_set.path && wnd != g_set.sync_heading &&
       wnd != g_set.name_label && wnd != g_set.addr_label && wnd != g_set.addr && wnd != g_set.play_heading &&
       wnd != g_set.order_check_label && wnd != g_set.lfm_heading && wnd != g_set.lfm_status &&
-      wnd != g_set.lfm_check_label)
+      wnd != g_set.lfm_check_label && wnd != g_set.test_heading)
     return NULL;
   SetTextColor(dc, note ? theme.text2 : theme.text);
   SetBkColor(dc, theme.bg);

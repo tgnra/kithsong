@@ -151,6 +151,7 @@ static struct {
   char open[MC_UID_STRLEN];
   GtkWidget *page, *avatar, *name, *summary, *actions, *more;
   GtkWidget *backdrop; /* the covers' colours behind the header */
+  GtkWidget *list_scroller;
   GtkWidget *albums_heading, *albums_scroller, *albums;
   GtkWidget *singles_heading, *singles_scroller, *singles_box;
   GListStore *singles; /* ArtistTracks, in singles_box's order */
@@ -1149,6 +1150,7 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
                      gtk_callback_action_new(on_list_menu_key, NULL, NULL)));
   gtk_widget_add_controller(v.list, keys);
   GtkWidget *scroller = gtk_scrolled_window_new();
+  v.list_scroller = scroller;
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), v.list);
   gtk_widget_set_vexpand(scroller, TRUE);
@@ -1254,6 +1256,10 @@ gboolean artist_view_playable(void) {
 
 void artist_view_play(int start) {
   if (v.open[0]) play_tracks(G_LIST_MODEL(v.tracks), start);
+}
+
+GtkWidget *artist_view_scrolled(void) {
+  return v.list_scroller;
 }
 
 void artist_view_set_playing(const char *uid) {

@@ -20,6 +20,12 @@ class CoreSettings(dir: String) : AutoCloseable {
 
     @Synchronized fun setBool(key: String, value: Boolean) = nativeSetBool(handle, key, value)
 
+    /** Text of the app's own under [key], or null if none is saved. */
+    @Synchronized fun string(key: String): String? = nativeString(handle, key)
+
+    /** null clears it. */
+    @Synchronized fun setString(key: String, value: String?) = nativeSetString(handle, key, value)
+
     /** Whether playback shuffles, as it was left (CorePlayer.setShuffle). Off if never set. */
     var shuffle: Boolean
         @Synchronized get() = nativeShuffle(handle)
@@ -61,6 +67,8 @@ class CoreSettings(dir: String) : AutoCloseable {
         @JvmStatic external fun nativeSave(handle: Long)
         @JvmStatic external fun nativeDeviceName(handle: Long): String?
         @JvmStatic external fun nativeSetDeviceName(handle: Long, name: String?)
+        @JvmStatic external fun nativeString(handle: Long, key: String): String?
+        @JvmStatic external fun nativeSetString(handle: Long, key: String, value: String?)
         @JvmStatic external fun nativeBool(handle: Long, key: String, def: Boolean): Boolean
         @JvmStatic external fun nativeSetBool(handle: Long, key: String, value: Boolean)
         @JvmStatic external fun nativeShuffle(handle: Long): Boolean

@@ -117,5 +117,7 @@ int artist_view_play_index(void);
 /* The request the last ARN_ADD_TO_PLAYLIST, ARN_DELETE_TRACK, ARN_EDIT_TRACK or ARN_GO_TO_ARTIST
  * was for. */
 const track_list_request *artist_view_last_request(void);
+/* For a scroll test. */
+struct scroller *artist_view_scroller(void);
 
 #endif
