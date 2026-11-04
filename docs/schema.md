@@ -279,9 +279,9 @@ updated, so no two devices ever write the same field. So a row is logged whole: 
 Recycle Bin. A duplicate's rows move to the track that stays, which isn't logged. A merged
 library's history is not carried over (see [Merging libraries](sync-protocol.md#merging-libraries)).
 
-Rows are kept for good. A row costs about SIZE_ROW bytes of `library.db`: SIZE_TABLE for the row and its
+Rows are kept for good. A row costs about 700 bytes of `library.db`: 350 for the row and its
 indexes, the rest for its changelog row. So 10,000 starts a year, about 30 a day, come to some
-SIZE_YEAR MB, on every device of the group, whichever of them played what.
+7 MB, on every device of the group, whichever of them played what.
 
 ## Album groups
 
