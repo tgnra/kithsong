@@ -8,11 +8,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <windowsx.h>
 
 #include "canvas.h"
 #include "firewall.h"
 #include "playback.h"
 #include "scrobble_service.h"
+#include "scroller.h"
 #include "sync_bridge.h"
 #include "theme.h"
 #include "wstr.h"
@@ -57,8 +59,17 @@ enum { MAX_ADDRESSES = 8 };
 enum { AUTH_POLL_MS = 3000, AUTH_LIMIT_MS = 10 * 60 * 1000, STATUS_MS = 2000, STATUS_TIMER = 1 };
 enum { WM_AUTH_URL = WM_APP + 1, WM_AUTH_DONE }; /* to the status label, from the auth thread */
 
+/* At 96 DPI: a key's step, and what's kept in view around a control tabbed to, which takes in
+ * its label or note. */
+enum { LINE_STEP = 40, REVEAL_MARGIN = 40 };
+
 static struct {
-  HWND parent;
+  HWND parent;  /* the main window */
+  HWND page;    /* the window that clips the content, and has the scrollbar in its right margin */
+  HWND content; /* as tall as the controls need, moved up and down in page; they're its children */
+  scroller scroll;
+  canvas canvas;
+  BOOL tracking; /* the mouse's leaving page */
   HWND title, heading, path, move, open, note;
   HWND sync_heading, name_label, name, addr_label, addr, leave, firewall, sync_note;
   BOOL firewall_shown; /* Ask about Windows Firewall again is: firewall_can_ask_again() */
@@ -87,7 +98,7 @@ static void stop_auth(void);
 static LRESULT CALLBACK lfm_status_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data);
 
 static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
-  return CreateWindowExW(0, cls, text, WS_CHILD | style, 0, 0, 0, 0, g_set.parent, (HMENU)(INT_PTR)id,
+  return CreateWindowExW(0, cls, text, WS_CHILD | style, 0, 0, 0, 0, g_set.content, (HMENU)(INT_PTR)id,
                          GetModuleHandleW(NULL), NULL);
 }
 
@@ -114,8 +125,166 @@ static LRESULT CALLBACK name_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT
   return DefSubclassProc(wnd, msg, wp, lp);
 }
 
+/* --- Scrolling --- */
+
+static void scrolled(void) {
+  SetWindowPos(g_set.content, NULL, 0, -g_set.scroll.pos, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/* The controls' messages go on to the main window, as they did when it was their parent. */
+static LRESULT CALLBACK content_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_COMMAND:
+    case WM_NOTIFY:
+    case WM_DRAWITEM:
+    case WM_MEASUREITEM:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+    case WM_CTLCOLORSTATIC:
+      return SendMessageW(g_set.parent, msg, wp, lp);
+    case WM_ERASEBKGND: /* also how themed controls draw their parent's background */
+    case WM_PRINTCLIENT: {
+      RECT client;
+      GetClientRect(wnd, &client);
+      FillRect((HDC)wp, &client, theme.bg_brush);
+      return 1;
+    }
+  }
+  return DefWindowProcW(wnd, msg, wp, lp);
+}
+
+static LRESULT CALLBACK page_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_ERASEBKGND:
+      return 1;
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC dc = BeginPaint(wnd, &ps);
+      RECT client;
+      GetClientRect(wnd, &client);
+      if (canvas_reserve(&g_set.canvas, client.right, client.bottom)) {
+        canvas_clear(&g_set.canvas, &ps.rcPaint, theme.bg, 255);
+        scroller_paint(&g_set.scroll, &g_set.canvas);
+        canvas_blit(&g_set.canvas, dc, ps.rcPaint.left, ps.rcPaint.top, &ps.rcPaint);
+      }
+      EndPaint(wnd, &ps);
+      return 0;
+    }
+    case WM_TIMER:
+      scroller_timer(&g_set.scroll, wp);
+      return 0;
+    case WM_MOUSEMOVE:
+      if (!g_set.tracking) {
+        TRACKMOUSEEVENT tme = {sizeof tme, TME_LEAVE, wnd, 0};
+        g_set.tracking = TrackMouseEvent(&tme);
+      }
+      scroller_mouse_move(&g_set.scroll, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+      return 0;
+    case WM_MOUSELEAVE:
+      g_set.tracking = FALSE;
+      scroller_mouse_leave(&g_set.scroll);
+      return 0;
+    case WM_LBUTTONDOWN:
+      scroller_mouse_down(&g_set.scroll, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+      return 0;
+    case WM_LBUTTONUP:
+      scroller_mouse_up(&g_set.scroll);
+      return 0;
+    case WM_CAPTURECHANGED:
+      scroller_capture_changed(&g_set.scroll);
+      return 0;
+  }
+  return DefWindowProcW(wnd, msg, wp, lp);
+}
+
+/* Scrolls ctl into view, with what's around it. */
+static void reveal(HWND ctl) {
+  RECT r;
+  GetWindowRect(ctl, &r);
+  MapWindowPoints(NULL, g_set.content, (POINT *)&r, 2);
+  int margin = MulDiv(REVEAL_MARGIN, (int)GetDpiForWindow(g_set.page), USER_DEFAULT_SCREEN_DPI);
+  scroller_reveal(&g_set.scroll, r.top - margin, r.bottom + margin);
+}
+
+/* Gives ctl the focus as Tab does in a dialog, which the main window isn't. */
+static void tab_to(HWND ctl) {
+  if (!ctl) return; /* nothing can take the focus */
+  SendMessageW(g_set.parent, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+  SetFocus(ctl);
+  if (SendMessageW(ctl, WM_GETDLGCODE, 0, 0) & DLGC_HASSETSEL) SendMessageW(ctl, EM_SETSEL, 0, -1);
+  reveal(ctl);
+}
+
+void settings_view_focus(void) {
+  if (g_set.shown) tab_to(GetNextDlgTabItem(g_set.content, NULL, FALSE));
+}
+
+/* A key for the page: Tab from anywhere in the window, the others from one of its controls,
+ * unless that control uses them. */
+static BOOL on_key(const MSG *msg) {
+  if (GetKeyState(VK_CONTROL) < 0 || GetKeyState(VK_MENU) < 0) return FALSE;
+  BOOL in_page = IsChild(g_set.content, msg->hwnd);
+  if (msg->wParam == VK_TAB) {
+    tab_to(GetNextDlgTabItem(g_set.content, in_page ? msg->hwnd : NULL, GetKeyState(VK_SHIFT) < 0));
+    return TRUE;
+  }
+  if (!in_page) return FALSE;
+  int code;
+  switch (msg->wParam) {
+    case VK_PRIOR: code = SB_PAGEUP; break;
+    case VK_NEXT: code = SB_PAGEDOWN; break;
+    case VK_UP: code = SB_LINEUP; break;
+    case VK_DOWN: code = SB_LINEDOWN; break;
+    case VK_HOME: code = SB_TOP; break;
+    case VK_END: code = SB_BOTTOM; break;
+    default: return FALSE;
+  }
+  const LRESULT keeps = DLGC_HASSETSEL | DLGC_WANTARROWS | DLGC_WANTALLKEYS;
+  if (SendMessageW(msg->hwnd, WM_GETDLGCODE, msg->wParam, (LPARAM)msg) & keeps) return FALSE;
+  scroller_command(&g_set.scroll, code, MulDiv(LINE_STEP, (int)GetDpiForWindow(g_set.page), USER_DEFAULT_SCREEN_DPI));
+  return TRUE;
+}
+
+BOOL settings_view_translate(const MSG *msg) {
+  if (!g_set.shown || GetAncestor(msg->hwnd, GA_ROOT) != g_set.parent || !IsWindowEnabled(g_set.parent)) return FALSE;
+  switch (msg->message) {
+    case WM_KEYDOWN:
+      return on_key(msg);
+    case WM_MOUSEWHEEL: { /* whichever control is under the mouse, or has the focus */
+      RECT r;
+      GetWindowRect(g_set.page, &r);
+      if (!PtInRect(&r, msg->pt)) return FALSE;
+      scroller_wheel(&g_set.scroll, GET_WHEEL_DELTA_WPARAM(msg->wParam));
+      return TRUE;
+    }
+    case WM_MOUSEMOVE: /* over the controls, which page doesn't hear of: the bar shows */
+      if (IsChild(g_set.page, msg->hwnd)) {
+        POINT pt = msg->pt;
+        ScreenToClient(g_set.page, &pt);
+        scroller_mouse_move(&g_set.scroll, pt.x, pt.y);
+      }
+      return FALSE;
+  }
+  return FALSE;
+}
+
 void settings_view_create(HWND parent) {
   g_set.parent = parent;
+  HINSTANCE inst = GetModuleHandleW(NULL);
+  WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = page_proc, .hInstance = inst,
+                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"kithsong_settings"};
+  RegisterClassExW(&wc);
+  wc.lpfnWndProc = content_proc;
+  wc.lpszClassName = L"kithsong_settings_content";
+  RegisterClassExW(&wc);
+  g_set.page = CreateWindowExW(0, L"kithsong_settings", NULL, WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0, 0, parent, NULL,
+                               inst, NULL);
+  g_set.content = CreateWindowExW(0, L"kithsong_settings_content", NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0,
+                                  0, 0, 0, g_set.page, NULL, inst, NULL);
+  g_set.scroll.wnd = g_set.page;
+  g_set.scroll.moved = scrolled;
+
   DWORD label = SS_LEFT | SS_NOPREFIX;
   g_set.title = child(WC_STATICW, mc_wstr(MC_STR_SETTINGS), label, ID_SET_TITLE);
   g_set.heading = child(WC_STATICW, mc_wstr(MC_STR_LIBRARY_LOCATION), label, ID_SET_HEADING);
@@ -129,7 +298,7 @@ void settings_view_create(HWND parent) {
   g_set.sync_heading = child(WC_STATICW, mc_wstr(MC_STR_SYNC), label, ID_SET_SYNC_HEADING);
   g_set.name_label = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_THIS_PC_NAME), label, ID_SET_NAME_LABEL);
   g_set.name = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0,
-                               0, parent, (HMENU)(INT_PTR)ID_SET_NAME, GetModuleHandleW(NULL), NULL);
+                               0, g_set.content, (HMENU)(INT_PTR)ID_SET_NAME, GetModuleHandleW(NULL), NULL);
   SendMessageW(g_set.name, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
   SetWindowSubclass(g_set.name, name_proc, 0, 0);
   theme_center_edit(g_set.name);
@@ -185,6 +354,7 @@ void settings_view_destroy(void) {
   if (g_set.title_font) DeleteObject(g_set.title_font);
   if (g_set.heading_font) DeleteObject(g_set.heading_font);
   g_set.title_font = g_set.heading_font = NULL;
+  canvas_free(&g_set.canvas);
 }
 
 void settings_view_set_library_dir(const char *dir) {
@@ -234,8 +404,10 @@ void settings_view_show(BOOL show) {
                 g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
                 g_set.reset_heading, g_set.reset, g_set.reset_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
+  ShowWindow(g_set.page, show ? SW_SHOW : SW_HIDE);
   update_firewall();
   if (show) {
+    scroller_show(&g_set.scroll); /* a moment's sign that there's more below */
     settings_view_update_sync();
     update_scrobble();
     SetTimer(g_set.lfm_status, STATUS_TIMER, STATUS_MS, NULL);
@@ -256,12 +428,13 @@ static int button_width(HWND wnd, int pad) {
   return size.cx + 2 * pad;
 }
 
+/* Lays the controls out down content, from its top: how far they reach is what scrolls, so
+ * anything that changes that only has to come through here (WM_SIZE to the main window). */
 void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
-  (void)h;
   if (!g_set.shown || !g_set.font) return;
 #define S(px) MulDiv((px), (int)dpi, USER_DEFAULT_SCREEN_DPI)
   int pad = S(32), text_w = min(w - 2 * pad, S(720));
-  int left = x + pad, top = y + S(24);
+  int left = 0, top = S(24);
 
   int th = canvas_text_height(g_set.title, g_set.title_font, text_w, 0);
   MoveWindow(g_set.title, left, top, text_w, th, TRUE);
@@ -359,6 +532,15 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   top += btn_h + S(12);
   nh = canvas_text_height(g_set.reset_note, g_set.font, text_w, 0);
   MoveWindow(g_set.reset_note, left, top, text_w, nh, TRUE);
+  top += nh + S(24);
+
+  /* The page leaves the main window to draw the left margin and, a pixel high, the content
+   * area's border and rounded corner. The right margin is the page's, for the scrollbar. */
+  RECT view = {0, 0, max(w - pad, 0), max(h - 1, 0)};
+  MoveWindow(g_set.page, x + pad, y + 1, view.right, view.bottom, TRUE);
+  scroller_resize(&g_set.scroll, &view, top);
+  SetWindowPos(g_set.content, NULL, 0, -g_set.scroll.pos, max(w - 2 * pad, 0), top, SWP_NOZORDER | SWP_NOACTIVATE);
+  InvalidateRect(g_set.page, NULL, FALSE); /* the bar's size, or that it's gone */
 #undef S
 }
 

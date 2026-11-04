@@ -1494,6 +1494,7 @@ static void on_command(int id, int code) {
         if (g_app.page == PAGE_SEARCH) search_view_focus();
         else if (library_page()) SetFocus(g_app.grid);
         else if (g_app.page == PAGE_ARTISTS) SetFocus(g_app.artists);
+        else if (g_app.page == PAGE_SETTINGS) settings_view_focus();
       } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
       else if (code == SBN_PAIR_DEVICE) pair_nearby_uid(sidebar_clicked_nearby());
       else if (code == SBN_OPEN_RECENT) open_recent();
@@ -2420,7 +2421,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
 
   MSG msg;
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {
-    if (pair_dialog_translate(&msg)) continue;
+    if (pair_dialog_translate(&msg) || settings_view_translate(&msg)) continue;
     if (space_play_pause(&msg) || shortcut(&msg)) continue;
     TranslateMessage(&msg);
     DispatchMessageW(&msg);
