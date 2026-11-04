@@ -153,6 +153,9 @@ See "Merging libraries" in docs/sync-protocol.md.
 Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <host>:<port>` on Android pair two scratch instances without clicks; `--es fake_merge <scenario>` on Android shows one of the merge's screens with made-up data.
 
 ### First
+- Orphan sweep: a decision, not a check. An archive only reports orphans (MC_ORPHANS_ARCHIVE_ONLY_REPORTS, orphans.h), and the first archive is usually the main computer, so it gets no sweep; the guard against orphans outnumbering known files is MC_ORPHANS_MAX_PER_KNOWN, also there
+- Orphan sweep: with the real mc_trash(), as every run so far used a stand-in: the Recycle Bin and the Linux trash, a path past MAX_PATH (SHFileOperation can't take it, so the file stays), and a drive with no Recycle Bin, which deletes outright
+- First run and Open another library: the refusal after a real folder picker on Windows and Linux; the check itself is tested in core, and the suggestion's hiding on Windows, but neither picker can be driven
 - test_sync_merge on a real build: abandoning a merge (librestore.c) was only syntax-checked where it was written
 
 ### Linux
