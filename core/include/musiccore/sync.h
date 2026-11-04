@@ -229,12 +229,24 @@ typedef struct mc_sync_progress {
   int sends_done;        /* answered so far, sent or refused */
   int sends_total;
   int64_t sends_bytes;   /* sends_total's size, as the peer estimated it */
+  /* MC_SYNC_PHASE_FILES: how fast files are moving and how long the turns known so far have
+   * left, smoothed and rounded by the core so that every frontend shows the same. Show them as
+   * they are, with mc_sync_pace_text(). 0 for nothing to show, as in the first seconds of a
+   * turn, in a stall, or for time left when the turn's size isn't known. speed is in bytes per
+   * second. eta_seconds is on a coarse grid (a minute, later five, and so on) and under 60
+   * means less than a minute. */
+  int64_t speed;
+  int eta_seconds;
   /* See "Showing sync" below. user: this device's user asked for the session. connected: the
    * other device has answered (the handshake is done); 0 only in MC_SYNC_PHASE_CONNECTING
    * and in the MC_SYNC_PHASE_DONE that ends an attempt that never got that far. */
   int user;
   int connected;
 } mc_sync_progress;
+
+/* progress's speed and time left as text, "8.3 MB/s · about 12 min left", or as much of it as
+ * there is; "" for neither. */
+void mc_sync_pace_text(const mc_sync_progress *progress, char *out, size_t cap);
 
 typedef struct mc_sync_result {
   const char *device_uid;

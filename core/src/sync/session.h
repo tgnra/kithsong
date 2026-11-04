@@ -5,6 +5,7 @@
 #ifndef MC_SYNC_SESSION_H
 #define MC_SYNC_SESSION_H
 
+#include "sync/pace.h"
 #include "sync/sync_internal.h"
 
 typedef struct mc_session {
@@ -48,6 +49,8 @@ typedef struct mc_session {
   int64_t sends_bytes;
   int covers_received;
   int64_t bytes_received, bytes_sent;
+  mc_sync_pace pace;    /* the file phase's speed and time left */
+  uint64_t progress_ms; /* when the file phase last reported progress */
   struct mc_transfer *xfer; /* between mc_transfer_begin() and mc_transfer_end() */
 } mc_session;
 

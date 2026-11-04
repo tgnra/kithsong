@@ -48,9 +48,10 @@ mc_status mc_encode_pool_queue(mc_encode_pool *p, const char *file_uid, const ch
 void mc_encode_pool_drop(mc_encode_pool *p, const void *owner);
 /* Encodes file_uid at kbps now and waits for it: joins its job if it has one (moving it to
  * the front of the queue), else queues one at the front. On MC_OK, *out is the cached file
- * (malloc'd). Hold the pool around it and the sending, so the trim leaves the file alone. */
+ * (malloc'd). Hold the pool around it and the sending, so the trim leaves the file alone.
+ * idle, unless NULL, runs now and then during the wait. */
 mc_status mc_encode_pool_encode(mc_encode_pool *p, const char *file_uid, const char *src,
-                                int kbps, char **out);
+                                int kbps, void (*idle)(void *user), void *user, char **out);
 /* Keeps the trim from running until the matching release (waiting for one that runs). */
 void mc_encode_pool_hold(mc_encode_pool *p);
 void mc_encode_pool_release(mc_encode_pool *p);

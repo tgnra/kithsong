@@ -11,6 +11,8 @@
 
 enum { QUEUED, RUNNING, DONE };
 
+#define IDLE_MS 500 /* how often mc_encode_pool_encode() runs its idle */
+
 typedef struct job {
   char file_uid[MC_UID_STRLEN];
   int kbps;
@@ -261,7 +263,7 @@ void mc_encode_pool_drop(mc_encode_pool *p, const void *owner) {
 }
 
 mc_status mc_encode_pool_encode(mc_encode_pool *p, const char *file_uid, const char *src,
-                                int kbps, char **out) {
+                                int kbps, void (*idle)(void *user), void *user, char **out) {
   *out = NULL;
   mc_mutex_lock(&p->lock);
   job *j = find(p->queue, file_uid, kbps);
@@ -280,7 +282,16 @@ mc_status mc_encode_pool_encode(mc_encode_pool *p, const char *file_uid, const c
   }
   j->waiters++;
   spawn(p);
-  while (j->state != DONE) mc_cond_wait(&p->cond, &p->lock);
+  while (j->state != DONE) {
+    if (!idle) {
+      mc_cond_wait(&p->cond, &p->lock);
+      continue;
+    }
+    mc_cond_wait_ms(&p->cond, &p->lock, IDLE_MS);
+    mc_mutex_unlock(&p->lock);
+    idle(user);
+    mc_mutex_lock(&p->lock);
+  }
   mc_status st = j->st;
   if (!--j->waiters) job_free(j);
   mc_mutex_unlock(&p->lock);

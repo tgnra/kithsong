@@ -251,12 +251,39 @@ static mc_status send_file_err(mc_channel *ch, const char *track, const char *re
   return send_doc(ch, MC_MSG_FILE_ERR, doc);
 }
 
+/* Bytes still to move in the turns known so far, by their estimates; 0 if that isn't known,
+ * as for a peer too old to say what it will fetch. */
+static int64_t bytes_left(const mc_session *s) {
+  int64_t left = 0;
+  if (s->files_done < s->files_total && s->files_bytes > s->bytes_received)
+    left += s->files_bytes - s->bytes_received;
+  if (s->sends_done < s->sends_total && s->sends_bytes > s->bytes_sent)
+    left += s->sends_bytes - s->bytes_sent;
+  return left;
+}
+
 static void progress(mc_session *s) {
-  mc_sync_progress p = {s->peer_uid,      MC_SYNC_PHASE_FILES, s->rows_sent,     s->rows_received,
-                        s->files_done,    s->files_total,      s->bytes_received, s->bytes_sent,
-                        s->files_bytes,   s->sends_done,       s->sends_total,    s->sends_bytes,
-                        s->asked,         1};
+  s->progress_ms = mc_mono_ms();
+  mc_sync_pace_update(&s->pace, s->progress_ms, s->bytes_received + s->bytes_sent, bytes_left(s));
+  mc_sync_progress p = {.device_uid = s->peer_uid, .phase = MC_SYNC_PHASE_FILES,
+                        .rows_sent = s->rows_sent, .rows_received = s->rows_received,
+                        .files_done = s->files_done, .files_total = s->files_total,
+                        .bytes_received = s->bytes_received, .bytes_sent = s->bytes_sent,
+                        .files_bytes = s->files_bytes, .sends_done = s->sends_done,
+                        .sends_total = s->sends_total, .sends_bytes = s->sends_bytes,
+                        .speed = s->pace.speed, .eta_seconds = s->pace.eta, .user = s->asked,
+                        .connected = 1};
   mc_sync_emit_progress(s->sync, &p);
+}
+
+/* Progress in the middle of something long: while a file's bytes come or go, and while
+ * waiting for the peer or an encode, so that what's shown keeps up with a stall too. */
+static void progress_due(mc_session *s) {
+  if (mc_mono_ms() - s->progress_ms >= MC_CHANNEL_IDLE_MS) progress(s);
+}
+
+static void idle_progress(void *user) {
+  progress_due(user);
 }
 
 /* --- Exclusion --- */
@@ -489,14 +516,16 @@ static int find_transcode(mc_library *lib, const char *track, int kbps, held *h)
 /* The one way to the encode pool: Opus at kbps from orig, this device's original of the
  * track (find_original), into the transcode cache. With MC_ENCODE_NOW it waits, and *out is
  * the cached file (hold the pool around it and the sending); otherwise the job is queued at
- * prio for owner and out is unused. Anything but an original is refused: a transcode is
+ * prio for owner and out is unused; with MC_ENCODE_NOW, owner is the session, which goes on
+ * reporting its progress meanwhile. Anything but an original is refused: a transcode is
  * never encoded again (see the top of this file). */
 static mc_status encode_original(mc_sync *sync, const held *orig, int kbps, mc_encode_prio prio,
                                  const void *owner, char **out) {
   if (out) *out = NULL;
   if (orig->transcode) return MC_ERR_INVALID_ARG;
   if (prio == MC_ENCODE_NOW)
-    return out ? mc_encode_pool_encode(sync->enc, orig->file_uid, orig->path, kbps, out)
+    return out ? mc_encode_pool_encode(sync->enc, orig->file_uid, orig->path, kbps, idle_progress,
+                                       (void *)owner, out)
                : MC_ERR_INVALID_ARG;
   return mc_encode_pool_queue(sync->enc, orig->file_uid, orig->path, kbps, prio, owner);
 }
@@ -827,6 +856,7 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
     if (delay) mc_sleep_ms(delay);
     st = mc_channel_send(s->ch, MC_MSG_FILE_DATA, chunk, len);
     s->bytes_sent += (int64_t)len;
+    progress_due(s);
   }
   mc_file_reader_free(rd);
   fclose(f);
@@ -941,7 +971,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
     } else if (original && self_transcodes(s)) {
       /* Its encode-ahead job if it has one (queued or running), else a job of its own. */
       char *out = NULL;
-      mc_status enc = encode_original(s->sync, &h, kbps, MC_ENCODE_NOW, NULL, &out);
+      mc_status enc = encode_original(s->sync, &h, kbps, MC_ENCODE_NOW, s, &out);
       if (enc == MC_OK) {
         held c = cached_copy(&h, out);
         st = send_file(s, track, &c, "opus", kbps);
@@ -1369,6 +1399,7 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
     if (w) mc_file_writer_put(w, payload, len);
     have += (int64_t)len;
     s->bytes_received += (int64_t)len;
+    progress_due(s);
   }
   unsigned char digest[32];
   char got_sha[SHA_STRLEN] = "";
@@ -1724,6 +1755,7 @@ static mc_status recv_cover(mc_session *s, const char *album, const char *dir) {
     memcpy(img + have, payload, len);
     have += (int64_t)len;
     s->bytes_received += (int64_t)len;
+    progress_due(s);
   }
   if (st == MC_OK) {
     unsigned char digest[32];
@@ -2320,6 +2352,7 @@ void mc_transfer_begin(mc_session *s) {
 }
 
 mc_status mc_transfer_run(mc_session *s) {
+  mc_channel_set_idle(s->ch, idle_progress, s);
   progress(s);
   mc_status st;
   if (s->receive_first) {
@@ -2329,6 +2362,7 @@ mc_status mc_transfer_run(mc_session *s) {
     st = serve_turn(s);
     if (st == MC_OK) st = receive_turn(s);
   }
+  mc_channel_set_idle(s->ch, NULL, NULL);
   return st;
 }
 
