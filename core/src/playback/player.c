@@ -55,6 +55,7 @@ enum {
   RESTART_MS = 3000, /* previous() restarts the item after this far in */
   MAX_PLAYED = 16,   /* counted plays waiting for mc_player_take_played() */
   MAX_ENDED = 64,    /* ended plays waiting for mc_player_take_ended() */
+  MAX_SKIPS = 8,     /* skipped plays waiting for the feed, which takes them straight away */
   MAX_PLAY_MS = 4 * 60 * 1000,
   FADE_MS = 10, /* a volume change goes all the way from silence to full in this long */
   RADIO_AHEAD = 5, /* tracks a station keeps queued after the current one: skips use them up */
@@ -220,6 +221,8 @@ struct mc_player {
   char *radio_dir;    /* the library it's from */
   int radio_skip;     /* next() ran out of items: play the first one added */
   int radio_failures; /* items in a row that wouldn't open */
+  mc_play_event feed_skips[MAX_SKIPS]; /* those the station hasn't been told of, oldest first */
+  int nfeed_skips;
   int feed_started;
   mc_thread feed;
   mc_cond feed_wake;
@@ -378,6 +381,12 @@ static unsigned log_end(mc_player *p, mc_play_end end) {
   p->log_open = 0;
   p->log.end = end;
   p->log.listened_ms = p->rate ? (int64_t)(p->log_frames * 1000 / p->rate) : 0;
+  if (p->feeding && end == MC_PLAY_END_SKIPPED) {
+    if (p->nfeed_skips == MAX_SKIPS) /* the feed is busy opening: keep the newest */
+      memmove(p->feed_skips, p->feed_skips + 1, (size_t)--p->nfeed_skips * sizeof *p->feed_skips);
+    p->feed_skips[p->nfeed_skips++] = p->log;
+    mc_cond_broadcast(&p->feed_wake);
+  }
   return log_push(p, &p->log);
 }
 
@@ -856,6 +865,7 @@ static void feed_run(void *arg) {
   mc_radio_station *station = NULL;
   unsigned station_gen = 0;
   mc_radio_pick picks[RADIO_AHEAD];
+  mc_play_event heard[MAX_SKIPS];
   mc_mutex_lock(&p->lock);
   while (!p->quit) {
     if (station && (!p->feeding || station_gen != p->radio_gen)) {
@@ -882,6 +892,15 @@ static void feed_run(void *arg) {
       mc_mutex_lock(&p->lock);
       station_gen = gen;
       if (st != MC_OK && gen == p->radio_gen) end_radio(p); /* the seed plays by itself */
+      continue;
+    }
+    if (p->nfeed_skips) { /* before any pick. What's queued already stays. */
+      int n = p->nfeed_skips;
+      memcpy(heard, p->feed_skips, (size_t)n * sizeof *heard);
+      p->nfeed_skips = 0;
+      mc_mutex_unlock(&p->lock);
+      for (int i = 0; i < n; i++) mc_radio_station_heard(station, &heard[i]);
+      mc_mutex_lock(&p->lock);
       continue;
     }
     /* From the furthest the thread has got, not what's audible: items it has failed to open
@@ -942,6 +961,7 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
   free(p->radio_dir);
   p->radio_dir = dir;
   p->radio_failures = 0;
+  p->nfeed_skips = 0;
   p->nplays = 0;
   p->play_index = -1;
   for (int i = 0; i < p->nsegs; i++) p->segs[i].index = -1; /* what's still sounding isn't this queue's */
