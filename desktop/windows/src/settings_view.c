@@ -435,7 +435,7 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   if (!g_set.shown || !g_set.font) return;
 #define S(px) MulDiv((px), (int)dpi, USER_DEFAULT_SCREEN_DPI)
   int pad = S(32), text_w = min(w - 2 * pad, S(720));
-  int left = 0, top = S(24);
+  int band = S(CONTENT_RADIUS), left = 0, top = S(24) - band;
 
   int th = canvas_text_height(g_set.title, g_set.title_font, text_w, 0);
   MoveWindow(g_set.title, left, top, text_w, th, TRUE);
@@ -535,10 +535,12 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.reset_note, left, top, text_w, nh, TRUE);
   top += nh + S(24);
 
-  /* The page leaves the main window to draw the left margin and, a pixel high, the content
-   * area's border and rounded corner. The right margin is the page's, for the scrollbar. */
-  RECT view = {0, 0, max(w - pad, 0), max(h - 1, 0)};
-  MoveWindow(g_set.page, x + pad, y + 1, view.right, view.bottom, TRUE);
+  /* The page leaves the main window the left margin and the band at the top, with the content
+   * area's border and rounded corner: Mica's frame reaches down that far, and shows through
+   * what GDI draws, so the controls mustn't scroll through it. The right margin is the page's,
+   * for the scrollbar. */
+  RECT view = {0, 0, max(w - pad, 0), max(h - band, 0)};
+  MoveWindow(g_set.page, x + pad, y + band, view.right, view.bottom, TRUE);
   scroller_resize(&g_set.scroll, &view, top);
   SetWindowPos(g_set.content, NULL, 0, -g_set.scroll.pos, max(w - 2 * pad, 0), top, SWP_NOZORDER | SWP_NOACTIVATE);
   InvalidateRect(g_set.page, NULL, FALSE); /* the bar's size, or that it's gone */
