@@ -101,6 +101,13 @@ target_link_libraries(manual_mb_ping PRIVATE musiccore)
 add_executable(manual_scrobble manual_scrobble.c)
 target_link_libraries(manual_scrobble PRIVATE musiccore)
 target_include_directories(manual_scrobble PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+# Timing Opus encoding and an Opus sync; see opus.md.
+add_executable(manual_opus_sync manual_opus_sync.c)
+target_link_libraries(manual_opus_sync PRIVATE musiccore mc_sqlite3)
+target_include_directories(manual_opus_sync PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+add_executable(manual_opus_bench manual_opus_bench.c)
+target_link_libraries(manual_opus_bench PRIVATE musiccore mc_opusenc mbedcrypto)
+target_include_directories(manual_opus_bench PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_import manual_import.c)
 
 target_link_libraries(manual_import PRIVATE musiccore)
