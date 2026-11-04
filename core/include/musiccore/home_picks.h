@@ -1,6 +1,7 @@
 /* What the Home page's rows hold, for every desktop's page to show. Everything that decides what
- * goes in a row is here, in one pick_*() function per row in home_picks.c, so the guesses from
- * track_plays can give way to the play event log without touching the pages.
+ * goes in a row is here, in one pick_*() function per row in home_picks.c, so the rules can change
+ * without touching the pages. See "Home's played rows" in docs/schema.md for the two that go by
+ * what's been played.
  */
 #ifndef MUSICCORE_HOME_PICKS_H
 #define MUSICCORE_HOME_PICKS_H
@@ -46,8 +47,9 @@ typedef struct mc_home_picks {
 
 /* Fills out from lib (NULL leaves every row empty). seed decides Random's selection and order,
  * so one seed keeps the same selection across reloads; Radio's stations don't depend on it, and
- * hold for the day. This lists every album, evaluates every smart list and reads every analysis
- * result, so it's for a background thread, on its own connection. */
+ * hold for the day. This lists every album, evaluates every smart list, and reads every analysis
+ * result and the last 90 days of the play log, so it's for a background thread, on its own
+ * connection. */
 void mc_home_picks_load(mc_library *lib, unsigned seed, mc_home_picks *out);
 void mc_home_picks_free(mc_home_picks *picks);
 

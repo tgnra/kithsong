@@ -252,10 +252,10 @@ that device plays the track again.
 ## Play log
 
 `play_events` is the raw history that `track_plays` sums up: one row for each time a track was
-started, whether or not it counted as a play. It's there for readers to come (a local radio, a
-home screen), which go through `mc_library_list_play_events()`: every device's rows in a time
-range, oldest first. Nothing here filters or interprets; a reader decides what a two-second
-skip means. Nothing here leaves the user's own devices.
+started, whether or not it counted as a play. It's there for readers such as the Home page (see
+[Home's played rows](#homes-played-rows)), which go through `mc_library_list_play_events()`: every
+device's rows in a time range, oldest first. Nothing here filters or interprets; a reader decides
+what a two-second skip means. Nothing here leaves the user's own devices.
 
 | Column | |
 |--------|-|
@@ -283,6 +283,56 @@ library's history is not carried over (see [Merging libraries](sync-protocol.md#
 Rows are kept for good. A row costs about 700 bytes of `library.db`: 350 for the row and its
 indexes, the rest for its changelog row. So 10,000 starts a year, about 30 a day, come to some
 7 MB, on every device of the group, whichever of them played what.
+
+### Home's played rows
+
+"Played a lot recently" and "Not played in a while" come from `pick_played_lately()` and
+`pick_not_played_lately()` in [`home_picks.c`](../core/src/library/home_picks.c). Nothing is stored:
+each load reads the last 90 days of the log, however long it has grown, and `track_plays` for what's
+older. A track's plays go to its album and the playlists holding it as they are now, however it was
+played, so `context_uid` doesn't come into it.
+
+**A real play** is a row that didn't fail, with 30 seconds heard, or half the track if that's less.
+How it ended doesn't matter otherwise: a skip after two minutes was listened to, and `finished` can
+be a seek to the end. Half a track is there for interludes, which never reach 30 seconds. It's less
+than `mc_play_counts()` asks, as that's about what's fair to scrobble, and a minute of a long track
+says the album was on.
+
+**Radio plays.** A station's track was picked by the app, so it's weak evidence of wanting the album:
+a station can touch dozens of albums in an evening. So radio plays don't count towards "Played a lot
+recently", however many there are, even when the row is short. But they were heard, and the other
+row says something hasn't been, so for "Not played in a while" a real radio play is a play like any
+other: it keeps the album out for 90 days, and counts as having played it before.
+
+**Played a lot recently** takes, in order:
+
+1. Three or more real plays in the last 14 days, the most plays first.
+2. From before the log began: three or more tracks last played in those 14 days.
+
+And while the row has fewer than 8:
+
+3. A real play in the last 14 days.
+4. From before the log began: a track last played in those 14 days.
+5. A real play in the last 90 days.
+6. From before the log began: a track last played in those 90 days.
+
+So one play after years of silence comes behind anything on repeat, and only gets in at all if
+there's room.
+
+**Not played in a while** is what has a play, from either source, and none in the last 90 days, the
+longest ago first, those with two or more tracks played before the rest. A skip or a failure in the
+log changes nothing. With fewer than 8, it goes on down to 14 days ago, leaving out what's in the
+other row.
+
+**Before the log began.** `track_plays` is all there is of older plays, so the steps "from before
+the log began" keep its guess: it can only tell how many tracks had their last play lately, not how
+often they were played. The guess is taken only for an album or playlist whose last play in
+`track_plays` is older than the log's oldest row, of any device and any kind. After that the log has
+seen the play and knows better, and `track_plays` counts a station's plays with the rest. So an empty
+log gives the guess for everything, a short one gives the log's rows first and the guess behind them,
+and one that's older than 90 days leaves the guess out of "Played a lot recently" altogether. A device
+that only started logging after another has its earlier plays treated as seen, and they drop out of
+that row until they're older than the windows anyway.
 
 ## Audio analysis
 
