@@ -493,13 +493,18 @@ it syncs with the rows, a skip on one device teaches the others, and there's not
   at worst and about a seventh of a usual track, in the first verse. It's where
   `mc_radio_stations_list()` takes a play to have counted too.
 - `stopped` and `replaced` say the listening ended, not that the track didn't fit.
+- A skip the same track's next row of this pairing picks up from isn't one: it starts within 5
+  seconds of where the skip left off (`started_ms` + `listened_ms`), whichever way it ended. That's
+  a track started again, by Previous or a seek to the start, which the log has as `skipped`, or
+  gone back to from the first seconds of the next. Wanting more of a track is the opposite of a
+  skip. A station never brings one back that soon itself.
 - A row of the seed itself is left out, and so is this station's seed skipped on a station near
   it: a seed is what its station is built on, and pushing down what sounds like it would push the
   station away from itself.
 
 The log can't tell a seek from listening, so a track jumped through in 20 seconds and then skipped
-reads as an early skip. A restart by Previous reads as a skip too, which the play it starts takes
-back if it's heard out.
+reads as an early skip. A restart after a long pause isn't seen as one, as nothing says how long
+the pause was, so it counts as a skip, which the play it starts takes back if it's heard out.
 
 **How much.** Taking each pairing of seed and track on its own, oldest row first:
 
@@ -532,7 +537,8 @@ keep the old uid in `context_uid`, and aren't looked up in `aliases`.
 player hands each `skipped` row to its station (`mc_radio_station_heard()`) as it closes it, which
 costs less than a pick, on the thread that does the picking. The five tracks already queued stay,
 so it shows after those. A row is taken as one fresh skip of this seed, and a finish is left for the
-next opening.
+next opening. The player knows a restart when it does one and doesn't pass it on. Going back to a
+track it can't take back, so that too is left for the next opening.
 
 The numbers come from reasoning and the scales above, not from real skips. Reading the log costs
 in proportion to the rows of the last 60 days, however long the log is: some 6 microseconds a row,

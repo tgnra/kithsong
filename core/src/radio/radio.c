@@ -51,6 +51,10 @@ enum { KEEP_NOTHING, KEEP_ARTISTS, KEEP_ARTISTS_AND_ALBUMS };
  * the library's scales, where two random tracks are about 1 apart and stations.c finds a track's
  * nearest few at 0.45: those get a quarter, and anything less alike none at all. */
 #define SKIP_REACH 0.6
+/* A play of the same track this close to where a skipped one left off means it was started again,
+ * or gone back to from what came next (which Previous does in the first 3 seconds, so this is
+ * that and some room). Neither is a skip. A station never brings a track back so soon itself. */
+#define SKIP_BACK_MS 5000
 
 typedef struct candidate {
   char uid[MC_UID_STRLEN];
@@ -402,9 +406,10 @@ static void marks_settle(skip_marks *m) {
  *
  * Skipping a seed says nothing of its station, which is built on it. */
 #define SKIP_QUERY                                                                    \
-  "SELECT context_uid, track_uid, started_ms, listened_ms, ended = 'skipped'"         \
+  "SELECT context_uid, track_uid, started_ms, listened_ms, ended = 'skipped',"         \
+  " ended = 'finished'"                                                                \
   " FROM play_events WHERE started_ms > ?1 AND started_ms <= ?2 AND context = 'radio'" \
-  " AND ended IN ('skipped', 'finished') AND context_uid IS NOT NULL"                 \
+  " AND ended <> 'failed' AND context_uid IS NOT NULL"                                 \
   " AND track_uid <> context_uid ORDER BY context_uid, track_uid, started_ms, uid"
 
 /* Reads the pairings of seeds near this station's, each one's skips faded and summed, into m. */
@@ -418,6 +423,8 @@ static mc_status marks_read(mc_radio_station *s, mc_library *lib, int64_t now_ms
   const mc_analysis *own_result = &s->pool.results[s->seed];
   char seed[MC_UID_STRLEN] = "", track[MC_UID_STRLEN] = "";
   double reach = 0, skips = 0; /* of the seed, and the pairing so far in fresh skips */
+  double before = 0;           /* skips before the last row, if it was an early skip */
+  int64_t left_off = 0;        /* where that row ended; 0 if the last row wasn't one */
   mc_status st = MC_OK;
   int rc = SQLITE_DONE;
   for (unsigned rows = 1; st == MC_OK; rows++) {
@@ -433,6 +440,7 @@ static mc_status marks_read(mc_radio_station *s, mc_library *lib, int64_t now_ms
     if (new_seed || strcmp(row_track, track)) { /* that's all of the last pairing */
       if (skips > 0 && strcmp(track, own)) st = marks_add(m, track, skips * reach);
       skips = 0;
+      left_off = 0;
       strcpy(track, row_track);
     }
     if (rc != SQLITE_ROW) break;
@@ -442,12 +450,16 @@ static mc_status marks_read(mc_radio_station *s, mc_library *lib, int64_t now_ms
       reach = result_of(s, lib, seed, &result) ? skip_reach(mc_analysis_distance(&result, own_result, &s->stats)) : 0;
     }
     if (reach <= 0) continue;
-    int64_t listened = sqlite3_column_int64(stmt, 3);
-    int skipped = sqlite3_column_int(stmt, 4);
+    int64_t started = sqlite3_column_int64(stmt, 2), listened = sqlite3_column_int64(stmt, 3);
+    int skipped = sqlite3_column_int(stmt, 4), finished = sqlite3_column_int(stmt, 5);
+    if (left_off && llabs(started - left_off) < SKIP_BACK_MS) skips = before;
+    left_off = 0;
     if (early_skip(skipped, listened)) {
-      skips += 1.0 - (double)(now_ms - sqlite3_column_int64(stmt, 2)) / SKIP_FADE_MS;
+      before = skips;
+      left_off = started + listened;
+      skips += 1.0 - (double)(now_ms - started) / SKIP_FADE_MS;
       if (skips > SKIP_REPEATS) skips = SKIP_REPEATS;
-    } else if (!skipped && listened >= SKIP_EARLY_MS) { /* less got there by seeking */
+    } else if (finished && listened >= SKIP_EARLY_MS) { /* less got there by seeking */
       skips = skips > 1.0 ? skips - 1.0 : 0;            /* heard out: it does fit after all */
     }
   }

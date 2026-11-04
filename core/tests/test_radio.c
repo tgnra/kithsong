@@ -771,6 +771,50 @@ static void test_skip_repeats(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* A track started again, or gone back to, wasn't skipped, however the play after it ended. The
+ * same track coming round later on is another matter. */
+static void test_skip_started_again(const char *scratch) {
+  mc_library *lib = skip_library(scratch, "test_radio_skip_again.d");
+  if (!lib) return;
+  static mix_print none;
+  mix_prints(lib, "seed", NOW_MS, &none);
+
+  /* Previous 10 seconds in, and that play then stopped, replaced, skipped late, or skipped too
+   * soon to say anything. */
+  const mc_play_end ends[] = {MC_PLAY_END_STOPPED, MC_PLAY_END_REPLACED, MC_PLAY_END_SKIPPED};
+  int64_t at = NOW_MS - 2000000;
+  for (size_t i = 0; i < sizeof ends / sizeof ends[0]; i++, at += 100000) {
+    radio_skip(lib, "up0", "seed", at);
+    logged(lib, "up0", ends[i], MC_PLAY_CONTEXT_RADIO, "seed", at + 10000 + 200, 40000);
+    CHECK(same_mixes(lib, "seed", NOW_MS, &none));
+  }
+  radio_skip(lib, "up0", "seed", at);
+  logged(lib, "up0", MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_RADIO, "seed", at + 10000 + 200, 500);
+  CHECK(same_mixes(lib, "seed", NOW_MS, &none));
+  at += 100000;
+
+  /* Next, a couple of seconds of what came after, and Previous back to it. */
+  radio_skip(lib, "up0", "seed", at);
+  logged(lib, "up1", MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_RADIO, "seed", at + 10000, 2000);
+  logged(lib, "up0", MC_PLAY_END_STOPPED, MC_PLAY_CONTEXT_RADIO, "seed", at + 12000 + 200, 40000);
+  CHECK(same_mixes(lib, "seed", NOW_MS, &none));
+  at += 100000;
+
+  /* Started again, and then skipped for real: that one counts. */
+  radio_skip(lib, "up0", "seed", at);
+  radio_skip(lib, "up0", "seed", at + 10000 + 200);
+  CHECK(!same_mixes(lib, "seed", NOW_MS, &none));
+  mc_library_close(lib);
+
+  /* Back round minutes later, it was a skip all along. */
+  lib = skip_library(scratch, "test_radio_skip_again_later.d");
+  if (!lib) return;
+  radio_skip(lib, "up0", "seed", NOW_MS - 2000000);
+  logged(lib, "up0", MC_PLAY_END_STOPPED, MC_PLAY_CONTEXT_RADIO, "seed", NOW_MS - 1000000, 40000);
+  CHECK(!same_mixes(lib, "seed", NOW_MS, &none));
+  mc_library_close(lib);
+}
+
 /* However much is skipped, a mix still takes everything and a station still plays everything,
  * the skipped included. */
 static void test_skip_excludes_nothing(const char *scratch) {
@@ -931,6 +975,7 @@ int main(int argc, char **argv) {
   test_skip_teaches_nothing(scratch);
   test_skip_fades(scratch);
   test_skip_repeats(scratch);
+  test_skip_started_again(scratch);
   test_skip_excludes_nothing(scratch);
   test_skip_elsewhere(scratch);
   test_skip_in_session(scratch);

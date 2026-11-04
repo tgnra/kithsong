@@ -375,13 +375,21 @@ static void log_begin(mc_player *p, segment *seg) {
   seg->logged = 1;
 }
 
+/* Whether the command being carried out starts the open row's track again, as Previous does
+ * past RESTART_MS and a seek to the start. It logs as a skip, but tells a station nothing. Under
+ * lock. */
+static int restarting(const mc_player *p) {
+  return p->cmd == CMD_START && p->track_uids && p->cmd_index >= 0 && p->cmd_index < p->count &&
+         !strcmp(p->track_uids[p->cmd_index], p->log.track_uid);
+}
+
 /* Closes the open row, if any. Under lock. */
 static unsigned log_end(mc_player *p, mc_play_end end) {
   if (!p->log_open) return 0;
   p->log_open = 0;
   p->log.end = end;
   p->log.listened_ms = p->rate ? (int64_t)(p->log_frames * 1000 / p->rate) : 0;
-  if (p->feeding && end == MC_PLAY_END_SKIPPED) {
+  if (p->feeding && end == MC_PLAY_END_SKIPPED && !restarting(p)) {
     if (p->nfeed_skips == MAX_SKIPS) /* the feed is busy opening: keep the newest */
       memmove(p->feed_skips, p->feed_skips + 1, (size_t)--p->nfeed_skips * sizeof *p->feed_skips);
     p->feed_skips[p->nfeed_skips++] = p->log;
