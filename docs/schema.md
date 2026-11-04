@@ -252,10 +252,11 @@ that device plays the track again.
 ## Play log
 
 `play_events` is the raw history that `track_plays` sums up: one row for each time a track was
-started, whether or not it counted as a play. It's there for readers to come (a local radio, a
-home screen), which go through `mc_library_list_play_events()`: every device's rows in a time
-range, oldest first. Nothing here filters or interprets; a reader decides what a two-second
-skip means. Nothing here leaves the user's own devices.
+started, whether or not it counted as a play. Its readers (radio, a home screen) go through
+`mc_library_list_play_events()`, every device's rows in a time range, oldest first, or read it
+directly, as [What skips teach a station](#what-skips-teach-a-station) does. Nothing here filters
+or interprets; a reader decides what a two-second skip means. Nothing here leaves the user's own
+devices.
 
 | Column | |
 |--------|-|
@@ -453,8 +454,8 @@ Candidates have a result of this version and a file on this device, and aren't i
 They run from a minute up to `max_track_ms`, 8 minutes unless it says, negative for no limit; a
 duration of 0 or none is unknown and counts against a track neither way. A seed has to be a
 candidate too. A station reads them once and then never touches the library, so it doesn't see
-what changes later. It plays every candidate once before anything comes back, and then holds back
-its latest picks (half the pool, 64 at most).
+what changes later, but for the skips it's told of (see below). It plays every candidate once
+before anything comes back, and then holds back its latest picks (half the pool, 64 at most).
 
 `mc_player_play_radio()` plays a station: the seed starts at once, and a thread of the player's
 loads the station on its own connection and keeps 5 tracks queued ahead of the current one. Rows
@@ -469,6 +470,76 @@ drawn at random, named by `--name`, with `--max-length <minutes>` for `max_track
 `--scan` analyses what has no result first, and `--dry-run` only prints the mix. It makes no network
 calls, and refuses a library of an older schema without `--migrate`, as an older app can't open
 one that's been migrated.
+
+### What skips teach a station
+
+A track skipped early on a station didn't fit that station. That's all it means: music someone
+owns isn't music they dislike, so a skip never counts against a track in general. The track and
+what sounds like it score a little worse there, and on stations from seeds that sound like that
+seed, for a while. Picks elsewhere don't change, nor does anything outside radio.
+
+It's worked out from `play_events` each time a mix or station starts, so nothing new is stored:
+it syncs with the rows, a skip on one device teaches the others, and there's nothing to migrate.
+
+**What counts.** A row whose `context` is `radio`, with `context_uid` as the seed, `ended` as
+`skipped`, and `listened_ms` from 3 up to 30 seconds.
+
+- A skip in an album or a playlist teaches nothing: the listener was after something else.
+- Under 3 seconds too little was heard to be a judgement. Previous goes back a track within its
+  first 3 seconds, leaving a `skipped` row for one that may not have been listened to at all, and
+  Next pressed a few times running goes past tracks on the way to another.
+- From 30 seconds on it isn't early, as a track that's been given that long got a hearing, and the
+  listener may just want the next one. The shortest candidate is a minute, so this is half way
+  at worst and about a seventh of a usual track, in the first verse. It's where
+  `mc_radio_stations_list()` takes a play to have counted too.
+- `stopped` and `replaced` say the listening ended, not that the track didn't fit.
+- A row of the seed itself is left out, and so is this station's seed skipped on a station near
+  it: a seed is what its station is built on, and pushing down what sounds like it would push the
+  station away from itself.
+
+The log can't tell a seek from listening, so a track jumped through in 20 seconds and then skipped
+reads as an early skip. A restart by Previous reads as a skip too, which the play it starts takes
+back if it's heard out.
+
+**How much.** Taking each pairing of seed and track on its own, oldest row first:
+
+- A skip adds 1, less what it has faded: straight down to nothing over 60 days, so 0.5 at 30 days.
+  A skip made in the wrong mood wears off by itself, and the time limit is what bounds the read.
+- A pairing stops at 3. Skipping one track every time means no more than three times does.
+- A `finished` row of the pairing with 30 seconds or more heard takes 1 off what's built up so
+  far, down to 0: it fits after all. Skips after it count as usual, and with none before it, it
+  does nothing, as there's no bonus. Less than 30 seconds got to the end by seeking.
+- A row dated after now doesn't count: that's a device with its clock wrong, and it would never
+  fade.
+
+Each pairing then reaches this station by how close its seed is to this station's seed, and each
+candidate by how close it is to the skipped track. Both go from 1 at a distance of 0 straight down
+to nothing at 0.6, on the library's scales, where two random tracks are about 1 apart and a track's
+nearest few about 0.45. So those few get a quarter, and an unrelated station gets exactly nothing,
+not just very little. A score gets worse by 0.05 for each skip that arrives. That's `DRAW_SOFTNESS`,
+so among tracks otherwise level a fresh skip leaves a track about a third as likely to be drawn.
+However many skips agree, a track's score goes up by 0.15 at most, what being played just now
+costs it. It's a nudge to the order and no more: nothing is left out, a station still plays every
+candidate in a round, and with no skips that apply the scores are the same to the last bit.
+
+A station goes by the 32 skipped tracks that weigh the most, as each is a pass over the candidates.
+Those needn't be candidates: a track or seed with a result and no file here still says what sounds
+like it, which is how a phone's skips reach a desktop that lacks those files. A seed that has no
+result at all any more says nothing, and that includes one merged away as a duplicate: its rows
+keep the old uid in `context_uid`, and aren't looked up in `aliases`.
+
+**During a session.** A skip counts straight away, not just the next time the station opens. The
+player hands each `skipped` row to its station (`mc_radio_station_heard()`) as it closes it, which
+costs less than a pick, on the thread that does the picking. The five tracks already queued stay,
+so it shows after those. A row is taken as one fresh skip of this seed, and a finish is left for the
+next opening.
+
+The numbers come from reasoning and the scales above, not from real skips. Reading the log costs
+in proportion to the rows of the last 60 days, however long the log is: some 6 microseconds a row,
+as `play_events_started` doesn't hold the columns wanted. Timed on 50,000 made-up tracks
+(`manual_stations --make`, `--open`, in a release build) a station opened in 1.03 s with none of
+this. With 12,000 radio rows in those 60 days, 200 a day, it took 1.36 s, about 0.1 s of it the
+log and the rest all 32 passes. The seed is already playing by then.
 
 ### Radio stations
 

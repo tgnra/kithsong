@@ -648,8 +648,9 @@ static void test_skip_lowers(const char *scratch) {
 static void test_skip_teaches_nothing(const char *scratch) {
   mc_library *lib = skip_library(scratch, "test_radio_skip_nothing.d");
   if (!lib) return;
-  static mix_print before;
+  static mix_print before, near_before;
   mix_prints(lib, "seed", NOW_MS, &before);
+  mix_prints(lib, "nearseed", NOW_MS, &near_before);
 
   /* Another context, the seed's uid or not. */
   const mc_play_context others[] = {MC_PLAY_CONTEXT_UNKNOWN, MC_PLAY_CONTEXT_MANUAL, MC_PLAY_CONTEXT_ALBUM,
@@ -674,8 +675,11 @@ static void test_skip_teaches_nothing(const char *scratch) {
     logged(lib, "up0", ends[i], MC_PLAY_CONTEXT_RADIO, "seed", NOW_MS - 1000, 10000);
   CHECK(same_mixes(lib, "seed", NOW_MS, &before));
 
-  /* A station's seed skipped says nothing about what's built on it, there or on a near seed. */
+  /* A station's seed skipped says nothing about what's built on it, there or on a near seed,
+   * nor does this seed skipped on a near seed's station say anything here. */
   radio_skip(lib, "seed", "seed", NOW_MS - 1000);
+  CHECK(same_mixes(lib, "seed", NOW_MS, &before));
+  CHECK(same_mixes(lib, "nearseed", NOW_MS, &near_before));
   radio_skip(lib, "seed", "nearseed", NOW_MS - 1000);
   CHECK(same_mixes(lib, "seed", NOW_MS, &before));
 
@@ -708,6 +712,11 @@ static void test_skip_fades(const char *scratch) {
   CHECK(nearly <= untouched);
   CHECK(untouched - nearly < (untouched - fresh) / 4);
   CHECK(same_mixes(lib, "seed", late, &before));
+
+  /* What has faded has no say at all, not even against a skip that hasn't. */
+  radio_skip(lib, "up0", "seed", late + 30 * DAY_MS);
+  int alone = first_to(lib, "seed", late + 30 * DAY_MS, ups, SIDE);
+  CHECK(alone == fresh);
   mc_library_close(lib);
 }
 
@@ -729,6 +738,12 @@ static void test_skip_repeats(const char *scratch) {
   /* Those are a little fresher, but a pairing is already as strong as it gets. */
   CHECK(first_to(lib, "seed", NOW_MS, ups, SIDE) == counts[3]);
   CHECK(counts[3] > 0); /* still in the running */
+
+  /* However many skips reach a track, it goes down no further. */
+  const char *const rest[] = {"up1", "up2", "up3"};
+  for (int i = 0; i < 3; i++)
+    for (int k = 0; k < 3; k++) radio_skip(lib, rest[i], "seed", NOW_MS - 1000 - k);
+  CHECK(first_to(lib, "seed", NOW_MS, ups, SIDE) * 2 > counts[3]);
   mc_library_close(lib);
 
   /* Heard out after a skip: the skip is off. Before one, or got to by seeking: it's not. */
@@ -744,6 +759,14 @@ static void test_skip_repeats(const char *scratch) {
   logged(lib, "up0", MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_RADIO, "nearseed", NOW_MS - 700000, 200000);
   CHECK(!same_mixes(lib, "seed", NOW_MS, &none)); /* that pairing's own finish only */
   logged(lib, "up0", MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_RADIO, "seed", NOW_MS - 600000, 200000);
+  CHECK(same_mixes(lib, "seed", NOW_MS, &none));
+
+  /* A pairing holds no more than three, so three finishes clear it however many there were. */
+  for (int i = 0; i < 8; i++) radio_skip(lib, "up0", "seed", NOW_MS - 500000 + i);
+  for (int i = 0; i < 2; i++)
+    logged(lib, "up0", MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_RADIO, "seed", NOW_MS - 400000 + i, 200000);
+  CHECK(!same_mixes(lib, "seed", NOW_MS, &none));
+  logged(lib, "up0", MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_RADIO, "seed", NOW_MS - 300000, 200000);
   CHECK(same_mixes(lib, "seed", NOW_MS, &none));
   mc_library_close(lib);
 }

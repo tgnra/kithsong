@@ -35,8 +35,8 @@ enum { KEEP_NOTHING, KEEP_ARTISTS, KEEP_ARTISTS_AND_ALBUMS };
 #define LATELY_PENALTY 0.15 /* for a track played just now, fading to 0 over LATELY_MS */
 #define DRAW_SOFTNESS 0.05  /* how much worse a score can be and still be drawn often */
 
-/* What a skip says, for "What skips teach a station" in docs/schema.md, which has the reasoning.
- * A skip is early from the first of these up to the second. Before it, previous() goes back a
+/* What a skip says. "What skips teach a station" in docs/schema.md has the reasoning. A skip is
+ * early from the first of these up to the second. Before it, previous() goes back a
  * track rather than restarting this one (the player's RESTART_MS), and next() pressed a few times
  * running is on its way past: too little was heard to be a judgement. From the second on it's no
  * longer early, which is also where stations.c takes a play to have counted. The shortest
