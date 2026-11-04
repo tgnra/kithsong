@@ -66,6 +66,8 @@ BOOL playback_shuffle(void);
 /* Called when the media flyout's shuffle button asks for shuffle on or off, so main.c can
  * keep it in the settings; with none set, it's just playback_set_shuffle(). */
 void playback_on_shuffle_requested(void (*requested)(BOOL on));
+/* Plays the radio station that starts from seed_track_uid. */
+void playback_play_radio(const char *seed_track_uid);
 /* Pauses or resumes. Returns FALSE if nothing has been queued. */
 BOOL playback_toggle(void);
 void playback_next(void);

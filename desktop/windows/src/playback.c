@@ -270,6 +270,10 @@ void playback_clear(void) {
   if (s.changed) s.changed();
 }
 
+void playback_play_radio(const char *seed_track_uid) {
+  (void)seed_track_uid;
+}
+
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
                    const char *context_uid) {
   if (count <= 0 || start < -1 || start >= count) return;
