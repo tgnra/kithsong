@@ -99,11 +99,12 @@ internal fun itemOffsets(count: Int, heights: (Int) -> Int): IntArray {
 
 /**
  * [entries] made into places in the strip about [step] pixels of the list apart, by the items'
- * [offsets] (see [itemOffsets]). A run of letters closer together than that is one place, at
- * the first, through the last. Where the next entry is further away, as under a letter with a
- * lot of albums or a heading with no letters, a [FastScrollEntry.tick] goes in every [step] on
- * until it's less than half a step away. A heading always starts a place; a letter in another
- * section never joins one before it.
+ * [offsets] (see [itemOffsets]). A run of letters within two thirds of that is one place, at
+ * the first, through the last, so that letters a little under a step apart don't leave gaps of
+ * nearly two. Where the next entry is further away, as under a letter with a lot of albums or a
+ * heading with no letters, a [FastScrollEntry.tick] goes in every [step] on until it's less
+ * than a third of a step away. A heading always starts a place; a letter in another section
+ * never joins one before it.
  */
 internal fun groupEntries(entries: List<FastScrollEntry>, offsets: IntArray, step: Int): List<FastScrollEntry> {
     val groups = ArrayList<FastScrollEntry>()
@@ -118,17 +119,18 @@ internal fun groupEntries(entries: List<FastScrollEntry>, offsets: IntArray, ste
         var index = end.index
         var at = top(first) + step
         while (true) {
-            // The first item at or after [at], which is where a jump can land.
+            // The item [at] is in, which is where a jump can land, so that tall rows don't
+            // push the places further than a step apart; else the next one.
             val found = offsets.binarySearch(at, fromIndex = index + 1)
-            index = if (found >= 0) found else -found - 1
-            if (index >= offsets.lastIndex || until - offsets[index] < step / 2) break
+            index = if (found >= 0) found else (-found - 2).coerceAtLeast(index + 1)
+            if (index >= offsets.lastIndex || until - offsets[index] < step / 3) break
             groups += end.copy(index = index, through = null, tick = true)
             at = offsets[index] + step
         }
     }
     for (entry in entries) {
         val first = start
-        if (first == null || entry.heading || entry.section != first.section || top(entry) - top(first) >= step) {
+        if (first == null || entry.heading || entry.section != first.section || top(entry) - top(first) >= step * 2 / 3) {
             close(top(entry))
             start = entry
         }
