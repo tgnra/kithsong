@@ -18,10 +18,10 @@
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
-  <!-- 1809 (17763): the oldest Windows 10 still widely serviced, and well past what the
-       firewall extension (1607) needs. The app itself asks for Windows 10 (WINVER 0x0A00). -->
+  <!-- 1903 (18362): the oldest Windows the app starts on, past what the firewall extension
+       (1607) needs. Keep in step with MIN_WINDOWS_BUILD in desktop/windows/src/main.c. -->
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0"/>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0" MaxVersionTested="10.0.26100.0"/>
   </Dependencies>
 
   <Resources>

@@ -2320,6 +2320,20 @@ static void move_library(void) {
   move_library_start(g_app.wnd, g_app.settings, &host);
 }
 
+/* Windows 10 1903, the oldest Windows Kithsong runs on: the first to honour the manifest's
+ * UTF-8 code page. Keep in step with MinVersion in packaging/msix/AppxManifest.xml.in. */
+#define MIN_WINDOWS_BUILD 18362
+
+/* Before 1703 this never runs: the exe's imports stop it loading, with Windows' own error.
+ * RtlGetVersion, as GetVersionEx reports what the manifest declares rather than the truth. */
+static BOOL windows_supported(void) {
+  typedef LONG(WINAPI * rtl_get_version)(OSVERSIONINFOW *);
+  rtl_get_version get =
+    (rtl_get_version)(void (*)(void))GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
+  OSVERSIONINFOW v = {.dwOSVersionInfoSize = sizeof v};
+  return !get || get(&v) != 0 || v.dwBuildNumber >= MIN_WINDOWS_BUILD;
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   (void)prev;
   (void)cmd;
@@ -2328,6 +2342,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
                                             ICC_PROGRESS_CLASS | ICC_BAR_CLASSES /* tooltips */};
   InitCommonControlsEx(&icc);
   wstr_init(); /* before any thread looks up a string */
+  if (!windows_supported()) {
+    MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_TOO_OLD), mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONERROR);
+    return 1;
+  }
   int helper_code;
   if (firewall_helper_main(&helper_code)) return helper_code; /* the elevated --add-firewall-rule */
   app_args args;
