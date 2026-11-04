@@ -1,9 +1,9 @@
 /* The volume drop-down, under the toolbar's speaker button:
  *
- *                                   [spk]  _ [] X
- *              +-------------------------------+
- *              | [spk]  ==========O----------  |
- *              +-------------------------------+
+ *      ===O---------------  [shf] [spk]      _ [] X
+ *     +-------------------------------+
+ *     | [spk]  ==========O----------  |
+ *     +-------------------------------+
  *
  * A small popup window, drawn as the toolbar is: the speaker mutes and unmutes, and the
  * slider, Windows 11's as the seekbar is, sets the volume by dragging, the mouse wheel or
