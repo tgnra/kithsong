@@ -145,6 +145,23 @@ static const char *row_text(GtkWidget *row) {
   return gtk_editable_get_text(GTK_EDITABLE(row));
 }
 
+static gboolean grab_focus_later(gpointer data) {
+  if (gtk_widget_get_root(data)) gtk_widget_grab_focus(data);
+  g_object_unref(data);
+  return G_SOURCE_REMOVE;
+}
+
+/* Into widget, once the dialog is up: the menu it was opened from gives the focus back as it
+ * closes, to the window underneath. */
+static void focus_later(GtkWidget *widget) {
+  g_idle_add_full(G_PRIORITY_LOW, grab_focus_later, g_object_ref(widget), NULL);
+}
+
+/* Into row's text, not just onto the row, where keys would press the dialog's mnemonics. */
+static void focus_row(GtkWidget *row) {
+  focus_later(GTK_WIDGET(gtk_editable_get_delegate(GTK_EDITABLE(row))));
+}
+
 /* What the dialog says under the Search button, or for NULL nothing. spin: something is going on. */
 static void search_say(edit_search *s, const char *text, gboolean error, gboolean spin) {
   gtk_label_set_text(GTK_LABEL(s->message), text ? text : "");
@@ -156,6 +173,8 @@ static void search_say(edit_search *s, const char *text, gboolean error, gboolea
 }
 
 static void search_update(edit_search *s) {
+  /* The list says its selected row has gone as the dialog takes it down. */
+  if (s->closed || gtk_widget_in_destruction(s->dialog)) return;
   gboolean busy = s->job != NULL;
   /* The core needs a title to search for. */
   gtk_widget_set_sensitive(s->go, !busy && *row_text(s->title));
@@ -425,8 +444,8 @@ static void search_present(edit_form *f) {
   f->search = s->dialog;
   search_say(s, NULL, FALSE, FALSE);
   search_update(s);
-  adw_dialog_set_focus(ADW_DIALOG(s->dialog), s->title);
   adw_dialog_present(ADW_DIALOG(s->dialog), f->dialog);
+  focus_row(s->title);
   /* What the button says is what the user came for, so it's under way as the dialog opens,
    * if there's a title to search for. */
   search_start(s);
@@ -810,17 +829,17 @@ void edit_dialog_present(app *a, edit_kind kind, const char *uid) {
   adw_dialog_set_child(ADW_DIALOG(f->dialog), toolbar);
   g_signal_connect(f->dialog, "closed", G_CALLBACK(on_closed), f);
   form_update(f);
+  current = f;
+  adw_dialog_present(ADW_DIALOG(f->dialog), GTK_WIDGET(a->win));
   /* A failure leaves an empty form with only Cancel to press, and says why. */
   if (f->loaded) {
-    adw_dialog_set_focus(ADW_DIALOG(f->dialog), f->fields[kind == EDIT_ARTIST ? F_NAME : F_TITLE]);
+    focus_row(f->fields[kind == EDIT_ARTIST ? F_NAME : F_TITLE]);
   } else {
     char *failed = st == MC_ERR_NOT_FOUND ? NULL : mc_format_alloc(mc_str(MC_STR_EDIT_LOAD_FAILED), MC_S(mc_status_str(st)));
     form_say(f, failed ? failed : mc_str(MC_STR_EDIT_GONE));
     mc_free(failed);
-    adw_dialog_set_focus(ADW_DIALOG(f->dialog), f->cancel);
+    focus_later(f->cancel);
   }
-  current = f;
-  adw_dialog_present(ADW_DIALOG(f->dialog), GTK_WIDGET(a->win));
 }
 
 gboolean edit_dialog_saving(void) {
