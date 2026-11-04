@@ -256,6 +256,7 @@ fun MainScreen(
     onSearch: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
+    onStats: () -> Unit,
     importPickers: ImportPickers,
     importRunning: Boolean,
     banner: (@Composable (Modifier) -> Unit)?,
@@ -333,7 +334,7 @@ fun MainScreen(
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {
-                    MainItem.Header -> Header(onSearch, onSync, onSettings, importPickers, importRunning, syncDot)
+                    MainItem.Header -> Header(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
                     MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onSync, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(
@@ -409,6 +410,7 @@ private fun Header(
     onSearch: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
+    onStats: () -> Unit,
     importPickers: ImportPickers,
     importRunning: Boolean,
     syncDot: Boolean,
@@ -429,7 +431,7 @@ private fun Header(
                 modifier = Modifier.offset(x = (-4).dp).semantics { heading() },
             )
         }
-        HeaderMenu(onSearch, onSync, onSettings, importPickers, importRunning, syncDot)
+        HeaderMenu(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
     }
 }
 
@@ -444,6 +446,7 @@ private fun HeaderMenu(
     onSearch: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
+    onStats: () -> Unit,
     importPickers: ImportPickers,
     importRunning: Boolean,
     syncDot: Boolean,
@@ -521,6 +524,11 @@ private fun HeaderMenu(
                         BadgedBox(badge = { if (syncDot) Badge() }) { Icon(Icons.Sync, contentDescription = null) }
                     },
                     onClick = pick(onSync),
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.stats_title)) },
+                    leadingIcon = { Icon(Icons.BarChart, contentDescription = null) },
+                    onClick = pick(onStats),
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.settings)) },

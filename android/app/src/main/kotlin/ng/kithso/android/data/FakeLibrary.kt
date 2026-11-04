@@ -3,6 +3,8 @@ package ng.kithso.android.data
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import ng.kithso.core.CorePlayer
+import ng.kithso.core.LibraryStats
+import ng.kithso.core.LibraryTally
 
 /**
  * A made-up library, for previews and for trying the UI without music on the device.
@@ -71,6 +73,17 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
     override suspend fun trackArtists(trackUid: String): List<Artist> = emptyList()
 
     override suspend fun reshuffle(ref: CollectionRef) = Unit
+
+    override suspend fun stats(): LibraryStats {
+        val library = state.value
+        val tally = LibraryTally(
+            tracks = library.albums.size * 10L,
+            albums = library.albums.size.toLong(),
+            artists = library.artists.size.toLong(),
+            durationMs = library.albums.size * 2_400_000L,
+        )
+        return LibraryStats(all = tally, here = tally, playlists = library.playlists.size.toLong())
+    }
 
     private fun groupAlbums(lib: Library, group: AlbumGroup): List<Album> =
         lib.albums.filterIndexed { i, _ -> (i + (group.uid.hashCode() and 0x7fffffff)) % 5 == 0 }.take(group.albumCount)

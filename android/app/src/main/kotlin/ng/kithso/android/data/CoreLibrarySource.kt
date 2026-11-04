@@ -12,6 +12,7 @@ import ng.kithso.core.CoreSync
 import ng.kithso.core.DeleteKind
 import ng.kithso.core.DeviceKind
 import ng.kithso.core.ItemKind
+import ng.kithso.core.LibraryStats
 import ng.kithso.core.MusicCoreException
 import ng.kithso.core.NativeCore
 import ng.kithso.core.SearchHit
@@ -50,6 +51,7 @@ import ng.kithso.core.reshuffle
 import ng.kithso.core.search
 import ng.kithso.core.searchPrepare
 import ng.kithso.core.smartAlbums
+import ng.kithso.core.stats
 import ng.kithso.core.smartArt
 import ng.kithso.core.countSmart
 import ng.kithso.core.createSmart
@@ -777,6 +779,15 @@ class CoreLibrarySource(
         }
         // A smart list's picture is made from what it holds, which may have changed.
         refresh().join()
+    }
+
+    override suspend fun stats(): LibraryStats = withContext(core) {
+        try {
+            open()?.stats() ?: LibraryStats()
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't read the library's stats", e)
+            LibraryStats()
+        }
     }
 
     // On [core]. Null if the library can't be opened.

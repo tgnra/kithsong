@@ -8,6 +8,30 @@
 
 #include "jni_bridge.h"
 
+/* mc_library_read_stats() as a long[], in the order CoreLibrary.stats() reads it: a long[]
+ * rather than an object, as there are too many numbers for a constructor signature to be
+ * worth getting right at run time. */
+JNIEXPORT jlongArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeStats(JNIEnv *env, jclass cls, jlong handle) {
+  (void)cls;
+  mc_library_stats s;
+  mc_status st = mc_library_read_stats(jni_lib_of(handle), &s);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  const jlong values[] = {
+    s.all.tracks, s.all.albums, s.all.singles, s.all.artists, s.all.genres, s.all.duration_ms,
+    s.here.tracks, s.here.albums, s.here.singles, s.here.artists, s.here.genres, s.here.duration_ms,
+    s.files, s.size_bytes,
+    s.playlists, s.smart_playlists, s.album_groups, s.smart_album_groups,
+    s.plays, s.tracks_played, s.listened_ms,
+  };
+  const jsize count = (jsize)(sizeof values / sizeof *values);
+  jlongArray out = (*env)->NewLongArray(env, count);
+  if (out) (*env)->SetLongArrayRegion(env, out, 0, count, values);
+  return out;
+}
+
 /* The albums of an artist (kind 0), an album group (1) or a smart album group (2). */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListAlbums(JNIEnv *env, jclass cls,
                                                                               jlong handle, jint kind,

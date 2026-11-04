@@ -248,6 +248,7 @@ fun App(
                 onSearch = { nav = nav.push(Page.Search) },
                 onSync = { nav = nav.push(Page.Sync) },
                 onSettings = { nav = nav.push(Page.Settings) },
+                onStats = { nav = nav.push(Page.Stats) },
                 importPickers = importPickers,
                 importRunning = importProgress?.phase?.isOver == false,
                 // How an import is going, the merge after pairing by merging libraries, and
@@ -298,6 +299,7 @@ fun App(
                                     ScrollTest.start()
                                 },
                             )
+                            Page.Stats -> StatsScreen(source, bottomPadding, onBack = dismiss)
                             Page.Licenses -> LicensesScreen(bottomPadding, onOpen = { nav = nav.push(Page.License(it)) }, onBack = dismiss)
                             is Page.License -> LicenseTextScreen(page.asset, bottomPadding, onBack = dismiss)
                             Page.Sync -> SyncScreen(

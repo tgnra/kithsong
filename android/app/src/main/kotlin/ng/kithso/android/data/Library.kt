@@ -3,6 +3,7 @@ package ng.kithso.android.data
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.flow.StateFlow
 import ng.kithso.core.CorePlayer
+import ng.kithso.core.LibraryStats
 
 /**
  * Album art to load: [uid] names the album (or artist or playlist) whose cover it is, and
@@ -229,6 +230,9 @@ interface LibrarySource {
 
     /** Adds a play that has ended, counted or not, to the library's play log. */
     fun logPlay(event: CorePlayer.PlayEvent)
+
+    /** Numbers about the library; all of them 0 if it can't be read. */
+    suspend fun stats(): LibraryStats
 }
 
 /**
