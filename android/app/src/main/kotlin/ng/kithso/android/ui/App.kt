@@ -357,10 +357,14 @@ fun App(
                 }
             }
             if (track != null) ArtTheme(track.art) {
+                // The track's menu, for Go to album and artist and Delete from library; it isn't
+                // from a playlist here.
+                val trackMenu = { actions.trackMenu(track, removable = false) }
                 MiniPlayer(
                     playback,
                     track,
                     onOpen = { nav = nav.push(Page.Player) },
+                    onMenu = trackMenu,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .windowInsetsPadding(
@@ -389,9 +393,7 @@ fun App(
                                 onAddToPlaylist = if (actions.editor == null) null else {
                                     { actions.addToPlaylist(Addition.Tracks(listOf(track.uid))) }
                                 },
-                                // The track's menu, for Go to album and artist and Delete from library; it
-                                // isn't from a playlist here.
-                                onMenu = { actions.trackMenu(track, removable = false) },
+                                onMenu = trackMenu,
                             )
                         }
                     }

@@ -1,7 +1,8 @@
 package ng.kithso.android.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,15 +32,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
@@ -61,11 +68,11 @@ private fun Track.byline() = trackByline(artist, album)
 
 /**
  * The floating player above the content: art, title and byline, play/pause, and a seekbar
- * beneath. Tapping it calls [onOpen]; swiping it left or right skips a track (see
- * [TrackSwipeState]), which accessibility services get as actions.
+ * beneath. Tapping it calls [onOpen] and a long press [onMenu]; swiping it left or right skips
+ * a track (see [TrackSwipeState]), which accessibility services get as actions.
  */
 @Composable
-fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, onMenu: () -> Unit, modifier: Modifier = Modifier) {
     val swipe = rememberTrackSwipe(playback)
     val nextLabel = stringResource(R.string.next_track)
     val previousLabel = stringResource(R.string.previous_track)
@@ -78,6 +85,7 @@ fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, modifier: M
     ) {
         Column(
             Modifier
+                .verticalDragEndsPress()
                 .trackSwipe(swipe)
                 .semantics {
                     customActions = listOfNotNull(
@@ -85,7 +93,12 @@ fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, modifier: M
                         CustomAccessibilityAction(previousLabel) { playback.skipToPrevious(); true }.takeIf { playback.hasPrevious },
                     )
                 }
-                .clickable(onClickLabel = stringResource(R.string.open_player), onClick = onOpen)
+                .combinedClickable(
+                    onClickLabel = stringResource(R.string.open_player),
+                    onLongClickLabel = stringResource(R.string.track_menu),
+                    onLongClick = onMenu,
+                    onClick = onOpen,
+                )
                 .padding(start = 10.dp, end = 4.dp, top = 10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -144,7 +157,7 @@ private fun PlayPause(playback: Playback) {
  * the shuffle toggle at the ends. [onCollapse] slides it away; it is also dismissed by swiping
  * down (see [DismissibleScreen]). Swiping left or right skips a track, moving the art and title
  * (see [TrackSwipeState]). [onMenu], if given, opens the track's menu from a button across from
- * the collapse button.
+ * the collapse button, and from a long press on the art.
  */
 @Composable
 fun FullPlayer(
@@ -172,7 +185,7 @@ fun FullPlayer(
                 }
                 if (wide) {
                     Row(Modifier.fillMaxSize().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        PlayerArt(swipe, Modifier.fillMaxHeight())
+                        PlayerArt(swipe, onMenu, Modifier.fillMaxHeight())
                         Spacer(Modifier.size(32.dp))
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
                             PlayerTitle(swipe)
@@ -181,7 +194,7 @@ fun FullPlayer(
                     }
                 } else {
                     TallPlayerLayout(
-                        art = { PlayerArt(swipe, Modifier) },
+                        art = { PlayerArt(swipe, onMenu, Modifier) },
                         title = { PlayerTitle(swipe) },
                         controls = { PlayerControls(playback, track, onAddToPlaylist) },
                         modifier = Modifier.weight(1f),
@@ -250,9 +263,27 @@ private val ControlsGap = 16.dp
 private val MaxGapAboveArt = 96.dp
 private val MaxGapAboveSeekbar = 64.dp
 
+/**
+ * [onMenu], if given, is a long press on the art, with the buzz a long press has elsewhere.
+ * It leaves taps alone, as there's nothing to tap, and a drag is the player's: its swipes take
+ * the touch away from a press, and a press that's held takes the touch for itself.
+ */
 @Composable
-private fun PlayerArt(swipe: TrackSwipeState, modifier: Modifier) {
-    TrackSlides(swipe, modifier.widthIn(max = MaxArtSize).aspectRatio(1f)) { shown ->
+private fun PlayerArt(swipe: TrackSwipeState, onMenu: (() -> Unit)?, modifier: Modifier) {
+    val menu by rememberUpdatedState(onMenu)
+    val haptics = LocalHapticFeedback.current
+    val menuLabel = stringResource(R.string.track_menu)
+    val longPress = if (onMenu == null) Modifier else Modifier
+        .semantics(mergeDescendants = true) { onLongClick(menuLabel) { menu?.invoke(); true } }
+        .pointerInput(Unit) {
+            detectTapGestures(
+                onLongPress = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    menu?.invoke()
+                },
+            )
+        }
+    TrackSlides(swipe, modifier.widthIn(max = MaxArtSize).aspectRatio(1f).then(longPress)) { shown ->
         TrackArt(
             shown,
             contentDescription = shown?.let { stringResource(R.string.cover_of, it.album.ifEmpty { it.title }) },
