@@ -1,9 +1,14 @@
 package ng.kithso.android.ui
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +35,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -67,6 +73,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.pluralStringResource
@@ -74,6 +81,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -83,11 +91,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
+import ng.kithso.android.data.ArtRef
 import ng.kithso.android.data.TagEditor
 import ng.kithso.android.data.TagResult
 import ng.kithso.android.data.TagTarget
 import ng.kithso.android.data.TagValues
 import ng.kithso.android.playback.Playback
+import ng.kithso.android.ui.art.AlbumArt
 import ng.kithso.core.AlbumFlags
 import ng.kithso.core.AlbumTags
 import ng.kithso.core.ArtistTags
@@ -95,6 +105,7 @@ import ng.kithso.core.CoreEdit
 import ng.kithso.core.ReleaseInfo
 import ng.kithso.core.TrackTags
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.roundToInt
 
 /** The form's text boxes, by what they hold. */
@@ -104,10 +115,13 @@ private const val TAG = "kithsong"
 private const val YEAR_DIGITS = 4
 private const val NUMBER_DIGITS = 3
 
+/** What the picker offers: all the core takes for a cover. */
+private val CoverTypes = arrayOf("image/jpeg", "image/png")
+
 /**
- * The tag editor's form: its text as typed, an album's flags, and [saved], what the library has,
- * null until it's been read (or if it couldn't be). What's typed is kept through a rotation, so
- * [restored] is the text and flags [saver] kept, which win over what's read in.
+ * The tag editor's form: its text as typed, an album's flags or a single's mix, a new cover, and
+ * [saved], what the library has, null until it's been read (or if it couldn't be). What's typed
+ * is kept through a rotation, so [restored] is what [kept] said, which wins over what's read in.
  */
 @Stable
 internal class TagForm(val target: TagTarget, private val restored: List<String>? = null) {
@@ -116,6 +130,12 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
     var mix by mutableStateOf(false)
     var saved by mutableStateOf<TagValues?>(null)
     var saving by mutableStateOf(false)
+
+    /** A cover chosen for Save to keep, shown in place of the album's own. */
+    var newArt by mutableStateOf<ArtRef?>(null)
+
+    /** A cover picked is being read and checked. */
+    var reading by mutableStateOf(false)
 
     /** What the form has to say, and if [failed], it's that something went wrong. */
     var message by mutableStateOf<String?>(null)
@@ -129,6 +149,10 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
             TagField.entries.forEachIndexed { i, field -> text[field] = restored[i] }
             noScrobble = restored[TagField.entries.size].toBoolean()
             mix = restored[TagField.entries.size + 1].toBoolean()
+            // Gone if the cache was cleared meanwhile, and then it's as if it was never chosen.
+            newArt = File(restored[TagField.entries.size + 2]).takeIf(File::isFile)?.let {
+                ArtRef(target.uid, "", it.path, it.lastModified())
+            }
         }
     }
 
@@ -139,7 +163,7 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
     }
 
     /** Whether there's something to edit and it can be edited now. */
-    val editable: Boolean get() = saved != null && !saving
+    val editable: Boolean get() = saved != null && !saving && !reading
 
     /** The library's [values], read in: what the form starts from, unless it was [restored]. */
     fun start(values: TagValues) {
@@ -162,6 +186,7 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
                 this[TagField.DiscNo] = numberText(values.tags.discNo)
                 this[TagField.Year] = numberText(values.tags.year)
                 this[TagField.Genre] = values.tags.genre
+                mix = values.mix
             }
         }
     }
@@ -176,21 +201,23 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
     }
 
     /** What the form says, as the library would have it: 007 is 7, and nothing is 0, unknown. */
-    fun values(): TagValues? = when (saved) {
+    fun values(): TagValues? = when (val was = saved) {
         null -> null
-        is TagValues.Album -> TagValues.Album(
-            AlbumTags(
+        is TagValues.Album -> was.copy(
+            tags = AlbumTags(
                 this[TagField.Title], this[TagField.Artist], number(TagField.Year), number(TagField.OriginalYear),
                 this[TagField.Release],
             ),
-            AlbumFlags(noScrobble, mix),
+            flags = AlbumFlags(noScrobble, mix),
+            newArt = newArt,
         )
         is TagValues.Artist -> TagValues.Artist(ArtistTags(this[TagField.Name], this[TagField.SortName]))
-        is TagValues.Track -> TagValues.Track(
-            TrackTags(
+        is TagValues.Track -> was.copy(
+            tags = TrackTags(
                 this[TagField.Title], this[TagField.Artist], number(TagField.TrackNo), number(TagField.DiscNo),
                 number(TagField.Year), this[TagField.Genre],
             ),
+            mix = mix,
         )
     }
 
@@ -201,13 +228,14 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
 
     private fun numberText(n: Int) = if (n != 0) n.toString() else ""
 
+    /** What a rotation keeps, for [restored]: a new cover by its file, which is what lasts. */
+    fun kept(): List<String> =
+        TagField.entries.map { this[it] } + noScrobble.toString() + mix.toString() + newArt?.file.orEmpty()
+
     companion object {
-        /** Keeps the text and flags once they've been read in; what the library has is read again. */
+        /** Keeps what's in the form once it's been read in; what the library has is read again. */
         fun saver(target: TagTarget): Saver<TagForm, Any> = listSaver(
-            save = { form ->
-                if (form.saved == null) emptyList()
-                else TagField.entries.map { form[it] } + form.noScrobble.toString() + form.mix.toString()
-            },
+            save = { form -> if (form.saved == null) emptyList() else form.kept() },
             restore = { TagForm(target, it.takeIf(List<String>::isNotEmpty)) },
         )
     }
@@ -216,8 +244,13 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
 /**
  * The tag editor, ported from Windows' (edit_dialog.c), over everything as a layer of its own: a
  * page rather than a dialog, with Cancel, the title and Save along the top, for an album its
- * title, artist, years, MusicBrainz release and the two options, for an artist its name and sort
- * name, and for a track its title, artist, numbers, year and genre. Nothing changes until Save.
+ * cover, title, artist, years, MusicBrainz release and the two options, for an artist its name
+ * and sort name, and for a track its title, artist, numbers, year and genre, and a single's
+ * Continuous mix. Nothing changes until Save.
+ *
+ * Change… opens the system's picker. What's picked is read and checked off the main thread, and
+ * shows at once ([TagEditor.takeCover]); it counts as a change, Save keeps it after the tags, and
+ * leaving drops it. It lasts through a rotation, as a file, as the text does.
  *
  * Search MusicBrainz… opens a page over this one ([ReleaseSearchPage]), where using a release
  * fills in the form, MusicBrainz release included. Save calls only what changed, off the main
@@ -230,7 +263,8 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
  * changing under it (the Stop playing and retry that follows is then Windows' own). But a queue
  * knows its tracks by path, and an edit can move them, so once saved [playback]'s queue is
  * given their new paths and titles, which restarts the track from where it was
- * ([Playback.updateQueue]); one that isn't any different is left alone. [onClose] closes the editor.
+ * ([Playback.updateQueue]), or if only what's shown of them changed, a cover say, goes on
+ * undisturbed; one that isn't any different is left alone. [onClose] closes the editor.
  */
 @Composable
 internal fun TagEditorScreen(editor: TagEditor, playback: Playback, target: TagTarget, onClose: () -> Unit) {
@@ -260,7 +294,10 @@ internal fun TagEditorScreen(editor: TagEditor, playback: Playback, target: TagT
     Box(Modifier.fillMaxSize()) {
         DismissibleScreen(
             DismissDirection.Right,
-            onDismissed = onClose,
+            onDismissed = {
+                form.newArt?.let(editor::dropCover) // kept by now, if it was saved
+                onClose()
+            },
             modifier = if (searching) Modifier.clearAndSetSemantics {} else Modifier,
             backEnabled = !searching && !form.saving && !form.changed,
             // A stray swipe would lose the edit: only back or Cancel close it.
@@ -383,8 +420,8 @@ private fun TagPage(
                 form.failed = true
                 form.message = if (result.status == CoreEdit.ERR_NOT_FOUND) context.getString(R.string.edit_gone)
                 else context.getString(R.string.edit_save_failed, CoreEdit.statusText(result.status))
-                // Nothing changed, and it may yet be the track playing.
-                form.inUse = result.status == CoreEdit.ERR_IN_USE && playback.queueUids.isNotEmpty()
+                // Nothing changed, and it may yet be the track playing; a cover isn't played.
+                form.inUse = result.status == CoreEdit.ERR_IN_USE && !result.artTried && playback.queueUids.isNotEmpty()
             }
         }
     }
@@ -435,7 +472,7 @@ private fun TagPage(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 when (form.target.kind) {
-                    TagTarget.Kind.Album -> AlbumFields(form, save, onSearch)
+                    TagTarget.Kind.Album -> AlbumFields(editor, form, save, onSearch)
                     TagTarget.Kind.Artist -> ArtistFields(form, save)
                     TagTarget.Kind.Track -> TrackFields(form, save)
                 }
@@ -445,9 +482,28 @@ private fun TagPage(
 }
 
 @Composable
-private fun AlbumFields(form: TagForm, onDone: () -> Unit, onSearch: () -> Unit) {
-    TagTextField(form, TagField.Title, stringResource(R.string.title))
-    TagTextField(form, TagField.Artist, stringResource(R.string.edit_album_artist))
+private fun AlbumFields(editor: TagEditor, form: TagForm, onDone: () -> Unit, onSearch: () -> Unit) {
+    // The cover and its button, and beside them the boxes they're as tall as, as on Windows.
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        AlbumCover(editor, form)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            TagTextField(form, TagField.Title, stringResource(R.string.title))
+            TagTextField(form, TagField.Artist, stringResource(R.string.edit_album_artist))
+        }
+    }
+    val note = when {
+        (form.saved as? TagValues.Album)?.canSetArt == false -> R.string.edit_art_no_files
+        form.newArt != null -> R.string.edit_art_new
+        else -> null
+    }
+    note?.let {
+        Text(
+            stringResource(it),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         TagTextField(form, TagField.Year, stringResource(R.string.col_year), Modifier.weight(1f), digits = YEAR_DIGITS)
         TagTextField(
@@ -479,6 +535,77 @@ private fun AlbumFields(form: TagForm, onDone: () -> Unit, onSearch: () -> Unit)
     }
 }
 
+/**
+ * The album's cover, or the new one, or a place for one, with Change… under it. Tapping the cover
+ * does what Change… does. What's picked is a content URI, so it's read as bytes, not a path.
+ */
+@Composable
+private fun AlbumCover(editor: TagEditor, form: TagForm) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        form.reading = true
+        form.failed = false
+        form.message = context.getString(R.string.edit_art_reading)
+        scope.launch {
+            val art = editor.takeCover(form.target.uid) { context.contentResolver.openInputStream(uri) }
+            form.reading = false
+            if (art != null) {
+                form.newArt = art
+                form.message = null
+            } else {
+                form.failed = true
+                form.message = context.getString(R.string.edit_art_bad)
+            }
+        }
+    }
+    val pick: () -> Unit = {
+        try {
+            picker.launch(CoverTypes)
+        } catch (e: ActivityNotFoundException) {
+            Log.e(TAG, "No picker for a cover", e)
+        }
+    }
+    val album = form.saved as? TagValues.Album
+    val enabled = form.editable && album?.canSetArt == true
+    val art = form.newArt ?: album?.art
+    val name = stringResource(
+        when {
+            form.newArt != null -> R.string.edit_art_new_name
+            art != null -> R.string.edit_art_cover
+            else -> R.string.edit_art_none_name
+        },
+    )
+    val shape = RoundedCornerShape(12.dp)
+    val tap = Modifier.clickable(enabled = enabled, onClickLabel = stringResource(R.string.edit_art_change), onClick = pick)
+    Column(Modifier.width(CoverSize), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (art != null) {
+            AlbumArt(art, contentDescription = name, shape = shape, modifier = Modifier.size(CoverSize).clip(shape).then(tap))
+        } else {
+            Box(
+                Modifier
+                    .size(CoverSize)
+                    .clip(shape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .then(tap)
+                    .semantics { contentDescription = name },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    stringResource(R.string.edit_art_none),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clearAndSetSemantics {},
+                )
+            }
+        }
+        OutlinedButton(onClick = pick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.edit_art_change), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
 @Composable
 private fun ArtistFields(form: TagForm, onDone: () -> Unit) {
     TagTextField(form, TagField.Name, stringResource(R.string.name))
@@ -497,6 +624,13 @@ private fun TrackFields(form: TagForm, onDone: () -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         TagTextField(form, TagField.Year, stringResource(R.string.col_year), Modifier.weight(1f), digits = YEAR_DIGITS)
         TagTextField(form, TagField.Genre, stringResource(R.string.edit_genre), Modifier.weight(1f), onDone = onDone)
+    }
+    if ((form.saved as? TagValues.Track)?.canSetMix == true) {
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+            TagOption(stringResource(R.string.edit_mix), stringResource(R.string.edit_mix_track_text), form.mix, form.editable) {
+                form.mix = it
+            }
+        }
     }
 }
 
@@ -711,3 +845,6 @@ private fun ReleaseRow(release: ReleaseInfo, selected: Boolean, enabled: Boolean
 
 /** The form's width at most, on a tablet or in landscape. */
 private val MaxFormWidth = 640.dp
+
+/** An album's cover in the form: two boxes high, less the button under it. */
+private val CoverSize = 112.dp

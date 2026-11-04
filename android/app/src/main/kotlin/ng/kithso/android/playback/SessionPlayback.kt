@@ -16,6 +16,7 @@ import androidx.media3.common.util.Util
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import ng.kithso.android.data.Track
+import ng.kithso.playback.path
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -125,7 +126,10 @@ class SessionPlayback(context: Context, private val scope: CoroutineScope) : Pla
 
     override fun updateQueue(tracks: List<Track>) = withController {
         if (tracks.size == it.mediaItemCount) {
-            it.setMediaItems(tracks.map(Track::toMediaItem), it.currentMediaItemIndex, it.currentPosition)
+            val items = tracks.map(Track::toMediaItem)
+            // The same files with another cover or title: nothing for the player to start again.
+            if (items.indices.all { i -> items[i].path == it.getMediaItemAt(i).path }) it.replaceMediaItems(0, items.size, items)
+            else it.setMediaItems(items, it.currentMediaItemIndex, it.currentPosition)
         }
     }
 

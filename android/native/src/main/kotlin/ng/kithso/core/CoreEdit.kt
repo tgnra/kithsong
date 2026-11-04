@@ -1,7 +1,8 @@
 package ng.kithso.core
 
-// Editing an album's, artist's or track's tags and an album's flags on an open CoreLibrary, and
-// matching an album to another MusicBrainz release (musiccore/edit.h), bound in jni_edit.c.
+// Editing an album's, artist's or track's tags, an album's flags and cover and a single's mix on
+// an open CoreLibrary, and matching an album to another MusicBrainz release (musiccore/edit.h),
+// bound in jni_edit.c.
 // The rows are what's edited and the files follow, so a set can rewrite and move files, and a
 // search or a new release waits for MusicBrainz: keep them all off the main thread. Each throws
 // MusicCoreException; the ERR_ statuses below are the ones worth telling apart. "" is no text
@@ -26,6 +27,9 @@ data class TrackTags(
 /** mc_album_flags: what an album's tags can't say. */
 data class AlbumFlags(val noScrobble: Boolean, val mix: Boolean)
 
+/** mc_track_mix: a single's flag, which only a track that [canSet] has; a longer album's is the album's. */
+data class TrackMix(val canSet: Boolean, val mix: Boolean)
+
 /** mc_release_info: a MusicBrainz release, and in [score] how well it fits the album, 0 to 1. */
 data class ReleaseInfo(
     val mbAlbumId: String,
@@ -40,6 +44,9 @@ data class ReleaseInfo(
 )
 
 object CoreEdit {
+    /** MC_ERR_IO: a file couldn't be read or written. Nothing has changed. */
+    const val ERR_IO = -4
+
     /** MC_ERR_NET: MusicBrainz can't be reached. */
     const val ERR_NET = -6
 
@@ -49,8 +56,14 @@ object CoreEdit {
     /** MC_ERR_IN_USE: a file is open, or kept changing. Nothing has changed. */
     const val ERR_IN_USE = -13
 
+    /** MC_ALBUM_ART_MAX_BYTES: no image bigger than this can be a cover. */
+    const val ALBUM_ART_MAX_BYTES = 16 * 1024 * 1024
+
     /** A status in words (mc_status_str), in the core's language. */
     fun statusText(status: Int): String = EditNatives.nativeStatusText(status)
+
+    /** Throws if [image] can't be a cover. It's decoded, so a big one takes a moment: not on the main thread. */
+    fun checkAlbumArt(image: ByteArray) = EditNatives.nativeCheckAlbumArt(image)
 }
 
 fun CoreLibrary.albumTags(uid: String): AlbumTags = EditNatives.nativeAlbumTags(handle, uid)
@@ -78,6 +91,18 @@ fun CoreLibrary.albumFlags(uid: String): AlbumFlags =
 fun CoreLibrary.setAlbumFlags(uid: String, flags: AlbumFlags) =
     EditNatives.nativeSetAlbumFlags(handle, uid, flags.noScrobble, flags.mix)
 
+fun CoreLibrary.trackMix(uid: String): TrackMix =
+    EditNatives.nativeTrackMix(handle, uid).let { TrackMix(it[0] != 0, it[1] != 0) }
+
+/** Makes a track that [TrackMix.canSet] a mix or not; one with no album is given one of its title. */
+fun CoreLibrary.setTrackMix(uid: String, mix: Boolean) = EditNatives.nativeSetTrackMix(handle, uid, mix)
+
+/** The file of album [uid]'s cover here, null for none. Throws [CoreEdit.ERR_NOT_FOUND] if the album has no file here. */
+fun CoreLibrary.albumArt(uid: String): String? = EditNatives.nativeAlbumArt(handle, uid)
+
+/** Makes [image] album [uid]'s cover. After [setAlbumTags], which can move the album's folder. */
+fun CoreLibrary.setAlbumArt(uid: String, image: ByteArray) = EditNatives.nativeSetAlbumArt(handle, uid, image)
+
 /** The releases for [artist] and [title], best fit for album [uid]'s tracks first; about 6 s. */
 fun CoreLibrary.searchReleases(uid: String, artist: String, title: String): List<ReleaseInfo> =
     EditNatives.nativeReleaseSearch(handle, uid, artist.encodeToByteArray(), title.encodeToByteArray()).toList()
@@ -102,6 +127,11 @@ internal object EditNatives {
     )
     @JvmStatic external fun nativeAlbumFlags(handle: Long, uid: String): IntArray
     @JvmStatic external fun nativeSetAlbumFlags(handle: Long, uid: String, noScrobble: Boolean, mix: Boolean)
+    @JvmStatic external fun nativeTrackMix(handle: Long, uid: String): IntArray
+    @JvmStatic external fun nativeSetTrackMix(handle: Long, uid: String, mix: Boolean)
+    @JvmStatic external fun nativeAlbumArt(handle: Long, uid: String): String?
+    @JvmStatic external fun nativeCheckAlbumArt(image: ByteArray)
+    @JvmStatic external fun nativeSetAlbumArt(handle: Long, uid: String, image: ByteArray)
     @JvmStatic external fun nativeReleaseSearch(handle: Long, uid: String, artist: ByteArray, title: ByteArray): Array<ReleaseInfo>
     @JvmStatic external fun nativeReleaseTags(handle: Long, uid: String, mbAlbumId: String): AlbumTags
     @JvmStatic external fun nativeStatusText(status: Int): String
