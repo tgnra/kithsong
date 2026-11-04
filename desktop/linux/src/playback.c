@@ -4,6 +4,7 @@
 
 #include "artist_view.h"
 #include "mpris.h"
+#include "musiccore/radio.h"
 #include "now_playing.h"
 #include "track_list.h"
 #include "volume_button.h"
@@ -37,7 +38,7 @@ static struct {
   /* What's shown, to tell what changed. */
   int index;
   mc_player_state state;
-  gboolean shown_shuffle;
+  gboolean has_next;
 } s;
 
 static void free_items(void) {
@@ -90,11 +91,44 @@ void playback_art_changed(mc_library *lib, const char *album_uid) {
 
 static gboolean on_tick(gpointer data);
 
+/* Items for what a station has added to the queue. A track the library doesn't have any more
+ * still gets one, as indexes have to stay in step with the player's; it won't open anyway. */
+static void add_new_items(void) {
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  if (st.count <= s.count) return;
+  s.items = g_renew(item, s.items, (gsize)st.count);
+  for (; s.count < st.count; s.count++) {
+    item *it = &s.items[s.count];
+    memset(it, 0, sizeof *it);
+    mc_track_list *list = NULL;
+    if (mc_player_queue_uid(s.player, s.count, it->uid) == MC_OK && s.lib &&
+        mc_library_get_track(s.lib, it->uid, &list) == MC_OK) {
+      const mc_track_info *t = &list->items[0];
+      it->title = g_strdup(t->title);
+      it->artist = g_strdup(t->artist);
+      it->album = g_strdup(t->album);
+      it->cover_dir = g_strdup(t->cover_dir);
+      it->duration_ms = t->duration_ms;
+      mc_track_list_free(list);
+    }
+    if (!it->title) it->title = g_strdup(mc_str(MC_STR_UNTITLED));
+  }
+}
+
+/* Whether next() has anywhere to go. Shuffle can't say: a station's queue stays in its own order
+ * when the station ends, so with shuffle on it still has a last item. */
+static gboolean next_exists(const mc_player_status *st) {
+  int next = -1;
+  return st->radio || (mc_player_order(s.player, 1, 1, &next) == MC_OK && next >= 0);
+}
+
 /* Counts the plays the player says count, and scrobbles them. Writes the ones that ended to
  * the play log, or with no library open leaves them for the one that opens next. */
 static void count_plays(void) {
   int index;
   int64_t started_ms;
+  if (s.player) add_new_items(); /* a play's index may be one of theirs */
   while (s.player && mc_player_take_played(s.player, &index, &started_ms) == MC_OK) {
     if (index < 0 || index >= s.count || !s.items[index].uid[0]) continue;
     if (s.lib) mc_library_record_play(s.lib, s.items[index].uid);
@@ -110,15 +144,16 @@ static void refresh(void) {
   count_plays();
   mc_player_status st;
   mc_player_status_get(s.player, &st);
+  add_new_items(); /* the player may have moved on to one that's only just come */
   const item *it = current(&st);
   int duration_ms = duration_of(it, &st);
-  gboolean has_next = it && (st.shuffle || st.index + 1 < s.count);
+  gboolean has_next = it && next_exists(&st);
 
   gboolean new_track = st.index != s.index, new_state = st.state != s.state;
-  gboolean new_shuffle = !st.shuffle != !s.shown_shuffle; /* changes whether there's a next track */
+  gboolean new_next = has_next != s.has_next;
   s.index = st.index;
   s.state = st.state;
-  s.shown_shuffle = st.shuffle;
+  s.has_next = has_next;
   if (st.state != MC_PLAYER_PLAYING) {
     s.announced = -1;
   } else if (it && st.index != s.announced) {
@@ -135,7 +170,7 @@ static void refresh(void) {
   track_list_set_playing(it && st.state != MC_PLAYER_STOPPED ? it->uid : NULL);
   artist_view_set_playing(it && st.state != MC_PLAYER_STOPPED ? it->uid : NULL);
 
-  if (new_track || new_state || new_shuffle) {
+  if (new_track || new_state || new_next) {
     set_window_title(st.state != MC_PLAYER_STOPPED ? it : NULL);
     mpris_set_state(st.state, it != NULL, has_next);
     if (st.state == MC_PLAYER_PLAYING && !s.tick) s.tick = g_timeout_add(TICK_MS, on_tick, NULL);
@@ -184,6 +219,7 @@ void playback_free(void) {
 }
 
 void playback_set_library(mc_library *lib, const char *config_dir) {
+  if (s.player && lib != s.lib) mc_player_stop_radio(s.player); /* its tracks are that library's */
   if (!lib && s.player) mc_player_end_play(s.player); /* the library, or the app, is closing */
   count_plays();
   if (s.scrobbler && s.scrobbler_closing) s.scrobbler_closing();
@@ -205,6 +241,7 @@ void playback_clear(void) {
   free_items();
   s.index = s.announced = -1;
   s.state = MC_PLAYER_STOPPED;
+  s.has_next = FALSE;
   now_playing_show(NULL, NULL, 0, NULL);
   now_playing_set_position(0);
   mpris_set_track(NULL, NULL, NULL, NULL, NULL, 0);
@@ -215,8 +252,9 @@ void playback_clear(void) {
   if (s.changed) s.changed(s.user);
 }
 
-void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
-                   const char *context_uid) {
+/* playback_play(), or with radio, the one track as a station's seed. */
+static void play_queue(const playback_track *tracks, int count, int start, mc_play_context context,
+                       const char *context_uid, gboolean radio) {
   if (count <= 0 || start < -1 || start >= count) return;
   if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
     s.player = NULL;
@@ -246,10 +284,30 @@ void playback_play(const playback_track *tracks, int count, int start, mc_play_c
   s.count = count;
   s.index = s.announced = -1; /* show the track afresh even if it's the same item number */
 
-  mc_player_set_queue(s.player, paths, count, start, &(mc_play_origin){uids, context, context_uid});
+  if (radio) mc_player_play_radio(s.player, mc_library_dir(s.lib), paths[0], uids[0]);
+  else mc_player_set_queue(s.player, paths, count, start, &(mc_play_origin){uids, context, context_uid});
   g_free(paths);
   g_free(uids);
   refresh();
+}
+
+void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
+                   const char *context_uid) {
+  play_queue(tracks, count, start, context, context_uid, FALSE);
+}
+
+gboolean playback_can_radio(const char *seed_track_uid) {
+  mc_radio_options opts = {.seed_track = seed_track_uid};
+  return s.lib && seed_track_uid && seed_track_uid[0] && mc_radio_seed_check(s.lib, &opts) == MC_OK;
+}
+
+void playback_play_radio(const char *seed_track_uid) {
+  mc_track_list *list = NULL;
+  if (!playback_can_radio(seed_track_uid) || mc_library_get_track(s.lib, seed_track_uid, &list) != MC_OK) return;
+  const mc_track_info *t = &list->items[0];
+  playback_track track = {t->uid, t->path, t->title, t->artist, t->album, t->cover_dir, t->duration_ms};
+  if (t->path) play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, t->uid, TRUE);
+  mc_track_list_free(list);
 }
 
 void playback_set_shuffle(gboolean on) {
@@ -366,7 +424,7 @@ gboolean playback_has_current(void) {
 }
 
 gboolean playback_has_next(void) {
-  return playback_has_current() && (s.shuffle || s.index + 1 < s.count);
+  return playback_has_current() && s.has_next;
 }
 
 int64_t playback_position_ms(void) {
