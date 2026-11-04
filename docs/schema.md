@@ -403,6 +403,13 @@ can't be opened for now, or changed while it was read.
 `core/tests/manual_analysis` analyses a file or folder and prints the features and each file's
 nearest neighbours, for a person to judge.
 
+`core/tests/manual_radio <library folder>` makes a radio mix from these results (`mc_radio_make()`,
+[`radio.h`](../core/include/musiccore/radio.h)) and saves it as an ordinary playlist: 10 tracks unless
+`--count` says, from a search with `--seed <text>` or a track drawn at random, named by `--name`.
+`--scan` analyses what has no result first, and `--dry-run` only prints the mix. It makes no network
+calls, and refuses a library of an older schema without `--migrate`, as an older app can't open
+one that's been migrated.
+
 ## Album groups
 
 An album group is a named, ordered list of albums: a playlist whose entries are albums
