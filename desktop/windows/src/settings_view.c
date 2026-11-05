@@ -14,6 +14,7 @@
 #include "firewall.h"
 #include "musiccore/source_run.h"
 #include "playback.h"
+#include "prompt_dialog.h"
 #include "scrobble_service.h"
 #include "scroller.h"
 #include "sync_bridge.h"
@@ -787,7 +788,7 @@ static void apply_name(void) {
   if (st != MC_OK && st != MC_ERR_UNIMPLEMENTED) {
     wchar_t text[256];
     mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_RENAME_SELF_FAILED), MC_S(mc_status_str(st)));
-    MessageBoxW(g_set.parent, text, mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONERROR);
+    message_dialog(g_set.parent, mc_wstr(MC_STR_SETTINGS), text, MB_ICONERROR);
     if (MultiByteToWideChar(CP_UTF8, 0, g_set.shown_name, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1))
       SetWindowTextW(g_set.name, w); /* back to the name it has, so it isn't tried again */
   } else if (g_set.settings) {
@@ -797,8 +798,7 @@ static void apply_name(void) {
       snprintf(saved, sizeof saved, "%s", name);
     mc_settings_set_device_name(g_set.settings, saved);
     if (mc_settings_save(g_set.settings) != MC_OK)
-      MessageBoxW(g_set.parent, mc_wstr(MC_STR_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS),
-                  MB_OK | MB_ICONWARNING);
+      message_dialog(g_set.parent, mc_wstr(MC_STR_SETTINGS), mc_wstr(MC_STR_NAME_SAVE_FAILED), MB_ICONWARNING);
     snprintf(g_set.shown_name, sizeof g_set.shown_name, "%s", saved);
     if (MultiByteToWideChar(CP_UTF8, 0, saved, -1, w, MC_SYNC_DEVICE_NAME_MAX + 1)) SetWindowTextW(g_set.name, w);
   }
@@ -808,19 +808,19 @@ static void apply_name(void) {
 static void leave_group(void) {
   mc_sync *sync = sync_bridge_get();
   if (!sync) return;
-  if (MessageBoxW(g_set.parent, mc_wstr(MC_STR_WINDOWS_PC_LEAVE_GROUP_CONFIRM), mc_wstr(MC_STR_LEAVE_GROUP),
-                  MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+  if (!confirm_dialog(g_set.parent, mc_wstr(MC_STR_LEAVE_GROUP), mc_wstr(MC_STR_WINDOWS_PC_LEAVE_GROUP_CONFIRM),
+                      MB_ICONWARNING, mc_wstr_mnemonic(MC_STR_LEAVE_GROUP), mc_wstr_mnemonic(MC_STR_CANCEL), TRUE))
     return;
   HCURSOR old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT));
   mc_status st = mc_sync_leave_group(sync); /* blocks for a few seconds at most */
   SetCursor(old);
   if (st == MC_ERR_LOCKED)
-    MessageBoxW(g_set.parent, mc_wstr(MC_STR_WINDOWS_LEAVE_ONLY_ARCHIVE), mc_wstr(MC_STR_LEAVE_GROUP),
-                MB_OK | MB_ICONINFORMATION);
+    message_dialog(g_set.parent, mc_wstr(MC_STR_LEAVE_GROUP), mc_wstr(MC_STR_WINDOWS_LEAVE_ONLY_ARCHIVE),
+                   MB_ICONINFORMATION);
   else if (st != MC_OK && st != MC_ERR_NOT_FOUND) {
     wchar_t text[256];
     mc_wformat(text, 256, mc_str(MC_STR_LEAVE_GROUP_FAILED), MC_S(mc_status_str(st)));
-    MessageBoxW(g_set.parent, text, mc_wstr(MC_STR_LEAVE_GROUP), MB_OK | MB_ICONERROR);
+    message_dialog(g_set.parent, mc_wstr(MC_STR_LEAVE_GROUP), text, MB_ICONERROR);
   }
   if (g_set.devices_changed) g_set.devices_changed();
   settings_view_update_sync();
@@ -831,8 +831,10 @@ static void leave_group(void) {
 /* Reset Kithsong…: once confirmed, the main window marks the settings folder and closes
  * (WM_APP_RESET); the next start clears the folder. */
 static void reset_app(void) {
-  if (MessageBoxW(g_set.parent, mc_wstr(g_set.reset_deletes_library ? MC_STR_RESET_APP_CONFIRM_SOURCE : MC_STR_RESET_APP_CONFIRM),
-                  mc_wstr(MC_STR_RESET_APP_TITLE), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+  if (!confirm_dialog(g_set.parent, mc_wstr(MC_STR_RESET_APP_TITLE),
+                      mc_wstr(g_set.reset_deletes_library ? MC_STR_RESET_APP_CONFIRM_SOURCE : MC_STR_RESET_APP_CONFIRM),
+                      MB_ICONWARNING, mc_wstr_mnemonic(MC_STR_RESET_APP_CONFIRM_BUTTON), mc_wstr_mnemonic(MC_STR_CANCEL),
+                      TRUE))
     return;
   PostMessageW(g_set.parent, WM_APP_RESET, 0, 0);
 }
@@ -985,8 +987,8 @@ static void sign_out(const char *service) {
   if (!sc) return;
   wchar_t title[256];
   mc_wformat(title, 256, mc_str(MC_STR_SCROBBLE_SIGN_OUT_TITLE), MC_S(service));
-  if (MessageBoxW(g_set.parent, mc_wstr(MC_STR_SCROBBLE_SIGN_OUT_TEXT), title,
-                  MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
+  if (!confirm_dialog(g_set.parent, title, mc_wstr(MC_STR_SCROBBLE_SIGN_OUT_TEXT), MB_ICONQUESTION,
+                      mc_wstr_mnemonic(MC_STR_SCROBBLE_SIGN_OUT), mc_wstr_mnemonic(MC_STR_CANCEL), TRUE))
     return;
   g_set.auth_result = mc_scrobbler_sign_out(sc);
   g_set.auth_timed_out = FALSE;
@@ -1012,7 +1014,7 @@ static void change_service(void) {
   if (r != MC_OK) {
     wchar_t text[256];
     mc_wformat(text, 256, mc_str(MC_STR_SCROBBLE_SERVICE_FAILED), MC_S(mc_status_str(r)));
-    MessageBoxW(g_set.parent, text, mc_wstr(MC_STR_SCROBBLE_SERVICE_TITLE), MB_OK | MB_ICONERROR);
+    message_dialog(g_set.parent, mc_wstr(MC_STR_SCROBBLE_SERVICE_TITLE), text, MB_ICONERROR);
   }
   update_scrobble();
 }

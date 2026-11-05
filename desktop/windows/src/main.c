@@ -94,6 +94,7 @@
 #include "build_info.h"
 #include "canvas.h"
 #include "delete_dialog.h"
+#include "prompt_dialog.h"
 #include "remove_here.h"
 #include "device_view.h"
 #include "edit_dialog.h"
@@ -1087,12 +1088,12 @@ static void on_track_request(int code) {
     case TLN_REMOVE:
       changed = mc_playlist_remove(g_app.lib, req->entry_uid) == MC_OK;
       if (!changed)
-        MessageBoxW(g_app.wnd, mc_wstr(MC_STR_PLAYLIST_REMOVE_FAILED), mc_wstr(MC_STR_PLAYLIST), MB_OK | MB_ICONERROR);
+        message_dialog(g_app.wnd, mc_wstr(MC_STR_PLAYLIST), mc_wstr(MC_STR_PLAYLIST_REMOVE_FAILED), MB_ICONERROR);
       break;
     case TLN_MOVE:
       changed = mc_playlist_move(g_app.lib, req->entry_uid, req->after_uid[0] ? req->after_uid : NULL) == MC_OK;
       if (!changed)
-        MessageBoxW(g_app.wnd, mc_wstr(MC_STR_PLAYLIST_MOVE_FAILED), mc_wstr(MC_STR_PLAYLIST), MB_OK | MB_ICONERROR);
+        message_dialog(g_app.wnd, mc_wstr(MC_STR_PLAYLIST), mc_wstr(MC_STR_PLAYLIST_MOVE_FAILED), MB_ICONERROR);
       break;
     case TLN_RENAME_PLAYLIST:
       if (!name || strcmp(uid, req->playlist_uid)) break;
@@ -1127,7 +1128,7 @@ static void on_track_request(int code) {
       if (!name || strcmp(uid, req->playlist_uid)) break;
       changed = mc_smart_reshuffle(g_app.lib, uid) == MC_OK;
       if (!changed)
-        MessageBoxW(g_app.wnd, mc_wstr(MC_STR_RESHUFFLE_FAILED), mc_wstr(MC_STR_SMART_PLAYLIST), MB_OK | MB_ICONERROR);
+        message_dialog(g_app.wnd, mc_wstr(MC_STR_SMART_PLAYLIST), mc_wstr(MC_STR_RESHUFFLE_FAILED), MB_ICONERROR);
       break;
   }
   /* A change to the shown playlist's tracks puts it first in the recents, as adding to one
@@ -1430,7 +1431,7 @@ static void schedule_library_refresh(void) {
 static void rename_self(const char *name) {
   mc_settings_set_device_name(g_app.settings, name);
   if (mc_settings_save(g_app.settings) != MC_OK)
-    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_NAME_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
+    message_dialog(g_app.wnd, mc_wstr(MC_STR_SETTINGS), mc_wstr(MC_STR_NAME_SAVE_FAILED), MB_ICONWARNING);
   schedule_refresh();
 }
 
@@ -1661,7 +1662,7 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
 static void sync_off_message(void) {
   wchar_t text[256];
   mc_wformat(text, 256, mc_str(MC_STR_WINDOWS_PAIR_SYNC_OFF), MC_S(mc_status_str(sync_bridge_error())));
-  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
+  message_dialog(g_app.wnd, mc_wstr(MC_STR_PAIR_DEVICE), text, MB_ICONINFORMATION);
 }
 
 /* After mc_sync_pair_request() or _address(): opens the enter-code dialog, or says why
@@ -1690,7 +1691,7 @@ static void pair_started(mc_status st, const wchar_t *name, const wchar_t *addre
       mc_wformat(text, 512, mc_str(MC_STR_PAIR_START_FAILED), MC_S(mc_status_str(st)));
       break;
   }
-  MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_PAIR_DEVICE), MB_OK | MB_ICONINFORMATION);
+  message_dialog(g_app.wnd, mc_wstr(MC_STR_PAIR_DEVICE), text, MB_ICONINFORMATION);
 }
 
 /* Asks nearby device clicked, in the sidebar, to pair. Even one in another group: pairing
@@ -2178,7 +2179,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         wchar_t text[MAX_PATH + 512];
         mc_wformat(text, MAX_PATH + 512, mc_str(MC_STR_RESET_APP_FAILED), MC_S(g_app.config_dir),
                    MC_S(mc_status_str(st)));
-        MessageBoxW(wnd, text, mc_wstr(MC_STR_SETTINGS_RESET), MB_OK | MB_ICONERROR);
+        message_dialog(wnd, mc_wstr(MC_STR_SETTINGS_RESET), text, MB_ICONERROR);
         return 0;
       }
       PostMessageW(wnd, WM_CLOSE, 0, 0);
@@ -2425,14 +2426,14 @@ static char *choose_library_dir(HWND owner, const char *current, enum mc_str_id 
     char *dir = pick_folder(owner, mc_wstr(title_id), current);
     if (!dir) return NULL;
     if (empty_only && !mc_folder_takes_new_library(dir)) {
-      MessageBoxW(owner, mc_wstr(MC_STR_LIBRARY_NOT_EMPTY), mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
+      message_dialog(owner, mc_wstr(MC_STR_LIBRARY_FOLDER), mc_wstr(MC_STR_LIBRARY_NOT_EMPTY), MB_ICONINFORMATION);
       free(dir);
       continue;
     }
     if (!mc_folder_fits_library(dir)) { /* a library would be made among other things */
       wchar_t text[MAX_PATH + 256];
       mc_wformat(text, MAX_PATH + 256, mc_str(MC_STR_FIRST_RUN_NOT_EMPTY), MC_S(dir));
-      MessageBoxW(owner, text, mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
+      message_dialog(owner, mc_wstr(MC_STR_LIBRARY_FOLDER), text, MB_ICONINFORMATION);
       free(dir);
       continue;
     }
@@ -2483,7 +2484,7 @@ static mc_library *open_library(const char *dir) {
     wchar_t text[1024];
     mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LIBRARY_OPEN_FAILED_IN),
                MC_S(dir ? dir : mc_str(MC_STR_UNKNOWN_VALUE)), MC_S(mc_status_str(st)));
-    MessageBoxW(g_app.wnd, text, mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONERROR);
+    message_dialog(g_app.wnd, mc_wstr(MC_STR_APP_NAME), text, MB_ICONERROR);
     return NULL;
   }
   return lib;
@@ -2498,8 +2499,7 @@ static BOOL open_first_library(void) {
   if (!dir) return FALSE;
   mc_settings_set_library_dir(g_app.settings, dir);
   if (mc_settings_save(g_app.settings) != MC_OK)
-    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_SETTINGS_FIRST_SAVE_FAILED), mc_wstr(MC_STR_APP_NAME),
-                MB_OK | MB_ICONWARNING);
+    message_dialog(g_app.wnd, mc_wstr(MC_STR_APP_NAME), mc_wstr(MC_STR_SETTINGS_FIRST_SAVE_FAILED), MB_ICONWARNING);
   g_app.lib = open_library(dir); /* on failure the window says so */
   free(dir);
   import_view_set_library(g_app.lib);
@@ -2519,7 +2519,7 @@ static BOOL switch_library(const char *dir) {
   g_app.lib = lib;
   mc_settings_set_library_dir(g_app.settings, dir);
   if (mc_settings_save(g_app.settings) != MC_OK)
-    MessageBoxW(g_app.wnd, mc_wstr(MC_STR_SETTINGS_SAVE_FAILED), mc_wstr(MC_STR_SETTINGS), MB_OK | MB_ICONWARNING);
+    message_dialog(g_app.wnd, mc_wstr(MC_STR_SETTINGS), mc_wstr(MC_STR_SETTINGS_SAVE_FAILED), MB_ICONWARNING);
   import_view_set_library(g_app.lib);
   settings_view_set_library_dir(dir);
   refresh_library();
@@ -2673,13 +2673,6 @@ static BOOL go_back(void) {
 
 #define WEBSITE L"https://kithso.ng"
 
-static HRESULT CALLBACK about_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp, LONG_PTR data) {
-  (void)dlg;
-  (void)wp;
-  (void)data;
-  if (msg == TDN_HYPERLINK_CLICKED) ShellExecuteW(NULL, L"open", (const wchar_t *)lp, NULL, NULL, SW_SHOWNORMAL);
-  return S_OK;
-}
 
 /* F1, or About in the sidebar: the app's name, version and build, what it is, the library's
  * database version, where other devices reach this PC, and its website. */
@@ -2689,20 +2682,9 @@ static void show_about(void) {
   mc_wformat(version, 160, mc_str(MC_STR_WINDOWS_ABOUT_VERSION), MC_S(mc_version()), MC_D(KITHSONG_BUILD_NUMBER));
   about_details(details, sizeof details / sizeof details[0]);
   swprintf(content, sizeof content / sizeof content[0], L"%ls\n\n%ls", mc_wstr(MC_STR_APP_SUMMARY), details);
-  TASKDIALOGCONFIG config = {
-    .cbSize = sizeof config,
-    .hwndParent = g_app.wnd,
-    .hInstance = GetModuleHandleW(NULL),
-    .dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_ENABLE_HYPERLINKS,
-    .dwCommonButtons = TDCBF_OK_BUTTON,
-    .pszWindowTitle = title,
-    .pszMainIcon = MAKEINTRESOURCEW(IDI_APP),
-    .pszMainInstruction = version,
-    .pszContent = content,
-    .pszFooter = L"<a href=\"" WEBSITE L"\">" WEBSITE L"</a>",
-    .pfCallback = about_proc,
-  };
-  TaskDialogIndirect(&config, NULL, NULL, NULL);
+  prompt_dialog about = {.caption = title, .heading = version, .text = content, .link = WEBSITE,
+                         .ok = mc_wstr_mnemonic(MC_STR_OK)};
+  prompt_dialog_show(g_app.wnd, &about);
 }
 
 /* A sidebar page from the keyboard, with the focus in it, as Enter in the sidebar does (or
@@ -2895,7 +2877,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     wchar_t text[MAX_PATH + 512];
     mc_wformat(text, MAX_PATH + 512, mc_str(MC_STR_RESET_APP_FAILED), MC_S(left ? left : g_app.config_dir),
                MC_S(mc_status_str(reset)));
-    MessageBoxW(NULL, text, mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONWARNING);
+    message_dialog(NULL, mc_wstr(MC_STR_APP_NAME), text, MB_ICONWARNING);
   }
   mc_free(left);
   if (!g_app.config_dir || mc_settings_load(g_app.config_dir, &g_app.settings) != MC_OK) {
@@ -2903,7 +2885,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     char *shown = wstr_to_utf8(shown_dir);
     mc_wformat(text, MAX_PATH + 128, mc_str(MC_STR_WINDOWS_SETTINGS_LOAD_FAILED), MC_S(shown));
     free(shown);
-    MessageBoxW(NULL, text, mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONERROR);
+    message_dialog(NULL, mc_wstr(MC_STR_APP_NAME), text, MB_ICONERROR);
     free(g_app.config_dir);
     free_args(&args);
     return 1;

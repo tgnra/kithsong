@@ -9,6 +9,7 @@
 #include <wchar.h>
 
 #include "pick_folder.h"
+#include "prompt_dialog.h"
 #include "resource.h"
 #include "theme.h"
 #include "wstr.h"
@@ -412,14 +413,13 @@ static void refresh_row(int idx) {
 
 BOOL import_view_start(const char *const *paths, int count) {
   if (!g_view.lib) {
-    MessageBoxW(g_view.parent, mc_wstr(MC_STR_IMPORT_NO_LIBRARY_TEXT), mc_wstr(MC_STR_IMPORT_MUSIC),
-                MB_OK | MB_ICONERROR);
+    message_dialog(g_view.parent, mc_wstr(MC_STR_IMPORT_MUSIC), mc_wstr(MC_STR_IMPORT_NO_LIBRARY_TEXT), MB_ICONERROR);
     return FALSE;
   }
   if (g_view.imp && !g_view.idle) {
     wchar_t text[512];
     swprintf(text, 512, L"%ls\n\n%ls", mc_wstr(MC_STR_IMPORT_RUNNING_TITLE), mc_wstr(MC_STR_IMPORT_RUNNING_TEXT));
-    MessageBoxW(g_view.parent, text, mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
+    message_dialog(g_view.parent, mc_wstr(MC_STR_IMPORT_MUSIC), text, MB_ICONINFORMATION);
     return FALSE;
   }
   close_session();
@@ -432,7 +432,7 @@ BOOL import_view_start(const char *const *paths, int count) {
   if (st != MC_OK) {
     wchar_t msg[256];
     mc_wformat(msg, 256, mc_str(MC_STR_IMPORT_START_FAILED), MC_S(mc_status_str(st)));
-    MessageBoxW(g_view.parent, msg, mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONERROR);
+    message_dialog(g_view.parent, mc_wstr(MC_STR_IMPORT_MUSIC), msg, MB_ICONERROR);
     g_view.imp = NULL;
     return FALSE;
   }
@@ -477,8 +477,9 @@ BOOL import_view_confirm_close(void) {
   if (g_view.imp && !g_view.idle) {
     wchar_t text[512];
     swprintf(text, 512, L"%ls %ls", mc_wstr(MC_STR_IMPORT_STOP_TITLE), mc_wstr(MC_STR_IMPORT_STOP_TEXT));
-    int answer = MessageBoxW(g_view.parent, text, mc_wstr(MC_STR_IMPORT_MUSIC), MB_YESNO | MB_ICONQUESTION);
-    if (answer != IDYES) return FALSE;
+    if (!confirm_dialog(g_view.parent, mc_wstr(MC_STR_IMPORT_MUSIC), text, MB_ICONQUESTION,
+                        mc_wstr_mnemonic(MC_STR_WINDOWS_YES), mc_wstr_mnemonic(MC_STR_WINDOWS_NO), FALSE))
+      return FALSE;
   }
   close_session();
   return TRUE;
@@ -695,7 +696,7 @@ static void assign(HWND dlg, const review_row *track, const review_row *file) {
     enable_review_buttons(dlg, g_view.review_snap, TRUE);
     update_status();
   } else {
-    MessageBoxW(dlg, mc_wstr(MC_STR_IMPORT_ITEM_BUSY), mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
+    message_dialog(dlg, mc_wstr(MC_STR_IMPORT_MUSIC), mc_wstr(MC_STR_IMPORT_ITEM_BUSY), MB_ICONINFORMATION);
   }
 }
 
@@ -991,7 +992,7 @@ static void review_done(HWND dlg, mc_status st) {
     update_status();
     EndDialog(dlg, IDOK);
   } else {
-    MessageBoxW(dlg, mc_wstr(MC_STR_IMPORT_ITEM_BUSY), mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONINFORMATION);
+    message_dialog(dlg, mc_wstr(MC_STR_IMPORT_MUSIC), mc_wstr(MC_STR_IMPORT_ITEM_BUSY), MB_ICONINFORMATION);
   }
 }
 
@@ -1137,7 +1138,7 @@ static void tell_long_paths(void) {
   if (!n || long_paths_enabled()) return;
   wchar_t text[1024];
   mc_wformat(text, 1024, mc_str_plural(MC_STR_WINDOWS_IMPORT_LONG_PATHS, n), MC_D(n));
-  MessageBoxW(g_view.parent, text, mc_wstr(MC_STR_IMPORT_MUSIC), MB_OK | MB_ICONWARNING);
+  message_dialog(g_view.parent, mc_wstr(MC_STR_IMPORT_MUSIC), text, MB_ICONWARNING);
 }
 
 void import_view_on_event(WPARAM wp, LPARAM lp) {

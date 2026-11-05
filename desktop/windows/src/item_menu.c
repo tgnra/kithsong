@@ -8,6 +8,7 @@
 #include "edit_dialog.h"
 #include "playback.h"
 #include "playlist_dialogs.h"
+#include "prompt_dialog.h"
 #include "radio_menu.h"
 #include "remove_here.h"
 #include "smart_editor.h"
@@ -104,13 +105,13 @@ item_menu_result item_menu_album(const item_menu_options *o) {
   if (cmd == CMD_REMOVE_FROM_GROUP) {
     changed = lib && mc_album_group_remove(lib, group, h.uid) == MC_OK;
     if (!changed)
-      MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_REMOVE_FAILED), mc_wstr(MC_STR_ALBUM_GROUP), MB_OK | MB_ICONERROR);
+      message_dialog(owner, mc_wstr(MC_STR_ALBUM_GROUP), mc_wstr(MC_STR_ALBUM_GROUP_REMOVE_FAILED), MB_ICONERROR);
   }
   if (cmd == CMD_MOVE_UP || cmd == CMD_MOVE_DOWN) {
     const char *after = cmd == CMD_MOVE_UP ? up_after : down_after;
     changed = lib && mc_album_group_move(lib, group, h.uid, after[0] ? after : NULL) == MC_OK;
     if (!changed)
-      MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_MOVE_FAILED), mc_wstr(MC_STR_ALBUM_GROUP), MB_OK | MB_ICONERROR);
+      message_dialog(owner, mc_wstr(MC_STR_ALBUM_GROUP), mc_wstr(MC_STR_ALBUM_GROUP_MOVE_FAILED), MB_ICONERROR);
   }
   free(h.name);
   return result(cmd, changed);

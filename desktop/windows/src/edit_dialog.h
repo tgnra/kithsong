@@ -39,8 +39,8 @@
  * Automatic cover under Change…, for Save to go back to what an import would give it
  * (mc_album_art_reset()).
  *
- * Saving an artist with a name another artist has asks whether to merge the two; No saves the
- * name, and they're two artists of that name.
+ * Saving an artist with a name another artist has asks whether to merge the two; Keep Both saves
+ * the name, and they're two artists of that name.
  *
  * Save calls only the _set() functions whose values changed, on a thread of its own as they
  * can rewrite files and wait on MusicBrainz, and the dialog stays open and says why if one

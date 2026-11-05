@@ -6,6 +6,7 @@
 #include <wchar.h>
 
 #include "playlist_dialogs.h"
+#include "prompt_dialog.h"
 #include "wstr.h"
 
 static struct {
@@ -64,14 +65,14 @@ BOOL delete_dialog_lost(HWND owner, mc_library *lib, mc_sync *sync) {
     mc_status st = mc_sync_remove_lost(sync, uids, p->lost, &res);
     changed = res.tracks_deleted > 0;
     if (st == MC_ERR_LOCKED) {
-      MessageBoxW(owner, mc_wstr(MC_STR_SYNC_LOST_BUSY), title, MB_OK | MB_ICONINFORMATION);
+      message_dialog(owner, title, mc_wstr(MC_STR_SYNC_LOST_BUSY), MB_ICONINFORMATION);
     } else if (st != MC_OK) {
-      MessageBoxW(owner, mc_wstr(MC_STR_SYNC_LOST_FAILED), title, MB_OK | MB_ICONERROR);
+      message_dialog(owner, title, mc_wstr(MC_STR_SYNC_LOST_FAILED), MB_ICONERROR);
     } else if (res.tracks_deleted < p->lost) {
       wchar_t text[256];
       int kept = p->lost - res.tracks_deleted;
       mc_wformat(text, 256, mc_str_plural(MC_STR_SYNC_LOST_KEPT, kept), MC_D(kept));
-      MessageBoxW(owner, text, title, MB_OK | MB_ICONINFORMATION);
+      message_dialog(owner, title, text, MB_ICONINFORMATION);
     }
   }
   free(uids);
@@ -91,7 +92,7 @@ BOOL delete_dialog(HWND owner, mc_library *lib, mc_delete_kind kind, const char 
   mc_delete_plan *plan = NULL;
   if (!title || mc_delete_plan_new(lib, kind, uids, 1, &plan) != MC_OK) {
     free(title);
-    MessageBoxW(owner, mc_wstr(MC_STR_DELETE_FAILED), caption, MB_OK | MB_ICONERROR);
+    message_dialog(owner, caption, mc_wstr(MC_STR_DELETE_FAILED), MB_ICONERROR);
     return FALSE;
   }
   int files = mc_delete_plan_files(plan);
@@ -105,11 +106,11 @@ BOOL delete_dialog(HWND owner, mc_library *lib, mc_delete_kind kind, const char 
     mc_status st = mc_delete_run(lib, d.config_dir, plan, &res);
     changed = res.tracks_deleted > 0 || res.files_trashed > 0;
     if (st != MC_OK) {
-      MessageBoxW(owner, mc_wstr(MC_STR_DELETE_FAILED), caption, MB_OK | MB_ICONERROR);
+      message_dialog(owner, caption, mc_wstr(MC_STR_DELETE_FAILED), MB_ICONERROR);
     } else if (res.tracks_kept) {
       wchar_t text[512];
       mc_wformat(text, 512, mc_str_plural(MC_STR_WINDOWS_DELETE_KEPT_RECYCLE_BIN, res.tracks_kept), MC_D(res.tracks_kept));
-      MessageBoxW(owner, text, caption, MB_OK | MB_ICONWARNING);
+      message_dialog(owner, caption, text, MB_ICONWARNING);
     }
   }
   mc_delete_plan_free(plan);

@@ -5,6 +5,7 @@
 #include <wchar.h>
 #include <wctype.h>
 
+#include "prompt_dialog.h"
 #include "resource.h"
 #include "theme.h"
 #include "wstr.h"
@@ -174,7 +175,7 @@ BOOL playlist_create_dialog(HWND owner, mc_library *lib, BOOL playable, char out
   mc_status st = mc_playlist_create(lib, name, out_uid);
   free(name);
   if (st != MC_OK)
-    MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_CREATE_FAILED), mc_wstr(MC_STR_NEW_PLAYLIST), MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_NEW_PLAYLIST), mc_wstr(MC_STR_PLAYLIST_CREATE_FAILED), MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -186,8 +187,7 @@ BOOL playlist_rename_dialog(HWND owner, mc_library *lib, const char *uid, const 
   mc_status st = mc_playlist_rename(lib, uid, entered);
   free(entered);
   if (st != MC_OK)
-    MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_RENAME_FAILED), mc_wstr(MC_STR_PLAYLIST_RENAME_TITLE),
-                MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_PLAYLIST_RENAME_TITLE), mc_wstr(MC_STR_PLAYLIST_RENAME_FAILED), MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -270,8 +270,8 @@ BOOL playlist_delete_dialog(HWND owner, mc_library *lib, const char *uid, const 
     return FALSE;
   mc_status st = mc_playlist_delete(lib, uid);
   if (st != MC_OK)
-    MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_DELETE_FAILED), mc_wstr(MC_STR_WINDOWS_PLAYLIST_DELETE_CAPTION),
-                MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_WINDOWS_PLAYLIST_DELETE_CAPTION), mc_wstr(MC_STR_PLAYLIST_DELETE_FAILED),
+                   MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -284,7 +284,7 @@ BOOL album_group_create_dialog(HWND owner, mc_library *lib, char out_uid[MC_UID_
   mc_status st = mc_album_group_create(lib, name, out_uid);
   free(name);
   if (st != MC_OK)
-    MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_CREATE_FAILED), mc_wstr(MC_STR_NEW_ALBUM_GROUP), MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_NEW_ALBUM_GROUP), mc_wstr(MC_STR_ALBUM_GROUP_CREATE_FAILED), MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -296,8 +296,8 @@ BOOL album_group_rename_dialog(HWND owner, mc_library *lib, const char *uid, con
   mc_status st = mc_album_group_rename(lib, uid, entered);
   free(entered);
   if (st != MC_OK)
-    MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_RENAME_FAILED), mc_wstr(MC_STR_ALBUM_GROUP_RENAME_TITLE),
-                MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_ALBUM_GROUP_RENAME_TITLE), mc_wstr(MC_STR_ALBUM_GROUP_RENAME_FAILED),
+                   MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -307,8 +307,8 @@ BOOL album_group_delete_dialog(HWND owner, mc_library *lib, const char *uid, con
   if (!ask_delete(owner, caption, mc_wstr(MC_STR_ALBUM_GROUP_DELETE_TEXT), name)) return FALSE;
   mc_status st = mc_album_group_delete(lib, uid);
   if (st != MC_OK)
-    MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_DELETE_FAILED), mc_wstr(MC_STR_WINDOWS_ALBUM_GROUP_DELETE_CAPTION),
-                MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_WINDOWS_ALBUM_GROUP_DELETE_CAPTION), mc_wstr(MC_STR_ALBUM_GROUP_DELETE_FAILED),
+                   MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -322,7 +322,7 @@ BOOL smart_rename_dialog(HWND owner, mc_library *lib, const char *uid, const wch
   if (!entered) return FALSE;
   mc_status st = mc_smart_rename(lib, uid, entered);
   free(entered);
-  if (st != MC_OK) MessageBoxW(owner, mc_wstr(MC_STR_SMART_RENAME_FAILED), caption, MB_OK | MB_ICONERROR);
+  if (st != MC_OK) message_dialog(owner, caption, mc_wstr(MC_STR_SMART_RENAME_FAILED), MB_ICONERROR);
   return st == MC_OK;
 }
 
@@ -334,6 +334,6 @@ BOOL smart_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wch
   if (!ask_delete(owner, caption, mc_wstr(tracks ? MC_STR_PLAYLIST_DELETE_TEXT : MC_STR_ALBUM_GROUP_DELETE_TEXT), name))
     return FALSE;
   mc_status st = mc_smart_delete(lib, uid);
-  if (st != MC_OK) MessageBoxW(owner, mc_wstr(MC_STR_SMART_DELETE_FAILED), caption, MB_OK | MB_ICONERROR);
+  if (st != MC_OK) message_dialog(owner, caption, mc_wstr(MC_STR_SMART_DELETE_FAILED), MB_ICONERROR);
   return st == MC_OK;
 }

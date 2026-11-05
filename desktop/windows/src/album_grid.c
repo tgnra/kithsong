@@ -17,6 +17,7 @@
 #include "item_menu.h"
 #include "playback.h"
 #include "playlist_dialogs.h"
+#include "prompt_dialog.h"
 #include "scroller.h"
 #include "smart_editor.h"
 #include "theme.h"
@@ -1137,8 +1138,8 @@ static void reshuffle_group(void) {
   if (mc_smart_reshuffle(g.lib, g.group_uid) == MC_OK)
     notify_changed();
   else
-    MessageBoxW(GetAncestor(g.wnd, GA_ROOT), mc_wstr(MC_STR_RESHUFFLE_FAILED), mc_wstr(MC_STR_SMART_ALBUM_GROUP),
-                MB_OK | MB_ICONERROR);
+    message_dialog(GetAncestor(g.wnd, GA_ROOT), mc_wstr(MC_STR_SMART_ALBUM_GROUP), mc_wstr(MC_STR_RESHUFFLE_FAILED),
+                   MB_ICONERROR);
 }
 
 /* The header's + on Playlists and Album Groups: asks for a name and makes an empty one. A
@@ -1415,7 +1416,7 @@ static void drop(void) {
     if (slot > 0) memcpy(after, g.tiles[slot - 1].uid, sizeof after);
     memcpy(group, g.group_uid, sizeof group);
     if (mc_album_group_move(g.lib, group, album, after[0] ? after : NULL) != MC_OK) {
-      MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_MOVE_FAILED), mc_wstr(MC_STR_ALBUM_GROUP), MB_OK | MB_ICONERROR);
+      message_dialog(owner, mc_wstr(MC_STR_ALBUM_GROUP), mc_wstr(MC_STR_ALBUM_GROUP_MOVE_FAILED), MB_ICONERROR);
       return;
     }
     mc_library_record_opened(g.lib, MC_RECENT_ALBUM_GROUP, group);

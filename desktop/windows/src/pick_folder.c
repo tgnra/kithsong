@@ -4,6 +4,7 @@
 #include <shobjidl.h>
 #include <stdlib.h>
 
+#include "prompt_dialog.h"
 #include "wstr.h"
 
 /* The item's file system path, as a malloc'd UTF-8 string, or NULL. */
@@ -133,6 +134,6 @@ static BOOL in_onedrive(const char *dir) {
 
 BOOL confirm_onedrive(HWND owner, const char *dir) {
   if (!in_onedrive(dir)) return TRUE;
-  return MessageBoxW(owner, mc_wstr(MC_STR_WINDOWS_ONEDRIVE_WARNING), mc_wstr(MC_STR_LIBRARY_FOLDER),
-                     MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
+  return confirm_dialog(owner, mc_wstr(MC_STR_LIBRARY_FOLDER), mc_wstr(MC_STR_WINDOWS_ONEDRIVE_WARNING), MB_ICONWARNING,
+                        mc_wstr_mnemonic(MC_STR_WINDOWS_YES), mc_wstr_mnemonic(MC_STR_WINDOWS_NO), TRUE);
 }

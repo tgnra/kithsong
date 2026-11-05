@@ -9,6 +9,7 @@
 #include "canvas.h"
 #include "firewall.h"
 #include "firewall_banner.h"
+#include "prompt_dialog.h"
 #include "theme.h"
 #include "wstr.h"
 
@@ -70,7 +71,7 @@ enum {
 #define AUTO_ITEM 1 /* the format list's item data for Auto; the others hold their kbps, 0 originals */
 #define GIB ((int64_t)1024 * 1024 * 1024)
 #define MAX_BUSY 16
-#define ARCHIVE_BUTTON 100 /* the archive confirmation's Make archive */
+
 
 enum { TAB_ALBUMS, TAB_ARTISTS, TAB_PLAYLISTS, TAB_GROUPS, NUM_TABS };
 static const mc_profile_item_kind k_tab_kind[NUM_TABS] = {MC_PROFILE_ALBUM, MC_PROFILE_ARTIST,
@@ -1208,18 +1209,20 @@ static void apply_name(void) {
 static void remove_device(void) {
   if (!g_dv.sync || !g_dv.found) return;
   wchar_t text[1024];
-  const wchar_t *caption;
+  const wchar_t *caption, *ok;
   if (g_dv.is_self) {
     caption = mc_wstr(MC_STR_LEAVE_GROUP);
+    ok = mc_wstr_mnemonic(MC_STR_LEAVE_GROUP);
     mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LEAVE_GROUP_CONFIRM_OTHERS),
                MC_S(g_dv.others[0] ? u8(g_dv.others) : mc_str(MC_STR_OTHER_DEVICES)));
   } else {
     caption = mc_wstr(MC_STR_REMOVE_FROM_GROUP);
+    ok = mc_wstr_mnemonic(MC_STR_REMOVE_FROM_GROUP);
     wchar_t title[256];
     mc_wformat(title, 256, mc_str(MC_STR_REMOVE_DEVICE_TITLE), MC_S(u8(g_dv.name)));
     swprintf(text, 1024, L"%ls\n\n%ls", title, mc_wstr(MC_STR_REMOVE_DEVICE_TEXT));
   }
-  if (MessageBoxW(g_dv.parent, text, caption, MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
+  if (!confirm_dialog(g_dv.parent, caption, text, MB_ICONWARNING, ok, mc_wstr_mnemonic(MC_STR_CANCEL), TRUE)) return;
   flush();
 
   mc_status st;
@@ -1285,14 +1288,7 @@ static void confirm_archive_estimated(const estimate_job *job) {
   wchar_t size[32];
   mc_wformat(g_dv.confirm_text, 512, mc_str(MC_STR_MAKE_ARCHIVE_TEXT),
              MC_S(u8(wstr_size(size, 32, job->est.total_bytes))));
-  SendMessageW(g_dv.confirm_dlg, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, (LPARAM)g_dv.confirm_text);
-}
-
-static HRESULT CALLBACK confirm_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp, LONG_PTR data) {
-  (void)wp, (void)lp, (void)data;
-  if (msg == TDN_CREATED) g_dv.confirm_dlg = dlg;
-  else if (msg == TDN_DESTROYED) g_dv.confirm_dlg = NULL;
-  return S_OK;
+  prompt_dialog_set_text(g_dv.confirm_dlg, g_dv.confirm_text);
 }
 
 /* Asks first, saying how much the whole library comes to as originals, then makes it one. */
@@ -1321,27 +1317,12 @@ static void ask_make_archive(void) {
     if (!g_dv.est.archive) estimate_job_free(job);
   }
 
-  const TASKDIALOG_BUTTON buttons[] = {
-    {ARCHIVE_BUTTON, mc_wstr_mnemonic(MC_STR_MAKE_ARCHIVE)},
-    {IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL)},
-  };
-  TASKDIALOGCONFIG config = {
-    .cbSize = sizeof config,
-    .hwndParent = g_dv.parent,
-    .dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW,
-    .pszWindowTitle = mc_wstr(MC_STR_APP_NAME),
-    .pszMainInstruction = title,
-    .pszContent = g_dv.confirm_text,
-    .cButtons = sizeof buttons / sizeof buttons[0],
-    .pButtons = buttons,
-    .nDefaultButton = ARCHIVE_BUTTON,
-    .pfCallback = confirm_proc,
-  };
-  int button = 0;
-  HRESULT hr = TaskDialogIndirect(&config, &button, NULL, NULL);
-  g_dv.confirm_dlg = NULL;
+  prompt_dialog ask = {.caption = mc_wstr(MC_STR_APP_NAME), .icon = MB_ICONQUESTION, .heading = title,
+                       .text = g_dv.confirm_text, .ok = mc_wstr_mnemonic(MC_STR_MAKE_ARCHIVE),
+                       .cancel = mc_wstr_mnemonic(MC_STR_CANCEL), .shown = &g_dv.confirm_dlg};
+  INT_PTR answer = prompt_dialog_show(g_dv.parent, &ask);
   /* Still the device it was asked about. */
-  if (SUCCEEDED(hr) && button == ARCHIVE_BUTTON && sync == g_dv.sync && !strcmp(uid, g_dv.uid)) set_archive(TRUE);
+  if (answer == IDOK && sync == g_dv.sync && !strcmp(uid, g_dv.uid)) set_archive(TRUE);
 }
 
 /* The box shows what is until it's confirmed and stored. Only the device itself may stop

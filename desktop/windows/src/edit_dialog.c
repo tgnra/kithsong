@@ -23,6 +23,7 @@
 #include "now_playing.h"
 #include "pick_folder.h"
 #include "playback.h"
+#include "prompt_dialog.h"
 #include "scroller.h"
 #include "theme.h"
 #include "track_list.h"
@@ -1971,8 +1972,11 @@ static void save(void) {
              mc_artist_same_name(g_form.lib, g_form.uid, j->text[F_NAME], j->merge_into) == MC_OK) {
     wchar_t text[512];
     mc_wformat(text, 512, mc_str(MC_STR_EDIT_MERGE_TEXT), MC_S(j->text[F_NAME]));
-    int answer = MessageBoxW(s->wnd, text, mc_wstr(MC_STR_EDIT_MERGE_TITLE), MB_YESNOCANCEL | MB_ICONQUESTION);
-    if (answer == IDCANCEL) {
+    prompt_dialog ask = {.caption = mc_wstr(MC_STR_EDIT_MERGE_TITLE), .icon = MB_ICONQUESTION, .text = text,
+                         .ok = mc_wstr_mnemonic(MC_STR_EDIT_MERGE), .other = mc_wstr_mnemonic(MC_STR_EDIT_MERGE_KEEP),
+                         .cancel = mc_wstr_mnemonic(MC_STR_CANCEL)};
+    INT_PTR answer = prompt_dialog_show(s->wnd, &ask);
+    if (answer != IDOK && answer != IDNO) {
       job_free(j);
       return;
     }

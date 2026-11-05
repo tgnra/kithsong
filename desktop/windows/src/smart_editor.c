@@ -16,6 +16,7 @@
 #include <yyjson.h>
 
 #include "canvas.h"
+#include "prompt_dialog.h"
 #include "resource.h"
 #include "theme.h"
 #include "wstr.h"
@@ -2799,7 +2800,7 @@ static void read_fields(void) {
 static void fail(enum mc_str_id text) {
   wchar_t caption[128];
   GetWindowTextW(ed.dlg, caption, 128);
-  MessageBoxW(ed.dlg, mc_wstr(text), caption, MB_OK | MB_ICONERROR);
+  message_dialog(ed.dlg, caption, mc_wstr(text), MB_ICONERROR);
 }
 
 static BOOL save(void) {

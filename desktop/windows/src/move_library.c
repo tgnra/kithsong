@@ -9,6 +9,7 @@
 
 #include "canvas.h"
 #include "pick_folder.h"
+#include "prompt_dialog.h"
 #include "theme.h"
 #include "wstr.h"
 
@@ -130,7 +131,7 @@ static char *choose(HWND owner, const char *src) {
       if (hook) break;
       continue;
     }
-    MessageBoxW(owner, text, mc_wstr(MC_STR_LIBRARY_MOVE_CANT_TITLE), MB_OK | MB_ICONWARNING);
+    message_dialog(owner, mc_wstr(MC_STR_LIBRARY_MOVE_CANT_TITLE), text, MB_ICONWARNING);
     free(dst);
     if (hook || st != MC_OK) break; /* the hook's folder won't change; nor will an unreadable library */
   }
@@ -404,8 +405,7 @@ static void finish(void) {
     mc_wformat(text, 2048, mc_str_plural(MC_STR_LIBRARY_MOVE_LEFT_BEHIND, result.left_behind),
                MC_D(result.left_behind), MC_S(g_move.src));
   if ((st != MC_OK && st != MC_ERR_CANCELLED) || result.left_behind)
-    MessageBoxW(g_move.main, text, mc_wstr(MC_STR_LIBRARY_MOVE_TITLE),
-                MB_OK | (st != MC_OK ? MB_ICONERROR : MB_ICONWARNING));
+    message_dialog(g_move.main, mc_wstr(MC_STR_LIBRARY_MOVE_TITLE), text, st != MC_OK ? MB_ICONERROR : MB_ICONWARNING);
 
   mc_library_move_result_free(&result);
   free(g_move.src);

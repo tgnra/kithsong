@@ -8,6 +8,7 @@
 #include <wchar.h>
 
 #include "canvas.h"
+#include "prompt_dialog.h"
 #include "theme.h"
 #include "wstr.h"
 
@@ -215,8 +216,8 @@ static DWORD WINAPI delete_main(void *arg) {
 
 static void delete_all(void) {
   if (t.deleting) return;
-  if (MessageBoxW(GetAncestor(t.parent, GA_ROOT), mc_wstr(MC_STR_STRESS_DELETE_CONFIRM), mc_wstr(MC_STR_STRESS_HEADING),
-                  MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+  if (!confirm_dialog(GetAncestor(t.parent, GA_ROOT), mc_wstr(MC_STR_STRESS_HEADING), mc_wstr(MC_STR_STRESS_DELETE_CONFIRM),
+                      MB_ICONWARNING, mc_wstr_mnemonic(MC_STR_DELETE), mc_wstr_mnemonic(MC_STR_CANCEL), TRUE))
     return;
   mc_library *lib = t.host.library ? t.host.library() : NULL;
   t.delete_open_dir = lib ? _strdup(mc_library_dir(lib)) : NULL;
@@ -262,7 +263,7 @@ static void save_report(void) {
   if (st != MC_OK) {
     wchar_t text[256];
     mc_wformat(text, 256, mc_str(MC_STR_PERF_SAVE_FAILED), MC_S(mc_status_str(st)));
-    MessageBoxW(ofn.hwndOwner, text, mc_wstr(MC_STR_TESTING_HEADING), MB_OK | MB_ICONERROR);
+    message_dialog(ofn.hwndOwner, mc_wstr(MC_STR_TESTING_HEADING), text, MB_ICONERROR);
   }
 }
 

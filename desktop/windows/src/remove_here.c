@@ -6,6 +6,7 @@
 #include <wchar.h>
 
 #include "playlist_dialogs.h"
+#include "prompt_dialog.h"
 #include "sync_bridge.h"
 #include "wstr.h"
 
@@ -40,7 +41,7 @@ static BOOL remove_item(HWND owner, mc_sync *sync, mc_profile_item_kind kind, co
   const wchar_t *caption = mc_wstr(MC_STR_WINDOWS_REMOVE_FROM_THIS_PC_CAPTION);
   mc_here_plan *plan = NULL;
   if (mc_sync_here_plan_new(sync, kind, uid, &plan) != MC_OK) {
-    MessageBoxW(owner, mc_wstr(MC_STR_REMOVE_HERE_FAILED), caption, MB_OK | MB_ICONERROR);
+    message_dialog(owner, caption, mc_wstr(MC_STR_REMOVE_HERE_FAILED), MB_ICONERROR);
     return FALSE;
   }
   int files = mc_here_plan_files(plan), kept = mc_here_plan_kept(plan);
@@ -70,12 +71,12 @@ static BOOL remove_item(HWND owner, mc_sync *sync, mc_profile_item_kind kind, co
     mc_status st = mc_sync_remove_here(sync, plan, &res);
     changed = st == MC_OK;
     if (st != MC_OK) {
-      MessageBoxW(owner, mc_wstr(MC_STR_REMOVE_HERE_FAILED), caption, MB_OK | MB_ICONERROR);
+      message_dialog(owner, caption, mc_wstr(MC_STR_REMOVE_HERE_FAILED), MB_ICONERROR);
     } else if (res.files_kept > kept) {
       int n = res.files_kept - kept;
       wchar_t text[512];
       mc_wformat(text, 512, mc_str_plural(MC_STR_REMOVE_HERE_IN_USE, n), MC_D(n));
-      MessageBoxW(owner, text, caption, MB_OK | MB_ICONWARNING);
+      message_dialog(owner, caption, text, MB_ICONWARNING);
     }
   }
   mc_here_plan_free(plan);
@@ -99,8 +100,7 @@ BOOL remove_here_command(HWND owner, UINT cmd, UINT cmd_remove, UINT cmd_sync, m
     changed = TRUE;
     mc_sync_now(sync, NULL); /* bring it back soon, rather than at the next scheduled sync */
   } else {
-    MessageBoxW(owner, mc_wstr(MC_STR_SYNC_HERE_FAILED), mc_wstr(MC_STR_WINDOWS_SYNC_TO_THIS_PC),
-                MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_WINDOWS_SYNC_TO_THIS_PC), mc_wstr(MC_STR_SYNC_HERE_FAILED), MB_ICONERROR);
   }
   free(title);
   return changed;

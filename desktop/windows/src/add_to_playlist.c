@@ -4,6 +4,7 @@
 #include <wchar.h>
 
 #include "playlist_dialogs.h"
+#include "prompt_dialog.h"
 #include "wstr.h"
 
 /* A menu item's text for name: & doubled, so it isn't taken for an accelerator. */
@@ -51,7 +52,7 @@ BOOL add_to_playlist(HWND owner, mc_library *lib, const char *track_uid, BOOL he
     created = TRUE;
   }
   if (mc_playlist_append(lib, playlist_uid, track_uid, NULL) != MC_OK) {
-    MessageBoxW(owner, mc_wstr(MC_STR_PLAYLIST_ADD_FAILED), mc_wstr(MC_STR_ADD_TO_PLAYLIST), MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_ADD_TO_PLAYLIST), mc_wstr(MC_STR_PLAYLIST_ADD_FAILED), MB_ICONERROR);
     return created;
   }
   mc_library_record_opened(lib, MC_RECENT_PLAYLIST, playlist_uid); /* changed: first in the recents */
@@ -84,7 +85,7 @@ BOOL add_to_album_group(HWND owner, mc_library *lib, const char *album_uid, cons
     created = TRUE;
   }
   if (mc_album_group_add(lib, group_uid, album_uid) != MC_OK) {
-    MessageBoxW(owner, mc_wstr(MC_STR_ALBUM_GROUP_ADD_FAILED), mc_wstr(MC_STR_ADD_TO_ALBUM_GROUP), MB_OK | MB_ICONERROR);
+    message_dialog(owner, mc_wstr(MC_STR_ADD_TO_ALBUM_GROUP), mc_wstr(MC_STR_ALBUM_GROUP_ADD_FAILED), MB_ICONERROR);
     return created;
   }
   mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, group_uid);

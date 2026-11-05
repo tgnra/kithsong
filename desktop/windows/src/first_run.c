@@ -16,6 +16,7 @@
 #include "musiccore/library_move.h"
 #include "musiccore/source_run.h"
 #include "pick_folder.h"
+#include "prompt_dialog.h"
 #include "resource.h"
 #include "theme.h"
 #include "uia.h"
@@ -314,7 +315,7 @@ static void choose(void) {
   if (!mc_folder_fits_library(dir)) { /* they can choose again */
     wchar_t text[MAX_PATH + 256];
     mc_wformat(text, MAX_PATH + 256, mc_str(MC_STR_FIRST_RUN_NOT_EMPTY), MC_S(dir));
-    MessageBoxW(g_fr.wnd, text, mc_wstr(MC_STR_LIBRARY_FOLDER), MB_OK | MB_ICONINFORMATION);
+    message_dialog(g_fr.wnd, mc_wstr(MC_STR_LIBRARY_FOLDER), text, MB_ICONINFORMATION);
     free(dir);
     return;
   }
