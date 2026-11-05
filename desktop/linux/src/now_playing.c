@@ -241,7 +241,7 @@ void now_playing_set_track_menu(const track_list_callbacks *cb, mc_library *(*li
 static void add_track_click(GtkWidget *widget) {
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_track_click), NULL);
+  g_signal_connect(click, "released", G_CALLBACK(on_track_click), NULL);
   gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(click));
 }
 

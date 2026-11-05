@@ -272,7 +272,7 @@ GtkWidget *recents_new(app *a) {
 
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_click), NULL);
+  g_signal_connect(click, "released", G_CALLBACK(on_click), NULL);
   gtk_widget_add_controller(r.list, GTK_EVENT_CONTROLLER(click));
   GtkGesture *press = gtk_gesture_long_press_new();
   gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(press), TRUE);

@@ -389,7 +389,7 @@ static void artist_setup(GtkSignalListItemFactory *factory, GtkListItem *item, g
 
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_row_click), item);
+  g_signal_connect(click, "released", G_CALLBACK(on_row_click), item);
   gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
   GtkGesture *press = gtk_gesture_long_press_new();
   gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(press), TRUE);
@@ -550,7 +550,7 @@ static void track_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gp
 
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_track_menu), r);
+  g_signal_connect(click, "released", G_CALLBACK(on_track_menu), r);
   gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
   drag_source_new(box, on_track_drag, r);
   g_object_set_data_full(G_OBJECT(box), "row", r, g_free);
@@ -778,7 +778,7 @@ static GtkWidget *album_child(const mc_album_info *info, const char *artist) {
   g_object_unref(album);
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_album_menu), child);
+  g_signal_connect(click, "released", G_CALLBACK(on_album_menu), child);
   gtk_widget_add_controller(tile, GTK_EVENT_CONTROLLER(click));
   return child;
 }
@@ -804,7 +804,7 @@ static GtkWidget *single_child(ArtistTrack *t, const char *artist) {
   g_object_set_data_full(G_OBJECT(child), "track", g_object_ref(t), g_object_unref);
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_single_menu), child);
+  g_signal_connect(click, "released", G_CALLBACK(on_single_menu), child);
   gtk_widget_add_controller(tile, GTK_EVENT_CONTROLLER(click));
   drag_source_new(tile, on_single_drag, child);
   return child;

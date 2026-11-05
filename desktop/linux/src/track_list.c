@@ -289,7 +289,7 @@ static void row_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpoi
 
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_row_menu), r);
+  g_signal_connect(click, "released", G_CALLBACK(on_row_menu), r);
   gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
 
   drag_source_new(box, on_drag_prepare, r);

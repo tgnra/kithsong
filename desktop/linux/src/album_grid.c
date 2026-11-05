@@ -239,7 +239,9 @@ static char *tile_show(GtkWidget *box, AlbumItem *album) {
   return name;
 }
 
-/* Right-click: the grid's menu for the tile's item, where the pointer is. */
+/* Right-click: the grid's menu for the tile's item, where the pointer is. As the button comes up, as
+ * every right-click menu here is: opened while it's down, the release goes to the menu, the window
+ * never hears of it and the tile stays highlighted. */
 static void on_tile_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
   (void)n_press;
   cell *c = user;
@@ -318,7 +320,7 @@ static void tile_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
   c->g = user;
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_tile_menu), c);
+  g_signal_connect(click, "released", G_CALLBACK(on_tile_menu), c);
   gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
   drag_source_new(box, on_tile_drag, c);
   GtkDropTarget *drop = drag_target_new(GDK_ACTION_COPY | GDK_ACTION_MOVE);

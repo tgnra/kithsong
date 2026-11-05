@@ -1222,7 +1222,7 @@ static void open_review(import_view *v, int idx) {
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(r->tracks), GTK_SELECTION_MULTIPLE);
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
-  g_signal_connect(click, "pressed", G_CALLBACK(on_tracks_menu), r);
+  g_signal_connect(click, "released", G_CALLBACK(on_tracks_menu), r);
   gtk_widget_add_controller(r->tracks, GTK_EVENT_CONTROLLER(click));
   g_signal_connect(r->tracks, "row-activated", G_CALLBACK(on_track_activated), r);
   r->menu = gtk_popover_menu_new_from_model(NULL);
