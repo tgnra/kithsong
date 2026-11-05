@@ -76,6 +76,11 @@ void mc_plan_free(mc_plan *plan);
 /* profile_items.kind for kind ("album", ...); NULL for a value out of range. */
 const char *mc_profile_kind_str(mc_profile_item_kind kind);
 
+/* The tracks an artist in a profile stands for (p as in CREDITED_TRACKS): every one credited to
+ * them, featured credits included, and every track of an album credited to them. A query of
+ * uids, on the library. */
+#define MC_PLAN_ARTIST_TRACKS(p)   CREDITED_TRACKS(p) " UNION SELECT uid FROM tracks WHERE album_uid IN (" CREDITED_ALBUMS(p) ")"
+
 /* profile_items.kind of an exclusion (musiccore/sync_here.h): the album's or artist's tracks
  * are not wanted, whatever else selects them (but on an archive). Not an mc_profile_item_kind:
  * editors neither see nor drop them. */
