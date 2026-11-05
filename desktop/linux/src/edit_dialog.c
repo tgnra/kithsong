@@ -775,6 +775,8 @@ static void read_art_done(gpointer owner, job *j) {
   if (j->st == MC_OK && j->art_texture) {
     g_clear_pointer(&f->new_art, g_bytes_unref);
     f->new_art = g_steal_pointer(&j->art);
+    f->reset_art = FALSE;
+    gtk_widget_set_sensitive(f->art_auto, TRUE);
     art_show(f, j->art_texture, MC_STR_EDIT_ART_NEW_NAME);
     art_say(f, mc_str(MC_STR_EDIT_ART_NEW), FALSE);
   } else {
