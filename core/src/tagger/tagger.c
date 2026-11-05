@@ -96,8 +96,8 @@ typedef struct item {
    * discs it seems to be one of, or -1. Only the import thread uses them. */
   int disc, disc_set;
   /* Other discs (see defer_for_discs): waiting in PENDING for items that may be the rest of
-   * its best release, and whether items were joined into it so. Only the import thread uses
-   * them. */
+   * its best release, and how many discs it's made of if items were joined into it, so or
+   * as disc folders (1 until they're counted). Only the import thread uses them. */
   int held, joined;
 } item;
 
@@ -206,6 +206,21 @@ static void set_unreachable(mc_import *imp, int idx, const char *why) {
   it->error = error;
   mc_mutex_unlock(&imp->lock);
   emit(imp, MC_IMPORT_EV_ITEM_CHANGED, idx);
+}
+
+/* Puts an item in review, why (or NULL) saying what for. One whose discs were joined goes on
+ * saying so, whatever a search of the user's then makes of it. */
+static void set_review(mc_import *imp, int idx, const char *why) {
+  int n = imp->items[idx].joined;
+  if (!n) {
+    set_state(imp, idx, MC_IMPORT_REVIEW, why);
+    return;
+  }
+  char *joined = mc_format_alloc(mc_str_plural(MC_STR_IMPORT_JOINED_DISCS, n), MC_D(n));
+  char *both = joined && why ? mc_format_alloc("{0} {1}", MC_S(joined), MC_S(why)) : NULL;
+  set_state(imp, idx, MC_IMPORT_REVIEW, both ? both : joined);
+  mc_free(both);
+  mc_free(joined);
 }
 
 static int skipping_tags(mc_import *imp) {
@@ -893,7 +908,7 @@ static int widen_item(mc_import *imp, int idx) {
     free(tags);
     free(dist);
     free(with);
-    set_state(imp, idx, MC_IMPORT_REVIEW, NULL);
+    set_review(imp, idx, NULL);
     return 0;
   }
   for (int i = 0; i < it->file_count; i++) tags[i] = *item_tags(imp, it, i);
@@ -1100,7 +1115,7 @@ static int match_item(mc_import *imp, mc_library *lib, int idx, const char *arti
   if (accept) write_item(imp, lib, idx, 0);
   else if (unreachable) set_unreachable(imp, idx, l.why);
   /* Some discs of a release whose others may be still to come: not for the user yet. */
-  else if (manual || !defer_for_discs(imp, idx)) set_state(imp, idx, MC_IMPORT_REVIEW, why);
+  else if (manual || !defer_for_discs(imp, idx)) set_review(imp, idx, why);
   else mb_trace("    -> not yet: held for its other discs, or joined to a held one");
   return unreachable;
 }
@@ -1890,8 +1905,9 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   } else {
     /* As-is: file the tracks under their existing tags; with no album tag, under no album. */
     const mc_tags *first = item_tags(imp, it, 0);
-    album.no_album = !first->album;
-    album.title = first->album;
+    /* Discs joined by their album tags are one album, of the title they share. */
+    album.title = it->joined ? it->album : first->album;
+    album.no_album = !album.title;
     /* A mix is an album's flag, so one long track with no album tag gets an album of its
      * title to be a mix on (see "Singles" in docs/tagging-rules.md). */
     if (album.no_album && it->file_count == 1 && first->duration_ms >= MC_MIX_MIN_MS) {
@@ -2196,26 +2212,38 @@ static void join_search(mc_import *imp, disc_set *s, const char *searched, cand_
   }
 }
 
+/* The disc set's fate is settled: its items go their own ways from here on. */
+static void end_disc_set(mc_import *imp, int set) {
+  for (int i = set; i < imp->item_count; i++)
+    if (imp->items[i].disc_set == set) imp->items[i].disc_set = -1;
+}
+
 /* Joins item idx's disc set (see above) into its first item if MusicBrainz knows the album:
  * all the files move there, the other items are skipped as moved, and the joined item waits
  * for the user however good its match. Returns nonzero if idx was joined; else (no set,
  * offline, nothing on MusicBrainz) the items stay as they were, to be matched one by one. */
 static int join_discs(mc_import *imp, int idx) {
-  int first = imp->items[idx].disc_set;
-  if (first < 0) return 0;
-  /* Tried once per set, whatever the outcome. */
-  int members[64], n = 0, files = 0;
-  for (int i = first; i < imp->item_count; i++) {
+  int set = imp->items[idx].disc_set;
+  if (set < 0) return 0;
+  /* Tried until MusicBrainz has answered. Unreachable, the set stays, and its items go to
+   * review for that reason, to come back here once it's back (REQ_RETRY). */
+  int members[64], n = 0, files = 0, first = -1;
+  for (int i = set; i < imp->item_count; i++) {
     item *it = &imp->items[i];
-    if (it->disc_set != first) continue;
-    it->disc_set = -1;
-    if (it->state != MC_IMPORT_PENDING || n == 64) continue;
+    if (it->disc_set != set) continue;
+    int waiting = it->state == MC_IMPORT_PENDING || (it->state == MC_IMPORT_REVIEW && it->unreachable);
+    if (!waiting || it->held || n == 64) continue;
+    if (first < 0) first = i;
     int j = n++;
     while (j > 0 && imp->items[members[j - 1]].disc > it->disc) members[j] = members[j - 1], j--;
     members[j] = i;
     files += it->file_count;
   }
-  if (n < 2 || skipping_tags(imp) || !online(imp) || cancelled(imp)) return 0;
+  if (n < 2 || skipping_tags(imp)) {
+    end_disc_set(imp, set);
+    return 0;
+  }
+  if (!online(imp) || cancelled(imp)) return 0;
 
   item *lead = &imp->items[first];
   int disc;
@@ -2257,6 +2285,7 @@ static int join_discs(mc_import *imp, int idx) {
   if (l.n == 0 && l.net != MC_ERR_NET) join_search(imp, &s, artist, &l);
   mc_search_keys_clear(&k);
   free(tags);
+  if (l.n > 0 || l.net != MC_ERR_NET) end_disc_set(imp, set);
   if (l.n == 0) {
     free(title);
     free(order);
@@ -2266,16 +2295,23 @@ static int join_discs(mc_import *imp, int idx) {
   if (l.n > 1) qsort(l.c, (size_t)l.n, sizeof *l.c, compare_candidates);
 
   mc_mutex_lock(&imp->lock);
+  int last_disc = imp->items[members[n - 1]].disc;
   for (int m = 0, at = 0; m < n; m++) {
     item *it = &imp->items[members[m]];
-    for (int i = 0; i < it->file_count; i++, at++)
-      if (!imp->files[order[at]].tags.disc) imp->files[order[at]].tags.disc = it->disc;
+    for (int i = 0; i < it->file_count; i++, at++) {
+      mc_tags *t = &imp->files[order[at]].tags;
+      if (!t->disc) t->disc = it->disc;
+      if (!t->disc_total) t->disc_total = last_disc;
+    }
     if (it == lead) continue;
     free(it->files);
     it->files = NULL;
     it->file_count = 0;
     it->state = MC_IMPORT_SKIPPED;
     it->outcome = MC_IMPORT_OUTCOME_MOVED;
+    it->unreachable = 0;
+    free(it->error);
+    it->error = NULL;
   }
   free(lead->files);
   lead->files = order;
@@ -2285,13 +2321,12 @@ static int join_discs(mc_import *imp, int idx) {
   candidates_free(lead->cands, lead->cand_count);
   lead->cands = l.c;
   lead->cand_count = l.n;
+  lead->joined = n;
   mc_mutex_unlock(&imp->lock);
 
   for (int m = 0; m < n; m++)
     if (members[m] != first) emit(imp, MC_IMPORT_EV_ITEM_CHANGED, members[m]);
-  char *why = mc_format_alloc(mc_str_plural(MC_STR_IMPORT_JOINED_DISCS, n), MC_D(n));
-  set_state(imp, first, MC_IMPORT_REVIEW, why);
-  mc_free(why);
+  set_review(imp, first, NULL);
   return 1;
 }
 
@@ -2397,14 +2432,11 @@ static void hold(mc_import *imp, int idx) {
 static void unhold(mc_import *imp, int idx) {
   item *it = &imp->items[idx];
   it->held = 0;
-  char *why = NULL;
   if (it->joined) {
     int n = it->cand_count ? disc_count(discs_with_files(&it->cands[0], it->file_count)) : 0;
-    if (n < 2) n = 2;
-    why = mc_format_alloc(mc_str_plural(MC_STR_IMPORT_JOINED_DISCS, n), MC_D(n));
+    it->joined = n < 2 ? 2 : n;
   }
-  set_state(imp, idx, MC_IMPORT_REVIEW, why);
-  mc_free(why);
+  set_review(imp, idx, NULL);
 }
 
 /* Puts the held items whose other discs can't come any more in review; with all, every one. */
@@ -2699,7 +2731,7 @@ static void handle_request(mc_import *imp, mc_library *lib, request *r) {
       const item *it = &imp->items[r->item];
       int waiting = it->state == MC_IMPORT_REVIEW && it->unreachable;
       mc_mutex_unlock(&imp->lock);
-      if (waiting) auto_match(imp, lib, r->item);
+      if (waiting && !join_discs(imp, r->item)) auto_match(imp, lib, r->item);
       break;
     }
   }

@@ -56,9 +56,12 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
      best-fitting title and artist, see Score), and the other
      items are skipped as "Moved to another album". The joined item **always** waits for the
      user, saying it was joined ("Joined 2 discs into one album: check that they belong
-     together"), however high it scores. If MusicBrainz has no such release, or can't be
-     reached, the items stay apart and are matched one by one. Two items claiming the same
-     disc are never joined.
+     together"), however high it scores, and it goes on saying so after a search of the
+     user's. Keeping its existing tags files every disc under the title, not the first disc's
+     album tag. If MusicBrainz has no such release, the items stay apart and are matched one
+     by one. If it can't be reached they wait for it as any item does, and joining them is
+     tried again when they're looked up again. Two items claiming the same disc are never
+     joined.
    - **other discs**: an album matched to a release with discs it has no files on (disc 1 of
      2, say; a video disc doesn't count) waits rather than going to the user while items that may be those discs are
      still to be matched: albums whose files carry the release's id, or whose title without
@@ -341,10 +344,13 @@ The full rules are in `core/include/musiccore/tagger.h` ("Duplicates"); in short
   its cover moving to the new one unless the import brings its own. An item imported with
   its existing tags has no match to win, so it is re-tagged as above.
 - Otherwise the tracks the library has are **skipped**, with no ` (2)` copies; tracks it
-  lacks are added to its album either way.
-- **The same file again** is skipped. Every file imported from outside the library records
-  the SHA-256 of the bytes it was imported from, before its copy was tagged
-  (`files.source_sha256`; sync passes it on with an original). An incoming file whose bytes
+  lacks are added to its album either way. Short of a whole release, a matched one takes the
+  album's title, album artist, year and ids rather than its match's, which can be another
+  release of the group, and has no release track id, as its own is that release's.
+- **The same file again** is skipped. Every file new to the library records the SHA-256 of
+  the bytes it was imported from, before its copy was tagged (`files.source_sha256`; sync
+  passes it on with an original), and a merged library's files bring theirs, or else record
+  the bytes they arrive as. An incoming file whose bytes
   hash to a recorded source hash, or to a library file's `sha256` (or, without one, to the
   bytes of a library file of the same size), is already in the library. Files imported
   before this have no source hash and are only recognised by their current bytes.

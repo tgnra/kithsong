@@ -16,6 +16,10 @@
  *     catalogue number finds the two-disc "Bassline" by "DJ X": they're joined before
  *     either is matched on its own, into one item whose best candidate is that release,
  *     complete and scored with "DJ X".
+ *
+ * Then "Later/Disc1" and "/Disc2" while MusicBrainz is down: they stay apart, and are joined
+ * once it's back. A search of the user's leaves the item saying its discs were joined, and
+ * keeping the existing tags files both discs under the title they share.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -34,6 +38,7 @@
 #define BASS_ID "71111111-2222-3333-4444-555555555555"
 #define BASS_CATNO "ABCD-0027"
 #define BASS_FOLDER "LABEL - Bassline [" BASS_CATNO "] (C80)"
+#define LATER_ID "91111111-2222-3333-4444-555555555555"
 
 /* --- Files --- */
 
@@ -123,6 +128,8 @@ static const char *const k_lonely2[] = {"Rain", "Snow"}; /* disc 2 of "Lonely", 
 static const char *const k_lonely_b[] = {"Sun", "Moon"};
 static const char *const k_bass1[] = {"Mmmm", "Usamatix", "Vorkuta"};
 static const char *const k_bass2[] = {"Survivor", "Cycles"};
+static const char *const k_later1[] = {"Dawn", "Noon", "Dusk"};
+static const char *const k_later2[] = {"Night", "Morning"};
 
 /* --- Fake MusicBrainz --- */
 
@@ -133,6 +140,7 @@ static int g_seen_waiting[2]; /* Twin, Lonely */
 /* Bassline: searched for one disc at a time, and by its catalogue number with both discs'
  * files. */
 static int g_bass_disc_searches, g_bass_catno_joined;
+static int g_down; /* searches fail as if MusicBrainz couldn't be reached */
 
 static void wait_seen(int which) {
   uint64_t deadline = mc_mono_ms() + 10000;
@@ -149,6 +157,11 @@ static mc_status fake_search(const char *artist, const char *album, int track_co
                              char (*ids)[MC_UID_STRLEN], int max, int *n) {
   (void)artist;
   *n = 0;
+  mc_mutex_lock(&g_lock);
+  int down = g_down;
+  mc_mutex_unlock(&g_lock);
+  if (down) return MC_ERR_NET;
+  if (strcmp(album, "Later") == 0) memcpy(ids[(*n)++], LATER_ID, MC_UID_STRLEN);
   if (strncmp(album, "Bassline", 8) == 0 && track_count != 5) {
     mc_mutex_lock(&g_lock);
     g_bass_disc_searches++;
@@ -202,15 +215,16 @@ static void add_track(mb_release *rel, int disc, int number, const char *title, 
 static mc_status fake_lookup(const char *id, mb_release *out) {
   memset(out, 0, sizeof *out);
   int twin = strcmp(id, TWIN_ID) == 0, lonely = strcmp(id, LONELY_ID) == 0, lonely_b = strcmp(id, LONELY_B_ID) == 0;
-  int bass = strcmp(id, BASS_ID) == 0;
-  if (!twin && !lonely && !lonely_b && !bass) return MC_ERR_NOT_FOUND;
+  int bass = strcmp(id, BASS_ID) == 0, later = strcmp(id, LATER_ID) == 0;
+  if (!twin && !lonely && !lonely_b && !bass && !later) return MC_ERR_NOT_FOUND;
   out->id = mc_strdup(id);
-  out->title = mc_strdup(twin ? "Twin" : bass ? "Bassline" : "Lonely");
+  out->title = mc_strdup(twin ? "Twin" : bass ? "Bassline" : later ? "Later" : "Lonely");
   out->artist = mc_strdup(bass ? "DJ X" : "Band");
   out->primary_artist = mc_strdup(out->artist);
   out->releasegroup_id = mc_strdup(twin     ? "d1111111-2222-3333-4444-555555555555"
                                    : lonely ? "e1111111-2222-3333-4444-555555555555"
                                    : bass   ? "81111111-2222-3333-4444-555555555555"
+                                   : later  ? "61111111-2222-3333-4444-555555555555"
                                             : "f1111111-2222-3333-4444-555555555555");
   out->release_type = mc_strdup("Album");
   out->year = out->original_year = 2010;
@@ -224,6 +238,8 @@ static mc_status fake_lookup(const char *id, mb_release *out) {
   for (int i = 0; lonely_b && i < 2; i++) add_track(out, 1, i + 1, k_lonely_b[i], '3');
   for (int i = 0; bass && i < 3; i++) add_track(out, 1, i + 1, k_bass1[i], '4');
   for (int i = 0; bass && i < 2; i++) add_track(out, 2, i + 1, k_bass2[i], '4');
+  for (int i = 0; later && i < 3; i++) add_track(out, 1, i + 1, k_later1[i], '5');
+  for (int i = 0; later && i < 2; i++) add_track(out, 2, i + 1, k_later2[i], '5');
   return MC_OK;
 }
 
@@ -289,6 +305,100 @@ static int wait_settled(mc_import *imp, int count, const char *waiting, int *ear
     mc_sleep_ms(5);
   }
   return 0;
+}
+
+/* Waits for item idx to be in state with file_count files; returns whether it got there. */
+static int wait_item(mc_import *imp, int idx, mc_import_state state, int file_count) {
+  uint64_t deadline = mc_mono_ms() + 20000;
+  while (mc_mono_ms() < deadline) {
+    mc_import_item *it = get(imp, idx);
+    int ok = it && it->state == state && it->file_count == file_count;
+    mc_import_item_free(it);
+    if (ok) return 1;
+    mc_sleep_ms(5);
+  }
+  return 0;
+}
+
+/* Disc folders while MusicBrainz is down, then after; see the top of the file. */
+static void test_later(mc_library *lib, const char *root) {
+  char src[1200];
+  snprintf(src, sizeof src, "%s/src2", root);
+  CHECK(write_folder(src, "Later/Disc1", "Later Disc1", k_later1, 3));
+  CHECK(write_folder(src, "Later/Disc2", "Later Disc2", k_later2, 2));
+  mc_mutex_lock(&g_lock);
+  g_down = 1;
+  mc_mutex_unlock(&g_lock);
+  mc_import *imp = NULL;
+  mc_import_options opts = {.threshold = 0, .fetch_art = 0};
+  const char *paths[] = {src};
+  CHECK(mc_import_start(lib, paths, 1, &opts, NULL, NULL, &imp) == MC_OK);
+  if (!imp) return;
+  CHECK(wait_item(imp, 0, MC_IMPORT_REVIEW, 3));
+  CHECK(wait_item(imp, 1, MC_IMPORT_REVIEW, 2));
+  mc_import_item *it = get(imp, 0);
+  CHECK(it && it->unreachable);
+  mc_import_item_free(it);
+
+  mc_mutex_lock(&g_lock);
+  g_down = 0;
+  mc_mutex_unlock(&g_lock);
+  CHECK(mc_import_retry_unreachable(imp) == MC_OK);
+  CHECK(wait_item(imp, 0, MC_IMPORT_REVIEW, 5));
+  CHECK(wait_item(imp, 1, MC_IMPORT_SKIPPED, 0));
+  char *why = mc_format_alloc(mc_str_plural(MC_STR_IMPORT_JOINED_DISCS, 2), MC_D(2));
+  it = get(imp, 0);
+  if (it) {
+    CHECK_STR(it->album, "Later");
+    CHECK(!it->unreachable && it->match_count == 1);
+    CHECK_STR(it->error, why);
+    mc_import_item_free(it);
+  }
+
+  /* The user's search, finding the same or nothing: it still says so. */
+  CHECK(mc_import_search(imp, 0, "Band", "Later") == MC_OK);
+  mc_sleep_ms(50);
+  CHECK(wait_item(imp, 0, MC_IMPORT_REVIEW, 5));
+  it = get(imp, 0);
+  if (it) {
+    CHECK(it->match_count == 1);
+    CHECK_STR(it->error, why);
+    mc_import_item_free(it);
+  }
+  CHECK(mc_import_search(imp, 0, "Band", "Nothing Like It") == MC_OK);
+  mc_sleep_ms(50);
+  CHECK(wait_item(imp, 0, MC_IMPORT_REVIEW, 5));
+  it = get(imp, 0);
+  if (it) {
+    CHECK(it->match_count == 0 && it->error && strstr(it->error, why));
+    CHECK(strstr(it->error, mc_str(MC_STR_IMPORT_ERROR_NO_MATCHES)) != NULL);
+    mc_import_item_free(it);
+  }
+  mc_free(why);
+
+  /* Keeping the tags: one album of two discs, not "Later Disc1". */
+  CHECK(mc_import_accept_as_is(imp, 0) == MC_OK);
+  CHECK(wait_item(imp, 0, MC_IMPORT_DONE, 5));
+  mc_import_free(imp);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK);
+  const char *uid = NULL;
+  for (int i = 0; albums && i < albums->count; i++) {
+    CHECK(!albums->items[i].title || strcmp(albums->items[i].title, "Later Disc1") != 0);
+    if (albums->items[i].title && strcmp(albums->items[i].title, "Later") == 0) uid = albums->items[i].uid;
+  }
+  CHECK(uid != NULL);
+  mc_track_list *tracks = NULL;
+  CHECK(uid && mc_library_list_album_tracks(lib, uid, &tracks) == MC_OK);
+  if (tracks) {
+    CHECK(tracks->count == 5);
+    if (tracks->count == 5) {
+      CHECK(tracks->items[3].disc_no == 2 && tracks->items[3].track_no == 1);
+      CHECK(tracks->items[3].path && strstr(tracks->items[3].path, "2-01 Night.wav"));
+    }
+    mc_track_list_free(tracks);
+  }
+  mc_album_list_free(albums);
 }
 
 int main(int argc, char **argv) {
@@ -442,6 +552,8 @@ int main(int argc, char **argv) {
     mc_track_list_free(tracks);
   }
   mc_album_list_free(albums);
+
+  test_later(lib, root);
 
   mc_library_close(lib);
   mb_set_fake(NULL);

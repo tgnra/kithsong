@@ -90,7 +90,10 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * catalogue numbers, then the title with each other artist, at most 3 searches and 4
  * lookups more. Its candidates are scored with the keys' best fitting title and artist.
  * The joined item is never imported straight away: it waits in MC_IMPORT_REVIEW, with error
- * saying it was joined, however high its confidence. Otherwise they're matched one by one.
+ * saying it was joined, however high its confidence, and it goes on saying so after a search
+ * of the user's. Kept with its existing tags, it's one album under the title. If MusicBrainz
+ * has no such release they're matched one by one. If it can't be reached they wait in review
+ * as any item does, and the join is tried again when they're looked up again.
  *
  * Other discs. An album whose best candidate is a release with discs it has no files on
  * (disc 1 of 2, say), while items that may be those discs are still to be matched (albums
