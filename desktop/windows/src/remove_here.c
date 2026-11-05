@@ -24,6 +24,8 @@ void remove_here_append_menu(HMENU menu, mc_profile_item_kind kind, const char *
     AppendMenuW(menu, MF_STRING, cmd_remove, mc_wstr_mnemonic(MC_STR_WINDOWS_REMOVE_FROM_THIS_PC));
   else if (state == MC_HERE_REMOVED)
     AppendMenuW(menu, MF_STRING, cmd_sync, mc_wstr_mnemonic(MC_STR_WINDOWS_SYNC_TO_THIS_PC));
+  else if (state == MC_HERE_NOT_INCLUDED)
+    AppendMenuW(menu, MF_STRING, cmd_sync, mc_wstr_mnemonic(MC_STR_WINDOWS_ADD_TO_THIS_PC));
 }
 
 /* Appends text to note (cap wide chars), after a space if note isn't empty. */
@@ -42,16 +44,21 @@ static BOOL remove_item(HWND owner, mc_sync *sync, mc_profile_item_kind kind, co
     return FALSE;
   }
   int files = mc_here_plan_files(plan), kept = mc_here_plan_kept(plan);
+  int staying = mc_here_plan_staying(plan);
   wchar_t note[1024] = L"", part[512];
   /* What goes (or that nothing's here), what stays for now, how to get it back. */
   if (files) {
     mc_wformat(part, 512, mc_str_plural(MC_STR_REMOVE_HERE_FILES, files), MC_D(files));
     append(note, 1024, part);
-  } else if (!kept) {
+  } else if (!kept && !staying) {
     append(note, 1024, mc_wstr(MC_STR_REMOVE_HERE_NO_FILES));
   }
   if (kept) {
     mc_wformat(part, 512, mc_str_plural(MC_STR_REMOVE_HERE_KEPT, kept), MC_D(kept));
+    append(note, 1024, part);
+  }
+  if (staying) {
+    mc_wformat(part, 512, mc_str_plural(MC_STR_REMOVE_HERE_STAYING, staying), MC_D(staying));
     append(note, 1024, part);
   }
   append(note, 1024, mc_wstr(MC_STR_WINDOWS_REMOVE_FROM_THIS_PC_BACK));

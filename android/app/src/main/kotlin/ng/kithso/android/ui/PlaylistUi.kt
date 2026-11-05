@@ -284,18 +284,20 @@ fun PlaylistSheets(
         val state by produceState(HereState.Unavailable, kind, uid) {
             value = remover?.hereState(kind, uid) ?: HereState.Unavailable
         }
+        val bringHere: () -> Unit = {
+            scope.launch {
+                if (remover?.restoreHere(kind, uid) == false) {
+                    Toast.makeText(context, syncHereFailed, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
         return when (state) {
             HereState.Unavailable -> null
             HereState.Held -> SheetAction(stringResource(R.string.remove_from_this_phone), Icons.Remove) {
                 actions.dialog = PlaylistActions.Dialog.RemoveHere(kind, uid, name)
             }
-            HereState.Removed -> SheetAction(stringResource(R.string.sync_to_this_phone), Icons.Sync) {
-                scope.launch {
-                    if (remover?.restoreHere(kind, uid) == false) {
-                        Toast.makeText(context, syncHereFailed, Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
+            HereState.Removed -> SheetAction(stringResource(R.string.sync_to_this_phone), Icons.Sync, bringHere)
+            HereState.NotIncluded -> SheetAction(stringResource(R.string.add_to_this_phone), Icons.Sync, bringHere)
         }
     }
     when (val sheet = actions.sheet) {
@@ -662,8 +664,9 @@ private fun RemoveHereDialog(
             preview?.let {
                 val parts = buildList {
                     if (it.files > 0) add(pluralStringResource(R.plurals.remove_here_files, it.files, it.files))
-                    else if (it.kept == 0) add(stringResource(R.string.remove_here_no_files))
+                    else if (it.kept == 0 && it.staying == 0) add(stringResource(R.string.remove_here_no_files))
                     if (it.kept > 0) add(pluralStringResource(R.plurals.remove_here_kept, it.kept, it.kept))
+                    if (it.staying > 0) add(pluralStringResource(R.plurals.remove_here_staying, it.staying, it.staying))
                     add(stringResource(R.string.remove_from_this_phone_back))
                 }
                 Text(parts.joinToString(" "))

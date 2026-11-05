@@ -7,18 +7,24 @@ package ng.kithso.core
 
 /** mc_here_state: what an album's or artist's menu offers. */
 enum class HereState {
-    /** Neither: sync is off, not in a group, or this phone is an archive. */
+    /** None: sync is off, not in a group, or this phone is an archive. */
     Unavailable,
 
     /** Remove from this phone. */
     Held,
 
-    /** Removed from this phone: Sync to this phone. */
+    /** Removed from this phone, or an album with its artist: Sync to this phone. */
     Removed,
+
+    /** This phone's selection doesn't have it: Add to this phone. */
+    NotIncluded,
 }
 
-/** What removing would do: [files] go from this phone now, [kept] imported originals stay until an archive has them. */
-data class HerePreview(val files: Int, val kept: Int)
+/**
+ * What removing would do: [files] go from this phone now, [kept] imported originals stay until
+ * an archive has them, and [staying] tracks stay because a ticked playlist has them.
+ */
+data class HerePreview(val files: Int, val kept: Int, val staying: Int)
 
 /** What removing did: [filesRemoved] went, [filesKept] stayed (imported here, or couldn't be removed). */
 data class HereResult(val filesRemoved: Int, val filesKept: Int)
@@ -34,7 +40,7 @@ fun CoreSync.hereState(kind: ProfileItemKind, uid: String): HereState =
 
 /** What removing [uid] from this phone would do, to ask first. */
 fun CoreSync.herePreview(kind: ProfileItemKind, uid: String): HerePreview =
-    SyncHereNatives.nativePreview(handle, kind.code(), uid).let { HerePreview(it[0], it[1]) }
+    SyncHereNatives.nativePreview(handle, kind.code(), uid).let { HerePreview(it[0], it[1], it[2]) }
 
 /** Whether removing [uid] from this phone would remove a file of any of [trackUids], e.g. the play queue's. */
 fun CoreSync.hereTakesAny(kind: ProfileItemKind, uid: String, trackUids: List<String>): Boolean =
@@ -44,9 +50,16 @@ fun CoreSync.hereTakesAny(kind: ProfileItemKind, uid: String, trackUids: List<St
 fun CoreSync.removeHere(kind: ProfileItemKind, uid: String): HereResult =
     SyncHereNatives.nativeRemove(handle, kind.code(), uid).let { HereResult(it[0], it[1]) }
 
-/** Undoes [removeHere]; the files come back at the next sync. */
+/** Undoes [removeHere], or adds [uid] to this phone's selection; the files come at the next sync. */
 fun CoreSync.restoreHere(kind: ProfileItemKind, uid: String) =
     SyncHereNatives.nativeRestore(handle, kind.code(), uid)
+
+/**
+ * A tick under Sync everything on [deviceUid]'s profile: with [on], excludes [uid], else takes
+ * it out of what's removed, an album coming back alone if its artist stays removed.
+ */
+fun CoreSync.excludeItem(deviceUid: String, kind: ProfileItemKind, uid: String, on: Boolean) =
+    SyncHereNatives.nativeExclude(handle, deviceUid, kind.code(), uid, on)
 
 /**
  * Whether deletes here go to the recycle bin ([CoreLibrary.deleteToBin]): in a group, and not
@@ -78,6 +91,7 @@ internal object SyncHereNatives {
     @JvmStatic external fun nativeTakesAny(handle: Long, kind: Int, uid: String, trackUids: Array<String>): Boolean
     @JvmStatic external fun nativeRemove(handle: Long, kind: Int, uid: String): IntArray
     @JvmStatic external fun nativeRestore(handle: Long, kind: Int, uid: String)
+    @JvmStatic external fun nativeExclude(handle: Long, deviceUid: String, kind: Int, uid: String, on: Boolean)
     @JvmStatic external fun nativeBinOffered(handle: Long): Boolean
     @JvmStatic external fun nativeBinCount(handle: Long): Int
     @JvmStatic external fun nativeBinRestore(handle: Long, id: Long): Int

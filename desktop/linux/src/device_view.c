@@ -86,7 +86,8 @@ static struct {
   GtkWidget *sync_now, *remove;
   GtkWidget *info_group, *files_row, *address_row, *reach_row, *reach_check;
   GtkWidget *profile_group, *name_row, *archive_row, *format_row, *budget_row, *budget_switch, *budget_spin;
-  GtkWidget *what_group, *sync_all_row, *picker, *tabs[NUM_TABS], *select_all, *select_none, *list_stack, *empty, *count;
+  GtkWidget *what_group, *sync_all_row, *picker, *tabs[NUM_TABS], *select_box, *select_all, *select_none, *list_stack,
+    *empty, *count;
   GListStore *store;
   gboolean filling; /* ignore the controls' signals while we set them */
 
@@ -248,6 +249,13 @@ static void build_sel(void) {
 
 static gboolean sel_has(int tab, const char *uid) {
   return tab >= 0 && g_hash_table_contains(g_dv.sel[tab], uid);
+}
+
+/* Whether the list's row for uid is ticked: Sync everything has all but what was removed, a
+ * selection what it has. */
+static gboolean row_ticked(int tab, const char *uid) {
+  if (tab >= 0 && g_dv.profile && g_dv.profile->sync_all) return !g_hash_table_contains(g_dv.removed_items[tab], uid);
+  return sel_has(tab, uid);
 }
 
 /* --- Pending edits --- */
@@ -582,6 +590,17 @@ static void update_status(void) {
   gtk_widget_set_visible(g_dv.remove, g_dv.found && !g_dv.solo);
 }
 
+/* The list shows but for an archive. Under Sync everything it has albums and artists, ticked
+ * but what was removed: playlists and groups would select nothing more. */
+static void update_picker(void) {
+  const mc_sync_profile *p = g_dv.profile;
+  gboolean choosing = p && !p->sync_all;
+  gtk_widget_set_visible(g_dv.picker, p && !p->archive);
+  for (int t = TAB_PLAYLISTS; t < NUM_TABS; t++) gtk_widget_set_visible(g_dv.tabs[t], choosing);
+  gtk_widget_set_visible(g_dv.select_box, choosing);
+  gtk_widget_set_visible(g_dv.count, choosing);
+}
+
 static void update_count(void) {
   GString *counts = g_string_new(NULL);
   for (int i = 0; i < NUM_TABS; i++) {
@@ -688,7 +707,7 @@ static void update_controls(gboolean force) {
 
   adw_switch_row_set_active(ADW_SWITCH_ROW(g_dv.sync_all_row), !p || p->sync_all);
   gtk_widget_set_sensitive(g_dv.sync_all_row, edit);
-  gtk_widget_set_visible(g_dv.picker, p && !p->sync_all);
+  update_picker();
   gtk_widget_set_sensitive(g_dv.picker, edit);
 
   char note[256] = "";
@@ -706,7 +725,8 @@ static void update_controls(gboolean force) {
 /* Select all and Select none, each greyed out while pressing it would change nothing. */
 static void update_select_buttons(void) {
   gboolean can_all = FALSE, can_none = FALSE;
-  guint n = g_dv.rows_tab >= 0 && editable() ? g_list_model_get_n_items(G_LIST_MODEL(g_dv.store)) : 0;
+  gboolean choosing = g_dv.profile && !g_dv.profile->sync_all;
+  guint n = g_dv.rows_tab >= 0 && editable() && choosing ? g_list_model_get_n_items(G_LIST_MODEL(g_dv.store)) : 0;
   for (guint i = 0; i < n && !(can_all && can_none); i++) {
     DvItem *item = g_list_model_get_item(G_LIST_MODEL(g_dv.store), i);
     if (sel_has(g_dv.rows_tab, item->uid)) can_none = TRUE;
@@ -793,12 +813,31 @@ static void fill_list(void) {
   update_select_buttons();
 }
 
+static gboolean exclude_tick(gpointer data);
+
+/* A tick under Sync everything, stored once the check button's signal is over: the rows it
+ * sits in are made again. */
+typedef struct tick {
+  char device[MC_UID_STRLEN], uid[MC_UID_STRLEN];
+  mc_profile_item_kind kind;
+  gboolean on;
+} tick;
+
 static void on_item_toggled(GtkCheckButton *check, gpointer data) {
   (void)data;
   if (g_dv.filling || g_dv.rows_tab < 0) return;
   DvItem *item = g_object_get_data(G_OBJECT(check), "item");
   if (!item) return;
   gboolean on = gtk_check_button_get_active(check);
+  if (g_dv.profile && g_dv.profile->sync_all) {
+    tick *t = g_new0(tick, 1);
+    g_strlcpy(t->device, g_dv.uid, sizeof t->device);
+    g_strlcpy(t->uid, item->uid, sizeof t->uid);
+    t->kind = k_tab_kind[g_dv.rows_tab];
+    t->on = on;
+    g_idle_add(exclude_tick, t);
+    return;
+  }
   if (on) g_hash_table_add(g_dv.sel[g_dv.rows_tab], g_strdup(item->uid));
   else g_hash_table_remove(g_dv.sel[g_dv.rows_tab], item->uid);
   pending_toggle(k_tab_kind[g_dv.rows_tab], item->uid, on);
@@ -842,7 +881,7 @@ static void on_item_bind(GtkSignalListItemFactory *factory, GtkListItem *li, gpo
   g_object_set_data(G_OBJECT(check), "item", item);
   gboolean was = g_dv.filling;
   g_dv.filling = TRUE;
-  gtk_check_button_set_active(GTK_CHECK_BUTTON(check), sel_has(g_dv.rows_tab, item->uid));
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(check), row_ticked(g_dv.rows_tab, item->uid));
   g_dv.filling = was;
 }
 
@@ -858,7 +897,7 @@ static void reload(gboolean keep) {
   load_device();
   load_profile();
   update_controls(!keep);
-  if (g_dv.profile && !g_dv.profile->sync_all) fill_list();
+  if (g_dv.profile && !g_dv.profile->archive) fill_list();
   else if (!keep) g_dv.rows_tab = -1; /* filled when the picker shows */
 }
 
@@ -891,7 +930,7 @@ static void estimate_job_free(estimate_job *job) {
 /* The estimate line: the size and, for Auto, what the budget picked; or how much too big. */
 static void show_estimate(const estimate_job *job) {
   const mc_sync_estimate *e = &job->est;
-  char text[256] = "", a[32], b[32];
+  char text[512] = "", a[32], b[32];
   gboolean over = job->status == MC_OK && e->over_budget;
   if (over) {
     /* Free space, when it is less than the budget, is what it had to fit in. */
@@ -908,6 +947,12 @@ static void show_estimate(const estimate_job *job) {
   } else if (job->status != MC_ERR_LIBRARY_MISMATCH && job->status != MC_ERR_NOT_FOUND) {
     /* Another library open, or the device gone: the page says so already. */
     mc_format(text, sizeof text, mc_str(MC_STR_ESTIMATE_FAILED), MC_S(mc_status_str(job->status)));
+  }
+  if (job->status == MC_OK && e->imports_dropped > 0) {
+    size_t len = g_strlcat(text, "\n", sizeof text);
+    if (len < sizeof text)
+      mc_format(text + len, sizeof text - len, mc_str_plural(MC_STR_LINUX_IMPORTS_DROPPED_COMPUTER, e->imports_dropped),
+                MC_D(e->imports_dropped));
   }
   adw_action_row_set_subtitle(ADW_ACTION_ROW(g_dv.format_row), text);
   if (over) gtk_widget_add_css_class(g_dv.format_row, "warning");
@@ -1020,7 +1065,7 @@ static void show_stored(mc_status st) {
   load_profile();
   if (g_dv.root) {
     update_controls(FALSE);
-    if (g_dv.profile && !g_dv.profile->sync_all) fill_list();
+    if (g_dv.profile && !g_dv.profile->archive) fill_list();
   }
 }
 
@@ -1341,9 +1386,23 @@ static void on_sync_all_active(GObject *row, GParamSpec *pspec, gpointer data) {
   if (g_dv.filling || !g_dv.profile) return;
   g_dv.profile->sync_all = g_dv.pending.sync_all = adw_switch_row_get_active(ADW_SWITCH_ROW(row));
   g_dv.pending.mask |= PEND_SYNC_ALL;
-  gtk_widget_set_visible(g_dv.picker, !g_dv.profile->sync_all);
-  if (!g_dv.profile->sync_all && g_dv.rows_tab != g_dv.tab) fill_list();
+  update_picker();
+  if (g_dv.profile->sync_all && g_dv.tab >= TAB_PLAYLISTS)
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g_dv.tabs[TAB_ALBUMS]), TRUE); /* fills the list */
+  else fill_list(); /* the ticks mean something else now */
   schedule();
+}
+
+static gboolean exclude_tick(gpointer data) {
+  tick *t = data;
+  if (g_dv.sync && !strcmp(t->device, g_dv.uid)) {
+    flush();
+    char uid[1][MC_UID_STRLEN];
+    memcpy(uid[0], t->uid, MC_UID_STRLEN);
+    show_stored(mc_sync_exclude_items(g_dv.sync, g_dv.uid, t->kind, (const char(*)[MC_UID_STRLEN])uid, 1, !t->on));
+  }
+  g_free(t);
+  return G_SOURCE_REMOVE;
 }
 
 /* Select all and Select none: the rows shown, stored at once as one write rather than waiting
@@ -1549,7 +1608,7 @@ static GtkWidget *build_what_group(void) {
   gtk_box_append(GTK_BOX(g_dv.picker), tabs);
 
   /* Select all and Select none, for the tab open. */
-  GtkWidget *select = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+  GtkWidget *select = g_dv.select_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
   g_dv.select_all = gtk_button_new_with_label(mc_str(MC_STR_SELECT_ALL));
   g_signal_connect(g_dv.select_all, "clicked", G_CALLBACK(on_select_clicked), GINT_TO_POINTER(TRUE));
   g_dv.select_none = gtk_button_new_with_label(mc_str(MC_STR_SELECT_NONE));

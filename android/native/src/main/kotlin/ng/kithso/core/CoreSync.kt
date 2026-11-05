@@ -148,6 +148,8 @@ data class SyncEstimate(
     val limitBytes: Long,
     /** The device's free space, -1 if unknown. */
     val freeBytes: Long,
+    /** Tracks imported on this device the profile leaves out; 0 for another device. */
+    val importsDropped: Int,
     /**
      * The tracks' size as originals ([0]) and at each of [CoreSync.OPUS_BITRATES] ([1 + i]),
      * whatever the profile's format, so an editor can show every option.
@@ -565,7 +567,7 @@ class CoreSync(
      * the open library isn't the group's.
      */
     fun estimate(uid: String, profile: SyncProfile): SyncEstimate {
-        val out = LongArray(8 + 1 + OPUS_BITRATES.size)
+        val out = LongArray(9 + 1 + OPUS_BITRATES.size)
         nativeEstimate(
             handle,
             uid,
@@ -588,7 +590,8 @@ class CoreSync(
             shortfallBytes = out[5],
             limitBytes = out[6],
             freeBytes = out[7],
-            stepBytes = out.drop(8),
+            importsDropped = out[8].toInt(),
+            stepBytes = out.drop(9),
         )
     }
 

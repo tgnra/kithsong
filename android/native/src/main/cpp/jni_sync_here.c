@@ -3,6 +3,7 @@
  * Kept apart from jni_bridge.c; as thin as it is. Failures throw MusicCoreException. */
 #include <jni.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "jni_bridge.h"
 #include "musiccore/musiccore.h"
@@ -43,16 +44,17 @@ static mc_here_plan *plan_of(JNIEnv *env, jlong handle, jint kind, jstring uid) 
   return plan;
 }
 
-/* What removing uid would do, for asking first: {files removed now, originals kept}. */
+/* What removing uid would do, for asking first: {files removed now, originals kept, tracks a
+ * playlist keeps}. */
 JNIEXPORT jintArray JNICALL Java_ng_kithso_core_SyncHereNatives_nativePreview(JNIEnv *env, jclass cls,
                                                                             jlong handle, jint kind,
                                                                             jstring uid) {
   (void)cls;
   mc_here_plan *plan = plan_of(env, handle, kind, uid);
   if (!plan) return NULL;
-  jint values[] = {mc_here_plan_files(plan), mc_here_plan_kept(plan)};
+  jint values[] = {mc_here_plan_files(plan), mc_here_plan_kept(plan), mc_here_plan_staying(plan)};
   mc_here_plan_free(plan);
-  return jni_ints(env, values, 2);
+  return jni_ints(env, values, 3);
 }
 
 /* Whether removing uid would remove a file of any of track_uids (the play queue's), so the app
@@ -109,6 +111,26 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_SyncHereNatives_nativeRestore(JNIEnv 
   mc_status st = mc_sync_restore_here(jni_sync_of(handle), (mc_profile_item_kind)kind, cuid);
   (*env)->ReleaseStringUTFChars(env, uid, cuid);
   if (st != MC_OK) throw_status(env, st);
+}
+
+/* A tick under Sync everything: excludes uid from device_uid's profile, or with on false takes
+ * it out of what's removed. */
+JNIEXPORT void JNICALL Java_ng_kithso_core_SyncHereNatives_nativeExclude(JNIEnv *env, jclass cls, jlong handle,
+                                                                       jstring device_uid, jint kind, jstring uid,
+                                                                       jboolean on) {
+  (void)cls;
+  if (!check_kind(env, kind)) return;
+  const char *cdevice = (*env)->GetStringUTFChars(env, device_uid, NULL);
+  const char *cuid = cdevice ? (*env)->GetStringUTFChars(env, uid, NULL) : NULL;
+  if (cuid) {
+    char uids[1][MC_UID_STRLEN];
+    snprintf(uids[0], MC_UID_STRLEN, "%s", cuid);
+    mc_status st = mc_sync_exclude_items(jni_sync_of(handle), cdevice, (mc_profile_item_kind)kind,
+                                         (const char(*)[MC_UID_STRLEN])uids, 1, on ? 1 : 0);
+    (*env)->ReleaseStringUTFChars(env, uid, cuid);
+    if (st != MC_OK) throw_status(env, st);
+  }
+  if (cdevice) (*env)->ReleaseStringUTFChars(env, device_uid, cdevice);
 }
 
 /* The recycle bin (musiccore/delete.h): whether deletes here go to it. */

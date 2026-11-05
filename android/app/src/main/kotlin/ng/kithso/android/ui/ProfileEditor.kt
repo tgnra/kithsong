@@ -264,12 +264,11 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
                 edit { copy(syncAll = on) }
             },
         )
-        val choosable = editable && !profile.syncAll
         ListItem(
             headlineContent = { Text(stringResource(R.string.choose_what_to_sync)) },
-            colors = itemColors(choosable),
-            supportingContent = { Text(selectionText(profile.items)) },
-            modifier = Modifier.clickable(enabled = choosable) { picking = true },
+            colors = itemColors(editable),
+            supportingContent = if (profile.syncAll) null else { { Text(selectionText(profile.items)) } },
+            modifier = Modifier.clickable(enabled = editable) { picking = true },
         )
 
         // Auto and a budget are one choice: a budget picks the format, and picking one drops the budget.
@@ -307,9 +306,24 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
 
     if (picking) {
         ProfileItemsDialog(
+            syncAll = profile.syncAll,
             selected = remember(profile.items) { profile.items.toHashSet() },
             removed = remember(profile.removed) { profile.removed.toHashSet() },
-            onToggle = { item, on -> edit { copy(items = items + (item to on)) } },
+            onToggle = { item, on ->
+                if (profile.syncAll) {
+                    // Exclusions aren't part of the selection: one write for each tick.
+                    scope.launch {
+                        message = try {
+                            stored = syncer.excludeItem(uid, item, !on)
+                            null
+                        } catch (e: MusicCoreException) {
+                            context.getString(R.string.profile_save_failed, statusText(context, e.status))
+                        }
+                    }
+                } else {
+                    edit { copy(items = items + (item to on)) }
+                }
+            },
             onSelect = { shown, on -> edit { copy(items = items + shown.associateWith { on }) } },
             onDismiss = { picking = false },
             syncer = syncer,
@@ -407,6 +421,11 @@ private fun EstimateCard(profile: SyncProfile, estimate: SyncEstimate?, error: I
                             estimate.freeBytes.takeIf { it >= 0 }?.let { stringResource(R.string.estimate_free, size(it)) },
                         )
                         if (room.isNotEmpty()) SecondaryText(room.joinToString(stringResource(R.string.separator_dot)))
+                        if (estimate.importsDropped > 0) {
+                            SecondaryText(
+                                pluralStringResource(R.plurals.imports_dropped_phone, estimate.importsDropped, estimate.importsDropped),
+                            )
+                        }
                     }
                     error != null -> SecondaryText(stringResource(R.string.estimate_failed, statusText(context, error)))
                     else -> SecondaryText(stringResource(R.string.measuring))
@@ -455,10 +474,12 @@ private fun MakeArchiveDialog(
  * album groups under tabs, ticked if [selected]. Each tick calls [onToggle] at once. Select
  * all and Select none call [onSelect] once with the rows of the tab shown; Select all leaves
  * out what's [removed] from the device, which only a tick brings back, and neither touches
- * Sync everything.
+ * Sync everything. With [syncAll] it's albums and artists, ticked but what's [removed], with
+ * neither button: playlists and groups would select nothing more.
  */
 @Composable
 private fun ProfileItemsDialog(
+    syncAll: Boolean,
     selected: Set<ProfileItem>,
     removed: Set<ProfileItem>,
     onToggle: (ProfileItem, Boolean) -> Unit,
@@ -476,8 +497,10 @@ private fun ProfileItemsDialog(
             error = e.status
         }
     }
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    val kind = ProfileItemKind.entries[tab]
+    val kinds = if (syncAll) listOf(ProfileItemKind.Album, ProfileItemKind.Artist) else ProfileItemKind.entries
+    var chosenTab by rememberSaveable { mutableIntStateOf(0) }
+    val tab = chosenTab.coerceAtMost(kinds.lastIndex)
+    val kind = kinds[tab]
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -497,15 +520,17 @@ private fun ProfileItemsDialog(
                 ScreenHeader(stringResource(R.string.what_to_sync), onDismiss) {
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.done)) }
                 }
-                Text(
-                    selectionText(selected.toList()),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
-                )
+                if (!syncAll) {
+                    Text(
+                        selectionText(selected.toList()),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                }
                 PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 16.dp) {
-                    ProfileItemKind.entries.forEachIndexed { i, k ->
-                        Tab(selected = tab == i, onClick = { tab = i }, text = { Text(kindTitle(k)) })
+                    kinds.forEachIndexed { i, k ->
+                        Tab(selected = tab == i, onClick = { chosenTab = i }, text = { Text(kindTitle(k)) })
                     }
                 }
                 val list = choices?.let { kind.choicesIn(it) }
@@ -514,15 +539,17 @@ private fun ProfileItemsDialog(
                     val addable = remember(shown, selected, removed) {
                         shown.filter { it !in selected && it !in removed }
                     }
-                    Row(
-                        horizontalArrangement = Arrangement.End,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                    ) {
-                        TextButton(onClick = { onSelect(addable, true) }, enabled = addable.isNotEmpty()) {
-                            Text(stringResource(R.string.select_all))
-                        }
-                        TextButton(onClick = { onSelect(shown, false) }, enabled = shown.any { it in selected }) {
-                            Text(stringResource(R.string.select_none))
+                    if (!syncAll) {
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        ) {
+                            TextButton(onClick = { onSelect(addable, true) }, enabled = addable.isNotEmpty()) {
+                                Text(stringResource(R.string.select_all))
+                            }
+                            TextButton(onClick = { onSelect(shown, false) }, enabled = shown.any { it in selected }) {
+                                Text(stringResource(R.string.select_none))
+                            }
                         }
                     }
                 }
@@ -545,7 +572,7 @@ private fun ProfileItemsDialog(
                             ) {
                                 items(list, key = { it.uid }) { choice ->
                                     val item = ProfileItem(kind, choice.uid)
-                                    val checked = item in selected
+                                    val checked = if (syncAll) item !in removed else item in selected
                                     ListItem(
                                         leadingContent = { Checkbox(checked = checked, onCheckedChange = null) },
                                         headlineContent = { Text(choice.name) },

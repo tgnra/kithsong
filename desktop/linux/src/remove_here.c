@@ -39,6 +39,8 @@ void remove_here_append(GMenu *menu, mc_profile_item_kind kind, const char *uid,
     g_menu_append(menu, mc_str_mnemonic(MC_STR_LINUX_REMOVE_FROM_THIS_COMPUTER), remove_action);
   else if (state == MC_HERE_REMOVED)
     g_menu_append(menu, mc_str_mnemonic(MC_STR_LINUX_SYNC_TO_THIS_COMPUTER), sync_action);
+  else if (state == MC_HERE_NOT_INCLUDED)
+    g_menu_append(menu, mc_str_mnemonic(MC_STR_LINUX_ADD_TO_THIS_COMPUTER), sync_action);
 }
 
 static void on_response(AdwAlertDialog *dialog, const char *response, gpointer data) {
@@ -69,17 +71,24 @@ void remove_here_present(GtkWidget *parent, mc_profile_item_kind kind, const cha
     return;
   }
   int files = mc_here_plan_files(plan), kept = mc_here_plan_kept(plan);
+  int staying = mc_here_plan_staying(plan);
   /* What goes (or that nothing's here), what stays for now, how to get it back. */
   GString *body = g_string_new(NULL);
   if (files) {
     char *s = mc_format_alloc(mc_str_plural(MC_STR_REMOVE_HERE_FILES, files), MC_D(files));
     g_string_append(body, s);
     mc_free(s);
-  } else if (!kept) {
+  } else if (!kept && !staying) {
     g_string_append(body, mc_str(MC_STR_REMOVE_HERE_NO_FILES));
   }
   if (kept) {
     char *s = mc_format_alloc(mc_str_plural(MC_STR_REMOVE_HERE_KEPT, kept), MC_D(kept));
+    if (body->len) g_string_append_c(body, ' ');
+    g_string_append(body, s);
+    mc_free(s);
+  }
+  if (staying) {
+    char *s = mc_format_alloc(mc_str_plural(MC_STR_REMOVE_HERE_STAYING, staying), MC_D(staying));
     if (body->len) g_string_append_c(body, ' ');
     g_string_append(body, s);
     mc_free(s);

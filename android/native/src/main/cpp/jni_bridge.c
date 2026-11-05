@@ -1792,12 +1792,13 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeEstimate(
       mc_status st = mc_sync_estimate_profile(sync_of(handle), cuid, &p, &e);
       (*env)->ReleaseStringUTFChars(env, uid, cuid);
       if (st == MC_OK) {
-        jlong values[8 + MC_SYNC_ESTIMATE_STEPS] = {
+        jlong values[9 + MC_SYNC_ESTIMATE_STEPS] = {
           e.tracks,      e.total_bytes,     e.kbps,        e.archive,
           e.over_budget, e.shortfall_bytes, e.limit_bytes, e.free_bytes,
+          e.imports_dropped,
         };
-        for (int i = 0; i < MC_SYNC_ESTIMATE_STEPS; i++) values[8 + i] = e.step_bytes[i];
-        (*env)->SetLongArrayRegion(env, out, 0, 8 + MC_SYNC_ESTIMATE_STEPS, values);
+        for (int i = 0; i < MC_SYNC_ESTIMATE_STEPS; i++) values[9 + i] = e.step_bytes[i];
+        (*env)->SetLongArrayRegion(env, out, 0, 9 + MC_SYNC_ESTIMATE_STEPS, values);
       } else {
         throw_status(env, st);
       }

@@ -15,6 +15,7 @@ import ng.kithso.core.HereResult
 import ng.kithso.core.HereState
 import ng.kithso.core.MusicCoreException
 import ng.kithso.core.NearbyDevice
+import ng.kithso.core.ProfileItem
 import ng.kithso.core.ProfileItemKind
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
@@ -22,6 +23,7 @@ import ng.kithso.core.SyncEstimate
 import ng.kithso.core.SyncProfile
 import ng.kithso.core.SyncWaiting
 import ng.kithso.core.VerifyResult
+import ng.kithso.core.excludeItem as coreExcludeItem
 import ng.kithso.core.hereState as coreHereState
 import ng.kithso.core.herePreview as coreHerePreview
 import ng.kithso.core.hereTakesAny as coreHereTakesAny
@@ -481,6 +483,17 @@ class Syncer(
      */
     suspend fun setArchive(uid: String, archive: Boolean): SyncProfile = onCore { sync ->
         sync.setArchive(uid, archive)
+        sync.notifyChanged()
+        refreshLists(sync)
+        sync.profile(uid)
+    }
+
+    /**
+     * A tick under Sync everything on [uid]'s profile: with [on], excludes [item], else brings
+     * it back. Returns the profile as it now reads.
+     */
+    suspend fun excludeItem(uid: String, item: ProfileItem, on: Boolean): SyncProfile = onCore { sync ->
+        sync.coreExcludeItem(uid, item.kind, item.uid, on)
         sync.notifyChanged()
         refreshLists(sync)
         sync.profile(uid)

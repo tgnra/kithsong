@@ -32,6 +32,6 @@ interface DeviceRemover {
     /** Removes [uid] from this phone, then reads the library again; null if it failed. */
     suspend fun removeHere(kind: ProfileItemKind, uid: String): HereResult?
 
-    /** Syncs [uid] to this phone again, starting a sync; false if it failed. */
+    /** Syncs [uid] to this phone again, or adds it to a selection, starting a sync; false if it failed. */
     suspend fun restoreHere(kind: ProfileItemKind, uid: String): Boolean
 }

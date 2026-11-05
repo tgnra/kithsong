@@ -314,6 +314,13 @@ static void build_sel(void) {
   }
 }
 
+/* Whether the current list's row for uid is ticked: Sync everything has all but what was
+ * removed, a selection what it has. */
+static BOOL row_ticked(int tab, const char *uid) {
+  if (g_dv.profile && g_dv.profile->sync_all) return !set_has(&g_dv.removed_items[tab], uid);
+  return set_has(&g_dv.sel[tab], uid);
+}
+
 /* --- Pending edits --- */
 
 static BOOL pending_any(void) {
@@ -610,7 +617,7 @@ static void set_check(int row, BOOL on) {
  * the keyboard's place when the one with the focus goes grey. */
 static void update_select_buttons(void) {
   BOOL can_all = FALSE, can_none = FALSE;
-  if (editable() && g_dv.rows_tab >= 0) {
+  if (editable() && g_dv.rows_tab >= 0 && !g_dv.profile->sync_all) {
     const uid_set *sel = &g_dv.sel[g_dv.rows_tab], *removed = &g_dv.removed_items[g_dv.rows_tab];
     for (int i = 0; i < g_dv.nrows && !(can_all && can_none); i++) {
       if (set_has(sel, g_dv.rows[i])) can_none = TRUE;
@@ -629,7 +636,7 @@ static void update_checks(void) {
   if (g_dv.rows_tab < 0) return;
   g_dv.filling = TRUE;
   SendMessageW(g_dv.list, WM_SETREDRAW, FALSE, 0);
-  for (int i = 0; i < g_dv.nrows; i++) set_check(i, set_has(&g_dv.sel[g_dv.rows_tab], g_dv.rows[i]));
+  for (int i = 0; i < g_dv.nrows; i++) set_check(i, row_ticked(g_dv.rows_tab, g_dv.rows[i]));
   SendMessageW(g_dv.list, WM_SETREDRAW, TRUE, 0);
   InvalidateRect(g_dv.list, NULL, TRUE);
   g_dv.filling = FALSE;
@@ -824,19 +831,19 @@ static void fill_list(BOOL keep) {
     ListView_DeleteAllItems(g_dv.list);
     SendMessageW(g_dv.list, LVM_SETITEMCOUNT, (WPARAM)n, 0);
   }
-  const uid_set *sel = &g_dv.sel[g_dv.tab];
   for (int i = 0; i < n; i++) {
     item_row(&items, i, text, 512, detail, 64);
+    BOOL ticked = row_ticked(g_dv.tab, rows[i]);
     if (same) {
       LVITEMW item = {.iSubItem = 0, .pszText = text};
       SendMessageW(g_dv.list, LVM_SETITEMTEXTW, (WPARAM)i, (LPARAM)&item);
-      set_check(i, set_has(sel, rows[i]));
+      set_check(i, ticked);
     } else {
       LVITEMW item = {.mask = LVIF_TEXT | LVIF_STATE, .iItem = i, .pszText = text,
-                      .state = INDEXTOSTATEIMAGEMASK(set_has(sel, rows[i]) ? 2 : 1),
+                      .state = INDEXTOSTATEIMAGEMASK(ticked ? 2 : 1),
                       .stateMask = LVIS_STATEIMAGEMASK};
       SendMessageW(g_dv.list, LVM_INSERTITEMW, 0, (LPARAM)&item);
-      set_check(i, set_has(sel, rows[i])); /* a checkbox list may insert it unchecked anyway */
+      set_check(i, ticked); /* a checkbox list may insert it unchecked anyway */
     }
     LVITEMW sub = {.iSubItem = 1, .pszText = detail};
     SendMessageW(g_dv.list, LVM_SETITEMTEXTW, (WPARAM)i, (LPARAM)&sub);
@@ -909,7 +916,7 @@ static void set_estimate(const wchar_t *text, BOOL over) {
 /* The estimate line: the size and, for Auto, what the budget picked; or how much too big. */
 static void show_estimate(const estimate_job *job) {
   const mc_sync_estimate *e = &job->est;
-  wchar_t text[256] = L"", a[32], b[32];
+  wchar_t text[512] = L"", a[32], b[32];
   BOOL over = job->status == MC_OK && e->over_budget;
   if (over) {
     /* Free space, when it is less than the budget, is what it had to fit in. */
@@ -926,6 +933,13 @@ static void show_estimate(const estimate_job *job) {
   } else if (job->status != MC_ERR_LIBRARY_MISMATCH && job->status != MC_ERR_NOT_FOUND) {
     /* Another library open, or the device gone: the page says so already. */
     mc_wformat(text, 256, mc_str(MC_STR_ESTIMATE_FAILED), MC_S(mc_status_str(job->status)));
+  }
+  if (job->status == MC_OK && e->imports_dropped > 0) {
+    size_t len = wcslen(text);
+    swprintf(text + len, 512 - len, L"\n");
+    len = wcslen(text);
+    mc_wformat(text + len, 512 - len, mc_str_plural(MC_STR_WINDOWS_IMPORTS_DROPPED_PC, e->imports_dropped),
+               MC_D(e->imports_dropped));
   }
   set_estimate(text, over);
 }
@@ -1338,16 +1352,30 @@ static void on_budget(void) {
   pend_format_budget();
 }
 
+static void select_tab(int tab);
+
 static void on_sync_all(void) {
   if (!g_dv.profile) return;
   g_dv.profile->sync_all = g_dv.pending.sync_all = is_checked(g_dv.sync_all);
   g_dv.pending.mask |= PEND_SYNC_ALL;
+  /* Sync everything lists albums and artists: playlists and groups would select nothing more. */
+  if (g_dv.profile->sync_all && g_dv.tab >= TAB_PLAYLISTS) select_tab(TAB_ALBUMS);
+  update_checks();
   layout_again();
   schedule();
 }
 
 static void on_check(int row, BOOL on) {
   if (row < 0 || row >= g_dv.nrows || g_dv.rows_tab < 0) return;
+  if (g_dv.profile && g_dv.profile->sync_all) {
+    /* Sync everything keeps its exclusions apart from the selection, so a tick is one write. */
+    uid_str uid;
+    memcpy(uid, g_dv.rows[row], MC_UID_STRLEN);
+    flush();
+    show_stored(mc_sync_exclude_items(g_dv.sync, g_dv.uid, k_tab_kind[g_dv.rows_tab],
+                                      (const char(*)[MC_UID_STRLEN])&uid, 1, !on));
+    return;
+  }
   set_put(&g_dv.sel[g_dv.rows_tab], g_dv.rows[row], on);
   pending_toggle(k_tab_kind[g_dv.rows_tab], g_dv.rows[row], on);
   update_count();
@@ -1809,21 +1837,24 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi) {
         text_width(g_dv.sync_all_label, g_dv.font) + S(8), line_h);
   if (dev) top += row_h + S(12);
 
-  BOOL pick = dev && g_dv.profile && !g_dv.profile->sync_all;
+  /* Under Sync everything, what was removed shows unticked among the albums and artists. */
+  BOOL pick = dev && g_dv.profile && !g_dv.profile->archive;
+  BOOL choosing = pick && !g_dv.profile->sync_all;
   int tab_w = 0;
   for (int i = 0; i < NUM_TABS; i++) tab_w = max(tab_w, text_width(g_dv.tabs[i], g_dv.font) + S(32));
   tab_w = min(tab_w, text_w / NUM_TABS);
-  for (int i = 0; i < NUM_TABS; i++) place(g_dv.tabs[i], pick, left + i * tab_w, top, tab_w, btn_h);
+  for (int i = 0; i < NUM_TABS; i++)
+    place(g_dv.tabs[i], choosing || (pick && i < TAB_PLAYLISTS), left + i * tab_w, top, tab_w, btn_h);
 
   /* Select All and Select None at the tabs' right, or on a line of their own if there's no room. */
   int all_w = text_width(g_dv.select_all, g_dv.font) + S(24), none_w = text_width(g_dv.select_none, g_dv.font) + S(24);
-  if (pick && NUM_TABS * tab_w + S(16) + all_w + S(8) + none_w > text_w) top += btn_h + S(8);
-  place(g_dv.select_none, pick, right - none_w, top, none_w, btn_h);
-  place(g_dv.select_all, pick, right - none_w - S(8) - all_w, top, all_w, btn_h);
+  if (choosing && NUM_TABS * tab_w + S(16) + all_w + S(8) + none_w > text_w) top += btn_h + S(8);
+  place(g_dv.select_none, choosing, right - none_w, top, none_w, btn_h);
+  place(g_dv.select_all, choosing, right - none_w - S(8) - all_w, top, all_w, btn_h);
   if (pick) top += btn_h + S(8);
 
   int count_y = y + h - S(24) - line_h;
-  place(g_dv.count, pick, left, count_y, text_w, line_h);
+  place(g_dv.count, choosing, left, count_y, text_w, line_h);
   int list_h = max(count_y - S(8) - top, S(80));
   place(g_dv.list, pick, left, top, text_w, list_h);
   if (pick) {
