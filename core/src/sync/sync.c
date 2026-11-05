@@ -55,6 +55,8 @@
 #define HIGHER_GRACE_MS 30000
 #define POLL_MS 2000
 #define HINTS_MS 60000
+/* How long after start a desktop first looks whether the weekly deep check is due. */
+#define DEEP_FIRST_MS (10 * 60 * 1000)
 #define BACKOFF_MIN_MS 10000
 #define CONNECT_MS 3000
 #define ACCEPT_WAIT_MS 1000
@@ -1963,6 +1965,7 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   mc_mutex_init(&sync->lock);
   mc_cond_init(&sync->cond);
   sync->kind = kind;
+  sync->deep_delay_ms = DEEP_FIRST_MS;
   if (events) sync->ev = *events;
   sync->user = user;
   sync->use_discovery = 1;
