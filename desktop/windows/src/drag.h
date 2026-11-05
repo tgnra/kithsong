@@ -1,7 +1,7 @@
 /* Dragging tracks onto playlists and albums onto album groups, from one window to another.
  *
- * The window a drag starts in (the track list for a track, the album grid for an album)
- * holds the mouse capture throughout, and handles the drag itself while it's over that
+ * The window a drag starts in (the track list for a track, the album grid for an album, the
+ * artist page and search results for either) holds the mouse capture throughout, and handles the drag itself while it's over that
  * window: a playlist's tracks or a group's albums move into another order there. Anywhere
  * else it calls drag_over() as the mouse moves, which asks the window under the pointer
  * what's there, if it takes drops (drag_add_target()): the sidebar's recents and the

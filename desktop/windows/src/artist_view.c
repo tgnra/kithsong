@@ -141,7 +141,7 @@ static struct {
   BOOL tracking;
 
   /* Dragging the single pressed (v.pressed) onto a playlist, once it has moved far enough
-   * from drag_from; drop_target is the playlist it would be added to (drag.h), or "". */
+   * from drag_from; drop_target is the playlist or group it would be added to (drag.h), or "". */
   POINT drag_from;
   BOOL dragging;
   char drop_target[MC_UID_STRLEN];
@@ -1140,10 +1140,16 @@ static void single_menu(int i, POINT pt) {
   }
 }
 
+/* The album tile i's menu, at pt (screen coordinates), as the album grid shows it. */
+static void album_menu(int i, POINT pt) {
+  item_menu_options o = {.wnd = v.wnd, .lib = v.lib, .uid = tile_at(i)->uid, .name = tile_at(i)->title, .pt = pt};
+  if (item_menu_album(&o) == ITEM_MENU_CHANGED) notify(ARN_LIBRARY_CHANGED, TRUE);
+}
+
 /* WM_CONTEXTMENU: Start radio, Edit..., then Remove from This PC... or Sync to This PC where they
  * apply (an artist can't be deleted from the library), for the row under the pointer (from the
- * keyboard, lp -1, the focused row), or anywhere on an artist's page for that artist, though on
- * an album Start radio and Edit... are the album's; but on a single, the single's menu. */
+ * keyboard, lp -1, the focused row), or anywhere on an artist's page for that artist; but on an
+ * album, the album's menu, and on a single, the single's. */
 static BOOL on_context_menu(LPARAM lp) {
   if (!v.lib) return FALSE;
   POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
@@ -1155,14 +1161,15 @@ static BOOL on_context_menu(LPARAM lp) {
     ScreenToClient(v.wnd, &client);
     i = hit_at(client.x, client.y);
   }
-  if (is_open() && is_single(i)) {
+  if (is_open() && i >= 0 && i < num_tiles()) {
     if (lp == -1) {
       RECT r = tile_rect(i);
       pt.x = r.left;
       pt.y = r.top + scale(TILE_W);
       ClientToScreen(v.wnd, &pt);
     }
-    single_menu(i, pt);
+    if (is_single(i)) single_menu(i, pt);
+    else album_menu(i, pt);
     return TRUE;
   }
   if (!is_open() && (i < 0 || i >= v.nartists)) return FALSE;
@@ -1173,17 +1180,16 @@ static BOOL on_context_menu(LPARAM lp) {
     ClientToScreen(v.wnd, &pt);
   }
   item_menu_options o = {.wnd = v.wnd, .lib = v.lib, .pt = pt, .uid = is_open() ? v.open_uid : v.artists[i].uid,
-                         .name = is_open() ? v.open_name : v.artists[i].name,
-                         .album = is_open() && i >= 0 && i < v.strips[STRIP_ALBUMS].n ? tile_at(i)->uid : NULL};
+                         .name = is_open() ? v.open_name : v.artists[i].name};
   if (item_menu_artist(&o) == ITEM_MENU_CHANGED) notify(ARN_LIBRARY_CHANGED, TRUE);
   return TRUE;
 }
 
-/* --- Dragging a single onto a playlist --- */
+/* --- Dragging a single onto a playlist, an album onto an album group --- */
 
-/* The pressed single has moved to x, y: once far enough, it's dragged, and outside the page
- * the window under the pointer says whether there's a playlist to add it to. Nothing on the
- * page takes it. */
+/* The pressed tile has moved to x, y: once far enough, it's dragged, and outside the page
+ * the window under the pointer says whether there's a playlist or group to add it to. Nothing
+ * on the page takes it. */
 static void drag_to(int x, int y) {
   if (!v.dragging) {
     if (abs(x - v.drag_from.x) < GetSystemMetrics(SM_CXDRAG) && abs(y - v.drag_from.y) < GetSystemMetrics(SM_CYDRAG))
@@ -1197,7 +1203,7 @@ static void drag_to(int x, int y) {
   POINT pt = {x, y};
   if (!PtInRect(&rc, pt)) {
     ClientToScreen(v.wnd, &pt);
-    drag_over(DRAG_TRACK, pt, v.drop_target);
+    drag_over(is_single(v.pressed) ? DRAG_TRACK : DRAG_ALBUM, pt, v.drop_target);
     return;
   }
   drag_leave();
@@ -1281,7 +1287,7 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         v.tracking = TRUE;
       }
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-      if (v.pressed >= 0 && is_single(v.pressed) && (wp & MK_LBUTTON)) {
+      if (is_open() && v.pressed >= 0 && v.pressed < num_tiles() && (wp & MK_LBUTTON)) {
         drag_to(x, y);
         if (v.dragging) return 0;
       }
@@ -1315,14 +1321,16 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_LBUTTONUP:
-      if (v.dragging) { /* dropped: onto a playlist, or nowhere */
+      if (v.dragging) { /* dropped: onto a playlist or group, or nowhere */
         char target[MC_UID_STRLEN], uid[MC_UID_STRLEN];
         memcpy(target, v.drop_target, sizeof target);
         memcpy(uid, tile_at(v.pressed)->uid, sizeof uid);
-        BOOL here = tile_at(v.pressed)->path != NULL;
+        BOOL here = tile_at(v.pressed)->path != NULL, single = is_single(v.pressed);
         end_drag();
         ReleaseCapture();
-        if (target[0]) request_add(uid, here, target);
+        if (target[0] && single) request_add(uid, here, target);
+        else if (target[0] && add_to_album_group(GetAncestor(wnd, GA_ROOT), v.lib, uid, target))
+          notify(ARN_LIBRARY_CHANGED, TRUE);
       } else if (v.pressed != HIT_NONE) {
         int i = v.pressed;
         BOOL clicked = hit_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)) == i;

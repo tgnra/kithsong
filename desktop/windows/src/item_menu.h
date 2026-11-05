@@ -1,5 +1,5 @@
 /* The menus of what the library holds, the same wherever it shows: the album grid's tiles, the
- * artist page and the Home page's tiles.
+ * artist page, the Home page's tiles and search results.
  *
  *   an album    Start radio, Add to Album Group >, inside a manual group Move Up, Move Down and
  *               Remove from Album Group, then Edit..., Remove from This PC... or Sync to This PC
@@ -45,10 +45,6 @@ typedef struct item_menu_options {
   const char *group;
   const char *up_after, *down_after;
   BOOL first, last; /* greys out Move Up or Move Down */
-
-  /* On the artist page: the album it was opened on, or NULL, which Start radio and Edit... are
-   * then for. */
-  const char *album;
 } item_menu_options;
 
 item_menu_result item_menu_album(const item_menu_options *o);

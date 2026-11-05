@@ -120,13 +120,10 @@ item_menu_result item_menu_artist(const item_menu_options *o) {
   held h = hold(o);
   mc_library *lib = o->lib;
   HWND owner = GetAncestor(o->wnd, GA_ROOT);
-  char album[MC_UID_STRLEN];
-  snprintf(album, sizeof album, "%s", o->album ? o->album : "");
 
   HMENU menu = CreatePopupMenu();
   char seed[MC_UID_STRLEN];
-  if (album[0]) radio_menu_append_album(menu, CMD_START_RADIO, lib, album, seed);
-  else radio_menu_append_artist(menu, CMD_START_RADIO, lib, h.uid, seed);
+  radio_menu_append_artist(menu, CMD_START_RADIO, lib, h.uid, seed);
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   AppendMenuW(menu, MF_STRING, CMD_EDIT, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
   remove_here_append_menu(menu, MC_PROFILE_ARTIST, h.uid, CMD_REMOVE_HERE, CMD_SYNC_HERE);
@@ -134,7 +131,7 @@ item_menu_result item_menu_artist(const item_menu_options *o) {
 
   BOOL changed = FALSE;
   if (cmd == CMD_START_RADIO) playback_play_radio(seed);
-  if (cmd == CMD_EDIT) changed = album[0] ? edit_dialog_album(owner, lib, album) : edit_dialog_artist(owner, lib, h.uid);
+  if (cmd == CMD_EDIT) changed = edit_dialog_artist(owner, lib, h.uid);
   if (cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE)
     changed = remove_here_command(owner, (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ARTIST, h.uid, h.name);
   free(h.name);

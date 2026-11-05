@@ -31,8 +31,9 @@
  * its heading, or Left and Right scroll it, and Up and Down go between them; clicking an
  * album (or Enter) opens it (ARN_OPEN_ALBUM), and clicking a single plays the singles from it
  * (ARN_PLAY_SINGLE). A single has a track's right-click menu, as in the track list, and can
- * be dragged onto a playlist (drag.h). Back is the back button, Escape, Backspace, Alt+Left
- * or the mouse's back button (ARN_BACK); the list keeps its place meanwhile.
+ * be dragged onto a playlist; an album has an album's, and can be dragged onto an album group
+ * (drag.h). Back is the back button, Escape, Backspace, Alt+Left or the mouse's back button
+ * (ARN_BACK); the list keeps its place meanwhile.
  *
  * In the list the arrow keys, Page Up, Page Down, Home and End move the focus, and typing a
  * letter goes to the next artist starting with it.
