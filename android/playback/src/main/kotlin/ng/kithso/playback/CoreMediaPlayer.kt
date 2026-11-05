@@ -284,10 +284,15 @@ class CoreMediaPlayer(
     override fun handleRemoveMediaItems(fromIndex: Int, toIndex: Int): ListenableFuture<*> = Futures.immediateVoidFuture()
     override fun handleMoveMediaItems(fromIndex: Int, toIndex: Int, newIndex: Int): ListenableFuture<*> = Futures.immediateVoidFuture()
 
-    // What's shown of tracks whose files are the same, so the core, which knows only the files,
-    // plays on. A queue's other changes go through handleSetMediaItems().
+    // The same tracks as they are now: what's shown of them, and where their files are, which is
+    // all the core knows of them, so it plays on. A queue's other changes go through
+    // handleSetMediaItems().
     override fun handleReplaceMediaItems(fromIndex: Int, toIndex: Int, mediaItems: List<MediaItem>): ListenableFuture<*> {
         if (toIndex - fromIndex == mediaItems.size) {
+            mediaItems.forEachIndexed { i, item ->
+                val path = item.path
+                if (path != null && path != items[fromIndex + i].path) core.setQueuePath(fromIndex + i, path)
+            }
             items = items.take(fromIndex) + mediaItems + items.drop(toIndex)
             update()
         }

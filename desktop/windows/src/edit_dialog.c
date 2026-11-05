@@ -2231,6 +2231,7 @@ static BOOL edit_dialog(HWND owner, mc_library *lib, edit_kind kind, const char 
     artist_view_art_changed();
   }
   BOOL changed = g_form.changed;
+  if (changed) playback_tracks_changed();
   free_saved();
   free(g_form.new_art);
   if (g_form.art) DeleteObject(g_form.art);

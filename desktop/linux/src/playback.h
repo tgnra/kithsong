@@ -54,6 +54,9 @@ void playback_clear(void);
 /* album_uid's cover was changed: what's queued from it takes the cover from lib, and what's
  * showing the playing track shows it. */
 void playback_art_changed(mc_library *lib, const char *album_uid);
+/* An edit may have changed what's queued: its titles and artists are read again from lib, what's
+ * showing the playing track shows them, and the player gets any file's new place. Nothing stops. */
+void playback_tracks_changed(mc_library *lib);
 /* Replaces the queue and plays tracks[start], or with start -1 the first track (shuffled,
  * any track). context and context_uid (or NULL) say what's played, for the play log. */
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,

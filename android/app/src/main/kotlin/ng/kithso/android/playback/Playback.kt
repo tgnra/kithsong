@@ -67,8 +67,8 @@ interface Playback {
 
     /**
      * Swaps the queue for [tracks], the same ones in the same order as the library now has them
-     * (a tag edit can move their files), going on from the same place. A player goes by its
-     * queue's paths, so the track starts again there, and shuffled what follows is shuffled afresh.
+     * (a tag edit can move their files). Nothing stops: the track playing plays on from the file
+     * it has open.
      */
     fun updateQueue(tracks: List<Track>) {}
 

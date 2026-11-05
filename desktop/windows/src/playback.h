@@ -95,6 +95,10 @@ int playback_queue_count(void);
 const char *playback_queue_uid(int i);
 /* Whether there's a current track, and one after it (always, shuffled). */
 BOOL playback_has_current(void);
+/* An edit may have changed what's queued: its titles and artists are read again, what's showing
+ * the playing track shows them, and the player gets any file's new place. Nothing stops. */
+void playback_tracks_changed(void);
+
 /* The current track's uid, or "" with none or for one without. Valid until the queue changes. */
 const char *playback_current_uid(void);
 BOOL playback_has_next(void);

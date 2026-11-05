@@ -267,9 +267,8 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
  * file whatever the edit does, and the core reports a file in use only if the files kept
  * changing under it (the Stop playing and retry that follows is then Windows' own). But a queue
  * knows its tracks by path, and an edit can move them, so once saved [playback]'s queue is
- * given their new paths and titles, which restarts the track from where it was
- * ([Playback.updateQueue]), or if only what's shown of them changed, a cover say, goes on
- * undisturbed; one that isn't any different is left alone. [onClose] closes the editor.
+ * given their new paths and titles ([Playback.updateQueue]), and plays on undisturbed; one that
+ * isn't any different is left alone. [onClose] closes the editor.
  */
 @Composable
 internal fun TagEditorScreen(editor: TagEditor, playback: Playback, target: TagTarget, onClose: () -> Unit) {

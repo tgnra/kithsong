@@ -86,6 +86,9 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
     /** Queue item [index]'s track uid; null if there's no such item, or it isn't logged. */
     fun queueUid(index: Int): String? = nativeQueueUid(handle, index)
 
+    /** Queue item [index]'s file is now at [path]: nothing stops, see mc_player_queue_set_path(). */
+    fun setQueuePath(index: Int, path: String) = nativeQueueSetPath(handle, index, path)
+
     fun skipTo(index: Int) = nativeSkipTo(handle, index)
     fun toggle() = nativeCommand(handle, 0)
     fun pause() = nativeCommand(handle, 1)
@@ -175,6 +178,7 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         )
         @JvmStatic external fun nativePlayRadio(handle: Long, libraryDir: String, seedPath: String, seedUid: String)
         @JvmStatic external fun nativeQueueUid(handle: Long, index: Int): String?
+        @JvmStatic external fun nativeQueueSetPath(handle: Long, index: Int, path: String)
         @JvmStatic external fun nativeCommand(handle: Long, command: Int)
         @JvmStatic external fun nativeSkipTo(handle: Long, index: Int)
         @JvmStatic external fun nativeSeekMs(handle: Long, ms: Long)

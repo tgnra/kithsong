@@ -132,6 +132,21 @@ int main(int argc, char **argv) {
   errors = events = played = 0;
   mc_mutex_unlock(&lock);
 
+  /* Told its file has moved, an item plays from there, and the one playing isn't stopped. */
+  const char *moving[] = {longer, missing};
+  CHECK(mc_player_set_queue(player, moving, 2, 0, NULL) == MC_OK);
+  CHECK(mc_player_queue_set_path(player, 2, a) == MC_ERR_NOT_FOUND);
+  CHECK(mc_player_queue_set_path(player, 1, a) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.state == MC_PLAYER_PLAYING && st.index == 0);
+  CHECK(mc_player_skip_to(player, 1) == MC_OK);
+  mc_sleep_ms(100);
+  mc_player_status_get(player, &st);
+  CHECK(st.state == MC_PLAYER_PLAYING && st.index == 1);
+  mc_mutex_lock(&lock);
+  CHECK(errors == 0);
+  mc_mutex_unlock(&lock);
+
   /* a, two that can't be played, then b at another rate and channel count. */
   const char *queue[] = {a, bad, missing, b};
   CHECK(mc_player_set_queue(player, queue, 4, 0, NULL) == MC_OK);

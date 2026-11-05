@@ -74,6 +74,34 @@ static int duration_of(const item *it, const mc_player_status *st) {
   return ms ? ms : (int)st->duration_ms;
 }
 
+void playback_tracks_changed(mc_library *lib) {
+  if (!s.player) return;
+  for (int i = 0; i < s.count; i++) {
+    item *it = &s.items[i];
+    mc_track_list *list = NULL;
+    if (!it->uid[0] || mc_library_get_track(lib, it->uid, &list) != MC_OK) continue;
+    const mc_track_info *t = &list->items[0];
+    g_free(it->title);
+    g_free(it->artist);
+    g_free(it->album);
+    g_free(it->cover_dir);
+    it->title = g_strdup(t->title ? t->title : mc_str(MC_STR_UNTITLED));
+    it->artist = g_strdup(t->artist);
+    it->album = g_strdup(t->album);
+    it->cover_dir = g_strdup(t->cover_dir);
+    if (t->path) mc_player_queue_set_path(s.player, i, t->path);
+    mc_track_list_free(list);
+  }
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  const item *it = current(&st);
+  if (!it) return;
+  int duration_ms = duration_of(it, &st);
+  now_playing_show(it->title, it->artist, duration_ms, it->cover_dir);
+  now_playing_set_position((int)st.position_ms);
+  mpris_set_track(it->uid, it->title, it->artist, it->album, it->cover_dir, duration_ms);
+}
+
 void playback_art_changed(mc_library *lib, const char *album_uid) {
   mc_track_list *tracks = NULL;
   if (!s.player || !s.count || mc_library_list_album_tracks(lib, album_uid, &tracks) != MC_OK) return;

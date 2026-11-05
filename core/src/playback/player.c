@@ -1032,6 +1032,22 @@ mc_status mc_player_queue_uid(mc_player *p, int index, char *out) {
   return st;
 }
 
+mc_status mc_player_queue_set_path(mc_player *p, int index, const char *path) {
+  if (!p || !path) return MC_ERR_INVALID_ARG;
+  char *copy = mc_strdup(path);
+  if (!copy) return MC_ERR_NOMEM;
+  mc_mutex_lock(&p->lock);
+  mc_status st = index >= 0 && index < p->count ? MC_OK : MC_ERR_NOT_FOUND;
+  if (st == MC_OK) {
+    free(p->queue[index]);
+    p->queue[index] = copy;
+    copy = NULL;
+  }
+  mc_mutex_unlock(&p->lock);
+  free(copy);
+  return st;
+}
+
 mc_status mc_player_skip_to(mc_player *p, int index) {
   if (!p) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&p->lock);

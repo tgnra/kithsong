@@ -111,6 +111,11 @@ mc_status mc_player_stop_radio(mc_player *player);
  * MC_ERR_NOT_FOUND if there's no such item. */
 mc_status mc_player_queue_uid(mc_player *player, int index, char *out);
 
+/* Queue item index's file is now at path (copied), an edit having moved it. Nothing stops: what's
+ * playing or buffered reads on from the file it has open, and whatever opens it from here on, a
+ * seek or its turn to play, uses path. MC_ERR_NOT_FOUND if there's no such item. */
+mc_status mc_player_queue_set_path(mc_player *player, int index, const char *path);
+
 /* Plays queue item index from its start. Shuffled, the rest are shuffled afresh after it. */
 mc_status mc_player_skip_to(mc_player *player, int index);
 /* The next item. After the last one, stops with the first item current, as when the queue

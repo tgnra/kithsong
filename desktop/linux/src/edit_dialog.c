@@ -598,6 +598,7 @@ static void form_update(edit_form *f) {
  * decoded on the file, which is the same one, so the playing track's cover is shown again. */
 static void form_finished(edit_form *f) {
   if (f->changed) app_reload_library(f->a);
+  if (f->changed && f->a->lib == f->lib) playback_tracks_changed(f->lib);
   if (f->art_saved && f->a->lib == f->lib) playback_art_changed(f->lib, f->uid);
 }
 

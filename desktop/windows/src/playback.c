@@ -296,6 +296,33 @@ void playback_end_session(void) {
   count_plays();
 }
 
+void playback_tracks_changed(void) {
+  if (!s.player || !s.lib) return;
+  for (int i = 0; i < s.count; i++) {
+    item *it = &s.items[i];
+    mc_track_list *list = NULL;
+    if (!it->uid[0] || mc_library_get_track(s.lib, it->uid, &list) != MC_OK) continue;
+    const mc_track_info *t = &list->items[0];
+    free(it->title);
+    free(it->artist);
+    free(it->album);
+    free(it->cover_dir);
+    it->title = t->title ? wstr_dup_from_utf8(t->title) : dup(mc_wstr(MC_STR_UNTITLED));
+    it->artist = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
+    it->album = t->album ? wstr_dup_from_utf8(t->album) : NULL;
+    it->cover_dir = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
+    if (t->path) mc_player_queue_set_path(s.player, i, t->path);
+    mc_track_list_free(list);
+  }
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  const item *it = st.index >= 0 && st.index < s.count ? &s.items[st.index] : NULL;
+  if (!it) return;
+  now_playing_show(it->title, it->artist, it->duration_ms ? it->duration_ms : (int)st.duration_ms, it->cover_dir);
+  now_playing_set_position((int)st.position_ms);
+  media_controls_set_track(it->title, it->artist, it->album, it->cover_dir);
+}
+
 void playback_clear(void) {
   if (!s.player) return;
   mc_player_end_play(s.player);

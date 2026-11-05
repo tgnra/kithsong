@@ -131,19 +131,7 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
     override fun updateQueue(tracks: List<Track>) = withController {
         if (tracks.size == it.mediaItemCount) {
             val origin = it.currentMediaItem?.playOrigin ?: CorePlayer.Origin()
-            val items = queueItems(context, tracks, origin)
-            // The same files with another cover or title: nothing for the player to start again.
-            if (items.indices.all { i -> items[i].path == it.getMediaItemAt(i).path }) {
-                it.replaceMediaItems(0, items.size, items)
-            } else {
-                // A new queue ends a station, which leaves its tracks as a queue like any other.
-                val queue = if (origin.context == CorePlayer.PlayContext.Radio) {
-                    queueItems(context, tracks, CorePlayer.Origin(CorePlayer.PlayContext.Manual))
-                } else {
-                    items
-                }
-                it.setMediaItems(queue, it.currentMediaItemIndex, it.currentPosition)
-            }
+            it.replaceMediaItems(0, tracks.size, queueItems(context, tracks, origin))
         }
     }
 

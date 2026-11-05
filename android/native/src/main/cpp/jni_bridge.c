@@ -1039,6 +1039,15 @@ JNIEXPORT jstring JNICALL Java_ng_kithso_core_CorePlayer_nativeQueueUid(JNIEnv *
   return new_string(env, uid);
 }
 
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeQueueSetPath(JNIEnv *env, jclass cls, jlong handle,
+                                                                         jint index, jstring path) {
+  (void)cls;
+  const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
+  if (!cpath) return;
+  mc_player_queue_set_path(player_of(handle), index, cpath);
+  (*env)->ReleaseStringUTFChars(env, path, cpath);
+}
+
 /* Fills out with state, index, count, position_ms, duration_ms, shuffle, volume, muted, radio. */
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeStatus(JNIEnv *env, jclass cls,
                                                                   jlong handle, jlongArray out) {
