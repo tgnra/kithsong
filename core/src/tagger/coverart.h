@@ -44,6 +44,8 @@ mc_status mc_coverart_replace(const char *dir, const mc_buffer *img, const char 
 /* Deletes dir's cover images called cover, any case, other than name. Those called folder or
  * front are the user's, and rank below cover.*, so they stay. */
 void mc_coverart_drop_others(const char *dir, const char *name);
+/* The same, by trash, then deleting what that can't take: for covers the user may want back. */
+void mc_coverart_trash_others(const char *dir, const char *name, mc_status (*trash)(const char *path));
 
 /* "jpg" or "png" by img's first bytes; NULL if it's neither. */
 const char *mc_coverart_ext(const mc_buffer *img);

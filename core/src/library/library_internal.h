@@ -20,6 +20,7 @@ struct mc_library {
   mc_changelog_ctx log; /* points the trigger functions at hlc, node_uid, applying_remote */
   struct mc_search *search; /* search.c's index and its builder; NULL until first used */
   struct mc_refresh *refresh; /* the artist refresh this handle started (tagger/refresh.h) */
+  const struct mc_edit_watch *edit_watch; /* mc_edit_set_watch()'s */
 };
 
 /* mc_library_open() without starting background work of its own (the artist refresh after

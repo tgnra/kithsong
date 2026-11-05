@@ -47,6 +47,7 @@
 int mc_edit_test_fail_tags;
 int mc_edit_test_fail_rename;
 int mc_edit_test_abandon_rename;
+mc_status (*mc_edit_trash)(const char *path) = mc_trash;
 
 /* One edit at a time in the process, so two can't pick the same new path, and a library opened
  * meanwhile doesn't take an edit under way for a crashed one. */
@@ -101,6 +102,33 @@ static int same(const char *a, const char *b) {
 
 static const char *or_empty(const char *s) {
   return s ? s : "";
+}
+
+/* --- What's watching --- */
+
+void mc_edit_set_watch(mc_library *lib, const mc_edit_watch *watch) {
+  if (lib) lib->edit_watch = watch;
+}
+
+static int watch_cancelled(const mc_library *lib) {
+  const mc_edit_watch *w = lib->edit_watch;
+  return w && w->cancelled && w->cancelled(w->user);
+}
+
+static void watch_progress(const mc_library *lib, int done, int total) {
+  const mc_edit_watch *w = lib->edit_watch;
+  if (w && w->progress) w->progress(w->user, done, total);
+}
+
+/* An mb_call the watch can give up on; both of them are the caller's, to outlast the call. */
+static mb_call *watch_call(const mc_library *lib, mc_http_cancel *cancel, mb_call *call) {
+  const mc_edit_watch *w = lib->edit_watch;
+  memset(call, 0, sizeof *call);
+  if (w && w->cancelled) {
+    *cancel = (mc_http_cancel){w->cancelled, w->user};
+    call->cancel = cancel;
+  }
+  return call;
 }
 
 typedef struct uids {
@@ -370,6 +398,7 @@ typedef struct job {
   char *tmp;  /* its new copy, beside it */
   char *bak;  /* the name it has during the swap */
   int fresh;  /* there's nothing at rel yet: a cover for a folder with none */
+  int cover;  /* a cover, so what it replaces goes to the trash, not away for good */
   int tagged;
   mc_tags tags; /* what to write, if tagged */
   char sha[MC_SHA256_STRLEN];     /* its row's */
@@ -787,6 +816,112 @@ static void carry_cover(mc_library *lib, const job *j) {
   free(to);
 }
 
+/* A folder a cover stayed in shows that cover, whatever the album moved in had: it's the album's
+ * now. Only for an album's own files, and a cover the user chose is the choice all the same. */
+static void follow_folder_covers(mc_library *lib, const plan *p) {
+  char *last = NULL;
+  for (int i = 0; i < p->count; i++) {
+    const job *j = &p->jobs[i];
+    char *from = folder_of(j->rel), *to = folder_of(j->dest);
+    if (from && to && *to && !same_rel(from, to) && (!last || strcmp(last, to))) {
+      char *dir = mc_library_abspath(lib, to);
+      char *cover = dir ? mc_coverart_find(dir) : NULL;
+      char hash[MC_ART_HASH_LEN];
+      if (cover && mc_coverart_hash(cover, hash) == MC_OK && mc_library_begin_write(lib) == MC_OK) {
+        sqlite3_stmt *stmt = prepare(lib, "UPDATE albums SET art_hash = ?2 WHERE art_chosen IS NULL"
+                                          " AND art_hash IS NOT ?2 AND uid ="
+                                          " (SELECT t.album_uid FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                                          "  WHERE f.uid = ?1 AND f.source_file_uid IS NULL)");
+        if (stmt) {
+          bind_str(stmt, 1, j->file);
+          bind_str(stmt, 2, hash);
+        }
+        if (step_done(stmt) != MC_OK || mc_library_commit(lib) != MC_OK) mc_library_rollback(lib);
+      }
+      free(cover);
+      free(dir);
+      free(last);
+      last = to;
+      to = NULL;
+    }
+    free(from);
+    free(to);
+  }
+  free(last);
+}
+
+/* Files moved into a folder whose name changes only in case go into it as it is, where the
+ * system finds it, so the folder takes the new case itself: each part of the path that differs
+ * so, for as long as the two are the same but for case. Others' rows may still say the old one,
+ * which finds it just as well. Where case matters they're two folders, and nothing here applies. */
+static void match_folder_case(mc_library *lib, const char *rel, const char *dest) {
+  char *from = folder_of(rel), *to = folder_of(dest);
+  char *old = from && to ? malloc(strlen(from) + strlen(to) + 2) : NULL;
+  if (old) {
+    const char *a = from, *b = to;
+    while (*a && *b) {
+      const char *a_end = strchr(a, '/'), *b_end = strchr(b, '/');
+      size_t a_len = a_end ? (size_t)(a_end - a) : strlen(a), b_len = b_end ? (size_t)(b_end - b) : strlen(b);
+      size_t done = (size_t)(b - to);
+      char *x = malloc(a_len + 1), *y = malloc(b_len + 1);
+      int same_bytes = 0, same_name = 0;
+      if (x && y) {
+        memcpy(x, a, a_len);
+        x[a_len] = '\0';
+        memcpy(y, b, b_len);
+        y[b_len] = '\0';
+        same_bytes = !strcmp(x, y);
+        same_name = same_rel(x, y);
+      }
+      if (same_name && !same_bytes) {
+        memcpy(old, to, done);
+        memcpy(old + done, x, a_len + 1);
+        char end = b[b_len];
+        char *cut = to + done + b_len;
+        *cut = '\0';
+        char *src = mc_library_abspath(lib, old), *dst = mc_library_abspath(lib, to);
+        if (src && dst) mc_rename_in_place(src, dst);
+        free(src);
+        free(dst);
+        *cut = end;
+      }
+      free(x);
+      free(y);
+      if (!same_name || !a_end || !b_end) break;
+      a = a_end + 1;
+      b = b_end + 1;
+    }
+  }
+  free(old);
+  free(from);
+  free(to);
+}
+
+/* A replaced cover goes to the trash, as something the user may want back: called what it is,
+ * and not the backup's name. Where there's no trash, as on Android, it's deleted. */
+static mc_status cover_away(mc_library *lib, const job *j, const char *bak) {
+  const char *slash = strrchr(j->rel, '/');
+  const char *name = slash ? slash + 1 : j->rel;
+  char *folder = folder_of(j->rel);
+  size_t len = strlen(j->rel) + 16;
+  char *rel = folder ? malloc(len) : NULL, *named = NULL;
+  if (rel) {
+    snprintf(rel, len, "%s%sreplaced %s", folder, *folder ? "/" : "", name);
+    named = mc_library_abspath(lib, rel);
+  }
+  free(folder);
+  free(rel);
+  mc_status st = MC_ERR_IO;
+  if (named && mc_rename(bak, named, 1) == MC_OK) {
+    st = mc_edit_trash(named);
+    if (st != MC_OK) st = mc_remove(named);
+  } else {
+    st = mc_remove(bak);
+  }
+  free(named);
+  return st;
+}
+
 /* After the commit: the backups go, then the folders that left empty. Returns whether every
  * backup went; a file that can't be deleted stays listed for the next open. */
 static int finish_jobs(mc_library *lib, const plan *p, int covers) {
@@ -796,7 +931,7 @@ static int finish_jobs(mc_library *lib, const plan *p, int covers) {
     char *bak = mc_library_abspath(lib, j->bak);
     if (bak && mc_file_exists(bak)) {
       mc_clear_read_only(bak);
-      if (mc_remove(bak) != MC_OK) {
+      if ((j->cover ? cover_away(lib, j, bak) : mc_remove(bak)) != MC_OK) {
         fprintf(stderr, "musiccore: edit: couldn't delete %s\n", j->bak);
         all = 0;
       }
@@ -804,8 +939,11 @@ static int finish_jobs(mc_library *lib, const plan *p, int covers) {
     free(bak);
   }
   for (int i = 0; covers && i < p->count; i++) carry_cover(lib, &p->jobs[i]);
-  for (int i = 0; i < p->count; i++)
-    if (strcmp(p->jobs[i].rel, p->jobs[i].dest)) mc_transfer_prune_dirs(lib, p->jobs[i].rel);
+  for (int i = 0; i < p->count; i++) {
+    if (!strcmp(p->jobs[i].rel, p->jobs[i].dest)) continue;
+    mc_transfer_prune_dirs(lib, p->jobs[i].rel);
+    match_folder_case(lib, p->jobs[i].rel, p->jobs[i].dest);
+  }
   return all;
 }
 
@@ -830,6 +968,7 @@ static mc_status swap_and_commit(mc_library *lib, plan *p) {
     return st;
   }
   if (finish_jobs(lib, p, 1)) mc_library_meta_set(lib, KEY_SWAP, NULL);
+  follow_folder_covers(lib, p);
   return MC_OK;
 }
 
@@ -847,6 +986,11 @@ static mc_status attempt_edit(mc_library *lib, const edit_ops *ops, void *user, 
   tag_writes = 0;
   for (int i = 0; st == MC_OK && i < first.count; i++) {
     int unusable = 0;
+    watch_progress(lib, i, first.count);
+    if (watch_cancelled(lib)) {
+      st = MC_ERR_CANCELLED;
+      break;
+    }
     st = prepare_job(lib, &first.jobs[i], &unusable);
     if (st == MC_OK && unusable) {
       fprintf(stderr, "musiccore: edit: %s isn't what its hash says: left as it is\n", first.jobs[i].rel);
@@ -879,6 +1023,7 @@ static mc_status run_edit(mc_library *lib, const edit_ops *ops, void *user) {
   mc_library *own = NULL;
   mc_status st = mc_library_open_internal(mc_library_dir(lib), &own);
   if (st != MC_OK) return st;
+  own->edit_watch = lib->edit_watch;
   mc_folder_hold(mc_library_dir(lib));
   if (g_ready) mc_mutex_lock(&g_lock);
   uids skip = {0};
@@ -1370,8 +1515,11 @@ mc_status mc_album_tags_set(mc_library *lib, const char *album_uid, const mc_alb
   mb_release rel;
   memset(&rel, 0, sizeof rel);
   if (*id && strcmp(id, cur.mb_albumid)) {
+    mc_http_cancel cancel;
+    mb_call call;
     if (release_taken(lib, album_uid, id)) st = MC_ERR_EXISTS;
-    else st = mb_lookup_release(id, &rel, NULL);
+    else st = mb_lookup_release(id, &rel, watch_call(lib, &cancel, &call));
+    if (watch_cancelled(lib)) st = MC_ERR_CANCELLED;
     if (st == MC_OK && !rel.id) st = MC_ERR_NOT_FOUND;
     if (st == MC_OK) {
       e.rel = &rel;
@@ -1506,7 +1654,7 @@ static mc_status art_copy(mc_library *lib, const job *j, const mc_buffer *img) {
 /* One try, by the edit's own steps: the copies with no lock held, then in one transaction the
  * row and the renames. *again is set if the album's folders changed meanwhile. */
 static mc_status art_attempt(mc_library *lib, const char *album_uid, const mc_buffer *img,
-                             const char *ext, int *again) {
+                             const char *ext, int chosen, int *again) {
   *again = 0;
   strs folders = {0}, now = {0};
   plan p = {0};
@@ -1517,6 +1665,7 @@ static mc_status art_attempt(mc_library *lib, const char *album_uid, const mc_bu
   for (int i = 0; st == MC_OK && i < folders.count; i++) {
     p.count = i + 1;
     st = art_job(lib, folders.items[i], ext, &p.jobs[i]);
+    p.jobs[i].cover = 1;
     if (st == MC_OK && !p.jobs[i].fresh && file_open(lib, p.jobs[i].rel)) st = MC_ERR_IN_USE;
   }
   if (st == MC_OK) st = name_jobs(&p);
@@ -1538,10 +1687,11 @@ static mc_status art_attempt(mc_library *lib, const char *album_uid, const mc_bu
   st = art_folders(lib, album_uid, &now);
   if (st == MC_OK && !strs_equal(&folders, &now)) *again = 1;
   if (st == MC_OK && !*again) {
-    sqlite3_stmt *stmt = prepare(lib, "UPDATE albums SET art_hash = ?2, art_chosen = ?2 WHERE uid = ?1");
+    sqlite3_stmt *stmt = prepare(lib, "UPDATE albums SET art_hash = ?2, art_chosen = ?3 WHERE uid = ?1");
     if (stmt) {
       bind_str(stmt, 1, album_uid);
       bind_str(stmt, 2, hash);
+      bind_opt(stmt, 3, chosen ? hash : NULL);
     }
     st = step_done(stmt);
     if (st == MC_OK && !sqlite3_changes(mc_library_db(lib))) st = MC_ERR_NOT_FOUND;
@@ -1555,7 +1705,7 @@ static mc_status art_attempt(mc_library *lib, const char *album_uid, const mc_bu
   for (int i = 0; st == MC_OK && i < folders.count; i++) {
     char *dir = mc_library_abspath(lib, folders.items[i]);
     const char *slash = strrchr(p.jobs[i].dest, '/');
-    if (dir && slash) mc_coverart_drop_others(dir, slash + 1);
+    if (dir && slash) mc_coverart_trash_others(dir, slash + 1, mc_edit_trash);
     free(dir);
   }
 done:
@@ -1597,24 +1747,142 @@ mc_status mc_album_art_check_file(const char *path) {
   return st;
 }
 
+/* Makes img, checked, the album's cover, as its user's choice or not. */
+static mc_status art_write(mc_library *lib, const char *album_uid, const mc_buffer *img, const char *ext,
+                           int chosen) {
+  mc_library *own = NULL;
+  mc_status st = mc_library_open_internal(mc_library_dir(lib), &own);
+  if (st != MC_OK) return st;
+  mc_folder_hold(mc_library_dir(lib));
+  if (g_ready) mc_mutex_lock(&g_lock);
+  int again = 1;
+  for (int i = 0; st == MC_OK && again && i < MAX_ATTEMPTS; i++)
+    st = art_attempt(own, album_uid, img, ext, chosen, &again);
+  if (st == MC_OK && again) st = MC_ERR_IN_USE; /* something keeps moving it */
+  if (st == ABANDONED) st = MC_ERR_IO;
+  if (g_ready) mc_mutex_unlock(&g_lock);
+  mc_folder_release(mc_library_dir(lib));
+  mc_library_close(own);
+  return st;
+}
+
 mc_status mc_album_art_set(mc_library *lib, const char *album_uid, const void *image, size_t len) {
   if (!lib || !album_uid || !image) return MC_ERR_INVALID_ARG;
   mc_buffer img = {(char *)image, len};
   const char *ext;
   mc_status st = mc_coverart_check(&img, &ext);
   if (st != MC_OK) return st;
-  mc_library *own = NULL;
-  if ((st = mc_library_open_internal(mc_library_dir(lib), &own)) != MC_OK) return st;
-  mc_folder_hold(mc_library_dir(lib));
-  if (g_ready) mc_mutex_lock(&g_lock);
-  int again = 1;
-  for (int i = 0; st == MC_OK && again && i < MAX_ATTEMPTS; i++)
-    st = art_attempt(own, album_uid, &img, ext, &again);
-  if (st == MC_OK && again) st = MC_ERR_IN_USE; /* something keeps moving it */
-  if (st == ABANDONED) st = MC_ERR_IO;
-  if (g_ready) mc_mutex_unlock(&g_lock);
-  mc_folder_release(mc_library_dir(lib));
-  mc_library_close(own);
+  return art_write(lib, album_uid, &img, ext, 1);
+}
+
+/* The picture embedded in the first of the album's files here to have one, into img. */
+static void embedded_cover(mc_library *lib, const char *album_uid, mc_buffer *img, const char **ext) {
+  sqlite3_stmt *stmt = prepare(lib, "SELECT f.path FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                                    " WHERE t.album_uid = ?1 AND f.source_file_uid IS NULL ORDER BY f.path");
+  if (!stmt) return;
+  bind_str(stmt, 1, album_uid);
+  while (!img->data && sqlite3_step(stmt) == SQLITE_ROW) {
+    char *abs = mc_library_abspath(lib, (const char *)sqlite3_column_text(stmt, 0));
+    if (abs) mc_coverart_read_embedded(abs, img, ext);
+    free(abs);
+  }
+  sqlite3_finalize(stmt);
+}
+
+/* What an import would give the album, in img, as ensure_cover() in tagger.c picks it: its files'
+ * picture, unless a download is bigger. MC_OK with img empty if there's none to be had. */
+static mc_status automatic_cover(mc_library *lib, const char *album_uid, const album_row *a, mc_buffer *img,
+                                 const char **ext) {
+  memset(img, 0, sizeof *img);
+  embedded_cover(lib, album_uid, img, ext);
+  int side = img->data ? mc_coverart_short_side(img) : 0;
+  if (side >= MC_COVER_LOW_RES) return MC_OK;
+  mc_buffer got = {0};
+  const char *got_ext = NULL;
+  mc_http_cancel cancel;
+  mb_call call;
+  watch_call(lib, &cancel, &call);
+  mc_status st = mc_coverart_fetch(*a->mb_albumid ? a->mb_albumid : NULL,
+                                   *a->mb_releasegroupid ? a->mb_releasegroupid : NULL, a->artist, a->title,
+                                   &got, &got_ext, call.cancel);
+  if (watch_cancelled(lib)) st = MC_ERR_CANCELLED;
+  if (st == MC_OK) {
+    if (!img->data || mc_coverart_short_side(&got) > side) {
+      mc_buffer_free(img);
+      *img = got;
+      *ext = got_ext;
+    } else {
+      mc_buffer_free(&got);
+    }
+    return MC_OK;
+  }
+  if (st == MC_ERR_CANCELLED) mc_buffer_free(img);
+  if (img->data || st == MC_ERR_NOT_FOUND) return MC_OK;
+  return st;
+}
+
+/* No cover to go back to: the row says so and the folders' cover.* go to the trash. A folder.* or
+ * front.* of the user's then shows, and is what the row says. */
+static mc_status art_drop(mc_library *lib, const char *album_uid, const strs *folders) {
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  sqlite3_stmt *stmt = prepare(lib, "UPDATE albums SET art_hash = NULL, art_chosen = NULL WHERE uid = ?1");
+  if (stmt) bind_str(stmt, 1, album_uid);
+  st = step_done(stmt);
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) {
+    mc_library_rollback(lib);
+    return st;
+  }
+  char hash[MC_ART_HASH_LEN] = "";
+  for (int i = 0; i < folders->count; i++) {
+    char *dir = mc_library_abspath(lib, folders->items[i]);
+    if (dir) mc_coverart_trash_others(dir, "", mc_edit_trash);
+    char *left = dir ? mc_coverart_find(dir) : NULL;
+    if (left && !*hash && mc_coverart_hash(left, hash) != MC_OK) hash[0] = '\0';
+    free(left);
+    free(dir);
+  }
+  if (*hash && mc_library_begin_write(lib) == MC_OK) {
+    if ((stmt = prepare(lib, "UPDATE albums SET art_hash = ?2 WHERE uid = ?1"))) {
+      bind_str(stmt, 1, album_uid);
+      bind_str(stmt, 2, hash);
+    }
+    if (step_done(stmt) != MC_OK || mc_library_commit(lib) != MC_OK) mc_library_rollback(lib);
+  }
+  return MC_OK;
+}
+
+mc_status mc_album_art_reset(mc_library *lib, const char *album_uid) {
+  if (!lib || !album_uid) return MC_ERR_INVALID_ARG;
+  mc_album_flags flags;
+  mc_status st = mc_album_flags_get(lib, album_uid, &flags);
+  if (st != MC_OK || !flags.art_chosen) return st;
+  album_row a;
+  if ((st = album_row_read(lib, album_uid, &a)) != MC_OK) return st;
+  strs folders = {0};
+  st = art_folders(lib, album_uid, &folders);
+  if (st == MC_OK && !folders.count) st = MC_ERR_NOT_FOUND;
+  mc_buffer img = {0};
+  const char *ext = NULL;
+  if (st == MC_OK) st = automatic_cover(lib, album_uid, &a, &img, &ext);
+  if (st == MC_OK && img.data && mc_coverart_check(&img, &ext) != MC_OK) mc_buffer_free(&img);
+  if (st == MC_OK) {
+    if (img.data) {
+      st = art_write(lib, album_uid, &img, ext, 0);
+    } else {
+      mc_library *own = NULL;
+      if ((st = mc_library_open_internal(mc_library_dir(lib), &own)) == MC_OK) {
+        if (g_ready) mc_mutex_lock(&g_lock);
+        st = art_drop(own, album_uid, &folders);
+        if (g_ready) mc_mutex_unlock(&g_lock);
+        mc_library_close(own);
+      }
+    }
+  }
+  mc_buffer_free(&img);
+  strs_clear(&folders);
+  album_row_clear(&a);
   return st;
 }
 
@@ -1756,6 +2024,32 @@ static mc_status respell_credits(mc_library *lib, const char *uid, const char *n
   return st;
 }
 
+/* Artist uid's credits, on albums and tracks, spelled with name. While its old name is there to
+ * compare with. */
+static mc_status respell_artist(mc_library *lib, const char *uid, const char *name) {
+  mc_status st = respell_credits(lib, uid, name,
+                                 "SELECT uid, artist_credit FROM albums WHERE artist_credit IS NOT NULL"
+                                 " AND uid IN (" CREDITED_ALBUMS("?1") ")",
+                                 "UPDATE albums SET artist_credit = ?2 WHERE uid = ?1");
+  if (st == MC_OK)
+    st = respell_credits(lib, uid, name,
+                         "SELECT uid, artist_credit FROM tracks WHERE artist_credit IS NOT NULL"
+                         " AND (artist_uid = ?1 OR uid IN"
+                         "  (SELECT track_uid FROM track_artists WHERE artist_uid = ?1))",
+                         "UPDATE tracks SET artist_credit = ?2 WHERE uid = ?1");
+  return st;
+}
+
+static mc_status name_artist(mc_library *lib, const char *uid, const mc_artist_tags *tags) {
+  sqlite3_stmt *stmt = prepare(lib, "UPDATE artists SET name = ?2, sort_name = ?3 WHERE uid = ?1");
+  if (stmt) {
+    bind_str(stmt, 1, uid);
+    bind_str(stmt, 2, tags->name);
+    bind_opt(stmt, 3, tags->sort_name);
+  }
+  return step_done(stmt);
+}
+
 static mc_status artist_apply(mc_library *lib, void *user) {
   const artist_edit *e = user;
   sqlite3_stmt *stmt = prepare(lib, "SELECT 1 FROM artists WHERE uid = ?1");
@@ -1765,24 +2059,8 @@ static mc_status artist_apply(mc_library *lib, void *user) {
   sqlite3_finalize(stmt);
   if (!found) return MC_ERR_NOT_FOUND;
 
-  /* While the old name is there to compare with. */
-  mc_status st = respell_credits(lib, e->uid, e->tags->name,
-                                 "SELECT uid, artist_credit FROM albums WHERE artist_credit IS NOT NULL"
-                                 " AND uid IN (" CREDITED_ALBUMS("?1") ")",
-                                 "UPDATE albums SET artist_credit = ?2 WHERE uid = ?1");
-  if (st == MC_OK)
-    st = respell_credits(lib, e->uid, e->tags->name,
-                         "SELECT uid, artist_credit FROM tracks WHERE artist_credit IS NOT NULL"
-                         " AND (artist_uid = ?1 OR uid IN"
-                         "  (SELECT track_uid FROM track_artists WHERE artist_uid = ?1))",
-                         "UPDATE tracks SET artist_credit = ?2 WHERE uid = ?1");
-  if (st != MC_OK) return st;
-  if ((stmt = prepare(lib, "UPDATE artists SET name = ?2, sort_name = ?3 WHERE uid = ?1"))) {
-    bind_str(stmt, 1, e->uid);
-    bind_str(stmt, 2, e->tags->name);
-    bind_opt(stmt, 3, e->tags->sort_name);
-  }
-  return step_done(stmt);
+  mc_status st = respell_artist(lib, e->uid, e->tags->name);
+  return st == MC_OK ? name_artist(lib, e->uid, e->tags) : st;
 }
 
 mc_status mc_artist_tags_set(mc_library *lib, const char *artist_uid, const mc_artist_tags *tags) {
@@ -1794,6 +2072,100 @@ mc_status mc_artist_tags_set(mc_library *lib, const char *artist_uid, const mc_a
   artist_edit e = {artist_uid, tags};
   static const edit_ops ops = {artist_scope, artist_apply};
   return run_edit(lib, &ops, &e);
+}
+
+mc_status mc_artist_same_name(mc_library *lib, const char *artist_uid, const char *name,
+                              char other_uid[MC_UID_STRLEN]) {
+  if (!lib || !artist_uid || !name || !other_uid) return MC_ERR_INVALID_ARG;
+  other_uid[0] = '\0';
+  sqlite3_stmt *stmt = prepare(lib, "SELECT uid FROM artists WHERE name = ?2 COLLATE NOCASE AND uid <> ?1"
+                                    " ORDER BY name <> ?2, mb_artistid IS NULL, uid LIMIT 1");
+  if (!stmt) return MC_ERR_DB;
+  bind_str(stmt, 1, artist_uid);
+  bind_str(stmt, 2, name);
+  mc_status st = MC_ERR_NOT_FOUND;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    snprintf(other_uid, MC_UID_STRLEN, "%s", sqlite3_column_text(stmt, 0));
+    st = MC_OK;
+  }
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+/* Two artists being made one: keep stays, under tags, and gone goes. */
+typedef struct artist_merge {
+  char keep[MC_UID_STRLEN], gone[MC_UID_STRLEN];
+  mc_artist_tags tags;
+} artist_merge;
+
+static mc_status merge_scope(mc_library *lib, void *user, uids *tracks) {
+  const artist_merge *m = user;
+  artist_edit keep = {m->keep, NULL}, gone = {m->gone, NULL};
+  mc_status st = artist_scope(lib, &keep, tracks);
+  return st == MC_OK ? artist_scope(lib, &gone, tracks) : st;
+}
+
+/* Everything that credits gone credits keep. Rows as an edit writes them, so it syncs; recents
+ * being keyed by what they're of, gone's goes. */
+static mc_status merge_apply(mc_library *lib, void *user) {
+  const artist_merge *m = user;
+  mc_status st = respell_artist(lib, m->gone, m->tags.name);
+  if (st == MC_OK) st = respell_artist(lib, m->keep, m->tags.name);
+  static const char *const moves[] = {
+    "UPDATE tracks SET artist_uid = ?2 WHERE artist_uid = ?1",
+    "UPDATE albums SET artist_uid = ?2 WHERE artist_uid = ?1",
+    "UPDATE track_artists SET artist_uid = ?2 WHERE artist_uid = ?1",
+    "UPDATE album_artists SET artist_uid = ?2 WHERE artist_uid = ?1",
+  };
+  for (size_t i = 0; st == MC_OK && i < sizeof moves / sizeof moves[0]; i++) {
+    sqlite3_stmt *stmt = prepare(lib, moves[i]);
+    if (stmt) {
+      bind_str(stmt, 1, m->gone);
+      bind_str(stmt, 2, m->keep);
+    }
+    st = step_done(stmt);
+  }
+  if (st == MC_OK) {
+    sqlite3_stmt *stmt = prepare(lib, "DELETE FROM recents WHERE uid = ?1");
+    if (stmt) bind_str(stmt, 1, m->gone);
+    st = step_done(stmt);
+  }
+  if (st == MC_OK) {
+    sqlite3_stmt *stmt = prepare(lib, "DELETE FROM artists WHERE uid = ?1");
+    if (stmt) bind_str(stmt, 1, m->gone);
+    st = step_done(stmt);
+  }
+  return st == MC_OK ? name_artist(lib, m->keep, &m->tags) : st;
+}
+
+/* Whether the artist has a MusicBrainz id. */
+static int artist_has_id(mc_library *lib, const char *uid) {
+  sqlite3_stmt *stmt = prepare(lib, "SELECT 1 FROM artists WHERE uid = ?1 AND coalesce(mb_artistid, '') <> ''");
+  if (!stmt) return 0;
+  bind_str(stmt, 1, uid);
+  int yes = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  return yes;
+}
+
+mc_status mc_artist_merge(mc_library *lib, const char *artist_uid, const char *other_uid) {
+  if (!lib || !artist_uid || !other_uid || !strcmp(artist_uid, other_uid)) return MC_ERR_INVALID_ARG;
+  artist_merge m;
+  memset(&m, 0, sizeof m);
+  mc_artist_tags cur;
+  mc_status st = mc_artist_tags_get(lib, artist_uid, &cur);
+  if (st != MC_OK) return st;
+  mc_artist_tags_clear(&cur);
+  if ((st = mc_artist_tags_get(lib, other_uid, &m.tags)) != MC_OK) return st;
+  /* An id is what makes two rows one (see "Duplicates" in docs/sync-protocol.md), and a row's
+   * delete is its whole class's: so the one with an id stays, and it's never passed on. */
+  int swap = artist_has_id(lib, artist_uid) && !artist_has_id(lib, other_uid);
+  snprintf(m.keep, sizeof m.keep, "%s", swap ? artist_uid : other_uid);
+  snprintf(m.gone, sizeof m.gone, "%s", swap ? other_uid : artist_uid);
+  static const edit_ops ops = {merge_scope, merge_apply};
+  st = run_edit(lib, &ops, &m);
+  mc_artist_tags_clear(&m.tags);
+  return st;
 }
 
 /* --- Tracks --- */
@@ -2077,14 +2449,18 @@ mc_status mc_release_search(mc_library *lib, const char *album_uid, const char *
   const char *search_artist = artist && *artist && mc_string_distance(artist, "Various Artists") != 0.0
                                 ? artist
                                 : NULL;
-  if (st == MC_OK) st = mb_search_releases(search_artist, title, n, ids, RELEASE_LOOKUPS, &found, NULL);
+  mc_http_cancel cancel;
+  mb_call call;
+  watch_call(lib, &cancel, &call);
+  if (st == MC_OK) st = mb_search_releases(search_artist, title, n, ids, RELEASE_LOOKUPS, &found, &call);
 
   mc_release_list *list = st == MC_OK ? calloc(1, sizeof *list) : NULL;
   if (st == MC_OK && !list) st = MC_ERR_NOMEM;
   if (st == MC_OK && found && !(list->items = calloc((size_t)found, sizeof *list->items))) st = MC_ERR_NOMEM;
-  for (int i = 0; st == MC_OK && i < found; i++) {
+  for (int i = 0; st == MC_OK && i < found && !watch_cancelled(lib); i++) {
     mb_release rel;
-    mc_status got = mb_lookup_release(ids[i], &rel, NULL);
+    watch_progress(lib, i, found);
+    mc_status got = mb_lookup_release(ids[i], &rel, &call);
     if (got == MC_OK) {
       mc_release_score score = {1.0, 0, 0};
       if (n) st = mc_score_release(&rel, tags, n, cur.title, cur.artist, map, &score);
@@ -2095,6 +2471,7 @@ mc_status mc_release_search(mc_library *lib, const char *album_uid, const char *
     mb_release_clear(&rel);
     if (got == MC_ERR_NET) break;
   }
+  if (watch_cancelled(lib)) st = MC_ERR_CANCELLED;
   if (st == MC_OK) {
     if (list->count) qsort(list->items, (size_t)list->count, sizeof *list->items, by_score);
     *out = list;
@@ -2130,7 +2507,13 @@ mc_status mc_release_tags(mc_library *lib, const char *album_uid, const char *mb
   if (st != MC_OK) return st;
   album_row_clear(&cur);
   mb_release rel;
-  st = mb_lookup_release(mb_albumid, &rel, NULL);
+  mc_http_cancel cancel;
+  mb_call call;
+  st = mb_lookup_release(mb_albumid, &rel, watch_call(lib, &cancel, &call));
+  if (watch_cancelled(lib)) {
+    if (st == MC_OK) mb_release_clear(&rel);
+    return MC_ERR_CANCELLED;
+  }
   if (st == MC_OK) {
     out->title = mc_strdup(or_empty(rel.title));
     out->artist = mc_strdup(or_empty(rel.artist));

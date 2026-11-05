@@ -499,9 +499,17 @@ follow on this device only.
   typo put right leaves nothing behind.
 - **Renaming an artist.** The row changes, and with it credits that spell the old name out
   ("Ann & Bob", when the artists are Ann and Bob); one that credits them otherwise stays. A name
-  another artist has doesn't merge them: artists are told apart by uid, and merged by
-  `mb_artistid` alone, as sync does. Two with the same id are one already, and two without may
-  well be different people.
+  another artist has doesn't merge them by itself: artists are told apart by uid, and merged by
+  `mb_artistid` alone, as sync does, since two without an id may well be different people. So
+  the form asks.
+- **Merging two artists.** Renaming an artist to a name another has (`mc_artist_same_name()`, any
+  case) asks whether to merge them, and yes is `mc_artist_merge()`: everything that credited
+  either credits one, under the other's name and sort name, with files and tags following as for
+  a rename. It's a hand edit, so all or nothing, and it syncs as rows: credits change and the
+  artist that goes is deleted. The row that stays is the one with an `mb_artistid` if only one has,
+  and an id is never copied across: two rows that have shared one are one for good, and a delete
+  of either would then be both's (see [Duplicates](sync-protocol.md#duplicates)). A sync profile
+  that chose the artist that went loses that item.
 - **File tags.** Each original on this device whose tags the edit changes is rewritten with
   `mc_tags_write()`: only the tags that changed, so what the rows don't know about stays. A
   transcode keeps its tags, and nothing outside the library folder is touched. The `files` row
@@ -521,10 +529,15 @@ follow on this device only.
   would put it, with the same ` (2)` when that's taken, on disk or in `files`. A file this edit
   moves away doesn't count, so tracks can trade names. One filed elsewhere stays there through
   edits that don't change its place. Transcodes move too. The cover is copied to the album's new
-  folder unless it has one, and folders left empty or holding only a cover go, as usual. `files`
+  folder unless it has one, in which case that's the album's cover now and `art_hash` follows it,
+  unless the user chose the album's. Folders left empty or holding only a cover go, as usual. A
+  folder whose name changes only in case on Windows is renamed to match. `files`
   doesn't sync, so only the device that made the edit moves anything. A disc number past the
   album's last raises `disc_total`, which renames all its files; taking the last track off the
   album's last disc lowers it to the last disc with a track, which renames them again.
+- **Stopping one.** `mc_edit_set_watch()` says how far an edit or a release search is, and can
+  stop it (`MC_ERR_CANCELLED`) while copies are being made, nothing having changed. The renames
+  after that are quick, and can't be stopped.
 - **All or nothing.** A failed copy, tag write or rename leaves rows and files exactly as they
   were. Neither goes first. In a write transaction the rows change, what that means for each
   file is worked out by comparing tags and paths before and after, and it's rolled back. With no
@@ -638,9 +651,15 @@ a path. It must be a JPEG or PNG of up to 16 MB and 8192 px a side that decodes 
 - **Where it goes.** As `cover.jpg` or `cover.png`, by its bytes, in every folder here holding a
   file of the album, inside the library folder. An album with no file on this device can't take
   one (`MC_ERR_NOT_FOUND`), and `mc_album_art_get()` says so before a form offers it. Any other
-  `cover.*` of those folders goes, deleted rather than trashed, or it could go on being found
-  first; `folder.*` and `front.*` stay, ranking below. `albums.art_hash` and `albums.art_chosen`
-  take its SHA-256, logged like any change.
+  `cover.*` of those folders goes too, or it could go on being found first; `folder.*` and
+  `front.*` stay, ranking below. What's replaced goes to the Recycle Bin or trash, the one in its
+  place as `replaced cover.jpg`, and is deleted only where there's none, as on Android.
+  `albums.art_hash` and `albums.art_chosen` take its SHA-256, logged like any change.
+- **Going back.** `mc_album_art_reset()` undoes it: `art_chosen` is cleared and the album gets what
+  an import would give it, the picture embedded in its files or one downloaded, whichever is
+  bigger, by the same steps. With none to be had it has no cover (a `folder.*` or `front.*` then
+  shows), and with the network down nothing changes. Other devices clear the choice but keep the
+  cover they have, as a folder with a cover does, until something replaces it.
 - **Files' tags.** Nothing is embedded, as for all art here, so no audio file is touched and
   nothing else about the tracks changes.
 - **All or nothing.** It goes by the steps of any hand edit: the copies are written beside the

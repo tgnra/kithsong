@@ -225,6 +225,7 @@ mc_status mc_coverart_save(const char *dir, const mc_buffer *img, const char *ex
 
 typedef struct cover_drop {
   const char *dir, *keep;
+  mc_status (*trash)(const char *path); /* NULL: they're deleted */
 } cover_drop;
 
 static void on_drop_entry(void *user, const char *name, int is_dir) {
@@ -237,7 +238,7 @@ static void on_drop_entry(void *user, const char *name, int is_dir) {
     if (path) {
       snprintf(path, len, "%s%c%s", d->dir, MC_PATH_SEP, name);
       mc_clear_read_only(path);
-      mc_remove(path);
+      if (!d->trash || d->trash(path) != MC_OK) mc_remove(path);
     }
     free(path);
     break;
@@ -245,7 +246,12 @@ static void on_drop_entry(void *user, const char *name, int is_dir) {
 }
 
 void mc_coverart_drop_others(const char *dir, const char *name) {
-  cover_drop d = {dir, name};
+  cover_drop d = {dir, name, NULL};
+  mc_list_dir(dir, on_drop_entry, &d);
+}
+
+void mc_coverart_trash_others(const char *dir, const char *name, mc_status (*trash)(const char *path)) {
+  cover_drop d = {dir, name, trash};
   mc_list_dir(dir, on_drop_entry, &d);
 }
 

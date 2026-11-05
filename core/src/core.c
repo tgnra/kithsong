@@ -33,6 +33,7 @@ const char *mc_status_str(mc_status status) {
     case MC_ERR_IN_USE: return mc_str(MC_STR_STATUS_IN_USE);
     case MC_ERR_EXISTS: return mc_str(MC_STR_STATUS_EXISTS);
     case MC_ERR_STRESS_LIBRARY: return mc_str(MC_STR_STATUS_STRESS_LIBRARY);
+    case MC_ERR_CANCELLED: return mc_str(MC_STR_STATUS_CANCELLED);
 
   }
   return mc_str(MC_STR_STATUS_UNKNOWN);

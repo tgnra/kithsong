@@ -1660,6 +1660,328 @@ static void test_art_kept(const char *base) {
   lib_close(&l);
 }
 
+/* What the trash was given, deleted so that the test's folder goes. */
+static int g_trashed;
+static char g_trashed_name[64];
+
+static mc_status count_trash(const char *path) {
+  g_trashed++;
+  const char *slash = strrchr(path, '/'), *sep = strrchr(path, MC_PATH_SEP);
+  if (sep > slash) slash = sep;
+  snprintf(g_trashed_name, sizeof g_trashed_name, "%s", slash ? slash + 1 : path);
+  return mc_remove(path);
+}
+
+static mc_status no_trash(const char *path) {
+  (void)path;
+  return MC_ERR_IO;
+}
+
+static test_image g_auto_image;
+static mc_status g_auto_status;
+
+static mc_status fake_auto_cover(const char *mb_albumid, const char *mb_releasegroupid, const char *artist,
+                                 const char *album, mc_buffer *img, const char **ext) {
+  (void)mb_albumid, (void)mb_releasegroupid, (void)artist, (void)album;
+  g_cover_fetches++;
+  if (g_auto_status != MC_OK) return g_auto_status;
+  img->data = malloc(g_auto_image.len);
+  memcpy(img->data, g_auto_image.data, g_auto_image.len);
+  img->len = g_auto_image.len;
+  *ext = "jpg";
+  return MC_OK;
+}
+
+/* A replaced cover goes to the trash, under a name that says so; and going back to the automatic
+ * cover clears the choice, or if there's nothing to go back to leaves the album without one. */
+static void test_art_reset(const char *base) {
+  lib_dir l;
+  lib_open(&l, base, "art-reset");
+  char album[MC_UID_STRLEN];
+  album_spec s = {"Album", "Ann", ANN, NULL, 2000, 2, k_titles};
+  add_album(&l, &s, album);
+  test_image one = test_image_make(0, 1, 32), two = test_image_make(0, 2, 32);
+  g_auto_image = test_image_make(0, 3, 32);
+  mc_album_flags flags;
+  CHECK(mc_album_flags_get(l.lib, album, &flags) == MC_OK && !flags.art_chosen);
+
+  /* Nothing chosen, nothing to do. */
+  mc_coverart_set_fake(fake_auto_cover);
+  g_cover_fetches = 0;
+  CHECK(mc_album_art_reset(l.lib, album) == MC_OK);
+  CHECK(g_cover_fetches == 0);
+
+  mc_status (*was)(const char *) = mc_edit_trash;
+  mc_edit_trash = count_trash;
+  CHECK(mc_album_art_set(l.lib, album, one.data, one.len) == MC_OK);
+  CHECK(g_trashed == 0); /* it replaced nothing */
+  CHECK(mc_album_art_set(l.lib, album, two.data, two.len) == MC_OK);
+  CHECK(g_trashed == 1);
+  CHECK_STR(g_trashed_name, "replaced cover.jpg");
+  CHECK(count_strays(l.path) == 0);
+  CHECK(mc_album_flags_get(l.lib, album, &flags) == MC_OK && flags.art_chosen);
+
+  /* No trash to go to, as on Android: it's deleted, and nothing is left behind. */
+  mc_edit_trash = no_trash;
+  CHECK(mc_album_art_set(l.lib, album, one.data, one.len) == MC_OK);
+  CHECK(!mc_file_exists(abs_of(&l, "Ann/Album (2000)/replaced cover.jpg")));
+  CHECK(count_strays(l.path) == 0);
+  mc_edit_trash = count_trash;
+
+  /* The network down: nothing changes. */
+  char want[MC_SHA256_STRLEN];
+  snprintf(want, sizeof want, "%s", sha_of_image(&l, &one));
+  g_auto_status = MC_ERR_NET;
+  CHECK(mc_album_art_reset(l.lib, album) == MC_ERR_NET);
+  CHECK_STR(q_str(&l, "SELECT art_chosen FROM albums WHERE uid = ?1", album, NULL), want);
+
+  /* A download: it's the album's cover, and no one's choice. */
+  g_auto_status = MC_OK;
+  snprintf(want, sizeof want, "%s", sha_of_image(&l, &g_auto_image));
+  CHECK(mc_album_art_reset(l.lib, album) == MC_OK);
+  CHECK(q_int(&l, "SELECT art_chosen IS NULL FROM albums WHERE uid = ?1", album, NULL) == 1);
+  CHECK_STR(q_str(&l, "SELECT art_hash FROM albums WHERE uid = ?1", album, NULL), want);
+  CHECK_STR(hash_of(abs_of(&l, "Ann/Album (2000)/cover.jpg")), want);
+  CHECK(logged(&l, "albums", album, "art_chosen"));
+
+  /* Nothing to be had: no cover, and the row says so. */
+  CHECK(mc_album_art_set(l.lib, album, one.data, one.len) == MC_OK);
+  g_auto_status = MC_ERR_NOT_FOUND;
+  int trashed = g_trashed;
+  CHECK(mc_album_art_reset(l.lib, album) == MC_OK);
+  CHECK(g_trashed == trashed + 1);
+  CHECK(!mc_file_exists(abs_of(&l, "Ann/Album (2000)/cover.jpg")));
+  CHECK(q_int(&l, "SELECT art_hash IS NULL AND art_chosen IS NULL FROM albums WHERE uid = ?1", album, NULL) == 1);
+
+  /* But a folder.jpg of the user's shows then, and the row says that. */
+  CHECK(mc_album_art_set(l.lib, album, one.data, one.len) == MC_OK);
+  write_bytes(abs_of(&l, "Ann/Album (2000)/folder.jpg"), "the user's");
+  CHECK(mc_album_art_reset(l.lib, album) == MC_OK);
+  CHECK_STR(q_str(&l, "SELECT art_hash FROM albums WHERE uid = ?1", album, NULL),
+            hash_of(abs_of(&l, "Ann/Album (2000)/folder.jpg")));
+
+  mc_edit_trash = was;
+  mc_coverart_set_fake(NULL);
+  g_auto_status = MC_OK;
+  free(one.data);
+  free(two.data);
+  free(g_auto_image.data);
+  lib_close(&l);
+}
+
+/* Two albums made to share a folder: the folder's cover stays, and is the moved album's now. */
+static void test_shared_folder_cover(const char *base) {
+  lib_dir l;
+  lib_open(&l, base, "shared-cover");
+  char stays[MC_UID_STRLEN], moves[MC_UID_STRLEN];
+  album_spec s = {"Album", "Ann", ANN, NULL, 2000, 1, k_titles};
+  static const char *const titles[] = {"Other"};
+  album_spec s2 = {"Taken", "Ann", ANN, NULL, 2000, 1, titles};
+  add_album(&l, &s, moves);
+  add_album(&l, &s2, stays);
+  test_image kept = test_image_make(0, 1, 32), lost = test_image_make(0, 2, 32);
+  CHECK(mc_album_art_set(l.lib, stays, kept.data, kept.len) == MC_OK);
+  CHECK(mc_album_art_set(l.lib, moves, lost.data, lost.len) == MC_OK);
+  char hash[MC_SHA256_STRLEN];
+  snprintf(hash, sizeof hash, "%s", sha_of_image(&l, &kept));
+
+  /* Chosen covers stay chosen. */
+  mc_album_tags t;
+  CHECK(mc_album_tags_get(l.lib, moves, &t) == MC_OK);
+  free(t.title);
+  t.title = mc_strdup("Taken");
+  CHECK(mc_album_tags_set(l.lib, moves, &t) == MC_OK);
+  CHECK_STR(q_str(&l, "SELECT art_hash FROM albums WHERE uid = ?1", moves, NULL), sha_of_image(&l, &lost));
+
+  /* One that isn't takes the folder's. */
+  CHECK(mc_library_begin_write(l.lib) == MC_OK);
+  CHECK(sqlite3_exec(mc_library_db(l.lib), "UPDATE albums SET art_chosen = NULL", NULL, NULL, NULL) == SQLITE_OK);
+  CHECK(mc_library_commit(l.lib) == MC_OK);
+  free(t.title);
+  t.title = mc_strdup("Album");
+  CHECK(mc_album_tags_set(l.lib, moves, &t) == MC_OK);
+  write_bytes(abs_of(&l, "Ann/Album (2000)/cover.jpg"), "its own");
+  free(t.title);
+  t.title = mc_strdup("Taken");
+  CHECK(mc_album_tags_set(l.lib, moves, &t) == MC_OK);
+  mc_album_tags_clear(&t);
+  CHECK_STR(path_of(&l, track_at(&l, moves, 1)), "Ann/Taken (2000)/01 One.wav");
+  CHECK_STR(hash_of(abs_of(&l, "Ann/Taken (2000)/cover.jpg")), hash);
+  CHECK_STR(q_str(&l, "SELECT art_hash FROM albums WHERE uid = ?1", moves, NULL), hash);
+  CHECK(logged(&l, "albums", moves, "art_hash"));
+  free(kept.data);
+  free(lost.data);
+  lib_close(&l);
+}
+
+/* Whether dir holds an entry of exactly this name. */
+static int has_entry(const char *dir, const char *name) {
+  names n = {NULL, 0};
+  mc_list_dir(dir, collect, &n);
+  int yes = 0;
+  for (int i = 0; i < n.count; i++) yes |= !strcmp(n.items[i] + 1, name);
+  free(n.items);
+  return yes;
+}
+
+/* On Windows the folder takes a change of case too; elsewhere it's a new folder. Either way the
+ * name on disk ends up the one in the rows. */
+static void test_folder_case(const char *base) {
+  lib_dir l;
+  lib_open(&l, base, "folder-case");
+  char album[MC_UID_STRLEN];
+  album_spec s = {"Album", "Ann", ANN, NULL, 2000, 2, k_titles};
+  add_album(&l, &s, album);
+  mc_album_tags t;
+  CHECK(mc_album_tags_get(l.lib, album, &t) == MC_OK);
+  free(t.title);
+  t.title = mc_strdup("ALBUM");
+  CHECK(mc_album_tags_set(l.lib, album, &t) == MC_OK);
+  mc_album_tags_clear(&t);
+  CHECK(has_entry(abs_of(&l, "Ann"), "ALBUM (2000)"));
+  CHECK(!has_entry(abs_of(&l, "Ann"), "Album (2000)"));
+  CHECK(files_check_out(&l));
+
+  /* The artist's folder as well, each part that differs. */
+  mc_artist_list *artists = NULL;
+  CHECK(mc_library_list_artists(l.lib, &artists) == MC_OK);
+  mc_artist_tags a = {NULL, NULL};
+  if (artists && artists->count == 1) {
+    CHECK(mc_artist_tags_get(l.lib, artists->items[0].uid, &a) == MC_OK);
+    free(a.name);
+    a.name = mc_strdup("ANN");
+    CHECK(mc_artist_tags_set(l.lib, artists->items[0].uid, &a) == MC_OK);
+    mc_artist_tags_clear(&a);
+  }
+  mc_artist_list_free(artists);
+  CHECK(has_entry(l.path, "ANN"));
+  CHECK(!has_entry(l.path, "Ann"));
+  CHECK(files_check_out(&l));
+  lib_close(&l);
+}
+
+/* Two artists of a name made one, whichever rows credit them. */
+static void test_artist_merge(const char *base) {
+  lib_dir l;
+  lib_open(&l, base, "artist-merge");
+  char one[MC_UID_STRLEN], two[MC_UID_STRLEN], other[MC_UID_STRLEN];
+  static const char *const titles[] = {"Other"};
+  album_spec s = {"Album", "Ann", ANN, NULL, 2000, 2, k_titles};
+  album_spec s2 = {"Second", "Ann Lee", NULL, NULL, 2001, 1, titles};
+  add_album(&l, &s, one);
+  add_album(&l, &s2, two);
+  char ann[MC_UID_STRLEN], lee[MC_UID_STRLEN];
+  snprintf(ann, sizeof ann, "%s", q_str(&l, "SELECT uid FROM artists WHERE name = 'Ann'", NULL, NULL));
+  snprintf(lee, sizeof lee, "%s", q_str(&l, "SELECT uid FROM artists WHERE name = 'Ann Lee'", NULL, NULL));
+
+  CHECK(mc_artist_same_name(l.lib, lee, "Bob", other) == MC_ERR_NOT_FOUND);
+  CHECK(mc_artist_same_name(l.lib, lee, "Ann Lee", other) == MC_ERR_NOT_FOUND); /* its own */
+  CHECK(mc_artist_same_name(l.lib, lee, "ann", other) == MC_OK);
+  CHECK_STR(other, ann);
+  CHECK(mc_artist_merge(l.lib, lee, lee) == MC_ERR_INVALID_ARG);
+  CHECK(mc_artist_merge(l.lib, lee, "nope") == MC_ERR_NOT_FOUND);
+
+  /* A recent of the one that goes goes too. */
+  CHECK(mc_library_begin_write(l.lib) == MC_OK);
+  char sql[256];
+  snprintf(sql, sizeof sql, "INSERT INTO recents (uid, kind, opened_ms) VALUES ('%s', 'artist', 1)", lee);
+  CHECK(sqlite3_exec(mc_library_db(l.lib), sql, NULL, NULL, NULL) == SQLITE_OK);
+  CHECK(mc_library_commit(l.lib) == MC_OK);
+
+  CHECK(mc_artist_merge(l.lib, lee, ann) == MC_OK);
+  CHECK(q_int(&l, "SELECT count(*) FROM artists", NULL, NULL) == 1);
+  CHECK(q_int(&l, "SELECT count(*) FROM artists WHERE uid = ?1 AND name = 'Ann'", ann, NULL) == 1);
+  CHECK(q_int(&l, "SELECT count(*) FROM albums WHERE artist_uid = ?1", ann, NULL) == 2);
+  CHECK(q_int(&l, "SELECT count(*) FROM tracks WHERE artist_uid = ?1", lee, NULL) == 0);
+  CHECK(q_int(&l, "SELECT count(*) FROM track_artists WHERE artist_uid = ?1", lee, NULL) == 0);
+  CHECK(q_int(&l, "SELECT count(*) FROM album_artists WHERE artist_uid = ?1", lee, NULL) == 0);
+  CHECK(q_int(&l, "SELECT count(*) FROM recents WHERE uid = ?1", lee, NULL) == 0);
+  CHECK(logged(&l, "albums", two, "artist_uid"));
+  /* Its files follow, into the folder of the name that's left. */
+  CHECK_STR(path_of(&l, track_at(&l, two, 1)), "Ann/Second (2001)/01 Other.wav");
+  CHECK(files_check_out(&l));
+  mc_tags tags;
+  CHECK(mc_tags_read(abs_of(&l, path_of(&l, track_at(&l, two, 1))), &tags) == MC_OK);
+  CHECK_STR(tags.album_artist, "Ann");
+  CHECK_STR(tags.mb_albumartistid, ANN);
+  mc_tags_clear(&tags);
+  lib_close(&l);
+
+  /* The row with an id stays whichever way it's asked, but the name is the one asked for. */
+  lib_open(&l, base, "artist-merge-id");
+  add_album(&l, &s, one);
+  add_album(&l, &s2, two);
+  snprintf(ann, sizeof ann, "%s", q_str(&l, "SELECT uid FROM artists WHERE name = 'Ann'", NULL, NULL));
+  snprintf(lee, sizeof lee, "%s", q_str(&l, "SELECT uid FROM artists WHERE name = 'Ann Lee'", NULL, NULL));
+  CHECK(mc_artist_merge(l.lib, ann, lee) == MC_OK);
+  CHECK(q_int(&l, "SELECT count(*) FROM artists", NULL, NULL) == 1);
+  CHECK(q_int(&l, "SELECT count(*) FROM artists WHERE uid = ?1 AND name = 'Ann Lee'", ann, NULL) == 1);
+  CHECK_STR(path_of(&l, track_at(&l, one, 1)), "Ann Lee/Album (2000)/01 One.wav");
+  CHECK(files_check_out(&l));
+  lib_close(&l);
+}
+
+typedef struct watching {
+  int stop_at; /* cancels at this many files done; < 0 never */
+  int last_done, last_total, calls;
+} watching;
+
+static void on_progress(void *user, int done, int total) {
+  watching *w = user;
+  w->last_done = done;
+  w->last_total = total;
+  w->calls++;
+}
+
+static int on_cancelled(void *user) {
+  watching *w = user;
+  return w->stop_at >= 0 && w->calls > w->stop_at;
+}
+
+/* Stopping an edit part way changes nothing; so does stopping a search, and a watch that's
+ * cleared watches no more. */
+static void test_watch(const char *base) {
+  lib_dir l;
+  lib_open(&l, base, "watch");
+  char album[MC_UID_STRLEN];
+  album_spec s = {"Album", "Ann", ANN, NULL, 2000, 3, k_titles};
+  add_album(&l, &s, album);
+  mc_album_tags t;
+  CHECK(mc_album_tags_get(l.lib, album, &t) == MC_OK);
+  free(t.title);
+  t.title = mc_strdup("Renamed");
+
+  watching w = {1, 0, 0, 0};
+  mc_edit_watch watch = {on_progress, on_cancelled, &w};
+  mc_edit_set_watch(l.lib, &watch);
+  CHECK(mc_album_tags_set(l.lib, album, &t) == MC_ERR_CANCELLED);
+  CHECK(w.last_total == 3 && w.last_done == 1);
+  CHECK(q_int(&l, "SELECT count(*) FROM albums WHERE title = 'Album'", NULL, NULL) == 1);
+  CHECK(files_check_out(&l));
+  CHECK(count_strays(l.path) == 0);
+  CHECK(q_int(&l, "SELECT count(*) FROM meta WHERE key = 'edit_swap'", NULL, NULL) == 0);
+
+  /* Left to run it says each file. */
+  w = (watching){-1, 0, 0, 0};
+  CHECK(mc_album_tags_set(l.lib, album, &t) == MC_OK);
+  CHECK(w.calls == 3 && w.last_done == 2 && w.last_total == 3);
+  CHECK(q_int(&l, "SELECT count(*) FROM albums WHERE title = 'Renamed'", NULL, NULL) == 1);
+
+  w = (watching){0, 0, 0, 1};
+  mc_release_list *list = NULL;
+  CHECK(mc_release_search(l.lib, album, "Ann", "Renamed", &list) == MC_ERR_CANCELLED);
+  CHECK(list == NULL);
+  mc_album_tags from = {0};
+  CHECK(mc_release_tags(l.lib, album, REL_NEW, &from) == MC_ERR_CANCELLED);
+
+  mc_edit_set_watch(l.lib, NULL);
+  free(t.title);
+  t.title = mc_strdup("Again");
+  CHECK(mc_album_tags_set(l.lib, album, &t) == MC_OK);
+  mc_album_tags_clear(&t);
+  lib_close(&l);
+}
+
 int main(int argc, char **argv) {
   const char *base = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
@@ -1682,6 +2004,11 @@ int main(int argc, char **argv) {
   test_art_set(base);
   test_art_failures(base);
   test_art_kept(base);
+  test_art_reset(base);
+  test_shared_folder_cover(base);
+  test_folder_case(base);
+  test_artist_merge(base);
+  test_watch(base);
   mb_set_fake(NULL);
   mc_shutdown();
   return TEST_RESULT();

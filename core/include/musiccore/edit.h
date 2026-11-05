@@ -16,6 +16,7 @@
  *   MC_ERR_EXISTS  (an album's new mb_albumid) another album has that release, or once had:
  *                  sync would merge the two. Nothing has changed.
  *   MC_ERR_IO      a file couldn't be copied or written, a full disk say. Nothing has changed.
+ *   MC_ERR_CANCELLED  stopped by mc_edit_set_watch()'s cancelled. Nothing has changed.
  *
  * What an edit does to files: every original of this device that the changed tags are in is
  * rewritten, those tags only, with its files row following (size, mtime, sha256); its file_rev
@@ -61,8 +62,8 @@ void mc_album_tags_clear(mc_album_tags *tags);
 
 /* name can't be empty (MC_ERR_INVALID_ARG). Renamed, credits that spell the name out follow, as
  * do the files; one that credits the artist otherwise stays as it was. A name another artist
- * has makes two artists of that name, listed apart: they're merged only as any two are, by
- * sharing a MusicBrainz id. */
+ * has makes two artists of that name, listed apart. So before saving a new name, a form asks
+ * mc_artist_same_name(), and if there is one offers to merge the two. */
 typedef struct mc_artist_tags {
   char *name;
   char *sort_name;
@@ -71,6 +72,17 @@ typedef struct mc_artist_tags {
 mc_status mc_artist_tags_get(mc_library *lib, const char *artist_uid, mc_artist_tags *out);
 mc_status mc_artist_tags_set(mc_library *lib, const char *artist_uid, const mc_artist_tags *tags);
 void mc_artist_tags_clear(mc_artist_tags *tags);
+
+/* Another artist called name, whatever its case: MC_OK with other_uid set, the closest spelling
+ * first, else MC_ERR_NOT_FOUND. */
+mc_status mc_artist_same_name(mc_library *lib, const char *artist_uid, const char *name,
+                              char other_uid[MC_UID_STRLEN]);
+/* Makes artist_uid and other_uid one artist, by other_uid's name and sort name. All that credits
+ * either credits it, with files following as for a rename: a _set(), with its statuses and with
+ * the free space a rename takes. The row that stays is other_uid's, unless only artist_uid has a
+ * MusicBrainz id, so a frontend should open whichever uid has been left in its list again.
+ * MC_ERR_INVALID_ARG for one artist given twice. */
+mc_status mc_artist_merge(mc_library *lib, const char *artist_uid, const char *other_uid);
 
 typedef struct mc_track_tags {
   char *title;
@@ -84,6 +96,24 @@ typedef struct mc_track_tags {
 mc_status mc_track_tags_get(mc_library *lib, const char *track_uid, mc_track_tags *out);
 mc_status mc_track_tags_set(mc_library *lib, const char *track_uid, const mc_track_tags *tags);
 void mc_track_tags_clear(mc_track_tags *tags);
+
+/* Watching an edit or a release search, which can take minutes: an artist with many albums copies
+ * every file first, and MusicBrainz may be busy. Set on the handle before calling, and cleared
+ * with NULL after; the struct must last until then. It covers the _set()s above and below, and
+ * mc_release_search() and mc_release_tags().
+ *
+ * progress, if not NULL, is told how far it is: files copied of those to copy, or releases looked
+ * up of those found. cancelled, if not NULL, is asked often and returns nonzero to stop: the call
+ * then returns MC_ERR_CANCELLED, with nothing changed. Once the copies are made an edit is only
+ * renames and can't be stopped, so it may still finish. Both are called on the thread of the
+ * call, as often as a file or a request takes, so a file that's copying has to finish first. */
+typedef struct mc_edit_watch {
+  void (*progress)(void *user, int done, int total);
+  int (*cancelled)(void *user);
+  void *user;
+} mc_edit_watch;
+
+void mc_edit_set_watch(mc_library *lib, const mc_edit_watch *watch);
 
 /* What an album's tags can't say; these are never written to its files. */
 typedef struct mc_album_flags {
@@ -99,6 +129,9 @@ typedef struct mc_album_flags {
   /* mix is the user's choice, not the album's length. Ignored by _set(): changing mix from
    * what _get() said is what makes a choice, and leaving it leaves it to the length. */
   int mix_by_hand;
+  /* The cover is the user's choice, so mc_album_art_reset() has something to undo. Ignored by
+   * _set(). */
+  int art_chosen;
 } mc_album_flags;
 
 mc_status mc_album_flags_get(mc_library *lib, const char *album_uid, mc_album_flags *out);
@@ -122,7 +155,8 @@ mc_status mc_track_mix_set(mc_library *lib, const char *track_uid, int mix);
 /* An album's cover, chosen by the user. It's kept as given, as cover.jpg or cover.png in every
  * folder of this device holding the album's files, with albums.art_hash following, and reaches
  * other devices as a change of art (see "Covers" in docs/sync-protocol.md). Files' tags aren't
- * touched: no art is embedded, on this device or any. The cover replaced is deleted.
+ * touched: no art is embedded, on this device or any. The cover replaced goes to the Recycle
+ * Bin or trash, as "replaced cover.jpg", or is deleted where there's none, as on Android.
  *
  * The album remembers the choice: import and cover downloads leave it alone, a later choice
  * being the only thing that replaces it. See "Cover art" in docs/tagging-rules.md.
@@ -151,6 +185,15 @@ mc_status mc_album_art_check_file(const char *path);
  * mc_album_tags_set() if both are being saved, as that can move the album's folder. */
 mc_status mc_album_art_set(mc_library *lib, const char *album_uid, const void *image, size_t len);
 mc_status mc_album_art_set_file(mc_library *lib, const char *album_uid, const char *path);
+
+/* Undoes the choice: the album goes back to the cover an import would give it, the picture in its
+ * files or one downloaded, whichever is bigger, and import and downloads may change it again. If
+ * there's none to be had it has no cover, and the chosen one goes as a replaced one does. Waits
+ * for the network, so call it off the UI thread. MC_OK with nothing changed if no cover was
+ * chosen; MC_ERR_NET, also with nothing changed, if a cover may be there but can't be reached;
+ * otherwise as mc_album_art_set(). Other devices have the album's new cover only if the folder
+ * has none, as for a cover that isn't chosen: see "Covers" in docs/sync-protocol.md. */
+mc_status mc_album_art_reset(mc_library *lib, const char *album_uid);
 
 typedef struct mc_release_info {
   char mb_albumid[MC_UID_STRLEN];

@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "library/delete_internal.h"
+#include "library/edit_internal.h"
 #include "sync/transfer.h"
 #include "tagger/dupes.h"
 #include "util/platform.h"
@@ -27,4 +28,5 @@ __attribute__((constructor)) static void use_test_trash(void) {
   mc_transfer_trash = test_trash;
   mc_dupes_trash = test_trash;
   mc_delete_trash = test_trash;
+  mc_edit_trash = test_trash;
 }

@@ -33,7 +33,8 @@ typedef enum mc_status {
   MC_ERR_AUTH = -12,            /* a service refused the sign-in, session or API key */
   MC_ERR_IN_USE = -13,          /* a file is open (being played, sent...): try again once it isn't */
   MC_ERR_EXISTS = -14,          /* it's in the library already, as something else */
-  MC_ERR_STRESS_LIBRARY = -15   /* a stress test library neither syncs nor scrobbles (stress.h) */
+  MC_ERR_STRESS_LIBRARY = -15,  /* a stress test library neither syncs nor scrobbles (stress.h) */
+  MC_ERR_CANCELLED = -16        /* the caller stopped it: nothing has changed (edit.h) */
 
 } mc_status;
 

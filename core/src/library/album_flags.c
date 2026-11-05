@@ -12,8 +12,8 @@ mc_status mc_album_flags_get(mc_library *lib, const char *album_uid, mc_album_fl
   if (!lib || !album_uid || !out) return MC_ERR_INVALID_ARG;
   memset(out, 0, sizeof *out);
   sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(lib->db, "SELECT a.no_scrobble, " MC_ALBUM_IS_MIX("a") ", a.mix <> 0"
-                         " FROM albums a WHERE a.uid = ?1", -1, &stmt, NULL) != SQLITE_OK)
+  if (sqlite3_prepare_v2(lib->db, "SELECT a.no_scrobble, " MC_ALBUM_IS_MIX("a") ", a.mix <> 0,"
+                         " a.art_chosen IS NOT NULL FROM albums a WHERE a.uid = ?1", -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
   sqlite3_bind_text(stmt, 1, album_uid, -1, SQLITE_STATIC);
   int rc = sqlite3_step(stmt);
@@ -21,6 +21,7 @@ mc_status mc_album_flags_get(mc_library *lib, const char *album_uid, mc_album_fl
     out->no_scrobble = sqlite3_column_int(stmt, 0);
     out->mix = sqlite3_column_int(stmt, 1);
     out->mix_by_hand = sqlite3_column_int(stmt, 2);
+    out->art_chosen = sqlite3_column_int(stmt, 3);
   }
   sqlite3_finalize(stmt);
   return rc == SQLITE_ROW ? MC_OK : rc == SQLITE_DONE ? MC_ERR_NOT_FOUND : MC_ERR_DB;

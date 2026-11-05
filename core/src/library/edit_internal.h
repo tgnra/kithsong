@@ -19,6 +19,9 @@ void mc_edit_recover(mc_library *lib);
  * NULL if none does. Free it. */
 char *mc_edit_chosen_cover(mc_library *lib, const char *album_uid, const char *hash);
 
+/* What a replaced cover goes to: mc_trash(), but for a test, or mc_remove() where it fails. */
+extern mc_status (*mc_edit_trash)(const char *path);
+
 /* > 0: writing the nth file's tags fails, as a full disk would. */
 extern int mc_edit_test_fail_tags;
 /* > 0: the nth rename of an edit's swap fails, as a file opened at that moment would. */
