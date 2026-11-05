@@ -877,6 +877,7 @@ size_t mc_sync_problems_text(const mc_sync_problems *p, char *buf, size_t size);
  * it may be bringing one of them. Whatever isn't lost any more (a file came back, a member has
  * it after all) is left out, and only out says so: compare its tracks_deleted with count. Call
  * it only once the user has confirmed: nothing can fetch the tracks back. out may be NULL. */
+struct mc_delete_result; /* delete.h, which may be what brought this file in */
 mc_status mc_sync_remove_lost(mc_sync *sync, const char *const *uids, int count,
                               struct mc_delete_result *out);
 
