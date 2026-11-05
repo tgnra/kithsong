@@ -68,13 +68,24 @@ mc_status mc_pair_jpake(mc_channel *ch, const char *code, unsigned char psk[MC_N
                             (const unsigned char *)code, MC_PAIR_CODE_DIGITS) != 0)
     goto done;
 
-  /* Both sides write each round before reading the peer's: the messages are small enough
-   * for the socket buffers, so this can't deadlock, and it saves a round trip. */
+  /* The side showing the code speaks second in the first round, so that while A's user types
+   * the code nothing comes from B but a refusal (A watches for one). In the second both sides
+   * write before reading the peer's: the messages are small enough for the socket buffers, so
+   * this can't deadlock, and it saves a round trip. */
+  int first = role == MBEDTLS_ECJPAKE_CLIENT;
+  if (!first) {
+    if ((st = expect(ch, MC_MSG_JPAKE_1, &in, &in_len)) != MC_OK) goto done;
+    st = MC_ERR_FORMAT;
+    if (mbedtls_ecjpake_read_round_one(&ctx, in, in_len) != 0) goto done;
+    st = MC_ERR_IO;
+  }
   if (mbedtls_ecjpake_write_round_one(&ctx, buf, sizeof buf, &n, os_random, NULL) != 0) goto done;
   if ((st = mc_channel_send_clear(ch, MC_MSG_JPAKE_1, buf, n)) != MC_OK) goto done;
-  if ((st = expect(ch, MC_MSG_JPAKE_1, &in, &in_len)) != MC_OK) goto done;
-  st = MC_ERR_FORMAT;
-  if (mbedtls_ecjpake_read_round_one(&ctx, in, in_len) != 0) goto done;
+  if (first) {
+    if ((st = expect(ch, MC_MSG_JPAKE_1, &in, &in_len)) != MC_OK) goto done;
+    st = MC_ERR_FORMAT;
+    if (mbedtls_ecjpake_read_round_one(&ctx, in, in_len) != 0) goto done;
+  }
 
   st = MC_ERR_IO;
   if (mbedtls_ecjpake_write_round_two(&ctx, buf, sizeof buf, &n, os_random, NULL) != 0) goto done;

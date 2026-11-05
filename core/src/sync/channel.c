@@ -129,6 +129,10 @@ void mc_channel_abort(mc_channel *ch) {
   if (ch) mc_socket_shutdown(ch->sock);
 }
 
+int mc_channel_readable(mc_channel *ch) {
+  return ch && mc_socket_wait_readable(ch->sock, 0);
+}
+
 int mc_channel_mode(const mc_channel *ch) {
   return ch->mode;
 }
@@ -341,8 +345,9 @@ mc_status mc_channel_send_clear(mc_channel *ch, uint8_t type, const void *payloa
 mc_status mc_channel_recv_clear(mc_channel *ch, uint8_t *type, const unsigned char **payload,
                                 size_t *len) {
   if (!ch || !type || !payload || !len || ch->encrypted || ch->broken) return MC_ERR_INVALID_ARG;
-  size_t n;
-  mc_status st = mc_frame_recv(ch->sock, ch->rbuf, sizeof ch->rbuf, &n, ch->timeout_ms);
+  size_t n = 0;
+  mc_status st = ch->idle ? wait_idling(ch) : MC_OK;
+  if (st == MC_OK) st = mc_frame_recv(ch->sock, ch->rbuf, sizeof ch->rbuf, &n, ch->timeout_ms);
   if (st == MC_OK && n < 1) st = MC_ERR_FORMAT;
   if (st != MC_OK) {
     ch->broken = 1;

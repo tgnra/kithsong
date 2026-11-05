@@ -769,16 +769,20 @@ static joined_archives peer_is_archive(const side *peer) {
 
 /* Waits for mc_sync_pair_enter(), and with ask also for the user's answer to merging
  * (mc_sync_pair_merge_confirm()). 1 when both are in, -1 if the merge was declined, 0 if
- * cancelled, stopped or timed out. */
-static int wait_for_code(mc_sync *sync, int ask, char code[MC_PAIR_CODE_DIGITS + 1]) {
+ * cancelled, stopped or timed out, -2 if B said something or went: nothing but a refusal
+ * comes from it before the code. */
+static int wait_for_code(mc_sync *sync, mc_channel *ch, int ask,
+                         char code[MC_PAIR_CODE_DIGITS + 1]) {
   uint64_t deadline = mc_mono_ms() + CODE_WAIT_MS;
+  int heard = 0;
   mc_mutex_lock(&sync->lock);
   while ((!sync->out_has_code || (ask && !sync->out_merge_answer)) &&
          sync->out_merge_answer >= 0 && !sync->out_cancel && !sync->stopping &&
-         mc_mono_ms() < deadline)
+         mc_mono_ms() < deadline && !(heard = mc_channel_readable(ch)))
     mc_cond_wait_ms(&sync->cond, &sync->lock, 500);
   int ok = sync->out_cancel || sync->stopping ? 0
            : sync->out_merge_answer < 0       ? -1
+           : heard                            ? -2
            : sync->out_has_code && (!ask || sync->out_merge_answer > 0);
   if (ok > 0) memcpy(code, sync->out_code, MC_PAIR_CODE_DIGITS + 1);
   mc_mutex_unlock(&sync->lock);
@@ -848,7 +852,16 @@ void mc_pairing_initiate(void *arg) {
     }
 
     char code[MC_PAIR_CODE_DIGITS + 1];
-    int got = wait_for_code(sync, merging && !merge.kept_here, code);
+    int got = wait_for_code(sync, ch, merging && !merge.kept_here, code);
+    if (got == -2) {
+      /* B's user declined the merge, or B gave up: there's no code to wait for. */
+      reason = MC_PAIR_CANCELLED;
+      st = mc_channel_recv_clear(ch, &type, &payload, &len);
+      if (st == MC_OK && type == MC_MSG_PAIR_REFUSE)
+        parse_refuse(payload, len, &reason, &attempts_left);
+      st = reason == MC_PAIR_CANCELLED ? MC_ERR_NET : reason_status(reason);
+      break;
+    }
     if (got <= 0) {
       reason = got < 0 ? MC_PAIR_MERGE_DECLINED : MC_PAIR_CANCELLED;
       send_refuse(ch, MC_PAIR_CANCELLED, 0); /* so B stops showing the code */
@@ -954,6 +967,25 @@ void mc_pairing_initiate(void *arg) {
 
 /* --- B: showing the code --- */
 
+/* While B waits for A's code. */
+typedef struct code_wait {
+  mc_sync *sync;
+  mc_channel *ch;
+  int refused;
+} code_wait;
+
+/* Declining the merge needs no code: A hears at once, and the pairing slot is free again. */
+static void watch_for_decline(void *user) {
+  code_wait *w = user;
+  mc_mutex_lock(&w->sync->lock);
+  int declined = w->sync->in_merge_answer < 0;
+  mc_mutex_unlock(&w->sync->lock);
+  if (!declined || w->refused) return;
+  w->refused = 1;
+  send_refuse(w->ch, MC_PAIR_MERGE_DECLINED, 0);
+  mc_channel_abort(w->ch);
+}
+
 void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   side me, peer;
   uint8_t type;
@@ -1022,8 +1054,11 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   mc_channel_set_timeout(ch, CODE_WAIT_MS);
   unsigned char peer_key[MC_SYNC_KEY_LEN];
   int failures = sync->in_r.failures, new_code = 0;
+  code_wait watch = {sync, ch, 0};
+  if (merging && !merge.kept_here) mc_channel_set_idle(ch, watch_for_decline, &watch);
   st = mc_pair_respond(&sync->in_r, ch, mc_sync_db_private_key(c->sdb),
                        mc_sync_db_public_key(c->sdb), peer_key, &new_code);
+  mc_channel_set_idle(ch, NULL, NULL);
   mc_channel_set_timeout(ch, mc_channel_default_timeout());
 
   mc_mutex_lock(&sync->lock);
@@ -1034,7 +1069,7 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   mc_mutex_unlock(&sync->lock);
 
   if (st != MC_OK) {
-    if (counted && !cancelled) {
+    if (counted && !cancelled && !watch.refused) {
       /* A guessed wrong. Tell it in the clear: its keys don't match ours. A may come
        * straight back, so this connection stops counting first. */
       mc_mutex_lock(&sync->lock);

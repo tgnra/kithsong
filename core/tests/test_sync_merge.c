@@ -752,6 +752,24 @@ int main(int argc, char **argv) {
     CHECK(!has_backup(f.libdir));
     CHECK(group_int(&f, "SELECT count(*) FROM local WHERE group_uid IS NULL") == 1);
     CHECK(group_int(&g, "SELECT count(*) FROM local WHERE group_uid IS NULL") == 1);
+    /* The other way round, F showing the code: declining needs no code typed. G hears within a
+     * second or so, and F's slot is free for G to come straight back. */
+    for (int i = 0; i < 2; i++) {
+      int rf = f.results, rg = g.results;
+      uint64_t asked = mc_mono_ms();
+      mc_status st;
+      while ((st = mc_sync_pair_request_address(g.sync, "127.0.0.1", mc_sync_port(f.sync))) ==
+               MC_ERR_LOCKED && mc_mono_ms() - asked < 2000)
+        mc_sleep_ms(10); /* G's thread finishing the last one */
+      CHECK(st == MC_OK);
+      CHECK(wait_count(&g, &g.results, rg));
+      CHECK(g.reason == MC_PAIR_MERGE_DECLINED);
+      CHECK(wait_count(&f, &f.results, rf));
+      CHECK(f.reason == MC_PAIR_MERGE_DECLINED);
+    }
+    CHECK(lib_int(&f, "SELECT count(*) FROM tracks") == 1);
+    CHECK(!has_backup(f.libdir));
+
 
     /* 4. G runs a version without merging: H (1 track) is refused as before. */
     mc_sync_set_test_no_merge(g.sync, 1);

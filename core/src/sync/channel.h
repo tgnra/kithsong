@@ -49,6 +49,8 @@ void mc_channel_close(mc_channel *ch);
  * still open. */
 void mc_channel_abort(mc_channel *ch);
 
+/* 1 if a message has started to arrive, or the other side has gone: a recv won't wait. */
+int mc_channel_readable(mc_channel *ch);
 int mc_channel_mode(const mc_channel *ch);
 int mc_channel_is_initiator(const mc_channel *ch);
 int mc_channel_is_encrypted(const mc_channel *ch);

@@ -138,7 +138,8 @@ the code and A's user enters it.
    `{"reason": "cancelled"}`, so B stops showing the code.
 3. The user types the code on A. Both sides run EC J-PAKE (`mbedtls_ecjpake`, secp256r1,
    SHA-256) with the code's 6 ASCII digits as the shared secret. A is the client:
-   `JPAKE_1` both ways, then `JPAKE_2` both ways. Both derive the 32-byte secret.
+   `JPAKE_1` from A, then from B (so that before the code B sends nothing but a refusal),
+   then `JPAKE_2` both ways. Both derive the 32-byte secret.
 4. They run `Noise_XXpsk3` with `psk = HKDF-SHA256(jpake_secret, info = "kithsong pair v1")`.
    A wrong code makes the handshake fail at the psk. A's side of XXpsk3 finishes first, so
    only B can tell. On a failure B sends `PAIR_REFUSE` `{"reason": "wrong_code",
@@ -217,10 +218,12 @@ import would bring it in, except that names match as they do for
   - Merged device A: it waits for the answer as well as the code before J-PAKE. Declining
     sends `PAIR_REFUSE {"reason": "cancelled"}` as giving up does; A reports
     `merge_declined`, B `cancelled`.
-  - Merged device B: after the handshake B waits up to 5 minutes for the answer, then sends
-    either the rest of the pairing or an encrypted `PAIR_REFUSE {"reason":
-    "merge_declined"}`, which A reports. An answer given before A entered the code is kept
-    until then. A, as the kept device, waits up to 10 minutes for B's next message.
+  - Merged device B: declining while the code is shown sends `PAIR_REFUSE {"reason":
+    "merge_declined"}` in the clear and closes the connection, so the pairing slot is free
+    at once; A, which watches the connection while it waits for the code, reports it. After
+    the handshake B waits up to 5 minutes for the answer, then sends either the rest of the
+    pairing or that refusal, encrypted. A yes given before A entered the code is kept until
+    then. A, as the kept device, waits up to 10 minutes for B's next message.
 - **Preparing** (the merged device, after the code, before it applies the pairing):
   1. If it is in a group, it forgets it as a removed device does (`mc_sync_db_clear_group()`,
      no message to anyone): its paired devices, their profiles and status are deleted

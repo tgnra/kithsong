@@ -107,9 +107,8 @@ typedef struct mc_pair_result {
  *        MC_PAIR_MERGE_DECLINED on both devices (the other one hears it as the user
  *        cancelling: MC_PAIR_CANCELLED).
  *      - On the device showing the code: confirm or decline next to the code. Declining
- *        doesn't stop the code being shown by itself (the UI closes its dialog); the other
- *        device hears MC_PAIR_MERGE_DECLINED when its user enters the code, and this one
- *        gets on_pair_result with MC_PAIR_MERGE_DECLINED then (or when the other gives up).
+ *        ends it within a second, code typed or not, with MC_PAIR_MERGE_DECLINED on both
+ *        devices, and this device can pair again at once (the UI closes its dialog).
  *        Not answering for 5 minutes after the code was entered is declining.
  *    mc_sync_pair_cancel() still cancels either side.
  *  - After the code: the device whose library is merged signs its scrobbling account out if
