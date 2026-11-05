@@ -315,7 +315,10 @@ import would bring it in, except that names match as they do for
     (by their seed tracks) mapped, a newer `opened_ms` than the kept library's winning. An app
     from before stations leaves them out here, as it does any kind it doesn't know.
   - Then `meta.merge_source` is cleared, `on_merge_done` reports what happened, members are
-    told of the change, and so is the old group, if any (see Preparing, step 1). Until then the merged device's file phase fetches and deletes
+    told of the change, and so is the old group, if any (see Preparing, step 1). The report
+    includes `tracks_unselected`, the tracks with this device's file that its profile leaves
+    out: the profile was chosen from the kept library alone, so the summary says to choose
+    them and press Sync, or they go once an archive holds them. Until then the merged device's file phase fetches and deletes
     nothing (its files have no `files` rows yet, so reconcile would take them for unknown
     files). If the app stops first, the merge runs after the next session that syncs the
     library.

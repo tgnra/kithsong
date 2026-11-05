@@ -171,22 +171,26 @@ typedef struct mc_merge_progress {
 
 typedef struct mc_merge_result {
   mc_status status;        /* MC_OK, or why it stopped (what was written stays) */
-  const char *backup_path; /* the set-aside library (absolute); kept, never deleted */
+  const char *backup_path; /* the set-aside library (absolute); kept for 30 days */
   /* Tracks of the set-aside library: */
   int tracks_added;        /* new to the kept library, with this device's file */
   int tracks_attached;     /* the kept library had them, with no copy whose quality is known
                             * (none on the device that kept it): this device's file was added
                             * to the kept track as this device's original */
   int tracks_better;       /* the kept library had them, in lower quality on the other
-                            * device: this device's file was added as for tracks_attached
-                            * (the other device's copy stays as it is) */
+                            * device: this device's file was added as for tracks_attached,
+                            * and the group's copies follow it */
   int tracks_skipped;      /* the kept library had them in the same or better quality: this
                             * device's file went to the Recycle Bin or trash */
   int tracks_mapped;       /* no file on this device, but the kept library has the track (by
-                            * MusicBrainz id): only its playlist entries, plays and so on
-                            * came along */
+                            * MusicBrainz id, or name on the same album): only its playlist
+                            * entries, plays and so on came along */
   int tracks_left_out;     /* no file on this device and not in the kept library: left out */
   int tracks_failed;       /* couldn't be written */
+  /* Tracks with this device's file that its profile leaves out, as it was chosen before the
+   * old library's music could be seen: they go once an archive holds them. Worth saying, as
+   * the user has to choose them and press Sync for them to stay. */
+  int tracks_unselected;
   int playlists;           /* playlists, album groups and smart lists carried over */
   int playlists_renamed;   /* of those, renamed "Name (2)" and so on: the kept library had
                             * one of the same name */

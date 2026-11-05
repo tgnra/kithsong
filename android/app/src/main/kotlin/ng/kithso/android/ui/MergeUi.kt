@@ -26,7 +26,7 @@ import ng.kithso.core.CoreSync
 
 /**
  * The merge of this phone's old library into the one it now syncs, after pairing by merging,
- * under the main screen's header as an import is: albums done of total, then playlists and
+ * under the main screen's header as an import is: tracks done of total, then playlists and
  * play counts, on one bar, while the app stays usable; then a summary of what came in, until
  * Done.
  */
@@ -113,6 +113,7 @@ private fun mergeSummary(r: CoreSync.Event.MergeDone): List<String> = buildList 
         add(stringResource(R.string.merge_scrobble_signed_out, r.scrobbleSignedOut) + dropped)
     }
     if (r.backupPath.isNotEmpty()) add(stringResource(R.string.merge_backup, r.backupPath))
+    if (r.tracksUnselected > 0) add(pluralStringResource(R.plurals.merge_unselected, r.tracksUnselected, r.tracksUnselected))
 }
 
 // One item of the tracks list, or null for none: a string, or a [plural]'s.

@@ -1223,7 +1223,7 @@ static void on_sync_merge_done(void *user, const mc_merge_result *r) {
     r->tracks_added,      r->tracks_attached, r->tracks_better,    r->tracks_skipped,
     r->tracks_mapped,     r->tracks_left_out, r->tracks_failed,    r->playlists,
     r->playlists_renamed, r->album_groups,    r->smart_lists,      r->plays,
-    r->recents,           r->scrobbles_sent,  r->scrobbles_dropped,
+    r->recents,           r->scrobbles_sent,  r->scrobbles_dropped, r->tracks_unselected,
   };
   const jsize n = (jsize)(sizeof counts / sizeof *counts);
   jintArray jcounts = (*env)->NewIntArray(env, n);

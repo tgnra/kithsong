@@ -41,6 +41,7 @@
 #include "library/library_internal.h"
 #include "sync/archive.h"
 #include "sync/libmerge.h"
+#include "sync/plan.h"
 #include "sync/reach.h"
 #include "sync/rows.h"
 #include "sync/session.h"
@@ -402,6 +403,11 @@ static int run_pending_merge(mc_sync *sync, mc_sync_conn *c, const mc_sync_resul
     mc_cond_broadcast(&sync->cond);
     mc_mutex_unlock(&sync->lock);
   }
+  mc_plan *plan = NULL;
+  if (r.status == MC_OK &&
+      mc_plan_compute(c->sdb, c->lib, sync->device_uid, mc_sync_free_space(c->lib), &plan) == MC_OK)
+    r.tracks_unselected = plan->imports_dropped;
+  mc_plan_free(plan);
   r.backup_path = backup ? backup : "";
   r.scrobble_signed_out = signed_out;
   r.scrobbles_sent = sent;

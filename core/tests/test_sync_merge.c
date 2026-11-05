@@ -618,6 +618,8 @@ int main(int argc, char **argv) {
     CHECK(mc_sync_confirm_now(a.sync, b.uid) == MC_OK);
     CHECK(wait_count(&a, &a.merge_dones, 0));
     CHECK(a.mr.status == MC_OK && a.mr.tracks_added == 1);
+    /* A syncs everything, so nothing of it is left out. */
+    CHECK(a.mr.tracks_unselected == 0);
     CHECK(!strcmp(a.mr_signed_out, "alice"));
     CHECK(a.mr.scrobbles_sent == 0 && a.mr.scrobbles_dropped == 2);
     CHECK(a.progress > 0);
@@ -1040,9 +1042,17 @@ int main(int argc, char **argv) {
   if (dev_start(&w) && dev_start(&x)) {
     CHECK(pair(&w, &x) == MC_PAIR_PAIRED);
     CHECK(w.merged && x.kept_here);
+    mc_sync_profile *chosen = NULL;
+    CHECK(mc_sync_get_profile(w.sync, w.uid, &chosen) == MC_OK);
+    if (chosen) {
+      chosen->sync_all = 0;
+      CHECK(mc_sync_set_profile(w.sync, w.uid, chosen) == MC_OK);
+      mc_sync_profile_free(chosen);
+    }
     CHECK(mc_sync_confirm_now(w.sync, x.uid) == MC_OK);
     CHECK(wait_count(&w, &w.merge_dones, 0));
     CHECK(w.mr.status == MC_OK && w.mr.tracks_better == 2 && w.mr.tracks_skipped == 0);
+    CHECK(w.mr.tracks_unselected == 2); /* W chose nothing, seeing only the kept library */
     CHECK(lib_int(&w, "SELECT count(*) FROM files f JOIN tracks t ON t.uid = f.track_uid"
                       " WHERE t.file_rev IS NOT NULL AND f.file_rev = t.file_rev") == 2);
     CHECK(sync_now(&w, &x) == MC_OK);

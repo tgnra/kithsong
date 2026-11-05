@@ -888,6 +888,10 @@ static void merge_summary(wchar_t *out, size_t n, const sync_event *ev) {
     mc_wformat(para, 1280, mc_str(MC_STR_MERGE_BACKUP), MC_S(ev->backup_path));
     append_para(out, n, para);
   }
+  if (r->tracks_unselected > 0) {
+    mc_wformat(para, 1280, mc_str_plural(MC_STR_MERGE_UNSELECTED, r->tracks_unselected), MC_D(r->tracks_unselected));
+    append_para(out, n, para);
+  }
 }
 
 void pair_dialog_on_merge_event(const sync_event *ev) {
@@ -905,7 +909,7 @@ void pair_dialog_on_merge_event(const sync_event *ev) {
                                                                           : MC_STR_MERGE_PROGRESS_LISTS),
                MC_D(ev->merge_done), MC_D(ev->merge_total));
     SetDlgItemTextW(m->wnd, IDC_PAIR_STATUS, text);
-    /* Albums take most of the time: the bar gives them nine tenths. */
+    /* Tracks take most of the time: the bar gives them nine tenths. */
     int part = ev->merge_total > 0 ? MulDiv(min(ev->merge_done, ev->merge_total), 1000, ev->merge_total) : 0;
     int pos = ev->merge_phase == MC_MERGE_PHASE_TRACKS ? part * 9 / 10 : 900 + part / 10;
     SendDlgItemMessageW(m->wnd, ID_MERGE_PROGRESS, PBM_SETPOS, (WPARAM)pos, 0);

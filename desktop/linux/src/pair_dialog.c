@@ -862,6 +862,9 @@ static char *merge_summary(const sync_event *ev) {
   }
   if (ev->backup_path[0])
     text = join_para(text, gformat(mc_format_alloc(mc_str(MC_STR_MERGE_BACKUP), MC_S(ev->backup_path))));
+  if (ev->merge.tracks_unselected > 0)
+    text = join_para(text, gformat(mc_format_alloc(mc_str_plural(MC_STR_MERGE_UNSELECTED, ev->merge.tracks_unselected),
+                                                   MC_D(ev->merge.tracks_unselected))));
   return text;
 }
 
@@ -880,7 +883,7 @@ void pair_dialog_on_merge_event(GtkWidget *parent, const sync_event *ev) {
                                          MC_D(ev->merge_done), MC_D(ev->merge_total)));
     gtk_label_set_text(GTK_LABEL(m->status), text);
     g_free(text);
-    /* Albums take most of the time: the bar gives them nine tenths. */
+    /* Tracks take most of the time: the bar gives them nine tenths. */
     double part = ev->merge_total > 0 ? (double)MIN(ev->merge_done, ev->merge_total) / ev->merge_total : 0.0;
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(m->bar),
                                   ev->merge_phase == MC_MERGE_PHASE_TRACKS ? part * 0.9 : 0.9 + part * 0.1);
