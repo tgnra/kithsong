@@ -452,7 +452,7 @@ static void close_confirmed(void *user, gboolean closed) {
 static gboolean on_close_request(GtkWindow *win, gpointer user) {
   (void)win;
   app *a = user;
-  if (edit_dialog_saving()) return TRUE; /* the dialog says so, and it can't be stopped */
+  if (edit_dialog_saving()) return TRUE; /* the dialog is up, with Cancel to stop it */
   if (import_view_is_running(a->import)) {
     import_view_confirm_close(a->import, close_confirmed, a);
     return TRUE;

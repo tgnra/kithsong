@@ -47,7 +47,7 @@ typedef struct edit_form {
   gboolean banner_room;  /* the dialog has grown for it */
   GtkWidget *save_focus; /* what had the focus as Save started, which greying out takes away */
   GtkWidget *fields[NUM_FIELDS]; /* AdwEntryRows; NULL for those not on the form */
-  GtkWidget *mb_row, *mb_search, *no_scrobble, *mix;
+  GtkWidget *mb_row, *mb_search, *mb_unlink, *no_scrobble, *mix;
   GtkWidget *art, *art_picture, *art_none, *art_drop, *art_change, *art_auto, *art_note;
   char *mb;                /* the release the form has now, "" for none */
   char *saved[NUM_FIELDS]; /* what's in the library, as text; NULL for a field not on the form */
@@ -59,9 +59,9 @@ typedef struct edit_form {
   GCancellable *art_closing; /* what's going on for the cover that closing stops */
   GtkWidget *search;  /* the search dialog while it's open */
   gboolean loaded;    /* the tags were read, so there's something to save */
-  gboolean saving;
+  struct job *saving; /* the save running, or NULL */
+  gboolean stopping;  /* it's been asked to stop */
   gboolean reading;   /* an image is being read, for the cover */
-  gboolean in_use;    /* Save found a file open while something plays: the banner offers to stop */
   gboolean changed;   /* something was saved */
   gboolean art_saved; /* a new cover was, of what changed */
   gboolean closed;
@@ -94,12 +94,14 @@ typedef struct job {
   char *text[NUM_FIELDS];
   mc_album_flags flags;
   gboolean set_tags, set_flags, tags_saved, flags_saved;
+  GtkWidget *form_dialog; /* who's told how far it's got */
+  gint cancel;            /* atomic: Cancel was pressed, or the library is going */
   /* A new cover: the image, to save or, read from art_file, to check and show at art_size. */
   GFile *art_file;
   GBytes *art;
   GdkTexture *art_texture;
   int art_size;
-  gboolean set_art, reset_art, art_tried, art_saved;
+  gboolean set_art, reset_art, art_saved;
   char merge_into[MC_UID_STRLEN]; /* the artist to merge with, rather than save the name; "" for none */
   /* Search. */
   char *artist, *title;
@@ -540,11 +542,51 @@ static mc_status load(edit_form *f) {
   return st;
 }
 
+static void form_say(edit_form *f, const char *text);
+
+/* How far a save has got, on its way to the UI thread. */
+typedef struct save_step {
+  GtkWidget *dialog; /* referenced */
+  int done, total;
+} save_step;
+
+/* Files copied, which is what takes the time; Stopping... says more. The step may come after the
+ * save is over, as nothing orders it with save_done(). */
+static gboolean on_save_step(gpointer data) {
+  save_step *step = data;
+  edit_form *f = g_object_get_data(G_OBJECT(step->dialog), "edit-data");
+  if (f && f->saving && !f->stopping && !f->closed && step->total > 0) {
+    char *text = mc_format_alloc(mc_str(MC_STR_EDIT_SAVING_FILES), MC_D(step->done), MC_D(step->total));
+    form_say(f, text);
+    mc_free(text);
+  }
+  g_object_unref(step->dialog);
+  g_free(step);
+  return G_SOURCE_REMOVE;
+}
+
+/* mc_edit_watch's, on the save's thread. */
+static void save_progress(void *user, int done, int total) {
+  job *j = user;
+  save_step *step = g_new(save_step, 1);
+  step->dialog = g_object_ref(j->form_dialog);
+  step->done = done;
+  step->total = total;
+  g_idle_add_full(G_PRIORITY_DEFAULT, on_save_step, step, NULL);
+}
+
+static int save_cancelled(void *user) {
+  job *j = user;
+  return g_atomic_int_get(&j->cancel);
+}
+
 /* On the save's thread: the tags, then the flags, each if it changed, then a new cover, which
  * goes last as tags can move the album's folder. */
 static void run_save(job *j) {
   char **f = j->text;
   mc_status st = MC_OK;
+  mc_edit_watch watch = {save_progress, save_cancelled, j};
+  mc_edit_set_watch(j->lib, &watch);
   if (j->set_tags) {
     if (j->kind == EDIT_ALBUM) {
       mc_album_tags t = {f[F_TITLE], f[F_ARTIST], atoi(f[F_YEAR]), atoi(f[F_ORIGINAL_YEAR]), f[F_MB]};
@@ -566,32 +608,31 @@ static void run_save(job *j) {
   if (st == MC_OK && j->set_art) {
     gsize len = 0;
     const void *image = j->art ? g_bytes_get_data(j->art, &len) : NULL;
-    j->art_tried = TRUE;
     st = j->reset_art ? mc_album_art_reset(j->lib, j->uid) : mc_album_art_set(j->lib, j->uid, image, len);
     j->art_saved = st == MC_OK;
   }
+  mc_edit_set_watch(j->lib, NULL);
   j->st = st;
 }
 
-/* What the banner says, or for NULL nothing; it offers to stop playing while f->in_use. */
+/* What the banner says, or for NULL nothing. */
 static void form_say(edit_form *f, const char *text) {
   if (text && !f->banner_room) {
     f->banner_room = TRUE;
     adw_dialog_set_content_height(ADW_DIALOG(f->dialog), gtk_widget_get_height(f->toolbar) + BANNER_ROOM);
   }
   if (text) adw_banner_set_title(f->banner, text);
-  adw_banner_set_button_label(f->banner, f->in_use ? mc_str(MC_STR_EDIT_STOP_RETRY) : NULL);
   adw_banner_set_revealed(f->banner, text != NULL);
 }
 
 static void form_update(edit_form *f) {
   gboolean off = f->saving || !f->loaded;
   gtk_widget_set_sensitive(f->save, !off && !f->reading);
-  gtk_widget_set_sensitive(f->cancel, !f->saving);
+  gtk_widget_set_sensitive(f->cancel, !f->stopping); /* a save can be stopped, but only the once */
   gtk_widget_set_sensitive(f->groups, !off);
   gtk_widget_set_visible(f->spinner, f->saving || f->reading);
   gtk_spinner_set_spinning(GTK_SPINNER(f->spinner), f->saving || f->reading);
-  adw_dialog_set_can_close(ADW_DIALOG(f->dialog), !f->saving); /* a save can't be taken back halfway */
+  adw_dialog_set_can_close(ADW_DIALOG(f->dialog), !f->saving); /* closing asks it to stop: on_close_attempt() */
 }
 
 /* What the library and what shows it need once the form is done: the views key what they've
@@ -604,7 +645,8 @@ static void form_finished(edit_form *f) {
 
 static void save_done(gpointer owner, job *j) {
   edit_form *f = owner;
-  f->saving = FALSE;
+  f->saving = NULL;
+  f->stopping = FALSE;
   /* What did get saved is saved, whatever came next: a second try leaves it out. */
   if (j->tags_saved)
     for (int i = 0; i < NUM_FIELDS; i++) {
@@ -628,11 +670,11 @@ static void save_done(gpointer owner, job *j) {
     adw_dialog_force_close(ADW_DIALOG(f->dialog));
     return;
   }
-  /* Nothing changed, and it's most likely the track playing; a cover isn't played. */
-  f->in_use = j->st == MC_ERR_IN_USE && !j->art_tried && playback_queue_count() > 0;
-  char *failed = j->st == MC_ERR_NOT_FOUND ? NULL
-                                           : mc_format_alloc(mc_str(MC_STR_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st)));
-  form_say(f, failed ? failed : mc_str(MC_STR_EDIT_GONE));
+  char *failed = NULL;
+  if (j->st == MC_ERR_NOT_FOUND) form_say(f, mc_str(MC_STR_EDIT_GONE));
+  else if (j->st == MC_ERR_IN_USE) form_say(f, mc_str(MC_STR_EDIT_IN_USE));
+  else if (j->st == MC_ERR_CANCELLED) form_say(f, mc_str(MC_STR_EDIT_SAVE_STOPPED));
+  else form_say(f, failed = mc_format_alloc(mc_str(MC_STR_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st))));
   mc_free(failed);
   if (f->save_focus) gtk_widget_grab_focus(f->save_focus);
 }
@@ -722,11 +764,22 @@ static void save(edit_form *f) {
 
 static void start_save(edit_form *f, job *j) {
   f->save_focus = adw_dialog_get_focus(ADW_DIALOG(f->dialog));
-  f->saving = TRUE;
-  f->in_use = FALSE;
+  f->saving = j;
+  j->form_dialog = f->dialog; /* held by the job's GTask */
   form_say(f, mc_str(MC_STR_EDIT_SAVING));
   form_update(f);
+  gtk_widget_grab_focus(f->cancel); /* greying out takes it from what had it: Escape still stops the save */
   job_start(f->dialog, j);
+}
+
+/* While a save runs it's asked to stop. It may still finish: once the files are copied it's
+ * only renames, and those aren't stopped. */
+static void save_stop(edit_form *f) {
+  if (!f->saving || f->stopping) return;
+  g_atomic_int_set(&f->saving->cancel, 1);
+  f->stopping = TRUE;
+  form_say(f, mc_str(MC_STR_EDIT_STOPPING));
+  form_update(f);
 }
 
 /* --- The cover --- */
@@ -906,7 +959,12 @@ static gboolean on_art_drop(GtkDropTarget *target, const GValue *value, double x
 static void set_mb(edit_form *f, const char *mb) {
   g_free(f->mb);
   f->mb = dup_text(mb);
-  if (f->mb_row) adw_action_row_set_subtitle(ADW_ACTION_ROW(f->mb_row), *f->mb ? f->mb : mc_str(MC_STR_EDIT_MB_NONE));
+  if (!f->mb_row) return;
+  gboolean unlinked = !*f->mb && f->saved[F_MB] && *f->saved[F_MB];
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(f->mb_row), *f->mb    ? f->mb
+                                                         : unlinked ? mc_str(MC_STR_EDIT_MB_UNLINK_NOTE)
+                                                                    : mc_str(MC_STR_EDIT_MB_NONE));
+  gtk_widget_set_sensitive(f->mb_unlink, *f->mb != '\0');
 }
 
 /* The release used in the search: the form takes it, for Save to keep. */
@@ -919,7 +977,6 @@ static void form_use_release(edit_form *f, const mc_album_tags *t) {
   g_free(year);
   g_free(original);
   set_mb(f, t->mb_albumid);
-  f->in_use = FALSE;
   form_say(f, NULL);
 }
 
@@ -933,22 +990,29 @@ static void on_field_activated(AdwEntryRow *row, gpointer data) {
   save(data);
 }
 
-/* The banner's Stop playing and retry: lets go of the file now, so the save can have it. */
-static void on_stop_retry(AdwBanner *banner, gpointer data) {
-  (void)banner;
-  playback_clear();
-  save(data);
-}
-
 static void on_cancel(GtkButton *button, gpointer data) {
   (void)button;
   edit_form *f = data;
   adw_dialog_close(ADW_DIALOG(f->dialog));
 }
 
+/* Cancel or Escape during a save: the dialog can't close yet. */
+static void on_close_attempt(AdwDialog *dialog, gpointer data) {
+  (void)dialog;
+  save_stop(data);
+}
+
 static void on_search_mb(GtkButton *button, gpointer data) {
   (void)button;
   search_present(data);
+}
+
+/* Unlink: the release goes, for Save to keep. */
+static void on_unlink_mb(GtkButton *button, gpointer data) {
+  (void)button;
+  edit_form *f = data;
+  set_mb(f, "");
+  gtk_widget_grab_focus(f->mb_search); /* Unlink has just greyed out */
 }
 
 static void on_closed(AdwDialog *dialog, gpointer data) {
@@ -1099,6 +1163,10 @@ static void build_album(edit_form *f) {
   gtk_widget_set_valign(f->mb_search, GTK_ALIGN_CENTER);
   g_signal_connect(f->mb_search, "clicked", G_CALLBACK(on_search_mb), f);
   adw_action_row_add_suffix(ADW_ACTION_ROW(f->mb_row), f->mb_search);
+  f->mb_unlink = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_EDIT_MB_UNLINK));
+  gtk_widget_set_valign(f->mb_unlink, GTK_ALIGN_CENTER);
+  g_signal_connect(f->mb_unlink, "clicked", G_CALLBACK(on_unlink_mb), f);
+  adw_action_row_add_suffix(ADW_ACTION_ROW(f->mb_row), f->mb_unlink);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), f->mb_row);
   set_mb(f, f->saved[F_MB]);
 
@@ -1164,7 +1232,6 @@ void edit_dialog_present(app *a, edit_kind kind, const char *uid) {
   GtkWidget *banner = adw_banner_new("");
   f->banner = ADW_BANNER(banner);
   adw_banner_set_use_markup(f->banner, FALSE);
-  g_signal_connect(banner, "button-clicked", G_CALLBACK(on_stop_retry), f);
   GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
   gtk_box_append(GTK_BOX(content), banner);
   gtk_box_append(GTK_BOX(content), scroller);
@@ -1191,6 +1258,7 @@ void edit_dialog_present(app *a, edit_kind kind, const char *uid) {
   adw_dialog_set_content_width(ADW_DIALOG(f->dialog), FORM_WIDTH);
   adw_dialog_set_child(ADW_DIALOG(f->dialog), f->toolbar);
   g_signal_connect(f->dialog, "closed", G_CALLBACK(on_closed), f);
+  g_signal_connect(f->dialog, "close-attempt", G_CALLBACK(on_close_attempt), f);
   if (kind == EDIT_ALBUM) {
     GtkDropTarget *drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
     /* Ahead of the fields, which would take a file as its path, in the text. */
@@ -1222,6 +1290,7 @@ void edit_dialog_close(void) {
   if (current) {
     edit_form *f = current;
     f->loaded = FALSE; /* no Save now, with the library going, as it animates away */
+    if (f->saving) g_atomic_int_set(&f->saving->cancel, 1);
     if (f->search) adw_dialog_force_close(ADW_DIALOG(f->search));
     adw_dialog_force_close(ADW_DIALOG(f->dialog));
   }

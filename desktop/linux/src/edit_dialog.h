@@ -5,14 +5,14 @@
  *
  *   +-----------------------------------------------+
  *   | [Cancel]         Edit album            [Save] |
- *   | (banner: why Save failed [Stop playing...])   |
+ *   | (banner: how Save is going, or why it failed) |
  *   |  +-----------------------------------------+  |
  *   |  | Title                                   |  |
  *   |  | Album artist                            |  |
  *   |  | Year                                    |  |
  *   |  | Original year                           |  |
  *   |  +-----------------------------------------+  |
- *   |  | MusicBrainz release  [Search MusicBrainz…] |
+ *   |  | MusicBrainz release  [Search...] [Unlink]  |
  *   |  +-----------------------------------------+  |
  *   |  | Don't scrobble                     (o ) |  |
  *   |  | Continuous mix                     ( o) |  |
@@ -26,14 +26,14 @@
  *
  * Search MusicBrainz… opens another dialog over this one: artist and title, filled in from the
  * form, and the releases found. Using one fills in the form, MusicBrainz release included;
- * nothing changes until Save.
+ * nothing changes until Save. Unlink takes the release away, and says so in its place, for Save
+ * to keep.
  *
  * Save calls only the _set() functions whose values changed, on a thread as they can rewrite
- * files and wait on MusicBrainz, and the dialog stays open and says why if one fails. It can't
- * be cancelled once it's started, so Cancel is greyed out, and the main window doesn't close,
- * meanwhile. A file in use changes nothing and is most likely the track playing, so while
- * something plays the banner offers Stop playing and retry, which empties the queue and saves
- * again.
+ * files and wait on MusicBrainz, and the dialog stays open and says why if one fails. The banner
+ * says how many files it has copied (mc_edit_set_watch()), and Cancel or Escape stops it with
+ * nothing changed, unless it has got past the copying. The main window doesn't close meanwhile.
+ * A file in use changes nothing, and the banner says to try again once it's free.
  *
  * The library reloads once the dialog has gone, if anything was saved, which can be the case
  * even if Save failed partway and the user cancelled.
