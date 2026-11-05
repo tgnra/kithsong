@@ -66,6 +66,7 @@
 #include "volume_button.h"
 
 static const char css[] =
+    "banner.warning > revealer > widget { background-color: alpha(@warning_bg_color, 0.3); }"
   ".album-cover { border-radius: 8px; background-color: alpha(currentColor, 0.08); }"
   ".now-playing .album-cover { border-radius: 4px; }"
   /* The edit dialog's cover, which is a button, and what a file over the dialog shows. */
