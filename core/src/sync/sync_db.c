@@ -67,6 +67,13 @@ static const char *const k_migrations[] = {
   /* v7: the version vector (mc_changelog_version_vector()) without reading the whole
    * changelog. */
   "CREATE INDEX changelog_origin ON changelog (origin_uid, hlc);",
+  /* v8: what this device wants that a member said it hasn't, in their last session. This
+   * device's alone and never synced: the waiting tracks (sync/waiting.h) go by it. */
+  "CREATE TABLE peer_lacks ("
+  "  device_uid TEXT NOT NULL,"
+  "  track_uid  TEXT NOT NULL,"
+  "  PRIMARY KEY (device_uid, track_uid)"
+  ") WITHOUT ROWID;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -408,6 +415,7 @@ mc_status mc_sync_db_clear_group(mc_sync_db *sdb) {
     st = exec(sdb, sql);
   }
   if (st == MC_OK) st = exec(sdb, "DELETE FROM peer_contact");
+  if (st == MC_OK) st = exec(sdb, "DELETE FROM peer_lacks");
   if (st == MC_OK) st = exec(sdb, "UPDATE local SET group_uid = NULL WHERE id = 1");
   sdb->applying_remote = 0;
   if (st == MC_OK) st = mc_sync_db_commit(sdb);

@@ -14,6 +14,9 @@
  *    tracks.file_rev change in the library changelog (a better file swapped in), else of the
  *    track's first change, mapped to a member through devices.node_uid. It keeps that
  *    original until an archive holds a verified copy, and the archive is a holder then.
+ * Neither counts for a track the member said it hasn't in its last session with this device
+ * (peer_lacks, from HAVE_RESP): one short of its own profile isn't named for what it hasn't
+ * fetched yet. It may have the track since, but then it's named after the next session.
  * A track counts as waiting when it has a holder other than this device and none of them is
  * reachable. A track no member is known to hold is left out: it isn't waiting for anyone. */
 #ifndef MC_SYNC_WAITING_H

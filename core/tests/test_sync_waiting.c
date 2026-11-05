@@ -327,6 +327,32 @@ int main(int argc, char **argv) {
   CHECK_TEXT(text, "");
   mc_sync_waiting_free(out);
 
+  /* Phone's profile has track 2, but it said in its last session here that it hasn't it yet:
+   * reachable, it's no source, and it isn't named. And once Desk has said so too, nobody is
+   * known to hold it, so it isn't waiting for anyone. */
+  set_reach(&w, 0, 1, 0, 0);
+  out = compute(&w);
+  int before = out ? out->tracks : 0;
+  CHECK(out && !tracks_of(out, w.uid[PHONE]));
+  mc_sync_waiting_free(out);
+  snprintf(sql, sizeof sql, "INSERT INTO peer_lacks VALUES ('%s', '%s')", w.uid[PHONE], w.track[1]);
+  CHECK(exec(mc_sync_db_handle(w.sdb), sql) == SQLITE_OK);
+  out = compute(&w);
+  CHECK(out && out->tracks == before + 1);
+  CHECK(out && !tracks_of(out, w.uid[PHONE]));
+  mc_sync_waiting_free(out);
+  set_reach(&w, 0, 0, 0, 0);
+  out = compute(&w);
+  CHECK(out && !tracks_of(out, w.uid[PHONE]));
+  mc_sync_waiting_free(out);
+  snprintf(sql, sizeof sql, "INSERT INTO peer_lacks VALUES ('%s', '%s')", w.uid[DESK], w.track[1]);
+  CHECK(exec(mc_sync_db_handle(w.sdb), sql) == SQLITE_OK);
+  set_reach(&w, 0, 1, 0, 0);
+  out = compute(&w);
+  CHECK(out && out->tracks == before);
+  mc_sync_waiting_free(out);
+  CHECK(exec(mc_sync_db_handle(w.sdb), "DELETE FROM peer_lacks") == SQLITE_OK);
+
   /* A better file swapped in on Laptop: the newest file_rev change is Laptop's, so the
    * current original of track 3 is Laptop's alone, and Desk's copy no longer counts. */
   snprintf(sql, sizeof sql,

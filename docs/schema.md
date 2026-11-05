@@ -75,7 +75,9 @@ a separate `sync.db` in the per-device config dir. See
 [core/src/sync/sync_db.c](../core/src/sync/sync_db.c): v2 (`devices.host`,
 `capabilities.addresses`, and the local-only `peer_contact`), v3 (`profiles.name`), v4
 (`scrobble_account`, and the local-only `scrobble_queue`), v5
-(`devices.confirmed_profile`) and v6 (`scrobble_queue.track_uid`). Removing an album or artist from one device needed no
+(`devices.confirmed_profile`), v6 (`scrobble_queue.track_uid`), v7 (index `changelog_origin`)
+and v8 (the local-only `peer_lacks`, see
+[Waiting for a device](sync-protocol.md#waiting-for-a-device)). Removing an album or artist from one device needed no
 migration: it's a `profile_items` row of a new kind, `exclude_album` or `exclude_artist`
 (see [Removing from one device](sync-protocol.md#removing-from-one-device)), which older
 versions keep and ignore. A track's delete taken back out of the recycle bin is the same

@@ -3,7 +3,7 @@
  *
  * This device's plan gives the wanted tracks it lacks; each other current member's plan
  * (one read of every track per member) and the library changelog's origins give who holds
- * them. Every plan is sorted by track uid, so finding a track in one is a binary search. */
+ * them, less what a member said it hasn't (peer_lacks). Every plan is sorted by track uid, so finding a track in one is a binary search. */
 #include "sync/waiting.h"
 
 #include <ctype.h>
@@ -130,6 +130,16 @@ static int importer(sqlite3_stmt *rev, sqlite3_stmt *first, const char *track, c
   return -1;
 }
 
+/* Whether m said in its last session with this device that it hasn't the track. */
+static int lacks(sqlite3_stmt *stmt, const member *m, const char *track) {
+  sqlite3_reset(stmt);
+  sqlite3_bind_text(stmt, 1, m->uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, track, -1, SQLITE_STATIC);
+  int yes = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_reset(stmt);
+  return yes;
+}
+
 /* Whether m's profile has it hold what t needs: the original, or Opus at t's very bitrate. */
 static int holds(const member *m, const mc_plan_track *t) {
   const mc_plan_track *theirs = mc_plan_find(m->plan, t->track_uid);
@@ -216,9 +226,12 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
   for (int i = 0; st == MC_OK && i < n; i++) ms[i].reachable = reachable(user, ms[i].uid) != 0;
 
   sqlite3 *ldb = mc_library_db(lib);
-  sqlite3_stmt *rev = NULL, *first = NULL, *satisfied = NULL;
+  sqlite3_stmt *rev = NULL, *first = NULL, *satisfied = NULL, *lacking = NULL;
   if (st == MC_OK &&
-      (sqlite3_prepare_v2(ldb,
+      (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
+                          "SELECT 1 FROM peer_lacks WHERE device_uid = ?1 AND track_uid = ?2", -1,
+                          &lacking, NULL) != SQLITE_OK ||
+       sqlite3_prepare_v2(ldb,
                           "SELECT origin_uid FROM changelog WHERE entity = 'tracks'"
                           " AND row_uid = ?1 AND field = 'file_rev' ORDER BY hlc DESC LIMIT 1",
                           -1, &rev, NULL) != SQLITE_OK ||
@@ -234,17 +247,13 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
   for (int t = 0; st == MC_OK && n && t < plan->count; t++) {
     const mc_plan_track *track = &plan->tracks[t];
     if (mc_transfer_track_satisfied(lib, &satisfied, track)) continue;
+    int imp = importer(rev, first, track->track_uid, ms, n);
     int any = 0, reached = 0;
     for (int i = 0; i < n; i++) {
-      held[i] = ms[i].plan && holds(&ms[i], track);
+      held[i] = (i == imp || (ms[i].plan && holds(&ms[i], track))) &&
+                !lacks(lacking, &ms[i], track->track_uid);
       any |= held[i];
       reached |= held[i] && ms[i].reachable;
-    }
-    int imp = importer(rev, first, track->track_uid, ms, n);
-    if (imp >= 0) {
-      held[imp] = 1;
-      any = 1;
-      reached |= ms[imp].reachable;
     }
     if (!any || reached) continue;
     if (w->tracks == uids_cap) {
@@ -264,6 +273,7 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
   sqlite3_finalize(rev);
   sqlite3_finalize(first);
   sqlite3_finalize(satisfied);
+  sqlite3_finalize(lacking);
   mc_plan_free(plan);
 
   for (int i = 0; st == MC_OK && i < n; i++) {

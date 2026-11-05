@@ -1555,6 +1555,34 @@ static mc_status ask_have(mc_session *s, want *w, int n, const mc_plan *plan) {
   return MC_OK;
 }
 
+/* Keeps what the peer just said it hasn't of what this device wants, in place of what it said
+ * last time, for the waiting tracks. They're only for a notice, so a failure here isn't one
+ * of the session's. */
+static void note_lacks(mc_session *s, const want *w, int n) {
+  mc_sync_db *sdb = s->conn->sdb;
+  sqlite3 *db = mc_sync_db_handle(sdb);
+  if (mc_sync_db_begin_write(sdb) != MC_OK) return;
+  sqlite3_stmt *clear = NULL, *add = NULL;
+  int ok = sqlite3_prepare_v2(db, "DELETE FROM peer_lacks WHERE device_uid = ?1", -1, &clear,
+                              NULL) == SQLITE_OK &&
+           sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO peer_lacks (device_uid, track_uid)"
+                                  " VALUES (?1, ?2)", -1, &add, NULL) == SQLITE_OK;
+  if (ok) {
+    sqlite3_bind_text(clear, 1, s->peer_uid, -1, SQLITE_STATIC);
+    ok = sqlite3_step(clear) == SQLITE_DONE;
+    sqlite3_bind_text(add, 1, s->peer_uid, -1, SQLITE_STATIC);
+  }
+  for (int i = 0; ok && i < n; i++) {
+    if (!w[i].t || w[i].original || w[i].cached) continue;
+    sqlite3_bind_text(add, 2, w[i].uid, -1, SQLITE_STATIC);
+    ok = sqlite3_step(add) == SQLITE_DONE;
+    sqlite3_reset(add);
+  }
+  sqlite3_finalize(clear);
+  sqlite3_finalize(add);
+  if (!ok || mc_sync_db_commit(sdb) != MC_OK) mc_sync_db_rollback(sdb);
+}
+
 static void add_archived(mc_transfer *x, const char *uid) {
   if (x->narchived == x->archived_cap) {
     int grown = x->archived_cap ? x->archived_cap * 2 : 64;
@@ -1675,6 +1703,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   }
   sqlite3_finalize(satisfied);
   if (st == MC_OK && n) st = ask_have(s, w, n, plan);
+  if (st == MC_OK) note_lacks(s, w, n);
 
   transcoder *tc = NULL;
   int ntc = st == MC_OK ? list_transcoders(s, &tc) : 0;

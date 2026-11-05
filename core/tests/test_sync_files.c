@@ -1497,6 +1497,29 @@ int main(int argc, char **argv) {
     /* Settled: nothing more moves. */
     CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
     CHECK(rb.files_received == 0 && rb.files_deleted == 0);
+
+    /* A has lost a track B wants: B notes that it hasn't it, for the waiting tracks, and
+     * forgets that once it has. */
+    char aside[2048], b_two[256];
+    abs_path(&a, t2.rel, p, sizeof p);
+    snprintf(aside, sizeof aside, "%s.aside", p);
+    CHECK(mc_rename(p, aside, 0) == MC_OK);
+    snprintf(sql, sizeof sql, "SELECT path FROM files WHERE track_uid = '%s'", t2.uid);
+    query_text(mc_library_db(b.lib), sql, b_two, sizeof b_two);
+    char b_abs[2048];
+    abs_path(&b, b_two, b_abs, sizeof b_abs);
+    CHECK(mc_remove(b_abs) == MC_OK);
+    snprintf(sql, sizeof sql, "DELETE FROM files WHERE track_uid = '%s'", t2.uid);
+    CHECK(exec(mc_library_db(b.lib), sql) == SQLITE_OK);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM peer_lacks WHERE track_uid = '%s'", t2.uid);
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.files_received == 0);
+    CHECK(group_int(&b, sql) == 1);
+    CHECK(mc_rename(aside, p, 0) == MC_OK);
+    CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
+    CHECK(rb.files_received == 1);
+    CHECK(group_int(&b, sql) == 0);
+    CHECK(files_match(&b));
   }
 
   /* An original imported on B, its whole album deleted on A: B's sync trashes it with a record,

@@ -1263,7 +1263,11 @@ it changed. The rules are in `core/src/sync/waiting.h`:
     mapped through `devices.node_uid`. It keeps that original until an archive holds a
     verified copy (Reconcile), and the archive is a holder then.
 
-  A track no member is known to hold doesn't count: it isn't waiting for anyone.
+  Neither counts for a track the member said it hasn't, neither `original` nor `cached`, in
+  `HAVE_RESP` in its last session with this device (`peer_lacks`, local to this device's
+  `sync.db`, replaced each session), so a member short of its own profile isn't named for what
+  it hasn't fetched yet. A track no member is known to hold doesn't count: it isn't waiting for
+  anyone.
 - **Reachable** means how the last real session attempt with the member went, kept while
   the `mc_sync` exists (across stop and start): a session that completed, or one running
   now. One that never got past connecting (`connected` 0 in its result: no answer, or a
