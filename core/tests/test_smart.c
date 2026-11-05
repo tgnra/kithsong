@@ -891,9 +891,9 @@ int main(int argc, char **argv) {
   test_singles(lib);
   test_invalid();
   test_fields();
-  test_limit_duration(lib);
   test_examples(lib);
   test_saved(lib);
+  test_limit_duration(lib);
   test_describe(lib);
   test_credits(lib);
   test_mix(lib);
