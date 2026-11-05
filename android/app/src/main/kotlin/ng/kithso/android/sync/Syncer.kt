@@ -627,7 +627,7 @@ class Syncer(
             val kept = MergeProposal(true, 1204, 120)
             val done = CoreSync.Event.MergeDone(
                 0, "/data/user/0/ng.kithso/files/library/library-before-merge-2026-10-29.db",
-                80, 6, 4, 30, 5, 2, 1, 6, 1, 2, 1, 40, 10, "tania_listens", 3, 2,
+                80, 6, 4, 30, 5, 2, 1, 6, 1, 2, 1, 40, 10, "tania_listens", 3, 2, 12,
             )
             val ended = Pairing.Ended(peer, CoreSync.PairReason.Paired, initiator = true, peerUid = "fake", joined = true)
             when (scenario) {
