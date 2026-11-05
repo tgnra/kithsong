@@ -1778,6 +1778,16 @@ void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
   reload(FALSE);
 }
 
+static gboolean focus_what_to_sync(gpointer data) {
+  (void)data;
+  if (g_dv.sync_all_row) gtk_widget_grab_focus(g_dv.sync_all_row); /* and the page scrolls to it */
+  return G_SOURCE_REMOVE;
+}
+
+void device_view_focus_what_to_sync(void) {
+  g_idle_add(focus_what_to_sync, NULL);
+}
+
 void device_view_refresh(void) {
   if (!g_dv.sync || !g_dv.root) return;
   reload(TRUE);

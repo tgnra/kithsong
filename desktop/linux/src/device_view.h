@@ -58,6 +58,9 @@ void device_view_open(mc_sync *sync, mc_library *lib, const char *uid);
 /* Reloads the device's details and profile, e.g. after the device list changed, keeping
  * edits not yet applied. */
 void device_view_refresh(void);
+/* Scrolls to What to sync and puts the focus on its first row, as Choose what to sync brought
+ * the page up for it. Waits for the page to be shown, so call it just after opening it. */
+void device_view_focus_what_to_sync(void);
 /* Updates the status and progress from a sync event about this device; others are ignored. */
 void device_view_on_sync_event(const sync_event *ev);
 

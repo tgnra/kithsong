@@ -1940,6 +1940,11 @@ static void layout_again(void) {
   if (g_dv.shown) device_view_layout(g_dv.x, g_dv.y, g_dv.w, g_dv.h, g_dv.dpi);
 }
 
+void device_view_focus_what_to_sync(void) {
+  SetFocus(g_dv.sync_all);
+  SendMessageW(GetAncestor(g_dv.sync_all, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+}
+
 void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
   /* Edits still waiting go to the device they were made for, while its sync is still
    * there: opening with NULL comes before sync stops. */

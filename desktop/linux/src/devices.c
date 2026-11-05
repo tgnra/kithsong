@@ -439,6 +439,7 @@ void devices_open_self(void) {
   if (!sync || d.state != DEVICES_GROUPED) return;
   open_device(mc_sync_device_uid(sync));
   refresh_devices(); /* selects its row */
+  device_view_focus_what_to_sync();
 }
 
 /* --- The pairing dialogs' side --- */
@@ -447,6 +448,7 @@ void devices_open_self(void) {
 static void pair_show_device(const char *uid) {
   open_device(uid);
   refresh_devices(); /* selects its row */
+  device_view_focus_what_to_sync();
 }
 
 static gboolean open_library_for_pairing(void *user, const char *dir) {

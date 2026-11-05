@@ -1757,7 +1757,9 @@ static void show_own_page(void) {
   mc_sync *sync = sync_bridge_get();
   if (!sync) return;
   sidebar_select_device(mc_sync_device_uid(sync));
-  if (sidebar_selected_device()) show_page(PAGE_DEVICE);
+  if (!sidebar_selected_device()) return;
+  show_page(PAGE_DEVICE);
+  device_view_focus_what_to_sync();
 }
 
 
@@ -1767,7 +1769,9 @@ static void show_own_page(void) {
 static void pair_show_device(const char *uid) {
   refresh_devices();
   sidebar_select_device(uid);
-  if (sidebar_selected_device()) show_page(PAGE_DEVICE);
+  if (!sidebar_selected_device()) return;
+  show_page(PAGE_DEVICE);
+  device_view_focus_what_to_sync();
 }
 
 /* Create a New Library, from a pairing refused because this PC has music of its own. */
