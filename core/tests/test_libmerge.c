@@ -390,6 +390,15 @@ static void test_merge(const char *root) {
   CHECK(trashed == 1);
   CHECK(mc_libmerge_pending(lib, NULL) == 0);
 
+  /* Better beats the kept device's copy, so the track's file changes for everyone; Unknown is
+   * only one more copy. */
+  CHECK(query_int(db, "SELECT count(*) FROM tracks t JOIN files f ON f.track_uid = t.uid"
+                      " WHERE t.uid = 'b1000000-0000-7000-8000-000000000001'"
+                      " AND t.file_rev IS NOT NULL AND f.file_rev = t.file_rev") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE field = 'file_rev'"
+                      " AND row_uid = 'b1000000-0000-7000-8000-000000000001'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE file_rev IS NOT NULL") == 1);
+
   /* Tracks: the kept five plus Fresh, which keeps its date added. Better and Unknown have
    * this device's files, attached to the kept tracks; Same's file went to the trash. */
   CHECK(query_int(db, "SELECT count(*) FROM tracks") == 6);
@@ -530,6 +539,62 @@ static void test_merge(const char *root) {
   remove_tree(dir);
 }
 
+/* Two lossless files differ by depth and rate, as the kept device reports them, and what it
+ * reported lasts until the merge has run, whenever that is. */
+static void test_lossless(const char *root) {
+  char dir[1024], config[1100], saved[1200];
+  snprintf(dir, sizeof dir, "%s/libmerge-lossless", root);
+  snprintf(config, sizeof config, "%s-config", dir);
+  remove_tree(dir);
+  remove_tree(config);
+  snprintf(saved, sizeof saved, "%s/" MC_LIBMERGE_SYNC_BACKUP_DIR, config);
+  CHECK(mc_mkdirs(saved) == MC_OK);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(dir, &lib) == MC_OK);
+  if (!lib) return;
+  track deep = {"Low", "Deep", "rel-deep", "Deep", "rt-deep", 1, 1, "", "", ""};
+  track thin = {"Low", "Thin", "rel-thin", "Thin", "rt-thin", 1, 1, "", "", ""};
+  add_track(lib, &deep, 1);
+  add_track(lib, &thin, 2);
+  CHECK(mc_libmerge_set_aside(lib, NULL, NULL, NULL) == MC_OK);
+  lib->applying_remote = 1;
+  CHECK(exec(mc_library_db(lib),
+             "INSERT INTO artists (uid, name) VALUES ('a0000000-0000-7000-8000-00000000000a', 'Low');"
+             "INSERT INTO albums (uid, title, artist_uid, mb_albumid) VALUES"
+             " ('a1000000-0000-7000-8000-000000000001', 'Deep', 'a0000000-0000-7000-8000-00000000000a', 'rel-deep'),"
+             " ('a1000000-0000-7000-8000-000000000002', 'Thin', 'a0000000-0000-7000-8000-00000000000a', 'rel-thin');"
+             "INSERT INTO tracks (uid, album_uid, artist_uid, title, track_no, mb_releasetrackid) VALUES"
+             " ('b1000000-0000-7000-8000-000000000001', 'a1000000-0000-7000-8000-000000000001',"
+             "  'a0000000-0000-7000-8000-00000000000a', 'Deep', 1, 'rt-deep'),"
+             " ('b1000000-0000-7000-8000-000000000002', 'a1000000-0000-7000-8000-000000000002',"
+             "  'a0000000-0000-7000-8000-00000000000a', 'Thin', 1, 'rt-thin');") == SQLITE_OK);
+  lib->applying_remote = 0;
+  /* This device's WAVs are 16-bit at 44.1 kHz. */
+  mc_kept_file kept[2];
+  memset(kept, 0, sizeof kept);
+  snprintf(kept[0].track, sizeof kept[0].track, "b1000000-0000-7000-8000-000000000002");
+  snprintf(kept[0].format, sizeof kept[0].format, "flac");
+  kept[0].sample_rate = 22050;
+  kept[0].bits = 16;
+  snprintf(kept[1].track, sizeof kept[1].track, "b1000000-0000-7000-8000-000000000001");
+  snprintf(kept[1].format, sizeof kept[1].format, "flac");
+  kept[1].sample_rate = 96000;
+  kept[1].bits = 24;
+  CHECK(mc_libmerge_save_kept(config, kept, 2) == MC_OK);
+  int n = 0;
+  mc_kept_file *back = mc_libmerge_load_kept(config, &n);
+  CHECK(n == 2 && back);
+  CHECK(back && !strcmp(back[0].track, kept[1].track) && !strcmp(back[0].format, "flac") &&
+        back[0].sample_rate == 96000 && back[0].bits == 24);
+  mc_merge_result r;
+  CHECK(mc_libmerge_run(lib, back, n, NULL, NULL, &r) == MC_OK);
+  CHECK(r.tracks_better == 1 && r.tracks_skipped == 1);
+  free(back);
+  mc_library_close(lib);
+  remove_tree(dir);
+  remove_tree(config);
+}
+
 /* For editing a copy outside the library: its triggers log nothing. */
 static void sql_remote(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
   (void)argc;
@@ -625,5 +690,6 @@ int main(int argc, char **argv) {
   test_merge(root);
   test_merge_credits(root, 0);
   test_merge_credits(root, 1);
+  test_lossless(root);
   return TEST_RESULT();
 }

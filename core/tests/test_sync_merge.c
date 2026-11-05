@@ -561,7 +561,7 @@ int main(int argc, char **argv) {
   mc_lastfm_post = offline_post;
 
   dev a = {0}, b = {0}, c = {0}, d = {0}, e = {0}, f = {0}, g = {0}, h = {0};
-  dev p = {0}, q = {0}, r = {0}, s = {0}, t = {0}, u = {0}, v = {0};
+  dev p = {0}, q = {0}, r = {0}, s = {0}, t = {0}, u = {0}, v = {0}, w = {0}, x = {0};
   dev_paths(&a, base, "a");
   dev_paths(&b, base, "b");
   dev_paths(&c, base, "c");
@@ -577,6 +577,8 @@ int main(int argc, char **argv) {
   dev_paths(&t, base, "t");
   dev_paths(&u, base, "u");
   dev_paths(&v, base, "v");
+  dev_paths(&w, base, "w");
+  dev_paths(&x, base, "x");
 
   /* 1. A (1 track) asks B (3 tracks): B's library is kept, A confirms. Both are signed in;
    * A's two queued plays can't be sent (offline), so they're dropped with its account. */
@@ -637,6 +639,9 @@ int main(int argc, char **argv) {
     CHECK(sync_now(&a, &b) == MC_OK);
     CHECK(lib_int(&b, "SELECT count(*) FROM tracks") == 4);
     CHECK(lib_int(&b, "SELECT count(*) FROM tracks WHERE title = 'Alpha 1'") == 1);
+    /* And its file, with what the row said of it. */
+    CHECK(lib_int(&b, "SELECT count(*) FROM files WHERE source_peer_uid IS NOT NULL"
+                      " AND bitrate_kbps = 192") == 1);
     group_text(&b, "SELECT username FROM scrobble_account", user, sizeof user);
     CHECK(!strcmp(user, "bob"));
 
@@ -1004,6 +1009,47 @@ int main(int argc, char **argv) {
   }
   dev_stop(&u);
   dev_stop(&v);
+
+  /* 9. W's album is better than the same album on X, the archive, which imported its own. Its
+   * tracks get a new file_rev: X fetches W's files, with their bitrate, and its own go to the
+   * trash, as if the better files had been imported there. */
+  fill_library(&w, "Same", 2);
+  fill_library(&x, "Same", 2);
+  fill_library(&x, "More", 1);
+  {
+    mc_library *lib = NULL;
+    CHECK(mc_library_open(w.libdir, &lib) == MC_OK);
+    if (lib) {
+      CHECK(mc_library_begin_write(lib) == MC_OK);
+      CHECK(exec(mc_library_db(lib), "UPDATE files SET format = 'flac', bitrate_kbps = 900") == SQLITE_OK);
+      CHECK(mc_library_commit(lib) == MC_OK);
+      mc_library_close(lib);
+    }
+  }
+  w.answer = 1;
+  if (dev_start(&w) && dev_start(&x)) {
+    CHECK(pair(&w, &x) == MC_PAIR_PAIRED);
+    CHECK(w.merged && x.kept_here);
+    CHECK(mc_sync_confirm_now(w.sync, x.uid) == MC_OK);
+    CHECK(wait_count(&w, &w.merge_dones, 0));
+    CHECK(w.mr.status == MC_OK && w.mr.tracks_better == 2 && w.mr.tracks_skipped == 0);
+    CHECK(lib_int(&w, "SELECT count(*) FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                      " WHERE t.file_rev IS NOT NULL AND f.file_rev = t.file_rev") == 2);
+    CHECK(sync_now(&w, &x) == MC_OK);
+    CHECK(lib_int(&x, "SELECT count(*) FROM files WHERE source_peer_uid IS NOT NULL"
+                      " AND bitrate_kbps = 900") == 2);
+    CHECK(lib_int(&x, "SELECT count(*) FROM files WHERE path LIKE 'Same/%'") == 0);
+    CHECK(lib_int(&x, "SELECT count(*) FROM files WHERE path LIKE 'More/%'"
+                      " AND source_peer_uid IS NULL") == 1);
+    char gone[1200];
+    snprintf(gone, sizeof gone, "%s/Same", x.libdir);
+    CHECK(!mc_file_exists(gone));
+    /* Nothing more to do. */
+    CHECK(sync_now(&w, &x) == MC_OK);
+    CHECK(lib_int(&x, "SELECT count(*) FROM files") == 3);
+  }
+  dev_stop(&w);
+  dev_stop(&x);
 
   remove_tree(base);
   return TEST_RESULT();

@@ -45,7 +45,9 @@
  * its track's is stale (STALE_SQL): it satisfies nothing, so the track is fetched again,
  * and reconcile then drops the stale copy like one in the wrong format. Only files whose
  * file_rev matches are offered to peers. An original imported here is never stale: it's
- * this device's own, whatever another device swapped in.
+ * this device's own, whatever another device swapped in. Only an archive, which is there to
+ * hold the best of everything, fetches the new file all the same (replaced_here()), and then
+ * puts its own in the trash, as an import there would have.
  *
  * Failed checks. An original imported here that's missing or corrupt keeps its row and is
  * noted in file_failed (mc_file_check): it satisfies nothing and is offered to no one, so the
@@ -102,6 +104,15 @@
 #define STALE_SQL \
   "((f.source_file_uid IS NOT NULL OR f.source_peer_uid IS NOT NULL)" \
   " AND f.file_rev IS NOT t.file_rev)"
+/* An original imported here that the track's current file has replaced, among files f of track
+ * t, with no copy of the current one here yet. */
+#define REPLACED_HERE_SQL \
+  "SELECT DISTINCT f.track_uid FROM files f JOIN tracks t ON t.uid = f.track_uid" \
+  " WHERE f.source_file_uid IS NULL AND f.source_peer_uid IS NULL" \
+  " AND f.file_rev IS NOT t.file_rev AND NOT EXISTS (SELECT 1 FROM files g" \
+  "  WHERE g.track_uid = f.track_uid AND g.source_file_uid IS NULL AND g.file_rev IS t.file_rev)" \
+  " ORDER BY f.track_uid"
+
 /* For a files row f: whether its file is there and whole, as far as the checks know. A file
  * that only changed may be the user's own edit, so it still counts. */
 #define INTACT_SQL \
@@ -612,6 +623,26 @@ static int track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_
 
 int mc_transfer_track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_track *t) {
   return track_satisfied(lib, cache, t);
+}
+
+/* The tracks on an archive whose own original another device's better file replaced, sorted,
+ * malloc'd: wanted although that original satisfies them. */
+static char (*replaced_here(mc_library *lib, int *count))[MC_UID_STRLEN] {
+  *count = 0;
+  char (*v)[MC_UID_STRLEN] = NULL;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib), REPLACED_HERE_SQL, -1, &stmt, NULL) != SQLITE_OK)
+    return NULL;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *uid = (const char *)sqlite3_column_text(stmt, 0);
+    if (!is_uid(uid)) continue;
+    char (*more)[MC_UID_STRLEN] = realloc(v, (size_t)(*count + 1) * sizeof *more);
+    if (!more) break;
+    v = more;
+    memcpy(v[(*count)++], uid, MC_UID_STRLEN);
+  }
+  sqlite3_finalize(stmt);
+  return v;
 }
 
 /* --- Paths --- */
@@ -1722,8 +1753,13 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   sqlite3_stmt *satisfied = NULL;
 
   /* Missing wanted tracks (plan order is uid order). */
+  int nreplaced = 0;
+  char (*replaced)[MC_UID_STRLEN] = plan->archive ? replaced_here(lib, &nreplaced) : NULL;
   for (int i = 0; i < plan->count && st == MC_OK; i++) {
-    if (track_satisfied(lib, &satisfied, &plan->tracks[i])) continue;
+    if (track_satisfied(lib, &satisfied, &plan->tracks[i]) &&
+        !(nreplaced && bsearch(plan->tracks[i].track_uid, replaced, (size_t)nreplaced,
+                               sizeof *replaced, uid_cmp)))
+      continue;
     if (n == cap) {
       int grown = cap ? cap * 2 : 64;
       want *more = realloc(w, (size_t)grown * sizeof *more);
@@ -1739,6 +1775,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     memcpy(w[n].uid, plan->tracks[i].track_uid, MC_UID_STRLEN);
     n++;
   }
+  free(replaced);
   /* With an archive: the originals imported here that reconcile would drop if the archive
    * had them (no longer wanted, or wanted in another format). Merged in, so w stays sorted
    * and unique. */
@@ -2153,6 +2190,7 @@ typedef struct file_row {
   char sha[SHA_STRLEN];
   mc_file_kind kind;
   int stale; /* made from an older file of the track (see the top) */
+  int replaced; /* an original imported here, of an older file of the track */
   mc_file_check failed; /* what its file_failed row says, if it has one */
   int64_t failed_size, failed_mtime;
 } file_row;
@@ -2175,7 +2213,7 @@ static mc_status read_files(mc_library *lib, file_row **out, int *count) {
   if (sqlite3_prepare_v2(mc_library_db(lib),
                          "SELECT f.uid, f.track_uid, f.path, f.format, f.bitrate_kbps, f.size_bytes,"
                          " f.mtime_ms, f.sha256, f.source_file_uid, f.source_peer_uid, " STALE_SQL ","
-                         " x.state, x.size_bytes, x.mtime_ms"
+                         " x.state, x.size_bytes, x.mtime_ms, f.file_rev IS NOT t.file_rev"
                          " FROM files f LEFT JOIN tracks t ON t.uid = f.track_uid"
                          " LEFT JOIN file_failed x ON x.file_uid = f.uid"
                          " ORDER BY f.track_uid",
@@ -2222,6 +2260,7 @@ static mc_status read_files(mc_library *lib, file_row **out, int *count) {
     r->failed = (mc_file_check)sqlite3_column_int(stmt, 11);
     r->failed_size = sqlite3_column_int64(stmt, 12);
     r->failed_mtime = sqlite3_column_int64(stmt, 13);
+    r->replaced = r->kind == MC_FILE_IMPORTED && sqlite3_column_int(stmt, 14);
   }
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
@@ -2420,7 +2459,8 @@ static void reconcile_files(mc_session *s, mc_transfer *x) {
 }
 
 /* An archive keeps everything, except a stale copy once the track's current original has
- * arrived: that's the same track, replaced by a better file. */
+ * arrived: that's the same track, replaced by a better file. Its own original goes then too,
+ * to the trash, as a file swapped out by an import here does. */
 static void drop_stale_on_archive(mc_session *s) {
   mc_library *lib = s->conn->lib;
   file_row *rows;
@@ -2429,10 +2469,18 @@ static void drop_stale_on_archive(mc_session *s) {
   for (int i = 0; i < n;) {
     int end = i, current = 0;
     while (end < n && !strcmp(rows[end].track, rows[i].track)) end++;
-    for (int j = i; j < end; j++)
+    for (int j = i; j < end; j++) {
+      rows[j].stale |= rows[j].replaced;
       current |= !rows[j].stale && !broken(&rows[j]) && rows[j].kind != MC_FILE_TRANSCODE;
-    for (int j = i; current && j < end; j++)
-      if (rows[j].stale) drop_row(s, &rows[i], end - i, &rows[j]);
+    }
+    for (int j = i; current && j < end; j++) {
+      if (!rows[j].stale) continue;
+      char *abs = rows[j].replaced ? deletable_path(lib, rows[j].path) : NULL;
+      if (abs && mc_file_exists(abs) && mc_transfer_trash(abs) != MC_OK)
+        fprintf(stderr, "musiccore: sync: couldn't move %s to the trash\n", abs);
+      free(abs);
+      drop_row(s, &rows[i], end - i, &rows[j]);
+    }
     i = end;
   }
   rows_free(rows, n);

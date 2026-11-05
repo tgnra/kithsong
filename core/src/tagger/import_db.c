@@ -344,6 +344,7 @@ static mc_status attach_file(sqlite3 *db, const mc_db_track *t, const credit_row
   mc_status st;
   if ((st = mc_uid_new(file_uid)) != MC_OK || (st = mc_uid_new(rev)) != MC_OK) return st;
   int swap = t->replace_file_uid != NULL;
+  int new_rev = swap || t->new_rev;
 
   sqlite3_stmt *stmt;
   if (t->update_track) {
@@ -366,14 +367,14 @@ static mc_status attach_file(sqlite3 *db, const mc_db_track *t, const credit_row
       return st;
   }
 
-  stmt = prepare(db, swap ? "UPDATE tracks SET duration_ms = coalesce(?2, duration_ms),"
-                                          " file_rev = ?3 WHERE uid = ?1"
-                                        : "UPDATE tracks SET duration_ms = coalesce(duration_ms, ?2)"
-                                          " WHERE uid = ?1");
+  stmt = prepare(db, new_rev ? "UPDATE tracks SET duration_ms = coalesce(?2, duration_ms),"
+                               " file_rev = ?3 WHERE uid = ?1"
+                             : "UPDATE tracks SET duration_ms = coalesce(duration_ms, ?2)"
+                               " WHERE uid = ?1");
   if (!stmt) return MC_ERR_DB;
   bind_text(stmt, 1, t->track_uid);
   bind_int(stmt, 2, t->duration_ms);
-  if (swap) sqlite3_bind_text(stmt, 3, rev, -1, SQLITE_STATIC);
+  if (new_rev) sqlite3_bind_text(stmt, 3, rev, -1, SQLITE_STATIC);
   if ((st = step_done(stmt)) != MC_OK) return st;
   if (sqlite3_changes(db) != 1) return MC_ERR_NOT_FOUND;
 

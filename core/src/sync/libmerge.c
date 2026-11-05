@@ -702,6 +702,8 @@ static void merge_album_tracks(merge_ctx *x, const old_album *a, old_track *t, i
       }
       mc_db_track row = rows[i];
       if (act != MC_DUPE_IMPORT) row.track_uid = d->track_uid; /* ATTACH, or a SWAP: attach */
+      /* Better than the kept device's: the group's copies follow this one, an archive's too. */
+      row.new_rev = d && d->remote;
       /* What it was first imported from, or else the bytes it comes here as. */
       row.source_sha256 = src[i]->source_sha256 ? src[i]->source_sha256
                           : d && d->source_sha256[0] ? d->source_sha256 : NULL;

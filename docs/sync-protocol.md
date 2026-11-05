@@ -284,11 +284,13 @@ import would bring it in, except that names match as they do for
     it as for any import.
     - New to the kept library: added (keeping its `added_ms`).
     - The kept library has it, and the kept device holds an original of it (from
-      `MERGE_FILES`): compared as an import compares. The same or lower quality is
+      `MERGE_FILES`): compared as an import compares, so two lossless files by bit depth, then
+      sample rate. The same or lower quality is
       skipped and the file goes to the Recycle Bin or trash, and the album folder with it if
       that was its last file. Better: the file is attached
-      to the kept track as this device's original; the kept device's copy stays as it is
-      (no `file_rev` swap: the copy to swap out isn't on this device).
+      to the kept track as this device's original, and the track gets a new `file_rev`, so
+      that the group's copies follow it (see "Stale copies" below): an archive
+      fetches it and its own copy goes, as if the file had been imported there.
     - The kept library has it but no copy whose quality is known (the kept device holds no
       current original): attached, as an import attaches a file to a track held elsewhere.
     - Tracks of the copy with no file on this device are tied to the kept library's by
@@ -878,7 +880,10 @@ the plaintext limit.
     gone. Senders only offer
     originals and transcodes whose `file_rev` is current, and the swapped file gets a new
     file uid, so no transcode cached for the old one is sent. An original imported on a
-    device is never stale there: another device's better file doesn't replace it.
+    device is never stale there: another device's better file doesn't replace it. An archive
+    is the exception, as it's there to hold the best of everything: it fetches the current
+    file all the same, and once that's here its own goes to the Recycle Bin or trash. It
+    counts as holding the track meanwhile, so nothing waits on it.
   - A hand edit isn't a new file: it rewrites this device's originals' tags and updates their
     `files` rows, `sha256` too, with no new `file_rev`, so nothing is fetched and peers keep
     their copies and old tags (see "Hand edits" in tagging-rules.md).

@@ -70,6 +70,9 @@ typedef struct mc_db_track {
    * it, the file is added to the track. */
   const char *track_uid;
   const char *replace_file_uid;
+  /* With track_uid and no replace_file_uid: the file added is the track's better one, though
+   * the one it replaces is on another device, so the track gets a new file_rev all the same. */
+  int new_rev;
   /* With track_uid: the track's metadata follows this row after all (title, artist, numbers,
    * year, ids, and the genre if set); its uid and album stay. For a whole release. */
   int update_track;
