@@ -593,6 +593,52 @@ static void test_swap_retag(void) {
   mc_library_close(lib);
 }
 
+/* A track the library lacks, matched to a reissue in the same release group: it joins the
+ * album as the album stands, naming the library's release. */
+static void test_new_track_joins(void) {
+  mc_library *lib = make_library("join", MBID_ALBUM, "flac", 900, 0, 0);
+  CHECK(lib != NULL);
+  if (!lib) return;
+  incoming x;
+  make_incoming(&x, "join", 1, MBID_REISSUE, "flac", 900, 44100, 16);
+  x.row[0].title = "Bonus";
+  x.row[0].track_no = 4;
+  x.row[0].year = 2021;
+  x.row[0].mb_releasetrackid = k_reissue_rtids[0];
+  mc_db_album a = album_desc(MBID_REISSUE);
+  a.title = "Things We Lost in the Fire (Deluxe)";
+  mc_dupe_plan p;
+  CHECK(mc_dupes_plan(lib, &a, x.in, 1, &p) == MC_OK);
+  CHECK(p.d[0].action == MC_DUPE_IMPORT && !p.d[0].has_tags && !p.whole && p.has_album_tags);
+  mc_tags tags = {0};
+  tags.title = "Bonus";
+  tags.album = "Things We Lost in the Fire (Deluxe)";
+  tags.mb_albumid = MBID_REISSUE;
+  tags.mb_releasetrackid = (char *)k_reissue_rtids[0];
+  tags.year = 2021;
+  tags.track = 4;
+  mc_dupes_join_album(&p, &x.row[0], &tags);
+  CHECK_STR(tags.title, "Bonus");
+  CHECK(tags.track == 4);
+  CHECK_STR(tags.album, "Things We Lost in the Fire");
+  CHECK_STR(tags.album_artist, "Low");
+  CHECK_STR(tags.mb_albumid, MBID_ALBUM);
+  CHECK_STR(tags.mb_releasegroupid, MBID_GROUP);
+  CHECK_STR(tags.mb_releasetrackid, "");
+  CHECK(tags.year == 2001);
+  CHECK(x.row[0].year == 2001 && !x.row[0].mb_releasetrackid);
+  CHECK_STR(x.row[0].mb_albumid, MBID_ALBUM);
+  mc_dupe_plan_free(&p);
+
+  /* Nothing to join in the same album with every track already here. */
+  make_incoming(&x, "join2", 3, MBID_ALBUM, "flac", 900, 44100, 16);
+  a = album_desc(MBID_ALBUM);
+  CHECK(mc_dupes_plan(lib, &a, x.in, 3, &p) == MC_OK);
+  CHECK(p.skips == 3 && !p.has_album_tags);
+  mc_dupe_plan_free(&p);
+  mc_library_close(lib);
+}
+
 /* The whole release swapped for another release of its group: the match wins, and the
  * library's album and tracks take its metadata, keeping their uids. */
 static void test_swap_whole_release(void) {
@@ -939,6 +985,7 @@ int main(int argc, char **argv) {
   test_by_name_and_gaps();
   test_exact_file();
   test_swap_retag();
+  test_new_track_joins();
   test_swap_whole_release();
   test_source_hash();
   test_no_album();

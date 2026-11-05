@@ -84,6 +84,11 @@ typedef struct mc_dupe_plan {
    * and the new files keep their own tags and names. Otherwise each swapped or attached
    * file is tagged as the library's track (has_tags) and keeps the old name. */
   int whole;
+  /* Outside a whole release, a new track joins an album found here as the album stands, not
+   * as its own match has it, which can be another release of the group (under another
+   * title, even). album_tags is one of the album's tracks' tags, for its album fields. */
+  int has_album_tags;
+  mc_tags album_tags;
 } mc_dupe_plan;
 
 /* Works out what to do with an incoming release (album describes it as mc_import_db_write
@@ -93,6 +98,10 @@ typedef struct mc_dupe_plan {
 mc_status mc_dupes_plan(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
                         int count, mc_dupe_plan *out);
 void mc_dupe_plan_free(mc_dupe_plan *plan);
+/* Makes a new track's row and tags (of an MC_DUPE_IMPORT) those of a track of the plan's
+ * album, which has_album_tags says is there: the album's fields come from it, and its release
+ * track id goes, as it's another release's. They point into the plan. */
+void mc_dupes_join_album(const mc_dupe_plan *plan, mc_db_track *row, mc_tags *tags);
 
 /* Where the library's own copy of a track is on another device, what it sounds like: for
  * merging libraries (sync/libmerge.c), whose kept library's files are on the other device.

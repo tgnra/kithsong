@@ -554,9 +554,28 @@ void mc_dupe_plan_free(mc_dupe_plan *plan) {
     free(plan->d[i].old_path);
     if (plan->d[i].has_tags) mc_tags_clear(&plan->d[i].tags);
   }
+  if (plan->has_album_tags) mc_tags_clear(&plan->album_tags);
   free(plan->d);
   free(plan->album_dir);
   memset(plan, 0, sizeof *plan);
+}
+
+void mc_dupes_join_album(const mc_dupe_plan *plan, mc_db_track *row, mc_tags *tags) {
+  const mc_tags *a = &plan->album_tags;
+  tags->album = a->album;
+  tags->album_artist = a->album_artist;
+  tags->album_artists = a->album_artists;
+  tags->mb_albumartistid = a->mb_albumartistid;
+  tags->mb_albumartistids = a->mb_albumartistids;
+  tags->mb_albumid = a->mb_albumid;
+  tags->mb_releasegroupid = a->mb_releasegroupid;
+  tags->mb_releasetrackid = "";
+  tags->year = a->year;
+  tags->original_year = a->original_year;
+  tags->disc_total = a->disc_total;
+  row->mb_albumid = a->mb_albumid[0] ? a->mb_albumid : NULL;
+  row->mb_releasetrackid = NULL;
+  row->year = a->year;
 }
 
 mc_status mc_dupes_plan(mc_library *lib, const mc_db_album *album, const mc_dupe_in *in,
@@ -646,6 +665,14 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
     if (d->action != MC_DUPE_SWAP && (d->action != MC_DUPE_ATTACH || d->remote)) continue;
     mc_status ts = mc_dupes_library_tags(lib, d->track_uid, &d->tags);
     if (ts == MC_OK) d->has_tags = 1;
+    else if (ts == MC_ERR_NOMEM) st = ts;
+  }
+
+  int joining = 0;
+  for (int i = 0; i < count; i++) joining |= out->d[i].action == MC_DUPE_IMPORT;
+  if (st == MC_OK && joining && out->album_uid[0] && !out->whole && !album->no_album && n > 0) {
+    mc_status ts = mc_dupes_library_tags(lib, t[0].uid, &out->album_tags);
+    if (ts == MC_OK) out->has_album_tags = 1;
     else if (ts == MC_ERR_NOMEM) st = ts;
   }
 

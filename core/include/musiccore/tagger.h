@@ -189,6 +189,9 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  *     a singles album, or an item imported with its existing tags.
  *   - Otherwise the tracks already in the library are skipped: no "(2)" copies.
  *   - Tracks of the release the library lacks are added to the existing album either way.
+ *     Short of a whole release, a matched one takes the album's title, album artist, year
+ *     and ids rather than its match's, which can be another release of the group, and has
+ *     no release track id, as its own is that release's.
  *   - The same file again: every file new to the library records the SHA-256 of its
  *     bytes as they were before the import tagged its copy (files.source_sha256), and a
  *     merged library's files bring theirs along. A file whose bytes hash to a recorded source hash, or to the

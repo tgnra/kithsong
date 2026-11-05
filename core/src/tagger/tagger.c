@@ -1695,6 +1695,9 @@ static int apply_dupes(mc_library *lib, mc_db_album *album, mc_db_track *rows,
       pl.tags = d->tags;
       pl.write_tags = 1;
     }
+    /* An item imported as it is keeps its tags, so only a match's are changed. */
+    int joining = d->action == MC_DUPE_IMPORT && dp->has_album_tags && pl.write_tags;
+    if (joining) mc_dupes_join_album(dp, &row, &pl.tags);
     char *dest = NULL;
     if (d->action == MC_DUPE_SWAP) {
       row.replace_file_uid = d->file_uid;
@@ -1705,9 +1708,9 @@ static int apply_dupes(mc_library *lib, mc_db_album *album, mc_db_track *rows,
                                : swap_path(d->old_path, audio_format(pl.f->path));
       dest = mc_strdup(pl.final_rel);
     } else if (album_dir && pl.dest_rel) {
-      char *name = d->has_tags ? mc_track_file(d->tags.title, d->tags.disc, d->tags.disc_total,
-                                               d->tags.track, audio_format(pl.f->path))
-                               : NULL;
+      char *name = d->has_tags || joining ? mc_track_file(pl.tags.title, pl.tags.disc, pl.tags.disc_total,
+                                                          pl.tags.track, audio_format(pl.f->path))
+                                          : NULL;
       dest = join_rel(album_dir, name ? name : base_name(pl.dest_rel));
       free(name);
     }
