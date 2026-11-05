@@ -171,9 +171,17 @@ mc_status mc_changelog_version_vector(sqlite3 *db, mc_origin_hlc **out, int *cou
   *count = 0;
 
   sqlite3_stmt *stmt;
+  /* A GROUP BY reads the whole changelog_origin index, so this hops from origin to origin
+   * along it, one lookup each: a session asks for this several times, and there are few
+   * origins in a great many rows. */
   if (sqlite3_prepare_v2(db,
-                         "SELECT origin_uid, max(hlc) FROM changelog"
-                         " GROUP BY origin_uid ORDER BY origin_uid",
+                         "WITH RECURSIVE o (uid) AS ("
+                         "  SELECT min(origin_uid) FROM changelog"
+                         "  UNION ALL"
+                         "  SELECT (SELECT min(origin_uid) FROM changelog WHERE origin_uid > o.uid)"
+                         "  FROM o WHERE o.uid IS NOT NULL)"
+                         " SELECT uid, (SELECT max(hlc) FROM changelog WHERE origin_uid = o.uid)"
+                         " FROM o WHERE uid IS NOT NULL",
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
 

@@ -243,6 +243,9 @@ static const char *const k_migrations[] = {
   "  mtime_ms         INTEGER,"
   "  analysis_version INTEGER NOT NULL"
   ") WITHOUT ROWID;",
+  /* v20: the version vector (mc_changelog_version_vector()) without reading the whole
+   * changelog. (IF NOT EXISTS: tests that wind user_version back keep their tables.) */
+  "CREATE INDEX IF NOT EXISTS changelog_origin ON changelog (origin_uid, hlc);",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 

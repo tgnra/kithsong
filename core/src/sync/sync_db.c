@@ -64,6 +64,9 @@ static const char *const k_migrations[] = {
   /* v6: a queued play says which track it was, so that flagging its album no_scrobble before
    * it's sent stops it. */
   "ALTER TABLE scrobble_queue ADD COLUMN track_uid TEXT;",
+  /* v7: the version vector (mc_changelog_version_vector()) without reading the whole
+   * changelog. */
+  "CREATE INDEX changelog_origin ON changelog (origin_uid, hlc);",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 

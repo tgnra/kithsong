@@ -25,6 +25,7 @@ The source of truth is [core/src/library/schema_v1.sql](../core/src/library/sche
 | 17 | `albums.art_chosen`: the cover the user chose |
 | 18 | `play_events`: the play log |
 | 19 | `track_analysis`, `analysis_failed`: local audio analysis |
+| 20 | index `changelog_origin`, for the version vector |
 
 ## Location
 
@@ -911,7 +912,9 @@ moving a reference). Deletes are logged as for any table. The applier treats tha
 change to every column.
 
 The version vector sync exchanges (the newest hlc per origin) is computed from the changelog
-each time, never stored, so it can't disagree with the data after a crash.
+each time, never stored, so it can't disagree with the data after a crash. The index
+`changelog_origin` on (`origin_uid`, `hlc`), which `sync.db` has too, makes that a lookup per
+origin, however long the changelog is.
 
 Several connections to one library can be open at once: the importer opens its own on its
 thread. Each has its own clock, so writes go through `mc_library_begin_write()`, which takes

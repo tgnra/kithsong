@@ -2060,6 +2060,8 @@ int main(int argc, char **argv) {
   if (!lib) return TEST_RESULT();
 
   CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(query_int(mc_library_db(lib), "SELECT count(*) FROM sqlite_master WHERE"
+                                      " name = 'changelog_origin'") == 1);
   char node[MC_UID_STRLEN];
   strcpy(node, mc_library_node_uid(lib));
   char library_uid[MC_UID_STRLEN];

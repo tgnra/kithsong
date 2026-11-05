@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
   mc_sync_db *sdb = NULL;
   CHECK(mc_sync_db_open(path, &sdb) == MC_OK);
   if (!sdb) return TEST_RESULT();
-  CHECK(mc_sync_db_schema_version(sdb) == 6);
+  CHECK(mc_sync_db_schema_version(sdb) == 7);
   char device[MC_UID_STRLEN];
   unsigned char priv[MC_SYNC_KEY_LEN], pub[MC_SYNC_KEY_LEN];
   strcpy(device, mc_sync_db_device_uid(sdb));
@@ -160,6 +160,12 @@ int main(int argc, char **argv) {
     if (sqlite3_step(stmt) == SQLITE_ROW) local_max = (uint64_t)sqlite3_column_int64(stmt, 0);
     sqlite3_finalize(stmt);
   }
+  /* It comes from the index, not from reading the whole changelog. */
+  sqlite3_stmt *index;
+  CHECK(sqlite3_prepare_v2(db, "SELECT 1 FROM sqlite_master WHERE name = 'changelog_origin'", -1,
+                           &index, NULL) == SQLITE_OK);
+  CHECK(sqlite3_step(index) == SQLITE_ROW);
+  sqlite3_finalize(index);
   mc_origin_hlc *vv = NULL;
   int count = -1;
   CHECK(mc_sync_db_version_vector(sdb, &vv, &count) == MC_OK && count == 2);
@@ -188,7 +194,7 @@ int main(int argc, char **argv) {
     CHECK(memcmp(mc_sync_db_private_key(sdb), priv, sizeof priv) == 0);
     CHECK(memcmp(mc_sync_db_public_key(sdb), pub, sizeof pub) == 0);
     CHECK_STR(mc_sync_db_group_uid(sdb), "0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e");
-    CHECK(mc_sync_db_schema_version(sdb) == 6);
+    CHECK(mc_sync_db_schema_version(sdb) == 7);
     mc_sync_db_close(sdb);
   }
 
