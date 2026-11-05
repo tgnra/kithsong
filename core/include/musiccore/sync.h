@@ -61,6 +61,15 @@ typedef enum mc_pair_reason {
                              * device); see "Merging libraries" below */
 } mc_pair_reason;
 
+/* With MC_PAIR_LIBRARY_MISMATCH: why the two libraries weren't merged instead. */
+typedef enum mc_pair_why {
+  MC_PAIR_WHY_NONE,          /* nothing more is known */
+  MC_PAIR_WHY_OTHER_LIBRARY, /* a device in a group has another library open */
+  MC_PAIR_WHY_MERGE_PENDING, /* a device still has its last merge to run */
+  MC_PAIR_WHY_NO_MERGE,      /* a device's frontend offers no merging (a watch) */
+  MC_PAIR_WHY_NO_MUSIC       /* a device in a group has no music to merge with yet */
+} mc_pair_why;
+
 typedef struct mc_pair_result {
   const char *device_uid; /* the other device; "" if it was never reached */
   const char *name;       /* its name, "" if unknown */
@@ -68,6 +77,13 @@ typedef struct mc_pair_result {
   mc_pair_reason reason;
   int attempts_left;      /* for MC_PAIR_WRONG_CODE */
   mc_status status;       /* MC_OK when paired, else the error behind the reason */
+  mc_pair_why why;         /* MC_PAIR_LIBRARY_MISMATCH: why it wasn't a merge */
+  int why_here;           /* why is about this device; 0 the other one */
+  /* On the device that was asked: where the other one connected from and listens, "" and 0 if
+   * not known, for asking it back when discovery can't see it (multicast blocked). Only with
+   * a pairing that was refused. */
+  const char *host;
+  uint16_t port;
   /* MC_PAIR_PAIRED: 1 on the device that joined (the other one's group, or a new group
    * syncing the other one's library; see "Join rules" in docs/sync-protocol.md), 0 on the
    * other. The device that joined holds no music yet, and its profile is the one to set up
@@ -135,8 +151,8 @@ typedef struct mc_pair_result {
  *    one can be reached). mc_sync_take_merge_restored() then says so once. A pairing that
  *    fails after the library was set aside is undone the same way.
  *  - A frontend that leaves on_pair_merge NULL doesn't offer merging: pairing two libraries
- *    with music is refused with MC_PAIR_LIBRARY_MISMATCH as before. So is pairing with a
- *    device running a version without merging. */
+ *    with music is refused with MC_PAIR_LIBRARY_MISMATCH, as is any pair that can't merge
+ *    for another reason; mc_pair_result.why says which. */
 
 typedef struct mc_pair_merge {
   const char *device_uid;  /* the other device */

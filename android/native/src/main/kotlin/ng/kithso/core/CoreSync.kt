@@ -253,7 +253,7 @@ data class NearbyDevice(
  *
  * With [offerMerge], pairing two libraries that both have music merges them ([Event.PairMerge]).
  * A frontend with no screens for that passes false: such a pairing is then refused with
- * [PairReason.LibraryMismatch], as by a version without merging, and no [Event.PairMerge] comes.
+ * [PairReason.LibraryMismatch] with [PairWhy.NoMerge], and no [Event.PairMerge] comes.
  */
 class CoreSync(
     library: CoreLibrary,
@@ -273,6 +273,9 @@ class CoreSync(
          */
         MergeDeclined,
     }
+
+    /** mc_pair_why: with [PairReason.LibraryMismatch], why the libraries weren't merged instead. */
+    enum class PairWhy { None, OtherLibrary, MergePending, NoMerge, NoMusic }
 
     /** mc_merge_phase. */
     enum class MergePhase {
@@ -308,6 +311,8 @@ class CoreSync(
          * other, [joined], gets [MergeProgress] and [MergeDone] once the first session has
          * brought the kept library). [scrobbleSignedOut] is the Last.fm user signed out on the
          * merged device because both had one, "" if none was.
+         * [why] is why a [PairReason.LibraryMismatch] wasn't a merge; [whyHere] says it's about
+         * this device, not the other.
          */
         data class PairResult(
             val uid: String,
@@ -322,6 +327,8 @@ class CoreSync(
             val merged: Boolean = false,
             val keptHere: Boolean = false,
             val scrobbleSignedOut: String = "",
+            val why: PairWhy = PairWhy.None,
+            val whyHere: Boolean = false,
         ) : Event
 
         /**
@@ -683,10 +690,13 @@ class CoreSync(
         merged: Boolean,
         keptHere: Boolean,
         scrobbleSignedOut: String,
+        why: Int,
+        whyHere: Boolean,
     ) = listener(
         Event.PairResult(
             uid, name, initiator, PairReason.entries.getOrElse(reason) { PairReason.Failed }, attemptsLeft, status,
             joined, archiveName, archives, merged, keptHere, scrobbleSignedOut,
+            PairWhy.entries.getOrElse(why) { PairWhy.None }, whyHere,
         ),
     )
 

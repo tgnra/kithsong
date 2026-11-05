@@ -170,6 +170,16 @@ static char *merged_text(const sync_event *ev, const char *name) {
   return text;
 }
 
+/* Why a library mismatch wasn't a merge. */
+static enum mc_str_id why_string(mc_pair_why why) {
+  switch (why) {
+    case MC_PAIR_WHY_OTHER_LIBRARY: return MC_STR_PAIR_WHY_OTHER_LIBRARY;
+    case MC_PAIR_WHY_MERGE_PENDING: return MC_STR_PAIR_WHY_MERGE_PENDING;
+    case MC_PAIR_WHY_NO_MUSIC: return MC_STR_PAIR_WHY_NO_MUSIC;
+    default: return MC_STR_PAIR_WHY_NO_MERGE;
+  }
+}
+
 /* How a pairing ended, as on Windows and Android; g_free it. */
 static char *ended_text(const sync_event *ev, gboolean initiator, const char *name) {
   switch (ev->reason) {
@@ -186,8 +196,8 @@ static char *ended_text(const sync_event *ev, gboolean initiator, const char *na
     case MC_PAIR_LIBRARY_MISMATCH: {
       char *text = initiator ? peer_text(MC_STR_LINUX_COMPUTER_PAIR_LIBRARY_MISMATCH, name, FALSE)
                              : peer_text(MC_STR_LINUX_COMPUTER_PAIR_LIBRARY_MISMATCH_INCOMING, name, TRUE);
-      /* This computer merges libraries, so the other device can't (yet). */
-      text = join_para(text, peer_text(MC_STR_PAIR_MERGE_UPDATE_HINT, name, FALSE));
+      if (ev->why != MC_PAIR_WHY_NONE)
+        text = join_para(text, peer_text(why_string(ev->why), ev->why_here ? mc_str(MC_STR_PAIR_THIS_DEVICE) : name, TRUE));
       if (!could_join()) return text;
       return join_para(text, g_strdup(mc_str(MC_STR_PAIR_NEW_LIBRARY_HINT)));
     }
@@ -385,6 +395,10 @@ static void show_ended(pair_dlg *d, const sync_event *ev) {
     }
   } else if (ev->reason == MC_PAIR_LIBRARY_MISMATCH && could_join()) {
     if (ev->uid[0]) g_strlcpy(d->target, ev->uid, sizeof d->target); /* else as set_target said */
+    if (ev->host[0]) { /* asked by a device discovery may never show: it can be asked back */
+      g_strlcpy(d->host, ev->host, sizeof d->host);
+      d->port = ev->port;
+    }
     next = ACT_NEW_LIBRARY;
     action_id = MC_STR_PAIR_CREATE_LIBRARY;
   }

@@ -198,6 +198,16 @@ static void append_merged(wchar_t *out, size_t n, const sync_event *ev, const wc
   }
 }
 
+/* Why a library mismatch wasn't a merge. */
+static enum mc_str_id why_string(mc_pair_why why) {
+  switch (why) {
+    case MC_PAIR_WHY_OTHER_LIBRARY: return MC_STR_PAIR_WHY_OTHER_LIBRARY;
+    case MC_PAIR_WHY_MERGE_PENDING: return MC_STR_PAIR_WHY_MERGE_PENDING;
+    case MC_PAIR_WHY_NO_MUSIC: return MC_STR_PAIR_WHY_NO_MUSIC;
+    default: return MC_STR_PAIR_WHY_NO_MERGE;
+  }
+}
+
 /* How a pairing ended, as on Android. */
 static void ended_text(wchar_t *out, size_t n, const sync_event *ev, BOOL initiator, const wchar_t *name) {
   mc_pair_reason reason = ev->reason;
@@ -221,10 +231,9 @@ static void ended_text(wchar_t *out, size_t n, const sync_event *ev, BOOL initia
     case MC_PAIR_LIBRARY_MISMATCH:
       if (initiator) peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_LIBRARY_MISMATCH, name, FALSE);
       else peer_text(out, n, MC_STR_WINDOWS_PC_PAIR_LIBRARY_MISMATCH_INCOMING, name, TRUE);
-      {
-        /* This PC merges libraries, so the other device can't (yet). */
+      if (ev->why != MC_PAIR_WHY_NONE) {
         wchar_t hint[512];
-        peer_text(hint, 512, MC_STR_PAIR_MERGE_UPDATE_HINT, name, FALSE);
+        peer_text(hint, 512, why_string(ev->why), ev->why_here ? mc_wstr(MC_STR_PAIR_THIS_DEVICE) : name, TRUE);
         append_para(out, n, hint);
       }
       if (could_join()) append_para(out, n, mc_wstr(MC_STR_PAIR_NEW_LIBRARY_HINT));
@@ -433,6 +442,10 @@ static void show_ended(pair_dlg *d, const sync_event *ev) {
     }
   } else if (ev->reason == MC_PAIR_LIBRARY_MISMATCH && could_join()) {
     if (ev->uid[0]) snprintf(d->target, sizeof d->target, "%s", ev->uid); /* else as set_target said */
+    if (ev->host[0]) { /* asked by a device discovery may never show: it can be asked back */
+      snprintf(d->host, sizeof d->host, "%s", ev->host);
+      d->port = ev->port;
+    }
     action = ACT_NEW_LIBRARY;
     action_id = MC_STR_PAIR_CREATE_LIBRARY;
   }

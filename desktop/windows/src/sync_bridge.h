@@ -26,7 +26,7 @@ typedef enum {
   SYNC_EV_PEER,        /* on_peer: uid, online, member */
   SYNC_EV_PAIR_CODE,   /* on_pair_code: code, name (the requester), attempts_left */
   SYNC_EV_PAIR_RESULT, /* on_pair_result: uid, name, initiator, reason, attempts_left, status,
-                        * joined, archive_name, archives */
+                        * joined, archive_name, archives, why, why_here, host, port */
   SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_*, files_done, files_total, sends_*,
                         * bytes_*, pace, library_changed */
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
@@ -49,6 +49,10 @@ typedef struct sync_event {
   int attempts_left;
   int initiator;
   mc_pair_reason reason;
+  mc_pair_why why; /* pair result: why a library mismatch wasn't a merge */
+  int why_here;
+  char host[MC_SYNC_ADDR_STRLEN]; /* pair result: where the other device can be asked back */
+  uint16_t port;
   mc_status status;
   mc_sync_phase phase;
   int64_t rows_sent, rows_received;

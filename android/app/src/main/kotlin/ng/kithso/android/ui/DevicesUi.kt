@@ -390,6 +390,19 @@ fun memberText(device: SyncDevice, syncing: Boolean): String {
     return confirmText(device.confirm)?.let { "$shown\n$it" } ?: shown
 }
 
+// Why a library mismatch wasn't a merge, if that's known.
+@Composable
+private fun pairWhyText(pairing: Pairing.Ended): String? {
+    val id = when (pairing.why) {
+        CoreSync.PairWhy.None -> return null
+        CoreSync.PairWhy.OtherLibrary -> R.string.pair_why_other_library
+        CoreSync.PairWhy.MergePending -> R.string.pair_why_merge_pending
+        CoreSync.PairWhy.NoMerge -> R.string.pair_why_no_merge
+        CoreSync.PairWhy.NoMusic -> R.string.pair_why_no_music
+    }
+    return stringResource(id, if (pairing.whyHere) stringResource(R.string.pair_this_device) else pairing.peer)
+}
+
 @Composable
 private fun endedText(pairing: Pairing.Ended): String = when (pairing.reason) {
     // Nothing syncs yet: the device that joined has its sync settings to choose.

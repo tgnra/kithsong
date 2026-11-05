@@ -13,6 +13,7 @@
 #include "sync/archive.h"
 #include "sync/libmerge.h"
 #include "sync/msg.h"
+#include "sync/reach.h"
 #include "sync/session.h"
 #include "sync/sync_internal.h"
 #include "sync/transfer.h"
@@ -37,11 +38,19 @@ typedef struct side {
   char library_uid[MC_UID_STRLEN];
   char group_library_uid[MC_UID_STRLEN]; /* "" when not in a group or not known yet */
   int64_t tracks;
-  /* Merging libraries; versions before it send none of these. */
+  uint16_t port; /* where it listens: the other side may know it by no other means */
+  /* Merging libraries. */
   int merge;      /* it can merge libraries (and its frontend offers it) */
+  int merge_pending; /* it can't for now: its last merge is still to run */
   int64_t bytes;  /* the files it holds */
   int scrobbling; /* it is signed in to a scrobbling service */
 } side;
+
+/* Why a library_mismatch isn't a merge: here says the device it's about is this one. */
+typedef struct why_not {
+  mc_pair_why why;
+  int here;
+} why_not;
 
 /* Where the pair ends up. */
 typedef enum outcome {
@@ -64,6 +73,31 @@ static int can_merge(const side *a, const side *b) {
   if (a->grp[0] && strcmp(a->library_uid, a->group_library_uid)) return 0;
   if (b->grp[0] && strcmp(b->library_uid, b->group_library_uid)) return 0;
   return 1;
+}
+
+/* Why two libraries with music can't be merged, once decide() has refused them; *a_side says
+ * the device it's about is a. */
+static mc_pair_why why_no_merge(const side *a, const side *b, int *a_side) {
+  int a_other = a->grp[0] && strcmp(a->library_uid, a->group_library_uid);
+  int b_other = b->grp[0] && strcmp(b->library_uid, b->group_library_uid);
+  *a_side = 0;
+  if (a_other || b_other) {
+    *a_side = a_other;
+    return MC_PAIR_WHY_OTHER_LIBRARY;
+  }
+  if (a->merge_pending || b->merge_pending) {
+    *a_side = a->merge_pending;
+    return MC_PAIR_WHY_MERGE_PENDING;
+  }
+  if (!a->merge || !b->merge) {
+    *a_side = !a->merge;
+    return MC_PAIR_WHY_NO_MERGE;
+  }
+  if (a->tracks <= 0 || b->tracks <= 0) {
+    *a_side = a->tracks <= 0;
+    return MC_PAIR_WHY_NO_MUSIC;
+  }
+  return MC_PAIR_WHY_NONE;
 }
 
 /* A merge: the larger library is kept and the other device joins its group, or a new one
@@ -120,6 +154,20 @@ static const char *const k_reasons[] = {
   [MC_PAIR_MERGE_DECLINED] = "merge_declined",
 };
 
+static const char *const k_whys[] = {
+  [MC_PAIR_WHY_NONE] = "",
+  [MC_PAIR_WHY_OTHER_LIBRARY] = "other_library",
+  [MC_PAIR_WHY_MERGE_PENDING] = "merge_pending",
+  [MC_PAIR_WHY_NO_MERGE] = "no_merge",
+  [MC_PAIR_WHY_NO_MUSIC] = "no_music",
+};
+
+static mc_pair_why why_parse(const char *s) {
+  for (int i = 1; s && i < (int)(sizeof k_whys / sizeof k_whys[0]); i++)
+    if (!strcmp(s, k_whys[i])) return (mc_pair_why)i;
+  return MC_PAIR_WHY_NONE;
+}
+
 static mc_pair_reason reason_parse(const char *s) {
   for (int i = 0; s && i < (int)(sizeof k_reasons / sizeof k_reasons[0]); i++)
     if (!strcmp(s, k_reasons[i])) return (mc_pair_reason)i;
@@ -172,8 +220,12 @@ static mc_status my_side(mc_sync *sync, mc_sync_conn *c, side *me) {
   mc_mutex_lock(&sync->lock);
   me->merge = sync->ev.on_pair_merge && !sync->no_merge;
   mc_mutex_unlock(&sync->lock);
+  me->port = sync->port;
   /* One merge at a time: a library still to be merged in pairs as if it couldn't merge. */
-  if (mc_libmerge_pending(c->lib, NULL)) me->merge = 0;
+  if (mc_libmerge_pending(c->lib, NULL)) {
+    me->merge = 0;
+    me->merge_pending = 1;
+  }
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(c->lib), "SELECT coalesce(sum(size_bytes), 0) FROM files",
                          -1, &stmt, NULL) == SQLITE_OK) {
@@ -196,6 +248,7 @@ static mc_status send_side(mc_channel *ch, uint8_t type, const side *s) {
   yyjson_mut_obj_add_str(doc, root, "grp", s->grp);
   yyjson_mut_obj_add_str(doc, root, "library_uid", s->library_uid);
   yyjson_mut_obj_add_int(doc, root, "tracks", s->tracks);
+  yyjson_mut_obj_add_uint(doc, root, "port", s->port);
   if (s->group_library_uid[0])
     yyjson_mut_obj_add_str(doc, root, "group_library_uid", s->group_library_uid);
   if (s->merge) {
@@ -203,6 +256,7 @@ static mc_status send_side(mc_channel *ch, uint8_t type, const side *s) {
     yyjson_mut_obj_add_int(doc, root, "bytes", s->bytes);
     if (s->scrobbling) yyjson_mut_obj_add_bool(doc, root, "scrobbling", 1);
   }
+  if (s->merge_pending) yyjson_mut_obj_add_int(doc, root, "merge_pending", 1);
   size_t len = 0;
   char *json = yyjson_mut_write(doc, 0, &len);
   yyjson_mut_doc_free(doc);
@@ -232,8 +286,12 @@ static mc_status parse_side(const unsigned char *payload, size_t len, side *s) {
     copy_field(root, "group_library_uid", s->group_library_uid, sizeof s->group_library_uid);
     yyjson_val *t = yyjson_obj_get(root, "tracks");
     s->tracks = yyjson_is_int(t) ? yyjson_get_sint(t) : 0;
+    yyjson_val *p = yyjson_obj_get(root, "port");
+    uint64_t port = yyjson_is_uint(p) ? yyjson_get_uint(p) : 0;
+    s->port = port <= 65535 ? (uint16_t)port : 0;
     yyjson_val *m = yyjson_obj_get(root, "merge"), *b = yyjson_obj_get(root, "bytes");
     s->merge = yyjson_is_int(m) && yyjson_get_sint(m) >= 1;
+    s->merge_pending = yyjson_is_int(yyjson_obj_get(root, "merge_pending"));
     s->bytes = yyjson_is_int(b) ? yyjson_get_sint(b) : 0;
     s->scrobbling = yyjson_is_true(yyjson_obj_get(root, "scrobbling"));
     if (is_uid(s->dev) && is_uid(s->library_uid) && (!s->grp[0] || strlen(s->grp) == 16))
@@ -252,13 +310,24 @@ static void send_refuse(mc_channel *ch, mc_pair_reason reason, int attempts_left
   mc_channel_send_clear(ch, MC_MSG_PAIR_REFUSE, json, (size_t)n);
 }
 
+/* library_mismatch, saying why they can't merge instead. why_sender: it's about the sender. */
+static void send_mismatch(mc_channel *ch, const why_not *why) {
+  char json[96];
+  int n = snprintf(json, sizeof json, "{\"reason\":\"%s\",\"why\":\"%s\",\"why_sender\":%d}",
+                   k_reasons[MC_PAIR_LIBRARY_MISMATCH], k_whys[why->why], why->here);
+  mc_channel_send_clear(ch, MC_MSG_PAIR_REFUSE, json, (size_t)n);
+}
+
 static void parse_refuse(const unsigned char *payload, size_t len, mc_pair_reason *reason,
-                         int *attempts_left) {
+                         int *attempts_left,
+                         why_not *why) {
   yyjson_doc *doc = yyjson_read((const char *)payload, len, 0);
   yyjson_val *root = yyjson_doc_get_root(doc);
   *reason = reason_parse(yyjson_get_str(yyjson_obj_get(root, "reason")));
   yyjson_val *a = yyjson_obj_get(root, "attempts_left");
   *attempts_left = yyjson_is_int(a) ? (int)yyjson_get_sint(a) : 0;
+  why->why = why_parse(yyjson_get_str(yyjson_obj_get(root, "why")));
+  why->here = !yyjson_get_sint(yyjson_obj_get(root, "why_sender"));
   yyjson_doc_free(doc);
 }
 
@@ -467,8 +536,10 @@ static void first_session(mc_sync *sync, mc_sync_conn *c, mc_channel *ch, const 
   mc_sync_session_ended(sync, c, peer, &r, s.rows_new, s.follow_up, initiator ? address : NULL, port);
 }
 
-static void result(mc_sync *sync, const side *peer, int initiator, mc_pair_reason reason,
-                   int attempts_left, mc_status st) {
+/* why may be NULL. host and port: where a device that asked to pair can be found again. */
+static void result_at(mc_sync *sync, const side *peer, int initiator, mc_pair_reason reason,
+                      int attempts_left, mc_status st, const why_not *why, const char *host,
+                      uint16_t port) {
   mc_pair_result r;
   r.device_uid = peer ? peer->dev : "";
   r.name = peer ? peer->name : "";
@@ -481,7 +552,16 @@ static void result(mc_sync *sync, const side *peer, int initiator, mc_pair_reaso
   r.archives = 0;
   r.merged = r.kept_here = 0;
   r.scrobble_signed_out = "";
+  r.why = why ? why->why : MC_PAIR_WHY_NONE;
+  r.why_here = why ? why->here : 0;
+  r.host = host;
+  r.port = port;
   mc_sync_emit_pair_result(sync, &r);
+}
+
+static void result(mc_sync *sync, const side *peer, int initiator, mc_pair_reason reason,
+                   int attempts_left, mc_status st) {
+  result_at(sync, peer, initiator, reason, attempts_left, st, NULL, "", 0);
 }
 
 /* --- Merging libraries --- */
@@ -514,6 +594,7 @@ static void paired(mc_sync *sync, const side *peer, int initiator, const joined_
   r.merged = m && m->on;
   r.kept_here = m && m->on && m->kept_here;
   r.scrobble_signed_out = m && m->on ? m->signed_out : "";
+  r.host = "";
   mc_sync_emit_pair_result(sync, &r);
 }
 
@@ -837,6 +918,7 @@ void mc_pairing_initiate(void *arg) {
   mc_channel *ch = NULL;
   merge_state merge;
   memset(&merge, 0, sizeof merge);
+  why_not why = {MC_PAIR_WHY_NONE, 0};
 
   while (st == MC_OK) {
     if ((st = my_side(sync, &c, &me)) != MC_OK) break;
@@ -850,7 +932,7 @@ void mc_pairing_initiate(void *arg) {
     size_t len;
     if ((st = mc_channel_recv_clear(ch, &type, &payload, &len)) != MC_OK) break;
     if (type == MC_MSG_PAIR_REFUSE) {
-      parse_refuse(payload, len, &reason, &attempts_left);
+      parse_refuse(payload, len, &reason, &attempts_left, &why);
       st = reason_status(reason);
       break;
     }
@@ -868,6 +950,11 @@ void mc_pairing_initiate(void *arg) {
     int merging = 0;
     reason = decide(&me, &peer, &out, &merging);
     if (reason != MC_PAIR_PAIRED) {
+      if (reason == MC_PAIR_LIBRARY_MISMATCH) {
+        int a_side;
+        why.why = why_no_merge(&me, &peer, &a_side);
+        why.here = a_side;
+      }
       st = reason_status(reason);
       break;
     }
@@ -887,7 +974,7 @@ void mc_pairing_initiate(void *arg) {
       reason = MC_PAIR_CANCELLED;
       st = mc_channel_recv_clear(ch, &type, &payload, &len);
       if (st == MC_OK && type == MC_MSG_PAIR_REFUSE)
-        parse_refuse(payload, len, &reason, &attempts_left);
+        parse_refuse(payload, len, &reason, &attempts_left, &why);
       st = reason == MC_PAIR_CANCELLED ? MC_ERR_NET : reason_status(reason);
       break;
     }
@@ -908,12 +995,12 @@ void mc_pairing_initiate(void *arg) {
     mc_channel_set_timeout(ch, mc_channel_default_timeout());
     if (st == MC_OK && !clear && type == MC_MSG_PAIR_REFUSE) {
       /* B's user declined the merge. */
-      parse_refuse(payload, len, &reason, &attempts_left);
+      parse_refuse(payload, len, &reason, &attempts_left, &why);
       st = reason_status(reason);
       break;
     }
     if (st == MC_OK && clear) {
-      parse_refuse(payload, len, &reason, &attempts_left);
+      parse_refuse(payload, len, &reason, &attempts_left, &why);
       st = reason_status(reason);
       if (reason != MC_PAIR_WRONG_CODE) break;
       /* Wrong code: say so, and wait for another on a new connection. */
@@ -978,7 +1065,7 @@ void mc_pairing_initiate(void *arg) {
 
   if (reason != MC_PAIR_PAIRED) {
     if (out_cancelled(sync)) reason = MC_PAIR_CANCELLED;
-    result(sync, peer.dev[0] ? &peer : NULL, 1, reason, attempts_left, st);
+    result_at(sync, peer.dev[0] ? &peer : NULL, 1, reason, attempts_left, st, &why, "", 0);
   }
   if (ch) {
     mc_sync_untrack(sync, ch);
@@ -1041,13 +1128,23 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   mc_pair_reason reason = MC_PAIR_FAILED;
   int merging = 0;
   if ((st = my_side(sync, c, &me)) == MC_OK) reason = decide(&peer, &me, &out, &merging);
+  char from[MC_SYNC_ADDR_MAX];
+  mc_reach_host_of(mc_channel_peer_addr(ch), from);
   merge_state merge;
   memset(&merge, 0, sizeof merge);
   merge.on = merging;
   merge.kept_here = merging && a_is_merged(out);
   if (reason != MC_PAIR_PAIRED) {
-    send_refuse(ch, reason, 0);
-    result(sync, &peer, 0, reason, 0, reason_status(reason));
+    why_not why = {MC_PAIR_WHY_NONE, 0};
+    if (reason == MC_PAIR_LIBRARY_MISMATCH) {
+      int a_side;
+      why.why = why_no_merge(&peer, &me, &a_side);
+      why.here = !a_side;
+      send_mismatch(ch, &why);
+    } else {
+      send_refuse(ch, reason, 0);
+    }
+    result_at(sync, &peer, 0, reason, 0, reason_status(reason), &why, from, peer.port);
     mc_mutex_lock(&sync->lock);
     sync->in_conn = 0;
     mc_mutex_unlock(&sync->lock);
@@ -1164,8 +1261,9 @@ void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch) {
   if (st != MC_OK) {
     /* Set aside but not paired: everything goes back as it was. */
     if (merging && !merge.kept_here) mc_sync_abandon_merge(sync, c);
-    result(sync, &peer, 0,
-           st == MC_ERR_LIBRARY_MISMATCH ? MC_PAIR_LIBRARY_MISMATCH : MC_PAIR_FAILED, 0, st);
+    result_at(sync, &peer, 0,
+              st == MC_ERR_LIBRARY_MISMATCH ? MC_PAIR_LIBRARY_MISMATCH : MC_PAIR_FAILED, 0, st, NULL,
+              from, peer.port);
     goto done;
   }
   mc_mutex_lock(&sync->lock);

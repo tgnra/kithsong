@@ -1161,7 +1161,8 @@ static void on_sync_pair_result(void *user, const mc_pair_result *r) {
   (*env)->CallVoidMethod(env, p->listener, p->on_pair_result, uid, name,
                          (jboolean)(r->initiator != 0), (jint)r->reason, (jint)r->attempts_left,
                          (jint)r->status, (jboolean)(r->joined != 0), archive, (jint)r->archives,
-                         (jboolean)(r->merged != 0), (jboolean)(r->kept_here != 0), scrobble);
+                         (jboolean)(r->merged != 0), (jboolean)(r->kept_here != 0), scrobble,
+                         (jint)r->why, (jboolean)(r->why_here != 0));
   if (uid) (*env)->DeleteLocalRef(env, uid);
   if (name) (*env)->DeleteLocalRef(env, name);
   if (archive) (*env)->DeleteLocalRef(env, archive);
@@ -1310,7 +1311,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
   } methods[] = {
     {"onPeer", "(Ljava/lang/String;ZZ)V"},
     {"onPairCode", "(Ljava/lang/String;Ljava/lang/String;I)V"},
-    {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIIIZLjava/lang/String;IZZLjava/lang/String;)V"},
+    {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIIIZLjava/lang/String;IZZLjava/lang/String;IZ)V"},
     {"onProgress", "(Ljava/lang/String;IJJIIJJIILjava/lang/String;ZZ)V"},
     {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJIZZZ)V"},
     {"onPairMerge", "(Ljava/lang/String;Ljava/lang/String;ZZZJJJJZLjava/lang/String;I[Ljava/lang/String;)V"},
@@ -1344,7 +1345,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
       .on_sync_done = on_sync_done,
       /* Setting on_pair_merge is what lets pairing merge two libraries with music. A
        * frontend with no screens for that (the watch) leaves it out, and such a pairing is
-       * refused with MC_PAIR_LIBRARY_MISMATCH, as by a version without merging. */
+       * refused with MC_PAIR_LIBRARY_MISMATCH and MC_PAIR_WHY_NO_MERGE. */
       .on_pair_merge = offer_merge != JNI_FALSE ? on_sync_pair_merge : NULL,
       .on_merge_progress = on_sync_merge_progress,
       .on_merge_done = on_sync_merge_done,

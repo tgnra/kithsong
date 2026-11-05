@@ -121,15 +121,20 @@ The device that starts pairing is A, the initiator. The device it pairs with is 
 the code and A's user enters it.
 
 1. A connects in pairing mode and sends `PAIR_HELLO` in the clear:
-   `{"dev", "name", "kind", "host", "grp", "library_uid", "tracks": <track count>,
-   "group_library_uid", "merge": 1, "bytes", "scrobbling": true}`. `library_uid` is A's
+   `{"dev", "name", "kind", "host", "grp", "library_uid", "tracks": <track count>, "port",
+   "group_library_uid", "merge": 1, "merge_pending": 1, "bytes", "scrobbling": true}`. `port` is
+   where it listens, so that a device that can't see it through discovery can still ask back. `library_uid` is A's
    open library; `group_library_uid`, sent only when A is in a group, is the library its
    group syncs, which the join rules need. `merge`, `bytes` (the size of the files the device
    holds) and `scrobbling` (sent only when true: it is signed in to a scrobbling service) say
    it can merge libraries (see [Merging libraries](#merging-libraries)); a device sends them
-   only when its frontend offers merging, and older versions never do.
+   only when its frontend offers merging. `merge_pending`, sent only then, says it would merge
+   but its last merge has yet to run.
 2. B checks the join rules (below). If pairing is impossible, B replies `PAIR_REFUSE`
    `{"reason": "in_group" | "library_mismatch" | "already_paired" | "busy" | "wrong_code"}` and closes.
+   With `library_mismatch` it adds why the libraries can't merge instead, `"why": "other_library" |
+   "merge_pending" | "no_merge" | "no_music"`, and `"why_sender": 1` if that is about B rather
+   than A (see [Join rules](#join-rules)).
    Otherwise B draws a 6-digit code (uniform, `000000`–`999999`), shows it through the
    `on_pair_code` callback, and replies `PAIR_READY` with the same fields as `PAIR_HELLO`.
    B serves one requester at a time: another device gets `busy` until that pairing ends
@@ -191,8 +196,16 @@ Where the table says `library_mismatch` or `in_group`, the pair is a **merge** i
 both `PAIR_HELLO`/`PAIR_READY` carry `"merge": 1`, both libraries have tracks and differ, and
 a device in a group has its group's library open. The larger library is kept and the other
 device joins as if its library were empty (see [Merging libraries](#merging-libraries)).
-Otherwise the refusal stands, so an older peer, or a frontend that offers no merging, sees
-what it always did.
+Otherwise the refusal stands, and `why` says what stopped the merge, the first that applies:
+
+- `other_library`: a device in a group has another library open than the group's.
+- `merge_pending`: a device has its last merge still to run.
+- `no_merge`: a device's frontend offers no merging (the watch).
+- `no_music`: a device in a group has no tracks, so there's nothing to merge with.
+
+The device that was asked also tells its frontend the address the other came from and the
+`port` it sent, so Create a new library can offer Pair again when discovery doesn't show the
+device (multicast blocked).
 
 ### Merging libraries
 

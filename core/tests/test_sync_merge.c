@@ -101,6 +101,10 @@ typedef struct dev {
   int codes;
   int results;
   mc_pair_reason reason;
+  mc_pair_why why;
+  int why_here;
+  char host[64];
+  uint16_t port;
   int merged, kept_here;
   char signed_out[128];
   /* The last on_pair_merge. */
@@ -131,6 +135,10 @@ static void on_pair_result(void *user, const mc_pair_result *r) {
   dev *d = user;
   mc_mutex_lock(&d->m);
   d->reason = r->reason;
+  d->why = r->why;
+  d->why_here = r->why_here;
+  snprintf(d->host, sizeof d->host, "%s", r->host ? r->host : "?");
+  d->port = r->port;
   d->merged = r->merged;
   d->kept_here = r->kept_here;
   snprintf(d->signed_out, sizeof d->signed_out, "%s",
@@ -562,6 +570,7 @@ int main(int argc, char **argv) {
 
   dev a = {0}, b = {0}, c = {0}, d = {0}, e = {0}, f = {0}, g = {0}, h = {0};
   dev p = {0}, q = {0}, r = {0}, s = {0}, t = {0}, u = {0}, v = {0}, w = {0}, x = {0};
+  dev y = {0}, z = {0};
   dev_paths(&a, base, "a");
   dev_paths(&b, base, "b");
   dev_paths(&c, base, "c");
@@ -579,6 +588,8 @@ int main(int argc, char **argv) {
   dev_paths(&v, base, "v");
   dev_paths(&w, base, "w");
   dev_paths(&x, base, "x");
+  dev_paths(&y, base, "y");
+  dev_paths(&z, base, "z");
 
   /* 1. A (1 track) asks B (3 tracks): B's library is kept, A confirms. Both are signed in;
    * A's two queued plays can't be sent (offline), so they're dropped with its account. */
@@ -788,20 +799,37 @@ int main(int argc, char **argv) {
     CHECK(!has_backup(f.libdir));
 
 
-    /* 4. G runs a version without merging: H (1 track) is refused as before. */
+    /* 4. G's frontend offers no merging: H (1 track) is refused, and both are told that's why.
+     * G, which was asked, hears where H can be found: discovery may never show it. */
     mc_sync_set_test_no_merge(g.sync, 1);
     int merges = g.merges;
     if (dev_start(&h)) {
       h.answer = 1;
       CHECK(pair(&h, &g) == MC_PAIR_LIBRARY_MISMATCH);
       CHECK(h.merges == 0 && g.merges == merges);
+      CHECK(h.why == MC_PAIR_WHY_NO_MERGE && !h.why_here);
+      CHECK(g.why == MC_PAIR_WHY_NO_MERGE && g.why_here);
+      CHECK(!strcmp(g.host, "127.0.0.1"));
+      CHECK(g.port == mc_sync_port(h.sync));
+      CHECK(!h.host[0]);
       CHECK(lib_int(&h, "SELECT count(*) FROM tracks") == 1);
       CHECK(!has_backup(h.libdir));
+
+      /* Y and Z pair with empty libraries: H can't join their group, and has nothing to merge
+       * with there. */
+      if (dev_start(&y) && dev_start(&z)) {
+        CHECK(pair(&y, &z) == MC_PAIR_PAIRED);
+        CHECK(pair(&h, &y) == MC_PAIR_LIBRARY_MISMATCH);
+        CHECK(h.why == MC_PAIR_WHY_NO_MUSIC && !h.why_here);
+        CHECK(y.why == MC_PAIR_WHY_NO_MUSIC && y.why_here);
+      }
     }
   }
   dev_stop(&f);
   dev_stop(&g);
   dev_stop(&h);
+  dev_stop(&y);
+  dev_stop(&z);
 
   /* 5. P (1 track, a playlist, plays, Recents; signed in alone) asks Q (3 tracks) and
    * confirms: P's library is set aside and the merge waits for Sync now. P is renamed while

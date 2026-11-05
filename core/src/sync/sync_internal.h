@@ -173,7 +173,7 @@ struct mc_sync {
    * (mc_sync_pair_merge_confirm()), and the answer: 1 merge, -1 declined, 0 none yet. */
   int out_merge_wait, out_merge_answer;
   int in_merge_wait, in_merge_answer;
-  int no_merge; /* test hook: offer no merging, as an older version */
+  int no_merge; /* test hook: offer no merging, as a watch */
   int no_files_plan; /* test hook: no FILES_PLAN either way, as an older version */
   /* The merge that runs after a session syncs the library (sync.c), with what the pairing
    * learnt: the kept device's originals (sorted; owned) and the account signed out. */
@@ -390,7 +390,7 @@ void mc_sync_set_test_reach_port(mc_sync *sync, uint16_t port);
 /* Sleeps ms before each frame of a file this device serves, so that a test can catch a
  * transfer halfway (0: none). Any time. */
 void mc_sync_set_test_send_delay(mc_sync *sync, uint32_t ms);
-/* no_merge = 1: this device pairs as a version without merging libraries would (no "merge"
+/* no_merge = 1: this device pairs as a frontend without merging libraries would (no "merge"
  * in PAIR_HELLO/PAIR_READY), so two libraries with music are refused as library_mismatch.
  * Any time; takes effect at the next pairing. */
 void mc_sync_set_test_no_merge(mc_sync *sync, int no_merge);

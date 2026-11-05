@@ -101,6 +101,7 @@ sealed interface Pairing {
      * group's archive (the first of [archives]), "" if not known. [merged]: paired by merging
      * libraries, this phone's kept if [keptHere]; [scrobbleSignedOut] is the Last.fm user
      * signed out on the merged device, "" if none was.
+     * [why] and [whyHere]: why a library mismatch wasn't a merge, and that it's about this phone.
      */
     data class Ended(
         val peer: String,
@@ -113,6 +114,8 @@ sealed interface Pairing {
         val merged: Boolean = false,
         val keptHere: Boolean = false,
         val scrobbleSignedOut: String = "",
+        val why: CoreSync.PairWhy = CoreSync.PairWhy.None,
+        val whyHere: Boolean = false,
     ) : Pairing {
         override val merge: MergeProposal? get() = null
     }
@@ -918,7 +921,7 @@ class Syncer(
                     event.merged, event.keptHere, event.scrobbleSignedOut,
                 )
             }
-            else -> Pairing.Ended(peer, event.reason, event.initiator)
+            else -> Pairing.Ended(peer, event.reason, event.initiator, why = event.why, whyHere = event.whyHere)
         }
         Log.i(TAG, "Pairing with $peer: ${event.reason}, status ${event.status}, merged ${event.merged}")
         // Wrong codes keep the merge's proposal or note with the code.
