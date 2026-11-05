@@ -490,6 +490,41 @@ static void test_merge(const char *root) {
   CHECK(sqlite3_open_v2(backup, &old, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK);
   CHECK(query_int(old, "SELECT count(*) FROM tracks") == 7);
   sqlite3_close(old);
+
+  /* Album folders the trashed duplicates emptied go, with their artist's if that's empty too. */
+  {
+    char gone[1200];
+    snprintf(gone, sizeof gone, "%s/Low/Others", dir);
+    CHECK(!mc_file_exists(gone));
+    snprintf(gone, sizeof gone, "%s/Low/Things", dir);
+    CHECK(mc_file_exists(gone));
+  }
+
+  /* The copy goes 30 days on, by the date in its name. */
+  {
+    mc_libmerge_clean_copies(lib);
+    CHECK(mc_file_exists(backup)); /* today's */
+    char aged[1200];
+    snprintf(aged, sizeof aged, "%s/" MC_LIBMERGE_PREFIX "2020-01-01.db", dir);
+    CHECK(mc_rename(backup, aged, 0) == MC_OK);
+    /* Not while it's all that keeps a file the sweep would take: one with no files row. */
+    snprintf(sql, sizeof sql, "DELETE FROM files WHERE path = '%s'", fresh.rel);
+    lib->applying_remote = 1;
+    CHECK(exec(db, sql) == SQLITE_OK);
+    lib->applying_remote = 0;
+    mc_libmerge_clean_copies(lib);
+    CHECK(mc_file_exists(aged));
+    /* And not while it waits to be merged. */
+    char *abs = mc_library_abspath(lib, fresh.rel);
+    CHECK(abs && mc_remove(abs) == MC_OK);
+    free(abs);
+    CHECK(mc_library_meta_set(lib, MC_LIBMERGE_META, MC_LIBMERGE_PREFIX "2020-01-01.db") == MC_OK);
+    mc_libmerge_clean_copies(lib);
+    CHECK(mc_file_exists(aged));
+    CHECK(mc_library_meta_set(lib, MC_LIBMERGE_META, NULL) == MC_OK);
+    mc_libmerge_clean_copies(lib);
+    CHECK(!mc_file_exists(aged));
+  }
   free(backup);
   mc_library_close(lib);
   remove_tree(dir);

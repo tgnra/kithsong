@@ -241,7 +241,10 @@ import would bring it in, except that names match as they do for
      logging (every row, `files`, `aliases`, `merge_keys`, the changelog; the example smart
      lists are seeded again as migration v10 does), and it gets a new `node_uid`. The
      `library_uid` stays until `apply_pairing` adopts the kept one. `meta.merge_source`
-     names the copy until the merge has run. The copy is never deleted by the app. Before
+     names the copy until the merge has run. The copy is deleted 30 days after the date in its
+     name, at the end of a session (`mc_libmerge_clean_copies()`), unless a merge still waits
+     on it or it names a file in the folder that has no `files` row: a track the merge
+     couldn't bring in, which only the copy keeps from the orphan sweep. Before
      step 1, `sync.db` is copied aside too, so that the pairing can be undone while the
      merge waits (see "Abandoning a merge" below).
 - **After `PAIR_ACCEPT`**, encrypted, before the first `HELLO`: the merged device sends
@@ -276,7 +279,8 @@ import would bring it in, except that names match as they do for
     - New to the kept library: added (keeping its `added_ms`).
     - The kept library has it, and the kept device holds an original of it (from
       `MERGE_FILES`): compared as an import compares. The same or lower quality is
-      skipped and the file goes to the Recycle Bin or trash. Better: the file is attached
+      skipped and the file goes to the Recycle Bin or trash, and the album folder with it if
+      that was its last file. Better: the file is attached
       to the kept track as this device's original; the kept device's copy stays as it is
       (no `file_rev` swap: the copy to swap out isn't on this device).
     - The kept library has it but no copy whose quality is known (the kept device holds

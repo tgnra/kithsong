@@ -81,6 +81,13 @@ typedef void (*mc_libmerge_progress_fn)(void *user, const mc_merge_progress *pro
 mc_status mc_libmerge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
                           mc_libmerge_progress_fn progress, void *user, mc_merge_result *out);
 
+/* How long a set-aside copy is kept once it has been merged or put back, in days. */
+#define MC_LIBMERGE_KEEP_DAYS 30
+/* Deletes set-aside copies that old, by the date in their names. Not one a merge still waits
+ * on, nor one naming a file that is in the folder with no files row: a track the merge couldn't
+ * bring in, which only the copy keeps from the orphan sweep (orphans.c). */
+void mc_libmerge_clean_copies(mc_library *lib);
+
 /* Sorts kept by track uid, for mc_libmerge_run(). */
 void mc_libmerge_sort_kept(mc_kept_file *kept, int count);
 

@@ -12,6 +12,7 @@
 #include "musiccore/tagger.h"
 #include "tagger/dupes.h"
 #include "tagger/import_db.h"
+#include "sync/transfer.h"
 #include "util/db_open.h"
 #include "util/platform.h"
 
@@ -112,6 +113,98 @@ int mc_libmerge_waiting(mc_library *lib) {
 mc_status mc_libmerge_release(mc_library *lib) {
   if (!lib) return MC_ERR_INVALID_ARG;
   return mc_libmerge_waiting(lib) ? mc_library_meta_set(lib, MC_LIBMERGE_WAIT_META, NULL) : MC_OK;
+}
+
+/* --- Clearing out old copies --- */
+
+/* Days since 1970-01-01 of a civil date (H. Hinnant's algorithm). */
+static int64_t civil_days(int64_t y, int m, int d) {
+  y -= m <= 2;
+  int64_t era = (y >= 0 ? y : y - 399) / 400;
+  int64_t yoe = y - era * 400;
+  int64_t doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+  int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + doe - 719468;
+}
+
+typedef struct copy_names {
+  char **v;
+  int n;
+} copy_names;
+
+static void note_copy(void *user, const char *name, int is_dir) {
+  copy_names *c = user;
+  size_t len = strlen(name);
+  if (is_dir || strncmp(name, MC_LIBMERGE_PREFIX, strlen(MC_LIBMERGE_PREFIX)) || len < 3 ||
+      strcmp(name + len - 3, ".db"))
+    return;
+  char **more = realloc(c->v, (size_t)(c->n + 1) * sizeof *more);
+  if (!more) return;
+  c->v = more;
+  if ((c->v[c->n] = mc_strdup(name))) c->n++;
+}
+
+/* Whether a file the copy at abs names is in the folder with no files row: a track the merge
+ * couldn't bring in, whose file the copy alone keeps from the orphan sweep (orphans.c). 1 too if
+ * the copy can't be read, as that can't be told. */
+static int copy_holds_files(mc_library *lib, const char *abs) {
+  sqlite3 *old = NULL;
+  sqlite3_stmt *paths = NULL, *known = NULL;
+  int holds = 1;
+  if (mc_db_open(abs, &old, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX) == SQLITE_OK &&
+      sqlite3_prepare_v2(old, "SELECT path FROM files", -1, &paths, NULL) == SQLITE_OK &&
+      sqlite3_prepare_v2(mc_library_db(lib), "SELECT 1 FROM files WHERE path = ?1", -1, &known,
+                         NULL) == SQLITE_OK) {
+    holds = 0;
+    while (!holds && sqlite3_step(paths) == SQLITE_ROW) {
+      const char *rel = (const char *)sqlite3_column_text(paths, 0);
+      if (!rel) continue;
+      sqlite3_reset(known);
+      sqlite3_bind_text(known, 1, rel, -1, SQLITE_STATIC);
+      if (sqlite3_step(known) == SQLITE_ROW) continue;
+      char *file = mc_library_abspath(lib, rel);
+      holds = !file || mc_file_exists(file);
+      free(file);
+    }
+  }
+  sqlite3_finalize(paths);
+  sqlite3_finalize(known);
+  sqlite3_close_v2(old);
+  return holds;
+}
+
+void mc_libmerge_clean_copies(mc_library *lib) {
+  if (!lib) return;
+  char pending[256] = "";
+  mc_library_meta_get(lib, MC_LIBMERGE_META, pending, sizeof pending);
+  copy_names c = {NULL, 0};
+  mc_list_dir(mc_library_dir(lib), note_copy, &c);
+  int64_t today = (int64_t)(mc_wall_ms() / 1000 / 86400);
+  for (int i = 0; i < c.n; i++) {
+    int y, m, d;
+    const char *date = c.v[i] + strlen(MC_LIBMERGE_PREFIX);
+    char *abs = mc_library_abspath(lib, c.v[i]);
+    if (abs && strcmp(c.v[i], pending) && sscanf(date, "%4d-%2d-%2d", &y, &m, &d) == 3 &&
+        today - civil_days(y, m, d) >= MC_LIBMERGE_KEEP_DAYS && !copy_holds_files(lib, abs)) {
+      fprintf(stderr, "musiccore: merge: removing %s after %d days\n", c.v[i],
+              MC_LIBMERGE_KEEP_DAYS);
+      if (mc_remove(abs) == MC_OK) {
+        static const char *const side[] = {"-wal", "-shm"};
+        for (int k = 0; k < 2; k++) {
+          size_t n = strlen(abs) + 5;
+          char *extra = malloc(n);
+          if (extra) {
+            snprintf(extra, n, "%s%s", abs, side[k]);
+            if (mc_file_exists(extra)) mc_remove(extra);
+          }
+          free(extra);
+        }
+      }
+    }
+    free(abs);
+    free(c.v[i]);
+  }
+  free(c.v);
 }
 
 /* --- Maps from the copy's uids to the kept library's --- */
@@ -550,6 +643,8 @@ static void merge_album_tracks(merge_ctx *x, const old_album *a, old_track *t, i
         if (mc_dupes_trash(src[i]->abs) != MC_OK)
           fprintf(stderr, "musiccore: merge: couldn't move %s to the trash; left in place\n",
                   src[i]->abs);
+        else
+          mc_transfer_prune_dirs(x->lib, src[i]->path); /* the last of its folder, perhaps */
         x->r->tracks_skipped++;
         continue;
       }

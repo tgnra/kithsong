@@ -2463,6 +2463,7 @@ static void sweep_orphans(mc_session *s, int archive) {
             s->files_corrupt);
     return;
   }
+  mc_libmerge_clean_copies(s->conn->lib);
   mc_orphans_args a = {s->conn->lib, s->sync->config_dir, MC_ORPHANS_ARCHIVE_ONLY_REPORTS && archive, 1,
                        session_stopping, s->sync};
   mc_orphans_result r;
