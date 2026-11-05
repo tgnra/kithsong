@@ -1238,8 +1238,8 @@ A device shows which of its wanted tracks can only come from members it can't re
 "12 tracks are waiting for Tania's desktop to come online.", or with several members
 "... for Tania's desktop and 2 other devices ...", naming the one holding the most. It is a
 calm notice at the top of the library on every platform, with no button, and it goes once
-the tracks arrive. `mc_sync_get_waiting()` gives it (total tracks, then each member with the
-tracks it holds, most first) and `mc_sync_waiting_text()` the sentence; `on_waiting` says when
+the tracks arrive. `mc_sync_get_waiting()` gives it (total tracks and their uids, then each member
+with the tracks it holds, most first) and `mc_sync_waiting_text()` the sentence; `on_waiting` says when
 it changed. The rules are in `core/src/sync/waiting.h`:
 
 - **Waiting tracks:** this device's plan, less the tracks it holds in the target format (as

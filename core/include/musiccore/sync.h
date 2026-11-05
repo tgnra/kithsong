@@ -608,6 +608,7 @@ typedef struct mc_sync_waiting_device {
 
 typedef struct mc_sync_waiting {
   int tracks;                      /* waiting tracks, each counted once */
+  char (*track_uids)[MC_UID_STRLEN]; /* those tracks, as many as tracks, sorted */
   mc_sync_waiting_device *devices; /* the unreachable members holding them, most tracks
                                     * first (then by name); a track several of them hold
                                     * counts for each */

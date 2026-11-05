@@ -228,6 +228,7 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
                           -1, &first, NULL) != SQLITE_OK))
     st = MC_ERR_DB;
 
+  int uids_cap = 0;
   char *held = n ? malloc((size_t)n) : NULL;
   if (st == MC_OK && n && !held) st = MC_ERR_NOMEM;
   for (int t = 0; st == MC_OK && n && t < plan->count; t++) {
@@ -246,7 +247,17 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
       reached |= ms[imp].reachable;
     }
     if (!any || reached) continue;
-    w->tracks++;
+    if (w->tracks == uids_cap) {
+      int cap = uids_cap ? uids_cap * 2 : 64;
+      char(*more)[MC_UID_STRLEN] = realloc(w->track_uids, (size_t)cap * sizeof *more);
+      if (!more) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      w->track_uids = more;
+      uids_cap = cap;
+    }
+    memcpy(w->track_uids[w->tracks++], track->track_uid, MC_UID_STRLEN);
     for (int i = 0; i < n; i++) ms[i].tracks += held[i];
   }
   free(held);
@@ -282,10 +293,12 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
 }
 
 int mc_waiting_equal(const mc_sync_waiting *a, const mc_sync_waiting *b) {
-  static const mc_sync_waiting none = {0, NULL, 0};
+  static const mc_sync_waiting none = {0, NULL, NULL, 0};
   if (!a) a = &none;
   if (!b) b = &none;
   if (a->tracks != b->tracks || a->count != b->count) return 0;
+  if (a->tracks && memcmp(a->track_uids, b->track_uids, (size_t)a->tracks * MC_UID_STRLEN))
+    return 0;
   for (int i = 0; i < a->count; i++) {
     const mc_sync_waiting_device *x = &a->devices[i], *y = &b->devices[i];
     if (strcmp(x->uid, y->uid) || x->tracks != y->tracks || x->kind != y->kind ||
@@ -302,11 +315,15 @@ mc_sync_waiting *mc_waiting_copy(const mc_sync_waiting *w) {
     return c;
   }
   c->devices = calloc((size_t)w->count, sizeof *c->devices);
-  if (!c->devices) {
+  c->track_uids = malloc((size_t)w->tracks * MC_UID_STRLEN);
+  if (!c->devices || !c->track_uids) {
+    free(c->devices);
+    free(c->track_uids);
     free(c);
     return NULL;
   }
   c->tracks = w->tracks;
+  memcpy(c->track_uids, w->track_uids, (size_t)w->tracks * MC_UID_STRLEN);
   for (; c->count < w->count; c->count++) {
     mc_sync_waiting_device *d = &c->devices[c->count];
     *d = w->devices[c->count];
@@ -325,6 +342,7 @@ void mc_sync_waiting_free(mc_sync_waiting *waiting) {
   if (!waiting) return;
   for (int i = 0; i < waiting->count; i++) free(waiting->devices[i].name);
   free(waiting->devices);
+  free(waiting->track_uids);
   free(waiting);
 }
 

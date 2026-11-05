@@ -232,6 +232,12 @@ int main(int argc, char **argv) {
   out = compute(&w);
   CHECK(out && out->tracks == 4);
   CHECK(out && out->count == 3);
+  /* They're named, in order: a frontend can show them. */
+  for (int i = 0; out && out->track_uids && i < out->tracks; i++) {
+    CHECK(strcmp(out->track_uids[i], w.track[4]) != 0);
+    if (i) CHECK(strcmp(out->track_uids[i - 1], out->track_uids[i]) < 0);
+  }
+  CHECK(out && out->track_uids);
   CHECK(tracks_of(out, w.uid[DESK]) == 4);
   CHECK(tracks_of(out, w.uid[PHONE]) == 1);
   CHECK(tracks_of(out, w.uid[LAPTOP]) == 1);
@@ -252,7 +258,13 @@ int main(int argc, char **argv) {
   /* Copies compare equal; a change doesn't. */
   mc_sync_waiting *copy = mc_waiting_copy(out);
   CHECK(mc_waiting_equal(out, copy));
-  if (copy && copy->count) copy->devices[0].tracks--;
+  if (copy && copy->count) copy->track_uids[0][0] ^= 1;
+  CHECK(!mc_waiting_equal(out, copy));
+  if (copy && copy->count) {
+    copy->track_uids[0][0] ^= 1;
+    CHECK(mc_waiting_equal(out, copy));
+    copy->devices[0].tracks--;
+  }
   CHECK(!mc_waiting_equal(out, copy));
   CHECK(!mc_waiting_equal(out, NULL));
   mc_sync_waiting_free(copy);
