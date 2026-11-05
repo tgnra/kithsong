@@ -41,11 +41,13 @@ int mc_libmerge_keeps_first(int64_t tracks_a, int64_t bytes_a, const char *libra
                             int64_t tracks_b, int64_t bytes_b, const char *library_b);
 
 /* An original the kept library's device holds: what it sounds like, for the duplicates
- * check (format as files.format, kbps as files.bitrate_kbps, 0 if unknown). */
+ * check (format as files.format, kbps as files.bitrate_kbps; these and the sample rate and
+ * bit depth, read from the file, 0 if unknown). */
 typedef struct mc_kept_file {
   char track[MC_UID_STRLEN];
   char format[16];
   int kbps;
+  int sample_rate, bits;
 } mc_kept_file;
 
 /* Copies the library to a new file in its folder (VACUUM INTO; the copy has no WAL), then
@@ -90,6 +92,11 @@ void mc_libmerge_clean_copies(mc_library *lib);
 
 /* Sorts kept by track uid, for mc_libmerge_run(). */
 void mc_libmerge_sort_kept(mc_kept_file *kept, int count);
+/* Keeps kept beside sync.db's copy (MC_LIBMERGE_SYNC_BACKUP_DIR), which lasts until the merge
+ * has run or been undone, so a merge that runs after a restart still compares quality. */
+mc_status mc_libmerge_save_kept(const char *config_dir, const mc_kept_file *kept, int count);
+/* What was saved, sorted, malloc'd; NULL and 0 if nothing was. */
+mc_kept_file *mc_libmerge_load_kept(const char *config_dir, int *count);
 
 /* --- Abandoning a merge (librestore.c) ---
  * While the merge still waits for Sync now, the pairing can be undone: the app was

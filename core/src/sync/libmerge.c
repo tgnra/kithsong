@@ -319,6 +319,56 @@ void mc_libmerge_sort_kept(mc_kept_file *kept, int count) {
   if (kept && count > 1) qsort(kept, (size_t)count, sizeof *kept, kept_cmp);
 }
 
+/* The saved list: a line per file of track, format, kbps, sample rate and bits. */
+#define KEPT_FILE "kept-files"
+
+static char *kept_path(const char *config_dir) {
+  size_t n = strlen(config_dir) + sizeof MC_LIBMERGE_SYNC_BACKUP_DIR + sizeof KEPT_FILE + 2;
+  char *p = malloc(n);
+  if (p)
+    snprintf(p, n, "%s%c" MC_LIBMERGE_SYNC_BACKUP_DIR "%c" KEPT_FILE, config_dir, MC_PATH_SEP,
+             MC_PATH_SEP);
+  return p;
+}
+
+mc_status mc_libmerge_save_kept(const char *config_dir, const mc_kept_file *kept, int count) {
+  char *path = config_dir ? kept_path(config_dir) : NULL;
+  FILE *f = path ? mc_fopen(path, "wb") : NULL;
+  free(path);
+  if (!f) return MC_ERR_IO;
+  int ok = 1;
+  for (int i = 0; ok && i < count; i++)
+    ok = fprintf(f, "%s %s %d %d %d\n", kept[i].track, kept[i].format[0] ? kept[i].format : "-",
+                 kept[i].kbps, kept[i].sample_rate, kept[i].bits) > 0;
+  return fclose(f) == 0 && ok ? MC_OK : MC_ERR_IO;
+}
+
+mc_kept_file *mc_libmerge_load_kept(const char *config_dir, int *count) {
+  *count = 0;
+  char *path = config_dir ? kept_path(config_dir) : NULL;
+  FILE *f = path ? mc_fopen(path, "rb") : NULL;
+  free(path);
+  if (!f) return NULL;
+  mc_kept_file *kept = NULL, k;
+  int n = 0, cap = 0;
+  memset(&k, 0, sizeof k);
+  while (fscanf(f, "%36s %15s %d %d %d", k.track, k.format, &k.kbps, &k.sample_rate, &k.bits) == 5) {
+    if (n == cap) {
+      int grown = cap ? cap * 2 : 256;
+      mc_kept_file *more = realloc(kept, (size_t)grown * sizeof *more);
+      if (!more) break;
+      kept = more;
+      cap = grown;
+    }
+    if (!strcmp(k.format, "-")) k.format[0] = '\0';
+    kept[n++] = k;
+  }
+  fclose(f);
+  mc_libmerge_sort_kept(kept, n);
+  *count = n;
+  return kept;
+}
+
 static int remote_quality(void *user, const char *track_uid, mc_audio_quality *out) {
   merge_ctx *x = user;
   if (!x->kept || x->nkept <= 0) return 0;
@@ -330,6 +380,8 @@ static int remote_quality(void *user, const char *track_uid, mc_audio_quality *o
   memset(out, 0, sizeof *out);
   out->format = k->format;
   out->bitrate_kbps = k->kbps;
+  out->sample_rate = k->sample_rate;
+  out->bits_per_sample = k->bits;
   return 1;
 }
 

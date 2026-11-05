@@ -387,6 +387,8 @@ static int run_pending_merge(mc_sync *sync, mc_sync_conn *c, const mc_sync_resul
   mc_mutex_unlock(&sync->lock);
   if (busy) return 0;
 
+  /* A restart since the pairing: what it learnt was kept on disk. */
+  if (!kept) kept = mc_libmerge_load_kept(sync->config_dir, &nkept);
   char *backup = NULL;
   mc_libmerge_pending(c->lib, &backup);
   mc_merge_result r;

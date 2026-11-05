@@ -885,7 +885,8 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
     yyjson_mut_obj_add_strcpy(doc, root, "track", track);
     yyjson_mut_obj_add_strcpy(doc, root, "file", h->file_uid);
     yyjson_mut_obj_add_str(doc, root, "format", format);
-    yyjson_mut_obj_add_int(doc, root, "kbps", kbps);
+    /* An original's is the file's own, for the row the receiver writes. */
+    yyjson_mut_obj_add_int(doc, root, "kbps", !strcmp(format, "original") ? h->bitrate : kbps);
     yyjson_mut_obj_add_strcpy(doc, root, "ext", ext);
     yyjson_mut_obj_add_int(doc, root, "size", size);
     yyjson_mut_obj_add_strcpy(doc, root, "sha256", sha);
@@ -1517,7 +1518,7 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
     int64_t fsize = 0, mtime = 0;
     mc_file_info(abs, &fsize, &mtime);
     /* A received original keeps no source_file_uid: it is still an original. */
-    if (insert_file(lib, t->track_uid, rel, ext, sent_opus ? kbps : 0, fsize, mtime,
+    if (insert_file(lib, t->track_uid, rel, ext, kbps, fsize, mtime,
                     sent_opus ? file_uid : NULL, s->peer_uid, sha,
                     source_sha[0] ? source_sha : NULL) == MC_OK) {
       *got = GOT_OK;

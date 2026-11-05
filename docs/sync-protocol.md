@@ -252,8 +252,11 @@ import would bring it in, except that names match as they do for
      merge waits (see "Abandoning a merge" below).
 - **After `PAIR_ACCEPT`**, encrypted, before the first `HELLO`: the merged device sends
   `MERGE_REQ {"scrobble_signed_out"?: <user name>}`, and the kept device answers with its
-  originals in one or more `MERGE_FILES {"files": [[track_uid, format, kbps], ...],
-  "more": bool}` (600 per message, `more` false on the last), for the duplicates check. Both
+  originals in one or more `MERGE_FILES {"files": [[track_uid, format, kbps, sample_rate,
+  bits], ...], "more": bool}` (600 per message, `more` false on the last), for the duplicates
+  check. The last two are read from the file, as is `kbps` if the `files` row has none, for
+  lossless files, which they alone tell apart; 0 if unknown. The merged device keeps the list
+  in `sync-before-merge/kept-files`, so a merge that runs after a restart still has it. Both
   then report `on_pair_result` (`merged`, `kept_here`, `scrobble_signed_out`), and the first
   session runs as for any pairing.
 - **The merge** runs on the merged device at the end of a session that synced the library
@@ -286,8 +289,8 @@ import would bring it in, except that names match as they do for
       that was its last file. Better: the file is attached
       to the kept track as this device's original; the kept device's copy stays as it is
       (no `file_rev` swap: the copy to swap out isn't on this device).
-    - The kept library has it but no copy whose quality is known (the kept device holds
-      none): attached, as an import attaches a file to a track held elsewhere.
+    - The kept library has it but no copy whose quality is known (the kept device holds no
+      current original): attached, as an import attaches a file to a track held elsewhere.
     - Tracks of the copy with no file on this device are tied to the kept library's by
       `mb_releasetrackid` for the lists below; others are left out.
   - Playlists, album groups and user smart lists (not the examples) are created anew, their
@@ -306,7 +309,7 @@ import would bring it in, except that names match as they do for
     are told of the change. Until then the merged device's file phase fetches and deletes
     nothing (its files have no `files` rows yet, so reconcile would take them for unknown
     files). If the app stops first, the merge runs after the next session that syncs the
-    library, without `MERGE_FILES` (matched tracks are then attached).
+    library.
 - **Abandoning a merge.** While `meta.merge_wait` is set the pairing isn't finished, and it is
   undone if the app stops (`merge_wait` holds the run that set it, so the next run knows), if
   the merged device leaves the kept group or is removed from it, or if the pairing fails after
@@ -474,7 +477,7 @@ Message types:
 | 0x20 | `HAVE_REQ`    | `{"tracks": [uid], "format", "kbps"}` |
 | 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool, "verified": bool, "size"?, "copy"?: bool, "copy_kbps"?}]}` |
 | 0x22 | `FILE_REQ`    | `{"track", "format", "kbps", "est", "retry": true}`; `format` `"original"` or `"opus"`; `est` the size the receiver expects, for progress only; `retry` only on the second ask for a track after a checksum mismatch |
-| 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256", "source_sha256"?}` |
+| 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256", "source_sha256"?}`; `kbps` is the transcode's bitrate, or an original's own (0 if unknown) |
 | 0x24 | `FILE_DATA`   | raw bytes, in order, until `size` bytes have been sent |
 | 0x25 | `FILE_ERR`    | `{"track", "reason"}`, sent instead of `FILE_HDR` |
 | 0x26 | `PREPARE_REQ` | `{"device", "tracks": [uid], "kbps"}`: transcode into the cache for a device that is offline, or (`device` the receiver itself) ahead of its `FILE_REQ`s; no reply |

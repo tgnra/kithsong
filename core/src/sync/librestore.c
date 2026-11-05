@@ -503,9 +503,9 @@ static mc_status restore_sync(mc_library *lib, mc_sync_db *sdb, const char *conf
   mc_status st = bpath && lpath ? MC_OK : MC_ERR_NOMEM;
   char flag[8];
   if (st == MC_OK && !meta_text(lib, MC_LIBMERGE_RESTORE_SYNC_META, flag, sizeof flag)) {
-    /* Nothing left to restore. A copy of sync.db that no waiting merge needs (the merge ran,
-     * or the restore was done but for removing it) goes. */
-    if (!mc_libmerge_waiting(lib) || !mc_libmerge_pending(lib, NULL)) remove_with_part(bdir);
+    /* Nothing left to restore. A copy of sync.db that no merge needs (the merge ran, or the
+     * restore was done but for removing it) goes. */
+    if (!mc_libmerge_pending(lib, NULL)) remove_with_part(bdir);
     st = MC_ERR_NOT_FOUND;
   }
   char old_group[MC_UID_STRLEN] = "", *old_key = NULL;

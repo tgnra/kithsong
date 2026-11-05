@@ -8,6 +8,7 @@
 #include <yyjson.h>
 
 #include "library/library_internal.h"
+#include "musiccore/tagger.h"
 #include "scrobble/scrobble_internal.h"
 #include "sync/archive.h"
 #include "sync/libmerge.h"
@@ -15,6 +16,7 @@
 #include "sync/session.h"
 #include "sync/sync_internal.h"
 #include "sync/transfer.h"
+#include "tagger/dupes.h"
 
 /* How long B keeps a code for its requester, and A waits for the user to type it. */
 #define CODE_WAIT_MS (5 * 60 * 1000)
@@ -664,7 +666,8 @@ static mc_status merge_request(mc_sync *sync, mc_channel *ch, const merge_state 
     yyjson_arr_foreach(files, idx, max, f) {
       const char *track = yyjson_get_str(yyjson_arr_get(f, 0));
       const char *format = yyjson_get_str(yyjson_arr_get(f, 1));
-      yyjson_val *kbps = yyjson_arr_get(f, 2);
+      yyjson_val *kbps = yyjson_arr_get(f, 2), *rate = yyjson_arr_get(f, 3),
+                 *bits = yyjson_arr_get(f, 4);
       if (!track || strlen(track) != MC_UID_STRLEN - 1) continue;
       if (n == cap) {
         int grown = cap ? cap * 2 : 256;
@@ -680,6 +683,8 @@ static mc_status merge_request(mc_sync *sync, mc_channel *ch, const merge_state 
       snprintf(k->track, sizeof k->track, "%s", track);
       snprintf(k->format, sizeof k->format, "%s", format ? format : "");
       k->kbps = yyjson_is_int(kbps) ? (int)yyjson_get_sint(kbps) : 0;
+      k->sample_rate = yyjson_is_int(rate) ? (int)yyjson_get_sint(rate) : 0;
+      k->bits = yyjson_is_int(bits) ? (int)yyjson_get_sint(bits) : 0;
     }
     yyjson_doc_free(in);
     if (!yyjson_is_arr(files)) st = MC_ERR_FORMAT;
@@ -689,6 +694,9 @@ static mc_status merge_request(mc_sync *sync, mc_channel *ch, const merge_state 
     return st;
   }
   mc_libmerge_sort_kept(kept, n);
+  /* Not fatal: a merge that runs in this run of the app doesn't need it. */
+  if (mc_libmerge_save_kept(sync->config_dir, kept, n) != MC_OK)
+    fprintf(stderr, "musiccore: merge: couldn't keep the other device's list of files\n");
   mc_mutex_lock(&sync->lock);
   free(sync->merge_kept);
   sync->merge_kept = kept;
@@ -698,6 +706,22 @@ static mc_status merge_request(mc_sync *sync, mc_channel *ch, const merge_state 
   sync->merge_dropped = m->dropped;
   mc_mutex_unlock(&sync->lock);
   return MC_OK;
+}
+
+/* What the files row can't say of the file at rel: a lossless file's sample rate and bit depth
+ * are all that tell two apart, and a row may have no bitrate. A file that can't be read stays
+ * as its row has it. */
+static void read_quality(mc_library *lib, const char *rel, mc_audio_quality *q) {
+  if (!rel || (q->bitrate_kbps > 0 && !mc_quality_is_lossless(q))) return;
+  char *abs = mc_library_abspath(lib, rel);
+  mc_tags tags;
+  if (abs && mc_tags_read(abs, &tags) == MC_OK) {
+    if (tags.bitrate_kbps) q->bitrate_kbps = tags.bitrate_kbps;
+    q->sample_rate = tags.sample_rate;
+    q->bits_per_sample = tags.bits_per_sample;
+    mc_tags_clear(&tags);
+  }
+  free(abs);
 }
 
 /* The kept device, after it applied the pairing: waits for MERGE_REQ and answers with its
@@ -718,8 +742,9 @@ static mc_status merge_answer(mc_sync_conn *c, mc_channel *ch, merge_state *m) {
 
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(c->lib),
-                         "SELECT track_uid, format, bitrate_kbps FROM files"
-                         " WHERE source_file_uid IS NULL GROUP BY track_uid ORDER BY track_uid",
+                         "SELECT f.track_uid, f.format, f.bitrate_kbps, f.path FROM files f"
+                         " JOIN tracks t ON t.uid = f.track_uid WHERE f.source_file_uid IS NULL"
+                         " AND f.file_rev IS t.file_rev GROUP BY f.track_uid ORDER BY f.track_uid",
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
   int rc = SQLITE_ROW;
@@ -736,10 +761,14 @@ static mc_status merge_answer(mc_sync_conn *c, mc_channel *ch, merge_state *m) {
     while (n < MERGE_FILES_CHUNK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
       const char *track = (const char *)sqlite3_column_text(stmt, 0);
       const char *format = (const char *)sqlite3_column_text(stmt, 1);
+      mc_audio_quality q = {format, sqlite3_column_int(stmt, 2), 0, 0};
+      read_quality(c->lib, (const char *)sqlite3_column_text(stmt, 3), &q);
       yyjson_mut_val *f = yyjson_mut_arr(doc);
       yyjson_mut_arr_add_strcpy(doc, f, track ? track : "");
       yyjson_mut_arr_add_strcpy(doc, f, format ? format : "");
-      yyjson_mut_arr_add_int(doc, f, sqlite3_column_int(stmt, 2));
+      yyjson_mut_arr_add_int(doc, f, q.bitrate_kbps);
+      yyjson_mut_arr_add_int(doc, f, q.sample_rate);
+      yyjson_mut_arr_add_int(doc, f, q.bits_per_sample);
       yyjson_mut_arr_append(files, f);
       n++;
     }
