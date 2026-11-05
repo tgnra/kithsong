@@ -877,8 +877,8 @@
     "edit_art_automatic_note": { "text": "The automatic cover will be looked for when you save.", "note": "Shown in the Edit dialog after pressing Automatic cover: nothing has changed yet." },
     "edit_merge_title": { "text": "Merge artists?", "note": "Title of the question asked on saving an artist with a name another artist has." },
     "edit_merge_text": { "text": "There's already an artist called {0}. Merge the two, so that all their music is under one artist?", "note": "The question itself; {0} is the name. On Windows it's answered with Yes (merge), No (keep two artists of that name) and Cancel." },
-    "edit_merge": { "text": "Merge", "note": "Button of the question: makes the two artists one." },
-    "edit_merge_keep": { "text": "Keep Both", "note": "Button of the question: two artists of that name, listed apart." },
+    "edit_merge": { "text": "_Merge", "note": "Button of the question: makes the two artists one." },
+    "edit_merge_keep": { "text": "_Keep Both", "note": "Button of the question: two artists of that name, listed apart." },
     "edit_art_help": "Choose an image with Change, or drop one anywhere on this window.",
     "edit_art_pick_title": { "text": "Choose a cover", "note": "Title of the file picker for an album's new cover." },
     "edit_art_file_types": { "text": "Images (JPEG, PNG)", "note": "The kinds of file the picker for a cover shows." },
@@ -1011,6 +1011,8 @@
   },
 
   "windows": {
+    "yes": { "text": "_Yes", "note": "Button answering a question." },
+    "no": { "text": "_No", "note": "Button answering a question." },
     "home_station_name": { "text": "Radio station", "note": "Said by screen readers before a radio station's name on the Home page." },
     "home_station_tip": { "text": "Radio station: plays music that sounds like {0}", "note": "Tooltip of a radio station on the Home page, also read by screen readers. {0} is the title of the track it starts from." },
     "too_old": { "text": "Kithsong needs Windows 10 version 1903 or later. Update Windows, then open Kithsong again.", "note": "Shown instead of starting, on an older Windows." },

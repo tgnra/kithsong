@@ -1,6 +1,8 @@
 #include "prompt_dialog.h"
 
 #include <commctrl.h>
+#include <shellapi.h>
+#include <stdio.h>
 #include <uxtheme.h>
 #include <vsstyle.h>
 
@@ -24,6 +26,8 @@ enum {
   CHECK_GAP = 12,
   CHECK_H = 20,
   CHECK_TEXT_GAP = 4, /* between the checkbox's box and its label, as Windows draws it */
+  LINK_GAP = 12,
+  LINK_H = 20,
   BUTTONS_GAP = 16,
   BTN_W = 84, /* at least */
   BTN_H = 26,
@@ -59,8 +63,13 @@ static void make_scaled(HWND dlg, state *s) {
   }
   HICON icon = NULL;
   int size = scale(dlg, ICON);
-  if (SUCCEEDED(LoadIconWithScaleDown(NULL, s->p->icon == MB_ICONERROR ? IDI_ERROR : IDI_INFORMATION, size, size,
-                                      &icon))) {
+  UINT kind = s->p->icon;
+  const wchar_t *name = kind == MB_ICONERROR      ? IDI_ERROR
+                        : kind == MB_ICONWARNING  ? IDI_WARNING
+                        : kind == MB_ICONQUESTION ? IDI_QUESTION
+                        : kind                    ? IDI_INFORMATION
+                                                  : MAKEINTRESOURCEW(IDI_APP);
+  if (SUCCEEDED(LoadIconWithScaleDown(kind ? NULL : GetModuleHandleW(NULL), name, size, size, &icon))) {
     SendDlgItemMessageW(dlg, IDC_PROMPT_ICON, STM_SETICON, (WPARAM)icon, 0);
     if (s->icon) DestroyIcon(s->icon);
     s->icon = icon;
@@ -95,6 +104,12 @@ static void layout(HWND dlg, const state *s) {
   int h = canvas_text_height(text, NULL, text_w, 0);
   place(text, x, y, text_w, h);
   y += h;
+  if (s->p->link) {
+    y += scale(dlg, LINK_GAP);
+    h = scale(dlg, LINK_H);
+    place(GetDlgItem(dlg, IDC_PROMPT_LINK), x, y, text_w, h);
+    y += h;
+  }
   if (s->p->check) {
     y += scale(dlg, CHECK_GAP);
     h = scale(dlg, CHECK_H);
@@ -109,6 +124,12 @@ static void layout(HWND dlg, const state *s) {
     HWND cancel = GetDlgItem(dlg, IDCANCEL);
     int w = button_width(dlg, cancel);
     place(cancel, right - w, y, w, btn_h);
+    right -= w + scale(dlg, BTN_GAP);
+  }
+  if (s->p->other) {
+    HWND other = GetDlgItem(dlg, IDNO);
+    int w = button_width(dlg, other);
+    place(other, right - w, y, w, btn_h);
     right -= w + scale(dlg, BTN_GAP);
   }
   HWND ok = GetDlgItem(dlg, IDOK);
@@ -185,6 +206,17 @@ static LRESULT draw_check(const NMCUSTOMDRAW *cd) {
   return CDRF_SKIPDEFAULT;
 }
 
+/* The link, made here as most dialogs have none, and its class needs asking for. */
+static void add_link(HWND dlg, const wchar_t *address) {
+  INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_LINK_CLASS};
+  InitCommonControlsEx(&icc);
+  wchar_t text[512];
+  swprintf(text, sizeof text / sizeof text[0], L"<a>%ls</a>", address);
+  HWND link = CreateWindowExW(0, WC_LINK, text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | LWS_TRANSPARENT, 0, 0, 0, 0, dlg,
+                              (HMENU)(INT_PTR)IDC_PROMPT_LINK, GetModuleHandleW(NULL), NULL);
+  SendMessageW(link, WM_SETFONT, SendMessageW(dlg, WM_GETFONT, 0, 0), FALSE);
+}
+
 static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
   state *s = (state *)GetWindowLongPtrW(dlg, DWLP_USER);
   switch (msg) {
@@ -197,15 +229,24 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       SetDlgItemTextW(dlg, IDC_PROMPT_TEXT, p->text);
       SetDlgItemTextW(dlg, IDC_PROMPT_CHECK, p->check ? p->check : L"");
       SetDlgItemTextW(dlg, IDOK, p->ok);
+      SetDlgItemTextW(dlg, IDNO, p->other ? p->other : L"");
       SetDlgItemTextW(dlg, IDCANCEL, p->cancel ? p->cancel : L"");
       if (!p->heading) ShowWindow(GetDlgItem(dlg, IDC_PROMPT_HEADING), SW_HIDE);
       if (!p->check) ShowWindow(GetDlgItem(dlg, IDC_PROMPT_CHECK), SW_HIDE);
+      if (!p->other) ShowWindow(GetDlgItem(dlg, IDNO), SW_HIDE);
       if (!p->cancel) ShowWindow(GetDlgItem(dlg, IDCANCEL), SW_HIDE);
+      if (p->link) add_link(dlg, p->link);
       make_scaled(dlg, s);
       apply_theme(dlg);
       layout(dlg, s);
       center_on_owner(dlg);
-      SetFocus(GetDlgItem(dlg, IDOK));
+      if (p->shown) *p->shown = dlg;
+      if (p->cancel_default) {
+        SendMessageW(dlg, DM_SETDEFID, IDCANCEL, 0);
+        SendDlgItemMessageW(dlg, IDOK, BM_SETSTYLE, BS_PUSHBUTTON, TRUE);
+        SendDlgItemMessageW(dlg, IDCANCEL, BM_SETSTYLE, BS_DEFPUSHBUTTON, TRUE);
+      }
+      SetFocus(GetDlgItem(dlg, p->cancel_default ? IDCANCEL : IDOK));
       return FALSE; /* focus is set */
     }
     case WM_CTLCOLORSTATIC: {
@@ -241,16 +282,21 @@ static INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         SetWindowLongPtrW(dlg, DWLP_MSGRESULT, draw_check((const NMCUSTOMDRAW *)lp));
         return TRUE;
       }
+      if (n->idFrom == IDC_PROMPT_LINK && (n->code == NM_CLICK || n->code == NM_RETURN)) {
+        ShellExecuteW(NULL, L"open", s->p->link, NULL, NULL, SW_SHOWNORMAL);
+        return TRUE;
+      }
       break;
     }
     case WM_COMMAND:
-      if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+      if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL || LOWORD(wp) == IDNO) {
         s->p->checked = IsDlgButtonChecked(dlg, IDC_PROMPT_CHECK) == BST_CHECKED;
         EndDialog(dlg, LOWORD(wp));
         return TRUE;
       }
       break;
     case WM_DESTROY:
+      if (s && s->p->shown) *s->p->shown = NULL;
       if (s && s->heading_font) DeleteObject(s->heading_font);
       if (s && s->icon) DestroyIcon(s->icon);
       break;
@@ -263,8 +309,21 @@ INT_PTR prompt_dialog_show(HWND owner, prompt_dialog *p) {
   return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_PROMPT), owner, dialog_proc, (LPARAM)&s);
 }
 
+void prompt_dialog_set_text(HWND dlg, const wchar_t *text) {
+  SetDlgItemTextW(dlg, IDC_PROMPT_TEXT, text);
+  layout(dlg, (const state *)GetWindowLongPtrW(dlg, DWLP_USER));
+}
+
 void message_dialog(HWND owner, const wchar_t *caption, const wchar_t *text, UINT icon) {
   prompt_dialog p = {.caption = caption, .icon = icon, .text = text, .ok = mc_wstr_mnemonic(MC_STR_OK)};
   MessageBeep(icon);
   prompt_dialog_show(owner, &p);
+}
+
+BOOL confirm_dialog(HWND owner, const wchar_t *caption, const wchar_t *text, UINT icon, const wchar_t *ok,
+                    const wchar_t *cancel, BOOL cancel_default) {
+  prompt_dialog p = {.caption = caption, .icon = icon, .text = text, .ok = ok, .cancel = cancel,
+                     .cancel_default = cancel_default};
+  MessageBeep(icon);
+  return prompt_dialog_show(owner, &p) == IDOK;
 }
