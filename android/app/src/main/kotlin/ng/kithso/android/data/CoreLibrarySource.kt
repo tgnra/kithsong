@@ -374,7 +374,8 @@ class CoreLibrarySource(
         try {
             val lib = open() ?: return@withContext null
             if (!lib.radioSeedUsable(seedUid)) return@withContext null
-            lib.track(seedUid)?.takeIf { it.path != null }?.let { Covers().track(it) }
+            // The check goes by the library, which still has a file that's since gone.
+            lib.track(seedUid)?.takeIf { info -> info.path?.let { File(it).exists() } == true }?.let { Covers().track(it) }
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't check station $seedUid", e)
             null

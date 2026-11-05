@@ -1083,7 +1083,7 @@
 
   "android": {
     "station_label": { "text": "Radio station, {0}, {1}: plays music that sounds like {2}", "note": "What a screen reader says of a radio station's tile on the main screen. {0} is its name, {1} the line beneath it, {2} the title of the track it starts from." },
-    "station_unavailable": { "text": "This station can't start here: the track it starts from isn't on this phone, or hasn't been analysed.", "note": "Shown briefly on tapping a radio station that can't be played, which is common on a phone that holds only part of the library." },
+    "station_unavailable": { "text": "Can't play this station: its track is missing or not analysed yet.", "note": "Shown briefly on tapping a radio station that can't be played, which is common on a phone that holds only part of the library." },
     "edit_discard_title": { "text": "Discard your changes?", "note": "Asked on leaving the page that edits an album, artist or track with something changed and not saved." },
     "edit_discard": { "text": "Discard", "note": "Button under edit_discard_title: leaves without saving." },
     "edit_keep_editing": { "text": "Keep editing", "note": "Button under edit_discard_title: stays on the page." },
