@@ -539,7 +539,8 @@ follow on this device only.
   unless the user chose the album's. Folders left empty or holding only a cover go, as usual. A
   folder whose name changes only in case on Windows is renamed to match. `files`
   doesn't sync, so only the device that made the edit moves anything. A disc number past the
-  album's last raises `disc_total`, which renames all its files; taking the last track off the
+  album's last raises `disc_total`, which renames all its files, and any disc above 1 puts the
+  album's tracks with no disc number on disc 1, so they're named and tagged that way at once; taking the last track off the
   album's last disc lowers it to the last disc with a track, which renames them again.
 - **Stopping one.** `mc_edit_set_watch()` says how far an edit or a release search is, and can
   stop it (`MC_ERR_CANCELLED`) while copies are being made, nothing having changed. The renames

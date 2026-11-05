@@ -828,6 +828,26 @@ static void test_filing(const char *base) {
   CHECK_STR(path_of(&l, second), "Ann/Taken (2000)/02 Two.wav");
   CHECK_STR(path_of(&l, moved), "Ann/Taken (2000)/01 What_ Why_How.wav");
   CHECK(files_check_out(&l));
+
+  /* A track with no disc number is on the first once there's a second, and its name says so
+   * then, not at some later save. */
+  CHECK(mc_track_tags_get(l.lib, moved, &t) == MC_OK);
+  t.disc_no = 0;
+  CHECK(mc_track_tags_set(l.lib, moved, &t) == MC_OK);
+  mc_track_tags_clear(&t);
+  CHECK(q_int(&l, "SELECT disc_no IS NULL FROM tracks WHERE uid = ?1", moved, NULL) == 1);
+  CHECK(mc_track_tags_get(l.lib, second, &t) == MC_OK);
+  t.disc_no = 2;
+  t.track_no = 1;
+  CHECK(mc_track_tags_set(l.lib, second, &t) == MC_OK);
+  mc_track_tags_clear(&t);
+  CHECK(q_int(&l, "SELECT disc_no FROM tracks WHERE uid = ?1", moved, NULL) == 1);
+  CHECK_STR(path_of(&l, second), "Ann/Taken (2000)/2-01 Two.wav");
+  CHECK_STR(path_of(&l, moved), "Ann/Taken (2000)/1-01 What_ Why_How.wav");
+  CHECK(mc_tags_read(abs_of(&l, path_of(&l, moved)), &tags) == MC_OK);
+  CHECK(tags.disc == 1 && tags.disc_total == 2);
+  mc_tags_clear(&tags);
+  CHECK(files_check_out(&l));
   lib_close(&l);
 
   /* Two tracks trading places: each one's new name is the other's old one. */

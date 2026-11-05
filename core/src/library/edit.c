@@ -2375,6 +2375,12 @@ static mc_status track_apply(mc_library *lib, void *user) {
       sqlite3_bind_int(stmt, 2, t->disc_no);
     }
     st = step_done(stmt);
+    /* Tracks with no number are on the first, and their names and tags say so now. */
+    if (st == MC_OK) {
+      stmt = prepare(lib, "UPDATE tracks SET disc_no = 1 WHERE album_uid = ?1 AND disc_no IS NULL");
+      if (stmt) bind_str(stmt, 1, cur.album_uid);
+      st = step_done(stmt);
+    }
   }
   /* And the last track gone from its last disc: it has fewer, down to the last with a track. A
    * release's total above the discs that are here isn't touched, as the edit didn't empty it. */
