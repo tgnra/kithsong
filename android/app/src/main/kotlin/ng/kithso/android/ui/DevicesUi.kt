@@ -431,11 +431,13 @@ private fun endedText(pairing: Pairing.Ended): String = when (pairing.reason) {
     CoreSync.PairReason.MergeDeclined -> stringResource(R.string.pair_merge_declined)
     CoreSync.PairReason.WrongCode -> stringResource(R.string.pair_wrong_code_too_often)
     CoreSync.PairReason.InGroup -> stringResource(R.string.pair_in_group, pairing.peer)
-    // This phone merges libraries, so the other device can't: it runs an older version.
-    CoreSync.PairReason.LibraryMismatch -> stringResource(
-        if (pairing.initiator) R.string.pair_library_mismatch else R.string.pair_library_mismatch_incoming,
-        pairing.peer,
-    ) + "\n\n" + stringResource(R.string.pair_merge_update_hint, pairing.peer)
+    CoreSync.PairReason.LibraryMismatch -> listOfNotNull(
+        stringResource(
+            if (pairing.initiator) R.string.pair_library_mismatch else R.string.pair_library_mismatch_incoming,
+            pairing.peer,
+        ),
+        pairWhyText(pairing),
+    ).joinToString("\n\n")
     CoreSync.PairReason.AlreadyPaired -> stringResource(R.string.pair_already_paired, pairing.peer)
     CoreSync.PairReason.Busy -> stringResource(R.string.pair_busy, pairing.peer)
     CoreSync.PairReason.Cancelled -> stringResource(R.string.pair_cancelled)
