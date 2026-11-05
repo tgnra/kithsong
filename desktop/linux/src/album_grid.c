@@ -147,6 +147,7 @@ typedef struct grid {
   gboolean quiet; /* selection changes aren't the user's */
   GHashTable *art; /* playlist uid -> its picture, or NULL for none, as last looked up */
   guint art_gen;   /* bumped by each lookup, so only the latest one's results are used */
+  char kept_smart[MC_UID_STRLEN]; /* a smart playlist hidden here that was asked for, listed anyway */
 } grid;
 
 static grid *grid_of(GtkWidget *widget) {
@@ -587,6 +588,10 @@ static void art_lookup(GtkWidget *widget, mc_library *lib, const char *art_dir) 
   g_object_unref(task);
 }
 
+void album_grid_keep_smart(GtkWidget *widget, const char *uid) {
+  g_strlcpy(grid_of(widget)->kept_smart, uid, MC_UID_STRLEN);
+}
+
 int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *art_dir, int *hidden) {
   char keep[MC_UID_STRLEN];
   grid_keep(widget, keep);
@@ -594,7 +599,7 @@ int album_grid_reload_playlists(GtkWidget *widget, mc_library *lib, const char *
   mc_playlist_list *list = NULL;
   if (lib && mc_library_list_playlists(lib, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
   mc_smart_list *smart = NULL;
-  if (lib && mc_library_list_smart(lib, MC_LIST_PLAYABLE, &smart) != MC_OK) smart = NULL;
+  if (lib && mc_library_list_smart_keeping(lib, MC_LIST_PLAYABLE, g->kept_smart, &smart) != MC_OK) smart = NULL;
   guint count = list ? (guint)list->count : 0, n = 0;
   *hidden = list ? list->hidden : 0;
   AlbumItem **items = g_new0(AlbumItem *, count + (smart ? (guint)smart->count : 0) + 1);

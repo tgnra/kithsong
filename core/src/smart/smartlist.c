@@ -1376,6 +1376,10 @@ static int is_random(const char *rule) {
 }
 
 mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list **out) {
+  return mc_library_list_smart_keeping(lib, flags, NULL, out);
+}
+
+mc_status mc_library_list_smart_keeping(mc_library *lib, unsigned flags, const char *keep_uid, mc_smart_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   mc_smart_list *list = calloc(1, sizeof *list);
@@ -1391,7 +1395,7 @@ mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list *
     mc_smart_subject subject;
     /* Skip kinds of list from a newer app this build can't show. */
     if (!parse_subject(sqlite3_column_text(stmt, 2), &subject)) continue;
-    if (flags & MC_LIST_PLAYABLE) {
+    if ((flags & MC_LIST_PLAYABLE) && !(keep_uid && !strcmp(keep_uid, (const char *)sqlite3_column_text(stmt, 0)))) {
       int listed = 0;
       st = rule_listed_here(lib, subject, (const char *)sqlite3_column_text(stmt, 3), &listed);
       if (st == MC_ERR_FORMAT || st == MC_ERR_INVALID_ARG) st = MC_OK; /* can't be shown */

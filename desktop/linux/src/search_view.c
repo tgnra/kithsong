@@ -147,7 +147,7 @@ static gboolean hit_opens(const mc_search_hit *h) {
     case MC_SEARCH_ARTIST: return TRUE;
     case MC_SEARCH_TRACK: /* gone since the index was built? */
       return grid_has(v.a->album_grid, h->album_uid) || track_artist(h);
-    case MC_SEARCH_PLAYLIST: return grid_has(v.a->playlist_grid, h->uid); /* only playable ones */
+    case MC_SEARCH_PLAYLIST: return h->is_smart || grid_has(v.a->playlist_grid, h->uid); /* only playable ones */
     case MC_SEARCH_ALBUM_GROUP: return TRUE;
     default: return FALSE;
   }

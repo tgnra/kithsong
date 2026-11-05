@@ -61,6 +61,9 @@ GtkWidget *album_grid_new(const char *label, void (*changed)(void *user), void *
  * (not counted in *hidden), with no picture and "Smart playlist" beneath the name. */
 int album_grid_reload(GtkWidget *grid, mc_library *lib);
 int album_grid_reload_playlists(GtkWidget *grid, mc_library *lib, const char *art_dir, int *hidden);
+/* From now on the playlists grid lists smart playlist uid even if it's hidden here, as it's
+ * been asked for by name. Reload it to see that. */
+void album_grid_keep_smart(GtkWidget *grid, const char *uid);
 /* The same for the manual album groups (mc_library_list_album_groups()), with their
  * pictures from mc_album_group_art(), then the smart groups as the smart playlists; and for a
  * group's own albums, in its order (or a smart group's, as its rule picks them). A grid

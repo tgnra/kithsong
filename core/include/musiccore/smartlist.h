@@ -60,6 +60,9 @@ typedef struct mc_smart_list {
  * (MC_ERR_FORMAT, e.g. from a newer app). One that picks nothing in the whole library is kept,
  * unless this device has no files at all. Free with mc_smart_list_free(). */
 mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list **out);
+/* The same, but MC_LIST_PLAYABLE doesn't leave out keep_uid (may be NULL): a list hidden here
+ * that the user has asked to open, from a search or by making it, stays on its page. */
+mc_status mc_library_list_smart_keeping(mc_library *lib, unsigned flags, const char *keep_uid, mc_smart_list **out);
 void mc_smart_list_free(mc_smart_list *list);
 
 /* What a saved smart list holds now. MC_ERR_INVALID_ARG if it's the other subject. Free with

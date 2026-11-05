@@ -177,20 +177,15 @@ static void load_lists(void) {
   }
   mc_album_list_free(albums);
 
-  /* The playlists the grid shows, smart ones included. */
+  /* The playlists the grid shows. A smart one opens whether it does or not. */
   mc_playlist_list *playlists = NULL;
-  mc_smart_list *smart = NULL;
   if (v.lib && mc_library_list_playlists(v.lib, MC_LIST_PLAYABLE, &playlists) != MC_OK) playlists = NULL;
-  if (v.lib && mc_library_list_smart(v.lib, MC_LIST_PLAYABLE, &smart) != MC_OK) smart = NULL;
-  int n = (playlists ? playlists->count : 0) + (smart ? smart->count : 0);
+  int n = playlists ? playlists->count : 0;
   v.playlists = n ? calloc((size_t)n, sizeof *v.playlists) : NULL;
-  for (int i = 0; v.playlists && playlists && i < playlists->count; i++)
+  for (int i = 0; v.playlists && i < n; i++)
     memcpy(v.playlists[v.nplaylists++], playlists->items[i].uid, MC_UID_STRLEN);
-  for (int i = 0; v.playlists && smart && i < smart->count; i++)
-    if (smart->items[i].subject == MC_SMART_TRACKS) memcpy(v.playlists[v.nplaylists++], smart->items[i].uid, MC_UID_STRLEN);
   if (v.nplaylists) qsort(v.playlists, (size_t)v.nplaylists, sizeof *v.playlists, uid_cmp);
   mc_playlist_list_free(playlists);
-  mc_smart_list_free(smart);
 }
 
 static const album_ref *find_album(const char *uid) {
@@ -414,7 +409,7 @@ static void show_results(BOOL keep) {
         case MC_SEARCH_ARTIST:
         case MC_SEARCH_ALBUM: h->opens = TRUE; break;
         case MC_SEARCH_TRACK: h->opens = find_album(r->album_uid) != NULL; break;
-        case MC_SEARCH_PLAYLIST: h->opens = playable_playlist(r->uid); break;
+        case MC_SEARCH_PLAYLIST: h->opens = r->is_smart || playable_playlist(r->uid); break;
         case MC_SEARCH_ALBUM_GROUP: h->opens = TRUE; break;
         default: h->opens = FALSE; break; /* no page for it here yet */
       }

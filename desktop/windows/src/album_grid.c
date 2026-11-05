@@ -113,6 +113,7 @@ static struct {
   BOOL group_smart, group_random; /* it's a smart group, and in random order */
   wchar_t *group_rule;           /* a smart group's rule as a sentence, under its name; or NULL */
   int hidden;                    /* playlists or album groups left out, empty only here */
+  char kept_smart[MC_UID_STRLEN]; /* a smart playlist hidden here that was asked for, listed anyway */
   album_grid_sync sync_state;    /* whether the empty pages offer importing or the sync profile */
   BOOL first_run;                /* no library yet, while the first run asks where it goes */
   RECT action_rc;                /* the empty page's button, as last painted; empty if none */
@@ -498,7 +499,7 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
  * counting what they hold would evaluate each rule again. */
 static void add_smart(mc_smart_subject subject, tile **tiles, wchar_t ***dirs, int *n) {
   mc_smart_list *list = NULL;
-  if (!g.lib || mc_library_list_smart(g.lib, MC_LIST_PLAYABLE, &list) != MC_OK) return;
+  if (!g.lib || mc_library_list_smart_keeping(g.lib, MC_LIST_PLAYABLE, g.kept_smart, &list) != MC_OK) return;
   int more = 0;
   for (int i = 0; i < list->count; i++) more += list->items[i].subject == subject;
   tile *grown = more ? realloc(*tiles, (size_t)(*n + more) * sizeof **tiles) : NULL;
@@ -1108,7 +1109,7 @@ void album_grid_new_smart(void) {
   char uid[MC_UID_STRLEN];
   if (!smart_new_dialog(GetAncestor(g.wnd, GA_ROOT), g.lib, tracks ? MC_SMART_TRACKS : MC_SMART_ALBUMS, uid)) return;
   g.dirty = TRUE;
-  if (tracks) album_grid_select(uid); /* if it has anything to play here; the grid leaves it out otherwise */
+  if (tracks) album_grid_select(uid);
   else album_grid_open_group(uid);
   notify_changed();
 }
@@ -1611,6 +1612,12 @@ BOOL album_grid_select(const char *uid) {
     select_tile(i);
     reveal_tile(i);
     return TRUE;
+  }
+  /* A smart playlist with nothing here is hidden, until it's asked for by name. */
+  if (g.tiles_view == AGV_PLAYLISTS && strcmp(g.kept_smart, uid)) {
+    snprintf(g.kept_smart, sizeof g.kept_smart, "%s", uid);
+    g.dirty = TRUE;
+    return album_grid_select(uid);
   }
   return FALSE;
 }

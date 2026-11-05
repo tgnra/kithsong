@@ -1089,8 +1089,7 @@ static void on_new_playlist(GtkButton *button, gpointer user) {
   playlist_create_present(GTK_WIDGET(button), a->lib, on_playlist_created, a);
 }
 
-/* The + menu's New smart playlist… (smart.new-playlist): the new one opens, if it holds
- * something to play here. */
+/* The + menu's New smart playlist… (smart.new-playlist): the new one opens. */
 static void on_new_smart_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -1282,7 +1281,13 @@ static void open_view(app *a, app_view view) {
 
 void app_open(app *a, gboolean playlist, const char *uid) {
   open_view(a, playlist ? APP_VIEW_PLAYLISTS : APP_VIEW_ALBUMS);
-  if (album_grid_select(shown_grid(a), uid)) show_album(a);
+  gboolean found = album_grid_select(shown_grid(a), uid);
+  if (!found && playlist) { /* a smart playlist with nothing here is hidden, until it's asked for by name */
+    album_grid_keep_smart(a->playlist_grid, uid);
+    app_reload_library(a);
+    found = album_grid_select(a->playlist_grid, uid);
+  }
+  if (found) show_album(a);
 }
 
 void app_open_album_or_single(app *a, const char *uid, const char *artist) {

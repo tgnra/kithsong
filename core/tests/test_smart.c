@@ -761,6 +761,16 @@ static void test_limit_duration(mc_library *lib) {
   int listed = -1;
   CHECK(mc_smart_listed_here(lib, uid, &listed) == MC_OK);
   CHECK(listed == 0);
+  /* Kept on its page once it's been asked for. */
+  mc_smart_list *shown = NULL;
+  CHECK(mc_library_list_smart(lib, MC_LIST_PLAYABLE, &shown) == MC_OK);
+  int hidden = shown->hidden, count_shown = shown->count;
+  CHECK(hidden >= 1);
+  mc_smart_list_free(shown);
+  CHECK(mc_library_list_smart_keeping(lib, MC_LIST_PLAYABLE, uid, &shown) == MC_OK);
+  CHECK(shown->hidden == hidden - 1);
+  CHECK(shown->count == count_shown + 1);
+  mc_smart_list_free(shown);
   CHECK(mc_smart_set_rule(lib, uid, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit_duration\":1}") == MC_OK);
   CHECK(mc_smart_listed_here(lib, uid, &listed) == MC_OK);
   CHECK(listed == 1);
