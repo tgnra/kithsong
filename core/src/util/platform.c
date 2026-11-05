@@ -433,12 +433,39 @@ int mc_is_link(const char *path) {
          (tag == IO_REPARSE_TAG_SYMLINK || tag == IO_REPARSE_TAG_MOUNT_POINT);
 }
 
-mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
+typedef struct copy_watch {
+  mc_copy_fn fn;
+  void *user;
+} copy_watch;
+
+static DWORD CALLBACK copy_progress(LARGE_INTEGER total, LARGE_INTEGER done, LARGE_INTEGER stream_total,
+                                    LARGE_INTEGER stream_done, DWORD stream, DWORD reason, HANDLE from,
+                                    HANDLE to, LPVOID data) {
+  (void)total;
+  (void)stream_total;
+  (void)stream_done;
+  (void)stream;
+  (void)reason;
+  (void)from;
+  (void)to;
+  copy_watch *w = data;
+  return w->fn(w->user, done.QuadPart) ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
+}
+
+mc_status mc_copy_file_watched(const char *src, const char *dst, int overwrite, mc_copy_fn fn,
+                               void *user) {
   wchar_t *ws = mc_win_path(src), *wd = mc_win_path(dst);
-  BOOL ok = ws && wd && CopyFileW(ws, wd, !overwrite);
+  copy_watch w = {fn, user};
+  BOOL ok = ws && wd && CopyFileExW(ws, wd, fn ? copy_progress : NULL, &w, NULL,
+                                    overwrite ? 0 : COPY_FILE_FAIL_IF_EXISTS);
+  DWORD err = ok ? ERROR_SUCCESS : GetLastError();
   free(ws);
   free(wd);
-  return ok ? MC_OK : MC_ERR_IO;
+  return ok ? MC_OK : err == ERROR_REQUEST_ABORTED ? MC_ERR_CANCELLED : MC_ERR_IO;
+}
+
+mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
+  return mc_copy_file_watched(src, dst, overwrite, NULL, NULL);
 }
 
 mc_status mc_rename(const char *src, const char *dst, int replace) {
@@ -1007,7 +1034,8 @@ int mc_is_link(const char *path) {
   return lstat(path, &st) == 0 && S_ISLNK(st.st_mode);
 }
 
-mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
+mc_status mc_copy_file_watched(const char *src, const char *dst, int overwrite, mc_copy_fn fn,
+                               void *user) {
   int in = open(src, O_RDONLY | O_CLOEXEC);
   if (in < 0) return MC_ERR_IO;
   int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | (overwrite ? 0 : O_EXCL), 0644);
@@ -1017,6 +1045,7 @@ mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
   }
   char buf[1 << 16];
   mc_status st = MC_OK;
+  int64_t done = 0;
   for (;;) {
     ssize_t n = read(in, buf, sizeof buf);
     if (n < 0 && errno == EINTR) continue;
@@ -1032,11 +1061,20 @@ mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
       off += w;
     }
     if (st != MC_OK) break;
+    done += n;
+    if (fn && fn(user, done)) {
+      st = MC_ERR_CANCELLED;
+      break;
+    }
   }
   close(in);
-  if (close(out) != 0) st = MC_ERR_IO;
+  if (close(out) != 0 && st == MC_OK) st = MC_ERR_IO;
   if (st != MC_OK) unlink(dst);
   return st;
+}
+
+mc_status mc_copy_file(const char *src, const char *dst, int overwrite) {
+  return mc_copy_file_watched(src, dst, overwrite, NULL, NULL);
 }
 
 mc_status mc_rename(const char *src, const char *dst, int replace) {

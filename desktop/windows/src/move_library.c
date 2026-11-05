@@ -21,11 +21,11 @@ enum {
 enum { ID_HEADING = 100, ID_BAR, ID_STATUS, ID_FILE, ID_NOTE };
 
 /* Layout at 96 DPI. */
-enum { WIN_W = 520, PAD = 24, GAP = 8, BAR_H = 6, BAR_RANGE = 1000 };
+enum { WIN_W = 520, PAD = 24, GAP = 8, BAR_H = 6, BAR_RANGE = 1000, BUTTON_W = 88, BUTTON_H = 26 };
 
 static struct {
   HWND main, wnd;
-  HWND heading, bar, status, file, note;
+  HWND heading, bar, status, file, note, cancel_button;
   HFONT font, heading_font;
   UINT dpi;
   const move_library_host *host;
@@ -40,6 +40,7 @@ static struct {
   mc_library_move_progress p;
   char current[1024]; /* p.current, copied */
   BOOL posted;        /* a WM_MOVE_PROGRESS is on its way */
+  BOOL cancel;        /* Cancel was pressed */
   mc_status st;
   mc_library_move_result result;
 } g_move;
@@ -141,16 +142,17 @@ static char *choose(HWND owner, const char *src) {
 
 /* On the worker thread: keeps the latest progress, and wakes the window if it isn't
  * already on its way. */
-static void on_progress(void *user, const mc_library_move_progress *p) {
+static int on_progress(void *user, const mc_library_move_progress *p) {
   (void)user;
   EnterCriticalSection(&g_move.lock);
   g_move.p = *p;
   snprintf(g_move.current, sizeof g_move.current, "%s", p->current ? p->current : "");
-  BOOL post = !g_move.posted;
+  BOOL post = !g_move.posted, cancel = g_move.cancel;
   g_move.posted = TRUE;
   LeaveCriticalSection(&g_move.lock);
   if (post) PostMessageW(g_move.wnd, WM_MOVE_PROGRESS, 0, 0);
   if (g_move.delay_ms > 0 && p->current) Sleep((DWORD)g_move.delay_ms);
+  return cancel;
 }
 
 static unsigned __stdcall worker(void *arg) {
@@ -173,6 +175,7 @@ static void show_progress(void) {
   wchar_t file[1024];
   wstr_from_utf8(file, 1024, g_move.current);
   g_move.posted = FALSE;
+  BOOL cancelled = g_move.cancel;
   LeaveCriticalSection(&g_move.lock);
 
   wchar_t status[512];
@@ -188,7 +191,16 @@ static void show_progress(void) {
     }
     case MC_MOVE_PHASE_CHECKING: wcscpy(status, mc_wstr(MC_STR_LIBRARY_MOVE_CHECKING)); break;
     case MC_MOVE_PHASE_REMOVING: wcscpy(status, mc_wstr(MC_STR_LIBRARY_MOVE_REMOVING)); break;
-    case MC_MOVE_PHASE_UNDOING: wcscpy(status, mc_wstr(MC_STR_LIBRARY_MOVE_UNDOING)); break;
+    case MC_MOVE_PHASE_UNDOING:
+      wcscpy(status, mc_wstr(cancelled ? MC_STR_LIBRARY_MOVE_CANCELLING : MC_STR_LIBRARY_MOVE_UNDOING));
+      break;
+  }
+  BOOL can_cancel = p.can_cancel && !cancelled;
+  if (can_cancel && !IsWindowEnabled(g_move.cancel_button)) {
+    EnableWindow(g_move.cancel_button, TRUE);
+    SetFocus(g_move.cancel_button); /* so that Space presses it */
+  } else if (!can_cancel) {
+    EnableWindow(g_move.cancel_button, FALSE);
   }
   SetWindowTextW(g_move.status, status);
   SetWindowTextW(g_move.file, p.phase == MC_MOVE_PHASE_COPYING ? file : L"");
@@ -213,7 +225,10 @@ static void layout(void) {
   y += line + 2 * gap;
   int nh = canvas_text_height(g_move.note, g_move.font, text_w, 0);
   MoveWindow(g_move.note, pad, y, text_w, nh, FALSE);
-  y += nh + pad;
+  y += nh + 2 * gap;
+  int bw = scale(BUTTON_W), bh = scale(BUTTON_H);
+  MoveWindow(g_move.cancel_button, w - pad - bw, y, bw, bh, FALSE);
+  y += bh + pad;
 
   RECT rc = {0, 0, w, y};
   DWORD style = (DWORD)GetWindowLongPtrW(g_move.wnd, GWL_STYLE), ex = (DWORD)GetWindowLongPtrW(g_move.wnd, GWL_EXSTYLE);
@@ -236,7 +251,7 @@ static void make_fonts(void) {
   lf.lfWeight = FW_SEMIBOLD;
   g_move.heading_font = CreateFontIndirectW(&lf);
   SendMessageW(g_move.heading, WM_SETFONT, (WPARAM)g_move.heading_font, FALSE);
-  HWND body[] = {g_move.status, g_move.file, g_move.note};
+  HWND body[] = {g_move.status, g_move.file, g_move.note, g_move.cancel_button};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)g_move.font, FALSE);
 }
 
@@ -249,6 +264,14 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_MOVE_DONE:
       finish();
+      return 0;
+    case WM_COMMAND:
+      if (LOWORD(wp) == IDCANCEL) { /* the worker stops at its next report */
+        EnterCriticalSection(&g_move.lock);
+        g_move.cancel = TRUE;
+        LeaveCriticalSection(&g_move.lock);
+        EnableWindow(g_move.cancel_button, FALSE);
+      }
       return 0;
     case WM_CLOSE: /* Alt+F4: not until it's done */
       return 0;
@@ -307,6 +330,7 @@ static BOOL create_window(void) {
   g_move.status = child(WC_STATICW, L" ", label | SS_ENDELLIPSIS, ID_STATUS);
   g_move.file = child(WC_STATICW, L" ", label | SS_PATHELLIPSIS, ID_FILE);
   g_move.note = child(WC_STATICW, mc_wstr(MC_STR_LIBRARY_MOVE_WAIT), label, ID_NOTE);
+  g_move.cancel_button = child(WC_BUTTONW, mc_wstr(MC_STR_CANCEL), BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, IDCANCEL);
   theme_apply_controls(g_move.wnd);
   make_fonts();
   layout();
@@ -334,6 +358,7 @@ void move_library_start(HWND main, mc_settings *settings, const move_library_hos
   memset(&g_move.p, 0, sizeof g_move.p);
   g_move.current[0] = '\0';
   g_move.posted = FALSE;
+  g_move.cancel = FALSE;
 
   host->close_library();
   ShowWindow(main, SW_HIDE);
@@ -373,12 +398,12 @@ static void finish(void) {
   if (st != MC_OK && result.failed_path)
     mc_wformat(text, 2048, mc_str(MC_STR_LIBRARY_MOVE_FAILED_FILE), MC_S(result.failed_path),
                MC_S(mc_status_str(st)), MC_S(g_move.src));
-  else if (st != MC_OK)
+  else if (st != MC_OK && st != MC_ERR_CANCELLED)
     mc_wformat(text, 2048, mc_str(MC_STR_LIBRARY_MOVE_FAILED), MC_S(mc_status_str(st)), MC_S(g_move.src));
   else if (result.left_behind)
     mc_wformat(text, 2048, mc_str_plural(MC_STR_LIBRARY_MOVE_LEFT_BEHIND, result.left_behind),
                MC_D(result.left_behind), MC_S(g_move.src));
-  if (st != MC_OK || result.left_behind)
+  if ((st != MC_OK && st != MC_ERR_CANCELLED) || result.left_behind)
     MessageBoxW(g_move.main, text, mc_wstr(MC_STR_LIBRARY_MOVE_TITLE),
                 MB_OK | (st != MC_OK ? MB_ICONERROR : MB_ICONWARNING));
 

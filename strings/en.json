@@ -141,6 +141,7 @@
     "library_move_checking": { "text": "Checking the moved library…", "note": "The files are copied; the database is being opened in its new place." },
     "library_move_removing": { "text": "Removing the old copy…", "note": "The library has moved; its files are being removed from the old folder." },
     "library_move_undoing": { "text": "Couldn't finish the move. Putting things back…", "note": "The partial copy is being removed; the library stays where it was." },
+    "library_move_cancelling": { "text": "Cancelling. Putting things back…", "note": "After Cancel in the move's progress window: the partial copy is being removed, and the library stays where it was." },
     "library_move_failed": { "text": "Couldn't move the library ({0}). It's still in {1}.", "note": "{0} is the reason, {1} the old folder." },
     "library_move_failed_file": { "text": "Couldn't move the library: {0} couldn't be copied ({1}). It's still in {2}.", "note": "{0} is a file, {1} the reason, {2} the old folder." },
     "library_move_left_behind": { "one": "The library has moved, but {0:d} file couldn't be removed from {1}. You can delete it yourself.", "other": "The library has moved, but {0:d} files couldn't be removed from {1}. You can delete them yourself.", "note": "{1} is the old folder." },

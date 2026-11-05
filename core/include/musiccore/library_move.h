@@ -88,10 +88,13 @@ typedef struct mc_library_move_progress {
   int files_done, files_total;
   int64_t bytes_done, bytes_total;
   const char *current; /* the file being copied, relative to the library folder; NULL between files */
+  int can_cancel;      /* a non-zero return from the callback stops the move now */
 } mc_library_move_progress;
 
-/* Called on mc_library_move()'s thread, before each file and as the phase changes. */
-typedef void (*mc_library_move_fn)(void *user, const mc_library_move_progress *progress);
+/* Called on mc_library_move()'s thread, before each file, every few MB of a big one and as the
+ * phase changes. Returning non-zero cancels the move while can_cancel says it may: while
+ * copying, but not during a rename (which is quick) or after the last file. */
+typedef int (*mc_library_move_fn)(void *user, const mc_library_move_progress *progress);
 
 typedef struct mc_library_move_result {
   mc_move_problem problem; /* if the check failed (the move returns MC_ERR_INVALID_ARG) */
@@ -103,10 +106,10 @@ typedef struct mc_library_move_result {
 /* Moves the library in folder src to folder dst, as described at the top. The library must
  * be closed everywhere in the process. If settings isn't NULL its library folder is set to
  * dst and saved once the copy is complete and checked; failing to save undoes the move.
- * progress may be NULL. There's no cancelling: it runs to the end or fails. *result is
- * always filled; free it with mc_library_move_result_free(). Returns MC_OK if the library is
- * now in dst (some old files may be left behind, see left_behind), else an error with the
- * library still in src. */
+ * progress may be NULL. *result is always filled; free it with mc_library_move_result_free().
+ * Returns MC_OK if the library is now in dst (some old files may be left behind, see
+ * left_behind), else an error with the library still in src: MC_ERR_CANCELLED if the callback
+ * cancelled it, with the partial copy removed. */
 mc_status mc_library_move(const char *src, const char *dst, mc_settings *settings,
                           mc_library_move_fn progress, void *user, mc_library_move_result *result);
 void mc_library_move_result_free(mc_library_move_result *result);

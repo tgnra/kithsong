@@ -153,6 +153,11 @@ int mc_file_exists(const char *path);
 int mc_is_link(const char *path);
 /* Copies a file. Fails if dst exists, unless overwrite is set. */
 mc_status mc_copy_file(const char *src, const char *dst, int overwrite);
+/* The same, calling fn (which may be NULL) as it goes with the bytes copied so far. fn returning
+ * non-zero stops the copy: dst is removed, and it returns MC_ERR_CANCELLED. */
+typedef int (*mc_copy_fn)(void *user, int64_t bytes_done);
+mc_status mc_copy_file_watched(const char *src, const char *dst, int overwrite, mc_copy_fn fn,
+                               void *user);
 /* Renames or moves a file, across volumes if needed. Fails if dst exists, unless replace
  * is set. */
 mc_status mc_rename(const char *src, const char *dst, int replace);

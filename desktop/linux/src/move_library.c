@@ -6,7 +6,7 @@
 
 static struct {
   GtkWindow *main, *win;
-  GtkWidget *bar, *status, *file;
+  GtkWidget *bar, *status, *file, *cancel_button;
   const move_library_host *host;
   char *settings_dir;
   char *src, *dst;
@@ -22,6 +22,7 @@ static struct {
   mc_library_move_progress p;
   char current[1024]; /* p.current, copied */
   gboolean posted;    /* a show_progress idle is queued */
+  gboolean cancel;    /* Cancel was pressed */
   mc_status st;
   mc_library_move_result result;
 } g_move;
@@ -135,16 +136,17 @@ static void choose(void) {
 static gboolean show_progress(gpointer data);
 
 /* On the worker thread: keeps the latest progress, and queues an update if none is. */
-static void on_progress(void *user, const mc_library_move_progress *p) {
+static int on_progress(void *user, const mc_library_move_progress *p) {
   (void)user;
   g_mutex_lock(&g_move.lock);
   g_move.p = *p;
   g_snprintf(g_move.current, sizeof g_move.current, "%s", p->current ? p->current : "");
-  gboolean post = !g_move.posted;
+  gboolean post = !g_move.posted, cancel = g_move.cancel;
   g_move.posted = TRUE;
   g_mutex_unlock(&g_move.lock);
   if (post) g_idle_add(show_progress, NULL);
   if (g_move.delay_ms > 0 && p->current) g_usleep((gulong)g_move.delay_ms * 1000);
+  return cancel;
 }
 
 static gboolean finish(gpointer data);
@@ -169,6 +171,7 @@ static gboolean show_progress(gpointer data) {
   mc_library_move_progress p = g_move.p;
   char *file = g_strdup(g_move.current);
   g_move.posted = FALSE;
+  gboolean cancelled = g_move.cancel;
   g_mutex_unlock(&g_move.lock);
   if (!g_move.win) {
     g_free(file);
@@ -188,8 +191,11 @@ static gboolean show_progress(gpointer data) {
     }
     case MC_MOVE_PHASE_CHECKING: status = mc_str(MC_STR_LIBRARY_MOVE_CHECKING); break;
     case MC_MOVE_PHASE_REMOVING: status = mc_str(MC_STR_LIBRARY_MOVE_REMOVING); break;
-    case MC_MOVE_PHASE_UNDOING: status = mc_str(MC_STR_LIBRARY_MOVE_UNDOING); break;
+    case MC_MOVE_PHASE_UNDOING:
+      status = mc_str(cancelled ? MC_STR_LIBRARY_MOVE_CANCELLING : MC_STR_LIBRARY_MOVE_UNDOING);
+      break;
   }
+  gtk_widget_set_sensitive(g_move.cancel_button, p.can_cancel && !cancelled);
   gtk_label_set_text(GTK_LABEL(g_move.status), status ? status : "");
   gtk_label_set_text(GTK_LABEL(g_move.file), p.phase == MC_MOVE_PHASE_COPYING ? file : "");
   double fraction = p.bytes_total > 0 ? (double)p.bytes_done / (double)p.bytes_total
@@ -198,6 +204,15 @@ static gboolean show_progress(gpointer data) {
   mc_free(counts);
   g_free(file);
   return G_SOURCE_REMOVE;
+}
+
+/* Cancel: the worker stops at its next report, and the partial copy goes. */
+static void on_cancel_clicked(GtkButton *button, gpointer data) {
+  (void)data;
+  g_mutex_lock(&g_move.lock);
+  g_move.cancel = TRUE;
+  g_mutex_unlock(&g_move.lock);
+  gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
 }
 
 /* Alt+F4 and the like: not until it's done. */
@@ -241,6 +256,12 @@ static void create_window(void) {
   gtk_label_set_wrap(GTK_LABEL(note), TRUE);
   gtk_widget_set_margin_top(note, 12);
   gtk_box_append(GTK_BOX(box), note);
+  g_move.cancel_button = gtk_button_new_with_label(mc_str(MC_STR_CANCEL));
+  gtk_widget_set_halign(g_move.cancel_button, GTK_ALIGN_END);
+  gtk_widget_set_margin_top(g_move.cancel_button, 12);
+  gtk_widget_set_sensitive(g_move.cancel_button, FALSE);
+  g_signal_connect(g_move.cancel_button, "clicked", G_CALLBACK(on_cancel_clicked), NULL);
+  gtk_box_append(GTK_BOX(box), g_move.cancel_button);
 
   /* No close button: the header bar shows the title only. */
   GtkWidget *header = adw_header_bar_new();
@@ -278,6 +299,7 @@ static void begin(void) {
   memset(&g_move.p, 0, sizeof g_move.p);
   g_move.current[0] = '\0';
   g_move.posted = FALSE;
+  g_move.cancel = FALSE;
 
   g_move.host->close_library(g_move.host->user);
   gtk_widget_set_visible(GTK_WIDGET(g_move.main), FALSE);
@@ -313,7 +335,7 @@ static gboolean finish(gpointer data) {
   if (st != MC_OK && result.failed_path)
     text = mc_format_alloc(mc_str(MC_STR_LIBRARY_MOVE_FAILED_FILE), MC_S(result.failed_path),
                            MC_S(mc_status_str(st)), MC_S(g_move.src));
-  else if (st != MC_OK)
+  else if (st != MC_OK && st != MC_ERR_CANCELLED)
     text = mc_format_alloc(mc_str(MC_STR_LIBRARY_MOVE_FAILED), MC_S(mc_status_str(st)), MC_S(g_move.src));
   else if (result.left_behind)
     text = mc_format_alloc(mc_str_plural(MC_STR_LIBRARY_MOVE_LEFT_BEHIND, result.left_behind),

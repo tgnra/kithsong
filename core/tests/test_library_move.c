@@ -222,9 +222,13 @@ static void test_checks(void) {
 typedef struct progress_log {
   int calls, last_done, total, went_back, undid;
   int64_t bytes_total;
+  int cancel_after;   /* cancel at the nth report of this much of the big file */
+  int in_file;        /* reports part-way through the big file */
+  int64_t last_bytes; /* bytes_done so far */
+  int cancels_refused;
 } progress_log;
 
-static void on_progress(void *user, const mc_library_move_progress *p) {
+static int on_progress(void *user, const mc_library_move_progress *p) {
   progress_log *log = user;
   log->calls++;
   if (p->files_done < log->last_done) log->went_back = 1;
@@ -232,6 +236,31 @@ static void on_progress(void *user, const mc_library_move_progress *p) {
   log->total = p->files_total;
   log->bytes_total = p->bytes_total;
   if (p->phase == MC_MOVE_PHASE_UNDOING) log->undid = 1;
+  if (p->bytes_done < log->last_bytes) log->went_back = 1;
+  int part_way = p->current && strstr(p->current, "big.bin") && p->bytes_done > log->last_bytes;
+  log->last_bytes = p->bytes_done;
+  if (part_way) log->in_file++;
+  if (p->phase == MC_MOVE_PHASE_CHECKING && p->can_cancel) log->cancels_refused = 1;
+  return log->cancel_after && log->in_file >= log->cancel_after;
+}
+
+/* A big file of zeroes in the library, 9 MB. */
+static void write_big(void) {
+  char file[1200];
+  path(file, sizeof file, "src/big.bin");
+  FILE *f = fopen(file, "wb");
+  CHECK(f != NULL);
+  if (!f) return;
+  static char block[1 << 20];
+  for (int i = 0; i < 9; i++) fwrite(block, 1, sizeof block, f);
+  fclose(f);
+}
+
+static int has_size(const char *rel, int64_t want) {
+  char file[1200];
+  path(file, sizeof file, rel);
+  int64_t size = -1, mtime;
+  return mc_file_info(file, &size, &mtime) == MC_OK && size == want;
 }
 
 /* Copying fails at the third file: the old library stays, and the copy goes. */
@@ -331,6 +360,44 @@ static void test_copy(void) {
   reset_hooks();
 }
 
+/* A big file shows movement as it copies, and the move can be stopped part-way through it. */
+static void test_cancel(void) {
+  char src[1200], dst[1200], cfg[1200];
+  make_library();
+  write_big();
+  path(src, sizeof src, "src");
+  path(dst, sizeof dst, "cancelled/lib");
+  path(cfg, sizeof cfg, "config");
+  remove_tree(dst);
+
+  mc_settings *settings = NULL;
+  CHECK(mc_settings_load(cfg, &settings) == MC_OK);
+  mc_settings_set_library_dir(settings, src);
+
+  mc_move_test_no_rename = 1;
+  progress_log log = {0};
+  log.cancel_after = 2; /* some way into it, whatever came first */
+  mc_library_move_result result;
+  CHECK(mc_library_move(src, dst, settings, on_progress, &log, &result) == MC_ERR_CANCELLED);
+  CHECK(result.failed_path == NULL && !result.renamed);
+  CHECK(log.undid && log.in_file >= 2 && !log.went_back);
+  mc_library_move_result_free(&result);
+  CHECK(library_intact("src"));
+  CHECK(has_size("src/big.bin", (int64_t)9 << 20));
+  CHECK(!exists("cancelled"));
+  CHECK(same(mc_settings_library_dir(settings), src));
+
+  /* Not cancelled, it reports the file part-way, and once copying is over it can't be. */
+  progress_log whole = {0};
+  CHECK(mc_library_move(src, dst, settings, on_progress, &whole, &result) == MC_OK);
+  CHECK(whole.in_file >= 2 && !whole.went_back && !whole.cancels_refused);
+  mc_library_move_result_free(&result);
+  CHECK(has_size("cancelled/lib/big.bin", (int64_t)9 << 20));
+  mc_settings_free(settings);
+  reset_hooks();
+  remove_tree(dst);
+}
+
 /* On the same volume the entries are renamed. */
 static void test_rename(void) {
   char src[1200], dst[1200];
@@ -369,6 +436,7 @@ int main(int argc, char **argv) {
   test_checks();
   test_failure();
   test_copy();
+  test_cancel();
   test_rename();
   return TEST_RESULT();
 }

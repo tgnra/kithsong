@@ -363,12 +363,18 @@ typedef struct mover {
   void *user;
   mc_library_move_result *result;
   mc_library_move_progress p;
+  int64_t file_base; /* bytes_done before the file being copied */
+  int64_t file_told; /* how much of it the last report said */
 } mover;
 
-static void report(mover *m, mc_move_phase phase, const char *current) {
+/* How often a big file's progress is reported. */
+#define REPORT_BYTES ((int64_t)4 << 20)
+
+/* Non-zero if the callback wants the move cancelled. */
+static int report(mover *m, mc_move_phase phase, const char *current) {
   m->p.phase = phase;
   m->p.current = current;
-  if (m->fn) m->fn(m->user, &m->p);
+  return m->fn ? m->fn(m->user, &m->p) : 0;
 }
 
 static int top_level(const entry *e) {
@@ -423,9 +429,20 @@ static int remove_entries(mover *m, const char *dir, int end) {
   return stayed;
 }
 
-/* Copies everything into dst, checking each copy's size. On failure removes the copies. */
+/* Part of the current file is copied. */
+static int on_copied(void *user, int64_t done) {
+  mover *m = user;
+  if (done - m->file_told < REPORT_BYTES) return 0;
+  m->file_told = done;
+  m->p.bytes_done = m->file_base + done;
+  return report(m, MC_MOVE_PHASE_COPYING, m->p.current);
+}
+
+/* Copies everything into dst, checking each copy's size. On failure, or if the callback
+ * cancels, removes the copies. */
 static mc_status copy_all(mover *m) {
   int n = 0; /* files so far */
+  m->p.can_cancel = 1;
   for (int i = 0; i < m->t->count; i++) {
     const entry *e = &m->t->items[i];
     char *from = join(m->src, e->rel), *to = join(m->dst, e->rel);
@@ -433,17 +450,21 @@ static mc_status copy_all(mover *m) {
     if (st == MC_OK && e->is_dir) {
       st = mc_mkdirs(to);
     } else if (st == MC_OK) {
-      report(m, MC_MOVE_PHASE_COPYING, e->rel);
       int64_t size = -1, mtime;
-      if (mc_move_test_fail_at > 0 && ++n == mc_move_test_fail_at) st = MC_ERR_IO;
-      else st = mc_copy_file(from, to, 0);
+      m->file_base = m->p.bytes_done;
+      m->file_told = 0;
+      if (report(m, MC_MOVE_PHASE_COPYING, e->rel)) st = MC_ERR_CANCELLED;
+      else if (mc_move_test_fail_at > 0 && ++n == mc_move_test_fail_at) st = MC_ERR_IO;
+      else st = mc_copy_file_watched(from, to, 0, on_copied, m);
       if (st == MC_OK && (mc_file_info(to, &size, &mtime) != MC_OK || size != e->size)) st = MC_ERR_IO;
       m->p.files_done++;
-      m->p.bytes_done += e->size;
+      m->p.bytes_done = m->file_base + e->size;
     }
     if (st != MC_OK) {
-      m->result->failed_path = from;
+      if (st == MC_ERR_CANCELLED) free(from);
+      else m->result->failed_path = from;
       free(to);
+      m->p.can_cancel = 0;
       report(m, MC_MOVE_PHASE_UNDOING, NULL);
       remove_entries(m, m->dst, i + 1);
       return st;
@@ -451,6 +472,7 @@ static mc_status copy_all(mover *m) {
     free(from);
     free(to);
   }
+  m->p.can_cancel = 0;
   report(m, MC_MOVE_PHASE_COPYING, NULL);
   return MC_OK;
 }
@@ -564,7 +586,7 @@ static mc_status move_library(const char *src, const char *dst, mc_settings *set
     if (st != MC_OK) goto done;
   }
 
-  mover m = {src_full, dst_full, src, &t, progress, user, result, {0}};
+  mover m = {src_full, dst_full, src, &t, progress, user, result, {0}, 0, 0};
   int copied = 0;
   m.p.files_total = t.files;
   m.p.bytes_total = t.bytes;
