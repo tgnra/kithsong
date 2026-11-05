@@ -43,6 +43,9 @@ typedef struct mc_plan {
    * what budget mode adds to the free space. Only it knows (files is local), so 0 for
    * another device. */
   int64_t held_bytes;
+  /* Tracks with an original imported on this device that the set leaves out: they go once an
+   * archive holds them. 0 for another device, and for an archive. */
+  int imports_dropped;
   /* With MC_PLAN_SIZES: the set's size at each step of the ladder (index 0 originals, then
    * mc_opus_bitrates' order), whatever the profile's own format. */
   int64_t step_bytes[MC_PLAN_STEPS];
@@ -82,14 +85,22 @@ const char *mc_profile_kind_str(mc_profile_item_kind kind);
 #define MC_PLAN_ARTIST_TRACKS(p)   CREDITED_TRACKS(p) " UNION SELECT uid FROM tracks WHERE album_uid IN (" CREDITED_ALBUMS(p) ")"
 
 /* profile_items.kind of an exclusion (musiccore/sync_here.h): the album's or artist's tracks
- * are not wanted, whatever else selects them (but on an archive). Not an mc_profile_item_kind:
- * editors neither see nor drop them. */
+ * are not wanted, whatever else but a ticked playlist selects them (and not on an archive).
+ * Not an mc_profile_item_kind: editors get them apart, as mc_sync_profile.removed. */
 #define MC_PLAN_EXCLUDE_ALBUM "exclude_album"
 #define MC_PLAN_EXCLUDE_ARTIST "exclude_artist"
 /* A single track: a delete taken back out of the recycle bin (musiccore/delete.h). */
 #define MC_PLAN_EXCLUDE_TRACK "exclude_track"
+/* An album brought back on its own while its artist stays removed: the selection counts for it
+ * in spite of the artist's exclusion. Goes when the album or that artist next changes. */
+#define MC_PLAN_KEEP_ALBUM "keep_album"
 /* The kind an exclusion kind takes out ("album", "artist" or "track"), or NULL if kind isn't one. */
 const char *mc_plan_excluded_kind(const char *kind);
+
+/* The tracks device_uid's ticked playlists keep whatever's excluded, sorted by uid; none with
+ * Sync everything. *out is malloc'd (NULL if there are none). */
+mc_status mc_plan_kept_by_playlists(mc_sync_db *sdb, mc_library *lib, const char *device_uid,
+                                    char (**out)[MC_UID_STRLEN], int *count);
 
 /* The bitrate an original of unknown size is estimated at, roughly a FLAC of a CD. */
 #define MC_PLAN_ORIGINAL_KBPS 1000

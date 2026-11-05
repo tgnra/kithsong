@@ -743,8 +743,9 @@ the plaintext limit.
   - its exclusions, `profile_items` rows of kind `exclude_album`, `exclude_artist` or
     `exclude_track`: what was removed from this one device (see
     [Removing from one device](#removing-from-one-device); `exclude_track` only comes from the
-    [Recycle bin](#recycle-bin)). They apply in either mode, and aren't part of the selection
-    an editor shows.
+    [Recycle bin](#recycle-bin)), and `keep_album` rows, albums brought back on their own while
+    an artist of theirs stays removed. They apply in either mode, and aren't part of the
+    selection an editor shows.
 
   A device with no `profiles` row receives no files until it has one (see below). Pairing
   writes the row straight away (the archive's for a new group, and the joiner's when it
@@ -763,10 +764,13 @@ the plaintext limit.
     selected artist ∪ the tracks of the albums whose `artist_uid` is a selected artist ∪
     the tracks of the albums in the selected album groups ∪ the entries of the selected
     playlists;
-  - then, either way, less the tracks of each excluded album, of each excluded artist
-    (counted as a selected artist is), and each excluded track. An exclusion wins over
-    everything that selects the track, a playlist included. An archive has no exclusions: it
-    wants every track.
+  - then, either way, in this order: less the tracks of each excluded artist (counted as a
+    selected artist is); plus those of each `keep_album` the step before took out; less
+    those of each excluded album; in mode `selected`, plus the entries of the selected
+    playlists; less each excluded track. So a ticked playlist keeps its tracks on the device
+    when their album or artist is removed, until it's unticked. Sync everything ticks nothing
+    one by one, so under it no playlist keeps anything. An archive has no exclusions: it wants
+    every track.
 
   Selections that name a uid the library doesn't have are skipped, and so are items of
   kinds the device doesn't know.
@@ -783,8 +787,7 @@ the plaintext limit.
   take the highest that fits in `min(budget_bytes, free space + bytes already held of the
   set)`. If even 64 kbps doesn't fit, the profile is over budget: nothing syncs (the file
   phase fetches and deletes nothing, so what the device holds stays) and the profile editor
-  shows the shortfall from `mc_sync_estimate_profile()` (on Windows' device page; the other
-  frontends have no profile editor yet), for the user to raise the budget or select less.
+  shows the shortfall from `mc_sync_estimate_profile()` (on each frontend's device page), for the user to raise the budget or select less.
   - The walk always starts at originals, whatever `format` the row holds.
   - An original's size is the same file everywhere, so any device that holds it knows it;
     one no device at hand holds is estimated at 1000 kbps. The bytes already held are only
@@ -881,9 +884,9 @@ profile and pressed Sync.
   `<mode> <format> <kbps> <budget> <budget_bytes>` (`kbps` 0 for originals, `budget` `-` and
   `budget_bytes` 0 when the budget is off), then for mode `selected` one line
   `<kind> <ref_uid>` per distinct `profile_items` row, sorted, and for mode `all` the same
-  for its exclusion rows only (`exclude_album`, `exclude_artist`, `exclude_track`). Names, the selection while the mode is `all`, and an
-  archive's other fields leave it as it is. (Versions before exclusions hash no rows for
-  `all`, so they show a device with exclusions as changed.) With no `profiles` row it
+  for its exclusion rows only (`exclude_album`, `exclude_artist`, `exclude_track`,
+  `keep_album`). Names, the selection while the mode is `all`, and an archive's other fields
+  leave it as it is. With no `profiles` row it
   is the hash of `none`. Every device holding the same rows computes the same one.
 - `devices.confirmed_profile` is the fingerprint of the device's profile when it was last
   confirmed, written by the device itself (NULL until then). The device is *confirmed* while
@@ -936,12 +939,18 @@ music lives nowhere else.
   album or artist), inserted like any other item so it syncs and concurrent edits merge. In a
   selection, the album's or artist's own row is deleted as well. A profile can only include,
   so "Sync everything but this" needs the exclusion; turning `all` into a long selection
-  would also miss what's imported later.
-- **Editors** don't edit exclusions: `mc_sync_get_profile()` lists them apart from the items,
-  as `removed` (with the albums of a removed artist), and `mc_sync_set_profile()` keeps stored
-  rows of those kinds, so any member's editor keeps them through a read-modify-write. Adding
-  an album or artist to a selection deletes its exclusion: what the user just chose to sync
-  is synced. The editors mark such rows as removed.
+  would also miss what's imported later. A ticked playlist keeps its tracks (see the wanted
+  set): their files stay, and the question before the removal says how many.
+- **Editors** see exclusions apart from the items: `mc_sync_get_profile()` lists them as
+  `removed` (with the albums of a removed artist, but not those brought back alone), and
+  `mc_sync_set_profile()` keeps stored rows of those kinds, so any member's editor keeps them
+  through a read-modify-write. Adding an album or artist to a selection deletes its exclusion:
+  what the user just chose to sync is synced. The editors mark such rows as removed.
+- **Sync everything in an editor** shows every album and artist ticked but what's in
+  `removed`. Unticking one adds its exclusion and ticking it takes the exclusion away
+  (`mc_sync_exclude_items()`), so the profile stays mode `all` and later imports still sync;
+  the files go at the next sync, like any edit, not at once. Playlists and album groups aren't
+  listed under it: they'd select nothing more, and there's no exclusion for them.
 - **Select all and Select none** (`mc_sync_select_items()`) act on one category's shown rows
   in one write. Select all is not a choice of each item, so it leaves out what's in `removed`
   and keeps the exclusions; only ticking such a row by hand brings it back. Select none keeps
@@ -949,7 +958,12 @@ music lives nowhere else.
   Sync everything also takes in later imports.
 - **Bringing it back**: "Sync to this PC" on its menu (`mc_sync_restore_here()`) deletes the
   exclusion and, in a selection, adds the album or artist; the files arrive at the next
-  sync. An album removed only through its artist is brought back from the artist's menu.
+  sync. An album removed only through its artist can come back alone, from its own menu or a
+  tick: that adds a `keep_album` row, and the artist stays removed. The row goes when the
+  album is removed again or that artist's exclusion changes.
+- **Adding what a selection lacks**: an album or artist a selection doesn't have (an artist
+  counts as had if an album of theirs is) offers "Add to this PC", which is the same call and
+  adds its row. A playlist holding some of an album's tracks doesn't make the album had.
 - **The files go at once**, not at the next session: the item's tracks' `files` rows here and
   their files, under the same one-receiver-at-a-time lock as the file phase. Files sync
   brought are removed. Originals imported on this device go to the Recycle Bin or trash only
@@ -981,7 +995,8 @@ rows it took.
   never carried it. The device's own profile then excludes what it deleted (`exclude_album`
   for an album, `exclude_track` for a track, in a selection the album's own row goes too), so
   the music counts as [removed from this device](#removing-from-one-device): its files stay
-  gone here, and it stays in the library and on the other devices, to be synced here again
+  gone here (but for what a ticked playlist has, as for any removal), and it stays in the
+  library and on the other devices, to be synced here again
   with Sync to this device. The library is written first, then the profile: should the profile
   write fail, the music syncs back to the device at the next session rather than being lost.
   An entry whose rows need a row a later entry's delete took (a track's album, deleted with

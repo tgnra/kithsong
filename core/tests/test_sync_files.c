@@ -664,6 +664,69 @@ static void check_plan(const char *root) {
     CHECK(exec(g, "DELETE FROM profile_items") == SQLITE_OK);
   }
 
+  /* A ticked playlist keeps its tracks through their album's exclusion, in a selection; the
+   * rest of the album goes. Sync everything ticks nothing, so there an exclusion is one. Only
+   * an exclude_track, a delete taken back, beats it. */
+  {
+    sqlite3 *g = mc_sync_db_handle(sdb);
+    char u1[MC_UID_STRLEN], u2[MC_UID_STRLEN], u3[MC_UID_STRLEN];
+    mc_uid_new(u1);
+    mc_uid_new(u2);
+    mc_uid_new(u3);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO profile_items (uid, device_uid, kind, ref_uid) VALUES"
+             " ('%s', '%s', 'album', '%s'), ('%s', '%s', 'playlist', '%s'),"
+             " ('%s', '%s', 'exclude_album', '%s')",
+             u1, me, al2, u2, me, pl, u3, me, al2);
+    CHECK(exec(g, sql) == SQLITE_OK);
+    plan_profile(sdb, me, "0, 'selected', 'original', NULL, NULL, 0");
+    CHECK(mc_plan_compute(sdb, lib, me, -1, &p) == MC_OK);
+    CHECK(p && p->count == 1 && mc_plan_find(p, t[4]));
+    mc_plan_free(p);
+    char (*kept)[MC_UID_STRLEN] = NULL;
+    int nkept = 0;
+    CHECK(mc_plan_kept_by_playlists(sdb, lib, me, &kept, &nkept) == MC_OK);
+    CHECK(nkept == 1 && kept && !strcmp(kept[0], t[4]));
+    free(kept);
+    plan_profile(sdb, me, "0, 'all', 'original', NULL, NULL, 0");
+    CHECK(mc_plan_compute(sdb, lib, me, -1, &p) == MC_OK);
+    CHECK(p && p->count == 3 && !mc_plan_find(p, t[4]));
+    mc_plan_free(p);
+    CHECK(mc_plan_kept_by_playlists(sdb, lib, me, &kept, &nkept) == MC_OK);
+    CHECK(nkept == 0 && !kept);
+    plan_profile(sdb, me, "0, 'selected', 'original', NULL, NULL, 0");
+    snprintf(sql, sizeof sql,
+             "INSERT INTO profile_items (uid, device_uid, kind, ref_uid) VALUES"
+             " ('x-track', '%s', 'exclude_track', '%s')",
+             me, t[4]);
+    CHECK(exec(g, sql) == SQLITE_OK);
+    CHECK(mc_plan_compute(sdb, lib, me, -1, &p) == MC_OK);
+    CHECK(p && p->count == 0);
+    mc_plan_free(p);
+    CHECK(exec(g, "DELETE FROM profile_items") == SQLITE_OK);
+  }
+
+  /* Imports the set leaves out are counted: the originals here have no source peer. */
+  {
+    sqlite3 *g = mc_sync_db_handle(sdb);
+    char u1[MC_UID_STRLEN];
+    mc_uid_new(u1);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO profile_items (uid, device_uid, kind, ref_uid)"
+             " VALUES ('%s', '%s', 'album', '%s')",
+             u1, me, al2);
+    CHECK(exec(g, sql) == SQLITE_OK);
+    plan_profile(sdb, me, "0, 'selected', 'original', NULL, NULL, 0");
+    CHECK(mc_plan_compute(sdb, lib, me, -1, &p) == MC_OK);
+    CHECK(p && p->imports_dropped == 2);
+    mc_plan_free(p);
+    CHECK(exec(g, "DELETE FROM profile_items") == SQLITE_OK);
+    plan_profile(sdb, me, "0, 'all', 'original', NULL, NULL, 0");
+    CHECK(mc_plan_compute(sdb, lib, me, -1, &p) == MC_OK);
+    CHECK(p && p->imports_dropped == 0);
+    mc_plan_free(p);
+  }
+
   /* Budget mode. Sizes of the set at each bitrate (one 1000-byte MP3 kept as is). */
   int64_t at[7];
   for (int l = 1; l < 7; l++) {

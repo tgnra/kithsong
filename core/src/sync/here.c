@@ -23,7 +23,7 @@
 struct mc_here_plan {
   mc_profile_item_kind kind;
   char uid[MC_UID_STRLEN]; /* resolved through merges */
-  int files, kept;
+  int files, kept, staying;
   char (*tracks)[MC_UID_STRLEN]; /* with a file here, sorted */
   int ntracks;
 };
@@ -67,26 +67,63 @@ static void files_release(mc_sync *sync) {
 
 /* --- State --- */
 
-/* Whether this device's profile has an exclusion of kind that resolves to uid. 1, 0, -1. */
-static int excluded(mc_sync *sync, const char *kind, const char *uid) {
+/* Whether this device's profile has a row of kind that resolves to uid. 1, 0, -1. */
+static int has_row(mc_sync *sync, const char *kind, const char *uid) {
+  return mc_profile_has_row(mc_sync_db_handle(sync->api.sdb), sync->api.lib, sync->device_uid,
+                            kind, uid);
+}
+
+/* Whether an artist credited on album has a row of kind. 1, 0, -1. */
+static int artist_row(mc_sync *sync, const char *kind, const char *album) {
+  return mc_profile_album_artist_row(mc_sync_db_handle(sync->api.sdb), sync->api.lib,
+                                     sync->device_uid, kind, album);
+}
+
+/* Whether a selected album group has album. 1, 0, -1. */
+static int in_selected_group(mc_sync *sync, const char *album) {
   sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(mc_sync_db_handle(sync->api.sdb),
-                         "SELECT ref_uid FROM profile_items WHERE device_uid = ?1 AND kind = ?2",
-                         -1, &stmt, NULL) != SQLITE_OK)
+  if (sqlite3_prepare_v2(mc_library_db(sync->api.lib),
+                         "SELECT group_uid FROM album_group_entries WHERE album_uid = ?1", -1,
+                         &stmt, NULL) != SQLITE_OK)
     return -1;
-  sqlite3_bind_text(stmt, 1, sync->device_uid, -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 2, kind, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 1, album, -1, SQLITE_STATIC);
   int found = 0, rc;
-  while (!found && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-    const char *ref = (const char *)sqlite3_column_text(stmt, 0);
-    if (!is_uid(ref)) continue;
-    char r[MC_UID_STRLEN];
-    resolve(sync->api.lib, ref, r);
-    found = !strcmp(r, uid);
-  }
+  while (!found && (rc = sqlite3_step(stmt)) == SQLITE_ROW)
+    found = has_row(sync, "album_group", (const char *)sqlite3_column_text(stmt, 0));
   if (!found && rc != SQLITE_DONE) found = -1;
   sqlite3_finalize(stmt);
   return found;
+}
+
+/* Whether this device's selection has album, itself or through its artist or an album group.
+ * A playlist with some of its tracks doesn't make it the album's. */
+static int selection_has_album(mc_sync *sync, const char *album) {
+  int has = has_row(sync, "album", album);
+  if (!has) has = artist_row(sync, "artist", album);
+  return has ? has : in_selected_group(sync, album);
+}
+
+/* Whether this device's selection has artist, or any album of theirs: there's something of
+ * theirs here to remove then. */
+static int selection_has_artist(mc_sync *sync, const char *artist) {
+  int has = has_row(sync, "artist", artist);
+  if (has) return has;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(sync->api.lib), CREDITED_ALBUMS("?1"), -1, &stmt, NULL) !=
+      SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, artist, -1, SQLITE_STATIC);
+  int rc;
+  while (!has && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *album = (const char *)sqlite3_column_text(stmt, 0);
+    if (!is_uid(album)) continue;
+    char r[MC_UID_STRLEN];
+    resolve(sync->api.lib, album, r);
+    has = selection_has_album(sync, r);
+  }
+  if (!has && rc != SQLITE_DONE) has = -1;
+  sqlite3_finalize(stmt);
+  return has;
 }
 
 /* Whether this device keeps a part of the library: it's a member of a group (and not
@@ -108,39 +145,46 @@ static int keeps_part(mc_sync *sync) {
   return archive < 0 ? -1 : !archive;
 }
 
+/* Whether this device's profile is a selection (mode 'selected'). */
+static int is_selection(sqlite3 *db, const char *me) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db, "SELECT mode FROM profiles WHERE device_uid = ?1", -1, &stmt, NULL) !=
+      SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, me, -1, SQLITE_STATIC);
+  int selected = 0, rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    const char *mode = (const char *)sqlite3_column_text(stmt, 0);
+    selected = mode && !strcmp(mode, "selected");
+  }
+  sqlite3_finalize(stmt);
+  return rc == SQLITE_ROW || rc == SQLITE_DONE ? selected : -1;
+}
+
 /* The state of uid (resolved), under api_lock, the library being the group's. */
 static mc_status read_state(mc_sync *sync, mc_profile_item_kind kind, const char *uid,
                             mc_here_state *out) {
   *out = MC_HERE_UNAVAILABLE;
-  sqlite3_stmt *stmt;
   int part = keeps_part(sync);
   if (part <= 0) return part < 0 ? MC_ERR_DB : MC_OK;
-  int ex = excluded(sync, exclusion_kind(kind), uid);
+  int ex = has_row(sync, exclusion_kind(kind), uid);
+  if (!ex && kind == MC_PROFILE_ALBUM) {
+    /* Its artist removed from here takes it along, unless it was brought back since. */
+    ex = artist_row(sync, MC_PLAN_EXCLUDE_ARTIST, uid);
+    int back = ex > 0 ? has_row(sync, MC_PLAN_KEEP_ALBUM, uid) : 0;
+    if (back) ex = back < 0 ? -1 : 0;
+  }
   if (ex < 0) return MC_ERR_DB;
   if (ex) {
     *out = MC_HERE_REMOVED;
     return MC_OK;
   }
-  if (kind == MC_PROFILE_ALBUM) {
-    /* Its artist removed from here takes it along, and only the artist can bring it back. */
-    char artist[MC_UID_STRLEN] = "";
-    if (sqlite3_prepare_v2(mc_library_db(sync->api.lib),
-                           "SELECT artist_uid FROM albums WHERE uid = ?1", -1, &stmt,
-                           NULL) != SQLITE_OK)
-      return MC_ERR_DB;
-    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-      const char *a = (const char *)sqlite3_column_text(stmt, 0);
-      if (is_uid(a)) resolve(sync->api.lib, a, artist);
-    }
-    sqlite3_finalize(stmt);
-    if (artist[0]) {
-      ex = excluded(sync, MC_PLAN_EXCLUDE_ARTIST, artist);
-      if (ex < 0) return MC_ERR_DB;
-      if (ex) return MC_OK;
-    }
-  }
-  *out = MC_HERE_HELD;
+  int selected = is_selection(mc_sync_db_handle(sync->api.sdb), sync->device_uid);
+  int has = selected <= 0 ? 1
+            : kind == MC_PROFILE_ALBUM ? selection_has_album(sync, uid)
+                                       : selection_has_artist(sync, uid);
+  if (selected < 0 || has < 0) return MC_ERR_DB;
+  *out = has ? MC_HERE_HELD : MC_HERE_NOT_INCLUDED;
   return MC_OK;
 }
 
@@ -243,6 +287,31 @@ static mc_status read_files(mc_library *lib, mc_profile_item_kind kind, const ch
   return MC_OK;
 }
 
+/* Takes out of *files those of tracks a ticked playlist keeps here (sync/plan.h), and says how
+ * many tracks that was. Under api_lock. */
+static mc_status drop_staying(mc_sync *sync, here_file *files, int *count, int *staying) {
+  *staying = 0;
+  char (*kept)[MC_UID_STRLEN] = NULL;
+  int nkept = 0;
+  mc_status st = mc_plan_kept_by_playlists(sync->api.sdb, sync->api.lib, sync->device_uid, &kept,
+                                           &nkept);
+  if (st != MC_OK || !nkept) return st;
+  int n = 0;
+  char last_track[MC_UID_STRLEN] = "";
+  for (int i = 0; i < *count; i++) {
+    if (!bsearch(files[i].track, kept, (size_t)nkept, sizeof *kept, uid_cmp)) {
+      files[n++] = files[i];
+      continue;
+    }
+    if (strcmp(last_track, files[i].track)) (*staying)++; /* they come sorted by track */
+    memcpy(last_track, files[i].track, MC_UID_STRLEN);
+    free(files[i].path);
+  }
+  *count = n;
+  free(kept);
+  return MC_OK;
+}
+
 /* Whether originals imported here may go: an archive holds verified copies of everything.
  * Under api_lock. 1, 0, -1. */
 static int originals_safe(mc_sync *sync) {
@@ -267,6 +336,7 @@ mc_status mc_sync_here_plan_new(mc_sync *sync, mc_profile_item_kind kind, const 
   here_file *files = NULL;
   int n = 0, safe = 0;
   if (st == MC_OK) st = read_files(sync->api.lib, kind, plan->uid, &files, &n);
+  if (st == MC_OK) st = drop_staying(sync, files, &n, &plan->staying);
   if (st == MC_OK && (safe = originals_safe(sync)) < 0) st = MC_ERR_DB;
   mc_mutex_unlock(&sync->api_lock);
   if (st == MC_OK && n && !(plan->tracks = malloc((size_t)n * sizeof *plan->tracks)))
@@ -303,48 +373,16 @@ int mc_here_plan_kept(const mc_here_plan *plan) {
   return plan ? plan->kept : 0;
 }
 
+int mc_here_plan_staying(const mc_here_plan *plan) {
+  return plan ? plan->staying : 0;
+}
+
 int mc_here_plan_has(const mc_here_plan *plan, const char *track_uid) {
   return plan && track_uid && plan->ntracks &&
          bsearch(track_uid, plan->tracks, (size_t)plan->ntracks, sizeof *plan->tracks, uid_cmp);
 }
 
 /* --- Editing the profile --- */
-
-/* Whether this device's profile is a selection (mode 'selected'). Under the write. */
-static int is_selection(sqlite3 *db, const char *me) {
-  sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db, "SELECT mode FROM profiles WHERE device_uid = ?1", -1, &stmt, NULL) !=
-      SQLITE_OK)
-    return -1;
-  sqlite3_bind_text(stmt, 1, me, -1, SQLITE_STATIC);
-  int selected = 0, rc = sqlite3_step(stmt);
-  if (rc == SQLITE_ROW) {
-    const char *mode = (const char *)sqlite3_column_text(stmt, 0);
-    selected = mode && !strcmp(mode, "selected");
-  }
-  sqlite3_finalize(stmt);
-  return rc == SQLITE_ROW || rc == SQLITE_DONE ? selected : -1;
-}
-
-/* A new profile_items row, which the insert trigger logs for the group. */
-static mc_status insert_item(sqlite3 *db, const char *me, const char *kind, const char *ref) {
-  char row[MC_UID_STRLEN];
-  mc_status st = mc_uid_new(row);
-  if (st != MC_OK) return st;
-  sqlite3_stmt *stmt;
-  if (sqlite3_prepare_v2(db,
-                         "INSERT INTO profile_items (uid, device_uid, kind, ref_uid)"
-                         " VALUES (?1, ?2, ?3, ?4)",
-                         -1, &stmt, NULL) != SQLITE_OK)
-    return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, row, -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 2, me, -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 3, kind, -1, SQLITE_STATIC);
-  sqlite3_bind_text(stmt, 4, ref, -1, SQLITE_STATIC);
-  st = sqlite3_step(stmt) == SQLITE_DONE ? MC_OK : MC_ERR_DB;
-  sqlite3_finalize(stmt);
-  return st;
-}
 
 /* Under api_lock: removing (remove = 1) or restoring uid in this device's profile, in a write
  * of its own, then confirming it again if it was confirmed before. */
@@ -367,15 +405,21 @@ static mc_status edit_profile(mc_sync *sync, mc_profile_item_kind kind, const ch
      * exclusion keeps out what else selects it (an artist, a group, a playlist). */
     if (st == MC_OK && selected)
       st = mc_profile_delete_rows(db, sync->api.lib, me, mc_profile_kind_str(kind), &item);
-    if (st == MC_OK) st = insert_item(db, me, exclusion_kind(kind), uid);
+    if (st == MC_OK && kind == MC_PROFILE_ALBUM)
+      st = mc_profile_delete_rows(db, sync->api.lib, me, MC_PLAN_KEEP_ALBUM, &item);
+    if (st == MC_OK) st = mc_profile_insert_row(db, me, exclusion_kind(kind), uid);
   } else {
-    if (st == MC_OK) st = mc_profile_delete_rows(db, sync->api.lib, me, exclusion_kind(kind), &item);
+    if (st == MC_OK && kind == MC_PROFILE_ALBUM)
+      st = mc_profile_album_back(db, sync->api.lib, me, uid);
+    else if (st == MC_OK)
+      st = mc_profile_delete_rows(db, sync->api.lib, me, exclusion_kind(kind), &item);
     /* In a selection it's then selected; with everything it's back as it is. Any copy of
      * the row already there is dropped first, so there's one. */
     if (st == MC_OK && selected)
       st = mc_profile_delete_rows(db, sync->api.lib, me, mc_profile_kind_str(kind), &item);
-    if (st == MC_OK && selected) st = insert_item(db, me, mc_profile_kind_str(kind), uid);
+    if (st == MC_OK && selected) st = mc_profile_insert_row(db, me, mc_profile_kind_str(kind), uid);
   }
+  if (st == MC_OK && kind == MC_PROFILE_ARTIST) st = mc_profile_drop_keeps(db, sync->api.lib, me, uid);
   if (st == MC_OK) st = mc_sync_db_commit(sdb);
   if (st != MC_OK) {
     mc_sync_db_rollback(sdb);
@@ -402,7 +446,9 @@ mc_status mc_sync_remove_here(mc_sync *sync, const mc_here_plan *plan, mc_here_r
   mc_here_result res = {0, 0};
   here_file *files = NULL;
   int n = 0, safe = 0;
-  if (st == MC_OK && read_files(sync->api.lib, plan->kind, uid, &files, &n) == MC_OK) {
+  int staying = 0;
+  if (st == MC_OK && read_files(sync->api.lib, plan->kind, uid, &files, &n) == MC_OK &&
+      drop_staying(sync, files, &n, &staying) == MC_OK) {
     mc_library *lib = sync->api.lib;
     safe = originals_safe(sync) > 0;
     /* Files first, then their rows: a file that stays keeps its row. */
@@ -461,7 +507,7 @@ mc_status mc_sync_restore_here(mc_sync *sync, mc_profile_item_kind kind, const c
   mc_here_state state;
   char resolved[MC_UID_STRLEN];
   mc_status st = lock_state(sync, kind, uid, resolved, &state);
-  if (st == MC_OK && state != MC_HERE_REMOVED) st = MC_ERR_LOCKED;
+  if (st == MC_OK && state != MC_HERE_REMOVED && state != MC_HERE_NOT_INCLUDED) st = MC_ERR_LOCKED;
   if (st == MC_OK) st = edit_profile(sync, kind, resolved, 0);
   mc_mutex_unlock(&sync->api_lock);
   if (st == MC_OK) mc_sync_notify_changed(sync);
@@ -540,7 +586,7 @@ static mc_status exclude_taken(mc_sync *sync, const mc_bin_taken *taken) {
     const char *kind = album ? MC_PLAN_EXCLUDE_ALBUM : MC_PLAN_EXCLUDE_TRACK;
     char uid[MC_UID_STRLEN];
     resolve(sync->api.lib, taken->items[i].uid, uid);
-    int ex = excluded(sync, kind, uid);
+    int ex = has_row(sync, kind, uid);
     if (ex < 0) st = MC_ERR_DB;
     if (st != MC_OK || ex) continue;
     if (album && selected) {
@@ -551,7 +597,7 @@ static mc_status exclude_taken(mc_sync *sync, const mc_bin_taken *taken) {
       memcpy(item.ref_uid, uid, MC_UID_STRLEN);
       st = mc_profile_delete_rows(db, sync->api.lib, me, mc_profile_kind_str(MC_PROFILE_ALBUM), &item);
     }
-    if (st == MC_OK) st = insert_item(db, me, kind, uid);
+    if (st == MC_OK) st = mc_profile_insert_row(db, me, kind, uid);
   }
   if (st == MC_OK) st = mc_sync_db_commit(sdb);
   if (st != MC_OK) {

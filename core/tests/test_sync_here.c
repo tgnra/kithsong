@@ -11,6 +11,7 @@
 
 #include "library/library_internal.h"
 #include "musiccore/musiccore.h"
+#include "sync/plan.h"
 #include "sync/sync_db.h"
 #include "sync/sync_internal.h"
 #include "sync/transfer.h"
@@ -536,7 +537,7 @@ int main(int argc, char **argv) {
   CHECK(files == 1 && kept == 0 && res.files_removed == 1);
   CHECK(files_of(&b, "Other") == 0 && files_of(&b, "Kid Album") == 1);
   CHECK(state_of(&b, MC_PROFILE_ARTIST, low) == MC_HERE_REMOVED);
-  CHECK(state_of(&b, MC_PROFILE_ALBUM, other) == MC_HERE_UNAVAILABLE);
+  CHECK(state_of(&b, MC_PROFILE_ALBUM, other) == MC_HERE_REMOVED);
   CHECK(state_of(&b, MC_PROFILE_ALBUM, things) == MC_HERE_REMOVED);
   CHECK(state_of(&b, MC_PROFILE_ALBUM, kid) == MC_HERE_HELD);
   /* Back: Other returns at the next sync, Things stays removed. */
@@ -638,6 +639,120 @@ int main(int argc, char **argv) {
     select_albums(&b, b.uid, sel);
   }
   CHECK(items_of(&b, b.uid, "exclude_album") == 0 && items_of(&b, b.uid, "exclude_artist") == 1);
+
+  /* An album of a removed artist comes back alone, the artist staying removed. */
+  CHECK(state_of(&b, MC_PROFILE_ALBUM, things) == MC_HERE_REMOVED);
+  CHECK(state_of(&b, MC_PROFILE_ARTIST, low) == MC_HERE_REMOVED);
+  CHECK(mc_sync_restore_here(b.sync, MC_PROFILE_ALBUM, things) == MC_OK);
+  CHECK(items_of(&b, b.uid, "keep_album") == 1 && items_of(&b, b.uid, "exclude_artist") == 1);
+  CHECK(state_of(&b, MC_PROFILE_ALBUM, things) == MC_HERE_HELD);
+  CHECK(state_of(&b, MC_PROFILE_ALBUM, other) == MC_HERE_REMOVED);
+  CHECK(state_of(&b, MC_PROFILE_ARTIST, low) == MC_HERE_REMOVED);
+  {
+    mc_sync_profile *p = NULL;
+    CHECK(mc_sync_get_profile(b.sync, b.uid, &p) == MC_OK);
+    for (int i = 0; p && i < p->removed_count; i++) CHECK(strcmp(p->removed[i].ref_uid, things));
+    mc_sync_profile_free(p);
+    mc_plan *plan = NULL;
+    mc_mutex_lock(&b.sync->api_lock);
+    CHECK(mc_plan_compute(b.sync->api.sdb, b.lib, b.uid, -1, &plan) == MC_OK);
+    mc_mutex_unlock(&b.sync->api_lock);
+    CHECK(plan && mc_plan_find(plan, t1.uid) && !mc_plan_find(plan, o1.uid));
+    mc_plan_free(plan);
+  }
+  /* The artist back takes the special case away. */
+  CHECK(mc_sync_restore_here(b.sync, MC_PROFILE_ARTIST, low) == MC_OK);
+  CHECK(items_of(&b, b.uid, "keep_album") == 0 && items_of(&b, b.uid, "exclude_artist") == 0);
+
+  /* What a selection doesn't have is offered as Add to this device, which selects it. */
+  {
+    const char *sel[] = {kid, NULL};
+    select_albums(&b, b.uid, sel);
+    CHECK(state_of(&b, MC_PROFILE_ALBUM, kid) == MC_HERE_HELD);
+    CHECK(state_of(&b, MC_PROFILE_ALBUM, other) == MC_HERE_NOT_INCLUDED);
+    CHECK(state_of(&b, MC_PROFILE_ARTIST, low) == MC_HERE_NOT_INCLUDED);
+    CHECK(mc_sync_restore_here(b.sync, MC_PROFILE_ALBUM, other) == MC_OK);
+    CHECK(state_of(&b, MC_PROFILE_ALBUM, other) == MC_HERE_HELD);
+    /* An album of theirs is selected: the artist has something here to remove. */
+    CHECK(state_of(&b, MC_PROFILE_ARTIST, low) == MC_HERE_HELD);
+    CHECK(state_of(&b, MC_PROFILE_ALBUM, things) == MC_HERE_NOT_INCLUDED);
+  }
+
+  /* A ticked playlist keeps its tracks through a removal, and the removal says so. */
+  {
+    char pl[MC_UID_STRLEN], entry[MC_UID_STRLEN];
+    mc_uid_new(pl);
+    mc_uid_new(entry);
+    CHECK(mc_library_begin_write(b.lib) == MC_OK);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO playlists (uid, name) VALUES ('%s', 'P');"
+             "INSERT INTO playlist_entries (uid, playlist_uid, track_uid, position)"
+             " VALUES ('%s', '%s', '%s', 'a0')",
+             pl, entry, pl, o1.uid);
+    CHECK(exec(mc_library_db(b.lib), sql) == SQLITE_OK);
+    CHECK(mc_library_commit(b.lib) == MC_OK);
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(files_of(&b, "Other") == 1);
+    mc_sync_profile *p = NULL;
+    CHECK(mc_sync_get_profile(b.sync, b.uid, &p) == MC_OK);
+    mc_profile_item *items = realloc(p->items, ((size_t)p->count + 1) * sizeof *items);
+    CHECK(items != NULL);
+    p->items = items;
+    p->items[p->count].kind = MC_PROFILE_PLAYLIST;
+    memcpy(p->items[p->count++].ref_uid, pl, MC_UID_STRLEN);
+    CHECK(mc_sync_set_profile(b.sync, b.uid, p) == MC_OK);
+    mc_sync_profile_free(p);
+    mc_here_plan *plan = NULL;
+    CHECK(mc_sync_here_plan_new(b.sync, MC_PROFILE_ALBUM, other, &plan) == MC_OK);
+    CHECK(mc_here_plan_staying(plan) == 1 && mc_here_plan_files(plan) == 0);
+    CHECK(!mc_here_plan_has(plan, o1.uid));
+    mc_here_result r2;
+    CHECK(mc_sync_remove_here(b.sync, plan, &r2) == MC_OK);
+    CHECK(r2.files_removed == 0 && r2.files_kept == 0);
+    mc_here_plan_free(plan);
+    CHECK(files_of(&b, "Other") == 1);
+    CHECK(state_of(&b, MC_PROFILE_ALBUM, other) == MC_HERE_REMOVED);
+    /* A sync keeps it too, until the playlist is unticked. */
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(files_of(&b, "Other") == 1);
+    const char *sel[] = {kid, NULL};
+    select_albums(&b, b.uid, sel);
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(files_of(&b, "Other") == 0);
+  }
+
+  /* Under Sync everything, a tick off is an exclusion and a tick on takes it away. */
+  select_albums(&b, b.uid, NULL);
+  {
+    char one[1][MC_UID_STRLEN];
+    memcpy(one[0], low, MC_UID_STRLEN);
+    CHECK(mc_sync_restore_here(b.sync, MC_PROFILE_ALBUM, other) == MC_OK);
+    CHECK(mc_sync_exclude_items(b.sync, b.uid, MC_PROFILE_ARTIST, UIDS(one), 1, 1) == MC_OK);
+    CHECK(items_of(&b, b.uid, "exclude_artist") == 1);
+    mc_sync_profile *p = NULL;
+    CHECK(mc_sync_get_profile(b.sync, b.uid, &p) == MC_OK);
+    CHECK(p && p->sync_all && p->removed_count == 3); /* Low, its two albums */
+    mc_sync_profile_free(p);
+    /* One of the two back alone, which the selection then shows as it does any other. */
+    memcpy(one[0], things, MC_UID_STRLEN);
+    CHECK(mc_sync_exclude_items(b.sync, b.uid, MC_PROFILE_ALBUM, UIDS(one), 1, 0) == MC_OK);
+    CHECK(items_of(&b, b.uid, "keep_album") == 1);
+    p = NULL;
+    CHECK(mc_sync_get_profile(b.sync, b.uid, &p) == MC_OK);
+    CHECK(p && p->removed_count == 2);
+    mc_sync_profile_free(p);
+    /* Off again: an exclusion of its own, the special case gone. */
+    CHECK(mc_sync_exclude_items(b.sync, b.uid, MC_PROFILE_ALBUM, UIDS(one), 1, 1) == MC_OK);
+    CHECK(items_of(&b, b.uid, "keep_album") == 0 && items_of(&b, b.uid, "exclude_album") == 1);
+    CHECK(mc_sync_exclude_items(b.sync, b.uid, MC_PROFILE_ALBUM, UIDS(one), 1, 0) == MC_OK);
+    memcpy(one[0], low, MC_UID_STRLEN);
+    CHECK(mc_sync_exclude_items(b.sync, b.uid, MC_PROFILE_ARTIST, UIDS(one), 1, 0) == MC_OK);
+    CHECK(items_of(&b, b.uid, "exclude_artist") == 0 && items_of(&b, b.uid, "keep_album") == 0);
+    /* An archive has no exclusions, and a playlist isn't an album or artist. */
+    CHECK(mc_sync_exclude_items(a.sync, a.uid, MC_PROFILE_ARTIST, UIDS(one), 1, 1) == MC_ERR_LOCKED);
+    CHECK(mc_sync_exclude_items(b.sync, b.uid, MC_PROFILE_PLAYLIST, UIDS(one), 1, 1) ==
+          MC_ERR_INVALID_ARG);
+  }
 
   dev_stop(&c);
   dev_stop(&b);

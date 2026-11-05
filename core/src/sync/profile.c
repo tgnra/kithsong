@@ -310,7 +310,8 @@ static mc_status add_artist_albums(mc_library *lib, const char *artist, mc_profi
 }
 
 /* mc_sync_profile.removed for uid: what its exclusions name, and the albums of the artists
- * among them. *out is malloc'd (NULL if there are none). */
+ * among them, but for those brought back on their own. *out is malloc'd (NULL if there are
+ * none). */
 static mc_status read_removed(sqlite3 *db, mc_library *lib, const char *uid,
                               mc_profile_item **out, int *count) {
   *out = NULL;
@@ -323,10 +324,18 @@ static mc_status read_removed(sqlite3 *db, mc_library *lib, const char *uid,
   int total = 0, cap = n;
   if (!items) st = MC_ERR_NOMEM;
   for (int i = 0; st == MC_OK && i < n; i++) items[total++] = rows[i].item;
+  int stored = total;
   for (int i = 0; st == MC_OK && lib && i < n; i++)
     if (rows[i].item.kind == MC_PROFILE_ARTIST)
       st = add_artist_albums(lib, rows[i].item.ref_uid, &items, &total, &cap);
   free(rows);
+  int kept = stored;
+  for (int i = stored; st == MC_OK && i < total; i++) {
+    int keep = mc_profile_has_row(db, lib, uid, MC_PLAN_KEEP_ALBUM, items[i].ref_uid);
+    if (keep < 0) st = MC_ERR_DB;
+    if (!keep) items[kept++] = items[i];
+  }
+  total = kept;
   if (st != MC_OK) {
     free(items);
     return st;
@@ -489,6 +498,125 @@ mc_status mc_profile_delete_rows(sqlite3 *db, mc_library *lib, const char *devic
   return delete_rows(db, lib, device_uid, kind, item);
 }
 
+int mc_profile_has_row(sqlite3 *db, mc_library *lib, const char *device_uid, const char *kind,
+                       const char *uid) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db, "SELECT ref_uid FROM profile_items WHERE device_uid = ?1 AND kind = ?2",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, device_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, kind, -1, SQLITE_STATIC);
+  int found = 0, rc;
+  while (!found && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *ref = (const char *)sqlite3_column_text(stmt, 0);
+    if (!is_uid(ref)) continue;
+    char r[MC_UID_STRLEN];
+    if (mc_merge_resolve(lib, ref, r) != MC_OK) memcpy(r, ref, MC_UID_STRLEN);
+    found = !strcmp(r, uid);
+  }
+  if (!found && rc != SQLITE_DONE) found = -1;
+  sqlite3_finalize(stmt);
+  return found;
+}
+
+/* Walks the artists credited on album, resolved: whether one is artist, or if artist is NULL
+ * has a row of kind. 1, 0, -1. */
+static int album_credit(sqlite3 *db, mc_library *lib, const char *device_uid, const char *kind,
+                        const char *album, const char *artist) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT artist_uid FROM albums WHERE uid = ?1 UNION"
+                         " SELECT artist_uid FROM album_artists WHERE album_uid = ?1"
+                         " AND position > 0",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return -1;
+  sqlite3_bind_text(stmt, 1, album, -1, SQLITE_STATIC);
+  int found = 0, rc;
+  while (!found && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *a = (const char *)sqlite3_column_text(stmt, 0);
+    if (!is_uid(a)) continue;
+    char r[MC_UID_STRLEN];
+    if (mc_merge_resolve(lib, a, r) != MC_OK) memcpy(r, a, MC_UID_STRLEN);
+    found = artist ? !strcmp(r, artist) : mc_profile_has_row(db, lib, device_uid, kind, r);
+  }
+  if (!found && rc != SQLITE_DONE) found = -1;
+  sqlite3_finalize(stmt);
+  return found;
+}
+
+int mc_profile_album_artist_row(sqlite3 *db, mc_library *lib, const char *device_uid,
+                                const char *kind, const char *album) {
+  return album_credit(db, lib, device_uid, kind, album, NULL);
+}
+
+mc_status mc_profile_insert_row(sqlite3 *db, const char *device_uid, const char *kind,
+                                const char *ref) {
+  char row[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(row);
+  if (st != MC_OK) return st;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db,
+                         "INSERT INTO profile_items (uid, device_uid, kind, ref_uid)"
+                         " VALUES (?1, ?2, ?3, ?4)",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, row, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, device_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, kind, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 4, ref, -1, SQLITE_STATIC);
+  st = run(stmt);
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+mc_status mc_profile_album_back(sqlite3 *db, mc_library *lib, const char *device_uid,
+                                const char *album) {
+  mc_profile_item item = {.kind = MC_PROFILE_ALBUM};
+  memcpy(item.ref_uid, album, MC_UID_STRLEN);
+  mc_status st = delete_rows(db, lib, device_uid, MC_PLAN_EXCLUDE_ALBUM, &item);
+  if (st != MC_OK) return st;
+  int out = mc_profile_album_artist_row(db, lib, device_uid, MC_PLAN_EXCLUDE_ARTIST, album);
+  int kept = out > 0 ? mc_profile_has_row(db, lib, device_uid, MC_PLAN_KEEP_ALBUM, album) : 0;
+  if (out < 0 || kept < 0) return MC_ERR_DB;
+  return out && !kept ? mc_profile_insert_row(db, device_uid, MC_PLAN_KEEP_ALBUM, album) : MC_OK;
+}
+
+mc_status mc_profile_drop_keeps(sqlite3 *db, mc_library *lib, const char *device_uid,
+                                const char *artist) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(db, "SELECT DISTINCT ref_uid FROM profile_items WHERE device_uid = ?1"
+                             " AND kind = '" MC_PLAN_KEEP_ALBUM "'", -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, device_uid, -1, SQLITE_STATIC);
+  /* Collected first, as in delete_rows(). */
+  mc_profile_item *drop = NULL;
+  int n = 0, rc;
+  mc_status st = MC_OK;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *ref = (const char *)sqlite3_column_text(stmt, 0);
+    if (!is_uid(ref)) continue;
+    mc_profile_item it = {.kind = MC_PROFILE_ALBUM};
+    memcpy(it.ref_uid, ref, MC_UID_STRLEN);
+    if ((st = resolve_item(lib, &it)) != MC_OK) break;
+    int credited = album_credit(db, lib, device_uid, NULL, it.ref_uid, artist);
+    if (credited < 0) st = MC_ERR_DB;
+    if (credited <= 0) continue;
+    mc_profile_item *more = realloc(drop, (size_t)(n + 1) * sizeof *more);
+    if (!more) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    drop = more;
+    drop[n++] = it;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  for (int i = 0; st == MC_OK && i < n; i++)
+    st = delete_rows(db, lib, device_uid, MC_PLAN_KEEP_ALBUM, &drop[i]);
+  free(drop);
+  return st;
+}
+
 /* Deletes rows[i], and the rows after it (up to n) for the same thing, duplicates of one item;
  * returns the index after them. */
 static int delete_group(sqlite3_stmt *del, const stored_row *rows, int n, int i, mc_status *st) {
@@ -531,6 +659,8 @@ static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
       sqlite3_prepare_v2(db, "DELETE FROM profile_items WHERE uid = ?1", -1, &del, NULL) !=
         SQLITE_OK)
     st = MC_ERR_DB;
+  int artists_out = 0;
+  for (int k = nhave; k < nrows; k++) artists_out |= rows[k].item.kind == MC_PROFILE_ARTIST;
   int i = 0, j = 0;
   while (st == MC_OK && (i < nwant || j < nhave)) {
     int c = i == nwant ? 1 : j == nhave ? -1 : item_cmp(&want[i], &rows[j].item);
@@ -551,8 +681,16 @@ static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,
         while (first > nhave && !row_cmp(&rows[first - 1], ex)) first--;
         delete_group(del, rows, nrows, first, &st);
       }
+      /* An album of an artist removed comes back on its own; an artist takes its albums'
+       * special cases with it. Only worth a look if an artist is removed at all. */
+      if (st == MC_OK && artists_out && want[i].kind == MC_PROFILE_ALBUM)
+        st = mc_profile_album_back(db, lib, uid, want[i].ref_uid);
+      else if (st == MC_OK && ex && want[i].kind == MC_PROFILE_ARTIST)
+        st = mc_profile_drop_keeps(db, lib, uid, want[i].ref_uid);
       i++;
     } else if (c > 0) {
+      if (st == MC_OK && artists_out && rows[j].item.kind == MC_PROFILE_ALBUM)
+        st = delete_rows(db, lib, uid, MC_PLAN_KEEP_ALBUM, &rows[j].item);
       j = delete_group(del, rows, nhave, j, &st);
     } else {
       i++;
@@ -682,6 +820,54 @@ mc_status mc_sync_select_items(mc_sync *sync, const char *device_uid, mc_profile
   if (st == MC_OK && changed) st = mc_sync_set_profile(sync, device_uid, p);
   mc_sync_profile_free(p);
   free(want);
+  return st;
+}
+
+mc_status mc_sync_exclude_items(mc_sync *sync, const char *device_uid, mc_profile_item_kind kind,
+                                 const char (*uids)[MC_UID_STRLEN], int count, int on) {
+  if (!sync || !is_uid(device_uid) || (kind != MC_PROFILE_ALBUM && kind != MC_PROFILE_ARTIST) ||
+      count < 0 || (count && !uids))
+    return MC_ERR_INVALID_ARG;
+  for (int i = 0; i < count; i++)
+    if (!is_uid_field(uids[i])) return MC_ERR_INVALID_ARG;
+  const char *row_kind = kind == MC_PROFILE_ALBUM ? MC_PLAN_EXCLUDE_ALBUM : MC_PLAN_EXCLUDE_ARTIST;
+  mc_mutex_lock(&sync->api_lock);
+  mc_sync_db *sdb = sync->api.sdb;
+  sqlite3 *db = mc_sync_db_handle(sdb);
+  mc_library *lib = sync->api.lib;
+  mc_status st = mc_sync_db_begin_write(sdb);
+  if (st != MC_OK) {
+    mc_mutex_unlock(&sync->api_lock);
+    return st;
+  }
+  st = check_member(sdb, device_uid);
+  if (st == MC_OK) {
+    int archive = mc_archive_is(db, device_uid);
+    st = archive < 0 ? MC_ERR_DB : archive ? MC_ERR_LOCKED : MC_OK;
+  }
+  for (int i = 0; st == MC_OK && i < count; i++) {
+    mc_profile_item item = {.kind = kind};
+    memcpy(item.ref_uid, uids[i], MC_UID_STRLEN);
+    if ((st = resolve_item(lib, &item)) != MC_OK) break;
+    const char *ref = item.ref_uid;
+    if (on) {
+      int has = mc_profile_has_row(db, lib, device_uid, row_kind, ref);
+      if (has < 0) st = MC_ERR_DB;
+      if (st == MC_OK && !has) st = mc_profile_insert_row(db, device_uid, row_kind, ref);
+      if (st == MC_OK && kind == MC_PROFILE_ALBUM)
+        st = delete_rows(db, lib, device_uid, MC_PLAN_KEEP_ALBUM, &item);
+    } else if (kind == MC_PROFILE_ALBUM) {
+      st = mc_profile_album_back(db, lib, device_uid, ref);
+    } else {
+      st = delete_rows(db, lib, device_uid, row_kind, &item);
+    }
+    if (st == MC_OK && kind == MC_PROFILE_ARTIST)
+      st = mc_profile_drop_keeps(db, lib, device_uid, ref);
+  }
+  if (st == MC_OK) st = mc_sync_db_commit(sdb);
+  if (st != MC_OK) mc_sync_db_rollback(sdb);
+  mc_mutex_unlock(&sync->api_lock);
+  if (st == MC_OK && count) mc_sync_notify_changed(sync);
   return st;
 }
 
@@ -984,6 +1170,7 @@ mc_status mc_sync_estimate_profile(mc_sync *sync, const char *device_uid,
   out->shortfall_bytes = plan->shortfall_bytes;
   out->limit_bytes = plan->limit_bytes;
   out->free_bytes = free_bytes;
+  out->imports_dropped = plan->imports_dropped;
   for (int i = 0; i < MC_SYNC_ESTIMATE_STEPS; i++) out->step_bytes[i] = plan->step_bytes[i];
   mc_plan_free(plan);
   return MC_OK;
@@ -1038,14 +1225,14 @@ mc_status mc_profile_fingerprint(sqlite3 *db, const char *uid, char out[MC_PROFI
       }
       sqlite3_finalize(stmt);
     }
-    /* The stored rows as they are, of every kind, so devices of any version agree. While it
-     * syncs everything, only its exclusions (none, for versions without them). */
+    /* The stored rows as they are, of every kind. While it syncs everything, only its
+     * exclusions and the albums brought back from under them. */
     if (st == MC_OK && rc == SQLITE_ROW) {
       if (sqlite3_prepare_v2(db,
                              all ? "SELECT DISTINCT kind, ref_uid FROM profile_items"
                                    " WHERE device_uid = ?1 AND kind IN ('" MC_PLAN_EXCLUDE_ALBUM
                                    "', '" MC_PLAN_EXCLUDE_ARTIST "', '" MC_PLAN_EXCLUDE_TRACK
-                                   "') ORDER BY kind, ref_uid"
+                                   "', '" MC_PLAN_KEEP_ALBUM "') ORDER BY kind, ref_uid"
                                  : "SELECT DISTINCT kind, ref_uid FROM profile_items"
                                    " WHERE device_uid = ?1 ORDER BY kind, ref_uid",
                              -1, &stmt, NULL) != SQLITE_OK) {

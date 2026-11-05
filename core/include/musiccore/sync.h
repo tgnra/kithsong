@@ -719,6 +719,15 @@ mc_status mc_sync_set_profile(mc_sync *sync, const char *device_uid, const mc_sy
  * nothing changes. MC_ERR_INVALID_ARG and MC_ERR_NOT_FOUND as for mc_sync_set_profile(). */
 mc_status mc_sync_select_items(mc_sync *sync, const char *device_uid, mc_profile_item_kind kind,
                                const char (*uids)[MC_UID_STRLEN], int count, int on);
+/* What What to sync does with a tick under Sync everything, where all's ticked but what was
+ * removed: with on, excludes the albums or artists (MC_PROFILE_ALBUM or MC_PROFILE_ARTIST), as
+ * Remove from this device would (musiccore/sync_here.h) but leaving the files to the next
+ * sync; without, takes them out of mc_sync_profile.removed. An album removed only through its
+ * artist comes back alone. It changes the profile like any edit, for any member's profile.
+ * MC_ERR_LOCKED for an archive; MC_ERR_INVALID_ARG and MC_ERR_NOT_FOUND as for
+ * mc_sync_set_profile(). */
+mc_status mc_sync_exclude_items(mc_sync *sync, const char *device_uid, mc_profile_item_kind kind,
+                                const char (*uids)[MC_UID_STRLEN], int count, int on);
 
 /* --- Archives ---
  * An archive keeps the whole library as originals, and the group always has one. */
@@ -754,6 +763,9 @@ typedef struct mc_sync_estimate {
                             * plus what the device already holds of them if that's less;
                             * -1 without a budget or a limit */
   int64_t free_bytes;      /* the device's free space used, -1 if unknown */
+  int imports_dropped;     /* tracks imported on this device the profile leaves out, which go
+                            * from it once an archive has them; 0 for another device, whose
+                            * files only it knows */
   /* The wanted tracks' size as originals ([0]) and at each of mc_opus_bitrates ([1 + i]),
    * whatever the profile's format, so an editor can show every option. */
   int64_t step_bytes[MC_SYNC_ESTIMATE_STEPS];

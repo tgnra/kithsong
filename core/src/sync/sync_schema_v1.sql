@@ -60,7 +60,7 @@ CREATE TABLE profiles (
 CREATE TABLE profile_items (
   uid        TEXT PRIMARY KEY,
   device_uid TEXT NOT NULL,
-  kind       TEXT NOT NULL,     -- 'album', 'artist', 'album_group' or 'playlist'
+  kind       TEXT NOT NULL,     -- 'album', 'artist', 'album_group', 'playlist', or see sync/plan.h
   ref_uid    TEXT NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX profile_items_device ON profile_items (device_uid);

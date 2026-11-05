@@ -40,6 +40,25 @@ int mc_profile_other_archive_verified(sqlite3 *db, const char *uid, int64_t late
 mc_status mc_profile_delete_rows(sqlite3 *db, mc_library *lib, const char *device_uid,
                                  const char *kind, const mc_profile_item *item);
 
+/* Whether device_uid has a profile_items row of kind that resolves to uid (an album or artist,
+ * resolved). 1, 0, -1. */
+int mc_profile_has_row(sqlite3 *db, mc_library *lib, const char *device_uid, const char *kind,
+                       const char *uid);
+/* Whether an artist credited on album (resolved) has a row of kind. 1, 0, -1. */
+int mc_profile_album_artist_row(sqlite3 *db, mc_library *lib, const char *device_uid,
+                                const char *kind, const char *album);
+/* A new profile_items row, which the insert trigger logs for the group. */
+mc_status mc_profile_insert_row(sqlite3 *db, const char *device_uid, const char *kind,
+                                const char *ref);
+/* album back on device_uid: its exclusion goes, and with an artist of it removed, a keep_album
+ * row (sync/plan.h) goes in. In a write. */
+mc_status mc_profile_album_back(sqlite3 *db, mc_library *lib, const char *device_uid,
+                                const char *album);
+/* An artist's exclusion changed: the keep_album rows of its albums no longer apply. In a
+ * write. */
+mc_status mc_profile_drop_keeps(sqlite3 *db, mc_library *lib, const char *device_uid,
+                                const char *artist);
+
 /* "It writes archive = 1 again": if this device's own demotion is void, logs archive = 1
  * on its profile in a write of its own. *wrote (may be NULL) says whether it did. */
 mc_status mc_archive_restore(mc_sync_db *sdb, int *wrote);
