@@ -848,7 +848,9 @@ the plaintext limit.
     `file_rev` it was made from. A received original or transcode whose `file_rev` differs
     from its track's is stale: it doesn't count as holding the track, so the new file is
     fetched, and reconcile then deletes the stale copy as it would one in the wrong format
-    (an archive deletes it too, once the current original has arrived). Senders only offer
+    (an archive deletes it too, once the current original has arrived). The new copy lands
+    as `<name> (2).<ext>` if the stale one has its name, and takes the name once that's
+    gone. Senders only offer
     originals and transcodes whose `file_rev` is current, and the swapped file gets a new
     file uid, so no transcode cached for the old one is sent. An original imported on a
     device is never stale there: another device's better file doesn't replace it.

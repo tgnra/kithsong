@@ -2188,6 +2188,57 @@ static int archived(const mc_transfer *x, const char *track) {
          bsearch(track, x->archived, (size_t)x->narchived, sizeof *x->archived, uid_cmp) != NULL;
 }
 
+/* Whether path is name with " (<n>)" before its extension, as dest_path() makes it. */
+static int numbered_copy(const char *path, const char *name) {
+  const char *slash = strrchr(name, '/'), *dot = strrchr(name, '.');
+  size_t base = dot && (!slash || dot > slash) ? (size_t)(dot - name) : strlen(name);
+  if (strncmp(path, name, base) || strncmp(path + base, " (", 2)) return 0;
+  const char *p = path + base + 2;
+  size_t digits = strspn(p, "0123456789");
+  return digits && p[digits] == ')' && !strcmp(p + digits + 1, name + base);
+}
+
+/* Files row r moves to rel, a name no file has. */
+static void move_file(mc_library *lib, file_row *r, const char *rel) {
+  char *to = deletable_path(lib, rel), *from = deletable_path(lib, r->path), *path = mc_strdup(rel);
+  sqlite3_stmt *stmt = NULL;
+  if (to && from && path && !path_taken(lib, rel) && mc_library_begin_write(lib) == MC_OK) {
+    mc_status st = MC_ERR_DB;
+    if (sqlite3_prepare_v2(mc_library_db(lib), "UPDATE files SET path = ?2 WHERE uid = ?1", -1,
+                           &stmt, NULL) == SQLITE_OK) {
+      sqlite3_bind_text(stmt, 1, r->uid, -1, SQLITE_STATIC);
+      sqlite3_bind_text(stmt, 2, rel, -1, SQLITE_STATIC);
+      if (sqlite3_step(stmt) == SQLITE_DONE) st = mc_rename(from, to, 0);
+      sqlite3_finalize(stmt);
+    }
+    if (st == MC_OK) st = mc_library_commit(lib);
+    if (st != MC_OK) {
+      mc_library_rollback(lib);
+    } else {
+      free(r->path);
+      r->path = path;
+      path = NULL;
+    }
+  }
+  free(to);
+  free(from);
+  free(path);
+}
+
+/* Drops row r of rows, those of its track. If it was stale, a copy that replaced it found the
+ * name taken and landed as "<name> (2).<ext>", and takes the name now. */
+static void drop_row(mc_session *s, file_row *rows, int n, file_row *r) {
+  mc_library *lib = s->conn->lib;
+  if (drop_file(lib, r->uid, r->path) != MC_OK) return;
+  s->files_deleted++;
+  for (int j = 0; r->stale && j < n; j++) {
+    if (rows[j].stale || rows[j].kind == MC_FILE_IMPORTED || !numbered_copy(rows[j].path, r->path))
+      continue;
+    move_file(lib, &rows[j], r->path);
+    break;
+  }
+}
+
 /* Files of tracks no longer wanted, in the wrong format, or stale go. A wrong-format or
  * stale copy stays while the track has no good copy yet, so it stays playable; an original
  * imported here stays until an archive holds a verified copy. */
@@ -2210,7 +2261,7 @@ static void reconcile_files(mc_session *s, mc_transfer *x) {
                 (!r->stale && mc_plan_file_satisfies(t, r->kind, r->format, r->bitrate, r->size))))
         continue;
       if (r->kind == MC_FILE_IMPORTED && !archived(x, r->track)) continue;
-      if (drop_file(lib, r->uid, r->path) == MC_OK) s->files_deleted++;
+      drop_row(s, &rows[i], end - i, r);
     }
     i = end;
   }
@@ -2229,7 +2280,7 @@ static void drop_stale_on_archive(mc_session *s) {
     while (end < n && !strcmp(rows[end].track, rows[i].track)) end++;
     for (int j = i; j < end; j++) current |= !rows[j].stale && rows[j].kind != MC_FILE_TRANSCODE;
     for (int j = i; current && j < end; j++)
-      if (rows[j].stale && drop_file(lib, rows[j].uid, rows[j].path) == MC_OK) s->files_deleted++;
+      if (rows[j].stale) drop_row(s, &rows[i], end - i, &rows[j]);
     i = end;
   }
   rows_free(rows, n);

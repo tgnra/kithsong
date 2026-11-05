@@ -1487,6 +1487,12 @@ int main(int argc, char **argv) {
     CHECK(lib_int(&b, sql) == 1);
     snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE uid = '%s'", old_opus);
     CHECK(lib_int(&b, sql) == 0);
+    /* The new copy landed beside the old one, and has its name now that's gone. */
+    char b_rel[256];
+    snprintf(sql, sizeof sql, "SELECT path FROM files WHERE track_uid = '%s'", t1.uid);
+    query_text(mc_library_db(b.lib), sql, b_rel, sizeof b_rel);
+    CHECK_TEXT(b_rel, "Low/Things (1994)/01 Song One.opus");
+    CHECK(lib_file_exists(&b, b_rel));
     CHECK(files_match(&b));
     /* Settled: nothing more moves. */
     CHECK(sync_now(&a, &b, &ra, &rb) == MC_OK);
