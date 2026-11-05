@@ -58,6 +58,9 @@ int mc_folder_is_empty(const char *dir);
  * have them all count as orphans (see "Files" in docs/sync-protocol.md). For the routes where
  * the user picks a folder; an install already in such a folder keeps working. */
 int mc_folder_fits_library(const char *dir);
+/* Whether Create a new library may use dir: it's empty or missing, or holds nothing but a library
+ * with no tracks, as an earlier try leaves it. That library is opened as it is. */
+int mc_folder_takes_new_library(const char *dir);
 
 /* Bytes free for this user on the volume that holds dir, or would hold it: a folder that
  * doesn't exist yet is measured at its nearest existing parent. */

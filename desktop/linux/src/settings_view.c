@@ -117,7 +117,7 @@ static void on_folder_chosen(GObject *source, GAsyncResult *result, gpointer dat
   char *current = load_library_dir(c->settings_dir);
   gboolean switched = FALSE, saved = FALSE;
 
-  if (dir && (c->empty_only ? !mc_folder_is_empty(dir) : !mc_folder_fits_library(dir))) {
+  if (dir && (c->empty_only ? !mc_folder_takes_new_library(dir) : !mc_folder_fits_library(dir))) {
     char *text = c->empty_only ? NULL : mc_format_alloc(mc_str(MC_STR_FIRST_RUN_NOT_EMPTY), MC_S(dir));
     AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_LIBRARY_FOLDER), text ? text : mc_str(MC_STR_LIBRARY_NOT_EMPTY));
     mc_free(text);

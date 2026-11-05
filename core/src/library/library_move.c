@@ -261,6 +261,26 @@ int mc_folder_fits_library(const char *dir) {
   return holds;
 }
 
+static void count_other(void *user, const char *name, int is_dir) {
+  if (is_dir || !is_db_file(name)) ++*(int *)user;
+}
+
+int mc_folder_takes_new_library(const char *dir) {
+  if (mc_folder_is_empty(dir)) return 1;
+  int others = 0;
+  if (!mc_folder_fits_library(dir) || mc_list_dir(dir, count_other, &others) != MC_OK || others) return 0;
+  char *path = join(dir, MC_LIBRARY_DB_NAME);
+  sqlite3 *db = NULL;
+  sqlite3_stmt *stmt = NULL;
+  int empty = path && sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK &&
+              sqlite3_prepare_v2(db, "SELECT 1 FROM tracks LIMIT 1", -1, &stmt, NULL) == SQLITE_OK &&
+              sqlite3_step(stmt) == SQLITE_DONE;
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
+  free(path);
+  return empty;
+}
+
 mc_status mc_folder_free_space(const char *dir, int64_t *out) {
   if (!dir || !out) return MC_ERR_INVALID_ARG;
   char *full = mc_full_path(dir), *base = full ? existing_parent(full) : NULL;

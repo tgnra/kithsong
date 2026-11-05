@@ -161,6 +161,22 @@ static void test_checks(void) {
     path(fresh, sizeof fresh, "db-is-a-folder");
     CHECK(!mc_folder_fits_library(fresh));
   }
+  CHECK(!mc_folder_takes_new_library(dst));
+  CHECK(!mc_folder_takes_new_library(src)); /* a library with tracks */
+  {
+    /* An earlier try at a new library can be used again, unless something else came to be there. */
+    char fresh[1100];
+    path(fresh, sizeof fresh, "not-made-yet");
+    CHECK(mc_folder_takes_new_library(fresh));
+    path(fresh, sizeof fresh, "earlier-try");
+    mc_library *empty = NULL;
+    CHECK(mc_library_open(fresh, &empty) == MC_OK);
+    mc_library_close(empty);
+    CHECK(!mc_folder_is_empty(fresh));
+    CHECK(mc_folder_takes_new_library(fresh));
+    write_file("earlier-try/keep.txt", "keep");
+    CHECK(!mc_folder_takes_new_library(fresh));
+  }
   CHECK(mc_library_move_check(src, dst, &info) == MC_OK && info.problem == MC_MOVE_NOT_EMPTY);
   mc_library_move_result result;
   CHECK(mc_library_move(src, dst, NULL, NULL, NULL, &result) == MC_ERR_INVALID_ARG);
