@@ -85,7 +85,7 @@ void mc_lastfm_sign(const mc_lastfm_param *params, int count, const char *secret
 static mc_status error_status(int code) {
   switch (code) {
     case 4:  /* authentication failed */
-    case 9:  /* invalid session key */
+    case MC_LASTFM_ERROR_BAD_SESSION:
     case 10: /* invalid API key */
     case 13: /* invalid signature */
     case 14: /* token not yet authorised */

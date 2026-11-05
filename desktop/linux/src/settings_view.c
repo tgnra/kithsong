@@ -492,6 +492,9 @@ static void update_scrobble(settings_view *s) {
   } else if (have && !st.has_key) {
     g_string_append(text, mc_str(MC_STR_SCROBBLE_NO_KEY));
     enabled = FALSE;
+  } else if (have && st.last_error == MC_ERR_AUTH) {
+    mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_ENDED), MC_S(service));
+    g_string_append(text, line);
   } else {
     g_string_append(text, mc_str(MC_STR_SCROBBLE_SIGNED_OUT));
   }

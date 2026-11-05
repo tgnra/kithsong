@@ -95,7 +95,9 @@ typedef struct mc_scrobbler_status {
   int has_key;        /* 0 when the service has no API key: Last.fm in a build without one,
                        * where signing in fails with MC_ERR_AUTH; say so instead */
   mc_status last_error; /* of the last call to the service: MC_ERR_AUTH when it refused the
-                         * session (sign in again), MC_ERR_NET when it couldn't be reached */
+                         * session (sign in again), MC_ERR_NET when it couldn't be reached.
+                         * MC_ERR_AUTH with username NULL: it said the session has ended, as
+                         * when access is revoked there, so this signed out across the group */
 } mc_scrobbler_status;
 
 /* A snapshot; cheap. Release with mc_scrobbler_status_clear(). */

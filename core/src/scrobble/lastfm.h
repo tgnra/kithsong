@@ -63,6 +63,9 @@ typedef struct mc_scrobble {
   int duration_s;
 } mc_scrobble;
 
+/* The API error for a session key that's no longer good: the user revoked it on the service. */
+#define MC_LASTFM_ERROR_BAD_SESSION 9
+
 /* Each call sets *api_error to the service's error code, 0 when it gave none (success, or
  * it couldn't be reached). Its status says what to do about it: MC_ERR_AUTH for a refused
  * key, session or token (including one the user hasn't approved yet), MC_ERR_NET for a

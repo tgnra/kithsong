@@ -274,15 +274,14 @@ static void drop_flagged(sqlite3 *lib, sqlite3 *db) {
   sqlite3_finalize(del);
 }
 
-static mc_status now_playing(sqlite3 *lib, const mc_lastfm_service *svc, const char *uid) {
+static mc_status now_playing(sqlite3 *lib, const mc_lastfm_service *svc, const char *uid, int *api_error) {
   sqlite3_stmt *track = NULL;
   mc_status st = MC_OK;
   if (find_track(lib, uid, &track)) {
     mc_scrobble s = {0, text(track, 0), text(track, 1), text(track, 2), text(track, 3),
                      text(track, 6), sqlite3_column_int(track, 4),
                      (int)(sqlite3_column_int64(track, 5) / 1000)};
-    int api_error;
-    st = mc_lastfm_now_playing(svc, &s, &api_error);
+    st = mc_lastfm_now_playing(svc, &s, api_error);
   }
   sqlite3_finalize(track);
   return st;
@@ -291,8 +290,9 @@ static mc_status now_playing(sqlite3 *lib, const mc_lastfm_service *svc, const c
 /* Sends up to *batch of the oldest queued plays and takes the ones that are done off the
  * queue. *progress is 0 once there's nothing more to send. A batch the service won't take
  * is sent again a play at a time, and a single play it won't take is dropped. */
-static mc_status submit(sqlite3 *db, const mc_lastfm_service *svc, int *batch, int *progress) {
+static mc_status submit(sqlite3 *db, const mc_lastfm_service *svc, int *batch, int *progress, int *api_error) {
   *progress = 0;
+  *api_error = 0;
   char sql[160];
   snprintf(sql, sizeof sql, "DELETE FROM scrobble_queue WHERE played_at_s < %lld",
            (long long)(mc_wall_ms() / 1000) - MAX_AGE_S);
@@ -324,15 +324,15 @@ static mc_status submit(sqlite3 *db, const mc_lastfm_service *svc, int *batch, i
   }
   sqlite3_finalize(stmt);
 
-  int done[MC_LASTFM_BATCH] = {0}, api_error = 0;
-  if (st == MC_OK && n) st = mc_lastfm_scrobble(svc, plays, n, done, &api_error);
+  int done[MC_LASTFM_BATCH] = {0};
+  if (st == MC_OK && n) st = mc_lastfm_scrobble(svc, plays, n, done, api_error);
   int again = 0;
   if (st == MC_ERR_FORMAT && n > 1) {
     *batch = 1;
     again = 1;
     st = MC_OK;
   } else if (st == MC_ERR_FORMAT) {
-    fprintf(stderr, "musiccore: the service won't take a scrobble (error %d); dropped\n", api_error);
+    fprintf(stderr, "musiccore: the service won't take a scrobble (error %d); dropped\n", *api_error);
     done[0] = 1;
     st = MC_OK;
   } else if (st == MC_OK) {
@@ -381,6 +381,14 @@ static int quitting(mc_scrobbler *sc) {
   return quit;
 }
 
+/* Signs out because the service ended the session, unless a newer sign-in has replaced it.
+ * Queued plays wait for the next sign-in, as after signing out by hand. */
+static mc_status sign_out_session(mc_scrobbler *sc, const char *session_key) {
+  const char *texts[] = {session_key};
+  return write_account(sc, "UPDATE scrobble_account SET session_key = NULL, username = NULL"
+                           " WHERE uid = ?1 AND session_key = ?2", texts, 1);
+}
+
 /* The worker's calls stop when the scrobbler is freed. */
 static int worker_cancelled(void *user) {
   return quitting(user);
@@ -415,6 +423,7 @@ static void run(void *arg) {
   uint32_t backoff = 0;
   int batch = MC_LASTFM_BATCH;
   char *refused = NULL; /* a session key the service refused: not tried again */
+  char *ended = NULL;   /* the service (its API address) that ended the session, signing us out */
   mc_status last_error = open_st;
 
   mc_mutex_lock(&sc->lock);
@@ -440,6 +449,12 @@ static void run(void *arg) {
         refused = NULL;
         last_error = MC_OK;
       }
+      /* Said until they sign in again or move to another service. */
+      if (ended && (acc.session_key || strcmp(ended, acc.api_url))) {
+        free(ended);
+        ended = NULL;
+        last_error = MC_OK;
+      }
       const char *playing = NULL; /* only the newest matters */
       for (int i = 0; i < nreqs; i++) {
         if (reqs[i].started_ms < 0) playing = reqs[i].track_uid;
@@ -450,21 +465,30 @@ static void run(void *arg) {
       svc.cancel = &cancel;
       sending = acc.session_key && !refused && !quit;
       mc_status st = MC_OK;
-      int called = 0;
+      int called = 0, api_error = 0;
       if (sending && playing) {
-        st = now_playing(lib, &svc, playing);
+        st = now_playing(lib, &svc, playing, &api_error);
         called = 1;
       }
       if (sending && st != MC_ERR_AUTH && mc_mono_ms() >= next_try && !quitting(sc)) {
         int progress = 1;
         drop_flagged(lib, db);
-        while (progress && (st = submit(db, &svc, &batch, &progress)) == MC_OK && !quitting(sc)) {
+        while (progress && (st = submit(db, &svc, &batch, &progress, &api_error)) == MC_OK && !quitting(sc)) {
         }
         called = 1;
       }
       if (st == MC_ERR_AUTH) {
-        refused = mc_strdup(acc.session_key);
         sending = 0;
+        /* Revoked on the service. Any other refusal, of the API key say, isn't the account's. */
+        if (api_error == MC_LASTFM_ERROR_BAD_SESSION && sign_out_session(sc, acc.session_key) == MC_OK) {
+          free(ended);
+          ended = mc_strdup(acc.api_url);
+          free_wiped(acc.session_key);
+          free(acc.username);
+          acc.session_key = acc.username = NULL;
+        } else {
+          refused = mc_strdup(acc.session_key);
+        }
       } else if (st != MC_OK) { /* offline, the service down, or our own database */
         backoff = backoff ? backoff * 2 : BACKOFF_MIN_MS;
         if (backoff > BACKOFF_MAX_MS) backoff = BACKOFF_MAX_MS;
@@ -492,6 +516,7 @@ static void run(void *arg) {
   }
   mc_mutex_unlock(&sc->lock);
   free(refused);
+  free(ended);
   sqlite3_close_v2(lib);
   mc_sync_db_close(sdb);
 }
@@ -521,8 +546,8 @@ mc_status mc_scrobble_flush_once(sqlite3 *lib, sqlite3 *db, int *sent, int *left
     st = MC_ERR_AUTH;
   } else {
     mc_lastfm_service svc = service_of(&acc);
-    int batch = MC_LASTFM_BATCH, progress = 1;
-    while (progress && (st = submit(db, &svc, &batch, &progress)) == MC_OK) {
+    int batch = MC_LASTFM_BATCH, progress = 1, api_error;
+    while (progress && (st = submit(db, &svc, &batch, &progress, &api_error)) == MC_OK) {
     }
   }
   account_clear(&acc);

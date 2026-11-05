@@ -461,10 +461,17 @@ int main(int argc, char **argv) {
   CHECK(wait_status(sc, 0, MC_OK, 3000));
   CHECK(get(&scrobbled) == 64);
 
-  /* A refused session stops sending until the next sign-in, which sends what waited. */
+  /* A session revoked on the service signs out by itself and says why. What waited is
+   * kept, and goes after the next sign-in. */
   set(&answer, ANSWER_BAD_SESSION);
   CHECK(mc_scrobbler_scrobble(sc, T_OK, now) == MC_OK);
   CHECK(wait_status(sc, 1, MC_ERR_AUTH, 3000));
+  for (uint64_t end = mc_mono_ms() + 3000; (name = username(sc)) && mc_mono_ms() < end; mc_sleep_ms(10))
+    mc_free(name);
+  CHECK(!name);
+  mc_free(name);
+  mc_sleep_ms(200); /* it goes on saying so */
+  CHECK(wait_status(sc, 1, MC_ERR_AUTH, 0));
   mc_mutex_lock(&lock);
   session = "sk2";
   mc_mutex_unlock(&lock);

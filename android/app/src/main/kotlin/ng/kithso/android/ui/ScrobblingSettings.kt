@@ -84,6 +84,7 @@ fun ScrobblingSettings(scrobbling: Scrobbling) {
         state.timedOut -> stringResource(R.string.scrobble_sign_in_timed_out)
         state.failure != null -> stringResource(R.string.scrobble_sign_in_failed, statusText(context, state.failure!!))
         state.serviceFailure != null -> stringResource(R.string.scrobble_service_failed, statusText(context, state.serviceFailure!!))
+        state.username == null && state.lastError == CoreScrobbler.STATUS_AUTH -> stringResource(R.string.scrobble_ended, service)
         state.username == null -> null
         state.lastError == CoreScrobbler.STATUS_AUTH -> stringResource(R.string.scrobble_refused, service)
         state.lastError == CoreScrobbler.STATUS_NET -> stringResource(R.string.scrobble_offline, service)

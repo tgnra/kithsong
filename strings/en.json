@@ -796,6 +796,7 @@
     "scrobble_pending": { "one": "{0:d} play waiting to be sent", "other": "{0:d} plays waiting to be sent" },
     "scrobble_offline": { "text": "Can't reach {0} right now; plays are kept and sent later.", "note": "{0} is the service, e.g. Last.fm." },
     "scrobble_refused": { "text": "{0} turned down this sign-in. Sign out and sign in again.", "note": "{0} is the service, e.g. Last.fm." },
+    "scrobble_ended": { "text": "{0} ended this sign-in, so you're signed out. Waiting plays are sent when you sign in again.", "note": "{0} is the service, e.g. Last.fm. Shown when access was revoked on the service's website." },
     "scrobble_note": { "text": "Signing in opens {0} in your browser; Kithsong never sees your password. Signing in or out here does the same on your other devices when they sync.", "note": "{0} is the service, e.g. Last.fm." },
     "scrobble_change_service": { "text": "Use a different service…", "note": "A link in the Scrobbling settings; opens a dialog to choose Libre.fm or another service that works like Last.fm." },
     "scrobble_service_title": "Scrobbling service",

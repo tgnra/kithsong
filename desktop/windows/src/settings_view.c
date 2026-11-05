@@ -874,6 +874,8 @@ static void update_scrobble(void) {
   } else if (have && !st.has_key) {
     wcsncat(text, mc_wstr(MC_STR_SCROBBLE_NO_KEY), 511 - len);
     enabled = FALSE;
+  } else if (have && st.last_error == MC_ERR_AUTH) {
+    mc_wformat(text + len, 512 - len, mc_str(MC_STR_SCROBBLE_ENDED), MC_S(service));
   } else {
     wcsncat(text, mc_wstr(MC_STR_SCROBBLE_SIGNED_OUT), 511 - len);
   }
