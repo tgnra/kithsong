@@ -647,7 +647,7 @@ class Syncer(
                     copy(pairing = ended.copy(joined = false, merged = true, keptHere = true, scrobbleSignedOut = "tania_listens"))
                 }
                 "declined" -> update { copy(pairing = Pairing.Ended(peer, CoreSync.PairReason.MergeDeclined, true)) }
-                "mismatch" -> update { copy(pairing = Pairing.Ended(peer, CoreSync.PairReason.LibraryMismatch, true)) }
+                "mismatch" -> update { copy(pairing = Pairing.Ended(peer, CoreSync.PairReason.LibraryMismatch, true, why = CoreSync.PairWhy.NoMerge)) }
                 "progress" -> update { copy(merge = MergeState(CoreSync.MergePhase.Tracks, 12, 40)) }
                 "done" -> update { copy(merge = MergeState(result = done)) }
                 "failed" -> update { copy(merge = MergeState(result = done.copy(status = -4))) }
