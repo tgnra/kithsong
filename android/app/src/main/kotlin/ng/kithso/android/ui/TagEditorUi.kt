@@ -103,6 +103,7 @@ import ng.kithso.core.AlbumFlags
 import ng.kithso.core.AlbumTags
 import ng.kithso.core.ArtistTags
 import ng.kithso.core.CoreEdit
+import ng.kithso.core.EditWatch
 import ng.kithso.core.ReleaseInfo
 import ng.kithso.core.TrackTags
 import kotlinx.coroutines.launch
@@ -145,8 +146,8 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
     var message by mutableStateOf<String?>(null)
     var failed by mutableStateOf(false)
 
-    /** Save found a file in use while something plays: Stop playing and retry shows. */
-    var inUse by mutableStateOf(false)
+    /** Cancel was pressed during a save, which stops at the next file. */
+    var stopping by mutableStateOf(false)
 
     init {
         if (restored != null) {
@@ -260,13 +261,14 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
  *
  * Search MusicBrainz… opens a page over this one ([ReleaseSearchPage]), where using a release
  * fills in the form, MusicBrainz release included. Save calls only what changed, off the main
- * thread ([TagEditor.save]); nothing to save just closes. It can't be cancelled once it's
- * started, so back and Cancel wait for it, and the page stays open and says why if it fails.
+ * thread ([TagEditor.save]); nothing to save just closes. While it runs it says how many files it
+ * has copied, and back or Cancel stops it, once the file being copied is done, with nothing
+ * changed; the page stays open, and says why if it fails.
  * Back or Cancel with something changed asks first; the page doesn't swipe away.
  *
  * Android lets a file be replaced while it's open, so the track playing plays on from its old
  * file whatever the edit does, and the core reports a file in use only if the files kept
- * changing under it (the Stop playing and retry that follows is then Windows' own). But a queue
+ * changing under it. But a queue
  * knows its tracks by path, and an edit can move them, so once saved [playback]'s queue is
  * given their new paths and titles ([Playback.updateQueue]), and plays on undisturbed; one that
  * isn't any different is left alone. [onClose] closes the editor.
@@ -310,8 +312,12 @@ internal fun TagEditorScreen(editor: TagEditor, playback: Playback, target: TagT
             draggable = false,
         ) { dismiss ->
             val leave = { if (form.changed) asking = true else dismiss() }
-            BackHandler(enabled = !searching && (form.saving || form.changed)) { if (!form.saving) leave() }
-            TagPage(editor, playback, form, onLeave = { leave() }, onSaved = { dismiss() }, onSearch = { searching = true })
+            val stop = {
+                form.stopping = true
+                form.message = resources.getString(R.string.edit_stopping)
+            }
+            BackHandler(enabled = !searching && (form.saving || form.changed)) { if (form.saving) stop() else leave() }
+            TagPage(editor, playback, form, onLeave = { if (form.saving) stop() else leave() }, onSaved = { dismiss() }, onSearch = { searching = true })
             if (asking) {
                 AlertDialog(
                     onDismissRequest = { asking = false },
@@ -398,11 +404,17 @@ private fun TagPage(
     val saveAs: (TagValues) -> Unit = saveAs@{ now ->
         val was = form.saved ?: return@saveAs
         form.saving = true
-        form.inUse = false
         form.failed = false
         form.message = resources.getString(R.string.edit_saving)
+        val watch = object : EditWatch {
+            override fun progress(done: Int, total: Int) {
+                if (!form.stopping) form.message = resources.getString(R.string.edit_saving_files, done, total)
+            }
+
+            override fun cancelled() = form.stopping
+        }
         scope.launch {
-            val result = editor.save(form.target, was, now)
+            val result = editor.save(form.target, was, now, watch)
             form.saved = result.saved // what did get saved is saved: a second try leaves it out
             if (result.saved != was) {
                 val queue = playback.queueTracks
@@ -413,15 +425,18 @@ private fun TagPage(
                 }
             }
             form.saving = false
+            form.stopping = false
             if (result.status == 0) {
                 form.message = null
                 onSaved()
             } else {
-                form.failed = true
-                form.message = if (result.status == CoreEdit.ERR_NOT_FOUND) resources.getString(R.string.edit_gone)
-                else resources.getString(R.string.edit_save_failed, CoreEdit.statusText(result.status))
-                // Nothing changed, and it may yet be the track playing; a cover isn't played.
-                form.inUse = result.status == CoreEdit.ERR_IN_USE && !result.artTried && playback.queueUids.isNotEmpty()
+                form.failed = result.status != CoreEdit.ERR_CANCELLED
+                form.message = when (result.status) {
+                    CoreEdit.ERR_NOT_FOUND -> resources.getString(R.string.edit_gone)
+                    CoreEdit.ERR_IN_USE -> resources.getString(R.string.edit_in_use)
+                    CoreEdit.ERR_CANCELLED -> resources.getString(R.string.edit_save_stopped)
+                    else -> resources.getString(R.string.edit_save_failed, CoreEdit.statusText(result.status))
+                }
             }
         }
     }
@@ -471,7 +486,7 @@ private fun TagPage(
     TagFrame(
         stringResource(title),
         start = {
-            TextButton(onClick = onLeave, enabled = !form.saving) { Text(stringResource(R.string.cancel)) }
+            TextButton(onClick = onLeave, enabled = !form.stopping) { Text(stringResource(R.string.cancel)) }
         },
         end = {
             TextButton(onClick = save, enabled = form.editable) { Text(stringResource(R.string.save)) }
@@ -479,24 +494,15 @@ private fun TagPage(
     ) {
         if (form.saving) LinearProgressIndicator(Modifier.fillMaxWidth())
         form.message?.let { message ->
-            Column(Modifier.fillMaxWidth().widthIn(max = MaxFormWidth).padding(horizontal = 16.dp, vertical = 8.dp)) {
-                Text(
-                    message,
-                    color = if (form.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
-                )
-                if (form.inUse) {
-                    OutlinedButton(
-                        onClick = {
-                            playback.clear() // lets go of the file now, so the save can have it
-                            save()
-                        },
-                        modifier = Modifier.padding(top = 8.dp),
-                    ) {
-                        Text(stringResource(R.string.edit_stop_retry))
-                    }
-                }
-            }
+            Text(
+                message,
+                color = if (form.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = MaxFormWidth)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .semantics { liveRegion = LiveRegionMode.Assertive },
+            )
         }
         Column(
             Modifier

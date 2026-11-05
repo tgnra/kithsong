@@ -400,3 +400,71 @@ JNIEXPORT jstring JNICALL Java_ng_kithso_core_EditNatives_nativeStatusText(JNIEn
   (void)cls;
   return tag_string(env, mc_status_str((mc_status)status));
 }
+
+/* mc_edit_set_watch() on an EditWatch. The core keeps the pointer, so it's kept here until the
+ * watch ends. */
+typedef struct jni_edit_watch {
+  mc_edit_watch watch;
+  JavaVM *vm;
+  jobject object; /* global ref */
+  jmethodID progress, cancelled;
+} jni_edit_watch;
+
+/* On the thread of the edit, the JVM's, which needn't be the one that started the watch. */
+static JNIEnv *watch_env(jni_edit_watch *w) {
+  JNIEnv *env = NULL;
+  return (*w->vm)->GetEnv(w->vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK ? env : NULL;
+}
+
+static void watch_progress(void *user, int done, int total) {
+  jni_edit_watch *w = user;
+  JNIEnv *env = watch_env(w);
+  if (!env) return;
+  (*env)->CallVoidMethod(env, w->object, w->progress, (jint)done, (jint)total);
+  if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
+static int watch_cancelled(void *user) {
+  jni_edit_watch *w = user;
+  JNIEnv *env = watch_env(w);
+  if (!env) return 0;
+  jboolean stop = (*env)->CallBooleanMethod(env, w->object, w->cancelled);
+  if ((*env)->ExceptionCheck(env)) {
+    (*env)->ExceptionClear(env);
+    return 0;
+  }
+  return stop == JNI_TRUE;
+}
+
+/* Returns what nativeEndWatch takes. */
+JNIEXPORT jlong JNICALL Java_ng_kithso_core_EditNatives_nativeStartWatch(JNIEnv *env, jclass cls, jlong handle,
+                                                                        jobject watch) {
+  (void)cls;
+  jclass type = (*env)->GetObjectClass(env, watch);
+  jmethodID progress = (*env)->GetMethodID(env, type, "progress", "(II)V");
+  jmethodID cancelled = progress ? (*env)->GetMethodID(env, type, "cancelled", "()Z") : NULL;
+  if (!cancelled) return 0; /* with an exception pending */
+  jni_edit_watch *w = calloc(1, sizeof *w);
+  if (!w) {
+    throw_status(env, MC_ERR_NOMEM);
+    return 0;
+  }
+  (*env)->GetJavaVM(env, &w->vm);
+  w->object = (*env)->NewGlobalRef(env, watch);
+  w->progress = progress;
+  w->cancelled = cancelled;
+  w->watch.progress = watch_progress;
+  w->watch.cancelled = watch_cancelled;
+  w->watch.user = w;
+  mc_edit_set_watch(jni_lib_of(handle), &w->watch);
+  return (jlong)(intptr_t)w;
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeEndWatch(JNIEnv *env, jclass cls, jlong handle,
+                                                                      jlong watch) {
+  (void)cls;
+  jni_edit_watch *w = (jni_edit_watch *)(intptr_t)watch;
+  mc_edit_set_watch(jni_lib_of(handle), NULL);
+  (*env)->DeleteGlobalRef(env, w->object);
+  free(w);
+}

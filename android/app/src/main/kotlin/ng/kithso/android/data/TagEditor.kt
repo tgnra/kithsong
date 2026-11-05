@@ -7,6 +7,7 @@ import ng.kithso.core.AlbumTags
 import ng.kithso.core.ArtistTags
 import ng.kithso.core.CoreEdit
 import ng.kithso.core.CoreLibrary
+import ng.kithso.core.EditWatch
 import ng.kithso.core.MusicCoreException
 import ng.kithso.core.ReleaseInfo
 import ng.kithso.core.TrackTags
@@ -27,6 +28,7 @@ import ng.kithso.core.setTrackMix
 import ng.kithso.core.setTrackTags
 import ng.kithso.core.trackMix
 import ng.kithso.core.trackTags
+import ng.kithso.core.watchingEdits
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -74,10 +76,10 @@ sealed interface TagResult<out T> {
 
 /**
  * How a save went: [saved] is what the library has now, and [status] the failure, 0 if there was
- * none. [artTried]: it had got as far as the cover, so a file in use isn't one being played.
+ * none.
  */
 @Immutable
-data class TagSave(val saved: TagValues, val status: Int, val artTried: Boolean = false)
+data class TagSave(val saved: TagValues, val status: Int)
 
 /** All of [stream], or null if that's more than [limit] bytes. */
 internal fun readAtMost(stream: InputStream, limit: Int): ByteArray? {
@@ -104,9 +106,10 @@ interface TagEditor {
      * Saves what changed from [was] to [now]: the tags, then an album's flags or a single's mix,
      * then an album's new cover, last as the tags can move its folder. A failure can leave some
      * saved and not the rest, which [TagSave.saved] says, for a second try to leave them out.
-     * It's seen through, and the library read again, even if the caller goes.
+     * It's seen through, and the library read again, even if the caller goes; [watch] follows
+     * it, and can stop it while it copies files.
      */
-    suspend fun save(target: TagTarget, was: TagValues, now: TagValues): TagSave
+    suspend fun save(target: TagTarget, was: TagValues, now: TagValues, watch: EditWatch): TagSave
 
     /**
      * What [open] gives, if it makes a cover, set aside for album [albumUid] to keep on Save and
@@ -179,46 +182,45 @@ class CoreTagEditor(
     }
 
     // In [scope], so it's seen through and the library read again even if the screen goes away.
-    override suspend fun save(target: TagTarget, was: TagValues, now: TagValues): TagSave = scope.async(saving) {
+    override suspend fun save(target: TagTarget, was: TagValues, now: TagValues, watch: EditWatch): TagSave = scope.async(saving) {
         var saved = was
         var status = 0
-        var artTried = false
         try {
             val lib = saveLib ?: CoreLibrary(dir.path).also { saveLib = it }
-            when {
-                was is TagValues.Album && now is TagValues.Album -> {
-                    if (now.tags != was.tags) {
-                        lib.setAlbumTags(target.uid, now.tags)
-                        saved = was.copy(tags = now.tags)
+            lib.watchingEdits(watch) {
+                when {
+                    was is TagValues.Album && now is TagValues.Album -> {
+                        if (now.tags != was.tags) {
+                            lib.setAlbumTags(target.uid, now.tags)
+                            saved = was.copy(tags = now.tags)
+                        }
+                        if (now.flags != was.flags) {
+                            lib.setAlbumFlags(target.uid, now.flags)
+                            saved = (saved as TagValues.Album).copy(flags = now.flags)
+                        }
+                        val art = now.newArt?.file
+                        if (art != null && now.newArt != was.newArt) {
+                            lib.setAlbumArt(target.uid, File(art).readBytes())
+                            saved = now
+                        } else if (now.resetArt && !was.resetArt) {
+                            lib.resetAlbumArt(target.uid)
+                            saved = now
+                        }
                     }
-                    if (now.flags != was.flags) {
-                        lib.setAlbumFlags(target.uid, now.flags)
-                        saved = (saved as TagValues.Album).copy(flags = now.flags)
-                    }
-                    val art = now.newArt?.file
-                    if (art != null && now.newArt != was.newArt) {
-                        artTried = true
-                        lib.setAlbumArt(target.uid, File(art).readBytes())
+                    was is TagValues.Artist && now is TagValues.Artist -> {
+                        if (now.mergeWith != null) lib.mergeArtists(target.uid, now.mergeWith)
+                        else lib.setArtistTags(target.uid, now.tags)
                         saved = now
-                    } else if (now.resetArt && !was.resetArt) {
-                        artTried = true
-                        lib.resetAlbumArt(target.uid)
-                        saved = now
                     }
-                }
-                was is TagValues.Artist && now is TagValues.Artist -> {
-                    if (now.mergeWith != null) lib.mergeArtists(target.uid, now.mergeWith)
-                    else lib.setArtistTags(target.uid, now.tags)
-                    saved = now
-                }
-                was is TagValues.Track && now is TagValues.Track -> {
-                    if (now.tags != was.tags) {
-                        lib.setTrackTags(target.uid, now.tags)
-                        saved = was.copy(tags = now.tags)
-                    }
-                    if (now.mix != was.mix) {
-                        lib.setTrackMix(target.uid, now.mix)
-                        saved = now
+                    was is TagValues.Track && now is TagValues.Track -> {
+                        if (now.tags != was.tags) {
+                            lib.setTrackTags(target.uid, now.tags)
+                            saved = was.copy(tags = now.tags)
+                        }
+                        if (now.mix != was.mix) {
+                            lib.setTrackMix(target.uid, now.mix)
+                            saved = now
+                        }
                     }
                 }
             }
@@ -231,7 +233,7 @@ class CoreTagEditor(
             status = CoreEdit.ERR_IO
         }
         if (saved != was) changed()
-        TagSave(saved, status, artTried)
+        TagSave(saved, status)
     }.await()
 
     override suspend fun takeCover(albumUid: String, open: () -> InputStream?): ArtRef? = withContext(Dispatchers.IO) {

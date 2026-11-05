@@ -1026,7 +1026,7 @@ static GtkWidget *build_header(void) {
   v.more = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(v.more), "view-more-symbolic");
   gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(v.more), make_artist_menu, NULL, NULL);
-  gtk_widget_set_tooltip_text(v.more, mc_str(MC_STR_LINUX_ARTIST_MENU));
+  gtk_widget_set_tooltip_text(v.more, mc_str(MC_STR_ARTIST_MENU));
   gtk_widget_add_css_class(v.more, "flat");
   gtk_widget_add_css_class(v.more, "circular");
   gtk_widget_set_valign(v.more, GTK_ALIGN_START);

@@ -43,6 +43,15 @@ data class ReleaseInfo(
     val score: Double,
 )
 
+/**
+ * What an edit asks while it runs (mc_edit_watch), on the thread of the edit: how far it is, in
+ * files copied of those to copy, and whether to stop, which gives [CoreEdit.ERR_CANCELLED].
+ */
+interface EditWatch {
+    fun progress(done: Int, total: Int)
+    fun cancelled(): Boolean
+}
+
 object CoreEdit {
     /** MC_ERR_IO: a file couldn't be read or written. Nothing has changed. */
     const val ERR_IO = -4
@@ -67,6 +76,16 @@ object CoreEdit {
 
     /** Throws if [image] can't be a cover. It's decoded, so a big one takes a moment: not on the main thread. */
     fun checkAlbumArt(image: ByteArray) = EditNatives.nativeCheckAlbumArt(image)
+}
+
+/** Runs [edits], calls on this connection that change the library, with [watch] looking on. */
+fun <T> CoreLibrary.watchingEdits(watch: EditWatch, edits: () -> T): T {
+    val started = EditNatives.nativeStartWatch(handle, watch)
+    try {
+        return edits()
+    } finally {
+        EditNatives.nativeEndWatch(handle, started)
+    }
 }
 
 fun CoreLibrary.albumTags(uid: String): AlbumTags = EditNatives.nativeAlbumTags(handle, uid)
@@ -128,6 +147,8 @@ internal object EditNatives {
         System.loadLibrary("kithsong_jni")
     }
 
+    @JvmStatic external fun nativeStartWatch(handle: Long, watch: EditWatch): Long
+    @JvmStatic external fun nativeEndWatch(handle: Long, started: Long)
     @JvmStatic external fun nativeAlbumTags(handle: Long, uid: String): AlbumTags
     @JvmStatic external fun nativeSetAlbumTags(
         handle: Long, uid: String, title: ByteArray, artist: ByteArray, year: Int, originalYear: Int, mbAlbumId: String,

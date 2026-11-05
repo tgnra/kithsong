@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import ng.kithso.android.data.Album
 import ng.kithso.android.data.AlbumGroup
+import ng.kithso.android.data.Artist
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.Playlist
@@ -88,8 +89,9 @@ import kotlinx.coroutines.launch
  * ([PlaylistActions.albumMenu]), which in a manual album group can take it out. As on the
  * desktops, an album group has Play, Shuffle albums (its albums in a random order, each one's
  * tracks in theirs) and Shuffle tracks. A smart list in random order has a button
- * to reshuffle it, and a smart list a menu button for Edit rules…, Rename… and Delete. [onBack]
- * slides the screen away; it is also dismissed by swiping right.
+ * to reshuffle it, and a smart list a menu button for Edit rules…, Rename… and Delete. An album
+ * and an artist have a menu button too, with what a long press opens elsewhere. [onBack] slides
+ * the screen away, as happens once the artist or list has gone; so does swiping right.
  *
  * A manual playlist has an Edit button, which shows each track with a button to remove it and
  * a handle to drag it elsewhere, until Done. Each change is made as it happens, and the list as
@@ -146,6 +148,11 @@ fun DetailScreen(
     // read, so it may come later.
     val library by source.library.collectAsState()
     val picture = remember(library, ref) { library?.artOf(ref) }
+    // Merged into another artist, here or by a sync, or its last track gone: nothing to show.
+    val artistGone = remember(library, ref) {
+        ref.kind == CollectionRef.Kind.Artist && library?.artists?.none { it.uid == ref.uid } == true
+    }
+    LaunchedEffect(artistGone) { if (artistGone) onBack() }
     val list = loaded?.let { if (picture != null) it.copy(art = picture) else it }
     val tracks = edited ?: list?.tracks.orEmpty()
     val albums = editedAlbums ?: list?.albums.orEmpty()
@@ -259,6 +266,11 @@ fun DetailScreen(
                             ref.kind == CollectionRef.Kind.Album -> ({
                                 actions.albumMenu(Album(ref.uid, list.title, list.artist, list.year, list.art), inGroup = ref.group)
                             })
+                            ref.kind == CollectionRef.Kind.Artist -> ({
+                                actions.artistMenu(
+                                    library?.artists?.firstOrNull { it.uid == ref.uid } ?: Artist(ref.uid, list.title, list.albumCount, list.art),
+                                )
+                            })
                             smart && ref.kind == CollectionRef.Kind.Playlist -> ({
                                 actions.playlistMenu(
                                     library?.playlists?.firstOrNull { it.uid == ref.uid } ?: Playlist(ref.uid, list.title, tracks.size, list.art),
@@ -273,6 +285,7 @@ fun DetailScreen(
                         },
                         menuDescription = stringResource(
                             when {
+                                ref.kind == CollectionRef.Kind.Artist -> R.string.artist_menu
                                 !smart -> R.string.album_menu
                                 ref.kind == CollectionRef.Kind.Playlist -> R.string.smart_playlist_menu
                                 else -> R.string.smart_group_menu
