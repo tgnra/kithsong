@@ -16,11 +16,10 @@
  * section, and the sections are in the order of their best hit, so the top result's kind
  * comes first. The results scroll beneath the box, with the album grid's overlay scrollbar.
  *
- * Clicking a result, or Enter on it, opens it (SVN_OPEN): artists, albums, playable
- * playlists and album groups (smart ones too) on their pages, tracks on their album with
- * the track selected. Down in the
- * box moves the focus to the first result; the arrow keys, Home and End move it through the results,
- * and Up from the first goes back to the box.
+ * Clicking a result, or Enter on it, opens it (SVN_OPEN): artists, albums, playable playlists
+ * and album groups (smart ones whether playable or not) on their pages, tracks on their album
+ * with the track selected. Down in the box moves the focus to the first result; the arrow keys,
+ * Home and End move it through the results, and Up from the first goes back to the box.
  *
  * Covers are decoded on the UI thread, one per message, so typing isn't held up by them.
  * Screen readers see a list for each section (uia.h). */

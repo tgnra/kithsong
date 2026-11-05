@@ -97,6 +97,8 @@ static struct {
   int nalbums;
   char (*playlists)[MC_UID_STRLEN]; /* the playable ones' uids, sorted */
   int nplaylists;
+  char (*groups)[MC_UID_STRLEN]; /* the manual album groups the grid shows, the same */
+  int ngroups;
 
   hit *hits; /* grouped by section, in the sections' order */
   int nhits;
@@ -147,9 +149,11 @@ static void free_lists(void) {
   for (int i = 0; i < v.nalbums; i++) free(v.albums[i].cover_dir);
   free(v.albums);
   free(v.playlists);
+  free(v.groups);
   v.albums = NULL;
   v.playlists = NULL;
-  v.nalbums = v.nplaylists = 0;
+  v.groups = NULL;
+  v.nalbums = v.nplaylists = v.ngroups = 0;
 }
 
 static int album_cmp(const void *a, const void *b) {
@@ -186,6 +190,15 @@ static void load_lists(void) {
     memcpy(v.playlists[v.nplaylists++], playlists->items[i].uid, MC_UID_STRLEN);
   if (v.nplaylists) qsort(v.playlists, (size_t)v.nplaylists, sizeof *v.playlists, uid_cmp);
   mc_playlist_list_free(playlists);
+
+  /* So are the album groups, and for the same reason: one empty only here has nothing to show. */
+  mc_album_group_list *groups = NULL;
+  if (v.lib && mc_library_list_album_groups(v.lib, MC_LIST_PLAYABLE, &groups) != MC_OK) groups = NULL;
+  n = groups ? groups->count : 0;
+  v.groups = n ? calloc((size_t)n, sizeof *v.groups) : NULL;
+  for (int i = 0; v.groups && i < n; i++) memcpy(v.groups[v.ngroups++], groups->items[i].uid, MC_UID_STRLEN);
+  if (v.ngroups) qsort(v.groups, (size_t)v.ngroups, sizeof *v.groups, uid_cmp);
+  mc_album_group_list_free(groups);
 }
 
 static const album_ref *find_album(const char *uid) {
@@ -193,6 +206,10 @@ static const album_ref *find_album(const char *uid) {
   album_ref key;
   memcpy(key.uid, uid, MC_UID_STRLEN);
   return bsearch(&key, v.albums, (size_t)v.nalbums, sizeof *v.albums, album_cmp);
+}
+
+static BOOL playable_group(const char *uid) {
+  return v.ngroups && bsearch(uid, v.groups, (size_t)v.ngroups, sizeof *v.groups, uid_cmp) != NULL;
 }
 
 static BOOL playable_playlist(const char *uid) {
@@ -410,7 +427,7 @@ static void show_results(BOOL keep) {
         case MC_SEARCH_ALBUM: h->opens = TRUE; break;
         case MC_SEARCH_TRACK: h->opens = find_album(r->album_uid) != NULL; break;
         case MC_SEARCH_PLAYLIST: h->opens = r->is_smart || playable_playlist(r->uid); break;
-        case MC_SEARCH_ALBUM_GROUP: h->opens = TRUE; break;
+        case MC_SEARCH_ALBUM_GROUP: h->opens = r->is_smart || playable_group(r->uid); break;
         default: h->opens = FALSE; break; /* no page for it here yet */
       }
       if (album && album->cover_dir) h->cover_dir = _wcsdup(album->cover_dir);
