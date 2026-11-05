@@ -522,7 +522,8 @@ follow on this device only.
   edits that don't change its place. Transcodes move too. The cover is copied to the album's new
   folder unless it has one, and folders left empty or holding only a cover go, as usual. `files`
   doesn't sync, so only the device that made the edit moves anything. A disc number past the
-  album's last raises `disc_total`, which renames all its files; nothing lowers it.
+  album's last raises `disc_total`, which renames all its files; taking the last track off the
+  album's last disc lowers it to the last disc with a track, which renames them again.
 - **All or nothing.** A failed copy, tag write or rename leaves rows and files exactly as they
   were. Neither goes first. In a write transaction the rows change, what that means for each
   file is worked out by comparing tags and paths before and after, and it's rolled back. With no

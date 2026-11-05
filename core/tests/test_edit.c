@@ -816,6 +816,17 @@ static void test_filing(const char *base) {
   CHECK(tags.disc_total == 2);
   mc_tags_clear(&tags);
   CHECK(files_check_out(&l));
+
+  /* And back: nothing's left on the second disc, so the album hasn't one. */
+  CHECK(mc_track_tags_get(l.lib, second, &t) == MC_OK);
+  t.disc_no = 1;
+  t.track_no = 2;
+  CHECK(mc_track_tags_set(l.lib, second, &t) == MC_OK);
+  mc_track_tags_clear(&t);
+  CHECK(q_int(&l, "SELECT disc_total FROM albums WHERE uid = ?1", album, NULL) == 1);
+  CHECK_STR(path_of(&l, second), "Ann/Taken (2000)/02 Two.wav");
+  CHECK_STR(path_of(&l, moved), "Ann/Taken (2000)/01 What_ Why_How.wav");
+  CHECK(files_check_out(&l));
   lib_close(&l);
 
   /* Two tracks trading places: each one's new name is the other's old one. */

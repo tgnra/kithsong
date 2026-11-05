@@ -1971,6 +1971,19 @@ static mc_status track_apply(mc_library *lib, void *user) {
     }
     st = step_done(stmt);
   }
+  /* And the last track gone from its last disc: it has fewer, down to the last with a track. A
+   * release's total above the discs that are here isn't touched, as the edit didn't empty it. */
+  if (st == MC_OK && *cur.album_uid && cur.tags.disc_no > 1 && t->disc_no < cur.tags.disc_no) {
+    sqlite3_stmt *stmt = prepare(lib, "UPDATE albums SET disc_total ="
+                                      " (SELECT max(1, coalesce(max(disc_no), 1)) FROM tracks WHERE album_uid = ?1)"
+                                      " WHERE uid = ?1 AND disc_total = ?2 AND NOT EXISTS"
+                                      " (SELECT 1 FROM tracks WHERE album_uid = ?1 AND disc_no >= ?2)");
+    if (stmt) {
+      bind_str(stmt, 1, cur.album_uid);
+      sqlite3_bind_int(stmt, 2, cur.tags.disc_no);
+    }
+    st = step_done(stmt);
+  }
   if (st == MC_OK) st = delete_unused_artists(lib, &artists);
   free(artists.items);
   track_row_clear(&cur);
