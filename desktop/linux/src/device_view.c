@@ -113,6 +113,7 @@ static struct {
   mc_status profile_status;
   GHashTable *sel[NUM_TABS]; /* the selected uids of each kind */
   GHashTable *removed_items[NUM_TABS]; /* removed from the device: Select all leaves them out */
+  GThread *select_thread; /* Select all or Select none, storing the rows */
 
   int tab, rows_tab; /* rows_tab: the tab the list holds, -1 for none */
   mc_status rows_status;
@@ -1041,8 +1042,17 @@ static void estimate_request(void) {
 }
 
 /* Waits for the thread and drops its result: before sync goes. */
+/* Lets a press of Select all or Select none being stored finish: what's edited next is read
+ * after it. */
+static void select_wait(void) {
+  if (!g_dv.select_thread) return;
+  g_thread_join(g_dv.select_thread);
+  g_dv.select_thread = NULL;
+}
+
 static void estimate_cancel(void) {
   g_clear_handle_id(&g_dv.estimate_source, g_source_remove);
+  select_wait(); /* it uses sync too; its idle frees the job, seeing it's no longer current */
   if (g_dv.est.thread) {
     g_thread_join(g_dv.est.thread); /* its idle frees the job, seeing it's no longer current */
     g_dv.est.thread = NULL;
@@ -1072,6 +1082,7 @@ static void show_stored(mc_status st) {
 /* Applies the pending edits now: get, change, set. */
 static void flush(void) {
   g_clear_handle_id(&g_dv.apply_source, g_source_remove);
+  select_wait();
   if (!pending_any() || !g_dv.sync) {
     pending_clear();
     return;
@@ -1405,11 +1416,39 @@ static gboolean exclude_tick(gpointer data) {
   return G_SOURCE_REMOVE;
 }
 
+/* One press: a long list takes seconds to store, and the window has to stay alive for it. */
+typedef struct select_job {
+  mc_sync *sync;
+  char uid[MC_UID_STRLEN];
+  mc_profile_item_kind kind;
+  char (*rows)[MC_UID_STRLEN];
+  int count, on;
+  mc_status status;
+} select_job;
+
+static gboolean select_done(gpointer data) {
+  select_job *job = data;
+  select_wait();
+  if (job->sync == g_dv.sync && !strcmp(job->uid, g_dv.uid)) show_stored(job->status);
+  g_free(job->rows);
+  g_free(job);
+  return G_SOURCE_REMOVE;
+}
+
+static gpointer select_main(gpointer data) {
+  select_job *job = data;
+  job->status = mc_sync_select_items(job->sync, job->uid, job->kind, (const char(*)[MC_UID_STRLEN])job->rows,
+                                     job->count, job->on);
+  g_idle_add(select_done, job);
+  return NULL;
+}
+
 /* Select all and Select none: the rows shown, stored at once as one write rather than waiting
- * as a toggle each, which a long list couldn't afford. Edits made before them go first. */
+ * as a toggle each, which a long list couldn't afford, and on a thread of its own. Edits made
+ * before them go first. A press while one is being stored does nothing. */
 static void on_select_clicked(GtkButton *button, gpointer data) {
   (void)button;
-  if (g_dv.rows_tab < 0 || !g_dv.sync || !editable()) return;
+  if (g_dv.rows_tab < 0 || !g_dv.sync || !editable() || g_dv.select_thread) return;
   flush(); /* may fill the list again */
   guint n = g_list_model_get_n_items(G_LIST_MODEL(g_dv.store));
   if (!n) return;
@@ -1419,10 +1458,14 @@ static void on_select_clicked(GtkButton *button, gpointer data) {
     memcpy(uids[i], item->uid, MC_UID_STRLEN);
     g_object_unref(item);
   }
-  mc_status st = mc_sync_select_items(g_dv.sync, g_dv.uid, k_tab_kind[g_dv.rows_tab],
-                                      (const char(*)[MC_UID_STRLEN])uids, (int)n, GPOINTER_TO_INT(data));
-  g_free(uids);
-  show_stored(st);
+  select_job *job = g_new0(select_job, 1);
+  job->sync = g_dv.sync;
+  memcpy(job->uid, g_dv.uid, MC_UID_STRLEN);
+  job->kind = k_tab_kind[g_dv.rows_tab];
+  job->rows = uids;
+  job->count = (int)n;
+  job->on = GPOINTER_TO_INT(data);
+  g_dv.select_thread = g_thread_new("select", select_main, job);
 }
 
 static void on_tab_toggled(GtkToggleButton *button, gpointer data) {

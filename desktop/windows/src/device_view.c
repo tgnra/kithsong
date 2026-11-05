@@ -58,6 +58,8 @@ enum {
 #define WM_RECHECK (WM_APP + 1)
 /* Posted to the estimate line by the estimate's thread; lParam is its estimate_job. */
 #define WM_ESTIMATE_DONE (WM_APP + 2)
+/* Likewise, by Select All's thread; lParam is its select_job. */
+#define WM_SELECT_DONE (WM_APP + 3)
 
 #define APPLY_DELAY_MS 400
 #define ESTIMATE_DELAY_MS 250 /* a read of every track: once the edits pause */
@@ -131,6 +133,7 @@ static struct {
   mc_status profile_status;
   uid_set sel[NUM_TABS];
   uid_set removed_items[NUM_TABS]; /* removed from the device: Select All leaves them out */
+  HANDLE select_thread; /* Select All or Select None, storing the rows */
 
   /* The list's rows: the current tab's items, in the library's order. */
   int tab, rows_tab;
@@ -1020,8 +1023,44 @@ static void estimate_done(estimate_job *job) {
 }
 
 /* Waits for the thread and drops its result, and anything queued: before sync goes. */
+/* --- Select All and Select None --- */
+
+/* One press: a long list takes seconds to store, and the window has to stay alive for it. */
+typedef struct select_job {
+  mc_sync *sync;
+  char uid[MC_UID_STRLEN];
+  mc_profile_item_kind kind;
+  char (*rows)[MC_UID_STRLEN];
+  int count, on;
+  mc_status status;
+  HWND notify;
+} select_job;
+
+static void select_job_free(select_job *job) {
+  if (!job) return;
+  free(job->rows);
+  free(job);
+}
+
+static DWORD WINAPI select_main(void *arg) {
+  select_job *job = arg;
+  job->status = mc_sync_select_items(job->sync, job->uid, job->kind, (const char(*)[MC_UID_STRLEN])job->rows,
+                                     job->count, job->on);
+  if (!PostMessageW(job->notify, WM_SELECT_DONE, 0, (LPARAM)job)) select_job_free(job);
+  return 0;
+}
+
+/* Lets a press being stored finish: what's edited next is read after it. */
+static void select_wait(void) {
+  if (!g_dv.select_thread) return;
+  WaitForSingleObject(g_dv.select_thread, INFINITE);
+  CloseHandle(g_dv.select_thread);
+  g_dv.select_thread = NULL;
+}
+
 static void estimate_cancel(void) {
   KillTimer(g_dv.parent, ID_DEV_ESTIMATE_TIMER);
+  select_wait(); /* it uses sync too */
   if (g_dv.est.thread) {
     WaitForSingleObject(g_dv.est.thread, INFINITE);
     CloseHandle(g_dv.est.thread);
@@ -1035,13 +1074,24 @@ static void estimate_cancel(void) {
   MSG msg;
   while (g_dv.estimate && PeekMessageW(&msg, g_dv.estimate, WM_ESTIMATE_DONE, WM_ESTIMATE_DONE, PM_REMOVE))
     estimate_job_free((estimate_job *)msg.lParam);
+  while (g_dv.estimate && PeekMessageW(&msg, g_dv.estimate, WM_SELECT_DONE, WM_SELECT_DONE, PM_REMOVE))
+    select_job_free((select_job *)msg.lParam);
   g_dv.est.again = FALSE;
 }
+
+static void show_stored(mc_status st);
 
 static LRESULT CALLBACK estimate_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
   (void)id, (void)data;
   if (msg == WM_ESTIMATE_DONE) {
     estimate_done((estimate_job *)lp);
+    return 0;
+  }
+  if (msg == WM_SELECT_DONE) {
+    select_job *job = (select_job *)lp;
+    select_wait();
+    if (job->sync == g_dv.sync && !strcmp(job->uid, g_dv.uid)) show_stored(job->status);
+    select_job_free(job);
     return 0;
   }
   return DefSubclassProc(wnd, msg, wp, lp);
@@ -1073,6 +1123,7 @@ static void show_stored(mc_status st) {
 /* Applies the pending edits now: get, change, set. */
 static void flush(void) {
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
+  select_wait();
   if (!pending_any() || !g_dv.sync) {
     pending_clear();
     return;
@@ -1384,12 +1435,30 @@ static void on_check(int row, BOOL on) {
 }
 
 /* Select All and Select None: the rows shown, stored at once as one write rather than waiting
- * as a toggle each, which a long list couldn't afford. Edits made before them go first. */
+ * as a toggle each, which a long list couldn't afford, and on a thread of its own. Edits made
+ * before them go first. A press while one is being stored does nothing. */
 static void select_shown(BOOL on) {
-  if (g_dv.rows_tab < 0 || !g_dv.nrows || !editable()) return;
+  if (g_dv.rows_tab < 0 || !g_dv.nrows || !editable() || g_dv.select_thread) return;
   flush();
-  show_stored(mc_sync_select_items(g_dv.sync, g_dv.uid, k_tab_kind[g_dv.rows_tab],
-                                   (const char(*)[MC_UID_STRLEN])g_dv.rows, g_dv.nrows, on));
+  select_job *job = calloc(1, sizeof *job);
+  if (job) job->rows = malloc((size_t)g_dv.nrows * sizeof *job->rows);
+  if (!job || !job->rows) {
+    select_job_free(job);
+    show_stored(MC_ERR_NOMEM);
+    return;
+  }
+  memcpy(job->rows, g_dv.rows, (size_t)g_dv.nrows * sizeof *job->rows);
+  job->sync = g_dv.sync;
+  memcpy(job->uid, g_dv.uid, MC_UID_STRLEN);
+  job->kind = k_tab_kind[g_dv.rows_tab];
+  job->count = g_dv.nrows;
+  job->on = on;
+  job->notify = g_dv.estimate;
+  g_dv.select_thread = CreateThread(NULL, 0, select_main, job, 0, NULL);
+  if (!g_dv.select_thread) {
+    select_job_free(job);
+    show_stored(MC_ERR_NOMEM);
+  }
 }
 
 static void select_tab(int tab) {
