@@ -112,6 +112,8 @@
 
     "empty_title": "No music yet",
     "empty_text": "Use Import to add music.",
+    "albums_all_singles_title": { "text": "No albums", "note": "The Albums page when the library has music but every album in it has one track: singles, which the page leaves out." },
+    "albums_all_singles_text": { "text": "Every album here has only one track, so they're singles. Find them on the Artists page, under each artist's Singles, or by searching.", "note": "Under \"No albums\". Artists is the sidebar's page; Singles the heading on an artist's page." },
     "library_open_failed": "Couldn't open the library",
     "no_playlists_title": "No playlists yet",
     "no_playlists_text": { "text": "Right-click a track and choose Add to playlist to start one, or make an empty one with New playlist.", "note": "The Playlists page while there are none. Add to playlist is the track menu's item; New playlist is the page's + button." },
@@ -919,8 +921,6 @@
     "smart_move_to": { "text": "Move to {0}", "note": "Smart list editor: moves a condition or group into another group. {0} is that group, or the list itself." },
     "empty_with_version": { "text": "{0}\n\nmusiccore {1}", "note": "{0} is the empty-library message, {1} the core library's version number. musiccore is a name." },
     "playlists_list_failed": "Couldn't list the playlists",
-    "albums_all_singles_title": { "text": "No albums", "note": "The Albums page when the library has music but every album in it has one track: singles, which the page leaves out." },
-    "albums_all_singles_text": { "text": "Every album here has only one track, so they're singles. Find them on the Artists page, under each artist's Singles, or by searching.", "note": "Under \"No albums\". Artists is the sidebar's page; Singles the heading on an artist's page." },
     "album_tile_name": { "text": "{0}, {1}", "note": "An album tile's name for accessibility: its title, then its artist or track count." },
     "station_tile_name": { "text": "Radio station, {0}, {1}", "note": "A radio station's name for accessibility on the Home page: its name, then the line beneath it." },
     "station_tile_tip": { "text": "Radio station: plays music that sounds like {0}", "note": "Tooltip of a radio station on the Home page, also read by screen readers. {0} is the title of the track it starts from." },

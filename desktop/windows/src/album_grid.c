@@ -113,6 +113,7 @@ static struct {
   BOOL group_smart, group_random; /* it's a smart group, and in random order */
   wchar_t *group_rule;           /* a smart group's rule as a sentence, under its name; or NULL */
   int hidden;                    /* playlists or album groups left out, empty only here */
+  BOOL all_singles;              /* there are tracks but no albums: each has one track */
   char kept_smart[MC_UID_STRLEN]; /* a smart playlist hidden here that was asked for, listed anyway */
   album_grid_sync sync_state;    /* whether the empty pages offer importing or the sync profile */
   BOOL first_run;                /* no library yet, while the first run asks where it goes */
@@ -692,6 +693,10 @@ static void reload(void) {
   LeaveCriticalSection(&g.lock);
   g.tiles = tiles;
   g.count = n;
+  /* No albums but some tracks: they're all singles, so the empty page mustn't say no music. */
+  int64_t tracks = 0;
+  if (g.view == AGV_ALBUMS && !n && g.lib && mc_library_count(g.lib, MC_ENTITY_TRACKS, &tracks) != MC_OK) tracks = 0;
+  g.all_singles = tracks > 0;
   g.any_here = FALSE;
   for (int i = 0; i < n; i++) g.any_here |= tiles[i].here;
   g.selected = selected;
@@ -1163,6 +1168,7 @@ void album_grid_new_playlist(void) {
 /* The empty page's button, if it has one (album_grid_set_sync_state()). */
 static empty_action action(void) {
   if (!g.lib || g.count) return ACTION_NONE;
+  if (g.tiles_view == AGV_ALBUMS && g.all_singles) return ACTION_NONE;
   if (g.tiles_view == AGV_ALBUMS) return g.sync_state == AG_SYNC_GROUPED ? ACTION_SYNC : ACTION_IMPORT;
   if ((g.tiles_view == AGV_PLAYLISTS || g.tiles_view == AGV_GROUPS) && g.hidden && g.sync_state == AG_SYNC_GROUPED)
     return ACTION_SYNC;
@@ -1678,6 +1684,7 @@ static void empty_text(wchar_t *buf, size_t n, const wchar_t *sep) {
   else if (g.tiles_view == AGV_GROUPS) title = MC_STR_NO_ALBUM_GROUPS_TITLE, text = MC_STR_NO_ALBUM_GROUPS_TEXT;
   else if (g.tiles_view == AGV_GROUP && g.group_smart) title = MC_STR_SMART_LIST_EMPTY_TITLE, text = MC_STR_SMART_LIST_EMPTY_TEXT;
   else if (g.tiles_view == AGV_GROUP) title = MC_STR_ALBUM_GROUP_EMPTY_TITLE, text = MC_STR_ALBUM_GROUP_EMPTY_TEXT;
+  else if (g.all_singles) title = MC_STR_ALBUMS_ALL_SINGLES_TITLE, text = MC_STR_ALBUMS_ALL_SINGLES_TEXT;
   else if (g.sync_state == AG_SYNC_ALONE) title = MC_STR_EMPTY_TITLE, text = MC_STR_WINDOWS_PC_EMPTY_TEXT_PAIR;
   else if (g.sync_state == AG_SYNC_GROUPED) title = MC_STR_EMPTY_TITLE, text = MC_STR_WINDOWS_PC_EMPTY_TEXT_CHOOSE;
   else title = MC_STR_EMPTY_TITLE, text = MC_STR_EMPTY_TEXT;

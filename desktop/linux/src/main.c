@@ -160,11 +160,11 @@ static void set_empty_description(app *a) {
   gboolean alone = a->lib && !singles && state == DEVICES_ALONE;
   gboolean grouped = a->lib && !singles && state == DEVICES_GROUPED;
   enum mc_str_id text = !a->lib   ? MC_STR_LIBRARY_OPEN_FAILED
-                        : singles ? MC_STR_LINUX_ALBUMS_ALL_SINGLES_TEXT
+                        : singles ? MC_STR_ALBUMS_ALL_SINGLES_TEXT
                         : alone   ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
                         : grouped ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_CHOOSE
                                   : MC_STR_EMPTY_TEXT;
-  adw_status_page_set_title(a->empty, mc_str(singles ? MC_STR_LINUX_ALBUMS_ALL_SINGLES_TITLE : MC_STR_EMPTY_TITLE));
+  adw_status_page_set_title(a->empty, mc_str(singles ? MC_STR_ALBUMS_ALL_SINGLES_TITLE : MC_STR_EMPTY_TITLE));
   char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION), MC_S(mc_str(text)), MC_S(mc_version()));
   adw_status_page_set_description(a->empty, desc);
   mc_free(desc);
