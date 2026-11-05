@@ -38,6 +38,10 @@ typedef int (*mc_waiting_reach_fn)(void *user, const char *device_uid);
 mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_fn reachable,
                              void *user, mc_sync_waiting **out);
 
+/* Whether this device fetches files now: in a group, the group's library, its profile confirmed
+ * and no merged library still to come in. */
+int mc_waiting_fetching(mc_sync_db *sdb, mc_library *lib);
+
 /* Whether a and b say the same (either may be NULL, which is the same as empty). */
 int mc_waiting_equal(const mc_sync_waiting *a, const mc_sync_waiting *b);
 

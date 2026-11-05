@@ -46,7 +46,9 @@
 #include "sync/session.h"
 #include "sync/sync_internal.h"
 #include "sync/transfer.h"
+#include "sync/problems.h"
 #include "sync/waiting.h"
+#include "util/power.h"
 
 #define PERIOD_MS (5 * 60 * 1000)
 #define CHANGE_DELAY_MS 3000
@@ -415,6 +417,13 @@ static void emit_reach(mc_sync *sync, const char *uid) {
   if (!sync->ev.on_reach) return;
   mc_mutex_lock(&sync->cb_lock);
   sync->ev.on_reach(sync->user, uid);
+  mc_mutex_unlock(&sync->cb_lock);
+}
+
+static void emit_problems(mc_sync *sync) {
+  if (!sync->ev.on_problems) return;
+  mc_mutex_lock(&sync->cb_lock);
+  sync->ev.on_problems(sync->user);
   mc_mutex_unlock(&sync->cb_lock);
 }
 
@@ -1558,6 +1567,76 @@ static void update_waiting(mc_sync *sync, mc_sync_conn *c) {
   if (changed) emit_waiting(sync);
 }
 
+/* The same for the problems. */
+static void update_problems(mc_sync *sync, mc_sync_conn *c) {
+  mc_sync_problems *p = NULL;
+  if (mc_problems_compute(c->sdb, c->lib, &p) != MC_OK) return;
+  mc_mutex_lock(&sync->lock);
+  int changed = !mc_problems_equal(sync->problems, p);
+  mc_sync_problems *old = sync->problems;
+  sync->problems = p;
+  mc_mutex_unlock(&sync->lock);
+  mc_sync_problems_free(old);
+  if (changed) emit_problems(sync);
+}
+
+mc_status mc_sync_get_problems(mc_sync *sync, mc_sync_problems **out) {
+  if (out) *out = NULL;
+  if (!sync || !out) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  *out = mc_problems_copy(sync->problems);
+  mc_mutex_unlock(&sync->lock);
+  return *out ? MC_OK : MC_ERR_NOMEM;
+}
+
+/* The weekly deep check, on a desktop or laptop: it gives way to the battery and to stopping. */
+static int deep_stop(void *user) {
+  return mc_sync_is_stopping(user) || !mc_power_on_ac();
+}
+
+static int deep_claim(mc_sync *sync) {
+  mc_mutex_lock(&sync->lock);
+  int got = !sync->deep_running;
+  sync->deep_running = 1;
+  mc_mutex_unlock(&sync->lock);
+  return got;
+}
+
+static void deep_release(mc_sync *sync) {
+  mc_mutex_lock(&sync->lock);
+  sync->deep_running = 0;
+  mc_mutex_unlock(&sync->lock);
+}
+
+static void deep_worker(void *arg) {
+  mc_sync *sync = arg;
+  mc_sync_conn c;
+  if (mc_sync_conn_open(sync, &c) == MC_OK) {
+    int done;
+    mc_transfer_deep_run(sync, &c, 0, deep_stop, sync, &done);
+    mc_sync_conn_close(&c);
+  }
+  deep_release(sync);
+}
+
+mc_status mc_sync_verify_weekly(mc_sync *sync, int64_t budget_ms, int *done) {
+  if (done) *done = 0;
+  if (!sync || !done || budget_ms < 0) return MC_ERR_INVALID_ARG;
+  if (!deep_claim(sync)) return MC_OK; /* a run's under way: not done, so ask again */
+  mc_sync_conn c;
+  mc_status st = mc_sync_conn_open(sync, &c);
+  if (st == MC_OK) {
+    st = mc_transfer_deep_run(sync, &c, budget_ms, NULL, NULL, done);
+    mc_sync_conn_close(&c);
+  }
+  deep_release(sync);
+  return st;
+}
+
+void mc_sync_set_test_deep_delay(mc_sync *sync, uint32_t ms) {
+  sync->deep_delay_ms = ms;
+}
+
 void mc_sync_waiting_changed(mc_sync *sync) {
   mc_mutex_lock(&sync->lock);
   sync->waiting_dirty = 1;
@@ -1583,6 +1662,7 @@ static void sched_main(void *arg) {
   int64_t seen_lib = max_seq(mc_library_db(c.lib));
   int64_t seen_group = max_seq(mc_sync_db_handle(c.sdb));
   uint64_t next_poll = 0, next_hints = mc_mono_ms() + HINTS_MS;
+  uint64_t next_deep = mc_mono_ms() + sync->deep_delay_ms;
 
   for (;;) {
     reap(sync, 0);
@@ -1600,6 +1680,12 @@ static void sched_main(void *arg) {
         mc_session_refresh_self(sync, &c);
         reach_forget(sync);
       }
+    }
+    if (now >= next_deep) {
+      next_deep = now + HINTS_MS;
+      if (sync->kind == MC_DEVICE_DESKTOP && mc_power_on_ac() && mc_transfer_deep_due(c.sdb) &&
+          deep_claim(sync) && mc_sync_spawn(sync, deep_worker, sync) != MC_OK)
+        deep_release(sync);
     }
     if (now >= next_poll) {
       next_poll = now + POLL_MS;
@@ -1627,7 +1713,10 @@ static void sched_main(void *arg) {
     int redo_waiting = sync->waiting_dirty;
     sync->waiting_dirty = 0;
     mc_mutex_unlock(&sync->lock);
-    if (redo_waiting) update_waiting(sync, &c);
+    if (redo_waiting) {
+      update_waiting(sync, &c);
+      update_problems(sync, &c);
+    }
 
     member_row *ms;
     int n = load_members(&c, &ms);
@@ -1923,6 +2012,7 @@ void mc_sync_free(mc_sync *sync) {
   mc_pair_responder_wipe(&sync->in_r);
   free(sync->merge_kept);
   mc_sync_waiting_free(sync->waiting);
+  mc_sync_problems_free(sync->problems);
   mc_cond_destroy(&sync->cond);
   mc_mutex_destroy(&sync->lock);
   mc_mutex_destroy(&sync->api_lock);

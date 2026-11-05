@@ -335,7 +335,7 @@ int main(int argc, char **argv) {
   int before = out ? out->tracks : 0;
   CHECK(out && !tracks_of(out, w.uid[PHONE]));
   mc_sync_waiting_free(out);
-  snprintf(sql, sizeof sql, "INSERT INTO peer_lacks VALUES ('%s', '%s')", w.uid[PHONE], w.track[1]);
+  snprintf(sql, sizeof sql, "INSERT INTO peer_lacks (device_uid, track_uid) VALUES ('%s', '%s')", w.uid[PHONE], w.track[1]);
   CHECK(exec(mc_sync_db_handle(w.sdb), sql) == SQLITE_OK);
   out = compute(&w);
   CHECK(out && out->tracks == before + 1);
@@ -345,7 +345,7 @@ int main(int argc, char **argv) {
   out = compute(&w);
   CHECK(out && !tracks_of(out, w.uid[PHONE]));
   mc_sync_waiting_free(out);
-  snprintf(sql, sizeof sql, "INSERT INTO peer_lacks VALUES ('%s', '%s')", w.uid[DESK], w.track[1]);
+  snprintf(sql, sizeof sql, "INSERT INTO peer_lacks (device_uid, track_uid) VALUES ('%s', '%s')", w.uid[DESK], w.track[1]);
   CHECK(exec(mc_sync_db_handle(w.sdb), sql) == SQLITE_OK);
   set_reach(&w, 0, 1, 0, 0);
   out = compute(&w);

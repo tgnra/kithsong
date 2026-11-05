@@ -149,9 +149,7 @@ static int holds(const member *m, const mc_plan_track *t) {
          theirs->format.bitrate_kbps == t->format.bitrate_kbps;
 }
 
-/* Whether this device fetches files now: in a group, the group's library, its profile
- * confirmed and no merged library still to come in. */
-static int fetching(mc_sync_db *sdb, mc_library *lib) {
+int mc_waiting_fetching(mc_sync_db *sdb, mc_library *lib) {
   const char *group = mc_sync_db_group_uid(sdb);
   if (!group) return 0;
   char group_lib[MC_UID_STRLEN] = "", mine[MC_UID_STRLEN] = "";
@@ -202,7 +200,7 @@ mc_status mc_waiting_compute(mc_sync_db *sdb, mc_library *lib, mc_waiting_reach_
   if (!sdb || !lib || !reachable || !out) return MC_ERR_INVALID_ARG;
   mc_sync_waiting *w = calloc(1, sizeof *w);
   if (!w) return MC_ERR_NOMEM;
-  if (!fetching(sdb, lib)) {
+  if (!mc_waiting_fetching(sdb, lib)) {
     *out = w;
     return MC_OK;
   }

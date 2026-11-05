@@ -195,7 +195,7 @@ static void on_merge_done(void *user, const mc_merge_result *r) {
 
 static const mc_sync_events k_events = {NULL,         on_pair_code,      on_pair_result,
                                         NULL,         on_sync_done,      NULL,
-                                        on_pair_merge, on_merge_progress, on_merge_done, NULL};
+                                        on_pair_merge, on_merge_progress, on_merge_done, NULL, NULL};
 
 static void dev_paths(dev *d, const char *root, const char *label) {
   d->label = label;

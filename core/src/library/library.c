@@ -247,6 +247,16 @@ static const char *const k_migrations[] = {
   /* v20: the version vector (mc_changelog_version_vector()) without reading the whole
    * changelog. (IF NOT EXISTS: tests that wind user_version back keep their tables.) */
   "CREATE INDEX IF NOT EXISTS changelog_origin ON changelog (origin_uid, hlc);",
+  /* v21: files that failed a check and keep their rows: originals imported here, which a check
+   * never deletes (mc_file_check in sync/transfer.h). This device's own, as files is. The size
+   * and time are the row's at the time, so a row given a new file since isn't held to it. (IF
+   * NOT EXISTS: tests that wind user_version back keep their tables.) */
+  "CREATE TABLE IF NOT EXISTS file_failed ("
+  "  file_uid   TEXT PRIMARY KEY REFERENCES files (uid) ON DELETE CASCADE,"
+  "  state      INTEGER NOT NULL,"
+  "  size_bytes INTEGER,"
+  "  mtime_ms   INTEGER"
+  ") WITHOUT ROWID;",
 };
 #define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 

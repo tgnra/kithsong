@@ -134,6 +134,7 @@ add_library(musiccore STATIC
   src/sync/hashahead.c
   src/sync/pace.c
   src/sync/reach.c
+  src/sync/problems.c
   src/sync/waiting.c
   "${_sync_schema_c}")
 add_library(musiccore::musiccore ALIAS musiccore)

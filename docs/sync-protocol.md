@@ -465,7 +465,7 @@ Message types:
 | 0x11 | `ROWS`        | binary, below |
 | 0x12 | `ROWS_END`    | `{"db", "digest"}` |
 | 0x20 | `HAVE_REQ`    | `{"tracks": [uid], "format", "kbps"}` |
-| 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool, "verified": bool, "size"?}]}` |
+| 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool, "verified": bool, "size"?, "copy"?: bool, "copy_kbps"?}]}` |
 | 0x22 | `FILE_REQ`    | `{"track", "format", "kbps", "est", "retry": true}`; `format` `"original"` or `"opus"`; `est` the size the receiver expects, for progress only; `retry` only on the second ask for a track after a checksum mismatch |
 | 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256", "source_sha256"?}` |
 | 0x24 | `FILE_DATA`   | raw bytes, in order, until `size` bytes have been sent |
@@ -1310,15 +1310,82 @@ it changed. The rules are in `core/src/sync/waiting.h`:
   give a durable record of what arrived.
 - `mc_sync_verify(fast)` compares `size_bytes` and `mtime_ms`; `mc_sync_verify(deep)`
   re-hashes against `files.sha256`. A fast check runs after each sync and a deep one weekly
-  or on demand. Failed files are deleted and fetched again on the next session.
+  or on demand. Failed copies from peers are deleted and fetched again on the next session.
   - The fast check after a session runs after reconcile, so a file it deletes is fetched
     again in the following session.
-  - Originals imported on the device are never deleted by a check (there may be no other
-    copy): they are only counted as failed.
+  - A check tells three things apart: a file that's **missing**, one that **changed** (its
+    size or time isn't the row's) and one that's **corrupt** (its size and time are the row's
+    but its hash isn't). Bytes that changed along with the time may be the user's own edit, so
+    only the last is taken for damage. A file whose time alone changed and whose hash didn't
+    was only touched: a deep check gives its row the new time.
   - A deep check records the hash of a file that has none (an imported original), which
     then counts as verified. Sending such a file records it too, under the same condition
     (the file's size and mtime still match its row), since it is read whole either way.
-  - Scheduling the weekly deep check is left to the frontend.
+
+### Failed originals
+
+Originals imported on the device are never deleted by a check (there may be no other copy).
+They keep their rows, and are noted in `file_failed` in `library.db`, this device's own:
+
+- A missing or corrupt one satisfies nothing and is offered to no one, so the track counts as
+  missing here and the next session fetches it from whichever member has it. Once a good copy
+  in the format wanted is here the failed row goes, with a corrupt file, and a copy that landed
+  as `<name> (2).<ext>` takes the name.
+- One that only changed still counts as the track's file. It's reported, and nothing fetches
+  over it. A file that comes back passes the next check and is taken off the list.
+- A fast check can't see corruption, so what a deep check found stands until the row changes.
+
+### The weekly deep check
+
+Every `MC_SYNC_DEEP_CHECK_DAYS` (7). A desktop or laptop runs it by itself: the scheduler looks
+10 minutes after start and then every minute, and it runs on a thread of its own while
+`mc_power_on_ac()` says so, which is always on a desktop, and stops within a read of the battery
+taking over. A phone or watch has no scheduler for this: periodic work that needs a charger calls
+`mc_sync_verify_weekly()` in slices.
+
+- `sync.db`'s `local` keeps when it last finished (`deep_check_ms`) and the last track it got
+  through (`deep_check_at`, every 30 seconds and when it stops), so an interrupted run goes on from
+  there, and a machine restarted daily still gets through a large library.
+- It rests as long as it worked, up to half a second a file, to leave the disk to what's playing.
+- It holds nothing while it reads, unlike `mc_sync_verify()`: a session goes on meanwhile. Only a
+  file that seems wrong waits for the session's file phase, and is checked once more, against a
+  row that must still say the same, before anything is done about it.
+
+### The card
+
+`mc_sync_get_problems()` is what the frontends show at the top of the library, worked out by the
+scheduler with the waiting tracks and announced by `on_problems` when it changes: files that
+failed and weren't replaced, the unknown files an archive's latest sweep only reported
+(`local.unknown_files`), and on an archive the tracks that are lost. It goes by itself.
+
+### Missing for good
+
+`mc_sync_remove_lost()` deletes tracks from the library, so from every device, and nothing can
+fetch them back. So a track is **lost** only on clear evidence, and any doubt keeps it off the
+list. All of these must hold:
+
+- This device fetches files (see [Waiting for a device](#waiting-for-a-device)) and is an archive,
+  so it wants every track.
+- It holds nothing of the track: no file in the right format, and no other file on disk that
+  wasn't found corrupt. A lossy copy, or a file that merely changed, saves it.
+- Every other current member said, in a session in the last `MC_SYNC_LOST_ASKED_DAYS` (7), that
+  it has **no file of the track at all**. `HAVE_RESP` says so: a track answered with neither
+  `original` nor `cached` also carries `copy`, whether any file of it is there, a lossy one or a
+  stale one included, and `copy_kbps`, the best transcode of its current file the member could
+  send. `peer_lacks` keeps `has_copy` and `said_ms` from that. A member that was never asked
+  while the track was missing has no row, and one away for a week has an old one: either keeps
+  the track safe, as it may be the last to hold it. Removing a member from the group is how a
+  device that's gone for good stops holding the rest back.
+
+What comes first, by the same rule: a member with the original gives it, as for any missing track.
+A member with only a lossy copy gives that to an archive with nothing left of the track, as it is
+at its bitrate: the track stays playable, and isn't lost. It counts as a transcode, so the original
+is still wanted if it ever turns up.
+
+`mc_sync_remove_lost()` takes the uids the user confirmed and works the list out again itself, so
+anything that came back since the card was drawn stays. It refuses with `MC_ERR_LOCKED` while a
+session's file phase runs, as that may be bringing one of them. The removal is an ordinary delete
+(`musiccore/delete.h`). The frontends always ask first, naming the tracks.
 
 ## Open questions
 

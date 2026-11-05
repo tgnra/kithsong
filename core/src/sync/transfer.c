@@ -45,7 +45,14 @@
  * its track's is stale (STALE_SQL): it satisfies nothing, so the track is fetched again,
  * and reconcile then drops the stale copy like one in the wrong format. Only files whose
  * file_rev matches are offered to peers. An original imported here is never stale: it's
- * this device's own, whatever another device swapped in. */
+ * this device's own, whatever another device swapped in.
+ *
+ * Failed checks. An original imported here that's missing or corrupt keeps its row and is
+ * noted in file_failed (mc_file_check): it satisfies nothing and is offered to no one, so the
+ * track is fetched like any other missing one, and the row goes once a good copy is here
+ * (replace_failed()). A member with only a lossy copy says so, and an archive with nothing
+ * left of the track takes that (want.copy_kbps), so something of it stays if the original never
+ * turns up. See "Verification" in docs/sync-protocol.md. */
 #include "sync/transfer.h"
 
 #include <ctype.h>
@@ -67,6 +74,7 @@
 #include "sync/libmerge.h"
 #include "sync/orphans.h"
 #include "sync/plan.h"
+#include "sync/problems.h"
 #include "tagger/coverart.h"
 #include "tagger/organize.h"
 
@@ -94,6 +102,13 @@
 #define STALE_SQL \
   "((f.source_file_uid IS NOT NULL OR f.source_peer_uid IS NOT NULL)" \
   " AND f.file_rev IS NOT t.file_rev)"
+/* For a files row f: whether its file is there and whole, as far as the checks know. A file
+ * that only changed may be the user's own edit, so it still counts. */
+#define INTACT_SQL \
+  "NOT EXISTS (SELECT 1 FROM file_failed x WHERE x.file_uid = f.uid AND x.state <> 2)"
+/* How often a deep check notes how far it got, and the longest it rests between files. */
+#define DEEP_SAVE_MS 30000
+#define DEEP_REST_MAX_MS 500
 
 typedef struct mc_transfer {
   int receiving; /* holds sync->files_busy */
@@ -180,7 +195,9 @@ static void hex(const unsigned char digest[32], char out[SHA_STRLEN]) {
   out[SHA_STRLEN - 1] = '\0';
 }
 
-static mc_status hash_file(const char *path, char out[SHA_STRLEN]) {
+/* stop, which may be NULL, is asked between reads: MC_ERR_CANCELLED if it said yes. */
+static mc_status hash_file_until(const char *path, char out[SHA_STRLEN], int (*stop)(void *),
+                                 void *user) {
   FILE *f = mc_fopen(path, "rb");
   if (!f) return MC_ERR_IO;
   unsigned char *buf = malloc(1 << 16);
@@ -188,8 +205,10 @@ static mc_status hash_file(const char *path, char out[SHA_STRLEN]) {
   mbedtls_sha256_init(&ctx);
   mc_status st = buf && mbedtls_sha256_starts(&ctx, 0) == 0 ? MC_OK : MC_ERR_NOMEM;
   size_t n;
-  while (st == MC_OK && (n = fread(buf, 1, 1 << 16, f)) > 0)
+  while (st == MC_OK && (n = fread(buf, 1, 1 << 16, f)) > 0) {
     if (mbedtls_sha256_update(&ctx, buf, n) != 0) st = MC_ERR_IO;
+    if (st == MC_OK && stop && stop(user)) st = MC_ERR_CANCELLED;
+  }
   if (st == MC_OK && ferror(f)) st = MC_ERR_IO;
   unsigned char digest[32];
   if (st == MC_OK && mbedtls_sha256_finish(&ctx, digest) != 0) st = MC_ERR_IO;
@@ -198,6 +217,10 @@ static mc_status hash_file(const char *path, char out[SHA_STRLEN]) {
   free(buf);
   fclose(f);
   return st;
+}
+
+static mc_status hash_file(const char *path, char out[SHA_STRLEN]) {
+  return hash_file_until(path, out, NULL, NULL);
 }
 
 static uint64_t fnv(uint64_t h, const char *s) {
@@ -507,7 +530,7 @@ static int find_original(mc_library *lib, const char *track, held *h) {
                          " f.sha256, t.duration_ms, f.source_sha256"
                          " FROM files f JOIN tracks t ON t.uid = f.track_uid"
                          " WHERE f.track_uid = ?1 AND f.source_file_uid IS NULL"
-                         " AND f.file_rev IS t.file_rev"
+                         " AND f.file_rev IS t.file_rev AND " INTACT_SQL
                          " ORDER BY f.source_peer_uid IS NOT NULL, f.uid",
                          -1, &stmt, NULL) != SQLITE_OK)
     return 0;
@@ -566,7 +589,8 @@ static int track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_
                                   "SELECT f.format, f.bitrate_kbps, f.size_bytes,"
                                   " f.source_file_uid, f.source_peer_uid FROM files f"
                                   " JOIN tracks t ON t.uid = f.track_uid"
-                                  " WHERE f.track_uid = ?1 AND NOT " STALE_SQL,
+                                  " WHERE f.track_uid = ?1 AND NOT " STALE_SQL
+                                  " AND " INTACT_SQL,
                                   -1, &stmt, NULL) != SQLITE_OK)
     return 0;
   sqlite3_bind_text(stmt, 1, t->track_uid, -1, SQLITE_STATIC);
@@ -894,6 +918,36 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
 /* HAVE_REQ: for each track, whether this device has its original (and whether that copy is
  * verified: its sha256 is recorded), whether it can send the requested Opus at once, and the
  * size of the original when that is what it would send. Originals it would send with no recorded hash are queued for hash-ahead, in this order. */
+/* Whether some file of track is here, whatever it is, for a member asking who still has
+ * anything of it. *kbps: the best transcode of the track's current file that could be sent, 0
+ * for none. */
+static int any_copy(mc_library *lib, const char *track, int *kbps) {
+  *kbps = 0;
+  sqlite3_stmt *stmt;
+  /* Any error says yes: a track is only ever given up on a clear no. */
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT f.path, CASE WHEN f.source_file_uid IS NOT NULL AND NOT " STALE_SQL
+                         " THEN f.bitrate_kbps ELSE 0 END"
+                         " FROM files f JOIN tracks t ON t.uid = f.track_uid"
+                         " WHERE f.track_uid = ?1 AND " INTACT_SQL,
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return 1;
+  sqlite3_bind_text(stmt, 1, track, -1, SQLITE_STATIC);
+  int yes = 0;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *path = (const char *)sqlite3_column_text(stmt, 0);
+    char *abs = path ? mc_library_abspath(lib, path) : NULL;
+    if (abs && mc_file_exists(abs)) {
+      yes = 1;
+      int rate = sqlite3_column_int(stmt, 1);
+      if (rate > *kbps) *kbps = rate;
+    }
+    free(abs);
+  }
+  sqlite3_finalize(stmt);
+  return yes;
+}
+
 static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t len) {
   yyjson_doc *req = parse(payload, len);
   if (!req) return MC_ERR_FORMAT;
@@ -939,6 +993,11 @@ static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t 
     yyjson_mut_obj_add_bool(doc, o, "original", original);
     yyjson_mut_obj_add_bool(doc, o, "cached", cached);
     yyjson_mut_obj_add_bool(doc, o, "verified", original && h.sha[0]);
+    if (!original && !cached) {
+      int copy_kbps, copy = any_copy(s->conn->lib, track, &copy_kbps);
+      yyjson_mut_obj_add_bool(doc, o, "copy", copy);
+      yyjson_mut_obj_add_int(doc, o, "copy_kbps", copy_kbps);
+    }
     if (as_is) yyjson_mut_obj_add_int(doc, o, "size", h.size);
     yyjson_mut_arr_append(arr, o);
     if (original) held_free(&h);
@@ -1485,6 +1544,8 @@ typedef struct want {
   const mc_plan_track *t; /* NULL: an original imported here we asked about for reconcile */
   char uid[MC_UID_STRLEN];
   int original, cached, verified;
+  int copy;      /* with neither of those: the peer still holds some other file of it */
+  int copy_kbps; /* and could send a transcode at this bitrate; else 0 */
   int64_t size; /* of the original, if that's what the peer would send; else 0 */
   int imported; /* this device holds an original of it imported here, in the wrong format */
 } want;
@@ -1548,6 +1609,8 @@ static mc_status ask_have(mc_session *s, want *w, int n, const mc_plan *plan) {
       e->original = yyjson_get_bool(yyjson_obj_get(v, "original"));
       e->cached = yyjson_get_bool(yyjson_obj_get(v, "cached"));
       e->verified = yyjson_get_bool(yyjson_obj_get(v, "verified"));
+      e->copy = yyjson_get_bool(yyjson_obj_get(v, "copy"));
+      e->copy_kbps = (int)yyjson_get_sint(yyjson_obj_get(v, "copy_kbps"));
       e->size = yyjson_get_sint(yyjson_obj_get(v, "size"));
     }
     yyjson_doc_free(resp);
@@ -1556,8 +1619,8 @@ static mc_status ask_have(mc_session *s, want *w, int n, const mc_plan *plan) {
 }
 
 /* Keeps what the peer just said it hasn't of what this device wants, in place of what it said
- * last time, for the waiting tracks. They're only for a notice, so a failure here isn't one
- * of the session's. */
+ * last time, for the waiting tracks and what's missing for good. A row missing only holds a
+ * track back from being given up, so a failure here isn't one of the session's. */
 static void note_lacks(mc_session *s, const want *w, int n) {
   mc_sync_db *sdb = s->conn->sdb;
   sqlite3 *db = mc_sync_db_handle(sdb);
@@ -1565,16 +1628,19 @@ static void note_lacks(mc_session *s, const want *w, int n) {
   sqlite3_stmt *clear = NULL, *add = NULL;
   int ok = sqlite3_prepare_v2(db, "DELETE FROM peer_lacks WHERE device_uid = ?1", -1, &clear,
                               NULL) == SQLITE_OK &&
-           sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO peer_lacks (device_uid, track_uid)"
-                                  " VALUES (?1, ?2)", -1, &add, NULL) == SQLITE_OK;
+           sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO peer_lacks (device_uid, track_uid,"
+                                  " has_copy, said_ms) VALUES (?1, ?2, ?3, ?4)", -1, &add,
+                                  NULL) == SQLITE_OK;
   if (ok) {
     sqlite3_bind_text(clear, 1, s->peer_uid, -1, SQLITE_STATIC);
     ok = sqlite3_step(clear) == SQLITE_DONE;
     sqlite3_bind_text(add, 1, s->peer_uid, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(add, 4, (int64_t)mc_wall_ms());
   }
   for (int i = 0; ok && i < n; i++) {
     if (!w[i].t || w[i].original || w[i].cached) continue;
     sqlite3_bind_text(add, 2, w[i].uid, -1, SQLITE_STATIC);
+    sqlite3_bind_int(add, 3, w[i].copy);
     ok = sqlite3_step(add) == SQLITE_DONE;
     sqlite3_reset(add);
   }
@@ -1604,14 +1670,18 @@ static mc_status send_plan(mc_session *s) {
   return send_doc(s->ch, MC_MSG_FILES_PLAN, doc);
 }
 
+/* How a track is fetched. RESCUE: an archive with nothing left of the track takes a member's
+ * lossy copy as it is, which is all there is. */
+enum { FETCH_SKIP, FETCH_ORIGINAL, FETCH_OPUS, FETCH_RESCUE };
+
 /* Encode-ahead: PREPARE_REQ with this device as the device, for the Opus tracks about to be
- * fetched that the peer has to encode (how 2, not cached), in fetch order, so the peer
+ * fetched that the peer has to encode (FETCH_OPUS, not cached), in fetch order, so the peer
  * encodes while it sends. A new message where kbps changes. */
 static mc_status send_ahead(mc_session *s, const want *w, const int *how, int n) {
   const char *me = mc_sync_db_device_uid(s->conn->sdb);
   mc_status st = MC_OK;
   for (int at = 0; st == MC_OK && at < n;) {
-    while (at < n && (how[at] != 2 || w[at].cached)) at++;
+    while (at < n && (how[at] != FETCH_OPUS || w[at].cached)) at++;
     if (at == n) break;
     int kbps = w[at].t->format.bitrate_kbps;
     yyjson_mut_val *root;
@@ -1621,7 +1691,7 @@ static mc_status send_ahead(mc_session *s, const want *w, const int *how, int n)
     yyjson_mut_val *arr = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, root, "tracks", arr);
     for (int added = 0; at < n && added < PREPARE_CHUNK; at++) {
-      if (how[at] != 2 || w[at].cached) continue;
+      if (how[at] != FETCH_OPUS || w[at].cached) continue;
       if (w[at].t->format.bitrate_kbps != kbps) break;
       yyjson_mut_arr_add_strcpy(doc, arr, w[at].uid);
       added++;
@@ -1630,6 +1700,15 @@ static mc_status send_ahead(mc_session *s, const want *w, const int *how, int n)
     st = send_doc(s->ch, MC_MSG_PREPARE_REQ, doc);
   }
   return st;
+}
+
+/* What w is fetched as, which for a rescue is the copy the peer has (in *rescue). */
+static const mc_plan_track *fetched_as(const want *w, int how, mc_plan_track *rescue) {
+  if (how != FETCH_RESCUE) return w->t;
+  *rescue = *w->t;
+  rescue->format.format = MC_FORMAT_OPUS;
+  rescue->format.bitrate_kbps = w->copy_kbps;
+  return rescue;
 }
 
 /* This device's turn as the receiver, with its plan in x. */
@@ -1708,7 +1787,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   transcoder *tc = NULL;
   int ntc = st == MC_OK ? list_transcoders(s, &tc) : 0;
   /* What to fetch, and how. */
-  int *how = n ? calloc((size_t)n, sizeof *how) : NULL; /* 0 skip, 1 original, 2 opus */
+  int *how = n ? calloc((size_t)n, sizeof *how) : NULL;
   if (n && !how) st = MC_ERR_NOMEM;
   s->files_total = 0;
   s->files_bytes = 0;
@@ -1716,13 +1795,17 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     /* Reconcile only looks this up for originals imported here. */
     if (peer_archive && w[i].original && w[i].verified) add_archived(x, w[i].uid);
     if (!w[i].t) continue;
-    if (w[i].t->format.format == MC_FORMAT_ORIGINAL)
-      how[i] = w[i].original ? 1 : 0;
+    if (w[i].t->format.format == MC_FORMAT_ORIGINAL) {
+      int kbps;
+      how[i] = w[i].original ? FETCH_ORIGINAL : FETCH_SKIP;
+      if (!w[i].original && plan->archive && w[i].copy_kbps > 0 && !any_copy(lib, w[i].uid, &kbps))
+        how[i] = FETCH_RESCUE;
+    }
     /* An original imported here goes when this archive has it, so the archive encodes it:
      * the other transcoders may not hold it yet. */
     else if (w[i].cached ||
              (w[i].original && ntc && (w[i].imported || assigned_to_peer(tc, ntc, w[i].uid))))
-      how[i] = 2;
+      how[i] = FETCH_OPUS;
     s->files_total += how[i] != 0;
     if (how[i]) s->files_bytes += want_bytes(&w[i]);
   }
@@ -1741,7 +1824,9 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   for (int next = 0; st == MC_OK;) {
     for (; st == MC_OK && nq < FETCH_AHEAD && next < n; next++) {
       if (!how[next]) continue;
-      st = ask_file(s, w[next].t, how[next] == 2, want_bytes(&w[next]), 0);
+      mc_plan_track rescue;
+      st = ask_file(s, fetched_as(&w[next], how[next], &rescue), how[next] >= FETCH_OPUS,
+                    want_bytes(&w[next]), 0);
       if (st == MC_OK) q[(head + nq++) % FETCH_AHEAD] = (asked){next, 0, "", NULL};
     }
     if (st != MC_OK || !nq) break;
@@ -1756,10 +1841,13 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     int got = GOT_FAILED;
     char *landed = NULL;
     int64_t before = s->bytes_received;
-    st = recv_file(s, w[a.i].t, how[a.i] == 2, &got, &landed);
+    mc_plan_track rescue;
+    const mc_plan_track *as = fetched_as(&w[a.i], how[a.i], &rescue);
+    int opus = how[a.i] >= FETCH_OPUS;
+    st = recv_file(s, as, opus, &got, &landed);
     if (st == MC_OK && got == GOT_MISMATCH && !a.retry) {
       /* Once more, behind what is already asked; this session has only this peer to ask. */
-      st = ask_file(s, w[a.i].t, how[a.i] == 2, want_bytes(&w[a.i]), 1);
+      st = ask_file(s, as, opus, want_bytes(&w[a.i]), 1);
       if (st == MC_OK) q[(head + nq++) % FETCH_AHEAD] = (asked){a.i, 1, "", NULL};
       continue;
     }
@@ -2064,7 +2152,14 @@ typedef struct file_row {
   char sha[SHA_STRLEN];
   mc_file_kind kind;
   int stale; /* made from an older file of the track (see the top) */
+  mc_file_check failed; /* what its file_failed row says, if it has one */
+  int64_t failed_size, failed_mtime;
 } file_row;
+
+/* Whether r's file is gone or corrupt, so it counts for nothing. */
+static int broken(const file_row *r) {
+  return r->failed == MC_CHECK_MISSING || r->failed == MC_CHECK_CORRUPT;
+}
 
 static void rows_free(file_row *rows, int n) {
   for (int i = 0; i < n; i++) free(rows[i].path);
@@ -2078,8 +2173,10 @@ static mc_status read_files(mc_library *lib, file_row **out, int *count) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
                          "SELECT f.uid, f.track_uid, f.path, f.format, f.bitrate_kbps, f.size_bytes,"
-                         " f.mtime_ms, f.sha256, f.source_file_uid, f.source_peer_uid, " STALE_SQL
+                         " f.mtime_ms, f.sha256, f.source_file_uid, f.source_peer_uid, " STALE_SQL ","
+                         " x.state, x.size_bytes, x.mtime_ms"
                          " FROM files f LEFT JOIN tracks t ON t.uid = f.track_uid"
+                         " LEFT JOIN file_failed x ON x.file_uid = f.uid"
                          " ORDER BY f.track_uid",
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
@@ -2121,6 +2218,9 @@ static mc_status read_files(mc_library *lib, file_row **out, int *count) {
     r->kind = mc_plan_file_kind((const char *)sqlite3_column_text(stmt, 8),
                                 (const char *)sqlite3_column_text(stmt, 9));
     r->stale = sqlite3_column_int(stmt, 10);
+    r->failed = (mc_file_check)sqlite3_column_int(stmt, 11);
+    r->failed_size = sqlite3_column_int64(stmt, 12);
+    r->failed_mtime = sqlite3_column_int64(stmt, 13);
   }
   sqlite3_finalize(stmt);
   if (st != MC_OK) {
@@ -2254,18 +2354,38 @@ static void move_file(mc_library *lib, file_row *r, const char *rel) {
   free(path);
 }
 
-/* Drops row r of rows, those of its track. If it was stale, a copy that replaced it found the
- * name taken and landed as "<name> (2).<ext>", and takes the name now. */
+/* Drops row r of rows, those of its track. If it was stale or broken, a copy that replaced it
+ * found the name taken and landed as "<name> (2).<ext>", and takes the name now. */
 static void drop_row(mc_session *s, file_row *rows, int n, file_row *r) {
   mc_library *lib = s->conn->lib;
   if (drop_file(lib, r->uid, r->path) != MC_OK) return;
   s->files_deleted++;
-  for (int j = 0; r->stale && j < n; j++) {
+  for (int j = 0; (r->stale || broken(r)) && j < n; j++) {
     if (rows[j].stale || rows[j].kind == MC_FILE_IMPORTED || !numbered_copy(rows[j].path, r->path))
       continue;
     move_file(lib, &rows[j], r->path);
     break;
   }
+}
+
+/* An original imported here that's missing or corrupt goes once a good copy in the format
+ * wanted is here. Before that it stays, in case it's only away, and says so on the card. */
+static void replace_failed(mc_session *s, mc_transfer *x) {
+  file_row *rows;
+  int n;
+  if (read_files(s->conn->lib, &rows, &n) != MC_OK) return;
+  for (int i = 0; i < n;) {
+    int end = i, good = 0;
+    while (end < n && !strcmp(rows[end].track, rows[i].track)) end++;
+    const mc_plan_track *t = mc_plan_find(x->plan, rows[i].track);
+    for (int j = i; t && j < end; j++)
+      good |= !rows[j].stale && !broken(&rows[j]) &&
+              mc_plan_file_satisfies(t, rows[j].kind, rows[j].format, rows[j].bitrate, rows[j].size);
+    for (int j = i; good && j < end; j++)
+      if (broken(&rows[j])) drop_row(s, &rows[i], end - i, &rows[j]);
+    i = end;
+  }
+  rows_free(rows, n);
 }
 
 /* Files of tracks no longer wanted, in the wrong format, or stale go. A wrong-format or
@@ -2282,8 +2402,9 @@ static void reconcile_files(mc_session *s, mc_transfer *x) {
     const mc_plan_track *t = mc_plan_find(x->plan, rows[i].track);
     int satisfied = 0;
     for (int j = i; t && j < end; j++)
-      satisfied |= !rows[j].stale && mc_plan_file_satisfies(t, rows[j].kind, rows[j].format,
-                                                             rows[j].bitrate, rows[j].size);
+      satisfied |= !rows[j].stale && !broken(&rows[j]) &&
+                   mc_plan_file_satisfies(t, rows[j].kind, rows[j].format, rows[j].bitrate,
+                                          rows[j].size);
     for (int j = i; j < end; j++) {
       file_row *r = &rows[j];
       if (t && (!satisfied ||
@@ -2307,7 +2428,8 @@ static void drop_stale_on_archive(mc_session *s) {
   for (int i = 0; i < n;) {
     int end = i, current = 0;
     while (end < n && !strcmp(rows[end].track, rows[i].track)) end++;
-    for (int j = i; j < end; j++) current |= !rows[j].stale && rows[j].kind != MC_FILE_TRANSCODE;
+    for (int j = i; j < end; j++)
+      current |= !rows[j].stale && !broken(&rows[j]) && rows[j].kind != MC_FILE_TRANSCODE;
     for (int j = i; current && j < end; j++)
       if (rows[j].stale) drop_row(s, &rows[i], end - i, &rows[j]);
     i = end;
@@ -2321,6 +2443,20 @@ static int session_stopping(void *user) {
   return mc_sync_is_stopping(user);
 }
 
+/* How many unknown files the latest sweep left in the library folder. */
+static void note_unknown(mc_sync_db *sdb, int count) {
+  sqlite3_stmt *stmt;
+  if (mc_sync_db_begin_write(sdb) != MC_OK) return;
+  int ok = sqlite3_prepare_v2(mc_sync_db_handle(sdb), "UPDATE local SET unknown_files = ?1", -1,
+                              &stmt, NULL) == SQLITE_OK;
+  if (ok) {
+    sqlite3_bind_int(stmt, 1, count);
+    ok = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+  }
+  if (!ok || mc_sync_db_commit(sdb) != MC_OK) mc_sync_db_rollback(sdb);
+}
+
 static void sweep_orphans(mc_session *s, int archive) {
   if (s->files_corrupt) {
     fprintf(stderr, "musiccore: orphans: not sweeping: %d files failed their checksum\n",
@@ -2330,52 +2466,156 @@ static void sweep_orphans(mc_session *s, int archive) {
   mc_orphans_args a = {s->conn->lib, s->sync->config_dir, MC_ORPHANS_ARCHIVE_ONLY_REPORTS && archive, 1,
                        session_stopping, s->sync};
   mc_orphans_result r;
-  mc_orphans_sweep(&a, &r);
+  memset(&r, 0, sizeof r);
+  mc_status st = mc_orphans_sweep(&a, &r);
   s->files_unknown += r.orphans;
   s->files_deleted += r.removed;
+  /* The card shows what an archive only reported. MC_ERR_INVALID_ARG: it judged, and refused. */
+  if (st == MC_OK || st == MC_ERR_INVALID_ARG) note_unknown(s->conn->sdb, archive ? r.orphans : 0);
 }
 
-/* Checks every files row. Failed copies from peers are deleted with their rows so they're
- * fetched again; failed originals imported here are only counted. A deep check records
- * the hash of files that have none. */
+/* Runs sql, an UPDATE of a file's row, with ?1 uid and ?2 text if it isn't NULL, else number. */
+static void set_file(mc_library *lib, const char *uid, const char *sql, const char *text,
+                     int64_t number) {
+  if (mc_library_begin_write(lib) != MC_OK) return;
+  sqlite3_stmt *stmt;
+  int done = 0;
+  if (sqlite3_prepare_v2(mc_library_db(lib), sql, -1, &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+    if (text) sqlite3_bind_text(stmt, 2, text, -1, SQLITE_STATIC);
+    else sqlite3_bind_int64(stmt, 2, number);
+    done = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+  }
+  if (done) mc_library_commit(lib);
+  else mc_library_rollback(lib);
+}
+
+/* What r's file is like now, or -1 if stop said to give up. A deep check also reads it: it
+ * records the hash of a file with none, and a file whose time alone changed and whose hash
+ * didn't was only touched, so its row takes the time. A hash that differs only says corrupt
+ * where the size and time say nobody wrote to the file: bytes that changed with them may be
+ * the user's own edit. */
+static int check_file(mc_library *lib, const file_row *r, int deep, int (*stop)(void *), void *user) {
+  char *abs = mc_library_abspath(lib, r->path);
+  int64_t size = 0, mtime = 0;
+  int state = MC_CHECK_MISSING;
+  if (abs && mc_file_info(abs, &size, &mtime) == MC_OK) {
+    int same_time = !r->has_mtime || mtime == r->mtime;
+    char sha[SHA_STRLEN];
+    state = size == r->size && same_time ? MC_CHECK_OK : MC_CHECK_CHANGED;
+    if (deep && size == r->size && (same_time || r->sha[0])) {
+      mc_status st = hash_file_until(abs, sha, stop, user);
+      int64_t size_after = 0, mtime_after = 0;
+      if (st == MC_ERR_CANCELLED) {
+        state = -1;
+      } else if (st != MC_OK || mc_file_info(abs, &size_after, &mtime_after) != MC_OK ||
+                 size_after != size || mtime_after != mtime) {
+        state = MC_CHECK_CHANGED; /* unreadable, or written to while it was read */
+      } else if (!r->sha[0]) {
+        set_file(lib, r->uid, "UPDATE files SET sha256 = ?2 WHERE uid = ?1", sha, 0);
+      } else if (strcmp(sha, r->sha) != 0) {
+        state = same_time ? MC_CHECK_CORRUPT : MC_CHECK_CHANGED;
+      } else if (!same_time) {
+        set_file(lib, r->uid, "UPDATE files SET mtime_ms = ?2 WHERE uid = ?1", NULL, mtime);
+        state = MC_CHECK_OK;
+      }
+    }
+  }
+  free(abs);
+  return state;
+}
+
+/* Notes what a check of r found in file_failed. */
+static void note_check(mc_library *lib, const file_row *r, int state) {
+  if (mc_library_begin_write(lib) != MC_OK) return;
+  sqlite3_stmt *stmt;
+  int done = 0;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         state == MC_CHECK_OK
+                           ? "DELETE FROM file_failed WHERE file_uid = ?1"
+                           : "INSERT OR REPLACE INTO file_failed (file_uid, state, size_bytes,"
+                             " mtime_ms) VALUES (?1, ?2, ?3, ?4)",
+                         -1, &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, r->uid, -1, SQLITE_STATIC);
+    if (state != MC_CHECK_OK) {
+      sqlite3_bind_int(stmt, 2, state);
+      sqlite3_bind_int64(stmt, 3, r->size);
+      sqlite3_bind_int64(stmt, 4, r->mtime);
+    }
+    done = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+  }
+  if (done) mc_library_commit(lib);
+  else mc_library_rollback(lib);
+}
+
+/* Acts on what a check of r found. Failed copies from peers are deleted with their rows so
+ * they're fetched again; failed originals imported here are only noted. */
+static void take_check(mc_library *lib, const file_row *r, int deep, int state,
+                       mc_verify_result *res) {
+  /* A fast check can't see corruption: what a deep one found stands while the row is the one it
+   * found it in. */
+  if (state == MC_CHECK_OK && !deep && r->failed == MC_CHECK_CORRUPT &&
+      r->failed_size == r->size && r->failed_mtime == r->mtime)
+    state = MC_CHECK_CORRUPT;
+  res->checked++;
+  if (state == MC_CHECK_OK) {
+    res->ok++;
+    if (r->failed) note_check(lib, r, state);
+    return;
+  }
+  res->failed++;
+  fprintf(stderr, "musiccore: sync: %s failed its %s check\n", r->path, deep ? "deep" : "fast");
+  if (r->kind != MC_FILE_IMPORTED) {
+    if (drop_file(lib, r->uid, r->path) == MC_OK) res->deleted++;
+  } else if ((int)r->failed != state || r->failed_size != r->size || r->failed_mtime != r->mtime) {
+    note_check(lib, r, state);
+  }
+}
+
+/* Before a session: a file noted missing or changed that's back as its row says is taken off the
+ * list, so the session doesn't fetch it or tell a member it hasn't got it. A corrupt one takes a
+ * deep check to clear. */
+static void forgive_returned(mc_library *lib) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT f.uid, f.path, f.size_bytes, f.mtime_ms FROM file_failed x"
+                         " JOIN files f ON f.uid = x.file_uid WHERE x.state <> 3",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return;
+  file_row *back = NULL;
+  int n = 0;
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *uid = (const char *)sqlite3_column_text(stmt, 0);
+    const char *path = (const char *)sqlite3_column_text(stmt, 1);
+    file_row r;
+    memset(&r, 0, sizeof r);
+    if (!is_uid(uid) || !path) continue;
+    memcpy(r.uid, uid, MC_UID_STRLEN);
+    r.path = (char *)path;
+    r.size = sqlite3_column_int64(stmt, 2);
+    r.has_mtime = sqlite3_column_type(stmt, 3) != SQLITE_NULL;
+    r.mtime = sqlite3_column_int64(stmt, 3);
+    if (check_file(lib, &r, 0, NULL, NULL) != MC_CHECK_OK) continue;
+    file_row *more = realloc(back, (size_t)(n + 1) * sizeof *more);
+    if (!more) break;
+    back = more;
+    back[n++] = r;
+  }
+  sqlite3_finalize(stmt);
+  for (int i = 0; i < n; i++) note_check(lib, &back[i], MC_CHECK_OK);
+  free(back);
+}
+
+/* Checks every files row. */
 static void verify_files(mc_library *lib, int deep, mc_verify_result *res) {
   memset(res, 0, sizeof *res);
   file_row *rows;
   int n;
   if (read_files(lib, &rows, &n) != MC_OK) return;
-  for (int i = 0; i < n; i++) {
-    file_row *r = &rows[i];
-    char *abs = mc_library_abspath(lib, r->path);
-    int64_t size = 0, mtime = 0;
-    int ok = abs && mc_file_info(abs, &size, &mtime) == MC_OK && size == r->size &&
-             (!r->has_mtime || mtime == r->mtime);
-    char sha[SHA_STRLEN];
-    if (ok && deep) {
-      ok = hash_file(abs, sha) == MC_OK && (!r->sha[0] || !strcmp(sha, r->sha));
-      if (ok && !r->sha[0] && mc_library_begin_write(lib) == MC_OK) {
-        sqlite3_stmt *stmt;
-        int done = 0;
-        if (sqlite3_prepare_v2(mc_library_db(lib), "UPDATE files SET sha256 = ?2 WHERE uid = ?1",
-                               -1, &stmt, NULL) == SQLITE_OK) {
-          sqlite3_bind_text(stmt, 1, r->uid, -1, SQLITE_STATIC);
-          sqlite3_bind_text(stmt, 2, sha, -1, SQLITE_STATIC);
-          done = sqlite3_step(stmt) == SQLITE_DONE;
-          sqlite3_finalize(stmt);
-        }
-        if (done) mc_library_commit(lib);
-        else mc_library_rollback(lib);
-      }
-    }
-    free(abs);
-    res->checked++;
-    if (ok) {
-      res->ok++;
-      continue;
-    }
-    res->failed++;
-    fprintf(stderr, "musiccore: sync: %s failed its %s check\n", r->path, deep ? "deep" : "fast");
-    if (r->kind != MC_FILE_IMPORTED && drop_file(lib, r->uid, r->path) == MC_OK) res->deleted++;
-  }
+  for (int i = 0; i < n; i++)
+    take_check(lib, &rows[i], deep, check_file(lib, &rows[i], deep, NULL, NULL), res);
   rows_free(rows, n);
 }
 
@@ -2482,6 +2722,7 @@ void mc_transfer_write_status(mc_sync *sync, mc_sync_conn *c) {
 void mc_transfer_begin(mc_session *s) {
   if (s->xfer) return;
   s->xfer = calloc(1, sizeof *s->xfer);
+  forgive_returned(s->conn->lib);
   if (s->xfer && sqlite3_exec(mc_library_db(s->conn->lib), k_watch_sql, NULL, NULL, NULL) != SQLITE_OK)
     fprintf(stderr, "musiccore: sync: can't watch for deleted files: %s\n",
             sqlite3_errmsg(mc_library_db(s->conn->lib)));
@@ -2510,6 +2751,7 @@ void mc_transfer_end(mc_session *s, int ok) {
   drop_deleted_tracks(s);
   sqlite3_exec(mc_library_db(lib), k_unwatch_sql, NULL, NULL, NULL);
   if (ok && x->fetched) {
+    replace_failed(s, x);
     if (!x->plan->archive) reconcile_files(s, x);
     else drop_stale_on_archive(s);
     /* Files the user took back out of the trash would look unknown: their rows first. */
@@ -2555,6 +2797,162 @@ void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r) {
 
 /* --- Public API --- */
 
+/* After a check, through c: writes this device's sync_status when the open library is the
+ * group's. */
+static void check_ended(mc_sync *sync, mc_sync_conn *c, mc_sync_lib_state state) {
+  if (state != MC_SYNC_LIBRARY_GROUP) return;
+  int64_t free_bytes = mc_sync_free_space(c->lib);
+  mc_plan *plan = NULL;
+  if (mc_plan_compute(c->sdb, c->lib, sync->device_uid, free_bytes, &plan) == MC_OK &&
+      plan->status == MC_PLAN_OK)
+  {
+    status_row v;
+    int64_t latest;
+    compute_status(c->lib, plan, 0, &v, &latest);
+    /* Written now, outside any session; it replaces one a session left pending. */
+    mc_mutex_lock(&sync->lock);
+    sync->status_pending = 0;
+    mc_mutex_unlock(&sync->lock);
+    if (status_due(c->sdb, &v, 1, latest)) store_status(c->sdb, &v);
+  }
+  mc_plan_free(plan);
+}
+
+/* Notes in sync.db how far the deep check got: the track at (NULL: none), and with finished_ms
+ * the time it ended. */
+static void deep_note(mc_sync_db *sdb, const char *at, int64_t finished_ms) {
+  sqlite3_stmt *stmt;
+  if (mc_sync_db_begin_write(sdb) != MC_OK) return;
+  int ok = sqlite3_prepare_v2(mc_sync_db_handle(sdb),
+                              "UPDATE local SET deep_check_at = ?1,"
+                              " deep_check_ms = coalesce(?2, deep_check_ms)",
+                              -1, &stmt, NULL) == SQLITE_OK;
+  if (ok) {
+    if (at) sqlite3_bind_text(stmt, 1, at, -1, SQLITE_STATIC);
+    if (finished_ms) sqlite3_bind_int64(stmt, 2, finished_ms);
+    ok = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+  }
+  if (!ok || mc_sync_db_commit(sdb) != MC_OK) mc_sync_db_rollback(sdb);
+}
+
+/* Reads where the deep check stands. 1 if it's due: it never finished, or not for a week. */
+static int deep_state(mc_sync_db *sdb, char at[MC_UID_STRLEN]) {
+  at[0] = '\0';
+  sqlite3_stmt *stmt;
+  int due = 0;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sdb), "SELECT deep_check_ms, deep_check_at FROM local",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *v = (const char *)sqlite3_column_text(stmt, 1);
+    if (is_uid(v)) memcpy(at, v, MC_UID_STRLEN);
+    due = at[0] || sqlite3_column_type(stmt, 0) == SQLITE_NULL ||
+          (int64_t)mc_wall_ms() - sqlite3_column_int64(stmt, 0) >=
+            (int64_t)MC_SYNC_DEEP_CHECK_DAYS * 24 * 60 * 60 * 1000;
+  }
+  sqlite3_finalize(stmt);
+  return due;
+}
+
+int mc_transfer_deep_due(mc_sync_db *sdb) {
+  char at[MC_UID_STRLEN];
+  return deep_state(sdb, at);
+}
+
+typedef struct deep_limit {
+  uint64_t until_ms; /* mono; 0: none */
+  int (*stop)(void *);
+  void *user;
+} deep_limit;
+
+static int deep_stopping(void *user) {
+  const deep_limit *l = user;
+  return (l->until_ms && mc_mono_ms() >= l->until_ms) || (l->stop && l->stop(l->user));
+}
+
+/* Whether files row r still says what it said when the check read it. */
+static int row_current(mc_library *lib, const file_row *r) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_library_db(lib),
+                         "SELECT 1 FROM files WHERE uid = ?1 AND path = ?2 AND size_bytes = ?3"
+                         " AND (mtime_ms IS NULL OR mtime_ms = ?4)",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return 0;
+  sqlite3_bind_text(stmt, 1, r->uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, r->path, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 3, r->size);
+  sqlite3_bind_int64(stmt, 4, r->mtime);
+  int same = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  return same;
+}
+
+mc_status mc_transfer_deep_run(mc_sync *sync, mc_sync_conn *c, int64_t budget_ms,
+                               int (*stop)(void *), void *user, int *done) {
+  *done = 0;
+  char at[MC_UID_STRLEN];
+  if (!deep_state(c->sdb, at)) {
+    *done = 1;
+    return MC_OK;
+  }
+  mc_sync_lib_state state = MC_SYNC_LIBRARY_NO_GROUP;
+  if (mc_sync_library_state(sync, &state) != MC_OK) state = MC_SYNC_LIBRARY_NO_GROUP;
+  file_row *rows;
+  int n;
+  mc_status st = read_files(c->lib, &rows, &n);
+  if (st != MC_OK) return st;
+  deep_limit limit = {budget_ms > 0 ? mc_mono_ms() + (uint64_t)budget_ms : 0, stop, user};
+  mc_verify_result res;
+  memset(&res, 0, sizeof res);
+  uint64_t saved = mc_mono_ms();
+  int stopped = 0;
+  for (int i = 0; i < n && !stopped; i++) {
+    const file_row *r = &rows[i];
+    if (at[0] && strcmp(r->track, at) <= 0) continue;
+    /* A track's done with once the next one comes up. */
+    if (i && strcmp(rows[i - 1].track, r->track)) {
+      if (!at[0] || strcmp(rows[i - 1].track, at) > 0) memcpy(at, rows[i - 1].track, MC_UID_STRLEN);
+      if (mc_mono_ms() - saved >= DEEP_SAVE_MS) {
+        deep_note(c->sdb, at, 0);
+        saved = mc_mono_ms();
+      }
+    }
+    if (deep_stopping(&limit)) {
+      stopped = 1;
+      break;
+    }
+    uint64_t t0 = mc_mono_ms();
+    int found = check_file(c->lib, r, 1, deep_stopping, &limit);
+    if (found < 0) {
+      stopped = 1;
+    } else if (found == MC_CHECK_OK && !r->failed) {
+      res.checked++;
+      res.ok++;
+    } else {
+      /* Acting on it can't race a session's file phase, which may just have moved the file. */
+      files_wait(sync);
+      if (row_current(c->lib, r)) {
+        found = check_file(c->lib, r, 1, deep_stopping, &limit);
+        if (found < 0) stopped = 1;
+        else take_check(c->lib, r, 1, found, &res);
+      }
+      files_release(sync);
+    }
+    /* It rests as long as it worked, up to a point, to leave the disk to whatever's playing. */
+    uint64_t took = mc_mono_ms() - t0;
+    if (!stopped && took) mc_sleep_ms(took < DEEP_REST_MAX_MS ? (uint32_t)took : DEEP_REST_MAX_MS);
+  }
+  rows_free(rows, n);
+  if (stopped) deep_note(c->sdb, at[0] ? at : NULL, 0);
+  else deep_note(c->sdb, NULL, (int64_t)mc_wall_ms());
+  *done = !stopped;
+  if (!stopped) check_ended(sync, c, state);
+  if (state == MC_SYNC_LIBRARY_GROUP && res.failed) mc_sync_notify_changed(sync);
+  if (!stopped || res.failed) mc_sync_waiting_changed(sync);
+  return MC_OK;
+}
+
 mc_status mc_sync_verify(mc_sync *sync, mc_verify_mode mode, mc_verify_result *out) {
   if (out) memset(out, 0, sizeof *out);
   if (!sync || (mode != MC_VERIFY_FAST && mode != MC_VERIFY_DEEP)) return MC_ERR_INVALID_ARG;
@@ -2564,29 +2962,43 @@ mc_status mc_sync_verify(mc_sync *sync, mc_verify_mode mode, mc_verify_result *o
   mc_mutex_lock(&sync->api_lock);
   mc_verify_result r;
   verify_files(sync->api.lib, mode == MC_VERIFY_DEEP, &r);
-  if (state == MC_SYNC_LIBRARY_GROUP) {
-    int64_t free_bytes = mc_sync_free_space(sync->api.lib);
-    mc_plan *plan = NULL;
-    if (mc_plan_compute(sync->api.sdb, sync->api.lib, sync->device_uid, free_bytes, &plan) ==
-            MC_OK &&
-        plan->status == MC_PLAN_OK)
-    {
-      status_row v;
-      int64_t latest;
-      compute_status(sync->api.lib, plan, 0, &v, &latest);
-      /* Written now, outside any session; it replaces one a session left pending. */
-      mc_mutex_lock(&sync->lock);
-      sync->status_pending = 0;
-      mc_mutex_unlock(&sync->lock);
-      if (status_due(sync->api.sdb, &v, 1, latest)) store_status(sync->api.sdb, &v);
-    }
-    mc_plan_free(plan);
-  }
+  if (mode == MC_VERIFY_DEEP) deep_note(sync->api.sdb, NULL, (int64_t)mc_wall_ms());
+  check_ended(sync, &sync->api, state);
   mc_mutex_unlock(&sync->api_lock);
   files_release(sync);
-  /* Deleted copies are missing again, and may wait for a device. */
-  if (state == MC_SYNC_LIBRARY_GROUP && r.deleted) mc_sync_waiting_changed(sync);
+  /* Deleted copies are missing again, and may wait for a device; what failed goes on the card. */
+  mc_sync_waiting_changed(sync);
   if (state == MC_SYNC_LIBRARY_GROUP && r.failed) mc_sync_notify_changed(sync);
   if (out) *out = r;
   return MC_OK;
+}
+
+mc_status mc_sync_remove_lost(mc_sync *sync, const char *const *uids, int count,
+                              struct mc_delete_result *out) {
+  if (out) memset(out, 0, sizeof *out);
+  if (!sync || count < 0 || (count && !uids)) return MC_ERR_INVALID_ARG;
+  if (!files_try(sync)) return MC_ERR_LOCKED;
+  mc_mutex_lock(&sync->api_lock);
+  /* Worked out again here, with nothing else at the files: only what's lost as of now goes,
+   * whatever the card said when the user pressed its button. */
+  mc_sync_problems *p = NULL;
+  mc_status st = mc_problems_compute(sync->api.sdb, sync->api.lib, &p);
+  const char **still = st == MC_OK && count ? malloc((size_t)count * sizeof *still) : NULL;
+  int n = 0;
+  if (st == MC_OK && count && !still) st = MC_ERR_NOMEM;
+  for (int i = 0; st == MC_OK && i < count; i++)
+    if (mc_problems_is_lost(p, uids[i])) still[n++] = uids[i];
+  mc_delete_plan *plan = NULL;
+  if (st == MC_OK && n) st = mc_delete_plan_new(sync->api.lib, MC_DELETE_TRACKS, still, n, &plan);
+  if (st == MC_OK && plan)
+    st = sync->kind == MC_DEVICE_DESKTOP
+           ? mc_delete_run(sync->api.lib, sync->config_dir, plan, out)
+           : mc_delete_run_permanently(sync->api.lib, plan, out);
+  mc_delete_plan_free(plan);
+  free(still);
+  mc_sync_problems_free(p);
+  mc_mutex_unlock(&sync->api_lock);
+  files_release(sync);
+  mc_sync_waiting_changed(sync);
+  return st;
 }

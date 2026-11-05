@@ -16,6 +16,14 @@
 #include "sync/plan.h"
 #include "sync/session.h"
 
+/* What a check made of a file. file_failed.state, but for OK. */
+typedef enum mc_file_check {
+  MC_CHECK_OK,
+  MC_CHECK_MISSING, /* not there */
+  MC_CHECK_CHANGED, /* its size or time isn't the row's: maybe damage, maybe the user's own edit */
+  MC_CHECK_CORRUPT  /* its size and time are the row's, but not its hash */
+} mc_file_check;
+
 /* The transcode cache, in the per-device config dir, and the size the LRU trim keeps it to. */
 #define MC_TRANSCODE_CACHE_DIR "transcode-cache"
 #define MC_TRANSCODE_CACHE_MAX ((int64_t)8 << 30)
@@ -46,6 +54,14 @@ extern int (*mc_transfer_test_corrupt)(const char *track);
  * older file of the track): the track isn't missing. *cache keeps the query for the next
  * call (NULL: none); finalize it once done. */
 int mc_transfer_track_satisfied(mc_library *lib, sqlite3_stmt **cache, const mc_plan_track *t);
+
+/* Whether this device's weekly deep check is due, or has a run to finish. */
+int mc_transfer_deep_due(mc_sync_db *sdb);
+/* Goes on with the weekly deep check through c, on a thread of its own, until it's over or stop
+ * (may be NULL) or budget_ms (0: none) says enough. Only what it finds wrong waits for the
+ * sessions' file phase, so sessions go on meanwhile. *done: nothing is left to do. */
+mc_status mc_transfer_deep_run(mc_sync *sync, mc_sync_conn *c, int64_t budget_ms,
+                               int (*stop)(void *), void *user, int *done);
 
 /* Copies the session's file counts into r. */
 void mc_transfer_fill_result(const mc_session *s, mc_sync_result *r);

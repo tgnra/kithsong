@@ -76,8 +76,10 @@ a separate `sync.db` in the per-device config dir. See
 `capabilities.addresses`, and the local-only `peer_contact`), v3 (`profiles.name`), v4
 (`scrobble_account`, and the local-only `scrobble_queue`), v5
 (`devices.confirmed_profile`), v6 (`scrobble_queue.track_uid`), v7 (index `changelog_origin`)
-and v8 (the local-only `peer_lacks`, see
-[Waiting for a device](sync-protocol.md#waiting-for-a-device)). Removing an album or artist from one device needed no
+v8 (the local-only `peer_lacks`, see
+[Waiting for a device](sync-protocol.md#waiting-for-a-device)) and v9 (`peer_lacks.has_copy` and
+`said_ms`, `local.deep_check_ms`, `deep_check_at` and `unknown_files`, see
+[Verification](sync-protocol.md#verification)). Removing an album or artist from one device needed no
 migration: it's a `profile_items` row of a new kind, `exclude_album` or `exclude_artist`
 (see [Removing from one device](sync-protocol.md#removing-from-one-device)), which older
 versions keep and ignore. A track's delete taken back out of the recycle bin is the same
@@ -895,6 +897,7 @@ joins only its own table. That's why a kind is only ever added.
 | `merge_keys`       | no     | the MusicBrainz ids and `merge_name`s ever logged per uid, which decide what merges (rows of singles albums' artists from before v12 are left, unused) |
 | `changelog`        | -      | field-level change log that sync is built on |
 | `analysis_failed`  | no     | files that wouldn't decode for the audio analysis; see [Audio analysis](#audio-analysis) |
+| `file_failed`      | no     | originals imported here that failed a check; see [Failed originals](sync-protocol.md#failed-originals) |
 | `recycle_bin`      | no     | deletes made here that no other device has heard of yet, which can be taken back; see [Recycle bin](#recycle-bin) |
 | `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_name_seq` (the `seq` names were last logged at, see [Duplicates](sync-protocol.md#duplicates)), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `merge_wait` (set with it until this device's profile is confirmed: the merge waits for that, see [Merging libraries](sync-protocol.md#merging-libraries); its value is the run of the app that set it, and a later run finding it undoes the pairing), `merge_with` and `merge_name` (with them: the kept device's name and this device's own before pairing), `merge_restored` (the kept device's name, after a pairing was undone, until a frontend has said so), `merge_restore_sync` and `merge_restored_name` (while an undone pairing's `sync.db` and name are still to be put back; see "Abandoning a merge" there), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), `changelog_epoch` (bumped each time a delete is taken back out of the recycle bin, which takes changelog rows out; see [Recycle bin](#recycle-bin)), `edit_swap` (while a hand edit swaps its files: what to put right after a crash; see [Hand edits](tagging-rules.md#hand-edits)), `stress_library` (the preset, in a generated stress test library: sync and scrobbling refuse such a library, see `musiccore/stress.h`), and other per-library settings |
 

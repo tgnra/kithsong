@@ -321,6 +321,8 @@ typedef struct mc_sync_events {
    * when it changed, never for a reach check or discovery coming and going (see "Waiting
    * for a device" below). */
   void (*on_waiting)(void *user);
+  /* What mc_sync_get_problems() returns changed: a card showing it reads it again. */
+  void (*on_problems)(void *user);
 } mc_sync_events;
 
 /* Opens this device's sync state in config_dir (the per-device config dir, which holds
@@ -786,7 +788,11 @@ mc_status mc_sync_estimate_profile(mc_sync *sync, const char *device_uid,
 
 /* --- Verification ---
  * Every file sync receives is checked against its SHA-256 on arrival (files.sha256). A fast
- * check also runs after each session. */
+ * check also runs after each session, and a deep one every MC_SYNC_DEEP_CHECK_DAYS: by itself
+ * on a desktop or laptop while on mains power, and on a phone or watch through
+ * mc_sync_verify_weekly() from a job that needs a charger. */
+
+#define MC_SYNC_DEEP_CHECK_DAYS 7
 
 typedef enum mc_verify_mode {
   MC_VERIFY_FAST, /* each file's size and modification time against its files row */
@@ -806,6 +812,54 @@ typedef struct mc_verify_result {
  * group's. Blocks for as long as it takes (a deep check reads every file), waiting first for
  * a session's file phase to finish. out may be NULL. */
 mc_status mc_sync_verify(mc_sync *sync, mc_verify_mode mode, mc_verify_result *out);
+
+/* Goes on with the weekly deep check for up to budget_ms (0: until it's over), where it left off
+ * if it was stopped, on the caller's thread. Does nothing if it isn't due. Unlike
+ * mc_sync_verify() it holds nothing up while it reads. *done: it's over for this week, so a job
+ * can stop asking. For a device that doesn't run it by itself. */
+mc_status mc_sync_verify_weekly(mc_sync *sync, int64_t budget_ms, int *done);
+
+/* --- Problems ---
+ * What the checks left for the user to see, for a warning card at the top of the library.
+ *
+ * A track is lost when this device, an archive that fetches files, holds nothing of it, and
+ * every other current member said so too: each must have said in a session in the last
+ * MC_SYNC_LOST_ASKED_DAYS that it has no file of the track at all, lossy copies included. A
+ * member that hasn't said, or has been away that long, keeps the track off the list, however
+ * sure the others are, as it may be the last to hold it. See "Verification" in
+ * docs/sync-protocol.md. */
+
+#define MC_SYNC_LOST_ASKED_DAYS 7
+
+typedef struct mc_sync_lost_track {
+  char uid[MC_UID_STRLEN];
+  char *title;
+  char *artist; /* its credit as shown; NULL if none */
+} mc_sync_lost_track;
+
+typedef struct mc_sync_problems {
+  int failed;  /* files here that are missing, changed or corrupt, not counting lost tracks' */
+  int unknown; /* files in the library folder that an archive's latest sweep couldn't place */
+  int lost;
+  mc_sync_lost_track *tracks; /* the lost ones, as many as lost, sorted by uid */
+} mc_sync_problems;
+
+/* The problems as last worked out; never NULL on MC_OK. Doesn't block on the databases. Free
+ * with mc_sync_problems_free(). */
+mc_status mc_sync_get_problems(mc_sync *sync, mc_sync_problems **out);
+void mc_sync_problems_free(mc_sync_problems *problems);
+/* The card's sentences for p in the current language, "" if there's nothing to say. Like
+ * snprintf: returns the length it wanted. */
+size_t mc_sync_problems_text(const mc_sync_problems *p, char *buf, size_t size);
+
+/* Removes those of uids that are lost as of now from the library, so from every device, as a
+ * delete here would: to the Recycle Bin or trash on a desktop, for good on a phone or watch, and
+ * a damaged file with them. MC_ERR_LOCKED, with nothing done, while a session's file phase runs:
+ * it may be bringing one of them. Whatever isn't lost any more (a file came back, a member has
+ * it after all) is left out, and only out says so: compare its tracks_deleted with count. Call
+ * it only once the user has confirmed: nothing can fetch the tracks back. out may be NULL. */
+mc_status mc_sync_remove_lost(mc_sync *sync, const char *const *uids, int count,
+                              struct mc_delete_result *out);
 
 #ifdef __cplusplus
 }

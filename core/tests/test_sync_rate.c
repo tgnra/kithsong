@@ -125,7 +125,7 @@ static void on_progress(void *user, const mc_sync_progress *p) {
 }
 
 static const mc_sync_events k_events = {NULL, on_pair_code, on_pair_result, on_progress, on_sync_done,
-                                        NULL, NULL, NULL, NULL, NULL};
+                                        NULL, NULL, NULL, NULL, NULL, NULL};
 
 static int dev_open(dev *d, const char *root, const char *label) {
   d->label = label;

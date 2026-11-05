@@ -74,6 +74,15 @@ static const char *const k_migrations[] = {
   "  track_uid  TEXT NOT NULL,"
   "  PRIMARY KEY (device_uid, track_uid)"
   ") WITHOUT ROWID;",
+  /* v9: verification. peer_lacks says when a member said so and whether it holds some other
+   * copy of the track, for what's missing for good (sync/problems.h). local keeps when the
+   * weekly deep check last finished, the track it had got to, and how many unknown files the
+   * latest sweep reported. */
+  "ALTER TABLE peer_lacks ADD COLUMN has_copy INTEGER NOT NULL DEFAULT 0;"
+  "ALTER TABLE peer_lacks ADD COLUMN said_ms INTEGER NOT NULL DEFAULT 0;"
+  "ALTER TABLE local ADD COLUMN deep_check_ms INTEGER;"
+  "ALTER TABLE local ADD COLUMN deep_check_at TEXT;"
+  "ALTER TABLE local ADD COLUMN unknown_files INTEGER NOT NULL DEFAULT 0;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 

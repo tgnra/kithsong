@@ -192,6 +192,10 @@ struct mc_sync {
   struct mc_sync_waiting *waiting;
   int waiting_dirty;
   int waiting_announce; /* the answer was dropped (a pairing undone): say so with the next */
+  struct mc_sync_problems *problems; /* problems.h, worked out with the waiting tracks */
+  /* The weekly deep check: a run under way, whoever asked for it. Under lock. */
+  int deep_running;
+  uint32_t deep_delay_ms; /* how long after start a desktop first looks whether it's due */
   uint64_t waiting_grace_ms;
   /* The recycle bin (here.c): library exchanges that may be sending rows, which a restore
    * waits out (it's refused meanwhile), and a restore under way, which they wait for. Under
@@ -365,6 +369,9 @@ void mc_pairing_initiate(void *arg);
 void mc_pairing_respond(mc_sync *sync, mc_sync_conn *c, mc_channel *ch);
 
 /* --- Test hooks --- */
+
+/* How long after mc_sync_start() the scheduler first looks whether the weekly deep check is due. */
+void mc_sync_set_test_deep_delay(mc_sync *sync, uint32_t ms);
 
 /* Before mc_sync_start(): listen on port (0: ephemeral) instead of the default, and run
  * without discovery. */
