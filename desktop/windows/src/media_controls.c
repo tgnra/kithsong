@@ -7,6 +7,7 @@
 #include "media_controls.h"
 
 #include "cover.h" /* before initguid.h, which would define WIC's IIDs here too */
+#include "wstr.h"
 
 #include <initguid.h> /* defines the WinRT IIDs below, which no import library has */
 #include <roapi.h>
@@ -216,11 +217,12 @@ static HSTRING hstring(const wchar_t *text) {
 
 /* The album's cover as a stream reference, or NULL. */
 static IRandomAccessStreamReference *cover_stream(const wchar_t *dir) {
-  wchar_t path[MAX_PATH * 2];
+  wchar_t *found = cover_find(dir), *path = found ? wstr_long_path(found) : NULL;
   IStream *file = NULL;
-  if (!cover_find(dir, path, MAX_PATH * 2) ||
-      FAILED(SHCreateStreamOnFileEx(path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, NULL, &file)))
-    return NULL;
+  HRESULT hr = path ? SHCreateStreamOnFileEx(path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, NULL, &file) : E_FAIL;
+  free(path);
+  free(found);
+  if (FAILED(hr)) return NULL;
   IRandomAccessStream *stream = NULL;
   IRandomAccessStreamReferenceStatics *statics = NULL;
   IRandomAccessStreamReference *ref = NULL;

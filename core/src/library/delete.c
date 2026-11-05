@@ -15,6 +15,7 @@
 #include "library/delete_internal.h"
 #include "library/folder_gate.h"
 #include "library/library_internal.h"
+#include "util/db_open.h"
 #include "util/platform.h"
 
 #define DELETED_DB_NAME "deleted.db"
@@ -407,8 +408,7 @@ static mc_status store_open(const char *config_dir, int create, sqlite3 **out) {
     return MC_ERR_IO;
   }
   sqlite3 *db = NULL;
-  int rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX,
-                           NULL);
+  int rc = mc_db_open(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX);
   free(path);
   if (rc == SQLITE_OK) {
     sqlite3_busy_timeout(db, 5000);

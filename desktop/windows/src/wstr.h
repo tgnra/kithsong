@@ -24,6 +24,11 @@ const wchar_t *mc_wstr_mnemonic(enum mc_str_id id);
  * doesn't fit; NULL gives "". Returns buf. */
 wchar_t *wstr_from_utf8(wchar_t *buf, size_t n, const char *s);
 
+/* path, malloc'd, for Win32 calls that core doesn't make for us: a long one absolute and with
+ * the \\?\ prefix, so it works whatever MAX_PATH says (see mc_win_path). NULL only if out of
+ * memory. */
+wchar_t *wstr_long_path(const wchar_t *path);
+
 /* w as a malloc'd UTF-8 string, for passing UI text to mc_format(); NULL for NULL or out of
  * memory. Free with free(). */
 char *wstr_to_utf8(const wchar_t *w);

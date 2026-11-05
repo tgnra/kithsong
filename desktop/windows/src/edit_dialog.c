@@ -1628,7 +1628,9 @@ static void load_art(void) {
 /* On a thread of its own: the file's bytes, if they make a cover. */
 static void run_read_art(job *j) {
   j->st = MC_ERR_IO;
-  FILE *f = _wfopen(j->art_path, L"rb");
+  wchar_t *path = wstr_long_path(j->art_path);
+  FILE *f = path ? _wfopen(path, L"rb") : NULL;
+  free(path);
   if (!f) return;
   long long size = _fseeki64(f, 0, SEEK_END) == 0 ? _ftelli64(f) : -1;
   rewind(f);

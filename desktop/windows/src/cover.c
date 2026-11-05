@@ -11,19 +11,21 @@
 #include "musiccore/musiccore.h"
 #include "wstr.h"
 
-BOOL cover_find(const wchar_t *dir, wchar_t *path, size_t n) {
+wchar_t *cover_find(const wchar_t *dir) {
   char *utf8 = dir ? wstr_to_utf8(dir) : NULL;
   char *found = utf8 ? mc_coverart_find(utf8) : NULL;
-  if (found) wstr_from_utf8(path, n, found);
+  wchar_t *path = found ? wstr_dup_from_utf8(found) : NULL;
   free(utf8);
   mc_free(found);
-  return found != NULL;
+  return path;
 }
 
 HBITMAP cover_decode(IWICImagingFactory *wic, const wchar_t *dir, int size, int radius,
                      const uint32_t **pixels) {
-  wchar_t path[MAX_PATH * 2];
-  return cover_find(dir, path, MAX_PATH * 2) ? cover_decode_file(wic, path, size, radius, pixels) : NULL;
+  wchar_t *path = cover_find(dir);
+  HBITMAP bmp = path ? cover_decode_file(wic, path, size, radius, pixels) : NULL;
+  free(path);
+  return bmp;
 }
 
 void cover_art_close(cover_art_source *src) {
@@ -68,8 +70,10 @@ HBITMAP cover_decode_file(IWICImagingFactory *wic, const wchar_t *path, int size
   IWICFormatConverter *converter = NULL;
   HBITMAP bmp = NULL;
   UINT w = 0, h = 0;
+  wchar_t *file = wstr_long_path(path);
 
-  if (FAILED(IWICImagingFactory_CreateDecoderFromFilename(wic, path, NULL, GENERIC_READ,
+  if (!file ||
+      FAILED(IWICImagingFactory_CreateDecoderFromFilename(wic, file, NULL, GENERIC_READ,
                                                           WICDecodeMetadataCacheOnDemand, &decoder)) ||
       FAILED(IWICBitmapDecoder_GetFrame(decoder, 0, &frame)) ||
       FAILED(IWICBitmapFrameDecode_GetSize(frame, &w, &h)) || !w || !h)
@@ -112,5 +116,6 @@ done:
   if (scaler) IWICBitmapScaler_Release(scaler);
   if (frame) IWICBitmapFrameDecode_Release(frame);
   if (decoder) IWICBitmapDecoder_Release(decoder);
+  free(file);
   return bmp;
 }

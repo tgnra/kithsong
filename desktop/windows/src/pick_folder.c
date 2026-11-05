@@ -29,14 +29,19 @@ char *pick_folder(HWND owner, const wchar_t *title, const char *initial) {
   IFileOpenDialog_SetOptions(dlg, opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
   IFileOpenDialog_SetTitle(dlg, title);
 
-  wchar_t winitial[MAX_PATH * 2];
-  if (initial && MultiByteToWideChar(CP_UTF8, 0, initial, -1, winitial, MAX_PATH * 2) > 0) {
+  /* The shell can't go to a folder past MAX_PATH with Windows' long paths off, or one that's
+   * gone: the nearest parent it can will do. */
+  wchar_t *winitial = initial ? wstr_dup_from_utf8(initial) : NULL;
+  for (wchar_t *sep = winitial; sep;) {
     IShellItem *folder = NULL;
     if (SUCCEEDED(SHCreateItemFromParsingName(winitial, NULL, &IID_IShellItem, (void **)&folder))) {
       IFileOpenDialog_SetFolder(dlg, folder);
       IShellItem_Release(folder);
+      break;
     }
+    if ((sep = wcsrchr(winitial, L'\\')) != NULL) *sep = L'\0';
   }
+  free(winitial);
 
   if (SUCCEEDED(IFileOpenDialog_Show(dlg, owner))) {
     IShellItem *item = NULL;

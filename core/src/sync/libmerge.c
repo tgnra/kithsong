@@ -12,6 +12,7 @@
 #include "musiccore/tagger.h"
 #include "tagger/dupes.h"
 #include "tagger/import_db.h"
+#include "util/db_open.h"
 #include "util/platform.h"
 
 /* The example smart lists' fixed uids (migration v10) all start with this. */
@@ -71,7 +72,7 @@ mc_status mc_libmerge_set_aside(mc_library *lib, const char *kept_name, const ch
       sqlite3_prepare_v2(mc_library_db(lib), "VACUUM INTO ?1", -1, &stmt, NULL) != SQLITE_OK)
     st = MC_ERR_DB;
   if (st == MC_OK) {
-    sqlite3_bind_text(stmt, 1, abs, -1, SQLITE_STATIC);
+    mc_db_bind_path(stmt, 1, abs);
     if (sqlite3_step(stmt) != SQLITE_DONE) {
       fprintf(stderr, "musiccore: merge: couldn't copy the library aside: %s\n",
               sqlite3_errmsg(mc_library_db(lib)));
@@ -1060,8 +1061,7 @@ static mc_status merge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
   x.nkept = kept ? nkept : 0;
   x.r = r;
   mc_status st = MC_OK;
-  if (!backup || sqlite3_open_v2(backup, &x.old, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX,
-                                 NULL) != SQLITE_OK) {
+  if (!backup || mc_db_open(backup, &x.old, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX) != SQLITE_OK) {
     fprintf(stderr, "musiccore: merge: can't open %s\n", backup ? backup : "the set-aside copy");
     st = MC_ERR_IO;
   }

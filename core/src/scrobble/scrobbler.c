@@ -18,6 +18,7 @@
 #include "scrobble/lastfm.h"
 #include "scrobble/scrobble_internal.h"
 #include "sync/sync_db.h"
+#include "util/db_open.h"
 #include "util/platform.h"
 
 enum {
@@ -408,7 +409,7 @@ static void run(void *arg) {
     open_st = MC_ERR_NOMEM;
     if (path) {
       snprintf(path, len, "%s%c" MC_LIBRARY_DB_NAME, sc->lib_dir, MC_PATH_SEP);
-      open_st = sqlite3_open_v2(path, &lib, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, NULL) ==
+      open_st = mc_db_open(path, &lib, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX) ==
                     SQLITE_OK
                   ? MC_OK
                   : MC_ERR_DB;

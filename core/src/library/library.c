@@ -10,6 +10,7 @@
 #include "sync/libmerge.h"
 #include "sync/rows.h"
 #include "tagger/refresh.h"
+#include "util/db_open.h"
 #include "util/platform.h"
 #include "util/uid.h"
 
@@ -493,7 +494,7 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
   if ((st = mc_mkdirs(lib->dir)) != MC_OK) goto fail;
   st = MC_ERR_DB;
   int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
-  int rc = sqlite3_open_v2(db_path, &lib->db, flags, NULL);
+  int rc = mc_db_open(db_path, &lib->db, flags);
   free(db_path);
   db_path = NULL;
   if (rc != SQLITE_OK) goto fail;

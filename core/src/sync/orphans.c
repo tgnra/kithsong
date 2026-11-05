@@ -55,6 +55,7 @@
 #include "sync/sync_internal.h"
 #include "sync/transfer.h"
 #include "tagger/coverart.h"
+#include "util/db_open.h"
 #include "util/pathkey.h"
 #include "util/platform.h"
 
@@ -291,7 +292,7 @@ static mc_status known_snapshot(mc_library *lib, const char *name, known *k) {
   char *abs = mc_library_abspath(lib, name);
   sqlite3 *db = NULL;
   mc_status st = abs ? MC_ERR_DB : MC_ERR_NOMEM;
-  if (abs && sqlite3_open_v2(abs, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+  if (abs && mc_db_open(abs, &db, SQLITE_OPEN_READONLY) == SQLITE_OK) {
     sqlite3_busy_timeout(db, 5000);
     st = read_paths(db, k, &k->others);
   }

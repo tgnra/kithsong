@@ -92,6 +92,25 @@ wchar_t *wstr_from_utf8(wchar_t *buf, size_t n, const char *s) {
   return buf;
 }
 
+wchar_t *wstr_long_path(const wchar_t *path) {
+  DWORD n = GetFullPathNameW(path, 0, NULL, NULL);
+  wchar_t *full = n ? malloc((n + 8) * sizeof *full) : NULL;
+  if (!full) return _wcsdup(path);
+  DWORD got = GetFullPathNameW(path, n, full + 8, NULL);
+  if (got == 0 || got >= n || got < MAX_PATH - 12 || (full[8] == L'\\' && full[9] == L'?')) {
+    free(full);
+    return _wcsdup(path);
+  }
+  /* "\\server\share" takes UNC in place of its first backslash. */
+  int unc = full[8] == L'\\';
+  const wchar_t *prefix = unc ? L"\\\\?\\UNC" : L"\\\\?\\";
+  size_t len = wcslen(prefix);
+  wchar_t *start = full + 8 + (unc ? 1 : 0) - len;
+  memcpy(start, prefix, len * sizeof *start);
+  memmove(full, start, (wcslen(start) + 1) * sizeof *full);
+  return full;
+}
+
 char *wstr_to_utf8(const wchar_t *w) {
   if (!w) return NULL;
   int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);

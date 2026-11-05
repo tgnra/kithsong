@@ -10,6 +10,7 @@
 
 #include "library/folder_gate.h"
 #include "sync/libmerge.h"
+#include "util/db_open.h"
 #include "util/platform.h"
 
 /* In the library folder while the set-aside copy is brought up to date to be put back. */
@@ -62,7 +63,7 @@ static mc_status attach(sqlite3 *db, const char *path) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(db, "ATTACH DATABASE ?1 AS bak", -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
-  sqlite3_bind_text(stmt, 1, path, -1, SQLITE_STATIC);
+  mc_db_bind_path(stmt, 1, path);
   mc_status st = sqlite3_step(stmt) == SQLITE_DONE ? MC_OK : MC_ERR_DB;
   sqlite3_finalize(stmt);
   if (st != MC_OK) fprintf(stderr, "musiccore: merge: restore: %s\n", sqlite3_errmsg(db));
@@ -170,7 +171,7 @@ static mc_status copy_sync_db(mc_sync_db *sdb, const char *dir) {
       sqlite3_prepare_v2(mc_sync_db_handle(sdb), "VACUUM INTO ?1", -1, &stmt, NULL) != SQLITE_OK)
     st = MC_ERR_DB;
   if (st == MC_OK) {
-    sqlite3_bind_text(stmt, 1, path, -1, SQLITE_STATIC);
+    mc_db_bind_path(stmt, 1, path);
     if (sqlite3_step(stmt) != SQLITE_DONE) {
       fprintf(stderr, "musiccore: merge: couldn't copy sync.db aside: %s\n",
               sqlite3_errmsg(mc_sync_db_handle(sdb)));
@@ -332,7 +333,7 @@ static mc_status make_leave_notice(mc_sync_db *sdb, const char *config_dir,
     st = MC_ERR_DB;
     if (sqlite3_prepare_v2(mc_sync_db_handle(sdb), "VACUUM INTO ?1", -1, &stmt, NULL) ==
         SQLITE_OK) {
-      sqlite3_bind_text(stmt, 1, copy, -1, SQLITE_STATIC);
+      mc_db_bind_path(stmt, 1, copy);
       if (sqlite3_step(stmt) == SQLITE_DONE) st = MC_OK;
       sqlite3_finalize(stmt);
     }

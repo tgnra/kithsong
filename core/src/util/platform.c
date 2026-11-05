@@ -472,21 +472,74 @@ mc_status mc_clear_read_only(const char *path) {
   return ok ? MC_OK : MC_ERR_IO;
 }
 
-mc_status mc_trash(const char *path) {
-  wchar_t *w = widen(path);
-  if (!w) return MC_ERR_NOMEM;
+static mc_status shell_recycle(const wchar_t *full) {
   /* SHFileOperation wants an absolute path ending in two NULs. */
-  wchar_t full[MAX_PATH * 4];
-  DWORD n = GetFullPathNameW(w, MAX_PATH * 4 - 1, full, NULL);
-  free(w);
-  if (n == 0 || n >= MAX_PATH * 4 - 1) return MC_ERR_IO;
-  full[n + 1] = L'\0';
+  wchar_t from[MAX_PATH + 1];
+  size_t n = wcslen(full);
+  if (n >= MAX_PATH) return MC_ERR_IO;
+  memcpy(from, full, n * sizeof *from);
+  from[n] = from[n + 1] = L'\0';
   SHFILEOPSTRUCTW op = {0};
   op.wFunc = FO_DELETE;
-  op.pFrom = full;
+  op.pFrom = from;
   op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
   int rc = SHFileOperationW(&op);
   return rc == 0 && !op.fAnyOperationsAborted ? MC_OK : MC_ERR_IO;
+}
+
+mc_status (*mc_win_recycle)(const wchar_t *full) = shell_recycle;
+
+/* Room to leave for a file's name, at the least, when looking for a folder to recycle it from. */
+#define RECYCLE_MIN_NAME 64
+
+/* The shell has no way past MAX_PATH: the prefix means nothing to it. So a file at a long path
+ * moves up into a folder made for it, in the deepest parent that leaves room, and goes to the
+ * Recycle Bin from there, under its own name (cut short if it must be). Restoring it puts it
+ * in that folder, not where it was, which beats not having it in the Recycle Bin at all. */
+static mc_status recycle_long(const wchar_t *full) {
+  const wchar_t *last = wcsrchr(full, L'\\');
+  if (!last) return MC_ERR_IO;
+  const wchar_t *name = last + 1;
+  wchar_t *dir = _wcsdup(full), hold[MAX_PATH], moved[MAX_PATH];
+  if (!dir) return MC_ERR_NOMEM;
+  mc_status st = MC_ERR_IO;
+  for (wchar_t *sep; (sep = wcsrchr(dir, L'\\')) != NULL;) {
+    *sep = L'\0';
+    size_t len = wcslen(dir);
+    if (len + 32 + RECYCLE_MIN_NAME >= MAX_PATH) continue;
+    swprintf(hold, MAX_PATH, L"%ls\\kithsong-trash-%lx", dir, (unsigned long)GetTickCount());
+    if (!CreateDirectoryW(hold, NULL)) continue;
+
+    size_t room = MAX_PATH - 2 - wcslen(hold), n = wcslen(name);
+    const wchar_t *dot = wcsrchr(name, L'.');
+    size_t tail = dot && n - (size_t)(dot - name) < RECYCLE_MIN_NAME / 2 ? n - (size_t)(dot - name) : 0;
+    swprintf(moved, MAX_PATH, L"%ls\\%.*ls%ls", hold, (int)(n <= room ? n - tail : room - tail), name, name + n - tail);
+    wchar_t *from = extend(_wcsdup(full));
+    if (from && MoveFileW(from, moved)) {
+      st = mc_win_recycle(moved);
+      if (st != MC_OK) MoveFileW(moved, from);
+    }
+    free(from);
+    RemoveDirectoryW(hold);
+    break;
+  }
+  free(dir);
+  return st;
+}
+
+mc_status mc_trash(const char *path) {
+  wchar_t *w = widen(path);
+  if (!w) return MC_ERR_NOMEM;
+  DWORD n = GetFullPathNameW(w, 0, NULL, NULL);
+  wchar_t *full = n ? malloc(n * sizeof *full) : NULL;
+  mc_status st = n ? MC_ERR_NOMEM : MC_ERR_IO;
+  if (full) {
+    DWORD got = GetFullPathNameW(w, n, full, NULL);
+    st = got == 0 || got >= n ? MC_ERR_IO : got < MAX_PATH ? mc_win_recycle(full) : recycle_long(full);
+  }
+  free(full);
+  free(w);
+  return st;
 }
 
 mc_status mc_rmdir(const char *path) {

@@ -7,6 +7,7 @@
 #include <mbedtls/ecp.h>
 #include <mbedtls/platform_util.h>
 
+#include "util/db_open.h"
 #include "util/platform.h"
 
 extern const unsigned char mc_sync_schema_v1_sql[];
@@ -243,7 +244,7 @@ mc_status mc_sync_db_open(const char *config_dir, mc_sync_db **out) {
   if ((st = mc_mkdirs(dir)) != MC_OK) goto fail;
   st = MC_ERR_DB;
   int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
-  if (sqlite3_open_v2(db_path, &sdb->db, flags, NULL) != SQLITE_OK) goto fail;
+  if (mc_db_open(db_path, &sdb->db, flags) != SQLITE_OK) goto fail;
 
   sqlite3_busy_timeout(sdb->db, 5000);
   /* Turning a new file to WAL while another connection opens it too (sync's and the

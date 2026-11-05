@@ -125,6 +125,9 @@ int mc_long_path(const char *path);
 /* A UTF-8 path as UTF-16 for the wide Win32 and CRT file calls, malloc'd, or NULL: a long one
  * absolute and with the \\?\ prefix, so the call works whatever MAX_PATH says. */
 wchar_t *mc_win_path(const char *path);
+/* What mc_trash() ends with: sends an absolute path under MAX_PATH to the Recycle Bin. A test
+ * can swap it. */
+extern mc_status (*mc_win_recycle)(const wchar_t *full);
 #endif
 /* path as it should be given to a library that opens files by UTF-8 path itself (opusfile,
  * libopusenc): on Windows a long one in its \\?\ form, elsewhere just a copy. malloc'd, or

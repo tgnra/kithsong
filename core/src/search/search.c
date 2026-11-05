@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "library/library_internal.h"
+#include "util/db_open.h"
 #include "util/platform.h"
 #include "util/text.h"
 
@@ -531,8 +532,7 @@ static mc_status build_snapshot(mc_search *s, sqlite3 *db, mc_search_index **out
 static void worker(void *arg) {
   mc_search *s = arg;
   sqlite3 *db = NULL;
-  int ok = sqlite3_open_v2(s->db_path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, NULL) ==
-           SQLITE_OK;
+  int ok = mc_db_open(s->db_path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX) == SQLITE_OK;
   if (ok) sqlite3_busy_timeout(db, 5000);
   mc_mutex_lock(&s->mutex);
   s->worker_db = ok ? db : NULL;

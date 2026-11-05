@@ -2,17 +2,23 @@
  * it isn't long-path aware whatever LongPathsEnabled says: everything here has to go through
  * platform.c's \\?\ paths. Checks the file calls one by one, TagLib and the decoder, and an
  * import from a deep folder, where an unreadable file with a long path becomes a failed item
- * instead of being passed over. Elsewhere the same calls just have to work. */
+ * instead of being passed over, a library in a folder that deep, and mc_trash(), which has
+ * to get such a file to the shell, here a stand-in for it. Elsewhere the same calls just have
+ * to work. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "musiccore/i18n.h"
 #include "musiccore/library.h"
 #include "musiccore/musiccore.h"
 #include "musiccore/tagger.h"
 #include "playback/decoder.h"
+#include "sync/libmerge.h"
 #include "util/platform.h"
 #include "test.h"
 
@@ -130,6 +136,70 @@ static void test_files(const char *deep) {
 
 /* An import from the deep folder: the WAV is imported, the file that isn't audio becomes a
  * failed item on Windows, where its long path may be why it couldn't be read. */
+#ifdef _WIN32
+static int recycled, recycle_st;
+static size_t recycled_len;
+
+/* Takes the file as the Recycle Bin would, unless told to fail. */
+static mc_status fake_recycle(const wchar_t *full) {
+  recycled++;
+  recycled_len = wcslen(full);
+  if (recycle_st != MC_OK) return recycle_st;
+  return DeleteFileW(full) ? MC_OK : MC_ERR_IO;
+}
+
+static void test_trash(const char *root, const char *deep) {
+  mc_status (*was)(const wchar_t *) = mc_win_recycle;
+  mc_win_recycle = fake_recycle;
+  char wav[1024];
+  snprintf(wav, sizeof wav, "%s/to-trash.wav", deep);
+  CHECK(write_wav(wav));
+  int before = 0;
+  CHECK(mc_list_dir(root, count_entry, &before) == MC_OK);
+
+  /* Can't be taken: it's left where it was. */
+  recycle_st = MC_ERR_IO;
+  CHECK(mc_trash(wav) == MC_ERR_IO && recycled == 1 && recycled_len < 260);
+  CHECK(mc_file_exists(wav));
+
+  recycle_st = MC_OK;
+  CHECK(mc_trash(wav) == MC_OK && recycled == 2 && recycled_len < 260);
+  CHECK(!mc_file_exists(wav));
+  CHECK(mc_trash(wav) != MC_OK); /* gone already */
+
+  /* A name too long to fit anywhere is cut, keeping its extension. */
+  char name[256];
+  memset(name, 'n', 240);
+  strcpy(name + 240, ".wav");
+  snprintf(wav, sizeof wav, "%s/%s", deep, name);
+  CHECK(write_wav(wav));
+  CHECK(mc_trash(wav) == MC_OK && recycled_len < 260);
+  CHECK(!mc_file_exists(wav));
+
+  /* Nothing's left behind on the way. */
+  int after = 0;
+  CHECK(mc_list_dir(root, count_entry, &after) == MC_OK);
+  CHECK(after == before);
+  mc_win_recycle = was;
+}
+#endif
+
+/* The library itself in a deep folder, set aside as merging does. */
+static void test_library(const char *deep) {
+  char dir[1024];
+  snprintf(dir, sizeof dir, "%s/library", deep);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(dir, &lib) == MC_OK);
+  if (!lib) return;
+  char *copy = NULL;
+  CHECK(mc_libmerge_set_aside(lib, NULL, NULL, &copy) == MC_OK);
+  CHECK(copy && mc_file_exists(copy));
+  free(copy);
+  mc_library_close(lib);
+  CHECK(mc_library_open(dir, &lib) == MC_OK);
+  mc_library_close(lib);
+}
+
 static void test_import(const char *root, const char *deep) {
   char bad[1200], lib_dir[1200];
   snprintf(bad, sizeof bad, "%s%cbroken.flac", deep, MC_PATH_SEP);
@@ -195,6 +265,10 @@ int main(int argc, char **argv) {
 
   test_files(deep);
   test_import(root, deep);
+  test_library(deep);
+#ifdef _WIN32
+  test_trash(root, deep);
+#endif
 
   CHECK(mc_remove_tree(root) == MC_OK);
   CHECK(!mc_file_exists(root));
