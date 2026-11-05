@@ -19,11 +19,14 @@ BEGIN
                   LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER |
                   WS_BORDER | WS_TABSTOP, 7, 51, 526, 92
   LTEXT           "", IDC_REV_TRACKS_LABEL, 7, 149, 120, 9
-  RTEXT           "", IDC_REV_TRACKS_HINT, 133, 149, 400, 9, SS_NOPREFIX
+  RTEXT           "", IDC_REV_TRACKS_HINT, 133, 149, 305, 9, SS_NOPREFIX
   /* Several rows can be selected: a missing track and a file, for Use as Track on the menu. */
   CONTROL         "", IDC_REV_TRACKS, "SysListView32",
                   LVS_REPORT | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | WS_BORDER | WS_TABSTOP,
                   7, 160, 526, 118
+  /* After the list, for Tab: the selected missing track's files, for the keyboard and screen
+   * readers, which can't see the list's cells drop anything down. Shown with the hint. */
+  PUSHBUTTON      "", IDC_REV_CHOOSE_FILE, 443, 146, 90, 12, NOT WS_VISIBLE
   LTEXT           "", IDC_REV_SEARCH_LABEL, 7, 290, 48, 9
   LTEXT           "", IDC_REV_ARTIST_LABEL, 58, 290, 22, 9
   EDITTEXT        IDC_REV_ARTIST, 82, 288, 150, 13, ES_AUTOHSCROLL

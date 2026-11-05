@@ -6,12 +6,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uiautomation.h>
 #include <wchar.h>
 
 #include "pick_folder.h"
 #include "prompt_dialog.h"
 #include "resource.h"
 #include "theme.h"
+#include "uia.h"
 #include "wstr.h"
 
 enum {
@@ -66,6 +68,7 @@ typedef struct view {
   int rows_match; /* the match the rows show; -1 if none */
   int rows_gen;   /* bumped whenever the rows are rebuilt, e.g. while a menu is open */
   BOOL can_assign; /* the rows have missing tracks, and files Use as Track can make them */
+  BOOL choose_file_open; /* Choose File's menu is down */
   BOOL review_loading; /* load_review is selecting the chosen match; it fills the rows itself */
   /* A file made a missing track (assign) that the import thread hasn't taken up yet, which
    * may be a while if it's matching another item: the rows show it already, and the review
@@ -599,6 +602,7 @@ static void fill_track_rows(HWND dlg, int match) {
   SetDlgItemTextW(dlg, IDC_REV_TRACKS_HINT, mc_wstr(MC_STR_IMPORT_USE_AS_TRACK_HINT));
   wchar_t choose[128];
   swprintf(choose, 128, L"%ls \x25BE", mc_wstr(MC_STR_IMPORT_CHOOSE_FILE));
+  SetDlgItemTextW(dlg, IDC_REV_CHOOSE_FILE, choose);
   const mc_import_match *m = &it->matches[match];
   int count = (int)SendMessageW(lv, LVM_GETITEMCOUNT, 0, 0);
   for (int i = 0; i < count; i++) {
@@ -608,6 +612,7 @@ static void fill_track_rows(HWND dlg, int match) {
 }
 
 static void show_pending(HWND dlg);
+static void update_choose_file(HWND dlg);
 
 /* The track list for match `match`, with any pending file shown as its track. Drawn once
  * it's filled, not row by row. */
@@ -618,6 +623,7 @@ static void fill_tracks(HWND dlg, int match) {
   show_pending(dlg);
   SendMessageW(lv, WM_SETREDRAW, TRUE, 0);
   InvalidateRect(lv, NULL, TRUE);
+  update_choose_file(dlg);
 }
 
 /* The row at list index i if it's a missing track that Use as Track can fill, else NULL. */
@@ -826,6 +832,68 @@ static void tracks_menu(HWND dlg, POINT pt) {
   if (cmd == 1 && ok && gen == g_view.rows_gen && !review_busy()) assign(dlg, &t, &f);
 }
 
+/* --- The Choose File button: a track's files menu as UI Automation can see it, dropping down
+ * from the track's row as a click on the row does --- */
+
+/* The missing track that's selected alone, or -1. */
+static int choose_file_row(HWND dlg) {
+  HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
+  if (SendMessageW(lv, LVM_GETSELECTEDCOUNT, 0, 0) != 1) return -1;
+  int i = (int)SendMessageW(lv, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+  return missing_row(lv, i) ? i : -1;
+}
+
+static void update_choose_file(HWND dlg) {
+  HWND button = GetDlgItem(dlg, IDC_REV_CHOOSE_FILE);
+  BOOL enabled = choose_file_row(dlg) >= 0;
+  if (!enabled && GetFocus() == button) SetFocus(GetDlgItem(dlg, IDC_REV_TRACKS));
+  EnableWindow(button, enabled);
+  ShowWindow(button, g_view.can_assign ? SW_SHOWNA : SW_HIDE);
+}
+
+static void choose_file_drop(HWND dlg) {
+  g_view.choose_file_open = TRUE;
+  files_menu(dlg, choose_file_row(dlg), (POINT){-1, -1});
+  g_view.choose_file_open = FALSE;
+}
+
+/* Outside g_view, as elements clients still hold use it. */
+static uia_host choose_file_ui;
+
+static BOOL choose_file_node(int i, uia_node *n) {
+  if (i != UIA_ROOT) return FALSE;
+  n->type = UIA_ButtonControlTypeId;
+  n->flags = (g_view.choose_file_open ? UIA_EXPANDED : UIA_COLLAPSED) |
+             (IsWindowEnabled(choose_file_ui.wnd) ? 0 : UIA_DISABLED);
+  lstrcpynW(n->name, mc_wstr(MC_STR_IMPORT_CHOOSE_FILE), 512);
+  return TRUE;
+}
+
+static int choose_file_focus(void) {
+  return UIA_ROOT;
+}
+
+/* The menu runs its own loop, which this arrives through while it's down. */
+static void choose_file_expand(int i, BOOL expand) {
+  (void)i;
+  if (expand && !g_view.choose_file_open) choose_file_drop(GetParent(choose_file_ui.wnd));
+  else if (!expand && g_view.choose_file_open) EndMenu();
+}
+
+static const uia_ops choose_file_ops = {.node = choose_file_node, .focus = choose_file_focus,
+                                        .expand = choose_file_expand};
+
+static LRESULT CALLBACK choose_file_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+  (void)data;
+  LRESULT result;
+  if (uia_message(&choose_file_ui, msg, wp, lp, &result)) return result;
+  if (msg == WM_NCDESTROY) {
+    uia_destroy(&choose_file_ui);
+    RemoveWindowSubclass(wnd, choose_file_proc, id);
+  }
+  return DefSubclassProc(wnd, msg, wp, lp);
+}
+
 /* The track list: Enter on a missing track opens its files menu instead of pressing the
  * dialog's default button. */
 static LRESULT CALLBACK tracks_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
@@ -1006,6 +1074,8 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       init_review_text(dlg);
       init_review_columns(dlg);
       SetWindowSubclass(GetDlgItem(dlg, IDC_REV_TRACKS), tracks_proc, 0, 0);
+      SetWindowSubclass(GetDlgItem(dlg, IDC_REV_CHOOSE_FILE), choose_file_proc, 0, 0);
+      uia_init(&choose_file_ui, GetDlgItem(dlg, IDC_REV_CHOOSE_FILE), &choose_file_ops);
       load_review(dlg);
       theme_apply_window(dlg, FALSE);
       theme_apply_controls(dlg);
@@ -1046,6 +1116,10 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
           files_menu(dlg, ia->iItem, (POINT){-1, -1});
         break;
       }
+      if (nm->idFrom == IDC_REV_TRACKS && nm->code == LVN_ITEMCHANGED) {
+        update_choose_file(dlg);
+        break;
+      }
       if (nm->idFrom != IDC_REV_MATCHES) break;
       if (nm->code == LVN_ITEMCHANGED) {
         const NMLISTVIEW *lv = (const NMLISTVIEW *)lp;
@@ -1059,6 +1133,9 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_COMMAND:
       switch (LOWORD(wp)) {
+        case IDC_REV_CHOOSE_FILE:
+          choose_file_drop(dlg);
+          return TRUE;
         case IDOK:
           if (selected_match(dlg) >= 0)
             review_done(dlg, mc_import_accept(g_view.imp, g_view.review_item, selected_match(dlg)));
