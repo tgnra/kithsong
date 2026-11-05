@@ -834,6 +834,10 @@ static void type_ahead(wchar_t ch) {
 }
 
 static void on_key(WPARAM key) {
+  if (key == VK_ESCAPE && v.dragging) {
+    ReleaseCapture(); /* WM_CAPTURECHANGED ends the drag */
+    return;
+  }
   SendMessageW(GetAncestor(v.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
   if (is_open()) {
     /* Left, Right, Home and End stay in the focused tile's strip (with none focused, the

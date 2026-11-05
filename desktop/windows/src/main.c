@@ -1926,6 +1926,7 @@ static void on_command(int id, int code) {
       break;
     case ID_SEARCH:
       if (code == SVN_OPEN) open_search_result();
+      else if (code == SVN_LIBRARY_CHANGED) refresh_library();
       break;
     case ID_NOW_PLAYING:
       if (code == NPN_SEEK) playback_seek(now_playing_position());

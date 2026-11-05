@@ -21,6 +21,9 @@
  * with the track selected. Down in the box moves the focus to the first result; the arrow keys,
  * Home and End move it through the results, and Up from the first goes back to the box.
  *
+ * Every result has the right-click menu it has elsewhere (item_menu.h, track_menu.h), opening
+ * or not. Albums can be dragged onto album groups and tracks onto playlists (drag.h).
+ *
  * Covers are decoded on the UI thread, one per message, so typing isn't held up by them.
  * Screen readers see a list for each section (uia.h). */
 #ifndef KITHSONG_SEARCH_VIEW_H
@@ -33,6 +36,9 @@
 /* Sent to the parent as a WM_COMMAND notification code when a result is opened;
  * search_view_opened() says which. */
 #define SVN_OPEN 1
+/* Sent likewise when a result's menu or a drop changed the library: posted, for the parent to
+ * refresh. */
+#define SVN_LIBRARY_CHANGED 2
 
 typedef struct search_view_hit {
   mc_search_kind kind; /* MC_SEARCH_ARTIST, _ALBUM, _TRACK or _PLAYLIST */

@@ -2,6 +2,7 @@
 #include "search_view.h"
 
 #include <commctrl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uiautomation.h>
@@ -9,10 +10,17 @@
 #include <wincodec.h>
 #include <windowsx.h>
 
+#include "add_to_playlist.h"
 #include "canvas.h"
 #include "cover.h"
+#include "delete_dialog.h"
+#include "drag.h"
+#include "edit_dialog.h"
+#include "item_menu.h"
+#include "playback.h"
 #include "scroller.h"
 #include "theme.h"
+#include "track_menu.h"
 #include "uia.h"
 #include "wstr.h"
 
@@ -57,6 +65,7 @@ typedef struct hit {
   wchar_t *name;
   wchar_t *sub; /* beneath the name, or NULL */
   BOOL opens;   /* there's a page here to open it on */
+  BOOL smart;   /* a smart playlist or album group */
   RECT rc;      /* the tile or the row, in the content */
   /* Albums: the cover. */
   wchar_t *cover_dir; /* NULL when the album has none */
@@ -113,6 +122,12 @@ static struct {
   int focus;   /* the hit with the keyboard focus, or -1 */
   BOOL tracking;
   search_view_hit opened;
+
+  /* Dragging the pressed album or track: once it has moved far enough from drag_from.
+   * drop_target is the group or playlist it would be added to (drag.h), or "". */
+  POINT drag_from;
+  BOOL dragging;
+  char drop_target[MC_UID_STRLEN];
 } v;
 
 /* Outside v, which is cleared when the window goes: elements clients still hold use it. */
@@ -422,6 +437,7 @@ static void show_results(BOOL keep) {
       memcpy(h->album_uid, r->album_uid, MC_UID_STRLEN);
       h->name = wstr_dup_from_utf8(r->name && *r->name ? r->name : mc_str(MC_STR_UNTITLED));
       h->sub = hit_sub(r);
+      h->smart = r->is_smart != 0;
       switch (r->kind) {
         case MC_SEARCH_ARTIST:
         case MC_SEARCH_ALBUM: h->opens = TRUE; break;
@@ -536,23 +552,33 @@ static int next_row(int from, int dir) {
   return next_hit(to - dir, dir);
 }
 
-static void open_hit(int i) {
-  if (i < 0 || i >= v.nhits || !v.hits[i].opens) return;
-  v.opened.kind = v.hits[i].kind;
-  memcpy(v.opened.uid, v.hits[i].uid, MC_UID_STRLEN);
-  memcpy(v.opened.album_uid, v.hits[i].album_uid, MC_UID_STRLEN);
+static void open_item(mc_search_kind kind, const char *uid, const char *album_uid) {
+  v.opened.kind = kind;
+  snprintf(v.opened.uid, sizeof v.opened.uid, "%s", uid);
+  snprintf(v.opened.album_uid, sizeof v.opened.album_uid, "%s", album_uid);
   SendMessageW(GetParent(v.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(v.wnd), SVN_OPEN), (LPARAM)v.wnd);
 }
 
-/* The opening hit at a point in the client area, or -1. */
-static int hit_at(int x, int y) {
+static void open_hit(int i) {
+  if (i < 0 || i >= v.nhits || !v.hits[i].opens) return;
+  open_item(v.hits[i].kind, v.hits[i].uid, v.hits[i].album_uid);
+}
+
+/* The hit at a point in the client area, whether it opens or not, or -1. */
+static int any_hit_at(int x, int y) {
   POINT pt = {x, y};
   if (!PtInRect(&v.scroll.view, pt)) return -1;
   for (int i = 0; i < v.nhits; i++) {
     RECT r = to_client(v.hits[i].rc);
-    if (v.hits[i].opens && PtInRect(&r, pt)) return i;
+    if (PtInRect(&r, pt)) return i;
   }
   return -1;
+}
+
+/* The opening hit at a point in the client area, or -1. */
+static int hit_at(int x, int y) {
+  int i = any_hit_at(x, y);
+  return i >= 0 && v.hits[i].opens ? i : -1;
 }
 
 static void update_hot(void) {
@@ -570,6 +596,10 @@ static void on_scrolled(void) {
 /* The arrow keys, Home and End move the focus through the results (Up and Down a row at a
  * time among album tiles); Up from the first goes back to the box. Enter opens the focused one. */
 static void on_key(WPARAM key) {
+  if (key == VK_ESCAPE && v.dragging) {
+    ReleaseCapture(); /* WM_CAPTURECHANGED ends the drag */
+    return;
+  }
   SendMessageW(GetAncestor(v.wnd, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
   int to;
   switch (key) {
@@ -626,13 +656,141 @@ static LRESULT CALLBACK edit_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT
   return DefSubclassProc(wnd, msg, wp, lp);
 }
 
+/* --- Menus --- */
+
+/* Posted: the menus and dialogs have finished with what's shown. */
+static void library_changed(void) {
+  PostMessageW(GetParent(v.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(v.wnd), SVN_LIBRARY_CHANGED), (LPARAM)v.wnd);
+}
+
+/* A track's menu, as in the track list, at pt (screen coordinates). h can go while the menu
+ * runs other messages, so what's needed of it is copied first. */
+static void show_track_menu(const hit *h, POINT pt) {
+  char uid[MC_UID_STRLEN], album[MC_UID_STRLEN], artist[MC_UID_STRLEN], playlist[MC_UID_STRLEN];
+  memcpy(uid, h->uid, sizeof uid);
+  memcpy(album, h->album_uid, sizeof album);
+  BOOL opens = h->opens;
+  mc_track_list *list = NULL;
+  if (mc_library_get_track(v.lib, uid, &list) != MC_OK) return;
+  const mc_track_info *t = &list->items[0];
+  memcpy(artist, t->artist_uid, sizeof artist);
+  BOOL here = t->path != NULL;
+  wchar_t *title = wstr_dup_from_utf8(t->title ? t->title : mc_str(MC_STR_UNTITLED));
+  mc_track_list_free(list);
+
+  track_menu_options options = {.lib = v.lib, .track_uid = uid, .go_to_album = opens, .go_to_artist = artist[0] != '\0'};
+  track_menu_pick pick = track_menu_show(v.wnd, pt, &options, playlist);
+  HWND owner = GetAncestor(v.wnd, GA_ROOT);
+  BOOL changed = FALSE;
+  switch (pick) {
+    case TRACK_MENU_ADD_TO_PLAYLIST: changed = add_to_playlist(owner, v.lib, uid, here, playlist); break;
+    case TRACK_MENU_NEW_PLAYLIST: changed = add_to_playlist(owner, v.lib, uid, here, NULL); break;
+    case TRACK_MENU_START_RADIO: playback_play_radio(uid); break;
+    case TRACK_MENU_GO_TO_ALBUM: open_item(MC_SEARCH_TRACK, uid, album); break;
+    case TRACK_MENU_GO_TO_ARTIST: open_item(MC_SEARCH_ARTIST, artist, ""); break;
+    case TRACK_MENU_EDIT: changed = edit_dialog_track(owner, v.lib, uid); break;
+    case TRACK_MENU_DELETE: changed = delete_dialog(owner, v.lib, MC_DELETE_TRACKS, uid, title ? title : L""); break;
+    default: break; /* Move Up and the like are only for a playlist that's shown */
+  }
+  free(title);
+  if (changed) library_changed();
+}
+
+/* WM_CONTEXTMENU: the menu of the hit under the pointer, opening or not, as it has wherever else
+ * it shows; from the keyboard (lp -1), the focused one's, beneath it. */
+static BOOL on_context_menu(LPARAM lp) {
+  if (!v.lib) return FALSE;
+  POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+  int i;
+  if (lp == -1) {
+    i = v.focus;
+    if (i < 0 || i >= v.nhits) return FALSE;
+    RECT r = to_client(v.hits[i].rc);
+    pt = (POINT){r.left, v.hits[i].kind == MC_SEARCH_ALBUM ? r.top + v.tile_w : r.bottom};
+    ClientToScreen(v.wnd, &pt);
+  } else {
+    POINT client = pt;
+    ScreenToClient(v.wnd, &client);
+    i = any_hit_at(client.x, client.y);
+    if (i < 0) return FALSE;
+  }
+  const hit *h = &v.hits[i];
+  if (h->kind == MC_SEARCH_TRACK) {
+    show_track_menu(h, pt);
+  } else {
+    item_menu_options o = {.wnd = v.wnd, .lib = v.lib, .uid = h->uid, .name = h->name, .pt = pt};
+    item_menu_result changed = h->kind == MC_SEARCH_ARTIST     ? item_menu_artist(&o)
+                               : h->kind == MC_SEARCH_ALBUM    ? item_menu_album(&o)
+                               : h->kind == MC_SEARCH_PLAYLIST ? item_menu_playlist(&o, h->smart)
+                                                               : item_menu_group(&o, h->smart);
+    if (changed == ITEM_MENU_CHANGED) library_changed();
+  }
+  update_hot();
+  return TRUE;
+}
+
+/* --- Dragging an album onto an album group, a track onto a playlist --- */
+
+static BOOL can_drag(int i) {
+  return i >= 0 && i < v.nhits && (v.hits[i].kind == MC_SEARCH_ALBUM || v.hits[i].kind == MC_SEARCH_TRACK);
+}
+
+/* The pressed hit has moved to x, y: once far enough, it's dragged, and outside the page the
+ * window under the pointer says whether there's a group or playlist to add it to. Nothing on
+ * the page takes it. */
+static void drag_to(int x, int y) {
+  if (!v.dragging) {
+    if (abs(x - v.drag_from.x) < GetSystemMetrics(SM_CXDRAG) && abs(y - v.drag_from.y) < GetSystemMetrics(SM_CYDRAG))
+      return;
+    v.dragging = TRUE;
+    set_hot(-1);
+    invalidate_hit(v.pressed);
+  }
+  RECT rc;
+  GetClientRect(v.wnd, &rc);
+  POINT pt = {x, y};
+  if (!PtInRect(&rc, pt)) {
+    ClientToScreen(v.wnd, &pt);
+    drag_over(v.hits[v.pressed].kind == MC_SEARCH_ALBUM ? DRAG_ALBUM : DRAG_TRACK, pt, v.drop_target);
+    return;
+  }
+  drag_leave();
+  v.drop_target[0] = '\0';
+  drag_set_cursor(FALSE);
+}
+
+/* Stops dragging, without adding anything. */
+static void end_drag(void) {
+  if (!v.dragging) return;
+  v.dragging = FALSE;
+  v.drop_target[0] = '\0';
+  invalidate_hit(v.pressed);
+  drag_done();
+}
+
+/* The mouse button came up over the drag: adds what's dragged to what it was dropped on. */
+static void drop(void) {
+  char target[MC_UID_STRLEN], uid[MC_UID_STRLEN];
+  memcpy(target, v.drop_target, sizeof target);
+  memcpy(uid, v.hits[v.pressed].uid, sizeof uid);
+  BOOL album = v.hits[v.pressed].kind == MC_SEARCH_ALBUM;
+  end_drag();
+  ReleaseCapture(); /* WM_CAPTURECHANGED clears pressed */
+  if (!target[0]) return;
+  HWND owner = GetAncestor(v.wnd, GA_ROOT);
+  /* here only matters for a new playlist. */
+  if (album ? add_to_album_group(owner, v.lib, uid, target) : add_to_playlist(owner, v.lib, uid, TRUE, target))
+    library_changed();
+}
+
 /* --- Painting --- */
 
 static void paint_tile(canvas *c, int i) {
   const hit *h = &v.hits[i];
   RECT art = to_client(h->rc), outer = to_client(tile_outer(h));
   art.bottom = art.top + v.tile_w;
-  if (i == v.hot) theme_draw_state(c, &outer, scale(8), v.pressed == i ? STATE_PRESSED : STATE_HOT);
+  if (v.dragging && i == v.pressed) theme_draw_state(c, &outer, scale(8), STATE_PRESSED);
+  else if (i == v.hot) theme_draw_state(c, &outer, scale(8), v.pressed == i ? STATE_PRESSED : STATE_HOT);
 
   if (h->pixels) {
     canvas_draw_image(c, &art, h->pixels, h->thumb_size, h->thumb_size);
@@ -658,7 +816,8 @@ static void paint_row(canvas *c, int i, BOOL last) {
   const hit *h = &v.hits[i];
   RECT rc = to_client(h->rc), fill = rc;
   InflateRect(&fill, -scale(4), -scale(4));
-  if (i == v.hot) theme_draw_state(c, &fill, scale(RADIUS), v.pressed == i ? STATE_PRESSED : STATE_HOT);
+  if (v.dragging && i == v.pressed) theme_draw_state(c, &fill, scale(RADIUS), STATE_PRESSED);
+  else if (i == v.hot) theme_draw_state(c, &fill, scale(RADIUS), v.pressed == i ? STATE_PRESSED : STATE_HOT);
   if (!last) {
     RECT line = {rc.left + scale(ROW_ICON_W), rc.bottom - 1, rc.right - scale(12), rc.bottom};
     canvas_clear(c, &line, theme.line, 255);
@@ -934,6 +1093,10 @@ static LRESULT CALLBACK search_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         v.tracking = TRUE;
       }
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+      if (can_drag(v.pressed) && (wp & MK_LBUTTON)) {
+        drag_to(x, y);
+        if (v.dragging) return 0;
+      }
       BOOL on_bar = scroller_mouse_move(&v.scroll, x, y);
       int i = on_bar ? -1 : hit_at(x, y);
       set_hot(v.pressed >= 0 ? (i == v.pressed ? i : -1) : i);
@@ -948,18 +1111,23 @@ static LRESULT CALLBACK search_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDBLCLK: {
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
       if (scroller_mouse_down(&v.scroll, x, y)) return 0;
-      int i = hit_at(x, y);
-      if (i < 0) return 0;
+      int i = any_hit_at(x, y);
+      if (i < 0 || (!v.hits[i].opens && !can_drag(i))) return 0;
       SetFocus(wnd);
-      set_focus(i);
-      v.pressed = i; /* opens on release, like a button */
+      if (v.hits[i].opens) {
+        set_focus(i);
+        set_hot(i);
+      }
+      v.pressed = i; /* opens on release, like a button, unless it's dragged */
+      v.drag_from = (POINT){x, y};
       SetCapture(wnd);
-      set_hot(i);
       invalidate_hit(i);
       return 0;
     }
     case WM_LBUTTONUP:
-      if (v.pressed >= 0) {
+      if (v.dragging) {
+        drop();
+      } else if (v.pressed >= 0) {
         int i = v.pressed;
         BOOL clicked = hit_at(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)) == i;
         ReleaseCapture(); /* WM_CAPTURECHANGED clears pressed */
@@ -969,6 +1137,7 @@ static LRESULT CALLBACK search_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       return 0;
     case WM_CAPTURECHANGED:
+      end_drag();
       if (v.pressed >= 0) {
         invalidate_hit(v.pressed);
         v.pressed = -1;
@@ -978,6 +1147,9 @@ static LRESULT CALLBACK search_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_KEYDOWN:
       on_key(wp);
       return 0;
+    case WM_CONTEXTMENU:
+      if (on_context_menu(lp)) return 0;
+      break;
     case WM_GETDLGCODE:
       return DLGC_WANTARROWS;
     case WM_SETFOCUS:
