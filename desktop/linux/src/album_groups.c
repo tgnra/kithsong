@@ -672,6 +672,12 @@ const char *album_groups_open_group(void) {
   return v.open[0] ? v.open : NULL;
 }
 
+gboolean album_groups_shows(const char *uid) {
+  AlbumItem *item = v.groups ? album_grid_find(v.groups, uid) : NULL;
+  if (item) g_object_unref(item);
+  return item != NULL;
+}
+
 GtkWidget *album_groups_album_grid(void) {
   return v.open[0] ? v.albums : NULL;
 }

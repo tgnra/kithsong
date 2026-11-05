@@ -47,6 +47,8 @@ int album_groups_reload(app *a);
 gboolean album_groups_open(app *a, const char *uid);
 /* The open group's uid, or NULL while the groups show. */
 const char *album_groups_open_group(void);
+/* Whether the groups page shows group uid: not one empty here, as they're hidden. */
+gboolean album_groups_shows(const char *uid);
 /* The open group's album grid (album_grid.c), or NULL while the groups show. */
 GtkWidget *album_groups_album_grid(void);
 

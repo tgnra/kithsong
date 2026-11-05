@@ -16,13 +16,18 @@
  * album groups and playable playlists (smart ones too) open on their pages (opening an artist
  * or group puts it in the recents), tracks on their album with the track selected, and
  * singles (and tracks with no album), which the Albums page leaves out, on their artist's
- * page. */
+ * page.
+ *
+ * Right-clicking a result, opening or not, or the Menu key on it, gives the menu it has wherever
+ * else it shows, and albums and tracks drag onto the recents. */
 #ifndef KITHSONG_SEARCH_VIEW_H
 #define KITHSONG_SEARCH_VIEW_H
 
 #include "app.h"
+#include "track_list.h"
 
-GtkWidget *search_view_new(app *a);
+/* cb is what the tracks' menu does, as the track list's (copied). */
+GtkWidget *search_view_new(app *a, const track_list_callbacks *cb);
 
 /* Puts the focus in the search box, as when the page is opened. */
 void search_view_focus(void);

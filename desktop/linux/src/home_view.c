@@ -83,6 +83,7 @@ static struct {
    * it's open, so it works from these copies. */
   GtkWidget *rows_box, *menu;
   GSimpleAction *play;                 /* a station's, enabled if it can */
+  GActionGroup *actions;               /* the menus' "home." actions */
   char menu_uid[MC_UID_STRLEN];        /* the tile's, or a station's seed, as the recents know it */
   char *menu_title;
   gboolean menu_smart;
@@ -220,6 +221,18 @@ static GMenuModel *playlist_menu(gboolean smart) {
   g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_RENAME_MENU), "home.rename");
   g_menu_append(menu, mc_str_mnemonic(smart ? MC_STR_SMART_DELETE_PLAYLIST_MENU : MC_STR_PLAYLIST_DELETE_MENU), "home.delete");
   return G_MENU_MODEL(menu);
+}
+
+GMenuModel *home_view_playlist_menu(const char *uid, const char *title, gboolean smart) {
+  g_strlcpy(v.menu_uid, uid, sizeof v.menu_uid);
+  g_free(v.menu_title);
+  v.menu_title = g_strdup(title);
+  v.menu_smart = smart;
+  return playlist_menu(smart);
+}
+
+GActionGroup *home_view_actions(void) {
+  return v.actions;
 }
 
 static GMenuModel *station_menu(void) {
@@ -977,6 +990,7 @@ GtkWidget *home_view_new(app *a, const home_view_callbacks *callbacks) {
   g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
   v.play = G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(actions), "play"));
   gtk_widget_insert_action_group(rows, "home", G_ACTION_GROUP(actions));
+  v.actions = G_ACTION_GROUP(actions); /* rows keeps it */
   g_object_unref(actions);
 
   v.scroller = gtk_scrolled_window_new();

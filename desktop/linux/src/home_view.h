@@ -58,6 +58,12 @@ void home_view_refresh(void);
 /* Whether widget, the focus, is one of the tiles. */
 gboolean home_view_is_tile(GtkWidget *widget);
 
+/* The menu a playlist has on its tile, for showing elsewhere: Search's results. g_object_unref() it.
+ * Its items are "home." actions, home_view_actions(), which whatever shows it has to insert. What
+ * it's for is copied, so it can go while the menu is open. */
+GMenuModel *home_view_playlist_menu(const char *uid, const char *title, gboolean smart);
+GActionGroup *home_view_actions(void);
+
 /* The scrolled window of the rows, for the performance log. */
 GtkWidget *home_view_scrolled(void);
 

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "album_grid.h"
+#include "album_groups.h"
 #include "art_backdrop.h"
 #include "cover.h"
 #include "delete_dialog.h"
@@ -159,9 +160,8 @@ static struct {
   GListStore *tracks;
   GtkSingleSelection *track_selection;
   GtkWidget *track_view, *track_scroller, *menu;
-  GtkWidget *album_menu;        /* an album tile's: Start radio and Edit... */
-  char menu_album[MC_UID_STRLEN]; /* the album it was opened on */
-  char album_seed[MC_UID_STRLEN];  /* the track its Start radio starts from */
+  GtkWidget *album_menu;        /* an album tile's, as it has everywhere (album_groups.h) */
+  GtkWidget *album_menu_tile;   /* the tile it was opened on, while it lasts */
   char artist_seed[MC_UID_STRLEN]; /* and the artist menu's */
   GActionGroup *menu_actions;   /* the menus' "artist." actions */
   char menu_uid[MC_UID_STRLEN]; /* the track the menu was opened on */
@@ -169,7 +169,7 @@ static struct {
   char menu_track_album[MC_UID_STRLEN];  /* and its album, or "" */
   char menu_track_artist[MC_UID_STRLEN]; /* and its artist, or "" */
   GSimpleAction *go_to_album, *go_to_artist;
-  GSimpleAction *radio_artist, *radio_album, *radio_track; /* enabled if there's a seed */
+  GSimpleAction *radio_artist, *radio_track; /* enabled if there's a seed */
   GPtrArray *rows;              /* bound track rows, to mark the playing one */
   char playing_uid[MC_UID_STRLEN];
 } v;
@@ -242,7 +242,7 @@ static void on_edit_artist(GSimpleAction *action, GVariant *param, gpointer user
 static void on_start_radio(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)param;
   (void)user;
-  playback_play_radio(action == v.radio_artist ? v.artist_seed : action == v.radio_album ? v.album_seed : v.menu_uid);
+  playback_play_radio(action == v.radio_artist ? v.artist_seed : v.menu_uid);
 }
 
 static GSimpleAction *radio_action(GSimpleActionGroup *group, const char *name) {
@@ -590,8 +590,29 @@ static void popup_track_menu(const ArtistTrack *t, int x, int y) {
   gtk_popover_popup(GTK_POPOVER(v.menu));
 }
 
+/* A closed menu gives the focus back to its tile, as GTK would hand it elsewhere, unless what it
+ * chose opened a dialog or changed the page. */
+static void on_album_menu_closed(GtkPopover *menu, gpointer user) {
+  (void)menu;
+  (void)user;
+  if (v.album_menu_tile && !adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(v.a->win)))
+    gtk_widget_grab_focus(v.album_menu_tile);
+}
+
+/* Opens the menu of child, an album's tile, pointing at x, y in the page. */
+static void popup_album_menu(GtkWidget *child, int x, int y) {
+  GMenuModel *menu = album_groups_album_model(v.a, g_object_get_data(G_OBJECT(child), "uid"),
+                                               g_object_get_data(G_OBJECT(child), "title"));
+  if (!menu) return;
+  g_set_weak_pointer(&v.album_menu_tile, child);
+  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(v.album_menu), menu);
+  g_object_unref(menu); /* the popover keeps it */
+  gtk_popover_set_pointing_to(GTK_POPOVER(v.album_menu), &(GdkRectangle){x, y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(v.album_menu));
+}
+
 /* The Menu key or Shift+F10 on the page: in the tracks, the selected one's menu under its
- * title; on a single's tile, its menu under the tile; elsewhere, or with no track
+ * title; on an album's or a single's tile, its menu under the tile; elsewhere, or with no track
  * selected, the header's "...". */
 static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
   (void)widget;
@@ -600,6 +621,13 @@ static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer use
   if (!v.open[0]) return FALSE;
   GtkRoot *root = gtk_widget_get_root(v.page);
   GtkWidget *focus = root ? gtk_root_get_focus(root) : NULL;
+  for (GtkWidget *w = focus; w && w != v.albums; w = gtk_widget_get_parent(w)) {
+    graphene_rect_t at;
+    if (!GTK_IS_FLOW_BOX_CHILD(w) || gtk_widget_get_parent(w) != v.albums || !gtk_widget_compute_bounds(w, v.page, &at))
+      continue;
+    popup_album_menu(w, (int)at.origin.x, (int)(at.origin.y + at.size.height));
+    return TRUE;
+  }
   for (GtkWidget *w = focus; w && w != v.singles_box; w = gtk_widget_get_parent(w)) {
     ArtistTrack *t = g_object_get_data(G_OBJECT(w), "track"); /* on a single's flow box child */
     graphene_rect_t at;
@@ -682,15 +710,18 @@ static void on_single_menu(GtkGestureClick *click, int n_press, double x, double
 /* Right-click on an album's tile: its menu, where the pointer is. */
 static void on_album_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
   (void)n_press;
-  const char *uid = g_object_get_data(G_OBJECT(user), "uid");
   GtkWidget *tile = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
   graphene_point_t at;
-  if (!uid || !gtk_widget_compute_point(tile, v.page, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
+  if (!gtk_widget_compute_point(tile, v.page, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
   gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
-  g_strlcpy(v.menu_album, uid, sizeof v.menu_album);
-  g_simple_action_set_enabled(v.radio_album, v.a->lib && mc_radio_seed_for_album(v.a->lib, uid, v.album_seed) == MC_OK);
-  gtk_popover_set_pointing_to(GTK_POPOVER(v.album_menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
-  gtk_popover_popup(GTK_POPOVER(v.album_menu));
+  popup_album_menu(user, (int)at.x, (int)at.y);
+}
+
+/* An album's tile drags its album, as the album grid's do. */
+static gboolean on_album_drag(gpointer user, drag_item *item) {
+  item->kind = DRAG_ALBUM;
+  g_strlcpy(item->uid, g_object_get_data(G_OBJECT(user), "uid"), sizeof item->uid);
+  return TRUE;
 }
 
 /* A single's tile drags its track, as a track's row does. */
@@ -732,19 +763,12 @@ static void on_go_to_artist(GSimpleAction *action, GVariant *param, gpointer use
   if (artist[0]) app_open_artist(v.a, artist);
 }
 
-/* The track menu's Edit..., and the album tile's. */
+/* The track menu's Edit.... */
 static void on_edit_track(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
   (void)user;
   if (v.menu_uid[0]) edit_dialog_present(v.a, EDIT_TRACK, v.menu_uid);
-}
-
-static void on_edit_album(GSimpleAction *action, GVariant *param, gpointer user) {
-  (void)action;
-  (void)param;
-  (void)user;
-  if (v.menu_album[0]) edit_dialog_present(v.a, EDIT_ALBUM, v.menu_album);
 }
 
 /* The track menu's Delete from library... (delete_dialog.h). */
@@ -775,11 +799,13 @@ static GtkWidget *album_child(const mc_album_info *info, const char *artist) {
   GtkWidget *tile = album_tile_new(album);
   gtk_flow_box_child_set_child(GTK_FLOW_BOX_CHILD(child), tile);
   g_object_set_data_full(G_OBJECT(child), "uid", g_strdup(info->uid), g_free);
+  g_object_set_data_full(G_OBJECT(child), "title", g_strdup(album->title), g_free);
   g_object_unref(album);
   GtkGesture *click = gtk_gesture_click_new();
   gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
   g_signal_connect(click, "released", G_CALLBACK(on_album_menu), child);
   gtk_widget_add_controller(tile, GTK_EVENT_CONTROLLER(click));
+  drag_source_new(tile, on_album_drag, child);
   return child;
 }
 
@@ -1104,11 +1130,8 @@ static GtkWidget *build_page(void) {
   gtk_widget_set_halign(v.menu, GTK_ALIGN_START);
   gtk_widget_set_parent(v.menu, v.page);
   g_signal_connect(v.menu, "closed", G_CALLBACK(on_menu_closed), v.track_view);
-  model = g_menu_new();
-  g_menu_append(model, mc_str_mnemonic(MC_STR_START_RADIO), "artist.start-radio-album");
-  g_menu_append(model, mc_str_mnemonic(MC_STR_EDIT_MENU), "artist.edit-album");
-  v.album_menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));
-  g_object_unref(model);
+  v.album_menu = gtk_popover_menu_new_from_model(NULL);
+  g_signal_connect(v.album_menu, "closed", G_CALLBACK(on_album_menu_closed), NULL);
   gtk_popover_set_has_arrow(GTK_POPOVER(v.album_menu), FALSE);
   gtk_widget_set_halign(v.album_menu, GTK_ALIGN_START);
   gtk_widget_set_parent(v.album_menu, v.page);
@@ -1206,7 +1229,6 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
                                   {"delete-track", on_delete_track, NULL, NULL, NULL, {0}},
                                   {"edit", on_edit_artist, NULL, NULL, NULL, {0}},
                                   {"edit-track", on_edit_track, NULL, NULL, NULL, {0}},
-                                  {"edit-album", on_edit_album, NULL, NULL, NULL, {0}},
                                   {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
                                   {"sync-here", on_sync_here, NULL, NULL, NULL, {0}}};
   g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
@@ -1220,7 +1242,6 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
   g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(v.go_to_artist));
   g_object_unref(v.go_to_artist);
   v.radio_artist = radio_action(actions, "start-radio");
-  v.radio_album = radio_action(actions, "start-radio-album");
   v.radio_track = radio_action(actions, "start-radio-track");
   gtk_widget_insert_action_group(v.stack, "artist", G_ACTION_GROUP(actions));
   v.menu_actions = G_ACTION_GROUP(actions); /* the stack keeps it */

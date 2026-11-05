@@ -1829,7 +1829,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   const artist_view_callbacks artists_cb = {on_shuffle, on_track_add_to_playlist, on_artist_album, playback_changed, a};
   a->artists = artist_view_new(a, &artists_cb);
   gtk_stack_add_named(a->pages, a->artists, "artists");
-  a->search = search_view_new(a);
+  a->search = search_view_new(a, &tracks_cb);
   gtk_stack_add_named(a->pages, a->search, "search");
   const import_view_callbacks import_cb = {on_import_library_changed, on_import_session,
                                            on_import_done, on_import_present, a};
