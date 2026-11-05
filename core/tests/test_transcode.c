@@ -330,7 +330,8 @@ static void check_transcode(const char *dir) {
       CHECK(same[i].st == MC_OK);
       CHECK(same[i].out && same[0].out && !strcmp(same[i].out, same[0].out));
     }
-    /* The sidecar is the file's or stale, never another encode's hash. */
+    /* The sidecar is the file's or stale, never another encode's hash: two can land with the
+     * same size in the same millisecond, so they must be the same bytes. */
     char sha[65], got[65];
     int64_t ss = 0, sm = 0, fs = 0, fm = 0;
     if (same[0].out && mc_transcode_sha_read(same[0].out, sha, &ss, &sm) == MC_OK &&
@@ -338,6 +339,19 @@ static void check_transcode(const char *dir) {
       file_sha(same[0].out, got);
       CHECK(!strcmp(sha, got));
     }
+    job later = {cache, "same-later", src, MC_ERR_IO, NULL};
+    run_job(&later);
+    CHECK(later.st == MC_OK);
+    if (same[0].out && later.out) {
+      char other[65];
+      file_sha(same[0].out, got);
+      file_sha(later.out, other);
+      CHECK(!strcmp(got, other));
+    }
+    mc_free(later.out);
+    char *later_dir = join(cache, "same-later");
+    CHECK(mc_remove_tree(later_dir) == MC_OK);
+    free(later_dir);
     of = same[0].out ? op_open_file(same[0].out, NULL) : NULL;
     CHECK(of != NULL);
     if (of) {

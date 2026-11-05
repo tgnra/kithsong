@@ -5,7 +5,9 @@
  *   place -> sidecar with the hash
  *
  * Each encode writes a part file of its own, so two of the same file can run at once: the
- * last rename wins, and both files are whole.
+ * last rename wins, and both files are whole. They're the same bytes, the Ogg serial being
+ * fixed, so a sidecar is right whichever encode wrote it: two encodes can land with the same
+ * size in the same millisecond, and nothing about the file would show it was the other's.
  *
  * Tags are read from the source with TagLib (tag_io.cpp) and written as Opus comments while
  * encoding, so the file is complete the moment it's renamed into place. The cover is the
@@ -29,6 +31,7 @@
 enum {
   CHUNK = 4096,          /* frames decoded at a time */
   OVERHEAD_BYTES = 4096, /* Ogg framing, headers and tags, in size estimates */
+  OGG_SERIAL = 0x4b697468, /* a file holds one stream, so any number does */
   BENCH_FRAMES = 9600,   /* 200 ms at 48 kHz */
   BENCH_MS = 500,        /* of this thread's CPU time */
   BENCH_WALL_MS = 5000,  /* the most it waits for that on a device with no time to give */
@@ -208,7 +211,8 @@ static mc_status encode(const char *src_path, const char *part_path, int kbps, c
   enc = ope_encoder_create_callbacks(&callbacks, &out, comments, (opus_int32)mc_decoder_rate(dec),
                                      (int)out_channels, 0, &err);
   if (!enc) goto done;
-  if (ope_encoder_ctl(enc, OPUS_SET_BITRATE(kbps * 1000)) != OPE_OK ||
+  if (ope_encoder_ctl(enc, OPE_SET_SERIALNO(OGG_SERIAL)) != OPE_OK ||
+      ope_encoder_ctl(enc, OPUS_SET_BITRATE(kbps * 1000)) != OPE_OK ||
       ope_encoder_ctl(enc, OPUS_SET_VBR(1)) != OPE_OK ||
       ope_encoder_ctl(enc, OPUS_SET_COMPLEXITY(complexity(kbps))) != OPE_OK ||
       ope_encoder_ctl(enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC)) != OPE_OK)
@@ -359,9 +363,8 @@ mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const
       char sha[65];
       st = encode(src_path, part, opts->bitrate_kbps, sha);
       if (st == MC_OK) {
-        /* The size and mtime are the part file's (a rename keeps them), so should another
-         * encode of it (whose bytes differ: a new Ogg serial) replace it before the sidecar
-         * is written, the sidecar is stale rather than wrong. */
+        /* The size and mtime are the part file's (a rename keeps them). Should another encode
+         * of it replace it before the sidecar is written, the bytes are the same. */
         int64_t size = 0, mtime_ms = 0;
         int info = mc_file_info(part, &size, &mtime_ms) == MC_OK;
         st = mc_rename(part, path, 1);

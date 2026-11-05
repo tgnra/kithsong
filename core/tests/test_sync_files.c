@@ -1500,7 +1500,7 @@ int main(int argc, char **argv) {
 
     /* A has lost a track B wants: B notes that it hasn't it, for the waiting tracks, and
      * forgets that once it has. */
-    char aside[2048], b_two[256];
+    char aside[2064], b_two[256];
     abs_path(&a, t2.rel, p, sizeof p);
     snprintf(aside, sizeof aside, "%s.aside", p);
     CHECK(mc_rename(p, aside, 0) == MC_OK);
