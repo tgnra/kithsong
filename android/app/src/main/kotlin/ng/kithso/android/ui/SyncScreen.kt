@@ -294,6 +294,11 @@ fun DeviceScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                         )
+                        ListItem(
+                            leadingContent = { Icon(Icons.Sync, contentDescription = null) },
+                            headlineContent = { Text(stringResource(R.string.sync_now)) },
+                            modifier = Modifier.clickable(enabled = status.running) { syncer.syncNow() },
+                        )
                     }
                     status.self?.let { FilesRows(it) }
                     // This phone's sessions with any member.

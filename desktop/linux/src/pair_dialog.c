@@ -412,6 +412,7 @@ static char *merge_proposal(const sync_event *ev, const char *name) {
     text = gformat(mc_format_alloc(mc_str(MC_STR_PAIR_MERGE_TEXT), MC_S(peer_name(name, TRUE)), MC_S(there),
                                    MC_S(here)));
     text = join_para(text, g_strdup(mc_str(MC_STR_PAIR_MERGE_BACKUP)));
+    text = join_para(text, g_strdup(mc_str(MC_STR_PAIR_MERGE_WAIT)));
     if (ev->scrobble_sign_out && ev->scrobble_user[0])
       text = join_para(text, gformat(mc_format_alloc(mc_str(MC_STR_PAIR_MERGE_SCROBBLE), MC_S(ev->scrobble_user),
                                                      MC_S(peer_name(name, FALSE)))));

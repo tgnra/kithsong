@@ -462,6 +462,7 @@ static void merge_proposal(wchar_t *out, size_t n, const sync_event *ev, const w
   } else {
     mc_wformat(out, n, mc_str(MC_STR_PAIR_MERGE_TEXT), MC_S(peer_start), MC_S(there), MC_S(here));
     append_para(out, n, mc_wstr(MC_STR_PAIR_MERGE_BACKUP));
+    append_para(out, n, mc_wstr(MC_STR_PAIR_MERGE_WAIT));
     if (ev->scrobble_sign_out && ev->scrobble_user[0]) {
       mc_wformat(para, 768, mc_str(MC_STR_PAIR_MERGE_SCROBBLE), MC_S(ev->scrobble_user), MC_S(peer));
       append_para(out, n, para);

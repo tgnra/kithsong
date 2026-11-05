@@ -289,6 +289,7 @@ private fun MergeText(merge: MergeProposal, peer: String, modifier: Modifier = M
         else -> buildList {
             add(stringResource(R.string.pair_merge_text, peer, there, here))
             add(stringResource(R.string.pair_merge_backup))
+            add(stringResource(R.string.pair_merge_wait))
             if (merge.scrobbleUser.isNotEmpty()) add(stringResource(R.string.pair_merge_scrobble, merge.scrobbleUser, peer))
             if (merge.forgetNames.isNotEmpty()) {
                 val n = merge.forgetNames.size
