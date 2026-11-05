@@ -343,11 +343,18 @@ static void test_rename(void) {
   mc_library_move_info info;
   CHECK(mc_library_move_check(src, dst, &info) == MC_OK && info.problem == MC_MOVE_OK);
   CHECK(info.same_volume && info.needed_bytes == 0);
+  write_file("src/.directory", "[Desktop Entry]");
   mc_move_test_free_space = 1000; /* a rename needs no room */
   mc_library_move_result result;
   CHECK(mc_library_move(src, dst, NULL, NULL, NULL, &result) == MC_OK);
   CHECK(result.renamed);
   mc_library_move_result_free(&result);
+  /* It belongs to the folder, and stays with it. */
+  CHECK(has_file("src/.directory", "[Desktop Entry]"));
+  CHECK(!exists("renamed/lib/.directory"));
+  char left[1200];
+  path(left, sizeof left, "src/.directory");
+  mc_remove(left);
   check_moved("renamed/lib", dst);
   reset_hooks();
 }

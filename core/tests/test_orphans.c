@@ -239,6 +239,8 @@ static void test_categories(void) {
   /* What belongs to the folder or the volume. */
   put(&f, "desktop.ini");
   put(&f, "Artist/Desktop.ini");
+  put(&f, ".directory");
+  put(&f, "Artist/.directory");
   put(&f, "$RECYCLE.BIN/S-1-5-21/$R1.mp3");
   put(&f, "System Volume Information/tracking.log");
   put(&f, "lost+found/#123");
@@ -266,6 +268,7 @@ static void test_categories(void) {
     "Box/Set/cover.jpg", "library.db-journal", "library-before-merge-2026-11-01.db-wal",
     "Artist/Album/.kithsong-0a1b2c3d-01 Song.flac", "Artist/Album/.kithsong-0a1b2c3d-01 Song.flac.old",
     ".kithsong-probe-001122334455", ".merge-restore/library.db", "desktop.ini", "Artist/Desktop.ini",
+    ".directory", "Artist/.directory",
     "$RECYCLE.BIN/S-1-5-21/$R1.mp3", "System Volume Information/tracking.log", "lost+found/#123",
     ".Trash-1000/files/old.mp3", ".Trash/1000/files/old.mp3", "Artist/Album/02 Song.flac.part",
     "Box/Set/cover.png.tmp"};

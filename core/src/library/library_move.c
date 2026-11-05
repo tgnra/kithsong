@@ -193,7 +193,7 @@ static int is_db_file(const char *name) {
 
 /* Folder settings that belong to the folder rather than the library. */
 static int stays_at_top(const char *name) {
-  return mc_same_path(name, "desktop.ini");
+  return mc_same_path(name, "desktop.ini") || mc_same_path(name, ".directory");
 }
 
 static void scan(tree *t, const char *root, const char *rel);

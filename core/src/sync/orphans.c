@@ -23,8 +23,8 @@
  * (library/folder_gate.h), so no sweep runs beside them, and they're too young for one anyway.
  * One left by a crash is an orphan like any other.
  *
- * What isn't the app's or the user's to lose, so it's left alone: desktop.ini, whatever has
- * Windows' system attribute, and at the top a volume's own folders ($RECYCLE.BIN, System Volume
+ * What isn't the app's or the user's to lose, so it's left alone: desktop.ini, KDE's .directory,
+ * whatever has Windows' system attribute, and at the top a volume's own folders ($RECYCLE.BIN, System Volume
  * Information, lost+found, and .Trash or .Trash-1000, which mc_trash() itself fills when the
  * library is at the top of a drive). Links and junctions are neither followed nor touched.
  *
@@ -198,7 +198,8 @@ static int on_entry(void *user, const mc_tree_entry *e) {
     }
     leave = 1;
   }
-  leave = leave || !strcmp(name, "desktop.ini") || starts_with(name, ".kithsong-") ||
+  leave = leave || !strcmp(name, "desktop.ini") || !strcmp(name, ".directory") ||
+          starts_with(name, ".kithsong-") ||
           (top && (!strcmp(name, MC_LIBRARY_DB_NAME) || starts_with(name, MC_LIBRARY_DB_NAME "-")));
   if (leave) {
     free(rel);

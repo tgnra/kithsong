@@ -17,8 +17,8 @@
  * empty, as it may be a folder the user or the OS made (e.g. Music).
  *
  * Symbolic links and junctions in the library aren't followed or moved, and neither is a
- * desktop.ini at the top (it belongs to the folder, e.g. Windows' name for Music); they stay
- * behind in the old folder. */
+ * desktop.ini or .directory at the top (they belong to the folder, e.g. Windows' name for Music
+ * or KDE's icon for it); they stay behind in the old folder. */
 #ifndef MUSICCORE_LIBRARY_MOVE_H
 #define MUSICCORE_LIBRARY_MOVE_H
 
