@@ -840,7 +840,10 @@ ones included), and radio stations, with `kind` naming which (`'album'`, `'artis
 item's own uid, a station's being its seed track's, so an item
 has one row and opening it on two devices writes the same fields: sync keeps the newer open,
 and a removal wins over an earlier open. `opened_ms` is the wall-clock part of the hlc the
-open is stamped with, so the newest change by hlc is also the newest `opened_ms`. There is
+open is stamped with, so the newest change by hlc is normally the newest `opened_ms`. A row
+a merge carried over is the exception: it keeps the old library's `opened_ms` under the merge's
+hlc, so an open that raced the merge can lose to an older one. Listing goes by `opened_ms`
+alone, so the order stays right, and the next open puts it straight. There is
 no foreign key, since a row may name any of five tables; listing leaves out rows whose item
 is gone. The API is `mc_library_record_opened()`, `mc_library_list_recents()`,
 `mc_library_remove_recent()` and `mc_library_clear_recents()`. With `MC_LIST_PLAYABLE`,
