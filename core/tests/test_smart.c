@@ -784,6 +784,19 @@ static void test_limit_duration(mc_library *lib) {
   mc_free(s);
 }
 
+/* What a text condition's box can offer. */
+static void test_genres(mc_library *lib) {
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "UPDATE tracks SET genre = ' pop ' WHERE uid = 't4'") == SQLITE_OK);
+  mc_genre_list *list = NULL;
+  CHECK(mc_library_list_genres(lib, &list) == MC_OK);
+  CHECK(list->count == 2);
+  CHECK_STR(list->items[0], "Pop");
+  CHECK_STR(list->items[1], "Rock");
+  mc_genre_list_free(list);
+  CHECK(exec(db, "UPDATE tracks SET genre = 'Pop' WHERE uid = 't4'") == SQLITE_OK);
+}
+
 static void test_credits(mc_library *lib) {
   CHECK(exec(mc_library_db(lib),
              "UPDATE tracks SET artist_uid = 'ar1', artist_credit = 'The Beatles feat. Abba' WHERE uid = 't2';"
@@ -904,6 +917,7 @@ int main(int argc, char **argv) {
   test_examples(lib);
   test_saved(lib);
   test_limit_duration(lib);
+  test_genres(lib);
   test_describe(lib);
   test_credits(lib);
   test_mix(lib);

@@ -9,7 +9,8 @@
 
 enum { PREVIEW_DELAY_MS = 250, PREVIEW_ROWS = 50, PROBLEM_ROWS = 4, MAX_SORTS = 8, MAX_NAME = 255 };
 
-enum { MODE_ALL, MODE_ANY, MODE_NONE };
+enum { MODE_ALL, MODE_ANY, MODE_NONE, MODE_NOT_ALL };
+enum { LIMIT_ITEMS, LIMIT_MINUTES, LIMIT_HOURS };
 enum { UNIT_DAYS, UNIT_WEEKS, UNIT_MONTHS };
 enum { PROBLEM_NONE, PROBLEM_VALUE, PROBLEM_NUMBER, PROBLEM_DURATION, PROBLEM_CHOICE };
 enum { CHOICE_NONE = -1, CHOICE_EXTRA = -2 };
@@ -59,6 +60,7 @@ typedef struct row {
   GtkWidget *focus;                      /* the first thing to type in: its value, or its field */
   GtkWidget *warn;                       /* a group's */
   GtkWidget *count;
+  GtkWidget *move;
 } row;
 
 /* A page: a group's conditions. */
@@ -71,7 +73,7 @@ typedef struct page {
   GPtrArray *rows; /* of row, freed with the page */
   GtkWidget *focus; /* to have the focus once the page is shown */
   /* The list's page only */
-  GtkWidget *sorts, *sort_add, *shuffled, *limited, *limit;
+  GtkWidget *sorts, *sort_add, *shuffled, *limited, *limit, *limit_unit;
 } page;
 
 /* The thread's work: the rule without its limit, what the shown page previews, and the rule
@@ -80,6 +82,7 @@ typedef struct job {
   guint serial, gen;
   mc_smart_subject subject;
   char *list_rule;
+  char *timed_rule;   /* the rule with a limit by duration, if that's its limit; else NULL */
   char *preview_rule; /* the list's rule on its own page, else the shown group's; may be NULL */
   gboolean preview_is_list;
   int n;
@@ -90,6 +93,7 @@ typedef struct job {
 typedef struct result {
   guint serial, gen;
   int total;       /* the list's, without its limit; -1 if it couldn't be worked out */
+  int timed;       /* what timed_rule keeps; -1 if there's none */
   gboolean preview_ok;
   mc_track_list *tracks;
   mc_album_list *albums;
@@ -130,6 +134,7 @@ typedef struct editor {
   int nsortable;
   mc_playlist_list *playlists;
   mc_album_group_list *groups;
+  GtkStringList *genres, *artists; /* what text conditions offer, once one has asked */
 
   node *root;
   GHashTable *nodes; /* id -> node */
@@ -137,13 +142,13 @@ typedef struct editor {
   GArray *sorts; /* int: sortable index * 2 + desc */
   gboolean random, limited;
   gint64 seed;
-  int limit;
+  int limit, limit_unit;
 
   GPtrArray *bad; /* the conditions with problems, in the rule's order */
   worker *w;
   guint gen, timer;
   gboolean counted; /* a result has come back for the rule as it stands */
-  int total;
+  int total, timed;
   gboolean building; /* widgets being set up: their signals aren't edits */
 } editor;
 
@@ -493,8 +498,8 @@ static yyjson_mut_val *cond_json(yyjson_mut_doc *d, const node *c) {
 
 static yyjson_mut_val *node_json(yyjson_mut_doc *d, const node *n, gboolean lenient, gboolean *ok);
 
-/* {"name", "all": [...]}, {"name", "any": [...]} or, for none, {"name", "not": {"any": [...]}}.
- * Lenient leaves out what has a problem, and empty groups, as for a sentence; otherwise a
+/* {"name", "all": [...]}, {"name", "any": [...]} or, for none, {"name", "not": {"any": [...]}},
+ * and for not all, {"name", "not": {"all": [...]}}. Lenient leaves out what has a problem, and empty groups, as for a sentence; otherwise a
  * problem anywhere clears *ok. */
 static yyjson_mut_val *group_json(yyjson_mut_doc *d, const node *g, gboolean lenient, gboolean *ok) {
   yyjson_mut_val *list = yyjson_mut_arr(d);
@@ -506,12 +511,12 @@ static yyjson_mut_val *group_json(yyjson_mut_doc *d, const node *g, gboolean len
   }
   yyjson_mut_val *obj = yyjson_mut_obj(d);
   if (named(g) && g->parent) yyjson_mut_obj_add_strcpy(d, obj, "name", g->name);
-  if (g->mode != MODE_NONE) {
+  if (g->mode == MODE_ALL || g->mode == MODE_ANY) {
     yyjson_mut_obj_add_val(d, obj, g->mode == MODE_ALL ? "all" : "any", list);
     return obj;
   }
   yyjson_mut_val *inner = yyjson_mut_obj(d);
-  yyjson_mut_obj_add_val(d, inner, "any", list);
+  yyjson_mut_obj_add_val(d, inner, g->mode == MODE_NOT_ALL ? "all" : "any", list);
   yyjson_mut_obj_add_val(d, obj, "not", inner);
   return obj;
 }
@@ -571,7 +576,10 @@ static char *rule_json(gboolean with_limit) {
     yyjson_mut_arr_append(order, key);
   }
   if (yyjson_mut_arr_size(order)) yyjson_mut_obj_add_val(d, root, "order", order);
-  if (with_limit && ed->limited && ed->limit > 0) yyjson_mut_obj_add_sint(d, root, "limit", ed->limit);
+  if (with_limit && ed->limited && ed->limit > 0) {
+    if (ed->limit_unit == LIMIT_ITEMS) yyjson_mut_obj_add_sint(d, root, "limit", ed->limit);
+    else yyjson_mut_obj_add_sint(d, root, "limit_duration", (gint64)ed->limit * (ed->limit_unit == LIMIT_HOURS ? 3600 : 60));
+  }
   return write_doc(d, ok);
 }
 
@@ -661,14 +669,22 @@ static gboolean load_cond(node *parent, yyjson_val *leaf, gboolean negated) {
   return TRUE;
 }
 
-/* {"all": [...]}, {"any": [...]} or {"not": {"any": [...]}}, each maybe with a "name": its
- * mode, list and name. FALSE for anything else. */
+/* Whether a "not" around leaf can be shown as the one condition. */
+static gboolean can_negate(yyjson_val *leaf) {
+  int field = find_field(yyjson_get_str(yyjson_obj_get(leaf, "field")));
+  if (field < 0) return FALSE;
+  if (!strcmp(ed->fields[field].type, "bool")) return TRUE;
+  return find_op(field, negated_op(yyjson_get_str(yyjson_obj_get(leaf, "op")))) >= 0;
+}
+
+/* {"all": [...]}, {"any": [...]}, {"not": {"any": [...]}} or {"not": {"all": [...]}}, each maybe
+ * with a "name": its mode, list and name. FALSE for anything else. */
 static gboolean group_of(yyjson_val *v, int *mode, yyjson_val **list, const char **name) {
   *name = yyjson_get_str(yyjson_obj_get(v, "name"));
   yyjson_val *not = yyjson_obj_get(v, "not");
   if (not) {
-    *list = yyjson_obj_get(not, "any");
-    *mode = MODE_NONE;
+    *mode = yyjson_obj_get(not, "any") ? MODE_NONE : MODE_NOT_ALL;
+    *list = yyjson_obj_get(not, *mode == MODE_NONE ? "any" : "all");
     return *list != NULL;
   }
   if ((*list = yyjson_obj_get(v, "all"))) *mode = MODE_ALL;
@@ -691,8 +707,14 @@ static gboolean load_node(node *parent, yyjson_val *v) {
     return TRUE;
   }
   yyjson_val *not = yyjson_obj_get(v, "not");
-  if (not && (yyjson_obj_get(not, "all") || yyjson_obj_get(not, "any") || yyjson_obj_get(not, "not"))) return FALSE;
-  return load_cond(parent, not ? not : v, not != NULL);
+  if (!not) return load_cond(parent, v, FALSE);
+  /* A "not" around a condition is its negative operator, where it has one. */
+  if (yyjson_obj_get(not, "field") && can_negate(not)) return load_cond(parent, not, TRUE);
+  /* Anything else is a group of one: none of it, which means the same. */
+  node *g = node_new(parent, TRUE);
+  g->mode = MODE_NONE;
+  g->name = g_strdup(name);
+  return load_node(g, not);
 }
 
 /* rule into ed->root and the order. FALSE if the editor can't show it: it's read-only then. */
@@ -733,10 +755,15 @@ static gboolean load_rule(const char *rule) {
     int k = s * 2 + (dir && yyjson_equals_str(dir, "desc") ? 1 : 0);
     if (ok) g_array_append_val(ed->sorts, k);
   }
-  yyjson_val *limit = yyjson_obj_get(root, "limit");
+  yyjson_val *limit = yyjson_obj_get(root, "limit"), *seconds = yyjson_obj_get(root, "limit_duration");
   if (ok && limit) {
     ed->limited = TRUE;
     ed->limit = (int)CLAMP(json_int(limit), 1, G_MAXINT);
+  } else if (ok && seconds) {
+    gint64 s = json_int(seconds);
+    ed->limited = TRUE;
+    ed->limit_unit = s % 3600 ? LIMIT_MINUTES : LIMIT_HOURS;
+    ed->limit = (int)CLAMP(s % 3600 ? (s + 59) / 60 : s / 3600, 1, G_MAXINT);
   }
   yyjson_doc_free(doc);
   return ok;
@@ -797,6 +824,7 @@ static char *problem_line(const node *c) {
 
 static void changed(void);
 static void structure_changed(page *p);
+static void fill_rows(page *p);
 static void push_group(node *g);
 static void on_shown(AdwNavigationPage *nav, gpointer data);
 static void show_problem(guint id);
@@ -944,6 +972,62 @@ static void on_day_selected(GtkCalendar *cal, gpointer data) {
   changed();
 }
 
+/* What field's box offers as you type (the library's genres or artists), or NULL for nothing.
+ * The editor's. */
+static GListModel *names_for(const char *field) {
+  gboolean genre = !strcmp(field, "genre");
+  if (!genre && strcmp(field, "artist") && strcmp(field, "album_artist")) return NULL;
+  GtkStringList **names = genre ? &ed->genres : &ed->artists;
+  if (*names) return G_LIST_MODEL(*names);
+  *names = gtk_string_list_new(NULL);
+  if (genre) {
+    mc_genre_list *list = NULL;
+    if (mc_library_list_genres(ed->lib, &list) != MC_OK) list = NULL;
+    for (int i = 0; list && i < list->count; i++) gtk_string_list_append(*names, list->items[i]);
+    mc_genre_list_free(list);
+  } else {
+    mc_artist_list *list = NULL;
+    if (mc_library_list_artists(ed->lib, &list) != MC_OK) list = NULL;
+    for (int i = 0; list && i < list->count; i++)
+      if (list->items[i].name) gtk_string_list_append(*names, list->items[i].name);
+    mc_artist_list_free(list);
+  }
+  return G_LIST_MODEL(*names);
+}
+
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS /* nothing has replaced GtkEntryCompletion in GTK 4 */
+
+/* Whether the name in row iter has key, already folded by the completion, anywhere in it. */
+static gboolean name_has(GtkEntryCompletion *completion, const char *key, GtkTreeIter *iter, gpointer data) {
+  (void)data;
+  char *name = NULL;
+  gtk_tree_model_get(gtk_entry_completion_get_model(completion), iter, 0, &name, -1);
+  char *normal = name ? g_utf8_normalize(name, -1, G_NORMALIZE_ALL) : NULL;
+  char *folded = normal ? g_utf8_casefold(normal, -1) : NULL;
+  gboolean has = folded && strstr(folded, key);
+  g_free(folded);
+  g_free(normal);
+  g_free(name);
+  return has;
+}
+
+/* entry offers names as it's typed in. */
+static void offer_names(GtkWidget *entry, GListModel *names) {
+  GtkListStore *store = gtk_list_store_new(1, G_TYPE_STRING);
+  guint n = g_list_model_get_n_items(names);
+  for (guint i = 0; i < n; i++)
+    gtk_list_store_insert_with_values(store, NULL, -1, 0, gtk_string_list_get_string(GTK_STRING_LIST(names), i), -1);
+  GtkEntryCompletion *completion = gtk_entry_completion_new();
+  gtk_entry_completion_set_model(completion, GTK_TREE_MODEL(store));
+  g_object_unref(store);
+  gtk_entry_completion_set_text_column(completion, 0);
+  gtk_entry_completion_set_match_func(completion, name_has, NULL, NULL);
+  gtk_entry_set_completion(GTK_ENTRY(entry), completion);
+  g_object_unref(completion);
+}
+
+G_GNUC_END_IGNORE_DEPRECATIONS
+
 static GtkWidget *value_entry(node *c, gboolean high, const char *text, int width) {
   GtkWidget *e = gtk_entry_new();
   gtk_editable_set_text(GTK_EDITABLE(e), text ? text : "");
@@ -953,6 +1037,8 @@ static GtkWidget *value_entry(node *c, gboolean high, const char *text, int widt
   else gtk_widget_set_hexpand(e, TRUE);
   if (type_is(c, "int") || type_is(c, "date")) gtk_entry_set_input_purpose(GTK_ENTRY(e), GTK_INPUT_PURPOSE_DIGITS);
   if (type_is(c, "duration")) gtk_entry_set_placeholder_text(GTK_ENTRY(e), mc_str(MC_STR_SMART_DURATION_CUE));
+  GListModel *names = type_is(c, "text") ? names_for(field_of(c)->name) : NULL;
+  if (names) offer_names(e, names);
   set_label(e, mc_str(high ? MC_STR_SMART_VALUE_HIGH_NAME : MC_STR_SMART_VALUE_NAME));
   g_object_set_data(G_OBJECT(e), "high", GINT_TO_POINTER(high));
   g_signal_connect(e, "changed", G_CALLBACK(on_value_changed), GUINT_TO_POINTER(c->id));
@@ -1116,6 +1202,143 @@ static void on_remove(GtkButton *button, gpointer data) {
   gtk_widget_grab_focus(r ? (r->focus ? r->focus : r->widget) : p->add_condition);
 }
 
+/* --- Moving a row --- */
+
+/* n's place in its group. */
+static guint place_of(const node *n) {
+  guint at = 0;
+  g_ptr_array_find(n->parent->kids, n, &at);
+  return at;
+}
+
+/* Whether g is n, or inside it. */
+static gboolean within(const node *g, const node *n) {
+  for (; g; g = g->parent)
+    if (g == n) return TRUE;
+  return FALSE;
+}
+
+/* n to place at in group to, with every open page's rows made again: a group moved to may be
+ * one further back. The focus stays on n's menu if n is still on the page, else it goes as it
+ * does when a row is removed. */
+static void move_node(node *n, node *to, guint at) {
+  page *p = visible_page();
+  node *shown = page_group(p);
+  if (!shown) return;
+  guint was = place_of(n);
+  g_ptr_array_remove_index(n->parent->kids, was);
+  g_ptr_array_insert(to->kids, (int)MIN(at, to->kids->len), n);
+  n->parent = to;
+  GListModel *stack = adw_navigation_view_get_navigation_stack(ed->nav);
+  for (guint i = 0, count = g_list_model_get_n_items(stack); i < count; i++) {
+    AdwNavigationPage *nav = g_list_model_get_item(stack, i);
+    fill_rows(page_of(nav));
+    g_object_unref(nav);
+  }
+  g_object_unref(stack);
+  changed();
+  row *r = row_of(p, n->id);
+  if (r) {
+    gtk_widget_grab_focus(r->move);
+    return;
+  }
+  guint next = was < shown->kids->len ? was : was - 1;
+  r = shown->kids->len ? row_of(p, kid(shown, next)->id) : NULL;
+  gtk_widget_grab_focus(r ? (r->focus ? r->focus : r->widget) : p->add_condition);
+}
+
+typedef struct move {
+  guint id, to; /* to 0: within its group, by */
+  int by;
+} move;
+
+/* After the menu has gone, as its button goes with the row. */
+static gboolean do_move(gpointer data) {
+  const move *m = data;
+  node *n = find(m->id), *to = m->to ? find(m->to) : NULL;
+  if (n && n->parent && to && !within(to, n)) move_node(n, to, to->kids->len);
+  else if (n && n->parent && !m->to) move_node(n, n->parent, (guint)((int)place_of(n) + m->by));
+  return G_SOURCE_REMOVE;
+}
+
+static void on_move_action(GSimpleAction *action, GVariant *param, gpointer data) {
+  (void)action;
+  (void)data;
+  move *m = g_new0(move, 1);
+  gint32 by = 0;
+  g_variant_get(param, "(uui)", &m->id, &m->to, &by);
+  m->by = by;
+  g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, do_move, m, g_free);
+}
+
+/* A menu entry calling smart.move. */
+static void add_move(GMenu *menu, const char *label, guint id, guint to, int by) {
+  GMenuItem *item = g_menu_item_new(label, NULL);
+  g_menu_item_set_action_and_target_value(item, "smart.move", g_variant_new("(uui)", id, to, by));
+  g_menu_append_item(menu, item);
+  g_object_unref(item);
+}
+
+/* A group's name for a menu: its path within the list (the list by its name), each part kept
+ * short. */
+static char *group_path(const node *g) {
+  GString *path = g_string_new(NULL);
+  for (const node *top = g; g && (g->parent || g == top); g = g->parent) {
+    if (path->len) g_string_prepend(path, mc_str(MC_STR_SMART_PATH_SEPARATOR));
+    const char *title = group_title(g);
+    if (g_utf8_strlen(title, -1) > 32) {
+      char *cut = g_utf8_substring(title, 0, 31);
+      g_string_prepend(path, "…");
+      g_string_prepend(path, cut);
+      g_free(cut);
+    } else {
+      g_string_prepend(path, title);
+    }
+  }
+  return g_string_free(path, FALSE);
+}
+
+/* Move to, for each group from g down that n could go in. */
+static void add_move_tos(GMenu *menu, const node *n, const node *g) {
+  if (g == n) return;
+  if (g != n->parent) {
+    char *path = group_path(g), *label = mc_format_alloc(mc_str(MC_STR_LINUX_SMART_MOVE_TO), MC_S(path));
+    add_move(menu, label ? label : path, n->id, g->id, 0);
+    mc_free(label);
+    g_free(path);
+  }
+  for (guint i = 0; i < g->kids->len; i++)
+    if (kid(g, i)->is_group) add_move_tos(menu, n, kid(g, i));
+}
+
+/* The row's menu, as the rule stands when it opens. */
+static void fill_move_menu(GtkMenuButton *button, gpointer data) {
+  node *n = find(GPOINTER_TO_UINT(data));
+  if (!n || !n->parent) return;
+  GMenu *menu = g_menu_new(), *within_group = g_menu_new(), *others = g_menu_new();
+  guint at = place_of(n);
+  if (at > 0) add_move(within_group, mc_str(MC_STR_MOVE_UP), n->id, 0, -1);
+  if (at + 1 < n->parent->kids->len) add_move(within_group, mc_str(MC_STR_MOVE_DOWN), n->id, 0, 1);
+  add_move_tos(others, n, ed->root);
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(within_group));
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(others));
+  gtk_menu_button_set_menu_model(button, G_MENU_MODEL(menu));
+  g_object_unref(within_group);
+  g_object_unref(others);
+  g_object_unref(menu);
+}
+
+static GtkWidget *move_button(const node *n) {
+  GtkWidget *b = gtk_menu_button_new();
+  gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(b), "view-more-symbolic");
+  gtk_menu_button_set_has_frame(GTK_MENU_BUTTON(b), FALSE);
+  gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(b), fill_move_menu, GUINT_TO_POINTER(n->id), NULL);
+  gtk_widget_set_tooltip_text(b, mc_str(MC_STR_LINUX_SMART_MOVE_NAME));
+  set_label(b, mc_str(MC_STR_LINUX_SMART_MOVE_NAME));
+  gtk_widget_set_valign(b, GTK_ALIGN_CENTER);
+  return b;
+}
+
 static GtkWidget *count_label(void) {
   GtkWidget *l = gtk_label_new(NULL);
   gtk_widget_add_css_class(l, "dim-label");
@@ -1150,6 +1373,8 @@ static row *cond_row(node *c) {
   fill_values(r, c);
   r->count = count_label();
   gtk_box_append(GTK_BOX(line), r->count);
+  r->move = move_button(c);
+  gtk_box_append(GTK_BOX(line), r->move);
   GtkWidget *remove = flat_button("window-close-symbolic", mc_str(MC_STR_SMART_REMOVE_CONDITION));
   g_signal_connect(remove, "clicked", G_CALLBACK(on_remove), GUINT_TO_POINTER(c->id));
   gtk_box_append(GTK_BOX(line), remove);
@@ -1201,6 +1426,8 @@ static row *group_row(node *g) {
   gtk_widget_set_tooltip_text(r->warn, mc_str(MC_STR_SMART_GROUP_HAS_PROBLEM));
   set_label(r->warn, mc_str(MC_STR_SMART_GROUP_HAS_PROBLEM));
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->widget), r->warn);
+  r->move = move_button(g);
+  adw_action_row_add_suffix(ADW_ACTION_ROW(r->widget), r->move);
   GtkWidget *remove = flat_button("window-close-symbolic", mc_str(MC_STR_SMART_REMOVE_GROUP));
   g_signal_connect(remove, "clicked", G_CALLBACK(on_remove), GUINT_TO_POINTER(g->id));
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->widget), remove);
@@ -1397,6 +1624,15 @@ static void on_limited(GtkCheckButton *check, gpointer data) {
   if (!ed || ed->building) return;
   ed->limited = gtk_check_button_get_active(check);
   gtk_widget_set_sensitive(p->limit, ed->limited);
+  gtk_widget_set_sensitive(p->limit_unit, ed->limited);
+  changed();
+}
+
+static void on_limit_unit(GObject *d, GParamSpec *pspec, gpointer data) {
+  (void)pspec;
+  (void)data;
+  if (!ed || ed->building) return;
+  ed->limit_unit = (int)gtk_drop_down_get_selected(GTK_DROP_DOWN(d));
   changed();
 }
 
@@ -1411,7 +1647,7 @@ static void on_limit(GtkSpinButton *spin, gpointer data) {
  *  | Sort by        [least played first v]  x |
  *  [+ Add sort order]
  *  | Shuffled                          [   ]  |
- *  | [x] Only the first           [10] tracks |  */
+ *  | [x] Only the first        [10] [tracks v] |  */
 static GtkWidget *build_order(page *p) {
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
   gtk_box_append(GTK_BOX(box), heading(mc_str(MC_STR_SMART_ORDER_HEADING)));
@@ -1451,8 +1687,13 @@ static GtkWidget *build_order(page *p) {
   set_label(p->limit, mc_str(MC_STR_SMART_LIMIT_COUNT_NAME));
   g_signal_connect(p->limit, "value-changed", G_CALLBACK(on_limit), p);
   adw_action_row_add_suffix(ADW_ACTION_ROW(limit_row), p->limit);
-  GtkWidget *unit = gtk_label_new(mc_str(ed->subject == MC_SMART_TRACKS ? MC_STR_SMART_LIMIT_TRACKS : MC_STR_SMART_LIMIT_ALBUMS));
-  adw_action_row_add_suffix(ADW_ACTION_ROW(limit_row), unit);
+  const char *units[] = {mc_str(ed->subject == MC_SMART_TRACKS ? MC_STR_SMART_LIMIT_TRACKS : MC_STR_SMART_LIMIT_ALBUMS),
+                         mc_str(MC_STR_SMART_LIMIT_MINUTES), mc_str(MC_STR_SMART_LIMIT_HOURS), NULL};
+  p->limit_unit = drop_down(units, mc_str(MC_STR_SMART_LIMIT_UNIT_NAME));
+  gtk_drop_down_set_selected(GTK_DROP_DOWN(p->limit_unit), (guint)ed->limit_unit);
+  gtk_widget_set_sensitive(p->limit_unit, ed->limited);
+  g_signal_connect(p->limit_unit, "notify::selected", G_CALLBACK(on_limit_unit), p);
+  adw_action_row_add_suffix(ADW_ACTION_ROW(limit_row), p->limit_unit);
   gtk_list_box_append(GTK_LIST_BOX(list), limit_row);
   ed->building = FALSE;
   gtk_box_append(GTK_BOX(box), list);
@@ -1529,9 +1770,9 @@ static AdwNavigationPage *page_new(node *g) {
     gtk_box_append(GTK_BOX(box), card);
     p->list = boxed_list(); /* unused, so the rows have somewhere to be */
   } else {
-    /* All, any or none of the following, and a row each. */
+    /* All, any, none or not all of the following, and a row each. */
     const char *modes[] = {mc_str(MC_STR_SMART_MODE_ALL), mc_str(MC_STR_SMART_MODE_ANY),
-                           mc_str(MC_STR_SMART_MODE_NONE), NULL};
+                           mc_str(MC_STR_SMART_MODE_NONE), mc_str(MC_STR_LINUX_SMART_MODE_NOT_ALL), NULL};
     p->mode = drop_down(modes, mc_str(MC_STR_SMART_MODE_NAME));
     gtk_widget_set_halign(p->mode, GTK_ALIGN_START);
     gtk_widget_set_margin_top(p->mode, 12);
@@ -1710,6 +1951,13 @@ static void update_problems(void) {
   gtk_widget_set_visible(ed->problems_more, n > PROBLEM_ROWS);
 }
 
+/* How many of n picks the limit keeps. */
+static int kept_by_limit(int n) {
+  if (!ed->limited) return n;
+  if (ed->limit_unit == LIMIT_ITEMS) return MIN(n, ed->limit);
+  return ed->timed >= 0 ? MIN(n, ed->timed) : n;
+}
+
 /* "40 tracks match · 10 in the list", or Counting… while it's being worked out. */
 static void update_status(void) {
   char text[256] = "";
@@ -1722,7 +1970,7 @@ static void update_status(void) {
     mc_format(part, sizeof part, mc_str_plural(id, ed->total), MC_D(ed->total));
     if (ed->limited) {
       char in_list[128];
-      mc_format(in_list, sizeof in_list, mc_str(MC_STR_SMART_IN_LIST), MC_D(MIN(ed->limit, ed->total)));
+      mc_format(in_list, sizeof in_list, mc_str(MC_STR_SMART_IN_LIST), MC_D(kept_by_limit(ed->total)));
       g_snprintf(text, sizeof text, "%s%s%s", part, mc_str(MC_STR_SEPARATOR_DOT), in_list);
     } else {
       g_strlcpy(text, part, sizeof text);
@@ -1742,6 +1990,7 @@ static void update_save(void) {
 static void job_free(job *j) {
   if (!j) return;
   g_free(j->list_rule);
+  g_free(j->timed_rule);
   g_free(j->preview_rule);
   for (int i = 0; i < j->n; i++) g_free(j->rules[i]);
   g_free(j->rules);
@@ -1780,13 +2029,14 @@ static gpointer worker_main(gpointer data) {
     result *r = g_new0(result, 1);
     r->serial = j->serial;
     r->gen = j->gen;
-    r->total = -1;
+    r->total = r->timed = -1;
     if (lib) {
       if (j->preview_rule)
         r->preview_ok = j->subject == MC_SMART_TRACKS ? mc_smart_preview_tracks(lib, j->preview_rule, &r->tracks) == MC_OK
                                                       : mc_smart_preview_albums(lib, j->preview_rule, &r->albums) == MC_OK;
       if (j->preview_is_list && r->preview_ok) r->total = r->tracks ? r->tracks->count : r->albums ? r->albums->count : 0;
       else r->total = count_of(lib, j->subject, j->list_rule);
+      r->timed = count_of(lib, j->subject, j->timed_rule);
       r->n = j->n;
       r->ids = j->ids;
       r->rules = j->rules;
@@ -1856,6 +2106,11 @@ static void submit(void) {
   char *rule = rule_json(FALSE);
   j->list_rule = g_strdup(rule);
   g_free(rule);
+  if (ed->limited && ed->limit_unit != LIMIT_ITEMS) {
+    rule = rule_json(TRUE);
+    j->timed_rule = g_strdup(rule);
+    g_free(rule);
+  }
   j->preview_is_list = !g->parent;
   if (g->parent && g->kids->len) {
     char *m = match_json(g, FALSE);
@@ -1904,10 +2159,11 @@ static gboolean on_result(gpointer data) {
   if (r->gen == ed->gen) {
     ed->counted = TRUE;
     ed->total = r->total;
+    ed->timed = r->timed;
     node *g = page_group(p);
     if (p && g && p->preview) {
       int n = r->preview_ok ? (r->tracks ? r->tracks->count : r->albums ? r->albums->count : 0) : 0;
-      if (!g->parent && ed->limited) n = MIN(n, ed->limit);
+      if (!g->parent) n = kept_by_limit(n);
       fill_preview(p, r->tracks, r->albums, n);
       char note[128] = "";
       if (g->parent && r->preview_ok)
@@ -2088,6 +2344,8 @@ static void on_closed(AdwDialog *dialog, gpointer data) {
   mc_album_group_list_free(e->groups);
   g_free(e->old_name);
   g_free(e->old_rule);
+  g_clear_object(&e->genres);
+  g_clear_object(&e->artists);
   g_free(e->name);
   g_free(e);
   ed = NULL;
@@ -2123,6 +2381,12 @@ static void build_dialog(const char *title) {
   gtk_widget_set_margin_end(ed->path, 6);
   gtk_widget_set_margin_bottom(ed->path, 6);
   gtk_widget_set_visible(ed->path, FALSE);
+
+  static const GActionEntry k_actions[] = {{.name = "move", .activate = on_move_action, .parameter_type = "(uui)"}};
+  GSimpleActionGroup *actions = g_simple_action_group_new();
+  g_action_map_add_action_entries(G_ACTION_MAP(actions), k_actions, G_N_ELEMENTS(k_actions), NULL);
+  gtk_widget_insert_action_group(GTK_WIDGET(ed->dialog), "smart", G_ACTION_GROUP(actions));
+  g_object_unref(actions);
 
   ed->nav = ADW_NAVIGATION_VIEW(adw_navigation_view_new());
   g_signal_connect(ed->nav, "notify::visible-page", G_CALLBACK(on_visible_page), NULL);
@@ -2185,7 +2449,7 @@ static gboolean editor_new(mc_library *lib, mc_smart_subject subject) {
   ed->bad = g_ptr_array_new();
   ed->limit = subject == MC_SMART_TRACKS ? 25 : 10;
   ed->seed = g_random_int_range(0, G_MAXINT32); /* should Shuffled be turned on */
-  ed->total = -1;
+  ed->total = ed->timed = -1;
   for (int i = 0; i < mc_smart_field_count(subject) && ed->nfields < (int)G_N_ELEMENTS(ed->fields); i++) {
     if (!mc_smart_field_get(subject, i, &ed->fields[ed->nfields])) continue;
     if (ed->fields[ed->nfields].sortable && mc_smart_order_label(ed->fields[ed->nfields].name, 0))

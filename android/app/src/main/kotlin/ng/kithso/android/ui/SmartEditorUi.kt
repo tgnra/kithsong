@@ -142,6 +142,7 @@ internal class SmartEditorState(val editor: SmartListEditor, val target: SmartEd
     val counts = mutableStateMapOf<Int, Pair<String, Int>>()
     var preview by mutableStateOf<Pair<Int, SmartPreview?>?>(null)
     var total by mutableIntStateOf(-1)
+    var timed by mutableIntStateOf(-1) // what a limit by duration keeps; -1 if there's none
     var counted by mutableStateOf(false)
     var saving by mutableStateOf(false)
 
@@ -171,6 +172,14 @@ internal class SmartEditorState(val editor: SmartListEditor, val target: SmartEd
         !readOnly && !saving && name.isNotBlank() && r.problems().isEmpty() && (!r.limited || limitValue() != null)
 
     fun limitValue(): Int? = limitText.trim().toIntOrNull()?.takeIf { it in 1..MAX_LIMIT }
+
+    /** How many of [n] picks the limit keeps. */
+    fun keptByLimit(r: SmartRule, n: Int): Int = when {
+        !r.limited -> n
+        r.limitUnit == SmartRule.LIMIT_ITEMS -> minOf(n, r.limit)
+        timed >= 0 -> minOf(n, timed)
+        else -> n
+    }
 }
 
 /**
@@ -311,6 +320,7 @@ private fun SmartWork(state: SmartEditorState) {
             val preview = work.previewRule?.let { state.editor.previewRule(rule.isAlbums, it, PREVIEW_ROWS) }
             state.total = if (work.previewIsList && preview != null) preview.count
             else work.listRule?.let { state.editor.countRule(rule.isAlbums, it) } ?: -1
+            state.timed = work.timedRule?.let { state.editor.countRule(rule.isAlbums, it) } ?: -1
             state.preview = work.page to preview
             state.counted = true
             for ((id, json) in work.rows) {
@@ -322,13 +332,15 @@ private fun SmartWork(state: SmartEditorState) {
 }
 
 /**
- * The rule as [SmartWork] needs it: the list's rule without its limit, the shown [page] and what
+ * The rule as [SmartWork] needs it: the list's rule without its limit, and with it if that's a
+ * limit by duration, the shown [page] and what
  * it previews, its rows' rules (an empty group's isn't counted), and every group's rule for its
  * sentence (null if it says nothing yet).
  */
 @Immutable
 private data class Work(
     val listRule: String?,
+    val timedRule: String?,
     val page: Int,
     val previewRule: String?,
     val previewIsList: Boolean,
@@ -356,7 +368,8 @@ private fun workOf(state: SmartEditorState, rule: SmartRule): Work {
         }
     }
     walk(rule.root)
-    return Work(listRule, g.id, previewRule, g.parent == null, rows, groups)
+    val timedRule = if (rule.limited && rule.limitUnit != SmartRule.LIMIT_ITEMS) rule.ruleJson() else null
+    return Work(listRule, timedRule, g.id, previewRule, g.parent == null, rows, groups)
 }
 
 /** What a group is called in the path and the problems: its name, else its sentence, else "Group"; the list's own is the list's name. */
@@ -994,11 +1007,19 @@ private fun OrderSection(state: SmartEditorState, rule: SmartRule, words: SmartW
             isError = rule.limited && state.limitValue() == null,
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.width(96.dp).semantics { contentDescription = limitName },
+            modifier = Modifier.width(80.dp).semantics { contentDescription = limitName },
         )
-        Text(
-            stringResource(if (rule.isAlbums) R.string.smart_limit_albums else R.string.smart_limit_tracks),
+        Picker(
+            listOf(
+                stringResource(if (rule.isAlbums) R.string.smart_limit_albums else R.string.smart_limit_tracks),
+                stringResource(R.string.smart_limit_minutes),
+                stringResource(R.string.smart_limit_hours),
+            ),
+            rule.limitUnit,
+            stringResource(R.string.smart_limit_unit_name),
+            onSelect = { rule.limitUnit = it },
             modifier = Modifier.padding(start = 8.dp),
+            enabled = rule.limited,
         )
     }
 }
@@ -1011,7 +1032,7 @@ private fun PreviewSection(state: SmartEditorState, rule: SmartRule, group: Smar
     EditorHeading(stringResource(if (root) R.string.smart_preview else R.string.smart_group_preview))
     val (page, preview) = state.preview ?: return
     if (page != group.id || preview == null) return
-    val n = if (root && rule.limited) minOf(preview.count, rule.limit) else preview.count
+    val n = if (root) state.keptByLimit(rule, preview.count) else preview.count
     if (!root) {
         Text(
             pluralStringResource(if (rule.isAlbums) R.plurals.smart_group_albums else R.plurals.smart_group_tracks, n, n),
@@ -1063,7 +1084,7 @@ private fun SmartBottom(state: SmartEditorState, rule: SmartRule) {
             )
             if (rule.limited) {
                 match + stringResource(R.string.separator_dot) +
-                    stringResource(R.string.smart_in_list, minOf(rule.limit, state.total))
+                    stringResource(R.string.smart_in_list, state.keptByLimit(rule, state.total))
             } else {
                 match
             }

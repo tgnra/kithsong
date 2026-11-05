@@ -298,6 +298,16 @@ mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out);
 mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out);
 void mc_artist_list_free(mc_artist_list *list);
 
+typedef struct mc_genre_list {
+  char **items;
+  int count;
+} mc_genre_list;
+
+/* The tracks' different genres, whatever their case, without spaces around them, by name.
+ * Free with mc_genre_list_free(). */
+mc_status mc_library_list_genres(mc_library *lib, mc_genre_list **out);
+void mc_genre_list_free(mc_genre_list *list);
+
 /* A track is credited to its own artists, or to its album's when it has none. A credit can
  * name several ("A feat. B", "A & B"): the track or album is each one's, and lists on each
  * one's page. mc_track_info.artist and mc_album_info.artist are the credit as shown, and

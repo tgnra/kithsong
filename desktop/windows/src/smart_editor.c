@@ -32,6 +32,7 @@ enum { MAX_FIELDS = 32, MAX_SORTS = 8, MAX_VALUE = 256, MAX_NAME = 255, MAX_DEPT
 
 enum { MODE_ALL, MODE_ANY, MODE_NONE };
 enum { UNIT_DAYS, UNIT_WEEKS, UNIT_MONTHS };
+enum { LIMIT_ITEMS, LIMIT_MINUTES, LIMIT_HOURS };
 enum { PROBLEM_NONE, PROBLEM_VALUE, PROBLEM_NUMBER, PROBLEM_DURATION, PROBLEM_CHOICE };
 enum { CHOICE_NONE = -1, CHOICE_EXTRA = -2 };
 
@@ -122,6 +123,7 @@ typedef struct job {
   UINT gen;
   mc_smart_subject subject;
   char *list_rule;
+  char *timed_rule;   /* the rule with a limit by duration, if that's its limit; else NULL */
   char *preview_rule; /* the list's rule on its own page, else the shown group's; may be NULL */
   BOOL preview_is_list;
   int n;
@@ -132,6 +134,7 @@ typedef struct job {
 typedef struct result {
   UINT gen;
   int total; /* the list's, without its limit; -1 if it couldn't be worked out */
+  int timed; /* what timed_rule keeps; -1 if there's none */
   BOOL preview_ok;
   mc_track_list *tracks;
   mc_album_list *albums;
@@ -211,7 +214,7 @@ static struct {
   int nsorts;
   BOOL random, limited_on;
   long long seed;
-  int limit;
+  int limit, limit_kind;
 
   /* The groups opened, the list's first; the shown page is the last. */
   UINT stack[MAX_DEPTH + 1];
@@ -228,7 +231,7 @@ static struct {
   worker *w;
   UINT gen;
   BOOL counted; /* a result has come back for the rule as it stands */
-  int total;
+  int total, timed;
   BOOL building; /* controls being set up: their notifications aren't edits */
   mc_track_list *tracks;
   mc_album_list *albums;
@@ -723,7 +726,10 @@ static char *rule_json(BOOL with_limit) {
     yyjson_mut_arr_append(order, key);
   }
   if (yyjson_mut_arr_size(order)) yyjson_mut_obj_add_val(d, root, "order", order);
-  if (with_limit && ed.limited_on && ed.limit > 0) yyjson_mut_obj_add_sint(d, root, "limit", ed.limit);
+  if (with_limit && ed.limited_on && ed.limit > 0) {
+    if (ed.limit_kind == LIMIT_ITEMS) yyjson_mut_obj_add_sint(d, root, "limit", ed.limit);
+    else yyjson_mut_obj_add_sint(d, root, "limit_duration", (long long)ed.limit * (ed.limit_kind == LIMIT_HOURS ? 3600 : 60));
+  }
   return write_doc(d, ok);
 }
 
@@ -883,9 +889,13 @@ static BOOL load_rule(const char *rule) {
     ok = s >= 0 && ed.nsorts < MAX_SORTS;
     if (ok) ed.sorts[ed.nsorts++] = s * 2 + (dir && yyjson_equals_str(dir, "desc") ? 1 : 0);
   }
-  yyjson_val *limit = yyjson_obj_get(root, "limit");
-  if (ok && limit) {
-    long long n = json_int(limit);
+  yyjson_val *limit = yyjson_obj_get(root, "limit"), *seconds = yyjson_obj_get(root, "limit_duration");
+  if (ok && (limit || seconds)) {
+    long long n = limit ? json_int(limit) : json_int(seconds);
+    if (seconds) {
+      ed.limit_kind = n % 3600 ? LIMIT_MINUTES : LIMIT_HOURS;
+      n = n % 3600 ? (n + 59) / 60 : n / 3600;
+    }
     ed.limited_on = TRUE;
     ed.limit = n < 1 ? 1 : n > INT_MAX ? INT_MAX : (int)n;
   }
@@ -1371,7 +1381,12 @@ static void build_group(node *g) {
   free(limit);
   SendMessageW(ed.limit_box, EM_LIMITTEXT, 6, 0);
   EnableWindow(ed.limit_box, ed.limited_on);
-  ed.limit_unit = make_label(mc_wstr(ed.subject == MC_SMART_TRACKS ? MC_STR_SMART_LIMIT_TRACKS : MC_STR_SMART_LIMIT_ALBUMS));
+  ed.limit_unit = make_combo(mc_wstr(MC_STR_SMART_LIMIT_UNIT_NAME));
+  combo_add(ed.limit_unit, mc_wstr(ed.subject == MC_SMART_TRACKS ? MC_STR_SMART_LIMIT_TRACKS : MC_STR_SMART_LIMIT_ALBUMS), LIMIT_ITEMS);
+  combo_add(ed.limit_unit, mc_wstr(MC_STR_SMART_LIMIT_MINUTES), LIMIT_MINUTES);
+  combo_add(ed.limit_unit, mc_wstr(MC_STR_SMART_LIMIT_HOURS), LIMIT_HOURS);
+  combo_select_data(ed.limit_unit, ed.limit_kind);
+  EnableWindow(ed.limit_unit, ed.limited_on);
 }
 
 static void update_path(void);
@@ -1579,7 +1594,7 @@ static void layout_panel(void) {
       lx += text_width(ed.limited_label) + gap;
       put(&p, ed.limit_box, lx, y, dx(NUM_W), h, TRUE);
       lx += dx(NUM_W) + gap;
-      put(&p, ed.limit_unit, lx, y, text_width(ed.limit_unit), h, TRUE);
+      put(&p, ed.limit_unit, lx, y, dx(UNIT_W), h, TRUE);
       y += h;
     }
   }
@@ -1822,6 +1837,13 @@ static void update_problems(void) {
   layout_dialog();
 }
 
+/* How many of n picks the limit keeps. */
+static int kept_by_limit(int n) {
+  if (!ed.limited_on) return n;
+  if (ed.limit_kind == LIMIT_ITEMS) return min(n, ed.limit);
+  return ed.timed >= 0 ? min(n, ed.timed) : n;
+}
+
 /* "40 tracks match · 10 in the list", or Counting… while it's being worked out. */
 static void update_status(void) {
   wchar_t text[256] = L"";
@@ -1834,7 +1856,7 @@ static void update_status(void) {
     mc_format(part, sizeof part, mc_str_plural(id, ed.total), MC_D(ed.total));
     if (ed.limited_on) {
       char in_list[128];
-      mc_format(in_list, sizeof in_list, mc_str(MC_STR_SMART_IN_LIST), MC_D(min(ed.limit, ed.total)));
+      mc_format(in_list, sizeof in_list, mc_str(MC_STR_SMART_IN_LIST), MC_D(kept_by_limit(ed.total)));
       snprintf(all, sizeof all, "%s%s%s", part, mc_str(MC_STR_SEPARATOR_DOT), in_list);
     } else {
       snprintf(all, sizeof all, "%s", part);
@@ -1862,6 +1884,7 @@ static void update_preview_heading(void) {
 static void job_free(job *j) {
   if (!j) return;
   free(j->list_rule);
+  free(j->timed_rule);
   free(j->preview_rule);
   for (int i = 0; i < j->n; i++) free(j->rules[i]);
   free(j->rules);
@@ -1900,7 +1923,7 @@ static DWORD WINAPI worker_main(void *arg) {
     result *r = calloc(1, sizeof *r);
     if (r) {
       r->gen = j->gen;
-      r->total = -1;
+      r->total = r->timed = -1;
     }
     if (r && lib) {
       if (j->preview_rule)
@@ -1908,6 +1931,7 @@ static DWORD WINAPI worker_main(void *arg) {
                                                       : mc_smart_preview_albums(lib, j->preview_rule, &r->albums) == MC_OK;
       if (j->preview_is_list && r->preview_ok) r->total = r->tracks ? r->tracks->count : r->albums ? r->albums->count : 0;
       else r->total = count_of(lib, j->subject, j->list_rule);
+      r->timed = count_of(lib, j->subject, j->timed_rule);
       r->n = j->n;
       r->ids = j->ids;
       r->rules = j->rules;
@@ -1979,6 +2003,7 @@ static void submit(void) {
   j->gen = ++ed.gen;
   j->subject = ed.subject;
   j->list_rule = rule_json(FALSE);
+  if (ed.limited_on && ed.limit_kind != LIMIT_ITEMS) j->timed_rule = rule_json(TRUE);
   j->preview_is_list = !g->parent;
   if (g->parent && g->nkids) j->preview_rule = match_json(g, FALSE);
   else if (!g->parent && j->list_rule) j->preview_rule = _strdup(j->list_rule);
@@ -2024,10 +2049,11 @@ static void on_result(result *r) {
   if (r->gen == ed.gen) {
     ed.counted = TRUE;
     ed.total = r->total;
+    ed.timed = r->timed;
     node *g = page_group();
     if (g) {
       int n = r->preview_ok ? (r->tracks ? r->tracks->count : r->albums ? r->albums->count : 0) : 0;
-      if (!g->parent && ed.limited_on) n = min(n, ed.limit);
+      if (!g->parent) n = kept_by_limit(n);
       set_preview(r->tracks, r->albums, n);
       r->tracks = NULL;
       r->albums = NULL;
@@ -2286,6 +2312,10 @@ static void on_panel_command(HWND w, int code) {
     ed.random = SendMessageW(ed.shuffled, BM_GETCHECK, 0, 0) == BST_CHECKED;
     ed.limited_on = SendMessageW(ed.limited, BM_GETCHECK, 0, 0) == BST_CHECKED;
     EnableWindow(ed.limit_box, ed.limited_on);
+    EnableWindow(ed.limit_unit, ed.limited_on);
+    changed();
+  } else if (w == ed.limit_unit && code == CBN_SELCHANGE) {
+    ed.limit_kind = (int)combo_data(w);
     changed();
   } else if ((w == ed.shuffled_label || w == ed.limited_label) && code == STN_CLICKED) {
     /* The labels stand in for the checkboxes' own text, which stays black in dark mode. */
@@ -3062,7 +3092,7 @@ static BOOL run_editor(HWND owner, const wchar_t *caption, const char *name, con
   if (mc_library_list_album_groups(ed.lib, 0, &ed.groups) != MC_OK) ed.groups = NULL;
   ed.presets_of = ed.subject == MC_SMART_TRACKS ? k_track_presets : k_album_presets;
   ed.limit = ed.subject == MC_SMART_TRACKS ? 25 : 10;
-  ed.total = -1;
+  ed.total = ed.timed = -1;
   ed.root = node_new(NULL, TRUE);
   editor_args a = {caption, name, rule};
   INT_PTR r = ed.root ? DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_SMART_EDITOR), owner, editor_proc,

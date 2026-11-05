@@ -92,6 +92,9 @@ class SmartRule(
     var limited by mutableStateOf(false)
     var limit by mutableIntStateOf(if (isAlbums) 10 else 25)
 
+    /** What [limit] counts: tracks or albums ([LIMIT_ITEMS]), [LIMIT_MINUTES] or [LIMIT_HOURS] of music. */
+    var limitUnit by mutableIntStateOf(LIMIT_ITEMS)
+
     fun type(c: SmartCondition): String = fields[c.field].type
     fun opOf(c: SmartCondition): String = fields[c.field].ops[c.op]
     fun takesNoValue(c: SmartCondition): Boolean = opOf(c) == "empty" || opOf(c) == "not_empty"
@@ -302,7 +305,10 @@ class SmartRule(
         }
         if (random) order += linkedMapOf("field" to "random", "seed" to seed)
         if (order.isNotEmpty()) out["order"] = order
-        if (withLimit && limited && limit > 0) out["limit"] = limit
+        if (withLimit && limited && limit > 0) {
+            if (limitUnit == LIMIT_ITEMS) out["limit"] = limit
+            else out["limit_duration"] = limit.toLong() * (if (limitUnit == LIMIT_HOURS) 3600 else 60)
+        }
         return SmartJson.write(out)
     }
 
@@ -346,6 +352,13 @@ class SmartRule(
         (doc["limit"] as? Number)?.let {
             limited = true
             limit = it.toLong().coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+        }
+        (doc["limit_duration"] as? Number)?.let {
+            val seconds = it.toLong()
+            limited = true
+            limitUnit = if (seconds % 3600 == 0L) LIMIT_HOURS else LIMIT_MINUTES
+            val n = if (limitUnit == LIMIT_HOURS) seconds / 3600 else (seconds + 59) / 60
+            limit = n.coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
         }
         return true
     }
@@ -439,6 +452,10 @@ class SmartRule(
          * (tagger.c), which is what files.format holds. A rule naming another keeps it as an extra.
          */
         val FORMATS = listOf("flac" to "FLAC", "mp3" to "MP3", "opus" to "Opus", "wav" to "WAV", "aiff" to "AIFF", "aif" to "AIF")
+
+        const val LIMIT_ITEMS = 0
+        const val LIMIT_MINUTES = 1
+        const val LIMIT_HOURS = 2
 
         // A "not" around a condition, as the negative operator that means the same: missing
         // values count as false either way, so only the ops the core writes as another's negation map.

@@ -43,6 +43,8 @@ class SmartRuleTest {
     fun readsAndWritesRulesUnchanged() {
         roundTrip("""{"v":1}""")
         roundTrip("""{"v":1,"match":{"all":[{"field":"genre","op":"contains","value":"jazz"}]},"order":[{"field":"plays","dir":"asc"}],"limit":10}""")
+        roundTrip("""{"v":1,"limit_duration":3600}""")
+        roundTrip("""{"v":1,"order":[{"field":"plays","dir":"asc"}],"limit_duration":5400}""")
         roundTrip("""{"v":1,"match":{"any":[{"field":"year","op":"between","value":[1990,1999]},{"field":"duration","op":">","value":330}]}}""")
         roundTrip("""{"v":1,"match":{"all":[{"field":"last_played","op":"not_within","value":{"days":180}},{"field":"added","op":"after","value":1700000000000}]},"order":[{"field":"random","seed":42}]}""")
         roundTrip("""{"v":1,"match":{"all":[{"field":"on_device","op":"is","value":true},{"field":"format","op":"is","value":"flac"},{"field":"playlist","op":"is_not","value":"p1"}]}}""")

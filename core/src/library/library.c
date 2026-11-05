@@ -1135,6 +1135,45 @@ mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
   return list_artists(lib, sql, out);
 }
 
+mc_status mc_library_list_genres(mc_library *lib, mc_genre_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_genre_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt;
+  mc_status st = sqlite3_prepare_v2(lib->db,
+                                    "SELECT min(trim(genre)) AS name FROM tracks WHERE trim(genre) <> ''"
+                                    " GROUP BY lower(trim(genre)) ORDER BY name COLLATE NOCASE",
+                                    -1, &stmt, NULL) == SQLITE_OK
+                   ? MC_OK
+                   : MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    char *name = column_dup(stmt, 0);
+    if (!name || !grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      free(name);
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    list->items[list->count++] = name;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_genre_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_genre_list_free(mc_genre_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) free(list->items[i]);
+  free(list->items);
+  free(list);
+}
+
 void mc_artist_list_free(mc_artist_list *list) {
   if (!list) return;
   for (int i = 0; i < list->count; i++) {

@@ -8,8 +8,8 @@
  *   | [ Jazz to catch up on                                  ]  |
  *   | [All of the following v]                                  |
  *   | +-------------------------------------------------------+ |
- *   | | [Genre v] [contains v]       [jazz          ]  412  x | |
- *   | | Fresh stuff                                  40  x  > | |  <- a group: opens its page
+ *   | | [Genre v] [contains v]       [jazz          ] 412 ... x | |
+ *   | | Fresh stuff                                40 ... x  > | |  <- a group: opens its page
  *   | |   Tracks where date added is in the last 30 days or.. | |
  *   | +-------------------------------------------------------+ |
  *   | [+ Add condition]  [+ Add group]                          |
@@ -17,7 +17,7 @@
  *   | | Sort by           [least played first v]           x  | |
  *   | [+ Add sort order]                                        |
  *   | | Shuffled                                       [   ]  | |
- *   | | [x] Only the first                         [10] tracks| |
+ *   | | [x] Only the first                    [10] [tracks v] | |
  *   | Preview                                                   |
  *   | | So What                                               | |
  *   | |   Miles Davis                                         | |
@@ -28,8 +28,8 @@
  *   | 40 tracks match · 10 in the list                          |
  *   +-----------------------------------------------------------+
  *
- * The first page is the list's own: its name, then how its conditions combine (all, any or
- * none of them), one row each, then its order and limit and a preview of what it holds. A
+ * The first page is the list's own: its name, then how its conditions combine (all, any, none
+ * or not all of them), one row each, then its order and limit and a preview of what it holds. A
  * group's row shows its name, with what it matches as a sentence (mc_smart_describe()) beneath;
  * activating it slides in the group's page, the same but for the group's name (an entry whose
  * placeholder is that sentence) and, in place of the order, a preview of what the group alone
@@ -38,7 +38,8 @@
  *
  * A condition's value fits its field's type: text, a whole number, a length (m:ss), a date or a
  * number of days, weeks or months back, Yes or No, or a playlist, album group or format from a
- * list. Every row shows how many tracks or albums it matches on its own, and the bar at the
+ * list; a text box for a genre or an artist offers the library's as you type. Each row's ...
+ * menu moves it up or down, or to any other group, and every row shows how many tracks or albums it matches on its own, and the bar at the
  * bottom how many the whole rule does; they follow the rule as it's edited, a quarter of a
  * second after the last change, worked out on a thread with its own library connection.
  *
@@ -48,10 +49,11 @@
  * its group and focus it; its groups' rows and the path mark it too. Save is insensitive while
  * there's any, or while the name is blank.
  *
- * A new list starts with a choice of ready-made rules, or a blank one. A rule the editor can't
- * show (from a newer version, or a "not" with no negative operator to show it as) opens
- * read-only, as its sentence, and is never written back. Group names are in
- * docs/schema.md (Smart lists). */
+ * A new list starts with a choice of ready-made rules, or a blank one. A "not" around a
+ * condition is shown as its negative operator, or if it hasn't one as a group of that one
+ * condition, matching none of it. A rule the editor can't show (from a newer version) opens
+ * read-only, as its sentence, and is never written back. Group names are in docs/schema.md
+ * (Smart lists). */
 #ifndef KITHSONG_SMART_EDITOR_H
 #define KITHSONG_SMART_EDITOR_H
 

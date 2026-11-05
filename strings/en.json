@@ -407,6 +407,9 @@
     "smart_shuffled": { "text": "Shuffled", "note": "Smart list editor: the list is in a random order, after any sort order above (radio button)." },
     "smart_limit": { "text": "Only the first", "note": "Checkbox in the smart list editor, followed by a number and smart_limit_tracks: \"Only the first [10] tracks\"." },
     "smart_limit_tracks": { "text": "tracks", "note": "After the number in \"Only the first [10] tracks\"." },
+    "smart_limit_minutes": { "text": "minutes", "note": "After the number in \"Only the first [60] minutes\": a smart list kept to a total playing time." },
+    "smart_limit_hours": { "text": "hours", "note": "After the number in \"Only the first [2] hours\": a smart list kept to a total playing time." },
+    "smart_limit_unit_name": { "text": "What to count", "note": "Name for accessibility of the picker of tracks, minutes or hours after the number in \"Only the first [10] tracks\"." },
     "smart_limit_of_music": { "text": "{0} of music", "note": "A smart list's limit by playing time at the end of its rule as a sentence, e.g. \"1 hr 30 min of music\"." },
     "smart_limit_albums": { "text": "albums", "note": "After the number in \"Only the first [10] albums\"." },
     "smart_unit_days": { "text": "days", "note": "Picker after a number in a condition, e.g. Last played [isn't in the last] [180] [days]." },
@@ -890,6 +893,9 @@
   },
 
   "linux": {
+    "smart_mode_not_all": { "text": "Not all of the following", "note": "Smart list editor: picker entry above a group's conditions, of which at least one must be false." },
+    "smart_move_name": { "text": "Move", "note": "Tooltip and name for accessibility of a smart list condition's or group's menu of Move up, Move down and Move to." },
+    "smart_move_to": { "text": "Move to {0}", "note": "Smart list editor: moves a condition or group into another group. {0} is that group, or the list itself." },
     "empty_with_version": { "text": "{0}\n\nmusiccore {1}", "note": "{0} is the empty-library message, {1} the core library's version number. musiccore is a name." },
     "playlists_list_failed": "Couldn't list the playlists",
     "albums_all_singles_title": { "text": "No albums", "note": "The Albums page when the library has music but every album in it has one track: singles, which the page leaves out." },
