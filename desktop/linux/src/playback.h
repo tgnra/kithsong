@@ -54,6 +54,8 @@ void playback_clear(void);
 /* album_uid's cover was changed: what's queued from it takes the cover from lib, and what's
  * showing the playing track shows it. */
 void playback_art_changed(mc_library *lib, const char *album_uid);
+/* The library changed, perhaps by sync: a cover that has arrived for the playing track shows. */
+void playback_cover_check(mc_library *lib);
 /* An edit may have changed what's queued: its titles and artists are read again from lib, what's
  * showing the playing track shows them, and the player gets any file's new place. Nothing stops. */
 void playback_tracks_changed(mc_library *lib);

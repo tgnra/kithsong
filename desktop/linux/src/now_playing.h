@@ -44,6 +44,9 @@ void now_playing_show(const char *title, const char *artist, int duration_ms, co
 
 /* Shows the track's cover again, now in cover_dir, leaving the rest as it is: it was changed. */
 void now_playing_art_changed(const char *cover_dir);
+/* The same if what's in cover_dir isn't what's showing: a cover that has come since. Otherwise
+ * nothing, so a library changing during a track leaves it be. Whether it was shown. */
+gboolean now_playing_cover_check(const char *cover_dir);
 
 /* Where playback is, in ms. Ignored while the user drags the bar. */
 void now_playing_set_position(int ms);

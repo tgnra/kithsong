@@ -22,6 +22,8 @@ static struct {
 
   GtkWidget *box, *picture, *title, *cur, *left, *bar, *shuffle_button;
   GCancellable *cover_loading;
+  char *cover;        /* the file shown, or NULL */
+  gint64 cover_mtime; /* as it was then */
   gboolean playing; /* there's a track */
   int duration_ms;
   gboolean pressed;      /* a pointer is down on the bar */
@@ -340,13 +342,23 @@ static void show_cover(const char *cover_dir) {
   }
   gtk_picture_set_paintable(GTK_PICTURE(s.picture), GDK_PAINTABLE(texture));
   g_clear_object(&texture);
-  char *cover = cover_path(cover_dir);
-  art_accent_set_file(s.box, cover);
-  g_free(cover);
+  g_free(s.cover);
+  s.cover = cover_path(cover_dir);
+  s.cover_mtime = cover_mtime(s.cover);
+  art_accent_set_file(s.box, s.cover);
 }
 
 void now_playing_art_changed(const char *cover_dir) {
   if (s.playing) show_cover(cover_dir);
+}
+
+gboolean now_playing_cover_check(const char *cover_dir) {
+  if (!s.playing) return FALSE;
+  char *cover = cover_path(cover_dir);
+  gboolean same = !g_strcmp0(cover, s.cover) && cover_mtime(cover) == s.cover_mtime;
+  g_free(cover);
+  if (!same) show_cover(cover_dir);
+  return !same;
 }
 
 void now_playing_show(const char *title, const char *artist, int duration_ms, const char *cover_dir) {

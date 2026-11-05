@@ -47,6 +47,7 @@ static AlbumItem *album_item_new_playlist(const mc_playlist_info *info, const ch
   memcpy(self->uid, info->uid, sizeof self->uid);
   self->title = g_strdup(info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED));
   self->cover_file = g_strdup(cover_file);
+  self->cover_mtime = cover_mtime(cover_file);
   self->is_playlist = TRUE;
   self->track_count = info->track_count;
   return self;
@@ -57,6 +58,7 @@ static AlbumItem *album_item_new_group(const mc_album_group_info *info, const ch
   memcpy(self->uid, info->uid, sizeof self->uid);
   self->title = g_strdup(info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED));
   self->cover_file = g_strdup(cover_file);
+  self->cover_mtime = cover_mtime(cover_file);
   self->is_group = TRUE;
   self->track_count = info->album_count;
   return self;
@@ -69,6 +71,7 @@ static AlbumItem *album_item_new_smart(const mc_smart_info *info, const char *co
   memcpy(self->uid, info->uid, sizeof self->uid);
   self->title = g_strdup(info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED));
   self->cover_file = g_strdup(cover_file);
+  self->cover_mtime = cover_mtime(cover_file);
   self->is_playlist = info->subject == MC_SMART_TRACKS;
   self->is_group = info->subject == MC_SMART_ALBUMS;
   self->subtitle = g_strdup(mc_str(self->is_group ? MC_STR_SMART_ALBUM_GROUP : MC_STR_SMART_PLAYLIST));
@@ -92,6 +95,7 @@ static AlbumItem *album_item_with_cover(const AlbumItem *item, const char *cover
   memcpy(self->uid, item->uid, sizeof self->uid);
   self->title = g_strdup(item->title);
   self->cover_file = g_strdup(cover_file);
+  self->cover_mtime = cover_mtime(cover_file);
   self->is_playlist = item->is_playlist;
   self->is_group = item->is_group;
   self->track_count = item->track_count;
@@ -546,7 +550,8 @@ static void art_done(GObject *source, GAsyncResult *result, gpointer user) {
   for (guint i = 0; i < n; i++) {
     AlbumItem *a = g_list_model_get_item(G_LIST_MODEL(g->store), i);
     const char *path = g_hash_table_lookup(g->art, a->uid);
-    if (g_hash_table_contains(g->art, a->uid) && g_strcmp0(path, a->cover_file)) {
+    /* With under four covers the picture is an album's own, so a new one can have the old path. */
+    if (g_hash_table_contains(g->art, a->uid) && (g_strcmp0(path, a->cover_file) || cover_mtime(path) != a->cover_mtime)) {
       items[i] = album_item_with_cover(a, path);
       changed = TRUE;
       selected_changed |= a == sel;

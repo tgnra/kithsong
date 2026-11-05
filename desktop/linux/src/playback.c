@@ -120,6 +120,20 @@ void playback_art_changed(mc_library *lib, const char *album_uid) {
   mpris_set_track(it->uid, it->title, it->artist, it->album, it->cover_dir, duration_of(it, &st));
 }
 
+void playback_cover_check(mc_library *lib) {
+  if (!s.player || !lib) return;
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  item *it = st.index >= 0 && st.index < s.count ? &s.items[st.index] : NULL;
+  mc_track_list *list = NULL;
+  if (!it || !it->uid[0] || mc_library_get_track(lib, it->uid, &list) != MC_OK) return;
+  g_free(it->cover_dir);
+  it->cover_dir = g_strdup(list->items[0].cover_dir);
+  mc_track_list_free(list);
+  if (now_playing_cover_check(it->cover_dir))
+    mpris_set_track(it->uid, it->title, it->artist, it->album, it->cover_dir, duration_of(it, &st));
+}
+
 static gboolean on_tick(gpointer data);
 
 /* Items for what a station has added to the queue. A track the library doesn't have any more

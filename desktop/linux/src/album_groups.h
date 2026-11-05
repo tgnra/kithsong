@@ -42,6 +42,10 @@ GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*na
  * to the groups. Returns the number of groups. */
 int album_groups_reload(app *a);
 
+/* Choose what to sync shows under "none of them have albums on this device" once this computer is
+ * in a group: call when that may have changed. */
+void album_groups_update_empty(void);
+
 /* Opens the group with uid, records it in the recents and calls navigated. FALSE if there's
  * no such group. */
 gboolean album_groups_open(app *a, const char *uid);

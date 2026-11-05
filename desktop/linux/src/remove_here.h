@@ -13,8 +13,8 @@
  *   |       [ Cancel ]        [ Remove ]           |
  *   +---------------------------------------------+
  *
- * Remove is destructive, Cancel the default. Files open elsewhere can still be removed on
- * Linux, so playback isn't stopped first; a file that couldn't be removed is reported.
+ * Remove is destructive, Cancel the default. Playback stops first if a queued track goes, as the
+ * bar would go on showing a file that's gone; a file that couldn't be removed is reported.
  *
  * Needs libadwaita 1.5 (AdwAlertDialog), as delete_dialog.c does. */
 #ifndef KITHSONG_REMOVE_HERE_H
@@ -23,6 +23,10 @@
 #include <adwaita.h>
 
 #include "musiccore/musiccore.h"
+
+/* What to do just before files go: before_remove (may be NULL) gets the plan, e.g. to stop
+ * playback. */
+void remove_here_init(void (*before_remove)(const mc_here_plan *plan));
 
 /* Appends Remove from this computer... (remove_action) or Sync to this computer
  * (sync_action) for uid, an album or artist by kind, to menu; nothing if neither applies. */

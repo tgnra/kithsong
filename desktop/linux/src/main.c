@@ -58,6 +58,7 @@
 #include "testing_view.h"
 #include "playlist_dialogs.h"
 #include "recents.h"
+#include "remove_here.h"
 #include "search_view.h"
 #include "analysis_ui.h"
 #include "settings_view.h"
@@ -187,6 +188,7 @@ void app_update_empty_pages(app *a) {
   if (!a->empty || !a->no_playlists) return; /* not built yet */
   set_empty_description(a);
   set_no_playlists(a);
+  album_groups_update_empty();
 }
 
 void app_set_tooltip(GtkWidget *widget, const char *label, const char *accel) {
@@ -623,6 +625,15 @@ static void update_buttons(app *a) {
 static void before_delete(const mc_delete_plan *plan) {
   for (int i = 0, n = playback_queue_count(); i < n; i++)
     if (mc_delete_plan_has(plan, playback_queue_uid(i))) {
+      playback_clear();
+      return;
+    }
+}
+
+/* The same before Remove from this computer: what's playing is going from under the bar. */
+static void before_remove_here(const mc_here_plan *plan) {
+  for (int i = 0, n = playback_queue_count(); i < n; i++)
+    if (mc_here_plan_has(plan, playback_queue_uid(i))) {
       playback_clear();
       return;
     }
@@ -1270,6 +1281,7 @@ void app_reload_library(app *a) {
   gtk_stack_set_visible_child_name(a->albums, page);
   show_album(a); /* if the album went, the selection did too */
   recents_refresh(a);
+  playback_cover_check(a->lib);
   if (a->lib) mc_library_search_prepare(a->lib); /* the index is ready before the user types */
   search_view_refresh();
 }
@@ -1900,6 +1912,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   playback_on_radio_failed(playback_radio_failed);
   playback_set_library(a->lib, a->settings_dir);
   delete_dialog_init(before_delete);
+  remove_here_init(before_remove_here);
   mc_settings *settings = NULL;
   if (mc_settings_load(a->settings_dir, &settings) == MC_OK) { /* shuffle and volume as they were left */
     playback_set_shuffle(mc_settings_shuffle(settings));

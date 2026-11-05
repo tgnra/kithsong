@@ -485,7 +485,9 @@ static void on_merge_clicked(GtkButton *button, gpointer data) {
       adw_dialog_set_default_widget(d->dialog, d->pair);
     }
     update_pair(d);
-    adw_dialog_set_focus(d->dialog, d->checking ? d->cancel : d->code);
+    /* grab_focus, not adw_dialog_set_focus(): that puts the focus on the entry itself, not its
+     * text inside it, and the keys go nowhere. */
+    gtk_widget_grab_focus(d->checking ? d->cancel : d->code);
   } else {
     adw_dialog_set_focus(d->dialog, d->cancel);
   }

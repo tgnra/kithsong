@@ -755,7 +755,18 @@ static void create_files_menu(GtkMenuButton *button, gpointer data) {
 
 static void show_pending(review *r);
 
+/* The track whose row has the focus, or -1. */
+static int focused_track(review *r) {
+  GtkRoot *root = gtk_widget_get_root(r->tracks);
+  for (GtkWidget *w = root ? gtk_root_get_focus(root) : NULL; w && w != r->tracks; w = gtk_widget_get_parent(w)) {
+    const review_row *rr = g_object_get_data(G_OBJECT(w), "review-row");
+    if (rr) return rr->track;
+  }
+  return -1;
+}
+
 static void review_fill_tracks(review *r, int match) {
+  int focused = focused_track(r); /* the rows go, and the focus with them */
   r->selected = match;
   gtk_list_box_remove_all(GTK_LIST_BOX(r->tracks));
   const mc_import_item *it = r->snap;
@@ -846,6 +857,12 @@ static void review_fill_tracks(review *r, int match) {
     g_free(text);
   }
   show_pending(r);
+  for (GtkWidget *w = gtk_widget_get_first_child(r->tracks); focused >= 0 && w; w = gtk_widget_get_next_sibling(w)) {
+    const review_row *rr = g_object_get_data(G_OBJECT(w), "review-row");
+    if (!rr || rr->track != focused) continue;
+    gtk_widget_grab_focus(w);
+    break;
+  }
 }
 
 /* The review's buttons and track list actions, for an item that is busy (or has a file
@@ -967,6 +984,32 @@ static void on_tracks_menu(GtkGestureClick *click, int n_press, double x, double
   gtk_popover_popup(GTK_POPOVER(r->menu));
 }
 
+/* After a track got its file. */
+typedef struct next_missing {
+  GtkWidget *tracks; /* referenced */
+  int track;
+} next_missing;
+
+/* The focus goes to the next track that's missing, or the first if there are none after it, so the
+ * keys carry on down the list; with none left, it stays on the track. */
+static gboolean focus_next_missing(gpointer data) {
+  next_missing *n = data;
+  GtkWidget *next = NULL, *first = NULL, *own = NULL;
+  for (GtkWidget *w = gtk_widget_get_first_child(n->tracks); w; w = gtk_widget_get_next_sibling(w)) {
+    const review_row *rr = g_object_get_data(G_OBJECT(w), "review-row");
+    if (!rr || rr->track < 0) continue;
+    if (rr->track == n->track) own = w;
+    if (!g_object_get_data(G_OBJECT(w), "choose-file")) continue;
+    if (!first) first = w;
+    if (!next && rr->track > n->track) next = w;
+  }
+  GtkWidget *to = next ? next : first ? first : own;
+  if (to && gtk_widget_get_root(to)) gtk_widget_grab_focus(to);
+  g_object_unref(n->tracks);
+  g_free(n);
+  return G_SOURCE_REMOVE;
+}
+
 /* Makes from_item's file `file` track `track` of the shown match. The track list shows it at
  * once; the import thread writes the item when it gets to it, and the review refreshes then
  * (the dialog stays open). */
@@ -982,6 +1025,11 @@ static void review_assign(review *r, int track, int from_item, int file) {
     show_pending(r);
     review_set_busy(r, TRUE);
     update_status(r->v);
+    /* Once the menu has finished giving the focus back, to a button that has gone. */
+    next_missing *n = g_new(next_missing, 1);
+    n->tracks = g_object_ref(r->tracks);
+    n->track = track;
+    g_idle_add_full(G_PRIORITY_LOW, focus_next_missing, n, NULL);
   } else {
     alert(GTK_WIDGET(r->dialog), mc_str(MC_STR_LINUX_IMPORT_ITEM_BUSY_TITLE), mc_str(MC_STR_IMPORT_ITEM_BUSY));
   }

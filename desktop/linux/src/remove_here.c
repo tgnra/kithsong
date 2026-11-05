@@ -8,6 +8,12 @@
 #error "remove_here.c needs libadwaita 1.5 or later (AdwAlertDialog)"
 #endif
 
+static void (*before_remove)(const mc_here_plan *plan);
+
+void remove_here_init(void (*before)(const mc_here_plan *plan)) {
+  before_remove = before;
+}
+
 /* Owned by the dialog: freed with it. */
 typedef struct ask {
   mc_here_plan *plan;
@@ -49,6 +55,7 @@ static void on_response(AdwAlertDialog *dialog, const char *response, gpointer d
   mc_sync *sync = sync_bridge_get();
   if (strcmp(response, "remove") || !sync) return;
   mc_here_result res;
+  if (before_remove) before_remove(a->plan);
   mc_status st = mc_sync_remove_here(sync, a->plan, &res);
   if (st == MC_OK && a->changed) a->changed(a->user);
   if (st != MC_OK) {
