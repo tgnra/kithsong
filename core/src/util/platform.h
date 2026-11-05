@@ -17,6 +17,9 @@
 uint64_t mc_wall_ms(void);
 /* Monotonic milliseconds, arbitrary origin. */
 uint64_t mc_mono_ms(void);
+/* Milliseconds of CPU the calling thread has used, so time spent waiting for a core or
+ * asleep doesn't count. It ticks at about 15.6 ms on Windows. */
+uint64_t mc_thread_cpu_ms(void);
 void mc_sleep_ms(uint32_t ms);
 /* Logical processors online, at least 1. */
 int mc_cpu_count(void);

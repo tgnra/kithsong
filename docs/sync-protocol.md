@@ -1222,10 +1222,14 @@ Time is cut into one-second bins, starting with the first bytes.
   cache hit that marks the file as recently used carries its sidecar's mtime along. The
   trim counts a file and its sidecar as one entry (the sidecar's few bytes aren't counted),
   deletes them together, and deletes a sidecar whose file is gone.
-- Encoder settings: VBR, signal music, and complexity by bitrate: 10 at 64 and 96 kbps, 8
-  at 128 and 160, 7 at 192 and 256. At the higher bitrates the spare bits leave nothing
-  audible for the extra analysis to win, so it only costs time. The CPU benchmark
-  (`cpu_score`) always encodes at 128 kbps and complexity 10: it only ranks devices.
+- Encoder settings: constrained VBR (libopus's default once VBR is on), signal music, and
+  complexity by bitrate: 10 at 64 and 96 kbps, 8 at 128 and 160, 7 at 192 and 256. At the
+  higher bitrates the spare bits leave nothing audible for the extra analysis to win, so it
+  only costs time. The CPU benchmark (`cpu_score`) always encodes at 128 kbps and complexity
+  10: it only ranks devices. It runs once and is kept, so it is timed on the thread's CPU
+  clock rather than the wall clock, and time spent waiting for a core doesn't lower it.
+  Work sharing the core's caches and clock still does, by about a third with every core
+  taken twice over.
 - The receiver stores the copy as a `files` row with `source_file_uid` and
   `source_peer_uid` set. It is linked to the same `track_uid`, so it is never imported as a
   new track and never offered back to anyone as an original.

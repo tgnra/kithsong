@@ -30,7 +30,8 @@ enum {
   CHUNK = 4096,          /* frames decoded at a time */
   OVERHEAD_BYTES = 4096, /* Ogg framing, headers and tags, in size estimates */
   BENCH_FRAMES = 9600,   /* 200 ms at 48 kHz */
-  BENCH_MS = 500,
+  BENCH_MS = 500,        /* of this thread's CPU time */
+  BENCH_WALL_MS = 5000,  /* the most it waits for that on a device with no time to give */
 };
 
 /* Partial files older than this belong to an encode that died. */
@@ -510,17 +511,19 @@ mc_status mc_transcode_benchmark(int *score) {
     pcm[i * 2 + 1] = (float)(0.3 * sin(277 * w) + 0.2 * sin(990 * w)) - 0.05f * n;
   }
 
-  uint64_t start = mc_mono_ms(), elapsed = 0, frames = 0;
-  while (elapsed < BENCH_MS) {
+  /* Timed on this thread's CPU clock: the score is kept for good, and one taken while other
+   * work has the cores mustn't count the time spent waiting for one. */
+  uint64_t wall = mc_mono_ms(), start = mc_thread_cpu_ms(), elapsed = 0, frames = 0;
+  while (elapsed < BENCH_MS && (elapsed == 0 || mc_mono_ms() - wall < BENCH_WALL_MS)) {
     if (ope_encoder_write_float(enc, pcm, BENCH_FRAMES) != OPE_OK) goto done;
     unsigned char *page;
     opus_int32 len;
     while (ope_encoder_get_page(enc, &page, &len, 0)) {
     }
     frames += BENCH_FRAMES;
-    elapsed = mc_mono_ms() - start;
+    elapsed = mc_thread_cpu_ms() - start;
   }
-  /* Seconds of audio per second, per core, times the cores. */
+  /* Seconds of audio per second of CPU, per core, times the cores. */
   double realtime = (double)frames / 48000.0 / ((double)elapsed / 1000.0);
   *score = (int)(realtime * mc_cpu_count() + 0.5);
   st = MC_OK;

@@ -56,7 +56,8 @@ extern "C" {
  * docs/sync-protocol.md).
  *
  * Encoding: the source is decoded (FLAC, MP3, WAV, AIFF or Opus), downmixed to stereo if it
- * has more than two channels, resampled to 48 kHz and encoded as Opus VBR at the bitrate.
+ * has more than two channels, resampled to 48 kHz and encoded as constrained-VBR Opus at the
+ * bitrate.
  * Tags are copied, and the album's cover (the image file beside the source) is embedded. The
  * file appears atomically; on failure nothing is left behind. */
 mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const char *src_path,
@@ -84,8 +85,9 @@ mc_status mc_transcode_sha_write(const char *path, const char *sha, int64_t size
 mc_status mc_transcode_cache_trim(const char *cache_dir, int64_t max_bytes);
 
 /* Measures how fast this device encodes: 200 ms of synthetic stereo audio is encoded at
- * 128 kbps over and over for about half a second. *score is the speed as a multiple of real
- * time, times the number of cores. Takes the calling thread for that long. */
+ * 128 kbps over and over for about half a second of the calling thread's CPU time, so time
+ * spent waiting for a core doesn't lower the score (up to 5 seconds on a very busy device).
+ * *score is the speed as a multiple of real time, times the number of cores. */
 mc_status mc_transcode_benchmark(int *score);
 
 #ifdef __cplusplus

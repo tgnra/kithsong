@@ -403,6 +403,14 @@ int main(int argc, char **argv) {
 
   check_transcode(dir);
 
+  /* The benchmark's clock counts work, not waiting. */
+  uint64_t cpu = mc_thread_cpu_ms();
+  mc_sleep_ms(200);
+  CHECK(mc_thread_cpu_ms() - cpu < 100);
+  cpu = mc_thread_cpu_ms();
+  for (uint64_t start = mc_mono_ms(); mc_thread_cpu_ms() - cpu < 50;)
+    CHECK(mc_mono_ms() - start < 30000);
+
   int score = 0;
   CHECK(mc_transcode_benchmark(&score) == MC_OK);
   CHECK(score > 0);

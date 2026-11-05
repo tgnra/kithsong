@@ -42,6 +42,14 @@ uint64_t mc_mono_ms(void) {
   return GetTickCount64();
 }
 
+uint64_t mc_thread_cpu_ms(void) {
+  FILETIME created, exited, kernel, user;
+  if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0;
+  uint64_t k = ((uint64_t)kernel.dwHighDateTime << 32) | kernel.dwLowDateTime;
+  uint64_t u = ((uint64_t)user.dwHighDateTime << 32) | user.dwLowDateTime;
+  return (k + u) / 10000u;
+}
+
 void mc_sleep_ms(uint32_t ms) {
   Sleep(ms);
 }
@@ -711,6 +719,10 @@ uint64_t mc_wall_ms(void) {
 
 uint64_t mc_mono_ms(void) {
   return timespec_ms(CLOCK_MONOTONIC);
+}
+
+uint64_t mc_thread_cpu_ms(void) {
+  return timespec_ms(CLOCK_THREAD_CPUTIME_ID);
 }
 
 void mc_sleep_ms(uint32_t ms) {
