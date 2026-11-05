@@ -1084,14 +1084,14 @@
     "firewall_banner_net_named": { "text": "{0} ({1})", "note": "A network in the banner, e.g. \"Home Wi-Fi (Private network)\". {0} is its name, {1} its kind." },
     "firewall_rule_description": { "text": "Lets Kithsong on your other devices find this PC and sync with it on the local network.", "note": "Description of the rule shown in Windows Firewall's settings." },
 
-    "analysis_charging": { "text": "A phone only analyses while it's charging. Results from your other devices arrive by sync.", "note": "In Settings, under Audio analysis, below how many tracks aren't analysed yet." },
-    "analysis_asked": { "text": "They'll be analysed the next time this phone is charging.", "note": "In Settings, under Audio analysis, after pressing Analyse." },
-    "analysis_run": { "text": "Analyse", "note": "Settings button under Audio analysis: analyses the tracks that aren't yet, the next time the phone is charging." },
     "smart_delete_playlist_caption": "Delete smart playlist",
     "smart_delete_group_caption": "Delete smart album group"
   },
 
   "android": {
+    "analysis_charging": { "text": "A phone only analyses while it's charging. Results from your other devices arrive by sync.", "note": "In Settings, under Audio analysis, below how many tracks aren't analysed yet." },
+    "analysis_asked": { "text": "They'll be analysed the next time this phone is charging.", "note": "In Settings, under Audio analysis, after pressing Analyse." },
+    "analysis_run": { "text": "Analyse", "note": "Settings button under Audio analysis: analyses the tracks that aren't yet, the next time the phone is charging." },
     "station_label": { "text": "Radio station, {0}, {1}: plays music that sounds like {2}", "note": "What a screen reader says of a radio station's tile on the main screen. {0} is its name, {1} the line beneath it, {2} the title of the track it starts from." },
     "station_unavailable": { "text": "Can't play this station: its track is missing or not analysed yet.", "note": "Shown briefly on tapping a radio station that can't be played, which is common on a phone that holds only part of the library." },
     "edit_discard_title": { "text": "Discard your changes?", "note": "Asked on leaving the page that edits an album, artist or track with something changed and not saved." },
