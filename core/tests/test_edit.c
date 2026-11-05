@@ -22,6 +22,7 @@
 #include "library/library_internal.h"
 #include "musiccore/edit.h"
 #include "musiccore/musiccore.h"
+#include "playback/decoder.h"
 #include "sync/rows.h"
 #include "tagger/coverart.h"
 #include "tagger/dupes.h"
@@ -956,6 +957,33 @@ static void test_failed_write(const char *base) {
   lib_close(&l);
 }
 
+/* The track playing can be tagged and moved: the player reads on from the file it has open. */
+static void test_edit_while_playing(const char *base) {
+  lib_dir l;
+  lib_open(&l, base, "playing");
+  char album[MC_UID_STRLEN];
+  album_spec s = {"Album", "Ann", ANN, NULL, 2000, 3, k_titles};
+  add_album(&l, &s, album);
+  char track[MC_UID_STRLEN], rel[256];
+  snprintf(track, sizeof track, "%s", track_at(&l, album, 2));
+  snprintf(rel, sizeof rel, "%s", path_of(&l, track));
+
+  mc_decoder *playing = NULL;
+  CHECK(mc_decoder_open(abs_of(&l, rel), &playing) == MC_OK);
+  CHECK(!mc_file_in_use(abs_of(&l, rel)));
+  CHECK(rename_album(&l, album) == MC_OK);
+  CHECK(strcmp(path_of(&l, track), rel) != 0);
+  CHECK(!mc_file_exists(abs_of(&l, rel)));
+  CHECK(mc_file_exists(abs_of(&l, path_of(&l, track))));
+  if (playing) {
+    float frames[256 * 8];
+    mc_decoder_seek(playing, 0);
+    CHECK(mc_decoder_read(playing, frames, 256) > 0);
+    mc_decoder_close(playing);
+  }
+  lib_close(&l);
+}
+
 static void test_in_use(const char *base) {
 #ifdef _WIN32
   lib_dir l;
@@ -966,7 +994,8 @@ static void test_in_use(const char *base) {
   state was;
   state_read(&l, album, &was);
 
-  /* As the player has it open: the second track of three, to tag or to move. */
+  /* As something that doesn't share delete has it open, sync sending it say: the second track
+   * of three, to tag or to move. */
   char rel[256];
   snprintf(rel, sizeof rel, "%s", path_of(&l, track_at(&l, album, 2)));
   FILE *playing = mc_fopen(abs_of(&l, rel), "rb");
@@ -1994,6 +2023,7 @@ int main(int argc, char **argv) {
   test_filing(base);
   test_failed_move(base);
   test_failed_write(base);
+  test_edit_while_playing(base);
   test_in_use(base);
   test_crash(base);
   test_crash_after(base);

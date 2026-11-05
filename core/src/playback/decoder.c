@@ -1,6 +1,7 @@
 #include "playback/decoder.h"
 
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,6 +15,7 @@ typedef enum format { FMT_NONE, FMT_FLAC, FMT_MP3, FMT_WAV, FMT_OPUS } format;
 
 struct mc_decoder {
   format fmt;
+  FILE *file;
   drflac *flac;
   drmp3 mp3;
   drwav wav;
@@ -42,6 +44,71 @@ int mc_decoder_supports(const char *path) {
   return path && format_of(path) != FMT_NONE;
 }
 
+/* The decoders read through these rather than open the file themselves, so that it's opened
+ * with mc_fopen_shared(): a track can be tagged or moved while it plays, on Windows too. */
+static int file_seek(FILE *f, int64_t offset, int whence) {
+#ifdef _WIN32
+  return _fseeki64(f, offset, whence);
+#else
+  return fseeko(f, (off_t)offset, whence);
+#endif
+}
+
+static int64_t file_tell(FILE *f) {
+#ifdef _WIN32
+  return _ftelli64(f);
+#else
+  return (int64_t)ftello(f);
+#endif
+}
+
+static size_t file_read(void *user, void *out, size_t bytes) {
+  return fread(out, 1, bytes, user);
+}
+
+static drflac_bool32 flac_seek(void *user, int offset, drflac_seek_origin origin) {
+  int whence = origin == DRFLAC_SEEK_SET ? SEEK_SET : origin == DRFLAC_SEEK_CUR ? SEEK_CUR : SEEK_END;
+  return file_seek(user, offset, whence) == 0;
+}
+
+static drflac_bool32 flac_tell(void *user, drflac_int64 *cursor) {
+  *cursor = file_tell(user);
+  return *cursor >= 0;
+}
+
+static drmp3_bool32 mp3_seek(void *user, int offset, drmp3_seek_origin origin) {
+  int whence = origin == DRMP3_SEEK_SET ? SEEK_SET : origin == DRMP3_SEEK_CUR ? SEEK_CUR : SEEK_END;
+  return file_seek(user, offset, whence) == 0;
+}
+
+static drmp3_bool32 mp3_tell(void *user, drmp3_int64 *cursor) {
+  *cursor = file_tell(user);
+  return *cursor >= 0;
+}
+
+static drwav_bool32 wav_seek(void *user, int offset, drwav_seek_origin origin) {
+  int whence = origin == DRWAV_SEEK_SET ? SEEK_SET : origin == DRWAV_SEEK_CUR ? SEEK_CUR : SEEK_END;
+  return file_seek(user, offset, whence) == 0;
+}
+
+static drwav_bool32 wav_tell(void *user, drwav_int64 *cursor) {
+  *cursor = file_tell(user);
+  return *cursor >= 0;
+}
+
+static int opus_read(void *user, unsigned char *out, int bytes) {
+  size_t got = fread(out, 1, (size_t)bytes, user);
+  return got == 0 && ferror((FILE *)user) ? -1 : (int)got;
+}
+
+static int opus_seek(void *user, opus_int64 offset, int whence) {
+  return file_seek(user, offset, whence);
+}
+
+static opus_int64 opus_tell(void *user) {
+  return file_tell(user);
+}
+
 mc_status mc_decoder_open(const char *path, mc_decoder **out) {
   if (!path || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
@@ -50,18 +117,11 @@ mc_status mc_decoder_open(const char *path, mc_decoder **out) {
   mc_decoder *d = calloc(1, sizeof *d);
   if (!d) return MC_ERR_NOMEM;
   int ok = 0;
-#ifdef _WIN32
-  wchar_t *wpath = mc_win_path(path);
-#define OPEN_PATH wpath
-#define OPEN(fn) fn##_w
-#else
-#define OPEN_PATH path
-#define OPEN(fn) fn
-#endif
-  if (OPEN_PATH) {
+  d->file = mc_fopen_shared(path);
+  if (d->file) {
     switch (fmt) {
       case FMT_FLAC:
-        if ((d->flac = OPEN(drflac_open_file)(OPEN_PATH, NULL))) {
+        if ((d->flac = drflac_open(file_read, flac_seek, flac_tell, d->file, NULL))) {
           ok = 1;
           d->channels = d->flac->channels;
           d->rate = d->flac->sampleRate;
@@ -69,7 +129,7 @@ mc_status mc_decoder_open(const char *path, mc_decoder **out) {
         }
         break;
       case FMT_MP3:
-        if ((ok = OPEN(drmp3_init_file)(&d->mp3, OPEN_PATH, NULL))) {
+        if ((ok = drmp3_init(&d->mp3, file_read, mp3_seek, mp3_tell, NULL, d->file, NULL))) {
           d->channels = d->mp3.channels;
           d->rate = d->mp3.sampleRate;
           /* Only from the Xing/Info header: without one, counting means decoding the file. */
@@ -77,18 +137,17 @@ mc_status mc_decoder_open(const char *path, mc_decoder **out) {
         }
         break;
       case FMT_WAV:
-        if ((ok = OPEN(drwav_init_file)(&d->wav, OPEN_PATH, NULL))) {
+        if ((ok = drwav_init(&d->wav, file_read, wav_seek, wav_tell, d->file, NULL))) {
           d->channels = d->wav.channels;
           d->rate = d->wav.sampleRate;
           d->length = d->wav.totalPCMFrameCount;
         }
         break;
       case FMT_OPUS: {
-        /* opusfile takes UTF-8 paths on Windows too. It trims the pre-skip and end padding,
-         * and always decodes at 48 kHz; more than two channels are downmixed for us. */
-        char *opus_path = mc_open_path(path);
-        d->opus = opus_path ? op_open_file(opus_path, NULL) : NULL;
-        free(opus_path);
+        /* opusfile trims the pre-skip and end padding, and always decodes at 48 kHz; more
+         * than two channels are downmixed for us. No close: the file is ours to close. */
+        static const OpusFileCallbacks callbacks = {opus_read, opus_seek, opus_tell, NULL};
+        d->opus = op_open_callbacks(d->file, &callbacks, NULL, 0, NULL);
         if (d->opus) {
           ok = 1;
           d->channels = 2;
@@ -102,15 +161,14 @@ mc_status mc_decoder_open(const char *path, mc_decoder **out) {
         break;
     }
   }
-#undef OPEN_PATH
-#undef OPEN
-#ifdef _WIN32
-  free(wpath);
-#endif
   d->fmt = fmt;
   if (!ok || !d->channels || !d->rate) {
-    if (ok) mc_decoder_close(d);
-    else free(d);
+    if (ok) {
+      mc_decoder_close(d);
+    } else {
+      if (d->file) fclose(d->file);
+      free(d);
+    }
     return MC_ERR_IO;
   }
   *out = d;
@@ -123,6 +181,7 @@ void mc_decoder_close(mc_decoder *d) {
   if (d->fmt == FMT_MP3) drmp3_uninit(&d->mp3);
   if (d->fmt == FMT_WAV) drwav_uninit(&d->wav);
   if (d->fmt == FMT_OPUS) op_free(d->opus);
+  fclose(d->file);
   free(d);
 }
 

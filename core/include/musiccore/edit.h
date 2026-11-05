@@ -10,9 +10,9 @@
  *
  * An edit is all or nothing, rows and this device's files together. As well as the usual
  * statuses a _set() can return:
- *   MC_ERR_IN_USE  a file it would rewrite or move is open: on Windows, usually the track
- *                  playing, or the next one queued to play. Nothing has changed: say so, and
- *                  it can be tried again once playback has moved on or stopped.
+ *   MC_ERR_IN_USE  a file it would rewrite or move is open: on Windows, one sync is sending, or
+ *                  one another program has; the player's don't count. Nothing has changed: say
+ *                  so, and it can be tried again.
  *   MC_ERR_EXISTS  (an album's new mb_albumid) another album has that release, or once had:
  *                  sync would merge the two. Nothing has changed.
  *   MC_ERR_IO      a file couldn't be copied or written, a full disk say. Nothing has changed.

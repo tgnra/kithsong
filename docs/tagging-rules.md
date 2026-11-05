@@ -547,13 +547,14 @@ follow on this device only.
   rename puts everything back. `meta.edit_swap` lists what's under way, and turns from `undo` to
   `done` in the commit, so a crash is put right either way when a frontend next opens the
   library. If something else changed the rows or files meanwhile, the edit plans again.
-- **An open file.** On Windows the player and sync open files without sharing delete, so they
-  can't be renamed. Each file is checked as the plan is made, before any copying, and a rename
-  catches one opened since. The edit returns `MC_ERR_IN_USE` with nothing changed, the frontend
-  says so, and it can be tried again once playback has moved on. Only the files the edit touches
-  count, so tagging one track of an album while another plays is fine. Elsewhere an open file
-  can be renamed and goes on playing the old bytes, but the player's queue still has its old
-  path, so after an edit Android gives the player the queue's new paths and titles. An edit that
+- **An open file.** The player opens files sharing delete, on Windows too, so the track playing
+  is renamed like any other and goes on playing the old bytes. On Windows sync and other programs
+  open files without sharing delete, so those can't be renamed. Each file is checked as the plan
+  is made, before any copying, and a rename catches one opened since. The edit returns
+  `MC_ERR_IN_USE` with nothing changed, the frontend says so, and it can be tried again. Only the
+  files the edit touches count. The player's queue still has the old path, so after an edit
+  every frontend gives it the queue's new paths (`mc_player_queue_set_path()`) and shows the new
+  titles. An edit that
   moves no file, a new cover or title say, reaches the player without restarting the track.
 - **Another release.** `mc_release_search()` searches as an import does, sharing MusicBrainz's
   rate limit, looks up the best 5 and scores them against the album's tracks with `match.c`.

@@ -133,6 +133,9 @@ char *mc_open_path(const char *path);
 
 /* fopen with a UTF-8 path on every platform. */
 FILE *mc_fopen(const char *path, const char *mode);
+/* The same for reading a file for long, "rb": on Windows it can be renamed and deleted meanwhile,
+ * as anywhere else, and what's read goes on being what was there. */
+FILE *mc_fopen_shared(const char *path);
 /* Creates a directory and any missing parents. Succeeds if it already exists. */
 mc_status mc_mkdirs(const char *path);
 mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms);

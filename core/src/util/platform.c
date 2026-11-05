@@ -15,6 +15,8 @@
 #include <bcrypt.h>
 #include <shellapi.h>
 #include <process.h>
+#include <fcntl.h>
+#include <io.h>
 #else
 #include <dirent.h>
 #include <errno.h>
@@ -337,6 +339,23 @@ FILE *mc_fopen(const char *path, const char *mode) {
   FILE *f = wpath && wmode ? _wfopen(wpath, wmode) : NULL;
   free(wpath);
   free(wmode);
+  return f;
+}
+
+FILE *mc_fopen_shared(const char *path) {
+  wchar_t *w = mc_win_path(path);
+  HANDLE h = w ? CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+               : INVALID_HANDLE_VALUE;
+  free(w);
+  if (h == INVALID_HANDLE_VALUE) return NULL;
+  int fd = _open_osfhandle((intptr_t)h, _O_RDONLY | _O_BINARY);
+  if (fd < 0) {
+    CloseHandle(h);
+    return NULL;
+  }
+  FILE *f = _fdopen(fd, "rb");
+  if (!f) _close(fd); /* which closes the handle */
   return f;
 }
 
@@ -860,6 +879,10 @@ char *mc_open_path(const char *path) {
 
 FILE *mc_fopen(const char *path, const char *mode) {
   return fopen(path, mode);
+}
+
+FILE *mc_fopen_shared(const char *path) {
+  return fopen(path, "rb");
 }
 
 mc_status mc_mkdirs(const char *path) {
