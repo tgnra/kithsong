@@ -126,7 +126,7 @@ void mc_library_rollback(mc_library *lib);
   "SELECT a.uid, a.title, coalesce(a.artist_credit, ar.name), a.year, " ALBUM_IS_SINGLE \
   ", a.art_hash IS NOT NULL," \
   " (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid" \
-  "  WHERE t.album_uid = a.uid LIMIT 1), ar.uid"
+  "  WHERE t.album_uid = a.uid LIMIT 1), ar.uid, " MC_ALBUM_IS_MIX("a")
 #define ALBUM_JOINS " LEFT JOIN artists ar ON ar.uid = a.artist_uid"
 #define ALBUM_ORDER \
   "coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.year, a.title COLLATE NOCASE"

@@ -157,10 +157,12 @@ never written to its files. They sync as logged fields of the album.
   before the flag was set still goes. Plays are still counted.
 - `albums.mix`: a continuous mix, one piece of music split into tracks, or in one long track
   (a DJ mix). Its tracks aren't search results: a query matching one finds the album
-  instead, once, scored as the best of the album and its tracks. Smart playlists never pick
+  instead, once, scored as the best of the album and its tracks. An artist's page doesn't list
+  them among the artist's tracks either, only the album. Smart playlists never pick
   its tracks, whatever the rule; smart album groups can pick the album. A mix of one track
   is an album, not a single: album listings and counts have it, as the artist's albums, and
-  the artist's singles don't. Everything else lists its tracks as any album's.
+  the artist's singles don't. Everything else lists its tracks as any album's. The album's own
+  page says "Continuous mix" (`mc_album_info.mix`).
 
   1 is the user saying it's a mix, -1 saying it isn't, and 0 no one having said. With 0, an
   album whose only track is at least `MC_MIX_MIN_MS` long (30 minutes; the reasons are at its

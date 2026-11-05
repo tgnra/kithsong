@@ -98,10 +98,10 @@ void track_list_show_artist(mc_library *lib, const char *artist_uid);
  * random order (random) a Reshuffle button sits beside it (TLN_RESHUFFLE). */
 void track_list_show_smart(mc_library *lib, const char *uid, const wchar_t *title, BOOL random);
 /* The header's details for the album shown: its artist (NULL shows "Unknown Artist"), year
- * (0 if unknown) and the folder holding its cover (NULL if there's none). Call after
- * track_list_show. A playlist's header shows "Playlist" for the artist, and cover is its
- * picture file (see mc_playlist_art()) rather than a folder. */
-void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover);
+ * (0 if unknown), whether it's a continuous mix, and the folder holding its cover (NULL if
+ * there's none). Call after track_list_show. A playlist's header shows "Playlist" for the
+ * artist, and cover is its picture file (see mc_playlist_art()) rather than a folder. */
+void track_list_set_details(const wchar_t *artist, int year, BOOL mix, const wchar_t *cover);
 /* The cover file in the folder set was replaced. */
 void track_list_art_changed(void);
 

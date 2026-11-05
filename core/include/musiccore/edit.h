@@ -91,7 +91,8 @@ typedef struct mc_album_flags {
   int no_scrobble;
   /* A continuous mix: one piece of music split into tracks, or in one long track, so the
    * album is the thing to find. Its tracks aren't search results (a match on one finds the
-   * album, see search.h) and smart lists of tracks don't pick them. One of one track is listed
+   * album, see search.h), nor on an artist's list of tracks, and smart lists of tracks don't
+   * pick them. mc_album_info.mix says the same, for a page to show. One of one track is listed
    * as an album, not a single (library.h). An album nobody has chosen for is a mix if its one
    * track is long; a hand choice, either way, stays whatever the album's length. */
   int mix;

@@ -61,6 +61,7 @@ typedef struct tile {
   wchar_t *title;
   wchar_t *artist;    /* NULL if unknown */
   int year;           /* 0 if unknown */
+  BOOL mix;           /* a continuous mix */
   wchar_t *cover_dir; /* NULL when the album has no cover */
   wchar_t *cover_file; /* a playlist's or group's picture, once the loader has looked; NULL if none */
   wchar_t sub[64];     /* beneath a playlist's or group's name: its track or album count */
@@ -445,6 +446,10 @@ int album_grid_selection_year(void) {
   return g.selected >= 0 && g.selected < g.count ? g.tiles[g.selected].year : 0;
 }
 
+BOOL album_grid_selection_mix(void) {
+  return g.selected >= 0 && g.selected < g.count && g.tiles[g.selected].mix;
+}
+
 static void select_tile(int i);
 
 void album_grid_unselect(void) {
@@ -480,6 +485,7 @@ static void read_albums(tile **tiles, wchar_t ***dirs, int *n) {
     t->title = wstr_dup_from_utf8(a->title && *a->title ? a->title : mc_str(MC_STR_UNTITLED));
     t->artist = a->artist && *a->artist ? wstr_dup_from_utf8(a->artist) : NULL;
     t->year = a->year;
+    t->mix = a->mix != 0;
     t->cover_dir = (*dirs)[i] = a->has_art ? wstr_dup_from_utf8(a->folder) : NULL;
     t->here = a->folder != NULL;
   }

@@ -120,7 +120,7 @@ jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) {
   jclass info = (*env)->FindClass(env, "ng/kithso/core/AlbumInfo");
   jmethodID ctor = info ? (*env)->GetMethodID(
                             env, info, "<init>",
-                            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;Ljava/lang/String;)V")
+                            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZZLjava/lang/String;Ljava/lang/String;Z)V")
                         : NULL;
   if (ctor) out = (*env)->NewObjectArray(env, list->count, info, NULL);
   for (int i = 0; out && i < list->count; i++) {
@@ -132,7 +132,7 @@ jobjectArray album_array(JNIEnv *env, mc_status st, mc_album_list *list) {
     jstring artist_uid = new_string(env, a->artist_uid[0] ? a->artist_uid : NULL);
     jobject item = (*env)->NewObject(env, info, ctor, uid, title, artist, (jint)a->year,
                                      (jboolean)(a->is_singles != 0), (jboolean)(a->has_art != 0),
-                                     folder, artist_uid);
+                                     folder, artist_uid, (jboolean)(a->mix != 0));
     if (!item) {
       out = NULL;
       break;

@@ -158,6 +158,8 @@ const wchar_t *album_grid_selection_cover(void);
 BOOL album_grid_selection_smart(BOOL *random);
 /* The selected album's year, or 0 if it's unknown (or none is selected). */
 int album_grid_selection_year(void);
+/* Whether it's a continuous mix. */
+BOOL album_grid_selection_mix(void);
 /* Clears the selection, which notifies the parent (AGN_SELCHANGE) as a click would. */
 void album_grid_unselect(void);
 /* Selects the album (or playlist, on the Playlists page) with uid and scrolls it into view,

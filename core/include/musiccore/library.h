@@ -156,6 +156,7 @@ typedef struct mc_album_info {
   int is_singles;
   int has_art;    /* folder holds a cover (see mc_coverart_find()) */
   char *folder;   /* absolute path of the album's folder; NULL if it has no files here */
+  int mix;        /* a continuous mix, by hand or by its length (edit.h) */
   /* From mc_library_list_artist_albums() only (0 elsewhere): the album's tracks, and how
    * many of them are credited to the artist. */
   int track_count;
@@ -307,8 +308,8 @@ void mc_artist_list_free(mc_artist_list *list);
  * albums come first: those credited to them, then by the share of the tracks credited to
  * them, most first; then by year and title. Free with mc_album_list_free(). */
 mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid, mc_album_list **out);
-/* Every track credited to artist_uid, by title (then album and track number). Free with
- * mc_track_list_free(). */
+/* Every track credited to artist_uid, by title (then album and track number), but for those of
+ * a continuous mix (edit.h), which is found as its album. Free with mc_track_list_free(). */
 mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid, mc_track_list **out);
 /* artist_uid's singles: the tracks credited to them, or on an album of theirs, that are the
  * only track of their album in the library, or have no album at all, but for a continuous mix

@@ -513,7 +513,8 @@ static void show_album(void) {
   BOOL random;
   if (title && album_grid_selection_smart(&random)) track_list_show_smart(g_app.lib, uid, title, random);
   else track_list_show(g_app.lib, title ? uid : NULL, title, album_grid_showing_playlists());
-  track_list_set_details(album_grid_selection_artist(), album_grid_selection_year(), album_grid_selection_cover());
+  track_list_set_details(album_grid_selection_artist(), album_grid_selection_year(), album_grid_selection_mix(),
+                         album_grid_selection_cover());
   update_buttons();
   if (g_app.show_tracks != (title != NULL)) {
     g_app.show_tracks = title != NULL;

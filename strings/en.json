@@ -831,7 +831,7 @@
     "edit_mb_search": { "text": "Search MusicBrainz…", "note": "Button beside the MusicBrainz release: opens the search for another release." },
     "edit_no_scrobble": { "text": "Don't scrobble", "note": "Option in the album's Edit dialog. Scrobbling is sending what's played to Last.fm or the like." },
     "edit_no_scrobble_text": "Its tracks are never scrobbled. Plays are still counted here.",
-    "edit_mix": { "text": "Continuous mix", "note": "Option in the album's Edit dialog: one piece of music split into tracks, like a DJ mix." },
+    "edit_mix": { "text": "Continuous mix", "note": "Option in the album's Edit dialog, and shown on the album's page when it is one: one piece of music split into tracks, like a DJ mix." },
     "edit_mix_text": "Its tracks stay out of search and smart playlists, and the album shows instead.",
     "edit_mix_track_text": { "text": "Shows among the albums, not the artist's singles, and stays out of smart playlists.", "note": "Under the Continuous mix option in a single's Edit dialog. A long single starts with this ticked." },
     "edit_art_cover": { "text": "Album cover", "note": "Name for accessibility of the album's cover in its Edit dialog." },

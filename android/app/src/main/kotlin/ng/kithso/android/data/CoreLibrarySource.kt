@@ -333,7 +333,7 @@ class CoreLibrarySource(
         try {
             when (ref.kind) {
                 CollectionRef.Kind.Album -> contents.albums[ref.uid]?.let { album ->
-                    TrackList(album.title, album.art, lib.albumTracks(album.uid).here().map { covers.track(it) }, album.artist, album.year)
+                    TrackList(album.title, album.art, lib.albumTracks(album.uid).here().map { covers.track(it) }, album.artist, album.year, mix = album.mix)
                 }
                 // The albums it's on, its own first, its singles, then every track credited to it.
                 CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { artist ->
@@ -749,16 +749,14 @@ class CoreLibrarySource(
         outcome
     }.await()
 
-    // [queue] as the library has its tracks now, those it can't find as they were: by album, the
-    // one thing a queue's tracks can be found by, or for one on no album its artist's singles.
+    // [queue] as the library has its tracks now, those it can't find as they were: by album, or
+    // for one on no album by itself, as a single made a mix has one now.
     private suspend fun freshTracks(queue: List<Track>): List<Track> = withContext(core) {
         val lib = open() ?: return@withContext queue
         val covers = Covers()
         try {
             val albums = queue.mapNotNull { it.albumUid }.distinct().flatMap { lib.albumTracks(it) }
-            // All the artist's, as a single made a mix isn't one any more: it has an album now.
-            val singles = queue.filter { it.albumUid == null }.mapNotNull { it.artistUid }.distinct()
-                .flatMap { lib.artistTracks(it) }
+            val singles = queue.filter { it.albumUid == null }.mapNotNull { lib.track(it.uid) }
             val fresh = (albums + singles).here().associate { it.uid to covers.track(it) }
             queue.map { fresh[it.uid] ?: it }
         } catch (e: MusicCoreException) {
@@ -901,7 +899,7 @@ class CoreLibrarySource(
         val albumInfos = lib.albums().filter { it.folder != null }.byTitle()
         val artistInfos = lib.artistsHere()
         val albums = albumInfos.map { info ->
-            Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info))
+            Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info), info.mix)
         }
 
         // The core's artists with an album or track here, each with the picture the core picks

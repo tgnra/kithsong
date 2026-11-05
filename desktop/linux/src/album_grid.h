@@ -34,6 +34,7 @@ struct _AlbumItem {
                      * once looked for); NULL if it has none */
   gint64 cover_mtime; /* an album's cover_file's (cover_mtime()), as a new cover can have its path */
   int year;         /* 0 if unknown */
+  gboolean mix;      /* a continuous mix */
   gboolean is_playlist;
   gboolean is_group; /* an album group */
   int track_count;  /* playlists only; for a group, its albums; not for smart ones */

@@ -37,6 +37,7 @@ AlbumItem *album_item_new(const mc_album_info *info) {
   self->cover_file = info->has_art ? cover_path(info->folder) : NULL;
   self->cover_mtime = cover_mtime(self->cover_file);
   self->year = info->year;
+  self->mix = info->mix != 0;
   self->here = info->folder != NULL;
   return self;
 }
@@ -103,7 +104,7 @@ static AlbumItem *album_item_with_cover(const AlbumItem *item, const char *cover
 static gboolean album_item_equal(const AlbumItem *a, const AlbumItem *b) {
   return !strcmp(a->uid, b->uid) && !g_strcmp0(a->title, b->title) && !g_strcmp0(a->artist, b->artist) &&
          !g_strcmp0(a->cover_file, b->cover_file) && a->cover_mtime == b->cover_mtime &&
-         a->year == b->year && a->is_playlist == b->is_playlist && a->is_group == b->is_group &&
+         a->year == b->year && a->mix == b->mix && a->is_playlist == b->is_playlist && a->is_group == b->is_group &&
          a->track_count == b->track_count && !g_strcmp0(a->subtitle, b->subtitle) && a->is_smart == b->is_smart &&
          a->random == b->random && a->here == b->here;
 }

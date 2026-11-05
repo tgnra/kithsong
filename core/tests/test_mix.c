@@ -181,6 +181,25 @@ static void test_listing(const char *scratch) {
   CHECK(in_singles(lib, "ar1", "Short Single") == 1);
   CHECK(in_singles(lib, "ar1", "Edge Single") == 1);
 
+  /* Nor is its track among the artist's tracks. */
+  mc_track_list *credited = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "ar1", &credited) == MC_OK);
+  int mix_tracks = 0, plain = 0;
+  for (int i = 0; credited && i < credited->count; i++) {
+    mix_tracks += !strcmp(credited->items[i].uid, "tl");
+    plain += !strcmp(credited->items[i].uid, "t2");
+  }
+  CHECK(mix_tracks == 0);
+  CHECK(plain == 1);
+  mc_track_list_free(credited);
+
+  /* The albums say which is a mix. */
+  list = NULL;
+  CHECK(mc_library_list_albums(lib, &list) == MC_OK);
+  for (int i = 0; list && i < list->count; i++)
+    CHECK(list->items[i].mix == (strcmp(list->items[i].title, "Harbour Album") != 0));
+  mc_album_list_free(list);
+
   /* And counted as one. */
   mc_artist_list *artists = NULL;
   CHECK(mc_library_list_artists(lib, &artists) == MC_OK);

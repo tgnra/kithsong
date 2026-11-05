@@ -779,11 +779,12 @@ GtkWidget *track_list_new(const track_list_callbacks *cb) {
   return pane;
 }
 
-/* "1997 · 12 tracks · 47 min" */
-static void set_summary(int year, int count, int total_ms) {
+/* "1997 · 12 tracks · 47 min", and for a continuous mix "1997 · Continuous mix · 12 tracks..." */
+static void set_summary(int year, gboolean mix, int count, int total_ms) {
   GString *str = g_string_new(NULL);
   char part[64];
   if (year > 0) g_string_append_printf(str, "%d%s", year, mc_str(MC_STR_SEPARATOR_DOT));
+  if (mix) g_string_append_printf(str, "%s%s", mc_str(MC_STR_EDIT_MIX), mc_str(MC_STR_SEPARATOR_DOT));
   int min = (total_ms + 30000) / 60000;
   if (!count) {
     g_string_append(str, mc_str(MC_STR_NO_TRACKS));
@@ -860,7 +861,7 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
                                           : album && album->is_playlist ? mc_str(MC_STR_PLAYLIST)
                                           : album && album->artist      ? album->artist
                                                                         : mc_str(MC_STR_UNKNOWN_ARTIST));
-  set_summary(album ? album->year : 0, n, total_ms);
+  set_summary(album ? album->year : 0, album && album->mix, n, total_ms);
   gboolean smart = album && album->is_smart;
   gtk_widget_set_visible(s.playlist_button, album && album->is_playlist);
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), smart ? s.smart_header_menu : s.header_menu);

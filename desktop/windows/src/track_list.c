@@ -95,6 +95,7 @@ static struct {
   wchar_t *album_title;
   wchar_t *artist;     /* NULL if unknown */
   int year;            /* 0 if unknown */
+  BOOL mix;            /* a continuous mix: the summary says so */
   int total_ms;        /* the tracks' length */
   wchar_t summary[128]; /* "1997 · 12 tracks · 47 min" */
   wchar_t *cover_dir;  /* NULL if the album has no cover; a playlist's picture file */
@@ -436,11 +437,12 @@ static void clear_rows(void) {
 
 static void end_drag(void);
 
-/* "1997 · 12 tracks · 47 min" */
+/* "1997 · 12 tracks · 47 min", and for a continuous mix "1997 · Continuous mix · 12 tracks..." */
 static void make_summary(void) {
   int n = s.count, min = (s.total_ms + 30000) / 60000, count = 0;
-  char parts[3][64];
+  char parts[4][64];
   if (s.year > 0) snprintf(parts[count++], 64, "%d", s.year);
+  if (s.mix) snprintf(parts[count++], 64, "%s", mc_str(MC_STR_EDIT_MIX));
   if (!n) {
     snprintf(parts[count++], 64, "%s", mc_str(MC_STR_NO_TRACKS));
   } else {
@@ -474,10 +476,11 @@ static void load_art(void) {
   else s.art = cover_decode(s.wic, s.cover_dir, s.art_size, scale(COVER_RADIUS), &s.art_px);
 }
 
-void track_list_set_details(const wchar_t *artist, int year, const wchar_t *cover_dir) {
+void track_list_set_details(const wchar_t *artist, int year, BOOL mix, const wchar_t *cover_dir) {
   free(s.artist);
   s.artist = artist ? _wcsdup(artist) : NULL;
   s.year = year;
+  s.mix = mix;
   make_summary();
   BOOL same_cover = (!cover_dir && !s.cover_dir) || (cover_dir && s.cover_dir && !wcscmp(cover_dir, s.cover_dir));
   if (!same_cover) {
@@ -565,7 +568,10 @@ static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL pl
   if (playlist && keep[0] && s.selected < 0 && n) s.selected = was < n ? was : n - 1;
 
   s.total_ms = total_ms;
-  if (!same) s.year = 0; /* until track_list_set_details */
+  if (!same) { /* until track_list_set_details */
+    s.year = 0;
+    s.mix = FALSE;
+  }
   make_summary();
 
   if (s.focus_action >= 0 && !can_focus(s.focus_action)) s.focus_action = -1; /* gone or greyed out */

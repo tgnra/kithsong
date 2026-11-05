@@ -17,6 +17,7 @@ data class AlbumInfo(
     val hasArt: Boolean,
     val folder: String?,
     val artistUid: String? = null,
+    val mix: Boolean = false,
 )
 
 /**

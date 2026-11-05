@@ -620,8 +620,10 @@ private fun DetailTitle(kind: CollectionRef.Kind, list: TrackList, artSize: Dp, 
             )
             Text(
                 when (kind) {
-                    CollectionRef.Kind.Album ->
-                        if (list.year > 0) stringResource(R.string.album_byline_year, list.artist, list.year) else list.artist
+                    CollectionRef.Kind.Album -> {
+                        val byline = if (list.year > 0) stringResource(R.string.album_byline_year, list.artist, list.year) else list.artist
+                        if (list.mix) byline + stringResource(R.string.separator_dot) + stringResource(R.string.edit_mix) else byline
+                    }
                     CollectionRef.Kind.Artist ->
                         if (list.albumCount > 0) pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount)
                         else pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size)

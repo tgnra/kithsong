@@ -22,6 +22,7 @@ data class Album(
     val artist: String,
     val year: Int,
     val art: ArtRef,
+    val mix: Boolean = false,
 )
 
 /**
@@ -166,6 +167,7 @@ data class TrackList(
     val albums: List<Album> = emptyList(),
     val singles: List<Track> = emptyList(),
     val canReshuffle: Boolean = false,
+    val mix: Boolean = false,
 )
 
 /**

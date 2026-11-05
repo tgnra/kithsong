@@ -818,9 +818,10 @@ mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_l
       a->folder = abs;
     }
     copy_uid(a->artist_uid, stmt, 7);
-    if (sqlite3_column_count(stmt) > 9) { /* an artist's albums */
-      a->track_count = sqlite3_column_int(stmt, 8);
-      a->credited_count = sqlite3_column_int(stmt, 9);
+    a->mix = sqlite3_column_int(stmt, 8);
+    if (sqlite3_column_count(stmt) > 10) { /* an artist's albums */
+      a->track_count = sqlite3_column_int(stmt, 9);
+      a->credited_count = sqlite3_column_int(stmt, 10);
     }
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
@@ -1170,10 +1171,10 @@ mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid,
 
 mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid, mc_track_list **out) {
   /* Their own tracks, those they're featured on, and those with no artist on their albums,
-   * each by its index. */
+   * each by its index. A mix is found as its album, as in search. */
   static const char sql[] =
     TRACK_COLS " FROM tracks t" TRACK_JOINS
-    " WHERE t.uid IN (" CREDITED_TRACKS("?1") ")"
+    " WHERE t.uid IN (" CREDITED_TRACKS("?1") ") AND NOT " TRACK_IN_MIX
     " ORDER BY t.title COLLATE NOCASE, al.title COLLATE NOCASE, coalesce(t.disc_no, 0), t.track_no, t.uid";
   return list_tracks(lib, sql, artist_uid, out);
 }
