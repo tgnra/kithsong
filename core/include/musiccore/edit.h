@@ -114,7 +114,9 @@ typedef struct mc_track_mix {
 mc_status mc_track_mix_get(mc_library *lib, const char *track_uid, mc_track_mix *out);
 /* Makes a track that can_set a mix or not, by hand; MC_ERR_INVALID_ARG for one that can't. A
  * mix needs an album, so a track with none gets one of its title and is filed there, with the
- * statuses and file changes of any _set() above. */
+ * statuses and file changes of any _set() above. Made no mix again, here or by
+ * mc_album_flags_set(), such a track goes back to having no album, unless the album is flagged
+ * no_scrobble, which needs one. */
 mc_status mc_track_mix_set(mc_library *lib, const char *track_uid, int mix);
 
 /* An album's cover, chosen by the user. It's kept as given, as cover.jpg or cover.png in every

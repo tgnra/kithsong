@@ -6,6 +6,8 @@
 
 #include "library/library_internal.h"
 
+static mc_status mc_album_flags_write(mc_library *lib, const char *album_uid, const mc_album_flags *flags);
+
 mc_status mc_album_flags_get(mc_library *lib, const char *album_uid, mc_album_flags *out) {
   if (!lib || !album_uid || !out) return MC_ERR_INVALID_ARG;
   memset(out, 0, sizeof *out);
@@ -26,6 +28,13 @@ mc_status mc_album_flags_get(mc_library *lib, const char *album_uid, mc_album_fl
 
 mc_status mc_album_flags_set(mc_library *lib, const char *album_uid, const mc_album_flags *flags) {
   if (!lib || !album_uid || !flags) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_album_flags_write(lib, album_uid, flags);
+  /* A mix no more, and nothing else for the album it was given to hold. */
+  if (st == MC_OK && !flags->mix && !flags->no_scrobble) st = mc_mix_unfile(lib, album_uid);
+  return st;
+}
+
+static mc_status mc_album_flags_write(mc_library *lib, const char *album_uid, const mc_album_flags *flags) {
   mc_status st = mc_library_begin_write(lib);
   if (st != MC_OK) return st;
   sqlite3_stmt *stmt;
@@ -52,6 +61,19 @@ mc_status mc_album_flags_set(mc_library *lib, const char *album_uid, const mc_al
  * their uids from it too. */
 #define MIX_ALBUM_POSITION 7170424
 #define MIX_ALBUM "mc_credit_uid(t.uid, " MC_SQL_NUM(MIX_ALBUM_POSITION) ")"
+
+int mc_mix_album_of_track(mc_library *lib, const char *album_uid, char track_uid[MC_UID_STRLEN]) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "SELECT t.uid FROM tracks t WHERE t.album_uid = ?1"
+                         " AND " MIX_ALBUM " = ?1 AND (SELECT count(*) FROM tracks st"
+                         "  WHERE st.album_uid = ?1) = 1", -1, &stmt, NULL) != SQLITE_OK)
+    return 0;
+  sqlite3_bind_text(stmt, 1, album_uid, -1, SQLITE_STATIC);
+  int yes = sqlite3_step(stmt) == SQLITE_ROW;
+  if (yes) snprintf(track_uid, MC_UID_STRLEN, "%s", sqlite3_column_text(stmt, 0));
+  sqlite3_finalize(stmt);
+  return yes;
+}
 
 static mc_status file_step(mc_library *lib, const char *head, const char *where, const char *arg) {
   char sql[768];

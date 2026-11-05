@@ -1896,6 +1896,39 @@ static mc_status mix_apply(mc_library *lib, void *user) {
   return step_done(stmt);
 }
 
+typedef struct mix_unfiling {
+  char track[MC_UID_STRLEN];
+  const char *album;
+} mix_unfiling;
+
+static mc_status unfile_scope(mc_library *lib, void *user, uids *tracks) {
+  return uids_query(lib, tracks, "SELECT uid FROM tracks WHERE uid = ?1", ((mix_unfiling *)user)->track);
+}
+
+static mc_status unfile_apply(mc_library *lib, void *user) {
+  const mix_unfiling *m = user;
+  sqlite3_stmt *stmt = prepare(lib, "UPDATE tracks SET album_uid = NULL WHERE uid = ?1");
+  if (stmt) bind_str(stmt, 1, m->track);
+  mc_status st = step_done(stmt);
+  static const char *const gone[] = {
+    "DELETE FROM album_group_entries WHERE album_uid = ?1",
+    "DELETE FROM album_artists WHERE album_uid = ?1",
+    "DELETE FROM albums WHERE uid = ?1",
+  };
+  for (size_t i = 0; st == MC_OK && i < sizeof gone / sizeof gone[0]; i++) {
+    if ((stmt = prepare(lib, gone[i]))) bind_str(stmt, 1, m->album);
+    st = step_done(stmt);
+  }
+  return st;
+}
+
+mc_status mc_mix_unfile(mc_library *lib, const char *album_uid) {
+  mix_unfiling m = {"", album_uid};
+  if (!mc_mix_album_of_track(lib, album_uid, m.track)) return MC_OK;
+  static const edit_ops ops = {unfile_scope, unfile_apply};
+  return run_edit(lib, &ops, &m);
+}
+
 mc_status mc_track_mix_set(mc_library *lib, const char *track_uid, int mix) {
   mc_track_mix cur;
   mc_status st = mc_track_mix_get(lib, track_uid, &cur);

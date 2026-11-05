@@ -668,9 +668,18 @@ static void test_import(const char *scratch) {
   CHECK_STR(tags.album, "Qwxzzy Demo");
   mc_tags_clear(&tags);
 
-  /* Un-set, it's a single on its album, not back to no album. */
+  /* Un-set, it's back to no album, its file with it, and a single. */
+  int albums = query_int(lib, "SELECT count(*) FROM albums");
   CHECK(mc_track_mix_set(lib, uid, 0) == MC_OK);
   CHECK(in_albums(lib, "Qwxzzy Demo") == 0);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE title = 'Qwxzzy Demo' AND album_uid IS NULL") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM albums") == albums - 1);
+  CHECK(!mc_file_exists(path));
+  snprintf(path, sizeof path, "%s/Sasha Vale/Qwxzzy Demo.wav", lib_dir);
+  CHECK(mc_file_exists(path));
+  CHECK(mc_tags_read(path, &tags) == MC_OK);
+  CHECK(!tags.album || !*tags.album);
+  mc_tags_clear(&tags);
   mc_track_list *singles = NULL;
   mc_artist_list *artists = NULL;
   CHECK(mc_library_list_artists(lib, &artists) == MC_OK);
@@ -680,6 +689,88 @@ static void test_import(const char *scratch) {
   }
   mc_track_list_free(singles);
   mc_artist_list_free(artists);
+
+  /* Made a mix again it finds its album again, and flagged no_scrobble that album stays. */
+  CHECK(mc_track_mix_set(lib, uid, 1) == MC_OK);
+  CHECK(in_albums(lib, "Qwxzzy Demo") == 1);
+  char album[MC_UID_STRLEN];
+  sqlite3_stmt *stmt;
+  CHECK(sqlite3_prepare_v2(mc_library_db(lib), "SELECT album_uid FROM tracks WHERE uid = ?1", -1, &stmt, NULL) == SQLITE_OK);
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  CHECK(sqlite3_step(stmt) == SQLITE_ROW);
+  snprintf(album, sizeof album, "%s", sqlite3_column_text(stmt, 0));
+  sqlite3_finalize(stmt);
+  mc_album_flags flags = {.no_scrobble = 1, .mix = 0};
+  CHECK(mc_album_flags_set(lib, album, &flags) == MC_OK);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE title = 'Qwxzzy Demo' AND album_uid IS NULL") == 0);
+  mc_library_close(lib);
+}
+
+/* A long file that's a recording on no release gets an album of its title, as if imported
+ * as-is; a shorter one no album. */
+#define LOST_RECORDING "d0000000-2222-3333-4444-555555555555"
+#define OTHER_RECORDING "d1000000-2222-3333-4444-555555555555"
+
+static mc_status lone_recording(const char *artist, const char *title, mb_release *out, int max, int *n) {
+  (void)artist, (void)max;
+  memset(out, 0, sizeof *out);
+  out->tracks = calloc(1, sizeof *out->tracks);
+  if (!out->tracks) return MC_ERR_NOMEM;
+  out->track_count = 1;
+  out->tracks[0].recording_id = mc_strdup(strstr(title, "Long") ? LOST_RECORDING : OTHER_RECORDING);
+  out->tracks[0].title = mc_strdup(title);
+  out->tracks[0].artist = mc_strdup("Sasha Vale");
+  out->year = 2011;
+  *n = 1;
+  return MC_OK;
+}
+
+static const mb_fake k_lone_fake = {NULL, no_lookup, lone_recording, NULL, NULL};
+
+static void test_import_no_release(const char *scratch) {
+  char root[1024], src[1100], lib_dir[1100], path[1300];
+  snprintf(root, sizeof root, "%s/test_mix_lone.d", scratch);
+  remove_tree(root);
+  snprintf(src, sizeof src, "%s/src", root);
+  snprintf(lib_dir, sizeof lib_dir, "%s/lib", root);
+  CHECK(mc_mkdirs(src) == MC_OK && mc_mkdirs(lib_dir) == MC_OK);
+  snprintf(path, sizeof path, "%s/1.wav", src);
+  CHECK(write_track(path, "Qwxzzy Long Set", MC_MIX_MIN_MS + 5000));
+  snprintf(path, sizeof path, "%s/2.wav", src);
+  CHECK(write_track(path, "Qwxzzy Demo", 5000));
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(lib_dir, &lib) == MC_OK);
+  if (!lib) return;
+  mb_set_fake(&k_lone_fake);
+  mc_import *imp = NULL;
+  const char *paths[] = {src};
+  mc_import_options opts = {.threshold = 0.99, .fetch_art = 0};
+  CHECK(mc_import_start(lib, paths, 1, &opts, NULL, NULL, &imp) == MC_OK);
+  uint64_t deadline = mc_mono_ms() + 20000;
+  while (imp && mc_mono_ms() < deadline) {
+    int n = mc_import_item_count(imp), done = 0;
+    for (int i = 0; i < n; i++) {
+      mc_import_state s = item_state(imp, i);
+      if (s == MC_IMPORT_REVIEW) mc_import_accept(imp, i, 0);
+      done += s == MC_IMPORT_DONE;
+    }
+    if (n == 2 && done == 2) break;
+    mc_sleep_ms(20);
+  }
+  mc_import_free(imp);
+  mb_set_fake(&k_fake);
+
+  CHECK(in_albums(lib, "Qwxzzy Long Set") == 1);
+  CHECK(in_albums(lib, "Qwxzzy Demo") == 0);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE title = 'Qwxzzy Demo' AND album_uid IS NULL") == 1);
+  CHECK(query_int(lib, "SELECT count(*) FROM tracks WHERE mb_trackid = '" LOST_RECORDING "'") == 1);
+  snprintf(path, sizeof path, "%s/Sasha Vale/Qwxzzy Long Set (2011)/Qwxzzy Long Set.wav", lib_dir);
+  CHECK(mc_file_exists(path));
+  mc_tags tags;
+  CHECK(mc_tags_read(path, &tags) == MC_OK);
+  CHECK_STR(tags.album, "Qwxzzy Long Set");
+  mc_tags_clear(&tags);
   mc_library_close(lib);
 }
 
@@ -688,6 +779,7 @@ int main(int argc, char **argv) {
   CHECK(mc_init() == MC_OK);
   mb_set_fake(&k_fake);
   test_listing(scratch);
+  test_import_no_release(scratch);
   test_by_hand(scratch);
   test_migration(scratch);
   test_two_devices(scratch);

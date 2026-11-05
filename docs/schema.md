@@ -177,7 +177,8 @@ never written to its files. They sync as logged fields of the album.
 
 A mix needs an album row. A track with no album (see [Singles](#singles)) gets one, of one
 track, with the track's title, credit and year: at import if it's long enough; by hand when
-it's made a mix (`mc_track_mix_set()`, which files it there like an edit); and for those
+it's made a mix (`mc_track_mix_set()`, which files it there like an edit, and takes it out
+again when the choice is undone and the album's flagged nothing else); and for those
 already in a library, once, on the first open after upgrading to v16. That last writes rows
 only, leaving the file where it is, and is logged, as a migration's rows aren't: a device
 paired later has no migration to run. Its uid is derived from the track's (`mc_uid_derive()`),

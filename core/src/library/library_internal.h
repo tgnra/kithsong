@@ -137,6 +137,15 @@ void mc_library_rollback(mc_library *lib);
  * write transaction; logged, like any edit. In album_flags.c. */
 mc_status mc_mix_file_tracks(mc_library *lib, const char *where, const char *arg);
 
+/* Whether album_uid is an album mc_mix_file_tracks() made and still just that track's: 1, with
+ * track_uid set, if so. In album_flags.c. */
+int mc_mix_album_of_track(mc_library *lib, const char *album_uid, char track_uid[MC_UID_STRLEN]);
+
+/* Undoes that filing for such an album, the track going back to having no album, and the album
+ * and its file's tags and place with it; any other album stays as it is. A _set() of edit.h,
+ * so with its statuses. In edit.c. */
+mc_status mc_mix_unfile(mc_library *lib, const char *album_uid);
+
 /* Step a prepared, bound TRACK_COLS or ALBUM_COLS query into a list. Both finalize stmt. */
 mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_list **out);
 mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_list **out);

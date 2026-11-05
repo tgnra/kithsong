@@ -1760,7 +1760,8 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   if (rel) {
     /* A recording whose release couldn't be looked up keeps what the search had: the
      * release's title and ids, but no tracklist or album artist, for which its first
-     * credited artist stands in. A recording on no release has no album. */
+     * credited artist stands in. A recording on no release has no album, but for one long
+     * enough to be a mix, which gets one of its title, as a file imported as-is does. */
     int partial = c->from_recording && lone < 0;
     album.no_album = !rel->id || !rel->title;
     album.title = rel->title;
@@ -1771,8 +1772,18 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
     album.disc_total = rel->disc_total;
     album.mb_albumid = rel->id;
     album.mb_releasegroupid = rel->releasegroup_id;
+    int own_album = album.no_album && it->file_count == 1 && map[0] >= 0 &&
+                    item_tags(imp, it, 0)->duration_ms >= MC_MIX_MIN_MS && rel->tracks[map[0]].title;
+    if (own_album) {
+      const mb_track *tr = &rel->tracks[map[0]];
+      album.no_album = 0;
+      album.title = tr->title;
+      if (!album.artist.name) album.artist = (mc_db_artist){tr->artist, NULL, tr->artist_id};
+      album.year = rel->original_year ? rel->original_year : rel->year;
+      album.mb_albumid = album.mb_releasegroupid = NULL;
+    }
     /* Folders stay under the whole credit; the credit's artists are rows and tags. */
-    if (!album.no_album) album_rel = mc_album_dir(album.artist.name, rel->title, rel->year);
+    if (!album.no_album) album_rel = mc_album_dir(album.artist.name, album.title, album.year);
     static const mb_credit no_credit;
     const mb_credit *album_credit = partial ? &no_credit : &rel->credit;
     album.credit = mb_credit_rows(&owned, album_credit);
@@ -1811,14 +1822,14 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
         pl->dest_rel = join_rel(dir, name);
         free(dir);
       } else {
-        tags.album = rel->title;
+        tags.album = (char *)album.title;
         tags.album_artist = (char *)album.artist.name;
         tags.mb_albumartistid = album.artist.mb_artistid ? (char *)album.artist.mb_artistid : "";
         tags.album_artists = album_artists;
         tags.mb_albumartistids = album_artist_ids;
-        tags.mb_albumid = rel->id;
-        tags.mb_releasegroupid = rel->releasegroup_id;
-        tags.year = rel->year;
+        tags.mb_albumid = own_album ? "" : rel->id;
+        tags.mb_releasegroupid = own_album ? "" : rel->releasegroup_id;
+        tags.year = album.year;
         tags.track = tr->number;
         tags.track_total = partial ? 0 : disc_track_total(rel, tr->disc);
         tags.disc = tr->disc;

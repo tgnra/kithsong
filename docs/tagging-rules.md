@@ -375,7 +375,8 @@ A single is filed as what it is on MusicBrainz: a track of a release, like any a
   file goes in `<artist>/<title>.<ext>`. Unless it's long enough to be a continuous mix (30
   minutes, see [Album flags](schema.md#album-flags)), when it gets an album of its title,
   under `<artist>/<title>/`, for the flag to be on: a mix with no match on MusicBrainz is
-  usually such a file. That's the as-is path only; a recording on no release keeps no album.
+  usually such a file. A recording on no release of that length gets one the same way, and a
+  shorter one no album.
 - a single of that length, with an album of its own or the one just made, is a mix unless the
   user says otherwise: an album to the listings and search, and not a single.
 - there's no "&lt;artist&gt; Singles" album any more. Albums and files made as one before
