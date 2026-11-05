@@ -21,6 +21,7 @@
 #define RULE_VERSION 1
 #define MAX_DEPTH 32
 #define DAY_MS 86400000LL
+#define MAX_LIMIT_SECONDS 31536000000LL /* a thousand years */
 
 typedef enum ftype { F_TEXT, F_INT, F_DURATION, F_DATE, F_BOOL, F_PLAYLIST, F_GROUP, F_FORMAT } ftype;
 
@@ -534,10 +535,42 @@ typedef enum mode { M_LIST, M_COUNT, M_ART, M_PLAYABLE } mode;
 #define ALBUM_HERE(uid) \
   "EXISTS (SELECT 1 FROM tracks ft JOIN files f ON f.track_uid = ft.uid WHERE ft.album_uid = " uid ")"
 
+/* The condition for what a rule picks, before any limit. */
+static void put_picks(query *q, yyjson_val *match) {
+  if (q->subject == MC_SMART_TRACKS) put(q, TRACK_NOT_IN_MIX " AND ");
+  /* Without a match, or with one that's ignored, everything matches. */
+  if (!match || !put_match(q, match, 0, 0)) put(q, "1");
+}
+
+/* The condition for what's left of a rule's picks under a limit_duration: in its order, those
+ * whose running total is within seconds. The first is kept even if it's too long by itself,
+ * so a limit doesn't empty a list. An album's length is its tracks'. */
+static void put_within_duration(query *q, yyjson_val *match, yyjson_val *order, int64_t seconds) {
+  int tracks = q->subject == MC_SMART_TRACKS;
+  const char *length = tracks ? "coalesce(t.duration_ms, 0)" : "coalesce((SELECT sum(tt.duration_ms)" A_TRACKS ", 0)";
+  put(q, k_uid_col[q->subject]);
+  put(q, " IN (SELECT uid FROM (SELECT ");
+  put(q, k_uid_col[q->subject]);
+  put(q, " AS uid, ");
+  put(q, length);
+  put(q, " AS own, sum(");
+  put(q, length);
+  put(q, ") OVER (ORDER BY ");
+  put_order(q, order);
+  put(q, " ROWS UNBOUNDED PRECEDING) AS upto FROM ");
+  put(q, tracks ? "tracks t" TRACK_JOINS : "albums a" ALBUM_JOINS);
+  put(q, " WHERE ");
+  put_picks(q, match);
+  put(q, ") WHERE upto = own OR upto <= ");
+  put_int(q, seconds * 1000);
+  put(q, ")");
+}
+
 /* Compiles rule_json into q: the whole query, ready to prepare and bind. For M_COUNT the
  * order is checked but left out, since it only matters to which rows a limit keeps, not to
  * how many; so for M_PLAYABLE without a limit, which stops at the first row with a file
- * whatever the order. With a limit, M_PLAYABLE looks through the ordered rows it keeps. */
+ * whatever the order. With a limit, M_PLAYABLE looks through the ordered rows it keeps. A
+ * limit_duration is a condition of its own, with the order inside it. */
 static mc_status compile(query *q, mc_smart_subject subject, const char *rule_json, int64_t now_ms, mode m) {
   memset(q, 0, sizeof *q);
   q->subject = subject;
@@ -545,11 +578,12 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
   if ((unsigned)subject > MC_SMART_ALBUMS || !rule_json) return q->st = MC_ERR_INVALID_ARG;
   q->doc = yyjson_read(rule_json, strlen(rule_json), 0);
   yyjson_val *root = yyjson_doc_get_root(q->doc);
-  static const char *const top_keys[] = {"v", "match", "order", "limit", NULL};
-  int64_t v = 0, limit = 0;
-  yyjson_val *limit_val = yyjson_obj_get(root, "limit");
+  static const char *const top_keys[] = {"v", "match", "order", "limit", "limit_duration", NULL};
+  int64_t v = 0, limit = 0, seconds = 0;
+  yyjson_val *limit_val = yyjson_obj_get(root, "limit"), *seconds_val = yyjson_obj_get(root, "limit_duration");
   if (!yyjson_is_obj(root) || !only_keys(root, top_keys) || !get_int(yyjson_obj_get(root, "v"), &v) ||
-      v != RULE_VERSION || (limit_val && (!get_int(limit_val, &limit) || limit < 1)))
+      v != RULE_VERSION || (limit_val && (!get_int(limit_val, &limit) || limit < 1)) ||
+      (seconds_val && (limit_val || !get_int(seconds_val, &seconds) || seconds < 1 || seconds > MAX_LIMIT_SECONDS)))
     return q->st = MC_ERR_FORMAT;
 
   int count = m == M_COUNT, tracks = subject == MC_SMART_TRACKS;
@@ -572,10 +606,9 @@ static mc_status compile(query *q, mc_smart_subject subject, const char *rule_js
     put(q, subject == MC_SMART_TRACKS ? TRACK_COLS " FROM tracks t" TRACK_JOINS
                                       : ALBUM_COLS " FROM albums a" ALBUM_JOINS);
   put(q, " WHERE ");
-  if (tracks) put(q, TRACK_NOT_IN_MIX " AND ");
-  /* Without a match, or with one that's ignored, everything matches. */
   yyjson_val *match = yyjson_obj_get(root, "match");
-  if (!match || !put_match(q, match, 0, 0)) put(q, "1");
+  if (seconds_val) put_within_duration(q, match, yyjson_obj_get(root, "order"), seconds);
+  else put_picks(q, match);
   if (m == M_PLAYABLE && !picked) put(q, tracks ? " AND " TRACK_HERE("t.uid") : " AND " ALBUM_HERE("a.uid"));
   if (count || (m == M_PLAYABLE && !picked)) {
     query order = {.subject = subject, .now_ms = now_ms};
@@ -794,6 +827,13 @@ static char *duration(int64_t s) {
   else
     snprintf(buf, sizeof buf, "%s%u:%02u", sign, (unsigned)(u / 60), (unsigned)(u % 60));
   return mc_strdup(buf);
+}
+
+/* A limit_duration in hours and minutes, a part of a minute counting as one. */
+static char *limit_length(int64_t seconds) {
+  int64_t minutes = (seconds + 59) / 60;
+  if (minutes < 60) return mc_format_alloc(mc_str(MC_STR_DURATION_MINUTES), MC_D(minutes));
+  return mc_format_alloc(mc_str(MC_STR_DURATION_HOURS_MINUTES), MC_D(minutes / 60), MC_D(minutes % 60));
 }
 
 /* A Unix ms time as a date in local time. */
@@ -1054,6 +1094,11 @@ mc_status mc_smart_describe(mc_library *lib, mc_smart_subject subject, const cha
   if (ok && get_int(yyjson_obj_get(root, "limit"), &limit))
     ok = !!(parts[nparts++] = mc_format_alloc(mc_str_plural(tracks ? MC_STR_TRACKS : MC_STR_COUNT_ALBUMS, (long)limit),
                                               MC_D(limit)));
+  if (ok && get_int(yyjson_obj_get(root, "limit_duration"), &limit)) {
+    char *length = limit_length(limit);
+    ok = length && (parts[nparts++] = fmt1(MC_STR_SMART_LIMIT_OF_MUSIC, MC_S(length)));
+    free(length);
+  }
   yyjson_doc_free(doc);
 
   const char *sep = mc_str(MC_STR_SEPARATOR_DOT);
@@ -1078,6 +1123,32 @@ mc_status mc_smart_describe(mc_library *lib, mc_smart_subject subject, const cha
 }
 
 /* --- Saved lists --- */
+
+/* The example lists library.c's v10 seeds, and what each is called in the language in use. */
+static const struct {
+  const char *uid, *seeded;
+  enum mc_str_id name;
+} k_examples[] = {
+  {"5e1ec7ed-0000-4000-8000-000000000001", "Recently added", MC_STR_SMART_PRESET_RECENT},
+  {"5e1ec7ed-0000-4000-8000-000000000002", "Most played", MC_STR_SMART_EXAMPLE_MOST_PLAYED},
+  {"5e1ec7ed-0000-4000-8000-000000000003", "Never played", MC_STR_SMART_EXAMPLE_NEVER_PLAYED},
+  {"5e1ec7ed-0000-4000-8000-000000000004", "Recently added albums", MC_STR_SMART_PRESET_RECENT_ALBUMS},
+  {"5e1ec7ed-0000-4000-8000-000000000005", "Random albums", MC_STR_SMART_EXAMPLE_RANDOM_ALBUMS},
+};
+
+const char *mc_smart_shown_name(const char *uid, const char *name) {
+  for (size_t i = 0; uid && name && i < sizeof k_examples / sizeof k_examples[0]; i++)
+    if (!strcmp(uid, k_examples[i].uid) && !strcmp(name, k_examples[i].seeded)) return mc_str(k_examples[i].name);
+  return name;
+}
+
+void mc_smart_sql_shown_name(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  const char *name = mc_smart_shown_name((const char *)sqlite3_value_text(argv[0]),
+                                         (const char *)sqlite3_value_text(argv[1]));
+  if (name) sqlite3_result_text(ctx, name, -1, SQLITE_TRANSIENT);
+  else sqlite3_result_null(ctx);
+}
 
 static int parse_subject(const unsigned char *s, mc_smart_subject *out) {
   for (int i = 0; s && i <= MC_SMART_ALBUMS; i++)
@@ -1311,7 +1382,8 @@ mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list *
   if (!list) return MC_ERR_NOMEM;
   sqlite3_stmt *stmt = NULL;
   mc_status st = MC_OK;
-  if (sqlite3_prepare_v2(lib->db, "SELECT uid, name, subject, rule FROM smart_lists ORDER BY name COLLATE NOCASE, uid",
+  if (sqlite3_prepare_v2(lib->db, "SELECT uid, mc_smart_name(uid, name) AS shown, subject, rule FROM smart_lists"
+                         " ORDER BY shown COLLATE NOCASE, uid",
                          -1, &stmt, NULL) != SQLITE_OK)
     st = MC_ERR_DB;
   int cap = 0, rc = SQLITE_DONE;

@@ -53,7 +53,8 @@ typedef struct mc_smart_list {
   int hidden; /* smart lists MC_LIST_PLAYABLE left out */
 } mc_smart_list;
 
-/* Every smart list of either subject, by name. With MC_LIST_PLAYABLE (library.h) in flags,
+/* Every smart list of either subject, by name (an example list every library starts with goes
+ * by its name in the language in use until renamed). With MC_LIST_PLAYABLE (library.h) in flags,
  * each rule is evaluated, and a list is left out if what it picks has no file here (a smart
  * playlist's tracks, a smart album group's albums) or its rule can't be evaluated
  * (MC_ERR_FORMAT, e.g. from a newer app). One that picks nothing in the whole library is kept,

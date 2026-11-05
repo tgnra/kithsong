@@ -364,6 +364,7 @@ static mc_status load(sqlite3 *db, mc_search_index *ix, mc_search_kind kind, con
         else if (strcmp(subject, "albums") == 0) k = MC_SEARCH_ALBUM_GROUP;
         else break;
       }
+      if (subject) name = mc_smart_shown_name(uid, name);
       ok = add_item(ix, k, subject != NULL, uid, name, NULL, NULL, NULL, NULL);
       break;
     }

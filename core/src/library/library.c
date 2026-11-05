@@ -511,7 +511,9 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
                               sql_shuffle_key, NULL, NULL) != SQLITE_OK ||
       sqlite3_create_function(lib->db, "mc_credit_uid", 2,
                               SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
-                              sql_credit_uid, NULL, NULL) != SQLITE_OK) {
+                              sql_credit_uid, NULL, NULL) != SQLITE_OK ||
+      sqlite3_create_function(lib->db, "mc_smart_name", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
+                              mc_smart_sql_shown_name, NULL, NULL) != SQLITE_OK) {
     st = MC_ERR_DB;
     goto fail;
   }
@@ -1610,7 +1612,7 @@ mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc
   /* Each kind joins only its own table, so an entry whose item is gone, or of a kind this
    * version doesn't know, matches nothing and is left out. */
   static const char sql[] =
-    "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, s.name, st.title),"
+    "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, mc_smart_name(s.uid, s.name), st.title),"
     " coalesce(al.artist_credit, aar.name), s.uid IS NOT NULL,"
     " (p.uid IS NULL OR NOT EXISTS (SELECT 1 FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
     "  OR EXISTS (SELECT 1 FROM playlist_entries e JOIN files f ON f.track_uid = e.track_uid"

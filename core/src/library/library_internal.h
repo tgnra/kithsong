@@ -157,6 +157,12 @@ mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_l
 mc_status mc_smart_has_playable(mc_library *lib, const char *smart_uid, int *out);
 mc_status mc_smart_listed_here(mc_library *lib, const char *smart_uid, int *out);
 
+/* What smart list uid called name is shown as: an example list that hasn't been renamed goes
+ * by its name in the language in use, as the row holds English on every device. Static, or
+ * name; the SQL function mc_smart_name(uid, name) is the same. In smartlist.c. */
+const char *mc_smart_shown_name(const char *uid, const char *name);
+void mc_smart_sql_shown_name(sqlite3_context *ctx, int argc, sqlite3_value **argv);
+
 /* Any one file of album alias a, which finds the album's folder; originals first. */
 #define MC_ALBUM_FILE(a)                                                             \
   "(SELECT f.path FROM tracks t2 JOIN files f ON f.track_uid = t2.uid"              \

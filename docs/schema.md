@@ -762,6 +762,11 @@ into a mix of both. The API is in `musiccore/smartlist.h`, and the evaluator in
   - `mc_smart_reshuffle()` stores a new seed.
 - **`limit`** (optional) is a positive integer. It applies after the order, so
   `"order": [{"field": "plays"}], "limit": 10` is the 10 least played.
+- **`limit_duration`** (optional, not beside `limit`) is a positive number of seconds: "an
+  hour of music" is `3600`. It also applies after the order, keeping tracks or albums while
+  their running total is within it, and stopping at the first that would go over. The first
+  is kept whatever its length, so a limit never empties a list. An album's length is its
+  tracks'.
 
 Fields (`T` for smart playlists, `A` for smart album groups). For albums the value is
 worked out from the album's tracks. A smart playlist never picks the tracks of a continuous

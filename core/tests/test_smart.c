@@ -406,6 +406,13 @@ static void test_examples(mc_library *lib) {
   CHECK(strlen(saved(lib, EXAMPLE(3), MC_SMART_TRACKS)) == strlen("Something|Words"));
   CHECK_STR(saved(lib, EXAMPLE(4), MC_SMART_ALBUMS), "Arrival|Abbey Road");
   CHECK(strlen(saved(lib, EXAMPLE(5), MC_SMART_ALBUMS)) == strlen("Abbey Road|Arrival"));
+  /* Their names come from the strings, unless they've been renamed. */
+  CHECK(mc_smart_shown_name(EXAMPLE(2), "Most played") == mc_str(MC_STR_SMART_EXAMPLE_MOST_PLAYED));
+  CHECK(mc_smart_shown_name(EXAMPLE(4), "Recently added albums") == mc_str(MC_STR_SMART_PRESET_RECENT_ALBUMS));
+  CHECK_STR(mc_smart_shown_name(EXAMPLE(2), "Mine"), "Mine");
+  CHECK_STR(mc_smart_shown_name("another-uid", "Most played"), "Most played");
+  CHECK(query_int(mc_library_db(lib), "SELECT mc_smart_name('5e1ec7ed-0000-4000-8000-000000000001', 'Recently added')"
+                                      " = 'Recently added'") == 1);
 #undef EXAMPLE
   lib->applying_remote = 1;
   CHECK(exec(mc_library_db(lib), "DELETE FROM smart_lists") == SQLITE_OK);
@@ -711,6 +718,62 @@ static void test_count(mc_library *lib) {
 /* Artist conditions hold of the credit as shown or of any of its artists: Abba featured on
  * Something, and on Abbey Road's credit, is an artist of both, and of Come Together, which
  * has no artist but its album's. Last, as it changes the data. */
+/* limit_duration: the rule's picks, in its order, up to a running total. */
+static void test_limit_duration(mc_library *lib) {
+  mc_track_list *all = NULL;
+  CHECK(mc_smart_preview_tracks(lib, "{\"v\":1,\"order\":[{\"field\":\"title\"}]}", &all) == MC_OK);
+  CHECK(all && all->count >= 3);
+  int64_t first = all->items[0].duration_ms / 1000, second = all->items[1].duration_ms / 1000;
+  char rule[256], both[1024], unlimited_titles[1024];
+  const char *whole = both, *unlimited = unlimited_titles;
+  snprintf(both, sizeof both, "%s|%s", all->items[0].title, all->items[1].title);
+  /* Exactly the first two, then a second short of that. */
+  snprintf(rule, sizeof rule, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit_duration\":%lld}",
+           (long long)(first + second));
+  CHECK_STR(tracks(lib, rule), whole);
+  int count = -1;
+  CHECK(mc_smart_count(lib, MC_SMART_TRACKS, rule, &count) == MC_OK);
+  CHECK(count == 2);
+  snprintf(rule, sizeof rule, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit_duration\":%lld}",
+           (long long)(first + second - 1));
+  CHECK_STR(tracks(lib, rule), all->items[0].title);
+  /* One second keeps the first, however long it is. */
+  CHECK_STR(tracks(lib, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit_duration\":1}"), all->items[0].title);
+  mc_track_list_free(all);
+  /* What's bound in the match and the order stays in the right place around each other. */
+  snprintf(unlimited_titles, sizeof unlimited_titles, "%s",
+           tracks(lib, "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"contains\",\"value\":\"o\"},"
+                       "\"order\":[{\"field\":\"random\",\"seed\":7}]}"));
+  CHECK_STR(tracks(lib, "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"contains\",\"value\":\"o\"},"
+                        "\"order\":[{\"field\":\"random\",\"seed\":7}],\"limit_duration\":1000000}"),
+            unlimited);
+  /* An album counts as its tracks' total. */
+  CHECK_STR(albums(lib, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit_duration\":1}"), "Abbey Road");
+  CHECK_STR(albums(lib, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit_duration\":1000000}"), "Abbey Road|Arrival|Low Singles");
+  /* It's one limit or the other, a whole number of seconds. */
+  CHECK(mc_smart_validate(MC_SMART_TRACKS, "{\"v\":1,\"limit\":5,\"limit_duration\":60}") == MC_ERR_FORMAT);
+  CHECK(mc_smart_validate(MC_SMART_TRACKS, "{\"v\":1,\"limit_duration\":0}") == MC_ERR_FORMAT);
+  CHECK(mc_smart_validate(MC_SMART_TRACKS, "{\"v\":1,\"limit_duration\":\"1\"}") == MC_ERR_FORMAT);
+  /* What the limit keeps decides if it's listed here: Something has no file, the rest do. */
+  char uid[MC_UID_STRLEN];
+  CHECK(mc_smart_create(lib, "Short", MC_SMART_TRACKS,
+                        "{\"v\":1,\"order\":[{\"field\":\"title\",\"dir\":\"desc\"}],\"limit_duration\":1}", uid) == MC_OK);
+  int listed = -1;
+  CHECK(mc_smart_listed_here(lib, uid, &listed) == MC_OK);
+  CHECK(listed == 0);
+  CHECK(mc_smart_set_rule(lib, uid, "{\"v\":1,\"order\":[{\"field\":\"title\"}],\"limit_duration\":1}") == MC_OK);
+  CHECK(mc_smart_listed_here(lib, uid, &listed) == MC_OK);
+  CHECK(listed == 1);
+  CHECK(mc_smart_delete(lib, uid) == MC_OK);
+  char *s = NULL;
+  CHECK(mc_smart_describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"limit_duration\":5400}", &s) == MC_OK);
+  CHECK_STR(s, "All tracks · 1 hr 30 min of music");
+  mc_free(s);
+  CHECK(mc_smart_describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"limit_duration\":1790}", &s) == MC_OK);
+  CHECK_STR(s, "All albums · 30 min of music");
+  mc_free(s);
+}
+
 static void test_credits(mc_library *lib) {
   CHECK(exec(mc_library_db(lib),
              "UPDATE tracks SET artist_uid = 'ar1', artist_credit = 'The Beatles feat. Abba' WHERE uid = 't2';"
@@ -828,6 +891,7 @@ int main(int argc, char **argv) {
   test_singles(lib);
   test_invalid();
   test_fields();
+  test_limit_duration(lib);
   test_examples(lib);
   test_saved(lib);
   test_describe(lib);
