@@ -582,10 +582,38 @@ static int album_of(merge_ctx *x, const char *track, char out[MC_UID_STRLEN]) {
   return lookup_uid(x->db, "SELECT album_uid FROM tracks WHERE uid = ?1", track, out);
 }
 
-/* A track of the copy with no file here: only its id can tie it to the kept library's. */
-static void map_unheld(merge_ctx *x, const old_track *o) {
+/* The kept library's track on album with the id or, with the id NULL, the name of o: 1 if found.
+ * Names as for the duplicates check, exact after mc_name_key(). */
+static int track_on_album(merge_ctx *x, const char *album, const old_track *o, int by_id,
+                          char uid[MC_UID_STRLEN]) {
+  uid[0] = '\0';
+  const char *key = by_id ? o->mb_releasetrackid : o->title;
+  sqlite3_stmt *stmt;
+  if (!key || !*key ||
+      sqlite3_prepare_v2(x->db,
+                         by_id ? "SELECT uid FROM tracks WHERE album_uid = ?1"
+                                 " AND mb_releasetrackid = ?2 ORDER BY uid"
+                               : "SELECT uid FROM tracks WHERE album_uid = ?1"
+                                 " AND mc_name_key(title) = mc_name_key(?2) ORDER BY uid",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return 0;
+  sqlite3_bind_text(stmt, 1, album, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, key, -1, SQLITE_STATIC);
+  if (sqlite3_step(stmt) == SQLITE_ROW) col_uid(stmt, 0, uid);
+  sqlite3_finalize(stmt);
+  return uid[0] != '\0';
+}
+
+/* A track of the copy with no file here. Nothing of it can come in, as no device of the group
+ * holds it (it's on the devices of the old group, if any), but the lists can still follow it to
+ * the kept library's track: on the album the rest of it matched (album, may be ""), by its id
+ * then its name, or anywhere by its recording or release track. */
+static void map_unheld(merge_ctx *x, const old_track *o, const char *album) {
   char uid[MC_UID_STRLEN];
-  if (lookup_uid(x->db, "SELECT uid FROM tracks WHERE mb_releasetrackid = ?1 ORDER BY uid",
+  if ((album[0] && (track_on_album(x, album, o, 1, uid) || track_on_album(x, album, o, 0, uid))) ||
+      lookup_uid(x->db, "SELECT uid FROM tracks WHERE mb_trackid = ?1 ORDER BY uid", o->mb_trackid,
+                 uid) ||
+      lookup_uid(x->db, "SELECT uid FROM tracks WHERE mb_releasetrackid = ?1 ORDER BY uid",
                  o->mb_releasetrackid, uid)) {
     map_put(&x->tracks, o->uid, uid);
     x->r->tracks_mapped++;
@@ -746,9 +774,13 @@ static void merge_album_tracks(merge_ctx *x, const old_album *a, old_track *t, i
     free(in);
     free(src);
   }
+  /* An album with no file here has only its release to go by. */
+  if (!album_uid[0] && !a->no_album)
+    lookup_uid(x->db, "SELECT uid FROM albums WHERE mb_albumid = ?1 ORDER BY uid", a->mb_albumid,
+               album_uid);
   for (int i = 0; i < n; i++)
     if (!t[i].held) {
-      map_unheld(x, &t[i]);
+      map_unheld(x, &t[i], album_uid);
       const char *to = map_get(&x->tracks, t[i].uid);
       if (to && !album_uid[0]) album_of(x, to, album_uid);
     }

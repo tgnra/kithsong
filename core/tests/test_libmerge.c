@@ -239,7 +239,9 @@ static void test_merge(const char *root) {
   track mapped = {"Low", "Things", "rel-things", "Elsewhere", "rt-elsewhere", 2, 0, "", "", ""};
   track lost = {"Home", "Tapes", NULL, "Lost", NULL, 2, 0, "", "", ""};
   track named = {"The Hopes", "Near, Far", NULL, "Road Song!", NULL, 1, 1, "", "", ""};
+  track by_name = {"The Hopes", "Near, Far", NULL, "Second Song!", NULL, 2, 0, "", "", ""};
   add_track(lib, &named, 5);
+  add_track(lib, &by_name, 0);
   add_track(lib, &better, 1);
   add_track(lib, &same, 2);
   add_track(lib, &nocopy, 3);
@@ -330,7 +332,7 @@ static void test_merge(const char *root) {
    * playlist called Road. */
   {
     char k_ar[] = "a0000000-0000-7000-8000-00000000000a";
-    char sql2[2048];
+    char sql2[4096];
     snprintf(sql2, sizeof sql2,
              "INSERT INTO artists (uid, name) VALUES ('%s', 'Low');"
              "INSERT INTO albums (uid, title, artist_uid, mb_albumid) VALUES"
@@ -353,7 +355,9 @@ static void test_merge(const char *root) {
              " ('a1000000-0000-7000-8000-000000000004', 'Near Far', 'a0000000-0000-7000-8000-00000000000b');"
              "INSERT INTO tracks (uid, album_uid, artist_uid, title, track_no) VALUES"
              " ('b1000000-0000-7000-8000-000000000005', 'a1000000-0000-7000-8000-000000000004',"
-             "  'a0000000-0000-7000-8000-00000000000b', 'road song', 1);",
+             "  'a0000000-0000-7000-8000-00000000000b', 'road song', 1),"
+             " ('b1000000-0000-7000-8000-000000000006', 'a1000000-0000-7000-8000-000000000004',"
+             "  'a0000000-0000-7000-8000-00000000000b', 'second song', 2);",
              k_ar, k_ar, k_ar, k_ar, k_ar, k_ar, k_ar, k_ar);
     lib->applying_remote = 1;
     CHECK(exec(db, sql2) == SQLITE_OK);
@@ -377,14 +381,14 @@ static void test_merge(const char *root) {
   CHECK(mc_libmerge_run(lib, kept, 2, note_progress, NULL, &r) == MC_OK);
   mc_dupes_trash = was;
   CHECK(r.status == MC_OK);
-  /* The bar counts tracks, all seven of the copy, and moves within an album. */
-  CHECK(progress_total == 7 && progress_done == 7 && !progress_back);
+  /* The bar counts tracks, all eight of the copy, and moves within an album. */
+  CHECK(progress_total == 8 && progress_done == 8 && !progress_back);
   CHECK(progress_steps >= 8);
   CHECK(r.tracks_added == 1);    /* Fresh */
   CHECK(r.tracks_better == 1);   /* Better: this WAV beats the kept MP3 */
   CHECK(r.tracks_skipped == 1);  /* Same: the kept FLAC is as good */
   CHECK(r.tracks_attached == 2); /* Unknown and Road Song: the kept copy's quality isn't known */
-  CHECK(r.tracks_mapped == 1);   /* Elsewhere: no file here, but the kept library has it */
+  CHECK(r.tracks_mapped == 2);   /* Elsewhere and Second Song: no file here, but the kept library has them */
   CHECK(r.tracks_left_out == 1); /* Lost: no file, no id */
   CHECK(r.tracks_failed == 0);
   CHECK(trashed == 1);
@@ -399,9 +403,9 @@ static void test_merge(const char *root) {
                       " AND row_uid = 'b1000000-0000-7000-8000-000000000001'") == 1);
   CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE file_rev IS NOT NULL") == 1);
 
-  /* Tracks: the kept five plus Fresh, which keeps its date added. Better and Unknown have
+  /* Tracks: the kept six plus Fresh, which keeps its date added. Better and Unknown have
    * this device's files, attached to the kept tracks; Same's file went to the trash. */
-  CHECK(query_int(db, "SELECT count(*) FROM tracks") == 6);
+  CHECK(query_int(db, "SELECT count(*) FROM tracks") == 7);
   CHECK(query_int(db, "SELECT count(*) FROM albums WHERE title LIKE 'Near%'") == 1);
   CHECK(query_int(db, "SELECT count(*) FROM files WHERE"
                       " track_uid = 'b1000000-0000-7000-8000-000000000005'") == 1);
@@ -497,7 +501,7 @@ static void test_merge(const char *root) {
   /* The set-aside copy is still whole. */
   sqlite3 *old = NULL;
   CHECK(sqlite3_open_v2(backup, &old, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK);
-  CHECK(query_int(old, "SELECT count(*) FROM tracks") == 7);
+  CHECK(query_int(old, "SELECT count(*) FROM tracks") == 8);
   sqlite3_close(old);
 
   /* Album folders the trashed duplicates emptied go, with their artist's if that's empty too. */

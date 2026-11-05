@@ -296,8 +296,12 @@ import would bring it in, except that names match as they do for
       fetches it and its own copy goes, as if the file had been imported there.
     - The kept library has it but no copy whose quality is known (the kept device holds no
       current original): attached, as an import attaches a file to a track held elsewhere.
-    - Tracks of the copy with no file on this device are tied to the kept library's by
-      `mb_releasetrackid` for the lists below; others are left out.
+    - Tracks of the copy with no file on this device can't come in, as no device of the group
+      holds them (they're on its old group's devices, whose libraries come in if they pair
+      with the kept group). They are tied to the kept library's for the lists below: on the
+      album the rest of theirs matched (or its `mb_albumid`), by `mb_releasetrackid` then
+      name, or anywhere by `mb_trackid` or `mb_releasetrackid`. Others are left out, and
+      `on_merge_done` counts them.
   - Playlists, album groups and user smart lists (not the examples) are created anew, their
     entries pointed at the kept library's tracks and albums (entries whose track didn't come
     along are left out), and smart rules' playlist and group uids rewritten. A name the kept
