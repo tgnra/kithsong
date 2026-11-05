@@ -208,12 +208,6 @@ mc_status mc_libmerge_backup_sync(mc_sync_db *sdb, const char *config_dir) {
   return st;
 }
 
-void mc_libmerge_drop_sync_backup(const char *config_dir) {
-  char *dir = config_dir ? join(config_dir, MC_LIBMERGE_SYNC_BACKUP_DIR) : NULL;
-  if (dir) remove_with_part(dir);
-  free(dir);
-}
-
 /* sdb's contents replaced by the copy's at path (brought up to date by the caller), in one
  * unlogged transaction. */
 static mc_status put_back_sync(mc_sync_db *sdb, const char *path) {
@@ -306,6 +300,62 @@ mc_status mc_libmerge_sign_out_brought(mc_library *lib, mc_sync_db *sdb, const c
   return st;
 }
 
+/* In the sync.db l of a leave notice: this device marked removed, logged, as
+ * mc_sync_leave_group() marks it. *others: the members left to tell; none, and nothing is done. */
+static mc_status mark_left(mc_sync_db *l, int *others) {
+  sqlite3 *db = mc_sync_db_handle(l);
+  sqlite3_stmt *stmt;
+  *others = 0;
+  if (sqlite3_prepare_v2(db, "SELECT count(*) FROM devices WHERE removed = 0 AND uid <> ?1", -1,
+                         &stmt, NULL) == SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(l), -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_ROW) *others = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+  }
+  if (*others == 0) return MC_OK;
+  mc_status st = mc_sync_db_begin_write(l);
+  if (st != MC_OK) return st;
+  st = MC_ERR_DB;
+  if (sqlite3_prepare_v2(db, "UPDATE devices SET removed = 1 WHERE uid = ?1", -1, &stmt, NULL) ==
+      SQLITE_OK) {
+    sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(l), -1, SQLITE_STATIC);
+    if (sqlite3_step(stmt) == SQLITE_DONE) st = MC_OK;
+    sqlite3_finalize(stmt);
+  }
+  if (st == MC_OK) st = mc_sync_db_commit(l);
+  if (st != MC_OK) mc_sync_db_rollback(l);
+  return st;
+}
+
+int mc_libmerge_leave_old_group(const char *config_dir) {
+  char *bdir = config_dir ? join(config_dir, MC_LIBMERGE_SYNC_BACKUP_DIR) : NULL;
+  char *ldir = config_dir ? join(config_dir, MC_LIBMERGE_LEAVE_DIR) : NULL;
+  char *bpath = bdir ? join(bdir, MC_SYNC_DB_NAME) : NULL;
+  char *lpath = ldir ? join(ldir, MC_SYNC_DB_NAME) : NULL;
+  int waits = 0;
+  if (bpath && lpath) {
+    char group[MC_UID_STRLEN] = "";
+    waits = mc_file_exists(lpath); /* a pairing undone earlier: that notice goes first */
+    if (!waits && mc_file_exists(bpath) && ready_copy(bdir, group, NULL) == MC_OK && group[0]) {
+      mc_sync_db *l = NULL;
+      int others = 0;
+      mc_status st = mc_sync_db_open(bdir, &l);
+      if (st == MC_OK) st = mark_left(l, &others);
+      mc_sync_db_close(l);
+      if (st == MC_OK && others > 0) {
+        mc_remove_tree(ldir);
+        waits = mc_rename_in_place(bdir, ldir) == MC_OK;
+      }
+    }
+  }
+  if (bdir) remove_with_part(bdir);
+  free(lpath);
+  free(bpath);
+  free(ldir);
+  free(bdir);
+  return waits;
+}
+
 /* The kept group's sync.db, copied to MC_LIBMERGE_LEAVE_DIR with this device marked removed
  * there (logged, as mc_sync_leave_group() marks it), for sync.c to tell a member with. Not
  * made if one is there already, nor if no other member is left to tell. If the group's
@@ -342,27 +392,7 @@ static mc_status make_leave_notice(mc_sync_db *sdb, const char *config_dir,
   if (st == MC_OK && !made) {
     mc_sync_db *l = NULL;
     st = mc_sync_db_open(part, &l);
-    sqlite3 *db = l ? mc_sync_db_handle(l) : NULL;
-    sqlite3_stmt *stmt;
-    if (st == MC_OK && sqlite3_prepare_v2(db,
-                                          "SELECT count(*) FROM devices WHERE removed = 0"
-                                          " AND uid <> ?1",
-                                          -1, &stmt, NULL) == SQLITE_OK) {
-      sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(l), -1, SQLITE_STATIC);
-      if (sqlite3_step(stmt) == SQLITE_ROW) others = sqlite3_column_int(stmt, 0);
-      sqlite3_finalize(stmt);
-    }
-    if (st == MC_OK && others > 0 && (st = mc_sync_db_begin_write(l)) == MC_OK) {
-      st = MC_ERR_DB;
-      if (sqlite3_prepare_v2(db, "UPDATE devices SET removed = 1 WHERE uid = ?1", -1, &stmt,
-                             NULL) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, mc_sync_db_device_uid(l), -1, SQLITE_STATIC);
-        if (sqlite3_step(stmt) == SQLITE_DONE) st = MC_OK;
-        sqlite3_finalize(stmt);
-      }
-      if (st == MC_OK) st = mc_sync_db_commit(l);
-      if (st != MC_OK) mc_sync_db_rollback(l);
-    }
+    if (st == MC_OK) st = mark_left(l, &others);
     if (st == MC_OK && others > 0) st = sign_out_brought(l, session_key);
     mc_sync_db_close(l);
   }

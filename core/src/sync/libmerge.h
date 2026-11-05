@@ -125,8 +125,9 @@ mc_kept_file *mc_libmerge_load_kept(const char *config_dir, int *count);
 #define MC_LIBMERGE_RESTORE_SYNC_META "merge_restore_sync"
 #define MC_LIBMERGE_RESTORED_NAME_META "merge_restored_name"
 /* Folders in the sync config dir, each holding a sync.db: the copy from before the pairing,
- * until the merge has run or been undone; the kept group's, with this device marked removed,
- * until a member has been told. "<name>.part" while one is being written. */
+ * until the merge has run or been undone; a group this device left without telling it, the
+ * kept one after an undone pairing or its old one after a merge, with this device marked
+ * removed, until a member has been told. "<name>.part" while one is being written. */
 #define MC_LIBMERGE_SYNC_BACKUP_DIR "sync-before-merge"
 #define MC_LIBMERGE_LEAVE_DIR "sync-leave-notice"
 
@@ -140,8 +141,12 @@ mc_status mc_libmerge_backup_sync(mc_sync_db *sdb, const char *config_dir);
 /* Puts sync.db back from that copy in place (the caller is still preparing: nothing else
  * has changed) and removes it. MC_ERR_NOT_FOUND if there's none. */
 mc_status mc_libmerge_unprepare_sync(mc_sync_db *sdb, const char *config_dir);
-/* Removes the copy, once the merge has run. */
-void mc_libmerge_drop_sync_backup(const char *config_dir);
+/* Once the merge has run: the copy has nothing left to undo. If the device was in a group
+ * before the pairing, the copy becomes the leave notice, with this device marked removed there,
+ * so that group's members stop waiting for it; else it's removed. 1 if a notice waits to be sent
+ * (sync.c sends it). One from a pairing undone earlier that still waits is left as it is, and
+ * the old group isn't told. */
+int mc_libmerge_leave_old_group(const char *config_dir);
 /* Leaving the kept group while the merge waits: if the group's scrobbling account is still
  * the one this device brought into it (only this device was signed in, so pairing made its
  * account the group's), it's signed out in sdb, logged, so the group hears of it with the

@@ -730,6 +730,16 @@ int main(int argc, char **argv) {
     snprintf(sql, sizeof sql, "SELECT count(*) FROM devices WHERE uid = '%s'", e.uid);
     CHECK(group_int(&d, sql) == 0);
     CHECK(group_int(&d, "SELECT count(*) FROM devices WHERE removed = 0") == 2);
+    /* E hears of it now the merge has run, and stops waiting for D. */
+    snprintf(sql, sizeof sql, "SELECT removed FROM devices WHERE uid = '%s'", d.uid);
+    CHECK(wait_group_int(&e, sql, 1));
+    char notice[1200];
+    config_path(&d, MC_LIBMERGE_LEAVE_DIR, notice, sizeof notice);
+    CHECK(wait_gone(notice));
+    config_path(&d, MC_LIBMERGE_SYNC_BACKUP_DIR, notice, sizeof notice);
+    CHECK(!mc_file_exists(notice));
+    /* It's still in D's own group. */
+    CHECK(group_int(&d, "SELECT count(*) FROM local WHERE group_uid IS NOT NULL") == 1);
     /* D's account (and its queued play) stay, and become C's. */
     CHECK(group_int(&d, "SELECT count(*) FROM scrobble_queue") == 1);
     CHECK(sync_now(&d, &c) == MC_OK);

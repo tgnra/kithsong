@@ -393,8 +393,15 @@ static int run_pending_merge(mc_sync *sync, mc_sync_conn *c, const mc_sync_resul
   mc_libmerge_pending(c->lib, &backup);
   mc_merge_result r;
   mc_libmerge_run(c->lib, kept, nkept, emit_merge_progress, sync, &r);
-  /* Merged: sync.db's copy from before the pairing has nothing left to undo. */
-  if (!mc_libmerge_pending(c->lib, NULL)) mc_libmerge_drop_sync_backup(sync->config_dir);
+  /* Merged: sync.db's copy from before the pairing has nothing left to undo, and the group
+   * in it, if any, can be told this device has gone. */
+  if (!mc_libmerge_pending(c->lib, NULL) && mc_libmerge_leave_old_group(sync->config_dir)) {
+    mc_mutex_lock(&sync->lock);
+    sync->leave_pending = 1;
+    sync->leave_next_ms = 0;
+    mc_cond_broadcast(&sync->cond);
+    mc_mutex_unlock(&sync->lock);
+  }
   r.backup_path = backup ? backup : "";
   r.scrobble_signed_out = signed_out;
   r.scrobbles_sent = sent;
@@ -1400,7 +1407,7 @@ static int load_members(mc_sync_conn *c, member_row **out) {
   return n;
 }
 
-/* --- Telling the kept group of a pairing undone (librestore.c) --- */
+/* --- Telling a group this device left in a pairing that merged (librestore.c) --- */
 
 /* uid's key, if it's a member in c's sync.db. */
 static int member_key(mc_sync_conn *c, const char *uid, unsigned char key[MC_SYNC_KEY_LEN]) {
@@ -1494,7 +1501,7 @@ static int send_leave_notice(mc_sync *sync) {
   mc_sync_conn_close(&c);
   if (done) {
     mc_remove_tree(dir);
-    fprintf(stderr, "musiccore: merge: the group the pairing was undone with knows it's left\n");
+    fprintf(stderr, "musiccore: merge: the group this device left knows it's gone\n");
   }
   free(dir);
   free(path);

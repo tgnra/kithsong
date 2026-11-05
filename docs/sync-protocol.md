@@ -227,9 +227,12 @@ import would bring it in, except that names match as they do for
 - **Preparing** (the merged device, after the code, before it applies the pairing):
   1. If it is in a group, it forgets it as a removed device does (`mc_sync_db_clear_group()`,
      no message to anyone): its paired devices, their profiles and status are deleted
-     from its `sync.db`. They have to pair again, with the kept group, to sync with it; to
-     them it looks like a device that no longer answers. `on_pair_merge` lists their
-     names first so the user is warned.
+     from its `sync.db`. They have to pair again, with the kept group, to sync with it.
+     `on_pair_merge` lists their names first so the user is warned. Once the merge has run
+     they're told: the copy of `sync.db` from before the pairing becomes a leave notice, as
+     in "Abandoning a merge" below, with this device marked removed, and a session from it
+     tells one member. Until then the pairing can still be undone, and to them it looks
+     like a device that doesn't answer.
   2. Scrobbling. If both devices are signed in, the merged device's account is signed out:
      one attempt is made to send its queued plays under that account (batches until one
      fails, no retry), then the account row, its changelog rows and whatever is still
@@ -307,8 +310,8 @@ import would bring it in, except that names match as they do for
   - Recents: albums, artists (by MusicBrainz id, then name), playlists, groups and stations
     (by their seed tracks) mapped, a newer `opened_ms` than the kept library's winning. An app
     from before stations leaves them out here, as it does any kind it doesn't know.
-  - Then `meta.merge_source` is cleared, `on_merge_done` reports what happened, and members
-    are told of the change. Until then the merged device's file phase fetches and deletes
+  - Then `meta.merge_source` is cleared, `on_merge_done` reports what happened, members are
+    told of the change, and so is the old group, if any (see Preparing, step 1). Until then the merged device's file phase fetches and deletes
     nothing (its files have no `files` rows yet, so reconcile would take them for unknown
     files). If the app stops first, the merge runs after the next session that syncs the
     library.
