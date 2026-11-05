@@ -233,11 +233,12 @@ static void enqueue(sqlite3 *lib, sqlite3 *db, const request *r) {
   if (find_track(lib, r->track_uid, &track) &&
       sqlite3_prepare_v2(db,
                          "INSERT INTO scrobble_queue (played_at_s, artist, track, album,"
-                         " album_artist, track_no, duration_s, mb_trackid)"
-                         " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7 / 1000, ?8)",
+                         " album_artist, track_no, duration_s, mb_trackid, track_uid)"
+                         " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7 / 1000, ?8, ?9)",
                          -1, &ins, NULL) == SQLITE_OK) {
     sqlite3_bind_int64(ins, 1, r->started_ms / 1000);
     for (int i = 0; i < 7; i++) sqlite3_bind_value(ins, i + 2, sqlite3_column_value(track, i));
+    sqlite3_bind_text(ins, 9, r->track_uid, -1, SQLITE_STATIC);
     if (sqlite3_step(ins) != SQLITE_DONE)
       fprintf(stderr, "musiccore: couldn't queue a scrobble: %s\n", sqlite3_errmsg(db));
   }
@@ -247,6 +248,30 @@ static void enqueue(sqlite3 *lib, sqlite3 *db, const request *r) {
 
 static const char *text(sqlite3_stmt *stmt, int col) {
   return (const char *)sqlite3_column_text(stmt, col);
+}
+
+/* Takes off the queue the plays of tracks whose album was flagged no_scrobble after they were
+ * queued. A track gone from the library says nothing, and its play still goes. */
+static void drop_flagged(sqlite3 *lib, sqlite3 *db) {
+  sqlite3_stmt *plays = NULL, *flagged = NULL, *del = NULL;
+  if (sqlite3_prepare_v2(db, "SELECT seq, track_uid FROM scrobble_queue WHERE track_uid IS NOT NULL",
+                         -1, &plays, NULL) == SQLITE_OK &&
+      sqlite3_prepare_v2(lib, "SELECT al.no_scrobble FROM tracks t JOIN albums al ON al.uid = t.album_uid"
+                              " WHERE t.uid = ?1", -1, &flagged, NULL) == SQLITE_OK &&
+      sqlite3_prepare_v2(db, "DELETE FROM scrobble_queue WHERE seq = ?1", -1, &del, NULL) == SQLITE_OK) {
+    while (sqlite3_step(plays) == SQLITE_ROW) {
+      sqlite3_bind_text(flagged, 1, text(plays, 1), -1, SQLITE_TRANSIENT);
+      if (sqlite3_step(flagged) == SQLITE_ROW && sqlite3_column_int(flagged, 0)) {
+        sqlite3_bind_int64(del, 1, sqlite3_column_int64(plays, 0));
+        sqlite3_step(del);
+        sqlite3_reset(del);
+      }
+      sqlite3_reset(flagged);
+    }
+  }
+  sqlite3_finalize(plays);
+  sqlite3_finalize(flagged);
+  sqlite3_finalize(del);
 }
 
 static mc_status now_playing(sqlite3 *lib, const mc_lastfm_service *svc, const char *uid) {
@@ -432,6 +457,7 @@ static void run(void *arg) {
       }
       if (sending && st != MC_ERR_AUTH && mc_mono_ms() >= next_try && !quitting(sc)) {
         int progress = 1;
+        drop_flagged(lib, db);
         while (progress && (st = submit(db, &svc, &batch, &progress)) == MC_OK && !quitting(sc)) {
         }
         called = 1;
@@ -482,13 +508,14 @@ int mc_scrobble_signed_in(sqlite3 *db, char **username) {
   return in;
 }
 
-mc_status mc_scrobble_flush_once(sqlite3 *db, int *sent, int *left) {
+mc_status mc_scrobble_flush_once(sqlite3 *lib, sqlite3 *db, int *sent, int *left) {
   if (sent) *sent = 0;
   if (left) *left = 0;
-  if (!db) return MC_ERR_INVALID_ARG;
+  if (!lib || !db) return MC_ERR_INVALID_ARG;
   account acc;
   mc_status st = account_read(db, &acc);
   if (st != MC_OK) return st;
+  drop_flagged(lib, db);
   int before = queue_count(db);
   if (!acc.session_key) {
     st = MC_ERR_AUTH;

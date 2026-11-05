@@ -60,6 +60,9 @@ static const char *const k_migrations[] = {
    * file phase runs only while its profile still has that fingerprint (see "Confirming
    * profiles" in docs/sync-protocol.md). */
   "ALTER TABLE devices ADD COLUMN confirmed_profile TEXT;",
+  /* v6: a queued play says which track it was, so that flagging its album no_scrobble before
+   * it's sent stops it. */
+  "ALTER TABLE scrobble_queue ADD COLUMN track_uid TEXT;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 

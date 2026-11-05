@@ -73,8 +73,8 @@ a separate `sync.db` in the per-device config dir. See
 [core/src/sync/sync_schema_v1.sql](../core/src/sync/sync_schema_v1.sql), plus the migrations in
 [core/src/sync/sync_db.c](../core/src/sync/sync_db.c): v2 (`devices.host`,
 `capabilities.addresses`, and the local-only `peer_contact`), v3 (`profiles.name`), v4
-(`scrobble_account`, and the local-only `scrobble_queue`) and v5
-(`devices.confirmed_profile`). Removing an album or artist from one device needed no
+(`scrobble_account`, and the local-only `scrobble_queue`), v5
+(`devices.confirmed_profile`) and v6 (`scrobble_queue.track_uid`). Removing an album or artist from one device needed no
 migration: it's a `profile_items` row of a new kind, `exclude_album` or `exclude_artist`
 (see [Removing from one device](sync-protocol.md#removing-from-one-device)), which older
 versions keep and ignore. A track's delete taken back out of the recycle bin is the same
@@ -153,8 +153,9 @@ What an album's tags can't say, set by hand (`mc_album_flags_set()`, `musiccore/
 never written to its files. They sync as logged fields of the album.
 
 - `albums.no_scrobble`, 0 or 1: its tracks are never scrobbled nor sent as now playing, whichever
-  frontend plays them; the scrobbler decides when it looks the track up, so a play queued
-  before the flag was set still goes. Plays are still counted.
+  frontend plays them; the scrobbler decides when it looks the track up, and again before it
+  sends what's queued, so a play waiting there when the flag is set doesn't go. Plays are still
+  counted.
 - `albums.mix`: a continuous mix, one piece of music split into tracks, or in one long track
   (a DJ mix). Its tracks aren't search results: a query matching one finds the album
   instead, once, scored as the best of the album and its tracks. An artist's page doesn't list

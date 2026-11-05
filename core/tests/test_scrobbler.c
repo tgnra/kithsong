@@ -426,6 +426,18 @@ int main(int argc, char **argv) {
   CHECK_STR(name, "tania");
   mc_free(name);
 
+  /* A play waiting in the queue when its album is flagged doesn't go; the others do. */
+  set(&answer, ANSWER_RATE_LIMIT);
+  CHECK(mc_scrobbler_scrobble(sc, T_QUIET, now) == MC_OK);
+  CHECK(wait_status(sc, 1, MC_ERR_NET, 2000));
+  quiet.no_scrobble = 1;
+  CHECK(mc_album_flags_set(lib, "al2", &quiet) == MC_OK);
+  set(&answer, ANSWER_OK);
+  CHECK(mc_scrobbler_set_service(sc, "https://scrobble.invalid/2.0/",
+                                 "https://scrobble.invalid/auth/", "key", "secret") == MC_OK);
+  CHECK(wait_status(sc, 0, MC_OK, 2000));
+  CHECK(get(&scrobbled) == 3);
+
   /* Plays are sent fifty at a time. */
   set(&answer, ANSWER_RATE_LIMIT);
   for (int i = 0; i < 60; i++) CHECK(mc_scrobbler_scrobble(sc, T_OK, now + i * 1000) == MC_OK);

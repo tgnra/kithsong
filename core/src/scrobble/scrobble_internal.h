@@ -14,8 +14,9 @@ int mc_scrobble_signed_in(sqlite3 *db, char **username);
 
 /* One attempt to send every play in db's scrobble_queue under db's account: batches until
  * the queue is empty or a call fails (no retries, no backoff). Plays sent are taken off the
- * queue. *sent and *left (either may be NULL) say how many went and how many are still
- * queued. MC_ERR_AUTH if not signed in; otherwise the status of the call that failed. */
-mc_status mc_scrobble_flush_once(sqlite3 *db, int *sent, int *left);
+ * queue, and first those of albums lib now has flagged no_scrobble, which don't count as sent.
+ * *sent and *left (either may be NULL) say how many went and how many are still queued.
+ * MC_ERR_AUTH if not signed in; otherwise the status of the call that failed. */
+mc_status mc_scrobble_flush_once(sqlite3 *lib, sqlite3 *db, int *sent, int *left);
 
 #endif

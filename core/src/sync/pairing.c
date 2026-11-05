@@ -595,7 +595,7 @@ static mc_status prepare_merge(mc_sync *sync, mc_sync_conn *c, const side *me, c
    * were played under: one try to send them (before the copy, so that undoing the pairing
    * doesn't send them twice), and what's left is dropped. */
   int left = 0;
-  if (signed_in && peer->scrobbling) mc_scrobble_flush_once(db, &m->sent, &left);
+  if (signed_in && peer->scrobbling) mc_scrobble_flush_once(mc_library_db(c->lib), db, &m->sent, &left);
   mc_status st = mc_libmerge_backup_sync(c->sdb, sync->config_dir);
   /* Its paired devices are forgotten: they must pair again, with the kept group. */
   if (st == MC_OK && mc_sync_db_group_uid(c->sdb)) {
