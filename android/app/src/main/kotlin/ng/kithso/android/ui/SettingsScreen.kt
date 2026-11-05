@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +66,8 @@ import ng.kithso.android.AppSettings
 import ng.kithso.android.KithsongApp
 import ng.kithso.core.NativeCore
 import ng.kithso.android.R
+import ng.kithso.android.data.CoreLibrarySource
+import ng.kithso.android.importer.AnalysisWorker
 import coil3.SingletonImageLoader
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -111,6 +114,10 @@ fun SettingsScreen(
                         inOrder = on
                     },
                 )
+            }
+
+            ((context.applicationContext as KithsongApp).library as? CoreLibrarySource)?.let { source ->
+                item(key = "analysis") { AnalysisSettings(source) }
             }
 
             item(key = "scrobbling") {
@@ -206,6 +213,42 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+/**
+ * How many tracks here aren't analysed, and Analyse, which asks for a run the next time the phone
+ * charges. A phone doesn't scan by itself ([AnalysisWorker]), so this is the way to go on with
+ * tracks that nothing else will: what a desktop won't send it, say.
+ */
+@Composable
+private fun AnalysisSettings(source: CoreLibrarySource) {
+    val context = LocalContext.current
+    val waiting by produceState<Int?>(null) { value = source.analysisWaiting() }
+    val count = waiting ?: return
+    var asked by rememberSaveable { mutableStateOf(false) }
+    SettingsHeading(stringResource(R.string.analysis_heading))
+    ListItem(
+        headlineContent = {
+            Text(
+                if (count > 0) pluralStringResource(R.plurals.analysis_left, count, count)
+                else stringResource(R.string.analysis_none_left),
+            )
+        },
+        supportingContent = if (count > 0) {
+            { Text(stringResource(if (asked) R.string.analysis_asked else R.string.analysis_charging)) }
+        } else null,
+        trailingContent = if (count > 0) {
+            {
+                TextButton(
+                    onClick = {
+                        AnalysisWorker.schedule(context)
+                        asked = true
+                    },
+                    enabled = !asked,
+                ) { Text(stringResource(R.string.analysis_run)) }
+            }
+        } else null,
+    )
 }
 
 /**

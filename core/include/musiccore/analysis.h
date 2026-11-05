@@ -84,8 +84,8 @@ double mc_analysis_distance(const mc_analysis *a, const mc_analysis *b,
  * at a time, on a low-priority thread of its own with a connection of its own. It has no state
  * but the results: stopped at any point, it goes on from there next time. While paced it only
  * works on AC power, and it always stands aside while a sync session or an import runs. Android
- * keeps no scanner running, for the battery: results reach it by sync, and after an import it
- * asks for one run while charging, paced, with nothing shown. */
+ * keeps no scanner running, for the battery: results reach it by sync, and after an import, or
+ * from Settings, it asks for one run while charging, paced, with nothing shown. */
 typedef struct mc_analysis_scanner mc_analysis_scanner;
 
 /* How a scanner is doing, for a frontend to poll. */

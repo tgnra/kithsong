@@ -448,8 +448,9 @@ where no battery is known of. On Linux it's `/sys/class/power_supply`: any Mains
 online is AC, as is having no battery at all (desktops, containers) or a folder that can't be read,
 and supplies with `scope` Device, a wireless mouse's say, don't count. In doubt it's AC.
 
-A phone runs the scanner in one case only: an import that added tracks there asks for one run,
-as they may be on no desktop to analyse them. `AnalysisWorker` is one-off WorkManager work that
+A phone runs the scanner in two cases only: an import that added tracks there asks for one run,
+as they may be on no desktop to analyse them, and so does Analyse in Settings' Audio analysis
+section, which says how many tracks are waiting. `AnalysisWorker` is one-off WorkManager work that
 needs a charger, unique with `REPLACE`: it has no list, so replacing loses nothing, while a run
 under way may be past where the new tracks are. It calls `mc_analysis_scanner_start_once()`, the
 same scanner on its own thread and connection, holds included, but going at once and leaving

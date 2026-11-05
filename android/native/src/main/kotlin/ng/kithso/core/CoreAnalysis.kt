@@ -36,12 +36,16 @@ class CoreAnalysis(dir: String) {
     }
 }
 
+/** The tracks a run would go through now: those with a file here and no valid result. */
+fun CoreLibrary.analysisPending(): Int = AnalysisNatives.nativePending(handle)
+
 internal object AnalysisNatives {
     init {
         System.loadLibrary("kithsong_jni")
     }
 
     @JvmStatic external fun nativeStart(dir: String): Long
+    @JvmStatic external fun nativePending(library: Long): Int
     @JvmStatic external fun nativeState(handle: Long): Int
     @JvmStatic external fun nativeStop(handle: Long)
 }

@@ -24,7 +24,8 @@ import ng.kithso.core.MusicCoreException
  * Analyses what an import brought, the next time the phone is charging. A phone doesn't scan by
  * itself, for the battery: results come by sync from a desktop that holds the music. But music
  * imported here may have no such desktop, so an import that added tracks asks for one run of
- * this ([schedule]). Nothing else does: there's no periodic work and no scan at start.
+ * this ([schedule]), and so does Settings' Analyse, for what an import didn't leave a run for.
+ * Nothing else does: there's no periodic work and no scan at start.
  *
  * It has no list of tracks. The core works through those with a file here and no valid result,
  * so whatever sync delivered in the meantime is skipped, and it stands aside by itself during

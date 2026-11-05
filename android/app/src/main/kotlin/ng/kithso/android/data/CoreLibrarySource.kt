@@ -27,6 +27,7 @@ import ng.kithso.core.createAlbumGroup
 import ng.kithso.core.createPlaylist
 import ng.kithso.core.credit
 import ng.kithso.core.BinEntry
+import ng.kithso.core.analysisPending
 import ng.kithso.core.binEntries as coreBinEntries
 import ng.kithso.core.deleteAlbumGroup
 import ng.kithso.core.deletePermanently
@@ -767,6 +768,16 @@ class CoreLibrarySource(
     }
 
     /** The recycle bin's entries, newest first ([RecycleBin]); empty if they couldn't be read. */
+    /** The tracks a run of the analysis would go through, for Settings; null if that can't be told. */
+    suspend fun analysisWaiting(): Int? = withContext(core) {
+        try {
+            open()?.analysisPending()
+        } catch (e: MusicCoreException) {
+            Log.w(TAG, "Analysis: couldn't count what's waiting", e)
+            null
+        }
+    }
+
     suspend fun binEntries(): List<BinEntry> = withContext(core) {
         try {
             open()?.coreBinEntries().orEmpty()
