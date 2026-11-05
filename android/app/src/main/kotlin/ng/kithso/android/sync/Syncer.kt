@@ -20,6 +20,7 @@ import ng.kithso.core.ProfileItemKind
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncEstimate
+import ng.kithso.core.SyncProblems
 import ng.kithso.core.SyncProfile
 import ng.kithso.core.SyncWaiting
 import ng.kithso.core.VerifyResult
@@ -205,6 +206,8 @@ data class SyncStatus(
     val mergePending: Boolean = false,
     /** Tracks waiting for a member this phone can't reach now, for the main list's card. */
     val waiting: SyncWaiting = SyncWaiting.NONE,
+    /** What's wrong with the files here, for the main list's other card. */
+    val problems: SyncProblems = SyncProblems.NONE,
     /** Deletes go to the recycle bin here ([Syncer.binEntries]): in a group, not an archive. */
     val binOffered: Boolean = false,
     /** Deletes in the recycle bin: while any, this phone syncs only when Sync is pressed. */
@@ -586,6 +589,33 @@ class Syncer(
     }
 
     /**
+     * Goes on with the weekly deep check for up to [budgetMs], and returns true once it's over
+     * for this week. Off [thread], as the core holds nothing up while it reads, so call it only
+     * between [hold] and [release]. Throws MusicCoreException.
+     */
+    suspend fun verifyWeekly(budgetMs: Long): Boolean {
+        val sync = onCore { it }
+        return withContext(Dispatchers.IO) { sync.verifyWeekly(budgetMs) }
+    }
+
+    /**
+     * Removes those of [uids] that no device has any more from the library, on every device,
+     * for good. The core works out once more which those are, so what came back stays. None of
+     * them has a file here, so nothing that's playing goes with them.
+     */
+    suspend fun removeLost(uids: List<String>): LostRemoval {
+        val removed = try {
+            onCore { sync -> sync.removeLost(uids) }
+        } catch (e: MusicCoreException) {
+            Log.w(TAG, "Couldn't remove the lost tracks", e)
+            return if (e.status == CoreSync.ERR_LOCKED) LostRemoval.Busy else LostRemoval.Failed
+        }
+        Log.i(TAG, "Removed $removed of ${uids.size} lost tracks")
+        if (removed > 0) source.tracksRemoved()
+        return if (removed < uids.size) LostRemoval.Kept(uids.size - removed) else LostRemoval.Removed
+    }
+
+    /**
      * Debug builds only (MainActivity's fake_merge extra): shows one of the merge's screens
      * with made-up data, for screenshots without a second device. The buttons on them call
      * the core as usual, which has no such pairing.
@@ -717,7 +747,7 @@ class Syncer(
         val pairing = state.value.pairing
         when (event) {
             is CoreSync.Event.Peer -> Unit
-            // Read by refreshLists below.
+            // Read by refreshLists below, with the problems.
             CoreSync.Event.Waiting -> Unit
             is CoreSync.Event.PairCode -> {
                 // A merge declined here: the dialog stays closed, even for a new code.
@@ -905,6 +935,7 @@ class Syncer(
             val libraryState = sync.libraryState
             val mergePending = sync.mergePending
             val waiting = sync.waiting()
+            val problems = sync.problems()
             val binOffered = sync.coreBinOffered
             val binCount = sync.coreBinCount
             // Renamed here, or by another member in a session.
@@ -919,6 +950,7 @@ class Syncer(
                     selfConfirm = devices.firstOrNull { it.isSelf }?.confirm,
                     mergePending = mergePending || debugMergePending,
                     waiting = waiting,
+                    problems = problems,
                     binOffered = binOffered,
                     binCount = binCount,
                     nearby = if (running) sync.nearby() else emptyList(),
@@ -950,6 +982,7 @@ class Syncer(
     companion object {
         /** What the app holds sync as while it's on screen. */
         const val HOLDER_APP = "app"
+        const val HOLDER_VERIFY = "verify"
 
         private const val TAG = "kithsong"
         private const val FILES_REFRESH_MS = 10_000L
@@ -957,6 +990,18 @@ class Syncer(
 }
 
 /** Whether the phone is on Wi-Fi or Ethernet, where sync can find the other devices. */
+/** How [Syncer.removeLost] went. */
+sealed interface LostRemoval {
+    data object Removed : LostRemoval
+
+    /** [tracks] stayed: they turned up again, or their files couldn't be removed. */
+    data class Kept(val tracks: Int) : LostRemoval
+
+    /** A session is moving files, one of them perhaps: nothing went. */
+    data object Busy : LostRemoval
+    data object Failed : LostRemoval
+}
+
 fun Context.isOnLan(): Boolean {
     val connectivity = getSystemService(ConnectivityManager::class.java)
     val capabilities = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false

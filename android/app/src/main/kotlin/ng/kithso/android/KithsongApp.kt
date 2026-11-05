@@ -22,6 +22,7 @@ import ng.kithso.android.playback.PlaybackService
 import ng.kithso.android.playback.Scrobbling
 import ng.kithso.android.playback.SessionPlayback
 import ng.kithso.android.sync.Syncer
+import ng.kithso.android.sync.VerifyWorker
 import ng.kithso.android.ui.BackStack
 import ng.kithso.android.ui.art.FileArt
 import ng.kithso.android.ui.art.artImageLoader
@@ -128,6 +129,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         }
         core.onChanged = syncer::notifyChanged
         core.binOffered = syncer::binOffered
+        VerifyWorker.schedule(this)
         importer = Importer(this, core, MainScope())
         scrobbling = Scrobbling(libraryDir, File(noBackupFilesDir, "sync"), settings, MainScope())
         testing = Testing(this, noBackupFilesDir, settings, MainScope())

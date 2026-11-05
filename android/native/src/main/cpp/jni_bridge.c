@@ -1349,6 +1349,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
       .on_merge_progress = on_sync_merge_progress,
       .on_merge_done = on_sync_merge_done,
       .on_waiting = on_sync_waiting,
+      .on_problems = on_sync_waiting, /* one event: read again, both are in the same status */
     };
     /* mc_sync_new copies the strings and the events. */
     st = mc_sync_new((mc_library *)(intptr_t)library, cdir, cname, (mc_device_kind)kind, &events,
@@ -1694,6 +1695,75 @@ JNIEXPORT jobject JNICALL Java_ng_kithso_core_CoreSync_nativeWaiting(JNIEnv *env
   return out;
 }
 
+/* What's wrong with the files here as a SyncProblems, its lost tracks as parallel arrays. */
+JNIEXPORT jobject JNICALL Java_ng_kithso_core_CoreSync_nativeProblems(JNIEnv *env, jclass cls,
+                                                                     jlong handle) {
+  (void)cls;
+  jclass info = (*env)->FindClass(env, "ng/kithso/core/SyncProblems");
+  if (!info) return NULL;
+  jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
+                                       "(Ljava/lang/String;II[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)V");
+  jclass string_cls = ctor ? (*env)->FindClass(env, "java/lang/String") : NULL;
+  if (!string_cls) return NULL;
+  mc_sync_problems *p = NULL;
+  mc_status st = mc_sync_get_problems(sync_of(handle), &p);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  char text[512];
+  mc_sync_problems_text(p, text, sizeof text);
+  jobject out = NULL;
+  jstring sentences = new_string(env, text);
+  jobjectArray uids = sentences ? (*env)->NewObjectArray(env, p->lost, string_cls, NULL) : NULL;
+  jobjectArray titles = uids ? (*env)->NewObjectArray(env, p->lost, string_cls, NULL) : NULL;
+  jobjectArray artists = titles ? (*env)->NewObjectArray(env, p->lost, string_cls, NULL) : NULL;
+  int ok = artists != NULL;
+  for (int i = 0; ok && i < p->lost; i++) {
+    const mc_sync_lost_track *t = &p->tracks[i];
+    jstring uid = new_string(env, t->uid);
+    jstring title = new_string(env, t->title ? t->title : "");
+    jstring artist = new_string(env, t->artist ? t->artist : "");
+    ok = uid && title && artist;
+    if (uid) (*env)->SetObjectArrayElement(env, uids, i, uid);
+    if (title) (*env)->SetObjectArrayElement(env, titles, i, title);
+    if (artist) (*env)->SetObjectArrayElement(env, artists, i, artist);
+    if (uid) (*env)->DeleteLocalRef(env, uid);
+    if (title) (*env)->DeleteLocalRef(env, title);
+    if (artist) (*env)->DeleteLocalRef(env, artist);
+  }
+  if (ok) out = (*env)->NewObject(env, info, ctor, sentences, (jint)p->failed, (jint)p->unknown, uids, titles, artists);
+  mc_sync_problems_free(p);
+  return out;
+}
+
+/* Removes those of uids that are lost as of now, and returns how many went. */
+JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreSync_nativeRemoveLost(JNIEnv *env, jclass cls,
+                                                                    jlong handle, jobjectArray uids) {
+  (void)cls;
+  int count = (*env)->GetArrayLength(env, uids);
+  const char **cuids = calloc((size_t)(count ? count : 1), sizeof *cuids);
+  jstring *held = calloc((size_t)(count ? count : 1), sizeof *held);
+  mc_status st = cuids && held ? MC_OK : MC_ERR_NOMEM;
+  int got = 0;
+  for (; st == MC_OK && got < count; got++) {
+    held[got] = (*env)->GetObjectArrayElement(env, uids, got);
+    cuids[got] = held[got] ? (*env)->GetStringUTFChars(env, held[got], NULL) : NULL;
+    if (!cuids[got]) st = MC_ERR_NOMEM;
+  }
+  mc_delete_result r;
+  memset(&r, 0, sizeof r);
+  if (st == MC_OK) st = mc_sync_remove_lost(sync_of(handle), cuids, count, &r);
+  for (int i = 0; i < got; i++) {
+    if (cuids[i]) (*env)->ReleaseStringUTFChars(env, held[i], cuids[i]);
+    if (held[i]) (*env)->DeleteLocalRef(env, held[i]);
+  }
+  free(cuids);
+  free(held);
+  if (st != MC_OK) throw_status(env, st);
+  return (jint)r.tracks_deleted;
+}
+
 /* items as parallel kinds and uids; 0 with an exception pending on failure. */
 static int item_arrays(JNIEnv *env, jclass string_cls, const mc_profile_item *items, int count,
                        jintArray *kinds, jobjectArray *uids) {
@@ -1822,6 +1892,16 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSync_nativeVerify(JNIEnv *env, jc
   }
   jlong values[4] = {r.checked, r.ok, r.failed, r.deleted};
   (*env)->SetLongArrayRegion(env, out, 0, 4, values);
+}
+
+/* Goes on with the weekly deep check for up to budget_ms; true once it's over for this week. */
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreSync_nativeVerifyWeekly(JNIEnv *env, jclass cls,
+                                                                          jlong handle, jlong budget_ms) {
+  (void)cls;
+  int done = 0;
+  mc_status st = mc_sync_verify_weekly(sync_of(handle), (int64_t)budget_ms, &done);
+  if (st != MC_OK) throw_status(env, st);
+  return done ? JNI_TRUE : JNI_FALSE;
 }
 
 /* Renames this device, for the whole group when in one. */

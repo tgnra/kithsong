@@ -107,6 +107,9 @@ fun App(
     // Tracks waiting for a member this phone can't reach: a card under the main list's header.
     val waiting by remember(syncer) { syncer.status.map { it.waiting }.distinctUntilChanged() }
         .collectAsState(syncer.status.value.waiting)
+    // What's wrong with the files here: a card above that one.
+    val problems by remember(syncer) { syncer.status.map { it.problems }.distinctUntilChanged() }
+        .collectAsState(syncer.status.value.problems)
     // The recycle bin: how many deletes wait for a sync (null outside a group, where deletes
     // don't go there), and the red dot on the main menu and its Sync while one could sync.
     val binCount by remember(syncer) {
@@ -308,9 +311,9 @@ fun App(
                 onStats = { nav = nav.push(Page.Stats) },
                 importPickers = importPickers,
                 importRunning = importProgress?.phase?.isOver == false,
-                // How an import is going, the merge after pairing by merging libraries, and
-                // tracks waiting for a device.
-                banner = if (importProgress == null && merge == null && waiting.tracks == 0 && !stress) {
+                // How an import is going, the merge after pairing by merging libraries, what's
+                // wrong with the files here, and tracks waiting for a device.
+                banner = if (importProgress == null && merge == null && waiting.tracks == 0 && problems.text.isEmpty() && !stress) {
                     null
                 } else {
                     { modifier ->
@@ -318,6 +321,7 @@ fun App(
                             if (stress) StressCard()
                             importProgress?.let { ImportCard(it, importer) }
                             merge?.let { MergeCard(it, onDismiss = syncer::dismissMerge) }
+                            if (problems.text.isNotEmpty() && !stress) ProblemsCard(problems, onRemove = syncer::removeLost)
                             if (waiting.tracks > 0) WaitingCard(waiting)
                         }
                     }

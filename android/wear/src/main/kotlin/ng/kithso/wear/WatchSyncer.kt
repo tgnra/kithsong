@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ng.kithso.core.ConfirmState
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeviceKind
@@ -52,7 +53,8 @@ sealed interface SyncState {
      * [hasStatus], [synced] of [wanted] files are here as the watch last reported them to the
      * group; before its first file phase, [synced] counts the tracks with a file here and
      * [wanted] is 0. [progress] is a session fetching files, [waiting] the tracks that can only
-     * come from members the watch can't reach, and [failure] the last session that failed.
+     * come from members the watch can't reach, [problems] what's wrong with the files here as
+     * the core words it, and [failure] the last session that failed.
      */
     data class Paired(
         val devices: List<String>,
@@ -62,6 +64,7 @@ sealed interface SyncState {
         val hasStatus: Boolean,
         val progress: FileProgress? = null,
         val waiting: SyncWaiting = SyncWaiting.NONE,
+        val problems: String = "",
         val failure: SyncFailure? = null,
     ) : SyncState
 }
@@ -112,6 +115,8 @@ data class SyncStatus(
     val failure: SyncFailure? = null,
     /** Tracks waiting for a member this watch can't reach now. */
     val waiting: SyncWaiting = SyncWaiting.NONE,
+    /** What's wrong with the files here, as the core words it; empty if nothing is. */
+    val problems: String = "",
     val pairing: Pairing? = null,
 ) {
     /** Something is under way that shouldn't be cut off: a session or a pairing. */
@@ -141,6 +146,7 @@ data class SyncStatus(
                 hasStatus = status != null,
                 progress = filesProgress,
                 waiting = waiting,
+                problems = problems,
                 failure = failure,
             )
         }
@@ -250,6 +256,23 @@ class WatchSyncer(
      * member synced completely within the hour gets none (see [SyncWorker]).
      */
     fun syncBackground() = call { it.syncBackground() }
+
+    /**
+     * Goes on with the weekly deep check for up to [budgetMs], and returns true once it's over
+     * for this week, or can't go on. Off [thread], as the core holds nothing up while it reads,
+     * so call it only while holding sync.
+     */
+    suspend fun verifyWeekly(budgetMs: Long): Boolean {
+        val sync = withContext(thread) { sync } ?: return true
+        return withContext(Dispatchers.IO) {
+            try {
+                sync.verifyWeekly(budgetMs)
+            } catch (e: MusicCoreException) {
+                Log.w(TAG, "Weekly check failed", e)
+                true
+            }
+        }
+    }
 
     /** Gives up the pairing in progress, from the service's timeout. */
     fun cancelPairing() = call { it.pairCancel() }
@@ -450,6 +473,7 @@ class WatchSyncer(
             val devices = sync.devices()
             val inGroup = sync.libraryState != CoreSync.LibraryState.NoGroup
             val waiting = sync.waiting()
+            val problems = sync.problems().text
             // Renamed by another member in a session.
             val name = sync.deviceName
             if (name.isNotEmpty() && name != state.value.deviceName) onRenamed(name)
@@ -460,6 +484,7 @@ class WatchSyncer(
                     self = devices.firstOrNull { it.isSelf },
                     members = devices.filter { !it.isSelf && !it.removed },
                     waiting = waiting,
+                    problems = problems,
                 )
             }
         } catch (e: MusicCoreException) {

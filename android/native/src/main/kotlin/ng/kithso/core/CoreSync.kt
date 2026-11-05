@@ -179,6 +179,32 @@ data class WaitingDevice(
     val kind: DeviceKind get() = DeviceKind.entries.getOrElse(kindCode) { DeviceKind.Desktop }
 }
 
+/** A track no device has any more (mc_sync_lost_track). [artist] is empty if it has no credit. */
+data class LostTrack(val uid: String, val title: String, val artist: String)
+
+/**
+ * What's wrong with the files here (mc_sync_problems), for the card at the top of the library.
+ * [text] is the card's sentences in the core's language, empty if there's nothing to say.
+ * [failed] files failed a check, [unknown] are in the library folder and not in the library, and
+ * [lost] are the tracks an archive can offer to remove ([CoreSync.removeLost]).
+ */
+data class SyncProblems(val text: String, val failed: Int, val unknown: Int, val lost: List<LostTrack>) {
+    // For jni_bridge.c, which passes the tracks as parallel arrays.
+    @Suppress("unused")
+    private constructor(
+        text: String,
+        failed: Int,
+        unknown: Int,
+        uids: Array<String>,
+        titles: Array<String>,
+        artists: Array<String>,
+    ) : this(text, failed, unknown, uids.indices.map { LostTrack(uids[it], titles[it], artists[it]) })
+
+    companion object {
+        val NONE = SyncProblems("", 0, 0, emptyList())
+    }
+}
+
 /**
  * Tracks this device's profile wants that only members it can't reach now hold
  * (mc_sync_waiting): "12 tracks are waiting for Tania's desktop to come online." [tracks]
@@ -421,7 +447,7 @@ class CoreSync(
             val connected: Boolean = true,
         ) : Event
 
-        /** The tracks waiting for a device changed: read [CoreSync.waiting] again. */
+        /** The tracks waiting for a device, or the problems, changed: read [CoreSync.waiting] and [CoreSync.problems] again. */
         data object Waiting : Event
     }
 
@@ -529,6 +555,16 @@ class CoreSync(
     /** The tracks waiting for a device this one can't reach now, as sync last worked them out. Doesn't block. */
     fun waiting(): SyncWaiting = nativeWaiting(handle)
 
+    /** What's wrong with the files here, as sync last worked it out. Doesn't block. */
+    fun problems(): SyncProblems = nativeProblems(handle)
+
+    /**
+     * Removes those of [uids] that are lost as of now from the library, so from every device,
+     * and returns how many went. Nothing can fetch them back: call it only once the user has
+     * confirmed. Throws [ERR_LOCKED] while a session's file phase runs.
+     */
+    fun removeLost(uids: List<String>): Int = nativeRemoveLost(handle, uids.toTypedArray())
+
     /**
      * [uid]'s profile, any member's, this device's included. One with none stored yet reads as
      * an editor should start: everything, originals, no budget, no name. ERR_NOT_FOUND if not
@@ -605,6 +641,13 @@ class CoreSync(
         nativeVerify(handle, deep, out)
         return VerifyResult(out[0], out[1], out[2], out[3])
     }
+
+    /**
+     * Goes on with the weekly deep check for up to [budgetMs], where it left off, and returns
+     * true once it's over for this week. Does nothing if it isn't due. Blocks for that long, but
+     * holds up no other sync call. For a job that needs a charger.
+     */
+    fun verifyWeekly(budgetMs: Long): Boolean = nativeVerifyWeekly(handle, budgetMs)
 
     private fun SyncProfile.itemKinds() = IntArray(items.size) { items[it].kind.ordinal }
 
@@ -790,6 +833,8 @@ class CoreSync(
         @JvmStatic private external fun nativeListDevices(handle: Long): Array<SyncDevice>
         @JvmStatic private external fun nativeListNearby(handle: Long): Array<NearbyDevice>
         @JvmStatic private external fun nativeWaiting(handle: Long): SyncWaiting
+        @JvmStatic private external fun nativeProblems(handle: Long): SyncProblems
+        @JvmStatic private external fun nativeRemoveLost(handle: Long, uids: Array<String>): Int
         @JvmStatic private external fun nativeGetProfile(handle: Long, uid: String): SyncProfile
         @JvmStatic private external fun nativeSetProfile(
             handle: Long,
@@ -817,5 +862,6 @@ class CoreSync(
             out: LongArray,
         )
         @JvmStatic private external fun nativeVerify(handle: Long, deep: Boolean, out: LongArray)
+        @JvmStatic private external fun nativeVerifyWeekly(handle: Long, budgetMs: Long): Boolean
     }
 }

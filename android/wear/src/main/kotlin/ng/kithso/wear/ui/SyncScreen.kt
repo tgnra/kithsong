@@ -137,6 +137,7 @@ private fun pairedLines(state: SyncState.Paired): List<Line> {
         ConfirmState.Unconfirmed -> lines += Line(stringResource(R.string.watch_sync_unconfirmed))
         ConfirmState.ProfileChanged -> lines += Line(stringResource(R.string.watch_sync_paused))
     }
+    if (state.problems.isNotEmpty()) lines += Line(state.problems, error = true)
     waitingText(state.waiting)?.let { lines += Line(it) }
     state.failure?.let { failure ->
         lines += Line(stringResource(R.string.sync_failed_with, failure.deviceName, statusText(failure.status)), error = true)

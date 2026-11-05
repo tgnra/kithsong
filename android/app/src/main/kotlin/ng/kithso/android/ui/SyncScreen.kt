@@ -1,6 +1,7 @@
 package ng.kithso.android.ui
 
 import android.text.format.DateUtils
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -59,7 +60,9 @@ import ng.kithso.core.CoreSync
 import ng.kithso.core.MusicCoreException
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
+import ng.kithso.core.SyncProblems
 import ng.kithso.core.SyncWaiting
+import ng.kithso.android.sync.LostRemoval
 import ng.kithso.android.sync.SyncProgress
 import ng.kithso.android.sync.SyncStatus
 import ng.kithso.android.sync.Syncer
@@ -595,6 +598,85 @@ private fun BinNotice(count: Int, onOpenBin: () -> Unit, modifier: Modifier = Mo
             }
         }
     }
+}
+
+/** What's wrong with the files here, with a way to remove what no device has any more. */
+@Composable
+fun ProblemsCard(problems: SyncProblems, onRemove: suspend (List<String>) -> LostRemoval, modifier: Modifier = Modifier) {
+    var asking by rememberSaveable { mutableStateOf(false) }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.padding(end = 12.dp).size(20.dp),
+            )
+            Column {
+                Text(
+                    problems.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                if (problems.lost.isNotEmpty()) {
+                    TextButton(onClick = { asking = true }) {
+                        Text(stringResource(R.string.sync_lost_remove), color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                }
+            }
+        }
+    }
+    if (asking && problems.lost.isNotEmpty()) {
+        LostDialog(problems, onRemove, onDismiss = { asking = false })
+    }
+}
+
+// How many of the tracks the confirmation names.
+private const val LOST_NAMED = 6
+
+/** Asks before removing the tracks no device has any more, naming them. It can't be undone. */
+@Composable
+private fun LostDialog(problems: SyncProblems, onRemove: suspend (List<String>) -> LostRemoval, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val lost = problems.lost
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(pluralStringResource(R.plurals.sync_lost_confirm_title, lost.size, lost.size)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.sync_lost_confirm_body))
+                Column {
+                    lost.take(LOST_NAMED).forEach { track ->
+                        Text(if (track.artist.isEmpty()) track.title else stringResource(R.string.sync_lost_track, track.title, track.artist))
+                    }
+                    val more = lost.size - LOST_NAMED
+                    if (more > 0) Text(pluralStringResource(R.plurals.sync_lost_confirm_more, more, more))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onDismiss()
+                    scope.launch {
+                        val text = when (val outcome = onRemove(lost.map { it.uid })) {
+                            LostRemoval.Removed -> null
+                            is LostRemoval.Kept -> context.resources.getQuantityString(R.plurals.sync_lost_kept, outcome.tracks, outcome.tracks)
+                            LostRemoval.Busy -> context.getString(R.string.sync_lost_busy)
+                            LostRemoval.Failed -> context.getString(R.string.sync_lost_failed)
+                        }
+                        if (text != null) Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+                    }
+                },
+            ) { Text(stringResource(R.string.sync_lost_confirm_button)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 @Composable

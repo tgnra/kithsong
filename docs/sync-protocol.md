@@ -1341,7 +1341,8 @@ Every `MC_SYNC_DEEP_CHECK_DAYS` (7). A desktop or laptop runs it by itself: the 
 10 minutes after start and then every minute, and it runs on a thread of its own while
 `mc_power_on_ac()` says so, which is always on a desktop, and stops within a read of the battery
 taking over. A phone or watch has no scheduler for this: periodic work that needs a charger calls
-`mc_sync_verify_weekly()` in slices.
+`mc_sync_verify_weekly()` in slices. On a phone that's a job of its own, asked for daily; on a
+watch it's what's left of the hourly background sync, so it needs Wi-Fi as well.
 
 - `sync.db`'s `local` keeps when it last finished (`deep_check_ms`) and the last track it got
   through (`deep_check_at`, every 30 seconds and when it stops), so an interrupted run goes on from
@@ -1356,7 +1357,9 @@ taking over. A phone or watch has no scheduler for this: periodic work that need
 `mc_sync_get_problems()` is what the frontends show at the top of the library, worked out by the
 scheduler with the waiting tracks and announced by `on_problems` when it changes: files that
 failed and weren't replaced, the unknown files an archive's latest sweep only reported
-(`local.unknown_files`), and on an archive the tracks that are lost. It goes by itself.
+(`local.unknown_files`), and on an archive the tracks that are lost. It goes by itself. The watch shows
+it as a line on its sync screen, and has no button there: a track is removed from a phone or a
+desktop.
 
 ### Missing for good
 

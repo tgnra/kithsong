@@ -27,6 +27,9 @@ import java.util.concurrent.TimeUnit
  * hour has passed, and a run that comes early just opens sync, tries each member's address
  * and stops. The period is an hour too, the shortest the rate limit lets be of use. Only
  * scheduled while the watch is in a group (KithsongApp), and a run outside one ends at once.
+ *
+ * What's left of a run goes to the weekly deep check, which reads every file against its hash.
+ * The core says whether it's due, and remembers how far it got for the next run.
  */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -60,6 +63,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 }
             }
             Log.i(TAG, "Background sync: done after ${(SystemClock.elapsedRealtime() - start) / 1000} s")
+            while (SystemClock.elapsedRealtime() - start < MAX_MS) {
+                if (syncer.verifyWeekly(CHECK_SLICE_MS)) break
+            }
             return Result.success()
         } finally {
             syncer.release(WatchSyncer.HOLDER_WORKER)
@@ -73,6 +79,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         private const val SETTLE_MS = 30_000L
         private const val QUIET_MS = 15_000L
         private const val POLL_MS = 2_000L
+        // Short enough that a run told to stop isn't kept long.
+        private const val CHECK_SLICE_MS = 10_000L
         // Under WorkManager's ten minutes.
         private const val MAX_MS = 9 * 60_000L
 

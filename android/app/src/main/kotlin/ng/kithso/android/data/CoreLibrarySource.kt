@@ -749,6 +749,13 @@ class CoreLibrarySource(
         outcome
     }.await()
 
+    /** Sync took tracks out of the library ([ng.kithso.android.sync.Syncer.removeLost]): reads it again, and tells the group. */
+    suspend fun tracksRemoved() = withContext(core) {
+        refresh().join()
+        editCount.value++
+        onChanged()
+    }
+
     // [queue] as the library has its tracks now, those it can't find as they were: by album, or
     // for one on no album by itself, as a single made a mix has one now.
     private suspend fun freshTracks(queue: List<Track>): List<Track> = withContext(core) {
