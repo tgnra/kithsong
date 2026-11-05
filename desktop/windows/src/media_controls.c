@@ -7,6 +7,7 @@
 #include "media_controls.h"
 
 #include "cover.h" /* before initguid.h, which would define WIC's IIDs here too */
+#include "musiccore/edit.h"
 #include "wstr.h"
 
 #include <initguid.h> /* defines the WinRT IIDs below, which no import library has */
@@ -215,14 +216,32 @@ static HSTRING hstring(const wchar_t *text) {
   return h;
 }
 
-/* The album's cover as a stream reference, or NULL. */
-static IRandomAccessStreamReference *cover_stream(const wchar_t *dir) {
+/* The cover file in dir, as a stream in memory, or NULL. Windows keeps the stream until the next
+ * thumbnail, so one on the file itself would stop an edit replacing or moving it. */
+static IStream *cover_bytes(const wchar_t *dir) {
   wchar_t *found = cover_find(dir), *path = found ? wstr_long_path(found) : NULL;
-  IStream *file = NULL;
-  HRESULT hr = path ? SHCreateStreamOnFileEx(path, STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, NULL, &file) : E_FAIL;
+  HANDLE file = path ? CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                   OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL)
+                     : INVALID_HANDLE_VALUE;
   free(path);
   free(found);
-  if (FAILED(hr)) return NULL;
+  if (file == INVALID_HANDLE_VALUE) return NULL;
+  LARGE_INTEGER size = {0};
+  IStream *stream = NULL;
+  void *bytes = NULL;
+  DWORD got = 0;
+  if (GetFileSizeEx(file, &size) && size.QuadPart > 0 && size.QuadPart <= MC_ALBUM_ART_MAX_BYTES &&
+      (bytes = malloc((size_t)size.QuadPart)) && ReadFile(file, bytes, (DWORD)size.QuadPart, &got, NULL))
+    stream = SHCreateMemStream(bytes, got);
+  free(bytes);
+  CloseHandle(file);
+  return stream;
+}
+
+/* The album's cover as a stream reference, or NULL. */
+static IRandomAccessStreamReference *cover_stream(const wchar_t *dir) {
+  IStream *file = cover_bytes(dir);
+  if (!file) return NULL;
   IRandomAccessStream *stream = NULL;
   IRandomAccessStreamReferenceStatics *statics = NULL;
   IRandomAccessStreamReference *ref = NULL;
