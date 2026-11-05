@@ -9,13 +9,14 @@
  *   |  120 of 2,400 files, 1.2 GB of 24 GB             |
  *   |  Radiohead/OK Computer (1997)/02 Paranoid...     |
  *   |  Please wait. The library opens again ...        |
+ *   |                                       [ Cancel ] |
  *   +--------------------------------------------------+
  *
  * A folder that won't do (not empty, inside the library, too little room...) is explained
  * and the picker opens again. Once the move starts the main window is hidden, and the
  * progress window has no close button and refuses close-request (Alt+F4) and logging out
- * until the move has finished or been undone. Then it goes, and the host reopens the
- * library where it now is and shows the main window, followed by a message if the move
+ * until the move has finished or been undone. Cancel stops it while it copies, and the partial
+ * copy goes. Then the window goes, and the host reopens the library where it now is and shows the main window, followed by a message if the move
  * failed or left files behind.
  *
  * Debug builds only: KITHSONG_TEST_MOVE_TO=<folder> in the environment takes the place of
