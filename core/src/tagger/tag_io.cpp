@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <string>
 
@@ -22,6 +23,7 @@ extern "C" {
 #include <flac/flacproperties.h>
 #include <riff/aiff/aiffproperties.h>
 #include <riff/wav/wavproperties.h>
+#include <tfilestream.h>
 #include <tpropertymap.h>
 #include <tvariant.h>
 
@@ -82,7 +84,8 @@ int prop_int(const TagLib::PropertyMap &props, const char *key) {
   return std::atoi(it->second.front().toCString(true));  // "2003-05-01" -> 2003
 }
 
-// Opens a file with a UTF-8 path on every platform, of any length on Windows.
+// Opens a file to write its tags, with a UTF-8 path on every platform, of any length on
+// Windows.
 TagLib::FileRef open_file(const char *path, bool read_audio) {
 #ifdef _WIN32
   wchar_t *wide = mc_win_path(path);
@@ -94,6 +97,29 @@ TagLib::FileRef open_file(const char *path, bool read_audio) {
 #else
   return TagLib::FileRef(path, read_audio, TagLib::AudioProperties::Average);
 #endif
+}
+
+// A file opened only to read. A FileRef of the name alone opens it for writing if it can,
+// which on Windows shuts out everyone else: two encodes of one file at once, and the second
+// read no tags at all. file goes before stream, which it reads from.
+struct read_ref {
+  std::unique_ptr<TagLib::FileStream> stream;
+  TagLib::FileRef file;
+};
+
+read_ref open_read(const char *path, bool read_audio) {
+  read_ref r;
+#ifdef _WIN32
+  wchar_t *wide = mc_win_path(path);
+  if (!wide) return r;
+  r.stream = std::make_unique<TagLib::FileStream>(wide, true);
+  std::free(wide);
+#else
+  r.stream = std::make_unique<TagLib::FileStream>(path, true);
+#endif
+  if (r.stream->isOpen())
+    r.file = TagLib::FileRef(r.stream.get(), read_audio, TagLib::AudioProperties::Average);
+  return r;
 }
 
 // NULL leaves the tag alone; "" removes it.
@@ -132,7 +158,8 @@ extern "C" mc_status mc_tags_read(const char *path, mc_tags *out) {
   std::memset(out, 0, sizeof *out);
 
   try {
-    TagLib::FileRef f = open_file(path, true);
+    read_ref opened = open_read(path, true);
+    TagLib::FileRef &f = opened.file;
     if (f.isNull()) return MC_ERR_FORMAT;
 
     TagLib::PropertyMap props = f.properties();
@@ -226,7 +253,8 @@ extern "C" mc_status mc_tags_read_picture(const char *path, unsigned char **data
   *len = 0;
 
   try {
-    TagLib::FileRef f = open_file(path, false);
+    read_ref opened = open_read(path, false);
+    TagLib::FileRef &f = opened.file;
     if (f.isNull()) return MC_ERR_FORMAT;
 
     TagLib::List<TagLib::VariantMap> pictures = f.complexProperties("PICTURE");
