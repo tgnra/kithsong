@@ -948,7 +948,7 @@ private fun GroupRow(state: SmartEditorState, rule: SmartRule, g: SmartGroup) {
  *  Sort by        [least played first v]  x
  *  [+ Add sort order]
  *  Shuffled                          [   ]
- *  [x] Only the first           [10] tracks
+ *  [x] Only the first      [10] [tracks]
  */
 @Composable
 private fun OrderSection(state: SmartEditorState, rule: SmartRule, words: SmartWords) {

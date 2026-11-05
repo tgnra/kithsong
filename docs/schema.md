@@ -823,8 +823,9 @@ Migration v10 adds example lists, so a library has some to open before there's a
 "Recently added", "Most played" and "Never played" (random order) playlists, and "Recently
 added albums" and "Random albums" groups. Their uids are fixed (`5e1ec7ed-0000-4000-8000-00000000000N`),
 so every device makes the same rows, and they aren't logged (no migration's rows are): a
-rename, reshuffle or delete is logged against a uid every device already has. Their names
-are English, as user data rather than UI strings.
+rename, reshuffle or delete is logged against a uid every device already has. The rows hold
+English names; until one's renamed, listings, recents and search show it by a UI string
+instead, so it reads in the language in use (`k_examples` in `smartlist.c`).
 
 ## Recents
 
@@ -846,7 +847,8 @@ all, and a smart list whose rule picks nothing in the whole library, except on a
 no `files` rows at all, so the example smart lists don't take the place of the empty pages. A
 rule that can't be evaluated is left out. The playlist, album group and smart list listings
 take the same flag; `files` being device-local is what makes the answer differ between
-devices. Wear OS shows only what's present, so it drops the empty ones as well.
+devices. `mc_library_list_smart_keeping()` keeps one smart list however it answers, so one
+hidden here that's opened from a search or just made has a tile to open on. Wear OS shows only what's present, so it drops the empty ones as well.
 
 A station has no moment of being opened that the core sees, as a page has: `mc_library_log_play()`
 writes its row, in the same transaction as the [play log](#play-log) row of the station's seed

@@ -15,7 +15,7 @@
  *   | Sort by [least played first v]  x               |                          |
  *   | [Add sort order]                                |                          |
  *   | [ ] Shuffled                                    |                          |
- *   | [x] Only the first [10] tracks                  |                          |
+ *   | [x] Only the first [10] [tracks v]              |                          |
  *   | +- Fix this to save --------------------------------------------------+   |
  *   | | Fresh stuff › Artist: needs a value                         [Show]  |   |
  *   | +---------------------------------------------------------------------+   |
