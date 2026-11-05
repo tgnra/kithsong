@@ -2054,6 +2054,7 @@ mc_status mc_sync_start(mc_sync *sync) {
   sync->stopping = 0;
   sync->started = 1;
   sync->waiting_grace_ms = mc_mono_ms() + WAITING_GRACE_MS;
+  sync->waiting_dirty = 1; /* the problems are known at once, and so is what they hold back */
   mc_mutex_unlock(&sync->lock);
   mc_encode_pool_resume(sync->enc);
   char hints[MC_SYNC_HINTS_MAX];

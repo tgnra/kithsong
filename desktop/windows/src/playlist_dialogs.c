@@ -17,6 +17,7 @@ typedef struct ask {
   const wchar_t *note;         /* Delete's note under the heading; New's under the name, or NULL */
   int title_id;                /* Delete's heading, an enum mc_str_id taking the name; 0: "Delete "{0}"?" */
   const wchar_t *button;       /* Delete's button; NULL: Delete */
+  const wchar_t *heading;      /* Delete's heading as it is, over title_id; NULL: none */
   const wchar_t *name;         /* the current name; NULL for a new playlist */
   wchar_t entered[MAX_NAME + 1];
   HFONT heading_font; /* Delete's */
@@ -215,7 +216,7 @@ static INT_PTR CALLBACK delete_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       mc_wformat(heading, sizeof heading / sizeof heading[0],
                  mc_str(a->title_id ? (enum mc_str_id)a->title_id : MC_STR_PLAYLIST_DELETE_TITLE), MC_S(name));
       free(name);
-      SetDlgItemTextW(dlg, IDC_PL_HEADING, heading);
+      SetDlgItemTextW(dlg, IDC_PL_HEADING, a->heading ? a->heading : heading);
       SetDlgItemTextW(dlg, IDC_PL_NOTE, a->note);
       SetDlgItemTextW(dlg, IDOK, a->button ? a->button : mc_wstr_mnemonic(MC_STR_DELETE));
       SetDlgItemTextW(dlg, IDCANCEL, mc_wstr_mnemonic(MC_STR_CANCEL));
@@ -253,6 +254,13 @@ BOOL confirm_remove_dialog(HWND owner, const wchar_t *caption, int title_id, con
                            const wchar_t *note, const wchar_t *button) {
   ask a = {.caption = caption, .note = note, .name = name, .title_id = title_id, .button = button};
   return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_DEVICE_REMOVE), owner, delete_proc,
+                         (LPARAM)&a) == IDOK;
+}
+
+BOOL confirm_lost_dialog(HWND owner, const wchar_t *caption, const wchar_t *heading, const wchar_t *note,
+                         const wchar_t *button) {
+  ask a = {.caption = caption, .note = note, .heading = heading, .button = button};
+  return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_LOST_REMOVE), owner, delete_proc,
                          (LPARAM)&a) == IDOK;
 }
 

@@ -1856,8 +1856,12 @@ static void on_command(int id, int code) {
                mc_library_record_opened(g_app.lib, MC_RECENT_ALBUM_GROUP, album_grid_group()) == MC_OK)
         refresh_recents();
       break;
-    case ID_WAITING: /* the banner says a stress test library is open */
-      back_to_library();
+    case ID_WAITING:
+      if (code == WAITING_BANNER_REMOVE) {
+        if (delete_dialog_lost(g_app.wnd, g_app.lib, sync_bridge_get())) refresh_library();
+      } else {
+        back_to_library(); /* the banner says a stress test library is open */
+      }
       break;
     case ID_ARTISTS:
       if (code == ARN_OPEN) {

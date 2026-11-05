@@ -89,6 +89,18 @@ BEGIN
   DEFPUSHBUTTON   "", IDCANCEL, 201, 78, 52, 15
 END
 
+/* Removing tracks missing for good (delete_dialog.c): the same, with room to name them. */
+IDD_LOST_REMOVE DIALOGEX 0, 0, 280, 176
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_HEADING, 7, 8, 266, 12, SS_NOPREFIX | SS_ENDELLIPSIS
+  LTEXT           "", IDC_PL_NOTE, 7, 24, 266, 122, SS_NOPREFIX
+  PUSHBUTTON      "", IDOK, 163, 154, 52, 15
+  DEFPUSHBUTTON   "", IDCANCEL, 221, 154, 52, 15
+END
+
 /* The smart list editor (smart_editor.c): resizable, with everything but Save and Cancel
  * made at run time, as each page's rows come and go. */
 IDD_SMART_EDITOR DIALOGEX 0, 0, 574, 374

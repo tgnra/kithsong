@@ -30,4 +30,10 @@ void delete_dialog_init(const char *config_dir, void (*before_delete)(const mc_d
  * window. Returns TRUE if the library changed. */
 BOOL delete_dialog(HWND owner, mc_library *lib, mc_delete_kind kind, const char *uid, const wchar_t *name);
 
+/* The warning strip's Remove from Library: names the tracks missing for good
+ * (mc_sync_get_problems()), asks, with Cancel the default, then removes them from every device
+ * (mc_sync_remove_lost(), which goes only by what's lost at that moment), and says if any stayed.
+ * Returns TRUE if the library changed. */
+BOOL delete_dialog_lost(HWND owner, mc_library *lib, mc_sync *sync);
+
 #endif

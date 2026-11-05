@@ -45,6 +45,10 @@ BOOL smart_delete_dialog(HWND owner, mc_library *lib, const char *uid, const wch
 /* The Delete dialog for anything else (delete_dialog.c): "Delete "name"?" with note, which
  * may run to three lines, beneath, titled caption. TRUE if the user chose Delete. */
 BOOL confirm_delete_dialog(HWND owner, const wchar_t *caption, const wchar_t *name, const wchar_t *note);
+/* The same with room for a list in note, and heading and button as they are. Cancel is the
+ * default. */
+BOOL confirm_lost_dialog(HWND owner, const wchar_t *caption, const wchar_t *heading, const wchar_t *note,
+                         const wchar_t *button);
 /* The same, taller, for Remove from this PC (remove_here.c): the heading is title_id (an
  * mc_str_id formatting name), and the confirming button says button. */
 BOOL confirm_remove_dialog(HWND owner, const wchar_t *caption, int title_id, const wchar_t *name,

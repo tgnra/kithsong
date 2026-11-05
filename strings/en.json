@@ -707,6 +707,8 @@
     "sync_lost_confirm_body": { "text": "Every device was asked and none has these tracks any more. Removing them takes them off every device, with their plays and their places in playlists, and this can't be undone.", "note": "The confirmation after sync_lost_remove, above a list of the tracks." },
     "sync_lost_confirm_more": { "one": "and {0:d} more", "other": "and {0:d} more", "note": "Ends the list of tracks in the confirmation, when it doesn't show them all." },
     "sync_lost_confirm_button": { "text": "Remove", "note": "The button that confirms sync_lost_confirm_title." },
+    "sync_lost_caption": { "text": "Remove from Library", "note": "Title of the window asking sync_lost_confirm_title." },
+    "sync_lost_track": { "text": "{0} by {1}", "note": "A line in the confirmation's list of tracks: {0} the title, {1} the artist." },
     "sync_lost_busy": { "text": "Sync is moving files. Try again once it has finished.", "note": "After sync_lost_confirm_button, when nothing was removed because a sync is under way." },
     "sync_lost_failed": { "text": "Couldn't remove the tracks.", "note": "After sync_lost_confirm_button, when it failed." },
     "sync_lost_kept": { "one": "{0:d} track wasn't removed: it turned up again, or its file couldn't be removed.", "other": "{0:d} tracks weren't removed: they turned up again, or their files couldn't be removed.", "note": "After sync_lost_confirm_button, when core left some of the tracks out." },
