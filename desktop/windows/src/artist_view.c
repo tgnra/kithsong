@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uiautomation.h>
 #include <wchar.h>
 #include <wctype.h>
 #include <wincodec.h>
@@ -20,6 +21,7 @@
 #include "radio_menu.h"
 #include "scroller.h"
 #include "theme.h"
+#include "uia.h"
 #include "wstr.h"
 
 #define WM_APP_COVER (WM_APP + 22) /* decode the next cover */
@@ -58,6 +60,11 @@ enum {
  * albums, then the singles). Strip sk's arrows are HIT_ARROWS - 2sk (left) and one below
  * that (right): see arrow_hit(). */
 enum { HIT_NONE = -1, HIT_BACK = -2, HIT_ARROWS = -3 };
+
+/* UI Automation's nodes. In the list: the list, then its rows, or why there are none. On an
+ * artist's page: Back, the strips that have tiles, then all the tiles, whichever strip they're
+ * in, as a strip's are consecutive. */
+enum { NODE_LIST = 0, NODE_ROWS = 1, NODE_BACK = 0, NODE_STRIPS = 1, NODE_TILES = 3 };
 
 /* An artist's picture, decoded round and premultiplied: the cover of one of their albums
  * (mc_artist_info.cover_dir). */
@@ -146,6 +153,9 @@ static struct {
   BOOL dragging;
   char drop_target[MC_UID_STRLEN];
 } v;
+
+/* Outside v, which is cleared when the window goes: elements clients still hold use it. */
+static uia_host ui;
 
 static int scale(int px) {
   return MulDiv(px, (int)v.dpi, USER_DEFAULT_SCREEN_DPI);
@@ -378,6 +388,7 @@ static void update_hot(void) {
 }
 
 static void request_covers(void);
+static void ui_changed(void);
 
 static void on_scrolled(void) {
   update_hot();
@@ -715,6 +726,8 @@ static void close_artist(void) {
   layout();
   InvalidateRect(v.wnd, NULL, FALSE);
   request_covers(); /* the rows' */
+  ui_changed();
+  uia_focus(&ui);
 }
 
 /* Lists the artists again, and the open one's albums; if it has left the library, back to
@@ -768,6 +781,7 @@ static void reload(void) {
   layout();
   InvalidateRect(v.wnd, NULL, FALSE);
   request_covers();
+  ui_changed();
 }
 
 /* --- Navigation --- */
@@ -805,6 +819,11 @@ static void activate(int i) {
   else open_row(i);
 }
 
+/* UI Automation's number for row or tile i: see the nodes below. */
+static int ui_item(int i) {
+  return (is_open() ? NODE_TILES : NODE_ROWS) + i;
+}
+
 static void set_focus(int i) {
   int n = is_open() ? num_tiles() : v.nartists;
   if (n == 0) return;
@@ -818,6 +837,8 @@ static void set_focus(int i) {
     int top = scale(LIST_TOP) + i * scale(ROW_H);
     scroller_reveal(&v.scroll, top - scale(LIST_TOP), top + scale(ROW_H) + scale(LIST_TOP));
   }
+  uia_selected(&ui, ui_item(i));
+  uia_focus(&ui);
 }
 
 /* Typing a letter in the list: the next artist whose name starts with it. */
@@ -1006,11 +1027,16 @@ static void paint_header(canvas *c, const RECT *dirty) {
   paint_heading(c, &v.tracks_heading, MC_STR_TRACKS_TITLE);
 }
 
+/* Why the list is empty. */
+static void empty_text(wchar_t *text, size_t n) {
+  if (!v.lib) swprintf(text, n, L"%ls", mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
+  else if (v.status != MC_OK) mc_wformat(text, n, mc_str(MC_STR_LIST_FAILED), MC_S(mc_status_str(v.status)));
+  else swprintf(text, n, L"%ls", mc_wstr(MC_STR_NO_ARTISTS));
+}
+
 static void paint_empty(canvas *c, const RECT *client) {
   wchar_t text[512];
-  if (!v.lib) swprintf(text, 512, L"%ls", mc_wstr(MC_STR_LIBRARY_OPEN_FAILED));
-  else if (v.status != MC_OK) mc_wformat(text, 512, mc_str(MC_STR_LIST_FAILED), MC_S(mc_status_str(v.status)));
-  else swprintf(text, 512, L"%ls", mc_wstr(MC_STR_NO_ARTISTS));
+  empty_text(text, 512);
   RECT rc = *client, fit_rc;
   InflateRect(&rc, -scale(PAD_X), 0);
   fit_rc = rc;
@@ -1224,6 +1250,146 @@ static void end_drag(void) {
   drag_done();
 }
 
+/* --- UI Automation --- */
+
+/* The strip that node NODE_STRIPS + k is, or -1. */
+static int ui_strip(int k) {
+  for (int sk = 0; sk < NUM_STRIPS; sk++)
+    if (v.strips[sk].n && k-- == 0) return sk;
+  return -1;
+}
+
+/* And strip sk's node. */
+static int ui_strip_node(int sk) {
+  return NODE_STRIPS + (sk == STRIP_SINGLES && v.strips[STRIP_ALBUMS].n);
+}
+
+static BOOL ui_node_page(int i, uia_node *n) {
+  if (i == NODE_BACK) {
+    n->type = UIA_ButtonControlTypeId;
+    n->flags = UIA_INVOKABLE;
+    n->rect = v.back;
+    n->automation_id = L"Back";
+    lstrcpynW(n->name, mc_wstr(MC_STR_BACK), 512);
+    return TRUE;
+  }
+  if (i < NODE_TILES) {
+    int sk = ui_strip(i - NODE_STRIPS);
+    if (sk < 0) return FALSE;
+    n->type = UIA_ListControlTypeId;
+    n->flags = UIA_SELECTION;
+    n->rect = strip_rect(sk);
+    n->first = NODE_TILES + strip_first(sk);
+    n->count = v.strips[sk].n;
+    n->automation_id = sk == STRIP_ALBUMS ? L"Albums" : L"Singles";
+    lstrcpynW(n->name, mc_wstr(sk == STRIP_ALBUMS ? MC_STR_SECTION_ALBUMS : MC_STR_SECTION_SINGLES), 512);
+    return TRUE;
+  }
+  int t = i - NODE_TILES;
+  if (t >= num_tiles()) return FALSE;
+  const tile *tl = tile_at(t);
+  n->parent = ui_strip_node(tile_strip(t, NULL));
+  n->type = UIA_ListItemControlTypeId;
+  n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | UIA_INVOKABLE | (t == v.focus ? UIA_SELECTED : 0);
+  n->rect = tile_rect(t);
+  uia_name(n, tl->title ? tl->title : L"", tl->sub ? tl->sub : L"", NULL);
+  return TRUE;
+}
+
+static BOOL ui_node_list(int i, uia_node *n) {
+  if (!v.nartists) {
+    if (i != NODE_LIST) return FALSE;
+    n->type = UIA_TextControlTypeId;
+    GetClientRect(v.wnd, &n->rect);
+    empty_text(n->name, 512);
+    return TRUE;
+  }
+  if (i == NODE_LIST) {
+    n->type = UIA_ListControlTypeId;
+    n->flags = UIA_SELECTION;
+    GetClientRect(v.wnd, &n->rect);
+    n->first = NODE_ROWS;
+    n->count = v.nartists;
+    n->automation_id = L"Artists";
+    lstrcpynW(n->name, mc_wstr(MC_STR_SECTION_ARTISTS), 512);
+    return TRUE;
+  }
+  int row = i - NODE_ROWS;
+  if (row >= v.nartists) return FALSE;
+  n->parent = NODE_LIST;
+  n->type = UIA_ListItemControlTypeId;
+  n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | UIA_INVOKABLE | (row == v.focus ? UIA_SELECTED : 0);
+  n->rect = row_rect(row);
+  uia_name(n, v.artists[row].name ? v.artists[row].name : L"", v.artists[row].sub, NULL);
+  return TRUE;
+}
+
+static BOOL ui_node(int i, uia_node *n) {
+  n->parent = UIA_ROOT;
+  if (i == UIA_ROOT) {
+    n->type = UIA_PaneControlTypeId;
+    lstrcpynW(n->name, is_open() ? v.open_name : mc_wstr(MC_STR_SECTION_ARTISTS), 512);
+    if (is_open()) lstrcpynW(n->help, v.summary, 256);
+    n->count = !is_open() ? 1 : 1 + (v.strips[STRIP_ALBUMS].n > 0) + (v.strips[STRIP_SINGLES].n > 0);
+    return TRUE;
+  }
+  if (i < 0) return FALSE;
+  return is_open() ? ui_node_page(i, n) : ui_node_list(i, n);
+}
+
+static int ui_focus(void) {
+  return v.focus >= 0 ? ui_item(v.focus) : UIA_ROOT;
+}
+
+static int ui_at(POINT pt) {
+  int hit = hit_at(pt.x, pt.y), sk, dir;
+  if (hit == HIT_BACK) return NODE_BACK;
+  if (is_arrow(hit, &sk, &dir)) return ui_strip_node(sk);
+  return hit >= 0 ? ui_item(hit) : UIA_ROOT;
+}
+
+static int ui_selection(int i) {
+  if (v.focus < 0) return UIA_NONE;
+  if (!is_open()) return i == NODE_LIST ? ui_item(v.focus) : UIA_NONE;
+  return i == ui_strip_node(tile_strip(v.focus, NULL)) ? ui_item(v.focus) : UIA_NONE;
+}
+
+/* The focus is what's selected, and moving it scrolls to it. */
+static void ui_select(int i) {
+  int first = is_open() ? NODE_TILES : NODE_ROWS;
+  if (i >= first) set_focus(i - first);
+}
+
+/* As a click. */
+static void ui_invoke(int i) {
+  if (is_open() && i == NODE_BACK) activate(HIT_BACK);
+  else if (i >= (is_open() ? NODE_TILES : NODE_ROWS)) activate(i - (is_open() ? NODE_TILES : NODE_ROWS));
+}
+
+static const uia_ops ui_ops = {
+  .node = ui_node,
+  .focus = ui_focus,
+  .at = ui_at,
+  .selection = ui_selection,
+  .select = ui_select,
+  .invoke = ui_invoke,
+  .reveal = ui_select,
+  .set_focus = ui_select,
+};
+
+/* What the nodes are, so clients only start over when they changed. */
+static void ui_changed(void) {
+  unsigned long sig = uia_hash(0, v.open_uid, strlen(v.open_uid));
+  if (is_open()) {
+    int albums = v.strips[STRIP_ALBUMS].n;
+    sig = uia_hash(sig, &albums, sizeof albums);
+    for (int i = 0; i < num_tiles(); i++) sig = uia_hash(sig, tile_at(i)->uid, strlen(tile_at(i)->uid));
+  } else {
+    for (int i = 0; i < v.nartists; i++) sig = uia_hash(sig, v.artists[i].uid, strlen(v.artists[i].uid));
+  }
+  uia_changed(&ui, sig);
+}
+
 /* --- Window --- */
 
 /* The strip the wheel scrolls, for the pointer at lp (screen coordinates): the one it's over,
@@ -1242,7 +1408,12 @@ static int wheel_strip(LPARAM lp) {
 }
 
 static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
-  if (!v.wnd) v.wnd = v.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
+  if (!v.wnd) { /* messages arrive before CreateWindowExW returns */
+    v.wnd = v.scroll.wnd = wnd;
+    uia_init(&ui, wnd, &ui_ops);
+  }
+  LRESULT result;
+  if (uia_message(&ui, msg, wp, lp, &result)) return result;
   switch (msg) {
     case WM_SIZE:
       layout();
@@ -1398,6 +1569,7 @@ static LRESULT CALLBACK artist_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_DESTROY:
+      uia_destroy(&ui);
       strips_stop();
       free_artists();
       free_strips();
@@ -1483,6 +1655,7 @@ BOOL artist_view_open(const char *uid) {
   v.focus = -1;
   load_tiles();
   InvalidateRect(v.wnd, NULL, FALSE);
+  ui_changed();
   return TRUE;
 }
 
