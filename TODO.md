@@ -4,7 +4,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## For 1.0
 
-- **Home page** - A mock-up on Windows and Linux, from core's musiccore/home_picks.h, its guesses from track_plays until the play event log can say what was played when. Radio's stations come from the audio analysis (musiccore/radio_stations.h), and clicking one plays it on Windows; on Linux it does nothing yet. The phone app has no page like it
+- **Home page** - On Windows and Linux, from core's musiccore/home_picks.h: stations from the audio analysis (musiccore/radio_stations.h), and the played rows from the play log, with track_plays for what's older than it. The phone app has only the Radio row, on its main page
 - **Repeat and a play queue** - Core: repeat (one, all). All: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither) and a view of what's queued. Windows and Linux: Ctrl+R for repeat (kept free for it)
 
 ## Release
@@ -18,7 +18,9 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Windows - search doesn't filter album groups, so a group hidden as empty here can appear in results and open with its albums greyed
 - Linux - the empty Album groups page has no Choose what to sync button, as Windows has
 - Android - Android Auto's Home can list an empty playlist from Recents; its queue items now expose art through ArtProvider, untested there
-- Android - stations played on a desktop aren't shown in Recents, as the phone can't play one; pass MC_LIST_STATIONS and add ItemKind.Station when it can
+- Android - stations in Android Auto are untested; after a seed that won't open, Media3's legacy session queue keeps its old size, which Auto could show
+- All - radio skips: a restart after a long pause still counts as a skip, and going back to a skipped track keeps its push until the station next opens
+- Windows and Linux - Home's tile menus: physical clicks and the Menu key on Windows, screen readers on both, and touch long-press on Linux are untested
 - Android - the main page has no predictive back preview, as the handler has to stay registered so back can quit
 - Windows - the edit dialog: no way to unlink an album from MusicBrainz (mc_album_tags_set() with "" does it), no Alt+letter keys for its fields and buttons, and Save can't be cancelled once it's started; the search opens with focus on Artist, so the results are three Tabs away
 - Linux - the edit dialog: no way to unlink an album from MusicBrainz; search results have no menu, so no Edit… there; the Menu key on an artist page's album tile opens the artist's menu
@@ -143,67 +145,3 @@ See "Merging libraries" in docs/sync-protocol.md.
 
 - Dialogs still light in dark mode: about 60 MessageBoxW calls, and the About and archive TaskDialogs. message_dialog() in prompt_dialog.c can replace them
 - Screen readers: the artist page (kithsong_artists) has no UI Automation provider; the now-playing strip exposes no seek bar or times; the volume slider has no RangeValue pattern
-
-## Testing
-
-Debug hooks: KITHSONG_DEBUG_PAIR=<host>:<port> on Windows and `--es debug_pair <host>:<port>` on Android pair two scratch instances without clicks; `--es fake_merge <scenario>` on Android shows one of the merge's screens with made-up data.
-
-UI speed: Settings' Testing section has the profiler (musiccore/perf.h) and stress test libraries (musiccore/stress.h). KITHSONG_PERF=1 turns the profiler on, and KITHSONG_PERF_RUN=<file> on the desktops runs the scroll test after startup, saves the report and quits; `--ei stress_preset <0-2>` and `--ez perf_run true` do the like on an Android debug build, the report going to logcat (tag kithsong-perf). core/tests/manual_stress generates a library from the command line.
-
-### First
-- Orphan sweep: a decision, not a check. An archive only reports orphans (MC_ORPHANS_ARCHIVE_ONLY_REPORTS, orphans.h), and the first archive is usually the main computer, so it gets no sweep; the guard against orphans outnumbering known files is MC_ORPHANS_MAX_PER_KNOWN, also there
-- Orphan sweep: an existing install's first sweep has no notice in the app. On a library in a shared folder such as Music it recycles everything unknown, up to as many files as the library holds; orphans-removed.log and orphans-found.txt in the config folder are the only record. A first sweep that only lists would be the safer start
-- Orphan sweep: with the real mc_trash(), as every run so far used a stand-in: the Recycle Bin and the Linux trash, a path past MAX_PATH (SHFileOperation can't take it, so the file stays), and a drive with no Recycle Bin, which deletes outright
-- First run and Open another library: the refusal after a real folder picker on Windows and Linux; the check itself is tested in core and the suggestion's hiding was seen on both, but neither picker can be driven
-- test_sync_merge on a real build: abandoning a merge (librestore.c) was only syntax-checked where it was written
-
-### Linux
-- First run and the edit dialog on Wayland, in the Flatpak (portal paths) and with a screen reader; only seen on X11 under Xvfb
-- Other dialogs opened from a menu use adw_dialog_set_focus() before present (playlist_dialogs.c, album_group_dialogs.c), so may lose focus as the edit dialog did
-- GTK logs a gtk_drop_target_async_handle_crossing check from the second cover drag on; no visible effect, cause not found
-- Known bugs to fix:
-  - after Use as Track, focus returns to the first row rather than the next missing track
-  - the Choose file menu's items have no accessible names
-  - removing an album while it plays leaves the removed track in the bar, with Play doing nothing
-  - the artist page's album tiles have no menu (singles' do)
-  - an album tile stays highlighted after its right-click menu closes
-
-### Windows
-- Firewall: the success path after UAC (the themed prompt's Allow was only run up to start_helper, and the device page banner's Allow and its rule for public networks only through KITHSONG_DEBUG_FIREWALL), Settings' "Ask about Windows Firewall again", the elevated helper removing rules left for a moved exe (only compiled to objects, never linked or run), the banner's real third-party, group policy and block-rule detection, and the Windows pages its buttons open
-- Narrator and NVDA with the UI Automation providers
-- The edit dialog with Narrator; on Windows 10, in high contrast and across a DPI change. A cover from a real drag from Explorer and from the file picker (drops were only driven through IDropTarget). The same display checks for the Mica smart editor, and UI Automation on its now owner-drawn Back, Save and Cancel
-- The volume drop-down on Windows 10 (no rounded corners) and in high contrast; Play albums in order's screen-reader name
-- The empty Albums page's Choose What to Sync in a group, the empty Playlists page's Choose what to sync, and the empty-page button through UI Automation
-- The pairing dialog's ended page with a real pairing: the archive explainer (the dialog growing to fit it), Create a new library and Pair again
-- The import review's Choose file menu with files of related items ("Grouped separately: …")
-
-### Android and Wear OS
-- Android Auto on the Desktop Head Unit and in a car: the four tabs, art in its lists (ArtProvider), playing from the middle of an album, voice and on-screen search, refreshing after a sync, and the app's own player and lock screen still working
-- Remove from this phone / Sync to this phone in a real group, including stopping playback when it takes a queued track
-- Smart lists' and groups' pictures, and empty playlists in Playlists and Recents
-- An album group's Play, Shuffle albums and Shuffle tracks wrapping on a narrow screen; an edited playlist or group moving first in Recents
-- A recent's long-press menu; Settings' Play albums in order
-- Profile editor: the over-budget message, renaming a member, a group renaming the phone, dark theme
-- After pairing: Choose what to sync and the one-time archive explainer
-- Merging: the progress card, the forgotten-devices line, the merge_pending note, the failed summary and the merge's notification (only seen with fake_merge)
-- Search with a large library
-- A pairing finishing after leaving the app, and an upgrade from 0.4.2 leaving no WorkManager job (`adb shell dumpsys jobscheduler`)
-- The one-time handover of the old prefs recents to the core
-- API 24-32 devices (API 24-25 duck through the core's volume)
-- Wear OS: sync on a real watch and with a desktop peer (only seen between Wear and phone emulators); a wrong code, the refusals, the waiting sentence and the failure line; the service's notification
-- Wear OS: headphones connecting or unplugging mid-play, a real crown's seeking, album art in the media controls, a real scrobble
-- Wear OS: playlists' and groups' long-press haptic, failure notice and TalkBack labels, and the watch's additions reaching a peer
-- Wear OS: a licence's long text scrolling with the crown and showing its name
-- Android: the smart list editor and the recycle bin on a device (Restore, Empty, the sync dot on the main menu)
-- Android: the smart list editor in landscape with the keyboard up (the tag editor needed adjustResize there; the manifest could set it app-wide)
-- Android: swipes on a physical phone and with 3-button navigation; back on API levels below 33; the scrubber in landscape and at large font scales; a failed Save of a cover, a JPEG cover, and emoji in tags through the byte-array path
-- Android: a first launch on a fresh install once logged "Couldn't open the library" (status -5) and then opened fine; cause unknown
-- Android: :app:lintDebug fails on 20 errors from before this round (LocalContextGetResourceValueCall, StateFlowValueCalledInComposition)
-
-### Cross-platform
-- Sync speed and time left over a real network, between real devices, and against a peer without FILE_REQ's est; a chosen cover reaching a real older peer
-- Opus: run `manual_opus_bench pool <dir> 11 128 <cache> 1` on an idle PC for a measured figure rather than an estimate, and a sync to a real phone
-- merge_restored's notice (never seen anywhere); on Windows, that it fits the now-playing strip
-- The library_mismatch update hint (needs a peer running an older version)
-- The waiting-for-a-device banner and card running
-- Sync PREPARE_REQ end to end (needs three devices), and a merged album going through the file phase
