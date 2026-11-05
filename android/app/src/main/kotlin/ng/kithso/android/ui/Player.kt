@@ -362,6 +362,8 @@ private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: ((
             IconToggleButton(
                 checked = playback.shuffle,
                 onCheckedChange = playback::setShuffle,
+                // A station has its own order; shuffle is back, as it was, with the next queue.
+                enabled = !playback.station,
                 colors = IconButtonDefaults.iconToggleButtonColors(
                     checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
                     checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,

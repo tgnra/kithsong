@@ -15,6 +15,7 @@ import ng.kithso.core.ItemKind
 import ng.kithso.core.LibraryStats
 import ng.kithso.core.MusicCoreException
 import ng.kithso.core.NativeCore
+import ng.kithso.core.RecentInfo
 import ng.kithso.core.SearchHit
 import ng.kithso.core.SearchKind
 import ng.kithso.core.TrackInfo
@@ -44,6 +45,8 @@ import ng.kithso.core.artistAlbums
 import ng.kithso.core.artistSingles
 import ng.kithso.core.artistTracks
 import ng.kithso.core.clearRecents
+import ng.kithso.core.radioSeedUsable
+import ng.kithso.core.radioStations
 import ng.kithso.core.recents
 import ng.kithso.core.recordOpened
 import ng.kithso.core.removeRecent
@@ -52,6 +55,7 @@ import ng.kithso.core.search
 import ng.kithso.core.searchPrepare
 import ng.kithso.core.smartAlbums
 import ng.kithso.core.stats
+import ng.kithso.core.track
 import ng.kithso.core.smartArt
 import ng.kithso.core.countSmart
 import ng.kithso.core.createSmart
@@ -71,6 +75,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Calendar
 
 /**
  * The library as musiccore has it, in library folder [dir]. A library handle isn't
@@ -98,6 +103,12 @@ import java.io.File
  * of their own ([art]), and [library] is updated with those that changed. Meanwhile each
  * shows the picture it last had, kept in [prefs] across launches.
  *
+ * The radio stations are worked out from every analysis result, which is too slow to wait for
+ * and for [core] to be kept from anything else by, so after each read they're found on a thread
+ * and library connection of their own ([radio]), and [library] is updated if they've changed.
+ * Meanwhile the Radio row shows those last found. Results arriving by themselves, as analysis
+ * finishing does, and a new day change them too ([refreshStations], [onShown]).
+ *
  * Manual playlists and album groups are edited here too ([PlaylistEditor]), smart lists made
  * and edited ([SmartListEditor]), and albums, artists and tracks deleted ([LibraryDeleter]),
  * on [core], each change followed by a [refresh].
@@ -124,6 +135,12 @@ class CoreLibrarySource(
     private var lib: CoreLibrary? = null
     private var contents = Contents.Empty
     private var artLookups = 0 // bumped by each read, so only the latest read's lookup is used
+
+    private var stations: List<Station> = emptyList() // only touched on [core]
+    private val radio = Dispatchers.IO.limitedParallelism(1)
+    private var radioLib: CoreLibrary? = null // only touched on [radio]
+    private var stationsLookup: Job? = null
+    @Volatile private var stationsDay = 0
 
     private val art = Dispatchers.IO.limitedParallelism(1)
     private var artLib: CoreLibrary? = null // only touched on [art]
@@ -167,7 +184,7 @@ class CoreLibrarySource(
             }
         } ?: Contents.Empty
         handOverRecents()
-        state.value = contents.library(recents())
+        state.value = contents.library(recents(), stations)
         Log.i(TAG, "Read ${contents.albums.size} albums in ${SystemClock.elapsedRealtime() - start} ms")
         try {
             lib?.searchPrepare()
@@ -175,7 +192,45 @@ class CoreLibrarySource(
             Log.e(TAG, "Couldn't prepare search", e)
         }
         lookUpArt(contents.playlists.keys + contents.albumGroups.keys, ++artLookups)
+        refreshStations()
     }
+
+    /** Finds the stations again, in the background: analysis has added results, say. */
+    @Synchronized
+    fun refreshStations() {
+        stationsLookup?.cancel() // waiting its turn, or it'd go through every result for nothing
+        stationsLookup = scope.launch(radio) {
+            val start = SystemClock.elapsedRealtime()
+            val found = try {
+                val lib = radioLib ?: CoreLibrary(dir.path).also { radioLib = it }
+                lib.radioStations()
+            } catch (e: MusicCoreException) {
+                Log.e(TAG, "Couldn't list the radio stations", e)
+                return@launch
+            }
+            stationsDay = today()
+            Log.i(TAG, "Found ${found.size} radio stations in ${SystemClock.elapsedRealtime() - start} ms")
+            withContext(core) {
+                val covers = Covers()
+                val list = found.map { info ->
+                    Station(
+                        info.seedTrack, info.name, info.sub, info.seedTitle.orEmpty(),
+                        covers.station(info.seedTrack, info.name, info.coverDir, info.artistUid), info.artistUid,
+                    )
+                }
+                if (list == stations) return@withContext
+                stations = list
+                state.value = state.value?.copy(stations = list)
+            }
+        }
+    }
+
+    /** The app came on screen: stations can move to other tracks from one day to the next. */
+    fun onShown() {
+        if (stationsDay != 0 && stationsDay != today()) refreshStations()
+    }
+
+    private fun today(): Int = Calendar.getInstance().let { it.get(Calendar.YEAR) * 1000 + it.get(Calendar.DAY_OF_YEAR) }
 
     // On [core]. Looks up the pictures of playlists and album groups [uids] on [art], then puts
     // those that changed in [contents], unless another read has started a lookup since.
@@ -199,7 +254,7 @@ class CoreLibrarySource(
                 val albumGroups = contents.albumGroups.mapValues { (uid, g) -> g.copy(art = picture(uid, g.name, g.art)) }
                 if (playlists == contents.playlists && albumGroups == contents.albumGroups) return@withContext
                 contents = contents.copy(playlists = playlists, albumGroups = albumGroups)
-                state.value = contents.library(recents())
+                state.value = contents.library(recents(), stations)
             }
         }
     }
@@ -307,10 +362,36 @@ class CoreLibrarySource(
                         albumCount = albums.size, albums = albums, canReshuffle = ref.uid in contents.random,
                     )
                 }
+                CollectionRef.Kind.Station -> null
             }
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't list $ref", e)
             null
+        }
+    }
+
+    override suspend fun stationSeed(seedUid: String): Track? = withContext(core) {
+        try {
+            val lib = open() ?: return@withContext null
+            if (!lib.radioSeedUsable(seedUid)) return@withContext null
+            // The check goes by the library, which still has a file that's since gone.
+            lib.track(seedUid)?.takeIf { info -> info.path?.let { File(it).exists() } == true }?.let { Covers().track(it) }
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't check station $seedUid", e)
+            null
+        }
+    }
+
+    override suspend fun tracks(uids: List<String>): List<Track?> = withContext(core) {
+        val lib = open()
+        val covers = Covers()
+        uids.map { uid ->
+            try {
+                lib?.track(uid)?.let { covers.track(it) }
+            } catch (e: MusicCoreException) {
+                Log.e(TAG, "Couldn't read track $uid", e)
+                null
+            }
         }
     }
 
@@ -365,7 +446,10 @@ class CoreLibrarySource(
         scope.launch(core) {
             val lib = open() ?: return@launch
             try {
-                lib.logPlay(event)
+                if (lib.logPlay(event)) {
+                    state.value = state.value?.copy(recents = recents())
+                    onChanged()
+                }
             } catch (e: MusicCoreException) {
                 Log.w(TAG, "Couldn't log a play of ${event.trackUid}", e)
             }
@@ -870,12 +954,29 @@ class CoreLibrarySource(
     // playlists with nothing here, but not albums or artists, so it's asked for more than are
     // shown.
     private fun recents(): List<Recent> = try {
-        open()?.recents(MAX_RECENTS * 4, playableOnly = true).orEmpty()
-            .mapNotNull { recent(CollectionRef(it.kind.refKind, it.uid)) }
+        val lib = open()
+        val covers = Covers()
+        lib?.recents(MAX_RECENTS * 4, playableOnly = true).orEmpty().asSequence()
+            .mapNotNull { if (it.kind == ItemKind.Station) station(lib, it, covers) else recent(CollectionRef(it.kind.refKind, it.uid)) }
             .take(MAX_RECENTS)
+            .toList()
     } catch (e: MusicCoreException) {
         Log.e(TAG, "Couldn't list the recents", e)
         emptyList()
+    }
+
+    // A station from the recents, with the art it has in the Radio row.
+    private fun station(lib: CoreLibrary?, info: RecentInfo, covers: Covers): Recent {
+        val seed = lib?.track(info.uid)
+        return Recent(
+            CollectionRef(CollectionRef.Kind.Station, info.uid),
+            info.name,
+            null,
+            covers.station(info.uid, info.name, seed?.coverDir, seed?.artistUid),
+            info.sub,
+            info.seedTitle,
+            seed?.artistUid,
+        )
     }
 
     private fun recent(ref: CollectionRef): Recent? = when (ref.kind) {
@@ -883,6 +984,7 @@ class CoreLibrarySource(
         CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
         CollectionRef.Kind.Playlist -> contents.playlists[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
         CollectionRef.Kind.AlbumGroup -> contents.albumGroups[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
+        CollectionRef.Kind.Station -> null
     }
 
     // The tracks with a file on this phone.
@@ -901,12 +1003,13 @@ class CoreLibrarySource(
         val smart: Set<String>,
         val random: Set<String>,
     ) {
-        fun library(recents: List<Recent>) = Library(
+        fun library(recents: List<Recent>, stations: List<Station>) = Library(
             recents,
             playlists.values.toList(),
             albums.values.toList(),
             artists.values.toList(),
             albumGroups.values.toList(),
+            stations,
         )
 
         companion object {
@@ -950,6 +1053,12 @@ class CoreLibrarySource(
         fun artist(info: ArtistInfo): ArtRef =
             ref(info.uid, info.name, info.coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } })
 
+        /** A station's picture: the cover in [coverDir], or failing that its artist's. */
+        fun station(uid: String, name: String, coverDir: String?, artistUid: String?): ArtRef {
+            val cover = coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } }
+            return ref(uid, name, cover ?: artistUid?.let { contents.artists[it]?.art?.file }?.let(::File))
+        }
+
         /** A found track's art: its album's, keyed by the album's title as a track's is. */
         fun found(album: Album): ArtRef = album.art.copy(uid = album.title, label = album.title)
 
@@ -984,6 +1093,7 @@ class CoreLibrarySource(
                 CollectionRef.Kind.Artist -> ItemKind.Artist
                 CollectionRef.Kind.Playlist -> ItemKind.Playlist
                 CollectionRef.Kind.AlbumGroup -> ItemKind.AlbumGroup
+                CollectionRef.Kind.Station -> ItemKind.Station
             }
 
         val ItemKind.refKind: CollectionRef.Kind
@@ -992,6 +1102,7 @@ class CoreLibrarySource(
                 ItemKind.Artist -> CollectionRef.Kind.Artist
                 ItemKind.Playlist -> CollectionRef.Kind.Playlist
                 ItemKind.AlbumGroup -> CollectionRef.Kind.AlbumGroup
+                ItemKind.Station -> CollectionRef.Kind.Station
             }
     }
 }

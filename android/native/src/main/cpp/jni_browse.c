@@ -166,7 +166,7 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreBrowse_nativeClearRecents(JNIEnv 
   if (st != MC_OK) throw_status(env, st);
 }
 
-/* flags are mc_library_list_recents()'s (MC_LIST_PLAYABLE). */
+/* flags are mc_library_list_recents()'s (MC_LIST_PLAYABLE, MC_LIST_STATIONS). */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListRecents(JNIEnv *env, jclass cls,
                                                                                jlong handle, jint limit,
                                                                                jint flags) {
@@ -174,7 +174,8 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListRecents(
   jclass info = (*env)->FindClass(env, "ng/kithso/core/RecentInfo");
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
-                                       "(ILjava/lang/String;JLjava/lang/String;Ljava/lang/String;Z)V");
+                                       "(ILjava/lang/String;JLjava/lang/String;Ljava/lang/String;Z"
+                                       "Ljava/lang/String;Ljava/lang/String;)V");
   if (!ctor) return NULL;
 
   mc_recent_list *list = NULL;
@@ -190,8 +191,10 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListRecents(
     jstring uid = new_string(env, r->uid);
     jstring name = new_string(env, r->name ? r->name : "");
     jstring artist = new_string(env, r->artist);
+    jstring seed_title = new_string(env, r->seed_title);
+    jstring sub = new_string(env, r->sub);
     jobject item = (*env)->NewObject(env, info, ctor, (jint)r->kind, uid, (jlong)r->opened_ms, name, artist,
-                                     (jboolean)(r->is_smart != 0));
+                                     (jboolean)(r->is_smart != 0), seed_title, sub);
     if (!item) {
       out = NULL;
       break;
@@ -201,6 +204,8 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreBrowse_nativeListRecents(
     (*env)->DeleteLocalRef(env, uid);
     (*env)->DeleteLocalRef(env, name);
     if (artist) (*env)->DeleteLocalRef(env, artist);
+    if (seed_title) (*env)->DeleteLocalRef(env, seed_title);
+    if (sub) (*env)->DeleteLocalRef(env, sub);
   }
   mc_recent_list_free(list);
   return out;

@@ -1,5 +1,6 @@
 package ng.kithso.android.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
@@ -11,12 +12,15 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -67,7 +71,8 @@ import ng.kithso.android.ui.art.AlbumArt
  * [art] the tile has what a thing with no cover has, a coloured square with the title's first
  * letter. [badge] goes in the top corner of the art, for a small mark; if it means something,
  * give it a content description, which TalkBack reads after the text. [onLongClick] is for a
- * menu.
+ * menu. [description] is what TalkBack says in place of the title and subtitle, for a tile they
+ * don't explain.
  */
 @Immutable
 data class Tile(
@@ -77,6 +82,7 @@ data class Tile(
     val art: ArtRef? = null,
     val onLongClick: (() -> Unit)? = null,
     val badge: (@Composable () -> Unit)? = null,
+    val description: String? = null,
     val onClick: () -> Unit,
 )
 
@@ -180,15 +186,27 @@ fun TileRow(tiles: List<Tile>, modifier: Modifier = Modifier, state: LazyListSta
                     onClick = tile.onClick,
                     modifier = Modifier.width(width),
                     badge = tile.badge,
+                    description = tile.description,
                 )
             }
         }
     }
 }
 
+/** A radio station's mark on its art, so it doesn't read as the album it's showing. */
+@Composable
+internal fun StationBadge() {
+    Box(
+        Modifier.size(28.dp).background(MaterialTheme.colorScheme.primary, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Radio, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+    }
+}
+
 /**
  * Art with a title and, unless it's null, a [subtitle] under it, as a [modifier]-wide tap target;
- * the [badge] goes in the art's top corner.
+ * the [badge] goes in the art's top corner. [description], if any, is what TalkBack says of it.
  */
 @Composable
 internal fun ArtTile(
@@ -199,13 +217,14 @@ internal fun ArtTile(
     onClick: () -> Unit,
     modifier: Modifier,
     badge: (@Composable () -> Unit)? = null,
+    description: String? = null,
 ) {
-    val description = if (subtitle.isNullOrEmpty()) title else "$title, $subtitle"
+    val said = description ?: if (subtitle.isNullOrEmpty()) title else "$title, $subtitle"
     Column(
         modifier
             .clip(RoundedCornerShape(12.dp))
             .combinedClickable(onLongClick = onLongClick, onClick = onClick)
-            .semantics { contentDescription = description },
+            .semantics { contentDescription = said },
     ) {
         Box {
             AlbumArt(

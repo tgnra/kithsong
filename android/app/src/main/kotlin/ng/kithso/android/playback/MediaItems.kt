@@ -32,6 +32,7 @@ val CollectionRef.origin: CorePlayer.Origin
             CollectionRef.Kind.Artist -> CorePlayer.PlayContext.Artist
             CollectionRef.Kind.Playlist -> CorePlayer.PlayContext.Playlist
             CollectionRef.Kind.AlbumGroup -> CorePlayer.PlayContext.AlbumGroup
+            CollectionRef.Kind.Station -> CorePlayer.PlayContext.Radio
         },
         uid,
     )
@@ -43,6 +44,18 @@ val CollectionRef.origin: CorePlayer.Origin
 fun queueItems(context: Context, tracks: List<Track>, origin: CorePlayer.Origin): List<MediaItem> {
     val artwork = HashMap<ArtRef, Uri>()
     return tracks.map { it.toMediaItem(artwork.getOrPut(it.art) { ArtProvider.uriFor(context, it.art) }, origin) }
+}
+
+/**
+ * A station's queue items for [uids] and [tracks], one track for each uid, or null for one the
+ * library no longer has: it still needs an item, as the player's indexes have to stay in step
+ * with the core's, and the core will skip it.
+ */
+fun stationItems(context: Context, uids: List<String>, tracks: List<Track?>, origin: CorePlayer.Origin): List<MediaItem> {
+    val items = queueItems(context, tracks.filterNotNull(), origin).iterator()
+    return uids.indices.map { i ->
+        if (tracks[i] != null) items.next() else MediaItem.Builder().setMediaId(uids[i]).build()
+    }
 }
 
 /**

@@ -173,10 +173,11 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreLibrary_nativePreviewSmar
 }
 
 /* A play log row, as CorePlayer.takeEnded() gave it. context_uid may be null. */
-JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativeLogPlay(JNIEnv *env, jclass cls, jlong handle,
-                                                                   jstring track_uid, jlong started_ms,
-                                                                   jlong listened_ms, jint end, jint context,
-                                                                   jstring context_uid) {
+/* Whether logging it may have changed the recents (mc_play_event_starts_station()). */
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreLibrary_nativeLogPlay(JNIEnv *env, jclass cls, jlong handle,
+                                                                       jstring track_uid, jlong started_ms,
+                                                                       jlong listened_ms, jint end, jint context,
+                                                                       jstring context_uid) {
   (void)cls;
   mc_play_event event;
   memset(&event, 0, sizeof event);
@@ -185,17 +186,21 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativeLogPlay(JNIEnv *env
   event.end = (mc_play_end)end;
   event.context = (mc_play_context)context;
   const char *ctrack = (*env)->GetStringUTFChars(env, track_uid, NULL);
-  if (!ctrack) return;
+  if (!ctrack) return JNI_FALSE;
   snprintf(event.track_uid, sizeof event.track_uid, "%s", ctrack);
   (*env)->ReleaseStringUTFChars(env, track_uid, ctrack);
   if (context_uid) {
     const char *cuid = (*env)->GetStringUTFChars(env, context_uid, NULL);
-    if (!cuid) return;
+    if (!cuid) return JNI_FALSE;
     snprintf(event.context_uid, sizeof event.context_uid, "%s", cuid);
     (*env)->ReleaseStringUTFChars(env, context_uid, cuid);
   }
   mc_status st = mc_library_log_play((mc_library *)(intptr_t)handle, &event);
-  if (st != MC_OK) throw_status(env, st);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return JNI_FALSE;
+  }
+  return mc_play_event_starts_station(&event) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreLibrary_nativeRecordPlay(JNIEnv *env, jclass cls,
@@ -1009,14 +1014,40 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_CorePlayer_nativeOrder(JNIEnv *e
   return out;
 }
 
-/* Fills out with state, index, count, position_ms, duration_ms, shuffle, volume, muted. */
+/* mc_player_play_radio(). */
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativePlayRadio(JNIEnv *env, jclass cls, jlong handle,
+                                                                     jstring library_dir, jstring seed_path,
+                                                                     jstring seed_uid) {
+  (void)cls;
+  int ok = 1;
+  const char *dir = jni_chars(env, library_dir, &ok);
+  const char *path = ok ? jni_chars(env, seed_path, &ok) : NULL;
+  const char *uid = ok ? jni_chars(env, seed_uid, &ok) : NULL;
+  mc_status st = ok ? mc_player_play_radio(player_of(handle), dir, path, uid) : MC_OK;
+  jni_release(env, library_dir, dir);
+  jni_release(env, seed_path, path);
+  jni_release(env, seed_uid, uid);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* Queue item index's track uid; null if there's no such item, or one that isn't logged. */
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_CorePlayer_nativeQueueUid(JNIEnv *env, jclass cls, jlong handle,
+                                                                       jint index) {
+  (void)cls;
+  char uid[MC_UID_STRLEN];
+  if (mc_player_queue_uid(player_of(handle), index, uid) != MC_OK || !uid[0]) return NULL;
+  return new_string(env, uid);
+}
+
+/* Fills out with state, index, count, position_ms, duration_ms, shuffle, volume, muted, radio. */
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeStatus(JNIEnv *env, jclass cls,
                                                                   jlong handle, jlongArray out) {
   (void)cls;
   mc_player_status st;
   mc_player_status_get(player_of(handle), &st);
-  jlong values[8] = {st.state, st.index, st.count, st.position_ms, st.duration_ms, st.shuffle, st.volume, st.muted};
-  (*env)->SetLongArrayRegion(env, out, 0, 8, values);
+  jlong values[9] = {st.state, st.index, st.count, st.position_ms, st.duration_ms,
+                     st.shuffle, st.volume, st.muted, st.radio};
+  (*env)->SetLongArrayRegion(env, out, 0, 9, values);
 }
 
 /* Fills out with the item and start (wall clock ms) of the oldest play that counts; false if

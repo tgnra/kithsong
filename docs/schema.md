@@ -845,10 +845,7 @@ and then `opened_ms` isn't the wall-clock part of its hlc. A
 station's name isn't stored: it's made from its seed when listed, as the Home page's stations are.
 
 Stations are only listed with `MC_LIST_STATIONS`, and with `MC_LIST_PLAYABLE` only if the seed
-has a `files` row here, as there's nothing to start one from otherwise. Android doesn't pass the
-flag, as it can't play a station: it has `mc_recent_kind` as a closed enum, so it mustn't be
-handed a kind it doesn't have. The row still syncs through it, and Clear Recents there clears
-stations too.
+has a `files` row here, as there's nothing to start one from otherwise. Android passes both.
 
 `kind` is free text that nothing checks, so a new kind needs no schema version. An older app
 stores and passes on the row like any other, and its listing leaves the row out, since each kind
