@@ -61,6 +61,11 @@
                 <data android:mimeType="audio/*" />
                 <data android:mimeType="application/zip" />
             </intent-filter>
+            <!-- A voice assistant's "play ... on Kithsong". -->
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
         <service
             android:name=".importer.ImportService"

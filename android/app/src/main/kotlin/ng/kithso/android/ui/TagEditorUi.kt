@@ -75,6 +75,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -276,6 +277,7 @@ internal fun TagEditorScreen(editor: TagEditor, playback: Playback, target: TagT
     var searching by rememberSaveable(target) { mutableStateOf(false) }
     var asking by rememberSaveable(target) { mutableStateOf(false) }
     val context = LocalContext.current
+    val resources = LocalResources.current
     // The form makes room for the keyboard itself. Left to pan as well, the window slides the
     // whole page out of sight in landscape, where the box is lower than the keyboard's top.
     val window = (context as? Activity)?.window
@@ -290,8 +292,8 @@ internal fun TagEditorScreen(editor: TagEditor, playback: Playback, target: TagT
             // An empty form with only Cancel to press, saying why.
             is TagResult.Failed -> {
                 form.failed = true
-                form.message = if (read.status == CoreEdit.ERR_NOT_FOUND) context.getString(R.string.edit_gone)
-                else context.getString(R.string.edit_load_failed, CoreEdit.statusText(read.status))
+                form.message = if (read.status == CoreEdit.ERR_NOT_FOUND) resources.getString(R.string.edit_gone)
+                else resources.getString(R.string.edit_load_failed, CoreEdit.statusText(read.status))
             }
         }
     }
@@ -390,7 +392,7 @@ private fun TagPage(
     onSearch: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val focus = LocalFocusManager.current
     var askMerge by remember { mutableStateOf<String?>(null) } // the other artist, while the question's up
     val saveAs: (TagValues) -> Unit = saveAs@{ now ->
@@ -398,7 +400,7 @@ private fun TagPage(
         form.saving = true
         form.inUse = false
         form.failed = false
-        form.message = context.getString(R.string.edit_saving)
+        form.message = resources.getString(R.string.edit_saving)
         scope.launch {
             val result = editor.save(form.target, was, now)
             form.saved = result.saved // what did get saved is saved: a second try leaves it out
@@ -416,8 +418,8 @@ private fun TagPage(
                 onSaved()
             } else {
                 form.failed = true
-                form.message = if (result.status == CoreEdit.ERR_NOT_FOUND) context.getString(R.string.edit_gone)
-                else context.getString(R.string.edit_save_failed, CoreEdit.statusText(result.status))
+                form.message = if (result.status == CoreEdit.ERR_NOT_FOUND) resources.getString(R.string.edit_gone)
+                else resources.getString(R.string.edit_save_failed, CoreEdit.statusText(result.status))
                 // Nothing changed, and it may yet be the track playing; a cover isn't played.
                 form.inUse = result.status == CoreEdit.ERR_IN_USE && !result.artTried && playback.queueUids.isNotEmpty()
             }
@@ -760,7 +762,7 @@ private fun ReleaseSearchPage(
     var message by remember { mutableStateOf<String?>(null) }
     var failed by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val focus = LocalFocusManager.current
     val unreachable = stringResource(R.string.import_error_unreachable)
     val search: () -> Unit = search@{
@@ -770,18 +772,18 @@ private fun ReleaseSearchPage(
         failed = false
         releases = emptyList()
         picked = -1
-        message = context.getString(R.string.import_searching)
+        message = resources.getString(R.string.import_searching)
         scope.launch {
             when (val found = editor.searchReleases(albumUid, artist, title)) {
                 is TagResult.Ok -> {
                     releases = found.value
                     picked = if (found.value.isEmpty()) -1 else 0
-                    message = if (found.value.isEmpty()) context.getString(R.string.edit_search_nothing) else null
+                    message = if (found.value.isEmpty()) resources.getString(R.string.edit_search_nothing) else null
                 }
                 is TagResult.Failed -> {
                     failed = true
                     message = if (found.status == CoreEdit.ERR_NET) unreachable
-                    else context.getString(R.string.edit_search_failed, CoreEdit.statusText(found.status))
+                    else resources.getString(R.string.edit_search_failed, CoreEdit.statusText(found.status))
                 }
             }
             busy = false
@@ -792,14 +794,14 @@ private fun ReleaseSearchPage(
         if (busy) return@use
         busy = true
         failed = false
-        message = context.getString(R.string.edit_search_loading)
+        message = resources.getString(R.string.edit_search_loading)
         scope.launch {
             when (val tags = editor.releaseTags(albumUid, release.mbAlbumId)) {
                 is TagResult.Ok -> onUse(tags.value)
                 is TagResult.Failed -> {
                     failed = true
                     message = if (tags.status == CoreEdit.ERR_NET) unreachable
-                    else context.getString(R.string.edit_search_load_failed, CoreEdit.statusText(tags.status))
+                    else resources.getString(R.string.edit_search_load_failed, CoreEdit.statusText(tags.status))
                 }
             }
             busy = false

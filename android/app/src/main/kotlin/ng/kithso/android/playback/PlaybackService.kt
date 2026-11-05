@@ -162,7 +162,7 @@ class PlaybackService : MediaLibraryService() {
             val on = when (customCommand.customAction) {
                 ACTION_SHUFFLE_ON -> true
                 ACTION_SHUFFLE_OFF -> false
-                else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+                else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
             }
             session.player.shuffleModeEnabled = on
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))

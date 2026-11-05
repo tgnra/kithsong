@@ -50,6 +50,12 @@ interface Playback {
     fun previous()
     /** Straight to the track before, however far into this one it is, as a swipe shows it. */
     fun skipToPrevious()
+    /**
+     * Plays the best result for [query], as a voice search does; with none, or an empty [query]
+     * (as for "play Kithsong"), the first of Recents. Nothing plays if the library has nothing.
+     */
+    fun playSearch(query: String) {}
+
     /** Turns shuffle on or off, carrying on from the current track; set it before [play] to start shuffled. */
     fun setShuffle(on: Boolean)
 

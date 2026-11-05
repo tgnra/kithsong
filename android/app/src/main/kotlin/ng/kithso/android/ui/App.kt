@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -62,6 +63,7 @@ import ng.kithso.android.data.Track
 import ng.kithso.android.importer.Importer
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.playback.origin
+import ng.kithso.android.sync.SyncStatus
 import ng.kithso.android.sync.Syncer
 import ng.kithso.android.ui.theme.ArtColors
 import ng.kithso.android.ui.theme.ArtTheme
@@ -100,23 +102,16 @@ fun App(
     val library by source.library.collectAsState()
     val importProgress by importer.progress.collectAsState()
     // Only the merge's state, so sync's other progress doesn't recompose everything.
-    val merge by remember(syncer) { syncer.status.map { it.merge }.distinctUntilChanged() }
-        .collectAsState(syncer.status.value.merge)
-    val inGroup by remember(syncer) { syncer.status.map { it.inGroup }.distinctUntilChanged() }
-        .collectAsState(syncer.status.value.inGroup)
+    val merge by syncer.statusPart { it.merge }
+    val inGroup by syncer.statusPart { it.inGroup }
     // Tracks waiting for a member this phone can't reach: a card under the main list's header.
-    val waiting by remember(syncer) { syncer.status.map { it.waiting }.distinctUntilChanged() }
-        .collectAsState(syncer.status.value.waiting)
+    val waiting by syncer.statusPart { it.waiting }
     // What's wrong with the files here: a card above that one.
-    val problems by remember(syncer) { syncer.status.map { it.problems }.distinctUntilChanged() }
-        .collectAsState(syncer.status.value.problems)
+    val problems by syncer.statusPart { it.problems }
     // The recycle bin: how many deletes wait for a sync (null outside a group, where deletes
     // don't go there), and the red dot on the main menu and its Sync while one could sync.
-    val binCount by remember(syncer) {
-        syncer.status.map { s -> s.binCount.takeIf { s.binOffered || it > 0 } }.distinctUntilChanged()
-    }.collectAsState(null)
-    val binDot by remember(syncer) { syncer.status.map { it.binDot }.distinctUntilChanged() }
-        .collectAsState(syncer.status.value.binDot)
+    val binCount by syncer.statusPart { s -> s.binCount.takeIf { s.binOffered || it > 0 } }
+    val binDot by syncer.statusPart { it.binDot }
     val importPickers = rememberImportPickers(importer, onImportStarted)
     var nav by rememberSaveable(stateSaver = NavSaver) { mutableStateOf(BackStack<Page>()) }
     // What the tag editor is open on, which outlives a rotation as what's typed there does.
@@ -143,7 +138,7 @@ fun App(
             scope.launch {
                 val seed = source.stationSeed(ref.uid)
                 if (seed == null) {
-                    Toast.makeText(context, context.getString(R.string.station_unavailable), Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, R.string.station_unavailable, Toast.LENGTH_LONG).show()
                 } else {
                     playback.play(listOf(seed), 0, ref.origin)
                     source.notePlayed(ref)
@@ -503,6 +498,13 @@ fun App(
 }
 
 private val MiniPlayerMargin = 8.dp
+
+/** One part of [Syncer.status] as state, so a change elsewhere in it doesn't recompose what reads this. */
+@Composable
+private fun <T> Syncer.statusPart(part: (SyncStatus) -> T): State<T> {
+    val parts = remember(this) { status.map(part).distinctUntilChanged() }
+    return parts.collectAsState(remember(this) { part(status.value) })
+}
 
 /**
  * Whether the window is short, as a phone is in landscape: screens then put their headers'

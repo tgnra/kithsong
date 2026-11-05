@@ -2,12 +2,14 @@ package ng.kithso.android
 
 import ng.kithso.core.*
 import android.Manifest
+import android.app.SearchManager
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -70,7 +72,10 @@ class MainActivity : ComponentActivity() {
         Log.i(TAG, "musiccore ${NativeCore.version()}")
         // A zip or audio files opened with or shared to the app: import them. Only on a fresh
         // start, so turning the phone doesn't import them again.
-        if (savedInstanceState == null) importShared(intent)
+        if (savedInstanceState == null) {
+            importShared(intent)
+            playSearch(intent)
+        }
 
         setContent {
             KithsongTheme {
@@ -108,6 +113,13 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         importShared(intent)
+        playSearch(intent)
+    }
+
+    // A voice assistant asking for something to be played.
+    private fun playSearch(intent: Intent?) {
+        if (intent?.action != MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) return
+        (application as KithsongApp).playback.playSearch(intent.getStringExtra(SearchManager.QUERY).orEmpty())
     }
 
     // ACTION_VIEW of a zip ("Open with"), ACTION_SEND of a zip or audio file, ACTION_SEND_MULTIPLE

@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
@@ -96,6 +97,17 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
         positionMs = 0
         withController {
             it.setMediaItems(items, start, 0)
+            it.prepare()
+            it.play()
+        }
+    }
+
+    // An item with only a query, which the session turns into the queue it stands for.
+    override fun playSearch(query: String) {
+        val metadata = MediaItem.RequestMetadata.Builder().setSearchQuery(query).build()
+        val item = MediaItem.Builder().setRequestMetadata(metadata).build()
+        withController {
+            it.setMediaItem(item)
             it.prepare()
             it.play()
         }

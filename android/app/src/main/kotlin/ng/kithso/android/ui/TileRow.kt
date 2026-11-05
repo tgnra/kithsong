@@ -166,6 +166,7 @@ fun TileRow(tiles: List<Tile>, modifier: Modifier = Modifier, state: LazyListSta
         Snapshot.withoutReadObservation {
             if (state.firstVisibleItemIndex == 0 && state.firstVisibleItemScrollOffset == 0) state.requestScrollToItem(0)
         }
+        front
     }
     // All the tiles or none keep a line for the sub line, so the row's height stays the same.
     val subtitles = tiles.any { it.subtitle != null }

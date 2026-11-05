@@ -63,6 +63,7 @@ import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
@@ -138,6 +139,7 @@ private data class ProfileEdits(
 fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
     val uid = device.uid
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var stored by remember(uid) { mutableStateOf<SyncProfile?>(null) }
     var readError by remember(uid) { mutableStateOf<Int?>(null) }
@@ -167,9 +169,9 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
             null
         } catch (e: MusicCoreException) {
             if (e.status == CoreSync.ERR_LOCKED) {
-                context.getString(R.string.profile_locked)
+                resources.getString(R.string.profile_locked)
             } else {
-                context.getString(R.string.profile_save_failed, statusText(context, e.status))
+                resources.getString(R.string.profile_save_failed, statusText(context, e.status))
             }
         }
         edits = ProfileEdits.None
@@ -218,9 +220,9 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
                 null
             } catch (e: MusicCoreException) {
                 if (e.status == CoreSync.ERR_LOCKED && !archive && isSelf) {
-                    context.getString(R.string.profile_archive_locked)
+                    resources.getString(R.string.profile_archive_locked)
                 } else {
-                    context.getString(R.string.profile_archive_failed, statusText(context, e.status))
+                    resources.getString(R.string.profile_archive_failed, statusText(context, e.status))
                 }
             }
         }
@@ -317,7 +319,7 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
                             stored = syncer.excludeItem(uid, item, !on)
                             null
                         } catch (e: MusicCoreException) {
-                            context.getString(R.string.profile_save_failed, statusText(context, e.status))
+                            resources.getString(R.string.profile_save_failed, statusText(context, e.status))
                         }
                     }
                 } else {

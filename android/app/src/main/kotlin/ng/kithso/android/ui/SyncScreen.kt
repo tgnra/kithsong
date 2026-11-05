@@ -47,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -647,6 +648,7 @@ private const val LOST_NAMED = 6
 @Composable
 private fun LostDialog(problems: SyncProblems, onRemove: suspend (List<String>) -> LostRemoval, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val lost = problems.lost
     AlertDialog(
@@ -671,9 +673,9 @@ private fun LostDialog(problems: SyncProblems, onRemove: suspend (List<String>) 
                     scope.launch {
                         val text = when (val outcome = onRemove(lost.map { it.uid })) {
                             LostRemoval.Removed -> null
-                            is LostRemoval.Kept -> context.resources.getQuantityString(R.plurals.sync_lost_kept, outcome.tracks, outcome.tracks)
-                            LostRemoval.Busy -> context.getString(R.string.sync_lost_busy)
-                            LostRemoval.Failed -> context.getString(R.string.sync_lost_failed)
+                            is LostRemoval.Kept -> resources.getQuantityString(R.plurals.sync_lost_kept, outcome.tracks, outcome.tracks)
+                            LostRemoval.Busy -> resources.getString(R.string.sync_lost_busy)
+                            LostRemoval.Failed -> resources.getString(R.string.sync_lost_failed)
                         }
                         if (text != null) Toast.makeText(context, text, Toast.LENGTH_LONG).show()
                     }
