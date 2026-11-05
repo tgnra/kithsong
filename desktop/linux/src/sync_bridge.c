@@ -258,7 +258,7 @@ void sync_bridge_start(mc_library *lib, const char *config_dir, const char *devi
   static const mc_sync_events events = {on_peer,       on_pair_code,      on_pair_result,
                                         on_progress,   on_sync_done,      on_reach,
                                         on_pair_merge, on_merge_progress, on_merge_done,
-                                        on_waiting};
+                                        on_waiting,    on_waiting}; /* problems share the banners */
   mc_sync *sync = NULL;
   void *gen = GINT_TO_POINTER(g_atomic_int_get(&g_bridge.gen));
   mc_status st = mc_sync_new(lib, config_dir, device_name, MC_DEVICE_DESKTOP, &events, gen, &sync);

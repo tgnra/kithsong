@@ -16,6 +16,9 @@
  * trash Kithsong can use or make). Restoring is mc_delete_restore(), which main.c runs at
  * startup and whenever the window becomes active, saying how many tracks came back.
  *
+ * An archive's tracks missing for good (mc_sync_remove_lost()) go by delete_dialog_lost(), from
+ * the problems banner: it names them, says it can't be undone, and Cancel is the default.
+ *
  * Needs libadwaita 1.5 (AdwAlertDialog).
  */
 #ifndef KITHSONG_DELETE_DIALOG_H
@@ -35,5 +38,9 @@ void delete_dialog_init(void (*before_delete)(const mc_delete_plan *plan));
  * deleted. A failure is reported in a dialog of its own. */
 void delete_dialog_present(GtkWidget *parent, mc_library *lib, const char *config_dir, mc_delete_kind kind,
                            const char *uid, const char *name, void (*changed)(void *user), void *user);
+
+/* Asks over parent about removing the tracks that are lost as of now, on every device, and
+ * calls changed once any went. */
+void delete_dialog_lost(GtkWidget *parent, mc_library *lib, void (*changed)(void *user), void *user);
 
 #endif

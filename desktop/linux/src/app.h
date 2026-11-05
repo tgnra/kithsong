@@ -52,6 +52,7 @@ typedef struct app {
   app_view view;        /* the sidebar's library page picked last */
   AdwOverlaySplitView *album_split; /* the track list is its sidebar, at the end */
   AdwBanner *waiting;   /* above the pages: tracks waiting for a device (app_update_waiting()) */
+  AdwBanner *problems;  /* above that: what's wrong with the files here (app_update_waiting()) */
 } app;
 
 /* Reloads the album and playlist grids, the album groups, the artists and the shown tracks

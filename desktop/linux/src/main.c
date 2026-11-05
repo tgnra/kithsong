@@ -4,7 +4,8 @@
  *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle]  [vol][import][settings]
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
  *      |                    / Recents / Devices)
- *      +- AdwBanner: tracks waiting for a device (app_update_waiting()), on the library's pages
+ *      +- AdwBanner: what's wrong with the files here (app_update_waiting()), on the library's pages
+ *      +- AdwBanner: tracks waiting for a device (likewise)
  *      +- GtkStack of pages: "library" | "home" (home_view.c) | "artists" (artist_view.c)
  *         | "search" (search_view.c) | "import" (import_view.c) | "device" (device_view.c)
  *         +- AdwOverlaySplitView, sidebar at the end (track list, shown while an album is picked)
@@ -1700,10 +1701,32 @@ static void on_banner_clicked(AdwBanner *banner, gpointer user) {
   app_back_to_library(user);
 }
 
+/* Remove from Library... on the problems banner, there while an archive has lost tracks. */
+static void on_problems_clicked(AdwBanner *banner, gpointer user) {
+  (void)banner;
+  app *a = user;
+  delete_dialog_lost(GTK_WIDGET(a->win), a->lib, on_playlists_changed, a);
+}
+
+/* The problems banner, for this library's sync. */
+static void update_problems(app *a, gboolean library) {
+  char text[512] = "";
+  mc_sync *sync = devices_sync();
+  mc_sync_problems *p = NULL;
+  if (sync && !mc_library_is_stress(a->lib) && mc_sync_get_problems(sync, &p) == MC_OK)
+    mc_sync_problems_text(p, text, sizeof text);
+  adw_banner_set_button_label(a->problems, p && p->lost ? mc_str(MC_STR_SYNC_LOST_REMOVE) : NULL);
+  mc_sync_problems_free(p);
+  /* The title stays while the banner slides away. */
+  if (text[0]) adw_banner_set_title(a->problems, text);
+  adw_banner_set_revealed(a->problems, library && text[0]);
+}
+
 void app_update_waiting(app *a) {
   if (!a->waiting) return;
   const char *page = gtk_stack_get_visible_child_name(a->pages);
   gboolean library = page && !strcmp(page, "library");
+  update_problems(a, library);
   /* A stress test library has no sync to wait for: the banner's the way back. */
   if (mc_library_is_stress(a->lib)) {
     adw_banner_set_title(a->waiting, mc_str(MC_STR_STRESS_BANNER_TITLE));
@@ -1814,6 +1837,13 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
 
   /* Tracks waiting for a device, above the library's pages: calm, no button, not dismissed. */
   GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  /* And what's wrong with the files here, above it. It goes by itself, not dismissed either. */
+  GtkWidget *problems = adw_banner_new("");
+  a->problems = ADW_BANNER(problems);
+  g_signal_connect(problems, "button-clicked", G_CALLBACK(on_problems_clicked), a);
+  adw_banner_set_use_markup(a->problems, FALSE);
+  gtk_widget_add_css_class(problems, "warning");
+  gtk_box_append(GTK_BOX(content), problems);
   GtkWidget *waiting = adw_banner_new("");
   a->waiting = ADW_BANNER(waiting);
   g_signal_connect(waiting, "button-clicked", G_CALLBACK(on_banner_clicked), a);
