@@ -886,7 +886,7 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
   mc_file_reader_free(rd);
   fclose(f);
   if (st == MC_OK) s->files_sent++;
-  mc_sync_trace("send %.8s: %lld bytes, hash %llu ms, send %llu ms", track, (long long)size,
+  mc_sync_trace("send %s: %lld bytes, hash %llu ms, send %llu ms", track, (long long)size,
                 (unsigned long long)(hashed - t0), (unsigned long long)(mc_mono_ms() - hashed));
   return st;
 }
@@ -1471,7 +1471,7 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
   }
   if (part && mc_file_exists(part)) mc_remove(part);
   if (rel && *got != GOT_OK) prune_dirs(lib, rel);
-  mc_sync_trace("recv %.8s: %lld bytes, wait %llu ms, data %llu ms, finish %llu ms", t->track_uid,
+  mc_sync_trace("recv %s: %lld bytes, wait %llu ms, data %llu ms, finish %llu ms", t->track_uid,
                 (long long)size, (unsigned long long)(t_hdr - t0),
                 (unsigned long long)(t_data - t_hdr), (unsigned long long)(mc_mono_ms() - t_data));
   free(part);
