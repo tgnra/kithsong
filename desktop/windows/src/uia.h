@@ -33,6 +33,7 @@ enum {
   UIA_EXPANDED = 128,
   UIA_TOGGLE_OFF = 256, /* Toggle pattern (a click, so ops.invoke), off or on */
   UIA_TOGGLE_ON = 512,
+  UIA_RANGE = 1024,     /* RangeValue pattern: value, within minimum and maximum (ops.set_value) */
 };
 
 /* What a node is, as ops.node fills it in. Everything starts zeroed. */
@@ -47,6 +48,8 @@ typedef struct uia_node {
   wchar_t status[64];         /* ItemStatus, e.g. "Playing"; "" for none */
   const wchar_t *automation_id; /* a stable name for tests and tools, or NULL */
   int live;                   /* a live region: a LiveSetting (Polite, Assertive), or 0 for none */
+  double value, minimum, maximum; /* UIA_RANGE's */
+  double small_step, large_step;  /* what an arrow key and Page Up or Down move it by */
 } uia_node;
 
 typedef struct uia_ops {
@@ -66,6 +69,8 @@ typedef struct uia_ops {
   void (*expand)(int i, BOOL expand);
   void (*reveal)(int i);    /* scroll it into view */
   void (*set_focus)(int i); /* the window already has the focus */
+  /* Moves range i to a value within its limits. NULL leaves ranges read-only. */
+  void (*set_value)(int i, double value);
 } uia_ops;
 
 typedef struct uia_host {
@@ -90,8 +95,8 @@ void uia_destroy(uia_host *h);
  * from last time, elements from before go and clients are told the tree changed; if not,
  * it's uia_refresh(). */
 void uia_changed(uia_host *h, unsigned long sig);
-/* The same nodes, but names or statuses may have changed (a rename, "Playing" moving):
- * clients holding those elements are told of each that did. */
+/* The same nodes, but names, statuses or range values may have changed (a rename, "Playing"
+ * moving): clients holding those elements are told of each that did. */
 void uia_refresh(uia_host *h);
 /* An FNV-1a hash of n bytes, continuing from sig (start from 0). */
 unsigned long uia_hash(unsigned long sig, const void *data, size_t n);

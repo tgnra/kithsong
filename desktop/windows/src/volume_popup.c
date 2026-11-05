@@ -224,7 +224,7 @@ void volume_popup_update(void) {
   uia_refresh(&ui);
 }
 
-/* --- UI Automation: the speaker is a button, the slider is named by its level --- */
+/* --- UI Automation: the speaker is a button, the slider a range of 0 to 100 --- */
 
 static BOOL ui_node(int i, uia_node *n) {
   if (i == UIA_ROOT) {
@@ -245,9 +245,14 @@ static BOOL ui_node(int i, uia_node *n) {
     wstr_tooltip(n->help, 256, playback_muted() ? MC_STR_UNMUTE : MC_STR_MUTE, MC_STR_WINDOWS_SHORTCUT_MUTE);
   } else {
     n->type = UIA_SliderControlTypeId;
+    n->flags |= UIA_RANGE;
     n->rect = s.bar;
     n->automation_id = L"Volume";
-    mc_wformat(n->name, 512, mc_str(MC_STR_VOLUME_LEVEL), MC_D(playback_volume()));
+    lstrcpynW(n->name, mc_wstr(MC_STR_VOLUME), 512);
+    n->value = playback_volume();
+    n->maximum = 100;
+    n->small_step = KEY_STEP;
+    n->large_step = PAGE_STEP;
     if (playback_muted()) lstrcpynW(n->status, mc_wstr(MC_STR_VOLUME_MUTED), 64);
   }
   return TRUE;
@@ -270,8 +275,13 @@ static void ui_set_focus(int i) {
   set_focus(i);
 }
 
+static void ui_set_value(int i, double value) {
+  (void)i;
+  set_volume((int)(value + 0.5));
+}
+
 static const uia_ops ui_ops = {.node = ui_node, .focus = ui_focus, .at = ui_at, .invoke = ui_invoke,
-                               .set_focus = ui_set_focus};
+                               .set_focus = ui_set_focus, .set_value = ui_set_value};
 
 /* --- Window --- */
 

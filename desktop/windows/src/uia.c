@@ -42,6 +42,7 @@ typedef struct prov {
   IScrollItemProvider scroll;
   IExpandCollapseProvider expand;
   IToggleProvider toggle;
+  IRangeValueProvider range;
   LONG refs;
   uia_host *host; /* static in the control, so it outlives every element */
   int index;
@@ -50,6 +51,7 @@ typedef struct prov {
    * release may come from another thread. */
   struct prov *prev, *next;
   unsigned long name_sig, status_sig; /* of what a client was last told, or could have read */
+  double value;                       /* likewise */
 } prov;
 
 static SRWLOCK live_lock = SRWLOCK_INIT;
@@ -126,6 +128,7 @@ static HRESULT prov_qi(prov *p, REFIID riid, void **out) {
   else if (IsEqualIID(riid, &IID_IScrollItemProvider)) *out = &p->scroll;
   else if (IsEqualIID(riid, &IID_IExpandCollapseProvider)) *out = &p->expand;
   else if (IsEqualIID(riid, &IID_IToggleProvider)) *out = &p->toggle;
+  else if (IsEqualIID(riid, &IID_IRangeValueProvider)) *out = &p->range;
   else return E_NOINTERFACE;
   InterlockedIncrement(&p->refs);
   return S_OK;
@@ -168,6 +171,7 @@ UNKNOWN_METHODS(IInvokeProvider, invoke)
 UNKNOWN_METHODS(IScrollItemProvider, scroll)
 UNKNOWN_METHODS(IExpandCollapseProvider, expand)
 UNKNOWN_METHODS(IToggleProvider, toggle)
+UNKNOWN_METHODS(IRangeValueProvider, range)
 
 /* --- IRawElementProviderSimple --- */
 
@@ -203,6 +207,9 @@ static HRESULT STDMETHODCALLTYPE simple_pattern(IRawElementProviderSimple *This,
       break;
     case UIA_TogglePatternId:
       if (n.flags & (UIA_TOGGLE_OFF | UIA_TOGGLE_ON)) iface = &p->toggle;
+      break;
+    case UIA_RangeValuePatternId:
+      if (n.flags & UIA_RANGE) iface = &p->range;
       break;
   }
   if (iface) {
@@ -592,6 +599,52 @@ static const IExpandCollapseProviderVtbl expand_vtbl = {
   .get_ExpandCollapseState = expand_state,
 };
 
+/* Not posted, as moving a slider opens nothing, and a client reads the value back at once. */
+static HRESULT STDMETHODCALLTYPE range_set(IRangeValueProvider *This, double value) {
+  prov *p = PROV(This, range);
+  uia_node n;
+  if (!get(p, &n)) return UIA_E_ELEMENTNOTAVAILABLE;
+  if ((n.flags & UIA_DISABLED) || !p->host->ops->set_value) return UIA_E_ELEMENTNOTENABLED;
+  if (!(value >= n.minimum && value <= n.maximum)) return E_INVALIDARG;
+  p->host->ops->set_value(p->index, value);
+  return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE range_read_only(IRangeValueProvider *This, WINBOOL *ret) {
+  prov *p = PROV(This, range);
+  uia_node n;
+  if (!get(p, &n)) return UIA_E_ELEMENTNOTAVAILABLE;
+  *ret = (n.flags & UIA_DISABLED) || !p->host->ops->set_value;
+  return S_OK;
+}
+
+#define RANGE_GETTER(method, field)                                                 \
+  static HRESULT STDMETHODCALLTYPE method(IRangeValueProvider *This, double *ret) { \
+    uia_node n;                                                                     \
+    if (!get(PROV(This, range), &n)) return UIA_E_ELEMENTNOTAVAILABLE;              \
+    *ret = n.field;                                                                 \
+    return S_OK;                                                                    \
+  }
+
+RANGE_GETTER(range_value, value)
+RANGE_GETTER(range_minimum, minimum)
+RANGE_GETTER(range_maximum, maximum)
+RANGE_GETTER(range_small_step, small_step)
+RANGE_GETTER(range_large_step, large_step)
+
+static const IRangeValueProviderVtbl range_vtbl = {
+  .QueryInterface = range_qi,
+  .AddRef = range_addref,
+  .Release = range_release,
+  .SetValue = range_set,
+  .get_Value = range_value,
+  .get_IsReadOnly = range_read_only,
+  .get_Maximum = range_maximum,
+  .get_Minimum = range_minimum,
+  .get_LargeChange = range_large_step,
+  .get_SmallChange = range_small_step,
+};
+
 static prov *prov_new(uia_host *h, int index) {
   prov *p = calloc(1, sizeof *p);
   if (!p) return NULL;
@@ -604,6 +657,7 @@ static prov *prov_new(uia_host *h, int index) {
   p->scroll.lpVtbl = (IScrollItemProviderVtbl *)&scroll_vtbl;
   p->expand.lpVtbl = (IExpandCollapseProviderVtbl *)&expand_vtbl;
   p->toggle.lpVtbl = (IToggleProviderVtbl *)&toggle_vtbl;
+  p->range.lpVtbl = (IRangeValueProviderVtbl *)&range_vtbl;
   p->refs = 1;
   p->host = h;
   p->index = index;
@@ -612,6 +666,7 @@ static prov *prov_new(uia_host *h, int index) {
   if (node_of(h, index, &n)) {
     p->name_sig = text_sig(n.name);
     p->status_sig = text_sig(n.status);
+    p->value = n.value;
   }
   AcquireSRWLockExclusive(&live_lock);
   p->next = h->live;
@@ -717,6 +772,16 @@ static void raise_text_changed(prov *p, PROPERTYID id, const wchar_t *text) {
   VariantClear(&now);
 }
 
+static void raise_value_changed(prov *p, double was, double value) {
+  VARIANT old, now;
+  VariantInit(&old);
+  VariantInit(&now);
+  old.vt = now.vt = VT_R8;
+  old.dblVal = was;
+  now.dblVal = value;
+  UiaRaiseAutomationPropertyChangedEvent(&p->simple, UIA_RangeValueValuePropertyId, old, now);
+}
+
 void uia_refresh(uia_host *h) {
   if (!h->wnd || !h->root || !UiaClientsAreListening()) return;
   /* The live elements, held while their events go out: a client may let go meanwhile. */
@@ -731,16 +796,17 @@ void uia_refresh(uia_host *h) {
     }
   ReleaseSRWLockExclusive(&live_lock);
   /* A node can have several elements; clients know it by its runtime id, so one event each. */
-  BOOL told_name[MAX_LIVE] = {0}, told_status[MAX_LIVE] = {0};
+  BOOL told_name[MAX_LIVE] = {0}, told_status[MAX_LIVE] = {0}, told_value[MAX_LIVE] = {0};
   for (int i = 0; i < n; i++) {
     prov *p = live[i];
     uia_node node;
     if (get(p, &node)) {
-      BOOL name_told = FALSE, status_told = FALSE;
+      BOOL name_told = FALSE, status_told = FALSE, value_told = FALSE;
       for (int k = 0; k < i; k++)
         if (live[k]->index == p->index) {
           name_told |= told_name[k];
           status_told |= told_status[k];
+          value_told |= told_value[k];
         }
       unsigned long name = text_sig(node.name), status = text_sig(node.status);
       if (name != p->name_sig) {
@@ -752,6 +818,11 @@ void uia_refresh(uia_host *h) {
         p->status_sig = status;
         if (!status_told) raise_text_changed(p, UIA_ItemStatusPropertyId, node.status);
         told_status[i] = TRUE;
+      }
+      if ((node.flags & UIA_RANGE) && node.value != p->value) {
+        if (!value_told) raise_value_changed(p, p->value, node.value);
+        p->value = node.value;
+        told_value[i] = TRUE;
       }
     }
   }
