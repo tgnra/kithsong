@@ -28,5 +28,9 @@ GtkWidget *recents_new(app *a);
  * library changes (an import, a playlist edit, another library, or sync bringing opens or
  * removals from other devices). */
 void recents_refresh(app *a);
+/* Remove from Recents and Clear Recents, here or on a Home tile's menu. uid is a station's seed
+ * track, which is how the recents know it. */
+void recents_remove(app *a, const char *uid);
+void recents_clear(app *a);
 
 #endif

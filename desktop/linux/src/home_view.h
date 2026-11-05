@@ -24,6 +24,11 @@
  *
  * Clicking a tile (or Enter on it) opens it, or if it's one of Radio's stations, plays it.
  *
+ * Right-clicking a tile, a long press on a touchscreen, or the Menu key or Shift+F10 on the
+ * focused one, opens the menu the same thing has elsewhere: an album's (album_groups.h), an
+ * artist's (artist_view.h), a group's, a playlist's as under the track list's button, a station's
+ * being Play. A tile in Recents adds Remove from Recents and Clear Recents, as in the sidebar.
+ *
  * The rows are read on a worker thread with its own library connection, as doing so lists every
  * album and evaluates the smart lists, and what's showing stays until it's done. Reloading
  * updates the tiles where they are, so the scroll positions and the focus stay. Random's

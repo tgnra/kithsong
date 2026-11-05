@@ -13,6 +13,7 @@
 
 #include "canvas.h"
 #include "cover.h"
+#include "item_menu.h"
 #include "musiccore/home_picks.h"
 #include "playback.h"
 #include "scroller.h"
@@ -887,6 +888,74 @@ static BOOL on_key(WPARAM key) {
   return TRUE;
 }
 
+/* --- The menus --- */
+
+static void notify(int code) {
+  PostMessageW(GetParent(g.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(g.wnd), code), (LPARAM)g.wnd);
+}
+
+/* Tile index of row's menu, at pt (screen coordinates): what the same thing has elsewhere, with
+ * the sidebar's two for a recent. It runs messages, a reload's among them, so nothing here
+ * touches the tile afterwards. */
+static void show_tile_menu(int row, int index, POINT pt) {
+  const tile *t = &g.rows[row].tiles[index];
+  /* A station's own uid is its artist's: as a recent it goes by its seed. */
+  const char *uid = t->pick.station ? t->pick.seed_uid : t->pick.uid;
+  item_menu_options o = {.wnd = g.wnd, .lib = g.lib, .uid = uid, .name = t->pick.title, .pt = pt,
+                         .recent = row == MC_HOME_ROW_RECENTS};
+  char recent[MC_UID_STRLEN];
+  memcpy(recent, uid, sizeof recent);
+  item_menu_result picked = t->pick.station                       ? item_menu_station(&o)
+                            : t->pick.kind == MC_RECENT_ARTIST    ? item_menu_artist(&o)
+                            : t->pick.kind == MC_RECENT_PLAYLIST  ? item_menu_playlist(&o, t->pick.smart)
+                            : t->pick.kind == MC_RECENT_ALBUM_GROUP ? item_menu_group(&o, t->pick.smart)
+                                                                  : item_menu_album(&o);
+  if (picked == ITEM_MENU_CHANGED) {
+    notify(HVN_LIBRARY_CHANGED);
+  } else if (picked == ITEM_MENU_REMOVE_RECENT) {
+    memcpy(g.clicked_uid, recent, sizeof g.clicked_uid);
+    notify(HVN_REMOVE_RECENT);
+  } else if (picked == ITEM_MENU_CLEAR_RECENTS) {
+    notify(HVN_CLEAR_RECENTS);
+  }
+  update_hot();
+}
+
+/* WM_CONTEXTMENU: the menu of the tile under the mouse, or from the keyboard (lp -1) of the one
+ * with the focus, under its cover. As with the arrow keys, the first press shows where that is. */
+static BOOL on_context_menu(LPARAM lp) {
+  if (!g.lib || !g.has_music) return FALSE;
+  POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+  int row, index;
+  if (lp == -1) {
+    row = g.focus_row;
+    index = g.focus_index;
+    if (row < 0) {
+      row = first_row();
+      if (row < 0) return FALSE;
+      index = first_shown(row);
+    }
+    move_focus(row, index);
+    /* Where it's scrolling to: it may be off the page until the row has eased there. */
+    RECT art = cover_rect(row, index);
+    pt.x = art.left + g.rows[row].pos - g.rows[row].target;
+    pt.y = art.bottom;
+    pt.x = pt.x < 0 ? 0 : pt.x > g.client_w ? g.client_w : pt.x;
+    pt.y = pt.y < 0 ? 0 : pt.y > g.client_h ? g.client_h : pt.y;
+    ClientToScreen(g.wnd, &pt);
+  } else {
+    POINT client = pt;
+    ScreenToClient(g.wnd, &client);
+    hit h = hit_test(client.x, client.y);
+    if (h.part != PART_TILE) return FALSE;
+    SetFocus(g.wnd);
+    row = h.row;
+    index = h.index;
+  }
+  show_tile_menu(row, index, pt);
+  return TRUE;
+}
+
 /* --- Painting --- */
 
 static void paint_placeholder(canvas *c, const tile *t, const RECT *art) {
@@ -1299,6 +1368,9 @@ static LRESULT CALLBACK home_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_KEYDOWN:
       if (on_key(wp)) return 0;
+      break;
+    case WM_CONTEXTMENU:
+      if (on_context_menu(lp)) return 0;
       break;
     case WM_APP_THUMB:
       on_thumb((thumb_result *)lp);

@@ -68,6 +68,12 @@ typedef struct artist_view_callbacks {
 
 GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb);
 
+/* The menu the artist with uid has on this page, for showing elsewhere: the Home page's tiles.
+ * g_object_unref() it. Its items are "artist." actions, artist_view_actions(), which whatever
+ * shows it has to insert. What it's for is copied, so it can go while the menu is open. */
+GMenuModel *artist_view_menu(const char *uid);
+GActionGroup *artist_view_actions(void);
+
 /* Lists the artists, and the open artist's albums, singles and tracks, from a->lib again,
  * keeping the list's place; if the open artist has gone, back to the list. Call whenever the
  * library changes. */

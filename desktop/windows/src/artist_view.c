@@ -15,9 +15,9 @@
 #include "cover.h"
 #include "drag.h"
 #include "edit_dialog.h"
+#include "item_menu.h"
 #include "playback.h"
 #include "radio_menu.h"
-#include "remove_here.h"
 #include "scroller.h"
 #include "theme.h"
 #include "wstr.h"
@@ -1066,9 +1066,7 @@ static void paint(HDC dc, const RECT *dirty) {
 
 /* A single's menu is the track list's track menu, Play Next and Play Last stubs included. */
 enum {
-  CMD_REMOVE_HERE = 1,
-  CMD_SYNC_HERE,
-  CMD_NEW_PLAYLIST,
+  CMD_NEW_PLAYLIST = 1,
   CMD_PLAY_NEXT,
   CMD_PLAY_LAST,
   CMD_DELETE_TRACK,
@@ -1174,32 +1172,10 @@ static BOOL on_context_menu(LPARAM lp) {
     pt.y = r.bottom;
     ClientToScreen(v.wnd, &pt);
   }
-  /* Copies: the dialog's message loop repaints the list, which may reload it. */
-  char uid[MC_UID_STRLEN];
-  snprintf(uid, sizeof uid, "%s", is_open() ? v.open_uid : v.artists[i].uid);
-  wchar_t *name = _wcsdup(is_open() ? (v.open_name ? v.open_name : L"") : v.artists[i].name);
-  char album[MC_UID_STRLEN] = "";
-  if (is_open() && i >= 0 && i < v.strips[STRIP_ALBUMS].n) memcpy(album, tile_at(i)->uid, sizeof album);
-  HMENU menu = CreatePopupMenu();
-  char seed[MC_UID_STRLEN];
-  if (album[0]) radio_menu_append_album(menu, CMD_START_RADIO, v.lib, album, seed);
-  else radio_menu_append_artist(menu, CMD_START_RADIO, v.lib, uid, seed);
-  AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  AppendMenuW(menu, MF_STRING, CMD_EDIT, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
-  remove_here_append_menu(menu, MC_PROFILE_ARTIST, uid, CMD_REMOVE_HERE, CMD_SYNC_HERE);
-  int cmd = TrackPopupMenu(menu, menu_flags(), pt.x, pt.y, 0, v.wnd, NULL);
-  DestroyMenu(menu);
-  if (cmd == CMD_START_RADIO) playback_play_radio(seed);
-  if (cmd == CMD_EDIT) {
-    HWND owner = GetAncestor(v.wnd, GA_ROOT);
-    if (album[0] ? edit_dialog_album(owner, v.lib, album) : edit_dialog_artist(owner, v.lib, uid))
-      notify(ARN_LIBRARY_CHANGED, TRUE);
-  }
-  if ((cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE) && name &&
-      remove_here_command(GetAncestor(v.wnd, GA_ROOT), (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ARTIST,
-                          uid, name))
-    notify(ARN_LIBRARY_CHANGED, TRUE);
-  free(name);
+  item_menu_options o = {.wnd = v.wnd, .lib = v.lib, .pt = pt, .uid = is_open() ? v.open_uid : v.artists[i].uid,
+                         .name = is_open() ? v.open_name : v.artists[i].name,
+                         .album = is_open() && i >= 0 && i < v.strips[STRIP_ALBUMS].n ? tile_at(i)->uid : NULL};
+  if (item_menu_artist(&o) == ITEM_MENU_CHANGED) notify(ARN_LIBRARY_CHANGED, TRUE);
   return TRUE;
 }
 

@@ -24,6 +24,10 @@
  * seed track (playback_play_radio()), and its tooltip says what it's like. Radio's row is left
  * out until the library has stations.
  *
+ * Right-clicking a tile, or the Menu key or Shift+F10 on the focused one, opens what the same
+ * thing has elsewhere (item_menu.h), a station's being Play. A tile in Recents adds Remove from
+ * Recents and Clear Recents, as in the sidebar (HVN_REMOVE_RECENT, HVN_CLEAR_RECENTS).
+ *
  * Covers are decoded on a background thread, as the album grid's, those in view first, then
  * those a screen along or down, and only ever those. The rows are capped (MC_HOME_ROW_MAX), so
  * what's decoded stays small however big the library is, and it's kept until the page reloads.
@@ -58,6 +62,12 @@ void home_view_update(UINT dpi, HFONT font);
 #define HVN_OPEN 1
 /* Sent the same way when the welcome's Import is pressed, for the parent to show that page. */
 #define HVN_IMPORT 2
+/* Sent the same way when a tile's menu changed the library, for the parent to reload the views. */
+#define HVN_LIBRARY_CHANGED 3
+/* Sent the same way from a Recents tile's menu: Remove from Recents (home_view_clicked() says
+ * which, a station by its seed track) and Clear Recents. */
+#define HVN_REMOVE_RECENT 4
+#define HVN_CLEAR_RECENTS 5
 
 /* The tile last clicked: its uid (valid until the view next reloads), and in *kind what it is. */
 const char *home_view_clicked(mc_recent_kind *kind);

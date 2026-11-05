@@ -2,10 +2,15 @@
 
 #include <math.h>
 
+#include "album_groups.h"
+#include "artist_view.h"
 #include "brand_backdrop.h"
 #include "cover.h"
 #include "musiccore/home_picks.h"
 #include "playback.h"
+#include "playlist_dialogs.h"
+#include "recents.h"
+#include "smart_editor.h"
 
 enum {
   COVER_SIZE = 160, /* the album grid's tiles */
@@ -32,6 +37,7 @@ typedef struct tile {
   GtkWidget *button, *frame, *picture, *title, *sub, *badge;
   mc_recent_kind kind;
   gboolean station;
+  gboolean smart; /* a smart playlist or group */
   char uid[MC_UID_STRLEN];
   char seed[MC_UID_STRLEN]; /* a station's seed track, which is what tells them apart */
   char *artist;  /* the line under its title */
@@ -72,6 +78,14 @@ static struct {
   gboolean again;   /* something changed since it started: its result is out of date */
   GHashTable *art;  /* playlist or group uid -> its picture, as last looked up */
   guint art_gen;    /* bumped by each lookup, so only the latest one's results are used */
+
+  /* A tile's menu, on the rows' box, which outlives the tiles. A reload can free the tile while
+   * it's open, so it works from these copies. */
+  GtkWidget *rows_box, *menu;
+  GSimpleAction *play;                 /* a station's, enabled if it can */
+  char menu_uid[MC_UID_STRLEN];        /* the tile's, or a station's seed, as the recents know it */
+  char *menu_title;
+  gboolean menu_smart;
 } v;
 
 static double adj_max(GtkAdjustment *adj) {
@@ -139,6 +153,147 @@ static void on_tile_clicked(GtkButton *button, gpointer user) {
   g_free(artist);
 }
 
+/* --- The tiles' menu --- */
+
+static void on_library_changed(void *user) {
+  (void)user;
+  app_reload_library(v.a);
+}
+
+static void on_smart_saved(void *user, const char *uid) {
+  (void)uid;
+  on_library_changed(user);
+}
+
+static void on_play(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  playback_play_radio(v.menu_uid);
+}
+
+static void on_remove_recent(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  recents_remove(v.a, v.menu_uid);
+}
+
+static void on_clear_recents(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  recents_clear(v.a);
+}
+
+static void on_edit_rules(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.a->lib) smart_editor_edit(GTK_WIDGET(v.a->win), v.a->lib, v.menu_uid, on_smart_saved, NULL);
+}
+
+static void on_rename(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  GtkWidget *win = GTK_WIDGET(v.a->win);
+  if (!v.a->lib) return;
+  if (v.menu_smart) smart_rename_present(win, v.a->lib, v.menu_uid, v.menu_title, MC_SMART_TRACKS, on_library_changed, NULL);
+  else playlist_rename_present(win, v.a->lib, v.menu_uid, v.menu_title, on_library_changed, NULL);
+}
+
+static void on_delete(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  GtkWidget *win = GTK_WIDGET(v.a->win);
+  if (!v.a->lib) return;
+  if (v.menu_smart) smart_delete_present(win, v.a->lib, v.menu_uid, v.menu_title, MC_SMART_TRACKS, on_library_changed, NULL);
+  else playlist_delete_present(win, v.a->lib, v.menu_uid, v.menu_title, on_library_changed, NULL);
+}
+
+/* What the track list's button has for a playlist, or for a smart one. */
+static GMenuModel *playlist_menu(gboolean smart) {
+  GMenu *menu = g_menu_new();
+  if (smart) g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_EDIT_MENU), "home.edit-rules");
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_RENAME_MENU), "home.rename");
+  g_menu_append(menu, mc_str_mnemonic(smart ? MC_STR_SMART_DELETE_PLAYLIST_MENU : MC_STR_PLAYLIST_DELETE_MENU), "home.delete");
+  return G_MENU_MODEL(menu);
+}
+
+static GMenuModel *station_menu(void) {
+  g_simple_action_set_enabled(v.play, playback_can_radio(v.menu_uid));
+  GMenu *menu = g_menu_new();
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAY), "home.play");
+  return G_MENU_MODEL(menu);
+}
+
+static void set_roving(tile *t, gboolean grab);
+
+/* A closed menu gives the focus back to its tile, as GTK would hand it elsewhere, unless what
+ * it chose opened a dialog. By now the rows may have changed, so it goes by the roving tile. */
+static void on_tile_menu_closed(GtkPopover *menu, gpointer user) {
+  (void)menu;
+  (void)user;
+  if (v.roving && !adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(v.a->win)))
+    gtk_widget_grab_focus(v.roving->button);
+}
+
+/* t's menu, at x, y in widget. */
+static void popup_tile_menu(tile *t, GtkWidget *widget, double x, double y) {
+  graphene_point_t at;
+  if (!v.a->lib || !gtk_widget_compute_point(widget, v.rows_box, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
+  set_roving(t, FALSE);
+  /* A station's own uid is its artist's: as a recent it goes by its seed. */
+  g_strlcpy(v.menu_uid, t->station ? t->seed : t->uid, sizeof v.menu_uid);
+  g_free(v.menu_title);
+  v.menu_title = g_strdup(gtk_label_get_text(GTK_LABEL(t->title)));
+  v.menu_smart = t->smart;
+
+  GMenuModel *item;
+  if (t->station) {
+    item = station_menu();
+  } else if (t->kind == MC_RECENT_ARTIST) {
+    gtk_widget_insert_action_group(v.rows_box, "artist", artist_view_actions());
+    item = artist_view_menu(t->uid);
+  } else if (t->kind == MC_RECENT_PLAYLIST) {
+    item = playlist_menu(t->smart);
+  } else if (t->kind == MC_RECENT_ALBUM_GROUP) {
+    item = album_groups_group_model(t->uid, t->smart);
+  } else {
+    item = album_groups_album_model(v.a, t->uid, v.menu_title);
+  }
+  GMenu *menu = g_menu_new();
+  g_menu_append_section(menu, NULL, item);
+  g_object_unref(item);
+  if (t->row == &v.rows[MC_HOME_ROW_RECENTS]) {
+    GMenu *section = g_menu_new();
+    g_menu_append(section, mc_str_mnemonic(MC_STR_RECENT_REMOVE_MENU), "home.remove-recent");
+    g_menu_append(section, mc_str_mnemonic(MC_STR_RECENTS_CLEAR_MENU), "home.clear-recents");
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+    g_object_unref(section);
+  }
+  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(v.menu), G_MENU_MODEL(menu));
+  g_object_unref(menu); /* the popover keeps it */
+  gtk_popover_set_pointing_to(GTK_POPOVER(v.menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(v.menu));
+}
+
+/* Right-click, or a long press on a touchscreen. Claiming either keeps the tile from opening too. */
+static void on_tile_menu_click(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  tile *t = user;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  popup_tile_menu(t, t->button, x, y);
+}
+
+static void on_tile_long_press(GtkGestureLongPress *press, double x, double y, gpointer user) {
+  tile *t = user;
+  gtk_gesture_set_state(GTK_GESTURE(press), GTK_EVENT_SEQUENCE_CLAIMED);
+  popup_tile_menu(t, t->button, x, y);
+}
+
 static tile *tile_new(row *r, int index) {
   tile *t = g_new0(tile, 1);
   t->row = r;
@@ -175,6 +330,14 @@ static tile *tile_new(row *r, int index) {
   gtk_widget_set_can_focus(t->button, FALSE); /* until it's the roving one */
   g_object_set_data(G_OBJECT(t->button), "home-tile", t);
   g_signal_connect(t->button, "clicked", G_CALLBACK(on_tile_clicked), t);
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "pressed", G_CALLBACK(on_tile_menu_click), t);
+  gtk_widget_add_controller(t->button, GTK_EVENT_CONTROLLER(click));
+  GtkGesture *press = gtk_gesture_long_press_new();
+  gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(press), TRUE);
+  g_signal_connect(press, "pressed", G_CALLBACK(on_tile_long_press), t);
+  gtk_widget_add_controller(t->button, GTK_EVENT_CONTROLLER(press));
   gtk_box_append(GTK_BOX(r->tiles), t->button);
   return t;
 }
@@ -205,6 +368,7 @@ static void tile_set(tile *t, const mc_home_pick *p) {
   const char *title = p->title ? p->title : "", *sub = p->sub ? p->sub : "";
   t->kind = p->kind;
   t->station = p->station;
+  t->smart = p->smart;
   g_strlcpy(t->uid, p->uid, sizeof t->uid);
   g_strlcpy(t->seed, p->seed_uid, sizeof t->seed);
   g_free(t->artist);
@@ -482,6 +646,17 @@ static gboolean on_key(GtkEventControllerKey *keys, guint keyval, guint keycode,
     return TRUE;
   }
   return FALSE;
+}
+
+/* The Menu key or Shift+F10: the focused tile's menu, under it. */
+static gboolean on_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  tile *t = focused_tile();
+  if (!t) return FALSE;
+  popup_tile_menu(t, t->button, 0, gtk_widget_get_height(t->button));
+  return TRUE;
 }
 
 /* --- Reading the rows --- */
@@ -786,6 +961,24 @@ GtkWidget *home_view_new(app *a, const home_view_callbacks *callbacks) {
   gtk_widget_set_visible(v.hint, FALSE);
   gtk_box_append(GTK_BOX(rows), v.hint);
 
+  v.rows_box = rows;
+  v.menu = gtk_popover_menu_new_from_model(NULL);
+  gtk_popover_set_has_arrow(GTK_POPOVER(v.menu), FALSE);
+  gtk_widget_set_halign(v.menu, GTK_ALIGN_START);
+  gtk_widget_set_parent(v.menu, rows);
+  g_signal_connect(v.menu, "closed", G_CALLBACK(on_tile_menu_closed), NULL);
+  GSimpleActionGroup *actions = g_simple_action_group_new();
+  const GActionEntry entries[] = {{"play", on_play, NULL, NULL, NULL, {0}},
+                                  {"remove-recent", on_remove_recent, NULL, NULL, NULL, {0}},
+                                  {"clear-recents", on_clear_recents, NULL, NULL, NULL, {0}},
+                                  {"edit-rules", on_edit_rules, NULL, NULL, NULL, {0}},
+                                  {"rename", on_rename, NULL, NULL, NULL, {0}},
+                                  {"delete", on_delete, NULL, NULL, NULL, {0}}};
+  g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
+  v.play = G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(actions), "play"));
+  gtk_widget_insert_action_group(rows, "home", G_ACTION_GROUP(actions));
+  g_object_unref(actions);
+
   v.scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(v.scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(v.scroller), rows);
@@ -796,6 +989,15 @@ GtkWidget *home_view_new(app *a, const home_view_callbacks *callbacks) {
   GtkEventController *keys = gtk_event_controller_key_new();
   g_signal_connect(keys, "key-pressed", G_CALLBACK(on_key), NULL);
   gtk_widget_add_controller(v.scroller, keys);
+  GtkEventController *menu_keys = gtk_shortcut_controller_new();
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(menu_keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Menu, 0), gtk_callback_action_new(on_menu_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(menu_keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_F10, GDK_SHIFT_MASK),
+                     gtk_callback_action_new(on_menu_key, NULL, NULL)));
+  gtk_widget_add_controller(v.scroller, menu_keys);
 
   GtkWidget *welcome = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(welcome), "folder-music-symbolic");

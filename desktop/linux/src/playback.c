@@ -21,6 +21,7 @@ static struct {
   GtkWindow *win;
   void (*changed)(void *user);
   void (*recents_changed)(void *user);
+  void (*radio_failed)(void *user);
   gboolean station_logged; /* for the end of the next refresh() */
   void *user;
   mc_player *player;
@@ -219,6 +220,10 @@ void playback_on_recents_changed(void (*changed)(void *user)) {
   s.recents_changed = changed;
 }
 
+void playback_on_radio_failed(void (*failed)(void *user)) {
+  s.radio_failed = failed;
+}
+
 void playback_free(void) {
   playback_set_library(NULL, NULL);
   mc_player_free(s.player); /* first, so nothing more is posted */
@@ -312,9 +317,18 @@ gboolean playback_can_radio(const char *seed_track_uid) {
   return s.lib && seed_track_uid && seed_track_uid[0] && mc_radio_seed_check(s.lib, &opts) == MC_OK;
 }
 
+/* Not playback_can_radio()'s business: that's a menu asking, before anything was chosen. */
+static void radio_failed(void) {
+  if (s.radio_failed) s.radio_failed(s.user);
+}
+
 void playback_play_radio(const char *seed_track_uid) {
+  if (!s.lib || !seed_track_uid) return;
   mc_track_list *list = NULL;
-  if (!playback_can_radio(seed_track_uid) || mc_library_get_track(s.lib, seed_track_uid, &list) != MC_OK) return;
+  if (!playback_can_radio(seed_track_uid) || mc_library_get_track(s.lib, seed_track_uid, &list) != MC_OK) {
+    radio_failed();
+    return;
+  }
   const mc_track_info *t = &list->items[0];
   playback_track track = {t->uid, t->path, t->title, t->artist, t->album, t->cover_dir, t->duration_ms};
   if (t->path) {
@@ -322,6 +336,8 @@ void playback_play_radio(const char *seed_track_uid) {
     /* Now, as opening an album is: the play log's row only comes once the seed has ended. */
     if (mc_library_record_opened(s.lib, MC_RECENT_STATION, t->uid) == MC_OK && s.recents_changed)
       s.recents_changed(s.user);
+  } else {
+    radio_failed();
   }
   mc_track_list_free(list);
 }

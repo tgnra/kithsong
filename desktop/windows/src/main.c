@@ -619,9 +619,9 @@ static void open_home_tile(void) {
   else open_item(kind, uid);
 }
 
-/* Remove from Recents or Clear Recents on a recent's menu in the sidebar. */
-static void remove_recents(BOOL all) {
-  const char *clicked = all ? NULL : sidebar_clicked_recent(NULL);
+/* Remove from Recents, of clicked, or with all Clear Recents, on a recent's menu in the sidebar
+ * or on the Home page. */
+static void remove_recents(const char *clicked, BOOL all) {
   if (!g_app.lib || (!all && !clicked)) return;
   mc_status st = all ? mc_library_clear_recents(g_app.lib) : mc_library_remove_recent(g_app.lib, clicked);
   if (st == MC_OK || st == MC_ERR_NOT_FOUND) refresh_recents(); /* gone already: sync took it */
@@ -1784,7 +1784,8 @@ static void on_command(int id, int code) {
       else if (code == SBN_OPEN_RECENT) open_recent();
       else if (code == SBN_ABOUT) show_about();
       else if (code == SBN_ANALYSIS) analysis_present();
-      else if (code == SBN_REMOVE_RECENT || code == SBN_CLEAR_RECENTS) remove_recents(code == SBN_CLEAR_RECENTS);
+      else if (code == SBN_REMOVE_RECENT) remove_recents(sidebar_clicked_recent(NULL), FALSE);
+      else if (code == SBN_CLEAR_RECENTS) remove_recents(NULL, TRUE);
       else if (code == SBN_EDIT_RECENT) edit_recent();
       else if (code == SBN_NEW_SMART_PLAYLIST || code == SBN_NEW_SMART_GROUP) {
         show_page(code == SBN_NEW_SMART_PLAYLIST ? PAGE_PLAYLISTS : PAGE_ALBUM_GROUPS);
@@ -1794,6 +1795,12 @@ static void on_command(int id, int code) {
     case ID_HOME:
       if (code == HVN_OPEN) open_home_tile();
       else if (code == HVN_IMPORT) show_page(PAGE_IMPORT);
+      else if (code == HVN_LIBRARY_CHANGED) refresh_library();
+      else if (code == HVN_CLEAR_RECENTS) remove_recents(NULL, TRUE);
+      else if (code == HVN_REMOVE_RECENT) {
+        mc_recent_kind kind;
+        remove_recents(home_view_clicked(&kind), FALSE);
+      }
       break;
     case ID_GRID:
       if (code == AGN_SELCHANGE) {

@@ -163,6 +163,7 @@ static struct {
   char menu_album[MC_UID_STRLEN]; /* the album it was opened on */
   char album_seed[MC_UID_STRLEN];  /* the track its Start radio starts from */
   char artist_seed[MC_UID_STRLEN]; /* and the artist menu's */
+  GActionGroup *menu_actions;   /* the menus' "artist." actions */
   char menu_uid[MC_UID_STRLEN]; /* the track the menu was opened on */
   gboolean menu_here;           /* and whether it has a file here */
   char menu_track_album[MC_UID_STRLEN];  /* and its album, or "" */
@@ -263,6 +264,14 @@ static GMenuModel *artist_menu(const char *uid) {
   g_menu_append(menu, mc_str_mnemonic(MC_STR_EDIT_MENU), "artist.edit");
   remove_here_append(menu, MC_PROFILE_ARTIST, uid, "artist.remove-here", "artist.sync-here");
   return G_MENU_MODEL(menu);
+}
+
+GMenuModel *artist_view_menu(const char *uid) {
+  return artist_menu(uid);
+}
+
+GActionGroup *artist_view_actions(void) {
+  return v.menu_actions;
 }
 
 /* The header's "...": the open artist's. */
@@ -1214,6 +1223,7 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
   v.radio_album = radio_action(actions, "start-radio-album");
   v.radio_track = radio_action(actions, "start-radio-track");
   gtk_widget_insert_action_group(v.stack, "artist", G_ACTION_GROUP(actions));
+  v.menu_actions = G_ACTION_GROUP(actions); /* the stack keeps it */
   g_object_unref(actions);
   g_signal_connect(v.stack, "destroy", G_CALLBACK(on_destroy), NULL);
   return v.stack;

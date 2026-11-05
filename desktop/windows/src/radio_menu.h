@@ -14,5 +14,7 @@
 void radio_menu_append_track(HMENU menu, UINT cmd, mc_library *lib, const char *uid, char *seed);
 void radio_menu_append_album(HMENU menu, UINT cmd, mc_library *lib, const char *uid, char *seed);
 void radio_menu_append_artist(HMENU menu, UINT cmd, mc_library *lib, const char *uid, char *seed);
+/* The same for a station, from its seed track: it's already one, so the item says Play. */
+void radio_menu_append_station(HMENU menu, UINT cmd, mc_library *lib, const char *uid, char *seed);
 
 #endif

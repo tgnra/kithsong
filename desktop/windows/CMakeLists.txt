@@ -28,6 +28,7 @@ add_executable(kithsong WIN32
   src/first_run.c
   src/home_view.c
   src/import_view.c
+  src/item_menu.c
   src/media_controls.c
   src/move_library.c
   src/now_playing.c

@@ -43,6 +43,9 @@ void playback_set_scrobble(gboolean on);
 /* changed is called, with playback_init()'s user, when a play just logged has changed the
  * recents: a station goes in them once its first track ends (mc_play_event_starts_station()). */
 void playback_on_recents_changed(void (*changed)(void *user));
+/* failed is called, with playback_init()'s user, when playback_play_radio() was asked for a
+ * station that can't play, to tell the user so. */
+void playback_on_radio_failed(void (*failed)(void *user));
 
 
 /* Stops playing and empties the queue, letting go of the file that was playing; for before
@@ -56,7 +59,8 @@ void playback_art_changed(mc_library *lib, const char *album_uid);
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
                    const char *context_uid);
 /* Replaces the queue with a station from a track (see mc_player_play_radio()), in the library
- * set with playback_set_library(). A seed that can't be used does nothing. */
+ * set with playback_set_library(). A seed that can't be used leaves what's playing as it is, and
+ * says so (playback_on_radio_failed()). */
 void playback_play_radio(const char *seed_track_uid);
 /* Whether a track can start a station, for a menu to say so. It reads that one track. */
 gboolean playback_can_radio(const char *seed_track_uid);
