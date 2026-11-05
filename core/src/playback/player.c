@@ -19,8 +19,8 @@
  *
  * With shuffle on, the queue plays in an order of places (shuffle.c) rather than item by
  * item; segments note both. In order, an item's place is its index. Turning shuffle on or
- * off renumbers the places from the last item in the buffer, so what's buffered still plays
- * and the new order carries on after it.
+ * off renumbers the places from the audible item, so the new order carries on after it: what
+ * was buffered of the items after it goes, as the old order's next track shouldn't still play.
  *
  * A radio play is a queue that a third thread, the feed, adds to from a station. Loading the
  * station and picking take a while on a big library, so neither can be on this thread, whose
@@ -61,6 +61,8 @@ enum {
   RADIO_AHEAD = 5, /* tracks a station keeps queued after the current one: skips use them up */
   RADIO_MAX_FAILS = 8, /* items in a row that won't open before a station gives up */
 };
+
+#define NO_CUT UINT64_MAX
 
 /* --- Sources --- */
 
@@ -231,6 +233,7 @@ struct mc_player {
   source *src;
   ma_device device;
   ma_pcm_rb rb;
+  float *cut_frames; /* a buffer's worth, for cut_buffer() */
 
   int volume, muted; /* under lock, as set */
 
@@ -239,6 +242,9 @@ struct mc_player {
   uint64_t played; /* stream frames handed to the device */
   float gain_target; /* from volume and muted */
   float gain;        /* fading towards gain_target */
+  /* The stream frame the buffer is to end at, or NO_CUT. Written under lock as well, so
+   * the thread needn't take spin to look. The callback stops there till the thread has cut. */
+  uint64_t cut;
 };
 
 /* The queue item at place pos in the play order, or -1 if there's none. Under lock. */
@@ -279,6 +285,7 @@ static void on_audio(ma_device *device, void *output, const void *input, ma_uint
   ma_uint32 done = 0;
   ma_spinlock_lock(&p->spin);
   float target = p->gain_target;
+  if (p->cut - p->played < frames) frames = (ma_uint32)(p->cut - p->played);
   while (done < frames) {
     ma_uint32 n = frames - done;
     void *buf;
@@ -304,8 +311,52 @@ static void flush(mc_player *p) {
   ma_spinlock_lock(&p->spin);
   if (p->device_open) ma_pcm_rb_reset(&p->rb);
   p->written = p->played;
+  p->cut = NO_CUT;
   ma_spinlock_unlock(&p->spin);
   p->nsegs = 0;
+}
+
+/* Under lock: everything buffered after the audible item is to go, and its segments go now.
+ * Only the player thread can touch the ring buffer and the source, so fill() does the rest
+ * (cut_buffer()). Until then the callback stops at the cut, so none of it is heard, not even
+ * if the audible item runs out first. */
+static void cut_after_audible(mc_player *p) {
+  ma_spinlock_lock(&p->spin);
+  int keep = 1;
+  while (keep < p->nsegs && p->played >= p->segs[keep].start) keep++;
+  if (keep < p->nsegs) {
+    p->cut = p->segs[keep].start;
+    p->nsegs = keep;
+  }
+  ma_spinlock_unlock(&p->spin);
+}
+
+/* Under lock, from the player thread: ends the buffer at p->cut. A ring buffer can't take
+ * back what was written, so what stays is copied out and written again. That's under a
+ * second of audio, which the callback waits for by well under its own period. */
+static void cut_buffer(mc_player *p) {
+  ma_spinlock_lock(&p->spin);
+  ma_uint32 want = (ma_uint32)(p->cut - p->played), kept = 0, put = 0;
+  while (kept < want) {
+    ma_uint32 n = want - kept;
+    void *buf;
+    if (ma_pcm_rb_acquire_read(&p->rb, &n, &buf) != MA_SUCCESS || !n) break;
+    memcpy(p->cut_frames + (size_t)kept * CHANNELS, buf, (size_t)n * CHANNELS * sizeof *p->cut_frames);
+    ma_pcm_rb_commit_read(&p->rb, n);
+    kept += n;
+  }
+  ma_pcm_rb_reset(&p->rb);
+  while (put < kept) {
+    ma_uint32 n = kept - put;
+    void *buf;
+    if (ma_pcm_rb_acquire_write(&p->rb, &n, &buf) != MA_SUCCESS || !n) break;
+    memcpy(buf, p->cut_frames + (size_t)put * CHANNELS, (size_t)n * CHANNELS * sizeof *p->cut_frames);
+    ma_pcm_rb_commit_write(&p->rb, n);
+    put += n;
+  }
+  p->written = p->played + put;
+  p->cut = NO_CUT;
+  ma_spinlock_unlock(&p->spin);
 }
 
 /* The audible segment: the last one that has started. */
@@ -419,8 +470,10 @@ static int ensure_device(mc_player *p) {
   config.dataCallback = on_audio;
   config.pUserData = p;
   int ok = ma_device_init(NULL, &config, &p->device) == MA_SUCCESS;
-  if (ok && ma_pcm_rb_init(ma_format_f32, CHANNELS, p->device.sampleRate * BUFFER_MS / 1000, NULL, NULL, &p->rb) !=
-              MA_SUCCESS) {
+  ma_uint32 frames = ok ? p->device.sampleRate * BUFFER_MS / 1000 : 0;
+  float *cut_frames = ok ? malloc((size_t)frames * CHANNELS * sizeof *cut_frames) : NULL;
+  if (ok && (!cut_frames || ma_pcm_rb_init(ma_format_f32, CHANNELS, frames, NULL, NULL, &p->rb) != MA_SUCCESS)) {
+    free(cut_frames);
     ma_device_uninit(&p->device);
     ok = 0;
   }
@@ -428,6 +481,7 @@ static int ensure_device(mc_player *p) {
   if (ok) {
     p->device_open = 1;
     p->rate = p->device.sampleRate;
+    p->cut_frames = cut_frames;
   }
   return ok;
 }
@@ -612,6 +666,10 @@ static unsigned do_command(mc_player *p) {
 static unsigned fill(mc_player *p) {
   unsigned events = 0;
   while (p->cmd == CMD_NONE && !p->quit) {
+    if (p->cut != NO_CUT) { /* what comes after it is the old order's, the source included */
+      cut_buffer(p);
+      close_source(p);
+    }
     if (p->src) {
       ma_uint32 n = CHUNK;
       void *buf;
@@ -622,7 +680,7 @@ static unsigned fill(mc_player *p) {
       mc_mutex_lock(&p->lock);
       ma_pcm_rb_commit_write(&p->rb, (ma_uint32)got);
       p->written += got;
-      if (got == n || p->cmd != CMD_NONE) continue;
+      if (got == n || p->cmd != CMD_NONE || p->cut != NO_CUT) continue;
     } else if (p->drained || !p->nsegs) {
       break;
     }
@@ -646,9 +704,9 @@ static unsigned fill(mc_player *p) {
     source_close(done);
     p->decoding = -1;
     p->drained = 0;
-    if (gen != p->gen) {
+    if (gen != p->gen) { /* a command, which ends this, or the order changed */
       source_close(next);
-      break;
+      continue;
     }
     if (!next) {
       if (p->radio) { /* what the feed adds carries on past the failures */
@@ -729,6 +787,7 @@ mc_status mc_player_new(mc_player_cb cb, void *user, mc_player **out) {
   p->current_pos = p->decoding_pos = -1;
   p->volume = 100;
   p->gain = p->gain_target = 1.0f;
+  p->cut = NO_CUT;
   mc_mutex_init(&p->lock);
   mc_cond_init(&p->wake);
   mc_cond_init(&p->feed_wake);
@@ -765,6 +824,7 @@ void mc_player_free(mc_player *p) {
   if (p->device_open) {
     ma_device_uninit(&p->device);
     ma_pcm_rb_uninit(&p->rb);
+    free(p->cut_frames);
   }
   source_close(p->src);
   free_queue(p);
@@ -1196,8 +1256,10 @@ mc_status mc_player_set_shuffle(mc_player *p, int on) {
   if (p->radio) { /* a station has its own order, so this waits for the next queue */
     p->shuffle = on;
   } else if (on != p->shuffle) {
-    /* The new order carries on from the last item in the buffer, as what's buffered plays
-     * anyway: usually the one playing. Or from the one about to start, or the current one. */
+    /* The new order carries on from the one playing, or the one about to start, or the
+     * current one. An item being opened for the old order is dropped by the change of gen. */
+    if (p->cmd == CMD_NONE && p->nsegs) cut_after_audible(p);
+    p->gen++;
     int last = p->cmd == CMD_START               ? p->cmd_index
                : p->cmd == CMD_NONE && p->nsegs ? p->segs[p->nsegs - 1].index
                                                  : p->current;

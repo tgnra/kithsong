@@ -216,14 +216,38 @@ int main(int argc, char **argv) {
     CHECK(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2]);
     CHECK(seen[3] != seen[4] && seen[4] != seen[5] && seen[3] != seen[5]);
   }
-  /* Turned off, it plays on in order to the end of the queue, and stops there. (These are
-   * short enough that the items after the current one are buffered already, so the order
-   * changes after them.) */
+  /* Turned off, it plays on in order to the end of the queue, and stops there. */
   CHECK(mc_player_set_shuffle(player, 0) == MC_OK);
   n = watch(player, seen, 8, 3000);
   mc_player_status_get(player, &st);
   CHECK(!st.shuffle && st.state == MC_PLAYER_STOPPED);
   CHECK(n && seen[n - 1] == 2);
+
+  /* These are short enough that the tracks after the current one are in the buffer already.
+   * Turning shuffle off or on changes the order after the current one all the same, and
+   * doesn't disturb it. */
+  const char *five[] = {a, b, a, b, a};
+  int next[2];
+  CHECK(mc_player_set_shuffle(player, 1) == MC_OK);
+  do {
+    CHECK(mc_player_set_queue(player, five, 5, 0, NULL) == MC_OK);
+    CHECK(mc_player_order(player, 1, 1, next) == MC_OK);
+  } while (next[0] == 1);
+  mc_sleep_ms(100);
+  CHECK(mc_player_set_shuffle(player, 0) == MC_OK);
+  n = watch(player, seen, 8, 3000);
+  CHECK(n == 5);
+  for (int i = 0; i < n; i++) CHECK(seen[i] == i);
+
+  CHECK(mc_player_set_queue(player, five, 5, 0, NULL) == MC_OK);
+  mc_sleep_ms(100);
+  CHECK(mc_player_set_shuffle(player, 1) == MC_OK);
+  CHECK(mc_player_order(player, 0, 2, next) == MC_OK);
+  CHECK(next[0] == 0);
+  n = watch(player, seen, 3, 900);
+  CHECK(n == 3 && seen[0] == 0 && seen[1] == next[1]);
+  CHECK(mc_player_set_shuffle(player, 0) == MC_OK);
+  CHECK(mc_player_stop(player) == MC_OK);
 
   /* Volume: clamped, and kept apart from muted. */
   CHECK(st.volume == 100 && !st.muted);
