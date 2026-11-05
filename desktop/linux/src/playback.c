@@ -331,7 +331,8 @@ void playback_play_radio(const char *seed_track_uid) {
   }
   const mc_track_info *t = &list->items[0];
   playback_track track = {t->uid, t->path, t->title, t->artist, t->album, t->cover_dir, t->duration_ms};
-  if (t->path) {
+  /* The seed check only asks the database: a file that's gone would be skipped without a word. */
+  if (t->path && g_file_test(t->path, G_FILE_TEST_EXISTS)) {
     play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, t->uid, TRUE);
     /* Now, as opening an album is: the play log's row only comes once the seed has ended. */
     if (mc_library_record_opened(s.lib, MC_RECENT_STATION, t->uid) == MC_OK && s.recents_changed)

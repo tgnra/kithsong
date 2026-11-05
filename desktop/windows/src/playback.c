@@ -382,7 +382,9 @@ void playback_play_radio(const char *seed_track_uid) {
   wchar_t *album = t->album ? wstr_dup_from_utf8(t->album) : NULL;
   wchar_t *cover_dir = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
   playback_track track = {t->uid, t->path, title, artist, album, cover_dir, t->duration_ms};
-  if (t->path) {
+  /* The seed check only asks the database: a file that's gone would be skipped without a word. */
+  wchar_t *path = t->path ? wstr_dup_from_utf8(t->path) : NULL;
+  if (path && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
     play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, t->uid, TRUE);
     /* Now, as opening an album is: the play log's row only comes once the seed has ended. */
     if (mc_library_record_opened(s.lib, MC_RECENT_STATION, t->uid) == MC_OK && s.recents_changed)
@@ -390,6 +392,7 @@ void playback_play_radio(const char *seed_track_uid) {
   } else {
     now_playing_notice(mc_wstr(MC_STR_STATION_CANT_PLAY));
   }
+  free(path);
   free(title);
   free(artist);
   free(album);
