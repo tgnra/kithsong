@@ -1,6 +1,7 @@
 /* Dragging tracks onto playlists and albums onto album groups, within the window.
  *
- * A track list's row drags its track, and an album grid's tile its album (drag_source_new()).
+ * A track list's row drags its track, and an album grid's tile its album (drag_source_new()), as
+ * do the search page's results and the artist page's tiles.
  * What takes them: a manual playlist's or group's recent in the sidebar and its tile on the
  * Playlists or Album groups page, which add it (GDK_ACTION_COPY), and a playlist's own
  * tracks or a manual group's own albums, which move it there (GDK_ACTION_MOVE). Anything
