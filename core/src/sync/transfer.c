@@ -264,8 +264,8 @@ static void sizes_note(mc_turn_sizes *z, int64_t est, int64_t moved) {
   }
 }
 
-/* What a turn of est bytes by its plan has left, moved so far. A plan often knows only the
- * length of a track, and its estimates are off by much the same for most of a library, so
+/* What a turn of est bytes has left, moved so far. For a track to be encoded the plan knows
+ * only its length, and its estimates are off by much the same for most of a library, so
  * what's left is scaled by how the files so far came out, with a start at no error so that
  * the first small file doesn't swing it. */
 static int64_t turn_left(const mc_turn_sizes *z, int64_t est, int64_t moved) {
@@ -892,8 +892,8 @@ static mc_status send_file(mc_session *s, const char *track, const held *h, cons
 }
 
 /* HAVE_REQ: for each track, whether this device has its original (and whether that copy is
- * verified: its sha256 is recorded) and whether it can send the requested Opus at once.
- * Originals it would send with no recorded hash are queued for hash-ahead, in this order. */
+ * verified: its sha256 is recorded), whether it can send the requested Opus at once, and the
+ * size of the original when that is what it would send. Originals it would send with no recorded hash are queued for hash-ahead, in this order. */
 static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t len) {
   yyjson_doc *req = parse(payload, len);
   if (!req) return MC_ERR_FORMAT;
@@ -921,12 +921,11 @@ static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t 
     if (!is_uid(track)) continue;
     held h;
     int original = find_original(s->conn->lib, track, &h), cached = 0;
-    if (original && !h.sha[0] && x && x->hashes &&
-        (!kbps || mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps)))
-      mc_hash_ahead_queue(x->hashes, h.file_uid, h.path);
+    int as_is = original &&
+                (!kbps || mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps));
+    if (as_is && !h.sha[0] && x && x->hashes) mc_hash_ahead_queue(x->hashes, h.file_uid, h.path);
     if (kbps && valid_bitrate(kbps)) {
-      if (original && mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps))
-        cached = 1;
+      cached = as_is;
       if (!cached && original) {
         char *c = cache_path(s->sync, h.file_uid, kbps);
         cached = c && mc_file_exists(c);
@@ -940,6 +939,7 @@ static mc_status serve_have(mc_session *s, const unsigned char *payload, size_t 
     yyjson_mut_obj_add_bool(doc, o, "original", original);
     yyjson_mut_obj_add_bool(doc, o, "cached", cached);
     yyjson_mut_obj_add_bool(doc, o, "verified", original && h.sha[0]);
+    if (as_is) yyjson_mut_obj_add_int(doc, o, "size", h.size);
     yyjson_mut_arr_append(arr, o);
     if (original) held_free(&h);
   }
@@ -1342,21 +1342,21 @@ static char *cover_needed(mc_session *s, const char *track, const char *abs,
   return dir;
 }
 
-/* FILE_REQ for t; retry marks the second ask after a mismatch, so the peer counts the
- * track once. */
-static mc_status ask_file(mc_session *s, const mc_plan_track *t, int opus, int retry) {
+/* FILE_REQ for t, est bytes as far as this device knows; retry marks the second ask after a
+ * mismatch, so the peer counts the track once. */
+static mc_status ask_file(mc_session *s, const mc_plan_track *t, int opus, int64_t est, int retry) {
   yyjson_mut_val *root;
   yyjson_mut_doc *doc = new_doc(&root);
   if (!doc) return MC_ERR_NOMEM;
   yyjson_mut_obj_add_strcpy(doc, root, "track", t->track_uid);
   yyjson_mut_obj_add_str(doc, root, "format", opus ? "opus" : "original");
   yyjson_mut_obj_add_int(doc, root, "kbps", opus ? t->format.bitrate_kbps : 0);
-  yyjson_mut_obj_add_int(doc, root, "est", t->est_bytes);
+  yyjson_mut_obj_add_int(doc, root, "est", est);
   if (retry) yyjson_mut_obj_add_bool(doc, root, "retry", true);
   return send_doc(s->ch, MC_MSG_FILE_REQ, doc);
 }
 
-/* The answer to ask_file(s, t, opus): FILE_HDR and FILE_DATA into <dest>.part, renamed into
+/* The answer to ask_file() for t: FILE_HDR and FILE_DATA into <dest>.part, renamed into
  * place and recorded if the hash matches, or FILE_ERR. *got says how it went, and on GOT_OK
  * *landed is the file's absolute path. The return value is only for errors that end the
  * session. */
@@ -1485,8 +1485,14 @@ typedef struct want {
   const mc_plan_track *t; /* NULL: an original imported here we asked about for reconcile */
   char uid[MC_UID_STRLEN];
   int original, cached, verified;
+  int64_t size; /* of the original, if that's what the peer would send; else 0 */
   int imported; /* this device holds an original of it imported here, in the wrong format */
 } want;
+
+/* What a track will come to: the peer's word for it, else the plan's estimate. */
+static int64_t want_bytes(const want *w) {
+  return w->size > 0 ? w->size : w->t->est_bytes;
+}
 
 /* A request awaiting its answer: FILE_REQ for want i (the retry after a mismatch if retry),
  * or with i < 0, COVER_REQ for album, to be saved in dir. */
@@ -1542,6 +1548,7 @@ static mc_status ask_have(mc_session *s, want *w, int n, const mc_plan *plan) {
       e->original = yyjson_get_bool(yyjson_obj_get(v, "original"));
       e->cached = yyjson_get_bool(yyjson_obj_get(v, "cached"));
       e->verified = yyjson_get_bool(yyjson_obj_get(v, "verified"));
+      e->size = yyjson_get_sint(yyjson_obj_get(v, "size"));
     }
     yyjson_doc_free(resp);
   }
@@ -1688,7 +1695,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
              (w[i].original && ntc && (w[i].imported || assigned_to_peer(tc, ntc, w[i].uid))))
       how[i] = 2;
     s->files_total += how[i] != 0;
-    if (how[i]) s->files_bytes += w[i].t->est_bytes;
+    if (how[i]) s->files_bytes += want_bytes(&w[i]);
   }
   if (x->narchived) qsort(x->archived, (size_t)x->narchived, sizeof *x->archived, uid_cmp);
   free(tc);
@@ -1705,7 +1712,7 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
   for (int next = 0; st == MC_OK;) {
     for (; st == MC_OK && nq < FETCH_AHEAD && next < n; next++) {
       if (!how[next]) continue;
-      st = ask_file(s, w[next].t, how[next] == 2, 0);
+      st = ask_file(s, w[next].t, how[next] == 2, want_bytes(&w[next]), 0);
       if (st == MC_OK) q[(head + nq++) % FETCH_AHEAD] = (asked){next, 0, "", NULL};
     }
     if (st != MC_OK || !nq) break;
@@ -1723,12 +1730,13 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
     st = recv_file(s, w[a.i].t, how[a.i] == 2, &got, &landed);
     if (st == MC_OK && got == GOT_MISMATCH && !a.retry) {
       /* Once more, behind what is already asked; this session has only this peer to ask. */
-      st = ask_file(s, w[a.i].t, how[a.i] == 2, 1);
+      st = ask_file(s, w[a.i].t, how[a.i] == 2, want_bytes(&w[a.i]), 1);
       if (st == MC_OK) q[(head + nq++) % FETCH_AHEAD] = (asked){a.i, 1, "", NULL};
       continue;
     }
     if (st == MC_OK && got == GOT_MISMATCH) s->files_corrupt++;
-    sizes_note(&s->fetched_sizes, w[a.i].t->est_bytes, got == GOT_OK ? s->bytes_received - before : 0);
+    sizes_note(&s->fetched_sizes, want_bytes(&w[a.i]),
+               got == GOT_OK ? s->bytes_received - before : 0);
     asked c = {-1, 0, "", NULL};
     c.dir = landed ? cover_needed(s, w[a.i].t->track_uid, landed, c.album) : NULL;
     for (int k = 0; c.dir && k < nq; k++) {

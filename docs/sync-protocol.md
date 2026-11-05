@@ -463,8 +463,8 @@ Message types:
 | 0x11 | `ROWS`        | binary, below |
 | 0x12 | `ROWS_END`    | `{"db", "digest"}` |
 | 0x20 | `HAVE_REQ`    | `{"tracks": [uid], "format", "kbps"}` |
-| 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool, "verified": bool}]}` |
-| 0x22 | `FILE_REQ`    | `{"track", "format", "kbps", "est", "retry": true}`; `format` `"original"` or `"opus"`; `est` the size the plan has for it, for progress only; `retry` only on the second ask for a track after a checksum mismatch |
+| 0x21 | `HAVE_RESP`   | `{"tracks": [{"uid", "original": bool, "cached": bool, "verified": bool, "size"?}]}` |
+| 0x22 | `FILE_REQ`    | `{"track", "format", "kbps", "est", "retry": true}`; `format` `"original"` or `"opus"`; `est` the size the receiver expects, for progress only; `retry` only on the second ask for a track after a checksum mismatch |
 | 0x23 | `FILE_HDR`    | `{"track", "file", "format", "kbps", "ext", "size", "sha256", "source_sha256"?}` |
 | 0x24 | `FILE_DATA`   | raw bytes, in order, until `size` bytes have been sent |
 | 0x25 | `FILE_ERR`    | `{"track", "reason"}`, sent instead of `FILE_HDR` |
@@ -1031,6 +1031,8 @@ rows it took.
      A transcode at another bitrate counts for nothing: it is never encoded again (see
      [Lossy copies](#lossy-copies)).
    - `verified`: its original has a recorded `sha256` (see Reconcile above).
+   - `size`: the size of its original, only when that is the file it would send (the target
+     is `original`, or it's a lossy original standing in for the Opus).
 3. It chooses a source per track:
    1. a device with a cached transcode, or with the original when the target is `original`;
    2. otherwise a device holding the original with `can_transcode`, `on_power` and enough
@@ -1044,8 +1046,8 @@ rows it took.
    weighted by `cpu_score`, the same every time; one that falls to another member waits for
    the session with that member.
 4. Before its first `FILE_REQ`, the receiver sends `FILES_PLAN`: `files`, the tracks it has
-   chosen to fetch, and `bytes`, their size as its plan estimates it (exact only for
-   originals whose size it knows). It is for progress only: both sides then show the turn
+   chosen to fetch, and `bytes`, their size: `HAVE_RESP`'s `size` where there is one,
+   else the plan's estimate. It is for progress only: both sides then show the turn
    as `files` requests to answer (a retry of a mismatch is the same track), and the sender
    checks nothing against it. It is sent, even with `files` 0, only when both `HELLO`s carry
    `"files_plan": true`: older versions end the session on an unknown message, and send none
@@ -1187,10 +1189,10 @@ Time is cut into one-second bins, starting with the first bytes.
 - Nothing is shown when the size isn't known (a peer without `FILES_PLAN`), when nothing has
   moved for the 10 bins of the speed, or past 7 days. After a stall the value held goes on.
   A session with another peer starts from nothing: another link says nothing of this one.
-- The bytes left are the turns known so far. A plan often knows only a track's length, and its
-  estimates can be a third off, so what is left of a turn is scaled by how the files so far came
-  out against their estimates (`est` in `FILE_REQ`, which the sender needs for this; from an older
-  peer it has none and goes by the plan alone). More work arriving (the second turn's
+- The bytes left are the turns known so far. An original's size comes from `HAVE_RESP`, but of a
+  track to be encoded the plan knows only its length, and those estimates can be a third off, so
+  what is left of a turn is scaled by how the files so far came out against their estimates (`est`
+  in `FILE_REQ`, which the sender needs for this). More work arriving (the second turn's
   `FILES_PLAN`) starts the time left over, with its warm-up.
 
 ## Lossy copies

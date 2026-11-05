@@ -1011,9 +1011,10 @@ int main(int argc, char **argv) {
   CHECK(!ra.files_paused && !rb.files_paused);
   CHECK(rb.files_received == 4 && rb.files_missing == 0 && rb.files_corrupt == 0);
   /* The closing progress carries the file counts, finished. A, serving, knew from B's
-   * FILES_PLAN how many it would send, and their estimated size, before the first went. */
+   * FILES_PLAN how many it would send, and their size, before the first went: B holds none
+   * of them, so that's HAVE_RESP's size, not the estimate from their length. */
   mc_mutex_lock(&b.m);
-  CHECK(b.done_total == 4 && b.done_files == 4 && b.done_files_bytes > 0);
+  CHECK(b.done_total == 4 && b.done_files == 4 && b.done_files_bytes == rb.bytes_received);
   CHECK(b.done_sends_total == 0 && b.done_sends == 0);
   mc_mutex_unlock(&b.m);
   mc_mutex_lock(&a.m);
