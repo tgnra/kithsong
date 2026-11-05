@@ -227,6 +227,8 @@ static void test_merge(const char *root) {
   track fresh = {"Home", "Tapes", NULL, "Fresh", NULL, 1, 1, "", "", ""};
   track mapped = {"Low", "Things", "rel-things", "Elsewhere", "rt-elsewhere", 2, 0, "", "", ""};
   track lost = {"Home", "Tapes", NULL, "Lost", NULL, 2, 0, "", "", ""};
+  track named = {"The Hopes", "Near, Far", NULL, "Road Song!", NULL, 1, 1, "", "", ""};
+  add_track(lib, &named, 5);
   add_track(lib, &better, 1);
   add_track(lib, &same, 2);
   add_track(lib, &nocopy, 3);
@@ -333,7 +335,14 @@ static void test_merge(const char *root) {
              "  'Same', 1, 'rt-same'),"
              " ('b1000000-0000-7000-8000-000000000004', 'a1000000-0000-7000-8000-000000000003', '%s',"
              "  'Unknown', 1, 'rt-third');"
-             "INSERT INTO playlists (uid, name) VALUES ('c1000000-0000-7000-8000-000000000001', 'road');",
+             "INSERT INTO playlists (uid, name) VALUES ('c1000000-0000-7000-8000-000000000001', 'road');"
+             /* No ids here: the same album as Near, Far by The Hopes, by name alone. */
+             "INSERT INTO artists (uid, name) VALUES ('a0000000-0000-7000-8000-00000000000b', 'Hopes');"
+             "INSERT INTO albums (uid, title, artist_uid) VALUES"
+             " ('a1000000-0000-7000-8000-000000000004', 'Near Far', 'a0000000-0000-7000-8000-00000000000b');"
+             "INSERT INTO tracks (uid, album_uid, artist_uid, title, track_no) VALUES"
+             " ('b1000000-0000-7000-8000-000000000005', 'a1000000-0000-7000-8000-000000000004',"
+             "  'a0000000-0000-7000-8000-00000000000b', 'road song', 1);",
              k_ar, k_ar, k_ar, k_ar, k_ar, k_ar, k_ar, k_ar);
     lib->applying_remote = 1;
     CHECK(exec(db, sql2) == SQLITE_OK);
@@ -360,16 +369,19 @@ static void test_merge(const char *root) {
   CHECK(r.tracks_added == 1);    /* Fresh */
   CHECK(r.tracks_better == 1);   /* Better: this WAV beats the kept MP3 */
   CHECK(r.tracks_skipped == 1);  /* Same: the kept FLAC is as good */
-  CHECK(r.tracks_attached == 1); /* Unknown: the kept copy's quality isn't known */
+  CHECK(r.tracks_attached == 2); /* Unknown and Road Song: the kept copy's quality isn't known */
   CHECK(r.tracks_mapped == 1);   /* Elsewhere: no file here, but the kept library has it */
   CHECK(r.tracks_left_out == 1); /* Lost: no file, no id */
   CHECK(r.tracks_failed == 0);
   CHECK(trashed == 1);
   CHECK(mc_libmerge_pending(lib, NULL) == 0);
 
-  /* Tracks: the kept four plus Fresh, which keeps its date added. Better and Unknown have
+  /* Tracks: the kept five plus Fresh, which keeps its date added. Better and Unknown have
    * this device's files, attached to the kept tracks; Same's file went to the trash. */
-  CHECK(query_int(db, "SELECT count(*) FROM tracks") == 5);
+  CHECK(query_int(db, "SELECT count(*) FROM tracks") == 6);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE title LIKE 'Near%'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM files WHERE"
+                      " track_uid = 'b1000000-0000-7000-8000-000000000005'") == 1);
   CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE title = 'Fresh' AND added_ms = 1000") == 1);
   CHECK(query_int(db, "SELECT count(*) FROM files WHERE track_uid IN"
                       " ('b1000000-0000-7000-8000-000000000001',"
@@ -380,8 +392,8 @@ static void test_merge(const char *root) {
   /* A file brings what it was imported from, or else counts as coming from the bytes it
    * arrived as, so importing either again finds it. */
   CHECK(query_int(db, "SELECT count(*) FROM files WHERE source_sha256 = 'first imported from'") == 1);
-  CHECK(query_int(db, "SELECT count(*) FROM files WHERE length(source_sha256) = 64") == 2);
-  CHECK(query_int(db, "SELECT count(*) FROM albums") == 4);
+  CHECK(query_int(db, "SELECT count(*) FROM files WHERE length(source_sha256) = 64") == 3);
+  CHECK(query_int(db, "SELECT count(*) FROM albums") == 5);
   {
     char *abs = mc_library_abspath(lib, same.rel);
     CHECK(abs && !mc_file_exists(abs));
@@ -462,7 +474,7 @@ static void test_merge(const char *root) {
   /* The set-aside copy is still whole. */
   sqlite3 *old = NULL;
   CHECK(sqlite3_open_v2(backup, &old, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK);
-  CHECK(query_int(old, "SELECT count(*) FROM tracks") == 6);
+  CHECK(query_int(old, "SELECT count(*) FROM tracks") == 7);
   sqlite3_close(old);
   free(backup);
   mc_library_close(lib);

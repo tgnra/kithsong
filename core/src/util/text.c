@@ -1,5 +1,8 @@
 #include "util/text.h"
 
+#include <stdlib.h>
+#include <string.h>
+
 /* Base letters for U+00C0..U+00FF; '\0' is punctuation (× and ÷). */
 static const char k_latin1[] = "aaaaaaaceeeeiiiidnooooo\0ouuuuyts"
                                "aaaaaaaceeeeiiiidnooooo\0ouuuuyty";
@@ -9,6 +12,54 @@ static const char k_latin_ext_a[] = "aaaaaaccccccccddddeeeeeeeeeegggggggghhhhiii
                                     "kkkllllllllllnnnnnnnnnoooooooorrrrrrsssssssstttttt"
                                     "uuuuuuuuuuuuwwyyyzzzzzzs";
 _Static_assert(sizeof k_latin_ext_a == 0x80 + 1, "one letter per code point");
+
+static char *put_utf8(char *p, uint32_t c) {
+  if (c < 0x80) {
+    *p++ = (char)c;
+  } else if (c < 0x800) {
+    *p++ = (char)(0xC0 | c >> 6);
+    *p++ = (char)(0x80 | (c & 0x3F));
+  } else if (c < 0x10000) {
+    *p++ = (char)(0xE0 | c >> 12);
+    *p++ = (char)(0x80 | (c >> 6 & 0x3F));
+    *p++ = (char)(0x80 | (c & 0x3F));
+  } else {
+    *p++ = (char)(0xF0 | (c >> 18 & 0x07));
+    *p++ = (char)(0x80 | (c >> 12 & 0x3F));
+    *p++ = (char)(0x80 | (c >> 6 & 0x3F));
+    *p++ = (char)(0x80 | (c & 0x3F));
+  }
+  return p;
+}
+
+char *mc_name_key(const char *name) {
+  if (!name) return NULL;
+  /* At most 4 bytes come of each byte: "&" is the longest, and a code point keeps its size
+   * or shrinks, but for a broken sequence read as one. */
+  char *key = malloc(strlen(name) * 4 + 4);
+  if (!key) return NULL;
+  char *p = key;
+  int gap = 0;
+  for (const unsigned char *s = (const unsigned char *)name; *s;) {
+    uint32_t out[3];
+    int n = mc_text_fold(mc_utf8_next(&s), out);
+    if (n == MC_FOLD_DROP) continue;
+    if (n < 0) {
+      gap = 1;
+      continue;
+    }
+    if (gap && p > key) *p++ = ' ';
+    gap = 0;
+    for (int i = 0; i < n; i++) p = put_utf8(p, out[i]);
+  }
+  *p = '\0';
+  if (!strncmp(key, "the ", 4)) memmove(key, key + 4, strlen(key + 4) + 1);
+  if (!*key) {
+    free(key);
+    return NULL;
+  }
+  return key;
+}
 
 uint32_t mc_utf8_next(const unsigned char **s) {
   const unsigned char *p = *s;

@@ -12,6 +12,7 @@
 #include "tagger/refresh.h"
 #include "util/db_open.h"
 #include "util/platform.h"
+#include "util/text.h"
 #include "util/uid.h"
 
 extern const unsigned char mc_schema_v1_sql[];
@@ -355,6 +356,13 @@ static void sql_shuffle_key(sqlite3_context *ctx, int argc, sqlite3_value **argv
 }
 
 /* mc_credit_uid(owner, position): an artist credit row's uid (mc_uid_derive()). */
+static void sql_name_key(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  char *key = mc_name_key((const char *)sqlite3_value_text(argv[0]));
+  if (key) sqlite3_result_text(ctx, key, -1, free);
+  else sqlite3_result_null(ctx);
+}
+
 static void sql_credit_uid(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
   (void)argc;
   const char *owner = (const char *)sqlite3_value_text(argv[0]);
@@ -517,7 +525,10 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
                               SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
                               sql_credit_uid, NULL, NULL) != SQLITE_OK ||
       sqlite3_create_function(lib->db, "mc_smart_name", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
-                              mc_smart_sql_shown_name, NULL, NULL) != SQLITE_OK) {
+                              mc_smart_sql_shown_name, NULL, NULL) != SQLITE_OK ||
+      sqlite3_create_function(lib->db, "mc_name_key", 1,
+                              SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
+                              sql_name_key, NULL, NULL) != SQLITE_OK) {
     st = MC_ERR_DB;
     goto fail;
   }

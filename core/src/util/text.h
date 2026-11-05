@@ -20,4 +20,9 @@ uint32_t mc_utf8_next(const unsigned char **s);
  * (e.g. CJK) are kept as they are. */
 int mc_text_fold(uint32_t c, uint32_t out[3]);
 
+/* What two names must share to be the same name, for merging duplicates: name folded as
+ * above, its punctuation gone, its words one space apart, and a leading "The" gone. malloc'd,
+ * or NULL if out of memory or nothing is left of it ("!!!"), which matches nothing. */
+char *mc_name_key(const char *name);
+
 #endif

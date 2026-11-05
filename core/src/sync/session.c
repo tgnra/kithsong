@@ -12,6 +12,7 @@
 #include "musiccore/transcode.h"
 #include "sync/archive.h"
 #include "sync/libmerge.h"
+#include "sync/merge.h"
 #include "sync/rows.h"
 #include "sync/transfer.h"
 
@@ -571,6 +572,7 @@ static mc_status receive_only_end(exchange *x, char digest[MC_DIGEST_STRLEN]) {
  * compare the same two digests, and on a mismatch run one more round in which origins
  * whose newest hlc differs are sent again from 0. first_vv: the responder's already
  * received VV payload, or NULL. */
+/* A failure of mc_merge_note_names() leaves those rows unmerged until a later session. */
 static mc_status exchange_db(mc_session *s, int which, const unsigned char *first_vv,
                              size_t first_len) {
   exchange x;
@@ -586,6 +588,7 @@ static mc_status exchange_db(mc_session *s, int which, const unsigned char *firs
   x.handle = tg.db;
   mc_sync_phase phase = which == MC_ROWS_GROUP ? MC_SYNC_PHASE_GROUP : MC_SYNC_PHASE_LIBRARY;
   progress(s, phase);
+  if (which == MC_ROWS_LIBRARY) mc_merge_note_names(s->conn->lib);
   mc_status st = mc_rows_applier_new(&tg, &x.applier);
   if (st != MC_OK) return st;
   x.buf = malloc(MC_CHANNEL_MAX_PAYLOAD);

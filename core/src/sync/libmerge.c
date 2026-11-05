@@ -885,7 +885,8 @@ done:
   return st;
 }
 
-/* The kept library's artist for one of the copy's: by MusicBrainz id, then by name. */
+/* The kept library's artist for one of the copy's: by MusicBrainz id, then by name, as
+ * mc_name_key() has it. */
 static int map_artist(merge_ctx *x, const char *old_uid, char out[MC_UID_STRLEN]) {
   out[0] = '\0';
   sqlite3_stmt *stmt;
@@ -898,8 +899,8 @@ static int map_artist(merge_ctx *x, const char *old_uid, char out[MC_UID_STRLEN]
     const char *mbid = (const char *)sqlite3_column_text(stmt, 1);
     if (!lookup_uid(x->db, "SELECT uid FROM artists WHERE mb_artistid = ?1 ORDER BY uid", mbid,
                     out))
-      lookup_uid(x->db, "SELECT uid FROM artists WHERE name = ?1 COLLATE NOCASE ORDER BY uid",
-                 name, out);
+      lookup_uid(x->db, "SELECT uid FROM artists WHERE mc_name_key(name) = mc_name_key(?1)"
+                        " ORDER BY uid", name, out);
   }
   sqlite3_finalize(stmt);
   return out[0] != '\0';

@@ -9,6 +9,7 @@
 
 #include "musiccore/tagger.h"
 #include "util/platform.h"
+#include "util/text.h"
 
 #define SHA_STRLEN MC_SHA256_STRLEN
 
@@ -19,6 +20,17 @@ static int same_ci(const char *a, const char *b) {
   for (; *a && *b; a++, b++)
     if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
   return *a == *b;
+}
+
+/* Merging libraries goes further than an import: the same name, as mc_name_key() has it. */
+static int same_name(const char *a, const char *b, int loose) {
+  if (same_ci(a, b)) return 1;
+  if (!loose || !a || !b) return 0;
+  char *x = mc_name_key(a), *y = mc_name_key(b);
+  int same = x && y && !strcmp(x, y);
+  free(x);
+  free(y);
+  return same;
 }
 
 int mc_quality_is_lossless(const mc_audio_quality *q) {
@@ -237,7 +249,7 @@ static mc_status read_album(mc_library *lib, const char *album_uid, const char *
 /* Pairs incoming files with the album's tracks, strongest evidence first. pair[i] is the
  * library track of incoming file i, or -1. Returns how many were paired. */
 static int pair_tracks(const mc_dupe_in *in, int count, lib_track *t, int n, int no_album,
-                       int *pair) {
+                       int loose, int *pair) {
   for (int i = 0; i < count; i++) pair[i] = -1;
   for (int j = 0; j < n; j++) t[j].paired = -1;
   int paired = 0;
@@ -255,9 +267,9 @@ static int pair_tracks(const mc_dupe_in *in, int count, lib_track *t, int n, int
           case 2:
             match = r->track_no && r->track_no == t[j].number &&
                     (r->disc_no ? r->disc_no : 1) == (t[j].disc ? t[j].disc : 1) &&
-                    same_ci(r->title, t[j].title);
+                    same_name(r->title, t[j].title, loose);
             break;
-          default: match = same_ci(r->title, t[j].title); break;
+          default: match = same_name(r->title, t[j].title, loose); break;
         }
         if (match) {
           pair[i] = j;
@@ -272,7 +284,7 @@ static int pair_tracks(const mc_dupe_in *in, int count, lib_track *t, int n, int
 }
 
 /* The artist's uid, by MusicBrainz id then by name, or "". */
-static int find_artist(sqlite3 *db, const mc_db_artist *a, char uid[MC_UID_STRLEN]) {
+static int find_artist(sqlite3 *db, const mc_db_artist *a, int loose, char uid[MC_UID_STRLEN]) {
   sqlite3_stmt *stmt;
   if (a->mb_artistid && *a->mb_artistid) {
     if ((stmt = prepare(db, "SELECT uid FROM artists WHERE mb_artistid = ?1"))) {
@@ -281,7 +293,9 @@ static int find_artist(sqlite3 *db, const mc_db_artist *a, char uid[MC_UID_STRLE
     }
   }
   if (!a->name || !*a->name) return 0;
-  if (!(stmt = prepare(db, "SELECT uid FROM artists WHERE name = ?1 COLLATE NOCASE"))) return 0;
+  if (!(stmt = prepare(db, loose ? "SELECT uid FROM artists WHERE mc_name_key(name) = mc_name_key(?1)"
+                                 : "SELECT uid FROM artists WHERE name = ?1 COLLATE NOCASE")))
+    return 0;
   bind_text(stmt, 1, a->name);
   return first_uid(stmt, uid);
 }
@@ -309,12 +323,12 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
     else if (r->artist.name && *r->artist.name) who = &r->artist;
     else if (album->credit_count > 0 && album->credit) who = &album->credit[0].artist;
     char artist[MC_UID_STRLEN];
-    if (find_artist(db, who, artist)) {
+    if (find_artist(db, who, remote != NULL, artist)) {
       lib_track *t;
       int n;
       mc_status st = read_album(lib, NULL, artist, remote, &t, &n);
       if (st != MC_OK) return st;
-      if (pair_tracks(in, count, t, n, 1, pair) > 0) {
+      if (pair_tracks(in, count, t, n, 1, remote != NULL, pair) > 0) {
         *tracks = t;
         *ntracks = n;
         return MC_OK;
@@ -334,11 +348,15 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
     "SELECT uid FROM albums WHERE mb_releasegroupid = ?1",
     "SELECT al.uid FROM albums al JOIN artists ar ON ar.uid = al.artist_uid"
     " WHERE al.title = ?1 COLLATE NOCASE AND coalesce(al.artist_credit, ar.name) = ?2 COLLATE NOCASE"};
+  static const char by_key[] =
+    "SELECT al.uid FROM albums al JOIN artists ar ON ar.uid = al.artist_uid"
+    " WHERE mc_name_key(al.title) = mc_name_key(?1)"
+    " AND mc_name_key(coalesce(al.artist_credit, ar.name)) = mc_name_key(?2)";
   const char *keys[] = {album->mb_albumid, album->mb_releasegroupid, album->title};
   for (int k = 0; k < 3 && ncand < 8; k++) {
     if (!keys[k] || !*keys[k] || (k == 2 && (!album->artist.name || !*album->artist.name)))
       continue;
-    if (!(stmt = prepare(db, by[k]))) return MC_ERR_DB;
+    if (!(stmt = prepare(db, k == 2 && remote ? by_key : by[k]))) return MC_ERR_DB;
     bind_text(stmt, 1, keys[k]);
     if (k == 2) bind_text(stmt, 2, album->artist.name);
     while (ncand < 8 && sqlite3_step(stmt) == SQLITE_ROW) {
@@ -355,7 +373,7 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
     int n;
     mc_status st = read_album(lib, cands[c], NULL, remote, &t, &n);
     if (st != MC_OK) return st;
-    int paired = pair_tracks(in, count, t, n, 0, pair);
+    int paired = pair_tracks(in, count, t, n, 0, remote != NULL, pair);
     /* An album by name needs at least half of the incoming tracks in its track list. */
     int ok = by_id[c] || 2 * paired >= count;
     if (ok) {

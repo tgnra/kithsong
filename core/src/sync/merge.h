@@ -3,7 +3,8 @@
  *
  * Which uids are one is a function of the changelog alone: two uids merge once the
  * changelog shows them sharing a MusicBrainz id (artists by mb_artistid, albums by
- * mb_albumid, tracks by mb_releasetrackid). "Shows" means
+ * mb_albumid, tracks by mb_releasetrackid) or a merge_name, which a row without an id logs
+ * from what it's called (mc_merge_note_names()). "Shows" means
  * any value ever logged, not only the current winner, so the relation only grows as rows
  * arrive and every device reaches the same classes whatever order it gets them in. The
  * merge is applied locally and never logged; see rows.c for how the applier uses this. */
@@ -25,6 +26,14 @@ typedef struct mc_merge_pair {
 /* 1 if rows of table can be merged: the merged entities, and recents, which is keyed by
  * their uids. */
 int mc_merge_table(const char *table);
+
+/* Logs merge_name for each artist, album and track with no MusicBrainz id, for whatever it
+ * goes by now: an artist by name, an album by title and artist, a track on an album by those,
+ * its disc and number, and its title, each as mc_name_key() has it. Whether a row has an id
+ * is decided here and logged, not worked out by each device, or a row whose id arrives after
+ * its name would merge on one device and not on another. Takes the write lock. Run before
+ * sending rows; quick when no such row has changed since the last run. */
+mc_status mc_merge_note_names(mc_library *lib);
 
 /* Reads the changelog rows logged since the last scan (meta.merge_seq), records their keys
  * and merges the classes they join. *pairs (malloc'd, free with free()) lists each uid

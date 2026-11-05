@@ -3,7 +3,7 @@
  * aliases is a union-find kept flat: each merged-away uid points straight at its class's
  * canonical (smallest) uid, and the canonical uid has no row. merge_keys records every key
  * value the changelog has ever shown for a uid, so a later edit that changes or clears a
- * MusicBrainz id never splits a class: merges are permanent, which is what keeps the
+ * MusicBrainz id or a name never splits a class: merges are permanent, which is what keeps the
  * relation the same on every device whatever order rows arrive in. */
 #include "sync/merge.h"
 
@@ -13,6 +13,13 @@
 
 #include "library/library_internal.h"
 #include "util/platform.h"
+#include "util/text.h"
+
+/* A changelog field with no column: the name a row without a MusicBrainz id goes by, from
+ * mc_merge_note_names(). The applier passes it on as an unknown field. */
+#define MERGE_NAME "merge_name"
+/* Between the parts of a key: no name holds one, as a control character folds to a space. */
+#define KEY_SEP "\x1f"
 
 /* The field whose shared value makes two rows of a table one. */
 typedef struct merge_key {
@@ -23,10 +30,14 @@ static const merge_key k_keys[] = {
   {"artists", "mb_artistid"},
   {"albums", "mb_albumid"},
   {"tracks", "mb_releasetrackid"},
+  {"artists", MERGE_NAME},
+  {"albums", MERGE_NAME},
+  {"tracks", MERGE_NAME},
 };
 
-/* Columns that hold a mergeable uid. unique_with: the column is part of a UNIQUE key with
- * it, so two rows that would collide keep only the smaller uid.
+/* Columns that hold a mergeable uid. unique_with: two rows that would come to have the same
+ * value in both keep only the smaller uid, as the column is part of a UNIQUE key with it, or
+ * a playlist or album group that held both copies would hold the survivor twice.
  *
  * Not here: track_artists.track_uid and album_artists.album_uid. A merged-away track's or
  * album's credit rows aren't moved to the survivor, which keeps its own credit; they go
@@ -43,9 +54,9 @@ static const merge_ref k_refs[] = {
   {"track_artists", "artist_uid", "artists", NULL},
   {"album_artists", "artist_uid", "artists", NULL},
   {"tracks", "album_uid", "albums", NULL},
-  {"album_group_entries", "album_uid", "albums", NULL},
+  {"album_group_entries", "album_uid", "albums", "group_uid"},
   {"files", "track_uid", "tracks", NULL},
-  {"playlist_entries", "track_uid", "tracks", NULL},
+  {"playlist_entries", "track_uid", "tracks", "playlist_uid"},
   {"track_plays", "track_uid", "tracks", "node_uid"},
   {"play_events", "track_uid", "tracks", NULL},
   {"track_analysis", "track_uid", "tracks", NULL},
@@ -219,7 +230,8 @@ mc_status mc_merge_scan(sqlite3 *db, mc_merge_pair **pairs, int *count) {
   if (sqlite3_prepare_v2(db,
                          "SELECT seq, entity, row_uid, field, value FROM changelog WHERE seq > ?1"
                          " AND entity IN ('artists', 'albums', 'tracks')"
-                         " AND field IN ('mb_artistid', 'mb_albumid', 'mb_releasetrackid')"
+                         " AND field IN ('mb_artistid', 'mb_albumid', 'mb_releasetrackid',"
+                         " '" MERGE_NAME "')"
                          " ORDER BY seq",
                          -1, &s, NULL) != SQLITE_OK)
     return MC_ERR_DB;
@@ -267,6 +279,153 @@ mc_status mc_merge_scan(sqlite3 *db, mc_merge_pair **pairs, int *count) {
   *pairs = sc.pairs;
   *count = sc.count;
   return MC_OK;
+}
+
+/* --- Names --- */
+
+/* Untagged files all land here, so these names say nothing about what's in them. */
+static int placeholder(const char *name) {
+  return !name || !strcmp(name, "Unknown Album") || !strcmp(name, "Unknown Artist");
+}
+
+/* The key of an album, malloc'd: its title and artist's. NULL if it has none. */
+static char *album_key(const char *title, const char *artist) {
+  if (placeholder(title) || placeholder(artist)) return NULL;
+  char *t = mc_name_key(title), *a = mc_name_key(artist), *key = NULL;
+  if (t && a && (key = malloc(strlen(t) + strlen(a) + 2))) {
+    strcpy(key, t);
+    strcat(key, KEY_SEP);
+    strcat(key, a);
+  }
+  free(t);
+  free(a);
+  return key;
+}
+
+/* The key of a track on an album: the album's, its place there, and its title's. */
+static char *track_key(const char *title, int disc, int number, const char *album,
+                       const char *artist) {
+  char *al = album_key(album, artist), *t = mc_name_key(title), *key = NULL;
+  size_t len = (al ? strlen(al) : 0) + (t ? strlen(t) : 0) + 32;
+  if (al && t && (key = malloc(len)))
+    snprintf(key, len, "%s" KEY_SEP "%d" KEY_SEP "%d" KEY_SEP "%s", al, disc > 0 ? disc : 1,
+             number, t);
+  free(al);
+  free(t);
+  return key;
+}
+
+/* Logs key for uid, unless it has been. */
+static mc_status note_name(sqlite3_stmt *seen, sqlite3_stmt *add, const char *table,
+                           const char *uid, const char *key) {
+  sqlite3_reset(seen);
+  sqlite3_bind_text(seen, 1, table, -1, SQLITE_STATIC);
+  sqlite3_bind_text(seen, 2, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(seen, 3, key, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(seen);
+  sqlite3_reset(seen);
+  if (rc == SQLITE_ROW) return MC_OK;
+  if (rc != SQLITE_DONE) return MC_ERR_DB;
+  sqlite3_reset(add);
+  sqlite3_bind_text(add, 1, table, -1, SQLITE_STATIC);
+  sqlite3_bind_text(add, 2, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(add, 3, key, -1, SQLITE_STATIC);
+  rc = sqlite3_step(add);
+  sqlite3_reset(add);
+  return rc == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+}
+
+static mc_status note_names(sqlite3 *db) {
+  static const struct {
+    const char *table, *sql;
+  } k_rows[] = {
+    {"artists", "SELECT uid, name FROM artists WHERE coalesce(mb_artistid, '') = ''"},
+    {"albums", "SELECT al.uid, al.title, coalesce(al.artist_credit, ar.name) FROM albums al"
+               " LEFT JOIN artists ar ON ar.uid = al.artist_uid"
+               " WHERE coalesce(al.mb_albumid, '') = ''"},
+    {"tracks", "SELECT t.uid, t.title, al.title, coalesce(al.artist_credit, ar.name),"
+               " t.disc_no, t.track_no FROM tracks t JOIN albums al ON al.uid = t.album_uid"
+               " LEFT JOIN artists ar ON ar.uid = al.artist_uid"
+               " WHERE coalesce(t.mb_releasetrackid, '') = ''"},
+  };
+  sqlite3_stmt *seen = NULL, *add = NULL, *rows = NULL;
+  mc_status st = MC_ERR_DB;
+  if (sqlite3_prepare_v2(db, "SELECT 1 FROM changelog WHERE entity = ?1 AND row_uid = ?2"
+                             " AND field = '" MERGE_NAME "' AND value = ?3 LIMIT 1", -1, &seen,
+                         NULL) != SQLITE_OK ||
+      sqlite3_prepare_v2(db, "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value)"
+                             " VALUES (mc_hlc_now(), mc_node_uid(), ?1, ?2, '" MERGE_NAME "', ?3)",
+                         -1, &add, NULL) != SQLITE_OK)
+    goto done;
+  st = MC_OK;
+  for (size_t i = 0; st == MC_OK && i < COUNT(k_rows); i++) {
+    if (sqlite3_prepare_v2(db, k_rows[i].sql, -1, &rows, NULL) != SQLITE_OK) {
+      st = MC_ERR_DB;
+      break;
+    }
+    while (st == MC_OK && sqlite3_step(rows) == SQLITE_ROW) {
+      const char *uid = (const char *)sqlite3_column_text(rows, 0);
+      const char *name = (const char *)sqlite3_column_text(rows, 1);
+      char *key = NULL;
+      if (i == 0)
+        key = placeholder(name) ? NULL : mc_name_key(name);
+      else if (i == 1)
+        key = album_key(name, (const char *)sqlite3_column_text(rows, 2));
+      else
+        key = track_key(name, sqlite3_column_int(rows, 4), sqlite3_column_int(rows, 5),
+                        (const char *)sqlite3_column_text(rows, 2),
+                        (const char *)sqlite3_column_text(rows, 3));
+      if (key && uid) st = note_name(seen, add, k_rows[i].table, uid, key);
+      free(key);
+    }
+    sqlite3_finalize(rows);
+    rows = NULL;
+  }
+done:
+  sqlite3_finalize(seen);
+  sqlite3_finalize(add);
+  return st;
+}
+
+mc_status mc_merge_note_names(mc_library *lib) {
+  sqlite3 *db = mc_library_db(lib);
+  sqlite3_int64 from = 0, last = 0;
+  sqlite3_stmt *s;
+  if (sqlite3_prepare_v2(db, "SELECT value FROM meta WHERE key = 'merge_name_seq'", -1, &s, NULL) !=
+      SQLITE_OK)
+    return MC_ERR_DB;
+  if (sqlite3_step(s) == SQLITE_ROW) from = sqlite3_column_int64(s, 0);
+  sqlite3_finalize(s);
+  /* Nothing to read unless a row these go by has changed since. */
+  if (sqlite3_prepare_v2(db, "SELECT 1 FROM changelog WHERE seq > ?1"
+                             " AND entity IN ('artists', 'albums', 'tracks') LIMIT 1", -1, &s,
+                         NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_int64(s, 1, from);
+  int changed = sqlite3_step(s) == SQLITE_ROW;
+  sqlite3_finalize(s);
+  if (!changed) return MC_OK;
+
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  st = note_names(db);
+  if (st == MC_OK &&
+      sqlite3_prepare_v2(db, "SELECT coalesce(max(seq), 0) FROM changelog", -1, &s, NULL) ==
+          SQLITE_OK) {
+    if (sqlite3_step(s) == SQLITE_ROW) last = sqlite3_column_int64(s, 0);
+    sqlite3_finalize(s);
+    if (sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO meta (key, value)"
+                               " VALUES ('merge_name_seq', ?1)", -1, &s, NULL) != SQLITE_OK) {
+      st = MC_ERR_DB;
+    } else {
+      sqlite3_bind_int64(s, 1, last);
+      if (sqlite3_step(s) != SQLITE_DONE) st = MC_ERR_DB;
+      sqlite3_finalize(s);
+    }
+  }
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
 }
 
 /* --- Rewriting --- */

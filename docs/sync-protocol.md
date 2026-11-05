@@ -199,8 +199,10 @@ Rather than merging two changelogs (a delete in one library would kill the other
 that album, duplicate classes that never split would join a once-mismatched album to the
 wrong release, metadata would mix field by field, and both archives would claim the whole
 library), one library is kept whole and the other device's music is brought into it as an
-import would bring it in. The API is in `core/include/musiccore/sync.h` ("Merging
-libraries"); the code in `core/src/sync/pairing.c` and `core/src/sync/libmerge.c`.
+import would bring it in, except that names match as they do for
+[Duplicates](#duplicates) (`mc_name_key()`), not only as an import has them. The API is in
+`core/include/musiccore/sync.h` ("Merging libraries"); the code in
+`core/src/sync/pairing.c` and `core/src/sync/libmerge.c`.
 
 - **Which library is kept:** the larger, by `tracks`, then by `bytes`, then the smaller
   `library_uid` (the older library). Both devices work it out from the same two messages,
@@ -590,7 +592,20 @@ way, without logging anything.
   they share an `mb_albumid`, two tracks when they share an `mb_releasetrackid` (a track on
   one release, so the same recording on two releases stays two tracks). Empty ids don't
   count. A single is an album like any other and merges by its release id; nothing merges by
-  artist. Older versions also merged two singles albums (`albums.kind = 'singles'`) of one
+  artist.
+- **Without an id.** Rows with no id merge by name: two artists of the same name, two albums
+  of the same title and artist, two tracks of the same title on the same disc and number of
+  such an album. The same means exactly that once case, accents, punctuation, the spacing
+  between words and a leading "The" are set aside (`mc_name_key()`, so "The Beatles" and
+  "beatles" are one, and "Beatle" isn't: there is no edit distance, as a wrong merge can't be
+  undone). A name left with nothing ("!!!") matches nothing, and "Unknown Album" and "Unknown
+  Artist" don't count, as all sorts of files land there. A row with an id never merges by
+  name with one without. A track with no album doesn't merge by name.
+  Whether a row has an id can't be read from the changelog, since an id may arrive later than
+  the name, so each device logs the name itself: before sending rows, for each such row it logs
+  a `merge_name` row (a field with no column; `mc_merge_note_names()`) with what the row goes by
+  then. It's a key like the ids from there on, so a row that gains an id later stays merged.
+- **Sharing a key.** Older versions also merged two singles albums (`albums.kind = 'singles'`) of one
   artist, and logged `kind`: this version doesn't log the field, and a `kind` row from an
   older peer is logged and passed on as an unknown field, never applied, so its singles
   albums are ordinary albums here and don't merge. "Share"
@@ -612,8 +627,8 @@ way, without logging anything.
   `files.track_uid` are moved to the canonical uid, so each device's files stay attached to
   the surviving track. Two `track_plays` rows that would then share a
   `(track_uid, node_uid)` keep only the smaller uid. If the whole class is deleted, the
-  references go as ON DELETE takes them. Album groups or playlists that held both copies
-  hold the survivor twice.
+  references go as ON DELETE takes them. An album group or playlist that held both copies
+  keeps the entry with the smaller uid, so it holds the survivor once.
 - **Analysis.** `track_analysis.track_uid` is moved like those, so results follow the track. Two
   rows of one source may end up on the survivor; readers take the best (see
   [Audio analysis](schema.md#audio-analysis)).
@@ -1307,7 +1322,6 @@ it changed. The rules are in `core/src/sync/waiting.h`:
 
 ## Open questions
 
-- Duplicates without MusicBrainz ids (untagged imports of one album on two devices) stay
-  two. Compaction must keep the rows that decide [Duplicates](#duplicates), or a device
-  joining later can't derive the same classes.
+- Compaction must keep the rows that decide [Duplicates](#duplicates), `merge_name` among
+  them, or a device joining later can't derive the same classes.
 - How long to keep changelog history once every member has acknowledged it (compaction).

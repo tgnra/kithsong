@@ -10,10 +10,12 @@
 
 #include "library/library_internal.h"
 #include "musiccore/musiccore.h"
+#include "sync/merge.h"
 #include "sync/rows.h"
 #include "tagger/import_db.h"
 #include "test.h"
 #include "util/platform.h"
+#include "util/text.h"
 #include "util/uid.h"
 
 #define CHECK_TEXT(a, b) CHECK(strcmp((a), (b)) == 0)
@@ -518,9 +520,165 @@ static void test_flags(const char *scratch) {
   }
 }
 
+static void check_key(const char *name, const char *want) {
+  char *key = mc_name_key(name);
+  CHECK(want ? key && !strcmp(key, want) : !key);
+  free(key);
+}
+
+/* One untagged album, as each device has it: an artist, an album and a track with no ids. */
+typedef struct bare {
+  char artist[MC_UID_STRLEN], album[MC_UID_STRLEN], track[MC_UID_STRLEN];
+} bare;
+
+static void add_bare(mc_library *lib, const char *artist, const char *album, const char *title,
+                     bare *b) {
+  char sql[1024];
+  mc_uid_new(b->artist);
+  mc_uid_new(b->album);
+  mc_uid_new(b->track);
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  snprintf(sql, sizeof sql,
+           "INSERT INTO artists (uid, name) VALUES ('%s', '%s');"
+           "INSERT INTO albums (uid, title, artist_uid) VALUES ('%s', '%s', '%s');"
+           "INSERT INTO tracks (uid, album_uid, artist_uid, title, track_no)"
+           " VALUES ('%s', '%s', '%s', '%s', 1);",
+           b->artist, artist, b->album, album, b->artist, b->track, b->album, b->artist, title);
+  exec_ok(lib, sql);
+  CHECK(mc_library_commit(lib) == MC_OK);
+}
+
+static int alias_count(mc_library *lib, const char *entity) {
+  char sql[128];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM aliases WHERE entity = '%s'", entity);
+  return query_int(mc_library_db(lib), sql);
+}
+
+/* Rows with no MusicBrainz id merge by name, the same name once case, punctuation and a
+ * leading "The" are set aside; a playlist and an album group that held both copies then hold
+ * the survivor once. */
+static void test_names(const char *scratch) {
+  check_key("The Beatles", "beatles");
+  check_key("beatles", "beatles");
+  check_key("  THE   Beatles!", "beatles");
+  check_key("R.E.M.", "rem");
+  check_key("AC/DC", "ac dc");
+  check_key("Simon & Garfunkel", "simon and garfunkel");
+  check_key("Don\xe2\x80\x99t Stop", "dont stop");
+  check_key("The The", "the");
+  check_key("The", "the");
+  check_key("Theatre", "theatre");
+  check_key("!!!", NULL);
+  check_key("", NULL);
+
+  char pa[1024], pb[1024], pc[1024];
+  snprintf(pa, sizeof pa, "%s/test_merge_names_a.d", scratch);
+  snprintf(pb, sizeof pb, "%s/test_merge_names_b.d", scratch);
+  snprintf(pc, sizeof pc, "%s/test_merge_names_c.d", scratch);
+  remove_db(pa);
+  remove_db(pb);
+  remove_db(pc);
+  mc_library *a = NULL, *b = NULL, *c = NULL;
+  CHECK(mc_library_open(pa, &a) == MC_OK);
+  CHECK(mc_library_open(pb, &b) == MC_OK);
+  CHECK(mc_library_open(pc, &c) == MC_OK);
+  if (!a || !b || !c) return;
+
+  bare a1, b1, a2, b2, a3, b3, a4, b4;
+  add_bare(a, "The Beatles", "Abbey Road", "Come Together", &a1);
+  add_bare(b, "beatles", "Abbey Road!", "Come together.", &b1);
+  /* Near isn't the same. */
+  add_bare(a, "Low", "Things We Lost", "Sunflower", &a2);
+  add_bare(b, "Lows", "Things We Lost", "Sunflower", &b2);
+  /* Nothing left of the name, and names that say nothing about what's there. */
+  add_bare(a, "!!!", "Louden Up Now", "One", &a3);
+  add_bare(b, "???", "Louden Up Now", "One", &b3);
+  add_bare(a, "Unknown Artist", "Unknown Album", "Track", &a4);
+  add_bare(b, "Unknown Artist", "Unknown Album", "Track", &b4);
+  /* The same name with an id on one side stays two. */
+  char sql[1024], idd[MC_UID_STRLEN], idless[MC_UID_STRLEN];
+  mc_uid_new(idd);
+  mc_uid_new(idless);
+  CHECK(mc_library_begin_write(a) == MC_OK);
+  snprintf(sql, sizeof sql, "INSERT INTO artists (uid, name, mb_artistid) VALUES ('%s', 'Mono', 'M1')",
+           idd);
+  exec_ok(a, sql);
+  CHECK(mc_library_commit(a) == MC_OK);
+  CHECK(mc_library_begin_write(b) == MC_OK);
+  snprintf(sql, sizeof sql, "INSERT INTO artists (uid, name) VALUES ('%s', 'Mono')", idless);
+  exec_ok(b, sql);
+  CHECK(mc_library_commit(b) == MC_OK);
+
+  /* A hears of B's copy before any names are logged, and puts both in a playlist and a group. */
+  send(b, a, 1000);
+  CHECK(query_int(mc_library_db(a), "SELECT count(*) FROM aliases") == 0);
+  char pl[MC_UID_STRLEN], e1[MC_UID_STRLEN], e2[MC_UID_STRLEN];
+  char g[MC_UID_STRLEN], g1[MC_UID_STRLEN], g2[MC_UID_STRLEN], other[MC_UID_STRLEN];
+  mc_uid_new(pl);
+  mc_uid_new(e1);
+  mc_uid_new(e2);
+  mc_uid_new(g);
+  mc_uid_new(g1);
+  mc_uid_new(g2);
+  mc_uid_new(other);
+  CHECK(mc_library_begin_write(a) == MC_OK);
+  snprintf(sql, sizeof sql,
+           "INSERT INTO playlists (uid, name) VALUES ('%s', 'Both');"
+           "INSERT INTO playlist_entries (uid, playlist_uid, track_uid, position) VALUES"
+           " ('%s', '%s', '%s', 'a0'), ('%s', '%s', '%s', 'a1'), ('%s', '%s', '%s', 'a2');"
+           "INSERT INTO album_groups (uid, name) VALUES ('%s', 'Both');"
+           "INSERT INTO album_group_entries (uid, group_uid, album_uid, position) VALUES"
+           " ('%s', '%s', '%s', 'a0'), ('%s', '%s', '%s', 'a1');",
+           pl, e1, pl, a1.track, e2, pl, b1.track, other, pl, a2.track, g, g1, g, a1.album, g2, g,
+           b1.album);
+  exec_ok(a, sql);
+  CHECK(mc_library_commit(a) == MC_OK);
+
+  CHECK(mc_merge_note_names(a) == MC_OK);
+  CHECK(mc_merge_note_names(b) == MC_OK);
+  /* Nothing changed: run again, it logs nothing. */
+  int logged = query_int(mc_library_db(a), "SELECT count(*) FROM changelog");
+  CHECK(mc_merge_note_names(a) == MC_OK);
+  CHECK(query_int(mc_library_db(a), "SELECT count(*) FROM changelog") == logged);
+  send(a, b, 1000);
+  send(b, a, 1000);
+  send(a, c, 7); /* a third device, in small batches, from one peer */
+
+  mc_library *const all[] = {a, b, c};
+  for (int i = 0; i < 3; i++) {
+    sqlite3 *db = mc_library_db(all[i]);
+    CHECK(alias_count(all[i], "artists") == 1);
+    CHECK(alias_count(all[i], "albums") == 1);
+    CHECK(alias_count(all[i], "tracks") == 1);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM artists WHERE uid IN ('%s', '%s')", a1.artist,
+             b1.artist);
+    CHECK(query_int(db, sql) == 1);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM albums WHERE uid IN ('%s', '%s')", a1.album,
+             b1.album);
+    CHECK(query_int(db, sql) == 1);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM tracks WHERE uid IN ('%s', '%s')", a1.track,
+             b1.track);
+    CHECK(query_int(db, sql) == 1);
+    /* The survivor once, and the entry the merge has nothing to do with stays. */
+    CHECK(query_int(db, "SELECT count(*) FROM playlist_entries") == 2);
+    CHECK(query_int(db, "SELECT count(*) FROM album_group_entries") == 1);
+    snprintf(sql, sizeof sql, "SELECT uid FROM playlist_entries WHERE track_uid <> '%s'", a2.track);
+    char kept[MC_UID_STRLEN];
+    query_text(db, sql, kept, sizeof kept);
+    CHECK_TEXT(kept, smaller(e1, e2));
+    CHECK(query_int(db, "SELECT count(*) FROM pragma_foreign_key_check") == 0);
+  }
+  CHECK(same_digest(a, b));
+  CHECK(same_digest(a, c));
+  mc_library_close(a);
+  mc_library_close(b);
+  mc_library_close(c);
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
+  test_names(scratch);
   char pa[1024], pb[1024], pc[1024];
   snprintf(pa, sizeof pa, "%s/test_merge_a.d", scratch);
   snprintf(pb, sizeof pb, "%s/test_merge_b.d", scratch);
