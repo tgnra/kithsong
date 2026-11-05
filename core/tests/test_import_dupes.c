@@ -159,6 +159,21 @@ int main(int argc, char **argv) {
   mc_tags_clear(&tags);
   CHECK(query_int(lib, "SELECT count(*) FROM files WHERE length(source_sha256) = 64") == 2);
 
+  /* A folder put inside the library by hand records what it was, as one from outside does. */
+  char inside[1200];
+  snprintf(inside, sizeof inside, "%s/Dropped", libdir);
+  CHECK(write_album(inside, 16, "Dropped Album", "Third", "Fourth"));
+  it = import(lib, inside);
+  CHECK(it && it->state == MC_IMPORT_DONE);
+  mc_import_item_free(it);
+  CHECK(query_int(lib, "SELECT count(*) FROM files") == 4);
+  CHECK(query_int(lib, "SELECT count(*) FROM files WHERE length(source_sha256) = 64") == 4);
+  CHECK(sqlite3_exec(mc_library_db(lib),
+                     "DELETE FROM files WHERE track_uid IN (SELECT uid FROM tracks WHERE title IN ('Third', 'Fourth'));"
+                     "DELETE FROM tracks WHERE title IN ('Third', 'Fourth');"
+                     "DELETE FROM albums WHERE title = 'Dropped Album'",
+                     NULL, NULL, NULL) == SQLITE_OK);
+
   /* Renamed in the library, the album isn't found by name any more, and the copies' bytes
    * differ from src2's since they were tagged: only the source hashes know them. */
   CHECK(sqlite3_exec(mc_library_db(lib), "UPDATE albums SET title = 'Renamed'", NULL, NULL,

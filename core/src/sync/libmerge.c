@@ -312,6 +312,7 @@ typedef struct old_track {
   char *artist_credit; /* NULL: the artist's own name */
   old_credit credit;
   char *path, *format, *abs;
+  char *source_sha256; /* what its file was imported from, or NULL */
   int track_no, disc_no, duration_ms, year, kbps;
   int64_t added_ms; /* 0 if unknown */
   int64_t size, mtime;
@@ -333,6 +334,7 @@ static void old_tracks_free(old_track *t, int n) {
     free(t[i].path);
     free(t[i].format);
     free(t[i].abs);
+    free(t[i].source_sha256);
   }
   free(t);
 }
@@ -366,7 +368,7 @@ static void old_album_clear(old_album *a) {
 #define OLD_TRACK_SQL(credit) \
   "SELECT t.uid, t.title, t.track_no, t.disc_no, t.duration_ms, t.genre, t.mb_trackid," \
   " t.mb_releasetrackid, t.year, t.mb_albumid, t.added_ms, ar.name, ar.sort_name," \
-  " ar.mb_artistid, f.path, f.format, f.bitrate_kbps, " credit \
+  " ar.mb_artistid, f.path, f.format, f.bitrate_kbps, " credit ", f.source_sha256" \
   " FROM tracks t LEFT JOIN artists ar ON ar.uid = t.artist_uid" \
   " LEFT JOIN files f ON f.uid = (SELECT g.uid FROM files g WHERE g.track_uid = t.uid" \
   "  ORDER BY g.source_file_uid IS NOT NULL, g.source_peer_uid IS NOT NULL, g.uid LIMIT 1)"
@@ -408,6 +410,7 @@ static mc_status read_tracks(merge_ctx *x, sqlite3_stmt *stmt, old_track **out, 
     o->format = col_dup(stmt, 15);
     o->kbps = sqlite3_column_int(stmt, 16);
     o->artist_credit = col_dup(stmt, 17);
+    o->source_sha256 = col_dup(stmt, 18);
     if ((st = read_old_credit(x, 0, o->uid, o->artist_credit, &o->credit)) != MC_OK) break;
     if (o->path) {
       o->abs = mc_library_abspath(x->lib, o->path);
@@ -533,6 +536,9 @@ static void merge_album(merge_ctx *x, const old_album *a, old_track *t, int n) {
       }
       mc_db_track row = rows[i];
       if (act != MC_DUPE_IMPORT) row.track_uid = d->track_uid; /* ATTACH, or a SWAP: attach */
+      /* What it was first imported from, or else the bytes it comes here as. */
+      row.source_sha256 = src[i]->source_sha256 ? src[i]->source_sha256
+                          : d && d->source_sha256[0] ? d->source_sha256 : NULL;
       rows[w] = row;
       src[w] = src[i];
       w++;

@@ -1623,6 +1623,29 @@ static char *swap_path(const char *old_rel, const char *format) {
   return out;
 }
 
+/* An item with files from inside the library isn't compared with it, but one that's no
+ * file of the library's yet (a folder put there by hand, say) still records what it came
+ * from. One the library has keeps its own hash. Fills in dp->d just for those hashes. */
+static void hash_sources(mc_library *lib, mc_db_track *rows, const placement *places, int count,
+                         mc_dupe_plan *dp) {
+  if (!(dp->d = calloc((size_t)count, sizeof *dp->d))) return;
+  dp->count = count;
+  sqlite3_stmt *known = NULL;
+  if (sqlite3_prepare_v2(mc_library_db(lib), "SELECT 1 FROM files WHERE path = ?1", -1, &known, NULL) != SQLITE_OK)
+    return;
+  for (int i = 0; i < count; i++) {
+    char *rel = mc_library_relpath(lib, places[i].f->path);
+    sqlite3_reset(known);
+    sqlite3_bind_text(known, 1, rel, -1, SQLITE_STATIC);
+    int have = rel && sqlite3_step(known) == SQLITE_ROW;
+    sqlite3_reset(known);
+    free(rel);
+    if (!have && mc_sha256_file(places[i].f->path, dp->d[i].source_sha256) == MC_OK)
+      rows[i].source_sha256 = dp->d[i].source_sha256;
+  }
+  sqlite3_finalize(known);
+}
+
 /* Compares the item with the library (dupes.c) and drops, retargets or redirects its files
  * to suit; matched says the item has a MusicBrainz match (for a whole release, see dupes.h).
  * Returns the new count; *planned is set when the comparison ran. */
@@ -1630,7 +1653,11 @@ static int apply_dupes(mc_library *lib, mc_db_album *album, mc_db_track *rows,
                        placement *places, int count, int matched, mc_dupe_plan *dp,
                        int *planned) {
   *planned = 0;
-  if (count <= 0 || !all_outside(lib, places, count)) return count;
+  if (count <= 0) return count;
+  if (!all_outside(lib, places, count)) {
+    hash_sources(lib, rows, places, count, dp);
+    return count;
+  }
   mc_dupe_in *in = calloc((size_t)count, sizeof *in);
   if (!in) return count;
   for (int i = 0; i < count; i++) {

@@ -268,6 +268,8 @@ static void test_merge(const char *root) {
            pl_solo, better.uid, better.uid, fresh.uid, fresh.album_uid, pl_solo,
            "5e1ec7ed-0000-4000-8000-000000000002", better.uid, same.uid);
   edit(lib, sql);
+  snprintf(sql, sizeof sql, "UPDATE files SET source_sha256 = 'first imported from' WHERE track_uid = '%s'", fresh.uid);
+  edit(lib, sql);
   /* The examples are renamed here; the kept library's own state of them wins. */
   edit(lib, "UPDATE smart_lists SET name = 'Mine' WHERE uid = '5e1ec7ed-0000-4000-8000-000000000001'");
   CHECK(query_int(db, "SELECT count(*) FROM changelog") > 20);
@@ -375,6 +377,10 @@ static void test_merge(const char *root) {
                       " AND source_peer_uid IS NULL") == 2);
   CHECK(query_int(db, "SELECT count(*) FROM files WHERE track_uid ="
                       " 'b1000000-0000-7000-8000-000000000003'") == 0);
+  /* A file brings what it was imported from, or else counts as coming from the bytes it
+   * arrived as, so importing either again finds it. */
+  CHECK(query_int(db, "SELECT count(*) FROM files WHERE source_sha256 = 'first imported from'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM files WHERE length(source_sha256) = 64") == 2);
   CHECK(query_int(db, "SELECT count(*) FROM albums") == 4);
   {
     char *abs = mc_library_abspath(lib, same.rel);
