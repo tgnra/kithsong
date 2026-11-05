@@ -34,5 +34,7 @@ mc_status mc_analysis_scan_one(mc_library *lib, char cursor[MC_UID_STRLEN],
 void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int rests, int background);
 /* For tests: how often a scanner on battery looks again. (30 s by default.) */
 void mc_analysis_scanner_set_power_poll_ms(uint32_t ms);
+/* For tests: how often a scanner counts again what's ahead of it. (5 s by default.) */
+void mc_analysis_scanner_set_recount_ms(uint32_t ms);
 
 #endif

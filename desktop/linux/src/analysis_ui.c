@@ -30,7 +30,6 @@ static void remember(app *a, gboolean background) {
 
 static void show_progress(int done, int total) {
   if (!g.dialog) return;
-  if (done > total) done = total;
   gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(g.bar), total ? (double)done / total : 0.0);
   char *text = mc_format_alloc(mc_str(MC_STR_ANALYSIS_PROGRESS), MC_D(done), MC_D(total));
   gtk_label_set_text(GTK_LABEL(g.status), text);

@@ -90,17 +90,20 @@ typedef struct mc_analysis_scanner mc_analysis_scanner;
 
 /* How a scanner is doing, for a frontend to poll. */
 typedef struct mc_analysis_status {
-  int active;      /* a pass with tracks to do is under way */
-  int large;       /* too long to run unasked: see mc_analysis_scanner_start_sized() */
-  int paced;       /* resting, at low priority */
-  int done, total; /* tracks of this pass */
+  int active; /* there are tracks to do, and it's going through them */
+  int large;  /* too long to run unasked: see mc_analysis_scanner_start_sized() */
+  int paced;  /* resting, at low priority */
+  /* Tracks of this run, which lasts until nothing's left. done is never over total, and total
+   * moves within a few seconds as tracks arrive: an import may still be adding them. */
+  int done, total;
 } mc_analysis_status;
 
 /* Starts scanning the library in dir, after a short wait so a starting app isn't held up. */
 mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out);
-/* For a desktop: as above, but flat out unless paced is set. Each pass's size is in its status:
- * a large one goes on flat out until the frontend calls mc_analysis_scanner_set_paced() or stops
- * it. A pass starts soon after an import or sync ends, rather than at the next idle look. */
+/* For a desktop: as above, but flat out unless paced is set. The size of what's ahead is in its
+ * status: a run that is or becomes large goes on flat out until the frontend calls
+ * mc_analysis_scanner_set_paced() or stops it. A pass starts soon after an import or sync ends,
+ * rather than at the next idle look. */
 mc_status mc_analysis_scanner_start_sized(const char *dir, int paced, mc_analysis_scanner **out);
 /* Takes effect within a moment, in the middle of a track, and lasts until a pass finds nothing
  * to do; status.paced says when it has. Other scanners are always paced. */

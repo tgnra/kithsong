@@ -89,7 +89,6 @@ BOOL analysis_dialog_is_open(void) {
 
 void analysis_dialog_update(int done, int total) {
   if (!g.wnd) return;
-  if (done > total) done = total;
   SendDlgItemMessageW(g.wnd, ID_BAR, PBM_SETRANGE32, 0, total);
   SendDlgItemMessageW(g.wnd, ID_BAR, PBM_SETPOS, (WPARAM)done, 0);
   wchar_t text[128];

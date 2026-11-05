@@ -18,7 +18,12 @@
  * of each pass. It runs flat out, as a thread like any other, as a small batch is done in less
  * time than a fan takes to notice, and a large one says so in its status for the frontend to
  * ask what to do. mc_analysis_scanner_set_paced() then gives it the rests and the low priority
- * that every other scanner always has. */
+ * that every other scanner always has.
+ *
+ * The status counts a run: from a pass that finds work until one that finds none. An import
+ * files its tracks a few at a time, each with a hold of its own, so a pass can start on the
+ * first of them and carry on over the rest, and those behind the cursor wait for the next pass.
+ * So what's ahead is counted again as it goes, and done goes on from one pass to the next. */
 #include "analysis/scanner.h"
 
 #include <stdatomic.h>
@@ -42,12 +47,14 @@
  * build. A track of no known length counts as TYPICAL_TRACK_MS. */
 #define LARGE_BATCH_MS (5 * 3600 * 1000)
 #define TYPICAL_TRACK_MS 240000
+#define RECOUNT_MS 5000 /* how far behind the status's total can be, as it's a query of its own */
 
 static atomic_int g_holds;
 static atomic_uint g_releases; /* an import or sync that ended may have left work */
 static uint32_t g_start_ms = 30000, g_idle_ms = 5 * 60 * 1000;
 static int g_rests = 1, g_background = 1;
 static uint32_t g_power_poll_ms = 30000;
+static uint32_t g_recount_ms = RECOUNT_MS;
 
 void mc_analysis_hold(void) {
   atomic_fetch_add(&g_holds, 1);
@@ -71,6 +78,10 @@ void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int res
 
 void mc_analysis_scanner_set_power_poll_ms(uint32_t ms) {
   g_power_poll_ms = ms;
+}
+
+void mc_analysis_scanner_set_recount_ms(uint32_t ms) {
+  g_recount_ms = ms;
 }
 
 /* --- One track --- */
@@ -242,6 +253,7 @@ struct mc_analysis_scanner {
   atomic_int paced;          /* a sized scanner's: what mc_analysis_scanner_set_paced() said */
   int background;            /* the thread's own: it's in background mode */
   uint64_t burst_from;
+  uint64_t counted_at; /* the thread's own: when the status last had what's ahead */
 };
 
 static void set_state(mc_analysis_scanner *s, int state) {
@@ -310,17 +322,28 @@ static int busy(void *user, int tries) {
   return 1;
 }
 
-/* What a pass has ahead of it, for the status. */
-static void begin_pass(mc_analysis_scanner *s, mc_library *lib) {
+/* What's ahead, for the status: on top of what this run has done. */
+static void count_ahead(mc_analysis_scanner *s, mc_library *lib) {
   int tracks = 0;
   int64_t ms = 0;
-  if (mc_analysis_pending(lib, &tracks, &ms) != MC_OK) tracks = 0; /* it only goes unreported */
+  s->counted_at = mc_mono_ms();
+  if (mc_analysis_pending(lib, &tracks, &ms) != MC_OK) return; /* it only goes unreported */
   mc_mutex_lock(&s->lock);
-  s->status = (mc_analysis_status){.active = tracks > 0, .large = ms >= LARGE_BATCH_MS, .total = tracks};
+  s->status.active = tracks > 0;
+  s->status.large = s->status.large || ms >= LARGE_BATCH_MS; /* the frontend has been told */
+  s->status.total = s->status.done + tracks;
   mc_mutex_unlock(&s->lock);
 }
 
-static void end_pass(mc_analysis_scanner *s) {
+static void count_done(mc_analysis_scanner *s, mc_library *lib) {
+  mc_mutex_lock(&s->lock);
+  s->status.done++;
+  if (s->status.total < s->status.done) s->status.total = s->status.done;
+  mc_mutex_unlock(&s->lock);
+  if (mc_mono_ms() - s->counted_at >= g_recount_ms) count_ahead(s, lib);
+}
+
+static void end_run(mc_analysis_scanner *s) {
   mc_mutex_lock(&s->lock);
   memset(&s->status, 0, sizeof s->status);
   mc_mutex_unlock(&s->lock);
@@ -343,7 +366,7 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
   char cursor[MC_UID_STRLEN] = "";
   int worked = 0;
   s->burst_from = mc_mono_ms();
-  begin_pass(s, lib);
+  count_ahead(s, lib);
   while (!stopping(s)) {
     match_priority(s);
     /* Between tracks, so unplugging lets the one in hand finish, and that's the most it costs.
@@ -365,15 +388,13 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
     }
     if (step == MC_SCAN_DONE || step == MC_SCAN_FAILED) {
       worked = 1;
-      mc_mutex_lock(&s->lock);
-      s->status.done++;
-      mc_mutex_unlock(&s->lock);
+      count_done(s, lib);
     }
     if (step != MC_SCAN_NONE) continue;
     /* The end of a pass. One that did something goes round once more for what came meanwhile,
      * and what's passed over waits for the next idle look. */
     cursor[0] = '\0';
-    end_pass(s);
+    if (!worked) end_run(s);
     if (!worked && s->once) {
       set_state(s, 1);
       return;
@@ -383,7 +404,7 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
     if (!worked && wait_idle(s)) break;
     worked = 0;
     s->burst_from = mc_mono_ms();
-    begin_pass(s, lib);
+    count_ahead(s, lib);
   }
 }
 

@@ -1139,6 +1139,49 @@ static void test_scanner(const char *scratch) {
   mc_analysis_scanner_set_timing(0, 20, 0, 0);
   mc_analysis_scanner_status(NULL, &status);
   CHECK(!status.active);
+
+  /* Tracks that arrive under a run join it, as an import's do: a pass has started on the first
+   * of them, the rest are in its count, and it comes to the end of them. Some of the new uids
+   * may be behind the cursor, for another pass, which goes on with the same count. */
+  enum { FIRST = 2, MORE = 6 };
+  for (int i = 0; i < FIRST + MORE; i++) {
+    if (i == FIRST) {
+      mc_analysis_hold();
+      CHECK(mc_analysis_scanner_start_sized(dir, 0, &s) == MC_OK);
+      status.active = 0;
+      for (int k = 0; k < 500 && !status.active; k++) {
+        mc_sleep_ms(10);
+        mc_analysis_scanner_status(s, &status);
+      }
+      CHECK(status.active && status.total == FIRST && !status.large);
+    }
+    snprintf(name, sizeof name, "late%d.wav", i);
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    CHECK(write_wav(path, 44100, 1.0, 0.5));
+    add_track(lib, name, 0, other);
+  }
+  /* What came makes the run large, though it didn't start so. */
+  snprintf(sql, sizeof sql, "UPDATE tracks SET duration_ms = 18000000 WHERE uid = '%s'", other);
+  CHECK(sqlite3_exec(mc_library_db(lib), sql, NULL, NULL, NULL) == SQLITE_OK);
+  mc_analysis_scanner_set_recount_ms(0);
+  mc_analysis_release();
+  int most = 0, last_done = 0, went_back = 0, over = 0, large = 0;
+  for (uint64_t until = mc_mono_ms() + WAIT_MS; mc_mono_ms() < until;) {
+    mc_analysis_scanner_status(s, &status);
+    if (status.active) {
+      if (status.total > most) most = status.total;
+      if (status.done < last_done) went_back = 1;
+      if (status.done > status.total) over = 1;
+      if (status.large) large = 1;
+      last_done = status.done;
+    }
+    if (analysed(lib) >= TRACKS + 5 + FIRST + MORE && !status.active) break;
+    mc_sleep_ms(1);
+  }
+  CHECK(analysed(lib) == TRACKS + 5 + FIRST + MORE);
+  CHECK(most == FIRST + MORE && !went_back && !over && large);
+  mc_analysis_scanner_stop(s);
+  mc_analysis_scanner_set_recount_ms(5000);
   mc_library_close(lib);
 }
 
