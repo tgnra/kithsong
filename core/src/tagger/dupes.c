@@ -666,6 +666,7 @@ mc_status mc_dupes_plan_remote(mc_library *lib, const mc_db_album *album, const 
    * the library already, anywhere. */
   for (int i = 0; i < count; i++) {
     mc_dupe_decision *d = &out->d[i];
+    if (remote && remote->checked) remote->checked(remote->user);
     if (d->action != MC_DUPE_SKIP && mc_sha256_file(in[i].src_path, d->source_sha256) != MC_OK)
       d->source_sha256[0] = '\0';
     if ((d->action == MC_DUPE_IMPORT || d->action == MC_DUPE_ATTACH) &&

@@ -109,6 +109,8 @@ void mc_dupes_join_album(const mc_dupe_plan *plan, mc_db_track *row, mc_tags *ta
  * knows track_uid's original, else 0. */
 typedef struct mc_dupe_remote {
   int (*quality)(void *user, const char *track_uid, mc_audio_quality *out);
+  /* Called for each incoming file as its turn comes to be looked at (may be NULL). */
+  void (*checked)(void *user);
   void *user;
 } mc_dupe_remote;
 

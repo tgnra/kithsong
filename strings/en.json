@@ -624,7 +624,7 @@
     "paired_merged_scrobble_there": { "text": "Last.fm user {0} was signed out on {1}; the account here is used.", "note": "After pairing by merging, on the device whose library was kept. {0} is the Last.fm user name, {1} the other device." },
     "merge_title": { "text": "Merging libraries", "note": "Title of the window showing the merge of this device's old library into the one it now syncs." },
     "merge_text": "The music from your old library is coming into this one. You can keep using Kithsong meanwhile.",
-    "merge_progress_tracks": { "text": "Albums: {0:d} of {1:d}", "note": "Merge progress, first phase: albums of the old library done of total." },
+    "merge_progress_tracks": { "text": "Tracks: {0:d} of {1:d}", "note": "Merge progress, first phase: tracks of the old library done of total." },
     "merge_progress_lists": { "text": "Playlists and play counts: {0:d} of {1:d}", "note": "Merge progress, second phase: playlists, album groups, smart lists, play counts and recents." },
     "merge_done_title": "Libraries merged",
     "merge_failed_title": "Merge stopped",

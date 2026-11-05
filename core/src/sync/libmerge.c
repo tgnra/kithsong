@@ -213,6 +213,9 @@ typedef struct merge_ctx {
   /* Tracks given the copy's added_ms afterwards: new uid, then the time. */
   uid_map added; /* to holds the time as text, reusing the map's storage */
   mc_merge_result *r;
+  mc_libmerge_progress_fn progress;
+  void *progress_user;
+  int done, total; /* tracks of the copy */
 } merge_ctx;
 
 static int kept_cmp(const void *a, const void *b) {
@@ -446,7 +449,22 @@ static void map_unheld(merge_ctx *x, const old_track *o) {
   }
 }
 
-static void merge_album(merge_ctx *x, const old_album *a, old_track *t, int n) {
+static void emit(mc_libmerge_progress_fn fn, void *user, mc_merge_phase phase, int done,
+                 int total) {
+  if (!fn) return;
+  mc_merge_progress p = {phase, done, total};
+  fn(user, &p);
+}
+
+/* A track of the copy has been looked at. Most of a track's time is its file being hashed, in
+ * the duplicates check, so a long album moves the bar as it goes. */
+static void track_done(void *user) {
+  merge_ctx *x = user;
+  if (x->done < x->total) x->done++;
+  emit(x->progress, x->progress_user, MC_MERGE_PHASE_TRACKS, x->done, x->total);
+}
+
+static void merge_album_tracks(merge_ctx *x, const old_album *a, old_track *t, int n) {
   int held = 0;
   for (int i = 0; i < n; i++) held += t[i].held;
   char album_uid[MC_UID_STRLEN] = "";
@@ -515,7 +533,7 @@ static void merge_album(merge_ctx *x, const old_album *a, old_track *t, int n) {
       k++;
     }
 
-    mc_dupe_remote remote = {remote_quality, x};
+    mc_dupe_remote remote = {remote_quality, track_done, x};
     mc_dupe_plan plan;
     int planned = mc_dupes_plan_remote(x->lib, &al, in, held, &remote, &plan) == MC_OK;
     if (planned && plan.album_uid[0]) {
@@ -588,19 +606,18 @@ static void merge_album(merge_ctx *x, const old_album *a, old_track *t, int n) {
   if (a->uid[0] && album_uid[0]) map_put(&x->albums, a->uid, album_uid);
 }
 
-static void emit(mc_libmerge_progress_fn fn, void *user, mc_merge_phase phase, int done,
-                 int total) {
-  if (!fn) return;
-  mc_merge_progress p = {phase, done, total};
-  fn(user, &p);
+/* The album's tracks, and the bar to where they end, whichever of them it was told of. */
+static void merge_album(merge_ctx *x, const old_album *a, old_track *t, int n) {
+  int end = x->done + n;
+  merge_album_tracks(x, a, t, n);
+  x->done = end - 1;
+  track_done(x);
 }
 
-static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *user) {
-  int total = count_rows(x->old, "SELECT count(*) FROM albums") +
-              count_rows(x->old, "SELECT count(*) FROM tracks WHERE album_uid IS NULL"
-                                 " OR album_uid NOT IN (SELECT uid FROM albums)");
-  int done = 0;
-  emit(fn, user, MC_MERGE_PHASE_TRACKS, 0, total);
+static mc_status merge_tracks(merge_ctx *x) {
+  x->done = 0;
+  x->total = count_rows(x->old, "SELECT count(*) FROM tracks");
+  emit(x->progress, x->progress_user, MC_MERGE_PHASE_TRACKS, 0, x->total);
   sqlite3_stmt *albums, *tracks;
 #define OLD_ALBUM_SQL(credit) \
   "SELECT a.uid, a.title, a.year, a.original_year, a.disc_total," \
@@ -646,7 +663,6 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
     if (st == MC_OK && n > 0) merge_album(x, &a, t, n);
     old_tracks_free(t, n);
     old_album_clear(&a);
-    emit(fn, user, MC_MERGE_PHASE_TRACKS, ++done, total);
   }
   sqlite3_finalize(tracks);
   sqlite3_finalize(albums);
@@ -675,7 +691,6 @@ static mc_status merge_tracks(merge_ctx *x, mc_libmerge_progress_fn fn, void *us
     a.artist_mbid = t[i].artist_mbid ? mc_strdup(t[i].artist_mbid) : NULL;
     merge_album(x, &a, &t[i], 1);
     old_album_clear(&a);
-    emit(fn, user, MC_MERGE_PHASE_TRACKS, ++done, total);
   }
   old_tracks_free(t, n);
   return st;
@@ -1061,6 +1076,8 @@ static mc_status merge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
   x.kept = kept;
   x.nkept = kept ? nkept : 0;
   x.r = r;
+  x.progress = progress;
+  x.progress_user = user;
   mc_status st = MC_OK;
   if (!backup || mc_db_open(backup, &x.old, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX) != SQLITE_OK) {
     fprintf(stderr, "musiccore: merge: can't open %s\n", backup ? backup : "the set-aside copy");
@@ -1075,7 +1092,7 @@ static mc_status merge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
   /* Nor one before v17 any chosen covers. */
   x.chosen = st == MC_OK && count_rows(x.old, "SELECT count(*) FROM pragma_table_info('albums')"
                                               " WHERE name = 'art_chosen'") == 1;
-  if (st == MC_OK) st = merge_tracks(&x, progress, user);
+  if (st == MC_OK) st = merge_tracks(&x);
   if (st == MC_OK) st = merge_rest(&x, progress, user);
   /* Done, even if some tracks failed: their files stay in the folder, out of the library. */
   if (st == MC_OK) st = mc_library_meta_set(lib, MC_LIBMERGE_META, NULL);

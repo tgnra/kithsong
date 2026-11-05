@@ -184,6 +184,17 @@ static mc_status fake_trash(const char *path) {
   return mc_remove(path);
 }
 
+/* What the merge said of its first phase. */
+static int progress_steps, progress_done, progress_total, progress_back;
+static void note_progress(void *user, const mc_merge_progress *p) {
+  (void)user;
+  if (p->phase != MC_MERGE_PHASE_TRACKS) return;
+  progress_steps++;
+  progress_back |= p->done < progress_done;
+  progress_done = p->done;
+  progress_total = p->total;
+}
+
 /* --- Which library is kept --- */
 
 static void test_kept_choice(void) {
@@ -363,9 +374,12 @@ static void test_merge(const char *root) {
   mc_status (*was)(const char *) = mc_dupes_trash; /* safe_trash.c's */
   mc_dupes_trash = fake_trash;
   mc_merge_result r;
-  CHECK(mc_libmerge_run(lib, kept, 2, NULL, NULL, &r) == MC_OK);
+  CHECK(mc_libmerge_run(lib, kept, 2, note_progress, NULL, &r) == MC_OK);
   mc_dupes_trash = was;
   CHECK(r.status == MC_OK);
+  /* The bar counts tracks, all seven of the copy, and moves within an album. */
+  CHECK(progress_total == 7 && progress_done == 7 && !progress_back);
+  CHECK(progress_steps >= 8);
   CHECK(r.tracks_added == 1);    /* Fresh */
   CHECK(r.tracks_better == 1);   /* Better: this WAV beats the kept MP3 */
   CHECK(r.tracks_skipped == 1);  /* Same: the kept FLAC is as good */

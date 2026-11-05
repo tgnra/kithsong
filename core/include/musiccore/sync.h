@@ -161,7 +161,7 @@ typedef struct mc_pair_merge {
 } mc_pair_merge;
 
 typedef enum mc_merge_phase {
-  MC_MERGE_PHASE_TRACKS, /* albums of the set-aside library, done of total */
+  MC_MERGE_PHASE_TRACKS, /* tracks of the set-aside library, done of total */
   MC_MERGE_PHASE_LISTS   /* playlists, album groups, smart lists, play counts, recents */
 } mc_merge_phase;
 
