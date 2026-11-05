@@ -175,6 +175,202 @@ static void test_played(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* A row in the play log, of the track'th track of album i, days ago. */
+static void log_play(mc_library *lib, int album, int track, int days, int64_t listened_ms, mc_play_end end,
+                     mc_play_context context) {
+  mc_play_event e;
+  memset(&e, 0, sizeof e);
+  snprintf(e.track_uid, sizeof e.track_uid, "t%02d%d", album, track);
+  e.started_ms = (int64_t)time(NULL) * 1000 - days * DAY_MS;
+  e.listened_ms = listened_ms;
+  e.end = end;
+  e.context = context;
+  if (context == MC_PLAY_CONTEXT_ALBUM) snprintf(e.context_uid, sizeof e.context_uid, "al%02d", album);
+  if (context == MC_PLAY_CONTEXT_RADIO) snprintf(e.context_uid, sizeof e.context_uid, "t%02d%d", album, track);
+  CHECK(mc_library_log_play(lib, &e) == MC_OK);
+}
+
+/* times real plays of an album's first track, days ago. */
+static void log_real(mc_library *lib, int album, int times, int days) {
+  for (int i = 0; i < times; i++) log_play(lib, album, 0, days, 200000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_ALBUM);
+}
+
+/* A log that reaches past both windows: one skip, of no album a test looks at. */
+static void log_long_ago(mc_library *lib) {
+  log_play(lib, ALBUMS - 1, 0, 400, 1000, MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_ALBUM);
+}
+
+static int row_at(const mc_home_picks *p, mc_home_row_id row, const char *uid) {
+  for (int i = 0; i < p->counts[row]; i++)
+    if (!strcmp(p->rows[row][i].uid, uid)) return i;
+  return -1;
+}
+
+/* An album on repeat beats one track played once after years of silence, which looked the same
+ * to track_plays, and it's plays in the window that are counted. */
+static void test_repeat_or_once(const char *scratch) {
+  mc_library *lib = open_fresh(scratch, "test_home_picks_repeat.d");
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  seed_albums(db);
+  log_long_ago(lib);
+  log_real(lib, 1, 6, 2);   /* one track on repeat */
+  log_real(lib, 2, 4, 3);
+  play(db, 3, 1, 100, 1);   /* a hundred plays over the years, the last of them just now */
+  log_real(lib, 3, 1, 1);
+  log_real(lib, 4, 5, 30);  /* on repeat, but before the window */
+
+  mc_home_picks p;
+  mc_home_picks_load(lib, 7, &p);
+  CHECK(p.counts[MC_HOME_ROW_PLAYED_LATELY] == 4);
+  if (p.counts[MC_HOME_ROW_PLAYED_LATELY] == 4) {
+    CHECK_STR(p.rows[MC_HOME_ROW_PLAYED_LATELY][0].uid, "al01"); /* the most plays */
+    CHECK_STR(p.rows[MC_HOME_ROW_PLAYED_LATELY][1].uid, "al02");
+    CHECK_STR(p.rows[MC_HOME_ROW_PLAYED_LATELY][2].uid, "al03"); /* only while the row is short */
+    CHECK_STR(p.rows[MC_HOME_ROW_PLAYED_LATELY][3].uid, "al04");
+  }
+  mc_home_picks_free(&p);
+
+  /* With the row full of what's on repeat, one play doesn't get in. */
+  for (int i = 5; i < 12; i++) log_real(lib, i, 3, 4);
+  mc_home_picks_load(lib, 7, &p);
+  CHECK(p.counts[MC_HOME_ROW_PLAYED_LATELY] == 9);
+  CHECK(row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al11"));
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al03") && !row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al04"));
+  mc_home_picks_free(&p);
+  mc_library_close(lib);
+}
+
+/* Skips, failures and seeks to the end are in the log but aren't plays, so they neither make an
+ * album played lately nor stop it being one not played in a while. */
+static void test_skips_ignored(const char *scratch) {
+  mc_library *lib = open_fresh(scratch, "test_home_picks_skips.d");
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  seed_albums(db);
+  log_long_ago(lib);
+  for (int i = 0; i < 10; i++) log_play(lib, 1, 0, 1, 2000, MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_ALBUM);
+  for (int i = 0; i < 5; i++) log_play(lib, 2, 0, 1, 0, MC_PLAY_END_FAILED, MC_PLAY_CONTEXT_ALBUM);
+  log_play(lib, 3, 0, 1, 40000, MC_PLAY_END_FAILED, MC_PLAY_CONTEXT_ALBUM); /* whatever time it gives */
+  play(db, 4, 2, 3, 200);
+  for (int i = 0; i < 4; i++) log_play(lib, 4, 0, 1, 2000, MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_ALBUM);
+
+  /* A good listen that was skipped in the end is a play, and half of a short track is enough
+   * for one, but 12 seconds of a long one aren't, even if that took it to the end. */
+  log_play(lib, 5, 0, 1, 31000, MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_ALBUM);
+  CHECK(exec(db, "UPDATE tracks SET duration_ms = 20000 WHERE uid = 't060'") == SQLITE_OK);
+  CHECK(exec(db, "UPDATE tracks SET duration_ms = 300000 WHERE uid = 't070'") == SQLITE_OK);
+  log_play(lib, 6, 0, 1, 12000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_ALBUM);
+  log_play(lib, 7, 0, 1, 12000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_ALBUM);
+
+  mc_home_picks p;
+  mc_home_picks_load(lib, 7, &p);
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al01"));
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al02"));
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al03"));
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al04"));
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al07"));
+  CHECK(row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al05"));
+  CHECK(row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al06"));
+  CHECK(row_has(&p, MC_HOME_ROW_NOT_PLAYED_LATELY, "al04"));
+  CHECK(!row_has(&p, MC_HOME_ROW_NOT_PLAYED_LATELY, "al01")); /* never really played */
+  mc_home_picks_free(&p);
+  mc_library_close(lib);
+}
+
+/* A station's plays are no reason for Played a Lot Recently, however many, and track_plays, which
+ * has them too, doesn't let them in by the back door. But they were heard. */
+static void test_radio(const char *scratch) {
+  mc_library *lib = open_fresh(scratch, "test_home_picks_radio.d");
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  seed_albums(db);
+  log_play(lib, 1, 0, 5, 200000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_RADIO); /* the log's start */
+  play(db, 1, 3, 2, 1);
+  for (int t = 0; t < 3; t++)
+    for (int i = 0; i < 2; i++) log_play(lib, 1, t, 1, 200000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_RADIO);
+  play(db, 2, 2, 4, 200); /* long unplayed, but for a station last week */
+  log_play(lib, 2, 0, 7, 200000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_RADIO);
+  play(db, 3, 2, 4, 200); /* a station's skip is a skip */
+  log_play(lib, 3, 0, 7, 3000, MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_RADIO);
+
+  mc_home_picks p;
+  mc_home_picks_load(lib, 7, &p);
+  CHECK(p.has_plays);
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al01"));
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al02"));
+  CHECK(!row_has(&p, MC_HOME_ROW_NOT_PLAYED_LATELY, "al01"));
+  CHECK(!row_has(&p, MC_HOME_ROW_NOT_PLAYED_LATELY, "al02"));
+  CHECK(row_has(&p, MC_HOME_ROW_NOT_PLAYED_LATELY, "al03"));
+  mc_home_picks_free(&p);
+  mc_library_close(lib);
+}
+
+/* A log begun days ago: what it has comes first, and the guess fills in from before it, but only
+ * from before it. test_played has no log at all. */
+static void test_short_log(const char *scratch) {
+  mc_library *lib = open_fresh(scratch, "test_home_picks_short.d");
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  seed_albums(db);
+  log_real(lib, 1, 3, 3);   /* the log begins */
+  play(db, 2, 3, 2, 8);     /* played a lot before it, in the window */
+  play(db, 3, 1, 1, 9);     /* a stray track before it */
+  play(db, 4, 1, 1, 40);    /* longer ago, for a quiet row */
+  play(db, 5, 3, 2, 1);     /* since the log began, and the log has no real plays of it */
+  log_play(lib, 5, 0, 1, 1000, MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_ALBUM);
+  play(db, 6, 2, 2, 300);
+
+  mc_home_picks p;
+  mc_home_picks_load(lib, 7, &p);
+  CHECK(p.counts[MC_HOME_ROW_PLAYED_LATELY] == 4);
+  if (p.counts[MC_HOME_ROW_PLAYED_LATELY] == 4) {
+    CHECK_STR(p.rows[MC_HOME_ROW_PLAYED_LATELY][0].uid, "al01");
+    CHECK_STR(p.rows[MC_HOME_ROW_PLAYED_LATELY][1].uid, "al02");
+    CHECK_STR(p.rows[MC_HOME_ROW_PLAYED_LATELY][2].uid, "al03");
+    CHECK_STR(p.rows[MC_HOME_ROW_PLAYED_LATELY][3].uid, "al04");
+  }
+  CHECK(row_has(&p, MC_HOME_ROW_NOT_PLAYED_LATELY, "al06"));
+  mc_home_picks_free(&p);
+  mc_library_close(lib);
+}
+
+/* A log older than the windows leaves nothing to guess: track_plays alone can't put an album in
+ * Played a Lot Recently, only say when it was last played. */
+static void test_long_log(const char *scratch) {
+  mc_library *lib = open_fresh(scratch, "test_home_picks_long.d");
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  seed_albums(db);
+  log_long_ago(lib);
+  play(db, 1, 3, 2, 2);
+  log_real(lib, 2, 2, 120); /* real plays too old to read */
+  play(db, 2, 1, 2, 120);
+  log_real(lib, 3, 2, 40);  /* a quiet fortnight */
+  /* Heard for 40 seconds of a long track, so in the log but not in track_plays. */
+  log_play(lib, 4, 0, 2, 40000, MC_PLAY_END_STOPPED, MC_PLAY_CONTEXT_SHUFFLE);
+
+  CHECK(exec(db, "INSERT INTO playlists (uid, name) VALUES ('pl', 'Mix');"
+                 "INSERT INTO playlist_entries (uid, playlist_uid, track_uid, position) VALUES"
+                 " ('e1', 'pl', 't100', 'a'), ('e2', 'pl', 't100', 'b'), ('e3', 'pl', 't110', 'c');") == SQLITE_OK);
+  log_real(lib, 10, 2, 1); /* however they were played; twice in the list is still two plays */
+  log_real(lib, 11, 1, 1);
+
+  mc_home_picks p;
+  mc_home_picks_load(lib, 7, &p);
+  CHECK(p.has_plays);
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al01"));
+  CHECK(!row_has(&p, MC_HOME_ROW_NOT_PLAYED_LATELY, "al01"));
+  CHECK(!row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al02"));
+  CHECK(row_has(&p, MC_HOME_ROW_NOT_PLAYED_LATELY, "al02"));
+  CHECK(row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al03"));
+  CHECK(row_has(&p, MC_HOME_ROW_PLAYED_LATELY, "al04"));
+  CHECK(row_at(&p, MC_HOME_ROW_PLAYED_LATELY, "pl") == 0);
+  CHECK(row_at(&p, MC_HOME_ROW_PLAYED_LATELY, "al03") > row_at(&p, MC_HOME_ROW_PLAYED_LATELY, "al04"));
+  mc_home_picks_free(&p);
+  mc_library_close(lib);
+}
+
 /* A station in Recents is the same tile as one in the Radio row: marked, with the seed to start
  * from and the seed's cover. A recent's uid is the seed, the tile's its artist. */
 static void test_recent_station(const char *scratch) {
@@ -228,6 +424,11 @@ int main(int argc, char **argv) {
   test_nothing(scratch);
   test_unplayed(scratch);
   test_played(scratch);
+  test_repeat_or_once(scratch);
+  test_skips_ignored(scratch);
+  test_radio(scratch);
+  test_short_log(scratch);
+  test_long_log(scratch);
   test_recent_station(scratch);
   test_titles();
   mc_shutdown();
