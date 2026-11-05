@@ -10,6 +10,21 @@ extern mc_status (*mc_delete_trash)(const char *path);
 extern mc_status (*mc_delete_remove)(const char *path);
 
 typedef struct mc_library mc_library;
+typedef struct sqlite3 sqlite3;
+
+/* --- A peer's delete (sync/transfer.c) ---
+ * Originals sync trashes after another device's delete get a record as a delete here does, so
+ * they can be restored rather than swept as unknown. By then the rows have gone, so the session
+ * catches them first with the SQL function this registers on db, mc_delete_record(track_uid,
+ * file_uid), which gives what mc_delete_save_record() stores as rows. */
+mc_status mc_delete_register(sqlite3 *db);
+/* Opens the records of config_dir for saving in one go; NULL if it can't. */
+sqlite3 *mc_delete_records_open(const char *config_dir);
+/* A file that went to the trash: abs where it was, rel as files.path, its size, modification
+ * time and hash (may be NULL). */
+mc_status mc_delete_save_record(sqlite3 *store, mc_library *lib, const char *abs, const char *rel,
+                                int64_t size, int64_t mtime, const char *sha, const char *rows);
+void mc_delete_records_close(sqlite3 *store);
 
 /* --- The recycle bin (musiccore/delete.h), for sync (sync/here.c and session.c) --- */
 

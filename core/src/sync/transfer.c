@@ -57,6 +57,7 @@
 #include <mbedtls/sha256.h>
 #include <yyjson.h>
 
+#include "library/delete_internal.h"
 #include "library/library_internal.h"
 #include "musiccore/delete.h"
 #include "musiccore/transcode.h"
@@ -2094,26 +2095,56 @@ static mc_status read_files(mc_library *lib, file_row **out, int *count) {
   return MC_OK;
 }
 
+/* An original imported here, among files f. */
+#define IMPORTED(f) f ".source_file_uid IS NULL AND " f ".source_peer_uid IS NULL"
+/* What a delete of the track needs to be restored, for those of the files f it selects. */
+#define NOTE_RECORDS \
+  " INSERT OR IGNORE INTO sync_dropped_records (path, sha256, rows)" \
+  " SELECT f.path, f.sha256, mc_delete_record(f.track_uid, f.uid) FROM files f WHERE " IMPORTED("f")
+
 /* Files rows deleted during the library exchange are noted here (a temp trigger, so only
- * this connection's writes, and rolled back with them). */
+ * this connection's writes, and rolled back with them). A delete arrives parents first, so
+ * originals imported here have their records (library/delete_internal.h) noted before their
+ * artist or album goes; a track that outlives those has its record dropped with the table. */
 static const char k_watch_sql[] =
   "CREATE TEMP TABLE IF NOT EXISTS sync_dropped_files (path TEXT, track_uid TEXT, original INTEGER);"
+  "CREATE TEMP TABLE IF NOT EXISTS sync_dropped_records (path TEXT PRIMARY KEY, sha256 TEXT, rows TEXT);"
   "CREATE TEMP TRIGGER IF NOT EXISTS sync_files_dropped AFTER DELETE ON main.files BEGIN"
   " INSERT INTO sync_dropped_files (path, track_uid, original)"
-  " VALUES (old.path, old.track_uid, old.source_file_uid IS NULL AND old.source_peer_uid IS NULL);"
+  " VALUES (old.path, old.track_uid, " IMPORTED("old") ");"
+  " END;"
+  "CREATE TEMP TRIGGER IF NOT EXISTS sync_track_dropped BEFORE DELETE ON main.tracks BEGIN"
+  NOTE_RECORDS " AND f.track_uid = old.uid;"
+  " END;"
+  "CREATE TEMP TRIGGER IF NOT EXISTS sync_album_dropped BEFORE DELETE ON main.albums BEGIN"
+  NOTE_RECORDS " AND f.track_uid IN (SELECT uid FROM tracks WHERE album_uid = old.uid);"
+  " END;"
+  "CREATE TEMP TRIGGER IF NOT EXISTS sync_artist_dropped BEFORE DELETE ON main.artists BEGIN"
+  NOTE_RECORDS " AND f.track_uid IN (SELECT t.uid FROM tracks t WHERE t.artist_uid = old.uid"
+  "  OR t.uid IN (SELECT track_uid FROM track_artists WHERE artist_uid = old.uid)"
+  "  OR t.album_uid IN (SELECT uid FROM albums WHERE artist_uid = old.uid"
+  "   UNION SELECT album_uid FROM album_artists WHERE artist_uid = old.uid));"
   " END;";
 static const char k_unwatch_sql[] =
   "DROP TRIGGER IF EXISTS temp.sync_files_dropped;"
-  "DROP TABLE IF EXISTS temp.sync_dropped_files;";
+  "DROP TRIGGER IF EXISTS temp.sync_track_dropped;"
+  "DROP TRIGGER IF EXISTS temp.sync_album_dropped;"
+  "DROP TRIGGER IF EXISTS temp.sync_artist_dropped;"
+  "DROP TABLE IF EXISTS temp.sync_dropped_files;"
+  "DROP TABLE IF EXISTS temp.sync_dropped_records;";
 
 /* Removes the files of tracks the exchange deleted (another device deleted them, see
- * musiccore/delete.h). Originals imported here go to the trash, where they can still be got
- * back, unless there's none; files received from peers are simply removed. */
+ * musiccore/delete.h). Originals imported here go to the trash, unless there's none, with a
+ * record so they can be got back from it as after a delete here; files received from peers
+ * are simply removed. */
 static void drop_deleted_tracks(mc_session *s) {
   mc_library *lib = s->conn->lib;
   sqlite3_stmt *stmt;
+  sqlite3 *store = NULL;
   if (sqlite3_prepare_v2(mc_library_db(lib),
-                         "SELECT d.path, max(d.original) FROM temp.sync_dropped_files d"
+                         "SELECT d.path, max(d.original), r.sha256, r.rows"
+                         " FROM temp.sync_dropped_files d"
+                         " LEFT JOIN temp.sync_dropped_records r ON r.path = d.path"
                          " WHERE NOT EXISTS (SELECT 1 FROM main.files f WHERE f.path = d.path)"
                          " AND NOT EXISTS (SELECT 1 FROM main.tracks t WHERE t.uid = d.track_uid)"
                          " GROUP BY d.path",
@@ -2122,15 +2153,26 @@ static void drop_deleted_tracks(mc_session *s) {
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     const char *rel = (const char *)sqlite3_column_text(stmt, 0);
     int original = sqlite3_column_int(stmt, 1);
+    const char *sha = (const char *)sqlite3_column_text(stmt, 2);
+    const char *record = (const char *)sqlite3_column_text(stmt, 3);
     char *abs = deletable_path(lib, rel);
-    if (abs && mc_file_exists(abs) &&
-        ((original && mc_transfer_trash(abs) == MC_OK) || mc_remove(abs) == MC_OK)) {
-      s->files_deleted++;
-      prune_dirs(lib, rel);
+    int64_t size = 0, mtime = 0;
+    if (abs && mc_file_info(abs, &size, &mtime) == MC_OK) {
+      int trashed = original && mc_transfer_trash(abs) == MC_OK;
+      if (trashed || mc_remove(abs) == MC_OK) {
+        s->files_deleted++;
+        prune_dirs(lib, rel);
+      }
+      if (trashed && record) {
+        if (!store) store = mc_delete_records_open(s->sync->config_dir);
+        if (!store || mc_delete_save_record(store, lib, abs, rel, size, mtime, sha, record) != MC_OK)
+          fprintf(stderr, "musiccore: sync: couldn't save how to restore %s\n", rel);
+      }
     }
     free(abs);
   }
   sqlite3_finalize(stmt);
+  mc_delete_records_close(store);
 }
 
 static int archived(const mc_transfer *x, const char *track) {

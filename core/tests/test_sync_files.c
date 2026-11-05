@@ -1492,6 +1492,44 @@ int main(int argc, char **argv) {
     CHECK(rb.files_received == 0 && rb.files_deleted == 0);
   }
 
+  /* An original imported on B, its whole album deleted on A: B's sync trashes it with a record,
+   * so taking it back out of the trash brings the album back rather than a sweep taking it. */
+  {
+    track_ref own;
+    set_profile(&a, b.uid, 0, NULL); /* B keeps it: everything, originals */
+    add_track(&b, "Own", "Own Album", 2001, "Own Song", 1, 880, &own);
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(lib_file_exists(&a, own.rel) && lib_file_exists(&b, own.rel));
+    char album[MC_UID_STRLEN];
+    query_text(mc_library_db(a.lib), "SELECT uid FROM albums WHERE title = 'Own Album'", album,
+               sizeof album);
+    mc_delete_plan *dp = NULL;
+    const char *albums[] = {album};
+    CHECK(mc_delete_plan_new(a.lib, MC_DELETE_ALBUMS, albums, 1, &dp) == MC_OK);
+    CHECK(mc_delete_run(a.lib, a.config, dp, NULL) == MC_OK);
+    mc_delete_plan_free(dp);
+    int binned = g_binned;
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(!lib_file_exists(&b, own.rel) && g_binned == binned + 1);
+    CHECK(lib_int(&b, "SELECT count(*) FROM albums WHERE title = 'Own Album'") == 0);
+    char from[1300], back[2048];
+    snprintf(from, sizeof from, "%s%c%d-01 Own Song.wav", g_bin, MC_PATH_SEP, binned);
+    snprintf(back, sizeof back, "%s/%s", b.libdir, own.rel);
+    char dir[2048];
+    snprintf(dir, sizeof dir, "%s/Own/Own Album (2001)", b.libdir);
+    CHECK(mc_mkdirs(dir) == MC_OK);
+    CHECK(mc_rename(from, back, 0) == MC_OK);
+    int restored = 0, tracks = 0;
+    CHECK(mc_delete_restore(b.lib, b.config, &restored, &tracks) == MC_OK);
+    CHECK(restored == 1 && tracks == 1);
+    CHECK(lib_int(&b, "SELECT count(*) FROM albums WHERE title = 'Own Album'") == 1);
+    snprintf(sql, sizeof sql, "SELECT count(*) FROM files WHERE path = '%s'", own.rel);
+    CHECK(lib_int(&b, sql) == 1);
+    /* A session after it keeps the file, and A has the music again. */
+    CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
+    CHECK(lib_file_exists(&b, own.rel) && lib_file_exists(&a, own.rel));
+  }
+
   dev_stop(&a);
   dev_stop(&b);
 

@@ -595,6 +595,43 @@ static char *record_json(sqlite3 *db, const char *track_rows, const char *file_u
   return rows;
 }
 
+/* mc_delete_record(track_uid, file_uid). */
+static void sql_delete_record(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  const char *track = (const char *)sqlite3_value_text(argv[0]);
+  const char *file = (const char *)sqlite3_value_text(argv[1]);
+  char *track_rows = NULL, *rows = NULL;
+  if (track && file && track_json(db, track, &track_rows) == MC_OK && track_rows)
+    rows = record_json(db, track_rows, file);
+  free(track_rows);
+  if (rows) sqlite3_result_text(ctx, rows, -1, free);
+  else sqlite3_result_null(ctx);
+}
+
+mc_status mc_delete_register(sqlite3 *db) {
+  return sqlite3_create_function(db, "mc_delete_record", 2, SQLITE_UTF8, NULL, sql_delete_record,
+                                 NULL, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+}
+
+sqlite3 *mc_delete_records_open(const char *config_dir) {
+  sqlite3 *store = NULL;
+  if (store_open(config_dir, 1, &store) != MC_OK) return NULL;
+  sqlite3_exec(store, "BEGIN", NULL, NULL, NULL);
+  return store;
+}
+
+mc_status mc_delete_save_record(sqlite3 *store, mc_library *lib, const char *abs, const char *rel,
+                                int64_t size, int64_t mtime, const char *sha, const char *rows) {
+  return save_record(store, lib, abs, rel, size, mtime, sha, rows);
+}
+
+void mc_delete_records_close(sqlite3 *store) {
+  if (!store) return;
+  sqlite3_exec(store, "COMMIT", NULL, NULL, NULL);
+  sqlite3_close_v2(store);
+}
+
 /* Trashes track_uid's files, saving a record of each to store (which may be NULL); or if
  * permanent, removes them and records nothing. Their folders are added to dirs, and the
  * uids of those gone to trashed. *kept is set if one couldn't go. */

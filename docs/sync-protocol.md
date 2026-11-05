@@ -837,7 +837,8 @@ the plaintext limit.
   - Deleted tracks: `files` rows go with their track (`ON DELETE CASCADE`) when the library
     exchange applies the delete, so the session notes the rows it deletes and removes their
     files: originals imported on this device go to its Recycle Bin or trash (removed if
-    there's none), received files are removed. A file whose row went otherwise (a crash, an
+    there's none), with a restore record as for a delete made here, noted before the rows go;
+    received files are removed. A file whose row went otherwise (a crash, an
     edit outside a session) is an orphan. Before looking for orphans, the
     session restores deleted tracks whose files the user took back out of the trash
     (`mc_delete_restore()`, `core/include/musiccore/delete.h`), so those aren't swept away.

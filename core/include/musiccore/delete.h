@@ -21,7 +21,8 @@
  * config dir (next to settings.json and sync.db): for each trashed file, where it was, its
  * size, modification time and hash (when known), and its rows as JSON (the track and its
  * album, artists, plays, playlist places and album group places, the file's own row). So
- * library.db holds only the library, and nothing about deleted tracks travels with it.
+ * library.db holds only the library, and nothing about deleted tracks travels with it. Sync
+ * keeps the same record of an original it trashes after another device's delete.
  *
  * mc_delete_restore() looks for those files at their old paths. One that's back, the same
  * size and either the same modification time or the same hash, gets its rows back with

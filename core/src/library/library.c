@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "library/delete_internal.h"
 #include "library/edit_internal.h"
 #include "search/search_internal.h"
 #include "sync/libmerge.h"
@@ -504,6 +505,7 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
                       "PRAGMA trusted_schema = OFF;")) != MC_OK)
     goto fail;
   if ((st = mc_changelog_register(lib->db, &lib->log)) != MC_OK) goto fail;
+  if ((st = mc_delete_register(lib->db)) != MC_OK) goto fail;
   if (sqlite3_create_function(lib->db, "mc_shuffle_key", 2,
                               SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
                               sql_shuffle_key, NULL, NULL) != SQLITE_OK ||
