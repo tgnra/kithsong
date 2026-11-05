@@ -101,6 +101,7 @@
     "reset_app_confirm_button": { "text": "_Reset", "note": "Button in the Reset Kithsong? message: clears the settings and restarts." },
     "reset_app_failed": { "text": "Kithsong couldn't clear all of its settings from {0} ({1}). Delete what's left of that folder, then start Kithsong again.", "note": "Shown as Kithsong starts again after Reset Kithsong…, if some files couldn't be deleted. {0} is a folder, {1} the reason." },
     "seek": { "text": "Position", "note": "The seek bar's name for accessibility." },
+    "seek_state": { "text": "{0} of {1}", "note": "The seekbar's state for accessibility: elapsed time of total time." },
     "now_playing_artist": { "text": "— {0}", "note": "After the track's title in the now-playing bar, dimmed: its artist." },
     "volume_level": { "text": "Volume {0:d}%", "note": "Shown for a moment in place of the track in the now-playing bar after the volume changes from the keyboard; on Windows also the volume slider's name for accessibility. {0} is 0 to 100." },
     "volume_muted": { "text": "Muted", "note": "Shown for a moment in place of the track in the now-playing bar after the sound is muted from the keyboard." },
@@ -1174,7 +1175,6 @@
     "open_player": "Open the player",
     "close_player": "Close the player",
     "go_to_named_artist": { "text": "Go to {0}", "note": "On a track's menu, for a track credited to several artists (\"A feat. B\"): one for each, opening that artist's page. {0} is the artist's name." },
-    "seek_state": { "text": "{0} of {1}", "note": "The seekbar's state for accessibility: elapsed time of total time." },
 
     "edit_playlist": { "text": "Edit", "note": "Button on a playlist's or album group's page that shows the controls to reorder and remove its tracks or albums." },
     "playlist_reorder": { "text": "Drag to reorder", "note": "A playlist track's or album group album's drag handle, for accessibility." },

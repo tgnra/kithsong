@@ -139,7 +139,9 @@ static void set_position(int ms, BOOL notify) {
   if (ms == s.pos_ms) return;
   s.pos_ms = ms;
   InvalidateRect(s.wnd, NULL, FALSE);
-  if (notify) PostMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), NPN_SEEK), (LPARAM)s.wnd);
+  if (!notify) return;
+  PostMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), NPN_SEEK), (LPARAM)s.wnd);
+  uia_refresh(&ui); /* a seek, not the playing, or a screen reader would talk over the music */
 }
 
 static void set_hot(BOOL hot) {
@@ -286,20 +288,69 @@ static void on_key(WPARAM key) {
   }
 }
 
-/* --- UI Automation: the strip is a live region, so screen readers read out a flash --- */
+/* --- UI Automation: the strip is a live region, so screen readers read out a flash; in it
+ * are the two times and the seek bar, in seconds, while there's a track --- */
+
+enum { NODE_ELAPSED, NODE_BAR, NODE_LEFT, NUM_NODES };
+
+/* "1:02 of 6:23". */
+static void seek_state(wchar_t *out, size_t n) {
+  wchar_t cur[24], left[24], total[24];
+  format_times(cur, left, 24);
+  format_time((s.duration_ms + 500) / 1000 * 1000, total, 24);
+  char *cur8 = wstr_to_utf8(cur), *total8 = wstr_to_utf8(total);
+  mc_wformat(out, n, mc_str(MC_STR_SEEK_STATE), MC_S(cur8), MC_S(total8));
+  free(cur8);
+  free(total8);
+}
 
 static BOOL ui_node(int i, uia_node *n) {
-  if (i != UIA_ROOT) return FALSE;
-  lstrcpynW(n->name, s.flash, (int)(sizeof n->name / sizeof *n->name)); /* else the window's text, the track */
-  n->live = Polite;
+  if (i == UIA_ROOT) {
+    lstrcpynW(n->name, s.flash, (int)(sizeof n->name / sizeof *n->name)); /* else the window's text, the track */
+    n->live = Polite;
+    n->first = NODE_ELAPSED;
+    n->count = s.title ? NUM_NODES : 0;
+    return TRUE;
+  }
+  if (!s.title || i < 0 || i >= NUM_NODES) return FALSE;
+  n->parent = UIA_ROOT;
+  if (i == NODE_BAR) {
+    n->type = UIA_SliderControlTypeId;
+    n->flags = UIA_RANGE | (seekable() ? UIA_FOCUSABLE : UIA_DISABLED);
+    n->rect = s.bar;
+    n->automation_id = L"Position";
+    lstrcpynW(n->name, mc_wstr(MC_STR_SEEK), 512);
+    n->value = s.pos_ms / 1000.0;
+    n->maximum = s.duration_ms / 1000.0;
+    n->small_step = n->large_step = KEY_STEP_MS / 1000.0;
+    if (seekable()) seek_state(n->status, 64);
+    return TRUE;
+  }
+  wchar_t cur[24], left[24];
+  format_times(cur, left, 24);
+  n->type = UIA_TextControlTypeId;
+  n->rect = i == NODE_ELAPSED ? s.cur_rect : s.left_rect;
+  n->automation_id = i == NODE_ELAPSED ? L"Elapsed" : L"Remaining";
+  lstrcpynW(n->name, i == NODE_ELAPSED ? cur : left, 512);
   return TRUE;
 }
 
 static int ui_focus(void) {
-  return UIA_ROOT;
+  return s.title && seekable() ? NODE_BAR : UIA_ROOT;
 }
 
-static const uia_ops ui_ops = {.node = ui_node, .focus = ui_focus};
+static int ui_at(POINT pt) {
+  if (!s.title) return UIA_ROOT;
+  return PtInRect(&s.bar, pt) ? NODE_BAR : PtInRect(&s.cur_rect, pt) ? NODE_ELAPSED :
+         PtInRect(&s.left_rect, pt) ? NODE_LEFT : UIA_ROOT;
+}
+
+static void ui_set_value(int i, double value) {
+  (void)i;
+  if (seekable() && !s.dragging) set_position((int)(value * 1000), TRUE);
+}
+
+static const uia_ops ui_ops = {.node = ui_node, .focus = ui_focus, .at = ui_at, .set_value = ui_set_value};
 
 static LRESULT CALLBACK now_playing_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!s.wnd) { /* messages arrive before CreateWindowExW returns */
@@ -448,6 +499,8 @@ void now_playing_show(const wchar_t *title, const wchar_t *artist, int duration_
   load_art();
   relayout();
   InvalidateRect(s.wnd, NULL, FALSE);
+  BOOL has_nodes = s.title != NULL;
+  uia_changed(&ui, uia_hash(0, &has_nodes, sizeof has_nodes));
 }
 
 void now_playing_art_changed(void) {
