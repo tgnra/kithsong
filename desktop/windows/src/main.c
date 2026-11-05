@@ -449,6 +449,7 @@ static void paint_background(HDC dc, const RECT *area) {
 
 static void show_album(void);
 static void show_about(void);
+static void analysis_update_settings(void);
 
 /* What the profiler calls a page. */
 static const char *page_name(sidebar_page page) {
@@ -483,6 +484,7 @@ static void show_page(sidebar_page page) {
   if (page == PAGE_HOME) home_view_refresh(); /* plays since it last showed */
   import_view_show(page == PAGE_IMPORT);
   settings_view_show(page == PAGE_SETTINGS);
+  analysis_update_settings();
   device_view_show(page == PAGE_DEVICE);
   layout();
   perf_view_shown();
@@ -1490,17 +1492,40 @@ static void library_opened(void) {
 /* The audio analysis of the library that's open; it comes and goes with sync. A small batch
  * runs flat out with nothing shown. A large one opens analysis_dialog.h: Background carries on
  * paced, with a row in the sidebar, and is remembered until the work is done, so a restart
- * doesn't ask again. Cancel stops it until the next start. */
+ * doesn't ask again. Cancel stops it, over restarts too, until Settings' Resume analysis. */
 #define SETTING_ANALYSIS_BACKGROUND "analysis_background"
+#define SETTING_ANALYSIS_STOPPED "analysis_stopped"
 enum { ANALYSIS_POLL_MS = 500 };
 
 static mc_analysis_scanner *g_analysis;
 static BOOL g_analysis_remembered; /* SETTING_ANALYSIS_BACKGROUND is set */
+static BOOL g_analysis_active;     /* it was at the last look */
+static int g_analysis_left = -1;   /* the tracks waiting, for Settings: -1 to count them */
 
 static void analysis_remember(BOOL background) {
   g_analysis_remembered = background;
   mc_settings_set_bool(g_app.settings, SETTING_ANALYSIS_BACKGROUND, background);
   mc_settings_save(g_app.settings); /* failing, it asks again at the next start */
+}
+
+/* Settings' section, while it shows: the scanner's own count if it's going, or a query, which is
+ * only worth making when that can have changed. */
+static void analysis_update_settings(void) {
+  if (g_app.page != PAGE_SETTINGS) {
+    g_analysis_left = -1;
+    return;
+  }
+  mc_analysis_status st;
+  mc_analysis_scanner_status(g_analysis, &st);
+  if (g_analysis_active && !st.active) g_analysis_left = -1;
+  g_analysis_active = st.active;
+  if (st.active) {
+    g_analysis_left = st.total - st.done;
+  } else if (g_analysis_left < 0) {
+    int64_t ms;
+    if (!g_app.lib || mc_analysis_pending(g_app.lib, &g_analysis_left, &ms) != MC_OK) g_analysis_left = 0;
+  }
+  settings_view_update_analysis(mc_settings_bool(g_app.settings, SETTING_ANALYSIS_STOPPED, 0), g_analysis_left);
 }
 
 static void on_analysis_background(void) {
@@ -1513,7 +1538,19 @@ static void on_analysis_cancel(void) {
   mc_analysis_scanner_stop(g_analysis);
   g_analysis = NULL;
   analysis_remember(FALSE);
+  mc_settings_set_bool(g_app.settings, SETTING_ANALYSIS_STOPPED, TRUE);
+  mc_settings_save(g_app.settings); /* failing, it asks again at the next start */
   sidebar_set_analysing(FALSE);
+  analysis_update_settings();
+}
+
+/* Settings' Resume analysis: in the background, as there's been an answer to what the dialog
+ * would ask. */
+static void analysis_resume(void) {
+  mc_settings_set_bool(g_app.settings, SETTING_ANALYSIS_STOPPED, FALSE);
+  analysis_remember(TRUE);
+  if (g_app.lib && !g_analysis) mc_analysis_scanner_start_resumed(mc_library_dir(g_app.lib), &g_analysis);
+  analysis_update_settings();
 }
 
 static const analysis_dialog_host analysis_host = {on_analysis_background, on_analysis_cancel};
@@ -1527,6 +1564,7 @@ static void analysis_tick(void) {
   if (st.active) analysis_dialog_update(st.done, st.total);
   else analysis_dialog_close();
   sidebar_set_analysing(st.active && st.paced);
+  analysis_update_settings();
 }
 
 /* The sidebar row: the dialog again, for its progress or its Cancel. */
@@ -1549,7 +1587,8 @@ static void start_sync(void) {
   if (g_app.page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
   refresh_devices();
   if (waiting_banner_update(sync_bridge_get())) layout(); /* nothing yet: it comes with SYNC_EV_WAITING */
-  if (g_app.lib && !g_analysis) {
+  g_analysis_left = -1;
+  if (g_app.lib && !g_analysis && !mc_settings_bool(g_app.settings, SETTING_ANALYSIS_STOPPED, 0)) {
     g_analysis_remembered = mc_settings_bool(g_app.settings, SETTING_ANALYSIS_BACKGROUND, 0);
     mc_analysis_scanner_start_sized(mc_library_dir(g_app.lib), g_analysis_remembered, &g_analysis);
   }
@@ -2116,6 +2155,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_APP_OPEN_LIBRARY:
       change_library(FALSE);
+      return 0;
+    case WM_APP_RESUME_ANALYSIS:
+      analysis_resume();
       return 0;
     case WM_APP_MOVE_LIBRARY:
       move_library();

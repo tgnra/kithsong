@@ -16,6 +16,10 @@
  *   | [Leave Group...] [Ask about Windows Firewall...] |
  *   | Leaving the group stops syncing ...              |
  *   |                                                  |
+ *   | Audio analysis                                   |
+ *   | Analysis is stopped. 712 tracks aren't analysed. |
+ *   | [Resume analysis]                                |
+ *   |                                                  |
  *   | Scrobbling                                       |
  *   | Signed in as tania                               |
  *   | [Sign Out]                                       |
@@ -39,6 +43,10 @@
  * dialog, Ask about Windows Firewall again checks the firewall and asks as at startup
  * (firewall_ask_again()). The sync shown is sync_bridge_get()'s.
  *
+ * Audio analysis says how many tracks are waiting, as main.c tells it. Resume analysis is there
+ * once the analysis dialog's Cancel has stopped it, and posts WM_APP_RESUME_ANALYSIS to the main
+ * window.
+ *
  * Scrobbling signs in with playback_scrobbler(): Sign In opens Last.fm's page in the browser
  * and waits, on a thread, for the user to approve it there. The account is the sync group's
  * (see scrobbler.h); the checkbox is this PC's own, kept in settings.json.
@@ -59,6 +67,7 @@
 #define WM_APP_OPEN_LIBRARY (WM_APP + 5)
 #define WM_APP_MOVE_LIBRARY (WM_APP + 7)
 #define WM_APP_RESET (WM_APP + 8)
+#define WM_APP_RESUME_ANALYSIS (WM_APP + 11)
 
 void settings_view_create(HWND parent);
 void settings_view_destroy(void);
@@ -86,6 +95,9 @@ void settings_view_init_sync(mc_settings *settings, void (*devices_changed)(void
 /* Reloads the Sync section: the name (unless it's being edited), the addresses and whether
  * this PC is in a group. Call when sync starts or stops and when the devices change. */
 void settings_view_update_sync(void);
+
+/* What the Audio analysis section says: whether Cancel has stopped it, and the tracks waiting. */
+void settings_view_update_analysis(BOOL stopped, int left);
 
 /* Returns TRUE if the command (a WM_COMMAND's control id and notification code) belonged to
  * the settings view. */

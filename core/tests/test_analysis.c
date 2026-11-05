@@ -1182,6 +1182,18 @@ static void test_scanner(const char *scratch) {
   CHECK(most == FIRST + MORE && !went_back && !over && large);
   mc_analysis_scanner_stop(s);
   mc_analysis_scanner_set_recount_ms(5000);
+
+  /* Resumed, it goes at once whatever the wait to start, and paced. */
+  mc_analysis_scanner_set_timing(600000, 600000, 0, 0);
+  snprintf(path, sizeof path, "%s/resumed.wav", dir);
+  CHECK(write_wav(path, 44100, 1.0, 0.5));
+  add_track(lib, "resumed.wav", 0, other);
+  CHECK(mc_analysis_scanner_start_resumed(dir, &s) == MC_OK);
+  mc_analysis_scanner_status(s, &status);
+  CHECK(status.paced);
+  CHECK(wait_for(lib, TRACKS + 6 + FIRST + MORE));
+  mc_analysis_scanner_stop(s);
+  mc_analysis_scanner_set_timing(0, 20, 0, 0);
   mc_library_close(lib);
 }
 

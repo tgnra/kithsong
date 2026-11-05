@@ -15,6 +15,9 @@
  *   |  | This Computer's Address                    | |
  *   |  | 192.168.1.20:47823                         | |
  *   |  |              Leave Group...                | |
+ *   |  Audio analysis                                  |
+ *   |  Analysis is stopped. 712 tracks aren't analysed |
+ *   |  |            Resume analysis                 | |
  *   |  Scrobbling                                      |
  *   |  Signing in opens Last.fm in your browser...     |
  *   |  | Last.fm                                    | |
@@ -31,7 +34,9 @@
  * settings.json (unknown keys are kept). Move Library closes the dialog and calls the caller's
  * move_library, which moves it (move_library.c). The Sync group renames this computer (through
  * sync when it runs, and settings.json either way), shows where other devices reach it, and
- * leaves the group after asking, as Windows' Settings does. The Scrobbling group signs in
+ * leaves the group after asking, as Windows' Settings does. The Audio analysis group says how
+ * many tracks are waiting, with Resume analysis once its dialog's Cancel has stopped it
+ * (analysis_ui.h). The Scrobbling group signs in
  * with playback_scrobbler(), in the browser; a sign-in carries on if the dialog closes. The
  * switch is this computer's own (settings.json); the account is the sync group's. Reset
  * Kithsong..., after asking, closes the dialog and calls the caller's reset.

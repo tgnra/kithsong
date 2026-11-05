@@ -47,6 +47,9 @@ enum {
   ID_SET_ORDER_CHECK,
   ID_SET_ORDER_CHECK_LABEL,
   ID_SET_ORDER_NOTE,
+  ID_SET_ANALYSIS_HEADING,
+  ID_SET_ANALYSIS_STATUS,
+  ID_SET_ANALYSIS_RESUME,
   ID_SET_TEST_HEADING,
   ID_SET_TEST_TOGGLE,
   ID_SET_RESET_HEADING,
@@ -78,6 +81,9 @@ static struct {
   HWND sync_heading, name_label, name, addr_label, addr, leave, firewall, sync_note;
   BOOL firewall_shown; /* Ask about Windows Firewall again is: firewall_can_ask_again() */
   HWND play_heading, order_check, order_check_label, order_note;
+  HWND analysis_heading, analysis_status, analysis_resume;
+  BOOL analysis_stopped;       /* Resume analysis is there */
+  wchar_t analysis_shown[256]; /* the status line as last set */
   HWND lfm_heading, lfm_status, lfm_button, lfm_service, lfm_check, lfm_check_label, lfm_note;
   HWND test_heading, test_toggle; /* the Testing section's accordion: the rest is testing_view.c's */
   BOOL test_open;
@@ -334,6 +340,11 @@ void settings_view_create(HWND parent) {
   else
     g_set.acc = NULL;
 
+  g_set.analysis_heading = child(WC_STATICW, mc_wstr(MC_STR_ANALYSIS_HEADING), label, ID_SET_ANALYSIS_HEADING);
+  g_set.analysis_status = child(WC_STATICW, NULL, label, ID_SET_ANALYSIS_STATUS);
+  g_set.analysis_resume = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_ANALYSIS_RESUME), BS_PUSHBUTTON | WS_TABSTOP,
+                                ID_SET_ANALYSIS_RESUME); /* shown by settings_view_update_analysis() */
+
   g_set.lfm_heading = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLING), label, ID_SET_LFM_HEADING);
   g_set.lfm_status = child(WC_STATICW, NULL, label, ID_SET_LFM_STATUS);
   SetWindowSubclass(g_set.lfm_status, lfm_status_proc, 0, 0); /* the auth thread's news, the timer */
@@ -407,6 +418,7 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   SendMessageW(g_set.heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.sync_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.play_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  SendMessageW(g_set.analysis_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.lfm_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.test_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.reset_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
@@ -417,7 +429,7 @@ void settings_view_set_font(HFONT font, UINT dpi) {
                  g_set.leave,      g_set.sync_note,  g_set.order_check, g_set.order_check_label,
                  g_set.order_note, g_set.lfm_status, g_set.lfm_button,
                  g_set.lfm_service, g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
-                 g_set.firewall, g_set.reset, g_set.reset_note};
+                 g_set.firewall, g_set.reset, g_set.reset_note, g_set.analysis_status, g_set.analysis_resume};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
 }
 
@@ -447,10 +459,12 @@ void settings_view_show(BOOL show) {
   HWND all[] = {g_set.title,      g_set.heading,      g_set.path,  g_set.move,       g_set.open,
                 g_set.note,       g_set.sync_heading, g_set.name_label, g_set.name,  g_set.addr_label,
                 g_set.addr,       g_set.leave,        g_set.sync_note, g_set.play_heading, g_set.order_check,
-                g_set.order_check_label, g_set.order_note, g_set.lfm_heading, g_set.lfm_status,
+                g_set.order_check_label, g_set.order_note, g_set.analysis_heading, g_set.analysis_status,
+                g_set.lfm_heading, g_set.lfm_status,
                 g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
                 g_set.test_heading, g_set.test_toggle, g_set.reset_heading, g_set.reset, g_set.reset_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
+  ShowWindow(g_set.analysis_resume, show && g_set.analysis_stopped ? SW_SHOW : SW_HIDE);
   testing_view_show(show, g_set.test_open); /* its controls show only while it's open */
   ShowWindow(g_set.page, show ? SW_SHOW : SW_HIDE);
   update_firewall();
@@ -548,6 +562,21 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.order_note, left, top, text_w, nh, TRUE);
   top += nh + S(32);
 
+  /* Audio analysis */
+  hh = canvas_text_height(g_set.analysis_heading, g_set.heading_font, text_w, 0);
+  MoveWindow(g_set.analysis_heading, left, top, text_w, hh, TRUE);
+  top += hh + S(8);
+
+  nh = canvas_text_height(g_set.analysis_status, g_set.font, text_w, 0);
+  MoveWindow(g_set.analysis_status, left, top, text_w, nh, TRUE);
+  top += nh;
+  if (g_set.analysis_stopped) {
+    top += S(12);
+    MoveWindow(g_set.analysis_resume, left, top, button_width(g_set.analysis_resume, S(16)), btn_h, TRUE);
+    top += btn_h;
+  }
+  top += S(32);
+
   /* Scrobbling */
   hh = canvas_text_height(g_set.lfm_heading, g_set.heading_font, text_w, 0);
   MoveWindow(g_set.lfm_heading, left, top, text_w, hh, TRUE);
@@ -601,6 +630,30 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   SetWindowPos(g_set.content, NULL, 0, -g_set.scroll.pos, max(w - 2 * pad, 0), top, SWP_NOZORDER | SWP_NOACTIVATE);
   InvalidateRect(g_set.page, NULL, FALSE); /* the bar's size, or that it's gone */
 #undef S
+}
+
+/* --- Audio analysis --- */
+
+void settings_view_update_analysis(BOOL stopped, int left) {
+  wchar_t text[256];
+  if (left > 0) {
+    enum mc_str_id id = stopped ? MC_STR_ANALYSIS_STOPPED_LEFT : MC_STR_ANALYSIS_LEFT;
+    mc_wformat(text, 256, mc_str_plural(id, left), MC_D(left));
+  } else {
+    wcscpy(text, mc_wstr(stopped ? MC_STR_ANALYSIS_STOPPED : MC_STR_ANALYSIS_NONE_LEFT));
+  }
+  BOOL changed = !stopped != !g_set.analysis_stopped;
+  if (changed) {
+    g_set.analysis_stopped = stopped;
+    if (!stopped && GetFocus() == g_set.analysis_resume) SetFocus(g_set.name);
+    ShowWindow(g_set.analysis_resume, g_set.shown && stopped ? SW_SHOW : SW_HIDE);
+  }
+  if (wcscmp(text, g_set.analysis_shown)) {
+    wcscpy(g_set.analysis_shown, text);
+    SetWindowTextW(g_set.analysis_status, text);
+    changed = TRUE; /* it may take more lines */
+  }
+  if (changed && g_set.shown) SendMessageW(g_set.parent, WM_SIZE, 0, 0);
 }
 
 /* --- Sync --- */
@@ -1038,6 +1091,7 @@ BOOL settings_view_on_command(int id, int code) {
       if (code == EN_KILLFOCUS) apply_name();
       return TRUE;
     case ID_SET_LEAVE: leave_group(); return TRUE;
+    case ID_SET_ANALYSIS_RESUME: PostMessageW(g_set.parent, WM_APP_RESUME_ANALYSIS, 0, 0); return TRUE;
     case ID_SET_RESET: reset_app(); return TRUE;
     case ID_SET_TEST_TOGGLE: settings_view_open_testing(!g_set.test_open); return TRUE;
     case ID_SET_FIREWALL: ask_firewall_again(); return TRUE;
@@ -1077,7 +1131,8 @@ HBRUSH settings_view_ctlcolor(HWND wnd, HDC dc) {
   BOOL note = wnd == g_set.note || wnd == g_set.sync_note || wnd == g_set.order_note || wnd == g_set.lfm_note;
   if (!note && wnd != g_set.title && wnd != g_set.heading && wnd != g_set.path && wnd != g_set.sync_heading &&
       wnd != g_set.name_label && wnd != g_set.addr_label && wnd != g_set.addr && wnd != g_set.play_heading &&
-      wnd != g_set.order_check_label && wnd != g_set.lfm_heading && wnd != g_set.lfm_status &&
+      wnd != g_set.order_check_label && wnd != g_set.analysis_heading && wnd != g_set.analysis_status &&
+      wnd != g_set.lfm_heading && wnd != g_set.lfm_status &&
       wnd != g_set.lfm_check_label && wnd != g_set.test_heading)
     return NULL;
   SetTextColor(dc, note ? theme.text2 : theme.text);

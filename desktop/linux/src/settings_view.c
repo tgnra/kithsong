@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "analysis_ui.h"
 #include "musiccore/musiccore.h"
 #include "musiccore/source_run.h"
 #include "playback.h"
@@ -24,6 +25,8 @@ typedef struct settings_view {
   GtkWidget *name, *address, *leave; /* the Sync group's rows */
   GtkWidget *lfm_group, *lfm_status, *lfm_button, *lfm_service, *lfm_switch; /* the Scrobbling group's */
   guint lfm_timer;
+  GtkWidget *analysis_group, *analysis_resume; /* the Audio analysis group's */
+  guint analysis_timer;
 } settings_view;
 
 static void update_sync(settings_view *s);
@@ -49,6 +52,7 @@ static void stop_auth(void);
 static void settings_view_free(gpointer data) {
   settings_view *s = data;
   if (s->lfm_timer) g_source_remove(s->lfm_timer);
+  if (s->analysis_timer) g_source_remove(s->analysis_timer);
   if (g_auth.shown == s) g_auth.shown = NULL;
   g_free(s->settings_dir);
   g_free(s);
@@ -787,6 +791,49 @@ static GtkWidget *build_scrobble_group(settings_view *s) {
   return group;
 }
 
+/* --- Audio analysis --- */
+
+static void update_analysis(settings_view *s, gboolean count_again) {
+  gboolean stopped = analysis_ui_stopped();
+  int left = analysis_ui_left(count_again);
+  char *counted = NULL;
+  if (left > 0)
+    counted = mc_format_alloc(mc_str_plural(stopped ? MC_STR_ANALYSIS_STOPPED_LEFT : MC_STR_ANALYSIS_LEFT, left), MC_D(left));
+  adw_preferences_group_set_description(
+    ADW_PREFERENCES_GROUP(s->analysis_group),
+    counted ? counted : mc_str(stopped ? MC_STR_ANALYSIS_STOPPED : MC_STR_ANALYSIS_NONE_LEFT));
+  mc_free(counted);
+  gtk_widget_set_visible(s->analysis_resume, stopped);
+}
+
+static gboolean on_analysis_tick(gpointer data) {
+  update_analysis(data, FALSE);
+  return G_SOURCE_CONTINUE;
+}
+
+static void on_analysis_resume(GtkWidget *row, gpointer data) {
+  (void)row;
+  analysis_ui_resume();
+  update_analysis(data, TRUE);
+}
+
+static GtkWidget *build_analysis_group(settings_view *s) {
+  GtkWidget *group = s->analysis_group = adw_preferences_group_new();
+  adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_ANALYSIS_HEADING));
+#if ADW_CHECK_VERSION(1, 6, 0)
+  s->analysis_resume = adw_button_row_new();
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(s->analysis_resume), mc_str(MC_STR_ANALYSIS_RESUME));
+#else
+  s->analysis_resume = nav_row(mc_str(MC_STR_ANALYSIS_RESUME), NULL, FALSE);
+  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(s->analysis_resume), TRUE);
+#endif
+  g_signal_connect(s->analysis_resume, "activated", G_CALLBACK(on_analysis_resume), s);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), s->analysis_resume);
+  update_analysis(s, TRUE);
+  s->analysis_timer = g_timeout_add(STATUS_MS, on_analysis_tick, s);
+  return group;
+}
+
 /* --- Reset --- */
 
 /* Whether Reset takes the library with it: only a checkout's own, which it then says. */
@@ -889,6 +936,7 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(group));
   if (s->has_sync) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_sync_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_playback_group(s)));
+  adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_analysis_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_scrobble_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(testing_view_group(s->user)));
   if (s->reset) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_reset_group(s)));

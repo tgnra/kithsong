@@ -105,6 +105,8 @@ mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out);
  * mc_analysis_scanner_set_paced() or stops it. A pass starts soon after an import or sync ends,
  * rather than at the next idle look. */
 mc_status mc_analysis_scanner_start_sized(const char *dir, int paced, mc_analysis_scanner **out);
+/* As mc_analysis_scanner_start_sized(), paced, but at once: someone has just asked for it. */
+mc_status mc_analysis_scanner_start_resumed(const char *dir, mc_analysis_scanner **out);
 /* Takes effect within a moment, in the middle of a track, and lasts until a pass finds nothing
  * to do; status.paced says when it has. Other scanners are always paced. */
 void mc_analysis_scanner_set_paced(mc_analysis_scanner *s, int paced);

@@ -422,7 +422,10 @@ flat out behind the dialog. Background calls
 (`mc_thread_background()`), and only then the wait for AC power, and shows a row above Settings on
 Windows or a button next to Settings on Linux that opens the dialog again. `analysis_background` in
 settings.json keeps that choice across restarts until a pass finds nothing to do. Cancel stops the
-scanner until the next start, which asks again. One track at a time, it takes the next track, in
+scanner and sets `analysis_stopped` in settings.json, so it stays stopped over restarts, imports
+included, until Resume analysis in Settings' Audio analysis section. That section says how many
+tracks are waiting, and Resume starts a paced scanner at once
+(`mc_analysis_scanner_start_resumed()`), as if Background had been the answer. One track at a time, it takes the next track, in
 uid order, with a file that:
 
 - is the track's current one (`files.file_rev IS tracks.file_rev`; a stale copy, or an original

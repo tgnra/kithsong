@@ -248,6 +248,7 @@ struct mc_analysis_scanner {
   int stop;
   int once;  /* one run, its time chosen by the caller: see mc_analysis_scanner_start_once() */
   int sized; /* flat out until told otherwise: see mc_analysis_scanner_start_sized() */
+  int asked; /* no wait to start: see mc_analysis_scanner_start_resumed() */
   int state; /* as mc_analysis_scanner_state() says */
   mc_analysis_status status; /* guarded by lock, as the frontend polls it */
   atomic_int paced;          /* a sized scanner's: what mc_analysis_scanner_set_paced() said */
@@ -411,7 +412,7 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
 static void scanner_thread(void *arg) {
   mc_analysis_scanner *s = arg;
   match_priority(s);
-  if (!s->once && wait_ms(s, g_start_ms)) return;
+  if (!s->once && !s->asked && wait_ms(s, g_start_ms)) return;
   mc_library *lib = NULL;
   if (mc_library_open_internal(s->dir, &lib) != MC_OK) {
     set_state(s, -1);
@@ -422,7 +423,7 @@ static void scanner_thread(void *arg) {
   mc_library_close(lib);
 }
 
-static mc_status start(const char *dir, int once, int sized, int paced, mc_analysis_scanner **out) {
+static mc_status start(const char *dir, int once, int sized, int paced, int asked, mc_analysis_scanner **out) {
   if (!dir || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
   mc_analysis_scanner *s = calloc(1, sizeof *s);
@@ -433,6 +434,7 @@ static mc_status start(const char *dir, int once, int sized, int paced, mc_analy
   }
   s->once = once;
   s->sized = sized;
+  s->asked = asked;
   atomic_init(&s->paced, paced);
   mc_mutex_init(&s->lock);
   mc_cond_init(&s->wake);
@@ -449,15 +451,19 @@ static mc_status start(const char *dir, int once, int sized, int paced, mc_analy
 }
 
 mc_status mc_analysis_scanner_start(const char *dir, mc_analysis_scanner **out) {
-  return start(dir, 0, 0, 0, out);
+  return start(dir, 0, 0, 0, 0, out);
 }
 
 mc_status mc_analysis_scanner_start_sized(const char *dir, int paced, mc_analysis_scanner **out) {
-  return start(dir, 0, 1, paced, out);
+  return start(dir, 0, 1, paced, 0, out);
+}
+
+mc_status mc_analysis_scanner_start_resumed(const char *dir, mc_analysis_scanner **out) {
+  return start(dir, 0, 1, 1, 1, out);
 }
 
 mc_status mc_analysis_scanner_start_once(const char *dir, mc_analysis_scanner **out) {
-  return start(dir, 1, 0, 0, out);
+  return start(dir, 1, 0, 0, 0, out);
 }
 
 void mc_analysis_scanner_set_paced(mc_analysis_scanner *s, int paced) {
