@@ -24,8 +24,8 @@ data class TrackTags(
     val genre: String,
 )
 
-/** mc_album_flags: what an album's tags can't say. */
-data class AlbumFlags(val noScrobble: Boolean, val mix: Boolean)
+/** mc_album_flags: what an album's tags can't say. [artChosen] is only read: a cover the user chose. */
+data class AlbumFlags(val noScrobble: Boolean, val mix: Boolean, val artChosen: Boolean = false)
 
 /** mc_track_mix: a single's flag, which only a track that [canSet] has; a longer album's is the album's. */
 data class TrackMix(val canSet: Boolean, val mix: Boolean)
@@ -55,6 +55,9 @@ object CoreEdit {
 
     /** MC_ERR_IN_USE: a file is open, or kept changing. Nothing has changed. */
     const val ERR_IN_USE = -13
+
+    /** MC_ERR_CANCELLED: stopped, with nothing changed. */
+    const val ERR_CANCELLED = -16
 
     /** MC_ALBUM_ART_MAX_BYTES: no image bigger than this can be a cover. */
     const val ALBUM_ART_MAX_BYTES = 16 * 1024 * 1024
@@ -86,10 +89,20 @@ fun CoreLibrary.setTrackTags(uid: String, tags: TrackTags) = EditNatives.nativeS
 )
 
 fun CoreLibrary.albumFlags(uid: String): AlbumFlags =
-    EditNatives.nativeAlbumFlags(handle, uid).let { AlbumFlags(it[0] != 0, it[1] != 0) }
+    EditNatives.nativeAlbumFlags(handle, uid).let { AlbumFlags(it[0] != 0, it[1] != 0, it[2] != 0) }
 
 fun CoreLibrary.setAlbumFlags(uid: String, flags: AlbumFlags) =
     EditNatives.nativeSetAlbumFlags(handle, uid, flags.noScrobble, flags.mix)
+
+/** Back to the cover an import would give album [uid], for one the user chose: see mc_album_art_reset(). Waits for the network. */
+fun CoreLibrary.resetAlbumArt(uid: String) = EditNatives.nativeResetAlbumArt(handle, uid)
+
+/** Another artist called [name], for a form to offer to merge; null for none. */
+fun CoreLibrary.artistSameName(uid: String, name: String): String? =
+    EditNatives.nativeArtistSameName(handle, uid, name.encodeToByteArray())
+
+/** Makes artist [uid] and [other] one, by [other]'s name: see mc_artist_merge(). */
+fun CoreLibrary.mergeArtists(uid: String, other: String) = EditNatives.nativeMergeArtists(handle, uid, other)
 
 fun CoreLibrary.trackMix(uid: String): TrackMix =
     EditNatives.nativeTrackMix(handle, uid).let { TrackMix(it[0] != 0, it[1] != 0) }
@@ -127,6 +140,9 @@ internal object EditNatives {
     )
     @JvmStatic external fun nativeAlbumFlags(handle: Long, uid: String): IntArray
     @JvmStatic external fun nativeSetAlbumFlags(handle: Long, uid: String, noScrobble: Boolean, mix: Boolean)
+    @JvmStatic external fun nativeResetAlbumArt(handle: Long, uid: String)
+    @JvmStatic external fun nativeArtistSameName(handle: Long, uid: String, name: ByteArray): String?
+    @JvmStatic external fun nativeMergeArtists(handle: Long, uid: String, other: String)
     @JvmStatic external fun nativeTrackMix(handle: Long, uid: String): IntArray
     @JvmStatic external fun nativeSetTrackMix(handle: Long, uid: String, mix: Boolean)
     @JvmStatic external fun nativeAlbumArt(handle: Long, uid: String): String?

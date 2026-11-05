@@ -13,8 +13,11 @@ import ng.kithso.core.TrackTags
 import ng.kithso.core.albumArt
 import ng.kithso.core.albumFlags
 import ng.kithso.core.albumTags
+import ng.kithso.core.artistSameName
 import ng.kithso.core.artistTags
+import ng.kithso.core.mergeArtists
 import ng.kithso.core.releaseTags
+import ng.kithso.core.resetAlbumArt
 import ng.kithso.core.searchReleases
 import ng.kithso.core.setAlbumArt
 import ng.kithso.core.setAlbumFlags
@@ -44,7 +47,8 @@ data class TagTarget(val kind: Kind, val uid: String) {
 sealed interface TagValues {
     /**
      * [art] is the cover it has, null for none, and [canSetArt] whether it can have another: not
-     * with no file here for one to go beside. [newArt] is one chosen for Save to keep.
+     * with no file here for one to go beside. [newArt] is one chosen for Save to keep, and
+     * [resetArt] has Save go back to the automatic cover instead of the one chosen before.
      */
     data class Album(
         val tags: AlbumTags,
@@ -52,8 +56,11 @@ sealed interface TagValues {
         val art: ArtRef? = null,
         val canSetArt: Boolean = true,
         val newArt: ArtRef? = null,
+        val resetArt: Boolean = false,
     ) : TagValues
-    data class Artist(val tags: ArtistTags) : TagValues
+
+    /** [mergeWith]: save by making this artist and that one one, rather than by [tags]. */
+    data class Artist(val tags: ArtistTags, val mergeWith: String? = null) : TagValues
 
     /** [canSetMix]: it's a single, whose flag is its own. On a longer album [mix] means nothing here. */
     data class Track(val tags: TrackTags, val canSetMix: Boolean = false, val mix: Boolean = false) : TagValues
@@ -110,6 +117,9 @@ interface TagEditor {
 
     /** Forgets a cover [takeCover] set aside, the form having finished with it. */
     fun dropCover(art: ArtRef)
+
+    /** Another artist called [name], for the form to offer to merge artist [uid] with; null for none. */
+    suspend fun artistSameName(uid: String, name: String): String?
 
     /** The releases for [artist] and [title], best fit for album [albumUid]'s tracks first. */
     suspend fun searchReleases(albumUid: String, artist: String, title: String): TagResult<List<ReleaseInfo>>
@@ -190,10 +200,15 @@ class CoreTagEditor(
                         artTried = true
                         lib.setAlbumArt(target.uid, File(art).readBytes())
                         saved = now
+                    } else if (now.resetArt && !was.resetArt) {
+                        artTried = true
+                        lib.resetAlbumArt(target.uid)
+                        saved = now
                     }
                 }
                 was is TagValues.Artist && now is TagValues.Artist -> {
-                    lib.setArtistTags(target.uid, now.tags)
+                    if (now.mergeWith != null) lib.mergeArtists(target.uid, now.mergeWith)
+                    else lib.setArtistTags(target.uid, now.tags)
                     saved = now
                 }
                 was is TagValues.Track && now is TagValues.Track -> {
@@ -242,6 +257,16 @@ class CoreTagEditor(
 
     override fun dropCover(art: ArtRef) {
         art.file?.let { File(it).delete() }
+    }
+
+    override suspend fun artistSameName(uid: String, name: String): String? = withContext(saving) {
+        val lib = saveLib ?: CoreLibrary(dir.path).also { saveLib = it }
+        try {
+            lib.artistSameName(uid, name)
+        } catch (e: MusicCoreException) {
+            Log.e(TAG, "Couldn't look for another artist called that", e)
+            null
+        }
     }
 
     override suspend fun searchReleases(albumUid: String, artist: String, title: String): TagResult<List<ReleaseInfo>> =

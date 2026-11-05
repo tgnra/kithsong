@@ -48,13 +48,14 @@ typedef struct edit_form {
   GtkWidget *save_focus; /* what had the focus as Save started, which greying out takes away */
   GtkWidget *fields[NUM_FIELDS]; /* AdwEntryRows; NULL for those not on the form */
   GtkWidget *mb_row, *mb_search, *no_scrobble, *mix;
-  GtkWidget *art, *art_picture, *art_none, *art_drop, *art_change, *art_note;
+  GtkWidget *art, *art_picture, *art_none, *art_drop, *art_change, *art_auto, *art_note;
   char *mb;                /* the release the form has now, "" for none */
   char *saved[NUM_FIELDS]; /* what's in the library, as text; NULL for a field not on the form */
   mc_album_flags saved_flags;
   gboolean track_mix; /* a track alone on its album, or on none: the form has Continuous mix */
   gboolean art_ok;    /* the album has a folder here to put a cover in */
   GBytes *new_art;    /* the image that Save would use */
+  gboolean reset_art; /* Automatic cover was pressed, for Save to do */
   GCancellable *art_closing; /* what's going on for the cover that closing stops */
   GtkWidget *search;  /* the search dialog while it's open */
   gboolean loaded;    /* the tags were read, so there's something to save */
@@ -98,7 +99,8 @@ typedef struct job {
   GBytes *art;
   GdkTexture *art_texture;
   int art_size;
-  gboolean set_art, art_tried, art_saved;
+  gboolean set_art, reset_art, art_tried, art_saved;
+  char merge_into[MC_UID_STRLEN]; /* the artist to merge with, rather than save the name; "" for none */
   /* Search. */
   char *artist, *title;
   mc_release_list *list;
@@ -549,7 +551,7 @@ static void run_save(job *j) {
       st = mc_album_tags_set(j->lib, j->uid, &t);
     } else if (j->kind == EDIT_ARTIST) {
       mc_artist_tags t = {f[F_NAME], f[F_SORT_NAME]};
-      st = mc_artist_tags_set(j->lib, j->uid, &t);
+      st = j->merge_into[0] ? mc_artist_merge(j->lib, j->uid, j->merge_into) : mc_artist_tags_set(j->lib, j->uid, &t);
     } else {
       mc_track_tags t = {f[F_TITLE], f[F_ARTIST], atoi(f[F_TRACK_NO]), atoi(f[F_DISC_NO]), atoi(f[F_YEAR]), f[F_GENRE]};
       st = mc_track_tags_set(j->lib, j->uid, &t);
@@ -563,9 +565,9 @@ static void run_save(job *j) {
   }
   if (st == MC_OK && j->set_art) {
     gsize len = 0;
-    const void *image = g_bytes_get_data(j->art, &len);
+    const void *image = j->art ? g_bytes_get_data(j->art, &len) : NULL;
     j->art_tried = TRUE;
-    st = mc_album_art_set(j->lib, j->uid, image, len);
+    st = j->reset_art ? mc_album_art_reset(j->lib, j->uid) : mc_album_art_set(j->lib, j->uid, image, len);
     j->art_saved = st == MC_OK;
   }
   j->st = st;
@@ -612,6 +614,7 @@ static void save_done(gpointer owner, job *j) {
   if (j->flags_saved) f->saved_flags = j->flags;
   if (j->art_saved) {
     g_clear_pointer(&f->new_art, g_bytes_unref);
+    f->reset_art = FALSE;
     f->art_saved = TRUE;
   }
   f->changed |= j->tags_saved || j->flags_saved || j->art_saved;
@@ -631,6 +634,44 @@ static void save_done(gpointer owner, job *j) {
   form_say(f, failed ? failed : mc_str(MC_STR_EDIT_GONE));
   mc_free(failed);
   if (f->save_focus) gtk_widget_grab_focus(f->save_focus);
+}
+
+static void start_save(edit_form *f, job *j);
+
+typedef struct merge_question {
+  edit_form *f;
+  job *j;
+} merge_question;
+
+/* What was answered: the dialog holds on to the form until it's gone. */
+static void on_merge_answer(GObject *source, GAsyncResult *result, gpointer data) {
+  merge_question *q = data;
+  const char *answer = adw_alert_dialog_choose_finish(ADW_ALERT_DIALOG(source), result);
+  if (!strcmp(answer, "cancel")) {
+    job_free(q->j);
+  } else {
+    if (strcmp(answer, "merge")) q->j->merge_into[0] = '\0';
+    start_save(q->f, q->j);
+  }
+  g_object_unref(q->f->dialog);
+  g_free(q);
+}
+
+/* Saving an artist with a name another has: whether to make the two one. */
+static void ask_merge(edit_form *f, job *j) {
+  char *text = mc_format_alloc(mc_str(MC_STR_EDIT_MERGE_TEXT), MC_S(j->text[F_NAME]));
+  AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_EDIT_MERGE_TITLE), text);
+  mc_free(text);
+  adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", mc_str(MC_STR_CANCEL), "keep",
+                                 mc_str(MC_STR_EDIT_MERGE_KEEP), "merge", mc_str(MC_STR_EDIT_MERGE), NULL);
+  adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "merge", ADW_RESPONSE_SUGGESTED);
+  adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "merge");
+  adw_alert_dialog_set_close_response(ADW_ALERT_DIALOG(alert), "cancel");
+  merge_question *q = g_new(merge_question, 1);
+  q->f = f;
+  q->j = j;
+  g_object_ref(f->dialog);
+  adw_alert_dialog_choose(ADW_ALERT_DIALOG(alert), f->dialog, NULL, on_merge_answer, q);
 }
 
 /* Save: nothing to do closes the dialog, as there's nothing to lose. */
@@ -657,6 +698,10 @@ static void save(edit_form *f) {
     j->flags.mix = adw_switch_row_get_active(ADW_SWITCH_ROW(f->mix));
     j->set_flags = !j->flags.mix != !f->saved_flags.mix;
   }
+  if (f->reset_art) {
+    j->reset_art = TRUE;
+    j->set_art = TRUE;
+  }
   if (f->new_art) {
     j->art = g_bytes_ref(f->new_art);
     j->set_art = TRUE;
@@ -666,6 +711,15 @@ static void save(edit_form *f) {
     adw_dialog_force_close(ADW_DIALOG(f->dialog));
     return;
   }
+  if (f->kind == EDIT_ARTIST && strcmp(j->text[F_NAME], f->saved[F_NAME]) &&
+      mc_artist_same_name(f->lib, f->uid, j->text[F_NAME], j->merge_into) == MC_OK) {
+    ask_merge(f, j);
+    return;
+  }
+  start_save(f, j);
+}
+
+static void start_save(edit_form *f, job *j) {
   f->save_focus = adw_dialog_get_focus(ADW_DIALOG(f->dialog));
   f->saving = TRUE;
   f->in_use = FALSE;
@@ -774,6 +828,16 @@ static void on_art_picked(GObject *source, GAsyncResult *result, gpointer data) 
   if (file) take_art(f, file);
   g_clear_object(&file);
   g_object_unref(f->dialog);
+}
+
+/* Automatic cover: Save goes back to it; a cover picked after this is what Save uses instead. */
+static void on_art_auto(GtkButton *button, gpointer data) {
+  (void)button;
+  edit_form *f = data;
+  g_clear_pointer(&f->new_art, g_bytes_unref);
+  f->reset_art = TRUE;
+  gtk_widget_set_sensitive(f->art_auto, FALSE);
+  art_say(f, mc_str(MC_STR_EDIT_ART_AUTOMATIC_NOTE), FALSE);
 }
 
 static void on_art_change(GtkButton *button, gpointer data) {
@@ -991,11 +1055,15 @@ static void build_art(edit_form *f) {
   f->art_change = gtk_button_new_with_label(mc_str(MC_STR_EDIT_ART_CHANGE));
   gtk_widget_set_halign(f->art_change, GTK_ALIGN_START);
   g_signal_connect(f->art_change, "clicked", G_CALLBACK(on_art_change), f);
+  f->art_auto = gtk_button_new_with_label(mc_str(MC_STR_EDIT_ART_AUTOMATIC));
+  gtk_widget_set_halign(f->art_auto, GTK_ALIGN_START);
+  g_signal_connect(f->art_auto, "clicked", G_CALLBACK(on_art_auto), f);
   GtkWidget *side = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
   gtk_widget_set_valign(side, GTK_ALIGN_CENTER);
   gtk_widget_set_hexpand(side, TRUE);
   gtk_box_append(GTK_BOX(side), f->art_note);
   gtk_box_append(GTK_BOX(side), f->art_change);
+  gtk_box_append(GTK_BOX(side), f->art_auto);
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 18);
   gtk_box_append(GTK_BOX(box), cover);
   gtk_box_append(GTK_BOX(box), side);
@@ -1006,6 +1074,8 @@ static void build_art(edit_form *f) {
   if (f->loaded) load_art(f);
   gtk_widget_set_sensitive(f->art, f->art_ok);
   gtk_widget_set_sensitive(f->art_change, f->art_ok);
+  gtk_widget_set_visible(f->art_auto, f->saved_flags.art_chosen);
+  gtk_widget_set_sensitive(f->art_auto, f->art_ok);
   art_say(f, mc_str(f->art_ok || !f->loaded ? MC_STR_EDIT_ART_HELP : MC_STR_EDIT_ART_NO_FILES), FALSE);
 }
 

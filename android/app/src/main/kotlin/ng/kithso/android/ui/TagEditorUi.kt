@@ -134,6 +134,9 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
     /** A cover chosen for Save to keep, shown in place of the album's own. */
     var newArt by mutableStateOf<ArtRef?>(null)
 
+    /** Automatic cover was pressed, for Save to go back to it. */
+    var resetArt by mutableStateOf(false)
+
     /** A cover picked is being read and checked. */
     var reading by mutableStateOf(false)
 
@@ -153,6 +156,7 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
             newArt = File(restored[TagField.entries.size + 2]).takeIf(File::isFile)?.let {
                 ArtRef(target.uid, "", it.path, it.lastModified())
             }
+            resetArt = restored[TagField.entries.size + 3].toBoolean()
         }
     }
 
@@ -208,8 +212,9 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
                 this[TagField.Title], this[TagField.Artist], number(TagField.Year), number(TagField.OriginalYear),
                 this[TagField.Release],
             ),
-            flags = AlbumFlags(noScrobble, mix),
+            flags = was.flags.copy(noScrobble = noScrobble, mix = mix),
             newArt = newArt,
+            resetArt = resetArt,
         )
         is TagValues.Artist -> TagValues.Artist(ArtistTags(this[TagField.Name], this[TagField.SortName]))
         is TagValues.Track -> was.copy(
@@ -230,7 +235,7 @@ internal class TagForm(val target: TagTarget, private val restored: List<String>
 
     /** What a rotation keeps, for [restored]: a new cover by its file, which is what lasts. */
     fun kept(): List<String> =
-        TagField.entries.map { this[it] } + noScrobble.toString() + mix.toString() + newArt?.file.orEmpty()
+        TagField.entries.map { this[it] } + noScrobble.toString() + mix.toString() + newArt?.file.orEmpty() + resetArt.toString()
 
     companion object {
         /** Keeps what's in the form once it's been read in; what the library has is read again. */
@@ -388,15 +393,9 @@ private fun TagPage(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val focus = LocalFocusManager.current
-    val save: () -> Unit = save@{
-        val was = form.saved ?: return@save
-        val now = form.values() ?: return@save
-        if (form.saving) return@save
-        focus.clearFocus()
-        if (now == was) {
-            onSaved() // there's nothing to lose
-            return@save
-        }
+    var askMerge by remember { mutableStateOf<String?>(null) } // the other artist, while the question's up
+    val saveAs: (TagValues) -> Unit = saveAs@{ now ->
+        val was = form.saved ?: return@saveAs
         form.saving = true
         form.inUse = false
         form.failed = false
@@ -424,6 +423,44 @@ private fun TagPage(
                 form.inUse = result.status == CoreEdit.ERR_IN_USE && !result.artTried && playback.queueUids.isNotEmpty()
             }
         }
+    }
+    val save: () -> Unit = save@{
+        val was = form.saved ?: return@save
+        val now = form.values() ?: return@save
+        if (form.saving) return@save
+        focus.clearFocus()
+        if (now == was) {
+            onSaved() // there's nothing to lose
+            return@save
+        }
+        if (was is TagValues.Artist && now is TagValues.Artist && now.tags.name != was.tags.name) {
+            scope.launch {
+                val other = editor.artistSameName(form.target.uid, now.tags.name)
+                if (other != null) askMerge = other else saveAs(now)
+            }
+            return@save
+        }
+        saveAs(now)
+    }
+    askMerge?.let { other ->
+        val now = form.values() as? TagValues.Artist
+        AlertDialog(
+            onDismissRequest = { askMerge = null },
+            title = { Text(stringResource(R.string.edit_merge_title)) },
+            text = { Text(stringResource(R.string.edit_merge_text, now?.tags?.name.orEmpty())) },
+            confirmButton = {
+                TextButton(onClick = {
+                    askMerge = null
+                    now?.let { saveAs(it.copy(mergeWith = other)) }
+                }) { Text(stringResource(R.string.edit_merge)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    askMerge = null
+                    now?.let(saveAs)
+                }) { Text(stringResource(R.string.edit_merge_keep)) }
+            },
+        )
     }
     val title = when (form.target.kind) {
         TagTarget.Kind.Album -> R.string.edit_album_title
@@ -494,6 +531,7 @@ private fun AlbumFields(editor: TagEditor, form: TagForm, onDone: () -> Unit, on
     val note = when {
         (form.saved as? TagValues.Album)?.canSetArt == false -> R.string.edit_art_no_files
         form.newArt != null -> R.string.edit_art_new
+        form.resetArt -> R.string.edit_art_automatic_note
         else -> null
     }
     note?.let {
@@ -555,6 +593,7 @@ private fun AlbumCover(editor: TagEditor, form: TagForm) {
             form.reading = false
             if (art != null) {
                 form.newArt = art
+                form.resetArt = false
                 form.message = null
             } else {
                 form.failed = true
@@ -604,6 +643,19 @@ private fun AlbumCover(editor: TagEditor, form: TagForm) {
         }
         OutlinedButton(onClick = pick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.edit_art_change), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (album?.flags?.artChosen == true) {
+            OutlinedButton(
+                onClick = {
+                    form.newArt?.let(editor::dropCover)
+                    form.newArt = null
+                    form.resetArt = true
+                },
+                enabled = enabled && !form.resetArt,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.edit_art_automatic), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }

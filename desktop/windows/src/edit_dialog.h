@@ -32,7 +32,12 @@
  * and checked as it comes, off the UI thread, and shown at once; what's held is its bytes, as a
  * dropped file can be a temporary one. Save makes it the cover, last, as tags can move the
  * folder; Cancel forgets it. A file that won't do says so where Save's failures do. An album with
- * no file here has nowhere to put one, so Change… is greyed out.
+ * no file here has nowhere to put one, so Change… is greyed out. A cover the user chose has
+ * Automatic cover under Change…, for Save to go back to what an import would give it
+ * (mc_album_art_reset()).
+ *
+ * Saving an artist with a name another artist has asks whether to merge the two; No saves the
+ * name, and they're two artists of that name.
  *
  * Save calls only the _set() functions whose values changed, on a thread of its own as they
  * can rewrite files and wait on MusicBrainz, and the dialog stays open and says why if one

@@ -166,7 +166,7 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeSetTrackTags(JNIEnv
   jni_release(env, uid, cuid);
 }
 
-/* The album's flags: {no_scrobble, mix}. */
+/* The album's flags: {no_scrobble, mix, art_chosen}. */
 JNIEXPORT jintArray JNICALL Java_ng_kithso_core_EditNatives_nativeAlbumFlags(JNIEnv *env, jclass cls, jlong handle,
                                                                             jstring uid) {
   (void)cls;
@@ -180,8 +180,8 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_EditNatives_nativeAlbumFlags(JNI
     throw_status(env, st);
     return NULL;
   }
-  jint values[] = {flags.no_scrobble, flags.mix};
-  return jni_ints(env, values, 2);
+  jint values[] = {flags.no_scrobble, flags.mix, flags.art_chosen};
+  return jni_ints(env, values, 3);
 }
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeSetAlbumFlags(JNIEnv *env, jclass cls, jlong handle,
@@ -195,6 +195,50 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeSetAlbumFlags(JNIEn
   mc_status st = mc_album_flags_set(jni_lib_of(handle), cuid, &flags);
   jni_release(env, uid, cuid);
   if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeResetAlbumArt(JNIEnv *env, jclass cls, jlong handle,
+                                                                          jstring uid) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = jni_chars(env, uid, &ok);
+  if (!ok) return;
+  mc_status st = mc_album_art_reset(jni_lib_of(handle), cuid);
+  jni_release(env, uid, cuid);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+/* The other artist called name, or null. */
+JNIEXPORT jstring JNICALL Java_ng_kithso_core_EditNatives_nativeArtistSameName(JNIEnv *env, jclass cls, jlong handle,
+                                                                              jstring uid, jbyteArray name) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = jni_chars(env, uid, &ok);
+  char *cname = ok ? text_of(env, name) : NULL;
+  jstring out = NULL;
+  if (cname) {
+    char other[MC_UID_STRLEN];
+    mc_status st = mc_artist_same_name(jni_lib_of(handle), cuid, cname, other);
+    if (st == MC_OK) out = (*env)->NewStringUTF(env, other);
+    else if (st != MC_ERR_NOT_FOUND) throw_status(env, st);
+  }
+  free(cname);
+  jni_release(env, uid, cuid);
+  return out;
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_EditNatives_nativeMergeArtists(JNIEnv *env, jclass cls, jlong handle,
+                                                                         jstring uid, jstring other) {
+  (void)cls;
+  int ok = 1;
+  const char *cuid = jni_chars(env, uid, &ok);
+  const char *cother = ok ? jni_chars(env, other, &ok) : NULL;
+  if (ok) {
+    mc_status st = mc_artist_merge(jni_lib_of(handle), cuid, cother);
+    if (st != MC_OK) throw_status(env, st);
+  }
+  if (cother) jni_release(env, other, cother);
+  jni_release(env, uid, cuid);
 }
 
 /* A single's mix as {can_set, mix}. */

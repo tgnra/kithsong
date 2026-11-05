@@ -88,7 +88,7 @@ enum field {
 };
 
 /* Its other parts, and the search window's, numbered on from those. */
-enum { ID_ART_COVER = NUM_FIELDS, ID_ART_CHANGE, ID_SEARCH_MB, ID_NO_SCROBBLE, ID_MIX, ID_STOP_RETRY, ID_SAVE, ID_CANCEL, ID_CLOSE, ID_SEARCH, ID_LIST, ID_USE };
+enum { ID_ART_COVER = NUM_FIELDS, ID_ART_CHANGE, ID_ART_AUTO, ID_SEARCH_MB, ID_NO_SCROBBLE, ID_MIX, ID_STOP_RETRY, ID_SAVE, ID_CANCEL, ID_CLOSE, ID_SEARCH, ID_LIST, ID_USE };
 
 typedef enum { KIND_ALBUM, KIND_ARTIST, KIND_TRACK } edit_kind;
 
@@ -116,7 +116,8 @@ typedef struct job {
   wchar_t *art_path;
   unsigned char *art;
   size_t art_len;
-  BOOL set_art, art_tried, art_saved;
+  BOOL set_art, reset_art, art_tried, art_saved;
+  char merge_into[MC_UID_STRLEN]; /* the artist to merge with, rather than save the name; "" for none */
   /* Search. */
   char *artist, *title;
   mc_release_list *list;
@@ -1525,6 +1526,7 @@ static struct {
   BOOL art_ok;            /* the album has a folder here to put a cover in */
   unsigned char *new_art; /* the image that Save would use */
   size_t new_art_len;
+  BOOL reset_art;         /* Automatic cover was pressed, for Save to do */
   BOOL art_saved;
   BOOL dragging;          /* a file is over the window */
   BOOL in_use; /* Save found a file open while something plays: Stop Playing and Retry shows */
@@ -1644,6 +1646,7 @@ static void read_art_done(job *j) {
     free(g_form.new_art);
     g_form.new_art = j->art;
     g_form.new_art_len = j->art_len;
+    g_form.reset_art = FALSE;
     j->art = NULL;
     part_of(s, ID_ART_COVER)->label = MC_STR_EDIT_ART_NEW_NAME;
     set_message(s, mc_wstr(MC_STR_EDIT_ART_NEW), FALSE, FALSE);
@@ -1771,7 +1774,7 @@ static void run_save(job *j) {
       st = mc_album_tags_set(j->lib, j->uid, &t);
     } else if (j->kind == KIND_ARTIST) {
       mc_artist_tags t = {f[F_NAME], f[F_SORT_NAME]};
-      st = mc_artist_tags_set(j->lib, j->uid, &t);
+      st = j->merge_into[0] ? mc_artist_merge(j->lib, j->uid, j->merge_into) : mc_artist_tags_set(j->lib, j->uid, &t);
     } else {
       mc_track_tags t = {f[F_TITLE], f[F_ARTIST], atoi(f[F_TRACK_NO]), atoi(f[F_DISC_NO]), atoi(f[F_YEAR]), f[F_GENRE]};
       st = mc_track_tags_set(j->lib, j->uid, &t);
@@ -1785,7 +1788,7 @@ static void run_save(job *j) {
   }
   if (st == MC_OK && j->set_art) {
     j->art_tried = TRUE;
-    st = mc_album_art_set(j->lib, j->uid, j->art, j->art_len);
+    st = j->reset_art ? mc_album_art_reset(j->lib, j->uid) : mc_album_art_set(j->lib, j->uid, j->art, j->art_len);
     j->art_saved = st == MC_OK;
   }
   j->st = st;
@@ -1805,6 +1808,7 @@ static void form_update(void) {
   if ((p = part_of(s, ID_NO_SCROBBLE))) p->disabled = off;
   if ((p = part_of(s, ID_MIX))) p->disabled = off;
   if ((p = part_of(s, ID_ART_CHANGE))) p->disabled = off || !g_form.art_ok;
+  if ((p = part_of(s, ID_ART_AUTO))) p->disabled = off || !g_form.art_ok || g_form.reset_art;
   if ((p = part_of(s, ID_ART_COVER))) p->disabled = off || !g_form.art_ok;
   set_fields_locked(s, off);
   InvalidateRect(s->wnd, NULL, FALSE);
@@ -1823,6 +1827,7 @@ static void save_done(job *j) {
   if (j->art_saved) {
     free(g_form.new_art);
     g_form.new_art = NULL;
+    g_form.reset_art = FALSE;
     g_form.art_saved = TRUE;
   }
   g_form.changed |= j->tags_saved || j->flags_saved || j->art_saved;
@@ -1874,6 +1879,20 @@ static void save(void) {
   } else if (g_form.track_mix) {
     j->flags.mix = part_of(s, ID_MIX)->checked;
     j->set_flags = !j->flags.mix != !g_form.saved_flags.mix;
+  } else if (g_form.kind == KIND_ARTIST && strcmp(j->text[F_NAME], g_form.saved[F_NAME]) &&
+             mc_artist_same_name(g_form.lib, g_form.uid, j->text[F_NAME], j->merge_into) == MC_OK) {
+    wchar_t text[512];
+    mc_wformat(text, 512, mc_str(MC_STR_EDIT_MERGE_TEXT), MC_S(j->text[F_NAME]));
+    int answer = MessageBoxW(s->wnd, text, mc_wstr(MC_STR_EDIT_MERGE_TITLE), MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (answer == IDCANCEL) {
+      job_free(j);
+      return;
+    }
+    if (answer == IDNO) j->merge_into[0] = '\0';
+  }
+  if (g_form.reset_art) {
+    j->reset_art = TRUE;
+    j->set_art = TRUE;
   }
   if (g_form.new_art) {
     if (!(j->art = malloc(g_form.new_art_len))) {
@@ -1945,6 +1964,13 @@ static void form_activate(part *p) {
     case ID_SEARCH_MB: search_mb(); break;
     case ID_ART_COVER:
     case ID_ART_CHANGE: pick_art(); break;
+    case ID_ART_AUTO:
+      free(g_form.new_art);
+      g_form.new_art = NULL;
+      g_form.reset_art = TRUE;
+      set_message(s, mc_wstr(MC_STR_EDIT_ART_AUTOMATIC_NOTE), FALSE, FALSE);
+      form_update();
+      break;
     case ID_NO_SCROBBLE:
     case ID_MIX:
       p->checked = !p->checked;
@@ -1987,6 +2013,11 @@ static void form_layout(void) {
     y = layout_field(s, part_of(s, F_ORIGINAL_YEAR), side + half + gap, y, rest - half - gap);
     SetRect(&part_of(s, ID_ART_COVER)->rc, x, art_top, x + art, art_top + art);
     SetRect(&part_of(s, ID_ART_CHANGE)->rc, x, y - scale(s, BUTTON_H), x + art, y);
+    part *automatic = part_of(s, ID_ART_AUTO);
+    if (automatic) {
+      y += scale(s, BUTTON_GAP) + scale(s, BUTTON_H);
+      SetRect(&automatic->rc, x, y - scale(s, BUTTON_H), x + art, y);
+    }
     y += row;
     part *search = part_of(s, ID_SEARCH_MB);
     int button = button_width(s, search);
@@ -2121,6 +2152,8 @@ static void build_form(void) {
     add_part(s, PART_COVER, ID_ART_COVER, g_form.art ? MC_STR_EDIT_ART_COVER : MC_STR_EDIT_ART_NONE_NAME,
              L"AlbumCover")->note = MC_STR_EDIT_ART_HELP;
     add_part(s, PART_BUTTON, ID_ART_CHANGE, MC_STR_EDIT_ART_CHANGE, L"ChangeCover");
+    if (g_form.saved_flags.art_chosen)
+      add_part(s, PART_BUTTON, ID_ART_AUTO, MC_STR_EDIT_ART_AUTOMATIC, L"AutomaticCover");
     add_field(F_MB, MC_STR_EDIT_MB_RELEASE, ES_READONLY, 0, MC_STR_EDIT_MB_NONE);
     add_part(s, PART_BUTTON, ID_SEARCH_MB, MC_STR_EDIT_MB_SEARCH, L"SearchMusicBrainz");
     add_check(ID_NO_SCROBBLE, MC_STR_EDIT_NO_SCROBBLE, MC_STR_EDIT_NO_SCROBBLE_TEXT, L"NoScrobble",
