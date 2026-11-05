@@ -12,6 +12,7 @@
 #include <string.h>
 #include <uiautomation.h>
 #include <wchar.h>
+#include <wctype.h>
 #include <windowsx.h>
 
 #include "album_grid.h"
@@ -28,7 +29,8 @@
 #include "uia.h"
 #include "wstr.h"
 
-#define WM_JOB_DONE (WM_APP + 1) /* lParam: the sheet's job, finished */
+#define WM_JOB_DONE (WM_APP + 1)     /* lParam: the sheet's job, finished */
+#define WM_JOB_PROGRESS (WM_APP + 2) /* lParam: the job, further on; it may be over by now */
 
 /* Layout at 96 DPI. */
 enum {
@@ -88,7 +90,7 @@ enum field {
 };
 
 /* Its other parts, and the search window's, numbered on from those. */
-enum { ID_ART_COVER = NUM_FIELDS, ID_ART_CHANGE, ID_ART_AUTO, ID_SEARCH_MB, ID_NO_SCROBBLE, ID_MIX, ID_STOP_RETRY, ID_SAVE, ID_CANCEL, ID_CLOSE, ID_SEARCH, ID_LIST, ID_USE };
+enum { ID_ART_COVER = NUM_FIELDS, ID_ART_CHANGE, ID_ART_AUTO, ID_SEARCH_MB, ID_UNLINK_MB, ID_NO_SCROBBLE, ID_MIX, ID_SAVE, ID_CANCEL, ID_CLOSE, ID_SEARCH, ID_LIST, ID_USE };
 
 typedef enum { KIND_ALBUM, KIND_ARTIST, KIND_TRACK } edit_kind;
 
@@ -118,6 +120,8 @@ typedef struct job {
   size_t art_len;
   BOOL set_art, reset_art, art_tried, art_saved;
   char merge_into[MC_UID_STRLEN]; /* the artist to merge with, rather than save the name; "" for none */
+  volatile LONG cancel;           /* Cancel was pressed */
+  volatile LONG files_done, files; /* how far it is (mc_edit_watch) */
   /* Search. */
   char *artist, *title;
   mc_release_list *list;
@@ -202,6 +206,7 @@ typedef struct sheet_ops {
   void (*cancel)(void);       /* Escape, the close button, Alt+F4 */
   void (*paint)(canvas *c);   /* what only this window has; may be NULL */
   void (*drop)(const wchar_t *path); /* a file dropped on it; may be NULL */
+  void (*progress)(void);     /* its job has got further; may be NULL */
 } sheet_ops;
 
 struct sheet {
@@ -215,6 +220,7 @@ struct sheet {
   enum mc_str_id title;
   int hot, pressed, focus;
   BOOL show_focus; /* the keyboard has been used, so the focus ring shows */
+  BOOL show_keys;  /* Alt has been pressed, or Windows always shows them: access keys are underlined */
   BOOL tracking;   /* TrackMouseEvent is on */
   BOOL done;
   int w, h, line_h;
@@ -425,6 +431,13 @@ static void set_message(sheet *s, const wchar_t *text, BOOL error, BOOL spin) {
   if (text) uia_announce(&s->ui, 1);
 }
 
+/* What a running job says as it goes, which unlike set_message() isn't news to announce. */
+static void update_message(sheet *s, const wchar_t *text) {
+  wcsncpy(s->message, text, sizeof s->message / sizeof s->message[0] - 1);
+  InvalidateRect(s->wnd, NULL, FALSE);
+  uia_refresh(&s->ui);
+}
+
 /* Greys out the text boxes, or brings them back, as Save or a search runs. */
 static void set_fields_locked(sheet *s, BOOL locked) {
   for (int i = 0; i < s->nparts; i++) {
@@ -456,6 +469,11 @@ static COLORREF ink(void) {
   return theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0);
 }
 
+/* Part p's label in r, its access key underlined once those show. */
+static void paint_label(const sheet *s, canvas *c, const part *p, const RECT *r, UINT format, COLORREF color) {
+  canvas_text(c, mc_wstr_mnemonic(p->label), -1, r, format | (s->show_keys ? 0 : DT_HIDEPREFIX), s->font, color);
+}
+
 static COLORREF error_ink(void) {
   if (theme.high_contrast) return theme.text;
   return theme.dark ? RGB(255, 153, 164) : RGB(196, 43, 28); /* Windows 11's critical text */
@@ -478,8 +496,7 @@ static void paint_card(canvas *c, const RECT *r, int radius) {
  * it while it has the focus, as Windows 11's text boxes do. */
 static void paint_field(const sheet *s, canvas *c, int i) {
   const part *p = &s->parts[i];
-  canvas_text(c, mc_wstr(p->label), -1, &p->label_rc, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX, s->font,
-              theme.text);
+  paint_label(s, c, p, &p->label_rc, DT_SINGLELINE | DT_END_ELLIPSIS, theme.text);
   int radius = scale(s, RADIUS);
   BOOL focused = GetFocus() == p->edit;
   canvas_fill(c, &p->rc, radius, theme.field, 255);
@@ -514,7 +531,7 @@ static void paint_button(const sheet *s, canvas *c, int i) {
     if (p->disabled) fg = theme.text3;
     canvas_frame(c, &p->rc, radius, 1, theme.high_contrast ? (p->disabled ? theme.text3 : theme.text) : theme.line, 255);
   }
-  canvas_text(c, mc_wstr(p->label), -1, &p->rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, s->font, fg);
+  paint_label(s, c, p, &p->rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE, fg);
 }
 
 /* A checkbox, as Windows 11 draws one, with its name and the line under it. */
@@ -533,7 +550,7 @@ static void paint_check(const sheet *s, canvas *c, int i) {
   } else {
     canvas_frame(c, &box, radius, 1, p->disabled ? theme.text3 : theme.text2, 255);
   }
-  canvas_text(c, mc_wstr(p->label), -1, &p->label_rc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX, s->font, fg);
+  paint_label(s, c, p, &p->label_rc, DT_SINGLELINE | DT_VCENTER, fg);
   canvas_text(c, mc_wstr(p->note), -1, &p->note_rc, k_para, s->font, p->disabled ? theme.text3 : theme.text2);
 }
 
@@ -724,6 +741,7 @@ static struct {
   canvas rows;
   int rows_w, rows_h;
   BOOL searched; /* a search has come back, with results or not */
+  BOOL opening;  /* the search the window opened with is running, and nothing's been touched */
   mc_album_tags out; /* the release used */
   BOOL picked;
 } g_search;
@@ -913,11 +931,45 @@ static void on_click(sheet *s, int i) {
   if (!p->disabled) s->ops->activate(p);
 }
 
+/* The letter after the & in p's label, in upper case, or 0 for none. */
+static wchar_t access_key(const part *p) {
+  for (const wchar_t *t = mc_wstr_mnemonic(p->label); *t; t++) {
+    if (*t != L'&') continue;
+    if (t[1] != L'&') return (wchar_t)towupper(t[1]);
+    t++;
+  }
+  return 0;
+}
+
+/* Alt+letter: into the field, or presses the button or check. The close button's and the
+ * list's labels aren't drawn, so they have none. */
+static void on_access_key(sheet *s, wchar_t letter) {
+  letter = (wchar_t)towupper(letter);
+  for (int i = 0; i < s->nparts; i++) {
+    part *p = &s->parts[i];
+    if (p->kind == PART_CLOSE || p->kind == PART_LIST || p->kind == PART_COVER) continue;
+    if (p->disabled || access_key(p) != letter) continue;
+    s->show_focus = TRUE;
+    focus_part(s, i);
+    if (!p->edit) on_click(s, i);
+    return;
+  }
+}
+
 /* The keys a text box leaves to the sheet, seen before they reach it. TRUE if they're used. */
 static BOOL sheet_key(sheet *s, const MSG *m) {
   if (m->hwnd != s->wnd && !IsChild(s->wnd, m->hwnd)) return FALSE;
   if (m->message == WM_SYSKEYDOWN && m->wParam == VK_F4) { /* there's no system menu to do it */
     s->ops->cancel();
+    return TRUE;
+  }
+  if (m->message == WM_SYSKEYDOWN && m->wParam == VK_MENU && !s->show_keys) {
+    s->show_keys = TRUE;
+    InvalidateRect(s->wnd, NULL, FALSE);
+    return FALSE;
+  }
+  if (m->message == WM_SYSCHAR) { /* no menu to go to, so left alone it would only beep */
+    on_access_key(s, (wchar_t)m->wParam);
     return TRUE;
   }
   if (m->message != WM_KEYDOWN) return FALSE;
@@ -998,7 +1050,10 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       SetBkColor((HDC)wp, theme.field);
       return (LRESULT)theme.field_brush;
     case WM_COMMAND:
-      if (HIWORD(wp) == EN_CHANGE && list) search_update(); /* no title, no Search */
+      if (HIWORD(wp) == EN_CHANGE && list) {
+        g_search.opening = FALSE;
+        search_update(); /* no title, no Search */
+      }
       if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) {
         if (HIWORD(wp) == EN_SETFOCUS)
           for (int i = 0; i < s->nparts; i++)
@@ -1105,6 +1160,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       return 0;
     }
+    case WM_JOB_PROGRESS:
+      if ((job *)lp == s->job && s->ops->progress) s->ops->progress();
+      return 0;
     case WM_DPICHANGED: {
       s->dpi = HIWORD(wp);
       update_fonts(s);
@@ -1146,6 +1204,7 @@ static BOOL sheet_create(sheet *s, HWND owner, enum mc_str_id title, const sheet
   s->owner = owner;
   s->title = title;
   s->hot = s->pressed = s->focus = -1;
+  SystemParametersInfoW(SPI_GETKEYBOARDCUES, 0, &s->show_keys, 0);
   WNDCLASSEXW wc = {
     .cbSize = sizeof wc,
     .style = CS_DBLCLKS,
@@ -1284,8 +1343,11 @@ static void search_done(job *j) {
   else if (!result_count()) wcscpy(text, mc_wstr(MC_STR_EDIT_SEARCH_NOTHING));
   set_message(s, text[0] ? text : NULL, j->st != MC_OK, FALSE);
   search_update();
-  /* The Search button was pressed and is back: from it, on to what it found. */
-  if (result_count() && s->focus >= 0 && s->parts[s->focus].id == ID_SEARCH)
+  /* The Search button was pressed and is back, or the window opened with this search and
+   * has been left alone: on to what it found. */
+  BOOL left_alone = g_search.opening && s->focus == 0;
+  g_search.opening = FALSE;
+  if (result_count() && (left_alone || (s->focus >= 0 && s->parts[s->focus].id == ID_SEARCH)))
     focus_part(s, (int)(part_of(s, ID_LIST) - s->parts));
 }
 
@@ -1497,6 +1559,7 @@ static BOOL search_dialog(HWND owner, mc_library *lib, const char *uid, const ch
   search_layout();
   search_update();
   search_start();
+  g_search.opening = s->job != NULL;
   sheet_run(s);
 
   BOOL picked = g_search.picked;
@@ -1529,7 +1592,6 @@ static struct {
   BOOL reset_art;         /* Automatic cover was pressed, for Save to do */
   BOOL art_saved;
   BOOL dragging;          /* a file is over the window */
-  BOOL in_use; /* Save found a file open while something plays: Stop Playing and Retry shows */
   BOOL loaded; /* the tags were read, so there's something to save */
   BOOL track_mix; /* a track alone on its album, or on none: the form has Continuous mix */
   BOOL changed;
@@ -1765,11 +1827,26 @@ static HRESULT STDMETHODCALLTYPE drop_drop(IDropTarget *t, IDataObject *data, DW
 static IDropTargetVtbl k_drop_vtbl = {drop_query, drop_ref, drop_ref, drop_enter, drop_over, drop_leave, drop_drop};
 static IDropTarget k_drop_target = {&k_drop_vtbl};
 
+/* mc_edit_watch's, on the save's thread. */
+static void save_progress(void *user, int done, int total) {
+  job *j = user;
+  j->files_done = done;
+  j->files = total;
+  PostMessageW(j->notify, WM_JOB_PROGRESS, 0, (LPARAM)j);
+}
+
+static int save_cancelled(void *user) {
+  job *j = user;
+  return j->cancel || j->state == JOB_ABANDONED;
+}
+
 /* On the save's thread: the tags, then the flags, each if it changed, then a new cover, which
  * goes last as tags can move the album's folder. */
 static void run_save(job *j) {
   char **f = j->text;
   mc_status st = MC_OK;
+  mc_edit_watch watch = {save_progress, save_cancelled, j};
+  mc_edit_set_watch(j->lib, &watch);
   if (j->set_tags) {
     if (j->kind == KIND_ALBUM) {
       mc_album_tags t = {f[F_TITLE], f[F_ARTIST], atoi(f[F_YEAR]), atoi(f[F_ORIGINAL_YEAR]), f[F_MB]};
@@ -1793,6 +1870,7 @@ static void run_save(job *j) {
     st = j->reset_art ? mc_album_art_reset(j->lib, j->uid) : mc_album_art_set(j->lib, j->uid, j->art, j->art_len);
     j->art_saved = st == MC_OK;
   }
+  mc_edit_set_watch(j->lib, NULL);
   j->st = st;
 }
 
@@ -1802,11 +1880,11 @@ static void form_update(void) {
   sheet *s = &g_form.s;
   BOOL busy = s->job != NULL, off = busy || !g_form.loaded;
   part_of(s, ID_SAVE)->disabled = off;
-  part_of(s, ID_STOP_RETRY)->disabled = off || !g_form.in_use;
-  part_of(s, ID_CANCEL)->disabled = busy;
-  part_of(s, ID_CLOSE)->disabled = busy;
+  /* A save can be stopped, but only the once. */
+  part_of(s, ID_CANCEL)->disabled = part_of(s, ID_CLOSE)->disabled = busy && s->job->cancel;
   part *p = part_of(s, ID_SEARCH_MB);
   if (p) p->disabled = off;
+  if ((p = part_of(s, ID_UNLINK_MB))) p->disabled = off || !GetWindowTextLengthW(part_of(s, F_MB)->edit);
   if ((p = part_of(s, ID_NO_SCROBBLE))) p->disabled = off;
   if ((p = part_of(s, ID_MIX))) p->disabled = off;
   if ((p = part_of(s, ID_ART_CHANGE))) p->disabled = off || !g_form.art_ok;
@@ -1839,12 +1917,20 @@ static void save_done(job *j) {
   }
   wchar_t text[512];
   if (j->st == MC_ERR_NOT_FOUND) wcscpy(text, mc_wstr(MC_STR_EDIT_GONE));
+  else if (j->st == MC_ERR_IN_USE) wcscpy(text, mc_wstr(MC_STR_EDIT_IN_USE));
+  else if (j->st == MC_ERR_CANCELLED) wcscpy(text, mc_wstr(MC_STR_EDIT_SAVE_STOPPED));
   else mc_wformat(text, 512, mc_str(MC_STR_EDIT_SAVE_FAILED), MC_S(mc_status_str(j->st)));
-  set_message(s, text, TRUE, FALSE);
-  /* Nothing changed, and it's most likely the track playing; a cover isn't played. */
-  g_form.in_use = j->st == MC_ERR_IN_USE && !j->art_tried && playback_queue_count() > 0;
-  form_layout();
+  set_message(s, text, j->st != MC_ERR_CANCELLED, FALSE);
   form_update();
+}
+
+/* How far the save has got: files copied, which is what takes the time. */
+static void save_progress_shown(void) {
+  sheet *s = &g_form.s;
+  if (s->job->cancel || s->job->files <= 0) return; /* Stopping... says more */
+  wchar_t text[256];
+  mc_wformat(text, 256, mc_str(MC_STR_EDIT_SAVING_FILES), MC_D(s->job->files_done), MC_D(s->job->files));
+  update_message(s, text);
 }
 
 /* Save: nothing to do closes the dialog, as there's nothing to lose. */
@@ -1916,8 +2002,6 @@ static void save(void) {
   }
   s->job = j;
   set_message(s, mc_wstr(MC_STR_EDIT_SAVING), FALSE, TRUE);
-  g_form.in_use = FALSE;
-  form_layout();
   form_update();
 }
 
@@ -1944,26 +2028,41 @@ static void search_mb(void) {
     free(original);
     mc_album_tags_clear(&t);
     set_message(s, NULL, FALSE, FALSE);
+    form_update();
   }
   focus_part(s, (int)(part_of(s, picked ? ID_SAVE : ID_SEARCH_MB) - s->parts));
 }
 
+/* While a save runs it's asked to stop. It may still finish: once the files are copied it's
+ * only renames, and those aren't stopped. */
 static void form_cancel(void) {
-  if (!g_form.s.job) g_form.s.done = TRUE; /* a save can't be taken back halfway */
+  sheet *s = &g_form.s;
+  if (!s->job) {
+    s->done = TRUE;
+  } else if (!s->job->cancel) {
+    s->job->cancel = TRUE;
+    set_message(s, mc_wstr(MC_STR_EDIT_STOPPING), FALSE, TRUE);
+    form_update();
+  }
+}
+
+/* Unlink: the field empties, for Save to keep. */
+static void unlink_mb(void) {
+  sheet *s = &g_form.s;
+  set_field_text(part_of(s, F_MB), "");
+  set_message(s, mc_wstr(MC_STR_EDIT_MB_UNLINK_NOTE), FALSE, FALSE);
+  form_update();
+  focus_part(s, (int)(part_of(s, ID_SEARCH_MB) - s->parts));
 }
 
 static void form_activate(part *p) {
   sheet *s = &g_form.s;
   switch (p->id) {
     case ID_SAVE: save(); break;
-    case ID_STOP_RETRY: /* lets go of the file now, so the save can have it */
-      focus_part(s, (int)(part_of(s, ID_SAVE) - s->parts));
-      playback_clear();
-      save();
-      break;
     case ID_CANCEL:
     case ID_CLOSE: form_cancel(); break;
     case ID_SEARCH_MB: search_mb(); break;
+    case ID_UNLINK_MB: unlink_mb(); break;
     case ID_ART_COVER:
     case ID_ART_CHANGE: pick_art(); break;
     case ID_ART_AUTO:
@@ -2021,10 +2120,11 @@ static void form_layout(void) {
       SetRect(&automatic->rc, x, y - scale(s, BUTTON_H), x + art, y);
     }
     y += row;
-    part *search = part_of(s, ID_SEARCH_MB);
-    int button = button_width(s, search);
-    int under = layout_field(s, part_of(s, F_MB), x, y, col - button - scale(s, BUTTON_GAP));
-    SetRect(&search->rc, x + col - button, under - scale(s, BUTTON_H), x + col, under);
+    part *search = part_of(s, ID_SEARCH_MB), *unlink = part_of(s, ID_UNLINK_MB);
+    int button = button_width(s, search), unlink_w = button_width(s, unlink), button_gap = scale(s, BUTTON_GAP);
+    int under = layout_field(s, part_of(s, F_MB), x, y, col - button - unlink_w - 2 * button_gap);
+    SetRect(&unlink->rc, x + col - unlink_w, under - scale(s, BUTTON_H), x + col, under);
+    SetRect(&search->rc, unlink->rc.left - button_gap - button, unlink->rc.top, unlink->rc.left - button_gap, under);
     y = under + row + scale(s, 6);
     int top = y;
     y = layout_checks(s, x, y, col);
@@ -2049,9 +2149,8 @@ static void form_layout(void) {
   y += row;
   SetRect(&s->message_rc, x, y, x + col, y + MESSAGE_LINES * s->line_h);
   y = s->message_rc.bottom + row;
-  static const int ids[] = {ID_STOP_RETRY, ID_SAVE, ID_CANCEL};
-  SetRectEmpty(&part_of(s, ID_STOP_RETRY)->rc);
-  layout_buttons(s, y, g_form.in_use ? ids : ids + 1, g_form.in_use ? 3 : 2);
+  static const int ids[] = {ID_SAVE, ID_CANCEL};
+  layout_buttons(s, y, ids, 2);
   s->h = y + scale(s, BUTTON_H) + scale(s, BOTTOM);
 }
 
@@ -2102,6 +2201,7 @@ static const sheet_ops k_form_ops = {
   .cancel = form_cancel,
   .paint = form_paint,
   .drop = take_art,
+  .progress = save_progress_shown,
 };
 
 static BOOL form_ui_node(int i, uia_node *n) {
@@ -2158,6 +2258,7 @@ static void build_form(void) {
       add_part(s, PART_BUTTON, ID_ART_AUTO, MC_STR_EDIT_ART_AUTOMATIC, L"AutomaticCover");
     add_field(F_MB, MC_STR_EDIT_MB_RELEASE, ES_READONLY, 0, MC_STR_EDIT_MB_NONE);
     add_part(s, PART_BUTTON, ID_SEARCH_MB, MC_STR_EDIT_MB_SEARCH, L"SearchMusicBrainz");
+    add_part(s, PART_BUTTON, ID_UNLINK_MB, MC_STR_EDIT_MB_UNLINK, L"UnlinkMusicBrainz");
     add_check(ID_NO_SCROBBLE, MC_STR_EDIT_NO_SCROBBLE, MC_STR_EDIT_NO_SCROBBLE_TEXT, L"NoScrobble",
               g_form.saved_flags.no_scrobble);
     add_check(ID_MIX, MC_STR_EDIT_MIX, MC_STR_EDIT_MIX_TEXT, L"ContinuousMix", g_form.saved_flags.mix);
@@ -2175,7 +2276,6 @@ static void build_form(void) {
       add_check(ID_MIX, MC_STR_EDIT_MIX, MC_STR_EDIT_MIX_TRACK_TEXT, L"ContinuousMix",
                 g_form.saved_flags.mix);
   }
-  add_part(s, PART_BUTTON, ID_STOP_RETRY, MC_STR_EDIT_STOP_RETRY, L"StopAndRetry");
   add_part(s, PART_ACCENT, ID_SAVE, MC_STR_SAVE, L"Save");
   add_part(s, PART_BUTTON, ID_CANCEL, MC_STR_CANCEL, L"Cancel");
   add_part(s, PART_CLOSE, ID_CLOSE, MC_STR_CLOSE, L"Close");

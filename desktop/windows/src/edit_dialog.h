@@ -19,12 +19,15 @@
  *                             [ Save ] [ Cancel ]
  *
  * An artist has a name and sort name; a track a title, artist, track number, disc number, year
- * and genre, and if it's a single, Continuous mix too (mc_track_mix_set()). Enter saves, Escape cancels, Tab and Shift+Tab go round, Space presses what has
- * the focus.
+ * and genre, and if it's a single, Continuous mix too (mc_track_mix_set()). Enter saves, Escape
+ * cancels, Tab and Shift+Tab go round, Space presses what has the focus, and Alt with a label's
+ * letter goes to that field or presses that button; the letters are underlined from when Alt is
+ * first pressed, or always if Windows is set to.
  *
  * Search MusicBrainz… opens another such window over this one: artist and title boxes, filled
- * in from the form, and the releases found. Using one fills in the form, MusicBrainz release
- * included; nothing changes until Save.
+ * in from the form, and the releases found, with the focus going to those if it's been left
+ * alone. Using one fills in the form, MusicBrainz release included; nothing changes until Save.
+ * Unlink empties the release, and Save takes away the link (mc_album_tags_set() with "").
  *
  * Change… (or a click on the cover) picks a new cover, and a file dropped anywhere on the window
  * is one too. While a file is over the window a ring runs round it and the cover says what a drop
@@ -41,9 +44,10 @@
  *
  * Save calls only the _set() functions whose values changed, on a thread of its own as they
  * can rewrite files and wait on MusicBrainz, and the dialog stays open and says why if one
- * fails. It can't be cancelled once it's started, so Cancel is greyed out meanwhile. A file in
- * use changes nothing and is most likely the track playing, so while something plays a Stop
- * Playing and Retry button joins Save, which empties the queue and saves again.
+ * fails. It says how many files it has copied as it goes (mc_edit_set_watch()), and Cancel stops
+ * it with the file being copied, the dialog staying open; once they're copied an edit can only
+ * finish. A file in use changes nothing, and it's another program's or sync's: the player
+ * doesn't hold its files, so there's nothing here to let go of it.
  *
  * Text boxes are EDIT controls, which draw with GDI and leave every pixel's alpha at 0: over
  * Mica their background would show the backdrop and their text would vanish. So each is a

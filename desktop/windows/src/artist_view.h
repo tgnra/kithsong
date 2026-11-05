@@ -60,8 +60,9 @@
 #define ARN_BACK 2
 #define ARN_OPEN_ALBUM 3
 /* Posted after the right-click menu's Remove from This PC... or Sync to This PC (on a row, or
- * anywhere on an artist's page) changed what's here (remove_here.h), or its Edit... changed the
- * artist or the album under the pointer (edit_dialog.h): reload everything. */
+ * anywhere on an artist's page) changed what's here (remove_here.h), its Edit... changed the
+ * artist (edit_dialog.h), or an album's menu or a drop onto a group did something: reload
+ * everything. */
 #define ARN_LIBRARY_CHANGED 4
 /* A single was clicked (or Enter on it): play the singles from it (artist_view_play_index()
  * says which, artist_view_single_at() has them). */
