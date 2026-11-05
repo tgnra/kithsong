@@ -656,7 +656,7 @@ way, without logging anything.
   own copy of each rewrite, and a rewrite stamped later than a concurrent edit (moving a
   track to another album, say) would override it.
 - **Local state.** `library.db` keeps `aliases` (each merged-away uid and its canonical uid)
-  and `merge_keys` (the ids ever logged per uid); neither is logged. `meta.merge_seq` is the
+  and `merge_keys` (the ids and names ever logged per uid); neither is logged. `meta.merge_seq` is the
   changelog `seq` read so far, and each applied batch reads on from there, so rows written
   locally are taken into account at the next batch too.
 - **Imports.** An import looks albums up by `mb_albumid` first and artists by

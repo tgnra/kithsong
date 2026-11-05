@@ -1343,7 +1343,7 @@ mc_status mc_delete_bin_take(mc_library *lib, int64_t id, mc_bin_taken *out) {
   /* The seqs taken out may be given out again: duplicate merging reads on from before them,
    * and search learns the changelog went back from the epoch. */
   if (st == MC_OK)
-    st = run_int(db, "UPDATE meta SET value = min(CAST(value AS INTEGER), ?1) WHERE key = 'merge_seq'",
+    st = run_int(db, "UPDATE meta SET value = min(CAST(value AS INTEGER), ?1) WHERE key IN ('merge_seq', 'merge_name_seq')",
                  first - 1, 0);
   if (st == MC_OK)
     st = run_int(db, "INSERT OR REPLACE INTO meta (key, value) VALUES ('changelog_epoch',"

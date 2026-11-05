@@ -761,7 +761,7 @@ mc_status mc_library_reset_for_merge(mc_library *lib, const char *const *meta, i
     "DELETE FROM recents", "DELETE FROM smart_lists",
     "DELETE FROM playlists", "DELETE FROM album_groups", "DELETE FROM tracks",
     "DELETE FROM albums", "DELETE FROM artists", "DELETE FROM aliases",
-    "DELETE FROM merge_keys", "DELETE FROM changelog", "DELETE FROM meta WHERE key = 'merge_seq'",
+    "DELETE FROM merge_keys", "DELETE FROM changelog", "DELETE FROM meta WHERE key IN ('merge_seq', 'merge_name_seq')",
     "DELETE FROM recycle_bin", /* its deletes were the old changelog's */
   };
   for (size_t i = 0; i < sizeof k_clear / sizeof k_clear[0] && st == MC_OK; i++)
