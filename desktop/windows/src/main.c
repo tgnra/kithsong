@@ -821,10 +821,10 @@ static void create_controls(void) {
   set_button_label(g_app.buttons[ID_NEXT - ID_PREV], MC_STR_NEXT_TRACK, MC_STR_WINDOWS_SHORTCUT_NEXT);
   set_button_label(g_app.buttons[ID_PLAY - ID_PREV], MC_STR_PLAY, MC_STR_WINDOWS_SHORTCUT_PLAY_PAUSE);
   set_button_label(g_app.shuffle, MC_STR_SHUFFLE_OFF, MC_STR_WINDOWS_SHORTCUT_SHUFFLE);
-  g_app.queue = child(WC_BUTTONW, mc_wstr(MC_STR_WINDOWS_QUEUE), BS_OWNERDRAW, ID_QUEUE);
+  g_app.queue = child(WC_BUTTONW, mc_wstr(MC_STR_QUEUE), BS_OWNERDRAW, ID_QUEUE);
   SetWindowSubclass(g_app.queue, button_proc, 0, 0);
   ti.uId = (UINT_PTR)g_app.queue;
-  ti.lpszText = (wchar_t *)mc_wstr(MC_STR_WINDOWS_QUEUE);
+  ti.lpszText = (wchar_t *)mc_wstr(MC_STR_QUEUE);
   SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   /* Its name and tooltip stay "Volume"; the drop-down says the level. */
   g_app.volume = child(WC_BUTTONW, mc_wstr(MC_STR_VOLUME), BS_OWNERDRAW, ID_VOLUME);

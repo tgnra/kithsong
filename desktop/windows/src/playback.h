@@ -97,22 +97,12 @@ BOOL playback_muted(void);
 
 BOOL playback_is_playing(void);
 
-/* What can be added to the queue, which is the core's up next (mc_player_play_next()). Not
- * stations: nothing of radio goes in it. */
-typedef enum playback_what {
-  PLAYBACK_TRACK,
-  PLAYBACK_ALBUM,
-  PLAYBACK_ARTIST,
-  PLAYBACK_PLAYLIST,
-  PLAYBACK_SMART_PLAYLIST,
-  PLAYBACK_GROUP,
-  PLAYBACK_SMART_GROUP,
-} playback_what;
 
-/* Adds it to the front of the queue (Play Next) or the end (Play Last), and the now-playing strip
- * says so, or that it has nothing with a file on this device. Nothing starts playing. Anything but
- * a track goes in as one block, named name, unless playback_set_queue_tracks() says otherwise. */
-void playback_add(playback_what what, const char *uid, const wchar_t *name, BOOL next);
+/* Adds it to the front of the queue, the core's up next (Play Next), or the end (Play Last), and
+ * the now-playing strip says so, or that it has nothing with a file on this device. Nothing starts
+ * playing. Anything but a track goes in as one block, named name, unless
+ * playback_set_queue_tracks() says otherwise. */
+void playback_add(mc_up_next_kind what, const char *uid, const wchar_t *name, BOOL next);
 /* Whether things go in the queue as a track each (mc_settings_queue_tracks()). Off to begin
  * with; settings_view.c keeps it. */
 void playback_set_queue_tracks(BOOL on);

@@ -629,86 +629,17 @@ void playback_up_next_clear(void) {
   refresh();
 }
 
-/* An album's artist credit as shown, for its row. Malloc'd, or NULL. */
-static char *album_credit(const char *album_uid) {
-  mc_credit_list *credit = NULL;
-  if (mc_library_list_credit(s.lib, album_uid, &credit) != MC_OK) return NULL;
-  size_t n = 1;
-  for (int i = 0; i < credit->count; i++) n += strlen(credit->items[i].name) + strlen(credit->items[i].join);
-  char *text = credit->count ? calloc(n, 1) : NULL;
-  for (int i = 0; text && i < credit->count; i++) {
-    strcat(text, credit->items[i].name);
-    strcat(text, credit->items[i].join);
-  }
-  mc_credit_list_free(credit);
-  return text;
-}
-
-/* Every album of the group, in its order: their tracks with a file here (see
- * mc_library_list_albums_tracks()). NULL if it can't be listed. */
-static mc_track_list *group_tracks(const char *uid, BOOL smart) {
-  mc_album_list *albums = NULL;
-  mc_status st = smart ? mc_library_list_smart_albums(s.lib, uid, &albums)
-                       : mc_library_list_album_group_albums(s.lib, uid, &albums);
-  if (st != MC_OK) return NULL;
-  const char **uids = albums->count ? calloc((size_t)albums->count, sizeof *uids) : NULL;
-  for (int i = 0; uids && i < albums->count; i++) uids[i] = albums->items[i].uid;
-  mc_track_list *list = NULL;
-  if (uids && mc_library_list_albums_tracks(s.lib, uids, albums->count, &list) != MC_OK) list = NULL;
-  free(uids);
-  mc_album_list_free(albums);
-  return list;
-}
-
-static mc_track_list *tracks_of(playback_what what, const char *uid) {
-  mc_track_list *list = NULL;
-  mc_status st = MC_ERR_NOT_FOUND;
-  switch (what) {
-    case PLAYBACK_TRACK: st = mc_library_get_track(s.lib, uid, &list); break;
-    case PLAYBACK_ALBUM: st = mc_library_list_album_tracks(s.lib, uid, &list); break;
-    case PLAYBACK_ARTIST: st = mc_library_list_artist_tracks(s.lib, uid, &list); break;
-    case PLAYBACK_PLAYLIST: st = mc_library_list_playlist_tracks(s.lib, uid, &list); break;
-    case PLAYBACK_SMART_PLAYLIST: st = mc_library_list_smart_tracks(s.lib, uid, &list); break;
-    case PLAYBACK_GROUP: return group_tracks(uid, FALSE);
-    case PLAYBACK_SMART_GROUP: return group_tracks(uid, TRUE);
-  }
-  return st == MC_OK ? list : NULL;
-}
-
-void playback_add(playback_what what, const char *uid, const wchar_t *name, BOOL next) {
+void playback_add(mc_up_next_kind what, const char *uid, const wchar_t *name, BOOL next) {
   if (!s.lib || !uid || !ensure_player()) return;
-  mc_track_list *list = tracks_of(what, uid);
-  mc_up_next_track *tracks = list && list->count ? calloc((size_t)list->count, sizeof *tracks) : NULL;
-  int count = 0;
-  for (int i = 0; tracks && i < list->count; i++) {
-    const mc_track_info *t = &list->items[i];
-    if (t->path) tracks[count++] = (mc_up_next_track){t->path, t->uid, t->title, t->artist, t->duration_ms};
-  }
-  if (count) {
-    /* The second line of a block's row: what it is, or with none given, its tracks left. */
-    static const struct {
-      mc_play_context context;
-      int kind; /* a string for the second line, or 0 */
-    } k_whats[] = {[PLAYBACK_TRACK] = {MC_PLAY_CONTEXT_MANUAL, 0},
-                   [PLAYBACK_ALBUM] = {MC_PLAY_CONTEXT_ALBUM, 0},
-                   [PLAYBACK_ARTIST] = {MC_PLAY_CONTEXT_ARTIST, 0},
-                   [PLAYBACK_PLAYLIST] = {MC_PLAY_CONTEXT_PLAYLIST, MC_STR_PLAYLIST},
-                   [PLAYBACK_SMART_PLAYLIST] = {MC_PLAY_CONTEXT_PLAYLIST, MC_STR_SMART_PLAYLIST},
-                   [PLAYBACK_GROUP] = {MC_PLAY_CONTEXT_ALBUM_GROUP, MC_STR_ALBUM_GROUP},
-                   [PLAYBACK_SMART_GROUP] = {MC_PLAY_CONTEXT_ALBUM_GROUP, MC_STR_ALBUM_GROUP}};
-    char *title = what != PLAYBACK_TRACK && !s.queue_tracks && name ? wstr_to_utf8(name) : NULL;
-    char *credit = title && what == PLAYBACK_ALBUM ? album_credit(uid) : NULL;
-    const char *artist = credit ? credit : title && k_whats[what].kind ? mc_str((enum mc_str_id)k_whats[what].kind) : NULL;
-    mc_up_next_add add = {tracks, count, title, artist, k_whats[what].context,
-                          what == PLAYBACK_TRACK ? NULL : uid};
-    if ((next ? mc_player_play_next(s.player, &add) : mc_player_play_last(s.player, &add)) == MC_OK)
-      now_playing_flash(mc_wstr(MC_STR_WINDOWS_QUEUE_ADDED));
-    free(title);
-    free(credit);
+  char *title = name ? wstr_to_utf8(name) : NULL;
+  mc_up_next_add *add = NULL;
+  if (mc_up_next_add_load(s.lib, what, uid, title, s.queue_tracks, &add) == MC_OK) {
+    if ((next ? mc_player_play_next(s.player, add) : mc_player_play_last(s.player, add)) == MC_OK)
+      now_playing_flash(mc_wstr(MC_STR_QUEUE_ADDED));
+    mc_up_next_add_free(add);
     refresh();
   } else {
-    now_playing_notice(mc_wstr(MC_STR_WINDOWS_QUEUE_NOTHING_HERE));
+    now_playing_notice(mc_wstr(MC_STR_QUEUE_NOTHING_HERE));
   }
-  free(tracks);
-  mc_track_list_free(list);
+  free(title);
 }

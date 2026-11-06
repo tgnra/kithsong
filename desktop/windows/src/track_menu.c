@@ -32,8 +32,8 @@ track_menu_pick track_menu_show(HWND owner, POINT pt, const track_menu_options *
   mc_track_list *track = NULL;
   UINT queue = o->lib && mc_library_get_track(o->lib, o->track_uid, &track) == MC_OK && track->items[0].path ? 0 : MF_GRAYED;
   mc_track_list_free(track);
-  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
   char seed[MC_UID_STRLEN];
   radio_menu_append_track(menu, CMD_START_RADIO, o->lib, o->track_uid, seed);
   if (o->go_to_album || o->go_to_artist) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -67,7 +67,7 @@ track_menu_pick track_menu_show(HWND owner, POINT pt, const track_menu_options *
   switch (cmd) {
     case CMD_PLAY_NEXT:
     case CMD_PLAY_LAST:
-      playback_add(PLAYBACK_TRACK, o->track_uid, NULL, cmd == CMD_PLAY_NEXT);
+      playback_add(MC_UP_NEXT_TRACK, o->track_uid, NULL, cmd == CMD_PLAY_NEXT);
       return TRACK_MENU_NOTHING;
     case CMD_NEW_PLAYLIST: return TRACK_MENU_NEW_PLAYLIST;
     case CMD_START_RADIO: return TRACK_MENU_START_RADIO;

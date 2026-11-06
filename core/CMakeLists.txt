@@ -82,6 +82,7 @@ add_library(musiccore STATIC
   src/search/search.c
   src/playback/decoder.c
   src/playback/player.c
+  src/playback/up_next_add.c
   src/playback/shuffle.c
   src/analysis/analysis.c
   src/analysis/loudness.c

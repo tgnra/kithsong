@@ -103,6 +103,7 @@ target_include_directories(test_scrobbler PRIVATE "${PROJECT_BINARY_DIR}/core/ge
 kithsong_test(test_player)
 kithsong_test(test_play_log)
 kithsong_test(test_up_next)
+kithsong_test(test_up_next_add)
 kithsong_test(test_radio_player)
 kithsong_test(test_shuffle)
 kithsong_test(test_stress)

@@ -1134,8 +1134,8 @@ static void single_menu(int i, POINT pt) {
   if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_PLAYLIST));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   UINT queue = here ? 0 : MF_GRAYED;
-  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
   char seed[MC_UID_STRLEN];
   radio_menu_append_track(menu, CMD_START_RADIO, v.lib, uid, seed);
   if (artist[0] && strcmp(artist, v.open_uid)) {
@@ -1154,7 +1154,7 @@ static void single_menu(int i, POINT pt) {
   if (cmd == CMD_NEW_PLAYLIST) {
     request_add(uid, here, NULL);
   } else if (cmd == CMD_PLAY_NEXT || cmd == CMD_PLAY_LAST) {
-    playback_add(PLAYBACK_TRACK, uid, NULL, cmd == CMD_PLAY_NEXT);
+    playback_add(MC_UP_NEXT_TRACK, uid, NULL, cmd == CMD_PLAY_NEXT);
   } else if (cmd == CMD_START_RADIO) {
     playback_play_radio(seed);
   } else if (cmd == CMD_DELETE_TRACK) {

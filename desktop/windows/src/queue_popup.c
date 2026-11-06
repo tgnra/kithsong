@@ -142,7 +142,7 @@ static void relayout(void) {
   RECT view = {0, scale(HEADER_H), rc.right, rc.bottom - scale(PAD)};
   scroller_resize(&s.scroll, &view, s.count * scale(ROW_H));
 
-  const wchar_t *label = mc_wstr(MC_STR_WINDOWS_QUEUE_CLEAR);
+  const wchar_t *label = mc_wstr(MC_STR_QUEUE_CLEAR);
   HDC dc = GetDC(s.wnd);
   HGDIOBJ old = SelectObject(dc, s.sub_font);
   SIZE text = {0};
@@ -367,7 +367,7 @@ static void paint_clear(canvas *c) {
   COLORREF color = theme_draw_state(c, &s.clear, radius, state);
   canvas_frame(c, &s.clear, radius, 1, theme.high_contrast ? theme.text : theme.line, 255);
   if (s.focus_clear && focus_shows()) canvas_frame(c, &s.clear, radius, scale(2), theme.text, 255);
-  canvas_text(c, mc_wstr(MC_STR_WINDOWS_QUEUE_CLEAR), -1, &s.clear, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+  canvas_text(c, mc_wstr(MC_STR_QUEUE_CLEAR), -1, &s.clear, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
               s.sub_font, enabled ? color : theme.text3);
 }
 
@@ -381,7 +381,7 @@ static void paint(HDC dc, const RECT *dirty) {
 
   for (int i = 0; i < s.count; i++) paint_row(c, i);
   if (!s.count)
-    canvas_text(c, mc_wstr(MC_STR_WINDOWS_QUEUE_EMPTY), -1, &s.scroll.view, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+    canvas_text(c, mc_wstr(MC_STR_QUEUE_EMPTY), -1, &s.scroll.view, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
                 s.font, theme.text2);
   if (s.dragging && s.drop_at >= 0) { /* where the dragged row would go */
     int y = s.scroll.view.top + s.drop_at * scale(ROW_H) - s.scroll.pos;
@@ -394,7 +394,7 @@ static void paint(HDC dc, const RECT *dirty) {
   canvas_clear(c, &header, theme.bg, 255);
   canvas_clear(c, &foot, theme.bg, 255);
   RECT title = {scale(PAD) + scale(REMOVE_PAD), 0, s.clear.left - scale(PAD), header.bottom};
-  canvas_text(c, mc_wstr(MC_STR_WINDOWS_QUEUE), -1, &title, DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+  canvas_text(c, mc_wstr(MC_STR_QUEUE), -1, &title, DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
               s.title_font, theme.text);
   paint_clear(c);
   RECT rule = {0, header.bottom - 1, client.right, header.bottom};
@@ -446,7 +446,7 @@ static BOOL ui_node(int i, uia_node *n) {
   n->parent = UIA_ROOT;
   if (i == UIA_ROOT) {
     n->type = UIA_PaneControlTypeId;
-    lstrcpynW(n->name, mc_wstr(MC_STR_WINDOWS_QUEUE), 512);
+    lstrcpynW(n->name, mc_wstr(MC_STR_QUEUE), 512);
     n->first = UI_CLEAR;
     n->count = 2;
     return TRUE;
@@ -456,7 +456,7 @@ static BOOL ui_node(int i, uia_node *n) {
     n->flags = UIA_FOCUSABLE | UIA_INVOKABLE | (s.count ? 0 : UIA_DISABLED);
     n->rect = s.clear;
     n->automation_id = L"Clear";
-    lstrcpynW(n->name, mc_wstr(MC_STR_WINDOWS_QUEUE_CLEAR), 512);
+    lstrcpynW(n->name, mc_wstr(MC_STR_QUEUE_CLEAR), 512);
     return TRUE;
   }
   if (i == UI_LIST) {
@@ -466,8 +466,8 @@ static BOOL ui_node(int i, uia_node *n) {
     n->first = UI_ROWS;
     n->count = s.count;
     n->automation_id = L"Queue";
-    lstrcpynW(n->name, mc_wstr(MC_STR_WINDOWS_QUEUE), 512);
-    if (!s.count) lstrcpynW(n->status, mc_wstr(MC_STR_WINDOWS_QUEUE_EMPTY), 64);
+    lstrcpynW(n->name, mc_wstr(MC_STR_QUEUE), 512);
+    if (!s.count) lstrcpynW(n->status, mc_wstr(MC_STR_QUEUE_EMPTY), 64);
     return TRUE;
   }
   int r = i - UI_ROWS;
@@ -480,7 +480,7 @@ static BOOL ui_node(int i, uia_node *n) {
     n->flags = UIA_INVOKABLE;
     IntersectRect(&n->rect, &x, &s.scroll.view);
     n->automation_id = L"Remove";
-    lstrcpynW(n->name, mc_wstr(MC_STR_WINDOWS_QUEUE_REMOVE), 512);
+    lstrcpynW(n->name, mc_wstr(MC_STR_QUEUE_REMOVE), 512);
     return TRUE;
   }
   const queue_row *rw = &s.rows[r];
@@ -492,7 +492,7 @@ static BOOL ui_node(int i, uia_node *n) {
   n->count = 1;
   IntersectRect(&n->rect, &fill, &s.scroll.view);
   uia_name(n, rw->title ? rw->title : L"", rw->byline ? rw->byline : L"", rw->duration, NULL);
-  lstrcpynW(n->help, mc_wstr(MC_STR_WINDOWS_QUEUE_ROW_HELP), 256);
+  lstrcpynW(n->help, mc_wstr(MC_STR_QUEUE_ROW_HELP), 256);
   return TRUE;
 }
 
@@ -775,7 +775,7 @@ static BOOL create(HWND owner) {
                     .lpszClassName = L"kithsong_queue"};
   RegisterClassExW(&wc);
   /* Its text names it for screen readers. */
-  CreateWindowExW(WS_EX_TOOLWINDOW, L"kithsong_queue", mc_wstr(MC_STR_WINDOWS_QUEUE), WS_POPUP, 0, 0, 0, 0, owner, NULL,
+  CreateWindowExW(WS_EX_TOOLWINDOW, L"kithsong_queue", mc_wstr(MC_STR_QUEUE), WS_POPUP, 0, 0, 0, 0, owner, NULL,
                   GetModuleHandleW(NULL), NULL);
   if (!s.wnd) return FALSE;
   s.scroll.moved = on_scrolled;
@@ -786,7 +786,7 @@ static BOOL create(HWND owner) {
                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, s.wnd, NULL,
                               GetModuleHandleW(NULL), NULL);
   TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = s.wnd, .uId = 1,
-                    .lpszText = (wchar_t *)mc_wstr(MC_STR_WINDOWS_QUEUE_REMOVE)};
+                    .lpszText = (wchar_t *)mc_wstr(MC_STR_QUEUE_REMOVE)};
   SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   return TRUE;
 }

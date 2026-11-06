@@ -340,14 +340,14 @@ void settings_view_create(HWND parent) {
   g_set.order_note = child(WC_STATICW, mc_wstr(MC_STR_ALBUM_IN_ORDER_TEXT), label, ID_SET_ORDER_NOTE);
   g_set.queue_check = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_SET_QUEUE_CHECK);
   g_set.queue_check_label =
-    child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_QUEUE_TRACKS), label | SS_NOTIFY, ID_SET_QUEUE_CHECK_LABEL);
-  g_set.queue_note = child(WC_STATICW, mc_wstr(MC_STR_WINDOWS_QUEUE_TRACKS_TEXT), label, ID_SET_QUEUE_NOTE);
+    child(WC_STATICW, mc_wstr(MC_STR_QUEUE_TRACKS), label | SS_NOTIFY, ID_SET_QUEUE_CHECK_LABEL);
+  g_set.queue_note = child(WC_STATICW, mc_wstr(MC_STR_QUEUE_TRACKS_TEXT), label, ID_SET_QUEUE_NOTE);
   if (SUCCEEDED(CoCreateInstance(&CLSID_AccPropServices, NULL, CLSCTX_INPROC_SERVER, &IID_IAccPropServices,
                                  (void **)&g_set.acc))) {
     IAccPropServices_SetHwndPropStr(g_set.acc, g_set.order_check, OBJID_CLIENT, CHILDID_SELF, PROPID_ACC_NAME,
                                     mc_wstr(MC_STR_ALBUM_IN_ORDER));
     IAccPropServices_SetHwndPropStr(g_set.acc, g_set.queue_check, OBJID_CLIENT, CHILDID_SELF, PROPID_ACC_NAME,
-                                    mc_wstr(MC_STR_WINDOWS_QUEUE_TRACKS));
+                                    mc_wstr(MC_STR_QUEUE_TRACKS));
   } else {
     g_set.acc = NULL;
   }

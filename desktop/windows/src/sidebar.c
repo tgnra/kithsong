@@ -932,10 +932,10 @@ static BOOL drop_hover(drag_kind kind, const POINT *pt, char uid[MC_UID_STRLEN])
 static void add_recent_to_queue(int i, BOOL next) {
   const sb_row *r = &s.rows[i];
   mc_recent_kind kind = (mc_recent_kind)r->flags;
-  playback_what what = kind == MC_RECENT_ALBUM      ? PLAYBACK_ALBUM
-                       : kind == MC_RECENT_ARTIST   ? PLAYBACK_ARTIST
-                       : kind == MC_RECENT_PLAYLIST ? (r->smart ? PLAYBACK_SMART_PLAYLIST : PLAYBACK_PLAYLIST)
-                                                    : (r->smart ? PLAYBACK_SMART_GROUP : PLAYBACK_GROUP);
+  mc_up_next_kind what = kind == MC_RECENT_ALBUM      ? MC_UP_NEXT_ALBUM
+                       : kind == MC_RECENT_ARTIST   ? MC_UP_NEXT_ARTIST
+                       : kind == MC_RECENT_PLAYLIST ? (r->smart ? MC_UP_NEXT_SMART_PLAYLIST : MC_UP_NEXT_PLAYLIST)
+                                                    : (r->smart ? MC_UP_NEXT_SMART_ALBUM_GROUP : MC_UP_NEXT_ALBUM_GROUP);
   playback_add(what, r->uid, r->text, next);
 }
 
@@ -1058,8 +1058,8 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         HMENU menu = CreatePopupMenu();
         mc_recent_kind kind = (mc_recent_kind)s.rows[i].flags;
         if (kind != MC_RECENT_STATION) {
-          AppendMenuW(menu, MF_STRING, 5, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-          AppendMenuW(menu, MF_STRING, 6, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+          AppendMenuW(menu, MF_STRING, 5, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
+          AppendMenuW(menu, MF_STRING, 6, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
           if (kind != MC_RECENT_ALBUM && kind != MC_RECENT_ARTIST) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
         }
         char seed[MC_UID_STRLEN] = "";

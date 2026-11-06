@@ -709,7 +709,7 @@ static void show_playlist_menu(void) {
   else if (cmd == CMD_DELETE) request_playlist(TLN_DELETE_PLAYLIST);
   else if (cmd == CMD_EDIT_SMART) request_playlist(TLN_EDIT_SMART);
   else if (cmd == CMD_PLAY_NEXT || cmd == CMD_PLAY_LAST)
-    playback_add(s.smart ? PLAYBACK_SMART_PLAYLIST : PLAYBACK_PLAYLIST, s.album_uid, s.album_title, cmd == CMD_PLAY_NEXT);
+    playback_add(s.smart ? MC_UP_NEXT_SMART_PLAYLIST : MC_UP_NEXT_PLAYLIST, s.album_uid, s.album_title, cmd == CMD_PLAY_NEXT);
 }
 
 /* Whether row i's album has a page to go to that isn't the album shown. */

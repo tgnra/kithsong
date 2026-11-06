@@ -69,12 +69,12 @@ static item_menu_result result(int cmd, BOOL changed) {
 
 /* Play Next and Play Last, first on everything but a station. */
 static void append_queue(HMENU menu) {
-  AppendMenuW(menu, MF_STRING, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  AppendMenuW(menu, MF_STRING, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
 }
 
 /* If that's what was picked, adds it to the queue. */
-static void queue_pick(int cmd, playback_what what, const held *h) {
+static void queue_pick(int cmd, mc_up_next_kind what, const held *h) {
   if (cmd == CMD_PLAY_NEXT || cmd == CMD_PLAY_LAST) playback_add(what, h->uid, h->name, cmd == CMD_PLAY_NEXT);
 }
 
@@ -108,7 +108,7 @@ item_menu_result item_menu_album(const item_menu_options *o) {
 
   BOOL changed = FALSE;
   if (cmd == CMD_START_RADIO) playback_play_radio(seed);
-  queue_pick(cmd, PLAYBACK_ALBUM, &h);
+  queue_pick(cmd, MC_UP_NEXT_ALBUM, &h);
   if (cmd == CMD_EDIT) changed = edit_dialog_album(owner, lib, h.uid);
   if (cmd == CMD_DELETE) changed = delete_dialog(owner, lib, MC_DELETE_ALBUMS, h.uid, h.name);
   if (cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE)
@@ -148,7 +148,7 @@ item_menu_result item_menu_artist(const item_menu_options *o) {
 
   BOOL changed = FALSE;
   if (cmd == CMD_START_RADIO) playback_play_radio(seed);
-  queue_pick(cmd, PLAYBACK_ARTIST, &h);
+  queue_pick(cmd, MC_UP_NEXT_ARTIST, &h);
   if (cmd == CMD_EDIT) changed = edit_dialog_artist(owner, lib, h.uid);
   if (cmd == CMD_REMOVE_HERE || cmd == CMD_SYNC_HERE)
     changed = remove_here_command(owner, (UINT)cmd, CMD_REMOVE_HERE, CMD_SYNC_HERE, MC_PROFILE_ARTIST, h.uid, h.name);
@@ -159,8 +159,8 @@ item_menu_result item_menu_artist(const item_menu_options *o) {
 void item_menu_append_playlist(HMENU menu, BOOL smart, BOOL rename_key, UINT play_next, UINT play_last, UINT edit_rules,
                                UINT rename, UINT del) {
   wchar_t item[128];
-  AppendMenuW(menu, MF_STRING, play_next, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING, play_last, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  AppendMenuW(menu, MF_STRING, play_next, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING, play_last, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   if (smart) AppendMenuW(menu, MF_STRING, edit_rules, mc_wstr_mnemonic(MC_STR_SMART_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, rename,
@@ -179,7 +179,7 @@ item_menu_result item_menu_playlist(const item_menu_options *o, BOOL smart) {
   int cmd = show(menu, o);
 
   BOOL changed = FALSE;
-  queue_pick(cmd, smart ? PLAYBACK_SMART_PLAYLIST : PLAYBACK_PLAYLIST, &h);
+  queue_pick(cmd, smart ? MC_UP_NEXT_SMART_PLAYLIST : MC_UP_NEXT_PLAYLIST, &h);
   if (cmd == CMD_EDIT_RULES) changed = smart_edit_dialog(owner, lib, h.uid);
   if (cmd == CMD_RENAME)
     changed = smart ? smart_rename_dialog(owner, lib, h.uid, h.name, MC_SMART_TRACKS)
@@ -209,7 +209,7 @@ item_menu_result item_menu_group(const item_menu_options *o, BOOL smart) {
   int cmd = show(menu, o);
 
   BOOL changed = FALSE;
-  queue_pick(cmd, smart ? PLAYBACK_SMART_GROUP : PLAYBACK_GROUP, &h);
+  queue_pick(cmd, smart ? MC_UP_NEXT_SMART_ALBUM_GROUP : MC_UP_NEXT_ALBUM_GROUP, &h);
   if (cmd == CMD_EDIT_RULES) changed = smart_edit_dialog(owner, lib, h.uid);
   if (cmd == CMD_RENAME)
     changed = smart ? smart_rename_dialog(owner, lib, h.uid, h.name, MC_SMART_ALBUMS)

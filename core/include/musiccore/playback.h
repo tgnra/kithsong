@@ -36,6 +36,8 @@
 
 #include "musiccore/musiccore.h"
 
+typedef struct mc_library mc_library;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -175,6 +177,28 @@ typedef struct mc_up_next_add {
   mc_play_context context;   /* what the play log says of these tracks, as mc_play_origin does */
   const char *context_uid;
 } mc_up_next_add;
+
+/* What there is to add as a whole. Nothing of radio goes in up next. */
+typedef enum mc_up_next_kind {
+  MC_UP_NEXT_TRACK,
+  MC_UP_NEXT_ALBUM,
+  MC_UP_NEXT_ARTIST,
+  MC_UP_NEXT_PLAYLIST,
+  MC_UP_NEXT_SMART_PLAYLIST,
+  MC_UP_NEXT_ALBUM_GROUP,
+  MC_UP_NEXT_SMART_ALBUM_GROUP,
+} mc_up_next_kind;
+
+/* What Play Next and Play Last add for something in the library: its tracks with a file on this
+ * device, as *out, for mc_player_play_next() or mc_player_play_last(). Anything but a track is one
+ * block called name, unless name is NULL or as_tracks (mc_settings_queue_tracks()) says a track
+ * each. A block's artist is an album's credit, what a playlist or album group is (that string,
+ * in the language set now), and NULL for an artist's, whose row says how many tracks are left.
+ * MC_ERR_NOT_FOUND if it has no track with a file here, or isn't there. Free with
+ * mc_up_next_add_free(). */
+mc_status mc_up_next_add_load(mc_library *lib, mc_up_next_kind kind, const char *uid, const char *name, int as_tracks,
+                              mc_up_next_add **out);
+void mc_up_next_add_free(mc_up_next_add *add);
 
 /* Adds to the front of up next, the tracks in the order given, or to the end. Nothing starts:
  * what's playing plays on, and with nothing playing, mc_player_resume() or mc_player_next() starts
