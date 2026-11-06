@@ -18,7 +18,7 @@
 /* Metrics at 96 DPI. */
 enum {
   MARGIN = 16,
-  GAP = 12,       /* between the cards, and above the button */
+  GAP = 12,       /* between the cards */
   HEADING_H = 28, /* a card's heading, above it */
   ROW_H = 32,
   PAD = 14,       /* between a card's edges and its text */
@@ -129,9 +129,19 @@ static void add_time(enum mc_str_id label, int64_t ms) {
   stat_row *r = add_row(mc_wstr(label));
   if (!r) return;
   size_t n = sizeof r->value / sizeof r->value[0];
+  long long hours = (ms + 1800000) / 3600000;
   char text[64];
-  if (mc_format_playing_time(text, sizeof text, ms)) wstr_from_utf8(r->value, n, text);
-  else mc_wformat(r->value, n, mc_str(MC_STR_DURATION_MINUTES), MC_D(0));
+  if (hours >= 1000) { /* grouped, which mc_format_playing_time() leaves out */
+    wchar_t digits[32];
+    wstr_count(digits, 32, hours);
+    char *grouped = wstr_to_utf8(digits);
+    mc_wformat(r->value, n, mc_str_plural(MC_STR_DURATION_HOURS, (long)hours), MC_S(grouped ? grouped : ""));
+    free(grouped);
+  } else if (mc_format_playing_time(text, sizeof text, ms)) {
+    wstr_from_utf8(r->value, n, text);
+  } else {
+    mc_wformat(r->value, n, mc_str(MC_STR_DURATION_MINUTES), MC_D(0));
+  }
 }
 
 static void add_tally(const mc_library_tally *t) {
@@ -216,7 +226,7 @@ static void place(int cx, int cy) {
     y[s->column] = s->card.bottom + scale(GAP);
   }
   int bottom = g.nsections ? max(y[0], y[1]) - scale(GAP) : scale(MARGIN + MESSAGE_H);
-  RECT client = {0, 0, 2 * (scale(MARGIN) + w) + scale(GAP), bottom + scale(GAP + BUTTON_H + MARGIN)};
+  RECT client = {0, 0, 2 * (scale(MARGIN) + w) + scale(GAP), bottom + scale(2 * MARGIN + BUTTON_H)};
   SetWindowPos(g.panel, NULL, 0, 0, client.right, client.bottom, SWP_NOZORDER | SWP_NOACTIVATE);
   SetWindowPos(g.close, NULL, client.right - scale(MARGIN + BUTTON_W), client.bottom - scale(MARGIN + BUTTON_H),
                scale(BUTTON_W), scale(BUTTON_H), SWP_NOZORDER | SWP_NOACTIVATE);
