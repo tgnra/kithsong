@@ -1,5 +1,6 @@
 #include "musiccore/musiccore.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #include <curl/curl.h>
@@ -69,4 +70,26 @@ size_t mc_format_playing_time(char *buf, size_t size, long long ms) {
   if (minutes < 60) return mc_format(buf, size, mc_str(MC_STR_DURATION_MINUTES), MC_D(minutes));
   if (hours < 100) return mc_format(buf, size, mc_str(MC_STR_DURATION_HOURS_MINUTES), MC_D(minutes / 60), MC_D(minutes % 60));
   return mc_format(buf, size, mc_str_plural(MC_STR_DURATION_HOURS, (long)hours), MC_D(hours));
+}
+
+size_t mc_format_total_time(char *buf, size_t size, long long ms, mc_group_digits_fn group) {
+  long long hours = ((ms + 30000) / 60000 + 30) / 60;
+  if (hours >= 1000) {
+    char digits[32];
+    group(hours, digits, sizeof digits);
+    return mc_format(buf, size, mc_str_plural(MC_STR_DURATION_HOURS, (long)hours), MC_S(digits));
+  }
+  if (ms <= 0) return mc_format(buf, size, mc_str(MC_STR_DURATION_MINUTES), MC_D(0));
+  return mc_format_playing_time(buf, size, ms);
+}
+
+size_t mc_format_size(char *buf, size_t size, long long bytes) {
+  static const enum mc_str_id units[] = {MC_STR_SIZE_KB, MC_STR_SIZE_MB, MC_STR_SIZE_GB, MC_STR_SIZE_TB};
+  if (bytes < 1024) return mc_format(buf, size, mc_str_plural(MC_STR_SIZE_BYTES, (long)bytes), MC_D(bytes));
+  double v = (double)bytes / 1024.0;
+  size_t u = 0;
+  while (v >= 1024.0 && u + 1 < sizeof units / sizeof units[0]) v /= 1024.0, u++;
+  char num[32];
+  snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
+  return mc_format(buf, size, mc_str(units[u]), MC_S(num));
 }

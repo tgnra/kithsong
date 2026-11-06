@@ -1,9 +1,10 @@
 /* GTK4 + libadwaita frontend. Layout:
  *
  *   AdwToolbarView
- *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle][queue]  [vol][import][settings]
+ *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle][queue]  [vol]
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
- *      |                    / Recents / Devices)
+ *      |                    / Recents / Devices, scrolling above Import / Library stats
+ *      |                    / Analysing music, while it does / Settings / About)
  *      +- AdwBanner: what's wrong with the files here (app_update_waiting()), on the library's pages
  *      +- AdwBanner: tracks waiting for a device (likewise)
  *      +- GtkStack of pages: "library" | "home" (home_view.c) | "artists" (artist_view.c)
@@ -15,7 +16,8 @@
  *
  * The album and playlist grids are album_grid.c, the track list track_list.c, the
  * now-playing strip now_playing.c, the player playback.c, the desktop's media controls
- * mpris.c, the import page import_view.c, the Settings dialog settings_view.c, Settings' Move
+ * mpris.c, the import page import_view.c, the Library stats dialog stats_dialog.c, the Settings
+ * dialog settings_view.c, Settings' Move
  * Library move_library.c, the first run's dialog first_run.c, the Edit dialog edit_dialog.c,
  * the Add to Playlist dialog add_to_playlist.c and the Rename and
  * Delete Playlist dialogs playlist_dialogs.c, the Album groups page album_groups.c (its
@@ -31,6 +33,7 @@
  * change.
  */
 #include <adwaita.h>
+#include <locale.h>
 #include <math.h>
 #include <string.h>
 
@@ -63,6 +66,7 @@
 #include "analysis_ui.h"
 #include "settings_view.h"
 #include "smart_editor.h"
+#include "stats_dialog.h"
 #include "track_list.h"
 #include "volume_button.h"
 
@@ -123,11 +127,6 @@ static void on_import(GtkButton *button, gpointer user) {
   show_page(user, "import");
 }
 
-static void on_analysing(GtkButton *button, gpointer user) {
-  (void)button;
-  analysis_ui_present(user);
-}
-
 static void on_import_present(void *user) {
   show_page(user, "import");
 }
@@ -136,7 +135,7 @@ static void on_import_library_changed(void *user) {
   app_reload_library(user);
 }
 
-/* While an import session is open the library mustn't change under it, so the sidebar and
+/* While an import session is open the library mustn't change under it, so the sidebar's pages and
  * Settings are locked, as on Windows. */
 static void on_import_session(void *user, gboolean active) {
   app *a = user;
@@ -197,6 +196,21 @@ void app_update_empty_pages(app *a) {
   set_empty_description(a);
   set_no_playlists(a);
   album_groups_update_empty();
+}
+
+void app_group_digits(long long n, char *out, size_t size) {
+  g_snprintf(out, size, "%'lld", n);
+  /* The C locale has no grouping, but its strings are English, so it goes as English writes it. */
+  const char *locale = setlocale(LC_NUMERIC, NULL);
+  if (g_strcmp0(locale, "C") && g_strcmp0(locale, "POSIX") && !g_str_has_prefix(locale, "C.")) return;
+  char digits[32];
+  g_snprintf(digits, sizeof digits, "%lld", n);
+  size_t at = 0, start = digits[0] == '-', len = strlen(digits);
+  for (size_t i = 0; i < len && at + 2 < size; i++) {
+    out[at++] = digits[i];
+    if (i >= start && i + 1 < len && (len - i - 1) % 3 == 0) out[at++] = ',';
+  }
+  out[at] = '\0';
 }
 
 void app_set_tooltip(GtkWidget *widget, const char *label, const char *accel) {
@@ -364,6 +378,7 @@ static void on_settings_group_changed(void *user) {
  * lets go, and it closes. */
 static void move_close_library(void *user) {
   app *a = user;
+  stats_dialog_stop();
   edit_dialog_close();
   devices_stop(a); /* sync reads the library */
   playback_clear();
@@ -474,10 +489,14 @@ static gboolean on_close_request(GtkWindow *win, gpointer user) {
 /* --- Sidebar --- */
 
 enum { TOP_NAV_HOME, TOP_NAV_SEARCH }; /* top_nav's rows */
+/* The rows pinned below the rest, as on Windows. Analysing shows while audio analysis runs in the
+ * background (analysis_ui.h). */
+enum { BOTTOM_IMPORT, BOTTOM_STATS, BOTTOM_ANALYSING, BOTTOM_SETTINGS, BOTTOM_ABOUT };
 
 static void show_album(app *a);
 static GtkWidget *shown_grid(app *a);
 static void update_buttons(app *a);
+static void show_about(app *a);
 
 /* Albums, Playlists and Album groups lead back to the library page, e.g. from Import, each
  * with its grid; Artists to the Artists page. The grid left loses its selection, so the
@@ -558,15 +577,55 @@ static void connect_keynav(GtkWidget *widget) {
   for (GtkWidget *c = gtk_widget_get_first_child(widget); c; c = gtk_widget_get_next_sibling(c)) connect_keynav(c);
 }
 
-static GtkWidget *build_sidebar(app *a) {
-  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_box_append(GTK_BOX(box), build_top_nav(a));
+static GtkWidget *sidebar_separator(void) {
   GtkWidget *separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
   gtk_widget_set_margin_start(separator, 12);
   gtk_widget_set_margin_end(separator, 12);
   gtk_widget_set_margin_top(separator, 3);
   gtk_widget_set_margin_bottom(separator, 3);
-  gtk_box_append(GTK_BOX(box), separator);
+  return separator;
+}
+
+static void on_bottom_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
+  (void)list;
+  app *a = user;
+  switch (gtk_list_box_row_get_index(row)) {
+    case BOTTOM_IMPORT: show_page(a, "import"); break;
+    case BOTTOM_STATS: stats_dialog_present(a); break;
+    case BOTTOM_ANALYSING: analysis_ui_present(a); break;
+    case BOTTOM_SETTINGS: on_settings(NULL, a); break;
+    default: show_about(a); break;
+  }
+}
+
+/* A row of the bottom list. Its tooltip has its shortcut, accel (see app_set_tooltip()), if any. */
+static GtkWidget *add_bottom_row(GtkWidget *list, const char *icon, const char *label, const char *accel) {
+  gtk_list_box_append(GTK_LIST_BOX(list), nav_row(icon, label));
+  GtkWidget *row = gtk_widget_get_last_child(list);
+  if (accel) app_set_tooltip(row, label, accel);
+  return row;
+}
+
+/* Only Import is a page, and it shows as picked by the page rather than a selection
+ * (show_import_picked()), so moving through these rows with the keyboard picks nothing. */
+static GtkWidget *build_bottom_nav(app *a) {
+  GtkWidget *list = gtk_list_box_new();
+  gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
+  gtk_widget_add_css_class(list, "navigation-sidebar");
+  a->import_row = add_bottom_row(list, "list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC), "<Control>o");
+  a->stats_row = add_bottom_row(list, "x-office-spreadsheet-symbolic", mc_str(MC_STR_STATS_TITLE), NULL);
+  a->analysing = add_bottom_row(list, "content-loading-symbolic", mc_str(MC_STR_ANALYSIS_RUNNING), NULL);
+  gtk_widget_set_visible(a->analysing, FALSE);
+  a->settings = add_bottom_row(list, "emblem-system-symbolic", mc_str(MC_STR_SETTINGS), "<Control>comma");
+  add_bottom_row(list, "help-about-symbolic", mc_str(MC_STR_ABOUT), "F1");
+  g_signal_connect(list, "row-activated", G_CALLBACK(on_bottom_activated), a);
+  return list;
+}
+
+static GtkWidget *build_sidebar(app *a) {
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(box), build_top_nav(a));
+  gtk_box_append(GTK_BOX(box), sidebar_separator());
 
   /* In app_view's order. */
   GtkWidget *nav = gtk_list_box_new();
@@ -582,11 +641,9 @@ static GtkWidget *build_sidebar(app *a) {
 
   gtk_box_append(GTK_BOX(box), recents_new(a));
   gtk_box_append(GTK_BOX(box), devices_new(a));
-  connect_keynav(box);
 
   /* It all scrolls when it's taller than the window, with a scrollbar only then; moving the
-   * focus with the keyboard scrolls the focused row into view. Import and Settings are in
-   * the header bar, so nothing is pinned below. */
+   * focus with the keyboard scrolls the focused row into view. What's pinned below stays put. */
   GtkWidget *viewport = gtk_viewport_new(NULL, NULL);
   gtk_viewport_set_scroll_to_focus(GTK_VIEWPORT(viewport), TRUE);
   gtk_viewport_set_child(GTK_VIEWPORT(viewport), box);
@@ -594,7 +651,15 @@ static GtkWidget *build_sidebar(app *a) {
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
                                  GTK_POLICY_AUTOMATIC);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), viewport);
-  return scroller;
+  gtk_widget_set_vexpand(scroller, TRUE);
+  a->sidebar = scroller;
+
+  GtkWidget *sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(sidebar), scroller);
+  gtk_box_append(GTK_BOX(sidebar), sidebar_separator());
+  gtk_box_append(GTK_BOX(sidebar), build_bottom_nav(a));
+  connect_keynav(sidebar);
+  return sidebar;
 }
 
 /* --- Playback buttons --- */
@@ -797,7 +862,6 @@ typedef enum shortcut {
 
 static void on_playlist_created(void *user, const char *uid);
 static void show_shortcuts(app *a);
-static void show_about(app *a);
 
 /* Whether the focus is in a text box, whose own keys (arrows, + and -) it keeps. */
 static gboolean text_focused(GtkWidget *win) {
@@ -1311,6 +1375,8 @@ void app_reload_library(app *a) {
   playback_cover_check(a->lib);
   if (a->lib) mc_library_search_prepare(a->lib); /* the index is ready before the user types */
   search_view_refresh();
+  gtk_widget_set_sensitive(a->stats_row, a->lib != NULL);
+  stats_dialog_refresh();
 }
 
 /* Picks view in the sidebar, as clicking it does. */
@@ -1585,11 +1651,13 @@ static void prune_art(app *a) {
  * already (it does, while the pairing dialogs and the device page are still there). */
 static void on_window_destroy(GtkWidget *win, gpointer user) {
   (void)win;
+  stats_dialog_stop();
   devices_stop(user);
 }
 
 static void on_shutdown(GApplication *gapp, gpointer user) {
   (void)gapp;
+  stats_dialog_stop();
   if (save_volume_source) { /* a change not saved yet */
     g_source_remove(save_volume_source);
     save_volume(user);
@@ -1786,10 +1854,26 @@ void app_update_waiting(app *a) {
   adw_banner_set_revealed(a->waiting, library && text[0]);
 }
 
+/* The Import row shows as picked on its page, which everything that opens it comes through. */
+static void show_import_picked(app *a) {
+  gboolean picked = !g_strcmp0(gtk_stack_get_visible_child_name(a->pages), "import");
+  if (picked) {
+    devices_unselect();
+    gtk_list_box_unselect_all(a->top_nav);
+    gtk_list_box_unselect_all(a->nav);
+    gtk_widget_set_state_flags(a->import_row, GTK_STATE_FLAG_SELECTED, FALSE);
+  } else {
+    gtk_widget_unset_state_flags(a->import_row, GTK_STATE_FLAG_SELECTED);
+  }
+  gtk_accessible_update_state(GTK_ACCESSIBLE(a->import_row), GTK_ACCESSIBLE_STATE_SELECTED, picked, -1);
+}
+
 static void on_page_changed(GObject *pages, GParamSpec *pspec, gpointer user) {
   (void)pages;
   (void)pspec;
-  app_update_waiting(user);
+  app *a = user;
+  if (a->import_row) show_import_picked(a);
+  app_update_waiting(a);
 }
 
 static void on_activate(GtkApplication *gapp, gpointer user) {
@@ -1824,16 +1908,6 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_header_bar_pack_start(ADW_HEADER_BAR(header), play_button);
   adw_header_bar_pack_start(ADW_HEADER_BAR(header), action_button("media-skip-forward-symbolic", mc_str(MC_STR_NEXT_TRACK),
                                                                   "<Control>Right", "app.next"));
-  a->settings = icon_button("emblem-system-symbolic", mc_str(MC_STR_SETTINGS), "<Control>comma");
-  g_signal_connect(a->settings, "clicked", G_CALLBACK(on_settings), a);
-  adw_header_bar_pack_end(ADW_HEADER_BAR(header), a->settings);
-  a->analysing = icon_button("content-loading-symbolic", mc_str(MC_STR_ANALYSIS_RUNNING), NULL);
-  g_signal_connect(a->analysing, "clicked", G_CALLBACK(on_analysing), a);
-  gtk_widget_set_visible(a->analysing, FALSE);
-  adw_header_bar_pack_end(ADW_HEADER_BAR(header), a->analysing);
-  GtkWidget *import = icon_button("list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC), "<Control>o");
-  g_signal_connect(import, "clicked", G_CALLBACK(on_import), a);
-  adw_header_bar_pack_end(ADW_HEADER_BAR(header), import);
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), volume_button_new(on_volume, on_muted, a));
 
   /* The now-playing strip takes the title's place, up to a point. */
@@ -1896,9 +1970,9 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   gtk_box_append(GTK_BOX(content), pages);
   g_signal_connect(pages, "notify::visible-child-name", G_CALLBACK(on_page_changed), a);
 
-  a->sidebar = build_sidebar(a);
+  GtkWidget *sidebar = build_sidebar(a);
   GtkWidget *nav_split = adw_overlay_split_view_new();
-  adw_overlay_split_view_set_sidebar(ADW_OVERLAY_SPLIT_VIEW(nav_split), a->sidebar);
+  adw_overlay_split_view_set_sidebar(ADW_OVERLAY_SPLIT_VIEW(nav_split), sidebar);
   adw_overlay_split_view_set_content(ADW_OVERLAY_SPLIT_VIEW(nav_split), content);
 
   GtkWidget *toolbar = adw_toolbar_view_new();

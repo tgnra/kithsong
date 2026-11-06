@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "app.h"
+
 #if !ADW_CHECK_VERSION(1, 5, 0)
 #error "device_view.c needs libadwaita 1.5 or later"
 #endif
@@ -159,23 +161,12 @@ static void schedule(void);
 
 /* n with the locale's digit grouping: 1,204. */
 static const char *fmt_count(int64_t n, char *out, size_t cap) {
-  snprintf(out, cap, "%'lld", (long long)n);
+  app_group_digits(n, out, cap);
   return out;
 }
 
 static const char *fmt_size(int64_t bytes, char *out, size_t cap) {
-  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_SIZE_KB, MC_STR_SIZE_MB, MC_STR_SIZE_GB,
-                                         MC_STR_SIZE_TB};
-  double v = (double)bytes;
-  int u = 0;
-  while (v >= 1024.0 && u < 4) v /= 1024.0, u++;
-  if (u == 0) {
-    mc_format(out, cap, mc_str_plural(MC_STR_SIZE_BYTES, (long)bytes), MC_D(bytes));
-  } else {
-    char num[32];
-    snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
-    mc_format(out, cap, mc_str(units[u]), MC_S(num));
-  }
+  mc_format_size(out, cap, bytes);
   return out;
 }
 

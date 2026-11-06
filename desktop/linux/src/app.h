@@ -33,11 +33,14 @@ typedef struct app {
   GtkWidget *search;    /* the search page, search_view.c */
   GtkWidget *artists;   /* the Artists page, artist_view.c */
   GtkWidget *home;      /* the Home page, home_view.c */
-  GtkWidget *sidebar;
+  GtkWidget *sidebar;   /* the part of the sidebar that scrolls, which an import session locks */
   GtkListBox *top_nav;  /* the sidebar's Home and Search, above nav */
   GtkListBox *nav;      /* the sidebar's Albums, Artists, Playlists and Album groups */
-  GtkWidget *settings;  /* the header bar's Settings button */
-  GtkWidget *analysing; /* next to it, while audio analysis runs in the background (analysis_ui.h) */
+  /* The rows pinned below it: */
+  GtkWidget *import_row;
+  GtkWidget *stats_row;
+  GtkWidget *analysing; /* while audio analysis runs in the background (analysis_ui.h) */
+  GtkWidget *settings;
   GtkStack *albums;     /* "empty" status page | "grid" | "playlists" (a header over playlists)
                          * | "groups" (album_groups.c) */
   AdwStatusPage *empty;        /* "No music yet", or "No albums" when the music is all singles */
@@ -128,5 +131,8 @@ void app_show_testing(app *a);
 /* Sets widget's tooltip to label with its keyboard shortcut, "Next track (Ctrl+→)": accel
  * as gtk_accelerator_parse() reads it, e.g. "<Control>Right", shown as GTK labels it. */
 void app_set_tooltip(GtkWidget *widget, const char *label, const char *accel);
+
+/* n with the locale's digit grouping, as Windows and Android write it: 1,204. */
+void app_group_digits(long long n, char *out, size_t size);
 
 #endif

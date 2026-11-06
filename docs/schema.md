@@ -428,8 +428,8 @@ out with nothing shown: about 45 seconds' work in a release build. From five hou
 it's large, and the frontend opens a dialog with a progress bar, Background and Cancel. It stays
 flat out behind the dialog. Background calls
 `mc_analysis_scanner_set_paced()`, which brings the rests and background priority
-(`mc_thread_background()`), and only then the wait for AC power, and shows a row above Settings on
-Windows or a button next to Settings on Linux that opens the dialog again. `analysis_background` in
+(`mc_thread_background()`), and only then the wait for AC power, and shows a row above Settings in
+the sidebar that opens the dialog again. `analysis_background` in
 settings.json keeps that choice across restarts until a pass finds nothing to do. Cancel stops the
 scanner and sets `analysis_stopped` in settings.json, so it stays stopped over restarts, imports
 included, until Resume analysis in Settings' Audio analysis section. That section says how many

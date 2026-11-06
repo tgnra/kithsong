@@ -13,7 +13,7 @@
     "analysis_stopped_left": { "one": "Analysis is stopped. {0:d} track isn't analysed yet.", "other": "Analysis is stopped. {0:d} tracks aren't analysed yet.", "note": "In Settings, under Audio analysis, after Cancel in its dialog. It stays stopped until resumed, even over a restart." },
     "analysis_stopped": { "text": "Analysis is stopped. Music you add won't be analysed until it's resumed.", "note": "In Settings, under Audio analysis, after Cancel in its dialog, when no tracks are waiting." },
     "analysis_resume": { "text": "_Resume analysis", "note": "Settings button under Audio analysis: starts it again after Cancel in its dialog, carrying on in the background." },
-    "analysis_running": { "text": "Analysing music", "note": "The sidebar row or header bar button shown while audio analysis carries on in the background. Opens its dialog." },
+    "analysis_running": { "text": "Analysing music", "note": "The sidebar row shown while audio analysis carries on in the background. Opens its dialog." },
     "cancel": "Cancel",
     "ok": "OK",
     "close": "_Close",
@@ -933,7 +933,7 @@
     "home_welcome_title": { "text": "Welcome to {0}", "note": "The Home page of a library with no music. {0} is the app's name." },
     "home_welcome_text": { "text": "Import some music and this page fills up with your albums, your playlists and what you've been playing.", "note": "The Home page of a library with no music, above the Import button." },
     "home_no_history": { "text": "As you play music, this page fills up with what you've been listening to.", "note": "At the foot of the Home page while nothing has been played yet." },
-    "stats_title": { "text": "Library stats", "note": "Opens numbers about the library, and the title of what it opens: an item of the phone's main menu and a row at the bottom of the Windows sidebar." },
+    "stats_title": { "text": "Library stats", "note": "Opens numbers about the library, and the title of what it opens: an item of the phone's main menu and a row at the bottom of the desktop sidebar." },
     "stats_all": { "text": "Whole library", "note": "Heading in Library stats: all the music of the library, on this device or on other devices. Only shown if it differs from what's on this device." },
     "stats_lists": { "text": "Lists", "note": "Heading in Library stats, over the numbers of playlists and album groups." },
     "stats_listening": { "text": "Listening", "note": "Heading in Library stats, over the numbers of plays, on every device." },
@@ -943,10 +943,14 @@
     "stats_plays": { "text": "Plays", "note": "In Library stats: how many times tracks have been played." },
     "stats_tracks_played": { "text": "Tracks played", "note": "In Library stats: how many different tracks have been played at least once." },
     "stats_time_listened": { "text": "Time listened", "note": "In Library stats: how long has actually been spent listening." },
-    "stats_empty_text": { "text": "Numbers about your library will show here once it has some music.", "note": "Library stats of a library with no music, under empty_title." }
+    "stats_empty_text": { "text": "Numbers about your library will show here once it has some music.", "note": "Library stats of a library with no music, under empty_title." },
+    "stats_reading": { "text": "Counting…", "note": "In Library stats, in place of the numbers, while a large library is still being read." },
+    "stats_failed": { "text": "Couldn't read the library ({0}).", "note": "In Library stats, in place of the numbers. {0} is the reason, one of the status strings such as \"database error\"." },
+    "about": { "text": "About", "note": "The row at the bottom of the desktop sidebar that opens the About box." }
   },
 
   "linux": {
+    "stats_this_computer": { "text": "On this computer", "note": "Heading in Library stats: the music with a file on this computer." },
     "smart_mode_not_all": { "text": "Not all of the following", "note": "Smart list editor: picker entry above a group's conditions, of which at least one must be false." },
     "smart_move_name": { "text": "Move", "note": "Tooltip and name for accessibility of a smart list condition's or group's menu of Move up, Move down and Move to." },
     "smart_move_to": { "text": "Move to {0}", "note": "Smart list editor: moves a condition or group into another group. {0} is that group, or the list itself." },
@@ -1089,10 +1093,7 @@
     "scroll_right": { "text": "Scroll right", "note": "Button at the end of a row of albums that scrolls sideways." },
 
     "this_pc_suffix": { "text": " (this PC)", "note": "After this PC's name in the list of devices." },
-    "about": { "text": "About", "note": "The button at the bottom of the sidebar that opens the About box." },
     "stats_this_pc": { "text": "On this PC", "note": "Heading in Library stats: the music with a file on this PC." },
-    "stats_reading": { "text": "Counting…", "note": "In Library stats, in place of the numbers, while a large library is still being read." },
-    "stats_failed": { "text": "Couldn't read the library ({0}).", "note": "In Library stats, in place of the numbers. {0} is the reason, one of the status strings such as \"database error\"." },
     "about_version": { "text": "Kithsong {0} build {1:d}", "note": "In the About box. {0} is the version, e.g. \"0.3.0\", {1} the build number." },
     "about_db_version": { "text": "Library database version {0:d}", "note": "In the About box." },
     "about_sync_off": { "text": "Sync off ({0})", "note": "In the About box. {0} is the reason, e.g. \"network error\"." },

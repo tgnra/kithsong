@@ -34,19 +34,6 @@ static void reset(void) {
   g_move.running = FALSE;
 }
 
-/* "12.5 MB", in the strings' units as Windows writes them. */
-static char *fmt_size(int64_t bytes) {
-  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_SIZE_KB, MC_STR_SIZE_MB, MC_STR_SIZE_GB,
-                                         MC_STR_SIZE_TB};
-  double v = (double)bytes;
-  int u = 0;
-  while (v >= 1024.0 && u < 4) v /= 1024.0, u++;
-  if (u == 0) return mc_format_alloc(mc_str_plural(MC_STR_SIZE_BYTES, (long)bytes), MC_D(bytes));
-  char num[32];
-  g_snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
-  return mc_format_alloc(mc_str(units[u]), MC_S(num));
-}
-
 static void alert(GtkWindow *parent, const char *heading, const char *body, void (*then)(void));
 
 /* --- Choosing the folder --- */
@@ -64,10 +51,10 @@ static char *problem_text(mc_status st, const mc_library_move_info *info, const 
     case MC_MOVE_NOT_EMPTY: return mc_format_alloc(mc_str(MC_STR_LIBRARY_MOVE_NOT_EMPTY), MC_S(dst));
     case MC_MOVE_NOT_WRITABLE: return mc_format_alloc(mc_str(MC_STR_LIBRARY_MOVE_NOT_WRITABLE), MC_S(dst));
     case MC_MOVE_NO_SPACE: {
-      char *needed = fmt_size(info->needed_bytes), *avail = fmt_size(info->free_bytes);
+      char needed[64], avail[64];
+      mc_format_size(needed, sizeof needed, info->needed_bytes);
+      mc_format_size(avail, sizeof avail, info->free_bytes);
       char *text = mc_format_alloc(mc_str(MC_STR_LIBRARY_MOVE_NO_SPACE), MC_S(needed), MC_S(avail));
-      mc_free(needed);
-      mc_free(avail);
       return text;
     }
   }
@@ -182,11 +169,11 @@ static gboolean show_progress(gpointer data) {
   const char *status = "";
   switch (p.phase) {
     case MC_MOVE_PHASE_COPYING: {
-      char *done = fmt_size(p.bytes_done), *total = fmt_size(p.bytes_total);
+      char done[64], total[64];
+      mc_format_size(done, sizeof done, p.bytes_done);
+      mc_format_size(total, sizeof total, p.bytes_total);
       status = counts = mc_format_alloc(mc_str_plural(MC_STR_LIBRARY_MOVE_PROGRESS, p.files_total),
                                         MC_D(p.files_done), MC_D(p.files_total), MC_S(done), MC_S(total));
-      mc_free(done);
-      mc_free(total);
       break;
     }
     case MC_MOVE_PHASE_CHECKING: status = mc_str(MC_STR_LIBRARY_MOVE_CHECKING); break;

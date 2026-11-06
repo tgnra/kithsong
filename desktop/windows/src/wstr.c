@@ -120,15 +120,9 @@ char *wstr_to_utf8(const wchar_t *w) {
 }
 
 wchar_t *wstr_size(wchar_t *buf, size_t n, int64_t bytes) {
-  static const enum mc_str_id units[] = {MC_STR_COUNT, MC_STR_SIZE_KB, MC_STR_SIZE_MB, MC_STR_SIZE_GB,
-                                         MC_STR_SIZE_TB};
-  double v = (double)bytes;
-  int u = 0;
-  while (v >= 1024.0 && u < 4) v /= 1024.0, u++;
-  if (u == 0) return mc_wformat(buf, n, mc_str_plural(MC_STR_SIZE_BYTES, (long)bytes), MC_D(bytes));
-  char num[32];
-  snprintf(num, sizeof num, v < 100.0 ? "%.1f" : "%.0f", v);
-  return mc_wformat(buf, n, mc_str(units[u]), MC_S(num));
+  char text[64];
+  mc_format_size(text, sizeof text, bytes);
+  return wstr_from_utf8(buf, n, text);
 }
 
 wchar_t *mc_wformat_args(wchar_t *buf, size_t n, const char *fmt, const mc_arg *args, int nargs) {

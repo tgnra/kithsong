@@ -1,6 +1,7 @@
 /* The app's own string table (English only so far) and mc_format. Translations and the
  * fallback between languages are tested against a small table in test_strings_lang.c. */
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -132,6 +133,58 @@ static void test_playing_time(void) {
   CHECK(mc_format_playing_time(NULL, 0, 0) == 0);
 }
 
+/* Stands in for a frontend's grouping, so it shows when it's used. */
+static void group_with_dots(long long n, char *out, size_t size) {
+  snprintf(out, size, "%lld.%03lld", n / 1000, n % 1000);
+}
+
+/* Library stats' totals: 0 is a number there, and thousands of hours are grouped. */
+static void test_total_time(void) {
+  char buf[64];
+  struct {
+    long long ms;
+    const char *text;
+  } cases[] = {
+    {0, "0" NB "min"},
+    {47 * 60000LL, "47" NB "min"},
+    {90 * 60000LL, "1" NB "hr" NB "30" NB "min"},
+    {999 * 3600000LL, "999" NB "hours"},
+    {999 * 3600000LL + 29 * 60000LL, "999" NB "hours"},
+    {999 * 3600000LL + 30 * 60000LL, "1.000" NB "hours"},
+    {1234 * 3600000LL, "1.234" NB "hours"},
+  };
+  for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    size_t n = mc_format_total_time(buf, sizeof buf, cases[i].ms, group_with_dots);
+    CHECK_BUF(buf, cases[i].text);
+    CHECK(n == strlen(cases[i].text));
+  }
+}
+
+static void test_size(void) {
+  char buf[64];
+  struct {
+    long long bytes;
+    const char *text;
+  } cases[] = {
+    {0, "0 bytes"},
+    {1, "1 byte"},
+    {1023, "1023 bytes"},
+    {1024, "1.0 KB"},
+    {1536, "1.5 KB"},
+    {1024 * 1024LL - 1, "1024 KB"},
+    {100 * 1024LL, "100 KB"},
+    {5 * 1024 * 1024LL, "5.0 MB"},
+    {3LL << 30, "3.0 GB"},
+    {2LL << 40, "2.0 TB"},
+    {2000LL << 40, "2000 TB"}, /* TB is as far as it goes */
+  };
+  for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    size_t n = mc_format_size(buf, sizeof buf, cases[i].bytes);
+    CHECK_BUF(buf, cases[i].text);
+    CHECK(n == strlen(cases[i].text));
+  }
+}
+
 static void test_truncation(void) {
   char buf[8];
   memset(buf, 'z', sizeof buf);
@@ -160,6 +213,8 @@ int main(void) {
   test_plurals();
   test_format();
   test_playing_time();
+  test_total_time();
+  test_size();
   test_truncation();
   return TEST_RESULT();
 }

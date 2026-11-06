@@ -3,6 +3,7 @@
 
 #include <commctrl.h>
 #include <dwmapi.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uiautomation.h>
@@ -125,23 +126,19 @@ static void add_count(enum mc_str_id label, int64_t n) {
   if (r) wstr_count(r->value, sizeof r->value / sizeof r->value[0], n);
 }
 
+static void group_digits(long long n, char *out, size_t size) {
+  wchar_t digits[32];
+  char *grouped = wstr_to_utf8(wstr_count(digits, 32, n));
+  snprintf(out, size, "%s", grouped ? grouped : "");
+  free(grouped);
+}
+
 static void add_time(enum mc_str_id label, int64_t ms) {
   stat_row *r = add_row(mc_wstr(label));
   if (!r) return;
-  size_t n = sizeof r->value / sizeof r->value[0];
-  long long hours = (ms + 1800000) / 3600000;
   char text[64];
-  if (hours >= 1000) { /* grouped, which mc_format_playing_time() leaves out */
-    wchar_t digits[32];
-    wstr_count(digits, 32, hours);
-    char *grouped = wstr_to_utf8(digits);
-    mc_wformat(r->value, n, mc_str_plural(MC_STR_DURATION_HOURS, (long)hours), MC_S(grouped ? grouped : ""));
-    free(grouped);
-  } else if (mc_format_playing_time(text, sizeof text, ms)) {
-    wstr_from_utf8(r->value, n, text);
-  } else {
-    mc_wformat(r->value, n, mc_str(MC_STR_DURATION_MINUTES), MC_D(0));
-  }
+  mc_format_total_time(text, sizeof text, ms, group_digits);
+  wstr_from_utf8(r->value, sizeof r->value / sizeof r->value[0], text);
 }
 
 static void add_tally(const mc_library_tally *t) {
@@ -160,7 +157,7 @@ static void build(void) {
   g.message_title = NULL;
   g.message[0] = L'\0';
   if (g.status != MC_OK) {
-    mc_wformat(g.message, 256, mc_str(MC_STR_WINDOWS_STATS_FAILED), MC_S(mc_status_str(g.status)));
+    mc_wformat(g.message, 256, mc_str(MC_STR_STATS_FAILED), MC_S(mc_status_str(g.status)));
     return;
   }
   if (!s->all.tracks) {
@@ -490,7 +487,7 @@ static void on_init(HWND dlg) {
   apply_theme();
 
   read_start();
-  lstrcpynW(g.message, mc_wstr(MC_STR_WINDOWS_STATS_READING), 256);
+  lstrcpynW(g.message, mc_wstr(MC_STR_STATS_READING), 256);
   if (!g.thread) build();
   else if (WaitForSingleObject(g.thread, OPEN_WAIT_MS) == WAIT_OBJECT_0) read_finished();
 

@@ -536,7 +536,7 @@ static void rebuild(void) {
     }
     push_nav(mc_wstr(nav_bottom[i].text), nav_bottom[i].icon, nav_bottom[i].page, TRUE);
   }
-  sb_row *about = push_row(ROW_ABOUT, mc_wstr(MC_STR_WINDOWS_ABOUT), NULL);
+  sb_row *about = push_row(ROW_ABOUT, mc_wstr(MC_STR_ABOUT), NULL);
   if (about) {
     about->icon = 0xE946; /* Info */
     about->pinned = TRUE;

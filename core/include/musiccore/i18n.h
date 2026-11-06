@@ -91,6 +91,17 @@ char *mc_format_alloc_args(const char *fmt, const mc_arg *args, int nargs);
  * caller to leave out. Returns as mc_format_args. */
 size_t mc_format_playing_time(char *buf, size_t size, long long ms);
 
+/* Writes n with the locale's digit grouping, which only the frontends know, into out. */
+typedef void (*mc_group_digits_fn)(long long n, char *out, size_t size);
+
+/* A total that can run to thousands of hours, such as all of a library's: as
+ * mc_format_playing_time(), but 0 is "0 min", as a number to show rather than one to leave out,
+ * and from 1,000 hours the hours go through group. Returns as mc_format_args. */
+size_t mc_format_total_time(char *buf, size_t size, long long ms, mc_group_digits_fn group);
+
+/* "12.5 MB": bytes in the strings' units (KB, MB, GB, TB, of 1024). Returns as mc_format_args. */
+size_t mc_format_size(char *buf, size_t size, long long bytes);
+
 #ifdef __cplusplus
 }
 #endif

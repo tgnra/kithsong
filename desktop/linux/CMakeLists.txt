@@ -16,6 +16,7 @@ add_executable(kithsong
   src/track_menu.c
   src/import_view.c
   src/settings_view.c
+  src/stats_dialog.c
   src/move_library.c
   src/add_device.c
   src/devices.c
