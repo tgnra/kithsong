@@ -1179,7 +1179,10 @@ static void test_scanner(const char *scratch) {
     mc_sleep_ms(1);
   }
   CHECK(analysed(lib) == TRACKS + 5 + FIRST + MORE);
-  CHECK(most == FIRST + MORE && !went_back && !over && large);
+  CHECK(most == FIRST + MORE);
+  CHECK(!went_back);
+  CHECK(!over);
+  CHECK(large);
   mc_analysis_scanner_stop(s);
   mc_analysis_scanner_set_recount_ms(5000);
 

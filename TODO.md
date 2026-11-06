@@ -64,3 +64,4 @@ See "Merging libraries" in docs/sync-protocol.md.
 ## Windows
 
 - In dark mode the About dialog's link keeps the system blue: readable, but low contrast
+- test_analysis's check on a growing run failed twice in the release job on windows-latest at v0.7.6, and passed there once with diagnostics added; 56 local runs, debug and release, didn't reproduce it, and it passed on Linux. Cause not found. The check is split now, so the next failure says which part
