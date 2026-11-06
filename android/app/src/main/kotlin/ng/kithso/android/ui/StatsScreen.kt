@@ -26,7 +26,6 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -37,9 +36,6 @@ import ng.kithso.android.R
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.core.LibraryStats
 import ng.kithso.core.LibraryTally
-
-/** From this many hours a playing time is given in hours alone: the minutes tell nothing. */
-private const val HOURS_ONLY_FROM = 100L
 
 /**
  * Numbers about the library: what's on this phone, the whole library's if some of it isn't here,
@@ -141,14 +137,3 @@ private fun EmptyStats(modifier: Modifier) {
 /** [n] in the language's digits and grouping. */
 private fun count(n: Long): String = NumberFormat.getIntegerInstance().format(n)
 
-/** [ms] to the nearest minute, or from [HOURS_ONLY_FROM] hours up, to the nearest hour. */
-@Composable
-private fun playingTime(ms: Long): String {
-    val minutes = (ms + 30_000) / 60_000
-    val hours = (minutes + 30) / 60
-    return when {
-        minutes < 60 -> stringResource(R.string.duration_minutes, minutes.toInt())
-        hours < HOURS_ONLY_FROM -> stringResource(R.string.duration_hours_minutes, (minutes / 60).toInt(), (minutes % 60).toInt())
-        else -> pluralStringResource(R.plurals.stats_hours, hours.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), count(hours))
-    }
-}

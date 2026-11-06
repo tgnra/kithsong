@@ -57,3 +57,16 @@ void mc_shutdown(void) {
 void mc_free(void *ptr) {
   free(ptr);
 }
+
+size_t mc_format_playing_time(char *buf, size_t size, long long ms) {
+  if (ms <= 0) {
+    if (size) buf[0] = '\0';
+    return 0;
+  }
+  long long minutes = (ms + 30000) / 60000;
+  long long hours = (minutes + 30) / 60;
+  if (minutes < 1) minutes = 1;
+  if (minutes < 60) return mc_format(buf, size, mc_str(MC_STR_DURATION_MINUTES), MC_D(minutes));
+  if (hours < 100) return mc_format(buf, size, mc_str(MC_STR_DURATION_HOURS_MINUTES), MC_D(minutes / 60), MC_D(minutes % 60));
+  return mc_format(buf, size, mc_str_plural(MC_STR_DURATION_HOURS, (long)hours), MC_D(hours));
+}

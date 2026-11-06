@@ -84,6 +84,13 @@ char *mc_format_alloc_args(const char *fmt, const mc_arg *args, int nargs);
 #define mc_format_alloc(fmt, ...) \
   mc_format_alloc_args((fmt), MC_ARGS_(__VA_ARGS__), MC_NARGS_(__VA_ARGS__))
 
+/* A total playing time, as at the end of "1997 · 12 tracks · 47 min": "47 min" or "1 hr 30 min"
+ * to the nearest minute, never less than one, and from 100 hours "250 hours" to the nearest
+ * hour, as the minutes tell nothing by then. The hours aren't grouped into thousands, which
+ * takes the locale's digits. ms of 0 or less is a length not known: that writes "", for the
+ * caller to leave out. Returns as mc_format_args. */
+size_t mc_format_playing_time(char *buf, size_t size, long long ms);
+
 #ifdef __cplusplus
 }
 #endif

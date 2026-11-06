@@ -39,6 +39,7 @@
     "import_list_separator": { "text": ", ", "note": "Between the items of a list, e.g. \"12 imported, 3 skipped\"." },
     "duration_minutes": { "text": "{0:d} min", "note": "A total playing time under an hour." },
     "duration_hours_minutes": { "text": "{0:d} hr {1:d} min", "note": "A total playing time of an hour or more." },
+    "duration_hours": { "one": "{0} hour", "other": "{0} hours", "note": "A total playing time of 100 hours or more, where the minutes tell nothing. {0} is the number, already formatted, such as 1,234." },
 
     "settings": "Settings",
     "section_albums": "Albums",
@@ -1207,7 +1208,6 @@
     "stats_plays": { "text": "Plays", "note": "On the Library stats page: how many times tracks have been played." },
     "stats_tracks_played": { "text": "Tracks played", "note": "On the Library stats page: how many different tracks have been played at least once." },
     "stats_time_listened": { "text": "Time listened", "note": "On the Library stats page: how long has actually been spent listening." },
-    "stats_hours": { "one": "{0} hour", "other": "{0} hours", "note": "A long playing time on the Library stats page. {0} is the number, already formatted, such as 1,234." },
     "stats_empty_text": { "text": "Numbers about your library will show here once it has some music.", "note": "The Library stats page of a library with no music, under empty_title." },
     "sync_bin_waiting": { "text": "Sync: deletes are waiting for you to sync", "note": "For accessibility: Sync in the main screen's menu while it shows a red dot, deletes in the Recycle Bin waiting while another device is online." },
     "remove_from_this_phone": { "text": "Remove from this phone…", "note": "On an album's or artist's menu: removes its files from this phone only; it stays in the library and on the other devices." },

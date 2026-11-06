@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -24,7 +25,11 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import java.text.NumberFormat
 import ng.kithso.android.R
+
+/** From this many hours a playing time is given in hours alone: the minutes tell nothing. */
+private const val HOURS_ONLY_FROM = 100L
 
 /**
  * A seekbar over [durationMs]. [positionMs] is read only in here, so the position ticking
@@ -96,4 +101,23 @@ fun formatTime(ms: Long): String {
     val s = ms / 1000
     return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60)
     else "%d:%02d".format(s / 60, s % 60)
+}
+
+/**
+ * A total playing time: [ms] to the nearest minute, never less than one if there's any of it, or
+ * from [HOURS_ONLY_FROM] hours up, to the nearest hour. The desktops' mc_format_playing_time().
+ */
+@Composable
+fun playingTime(ms: Long): String {
+    val minutes = ((ms + 30_000) / 60_000).coerceAtLeast(if (ms > 0) 1 else 0)
+    val hours = (minutes + 30) / 60
+    return when {
+        minutes < 60 -> stringResource(R.string.duration_minutes, minutes.toInt())
+        hours < HOURS_ONLY_FROM -> stringResource(R.string.duration_hours_minutes, (minutes / 60).toInt(), (minutes % 60).toInt())
+        else -> pluralStringResource(
+            R.plurals.duration_hours,
+            hours.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+            NumberFormat.getIntegerInstance().format(hours),
+        )
+    }
 }
