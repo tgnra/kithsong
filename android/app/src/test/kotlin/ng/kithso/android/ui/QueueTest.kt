@@ -1,5 +1,6 @@
 package ng.kithso.android.ui
 
+import ng.kithso.playback.listPlaceOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -23,6 +24,13 @@ class QueueTest {
         assertEquals(listOf("b", "c", "a"), listOf("a", "b", "c").moved(0, 2))
         assertEquals(listOf("c", "a", "b"), listOf("a", "b", "c").moved(2, 0))
         assertEquals(listOf("a", "b", "c"), listOf("a", "b", "c").moved(1, 1))
+    }
+
+    @Test
+    fun `a saved place is the list's, not up next's`() {
+        assertEquals(2, listPlaceOf(2, 5, next = 3, before = 1))
+        assertEquals(3, listPlaceOf(7, 5, next = 3, before = 2))
+        assertEquals(4, listPlaceOf(7, 5, next = -1, before = 4))
     }
 
     private companion object {

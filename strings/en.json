@@ -1203,7 +1203,7 @@
     "go_to_named_artist": { "text": "Go to {0}", "note": "On a track's menu, for a track credited to several artists (\"A feat. B\"): one for each, opening that artist's page. {0} is the artist's name." },
 
     "edit_playlist": { "text": "Edit", "note": "Button on a playlist's or album group's page that shows the controls to reorder and remove its tracks or albums." },
-    "playlist_reorder": { "text": "Drag to reorder", "note": "The drag handle of a playlist track, an album group album or a row of the queue, for accessibility." },
+    "playlist_reorder": { "text": "Drag to reorder", "note": "A playlist track's or album group album's drag handle, for accessibility." },
 
     "delete_permanently_text": { "one": "{0:d} file will be deleted for good and removed from the library on all your devices. This phone has no trash to restore it from.", "other": "{0:d} files will be deleted for good and removed from the library on all your devices. This phone has no trash to restore them from.", "note": "Under \"Delete “{0}”?\"; the files are an album's or track's, and its cover." },
     "delete_kept": { "one": "{0:d} track couldn't be deleted, so it's still in the library.", "other": "{0:d} tracks couldn't be deleted, so they're still in the library." },

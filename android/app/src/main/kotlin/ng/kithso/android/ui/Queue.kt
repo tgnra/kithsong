@@ -349,9 +349,8 @@ private fun QueueRow(
             }
         }
         if (entry.durationMs > 0) {
-            // To the nearest second, as Windows' rows have it.
             Text(
-                formatTime(entry.durationMs + 500),
+                formatTime(entry.durationMs),
                 style = MaterialTheme.typography.bodyMedium,
                 color = secondary,
                 modifier = Modifier.padding(start = 8.dp),
@@ -363,5 +362,5 @@ private fun QueueRow(
     }
 }
 
-/** As wide as the mini player, on a tablet or in landscape. */
+/** So that on a tablet or in landscape a row's title stays near its time. */
 private val MaxQueueWidth = 640.dp
