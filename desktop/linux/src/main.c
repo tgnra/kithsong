@@ -482,7 +482,8 @@ static gboolean on_close_request(GtkWindow *win, gpointer user) {
     import_view_confirm_close(a->import, close_confirmed, a);
     return TRUE;
   }
-  devices_stop(a);
+  /* A dialog over the window closes instead of it, so sync carries on. */
+  if (!adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(a->win))) devices_stop(a);
   return FALSE;
 }
 
@@ -616,6 +617,7 @@ static GtkWidget *build_bottom_nav(app *a) {
   a->stats_row = add_bottom_row(list, "x-office-spreadsheet-symbolic", mc_str(MC_STR_STATS_TITLE), NULL);
   a->analysing = add_bottom_row(list, "content-loading-symbolic", mc_str(MC_STR_ANALYSIS_RUNNING), NULL);
   gtk_widget_set_visible(a->analysing, FALSE);
+  g_object_add_weak_pointer(G_OBJECT(a->analysing), (gpointer *)&a->analysing);
   a->settings = add_bottom_row(list, "emblem-system-symbolic", mc_str(MC_STR_SETTINGS), "<Control>comma");
   add_bottom_row(list, "help-about-symbolic", mc_str(MC_STR_ABOUT), "F1");
   g_signal_connect(list, "row-activated", G_CALLBACK(on_bottom_activated), a);

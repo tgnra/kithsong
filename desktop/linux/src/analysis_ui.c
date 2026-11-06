@@ -126,7 +126,7 @@ void analysis_ui_stop(void) {
     g_signal_handlers_disconnect_by_func(dialog, G_CALLBACK(on_response), g.a);
     adw_dialog_force_close(dialog);
   }
-  if (g.a) gtk_widget_set_visible(g.a->analysing, FALSE);
+  if (g.a && g.a->analysing) gtk_widget_set_visible(g.a->analysing, FALSE); /* it goes with the window */
 }
 
 gboolean analysis_ui_stopped(void) {

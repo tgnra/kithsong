@@ -4,8 +4,8 @@
 #include <string.h>
 
 enum {
-  WIDTH = 680,        /* two columns, where the window has room */
-  COLUMN_W = 300,     /* at least */
+  COLUMN_W = 316,     /* at least: two of them fill 680 */
+  MESSAGE_W = 420,
   MESSAGE_H = 280,
   MAX_ROWS = 18,
   OPEN_WAIT_MS = 100, /* too short to notice, and the numbers are in by then in all but a huge
@@ -160,6 +160,7 @@ static void show_new_cards(gboolean whole) {
 
   GtkWidget *scroller = gtk_scrolled_window_new();
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_propagate_natural_width(GTK_SCROLLED_WINDOW(scroller), TRUE);
   gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(scroller), TRUE);
   gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), flow);
   adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(g.toolbar), scroller);
@@ -169,7 +170,7 @@ static void show_new_cards(gboolean whole) {
 static void show_message(const char *title, const char *text) {
   GtkWidget *page = adw_status_page_new();
   gtk_widget_add_css_class(page, "compact");
-  gtk_widget_set_size_request(page, -1, MESSAGE_H);
+  gtk_widget_set_size_request(page, MESSAGE_W, MESSAGE_H);
   if (title) {
     adw_status_page_set_icon_name(ADW_STATUS_PAGE(page), "folder-music-symbolic");
     adw_status_page_set_title(ADW_STATUS_PAGE(page), title);
@@ -219,7 +220,7 @@ static void open_dialog(gboolean read) {
   adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(g.toolbar), adw_header_bar_new());
   g.dialog = adw_dialog_new();
   adw_dialog_set_title(g.dialog, mc_str(MC_STR_STATS_TITLE));
-  adw_dialog_set_content_width(g.dialog, WIDTH);
+  adw_dialog_set_follows_content_size(g.dialog, TRUE); /* the cards come, or go from two columns */
   adw_dialog_set_child(g.dialog, g.toolbar);
   g_signal_connect(g.dialog, "destroy", G_CALLBACK(on_destroy), NULL);
   if (read) show_read();
