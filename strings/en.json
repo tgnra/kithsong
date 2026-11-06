@@ -524,6 +524,7 @@
     "import_search_again": "Search again",
     "import_search_wider": { "text": "Search _more widely", "note": "Button in the review of an imported album or track: searches MusicBrainz (the online music database) again using other clues from the files and the folder name, such as catalogue numbers, the tracks' artists and the record label." },
     "import_matches": "Matches",
+    "import_tracks_text": "The chosen match's tracks, and the files they'd be applied to",
     "import_track_missing": { "text": "— missing", "note": "A track of the chosen match that no file was matched to." },
     "import_not_matched": { "text": "Not matched; left as is", "note": "A file that no track of the chosen match fits." },
     "import_other_item_file": { "text": "Grouped separately: {0}", "note": "In an import's track list, a file from the same folder that was grouped as an item of its own (and maybe already imported as that). {0} is that item's album, or the track's title." },
@@ -951,7 +952,6 @@
     "import_file_count": { "one": "{0:d} file", "other": "{0:d} files" },
     "import_matches_none_yet": "None yet. Search again, or keep the existing tags.",
     "import_matches_nothing": "MusicBrainz has nothing that fits. Search again with different terms, or keep the existing tags.",
-    "import_tracks_text": "The chosen match's tracks, and the files they'd be applied to",
 
     "this_computer": { "text": "This computer", "note": "This device's own row in the Devices list, and its page's status line." },
     "this_computer_no_group": { "text": "This computer, not syncing yet", "note": "This device's page status line while it isn't paired with any device." },

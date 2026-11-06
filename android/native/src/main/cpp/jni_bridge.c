@@ -770,6 +770,86 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeSearch(JNIEnv *env, 
   if (st != MC_OK && !(*env)->ExceptionCheck(env)) throw_status(env, st);
 }
 
+#define FILE_FIELDS 6
+
+/* The item's files, flattened FILE_FIELDS strings each, in CoreImport.ItemFile's order: path,
+ * title, artist, track, disc, length in ms. */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemFiles(JNIEnv *env, jclass cls, jlong handle,
+                                                                            jint item) {
+  (void)cls;
+  mc_import_item *it = NULL;
+  mc_status st = mc_import_item_get(import_of(handle), item, &it);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  jclass string_class = (*env)->FindClass(env, "java/lang/String");
+  jobjectArray out =
+      string_class ? (*env)->NewObjectArray(env, it->file_count * FILE_FIELDS, string_class, NULL) : NULL;
+  for (int i = 0; out && i < it->file_count; i++) {
+    const mc_import_file *f = &it->files[i];
+    jsize at = i * FILE_FIELDS;
+    if (!(put_string(env, out, at, f->path) && put_string(env, out, at + 1, f->title) &&
+          put_string(env, out, at + 2, f->artist) && put_int(env, out, at + 3, f->track) &&
+          put_int(env, out, at + 4, f->disc) && put_int(env, out, at + 5, f->duration_ms)))
+      out = NULL;
+  }
+  mc_import_item_free(it);
+  return out;
+}
+
+#define TRACK_FIELDS 7
+
+/* The tracks of all the item's candidates, flattened TRACK_FIELDS strings each: the candidate's
+ * index, then CoreImport.MatchTrack's order: title, artist, disc, number, length in ms, and the
+ * index of the file on it, or -1. */
+JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemTracks(JNIEnv *env, jclass cls, jlong handle,
+                                                                             jint item) {
+  (void)cls;
+  mc_import_item *it = NULL;
+  mc_status st = mc_import_item_get(import_of(handle), item, &it);
+  if (st != MC_OK) {
+    throw_status(env, st);
+    return NULL;
+  }
+  int tracks = 0;
+  for (int i = 0; i < it->match_count; i++) tracks += it->matches[i].track_count;
+  jclass string_class = (*env)->FindClass(env, "java/lang/String");
+  jobjectArray out = string_class ? (*env)->NewObjectArray(env, tracks * TRACK_FIELDS, string_class, NULL) : NULL;
+  jsize at = 0;
+  for (int i = 0; out && i < it->match_count; i++) {
+    for (int j = 0; out && j < it->matches[i].track_count; j++, at += TRACK_FIELDS) {
+      const mc_import_match_track *t = &it->matches[i].tracks[j];
+      if (!(put_int(env, out, at, i) && put_string(env, out, at + 1, t->title) &&
+            put_string(env, out, at + 2, t->artist) && put_int(env, out, at + 3, t->disc) &&
+            put_int(env, out, at + 4, t->number) && put_int(env, out, at + 5, t->length_ms) &&
+            put_int(env, out, at + 6, t->file)))
+        out = NULL;
+    }
+  }
+  mc_import_item_free(it);
+  return out;
+}
+
+/* Other items from the item's folder (mc_import_related). */
+JNIEXPORT jintArray JNICALL Java_ng_kithso_core_CoreImport_nativeRelated(JNIEnv *env, jclass cls, jlong handle,
+                                                                       jint item) {
+  (void)cls;
+  int related[64];
+  int n = mc_import_related(import_of(handle), item, related, 64);
+  if (n > 64) n = 64;
+  jintArray out = (*env)->NewIntArray(env, n);
+  if (out) (*env)->SetIntArrayRegion(env, out, 0, n, related);
+  return out;
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeAssign(JNIEnv *env, jclass cls, jlong handle, jint item,
+                                                                  jint match, jint track, jint from_item, jint file) {
+  (void)cls;
+  mc_status st = mc_import_assign(import_of(handle), item, match, track, from_item, file);
+  if (st != MC_OK) throw_status(env, st);
+}
+
 JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeSkipTagging(JNIEnv *env, jclass cls,
                                                                        jlong handle) {
   (void)cls;

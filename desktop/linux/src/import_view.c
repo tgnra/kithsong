@@ -850,9 +850,9 @@ static void review_fill_tracks(review *r, int match) {
   g_array_unref(candidates);
 
   if (match >= 0) {
-    char *text = can_assign ? g_strdup_printf("%s. %s", mc_str(MC_STR_LINUX_IMPORT_TRACKS_TEXT),
+    char *text = can_assign ? g_strdup_printf("%s. %s", mc_str(MC_STR_IMPORT_TRACKS_TEXT),
                                               mc_str(MC_STR_IMPORT_USE_AS_TRACK_HINT))
-                            : g_strdup(mc_str(MC_STR_LINUX_IMPORT_TRACKS_TEXT));
+                            : g_strdup(mc_str(MC_STR_IMPORT_TRACKS_TEXT));
     adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(r->tracks_group), text);
     g_free(text);
   }

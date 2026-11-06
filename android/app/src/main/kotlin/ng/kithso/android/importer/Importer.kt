@@ -46,7 +46,18 @@ data class ReviewDetails(
     val name: String,
     val info: CoreImport.ItemInfo,
     val matches: List<CoreImport.Match>,
+    val files: List<CoreImport.ItemFile>,
+    /** Other items from its folder, not busy, whose files may be its missing tracks. */
+    val related: List<RelatedItem>,
 )
+
+/** Another item from an item's folder, in the review: its album, or a single's title. */
+@Immutable
+data class RelatedItem(val item: Int, val name: String, val files: List<CoreImport.ItemFile>)
+
+/** A file picked for a missing track: [path] of item [fromItem], for [track] of the match. */
+@Immutable
+data class TrackPick(val track: Int, val fromItem: Int, val path: String)
 
 /** How an import is going, as the import card and the notification show it. */
 @Immutable
@@ -77,6 +88,8 @@ data class ImportProgress(
     val reviewItems: List<ReviewEntry> = emptyList(),
     /** "Name: why" for each item that failed, and for what couldn't be copied. */
     val problems: List<String> = emptyList(),
+    /** "Name: what happened" for each item the library already had some of. */
+    val outcomes: List<String> = emptyList(),
 ) {
     enum class Phase {
         /** Copying files out of the picked folder or documents into the app's storage. */
@@ -147,6 +160,12 @@ class Importer(
         /** Events that arrived before [session] was set. */
         val early = mutableListOf<Event>()
         val names = HashMap<Int, String>()
+        /** Picks being applied, one at a time, as the core renumbers files at each. */
+        val assigns = ArrayDeque<Assign>()
+    }
+
+    private class Assign(val item: Int, val match: Int, val pick: TrackPick) {
+        var sent = false
     }
 
     // Only touched on [thread].
@@ -264,6 +283,20 @@ class Importer(
     fun skipAll() = resolveAll(CoreImport::skip)
 
     fun accept(key: ItemKey, match: Int) = resolve(key) { session, item -> session.accept(item, match) }
+
+    /**
+     * Imports [key] with candidate [match], its missing tracks filled by [picks]. The first
+     * assign writes the item, and those after it re-file it, so its batch stays open until the
+     * last has been seen through.
+     */
+    fun accept(key: ItemKey, match: Int, picks: List<TrackPick>) {
+        if (picks.isEmpty()) return accept(key, match)
+        scope.launch(thread) {
+            val batch = batches.getOrNull(key.batch) ?: return@launch
+            picks.mapTo(batch.assigns) { Assign(key.item, match, it) }
+            nextAssign(batch)
+        }
+    }
     fun acceptAsIs(key: ItemKey) = resolve(key, CoreImport::acceptAsIs)
     fun skip(key: ItemKey) = resolve(key, CoreImport::skip)
     fun searchWider(key: ItemKey) = resolve(key, CoreImport::searchWider)
@@ -304,7 +337,18 @@ class Importer(
         val batch = batches.getOrNull(key.batch) ?: return@withContext null
         val session = batch.session ?: return@withContext null
         try {
-            ReviewDetails(key, session.itemName(key.item), session.itemInfo(key.item), session.matches(key.item))
+            val related = session.related(key.item).filterNot { session.itemState(it).isBusy }.map { item ->
+                val info = session.itemInfo(item)
+                RelatedItem(item, info.album, session.files(item))
+            }
+            ReviewDetails(
+                key,
+                session.itemName(key.item),
+                session.itemInfo(key.item),
+                session.matches(key.item),
+                session.files(key.item),
+                related,
+            )
         } catch (e: MusicCoreException) {
             null
         }
@@ -526,6 +570,7 @@ class Importer(
             CoreImport.Event.Scanning -> batch.found = e.arg
             CoreImport.Event.Scanned -> {
                 batch.states = Array(session.itemCount) { session.itemState(it) }
+                batch.states.indices.filter { batch.states[it].isFinished }.forEach { noteOutcome(batch, session, it) }
                 batch.scanned = true
                 scanning = false
                 // Extracted by now: the copy of the zip isn't needed.
@@ -533,10 +578,12 @@ class Importer(
                 if (batch.states.isEmpty() || batch.states.all { it.isFinished }) settle(batch)
             }
             CoreImport.Event.ItemChanged -> {
+                nextAssign(batch)
                 if (e.arg in batch.states.indices) {
                     val before = batch.states[e.arg]
                     batch.states[e.arg] = session.itemState(e.arg)
                     if (batch.states[e.arg] == CoreImport.State.Done && before != CoreImport.State.Done) refreshNowAndThen()
+                    if (batch.states[e.arg].isFinished) noteOutcome(batch, session, e.arg)
                     if (batch.scanned && batch.states.all { it.isFinished }) settle(batch)
                 }
             }
@@ -547,9 +594,53 @@ class Importer(
         maybeFinish()
     }
 
+    // Sends the next of the batch's picks once the one before has been written.
+    private fun nextAssign(batch: Batch) {
+        val session = batch.session ?: return
+        while (true) {
+            val next = batch.assigns.firstOrNull() ?: return
+            try {
+                val state = session.itemState(next.item)
+                if (state == CoreImport.State.Failed) {
+                    batch.assigns.clear()
+                    return
+                }
+                if (state.isBusy) return
+                val tracks = session.matches(next.item).getOrNull(next.match)?.tracks.orEmpty()
+                if (tracks.getOrNull(next.pick.track)?.let { it.file >= 0 } != false) {
+                    batch.assigns.removeFirst() // it's on the track, or the track has gone
+                    continue
+                }
+                if (next.sent) return
+                val file = session.files(next.pick.fromItem).indexOfFirst { it.path == next.pick.path }
+                if (file < 0) {
+                    batch.assigns.removeFirst()
+                    continue
+                }
+                session.assign(next.item, next.match, next.pick.track, next.pick.fromItem, file)
+                next.sent = true
+                return
+            } catch (e: MusicCoreException) {
+                Log.w(TAG, "Couldn't use a file as a track", e)
+                batch.assigns.removeFirst()
+            }
+        }
+    }
+
+    // What's said of an item the library already had some of, kept for when its session is closed.
+    private fun noteOutcome(batch: Batch, session: CoreImport, item: Int) {
+        val text = when (session.itemInfo(item).outcome) {
+            CoreImport.Outcome.Replaced -> R.string.import_state_replaced
+            CoreImport.Outcome.Added -> R.string.import_state_added_missing
+            CoreImport.Outcome.Duplicate -> R.string.import_state_duplicate
+            else -> return
+        }
+        outcomes[ItemKey(batch.id, item)] = context.getString(R.string.import_problem, session.itemName(item), context.getString(text))
+    }
+
     // Every item of the batch is settled: close its session and delete its copies.
     private fun settle(batch: Batch) {
-        if (batch.closed) return
+        if (batch.closed || batch.assigns.isNotEmpty()) return
         batch.closed = true
         batch.names.clear()
         batch.idle.complete(Unit)
@@ -587,7 +678,7 @@ class Importer(
 
     private fun maybeFinish() {
         if (over || !runnerDone) return
-        if (batches.all { it.closed || (it.scanned && it.states.all { s -> s.isFinished }) }) {
+        if (batches.all { it.closed || (it.scanned && it.assigns.isEmpty() && it.states.all { s -> s.isFinished }) }) {
             finish(ImportProgress.Phase.Finished)
         }
     }
@@ -623,6 +714,7 @@ class Importer(
             taggingSkipped = skipTagging,
             reviewItems = reviewEntries(),
             problems = copyProblems + failures(),
+            outcomes = outcomes.values.toList(),
         )
     }
 
@@ -638,6 +730,8 @@ class Importer(
             ReviewEntry(ItemKey(batch.id, item), name, session.itemError(item))
         }
     }
+
+    private val outcomes = LinkedHashMap<ItemKey, String>()
 
     // Failed items keep their names once their session is closed.
     private val failedNames = mutableMapOf<ItemKey, String>()
@@ -682,6 +776,7 @@ class Importer(
         val p = state.value
         state.value = p?.copy(phase = phase, reviewItems = emptyList(), offline = false)
         failedNames.clear()
+        outcomes.clear()
         Log.i(TAG, "Import ${phase.name.lowercase()}: ${p?.imported} imported, ${p?.skipped} skipped, ${p?.failed} failed")
         // Even if cancelled: what was imported stays.
         if ((p?.imported ?: 0) > 0) AnalysisWorker.schedule(context)

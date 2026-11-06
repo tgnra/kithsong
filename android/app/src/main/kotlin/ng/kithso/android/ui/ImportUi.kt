@@ -39,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -60,6 +61,7 @@ import ng.kithso.android.importer.ImportSource
 import ng.kithso.android.importer.Importer
 import ng.kithso.android.importer.ItemKey
 import ng.kithso.android.importer.ReviewDetails
+import ng.kithso.android.importer.TrackPick
 import ng.kithso.android.importer.detail
 import ng.kithso.android.importer.title
 import ng.kithso.core.CoreImport
@@ -140,7 +142,7 @@ fun ImportMenu(expanded: Boolean, pickers: ImportPickers, onDismiss: () -> Unit)
  * and a way to cancel; the offline banner, with ways to retry MusicBrainz and to import without
  * tagging (also shown while items couldn't be looked up though it's reachable); the items
  * with no sure match, to review one by one or settle all at once; then a summary with what
- * failed, until dismissed.
+ * failed and what the library already had, until dismissed.
  */
 @Composable
 fun ImportCard(progress: ImportProgress, importer: Importer, modifier: Modifier = Modifier) {
@@ -206,6 +208,23 @@ fun ImportCard(progress: ImportProgress, importer: Importer, modifier: Modifier 
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
+            for (outcome in progress.outcomes.take(MAX_PROBLEMS)) {
+                Text(
+                    outcome,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 6.dp, end = 8.dp),
+                )
+            }
+            if (progress.outcomes.size > MAX_PROBLEMS) {
+                val more = progress.outcomes.size - MAX_PROBLEMS
+                Text(
+                    pluralStringResource(R.plurals.import_more_problems, more, more),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
             FlowRow(
                 Modifier.fillMaxWidth().padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
@@ -232,9 +251,10 @@ fun ImportCard(progress: ImportProgress, importer: Importer, modifier: Modifier 
 private const val MAX_PROBLEMS = 3
 
 /**
- * The items waiting for a decision, and one of them opened: its candidates on MusicBrainz to
- * import it with, its existing tags, skipping it, searching again with the user's own terms
- * and, for an album, searching more widely. It closes when nothing is left to decide.
+ * The items waiting for a decision, and one of them opened: its candidates on MusicBrainz, each
+ * opening to its tracks to import it with ([MatchPage]), its existing tags, skipping it,
+ * searching again with the user's own terms and, for an album, searching more widely. It closes
+ * when nothing is left to decide.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -289,6 +309,7 @@ private fun ReviewItem(key: ItemKey, progress: ImportProgress, importer: Importe
     var details by remember(key) { mutableStateOf<ReviewDetails?>(null) }
     var loaded by remember(key) { mutableStateOf(false) }
     var searching by remember(key) { mutableStateOf(false) }
+    var chosen by remember(key) { mutableStateOf<Int?>(null) }
     // Read again as the import moves on: a search adds candidates, a decision settles it.
     LaunchedEffect(key, progress) {
         details = importer.details(key)
@@ -325,6 +346,10 @@ private fun ReviewItem(key: ItemKey, progress: ImportProgress, importer: Importe
     }
     if (d == null) return
     val busy = d.info.state.isBusy
+    d.matches.getOrNull(chosen ?: -1)?.let { match ->
+        MatchPage(d, chosen ?: 0, match, busy, importer, onBack = { chosen = null })
+        return
+    }
     if (d.matches.isNotEmpty()) {
         Text(
             stringResource(R.string.import_matches),
@@ -350,7 +375,7 @@ private fun ReviewItem(key: ItemKey, progress: ImportProgress, importer: Importe
                     headlineContent = { Text(heading, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     supportingContent = { Text(facts, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier.clickable(enabled = !busy) { importer.accept(key, i) },
+                    modifier = Modifier.clickable(enabled = !busy) { chosen = i },
                 )
             }
         }
@@ -379,6 +404,135 @@ private fun ReviewItem(key: ItemKey, progress: ImportProgress, importer: Importe
             },
             onDismiss = { searching = false },
         )
+    }
+}
+
+// A file that can be made a missing track: [group] says which other item it's from, if one.
+private data class Candidate(val fromItem: Int, val file: CoreImport.ItemFile, val group: String?)
+
+private val CoreImport.ItemFile.name: String get() = path.substringAfterLast('/')
+
+/**
+ * A match opened: its tracks with the files they'd be applied to, then the files left over and,
+ * with tracks missing, those of other items from the folder. Tapping a missing track lists the
+ * files it can take, and tapping it again takes the file back; Use this match imports the item
+ * with them. They're picked first and applied together, as an item is written with the first.
+ */
+@Composable
+private fun MatchPage(d: ReviewDetails, index: Int, match: CoreImport.Match, busy: Boolean, importer: Importer, onBack: () -> Unit) {
+    val picks = remember(d.key, index) { mutableStateMapOf<Int, Candidate>() }
+    val used = match.tracks.mapNotNull { t -> t.file.takeIf { it >= 0 } }.toSet()
+    val own = d.files.filterIndexed { i, _ -> i !in used }
+    val hasMissing = match.tracks.any { it.file < 0 }
+    val album = d.info.kind == CoreImport.Kind.Album
+    val otherText = stringResource(R.string.import_not_matched)
+    val related = if (hasMissing && album) {
+        d.related.flatMap { other ->
+            val group = stringResource(R.string.import_other_item_file, other.name)
+            other.files.map { Candidate(other.item, it, group) }
+        }
+    } else {
+        emptyList()
+    }
+    val candidates = own.map { Candidate(d.key.item, it, null) } + related
+    val picked = picks.values.map { it.file.path }.toSet()
+    val left = candidates.filter { it.file.path !in picked }
+    val canAssign = album && hasMissing && candidates.isNotEmpty()
+    val numbered = (match.tracks.lastOrNull()?.disc ?: 0) > 1
+    Text(
+        stringResource(R.string.import_tracks_text),
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp),
+    )
+    if (canAssign) {
+        Text(
+            stringResource(R.string.import_use_as_track_hint),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
+    }
+    LazyColumn(Modifier.heightIn(max = 400.dp)) {
+        items(match.tracks.size) { i ->
+            val t = match.tracks[i]
+            val number = if (numbered) "${t.disc}-${t.number}" else t.number.toString()
+            MatchTrackRow(
+                title = if (album) "$number. ${t.title}" else t.title,
+                file = d.files.getOrNull(t.file)?.name ?: picks[i]?.file?.name,
+                lengthMs = t.lengthMs,
+                useAs = stringResource(R.string.import_use_as_track, number),
+                choices = if (canAssign && t.file < 0 && !busy) left else emptyList(),
+                onPick = { picks[i] = it },
+                onUnpick = if (picks.containsKey(i)) ({ picks.remove(i) }) else null,
+            )
+        }
+        items(candidates.filter { it.file.path !in picked }) { c ->
+            ListItem(
+                headlineContent = { Text(c.file.name, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                supportingContent = { Text(c.group ?: otherText) },
+                trailingContent = { Text(formatTime(c.file.durationMs.toLong())) },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            )
+        }
+    }
+    HorizontalDivider()
+    FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+    ) {
+        TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
+        Button(
+            onClick = {
+                importer.accept(d.key, index, picks.map { (track, c) -> TrackPick(track, c.fromItem, c.file.path) })
+            },
+            enabled = !busy,
+        ) { Text(stringResource(R.string.import_use_match)) }
+    }
+}
+
+// A track of a match, and a missing one's menu of [choices].
+@Composable
+private fun MatchTrackRow(
+    title: String,
+    file: String?,
+    lengthMs: Int,
+    useAs: String,
+    choices: List<Candidate>,
+    onPick: (Candidate) -> Unit,
+    onUnpick: (() -> Unit)?,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        ListItem(
+            headlineContent = { Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            supportingContent = { Text(file ?: stringResource(R.string.import_track_missing), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            trailingContent = { Text(formatTime(lengthMs.toLong())) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.clickable(enabled = onUnpick != null || choices.isNotEmpty()) {
+                if (onUnpick != null) onUnpick() else menu = true
+            },
+        )
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            Text(
+                useAs,
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+            for (c in choices) {
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(c.file.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            c.group?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                        }
+                    },
+                    onClick = {
+                        menu = false
+                        onPick(c)
+                    },
+                )
+            }
+        }
     }
 }
 

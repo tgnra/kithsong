@@ -75,6 +75,28 @@ class CoreImport(
         val isSingle: Boolean,
         /** A single's track title; empty for a release. */
         val track: String,
+        /** In release order; for a single, just it. */
+        val tracks: List<MatchTrack> = emptyList(),
+    )
+
+    /** One track of a [Match] (mc_import_match_track). [file] indexes the item's [files], or is -1 for none. */
+    data class MatchTrack(
+        val title: String,
+        val artist: String,
+        val disc: Int,
+        val number: Int,
+        val lengthMs: Int,
+        val file: Int,
+    )
+
+    /** One of an item's files (mc_import_file), with its existing tags. */
+    data class ItemFile(
+        val path: String,
+        val title: String,
+        val artist: String,
+        val track: Int,
+        val disc: Int,
+        val durationMs: Int,
     )
 
     private var handle = nativeStart(
@@ -123,6 +145,7 @@ class CoreImport(
     /** The item's candidates, best first. */
     fun matches(item: Int): List<Match> {
         val f = nativeItemMatches(handle, item)
+        val tracks = matchTracks(item)
         return (0 until f.size / MATCH_FIELDS).map { i ->
             val at = i * MATCH_FIELDS
             Match(
@@ -137,9 +160,44 @@ class CoreImport(
                 label = f[at + 8],
                 isSingle = f[at + 9] != "0",
                 track = f[at + 10],
+                tracks = tracks[i].orEmpty(),
             )
         }
     }
+
+    // Each candidate's tracks, by its index.
+    private fun matchTracks(item: Int): Map<Int, List<MatchTrack>> {
+        val f = nativeItemTracks(handle, item)
+        return (0 until f.size / TRACK_FIELDS).groupBy({ f[it * TRACK_FIELDS].toInt() }) { i ->
+            val at = i * TRACK_FIELDS
+            MatchTrack(
+                title = f[at + 1],
+                artist = f[at + 2],
+                disc = f[at + 3].toInt(),
+                number = f[at + 4].toInt(),
+                lengthMs = f[at + 5].toInt(),
+                file = f[at + 6].toInt(),
+            )
+        }
+    }
+
+    /** The item's files. Their indices change as [assign] moves files, so read them again after one. */
+    fun files(item: Int): List<ItemFile> {
+        val f = nativeItemFiles(handle, item)
+        return (0 until f.size / FILE_FIELDS).map { i ->
+            val at = i * FILE_FIELDS
+            ItemFile(f[at], f[at + 1], f[at + 2], f[at + 3].toInt(), f[at + 4].toInt(), f[at + 5].toInt())
+        }
+    }
+
+    /** Other items from this item's folder, whose files [assign] can make tracks of it (mc_import_related). */
+    fun related(item: Int): List<Int> = nativeRelated(handle, item).asList()
+
+    /**
+     * Makes [file] of [fromItem] (which may be [item]) track [track] of [match], then writes
+     * [item] with that match (mc_import_assign). Neither may be busy.
+     */
+    fun assign(item: Int, match: Int, track: Int, fromItem: Int, file: Int) = nativeAssign(handle, item, match, track, fromItem, file)
 
     /** Imports an item that needs review with candidate [match]. */
     fun accept(item: Int, match: Int) = nativeAccept(handle, item, match)
@@ -179,7 +237,10 @@ class CoreImport(
     }
 
     private companion object {
-        const val MATCH_FIELDS = 11 // jni_bridge.c
+        // jni_bridge.c
+        const val MATCH_FIELDS = 11
+        const val TRACK_FIELDS = 7
+        const val FILE_FIELDS = 6
 
         init {
             System.loadLibrary("kithsong_jni")
@@ -201,6 +262,10 @@ class CoreImport(
         @JvmStatic external fun nativeItemUnreachable(handle: Long, item: Int): Boolean
         @JvmStatic external fun nativeItemInfo(handle: Long, item: Int): Array<String>
         @JvmStatic external fun nativeItemMatches(handle: Long, item: Int): Array<String>
+        @JvmStatic external fun nativeItemTracks(handle: Long, item: Int): Array<String>
+        @JvmStatic external fun nativeItemFiles(handle: Long, item: Int): Array<String>
+        @JvmStatic external fun nativeRelated(handle: Long, item: Int): IntArray
+        @JvmStatic external fun nativeAssign(handle: Long, item: Int, match: Int, track: Int, fromItem: Int, file: Int)
         @JvmStatic external fun nativeResolve(handle: Long, item: Int, how: Int)
         @JvmStatic external fun nativeAccept(handle: Long, item: Int, match: Int)
         @JvmStatic external fun nativeSearch(handle: Long, item: Int, artist: String?, title: String?)
