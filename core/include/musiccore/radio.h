@@ -48,7 +48,7 @@ typedef struct mc_radio_options {
   /* The first pick, and what the rest are measured from, for a station that starts somewhere
    * other than its seed; it has to be able to seed a mix itself. NULL: the seed. The seed still
    * decides the group, and it's the seed that skips are of, so what's learned stays with the
-   * station wherever it starts. */
+   * station wherever it starts. If the seed has gone from here, the start stands in for it. */
   const char *start_track;
 } mc_radio_options;
 

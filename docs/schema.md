@@ -546,13 +546,13 @@ owns isn't music they dislike, so a skip never counts against a track in general
 what sounds like it score a little worse there, and on stations from seeds that sound like that
 seed, for a while. Picks elsewhere don't change, nor does anything outside radio.
 
+It's worked out from `play_events` each time a mix or station starts, so nothing new is stored:
+it syncs with the rows, a skip on one device teaches the others, and there's nothing to migrate.
+
 A station that starts from another track than its seed (see [Radio stations](#radio-stations)) learns
 as any other does: its rows have the seed as `context_uid`, and it's the seed that's compared with
 other seeds. So it knows what it was told wherever it starts, and that first track can be skipped
 like any other.
-
-It's worked out from `play_events` each time a mix or station starts, so nothing new is stored:
-it syncs with the rows, a skip on one device teaches the others, and there's nothing to migrate.
 
 **What counts.** A row whose `context` is `radio`, with `context_uid` as the seed, `ended` as
 `skipped`, and `listened_ms` from 3 up to 30 seconds.

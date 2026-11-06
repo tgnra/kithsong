@@ -526,6 +526,7 @@ static mc_status station_start(mc_radio_station *s, mc_library *lib, const mc_ra
   } else {
     for (int i = 0; i < s->pool.count && s->seed < 0; i++)
       if (!strcmp(s->pool.items[i].uid, opts->seed_track)) s->seed = i;
+    if (s->seed < 0 && opts->start_track) s->seed = pool_find(&s->pool, opts->start_track);
     if (s->seed < 0) return MC_ERR_NOT_FOUND;
   }
   s->start = opts->start_track ? pool_find(&s->pool, opts->start_track) : s->seed;

@@ -533,6 +533,12 @@ static void test_start_track(const char *scratch) {
   for (int i = 0; i < n; i++) CHECK(picks[i].track_uid[1] == '0');
   opts.start_track = "unheard-of";
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_ERR_NOT_FOUND);
+  /* A seed that's gone from here gives way to the start, as what was playing goes on. */
+  opts.seed_track = "unheard-of";
+  opts.start_track = "c1-5";
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  for (int i = 0; i < n; i++) CHECK(picks[i].track_uid[1] == '1');
+  opts.seed_track = "c0-1";
   /* The groups can move on after a start was drawn. It still comes first, then the seed's group. */
   opts.start_track = "c1-5";
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
