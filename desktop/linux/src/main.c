@@ -1,7 +1,7 @@
 /* GTK4 + libadwaita frontend. Layout:
  *
  *   AdwToolbarView
- *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle]  [vol][import][settings]
+ *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle][queue]  [vol][import][settings]
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
  *      |                    / Recents / Devices)
  *      +- AdwBanner: what's wrong with the files here (app_update_waiting()), on the library's pages
@@ -84,6 +84,14 @@ static const char css[] =
   ".album-grid > child > .drop-after { box-shadow: 10px 0 0 -7px @accent_bg_color; }"
   ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }"
   ".now-playing .shuffle:checked { color: @accent_color; }"
+  /* The queue's popover (queue_button.c): its grip shows on the row in hand, and the row being
+   * dragged stands back while the line shows where it would go. */
+  ".queue-list > row { min-height: 48px; padding: 0 2px; }"
+  ".queue-grip { opacity: 0; }"
+  ".queue-list > row:hover .queue-grip, .queue-list > row:selected .queue-grip { opacity: 0.55; }"
+  ".queue-list > row.queue-dragged { opacity: 0.6; }"
+  ".queue-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
+  ".queue-list > row.drop-below { box-shadow: inset 0 -2px @accent_bg_color; }"
   ".pair-code { font-size: 20pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
   ".pair-code-shown { font-size: 32pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
   ".sync-picker { background: none; }"
@@ -609,14 +617,15 @@ static gboolean album_playable(app *a) {
   return FALSE;
 }
 
-/* Play turns into Pause while playing. With nothing queued, Play plays the album shown. */
+/* Play turns into Pause while playing. With nothing current, it starts the queue, or with that
+ * empty too plays the album shown. */
 static void update_buttons(app *a) {
   gboolean playing = playback_is_playing();
   gtk_button_set_icon_name(GTK_BUTTON(play_button),
                            playing ? "media-playback-pause-symbolic" : "media-playback-start-symbolic");
   app_set_tooltip(play_button, mc_str(playing ? MC_STR_PAUSE : MC_STR_PLAY), "space");
   set_action_enabled(a, "previous", playback_has_current());
-  set_action_enabled(a, "play-pause", playback_has_current() || album_playable(a));
+  set_action_enabled(a, "play-pause", playback_has_current() || playback_up_next_count() > 0 || album_playable(a));
   set_action_enabled(a, "next", playback_has_next());
 }
 
@@ -1081,9 +1090,27 @@ static void on_group_navigated(void *user) {
   show_album(user);
 }
 
+/* Play next and Play last on anything the library holds (track_menu_append_queue()). */
+static void on_queue_add(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)user;
+  int kind;
+  const char *uid, *name;
+  g_variant_get(param, "(i&s&s)", &kind, &uid, &name);
+  playback_add((mc_up_next_kind)kind, uid, name, !strcmp(g_action_get_name(G_ACTION(action)), "play-next"));
+}
+
 /* Right-clicking an album in the album grid: Add to album group. */
 static void on_album_menu(void *user, GtkWidget *grid, AlbumItem *album, double x, double y) {
   album_groups_album_menu(user, grid, album, NULL, x, y);
+}
+
+/* Right-clicking a playlist on the Playlists page: the menu it has on the Home page. */
+static void on_playlist_menu(void *user, GtkWidget *grid, AlbumItem *playlist, double x, double y) {
+  (void)user;
+  gtk_widget_insert_action_group(grid, "home", home_view_actions());
+  GMenuModel *menu = home_view_playlist_menu(playlist->uid, playlist->title, playlist->is_smart);
+  album_grid_popup(grid, menu, x, y);
+  g_object_unref(menu); /* the popover keeps it */
 }
 
 static void on_playlists_changed(void *user) {
@@ -1460,6 +1487,7 @@ static GtkWidget *build_albums(app *a) {
   gtk_stack_add_named(a->playlists, no_playlists, "none");
   a->playlist_grid = album_grid_new(mc_str(MC_STR_SECTION_PLAYLISTS), on_album_changed, a);
   album_grid_set_drop(a->playlist_grid, on_playlist_drop_over, on_playlist_dropped, a);
+  album_grid_set_menu(a->playlist_grid, on_playlist_menu, a);
   GtkEventController *keys = gtk_shortcut_controller_new();
   const guint playlist_keys[] = {GDK_KEY_Delete, GDK_KEY_KP_Delete, GDK_KEY_F2};
   for (size_t i = 0; i < G_N_ELEMENTS(playlist_keys); i++)
@@ -1782,6 +1810,8 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
     {"previous", on_previous, NULL, NULL, NULL, {0}},
     {"play-pause", on_play_pause, NULL, NULL, NULL, {0}},
     {"next", on_next, NULL, NULL, NULL, {0}},
+    {"play-next", on_queue_add, "(iss)", NULL, NULL, {0}},
+    {"play-last", on_queue_add, "(iss)", NULL, NULL, {0}},
   };
   g_action_map_add_action_entries(G_ACTION_MAP(gapp), actions, G_N_ELEMENTS(actions), a);
 
@@ -1918,6 +1948,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
     playback_set_shuffle(mc_settings_shuffle(settings));
     playback_set_volume(mc_settings_volume(settings));
     playback_set_scrobble(mc_settings_scrobble(settings));
+    playback_set_queue_tracks(mc_settings_queue_tracks(settings));
   }
   mc_settings_free(settings);
 

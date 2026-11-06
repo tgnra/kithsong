@@ -12,6 +12,7 @@
 #include "playback.h"
 #include "recents.h"
 #include "remove_here.h"
+#include "track_menu.h"
 
 enum { LIST_AVATAR = 40, PAGE_AVATAR = 96 };
 
@@ -170,6 +171,7 @@ static struct {
   char menu_track_artist[MC_UID_STRLEN]; /* and its artist, or "" */
   GSimpleAction *go_to_album, *go_to_artist;
   GSimpleAction *radio_artist, *radio_track; /* enabled if there's a seed */
+  GSimpleAction *queue_track[2]; /* the track menu's Play next and Play last */
   GPtrArray *rows;              /* bound track rows, to mark the playing one */
   char playing_uid[MC_UID_STRLEN];
 } v;
@@ -253,13 +255,14 @@ static GSimpleAction *radio_action(GSimpleActionGroup *group, const char *name) 
   return action;
 }
 
-/* The menu for the artist with uid, made each time it opens: Start radio, Edit..., then Remove
+/* The menu for the artist with uid, made each time it opens: Play next, Play last, Start radio, Edit..., then Remove
  * from this computer... or Sync to this computer where they apply. An artist can't be deleted
  * from the library, only their albums and tracks. */
 static GMenuModel *artist_menu(const char *uid) {
   g_strlcpy(v.menu_artist, uid, sizeof v.menu_artist);
   g_simple_action_set_enabled(v.radio_artist, v.a->lib && mc_radio_seed_for_artist(v.a->lib, uid, v.artist_seed) == MC_OK);
   GMenu *menu = g_menu_new();
+  track_menu_append_queue(menu, MC_UP_NEXT_ARTIST, uid, name_of(uid));
   g_menu_append(menu, mc_str_mnemonic(MC_STR_START_RADIO), "artist.start-radio");
   g_menu_append(menu, mc_str_mnemonic(MC_STR_EDIT_MENU), "artist.edit");
   remove_here_append(menu, MC_PROFILE_ARTIST, uid, "artist.remove-here", "artist.sync-here");
@@ -501,6 +504,7 @@ static void menu_for(const ArtistTrack *t) {
   if (album) g_object_unref(album);
   g_simple_action_set_enabled(v.go_to_artist, t->artist_uid[0] && strcmp(t->artist_uid, v.open));
   g_simple_action_set_enabled(v.radio_track, playback_can_radio(t->uid));
+  track_menu_enable_queue(v.queue_track, v.menu_here);
 }
 
 /* Right-click: selects the row and opens its menu where the pointer is. */
@@ -1102,6 +1106,8 @@ static GtkWidget *build_page(void) {
    * stack, artist_view_new()) resolve. */
   GMenu *model = g_menu_new();
   GMenu *section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_PLAY_NEXT), "artist.play-next");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_PLAY_LAST), "artist.play-last");
   g_menu_append(section, mc_str_mnemonic(MC_STR_START_RADIO), "artist.start-radio-track");
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "artist.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
@@ -1243,6 +1249,7 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
   g_object_unref(v.go_to_artist);
   v.radio_artist = radio_action(actions, "start-radio");
   v.radio_track = radio_action(actions, "start-radio-track");
+  track_menu_add_queue_actions(actions, v.menu_uid, v.queue_track);
   gtk_widget_insert_action_group(v.stack, "artist", G_ACTION_GROUP(actions));
   v.menu_actions = G_ACTION_GROUP(actions); /* the stack keeps it */
   g_object_unref(actions);

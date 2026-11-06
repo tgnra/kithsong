@@ -73,7 +73,7 @@ static struct {
   char *trackid, *title, *artist, *album, *art_url;
   int64_t length_us;
   mc_player_state state;
-  gboolean has_current, has_next;
+  gboolean playable, has_current, has_next;
 } s;
 
 /* --- Properties --- */
@@ -142,7 +142,8 @@ static GVariant *get_player(GDBusConnection *conn, const char *sender, const cha
   if (!strcmp(name, "Metadata")) return metadata();
   if (!strcmp(name, "Position")) return g_variant_new_int64(s.has_current ? playback_position_ms() * 1000 : 0);
   if (!strcmp(name, "CanGoNext")) return g_variant_new_boolean(s.has_next);
-  if (!strcmp(name, "CanGoPrevious") || !strcmp(name, "CanPlay") || !strcmp(name, "CanPause"))
+  if (!strcmp(name, "CanPlay")) return g_variant_new_boolean(s.playable);
+  if (!strcmp(name, "CanGoPrevious") || !strcmp(name, "CanPause"))
     return g_variant_new_boolean(s.has_current);
   if (!strcmp(name, "CanSeek")) return g_variant_new_boolean(can_seek());
   if (!strcmp(name, "CanControl")) return g_variant_new_boolean(TRUE);
@@ -326,7 +327,7 @@ void mpris_set_track(const char *uid, const char *title, const char *artist, con
   emit_changed(&b, TRUE);
 }
 
-void mpris_set_state(mc_player_state state, gboolean has_current, gboolean has_next) {
+void mpris_set_state(mc_player_state state, gboolean playable, gboolean has_current, gboolean has_next) {
   gboolean could_seek = can_seek();
   GVariantBuilder b;
   g_variant_builder_init(&b, G_VARIANT_TYPE_VARDICT);
@@ -336,9 +337,13 @@ void mpris_set_state(mc_player_state state, gboolean has_current, gboolean has_n
     any = TRUE;
   }
   if (has_current != s.has_current) {
-    const char *names[] = {"CanGoPrevious", "CanPlay", "CanPause"};
+    const char *names[] = {"CanGoPrevious", "CanPause"};
     for (size_t i = 0; i < G_N_ELEMENTS(names); i++)
       g_variant_builder_add(&b, "{sv}", names[i], g_variant_new_boolean(has_current));
+    any = TRUE;
+  }
+  if (playable != s.playable) {
+    g_variant_builder_add(&b, "{sv}", "CanPlay", g_variant_new_boolean(playable));
     any = TRUE;
   }
   if (has_next != s.has_next) {
@@ -346,6 +351,7 @@ void mpris_set_state(mc_player_state state, gboolean has_current, gboolean has_n
     any = TRUE;
   }
   s.state = state;
+  s.playable = playable;
   s.has_current = has_current;
   s.has_next = has_next;
   if (can_seek() != could_seek) {

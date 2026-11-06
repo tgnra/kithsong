@@ -11,6 +11,7 @@ add_executable(kithsong
   src/mpris.c
   src/now_playing.c
   src/playback.c
+  src/queue_button.c
   src/track_list.c
   src/track_menu.c
   src/import_view.c

@@ -12,6 +12,7 @@
 #include "recents.h"
 #include "remove_here.h"
 #include "smart_editor.h"
+#include "track_menu.h"
 
 static struct {
   app *a;
@@ -248,18 +249,22 @@ static void append_for(GMenu *menu, enum mc_str_id label, const char *action, co
   g_object_unref(item);
 }
 
-/* Rename... and Delete album group... for group uid; for a smart one, Edit rules... first. */
-static GMenuModel *group_menu(const char *uid, gboolean smart) {
-  GMenu *menu = g_menu_new();
-  if (smart) append_for(menu, MC_STR_SMART_EDIT_MENU, "albumgroup.edit-rules", uid);
-  append_for(menu, MC_STR_PLAYLIST_RENAME_MENU, "albumgroup.rename", uid);
-  append_for(menu, smart ? MC_STR_SMART_DELETE_GROUP_MENU : MC_STR_ALBUM_GROUP_DELETE_MENU, "albumgroup.delete", uid);
+/* Play next, Play last, then Rename... and Delete album group... for group uid, called name; for a
+ * smart one, Edit rules... before those. */
+static GMenuModel *group_menu(const char *uid, const char *name, gboolean smart) {
+  GMenu *menu = g_menu_new(), *section = g_menu_new();
+  track_menu_append_queue(menu, smart ? MC_UP_NEXT_SMART_ALBUM_GROUP : MC_UP_NEXT_ALBUM_GROUP, uid, name);
+  if (smart) append_for(section, MC_STR_SMART_EDIT_MENU, "albumgroup.edit-rules", uid);
+  append_for(section, MC_STR_PLAYLIST_RENAME_MENU, "albumgroup.rename", uid);
+  append_for(section, smart ? MC_STR_SMART_DELETE_GROUP_MENU : MC_STR_ALBUM_GROUP_DELETE_MENU, "albumgroup.delete", uid);
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
   return G_MENU_MODEL(menu);
 }
 
-GMenuModel *album_groups_group_model(const char *uid, gboolean smart) {
+GMenuModel *album_groups_group_model(const char *uid, const char *name, gboolean smart) {
   ensure_actions();
-  return group_menu(uid, smart);
+  return group_menu(uid, name, smart);
 }
 
 /* The album's menu; grid is what it's shown in if in_group isn't NULL, for where it can move. */
@@ -272,6 +277,7 @@ static GMenuModel *album_menu(app *a, GtkWidget *grid, const char *uid, const ch
   g_simple_action_set_enabled(v.start_radio, mc_radio_seed_for_album(a->lib, uid, v.menu_seed) == MC_OK);
 
   GMenu *menu = g_menu_new(), *add = g_menu_new();
+  track_menu_append_queue(menu, MC_UP_NEXT_ALBUM, uid, title);
   g_menu_append(menu, mc_str_mnemonic(MC_STR_START_RADIO), "albumgroup.start-radio");
   mc_album_group_list *groups = NULL;
   if (mc_library_list_album_groups(a->lib, 0, &groups) == MC_OK && groups->count) {
@@ -371,7 +377,7 @@ gboolean album_groups_open(app *a, const char *uid) {
   gtk_widget_set_tooltip_text(v.more, mc_str(v.smart ? MC_STR_SMART_GROUP_MENU : MC_STR_ALBUM_GROUP_MENU));
   gtk_widget_set_visible(v.reshuffle, group->is_smart && group->random);
   g_object_unref(group);
-  GMenuModel *menu = group_menu(v.open, v.smart);
+  GMenuModel *menu = group_menu(v.open, gtk_label_get_text(GTK_LABEL(v.name)), v.smart);
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(v.more), menu);
   g_object_unref(menu);
   clear_albums();
@@ -427,7 +433,7 @@ static void on_group_activated(void *user, AlbumItem *group) {
 static void on_group_menu(void *user, GtkWidget *grid, AlbumItem *group, double x, double y) {
   (void)user;
   ensure_actions();
-  GMenuModel *menu = group_menu(group->uid, group->is_smart);
+  GMenuModel *menu = group_menu(group->uid, group->title, group->is_smart);
   album_grid_popup(grid, menu, x, y);
   g_object_unref(menu);
 }

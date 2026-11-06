@@ -11,6 +11,7 @@
 #include "playlist_dialogs.h"
 #include "recents.h"
 #include "smart_editor.h"
+#include "track_menu.h"
 
 enum {
   COVER_SIZE = 160, /* the album grid's tiles */
@@ -217,12 +218,15 @@ static void on_delete(GSimpleAction *action, GVariant *param, gpointer user) {
   else playlist_delete_present(win, v.a->lib, v.menu_uid, v.menu_title, on_library_changed, NULL);
 }
 
-/* What the track list's button has for a playlist, or for a smart one. */
+/* A playlist's menu on a tile, here or on the Playlists page, or a smart one's. */
 static GMenuModel *playlist_menu(gboolean smart) {
-  GMenu *menu = g_menu_new();
-  if (smart) g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_EDIT_MENU), "home.edit-rules");
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_RENAME_MENU), "home.rename");
-  g_menu_append(menu, mc_str_mnemonic(smart ? MC_STR_SMART_DELETE_PLAYLIST_MENU : MC_STR_PLAYLIST_DELETE_MENU), "home.delete");
+  GMenu *menu = g_menu_new(), *section = g_menu_new();
+  track_menu_append_queue(menu, smart ? MC_UP_NEXT_SMART_PLAYLIST : MC_UP_NEXT_PLAYLIST, v.menu_uid, v.menu_title);
+  if (smart) g_menu_append(section, mc_str_mnemonic(MC_STR_SMART_EDIT_MENU), "home.edit-rules");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_PLAYLIST_RENAME_MENU), "home.rename");
+  g_menu_append(section, mc_str_mnemonic(smart ? MC_STR_SMART_DELETE_PLAYLIST_MENU : MC_STR_PLAYLIST_DELETE_MENU), "home.delete");
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
   return G_MENU_MODEL(menu);
 }
 
@@ -277,7 +281,7 @@ static void popup_tile_menu(tile *t, GtkWidget *widget, double x, double y) {
   } else if (t->kind == MC_RECENT_PLAYLIST) {
     item = playlist_menu(t->smart);
   } else if (t->kind == MC_RECENT_ALBUM_GROUP) {
-    item = album_groups_group_model(t->uid, t->smart);
+    item = album_groups_group_model(t->uid, v.menu_title, t->smart);
   } else {
     item = album_groups_album_model(v.a, t->uid, v.menu_title);
   }

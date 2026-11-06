@@ -56,7 +56,7 @@ gboolean album_groups_shows(const char *uid);
 /* The open group's album grid (album_grid.c), or NULL while the groups show. */
 GtkWidget *album_groups_album_grid(void);
 
-/* The menu for album in grid (an album grid), at x, y: Start radio, greyed out if none of its
+/* The menu for album in grid (an album grid), at x, y: Play next, Play last, Start radio, greyed out if none of its
  * tracks can seed a station, Add to album group, and if in_group isn't NULL, Remove from album group (of in_group), then Edit... (edit_dialog.h), Remove from
  * this computer... or Sync to this computer where they apply (remove_here.h), and Delete from
  * library... (delete_dialog.h).
@@ -67,7 +67,7 @@ void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const ch
  * the album uid, called title, or NULL with no library. g_object_unref() it. What it's for is
  * copied, so it can go while the menu is open. */
 GMenuModel *album_groups_album_model(app *a, const char *uid, const char *title);
-/* The same for group uid: a group tile's right-click menu. */
-GMenuModel *album_groups_group_model(const char *uid, gboolean smart);
+/* The same for group uid, called name: a group tile's right-click menu. */
+GMenuModel *album_groups_group_model(const char *uid, const char *name, gboolean smart);
 
 #endif

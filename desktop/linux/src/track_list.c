@@ -87,6 +87,7 @@ static struct {
   GtkWidget *pane, *menu;         /* menu: the tracks' right-click menu */
   GMenuModel *album_menu, *playlist_menu; /* what it shows */
   GSimpleAction *move_up, *move_down, *go_to_album, *go_to_artist, *start_radio;
+  GSimpleAction *queue[2];        /* Play next and Play last */
   char menu_uid[MC_UID_STRLEN];   /* the track it was opened on */
   char menu_entry[MC_UID_STRLEN]; /* and its playlist entry, or "" */
   char menu_album[MC_UID_STRLEN]; /* and its album and artist, or "" */
@@ -157,6 +158,7 @@ static gboolean menu_for(guint pos) {
   g_simple_action_set_enabled(s.go_to_album, album_to_go_to(s.menu_album));
   g_simple_action_set_enabled(s.go_to_artist, s.menu_artist[0] != '\0');
   g_simple_action_set_enabled(s.start_radio, playback_can_radio(s.menu_uid));
+  track_menu_enable_queue(s.queue, t->path != NULL);
   s.menu_here = t->path != NULL;
   s.menu_pos = pos;
   gboolean playlist = showing_playlist() && s.menu_entry[0];
@@ -397,6 +399,20 @@ static void on_reshuffle(GtkButton *button, gpointer user) {
   if (s.cb.reshuffle && s.album && s.album->is_smart) s.cb.reshuffle(s.cb.user);
 }
 
+/* The menu of the header's button: Play next, Play last, then Rename... and Delete, with Edit rules...
+ * before them for a smart playlist. */
+static GMenuModel *header_menu(gboolean smart) {
+  GMenu *menu = g_menu_new(), *section = g_menu_new();
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAY_NEXT), "playlist.play-next");
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAY_LAST), "playlist.play-last");
+  if (smart) g_menu_append(section, mc_str_mnemonic(MC_STR_SMART_EDIT_MENU), "playlist.edit-rules");
+  track_menu_append_with_key(section, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
+  g_menu_append(section, mc_str_mnemonic(smart ? MC_STR_SMART_DELETE_PLAYLIST_MENU : MC_STR_PLAYLIST_DELETE_MENU), "playlist.delete");
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  return G_MENU_MODEL(menu);
+}
+
 static GtkWidget *build_header(void) {
   GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
   gtk_widget_set_margin_start(header, 18);
@@ -438,15 +454,8 @@ static GtkWidget *build_header(void) {
   gtk_widget_set_margin_top(buttons, 18);
   gtk_widget_set_margin_end(buttons, 12);
 
-  GMenu *menu = g_menu_new();
-  track_menu_append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_DELETE_MENU), "playlist.delete");
-  s.header_menu = G_MENU_MODEL(menu);
-  menu = g_menu_new();
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_EDIT_MENU), "playlist.edit-rules");
-  track_menu_append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
-  g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_DELETE_PLAYLIST_MENU), "playlist.delete");
-  s.smart_header_menu = G_MENU_MODEL(menu);
+  s.header_menu = header_menu(FALSE);
+  s.smart_header_menu = header_menu(TRUE);
   s.playlist_button = gtk_menu_button_new();
   gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s.playlist_button), "view-more-symbolic");
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), s.header_menu);
@@ -515,6 +524,15 @@ static void on_remove(GSimpleAction *action, GVariant *param, gpointer user) {
   char entry[MC_UID_STRLEN];
   memcpy(entry, s.menu_entry, sizeof entry);
   if (s.cb.remove && entry[0]) s.cb.remove(s.cb.user, entry);
+}
+
+/* The header menu's Play next and Play last: the playlist shown. */
+static void on_queue_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)param;
+  (void)user;
+  if (!s.album) return;
+  playback_add(s.album->is_smart ? MC_UP_NEXT_SMART_PLAYLIST : MC_UP_NEXT_PLAYLIST, s.album->uid, s.album->title,
+               !strcmp(g_action_get_name(G_ACTION(action)), "play-next"));
 }
 
 static void on_rename_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -715,6 +733,7 @@ static void on_menu_closed(GtkPopover *menu, gpointer list) {
 static void build_menu(GtkWidget *pane) {
   GSimpleActionGroup *actions = g_simple_action_group_new();
   s.start_radio = add_action(actions, "start-radio", on_start_radio);
+  track_menu_add_queue_actions(actions, s.menu_uid, s.queue);
   add_action(actions, "add-to-playlist", on_add_to_playlist);
   s.move_up = add_action(actions, "move-up", on_move);
   s.move_down = add_action(actions, "move-down", on_move);
@@ -729,6 +748,8 @@ static void build_menu(GtkWidget *pane) {
   add_action(actions, "rename", on_rename_playlist);
   add_action(actions, "delete", on_delete_playlist);
   add_action(actions, "edit-rules", on_edit_rules);
+  add_action(actions, "play-next", on_queue_playlist);
+  add_action(actions, "play-last", on_queue_playlist);
   gtk_widget_insert_action_group(pane, "playlist", G_ACTION_GROUP(actions));
   g_object_unref(actions);
 

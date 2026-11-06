@@ -6,6 +6,8 @@
  * g_idle_add(); while playing, a timer moves the seekbar on. The player is created on first
  * play. Plays are counted in the library and scrobbled when the player says they count. A
  * station's queue grows as it plays, and what's added is looked up in the library as it comes.
+ * The queue the app shows, Play next and Play last, is the core's up next: its tracks are items
+ * like the rest, and queue_button.c shows the list. It goes with the library, as its tracks do.
  * Call everything here on the UI thread.
  */
 #ifndef KITHSONG_PLAYBACK_H
@@ -95,9 +97,25 @@ int playback_volume(void);
 void playback_set_muted(gboolean muted);
 gboolean playback_muted(void);
 
+/* Adds it to the front of the queue (Play next) or the end (Play last), and the now-playing strip
+ * says so, or that it has nothing with a file on this device. Nothing starts playing. Anything but
+ * a track goes in as one block, named name, unless playback_set_queue_tracks() says otherwise. */
+void playback_add(mc_up_next_kind what, const char *uid, const char *name, gboolean next);
+/* Whether things go in the queue as a track each (mc_settings_queue_tracks()). Off to begin
+ * with; main.c reads it and settings_view.c changes it. */
+void playback_set_queue_tracks(gboolean on);
+int playback_up_next_count(void);
+/* The queue as it is, NULL if there's no player yet. Free with mc_up_next_list_free(). */
+mc_up_next_list *playback_up_next(void);
+void playback_up_next_move(uint32_t id, int to);
+void playback_up_next_remove(uint32_t id);
+/* Empties the queue; playback goes on. */
+void playback_up_next_clear(void);
+
 gboolean playback_is_playing(void);
 mc_player_state playback_state(void);
-/* Whether there's a current track, and one after it (always, shuffled or from a station that's
+/* Whether there's a current track, and something to go next to (the queue, or one after it: always,
+ * shuffled or from a station that's
  * still adding). */
 gboolean playback_has_current(void);
 gboolean playback_has_next(void);

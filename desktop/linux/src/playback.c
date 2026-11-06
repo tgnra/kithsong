@@ -6,6 +6,7 @@
 #include "mpris.h"
 #include "musiccore/radio.h"
 #include "now_playing.h"
+#include "queue_button.h"
 #include "track_list.h"
 #include "volume_button.h"
 
@@ -22,6 +23,7 @@ static struct {
   void (*changed)(void *user);
   void (*recents_changed)(void *user);
   void (*radio_failed)(void *user);
+  gboolean queue_tracks; /* mc_settings_queue_tracks() */
   gboolean station_logged; /* for the end of the next refresh() */
   void *user;
   mc_player *player;
@@ -42,6 +44,7 @@ static struct {
   int index;
   mc_player_state state;
   gboolean has_next;
+  unsigned up_next_changes; /* as the player had them last */
 } s;
 
 static void free_items(void) {
@@ -74,6 +77,22 @@ static int duration_of(const item *it, const mc_player_status *st) {
   return ms ? ms : (int)st->duration_ms;
 }
 
+static void refresh(void);
+
+/* Rows of the queue keep up with what an edit changed: a track's, and an album's title. A playlist
+ * or group goes by what it was called when it was added. */
+static void rename_up_next(void) {
+  mc_up_next_list *list = playback_up_next();
+  for (int i = 0; list && i < list->count; i++) {
+    const mc_up_next_entry *e = &list->items[i];
+    if (e->first_item < 0 || e->first_item >= s.count) continue;
+    const item *it = &s.items[e->first_item];
+    const char *title = e->block ? (e->context == MC_PLAY_CONTEXT_ALBUM ? it->album : NULL) : it->title;
+    if (title) mc_player_up_next_rename(s.player, e->id, title, e->block ? e->artist : it->artist);
+  }
+  mc_up_next_list_free(list);
+}
+
 void playback_tracks_changed(mc_library *lib) {
   if (!s.player) return;
   for (int i = 0; i < s.count; i++) {
@@ -92,6 +111,8 @@ void playback_tracks_changed(mc_library *lib) {
     if (t->path) mc_player_queue_set_path(s.player, i, t->path);
     mc_track_list_free(list);
   }
+  rename_up_next();
+  refresh();
   mc_player_status st;
   mc_player_status_get(s.player, &st);
   const item *it = current(&st);
@@ -193,13 +214,15 @@ static void refresh(void) {
   add_new_items(); /* the player may have moved on to one that's only just come */
   const item *it = current(&st);
   int duration_ms = duration_of(it, &st);
-  gboolean has_next = it && next_exists(&st);
+  gboolean has_next = st.up_next || (it && next_exists(&st));
+  gboolean up_next_changed = st.up_next_changes != s.up_next_changes;
 
   gboolean new_track = st.index != s.index, new_state = st.state != s.state;
-  gboolean new_next = has_next != s.has_next;
+  gboolean new_next = has_next != s.has_next || up_next_changed; /* Play starts the queue, too */
   s.index = st.index;
   s.state = st.state;
   s.has_next = has_next;
+  s.up_next_changes = st.up_next_changes;
   if (st.state != MC_PLAYER_PLAYING) {
     s.announced = -1;
   } else if (it && st.index != s.announced) {
@@ -218,11 +241,12 @@ static void refresh(void) {
 
   if (new_track || new_state || new_next) {
     set_window_title(st.state != MC_PLAYER_STOPPED ? it : NULL);
-    mpris_set_state(st.state, it != NULL, has_next);
+    mpris_set_state(st.state, it || st.up_next, it != NULL, has_next); /* the queue starts on Play with nothing current */
     if (st.state == MC_PLAYER_PLAYING && !s.tick) s.tick = g_timeout_add(TICK_MS, on_tick, NULL);
     else if (st.state != MC_PLAYER_PLAYING && s.tick) g_clear_handle_id(&s.tick, g_source_remove);
     if (s.changed) s.changed(s.user);
   }
+  if (up_next_changed) queue_button_update();
   if (s.station_logged) {
     s.station_logged = FALSE;
     if (s.recents_changed) s.recents_changed(s.user);
@@ -277,7 +301,10 @@ void playback_free(void) {
 }
 
 void playback_set_library(mc_library *lib, const char *config_dir) {
-  if (s.player && lib != s.lib) mc_player_stop_radio(s.player); /* its tracks are that library's */
+  if (s.player && lib != s.lib) { /* their tracks are that library's */
+    mc_player_stop_radio(s.player);
+    mc_player_up_next_clear(s.player);
+  }
   if (!lib && s.player) mc_player_end_play(s.player); /* the library, or the app, is closing */
   count_plays();
   if (s.scrobbler && s.scrobbler_closing) s.scrobbler_closing();
@@ -300,27 +327,34 @@ void playback_clear(void) {
   s.index = s.announced = -1;
   s.state = MC_PLAYER_STOPPED;
   s.has_next = FALSE;
+  s.up_next_changes = 0;
   now_playing_show(NULL, NULL, 0, NULL);
   now_playing_set_position(0);
   mpris_set_track(NULL, NULL, NULL, NULL, NULL, 0);
-  mpris_set_state(MC_PLAYER_STOPPED, FALSE, FALSE);
+  mpris_set_state(MC_PLAYER_STOPPED, FALSE, FALSE, FALSE);
   track_list_set_playing(NULL);
   artist_view_set_playing(NULL);
   set_window_title(NULL);
   if (s.changed) s.changed(s.user);
+  queue_button_update();
+}
+
+/* The player, set up for use. FALSE if it can't be made. */
+static gboolean ensure_player(void) {
+  if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
+    s.player = NULL;
+    return FALSE;
+  }
+  mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off, at full volume */
+  mc_player_set_volume(s.player, s.volume);
+  mc_player_set_muted(s.player, s.muted);
+  return TRUE;
 }
 
 /* playback_play(), or with radio, the one track as a station's seed. */
 static void play_queue(const playback_track *tracks, int count, int start, mc_play_context context,
                        const char *context_uid, gboolean radio) {
-  if (count <= 0 || start < -1 || start >= count) return;
-  if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
-    s.player = NULL;
-    return;
-  }
-  mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off, at full volume */
-  mc_player_set_volume(s.player, s.volume);
-  mc_player_set_muted(s.player, s.muted);
+  if (count <= 0 || start < -1 || start >= count || !ensure_player()) return;
   const char **paths = g_new0(const char *, (gsize)count);
   const char **uids = g_new0(const char *, (gsize)count);
   item *items = g_new0(item, (gsize)count);
@@ -412,14 +446,14 @@ gboolean playback_shuffle(void) {
 }
 
 gboolean playback_toggle(void) {
-  if (!s.player || !s.count) return FALSE;
+  if (!playback_has_current() && !playback_up_next_count()) return FALSE;
   mc_player_toggle(s.player);
   refresh();
   return TRUE;
 }
 
 void playback_resume(void) {
-  if (!s.player || !s.count) return;
+  if (!playback_has_current() && !playback_up_next_count()) return;
   mc_player_resume(s.player);
   refresh();
 }
@@ -512,7 +546,7 @@ const char *playback_current_uid(void) {
 }
 
 gboolean playback_has_next(void) {
-  return playback_has_current() && s.has_next;
+  return s.player && s.has_next;
 }
 
 int64_t playback_position_ms(void) {
@@ -539,4 +573,54 @@ void playback_on_scrobbler_closing(void (*closing)(void)) {
 
 void playback_set_scrobble(gboolean on) {
   s.scrobble_off = !on;
+}
+
+/* --- The queue, the core's up next --- */
+
+void playback_set_queue_tracks(gboolean on) {
+  s.queue_tracks = on;
+}
+
+
+int playback_up_next_count(void) {
+  mc_player_status st = {0};
+  if (s.player) mc_player_status_get(s.player, &st);
+  return st.up_next;
+}
+
+mc_up_next_list *playback_up_next(void) {
+  mc_up_next_list *list = NULL;
+  if (s.player && mc_player_up_next(s.player, &list) != MC_OK) list = NULL;
+  return list;
+}
+
+void playback_up_next_move(uint32_t id, int to) {
+  if (!s.player) return;
+  mc_player_up_next_move(s.player, id, to);
+  refresh();
+}
+
+void playback_up_next_remove(uint32_t id) {
+  if (!s.player) return;
+  mc_player_up_next_remove(s.player, id);
+  refresh();
+}
+
+void playback_up_next_clear(void) {
+  if (!s.player) return;
+  mc_player_up_next_clear(s.player);
+  refresh();
+}
+
+void playback_add(mc_up_next_kind what, const char *uid, const char *name, gboolean next) {
+  if (!s.lib || !uid || !ensure_player()) return;
+  mc_up_next_add *add = NULL;
+  if (mc_up_next_add_load(s.lib, what, uid, name, s.queue_tracks, &add) == MC_OK) {
+    if ((next ? mc_player_play_next(s.player, add) : mc_player_play_last(s.player, add)) == MC_OK)
+      now_playing_flash(mc_str(MC_STR_QUEUE_ADDED));
+    mc_up_next_add_free(add);
+    refresh();
+  } else {
+    now_playing_notice(mc_str(MC_STR_QUEUE_NOTHING_HERE));
+  }
 }

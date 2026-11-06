@@ -17,7 +17,8 @@
  * nothing in it can be played here. Track numbers and durations are dimmed; on albums with
  * more than one disc the numbers read "2-5"; in a playlist they count its places.
  * Double-click or Enter plays a track; right-click, the Menu key or Shift+F10 opens its menu
- * (Start radio, greyed out for a track that can't seed a station, Add to Playlist, Go to Album
+ * (Play next and Play last, greyed out for a track with no file here, Start radio, greyed out for a
+ * track that can't seed a station, Add to Playlist, Go to Album
  * and Go to Artist where there's a page to go to, Delete from Library; in a playlist also Move Up, Move Down and Remove from Playlist). A playlist's tracks can be dragged into another order too, or moved with Alt+Up
  * and Alt+Down; Delete removes one. Its header has a menu (the "..." beside close, or F2, or
  * the Menu key with no track selected) to rename or delete it. A smart playlist's tracks

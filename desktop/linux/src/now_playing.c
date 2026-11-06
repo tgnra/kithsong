@@ -7,12 +7,14 @@
 #include "cover.h"
 #include "musiccore/musiccore.h"
 #include "playback.h"
+#include "queue_button.h"
 #include "track_menu.h"
 
 enum {
   ART = 36, /* the cover's square, as tall as the playback buttons */
   KEY_STEP_MS = 5000,
   FLASH_MS = 1500,
+  NOTICE_MS = 8000, /* a sentence to read, rather than a word to glance at */
 };
 
 static struct {
@@ -37,6 +39,7 @@ static struct {
   GtkWidget *menu;
   GSimpleAction *go_to_album, *go_to_artist, *start_radio;
   char menu_uid[MC_UID_STRLEN]; /* the track it was opened on */
+  GSimpleAction *queue[2]; /* the track menu's Play next and Play last */
   char menu_album[MC_UID_STRLEN];
   char menu_artist[MC_UID_STRLEN];
   gboolean menu_here;   /* it has a file here */
@@ -138,6 +141,7 @@ static gboolean menu_for_playing(void) {
   g_simple_action_set_enabled(s.go_to_album, track_menu_album_has_page(s.library(s.cb.user), s.menu_album));
   g_simple_action_set_enabled(s.go_to_artist, s.menu_artist[0] != '\0');
   g_simple_action_set_enabled(s.start_radio, playback_can_radio(s.menu_uid));
+  track_menu_enable_queue(s.queue, s.menu_here);
   mc_track_list_free(list);
   return TRUE;
 }
@@ -225,6 +229,7 @@ void now_playing_set_track_menu(const track_list_callbacks *cb, mc_library *(*li
   add_action(actions, "edit");
   add_action(actions, "delete");
   s.start_radio = add_action(actions, "start-radio");
+  track_menu_add_queue_actions(actions, s.menu_uid, s.queue);
   s.go_to_album = add_action(actions, "go-to-album");
   s.go_to_artist = add_action(actions, "go-to-artist");
   gtk_widget_insert_action_group(s.box, "track", G_ACTION_GROUP(actions));
@@ -319,6 +324,7 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(voi
                                  mc_str(MC_STR_SHUFFLE), -1);
   g_signal_connect(s.shuffle_button, "toggled", G_CALLBACK(on_shuffle_toggled), NULL);
   gtk_box_append(GTK_BOX(box), s.shuffle_button);
+  gtk_box_append(GTK_BOX(box), queue_button_new());
 
   now_playing_show(NULL, NULL, 0, NULL);
   return box;
@@ -415,10 +421,18 @@ static gboolean end_flash(gpointer user) {
   return G_SOURCE_REMOVE;
 }
 
-void now_playing_flash(const char *text) {
+static void flash_for(const char *text, guint ms) {
   if (!s.title) return;
   if (s.flash) g_source_remove(s.flash);
   else s.markup = g_strdup(gtk_label_get_label(GTK_LABEL(s.title)));
   gtk_label_set_text(GTK_LABEL(s.title), text ? text : "");
-  s.flash = g_timeout_add(FLASH_MS, end_flash, NULL);
+  s.flash = g_timeout_add(ms, end_flash, NULL);
+}
+
+void now_playing_flash(const char *text) {
+  flash_for(text, FLASH_MS);
+}
+
+void now_playing_notice(const char *text) {
+  flash_for(text, NOTICE_MS);
 }

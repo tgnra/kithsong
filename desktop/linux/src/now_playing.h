@@ -1,12 +1,13 @@
 /* The now-playing strip, in the middle of the header bar:
  *
  *   +----+         Paranoid Android — Radiohead
- *   |art |  1:02  ======O---------------------------  -5:21  [><]
+ *   |art |  1:02  ======O---------------------------  -5:21  [><] [=]
  *   +----+
  *
  * The cover sits in a rounded square, the track above the seekbar, with the time so far on
  * its left and the time left on its right, then the shuffle toggle (in the accent colour
- * while on). The bar's fill and the toggle take the playing track's cover's accent
+ * while on) and the queue's button (queue_button.h). The bar's fill and the toggle take the
+ * playing track's cover's accent
  * (art_accent.h). Dragging the bar (or the arrow keys once it has focus) moves the position; a
  * drag seeks when it's let go. With nothing playing the bar is greyed out. Only one strip
  * exists at a time.
@@ -53,5 +54,7 @@ void now_playing_set_position(int ms);
 
 /* Shows text in the track's place for a moment, e.g. "Volume 40%" after a shortcut. */
 void now_playing_flash(const char *text);
+/* The same for a sentence to read, which stays longer. */
+void now_playing_notice(const char *text);
 
 #endif

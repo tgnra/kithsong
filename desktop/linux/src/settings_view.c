@@ -592,6 +592,25 @@ static void on_album_in_order_switch(GObject *row, GParamSpec *pspec, gpointer d
   toast(s, mc_str(MC_STR_LINUX_SETTING_SAVE_FAILED));
 }
 
+/* Saved at once, for the next time the app starts; what's queued already stays as it is. */
+static void on_queue_tracks_switch(GObject *row, GParamSpec *pspec, gpointer data) {
+  (void)pspec;
+  settings_view *s = data;
+  gboolean on = adw_switch_row_get_active(ADW_SWITCH_ROW(row));
+  mc_settings *settings = NULL;
+  gboolean saved = mc_settings_load(s->settings_dir, &settings) == MC_OK &&
+                   mc_settings_set_queue_tracks(settings, on) == MC_OK && mc_settings_save(settings) == MC_OK;
+  mc_settings_free(settings);
+  if (saved) {
+    playback_set_queue_tracks(on);
+    return;
+  }
+  g_signal_handlers_block_by_func(row, on_queue_tracks_switch, data);
+  adw_switch_row_set_active(ADW_SWITCH_ROW(row), !on);
+  g_signal_handlers_unblock_by_func(row, on_queue_tracks_switch, data);
+  toast(s, mc_str(MC_STR_LINUX_SETTING_SAVE_FAILED));
+}
+
 static GtkWidget *build_playback_group(settings_view *s) {
   GtkWidget *group = adw_preferences_group_new();
   adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(group), mc_str(MC_STR_SETTINGS_PLAYBACK));
@@ -605,6 +624,17 @@ static GtkWidget *build_playback_group(settings_view *s) {
   mc_settings_free(settings);
   adw_switch_row_set_active(ADW_SWITCH_ROW(row), on);
   g_signal_connect(row, "notify::active", G_CALLBACK(on_album_in_order_switch), s);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), row);
+
+  row = adw_switch_row_new();
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), mc_str(MC_STR_QUEUE_TRACKS));
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(row), mc_str(MC_STR_QUEUE_TRACKS_TEXT));
+  on = FALSE;
+  if (mc_settings_load(s->settings_dir, &settings) == MC_OK) on = mc_settings_queue_tracks(settings);
+  mc_settings_free(settings);
+  settings = NULL;
+  adw_switch_row_set_active(ADW_SWITCH_ROW(row), on);
+  g_signal_connect(row, "notify::active", G_CALLBACK(on_queue_tracks_switch), s);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), row);
   return group;
 }

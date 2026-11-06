@@ -25,6 +25,7 @@ static struct {
   track_list_callbacks cb;
   GSimpleAction *start_radio, *go_to_album, *go_to_artist;
   char menu_uid[MC_UID_STRLEN];    /* the track it was opened on */
+  GSimpleAction *queue[2];         /* the track menu's Play next and Play last */
   char menu_album[MC_UID_STRLEN];  /* and its album, or "" */
   char menu_artist[MC_UID_STRLEN]; /* and its artist, or "" */
   gboolean menu_here;              /* and whether it has a file here */
@@ -134,6 +135,7 @@ static gboolean menu_for_track(const char *uid) {
     g_simple_action_set_enabled(v.go_to_album, track_menu_album_has_page(v.a->lib, v.menu_album));
     g_simple_action_set_enabled(v.go_to_artist, v.menu_artist[0] != '\0');
     g_simple_action_set_enabled(v.start_radio, playback_can_radio(v.menu_uid));
+    track_menu_enable_queue(v.queue, v.menu_here);
   }
   mc_track_list_free(list);
   return found;
@@ -153,7 +155,7 @@ static GMenuModel *result_menu(GtkWidget *result) {
     case MC_SEARCH_PLAYLIST:
       gtk_widget_insert_action_group(v.box, "home", home_view_actions());
       return home_view_playlist_menu(uid, name, smart);
-    case MC_SEARCH_ALBUM_GROUP: return album_groups_group_model(uid, smart);
+    case MC_SEARCH_ALBUM_GROUP: return album_groups_group_model(uid, name, smart);
     default: return NULL;
   }
 }
@@ -470,6 +472,7 @@ GtkWidget *search_view_new(app *a, const track_list_callbacks *cb) {
   add_track_action(actions, "edit");
   add_track_action(actions, "delete");
   v.start_radio = add_track_action(actions, "start-radio");
+  track_menu_add_queue_actions(actions, v.menu_uid, v.queue);
   v.go_to_album = add_track_action(actions, "go-to-album");
   v.go_to_artist = add_track_action(actions, "go-to-artist");
   gtk_widget_insert_action_group(box, "track", G_ACTION_GROUP(actions));

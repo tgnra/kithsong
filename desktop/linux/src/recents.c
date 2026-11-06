@@ -9,6 +9,7 @@
 #include "home_view.h"
 #include "musiccore/radio_seeds.h"
 #include "playback.h"
+#include "track_menu.h"
 
 enum { MAX_RECENTS = 3 };
 
@@ -20,6 +21,7 @@ static struct {
   mc_recent_kind menu_kind;         /* and what it is */
   GSimpleAction *edit;              /* enabled for an album or artist, and hidden otherwise */
   GSimpleAction *start_radio;       /* enabled if it has a seed */
+  GMenu *queue;                     /* Play next and Play last, for all but a station */
   GMenu *top;                       /* Edit..., with Start radio above it for an album or artist */
   char menu_seed[MC_UID_STRLEN];    /* the track its Start radio starts from */
 } r;
@@ -122,6 +124,7 @@ static GtkWidget *recent_row(const mc_recent_info *info) {
   gtk_widget_set_tooltip_text(row, tip);
   g_free(tip);
   g_object_set_data_full(G_OBJECT(row), "uid", g_strdup(info->uid), g_free);
+  g_object_set_data_full(G_OBJECT(row), "name", g_strdup(name), g_free);
   g_object_set_data(G_OBJECT(row), "kind", GINT_TO_POINTER(info->kind));
   g_object_set_data(G_OBJECT(row), "smart", GINT_TO_POINTER(info->is_smart));
   if (info->kind == MC_RECENT_ALBUM)
@@ -205,6 +208,24 @@ static void on_clear(GSimpleAction *action, GVariant *param, gpointer user) {
   recents_clear(r.a);
 }
 
+/* Play next and Play last for row, unless it's a station: nothing of radio can be queued. */
+static void update_queue(GtkListBoxRow *row) {
+  g_menu_remove_all(r.queue);
+  gboolean smart = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "smart"));
+  const char *name = g_object_get_data(G_OBJECT(row), "name");
+  switch (r.menu_kind) {
+    case MC_RECENT_ALBUM: track_menu_append_queue(r.queue, MC_UP_NEXT_ALBUM, r.menu_uid, name); break;
+    case MC_RECENT_ARTIST: track_menu_append_queue(r.queue, MC_UP_NEXT_ARTIST, r.menu_uid, name); break;
+    case MC_RECENT_PLAYLIST:
+      track_menu_append_queue(r.queue, smart ? MC_UP_NEXT_SMART_PLAYLIST : MC_UP_NEXT_PLAYLIST, r.menu_uid, name);
+      break;
+    case MC_RECENT_ALBUM_GROUP:
+      track_menu_append_queue(r.queue, smart ? MC_UP_NEXT_SMART_ALBUM_GROUP : MC_UP_NEXT_ALBUM_GROUP, r.menu_uid, name);
+      break;
+    default: break;
+  }
+}
+
 /* row's menu, at x, y in widget. */
 static void popup_menu(GtkListBoxRow *row, GtkWidget *widget, double x, double y) {
   const char *uid = row ? g_object_get_data(G_OBJECT(row), "uid") : NULL;
@@ -216,6 +237,7 @@ static void popup_menu(GtkListBoxRow *row, GtkWidget *widget, double x, double y
   r.menu_kind = (mc_recent_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"));
   g_simple_action_set_enabled(r.edit, r.menu_kind == MC_RECENT_ALBUM || r.menu_kind == MC_RECENT_ARTIST);
   update_radio();
+  update_queue(row);
   gtk_popover_set_pointing_to(GTK_POPOVER(r.menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
   gtk_popover_popup(GTK_POPOVER(r.menu));
 }
@@ -289,6 +311,10 @@ GtkWidget *recents_new(app *a) {
   gtk_widget_add_controller(r.list, keys);
 
   GMenu *model = g_menu_new(), *section = g_menu_new();
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  r.queue = section; /* the menu keeps it */
+  g_object_unref(section);
+  section = g_menu_new();
   GMenuItem *edit = g_menu_item_new(mc_str_mnemonic(MC_STR_EDIT_MENU), "recents.edit");
   g_menu_item_set_attribute(edit, "hidden-when", "s", "action-disabled");
   g_menu_append_item(section, edit);

@@ -25,7 +25,8 @@ void mpris_free(void);
 /* A NULL uid shows nothing playing. cover_dir is the album folder, or NULL. */
 void mpris_set_track(const char *uid, const char *title, const char *artist, const char *album,
                      const char *cover_dir, int64_t duration_ms);
-void mpris_set_state(mc_player_state state, gboolean has_current, gboolean has_next);
+/* playable: Play has something to start, the current track or the queue. */
+void mpris_set_state(mc_player_state state, gboolean playable, gboolean has_current, gboolean has_next);
 /* After shuffle, the volume or muting changed, from here or anywhere else (playback.c's
  * setters call them). */
 void mpris_shuffle_changed(void);
