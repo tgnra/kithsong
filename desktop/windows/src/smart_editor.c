@@ -2377,35 +2377,22 @@ static void on_get_item(NMLVDISPINFOW *info) {
 
 /* --- Drawing --- */
 
-/* Save and Cancel on the frame, as Windows 11 draws buttons over Mica: translucent, or in the
- * accent colour for the one Enter presses. Back is a bare icon with a fill on hover, like the
+/* Save and Cancel on the frame, as theme_draw_button() draws them. Back is a bare icon with a fill on hover, like the
  * main window's playback buttons. */
 static void draw_frame_button(canvas *c, const RECT *rc, const DRAWITEMSTRUCT *dis, control_state state, int radius) {
   HWND w = dis->hwndItem;
   BOOL disabled = (dis->itemState & ODS_DISABLED) != 0;
   BOOL primary = !disabled && (int)dis->CtlID == (ed.read_only ? IDCANCEL : IDOK);
-  COLORREF fg;
-  if (w == ed.back) {
-    fg = theme_draw_state(c, rc, radius, state);
-  } else if (theme.high_contrast) {
-    fg = theme_draw_state(c, rc, radius, primary ? STATE_SELECTED : state);
-    canvas_frame(c, rc, radius, 1, disabled ? theme.text3 : theme.text, 255);
-  } else if (primary) {
-    canvas_fill(c, rc, radius, theme.accent, state == STATE_PRESSED ? 204 : state == STATE_HOT ? 230 : 255);
-    fg = theme.on_accent;
-  } else {
-    /* Windows 11's control fills and stroke, as white or black at a low opacity. */
-    static const int fill[2][3] = {{179, 128, 77}, {15, 21, 8}}; /* light, dark: normal, hot, pressed */
-    int i = disabled || state == STATE_NORMAL ? 0 : state == STATE_HOT ? 1 : 2;
-    canvas_fill(c, rc, radius, RGB(255, 255, 255), disabled ? fill[theme.dark][2] : fill[theme.dark][i]);
-    canvas_frame(c, rc, radius, 1, theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), theme.dark ? 24 : 26);
-    fg = state == STATE_PRESSED ? theme.text2 : theme.text;
-  }
-  if (disabled) fg = theme.text3;
   wchar_t title[64];
   GetWindowTextW(w, title, 64);
-  UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE | (dis->itemState & ODS_NOACCEL ? DT_HIDEPREFIX : 0);
-  canvas_text(c, title, -1, rc, format, (HFONT)SendMessageW(w, WM_GETFONT, 0, 0), fg);
+  HFONT font = (HFONT)SendMessageW(w, WM_GETFONT, 0, 0);
+  UINT format = dis->itemState & ODS_NOACCEL ? DT_HIDEPREFIX : 0;
+  if (w == ed.back) {
+    COLORREF fg = theme_draw_state(c, rc, radius, state);
+    canvas_text(c, title, -1, rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | format, font, disabled ? theme.text3 : fg);
+  } else {
+    theme_draw_button(c, rc, radius, title, font, format, primary, disabled, state);
+  }
 }
 
 /* What's drawn here: on the frame, so with alpha, the path's crumbs and separators, the counts

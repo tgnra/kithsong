@@ -1,6 +1,6 @@
 /* The navigation list on the left, custom-drawn: Home
- * and Search, then the library's pages under section headers, with Import and Settings
- * pinned at the bottom. Pages are selected by mouse or keyboard; selecting one
+ * and Search, then the library's pages under section headers, with Import, Library stats and
+ * Settings pinned at the bottom. Pages are selected by mouse or keyboard; selecting one
  * sends the parent WM_COMMAND with LBN_SELCHANGE. The DEVICES heading has a + at its end, to
  * add a device by address (SBN_ADD_DEVICE).
  *
@@ -13,12 +13,13 @@
  * (drag.h).
  * Under DEVICES: this PC once it's in a group, the paired devices (each a PAGE_DEVICE row;
  * offline ones too, marked with a small glyph), and an "Unpaired devices (n)" accordion of
- * nearby devices, which ask to pair when clicked (SBN_PAIR_DEVICE). Below Settings, an
- * About button (SBN_ABOUT), which works while the sidebar is locked too.
+ * nearby devices, which ask to pair when clicked (SBN_PAIR_DEVICE). Above Settings, a Library
+ * stats button (SBN_STATS), and below it an About button (SBN_ABOUT), both of which work while
+ * the sidebar is locked too.
  *
  * Everything above Import scrolls when it's taller than the space left for it, with the
  * same overlay scrollbar as the album grid (scroller.c), which isn't drawn while everything
- * fits. Import, Settings and About stay put below it. The arrow keys, Home and End
+ * fits. Import, Library stats, Settings and About stay put below it. The arrow keys, Home and End
  * move the focus through the pages and buttons (selecting a page as they land on it, and
  * scrolling it into view); Enter or Space presses a button, and Enter on the selected page
  * asks to move the focus into it (SBN_ENTER_PAGE). Screen readers see the rows as a list
@@ -68,6 +69,8 @@ typedef enum {
 #define SBN_EDIT_RECENT 0x109
 /* Sent the same way when the row of audio analysis in the background is clicked. */
 #define SBN_ANALYSIS 0x10A
+/* Sent the same way when Library stats is clicked. */
+#define SBN_STATS 0x10B
 
 /* sidebar_device.flags */
 enum {

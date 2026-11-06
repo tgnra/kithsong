@@ -116,6 +116,7 @@
 #include "analysis_dialog.h"
 #include "sidebar.h"
 #include "smart_editor.h"
+#include "stats_dialog.h"
 #include "sync_bridge.h"
 #include "theme.h"
 #include "track_list.h"
@@ -641,6 +642,7 @@ static void refresh_library(void) {
   refresh_recents();
   if (g_app.lib) mc_library_search_prepare(g_app.lib); /* the index is ready before the user types */
   search_view_set_library(g_app.lib);
+  stats_dialog_refresh();
 }
 
 /* Edit... on an album's or artist's recent in the sidebar. */
@@ -1828,6 +1830,7 @@ static void on_command(int id, int code) {
       else if (code == SBN_PAIR_DEVICE) pair_nearby_uid(sidebar_clicked_nearby());
       else if (code == SBN_OPEN_RECENT) open_recent();
       else if (code == SBN_ABOUT) show_about();
+      else if (code == SBN_STATS && g_app.lib) stats_dialog_show(g_app.wnd, g_app.lib);
       else if (code == SBN_ANALYSIS) analysis_present();
       else if (code == SBN_REMOVE_RECENT) remove_recents(sidebar_clicked_recent(NULL), FALSE);
       else if (code == SBN_CLEAR_RECENTS) remove_recents(NULL, TRUE);

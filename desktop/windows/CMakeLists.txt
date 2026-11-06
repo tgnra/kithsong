@@ -46,6 +46,7 @@ add_executable(kithsong WIN32
   src/settings_view.c
   src/sidebar.c
   src/smart_editor.c
+  src/stats_dialog.c
   src/sync_bridge.c
   src/taskbar.c
   src/testing_view.c

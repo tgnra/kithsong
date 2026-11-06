@@ -57,6 +57,12 @@ HBRUSH theme_ctlcolor(UINT msg, HDC dc);
 /* The backdrop of a hovered, pressed or selected item. Returns the colour for text on it. */
 COLORREF theme_draw_state(canvas *c, const RECT *r, int radius, control_state state);
 
+/* A button over Mica, filling r, as Windows 11 draws them: translucent, or in the accent colour
+ * for the one Enter presses (primary). text may have an '&' mnemonic, and format adds DT_ flags,
+ * such as DT_HIDEPREFIX. Works over the frame colour too. */
+void theme_draw_button(canvas *c, const RECT *r, int radius, const wchar_t *text, HFONT font, UINT format,
+                       BOOL primary, BOOL disabled, control_state state);
+
 /* One button of a segmented control (a row of joined buttons, one of them selected), filling
  * r: first and last say which ends of the row it is, which are rounded. state is the
  * button's own (hot, pressed). */

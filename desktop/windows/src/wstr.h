@@ -40,6 +40,10 @@ wchar_t *wstr_dup_from_utf8(const char *s);
  * characters including the NUL). Returns buf. */
 wchar_t *wstr_size(wchar_t *buf, size_t n, int64_t bytes);
 
+/* "1,204": value with the user's digit grouping, into buf (n wide characters including the NUL).
+ * Returns buf. */
+wchar_t *wstr_count(wchar_t *buf, size_t n, int64_t value);
+
 /* mc_format() into a UTF-16 buffer: fmt (UTF-8, usually mc_str(..) or mc_str_plural(..))
  * with the tagged arguments, converted into buf (n wide characters including the NUL) and
  * cut short if it doesn't fit. Returns buf.

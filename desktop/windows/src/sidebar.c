@@ -24,13 +24,14 @@ typedef enum {
   ROW_NEARBY,    /* a nearby device: a button that asks to pair */
   ROW_NOTE,
   ROW_ABOUT,   /* a button that opens the About box */
+  ROW_STATS,   /* a button that opens the library stats dialog */
   ROW_ANALYSIS, /* a button that opens the audio analysis dialog, while it runs in the background */
   ROW_DIVIDER, /* a line between Home and Search and the library's pages */
 } row_kind;
 
 /* The rows are rebuilt from the fixed ones, the recents and the devices whenever any of them
  * change (rebuild), and laid out by layout(): the scrolling rows from the top of the
- * content, the pinned ones (Import, Settings, About) up from the bottom of the
+ * content, the pinned ones (Import, Library stats, Settings, About) up from the bottom of the
  * window. Rows are referred to by their index in s.rows. */
 typedef struct sb_row {
   row_kind kind;
@@ -169,11 +170,11 @@ static BOOL enabled(int i) {
   return selectable(row(i)) && (!s.locked || i == s.sel);
 }
 
-/* A row that acts when clicked, like a button: the accordion, a recent, a nearby device or
- * About. */
+/* A row that acts when clicked, like a button: the accordion, a recent, a nearby device, Library
+ * stats or About. */
 static BOOL clickable(int i) {
   row_kind kind = row(i)->kind;
-  return kind == ROW_ACCORDION || kind == ROW_ABOUT || kind == ROW_ANALYSIS || ((kind == ROW_NEARBY || kind == ROW_RECENT) && !s.locked);
+  return kind == ROW_ACCORDION || kind == ROW_ABOUT || kind == ROW_STATS || kind == ROW_ANALYSIS || ((kind == ROW_NEARBY || kind == ROW_RECENT) && !s.locked);
 }
 
 /* The next row after from in direction dir (+1 or -1) that the keyboard can land on, or -1
@@ -187,7 +188,8 @@ static int next_focus(int from, int dir) {
 static int row_height(const sb_row *r) {
   static const int heights[] = {[ROW_NAV] = NAV_H,       [ROW_HEADER] = HEADER_H, [ROW_RECENT] = NAV_H,
                                 [ROW_DEVICE] = NAV_H,    [ROW_ACCORDION] = NAV_H, [ROW_NEARBY] = NAV_H,
-                                [ROW_NOTE] = NOTE_H,     [ROW_ABOUT] = NAV_H,     [ROW_ANALYSIS] = NAV_H,
+                                [ROW_NOTE] = NOTE_H,     [ROW_ABOUT] = NAV_H,     [ROW_STATS] = NAV_H,
+                                [ROW_ANALYSIS] = NAV_H,
                                 [ROW_DIVIDER] = DIVIDER_H};
   return scale(heights[r->kind]);
 }
@@ -518,6 +520,13 @@ static void rebuild(void) {
   }
   if (s.npaired == 0 && s.nnearby == 0) push_row(ROW_NOTE, mc_wstr(MC_STR_DEVICES_NONE), NULL);
   for (size_t i = 0; i < sizeof nav_bottom / sizeof nav_bottom[0]; i++) {
+    if (nav_bottom[i].page == PAGE_SETTINGS) {
+      sb_row *stats = push_row(ROW_STATS, mc_wstr(MC_STR_STATS_TITLE), NULL);
+      if (stats) {
+        stats->icon = 0xE9D2; /* AreaChart */
+        stats->pinned = TRUE;
+      }
+    }
     if (nav_bottom[i].page == PAGE_SETTINGS && s.analysing) {
       sb_row *analysis = push_row(ROW_ANALYSIS, mc_wstr(MC_STR_ANALYSIS_RUNNING), NULL);
       if (analysis) {
@@ -575,6 +584,8 @@ static void activate(int i) {
     SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_OPEN_RECENT), (LPARAM)s.wnd);
   } else if (r->kind == ROW_ABOUT) {
     SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_ABOUT), (LPARAM)s.wnd);
+  } else if (r->kind == ROW_STATS) {
+    SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_STATS), (LPARAM)s.wnd);
   } else if (r->kind == ROW_ANALYSIS) {
     SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_ANALYSIS), (LPARAM)s.wnd);
   }
@@ -629,6 +640,7 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
     case ROW_RECENT:
     case ROW_NEARBY:
     case ROW_ABOUT:
+    case ROW_STATS:
     case ROW_ANALYSIS: { /* buttons: hot and pressed, never selected */
       color = theme_draw_state(c, &fill, scale(RADIUS), i == s.drop ? STATE_HOT : button_state(i));
       if (i == s.drop) canvas_frame(c, &fill, scale(RADIUS), scale(2), theme.accent, 255); /* where a drop lands */
@@ -785,10 +797,12 @@ static BOOL ui_node(int i, uia_node *n) {
     case ROW_RECENT:
     case ROW_NEARBY:
     case ROW_ABOUT:
+    case ROW_STATS:
     case ROW_ANALYSIS:
       n->type = UIA_ListItemControlTypeId;
       n->flags = UIA_FOCUSABLE | UIA_INVOKABLE | (clickable(r) ? 0 : UIA_DISABLED);
       if (row->kind == ROW_ABOUT) n->automation_id = L"About";
+      if (row->kind == ROW_STATS) n->automation_id = L"LibraryStats";
       if (row->kind == ROW_ANALYSIS) n->automation_id = L"Analysis";
       break;
     case ROW_ACCORDION:
