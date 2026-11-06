@@ -911,6 +911,10 @@ static mc_player *player_of(jlong handle) {
   return ((jni_player *)(intptr_t)handle)->player;
 }
 
+mc_player *jni_player_of(jlong handle) {
+  return player_of(handle);
+}
+
 JNIEXPORT jlong JNICALL Java_ng_kithso_core_CorePlayer_nativeNew(JNIEnv *env, jclass cls,
                                                                 jobject listener) {
   (void)cls;
@@ -1141,15 +1145,16 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeQueueSetPath(JNIEnv 
   (*env)->ReleaseStringUTFChars(env, path, cpath);
 }
 
-/* Fills out with state, index, count, position_ms, duration_ms, shuffle, volume, muted, radio. */
+/* Fills out with state, index, count, position_ms, duration_ms, shuffle, volume, muted, radio,
+ * up_next, up_next_changes. */
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeStatus(JNIEnv *env, jclass cls,
                                                                   jlong handle, jlongArray out) {
   (void)cls;
   mc_player_status st;
   mc_player_status_get(player_of(handle), &st);
-  jlong values[9] = {st.state, st.index, st.count, st.position_ms, st.duration_ms,
-                     st.shuffle, st.volume, st.muted, st.radio};
-  (*env)->SetLongArrayRegion(env, out, 0, 9, values);
+  jlong values[11] = {st.state, st.index, st.count, st.position_ms, st.duration_ms,
+                      st.shuffle, st.volume, st.muted, st.radio, st.up_next, st.up_next_changes};
+  (*env)->SetLongArrayRegion(env, out, 0, 11, values);
 }
 
 /* Fills out with the item and start (wall clock ms) of the oldest play that counts; false if

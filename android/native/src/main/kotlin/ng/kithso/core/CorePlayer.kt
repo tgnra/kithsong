@@ -1,6 +1,24 @@
 package ng.kithso.core
 
 /**
+ * What's left of an entry of up next (mc_up_next_entry). [id] stays while it's up next. [block]
+ * if it was added as a whole, an album say; [artist] is null if there's none, and a block's row
+ * then says how many [tracks] are left. [firstItem] is the first of those as a queue item.
+ * Made in jni_up_next.c.
+ */
+data class UpNextEntry(
+    val id: Int,
+    val title: String,
+    val artist: String?,
+    val block: Boolean,
+    val tracks: Int,
+    val durationMs: Long,
+    val firstItem: Int,
+    /** A [CorePlayer.PlayContext]'s ordinal. */
+    val context: Int,
+)
+
+/**
  * kithcore's gapless player (mc_player). It may be used from any thread. [onEvent] is called
  * on the player's own thread with an [Event]; read [status] from there or after posting to
  * the UI thread.
@@ -10,9 +28,13 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
 
     /**
      * mc_player_event, in the same order. Played: a play counts, to take with [takePlayed]. Ended:
-     * one ended, to take with [takeEnded]. Queue: a station added to the queue, or stopped.
+     * one ended, to take with [takeEnded]. Queue: the queue got new items, or a station stopped.
+     * UpNext: up next changed, by a call or by a track of it starting.
      */
-    enum class Event { State, Track, Error, Played, Ended, Queue }
+    enum class Event { State, Track, Error, Played, Ended, Queue, UpNext }
+
+    /** What there is to add to up next as a whole (mc_up_next_kind, in the same order). */
+    enum class UpNextKind { Track, Album, Artist, Playlist, SmartPlaylist, AlbumGroup, SmartAlbumGroup }
 
     /** How a queue came to be played (mc_play_context, in the same order). */
     enum class PlayContext { Unknown, Manual, Album, Playlist, AlbumGroup, Artist, Shuffle, Radio }
@@ -48,6 +70,10 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         val muted: Boolean,
         /** A station is adding to the queue, so there's always a next item; see [resumeStation]. */
         val radio: Boolean,
+        /** Entries of up next. */
+        val upNext: Int,
+        /** Goes up with every change to up next, for telling if a list is out of date. */
+        val upNextChanges: Long,
     )
 
     /** A play that counts: queue item [index], begun at [startedMs] (wall clock). */
@@ -122,6 +148,26 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
     fun order(from: Int, count: Int): IntArray = nativeOrder(handle, from, count)
 
     /**
+     * What Play Next ([front]) or Play Last adds for [uid] of [library]: its tracks with a file
+     * here, as one block called [name] unless [asTracks] or [name] is null (mc_up_next_add_load).
+     * False if it has none. Tracks of up next are items like any other, at the end of the
+     * queue: [Event.Queue] says so, as for a station. Call on [library]'s thread.
+     */
+    fun addUpNext(library: CoreLibrary, kind: UpNextKind, uid: String, name: String?, asTracks: Boolean, front: Boolean): Boolean =
+        nativeUpNextAdd(handle, library.handle, kind.ordinal, uid, name, asTracks, front)
+
+    /** Up next now, in the order it plays. */
+    val upNext: List<UpNextEntry> get() = nativeUpNext(handle).asList()
+
+    /** Entry [id] goes to place [to] (0 first). */
+    fun moveUpNext(id: Int, to: Int) = nativeUpNextMove(handle, id, to)
+    fun removeUpNext(id: Int) = nativeUpNextRemove(handle, id)
+    /** Empties up next; playback goes on. */
+    fun clearUpNext() = nativeUpNextClear(handle)
+    /** Entry [id]'s row has a new [title] and [artist], an edit having changed them. */
+    fun renameUpNext(id: Int, title: String, artist: String?) = nativeUpNextRename(handle, id, title, artist)
+
+    /**
      * The volume, 0 to 100 (100 to begin with), on a perceptual curve; changes fade over a few
      * milliseconds. The system's own volume is left alone.
      */
@@ -131,11 +177,12 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
 
     val status: Status
         get() {
-            val v = LongArray(9)
+            val v = LongArray(11)
             nativeStatus(handle, v)
             return Status(
                 State.entries[v[0].toInt()], v[1].toInt(), v[2].toInt(), v[3], v[4],
                 shuffle = v[5] != 0L, volume = v[6].toInt(), muted = v[7] != 0L, radio = v[8] != 0L,
+                upNext = v[9].toInt(), upNextChanges = v[10],
             )
         }
 
@@ -194,6 +241,14 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         @JvmStatic external fun nativeSeekMs(handle: Long, ms: Long)
         @JvmStatic external fun nativeSetShuffle(handle: Long, on: Boolean)
         @JvmStatic external fun nativeOrder(handle: Long, from: Int, count: Int): IntArray
+        @JvmStatic external fun nativeUpNextAdd(
+            handle: Long, library: Long, kind: Int, uid: String, name: String?, asTracks: Boolean, front: Boolean,
+        ): Boolean
+        @JvmStatic external fun nativeUpNext(handle: Long): Array<UpNextEntry>
+        @JvmStatic external fun nativeUpNextMove(handle: Long, id: Int, to: Int)
+        @JvmStatic external fun nativeUpNextRemove(handle: Long, id: Int)
+        @JvmStatic external fun nativeUpNextClear(handle: Long)
+        @JvmStatic external fun nativeUpNextRename(handle: Long, id: Int, title: String, artist: String?)
         @JvmStatic external fun nativeSetVolume(handle: Long, volume: Int)
         @JvmStatic external fun nativeSetMuted(handle: Long, muted: Boolean)
         @JvmStatic external fun nativeStatus(handle: Long, out: LongArray)

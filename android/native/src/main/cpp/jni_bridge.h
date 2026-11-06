@@ -15,6 +15,9 @@ static inline mc_library *jni_lib_of(jlong handle) {
   return (mc_library *)(intptr_t)handle;
 }
 
+/* The mc_player of a CorePlayer's handle (jni_up_next.c). */
+mc_player *jni_player_of(jlong handle);
+
 /* s's UTF-8, or NULL for a null s; *ok is cleared if it couldn't be had (OutOfMemoryError is
  * pending then). Release with jni_release(). */
 static inline const char *jni_chars(JNIEnv *env, jstring s, int *ok) {

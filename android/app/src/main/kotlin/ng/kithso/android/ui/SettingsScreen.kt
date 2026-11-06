@@ -116,6 +116,16 @@ fun SettingsScreen(
                         inOrder = on
                     },
                 )
+                var queueTracks by remember { mutableStateOf(settings.queueTracks) }
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.queue_tracks)) },
+                    supportingContent = { Text(stringResource(R.string.queue_tracks_text)) },
+                    trailingContent = { Switch(checked = queueTracks, onCheckedChange = null) },
+                    modifier = Modifier.toggleable(queueTracks, role = Role.Switch) { on ->
+                        settings.queueTracks = on
+                        queueTracks = on
+                    },
+                )
             }
 
             ((context.applicationContext as KithsongApp).library as? CoreLibrarySource)?.let { source ->

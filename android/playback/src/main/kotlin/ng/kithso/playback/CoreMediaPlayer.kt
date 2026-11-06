@@ -16,9 +16,22 @@ import androidx.media3.common.audio.AudioBecomingNoisyManager
 import androidx.media3.common.audio.AudioFocusManager
 import androidx.media3.common.util.Clock
 import androidx.media3.common.util.UnstableApi
+import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CorePlayer
+import ng.kithso.core.KithCoreException
+import ng.kithso.core.UpNextEntry
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+
+/**
+ * Where a list of [listSize] items goes on from: item [current] if it's one of them, else [next],
+ * the list's next, or with none (-1), [before], the one it had got to.
+ */
+fun listPlaceOf(current: Int, listSize: Int, next: Int, before: Int): Int = when {
+    current < listSize -> current
+    next in 0 until listSize -> next
+    else -> before.coerceIn(0, (listSize - 1).coerceAtLeast(0))
+}
 
 /**
  * kithcore's gapless player as a Media3 [Player], so a media session can drive it: the core
@@ -50,6 +63,13 @@ import com.google.common.util.concurrent.ListenableFuture
  * in its own order, so meanwhile it's shown as not shuffled, with [shuffle] kept for the next
  * queue, and next is offered and passed to the core as such, as it has one when Media3 sees none.
  *
+ * Up next is the core's too. Its tracks are items like a station's, at the end of [items] by the
+ * order they were added in, which isn't the order they play in, and they stay there after they've
+ * played or gone: indexes have to stay in step with the core's. So Media3 doesn't know what comes
+ * next. Next and previous go to the core as such while there are any, [itemAt] says what plays
+ * either side of the current track, and shuffled the timeline's order has them where they play.
+ * Up next isn't kept: [listItems] and [listPlace] are the queue without it.
+ *
  * Use it on the main thread.
  */
 @OptIn(UnstableApi::class)
@@ -62,11 +82,13 @@ class CoreMediaPlayer(
     private val onPlayEnded: (CorePlayer.PlayEvent) -> Unit = {},
     private val libraryDir: String? = null,
     /**
-     * Gives the done callback, on any thread, one queue item for each of a station's track uids,
-     * in order: one for a track the library no longer has too, as indexes have to stay in step
-     * with the core's. All are of a queue that is the origin.
+     * Gives the done callback, on any thread, one queue item for each of the track uids a station
+     * or up next added, in order: one for a track the library no longer has too, as indexes have
+     * to stay in step with the core's. All are of a queue that is the origin.
      */
-    private val stationItems: (List<String>, CorePlayer.Origin, (List<MediaItem>) -> Unit) -> Unit = { _, _, _ -> },
+    private val addedItems: (List<String>, CorePlayer.Origin, (List<MediaItem>) -> Unit) -> Unit = { _, _, _ -> },
+    /** Up next changed: read [upNext] again. */
+    private val onUpNextChanged: () -> Unit = {},
     private val onPlayed: (String, Long) -> Unit,
 ) : SimpleBasePlayer(Looper.getMainLooper()) {
     private val main = Handler(Looper.getMainLooper())
@@ -89,6 +111,9 @@ class CoreMediaPlayer(
         .apply { setReferenceCounted(false) }
 
     private var items: List<MediaItem> = emptyList()
+    // How many of [items] are the queue that was set; what comes after was added to it.
+    private var listSize = 0
+    private var upNextChanges = 0L
     // The core's shuffled order for Media3, worked out again when the current item or the
     // order changes: for item [orderIndex], while [orderVersion] is [orderMade].
     private var order: IntArray? = null
@@ -119,10 +144,56 @@ class CoreMediaPlayer(
     private var growing = false
     private var queueVersion = 0
 
+    /** Up next now, in the order it plays. */
+    val upNext: List<UpNextEntry> get() = core.upNext
+
+    /** See [CorePlayer.addUpNext]. Off the main thread, on [library]'s. */
+    fun addUpNext(library: CoreLibrary, kind: CorePlayer.UpNextKind, uid: String, name: String?, asTracks: Boolean, front: Boolean) =
+        core.addUpNext(library, kind, uid, name, asTracks, front)
+
+    fun moveUpNext(id: Int, to: Int) = core.moveUpNext(id, to)
+    fun removeUpNext(id: Int) = core.removeUpNext(id)
+    fun clearUpNext() = core.clearUpNext()
+
+    /**
+     * The item [place] places from the current one as they'll play (1 the next, -1 the one
+     * before), which Media3's timeline can't tell with up next about; null for none, or one
+     * that's still being looked up.
+     */
+    fun itemAt(place: Int): MediaItem? {
+        val index = core.status.index
+        // A seek before the first play moved the start, which the core hears of on playing.
+        if (!started && index >= 0 && index != startIndex) return items.getOrNull(startIndex + place)
+        // With nothing current, what's shown as current is up next's first track.
+        return items.getOrNull(core.order(if (index < 0 && place > 0) place + 1 else place, 1)[0])
+    }
+
+    /** The queue that was set, without what's been added to it. */
+    val listItems: List<MediaItem> get() = items.take(listSize)
+
+    /**
+     * Where in [listItems] to go on from, after the core is on item [current]: that item, or on a
+     * track of up next, the list's next, or with none, the one it followed.
+     */
+    fun listPlace(current: Int): Int {
+        if (current < listSize) return current
+        val left = core.upNext.sumOf { it.tracks }
+        return listPlaceOf(current, listSize, next = core.order(left + 1, 1)[0], before = core.order(-1, 1)[0])
+    }
+
     override fun getState(): State {
         val status = core.status
-        // The core may be on an item that's still being looked up.
-        val index = if (started) status.index.coerceAtMost(items.lastIndex).coerceAtLeast(0) else startIndex
+        // Up next, added with nothing to play, emptied again without having played: its items
+        // are only left over, and with nothing else there's nothing to show.
+        val shown = if (listSize == 0 && status.index < 0 && status.upNext == 0) emptyList() else items
+        val last = shown.lastIndex.coerceAtLeast(0)
+        val index = when {
+            // The core may be on an item that's still being looked up.
+            started -> status.index.coerceAtMost(items.lastIndex).coerceAtLeast(0)
+            // Nothing but up next, whose first track is what Play starts.
+            status.index < 0 -> core.order(1, 1)[0].coerceIn(0, last)
+            else -> startIndex
+        }
         val shuffled = shuffle && !station
         val position: PositionSupplier =
             if (started) PositionSupplier { core.status.positionMs } else PositionSupplier.getConstant(startPositionMs)
@@ -132,19 +203,21 @@ class CoreMediaPlayer(
             COMMAND_GET_CURRENT_MEDIA_ITEM, COMMAND_GET_TIMELINE, COMMAND_GET_METADATA, COMMAND_GET_AUDIO_ATTRIBUTES,
             COMMAND_SET_SHUFFLE_MODE,
         )
-        if (items.isNotEmpty()) {
+        if (shown.isNotEmpty()) {
             commands.addAll(
                 COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, COMMAND_SEEK_TO_DEFAULT_POSITION, COMMAND_SEEK_TO_MEDIA_ITEM,
                 // Previous restarts the track before going back, so it always does something.
                 COMMAND_SEEK_TO_PREVIOUS, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
             )
-            val more = status.radio || stationWaiting || index < maxOf(items.size, status.count) - 1
+            // By the core's order once it's playing: what was added isn't what's next by index.
+            val more = status.radio || stationWaiting || status.upNext > 0 ||
+                if (started) core.order(1, 1)[0] >= 0 else index < listSize - 1
             if (shuffled || more) commands.addAll(COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
         }
         val state = State.Builder()
             .setAvailableCommands(commands.build())
             .setAudioAttributes(AUDIO_ATTRIBUTES)
-            .setPlaylist(items.mapIndexed { i, item ->
+            .setPlaylist(shown.mapIndexed { i, item ->
                 // A playlist can hold a track twice, so the index is the uid.
                 MediaItemData.Builder(i)
                     .setMediaItem(item)
@@ -154,7 +227,7 @@ class CoreMediaPlayer(
             })
             .setCurrentMediaItemIndex(index)
             .setContentPositionMs(position)
-            .setPlaybackState(if (idle || items.isEmpty()) STATE_IDLE else STATE_READY)
+            .setPlaybackState(if (idle || shown.isEmpty()) STATE_IDLE else STATE_READY)
             .setPlayWhenReady(wantPlaying, wantPlayingReason)
             .setPlaybackSuppressionReason(
                 if (suppressed) PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS else PLAYBACK_SUPPRESSION_REASON_NONE,
@@ -163,7 +236,7 @@ class CoreMediaPlayer(
             .setMaxSeekToPreviousPositionMs(3000)
             .setShuffleModeEnabled(shuffled)
             .build()
-        val order = if (shuffled) shuffledOrder(index) else null
+        val order = if (shuffled && shown.isNotEmpty()) shuffledOrder(index) else null
         return if (order == null) state
         else state.buildUpon().setPlaylist(OrderedTimeline(state.timeline, order), Tracks.EMPTY, state.currentMetadata).build()
     }
@@ -174,7 +247,7 @@ class CoreMediaPlayer(
     private fun shuffledOrder(current: Int): IntArray? {
         val n = items.size
         if (n == 0) return null
-        if (current == orderIndex && orderMade == orderVersion) return order
+        if (current == orderIndex && orderMade == orderVersion && order?.size == n) return order
         // The places n - 1 either side hold every item: a round of n places plays each once.
         val around = core.order(-(n - 1), 2 * n - 1)
         val mid = n - 1
@@ -197,6 +270,7 @@ class CoreMediaPlayer(
     override fun handleSetMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<*> {
         takePlays() // the old queue's, while [items] still says which tracks they were
         items = mediaItems
+        listSize = items.size
         this.startIndex = if (startIndex == C.INDEX_UNSET) 0 else startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
         this.startPositionMs = if (startPositionMs == C.TIME_UNSET) 0 else startPositionMs
         started = false
@@ -212,6 +286,7 @@ class CoreMediaPlayer(
         load(items.map { it.path.orEmpty() }, items.map { it.mediaId }, origin, start)
         if (items.isNotEmpty()) this.startIndex = core.status.index.coerceAtLeast(0)
         orderVersion++
+        growQueue() // whatever's up next comes along, with new indexes after the list
         update()
         return Futures.immediateVoidFuture()
     }
@@ -245,17 +320,20 @@ class CoreMediaPlayer(
 
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
         val position = if (positionMs == C.TIME_UNSET) 0 else positionMs
-        if (!started) {
+        val toUpNext = seekCommand in NEXT_SEEKS && core.status.upNext > 0
+        if (!started && !toUpNext) {
             if (mediaItemIndex != C.INDEX_UNSET) startIndex = mediaItemIndex
             startPositionMs = position
-        } else if ((shuffle || station) && seekCommand in SHUFFLED_SEEKS) {
+        } else if ((shuffle || station || items.size > listSize) && seekCommand in CORE_SEEKS) {
             // The core's order, not Media3's idea of the next or previous item: a station's next
-            // may be one Media3 hasn't heard of, or one that's yet to be picked.
+            // may be one Media3 hasn't heard of, or one that's yet to be picked, and up next's
+            // tracks don't play in the order of their indexes.
             val paused = core.status.state != CorePlayer.State.Playing
+            started = true
             // The core's previous restarts a track that's past its first seconds, which is for
             // the previous button; this asks for the item before, whatever the position.
             if (seekCommand == COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) core.seekMs(0)
-            if (seekCommand == COMMAND_SEEK_TO_NEXT || seekCommand == COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) core.next() else core.previous()
+            if (seekCommand in NEXT_SEEKS) core.next() else core.previous()
             if (paused) core.pause()
             growQueue()
         } else {
@@ -263,9 +341,7 @@ class CoreMediaPlayer(
             if (mediaItemIndex != C.INDEX_UNSET && mediaItemIndex != status.index) {
                 // Skipping plays; keep a paused player paused. Shuffled, the rest are shuffled
                 // afresh after it.
-                core.skipTo(mediaItemIndex)
-                orderVersion++
-                if (status.state != CorePlayer.State.Playing) core.pause()
+                if (skipTo(mediaItemIndex) && status.state != CorePlayer.State.Playing) core.pause()
             }
             if (position > 0 || mediaItemIndex == status.index) core.seekMs(position)
         }
@@ -282,7 +358,20 @@ class CoreMediaPlayer(
         return Futures.immediateVoidFuture()
     }
 
-    // Queue editing isn't offered by the app; controllers that try it change nothing.
+    // Whether the core went to item [index]. A track of up next, as a controller can pick from
+    // the queue it's shown, isn't in the list to skip to, and plays when its turn comes.
+    private fun skipTo(index: Int): Boolean {
+        try {
+            core.skipTo(index)
+        } catch (e: KithCoreException) {
+            return false
+        }
+        orderVersion++
+        return true
+    }
+
+    // Queue editing through Media3 isn't offered; controllers that try it change nothing. Up next
+    // has calls of its own.
     override fun handleAddMediaItems(index: Int, mediaItems: List<MediaItem>): ListenableFuture<*> = Futures.immediateVoidFuture()
     override fun handleRemoveMediaItems(fromIndex: Int, toIndex: Int): ListenableFuture<*> = Futures.immediateVoidFuture()
     override fun handleMoveMediaItems(fromIndex: Int, toIndex: Int, newIndex: Int): ListenableFuture<*> = Futures.immediateVoidFuture()
@@ -297,9 +386,24 @@ class CoreMediaPlayer(
                 if (path != null && path != items[fromIndex + i].path) core.setQueuePath(fromIndex + i, path)
             }
             items = items.take(fromIndex) + mediaItems + items.drop(toIndex)
+            renameUpNext()
             update()
         }
         return Futures.immediateVoidFuture()
+    }
+
+    // Rows of up next keep up with what an edit changed: a track's, and an album's title. A
+    // playlist or group goes by what it was called when it was added.
+    private fun renameUpNext() {
+        for (entry in core.upNext) {
+            val metadata = items.getOrNull(entry.firstItem)?.mediaMetadata ?: continue
+            val album = entry.context == CorePlayer.PlayContext.Album.ordinal
+            val title = if (entry.block) metadata.albumTitle.takeIf { album } else metadata.title
+            val artist = if (entry.block) entry.artist else metadata.artist?.toString()
+            if (title != null && (title.toString() != entry.title || artist != entry.artist)) {
+                core.renameUpNext(entry.id, title.toString(), artist)
+            }
+        }
     }
 
     override fun handleRelease(): ListenableFuture<*> {
@@ -356,11 +460,15 @@ class CoreMediaPlayer(
                     val start = items.first()
                     val seed = start.playOrigin.contextUid ?: start.mediaId
                     core.resumeStation(libraryDir.orEmpty(), start.path.orEmpty(), start.mediaId, seed)
-                } else if (startIndex == core.status.index) {
-                    core.resume()
-                } else {
-                    core.skipTo(startIndex)
-                    orderVersion++
+                    // Up next added while it was loaded has new indexes now, so it's looked up again.
+                    if (items.size > listSize) {
+                        items = items.take(listSize)
+                        queueVersion++
+                        orderVersion++
+                        growQueue()
+                    }
+                } else if (startIndex == core.status.index || core.status.index < 0 || !skipTo(startIndex)) {
+                    core.resume() // with nothing current, up next's first track
                 }
                 if (startPositionMs > 0) core.seekMs(startPositionMs)
                 started = true
@@ -392,7 +500,12 @@ class CoreMediaPlayer(
                     core.next()
                 }
             }
-            CorePlayer.Event.Track, CorePlayer.Event.State, CorePlayer.Event.Queue -> Unit
+            CorePlayer.Event.Track, CorePlayer.Event.State, CorePlayer.Event.Queue, CorePlayer.Event.UpNext -> Unit
+        }
+        if (status.upNextChanges != upNextChanges) {
+            upNextChanges = status.upNextChanges
+            orderVersion++
+            onUpNextChanged()
         }
         if (status.state == CorePlayer.State.Playing) stationTries = 0
         growQueue()
@@ -415,21 +528,23 @@ class CoreMediaPlayer(
         invalidateState()
     }
 
-    // Has what a station added since looked up, one lookup at a time, and goes on until [items]
-    // has caught up with the core, which only ever adds to the end.
+    // Has what a station or up next added since looked up, one lookup at a time, and goes on until
+    // [items] has caught up with the core, which only ever adds to the end.
     private fun growQueue() {
         val from = items.size
         val count = core.status.count
-        if (growing || !station || count <= from) return
+        if (growing || count <= from) return
         val uids = (from until count).map { core.queueUid(it).orEmpty() }
         val version = queueVersion
         growing = true
-        stationItems(uids, items.first().playOrigin) { found ->
+        addedItems(uids, items.firstOrNull()?.playOrigin ?: CorePlayer.Origin()) { found ->
             main.post {
                 growing = false
                 if (version == queueVersion && items.size == from && found.size == uids.size) {
                     items = items + found
+                    orderVersion++ // its size has to be the timeline's
                     invalidateState()
+                    onUpNextChanged() // the track either side may be known now
                 }
                 growQueue()
             }
@@ -455,9 +570,8 @@ class CoreMediaPlayer(
         // As the core's RADIO_MAX_FAILS, which goes by items that won't open.
         const val STATION_TRIES = 8
 
-        val SHUFFLED_SEEKS = setOf(
-            COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
-        )
+        val NEXT_SEEKS = setOf(COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        val CORE_SEEKS = NEXT_SEEKS + setOf(COMMAND_SEEK_TO_PREVIOUS, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
 
         val AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)

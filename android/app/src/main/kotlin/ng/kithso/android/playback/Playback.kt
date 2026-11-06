@@ -5,8 +5,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.Track
 import ng.kithso.core.CorePlayer
+import ng.kithso.core.UpNextEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -78,9 +80,27 @@ interface Playback {
      */
     fun updateQueue(tracks: List<Track>) {}
 
-    /** Stops and empties the queue, so nothing is playing: before its tracks are deleted, say. */
+    /** Stops and empties the queue, up next too, so nothing is playing: before its tracks are deleted, say. */
     fun clear()
+
+    /** What the app calls the queue: what plays next, ahead of the rest, in the order it plays. */
+    val upNext: List<UpNextEntry> get() = emptyList()
+
+    /**
+     * Play next or, if not [next], Play last: adds [what], those of its tracks with a file here,
+     * as a row each or as one row by the setting. False if it has none.
+     */
+    suspend fun addUpNext(what: QueueAddition, next: Boolean): Boolean = false
+
+    /** Entry [id] goes to place [to] (0 first). */
+    fun moveUpNext(id: Int, to: Int) {}
+    fun removeUpNext(id: Int) {}
+    /** Empties up next; what's playing goes on. */
+    fun clearUpNext() {}
 }
+
+/** What Play next and Play last add: track [uid] with no [kind], or else what [uid] is, called [name]. */
+data class QueueAddition(val kind: CollectionRef.Kind?, val uid: String, val name: String? = null)
 
 /** Pretends to play: the position advances while playing and the queue moves on. */
 class FakePlayback(private val scope: CoroutineScope) : Playback {

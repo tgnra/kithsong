@@ -1198,6 +1198,8 @@
 
     "open_player": "Open the player",
     "close_player": "Close the player",
+    "open_queue": { "text": "Show the queue", "note": "For accessibility: the chevron on the full player that slides it away to show the queue." },
+    "close_queue": { "text": "Back to the player", "note": "For accessibility: the chevron at the top of the queue that slides the full player back." },
     "go_to_named_artist": { "text": "Go to {0}", "note": "On a track's menu, for a track credited to several artists (\"A feat. B\"): one for each, opening that artist's page. {0} is the artist's name." },
 
     "edit_playlist": { "text": "Edit", "note": "Button on a playlist's or album group's page that shows the controls to reorder and remove its tracks or albums." },

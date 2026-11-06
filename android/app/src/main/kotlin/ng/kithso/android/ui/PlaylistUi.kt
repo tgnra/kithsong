@@ -71,6 +71,7 @@ import ng.kithso.android.data.SmartListEditor
 import ng.kithso.android.data.TagTarget
 import ng.kithso.android.data.Track
 import ng.kithso.android.playback.Playback
+import ng.kithso.android.playback.QueueAddition
 import ng.kithso.core.HerePreview
 import ng.kithso.core.HereState
 import ng.kithso.core.ProfileItemKind
@@ -300,6 +301,24 @@ fun PlaylistSheets(
             HereState.NotIncluded -> SheetAction(stringResource(R.string.add_to_this_phone), Icons.Sync, bringHere)
         }
     }
+    // Play next and Play last, on anything but a station. Whether it went in shows as a toast,
+    // as the desktops show it in the now-playing bar.
+    @Composable
+    fun queueActions(what: QueueAddition): List<SheetAction> {
+        val playback = actions.playback ?: return emptyList()
+        val add = { next: Boolean ->
+            scope.launch {
+                val added = playback.addUpNext(what, next)
+                val text = if (added) R.string.queue_added else R.string.queue_nothing_here
+                Toast.makeText(context, text, if (added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+            }
+            Unit
+        }
+        return listOf(
+            SheetAction(stringResource(R.string.play_next), Icons.QueuePlayNext) { add(true) },
+            SheetAction(stringResource(R.string.play_last), Icons.PlaylistPlay) { add(false) },
+        )
+    }
     when (val sheet = actions.sheet) {
         null -> Unit
         is PlaylistActions.Sheet.RecentMenu -> {
@@ -320,7 +339,10 @@ fun PlaylistSheets(
                 recent.subtitle(),
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(recent.ref, false) })
-                    if (!station) add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(recent.ref, true) })
+                    if (!station) {
+                        add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(recent.ref, true) })
+                        addAll(queueActions(QueueAddition(recent.ref.kind, recent.ref.uid, recent.title)))
+                    }
                     if (artist != null) add(SheetAction(stringResource(R.string.go_to_artist), Icons.Person) { onOpen(artist) })
                     if (edit != null) add(edit)
                     if (recents != null) {
@@ -362,6 +384,7 @@ fun PlaylistSheets(
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
                     add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    addAll(queueActions(QueueAddition(ref.kind, ref.uid, playlist.name)))
                     if (editable) {
                         add(SheetAction(stringResource(R.string.playlist_rename_menu), Icons.Edit) {
                             actions.dialog = PlaylistActions.Dialog.Rename(playlist.uid, playlist.name)
@@ -387,6 +410,7 @@ fun PlaylistSheets(
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
                     add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    addAll(queueActions(QueueAddition(ref.kind, ref.uid, group.name)))
                     if (editable) {
                         add(SheetAction(stringResource(R.string.playlist_rename_menu), Icons.Edit) {
                             actions.dialog = PlaylistActions.Dialog.Rename(group.uid, group.name, group = true)
@@ -412,6 +436,7 @@ fun PlaylistSheets(
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
                     add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    addAll(queueActions(QueueAddition(ref.kind, ref.uid, album.title)))
                     if (editor != null) {
                         add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {
                             actions.addToPlaylist(Addition.Album(album.uid))
@@ -449,6 +474,7 @@ fun PlaylistSheets(
                 buildList {
                     add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
                     add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    addAll(queueActions(QueueAddition(ref.kind, ref.uid, artist.name)))
                     if (edit != null) add(edit)
                     if (here != null) add(here)
                 },
@@ -467,6 +493,7 @@ fun PlaylistSheets(
                 track.title,
                 trackByline(track.artist, track.album),
                 buildList {
+                    if (track.path != null) addAll(queueActions(QueueAddition(null, track.uid)))
                     if (editor != null) {
                         add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {
                             actions.addToPlaylist(Addition.Tracks(listOf(track.uid)))
@@ -503,6 +530,7 @@ fun PlaylistSheets(
                 track.title,
                 trackByline(track.artist, track.album),
                 buildList {
+                    addAll(queueActions(QueueAddition(null, track.uid)))
                     if (editor != null) {
                         add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {
                             actions.addToPlaylist(Addition.Tracks(listOf(track.uid)))

@@ -65,6 +65,8 @@ import ng.kithso.core.describeSmart
 import ng.kithso.core.previewSmartTracks
 import ng.kithso.core.renameSmart
 import ng.kithso.core.setSmartRule
+import ng.kithso.android.playback.QueueAddition
+import ng.kithso.playback.CoreMediaPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -400,6 +402,29 @@ class CoreLibrarySource(
                 Log.e(TAG, "Couldn't read track $uid", e)
                 null
             }
+        }
+    }
+
+    /**
+     * Adds [what] to [player]'s up next, at the front if [next], as a row per track if [asTracks].
+     * False if it has no track with a file here.
+     */
+    suspend fun addUpNext(player: CoreMediaPlayer, what: QueueAddition, next: Boolean, asTracks: Boolean): Boolean = withContext(core) {
+        val lib = open() ?: return@withContext false
+        val smart = what.uid in contents.smart
+        val kind = when (what.kind) {
+            null -> CorePlayer.UpNextKind.Track
+            CollectionRef.Kind.Album -> CorePlayer.UpNextKind.Album
+            CollectionRef.Kind.Artist -> CorePlayer.UpNextKind.Artist
+            CollectionRef.Kind.Playlist -> if (smart) CorePlayer.UpNextKind.SmartPlaylist else CorePlayer.UpNextKind.Playlist
+            CollectionRef.Kind.AlbumGroup -> if (smart) CorePlayer.UpNextKind.SmartAlbumGroup else CorePlayer.UpNextKind.AlbumGroup
+            CollectionRef.Kind.Station -> return@withContext false // nothing of radio goes in up next
+        }
+        try {
+            player.addUpNext(lib, kind, what.uid, what.name, asTracks, next)
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't add ${what.uid} to the queue", e)
+            false
         }
     }
 
