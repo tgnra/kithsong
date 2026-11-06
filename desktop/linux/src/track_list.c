@@ -11,7 +11,11 @@
 #include "playback.h"
 #include "track_menu.h"
 
-enum { HEADER_COVER = 96 };
+enum {
+  HEADER_COVER = 96,
+  HEADER_BUTTON = 34, /* a flat round button */
+  HEADER_BUTTON_GAP = 4,
+};
 /* How much of the backdrop's height, at its bottom, its glows thin out over. */
 #define BACKDROP_FADE 0.4
 
@@ -426,6 +430,14 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(text), s.summary);
   gtk_box_append(GTK_BOX(header), text);
 
+  /* Over the top right corner, so only the title makes room for them (track_list_show()): the
+   * lines under them keep the whole width, for the length at the end of the summary. */
+  GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, HEADER_BUTTON_GAP);
+  gtk_widget_set_halign(buttons, GTK_ALIGN_END);
+  gtk_widget_set_valign(buttons, GTK_ALIGN_START);
+  gtk_widget_set_margin_top(buttons, 18);
+  gtk_widget_set_margin_end(buttons, 12);
+
   GMenu *menu = g_menu_new();
   track_menu_append_with_key(menu, MC_STR_PLAYLIST_RENAME_MENU, "playlist.rename", "F2");
   g_menu_append(menu, mc_str_mnemonic(MC_STR_PLAYLIST_DELETE_MENU), "playlist.delete");
@@ -443,7 +455,7 @@ static GtkWidget *build_header(void) {
   gtk_widget_add_css_class(s.playlist_button, "circular");
   gtk_widget_set_valign(s.playlist_button, GTK_ALIGN_START);
   gtk_widget_set_visible(s.playlist_button, FALSE);
-  gtk_box_append(GTK_BOX(header), s.playlist_button);
+  gtk_box_append(GTK_BOX(buttons), s.playlist_button);
 
   s.reshuffle_button = gtk_button_new_from_icon_name("view-refresh-symbolic");
   gtk_widget_set_tooltip_text(s.reshuffle_button, mc_str(MC_STR_RESHUFFLE));
@@ -452,7 +464,7 @@ static GtkWidget *build_header(void) {
   gtk_widget_set_valign(s.reshuffle_button, GTK_ALIGN_START);
   gtk_widget_set_visible(s.reshuffle_button, FALSE);
   g_signal_connect(s.reshuffle_button, "clicked", G_CALLBACK(on_reshuffle), NULL);
-  gtk_box_append(GTK_BOX(header), s.reshuffle_button);
+  gtk_box_append(GTK_BOX(buttons), s.reshuffle_button);
 
   GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic");
   app_set_tooltip(close, mc_str(MC_STR_CLOSE), "Escape");
@@ -460,8 +472,12 @@ static GtkWidget *build_header(void) {
   gtk_widget_add_css_class(close, "circular");
   gtk_widget_set_valign(close, GTK_ALIGN_START);
   g_signal_connect(close, "clicked", G_CALLBACK(on_close), NULL);
-  gtk_box_append(GTK_BOX(header), close);
-  return header;
+  gtk_box_append(GTK_BOX(buttons), close);
+
+  GtkWidget *overlay = gtk_overlay_new();
+  gtk_overlay_set_child(GTK_OVERLAY(overlay), header);
+  gtk_overlay_add_overlay(GTK_OVERLAY(overlay), buttons);
+  return overlay;
 }
 
 static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -867,6 +883,8 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
   gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(s.playlist_button), smart ? s.smart_header_menu : s.header_menu);
   gtk_widget_set_tooltip_text(s.playlist_button, mc_str(smart ? MC_STR_SMART_PLAYLIST_MENU : MC_STR_PLAYLIST_MENU));
   gtk_widget_set_visible(s.reshuffle_button, album && album->is_smart && album->random);
+  int buttons = 1 + gtk_widget_get_visible(s.playlist_button) + gtk_widget_get_visible(s.reshuffle_button);
+  gtk_widget_set_margin_end(s.title, buttons * (HEADER_BUTTON + HEADER_BUTTON_GAP));
   gtk_widget_set_sensitive(s.actions, playable);
   if (!same) gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(s.scroller)), 0);
   if (new_cover) {
