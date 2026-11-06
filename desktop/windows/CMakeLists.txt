@@ -70,7 +70,7 @@ target_compile_definitions(kithsong PRIVATE
   UNICODE _UNICODE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 kithsong_warnings(kithsong)
 
-# Self-contained exe: no libgcc/libstdc++ DLLs next to it.
+# Self-contained exe: no C++ runtime DLLs next to it.
 if(MINGW)
   target_link_options(kithsong PRIVATE -static)
 endif()
