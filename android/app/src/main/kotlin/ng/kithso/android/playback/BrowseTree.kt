@@ -79,7 +79,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
 
     /** Each tab's id and how many children it has in [library], to say they've changed. */
     fun tabSizes(library: Library): Map<String, Int> = mapOf(
-        HOME to library.recents.size,
+        HOME to library.filledRecents.size,
         PLAYLISTS to library.filledPlaylists.size,
         ALBUMS to library.albums.size,
         GROUPS to library.filledGroups.size,
@@ -89,7 +89,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
     suspend fun children(parentId: String): List<MediaItem>? {
         when (parentId) {
             ROOT -> return TABS.map(::tab)
-            HOME -> return library().recents.map { it.toBrowseItem() }
+            HOME -> return library().filledRecents.map { it.toBrowseItem() }
             PLAYLISTS -> return library().filledPlaylists.map { it.toBrowseItem() }
             ALBUMS -> return library().albums.map { it.toBrowseItem() }
             GROUPS -> return library().filledGroups.map { it.toBrowseItem() }
@@ -164,7 +164,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
     private suspend fun queueForSearch(query: String): MediaItemsWithStartPosition? {
         if (query.isEmpty()) {
             val library = library()
-            val ref = library.recents.firstOrNull()?.ref
+            val ref = library.filledRecents.firstOrNull()?.ref
                 ?: library.albums.firstOrNull()?.let { CollectionRef(CollectionRef.Kind.Album, it.uid) }
                 ?: return null
             return queueOf(ref, null)
@@ -343,6 +343,17 @@ internal class BrowseTree(private val context: Context, private val source: () -
         const val FOUND = "found:"
         const val GROUP_ALBUM = "groupalbum"
         val TABS = listOf(HOME, PLAYLISTS, ALBUMS, GROUPS)
+
+        // The core keeps a list that's empty everywhere in Recents, for the phone to add to.
+        val Library.filledRecents: List<Recent>
+            get() = recents.filter { recent ->
+                val uid = recent.ref.uid
+                when (recent.ref.kind) {
+                    CollectionRef.Kind.Playlist -> playlists.none { it.uid == uid && it.trackCount == 0 }
+                    CollectionRef.Kind.AlbumGroup -> albumGroups.none { it.uid == uid && it.albumCount == 0 }
+                    else -> true
+                }
+            }
 
         // How long to wait for the library's first read, which takes a moment at most; a
         // browser asking before then is likely to have started the app itself.
