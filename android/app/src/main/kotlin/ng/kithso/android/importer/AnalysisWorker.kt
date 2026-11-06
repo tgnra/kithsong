@@ -14,6 +14,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import ng.kithso.android.KithsongApp
 import ng.kithso.android.data.CoreLibrarySource
@@ -77,6 +80,12 @@ class AnalysisWorker(context: Context, params: WorkerParameters) : CoroutineWork
         private const val POLL_MS = 1_000L
         // Under WorkManager's ten minutes, so a long run ends as a retry rather than being cut off.
         private const val MAX_MS = 9 * 60_000L
+
+        /** Whether a run is waiting for the charger or under way, as that changes. */
+        fun asked(context: Context): Flow<Boolean> =
+            WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK_NAME)
+                .map { runs -> runs.any { !it.state.isFinished } }
+                .distinctUntilChanged()
 
         /**
          * Asks for a run while charging. REPLACE, because the job has no list to lose: a run

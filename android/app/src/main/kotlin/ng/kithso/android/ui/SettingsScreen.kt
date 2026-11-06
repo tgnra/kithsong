@@ -43,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -71,6 +72,7 @@ import ng.kithso.android.importer.AnalysisWorker
 import coil3.SingletonImageLoader
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -218,14 +220,20 @@ fun SettingsScreen(
 /**
  * How many tracks here aren't analysed, and Analyse, which asks for a run the next time the phone
  * charges. A phone doesn't scan by itself ([AnalysisWorker]), so this is the way to go on with
- * tracks that nothing else will: what a desktop won't send it, say.
+ * tracks that nothing else will: what a desktop won't send it, say. Analyse stays off while a run
+ * is asked for or under way, and the count follows that run.
  */
 @Composable
 private fun AnalysisSettings(source: CoreLibrarySource) {
     val context = LocalContext.current
-    val waiting by produceState<Int?>(null) { value = source.analysisWaiting() }
+    val asked by remember(context) { AnalysisWorker.asked(context) }.collectAsState(false)
+    val waiting by produceState<Int?>(null, asked) {
+        do {
+            value = source.analysisWaiting()
+            if (asked) delay(ANALYSIS_COUNT_MS)
+        } while (asked)
+    }
     val count = waiting ?: return
-    var asked by rememberSaveable { mutableStateOf(false) }
     SettingsHeading(stringResource(R.string.analysis_heading))
     ListItem(
         headlineContent = {
@@ -240,16 +248,15 @@ private fun AnalysisSettings(source: CoreLibrarySource) {
         trailingContent = if (count > 0) {
             {
                 TextButton(
-                    onClick = {
-                        AnalysisWorker.schedule(context)
-                        asked = true
-                    },
+                    onClick = { AnalysisWorker.schedule(context) },
                     enabled = !asked,
                 ) { Text(stringResource(R.string.analysis_run)) }
             }
         } else null,
     )
 }
+
+private const val ANALYSIS_COUNT_MS = 5_000L
 
 /**
  * A full screen's header: a back button calling [onBack], and [title] under it, or beside it
