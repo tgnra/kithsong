@@ -203,22 +203,6 @@ static const char *u8(const wchar_t *w) {
   return b;
 }
 
-/* n with the user's digit grouping: 1,204. */
-static wchar_t *fmt_count(int64_t n, wchar_t *out, int cap) {
-  wchar_t digits[32], *p = digits + 31;
-  uint64_t v = n < 0 ? (uint64_t)-n : (uint64_t)n;
-  *p = L'\0';
-  do *--p = (wchar_t)(L'0' + v % 10);
-  while ((v /= 10) && p > digits + 1);
-  if (n < 0) *--p = L'-';
-  NUMBERFMTW fmt = {.NumDigits = 0, .Grouping = 3, .lpDecimalSep = L".", .lpThousandSep = L","};
-  wchar_t sep[8];
-  if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_STHOUSAND, sep, 8)) fmt.lpThousandSep = sep;
-  if (!GetNumberFormatEx(LOCALE_NAME_USER_DEFAULT, 0, p, &fmt, out, cap)) wcsncpy(out, p, (size_t)cap - 1);
-  out[cap - 1] = L'\0';
-  return out;
-}
-
 static int64_t unix_ms_now(void) {
   FILETIME ft;
   GetSystemTimeAsFileTime(&ft);
@@ -524,18 +508,18 @@ static void update_status(void) {
     wchar_t ok[32], expected[32], n[32], size[32];
     const wchar_t *sep = mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR);
     mc_wformat(text, 256, mc_str_plural(MC_STR_FILES_OK, (long)g_dv.expected),
-               MC_S(u8(fmt_count(g_dv.ok, ok, 32))), MC_S(u8(fmt_count(g_dv.expected, expected, 32))));
+               MC_S(u8(wstr_count(ok, 32, g_dv.ok))), MC_S(u8(wstr_count(expected, 32, g_dv.expected))));
     size_t used = wcslen(text);
     if (g_dv.missing > 0) {
       used += (size_t)swprintf(text + used, 256 - used, L"%ls", sep);
       mc_wformat(text + used, 256 - used, mc_str(MC_STR_FILES_MISSING),
-                 MC_S(u8(fmt_count(g_dv.missing, n, 32))));
+                 MC_S(u8(wstr_count(n, 32, g_dv.missing))));
       used = wcslen(text);
     }
     if (g_dv.corrupt > 0) {
       used += (size_t)swprintf(text + used, 256 - used, L"%ls", sep);
       mc_wformat(text + used, 256 - used, mc_str(MC_STR_FILES_DAMAGED),
-                 MC_S(u8(fmt_count(g_dv.corrupt, n, 32))));
+                 MC_S(u8(wstr_count(n, 32, g_dv.corrupt))));
       used = wcslen(text);
     }
     swprintf(text + used, 256 - used, L"%ls%ls", sep, wstr_size(size, 32, g_dv.bytes));
@@ -560,12 +544,12 @@ static void update_status(void) {
     } else if (g_dv.phase == MC_SYNC_PHASE_FILES && sending) {
       wchar_t done[32], total[32], size[32];
       mc_wformat(text, 256, mc_str_plural(MC_STR_PROGRESS_FILES_SENT, (long)g_dv.sends_total), MC_S(u8(phase)),
-                 MC_S(u8(fmt_count(g_dv.sends_done, done, 32))), MC_S(u8(fmt_count(g_dv.sends_total, total, 32))),
+                 MC_S(u8(wstr_count(done, 32, g_dv.sends_done))), MC_S(u8(wstr_count(total, 32, g_dv.sends_total))),
                  MC_S(u8(wstr_size(size, 32, g_dv.bytes_sent))));
     } else if (g_dv.phase == MC_SYNC_PHASE_FILES && g_dv.files_total > 0) {
       wchar_t done[32], total[32], size[32];
       mc_wformat(text, 256, mc_str_plural(MC_STR_PROGRESS_FILES, (long)g_dv.files_total), MC_S(u8(phase)),
-                 MC_S(u8(fmt_count(g_dv.files_done, done, 32))), MC_S(u8(fmt_count(g_dv.files_total, total, 32))),
+                 MC_S(u8(wstr_count(done, 32, g_dv.files_done))), MC_S(u8(wstr_count(total, 32, g_dv.files_total))),
                  MC_S(u8(wstr_size(size, 32, g_dv.bytes_received))));
     } else if (g_dv.phase == MC_SYNC_PHASE_FILES) { /* fetching nothing; maybe serving */
       wchar_t received[32], sent[32];
@@ -575,7 +559,7 @@ static void update_status(void) {
     } else {
       wchar_t sent[32], received[32];
       mc_wformat(text, 256, mc_str(MC_STR_PROGRESS_ROWS), MC_S(u8(phase)),
-                 MC_S(u8(fmt_count(g_dv.sent, sent, 32))), MC_S(u8(fmt_count(g_dv.received, received, 32))));
+                 MC_S(u8(wstr_count(sent, 32, g_dv.sent))), MC_S(u8(wstr_count(received, 32, g_dv.received))));
     }
     /* Of several sessions, whichever spoke last would have its speed shown: none is better. */
     if (g_dv.phase == MC_SYNC_PHASE_FILES && g_dv.nbusy == 1 && g_dv.pace[0]) {
@@ -933,7 +917,7 @@ static void show_estimate(const estimate_job *job) {
     if (job->profile.format.format == MC_FORMAT_AUTO && !e->archive)
       id = e->kbps ? MC_STR_ESTIMATE_AUTO_OPUS : MC_STR_ESTIMATE_AUTO_ORIGINAL;
     mc_wformat(text, 256, mc_str_plural(id, e->tracks), MC_S(u8(wstr_size(a, 32, e->total_bytes))),
-               MC_S(u8(fmt_count(e->tracks, b, 32))), MC_D(e->kbps));
+               MC_S(u8(wstr_count(b, 32, e->tracks))), MC_D(e->kbps));
   } else if (job->status != MC_ERR_LIBRARY_MISMATCH && job->status != MC_ERR_NOT_FOUND) {
     /* Another library open, or the device gone: the page says so already. */
     mc_wformat(text, 256, mc_str(MC_STR_ESTIMATE_FAILED), MC_S(mc_status_str(job->status)));
@@ -2049,7 +2033,7 @@ void device_view_on_sync_event(const sync_event *ev) {
         wchar_t n[32], size[32];
         if (ev->files_received > 0)
           mc_wformat(g_dv.finished_text, 256, mc_str_plural(MC_STR_SYNC_FINISHED_FILES, ev->files_received),
-                     MC_S(u8(fmt_count(ev->files_received, n, 32))), MC_S(u8(wstr_size(size, 32, ev->bytes_received))));
+                     MC_S(u8(wstr_count(n, 32, ev->files_received))), MC_S(u8(wstr_size(size, 32, ev->bytes_received))));
         else swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_SYNC_FINISHED));
       }
       /* The last sync time, its files, maybe its profile, have changed. */

@@ -280,6 +280,27 @@ COLORREF theme_draw_state(canvas *c, const RECT *r, int radius, control_state st
   return state == STATE_PRESSED ? theme.text2 : theme.text;
 }
 
+void theme_draw_button(canvas *c, const RECT *r, int radius, const wchar_t *text, HFONT font, UINT format,
+                       BOOL primary, BOOL disabled, control_state state) {
+  COLORREF fg;
+  if (theme.high_contrast) {
+    fg = theme_draw_state(c, r, radius, primary ? STATE_SELECTED : state);
+    canvas_frame(c, r, radius, 1, disabled ? theme.text3 : theme.text, 255);
+  } else if (primary) {
+    canvas_fill(c, r, radius, theme.accent, state == STATE_PRESSED ? 204 : state == STATE_HOT ? 230 : 255);
+    fg = theme.on_accent;
+  } else {
+    /* Windows 11's control fills and stroke, as white or black at a low opacity. */
+    static const int fill[2][3] = {{179, 128, 77}, {15, 21, 8}}; /* light, dark: normal, hot, pressed */
+    int i = disabled || state == STATE_NORMAL ? 0 : state == STATE_HOT ? 1 : 2;
+    canvas_fill(c, r, radius, RGB(255, 255, 255), disabled ? fill[theme.dark][2] : fill[theme.dark][i]);
+    canvas_frame(c, r, radius, 1, theme.dark ? RGB(255, 255, 255) : RGB(0, 0, 0), theme.dark ? 24 : 26);
+    fg = state == STATE_PRESSED ? theme.text2 : theme.text;
+  }
+  if (disabled) fg = theme.text3;
+  canvas_text(c, text, -1, r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | format, font, fg);
+}
+
 void theme_draw_segment(canvas *c, const RECT *r, int radius, const wchar_t *text, HFONT font, BOOL first,
                         BOOL last, BOOL selected, control_state state) {
   int line = 1;

@@ -176,3 +176,17 @@ wchar_t *wstr_menu_item(wchar_t *buf, size_t n, enum mc_str_id text, enum mc_str
 wchar_t *wstr_tooltip(wchar_t *buf, size_t n, enum mc_str_id text, enum mc_str_id shortcut) {
   return mc_wformat(buf, n, mc_str(MC_STR_TOOLTIP_SHORTCUT), MC_S(mc_str(text)), MC_S(mc_str(shortcut)));
 }
+
+wchar_t *wstr_count(wchar_t *buf, size_t n, int64_t value) {
+  wchar_t digits[32], *p = digits + 31;
+  uint64_t v = value < 0 ? (uint64_t)-value : (uint64_t)value;
+  *p = L'\0';
+  do *--p = (wchar_t)(L'0' + v % 10);
+  while ((v /= 10) && p > digits + 1);
+  if (value < 0) *--p = L'-';
+  NUMBERFMTW fmt = {.NumDigits = 0, .Grouping = 3, .lpDecimalSep = L".", .lpThousandSep = L","};
+  wchar_t sep[8];
+  if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_STHOUSAND, sep, 8)) fmt.lpThousandSep = sep;
+  if (!GetNumberFormatEx(LOCALE_NAME_USER_DEFAULT, 0, p, &fmt, buf, (int)n)) lstrcpynW(buf, p, (int)n);
+  return buf;
+}
