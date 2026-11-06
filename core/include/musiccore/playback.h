@@ -25,6 +25,10 @@
  * few tracks queued ahead from a station (musiccore/radio.h), so neither the audio nor a
  * frontend ever waits on it.
  *
+ * Up next is what people add to (mc_player_play_next(); apps call it the queue, where this file's
+ * queue is the list being played): it plays before the rest of that list, which then carries on,
+ * shuffled or not, a station's too.
+ *
  * Unlike most handles, a player may be used from any thread.
  */
 #ifndef MUSICCORE_PLAYBACK_H
@@ -50,7 +54,8 @@ typedef enum mc_player_event {
   MC_PLAYER_EVENT_ERROR, /* an item couldn't be played and was skipped, or there's no audio device */
   MC_PLAYER_EVENT_PLAYED, /* a play counts: take it with mc_player_take_played() */
   MC_PLAYER_EVENT_ENDED,  /* a play ended, counted or not: take it with mc_player_take_ended() */
-  MC_PLAYER_EVENT_QUEUE   /* a station added to the queue, or stopped: see mc_player_play_radio() */
+  MC_PLAYER_EVENT_QUEUE,  /* the queue got new items, or a station stopped: see mc_player_play_radio() */
+  MC_PLAYER_EVENT_UP_NEXT /* up next changed, by a call or by a track of it starting */
 } mc_player_event;
 
 /* Called on the player's thread, never from inside a player call, so it may call the player
@@ -75,7 +80,8 @@ typedef struct mc_play_origin {
 /* Replaces the queue with count files (UTF-8 paths, copied) and plays item start, or with
  * start -1, the first item (shuffled, any item). Plays not yet taken with
  * mc_player_take_played() are dropped, as their indexes were into the old queue: take them
- * first. origin says what's being played; with NULL, nothing of the queue is logged. */
+ * first. origin says what's being played; with NULL, nothing of the queue is logged. Up next
+ * stays, and plays after item start. */
 mc_status mc_player_set_queue(mc_player *player, const char *const *paths, int count, int start,
                               const mc_play_origin *origin);
 /* Like mc_player_set_queue(), but stopped: item start (or with -1, the first item, which
@@ -118,10 +124,12 @@ mc_status mc_player_queue_set_path(mc_player *player, int index, const char *pat
 
 /* Plays queue item index from its start. Shuffled, the rest are shuffled afresh after it. */
 mc_status mc_player_skip_to(mc_player *player, int index);
-/* The next item. After the last one, stops with the first item current, as when the queue
- * plays out by itself. */
+/* The next item: up next's first track if there is one. After the last one, stops with the
+ * first item current, as when the queue plays out by itself. */
 mc_status mc_player_next(mc_player *player);
-/* Back to the start of the item, or to the previous item when within its first 3 seconds. */
+/* Back to the start of the item, or to the previous item when within its first 3 seconds. In a
+ * track of up next that's the block's track before it, and the tracks go back up next from there.
+ * With none before it, it's the list's item it followed, and the track is up next again. */
 mc_status mc_player_previous(mc_player *player);
 
 /* Shuffle (off to begin with). The queue then plays in a shuffled order (a Miller Shuffle,
@@ -137,9 +145,77 @@ mc_status mc_player_set_shuffle(mc_player *player, int on);
  * the queue item at place from + i, counted from the current item's (0 is the current item,
  * -1 the one before it, 1 the next), or -1 where there's none: before the first place, after
  * the last item in queue order, or with an empty queue. Shuffled, the order goes on in new
- * rounds, so an item can come up more than once. For showing what plays next, or telling a
- * media framework the order (Android's Media3 timeline). */
+ * rounds, so an item can come up more than once. Up next's tracks come first after the current
+ * item; the items before it are the list's. For showing what plays next, or telling a media
+ * framework the order (Android's Media3 timeline). */
 mc_status mc_player_order(mc_player *player, int from, int count, int *out);
+
+/* A track to add to up next. All of it is copied. */
+typedef struct mc_up_next_track {
+  const char *path;
+  const char *uid;           /* NULL or "" for one that isn't logged */
+  const char *title, *artist; /* for its row when it's an entry of its own; may be NULL */
+  int duration_ms;           /* 0 if unknown */
+} mc_up_next_track;
+
+/* What to add. Frontends leave out tracks with no file here: a path that won't open is skipped
+ * when its turn comes. */
+typedef struct mc_up_next_add {
+  const mc_up_next_track *tracks;
+  int count;
+  /* What's added as a whole, an album say, is one entry, a block: its row has title and artist
+   * (which may be NULL). With a NULL title, each track is an entry of its own, for a track by
+   * itself or for mc_settings_queue_tracks(). */
+  const char *title, *artist;
+  mc_play_context context;   /* what the play log says of these tracks, as mc_play_origin does */
+  const char *context_uid;
+} mc_up_next_add;
+
+/* Adds to the front of up next, the tracks in the order given, or to the end. Nothing starts:
+ * what's playing plays on, and with nothing playing, mc_player_resume() or mc_player_next() starts
+ * up next. MC_ERR_INVALID_ARG for no tracks.
+ *
+ * Tracks of up next are items like any other: they get an index on being added, and a frontend
+ * looks them up as it does a station's (MC_PLAYER_EVENT_QUEUE, mc_player_queue_uid()), which is
+ * why mc_player_status.count goes up. They keep their order whatever shuffle says. A track leaves
+ * up next when it's heard, or when its file won't open; an entry leaves with its last track. Up
+ * next isn't saved, and isn't changed by what's played from elsewhere. It's a list of this
+ * library's files, so frontends clear it when the library changes. */
+mc_status mc_player_play_next(mc_player *player, const mc_up_next_add *add);
+mc_status mc_player_play_last(mc_player *player, const mc_up_next_add *add);
+
+/* An entry as up next has it now: what's left of it. */
+typedef struct mc_up_next_entry {
+  uint32_t id;         /* stays while it's up next, and isn't used again */
+  char *title;
+  char *artist;        /* NULL if there's none */
+  int block;           /* added as a whole */
+  int tracks;          /* tracks left */
+  int64_t duration_ms; /* of those, as far as they're known */
+  int first_item;      /* the first of them, as a queue item */
+  mc_play_context context;
+  char context_uid[MC_UID_STRLEN];
+} mc_up_next_entry;
+
+typedef struct mc_up_next_list {
+  mc_up_next_entry *items;
+  int count;
+} mc_up_next_list;
+
+/* Up next now, in the order it plays. Free with mc_up_next_list_free(). */
+mc_status mc_player_up_next(mc_player *player, mc_up_next_list **out);
+void mc_up_next_list_free(mc_up_next_list *list);
+/* Entry id goes to place to (0 first, out of range is clamped), all of it as one. What's playing
+ * isn't touched by this or the next two: only what comes after it. MC_ERR_NOT_FOUND if it's
+ * gone. */
+mc_status mc_player_up_next_move(mc_player *player, uint32_t id, int to);
+/* Entry id leaves up next, all that's left of it. MC_ERR_NOT_FOUND if it's gone. */
+mc_status mc_player_up_next_remove(mc_player *player, uint32_t id);
+/* Empties up next. Playback goes on. */
+mc_status mc_player_up_next_clear(mc_player *player);
+/* Entry id's row has a new title and artist (may be NULL), an edit having changed them.
+ * MC_ERR_NOT_FOUND if it's gone. */
+mc_status mc_player_up_next_rename(mc_player *player, uint32_t id, const char *title, const char *artist);
 
 mc_status mc_player_pause(mc_player *player);
 /* Carries on from where it was paused, or when stopped, plays the current item. */
@@ -161,13 +237,15 @@ mc_status mc_player_set_muted(mc_player *player, int muted);
 typedef struct mc_player_status {
   mc_player_state state;
   int index;           /* current queue item, -1 if the queue is empty */
-  int count;           /* items in the queue */
+  int count;           /* items in the queue, those of up next among them */
   int shuffle;         /* see mc_player_set_shuffle(); there's always a next item then */
   int radio;           /* a station is adding to the queue; there's always a next item then too */
   int64_t position_ms; /* in the current item, as heard */
   int64_t duration_ms; /* of the current item, 0 if unknown (or not open yet) */
   int volume;          /* see mc_player_set_volume() */
   int muted;
+  int up_next;         /* entries of up next */
+  unsigned up_next_changes; /* goes up with every change, for telling if a list is out of date */
 } mc_player_status;
 
 /* A consistent snapshot. Cheap enough to call on a UI timer. */
