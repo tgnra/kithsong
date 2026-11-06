@@ -58,10 +58,7 @@ try {
     # Turning the tests off leaves an earlier run's test list behind.
     if (-not $runnable) { Remove-Item "$buildDir\CTestTestfile.cmake" -ErrorAction SilentlyContinue }
     Invoke-Checked cmake --build --preset $preset
-    # test_analysis watches a run grow by polling, which a busy CI runner can miss.
-    $ctest = @('--test-dir', $buildDir, '--output-on-failure')
-    if ($env:GITHUB_ACTIONS) { $ctest += '-E', '^test_analysis$' }
-    Invoke-Checked ctest @ctest
+    Invoke-Checked ctest --test-dir $buildDir --output-on-failure
     if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
     Invoke-Checked cmake --install $buildDir --prefix $stage --component kithsong --strip
 } finally {

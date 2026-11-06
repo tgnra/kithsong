@@ -36,5 +36,9 @@ void mc_analysis_scanner_set_timing(uint32_t start_ms, uint32_t idle_ms, int res
 void mc_analysis_scanner_set_power_poll_ms(uint32_t ms);
 /* For tests: how often a scanner counts again what's ahead of it. (5 s by default.) */
 void mc_analysis_scanner_set_recount_ms(uint32_t ms);
+/* For tests: called on the scanner's thread after every change to a status, so a run shorter than
+ * any poll is seen whole. Set it with no scanner running; NULL for none. */
+typedef void (*mc_analysis_status_hook)(const mc_analysis_status *status, void *user);
+void mc_analysis_scanner_set_status_hook(mc_analysis_status_hook hook, void *user);
 
 #endif
