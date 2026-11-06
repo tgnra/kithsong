@@ -41,7 +41,7 @@ import com.google.common.util.concurrent.ListenableFuture
  * volume for a while, then puts [volume] back.
  *
  * A queue of one item whose [playOrigin] is the radio is a station from that track, in the
- * library in [libraryDir], which the core then keeps adding to (mc_player_play_station), and the
+ * library in [libraryDir], which the core then keeps adding to (mc_player_resume_station), and the
  * origin says what the station is, which needn't be that track. Media3
  * wants a queue up front, so [items] follows the core's: at each event, whichever it is as the
  * queue event can lag by seconds behind the core's count, what's new goes to [stationItems] to be
@@ -207,7 +207,9 @@ class CoreMediaPlayer(
         // Unset, shuffled, the core picks the first item.
         val start = if (startIndex == C.INDEX_UNSET && shuffle) -1 else this.startIndex
         val origin = items.firstOrNull()?.playOrigin ?: CorePlayer.Origin()
-        core.loadQueue(items.map { it.path.orEmpty() }, items.map { it.mediaId }, origin, start)
+        // Anything but what's coming back is someone playing it, which clears up next in the core.
+        val load = if (items.firstOrNull()?.restored == true) core::restoreQueue else core::loadQueue
+        load(items.map { it.path.orEmpty() }, items.map { it.mediaId }, origin, start)
         if (items.isNotEmpty()) this.startIndex = core.status.index.coerceAtLeast(0)
         orderVersion++
         update()
@@ -353,7 +355,7 @@ class CoreMediaPlayer(
                     stationTries = STATION_TRIES
                     val start = items.first()
                     val seed = start.playOrigin.contextUid ?: start.mediaId
-                    core.playRadio(libraryDir.orEmpty(), start.path.orEmpty(), start.mediaId, seed)
+                    core.resumeStation(libraryDir.orEmpty(), start.path.orEmpty(), start.mediaId, seed)
                 } else if (startIndex == core.status.index) {
                     core.resume()
                 } else {

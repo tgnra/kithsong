@@ -27,7 +27,7 @@
  *
  * Up next is what people add to (mc_player_play_next(); apps call it the queue, where this file's
  * queue is the list being played): it plays before the rest of that list, which then carries on,
- * shuffled or not, a station's too.
+ * shuffled or not, a station's too. Starting something new clears it.
  *
  * Unlike most handles, a player may be used from any thread.
  */
@@ -82,20 +82,28 @@ typedef struct mc_play_origin {
 /* Replaces the queue with count files (UTF-8 paths, copied) and plays item start, or with
  * start -1, the first item (shuffled, any item). Plays not yet taken with
  * mc_player_take_played() are dropped, as their indexes were into the old queue: take them
- * first. origin says what's being played; with NULL, nothing of the queue is logged. Up next
- * stays, and plays after item start. */
+ * first. origin says what's being played; with NULL, nothing of the queue is logged.
+ *
+ * This is someone starting something, so up next is cleared, even for the list already playing.
+ * With count 0 nothing starts and up next stays, as it does if this fails. Going through the queue
+ * is mc_player_skip_to() and the like, which leave up next alone. */
 mc_status mc_player_set_queue(mc_player *player, const char *const *paths, int count, int start,
                               const mc_play_origin *origin);
-/* Like mc_player_set_queue(), but stopped: item start (or with -1, the first item, which
- * shuffled is any) is current, and plays from its start on mc_player_resume(). So a frontend
- * can show what will play before it does, e.g. a shuffled queue's first item. */
+/* Like mc_player_set_queue(), up next included, but stopped: item start (or with -1, the first
+ * item, which shuffled is any) is current, and plays from its start on mc_player_resume(). So a
+ * frontend can show what will play before it does, e.g. a shuffled queue's first item. */
 mc_status mc_player_load_queue(mc_player *player, const char *const *paths, int count, int start,
                                const mc_play_origin *origin);
+/* Like mc_player_load_queue(), but up next stays, and plays after item start: for bringing back
+ * what was playing, which nobody has just asked for. */
+mc_status mc_player_restore_queue(mc_player *player, const char *const *paths, int count, int start,
+                                  const mc_play_origin *origin);
 /* Plays a station from a track: the queue becomes that track alone, which starts at once, and
  * a station from it then keeps a few tracks queued ahead for as long as this queue stays, paused
  * or stopped too. Anything that replaces the queue ends it, as does mc_player_stop_radio(), or a
  * run of items that won't open: a folder that's gone, say. Plays are logged as
- * MC_PLAY_CONTEXT_RADIO with the seed as context_uid.
+ * MC_PLAY_CONTEXT_RADIO with the seed as context_uid. Up next is cleared, as by
+ * mc_player_set_queue().
  *
  * library_dir is mc_library_dir(). The player reads it on its own thread with a connection of
  * its own, once, so this returns at once and needs no handle kept open. Check the seed first
@@ -117,6 +125,11 @@ mc_status mc_player_play_radio(mc_player *player, const char *library_dir, const
  * seed that plays are logged under, as what the station is. mc_radio_seed_check() the start. */
 mc_status mc_player_play_station(mc_player *player, const char *library_dir, const char *start_path,
                                  const char *start_uid, const char *seed_uid);
+/* As mc_player_play_station(), but up next stays: for a station already loaded stopped, as its one
+ * track, and only now getting going. Whatever loaded it has dealt with up next, and what's been
+ * added since is wanted. */
+mc_status mc_player_resume_station(mc_player *player, const char *library_dir, const char *start_path,
+                                   const char *start_uid, const char *seed_uid);
 /* Stops adding to the queue, which plays out what it has. For when the library closes, as the
  * station's tracks are that library's. */
 mc_status mc_player_stop_radio(mc_player *player);
@@ -129,7 +142,8 @@ mc_status mc_player_queue_uid(mc_player *player, int index, char *out);
  * seek or its turn to play, uses path. MC_ERR_NOT_FOUND if there's no such item. */
 mc_status mc_player_queue_set_path(mc_player *player, int index, const char *path);
 
-/* Plays queue item index from its start. Shuffled, the rest are shuffled afresh after it. */
+/* Plays queue item index from its start. Shuffled, the rest are shuffled afresh after it. Up next
+ * stays, and its own items can't be skipped to: MC_ERR_INVALID_ARG. */
 mc_status mc_player_skip_to(mc_player *player, int index);
 /* The next item: up next's first track if there is one. After the last one, stops with the
  * first item current, as when the queue plays out by itself. */
@@ -208,8 +222,10 @@ void mc_up_next_add_free(mc_up_next_add *add);
  * looks them up as it does a station's (MC_PLAYER_EVENT_QUEUE, mc_player_queue_uid()), which is
  * why mc_player_status.count goes up. They keep their order whatever shuffle says. A track leaves
  * up next when it's heard, or when its file won't open; an entry leaves with its last track. Up
- * next isn't saved, and isn't changed by what's played from elsewhere. It's a list of this
- * library's files, so frontends clear it when the library changes. */
+ * next isn't saved. Starting something new clears it (mc_player_set_queue(), mc_player_load_queue(),
+ * mc_player_play_radio() and mc_player_play_station()), which MC_PLAYER_EVENT_UP_NEXT reports as
+ * for any other change. It's a list of this library's files, so frontends clear it when the
+ * library changes. */
 mc_status mc_player_play_next(mc_player *player, const mc_up_next_add *add);
 mc_status mc_player_play_last(mc_player *player, const mc_up_next_add *add);
 

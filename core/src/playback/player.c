@@ -34,7 +34,8 @@
  * being added around them. Playing from up next doesn't move the place, so the list carries on
  * after it where it left off. A track leaves up next once it's heard, not when it's buffered:
  * segments note those on their way (waiting), and they're always its first tracks, as changing
- * up next cuts them from the buffer first (up_settle()).
+ * up next cuts them from the buffer first (up_settle()). Starting something new clears up next,
+ * so what it replaces goes with the old list; a list only brought back keeps it (up_rehome()).
  *
  * The callback copies out of the ring buffer, applies the volume and counts. A flush (seek,
  * skip, stop) resets the buffer from the player thread, so the two share a spinlock that the
@@ -1318,18 +1319,23 @@ static void up_rehome(mc_player *p, char **old, char (*old_uids)[MC_UID_STRLEN])
   }
 }
 
+/* What a new list does to up next: someone starting something clears it, and bringing a list back
+ * leaves it. */
+typedef enum up_next_fate { UP_NEXT_CLEARS, UP_NEXT_STAYS } up_next_fate;
+
 /* mc_player_set_queue(), with play 0 mc_player_load_queue(), and with radio_dir (the library of
  * the station that's to feed it) mc_player_play_radio(). */
 static mc_status set_queue(mc_player *p, const char *const *paths, int count, int start, int play,
-                           const mc_play_origin *origin, const char *radio_dir) {
+                           const mc_play_origin *origin, const char *radio_dir, up_next_fate fate) {
   if (!p || count < 0 || (count && (!paths || start < -1 || start >= count))) return MC_ERR_INVALID_ARG;
   char **queue = count ? calloc((size_t)count, sizeof *queue) : NULL;
   if (count && !queue) return MC_ERR_NOMEM;
   for (int i = 0; i < count; i++) {
     if (!paths[i] || !(queue[i] = mc_strdup(paths[i]))) {
+      mc_status st = paths[i] ? MC_ERR_NOMEM : MC_ERR_INVALID_ARG;
       while (i--) free(queue[i]);
       free(queue);
-      return paths[i] ? MC_ERR_NOMEM : MC_ERR_INVALID_ARG;
+      return st;
     }
   }
   char (*track_uids)[MC_UID_STRLEN];
@@ -1356,6 +1362,11 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
   p->item_origins = origins;
   p->list = list;
   p->count = p->list_count = count;
+  /* A list of nothing starts nothing, so it's no reason to lose what's queued. */
+  if (fate == UP_NEXT_CLEARS && count && p->nup) {
+    up_clear(p);
+    up_changed(p);
+  }
   up_rehome(p, old, old_uids);
   for (int i = 0; i < old_count; i++) free(old[i]);
   free(old);
@@ -1396,21 +1407,21 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
 
 mc_status mc_player_set_queue(mc_player *p, const char *const *paths, int count, int start,
                               const mc_play_origin *origin) {
-  return set_queue(p, paths, count, start, 1, origin, NULL);
+  return set_queue(p, paths, count, start, 1, origin, NULL, UP_NEXT_CLEARS);
 }
 
 mc_status mc_player_load_queue(mc_player *p, const char *const *paths, int count, int start,
                                const mc_play_origin *origin) {
-  return set_queue(p, paths, count, start, 0, origin, NULL);
+  return set_queue(p, paths, count, start, 0, origin, NULL, UP_NEXT_CLEARS);
 }
 
-mc_status mc_player_play_radio(mc_player *p, const char *library_dir, const char *seed_path,
-                               const char *seed_uid) {
-  return mc_player_play_station(p, library_dir, seed_path, seed_uid, seed_uid);
+mc_status mc_player_restore_queue(mc_player *p, const char *const *paths, int count, int start,
+                                  const mc_play_origin *origin) {
+  return set_queue(p, paths, count, start, 0, origin, NULL, UP_NEXT_STAYS);
 }
 
-mc_status mc_player_play_station(mc_player *p, const char *library_dir, const char *start_path,
-                                 const char *start_uid, const char *seed_uid) {
+static mc_status start_station(mc_player *p, const char *library_dir, const char *start_path,
+                               const char *start_uid, const char *seed_uid, up_next_fate fate) {
   if (!p || !library_dir || !start_path || !start_uid || !*start_uid || strlen(start_uid) >= MC_UID_STRLEN ||
       !seed_uid || !*seed_uid || strlen(seed_uid) >= MC_UID_STRLEN)
     return MC_ERR_INVALID_ARG;
@@ -1421,7 +1432,22 @@ mc_status mc_player_play_station(mc_player *p, const char *library_dir, const ch
   if (st != MC_OK) return st;
   const char *const paths[] = {start_path}, *const uids[] = {start_uid};
   mc_play_origin origin = {uids, MC_PLAY_CONTEXT_RADIO, seed_uid};
-  return set_queue(p, paths, 1, 0, 1, &origin, library_dir);
+  return set_queue(p, paths, 1, 0, 1, &origin, library_dir, fate);
+}
+
+mc_status mc_player_play_radio(mc_player *p, const char *library_dir, const char *seed_path,
+                               const char *seed_uid) {
+  return start_station(p, library_dir, seed_path, seed_uid, seed_uid, UP_NEXT_CLEARS);
+}
+
+mc_status mc_player_play_station(mc_player *p, const char *library_dir, const char *start_path,
+                                 const char *start_uid, const char *seed_uid) {
+  return start_station(p, library_dir, start_path, start_uid, seed_uid, UP_NEXT_CLEARS);
+}
+
+mc_status mc_player_resume_station(mc_player *p, const char *library_dir, const char *start_path,
+                                   const char *start_uid, const char *seed_uid) {
+  return start_station(p, library_dir, start_path, start_uid, seed_uid, UP_NEXT_STAYS);
 }
 
 mc_status mc_player_stop_radio(mc_player *p) {

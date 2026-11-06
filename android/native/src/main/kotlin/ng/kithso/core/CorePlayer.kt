@@ -46,7 +46,7 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         /** 0 to 100; see [setVolume]. */
         val volume: Int,
         val muted: Boolean,
-        /** A station is adding to the queue, so there's always a next item; see [playRadio]. */
+        /** A station is adding to the queue, so there's always a next item; see [resumeStation]. */
         val radio: Boolean,
     )
 
@@ -57,7 +57,8 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
 
     /**
      * Replaces the queue with [paths] and plays item [start], or with -1 the first (shuffled,
-     * any). [trackUids] go with the paths, one each, and with [origin] say what's logged.
+     * any). [trackUids] go with the paths, one each, and with [origin] say what's logged. This is
+     * someone playing something new, so it clears up next, unless [paths] is empty.
      */
     fun setQueue(paths: List<String>, trackUids: List<String>, origin: Origin, start: Int) =
         nativeSetQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
@@ -69,10 +70,15 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
     fun loadQueue(paths: List<String>, trackUids: List<String>, origin: Origin, start: Int) =
         nativeLoadQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
 
+    /** As [loadQueue], but up next stays: for what was playing coming back, which nobody just asked for. */
+    fun restoreQueue(paths: List<String>, trackUids: List<String>, origin: Origin, start: Int) =
+        nativeRestoreQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
+
     /**
-     * Plays a station (mc_player_play_station): the queue becomes the track [startUid], which
-     * starts at once, and a station from it keeps a few tracks queued ahead for as long as this
-     * queue stays. [libraryDir] is the library's folder, [startPath] the track's file, and [seedUid]
+     * Gets a station going that [loadQueue] or [restoreQueue] left waiting, so up next stays
+     * (mc_player_resume_station): the queue becomes the track [startUid], which starts at once,
+     * and a station from it keeps a few tracks queued ahead for as long as this queue stays.
+     * [libraryDir] is the library's folder, [startPath] the track's file, and [seedUid]
      * what the station is, the same track or another, which plays are logged under. Check the
      * start first ([radioSeedUsable]): one that can't be used plays by itself.
      *
@@ -81,8 +87,8 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
      * Next from the last item plays what's added. It plays in the station's order whatever
      * shuffle says, even once the station has stopped; shuffle applies again to the next queue.
      */
-    fun playRadio(libraryDir: String, startPath: String, startUid: String, seedUid: String) =
-        nativePlayRadio(handle, libraryDir, startPath, startUid, seedUid)
+    fun resumeStation(libraryDir: String, startPath: String, startUid: String, seedUid: String) =
+        nativeResumeStation(handle, libraryDir, startPath, startUid, seedUid)
 
     /** Queue item [index]'s track uid; null if there's no such item, or it isn't logged. */
     fun queueUid(index: Int): String? = nativeQueueUid(handle, index)
@@ -177,7 +183,10 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         @JvmStatic external fun nativeLoadQueue(
             handle: Long, paths: Array<String>, uids: Array<String>, context: Int, contextUid: String?, start: Int,
         )
-        @JvmStatic external fun nativePlayRadio(handle: Long, libraryDir: String, startPath: String, startUid: String, seedUid: String)
+        @JvmStatic external fun nativeRestoreQueue(
+            handle: Long, paths: Array<String>, trackUids: Array<String>, context: Int, contextUid: String?, start: Int,
+        )
+        @JvmStatic external fun nativeResumeStation(handle: Long, libraryDir: String, startPath: String, startUid: String, seedUid: String)
         @JvmStatic external fun nativeQueueUid(handle: Long, index: Int): String?
         @JvmStatic external fun nativeQueueSetPath(handle: Long, index: Int, path: String)
         @JvmStatic external fun nativeCommand(handle: Long, command: Int)

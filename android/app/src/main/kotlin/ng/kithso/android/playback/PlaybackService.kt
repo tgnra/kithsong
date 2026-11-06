@@ -24,6 +24,7 @@ import ng.kithso.android.KithsongApp
 import ng.kithso.android.R
 import ng.kithso.core.CorePlayer
 import ng.kithso.playback.CoreMediaPlayer
+import ng.kithso.playback.asRestored
 import ng.kithso.playback.path
 import ng.kithso.playback.playOrigin
 import com.google.common.collect.ImmutableList
@@ -183,7 +184,7 @@ class PlaybackService : MediaLibraryService() {
         val left = saved.keeping { tracks[it]?.path != null } ?: return null
         val playable = tracks.filterNotNull().filter { it.path != null }
         // Finding a cover's URI touches the disk.
-        val items = withContext(Dispatchers.IO) { queueItems(this@PlaybackService, playable, left.origin) }
+        val items = withContext(Dispatchers.IO) { queueItems(this@PlaybackService, playable, left.origin).map { it.asRestored() } }
         return MediaItemsWithStartPosition(items, left.index, left.positionMs)
     }
 

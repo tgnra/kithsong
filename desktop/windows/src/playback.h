@@ -61,8 +61,9 @@ void playback_end_session(void);
 /* Stops playing and empties the queue, letting go of the file that was playing; for before
  * the library's files move. */
 void playback_clear(void);
-/* Replaces the queue and plays tracks[start], or with start -1 the first track (shuffled,
- * any track). context and context_uid (or NULL) say what's played, for the play log. */
+/* Replaces the list being played and plays tracks[start], or with start -1 the first track
+ * (shuffled, any track), and empties the queue, as this is someone playing something new. context
+ * and context_uid (or NULL) say what's played, for the play log. */
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
                    const char *context_uid);
 /* Replaces the queue with a station from that track (mc_player_play_radio()), which plays at

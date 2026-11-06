@@ -61,8 +61,9 @@ void playback_cover_check(mc_library *lib);
 /* An edit may have changed what's queued: its titles and artists are read again from lib, what's
  * showing the playing track shows them, and the player gets any file's new place. Nothing stops. */
 void playback_tracks_changed(mc_library *lib);
-/* Replaces the queue and plays tracks[start], or with start -1 the first track (shuffled,
- * any track). context and context_uid (or NULL) say what's played, for the play log. */
+/* Replaces the list being played and plays tracks[start], or with start -1 the first track
+ * (shuffled, any track), and empties the queue, as this is someone playing something new. context
+ * and context_uid (or NULL) say what's played, for the play log. */
 void playback_play(const playback_track *tracks, int count, int start, mc_play_context context,
                    const char *context_uid);
 /* Replaces the queue with a station from a track (see mc_player_play_radio()), in the library

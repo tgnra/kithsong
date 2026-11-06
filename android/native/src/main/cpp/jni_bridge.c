@@ -975,9 +975,12 @@ static void string_array_release(JNIEnv *env, string_array *a) {
   free(a->refs);
 }
 
-/* mc_player_set_queue(), or if load, mc_player_load_queue(). uids go with paths, one each. */
+/* What replaces the queue: mc_player_set_queue() and the like. */
+typedef mc_status (*queue_call)(mc_player *, const char *const *, int, int, const mc_play_origin *);
+
+/* call with these. uids go with paths, one each. */
 static void set_queue(JNIEnv *env, jlong handle, jobjectArray paths, jobjectArray uids, jint context,
-                      jstring context_uid, jint start, int load) {
+                      jstring context_uid, jint start, queue_call call) {
   jsize count = (*env)->GetArrayLength(env, paths);
   if ((*env)->GetArrayLength(env, uids) != count) {
     throw_status(env, MC_ERR_INVALID_ARG);
@@ -989,11 +992,10 @@ static void set_queue(JNIEnv *env, jlong handle, jobjectArray paths, jobjectArra
   if (st == MC_OK) st = st2;
   const char *cctx = context_uid ? (*env)->GetStringUTFChars(env, context_uid, NULL) : NULL;
   if (context_uid && !cctx) st = MC_ERR_NOMEM;
-  /* Both copy everything. */
+  /* They copy everything. */
   if (st == MC_OK) {
     mc_play_origin origin = {cuids.strings, (mc_play_context)context, cctx};
-    st = load ? mc_player_load_queue(player_of(handle), cpaths.strings, count, start, &origin)
-              : mc_player_set_queue(player_of(handle), cpaths.strings, count, start, &origin);
+    st = call(player_of(handle), cpaths.strings, count, start, &origin);
   }
   if (cctx) (*env)->ReleaseStringUTFChars(env, context_uid, cctx);
   string_array_release(env, &cpaths);
@@ -1007,7 +1009,7 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeSetQueue(JNIEnv *env
                                                                     jobjectArray uids, jint context,
                                                                     jstring context_uid, jint start) {
   (void)cls;
-  set_queue(env, handle, paths, uids, context, context_uid, start, 0);
+  set_queue(env, handle, paths, uids, context, context_uid, start, mc_player_set_queue);
 }
 
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeLoadQueue(JNIEnv *env, jclass cls,
@@ -1016,7 +1018,16 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeLoadQueue(JNIEnv *en
                                                                      jobjectArray uids, jint context,
                                                                      jstring context_uid, jint start) {
   (void)cls;
-  set_queue(env, handle, paths, uids, context, context_uid, start, 1);
+  set_queue(env, handle, paths, uids, context, context_uid, start, mc_player_load_queue);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeRestoreQueue(JNIEnv *env, jclass cls,
+                                                                        jlong handle,
+                                                                        jobjectArray paths,
+                                                                        jobjectArray uids, jint context,
+                                                                        jstring context_uid, jint start) {
+  (void)cls;
+  set_queue(env, handle, paths, uids, context, context_uid, start, mc_player_restore_queue);
 }
 
 /* The player calls that take no arguments: 0 toggle, 1 pause, 2 resume, 3 stop, 4 next,
@@ -1094,17 +1105,17 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_CorePlayer_nativeOrder(JNIEnv *e
   return out;
 }
 
-/* mc_player_play_station(). */
-JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativePlayRadio(JNIEnv *env, jclass cls, jlong handle,
-                                                                     jstring library_dir, jstring start_path,
-                                                                     jstring start_uid, jstring seed_uid) {
+/* mc_player_resume_station(). */
+JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativeResumeStation(JNIEnv *env, jclass cls, jlong handle,
+                                                                         jstring library_dir, jstring start_path,
+                                                                         jstring start_uid, jstring seed_uid) {
   (void)cls;
   int ok = 1;
   const char *dir = jni_chars(env, library_dir, &ok);
   const char *path = ok ? jni_chars(env, start_path, &ok) : NULL;
   const char *start = ok ? jni_chars(env, start_uid, &ok) : NULL;
   const char *uid = ok ? jni_chars(env, seed_uid, &ok) : NULL;
-  mc_status st = ok ? mc_player_play_station(player_of(handle), dir, path, start, uid) : MC_OK;
+  mc_status st = ok ? mc_player_resume_station(player_of(handle), dir, path, start, uid) : MC_OK;
   jni_release(env, library_dir, dir);
   jni_release(env, start_path, path);
   jni_release(env, start_uid, start);
