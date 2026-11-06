@@ -418,6 +418,8 @@ static GtkWidget *build_header(void) {
   gtk_box_append(GTK_BOX(text), s.artist);
   s.summary = gtk_label_new(NULL);
   gtk_label_set_xalign(GTK_LABEL(s.summary), 0);
+  gtk_label_set_wrap(GTK_LABEL(s.summary), TRUE); /* the end of a long one, a mix's, is its length */
+  gtk_label_set_lines(GTK_LABEL(s.summary), 2);
   gtk_label_set_ellipsize(GTK_LABEL(s.summary), PANGO_ELLIPSIZE_END);
   gtk_widget_add_css_class(s.summary, "dim-label");
   gtk_widget_add_css_class(s.summary, "caption");

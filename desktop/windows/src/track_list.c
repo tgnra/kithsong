@@ -1040,9 +1040,15 @@ static void paint_header(canvas *c, int w, BOOL focused) {
   SelectObject(c->dc, s.title_font);
   if (s.album_title) DrawTextW(c->dc, s.album_title, -1, &title, wrap | DT_CALCRECT);
   int title_h = min(max(title.bottom, title_line), 2 * title_line);
-  int block = title_h + scale(LINE_GAP) + artist_h + scale(LINE_GAP) + sub_h;
+  /* The summary too, as the end of a long one, a mix's, is its length. */
+  RECT summary = {left, 0, right, 0};
+  SelectObject(c->dc, s.sub_font);
+  DrawTextW(c->dc, s.summary, -1, &summary, wrap | DT_CALCRECT);
+  int summary_h = min(max(summary.bottom, sub_h), 2 * sub_h);
+  int block = title_h + scale(LINE_GAP) + artist_h + scale(LINE_GAP) + summary_h;
   int top = cover.top + max(0, (scale(COVER) - block) / 2);
   SetRect(&title, left, top, right, top + title_h);
+  SelectObject(c->dc, s.title_font);
   SetTextColor(c->dc, theme.text);
   if (s.album_title) DrawTextW(c->dc, s.album_title, -1, &title, wrap);
   UINT one_line = DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS;
@@ -1053,10 +1059,10 @@ static void paint_header(canvas *c, int w, BOOL focused) {
                           : s.artist   ? s.artist
                                        : mc_wstr(MC_STR_UNKNOWN_ARTIST);
   DrawTextW(c->dc, byline, -1, &artist, one_line);
-  RECT sub = {left, artist.bottom + scale(LINE_GAP), right, artist.bottom + scale(LINE_GAP) + sub_h};
+  RECT sub = {left, artist.bottom + scale(LINE_GAP), right, artist.bottom + scale(LINE_GAP) + summary_h};
   SelectObject(c->dc, s.sub_font);
   SetTextColor(c->dc, theme.text2);
-  DrawTextW(c->dc, s.summary, -1, &sub, one_line);
+  DrawTextW(c->dc, s.summary, -1, &sub, wrap);
   if (s.rule_h) { /* a smart playlist's rule, across the pane under the cover */
     RECT rule = {scale(PAD_X), s.rule_top, w - scale(PAD_X), s.rule_top + s.rule_h};
     DrawTextW(c->dc, s.rule, -1, &rule, DT_WORDBREAK | DT_EDITCONTROL | DT_END_ELLIPSIS | DT_NOPREFIX);
