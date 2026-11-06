@@ -61,6 +61,8 @@ enum {
   CHUNK = 4096,     /* frames decoded at a time */
   MAX_SEGMENTS = 16,
   RESTART_MS = 3000, /* previous() restarts the item after this far in */
+  START_RETRY_MS = 1000, /* between tries at starting the device */
+  START_RETRIES = 5,     /* ...and how many, after the first */
   MAX_PLAYED = 16,   /* counted plays waiting for mc_player_take_played() */
   MAX_ENDED = 64,    /* ended plays waiting for mc_player_take_ended() */
   MAX_SKIPS = 8,     /* skipped plays waiting for the feed, which takes them straight away */
@@ -246,6 +248,9 @@ struct mc_player {
   uint64_t written;  /* stream frames put into the ring buffer */
   ma_uint32 rate;    /* output rate, once the device is open */
   int device_open, device_running;
+  int device_lost;         /* opening it again failed: only the buffers are left */
+  int start_tries;         /* failed starts since it last started */
+  uint64_t start_retry_ms; /* when to try again */
   /* The play being heard. heard is the stream frames already counted towards plays. */
   uint64_t heard;
   int play_index;
@@ -658,17 +663,23 @@ static unsigned log_failed(mc_player *p, int index) {
 
 /* --- Player thread --- */
 
+/* Opens the device at rate, 0 for its own, so the OS doesn't resample again. Without the
+ * lock. */
+static int open_device(mc_player *p, ma_uint32 rate) {
+  ma_device_config config = ma_device_config_init(ma_device_type_playback);
+  config.playback.format = ma_format_f32;
+  config.playback.channels = CHANNELS;
+  config.sampleRate = rate;
+  config.dataCallback = on_audio;
+  config.pUserData = p;
+  return ma_device_init(NULL, &config, &p->device) == MA_SUCCESS;
+}
+
 /* Opens the device if it isn't yet; it's started separately. Under lock. */
 static int ensure_device(mc_player *p) {
   if (p->device_open) return 1;
   mc_mutex_unlock(&p->lock);
-  ma_device_config config = ma_device_config_init(ma_device_type_playback);
-  config.playback.format = ma_format_f32;
-  config.playback.channels = CHANNELS;
-  config.sampleRate = 0; /* the device's own, so the OS doesn't resample again */
-  config.dataCallback = on_audio;
-  config.pUserData = p;
-  int ok = ma_device_init(NULL, &config, &p->device) == MA_SUCCESS;
+  int ok = open_device(p, 0);
   ma_uint32 frames = ok ? p->device.sampleRate * BUFFER_MS / 1000 : 0;
   float *cut_frames = ok ? malloc((size_t)frames * CHANNELS * sizeof *cut_frames) : NULL;
   if (ok && (!cut_frames || ma_pcm_rb_init(ma_format_f32, CHANNELS, frames, NULL, NULL, &p->rb) != MA_SUCCESS)) {
@@ -685,22 +696,53 @@ static int ensure_device(mc_player *p) {
   return ok;
 }
 
-/* Starts or stops the device to match the state. Under lock. */
+/* For test_player: this many starts fail, as they do while the output is changing. */
+int mc_player_test_start_failures;
+
+/* Starts the device, first opening it again if asked, at the rate the buffer is already in.
+ * Without the lock. */
+static int start_device(mc_player *p, int reopen) {
+  if (reopen) {
+    if (!p->device_lost) ma_device_uninit(&p->device);
+    p->device_lost = !open_device(p, p->rate);
+  }
+  if (p->device_lost) return 0;
+  if (mc_player_test_start_failures > 0) {
+    mc_player_test_start_failures--;
+    return 0;
+  }
+  return ma_device_start(&p->device) == MA_SUCCESS;
+}
+
+/* Starts or stops the device to match the state. Under lock.
+ *
+ * A start can fail for a moment while the output changes, as when Bluetooth headphones are
+ * connecting. The state stays playing, with the position held, while it tries again each
+ * START_RETRY_MS: the first time as it is, as miniaudio may be rerouting the stream itself,
+ * and after that with a newly opened device. */
 static unsigned sync_device(mc_player *p) {
   int want = p->state == MC_PLAYER_PLAYING;
+  if (!want) p->start_tries = 0;
   if (want == p->device_running || !p->device_open) return 0;
+  if (want && p->start_tries && mc_mono_ms() < p->start_retry_ms) return 0;
+  int reopen = p->start_tries >= 2 || p->device_lost;
   mc_mutex_unlock(&p->lock);
-  int ok = (want ? ma_device_start(&p->device) : ma_device_stop(&p->device)) == MA_SUCCESS;
+  int ok = want ? start_device(p, reopen) : ma_device_stop(&p->device) == MA_SUCCESS;
   mc_mutex_lock(&p->lock);
   if (ok) {
     p->device_running = want;
+    p->start_tries = 0;
     return 0;
   }
-  if (want) { /* the device went away, say */
-    p->state = MC_PLAYER_STOPPED;
-    return log_end(p, MC_PLAY_END_STOPPED) | EV(MC_PLAYER_EVENT_ERROR) | EV(MC_PLAYER_EVENT_STATE);
+  if (!want || p->state != MC_PLAYER_PLAYING) return 0;
+  if (p->start_tries < START_RETRIES) {
+    p->start_tries++;
+    p->start_retry_ms = mc_mono_ms() + START_RETRY_MS;
+    return 0;
   }
-  return 0;
+  p->start_tries = 0; /* the device went away, say */
+  p->state = MC_PLAYER_STOPPED;
+  return log_end(p, MC_PLAY_END_STOPPED) | EV(MC_PLAYER_EVENT_ERROR) | EV(MC_PLAYER_EVENT_STATE);
 }
 
 /* The station adds nothing more; what it added plays out. Under lock. */
@@ -1041,7 +1083,7 @@ void mc_player_free(mc_player *p) {
   mc_thread_join(&p->thread);
   if (p->feed_started) mc_thread_join(&p->feed);
   if (p->device_open) {
-    ma_device_uninit(&p->device);
+    if (!p->device_lost) ma_device_uninit(&p->device);
     ma_pcm_rb_uninit(&p->rb);
     free(p->cut_frames);
   }
