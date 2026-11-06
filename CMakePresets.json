@@ -8,25 +8,38 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
-      "name": "windows-w64devkit",
-      "displayName": "Windows (w64devkit gcc)",
+      "name": "windows",
+      "hidden": true,
       "inherits": "base",
       "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++"
-      },
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
     },
     {
-      "name": "windows-w64devkit-release",
-      "displayName": "Windows (w64devkit gcc, release)",
-      "inherits": "windows-w64devkit",
+      "name": "windows-x64",
+      "displayName": "Windows x64 (llvm-mingw)",
+      "inherits": "windows",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-windows-x64.cmake"
+    },
+    {
+      "name": "windows-x64-release",
+      "displayName": "Windows x64 (llvm-mingw, release)",
+      "inherits": "windows-x64",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "windows-arm64",
+      "displayName": "Windows on Arm (llvm-mingw)",
+      "inherits": "windows",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-windows-arm64.cmake"
+    },
+    {
+      "name": "windows-arm64-release",
+      "displayName": "Windows on Arm (llvm-mingw, release)",
+      "inherits": "windows-arm64",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
     {
@@ -44,13 +57,16 @@
     }
   ],
   "buildPresets": [
-    { "name": "windows-w64devkit", "configurePreset": "windows-w64devkit", "jobs": 8 },
-    { "name": "windows-w64devkit-release", "configurePreset": "windows-w64devkit-release", "jobs": 8 },
+    { "name": "windows-x64", "configurePreset": "windows-x64", "jobs": 8 },
+    { "name": "windows-x64-release", "configurePreset": "windows-x64-release", "jobs": 8 },
+    { "name": "windows-arm64", "configurePreset": "windows-arm64", "jobs": 8 },
+    { "name": "windows-arm64-release", "configurePreset": "windows-arm64-release", "jobs": 8 },
     { "name": "linux-gtk", "configurePreset": "linux-gtk" },
     { "name": "linux-gtk-release", "configurePreset": "linux-gtk-release" }
   ],
   "testPresets": [
-    { "name": "windows-w64devkit", "configurePreset": "windows-w64devkit", "output": { "outputOnFailure": true } },
+    { "name": "windows-x64", "configurePreset": "windows-x64", "output": { "outputOnFailure": true } },
+    { "name": "windows-arm64", "configurePreset": "windows-arm64", "output": { "outputOnFailure": true } },
     { "name": "linux-gtk", "configurePreset": "linux-gtk", "output": { "outputOnFailure": true } }
   ]
 }
